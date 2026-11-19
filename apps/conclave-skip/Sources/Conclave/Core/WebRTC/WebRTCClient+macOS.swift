@@ -78,7 +78,9 @@ final class WebRTCClient {
     func createReceiveTransport() async throws { }
     func restartIce() async -> Bool { false }
     func restartIce(transportKind: String) async -> Bool { false }
-    func consumeProducer(producerId: String, producerUserId: String, producerKind: String? = nil, producerType: String = "webcam", preferHighWebcamLayer: Bool = false, initialReceiveConnectionQuality: ConnectionQuality = .unknown, roomId: String? = nil, meetingLifecycleGeneration: Int = 0) async throws { }
+    func consumeProducer(producerId: String, producerUserId: String, producerKind: String? = nil, producerType: String = "webcam", preferHighWebcamLayer: Bool = false, initialReceiveConnectionQuality: ConnectionQuality = .unknown, roomId: String? = nil, meetingLifecycleGeneration: Int = 0) async throws {
+        try await testCallGate?("consume:" + producerId)
+    }
     func closeConsumer(producerId: String, userId: String) { }
     func applyRemoteConsumerBandwidthPolicy(
         focusedUserIds: Set<String>,

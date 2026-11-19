@@ -413,9 +413,26 @@ enum GameProjectionJSON {
         return String(value)
     }
 
-    static func int(_ dict: [String: Any], _ key: String, missing: Int = 0) -> Int {
-        guard let value = number(dict[key]) else { return missing }
+    enum InvalidNumber: Error {
+        case outOfRange
+    }
+
+    static func integer(_ value: Any?) throws -> Int? {
+        guard let value = number(value) else { return nil }
+        guard value.isFinite, value >= Double(Int32.min), value <= Double(Int32.max) else {
+            throw InvalidNumber.outOfRange
+        }
         return Int(value)
+    }
+
+    static func int(_ dict: [String: Any], _ key: String, missing: Int = 0) throws -> Int {
+        try integer(dict[key]) ?? missing
+    }
+
+    static func oneBased(_ dict: [String: Any], _ key: String) throws -> Int {
+        let value = try int(dict, key)
+        guard value < Int(Int32.max) else { throw InvalidNumber.outOfRange }
+        return value + 1
     }
 
     static func double(_ dict: [String: Any], _ key: String, missing: Double = 0) -> Double {
@@ -450,20 +467,20 @@ enum GameProjectionJSON {
         return result
     }
 
-    static func ints(_ dict: [String: Any], _ key: String) -> [Int] {
+    static func ints(_ dict: [String: Any], _ key: String) throws -> [Int] {
         guard let values = dict[key] as? [Any] else { return [] }
         var result: [Int] = []
         for value in values {
-            if let item = number(value) { result.append(Int(item)) }
+            if let item = try integer(value) { result.append(item) }
         }
         return result
     }
 
-    static func counts(_ dict: [String: Any], _ key: String) -> [GameCountEntry] {
+    static func counts(_ dict: [String: Any], _ key: String) throws -> [GameCountEntry] {
         guard let values = dict[key] as? [String: Any] else { return [] }
         var result: [GameCountEntry] = []
         for name in values.keys.sorted() {
-            if let count = number(values[name]) { result.append(GameCountEntry(key: name, count: Int(count))) }
+            if let count = try integer(values[name]) { result.append(GameCountEntry(key: name, count: count)) }
         }
         return result
     }
@@ -479,7 +496,7 @@ enum GameProjectionJSON {
         return result
     }
 
-    static func scores(_ dict: [String: Any], _ key: String) -> [GameScoreEntry] {
+    static func scores(_ dict: [String: Any], _ key: String) throws -> [GameScoreEntry] {
         var result: [GameScoreEntry] = []
         for item in objects(dict, key) {
             var id = string(item, "id")
@@ -487,7 +504,7 @@ enum GameProjectionJSON {
             if id.isEmpty { continue }
             var name = string(item, "name")
             if name.isEmpty { name = string(item, "playerName") }
-            let score = item["score"] != nil ? int(item, "score") : int(item, "points")
+            let score = try int(item, item["score"] != nil ? "score" : "points")
             result.append(GameScoreEntry(id: id, name: name.isEmpty ? id : name, score: score))
         }
         return result
@@ -502,97 +519,101 @@ enum GameProjectionParser {
         let hasPlayerView = !playerViewJSON.isEmpty && playerViewJSON != "null"
         let kind = GameSceneKind.kind(forGameId: gameId)
         let phase = GameProjectionJSON.string(view, "phase").isEmpty ? publicPhase : GameProjectionJSON.string(view, "phase")
-        let common = commonProjection(kind: kind, phase: phase, view: view)
-        return GameProjection(
-            gameId: gameId,
-            kind: kind,
-            hasPlayerView: hasPlayerView,
-            common: common,
-            trivia: kind == GameSceneKind.trivia ? trivia(phase: phase, view: view, mine: mine) : nil,
-            bluff: kind == GameSceneKind.bluff ? bluff(phase: phase, view: view, mine: mine) : nil,
-            wouldYouRather: kind == GameSceneKind.wouldYouRather ? wouldYouRather(phase: phase, view: view, mine: mine) : nil,
-            mostLikelyTo: kind == GameSceneKind.mostLikelyTo ? mostLikelyTo(phase: phase, view: view, mine: mine) : nil,
-            reaction: kind == GameSceneKind.reaction ? reaction(phase: phase, view: view, mine: mine) : nil,
-            imposter: kind == GameSceneKind.imposter ? imposter(phase: phase, view: view, mine: mine) : nil,
-            wordle: kind == GameSceneKind.wordle ? wordle(phase: phase, view: view, mine: mine) : nil,
-            chess: kind == GameSceneKind.chess ? chess(phase: phase, view: view, mine: mine) : nil,
-            zip: kind == GameSceneKind.zip ? zip(phase: phase, view: view, mine: mine) : nil,
-            longShot: kind == GameSceneKind.longShot ? LongShotProjectionParser.parse(view: view, mine: mine) : nil
-        )
+        do {
+            let common = try commonProjection(kind: kind, phase: phase, view: view)
+            return GameProjection(
+                gameId: gameId,
+                kind: kind,
+                hasPlayerView: hasPlayerView,
+                common: common,
+                trivia: kind == GameSceneKind.trivia ? try trivia(phase: phase, view: view, mine: mine) : nil,
+                bluff: kind == GameSceneKind.bluff ? try bluff(phase: phase, view: view, mine: mine) : nil,
+                wouldYouRather: kind == GameSceneKind.wouldYouRather ? try wouldYouRather(phase: phase, view: view, mine: mine) : nil,
+                mostLikelyTo: kind == GameSceneKind.mostLikelyTo ? try mostLikelyTo(phase: phase, view: view, mine: mine) : nil,
+                reaction: kind == GameSceneKind.reaction ? try reaction(phase: phase, view: view, mine: mine) : nil,
+                imposter: kind == GameSceneKind.imposter ? try imposter(phase: phase, view: view, mine: mine) : nil,
+                wordle: kind == GameSceneKind.wordle ? try wordle(phase: phase, view: view, mine: mine) : nil,
+                chess: kind == GameSceneKind.chess ? chess(phase: phase, view: view, mine: mine) : nil,
+                zip: kind == GameSceneKind.zip ? try zip(phase: phase, view: view, mine: mine) : nil,
+                longShot: kind == GameSceneKind.longShot ? try LongShotProjectionParser.parse(view: view, mine: mine) : nil
+            )
+        } catch {
+            return GameProjection.empty
+        }
     }
 
-    static func commonProjection(kind: String, phase: String, view: [String: Any]) -> GameCommonProjection {
+    static func commonProjection(kind: String, phase: String, view: [String: Any]) throws -> GameCommonProjection {
         var deadline = GameProjectionJSON.double(view, "deadline")
         var duration = 0.0
         var round = 0
         var total = 0
         var acted = 0
-        var players = GameProjectionJSON.int(view, "totalPlayers")
+        var players = try GameProjectionJSON.int(view, "totalPlayers")
         var actedIds: [String] = []
-        var scoreboard = GameProjectionJSON.scores(view, "scoreboard")
+        var scoreboard = try GameProjectionJSON.scores(view, "scoreboard")
         var winner = GameProjectionJSON.string(view, "winnerName")
         switch kind {
         case GameSceneKind.trivia:
             duration = GameProjectionJSON.double(view, "questionDurationMs")
-            round = GameProjectionJSON.int(view, "questionIndex") + 1
-            total = GameProjectionJSON.int(view, "totalQuestions")
-            acted = GameProjectionJSON.int(view, "answeredCount")
+            round = try GameProjectionJSON.oneBased(view, "questionIndex")
+            total = try GameProjectionJSON.int(view, "totalQuestions")
+            acted = try GameProjectionJSON.int(view, "answeredCount")
             if let tiles = GameProjectionJSON.child(view, "tiles") {
                 for id in tiles.keys.sorted() { actedIds.append(id) }
             }
         case GameSceneKind.bluff:
-            round = GameProjectionJSON.int(view, "round") + 1
-            total = GameProjectionJSON.int(view, "totalRounds")
-            acted = phase == "choose" ? GameProjectionJSON.int(view, "chosenCount") : GameProjectionJSON.int(view, "submittedCount")
+            round = try GameProjectionJSON.oneBased(view, "round")
+            total = try GameProjectionJSON.int(view, "totalRounds")
+            acted = phase == "choose" ? try GameProjectionJSON.int(view, "chosenCount") : try GameProjectionJSON.int(view, "submittedCount")
         case GameSceneKind.wouldYouRather:
             duration = GameProjectionJSON.double(view, "chooseDurationMs")
-            round = GameProjectionJSON.int(view, "index") + 1
-            total = GameProjectionJSON.int(view, "total")
-            acted = GameProjectionJSON.int(view, "answeredCount")
+            round = try GameProjectionJSON.oneBased(view, "index")
+            total = try GameProjectionJSON.int(view, "total")
+            acted = try GameProjectionJSON.int(view, "answeredCount")
         case GameSceneKind.mostLikelyTo:
             duration = GameProjectionJSON.double(view, "voteDurationMs")
-            round = GameProjectionJSON.int(view, "index") + 1
-            total = GameProjectionJSON.int(view, "total")
-            acted = GameProjectionJSON.int(view, "answeredCount")
+            round = try GameProjectionJSON.oneBased(view, "index")
+            total = try GameProjectionJSON.int(view, "total")
+            acted = try GameProjectionJSON.int(view, "answeredCount")
             actedIds = GameProjectionJSON.strings(view, "votedPlayerIds")
         case GameSceneKind.reaction:
-            round = GameProjectionJSON.int(view, "round") + 1
-            total = GameProjectionJSON.int(view, "totalRounds")
-            acted = GameProjectionJSON.int(view, "tappedCount")
+            round = try GameProjectionJSON.oneBased(view, "round")
+            total = try GameProjectionJSON.int(view, "totalRounds")
+            acted = try GameProjectionJSON.int(view, "tappedCount")
         case GameSceneKind.imposter:
             actedIds = GameProjectionJSON.strings(view, "votedPlayerIds")
             acted = actedIds.count
         case GameSceneKind.wordle:
             duration = GameProjectionJSON.double(view, "timeLimitMs")
-            round = GameProjectionJSON.int(view, "currentRound")
-            total = GameProjectionJSON.int(view, "totalRounds")
-            acted = GameProjectionJSON.int(view, "finishedCount")
-            players = GameProjectionJSON.int(view, "totalContestants")
-            scoreboard = GameProjectionJSON.scores(view, "scores")
+            round = try GameProjectionJSON.int(view, "currentRound")
+            total = try GameProjectionJSON.int(view, "totalRounds")
+            acted = try GameProjectionJSON.int(view, "finishedCount")
+            players = try GameProjectionJSON.int(view, "totalContestants")
+            scoreboard = try GameProjectionJSON.scores(view, "scores")
             if let result = GameProjectionJSON.child(view, "result") { winner = GameProjectionJSON.string(result, "winnerName") }
         case GameSceneKind.zip:
             deadline = GameProjectionJSON.double(view, "roundEndsAt")
             let started = GameProjectionJSON.double(view, "roundStartedAt")
             duration = deadline > 0 && started > 0 ? deadline - started : 0.0
-            round = GameProjectionJSON.int(view, "currentRound")
-            total = GameProjectionJSON.int(view, "totalRounds")
-            acted = GameProjectionJSON.int(view, "finishedCount")
+            round = try GameProjectionJSON.int(view, "currentRound")
+            total = try GameProjectionJSON.int(view, "totalRounds")
+            acted = try GameProjectionJSON.int(view, "finishedCount")
             if let result = GameProjectionJSON.child(view, "result") { winner = GameProjectionJSON.string(result, "winnerName") }
         case GameSceneKind.longShot:
             let timed = phase == "ready" || phase == "prompt"
             deadline = timed ? deadline : 0.0
             duration = timed ? GameProjectionJSON.double(view, "durationMs") : 0.0
             let classic = GameProjectionJSON.string(view, "mode") == LongShotMode.classic.rawValue
-            round = classic ? GameProjectionJSON.int(view, "promptIndex") + 1 : 0
-            total = classic ? GameProjectionJSON.int(view, "totalPrompts") : 0
-            acted = GameProjectionJSON.int(view, "answeredCount")
+            round = classic ? try GameProjectionJSON.oneBased(view, "promptIndex") : 0
+            total = classic ? try GameProjectionJSON.int(view, "totalPrompts") : 0
+            acted = try GameProjectionJSON.int(view, "answeredCount")
             if let tiles = GameProjectionJSON.child(view, "tiles") {
                 for id in tiles.keys.sorted() {
                     if let tile = GameProjectionJSON.child(tiles, id), GameProjectionJSON.bool(tile, "acted") { actedIds.append(id) }
                 }
             }
             let winnerId = GameProjectionJSON.string(view, "winnerId")
-            if !winnerId.isEmpty { winner = LongShotProjectionParser.seatName(view, id: winnerId) }
+            if !winnerId.isEmpty { winner = try LongShotProjectionParser.seatName(view, id: winnerId) }
         default:
             break
         }
@@ -602,77 +623,77 @@ enum GameProjectionParser {
                                     totalPlayers: players, actedPlayerIds: actedIds, scoreboard: scoreboard, winnerName: winner)
     }
 
-    static func trivia(phase: String, view: [String: Any], mine: [String: Any]) -> TriviaProjection {
+    static func trivia(phase: String, view: [String: Any], mine: [String: Any]) throws -> TriviaProjection {
         var outcome = ""
         if mine["correct"] is Bool || GameProjectionJSON.number(mine["correct"]) != nil {
             outcome = GameProjectionJSON.bool(mine, "correct") ? "correct" : "wrong"
         }
-        return TriviaProjection(phase: phase, questionIndex: GameProjectionJSON.int(view, "questionIndex"), totalQuestions: GameProjectionJSON.int(view, "totalQuestions"),
+        return TriviaProjection(phase: phase, questionIndex: try GameProjectionJSON.int(view, "questionIndex"), totalQuestions: try GameProjectionJSON.int(view, "totalQuestions"),
                                 category: GameProjectionJSON.string(view, "category"), prompt: GameProjectionJSON.string(view, "prompt"),
-                                options: GameProjectionJSON.strings(view, "options"), correctIndex: GameProjectionJSON.int(view, "correctIndex", missing: -1),
-                                optionCounts: GameProjectionJSON.ints(view, "optionCounts"), answeredCount: GameProjectionJSON.int(view, "answeredCount"),
-                                totalPlayers: GameProjectionJSON.int(view, "totalPlayers"), hasAnswered: GameProjectionJSON.bool(mine, "answered"),
-                                myChoice: GameProjectionJSON.int(mine, "choice", missing: -1), score: GameProjectionJSON.int(mine, "score"), rank: GameProjectionJSON.int(mine, "rank"),
-                                lastRoundPoints: GameProjectionJSON.int(mine, "lastRoundPoints"), outcome: outcome)
+                                options: GameProjectionJSON.strings(view, "options"), correctIndex: try GameProjectionJSON.int(view, "correctIndex", missing: -1),
+                                optionCounts: try GameProjectionJSON.ints(view, "optionCounts"), answeredCount: try GameProjectionJSON.int(view, "answeredCount"),
+                                totalPlayers: try GameProjectionJSON.int(view, "totalPlayers"), hasAnswered: GameProjectionJSON.bool(mine, "answered"),
+                                myChoice: try GameProjectionJSON.int(mine, "choice", missing: -1), score: try GameProjectionJSON.int(mine, "score"), rank: try GameProjectionJSON.int(mine, "rank"),
+                                lastRoundPoints: try GameProjectionJSON.int(mine, "lastRoundPoints"), outcome: outcome)
     }
 
-    static func bluff(phase: String, view: [String: Any], mine: [String: Any]) -> BluffProjection {
+    static func bluff(phase: String, view: [String: Any], mine: [String: Any]) throws -> BluffProjection {
         var options: [BluffOptionProjection] = []
         for item in GameProjectionJSON.objects(view, "options") {
             let id = GameProjectionJSON.string(item, "id")
             if id.isEmpty { continue }
             options.append(BluffOptionProjection(id: id, text: GameProjectionJSON.string(item, "text"), kind: GameProjectionJSON.string(item, "kind"),
-                                                 ownerName: GameProjectionJSON.string(item, "ownerName"), votes: GameProjectionJSON.int(item, "votes")))
+                                                 ownerName: GameProjectionJSON.string(item, "ownerName"), votes: try GameProjectionJSON.int(item, "votes")))
         }
-        return BluffProjection(phase: phase, round: GameProjectionJSON.int(view, "round"), totalRounds: GameProjectionJSON.int(view, "totalRounds"),
-                               question: GameProjectionJSON.string(view, "question"), options: options, submittedCount: GameProjectionJSON.int(view, "submittedCount"),
-                               chosenCount: GameProjectionJSON.int(view, "chosenCount"), totalPlayers: GameProjectionJSON.int(view, "totalPlayers"),
-                               roundPoints: GameProjectionJSON.scores(view, "roundPoints"), yourFake: GameProjectionJSON.string(mine, "yourFake"),
+        return BluffProjection(phase: phase, round: try GameProjectionJSON.int(view, "round"), totalRounds: try GameProjectionJSON.int(view, "totalRounds"),
+                               question: GameProjectionJSON.string(view, "question"), options: options, submittedCount: try GameProjectionJSON.int(view, "submittedCount"),
+                               chosenCount: try GameProjectionJSON.int(view, "chosenCount"), totalPlayers: try GameProjectionJSON.int(view, "totalPlayers"),
+                               roundPoints: try GameProjectionJSON.scores(view, "roundPoints"), yourFake: GameProjectionJSON.string(mine, "yourFake"),
                                hasSubmitted: GameProjectionJSON.bool(mine, "submitted"), yourPick: GameProjectionJSON.string(mine, "yourPick"),
-                               ownOptionId: GameProjectionJSON.string(mine, "ownOptionId"), score: GameProjectionJSON.int(mine, "score"))
+                               ownOptionId: GameProjectionJSON.string(mine, "ownOptionId"), score: try GameProjectionJSON.int(mine, "score"))
     }
 
-    static func wouldYouRather(phase: String, view: [String: Any], mine: [String: Any]) -> WouldYouRatherProjection {
-        let counts = GameProjectionJSON.ints(view, "counts")
-        return WouldYouRatherProjection(phase: phase, index: GameProjectionJSON.int(view, "index"), total: GameProjectionJSON.int(view, "total"),
+    static func wouldYouRather(phase: String, view: [String: Any], mine: [String: Any]) throws -> WouldYouRatherProjection {
+        let counts = try GameProjectionJSON.ints(view, "counts")
+        return WouldYouRatherProjection(phase: phase, index: try GameProjectionJSON.int(view, "index"), total: try GameProjectionJSON.int(view, "total"),
                                         optionA: GameProjectionJSON.string(view, "optionA"), optionB: GameProjectionJSON.string(view, "optionB"),
                                         countA: counts.count > 0 ? counts[0] : 0, countB: counts.count > 1 ? counts[1] : 0,
                                         namesA: GameProjectionJSON.strings(view, "namesA"), namesB: GameProjectionJSON.strings(view, "namesB"),
-                                        answeredCount: GameProjectionJSON.int(view, "answeredCount"), totalPlayers: GameProjectionJSON.int(view, "totalPlayers"),
-                                        myChoice: GameProjectionJSON.int(mine, "choice", missing: -1))
+                                        answeredCount: try GameProjectionJSON.int(view, "answeredCount"), totalPlayers: try GameProjectionJSON.int(view, "totalPlayers"),
+                                        myChoice: try GameProjectionJSON.int(mine, "choice", missing: -1))
     }
 
-    static func mostLikelyTo(phase: String, view: [String: Any], mine: [String: Any]) -> MostLikelyToProjection {
-        return MostLikelyToProjection(phase: phase, index: GameProjectionJSON.int(view, "index"), total: GameProjectionJSON.int(view, "total"),
+    static func mostLikelyTo(phase: String, view: [String: Any], mine: [String: Any]) throws -> MostLikelyToProjection {
+        return MostLikelyToProjection(phase: phase, index: try GameProjectionJSON.int(view, "index"), total: try GameProjectionJSON.int(view, "total"),
                                       prompt: GameProjectionJSON.string(view, "prompt"), players: GameProjectionJSON.players(view, "players"),
-                                      counts: GameProjectionJSON.counts(view, "counts"), votedPlayerIds: GameProjectionJSON.strings(view, "votedPlayerIds"),
-                                      answeredCount: GameProjectionJSON.int(view, "answeredCount"), totalPlayers: GameProjectionJSON.int(view, "totalPlayers"),
+                                      counts: try GameProjectionJSON.counts(view, "counts"), votedPlayerIds: GameProjectionJSON.strings(view, "votedPlayerIds"),
+                                      answeredCount: try GameProjectionJSON.int(view, "answeredCount"), totalPlayers: try GameProjectionJSON.int(view, "totalPlayers"),
                                       winnerId: GameProjectionJSON.string(view, "winnerId"), winnerName: GameProjectionJSON.string(view, "winnerName"),
                                       yourVote: GameProjectionJSON.string(mine, "yourVote"))
     }
 
-    static func reaction(phase: String, view: [String: Any], mine: [String: Any]) -> ReactionProjection {
+    static func reaction(phase: String, view: [String: Any], mine: [String: Any]) throws -> ReactionProjection {
         var results: [ReactionResultProjection] = []
         for item in GameProjectionJSON.objects(view, "results") {
             let id = GameProjectionJSON.string(item, "id")
             if id.isEmpty { continue }
             results.append(ReactionResultProjection(id: id, name: GameProjectionJSON.string(item, "name"),
-                                                    reactionMs: GameProjectionJSON.int(item, "reactionMs", missing: -1), isEarly: GameProjectionJSON.bool(item, "early")))
+                                                    reactionMs: try GameProjectionJSON.int(item, "reactionMs", missing: -1), isEarly: GameProjectionJSON.bool(item, "early")))
         }
-        return ReactionProjection(phase: phase, round: GameProjectionJSON.int(view, "round"), totalRounds: GameProjectionJSON.int(view, "totalRounds"),
-                                  goAtMillis: GameProjectionJSON.double(view, "goAt"), tappedCount: GameProjectionJSON.int(view, "tappedCount"),
-                                  totalPlayers: GameProjectionJSON.int(view, "totalPlayers"), results: results, winnerName: GameProjectionJSON.string(view, "winnerName"),
+        return ReactionProjection(phase: phase, round: try GameProjectionJSON.int(view, "round"), totalRounds: try GameProjectionJSON.int(view, "totalRounds"),
+                                  goAtMillis: GameProjectionJSON.double(view, "goAt"), tappedCount: try GameProjectionJSON.int(view, "tappedCount"),
+                                  totalPlayers: try GameProjectionJSON.int(view, "totalPlayers"), results: results, winnerName: GameProjectionJSON.string(view, "winnerName"),
                                   hasTapped: GameProjectionJSON.bool(mine, "tapped"), isEarly: GameProjectionJSON.bool(mine, "early"),
-                                  reactionMs: GameProjectionJSON.int(mine, "reactionMs", missing: -1), score: GameProjectionJSON.int(mine, "score"))
+                                  reactionMs: try GameProjectionJSON.int(mine, "reactionMs", missing: -1), score: try GameProjectionJSON.int(mine, "score"))
     }
 
-    static func imposter(phase: String, view: [String: Any], mine: [String: Any]) -> ImposterProjection {
+    static func imposter(phase: String, view: [String: Any], mine: [String: Any]) throws -> ImposterProjection {
         let result = GameProjectionJSON.child(view, "result")
         let empty: [String: Any] = [:]
         let resolved = result ?? empty
         return ImposterProjection(phase: phase, category: GameProjectionJSON.string(view, "category"), starterName: GameProjectionJSON.string(view, "starterName"),
                                   players: GameProjectionJSON.players(view, "players"), votedPlayerIds: GameProjectionJSON.strings(view, "votedPlayerIds"),
-                                  voteCounts: GameProjectionJSON.counts(view, "voteCounts"), totalPlayers: GameProjectionJSON.int(view, "totalPlayers"),
+                                  voteCounts: try GameProjectionJSON.counts(view, "voteCounts"), totalPlayers: try GameProjectionJSON.int(view, "totalPlayers"),
                                   hasResult: result != nil, imposterId: GameProjectionJSON.string(resolved, "imposterId"),
                                   imposterName: GameProjectionJSON.string(resolved, "imposterName"), resultWord: GameProjectionJSON.string(resolved, "word"),
                                   votedOutId: GameProjectionJSON.string(resolved, "votedOutId"), votedOutName: GameProjectionJSON.string(resolved, "votedOutName"),
@@ -689,12 +710,12 @@ enum GameProjectionParser {
         return result
     }
 
-    static func wordle(phase: String, view: [String: Any], mine: [String: Any]) -> WordleProjection {
+    static func wordle(phase: String, view: [String: Any], mine: [String: Any]) throws -> WordleProjection {
         var standings: [WordleStandingProjection] = []
         for item in GameProjectionJSON.objects(view, "standings") {
             let id = GameProjectionJSON.string(item, "playerId")
             if id.isEmpty { continue }
-            standings.append(WordleStandingProjection(id: id, name: GameProjectionJSON.string(item, "playerName"), triesUsed: GameProjectionJSON.int(item, "triesUsed"),
+            standings.append(WordleStandingProjection(id: id, name: GameProjectionJSON.string(item, "playerName"), triesUsed: try GameProjectionJSON.int(item, "triesUsed"),
                                                       outcome: GameProjectionJSON.string(item, "outcome")))
         }
         var boards: [WordleBoardProjection] = []
@@ -707,11 +728,11 @@ enum GameProjectionParser {
         let result = GameProjectionJSON.child(view, "result") ?? empty
         let mode = WordleMode.parse(GameProjectionJSON.string(view, "mode"))
         return WordleProjection(phase: phase, wordSource: GameProjectionJSON.string(view, "wordSource"), setterId: GameProjectionJSON.string(view, "setterId"),
-                                setterName: GameProjectionJSON.string(view, "setterName"), wordLength: GameProjectionJSON.int(view, "wordLength"),
-                                maxTries: GameProjectionJSON.int(view, "maxTries"), standings: standings, finishedCount: GameProjectionJSON.int(view, "finishedCount"),
-                                totalContestants: GameProjectionJSON.int(view, "totalContestants"), currentRound: GameProjectionJSON.int(view, "currentRound"),
-                                totalRounds: GameProjectionJSON.int(view, "totalRounds"), isFinalRound: GameProjectionJSON.bool(view, "isFinalRound"),
-                                scores: GameProjectionJSON.scores(view, "scores"), resultWord: GameProjectionJSON.string(result, "targetWord"),
+                                setterName: GameProjectionJSON.string(view, "setterName"), wordLength: try GameProjectionJSON.int(view, "wordLength"),
+                                maxTries: try GameProjectionJSON.int(view, "maxTries"), standings: standings, finishedCount: try GameProjectionJSON.int(view, "finishedCount"),
+                                totalContestants: try GameProjectionJSON.int(view, "totalContestants"), currentRound: try GameProjectionJSON.int(view, "currentRound"),
+                                totalRounds: try GameProjectionJSON.int(view, "totalRounds"), isFinalRound: GameProjectionJSON.bool(view, "isFinalRound"),
+                                scores: try GameProjectionJSON.scores(view, "scores"), resultWord: GameProjectionJSON.string(result, "targetWord"),
                                 resultWinnerId: GameProjectionJSON.string(result, "winnerId"), resultWinnerName: GameProjectionJSON.string(result, "winnerName"),
                                 isSetter: GameProjectionJSON.bool(mine, "isSetter"), canSetWord: GameProjectionJSON.bool(mine, "canSetWord"),
                                 canGuess: GameProjectionJSON.bool(mine, "canGuess"), secretWord: GameProjectionJSON.string(mine, "secretWord"),
@@ -771,30 +792,30 @@ enum GameProjectionParser {
                                canRespondToTakeback: GameProjectionJSON.bool(mine, "canRespondToTakeback"))
     }
 
-    static func zip(phase: String, view: [String: Any], mine: [String: Any]) -> ZipProjection {
+    static func zip(phase: String, view: [String: Any], mine: [String: Any]) throws -> ZipProjection {
         var barriers: [ZipBarrierProjection] = []
         for item in GameProjectionJSON.objects(view, "barriers") {
-            barriers.append(ZipBarrierProjection(from: GameProjectionJSON.int(item, "from"), to: GameProjectionJSON.int(item, "to")))
+            barriers.append(ZipBarrierProjection(from: try GameProjectionJSON.int(item, "from"), to: try GameProjectionJSON.int(item, "to")))
         }
         var standings: [ZipStandingProjection] = []
         for item in GameProjectionJSON.objects(view, "standings") {
             let id = GameProjectionJSON.string(item, "playerId")
             if id.isEmpty { continue }
-            standings.append(ZipStandingProjection(id: id, name: GameProjectionJSON.string(item, "playerName"), cellsFilled: GameProjectionJSON.int(item, "cellsFilled"),
-                                                   totalCells: GameProjectionJSON.int(item, "totalCells"), outcome: GameProjectionJSON.string(item, "outcome"),
-                                                   hintsUsed: GameProjectionJSON.int(item, "hintsUsed"), solvedAtMillis: GameProjectionJSON.double(item, "solvedAt")))
+            standings.append(ZipStandingProjection(id: id, name: GameProjectionJSON.string(item, "playerName"), cellsFilled: try GameProjectionJSON.int(item, "cellsFilled"),
+                                                   totalCells: try GameProjectionJSON.int(item, "totalCells"), outcome: GameProjectionJSON.string(item, "outcome"),
+                                                   hintsUsed: try GameProjectionJSON.int(item, "hintsUsed"), solvedAtMillis: GameProjectionJSON.double(item, "solvedAt")))
         }
         let empty: [String: Any] = [:]
         let result = GameProjectionJSON.child(view, "result") ?? empty
-        return ZipProjection(phase: phase, gridSize: GameProjectionJSON.int(view, "gridSize"), anchors: GameProjectionJSON.counts(view, "anchors"), barriers: barriers,
-                             deadCells: GameProjectionJSON.ints(view, "deadCells"), roundStartedAtMillis: GameProjectionJSON.double(view, "roundStartedAt"),
+        return ZipProjection(phase: phase, gridSize: try GameProjectionJSON.int(view, "gridSize"), anchors: try GameProjectionJSON.counts(view, "anchors"), barriers: barriers,
+                             deadCells: try GameProjectionJSON.ints(view, "deadCells"), roundStartedAtMillis: GameProjectionJSON.double(view, "roundStartedAt"),
                              roundEndsAtMillis: GameProjectionJSON.double(view, "roundEndsAt"), standings: standings,
-                             finishedCount: GameProjectionJSON.int(view, "finishedCount"), totalPlayers: GameProjectionJSON.int(view, "totalPlayers"),
-                             currentRound: GameProjectionJSON.int(view, "currentRound"), totalRounds: GameProjectionJSON.int(view, "totalRounds"),
-                             isFinalRound: GameProjectionJSON.bool(view, "isFinalRound"), scoreboard: GameProjectionJSON.scores(view, "scoreboard"),
-                             solutionPath: GameProjectionJSON.ints(result, "solutionPath"), winnerId: GameProjectionJSON.string(result, "winnerId"),
-                             winnerName: GameProjectionJSON.string(result, "winnerName"), path: GameProjectionJSON.ints(mine, "path"), outcome: GameProjectionJSON.string(mine, "outcome"),
-                             hintsUsed: GameProjectionJSON.int(mine, "hintsUsed"), hintAvailableAtMillis: GameProjectionJSON.double(mine, "hintAvailableAt"),
-                             mistakes: GameProjectionJSON.int(mine, "mistakes"), solvedAtMillis: GameProjectionJSON.double(mine, "solvedAt"))
+                             finishedCount: try GameProjectionJSON.int(view, "finishedCount"), totalPlayers: try GameProjectionJSON.int(view, "totalPlayers"),
+                             currentRound: try GameProjectionJSON.int(view, "currentRound"), totalRounds: try GameProjectionJSON.int(view, "totalRounds"),
+                             isFinalRound: GameProjectionJSON.bool(view, "isFinalRound"), scoreboard: try GameProjectionJSON.scores(view, "scoreboard"),
+                             solutionPath: try GameProjectionJSON.ints(result, "solutionPath"), winnerId: GameProjectionJSON.string(result, "winnerId"),
+                             winnerName: GameProjectionJSON.string(result, "winnerName"), path: try GameProjectionJSON.ints(mine, "path"), outcome: GameProjectionJSON.string(mine, "outcome"),
+                             hintsUsed: try GameProjectionJSON.int(mine, "hintsUsed"), hintAvailableAtMillis: GameProjectionJSON.double(mine, "hintAvailableAt"),
+                             mistakes: try GameProjectionJSON.int(mine, "mistakes"), solvedAtMillis: GameProjectionJSON.double(mine, "solvedAt"))
     }
 }

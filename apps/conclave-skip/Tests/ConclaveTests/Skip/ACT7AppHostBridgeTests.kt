@@ -138,6 +138,25 @@ class ACT7AppHostBridgeTests {
         assertEquals(FeedbackKind.hostActionFailed, presenter.feedbackState.token.kind)
     }
 
+    @Test fun rejoiningWatchCanMountEvenAfterTheOldDeadline() {
+        val presenter = AppHostPresenter()
+        val relay = ActiveAppSession()
+        presenter.bind(session = relay)
+        relay.begin(appId = "watch", callSessionId = call, isReadOnly = false)
+        presenter.apply(AppHostInputs.make(callSession = 1, appId = "watch"))
+        assertTrue(relay.attachBridge(appSessionId = relay.appSessionId) {})
+        val oldMount = presenter.model.reloadSerial
+        presenter.setHiddenLocally(true)
+        presenter.fireReadyTimeout(appSessionId = relay.appSessionId, reloadSerial = oldMount)
+        assertEquals(AppHostIssue.none, presenter.model.issue)
+        presenter.setHiddenLocally(false)
+        assertTrue(presenter.model.wantsWebView)
+        assertEquals(AppHostPhase.opening, presenter.model.phase)
+        assertTrue(relay.attachBridge(appSessionId = relay.appSessionId) {})
+        presenter.fireReadyTimeout(appSessionId = relay.appSessionId, reloadSerial = presenter.model.reloadSerial)
+        assertEquals(AppHostIssue.timedOut, presenter.model.issue)
+    }
+
     @Test fun missingWebMessageListenerShowsTheFailureState() {
         val presenter = AppHostPresenter()
         val relay = ActiveAppSession()

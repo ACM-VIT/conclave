@@ -3339,6 +3339,10 @@ final class WebRTCClient: NSObject, ObservableObject {
         let consumeConfigurationGeneration = configurationGeneration
         let producerClosureGeneration = remoteProducerClosureGenerations[producerId, default: 0]
         try await createReceiveTransportIfNeeded()
+        guard configurationGeneration == consumeConfigurationGeneration,
+              remoteProducerClosureGenerations[producerId, default: 0] == producerClosureGeneration else {
+            throw WebRTCError.staleConfiguration
+        }
         guard let socket = socketManager,
               let device,
               let receiveTransport = receiveTransport,
@@ -3405,6 +3409,10 @@ final class WebRTCClient: NSObject, ObservableObject {
         let rtpParameters: String
         let consumer: Consumer
         do {
+            guard configurationGeneration == consumeConfigurationGeneration,
+                  remoteProducerClosureGenerations[producerId, default: 0] == producerClosureGeneration else {
+                throw WebRTCError.staleConfiguration
+            }
             rtpParameters = try encodeJSONString(response.rtpParameters)
             let request = ConsumerCreationRequest(
                 transport: receiveTransport,
@@ -3445,8 +3453,6 @@ final class WebRTCClient: NSObject, ObservableObject {
         if response.kind == "audio", let track = consumer.track as? RTCAudioTrack {
             track.source.volume = participantAudioGain(userId: producerUserId)
         }
-        consumer.resume()
-
         let isScreenVideo = (producerType == "screen" && response.kind == "video")
         let trackKey = isScreenVideo ? "\(producerUserId)-screen" : producerUserId
         nextConsumerGeneration += 1
@@ -3525,6 +3531,11 @@ final class WebRTCClient: NSObject, ObservableObject {
             )
         }
         do {
+            guard configurationGeneration == consumeConfigurationGeneration,
+                  remoteProducerClosureGenerations[producerId, default: 0] == producerClosureGeneration else {
+                throw WebRTCError.staleConfiguration
+            }
+            consumer.resume()
             try await socket.resumeConsumer(
                 consumerId: response.id,
                 requestKeyFrame: response.kind == "video",

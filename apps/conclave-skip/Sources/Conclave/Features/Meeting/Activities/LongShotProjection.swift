@@ -183,65 +183,65 @@ struct LongShotProjection: Equatable {
 
 enum LongShotProjectionParser {
 
-    static func parse(view: [String: Any], mine: [String: Any]) -> LongShotProjection? {
+    static func parse(view: [String: Any], mine: [String: Any]) throws -> LongShotProjection? {
         guard let mode = LongShotMode.parse(GameProjectionJSON.string(view, "mode")) else { return nil }
-        guard let round = round(mode: mode, view: view) else { return nil }
+        guard let round = try round(mode: mode, view: view) else { return nil }
         return LongShotProjection(mode: mode, round: round, serverNowMillis: GameProjectionJSON.double(view, "serverNow"),
-                                  ladder: ladder(view), seats: seats(view), heartMeter: GameProjectionJSON.int(view, "heartMeter"),
-                                  scoreboard: GameProjectionJSON.scores(view, "scoreboard"), me: me(mine))
+                                  ladder: try ladder(view), seats: try seats(view), heartMeter: try GameProjectionJSON.int(view, "heartMeter"),
+                                  scoreboard: try GameProjectionJSON.scores(view, "scoreboard"), me: try me(mine))
     }
 
-    static func round(mode: LongShotMode, view: [String: Any]) -> LongShotRound? {
+    static func round(mode: LongShotMode, view: [String: Any]) throws -> LongShotRound? {
         let phase = GameProjectionJSON.string(view, "phase")
         switch phase {
         case "lobby":
             return LongShotRound.lobby
         case "ready", "prompt":
-            guard mode == LongShotMode.classic, let prompt = promptCard(view) else { return nil }
-            let dive = LongShotDive(prompt: prompt, lockedCount: GameProjectionJSON.int(view, "answeredCount"),
-                                    totalPlayers: GameProjectionJSON.int(view, "totalPlayers"))
+            guard mode == LongShotMode.classic, let prompt = try promptCard(view) else { return nil }
+            let dive = LongShotDive(prompt: prompt, lockedCount: try GameProjectionJSON.int(view, "answeredCount"),
+                                    totalPlayers: try GameProjectionJSON.int(view, "totalPlayers"))
             return phase == "ready" ? LongShotRound.ready(dive) : LongShotRound.answering(dive)
         case "reveal":
-            guard mode == LongShotMode.classic, let prompt = promptCard(view) else { return nil }
-            return LongShotRound.reveal(LongShotReveal(prompt: prompt, results: results(view), pearl: pearl(view),
+            guard mode == LongShotMode.classic, let prompt = try promptCard(view) else { return nil }
+            return LongShotRound.reveal(LongShotReveal(prompt: prompt, results: try results(view), pearl: pearl(view),
                                                        missedGems: GameProjectionJSON.strings(view, "missedGems")))
         case "fuse":
-            guard mode == LongShotMode.fuse, let prompt = promptCard(view) else { return nil }
+            guard mode == LongShotMode.fuse, let prompt = try promptCard(view) else { return nil }
             let holderId = GameProjectionJSON.string(view, "turnPlayerId")
             var holder: GameNamedPlayer? = nil
-            if !holderId.isEmpty { holder = GameNamedPlayer(id: holderId, name: seatName(view, id: holderId)) }
+            if !holderId.isEmpty { holder = GameNamedPlayer(id: holderId, name: try seatName(view, id: holderId)) }
             return LongShotRound.fuse(LongShotFuse(prompt: prompt, holder: holder, isPaused: GameProjectionJSON.bool(view, "paused"),
-                                                   foundCount: GameProjectionJSON.int(view, "usedCount"), chain: chain(view),
+                                                   foundCount: try GameProjectionJSON.int(view, "usedCount"), chain: try chain(view),
                                                    lastMiss: playerMiss(GameProjectionJSON.child(view, "lastMiss")),
                                                    lastHeart: heartGain(GameProjectionJSON.child(view, "lastHeart"))))
         case "popped":
             guard mode == LongShotMode.fuse, let popped = GameProjectionJSON.child(view, "popped"),
                   let player = namedPlayer(popped, idKey: "playerId") else { return nil }
             return LongShotRound.popped(LongShotPop(player: player, isEliminated: GameProjectionJSON.bool(popped, "eliminated"),
-                                                    promptNumber: GameProjectionJSON.int(view, "promptIndex") + 1))
+                                                    promptNumber: try GameProjectionJSON.oneBased(view, "promptIndex")))
         case "results":
             var survivor: GameNamedPlayer? = nil
             let winnerId = GameProjectionJSON.string(view, "winnerId")
             if mode == LongShotMode.fuse && !winnerId.isEmpty {
-                survivor = GameNamedPlayer(id: winnerId, name: seatName(view, id: winnerId))
+                survivor = GameNamedPlayer(id: winnerId, name: try seatName(view, id: winnerId))
             }
-            return LongShotRound.finished(LongShotFinish(survivor: survivor, best: best(view)))
+            return LongShotRound.finished(LongShotFinish(survivor: survivor, best: try best(view)))
         default:
             return nil
         }
     }
 
-    static func promptCard(_ view: [String: Any]) -> LongShotPromptCard? {
+    static func promptCard(_ view: [String: Any]) throws -> LongShotPromptCard? {
         let text = GameProjectionJSON.string(view, "prompt")
         if text.isEmpty { return nil }
         return LongShotPromptCard(category: GameProjectionJSON.string(view, "category"), text: text,
-                                  number: GameProjectionJSON.int(view, "promptIndex") + 1, total: GameProjectionJSON.int(view, "totalPrompts"))
+                                  number: try GameProjectionJSON.oneBased(view, "promptIndex"), total: try GameProjectionJSON.int(view, "totalPrompts"))
     }
 
-    static func landing(_ item: [String: Any], textKey: String) -> LongShotLanding? {
+    static func landing(_ item: [String: Any], textKey: String) throws -> LongShotLanding? {
         let text = GameProjectionJSON.string(item, textKey)
         guard !text.isEmpty, let tier = LongShotTier.parse(GameProjectionJSON.string(item, "tier")) else { return nil }
-        return LongShotLanding(text: text, tier: tier, points: GameProjectionJSON.int(item, "points"), isJudged: GameProjectionJSON.bool(item, "judged"))
+        return LongShotLanding(text: text, tier: tier, points: try GameProjectionJSON.int(item, "points"), isJudged: GameProjectionJSON.bool(item, "judged"))
     }
 
     static func namedPlayer(_ item: [String: Any], idKey: String) -> GameNamedPlayer? {
@@ -251,35 +251,35 @@ enum LongShotProjectionParser {
         return GameNamedPlayer(id: id, name: name.isEmpty ? id : name)
     }
 
-    static func seatName(_ view: [String: Any], id: String) -> String {
+    static func seatName(_ view: [String: Any], id: String) throws -> String {
         for seat in GameProjectionJSON.objects(view, "seats") {
             if GameProjectionJSON.string(seat, "id") == id {
                 let name = GameProjectionJSON.string(seat, "name")
                 return name.isEmpty ? id : name
             }
         }
-        for row in GameProjectionJSON.scores(view, "scoreboard") {
+        for row in try GameProjectionJSON.scores(view, "scoreboard") {
             if row.id == id { return row.name }
         }
         return id
     }
 
-    static func ladder(_ view: [String: Any]) -> [LongShotTierStop] {
+    static func ladder(_ view: [String: Any]) throws -> [LongShotTierStop] {
         var result: [LongShotTierStop] = []
         guard let points = GameProjectionJSON.child(view, "tierPoints") else { return result }
         for tier in LongShotTier.depthOrder {
-            guard let value = GameProjectionJSON.number(points[tier.rawValue]) else { continue }
-            result.append(LongShotTierStop(tier: tier, points: Int(value)))
+            guard let value = try GameProjectionJSON.integer(points[tier.rawValue]) else { continue }
+            result.append(LongShotTierStop(tier: tier, points: value))
         }
         return result
     }
 
-    static func results(_ view: [String: Any]) -> [LongShotResult] {
+    static func results(_ view: [String: Any]) throws -> [LongShotResult] {
         var result: [LongShotResult] = []
         for item in GameProjectionJSON.objects(view, "results") {
             guard let player = namedPlayer(item, idKey: "id") else { continue }
             let answered = !GameProjectionJSON.string(item, "answer").isEmpty
-            let landed = landing(item, textKey: "answer")
+            let landed = try landing(item, textKey: "answer")
             if answered && landed == nil { continue }
             result.append(LongShotResult(player: player, landing: landed))
         }
@@ -293,14 +293,14 @@ enum LongShotProjectionParser {
         return LongShotPearl(answer: answer, foundBy: GameProjectionJSON.strings(item, "foundBy"))
     }
 
-    static func chain(_ view: [String: Any]) -> [LongShotChainLink] {
+    static func chain(_ view: [String: Any]) throws -> [LongShotChainLink] {
         let items = GameProjectionJSON.objects(view, "chain")
-        let firstNumber = GameProjectionJSON.int(view, "usedCount") - items.count
+        let firstNumber = max(0, try GameProjectionJSON.int(view, "usedCount")) - items.count
         var result: [LongShotChainLink] = []
         var offset = 0
         for item in items {
             offset += 1
-            guard let player = namedPlayer(item, idKey: "playerId"), let landed = landing(item, textKey: "answer") else { continue }
+            guard let player = namedPlayer(item, idKey: "playerId"), let landed = try landing(item, textKey: "answer") else { continue }
             result.append(LongShotChainLink(id: "link-" + String(firstNumber + offset), player: player, landing: landed))
         }
         return result
@@ -321,31 +321,31 @@ enum LongShotProjectionParser {
         return LongShotHeartGain(player: player, atMillis: GameProjectionJSON.double(item, "at"))
     }
 
-    static func seats(_ view: [String: Any]) -> [LongShotSeat] {
+    static func seats(_ view: [String: Any]) throws -> [LongShotSeat] {
         var result: [LongShotSeat] = []
         for item in GameProjectionJSON.objects(view, "seats") {
             guard let player = namedPlayer(item, idKey: "id") else { continue }
-            result.append(LongShotSeat(id: player.id, name: player.name, hearts: GameProjectionJSON.int(item, "lives"),
-                                       meter: GameProjectionJSON.int(item, "meter"), isOut: GameProjectionJSON.bool(item, "out")))
+            result.append(LongShotSeat(id: player.id, name: player.name, hearts: try GameProjectionJSON.int(item, "lives"),
+                                       meter: try GameProjectionJSON.int(item, "meter"), isOut: GameProjectionJSON.bool(item, "out")))
         }
         return result
     }
 
-    static func best(_ view: [String: Any]) -> [LongShotBestAnswer] {
+    static func best(_ view: [String: Any]) throws -> [LongShotBestAnswer] {
         var result: [LongShotBestAnswer] = []
         for item in GameProjectionJSON.objects(view, "best") {
-            guard let player = namedPlayer(item, idKey: "id"), let landed = landing(item, textKey: "answer") else { continue }
+            guard let player = namedPlayer(item, idKey: "id"), let landed = try landing(item, textKey: "answer") else { continue }
             result.append(LongShotBestAnswer(player: player, prompt: GameProjectionJSON.string(item, "prompt"), landing: landed))
         }
         return result
     }
 
-    static func me(_ mine: [String: Any]) -> LongShotSelf {
+    static func me(_ mine: [String: Any]) throws -> LongShotSelf {
         var landed: LongShotLanding? = nil
-        if let answer = GameProjectionJSON.child(mine, "answer") { landed = landing(answer, textKey: "text") }
+        if let answer = GameProjectionJSON.child(mine, "answer") { landed = try landing(answer, textKey: "text") }
         var miss: LongShotMissedAnswer? = nil
         if let item = GameProjectionJSON.child(mine, "lastMiss") { miss = missedAnswer(item) }
-        return LongShotSelf(depth: GameProjectionJSON.int(mine, "score"), landing: landed, lastMiss: miss,
-                            roundPoints: GameProjectionJSON.int(mine, "roundPoints"))
+        return LongShotSelf(depth: try GameProjectionJSON.int(mine, "score"), landing: landed, lastMiss: miss,
+                            roundPoints: try GameProjectionJSON.int(mine, "roundPoints"))
     }
 }

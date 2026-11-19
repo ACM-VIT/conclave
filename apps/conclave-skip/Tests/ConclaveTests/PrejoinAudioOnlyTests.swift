@@ -76,22 +76,21 @@ struct PrejoinAudioOnlyLobbyTests {
         #expect(previewCalls == ["start"])
 
         premeeting.setAudioOnlyIntent(true)
-        #expect(viewModel.state.isAudioOnlyMode)
-        #expect(viewModel.state.isCameraOff)
+        #expect(!viewModel.state.isAudioOnlyMode)
+        #expect(!viewModel.state.isCameraOff)
         #expect(!viewModel.state.isMuted)
         #expect(previewCalls == ["start", "stop"])
         #expect(premeeting.lobbyMedia?.audioOnlyOn == true)
         #expect(premeeting.lobbyMedia?.cameraIntentOn == false)
 
         premeeting.setCameraIntent(true)
-        viewModel.setEntryMediaIntent(mic: true, camera: true)
-        #expect(viewModel.state.isCameraOff, "the camera stays off while audio-only is chosen")
+        #expect(premeeting.lobbyMedia?.cameraIntentOn == false)
         #expect(permissionRequests == ["camera"])
         #expect(previewCalls == ["start", "stop"])
 
         premeeting.setAudioOnlyIntent(false)
         #expect(!viewModel.state.isAudioOnlyMode)
-        #expect(viewModel.state.isCameraOff, "turning audio-only off does not turn the camera back on")
+        #expect(premeeting.lobbyMedia?.cameraIntentOn == false, "turning audio-only off does not restart the preview")
         #expect(premeeting.lobbyMedia?.audioOnlyOn == false)
     }
 
@@ -119,6 +118,73 @@ struct PrejoinAudioOnlyLobbyTests {
         #expect(!call.viewModel.state.isAudioOnlyMode)
         #expect(cameraRow(call).blockedReason == .none)
         await call.finish()
+    }
+
+    @Test func audioOnlyJoinDefersExistingAndNewVideoUntilVideoIsEnabled() async throws {
+        let call = RejoinHarness()
+        let viewModel = call.viewModel
+        let cameraUser = "camera@example.com#remote-session"
+        let screenUser = "screen@example.com#remote-session"
+        let lateUser = "late@example.com#remote-session"
+        let camera = ProducerInfo(producerId: "camera", producerUserId: cameraUser, kind: "video", type: "webcam", paused: false, roomId: "rose-sora-luffy")
+        let screen = ProducerInfo(producerId: "screen", producerUserId: screenUser, kind: "video", type: "screen", paused: false, roomId: "rose-sora-luffy")
+        let mic = ProducerInfo(producerId: "mic", producerUserId: cameraUser, kind: "audio", type: "webcam", paused: false, roomId: "rose-sora-luffy")
+        let late = ProducerInfo(producerId: "late", producerUserId: lateUser, kind: "video", type: "webcam", paused: false, roomId: "rose-sora-luffy")
+        call.media.isConfigured = false
+        viewModel.socketManager.testProducers = [camera, screen, mic]
+        viewModel.testJoinResponse = JoinRoomResponse(
+            rtpCapabilities: RtpCapabilities(codecs: nil, headerExtensions: nil),
+            existingProducers: [camera, screen, mic], status: "joined", roomId: "rose-sora-luffy"
+        )
+        let lobby = viewModel.premeeting
+        let hooks = LobbyCoreHooks()
+        hooks.join = { [weak viewModel] request in
+            viewModel?.joinRoom(roomId: request.roomId, displayName: request.displayName,
+                                clientId: "test-client", audioOnly: request.audioOnly)
+        }
+        lobby.lobbyHooks = hooks
+        lobby.handleIncomingURL(Self.link)
+        lobby.setGuestName("Local User")
+        lobby.setAudioOnlyIntent(true)
+        #expect(!viewModel.state.isAudioOnlyMode)
+        lobby.startOrJoin()
+        #expect(viewModel.state.isAudioOnlyMode)
+        #expect(await settle { viewModel.state.connectionState == .joined })
+        #expect(call.calls.count("consume:mic") > 0)
+        #expect(call.calls.count("consume:camera") == 0)
+        #expect(call.calls.count("consume:screen") == 0)
+        #expect(viewModel.state.participant(for: cameraUser)?.isCameraOff == false)
+        #expect(viewModel.state.activeScreenShareUserId == screenUser)
+
+        viewModel.socketManager.testProducers.append(late)
+        viewModel.socketManager.onNewProducer?(late)
+        #expect(await settle { viewModel.state.participant(for: lateUser)?.isCameraOff == false })
+        #expect(call.calls.count("consume:late") == 0)
+
+        viewModel.socketManager.testProducers = []
+        viewModel.setAudioOnlyMode(false)
+        #expect(await settle {
+            call.calls.count("consume:camera") == 1 && call.calls.count("consume:screen") == 1 && call.calls.count("consume:late") == 1
+        })
+        await call.finish()
+    }
+
+    @Test func abandoningALobbyLeavesTheNextRoomInVideoMode() {
+        let viewModel = MeetingViewModel()
+        let hooks = LobbyCoreHooks()
+        hooks.setEntryMediaIntent = { mic, camera in viewModel.setEntryMediaIntent(mic: mic, camera: camera) }
+        hooks.setEntryAudioOnly = { on in viewModel.setEntryAudioOnly(on) }
+        viewModel.setEntryMediaIntent(mic: false, camera: true)
+        let lobby = viewModel.premeeting
+        lobby.lobbyHooks = hooks
+        lobby.handleIncomingURL(Self.link)
+        lobby.setAudioOnlyIntent(true)
+        #expect(lobby.lobbyMedia?.audioOnlyOn == true)
+        #expect(!viewModel.state.isAudioOnlyMode)
+        lobby.setPath([])
+        lobby.handleIncomingURL("https://conclave.acmvit.in/fox-rain-dawn")
+        #expect(lobby.lobbyMedia?.audioOnlyOn == false)
+        #expect(lobby.lobbyMedia?.cameraIntentOn == true)
     }
 
     private func cameraRow(_ call: RejoinHarness) -> MeetingControlRow {

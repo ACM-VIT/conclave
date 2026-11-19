@@ -127,7 +127,34 @@ class ACT11LongShotBridgeTests {
         assertEquals(PromptHostAction.skipPrompt, PromptScenePolicy.hostAction(presenter("host", "classic-prompt-open").scene))
         assertEquals(PromptHostAction.next, PromptScenePolicy.hostAction(presenter("host", "fuse-popped").scene))
         assertEquals(PromptHostAction.none, PromptScenePolicy.hostAction(presenter("p2", "classic-prompt-open").scene))
-        assertEquals("skip", PromptHostAction.skipPrompt.moveType)
+        val hostMoves = mutableListOf<GameStageCommand>()
+        val host = presenter("host", "classic-prompt-open", sent = hostMoves)
+        assertEquals(ActivityTapResult.dispatched, host.send(PromptScenePolicy.hostAction(host.scene).intent()))
+        assertEquals("skip", hostMoves.single().type)
+        assertEquals("", hostMoves.single().payloadJSON)
+    }
+
+    @Test fun outOfRangeServerNumbersMakeTheProjectionUnavailable() {
+        val game = fixture.getJSONObject("snapshots").getJSONObject("classic-prompt-open").getJSONObject("public")
+        val view = JSONObject(game.getJSONObject("view").toString())
+        view.put("promptIndex", 1e30)
+        val projection = GameProjectionParser.parse(gameId = game.getString("gameId"), publicPhase = game.getString("phase"),
+            publicViewJSON = view.toString(), playerViewJSON = "")
+        assertFalse(projection.isKnownGame)
+        assertNull(projection.longShot)
+    }
+
+    @Test fun aJudgedAckReconcilesAnExpiredMove() {
+        val sent = mutableListOf<GameStageCommand>()
+        val games = presenter("p2", "classic-prompt-open", sent = sent)
+        games.setLongShotDraft("Modula-2")
+        assertEquals(ActivityTapResult.dispatched, games.submitLongShot())
+        val requestId = sent.single().requestId
+        games.fireTimeout(requestId)
+        assertFalse(games.interaction.isPending)
+        games.moveAcknowledged(requestId, true, "")
+        assertEquals(GameFailure.none, games.interaction.failure)
+        assertEquals("", games.longShotDraft)
     }
 
     @Test fun theFuseShowsTheHolderTheChainAndTheNotes() {

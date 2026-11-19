@@ -58,6 +58,8 @@ final class GameStagePresenter {
     @ObservationIgnored private var longShotDraftKey = ""
     @ObservationIgnored private var longShotSubmitted = ""
 
+    @ObservationIgnored private var lateJudgedRequestId = ""
+
     static let moveTimeoutMillis = 10000.0
 
     init() {}
@@ -103,11 +105,17 @@ final class GameStagePresenter {
     }
 
     func moveAcknowledged(requestId: String, success: Bool, serverText: String) {
-        if requestId.isEmpty || requestId != pendingRequestId { return }
-        cancelTimeout()
-        let ackedType = pendingType
-        pendingRequestId = ""
-        pendingType = ""
+        if requestId.isEmpty { return }
+        let ackedType: String
+        if requestId == pendingRequestId {
+            ackedType = pendingType
+            clearPending()
+        } else if requestId == lateJudgedRequestId {
+            ackedType = LongShotIntent.answerType
+            lateJudgedRequestId = ""
+        } else {
+            return
+        }
 
         let isChessMove = !chessMoveRequestId.isEmpty && chessMoveRequestId == requestId
         if isChessMove { settleChessMove(rejected: !success) }
@@ -157,6 +165,7 @@ final class GameStagePresenter {
         nextRequestNumber += 1
         let requestId = "g" + String(inputs.callSession) + "-" + String(nextRequestNumber)
         let stamped = intent.withRequestId(requestId)
+        lateJudgedRequestId = ""
         pendingRequestId = requestId
         pendingType = stamped.type
         failure = GameFailure.none
@@ -371,14 +380,12 @@ final class GameStagePresenter {
     }
 
     func reset() {
-        cancelTimeout()
+        clearPending()
         inputs = GameStageInputs.make()
         projection = GameProjection.empty
         parsedKey = ""
         pushReceivedAtMillis = 0.0
         emitLog = []
-        pendingRequestId = ""
-        pendingType = ""
         failure = GameFailure.none
         failureText = ""
         endPending = false
@@ -562,6 +569,7 @@ final class GameStagePresenter {
     }
 
     private func clearPending() {
+        lateJudgedRequestId = ""
         cancelTimeout()
         pendingRequestId = ""
         pendingType = ""
@@ -646,8 +654,10 @@ final class GameStagePresenter {
     private func startTimeout(requestId: String) {
         cancelTimeout()
         let wait = sleep
+        let deadlineMillis = GameMoveTiming.judgedAckTimeoutMillis(gameId: inputs.gameId, type: pendingType)
+        let timeoutMillis = deadlineMillis.map { Double($0) } ?? GameStagePresenter.moveTimeoutMillis
         timeoutTask = Task { @MainActor [weak self] in
-            await wait(GameStagePresenter.moveTimeoutMillis)
+            await wait(timeoutMillis)
             if Task.isCancelled { return }
             guard let self = self else { return }
             self.fireTimeout(requestId: requestId)
@@ -658,6 +668,9 @@ final class GameStagePresenter {
         if requestId != pendingRequestId { return }
         timeoutTask?.cancel()
         timeoutTask = nil
+        if GameMoveTiming.judgedAckTimeoutMillis(gameId: inputs.gameId, type: pendingType) != nil {
+            lateJudgedRequestId = requestId
+        }
         pendingRequestId = ""
         pendingType = ""
         failure = GameFailure.server

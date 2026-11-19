@@ -1313,7 +1313,9 @@ final class SocketIOManager {
 
     func sendGameMove(gameId: String, type: String, payload: GameJSONValue? = nil) async throws -> GameMoveResponse {
         let request = GameMoveRequest(gameId: gameId, type: type, payload: payload)
-        let data = try await emit(event: SocketEvent.gameMove, payload: request)
+        let timeoutMillis = GameMoveTiming.judgedAckTimeoutMillis(gameId: gameId, type: type)
+        let timeoutSeconds = timeoutMillis.map { Double($0) / 1_000.0 } ?? 30.0
+        let data = try await emit(event: SocketEvent.gameMove, payload: request, timeoutSeconds: timeoutSeconds)
         return try JSONDecoder().decode(GameMoveResponse.self, from: data)
     }
 

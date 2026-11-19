@@ -2433,6 +2433,12 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         val consumeConfigurationGeneration = configurationGeneration
         val producerClosureGeneration = remoteProducerClosureGenerations[producerId] ?: 0
         createReceiveTransportIfNeeded()
+        if (
+            configurationGeneration != consumeConfigurationGeneration ||
+            (remoteProducerClosureGenerations[producerId] ?: 0) != producerClosureGeneration
+        ) {
+            throw ErrorException("WebRTC session or remote producer changed while opening the receive transport")
+        }
         val socket = socketManager ?: throw ErrorException("Socket not configured")
         val loadedDevice = device ?: throw ErrorException("Device not configured")
         val rtpCapsJson = loadedDevice.getRtpCapabilities().takeIf { it.isNotBlank() }
@@ -2490,6 +2496,12 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             )
         }
         val consumer = try {
+            if (
+                configurationGeneration != consumeConfigurationGeneration ||
+                (remoteProducerClosureGenerations[producerId] ?: 0) != producerClosureGeneration
+            ) {
+                throw ErrorException("WebRTC session or remote producer changed before creating the consumer")
+            }
             receiveTransport.consume(
                 this,
                 response.id,
@@ -2511,8 +2523,6 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         if (response.kind == "audio") {
             (consumer.track as? AudioTrack)?.setVolume(participantAudioGain(producerUserId))
         }
-        consumer.resume()
-
         val isScreenVideo = producerType == "screen" && response.kind == "video"
         val trackKey = if (isScreenVideo) "${producerUserId}-screen" else producerUserId
         nextConsumerGeneration += 1
@@ -2586,6 +2596,13 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             }
         }
         try {
+            if (
+                configurationGeneration != consumeConfigurationGeneration ||
+                (remoteProducerClosureGenerations[producerId] ?: 0) != producerClosureGeneration
+            ) {
+                throw ErrorException("WebRTC session or remote producer changed before resuming the consumer")
+            }
+            consumer.resume()
             socket.resumeConsumer(
                 response.id,
                 response.kind == "video",

@@ -339,6 +339,13 @@ struct GameConfigValue: Codable, Equatable {
     }
 }
 
+enum GameMoveTiming {
+    static func judgedAckTimeoutMillis(gameId: String, type: String) -> Int? {
+        guard gameId == "long-shot", type == "answer" else { return nil }
+        return 45_000
+    }
+}
+
 struct GameJSONValue: Codable, Equatable {
     let rawJSON: String
 

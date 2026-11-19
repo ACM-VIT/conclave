@@ -10,7 +10,8 @@ enum LobbyJoinCoordinator {
         enteredInviteCode: String,
         needsInviteCode: Bool,
         resolvedClientId: String,
-        facing: LocalCameraFacing
+        facing: LocalCameraFacing,
+        audioOnly: Bool = false
     ) -> LobbyJoinRequest? {
         let roomId = target.roomId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !roomId.isEmpty else { return nil }
@@ -49,7 +50,8 @@ enum LobbyJoinCoordinator {
             webinarInviteCode: webinarInviteCode,
             clientId: target.clientId,
             allowRoomCreation: isNewMeeting || target.allowRoomCreation,
-            cameraFacing: facing
+            cameraFacing: facing,
+            audioOnly: audioOnly
         )
     }
 

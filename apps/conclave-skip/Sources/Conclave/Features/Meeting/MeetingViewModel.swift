@@ -715,6 +715,7 @@ final class MeetingViewModel {
 
     var testLocalMediaReportHandled: (() -> Void)?
 
+    var testJoinResponse: JoinRoomResponse?
     var testJoinFetch: (@MainActor () async throws -> Void)?
     #endif
     private var isDisplayNameUpdateInFlight = false
@@ -3297,7 +3298,7 @@ final class MeetingViewModel {
             let shouldPublishLocalMediaOnJoin = !state.mediaPublishingDisabled &&
                 (!state.isMuted || !state.isCameraOff)
             let hasInitialRemoteProducers = response.existingProducers.contains { producer in
-                !state.isLocalIdentityUserId(producer.producerUserId)
+                !state.isLocalIdentityUserId(producer.producerUserId) && permitsRemoteMedia(kind: producer.kind)
             }
             if shouldPublishLocalMediaOnJoin {
                 let transportsStartedAt = Date()
@@ -6543,7 +6544,7 @@ final class MeetingViewModel {
 
             guard !paused,
                   wasPaused == true,
-                  !(state.isAudioOnlyMode && kind == "video"),
+                  permitsRemoteMedia(kind: kind),
                   let consumerId = webRTCClient.consumerId(forProducer: producer.producerId) else { continue }
             consumersToResume.append((consumerId: consumerId, requestKeyFrame: kind == "video"))
             resumedProducerIds.append(producer.producerId)
@@ -6555,6 +6556,7 @@ final class MeetingViewModel {
             guard let self,
                   self.isCurrentSocketEvent(context) else { return }
             for (consumerId, requestKeyFrame) in consumersToResume {
+                guard self.isCurrentSocketEvent(context), self.permitsRemoteMedia(kind: kind) else { return }
                 do {
                     try await self.socketManager.resumeConsumer(
                         consumerId: consumerId,
@@ -6576,7 +6578,7 @@ final class MeetingViewModel {
         for target in LifecycleRefreshPolicy.videoStartKeyFrameRetryMillis {
             try? await Task.sleep(nanoseconds: UInt64((target - elapsed) * 1_000_000))
             elapsed = target
-            guard !Task.isCancelled, isCurrentSocketEvent(context) else { return }
+            guard !Task.isCancelled, isCurrentSocketEvent(context), permitsRemoteMedia(kind: "video") else { return }
             var live: [String] = []
             for producerId in producerIds {
                 if let info = producerInfosById[producerId], info.paused != true { live.append(producerId) }
@@ -6666,7 +6668,8 @@ final class MeetingViewModel {
         webinarInviteCode: String? = nil,
         clientId: String? = nil,
         allowRoomCreation: Bool = false,
-        reuseExistingSocket: Bool = false
+        reuseExistingSocket: Bool = false,
+        audioOnly: Bool? = nil
     ) {
         if versionGate.updateRequired && !isRejoinInFlight {
             PerformanceDiagnostics.event("join_blocked_update_required", details: "room=\(roomId)")
@@ -6725,6 +6728,7 @@ final class MeetingViewModel {
         self.currentRoomAliases = roomAliasSet(requestedRoomId: roomId, resolvedRoomId: nil)
         self.state.displayName = displayName
         self.state.isAdmin = isHost
+        if let audioOnly { setEntryAudioOnly(audioOnly) }
         if joinMode == .webinarAttendee {
             disableLocalMediaPublishingState()
         }
@@ -6781,6 +6785,10 @@ final class MeetingViewModel {
 
                 #if os(macOS) && !SKIP
 
+                if let testJoinResponse {
+                    await handleJoinedRoomResponse(testJoinResponse, joinAttemptId: joinAttemptId)
+                    return
+                }
                 if let testJoinFetch = self.testJoinFetch {
                     try await testJoinFetch()
                     return
@@ -7365,8 +7373,8 @@ final class MeetingViewModel {
             } else {
                 handleProducerState(producer)
             }
-            if let consumerId = webRTCClient.consumerId(forProducer: producer.producerId),
-               !(state.isAudioOnlyMode && producer.kind == "video") {
+            guard permitsRemoteMedia(kind: producer.kind) else { continue }
+            if let consumerId = webRTCClient.consumerId(forProducer: producer.producerId) {
                 try? await socketManager.resumeConsumer(consumerId: consumerId, requestKeyFrame: false)
             } else if webRTCClient.hasConsumerGeneration(forProducer: producer.producerId) {
 
@@ -7398,7 +7406,7 @@ final class MeetingViewModel {
             discardStaleConsumedProducer(producer)
             return
         }
-        if webRTCClient.hasConsumerGeneration(forProducer: producer.producerId) {
+        if !permitsRemoteMedia(kind: producer.kind) || webRTCClient.hasConsumerGeneration(forProducer: producer.producerId) {
             pendingProducers.removeValue(forKey: producer.producerId)
             pendingProducerContexts.removeValue(forKey: producer.producerId)
             pendingProducerRetryAttempts.removeValue(forKey: producer.producerId)
@@ -7473,7 +7481,7 @@ final class MeetingViewModel {
             } else {
                 guard isCurrentJoinAttempt(joinAttemptId) else { return }
             }
-            guard isTrackedRemoteProducer(producer) else { return }
+            guard permitsRemoteMedia(kind: producer.kind), isTrackedRemoteProducer(producer) else { return }
             debugLog("[Meeting] Failed to consume producer \(producer.producerId): \(error)")
             queueProducerConsumeRetry(producer, context: context, joinAttemptId: joinAttemptId)
         }
@@ -9767,7 +9775,7 @@ final class MeetingViewModel {
             || state.connectionState == ConnectionState.error else { return }
         state.pendingEntryMediaIntent = nil
         state.isMuted = !rejoinMicOn
-        state.isCameraOff = !rejoinCameraOn
+        state.isCameraOff = !rejoinCameraOn || state.isAudioOnlyMode
         rejoinJoinCount += 1
         if let override = rejoinJoinOverride {
             override(context)
@@ -9964,7 +9972,6 @@ final class MeetingViewModel {
             isAppActive: premeetingIsAppActive,
             micIntentOn: isPromotionLobbyOpen ? promotionMicIntent : (state.pendingEntryMediaIntent?.mic ?? !state.isMuted),
             cameraIntentOn: isPromotionLobbyOpen ? promotionCameraIntent : (state.pendingEntryMediaIntent?.camera ?? !state.isCameraOff),
-            audioOnlyIntentOn: !isPromotionLobbyOpen && state.isAudioOnlyMode,
             resumeInFlight: resumeInFlight,
             resumeRoomId: resumeRoomId,
             updateRequired: versionGate.updateRequired,
@@ -10363,7 +10370,7 @@ final class MeetingViewModel {
 
     private func requestRemoteVideoKeyFrames(producerIds: [String], context: SocketEventContext) async {
         for producerId in producerIds {
-            guard isCurrentSocketEvent(context), state.connectionState == .joined else { return }
+            guard isCurrentSocketEvent(context), state.connectionState == .joined, permitsRemoteMedia(kind: "video") else { return }
             guard let consumerId = webRTCClient.consumerId(forProducer: producerId) else { continue }
             try? await socketManager.setConsumerPreferences(consumerId: consumerId, requestKeyFrame: true)
         }
@@ -11109,7 +11116,30 @@ final class MeetingViewModel {
         if enabled && state.isScreenSharing {
             toggleScreenShare()
         }
+        let videos = producerInfosById.values.filter {
+            $0.kind == "video" && !state.isLocalIdentityUserId($0.producerUserId)
+        }
+        if enabled {
+            for producer in videos {
+                webRTCClient.closeConsumer(producerId: producer.producerId, userId: producer.producerUserId)
+            }
+        } else if state.connectionState == .joined && !videos.isEmpty {
+            let context = currentSocketEventContext()
+            let producerIds = videos.map { $0.producerId }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                for producerId in producerIds {
+                    guard self.isCurrentSocketEvent(context), self.permitsRemoteMedia(kind: "video") else { return }
+                    guard let producer = self.producerInfosById[producerId] else { continue }
+                    await self.consumeRemoteProducer(producer, context: context)
+                }
+            }
+        }
         scheduleRemoteConsumerBandwidthPolicyUpdate()
+    }
+
+    private func permitsRemoteMedia(kind: String) -> Bool {
+        kind != "video" || !state.isAudioOnlyMode
     }
 
     var localCameraFacing: LocalCameraFacing {

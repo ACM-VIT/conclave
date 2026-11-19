@@ -100,6 +100,29 @@ struct WatchTogetherOptOutTests {
         #expect(!presenter.chrome.isWatchTogetherHidden)
     }
 
+    @Test func rejoiningAfterAnAbandonedLoadMountsAFreshPlayer() {
+        let presenter = stage(inputs())
+        let activity = ActivitySession(shell: MeetingShellPresenter(), stage: presenter)
+        activity.bindStage()
+        let relay = ActiveAppSession()
+        relay.onBridgeEnded = { [weak relay] id in relay?.detachBridge(appSessionId: id) }
+        relay.begin(appId: "watch", callSessionId: "call-watch", isReadOnly: false)
+        activity.appHost.bind(session: relay)
+        activity.appHost.apply(AppHostInputs.make(callSession: 1, appId: "watch"))
+        #expect(relay.attachBridge(appSessionId: relay.appSessionId) { _ in })
+        let abandonedMount = activity.appHost.model.reloadSerial
+
+        presenter.leaveWatchTogether()
+        activity.appHost.fireReadyTimeout(appSessionId: relay.appSessionId, reloadSerial: abandonedMount)
+        #expect(activity.appHost.model.issue == .none)
+        presenter.rejoinWatchTogether()
+        #expect(activity.appHost.model.wantsWebView)
+        #expect(activity.appHost.model.phase == .opening)
+        #expect(relay.attachBridge(appSessionId: relay.appSessionId) { _ in })
+        activity.appHost.fireReadyTimeout(appSessionId: relay.appSessionId, reloadSerial: activity.appHost.model.reloadSerial)
+        #expect(activity.appHost.model.issue == .timedOut)
+    }
+
     @Test func leavingReleasesOnlyThisDevicesPlayer() {
         let presenter = stage(inputs())
         let activity = ActivitySession(shell: MeetingShellPresenter(), stage: presenter)

@@ -91,6 +91,8 @@ final class SocketIOManager {
 
     var testCallGate: (@MainActor (String) async throws -> Void)?
 
+    var testProducers: [ProducerInfo] = []
+
     var testSendChatError: Error?
 
     var testLastSendSuppressedEmbeds = false
@@ -167,7 +169,7 @@ final class SocketIOManager {
         paused: Bool? = nil,
         requestKeyFrame: Bool = false
     ) async throws { }
-    func getProducers() async throws -> GetProducersResponse { GetProducersResponse(producers: []) }
+    func getProducers() async throws -> GetProducersResponse { GetProducersResponse(producers: testProducers) }
     func getRooms() async throws -> [RoomInfo] { [] }
 
     func toggleMute(producerId: String, paused: Bool) async throws { }

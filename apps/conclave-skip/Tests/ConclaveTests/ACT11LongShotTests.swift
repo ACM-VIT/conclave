@@ -92,6 +92,59 @@ struct ACT11LongShotTests {
         return try #require(parsed.longShot)
     }
 
+    @Test func outOfRangeLongShotNumbersMakeTheGameUnavailable() throws {
+        for (field, value) in [
+            ("promptIndex", 1e30 as Any),
+            ("promptIndex", Int32.max as Any),
+            ("tierPoints", ["obvious": -1e30] as Any),
+        ] {
+            let fixture = try inputs("classic-prompt-open", viewer: Self.host) { $0[field] = value }
+            let games = GameStagePresenter()
+            games.apply(fixture)
+            #expect(games.scene.longShot == nil)
+            #expect(!games.chrome.isKnownGame)
+        }
+        for (gameId, json) in [
+            ("trivia", #"{"optionCounts":[1,1e30]}"#),
+            ("most-likely-to", #"{"counts":{"host":-1e30}}"#),
+        ] {
+            let projection = GameProjectionParser.parse(gameId: gameId, publicPhase: "question", publicViewJSON: json, playerViewJSON: "")
+            #expect(!projection.isKnownGame)
+        }
+    }
+
+    @Test func theLongShotHostSkipEmitsTheServerMove() throws {
+        let recorder = Recorder()
+        let games = try presenter(["classic-prompt-open"], viewer: Self.host, recorder: recorder)
+        let action = PromptScenePolicy.hostAction(games.scene)
+        #expect(games.send(action.intent()) == .dispatched)
+        let command = try #require(recorder.commands.last)
+        #expect(command.kind == .move && command.type == "skip" && command.payloadJSON.isEmpty)
+    }
+
+    @Test func judgedMovesWaitForTheServerAndReconcileALateAck() async throws {
+        let recorder = Recorder()
+        let games = try presenter(["classic-prompt-open"], viewer: Self.host, recorder: recorder)
+        var scheduledWait: Double?
+        games.sleep = { millis in
+            scheduledWait = millis
+            try? await Task.sleep(nanoseconds: 60_000_000_000)
+        }
+        games.setLongShotDraft("Modula-2")
+        #expect(games.submitLongShot() == .dispatched)
+        let command = try #require(recorder.commands.last)
+        for _ in 0..<100 {
+            if scheduledWait != nil { break }
+            await Task.yield()
+        }
+        #expect((scheduledWait ?? 0) > GameStagePresenter.moveTimeoutMillis)
+        games.fireTimeout(requestId: command.requestId)
+        #expect(!games.interaction.isPending)
+        games.moveAcknowledged(requestId: command.requestId, success: true, serverText: "")
+        #expect(games.interaction.failure == .none)
+        #expect(games.longShotDraft.isEmpty)
+    }
+
     @Test func everyServerSnapshotParsesIntoItsTypedRound() throws {
         let expected: [(String, LongShotMode, LongShotStage)] = [
             ("classic-lobby", .classic, .lobby), ("classic-ready", .classic, .dive), ("classic-prompt-open", .classic, .dive),

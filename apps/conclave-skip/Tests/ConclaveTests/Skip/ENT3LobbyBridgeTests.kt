@@ -90,6 +90,26 @@ class ENT3LobbyBridgeTests {
         assertFalse(joins[0].isHost)
     }
 
+    @Test fun audioOnlyIsSentWithTheJoinForItsOwnLobby() {
+        val presenter = presenter()
+        val joins = mutableListOf<LobbyJoinRequest>()
+        presenter.lobbyHooks = LobbyCoreHooks().also { hooks ->
+            hooks.join = { request -> joins.add(request) }
+        }
+        presenter.handleIncomingURL("https://conclave.acmvit.in/rose-sora-luffy")
+        presenter.setAudioOnlyIntent(true)
+        assertEquals(true, presenter.lobbyMedia?.audioOnlyOn)
+        assertTrue(joins.isEmpty())
+        presenter.setPath(skip.lib.Array(listOf<PremeetingRoute>()))
+
+        presenter.handleIncomingURL("https://conclave.acmvit.in/fox-rain-dawn")
+        assertEquals(false, presenter.lobbyMedia?.audioOnlyOn)
+        presenter.setAudioOnlyIntent(true)
+        presenter.startOrJoin()
+        assertEquals("fox-rain-dawn", joins.single().roomId)
+        assertTrue(joins.single().audioOnly)
+    }
+
     @Test fun lobbyUiCacheReusesInstancesForEqualSnapshots() {
         val presenter = presenter()
         presenter.handleIncomingURL("https://conclave.acmvit.in/rose-sora-luffy")

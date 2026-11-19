@@ -754,8 +754,12 @@ final class AppHostPresenter {
     func setHiddenLocally(_ hidden: Bool) {
         if isHiddenLocally == hidden { return }
         isHiddenLocally = hidden
-        rebuild()
-        if hidden { session?.releaseEmbed() }
+        if hidden {
+            session?.releaseEmbed()
+            rebuild()
+        } else {
+            retry()
+        }
     }
 
     func closeFailed() {
@@ -780,11 +784,15 @@ final class AppHostPresenter {
             rebuild()
         case .loadStarted:
             followSession()
-            if event.appSessionId != appSessionId { return }
+            if event.appSessionId != appSessionId || isHiddenLocally { return }
             embedReady = false
             issue = AppHostIssue.none
             startReadyTimer()
             rebuild()
+        case .loadDetached:
+            if event.appSessionId != appSessionId { return }
+            cancelReadyTimer()
+            embedReady = false
         case .ready:
             if event.appSessionId != appSessionId { return }
             embedReady = true
@@ -1315,7 +1323,7 @@ final class AppHostPresenter {
 
     func fireReadyTimeout(appSessionId expectedSession: String, reloadSerial expectedReload: Int) {
         if appSessionId != expectedSession || reloadSerial != expectedReload { return }
-        if embedReady || issue != AppHostIssue.none { return }
+        if readyTimeoutTask == nil || embedReady || issue != AppHostIssue.none { return }
         issue = AppHostIssue.timedOut
         readyTimeoutTask = nil
         rebuild()

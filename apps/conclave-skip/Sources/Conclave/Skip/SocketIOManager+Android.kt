@@ -1251,7 +1251,8 @@ internal class SocketIOManager {
         if (!rawPayload.isNullOrEmpty() && rawPayload != "null") {
             request.put("payload", jsonValueFromRaw(rawPayload))
         }
-        val data = emit(SocketEvent.gameMove, request)
+        val timeoutMs = GameMoveTiming.judgedAckTimeoutMillis(gameId = gameId, type = type)?.toLong() ?: ACK_TIMEOUT_MS
+        val data = emit(SocketEvent.gameMove, request, timeoutMs = timeoutMs)
         return decodeGameMoveResponse(data)
     }
 

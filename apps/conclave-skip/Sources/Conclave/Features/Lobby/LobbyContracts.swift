@@ -210,6 +210,7 @@ struct LobbyJoinRequest: Equatable {
     let allowRoomCreation: Bool
 
     let cameraFacing: LocalCameraFacing
+    let audioOnly: Bool
 }
 
 @MainActor

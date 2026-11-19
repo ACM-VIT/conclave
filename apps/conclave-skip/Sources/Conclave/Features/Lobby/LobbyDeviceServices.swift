@@ -298,7 +298,8 @@ enum LobbyProductionHooks {
             meetingInviteCode: request.meetingInviteCode,
             webinarInviteCode: request.webinarInviteCode,
             clientId: request.clientId,
-            allowRoomCreation: request.allowRoomCreation
+            allowRoomCreation: request.allowRoomCreation,
+            audioOnly: request.audioOnly
         )
     }
 }
