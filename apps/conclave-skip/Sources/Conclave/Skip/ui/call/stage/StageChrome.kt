@@ -122,7 +122,7 @@ internal fun StageChrome(
                     StageTopRow(stage, capsuleMax, onMinimize, routeAction)
                 }
             }
-            androidx.compose.animation.AnimatedVisibility(visible = visible && stage.chrome.isWatchTogetherHidden, enter = enter,
+            androidx.compose.animation.AnimatedVisibility(visible = stage.chrome.isWatchTogetherHidden, enter = enter,
                 exit = exit, modifier = Modifier.fillMaxWidth()) {
                 Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                     StageWatchTogetherPill(stage)

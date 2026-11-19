@@ -59,9 +59,6 @@ struct StageChromeLayer: View {
                 if stage.chrome.isWatchTogetherHidden {
                     StageWatchTogetherPill(stage: stage)
                         .frame(maxWidth: .infinity)
-                        .opacity(ChromeAutoHidePolicy.chromeOpacity(state))
-                        .allowsHitTesting(!hidden)
-                        .accessibilityHidden(hidden)
                         .accessibilitySortPriority(5.5)
                         .transition(.opacity)
                 }
