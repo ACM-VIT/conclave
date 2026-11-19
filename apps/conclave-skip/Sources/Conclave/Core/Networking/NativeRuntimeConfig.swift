@@ -64,7 +64,7 @@ enum NativeRuntimeConfig {
             "CONCLAVE_STAGE_FIXTURE", "CONCLAVE_STAGE_FIXTURE_PATTERN", "CONCLAVE_STAGE_FORCE_SCREEN_READER",
             "CONCLAVE_PEOPLE_FIXTURE", "CONCLAVE_CHAT_FIXTURE", "CONCLAVE_TRANSCRIPT_FIXTURE", "CONCLAVE_SILENT_AUDIO"
         ]
-        #if os(iOS) && targetEnvironment(simulator)
+        #if DEBUG && os(iOS) && targetEnvironment(simulator) && !SKIP
         return keys + [fakeCameraKey]
         #else
         return keys

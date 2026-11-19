@@ -2961,7 +2961,6 @@ final class WebRTCClient: NSObject, ObservableObject {
         for quality: VideoQuality,
         connectionQuality: ConnectionQuality = .unknown
     ) -> [RTCRtpEncodingParameters] {
-        // The VP8 encoder rejects simulcast layers with different frame rates.
         let fps = webcamCaptureProfile(for: quality, connectionQuality: connectionQuality).fps
         return webcamEncodingSpecs(for: quality, connectionQuality: connectionQuality).enumerated().map { index, spec in
             let encoding = RTCRtpEncodingParameters()
