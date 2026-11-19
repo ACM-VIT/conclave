@@ -2654,15 +2654,7 @@ final class WebRTCClient: NSObject, ObservableObject {
             localVideoEnabled = false
         }
 
-        let status = AVCaptureDevice.authorizationStatus(for: .video)
-        if status == .notDetermined {
-            let granted = await AVCaptureDevice.requestAccess(for: .video)
-            if !granted {
-                throw WebRTCError.permissionDenied
-            }
-        } else if status != .authorized {
-            throw WebRTCError.permissionDenied
-        }
+        try await ensureCameraPermission()
         guard generation == configurationGeneration else { throw WebRTCError.staleConfiguration }
         guard localVideoOffIntentGeneration == offIntentGeneration else {
             debugLog("[WebRTC] Camera start cancelled by a camera-off before producing")
@@ -2670,15 +2662,7 @@ final class WebRTCClient: NSObject, ObservableObject {
         }
 
         let source = Self.factory.videoSource()
-        let capturer: RTCCameraVideoCapturer
-        if ProcessInfo.processInfo.isiOSAppOnMac {
-            let adapter = MacCameraFrameAdapter(source: source)
-            cameraFrameAdapter = adapter
-            capturer = RTCCameraVideoCapturer(delegate: adapter)
-        } else {
-            cameraFrameAdapter = nil
-            capturer = RTCCameraVideoCapturer(delegate: source)
-        }
+        let capturer = makeCameraCapturer(source: source)
         videoSource = source
         videoCapturer = capturer
 
@@ -2782,19 +2766,61 @@ final class WebRTCClient: NSObject, ObservableObject {
         }
     }
 
+    private func ensureCameraPermission() async throws {
+        let status = cameraAuthorizationStatus
+        if status == .notDetermined {
+            let granted = await AVCaptureDevice.requestAccess(for: .video)
+            if !granted {
+                throw WebRTCError.permissionDenied
+            }
+        } else if status != .authorized {
+            throw WebRTCError.permissionDenied
+        }
+    }
+
+    private func makeCameraCapturer(source: RTCVideoSource) -> RTCCameraVideoCapturer {
+        #if DEBUG && targetEnvironment(simulator)
+        if NativeRuntimeConfig.usesFakeCamera {
+            return SyntheticCameraCapturer(delegate: source)
+        }
+        #endif
+        if ProcessInfo.processInfo.isiOSAppOnMac {
+            let adapter = MacCameraFrameAdapter(source: source)
+            cameraFrameAdapter = adapter
+            return RTCCameraVideoCapturer(delegate: adapter)
+        } else {
+            cameraFrameAdapter = nil
+            return RTCCameraVideoCapturer(delegate: source)
+        }
+    }
+
+    private var cameraAuthorizationStatus: AVAuthorizationStatus {
+        #if DEBUG && targetEnvironment(simulator)
+        if NativeRuntimeConfig.usesFakeCamera { return .authorized }
+        #endif
+        return AVCaptureDevice.authorizationStatus(for: .video)
+    }
+
     func startCameraCapture() throws {
         guard let capturer = videoCapturer else { return }
 
         LocalPreviewController.shared.releaseScopedPreviewForCallCamera()
 
-        guard let camera = getCameraDevice(position: currentCameraPosition) else {
-            throw WebRTCError.noCameraAvailable
-        }
-
         let profile = webcamCaptureProfile(
             for: currentVideoQuality,
             connectionQuality: currentLocalBandwidthQuality
         )
+        #if DEBUG && targetEnvironment(simulator)
+        if let synthetic = capturer as? SyntheticCameraCapturer {
+            synthetic.start(width: Int(profile.width), height: Int(profile.height), fps: profile.fps)
+            return
+        }
+        #endif
+
+        guard let camera = getCameraDevice(position: currentCameraPosition) else {
+            throw WebRTCError.noCameraAvailable
+        }
+
         let format = try selectFormat(for: camera, targetWidth: profile.width, targetHeight: profile.height)
         let fps = try selectFPS(for: format, targetFPS: profile.fps)
         let captureFps = CameraFrameRatePolicy.captureFps(fps, ranges: Self.frameRateRanges(format))
@@ -3928,8 +3954,7 @@ final class WebRTCClient: NSObject, ObservableObject {
         let enableCapturer = videoCapturer
         do {
             if enabled {
-                let status = AVCaptureDevice.authorizationStatus(for: .video)
-                guard status == .authorized else {
+                guard cameraAuthorizationStatus == .authorized else {
                     throw WebRTCError.permissionDenied
                 }
                 if !localVideoEnabled {

@@ -11,6 +11,9 @@ enum MediaPermissionStatusProvider {
         #if os(iOS) && !SKIP
         switch kind {
         case .camera:
+            #if DEBUG && targetEnvironment(simulator)
+            if NativeRuntimeConfig.usesFakeCamera { return .granted }
+            #endif
             return EntryPolicies.mediaPermissionState(authorization: cameraAuthorization(),
                                                       hasDevice: AVCaptureDevice.default(for: .video) != nil)
         case .microphone:
@@ -67,6 +70,12 @@ enum MediaPermissionStatusProvider {
         #if os(iOS) && !SKIP
         switch kind {
         case .camera:
+            #if DEBUG && targetEnvironment(simulator)
+            if NativeRuntimeConfig.usesFakeCamera {
+                completion(true)
+                return
+            }
+            #endif
             AVCaptureDevice.requestAccess(for: .video) { granted in
                 DispatchQueue.main.async { completion(granted) }
             }
