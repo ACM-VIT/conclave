@@ -2137,7 +2137,6 @@ final class WebRTCClient: NSObject, ObservableObject {
         let rid: String
         let scaleResolutionDownBy: Double
         let maxBitrateBps: Int
-        let maxFramerate: Double
     }
 
     private struct ScreenShareEncodingCap {
@@ -2876,16 +2875,16 @@ final class WebRTCClient: NSObject, ObservableObject {
         switch quality {
         case .low:
             defaults = [
-                WebcamEncodingSpec(rid: "q", scaleResolutionDownBy: 2, maxBitrateBps: 65_000, maxFramerate: 8),
-                WebcamEncodingSpec(rid: "h", scaleResolutionDownBy: 1, maxBitrateBps: 120_000, maxFramerate: 12),
-                WebcamEncodingSpec(rid: "f", scaleResolutionDownBy: 1, maxBitrateBps: 180_000, maxFramerate: 15)
+                WebcamEncodingSpec(rid: "q", scaleResolutionDownBy: 2, maxBitrateBps: 65_000),
+                WebcamEncodingSpec(rid: "h", scaleResolutionDownBy: 1, maxBitrateBps: 120_000),
+                WebcamEncodingSpec(rid: "f", scaleResolutionDownBy: 1, maxBitrateBps: 180_000)
             ]
             defaultMaximumBitrate = 180_000
         case .standard:
             defaults = [
-                WebcamEncodingSpec(rid: "q", scaleResolutionDownBy: 4, maxBitrateBps: 80_000, maxFramerate: 12),
-                WebcamEncodingSpec(rid: "h", scaleResolutionDownBy: 2, maxBitrateBps: 220_000, maxFramerate: 20),
-                WebcamEncodingSpec(rid: "f", scaleResolutionDownBy: 1, maxBitrateBps: 1_650_000, maxFramerate: 30)
+                WebcamEncodingSpec(rid: "q", scaleResolutionDownBy: 4, maxBitrateBps: 80_000),
+                WebcamEncodingSpec(rid: "h", scaleResolutionDownBy: 2, maxBitrateBps: 220_000),
+                WebcamEncodingSpec(rid: "f", scaleResolutionDownBy: 1, maxBitrateBps: 1_650_000)
             ]
             defaultMaximumBitrate = 1_650_000
         }
@@ -2905,10 +2904,7 @@ final class WebRTCClient: NSObject, ObservableObject {
                 maxBitrateBps: max(
                     20_000,
                     Int((Double(effectiveMaximumBitrate) * bitrateRatio * detailLayerFactor).rounded())
-                ),
-                maxFramerate: index == lastIndex
-                    ? Double(configuredCameraFrameRate)
-                    : min(spec.maxFramerate, Double(configuredCameraFrameRate))
+                )
             )
         }
     }
@@ -2931,35 +2927,29 @@ final class WebRTCClient: NSObject, ObservableObject {
         switch connectionQuality {
         case .emergency:
             let bitrateCaps = [65_000, 90_000, 120_000]
-            let framerateCaps: [Double] = [8, 8, 8]
             return base.enumerated().map { index, spec in
                 WebcamEncodingSpec(
                     rid: spec.rid,
                     scaleResolutionDownBy: constrainedScaleResolutionDownBy(index, spec),
-                    maxBitrateBps: min(spec.maxBitrateBps, bitrateCaps[min(index, bitrateCaps.count - 1)]),
-                    maxFramerate: min(spec.maxFramerate, framerateCaps[min(index, framerateCaps.count - 1)])
+                    maxBitrateBps: min(spec.maxBitrateBps, bitrateCaps[min(index, bitrateCaps.count - 1)])
                 )
             }
         case .poor:
             let bitrateCaps = [120_000, 160_000, 180_000]
-            let framerateCaps: [Double] = [12, 12, 15]
             return base.enumerated().map { index, spec in
                 WebcamEncodingSpec(
                     rid: spec.rid,
                     scaleResolutionDownBy: constrainedScaleResolutionDownBy(index, spec),
-                    maxBitrateBps: min(spec.maxBitrateBps, bitrateCaps[min(index, bitrateCaps.count - 1)]),
-                    maxFramerate: min(spec.maxFramerate, framerateCaps[min(index, framerateCaps.count - 1)])
+                    maxBitrateBps: min(spec.maxBitrateBps, bitrateCaps[min(index, bitrateCaps.count - 1)])
                 )
             }
         case .fair:
             let bitrateCaps = [90_000, 220_000, 420_000]
-            let framerateCaps: [Double] = [10, 15, 20]
             return base.enumerated().map { index, spec in
                 WebcamEncodingSpec(
                     rid: spec.rid,
                     scaleResolutionDownBy: spec.scaleResolutionDownBy,
-                    maxBitrateBps: min(spec.maxBitrateBps, bitrateCaps[min(index, bitrateCaps.count - 1)]),
-                    maxFramerate: min(spec.maxFramerate, framerateCaps[min(index, framerateCaps.count - 1)])
+                    maxBitrateBps: min(spec.maxBitrateBps, bitrateCaps[min(index, bitrateCaps.count - 1)])
                 )
             }
         case .good, .unknown:
@@ -2971,7 +2961,9 @@ final class WebRTCClient: NSObject, ObservableObject {
         for quality: VideoQuality,
         connectionQuality: ConnectionQuality = .unknown
     ) -> [RTCRtpEncodingParameters] {
-        webcamEncodingSpecs(for: quality, connectionQuality: connectionQuality).enumerated().map { index, spec in
+        // The VP8 encoder rejects simulcast layers with different frame rates.
+        let fps = webcamCaptureProfile(for: quality, connectionQuality: connectionQuality).fps
+        return webcamEncodingSpecs(for: quality, connectionQuality: connectionQuality).enumerated().map { index, spec in
             let encoding = RTCRtpEncodingParameters()
             encoding.rid = spec.rid
             encoding.isActive = shouldSendWebcamEncoding(
@@ -2981,7 +2973,7 @@ final class WebRTCClient: NSObject, ObservableObject {
             )
             encoding.scaleResolutionDownBy = NSNumber(value: spec.scaleResolutionDownBy)
             encoding.maxBitrateBps = NSNumber(value: spec.maxBitrateBps)
-            encoding.maxFramerate = NSNumber(value: spec.maxFramerate)
+            encoding.maxFramerate = NSNumber(value: fps)
             encoding.numTemporalLayers = NSNumber(value: WebcamTemporalLayerPolicy.temporalLayerCount)
             encoding.networkPriority = spec.rid == "f" ? .low : .veryLow
             return encoding
@@ -4758,6 +4750,7 @@ final class WebRTCClient: NSObject, ObservableObject {
                 for: currentVideoQuality,
                 connectionQuality: connectionQuality
             )
+            let fps = webcamCaptureProfile(for: currentVideoQuality, connectionQuality: connectionQuality).fps
 
             if adaptEncodings {
                 try? producer.setMaxSpatialLayer(
@@ -4779,7 +4772,7 @@ final class WebRTCClient: NSObject, ObservableObject {
                             connectionQuality: connectionQuality
                         )
                         encodings[index].maxBitrateBps = spec.maxBitrateBps
-                        encodings[index].maxFramerate = spec.maxFramerate
+                        encodings[index].maxFramerate = fps
                         encodings[index].scaleResolutionDownBy = spec.scaleResolutionDownBy
                         encodings[index].numTemporalLayers = WebcamTemporalLayerPolicy.temporalLayerCount
                     }
