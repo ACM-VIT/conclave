@@ -310,6 +310,17 @@ const emitConsumerTelemetry = (
   } satisfies ConsumerTelemetryNotification);
 };
 
+// Phones encode webcam simulcast with three temporal layers, so temporal layer
+// zero is a quarter of their frames. Leaving it unset gives every webcam viewer
+// the sender's full frame rate.
+const webcamLayersAtFullFrameRate = (
+  target: ConsumerTelemetryTarget,
+  layers: ConsumerLayers,
+): ConsumerLayers =>
+  target.room.getProducerInfoById(target.consumer.producerId)?.type === "webcam"
+    ? { spatialLayer: layers.spatialLayer }
+    : layers;
+
 const applyConsumerPreferences = async (
   target: ConsumerTelemetryTarget,
   options: {
@@ -326,7 +337,9 @@ const applyConsumerPreferences = async (
   if (options.preferredLayers) {
     if (isLayerCapableConsumer(consumer)) {
       try {
-        await consumer.setPreferredLayers(options.preferredLayers);
+        await consumer.setPreferredLayers(
+          webcamLayersAtFullFrameRate(target, options.preferredLayers),
+        );
       } catch (error) {
         if (options.explicitLayers) {
           throw error;
