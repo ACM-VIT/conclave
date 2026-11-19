@@ -9396,7 +9396,7 @@ final class MeetingViewModel {
         requestActivityRefresh()
     }
 
-    private static func activityGameInput(_ entry: GameCatalogEntry) -> ActivityGameInput {
+    static func activityGameInput(_ entry: GameCatalogEntry) -> ActivityGameInput {
         var options: [ActivityOptionInput] = []
         for option in entry.options {
             var choices: [GameChoiceModel] = []

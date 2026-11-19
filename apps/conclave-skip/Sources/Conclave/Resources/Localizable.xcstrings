@@ -128,6 +128,9 @@
     "%@ is choosing a word." : {
       "extractionState" : "manual"
     },
+    "%@ is guessing" : {
+      "extractionState" : "manual"
+    },
     "%@ is no longer watching." : {
       "extractionState" : "manual"
     },
@@ -158,6 +161,9 @@
       "extractionState" : "manual"
     },
     "%@ left" : {
+      "extractionState" : "manual"
+    },
+    "%@ left in this turn" : {
       "extractionState" : "manual"
     },
     "%@ left. Spotlight follows the speaker." : {
@@ -240,13 +246,25 @@
     "%@ wins with %@" : {
       "extractionState" : "manual"
     },
+    "%@, away" : {
+      "extractionState" : "manual"
+    },
     "%@, correct position" : {
+      "extractionState" : "manual"
+    },
+    "%@, guessed by %@" : {
+      "extractionState" : "manual"
+    },
+    "%@, guessing now" : {
       "extractionState" : "manual"
     },
     "%@, in the word" : {
       "extractionState" : "manual"
     },
     "%@, not in the word" : {
+      "extractionState" : "manual"
+    },
+    "%@, up next" : {
       "extractionState" : "manual"
     },
     "%lld More Participants" : {
@@ -689,6 +707,9 @@
     "A takeback is pending" : {
       "extractionState" : "manual"
     },
+    "A teammate is guessing" : {
+      "extractionState" : "manual"
+    },
     "AI" : {
       "extractionState" : "manual"
     },
@@ -826,6 +847,9 @@
       "extractionState" : "manual"
     },
     "Affects this test only." : {
+      "extractionState" : "manual"
+    },
+    "All together · %lld of %lld tries used" : {
       "extractionState" : "manual"
     },
     "Allow" : {
@@ -3765,6 +3789,9 @@
     "On hold" : {
       "extractionState" : "manual"
     },
+    "One board, no turns" : {
+      "extractionState" : "manual"
+    },
     "Only hosts can open apps." : {
       "extractionState" : "manual"
     },
@@ -3928,6 +3955,9 @@
       }
     },
     "Party" : {
+      "extractionState" : "manual"
+    },
+    "Pass" : {
       "extractionState" : "manual"
     },
     "Passes" : {
@@ -4588,6 +4618,9 @@
     "Round %lld of %lld" : {
       "extractionState" : "manual"
     },
+    "Round complete" : {
+      "extractionState" : "manual"
+    },
     "Row %lld, column %lld" : {
       "extractionState" : "manual"
     },
@@ -4947,6 +4980,12 @@
     "Solved in %@" : {
       "extractionState" : "manual"
     },
+    "Solved in %lld of %lld tries." : {
+      "extractionState" : "manual"
+    },
+    "Solved in %lld of %lld tries. %@ landed the final guess." : {
+      "extractionState" : "manual"
+    },
     "Someone" : {
       "extractionState" : "manual"
     },
@@ -5206,13 +5245,28 @@
       "extractionState" : "manual",
       "generatesSymbol" : false
     },
+    "Take turns · %lld of %lld tries used" : {
+      "extractionState" : "manual"
+    },
     "Takeback requested" : {
+      "extractionState" : "manual"
+    },
+    "Talk it through on the call. Anyone can enter the next guess." : {
+      "extractionState" : "manual"
+    },
+    "Talk it through, then enter the team’s guess." : {
       "extractionState" : "manual"
     },
     "Tap Now" : {
       "extractionState" : "manual"
     },
     "Taps" : {
+      "extractionState" : "manual"
+    },
+    "Team" : {
+      "extractionState" : "manual"
+    },
+    "Team board" : {
       "extractionState" : "manual"
     },
     "Test" : {
@@ -5362,6 +5416,9 @@
       "extractionState" : "manual"
     },
     "The shared browser took too long to respond. Try again." : {
+      "extractionState" : "manual"
+    },
+    "The team cracked it" : {
       "extractionState" : "manual"
     },
     "The transcript and minutes so far stay available to export." : {
@@ -5924,6 +5981,9 @@
     "Watch on YouTube" : {
       "extractionState" : "manual"
     },
+    "Watch your team crack it." : {
+      "extractionState" : "manual"
+    },
     "Watch-only attendees can't send messages." : {
       "extractionState" : "manual"
     },
@@ -6425,6 +6485,9 @@
     "You play White" : {
       "extractionState" : "manual"
     },
+    "You set the word" : {
+      "extractionState" : "manual"
+    },
     "You set the word. Watch everyone guess." : {
       "extractionState" : "manual"
     },
@@ -6556,6 +6619,9 @@
     "Your sign-in expired. Sign in again, or keep going as a guest." : {
       "extractionState" : "manual"
     },
+    "Your turn" : {
+      "extractionState" : "manual"
+    },
     "Your voice" : {
       "extractionState" : "manual",
       "generatesSymbol" : false
@@ -6594,6 +6660,9 @@
       "extractionState" : "manual"
     },
     "You’re in. Tap to return to the call." : {
+      "extractionState" : "manual"
+    },
+    "You’re next" : {
       "extractionState" : "manual"
     },
     "You’re no longer a host." : {

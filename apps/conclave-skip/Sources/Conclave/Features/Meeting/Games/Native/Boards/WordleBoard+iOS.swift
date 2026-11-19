@@ -50,7 +50,7 @@ struct WordleHeader: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityAddTraits(.isHeader)
                 if scene.phase == .setWord || scene.phase == .playing {
-                    Text(WordleCopy.meta(scene))
+                    Text(scene.team.map { WordleTeamCopy.meta(scene, team: $0) } ?? WordleCopy.meta(scene))
                         .font(.footnote)
                         .monospacedDigit()
                         .foregroundStyle(HostingTheme.inCallTextSecondary)
@@ -139,25 +139,37 @@ struct WordlePlayingView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            switch scene.role {
-            case .setter:
-                PromptHeadline(text: WordleCopy.setterWatching())
-                    .accessibilityIdentifier("game.wordle.setterWatching")
-                WordleLiveBoards(scene: scene)
-                WordleStandingsList(scene: scene)
-            case .spectator:
-                PromptSpectatorNotice(games: games)
-                WordleStandingsList(scene: scene)
-            case .guesser:
+            if let team = scene.team {
+                WordleTeamStatus(scene: scene, team: team, games: games)
                 WordleBoard(scene: scene, games: games, readOnly: false)
-                WordleOutcomeLine(scene: scene, games: games)
-                if scene.myOutcome == .none {
-                    WordleInputArea(scene: scene, games: games, textEntry: prefersTextEntry ?? voiceOver,
-                                    autoFocusField: prefersTextEntry == true, onTextEntry: { prefersTextEntry = $0 })
+                if scene.role == .guesser && scene.myOutcome == .none {
+                    inputArea
                 }
-                WordleStandingsList(scene: scene)
+            } else {
+                switch scene.role {
+                case .setter:
+                    PromptHeadline(text: WordleCopy.setterWatching())
+                        .accessibilityIdentifier("game.wordle.setterWatching")
+                    WordleLiveBoards(scene: scene)
+                    WordleStandingsList(scene: scene)
+                case .spectator:
+                    PromptSpectatorNotice(games: games)
+                    WordleStandingsList(scene: scene)
+                case .guesser:
+                    WordleBoard(scene: scene, games: games, readOnly: false)
+                    WordleOutcomeLine(scene: scene, games: games)
+                    if scene.myOutcome == .none {
+                        inputArea
+                    }
+                    WordleStandingsList(scene: scene)
+                }
             }
         }
+    }
+
+    private var inputArea: some View {
+        WordleInputArea(scene: scene, games: games, textEntry: prefersTextEntry ?? voiceOver,
+                        autoFocusField: prefersTextEntry == true, onTextEntry: { prefersTextEntry = $0 })
     }
 }
 
@@ -210,15 +222,21 @@ struct WordleResultsView: View {
                     .environment(\.layoutDirection, .leftToRight)
                     .accessibilityIdentifier("game.wordle.solution")
             }
-            PromptHeadline(text: WordleCopy.winner(scene))
-            WordleOutcomeLine(scene: scene, games: games)
-            if scene.role == .guesser && !scene.myRows.isEmpty {
-                WordleBoard(scene: scene, games: games, readOnly: true)
+            if let team = scene.team {
+                WordleTeamResults(scene: scene, team: team, games: games)
+            } else {
+                PromptHeadline(text: WordleCopy.winner(scene))
+                WordleOutcomeLine(scene: scene, games: games)
+                if scene.role == .guesser && !scene.myRows.isEmpty {
+                    WordleBoard(scene: scene, games: games, readOnly: true)
+                }
             }
             if isFinished && scene.roundTotal > 1 && !games.results.scoreboard.isEmpty {
                 GameKitScoreboard(rows: games.results.scoreboard)
             }
-            WordleStandingsList(scene: scene)
+            if scene.team == nil {
+                WordleStandingsList(scene: scene)
+            }
             if !isHost && !isFinished {
                 PromptLine(text: isFinal ? WordleCopy.waitingForHost() : WordleCopy.waitingNextRound())
             }
@@ -265,8 +283,14 @@ struct WordleBoard: View {
         let rows = readOnly ? scene.myRows : WordleBoardPolicy.displayRows(scene, draft: games.wordleDraft)
         VStack(spacing: CGFloat(WordleBoardPolicy.gap)) {
             ForEach(rows) { row in
-                WordleRowView(row: row, label: WordleCopy.rowSummary(row))
-                    .accessibilityFocused($focusedRow, equals: row.index)
+                Group {
+                    if let team = scene.team {
+                        WordleLabeledRow(row: row, label: team.label(row: row.index))
+                    } else {
+                        WordleRowView(row: row, label: WordleCopy.rowSummary(row))
+                    }
+                }
+                .accessibilityFocused($focusedRow, equals: row.index)
             }
         }
         .frame(maxWidth: .infinity)

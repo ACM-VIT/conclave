@@ -247,6 +247,13 @@ final class GameStagePresenter {
         return result
     }
 
+    func passWordleTurn() -> ActivityTapResult {
+        guard let team = scene.wordle?.team else { return ActivityTapResult.explained }
+        if !pendingRequestId.isEmpty { return ActivityTapResult.ignored }
+        if !team.canPass { return ActivityTapResult.explained }
+        return send(WordleIntent.passTurn())
+    }
+
     private func canEditWordleDraft(_ wordle: WordleScene) -> Bool {
         if !wordle.canGuess && !wordle.canSetWord { return false }
 
@@ -551,6 +558,7 @@ final class GameStagePresenter {
         var result: [GameOptionSummaryModel] = []
         for option in options {
             guard let value = ActivitiesCatalogPolicy.draft(option.id, in: config) else { continue }
+            if !ActivitiesCatalogPolicy.isVisible(option, among: options, drafts: config) { continue }
             var text = ""
             if value.isNumber {
                 text = ActivitiesCatalogPolicy.numberLabel(value.number, suffix: option.suffix)
@@ -719,6 +727,8 @@ struct WordleScene: Equatable {
 
     let canAdvanceRound: Bool
 
+    let team: WordleTeamScene?
+
     var triesUsed: Int { myRows.count }
 
     var showsDraftRow: Bool {
@@ -727,8 +737,9 @@ struct WordleScene: Equatable {
 
     var draftKey: String {
         if phase == WordlePhase.setWord && isSetter { return "secret-" + String(round) }
-        if phase == WordlePhase.playing && role == WordleRole.guesser { return "guess-" + String(round) }
-        return ""
+        if phase != WordlePhase.playing || role != WordleRole.guesser { return "" }
+        guard let team = team, team.mode == WordleMode.relay else { return "guess-" + String(round) }
+        return team.turn == WordleTurn.yours ? "guess-" + String(round) + "-" + String(team.triesUsed) : ""
     }
 
     var outcomeKey: String {
@@ -790,8 +801,14 @@ enum WordleSceneBuilder {
             }
             myOutcome = parseOutcome(projection.myOutcome)
         }
+        var team: WordleTeamScene? = nil
+        if let shared = projection.team {
+            myRows = WordleTeamSceneBuilder.rows(shared, length: length)
+            team = WordleTeamSceneBuilder.scene(shared, mode: projection.mode, phase: phase, round: projection.currentRound, maxTries: tries,
+                                                turnTimeMillis: projection.turnTimeMillis, role: role, context: context)
+        }
         var liveBoards: [WordleBoardStatusModel] = []
-        if isSetter {
+        if isSetter && team == nil {
             for board in projection.boards {
                 var rows: [WordleRowModel] = []
                 var index = 0
@@ -805,8 +822,9 @@ enum WordleSceneBuilder {
         }
         let recovering = context.isRecovering
         let isResults = phase == WordlePhase.results
+        let isTurnOpen = team == nil || team?.turn == WordleTurn.yours || team?.turn == WordleTurn.anyone
         let canGuess = role == WordleRole.guesser && phase == WordlePhase.playing && projection.canGuess
-            && myOutcome == WordleOutcome.none && myRows.count < tries && !recovering
+            && myOutcome == WordleOutcome.none && myRows.count < tries && !recovering && isTurnOpen
         let canSetWord = isSetter && phase == WordlePhase.setWord && projection.canSetWord && !recovering
         return WordleScene(phase: phase, round: projection.currentRound, roundTotal: projection.totalRounds, wordLength: length,
                            maxTries: tries, isRandomWord: projection.wordSource != "setter", role: role,
@@ -816,7 +834,8 @@ enum WordleSceneBuilder {
                            winnerName: isResults ? projection.resultWinnerName : "", isFinalRound: projection.isFinalRound,
                            finishedCount: projection.finishedCount, totalContestants: projection.totalContestants, isPlayer: isPlayer,
                            isReconnecting: recovering,
-                           canAdvanceRound: isResults && !projection.isFinalRound && context.isHost && isPlayer && !recovering)
+                           canAdvanceRound: isResults && !projection.isFinalRound && context.isHost && isPlayer && !recovering,
+                           team: team)
     }
 
     static func guessRow(index: Int, word: String, feedback: [String], length: Int, showsLetters: Bool) -> WordleRowModel {
@@ -1008,10 +1027,12 @@ enum WordleIntent {
     static let guessType = "guess"
     static let setWordType = "setWord"
     static let nextRoundType = "nextRound"
+    static let passTurnType = "passTurn"
 
     static func guess(_ word: String) -> GameMoveIntent { GameMoveIntent.make(type: guessType, text: word) }
     static func setWord(_ word: String) -> GameMoveIntent { GameMoveIntent.make(type: setWordType, text: word) }
     static func nextRound() -> GameMoveIntent { GameMoveIntent.make(type: nextRoundType) }
+    static func passTurn() -> GameMoveIntent { GameMoveIntent.make(type: passTurnType) }
 }
 
 enum WordleFixtureState: String, CaseIterable, Equatable {

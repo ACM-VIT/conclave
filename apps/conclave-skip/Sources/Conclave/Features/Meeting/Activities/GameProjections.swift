@@ -211,6 +211,10 @@ struct WordleProjection: Equatable {
     let myOutcome: String
 
     let boards: [WordleBoardProjection]
+
+    let mode: WordleMode
+    let turnTimeMillis: Double
+    let team: WordleTeamProjection?
 }
 
 struct ChessTeamMemberProjection: Equatable, Identifiable {
@@ -681,6 +685,7 @@ enum GameProjectionParser {
         }
         let empty: [String: Any] = [:]
         let result = GameProjectionJSON.child(view, "result") ?? empty
+        let mode = WordleMode.parse(GameProjectionJSON.string(view, "mode"))
         return WordleProjection(phase: phase, wordSource: GameProjectionJSON.string(view, "wordSource"), setterId: GameProjectionJSON.string(view, "setterId"),
                                 setterName: GameProjectionJSON.string(view, "setterName"), wordLength: GameProjectionJSON.int(view, "wordLength"),
                                 maxTries: GameProjectionJSON.int(view, "maxTries"), standings: standings, finishedCount: GameProjectionJSON.int(view, "finishedCount"),
@@ -691,7 +696,8 @@ enum GameProjectionParser {
                                 isSetter: GameProjectionJSON.bool(mine, "isSetter"), canSetWord: GameProjectionJSON.bool(mine, "canSetWord"),
                                 canGuess: GameProjectionJSON.bool(mine, "canGuess"), secretWord: GameProjectionJSON.string(mine, "secretWord"),
                                 myGuesses: wordleGuesses(GameProjectionJSON.objects(mine, "myGuesses")), myOutcome: GameProjectionJSON.string(mine, "myOutcome"),
-                                boards: boards)
+                                boards: boards, mode: mode, turnTimeMillis: GameProjectionJSON.double(view, "turnTimeMs"),
+                                team: WordleTeamProjection.parse(view, mode: mode))
     }
 
     static func chessTeam(_ teams: [String: Any]?, side: String) -> [ChessTeamMemberProjection] {

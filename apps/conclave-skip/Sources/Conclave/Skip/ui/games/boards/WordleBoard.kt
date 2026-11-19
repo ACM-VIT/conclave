@@ -117,7 +117,8 @@ private fun WordleHeader(scene: WordleScene, games: GameStagePresenter, isFinish
             Text(wordleTitle(scene, isFinished), style = MaterialTheme.typography.titleMedium, color = scheme.onSurface,
                 modifier = Modifier.semantics { heading() })
             if (scene.phase == WordlePhase.setWord || scene.phase == WordlePhase.playing) {
-                Text(conclaveString("gm_wordle_meta", scene.wordLength, scene.maxTries),
+                val team = scene.team
+                Text(if (team != null) wordleTeamMeta(scene, team) else conclaveString("gm_wordle_meta", scene.wordLength, scene.maxTries),
                     style = rememberTabular(MaterialTheme.typography.bodySmall), color = scheme.onSurfaceVariant)
             }
         }
@@ -183,8 +184,29 @@ private fun WordlePlayingView(scene: WordleScene, games: GameStagePresenter) {
 
     var entryMode by rememberSaveable(scene.round) { mutableIntStateOf(0) }
     val textEntry = if (entryMode == 0) access.touchExploration else entryMode == 1
+    val team = scene.team
+    val inputArea: @Composable () -> Unit = {
+        if (textEntry) {
+            WordleTextEntry(scene, games, autoFocus = entryMode == 1)
+            OutlinedButton(onClick = { entryMode = 2 },
+                modifier = Modifier.heightIn(min = 48.dp).testTag("game.wordle.useLetterKeys")) {
+                Text(conclaveString("gm_wordle_use_letter_keys"))
+            }
+        } else {
+            WordleLetterKeyboard(scene, games)
+            OutlinedButton(onClick = { entryMode = 1 },
+                modifier = Modifier.heightIn(min = 48.dp).testTag("game.wordle.typeGuess")) {
+                Icon(ConclaveIcons.KeyboardFill0, contentDescription = null, modifier = Modifier.padding(end = 8.dp).size(18.dp))
+                Text(conclaveString("gm_wordle_type_guess"))
+            }
+        }
+    }
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        when (scene.role) {
+        if (team != null) {
+            WordleTeamStatus(scene, team, games)
+            WordleBoard(scene, games, readOnly = false)
+            if (scene.role == WordleRole.guesser && scene.myOutcome == WordleOutcome.none) inputArea()
+        } else when (scene.role) {
             WordleRole.setter -> {
                 PromptHeadline(conclaveString("gm_wordle_setter_watching"), Modifier.testTag("game.wordle.setterWatching"))
                 WordleLiveBoards(scene)
@@ -197,22 +219,7 @@ private fun WordlePlayingView(scene: WordleScene, games: GameStagePresenter) {
             WordleRole.guesser -> {
                 WordleBoard(scene, games, readOnly = false)
                 WordleOutcomeLine(scene, games)
-                if (scene.myOutcome == WordleOutcome.none) {
-                    if (textEntry) {
-                        WordleTextEntry(scene, games, autoFocus = entryMode == 1)
-                        OutlinedButton(onClick = { entryMode = 2 },
-                            modifier = Modifier.heightIn(min = 48.dp).testTag("game.wordle.useLetterKeys")) {
-                            Text(conclaveString("gm_wordle_use_letter_keys"))
-                        }
-                    } else {
-                        WordleLetterKeyboard(scene, games)
-                        OutlinedButton(onClick = { entryMode = 1 },
-                            modifier = Modifier.heightIn(min = 48.dp).testTag("game.wordle.typeGuess")) {
-                            Icon(ConclaveIcons.KeyboardFill0, contentDescription = null, modifier = Modifier.padding(end = 8.dp).size(18.dp))
-                            Text(conclaveString("gm_wordle_type_guess"))
-                        }
-                    }
-                }
+                if (scene.myOutcome == WordleOutcome.none) inputArea()
                 WordleStandingsList(scene)
             }
         }
@@ -233,11 +240,16 @@ private fun WordleResultsView(scene: WordleScene, games: GameStagePresenter, isF
                 }
             }
         }
-        PromptHeadline(wordleWinner(scene))
-        WordleOutcomeLine(scene, games)
-        if (scene.role == WordleRole.guesser && scene.myRows.count > 0) WordleBoard(scene, games, readOnly = true)
+        val team = scene.team
+        if (team != null) {
+            WordleTeamResults(scene, team, games)
+        } else {
+            PromptHeadline(wordleWinner(scene))
+            WordleOutcomeLine(scene, games)
+            if (scene.role == WordleRole.guesser && scene.myRows.count > 0) WordleBoard(scene, games, readOnly = true)
+        }
         if (isFinished && scene.roundTotal > 1 && games.results.scoreboard.count > 0) GameKitScoreboard(games.results.scoreboard)
-        WordleStandingsList(scene)
+        if (team == null) WordleStandingsList(scene)
         if (!isHost && !isFinished) PromptLine(conclaveString(if (isFinal) "gm_waiting_host" else "gm_wordle_waiting_next"))
         PromptAnnouncement(games, scene.resultKey, wordWas)
     }
@@ -268,7 +280,7 @@ internal fun WordleHostBar(games: GameStagePresenter) {
 }
 
 @Composable
-private fun WordleBoard(scene: WordleScene, games: GameStagePresenter, readOnly: Boolean) {
+internal fun WordleBoard(scene: WordleScene, games: GameStagePresenter, readOnly: Boolean) {
     val draft = if (readOnly) "" else games.wordleDraft
     val rows = remember(scene, draft, readOnly) {
         if (readOnly) scene.myRows.toList() else WordleBoardPolicy.displayRows(scene, draft).toList()
@@ -281,13 +293,19 @@ private fun WordleBoard(scene: WordleScene, games: GameStagePresenter, readOnly:
         if (guessCount > lastCount && newest.isNotEmpty()) announcement = newest
         lastCount = guessCount
     }
+    val team = scene.team
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
-        Column(
-            Modifier.fillMaxWidth().testTag("game.wordle.board"),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(WordleBoardPolicy.gap.dp),
-        ) {
-            for (row in rows) WordleRow(row, wordleRowSummary(row))
+        BoxWithConstraints(Modifier.fillMaxWidth().testTag("game.wordle.board")) {
+            val layout = wordleLabelLayout(maxWidth.value, WordleBoardPolicy.boardWidth.toFloat())
+            Column(
+                Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(WordleBoardPolicy.gap.dp),
+            ) {
+                for (row in rows) {
+                    if (team != null) WordleLabeledRow(row, team.label(row.index), layout) else WordleRow(row, wordleRowSummary(row))
+                }
+            }
         }
     }
     Box(Modifier.size(1.dp).semantics {
@@ -297,7 +315,7 @@ private fun WordleBoard(scene: WordleScene, games: GameStagePresenter, readOnly:
 }
 
 @Composable
-private fun WordleRow(row: WordleRowModel, label: String) {
+internal fun WordleRow(row: WordleRowModel, label: String) {
     Row(
         Modifier.clearAndSetSemantics { contentDescription = label }.testTag("game.wordle.row.${row.index}"),
         horizontalArrangement = Arrangement.spacedBy(WordleBoardPolicy.gap.dp),
@@ -725,7 +743,7 @@ private fun wordleCellLabel(cell: WordleCellModel): String {
 }
 
 @Composable
-private fun wordleRowSummary(row: WordleRowModel): String {
+internal fun wordleRowSummary(row: WordleRowModel): String {
     val parts = mutableListOf<String>()
     for (cell in row.cells) {
         val label = wordleCellLabel(cell)
