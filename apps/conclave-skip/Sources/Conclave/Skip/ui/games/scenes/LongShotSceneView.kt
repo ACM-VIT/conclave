@@ -52,6 +52,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import java.text.NumberFormat
@@ -85,25 +86,34 @@ internal fun LongShotSceneBody(games: GameStagePresenter) {
 @Composable
 private fun LongShotDiveView(board: LongShotDiveBoard, scene: LongShotScene, games: GameStagePresenter) {
     val countdown = games.countdown
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        LongShotDepthReadout(board.depth, board.gain)
-        Spacer(Modifier.weight(1f))
-        if (countdown != null) GameKitCountdown(countdown)
-    }
-    GameKitPrompt(
-        kicker = longShotPromptKicker(board.prompt, LongShotMode.classic, 0),
-        title = board.prompt.text,
-        subtitle = if (board.isReady || board.totalPlayers <= 0) "" else conclaveString("gm_ls_locked_count", board.lockedCount, board.totalPlayers),
+    val count = board.rungs.count
+    GameFitColumn(
+        range = LongShotFitPolicy.ladderRange(count = count),
+        spacing = 14.dp,
+        lead = {
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    LongShotDepthReadout(board.depth, board.gain)
+                    Spacer(Modifier.weight(1f))
+                    if (countdown != null) GameKitCountdown(countdown)
+                }
+                GameKitPrompt(
+                    kicker = longShotPromptKicker(board.prompt, LongShotMode.classic, 0),
+                    title = board.prompt.text,
+                    subtitle = if (board.isReady || board.totalPlayers <= 0) "" else conclaveString("gm_ls_locked_count", board.lockedCount, board.totalPlayers),
+                )
+                val landing = board.landing
+                val miss = board.miss
+                if (landing != null) {
+                    LongShotLockedRow(landing)
+                } else if (scene.entry.isShown) {
+                    LongShotEntry(scene.entry, games, miss?.atMillis ?: 0.0)
+                    if (miss != null) LongShotNoteLine(longShotMiss(miss), Icons.Rounded.HighlightOff)
+                }
+            }
+        },
+        flex = { height -> LongShotLadder(board.rungs, board.landedIndex, LongShotFitPolicy.rungHeight(height = height, count = count)) },
     )
-    val landing = board.landing
-    val miss = board.miss
-    if (landing != null) {
-        LongShotLockedRow(landing)
-    } else if (scene.entry.isShown) {
-        LongShotEntry(scene.entry, games, miss?.atMillis ?: 0.0)
-        if (miss != null) LongShotNoteLine(longShotMiss(miss), Icons.Rounded.HighlightOff)
-    }
-    LongShotLadder(board.rungs, board.landedIndex)
 }
 
 @Composable
@@ -197,7 +207,7 @@ private fun LongShotNoteLine(text: String, icon: ImageVector) {
 }
 
 @Composable
-private fun LongShotLadder(rungs: skip.lib.Array<LongShotRungModel>, landedIndex: Int) {
+private fun LongShotLadder(rungs: skip.lib.Array<LongShotRungModel>, landedIndex: Int, rungHeight: Double = LongShotFitPolicy.maximumRung) {
     val reduceMotion = rememberReduceMotion()
     var marker by remember { mutableIntStateOf(landedIndex) }
     LaunchedEffect(landedIndex) {
@@ -215,7 +225,7 @@ private fun LongShotLadder(rungs: skip.lib.Array<LongShotRungModel>, landedIndex
             delay(LONG_SHOT_STEP_MILLIS)
         }
     }
-    Column(Modifier.fillMaxWidth().testTag("game.longShot.ladder"), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Column(Modifier.fillMaxWidth().testTag("game.longShot.ladder"), verticalArrangement = Arrangement.spacedBy(LongShotFitPolicy.rungSpacing.dp)) {
         var index = 0
         for (rung in rungs) {
             LongShotRungRow(
@@ -223,6 +233,7 @@ private fun LongShotLadder(rungs: skip.lib.Array<LongShotRungModel>, landedIndex
                 marked = index == marker,
                 passed = marker >= 0 && index < marker && marker < landedIndex,
                 dimmed = marker == landedIndex && landedIndex >= 0 && index != landedIndex,
+                height = rungHeight.dp,
             )
             index += 1
         }
@@ -230,7 +241,7 @@ private fun LongShotLadder(rungs: skip.lib.Array<LongShotRungModel>, landedIndex
 }
 
 @Composable
-private fun LongShotRungRow(rung: LongShotRungModel, marked: Boolean, passed: Boolean, dimmed: Boolean) {
+private fun LongShotRungRow(rung: LongShotRungModel, marked: Boolean, passed: Boolean, dimmed: Boolean, height: Dp) {
     val scheme = MaterialTheme.colorScheme
     val ext = LocalConclaveExtendedColors.current
     val landed = rung.isLanded && marked
@@ -238,7 +249,7 @@ private fun LongShotRungRow(rung: LongShotRungModel, marked: Boolean, passed: Bo
     val shape = RoundedCornerShape(8.dp)
     val label = longShotRungLabel(rung)
     Row(
-        Modifier.fillMaxWidth().heightIn(min = 40.dp).alpha(if (dimmed) 0.5f else 1f).background(fill, shape)
+        Modifier.fillMaxWidth().heightIn(min = height).alpha(if (dimmed) 0.5f else 1f).background(fill, shape)
             .border(1.dp, if (landed) scheme.primaryContainer else ext.border, shape).padding(horizontal = 12.dp)
             .clearAndSetSemantics {
                 contentDescription = label

@@ -87,7 +87,7 @@ import java.util.Locale
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
-private val WordleKeyHeight = 48.dp
+private val WordleKeyHeight = GameFitMetrics.android.keyHeight.dp
 private val WordleWideKeyLabelFloor = 9.dp
 
 @Composable
@@ -99,7 +99,7 @@ internal fun WordleSceneBody(games: GameStagePresenter) {
 @Composable
 private fun WordleSceneView(scene: WordleScene, games: GameStagePresenter, isFinished: Boolean) {
     Column(Modifier.fillMaxWidth().testTag("game.scene.wordle"), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        WordleHeader(scene, games, isFinished)
+        if (scene.phase != WordlePhase.playing) WordleHeader(scene, games, isFinished)
         when (scene.phase) {
             WordlePhase.lobby -> {}
             WordlePhase.setWord -> WordleSetWordView(scene, games)
@@ -127,7 +127,7 @@ private fun WordleHeader(scene: WordleScene, games: GameStagePresenter, isFinish
 }
 
 @Composable
-private fun WordleTimerSlot(games: GameStagePresenter) {
+internal fun WordleTimerSlot(games: GameStagePresenter) {
     val countdown = games.countdown ?: return
     WordleTimerChip(countdown)
 }
@@ -185,43 +185,65 @@ private fun WordlePlayingView(scene: WordleScene, games: GameStagePresenter) {
     var entryMode by rememberSaveable(scene.round) { mutableIntStateOf(0) }
     val textEntry = if (entryMode == 0) access.touchExploration else entryMode == 1
     val team = scene.team
-    val inputArea: @Composable () -> Unit = {
-        if (textEntry) {
-            WordleTextEntry(scene, games, autoFocus = entryMode == 1)
-            OutlinedButton(onClick = { entryMode = 2 },
-                modifier = Modifier.heightIn(min = 48.dp).testTag("game.wordle.useLetterKeys")) {
-                Text(conclaveString("gm_wordle_use_letter_keys"))
-            }
-        } else {
-            WordleLetterKeyboard(scene, games)
-            OutlinedButton(onClick = { entryMode = 1 },
-                modifier = Modifier.heightIn(min = 48.dp).testTag("game.wordle.typeGuess")) {
-                Icon(ConclaveIcons.KeyboardFill0, contentDescription = null, modifier = Modifier.padding(end = 8.dp).size(18.dp))
-                Text(conclaveString("gm_wordle_type_guess"))
-            }
-        }
-    }
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        if (team != null) {
-            WordleTeamStatus(scene, team, games)
-            WordleBoard(scene, games, readOnly = false)
-            if (scene.role == WordleRole.guesser && scene.myOutcome == WordleOutcome.none) inputArea()
-        } else when (scene.role) {
-            WordleRole.setter -> {
+    if (team == null && scene.role != WordleRole.guesser) {
+        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            WordleHeader(scene, games, false)
+            if (scene.role == WordleRole.setter) {
                 PromptHeadline(conclaveString("gm_wordle_setter_watching"), Modifier.testTag("game.wordle.setterWatching"))
                 WordleLiveBoards(scene)
-                WordleStandingsList(scene)
-            }
-            WordleRole.spectator -> {
+            } else {
                 PromptSpectatorNotice(games)
-                WordleStandingsList(scene)
             }
-            WordleRole.guesser -> {
-                WordleBoard(scene, games, readOnly = false)
-                WordleOutcomeLine(scene, games)
-                if (scene.myOutcome == WordleOutcome.none) inputArea()
-                WordleStandingsList(scene)
-            }
+            WordleStandingsList(scene)
+        }
+        return
+    }
+    val showsInput = scene.role == WordleRole.guesser && scene.myOutcome == WordleOutcome.none
+    val space = LocalGameFitSpace.current
+    val showsHint = WordleFitPolicy.showsHint(space = space, metrics = GameFitMetrics.android, rows = scene.maxTries,
+        columns = scene.wordLength, hasKeyboard = showsInput && !textEntry)
+    val keys = if (showsInput && !textEntry) rememberWordleKeyHandling(scene, games) else Modifier
+    Column(verticalArrangement = Arrangement.spacedBy(WordleFitPolicy.sectionSpacing.dp)) {
+        GameFitColumn(
+            range = WordleFitPolicy.boardRange(rows = scene.maxTries),
+            spacing = WordleFitPolicy.sectionSpacing.dp,
+            modifier = keys,
+            lead = {
+                if (team == null) {
+                    WordleHeader(scene, games, false)
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        if (scene.role == WordleRole.spectator) PromptSpectatorNotice(games)
+                        WordleTeamBanner(scene, team, games, showsHint)
+                    }
+                }
+            },
+            trail = {
+                if (showsInput) {
+                    if (textEntry) WordleTextEntry(scene, games, autoFocus = entryMode == 1) else WordleLetterKeyboard(scene, games)
+                }
+            },
+            flex = { height -> WordleBoard(scene, games, readOnly = false, boardHeight = height) },
+        )
+        if (showsInput) {
+            WordleEntryModeButton(textEntry, onMode = { entryMode = it })
+        } else if (team == null) {
+            WordleOutcomeLine(scene, games)
+        }
+        if (team != null) WordleTeamMembers(team) else WordleStandingsList(scene)
+    }
+}
+
+@Composable
+private fun WordleEntryModeButton(textEntry: Boolean, onMode: (Int) -> Unit) {
+    if (textEntry) {
+        OutlinedButton(onClick = { onMode(2) }, modifier = Modifier.heightIn(min = 48.dp).testTag("game.wordle.useLetterKeys")) {
+            Text(conclaveString("gm_wordle_use_letter_keys"))
+        }
+    } else {
+        OutlinedButton(onClick = { onMode(1) }, modifier = Modifier.heightIn(min = 48.dp).testTag("game.wordle.typeGuess")) {
+            Icon(ConclaveIcons.KeyboardFill0, contentDescription = null, modifier = Modifier.padding(end = 8.dp).size(18.dp))
+            Text(conclaveString("gm_wordle_type_guess"))
         }
     }
 }
@@ -280,7 +302,7 @@ internal fun WordleHostBar(games: GameStagePresenter) {
 }
 
 @Composable
-internal fun WordleBoard(scene: WordleScene, games: GameStagePresenter, readOnly: Boolean) {
+internal fun WordleBoard(scene: WordleScene, games: GameStagePresenter, readOnly: Boolean, boardHeight: Double = Double.POSITIVE_INFINITY) {
     val draft = if (readOnly) "" else games.wordleDraft
     val rows = remember(scene, draft, readOnly) {
         if (readOnly) scene.myRows.toList() else WordleBoardPolicy.displayRows(scene, draft).toList()
@@ -296,14 +318,20 @@ internal fun WordleBoard(scene: WordleScene, games: GameStagePresenter, readOnly
     val team = scene.team
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
         BoxWithConstraints(Modifier.fillMaxWidth().testTag("game.wordle.board")) {
-            val layout = wordleLabelLayout(maxWidth.value, WordleBoardPolicy.boardWidth.toFloat())
+            val cell = WordleFitPolicy.cellSide(height = boardHeight, width = maxWidth.value.toDouble(), rows = rows.size,
+                columns = scene.wordLength)
+            val layout = wordleLabelLayout(maxWidth.value, WordleFitPolicy.boardWidth(cell = cell, columns = scene.wordLength).toFloat())
             Column(
                 Modifier.fillMaxWidth(),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(WordleBoardPolicy.gap.dp),
             ) {
                 for (row in rows) {
-                    if (team != null) WordleLabeledRow(row, team.label(row.index), layout) else WordleRow(row, wordleRowSummary(row))
+                    if (team != null) {
+                        WordleLabeledRow(row, team.label(row.index), layout, cell.dp)
+                    } else {
+                        WordleRow(row, wordleRowSummary(row), cell.dp)
+                    }
                 }
             }
         }
@@ -315,21 +343,21 @@ internal fun WordleBoard(scene: WordleScene, games: GameStagePresenter, readOnly
 }
 
 @Composable
-internal fun WordleRow(row: WordleRowModel, label: String) {
+internal fun WordleRow(row: WordleRowModel, label: String, side: Dp = WordleFitPolicy.maximumCell.dp) {
     Row(
         Modifier.clearAndSetSemantics { contentDescription = label }.testTag("game.wordle.row.${row.index}"),
         horizontalArrangement = Arrangement.spacedBy(WordleBoardPolicy.gap.dp),
     ) {
-        for (cell in row.cells) WordleCell(cell)
+        for (cell in row.cells) WordleCell(cell, side)
     }
 }
 
 @Composable
-private fun WordleCell(cell: WordleCellModel) {
+private fun WordleCell(cell: WordleCellModel, side: Dp) {
     val colors = wordleCellColors(cell.state)
     val shape = RoundedCornerShape(6.dp)
     Box(
-        Modifier.size(WordleBoardPolicy.cellSize.dp).background(colors.fill, shape).border(colors.borderWidth, colors.border, shape),
+        Modifier.size(side).background(colors.fill, shape).border(colors.borderWidth, colors.border, shape),
         contentAlignment = Alignment.Center,
     ) {
         if (cell.letter.isNotEmpty()) {
@@ -408,51 +436,59 @@ private fun WordleStandingsList(scene: WordleScene) {
 }
 
 @Composable
-private fun WordleLetterKeyboard(scene: WordleScene, games: GameStagePresenter) {
-    val interaction = games.interaction
-    val draft = games.wordleDraft
-    val canType = scene.canGuess && !interaction.isPending
-    val pending = interaction.isPending && interaction.pendingType == WordleIntent.guessType
-    val canEnter = !interaction.isPending && WordleBoardPolicy.canSubmit(scene, draft)
+private fun rememberWordleKeyHandling(scene: WordleScene, games: GameStagePresenter): Modifier {
+    val canType = scene.canGuess && !games.interaction.isPending
     val focus = remember { FocusRequester() }
     val submit: () -> Unit = {
         if (!games.interaction.isPending && WordleBoardPolicy.canSubmit(scene, games.wordleDraft)) games.submitWordle()
     }
     val latestCanType by rememberUpdatedState(canType)
     val latestSubmit by rememberUpdatedState(submit)
+    LaunchedEffect(canType) {
+        if (canType) runCatching { focus.requestFocus() }
+    }
+    return Modifier
+        .onPreviewKeyEvent { event ->
+            if (event.type != KeyEventType.KeyDown || event.isCtrlPressed || event.isMetaPressed || event.isAltPressed) {
+                false
+            } else if (event.key == Key.Backspace) {
+                if (latestCanType) games.deleteWordleLetter()
+                true
+            } else if (event.key == Key.Enter || event.key == Key.NumPadEnter) {
+                latestSubmit()
+                true
+            } else {
+                val letter = wordleHardwareLetter(event.utf16CodePoint)
+                if (letter.isNotEmpty() && latestCanType) {
+                    games.typeWordleLetter(letter)
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+        .focusRequester(focus)
+        .focusable(enabled = canType)
+}
+
+@Composable
+private fun WordleLetterKeyboard(scene: WordleScene, games: GameStagePresenter) {
+    val interaction = games.interaction
+    val draft = games.wordleDraft
+    val canType = scene.canGuess && !interaction.isPending
+    val pending = interaction.isPending && interaction.pendingType == WordleIntent.guessType
+    val canEnter = !interaction.isPending && WordleBoardPolicy.canSubmit(scene, draft)
+    val submit: () -> Unit = {
+        if (!games.interaction.isPending && WordleBoardPolicy.canSubmit(scene, games.wordleDraft)) games.submitWordle()
+    }
     val enterLabel = conclaveString("gm_wordle_enter")
     val deleteLabel = conclaveString("gm_wordle_delete")
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
-        BoxWithConstraints(
-            Modifier
-                .fillMaxWidth()
-                .onPreviewKeyEvent { event ->
-                    if (event.type != KeyEventType.KeyDown || event.isCtrlPressed || event.isMetaPressed || event.isAltPressed) {
-                        false
-                    } else if (event.key == Key.Backspace) {
-                        if (latestCanType) games.deleteWordleLetter()
-                        true
-                    } else if (event.key == Key.Enter || event.key == Key.NumPadEnter) {
-                        latestSubmit()
-                        true
-                    } else {
-                        val letter = wordleHardwareLetter(event.utf16CodePoint)
-                        if (letter.isNotEmpty() && latestCanType) {
-                            games.typeWordleLetter(letter)
-                            true
-                        } else {
-                            false
-                        }
-                    }
-                }
-                .focusRequester(focus)
-                .focusable(enabled = canType)
-                .testTag("game.wordle.keyboard"),
-        ) {
+        BoxWithConstraints(Modifier.fillMaxWidth().testTag("game.wordle.keyboard")) {
             val unit = WordleBoardPolicy.keyWidth(maxWidth.value.toDouble())
             val keyWidth = unit.dp
             val wideWidth = (unit * WordleBoardPolicy.wideKeyFactor).dp
-            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(GameFitMetrics.android.keyRowSpacing.dp)) {
                 for (rowIndex in 0..1) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(WordleBoardPolicy.gap.dp, Alignment.CenterHorizontally)) {
                         for (letterKey in scene.keys(rowIndex)) {
@@ -471,9 +507,6 @@ private fun WordleLetterKeyboard(scene: WordleScene, games: GameStagePresenter) 
                 }
             }
         }
-    }
-    LaunchedEffect(canType) {
-        if (canType) runCatching { focus.requestFocus() }
     }
 }
 

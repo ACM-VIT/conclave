@@ -24,7 +24,9 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -37,6 +39,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.SubcomposeLayout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInRoot
@@ -45,6 +48,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.toSize
 import kotlinx.coroutines.launch
@@ -156,15 +161,63 @@ internal fun GameShellScrollColumn(
                     }
                 }
             }
-            Column(
-                Modifier.weight(1f).fillMaxWidth().gameShellBounds(bounds) { probe, rect -> probe.viewport = rect }
-                    .verticalScroll(scroll).gameShellBounds(bounds) { probe, rect -> probe.content = rect }.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-                content = content,
-            )
+            BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+                val space = GameFitPolicy.sceneSpace(viewportWidth = maxWidth.value.toDouble(), viewportHeight = maxHeight.value.toDouble(),
+                    hiddenBottom = 0.0, noticesHeight = 0.0)
+                CompositionLocalProvider(LocalGameFitSpace provides space) {
+                    Column(
+                        Modifier.fillMaxSize().gameShellBounds(bounds) { probe, rect -> probe.viewport = rect }
+                            .verticalScroll(scroll).gameShellBounds(bounds) { probe, rect -> probe.content = rect }
+                            .padding(GameFitPolicy.contentPadding.dp),
+                        verticalArrangement = Arrangement.spacedBy(GameFitPolicy.noticeSpacing.dp),
+                        content = content,
+                    )
+                }
+            }
         }
     }
 }
+
+internal val LocalGameFitSpace = compositionLocalOf { GameFitSpace.unbounded }
+
+@Composable
+internal fun GameFitColumn(
+    range: GameFitRange,
+    spacing: Dp,
+    modifier: Modifier = Modifier,
+    lead: @Composable () -> Unit,
+    trail: @Composable () -> Unit = {},
+    flex: @Composable (Double) -> Unit,
+) {
+    val space = LocalGameFitSpace.current
+    SubcomposeLayout(modifier) { constraints ->
+        val loose = Constraints(minWidth = 0, maxWidth = constraints.maxWidth, minHeight = 0, maxHeight = Constraints.Infinity)
+        val gap = spacing.roundToPx()
+        val leads = subcompose(GameFitSlot.lead, lead).map { it.measure(loose) }
+        val trails = subcompose(GameFitSlot.trail, trail).map { it.measure(loose) }
+        val leadHeight = leads.sumOf { it.height }
+        val trailHeight = trails.sumOf { it.height }
+        val fixed = leadHeight + gap + (if (trailHeight > 0) trailHeight + gap else 0)
+        val flexHeight = GameFitPolicy.flexHeight(space = space, fixed = (fixed.toFloat() / density).toDouble(), range = range)
+        val flexes = subcompose(GameFitSlot.flex) { flex(flexHeight) }.map { it.measure(loose) }
+        val blocks = listOf(leads, flexes, trails).filter { group -> group.any { it.height > 0 } }
+        val total = blocks.sumOf { group -> group.sumOf { it.height } } + gap * maxOf(0, blocks.size - 1)
+        val width = if (constraints.hasBoundedWidth) constraints.maxWidth
+            else blocks.flatten().maxOfOrNull { it.width } ?: constraints.minWidth
+        layout(width, total.coerceIn(constraints.minHeight, constraints.maxHeight)) {
+            var y = 0
+            for (group in blocks) {
+                for (placeable in group) {
+                    placeable.placeRelative(0, y)
+                    y += placeable.height
+                }
+                y += gap
+            }
+        }
+    }
+}
+
+private enum class GameFitSlot { lead, flex, trail }
 
 internal class GameNoticeAnchors {
     var viewport: LayoutCoordinates? = null

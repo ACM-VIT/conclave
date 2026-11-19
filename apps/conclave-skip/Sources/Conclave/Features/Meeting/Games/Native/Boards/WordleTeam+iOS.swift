@@ -2,38 +2,26 @@
 import Accessibility
 import SwiftUI
 
-struct WordleTeamStatus: View {
-    let scene: WordleScene
-    let team: WordleTeamScene
-    let games: GameStagePresenter
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if scene.role == .spectator {
-                PromptSpectatorNotice(games: games)
-            }
-            WordleTeamBanner(scene: scene, team: team, games: games)
-            WordleTeamMembers(team: team)
-        }
-    }
-}
-
 struct WordleTeamBanner: View {
     let scene: WordleScene
     let team: WordleTeamScene
     let games: GameStagePresenter
+    let showsHint: Bool
 
     var body: some View {
         let mine = team.turn == .yours
+        let clocks = WordleClockPolicy.plan(roundDeadlineMillis: games.countdown?.deadlineMillis ?? 0,
+                                            turnDeadlineMillis: team.isTurnTimed ? team.turnDeadlineMillis : 0)
         let shape = RoundedRectangle(cornerRadius: CGFloat(DesignTokens.radiusMedium), style: .continuous)
         HStack(alignment: .center, spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(WordleTeamCopy.title(scene, team: team))
-                    .font(.subheadline.weight(.semibold))
+                    .font(.headline)
                     .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
-                    .fixedSize(horizontal: false, vertical: true)
-                if let detail = WordleTeamCopy.detail(scene, team: team) {
-                    Text(detail)
+                    .lineLimit(showsHint ? 2 : 1)
+                WordleTeamMetaLine(scene: scene, team: team, countdown: clocks.showsRoundInMeta ? games.countdown : nil)
+                if showsHint, let hint = WordleTeamCopy.hint(scene, team: team) {
+                    Text(hint)
                         .font(.footnote)
                         .foregroundStyle(HostingTheme.inCallTextSecondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -41,8 +29,15 @@ struct WordleTeamBanner: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .combine)
-            .accessibilityAddTraits(mine ? .isHeader : [])
-            WordleTurnTimerSlot(team: team, games: games)
+            .accessibilityAddTraits(.isHeader)
+            switch clocks.chip {
+            case .turn:
+                WordleTurnTimerSlot(team: team, games: games)
+            case .round:
+                WordleTimerSlot(games: games)
+            case .none:
+                EmptyView()
+            }
             if team.canPass {
                 WordlePassButton(games: games)
             }
@@ -54,6 +49,35 @@ struct WordleTeamBanner: View {
         .modifier(PromptAnnouncement(games: games, key: team.turnKey, text: WordleTeamCopy.yourTurn(), urgent: true))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("game.wordle.team.banner")
+    }
+}
+
+struct WordleTeamMetaLine: View {
+    let scene: WordleScene
+    let team: WordleTeamScene
+    let countdown: CountdownModel?
+    @Environment(\.scenePhase) private var scenePhase
+
+    var body: some View {
+        if let countdown, scenePhase == .active {
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                face(seconds: countdown.secondsLeft(nowMillis: context.date.timeIntervalSince1970 * 1000))
+            }
+        } else if let countdown {
+            face(seconds: countdown.secondsLeft(nowMillis: Date().timeIntervalSince1970 * 1000))
+        } else {
+            face(seconds: nil)
+        }
+    }
+
+    private func face(seconds: Int?) -> some View {
+        Text(WordleTeamCopy.metaLine(scene, team: team, clock: seconds.map { WordleCopy.clock($0) }))
+            .font(.footnote)
+            .monospacedDigit()
+            .foregroundStyle(HostingTheme.inCallTextSecondary)
+            .lineLimit(1)
+            .accessibilityLabel(WordleTeamCopy.metaLine(scene, team: team, clock: seconds.map { WordleCopy.spokenDuration($0) }))
+            .accessibilityIdentifier("game.wordle.team.meta")
     }
 }
 
@@ -179,20 +203,21 @@ enum WordleTeamMetrics {
 struct WordleLabeledRow: View {
     let row: WordleRowModel
     let label: WordleRowLabel?
+    var cell = WordleFitPolicy.maximumCell
 
     var body: some View {
         let summary = WordleTeamCopy.rowSummary(row, label: label)
         ViewThatFits(in: .horizontal) {
             HStack(spacing: WordleTeamMetrics.labelGap) {
                 Color.clear.frame(width: WordleTeamMetrics.labelWidth, height: 1)
-                WordleRowView(row: row, label: summary)
+                WordleRowView(row: row, label: summary, cell: cell)
                 WordleRowGuesser(label: label)
             }
             HStack(spacing: WordleTeamMetrics.labelGap) {
-                WordleRowView(row: row, label: summary)
+                WordleRowView(row: row, label: summary, cell: cell)
                 WordleRowGuesser(label: label)
             }
-            WordleRowView(row: row, label: summary)
+            WordleRowView(row: row, label: summary, cell: cell)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(summary)
@@ -248,19 +273,29 @@ enum WordleTeamCopy {
         }
     }
 
-    static func detail(_ scene: WordleScene, team: WordleTeamScene) -> String? {
+    static func hint(_ scene: WordleScene, team: WordleTeamScene) -> String? {
         if scene.role == .setter { return ConclaveStrings.text("Watch your team crack it.") }
         switch team.turn {
         case .anyone: return ConclaveStrings.text("Talk it through on the call. Anyone can enter the next guess.")
         case .yours: return ConclaveStrings.text("Talk it through, then enter the team’s guess.")
-        case .teammate: return team.isUpNext ? ConclaveStrings.text("You’re next") : nil
-        case .none: return nil
+        case .teammate, .none: return nil
         }
     }
 
     static func meta(_ scene: WordleScene, team: WordleTeamScene) -> String {
         team.mode == .relay ? ConclaveStrings.format("Take turns · %lld of %lld tries used", team.triesUsed, scene.maxTries)
             : ConclaveStrings.format("All together · %lld of %lld tries used", team.triesUsed, scene.maxTries)
+    }
+
+    static func metaLine(_ scene: WordleScene, team: WordleTeamScene, clock: String?) -> String {
+        var line = meta(scene, team: team)
+        if team.turn == .teammate && team.isUpNext {
+            line = WordleCopy.twoFacts(ConclaveStrings.text("You’re next"), line)
+        }
+        if let clock {
+            line = WordleCopy.twoFacts(line, WordleCopy.timeLeft(clock))
+        }
+        return line
     }
 
     static func outcome(_ outcome: WordleOutcome) -> String {

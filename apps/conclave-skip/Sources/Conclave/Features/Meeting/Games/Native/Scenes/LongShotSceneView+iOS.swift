@@ -47,30 +47,43 @@ struct LongShotDiveView: View {
     let board: LongShotDiveBoard
     let scene: LongShotScene
     let games: GameStagePresenter
+    @Environment(\.gameFitSpace) private var space
+    @State private var aboveHeight = 0.0
 
     var body: some View {
+        let count = board.rungs.count
+        let ladder = GameFitPolicy.flexHeight(space: space, fixed: (aboveHeight > 0 ? aboveHeight : LongShotFitEstimates.above) + 14,
+                                              range: LongShotFitPolicy.ladderRange(count: count))
         VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .center, spacing: 12) {
-                LongShotDepthReadout(depth: board.depth, gain: board.gain)
-                Spacer(minLength: 8)
-                if let countdown = games.countdown {
-                    GameKitCountdown(model: countdown)
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .center, spacing: 12) {
+                    LongShotDepthReadout(depth: board.depth, gain: board.gain)
+                    Spacer(minLength: 8)
+                    if let countdown = games.countdown {
+                        GameKitCountdown(model: countdown)
+                    }
+                }
+                GameKitPrompt(kicker: LongShotCopy.promptKicker(board.prompt, mode: scene.mode, foundCount: 0),
+                              title: board.prompt.text,
+                              subtitle: board.isReady ? "" : LongShotCopy.lockedCount(board.lockedCount, total: board.totalPlayers))
+                if let landing = board.landing {
+                    LongShotLockedRow(landing: landing)
+                } else if scene.entry.isShown {
+                    LongShotEntry(entry: scene.entry, games: games, missKey: board.miss?.atMillis ?? 0)
+                    if let miss = board.miss {
+                        LongShotNoteLine(text: LongShotCopy.miss(miss), symbol: LongShotSymbols.miss)
+                    }
                 }
             }
-            GameKitPrompt(kicker: LongShotCopy.promptKicker(board.prompt, mode: scene.mode, foundCount: 0),
-                          title: board.prompt.text,
-                          subtitle: board.isReady ? "" : LongShotCopy.lockedCount(board.lockedCount, total: board.totalPlayers))
-            if let landing = board.landing {
-                LongShotLockedRow(landing: landing)
-            } else if scene.entry.isShown {
-                LongShotEntry(entry: scene.entry, games: games, missKey: board.miss?.atMillis ?? 0)
-                if let miss = board.miss {
-                    LongShotNoteLine(text: LongShotCopy.miss(miss), symbol: LongShotSymbols.miss)
-                }
-            }
-            LongShotLadder(rungs: board.rungs, landedIndex: board.landedIndex)
+            .modifier(GameFitHeightReader { aboveHeight = $0 })
+            LongShotLadder(rungs: board.rungs, landedIndex: board.landedIndex,
+                           rungHeight: LongShotFitPolicy.rungHeight(height: ladder, count: count))
         }
     }
+}
+
+enum LongShotFitEstimates {
+    static let above = 210.0
 }
 
 struct LongShotDepthReadout: View {
@@ -194,20 +207,22 @@ struct LongShotNoteLine: View {
 struct LongShotLadder: View {
     let rungs: [LongShotRungModel]
     let landedIndex: Int
+    let rungHeight: Double
     @State private var marker: Int
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    init(rungs: [LongShotRungModel], landedIndex: Int) {
+    init(rungs: [LongShotRungModel], landedIndex: Int, rungHeight: Double = LongShotFitPolicy.maximumRung) {
         self.rungs = rungs
         self.landedIndex = landedIndex
+        self.rungHeight = rungHeight
         _marker = State(initialValue: landedIndex)
     }
 
     var body: some View {
-        VStack(spacing: 4) {
+        VStack(spacing: CGFloat(LongShotFitPolicy.rungSpacing)) {
             ForEach(Array(rungs.enumerated()), id: \.element.id) { index, rung in
                 LongShotRungRow(rung: rung, isMarked: index == marker, isPassed: marker >= 0 && index < marker && marker < landedIndex,
-                                isDimmed: marker == landedIndex && landedIndex >= 0 && index != landedIndex)
+                                isDimmed: marker == landedIndex && landedIndex >= 0 && index != landedIndex, height: rungHeight)
             }
         }
         .task(id: landedIndex) {
@@ -243,6 +258,7 @@ struct LongShotRungRow: View {
     let isMarked: Bool
     let isPassed: Bool
     let isDimmed: Bool
+    var height = LongShotFitPolicy.maximumRung
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: CGFloat(DesignTokens.radiusSmall), style: .continuous)
@@ -270,7 +286,7 @@ struct LongShotRungRow: View {
                 .foregroundStyle(landed ? HostingTheme.inCallCoralText : HostingTheme.inCallTextSecondary)
         }
         .padding(.horizontal, 12)
-        .frame(minHeight: 40)
+        .frame(minHeight: CGFloat(height))
         .background(isPassed ? HostingTheme.token(DesignTokens.iosInCallSurfaceHigh) : HostingTheme.token(DesignTokens.iosInCallSurfaceRaised),
                     in: shape)
         .overlay { shape.strokeBorder(landed ? HostingTheme.coralFill : HostingTheme.inCallBorder, lineWidth: 1) }

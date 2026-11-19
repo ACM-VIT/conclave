@@ -56,14 +56,15 @@ struct GameShellBody: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                GameShellNotices(games: games)
+            VStack(alignment: .leading, spacing: CGFloat(GameFitPolicy.noticeSpacing)) {
+                GameShellNotices(games: games, probe: bounds)
                 GameShellScene(games: games, storeURL: storeURL, onShowVideo: onShowVideo)
             }
-            .padding(16)
+            .padding(CGFloat(GameFitPolicy.contentPadding))
             .frame(maxWidth: .infinity, alignment: .leading)
             .modifier(GameShellBoundsMeasure(probe: bounds, part: .content))
         }
+        .environment(\.gameFitSpace, bounds.fitSpace)
         .modifier(GameShellBoundsMeasure(probe: bounds, part: .viewport))
         .scrollDismissesKeyboard(.interactively)
         .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -90,6 +91,8 @@ final class GameShellBoundsProbe {
     private(set) var contentRect = GameShellRect.zero
     private(set) var barRect = GameShellRect.zero
     private(set) var barShowsEdge = false
+    private(set) var fitSpace = GameFitSpace.unbounded
+    @ObservationIgnored private var noticesHeight = 0.0
 
     var readout: String {
         GameShellInsetPolicy.readout(body: bodyRect, viewport: viewportRect, content: contentRect, bar: barRect)
@@ -104,16 +107,32 @@ final class GameShellBoundsProbe {
         case .bar: if barRect != rect { barRect = rect }
         }
         refreshEdge()
+        refreshFitSpace()
+    }
+
+    func recordNotices(height: Double) {
+        let next = height.isFinite ? max(0.0, height) : 0.0
+        if noticesHeight == next { return }
+        noticesHeight = next
+        refreshFitSpace()
     }
 
     func clearBar() {
         if barRect != GameShellRect.zero { barRect = GameShellRect.zero }
         refreshEdge()
+        refreshFitSpace()
     }
 
     private func refreshEdge() {
         let showsEdge = GameShellInsetPolicy.barShowsEdge(viewport: viewportRect, content: contentRect, bar: barRect)
         if barShowsEdge != showsEdge { barShowsEdge = showsEdge }
+    }
+
+    private func refreshFitSpace() {
+        let next = GameFitPolicy.sceneSpace(viewportWidth: viewportRect.width, viewportHeight: viewportRect.height,
+                                            hiddenBottom: GameShellInsetPolicy.requiredBottomInset(viewport: viewportRect, bar: barRect),
+                                            noticesHeight: noticesHeight)
+        if fitSpace != next { fitSpace = next }
     }
 }
 
@@ -149,22 +168,55 @@ struct GameShellBoundsReadout: View {
 
 struct GameShellNotices: View {
     let games: GameStagePresenter
+    var probe: GameShellBoundsProbe? = nil
 
     var body: some View {
         let interaction = games.interaction
         let chrome = games.chrome
-        VStack(alignment: .leading, spacing: 8) {
-            if chrome.isReconnecting {
-                GameKitNotice(kind: .reconnecting, message: "")
+        let failure = GameCopy.failure(interaction.failure, serverText: interaction.failureServerText)
+        if chrome.isReconnecting || failure != nil || chrome.endFailed {
+            VStack(alignment: .leading, spacing: 8) {
+                if chrome.isReconnecting {
+                    GameKitNotice(kind: .reconnecting, message: "")
+                }
+                if let text = failure {
+                    GameKitNotice(kind: .failure, message: text, buttonTitle: ConclaveStrings.text("Dismiss"),
+                                  onButton: { games.dismissFailure() })
+                }
+                if chrome.endFailed {
+                    GameKitNotice(kind: .failure, message: GameCopy.endFailed(), buttonTitle: ConclaveStrings.text("Dismiss"),
+                                  onButton: { games.dismissFailure() })
+                }
             }
-            if let text = GameCopy.failure(interaction.failure, serverText: interaction.failureServerText) {
-                GameKitNotice(kind: .failure, message: text, buttonTitle: ConclaveStrings.text("Dismiss"),
-                              onButton: { games.dismissFailure() })
+            .onGeometryChange(for: Double.self) { proxy in
+                Double(proxy.size.height)
+            } action: { height in
+                probe?.recordNotices(height: height)
             }
-            if chrome.endFailed {
-                GameKitNotice(kind: .failure, message: GameCopy.endFailed(), buttonTitle: ConclaveStrings.text("Dismiss"),
-                              onButton: { games.dismissFailure() })
-            }
+            .onDisappear { probe?.recordNotices(height: 0) }
+        }
+    }
+}
+
+private struct GameFitSpaceKey: EnvironmentKey {
+    static let defaultValue = GameFitSpace.unbounded
+}
+
+extension EnvironmentValues {
+    var gameFitSpace: GameFitSpace {
+        get { self[GameFitSpaceKey.self] }
+        set { self[GameFitSpaceKey.self] = newValue }
+    }
+}
+
+struct GameFitHeightReader: ViewModifier {
+    let onChange: (Double) -> Void
+
+    func body(content: Content) -> some View {
+        content.onGeometryChange(for: Double.self) { proxy in
+            Double(proxy.size.height)
+        } action: { height in
+            onChange(height)
         }
     }
 }

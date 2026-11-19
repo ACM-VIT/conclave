@@ -40,6 +40,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -51,44 +52,75 @@ internal val WordleRowLabelWidth = 56.dp
 internal val WordleRowLabelGap = 6.dp
 
 @Composable
-internal fun WordleTeamStatus(scene: WordleScene, team: WordleTeamScene, games: GameStagePresenter) {
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        if (scene.role == WordleRole.spectator) PromptSpectatorNotice(games)
-        WordleTeamBanner(scene, team, games)
-        WordleTeamMembers(team)
-    }
-}
-
-@Composable
-private fun WordleTeamBanner(scene: WordleScene, team: WordleTeamScene, games: GameStagePresenter) {
+internal fun WordleTeamBanner(scene: WordleScene, team: WordleTeamScene, games: GameStagePresenter, showsHint: Boolean) {
     val scheme = MaterialTheme.colorScheme
     val ext = LocalConclaveExtendedColors.current
     val mine = team.turn == WordleTurn.yours
+    val clocks = WordleClockPolicy.plan(roundDeadlineMillis = games.countdown?.deadlineMillis ?: 0.0,
+        turnDeadlineMillis = if (team.isTurnTimed) team.turnDeadlineMillis else 0.0)
     val title = wordleTeamTitle(scene, team)
-    val detail = wordleTeamDetail(scene, team)
-    Surface(
-        shape = MaterialTheme.shapes.medium,
-        color = scheme.surfaceContainerHigh,
-        border = BorderStroke(1.dp, if (mine) scheme.primary else ext.border),
-        modifier = Modifier.fillMaxWidth().testTag("game.wordle.team.banner"),
-    ) {
-        Row(
-            Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+    val detail = wordleTeamDetailResource(scene, team)
+    val hint = if (showsHint && detail != null && detail != WordleUpNextResource) conclaveString(detail) else ""
+    Box {
+        Surface(
+            shape = MaterialTheme.shapes.medium,
+            color = scheme.surfaceContainerHigh,
+            border = BorderStroke(1.dp, if (mine) scheme.primary else ext.border),
+            modifier = Modifier.fillMaxWidth().testTag("game.wordle.team.banner"),
         ) {
-            Column(
-                Modifier.weight(1f).semantics(mergeDescendants = true) { if (mine) heading() },
-                verticalArrangement = Arrangement.spacedBy(2.dp),
+            Row(
+                Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                Text(title, style = MaterialTheme.typography.titleSmall, color = scheme.onSurface)
-                if (detail.isNotEmpty()) Text(detail, style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant)
+                Column(
+                    Modifier.weight(1f).semantics(mergeDescendants = true) { heading() },
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text(title, style = MaterialTheme.typography.titleMedium, color = scheme.onSurface, maxLines = if (showsHint) 2 else 1,
+                        overflow = TextOverflow.Ellipsis)
+                    WordleTeamMetaLine(scene, team, upNext = detail == WordleUpNextResource,
+                        countdown = if (clocks.showsRoundInMeta) games.countdown else null)
+                    if (hint.isNotEmpty()) Text(hint, style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant)
+                }
+                when (clocks.chip) {
+                    WordleClock.turn -> WordleTurnTimerSlot(team, games)
+                    WordleClock.round -> WordleTimerSlot(games)
+                    else -> {}
+                }
+                if (team.canPass) WordlePassButton(games)
             }
-            WordleTurnTimerSlot(team, games)
-            if (team.canPass) WordlePassButton(games)
+        }
+        PromptAnnouncement(games, team.turnKey, conclaveString("gm_wordle_team_your_turn"), assertive = true)
+    }
+}
+
+private const val WordleUpNextResource = "gm_wordle_team_up_next"
+
+@Composable
+private fun WordleTeamMetaLine(scene: WordleScene, team: WordleTeamScene, upNext: Boolean, countdown: CountdownModel?) {
+    val scheme = MaterialTheme.colorScheme
+    var nowMillis by remember(countdown) { mutableDoubleStateOf(System.currentTimeMillis().toDouble()) }
+    if (countdown != null) {
+        val lifecycle = LocalLifecycleOwner.current.lifecycle
+        LaunchedEffect(countdown, lifecycle) {
+            lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                while (isActive) {
+                    nowMillis = System.currentTimeMillis().toDouble()
+                    if (countdown.secondsLeft(nowMillis = nowMillis) == 0) break
+                    delay(1000L)
+                }
+            }
         }
     }
-    PromptAnnouncement(games, team.turnKey, conclaveString("gm_wordle_team_your_turn"), assertive = true)
+    val meta = wordleTeamMeta(scene, team)
+    val status = if (upNext) conclaveString("act_two_facts", conclaveString(WordleUpNextResource), meta) else meta
+    val seconds = countdown?.secondsLeft(nowMillis = nowMillis)
+    val text = if (seconds == null) status else conclaveString("act_two_facts", status, conclaveString("gm_wordle_time_left", wordleClock(seconds)))
+    val spoken = if (seconds == null) status
+        else conclaveString("act_two_facts", status, conclaveString("gm_wordle_time_left", wordleSpokenDuration(seconds)))
+    Text(text, style = rememberTabular(MaterialTheme.typography.bodySmall), color = scheme.onSurfaceVariant, maxLines = 1,
+        overflow = TextOverflow.Ellipsis, modifier = Modifier.testTag("game.wordle.team.meta").semantics { contentDescription = spoken })
 }
 
 @Composable
@@ -146,7 +178,7 @@ private fun WordleTurnTimerChip(model: CountdownModel, isMine: Boolean) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun WordleTeamMembers(team: WordleTeamScene) {
+internal fun WordleTeamMembers(team: WordleTeamScene) {
     val you = conclaveString("ds_you")
     FlowRow(
         Modifier.fillMaxWidth().testTag("game.wordle.team.members"),
@@ -199,15 +231,16 @@ internal fun wordleLabelLayout(availableDp: Float, boardDp: Float): WordleLabelL
 }
 
 @Composable
-internal fun WordleLabeledRow(row: WordleRowModel, label: WordleRowLabel?, layout: WordleLabelLayout) {
+internal fun WordleLabeledRow(row: WordleRowModel, label: WordleRowLabel?, layout: WordleLabelLayout,
+                              side: Dp = WordleFitPolicy.maximumCell.dp) {
     val summary = wordleTeamRowSummary(row, label)
     if (layout == WordleLabelLayout.hidden) {
-        WordleRow(row, summary)
+        WordleRow(row, summary, side)
         return
     }
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(WordleRowLabelGap)) {
         if (layout == WordleLabelLayout.balanced) Spacer(Modifier.width(WordleRowLabelWidth))
-        WordleRow(row, summary)
+        WordleRow(row, summary, side)
         WordleRowGuesser(label)
     }
 }
@@ -248,7 +281,7 @@ internal fun wordleTeamDetailResource(scene: WordleScene, team: WordleTeamScene)
     scene.role == WordleRole.setter -> "gm_wordle_team_watch"
     team.turn == WordleTurn.anyone -> "gm_wordle_team_huddle_detail"
     team.turn == WordleTurn.yours -> "gm_wordle_team_your_turn_detail"
-    team.turn == WordleTurn.teammate && team.isUpNext -> "gm_wordle_team_up_next"
+    team.turn == WordleTurn.teammate && team.isUpNext -> WordleUpNextResource
     else -> null
 }
 
@@ -273,12 +306,6 @@ internal fun wordleTeamMetaResource(team: WordleTeamScene): String =
 private fun wordleTeamTitle(scene: WordleScene, team: WordleTeamScene): String {
     val name = wordleTeamTitleResource(scene, team)
     return if (name == "gm_wordle_team_guessing") conclaveString(name, team.guesserName) else conclaveString(name)
-}
-
-@Composable
-private fun wordleTeamDetail(scene: WordleScene, team: WordleTeamScene): String {
-    val name = wordleTeamDetailResource(scene, team) ?: return ""
-    return conclaveString(name)
 }
 
 @Composable
