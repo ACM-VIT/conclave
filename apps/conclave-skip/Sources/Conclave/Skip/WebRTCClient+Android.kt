@@ -1833,7 +1833,6 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         val rid: String,
         val scaleResolutionDownBy: Double,
         val maxBitrateBps: Int,
-        val maxFramerate: Int,
     )
 
     private data class ScreenShareEncodingCap(
@@ -3828,17 +3827,17 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         when (quality) {
             VideoQuality.low -> {
                 defaults = listOf(
-                WebcamEncodingSpec(rid = "q", scaleResolutionDownBy = 2.0, maxBitrateBps = 65_000, maxFramerate = 8),
-                WebcamEncodingSpec(rid = "h", scaleResolutionDownBy = 1.0, maxBitrateBps = 120_000, maxFramerate = 12),
-                WebcamEncodingSpec(rid = "f", scaleResolutionDownBy = 1.0, maxBitrateBps = 180_000, maxFramerate = 15),
+                WebcamEncodingSpec(rid = "q", scaleResolutionDownBy = 2.0, maxBitrateBps = 65_000),
+                WebcamEncodingSpec(rid = "h", scaleResolutionDownBy = 1.0, maxBitrateBps = 120_000),
+                WebcamEncodingSpec(rid = "f", scaleResolutionDownBy = 1.0, maxBitrateBps = 180_000),
                 )
                 defaultMaximumBitrate = 180_000
             }
             VideoQuality.standard -> {
                 defaults = listOf(
-                WebcamEncodingSpec(rid = "q", scaleResolutionDownBy = 4.0, maxBitrateBps = 80_000, maxFramerate = 12),
-                WebcamEncodingSpec(rid = "h", scaleResolutionDownBy = 2.0, maxBitrateBps = 220_000, maxFramerate = 20),
-                WebcamEncodingSpec(rid = "f", scaleResolutionDownBy = 1.0, maxBitrateBps = 1_650_000, maxFramerate = 30),
+                WebcamEncodingSpec(rid = "q", scaleResolutionDownBy = 4.0, maxBitrateBps = 80_000),
+                WebcamEncodingSpec(rid = "h", scaleResolutionDownBy = 2.0, maxBitrateBps = 220_000),
+                WebcamEncodingSpec(rid = "f", scaleResolutionDownBy = 1.0, maxBitrateBps = 1_650_000),
                 )
                 defaultMaximumBitrate = 1_650_000
             }
@@ -3861,11 +3860,6 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                     20_000,
                     (effectiveMaximumBitrate.toDouble() * bitrateRatio * detailLayerFactor).toInt(),
                 ),
-                maxFramerate = if (index == lastIndex) {
-                    configuredCameraFrameRate
-                } else {
-                    minOf(spec.maxFramerate, configuredCameraFrameRate)
-                },
             )
         }
     }
@@ -3876,19 +3870,15 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     ): List<WebcamEncodingSpec> {
         val base = webcamEncodingSpecs(quality)
         val bitrateCaps: List<Int>
-        val framerateCaps: List<Int>
         when (connectionQuality) {
             ConnectionQuality.emergency -> {
                 bitrateCaps = listOf(65_000, 90_000, 120_000)
-                framerateCaps = listOf(8, 8, 8)
             }
             ConnectionQuality.poor -> {
                 bitrateCaps = listOf(120_000, 160_000, 180_000)
-                framerateCaps = listOf(12, 12, 15)
             }
             ConnectionQuality.fair -> {
                 bitrateCaps = listOf(90_000, 220_000, 420_000)
-                framerateCaps = listOf(10, 15, 20)
             }
             ConnectionQuality.good, ConnectionQuality.unknown -> return base
         }
@@ -3910,7 +3900,6 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 rid = spec.rid,
                 scaleResolutionDownBy = scaleResolutionDownBy,
                 maxBitrateBps = minOf(spec.maxBitrateBps, bitrateCaps[minOf(index, bitrateCaps.size - 1)]),
-                maxFramerate = minOf(spec.maxFramerate, framerateCaps[minOf(index, framerateCaps.size - 1)]),
             )
         }
     }
@@ -3919,6 +3908,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         quality: VideoQuality,
         connectionQuality: ConnectionQuality = ConnectionQuality.unknown,
     ): List<RtpParameters.Encoding> {
+        val fps = webcamCaptureProfile(quality, connectionQuality).fps
         return webcamEncodingSpecs(quality, connectionQuality).mapIndexed { index, spec ->
             RtpParameters.Encoding(
                 spec.rid,
@@ -3926,7 +3916,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 spec.scaleResolutionDownBy,
             ).also { encoding ->
                 encoding.maxBitrateBps = spec.maxBitrateBps
-                encoding.maxFramerate = spec.maxFramerate
+                encoding.maxFramerate = fps
                 encoding.numTemporalLayers = WebcamTemporalLayerPolicy.temporalLayerCount
                 encoding.networkPriority = if (spec.rid == "f") {
                     WEBRTC_NETWORK_PRIORITY_LOW
@@ -3959,7 +3949,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         return listOf(
             RtpParameters.Encoding(null, true, spec.scaleResolutionDownBy).also { encoding ->
                 encoding.maxBitrateBps = spec.maxBitrateBps
-                encoding.maxFramerate = spec.maxFramerate
+                encoding.maxFramerate = webcamCaptureProfile(quality, connectionQuality).fps
                 encoding.numTemporalLayers = WebcamTemporalLayerPolicy.temporalLayerCount
                 encoding.networkPriority = WEBRTC_NETWORK_PRIORITY_LOW
             },
