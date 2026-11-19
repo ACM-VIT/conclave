@@ -31,6 +31,7 @@ import androidx.compose.material.icons.rounded.Groups
 import androidx.compose.material.icons.rounded.Lightbulb
 import androidx.compose.material.icons.rounded.PersonSearch
 import androidx.compose.material.icons.rounded.Schedule
+import androidx.compose.material.icons.rounded.ScubaDiving
 import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material.icons.rounded.TheaterComedy
 import androidx.compose.material.icons.rounded.Timeline
@@ -68,6 +69,7 @@ internal fun gameGlyphIcon(glyph: GameGlyph): ImageVector = when (glyph) {
     GameGlyph.wordle -> Icons.Rounded.Abc
     GameGlyph.chess -> Icons.Rounded.GridOn
     GameGlyph.zip -> Icons.Rounded.Timeline
+    GameGlyph.longShot -> Icons.Rounded.ScubaDiving
     GameGlyph.generic -> ConclaveIcons.SportsEsportsFill0
 }
 

@@ -18,6 +18,8 @@ final class GameStagePresenter {
 
     private(set) var chessPendingMove: ChessPendingMoveModel = ChessPendingMoveModel.none
 
+    private(set) var longShotDraft: String = ""
+
     @ObservationIgnored var onCommand: ((GameStageCommand) -> Void)? = nil
     @ObservationIgnored var sleep: (Double) async -> Void = { millis in
         try? await Task.sleep(nanoseconds: UInt64(max(0.0, millis) * 1_000_000.0))
@@ -53,6 +55,9 @@ final class GameStagePresenter {
     @ObservationIgnored private var chessMoveRequestId = ""
     @ObservationIgnored private var chessFenAtSend = ""
 
+    @ObservationIgnored private var longShotDraftKey = ""
+    @ObservationIgnored private var longShotSubmitted = ""
+
     static let moveTimeoutMillis = 10000.0
 
     init() {}
@@ -75,6 +80,7 @@ final class GameStagePresenter {
             wordleSubmitted = ""
 
             chessMoveRequestId = ""
+            longShotSubmitted = ""
         }
         if next.phase == "lobby" { announced = [] }
         if rematchPending && (!next.isFinished || next.phase == "lobby") { rematchPending = false }
@@ -113,6 +119,9 @@ final class GameStagePresenter {
                 && wordleDraft == wordleSubmitted {
                 wordleDraft = ""
             }
+            if ackedType == LongShotIntent.answerType && !longShotSubmitted.isEmpty && longShotDraft == longShotSubmitted {
+                longShotDraft = ""
+            }
         } else {
             failure = GameFailurePolicy.failure(serverText: serverText)
             failureText = failure == GameFailure.server ? serverText : ""
@@ -126,6 +135,7 @@ final class GameStagePresenter {
             }
         }
         if ackedType == WordleIntent.guessType || ackedType == WordleIntent.setWordType { wordleSubmitted = "" }
+        if ackedType == LongShotIntent.answerType { longShotSubmitted = "" }
         publishInteraction()
     }
 
@@ -327,6 +337,33 @@ final class GameStagePresenter {
         }
     }
 
+    func setLongShotDraft(_ text: String) {
+        guard let longShot = scene.longShot, longShot.entry.canSubmit else { return }
+        let next = LongShotDraftPolicy.normalized(text)
+        if next != longShotDraft { longShotDraft = next }
+    }
+
+    func submitLongShot() -> ActivityTapResult {
+        guard let longShot = scene.longShot else { return ActivityTapResult.explained }
+        if !pendingRequestId.isEmpty { return ActivityTapResult.ignored }
+        if !longShot.entry.canSubmit { return ActivityTapResult.explained }
+        let text = LongShotDraftPolicy.submission(longShotDraft)
+        if text.isEmpty { return ActivityTapResult.ignored }
+        longShotSubmitted = longShotDraft
+        let result = send(LongShotIntent.answer(text))
+        if result != ActivityTapResult.dispatched { longShotSubmitted = "" }
+        return result
+    }
+
+    private func syncLongShotDraft(_ longShot: LongShotScene?) {
+        var key = ""
+        if let longShot = longShot, !longShot.entry.draftKey.isEmpty { key = inputs.gameId + "|" + longShot.entry.draftKey }
+        if key == longShotDraftKey { return }
+        longShotDraftKey = key
+        longShotSubmitted = ""
+        if !longShotDraft.isEmpty { longShotDraft = "" }
+    }
+
     func summary() -> ActivityGameSummary {
         if !inputs.isActive { return ActivityGameSummary.none }
         return ActivityGameSummary(gameId: inputs.gameId, name: inputs.name, isActive: true, isFinished: inputs.isFinished,
@@ -355,6 +392,9 @@ final class GameStagePresenter {
         chessMoveRequestId = ""
         chessFenAtSend = ""
         if chessPendingMove != ChessPendingMoveModel.none { chessPendingMove = ChessPendingMoveModel.none }
+        longShotDraftKey = ""
+        longShotSubmitted = ""
+        if !longShotDraft.isEmpty { longShotDraft = "" }
         if chrome.withRevision(0) != GameChromeModel.empty { chrome = GameChromeModel.empty.withRevision(chrome.revision + 1) }
         if scene.withRevision(0) != GameScene.empty { scene = GameScene.empty.withRevision(scene.revision + 1) }
         syncTileAdornments()
@@ -418,8 +458,9 @@ final class GameStagePresenter {
                                                hasActed: false))
             }
         }
+        let minPlayers = LongShotSceneBuilder.minimumPlayers(projection.longShot, catalogMinimum: inputs.minPlayers)
         let lobby = GameStagePresenter.lobby(isHost: inputs.isHost, isSeated: holdsLobbySeat, seat: seat, isRecovering: inputs.isRecovering,
-                                             minPlayers: inputs.minPlayers, playerCount: inputs.players.count)
+                                             minPlayers: minPlayers, playerCount: inputs.players.count)
         rememberPlayers()
 
         let context = PromptSceneContext(localId: localId, isPlayer: seat == SeatState.player, isHost: inputs.isHost,
@@ -451,18 +492,23 @@ final class GameStagePresenter {
             zip = ZipSceneBuilder.scene(projected, context: context, serverNowMillis: common.serverNowMillis,
                                         receivedAtMillis: pushReceivedAtMillis)
         }
+        var longShot: LongShotScene? = nil
+        if let projected = projection.longShot { longShot = LongShotSceneBuilder.scene(projected, context: context) }
         let outcomes = [PromptOutcomePolicy.trivia(previous: scene.trivia, next: trivia),
                         PromptOutcomePolicy.reaction(previous: scene.reaction, next: reaction),
                         WordleOutcomePolicy.solved(previous: scene.wordle, next: wordle),
-                        ZipOutcomePolicy.solved(previous: scene.zip, next: zip)]
+                        ZipOutcomePolicy.solved(previous: scene.zip, next: zip),
+                        LongShotOutcomePolicy.feedback(previous: scene.longShot, next: longShot)]
         let nextScene = GameScene(revision: scene.revision, kind: sceneKind(phase: phase, isSeated: isSeated), players: players,
                                   pendingJoiners: pending, options: GameStagePresenter.optionSummary(config: inputs.config, options: inputs.options),
                                   lobby: lobby, projection: projection, trivia: trivia, bluff: bluff, wouldYouRather: wouldYouRather,
-                                  mostLikelyTo: mostLikelyTo, reaction: reaction, imposter: imposter, wordle: wordle, chess: chess, zip: zip)
+                                  mostLikelyTo: mostLikelyTo, reaction: reaction, imposter: imposter, wordle: wordle, chess: chess, zip: zip,
+                                  longShot: longShot)
         if nextScene != scene { scene = nextScene.withRevision(scene.revision + 1) }
         syncTileAdornments()
         syncWordleDraft(wordle)
         syncChessPending(chess)
+        syncLongShotDraft(longShot)
         for outcome in outcomes where outcome != FeedbackKind.none {
             advanceFeedback(outcome)
         }

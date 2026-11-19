@@ -197,6 +197,9 @@ struct GameShellScene: View {
 
         case GameSceneKind.zip:
             ZipSceneBody(games: games)
+
+        case GameSceneKind.longShot:
+            LongShotSceneBody(games: games)
         case GameSceneKind.unsupported:
             VStack(alignment: .leading, spacing: 10) {
                 GameKitNotice(kind: .unsupported, message: "", buttonTitle: storeURL.isEmpty ? "" : ConclaveStrings.text("Update App"),

@@ -237,6 +237,8 @@ private fun GameShellScene(games: GameStagePresenter, storeURL: String, onShowVi
         GameSceneKind.chess -> ChessSceneBody(games)
 
         GameSceneKind.zip -> ZipSceneBody(games)
+
+        GameSceneKind.longShot -> LongShotSceneBody(games)
         GameSceneKind.unsupported -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             GameKitNotice(
                 GameKitNoticeKind.unsupported, "",

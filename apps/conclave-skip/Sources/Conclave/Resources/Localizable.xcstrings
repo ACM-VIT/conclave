@@ -716,6 +716,9 @@
     "About" : {
       "extractionState" : "manual"
     },
+    "Abyss" : {
+      "extractionState" : "manual"
+    },
     "Accept Draw" : {
       "extractionState" : "manual"
     },
@@ -892,6 +895,9 @@
       "extractionState" : "manual"
     },
     "Another app is using the camera." : {
+      "extractionState" : "manual"
+    },
+    "Answer" : {
       "extractionState" : "manual"
     },
     "Answer Live" : {
@@ -1491,6 +1497,9 @@
     "Checking who’s here" : {
       "extractionState" : "manual"
     },
+    "Checking your answer" : {
+      "extractionState" : "manual"
+    },
     "Chess Black" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1758,6 +1767,9 @@
       "extractionState" : "manual"
     },
     "Clear chat on this device" : {
+      "extractionState" : "manual"
+    },
+    "Cliché" : {
       "extractionState" : "manual"
     },
     "Clip" : {
@@ -2209,6 +2221,9 @@
     "Decorative Only" : {
       "extractionState" : "manual"
     },
+    "Deepest answers" : {
+      "extractionState" : "manual"
+    },
     "Delete" : {
       "extractionState" : "manual"
     },
@@ -2278,6 +2293,9 @@
       "extractionState" : "manual",
       "generatesSymbol" : false
     },
+    "Depth" : {
+      "extractionState" : "manual"
+    },
     "Details" : {
       "extractionState" : "manual"
     },
@@ -2309,6 +2327,9 @@
       "extractionState" : "manual"
     },
     "Dismissed (%lld)" : {
+      "extractionState" : "manual"
+    },
+    "Dive" : {
       "extractionState" : "manual"
     },
     "Done" : {
@@ -2446,6 +2467,9 @@
       "extractionState" : "manual"
     },
     "Everyone returns to the meeting." : {
+      "extractionState" : "manual"
+    },
+    "Everyone surfaced" : {
       "extractionState" : "manual"
     },
     "Everyone who is presenting stops sharing." : {
@@ -2586,6 +2610,9 @@
       "extractionState" : "manual"
     },
     "Get notified about private messages and mentions while you’re in another app." : {
+      "extractionState" : "manual"
+    },
+    "Get ready" : {
       "extractionState" : "manual"
     },
     "Getting You In" : {
@@ -3020,6 +3047,9 @@
       "extractionState" : "manual",
       "generatesSymbol" : false
     },
+    "Judged" : {
+      "extractionState" : "manual"
+    },
     "Jump to Latest" : {
       "extractionState" : "manual"
     },
@@ -3251,7 +3281,197 @@
     "Locking…" : {
       "extractionState" : "manual"
     },
+    "Long Shot Found %lld" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld found"
+          }
+        }
+      }
+    },
+    "Long Shot Found By %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Found by %@"
+          }
+        }
+      }
+    },
+    "Long Shot Gain %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "+%@ m"
+          }
+        }
+      }
+    },
+    "Long Shot Heart %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ earned a heart"
+          }
+        }
+      }
+    },
+    "Long Shot Hearts %lld" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hearts: %lld"
+          }
+        }
+      }
+    },
+    "Long Shot Landed %@ %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ landed on %2$@"
+          }
+        }
+      }
+    },
+    "Long Shot Locked Count %lld %lld" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld of %2$lld locked in"
+          }
+        }
+      }
+    },
+    "Long Shot Lost Heart %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ lost a heart"
+          }
+        }
+      }
+    },
+    "Long Shot Meters %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ m"
+          }
+        }
+      }
+    },
+    "Long Shot Miss By %@ %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@: %2$@"
+          }
+        }
+      }
+    },
+    "Long Shot Out %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ is out"
+          }
+        }
+      }
+    },
+    "Long Shot Prompt Count %lld %lld" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld of %2$lld"
+          }
+        }
+      }
+    },
+    "Long Shot Taken %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ is taken"
+          }
+        }
+      }
+    },
+    "Long Shot Turn %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@’s turn"
+          }
+        }
+      }
+    },
+    "Long Shot Wins %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ wins"
+          }
+        }
+      }
+    },
+    "Long Shot Your Answer %@ %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@, your answer %2$@"
+          }
+        }
+      }
+    },
+    "Long Shot Your Dive %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your dive: %@"
+          }
+        }
+      }
+    },
     "Long Text" : {
+      "extractionState" : "manual"
+    },
+    "Long shot" : {
       "extractionState" : "manual"
     },
     "Low bandwidth. Audio is being prioritized." : {
@@ -3434,6 +3654,9 @@
       "extractionState" : "manual",
       "generatesSymbol" : false
     },
+    "Midnight" : {
+      "extractionState" : "manual"
+    },
     "Mine" : {
       "extractionState" : "manual"
     },
@@ -3456,6 +3679,9 @@
       "extractionState" : "manual"
     },
     "Mirroring changes only your view. Data Saver lowers the video you send and receive." : {
+      "extractionState" : "manual"
+    },
+    "Missed" : {
       "extractionState" : "manual"
     },
     "More" : {
@@ -3622,6 +3848,9 @@
       "extractionState" : "manual",
       "generatesSymbol" : false
     },
+    "Next heart" : {
+      "extractionState" : "manual"
+    },
     "No Clips Found" : {
       "extractionState" : "manual"
     },
@@ -3647,6 +3876,9 @@
       "extractionState" : "manual"
     },
     "No Stickers Found" : {
+      "extractionState" : "manual"
+    },
+    "No answer" : {
       "extractionState" : "manual"
     },
     "No answer yet." : {
@@ -3741,6 +3973,9 @@
     "Not joined yet" : {
       "extractionState" : "manual"
     },
+    "Not on the list" : {
+      "extractionState" : "manual"
+    },
     "Not quite" : {
       "extractionState" : "manual"
     },
@@ -3772,6 +4007,9 @@
       "extractionState" : "manual"
     },
     "Now Playing" : {
+      "extractionState" : "manual"
+    },
+    "Obvious" : {
       "extractionState" : "manual"
     },
     "Off" : {
@@ -3896,6 +4134,9 @@
     "Original message isn't available" : {
       "extractionState" : "manual"
     },
+    "Out of air" : {
+      "extractionState" : "manual"
+    },
     "Out of tries" : {
       "extractionState" : "manual"
     },
@@ -3985,6 +4226,9 @@
       "extractionState" : "manual"
     },
     "Pawn" : {
+      "extractionState" : "manual"
+    },
+    "Pearl" : {
       "extractionState" : "manual"
     },
     "Pending" : {
@@ -4308,6 +4552,9 @@
           }
         }
       }
+    },
+    "Rare" : {
+      "extractionState" : "manual"
     },
     "Ratio %@ against %@: %@" : {
       "extractionState" : "manual"
@@ -4821,6 +5068,9 @@
     "Settings closed." : {
       "extractionState" : "manual"
     },
+    "Shallows" : {
+      "extractionState" : "manual"
+    },
     "Share Again" : {
       "extractionState" : "manual"
     },
@@ -4974,6 +5224,9 @@
     "Sketch, drop sticky notes, or point things out with the laser. Everyone in the call sees it live." : {
       "extractionState" : "manual"
     },
+    "Skip Prompt" : {
+      "extractionState" : "manual"
+    },
     "Skip Question" : {
       "extractionState" : "manual"
     },
@@ -4990,6 +5243,9 @@
       "extractionState" : "manual"
     },
     "Smooth video" : {
+      "extractionState" : "manual"
+    },
+    "Solid" : {
       "extractionState" : "manual"
     },
     "Solved in %@" : {
@@ -5221,6 +5477,9 @@
       "extractionState" : "manual"
     },
     "Summary" : {
+      "extractionState" : "manual"
+    },
+    "Surfaced" : {
       "extractionState" : "manual"
     },
     "Surprised" : {
@@ -5546,6 +5805,9 @@
     "Thumbs Up" : {
       "extractionState" : "manual"
     },
+    "Tie at the top" : {
+      "extractionState" : "manual"
+    },
     "Tie, the Imposter Survives" : {
       "extractionState" : "manual"
     },
@@ -5610,6 +5872,9 @@
     "Transcript View" : {
       "extractionState" : "manual"
     },
+    "Trench" : {
+      "extractionState" : "manual"
+    },
     "Trending" : {
       "extractionState" : "manual"
     },
@@ -5663,6 +5928,9 @@
     "Turns off the video you send and receive in this call. Your camera stays off until you turn it on." : {
       "extractionState" : "manual"
     },
+    "Twilight" : {
+      "extractionState" : "manual"
+    },
     "Two Facts %@ %@" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -5681,6 +5949,9 @@
       "extractionState" : "manual"
     },
     "Type a message" : {
+      "extractionState" : "manual"
+    },
+    "Type an answer" : {
       "extractionState" : "manual"
     },
     "Typography" : {
@@ -5961,6 +6232,9 @@
       "extractionState" : "manual"
     },
     "Waiting for others" : {
+      "extractionState" : "manual"
+    },
+    "Waiting for players" : {
       "extractionState" : "manual"
     },
     "Waiting for the Host to Start" : {
@@ -6467,6 +6741,9 @@
     "You Were Disconnected" : {
       "extractionState" : "manual"
     },
+    "You are out" : {
+      "extractionState" : "manual"
+    },
     "You asked" : {
       "extractionState" : "manual"
     },
@@ -6485,10 +6762,16 @@
     "You don’t have permission to control live notes." : {
       "extractionState" : "manual"
     },
+    "You earned a heart" : {
+      "extractionState" : "manual"
+    },
     "You haven’t asked anything yet." : {
       "extractionState" : "manual"
     },
     "You hear this for speakers without a personal voice." : {
+      "extractionState" : "manual"
+    },
+    "You lost a heart" : {
       "extractionState" : "manual"
     },
     "You pick the %lld-letter word." : {
@@ -6516,6 +6799,9 @@
       "extractionState" : "manual"
     },
     "You vs the computer" : {
+      "extractionState" : "manual"
+    },
+    "You win" : {
       "extractionState" : "manual"
     },
     "You're already muted." : {

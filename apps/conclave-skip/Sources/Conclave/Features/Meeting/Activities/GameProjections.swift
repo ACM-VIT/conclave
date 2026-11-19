@@ -338,6 +338,7 @@ enum GameSceneKind {
     static let wordle = "wordle"
     static let chess = "chess"
     static let zip = "zip"
+    static let longShot = "longShot"
     static let privateView = "privateView"
     static let unsupported = "unsupported"
 
@@ -352,6 +353,7 @@ enum GameSceneKind {
         case "wordle": return wordle
         case "chess": return chess
         case "zip": return zip
+        case "long-shot": return longShot
         default: return unsupported
         }
     }
@@ -371,10 +373,12 @@ struct GameProjection: Equatable {
     let wordle: WordleProjection?
     let chess: ChessProjection?
     let zip: ZipProjection?
+    let longShot: LongShotProjection?
 
     static let empty = GameProjection(gameId: "", kind: GameSceneKind.unsupported, hasPlayerView: false,
                                       common: GameCommonProjection.empty, trivia: nil, bluff: nil, wouldYouRather: nil,
-                                      mostLikelyTo: nil, reaction: nil, imposter: nil, wordle: nil, chess: nil, zip: nil)
+                                      mostLikelyTo: nil, reaction: nil, imposter: nil, wordle: nil, chess: nil, zip: nil,
+                                      longShot: nil)
 
     var isKnownGame: Bool { kind != GameSceneKind.unsupported }
 }
@@ -512,7 +516,8 @@ enum GameProjectionParser {
             imposter: kind == GameSceneKind.imposter ? imposter(phase: phase, view: view, mine: mine) : nil,
             wordle: kind == GameSceneKind.wordle ? wordle(phase: phase, view: view, mine: mine) : nil,
             chess: kind == GameSceneKind.chess ? chess(phase: phase, view: view, mine: mine) : nil,
-            zip: kind == GameSceneKind.zip ? zip(phase: phase, view: view, mine: mine) : nil
+            zip: kind == GameSceneKind.zip ? zip(phase: phase, view: view, mine: mine) : nil,
+            longShot: kind == GameSceneKind.longShot ? LongShotProjectionParser.parse(view: view, mine: mine) : nil
         )
     }
 
@@ -573,6 +578,21 @@ enum GameProjectionParser {
             total = GameProjectionJSON.int(view, "totalRounds")
             acted = GameProjectionJSON.int(view, "finishedCount")
             if let result = GameProjectionJSON.child(view, "result") { winner = GameProjectionJSON.string(result, "winnerName") }
+        case GameSceneKind.longShot:
+            let timed = phase == "ready" || phase == "prompt"
+            deadline = timed ? deadline : 0.0
+            duration = timed ? GameProjectionJSON.double(view, "durationMs") : 0.0
+            let classic = GameProjectionJSON.string(view, "mode") == LongShotMode.classic.rawValue
+            round = classic ? GameProjectionJSON.int(view, "promptIndex") + 1 : 0
+            total = classic ? GameProjectionJSON.int(view, "totalPrompts") : 0
+            acted = GameProjectionJSON.int(view, "answeredCount")
+            if let tiles = GameProjectionJSON.child(view, "tiles") {
+                for id in tiles.keys.sorted() {
+                    if let tile = GameProjectionJSON.child(tiles, id), GameProjectionJSON.bool(tile, "acted") { actedIds.append(id) }
+                }
+            }
+            let winnerId = GameProjectionJSON.string(view, "winnerId")
+            if !winnerId.isEmpty { winner = LongShotProjectionParser.seatName(view, id: winnerId) }
         default:
             break
         }
