@@ -2578,28 +2578,16 @@ final class WebRTCClient: NSObject, ObservableObject {
     }
 
     private func microphoneOpusCodecOptionsJSON() throws -> String {
-        try encodeJSONString(
+        let profile = LocalSenderPolicy.microphoneProfile(for: currentLocalBandwidthQuality)
+        return try encodeJSONString(
             OpusCodecOptions(
                 opusStereo: false,
                 opusFec: true,
                 opusDtx: true,
-                opusMaxAverageBitrate: opusMaxAverageBitrate(connectionQuality: currentLocalBandwidthQuality),
+                opusMaxAverageBitrate: profile.maxAverageBitrateBps,
                 opusPtime: 20
             )
         )
-    }
-
-    private func opusMaxAverageBitrate(connectionQuality: ConnectionQuality) -> Int {
-        switch connectionQuality {
-        case .emergency:
-            return 24_000
-        case .poor:
-            return 32_000
-        case .fair:
-            return 48_000
-        case .good, .unknown:
-            return 96_000
-        }
     }
 
     private func ensureMicrophonePermission() async throws {
@@ -3127,18 +3115,26 @@ final class WebRTCClient: NSObject, ObservableObject {
             appData: appData
         )
         let queue = try sendOperationQueue(for: transport)
+        let degradation = LocalSenderPolicy.videoDegradationPreference(
+            for: .screen,
+            setting: configuredScreenDegradationPreference
+        )
         let result: ScreenProducerCreationResult
         do {
             result = try await performSendTransportOperation(on: queue) {
-                ScreenProducerCreationResult(
-                    producer: try request.transport.createProducer(
-                        for: request.track,
-                        encodings: request.encodings,
-                        codecOptions: nil,
-                        codec: request.codec,
-                        appData: request.appData
-                    )
+                let producer = try request.transport.createProducer(
+                    for: request.track,
+                    encodings: request.encodings,
+                    codecOptions: nil,
+                    codec: request.codec,
+                    appData: request.appData
                 )
+                producer.updateSenderParameters { parameters in
+                    var next = parameters
+                    next.degradationPreference = Self.degradationPreference(for: degradation)
+                    return next
+                }
+                return ScreenProducerCreationResult(producer: producer)
             }
         } catch {
             _ = transportConnectOutcomes.take(transportId: transport.id)
@@ -3166,18 +3162,37 @@ final class WebRTCClient: NSObject, ObservableObject {
             appData: appData
         )
         let queue = try sendOperationQueue(for: transport)
+        let cameraDegradation = LocalSenderPolicy.videoDegradationPreference(
+            for: .webcam,
+            setting: configuredCameraDegradationPreference
+        )
+        let microphonePriority = LocalSenderPolicy.microphoneProfile(for: currentLocalBandwidthQuality)
+            .bitratePriority
         let result: MediaProducerCreationResult
         do {
             result = try await performSendTransportOperation(on: queue) {
-                MediaProducerCreationResult(
-                    producer: try request.transport.createProducer(
-                        for: request.track,
-                        encodings: request.encodings,
-                        codecOptions: request.codecOptions,
-                        codec: request.codec,
-                        appData: request.appData
-                    )
+                let producer = try request.transport.createProducer(
+                    for: request.track,
+                    encodings: request.encodings,
+                    codecOptions: request.codecOptions,
+                    codec: request.codec,
+                    appData: request.appData
                 )
+                producer.updateSenderParameters { parameters in
+                    var next = parameters
+                    if producer.kind == .audio {
+                        if var encodings = next.encodings {
+                            for index in encodings.indices {
+                                encodings[index].bitratePriority = microphonePriority
+                            }
+                            next.encodings = encodings
+                        }
+                    } else {
+                        next.degradationPreference = Self.degradationPreference(for: cameraDegradation)
+                    }
+                    return next
+                }
+                return MediaProducerCreationResult(producer: producer)
             }
         } catch {
             _ = transportConnectOutcomes.take(transportId: transport.id)
@@ -4608,19 +4623,16 @@ final class WebRTCClient: NSObject, ObservableObject {
         return !definitiveRejections.contains { message.contains($0) }
     }
 
-    private func degradationPreference(
-        for rawValue: String,
-        fallback: RTPParameters.DegradationPreference
+    nonisolated private static func degradationPreference(
+        for preference: NativeMediaDegradationPreference
     ) -> RTPParameters.DegradationPreference {
-        switch rawValue {
-        case NativeMediaDegradationPreference.balanced.rawValue:
+        switch preference {
+        case .balanced:
             return .balanced
-        case NativeMediaDegradationPreference.maintainResolution.rawValue:
+        case .maintainResolution:
             return .maintainResolution
-        case NativeMediaDegradationPreference.maintainFramerate.rawValue:
+        case .maintainFramerate:
             return .maintainFramerate
-        default:
-            return fallback
         }
     }
 
@@ -4684,13 +4696,14 @@ final class WebRTCClient: NSObject, ObservableObject {
         evaluateWebcamTopologyTransition()
 
         if let audioProducer, !audioProducer.closed {
-            let audioBitrate = opusMaxAverageBitrate(connectionQuality: connectionQuality)
+            let profile = LocalSenderPolicy.microphoneProfile(for: connectionQuality)
             audioProducer.updateSenderParameters { parameters in
                 var next = parameters
                 if var encodings = next.encodings, !encodings.isEmpty {
                     for index in encodings.indices {
                         encodings[index].isActive = true
-                        encodings[index].maxBitrateBps = audioBitrate
+                        encodings[index].maxBitrateBps = profile.maxAverageBitrateBps
+                        encodings[index].bitratePriority = profile.bitratePriority
                     }
                     next.encodings = encodings
                 }
@@ -4698,26 +4711,29 @@ final class WebRTCClient: NSObject, ObservableObject {
             }
         }
 
-        if let producer = videoProducer,
-           webcamProducerTopology != .vp8SingleLayer {
+        if let producer = videoProducer, !producer.closed {
+            let adaptEncodings = webcamProducerTopology != .vp8SingleLayer
+            let degradation = LocalSenderPolicy.videoDegradationPreference(
+                for: .webcam,
+                setting: configuredCameraDegradationPreference
+            )
             let specs = webcamEncodingSpecs(
                 for: currentVideoQuality,
                 connectionQuality: connectionQuality
             )
 
-            try? producer.setMaxSpatialLayer(
-                webcamMaxSpatialLayer(
-                    for: currentVideoQuality,
-                    connectionQuality: connectionQuality
+            if adaptEncodings {
+                try? producer.setMaxSpatialLayer(
+                    webcamMaxSpatialLayer(
+                        for: currentVideoQuality,
+                        connectionQuality: connectionQuality
+                    )
                 )
-            )
+            }
             producer.updateSenderParameters { parameters in
                 var next = parameters
-                next.degradationPreference = self.degradationPreference(
-                    for: self.configuredCameraDegradationPreference,
-                    fallback: .maintainFramerate
-                )
-                if var encodings = next.encodings, !encodings.isEmpty {
+                next.degradationPreference = Self.degradationPreference(for: degradation)
+                if adaptEncodings, var encodings = next.encodings {
                     for index in encodings.indices {
                         let spec = specs[min(index, specs.count - 1)]
                         encodings[index].isActive = self.shouldSendWebcamEncoding(
@@ -4735,21 +4751,22 @@ final class WebRTCClient: NSObject, ObservableObject {
                 return next
             }
 
-            if localVideoEnabled, videoCapturer != nil {
+            if adaptEncodings, localVideoEnabled, videoCapturer != nil {
                 try? startCameraCapture()
             }
         }
 
         if let screenProducer, !screenProducer.closed {
             let cap = screenShareEncodingCap(connectionQuality: connectionQuality)
+            let degradation = LocalSenderPolicy.videoDegradationPreference(
+                for: .screen,
+                setting: configuredScreenDegradationPreference
+            )
             updateScreenCaptureProfile(connectionQuality: connectionQuality)
             resetScreenFrameLimiter()
             screenProducer.updateSenderParameters { parameters in
                 var next = parameters
-                next.degradationPreference = self.degradationPreference(
-                    for: self.configuredScreenDegradationPreference,
-                    fallback: .maintainResolution
-                )
+                next.degradationPreference = Self.degradationPreference(for: degradation)
                 if var encodings = next.encodings, !encodings.isEmpty {
                     for index in encodings.indices {
                         encodings[index].isActive = true
