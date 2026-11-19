@@ -2781,7 +2781,9 @@ function GridLayout({
 
             </div>
 
-            {!usesSpotlightLayout ? (
+            {/* Omit an empty rail (for example two people with the self view
+                detached) so the stage fills the space instead. */}
+            {!usesSpotlightLayout && stageRailTileCount > 0 ? (
               <div
                 className="flex h-32 w-full shrink-0 flex-row gap-3 overflow-x-auto pb-1 sm:h-auto sm:w-[min(22vw,15rem)] sm:min-w-[10rem] sm:max-w-[15rem] sm:flex-col sm:overflow-x-visible sm:overflow-y-auto sm:pb-0 sm:pr-1"
                 data-meet-stage-rail

@@ -2,6 +2,7 @@
 
 import {
   Check,
+  ChevronRight,
   Copy,
   Globe,
   Image as ImageIcon,
@@ -14,6 +15,7 @@ import {
   RotateCw,
   ShieldBan,
   Smile,
+  Sparkles,
   Users,
   Video,
   Volume2,
@@ -54,6 +56,7 @@ const inputClass =
   "w-full rounded-[10px] border border-white/[0.14] bg-[#131316] px-3 py-2.5 text-[14px] text-[#fafafa] outline-none transition-colors duration-[120ms] placeholder:text-[rgba(250,250,250,0.35)] focus:border-[rgba(250,250,250,0.28)]";
 
 interface MeetSettingsPanelProps {
+  onOpenAiSettings?: () => void;
   isRoomLocked: boolean;
   onToggleLock?: () => void;
   isNoGuests: boolean;
@@ -226,6 +229,28 @@ function SwitchRow({
         {label}
       </span>
       <ToggleSwitch isOn={isOn} tone={tone} />
+    </button>
+  );
+}
+
+function LinkRow({
+  icon: Icon,
+  label,
+  onClick,
+}: {
+  icon: LucideIcon;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex min-h-[44px] w-full items-center gap-3 px-4 py-2 text-left transition-colors duration-[120ms] hover:bg-[rgba(250,250,250,0.04)] active:bg-[rgba(250,250,250,0.07)]"
+    >
+      <Icon size={ICON_SIZE} strokeWidth={ICON_STROKE} className="shrink-0" style={{ color: ICON_OFF }} />
+      <span className="min-w-0 flex-1 truncate text-[14px] font-normal text-[#fafafa]">{label}</span>
+      <ChevronRight size={16} strokeWidth={ICON_STROKE} className="shrink-0" style={{ color: ICON_OFF }} />
     </button>
   );
 }
@@ -448,6 +473,7 @@ function InviteCodeForm({
 }
 
 export default function MeetSettingsPanel({
+  onOpenAiSettings,
   isRoomLocked,
   onToggleLock,
   isNoGuests,
@@ -746,6 +772,14 @@ export default function MeetSettingsPanel({
             onClick={onToggleReactionsDisabled}
             disabled={!onToggleReactionsDisabled}
           />
+
+          {onOpenAiSettings ? (
+            <>
+              <Separator />
+              <SectionHeader label="AI" />
+              <LinkRow icon={Sparkles} label="Room AI" onClick={onOpenAiSettings} />
+            </>
+          ) : null}
 
           <Separator />
 

@@ -1,5 +1,5 @@
 import type { RoomAiFeatureSettings } from "@conclave/ai/room-settings";
-export const ROOM_AI_PROVIDERS = ["openai", "anthropic", "sarvam"] as const;
+export const ROOM_AI_PROVIDERS = ["openai", "anthropic", "sarvam", "cloudflare", "typesafe"] as const;
 export type RoomAiProvider = (typeof ROOM_AI_PROVIDERS)[number];
 export type RoomAiState = Record<
   RoomAiProvider,
@@ -19,6 +19,8 @@ export const emptyRoomAiState = (): RoomAiState => ({
   openai: { source: null },
   anthropic: { source: null },
   sarvam: { source: null },
+  cloudflare: { source: null },
+  typesafe: { source: null },
   assistantModel: null,
 });
 export const isRoomAiProvider = (value: unknown): value is RoomAiProvider =>

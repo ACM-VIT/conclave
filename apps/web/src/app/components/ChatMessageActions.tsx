@@ -46,6 +46,10 @@ const ChatMessageActionsImpl = ({
     reactions.filter((r) => r.reactedByMe).map((r) => r.emoji),
   );
 
+  if (!onToggleReaction && !onReply && !onViewReactions) {
+    return null;
+  }
+
   return (
     <div
       className={`absolute bottom-full z-10 mb-1.5 flex items-center gap-0.5 rounded-full border border-white/10 bg-[#232327] p-1 shadow-xl shadow-black/50 transition-opacity duration-[120ms] group-hover:opacity-100 has-[:focus-visible]:opacity-100 ${

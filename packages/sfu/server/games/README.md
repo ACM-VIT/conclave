@@ -22,7 +22,7 @@ unrevealed answers) possible. A CRDT cannot hide anything from anyone.
 | `rng.ts` | seeded PRNG (server-only randomness for shuffles/deals) |
 | `roundLoop.ts` | shared round/phase driver + `allActivePlayersActed` liveness gate (advance early against connected players, never frozen seats) |
 | `aiContent.ts` | optional OpenAI generated prompt primitive |
-| `engine.ts` | `GameSession` owns authoritative state, applies moves, projects views |
+| `engine.ts` | `GameSession` owns authoritative state, applies moves, projects views; `prepareMove` runs a module's optional async move check (decision models) before `applyMove` |
 | `registry.ts` | maps `gameId` to module |
 | `modules/*.ts` | the games themselves (pure reducers) with exported typed move unions |
 | `../socket/handlers/gameHandlers.ts` | socket wiring: validation, broadcast loop, per-player emit, game votes, PostHog lifecycle analytics |
@@ -84,12 +84,20 @@ Full contributor guide: `packages/apps-sdk/docs/guides/add-a-game.md`.
   per-player tile status (answered, correct, points) for the video-tile overlay.
 - `long-shot`: typed-answer dive game where rarer correct answers sink you
   deeper (10 m per point, 7 prompts reach at most 7,000 m). Answers are matched
-  (aliases, small typos) against curated lists sorted into obvious, solid, rare,
-  and long-shot tiers. Two modes: dive together (each prompt shows for a 3 s
-  countdown, then 25 s to land one accepted answer, retrying freely) or last one
-  under (pass a hidden, random 10-30 s fuse by naming unused answers; whoever
-  holds it when it pops loses a heart, every 600 points of answers earns a heart
-  up to five, last diver under wins).
+  (aliases, small typos) against curated lists in six tiers: obvious (10),
+  cliche (15, the famous "obscure" pick), solid (30), rare (60), long shot (85)
+  and one designated pearl per prompt (100). Two modes: dive together (each
+  prompt shows for a 3 s countdown, then 25 s to land one accepted answer,
+  retrying freely; the result names the depth band reached) or last one under
+  (pass a hidden, random 10-30 s fuse by naming unused answers, topped back up
+  to 8 s on a pass; whoever holds it when it pops loses a heart, every 600
+  points earns a heart up to five, last diver under wins; 2+ players).
+  When the room has a decision model (Answer judging), answers missing from the
+  list are judged through the engine's async `prepareMove` hook: the model checks
+  correctness, safety, aliases of listed answers, repeats, and rarity on the tier
+  scale. Verdicts are cached per game session, capped per player per prompt and per game,
+  bound to the exact text they judged, and never accepted from the client. Topic
+  prompts from the LLM are checked the same way before the game starts.
 - `bluff`: Fibbage-style fake-answer game.
 - `would-you-rather`: room split prompts with no wrong answer.
 - `most-likely-to`: player-target voting prompts; tiles are tappable ballots.

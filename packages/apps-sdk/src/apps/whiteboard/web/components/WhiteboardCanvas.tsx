@@ -18,6 +18,14 @@ import type { AppUser } from "../../../../sdk/types/index";
 import { getColorForUser } from "../../core/presence/colors";
 import type { StickyElement, TextElement, WhiteboardElement } from "../../core/model/types";
 import { getBoundsForElement, hitTestElement, type Bounds } from "../../core/model/geometry";
+import {
+  anchorResizedElement,
+  getFrameResizePoint,
+  getResizedBounds,
+  startResizeFrame,
+  type ResizeFrame,
+  type ResizeHandle,
+} from "../../core/tools/resizeGeometry";
 
 export type WhiteboardCanvasProps = {
   doc: Y.Doc;
@@ -72,6 +80,9 @@ const ERASER_HIT_RADIUS = 12;
 const LASER_TTL_MS = 1000;
 const LASER_MAX_POINTS = 48;
 const LASER_GAP_RESET_MS = 300;
+// While the laser is held still, re-stamp its head this often so the dot
+// stays visible (and synced) instead of fading out under the pointer.
+const LASER_HOLD_REFRESH_MS = 250;
 
 type LaserPoint = { x: number; y: number; t: number };
 type LaserTrail = { points: LaserPoint[]; color: string };
@@ -129,7 +140,6 @@ const getMaxStickyScroll = (element: StickyElement) => {
   return Math.max(0, Math.ceil(getStickyTextHeight(element) - getStickyViewportHeight(element)));
 };
 
-type ResizeHandle = "nw" | "ne" | "sw" | "se";
 type ResizableElement = Extract<
   WhiteboardElement,
   { type: "shape" | "sticky" | "image" | "text" | "stroke" }
@@ -139,10 +149,8 @@ type RotatableElement = Extract<
   { type: "shape" | "sticky" | "image" | "text" | "stroke" }
 >;
 
-type ResizeSession = {
+type ResizeSession = ResizeFrame & {
   elementId: string;
-  handle: ResizeHandle;
-  startBounds: Bounds;
   startElement: ResizableElement;
 };
 
@@ -275,41 +283,6 @@ const getResizeMinimums = (element: ResizeSession["startElement"]) => {
   return { minWidth: 12, minHeight: 12 };
 };
 
-const getResizedBounds = (
-  startBounds: Bounds,
-  handle: ResizeHandle,
-  point: { x: number; y: number },
-  minWidth: number,
-  minHeight: number
-): Bounds => {
-  const left = startBounds.x;
-  const top = startBounds.y;
-  const right = startBounds.x + startBounds.width;
-  const bottom = startBounds.y + startBounds.height;
-
-  if (handle === "nw") {
-    const x = Math.min(point.x, right - minWidth);
-    const y = Math.min(point.y, bottom - minHeight);
-    return { x, y, width: right - x, height: bottom - y };
-  }
-
-  if (handle === "ne") {
-    const x = Math.max(point.x, left + minWidth);
-    const y = Math.min(point.y, bottom - minHeight);
-    return { x: left, y, width: x - left, height: bottom - y };
-  }
-
-  if (handle === "sw") {
-    const x = Math.min(point.x, right - minWidth);
-    const y = Math.max(point.y, top + minHeight);
-    return { x, y: top, width: right - x, height: y - top };
-  }
-
-  const x = Math.max(point.x, left + minWidth);
-  const y = Math.max(point.y, top + minHeight);
-  return { x: left, y: top, width: x - left, height: y - top };
-};
-
 const applyResizedBounds = (
   element: ResizeSession["startElement"],
   startBounds: Bounds,
@@ -423,6 +396,9 @@ export function WhiteboardCanvas({
   const laserTrailsRef = useRef<Map<number | "self", LaserTrail>>(new Map());
   const laserFrameRef = useRef<number | null>(null);
   const laserSyncRafRef = useRef<number | null>(null);
+  // The pointer currently holding the laser down; the laser shows only then.
+  const laserPointerIdRef = useRef<number | null>(null);
+  const syncOwnLaserRef = useRef<() => void>(() => {});
   const eraserRingRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef(viewport);
 
@@ -438,6 +414,17 @@ export function WhiteboardCanvas({
 
     const now = Date.now();
     const trails = laserTrailsRef.current;
+    const ownTrail = trails.get("self");
+    if (laserPointerIdRef.current !== null && ownTrail) {
+      const head = ownTrail.points[ownTrail.points.length - 1];
+      if (head && now - head.t >= LASER_HOLD_REFRESH_MS) {
+        ownTrail.points.push({ x: head.x, y: head.y, t: now });
+        if (ownTrail.points.length > LASER_MAX_POINTS) {
+          ownTrail.points.splice(0, ownTrail.points.length - LASER_MAX_POINTS);
+        }
+        syncOwnLaserRef.current();
+      }
+    }
     for (const [key, trail] of trails) {
       trail.points = trail.points.filter((point) => now - point.t < LASER_TTL_MS);
       if (trail.points.length === 0) {
@@ -523,6 +510,22 @@ export function WhiteboardCanvas({
     });
   }, [awareness]);
 
+  useEffect(() => {
+    syncOwnLaserRef.current = syncOwnLaser;
+  }, [syncOwnLaser]);
+
+  const endOwnLaser = useCallback(() => {
+    laserPointerIdRef.current = null;
+    if (laserSyncRafRef.current !== null) {
+      cancelAnimationFrame(laserSyncRafRef.current);
+      laserSyncRafRef.current = null;
+    }
+    if (laserTrailsRef.current.delete("self")) {
+      awareness.setLocalStateField("laser", null);
+      kickLaserLoop();
+    }
+  }, [awareness, kickLaserLoop]);
+
   const appendOwnLaserPoint = useCallback(
     (point: { x: number; y: number }) => {
       const now = Date.now();
@@ -551,14 +554,32 @@ export function WhiteboardCanvas({
   );
 
   useEffect(() => {
-    const collect = () => {
+    const collect = ({
+      added,
+      updated,
+      removed,
+    }: {
+      added: number[];
+      updated: number[];
+      removed: number[];
+    }) => {
       const receivedAt = Date.now();
       let changed = false;
-      awareness.getStates().forEach((state, clientId) => {
+      for (const clientId of removed) {
+        if (laserTrailsRef.current.delete(clientId)) changed = true;
+      }
+      const states = awareness.getStates();
+      [...added, ...updated].forEach((clientId) => {
         if (clientId === awareness.clientID) return;
-        const record = state as { laser?: unknown; user?: { color?: string } } | null;
+        const record = (states.get(clientId) ?? null) as {
+          laser?: unknown;
+          user?: { color?: string };
+        } | null;
         const points = parseLaserField(record?.laser, receivedAt);
-        if (!points) return;
+        if (!points) {
+          if (laserTrailsRef.current.delete(clientId)) changed = true;
+          return;
+        }
         laserTrailsRef.current.set(clientId, {
           points,
           color: record?.user?.color ?? "#a1a1aa",
@@ -640,6 +661,10 @@ export function WhiteboardCanvas({
     engineRef.current.setTool(tool);
     engineRef.current.setSettings(settings);
   }, [doc, pageId, tool, settings]);
+
+  useEffect(() => {
+    if (tool !== "laser") endOwnLaser();
+  }, [endOwnLaser, tool]);
 
   useEffect(() => {
     if (!selectedId) return;
@@ -1067,6 +1092,9 @@ export function WhiteboardCanvas({
       const canvasPoint = toCanvasPoint(event.clientX, event.clientY, rect);
       const point = { x: canvasPoint.x, y: canvasPoint.y, pressure: event.pressure };
       if (tool === "laser") {
+        event.currentTarget.setPointerCapture(event.pointerId);
+        laserTrailsRef.current.delete("self");
+        laserPointerIdRef.current = event.pointerId;
         appendOwnLaserPoint(point);
         scheduleCursorSync(point.x, point.y);
         return;
@@ -1105,10 +1133,12 @@ export function WhiteboardCanvas({
               const handle = getResizeHandleAtPoint(selectedBounds, point);
               if (handle) {
                 event.preventDefault();
+                const rotation = getElementRotation(selectedElement);
+                const rotated = Math.abs(rotation) >= ROTATION_EPSILON;
+                const localBounds = rotated ? getBoundsForElement(selectedElement) : selectedBounds;
                 resizeSessionRef.current = {
+                  ...startResizeFrame(localBounds, rotation, handle, point),
                   elementId: selectedElement.id,
-                  handle,
-                  startBounds: selectedBounds,
                   startElement: selectedElement,
                 };
                 scheduleCursorSync(point.x, point.y);
@@ -1158,7 +1188,21 @@ export function WhiteboardCanvas({
         return;
       }
       if (tool === "laser") {
-        appendOwnLaserPoint(point);
+        if (laserPointerIdRef.current === event.pointerId) {
+          // Pointer capture keeps delivering moves after the pointer leaves the
+          // canvas, and suppresses pointerleave, so end the laser here.
+          const rect = event.currentTarget.getBoundingClientRect();
+          const outside =
+            event.clientX < rect.left ||
+            event.clientX > rect.right ||
+            event.clientY < rect.top ||
+            event.clientY > rect.bottom;
+          if (outside) {
+            endOwnLaser();
+          } else {
+            appendOwnLaserPoint(point);
+          }
+        }
         scheduleCursorSync(point.x, point.y);
         return;
       }
@@ -1194,14 +1238,13 @@ export function WhiteboardCanvas({
           const nextBounds = getResizedBounds(
             resizeSession.startBounds,
             resizeSession.handle,
-            point,
+            getFrameResizePoint(resizeSession, point),
             minWidth,
             minHeight
           );
-          const nextElement = applyResizedBounds(
-            resizeSession.startElement,
-            resizeSession.startBounds,
-            nextBounds
+          const nextElement = anchorResizedElement(
+            applyResizedBounds(resizeSession.startElement, resizeSession.startBounds, nextBounds),
+            resizeSession
           );
           updateElement(doc, pageId, nextElement);
           setSelectedId(resizeSession.elementId);
@@ -1215,6 +1258,7 @@ export function WhiteboardCanvas({
     [
       appendOwnLaserPoint,
       doc,
+      endOwnLaser,
       locked,
       moveEraserRing,
       onPanMove,
@@ -1236,6 +1280,7 @@ export function WhiteboardCanvas({
       return;
     }
     if (tool === "laser") {
+      if (laserPointerIdRef.current === event.pointerId) endOwnLaser();
       return;
     }
     const rotateSession = rotateSessionRef.current;
@@ -1258,7 +1303,7 @@ export function WhiteboardCanvas({
       setSelectedId(engineRef.current?.getSelectedId() ?? null);
     }
     clearCursor();
-  }, [locked, clearCursor, flushPendingMove, onPanEnd, tool]);
+  }, [locked, clearCursor, endOwnLaser, flushPendingMove, onPanEnd, tool]);
 
   const handlePointerLeave = useCallback(
     (event: React.PointerEvent<HTMLCanvasElement>) => {
@@ -1269,12 +1314,13 @@ export function WhiteboardCanvas({
         return;
       }
       if (tool === "laser") {
+        if (laserPointerIdRef.current === event.pointerId) endOwnLaser();
         clearCursor();
         return;
       }
       handlePointerUp(event);
     },
-    [clearCursor, handlePointerUp, hideEraserRing, tool, onPanEnd]
+    [clearCursor, endOwnLaser, handlePointerUp, hideEraserRing, tool, onPanEnd]
   );
 
   const handleWheel = useCallback(
@@ -1476,6 +1522,7 @@ export function WhiteboardCanvas({
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerLeave={handlePointerLeave}
+        onPointerCancel={handlePointerLeave}
         onWheel={handleWheel}
         onDoubleClick={handleDoubleClick}
       />

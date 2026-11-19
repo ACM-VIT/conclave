@@ -3926,37 +3926,39 @@ export function useMeetMedia({
     try {
       const producer = videoProducerRef.current;
 
+      const closeCamera = (target: NonNullable<typeof producer>) => {
+        isCameraOffRef.current = true;
+        setIsCameraOff(true);
+        socketRef.current?.emit(
+          "closeProducer",
+          { producerId: target.id },
+          (response: { success: boolean } | { error: string }) => {
+            if ("error" in response) {
+              console.error("[Meets] Failed to close video producer:", response);
+            }
+          }
+        );
+        try {
+          target.close();
+        } catch {}
+        videoProducerRef.current = null;
+        const previousStream = localStreamRef.current;
+        if (previousStream) {
+          previousStream.getVideoTracks().forEach((track) => {
+            stopLocalTrack(track);
+          });
+          commitLocalStream(
+            new MediaStream(previousStream.getTracks().filter((track) => track.kind !== "video")),
+          );
+        }
+      };
+
       if (producer) {
         const newCameraOff = !isCameraOff;
         if (newCameraOff) {
-          setIsCameraOff(true);
-          socketRef.current?.emit(
-            "closeProducer",
-            { producerId: producer.id },
-            (response: { success: boolean } | { error: string }) => {
-              if ("error" in response) {
-                console.error("[Meets] Failed to close video producer:", response);
-              }
-            }
-          );
-          try {
-            producer.close();
-          } catch {}
-          videoProducerRef.current = null;
-
-          const previousStream = localStreamRef.current;
-          if (previousStream) {
-            previousStream.getVideoTracks().forEach((track) => {
-              stopLocalTrack(track);
-            });
-            const remainingTracks = previousStream
-              .getTracks()
-              .filter((track) => track.kind !== "video");
-            commitLocalStream(new MediaStream(remainingTracks));
-          }
+          closeCamera(producer);
           return;
         }
-
         if (producer.track?.readyState === "live") {
           const toggleResult = await resumeProducerWithServerConfirmation(
             producer,
@@ -3969,6 +3971,10 @@ export function useMeetMedia({
             );
             isCameraOffRef.current = true;
             setIsCameraOff(true);
+            return;
+          }
+          if (cameraPublishingDisabledRef.current) {
+            closeCamera(producer);
             return;
           }
           isCameraOffRef.current = false;

@@ -53,6 +53,7 @@ import {
   findClipboardImageFile,
   formatChatImageSize,
   isSupportedChatImageType,
+  prepareChatImageFile,
 } from "../lib/chat-images";
 import {
   type AssistantChatMessage,
@@ -64,6 +65,7 @@ import {
   isConclaveAssistantModel,
 } from "../lib/conclave-assistant";
 import { extractEmbedUrls } from "../lib/link-embeds";
+import { replaceEmojiShortcodesInMessage } from "../lib/emoji-shortcodes";
 import { formatDisplayName, getChatMessageSegments } from "../lib/utils";
 import {
   Conversation,
@@ -93,6 +95,7 @@ type MentionInputMode = "at" | "dm";
 
 interface ChatPanelProps {
   roomAi?: RoomAiController;
+  onOpenAiSettings?: () => void;
   messages: ChatMessage[];
   chatInput: string;
   onInputChange: (value: string) => void;
@@ -228,6 +231,7 @@ function TtsMessageBody({
 
 function ChatPanel({
   roomAi,
+  onOpenAiSettings,
   messages,
   chatInput,
   onInputChange,
@@ -266,8 +270,9 @@ function ChatPanel({
   const imageInputRef = useRef<HTMLInputElement>(null);
   const pendingImageUrlRef = useRef<string | null>(null);
   const sendAnimationTimeoutRef = useRef<number | null>(null);
-  const prevMessageIdsRef = useRef<Set<string>>(new Set());
-  const hasInitializedRef = useRef(false);
+  // null until the first message list is seen, so messages already present
+  // when the panel mounts are never treated (and animated) as new.
+  const prevMessageIdsRef = useRef<Set<string> | null>(null);
   const messageNodeRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const highlightTimeoutRef = useRef<number | null>(null);
   const [activeCommandIndex, setActiveCommandIndex] = useState(0);
@@ -287,6 +292,11 @@ function ChatPanel({
   const [imageUploadProgress, setImageUploadProgress] = useState(0);
   const [imageUploadError, setImageUploadError] = useState<string | null>(null);
   const [isImageUploading, setIsImageUploading] = useState(false);
+  // Image preparation is async, so its staging step reads these refs rather
+  // than state captured when the paste or pick began.
+  const isImageUploadingRef = useRef(false);
+  const imagePrepGenerationRef = useRef(0);
+  const [isPreparingImage, setIsPreparingImage] = useState(false);
   const [assistantApiKeyInput, setAssistantApiKeyInput] = useState("");
   const [assistantModel, setAssistantModel] = useState<ConclaveAssistantModel>(
     assistantApiKeyPrompt.model,
@@ -487,10 +497,6 @@ function ChatPanel({
   }, [replyTarget]);
 
   useEffect(() => {
-    hasInitializedRef.current = true;
-  }, []);
-
-  useEffect(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
     textarea.style.height = "auto";
@@ -518,6 +524,8 @@ function ChatPanel({
   }, [composerEmbedUrl, dismissedEmbedUrl]);
 
   const clearPendingImage = useCallback(() => {
+    imagePrepGenerationRef.current += 1;
+    setIsPreparingImage(false);
     if (pendingImageUrlRef.current) {
       URL.revokeObjectURL(pendingImageUrlRef.current);
       pendingImageUrlRef.current = null;
@@ -530,6 +538,7 @@ function ChatPanel({
 
   useEffect(
     () => () => {
+      imagePrepGenerationRef.current += 1;
       if (pendingImageUrlRef.current) {
         URL.revokeObjectURL(pendingImageUrlRef.current);
       }
@@ -555,7 +564,7 @@ function ChatPanel({
         setImageUploadError("Image attachments are disabled by the host.");
         return false;
       }
-      if (isImageUploading) {
+      if (isImageUploadingRef.current) {
         setImageUploadError("Wait for the current image to finish uploading.");
         return false;
       }
@@ -577,13 +586,32 @@ function ChatPanel({
       textareaRef.current?.focus();
       return true;
     },
-    [areImageAttachmentsEnabled, isImageUploading],
+    [areImageAttachmentsEnabled],
+  );
+
+  const prepareAndStageImage = useCallback(
+    async (file: File): Promise<boolean> => {
+      const generation = ++imagePrepGenerationRef.current;
+      setIsPreparingImage(true);
+      const prepared = await prepareChatImageFile(file).catch(() => null);
+      if (generation !== imagePrepGenerationRef.current) return false;
+      setIsPreparingImage(false);
+      if (!prepared) {
+        setImageUploadError(CHAT_IMAGE_TYPE_MESSAGE);
+        return false;
+      }
+      return stageImage(prepared);
+    },
+    [stageImage],
   );
 
   const handleImageSelected = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
+    const input = event.target;
+    const file = input.files?.[0];
     if (!file) return;
-    if (!stageImage(file)) event.target.value = "";
+    void prepareAndStageImage(file).then((staged) => {
+      if (!staged) input.value = "";
+    });
   };
 
   const handlePaste = useCallback(
@@ -591,14 +619,14 @@ function ChatPanel({
       const file = findClipboardImageFile(event.clipboardData);
       if (!file) return;
       event.preventDefault();
-      stageImage(file);
+      void prepareAndStageImage(file);
     },
-    [stageImage],
+    [prepareAndStageImage],
   );
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isChatDisabled || isImageUploading) return;
+    if (isChatDisabled || isImageUploading || isPreparingImage) return;
     if (ttsComposer && (ttsComposer.overLimit || isTtsDisabled)) return;
     if (chatInput.trim() || pendingImage) {
       setIsSendAnimating(true);
@@ -609,6 +637,7 @@ function ChatPanel({
         setIsSendAnimating(false);
       }, 240);
       if (pendingImage) {
+        isImageUploadingRef.current = true;
         setIsImageUploading(true);
         setImageUploadProgress(1);
         setImageUploadError(null);
@@ -616,7 +645,9 @@ function ChatPanel({
           pendingImage.file,
           chatInput.trim(),
           setImageUploadProgress,
-        );
+        ).finally(() => {
+          isImageUploadingRef.current = false;
+        });
         setIsImageUploading(false);
         if (sent) {
           clearPendingImage();
@@ -727,8 +758,10 @@ function ChatPanel({
     }
   };
 
-  const renderMessageContent = (content: string) =>
-    getChatMessageSegments(content).map((segment, index) =>
+  const renderMessageContent = (content: string, expandEmoji = true) =>
+    getChatMessageSegments(
+      expandEmoji ? replaceEmojiShortcodesInMessage(content) : content,
+    ).map((segment, index) =>
       segment.href ? (
         <a
           key={`${segment.href}-${index}`}
@@ -752,7 +785,7 @@ function ChatPanel({
     messages.forEach((message) => {
       const renderKey = getMessageRenderKey(message);
       currentIds.add(renderKey);
-      if (!prevIds.has(renderKey)) {
+      if (prevIds && !prevIds.has(renderKey)) {
         nextNewIds.add(renderKey);
       }
     });
@@ -775,7 +808,7 @@ function ChatPanel({
               aria-label="Room AI settings"
               aria-expanded={settingsOpen}
               title="Room AI settings"
-              onClick={() => setSettingsOpen((open) => !open)}
+              onClick={() => (onOpenAiSettings ? onOpenAiSettings() : setSettingsOpen((open) => !open))}
               className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[#a1a1aa] hover:bg-white/[0.06] hover:text-white"
             >
               <Settings2 size={16} />
@@ -882,8 +915,7 @@ function ChatPanel({
             {messages.map((msg, index) => {
               const isOwn = msg.userId === currentUserId;
               const messageRenderKey = getMessageRenderKey(msg);
-              const isNew =
-                hasInitializedRef.current && newMessageIds.has(messageRenderKey);
+              const isNew = newMessageIds.has(messageRenderKey);
               const displayName = formatDisplayName(msg.displayName || msg.userId);
 
               const assistantMsg = msg as AssistantChatMessage;
@@ -1113,7 +1145,11 @@ function ChatPanel({
                                 : undefined
                             }
                             onStop={onStopTts}
-                            renderContent={renderMessageContent}
+                            renderContent={(content) =>
+                              // Spoken text is shown as typed, matching what
+                              // the voice reads (shortcuts are not expanded).
+                              renderMessageContent(content, false)
+                            }
                           />
                         ) : (
                           <div
@@ -1431,6 +1467,11 @@ function ChatPanel({
               onDismiss={() => setDismissedEmbedUrl(composerEmbedUrl)}
             />
           ) : null}
+          {isPreparingImage && !pendingImage && !isChatDisabled ? (
+            <p role="status" className="mb-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-[11.5px] text-[#a1a1aa]">
+              Preparing image…
+            </p>
+          ) : null}
           {pendingImage && !isChatDisabled ? (
             <div className="mb-2 overflow-hidden rounded-xl border border-white/10 bg-white/[0.04]">
               <div className="flex items-center gap-3 p-2">
@@ -1555,6 +1596,7 @@ function ChatPanel({
               disabled={
                 isChatDisabled ||
                 isImageUploading ||
+                isPreparingImage ||
                 (!chatInput.trim() && !pendingImage) ||
                 Boolean(ttsComposer && (ttsComposer.overLimit || isTtsDisabled))
               }

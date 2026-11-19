@@ -1,14 +1,18 @@
 import {
   GameMoveError,
   type GameContext,
+  type GameDecider,
   type GameModule,
   type GameMove,
+  type GamePendingMove,
+  type GamePrepareContext,
 } from "../types.js";
 import { payloadField, requireString } from "../validation.js";
 import { numberOption, selectOption } from "../config.js";
 import { allActivePlayersActed } from "../roundLoop.js";
 import {
   GAME_CONTENT_TOPIC_OPTION,
+  GameContentGenerationError,
   cleanGeneratedStringArray,
   cleanGeneratedText,
   generateStructuredGameContent,
@@ -18,14 +22,26 @@ import {
 import {
   LONG_SHOT_BANK,
   LONG_SHOT_TIER_POINTS,
-  LONG_SHOT_TIERS,
+  LONG_SHOT_LIST_TIERS,
   compilePrompt,
   matchAnswer,
+  normalizeAnswer,
   type CompiledAnswer,
   type CompiledPrompt,
+  type LongShotListTier,
   type LongShotPrompt,
   type LongShotTier,
 } from "../longShotBank.js";
+import {
+  buildJudgePlan,
+  decodeJudgedMove,
+  tidyJudgedText,
+  verdictFromAnswers,
+  type JudgedMove,
+  type JudgeVerdict,
+} from "../longShotJudge.js";
+import { createGameDecider } from "../decisions.js";
+import type { DecisionQuestion } from "@conclave/ai/decisions";
 
 type Mode = "classic" | "fuse";
 type Phase = "lobby" | "ready" | "prompt" | "reveal" | "fuse" | "popped" | "results";
@@ -38,7 +54,8 @@ const FUSE_RANGE_MS: Record<string, [number, number]> = {
 };
 const READY_MS = 3_000;
 const REVEAL_MS = 9_000;
-const POPPED_MS = 4_000;
+const POPPED_MS = 2_800;
+const MIN_TURN_MS = 8_000;
 const MAX_ANSWER_LENGTH = 48;
 const SURVIVOR_BONUS = 2000;
 const HEART_METER = 6_000;
@@ -48,6 +65,10 @@ const DEFAULT_PROMPTS = 7;
 const DEFAULT_LIVES = 2;
 const FUSE_GENERATED_PROMPTS = 8;
 const ABSENT_FORFEIT_MS = 30_000;
+const JUDGES_PER_PLAYER_PROMPT = 6;
+const JUDGES_PER_GAME = 400;
+const GENERATED_ANSWER_THRESHOLD = 0.3;
+const GENERATED_ALIAS_THRESHOLD = 0.5;
 const RESUME_MIN_MS = 3_000;
 
 type Miss = { text: string; reason: "unknown" | "used"; at: number };
@@ -64,6 +85,7 @@ type RoundResult = {
   answer: string | null;
   tier: LongShotTier | null;
   points: number;
+  judged?: boolean;
 };
 
 type ChainLink = {
@@ -71,9 +93,16 @@ type ChainLink = {
   answer: string;
   tier: LongShotTier;
   points: number;
+  judged?: boolean;
 };
 
-type BestAnswer = { answer: string; tier: LongShotTier; prompt: string; points: number };
+type BestAnswer = {
+  answer: string;
+  tier: LongShotTier;
+  prompt: string;
+  points: number;
+  judged?: boolean;
+};
 
 type LongShotState = {
   mode: Mode;
@@ -104,22 +133,30 @@ type LongShotState = {
   winnerId: string | null;
   absentSince: Record<string, number>;
   pausedRemainingMs: number | null;
+  turn: number;
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value && typeof value === "object" && !Array.isArray(value));
 
-const TIER_LIMITS: Record<LongShotTier, { min: number; max: number }> = {
+const TIER_LIMITS: Record<LongShotListTier, { min: number; max: number }> = {
   obvious: { min: 3, max: 12 },
+  cliche: { min: 1, max: 6 },
   solid: { min: 4, max: 20 },
   rare: { min: 5, max: 25 },
   longShot: { min: 6, max: 30 },
 };
 
-export const LONG_SHOT_MIN_ANSWERS = LONG_SHOT_TIERS.reduce(
-  (sum, tier) => sum + TIER_LIMITS[tier].min,
-  0,
-);
+export const LONG_SHOT_MIN_ANSWERS =
+  LONG_SHOT_LIST_TIERS.reduce((sum, tier) => sum + TIER_LIMITS[tier].min, 0) + 1;
+
+const playableEntry = (entry: string | null | undefined): string | null => {
+  const names = (entry ?? "")
+    .split("|")
+    .map((name) => name.trim())
+    .filter((name) => name.length <= MAX_ANSWER_LENGTH && normalizeAnswer(name).length > 0);
+  return names.length > 0 ? names.join("|") : null;
+};
 
 export const parseLongShotPrompts = (payload: unknown, minItems = 1): LongShotPrompt[] | null => {
   if (!isRecord(payload) || !Array.isArray(payload.prompts)) return null;
@@ -132,19 +169,21 @@ export const parseLongShotPrompts = (payload: unknown, minItems = 1): LongShotPr
     if (!prompt) continue;
     const promptKey = normalizeGeneratedKey(prompt);
     if (!promptKey || seenPrompts.has(promptKey)) continue;
-    const tiers = {} as Record<LongShotTier, string[]>;
-    let valid = true;
-    for (const tier of LONG_SHOT_TIERS) {
-      const list = cleanGeneratedStringArray(item[tier], {
+    const pearl = playableEntry(cleanGeneratedText(item.pearl, 80));
+    if (!pearl) continue;
+    const tiers = {} as Record<LongShotListTier, string[]>;
+    for (const tier of LONG_SHOT_LIST_TIERS) {
+      tiers[tier] = cleanGeneratedStringArray(item[tier], {
         maxItems: TIER_LIMITS[tier].max,
         maxLength: 80,
-      });
-      if (list.length < TIER_LIMITS[tier].min) valid = false;
-      tiers[tier] = list;
+      })
+        .map(playableEntry)
+        .filter((entry): entry is string => Boolean(entry));
     }
-    if (!valid) continue;
-    const raw: LongShotPrompt = { category, prompt, ...tiers };
-    if (compilePrompt(raw).answers.length < LONG_SHOT_MIN_ANSWERS) continue;
+    const raw: LongShotPrompt = { category, prompt, ...tiers, pearl };
+    const counts = tierCounts(compilePrompt(raw));
+    if (counts.pearl !== 1) continue;
+    if (LONG_SHOT_LIST_TIERS.some((tier) => counts[tier] < TIER_LIMITS[tier].min)) continue;
     seenPrompts.add(promptKey);
     out.push(raw);
     if (out.length >= 15) break;
@@ -152,7 +191,7 @@ export const parseLongShotPrompts = (payload: unknown, minItems = 1): LongShotPr
   return out.length >= minItems ? out : null;
 };
 
-const tierSchema = (tier: LongShotTier) => ({
+const tierSchema = (tier: LongShotListTier) => ({
   type: "array",
   minItems: TIER_LIMITS[tier].min,
   maxItems: TIER_LIMITS[tier].max,
@@ -168,7 +207,14 @@ const currentPrompt = (state: LongShotState): CompiledPrompt | undefined =>
     : undefined;
 
 const tierCounts = (prompt: CompiledPrompt | undefined): Record<LongShotTier, number> => {
-  const counts: Record<LongShotTier, number> = { obvious: 0, solid: 0, rare: 0, longShot: 0 };
+  const counts: Record<LongShotTier, number> = {
+    obvious: 0,
+    cliche: 0,
+    solid: 0,
+    rare: 0,
+    longShot: 0,
+    pearl: 0,
+  };
   for (const answer of prompt?.answers ?? []) counts[answer.tier] += 1;
   return counts;
 };
@@ -184,7 +230,13 @@ const recordBest = (
   if (previous && previous.points >= points) return best;
   return {
     ...best,
-    [playerId]: { answer: answer.display, tier: answer.tier, prompt: prompt.prompt, points },
+    [playerId]: {
+      answer: answer.display,
+      tier: answer.tier,
+      prompt: prompt.prompt,
+      points,
+      ...(answer.judged ? { judged: true } : {}),
+    },
   };
 };
 
@@ -261,7 +313,13 @@ const scoreClassicRound = (state: LongShotState, ctx: GameContext): LongShotStat
     const points = LONG_SHOT_TIER_POINTS[entry.answer.tier];
     scores[playerId] = (scores[playerId] ?? 0) + points;
     best = recordBest(best, playerId, entry.answer, prompt, points);
-    results.push({ playerId, answer: entry.answer.display, tier: entry.answer.tier, points });
+    results.push({
+      playerId,
+      answer: entry.answer.display,
+      tier: entry.answer.tier,
+      points,
+      ...(entry.answer.judged ? { judged: true } : {}),
+    });
   }
   results.sort((a, b) => b.points - a.points || (a.answer ?? "").localeCompare(b.answer ?? ""));
   const said = new Set(
@@ -399,6 +457,149 @@ const afterPop = (state: LongShotState, ctx: GameContext): LongShotState => {
   return enterFuse(state, state.promptIndex + 1, starter, ctx);
 };
 
+const judgeBudgetKey = (state: LongShotState, playerId: string) =>
+  `judge:${state.promptIndex}:${playerId}`;
+
+const spendJudgeBudget = (cache: Map<string, unknown>, key: string, limit: number): boolean => {
+  const used = typeof cache.get(key) === "number" ? (cache.get(key) as number) : 0;
+  if (used >= limit) return false;
+  cache.set(key, used + 1);
+  return true;
+};
+
+export const prepareLongShotAnswer = async (
+  state: LongShotState,
+  move: GameMove,
+  ctx: GamePrepareContext,
+): Promise<{ judge: JudgedMove } | null> => {
+  if (move.type !== "answer" || !ctx.decide) return null;
+  const raw = payloadField(move.payload, "text");
+  if (typeof raw !== "string") return null;
+  const text = raw.trim().slice(0, MAX_ANSWER_LENGTH);
+  const receivedAt = move.receivedAt ?? ctx.now;
+  const answerable =
+    receivedAt < state.deadline &&
+    ((state.phase === "prompt" && !state.entries[move.playerId]?.answer) ||
+      (state.phase === "fuse" &&
+        state.turnPlayerId === move.playerId &&
+        state.pausedRemainingMs === null));
+  if (!text || !answerable) return null;
+  const prompt = currentPrompt(state);
+  if (!prompt || matchAnswer(prompt, text)) return null;
+  const key = normalizeAnswer(text);
+  if (key.length < 2) return null;
+  const used =
+    state.mode === "fuse"
+      ? prompt.answers.filter((answer) => state.used.includes(answer.id))
+      : [];
+  const cacheKey = `verdict:${state.promptIndex}:${prompt.prompt}:${JSON.stringify(text)}:${used.map((answer) => answer.id).join(",")}`;
+  const bound = { key, text, promptIndex: state.promptIndex, prompt: prompt.prompt, turn: state.turn };
+  const cached = ctx.cache.get(cacheKey) as JudgeVerdict | undefined;
+  if (cached) return { judge: { ...bound, verdict: cached } };
+  if (!spendJudgeBudget(ctx.cache, judgeBudgetKey(state, move.playerId), JUDGES_PER_PLAYER_PROMPT)) return null;
+  if (!spendJudgeBudget(ctx.cache, "judge:game", JUDGES_PER_GAME)) return null;
+  const plan = buildJudgePlan(prompt, text, used);
+  const answers = await ctx.decide({ state: plan.state, questions: plan.questions, signal: ctx.signal });
+  const verdict = verdictFromAnswers(plan, answers);
+  ctx.cache.set(cacheKey, verdict);
+  return { judge: { ...bound, verdict } };
+};
+
+export const holdLongShotTick = (
+  state: LongShotState,
+  pending: GamePendingMove[],
+): boolean => {
+  if (state.phase === "prompt") {
+    return pending.some(
+      (move) => move.receivedAt < state.deadline && !state.entries[move.playerId]?.answer,
+    );
+  }
+  if (state.phase === "fuse" && state.pausedRemainingMs === null) {
+    return pending.some(
+      (move) => move.playerId === state.turnPlayerId && move.receivedAt < state.deadline,
+    );
+  }
+  return false;
+};
+
+export const filterGeneratedPrompts = async (
+  prompts: LongShotPrompt[],
+  decide: GameDecider,
+  signal?: AbortSignal,
+): Promise<LongShotPrompt[]> => {
+  const checked = await Promise.all(
+    prompts.map(async (prompt) => {
+      const entries: { tier: LongShotListTier | "pearl"; value: string }[] = [
+        ...LONG_SHOT_LIST_TIERS.flatMap((tier) => prompt[tier].map((value) => ({ tier, value }))),
+        { tier: "pearl", value: prompt.pearl },
+      ];
+      const namesOf = (value: string) =>
+        value
+          .split("|")
+          .map((name) => name.trim())
+          .filter(Boolean);
+      const questions: Record<string, DecisionQuestion> = {};
+      entries.forEach((entry, index) => {
+        const [canonical, ...aliases] = namesOf(entry.value);
+        questions[`a${index}`] = {
+          type: "noul",
+          instructions: {
+            question: "Is `answer` a correct answer to the prompt in the state?",
+            answer: canonical,
+          },
+          criteria: {
+            true: "The answer names a real, specific thing that satisfies the prompt.",
+            false: "The answer is wrong, invented, too vague, or does not fit the prompt.",
+          },
+        };
+        aliases.forEach((alias, aliasIndex) => {
+          questions[`a${index}.${aliasIndex}`] = {
+            type: "noul",
+            instructions: {
+              question: "Is `alias` another name, spelling, or abbreviation for exactly the same thing as `answer`?",
+              answer: canonical,
+              alias,
+            },
+            criteria: {
+              true: "Both name the same specific thing.",
+              false: "They name different things, or the alias is vague or invented.",
+            },
+          };
+        });
+      });
+      try {
+        const answers = await decide({ state: { prompt: prompt.prompt, category: prompt.category }, questions, signal });
+        const passes = (id: string, threshold: number) => {
+          const answer = answers[id];
+          if (answer?.type === "refusal") return false;
+          return !answer || answer.type !== "noul" || answer.noul >= threshold;
+        };
+        const checkedEntry = (index: number): string | null => {
+          if (index < 0 || !passes(`a${index}`, GENERATED_ANSWER_THRESHOLD)) return null;
+          const [canonical, ...aliases] = namesOf(entries[index].value);
+          return [
+            canonical,
+            ...aliases.filter((_, aliasIndex) => passes(`a${index}.${aliasIndex}`, GENERATED_ALIAS_THRESHOLD)),
+          ].join("|");
+        };
+        const filtered: LongShotPrompt = { ...prompt };
+        for (const tier of LONG_SHOT_LIST_TIERS) {
+          filtered[tier] = prompt[tier]
+            .map((value) => checkedEntry(entries.findIndex((entry) => entry.tier === tier && entry.value === value)))
+            .filter((value): value is string => Boolean(value));
+        }
+        const pearl = checkedEntry(entries.length - 1);
+        if (!pearl) return null;
+        filtered.pearl = pearl;
+        return filtered;
+      } catch {
+        return prompt;
+      }
+    }),
+  );
+  return parseLongShotPrompts({ prompts: checked.filter((prompt): prompt is LongShotPrompt => Boolean(prompt)) }) ?? [];
+};
+
 export type LongShotMove =
   | { type: "start" }
   | { type: "answer"; text: string }
@@ -421,26 +622,79 @@ const decodeLongShotMove = (move: GameMove): LongShotMove => {
   }
 };
 
+type ResolvedAnswer = {
+  state: LongShotState;
+  match: CompiledAnswer | null;
+  repeatOf: CompiledAnswer | null;
+  unsafe?: boolean;
+};
+
+const resolveAnswer = (
+  state: LongShotState,
+  prompt: CompiledPrompt,
+  text: string,
+  judged: JudgedMove | null,
+): ResolvedAnswer => {
+  const listed = matchAnswer(prompt, text);
+  if (listed) return { state, match: listed, repeatOf: null };
+  const key = normalizeAnswer(text);
+  if (
+    !judged ||
+    !key ||
+    judged.key !== key ||
+    judged.text !== text ||
+    judged.promptIndex !== state.promptIndex ||
+    judged.prompt !== prompt.prompt ||
+    judged.turn !== state.turn
+  ) {
+    return { state, match: null, repeatOf: null };
+  }
+  const { verdict } = judged;
+  if (verdict.kind === "reject" && verdict.reason === "unsafe") {
+    return { state, match: null, repeatOf: null, unsafe: true };
+  }
+  const find = (id: string) => prompt.answers.find((answer) => answer.id === id) ?? null;
+  if (verdict.kind === "alias") return { state, match: find(verdict.answerId), repeatOf: null };
+  if (verdict.kind === "repeat") return { state, match: null, repeatOf: find(verdict.answerId) };
+  if (verdict.kind !== "accept") return { state, match: null, repeatOf: null };
+  const known = prompt.answers.find((answer) => answer.keys.includes(key));
+  if (known) return { state, match: known, repeatOf: null };
+  const answer: CompiledAnswer = {
+    id: `judged:${key}`,
+    display: tidyJudgedText(text).slice(0, MAX_ANSWER_LENGTH),
+    tier: verdict.tier,
+    keys: [key],
+    judged: true,
+  };
+  const prompts = state.prompts.slice();
+  prompts[state.promptIndex % prompts.length] = { ...prompt, answers: [...prompt.answers, answer] };
+  return { state: { ...state, prompts }, match: answer, repeatOf: null };
+};
+
 const answerClassic = (
   state: LongShotState,
   playerId: string,
   text: string,
   ctx: GameContext,
+  judged: JudgedMove | null,
+  receivedAt: number,
 ): LongShotState => {
   if (state.phase === "ready") throw new GameMoveError("Get ready");
   if (state.phase !== "prompt") throw new GameMoveError("Not accepting answers right now");
-  if (ctx.now >= state.deadline) throw new GameMoveError("Time's up");
+  if (receivedAt >= state.deadline) throw new GameMoveError("Time's up");
   const prompt = currentPrompt(state);
   if (!prompt) throw new GameMoveError("No prompt");
   const previous = state.entries[playerId];
   if (previous?.answer) throw new GameMoveError("You already locked in");
-  const match = matchAnswer(prompt, text);
+  const resolved = resolveAnswer(state, prompt, text, judged);
+  state = resolved.state;
+  const match = resolved.match;
   const entry: ClassicEntry = match
     ? { answer: match, misses: previous?.misses ?? 0, lastMiss: null, at: ctx.now }
     : {
         answer: null,
         misses: (previous?.misses ?? 0) + 1,
-        lastMiss: { text, reason: "unknown", at: ctx.now },
+        lastMiss: { text: resolved.unsafe ? "" : text, reason: "unknown", at: ctx.now },
         at: ctx.now,
       };
   const entries = { ...state.entries, [playerId]: entry };
@@ -453,16 +707,30 @@ const answerFuse = (
   playerId: string,
   text: string,
   ctx: GameContext,
+  judged: JudgedMove | null,
+  receivedAt: number,
 ): LongShotState => {
   if (state.phase !== "fuse") throw new GameMoveError("The fuse is not lit");
   if (state.turnPlayerId !== playerId) throw new GameMoveError("Not your turn");
   if (state.pausedRemainingMs !== null) throw new GameMoveError("Waiting for players");
-  if (ctx.now >= state.deadline) throw new GameMoveError("Time's up");
-  const prompt = currentPrompt(state);
-  if (!prompt) throw new GameMoveError("No prompt");
-  const match = matchAnswer(prompt, text);
+  if (receivedAt >= state.deadline) throw new GameMoveError("Time's up");
+  const currentPromptValue = currentPrompt(state);
+  if (!currentPromptValue) throw new GameMoveError("No prompt");
+  const resolved = resolveAnswer(state, currentPromptValue, text, judged);
+  if (resolved.repeatOf) {
+    return {
+      ...state,
+      lastMiss: { playerId, text: resolved.repeatOf.display, reason: "used", at: ctx.now },
+    };
+  }
+  state = resolved.state;
+  const prompt = currentPrompt(state)!;
+  const match = resolved.match;
   if (!match) {
-    return { ...state, lastMiss: { playerId, text, reason: "unknown", at: ctx.now } };
+    return {
+      ...state,
+      lastMiss: { playerId, text: resolved.unsafe ? "" : text, reason: "unknown", at: ctx.now },
+    };
   }
   if (state.used.includes(match.id)) {
     return {
@@ -472,7 +740,10 @@ const answerFuse = (
   }
   const points = LONG_SHOT_TIER_POINTS[match.tier];
   const used = [...state.used, match.id];
-  const chain = [...state.chain, { playerId, answer: match.display, tier: match.tier, points }].slice(
+  const chain = [
+    ...state.chain,
+    { playerId, answer: match.display, tier: match.tier, points, ...(match.judged ? { judged: true } : {}) },
+  ].slice(
     -CHAIN_LENGTH,
   );
   const scores = { ...state.scores, [playerId]: (state.scores[playerId] ?? 0) + points };
@@ -504,10 +775,19 @@ const answerFuse = (
   return {
     ...base,
     turnPlayerId: solo ? playerId : nextAliveConnected(base, playerId, ctx),
+    deadline: Math.max(state.deadline, ctx.now + MIN_TURN_MS),
   };
 };
 
-export const longShotModule: GameModule<LongShotState> = {
+const withTurn = (previous: LongShotState, next: LongShotState): LongShotState =>
+  next !== previous &&
+  (next.turnPlayerId !== previous.turnPlayerId ||
+    next.promptIndex !== previous.promptIndex ||
+    next.phase !== previous.phase)
+    ? { ...next, turn: previous.turn + 1 }
+    : next;
+
+const longShotRules: GameModule<LongShotState> = {
   id: "long-shot",
   name: "Long Shot",
   description: "Rare answers score big",
@@ -577,9 +857,10 @@ export const longShotModule: GameModule<LongShotState> = {
       instructions: [
         `Create ${count} open-ended "Name a ..." prompts for a rare-answer game about the topic.`,
         "Each prompt must have a large, finite, verifiable set of correct answers (for example 'Name a character from X' or 'Name a city in Y').",
-        "Sort the accepted answers into four tiers by how many people would think of them: obvious (the first answers nearly everyone says), solid, rare, and longShot (correct but almost nobody would think of it).",
+        "Sort the accepted answers by how many people would think of them: obvious (the first answers nearly everyone says), cliche (the famously 'obscure' picks everyone reaches for when trying to be clever), solid, rare, and longShot (correct but almost nobody would think of it).",
+        "Also choose one pearl per prompt: a single designated gem answer, deep and satisfying to land on, that at least a few people could plausibly get. It must not appear in any other tier.",
         "Every listed answer must be factually correct for its prompt. Never repeat an answer across tiers.",
-        `Give every prompt at least ${LONG_SHOT_MIN_ANSWERS} distinct answers: at least ${TIER_LIMITS.obvious.min} obvious, ${TIER_LIMITS.solid.min} solid, ${TIER_LIMITS.rare.min} rare and ${TIER_LIMITS.longShot.min} longShot.`,
+        `Give every prompt at least ${LONG_SHOT_MIN_ANSWERS} distinct answers including the pearl: at least ${TIER_LIMITS.obvious.min} obvious, ${TIER_LIMITS.cliche.min} cliche, ${TIER_LIMITS.solid.min} solid, ${TIER_LIMITS.rare.min} rare and ${TIER_LIMITS.longShot.min} longShot.`,
         "List as many correct answers as you reliably can, especially in the rare and longShot tiers.",
         "Write each answer as its most common name. Add alternate spellings after a pipe, like 'Kyiv|Kiev'.",
       ].join(" "),
@@ -599,11 +880,13 @@ export const longShotModule: GameModule<LongShotState> = {
                 category: { type: "string", maxLength: 32 },
                 prompt: { type: "string", maxLength: 100 },
                 obvious: tierSchema("obvious"),
+                cliche: tierSchema("cliche"),
                 solid: tierSchema("solid"),
                 rare: tierSchema("rare"),
                 longShot: tierSchema("longShot"),
+                pearl: { type: "string", maxLength: 80 },
               },
-              required: ["category", "prompt", "obvious", "solid", "rare", "longShot"],
+              required: ["category", "prompt", "obvious", "cliche", "solid", "rare", "longShot", "pearl"],
             },
           },
         },
@@ -611,6 +894,16 @@ export const longShotModule: GameModule<LongShotState> = {
       },
       maxOutputTokens: 800 + count * 900,
       parse: (payload) => parseLongShotPrompts(payload, Math.min(count, 3)),
+    }).then(async (prompts) => {
+      const decide = ctx.aiEnvironment ? createGameDecider(ctx.aiEnvironment) : null;
+      if (!prompts || !decide) return prompts;
+      const filtered = await filterGeneratedPrompts(prompts, decide, ctx.signal);
+      if (filtered.length === 0) {
+        throw new GameContentGenerationError(
+          "Not enough answers for that topic held up. Try another topic.",
+        );
+      }
+      return filtered;
     });
   },
 
@@ -656,8 +949,12 @@ export const longShotModule: GameModule<LongShotState> = {
       winnerId: null,
       absentSince: {},
       pausedRemainingMs: null,
+      turn: 0,
     };
   },
+
+  prepareMove: prepareLongShotAnswer,
+  holdTick: holdLongShotTick,
 
   onMove(state, move: GameMove, ctx): LongShotState {
     const m = decodeLongShotMove(move);
@@ -673,6 +970,7 @@ export const longShotModule: GameModule<LongShotState> = {
           throw new GameMoveError("No prompts available");
         }
         if (state.mode === "classic") return enterReady(state, 0, ctx);
+        if (ctx.players.length < 2) throw new GameMoveError("Last one under needs at least 2 players");
         const order = ctx.rng.shuffle(ctx.players.map((player) => player.id));
         const lives: Record<string, number> = {};
         for (const playerId of order) lives[playerId] = state.maxLives;
@@ -680,10 +978,13 @@ export const longShotModule: GameModule<LongShotState> = {
         const first = order.find((playerId) => isActive(ctx, playerId)) ?? order[0] ?? null;
         return enterFuse(seeded, 0, first, ctx);
       }
-      case "answer":
+      case "answer": {
+        const judged = decodeJudgedMove(move.verified);
+        const receivedAt = Math.min(move.receivedAt ?? ctx.now, ctx.now);
         return state.mode === "classic"
-          ? answerClassic(state, move.playerId, m.text, ctx)
-          : answerFuse(state, move.playerId, m.text, ctx);
+          ? answerClassic(state, move.playerId, m.text, ctx, judged, receivedAt)
+          : answerFuse(state, move.playerId, m.text, ctx, judged, receivedAt);
+      }
       case "skip": {
         if (!ctx.isAdmin(move.playerId)) {
           throw new GameMoveError("Only the host can skip");
@@ -807,6 +1108,15 @@ export const longShotModule: GameModule<LongShotState> = {
           ? state.results.map((result) => ({ ...result, id: result.playerId, name: name(result.playerId) }))
           : [],
       missedGems: state.phase === "reveal" ? state.missedGems : [],
+      pearl:
+        state.phase === "reveal" && prompt
+          ? {
+              answer: prompt.answers.find((answer) => answer.tier === "pearl")?.display ?? null,
+              foundBy: state.results
+                .filter((result) => result.tier === "pearl")
+                .map((result) => name(result.playerId)),
+            }
+          : null,
       obviousPicks: state.phase === "reveal" ? state.obviousPicks : [],
       turnPlayerId: state.phase === "fuse" ? state.turnPlayerId : null,
       maxHearts: MAX_HEARTS,
@@ -873,4 +1183,10 @@ export const longShotModule: GameModule<LongShotState> = {
   },
 
   isFinished: (state) => state.phase === "results",
+};
+
+export const longShotModule: GameModule<LongShotState> = {
+  ...longShotRules,
+  onMove: (state, move, ctx) => withTurn(state, longShotRules.onMove(state, move, ctx)),
+  onTick: (state, ctx) => withTurn(state, longShotRules.onTick ? longShotRules.onTick(state, ctx) : state),
 };

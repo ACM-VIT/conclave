@@ -18,6 +18,7 @@ import {
   ScanFace,
   Settings,
   Shield,
+  Sparkles,
   StickyNote,
   TerminalSquare,
   Users,
@@ -53,6 +54,8 @@ export interface ControlsBarProps {
   activeScreenShareId: string | null;
   isChatOpen: boolean;
   isTranscriptOpen?: boolean;
+  isAiSettingsOpen?: boolean;
+  onToggleAiSettings?: () => void;
   isTranscriptLive?: boolean;
   transcriptStatus?: TranscriptSessionStatus;
   unreadCount: number;
@@ -506,6 +509,15 @@ export function buildControlsConfig(p: ControlsBarProps): ControlsConfig {
         onPress: voiceAgentPress,
       });
     }
+  }
+  if (p.onToggleAiSettings) {
+    overflow.push({
+      id: "ai-settings",
+      icon: Sparkles,
+      label: "Room AI",
+      active: p.isAiSettingsOpen,
+      onPress: p.onToggleAiSettings,
+    });
   }
   if (!p.compact && p.onToggleDeviceSettings) {
     overflow.push({

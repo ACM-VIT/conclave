@@ -78,6 +78,7 @@ const ROW_KEYWORDS: Record<string, string> = {
   participants: "people members attendees who",
   games: "games play chess wordle trivia long shot bluff imposter",
   transcript: "captions transcript subtitles cc",
+  "ai-settings": "ai assistant keys api openai anthropic claude models minutes settings",
   "host-controls": "host admin moderation settings",
   popout: "mini view picture in picture pip popout floating",
   effects: "backgrounds effects filters blur virtual",

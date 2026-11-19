@@ -73,6 +73,7 @@ import { configureRoomAiForFeature, type RoomAiController } from "../hooks/useRo
 
 interface TranscriptPanelProps {
   roomAi?: RoomAiController;
+  onOpenAiSettings?: () => void;
   transcript: MeetingTranscriptController;
   onClose: () => void;
   initialTab?: TranscriptTab;
@@ -956,6 +957,7 @@ export default function TranscriptPanel({
   initialTab,
   onPostRecap,
   roomAi,
+  onOpenAiSettings,
 }: TranscriptPanelProps) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<TranscriptTab>(
@@ -1036,7 +1038,7 @@ export default function TranscriptPanel({
             {roomAi && !transcript.isViewOnly ? (
               <button
                 type="button"
-                onClick={() => setSettingsOpen((open) => !open)}
+                onClick={() => (onOpenAiSettings ? onOpenAiSettings() : setSettingsOpen((open) => !open))}
                 aria-label="Room AI settings"
                 aria-expanded={settingsOpen}
                 title="Room AI settings"
