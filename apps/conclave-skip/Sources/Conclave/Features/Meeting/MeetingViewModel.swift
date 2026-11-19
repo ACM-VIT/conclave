@@ -9964,6 +9964,7 @@ final class MeetingViewModel {
             isAppActive: premeetingIsAppActive,
             micIntentOn: isPromotionLobbyOpen ? promotionMicIntent : (state.pendingEntryMediaIntent?.mic ?? !state.isMuted),
             cameraIntentOn: isPromotionLobbyOpen ? promotionCameraIntent : (state.pendingEntryMediaIntent?.camera ?? !state.isCameraOff),
+            audioOnlyIntentOn: !isPromotionLobbyOpen && state.isAudioOnlyMode,
             resumeInFlight: resumeInFlight,
             resumeRoomId: resumeRoomId,
             updateRequired: versionGate.updateRequired,
@@ -10054,21 +10055,31 @@ final class MeetingViewModel {
             setPromotionMediaIntent(mic: mic, camera: camera)
             return
         }
+        let cameraOn = camera && !state.isAudioOnlyMode
         let route = EntryMediaIntentPolicy.route(phase: shell.session.phase,
                                                  hasBeenAdmittedThisSession: shell.session.hasBeenAdmittedThisSession)
         if route == "pending" {
-            state.pendingEntryMediaIntent = EntryMediaIntent(mic: mic, camera: camera, generation: meetingLifecycleGeneration)
+            state.pendingEntryMediaIntent = EntryMediaIntent(mic: mic, camera: cameraOn, generation: meetingLifecycleGeneration)
             premeeting.apply(makePremeetingInputs())
         } else if route == "toggles" {
             state.pendingEntryMediaIntent = nil
             if mic == state.isMuted { toggleMute() }
-            if camera == state.isCameraOff { toggleCamera() }
+            if cameraOn == state.isCameraOff { toggleCamera() }
         } else {
             state.pendingEntryMediaIntent = nil
             if state.isMuted == mic { state.isMuted = !mic }
-            if state.isCameraOff == camera { state.isCameraOff = !camera }
+            if state.isCameraOff == cameraOn { state.isCameraOff = !cameraOn }
             premeeting.apply(makePremeetingInputs())
         }
+    }
+
+    func setEntryAudioOnly(_ enabled: Bool) {
+        guard !isPromotionLobbyOpen else { return }
+        if enabled, let pending = state.pendingEntryMediaIntent, pending.camera {
+            state.pendingEntryMediaIntent = EntryMediaIntent(mic: pending.mic, camera: false, generation: pending.generation)
+        }
+        setAudioOnlyMode(enabled)
+        premeeting.apply(makePremeetingInputs())
     }
 
     private func reconcilePendingEntryMediaIntent() {
@@ -12251,7 +12262,8 @@ final class MeetingViewModel {
         guard state.connectionState == .joined else {
             throw MeetingActionResponseError(message: "Reconnect before sending chat.")
         }
-        let optimisticMessage = appendOptimisticChatMessage(content: content, gif: gif, image: image, replyTo: replyTo)
+        let outgoing = EmojiShortcodes.outgoing(content, hasGif: gif != nil)
+        let optimisticMessage = appendOptimisticChatMessage(content: outgoing, gif: gif, image: image, replyTo: replyTo)
         do {
             guard isCurrentJoinedCall(context) else {
                 if let optimisticMessage {
@@ -12260,7 +12272,7 @@ final class MeetingViewModel {
                 throw MeetingActionResponseError(message: "Reconnect before sending chat.")
             }
             return try await sendChatContent(
-                content,
+                outgoing,
                 gif: gif,
                 image: image,
                 replyTo: replyTo,
@@ -12776,7 +12788,8 @@ final class MeetingViewModel {
         }
 
         let actionContext = currentCallActionContext()
-        let optimisticMessage = appendOptimisticChatMessage(content: trimmed, gif: gif, replyTo: replyTo)
+        let outgoing = EmojiShortcodes.outgoing(trimmed, hasGif: gif != nil)
+        let optimisticMessage = appendOptimisticChatMessage(content: outgoing, gif: gif, replyTo: replyTo)
         Task {
             do {
                 guard isCurrentJoinedCall(actionContext) else {
@@ -12786,7 +12799,7 @@ final class MeetingViewModel {
                     return
                 }
                 try await sendChatContent(
-                    trimmed,
+                    outgoing,
                     gif: gif,
                     replyTo: replyTo,
                     replacingOptimisticMessageId: optimisticMessage?.id,
@@ -13678,13 +13691,15 @@ final class MeetingViewModel {
                 sendConclaveQuestion(trimmed, question: question, replyTo: replyTo)
             }
         case .privateText:
-            let body = ChatCommandParser.parseDirectMessage(trimmed)?.body ?? trimmed
-            sendRetainedChat(wireText: trimmed, displayText: body, suppressEmbeds: suppressEmbeds, replyTo: replyTo,
+            let wire = EmojiShortcodes.outgoing(trimmed, hasGif: false)
+            let body = ChatCommandParser.parseDirectMessage(wire)?.body ?? wire
+            sendRetainedChat(wireText: wire, displayText: body, suppressEmbeds: suppressEmbeds, replyTo: replyTo,
                              directTargetUserId: privateTargetId)
         case .publicText:
+            let wire = EmojiShortcodes.outgoing(trimmed, hasGif: false)
 
-            var display = trimmed
-            if !privateTargetId.isEmpty, let parsed = ChatCommandParser.parseDirectMessage(trimmed) {
+            var display = wire
+            if !privateTargetId.isEmpty, let parsed = ChatCommandParser.parseDirectMessage(wire) {
                 display = parsed.body
             }
 
@@ -13699,7 +13714,7 @@ final class MeetingViewModel {
                 chatPhotoSourceURL = ""
                 state.chatAttachment = ChatAttachmentState.none
             }
-            sendRetainedChat(wireText: trimmed, displayText: display, image: image, suppressEmbeds: suppressEmbeds,
+            sendRetainedChat(wireText: wire, displayText: display, image: image, suppressEmbeds: suppressEmbeds,
                              replyTo: replyTo, directTargetUserId: privateTargetId)
         case .voice:
             sendRetainedChat(wireText: trimmed, displayText: trimmed, replyTo: replyTo, directTargetUserId: "")

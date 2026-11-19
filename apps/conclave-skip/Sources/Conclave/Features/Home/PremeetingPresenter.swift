@@ -607,10 +607,16 @@ final class PremeetingPresenter {
 
     func setCameraIntent(_ on: Bool) {
         guard lobbyStatus != nil else { return }
+        if on && inputs.audioOnlyIntentOn { return }
         if on && !mayTurnOn(LobbyMediaKind.camera) {
             return
         }
         lobbyHooks?.setEntryMediaIntent?(inputs.micIntentOn, on)
+    }
+
+    func setAudioOnlyIntent(_ on: Bool) {
+        guard let status = lobbyStatus, status.intent != .promotion else { return }
+        lobbyHooks?.setEntryAudioOnly?(on)
     }
 
     func flipCamera() {
@@ -1456,7 +1462,8 @@ final class PremeetingPresenter {
             cameraIntentOn: inputs.cameraIntentOn,
             device: device,
             avatarName: name,
-            avatarSeed: inputs.isSignedIn ? inputs.accountSeed : ""
+            avatarSeed: inputs.isSignedIn ? inputs.accountSeed : "",
+            audioOnlyOn: inputs.audioOnlyIntentOn
         ))
     }
 
@@ -1534,7 +1541,8 @@ final class PremeetingPresenter {
         if let target = topLobbyTarget(), visibleLobbyRouteId == target.routeId {
 
             let callOwnsCamera = (root.root == .call && target.intent != .promotion) || previewHandedOff
-            wanted = LocalPreviewPolicy.isWanted(cameraIntentOn: inputs.cameraIntentOn, permission: device.cameraPermission,
+            wanted = LocalPreviewPolicy.isWanted(cameraIntentOn: inputs.cameraIntentOn && !inputs.audioOnlyIntentOn,
+                                                 permission: device.cameraPermission,
                                                  isLobbyVisible: true,
                                                  isCallOwningCamera: callOwnsCamera)
         }

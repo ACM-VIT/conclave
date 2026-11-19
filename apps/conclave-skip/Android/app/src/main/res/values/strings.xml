@@ -702,6 +702,10 @@
     <string name="stg_announce_activity_started">%1$s started</string>
     <string name="stg_show_video">Show video</string>
     <string name="stg_showing_activity">Showing activity</string>
+    <string name="stg_leave">Leave</string>
+    <string name="stg_leave_watch_together">Leave Watch together</string>
+    <string name="stg_watch_together_playing">Watch together is playing</string>
+    <string name="stg_rejoin_watch_together">Rejoin Watch together</string>
 
     <string name="stg_room_code">Room code</string>
     <string name="stg_copy_code">Copy code</string>

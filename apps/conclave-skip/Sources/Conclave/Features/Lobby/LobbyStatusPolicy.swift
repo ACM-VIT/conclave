@@ -141,7 +141,7 @@ enum LobbyStatusPolicy {
         let camera = PermissionPrimingPolicy.model(kind: .camera, permission: media.cameraPermission,
                                                    canAskAgain: media.canAskAgainCamera,
                                                    supportsRationale: supportsRationale, rationaleDismissed: false)
-        if microphone.priming == camera.priming
+        if !media.audioOnlyOn && microphone.priming == camera.priming
             && (microphone.priming == .openSettings || microphone.priming == .restricted) {
             let restricted = microphone.priming == .restricted
             return LobbyStatusRowModel(kind: .media, issue: .none, mediaKind: .microphone, restricted: restricted,
@@ -151,14 +151,14 @@ enum LobbyStatusPolicy {
             return LobbyStatusRowModel(kind: .microphone, issue: .none, mediaKind: .microphone, restricted: false,
                                        action: rowAction(microphone.priming))
         }
-        if rowAction(camera.priming) != LobbyStatusRowAction.none {
+        if !media.audioOnlyOn && rowAction(camera.priming) != LobbyStatusRowAction.none {
             return LobbyStatusRowModel(kind: .camera, issue: .none, mediaKind: .camera, restricted: false,
                                        action: rowAction(camera.priming))
         }
         if microphone.priming == .restricted {
             return LobbyStatusRowModel(kind: .microphone, issue: .none, mediaKind: .microphone, restricted: true, action: .none)
         }
-        if camera.priming == .restricted {
+        if !media.audioOnlyOn && camera.priming == .restricted {
             return LobbyStatusRowModel(kind: .camera, issue: .none, mediaKind: .camera, restricted: true, action: .none)
         }
         return nil

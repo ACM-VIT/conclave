@@ -148,6 +148,11 @@ final class ActiveAppSession {
         emit(ActiveAppEvent.make(kind: ActiveAppEventKind.lifecycle, appSessionId: ended, lifecycle: lifecycle))
     }
 
+    func releaseEmbed() {
+        if appSessionId.isEmpty { return }
+        onBridgeEnded?(appSessionId)
+    }
+
     func reset() {
         end()
         callSessionId = ""

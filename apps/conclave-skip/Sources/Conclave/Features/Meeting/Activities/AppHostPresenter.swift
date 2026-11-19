@@ -719,6 +719,7 @@ final class AppHostPresenter {
     @ObservationIgnored private var wheelRevision = 0
     @ObservationIgnored private var watchRevision = 0
     @ObservationIgnored private var sawAppStatus = false
+    @ObservationIgnored private(set) var isHiddenLocally = false
 
     @ObservationIgnored var fixtureSeedNames: [String] = []
 
@@ -748,6 +749,13 @@ final class AppHostPresenter {
         if next.appId != previous.appId { exportPNGBase64 = "" }
         followSession()
         rebuild()
+    }
+
+    func setHiddenLocally(_ hidden: Bool) {
+        if isHiddenLocally == hidden { return }
+        isHiddenLocally = hidden
+        rebuild()
+        if hidden { session?.releaseEmbed() }
     }
 
     func closeFailed() {
@@ -1153,6 +1161,7 @@ final class AppHostPresenter {
 
     func reset() {
         resetLocal()
+        isHiddenLocally = false
         inputs = AppHostInputs.make()
         trendingItems = []
         trendingRequested = false
@@ -1372,7 +1381,7 @@ final class AppHostPresenter {
         let canEdit = hasApp && AppHostPresenter.canEdit(isAttendee: inputs.isAttendee, isHost: inputs.isHost, isLocked: inputs.isLocked)
         let phase = AppHostPresenter.phase(hasApp: hasApp, hasEmbed: hasEmbed, issue: issue, embedReady: embedReady,
                                            closePending: closePending, canEdit: canEdit)
-        let wantsWebView = hasEmbed && !appSessionId.isEmpty
+        let wantsWebView = hasEmbed && !appSessionId.isEmpty && !isHiddenLocally
             && (phase == AppHostPhase.opening || phase == AppHostPhase.ready || phase == AppHostPhase.readOnly || phase == AppHostPhase.closing)
         let next = AppHostModel(
             revision: revision,

@@ -1308,6 +1308,9 @@
     "Camera is off for the meeting." : {
       "extractionState" : "manual"
     },
+    "Camera is off in audio-only mode" : {
+      "extractionState" : "manual"
+    },
     "Camera off" : {
       "extractionState" : "manual",
       "generatesSymbol" : false
@@ -2993,6 +2996,9 @@
     "Join the Game" : {
       "extractionState" : "manual"
     },
+    "Join without sending or receiving video." : {
+      "extractionState" : "manual"
+    },
     "Joined %@" : {
       "extractionState" : "manual",
       "generatesSymbol" : false
@@ -3086,7 +3092,13 @@
     "Leading" : {
       "extractionState" : "manual"
     },
+    "Leave" : {
+      "extractionState" : "manual"
+    },
     "Leave Call" : {
+      "extractionState" : "manual"
+    },
+    "Leave Watch Together" : {
       "extractionState" : "manual"
     },
     "Leave and Join" : {
@@ -4427,6 +4439,9 @@
       "extractionState" : "manual"
     },
     "Rejoin %@" : {
+      "extractionState" : "manual"
+    },
+    "Rejoin Watch Together" : {
       "extractionState" : "manual"
     },
     "Remaining %@" : {
@@ -5978,6 +5993,9 @@
     "Watch Together" : {
       "extractionState" : "manual"
     },
+    "Watch Together is playing" : {
+      "extractionState" : "manual"
+    },
     "Watch on YouTube" : {
       "extractionState" : "manual"
     },
@@ -6492,6 +6510,9 @@
       "extractionState" : "manual"
     },
     "You solved it" : {
+      "extractionState" : "manual"
+    },
+    "You stay in the call. Others keep watching." : {
       "extractionState" : "manual"
     },
     "You vs the computer" : {

@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -60,6 +61,7 @@ internal fun LobbyPreviewCard(
     bandCover: Dp?,
     onMic: (Boolean) -> Unit,
     onCamera: (Boolean) -> Unit,
+    onAudioOnly: ((Boolean) -> Unit)?,
     onFlip: () -> Unit,
     onEffects: () -> Unit,
     modifier: Modifier = Modifier,
@@ -76,7 +78,7 @@ internal fun LobbyPreviewCard(
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                LobbyToggles(card, onMic, onCamera, onEffects)
+                LobbyToggles(card, onMic, onCamera, onAudioOnly, onEffects)
             }
         }
     }
@@ -88,6 +90,7 @@ private fun LobbyPreviewVideo(card: LobbyCardUi, compact: Boolean, onFlip: () ->
     val ext = LocalConclaveExtendedColors.current
     val previewLabel = conclaveString("pm_your_preview")
     val previewValue = when {
+        card.audioOnlyOn -> conclaveString("lay_audio_only")
         card.preview == PreviewState.live && card.isFrontCamera -> conclaveString("ds_front")
         card.preview == PreviewState.live -> conclaveString("ds_back_camera")
         card.cameraIsUnavailable -> conclaveString("pm_camera_unavailable")
@@ -114,13 +117,28 @@ private fun LobbyPreviewVideo(card: LobbyCardUi, compact: Boolean, onFlip: () ->
                 }
             }
         }
-        Text(
-            conclaveString("ds_you"),
-            style = MaterialTheme.typography.labelMedium,
-            color = scheme.onSurface,
-            modifier = Modifier.align(Alignment.TopStart).padding(12.dp).clip(CircleShape).background(ext.labelScrim)
-                .padding(horizontal = 8.dp, vertical = 3.dp).clearAndSetSemantics { },
-        )
+        Row(
+            Modifier.align(Alignment.TopStart).padding(12.dp).clearAndSetSemantics { },
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                conclaveString("ds_you"),
+                style = MaterialTheme.typography.labelMedium,
+                color = scheme.onSurface,
+                modifier = Modifier.clip(CircleShape).background(ext.labelScrim).padding(horizontal = 8.dp, vertical = 3.dp),
+            )
+            if (card.audioOnlyOn) {
+                Row(
+                    Modifier.clip(CircleShape).background(ext.labelScrim).padding(horizontal = 8.dp, vertical = 3.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(ConclaveIcons.HeadphonesFill0, contentDescription = null, tint = scheme.onSurface, modifier = Modifier.size(14.dp))
+                    Text(conclaveString("lay_audio_only"), style = MaterialTheme.typography.labelMedium, color = scheme.onSurface)
+                }
+            }
+        }
         if (card.preview == PreviewState.live) {
             ConclaveFlipCameraButton(isFront = card.isFrontCamera, onClick = onFlip,
                 modifier = Modifier.align(Alignment.TopEnd).padding(12.dp), identifier = "lobby.flip")
@@ -162,7 +180,8 @@ private fun LobbyCameraOffContent(card: LobbyCardUi, compact: Boolean) {
 }
 
 @Composable
-private fun LobbyToggles(card: LobbyCardUi, onMic: (Boolean) -> Unit, onCamera: (Boolean) -> Unit, onEffects: () -> Unit) {
+private fun LobbyToggles(card: LobbyCardUi, onMic: (Boolean) -> Unit, onCamera: (Boolean) -> Unit, onAudioOnly: ((Boolean) -> Unit)?,
+                         onEffects: () -> Unit) {
     ConclaveCallToggle(
         label = conclaveString("ds_microphone"),
         stateText = lobbyToggleStateText(
@@ -180,7 +199,7 @@ private fun LobbyToggles(card: LobbyCardUi, onMic: (Boolean) -> Unit, onCamera: 
     )
     ConclaveCallToggle(
         label = conclaveString("ds_camera"),
-        stateText = lobbyToggleStateText(
+        stateText = if (card.audioOnlyOn) conclaveString("ctl_reason_audio_only") else lobbyToggleStateText(
             stateText = if (card.cameraOn) conclaveString("ds_state_on") else conclaveString("ds_state_off"),
             stateReason = permissionReasonText(LobbyMediaKind.camera, card.cameraReason),
         ),
@@ -190,10 +209,22 @@ private fun LobbyToggles(card: LobbyCardUi, onMic: (Boolean) -> Unit, onCamera: 
         identifier = "lobby.camera",
         onToggle = { onCamera(it) },
         width = 56.dp,
-        enabled = card.cameraPermission != MediaPermissionState.unavailable,
+        enabled = card.cameraPermission != MediaPermissionState.unavailable && !card.audioOnlyOn,
         feedback = LobbyToggleFeedbackPolicy.kind(isOn = card.cameraOn, permission = card.cameraPermission,
             onKind = FeedbackKind.cameraOn, offKind = FeedbackKind.cameraOff, canAskAgain = card.canAskAgainCamera),
     )
+    if (onAudioOnly != null) {
+        ConclaveCallToggle(
+            label = conclaveString("lay_audio_only"),
+            stateText = if (card.audioOnlyOn) conclaveString("ds_state_on") else conclaveString("ds_state_off"),
+            icon = ConclaveIcons.HeadphonesFill0,
+            visual = if (card.audioOnlyOn) ConclaveCallControlVisual.Engaged else ConclaveCallControlVisual.On,
+            checked = card.audioOnlyOn,
+            identifier = "lobby.audioOnly",
+            onToggle = { onAudioOnly(it) },
+            width = 56.dp,
+        )
+    }
     if (card.showsEffects) {
         ConclaveCallToggle(
             label = conclaveString("pm_effects"),
@@ -205,7 +236,7 @@ private fun LobbyToggles(card: LobbyCardUi, onMic: (Boolean) -> Unit, onCamera: 
             identifier = "lobby.effects",
             onToggle = { onEffects() },
             width = 56.dp,
-            enabled = !card.isCameraBlocked,
+            enabled = !card.isCameraBlocked && !card.audioOnlyOn,
         )
     }
 }

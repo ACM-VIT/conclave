@@ -31,6 +31,9 @@ final class ActivitySession {
         stage.onActivityResolved = { [weak self] onStageKind in
             self?.activities.setOnStageActivityKind(onStageKind)
         }
+        stage.onWatchTogetherHiddenChanged = { [weak self] hidden in
+            self?.appHost.setHiddenLocally(hidden)
+        }
 
         appHost.onOpenPage = { [weak self] appId in
             self?.stage.openActivities(destination: PanelDestination.activitiesApp, targetId: appId)

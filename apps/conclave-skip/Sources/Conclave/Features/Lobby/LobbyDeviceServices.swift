@@ -193,6 +193,9 @@ enum LobbyProductionHooks {
         hooks.setEntryMediaIntent = { mic, camera in
             viewModel.setEntryMediaIntent(mic: mic, camera: camera)
         }
+        hooks.setEntryAudioOnly = { on in
+            viewModel.setEntryAudioOnly(on)
+        }
         hooks.setPrejoinAudioRouteIntent = { outputKind, inputId in
             viewModel.setPrejoinAudioRouteIntent(outputKind: outputKind, inputId: inputId)
         }

@@ -34,6 +34,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.isTraversalGroup
 import androidx.compose.ui.semantics.semantics
@@ -153,17 +154,11 @@ private fun ActivityStageHeaderIdentity(kind: String, parts: ActivityStageIdenti
 @Composable
 private fun ActivityStageHeaderActions(kind: String, stage: StagePresenter, session: ActivitySession?) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-        val stateText = conclaveString("stg_showing_activity")
-        FilledTonalIconToggleButton(
-            checked = false,
-            onCheckedChange = { stage.setShowsVideoOverActivity(true) },
-            colors = IconButtonDefaults.filledTonalIconToggleButtonColors(
-                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                contentColor = MaterialTheme.colorScheme.onSurface,
-            ),
-            modifier = Modifier.testTag("stage.activity.showVideo").semantics { stateDescription = stateText },
-        ) {
-            Icon(ConclaveIcons.VideocamFill1, contentDescription = conclaveString("stg_show_video"), modifier = Modifier.size(20.dp))
+        if (activityStageKind(kind) == ActivityKind.app && session != null &&
+            session.appHost.model.appId == ActivityStagePolicy.watchTogetherAppId) {
+            WatchTogetherLeaveButton(stage)
+        } else {
+            ActivityShowVideoButton(stage)
         }
         if (session != null) {
             if (activityStageKind(kind) == ActivityKind.game) {
@@ -179,6 +174,32 @@ private fun ActivityStageHeaderActions(kind: String, stage: StagePresenter, sess
             }
         }
     }
+}
+
+@Composable
+private fun ActivityShowVideoButton(stage: StagePresenter) {
+    val stateText = conclaveString("stg_showing_activity")
+    FilledTonalIconToggleButton(
+        checked = false,
+        onCheckedChange = { stage.setShowsVideoOverActivity(true) },
+        colors = IconButtonDefaults.filledTonalIconToggleButtonColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            contentColor = MaterialTheme.colorScheme.onSurface,
+        ),
+        modifier = Modifier.testTag("stage.activity.showVideo").semantics { stateDescription = stateText },
+    ) {
+        Icon(ConclaveIcons.VideocamFill1, contentDescription = conclaveString("stg_show_video"), modifier = Modifier.size(20.dp))
+    }
+}
+
+@Composable
+private fun WatchTogetherLeaveButton(stage: StagePresenter) {
+    val label = conclaveString("stg_leave_watch_together")
+    ActivityHeaderCapsuleButton(
+        title = conclaveString("stg_leave"),
+        onClick = { stage.leaveWatchTogether() },
+        modifier = Modifier.testTag("stage.activity.leaveWatch").semantics { contentDescription = label },
+    )
 }
 
 @Composable

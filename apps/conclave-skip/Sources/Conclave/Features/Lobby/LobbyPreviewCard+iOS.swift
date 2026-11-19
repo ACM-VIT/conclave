@@ -68,6 +68,7 @@ private struct LobbyPreviewVideo: View {
     }
 
     private var previewValue: String {
+        if media.audioOnlyOn { return ConclaveStrings.text("Audio Only") }
         if media.preview == .live {
             return media.isFrontCamera ? ConclaveStrings.text("Front Camera") : ConclaveStrings.text("Back Camera")
         }
@@ -99,18 +100,28 @@ private struct LobbyPreviewVideo: View {
         .accessibilityValue(previewValue)
         .accessibilityIdentifier("lobby.preview")
         .overlay(alignment: .topLeading) {
-            Text(ConclaveStrings.text("You"))
-                .font(.footnote)
-                .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(Capsule().fill(HostingTheme.inCallLabelScrim))
-                .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
-                .accessibilityHidden(true)
-                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: {
-                    if selfChipWidth != $0 { selfChipWidth = $0 }
+            HStack(spacing: 6) {
+                Text(ConclaveStrings.text("You"))
+                    .font(.footnote)
+                    .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Capsule().fill(HostingTheme.inCallLabelScrim))
+                if media.audioOnlyOn {
+                    Label(ConclaveStrings.text("Audio Only"), systemImage: ConclaveSymbols.waveform)
+                        .font(.footnote)
+                        .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Capsule().fill(HostingTheme.inCallLabelScrim))
                 }
-                .padding(12)
+            }
+            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+            .accessibilityHidden(true)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: {
+                if selfChipWidth != $0 { selfChipWidth = $0 }
+            }
+            .padding(12)
         }
         .overlay(alignment: .topTrailing) {
             if media.preview == .live {
@@ -233,10 +244,11 @@ private struct LobbyToggleStrip: View {
         .accessibilityHint(hint(.microphone))
         LobbyMediaToggle(
             title: ConclaveStrings.text("Camera"),
-            value: cameraOn ? ConclaveStrings.text("On") : ConclaveStrings.text("Off"),
+            value: media.audioOnlyOn ? ConclaveStrings.text("Camera is off in audio-only mode")
+                : (cameraOn ? ConclaveStrings.text("On") : ConclaveStrings.text("Off")),
             systemImage: cameraOn ? ConclaveSymbols.videoFill : ConclaveSymbols.videoSlashFill,
             state: cameraOn ? .on : .off,
-            isEnabled: media.cameraPermission != .unavailable,
+            isEnabled: media.cameraPermission != .unavailable && !media.audioOnlyOn,
             inputLabels: [ConclaveStrings.text("Camera"), ConclaveStrings.text("Video")],
             feedback: LobbyToggleFeedbackPolicy.kind(isOn: cameraOn, permission: media.cameraPermission,
                                                onKind: .cameraOn, offKind: .cameraOff),
@@ -245,6 +257,18 @@ private struct LobbyToggleStrip: View {
             premeeting.setCameraIntent(!cameraOn)
         }
         .accessibilityHint(hint(.camera))
+        if premeeting.lobbyStatus?.intent != .promotion {
+            LobbyMediaToggle(
+                title: ConclaveStrings.text("Audio Only"),
+                value: media.audioOnlyOn ? ConclaveStrings.text("On") : ConclaveStrings.text("Off"),
+                systemImage: ConclaveSymbols.waveform,
+                state: media.audioOnlyOn ? .engaged : .on,
+                identifier: "lobby.audioOnly"
+            ) {
+                premeeting.setAudioOnlyIntent(!media.audioOnlyOn)
+            }
+            .accessibilityHint(ConclaveStrings.text("Join without sending or receiving video."))
+        }
         if media.showsEffects {
             LobbyMediaToggle(
                 title: ConclaveStrings.text("Effects"),
@@ -253,7 +277,7 @@ private struct LobbyToggleStrip: View {
                     : (media.effectsActive ? ConclaveStrings.text("On") : ConclaveStrings.text("Off")),
                 systemImage: ConclaveSymbols.faceSmiling,
                 state: media.effectsActive ? .engaged : .off,
-                isEnabled: media.cameraPermission != .denied && media.cameraPermission != .restricted,
+                isEnabled: media.cameraPermission != .denied && media.cameraPermission != .restricted && !media.audioOnlyOn,
                 identifier: "lobby.effects"
             ) {
                 premeeting.openEffects()

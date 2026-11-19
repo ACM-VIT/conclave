@@ -155,6 +155,7 @@ private fun LobbyCardSlot(premeeting: PremeetingPresenter, routeId: Int, cache: 
             bandCover = bandCover,
             onMic = { premeeting.setMicIntent(it) },
             onCamera = { premeeting.setCameraIntent(it) },
+            onAudioOnly = if (premeeting.lobbyStatus?.intent == LobbyIntent.promotion) null else { on -> premeeting.setAudioOnlyIntent(on) },
             onFlip = { premeeting.flipCamera() },
             onEffects = {
                 premeeting.openEffects()

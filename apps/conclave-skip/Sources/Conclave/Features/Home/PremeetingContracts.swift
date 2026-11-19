@@ -306,6 +306,7 @@ struct PremeetingInputs: Equatable {
 
     let micIntentOn: Bool
     let cameraIntentOn: Bool
+    let audioOnlyIntentOn: Bool
 
     let resumeInFlight: Bool
     let resumeRoomId: String
@@ -346,6 +347,7 @@ struct PremeetingInputs: Equatable {
         isAppActive: Bool = true,
         micIntentOn: Bool = false,
         cameraIntentOn: Bool = false,
+        audioOnlyIntentOn: Bool = false,
         resumeInFlight: Bool = false,
         resumeRoomId: String = "",
         updateRequired: Bool = false,
@@ -380,6 +382,7 @@ struct PremeetingInputs: Equatable {
             isAppActive: isAppActive,
             micIntentOn: micIntentOn,
             cameraIntentOn: cameraIntentOn,
+            audioOnlyIntentOn: audioOnlyIntentOn,
             resumeInFlight: resumeInFlight,
             resumeRoomId: resumeRoomId,
             updateRequired: updateRequired,
@@ -417,6 +420,7 @@ struct PremeetingInputs: Equatable {
             isAppActive: isAppActive,
             micIntentOn: micIntentOn,
             cameraIntentOn: cameraIntentOn,
+            audioOnlyIntentOn: audioOnlyIntentOn,
             resumeInFlight: resumeInFlight,
             resumeRoomId: resumeRoomId,
             updateRequired: updateRequired,
@@ -454,6 +458,7 @@ struct PremeetingInputs: Equatable {
             isAppActive: isAppActive,
             micIntentOn: mic,
             cameraIntentOn: camera,
+            audioOnlyIntentOn: audioOnlyIntentOn,
             resumeInFlight: resumeInFlight,
             resumeRoomId: resumeRoomId,
             updateRequired: updateRequired,
@@ -491,6 +496,7 @@ struct PremeetingInputs: Equatable {
             isAppActive: base.isAppActive,
             micIntentOn: base.micIntentOn,
             cameraIntentOn: base.cameraIntentOn,
+            audioOnlyIntentOn: base.audioOnlyIntentOn,
             resumeInFlight: base.resumeInFlight,
             resumeRoomId: base.resumeRoomId,
             updateRequired: base.updateRequired,

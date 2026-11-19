@@ -57,6 +57,8 @@ final class StagePresenter {
 
     @ObservationIgnored var onActivityResolved: ((String) -> Void)? = nil
 
+    @ObservationIgnored var onWatchTogetherHiddenChanged: ((Bool) -> Void)? = nil
+
     @ObservationIgnored var onNoticeCommand: ((NoticeCommand) -> Void)? = nil
 
     @ObservationIgnored weak var people: PeoplePresenter? = nil
@@ -95,6 +97,8 @@ final class StagePresenter {
     @ObservationIgnored private var showsVideoOverActivity = false
 
     @ObservationIgnored private var preferredActivityKind = ""
+    @ObservationIgnored private var isWatchTogetherOptedOut = false
+    @ObservationIgnored private var lastWatchTogetherHidden = false
     @ObservationIgnored private var lastLiveActivities: [String] = []
     @ObservationIgnored private var hasActivityBaseline = false
     @ObservationIgnored private var lastResolvedOnStage = "~"
@@ -385,6 +389,22 @@ final class StagePresenter {
         if !ActivityStagePolicy.liveKinds(inputs).contains(kind) { return }
         preferredActivityKind = kind
         showsVideoOverActivity = false
+        if kind == ActivityStageKind.app { isWatchTogetherOptedOut = false }
+        rebuild()
+    }
+
+    func leaveWatchTogether() {
+        if isWatchTogetherOptedOut { return }
+        if !ActivityStagePolicy.isWatchTogether(activeAppId: inputs.activeAppId, live: ActivityStagePolicy.liveKinds(inputs)) { return }
+        isWatchTogetherOptedOut = true
+        rebuild()
+    }
+
+    func rejoinWatchTogether() {
+        if !isWatchTogetherOptedOut { return }
+        isWatchTogetherOptedOut = false
+        preferredActivityKind = ActivityStageKind.app
+        showsVideoOverActivity = false
         rebuild()
     }
 
@@ -436,6 +456,7 @@ final class StagePresenter {
         fitOverrides = [:]
         showsVideoOverActivity = false
         preferredActivityKind = ""
+        isWatchTogetherOptedOut = false
         lastLiveActivities = []
         hasActivityBaseline = false
         lastResolvedOnStage = "~"
@@ -497,7 +518,7 @@ final class StagePresenter {
                                                               localUserId: inputs.localUserId)
         }
         let activityResolution = resolveActivities()
-        var nextKind = StageLayoutPolicy.kind(inputs, showsVideoOverActivity: activityResolution.showsVideoOverActivity)
+        var nextKind = StageLayoutPolicy.kind(inputs, showsVideoOverActivity: activityResolution.onStageKind.isEmpty)
         if nextKind.isActivity, let card = activityResolution.stageKind { nextKind = card }
 
         attendeeFeed = inputs.isWebinarAttendee ? AttendeeViewerPolicy.feed(inputs) : AttendeeFeed.none
@@ -592,7 +613,7 @@ final class StagePresenter {
 
         let nextCapsule = capsuleModel(present)
         if nextCapsule != capsule { capsule = nextCapsule }
-        let nextChrome = chromeSnapshot(present, chip: activityResolution.chip)
+        let nextChrome = chromeSnapshot(present, chip: activityResolution.chip, watchTogetherHidden: isWatchTogetherOptedOut)
         if nextChrome != chrome.withRevision(0) {
             chrome = nextChrome.withRevision(chrome.revision + 1)
         }
@@ -714,22 +735,26 @@ final class StagePresenter {
                                  isLocked: inputs.isRoomLocked, captionsOn: inputs.captionsOn, liveNotes: inputs.liveNotes)
     }
 
-    private func chromeSnapshot(_ present: [StageParticipantInput], chip: NowPlayingChip?) -> StageChromeSnapshot {
+    private func chromeSnapshot(_ present: [StageParticipantInput], chip: NowPlayingChip?,
+                                watchTogetherHidden: Bool) -> StageChromeSnapshot {
         let local = StageOrderPolicy.participant(inputs.localUserId, in: present)
         let cameraOn = !(local?.isCameraOff ?? true)
         return StageChromeSnapshot(revision: 0, canFlipCamera: inputs.canFlipCamera && cameraOn, isFrontCamera: inputs.isFrontCamera,
                                    isFlipInFlight: inputs.isFlipInFlight && cameraOn, isCameraPaused: inputs.isCameraPaused && cameraOn,
-                                   nowPlaying: chip, routeKind: inputs.routeKind, routeName: inputs.routeName,
-                                   isAttendee: inputs.isWebinarAttendee)
+                                   nowPlaying: chip, isWatchTogetherHidden: watchTogetherHidden, routeKind: inputs.routeKind,
+                                   routeName: inputs.routeName, isAttendee: inputs.isWebinarAttendee)
     }
 
     private func resolveActivities() -> ActivityStageResolution {
         let live = ActivityStagePolicy.liveKinds(inputs)
         preferredActivityKind = ActivityStagePolicy.normalizedPreference(preferredActivityKind, live: live)
         showsVideoOverActivity = ActivityStagePolicy.normalizedShowsVideo(showsVideoOverActivity, live: live)
+        isWatchTogetherOptedOut = ActivityStagePolicy.normalizedWatchOptOut(isWatchTogetherOptedOut, activeAppId: inputs.activeAppId,
+                                                                            live: live)
         return ActivityStagePolicy.resolve(live: live, preferredKind: preferredActivityKind,
                                            showsVideoOverActivity: showsVideoOverActivity,
-                                           names: ActivityStageNames(appId: inputs.activeAppId, gameName: inputs.gameName))
+                                           names: ActivityStageNames(appId: inputs.activeAppId, gameName: inputs.gameName),
+                                           appOptedOut: isWatchTogetherOptedOut)
     }
 
     private func publishActivityChanges(_ resolution: ActivityStageResolution) {
@@ -754,6 +779,10 @@ final class StagePresenter {
         if resolution.onStageKind != lastResolvedOnStage {
             lastResolvedOnStage = resolution.onStageKind
             onActivityResolved?(resolution.onStageKind)
+        }
+        if isWatchTogetherOptedOut != lastWatchTogetherHidden {
+            lastWatchTogetherHidden = isWatchTogetherOptedOut
+            onWatchTogetherHiddenChanged?(isWatchTogetherOptedOut)
         }
     }
 
