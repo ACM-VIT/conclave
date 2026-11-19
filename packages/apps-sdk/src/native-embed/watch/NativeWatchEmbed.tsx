@@ -1,12 +1,3 @@
-// The Watch Together renderer for the native app host (S60 13 c, ACT-8): the embedded YouTube player with its own
-// playback controls (seek, live, volume, captions), following the room's playback record in the SDK `watch` doc.
-// Search, Play Now, Up Next, Requests and Everyone Can Control are native (the card's Queue button opens the
-// Activities Watch page) and reach this page as bridge commands; the page answers each with an `ack` after the status
-// that shows the change, and adds the page data to every status under `app`. The doc syncs intent only: every
-// participant's own player fetches the media from YouTube. The player follows the doc; a person allowed to control
-// playback writes their play, pause and seek to the doc (the room app lock decides, as on web), and anyone else's
-// local change is pulled back to the room's position. The video title is announced natively. Flat only.
-
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type * as Y from "yjs";
 import {
@@ -46,13 +37,9 @@ import { PLAYER_STATE, YouTubeFrameController, youtubeEmbedUrl, type PlayerEvent
 
 const EDIT_COMMANDS: ReadonlySet<string> = new Set<string>(APP_EDIT_COMMANDS);
 const FOLLOW_INTERVAL_MS = 500;
-/** Our own play, pause, seek or load echo back as player events for a moment; they are not a person's intent. */
 const PROGRAMMATIC_WINDOW_MS = 1500;
-/** While the record has not changed, never hard-seek more often than this (the web's CORRECTION_COOLDOWN_MS). */
 const CORRECTION_COOLDOWN_MS = 2500;
-/** Asking a blocked player to play again is cheap but noisy; at most this often. */
 const PLAY_RETRY_MS = 2000;
-/** A jump in the player's own clock larger than this between two reports is a seek. */
 const USER_SEEK_SECONDS = 3;
 
 const useHostStatus = (session: NativeEmbedSession): HostStatus =>
@@ -67,7 +54,6 @@ const useSynced = (session: NativeEmbedSession): boolean =>
     () => session.isSynced,
   );
 
-/** The room's playback state as a primitive (a stable snapshot for useSyncExternalStore). */
 const usePlaybackState = (doc: Y.Doc): "playing" | "paused" =>
   useSyncExternalStore(
     useCallback(
@@ -116,8 +102,6 @@ export function NativeWatchEmbed({ session }: { session: NativeEmbedSession }) {
   const controller = useMemo(() => new YouTubeFrameController((event) => playerEventRef.current(event)), []);
   useEffect(() => () => controller.dispose(), [controller]);
 
-  // The frame is created once when a video first shows (its URL carries that video and the room's position); later
-  // videos switch through the player, never a reload. Idle removes it.
   const [frame, setFrame] = useState<{ videoId: string; start: number } | null>(null);
   const frameVideoRef = useRef<string | null>(null);
   frameVideoRef.current = frame ? frame.videoId : null;
@@ -133,7 +117,6 @@ export function NativeWatchEmbed({ session }: { session: NativeEmbedSession }) {
     programmaticUntil.current = Date.now() + PROGRAMMATIC_WINDOW_MS;
   }, []);
 
-  // The follow loop: the player converges on the room's record (load, play or pause, then drift).
   followRef.current = () => {
     if (!syncedRef.current) return;
     const current = getVideoId(doc);
@@ -149,7 +132,6 @@ export function NativeWatchEmbed({ session }: { session: NativeEmbedSession }) {
     lastRecordKey.current = key;
     const target = expectedPosition(record, now);
     if (loadedVideoId.current !== current) {
-      // The frame was created for another video (or none yet): switch it.
       if (loadedVideoId.current !== null) {
         markProgrammatic();
         controller.load(current, target, record.state === "playing");
@@ -191,17 +173,14 @@ export function NativeWatchEmbed({ session }: { session: NativeEmbedSession }) {
     }
   };
 
-  /** A person's own play, pause or seek, as the room's record (the SDK stamps `updatedAt`; the loop then settles). */
   const writePlayback = (state: "playing" | "paused") => {
     writePlaybackDoc(doc, { state, positionSeconds: controller.position(), rate: getPlayback(doc).rate });
   };
 
-  // Player events: a person's own play, pause or seek becomes the room's record when they may control playback.
   playerEventRef.current = (event) => {
     const now = Date.now();
     const current = getVideoId(doc);
     if (event === "ready") {
-      // The frame's first video came from its URL; the loop switches it if the room moved on meanwhile.
       loadedVideoId.current = frameVideoRef.current;
       followRef.current();
       return;
@@ -227,7 +206,6 @@ export function NativeWatchEmbed({ session }: { session: NativeEmbedSession }) {
       }
       return;
     }
-    // A time report: a jump in the player's own clock is a seek from its controls.
     const previous = lastReport.current;
     lastReport.current = { time: controller.currentTime, at: now };
     if (previous.at === 0 || now < programmaticUntil.current || !mayControl) return;
@@ -237,7 +215,6 @@ export function NativeWatchEmbed({ session }: { session: NativeEmbedSession }) {
     }
   };
 
-  // The follow loop runs on a timer and on every doc change.
   useEffect(() => {
     const tick = () => followRef.current();
     const timer = setInterval(tick, FOLLOW_INTERVAL_MS);
@@ -284,7 +261,6 @@ export function NativeWatchEmbed({ session }: { session: NativeEmbedSession }) {
     session.sendStatus({ app: status });
   }, [session, status, synced]);
 
-  // Host commands. Each one applies (the doc update re-sends the status), then returns for the ack.
   const requestsRef = useRef(watchRequests);
   requestsRef.current = watchRequests;
   useEffect(() => {
@@ -311,7 +287,6 @@ export function NativeWatchEmbed({ session }: { session: NativeEmbedSession }) {
           const nextVideoId = payloadString(payload, "videoId");
           if (!isValidVideoId(nextVideoId)) return { ok: false, error: "badVideo" };
           const title = clip(payloadString(payload, "title"), WATCH_LIMITS.title) || null;
-          // As on web: with nothing playing, adding starts it.
           if (!getVideoId(doc)) {
             setVideo(doc, nextVideoId, { play: true, positionSeconds: 0, title });
           } else {
@@ -330,7 +305,6 @@ export function NativeWatchEmbed({ session }: { session: NativeEmbedSession }) {
           const requestId = payloadString(payload, "requestId");
           const request = requestsRef.current.requests.find((entry) => entry.id === requestId);
           if (!request) return { ok: false, error: "noRequest" };
-          // With co-hosts the first decision wins; a later one is a no-op, not a duplicate.
           if (getWatchRequestResolution(doc, request.id)) return { ok: true };
           if (envelope.type === "approve") {
             resolveWatchRequest(doc, request.id, "added");
@@ -344,7 +318,6 @@ export function NativeWatchEmbed({ session }: { session: NativeEmbedSession }) {
           requestsRef.current.cancelRequest();
           return { ok: true };
         case "move": {
-          // One step per Move up or Move down; an iOS drag sends its whole distance as `steps` (one transaction).
           const itemId = payloadString(payload, "itemId");
           const direction = payloadNumber(payload, "direction");
           const steps = payloadNumber(payload, "steps") ?? 1;
@@ -361,7 +334,6 @@ export function NativeWatchEmbed({ session }: { session: NativeEmbedSession }) {
           removeQueueItem(doc, itemId);
           return { ok: true };
         }
-        // Relay messages and commands for another app retain the same rejection as unknown commands.
         case "snapshot":
         case "update":
         case "awareness":

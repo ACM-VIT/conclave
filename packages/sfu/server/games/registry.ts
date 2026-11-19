@@ -1,6 +1,7 @@
 import { bluffModule } from "./modules/bluff.js";
 import { chessModule } from "./modules/chess.js";
 import { imposterModule } from "./modules/imposter.js";
+import { longShotModule } from "./modules/longShot.js";
 import { mostLikelyToModule } from "./modules/mostLikelyTo.js";
 import { reactionModule } from "./modules/reaction.js";
 import { triviaModule } from "./modules/trivia.js";
@@ -12,6 +13,7 @@ import type { GameCatalogEntry, GameModule } from "./types.js";
 // Register a game here (one line). The order is the order shown in the launcher.
 const MODULES: GameModule[] = [
   triviaModule,
+  longShotModule,
   bluffModule,
   wouldYouRatherModule,
   mostLikelyToModule,

@@ -442,29 +442,6 @@ private struct ChatWiringHostError: LocalizedError {
 }
 #endif
 
-private func chatPackageRoot() -> URL {
-    URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-}
-
-func chatSource(_ packageRelativePath: String) throws -> String {
-    try String(contentsOf: chatPackageRoot().appendingPathComponent(packageRelativePath).standardizedFileURL, encoding: .utf8)
-}
-
-func chatFiles(under directory: String, extensions: Set<String>) throws -> [String] {
-    let root = chatPackageRoot()
-    var result: [String] = []
-    let enumerator = FileManager.default.enumerator(at: root.appendingPathComponent(directory), includingPropertiesForKeys: nil)
-    while let url = enumerator?.nextObject() as? URL {
-        if extensions.contains(url.pathExtension) { result.append(url.path) }
-    }
-    let prefix = root.path + "/"
-    return result.map { $0.hasPrefix(prefix) ? String($0.dropFirst(prefix.count)) : $0 }.sorted()
-}
-
-func chatHasDash(_ text: String) -> Bool {
-    text.unicodeScalars.contains { $0.value == 0x2013 || $0.value == 0x2014 }
-}
-
 @MainActor
 enum ChatFixtureTestGate {
     private static var isHeld = false

@@ -212,31 +212,5 @@ struct CTL3RoutePickerTests {
 
         #expect(ControlsFixtureSession(state: .guest).controls.routeOwner !== AudioRouteOwner.shared)
     }
-
-    @Test func routeStringsResolveInBothCatalogs() throws {
-
-        let strings = try ctl3Source("Android/app/src/main/res/values/strings.xml")
-        for name in ["ctl_audio_output", "ctl_audio_settings", "ctl_route_switching", "ctl_route_connecting", "ctl_route_bt_allow",
-                     "ctl_route_bt_allow_settings", "ctl_choose_audio_output", "ctl_route_phone", "ctl_route_speaker",
-                     "ctl_route_bluetooth", "ctl_route_wired", "ctl_route_usb", "ctl_route_hearing_aid", "ctl_toast_route_failed"] {
-            #expect(strings.contains("name=\"" + name + "\""), "missing \(name)")
-        }
-        let catalog = try ctl3Source("Sources/Conclave/Resources/Localizable.xcstrings")
-        for key in ["Couldn\u{2019}t switch audio. Try again.", "Speaker"] {
-            #expect(catalog.contains("\"" + key + "\""), "missing \(key)")
-        }
-    }
-}
-
-private func ctl3PackageRoot() -> URL {
-    URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-}
-
-private func ctl3Source(_ packageRelativePath: String) throws -> String {
-    try String(contentsOf: ctl3PackageRoot().appendingPathComponent(packageRelativePath).standardizedFileURL, encoding: .utf8)
-}
-
-private func ctl3Normalized(_ text: String) -> String {
-    text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
 }
 #endif

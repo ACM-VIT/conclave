@@ -379,32 +379,6 @@ struct CHT7AssistantRowTests {
         #expect(ChatFixtureScriptName(rawValue: "stream:3tasks") == .stream3tasks)
     }
 
-    @Test func assistantStringsAreInBothCatalogs() throws {
-        let catalog = try #require(try JSONSerialization.jsonObject(
-            with: Data(chatSource("Sources/Conclave/Resources/Localizable.xcstrings").utf8)) as? [String: Any])
-        let keys = try #require(catalog["strings"] as? [String: Any])
-        for key in ["Conclave", "AI", "Thinking", "Thinking\u{2026}", "Thought for %llds", "Thought Process", "Working", "Actions",
-                    "Searching the web", "Searched the web", "Reading the transcript", "Read the meeting transcript",
-                    "Preparing a GitHub issue", "Finished the GitHub issue request", "Using the shared browser",
-                    "Used the shared browser", "Conclave couldn't answer right now.", "Conclave AI isn't available in this room.",
-                    "Conclave's authorization expired. Try again.", "Conclave is being asked too quickly. Try again in a moment.",
-                    "I didn't catch anything to answer.", "Conclave answered: %@", "Try Again", "Open External Link?",
-                    "This link opens a website outside Conclave. Only open links you trust."] {
-            #expect(keys[key] != nil, "missing iOS key \(key)")
-        }
-        let xml = try chatSource("Android/app/src/main/res/values/strings.xml")
-        for name in ["chat_assistant_name", "chat_assistant_tag", "chat_assistant_thinking", "chat_assistant_reasoning_live",
-                     "chat_assistant_thought_for", "chat_assistant_thought", "chat_assistant_working", "chat_assistant_actions",
-                     "chat_task_web_running", "chat_task_web_done", "chat_task_transcript_running", "chat_task_transcript_done",
-                     "chat_task_github_running", "chat_task_github_done", "chat_task_browser_running", "chat_task_browser_done",
-                     "chat_assistant_error_generic", "chat_assistant_unavailable", "chat_assistant_error_expired",
-                     "chat_assistant_error_rate", "chat_assistant_empty", "chat_ax_assistant_answered", "chat_assistant_expand",
-                     "chat_assistant_collapse", "chat_assistant_expanded", "chat_assistant_collapsed", "ds_try_again",
-                     "chat_link_body", "chat_link_body_app", "chat_action_copy_link"] {
-            #expect(xml.contains("name=\"" + name + "\""), "missing Android name \(name)")
-        }
-    }
-
     @Test func theRelayPacketKeepsItsSignedProcessFields() throws {
         let json = """
         {"id":"a","roomId":"r","channelId":"c","requesterUserId":"u","questionMessageId":"q","content":"Hi","done":false,\

@@ -11,7 +11,10 @@ import {
 } from "@conclave/ai/models";
 
 import { AI_GENERATION_LIMITS } from "@conclave/ai/limits";
+import { DECISION_MODELS, decisionModel } from "@conclave/ai/decisions";
 export { AI_GENERATION_LIMITS } from "@conclave/ai/limits";
+
+export const DECISION_TIMEOUT_MS = 2_500;
 
 export const AI_FEATURES = {
   assistant: {
@@ -50,6 +53,11 @@ export const AI_FEATURES = {
     kind: "speech",
     model: AI_DEFAULT_MODELS.tts,
   },
+  answers: {
+    label: "Answer judging",
+    kind: "decision",
+    model: AI_DEFAULT_MODELS.answers,
+  },
 } as const;
 export type AiFeature = keyof typeof AI_FEATURES;
 export type AiFeatureSettings = {
@@ -75,7 +83,9 @@ export const featureProvider = (
 ): AiProvider =>
   AI_FEATURES[feature].kind === "text"
     ? getResponseProvider(model)
-    : feature === "transcription"
+    : AI_FEATURES[feature].kind === "decision"
+      ? decisionModel(model)?.provider ?? "cloudflare"
+      : feature === "transcription"
       ? getTranscriptTranscriptionProvider(model)
       : feature === "speech"
         ? "elevenlabs"
@@ -94,7 +104,9 @@ export function validateFeaturePatch(
         typeof value === "string" &&
         (AI_FEATURES[feature].kind === "text"
           ? isResponseModel(value)
-          : feature === "transcription"
+          : AI_FEATURES[feature].kind === "decision"
+            ? DECISION_MODELS.some((model) => model.id === value)
+            : feature === "transcription"
             ? LIVE_TRANSCRIPT_TRANSCRIPTION_MODELS.some(
                 (model) => model.id === value,
               )
@@ -181,7 +193,13 @@ export function resolveAiFeatureSettings(
     maxOutputTokens: AI_GENERATION_LIMITS.outputTokens,
     researchTokens: AI_GENERATION_LIMITS.researchTokens,
     timeoutMs:
-      feature === "transcription" ? 30_000 : feature === "images" ? 8_000 : AI_GENERATION_LIMITS.timeoutMs,
+      feature === "transcription"
+        ? 30_000
+        : feature === "images"
+          ? 8_000
+          : AI_FEATURES[feature].kind === "decision"
+            ? DECISION_TIMEOUT_MS
+            : AI_GENERATION_LIMITS.timeoutMs,
     searchEnabled: feature === "assistant" || feature === "games",
     maxSearchUses: 10,
     reasoningEffort: "default",

@@ -495,9 +495,6 @@ export async function startMeetVideoPipeEffect({
       }, MEET_VIDEOPIPE_OUTPUT_TIMEOUT_MS);
     });
     outputPromise.catch(() => {
-      // The effect request can still be inside Google's async runtime when the
-      // timeout fires. Keep the original promise rejectable for our await below
-      // without surfacing a browser-level unhandled rejection.
     });
 
     const clearOutputTimeout = () => {

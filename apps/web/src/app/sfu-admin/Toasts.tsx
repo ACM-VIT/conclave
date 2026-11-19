@@ -2,8 +2,6 @@
 
 import { color } from "@conclave/ui-tokens";
 
-/** Top-right feedback stack: sticky errors, self-dismissing successes, and a
- * busy note that only appears for genuinely slow commands. */
 export function Toasts({
   errorMessage,
   statusMessage,

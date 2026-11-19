@@ -5,12 +5,6 @@ import Testing
 
 @MainActor
 struct EntryLobbyReadoutTests {
-    static let presenterFile = "Sources/Conclave/Features/Home/PremeetingPresenter.swift"
-    static let fixturesFile = "Sources/Conclave/Features/Home/PremeetingFixtures.swift"
-    static let iosRootFile = "Sources/Conclave/Features/Home/PremeetingRoot+iOS.swift"
-    static let androidHostFile = "Sources/Conclave/Skip/ui/home/PremeetingHost.kt"
-    static let iosLobbyFile = "Sources/Conclave/Features/Lobby/LobbyView+iOS.swift"
-    static let androidLobbyFile = "Sources/Conclave/Skip/ui/lobby/LobbyScreen.kt"
     static let link = "https://conclave.acmvit.in/rose-sora-luffy"
     static let start: Double = 1793102400000.0
 
@@ -226,23 +220,5 @@ struct EntryLobbyReadoutTests {
             session.premeeting.lobbyDidDisappear(routeId: route.id)
         }
     }
-}
-
-private func elrSource(_ packageRelativePath: String) throws -> String {
-    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-    return try String(contentsOf: root.appendingPathComponent(packageRelativePath).standardizedFileURL, encoding: .utf8)
-}
-
-private func elrFlat(_ text: String) -> String {
-    text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
-}
-
-private struct EntryLobbyReadoutBlockMissing: Error {}
-
-private func elrBlock(_ text: String, from start: String, to end: String) throws -> String {
-    guard let lower = text.range(of: start), let upper = text.range(of: end, range: lower.upperBound..<text.endIndex) else {
-        throw EntryLobbyReadoutBlockMissing()
-    }
-    return String(text[lower.lowerBound..<upper.lowerBound])
 }
 #endif

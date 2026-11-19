@@ -176,12 +176,6 @@ export const requireSfuAdminUser = async (
   return { ok: true, user: normalizedUser };
 };
 
-/**
- * Mint a short-lived HMAC token for the SFU admin socket namespace. The
- * browser can never hold the SFU secret, so the server signs a small payload
- * with it and the SFU gateway verifies the signature on the socket handshake.
- * Format: base64url(payload).base64url(hmacSha256(payload, secret)).
- */
 export const mintSfuAdminSocketToken = (
   subject: string,
   ttlMs = 5 * 60_000,

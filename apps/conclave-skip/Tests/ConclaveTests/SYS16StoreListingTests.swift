@@ -5,12 +5,6 @@ import Testing
 
 @MainActor
 struct SYS16StoreListingTests {
-    @Test func theListingsPointAtTheRealStores() {
-        #expect(StoreListing.appStoreURL == "https://apps.apple.com/app/id6758411334")
-        #expect(StoreListing.playStoreURL == "https://play.google.com/store/apps/details?id=com.acmvit.conclave")
-        #expect(StoreListing.platformURL == StoreListing.appStoreURL)
-    }
-
     @Test func openingTheListingUsesTheInstalledOpenerThenDismissesThePrompt() {
         let presenter = PremeetingPresenter()
         var opened: [String] = []

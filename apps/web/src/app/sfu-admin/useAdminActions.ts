@@ -7,13 +7,6 @@ import type { AdminActionInput } from "./types";
 const BUSY_TOAST_DELAY_MS = 400;
 const STATUS_TOAST_MS = 4000;
 
-/**
- * Command runner with calm feedback: commands are re-entry guarded, the busy
- * toast only appears for actions that actually take a while (quick ones never
- * flash it), successes self-dismiss, and errors stay until dismissed. `isBusy`
- * is meant for destructive confirm buttons only; everyday controls stay
- * enabled and rely on the re-entry guard, so acting never dims the page.
- */
 export function useAdminActions() {
   const [isBusy, setIsBusy] = useState(false);
   const [busyToast, setBusyToast] = useState<string | null>(null);
@@ -79,7 +72,6 @@ export function useAdminActions() {
     [begin, finish],
   );
 
-  /** Several commands under one label and one toast, e.g. mute all. */
   const runBatch = useCallback(
     async (
       label: string,

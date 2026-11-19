@@ -323,21 +323,4 @@ private func classifierSettle(timeout: Duration = .seconds(5), _ condition: () -
     return condition()
 }
 #endif
-
-private func classifierSource(_ packageRelativePath: String) throws -> String {
-    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-    return try String(contentsOf: root.appendingPathComponent(packageRelativePath), encoding: .utf8)
-}
-
-private struct ClassifierSourceRangeMissing: Error {
-    let marker: String
-}
-
-private func classifierBody(_ source: String, from start: String, to end: String) throws -> String {
-    guard let startRange = source.range(of: start) else { throw ClassifierSourceRangeMissing(marker: start) }
-    guard let endRange = source.range(of: end, range: startRange.upperBound..<source.endIndex) else {
-        throw ClassifierSourceRangeMissing(marker: end)
-    }
-    return String(source[startRange.upperBound..<endRange.lowerBound])
-}
 #endif

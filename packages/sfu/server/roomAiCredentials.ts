@@ -18,6 +18,9 @@ import {
   type RoomAiState,
 } from "@conclave/ai/room";
 
+const isTextProvider = (provider: RoomAiProvider): provider is "openai" | "anthropic" =>
+  provider === "openai" || provider === "anthropic";
+
 export class RoomAiCredentials {
   // Private fields cannot leak through room snapshots or JSON serialization.
   #keys = new Map<RoomAiProvider, { apiKey: string; ownerId: string }>();
@@ -124,16 +127,19 @@ export class RoomAiCredentials {
   ): void {
     const key = apiKey.trim();
     if (key.length > 512 || !isProviderApiKey(provider, key))
-      throw new Error(`Enter a valid ${AI_PROVIDERS[provider].label} API key.`);
+      throw new Error(
+        provider === "cloudflare"
+          ? "Enter a valid Cloudflare account ID and API token."
+          : `Enter a valid ${AI_PROVIDERS[provider].label} API key.`,
+      );
     this.assertOwner(provider, actorId, isHost);
     this.#keys.set(provider, { apiKey: key, ownerId: actorId });
     ++this.#keyRevision;
-    if (provider !== "sarvam") this.#catalogs.delete(provider);
-    // The first text-provider contribution selects its model visibly for the room.
+    if (isTextProvider(provider)) this.#catalogs.delete(provider);
     if (
       !this.hasAssistantModelSelection &&
       options.selectDefaultModel !== false &&
-      provider !== "sarvam" &&
+      isTextProvider(provider) &&
       !getProviderApiKey(env, provider)
     ) {
       this.#assistantModel = AI_RESPONSE_MODELS.find(
@@ -146,7 +152,7 @@ export class RoomAiCredentials {
     this.assertOwner(provider, actorId, isHost);
     this.#keys.delete(provider);
     ++this.#keyRevision;
-    if (provider !== "sarvam") this.#catalogs.delete(provider);
+    if (isTextProvider(provider)) this.#catalogs.delete(provider);
   }
 
   private assertOwner(

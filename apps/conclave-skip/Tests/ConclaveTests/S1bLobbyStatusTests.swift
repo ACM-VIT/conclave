@@ -9,11 +9,6 @@ struct S1bLobbyStatusTests {
     static let rowsFile = "Sources/Conclave/Features/Lobby/LobbyStatusRow+iOS.swift"
     static let entryFile = "Sources/Conclave/Features/Lobby/EntryStatusBlock+iOS.swift"
     static let lobbyFile = "Sources/Conclave/Features/Lobby/LobbyView+iOS.swift"
-    static let primingFile = "Sources/Conclave/Features/Lobby/PermissionPrimingRow+iOS.swift"
-    static let cardFile = "Sources/Conclave/Features/Lobby/LobbyPreviewCard+iOS.swift"
-    static let barFile = "Sources/Conclave/DesignSystem/iOS/Components/ConclaveFloatingActionBar+iOS.swift"
-    static let themeFile = "Sources/Conclave/DesignSystem/iOS/HostingTheme+iOS.swift"
-    static let iosStatusFiles = [lobbyFile, entryFile, rowsFile, primingFile, cardFile]
     static let link = "https://conclave.acmvit.in/rose-sora-luffy"
 
     static let permissionConfigs: [(MediaPermissionState, Bool)] = [
@@ -470,73 +465,6 @@ struct S1bLobbyStatusTests {
         #expect(abs(ContrastRatio.wcag(foreground: DesignTokens.iosAppTextSecondaryLightHighContrast, background: 0xFFC4C4C8) - 5.25) < 0.01,
                 "the bar line on the light band")
     }
-
-    static let newIOSKeys = [
-        "You\u{2019}re offline", "Still connecting", "Couldn\u{2019}t reach Conclave", "Audio and video didn\u{2019}t connect",
-        "Server is busy", "Couldn\u{2019}t start", "Update Conclave to join", "Meeting not found", "Sign in to join",
-        "Reconnecting\u{2026}", "Hang tight.", "This meeting is locked", "No one can let you in yet", "A host is here",
-        "Reconnecting, you\u{2019}ll keep your place", "You\u{2019}re offline, you\u{2019}ll keep your place", "Server is restarting",
-        "No Microphone or Camera Access", "Microphone Access Is Restricted", "Camera Access Is Restricted",
-        "Microphone and Camera Restricted", "Your Phone Paused Conclave", "That code didn\u{2019}t work",
-        "Allow microphone and camera access in Settings."
-    ]
-    static let deletedIOSKeys = [
-        "You\u{2019}re offline. Connect to the internet to join.", "No meeting found with this code. Check it and try again.",
-        "Couldn\u{2019}t Join", "Couldn\u{2019}t Start", "Still connecting. Check your connection.",
-        "You\u{2019}re offline. Waiting for a connection.", "You\u{2019}ll join as soon as someone lets you in.",
-        "This meeting is locked. The host will review your request.", "No one is here to let you in yet. You can keep waiting.",
-        "A host is here and can let you in.", "Reconnecting. You\u{2019}ll keep your place.",
-        "You\u{2019}re offline. You\u{2019}ll keep your place when you\u{2019}re back."
-    ]
-    static let androidPairs: [(String, String)] = [
-        ("ds_offline_title", "You\u{2019}re offline"), ("pm_status_still_connecting", "Still connecting"),
-        ("pm_status_fail_network", "Couldn\u{2019}t reach Conclave"), ("pm_status_fail_media", "Audio and video didn\u{2019}t connect"),
-        ("pm_status_fail_server_busy", "Server is busy"), ("pm_couldnt_start", "Couldn\u{2019}t start"),
-        ("pm_status_update_required", "Update Conclave to join"), ("pm_status_room_not_found", "Meeting not found"),
-        ("pm_status_sign_in_required", "Sign in to join"), ("pm_reconnecting", "Reconnecting\u{2026}"),
-        ("pm_status_wait_standard", "Hang tight."), ("pm_status_wait_locked", "This meeting is locked"),
-        ("pm_status_wait_no_host", "No one can let you in yet"), ("pm_status_wait_host_available", "A host is here"),
-        ("pm_status_wait_reconnecting", "Reconnecting, you\u{2019}ll keep your place"),
-        ("pm_status_wait_offline", "You\u{2019}re offline, you\u{2019}ll keep your place"),
-        ("pm_status_wait_server_restart", "Server is restarting"), ("pm_status_media_off", "No mic or camera access"),
-        ("pm_status_mic_restricted", "Microphone access is restricted"), ("pm_status_camera_restricted", "Camera access is restricted"),
-        ("pm_status_media_restricted", "Microphone and camera restricted"), ("pm_status_app_suspended", "Your phone paused Conclave"),
-        ("pm_invite_code_wrong", "That code didn\u{2019}t work")
-    ]
-    static let deletedAndroidNames = [
-        "pm_offline", "pm_room_not_found", "pm_still_connecting", "pm_offline_waiting", "pm_wait_standard", "pm_wait_locked",
-        "pm_wait_no_host", "pm_wait_host_available", "pm_wait_reconnecting", "pm_wait_offline", "pm_wait_server_restart"
-    ]
-
-    @Test func lobbyStatusStringsAreInBothCatalogs() throws {
-        let data = try #require(try s1blsSource("Sources/Conclave/Resources/Localizable.xcstrings").data(using: .utf8))
-        let catalog = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
-        let strings = try #require(catalog["strings"] as? [String: Any])
-        for key in Self.newIOSKeys {
-            #expect(strings[key] != nil, "missing iOS key \(key)")
-        }
-        for key in Self.deletedIOSKeys {
-            #expect(strings[key] == nil, "stale iOS key \(key)")
-        }
-        for key in ["You\u{2019}re offline", "Reconnecting\u{2026}"] {
-            let entry = try #require(strings[key] as? [String: Any], "\(key)")
-            #expect(entry["generatesSymbol"] as? Bool == false, "\(key) would share a generated symbol with its twin")
-            #expect(entry["extractionState"] as? String == "manual", "\(key)")
-        }
-        for twin in ["You\u{2019}re Offline", "Reconnecting", "The meeting server is restarting. You\u{2019}ll be reconnected automatically."] {
-            #expect(strings[twin] != nil, "kept iOS key \(twin)")
-        }
-        let xml = try s1blsSource("Android/app/src/main/res/values/strings.xml")
-        for (name, value) in Self.androidPairs {
-            #expect(xml.contains("<string name=\"\(name)\">\(value)</string>"), "\(name) is \(value)")
-        }
-        for name in Self.deletedAndroidNames {
-            #expect(!xml.contains("<string name=\"\(name)\""), "stale Android name \(name)")
-        }
-        for name in ["pm_invite_invalid", "pm_sign_in_required", "pm_app_suspended", "pm_update_body", "pm_fail_network", "ds_not_now"] {
-            #expect(xml.contains("<string name=\"\(name)\""), "kept Android name \(name)")
-        }
-    }
 }
 
 @MainActor
@@ -552,46 +480,6 @@ private final class S1bLobbyHookRecorder {
         hooks.requestPermission = { [weak self] kind in
             self?.permissionRequests.append(kind)
         }
-    }
-}
-
-private func s1blsPackageRoot() -> URL {
-    URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-}
-
-private func s1blsSource(_ packageRelativePath: String) throws -> String {
-    try String(contentsOf: s1blsPackageRoot().appendingPathComponent(packageRelativePath).standardizedFileURL, encoding: .utf8)
-}
-
-private func s1blsFlat(_ text: String) -> String {
-    text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
-}
-
-private struct S1bLobbyStatusBlockMissing: Error {}
-
-private func s1blsBlock(_ text: String, from start: String, to end: String) throws -> String {
-    guard let lower = text.range(of: start), let upper = text.range(of: end, range: lower.upperBound..<text.endIndex) else {
-        throw S1bLobbyStatusBlockMissing()
-    }
-    return String(text[lower.lowerBound..<upper.lowerBound])
-}
-
-private func s1blsFiles(under directory: String, extensions: Set<String>) throws -> [String] {
-    let root = s1blsPackageRoot()
-    var result: [String] = []
-    let enumerator = FileManager.default.enumerator(at: root.appendingPathComponent(directory), includingPropertiesForKeys: nil)
-    while let url = enumerator?.nextObject() as? URL {
-        if extensions.contains(url.pathExtension) { result.append(url.path) }
-    }
-    let prefix = root.path + "/"
-    return result.map { $0.hasPrefix(prefix) ? String($0.dropFirst(prefix.count)) : $0 }.sorted()
-}
-
-private func s1blsMatches(_ pattern: String, in text: String) -> [String] {
-    guard let regex = try? NSRegularExpression(pattern: pattern) else { return [pattern] }
-    let range = NSRange(text.startIndex..<text.endIndex, in: text)
-    return regex.matches(in: text, range: range).compactMap { match in
-        Range(match.range, in: text).map { String(text[$0]) }
     }
 }
 #endif

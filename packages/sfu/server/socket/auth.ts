@@ -26,6 +26,22 @@ const isSfuAuthPayload = (
 ): decoded is SfuAuthPayload =>
   Boolean(decoded && typeof decoded === "object");
 
+/**
+ * Other tokens signed with the same secret: the SFU's own assistant and
+ * room-AI tokens (`tokenUse`, `aud`, `iss`), chat image upload tokens
+ * (`type`) and, when TRANSCRIPT_TOKEN_SECRET falls back to the SFU secret,
+ * transcript tokens (`aud`, `iss`). Several carry `isAdmin`/`isHost` or a
+ * session-only user id, so accepting them as a login let a room creator
+ * mint host claims for other rooms (including scheduled webinars) and let a
+ * blocked user rejoin under an identity the block list does not match. Join
+ * tokens from the web route carry none of these claims.
+ */
+export const isNonJoinToken = (decoded: JwtPayload): boolean =>
+  decoded.aud !== undefined ||
+  decoded.iss !== undefined ||
+  (decoded as { tokenUse?: unknown }).tokenUse !== undefined ||
+  (decoded as { type?: unknown }).type !== undefined;
+
 // socket.io types `socket.data` as `any`; this pair is the single asserted
 // view of the auth slot. The middleware below is the only writer.
 type SocketAuthData = { user?: SfuAuthPayload };
@@ -56,12 +72,13 @@ export const attachSocketAuth = (
     jwt.verify(
       token,
       config.sfuSecret,
+      { algorithms: ["HS256"] },
       (err: VerifyErrors | null, decoded: string | JwtPayload | undefined) => {
         if (err) {
           return next(new Error("Authentication error: Invalid token"));
         }
 
-        if (!isSfuAuthPayload(decoded)) {
+        if (!isSfuAuthPayload(decoded) || isNonJoinToken(decoded)) {
           return next(new Error("Authentication error: Invalid token payload"));
         }
 

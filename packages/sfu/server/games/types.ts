@@ -1,4 +1,5 @@
 import type { AiEnvironment } from "@conclave/ai/models";
+import type { DecisionAnswer, DecisionQuestion } from "@conclave/ai/decisions";
 /**
  * Server-authoritative game runtime types.
  *
@@ -105,6 +106,29 @@ export type GameMove = {
   playerId: string;
   type: string;
   payload: unknown;
+  verified?: unknown;
+  receivedAt?: number;
+};
+
+export type GameDecisionRequest = {
+  state: unknown;
+  questions: Record<string, DecisionQuestion>;
+  signal?: AbortSignal;
+};
+
+export type GamePendingMove = { playerId: string; receivedAt: number };
+
+export type GameDecider = (request: GameDecisionRequest) => Promise<Record<string, DecisionAnswer>>;
+
+export type GamePrepareContext = {
+  players: GamePlayer[];
+  activePlayers: GamePlayer[];
+  config: GameConfig;
+  now: number;
+  decide: GameDecider | null;
+  signal: AbortSignal;
+  cache: Map<string, unknown>;
+  isAdmin(playerId: string): boolean;
 };
 
 type LateJoinPhasesResolver<S> = {
@@ -145,6 +169,8 @@ export type GameModule<S = unknown> = {
   /** Optional async content loader, used before setup for AI-backed prompts. */
   generateContent?(ctx: GameContentContext): Promise<unknown | null>;
   setup(ctx: GameContext): S;
+  prepareMove?(state: S, move: GameMove, ctx: GamePrepareContext): Promise<unknown>;
+  holdTick?(state: S, pending: GamePendingMove[], ctx: GameContext): boolean;
   /** Apply a validated move. Throw `GameMoveError` to reject it. */
   onMove(state: S, move: GameMove, ctx: GameContext): S;
   /** Optional time-driven progression (phase deadlines, countdowns). */

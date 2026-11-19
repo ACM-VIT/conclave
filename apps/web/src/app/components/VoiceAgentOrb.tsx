@@ -8,10 +8,6 @@ interface VoiceAgentOrbProps {
   state?: VoiceAgentOrbState;
   compact?: boolean;
   className?: string;
-  /**
-   * The agent's audio stream. When provided, the orb reacts to its live
-   * loudness — swelling and brightening as the agent speaks.
-   */
   audioStream?: MediaStream | null;
 }
 
@@ -27,14 +23,6 @@ const getAudioContextCtor = (): AudioContextCtor | null => {
   );
 };
 
-/**
- * Ambient "sky" orb for the AI voice agent: a soft sphere with blurred cloud
- * layers drifting inside and a slow, soothing hue drift. When an audioStream is
- * passed it becomes reactive — an analyser maps the agent's live loudness (0–1)
- * to a gentle swell and brightening, written directly to the elements only when
- * the level changes. The CSS motion is disabled under prefers-reduced-motion by
- * the global reset in globals.css; the JS swell is skipped there too.
- */
 export default function VoiceAgentOrb({
   state = "idle",
   compact = false,
@@ -63,11 +51,7 @@ export default function VoiceAgentOrb({
     let raf = 0;
     let smoothed = 0;
     let disposed = false;
-    // Last level actually written; writes are skipped below this delta so a
-    // silent agent costs no style work at all.
     let lastWritten = 0;
-    // The global CSS reduced-motion reset can't stop a JS-driven transform, so
-    // track the setting live and drop the swell the moment it turns on.
     const motionQuery =
       typeof window.matchMedia === "function"
         ? window.matchMedia("(prefers-reduced-motion: reduce)")
@@ -78,7 +62,6 @@ export default function VoiceAgentOrb({
       if (reduceMotion) {
         root.style.removeProperty("transform");
       } else {
-        // Force the next tick to write the current level back.
         lastWritten = -1;
       }
     };
@@ -91,8 +74,6 @@ export default function VoiceAgentOrb({
       analyser.fftSize = 256;
       analyser.smoothingTimeConstant = 0.8;
       source.connect(analyser);
-      // Analyser is a sink only — nothing is routed to the destination, so this
-      // never double-plays the agent audio (ParticipantAudio owns playback).
       const samples = new Uint8Array(analyser.fftSize);
 
       const tick = () => {
@@ -104,12 +85,8 @@ export default function VoiceAgentOrb({
           sumSquares += centered * centered;
         }
         const rms = Math.sqrt(sumSquares / samples.length);
-        // Gain up quiet speech, then ease toward the target so the orb glides
-        // instead of jittering frame to frame.
         const target = Math.min(1, rms * 2.6);
         smoothed += (target - smoothed) * 0.25;
-        // Snap to rest once the level has all but decayed, so silence leaves an
-        // exact identity transform instead of a sub-threshold residue.
         if (smoothed < 0.004) smoothed = 0;
         if (
           Math.abs(smoothed - lastWritten) >= 0.004 ||
@@ -127,7 +104,6 @@ export default function VoiceAgentOrb({
       void context.resume().catch(() => undefined);
       raf = window.requestAnimationFrame(tick);
     } catch {
-      // Autoplay/AudioContext restrictions: fall back to the non-reactive orb.
     }
 
     return () => {

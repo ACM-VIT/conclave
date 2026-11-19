@@ -137,3 +137,15 @@ export const verifyTranscriptRoomToken = async (
   if (!payload || payload.roomId !== roomId) return null;
   return payload;
 };
+
+const CONCLAVE_CLIENT_ID = "conclave";
+
+export const transcriptRoomObjectName = (
+  payload: Pick<TranscriptTokenPayload, "roomId" | "clientId" | "channelId">,
+): string | null => {
+  const roomId = typeof payload.roomId === "string" ? payload.roomId : "";
+  const clientId = typeof payload.clientId === "string" ? payload.clientId : "";
+  if (!roomId || !clientId) return null;
+  if (payload.channelId !== `${clientId}:${roomId}`) return null;
+  return clientId === CONCLAVE_CLIENT_ID ? roomId : `${clientId}\u001f${roomId}`;
+};

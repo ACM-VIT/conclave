@@ -3,7 +3,14 @@
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, PointerEvent, SetStateAction } from "react";
-import { Home, Loader2, LogOut, Plus, RefreshCw } from "lucide-react";
+import {
+  Home,
+  Loader2,
+  LogOut,
+  MonitorPlay,
+  Plus,
+  RefreshCw,
+} from "lucide-react";
 import type { Socket } from "socket.io-client";
 import type { RoomInfo } from "@/lib/sfu-types";
 import ChatOverlay from "./ChatOverlay";
@@ -33,6 +40,7 @@ import WebinarViewerChrome, {
 } from "./WebinarViewer";
 import ToastQueue from "./ToastQueue";
 import TranscriptPanel from "./TranscriptPanel";
+import RoomAiPanel from "./RoomAiPanel";
 import AndroidUpsellSheet from "./AndroidUpsellSheet";
 import type { BrowserState } from "../hooks/useSharedBrowser";
 import type {
@@ -120,7 +128,6 @@ const DevMeetToolsPanel = dynamic(() => import("./DevMeetToolsPanel"), {
 interface MeetsMainContentProps {
   roomAi: RoomAiController;
   isJoined: boolean;
-  /** True under the phone-width breakpoint. Gates compact control/panel layout. */
   isMobile?: boolean;
   viewSettings: MeetViewSettings;
   onViewSettingsChange: Dispatch<SetStateAction<MeetViewSettings>>;
@@ -162,14 +169,11 @@ interface MeetsMainContentProps {
   videoEffectsDebugStats?: VideoEffectsDebugStats | null;
   activeVideoEffectsCount: number;
   deferVideoEffectsPreload?: boolean;
-  /** Private local-only camera preview (Settings + effects panels). Already
-   * routed through the effects pipeline when effects are active. */
   cameraPreviewStream?: MediaStream | null;
   isCameraPreviewStarting?: boolean;
   cameraPreviewError?: string | null;
   onStartCameraPreview?: () => void;
   onStopCameraPreview?: () => void;
-  /** Self connection quality (poll-updated) for the Settings panel. */
   connectionStats?: ConnectionQualityStats;
   onDevCameraStreamChange?: (stream: MediaStream | null) => void;
   onPrejoinMediaCommit?: (handoff: PrejoinMediaHandoff) => void;
@@ -236,10 +240,8 @@ interface MeetsMainContentProps {
   setChatOverlayMessages: Dispatch<SetStateAction<ChatMessage[]>>;
   replyTarget: ChatReplyPreview | null;
   onReplyToMessage: (message: ChatMessage) => void;
-  /** Withheld (undefined) for watch-only observers, who cannot react. */
   onToggleMessageReaction?: (messageId: string, emoji: string) => void;
   onCancelReply: () => void;
-  /** Chat message id currently being spoken by the TTS engine. */
   activeTtsMessageId?: string | null;
   onReplayTtsMessage?: (message: ChatMessage) => void;
   onStopTts?: () => void;
@@ -628,6 +630,24 @@ export default function MeetsMainContent({
   const handleCloseWhiteboard = useCallback(() => closeApp(), [closeApp]);
   const handleOpenWatch = useCallback(() => openApp("watch"), [openApp]);
   const handleCloseWatch = useCallback(() => closeApp(), [closeApp]);
+  // Opting out of Watch together is local: this participant goes back to the
+  // call view while everyone else keeps watching. It lasts until the current
+  // Watch together session ends, so the next one starts joined.
+  const [isWatchOptedOut, setIsWatchOptedOut] = useState(false);
+  const [wasWatchActive, setWasWatchActive] = useState(isWatchActive);
+  if (wasWatchActive !== isWatchActive) {
+    setWasWatchActive(isWatchActive);
+    if (!isWatchActive) setIsWatchOptedOut(false);
+  }
+  const isWatchHiddenLocally = isWatchActive && isWatchOptedOut;
+  const watchLeaveAction = useMemo(
+    () => ({
+      label: "Leave watch together",
+      hint: "You stay in the call. Others keep watching.",
+      onLeave: () => setIsWatchOptedOut(true),
+    }),
+    [],
+  );
   const handleOpenDevPlayground = useCallback(
     () => openApp("dev-playground"),
     [openApp],
@@ -657,9 +677,6 @@ export default function MeetsMainContent({
     [currentUserId, participantsArray],
   );
 
-  // The cast of the watch-together coachmark vignette: the real room (self
-  // first), padded with a couple of fictional friends when the room is small
-  // so the animation still tells its story.
   const coachAvatars = useMemo(() => {
     const cast: { id: string; name: string }[] = [
       { id: currentUserId || "you", name: "You" },
@@ -724,17 +741,15 @@ export default function MeetsMainContent({
   const [participantAudioBlocked, setParticipantAudioBlocked] = useState(false);
   const [participantAudioPlaybackAttempt, setParticipantAudioPlaybackAttempt] =
     useState(0);
-  // Right-docked panels are owned here so the stage reserve stays in sync.
   const [isHostControlsOpen, setIsHostControlsOpen] = useState(false);
   const [isVideoEffectsOpen, setIsVideoEffectsOpen] = useState(false);
   const [isViewPanelOpen, setIsViewPanelOpen] = useState(false);
   const [isDeviceSettingsOpen, setIsDeviceSettingsOpen] = useState(false);
   const [isTranscriptOpen, setIsTranscriptOpen] = useState(false);
-  // Which tab the transcript panel mounts on; the catch-up pill sets "minutes".
+  const [isAiPanelOpen, setIsAiPanelOpen] = useState(false);
   const [transcriptInitialTab, setTranscriptInitialTab] = useState<
     "transcript" | "ask" | "minutes"
   >("transcript");
-  // When this participant joined, for the late-join catch-up gate.
   const [joinedAt, setJoinedAt] = useState<number | null>(null);
   useEffect(() => {
     if (isJoined && joinedAt == null) {
@@ -797,9 +812,6 @@ export default function MeetsMainContent({
       !hasLiveDevCamera &&
       (cameraPermissionState === "prompt" ||
         cameraPermissionState === "denied"));
-  // You're the one sharing your screen, so the stage tile defaults to a
-  // chooser instead of mirroring your own share back at you (see
-  // GridLayout's `isLocalPresenter` handling).
   const isLocalPresenter = isScreenSharing && Boolean(presentationStream);
   const effectivePresentationStream =
     presentationStream ?? devPresentationStream;
@@ -841,9 +853,6 @@ export default function MeetsMainContent({
     : localStream;
   const effectiveIsCameraOff =
     shouldUseDevCameraStream && hasLiveDevCamera ? false : isCameraOff;
-  // Local-only preview feed for the Settings/effects panels. Kept out of
-  // effectiveLocalStream on purpose: the grid, PiP, and popout must keep
-  // treating the camera as off while a private preview runs.
   const hasLivePreviewVideo = Boolean(getLiveVideoStream(cameraPreviewStream));
   const panelPreviewStream = getLiveVideoStream(effectiveLocalStream)
     ? effectiveLocalStream
@@ -986,8 +995,6 @@ export default function MeetsMainContent({
     stableWebinarSpeakerId,
     webinarSpeakerUserId,
   ]);
-  // "Live" means real program media — a silent host holding the stage as an
-  // avatar tile still reads as "Waiting" to the audience.
   const webinarStageIsLive = useMemo(() => {
     if (!isWebinarAttendee || !webinarStage) return false;
     if (webinarStage.main.participant.videoStream) return true;
@@ -995,17 +1002,12 @@ export default function MeetsMainContent({
       (participant) => !participant.isMuted && participant.audioStream,
     );
   }, [isWebinarAttendee, webinarStage, nonSystemParticipants]);
-  // Before the first live media, a silent panelist roster shows the branded
-  // waiting state, not a giant avatar. After going live once, the stage stays
-  // up through quiet gaps (everyone briefly muted is not "waiting").
   const [hasWebinarStageBeenLive, setHasWebinarStageBeenLive] = useState(false);
   useEffect(() => {
     if (webinarStageIsLive) setHasWebinarStageBeenLive(true);
   }, [webinarStageIsLive]);
   const showWebinarStage =
     Boolean(webinarStage) && (webinarStageIsLive || hasWebinarStageBeenLive);
-  // On the attendee stage the chrome owns the corners (title card up top,
-  // control row at the bottom), so the presenter PiP docks clear of both.
   const webinarPipCornerClass = useMemo(() => {
     switch (pipCorner) {
       case "top-left":
@@ -1166,8 +1168,6 @@ export default function MeetsMainContent({
   );
   const handleToggleParticipants = useCallback(() => {
     const opening = !isParticipantsOpen;
-    // Fire the chat side effect outside the state updater so StrictMode's
-    // double-invoke doesn't toggle chat twice and leave panels open.
     if (opening && isChatOpen) {
       toggleChat();
     }
@@ -1177,6 +1177,7 @@ export default function MeetsMainContent({
       setIsViewPanelOpen(false);
       setIsDeviceSettingsOpen(false);
       setIsTranscriptOpen(false);
+      setIsAiPanelOpen(false);
     }
     setIsParticipantsOpen(opening);
   }, [isParticipantsOpen, isChatOpen, setIsParticipantsOpen, toggleChat]);
@@ -1195,6 +1196,7 @@ export default function MeetsMainContent({
     setIsViewPanelOpen(false);
     setIsDeviceSettingsOpen(false);
     setIsTranscriptOpen(false);
+    setIsAiPanelOpen(false);
     setIsParticipantsOpen(true);
   }, [toggleChat, setIsParticipantsOpen]);
 
@@ -1203,12 +1205,6 @@ export default function MeetsMainContent({
     [setIsParticipantsOpen],
   );
 
-  // The game dock (launcher / active game) is independent of the chat &
-  // participants panels: on wide screens it docks side-by-side with them, so
-  // you can chat while a game runs. Toggling it does NOT close the others.
-  // The apps launcher shares that dock slot, so games and apps are mutually
-  // exclusive (side effects outside the updater for StrictMode, mirroring
-  // handleToggleHostControls).
   const handleToggleGames = useCallback(() => {
     const opening = !isGamesOpen;
     if (opening) setIsAppsOpen(false);
@@ -1221,8 +1217,6 @@ export default function MeetsMainContent({
     setIsAppsOpen(opening);
   }, [isAppsOpen]);
 
-  // Once a game is actually running, the active GamePanel takes the dock slot,
-  // so collapse the (now-redundant) launchers.
   useEffect(() => {
     if (isGameActive) {
       setIsGamesOpen(false);
@@ -1230,8 +1224,6 @@ export default function MeetsMainContent({
     }
   }, [isGameActive]);
 
-  // Secondary right-dock panels (chat, participants, etc). The game dock sits to
-  // the left of these when both are open on a wide enough screen.
   const isSecondaryPanelOpen =
     isChatOpen ||
     isParticipantsOpen ||
@@ -1239,7 +1231,8 @@ export default function MeetsMainContent({
     isVideoEffectsOpen ||
     isViewPanelOpen ||
     isDeviceSettingsOpen ||
-    isTranscriptOpen;
+    isTranscriptOpen ||
+    isAiPanelOpen;
   const isGameDockPresent = isGameActive || isGamesOpen || isAppsOpen;
   const gameDockOffset =
     canReserveDockedPanel && isSecondaryPanelOpen ? DOCKED_PANEL_WIDTH : 0;
@@ -1266,9 +1259,6 @@ export default function MeetsMainContent({
 
   const handleToggleHostControls = useCallback(() => {
     const opening = !isHostControlsOpen;
-    // One right-dock panel at a time. Fire the side effects OUTSIDE the setState
-    // updater so StrictMode's double-invoke doesn't toggle chat twice and leave
-    // both panels docked (mirrors handleToggleParticipants).
     if (opening && isChatOpenRef.current) {
       toggleChat();
     }
@@ -1278,6 +1268,7 @@ export default function MeetsMainContent({
       setIsViewPanelOpen(false);
       setIsDeviceSettingsOpen(false);
       setIsTranscriptOpen(false);
+      setIsAiPanelOpen(false);
     }
     setIsHostControlsOpen(opening);
   }, [isHostControlsOpen, toggleChat, setIsParticipantsOpen]);
@@ -1313,6 +1304,7 @@ export default function MeetsMainContent({
       setIsViewPanelOpen(false);
       setIsDeviceSettingsOpen(false);
       setIsTranscriptOpen(false);
+      setIsAiPanelOpen(false);
     }
     setIsVideoEffectsOpen(opening);
   }, [
@@ -1338,6 +1330,7 @@ export default function MeetsMainContent({
       setIsVideoEffectsOpen(false);
       setIsDeviceSettingsOpen(false);
       setIsTranscriptOpen(false);
+      setIsAiPanelOpen(false);
     }
     setIsViewPanelOpen(opening);
   }, [isViewPanelOpen, setIsParticipantsOpen, toggleChat]);
@@ -1357,6 +1350,7 @@ export default function MeetsMainContent({
       setIsVideoEffectsOpen(false);
       setIsViewPanelOpen(false);
       setIsTranscriptOpen(false);
+      setIsAiPanelOpen(false);
     }
     setIsDeviceSettingsOpen(opening);
   }, [isDeviceSettingsOpen, setIsParticipantsOpen, toggleChat]);
@@ -1365,8 +1359,6 @@ export default function MeetsMainContent({
     setIsDeviceSettingsOpen(false);
   }, []);
 
-  // The private camera preview only makes sense while a panel that shows it is
-  // open; release the capture (camera light off) the moment both are closed.
   useEffect(() => {
     if (!isVideoEffectsOpen && !isDeviceSettingsOpen) {
       onStopCameraPreview?.();
@@ -1384,20 +1376,38 @@ export default function MeetsMainContent({
       setIsVideoEffectsOpen(false);
       setIsViewPanelOpen(false);
       setIsDeviceSettingsOpen(false);
+      setIsAiPanelOpen(false);
     } else {
       setTranscriptInitialTab("transcript");
     }
     setIsTranscriptOpen(opening);
   }, [isTranscriptOpen, setIsParticipantsOpen, toggleChat]);
 
+  const handleToggleAiPanel = useCallback(() => {
+    const opening = !isAiPanelOpen;
+    if (opening && isChatOpenRef.current) {
+      toggleChat();
+    }
+    if (opening) {
+      setIsParticipantsOpen(false);
+      setIsHostControlsOpen(false);
+      setIsVideoEffectsOpen(false);
+      setIsViewPanelOpen(false);
+      setIsDeviceSettingsOpen(false);
+      setIsTranscriptOpen(false);
+    }
+    setIsAiPanelOpen(opening);
+  }, [isAiPanelOpen, setIsParticipantsOpen, toggleChat]);
+
+  const handleOpenAiPanel = useCallback(() => {
+    if (!isAiPanelOpen) handleToggleAiPanel();
+  }, [isAiPanelOpen, handleToggleAiPanel]);
+
   const handleCloseTranscript = useCallback(() => {
     setIsTranscriptOpen(false);
     setTranscriptInitialTab("transcript");
   }, []);
 
-  // Catch-up moment for late joiners: while a transcript session is live and
-  // this participant joined well after it started, a quiet pill offers the
-  // live minutes. Opens the panel straight on the minutes tab.
   const handleOpenCatchUp = useCallback(() => {
     setTranscriptInitialTab("minutes");
     if (!isTranscriptOpen) {
@@ -1405,9 +1415,6 @@ export default function MeetsMainContent({
     }
   }, [isTranscriptOpen, handleToggleTranscript]);
 
-  // Wrap-up moment: asks Conclave in the room chat for a recap, visible to
-  // everyone through the existing assistant relay. Only offered while the
-  // opt-in transcript session is running (the button lives in the minutes tab).
   const canPostRecapToChat = !isChatLocked || isAdmin;
   const handlePostRecap = useCallback((): boolean => {
     if (!canPostRecapToChat) return false;
@@ -1523,8 +1530,35 @@ export default function MeetsMainContent({
       setIsViewPanelOpen(false);
       setIsDeviceSettingsOpen(false);
       setIsTranscriptOpen(false);
+      setIsAiPanelOpen(false);
     }
     toggleChat();
+  }, [isChatOpen, isParticipantsOpen, setIsParticipantsOpen, toggleChat]);
+
+  const previousDockOpenRef = useRef({
+    chat: isChatOpen,
+    participants: isParticipantsOpen,
+  });
+  useEffect(() => {
+    const previous = previousDockOpenRef.current;
+    previousDockOpenRef.current = {
+      chat: isChatOpen,
+      participants: isParticipantsOpen,
+    };
+    const chatOpened = isChatOpen && !previous.chat;
+    const participantsOpened = isParticipantsOpen && !previous.participants;
+    if (!chatOpened && !participantsOpened) return;
+    setIsHostControlsOpen(false);
+    setIsVideoEffectsOpen(false);
+    setIsViewPanelOpen(false);
+    setIsDeviceSettingsOpen(false);
+    setIsTranscriptOpen(false);
+    setIsAiPanelOpen(false);
+    if (chatOpened && isParticipantsOpen && !participantsOpened) {
+      setIsParticipantsOpen(false);
+    } else if (participantsOpened && isChatOpen && !chatOpened) {
+      toggleChat();
+    }
   }, [isChatOpen, isParticipantsOpen, setIsParticipantsOpen, toggleChat]);
 
   const handlePendingUserStale = useCallback(
@@ -1539,10 +1573,6 @@ export default function MeetsMainContent({
     [onPendingUserStale, setPendingUsers],
   );
 
-  // The wrap-up intercept: when the host ends the call for everyone while the
-  // opt-in transcript is live and has content, offer to post a recap to chat
-  // first. "idle" ends immediately as before; "confirm" shows the choice;
-  // "posting" waits for the recap to land in chat, then ends.
   const [endFlowState, setEndFlowState] = useState<
     "idle" | "confirm" | "posting"
   >("idle");
@@ -1583,8 +1613,6 @@ export default function MeetsMainContent({
     setEndFlowState("posting");
   }, [endRoomNow, handlePostRecap]);
 
-  // End once the recap answer finishes streaming into chat (or errors), so the
-  // room actually sees it before the call closes.
   useEffect(() => {
     if (endFlowState !== "posting") return;
     const requestedAt = recapRequestedAtRef.current;
@@ -1599,7 +1627,6 @@ export default function MeetsMainContent({
     }
   }, [chatMessages, endFlowState, endRoomNow]);
 
-  // Safety cap so a stalled stream can never trap the host in the meeting.
   useEffect(() => {
     if (endFlowState !== "posting") return;
     const timer = window.setTimeout(endRoomNow, 30_000);
@@ -1632,10 +1659,6 @@ export default function MeetsMainContent({
     isJoined && !isWebinarAttendee
       ? { paddingRight: `calc(1rem + ${dockedPanelReserve}px)` }
       : undefined;
-  // When docked panels eat into the stage, the full controls bar (clock +
-  // center + side cluster) gets cramped. Degrade in two steps: first demote
-  // the least-used center controls (hand, screen share) into More so the bar
-  // keeps air, then fold to the compact layout once the stage is truly tight.
   const stageWidth = viewportWidth - dockedPanelReserve;
   const isControlsBarTight = !isMobile && isJoined && stageWidth < 900;
   const useCompactControls = isMobile || isControlsBarTight;
@@ -1703,9 +1726,6 @@ export default function MeetsMainContent({
       : canRetryRecovery
         ? (meetError?.message ?? "We could not restore the connection yet.")
         : "Keeping your meeting open while the connection is restored.";
-  // The whiteboard/watch/playground/apps-lock handlers are async, but the bar
-  // and palette fire them without awaiting; adapt them once as void-returning
-  // callbacks so their identity stays stable for ControlsBar's memo.
   const openWhiteboard = useCallback(() => {
     void handleOpenWhiteboard();
   }, [handleOpenWhiteboard]);
@@ -1731,9 +1751,6 @@ export default function MeetsMainContent({
     !isAdmin && !isParticipantUnmuteAllowed;
   const isParticipantCameraActivationBlocked =
     !isAdmin && !isParticipantVideoAllowed;
-  // Assembled once so the bar and the Mod+K quick-actions palette stay in
-  // lockstep: every control the bar offers is exactly what the palette can
-  // search and run.
   const controlsBarProps: ControlsBarProps = {
     compact: useCompactControls,
     slim: useSlimControls,
@@ -1758,6 +1775,8 @@ export default function MeetsMainContent({
     onToggleScreenShare: toggleScreenShare,
     onToggleChat: handleToggleChat,
     onToggleTranscript: handleToggleTranscript,
+    isAiSettingsOpen: isAiPanelOpen,
+    onToggleAiSettings: roomAi ? handleToggleAiPanel : undefined,
     onToggleHandRaised: toggleHandRaised,
     onSendReaction: sendReaction,
     onLeave: leaveRoom,
@@ -2073,6 +2092,21 @@ export default function MeetsMainContent({
           onCameraStreamChange={handleDevCameraStreamChange}
         />
       )}
+      {isJoined && !isWebinarAttendee && isWatchHiddenLocally ? (
+        <div className="mb-3 flex shrink-0 justify-center">
+          <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-[#18181b] py-1 pl-3 pr-1 text-[12.5px] text-[#a1a1aa]">
+            <MonitorPlay size={14} strokeWidth={1.75} aria-hidden="true" />
+            <span>Watch together is playing</span>
+            <button
+              type="button"
+              onClick={() => setIsWatchOptedOut(false)}
+              className="inline-flex h-7 items-center rounded-full bg-[#F95F4A] px-3 font-medium text-white transition-[filter] duration-150 hover:brightness-105 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/40"
+            >
+              Rejoin
+            </button>
+          </div>
+        </div>
+      ) : null}
       {!isJoined ? (
         hideJoinUI ? (
           (() => {
@@ -2168,7 +2202,6 @@ export default function MeetsMainContent({
           ref={webinarStageRef}
           className={`relative flex min-h-0 flex-1 flex-col overflow-hidden bg-[#0a0a0b] ${isWebinarQaOpen ? "sm:mr-[380px]" : ""}`}
         >
-          {/* Every panelist stays audible even when they are not on stage. */}
           <div
             className="pointer-events-none h-0 w-0 overflow-hidden"
             aria-hidden={true}
@@ -2298,10 +2331,12 @@ export default function MeetsMainContent({
           )}
         </div>
       ) : ActiveMeetingApp &&
+        !isWatchHiddenLocally &&
         (!isDevPlaygroundActive || isDevPlaygroundEnabled) ? (
         <MeetingAppLayout
           app={ActiveMeetingApp}
           frameContent={!isDevPlaygroundActive}
+          leaveAction={isWatchActive ? watchLeaveAction : undefined}
           localStream={localStream}
           isCameraOff={isCameraOff}
           isMuted={isMuted}
@@ -2479,6 +2514,7 @@ export default function MeetsMainContent({
         <ChatPanel
           key={`${currentUserId}:${roomId}`}
           roomAi={roomAi}
+          onOpenAiSettings={roomAi ? handleOpenAiPanel : undefined}
           messages={chatMessages}
           chatInput={chatInput}
           onInputChange={setChatInput}
@@ -2514,11 +2550,16 @@ export default function MeetsMainContent({
         <TranscriptPanel
           key={`${currentUserId}:${roomId}`}
           roomAi={roomAi}
+          onOpenAiSettings={roomAi ? handleOpenAiPanel : undefined}
           transcript={transcript}
           onClose={handleCloseTranscript}
           initialTab={transcriptInitialTab}
           onPostRecap={canPostRecapToChat ? handlePostRecap : undefined}
         />
+      )}
+
+      {isJoined && !isWebinarAttendee && isAiPanelOpen && roomAi && (
+        <RoomAiPanel controller={roomAi} onClose={() => setIsAiPanelOpen(false)} />
       )}
 
       {isJoined && !isWebinarAttendee && isParticipantsOpen && (
@@ -2554,6 +2595,7 @@ export default function MeetsMainContent({
         isAdmin &&
         isHostControlsOpen && (
           <MeetSettingsPanel
+            onOpenAiSettings={roomAi ? handleOpenAiPanel : undefined}
             isRoomLocked={isRoomLocked}
             onToggleLock={onToggleLock}
             isNoGuests={isNoGuests}

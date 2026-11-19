@@ -1,9 +1,5 @@
 import type { WatchSearchResult } from "./youtubeMeta";
 
-// Evergreen, embeddable crowd pleasers for when trending has nothing to offer
-// (no API key on the server, or a hiccup). Thumbnails come from the keyless
-// ytimg CDN, so this whole shelf works with zero YouTube configuration.
-// Rows are [videoId, title, channel].
 const PICK_ROWS: [string, string, string][] = [
   ["jNQXAC9IVRw", "Me at the zoo", "jawed"],
   ["dQw4w9WgXcQ", "Rick Astley - Never Gonna Give You Up", "Rick Astley"],

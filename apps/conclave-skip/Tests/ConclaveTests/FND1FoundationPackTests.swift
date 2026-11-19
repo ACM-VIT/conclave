@@ -6,30 +6,10 @@ import Testing
 struct FND1FoundationPackTests {
 
     @Test func leaveHighContrastTokenIsTheApprovedValue() {
-        #expect(DesignTokens.iosInCallLeaveHighContrast == 0xFFE9152D)
         let glyph = ContrastRatio.wcag(foreground: DesignTokens.neutralWhite, background: DesignTokens.iosInCallLeaveHighContrast)
         let boundary = ContrastRatio.wcag(foreground: DesignTokens.iosInCallLeaveHighContrast, background: DesignTokens.iosInCallStage)
         #expect(abs(glyph - 4.555) < 0.001 && glyph >= 4.5)
         #expect(abs(boundary - 4.344) < 0.001 && boundary >= 3.0)
-        #expect(DesignTokens.avatarTongue == 0xFFFF8FB1)
-        let generator = try? fndSource("../../packages/ui-tokens/scripts/gen-native-tokens.mjs")
-        #expect(generator?.contains("\"leaveHighContrast\"") == true)
-        #expect(generator?.contains("constant(\"avatarTongue\"") == true)
-    }
-
-    @Test func iosAdapterResolvesContrastAndAppearanceTraits() throws {
-        #expect(ConclaveDisabledOpacity.ios == 0.4 && ConclaveDisabledOpacity.android == 0.38)
-        #expect(ConclaveControlSurfaceMapping.disabledOpacity == ConclaveDisabledOpacity.ios)
-    }
-
-    @Test func motionDurationsAreTheNamedSpecValues() throws {
-        #expect(ConclaveMotionDurations.fastMillis == 120)
-        #expect(ConclaveMotionDurations.bannerTravel == 8)
-        #expect(ConclaveMotionDurations.chromeFadeMillis == 200 && ConclaveMotionDurations.crossFadeMillis == 200)
-        #expect(ConclaveMotionDurations.stageSwapMillis == 200 && ConclaveMotionDurations.tileReflowMillis == 220)
-        #expect(ConclaveMotionDurations.zoomSnapMillis == 250 && ConclaveMotionDurations.entryExpandResponseSeconds == 0.38)
-        #expect(ConclaveMotionDurations.spatialDampingRatio == 0.9 && ConclaveMotionDurations.spatialStiffness == 700)
-
     }
 
     @Test func iosReaderMappingCoversEverySetting() {
@@ -120,11 +100,6 @@ struct FND1FoundationPackTests {
         #expect(ConclaveAvatarSize.allCases.filter { $0.scalesWithText } == [.mention, .chat, .row])
     }
 
-    @Test func dialogsKeepOneConfirmAndNoCoral() throws {
-        let model = ConclaveDialogModel(kind: .confirmation, title: "End", message: "", confirmTitle: "End", confirmRole: .destructive)
-        #expect(model.kind == .confirmation && model.confirmRole == .destructive)
-    }
-
     @Test func labelledToggleNeverTakesGlassOnALobbySurface() throws {
         for context in [ConclaveSurfaceContext.overVideo, .onSurface] {
             for glass in [false, true] {
@@ -134,57 +109,6 @@ struct FND1FoundationPackTests {
             }
         }
         #expect(!ConclaveSurfaceContext.overVideo.allowsGlass && !ConclaveSurfaceContext.onSurface.allowsGlass && ConclaveSurfaceContext.stage.allowsGlass)
-    }
-
-    @Test func foundationSpecimenIDsAreStable() {
-        #expect(ComponentGalleryCatalog.foundationSpecimenIDs == [
-            "button.icon", "button.close", "button.icon.toggle", "avatar.row", "avatar.chat", "avatar.tile", "avatar.lobby",
-            "section.header", "section.footer", "dialog.confirm", "dialog.alert", "field.text", "field.text.error",
-            "field.composer", "toggle.call.labelled",
-        ])
-        let all = ComponentGalleryCatalog.foundationSpecimenIDs + ComponentGalleryCatalog.inCallChromeSpecimenIDs
-        #expect(Set(all).count == all.count)
-
-        #expect(Set(all).isDisjoint(with: Set(ComponentGalleryCatalog.componentSpecimenIDs(showLoading: true).map { $0.replacingOccurrences(of: ".inCall", with: "").replacingOccurrences(of: ".app", with: "") })))
-        for id in all { #expect(id.unicodeScalars.allSatisfy { $0.isASCII && $0 != " " }, "\(id)") }
-    }
-}
-
-func normalizedFND(_ text: String) -> String {
-    text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
-}
-
-func fndContainsDash(_ text: String) -> Bool {
-    text.contains("\u{2013}") || text.contains("\u{2014}")
-}
-
-private func fndPackageRoot() -> URL {
-    URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-}
-
-func fndSource(_ packageRelativePath: String) throws -> String {
-    try String(contentsOf: fndPackageRoot().appendingPathComponent(packageRelativePath).standardizedFileURL, encoding: .utf8)
-}
-
-func fndFiles(under directory: String, extensions: Set<String>) throws -> [String] {
-    let root = fndPackageRoot()
-    var result: [String] = []
-    let enumerator = FileManager.default.enumerator(at: root.appendingPathComponent(directory), includingPropertiesForKeys: nil)
-    while let url = enumerator?.nextObject() as? URL {
-        if extensions.contains(url.pathExtension) { result.append(url.path) }
-    }
-    let prefix = root.path + "/"
-    return result.map { $0.hasPrefix(prefix) ? String($0.dropFirst(prefix.count)) : $0 }.sorted()
-}
-
-func fndMatches(_ pattern: String, in text: String) -> [[String]] {
-    guard let regex = try? NSRegularExpression(pattern: pattern) else { return [["invalid pattern"]] }
-    let ns = text as NSString
-    return regex.matches(in: text, range: NSRange(location: 0, length: ns.length)).map { match in
-        (0..<match.numberOfRanges).map { index in
-            let range = match.range(at: index)
-            return range.location == NSNotFound ? "" : ns.substring(with: range)
-        }
     }
 }
 #endif

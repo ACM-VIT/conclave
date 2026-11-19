@@ -420,10 +420,6 @@ const hasOutboundVideoProgress = (
   previous: CameraOutboundStallState,
   sample: OutboundVideoProgressSample,
 ): boolean => {
-  // When frame counters exist, they are the strongest signal. A healthy camera
-  // sender should either advance frames or report a positive FPS; flat frames
-  // with flat bytes is a dead sender, and flat frames with only bytes moving is
-  // usually padding/retransmission without usable video.
   if (previous.frames !== null && sample.frames !== null) {
     if (sample.frames > previous.frames) return true;
     if (sample.framesPerSecond !== null && sample.framesPerSecond > 0) {
@@ -462,9 +458,6 @@ const hasOutboundScreenShareStallEvidence = (
     byteDelta === null ||
     byteDelta < MIN_SCREEN_SHARE_OUTBOUND_BYTE_DELTA_FOR_STALL
   ) {
-    // Static shared documents/slides can legitimately produce no new encoded
-    // frames and almost no RTP. Do not refresh the sender just because the
-    // screen is quiet.
     return false;
   }
 
@@ -806,6 +799,7 @@ export function useMeetMedia({
   );
   const toggleMuteInFlightRef = useRef(false);
   const toggleCameraInFlightRef = useRef(false);
+  const screenShareStartInFlightRef = useRef(false);
   const markAudioTrackForSpeech = useCallback(
     (track?: MediaStreamTrack | null) => {
       if (track && "contentHint" in track) {
@@ -903,8 +897,6 @@ export function useMeetMedia({
       const audioContext = getAudioContext();
       if (!audioContext) return;
 
-      // Lazily build (and cache) a short reverb tail so the cues feel like
-      // they exist in a space rather than sounding like dry, cheap beeps.
       const ctxWithReverb = audioContext as AudioContext & {
         __notificationReverb?: ConvolverNode;
       };
@@ -921,7 +913,6 @@ export function useMeetMedia({
         );
         for (let channel = 0; channel < 2; channel += 1) {
           const data = impulse.getChannelData(channel);
-          // Pseudo-random but deterministic noise burst with exponential decay.
           let seed = channel === 0 ? 0x9e3779b9 : 0x85ebca6b;
           for (let i = 0; i < length; i += 1) {
             seed = (seed * 1664525 + 1013904223) >>> 0;
@@ -935,9 +926,6 @@ export function useMeetMedia({
         return convolver;
       };
 
-      // Plays one bell/marimba-like note built from a few decaying partials
-      // with a soft, click-free envelope, gentle stereo warmth and a hint of
-      // reverb. This is what makes the cues feel polished instead of harsh.
       const playVoice = (
         frequency: number,
         start: number,
@@ -945,8 +933,6 @@ export function useMeetMedia({
         peak: number,
         masterIn: AudioNode
       ) => {
-        // Inharmonic partials give a natural, bell-like shimmer; higher
-        // partials are quieter and decay faster.
         const partials: Array<{ ratio: number; gain: number; decay: number }> = [
           { ratio: 1, gain: 1, decay: 1 },
           { ratio: 2.0, gain: 0.22, decay: 0.7 },
@@ -959,7 +945,6 @@ export function useMeetMedia({
           const env = audioContext.createGain();
           oscillator.type = "sine";
           oscillator.frequency.value = frequency * ratio;
-          // Tiny detune adds chorus-like warmth without sounding out of tune.
           oscillator.detune.value = (ratio - 1) * 1.5;
 
           const partialPeak = peak * partialGain;
@@ -978,8 +963,6 @@ export function useMeetMedia({
       const playPattern = () => {
         const now = audioContext.currentTime + 0.02;
 
-        // Shared output chain: soft low-pass to tame harshness, a master
-        // level, plus a parallel reverb send for a short, airy tail.
         const lowpass = audioContext.createBiquadFilter();
         lowpass.type = "lowpass";
         lowpass.frequency.value = 3200;
@@ -1000,30 +983,25 @@ export function useMeetMedia({
         wet.connect(getReverb());
         getReverb().connect(audioContext.destination);
 
-        // Musical, pleasant note sequences per cue.
         const notes: Array<{ freq: number; dur: number }> =
           type === "join"
-            ? // Warm ascending major third + octave shimmer (C4 → E4 → C5)
-              [
+            ? [
                 { freq: 261.63, dur: 0.55 },
                 { freq: 329.63, dur: 0.55 },
                 { freq: 523.25, dur: 0.8 },
               ]
             : type === "leave"
-            ? // Gentle descending two-note (E4 → C4)
-              [
+            ? [
                 { freq: 329.63, dur: 0.6 },
                 { freq: 261.63, dur: 0.9 },
               ]
             : type === "waiting"
-            ? // Soft three-note rising prompt (A3 → C4 → E4)
-              [
+            ? [
                 { freq: 220.0, dur: 0.46 },
                 { freq: 261.63, dur: 0.46 },
                 { freq: 329.63, dur: 0.7 },
               ]
-            : // handRaise: single soft marimba pop (A4)
-              [{ freq: 440.0, dur: 0.55 }];
+            : [{ freq: 440.0, dur: 0.55 }];
 
         const stride =
           type === "join" ? 0.11 : type === "waiting" ? 0.13 : 0.14;
@@ -1032,7 +1010,6 @@ export function useMeetMedia({
 
         let cursor = now;
         notes.forEach((note, index) => {
-          // Slight fall-off so trailing notes don't pile up in volume.
           const notePeak = peak * (1 - index * 0.08);
           playVoice(note.freq, cursor, note.dur, notePeak, lowpass);
           cursor += stride;
@@ -1285,10 +1262,6 @@ export function useMeetMedia({
             const next = normalizeWebcamCodecPolicy(
               response.webcamCodecPolicy,
             );
-            // The SFU emits webcamCodecPolicyChanged before this ACK. Never
-            // prewrite the epoch here: doing so could make the shared policy
-            // transition handler ignore the notification and skip its single
-            // close/recovery cycle.
             resolve(Boolean(next));
           },
         );
@@ -1304,9 +1277,6 @@ export function useMeetMedia({
 
   const waitForPreferredVideoPublishTrack = useCallback(
     async (stream: MediaStream, rawTrack: MediaStreamTrack) => {
-      // Mobile browsers can stop the old camera capture as soon as a new one is
-      // opened. Publish the raw replacement immediately; the effects bridge will
-      // replace it with processed output once the pipeline is ready.
       const allowProcessedWarmupWait = !isLikelyMobileOrTabletNavigator();
       if (!shouldUsePreferredVideoPublishTrack || !allowProcessedWarmupWait) {
         return rawTrack;
@@ -2431,8 +2401,6 @@ export function useMeetMedia({
     async (deviceId: string) => {
       setSelectedAudioOutputDeviceId(deviceId);
 
-      // Register every element's request before awaiting any device operation.
-      // Players and this immediate menu handler share one queue per element.
       await Promise.all(
         Array.from(document.querySelectorAll<HTMLMediaElement>("audio, video"))
           .map(async (element) => {
@@ -2613,11 +2581,6 @@ export function useMeetMedia({
           isVp9SvcWebcamProducer(previousProducer) &&
           !forceCaptureRefresh
         ) {
-          // Continuous VP9 SVC already carries a receiver-selectable base and
-          // enhancement layer. A network-only quality transition must mutate
-          // sender caps, not camera constraints: changing the capture raster
-          // forced every receiver through a ~500ms decoder discontinuity.
-          // Bitrate/framerate changes do not need another key-frame request.
           await applyWebcamProducerNetworkProfile(
             previousProducer,
             quality,
@@ -2831,8 +2794,6 @@ export function useMeetMedia({
           );
         }
         if (previousProducer) {
-          // The SFU can displace the previous producer before produce()
-          // resolves. Fence that close event before crossing the await.
           intentionalLocalProducerCloseIdsRef.current.add(previousProducer.id);
           fencedPreviousProducer = previousProducer;
         }
@@ -3119,8 +3080,6 @@ export function useMeetMedia({
           webcamCodecPolicyRef.current,
         );
 
-        // The SFU commits a replacement before mediasoup resolves produce().
-        // Fence the corresponding producerClosed event before awaiting it.
         intentionalLocalProducerCloseIdsRef.current.add(previousProducer.id);
         nextProducer = await produceCameraTrackWithRawFallback({
           transport,
@@ -3177,8 +3136,6 @@ export function useMeetMedia({
           };
         }
 
-        // A device/effects switch can land while SDP negotiation is queued.
-        // Reconcile the committed producer to the latest live publish track.
         const currentStream = localStreamRef.current;
         const latestRawTrack = getFirstLiveTrack(
           currentStream?.getVideoTracks() ?? [],
@@ -3969,37 +3926,39 @@ export function useMeetMedia({
     try {
       const producer = videoProducerRef.current;
 
+      const closeCamera = (target: NonNullable<typeof producer>) => {
+        isCameraOffRef.current = true;
+        setIsCameraOff(true);
+        socketRef.current?.emit(
+          "closeProducer",
+          { producerId: target.id },
+          (response: { success: boolean } | { error: string }) => {
+            if ("error" in response) {
+              console.error("[Meets] Failed to close video producer:", response);
+            }
+          }
+        );
+        try {
+          target.close();
+        } catch {}
+        videoProducerRef.current = null;
+        const previousStream = localStreamRef.current;
+        if (previousStream) {
+          previousStream.getVideoTracks().forEach((track) => {
+            stopLocalTrack(track);
+          });
+          commitLocalStream(
+            new MediaStream(previousStream.getTracks().filter((track) => track.kind !== "video")),
+          );
+        }
+      };
+
       if (producer) {
         const newCameraOff = !isCameraOff;
         if (newCameraOff) {
-          setIsCameraOff(true);
-          socketRef.current?.emit(
-            "closeProducer",
-            { producerId: producer.id },
-            (response: { success: boolean } | { error: string }) => {
-              if ("error" in response) {
-                console.error("[Meets] Failed to close video producer:", response);
-              }
-            }
-          );
-          try {
-            producer.close();
-          } catch {}
-          videoProducerRef.current = null;
-
-          const previousStream = localStreamRef.current;
-          if (previousStream) {
-            previousStream.getVideoTracks().forEach((track) => {
-              stopLocalTrack(track);
-            });
-            const remainingTracks = previousStream
-              .getTracks()
-              .filter((track) => track.kind !== "video");
-            commitLocalStream(new MediaStream(remainingTracks));
-          }
+          closeCamera(producer);
           return;
         }
-
         if (producer.track?.readyState === "live") {
           const toggleResult = await resumeProducerWithServerConfirmation(
             producer,
@@ -4012,6 +3971,10 @@ export function useMeetMedia({
             );
             isCameraOffRef.current = true;
             setIsCameraOff(true);
+            return;
+          }
+          if (cameraPublishingDisabledRef.current) {
+            closeCamera(producer);
             return;
           }
           isCameraOffRef.current = false;
@@ -4117,8 +4080,6 @@ export function useMeetMedia({
             deviceRef.current,
             webcamCodecPolicyRef.current,
           );
-          // Capture/effects warmup can span a codec-policy notification. Check
-          // the pending reset again at the actual publication boundary.
           const publishTransport = await prepareCameraProducerTransport();
           const videoProducer = await produceCameraTrackWithRawFallback({
             transport: publishTransport,
@@ -5341,8 +5302,6 @@ export function useMeetMedia({
             deviceRef.current,
             webcamCodecPolicyRef.current,
           );
-        // The policy can change while recovery acquires or warms the camera.
-        // Revalidate the transport immediately before negotiating the sender.
         const transport = await prepareCameraProducerTransport();
         const recoveredProducer = await produceCameraTrackWithRawFallback({
           transport,
@@ -5885,6 +5844,9 @@ export function useMeetMedia({
       return;
     }
 
+    if (screenShareStartInFlightRef.current) return;
+    screenShareStartInFlightRef.current = true;
+
     let acquiredScreenShareStream: MediaStream | null = null;
     let screenShareStarted = false;
 
@@ -5904,10 +5866,6 @@ export function useMeetMedia({
       const screenPublishSettings = getScreenSharePublishSettings();
 
       let captureController = createCaptureController();
-      // Acquire the user-selected surface without dimension constraints. The
-      // screen-capture spec applies those constraints after selection anyway,
-      // and doing both caused Chromium to reconfigure full-monitor capture
-      // multiple times before the first encoded frame.
       const displayVideoConstraints: DisplayMediaVideoConstraints = {
         cursor: screenPublishSettings.cursor,
       };
@@ -5968,9 +5926,6 @@ export function useMeetMedia({
       attachLocalScreenShareTrackHandlers(track);
       await applyScreenShareTrackNetworkProfile(
         track,
-        // Capture once at the configured ceiling. Network adaptation scales
-        // the RTP sender from this stable source so recovery can increase
-        // quality without restarting the monitor capture pipeline.
         "good",
         screenPublishSettings,
       );
@@ -6151,6 +6106,8 @@ export function useMeetMedia({
         console.error("[Meets] Error starting screen share:", err);
         setMeetError(createMeetError(err, "MEDIA_ERROR"));
       }
+    } finally {
+      screenShareStartInFlightRef.current = false;
     }
   }, [
     isObserverMode,

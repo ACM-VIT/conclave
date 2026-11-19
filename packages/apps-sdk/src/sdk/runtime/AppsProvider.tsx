@@ -24,11 +24,6 @@ export type AppsProviderProps = {
   socket: Socket | null;
   apps: ConclaveApp[];
   user?: AppUser;
-  /**
-   * Meeting roster (self included). Callers may rebuild this array every
-   * render; the provider only forwards a new identity when the contents
-   * actually change.
-   */
   participants?: AppUser[];
   isAdmin?: boolean;
   isReadOnly?: boolean;
@@ -64,7 +59,6 @@ const decodeBase64 = (value: string): Uint8Array | null => {
     try {
       return Uint8Array.from(maybeBuffer.from(value, "base64"));
     } catch {
-      // continue to atob fallback
     }
   }
 
@@ -157,6 +151,8 @@ export function AppsProvider({
     isReadOnlyRef.current = isReadOnly;
   }, [isReadOnly]);
 
+  const serverActiveAppIdRef = useRef<string | null>(null);
+
   const resetLocalData = useCallback(() => {
     for (const [appId, doc] of docsRef.current.entries()) {
       const handler = docHandlersRef.current.get(appId);
@@ -184,6 +180,7 @@ export function AppsProvider({
     awarenessHandlersRef.current.clear();
     pendingInitialUpdatesRef.current.clear();
     initialUpdateSentRef.current.clear();
+    serverActiveAppIdRef.current = null;
     setState({ activeAppId: null, locked: false });
   }, []);
 
@@ -193,6 +190,43 @@ export function AppsProvider({
     }
     socketRef.current = socket;
   }, [socket, resetLocalData]);
+
+  const discardLocalApp = useCallback((appId: string) => {
+    const doc = docsRef.current.get(appId);
+    if (doc) {
+      const handler = docHandlersRef.current.get(appId);
+      if (handler) doc.off("update", handler);
+      try {
+        doc.destroy();
+      } catch {}
+    }
+    const awareness = awarenessRef.current.get(appId);
+    if (awareness) {
+      const handler = awarenessHandlersRef.current.get(appId);
+      if (handler) awareness.off("update", handler);
+      try {
+        awareness.destroy();
+      } catch {}
+    }
+    docsRef.current.delete(appId);
+    awarenessRef.current.delete(appId);
+    docHandlersRef.current.delete(appId);
+    awarenessHandlersRef.current.delete(appId);
+    pendingInitialUpdatesRef.current.delete(appId);
+    initialUpdateSentRef.current.delete(appId);
+  }, []);
+
+  const applyServerAppsState = useCallback(
+    (next: AppsState) => {
+      const previous = serverActiveAppIdRef.current;
+      serverActiveAppIdRef.current = next.activeAppId;
+      if (previous && previous !== next.activeAppId) {
+        discardLocalApp(previous);
+      }
+      setState(next);
+    },
+    [discardLocalApp],
+  );
 
   const registerDocHandlers = useCallback((appId: string, doc: Y.Doc) => {
     if (docHandlersRef.current.has(appId)) return;
@@ -289,10 +323,10 @@ export function AppsProvider({
 
     currentSocket.emit("apps:getState", (response?: unknown) => {
       if (isAppsState(response)) {
-        setState(response);
+        applyServerAppsState(response);
       }
     });
-  }, []);
+  }, [applyServerAppsState]);
 
   const syncApp = useCallback(
     (appId: string) => {
@@ -345,7 +379,7 @@ export function AppsProvider({
 
     const handleState = (next: unknown) => {
       if (!isAppsState(next)) return;
-      setState(next);
+      applyServerAppsState(next);
     };
 
     const handleUpdate = (payload: AppsUpdatePayload) => {
@@ -383,7 +417,7 @@ export function AppsProvider({
       socket.off("apps:yjs:update", handleUpdate);
       socket.off("apps:awareness", handleAwareness);
     };
-  }, [socket, getDoc, getAwareness, refreshState]);
+  }, [socket, getDoc, getAwareness, refreshState, applyServerAppsState]);
 
   useEffect(() => {
     if (!socket) return;

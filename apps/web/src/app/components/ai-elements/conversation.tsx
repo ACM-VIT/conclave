@@ -1,8 +1,6 @@
 "use client";
 
-// Ported from AI SDK Elements (elements.ai-sdk.dev) "Conversation" and themed
-// for Conclave's meeting UI. Auto-scrolls to the latest message and exposes a
-// scroll-to-bottom affordance when the user scrolls up.
+// Ported from AI SDK Elements (elements.ai-sdk.dev) "Conversation".
 
 import { ArrowDownIcon } from "lucide-react";
 import type { ComponentProps } from "react";
@@ -31,8 +29,6 @@ export const ConversationContent = ({
   ...props
 }: ConversationContentProps) => (
   <StickToBottom.Content
-    // The library renders its own scroll element around this content; long
-    // unbreakable strings must never widen it, only wrap or clip.
     scrollClassName="overflow-x-hidden"
     className={cn("flex min-w-0 max-w-full flex-col gap-4 px-4 py-4", className)}
     {...props}

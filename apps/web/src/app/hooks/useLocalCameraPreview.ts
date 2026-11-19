@@ -4,7 +4,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ResolvedCameraPublishSettings } from "../lib/media-quality-settings";
 
 export interface LocalCameraPreviewController {
-  /** Private preview stream. Never handed to a producer, so never broadcast. */
   stream: MediaStream | null;
   isStarting: boolean;
   error: string | null;
@@ -32,28 +31,17 @@ const describeCameraPreviewError = (err: unknown): string => {
   return "Camera preview failed to start.";
 };
 
-/**
- * Camera preview that stays on this machine. The stream comes from a plain
- * getUserMedia call and is never attached to a mediasoup producer, so nothing
- * reaches the SFU or other participants. Used by the in-meeting Settings panel
- * and the effects panel to test the camera / preview effects while the real
- * camera stays off for the room.
- */
 export function useLocalCameraPreview({
   deviceId,
   publishSettings,
 }: {
-  /** Preferred camera; preview restarts when this changes while running. */
   deviceId?: string;
-  /** The same local quality ceiling used by the meeting publisher. */
   publishSettings?: ResolvedCameraPublishSettings;
 }): LocalCameraPreviewController {
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [isStarting, setIsStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [wanted, setWanted] = useState(false);
-  // Monotonic token: any stop/restart invalidates in-flight getUserMedia
-  // results so a late resolve can't resurrect a preview the caller ended.
   const requestIdRef = useRef(0);
   const streamRef = useRef<MediaStream | null>(null);
 
@@ -117,8 +105,6 @@ export function useLocalCameraPreview({
                 },
               }
             : PREVIEW_VIDEO_CONSTRAINTS),
-          // "ideal" (not "exact") so a stale device id falls back to any
-          // camera instead of failing the preview outright.
           ...(deviceId ? { deviceId: { ideal: deviceId } } : {}),
         },
       })
@@ -135,8 +121,6 @@ export function useLocalCameraPreview({
           track.addEventListener(
             "ended",
             () => {
-              // Device unplugged / revoked: fold back to the idle state so the
-              // UI offers the start button again instead of a black tile.
               if (streamRef.current === nextStream) {
                 requestIdRef.current += 1;
                 setWanted(false);
@@ -150,9 +134,6 @@ export function useLocalCameraPreview({
       })
       .catch((err: unknown) => {
         if (cancelled || requestId !== requestIdRef.current) return;
-        // A failed (re)start ends the whole preview: releasing the previous
-        // capture keeps the UI state ("preview off" + error) truthful — no
-        // orphaned camera light while an error is showing.
         releaseStream();
         setError(describeCameraPreviewError(err));
         setWanted(false);
@@ -175,7 +156,6 @@ export function useLocalCameraPreview({
     releaseStream,
   ]);
 
-  // Release the camera when the owner unmounts.
   useEffect(
     () => () => {
       requestIdRef.current += 1;

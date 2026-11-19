@@ -11,7 +11,6 @@ export type WheelPanelProps = {
   isAdmin: boolean;
   isSpinning: boolean;
   removeWinnerOnDone: boolean;
-  /** Roster names not on the wheel yet; 0 means nothing to add. */
   missingParticipantCount: number;
   onAddEntry: (label: string) => void;
   onAddEntries: (labels: string[]) => void;
@@ -159,7 +158,6 @@ export function WheelPanel({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {/* Identity + status */}
       <div className="flex items-center gap-2 border-b border-white/[0.06] px-4 pb-3 pt-3.5">
         <span className="text-[#f95f4a]">
           <MiniWheelIcon />
@@ -181,7 +179,6 @@ export function WheelPanel({
         )}
       </div>
 
-      {/* Tabs */}
       <div className="px-3 pt-3">
         <div className="flex rounded-full border border-white/[0.08] bg-white/[0.03] p-[3px]">
           {(

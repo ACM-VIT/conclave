@@ -15,12 +15,6 @@ import { btnSecondary, inputClass } from "./ui";
 import { useAdminActions } from "./useAdminActions";
 import { useAdminSocket } from "./useAdminSocket";
 
-/**
- * Operator dashboard, meeting-grade. All data streams in over direct
- * browser-to-SFU sockets (serverless friendly: the web tier only mints
- * tokens); commands ride the authenticated HTTP proxy and their effects
- * stream back within a second.
- */
 export default function SfuAdminDashboard() {
   const {
     connection,
@@ -68,8 +62,6 @@ export default function SfuAdminDashboard() {
       .catch((error) => setErrorMessage((error as Error).message));
   }, [setErrorMessage]);
 
-  // Keep a valid selection: prefer what the operator picked, fall back to the
-  // busiest room, clear when the floor empties.
   useEffect(() => {
     if (rooms.length === 0) {
       if (selected !== null) {
@@ -111,8 +103,6 @@ export default function SfuAdminDashboard() {
     [watchRoom],
   );
 
-  // Operator shortcuts: "/" find a person, j and k cycle rooms in rail
-  // order, "a" toggles the activity drawer. Never while typing.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
@@ -161,8 +151,6 @@ export default function SfuAdminDashboard() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [rooms, selected, selectRoom]);
 
-  // Alert rules over the live stream. Dismissals are per session and keyed,
-  // so a condition that clears and returns will surface again after reload.
   const alerts = useMemo(() => {
     const list: OperatorAlert[] = [];
     for (const instance of instances) {
@@ -191,9 +179,6 @@ export default function SfuAdminDashboard() {
     return list.filter((alert) => !dismissedAlerts.has(alert.key));
   }, [dismissedAlerts, instances, rooms]);
 
-  // The room pane renders whatever detail the socket has confirmed; while a
-  // switch is in flight it keeps showing the previous room instead of
-  // flashing a loading state.
   const detailInstance = useMemo(
     () =>
       instances.find((instance) => instance.key === detailSelection?.instanceKey) ??
@@ -263,7 +248,6 @@ export default function SfuAdminDashboard() {
             activityOpen ? "xl:mr-[360px]" : ""
           }`}
         >
-          {/* Small screens still need room switching */}
           <div className="py-3 xl:hidden">
             <select
               className={inputClass}

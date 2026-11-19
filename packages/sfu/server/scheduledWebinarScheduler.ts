@@ -17,6 +17,90 @@ import {
 
 const DEFAULT_TICK_MS = 10_000;
 
+/** Room controls a schedule seeds and the host can then change live. */
+type ScheduledRoomControls = {
+  status: ScheduledWebinar["status"];
+  publicAccess: boolean;
+  maxAttendees: number;
+  waitingRoomEnabled: boolean;
+  qaEnabled: boolean;
+};
+
+/**
+ * The schedule values last copied into each room config. The schedule is
+ * re-applied on every panelist join, on the scheduler tick and on schedule
+ * edits; only values the schedule itself changed since then are copied
+ * again, so a host's live lock, Q&A toggle or attendee cap is not reverted
+ * by the next join.
+ */
+const appliedScheduleControls = new WeakMap<
+  WebinarRoomConfig,
+  ScheduledRoomControls
+>();
+
+const isTerminalWebinarStatus = (status: ScheduledWebinar["status"]): boolean =>
+  status === "ended" || status === "cancelled";
+
+const applyScheduledRoomControls = (
+  webinarConfig: WebinarRoomConfig,
+  webinar: ScheduledWebinar,
+): void => {
+  const next: ScheduledRoomControls = {
+    status: webinar.status,
+    publicAccess: webinar.publicAccess,
+    maxAttendees: webinar.maxAttendees,
+    waitingRoomEnabled: webinar.waitingRoomEnabled,
+    qaEnabled: webinar.qaEnabled,
+  };
+  const previous =
+    webinarConfig.scheduledWebinarId === webinar.id
+      ? appliedScheduleControls.get(webinarConfig)
+      : undefined;
+
+  const wasOpen = previous ? !isTerminalWebinarStatus(previous.status) : false;
+  const isOpen = !isTerminalWebinarStatus(next.status);
+  if (isOpen && !wasOpen) {
+    // First application, or the schedule was reopened: open the room.
+    webinarConfig.enabled = true;
+    webinarConfig.locked = false;
+  } else if (!isOpen) {
+    // Ended or cancelled schedules lock the room, as the /end and /cancel
+    // routes and the scheduler tick do.
+    webinarConfig.locked = true;
+    if (next.status === "cancelled") {
+      webinarConfig.enabled = false;
+    }
+  }
+
+  if (!previous || previous.publicAccess !== next.publicAccess) {
+    webinarConfig.publicAccess = next.publicAccess;
+  }
+  if (!previous || previous.maxAttendees !== next.maxAttendees) {
+    webinarConfig.maxAttendees = next.maxAttendees;
+  }
+  if (!previous || previous.waitingRoomEnabled !== next.waitingRoomEnabled) {
+    webinarConfig.waitingRoomEnabled = next.waitingRoomEnabled;
+  }
+  if (!previous || previous.qaEnabled !== next.qaEnabled) {
+    webinarConfig.qaEnabled = next.qaEnabled;
+  }
+  appliedScheduleControls.set(webinarConfig, next);
+};
+
+const recordScheduledWebinarEnded = (
+  webinarConfig: WebinarRoomConfig,
+  webinar: ScheduledWebinar,
+): void => {
+  webinarConfig.locked = true;
+  const applied = appliedScheduleControls.get(webinarConfig);
+  if (applied && webinarConfig.scheduledWebinarId === webinar.id) {
+    appliedScheduleControls.set(webinarConfig, {
+      ...applied,
+      status: webinar.status,
+    });
+  }
+};
+
 const applyScheduledWebinarToConfig = (
   state: SfuState,
   webinar: ScheduledWebinar,
@@ -28,13 +112,8 @@ const applyScheduledWebinarToConfig = (
     channelId,
   );
 
-  webinarConfig.enabled = true;
-  webinarConfig.publicAccess = webinar.publicAccess;
-  webinarConfig.maxAttendees = webinar.maxAttendees;
-  webinarConfig.locked = false;
+  applyScheduledRoomControls(webinarConfig, webinar);
   webinarConfig.scheduledWebinarId = webinar.id;
-  webinarConfig.waitingRoomEnabled = webinar.waitingRoomEnabled;
-  webinarConfig.qaEnabled = webinar.qaEnabled;
   if (inviteCodeHash !== null) {
     webinarConfig.inviteCodeHash = inviteCodeHash;
   }
@@ -110,7 +189,7 @@ const advanceScheduledWebinars = (
       const channelId = getRoomChannelId(webinar.clientId, webinar.roomId);
       const cfg = state.webinarConfigs.get(channelId);
       if (cfg) {
-        cfg.locked = true;
+        recordScheduledWebinarEnded(cfg, webinar);
       }
       void io;
       changed += 1;

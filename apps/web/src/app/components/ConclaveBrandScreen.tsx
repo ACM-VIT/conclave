@@ -79,10 +79,6 @@ type ConclaveBrandScreenProps = {
   actions?: ReactNode;
 };
 
-// Full-screen brand surface: the Conclave Lottie stays the visible centerpiece
-// while a caption (loading) or message + actions (error / not-found) sit low
-// over the already-black lower frame, never covering the mark. Shared by the
-// route loading/error/not-found screens.
 export default function ConclaveBrandScreen({
   caption,
   eyebrow,

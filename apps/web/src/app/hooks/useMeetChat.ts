@@ -27,6 +27,7 @@ import {
   MAX_CHAT_IMAGE_BYTES,
   isSupportedChatImageType,
 } from "../lib/chat-images";
+import { replaceEmojiShortcodesInMessage } from "../lib/emoji-shortcodes";
 import {
   ConclaveAssistantApiKeyRequiredError,
   type AssistantChatMessage,
@@ -424,8 +425,6 @@ export function useMeetChat({
     [startConclaveStream],
   );
 
-  // "@Conclave …" summons the room AI. The question is first accepted as a
-  // public chat line, then the SFU issues a short-lived token for the answer.
   const askConclave = useCallback(
     (rawQuestion: string, questionMessageId: string) => {
       if (!assistantEnabled) {
@@ -557,29 +556,12 @@ export function useMeetChat({
     setReplyTarget(null);
   }, []);
 
-  /**
-   * Toggle our emoji reaction on a message.
-   *
-   * We apply the toggle optimistically so the chip responds instantly, then
-   * overwrite with the server's authoritative set from the ack (the same set
-   * every other client receives via `chat:reactionChanged`). On error we
-   * restore the pre-toggle set rather than re-inverting, so a rejected toggle
-   * can't drift out of sync with a concurrent reaction from someone else.
-   */
   const toggleMessageReaction = useCallback(
     (messageId: string, emoji: string) => {
       const socket = socketRef.current;
       if (!socket) return;
-      // Watch-only attendees can't write chat; the server rejects their
-      // reactions outright. Bail before the optimistic flip so we never show a
-      // chip that is guaranteed to roll back. The affordance is also hidden in
-      // the UI (onToggleReaction is withheld for observers) — this is the
-      // defense-in-depth floor in case a caller reaches this directly.
       if (isObserverMode) return;
 
-      // Captured inside the updater, not from chatMessagesRef: that ref syncs
-      // in an effect and so lags a render, which would hand a rapid second
-      // toggle a stale set to roll back to.
       let previous: ChatMessageReaction[] | undefined;
 
       setChatMessages((prev) =>
@@ -652,9 +634,15 @@ export function useMeetChat({
         return Promise.resolve(null);
       }
 
-      const messageContent =
+      const rawContent =
         trimmedContent || gif?.title || image?.fileName || "Image";
-      const isTtsMessage = /^\/tts(?:\s|$)/i.test(messageContent);
+      const isTtsMessage = /^\/tts(?:\s|$)/i.test(rawContent);
+      // Expand :name: shortcuts before sending so every client, native
+      // included, receives the emoji. TTS text is spoken, so it stays as typed.
+      const messageContent =
+        isTtsMessage || gif
+          ? rawContent
+          : replaceEmojiShortcodesInMessage(rawContent);
       const optimisticMessage = buildOptimisticMessage(
         messageContent,
         gif,
@@ -991,8 +979,6 @@ export function useMeetChat({
           const request = new XMLHttpRequest();
           request.open("POST", uploadUrl.toString());
           request.responseType = "json";
-          // Bound the upload so a stalled connection can't leave the composer
-          // stuck in its uploading state (which blocks sending and removal).
           request.timeout = authorization.timeoutMs ?? CHAT_IMAGE_UPLOAD_TIMEOUT_MS;
           request.setRequestHeader(
             "Authorization",

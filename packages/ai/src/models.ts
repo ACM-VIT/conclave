@@ -7,8 +7,14 @@ export type TranscriptTextVerbosity = "low" | "medium" | "high";
 export type TranscriptTranscriptionProvider = "openai" | "sarvam";
 
 export type AiTextProvider = "openai" | "anthropic";
+export type AiDecisionProvider = "cloudflare" | "typesafe";
 export type AiProvider =
-  TranscriptTranscriptionProvider | AiTextProvider | "elevenlabs";
+  TranscriptTranscriptionProvider | AiTextProvider | AiDecisionProvider | "elevenlabs";
+
+export const AI_DECISION_PROVIDERS: readonly AiDecisionProvider[] = ["cloudflare", "typesafe"];
+
+export const isDecisionProvider = (value: unknown): value is AiDecisionProvider =>
+  value === "cloudflare" || value === "typesafe";
 
 export type TranscriptProviderKeyAvailability = Partial<
   Record<TranscriptTranscriptionProvider | AiTextProvider, boolean>
@@ -330,6 +336,7 @@ export const AI_DEFAULT_MODELS = {
   voice: "gpt-realtime-1.5",
   moderation: "omni-moderation-latest",
   tts: "eleven_multilingual_v2",
+  answers: "clef-flash",
 } as const;
 
 export const AI_ENDPOINTS = {
@@ -342,6 +349,8 @@ export const AI_ENDPOINTS = {
   anthropic: { apiBase: "https://api.anthropic.com" },
   sarvam: { transcription: "wss://api.sarvam.ai/speech-to-text/ws" },
   elevenlabs: { apiBase: "https://api.elevenlabs.io/v1" },
+  cloudflare: { workersAi: "https://api.cloudflare.com/client/v4/accounts" },
+  typesafe: { systemOne: "https://api.typesafe.ai/v1/systemone" },
 } as const;
 
 export const AI_PROVIDERS = {
@@ -365,6 +374,16 @@ export const AI_PROVIDERS = {
     keyEnv: "SARVAM_API_KEY",
     keysUrl: "https://dashboard.sarvam.ai",
   },
+  cloudflare: {
+    label: "Cloudflare",
+    keyEnv: "CLOUDFLARE_AI_API_KEY",
+    keysUrl: "https://dash.cloudflare.com/profile/api-tokens",
+  },
+  typesafe: {
+    label: "TypeSafe",
+    keyEnv: "TYPESAFE_API_KEY",
+    keysUrl: "https://console.typesafe.ai",
+  },
 } as const;
 
 export type AiEnvironment = Partial<
@@ -373,6 +392,8 @@ export type AiEnvironment = Partial<
     | "ANTHROPIC_API_KEY"
     | "SARVAM_API_KEY"
     | "ELEVENLABS_API_KEY"
+    | "CLOUDFLARE_AI_API_KEY"
+    | "TYPESAFE_API_KEY"
     | "OPENAI_BASE_URL"
     | "CLOUDFLARE_AI_GATEWAY_OPENAI_URL"
     | "ANTHROPIC_BASE_URL"
@@ -416,6 +437,8 @@ export const readAiEnvironment = (
   ANTHROPIC_API_KEY: source.ANTHROPIC_API_KEY,
   SARVAM_API_KEY: source.SARVAM_API_KEY,
   ELEVENLABS_API_KEY: source.ELEVENLABS_API_KEY,
+  CLOUDFLARE_AI_API_KEY: source.CLOUDFLARE_AI_API_KEY,
+  TYPESAFE_API_KEY: source.TYPESAFE_API_KEY,
   CONCLAVE_AI_SETTINGS: source.CONCLAVE_AI_SETTINGS,
   OPENAI_BASE_URL: source.OPENAI_BASE_URL,
   CLOUDFLARE_AI_GATEWAY_OPENAI_URL: source.CLOUDFLARE_AI_GATEWAY_OPENAI_URL,
@@ -433,5 +456,7 @@ export const isProviderApiKey = (
   if (provider === "anthropic") return key.startsWith("sk-ant-");
   if (provider === "openai")
     return key.startsWith("sk-") && !key.startsWith("sk-ant-");
+  if (provider === "cloudflare")
+    return /^[A-Za-z0-9]{8,64}:\S+$/.test(key.trim());
   return Boolean(key.trim());
 };

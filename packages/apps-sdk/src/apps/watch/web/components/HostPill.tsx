@@ -1,22 +1,11 @@
 import React, { useEffect, useRef, useState } from "react";
 
 type HostPillProps = {
-  /** Whether the room app lock is on (only admins may control playback). */
   locked: boolean;
   isAdmin: boolean;
-  /** Flip the room app lock. Only invoked for admins. */
   onSetLocked: (locked: boolean) => void;
 };
 
-/**
- * The playback permission surface, in context. The pill names the POLICY, not
- * a person ("Host only" or "Everyone"), so it stays truthful with any number
- * of co-hosts; every admin can open it and flip the switch, and the doc-level
- * lock is the single source of truth underneath.
- *
- * The popover is fixed-positioned from the pill's rect so the rail's
- * overflow-hidden (needed for the collapse animation) can never clip it.
- */
 export function HostPill({ locked, isAdmin, onSetLocked }: HostPillProps) {
   const [open, setOpen] = useState(false);
   const [anchor, setAnchor] = useState<{ top: number; right: number } | null>(

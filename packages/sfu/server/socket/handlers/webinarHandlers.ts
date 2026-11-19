@@ -20,6 +20,8 @@ import {
 import type { ConnectionContext } from "../context.js";
 import { RATE_LIMITS, takeToken } from "../rateLimit.js";
 import { respond } from "./ack.js";
+import { getRoomChannelId } from "../../rooms.js";
+import { getScheduledWebinarBySlug } from "../../scheduledWebinars.js";
 
 const MAX_INVITE_CODE_LENGTH = 256;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
@@ -142,6 +144,20 @@ export const registerWebinarHandlers = (context: ConnectionContext): void => {
               webinarConfig.linkVersion += 1;
             }
           } else {
+            // A scheduled webinar's link code belongs to its room, even before
+            // (or after) the scheduler binds it; an ad-hoc room must not take
+            // it and receive that webinar's audience.
+            const reservedBy = getScheduledWebinarBySlug(
+              state.scheduledWebinars,
+              rawLinkSlug,
+            );
+            if (
+              reservedBy &&
+              getRoomChannelId(reservedBy.clientId, reservedBy.roomId) !==
+                room.channelId
+            ) {
+              throw new Error("This webinar link code is already in use.");
+            }
             const { changed: slugChanged } = setCustomWebinarLinkSlug({
               webinarConfig,
               webinarLinks: state.webinarLinks,

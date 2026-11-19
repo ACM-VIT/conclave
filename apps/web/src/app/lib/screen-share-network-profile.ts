@@ -112,10 +112,6 @@ const getScreenShareStartupNetworkProfile = (
   }
   if (browserQuality === "good") return null;
 
-  // Absence of Network Information API data is not evidence of a constrained
-  // upload. Starting every unsupported browser in a reduced temporal profile
-  // made otherwise healthy Firefox/Safari shares visibly choppy until enough
-  // WebRTC stats accumulated.
   return null;
 };
 

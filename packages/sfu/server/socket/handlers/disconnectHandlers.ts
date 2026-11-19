@@ -249,11 +249,10 @@ export const registerDisconnectHandlers = (
       }
     }
 
-    if (
-      !context.currentClient &&
-      context.pendingRoomChannelId &&
-      context.pendingUserKey
-    ) {
+    // A socket can wait for one room while still seated in another (an
+    // in-place room switch), so drop its waiting-room entry either way;
+    // otherwise the dead entry keeps that room from ever counting as empty.
+    if (context.pendingRoomChannelId && context.pendingUserKey) {
       const pendingRoom = state.rooms.get(context.pendingRoomChannelId);
       if (pendingRoom) {
         const pending = pendingRoom.pendingClients.get(context.pendingUserKey);

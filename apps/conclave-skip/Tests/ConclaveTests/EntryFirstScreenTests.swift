@@ -57,21 +57,4 @@ struct EntryFirstScreenTests {
         #endif
     }
 }
-
-private func entryFirstScreenSource(_ packageRelativePath: String) throws -> String {
-    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-    return try String(contentsOf: root.appendingPathComponent(packageRelativePath), encoding: .utf8)
-}
-
-private struct EntryFirstScreenRangeMissing: Error {
-    let marker: String
-}
-
-private func entryFirstScreenBody(_ source: String, from start: String, to end: String) throws -> String {
-    guard let startRange = source.range(of: start) else { throw EntryFirstScreenRangeMissing(marker: start) }
-    guard let endRange = source.range(of: end, range: startRange.upperBound..<source.endIndex) else {
-        throw EntryFirstScreenRangeMissing(marker: end)
-    }
-    return String(source[startRange.upperBound..<endRange.lowerBound])
-}
 #endif

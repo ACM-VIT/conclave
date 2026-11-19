@@ -1,9 +1,6 @@
 "use client";
 
-// Ported from AI SDK Elements (elements.ai-sdk.dev) "Chain of Thought" and themed
-// for Conclave's dark chat. A collapsible surface that lays out an agent's steps
-// (tool calls, searches, reasoning) as a connected vertical timeline so the work
-// reads as a sequence without dominating the message.
+// Ported from AI SDK Elements (elements.ai-sdk.dev) "Chain of Thought".
 
 import { ChevronDownIcon, DotIcon } from "lucide-react";
 import { type ComponentProps, memo, type ReactNode } from "react";
@@ -90,7 +87,6 @@ export const ChainOfThoughtStep = memo(
     <div
       className={cn(
         "relative flex gap-2.5 pl-1 text-[12.5px]",
-        // Connector line between steps.
         "before:absolute before:left-[8px] before:top-5 before:h-[calc(100%-4px)] before:w-px before:bg-white/10 last:before:hidden",
         className,
       )}

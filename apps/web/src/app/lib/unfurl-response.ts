@@ -1,5 +1,3 @@
-// Reads at most `maxBytes` of the body, stopping early once the document head
-// has closed — everything the parser wants lives there on real pages.
 export const readHtmlPrefix = async (
   response: Response,
   maxBytes: number,
@@ -26,11 +24,6 @@ export const readHtmlPrefix = async (
   return html + decoder.decode();
 };
 
-/**
- * Passes a body through unchanged, erroring the stream once `maxBytes` have
- * flowed. Used for media too large to buffer — backpressure means only what
- * the client actually consumes is transferred.
- */
 export const boundedResponseStream = (
   body: ReadableStream<Uint8Array>,
   maxBytes: number,
@@ -50,7 +43,6 @@ export const boundedResponseStream = (
   );
 };
 
-/** Buffers a response only when its complete body fits within `maxBytes`. */
 export const readBoundedResponseBytes = async (
   response: Response,
   maxBytes: number,

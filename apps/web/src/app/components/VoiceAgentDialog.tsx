@@ -9,12 +9,6 @@ import {
 } from "react";
 import { color } from "@conclave/ui-tokens";
 
-/**
- * Bring-your-own-key dialog for the AI voice agent. Collects the host's
- * OpenAI API key, then stays open in a connecting state until the agent is
- * live so start failures land inline instead of in a toast. The parent owns
- * start/stop and closes the dialog once the agent connects.
- */
 export default function VoiceAgentDialog({
   open,
   isStarting,
@@ -23,12 +17,9 @@ export default function VoiceAgentDialog({
   onClose,
 }: {
   open: boolean;
-  /** Agent is connecting; the dialog shows progress instead of the form. */
   isStarting: boolean;
-  /** Start failure to show inline (key rejection, connection errors). */
   error: string | null;
   onStart: (apiKey: string, remember: boolean) => void;
-  /** Dismiss; the parent aborts an in-flight start. */
   onClose: () => void;
 }) {
   const [key, setKey] = useState("");
@@ -75,8 +66,6 @@ export default function VoiceAgentDialog({
     }
   };
 
-  // Connecting has no form to correct, so a rejected key returns us to the
-  // form via the parent; here we only show progress.
   const connecting = isStarting;
 
   return (

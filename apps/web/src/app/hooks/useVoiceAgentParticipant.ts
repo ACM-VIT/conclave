@@ -32,10 +32,6 @@ import { resolveBrowserSfuClientId } from "@/lib/sfu-client-id";
 
 type VoiceAgentStatus = "idle" | "starting" | "running" | "error";
 
-/**
- * Machine-readable failure class so the UI can route errors without string
- * matching: an invalid key reopens the key dialog; anything else is a toast.
- */
 export type VoiceAgentErrorCode = "invalid-key" | "generic";
 
 type JoinInfo = {
@@ -68,10 +64,8 @@ type UseVoiceAgentParticipantOptions = {
   localStream: MediaStream | null;
   participants: Map<string, Participant>;
   recentMessages?: ChatMessage[];
-  /** Live transcription feed; lets the agent quote what was actually said. */
   transcriptSegments?: TranscriptSegment[];
   isTranscriptActive?: boolean;
-  /** Meeting minutes maintained by the live-notes feature. */
   meetingMinutes?: TranscriptMinutesSnapshot | null;
   resolveDisplayName?: (userId: string) => string;
   instructions?: string;
@@ -125,12 +119,8 @@ const getJoinRoomRedirectError = (
 };
 const SFU_CLIENT_ID = resolveBrowserSfuClientId();
 const TURN_URL_PATTERN = /^turns?:/i;
-// The agent only hears the active speaker; hold the last speaker through
-// brief VAD dropouts (breaths, mid-sentence pauses) so it hears complete
-// sentences instead of clipped fragments.
 const ACTIVE_SPEAKER_HOLD_MS = 1500;
 
-/** Thrown when OpenAI rejects the API key so the UI can re-prompt for it. */
 class VoiceAgentAuthError extends Error {
   constructor(message: string) {
     super(message);
@@ -675,9 +665,6 @@ export function useVoiceAgentParticipant({
   const meetingMinutesRef = useRef(meetingMinutes);
   const resolveDisplayNameRef = useRef(resolveDisplayName);
   const lastHeldSpeakerRef = useRef<{ id: string; ts: number } | null>(null);
-  // The active-speaker hold keeps the last speaker in the mix through brief VAD
-  // gaps. Nothing re-renders once the room falls silent, so this timer fires
-  // the one rebuild that lets the hold expire and drops the stale stream.
   const holdExpiryTimeoutRef = useRef<number | null>(null);
 
   const [status, setStatus] = useState<VoiceAgentStatus>("idle");
@@ -752,6 +739,24 @@ export function useVoiceAgentParticipant({
     setSafeStatus("idle");
   }, [setSafeError, setSafeStatus]);
 
+  const failRuntime = useCallback(
+    (runtime: RuntimeState, message: string) => {
+      if (!mountedRef.current) return;
+      if (runtimeRef.current !== runtime) return;
+      pendingRemoteTrackRef.current = null;
+      lastHeldSpeakerRef.current = null;
+      if (holdExpiryTimeoutRef.current !== null) {
+        window.clearTimeout(holdExpiryTimeoutRef.current);
+        holdExpiryTimeoutRef.current = null;
+      }
+      runtimeRef.current = createRuntimeState();
+      closeRuntimeState(runtime);
+      setSafeError(message);
+      setSafeStatus("error");
+    },
+    [setSafeError, setSafeStatus],
+  );
+
   const producePendingTrack = useCallback(async () => {
     const pendingTrack = pendingRemoteTrackRef.current;
     const runtime = runtimeRef.current;
@@ -812,8 +817,6 @@ export function useVoiceAgentParticipant({
         now - lastHeldSpeakerRef.current.ts <= ACTIVE_SPEAKER_HOLD_MS
       ) {
         speakerId = lastHeldSpeakerRef.current.id;
-        // Nothing else will re-run the mix while the room stays silent; wake
-        // once when the hold lapses so the held stream is released.
         const remainingMs =
           ACTIVE_SPEAKER_HOLD_MS - (now - lastHeldSpeakerRef.current.ts) + 20;
         holdExpiryTimeoutRef.current = window.setTimeout(() => {
@@ -853,8 +856,6 @@ export function useVoiceAgentParticipant({
     [activeSpeakerId, isMuted, localStream, localUserId, participants],
   );
 
-  // The hold-expiry timer is scheduled from inside rebuildOpenAiMix; route it
-  // through a ref so it always fires the latest closure (current speaker set).
   const rebuildOpenAiMixRef = useRef(rebuildOpenAiMix);
   useEffect(() => {
     rebuildOpenAiMixRef.current = rebuildOpenAiMix;
@@ -1139,8 +1140,6 @@ export function useVoiceAgentParticipant({
         const reason =
           clientSecretBody?.error?.message ??
           "Failed to create voice agent session secret.";
-        // 401/403 from the client_secrets endpoint means the key itself was
-        // rejected — signal it as such so the UI re-prompts for the key.
         if (
           clientSecretResponse.status === 401 ||
           clientSecretResponse.status === 403
@@ -1176,14 +1175,12 @@ export function useVoiceAgentParticipant({
         if (!audioTrack) return;
         pendingRemoteTrackRef.current = audioTrack;
         void producePendingTrack().catch((produceError) => {
-          if (!mountedRef.current) return;
-          if (runtimeRef.current !== runtime) return;
-          const message =
+          failRuntime(
+            runtime,
             produceError instanceof Error
               ? produceError.message
-              : "Failed to publish voice agent audio to SFU.";
-          setSafeError(message);
-          setSafeStatus("error");
+              : "Failed to publish voice agent audio to SFU.",
+          );
         });
       };
 
@@ -1230,7 +1227,6 @@ export function useVoiceAgentParticipant({
             type: "session.update",
             session: {
               type: "realtime",
-              // Preserve the authoritative model and instructions from the room proxy.
               ...(!useRoomKey ? {model, instructions: sessionInstructions} : {}),
               audio: {
                 input: {
@@ -1286,10 +1282,8 @@ export function useVoiceAgentParticipant({
         const socket = await createSocketConnection(url, token);
         runtime.sfuSocket = socket;
         socket.on("disconnect", () => {
-          if (!mountedRef.current) return;
           if (runtimeRef.current.sfuSocket !== socket) return;
-          setSafeError("Voice agent disconnected from SFU.");
-          setSafeStatus("error");
+          failRuntime(runtime, "Voice agent disconnected from SFU.");
         });
         return socket;
       };
@@ -1363,12 +1357,7 @@ export function useVoiceAgentParticipant({
       setSafeStatus("running");
       setSafeError(null);
     } catch (startError) {
-      // Always release this attempt's own resources...
       closeRuntimeState(runtime);
-      // ...but if stop() ran or a newer start() superseded this one,
-      // runtimeRef no longer points at us: don't touch shared status/error,
-      // or a cancelled/stale attempt would surface a late error and clobber
-      // the newer state.
       if (runtimeRef.current !== runtime) return;
       const message =
         startError instanceof Error
@@ -1384,6 +1373,7 @@ export function useVoiceAgentParticipant({
     }
   }, [
     buildSessionInstructions,
+    failRuntime,
     handleRealtimeToolCall,
     isAdmin,
     isJoined,
@@ -1435,14 +1425,14 @@ export function useVoiceAgentParticipant({
     const runtime = runtimeRef.current;
     if (!runtime.openAiMixContext || !runtime.openAiMixDestination) return;
     void rebuildOpenAiMix(runtime).catch((mixError) => {
-      const message =
+      failRuntime(
+        runtime,
         mixError instanceof Error
           ? mixError.message
-          : "Failed to refresh voice agent audio input.";
-      setSafeError(message);
-      setSafeStatus("error");
+          : "Failed to refresh voice agent audio input.",
+      );
     });
-  }, [rebuildOpenAiMix, setSafeError, setSafeStatus, status]);
+  }, [failRuntime, rebuildOpenAiMix, status]);
 
   return {
     status,

@@ -42,7 +42,6 @@ type TriviaMe = {
 };
 
 const OPTION_LETTERS = ["A", "B", "C", "D", "E", "F"];
-// Kahoot-style signature colors so each answer reads as its own shape at a glance.
 const OPTION_COLORS = ["#E24B4A", "#378ADD", "#EF9F27", "#639922", "#7F77DD", "#1D9E75"];
 
 export default function TriviaGame({

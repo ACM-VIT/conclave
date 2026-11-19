@@ -3,10 +3,6 @@ export type LatestWinsAsyncQueue<T> = {
   clearPending: () => void;
 };
 
-/**
- * Serializes asynchronous mutations while retaining only the newest target
- * requested during an in-flight mutation.
- */
 export const createLatestWinsAsyncQueue = <T,>(
   apply: (value: T) => Promise<void>,
   onError?: (error: unknown) => void,

@@ -7,7 +7,6 @@ export interface ToastItem {
   id: string;
   label: string;
   message: string;
-  /** "danger" reads as an error: danger label + a slightly lighter surface. */
   tone?: "accent" | "danger";
   onDismiss?: () => void;
 }

@@ -1,9 +1,6 @@
 "use client";
 
-// Ported from AI SDK Elements (elements.ai-sdk.dev) "Reasoning" and themed for
-// Conclave's dark chat. A collapsible block that shows the model's thinking: it
-// auto-opens while streaming, tracks how long it thought, and auto-closes once
-// the answer starts so it stays out of the way.
+// Ported from AI SDK Elements (elements.ai-sdk.dev) "Reasoning".
 
 import { BrainIcon, ChevronDownIcon } from "lucide-react";
 import {
@@ -40,8 +37,6 @@ const useReasoning = () => {
   return context;
 };
 
-// Omit Radix's method-style onOpenChange declaration and re-declare it as a
-// plain function type so destructuring it doesn't trip unbound-method.
 export type ReasoningProps = Omit<
   ComponentProps<typeof Collapsible>,
   "onOpenChange"
@@ -71,8 +66,6 @@ export const Reasoning = memo(
     const [hasAutoClosed, setHasAutoClosed] = useState(false);
     const startedAtRef = useRef<number | null>(null);
 
-    // Measure how long the model streamed reasoning so the trigger can read
-    // "Thought for N seconds" once it settles.
     useEffect(() => {
       if (isStreaming) {
         if (startedAtRef.current === null) startedAtRef.current = Date.now();
@@ -89,9 +82,6 @@ export const Reasoning = memo(
       onOpenChange?.(next);
     };
 
-    // When uncontrolled, auto-open while thinking then collapse once it's done.
-    // A controlled parent owns the open state instead — e.g. to keep the trace
-    // visible until the whole message finishes streaming before collapsing.
     useEffect(() => {
       if (isControlled) return;
       if (isStreaming && !internalOpen) {

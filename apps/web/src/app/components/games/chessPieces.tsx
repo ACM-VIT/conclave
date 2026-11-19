@@ -2,13 +2,6 @@
 
 import React from "react";
 
-/**
- * Standard chess piece set ("cburnett") by Colin M.L. Burnett, embedded from
- * the Wikimedia SVGs (triple-licensed GFDL / BSD / GPL; used here under the
- * BSD license). Same glyphs lichess ships as its default set, so the board
- * reads instantly as "real chess" at any square size.
- */
-
 export type PieceCode =
   | "P" | "N" | "B" | "R" | "Q" | "K"
   | "p" | "n" | "b" | "r" | "q" | "k";
@@ -55,7 +48,6 @@ export function ChessPiece({
       aria-hidden="true"
       focusable="false"
       style={{ display: "block", pointerEvents: "none" }}
-      // Static, trusted markup bundled with the app (see license note above).
       dangerouslySetInnerHTML={{ __html: PIECE_MARKUP[piece] }}
     />
   );

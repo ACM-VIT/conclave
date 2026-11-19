@@ -1,10 +1,3 @@
-// The Whiteboard renderer for the native app host (S60 13 c, Q14): the existing SDK canvas
-// (`apps/whiteboard/web/components/WhiteboardCanvas`) and nothing else. Every tool, menu, lock and page control is
-// native and reaches this page as a bridge command; the page answers with an `ack` after sending its new `status`, so the
-// native control's pending state ends on a status that already shows the change. Pinch and two-finger pan stay inside
-// the canvas (the meeting never pans); with Apple Pencil only drawing (iOS `prefersPencilOnlyDrawing`) one finger pans.
-// No text, toolbar or hint is drawn here: copy and accessibility of the chrome are native. Flat only (no gradients).
-
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import * as Y from "yjs";
 import { WhiteboardCanvas } from "../../apps/whiteboard/web/components/WhiteboardCanvas";
@@ -68,7 +61,6 @@ const distanceOf = (points: Point[]): number => {
   return Math.hypot(a.x - b.x, a.y - b.y);
 };
 
-/** The canvas as a PNG (base64, no data URL prefix), halved until it fits the bridge bound. */
 const exportPng = (canvas: HTMLCanvasElement | null): string | null => {
   if (!canvas) return null;
   const limit = base64CharacterLimit(NATIVE_EMBED_LIMITS.exportBytes);
@@ -106,7 +98,6 @@ export function NativeWhiteboardEmbed({ session }: { session: NativeEmbedSession
   const [canRedo, setCanRedo] = useState(false);
   const [editorCount, setEditorCount] = useState(1);
 
-  // Per-person history, as on web: remote updates carry origin "remote", so only your own edits undo.
   useEffect(() => {
     const manager = new Y.UndoManager(getWhiteboardRoot(doc), { captureTimeout: 400 });
     setUndoManager(manager);
@@ -127,7 +118,6 @@ export function NativeWhiteboardEmbed({ session }: { session: NativeEmbedSession
     };
   }, [doc]);
 
-  // People present (the native "%lld editing" status).
   useEffect(() => {
     const count = () => {
       let present = 0;
@@ -189,7 +179,6 @@ export function NativeWhiteboardEmbed({ session }: { session: NativeEmbedSession
     fitBounds({ x: minX, y: minY, width: maxX - minX, height: maxY - minY }, { width: rect.width, height: rect.height });
   }, [elements, fitBounds, resetViewport]);
 
-  // Host commands. Each one applies, sends the status that shows it, then returns for the ack.
   useEffect(() => {
     const respond = (next: Partial<EmbedStatusPayload>): CommandResult => {
       session.sendStatus({ ...status, ...next });
@@ -263,7 +252,6 @@ export function NativeWhiteboardEmbed({ session }: { session: NativeEmbedSession
           const png = exportPng(canvasRef.current);
           return png ? { ok: true, pngBase64: png } : { ok: false, error: "exportFailed" };
         }
-        // Relay messages and commands for another app retain the same rejection as unknown commands.
         case "snapshot":
         case "update":
         case "awareness":
@@ -297,7 +285,6 @@ export function NativeWhiteboardEmbed({ session }: { session: NativeEmbedSession
     };
   }, [session, status, readOnly, undoManager, pages, setActive, createPage, renamePage, deletePage, zoomToFit]);
 
-  // Size for the host (resize message), coalesced to one per frame.
   useEffect(() => {
     const element = containerRef.current;
     if (!element) return;
@@ -316,7 +303,6 @@ export function NativeWhiteboardEmbed({ session }: { session: NativeEmbedSession
     };
   }, [session]);
 
-  // Pinch and two-finger pan (and one-finger pan with Pencil-only drawing) never reach the canvas tools.
   const touches = useRef(new Map<number, Point>());
   const gesture = useRef<TouchGesture | null>(null);
   const panStart = useRef<Point | null>(null);
@@ -385,7 +371,6 @@ export function NativeWhiteboardEmbed({ session }: { session: NativeEmbedSession
     if (wasGesture) event.stopPropagation();
   }, []);
 
-  // The Pan tool and trackpad or mouse wheel zoom, as on web (WhiteboardWebApp).
   const lastPan = useRef<Point | null>(null);
   const onPanStart = useCallback((x: number, y: number) => {
     lastPan.current = { x, y };
@@ -446,7 +431,6 @@ export function NativeWhiteboardEmbed({ session }: { session: NativeEmbedSession
   );
 }
 
-/** Other people's cursors (awareness), in their own layer so a cursor flood re-renders only this. */
 function RemoteCursors({
   session,
   viewport,

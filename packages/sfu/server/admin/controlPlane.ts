@@ -1003,6 +1003,20 @@ export const kickClient = (
   if (!target || isSuperAdminClient(target)) {
     return false;
   }
+  // A removed user has to be let in again: drop every grant a rejoin would
+  // honour (waiting-room and lock admissions, retained host rights, primary
+  // host, a webinar stage invite), or they could rejoin at once, still
+  // admitted and still a host.
+  const userKey = room.userKeysById.get(userId);
+  if (userKey) {
+    room.revokeAllowedUser(userKey);
+    room.revokeLockedAllowedUser(userKey);
+    room.adminUserKeys.delete(userKey);
+    if (room.hostUserKey === userKey) {
+      room.hostUserKey = null;
+    }
+    room.revokeWebinarPromotion(userKey);
+  }
   target.socket.emit("kicked", { reason, roomId: room.id });
   target.socket.disconnect(true);
 

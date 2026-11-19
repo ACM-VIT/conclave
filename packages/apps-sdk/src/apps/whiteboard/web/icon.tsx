@@ -1,6 +1,5 @@
 import React from "react";
 
-/** Pen-and-stroke glyph for launcher surfaces. */
 export function WhiteboardAppIcon() {
   return (
     <svg

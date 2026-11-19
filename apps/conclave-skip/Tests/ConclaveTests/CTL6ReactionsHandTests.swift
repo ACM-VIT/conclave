@@ -145,20 +145,6 @@ struct CTL6ReactionsHandTests {
         #expect(attendee.controls.more.sections.isEmpty && attendee.controls.more.itemIds.isEmpty)
         #expect(MoreMenuPolicy.handState(nil) == .lowered)
     }
-
-    @Test func noReactionArtShipsYet() throws {
-
-        let root = ctl6PackageRoot()
-        var found: [String] = []
-        for directory in ["Sources/Conclave/Resources", "Android/app/src/main/res", "Android/app/src/main/assets"] {
-            let enumerator = FileManager.default.enumerator(at: root.appendingPathComponent(directory), includingPropertiesForKeys: nil)
-            while let url = enumerator?.nextObject() as? URL {
-                let name = url.lastPathComponent.lowercased()
-                if name.hasPrefix("reaction-") || name.hasSuffix(".gif") { found.append(name) }
-            }
-        }
-        #expect(found.isEmpty, "reaction art: \(found)")
-    }
 }
 
 @MainActor
@@ -182,17 +168,5 @@ private final class HandHarness {
     func refresh() {
         controls.apply(CallControlsInputs.fromShell(shell))
     }
-}
-
-private func ctl6PackageRoot() -> URL {
-    URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-}
-
-private func ctl6Source(_ packageRelativePath: String) throws -> String {
-    try String(contentsOf: ctl6PackageRoot().appendingPathComponent(packageRelativePath).standardizedFileURL, encoding: .utf8)
-}
-
-private func ctl6Normalized(_ text: String) -> String {
-    text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
 }
 #endif

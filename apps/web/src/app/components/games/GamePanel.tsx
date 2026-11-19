@@ -30,12 +30,6 @@ const readScoreboard = (view: unknown): ScoreRow[] | null => {
   });
 };
 
-/**
- * The active game as a right-docked panel (same dock model as Chat/Participants).
- * The video grid keeps the main stage and reserves width for this panel, so the
- * game sits beside the group instead of taking over an empty stage. On mobile it
- * becomes a full-width sheet that respects the safe-area insets.
- */
 export function GamePanel({
   rightOffset = 0,
   dockWidth,
@@ -74,8 +68,6 @@ export function GamePanel({
     userId &&
       publicState.pendingJoiners.some((player) => player.id === userId),
   );
-  // Spectators receive a read-only projection for games that allow it; when
-  // the view is absent (imposter keeps secrets), fall back to the blocked copy.
   const isSpectating = !isPlayer && view != null;
   const canRequestSeat =
     !isPlayer && !isReadOnly && !publicState.finished && publicState.canJoinLate;

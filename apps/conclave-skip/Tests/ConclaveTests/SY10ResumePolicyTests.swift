@@ -352,22 +352,4 @@ private struct SY10ResumeKeys {
         }
     }
 }
-
-private func sy10PackageRoot() -> URL {
-    URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-}
-
-private func sy10Source(_ packageRelativePath: String) throws -> String {
-    try String(contentsOf: sy10PackageRoot().appendingPathComponent(packageRelativePath).standardizedFileURL, encoding: .utf8)
-}
-
-private struct SY10MissingSlice: Error {
-    let marker: String
-}
-
-private func sy10Slice(_ text: String, from start: String, to end: String) throws -> String {
-    guard let lower = text.range(of: start) else { throw SY10MissingSlice(marker: start) }
-    guard let upper = text.range(of: end, range: lower.upperBound..<text.endIndex) else { throw SY10MissingSlice(marker: end) }
-    return String(text[lower.lowerBound..<upper.lowerBound])
-}
 #endif

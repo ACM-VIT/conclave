@@ -158,7 +158,6 @@ export default function ImposterGame({
     );
   }
 
-  // discuss + vote
   const voting = pub.phase === "vote";
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>

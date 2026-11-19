@@ -106,8 +106,6 @@ export const createVp9EncoderNegativeCapabilityCache = (
           JSON.stringify(Array.from(stored).sort()),
         );
       } catch {
-        // The in-memory entry still makes reconnects conservative when storage
-        // is disabled, full, or blocked by the browser.
       }
     },
   };
@@ -397,11 +395,6 @@ export const detectLoadedDeviceWebcamCodecCapabilities = (
     device.handlerName,
     {
       ...options,
-      // The loaded Device reflects the router intersection, while these
-      // browser capabilities reflect the sender/receiver surface that will
-      // actually encode and decode. Require both. This also preserves a
-      // truthful native or proven-negative capability override instead of
-      // re-introducing a codec from the router after Device.load().
       allowVp9SvcSend: true,
     },
   );

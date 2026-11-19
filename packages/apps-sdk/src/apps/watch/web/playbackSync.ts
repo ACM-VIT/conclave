@@ -11,12 +11,6 @@ export type PlaybackCorrection =
   | { kind: "rate"; rate: number }
   | { kind: "seek"; rate: number; target: number };
 
-/**
- * Keep small network/buffering drift invisible. Playing clients gently catch
- * up (or ease back) and only seek when the gap is large or the room made an
- * explicit timeline jump. Paused media can seek without causing a playback
- * hiccup, so it converges directly.
- */
 export const planPlaybackCorrection = (input: {
   current: number;
   target: number;
@@ -37,8 +31,6 @@ export const planPlaybackCorrection = (input: {
     return { kind: "seek", rate: input.baseRate, target: input.target };
   }
 
-  // YouTube exposes discrete rates; 0.75 and 1.25 are the nearest subtle,
-  // broadly-supported steps around normal playback.
   return {
     kind: "rate",
     rate:

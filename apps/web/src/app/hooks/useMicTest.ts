@@ -7,29 +7,21 @@ import { createNoiseCancellationPipeline } from "../lib/noise-cancellation";
 type MicLoopbackPhase = "idle" | "recording" | "playing";
 
 export interface MicTestController {
-  /** Capture + analysis chain is live and metering. */
   isRunning: boolean;
   isStarting: boolean;
   error: string | null;
-  /** Whether the metered signal actually went through noise cancellation
-   * (the pipeline can fail and fall back to the raw mic). */
   usingNoiseCancellation: boolean;
-  /** Smoothed input level 0..1, updated every animation frame. Read it from a
-   * rAF loop instead of state so the meter doesn't re-render the panel. */
   levelRef: React.MutableRefObject<number>;
   gain: number;
   setGain: (value: number) => void;
   loopbackPhase: MicLoopbackPhase;
-  /** Seconds left while recording the loopback clip. */
   loopbackSecondsLeft: number;
-  /** idle → record a short clip; recording → stop early and play; playing → stop. */
   toggleLoopback: () => void;
-  /** Current private, post-gain microphone stream for explicit local tests. */
   getRecordingStream: () => MediaStream | null;
 }
 
 const LOOPBACK_MAX_SECONDS = 5;
-const LEVEL_SCALE = 4.5; // speech RMS is ~0.05–0.25; scale into a useful 0..1
+const LEVEL_SCALE = 4.5;
 const MIN_GAIN = 0;
 const MAX_GAIN = 2;
 
@@ -58,13 +50,6 @@ const pickRecorderMimeType = (): string | undefined => {
   return undefined;
 };
 
-/**
- * Private microphone test chain: its own getUserMedia capture (same
- * constraints as the published mic), optionally routed through the same
- * noise-cancellation pipeline the meeting publishes with, then through a test
- * gain into an analyser. Nothing here touches the mediasoup producers — the
- * meeting keeps hearing (or not hearing) exactly what it did before.
- */
 export function useMicTest({
   active,
   deviceId,
@@ -74,7 +59,6 @@ export function useMicTest({
   active: boolean;
   deviceId?: string;
   noiseCancellation: boolean;
-  /** Speaker used for loopback playback. */
   outputDeviceId?: string;
 }): MicTestController {
   const [isRunning, setIsRunning] = useState(false);
@@ -144,9 +128,6 @@ export function useMicTest({
     const recorder = recorderRef.current;
     recorderRef.current = null;
     if (recorder) {
-      // Neutralize handlers unconditionally: stop() flips state to
-      // "inactive" synchronously while the onstop event is still queued, so
-      // an already-inactive recorder can still fire playback afterwards.
       recorder.ondataavailable = null;
       recorder.onstop = null;
       if (recorder.state !== "inactive") {
@@ -160,7 +141,6 @@ export function useMicTest({
     setLoopbackSecondsLeft(LOOPBACK_MAX_SECONDS);
   }, [clearRecorderTimers, stopPlayback]);
 
-  // Build / tear down the capture chain whenever the inputs change.
   useEffect(() => {
     if (!active) return;
     if (
@@ -211,7 +191,6 @@ export function useMicTest({
             pipelineCleanup = () =>
               pipeline.cleanup({ stopSource: false, stopOutput: true });
           } catch {
-            // Pipeline unavailable — meter the raw mic instead.
           }
         }
 
@@ -238,7 +217,6 @@ export function useMicTest({
         const analyser = context.createAnalyser();
         analyser.fftSize = 2048;
         analyser.smoothingTimeConstant = 0;
-        // Post-gain destination so loopback records what the meter shows.
         const recorderDestination = context.createMediaStreamDestination();
 
         source.connect(gainNode);
@@ -260,7 +238,6 @@ export function useMicTest({
           const rms = Math.sqrt(sumSquares / samples.length);
           const target = Math.min(1, rms * LEVEL_SCALE);
           const previous = levelRef.current;
-          // Fast attack, slower release so peaks are visible but not jumpy.
           levelRef.current =
             target > previous
               ? previous + (target - previous) * 0.55
@@ -274,8 +251,6 @@ export function useMicTest({
         setIsStarting(false);
       } catch (err) {
         if (cancelled) return;
-        // Tear down everything built before the failure (the NC pipeline and
-        // audio context can already exist by the time something throws).
         if (rafId !== null) {
           window.cancelAnimationFrame(rafId);
           rafId = null;
@@ -328,7 +303,6 @@ export function useMicTest({
       setIsRunning(false);
       setUsingNoiseCancellation(false);
     };
-    // stopLoopback is stable; deviceId/noiseCancellation changes rebuild the chain.
   }, [active, deviceId, noiseCancellation, stopLoopback]);
 
   const playLoopbackClip = useCallback(
@@ -377,7 +351,6 @@ export function useMicTest({
       return;
     }
     if (loopbackPhase === "recording") {
-      // Stop early: the recorder's onstop hands the clip to playback.
       clearRecorderTimers();
       const recorder = recorderRef.current;
       if (recorder && recorder.state !== "inactive") {
@@ -463,10 +436,6 @@ export function useMicTest({
   };
 }
 
-/**
- * Plays a short two-note chime through the chosen speaker so people can check
- * the right output device is selected. Local playback only.
- */
 export async function playSpeakerTestSound(
   outputDeviceId?: string,
 ): Promise<void> {

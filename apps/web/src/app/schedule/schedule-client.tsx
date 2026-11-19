@@ -191,7 +191,6 @@ const listTimeZones = (): string[] => {
     ).supportedValuesOf?.("timeZone");
     if (zones && zones.length > 0) return zones;
   } catch {
-    // Older runtimes: fall back to a curated list below.
   }
   return FALLBACK_TIME_ZONES;
 };
@@ -202,7 +201,20 @@ export default function ScheduleClient({ user: _user }: Props) {
   );
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [status, setStatus] = useState<"loading" | "idle" | "error">("loading");
-  const [working, setWorking] = useState<string | null>(null);
+  const [workingKeys, setWorkingKeys] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const startWork = useCallback((key: string) => {
+    setWorkingKeys((current) => new Set(current).add(key));
+  }, []);
+  const finishWork = useCallback((key: string) => {
+    setWorkingKeys((current) => {
+      if (!current.has(key)) return current;
+      const next = new Set(current);
+      next.delete(key);
+      return next;
+    });
+  }, []);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const [editing, setEditing] = useState<SchedulingEventType | null>(null);
@@ -235,7 +247,7 @@ export default function ScheduleClient({ user: _user }: Props) {
 
   const updateProfile = useCallback(
     async (updates: { name?: string; username?: string; timeZone?: string }) => {
-      setWorking("profile");
+      startWork("profile");
       setError(null);
       try {
         const data = await fetchJson<SchedulingDashboardResponse>(
@@ -246,7 +258,7 @@ export default function ScheduleClient({ user: _user }: Props) {
       } catch (updateError) {
         setError((updateError as Error).message || "Could not update profile");
       } finally {
-        setWorking(null);
+        finishWork("profile");
       }
     },
     [],
@@ -254,7 +266,7 @@ export default function ScheduleClient({ user: _user }: Props) {
 
   const saveAvailability = useCallback(
     async (availability: WeeklyAvailability) => {
-      setWorking("availability");
+      startWork("availability");
       setError(null);
       try {
         const data = await fetchJson<{
@@ -272,7 +284,7 @@ export default function ScheduleClient({ user: _user }: Props) {
       } catch (saveError) {
         setError((saveError as Error).message || "Could not save availability");
       } finally {
-        setWorking(null);
+        finishWork("availability");
       }
     },
     [],
@@ -280,7 +292,7 @@ export default function ScheduleClient({ user: _user }: Props) {
 
   const createEventType = useCallback(async () => {
     const title = "New event type";
-    setWorking("create-event");
+    startWork("create-event");
     setError(null);
     try {
       const data = await fetchJson<{ eventType: SchedulingEventType }>(
@@ -304,13 +316,13 @@ export default function ScheduleClient({ user: _user }: Props) {
     } catch (createError) {
       setError((createError as Error).message || "Could not create event type");
     } finally {
-      setWorking(null);
+      finishWork("create-event");
     }
   }, []);
 
   const patchEventType = useCallback(
     async (id: string, updates: Partial<SchedulingEventType>) => {
-      setWorking(id);
+      startWork(id);
       setError(null);
       try {
         const data = await fetchJson<{ eventType: SchedulingEventType }>(
@@ -331,7 +343,7 @@ export default function ScheduleClient({ user: _user }: Props) {
       } catch (patchError) {
         setError((patchError as Error).message || "Could not update event type");
       } finally {
-        setWorking(null);
+        finishWork(id);
       }
     },
     [],
@@ -351,7 +363,7 @@ export default function ScheduleClient({ user: _user }: Props) {
   );
 
   const disconnectCalendar = useCallback(async () => {
-    setWorking("calendar");
+    startWork("calendar");
     setError(null);
     try {
       const data = await fetchJson<{
@@ -366,7 +378,7 @@ export default function ScheduleClient({ user: _user }: Props) {
     } catch (disconnectError) {
       setError((disconnectError as Error).message || "Could not disconnect calendar");
     } finally {
-      setWorking(null);
+      finishWork("calendar");
     }
   }, []);
 
@@ -422,7 +434,6 @@ export default function ScheduleClient({ user: _user }: Props) {
         </a>
 
         <div className="rounded-2xl border border-white/10 bg-[#0e0e10]">
-          {/* Header — identity + the one primary action */}
           <div className="flex items-center justify-between gap-4 border-b border-white/10 px-5 py-4 sm:px-6">
             <div className="flex min-w-0 items-center gap-3">
               <div className="min-w-0">
@@ -454,10 +465,10 @@ export default function ScheduleClient({ user: _user }: Props) {
             <button
               type="button"
               onClick={() => void createEventType()}
-              disabled={working === "create-event"}
+              disabled={workingKeys.has("create-event")}
               className={PRIMARY}
             >
-              {working === "create-event" ? (
+              {workingKeys.has("create-event") ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
                 <Plus className="h-4 w-4" />
@@ -473,7 +484,6 @@ export default function ScheduleClient({ user: _user }: Props) {
               </p>
             ) : null}
 
-            {/* Calendar — banner only when it needs attention */}
             {calendarConnected ? (
               <div className="flex items-center justify-between gap-3 text-[12.5px]">
                 <span className="inline-flex min-w-0 items-center gap-2 text-[#fafafa]/55">
@@ -486,10 +496,10 @@ export default function ScheduleClient({ user: _user }: Props) {
                 <button
                   type="button"
                   onClick={() => void disconnectCalendar()}
-                  disabled={working === "calendar"}
+                  disabled={workingKeys.has("calendar")}
                   className="shrink-0 text-[#fafafa]/45 transition-colors hover:text-[#fafafa] disabled:opacity-50"
                 >
-                  {working === "calendar" ? "…" : "Disconnect"}
+                  {workingKeys.has("calendar") ? "…" : "Disconnect"}
                 </button>
               </div>
             ) : (
@@ -509,14 +519,13 @@ export default function ScheduleClient({ user: _user }: Props) {
               </div>
             )}
 
-            {/* Booking links */}
             <section>
               <p className={`${LABEL} mb-3`}>Booking links</p>
               {dashboard.eventTypes.length === 0 ? (
                 <button
                   type="button"
                   onClick={() => void createEventType()}
-                  disabled={working === "create-event"}
+                  disabled={workingKeys.has("create-event")}
                   className="group flex w-full items-center justify-between gap-4 rounded-xl border border-dashed border-white/12 px-4 py-4 text-left transition-colors hover:border-white/20 hover:bg-white/[0.02]"
                 >
                   <span className="min-w-0">
@@ -564,7 +573,7 @@ export default function ScheduleClient({ user: _user }: Props) {
                         <Switch
                           label={`Publish ${eventType.title}`}
                           checked={eventType.isActive}
-                          disabled={working === eventType.id}
+                          disabled={workingKeys.has(eventType.id)}
                           onChange={(checked) =>
                             void patchEventType(eventType.id, { isActive: checked })
                           }
@@ -609,16 +618,14 @@ export default function ScheduleClient({ user: _user }: Props) {
               )}
             </section>
 
-            {/* Weekly hours */}
             <AvailabilitySection
               availability={dashboard.availability}
               timeZone={dashboard.profile.timeZone}
-              working={working === "availability"}
+              working={workingKeys.has("availability")}
               onSave={(availability) => void saveAvailability(availability)}
               onTimeZoneChange={changeTimeZone}
             />
 
-            {/* Bookings — only when there are any */}
             {bookings.length > 0 ? (
               <section>
                 <p className={`${LABEL} mb-3`}>Upcoming</p>
@@ -661,10 +668,10 @@ export default function ScheduleClient({ user: _user }: Props) {
           eventType={editing}
           username={dashboard.profile.username}
           calendarConnected={calendarConnected}
-          working={working === editing.id}
+          working={workingKeys.has(editing.id)}
           onClose={() => setEditing(null)}
           onDelete={async () => {
-            setWorking(editing.id);
+            startWork(editing.id);
             setError(null);
             try {
               await fetchJson<{ success: boolean }>(
@@ -685,7 +692,7 @@ export default function ScheduleClient({ user: _user }: Props) {
             } catch (deleteError) {
               setError((deleteError as Error).message || "Could not delete event type");
             } finally {
-              setWorking(null);
+              finishWork(editing.id);
             }
           }}
           onSave={(updates) => void patchEventType(editing.id, updates)}

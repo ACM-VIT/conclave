@@ -35,9 +35,6 @@ interface UseSharedBrowserReturn {
     clearError: () => void;
 }
 
-// Launching Kitesurf can require two sequential Cloudflare requests. The SFU
-// caps each request at 20 seconds, so leave enough time for a successful launch
-// and its acknowledgement to reach this socket.
 const BROWSER_COMMAND_TIMEOUT_MS = 45000;
 const BROWSER_CAPABILITIES_TIMEOUT_MS = 22000;
 
@@ -115,6 +112,7 @@ export function useSharedBrowser({
     const [isLaunching, setIsLaunching] = useState(false);
     const [launchError, setLaunchError] = useState<string | null>(null);
     const activityIntervalRef = useRef<NodeJS.Timeout | null>(null);
+    const browserStateEpochRef = useRef(0);
 
     const clearError = useCallback(() => {
         setLaunchError(null);
@@ -172,15 +170,18 @@ export function useSharedBrowser({
         if (!socket || !isConnected) return;
 
         const handleBrowserState = (state: BrowserState) => {
+            browserStateEpochRef.current += 1;
             setBrowserState(state);
             setIsLaunching(false);
         };
 
         const handleBrowserClosed = () => {
+            browserStateEpochRef.current += 1;
             setBrowserState({ active: false });
             setIsLaunching(false);
         };
         const handleDisconnect = () => {
+            browserStateEpochRef.current += 1;
             setBrowserState({ active: false });
             setIsLaunching(false);
         };
@@ -226,6 +227,7 @@ export function useSharedBrowser({
             setIsLaunching(true);
             setLaunchError(null);
 
+            const requestEpoch = browserStateEpochRef.current;
             const response = await emitBrowserCommand(socket, "browser:launch", { url });
             setIsLaunching(false);
             if (response.error) {
@@ -233,6 +235,7 @@ export function useSharedBrowser({
                 return false;
             }
 
+            if (browserStateEpochRef.current !== requestEpoch) return true;
             setBrowserState({
                 active: true,
                 url,
@@ -252,6 +255,7 @@ export function useSharedBrowser({
             setIsLaunching(true);
             setLaunchError(null);
 
+            const requestEpoch = browserStateEpochRef.current;
             const response = await emitBrowserCommand(socket, "browser:navigate", { url });
             setIsLaunching(false);
             if (response.error) {
@@ -259,6 +263,7 @@ export function useSharedBrowser({
                 return false;
             }
 
+            if (browserStateEpochRef.current !== requestEpoch) return true;
             setBrowserState((prev) => ({
                 ...prev,
                 url,
@@ -273,12 +278,14 @@ export function useSharedBrowser({
         const socket = socketRef.current;
         if (!socket || !isAdmin) return false;
 
+        const requestEpoch = browserStateEpochRef.current;
         const response = await emitBrowserCommand(socket, "browser:close");
         if (response.error) {
             setLaunchError(response.error);
             return false;
         }
 
+        if (browserStateEpochRef.current !== requestEpoch) return true;
         setBrowserState({ active: false });
         return true;
     }, [socketRef, isAdmin]);

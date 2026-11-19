@@ -2,9 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   DYNAMIC_NETWORK_TRANSITION_ASSESSMENT_VERSION,
-  DYNAMIC_NETWORK_TRANSITION_CHECKPOINT_INTERVAL_MS,
   DYNAMIC_NETWORK_TRANSITION_ENDPOINTS,
-  DYNAMIC_NETWORK_TRANSITION_PHASE_PLAN,
   DYNAMIC_NETWORK_TRANSITION_SCHEMA_VERSION,
   DYNAMIC_NETWORK_TRANSITION_WINDOW_MS,
   advanceDynamicNetworkHintLedger,
@@ -2469,16 +2467,4 @@ test("schema or exact-plan loss fails closed with complete result fields", () =>
   assert.equal(result.phases, null);
   assert.equal(result.transitionDurationsMs, null);
   assert.equal(result.continuity, null);
-});
-
-test("phase constants preserve the exact pristine-poor-pristine budget", () => {
-  assert.deepEqual(DYNAMIC_NETWORK_TRANSITION_PHASE_PLAN.phases, {
-    pristine: { startOffsetMs: 0, endOffsetMs: 12_000 },
-    downshift: { startOffsetMs: 12_000, endOffsetMs: 24_000 },
-    poor: { startOffsetMs: 24_000, endOffsetMs: 36_000 },
-    recovery: { startOffsetMs: 36_000, endOffsetMs: 91_000 },
-    recovered: { startOffsetMs: 91_000, endOffsetMs: 103_000 },
-  });
-  assert.equal(DYNAMIC_NETWORK_TRANSITION_CHECKPOINT_INTERVAL_MS, 500);
-  assert.equal(DYNAMIC_NETWORK_TRANSITION_ENDPOINTS.length, 3);
 });

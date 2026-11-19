@@ -15,7 +15,7 @@ import {
   Mail,
   Video,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AvailableSlot,
   BookingConfirmation,
@@ -61,7 +61,6 @@ const listTimeZones = (): string[] => {
     ).supportedValuesOf?.("timeZone");
     if (zones && zones.length > 0) return zones;
   } catch {
-    // Older runtimes: fall back to a curated list below.
   }
   return FALLBACK_TIME_ZONES;
 };
@@ -253,8 +252,11 @@ export default function BookingClient({ username, eventSlug }: Props) {
     };
   }, [username, eventSlug]);
 
+  const slotRequestRef = useRef(0);
   const loadSlots = useCallback(async () => {
     if (!page) return;
+    slotRequestRef.current += 1;
+    const requestId = slotRequestRef.current;
     setSlotStatus("loading");
     setError(null);
     try {
@@ -264,9 +266,11 @@ export default function BookingClient({ username, eventSlug }: Props) {
       const data = await fetchJson<{ slots?: AvailableSlot[] }>(
         `/api/scheduling/public/${encodeURIComponent(username)}/${encodeURIComponent(eventSlug)}/slots?from=${from}&to=${to}&timeZone=${encodeURIComponent(timeZone)}`,
       );
+      if (slotRequestRef.current !== requestId) return;
       setSlots(data.slots ?? []);
       setSlotStatus("idle");
     } catch (slotError) {
+      if (slotRequestRef.current !== requestId) return;
       setError((slotError as Error).message || "Could not load slots");
       setSlotStatus("error");
     }
@@ -426,7 +430,6 @@ export default function BookingClient({ username, eventSlug }: Props) {
     <main className="flex min-h-dvh items-center justify-center bg-[#0a0a0b] px-4 py-8 text-[#fafafa]">
       <div className="w-full max-w-[860px]">
         <div className="overflow-hidden rounded-2xl border border-white/10 bg-[#0e0e10] md:grid md:grid-cols-[290px_minmax(0,1fr)]">
-          {/* What you're booking */}
           <aside className="border-b border-white/10 p-6 md:border-b-0 md:border-r">
             <p className="text-[13px] text-[#fafafa]/45">{page.profile.name}</p>
             <h1
@@ -460,7 +463,6 @@ export default function BookingClient({ username, eventSlug }: Props) {
             </div>
           </aside>
 
-          {/* When + who */}
           <section className="flex flex-col p-6 md:min-h-[508px]">
             {selectedSlot ? (
               <div className="flex flex-1 flex-col">

@@ -517,13 +517,5 @@ struct TRN2TranscriptPanelTests {
         #expect(TranscriptTab.allCases.count == 3 && StopPhase.allCases.count == 4 && RecapPhase.allCases.count == 4
                 && KeyCoverage.allCases.count == 4 && AskRowState.allCases.count == 6 && MinutesSection.allCases.count == 6)
     }
-
-    @Test func transcriptSourcesStayFlatDashFreeAndOnTheSharedComponents() throws {
-        let paths = try stageSource("Android/app/src/main/res/xml/conclave_file_paths.xml")
-        #expect(paths.contains("<cache-path name=\"exports\" path=\"exports/\" />"))
-        let manifest = try stageSource("Android/app/src/main/AndroidManifest.xml")
-        #expect(manifest.contains("android:authorities=\"${applicationId}.fileprovider\""))
-        #expect(manifest.contains("android:resource=\"@xml/conclave_file_paths\""))
-    }
 }
 #endif

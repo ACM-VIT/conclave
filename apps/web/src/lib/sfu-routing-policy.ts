@@ -53,8 +53,6 @@ export const resolveRoomPlacementCapability = (
 
   const capabilities = (status as { capabilities?: unknown }).capabilities;
   if (!capabilities || typeof capabilities !== "object" || Array.isArray(capabilities)) {
-    // A valid status envelope without the capability marker is an SFU from
-    // before the atomic placement endpoint was introduced.
     return "legacy";
   }
 
@@ -135,8 +133,6 @@ export const selectPreOwnerSfu = (
     };
   }
 
-  // An unknown instance may still be reachable by the client. Prefer it over
-  // an instance that explicitly reported that it will reject new rooms.
   const unknown = candidates.filter(
     (candidate) => candidate.availability === "unknown",
   );
@@ -183,8 +179,6 @@ export const resolveConfiguredOwnerSfuUrl = (
   for (const candidateSfuUrl of candidateSfuUrls) {
     const candidateOrigin = normalizeHttpOrigin(candidateSfuUrl);
     if (candidateOrigin === ownerOrigin) {
-      // Return the trusted configured origin, not an owner-controlled path,
-      // query, fragment, or spelling of the same origin.
       return candidateOrigin;
     }
   }

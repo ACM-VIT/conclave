@@ -29,7 +29,6 @@ export function useOneTimeHint(
     try {
       dismissed = window.localStorage.getItem(STORAGE_PREFIX + id) === "1";
     } catch {
-      // Private mode / storage disabled, just show it this session.
     }
     if (dismissed) return;
     const timer = window.setTimeout(() => setVisible(true), delay);
@@ -41,7 +40,6 @@ export function useOneTimeHint(
     try {
       window.localStorage.setItem(STORAGE_PREFIX + id, "1");
     } catch {
-      // Ignore, the hint just won't be remembered across reloads.
     }
   }, [id]);
 

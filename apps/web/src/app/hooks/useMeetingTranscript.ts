@@ -184,7 +184,6 @@ const toWorkerWebSocketUrl = (token: TranscriptTokenResponse): string => {
   return url.toString();
 };
 
-// Matches ConclaveUpdatePill's cadence so both update prompts behave alike.
 const VERSION_POLL_INTERVAL_MS = 30_000;
 const SFU_SESSION_READY_TIMEOUT_MS = 30_000;
 const SFU_RELAY_TOKEN_TIMEOUT_MS = 5_000;
@@ -332,6 +331,7 @@ export function useMeetingTranscript({
   const serviceVersionRef = useRef<TranscriptServiceVersion | null>(null);
   const autoTakeoverAttemptRef = useRef<string | null>(null);
   const suppressAutoTakeoverUntilRef = useRef(0);
+  const explicitStopSerialRef = useRef(0);
 
   const clearReconnectTimer = useCallback(() => {
     if (reconnectTimerRef.current === null) return;
@@ -354,8 +354,6 @@ export function useMeetingTranscript({
     }
     reconnectTimerRef.current = window.setTimeout(() => {
       reconnectTimerRef.current = null;
-      // The current connect attempt schedules its own failures. An obsolete
-      // attempt must not schedule another retry after a replacement opens.
       void connectRef.current?.();
     }, delay);
   }, [cancelPendingQuestions]);
@@ -1106,7 +1104,6 @@ export function useMeetingTranscript({
           setAvailableServiceVersion(payload.serviceVersion);
         }
       } catch {
-        // A version probe should never interrupt the live transcript.
       }
     };
 
@@ -1132,6 +1129,7 @@ export function useMeetingTranscript({
         setPermissionError();
         return false;
       }
+      const stopSerialAtRequest = explicitStopSerialRef.current;
       const connected = await connect();
       if (!connected) return false;
       suppressAutoTakeoverUntilRef.current = 0;
@@ -1141,6 +1139,7 @@ export function useMeetingTranscript({
       }
       sfuRelayStartTokenRef.current = null;
       clearSfuRelayStartTokenWaiters();
+      if (explicitStopSerialRef.current !== stopSerialAtRequest) return false;
       const sent = send({
         type: "session.start",
         apiKey: options.apiKey,
@@ -1160,6 +1159,9 @@ export function useMeetingTranscript({
               nextSession.status === "takeover_needed"),
           SFU_SESSION_READY_TIMEOUT_MS,
         );
+        if (explicitStopSerialRef.current !== stopSerialAtRequest) {
+          return false;
+        }
         if (readySession?.status !== "live") {
           setError(
             readySession?.error ||
@@ -1196,6 +1198,7 @@ export function useMeetingTranscript({
         setPermissionError();
         return false;
       }
+      const stopSerialAtRequest = explicitStopSerialRef.current;
       const connected = await connect();
       if (!connected) return false;
       suppressAutoTakeoverUntilRef.current = 0;
@@ -1205,6 +1208,7 @@ export function useMeetingTranscript({
       }
       sfuRelayStartTokenRef.current = null;
       clearSfuRelayStartTokenWaiters();
+      if (explicitStopSerialRef.current !== stopSerialAtRequest) return false;
       const sent = send({
         type: "session.takeover",
         apiKey: options.apiKey,
@@ -1224,6 +1228,9 @@ export function useMeetingTranscript({
               nextSession.status === "takeover_needed"),
           SFU_SESSION_READY_TIMEOUT_MS,
         );
+        if (explicitStopSerialRef.current !== stopSerialAtRequest) {
+          return false;
+        }
         if (readySession?.status !== "live") {
           setError(
             readySession?.error ||
@@ -1299,6 +1306,8 @@ export function useMeetingTranscript({
       return;
     }
     const transportMode = session.transportMode;
+    explicitStopSerialRef.current += 1;
+    clearSessionWaiters();
     suppressAutoTakeoverUntilRef.current =
       Date.now() + SFU_EXPLICIT_STOP_SUPPRESS_TAKEOVER_MS;
     send({ type: "session.stop" });
@@ -1310,6 +1319,7 @@ export function useMeetingTranscript({
     }
   }, [
     canStop,
+    clearSessionWaiters,
     send,
     session.transportMode,
     setPermissionError,
@@ -1531,10 +1541,15 @@ export function useMeetingTranscript({
         },
       });
     }
-    relayRef.current
+    const relay = relayRef.current;
+    relay
       .start(transcriptSources)
-      .then(() => updateIsStreamingAudio(true))
+      .then(() => {
+        if (relayRef.current !== relay) return;
+        updateIsStreamingAudio(true);
+      })
       .catch((startError: unknown) => {
+        if (relayRef.current !== relay) return;
         updateIsStreamingAudio(false);
         setError(
           startError instanceof Error

@@ -19,11 +19,6 @@ const subscribe = (onChange: () => void) => {
 const getSnapshot = () => getMediaQuery()?.matches ?? false;
 const getServerSnapshot = () => false;
 
-/**
- * Live `prefers-reduced-motion: reduce` state. Unlike Motion's
- * `useReducedMotion` (which samples once on mount), this re-renders when the
- * user flips the OS setting mid-session.
- */
 export function usePrefersReducedMotion(): boolean {
   return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 }

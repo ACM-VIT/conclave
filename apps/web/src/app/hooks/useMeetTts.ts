@@ -10,7 +10,6 @@ export interface TtsPayload {
   displayName: string;
   text: string;
   ttsVoiceToken?: string;
-  /** Chat message id, when the payload came from a chat message. */
   messageId?: string;
 }
 
@@ -27,19 +26,12 @@ export interface ClonedTtsVoice {
 
 const TTS_RATE = 0.94;
 const TTS_PITCH = 1;
-/** Queued messages beyond this are dropped oldest-first. */
 const MAX_QUEUED_TTS = 6;
-/** Gap between queued messages so back-to-back TTS doesn't run together. */
 const QUEUE_ADVANCE_DELAY_MS = 250;
-/** Give up on cloned-speech generation after this and use the system voice. */
-/** Post-playback grace before the stuck-playback failsafe fires. */
 const FAILSAFE_GRACE_MS = 8000;
 
-/** Speech budget for playbacks whose real duration is unknown. */
 const estimateSpeechMs = (text: string): number => {
   const words = text.split(/\s+/).filter(Boolean).length;
-  // Whitespace-free scripts (CJK etc.) would count as one word, so also
-  // budget by characters and take the larger of the two.
   const units = Math.max(words, Math.ceil(text.length / 6));
   return Math.min(90000, Math.max(FAILSAFE_GRACE_MS, units * 700 + 5000));
 };
@@ -199,11 +191,6 @@ export function useMeetTts({
     if (next) speakPayloadRef.current(next);
   }, []);
 
-  /**
-   * Single completion path for a playback attempt: clears the speaking
-   * indicators and, after a short beat, plays the next queued message.
-   * Safe to call multiple times — only the owning token wins.
-   */
   const finishPlayback = useCallback((token: number) => {
     if (activeTokenRef.current !== token) return;
     activeTokenRef.current = null;
@@ -240,20 +227,12 @@ export function useMeetTts({
       pickBestVoice(voices, preferredLanguageRef.current);
   }, [selectedSystemVoiceUri]);
 
-  // The mount effect must not re-run when the selected voice changes (its
-  // cleanup tears down live playback), so it reaches the latest refresher
-  // through a ref while this effect applies selection changes immediately.
   const refreshPreferredVoiceRef = useRef(refreshPreferredVoice);
   useEffect(() => {
     refreshPreferredVoiceRef.current = refreshPreferredVoice;
     refreshPreferredVoice();
   }, [refreshPreferredVoice]);
 
-  /**
-   * Arms the stuck-playback failsafe for the active token. Real completion
-   * comes from the utterance/audio end events; this only rescues playback
-   * that never reports back so the queue cannot wedge.
-   */
   const armFailsafe = useCallback((token: number, delayMs: number) => {
     if (failsafeTimeoutRef.current !== null) {
       window.clearTimeout(failsafeTimeoutRef.current);
@@ -343,8 +322,6 @@ export function useMeetTts({
 
     const controller = new AbortController();
     clonedSpeechAbortRef.current = controller;
-    // Generation gets its own clock: a slow provider falls back to the system
-    // voice instead of eating into (or being killed by) the playback failsafe.
     let generationTimedOut = false;
     const roomAi = getRoomAi?.();
     const speechSettings = resolveAiFeatureSettings({}, "speech", roomAi?.state.features ?? {});
@@ -396,8 +373,6 @@ export function useMeetTts({
     } catch {
       window.clearTimeout(generationTimeout);
       if (activeTokenRef.current !== token) return;
-      // A user-initiated stop aborts too; only the generation timeout should
-      // fall back to the system voice.
       if (controller.signal.aborted && !generationTimedOut) return;
       stopClonedSpeech();
       speakWithSystemVoice(payload, token);
@@ -425,8 +400,6 @@ export function useMeetTts({
       window.clearTimeout(failsafeTimeoutRef.current);
       failsafeTimeoutRef.current = null;
     }
-    // The cloned path arms its playback failsafe once audio actually starts
-    // (generation has its own timeout); until then, guard the fetch window.
     if (payload.ttsVoiceToken) {
       armFailsafe(token, resolveAiFeatureSettings({}, "speech", getRoomAi?.()?.state.features ?? {}).timeoutMs + estimateSpeechMs(text));
       void speakWithClonedVoice(payload, token);
@@ -480,8 +453,6 @@ export function useMeetTts({
     if (!payload.text?.trim()) return;
     const mustQueue =
       activeTokenRef.current !== null ||
-      // Messages already waiting keep their order even during the short
-      // advance gap between playbacks.
       queueRef.current.length > 0 ||
       (shouldGateSpeechRef.current && !isSpeechUnlockedRef.current);
     if (mustQueue) {
@@ -494,10 +465,8 @@ export function useMeetTts({
     speakPayload(payload);
   }, [speakPayload]);
 
-  /** Stops the current message (if any) and plays this payload right away. */
   const replayTts = useCallback((payload: TtsPayload) => {
     if (!payload.text?.trim()) return;
-    // Replay always comes from a click, so speech is user-gesture unlocked.
     isSpeechUnlockedRef.current = true;
     if (typeof window !== "undefined" && "speechSynthesis" in window) {
       try {
@@ -507,7 +476,6 @@ export function useMeetTts({
     speakPayload(payload);
   }, [speakPayload]);
 
-  /** Stops the current message and drops everything queued behind it. */
   const stopTts = useCallback(() => {
     queueRef.current = [];
     if (advanceTimeoutRef.current !== null) {
@@ -524,8 +492,6 @@ export function useMeetTts({
     if (token !== null) finishPlayback(token);
   }, [finishPlayback, stopClonedSpeech]);
 
-  // Mount-only lifecycle (all deps are stable callbacks): re-running this
-  // effect would tear down live playback and leave the queue wedged.
   useEffect(() => {
     if (typeof window !== "undefined" && "speechSynthesis" in window) {
       const synth = window.speechSynthesis;

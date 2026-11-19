@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { runInNewContext } from "node:vm";
+import * as vm from "node:vm";
 import { test } from "node:test";
 
 const require = createRequire(import.meta.url);
@@ -36,11 +36,39 @@ test("Cloudflare inlines Next.js preview props and rejects unknown manifests", a
       monorepoRoot: root,
       appBuildOutputPath: path.join(root, "apps/web"),
     });
-    const code = await updates[0].callback({ contents: `
-      function loadManifest(path, shouldCache = true) { throw new Error("Filesystem unavailable"); }
-      function evalManifest(path, shouldCache = true) { throw new Error("Filesystem unavailable"); }
-    ` });
-    const load = runInNewContext(`${code}\nloadManifest`);
+    // Patch the real Next.js module (not a hand-written stand-in) so this test
+    // follows both Next.js and the adapter: every manifest read must be
+    // inlined, because the Worker has no filesystem.
+    const nextLoadManifest = require.resolve("next/dist/server/load-manifest.external.js", {
+      paths: [path.join(import.meta.dirname, "../apps/web")],
+    });
+    const code = await updates[0].callback({
+      contents: await readFile(nextLoadManifest, "utf8"),
+      path: nextLoadManifest,
+    });
+    const module = { exports: {} };
+    const unavailableFs = {
+      readFileSync() {
+        throw new Error("Filesystem unavailable");
+      },
+    };
+    const stubs = {
+      fs: unavailableFs,
+      path,
+      vm,
+      "../shared/lib/deep-freeze": { deepFreeze: (value) => value },
+    };
+    vm.runInNewContext(code, {
+      module,
+      exports: module.exports,
+      require: (id) => {
+        if (!(id in stubs)) throw new Error(`Unexpected require(${id})`);
+        return stubs[id];
+      },
+      process: { env: { NEXT_BUILD_ID: "fixture-build" } },
+    });
+    const { loadManifest } = module.exports;
+    const load = (manifest) => loadManifest(manifest, false);
     assert.deepEqual(JSON.parse(JSON.stringify(load("/.next/server/preview-props.json"))), preview);
     assert.deepEqual(JSON.parse(JSON.stringify(load("/.next/prerender-manifest.json"))), prerender);
     assert.throws(() => load("/.next/unknown.json"), /Unexpected loadManifest/);

@@ -3,6 +3,7 @@ import type { Server as SocketIOServer } from "socket.io";
 import { Logger } from "../../utilities/loggers.js";
 import type { SfuState } from "../state.js";
 import { createConnectionContext, setSocketContext } from "./context.js";
+import { guardSocketListeners } from "./guardListeners.js";
 import { registerChatHandlers } from "./handlers/chatHandlers.js";
 import { registerChatReactionHandlers } from "./handlers/chatReactionHandlers.js";
 import { registerDisconnectHandlers } from "./handlers/disconnectHandlers.js";
@@ -27,6 +28,8 @@ export const registerConnectionHandlers = (
 ): void => {
   io.on("connection", (socket) => {
     Logger.info(`Client connected: ${socket.id}`);
+    // Before any handler registers: one bad packet must not crash the SFU.
+    guardSocketListeners(socket);
 
     const context = createConnectionContext(io, socket, state);
     setSocketContext(socket, context);

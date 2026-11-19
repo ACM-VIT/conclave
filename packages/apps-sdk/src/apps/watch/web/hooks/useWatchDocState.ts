@@ -9,11 +9,6 @@ type WatchDocState = {
   queue: QueueItem[];
 };
 
-/**
- * Reactively read the durable Watch doc fields the React tree renders: the
- * current video (id + title) and the queue. Playback timing lives in
- * useSyncedPlayback; this hook only tracks the content that changes the layout.
- */
 export function useWatchDocState(doc: Y.Doc): WatchDocState {
   const [state, setState] = useState<WatchDocState>(() => ({
     videoId: getVideoId(doc),

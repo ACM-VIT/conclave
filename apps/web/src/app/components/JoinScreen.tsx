@@ -1,7 +1,9 @@
 "use client";
 
+import { toSafeNextPath } from "../lib/safe-next-path";
 import dynamic from "next/dynamic";
 import {
+  Headphones,
   Loader2,
   WandSparkles,
   Video,
@@ -167,9 +169,6 @@ interface JoinScreenProps {
   onEnterStart?: (action: "new" | "join") => void;
 }
 
-// Flat, Google-Meet-style lobby (dark Carbon, no gradients/marketing): a single
-// screen with the mic/cam self-preview on the left and the join actions on the
-// right. The whole 3-phase welcome/auth/join flow was ripped out for this.
 const FIELD =
   "w-full rounded-xl border border-white/10 bg-white/[0.03] px-4 h-12 text-[15px] text-[#fafafa] placeholder:text-[#fafafa]/30 transition-[border-color,background-color] duration-150 focus:border-[#F95F4A]/60 focus:bg-white/[0.05] focus:outline-none disabled:opacity-50";
 const CTA_PRIMARY =
@@ -242,8 +241,6 @@ const warnJoinMedia = (event: string, payload?: unknown) => {
 
 type DeviceOption = { deviceId: string; label: string };
 
-// Compact device dropdown for the prejoin actions column (mic / camera). Styled
-// to match the FIELD inputs; uses a native <select> so it stays accessible.
 function DeviceSelect({
   icon: Icon,
   value,
@@ -317,8 +314,6 @@ function JoinScreen({
   const isRoutedRoom = forceJoinOnly;
   const enforceShortCode = enableRoomRouting || forceJoinOnly;
 
-  // Warm the (large) brand animation while the lobby is idle so the entry
-  // overlay can paint instantly the moment the user commits to a meeting.
   useEffect(() => {
     prefetchConclaveAnimation();
     prefetchConclaveLock();
@@ -336,6 +331,12 @@ function JoinScreen({
   const micIntentRef = useRef(false);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [isCameraOn, setIsCameraOn] = useState(false);
+  // Join without sending or receiving video (for slow connections). Carried
+  // into the meeting through the prejoin media handoff.
+  const [isAudioOnly, setIsAudioOnly] = useState(false);
+  // Read by async camera paths, which must not start video once audio-only
+  // mode is on even if they began before it was turned on.
+  const audioOnlyRef = useRef(false);
   const [isMicOn, setIsMicOn] = useState(false);
   const [isRequestingPermissions, setIsRequestingPermissions] = useState(false);
   const [permissionRequestError, setPermissionRequestError] = useState<
@@ -344,26 +345,14 @@ function JoinScreen({
   const [isEffectsOpen, setIsEffectsOpen] = useState(false);
   const [guestName, setGuestName] = useState("");
   const [isSigningOut, setIsSigningOut] = useState(false);
-  // presenceChecked: a check has started (pill may appear, possibly as "Checking…").
-  // presenceSettled: a check has completed at least once, so we show a real count
-  // and keep showing it through background polls instead of flickering to "Checking…".
   const [presenceChecked, setPresenceChecked] = useState(false);
   const [presenceSettled, setPresenceSettled] = useState(false);
-  // Prejoin device selection + copy-link. Device pickers only act on a live
-  // track (a clean swap on the local preview, which the handoff then carries
-  // into the call), so none of the toggle/permission paths need to change.
   const [audioInputs, setAudioInputs] = useState<DeviceOption[]>([]);
   const [videoInputs, setVideoInputs] = useState<DeviceOption[]>([]);
   const [selectedAudioId, setSelectedAudioId] = useState("");
   const [selectedVideoId, setSelectedVideoId] = useState("");
   const [linkCopied, setLinkCopied] = useState(false);
   const copyResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Deferred join: both the guest user (onUserChange) and the host flag
-  // (onIsAdminChange) propagate through the parent asynchronously, and the
-  // parent rebuilds onJoinRoom with the new isHost only on the next render.
-  // So we stash the intent and fire onJoinRoom once both have landed —
-  // otherwise "New meeting" joins with a stale isAdmin=false and the SFU
-  // replies "No room found" (it only creates a room when isHost is true).
   const [pending, setPending] = useState<{ mode: "new" | "join"; roomId: string } | null>(null);
 
   const { data: session } = useSession();
@@ -585,13 +574,16 @@ function JoinScreen({
   const requestMicrophoneAndCamera = async () => {
     if (isRequestingPermissions) return;
 
-    const requestGeneration = beginPrejoinMediaRequest(["audio", "video"]);
+    const wantsVideo = !audioOnlyRef.current;
+    const requestGeneration = beginPrejoinMediaRequest(
+      wantsVideo ? ["audio", "video"] : ["audio"],
+    );
     setIsRequestingPermissions(true);
     setPermissionRequestError(null);
     try {
-      const videoConstraints = getPrejoinVideoConstraints(
-        shouldRunPreviewVideoEffects,
-      );
+      const videoConstraints = wantsVideo
+        ? getPrejoinVideoConstraints(shouldRunPreviewVideoEffects)
+        : false;
       logJoinMedia("get_user_media_full_request", {
         audio: DEFAULT_AUDIO_CONSTRAINTS,
         video: videoConstraints,
@@ -627,15 +619,19 @@ function JoinScreen({
             timeoutMs: MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS,
           },
         ),
-        getUserMediaWithTimeout(
-          {
-            video: getPrejoinVideoConstraints(shouldRunPreviewVideoEffects),
-          },
-          {
-            label: "prejoin camera fallback permission request",
-            timeoutMs: MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS,
-          },
-        ),
+        wantsVideo &&
+        !audioOnlyRef.current &&
+        isCurrentPrejoinMediaRequest("video", requestGeneration.video)
+          ? getUserMediaWithTimeout(
+              {
+                video: getPrejoinVideoConstraints(shouldRunPreviewVideoEffects),
+              },
+              {
+                label: "prejoin camera fallback permission request",
+                timeoutMs: MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS,
+              },
+            )
+          : Promise.resolve(new MediaStream()),
       ]);
 
       if (audioResult.status === "fulfilled") {
@@ -671,7 +667,8 @@ function JoinScreen({
         requestGeneration,
       );
       const audioStale = staleKinds.includes("audio");
-      const videoStale = staleKinds.includes("video");
+      // Video that was not requested (audio-only mode) counts as settled.
+      const videoStale = !wantsVideo || staleKinds.includes("video");
       if (audioStale && videoStale) return;
       if (!hasAudio && !audioStale && !hasVideo && !videoStale) {
         cameraIntentRef.current = false;
@@ -693,8 +690,10 @@ function JoinScreen({
   const hasPushedNextRef = useRef(false);
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const candidate = new URLSearchParams(window.location.search).get("next");
-    if (!candidate || !candidate.startsWith("/") || candidate.startsWith("//")) return;
+    const candidate = toSafeNextPath(
+      new URLSearchParams(window.location.search).get("next"),
+    );
+    if (!candidate) return;
     setNextParam(candidate);
   }, []);
   useEffect(() => {
@@ -785,7 +784,7 @@ function JoinScreen({
   const commitPrejoinMedia = () => {
     if (!onPrejoinMediaCommit) return;
     const stream = localStreamRef.current;
-    const shouldCommitCamera = cameraIntentRef.current;
+    const shouldCommitCamera = cameraIntentRef.current && !isAudioOnly;
     const shouldCommitMic = micIntentRef.current;
     const liveTracks =
       stream
@@ -812,10 +811,35 @@ function JoinScreen({
       stream: handoffStream,
       isCameraOn: shouldCommitCamera && hasLiveVideo,
       isMicOn: shouldCommitMic && hasLiveAudio,
+      isAudioOnly,
     });
   };
 
+  const toggleAudioOnly = () => {
+    const next = !isAudioOnly;
+    audioOnlyRef.current = next;
+    setIsAudioOnly(next);
+    if (!next) return;
+    // Invalidate any camera start still in flight, then drop live video now
+    // rather than through toggleCamera, which ignores calls while one runs.
+    beginPrejoinMediaRequest(["video"]);
+    cameraIntentRef.current = false;
+    const currentStream = localStreamRef.current;
+    const videoTracks = currentStream?.getVideoTracks() ?? [];
+    if (currentStream && videoTracks.length > 0) {
+      stopTracks(videoTracks);
+      const remaining = currentStream
+        .getTracks()
+        .filter((track) => track.kind !== "video");
+      commitLocalPreviewStream(
+        remaining.length > 0 ? new MediaStream(remaining) : null,
+      );
+    }
+    setIsCameraOn(false);
+  };
+
   const toggleCamera = async () => {
+    if (audioOnlyRef.current) return;
     if (toggleCameraInFlightRef.current) {
       logJoinMedia("toggle_camera_ignored_in_flight", {
         isCameraOn,
@@ -1022,9 +1046,6 @@ function JoinScreen({
     }
   };
 
-  // Fire the actual join once the deferred guest user AND the host flag have
-  // both propagated. onJoinRoom is rebuilt by the parent with the right
-  // isHost, and arrives on the same render as the updated isAdmin prop.
   useEffect(() => {
     if (!pending || !hasIdentity) return;
     const wantAdmin = pending.mode === "new";
@@ -1038,8 +1059,6 @@ function JoinScreen({
     onJoinRoom(targetId);
   }, [pending, hasIdentity, isAdmin, enableRoomRouting, onJoinRoom, onRoomIdChange]);
 
-  // Ensure a guest user exists (from the name field) before acting; returns
-  // false when nothing actionable (no identity and no usable name).
   const ensureGuest = (): boolean => {
     const name = liveDisplayName;
     if (hasIdentity) {
@@ -1112,9 +1131,6 @@ function JoinScreen({
   const canJoin = normalizedRoomId.trim().length > 0;
   const nameReady = hasIdentity || liveDisplayName.length > 0;
 
-  // Resolve how many people are already in the room we're about to join, matched
-  // against the polled occupancy list (see useMeetRooms). A room with no one in
-  // it simply isn't in the list, which reads as 0 — "no one else is here yet".
   const presenceTarget = enforceShortCode
     ? sanitizeRoomCode(normalizedRoomId)
     : normalizedRoomId.trim();
@@ -1128,8 +1144,6 @@ function JoinScreen({
       )
     : undefined;
   const showPresence = presenceTarget.length > 0 && presenceChecked;
-  // Until the first check settles show "Checking…"; afterwards always show the
-  // real count (a room with no one in it isn't in the list, so that's 0).
   const presenceCount = presenceSettled ? matchedRoom?.userCount ?? 0 : null;
   const presenceLoading = !presenceSettled;
 
@@ -1148,7 +1162,6 @@ function JoinScreen({
           .map((d, i) => ({ deviceId: d.deviceId, label: d.label || `Camera ${i + 1}` })),
       );
     } catch {
-      // enumeration can fail before permission — leave the lists as-is.
     }
   }, []);
 
@@ -1163,8 +1176,6 @@ function JoinScreen({
       navigator.mediaDevices.removeEventListener("devicechange", onDeviceChange);
   }, [refreshDevices]);
 
-  // Once a stream is live the OS exposes device labels + the active deviceId,
-  // so re-enumerate and sync the dropdowns to whatever is actually in use.
   useEffect(() => {
     void refreshDevices();
     const videoId = localStream?.getVideoTracks()[0]?.getSettings().deviceId;
@@ -1283,7 +1294,6 @@ function JoinScreen({
       if (copyResetRef.current) clearTimeout(copyResetRef.current);
       copyResetRef.current = setTimeout(() => setLinkCopied(false), 1800);
     } catch {
-      // clipboard can be blocked; nothing actionable.
     }
   };
 
@@ -1334,6 +1344,12 @@ function JoinScreen({
                   }`}
                 >
                   {previewName}
+                  {isAudioOnly ? (
+                    <span className="ml-2 inline-flex items-center gap-1 border-l border-white/20 pl-2 text-white/85">
+                      <Headphones size={13} aria-hidden="true" />
+                      Audio only
+                    </span>
+                  ) : null}
                 </div>
                 {(showPermissionHint || permissionRequestError) && (
                   <div className="pointer-events-none absolute bottom-[76px] left-1/2 max-w-[calc(100%-2rem)] -translate-x-1/2 rounded-full bg-black/65 px-3 py-1.5 text-center text-[12.5px] font-medium text-white/80 backdrop-blur-sm">
@@ -1352,8 +1368,16 @@ function JoinScreen({
                   </button>
                   <button
                     onClick={toggleCamera}
-                    aria-label={isCameraOn ? "Turn off camera" : "Turn on camera"}
-                    className={`inline-flex h-11 w-11 items-center justify-center rounded-full text-white transition-colors duration-150 ${
+                    disabled={isAudioOnly}
+                    aria-label={
+                      isAudioOnly
+                        ? "Camera is off in audio-only mode"
+                        : isCameraOn
+                          ? "Turn off camera"
+                          : "Turn on camera"
+                    }
+                    title={isAudioOnly ? "Camera is off in audio-only mode" : undefined}
+                    className={`inline-flex h-11 w-11 items-center justify-center rounded-full text-white transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-45 ${
                       isCameraOn ? "bg-[#232327] hover:bg-[#2e2e33]" : "bg-[#ea4335] hover:brightness-105"
                     }`}
                   >
@@ -1389,7 +1413,23 @@ function JoinScreen({
                   >
                     <WandSparkles size={18} />
                   </button>
+                  <button
+                    type="button"
+                    data-testid="prejoin-audio-only"
+                    onClick={toggleAudioOnly}
+                    aria-pressed={isAudioOnly}
+                    aria-label="Audio only: join without video"
+                    title="Audio only: join without video"
+                    className={`inline-flex h-11 w-11 items-center justify-center rounded-full text-white transition-colors duration-150 ${
+                      isAudioOnly
+                        ? "bg-[#F95F4A] hover:bg-[#ff6d5a]"
+                        : "bg-[#232327] hover:bg-[#2e2e33]"
+                    }`}
+                  >
+                    <Headphones size={18} />
+                  </button>
                 </div>
+
               </div>
 
           <div className="safe-area-pb flex min-h-0 shrink-0 flex-col justify-start gap-3 p-5 pb-10 sm:gap-4 sm:p-8 sm:pb-14 md:min-h-[520px] md:justify-center">

@@ -15,10 +15,6 @@ import {
 type WatchEmptyStateProps = {
   onStart: (videoId: string, title?: string | null) => void;
   readOnly: boolean;
-  /**
-   * What picking a video does: start playback for the room (idle state), add
-   * to the queue (browsing with control), or request it (browsing without).
-   */
   mode?: "start" | "add" | "request";
 };
 
@@ -34,12 +30,6 @@ const PREVIEW_HINT: Record<"start" | "add" | "request", string> = {
   request: "Sends a request for the host to approve",
 };
 
-/**
- * The idle browse surface. One pill input takes either a YouTube link (instant
- * live preview of exactly what will play) or a search query (results on
- * submit, quota-friendly). Trending fills the grid until there is a query, so
- * the app opens with something to tap instead of an empty form.
- */
 export function WatchEmptyState({
   onStart,
   readOnly,
@@ -77,8 +67,6 @@ export function WatchEmptyState({
     };
   }, [readOnly]);
 
-  // Infinite scroll for trending: a sentinel below the grid pulls the next
-  // page (deduped) as it nears the viewport. Search results stay single-page.
   useEffect(() => {
     if (readOnly || !trendingToken) return;
     const sentinel = sentinelRef.current;
@@ -106,10 +94,8 @@ export function WatchEmptyState({
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
-    // results/previewId swap the grid in and out; rebind to the fresh sentinel.
   }, [readOnly, trendingToken, results, previewId]);
 
-  // Live title for a pasted link, race-guarded.
   useEffect(() => {
     if (!previewId) {
       setPreviewTitle(null);
@@ -175,7 +161,6 @@ export function WatchEmptyState({
   }
 
   const showResults = results !== null || searching;
-  // No key or no data: keep the surface alive with keyless evergreen picks.
   const fallbackMode = !showResults && trendingLoaded && trending.length === 0;
   const showSkeletons = searching || (!showResults && !trendingLoaded);
   const gridItems = showResults
@@ -189,7 +174,6 @@ export function WatchEmptyState({
   return (
     <div ref={scrollRef} className="h-full w-full overflow-y-auto">
       <div className="mx-auto w-full max-w-6xl px-6 pb-8 pt-7">
-        {/* Centered pill search: one box for links and searches alike. */}
         <form
           onSubmit={handleSubmit}
           className="relative mx-auto w-full max-w-xl"
@@ -224,8 +208,6 @@ export function WatchEmptyState({
         </form>
 
         {previewId ? (
-          /* A pasted link becomes a live preview card: what you see is exactly
-             what plays for the room when you tap it. */
           <button
             type="button"
             onClick={() => onStart(previewId, previewTitle)}

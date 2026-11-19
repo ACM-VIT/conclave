@@ -102,9 +102,6 @@ interface ConclaveMessageProps {
   ) => void;
 }
 
-// Renders a Conclave AI chat message: a collapsible "chain of thought" surface
-// (reasoning trace + tool steps) above the streamed markdown answer. The whole
-// thought process can be collapsed so the assistant stays unobtrusive.
 function ConclaveMessage({
   message,
   isNew,
@@ -140,10 +137,6 @@ function ConclaveMessage({
   const isProcessRunning = reasoningStreaming || hasRunningTask;
   const hasProcess = !isError && (visibleTasks.length > 0 || hasReasoning);
 
-  // Keep the reasoning + chain-of-thought expanded for the ENTIRE stream. Only
-  // once the full message has finished streaming do we let them ease closed, so
-  // the finished answer is what's left in view. Each panel keeps its own open
-  // state so manual toggles stay independent, but they share one auto-collapse.
   const keepProcessOpen = isStreaming || isProcessRunning;
   const [reasoningOpen, setReasoningOpen] = useState(keepProcessOpen);
   const [actionsOpen, setActionsOpen] = useState(keepProcessOpen);
@@ -157,7 +150,6 @@ function ConclaveMessage({
     }
     if (wasOpenForWorkRef.current) {
       wasOpenForWorkRef.current = false;
-      // Linger on the finished trace for a beat, then collapse it nicely.
       const timer = setTimeout(() => {
         setReasoningOpen(false);
         setActionsOpen(false);

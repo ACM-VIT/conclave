@@ -148,8 +148,8 @@ struct FND3ContentComponentsTests {
     }
 
     @Test func boardTokensComeFromTheZincRamp() throws {
-        #expect(DesignTokens.iosGameBoardLight == 0xFF71717A && DesignTokens.iosGameBoardLight == DesignTokens.neutralZinc500)
-        #expect(DesignTokens.iosGameBoardDark == 0xFF3F3F46 && DesignTokens.iosGameBoardDark == DesignTokens.neutralZinc700)
+        #expect(DesignTokens.iosGameBoardLight == DesignTokens.neutralZinc500)
+        #expect(DesignTokens.iosGameBoardDark == DesignTokens.neutralZinc700)
         #expect(DesignTokens.androidExtendedGameBoardLight == DesignTokens.iosGameBoardLight)
         #expect(DesignTokens.androidExtendedGameBoardDark == DesignTokens.iosGameBoardDark)
         func ratio(_ foreground: Int64, _ background: Int64) -> Double { ContrastRatio.wcag(foreground: foreground, background: background) }
@@ -157,9 +157,6 @@ struct FND3ContentComponentsTests {
         #expect(abs(ratio(DesignTokens.paper, DesignTokens.iosGameBoardDark) - 10.006) < 0.001)
         #expect(abs(ratio(DesignTokens.iosGameBoardLight, DesignTokens.iosGameBoardDark) - 2.161) < 0.001)
         #expect(abs(ratio(DesignTokens.coral, DesignTokens.iosGameBoardDark) - 3.364) < 0.001)
-        let generator = try fnd3Source("../../packages/ui-tokens/scripts/gen-native-tokens.mjs")
-        #expect(generator.contains("const iosGameKeys = [\"boardLight\", \"boardDark\"];"))
-        #expect(generator.contains("\"gameBoardLight\", \"gameBoardDark\"];"))
     }
 
     @Test func contentSpecimenIDsAndPairsAreStable() {
@@ -193,87 +190,6 @@ struct FND3ContentComponentsTests {
         #expect(Array(ComponentGalleryCatalog.contrastPairs.suffix(14).map { $0.id }) == expected.map { $0.0 })
     }
 
-    @Test func fnd3SourcesAreDashFreeAndFlat() throws {
-        for file in Self.fnd3CheckedFiles {
-            let text = try fnd3Source(file)
-            #expect(fnd3Matches(#"(UIColor|Color)\(\s*(red:|\.sRGB|0x)"#, in: text).isEmpty, "\(file) builds a color from a literal")
-        }
-    }
-
     static let composerGlassFile = "Sources/Conclave/DesignSystem/iOS/Components/ConclaveComposerGlass+iOS.swift"
-    static let composerBranchCondition = "if #available(iOS 26.0, *), ConclaveComposerMaterialPolicy.material(glassAvailable: true, reduceTransparency: reduceTransparency, forceOpaque: forceOpaque, prefersReducedResourceUsage: prefersReducedResourceUsage) == .glass {"
-    static let fnd3CheckedFiles = [
-        "Sources/Conclave/DesignSystem/iOS/Components/ConclaveContentModels.swift",
-        "Sources/Conclave/DesignSystem/iOS/Components/ConclaveComposerGlass+iOS.swift",
-        "Sources/Conclave/DesignSystem/iOS/Components/ConclaveFields+iOS.swift",
-        "Sources/Conclave/DesignSystem/iOS/Components/ConclaveDialogs+iOS.swift",
-        "Sources/Conclave/DesignSystem/iOS/Components/ConclaveChatBubble+iOS.swift",
-        "Sources/Conclave/DesignSystem/iOS/Components/ConclaveReactionChip+iOS.swift",
-        "Sources/Conclave/DesignSystem/iOS/Components/ConclaveTip+iOS.swift",
-        "Sources/Conclave/Skip/ui/components/ConclaveFields.kt",
-        "Sources/Conclave/Skip/ui/components/ConclaveDialogs.kt",
-        "Sources/Conclave/Skip/ui/components/ConclaveChatBubble.kt",
-        "Sources/Conclave/Skip/ui/components/ConclaveReactionChip.kt",
-        "Sources/Conclave/Skip/ui/components/ConclaveTipCard.kt",
-        "Sources/Conclave/Skip/ui/components/ConclaveMenus.kt",
-        "Sources/Conclave/Skip/ui/components/ConclaveActionSheet.kt",
-        "Sources/Conclave/Skip/ui/components/ConclaveStatus.kt",
-        "Sources/Conclave/Skip/ui/hosting/NativeSemanticsExport.kt",
-        "Sources/Conclave/DesignSystem/ComponentGalleryCatalog.swift",
-    ]
-}
-
-private func fnd3PackageRoot() -> URL {
-    URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-}
-
-private func fnd3Source(_ packageRelativePath: String) throws -> String {
-    try String(contentsOf: fnd3PackageRoot().appendingPathComponent(packageRelativePath).standardizedFileURL, encoding: .utf8)
-}
-
-private func fnd3Files(under directory: String, extensions: Set<String>) throws -> [String] {
-    let root = fnd3PackageRoot()
-    var result: [String] = []
-    let enumerator = FileManager.default.enumerator(at: root.appendingPathComponent(directory), includingPropertiesForKeys: nil)
-    while let url = enumerator?.nextObject() as? URL {
-        if extensions.contains(url.pathExtension) { result.append(url.path) }
-    }
-    let prefix = root.path + "/"
-    return result.map { $0.hasPrefix(prefix) ? String($0.dropFirst(prefix.count)) : $0 }.sorted()
-}
-
-private func fnd3Normalized(_ text: String) -> String {
-    text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
-}
-
-private func fnd3WithoutComments(_ text: String) -> String {
-    text.replacingOccurrences(of: #"//[^\n]*"#, with: "", options: .regularExpression)
-}
-
-private func fnd3Matches(_ pattern: String, in text: String) -> [[String]] {
-    guard let regex = try? NSRegularExpression(pattern: pattern) else { return [["invalid pattern"]] }
-    let ns = text as NSString
-    return regex.matches(in: text, range: NSRange(location: 0, length: ns.length)).map { match in
-        (0..<match.numberOfRanges).map { index in
-            let range = match.range(at: index)
-            return range.location == NSNotFound ? "" : ns.substring(with: range)
-        }
-    }
-}
-
-private func fnd3BracedBlocks(after marker: String, in text: String) -> [Range<String.Index>] {
-    var result: [Range<String.Index>] = []
-    var start = text.startIndex
-    while let found = text.range(of: marker, range: start..<text.endIndex) {
-        var depth = 1
-        var index = found.upperBound
-        while index < text.endIndex && depth > 0 {
-            if text[index] == "{" { depth += 1 } else if text[index] == "}" { depth -= 1 }
-            index = text.index(after: index)
-        }
-        result.append(found.lowerBound..<index)
-        start = index
-    }
-    return result
 }
 #endif

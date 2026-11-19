@@ -58,10 +58,6 @@ export type WebcamReceiveRecoveryProbeState =
       cooldownUntilMs: number;
     };
 
-// A receiver can enter the probe while the remote publisher is still
-// constrained. Twenty seconds covers that asymmetric source-recovery window;
-// fresh local browser/SFU pressure still aborts immediately and expiry always
-// enters the cooldown, so the override cannot become permanent.
 export const WEBCAM_RECEIVE_RECOVERY_PROBE_DURATION_MS = 20_000;
 export const WEBCAM_RECEIVE_RECOVERY_PROBE_COOLDOWN_MS = 20_000;
 
@@ -78,15 +74,6 @@ const createCooldownWebcamReceiveRecoveryProbeState = (
   cooldownUntilMs: nowMs + WEBCAM_RECEIVE_RECOVERY_PROBE_COOLDOWN_MS,
 });
 
-/**
- * Break a receiver's self-induced fair/poor loop for one bounded window. A
- * probe can start only when browser network evidence and the SFU consumer
- * score independently say the path is healthy. The aggregate quality and
- * continuity values can still be poor because their rolling loss window
- * predates that independent recovery evidence. Once armed, the probe ignores
- * those stale values long enough for a higher RID to clear the history, but
- * immediately aborts on fresh browser/consumer pressure.
- */
 export const advanceWebcamReceiveRecoveryProbe = ({
   previousState,
   consumerId,
@@ -136,8 +123,6 @@ export const advanceWebcamReceiveRecoveryProbe = ({
     if (nowMs >= state.expiresAtMs) {
       return createCooldownWebcamReceiveRecoveryProbeState(consumerId, nowMs);
     }
-    // Aggregate quality and continuity risk may temporarily worsen because
-    // they still contain the low-RID loss window the probe is meant to clear.
     return state;
   }
 
@@ -197,21 +182,8 @@ const CONTINUITY_FOCUS_MIN_INCOMING_BITRATE_BPS = 240_000;
 const WEBCAM_LAYER_CONVERGENCE_KEYFRAME_RETRY_MS = 4_000;
 const WEBCAM_LAYER_CONVERGENCE_KEYFRAME_MAX_ATTEMPTS = 3;
 
-// Every supported webcam publish path is intentionally single-temporal-layer:
-// VP8 uses L1T1 for each simulcast encoding and VP9 uses L2T1. Asking the
-// SFU for T1/T2 cannot increase camera frame rate; it only creates clamped or
-// rejected preference updates and makes generation signatures churn.
 export const WEBCAM_RECEIVE_TEMPORAL_LAYER = 0;
 
-/**
- * A preferred-layer ACK confirms the request, not that mediasoup has switched
- * to that RID. Retry a clean frame only while an otherwise healthy, visible
- * webcam is observably stuck below its requested spatial layer. Callers may
- * include a fair aggregate path when the per-consumer SFU score is good: that
- * breaks the loss-history/layer-switch feedback loop without admitting a poor
- * or continuity-risk path. The bounded cadence avoids turning a truly
- * bandwidth-limited receiver into a PLI loop.
- */
 export const shouldRetryWebcamLayerConvergenceKeyFrame = ({
   consumerId,
   preferredSpatialLayer,
@@ -392,11 +364,6 @@ export const getGoodLinkWebcamSpatialAllocation = ({
   };
 };
 
-/**
- * Under loss plus a long repair RTT, preserve the middle spatial raster for
- * the camera a participant is actively watching unless even that layer
- * exceeds the receive budget. Webcam cadence remains on its only T0 layer.
- */
 export const getWebcamContinuityLayerPreference = ({
   bounds,
   isFocusOrPrimary,

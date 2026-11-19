@@ -11,7 +11,7 @@ overrides:
   "brace-expansion@>=2.0.0 <2.1.7": "2.1.7"
   "socket.io-parser@>=4.0.0 <4.2.7": "4.2.7"
   protobufjs: "8.8.1"
-  mediasoup-client: "3.24.5"
+  mediasoup-client: "3.26.0"
   yjs: "13.6.33"
 allowBuilds:
   core-js: true
@@ -56,5 +56,4 @@ minimumReleaseAgeExclude:
   - wrangler@4.151.0
   - "@anthropic-ai/sdk@1.1.0"
 patchedDependencies:
-  '@mediapipe/tasks-vision@1.1.0': patches/@mediapipe__tasks-vision@1.1.0.patch
-  '@opennextjs/cloudflare@1.20.11': patches/@opennextjs__cloudflare@1.20.11.patch
+  '@mediapipe/tasks-vision@1.2.3': patches/@mediapipe__tasks-vision@1.2.3.patch

@@ -15,28 +15,14 @@ import {
   planPlaybackCorrection,
 } from "../playbackSync";
 
-// While the doc record has not changed, never hard-seek more often than this.
-// A genuinely stuck player still converges (the anchored expected position is
-// monotonic), but a pathological source can no longer thrash seek after seek.
 const CORRECTION_COOLDOWN_MS = 2_500;
 
-// Never seek into the last moments of a finite video: the YouTube embed treats
-// past-the-end seeks unpredictably (sometimes restarting at 0), and the ENDED
-// event should be the thing that closes a video out.
 const END_GUARD_SECONDS = 0.75;
 
-// How long after asking for playback we wait before deciding the browser
-// blocked autoplay and a user gesture is required.
 const AUTOPLAY_PROBE_MS = 1200;
 
 export type GestureNeed = "none" | "sound" | "sync";
 
-/**
- * The media element react-player v3 renders (youtube-video-element) implements
- * the HTMLMediaElement interface: `currentTime` is readable AND assignable
- * (assigning seeks), `play`/`pause` are promises, `paused`/`muted`/`duration`
- * read live state. That is the whole surface this hook needs.
- */
 type WatchMediaElement = Pick<
   HTMLVideoElement,
   | "currentTime"
@@ -54,19 +40,13 @@ type WatchMediaElement = Pick<
 type MediaEvent = React.SyntheticEvent<HTMLVideoElement>;
 
 export type SyncedPlaybackHandle = {
-  /** Callback ref for `<ReactPlayer ref>`; captures the media element. */
   attachPlayer: (element: WatchMediaElement | null) => void;
 
-  /* ---- Declarative props for <ReactPlayer>. The player FOLLOWS the doc; it
-     never leads. All intent enters through the actions below, which write the
-     doc first, so there is no echo problem by construction. ---- */
   playing: boolean;
   mutedProp: boolean;
-  /** 0..1 for the media element (the UI works in 0..100). */
   volumeProp: number;
   rate: number;
 
-  /* ---- Media event handlers to spread onto <ReactPlayer>. ---- */
   onReady: () => void;
   onTimeUpdate: (event: MediaEvent) => void;
   onDurationChange: (event: MediaEvent) => void;
@@ -74,32 +54,22 @@ export type SyncedPlaybackHandle = {
   onEnded: () => void;
   onError: (event: MediaEvent) => void;
 
-  /* ---- UI state. ---- */
   ready: boolean;
   error: string | null;
   gestureNeed: GestureNeed;
   muted: boolean;
-  /** Local volume 0..100 (never synced). */
   volume: number;
   currentTime: number;
   duration: number;
   playbackState: PlaybackState;
-  /** True only while the current YouTube broadcast is actively live. */
   isLive: boolean;
-  /** True when the local player is close enough to the moving live edge. */
   isAtLiveEdge: boolean;
-  /** Whether this video has caption tracks at all. */
   captionsAvailable: boolean;
-  /** Whether a caption track is currently showing (local only). */
   captionsOn: boolean;
-  /** The video's caption tracks, with the active one flagged. */
   captionTracks: WatchCaptionTrack[];
-  /** Whether the player exposes caption font sizing. */
   captionSizeAvailable: boolean;
-  /** Current caption size step (-1 small, 0 default, 2 large, 3 huge). */
   captionFontSize: number;
 
-  /* ---- Actions (the ONLY sources of playback intent). ---- */
   play: () => void;
   pause: () => void;
   seek: (seconds: number) => void;
@@ -107,7 +77,6 @@ export type SyncedPlaybackHandle = {
   toggleMute: () => void;
   setVolume: (value: number) => void;
   toggleCaptions: () => void;
-  /** Show captions in this language, or turn them off with null. */
   setCaptionTrack: (language: string | null) => void;
   setCaptionFontSize: (size: number) => void;
   resolveGesture: () => void;
@@ -119,11 +88,6 @@ export type WatchCaptionTrack = {
   active: boolean;
 };
 
-/**
- * Best-effort handle on the element's underlying YT player. Internal to
- * youtube-video-element, so everything is feature-detected and every call is
- * guarded; if a future version hides it, the api-backed paths simply vanish.
- */
 type CaptionsApi = {
   setOption?: (module: string, option: string, value: unknown) => void;
   getOption?: (module: string, option: string) => unknown;
@@ -148,12 +112,6 @@ const captionsApiOf = (
   return api && typeof api === "object" ? api : null;
 };
 
-/**
- * Feature-detected fallback for deployments without YouTube Data API metadata.
- * The public iframe wrapper exposes video data on current players, but the
- * server-provided hint remains authoritative because this surface is not part
- * of the HTMLMediaElement contract.
- */
 const readApiLiveStatus = (
   element: WatchMediaElement | null,
 ): boolean | null => {
@@ -203,7 +161,6 @@ const readElementLiveEdge = (
       if (edge !== null) return edge;
     }
   } catch {
-    /* YouTube's media shim may not expose seekable ranges. */
   }
   return liveEdgeTime(duration);
 };
@@ -213,13 +170,6 @@ type ApiCaptionState = {
   activeLanguage: string | null;
 };
 
-/**
- * Read caption state straight from the YT player. The element only mirrors
- * YouTube's tracklist into `textTracks` during PLAYING/BUFFERING state
- * changes, and the captions module loads lazily, so on plenty of runs the DOM
- * list stays empty forever while the iframe renders captions anyway. The api
- * is the ground truth; the DOM mirror is a convenience.
- */
 const readApiCaptions = (
   element: WatchMediaElement | null,
 ): ApiCaptionState | null => {
@@ -264,20 +214,10 @@ const readApiCaptions = (
 type UseSyncedPlaybackArgs = {
   doc: Y.Doc;
   videoId: string | null;
-  /** When true, actions author nothing; the player still follows the doc. */
   readOnly: boolean;
-  /** Authoritative server metadata when available; null uses player fallback. */
   liveHint?: boolean | null;
 };
 
-/**
- * The sync engine for Watch together, built on one rule: the shared doc is the
- * single source of playback intent. Our custom controls write the doc; the
- * player follows it declaratively via the `playing` prop plus drift-corrected
- * seeks. Native player controls are hidden and the iframe is click-shielded by
- * the component, so no player event is ever ambiguous user intent, which is
- * what previously forced echo-guard heuristics (and their failure modes).
- */
 export function useSyncedPlayback({
   doc,
   videoId,
@@ -291,8 +231,6 @@ export function useSyncedPlayback({
   videoIdRef.current = videoId;
   const liveHintRef = useRef<boolean | null>(liveHint);
   liveHintRef.current = liveHint;
-  // The last video this client advanced away from, so a duplicate ENDED event
-  // cannot make the same client advance the queue twice.
   const advancedFromRef = useRef<string | null>(null);
 
   const [record, setRecord] = useState<PlaybackRecord>(() => getPlayback(doc));
@@ -305,8 +243,6 @@ export function useSyncedPlayback({
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [gestureNeed, setGestureNeed] = useState<GestureNeed>("none");
-  // Start muted so the initial autoplay satisfies browser policy; the gesture
-  // overlay lifts the mute on a real click. Volume and mute never sync.
   const [muted, setMuted] = useState(true);
   const mutedRef = useRef(muted);
   mutedRef.current = muted;
@@ -328,20 +264,11 @@ export function useSyncedPlayback({
   const [captionFontSize, setCaptionFontSizeState] = useState(0);
   const captionFontSizeRef = useRef(0);
   captionFontSizeRef.current = captionFontSize;
-  // The embed loads YouTube's captions module lazily (cc_load_policy 1, the
-  // element's default, force-displays captions once it arrives). Each new
-  // video gets one initialization pass applying the user's sticky session
-  // preference, which starts as off.
   const captionsPreferredRef = useRef(false);
   const captionsInitializedForRef = useRef<string | null>(null);
   const captionsNudgedForRef = useRef<string | null>(null);
-  // Declared before syncCaptionState (which runs it), assigned after the
-  // callback below is created.
   const applyCaptionFontSizeRef = useRef<(() => void) | null>(null);
 
-  // Show one track (or none) through BOTH surfaces: DOM track modes when the
-  // mirror exists, and the player api directly so it also works when the
-  // mirror never materialized. The two are idempotent with each other.
   const applyCaptionTrack = useCallback((language: string | null) => {
     const element = elementRef.current;
     if (!element) return;
@@ -354,7 +281,6 @@ export function useSyncedPlayback({
             : "disabled";
       }
     } catch {
-      /* mirror not ready */
     }
     try {
       captionsApiOf(element)?.setOption?.(
@@ -363,13 +289,9 @@ export function useSyncedPlayback({
         language !== null ? { languageCode: language } : {},
       );
     } catch {
-      /* api not ready */
     }
   }, []);
 
-  // Read caption state from the DOM mirror AND the player api, preferring the
-  // api for what is actually showing. Re-read on the safety tick, since both
-  // surfaces materialize at their own pace.
   const syncCaptionState = useCallback(() => {
     const element = elementRef.current;
     if (!element) {
@@ -387,9 +309,6 @@ export function useSyncedPlayback({
     const apiState = readApiCaptions(element);
     const currentVideo = videoIdRef.current;
 
-    // Neither surface has tracks yet: nudge the captions module once per
-    // video so a lazy load cannot leave the CC control missing forever while
-    // the iframe renders captions on its own.
     if (
       domList.length === 0 &&
       !apiState &&
@@ -400,7 +319,6 @@ export function useSyncedPlayback({
       try {
         captionsApiOf(element)?.loadModule?.("captions");
       } catch {
-        /* module load is best effort */
       }
     }
 
@@ -409,9 +327,6 @@ export function useSyncedPlayback({
       domList.find((track) => track.mode === "showing")?.language ?? null;
     let activeLanguage = apiState?.activeLanguage ?? domShowing;
 
-    // One-time per video: apply the sticky caption preference. The captions
-    // module force-displays by default, so default-off means actively turning
-    // the track off as soon as EITHER surface shows captions exist.
     if (
       available &&
       currentVideo &&
@@ -458,8 +373,6 @@ export function useSyncedPlayback({
               label: track.label,
               active: track.language === activeLanguage,
             }));
-      // Keep the reference stable when nothing changed, so consumers do not
-      // re-render once a second.
       const same =
         previous.length === next.length &&
         previous.every(
@@ -472,8 +385,6 @@ export function useSyncedPlayback({
     });
   }, [applyCaptionTrack]);
 
-  // The captions module forgets styling between videos; reapply the chosen
-  // size whenever a track goes live.
   const applyCaptionFontSize = useCallback(() => {
     const size = captionFontSizeRef.current;
     if (size === 0) return;
@@ -484,7 +395,6 @@ export function useSyncedPlayback({
         size,
       );
     } catch {
-      /* styling is best effort */
     }
   }, []);
   applyCaptionFontSizeRef.current = applyCaptionFontSize;
@@ -497,10 +407,8 @@ export function useSyncedPlayback({
     const element = elementRef.current;
     if (!element) return;
     try {
-      // Apply immediately as well as declaratively through ReactPlayer.
       element.playbackRate = nextRate;
     } catch {
-      /* player may still be loading */
     }
   }, []);
 
@@ -553,15 +461,6 @@ export function useSyncedPlayback({
     };
   }, []);
 
-  /* ---- Drift correction, hardened against restart loops. ----
-     The doc's `updatedAt` is the WRITER'S wall clock. Extrapolating from it on
-     every check means a writer whose clock runs ahead freezes everyone else's
-     expected position at `positionSeconds` (elapsed clamps to zero), so each
-     client plays a second, gets yanked back, and loops. Instead, each distinct
-     record is anchored ONCE to local receipt time; from then on the expected
-     position advances on the local clock only, which makes it monotonic no
-     matter whose clock wrote the record. */
-
   type PlaybackAnchor = {
     key: string;
     state: PlaybackState;
@@ -578,10 +477,6 @@ export function useSyncedPlayback({
     const existing = anchorRef.current;
     if (existing && existing.key === key) return existing;
     const now = Date.now();
-    // Sender-clock extrapolation exactly once, as a best effort for records
-    // that were written before we loaded (late join). For a live write the
-    // elapsed term is just network latency, and a future-skewed writer clock
-    // contributes nothing because expectedPosition clamps negative elapsed.
     const anchor: PlaybackAnchor = {
       key,
       state: target.state,
@@ -593,9 +488,6 @@ export function useSyncedPlayback({
     return anchor;
   }, []);
 
-  // Reconcile toward the room without turning small drift into visible
-  // buffering. Explicit timeline jumps and large gaps still seek immediately;
-  // ordinary jitter gets a short, local-only playback-rate nudge.
   const correctDrift = useCallback(
     (target: PlaybackRecord) => {
       const element = elementRef.current;
@@ -614,8 +506,6 @@ export function useSyncedPlayback({
       let elementDuration = Number.NaN;
       try {
         current = element.currentTime ?? 0;
-        // A seek already in flight makes currentTime unreliable; check again
-        // on the next tick instead of stacking seeks.
         if (element.seeking === true) return;
         elementDuration = element.duration;
       } catch {
@@ -663,8 +553,6 @@ export function useSyncedPlayback({
       }
       applyPlaybackRate(correction.rate);
 
-      // Repeat hard corrections for the SAME record are rate-limited so a
-      // pathological source cannot get stuck in a seek/buffer loop.
       const last = lastCorrectionRef.current;
       if (
         last &&
@@ -677,14 +565,11 @@ export function useSyncedPlayback({
       try {
         element.currentTime = correction.target;
       } catch {
-        /* element not ready to seek yet */
       }
     },
     [anchorFor, applyPlaybackRate],
   );
 
-  // Follow the doc: mirror the record into state (which drives the `playing`
-  // prop) and correct position drift on every remote change.
   useEffect(() => {
     const sync = () => {
       const next = getPlayback(doc);
@@ -700,10 +585,6 @@ export function useSyncedPlayback({
     };
   }, [correctDrift, doc]);
 
-  // A gentle safety tick: keeps the time display fresh when timeupdate is
-  // throttled (hidden tabs), re-checks drift while paused, and keeps polling
-  // caption availability. Not gated on `ready`, so caption detection still
-  // runs even if the ready event was missed; every step is element-guarded.
   useEffect(() => {
     const interval = setInterval(() => {
       if (!syncMediaSnapshot()) return;
@@ -723,8 +604,6 @@ export function useSyncedPlayback({
 
     const target = recordRef.current;
     initializedLiveForRef.current = currentVideo;
-    // Fresh video records carry explicit live-edge intent. Every user playback
-    // action clears it, including an intentional seek to the first half-second.
     if (!target.liveEdge) {
       correctDrift(target);
       return;
@@ -735,14 +614,10 @@ export function useSyncedPlayback({
     try {
       element.currentTime = snapshot.liveEdge;
     } catch {
-      /* player will retry through drift correction */
     }
 
   }, [applyPlaybackRate, correctDrift, syncMediaSnapshot]);
 
-  // A new video started: allow it to advance the queue when it ends, clear any
-  // stale error from the previous one, and let the fresh element correct
-  // immediately instead of inheriting the previous video's seek cooldown.
   useEffect(() => {
     if (videoId && advancedFromRef.current !== videoId) {
       advancedFromRef.current = null;
@@ -766,9 +641,6 @@ export function useSyncedPlayback({
     initializeLivePlayback();
   }, [initializeLivePlayback, isLive, ready, videoId]);
 
-  // Probe for blocked autoplay: if the room wants playback but the element is
-  // still paused shortly after, a gesture is needed to start at all ("sync").
-  // If it plays but only because we are muted, a gesture buys sound ("sound").
   useEffect(() => {
     if (!ready || record.state !== "playing") return;
     const timer = setTimeout(() => {
@@ -782,9 +654,6 @@ export function useSyncedPlayback({
     }, AUTOPLAY_PROBE_MS);
     return () => clearTimeout(timer);
   }, [ready, record.state, videoId]);
-
-  /* ---- Media event handlers. None of these author intent; with the iframe
-     shielded, player events can only be consequences of the doc. ---- */
 
   const onReady = useCallback(() => {
     setReady(true);
@@ -817,7 +686,6 @@ export function useSyncedPlayback({
   const onPlaying = useCallback(() => {
     syncMediaSnapshot();
     initializeLivePlayback();
-    // Playback genuinely running: downgrade or clear the gesture prompt.
     setGestureNeed((prev) => {
       if (prev === "none") return prev;
       return mutedRef.current ? "sound" : "none";
@@ -834,8 +702,6 @@ export function useSyncedPlayback({
       advanceQueue(doc, ended);
       return;
     }
-    // Nothing queued: park the doc at the end so late joiners do not see the
-    // position extrapolate past the duration forever.
     const element = elementRef.current;
     let position = 0;
     try {
@@ -859,8 +725,6 @@ export function useSyncedPlayback({
         : "This video failed to play. It may not allow embedding.";
     setError(message);
   }, []);
-
-  /* ---- Actions: write the doc first, the player follows. ---- */
 
   const readElementTime = useCallback((): number => {
     const element = elementRef.current;
@@ -903,7 +767,6 @@ export function useSyncedPlayback({
         try {
           element.currentTime = target;
         } catch {
-          /* ignore */
         }
       }
       setCurrentTime(target);
@@ -929,7 +792,6 @@ export function useSyncedPlayback({
     try {
       element.currentTime = snapshot.liveEdge;
     } catch {
-      /* the new shared record will retry */
     }
     writePlayback(doc, {
       state: "playing",
@@ -939,19 +801,14 @@ export function useSyncedPlayback({
     });
   }, [applyPlaybackRate, doc, syncMediaSnapshot]);
 
-  /* ---- Local mute / volume (never synced). ---- */
-
   const toggleMute = useCallback(() => {
     setMuted((prev) => {
       const next = !prev;
       const element = elementRef.current;
       if (element) {
         try {
-          // Assign directly as well as via the prop, so an unmute stays inside
-          // the user's click for browser gesture rules.
           element.muted = next;
         } catch {
-          /* ignore */
         }
       }
       if (!next) {
@@ -972,7 +829,6 @@ export function useSyncedPlayback({
           try {
             element.muted = false;
           } catch {
-            /* ignore */
           }
         }
         return false;
@@ -980,10 +836,6 @@ export function useSyncedPlayback({
     }
   }, []);
 
-  // Toggle closed captions on the local player only (never synced). Works
-  // through the DOM mirror and the player api alike, so the control functions
-  // even when the element never mirrored the tracklist. Preference order when
-  // enabling: the browser language, then the first track.
   const toggleCaptions = useCallback(() => {
     const element = elementRef.current;
     if (!element) return;
@@ -1044,14 +896,11 @@ export function useSyncedPlayback({
           size,
         );
       } catch {
-        /* styling is best effort */
       }
     },
     [],
   );
 
-  // Resolve the gesture overlay with a real click: unmute synchronously (so the
-  // gesture context applies) and kick playback if the room wants it running.
   const resolveGesture = useCallback(() => {
     setGestureNeed("none");
     setMuted(false);
@@ -1061,11 +910,9 @@ export function useSyncedPlayback({
       element.muted = false;
       if (recordRef.current.state === "playing" && element.paused) {
         void element.play()?.catch?.(() => {
-          /* the reconcile props keep trying */
         });
       }
     } catch {
-      /* ignore */
     }
     correctDrift(recordRef.current);
   }, [correctDrift]);

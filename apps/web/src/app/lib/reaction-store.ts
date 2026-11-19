@@ -1,13 +1,5 @@
 import type { ReactionEvent } from "./types";
 
-/**
- * Reaction events are high-frequency and ephemeral (each one is added and then
- * removed ~4s later). Keeping them in React state at the meeting-client level
- * re-rendered the entire meeting tree twice per reaction, which made bursts of
- * reactions visibly lag the call UI. This store keeps them outside React;
- * only ReactionOverlay subscribes (via useSyncExternalStore), so reaction
- * traffic re-renders nothing but the overlay itself.
- */
 export interface ReactionStore {
   subscribe: (listener: () => void) => () => void;
   getSnapshot: () => ReactionEvent[];

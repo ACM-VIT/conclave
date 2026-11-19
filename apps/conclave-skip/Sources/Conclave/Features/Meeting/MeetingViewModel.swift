@@ -3376,6 +3376,12 @@ final class MeetingViewModel {
             await replayPendingPreAckRoomEvents(includeDeferredRoomState: true)
             await syncProducers(context: currentSocketEventContext())
             await flushPendingProducers()
+            // A terminal event (kick, room ended, leave) can land during the
+            // awaits above; never re-activate call presence after it.
+            guard isCurrentJoinAttempt(joinAttemptId) else {
+                await cleanupAbandonedJoinAttempt(cleanupMedia: true, joinAttemptId: joinAttemptId)
+                return
+            }
             isRejoinInFlight = false
             resetReconnectRetryState()
             startActiveSpeakerPoll()
@@ -6879,7 +6885,11 @@ final class MeetingViewModel {
                 }
                 currentJoinInfo = nil
                 if let joinFormMessage = recoverableJoinFormErrorMessage(for: error, joinMode: joinMode) {
-                    finishRecoverableJoinFormFailure(joinFormMessage)
+                    if isRecoveryJoin {
+                        await finishRecoveryJoinFormFailure(joinFormMessage)
+                    } else {
+                        finishRecoverableJoinFormFailure(joinFormMessage)
+                    }
                     return
                 }
                 if isRecoveryJoin {
@@ -7005,6 +7015,7 @@ final class MeetingViewModel {
             user: nil
         )
 
+        let redirectGeneration = meetingLifecycleGeneration
         redirectContinuationPending = true
         isIntentionalLeave = true
         isIntentionalTeardownInProgress = true
@@ -7012,7 +7023,10 @@ final class MeetingViewModel {
         state.connectionState = ConnectionState.joining
         state.errorMessage = nil
         socketManager.disconnect()
-        await cleanup()
+        await cleanup(lifecycleGeneration: redirectGeneration)
+        // The user left (or another join started) while the old room was
+        // being torn down: do not follow the redirect.
+        guard meetingLifecycleGeneration == redirectGeneration else { return }
         isIntentionalTeardownInProgress = false
 
         joinRoom(
@@ -7767,11 +7781,16 @@ final class MeetingViewModel {
         }
     }
 
+    private func beginTerminalTransition() -> Int {
+        activeJoinAttemptId = nil
+        meetingLifecycleGeneration += 1
+        return meetingLifecycleGeneration
+    }
+
     func leaveRoom() {
         cancelMicReplay(restore: false)
-        let leavingGeneration = meetingLifecycleGeneration
+        let leavingGeneration = beginTerminalTransition()
         recordTerminalOutcome(.left, serverText: "")
-        activeJoinAttemptId = nil
         isIntentionalLeave = true
         isIntentionalTeardownInProgress = true
         shouldRejoinAfterReconnect = false
@@ -7795,6 +7814,7 @@ final class MeetingViewModel {
     }
 
     private func finishTerminalRoomError(_ message: String, outcome: MeetingTerminalOutcomeKind) async {
+        let terminalGeneration = beginTerminalTransition()
         isIntentionalLeave = true
         shouldRejoinAfterReconnect = false
         isRejoinInFlight = false
@@ -7811,12 +7831,14 @@ final class MeetingViewModel {
         state.meetingEndedNoticeMessage = nil
         state.serverRestartNotice = nil
         socketManager.disconnect()
-        await cleanup()
+        await cleanup(lifecycleGeneration: terminalGeneration)
+        guard meetingLifecycleGeneration == terminalGeneration else { return }
+        isIntentionalTeardownInProgress = false
     }
 
     private func finishServerDisconnect() async {
         guard !isIntentionalTeardownInProgress else { return }
-        let disconnectGeneration = meetingLifecycleGeneration
+        let disconnectGeneration = beginTerminalTransition()
         isIntentionalLeave = true
         isIntentionalTeardownInProgress = true
         shouldRejoinAfterReconnect = false
@@ -7851,7 +7873,7 @@ final class MeetingViewModel {
 
     private func finishMeetingEnded(showNotice: Bool, message: String?, outcome: MeetingTerminalOutcomeKind) async {
         guard !isIntentionalTeardownInProgress else { return }
-        let endingGeneration = meetingLifecycleGeneration
+        let endingGeneration = beginTerminalTransition()
         isIntentionalLeave = true
         isIntentionalTeardownInProgress = true
         shouldRejoinAfterReconnect = false
@@ -7899,7 +7921,7 @@ final class MeetingViewModel {
         outcome: MeetingTerminalOutcomeKind = .joinFailed,
         classified: ClassifiedError? = nil
     ) async {
-        let failureGeneration = meetingLifecycleGeneration
+        let failureGeneration = beginTerminalTransition()
         let resolvedMessage = message.trimmingCharacters(in: .whitespacesAndNewlines)
 
         let classification = classified ?? MeetingErrorClassifier.classify(
@@ -7925,6 +7947,7 @@ final class MeetingViewModel {
         socketManager.disconnect()
         await cleanup(lifecycleGeneration: failureGeneration, notifyLocalState: false)
         guard meetingLifecycleGeneration == failureGeneration else { return }
+        isIntentionalTeardownInProgress = false
 
         state.roomId = preservedRoomId
         state.displayName = preservedDisplayName
@@ -7955,6 +7978,23 @@ final class MeetingViewModel {
         state.connectionState = ConnectionState.disconnected
         state.errorMessage = nil
         premeeting.apply(makePremeetingInputs())
+    }
+
+    /// A recovery rejoin that fails with a form error ("no room found", guests
+    /// not allowed, invite code) still has a live call around it (call
+    /// presence, keep-awake, participants), so tear that down as a terminal
+    /// path does before returning to the join form with the error.
+    private func finishRecoveryJoinFormFailure(_ message: String) async {
+        let failureGeneration = beginTerminalTransition()
+        let preservedRoomId = state.roomId
+        let preservedDisplayName = state.displayName
+        finishRecoverableJoinFormFailure(message)
+        await cleanup(lifecycleGeneration: failureGeneration, notifyLocalState: false)
+        guard meetingLifecycleGeneration == failureGeneration else { return }
+        state.roomId = preservedRoomId
+        state.displayName = preservedDisplayName
+        state.joinFormErrorMessage = message
+        isIntentionalTeardownInProgress = false
     }
 
     private func finishRecoverableJoinFormFailure(_ message: String) {
@@ -9227,10 +9267,9 @@ final class MeetingViewModel {
         }
         socketManager.disconnect()
         await cleanup(lifecycleGeneration: leavingGeneration)
-        guard meetingLifecycleGeneration == leavingGeneration else {
-            isIntentionalTeardownInProgress = false
-            return
-        }
+        // A newer join or terminal transition (the user tapping Leave) bumped
+        // the generation and owns the teardown flag from here.
+        guard meetingLifecycleGeneration == leavingGeneration else { return }
         isIntentionalTeardownInProgress = false
         guard outcome == PeopleDemotionOutcome.rejoinAsAttendee, let context else {
             beginShellRefreshBatch()
@@ -9299,10 +9338,9 @@ final class MeetingViewModel {
         socketManager.disconnect()
         Task { @MainActor in
             await cleanup(lifecycleGeneration: leavingGeneration)
-            guard meetingLifecycleGeneration == leavingGeneration else {
-                isIntentionalTeardownInProgress = false
-                return
-            }
+            // A newer join or terminal transition (the user tapping Leave)
+            // bumped the generation and owns the teardown flag from here.
+            guard meetingLifecycleGeneration == leavingGeneration else { return }
             isIntentionalTeardownInProgress = false
 
             state.isMuted = !mic

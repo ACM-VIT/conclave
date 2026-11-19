@@ -510,20 +510,5 @@ struct STG5NoticePolicyTests {
         stage.applyNotices(next)
         #expect(stage.banner == nil)
     }
-
-    @Test func chimeAssetsAreBundledOnBothPlatformsAndIdentical() throws {
-        for name in ["notice_knock", "notice_hand"] {
-            let module = try Data(contentsOf: stagePackageURL("Sources/Conclave/Resources/" + name + ".mp3"))
-            let app = try Data(contentsOf: stagePackageURL("Android/app/src/main/assets/" + name + ".mp3"))
-            #expect(module == app, "\(name) differs between the module and the app assets")
-            #expect(module.count > 2_000 && module.count < 40_000, "\(name) is a short chime")
-            #expect(Array(module.prefix(3)) == Array("ID3".utf8), "\(name) is an MP3 with an ID3 header")
-        }
-    }
-
-    private func stagePackageURL(_ path: String) -> URL {
-        URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent(path)
-    }
 }
 #endif

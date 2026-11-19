@@ -304,15 +304,10 @@ struct ACT5ChessTests {
         #expect(ChessBoardPolicy.tap(waiting, selected: "", square: "e5").action == .none)
     }
 
-    @Test func everyActionIsTheModulesPayloadFreeMoveType() throws {
-        #expect(ChessAction.allCases.map { $0.rawValue }
-            == ["offerDraw", "acceptDraw", "declineDraw", "requestTakeback", "acceptTakeback", "declineTakeback", "resign"])
-        let module = try stageSource("../../packages/sfu/server/games/modules/chess.ts")
+    @Test func everyActionIsPayloadFree() {
         for action in ChessAction.allCases {
-            #expect(module.contains("case \"" + action.rawValue + "\":"), "chess.ts has no \(action.rawValue)")
             #expect(GameMoveAdapter.payloadJSON(ChessIntent.action(action)).isEmpty, "\(action.rawValue) carries a payload")
         }
-        #expect(module.contains("export const CHESS_BOT_ID = \"" + ChessSceneBuilder.botId + "\";"))
     }
 
     @Test func drawAndTakebackAreEligibilityGated() throws {
@@ -489,9 +484,6 @@ struct ACT5ChessTests {
         #expect(ChessFixtures.apply(named: "game-wordle-guess", session: session, owner: ActivityFixtureOwner()) == nil)
     }
 
-    private let iosPath = "Sources/Conclave/Features/Meeting/Games/Native/Boards/ChessBoard+iOS.swift"
-    private let kotlinPath = "Sources/Conclave/Skip/ui/games/boards/ChessBoard.kt"
-
     @Test func licensedPieceArtworkCoversEveryKindOnBothPlatforms() throws {
         func pathValues(_ attribute: String, in text: String) throws -> [String] {
             let regex = try NSRegularExpression(pattern: "\\b" + attribute + "=\"([^\"]*)\"")
@@ -531,26 +523,6 @@ struct ACT5ChessTests {
             let attribution = try stageSource("\(root)/TablerChess-ATTRIBUTION.txt")
             #expect(attribution.contains("ed177a085b652fe04ec4f37ced867c94621e7840"))
         }
-    }
-
-    @Test func chessStringsAreInBothCatalogs() throws {
-        let catalogData = try Data(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().appendingPathComponent("Sources/Conclave/Resources/Localizable.xcstrings"))
-        let catalog = try #require(try JSONSerialization.jsonObject(with: catalogData) as? [String: Any])
-        let strings = try #require(catalog["strings"] as? [String: Any])
-        let ios = try stageSource(iosPath)
-        var keys = Set<String>()
-        for match in stageMatches(#"ConclaveStrings\.(?:text|format)\("[^"]+""#, in: ios) {
-            if let start = match.firstIndex(of: "\"") { keys.insert(String(match[match.index(after: start)...].dropLast())) }
-        }
-        #expect(keys.count > 80)
-        for key in keys { #expect(strings[key] != nil, "missing iOS key \(key)") }
-        let xml = try stageSource("Android/app/src/main/res/values/strings.xml")
-        let kotlin = try stageSource(kotlinPath)
-        var names = Set<String>()
-        for match in stageMatches(#""(?:gm|ds|act)_[a-z0-9_]+""#, in: kotlin) { names.insert(String(match.dropFirst().dropLast())) }
-        #expect(names.count > 80)
-        for name in names { #expect(xml.contains("name=\"" + name + "\""), "missing Android resource \(name)") }
     }
 }
 

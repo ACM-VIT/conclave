@@ -90,6 +90,7 @@ describe("game AI content", () => {
         [
           "bluff",
           "imposter",
+          "long-shot",
           "most-likely-to",
           "trivia",
           "would-you-rather",
@@ -104,7 +105,13 @@ describe("game AI content", () => {
             option.type === "number" ? option.max : option.default,
           ]),
         );
-        const count = Number(gameConfig.questions ?? gameConfig.rounds ?? 12);
+        // Long Shot plays its curated bank unless the host names a topic.
+        if (game.id === "long-shot") gameConfig.topic = "Fixture topic";
+        const count = Number(
+          gameConfig.questions ?? gameConfig.rounds ?? gameConfig.prompts ?? 12,
+        );
+        const tierFixture = (tier: string, size: number) =>
+          Array.from({ length: size }, (_, i) => `Fixture ${tier} ${i}`);
         const payload =
           game.id === "trivia"
             ? {
@@ -115,7 +122,20 @@ describe("game AI content", () => {
                   answer: "Moon",
                 })),
               }
-            : game.id === "imposter"
+            : game.id === "long-shot"
+              ? {
+                  prompts: Array.from({ length: count }, (_, i) => ({
+                    category: "Fixture",
+                    prompt: `Name a fixture ${i}`,
+                    obvious: tierFixture("obvious", 4),
+                    cliche: tierFixture("cliche", 2),
+                    solid: tierFixture("solid", 5),
+                    rare: tierFixture("rare", 6),
+                    longShot: tierFixture("long shot", 6),
+                    pearl: `Fixture pearl ${i}`,
+                  })),
+                }
+              : game.id === "imposter"
               ? {
                   set: {
                     category: "Fixture",

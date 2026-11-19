@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { guardSocketListeners } from "../socket/guardListeners.js";
 import type { Server as SocketIOServer } from "socket.io";
 import { Logger } from "../../utilities/loggers.js";
 import { renewRoomOwnerships } from "../rooms.js";
@@ -596,6 +597,7 @@ export const registerAdminGateway = (
   });
 
   nsp.on("connection", (socket) => {
+    guardSocketListeners(socket);
     Logger.info(
       `[AdminGateway] operator connected: ${String(
         (socket.data as { subject?: string }).subject,

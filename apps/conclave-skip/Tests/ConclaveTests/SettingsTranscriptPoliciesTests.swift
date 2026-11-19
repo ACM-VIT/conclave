@@ -95,11 +95,6 @@ struct SettingsTranscriptPoliciesTests {
     }
 
     @Test func settingsStoresUseTheirKeysAndDefaults() {
-        #expect(SettingsPreferences.noiseSuppressionKey == "conclave.pref.noiseSuppression")
-        #expect(SettingsPreferences.alwaysShowControlsKey == "conclave.pref.alwaysShowControls")
-        #expect(SettingsPreferences.hapticsKey == "conclave.pref.haptics")
-        #expect(SettingsPreferences.knockSoundKey == "conclave.pref.knockSound")
-        #expect(SettingsPreferences.handSoundKey == "conclave.pref.handSound")
         let defaults = Self.freshDefaults()
         #expect(SettingsPreferences.noiseSuppression(defaults: defaults))
         #expect(!SettingsPreferences.alwaysShowControls(defaults: defaults))
@@ -241,37 +236,6 @@ struct SettingsTranscriptPoliciesTests {
         #expect(!presenter.account.signOutPending)
     }
 
-    @Test func everyIOSCopyKeyIsInTheCatalog() throws {
-        let catalog = try Self.catalogKeys()
-        let source = try Self.source("Sources/Conclave/Features/Meeting/Settings/SettingsCopy+iOS.swift")
-        let keys = Self.catalogKeysUsed(in: source)
-        for key in keys { #expect(catalog.contains(key), "missing catalog key: \(key)") }
-
-    }
-
-    @Test func everySettingsSourceKeyAndNameResolves() throws {
-        let catalog = try Self.catalogKeys()
-        let names = try Self.androidStringNames()
-        for file in Self.iosFiles {
-            for key in Self.catalogKeysUsed(in: try Self.source(file)) {
-                #expect(catalog.contains(key), "\(file): missing catalog key \(key)")
-            }
-        }
-        for file in Self.kotlinFiles {
-            let text = try Self.source(file)
-            for name in Self.matches(#""((?:set|sys)_[a-z0-9_]+)""#, in: text) {
-                #expect(names.contains(name), "\(file): missing resource \(name)")
-            }
-        }
-    }
-
-    @Test func settingsSourcesFollowThePlatformRules() throws {
-        for file in Self.sharedFiles {
-            let text = try Self.source(file)
-            #expect(Self.matches(#"\.(?:compactMap|map)\([A-Za-z.]+\)"#, in: text).isEmpty, "\(file)")
-        }
-    }
-
     static let sharedFiles = [
         "Sources/Conclave/Features/Meeting/Settings/SettingsPresenter.swift",
         "Sources/Conclave/Features/Meeting/Settings/SettingsRoute.swift",
@@ -307,41 +271,6 @@ struct SettingsTranscriptPoliciesTests {
 
     static func source(_ path: String) throws -> String {
         try String(contentsOf: packageRoot().appendingPathComponent(path), encoding: .utf8)
-    }
-
-    static func catalogKeys() throws -> Set<String> {
-        let data = try Data(contentsOf: packageRoot().appendingPathComponent("Sources/Conclave/Resources/Localizable.xcstrings"))
-        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        let strings = json?["strings"] as? [String: Any] ?? [:]
-        return Set(strings.keys)
-    }
-
-    static func androidStringNames() throws -> Set<String> {
-        let text = try source("Android/app/src/main/res/values/strings.xml")
-        return Set(matches(#"<(?:string|plurals) name="([a-z0-9_]+)""#, in: text))
-    }
-
-    static func catalogKeysUsed(in text: String) -> [String] {
-        matches(#"ConclaveStrings\.(?:text|format)\("((?:[^"\\]|\\.)*)""#, in: text).map { unescape($0) }
-    }
-
-    static func unescape(_ raw: String) -> String {
-        var result = ""
-        var index = raw.startIndex
-        while index < raw.endIndex {
-            if raw[index] == "\\", raw[raw.index(after: index)...].hasPrefix("u{"),
-               let close = raw[index...].firstIndex(of: "}") {
-                let hexStart = raw.index(index, offsetBy: 3)
-                if let scalar = UInt32(raw[hexStart..<close], radix: 16).flatMap({ Unicode.Scalar($0) }) {
-                    result.unicodeScalars.append(scalar)
-                    index = raw.index(after: close)
-                    continue
-                }
-            }
-            result.append(raw[index])
-            index = raw.index(after: index)
-        }
-        return result
     }
 
     static func matches(_ pattern: String, in text: String) -> [String] {

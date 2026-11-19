@@ -35,14 +35,6 @@ const parseRequest = (value: unknown): WatchRequest | null => {
   };
 };
 
-/**
- * Queue requests for participants without control permission. The pending
- * request rides the requester's AWARENESS state (which the room lock does not
- * block, and which naturally disappears with them), while the host's decision
- * arrives back through the doc's resolution markers. This hook serves both
- * roles: everyone reads the live request list; a requester submits, cancels,
- * and auto-clears when resolved.
- */
 export function useWatchRequests({ doc, awareness, self }: UseWatchRequestsArgs) {
   const [requests, setRequests] = useState<WatchRequest[]>([]);
   const [myRequest, setMyRequest] = useState<WatchRequest | null>(null);
@@ -50,7 +42,6 @@ export function useWatchRequests({ doc, awareness, self }: UseWatchRequestsArgs)
   const myRequestRef = useRef<WatchRequest | null>(null);
   myRequestRef.current = myRequest;
 
-  // Live request list from every participant's awareness state.
   useEffect(() => {
     const snapshot = () => {
       const next: WatchRequest[] = [];
@@ -70,8 +61,6 @@ export function useWatchRequests({ doc, awareness, self }: UseWatchRequestsArgs)
     };
   }, [awareness]);
 
-  // When the host resolves my request, clear the pending state; a decline gets
-  // a short-lived note so the requester is not left guessing.
   useEffect(() => {
     const check = () => {
       const mine = myRequestRef.current;
@@ -97,7 +86,6 @@ export function useWatchRequests({ doc, awareness, self }: UseWatchRequestsArgs)
     return () => clearTimeout(timer);
   }, [declined]);
 
-  // Leaving the app withdraws any pending request.
   useEffect(() => {
     return () => {
       awareness.setLocalStateField(AWARENESS_FIELD, null);

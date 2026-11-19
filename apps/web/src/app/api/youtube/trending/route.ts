@@ -5,9 +5,6 @@ import {
   youtubeRateLimitResponse,
 } from "../rate-limit";
 
-// Trending videos for the watch app's browse surface. Cheap (1 quota unit) but
-// cached server-side anyway so a busy meeting does not refetch it per client.
-
 const YOUTUBE_VIDEOS_URL = "https://www.googleapis.com/youtube/v3/videos";
 const REGION_CODE = "US";
 const MAX_RESULTS = 12;
@@ -22,7 +19,6 @@ type TrendingPage = {
   nextPageToken: string | null;
 };
 
-// One entry per page token ("" = first page), so infinite scroll stays cached.
 const pageCache = new Map<string, TrendingPage>();
 
 type VideosResponse = {

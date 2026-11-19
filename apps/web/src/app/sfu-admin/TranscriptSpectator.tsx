@@ -40,11 +40,6 @@ const upsertSegment = (
   return next;
 };
 
-/**
- * Read-only live transcript for a room, straight from the transcription
- * worker: the SFU mints a spectator token (all capabilities off) and this
- * component only ever listens. Nothing about the meeting changes.
- */
 export function TranscriptSpectator({
   roomId,
   clientId,
@@ -71,7 +66,6 @@ export function TranscriptSpectator({
   }, []);
 
   useEffect(() => stop, [stop]);
-  // A different scoped room means a different session; never show stale lines.
   useEffect(() => {
     stop();
   }, [roomId, clientId, instanceUrl, stop]);
@@ -125,8 +119,6 @@ export function TranscriptSpectator({
             setSegments((prev) => upsertSegment(prev, message.segment!));
           }
         } catch {
-          // Unknown frames (deltas, minutes, qa) are fine to skip: finalized
-          // lines land via segment.final within a few seconds.
         }
       };
     } catch (err) {

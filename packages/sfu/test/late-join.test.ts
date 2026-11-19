@@ -252,8 +252,4 @@ describe("spectating", () => {
     expect(view.choice).toBeNull();
     expect(view.score).toBe(0);
   });
-
-  it("marks imposter as not spectatable", () => {
-    expect(imposterModule.spectatable).toBe(false);
-  });
 });

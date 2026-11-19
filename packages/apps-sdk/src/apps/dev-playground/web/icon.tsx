@@ -1,6 +1,5 @@
 import React from "react";
 
-/** Terminal glyph for launcher surfaces. */
 export function DevPlaygroundAppIcon() {
   return (
     <svg

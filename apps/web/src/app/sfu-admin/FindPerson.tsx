@@ -5,10 +5,6 @@ import { color } from "@conclave/ui-tokens";
 import type { TaggedFindMatch } from "./types";
 import { Tag } from "./ui";
 
-/**
- * Header person search: ask every connected instance which room someone is
- * in. Debounced; picking a match jumps straight to that room.
- */
 export function FindPerson({
   onSearch,
   onPick,
@@ -16,7 +12,6 @@ export function FindPerson({
 }: {
   onSearch: (query: string) => Promise<TaggedFindMatch[]>;
   onPick: (match: TaggedFindMatch) => void;
-  /** Lets the dashboard focus the box from the "/" shortcut. */
   inputRef?: React.Ref<HTMLInputElement>;
 }) {
   const [query, setQuery] = useState("");

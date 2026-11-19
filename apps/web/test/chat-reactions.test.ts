@@ -41,8 +41,6 @@ describe("applyLocalReactionToggle", () => {
 
     applyLocalReactionToggle(reactions, "👍", "me");
 
-    // React state updates are shallow-compared, so mutating here would make
-    // the optimistic update invisible until the server echo landed.
     expect(reactions).toEqual(snapshot);
   });
 });

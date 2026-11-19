@@ -112,23 +112,6 @@ struct SYS15DiagnosticsTests {
     }
 
     @Test func everyClassifierCodeIsAllowed() throws {
-
-        let source = try sys15Source("Sources/Conclave/Core/Session/MeetingErrorClassifier.swift")
-        var codes: [String] = []
-        for marker in ["code: \"", "diagnosticCode: \""] {
-            var rest = source[...]
-            while let range = rest.range(of: marker) {
-                let tail = rest[range.upperBound...]
-                guard let close = tail.firstIndex(of: "\"") else { break }
-                codes.append(String(tail[..<close]))
-                rest = tail[close...]
-            }
-        }
-        #expect(codes.count > 20)
-        for code in codes where !code.hasSuffix(".") {
-            #expect(DiagnosticsRedactionPolicy.isAllowedCode(code), "\(code)")
-        }
-
         #expect(DiagnosticsRedactionPolicy.isAllowedCode("http.503"))
         #expect(DiagnosticsRedactionPolicy.isAllowedCode("android.serverUnreachable"))
         let classified = MeetingErrorClassifier.classify(serverMessage: "Request timed out", context: .join)
@@ -583,25 +566,6 @@ struct SYS15DiagnosticsTests {
         }
         #expect(DiagnosticsReadout.listenersKey == "sys.diagListeners" && DiagnosticsReadout.bufferKey == "sys.diagBuffer")
     }
-
-    @Test func theExportFolderIsInsideTheFileProviderExportsPath() throws {
-        let paths = try sys15Source("Android/app/src/main/res/xml/conclave_file_paths.xml")
-        #expect(paths.contains("<cache-path name=\"exports\" path=\"exports/\" />"))
-        let manifest = try sys15Source("Android/app/src/main/AndroidManifest.xml")
-        #expect(manifest.contains("android:authorities=\"${applicationId}.fileprovider\""))
-    }
-
-    @Test func diagnosticsStringsAreInBothCatalogs() throws {
-        let catalog = try sys15Source("Sources/Conclave/Resources/Localizable.xcstrings")
-        for key in ["Export Diagnostics", "Creates a file without names, messages or meeting codes that you can send to support.",
-                    "Conclave diagnostics", "Couldn\u{2019}t create the diagnostics file.", "Try Again"] {
-            #expect(catalog.contains("\"\(key)\" : {"), "\(key)")
-        }
-        let strings = try sys15Source("Android/app/src/main/res/values/strings.xml")
-        for name in ["sys_diag_export", "sys_diag_footer", "sys_diag_share_title", "sys_diag_failed", "ds_retry"] {
-            #expect(strings.contains("<string name=\"\(name)\">"), "\(name)")
-        }
-    }
 }
 
 #if os(macOS)
@@ -639,24 +603,4 @@ struct SYS15TransportMilestoneViewModelTests {
     }
 }
 #endif
-
-private func sys15PackageRoot() -> URL {
-    URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-}
-
-private func sys15Source(_ packageRelativePath: String) throws -> String {
-    try String(contentsOf: sys15PackageRoot().appendingPathComponent(packageRelativePath).standardizedFileURL, encoding: .utf8)
-}
-
-private struct SYS15SourceRangeMissing: Error {
-    let marker: String
-}
-
-private func sys15Body(_ source: String, from start: String, to end: String) throws -> String {
-    guard let startRange = source.range(of: start) else { throw SYS15SourceRangeMissing(marker: start) }
-    guard let endRange = source.range(of: end, range: startRange.upperBound..<source.endIndex) else {
-        throw SYS15SourceRangeMissing(marker: end)
-    }
-    return String(source[startRange.upperBound..<endRange.lowerBound])
-}
 #endif

@@ -12,20 +12,11 @@ import { takeUnfurlRateLimit } from "../../lib/unfurl-rate-limit";
 import { readHtmlPrefix } from "../../lib/unfurl-response";
 import { fetchTweetPreview, getTweetIdFromUrl } from "../../lib/unfurl-tweet";
 
-// Server-side link unfurler for chat embeds. The client hands us a URL from a
-// chat message; we fetch it (so participant IPs never reach the target site),
-// scrape Open Graph / Twitter-card metadata, and return a normalized preview.
-//
-// Production runs on Cloudflare Workers with `global_fetch_strictly_public`,
-// which hard-blocks fetches that resolve to private addresses. The hostname
-// checks in parseUnfurlableUrl are the equivalent guard for `next dev`.
-
 const FETCH_TIMEOUT_MS = 6_000;
 const MAX_HTML_BYTES = 512 * 1024;
 const USER_AGENT =
   "Mozilla/5.0 (compatible; ConclaveLinkPreview/1.0; +https://conclave.acmvit.in)";
 
-// Found metadata is stable; misses retry sooner in case the page was flaky.
 const HIT_CACHE_CONTROL =
   "private, max-age=3600, stale-while-revalidate=3600";
 const MISS_CACHE_CONTROL = "private, max-age=300";
@@ -33,8 +24,6 @@ const MISS_CACHE_CONTROL = "private, max-age=300";
 const IMAGE_CONTENT_TYPE_PATTERN =
   /^image\/(?:png|jpeg|gif|webp|avif|svg\+xml)\b/i;
 
-// YouTube's watch pages are bot-gated and scrape to nothing; its public
-// oEmbed endpoint returns the title/author/thumbnail without an API key.
 const fetchYouTubePreview = async (
   target: URL,
   videoId: string,
@@ -80,9 +69,6 @@ const fetchYouTubePreview = async (
 };
 
 const fetchPreview = async (target: URL): Promise<ChatLinkPreview | null> => {
-  // Tweet links can't be scraped (X serves an empty JS shell); the
-  // syndication CDN returns the tweet with its media instead. On failure we
-  // still try the generic scrape below rather than giving up outright.
   const tweetId = getTweetIdFromUrl(target);
   if (tweetId) {
     const tweetPreview = await fetchTweetPreview(tweetId, FETCH_TIMEOUT_MS);

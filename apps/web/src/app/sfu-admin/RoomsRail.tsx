@@ -5,10 +5,6 @@ import { color } from "@conclave/ui-tokens";
 import type { InstanceStatus, RoomSelection, TaggedRoomSummary } from "./types";
 import { Tag, inputClass } from "./ui";
 
-/**
- * Left rail: every active room across the whole pool, streamed live. Tenant
- * chips and search filter locally; the sockets always carry the full picture.
- */
 export function RoomsRail({
   rooms,
   instances,

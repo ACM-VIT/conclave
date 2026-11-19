@@ -34,27 +34,12 @@ import { WatchControls } from "./WatchControls";
 import { WatchEmptyState } from "./WatchEmptyState";
 import { WatchQueue } from "./WatchQueue";
 
-// Hide the floating controls after this much pointer idle while playing.
 const CONTROLS_IDLE_MS = 2600;
 
-/**
- * Watch together: synced YouTube playback on the Conclave apps SDK. Nobody
- * streams video to anyone. YouTube serves each participant directly and the
- * shared Yjs doc syncs intent only.
- *
- * The player is react-player v3 with native controls OFF and a click shield
- * over the iframe, so ALL playback intent flows through our custom UI, which
- * writes the doc first; the player follows declaratively. This removes the
- * whole class of native-control/echo bugs by construction.
- */
 export function WatchWebApp() {
   const { user, isAdmin, isReadOnly: appReadOnly, setLocked } = useApps();
   const { doc, locked, awareness } = useAppDoc("watch");
-  // Read-only when the app itself is read-only (observer) or the room is locked
-  // and the user is not an admin. Playback still follows the doc either way.
   const isReadOnly = Boolean(appReadOnly) || (locked && !isAdmin);
-  // Locked non-admins cannot edit, but they CAN ask: their picks become queue
-  // requests the host approves. True observers get neither.
   const canRequest = !appReadOnly && locked && !isAdmin;
 
   const watchRequests = useWatchRequests({
@@ -65,9 +50,6 @@ export function WatchWebApp() {
 
   const { videoId, videoTitle, queue } = useWatchDocState(doc);
 
-  // YouTube reports a growing finite duration for active broadcasts, so the
-  // player cannot identify live content from duration alone. Keep metadata
-  // keyed to its video to ensure a slow response never labels the next item.
   const [videoMetadata, setVideoMetadata] =
     useState<WatchVideoMetadata | null>(null);
   useEffect(() => {
@@ -87,9 +69,6 @@ export function WatchWebApp() {
         setVideoMetadata(metadata);
         nextRevalidateAfterMs = metadata.revalidateAfterMs;
       }
-      // Once a status is known to be transient, keep checking through an
-      // occasional failed request. An initial unavailable proxy still falls
-      // back to the iframe without starting a pointless polling loop.
       if (nextRevalidateAfterMs !== null) {
         revalidateTimer = setTimeout(() => {
           void refreshMetadata();
@@ -114,9 +93,6 @@ export function WatchWebApp() {
     liveHint,
   });
 
-  // Start a video: play immediately when idle, append to the queue otherwise.
-  // Playback starts instantly with no title; the title backfills into the doc
-  // a moment later (best effort, guarded so a slow fetch cannot mislabel).
   const handleAdd = useCallback(
     (nextVideoId: string, knownTitle?: string | null) => {
       if (isReadOnly) return;
@@ -148,12 +124,9 @@ export function WatchWebApp() {
     [doc, isReadOnly, user?.id, user?.name],
   );
 
-  // The empty-state browse surface always starts playback (it only renders
-  // when idle).
   const handleStart = useCallback(
     (nextVideoId: string, knownTitle?: string | null) => {
       if (isReadOnly) return;
-      // Guard against a race where a video appeared between render and submit.
       if (getVideoId(doc)) {
         handleAdd(nextVideoId, knownTitle);
         return;
@@ -209,28 +182,21 @@ export function WatchWebApp() {
     [setLocked],
   );
 
-  // The queue rail collapses to give the video the whole app; a chip brings it
-  // back. A local preference, never synced, and it doubles as theater view.
   const [railOpen, setRailOpen] = useState(true);
   const handleToggleRail = useCallback(() => {
     setRailOpen((prev) => !prev);
   }, []);
 
-  // Personal browse mode over the running video: playback (and audio) carry on
-  // underneath while you shop trending or search for the queue.
   const [browsing, setBrowsing] = useState(false);
   const handleBrowsePick = useCallback(
     (pickedId: string, pickedTitle?: string | null) => {
       if (appReadOnly) return;
       if (canRequest) {
         watchRequests.submitRequest(pickedId, pickedTitle);
-        // Close so the requester lands on their pending row in the rail.
         setBrowsing(false);
         setRailOpen(true);
         return;
       }
-      // Editors stay in browse to add several in a row; items appear in the
-      // rail as they land.
       handleAdd(pickedId, pickedTitle);
     },
     [appReadOnly, canRequest, handleAdd, watchRequests],
@@ -238,8 +204,6 @@ export function WatchWebApp() {
 
   const acceptRequest = useCallback(
     (request: WatchRequest) => {
-      // With co-hosts, two admins can race on the same request; the first
-      // resolution wins and later clicks become no-ops instead of duplicates.
       if (getWatchRequestResolution(doc, request.id)) return;
       resolveWatchRequest(doc, request.id, "added");
       const item = enqueue(
@@ -266,11 +230,6 @@ export function WatchWebApp() {
 
   const hasVideo = Boolean(videoId);
   const isPlaying = player.playbackState === "playing";
-  // A video that ended into an EMPTY queue parks paused at its final frame,
-  // and the ENDED event that normally advances has already fired. So when
-  // something lands in the queue afterwards (an add, another client, an
-  // accepted request), any client with edit rights advances; advanceQueue's
-  // compare-and-swap lets exactly one writer win across the room.
   const videoOver =
     hasVideo &&
     !player.isLive &&
@@ -284,8 +243,6 @@ export function WatchWebApp() {
 
   const endedIdle = videoOver && queue.length === 0;
 
-  // Pending queue requests, shown to everyone; the host gets the verdict
-  // buttons, the requester gets a cancel, and a decline leaves a short note.
   const requestsSection =
     watchRequests.requests.length > 0 || watchRequests.declined ? (
       <div className="border-b border-white/[0.06] px-3 pb-2.5">
@@ -422,9 +379,6 @@ export function WatchWebApp() {
     />
   );
 
-  // Floating controls visibility: always there while paused, prompting, or
-  // errored; while playing they fade after a short pointer idle and any pointer
-  // movement brings them back. A single opacity transition, no loops.
   const [pointerFresh, setPointerFresh] = useState(true);
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pokeControls = useCallback(() => {
@@ -447,7 +401,6 @@ export function WatchWebApp() {
     Boolean(player.error);
 
   const handleShieldClick = useCallback(() => {
-    // In mini form the whole tile is the "go back" affordance.
     if (browsing) {
       setBrowsing(false);
       return;
@@ -463,7 +416,6 @@ export function WatchWebApp() {
         fontFamily: "'PolySans Trial', sans-serif",
       }}
     >
-      {/* Player column */}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <div
           className="relative min-h-0 flex-1 overflow-hidden bg-black"
@@ -471,13 +423,6 @@ export function WatchWebApp() {
           onPointerDown={pokeControls}
         >
           {hasVideo ? (
-            /* Hard clipping container: the youtube-video custom element sizes
-               itself by its intrinsic 16:9 ratio when left in normal flow,
-               overflowing the stage. Pinning it inside an absolute box and
-               forcing block 100% sizing keeps the video exactly in its frame.
-               While browsing, this same box shrinks into a floating mini
-               player (the ONE iframe simply moves), so playback stays visible
-               and tapping it returns to the full view. */
             <div
               className={
                 browsing
@@ -515,9 +460,6 @@ export function WatchWebApp() {
                   />
                 }
               />
-              {/* Click shield: the iframe never receives input, so the hidden
-                  native UI can never inject intent. A stage tap only reveals
-                  controls; shared play/pause requires the explicit button. */}
               <button
                 type="button"
                 aria-label={browsing ? "Back to video" : "Show playback controls"}
@@ -568,8 +510,6 @@ export function WatchWebApp() {
             />
           ) : null}
 
-          {/* The video finished with nothing queued: offer the way back to
-              browsing without hunting for the rail button. */}
           {endedIdle && !browsing && !appReadOnly ? (
             <div className="absolute inset-0 z-10 flex items-center justify-center">
               <button
@@ -590,8 +530,6 @@ export function WatchWebApp() {
             </div>
           ) : null}
 
-          {/* Personal browse mode: an opaque layer over the (still running)
-              player. Your playback keeps going; you are just shopping. */}
           {hasVideo && browsing ? (
             <div
               className="absolute inset-0 z-30 flex flex-col"
@@ -624,8 +562,6 @@ export function WatchWebApp() {
             </div>
           ) : null}
 
-          {/* The queue rail handle: a slim tab at the vertical center of the
-              stage's right edge, pointing the way it will move the rail. */}
           {hasVideo && !browsing ? (
             <button
               type="button"
@@ -648,7 +584,6 @@ export function WatchWebApp() {
             </button>
           ) : null}
 
-          {/* Floating custom controls: the only playback UI there is. */}
           {hasVideo ? (
             <div
               className={`absolute bottom-5 left-1/2 z-10 w-[min(34rem,calc(100%-1.5rem))] -translate-x-1/2 overflow-hidden rounded-2xl border border-white/10 transition-opacity duration-200 ${
@@ -707,10 +642,6 @@ export function WatchWebApp() {
         </div>
       </div>
 
-      {/* Queue column, only once something is playing. On narrow layouts it
-          sits under the player with a capped height; on wide layouts it is a
-          fixed side rail. Collapsing animates the width (or height) shut while
-          the fixed-width inner keeps the content from reflowing mid-slide. */}
       {hasVideo ? (
         <aside
           className={`flex min-h-0 shrink-0 flex-col overflow-hidden border-white/10 transition-all duration-300 ease-out lg:max-h-none ${

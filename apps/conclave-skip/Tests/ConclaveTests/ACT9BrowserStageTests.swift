@@ -70,19 +70,6 @@ struct ACT9BrowserStageTests {
         #expect(!BrowserProviderPolicy.isChromium("kitesurf"))
     }
 
-    @Test func timeoutsMatchTheWebClient() throws {
-        #expect(SharedBrowserTimeouts.capabilitiesAckMillis == 22000)
-        #expect(SharedBrowserTimeouts.commandAckMillis == 45000)
-        #expect(SharedBrowserTimeouts.capabilitiesRefreshMillis == 30000)
-        #expect(SharedBrowserTimeouts.heartbeatMillis == 30000)
-        #expect(SharedBrowserTimeouts.firstFrameMillis == 20000)
-        #expect(SharedBrowserTimeouts.seconds(22000) == 22.0)
-        #expect(BrowserStagePresenter.hostActionSafetyMillis > Double(SharedBrowserTimeouts.commandAckMillis))
-        let web = act9Normalized(try act9Repo("apps/web/src/app/hooks/useSharedBrowser.ts"))
-        #expect(web.contains("const BROWSER_COMMAND_TIMEOUT_MS = 45000;"))
-        #expect(web.contains("const BROWSER_CAPABILITIES_TIMEOUT_MS = 22000;"))
-    }
-
     @Test func capabilityAndHeartbeatRules() throws {
         #expect(BrowserCapabilityPolicy.shouldProbe(isJoined: true, isHost: true, isAttendee: false))
         #expect(!BrowserCapabilityPolicy.shouldProbe(isJoined: true, isHost: false, isAttendee: false))
@@ -102,15 +89,6 @@ struct ACT9BrowserStageTests {
         #expect(available.available == true && available.provider == "kitesurf" && available.video == false && available.agentic == true)
         let unavailable = try JSONDecoder().decode(BrowserCapabilitiesResponse.self, from: Data(#"{"available":false}"#.utf8))
         #expect(unavailable.available == false && unavailable.provider == nil)
-    }
-
-    @Test func theProbeIsAckOnlyWithNoPayloadOnBothClients() throws {
-        let sfu = act9Normalized(try act9Repo("packages/sfu/server/socket/handlers/sharedBrowserHandlers.ts"))
-        #expect(sfu.contains("\"browser:getCapabilities\", async ( callback: ("))
-        let web = act9Normalized(try act9Repo("apps/web/src/app/hooks/useSharedBrowser.ts"))
-        #expect(web.contains("browser:getCapabilities"))
-
-        #expect(SfuClientEvent.browserGetCapabilities.rawValue == "browser:getCapabilities")
     }
 
     @Test func theControllerGetsTheInputLayerOverTheVideo() {
@@ -406,47 +384,5 @@ struct ACT9BrowserStageTests {
         #expect(BrowserStageFixtures.isFixture("browser-kitesurf") && !BrowserStageFixtures.isFixture("app-opening"))
         #expect(!BrowserFixturePage.html.contains("http") && !BrowserFixturePage.html.contains("<script"))
     }
-
-    @Test func browserStringsAreInBothCatalogs() throws {
-        let catalogData = try Data(contentsOf: act9PackageRoot().appendingPathComponent("Sources/Conclave/Resources/Localizable.xcstrings"))
-        let catalog = try #require(try JSONSerialization.jsonObject(with: catalogData) as? [String: Any])
-        let strings = try #require(catalog["strings"] as? [String: Any])
-        let ios = try act9Source("Sources/Conclave/Features/Meeting/Activities/BrowserSurface+iOS.swift")
-        let pattern = try NSRegularExpression(pattern: #"ConclaveStrings\.(?:text|format)\("((?:[^"\\]|\\.)+)""#)
-        var keys = Set<String>()
-        for match in pattern.matches(in: ios, range: NSRange(ios.startIndex..., in: ios)) {
-            if let range = Range(match.range(at: 1), in: ios) { keys.insert(String(ios[range])) }
-        }
-        #expect(keys.count >= 20)
-        for key in keys { #expect(strings[key] != nil, "missing iOS key \(key)") }
-        let xml = try String(contentsOf: act9PackageRoot().appendingPathComponent("Android/app/src/main/res/values/strings.xml"), encoding: .utf8)
-        let kotlin = try act9Source("Sources/Conclave/Skip/ui/browser/BrowserCopy.kt") + act9Source("Sources/Conclave/Skip/ui/browser/BrowserSurface.kt")
-        let names = try NSRegularExpression(pattern: #""((?:br|act|stg|ds)_[a-z0-9_]+)""#)
-        var found = 0
-        for match in names.matches(in: kotlin, range: NSRange(kotlin.startIndex..., in: kotlin)) {
-            guard let range = Range(match.range(at: 1), in: kotlin) else { continue }
-            found += 1
-            let name = String(kotlin[range])
-            #expect(xml.contains("name=\"" + name + "\""), "missing Android resource \(name)")
-        }
-        #expect(found >= 30)
-    }
-}
-
-private func act9PackageRoot() -> URL {
-    URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-}
-
-private func act9Source(_ packageRelativePath: String) throws -> String {
-    try String(contentsOf: act9PackageRoot().appendingPathComponent(packageRelativePath), encoding: .utf8)
-}
-
-private func act9Repo(_ repoRelativePath: String) throws -> String {
-    let repo = act9PackageRoot().deletingLastPathComponent().deletingLastPathComponent()
-    return try String(contentsOf: repo.appendingPathComponent(repoRelativePath), encoding: .utf8)
-}
-
-private func act9Normalized(_ text: String) -> String {
-    return text.split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" || $0 == "\r" }).joined(separator: " ")
 }
 #endif

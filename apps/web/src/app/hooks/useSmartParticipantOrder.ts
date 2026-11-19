@@ -317,10 +317,6 @@ function useSmartParticipantOrderWithMetadata<
     visibleParticipantLimit,
   ]);
 
-  // Return the SAME array reference when the resulting order is element-
-  // identical (e.g. a participant's mute toggled but the sort didn't move
-  // anyone). Protects every downstream useMemo/FLIP from re-running on a no-op
-  // reorder — same trick `raisedOrder` already uses above.
   const stableOrdered = useMemo(() => {
     const prev = previousResultRef.current;
     const same =

@@ -47,11 +47,6 @@ const POLICY_ROWS: Array<{ key: PolicyKey; label: string }> = [
 
 const POLICY_CONFIRM_MS = 5000;
 
-/**
- * Everything about one room on a single calm page: live participants with
- * inline moderation on the left, controls in a sticky rail on the right, and
- * the destructive stuff fenced at the bottom of that rail.
- */
 export function RoomView({
   room,
   chat,
@@ -62,19 +57,14 @@ export function RoomView({
   onActionSettled,
 }: {
   room: RoomSnapshot;
-  /** Live broadcast chat for this room, or null before the first push. */
   chat: AdminChatMessage[] | null;
-  /** Pool url of the SFU this room lives on; commands target it. */
   instanceUrl: string;
-  /** Disables destructive confirms while a command is in flight. */
   isBusy: boolean;
   runAction: (input: AdminActionInput) => Promise<boolean>;
-  /** Several commands under one label and one toast, e.g. mute all. */
   runBatch: (
     label: string,
     inputs: Array<Omit<AdminActionInput, "label">>,
   ) => Promise<boolean>;
-  /** Called after any action, so the caller can force a fresh room push. */
   onActionSettled: () => void;
 }) {
   const roomPath = `rooms/${encodeURIComponent(room.id)}`;
@@ -98,9 +88,6 @@ export function RoomView({
     return () => clearTimeout(timer);
   }, [copied]);
 
-  // Policies apply the moment a switch flips. Each override clears only when
-  // the server echoes that value back (or it expires); clearing on ANY push
-  // made unrelated updates in a busy room snap the switch back and forth.
   const [policyOverride, setPolicyOverride] = useState<Partial<RoomPolicies>>({});
   const policyOverrideAtRef = useRef<Partial<Record<PolicyKey, number>>>({});
   useEffect(() => {
@@ -167,7 +154,6 @@ export function RoomView({
 
   return (
     <div className="mx-auto w-full max-w-6xl pb-10">
-      {/* Header */}
       <div className="flex flex-wrap items-start justify-between gap-3 pt-1">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -223,7 +209,6 @@ export function RoomView({
       </div>
 
       <div className="mt-2 grid items-start gap-x-10 lg:grid-cols-[minmax(0,1fr)_320px]">
-        {/* People */}
         <div className="min-w-0 space-y-4">
           <WaitingSection pendingUsers={room.pendingUsers} roomPath={roomPath} act={act} />
 
@@ -300,7 +285,6 @@ export function RoomView({
           />
         </div>
 
-        {/* Controls rail */}
         <div className="min-w-0 space-y-4 lg:sticky lg:top-3">
           <Section title="Room settings">
             <div className="grid grid-cols-1">

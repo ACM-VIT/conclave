@@ -169,7 +169,6 @@ describe("applyVideoReceiverJitterBufferTarget", () => {
       get: () => currentTarget,
       set: () => {
         assignmentCount += 1;
-        // Simulate a partial implementation silently ignoring the request.
       },
     });
 

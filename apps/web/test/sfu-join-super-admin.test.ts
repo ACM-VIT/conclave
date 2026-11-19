@@ -85,3 +85,27 @@ describe("join token super admin authorization", () => {
     });
   });
 });
+
+describe("join token identity", () => {
+  it("never signs an unauthenticated body identity", async () => {
+    const claims = await join({ email: "host@victim.example" }) as Record<string, unknown>;
+    expect(claims.email).toBeUndefined();
+    expect(claims.userId).toBe("guest-session");
+  });
+
+  it("ignores a body user id without a session", async () => {
+    const response = await POST(new Request("http://localhost/api/sfu/join", {
+      method: "POST",
+      body: JSON.stringify({ roomId: "room", sessionId: "session", user: { id: "victim-user-id" } }),
+    }));
+    const { token } = await response.json() as { token: string };
+    expect(jwt.verify(token, "super-admin-test-secret")).toMatchObject({ userId: "guest-session" });
+  });
+
+  it("uses the session identity over a different body identity", async () => {
+    getSession.mockResolvedValue({ user: { id: "u1", email: "me@example.com", name: "Me" } });
+    expect(await join({ email: "someone-else@example.com" })).toMatchObject({
+      email: "me@example.com", userId: "me@example.com",
+    });
+  });
+});

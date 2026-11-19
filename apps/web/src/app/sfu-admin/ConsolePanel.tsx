@@ -13,18 +13,11 @@ type CommandDef = {
   group: string;
   label: string;
   method: RequestMethod;
-  /** Path template; {roomId} is prefilled from the selected room, other
-   * placeholders become inputs. */
   path: string;
   body?: unknown;
   hint?: string;
 };
 
-/**
- * Every admin endpoint, named and prefilled, so nobody has to remember route
- * shapes. The selected room flows into {roomId}; remaining placeholders
- * become inputs; bodies start from a working template.
- */
 const COMMANDS: CommandDef[] = [
   { id: "overview", group: "Inspect", label: "Cluster overview", method: "GET", path: "overview" },
   { id: "workers", group: "Inspect", label: "Worker usage", method: "GET", path: "workers" },
@@ -119,7 +112,6 @@ export function ConsolePanel({
   room,
   instanceUrl,
 }: {
-  /** Selected room, used to prefill {roomId} and scope the request. */
   room: { id: string; clientId: string } | null;
   instanceUrl?: string;
 }) {
@@ -135,8 +127,6 @@ export function ConsolePanel({
     [commandId],
   );
 
-  // The body editor follows the selected command's template until the
-  // operator edits it for that command.
   const effectiveBody =
     bodyForCommand === command.id
       ? body

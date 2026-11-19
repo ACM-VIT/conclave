@@ -79,8 +79,6 @@ export function useScreenWakeLock({ enabled }: UseScreenWakeLockOptions) {
         sentinel = nextSentinel;
         sentinel.addEventListener("release", handleRelease);
       } catch (error) {
-        // Browsers can reject while hidden, battery-saving, or permission-limited.
-        // Visibility/page-show handlers below retry when requesting becomes legal.
         console.debug("[Meets] Screen wake lock request failed:", error);
       } finally {
         requesting = false;

@@ -13,7 +13,6 @@ interface ChatReactionChipsProps {
   isOwn: boolean;
   currentUserId: string;
   resolveDisplayName: (userId: string) => string;
-  /** Reactions stay visible but become inert when the host disables them. */
   disabled?: boolean;
 }
 
@@ -81,8 +80,6 @@ const ReactionChip = ({
         }`}
       >
         <span className="text-[12px] leading-none">{reaction.emoji}</span>
-        {/* Re-key on count so the number replays a small pop each time it
-            changes, giving live updates a Discord-like tick. */}
         <span
           key={reaction.count}
           className="web-chat-reaction-count tabular-nums"
@@ -103,17 +100,6 @@ const ReactionChip = ({
   );
 };
 
-/**
- * Chip row under a message bubble: one pill per emoji.
- *
- * There is deliberately no trailing add-reaction chip here — the hover
- * quick-react toolbar already offers one-tap emoji and the full picker, so a
- * chip-row "+" only duplicated it while reserving an always-present empty slot
- * that left the chips visibly offset from the bubble edge when idle.
- *
- * Renders nothing when there are no reactions, so those messages cost no
- * vertical space and consecutive own-messages keep their tight grouping.
- */
 const ChatReactionChipsImpl = ({
   reactions,
   onToggle,

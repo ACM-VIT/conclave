@@ -1,10 +1,7 @@
 import type { ChatGifAttachment, ChatGifAttachmentKind } from "./types";
 
-// The Klipy catalogs we surface in the picker. These map to the plural path
-// segments used by the Klipy API (`/gifs`, `/stickers`, `/clips`).
 export type KlipyMediaKind = "gifs" | "stickers" | "clips";
 
-// The singular `ChatGifAttachment.kind` each catalog produces once sent.
 export const KLIPY_ATTACHMENT_KIND: Record<
   KlipyMediaKind,
   ChatGifAttachmentKind

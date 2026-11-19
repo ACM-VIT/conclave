@@ -1,3 +1,4 @@
+import type { RegisterableHotkey } from "@tanstack/hotkeys";
 import {
   AudioLines,
   Blocks,
@@ -17,6 +18,7 @@ import {
   ScanFace,
   Settings,
   Shield,
+  Sparkles,
   StickyNote,
   TerminalSquare,
   Users,
@@ -39,14 +41,8 @@ import type {
 import { HOTKEYS } from "../lib/hotkeys";
 
 export interface ControlsBarProps {
-  /** Phone-width layout: fold screen-share/reactions into the More menu so the
-   * core mic/camera/More/leave row fits without wrapping. */
   compact?: boolean;
-  /** Tight-stage layout (docked panels eating width): demote the least-used
-   * center controls (raise hand, screen share) into the More menu so the bar
-   * keeps breathing room instead of crowding. Ignored when compact is set. */
   slim?: boolean;
-  /** Room members (self first) for the watch-together coachmark vignette. */
   coachAvatars?: { id: string; name: string }[];
   roomId?: string;
   isMuted: boolean;
@@ -58,6 +54,8 @@ export interface ControlsBarProps {
   activeScreenShareId: string | null;
   isChatOpen: boolean;
   isTranscriptOpen?: boolean;
+  isAiSettingsOpen?: boolean;
+  onToggleAiSettings?: () => void;
   isTranscriptLive?: boolean;
   transcriptStatus?: TranscriptSessionStatus;
   unreadCount: number;
@@ -164,7 +162,7 @@ export interface ControlDescriptor {
   id: string;
   icon: LucideIcon;
   label: string;
-  hotkey?: string;
+  hotkey?: RegisterableHotkey;
   showTooltipWithoutHotkey?: boolean;
   variant: ControlButtonVariant;
   badge?: number;
@@ -177,15 +175,11 @@ export interface OverflowRow {
   id: string;
   icon: LucideIcon;
   label: string;
-  hotkey?: string;
+  hotkey?: RegisterableHotkey;
   active?: boolean;
   badge?: number;
   disabled?: boolean;
-  /** When set, this row opens the browser launcher instead of firing onPress. */
   opensBrowserLauncher?: boolean;
-  /** Kept searchable in the command palette but hidden from the More menu —
-   * the Apps panel is the visible home for SDK apps, so listing them in More
-   * too would be a duplicate. */
   paletteOnly?: boolean;
   onPress?: () => void;
 }
@@ -214,9 +208,6 @@ export function buildControlsConfig(p: ControlsBarProps): ControlsConfig {
   const canStartScreenShare = !p.activeScreenShareId || p.isScreenSharing;
   const screenShareDisabled =
     !canStartScreenShare || Boolean(p.isAudioOnly && !p.isScreenSharing);
-  // When the Apps launcher exists, every SDK app (whiteboard, watch, dev
-  // playground) plus the editing lock lives in the Apps panel; their rows go
-  // palette-only instead of doubling up in the More menu.
   const appsPanelOwnsApps = Boolean(p.onToggleApps);
 
   const sideControls: ControlDescriptor[] = [];
@@ -255,8 +246,6 @@ export function buildControlsConfig(p: ControlsBarProps): ControlsConfig {
     sideControls.push({
       id: "transcript",
       icon: FileText,
-      // Label stays put; live state is signalled by the status dot/tint, not
-      // by renaming the control under the user.
       label: "Transcript",
       showTooltipWithoutHotkey: true,
       variant:
@@ -347,9 +336,6 @@ export function buildControlsConfig(p: ControlsBarProps): ControlsConfig {
         onPress: control.onPress,
       });
     });
-    // Phone-width bar: keep the core row to mic/cam/More/leave, fold
-    // side controls, hand raise, and screen-share into the More menu instead
-    // of squeezing them into separate rails.
     overflow.push({
       id: handDescriptor.id,
       icon: handDescriptor.icon,
@@ -369,8 +355,6 @@ export function buildControlsConfig(p: ControlsBarProps): ControlsConfig {
       onPress: screenShareDescriptor.onPress,
     });
   } else if (p.slim) {
-    // Tight stage: keep mic/camera/reactions/More/leave in the bar and demote
-    // the two least-used center controls to the top of the More menu.
     overflow.push({
       id: handDescriptor.id,
       icon: handDescriptor.icon,
@@ -507,8 +491,6 @@ export function buildControlsConfig(p: ControlsBarProps): ControlsConfig {
       onPress: p.onToggleAppsLock,
     });
   }
-  // Host-only AI voice agent. Until now this was reachable only through the
-  // Mod+K palette; give it a discoverable home in the More menu too.
   {
     const voiceAgentPress = p.isVoiceAgentRunning
       ? p.onStopVoiceAgent
@@ -528,8 +510,15 @@ export function buildControlsConfig(p: ControlsBarProps): ControlsConfig {
       });
     }
   }
-  // Desktop-only: device/mic/camera testing and connection stats. The compact
-  // bar already has its own Settings tile wired to the mobile drawer.
+  if (p.onToggleAiSettings) {
+    overflow.push({
+      id: "ai-settings",
+      icon: Sparkles,
+      label: "Room AI",
+      active: p.isAiSettingsOpen,
+      onPress: p.onToggleAiSettings,
+    });
+  }
   if (!p.compact && p.onToggleDeviceSettings) {
     overflow.push({
       id: "settings",
@@ -539,9 +528,6 @@ export function buildControlsConfig(p: ControlsBarProps): ControlsConfig {
       onPress: p.onToggleDeviceSettings,
     });
   }
-  // Phone-width: the standalone host-controls shield is dropped from the right
-  // cluster (see ControlsBar) and folded into the More menu like everything else
-  // so the compact bar stays mic/cam/More/leave.
   if (p.compact && p.isAdmin && p.onToggleHostControls) {
     overflow.push({
       id: "host-controls",

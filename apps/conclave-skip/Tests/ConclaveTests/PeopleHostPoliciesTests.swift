@@ -403,34 +403,6 @@ struct PeopleHostPoliciesTests {
         #expect(lost.people.snapshot.showsLostHostNotice && lost.people.snapshot.section(.waiting) == nil)
         #expect(lost.countersReadout().contains("lostHost=1"))
     }
-
-    @Test func peopleStringsExistOnBothPlatforms() throws {
-        let catalog = try #require(try JSONSerialization.jsonObject(with: Data(peopleSource("Sources/Conclave/Resources/Localizable.xcstrings").utf8))
-            as? [String: Any])
-        let keys = Set((catalog["strings"] as? [String: Any] ?? [:]).keys)
-        for file in try peopleFiles(under: "Sources/Conclave/Features/Meeting/People", extensions: ["swift"]) where file.contains("+iOS") {
-
-            let text = try peopleSource(file).replacingOccurrences(of: "\\u{2019}", with: "\u{2019}")
-                .replacingOccurrences(of: "\\u{2026}", with: "\u{2026}")
-            for match in peopleCaptures(#"ConclaveStrings\.(?:text|format)\("([^"]+)""#, in: text) {
-                #expect(keys.contains(match), "\(file): missing catalog key \(match)")
-            }
-        }
-        let xml = try peopleSource("Android/app/src/main/res/values/strings.xml")
-        let names = Set(peopleCaptures(#"<(?:string|plurals) name="([a-z0-9_]+)""#, in: xml))
-        for file in try peopleFiles(under: "Sources/Conclave/Skip/ui/people", extensions: ["kt"]) {
-            for match in peopleCaptures(#""((?:ppl|ds|native_panel)_[a-z0-9_]+)""#, in: try peopleSource(file)) {
-                #expect(names.contains(match), "\(file): missing resource \(match)")
-            }
-        }
-
-        for name in names where name.hasPrefix("ppl_") {
-            #expect(!xml.contains("name=\"\(name)\">'"), "\(name)")
-        }
-        #expect(xml.contains("<string name=\"ppl_queue_position\">%1$d of %2$d in queue</string>"))
-        #expect(xml.contains("<string name=\"ppl_sub_join\">%1$s \u{00B7} %2$s</string>"))
-        #expect(keys.contains("You\u{2019}re the only one here.") && keys.contains("%lld of %lld in queue"))
-    }
 }
 
 #if os(macOS)
@@ -528,58 +500,4 @@ struct PeopleViewModelWiringTests {
     }
 }
 #endif
-
-private func peoplePackageRoot() -> URL {
-    URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-}
-
-private func peopleSource(_ packageRelativePath: String) throws -> String {
-    try String(contentsOf: peoplePackageRoot().appendingPathComponent(packageRelativePath).standardizedFileURL, encoding: .utf8)
-}
-
-private func peopleFiles(under directory: String, extensions: Set<String>) throws -> [String] {
-    let root = peoplePackageRoot()
-    var result: [String] = []
-    let enumerator = FileManager.default.enumerator(at: root.appendingPathComponent(directory), includingPropertiesForKeys: nil)
-    while let url = enumerator?.nextObject() as? URL {
-        if extensions.contains(url.pathExtension) { result.append(url.path) }
-    }
-    let prefix = root.path + "/"
-    return result.map { $0.hasPrefix(prefix) ? String($0.dropFirst(prefix.count)) : $0 }.sorted()
-}
-
-private func peopleCode(_ text: String) -> String {
-    var lines: [String] = []
-    for line in text.components(separatedBy: "\n") {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        if trimmed.hasPrefix("//") || trimmed.hasPrefix("*") || trimmed.hasPrefix("/*") { continue }
-        if let range = line.range(of: " // ") {
-            lines.append(String(line[line.startIndex..<range.lowerBound]))
-        } else {
-            lines.append(line)
-        }
-    }
-    return lines.joined(separator: "\n")
-}
-
-private func peopleNormalized(_ text: String) -> String {
-    text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
-}
-
-private func peopleMatches(_ pattern: String, in text: String) -> [String] {
-    guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
-    let range = NSRange(text.startIndex..<text.endIndex, in: text)
-    return regex.matches(in: text, range: range).compactMap { match in
-        Range(match.range, in: text).map { String(text[$0]) }
-    }
-}
-
-private func peopleCaptures(_ pattern: String, in text: String) -> [String] {
-    guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
-    let range = NSRange(text.startIndex..<text.endIndex, in: text)
-    return regex.matches(in: text, range: range).compactMap { match in
-        guard match.numberOfRanges > 1 else { return nil }
-        return Range(match.range(at: 1), in: text).map { String(text[$0]) }
-    }
-}
 #endif

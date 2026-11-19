@@ -8,9 +8,6 @@ import type { ChatImageAttachment } from "../lib/types";
 interface ChatImageAttachmentViewProps {
   image: ChatImageAttachment;
   caption?: string;
-  /** Transient surfaces (the chat notification toasts) render a passive
-   * preview — the toast dismisses itself after a few seconds, which would
-   * yank an open lightbox out from under the viewer. */
   expandable?: boolean;
   className?: string;
   widthClassName?: string;
@@ -31,16 +28,12 @@ function ChatImageLightbox({
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
-      // The close button is the dialog's only tabbable control, so pinning
-      // Tab there is a complete focus trap for this modal.
       if (event.key === "Tab") {
         event.preventDefault();
         closeButtonRef.current?.focus();
       }
     };
     window.addEventListener("keydown", onKeyDown);
-    // Same accessible-modal focus dance as LinkSafetyDialog: move focus in on
-    // open, hand it back to the thumbnail that opened us on close.
     const previouslyFocused = document.activeElement as HTMLElement | null;
     dialogRef.current?.focus();
     return () => {
@@ -49,8 +42,6 @@ function ChatImageLightbox({
     };
   }, [onClose]);
 
-  // Portal to <body>: chat rows are entrance-animated (transformed), which
-  // would re-anchor a `fixed` overlay to the row instead of the viewport.
   return createPortal(
     <div
       ref={dialogRef}
@@ -89,8 +80,6 @@ export default function ChatImageAttachmentView({
   widthClassName = "max-w-[300px]",
 }: ChatImageAttachmentViewProps) {
   const [isExpanded, setIsExpanded] = useState(false);
-  // Stable identity so the lightbox's focus effect doesn't re-run (and yank
-  // focus around) whenever new chat messages re-render this row.
   const closeLightbox = useCallback(() => setIsExpanded(false), []);
 
   const frameClassName = `block ${widthClassName} overflow-hidden rounded-[18px] bg-black/30 ${className}`;

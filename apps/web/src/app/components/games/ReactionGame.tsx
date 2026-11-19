@@ -28,7 +28,6 @@ type ReactionMe = {
   score: number;
 };
 
-/** Counts UP from the server go moment, skew-free. */
 function useElapsed(goAt: number | null, serverNow: number | null): number {
   const [ms, setMs] = useState(0);
   const baseRef = useRef({ goAt, serverNow, at: Date.now() });
@@ -163,7 +162,6 @@ export default function ReactionGame({
     );
   }
 
-  // reveal
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <p style={{ fontSize: 11, color: color.textFaint, margin: 0 }}>

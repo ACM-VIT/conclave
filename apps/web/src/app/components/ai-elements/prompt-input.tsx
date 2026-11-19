@@ -1,9 +1,6 @@
 "use client";
 
-// Ported (and trimmed) from AI SDK Elements (elements.ai-sdk.dev) "PromptInput"
-// and themed for Conclave. Keeps the framed form + auto-growing textarea +
-// toolbar + status-aware submit button; drops the attachment / model-picker
-// machinery the transcript Ask box doesn't need.
+// Ported (and trimmed) from AI SDK Elements (elements.ai-sdk.dev) "PromptInput".
 
 import { Loader2, Send, Square, X } from "lucide-react";
 import type { ComponentProps, KeyboardEventHandler } from "react";

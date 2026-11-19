@@ -5,7 +5,6 @@ export type WinnerOverlayProps = {
   label: string;
   color: string;
   byName: string;
-  /** 1-based position of this result in the running history. */
   resultNumber: number;
   canRemove: boolean;
   canSpinAgain: boolean;
@@ -28,7 +27,7 @@ type ConfettiParticle = {
   lifeMs: number;
 };
 
-const CONFETTI_GRAVITY = 620; // px/s^2
+const CONFETTI_GRAVITY = 620;
 const CONFETTI_DRAG = 0.3;
 const SECOND_WAVE_DELAY_MS = 320;
 
@@ -83,8 +82,6 @@ function ConfettiCanvas() {
 
     const particles: ConfettiParticle[] = [];
     const startedAt = performance.now();
-    // Center pop plus two corner cannons aimed inward, then a lighter
-    // second wave so the celebration lingers a beat.
     spawnBurst(particles, width / 2, height * 0.32, -90, 140, 90, startedAt);
     spawnBurst(particles, width * 0.05, height * 0.95, -60, 42, 40, startedAt);
     spawnBurst(particles, width * 0.95, height * 0.95, -120, 42, 40, startedAt);
@@ -186,7 +183,6 @@ export function WinnerOverlay({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [onClose]);
 
-  // Long names scale down so the card never wraps into a wall of text.
   const nameFontSize =
     label.length <= 12 ? 38 : label.length <= 20 ? 32 : label.length <= 30 ? 26 : 21;
 
@@ -221,7 +217,6 @@ export function WinnerOverlay({
               : "wheel-winner-pop 260ms cubic-bezier(0.22, 1.2, 0.36, 1) both",
           }}
         >
-          {/* Winner-colored crown bar */}
           <span
             className="absolute inset-x-0 top-0 h-1"
             style={{ backgroundColor: color }}

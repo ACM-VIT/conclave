@@ -21,9 +21,6 @@ type MeetingEnterOverlayProps = {
 
 const EASE = [0.22, 1, 0.36, 1] as const;
 
-// Friendly, on-brand copy for each failure mode. `canRetry` distinguishes a
-// transient connection issue (re-attemptable in place) from a device/permission
-// problem that has to be fixed back in the lobby.
 function describeError(
   action: MeetingEnterAction,
   error: MeetError,
@@ -59,8 +56,6 @@ function describeError(
         canRetry: true,
       };
     case "UNKNOWN": {
-      // Surface a clean server message (e.g. "Room not found") but hide raw
-      // transport noise (e.g. "xhr poll error", "Failed to fetch").
       const raw = (error.message || "").trim();
       const technical =
         !raw ||
@@ -78,10 +73,6 @@ function describeError(
   }
 }
 
-// Full-screen brand animation that takes over the instant a meeting is created
-// or joined, so the navigation feels immediate while the SFU connection settles
-// underneath. The Lottie stays the visible centerpiece throughout; the caption
-// and (on failure) the error both sit low so they never cover the mark.
 export default function MeetingEnterOverlay({
   show,
   action,
@@ -89,25 +80,15 @@ export default function MeetingEnterOverlay({
   onRetry,
   onDismiss,
 }: MeetingEnterOverlayProps) {
-  // Hold the last real action so copy doesn't flip during fade-out (the parent
-  // clears `action` to null at the same time it sets `show` false).
   const [shownAction, setShownAction] = useState<MeetingEnterAction>("new");
   useEffect(() => {
     if (action) setShownAction(action);
   }, [action]);
 
-  // The takeover follows a New/Join click, so the lock sound is within the user
-  // activation window and plays. Once per overlay session (not on every render).
   useEffect(() => {
     if (show) playConclaveLock();
   }, [show]);
 
-  // Motion's JS animations ignore the global CSS reduced-motion reset, so pin
-  // transforms here. Full transform strings (not scale/y shorthands) keep the
-  // motion hardware-accelerated while the meeting mounts underneath. Reduced
-  // motion swaps in the same-shaped identity transform (never "none", which
-  // Motion can't interpolate against a real value), and the hook follows the
-  // OS setting live rather than sampling it once on mount.
   const reduceMotion = usePrefersReducedMotion();
   const scale = (value: number) => `scale(${reduceMotion ? 1 : value})`;
   const rise = (px: number) => `translateY(${reduceMotion ? 0 : px}px)`;
@@ -125,12 +106,6 @@ export default function MeetingEnterOverlay({
           className="fixed inset-0 z-[200] overflow-hidden bg-black"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1, pointerEvents: "auto" }}
-          // Non-animatable values apply the instant the exit starts. That
-          // matters: the fade runs on rAF, which browsers freeze in
-          // backgrounded tabs — AnimatePresence then holds this full-screen
-          // layer mounted at opacity 0, and without the immediate
-          // pointer-events cut it silently eats every click on the meeting
-          // UI underneath.
           exit={{ opacity: 0, pointerEvents: "none" }}
           transition={{ duration: 0.42, ease: EASE }}
         >

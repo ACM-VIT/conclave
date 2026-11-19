@@ -122,8 +122,6 @@ function MediaClusterButton({
 
 type PanelStatus = "live" | "attention" | null;
 
-/** Room-level "something is happening here" marker on a dock icon. Distinct
- * from the active variant, which means "my panel is open". */
 interface DockDot {
   color: string;
   pulse?: boolean;
@@ -193,8 +191,6 @@ function DockDivider() {
   );
 }
 
-/** A labeled row inside the activities flyout: icon, name, and the same
- * status-dot language as the dock (dot = live in the room). */
 function DockFlyoutRow({
   entry,
   onActivate,
@@ -228,16 +224,6 @@ function DockFlyoutRow({
   );
 }
 
-/**
- * The right-rail dock. Panel toggles are grouped by intent instead of lined up
- * as six equal icons: the people panels (participants, chat) stay put, the
- * activity panels (games, apps, transcript) share a single slot, and the host
- * shield anchors its own segment. The slot opens a small flyout above the bar
- * (hover, tap, or keyboard), so the pill never changes width and the bar never
- * shifts. When something is live in the room — game running, app open,
- * transcript recording — the slot wears that activity's icon with a status
- * dot, so one click returns to it without any "LIVE" chrome.
- */
 function ActivityDock({
   core,
   activities,
@@ -247,11 +233,8 @@ function ActivityDock({
 }: {
   core: DockEntry[];
   activities: DockEntry[];
-  /** The activity owning the shared slot's face right now (live beats open). */
   promoted?: DockEntry | null;
   host?: DockEntry | null;
-  /** Lets the bar hide dock coachmarks while the flyout is up — both float in
-   * the same spot above the dock, and the flyout must win. */
   onFlyoutOpenChange?: (open: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -271,10 +254,6 @@ function ActivityDock({
   }, []);
   useEffect(() => cancelClose, [cancelClose]);
 
-  // A short grace period keeps the flyout from snapping shut when the pointer
-  // crosses the gap between the face and the flyout. Only *keyboard* focus
-  // pins it open — a mouse click also focuses the button it hit, and honoring
-  // that would leave the flyout stuck open after every click.
   const scheduleClose = () => {
     cancelClose();
     closeTimer.current = setTimeout(() => {
@@ -311,10 +290,6 @@ function ActivityDock({
   const faceLabel = face ? face.d.label : "Activities";
   const faceActive = face?.d.variant === "active";
 
-  // Clicking the face does what its icon promises: with a promoted activity
-  // it toggles that panel directly (the flyout is a hover reveal on pointer
-  // devices). Only the idle face — or any tap on a no-hover device, where the
-  // flyout is the sole way to reach the activities — toggles the flyout.
   const handleFaceClick = () => {
     const hoverCapable =
       typeof window !== "undefined" &&
@@ -368,7 +343,6 @@ function ActivityDock({
                 className="relative inline-flex h-10 w-10 items-center justify-center rounded-full transition-[background-color,color] duration-[120ms] hover:bg-white/[0.08] hover:!text-[#fafafa]"
                 style={{ color: faceActive ? color.accent : color.textMuted }}
               >
-                {/* Keyed so a promotion change fades the new face in. */}
                 <span
                   key={face?.d.id ?? "activities"}
                   className="inline-flex animate-[acm-fade-in_150ms_ease-out_both]"
@@ -378,8 +352,6 @@ function ActivityDock({
                 {face?.dot ? <DockStatusDot dot={face.dot} /> : null}
               </button>
               {open && (
-                // pb-2 bridges the gap so hover stays continuous between the
-                // face and the flyout (same trick as the leave button's menu).
                 <div className="absolute bottom-full right-0 z-50 pb-2">
                   <div
                     id={trayId}
@@ -422,11 +394,6 @@ function ActivityDock({
 }
 
 
-/**
- * One-time "Watch together" nudge. It used to point at the More menu; the
- * watch app now lives in the Apps panel, so it anchors to the activity dock
- * (rendered inside the dock's relative wrapper) with the tray held open.
- */
 function WatchTogetherTip({
   cast,
   onDismiss,
@@ -443,11 +410,6 @@ function WatchTogetherTip({
         arrowLeft="calc(100% - 5rem)"
         onDismiss={onDismiss}
         visual={
-          /* A living watch party: the room's real avatars orbit the
-             play button (counter-rotated so faces stay upright) while
-             the playhead below plays a video through, fades, and starts
-             the next one, a seamless nod to the queue. Continuous by
-             design; stilled for reduced-motion users. */
           <div
             className="relative h-[4.75rem] w-full overflow-hidden rounded-lg border"
             style={{
@@ -489,8 +451,6 @@ function WatchTogetherTip({
                         transform: `rotate(${(-360 / orbit.length) * index}deg)`,
                       }}
                     >
-                      {/* Centered via margins, not translate: the spin
-                          animation owns this element's transform. */}
                       <span
                         className="block h-[18px] w-[18px] overflow-hidden rounded-full animate-[acm-orbit-rev_11s_linear_infinite] motion-reduce:animate-none"
                         style={{
@@ -527,8 +487,6 @@ const popoverWrapClass = "absolute bottom-full mb-3 z-50";
 const popoverPanelClass =
   "rounded-2xl border p-1.5 origin-bottom will-change-transform " +
   "animate-[meet-popover-in_150ms_cubic-bezier(0.22,1,0.36,1)]";
-// The activities flyout opens on hover, so the cursor crossing the dock
-// triggers it often: opacity only, no lift or scale.
 const flyoutPanelClass =
   "rounded-2xl border p-1.5 animate-[acm-fade-in_150ms_ease-out]";
 
@@ -547,8 +505,6 @@ function useClickOutside(
   }, [open, ref, close]);
 }
 
-// Leave button. For hosts, hovering (desktop) or long-pressing (mobile) reveals
-// an "End call for everyone" action above it; a plain click still leaves solo.
 function LeaveControl({
   onLeave,
   onEndForEveryone,
@@ -567,10 +523,9 @@ function LeaveControl({
 
   useClickOutside(menuOpen, ref, () => setMenuOpen(false));
 
-  // If there's no host action available, fall back to a plain leave button.
   if (!onEndForEveryone) {
     return (
-      <HotkeyTooltip label="Leave call" hotkey="">
+      <HotkeyTooltip label="Leave call">
         <button
           type="button"
           onClick={onLeave}
@@ -599,8 +554,6 @@ function LeaveControl({
       onMouseLeave={() => setMenuOpen(false)}
     >
       {menuOpen && (
-        // pb-2 bridges the visual gap so the hover area stays continuous
-        // between the button and the pill; no dead zone to cross.
         <div className="absolute bottom-full left-1/2 z-20 -translate-x-1/2 pb-2">
           <button
             type="button"
@@ -686,9 +639,6 @@ function ControlsBar(props: ControlsBarProps) {
 
   const [reactionsOpen, setReactionsOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
-  // Fallback compact settings drawer. The meeting surface normally supplies
-  // the full settings panel so camera/screen quality controls stay identical
-  // across desktop and mobile web.
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [browserOpen, setBrowserOpen] = useState(false);
   const [browserUrl, setBrowserUrl] = useState("");
@@ -696,8 +646,6 @@ function ControlsBar(props: ControlsBarProps) {
   const { meetVolume, setMeetVolume } = useMeetVolume();
   const meetVolumePercent = Math.round(clampMeetVolume(meetVolume) * 100);
 
-  // Enumerate cameras only while a compact drawer is open, to power the quick
-  // front/rear flip (and to decide whether the flip action is even available).
   const { videoInput: drawerCameras } = useEnumeratedDevices(
     compact && (moreOpen || settingsOpen),
   );
@@ -717,17 +665,11 @@ function ControlsBar(props: ControlsBarProps) {
   const browserRef = useRef<HTMLDivElement>(null);
 
   useClickOutside(reactionsOpen, reactionRef, () => setReactionsOpen(false));
-  // The compact More menu uses a vaul Drawer (portaled outside moreRef + its own
-  // overlay dismissal), so only the desktop popover needs click-outside handling.
   useClickOutside(moreOpen && !compact, moreRef, () => setMoreOpen(false));
   useClickOutside(browserOpen, browserRef, () => setBrowserOpen(false));
 
-  // Rows owned by the Apps panel stay palette-searchable but are dropped from
-  // the visible More menu (popover and phone drawer alike).
   const moreRows = config.overflow.filter((row) => !row.paletteOnly);
 
-  // One-time nudge toward the backgrounds/filters tucked inside More, only
-  // surfaced if that option is actually available to this participant.
   const hasEffects = config.overflow.some(
     (row) => row.id === "effects" && !row.disabled,
   );
@@ -753,8 +695,6 @@ function ControlsBar(props: ControlsBarProps) {
     enabled: !compact && hasChatControl && !props.isChatOpen,
     delay: 2400,
   });
-  // One-time nudge for Watch together, only for people who can actually open
-  // it (it now lives in the Apps panel, reached through the activity dock).
   const hasWatchControl = config.overflow.some(
     (row) => row.id === "watch" && !row.disabled,
   );
@@ -817,9 +757,6 @@ function ControlsBar(props: ControlsBarProps) {
       (gamesTip.visible && !props.isGamesOpen && !props.hasActiveGame) ||
       (gifsTip.visible && !props.isChatOpen));
 
-  // Side-panel toggles regroup into the activity dock: people panels stay
-  // always-visible, activity panels fold into one adaptive slot, and the host
-  // shield anchors its own segment.
   const leftById = new Map(config.left.map((d) => [d.id, d]));
   const withTipDismiss = (
     d: ControlDescriptor | undefined,
@@ -838,8 +775,6 @@ function ControlsBar(props: ControlsBarProps) {
   const appsItem = withTipDismiss(leftById.get("apps"), watchTip.dismiss);
   const transcriptItem = leftById.get("transcript");
 
-  // In the dock, icon tint means "my panel is open" while the dot means
-  // "something is live in the room" — two signals, never conflated.
   const gamesEntry: DockEntry | null = gamesItem
     ? {
         d: { ...gamesItem, variant: props.isGamesOpen ? "active" : "default" },
@@ -858,8 +793,6 @@ function ControlsBar(props: ControlsBarProps) {
           ...transcriptItem,
           variant: props.isTranscriptOpen ? "active" : "default",
         },
-        // One dot language across the dock: the lone coral accent. A pulse —
-        // not a different hue — marks the needs-attention state.
         dot:
           transcriptClusterStatus === "live"
             ? { color: color.accent }
@@ -879,8 +812,6 @@ function ControlsBar(props: ControlsBarProps) {
     transcriptEntry,
   ].filter((entry): entry is DockEntry => entry !== null);
 
-  // The folded slot wears the most urgent activity's face: a transcript that
-  // needs attention beats live room state, which beats a merely-open panel.
   const promotedEntry =
     (transcriptEntry?.dot?.pulse ? transcriptEntry : null) ??
     (props.hasActiveApp ? appsEntry : null) ??
@@ -909,9 +840,6 @@ function ControlsBar(props: ControlsBarProps) {
 
   return (
     <div className="relative flex w-full items-center gap-2 px-4 py-3 sm:grid sm:grid-cols-[1fr_auto_1fr]">
-      {/* Equal side columns keep the center controls truly centered; the dock
-          never grows sideways (activities open as a flyout above it), so the
-          columns cannot collide and the bar never shifts. */}
       <div className="flex min-w-0 shrink-0 items-center justify-self-start">
         {!compact && <MeetingInfoTag roomId={roomId} />}
       </div>
@@ -953,7 +881,7 @@ function ControlsBar(props: ControlsBarProps) {
 
         {!compact && (!isReactionsDisabled || isAdmin) && (
           <div ref={reactionRef} className="relative">
-            <HotkeyTooltip label="Reactions" hotkey="">
+            <HotkeyTooltip label="Reactions">
               <ControlButton
                 icon={Smile}
                 variant={reactionsOpen ? "active" : "default"}
@@ -1069,8 +997,6 @@ function ControlsBar(props: ControlsBarProps) {
             </div>
             </div>
           )}
-          {/* Phone: present More as a full-width drag-to-dismiss bottom sheet
-              (vaul, Meet-style) instead of a cramped anchored dropdown. */}
           {compact && (
             <Drawer.Root
               open={moreOpen}
@@ -1193,7 +1119,6 @@ function ControlsBar(props: ControlsBarProps) {
               </Drawer.Portal>
             </Drawer.Root>
           )}
-          {/* Settings drawer, opened from the More drawer's Settings tile. */}
           {compact && (
             <Drawer.Root open={settingsOpen} onOpenChange={setSettingsOpen}>
               <Drawer.Portal>

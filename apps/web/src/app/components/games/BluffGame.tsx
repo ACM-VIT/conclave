@@ -248,7 +248,6 @@ export default function BluffGame({
     );
   }
 
-  // reveal
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <p style={{ fontSize: 11, color: color.textFaint, margin: 0 }}>

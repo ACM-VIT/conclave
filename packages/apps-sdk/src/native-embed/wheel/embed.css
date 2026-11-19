@@ -1,6 +1,3 @@
-/* The native Spin the Wheel embed page (ACT-8): full-bleed on the dark activity card, no page scroll or zoom, no
-   selection callouts, flat only. The few utility classes the SDK wheel uses (WheelStage.tsx) are defined here, so the
-   page needs no Tailwind build; the winner card is this page's own. */
 html,
 body,
 #root {

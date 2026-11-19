@@ -17,8 +17,6 @@ function ReactionOverlay({
   getDisplayName,
   participantCount,
 }: ReactionOverlayProps) {
-  // Subscribing here (instead of receiving reactions as a prop) keeps
-  // reaction traffic from re-rendering anything above this overlay.
   const reactions = useSyncExternalStore(
     store.subscribe,
     store.getSnapshot,
@@ -32,9 +30,6 @@ function ReactionOverlay({
 
   if (reactions.length === 0) return null;
 
-  // A wall of translucent animated layers is expensive to composite over a
-  // large live-video grid. Keep the newest reactions visible while bounding
-  // the amount of per-frame paint/composite work.
   const visibleReactions =
     reactions.length > renderLimit ? reactions.slice(-renderLimit) : reactions;
 

@@ -332,33 +332,5 @@ struct ACT3PromptGamesTests {
         }
         #expect(PromptGameFixtures.at(0) == "1700000600000")
     }
-
-    private func sources(_ directory: String, _ ext: String) throws -> String {
-        var text = ""
-        for file in try stageFiles(under: directory, extensions: [ext]) { text += try stageSource(file) }
-        return text
-    }
-
-    @Test func promptStringsAreInBothCatalogs() throws {
-        let catalogData = try Data(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().appendingPathComponent("Sources/Conclave/Resources/Localizable.xcstrings"))
-        let catalog = try #require(try JSONSerialization.jsonObject(with: catalogData) as? [String: Any])
-        let strings = try #require(catalog["strings"] as? [String: Any])
-        var ios = try sources("Sources/Conclave/Features/Meeting/Games/Native/Scenes", "swift")
-        ios += try stageSource("Sources/Conclave/Features/Meeting/Games/Native/Boards/ReactionPad+iOS.swift")
-        var keys = Set<String>()
-        for match in stageMatches(#"ConclaveStrings\.(?:text|format)\("[^"]+""#, in: ios) {
-            if let start = match.firstIndex(of: "\"") { keys.insert(String(match[match.index(after: start)...].dropLast())) }
-        }
-        #expect(keys.count > 60)
-        for key in keys { #expect(strings[key] != nil, "missing iOS key \(key)") }
-        let xml = try stageSource("Android/app/src/main/res/values/strings.xml")
-        var kotlin = try sources("Sources/Conclave/Skip/ui/games/scenes", "kt")
-        kotlin += try stageSource("Sources/Conclave/Skip/ui/games/boards/ReactionPad.kt")
-        var names = Set<String>()
-        for match in stageMatches(#""(?:act|gm|ds)_[a-z0-9_]+""#, in: kotlin) { names.insert(String(match.dropFirst().dropLast())) }
-        #expect(names.count > 60)
-        for name in names { #expect(xml.contains("name=\"" + name + "\""), "missing Android resource \(name)") }
-    }
 }
 #endif

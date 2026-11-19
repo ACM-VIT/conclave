@@ -5,6 +5,8 @@ import { config as sfuConfig } from "../../../config/config.js";
 import { resolveAiFeatureSettings } from "@conclave/ai/room-settings";
 import type { Room } from "../../../config/classes/Room.js";
 import { GameSession } from "../../games/engine.js";
+import { createGameDecider } from "../../games/decisions.js";
+import type { AiEnvironment } from "@conclave/ai/models";
 import { GameContentGenerationError, gameContentTopic } from "../../games/aiContent.js";
 import { normalizeConfig } from "../../games/config.js";
 import { getGameCatalog, getGameModule } from "../../games/registry.js";
@@ -80,6 +82,27 @@ type PlayAnalytics = {
 // One record per running play, keyed by the session instance. A WeakMap never
 // leaks: when the room drops its session, the entry becomes collectable.
 const playAnalyticsBySession = new WeakMap<GameSession, PlayAnalytics>();
+
+const describeDecisionError = (error: unknown): string =>
+  error instanceof Error ? error.message : "unknown error";
+
+const roomGameAiEnvironment = (room: Room): AiEnvironment => ({
+  ...Object.fromEntries(
+    ROOM_AI_PROVIDERS.map((provider) => [
+      AI_PROVIDERS[provider].keyEnv,
+      room.aiCredentials.get(provider),
+    ]),
+  ),
+  ...Object.fromEntries(
+    Object.entries(readAiEnvironment(process.env)).filter(([, value]) => Boolean(value)),
+  ),
+  CONCLAVE_AI_SETTINGS: JSON.stringify(
+    room.aiCredentials.effectiveFeatureSettings(readAiEnvironment(process.env)),
+  ),
+  ...(room.aiCredentials.assistantModel
+    ? { CONCLAVE_ASSISTANT_MODEL: room.aiCredentials.assistantModel }
+    : {}),
+});
 
 /**
  * Resolve an opaque, stable identifier for the acting participant to use as the
@@ -404,23 +427,7 @@ export const registerGameHandlers = (context: ConnectionContext): void => {
             content = await module.generateContent({
               signal: generation.signal,
               players,
-              aiEnvironment: {
-                ...Object.fromEntries(
-                  ROOM_AI_PROVIDERS.map((provider) => [
-                    AI_PROVIDERS[provider].keyEnv,
-                    room.aiCredentials.get(provider),
-                  ]),
-                ),
-                ...Object.fromEntries(
-                  Object.entries(readAiEnvironment(process.env)).filter(
-                    ([, value]) => Boolean(value),
-                  ),
-                ),
-                CONCLAVE_AI_SETTINGS: JSON.stringify(room.aiCredentials.effectiveFeatureSettings(readAiEnvironment(process.env))),
-                ...(room.aiCredentials.assistantModel
-                  ? { CONCLAVE_ASSISTANT_MODEL: room.aiCredentials.assistantModel }
-                  : {}),
-              },
+              aiEnvironment: roomGameAiEnvironment(room),
               config: gameConfig,
               now: Date.now(),
             });
@@ -651,7 +658,7 @@ export const registerGameHandlers = (context: ConnectionContext): void => {
 
   socket.on(
     "game:move",
-    (data: GameMoveData, callback: (response: GameMoveResponse) => void) => {
+    async (data: GameMoveData, callback: (response: GameMoveResponse) => void) => {
       if (!context.currentRoom || !context.currentClient) {
         respond(callback, { success: false, error: "Not in a room" });
         return;
@@ -676,10 +683,31 @@ export const registerGameHandlers = (context: ConnectionContext): void => {
         return;
       }
 
+      const playerId = context.currentClient.id;
+      const receivedAt = Date.now();
+      let verified: unknown = null;
+      if (session.module.prepareMove) {
+        const prepared = await session.prepareMove(playerId, data.type, data.payload, {
+          decide: createGameDecider(roomGameAiEnvironment(room)),
+          signal: new AbortController().signal,
+          receivedAt,
+          onError: (error) => Logger.warn("[Games] move check failed", describeDecisionError(error)),
+        });
+        if (room.gameSession !== session || session.isFinished()) {
+          respond(callback, { success: false, error: "Game has ended" });
+          return;
+        }
+        if (!prepared.ok) {
+          respond(callback, { success: false, error: prepared.error });
+          return;
+        }
+        verified = prepared.verified;
+      }
+
       let result: { ok: true } | { ok: false; error: string };
       try {
         syncGameSessionRoomMembership(room);
-        result = session.applyMove(context.currentClient.id, data.type, data.payload);
+        result = session.applyMove(playerId, data.type, data.payload, { verified, receivedAt });
       } catch (error) {
         Logger.warn("[Games] move failed", error);
         respond(callback, { success: false, error: "Move failed" });

@@ -9,9 +9,7 @@ interface CoachmarkProps {
   onDismiss: () => void;
   arrowLeft?: string;
   className?: string;
-  /** Tailwind width class for the bubble. */
   width?: string;
-  /** Optional flat visual above the text, for feature-preview tips. */
   visual?: React.ReactNode;
 }
 

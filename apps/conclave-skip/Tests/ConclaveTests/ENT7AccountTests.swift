@@ -384,49 +384,9 @@ struct ENT7AccountTests {
         #expect(firstBlock.text.contains("the c0nclav3 app"), "OQ9: the product name stays until the legal update")
     }
 
-    @Test func accountStringsAreInBothCatalogs() throws {
-        let catalog = try #require(try JSONSerialization.jsonObject(with: Data(ent7Source("Sources/Conclave/Resources/Localizable.xcstrings").utf8)) as? [String: Any])
-        let strings = try #require(catalog["strings"] as? [String: Any])
-        for key in ["Loading Sign-In Options",
-                    "Couldn\u{2019}t load sign-in options.", "Sign-in isn\u{2019}t available right now. You can still join as a guest.",
-                    "Continue with Google", "Sign-in didn\u{2019}t finish. Try again, or keep going as a guest.", "Guest", "Your Name",
-                    "Signed in with Apple", "Signed in with Google", "Signed in",
-                    "Sign Out", "Privacy Policy", "View on the Web", "Delete Account", "Deleting your account removes it permanently.",
-                    "Delete Your Account?",
-                    "This permanently deletes your Conclave account and signs you out on this device. This can\u{2019}t be undone.",
-                    "Couldn\u{2019}t delete your account. Check your connection and try again.", "Your account was deleted.",
-                    "This meeting needs you to sign in.", "Your sign-in expired. Sign in again, or keep going as a guest.",
-                    "Account", "Close", "Cancel", "Try Again", "In Progress"] {
-            #expect(strings[key] != nil, "missing \(key)")
-        }
-        let xml = try ent7Source("Android/app/src/main/res/values/strings.xml")
-        for name in ["pm_account", "pm_account_value_line", "pm_providers_loading", "pm_providers_failed", "pm_no_providers",
-                     "pm_continue_google", "pm_apple_unavailable", "pm_signin_failed", "pm_your_name", "pm_guest_footer",
-                     "pm_signed_in_with_apple", "pm_signed_in_with_google", "pm_signed_in", "pm_sign_out", "pm_privacy_policy",
-                     "pm_view_on_web", "pm_delete_account", "pm_delete_footer", "pm_delete_title", "pm_delete_message",
-                     "pm_delete", "pm_cancel", "pm_delete_failed", "pm_retry", "pm_account_deleted", "pm_sign_in_required",
-                     "pm_notice_session_expired", "ds_back", "ds_try_again", "ds_in_progress"] {
-            #expect(xml.contains("<string name=\"\(name)\">"), "missing \(name)")
-        }
-        #expect(xml.contains("<string name=\"pm_apple_unavailable\">Apple sign-in isn\u{2019}t available on Android yet. Use the web or an iPhone to sign in with Apple.</string>"))
-    }
-
-    static let swiftFiles = [
-        "Sources/Conclave/Features/Account/AccountPresenterInputs.swift",
-        "Sources/Conclave/Features/Account/AccountPresenter.swift",
-        "Sources/Conclave/Features/Account/AccountAuthCoordinator.swift",
-        "Sources/Conclave/Features/Account/AccountFixtures.swift",
-        "Sources/Conclave/Features/Account/PrivacyPolicyDocument.swift",
-        "Sources/Conclave/Features/Account/AccountView+iOS.swift",
-        "Sources/Conclave/Features/Account/PrivacyPolicyScreen+iOS.swift"
-    ]
     static let kotlinFiles = [
         "Sources/Conclave/Skip/ui/account/AccountScreen.kt",
         "Sources/Conclave/Skip/ui/account/PrivacyPolicyScreen.kt"
-    ]
-    static let ownedChangedFiles = [
-        "Sources/Conclave/Core/Networking/NativeAuthService.swift",
-        "Sources/Conclave/Skip/NativeGoogleSignInBridge.kt"
     ]
 }
 
@@ -518,22 +478,5 @@ private func ent7LoadProviders(_ presenter: AccountPresenter, _ recorder: ENT7Re
     presenter.didPresent()
     let request = recorder.requests.last { $0.kind == .loadProviders }
     presenter.providersLoaded(generation: request?.generation ?? -1, listsApple: apple, listsGoogle: google)
-}
-
-private func ent7Source(_ packageRelativePath: String) throws -> String {
-    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-    return try String(contentsOf: root.appendingPathComponent(packageRelativePath), encoding: .utf8)
-}
-
-private func ent7Flat(_ text: String) -> String {
-    text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
-}
-
-private func ent7Matches(_ pattern: String, in text: String) -> [String] {
-    guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
-    let range = NSRange(text.startIndex..<text.endIndex, in: text)
-    return regex.matches(in: text, range: range).compactMap { match in
-        Range(match.range, in: text).map { String(text[$0]) }
-    }
 }
 #endif

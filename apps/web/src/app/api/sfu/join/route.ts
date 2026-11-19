@@ -123,20 +123,6 @@ const normalizeEmail = (
   return normalized || undefined;
 };
 
-const normalizeUserId = (
-  value: string | null | undefined,
-): string | undefined => {
-  const normalized = value?.trim();
-  if (!normalized || normalized.length > 128) return undefined;
-  return /^[a-zA-Z0-9._:@-]+$/.test(normalized) ? normalized : undefined;
-};
-
-const isSyntheticGuestEmail = (value: string | undefined): boolean =>
-  Boolean(value && /^guest-[^@]+@guest\.(?:conclave|com)$/i.test(value));
-
-const isSyntheticGuestUserId = (value: string | undefined): boolean =>
-  Boolean(value && value.startsWith("guest-"));
-
 const isScheduledRoomId = (value: string): boolean =>
   /^sched-[a-f0-9]{8}$/i.test(value);
 
@@ -152,7 +138,6 @@ const fetchWithTimeout = async (
   const deadline = AbortSignal.timeout(timeoutMs);
   return fetch(input, {
     ...init,
-    // Keep the deadline active while callers consume the response body too.
     signal: init.signal ? AbortSignal.any([init.signal, deadline]) : deadline,
   });
 };
@@ -296,8 +281,6 @@ const resolveNonDrainingSfuUrl = async (options: {
   });
 
   const selection = selectPreOwnerSfu(candidates, options.routingKey);
-  // Stable hashing inside the near-latency band avoids needless placement
-  // churn. The shared reservation below is still the concurrency authority.
   return selection;
 };
 
@@ -389,8 +372,6 @@ const resolveRoutedSfuUrl = async (options: {
   const candidateSfuUrls = options.candidateSfuUrls
     .map((url) => normalizeSfuUrl(url))
     .filter(Boolean);
-  // Ownership lookup and edge-to-SFU health/latency probes are independent.
-  // Running them together removes a full regional RTT from first-join startup.
   const [ownerSfuUrl, selection] = await Promise.all([
     resolveRoomOwnerSfuUrl({
       candidateSfuUrls,
@@ -425,9 +406,6 @@ const resolveRoutedSfuUrl = async (options: {
     }
 
     let everyAttemptWasDraining = true;
-    // A timed-out reservation may still have committed in Redis. Trying the
-    // next healthy candidate is safe: its atomic response returns that first
-    // winner instead of creating a second placement.
     const reservationCandidates = [
       selection.candidate,
       ...selection.alternatives,
@@ -664,36 +642,18 @@ export async function POST(request: Request) {
     .catch(() => null);
   const sessionUser = session?.user;
   const sessionEmail = sessionUser?.email?.trim() || undefined;
-  const rawBodyEmail = normalizeEmail(body?.user?.email);
-  const rawBodyUserId = normalizeUserId(body?.user?.id);
-  const bodyEmail = isSyntheticGuestEmail(rawBodyEmail)
-    ? undefined
-    : rawBodyEmail;
-  const bodyUserId = isSyntheticGuestUserId(rawBodyUserId)
-    ? undefined
-    : rawBodyUserId;
-  // Browser sessions are authoritative when present. Native clients do not have
-  // the better-auth cookie, so preserve their supplied non-guest stable identity
-  // for the SFU's user-keyed reconnect, allow/block-list, and host-tracking
-  // paths. Synthetic web/mobile guests must stay session-scoped because the
-  // clients render their local participant as guest-${sessionId}.
-  const email = sessionEmail || bodyEmail;
+  const email = sessionEmail;
   const name =
     sessionUser?.name?.trim() || body?.user?.name?.trim() || undefined;
   const normalizedSessionEmail = normalizeEmail(sessionEmail);
-  const providedId = sessionUser?.id?.trim() || bodyUserId || undefined;
+  const providedId = sessionUser?.id?.trim() || undefined;
   const baseUserId = email || providedId || `guest-${sessionId}`;
   const isWebinarAttendeeJoin = joinMode === "webinar_attendee";
   const isScheduledHostRoom = isScheduledRoomId(roomId);
-  // Only the authenticated session may confer super admin status; native/body
-  // identity fields are not proof of ownership of an allowlisted email.
   const isSuperAdmin = isSfuSuperAdminEmail(normalizedSessionEmail);
   const isForcedHost = !isWebinarAttendeeJoin && isSuperAdmin;
   const requestedHost = Boolean(body?.isHost ?? body?.isAdmin);
 
-  // For scheduled webinar rooms, only the actual host or a registered co-host
-  // may claim host status. We resolve this by looking the scheduled webinar
-  // up by roomId on the SFU and matching the session email.
   let scheduledRoomHostMatch = false;
   if (isScheduledHostRoom && !isWebinarAttendeeJoin && normalizedSessionEmail) {
     const scheduled = await lookupScheduledWebinarByRoomId(clientId, roomId);
@@ -707,19 +667,12 @@ export async function POST(request: Request) {
     }
   }
 
-  // Host/admin is NEVER minted from a bare client claim. The decision (and its
-  // security invariant + regression tests) lives in resolveHostGrant: a host
-  // *intent* only grants room-creation, so the creator becomes host via the
-  // SFU's server-authoritative createdRoom path — never seizing an existing room.
   const { isHost, allowRoomCreation } = resolveHostGrant({
     isWebinarAttendeeJoin,
     isForcedHost,
     scheduledRoomHostMatch,
     isScheduledHostRoom,
     requestedHost,
-    // `/abc123` public room links intentionally create the room on first join.
-    // This still does not mint host/admin for an existing room; the SFU only
-    // promotes the requester through its server-authoritative createdRoom path.
     bodyAllowRoomCreation: Boolean(body?.allowRoomCreation),
   });
 

@@ -9,10 +9,6 @@ import {
   type GameViewProps,
 } from "./gameUi";
 
-/* ------------------------------------------------------------------ */
-/*  Wire types (matching publicView / playerView from the server)     */
-/* ------------------------------------------------------------------ */
-
 type CellCoord = { row: number; col: number };
 type CellIndex = number;
 type BarrierEdge = { from: CellIndex; to: CellIndex };
@@ -59,10 +55,6 @@ type ZipMe = {
   mistakes: number;
 };
 
-/* ------------------------------------------------------------------ */
-/*  Constants                                                          */
-/* ------------------------------------------------------------------ */
-
 const ZIP_GOLD = "#f6c744";
 const ZIP_VIOLET = "#6c5ce7";
 const GRID_BG = "#232327";
@@ -72,10 +64,6 @@ const CHECKPOINT_BG = "#1a1a1a";
 const CHECKPOINT_TEXT = "#ffffff";
 const ERROR_RED = "#ff4d4f";
 const CELL_PAD = 2;
-
-/* ------------------------------------------------------------------ */
-/*  Helpers                                                            */
-/* ------------------------------------------------------------------ */
 
 const coordKey = (c: CellCoord): string => `${c.row},${c.col}`;
 const cellEdgeKey = (a: CellIndex, b: CellIndex): string =>
@@ -93,7 +81,6 @@ const edgeKey = (a: CellCoord, b: CellCoord): string => {
   return k1 < k2 ? `${k1}|${k2}` : `${k2}|${k1}`;
 };
 
-/** Interpolate between two hex colors. */
 const lerpColor = (c1: string, c2: string, t: number): string => {
   const parse = (hex: string) => {
     const h = hex.replace("#", "");
@@ -129,10 +116,6 @@ const formatSolveTime = (solvedAt: number | null, roundStartedAt: number | null)
   const seconds = Math.floor((tenths % 600) / 10).toString().padStart(2, "0");
   return `${minutes}:${seconds}.${tenths % 10}`;
 };
-
-/* ------------------------------------------------------------------ */
-/*  SVG Grid component                                                 */
-/* ------------------------------------------------------------------ */
 
 function ZipGrid({
   gridSize,
@@ -247,7 +230,6 @@ function ZipGrid({
     onPointerUp();
   };
 
-  // Path position lookup for gradient coloring.
   const pathIndexMap = useMemo(() => {
     const m = new Map<string, number>();
     for (let i = 0; i < path.length; i++) m.set(coordKey(path[i]), i);
@@ -256,7 +238,6 @@ function ZipGrid({
 
   const displayPath = showSolution && solutionPath ? solutionPath : path;
 
-  // Build SVG path segments with per-segment gradient colors.
   const pathSegments = useMemo(() => {
     if (displayPath.length < 2) return [];
     const segments: Array<{
@@ -298,10 +279,8 @@ function ZipGrid({
       onPointerUp={finishPointer}
       onPointerCancel={finishPointer}
     >
-      {/* Background */}
       <rect width={totalSize} height={totalSize} rx={8} fill={GRID_BG} />
 
-      {/* Grid lines */}
       {Array.from({ length: gridSize - 1 }, (_, i) => (
         <React.Fragment key={`lines-${i}`}>
           <line
@@ -317,7 +296,6 @@ function ZipGrid({
         </React.Fragment>
       ))}
 
-      {/* Visited cell tint */}
       {path.map((cell) => {
         const idx = pathIndexMap.get(coordKey(cell)) ?? 0;
         const t = path.length > 1 ? idx / (path.length - 1) : 0;
@@ -336,7 +314,6 @@ function ZipGrid({
         );
       })}
 
-      {/* Cells removed from this puzzle. */}
       {deadCells.map((cell) => (
         <g key={`dead-${coordKey(cell)}`}>
           <rect
@@ -358,7 +335,6 @@ function ZipGrid({
         </g>
       ))}
 
-      {/* Path line segments */}
       {pathSegments.map((seg, i) => (
         <line
           key={`path-${i}`}
@@ -370,7 +346,6 @@ function ZipGrid({
         />
       ))}
 
-      {/* Head cell glow */}
       {headCell && !showSolution ? (
         <circle
           cx={headCell.col * cellSize + cellSize / 2}
@@ -394,7 +369,6 @@ function ZipGrid({
         </circle>
       ) : null}
 
-      {/* Walls */}
       {walls.map((w) => {
         const horizontal = w.a.row === w.b.row;
         const wallThickness = 4;
@@ -423,7 +397,6 @@ function ZipGrid({
         );
       })}
 
-      {/* Checkpoint circles */}
       {checkpoints.map((cp, i) => {
         const cx = cp.col * cellSize + cellSize / 2;
         const cy = cp.row * cellSize + cellSize / 2;
@@ -455,7 +428,6 @@ function ZipGrid({
         );
       })}
 
-      {/* Flash cell (error feedback) */}
       {flashCell ? (
         <rect
           x={flashCell.col * cellSize + 2}
@@ -478,10 +450,6 @@ function ZipGrid({
     </svg>
   );
 }
-
-/* ------------------------------------------------------------------ */
-/*  Main renderer                                                      */
-/* ------------------------------------------------------------------ */
 
 export default function ZipGame({
   pub,
@@ -536,7 +504,6 @@ export default function ZipGame({
     return anchor === undefined ? null : Number(anchor);
   }, [pub.anchors]);
 
-  // Sync local path from server when server view changes.
   useEffect(() => {
     pathRef.current = me.path;
     setLocalPath(me.path);
@@ -547,7 +514,6 @@ export default function ZipGame({
     setLocalPath(nextPath);
   }, []);
 
-  // Wall set for local validation.
   const wallSet = useMemo(
     () => new Set(pub.barriers.map(({ from, to }) => cellEdgeKey(from, to))),
     [pub.barriers],
@@ -587,20 +553,16 @@ export default function ZipGame({
       if (currentPath.length === 0) return false;
       const head = currentPath[currentPath.length - 1];
 
-      // Orthogonal adjacency.
       const dr = Math.abs(Math.floor(next / pub.gridSize) - Math.floor(head / pub.gridSize));
       const dc = Math.abs((next % pub.gridSize) - (head % pub.gridSize));
       if (dr + dc !== 1) return false;
 
-      // Wall check.
       if (wallSet.has(cellEdgeKey(head, next))) return false;
 
       if (deadCellSet.has(next)) return false;
 
-      // Revisit check.
       if (currentPath.includes(next)) return false;
 
-      // Checkpoint ordering.
       let nextExpectedCp = 1;
       for (const cell of currentPath) {
         if (checkpointOrder.get(cell) === nextExpectedCp) nextExpectedCp++;
@@ -626,21 +588,17 @@ export default function ZipGame({
       const nextCell = coordToCell(cell, pub.gridSize);
       const currentPath = pathRef.current;
 
-      // Can start from checkpoint 1 (fresh) or resume from the head.
       const head = currentPath[currentPath.length - 1];
       if (currentPath.length === 0 || nextCell === startCell) {
-        // Fresh start.
         updateLocalPath([startCell]);
         drawingRef.current = true;
         return;
       }
       if (head === nextCell) {
-        // Resume from head.
         drawingRef.current = true;
         return;
       }
 
-      // Check if this cell is in the path (backward drag to truncate).
       const idx = currentPath.indexOf(nextCell);
       if (idx >= 0) {
         updateLocalPath(currentPath.slice(0, idx + 1));
@@ -648,7 +606,6 @@ export default function ZipGame({
         return;
       }
 
-      // Invalid start point — flash.
       setFlashCell(cell);
       setTimeout(() => setFlashCell(null), 300);
     },
@@ -668,7 +625,6 @@ export default function ZipGame({
       const nextCell = coordToCell(cell, pub.gridSize);
       const currentPath = pathRef.current;
 
-      // Check for backward drag (retraction).
       if (currentPath.length >= 2) {
         const secondToLast = currentPath[currentPath.length - 2];
         if (nextCell === secondToLast) {
@@ -677,13 +633,11 @@ export default function ZipGame({
         }
       }
 
-      // Check for valid forward move.
       if (isValidLocalMove(currentPath, nextCell)) {
         updateLocalPath([...currentPath, nextCell]);
         return;
       }
 
-      // Invalid — flash.
       if (!currentPath.includes(nextCell)) {
         setFlashCell(cell);
         setTimeout(() => setFlashCell(null), 300);
@@ -748,7 +702,6 @@ export default function ZipGame({
     void runMove("hint");
   };
 
-  // --- Lobby ---
   if (pub.phase === "lobby") {
     return (
       <GameLobby
@@ -769,7 +722,6 @@ export default function ZipGame({
     );
   }
 
-  // --- Results ---
   if (pub.phase === "results" && pub.result) {
     const multiRound = pub.totalRounds > 1;
     const winner = pub.standings.find((entry) => entry.playerId === pub.result?.winnerId);
@@ -794,7 +746,6 @@ export default function ZipGame({
           </p>
         ) : null}
 
-        {/* Show solved grid */}
         <ZipGrid
           gridSize={pub.gridSize}
           checkpoints={checkpoints}
@@ -809,7 +760,6 @@ export default function ZipGame({
           flashCell={null}
         />
 
-        {/* Score table */}
         {multiRound && pub.scores.length > 0 ? (
           <div style={{ marginTop: 12 }}>
             <p style={{ fontSize: 11, color: color.textFaint, fontFamily: HEAD_FONT, margin: "0 0 6px" }}>
@@ -907,11 +857,8 @@ export default function ZipGame({
     );
   }
 
-  // --- Playing ---
-
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      {/* Header */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div>
           <p style={{ margin: 0, color: ZIP_GOLD, fontFamily: HEAD_FONT, fontSize: 12 }}>
@@ -931,7 +878,6 @@ export default function ZipGame({
         </div>
       </div>
 
-      {/* Grid */}
       <ZipGrid
         gridSize={pub.gridSize}
         checkpoints={checkpoints}
@@ -945,7 +891,6 @@ export default function ZipGame({
         flashCell={flashCell}
       />
 
-      {/* Progress */}
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <div style={{
           flex: 1,
@@ -968,7 +913,6 @@ export default function ZipGame({
         </span>
       </div>
 
-      {/* Action buttons */}
       {!me.outcome && !readOnly ? (
         <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
           <button
@@ -1028,7 +972,6 @@ export default function ZipGame({
         </div>
       ) : null}
 
-      {/* Outcome banner */}
       {me.outcome ? (
         <div style={{
           textAlign: "center",
@@ -1042,7 +985,6 @@ export default function ZipGame({
         </div>
       ) : null}
 
-      {/* Live standings */}
       {pub.standings.length > 0 && pub.phase === "playing" ? (
         <div style={{ paddingTop: 10, borderTop: `1px solid ${color.border}` }}>
           <p style={{ fontSize: 11, color: color.textFaint, fontFamily: HEAD_FONT, margin: "0 0 6px" }}>Standings</p>

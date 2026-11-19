@@ -5,11 +5,6 @@ import Testing
 
 @MainActor
 struct T3BorrowComposerPolicyTests {
-    private static let iosComposer = "Sources/Conclave/Features/Meeting/Chat/ChatComposer+iOS.swift"
-    private static let androidComposer = "Sources/Conclave/Skip/ui/chat/ChatComposer.kt"
-    private static let iosCopy = "Sources/Conclave/Features/Meeting/Chat/ChatCopy+iOS.swift"
-    private static let policy = "Sources/Conclave/Features/Meeting/Chat/ChatComposerPolicy.swift"
-
     private func item(_ id: String, _ available: Bool = true) -> ChatSuggestionItem {
         ChatSuggestionItem(id: id, insertText: "/" + id, isAvailable: available)
     }

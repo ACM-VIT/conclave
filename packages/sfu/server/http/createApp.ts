@@ -36,7 +36,7 @@ import {
 } from "../admin/moderation.js";
 import { recordAdminAudit } from "../admin/adminAudit.js";
 import { createTranscriptSpectatorToken } from "../socket/handlers/transcriptHandlers.js";
-import { forceCloseRoom, getRoomChannelId, markRoomEnded } from "../rooms.js";
+import { forceCloseRoom, getRoomChannelId, isCurrentRoom, markRoomEnded } from "../rooms.js";
 import { resolveCorsOrigins } from "../cors.js";
 import { secretsMatch } from "../secret.js";
 import { readBoolean, requestBody } from "../../utilities/untrusted.js";
@@ -604,20 +604,34 @@ export const createSfuApp = ({
       res.on("close", onClose);
       try {
         const imageSettings = resolveAiFeatureSettings({}, "images", room.aiCredentials.effectiveFeatureSettings());
-        if (!imageSettings.enabled) {
-          res.status(403).json({error: "Image safety is disabled in Room AI settings."});
-          return;
-        }
-        const moderation = await moderateImage({
-          data: req.body,
-          mimeType,
-          timeoutMs: imageSettings.timeoutMs,
-          model: imageSettings.model,
-          apiKey: config.openAi.apiKey || room.aiCredentials.get("openai"),
-          signal: abort.signal,
-        });
+        const moderationApiKey =
+          config.openAi.apiKey || room.aiCredentials.get("openai");
+        // Image safety is an optional AI feature. When the host has turned it
+        // off, or no safety model is configured for the deployment or room,
+        // uploads proceed without a safety check instead of failing. The
+        // file-type, size, and capability checks above still apply. Once a
+        // safety model is configured, a failed check still rejects the upload.
+        const moderation =
+          imageSettings.enabled && moderationApiKey
+            ? await moderateImage({
+                data: req.body,
+                mimeType,
+                timeoutMs: imageSettings.timeoutMs,
+                model: imageSettings.model,
+                apiKey: moderationApiKey,
+                signal: abort.signal,
+              })
+            : null;
         if (abort.signal.aborted) return;
-        if (moderation.blocked) {
+        if (!moderation) {
+          Logger.info(
+            `Chat image in room ${room.id} accepted without a safety check (${
+              imageSettings.enabled
+                ? "no image safety model is configured"
+                : "image safety is disabled in Room AI settings"
+            })`,
+          );
+        } else if (moderation.blocked) {
           Logger.warn(
             `Blocked chat image in room ${room.id} (categories=${
               moderation.categories.join(",") || "unspecified"
@@ -1810,6 +1824,8 @@ export const createSfuApp = ({
     }
 
     const closeNow = () => {
+      // A delayed close must not hit a newer room reopened on this channel.
+      if (!isCurrentRoom(state, room)) return;
       forceCloseRoomWithSockets(io, roomChannelId, pendingSockets);
     };
 

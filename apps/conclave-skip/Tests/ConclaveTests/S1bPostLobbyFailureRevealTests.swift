@@ -14,15 +14,6 @@ struct S1bPostLobbyFailureRevealTests {
         + "withAnimation(ConclaveMotion.travel(ConclaveMotion.snap, reduceMotion: reduceMotion)) { "
         + "proxy.scrollTo(LobbyScrollAnchor.status, anchor: .top) } }"
 
-    static let predicate = "private var revealsStatusReason: Bool { "
-        + "guard let status = premeeting.lobbyStatus, status.routeId == route.id else { return false } "
-        + "let reasonRows = LobbyStatusPolicy.rows(status: status, media: nil, supportsRationale: false, offersAppInfo: false) "
-        + "if reasonRows.contains(where: { $0.kind == .issue }) { return true } "
-        + "let refused = status.mode == .editing && [LobbyIssue.roomNotFound, .signInRequired, .failedServerText].contains(status.issue) "
-        + "guard status.mode == .failed || refused else { return false } "
-        + "let isSignedIn = premeeting.lobbyIdentity?.routeId == route.id && premeeting.lobbyIdentity?.isSignedIn == true "
-        + "return LobbyStatusCopy.line(status: status, isSignedIn: isSignedIn) != nil }"
-
     static let link = "https://conclave.acmvit.in/rose-sora-luffy"
 
     @Test func theDeviceCellFixtureFailsAfterTwoSecondsWithTheSlotIdentifier() {
@@ -154,23 +145,5 @@ struct S1bPostLobbyFailureRevealTests {
         let isSignedIn = premeeting.lobbyIdentity?.routeId == routeId && premeeting.lobbyIdentity?.isSignedIn == true
         return LobbyStatusPolicy.line(status: status, isSignedIn: isSignedIn) != LobbyStatusLineKind.none
     }
-}
-
-private func s1bpfrSource(_ packageRelativePath: String) throws -> String {
-    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-    return try String(contentsOf: root.appendingPathComponent(packageRelativePath).standardizedFileURL, encoding: .utf8)
-}
-
-private func s1bpfrFlat(_ text: String) -> String {
-    text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
-}
-
-private struct S1bPostLobbyFailureRevealBlockMissing: Error {}
-
-private func s1bpfrBlock(_ text: String, from start: String, to end: String) throws -> String {
-    guard let lower = text.range(of: start), let upper = text.range(of: end, range: lower.upperBound..<text.endIndex) else {
-        throw S1bPostLobbyFailureRevealBlockMissing()
-    }
-    return String(text[lower.lowerBound..<upper.lowerBound])
 }
 #endif

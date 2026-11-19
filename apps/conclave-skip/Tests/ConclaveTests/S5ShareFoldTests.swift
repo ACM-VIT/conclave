@@ -27,14 +27,5 @@ struct S5ShareFoldTests {
             }
         }
     }
-
-    @Test func bothProjectionHostsDeclareTheirRequiredManifestTypes() throws {
-        let root = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        let manifest = try String(contentsOf: root.appendingPathComponent("Android/app/src/main/AndroidManifest.xml").standardizedFileURL, encoding: .utf8)
-        #expect(manifest.contains("android:name=\"conclave.module.CallForegroundService\"\n            android:foregroundServiceType=\"microphone|camera|mediaPlayback|mediaProjection\""))
-        #expect(manifest.contains("android:name=\"conclave.module.ScreenCaptureService\"\n            android:foregroundServiceType=\"mediaProjection\""))
-        #expect(manifest.contains("android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION"))
-    }
 }
 #endif

@@ -1187,8 +1187,6 @@ export function useAdaptiveConsumerPreferences({
           reconciliation.nextState,
         );
       } else {
-        // Null policy transitions always clear ownership, including after a
-        // prior unsupported receiver or transient setter/readback error.
         videoJitterBufferTargetsRef.current.delete(producerId);
       }
       return reconciliation;
@@ -1962,9 +1960,6 @@ export function useAdaptiveConsumerPreferences({
     ) => {
       inFlightProducerIdsRef.current.delete(update.producerId);
       if (update.preferences.paused === true) {
-        // Preserve the desired pause while a make-before-break candidate is
-        // server-current. Clearing this optimistic marker could let that
-        // candidate commit and flow until the next preference cycle.
         refs.adaptivelyPausedConsumerProducerIdsRef.current.add(
           update.producerId,
         );

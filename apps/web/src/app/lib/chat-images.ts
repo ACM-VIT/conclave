@@ -1,10 +1,5 @@
 import type { ChatImageAttachment } from "./types";
 
-// Client-side mirror of the SFU's chat-image upload contract
-// (MAX_CHAT_IMAGE_BYTES in packages/sfu/config/classes/Room.ts and the
-// supported types in packages/sfu/server/chatImages.ts). The server
-// re-validates everything; these exist so the picker can reject bad files
-// before burning an upload round-trip.
 export const MAX_CHAT_IMAGE_BYTES = 6 * 1024 * 1024;
 
 export const CHAT_IMAGE_MIME_TYPES: readonly ChatImageAttachment["mimeType"][] =
@@ -31,22 +26,134 @@ export function isSupportedChatImageType(mimeType: string): boolean {
   return (CHAT_IMAGE_MIME_TYPES as readonly string[]).includes(mimeType);
 }
 
+const CHAT_IMAGE_EXTENSION_TYPES: Record<
+  string,
+  ChatImageAttachment["mimeType"]
+> = {
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  jfif: "image/jpeg",
+  png: "image/png",
+  gif: "image/gif",
+  webp: "image/webp",
+  avif: "image/avif",
+};
+
+/**
+ * Returns the upload MIME type for a file, or null when it is not one of the
+ * supported chat image formats. Clipboards and some file managers report
+ * nonstandard aliases (`image/jpg`) or no type at all, so those fall back to
+ * the file extension.
+ */
+export function resolveChatImageType(
+  file: Pick<File, "name" | "type">,
+): ChatImageAttachment["mimeType"] | null {
+  const type = file.type.trim().toLowerCase();
+  if (type === "image/jpg" || type === "image/pjpeg") return "image/jpeg";
+  if (isSupportedChatImageType(type)) {
+    return type as ChatImageAttachment["mimeType"];
+  }
+  if (type && type !== "application/octet-stream") return null;
+  const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
+  return CHAT_IMAGE_EXTENSION_TYPES[extension] ?? null;
+}
+
+function isClipboardImageCandidate(file: Pick<File, "name" | "type">) {
+  return file.type.startsWith("image/") || resolveChatImageType(file) !== null;
+}
+
+/**
+ * Picks the image to attach from a paste. Supported formats win over other
+ * image types, because macOS clipboards can carry the same picture as both
+ * TIFF and PNG.
+ */
 export function findClipboardImageFile(
   clipboardData: ClipboardImageData,
 ): File | null {
+  const candidates: File[] = [];
+
   for (let index = 0; index < clipboardData.items.length; index += 1) {
     const item = clipboardData.items[index];
-    if (item?.kind !== "file" || !item.type.startsWith("image/")) continue;
+    if (item?.kind !== "file") continue;
+    if (item.type && !item.type.startsWith("image/")) continue;
     const file = item.getAsFile();
-    if (file) return file;
+    if (file && isClipboardImageCandidate(file)) candidates.push(file);
   }
 
   for (let index = 0; index < clipboardData.files.length; index += 1) {
     const file = clipboardData.files[index];
-    if (file?.type.startsWith("image/")) return file;
+    if (file && isClipboardImageCandidate(file)) candidates.push(file);
   }
 
-  return null;
+  return (
+    candidates.find((file) => resolveChatImageType(file) !== null) ??
+    candidates[0] ??
+    null
+  );
+}
+
+function replaceFileExtension(name: string, extension: string): string {
+  const base = name.replace(/\.[^./\\]+$/, "") || "image";
+  return `${base}.${extension}`;
+}
+
+async function transcodeImageFile(
+  file: File,
+  maxBytes: number,
+): Promise<File | null> {
+  if (typeof createImageBitmap !== "function") return null;
+  let bitmap: ImageBitmap;
+  try {
+    bitmap = await createImageBitmap(file);
+  } catch {
+    return null;
+  }
+  try {
+    const canvas = document.createElement("canvas");
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const context = canvas.getContext("2d");
+    if (!context) return null;
+    context.drawImage(bitmap, 0, 0);
+    const encode = (type: string, quality?: number) =>
+      new Promise<Blob | null>((resolve) =>
+        canvas.toBlob(resolve, type, quality),
+      );
+    const png = await encode("image/png");
+    const pngFile = png
+      ? new File([png], replaceFileExtension(file.name, "png"), {
+          type: "image/png",
+        })
+      : null;
+    if (pngFile && pngFile.size <= maxBytes) return pngFile;
+    const jpeg = await encode("image/jpeg", 0.9);
+    if (jpeg && jpeg.size <= maxBytes) {
+      return new File([jpeg], replaceFileExtension(file.name, "jpg"), {
+        type: "image/jpeg",
+      });
+    }
+    // Still too large: hand back the PNG so the caller reports the size limit.
+    return pngFile;
+  } finally {
+    bitmap.close();
+  }
+}
+
+/**
+ * Turns a picked or pasted file into one the upload endpoint accepts: fixes
+ * a missing or aliased MIME type, and re-encodes other image formats the
+ * browser can decode (such as TIFF from the macOS clipboard) to PNG or JPEG.
+ * Returns null when the file cannot be sent as a chat image.
+ */
+export async function prepareChatImageFile(file: File): Promise<File | null> {
+  const resolvedType = resolveChatImageType(file);
+  if (resolvedType) {
+    return resolvedType === file.type
+      ? file
+      : new File([file], file.name || "image", { type: resolvedType });
+  }
+  if (!file.type.startsWith("image/")) return null;
+  return transcodeImageFile(file, MAX_CHAT_IMAGE_BYTES);
 }
 
 export function formatChatImageSize(bytes: number): string {
@@ -54,9 +161,6 @@ export function formatChatImageSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-// Image messages carry the file name as fallback content (so reply previews,
-// TTS, and native clients always have text); only a sender-typed caption
-// should render under the picture.
 export function chatImageCaption(
   content: string,
   image: ChatImageAttachment,

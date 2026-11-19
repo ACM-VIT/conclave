@@ -280,3 +280,25 @@ describe("super admin HTTP moderation", () => {
     expect(h.closeTransport).toHaveBeenCalledOnce();
   });
 });
+
+describe("kick and admission", () => {
+  it("revokes the kicked identity's waiting-room and lock admission", () => {
+    const h = makeHarness({ targetClaims: {}, targetAdmin: false });
+    h.room.allowUser("admin@example.com");
+    h.room.allowLockedUser("admin@example.com");
+    expect(h.invoke("kickUser", { userId: "target" })).toHaveBeenCalledWith({ success: true });
+    expect(h.room.isAllowed("admin@example.com")).toBe(false);
+    expect(h.room.isLockedAllowed("admin@example.com")).toBe(false);
+  });
+
+  it("revokes a kicked host's retained host rights and stage invite", () => {
+    const h = makeHarness({ targetClaims: {}, targetAdmin: true });
+    h.room.registerAdminUserKey("admin@example.com");
+    h.room.hostUserKey = "admin@example.com";
+    h.room.promoteWebinarUserKey("admin@example.com");
+    expect(h.invoke("kickUser", { userId: "target" })).toHaveBeenCalledWith({ success: true });
+    expect(h.room.isAdminUserKey("admin@example.com")).toBe(false);
+    expect(h.room.hostUserKey).toBeNull();
+    expect(h.room.isWebinarPromotedUserKey("admin@example.com")).toBe(false);
+  });
+});

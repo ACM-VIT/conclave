@@ -147,12 +147,6 @@ const requestedCaptureValue = (constraint: unknown): number | null => {
   return null;
 };
 
-/**
- * A failed adaptive downshift must not replace a healthy camera track: sender
- * scaling and bitrate caps can apply immediately without a visible source gap.
- * Reopen only when the track died or a live low-resolution capture genuinely
- * cannot satisfy an attempted quality upgrade.
- */
 export const shouldReopenCameraAfterConstraintFailure = ({
   trackReadyState,
   currentSettings,

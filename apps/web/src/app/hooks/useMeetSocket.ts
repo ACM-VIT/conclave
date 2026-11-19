@@ -16,6 +16,12 @@ import {
   buildMicrophoneOpusCodecOptions,
   buildScreenShareAudioOpusCodecOptions,
 } from "../lib/constants";
+import { emitWithAckTimeout } from "../lib/socket-ack";
+import {
+  resolveInFlightReconnectRequest,
+  resolveReconnectStartAttempts,
+  type ReconnectRequest,
+} from "../lib/reconnect-request-policy";
 import type {
   ActiveSpeakerChangedNotification,
   AdminNoticeNotification,
@@ -291,6 +297,9 @@ const getStaleConsumerRecoveryDelayMs = (
   producerInfo.type === "screen"
     ? SCREEN_SHARE_STALE_CONSUMER_RECOVERY_DELAY_MS
     : STALE_CONSUMER_RECOVERY_DELAY_MS;
+
+const ACK_REQUEST_TIMEOUT_MS = SOCKET_TIMEOUT_MS;
+const LONG_ACK_REQUEST_TIMEOUT_MS = 30_000;
 
 const startSocketAckTimeout = (
   eventName: string,
@@ -624,9 +633,6 @@ const normalizeReceiveRtpParametersForCongestionFeedback = (
 
   if (!changed) return rtpParameters;
 
-  // Chrome applies one congestion-control feedback mode to a bundled RTP
-  // transport. Mediasoup's audio consumer params can omit Opus transport-cc
-  // while video consumers include it, which makes Chrome ignore video TWCC.
   return {
     ...rtpParameters,
     codecs,
@@ -1078,14 +1084,7 @@ export function useMeetSocket({
   const serverRestartNoticeRef = useRef<string | null>(null);
   const adminNoticeTimeoutRef = useRef<number | null>(null);
   const consumeRetryAttemptsRef = useRef<Map<string, number>>(new Map());
-  // Initial consumes from join, sync, and producer notifications can race.
-  // Replacement consumes are serialized separately by the recovery owner.
   const consumerConsumeInFlightRef = useRef<Map<string, symbol>>(new Map());
-  // One retry chain per producer for acked resumeConsumer delivery; a lost
-  // resume means one silent speaker for this attendee only (#177). The entry
-  // owns a specific consumer generation and keeps its attempt count, so stale
-  // acknowledgements from a displaced consumer cannot cancel the replacement
-  // consumer's chain while overlapping triggers still adopt current progress.
   const consumerResumeRetryStateRef = useRef<
     Map<string, ConsumerResumeRetryState>
   >(new Map());
@@ -1111,9 +1110,6 @@ export function useMeetSocket({
   const webcamStartupLatencyResetLastFinishedAtRef = useRef(0);
   const webcamStartupLatencyResetDrainTimeoutRef = useRef<number | null>(null);
   const webcamStartupLatencyResetEpochRef = useRef(0);
-  // Server telemetry for a make-before-break candidate can arrive before its
-  // local Consumer is committed. Stage it by consumer id so stale generations
-  // never overwrite the currently presented generation.
   const pendingConsumerTelemetryByIdRef = useRef<
     Map<string, ConsumerTelemetrySnapshot>
   >(new Map());
@@ -1142,11 +1138,6 @@ export function useMeetSocket({
   const mutedConsumerSinceRef = useRef<Map<string, number>>(new Map());
   const producerPausedStateRef = useRef<Map<string, boolean>>(new Map());
   const producerPausedStateRevisionRef = useRef<Map<string, number>>(new Map());
-  // Per-video-consumer decode progress for the freeze watchdog: last
-  // framesDecoded/bytesReceived sample + how many consecutive checks the decoder
-  // has been stuck (frames flat while bytes still climb). See the freeze-watchdog
-  // effect below — this catches a frozen decoder that `track.muted` never fires
-  // for (RTP keeps flowing, the decoder is stuck on a stale reference frame).
   const videoFreezeStatsRef = useRef<
     Map<string, VideoFreezeRecoveryState & { consumerId: string }>
   >(new Map());
@@ -1162,14 +1153,6 @@ export function useMeetSocket({
   audioOnlyModeRef.current = audioOnlyMode;
   const pendingScreenProducerCloseIdsRef = useRef<Set<string>>(new Set());
   const screenShareRepublishPromiseRef = useRef<Promise<boolean> | null>(null);
-  // Announce-order bookkeeping for producers, per participant slot
-  // (userId:kind:type). Producers are re-created (mic switch, recovery), and
-  // consume completions can finish out of order — a stale consume must never
-  // overwrite the stream of a newer producer for the same slot, or the viewer
-  // is left playing a dead track while the live consumer goes unheard (#177).
-  // latestBySlot maps a slot to the most recently ANNOUNCED producer (each
-  // producerId is recorded once, so re-listing an old producer in a stale
-  // sync snapshot cannot roll a slot back to it).
   const producerAnnounceOrderRef = useRef<{
     slotById: Map<string, string>;
     latestBySlot: Map<string, string>;
@@ -1193,9 +1176,6 @@ export function useMeetSocket({
   const producerTransportCreatePromiseRef = useRef<Promise<boolean> | null>(
     null,
   );
-  // Keep presentations stable when the room changes webcam codec while this
-  // participant's camera is off. The next camera publish consumes the flag and
-  // recreates the send transport before negotiating the new codec family.
   const pendingCameraCodecTransportResetEpochRef = useRef<number | null>(null);
   const iceRestartPromiseRef = useRef<
     Record<"producer" | "consumer", Promise<boolean> | null>
@@ -1437,10 +1417,6 @@ export function useMeetSocket({
     info: Pick<ProducerInfo, "producerUserId" | "kind" | "type">,
   ): string => `${info.producerUserId}:${info.kind}:${info.type}`;
 
-  // Record the order the server announced producers in (newProducer, join
-  // snapshot, producer sync). Idempotent per producerId; the server keeps at
-  // most one live producer per slot, so the most recently announced producer
-  // in a slot is the one whose media the participant should be rendering.
   const noteAnnouncedProducer = useCallback((info: ProducerInfo) => {
     const state = producerAnnounceOrderRef.current;
     if (state.slotById.has(info.producerId)) return;
@@ -2102,7 +2078,6 @@ export function useMeetSocket({
     console.info("[Meets] Running full cleanup...");
 
     intentionalDisconnectRef.current = true;
-    // Invalidate pending joins and reconnects before closing their transports.
     reconnectGenerationRef.current += 1;
     reconnectInFlightRef.current = false;
     cleanupRoomResources();
@@ -2195,8 +2170,6 @@ export function useMeetSocket({
             )),
       );
 
-      // The latest prejoin click is authoritative for the pending join. A stale
-      // local stream from an earlier call can still be present for one tick.
       return {
         isMicOn: prejoinIntent ? prejoinIntent.isMicOn : !isMuted,
         isCameraOn: prejoinIntent ? prejoinIntent.isCameraOn : !isCameraOff,
@@ -2210,8 +2183,6 @@ export function useMeetSocket({
     (stream: MediaStream | null | undefined) => {
       const mediaIntent = resolveMediaPublishIntent(stream);
       return {
-        // Keep a muted microphone track warm like production meeting clients do:
-        // the producer starts paused, but unmute does not need a fresh gUM call.
         needsAudio: true,
         needsVideo: mediaIntent.isCameraOn,
         requiredAudio: mediaIntent.isMicOn,
@@ -2289,8 +2260,6 @@ export function useMeetSocket({
         mediaGeneration !== reconnectGenerationRef.current ||
         intentionalDisconnectRef.current
       ) {
-        // Device permission prompts can outlive the meeting. Release this
-        // request's tracks without touching media owned by a subsequent join.
         const currentTracks = new Set(localStreamRef.current?.getTracks() ?? []);
         refreshedStream?.getTracks().forEach((track) => {
           if (!currentTracks.has(track)) stopLocalTrack(track);
@@ -2525,12 +2494,6 @@ export function useMeetSocket({
         epoch: next.epoch,
       });
 
-      // Chromium can leave the send transceiver bound to the old codec after a
-      // producer is stopped. Reusing that PeerConnection for a codec-family
-      // change can fail in mediasoup-client while parsing an answer with
-      // "no a=ssrc lines found". Force a fresh send transport; the SFU closes
-      // the replaced server transport atomically, while the normal audio,
-      // camera, and screen recovery paths republish live tracks.
       const resetProducerTransportForCodecChange = () => {
         const transport = producerTransportRef.current;
         if (transport && !transport.closed) {
@@ -2547,10 +2510,6 @@ export function useMeetSocket({
 
       const producer = videoProducerRef.current;
       if (!producer || producer.closed) {
-        // This also covers the narrow camera-toggle gap where React state has
-        // changed but isCameraOffRef has not committed yet. Record the epoch
-        // instead of tearing down a presentation; an enabled camera's recovery
-        // pulse will consume it through prepareCameraProducerTransport.
         pendingCameraCodecTransportResetEpochRef.current = next.epoch;
         if (!isCameraOffRef.current) {
           requestCameraProducerRecovery();
@@ -2559,10 +2518,6 @@ export function useMeetSocket({
       }
 
       if (isCameraOffRef.current) {
-        // Do not interrupt an active screen share just because a disabled
-        // camera's future codec changed. Close any stale webcam producer, keep
-        // the display-media capture and current transport flowing, and force a
-        // fresh transport immediately before the next camera publication.
         pendingCameraCodecTransportResetEpochRef.current = next.epoch;
         if (producer && !producer.closed) {
           intentionalLocalProducerCloseIdsRef.current.add(producer.id);
@@ -2711,12 +2666,6 @@ export function useMeetSocket({
     [],
   );
 
-  // resumeConsumer used to be fire-and-forget: a single dropped request (rate
-  // limit, disconnect blip, lost ack) left the server-side consumer paused
-  // forever, i.e. one speaker permanently silent for this attendee only
-  // (#177). Every resume now goes through this acked helper: retries with
-  // backoff, re-consumes when the server no longer knows the consumer, and
-  // escalates to a full stale-consumer recovery when retries are exhausted.
   const resumeConsumerReliably = useCallback(
     (
       producerId: string,
@@ -2731,9 +2680,6 @@ export function useMeetSocket({
       }
       const consumerId = consumer.id;
 
-      // Adopt any running chain's progress: cancel its pending timer but keep
-      // the higher attempt count, so a fresh trigger cannot reset a stuck
-      // consumer's escalation clock.
       const existingRetryState =
         consumerResumeRetryStateRef.current.get(producerId);
       if (existingRetryState?.timeoutId != null) {
@@ -2840,8 +2786,6 @@ export function useMeetSocket({
                   ? "rate_limited"
                   : undefined);
             if (code === "not_found") {
-              // The server no longer tracks this consumer (displaced or torn
-              // down); retrying the resume can never succeed. Re-consume.
               clearConsumerResumeRetry(producerId, consumerId);
               const producerInfo = buildProducerInfoForRecovery();
               if (producerInfo) {
@@ -2882,21 +2826,13 @@ export function useMeetSocket({
       clearStaleConsumerRecoveryTimeout(producerId);
 
       if (paused) {
-        // Muting / camera-off: the producer sends no RTP; nothing to resume.
         return;
       }
 
-      // Only act on a REAL paused -> unpaused TRANSITION. syncProducers calls
-      // this with paused=false for every live producer every 15s; without this
-      // guard we'd re-emit a keyframe (PLI) for every remote video on every sync
-      // tick (periodic bandwidth/quality spikes). On the first call (consume
-      // time) wasPaused is undefined, and the consume path does its own resume.
       if (wasPaused !== true) {
         return;
       }
 
-      // The consume path leaves paused producers paused server-side, so resume
-      // immediately when the producer unmutes instead of waiting for sync.
       if (adaptivelyPausedConsumerProducerIdsRef.current.has(producerId)) {
         return;
       }
@@ -2948,9 +2884,6 @@ export function useMeetSocket({
           closingConsumerId: consumerIdToClose,
         });
 
-      // These ledgers are producer-scoped and now describe the committed
-      // successor. A late close of its displaced predecessor may only clean up
-      // exact-ID telemetry and media resources.
       if (closesCurrentGeneration) {
         pendingProducersRef.current.delete(producerId);
         consumeRetryAttemptsRef.current.delete(producerId);
@@ -3887,10 +3820,6 @@ export function useMeetSocket({
         ? pendingCameraCodecTransportResetEpochRef.current
         : null;
 
-      // If another caller is already creating a transport, let it settle before
-      // deciding whether the pending codec transition still requires one more
-      // fresh PeerConnection. This prevents closing a transport while its create
-      // acknowledgement is still being installed.
       if (
         pendingResetEpoch !== null &&
         producerTransportCreatePromiseRef.current
@@ -4463,8 +4392,6 @@ export function useMeetSocket({
         return;
       }
       if (isSupersededProducer(producerInfo)) {
-        // A newer producer for this participant slot has been announced;
-        // consuming this one would attach a stream that is about to die.
         pendingProducersRef.current.delete(producerInfo.producerId);
         consumeRetryAttemptsRef.current.delete(producerInfo.producerId);
         return;
@@ -4601,9 +4528,6 @@ export function useMeetSocket({
             const acknowledgedProducerPaused = Boolean(
               response.producerPaused ?? producerInfo.paused,
             );
-            // Apply the ACK snapshot before the first await. Any subsequently
-            // ordered pause/unpause notification then wins and remains the
-            // source of truth through candidate verification/presentation.
             if (
               isProducerPauseSnapshotCurrent({
                 requestRevision: producerPauseRevisionAtRequest,
@@ -4695,10 +4619,6 @@ export function useMeetSocket({
                   type: producerInfo.type,
                 })
               ) {
-                // A newer producer for this slot was announced while this
-                // consume was in flight. Attaching this stream would clobber
-                // the newer producer's stream and leave the participant
-                // playing a dead track once this one closes.
                 await discardUncommittedConsumer({ confirmRollback: false });
                 resolve();
                 return;
@@ -4989,9 +4909,6 @@ export function useMeetSocket({
                   !consumerBeingReplaced.closed &&
                   consumerBeingReplaced.track.readyState === "live"
                 ) {
-                  // The presentation waiter owns this provisional generation.
-                  // Keep it locally current long enough for the shared rollback
-                  // path to restore the still-flowing predecessor.
                   return;
                 }
                 clearStaleConsumerRecoveryTimeout(producerInfo.producerId);
@@ -5249,10 +5166,6 @@ export function useMeetSocket({
                 updateCameraState(false);
               }
 
-              // `response.paused === false` means the server created this
-              // consumer already flowing (audio, on current servers) — no
-              // resume round-trip needed. Older servers omit the field, so
-              // anything other than an explicit false still resumes.
               if (
                 !preparedMakeBeforeBreak &&
                 !startsPausedForAdaptiveReceive &&
@@ -6014,25 +5927,10 @@ export function useMeetSocket({
   );
   recoverStaleConsumerRef.current = recoverStaleConsumer;
 
-  // ----- Video freeze watchdog -----
-  // A frozen remote decoder (stuck on a stale reference frame while RTP keeps
-  // flowing) is invisible to `track.muted`, so the existing mute-based recovery
-  // never fires. Poll each remote VIDEO consumer's getStats every ~2s: if
-  // framesDecoded stops advancing while bytesReceived keeps climbing and the
-  // producer isn't paused, the decoder is stuck — request a fresh keyframe (PLI)
-  // so it un-freezes. One confirmed stalled sample is enough (~2s) because the
-  // byte-delta gate proves media is still arriving; a per-consumer cooldown
-  // avoids keyframe storms in lossy rooms. If bounded PLI attempts produce no
-  // decoded-frame progress, close/re-consume through the stale-consumer path.
   useEffect(() => {
     const FREEZE_CHECK_MS = 2000;
     const STALL_SAMPLES_BEFORE_PLI = 1;
     const KEYFRAME_REQUEST_COOLDOWN_MS = 3500;
-    // Only treat a flat frame count as a freeze when REAL media is still
-    // arriving (>~32kbps over the 2s window). A truly frozen decoder still
-    // receives full-bitrate RTP from the sender, so a real freeze easily clears
-    // this; an idle/static source with only padding/RTX trickle does not — this
-    // avoids needless keyframe (PLI) storms on low-activity tiles.
     const MIN_STALL_BYTE_DELTA = 8000;
 
     const interval = window.setInterval(() => {
@@ -6054,8 +5952,6 @@ export function useMeetSocket({
         void consumer
           .getStats()
           .then((report: RTCStatsReport) => {
-            // Read framesDecoded + bytesReceived from ONE inbound-rtp video entry
-            // (don't mix fields across simulcast layers / entries).
             let framesDecoded: number | null = null;
             let bytesReceived: number | null = null;
             report.forEach((entry) => {
@@ -6075,8 +5971,6 @@ export function useMeetSocket({
             const bytesNow = bytesReceived;
             if (decodedNow == null || bytesNow == null) return;
 
-            // getStats was async — the consumer may have been closed/replaced or
-            // the producer paused meanwhile. Revalidate before acting.
             const live = consumersRef.current.get(producerId);
             if (!live || live.id !== consumerId) {
               stats.delete(producerId);
@@ -6108,7 +6002,6 @@ export function useMeetSocket({
             });
 
             if (transition.action === "request-key-frame") {
-              // Decoder is frozen but real media is flowing → force a keyframe.
               const socket2 = socketRef.current;
               if (socket2?.connected) {
                 socket2.emit(
@@ -6140,7 +6033,6 @@ export function useMeetSocket({
           .catch(() => {});
       });
 
-      // Drop tracking for consumers that no longer exist.
       stats.forEach((_value, producerId) => {
         if (!consumersRef.current.has(producerId)) stats.delete(producerId);
       });
@@ -6698,8 +6590,6 @@ export function useMeetSocket({
       };
       assertJoinCurrent();
 
-      // Construct the mediasoup handler before membership so the SFU can make
-      // a room-wide codec decision without a transient incompatible producer.
       const DeviceClass = prewarm?.Device
         ? prewarm.Device
         : (await import("mediasoup-client")).Device;
@@ -6708,10 +6598,6 @@ export function useMeetSocket({
         pendingDevice.handlerName,
         {
           videoInputDeviceId: selectedVideoInputDeviceId,
-          // A validated desktop handler/static RTP intersection keeps an
-          // existing all-modern room on VP9 while this client loads. Proven
-          // encoder negatives are removed by the session/device cache. Confirm
-          // the claim again from the loaded Device before publishing below.
           allowVp9SvcSend: true,
         },
       );
@@ -6751,8 +6637,6 @@ export function useMeetSocket({
 
             departedParticipantIdsRef.current.clear();
 
-            // A missing policy means an older SFU, whose interoperable webcam
-            // baseline is VP8. Set this before any producer is created.
             webcamCodecPolicyRef.current =
               normalizeWebcamCodecPolicy(response.webcamCodecPolicy) ?? {
                 ...BASELINE_WEBCAM_CODEC_POLICY,
@@ -6848,8 +6732,6 @@ export function useMeetSocket({
                 setServerActiveSpeakerAvailable(false);
               }
               setWebinarRole(response.webinarRole ?? null);
-              // The server clears an attendee's raised hand whenever their
-              // seat is replaced, so a (re)join always starts lowered.
               setIsWebinarHandRaised(false);
               setWebinarSpeakerUserId(
                 response.webinarSpeakerUserId ??
@@ -7180,10 +7062,6 @@ export function useMeetSocket({
                 return;
               }
 
-              // A deliberate server-side disconnect (kick / ban / room ended /
-              // shutdown) is terminal — don't fight it with reconnect attempts
-              // that race the kicked/roomEnded/roomClosed messages. Only
-              // transient drops (ping timeout, transport close/error) reconnect.
               if (reason === "io server disconnect") {
                 if (serverRestartNoticeRef.current) {
                   if (currentRoomIdRef.current) {
@@ -7215,8 +7093,6 @@ export function useMeetSocket({
               cleanup();
             });
 
-            // Host ended the meeting (admin:endRoom). Local hosts go straight
-            // home; everyone else lands back in the lobby with a non-error note.
             socket.on(
               "roomEnded",
               ({
@@ -7385,10 +7261,6 @@ export function useMeetSocket({
               },
             );
 
-            // Server-side heal sweep resumed an audio consumer this client
-            // failed to resume (#177 backstop). Media starts flowing on its
-            // own; reset the stale-tracking clock and record the event so
-            // partial-audio incidents are visible in telemetry.
             socket.on(
               "consumerAutoResumed",
               (notification: {
@@ -7847,9 +7719,6 @@ export function useMeetSocket({
               ({ messages, roomId: eventRoomId }: ChatHistorySnapshot) => {
                 if (!isRoomEvent(eventRoomId)) return;
                 if (!Array.isArray(messages) || messages.length === 0) return;
-                // Only seed messages this client is allowed to see. The server
-                // already excludes DMs from history, but mirror the live-path
-                // visibility rule defensively in case that ever changes.
                 const visible = messages.filter(
                   (message) =>
                     !message.isDirect ||
@@ -7861,14 +7730,6 @@ export function useMeetSocket({
                   const bySnapshotId = new Map(
                     visible.map((message) => [message.id, message]),
                   );
-                  // Reconnect recovery: a reaction that changed while we were
-                  // disconnected only reaches us through this snapshot — we
-                  // missed the live chat:reactionChanged. Overlay the
-                  // authoritative reaction set onto messages we already hold so
-                  // stale counts don't persist. Only reactions are reconciled;
-                  // the rest of a retained message is immutable and already
-                  // normalized. Reactionless messages keep their reference, so
-                  // the common case creates no new objects.
                   const reconciled = prev.map((message) => {
                     const snapshot = bySnapshotId.get(message.id);
                     if (!snapshot) return message;
@@ -8137,9 +7998,6 @@ export function useMeetSocket({
               }
             });
 
-            // Streamed "@Conclave" AI answers fanned out by the asking client.
-            // Upsert by id so the bubble fills in live for everyone in the
-            // room with the same thinking/actions/answer flow the asker sees.
             socket.on(
               "conclaveMessage",
               (payload: {
@@ -8179,9 +8037,6 @@ export function useMeetSocket({
                       : previous && previous.content.length > incomingContent.length
                         ? previous.content
                         : incomingContent || previous?.content || "";
-                  // Packets carry cumulative reasoning; keep the longer text so
-                  // a stale snapshot can never rewind the trace, and only trust
-                  // the incoming done flag when the incoming text is current.
                   const incomingReasoning = payload.reasoning ?? "";
                   const previousReasoning = previous?.reasoning ?? "";
                   const reasoningStale =
@@ -8255,12 +8110,6 @@ export function useMeetSocket({
               }
             });
 
-            // The payload is the complete reaction set for that message, so we
-            // replace rather than merge. A message we don't currently hold is
-            // ignored here; when we later receive it inline (a fresh message,
-            // or the host-only history snapshot on reconnect) its reactions
-            // come with it. The snapshot handler above reconciles reactions on
-            // messages we already hold, covering changes missed while away.
             socket.on(
               "chat:reactionChanged",
               ({
@@ -8459,7 +8308,16 @@ export function useMeetSocket({
                       prejoinMediaIntentRef.current = null;
                     }
                   })
-                  .catch(console.error);
+                  .catch((joinError: unknown) => {
+                    if (
+                      approvalGeneration !== reconnectGenerationRef.current ||
+                      intentionalDisconnectRef.current ||
+                      socketRef.current !== socket
+                    ) return;
+                    console.error("[Meets] Join after approval failed:", joinError);
+                    setMeetError(createMeetError(joinError));
+                    setConnectionState("error");
+                  });
               } else {
                 console.error(
                   "[Meets] Cannot re-join: missing room ID or local stream",
@@ -8469,6 +8327,7 @@ export function useMeetSocket({
                     bypassMediaPermissions,
                   },
                 );
+                setConnectionState("error");
               }
             });
 
@@ -8723,7 +8582,6 @@ export function useMeetSocket({
                     );
                   }
                   const next = previous.slice();
-                  // Server broadcasts omit per-viewer vote state; keep ours.
                   next[existingIndex] = {
                     ...entry,
                     hasUpvoted:
@@ -8917,15 +8775,17 @@ export function useMeetSocket({
     ],
   );
 
-  const handleReconnect = useCallback(async (options?: { immediate?: boolean }) => {
+  const handleReconnect = useCallback(async (options?: ReconnectRequest) => {
     if (reconnectInFlightRef.current) {
       const cancelBackoff = reconnectBackoffCancelRef.current;
-      manualReconnectRetryRequestedRef.current = true;
-      if (
-        options?.immediate === true &&
-        reconnectPhaseRef.current === "waiting" &&
-        cancelBackoff
-      ) {
+      const decision = resolveInFlightReconnectRequest(options, {
+        isWaitingForBackoff: reconnectPhaseRef.current === "waiting",
+        canCancelBackoff: Boolean(cancelBackoff),
+      });
+      if (decision.markUserRetry) {
+        manualReconnectRetryRequestedRef.current = true;
+      }
+      if (decision.cancelBackoff && cancelBackoff) {
         updateReconnectRecoveryStatus((current) =>
           buildReconnectRecoveryStatus(
             "connecting",
@@ -8937,6 +8797,7 @@ export function useMeetSocket({
         cancelBackoff();
         return;
       }
+      if (!decision.announceQueuedRetry) return;
 
       updateReconnectRecoveryStatus((current) =>
         current
@@ -8958,16 +8819,15 @@ export function useMeetSocket({
     let skipNextDelay = options?.immediate === true;
     let lastReconnectError: unknown = null;
     reconnectInFlightRef.current = true;
+    reconnectAttemptsRef.current = resolveReconnectStartAttempts(
+      reconnectAttemptsRef.current,
+      MAX_RECONNECT_ATTEMPTS,
+    );
     setMeetError(null);
 
     try {
       while (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
         if (reconnectGeneration !== reconnectGenerationRef.current) return;
-        // A terminal event (kick / ban / roomEnded / roomClosed / explicit
-        // leave) sets intentionalDisconnectRef via cleanup(). If it lands while
-        // this loop is already retrying a transient drop, stop fighting it —
-        // otherwise we'd briefly re-enter the call and then clobber the terminal
-        // notice ("The host ended the meeting.") with "Failed to reconnect".
         if (intentionalDisconnectRef.current) return;
         const shouldSurfaceReconnectState =
           !isMeetingDocumentHidden();
@@ -9014,7 +8874,6 @@ export function useMeetSocket({
         if (delay > 0) {
           await waitForReconnectBackoff(delay);
         }
-        // The terminal event may have arrived during the backoff wait.
         if (intentionalDisconnectRef.current) return;
         if (reconnectGeneration !== reconnectGenerationRef.current) return;
         if (manualReconnectRetryRequestedRef.current) {
@@ -9067,8 +8926,6 @@ export function useMeetSocket({
             setMeetError(null);
           }
           if (reconnectGeneration !== reconnectGenerationRef.current) return;
-          // …or while the socket was (re)connecting — bail before rejoining so
-          // we don't re-enter a room we were just removed from.
           if (intentionalDisconnectRef.current) return;
 
           const joinOptions = joinOptionsRef.current;
@@ -9207,8 +9064,6 @@ export function useMeetSocket({
         }
       }
 
-      // Don't surface a reconnect-failure error if the user was kicked / the
-      // room ended mid-loop — that terminal notice + state must stand.
       if (intentionalDisconnectRef.current) return;
       if (reconnectGeneration !== reconnectGenerationRef.current) return;
 
@@ -9623,7 +9478,7 @@ export function useMeetSocket({
     }
 
     if (reconnectInFlightRef.current) {
-      await handleReconnect({ immediate: true });
+      await handleReconnect({ immediate: true, userInitiated: true });
       return;
     }
 
@@ -9640,7 +9495,7 @@ export function useMeetSocket({
     setConnectionState("reconnecting");
 
     if (currentRoomIdRef.current) {
-      await handleReconnect({ immediate: true });
+      await handleReconnect({ immediate: true, userInitiated: true });
       return;
     }
 
@@ -9671,7 +9526,10 @@ export function useMeetSocket({
       if (!socket) return Promise.resolve(false);
 
       return new Promise((resolve) => {
-        socket.emit(
+        emitWithAckTimeout(
+          socket,
+          ACK_REQUEST_TIMEOUT_MS,
+          () => resolve(false),
           "lockRoom",
           { locked },
           (
@@ -9701,7 +9559,10 @@ export function useMeetSocket({
       if (!socket) return Promise.resolve(false);
 
       return new Promise((resolve) => {
-        socket.emit(
+        emitWithAckTimeout(
+          socket,
+          ACK_REQUEST_TIMEOUT_MS,
+          () => resolve(false),
           "setNoGuests",
           { noGuests },
           (
@@ -9728,7 +9589,10 @@ export function useMeetSocket({
       if (!socket) return Promise.resolve(false);
 
       return new Promise((resolve) => {
-        socket.emit(
+        emitWithAckTimeout(
+          socket,
+          ACK_REQUEST_TIMEOUT_MS,
+          () => resolve(false),
           "lockChat",
           { locked },
           (response: { success: boolean; locked?: boolean } | { error: string }) => {
@@ -9754,7 +9618,10 @@ export function useMeetSocket({
       if (!socket) return Promise.resolve(false);
 
       return new Promise((resolve) => {
-        socket.emit(
+        emitWithAckTimeout(
+          socket,
+          ACK_REQUEST_TIMEOUT_MS,
+          () => resolve(false),
           "setParticipantMediaPermissions",
           permissions,
           (response: { success: boolean } | { error: string }) => {
@@ -9782,7 +9649,10 @@ export function useMeetSocket({
       if (!socket) return Promise.resolve(false);
 
       return new Promise((resolve) => {
-        socket.emit(
+        emitWithAckTimeout(
+          socket,
+          ACK_REQUEST_TIMEOUT_MS,
+          () => resolve(false),
           "admin:endRoom",
           {
             message:
@@ -9816,7 +9686,10 @@ export function useMeetSocket({
       if (!socket) return Promise.resolve(null);
 
       return new Promise((resolve) => {
-        socket.emit(
+        emitWithAckTimeout(
+          socket,
+          ACK_REQUEST_TIMEOUT_MS,
+          () => resolve(null),
           "transcript:getToken",
           (response: TranscriptTokenResponse | { error: string }) => {
             if ("error" in response) {
@@ -9839,7 +9712,10 @@ export function useMeetSocket({
       if (!socket) return Promise.resolve(null);
 
       return new Promise((resolve) => {
-        socket.emit(
+        emitWithAckTimeout(
+          socket,
+          ACK_REQUEST_TIMEOUT_MS,
+          () => resolve(null),
           "transcript:sfuRelayStatus",
           (response: TranscriptSfuRelayStatusResponse | { error: string }) => {
             if ("error" in response) {
@@ -9864,7 +9740,16 @@ export function useMeetSocket({
       if (!socket) return Promise.resolve(null);
 
       return new Promise((resolve) => {
-        socket.emit(
+        emitWithAckTimeout(
+          socket,
+          LONG_ACK_REQUEST_TIMEOUT_MS,
+          () => resolve({
+              mode: "sfu",
+              success: false,
+              status: "error",
+              reason: "The server did not respond. Try again.",
+              updatedAt: Date.now(),
+            }),
           "transcript:sfuRelayStart",
           request,
           (response: TranscriptSfuRelayStartResponse | { error: string }) => {
@@ -9894,7 +9779,10 @@ export function useMeetSocket({
       if (!socket) return Promise.resolve(null);
 
       return new Promise((resolve) => {
-        socket.emit(
+        emitWithAckTimeout(
+          socket,
+          LONG_ACK_REQUEST_TIMEOUT_MS,
+          () => resolve(null),
           "transcript:sfuRelayStop",
           (response: TranscriptSfuRelayStopResponse | { error: string }) => {
             if ("error" in response) {
@@ -9917,7 +9805,10 @@ export function useMeetSocket({
       if (!socket) return Promise.resolve(null);
 
       return new Promise((resolve) => {
-        socket.emit(
+        emitWithAckTimeout(
+          socket,
+          ACK_REQUEST_TIMEOUT_MS,
+          () => resolve(null),
           "meeting:getConfig",
           (response: MeetingConfigSnapshot | { error: string }) => {
             if ("error" in response) {
@@ -9943,7 +9834,10 @@ export function useMeetSocket({
       if (!socket) return Promise.resolve(null);
 
       return new Promise((resolve) => {
-        socket.emit(
+        emitWithAckTimeout(
+          socket,
+          ACK_REQUEST_TIMEOUT_MS,
+          () => resolve(null),
           "meeting:updateConfig",
           update,
           (
@@ -9975,7 +9869,10 @@ export function useMeetSocket({
     if (!socket) return Promise.resolve(null);
 
     return new Promise((resolve) => {
-      socket.emit(
+      emitWithAckTimeout(
+        socket,
+        ACK_REQUEST_TIMEOUT_MS,
+        () => resolve(null),
         "webinar:getConfig",
         (response: WebinarConfigSnapshot | { error: string }) => {
           if ("error" in response) {
@@ -9996,7 +9893,10 @@ export function useMeetSocket({
       if (!socket) return Promise.resolve(null);
 
       return new Promise((resolve) => {
-        socket.emit(
+        emitWithAckTimeout(
+          socket,
+          ACK_REQUEST_TIMEOUT_MS,
+          () => resolve(null),
           "webinar:updateConfig",
           update,
           (
@@ -10023,7 +9923,10 @@ export function useMeetSocket({
     if (!socket) return Promise.resolve(null);
 
     return new Promise((resolve) => {
-      socket.emit(
+      emitWithAckTimeout(
+        socket,
+        ACK_REQUEST_TIMEOUT_MS,
+        () => resolve(null),
         "webinar:rotateLink",
         (response: WebinarLinkResponse | { error: string }) => {
           if ("error" in response) {
@@ -10043,7 +9946,10 @@ export function useMeetSocket({
       if (!socket) return Promise.resolve(null);
 
       return new Promise((resolve) => {
-        socket.emit(
+        emitWithAckTimeout(
+          socket,
+          ACK_REQUEST_TIMEOUT_MS,
+          () => resolve(null),
           "webinar:generateLink",
           (response: WebinarLinkResponse | { error: string }) => {
             if ("error" in response) {
@@ -10065,7 +9971,10 @@ export function useMeetSocket({
       if (!socket) return Promise.resolve({ ok: false, error: "Not connected" });
 
       return new Promise((resolve) => {
-        socket.emit(
+        emitWithAckTimeout(
+          socket,
+          ACK_REQUEST_TIMEOUT_MS,
+          () => resolve({ ok: false, error: "The server did not respond. Try again." }),
           "webinar:qa:submit",
           { question },
           (response: { success: boolean } | { error: string }) => {
@@ -10085,7 +9994,6 @@ export function useMeetSocket({
     (id: string): void => {
       const socket = socketRef.current;
       if (!socket) return;
-      // Optimistic flip; the ack corrects the count if it diverged.
       setWebinarQaEntries((previous) =>
         previous.map((entry) =>
           entry.id === id
@@ -10106,8 +10014,6 @@ export function useMeetSocket({
             | { error: string },
         ) => {
           if ("error" in response) {
-            // Roll the optimistic flip back so a rate-limited click cannot
-            // leave the count and vote state diverged from the server.
             setWebinarQaEntries((previous) =>
               previous.map((entry) =>
                 entry.id === id
@@ -10147,7 +10053,10 @@ export function useMeetSocket({
       if (!socket) return Promise.resolve({ ok: false, error: "Not connected" });
 
       return new Promise((resolve) => {
-        socket.emit(
+        emitWithAckTimeout(
+          socket,
+          ACK_REQUEST_TIMEOUT_MS,
+          () => resolve({ ok: false, error: "The server did not respond. Try again." }),
           "webinar:qa:moderate",
           request,
           (response: { success: boolean } | { error: string }) => {
@@ -10168,7 +10077,10 @@ export function useMeetSocket({
       const socket = socketRef.current;
       if (!socket) return;
       setIsWebinarHandRaised(raised);
-      socket.emit(
+      emitWithAckTimeout(
+        socket,
+        ACK_REQUEST_TIMEOUT_MS,
+        () => setIsWebinarHandRaised(!raised),
         "webinar:setHandRaised",
         { raised },
         (response: { success: boolean; raised: boolean } | { error: string }) => {
@@ -10193,7 +10105,10 @@ export function useMeetSocket({
       if (!socket) return Promise.resolve({ ok: false, error: "Not connected" });
 
       return new Promise((resolve) => {
-        socket.emit(
+        emitWithAckTimeout(
+          socket,
+          ACK_REQUEST_TIMEOUT_MS,
+          () => resolve({ ok: false, error: "The server did not respond. Try again." }),
           "webinar:promoteAttendee",
           { userId },
           (response: { success: boolean } | { error: string }) => {
@@ -10215,7 +10130,10 @@ export function useMeetSocket({
       if (!socket) return Promise.resolve({ ok: false, error: "Not connected" });
 
       return new Promise((resolve) => {
-        socket.emit(
+        emitWithAckTimeout(
+          socket,
+          ACK_REQUEST_TIMEOUT_MS,
+          () => resolve({ ok: false, error: "The server did not respond. Try again." }),
           "webinar:demoteParticipant",
           { userId },
           (response: { success: boolean } | { error: string }) => {

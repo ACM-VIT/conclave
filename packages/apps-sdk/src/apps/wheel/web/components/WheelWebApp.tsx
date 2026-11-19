@@ -36,9 +36,7 @@ const SPIN_MIN_DURATION_MS = 7200;
 const SPIN_DURATION_SPREAD_MS = 1600;
 const SPIN_MIN_TURNS = 7;
 const SPIN_TURNS_SPREAD = 3;
-/** Pause between the wheel stopping and the winner card, for the reveal beat. */
 const REVEAL_DELAY_MS = 800;
-/** Non-spinners record the outcome themselves if the spinner vanishes. */
 const RESULT_FAILOVER_MS = 2600;
 
 const useReducedMotion = (): boolean => {
@@ -128,7 +126,6 @@ export function WheelWebApp() {
     try {
       window.localStorage.setItem(SOUND_PREF_KEY, soundOn ? "1" : "0");
     } catch {
-      // Private mode etc. — preference just won't persist.
     }
   }, [soundOn]);
 
@@ -141,7 +138,6 @@ export function WheelWebApp() {
     };
   }, []);
 
-  // A new spin from anyone replaces whatever ceremony is on screen.
   const activeSpinId = spin?.spinId;
   useEffect(() => {
     setOverlaySpin(null);
@@ -184,12 +180,6 @@ export function WheelWebApp() {
 
       setAnnouncement(`Winner: ${winner.label}`);
 
-      // The spinner writes the outcome so the result lands exactly once and
-      // never before wheels stop elsewhere. If the spinner vanished mid-spin
-      // (closed tab, dropped connection), any remaining client that is still
-      // allowed to write records it after a grace window; recordResult dedupes
-      // by spinId either way. Locked viewers and observers must never mutate a
-      // local document with updates the SFU will reject.
       const isSpinner = Boolean(user?.id) && user?.id === settled.spunById;
       const finalizeResult = () => {
         recordResult(doc, {
@@ -213,9 +203,6 @@ export function WheelWebApp() {
         }, jitteredDelay);
       }
 
-      // Reveal beat: flash the winning slice, then bring in the card. The
-      // flash needs the live wheel to still match the snapshot's geometry;
-      // if the list changed mid-spin, skip straight to the card.
       const liveEntries = getEntries(doc);
       const flashable =
         liveEntries.length === settled.entries.length &&
@@ -227,9 +214,6 @@ export function WheelWebApp() {
         setHighlightIndex(null);
         soundsRef.current?.win();
         setOverlaySpin(settled);
-        // Recording (and auto-remove) happens after the flash so the slice
-        // is visible while it celebrates; both are idempotent if a failover
-        // client got there first.
         if (isSpinner && canEditRef.current) finalizeResult();
       }, flashable ? REVEAL_DELAY_MS : 120);
     },
@@ -312,7 +296,6 @@ export function WheelWebApp() {
           onSpinningChange={setIsSpinning}
         />
 
-        {/* Floating sound toggle keeps the stage otherwise chrome-free. */}
         <button
           type="button"
           onClick={() => setSoundOn((value) => !value)}

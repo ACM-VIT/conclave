@@ -829,6 +829,42 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           return;
         }
 
+        // The screen-share checks above ran before the produce await. Another
+        // participant can have started sharing meanwhile (both passed the
+        // check), or this user's screen video can have ended; re-check before
+        // claiming the room's single share slot or advertising screen audio.
+        const screenShareConflictError = (() => {
+          if (isScreenShareVideo) {
+            const currentShareId = room.screenShareProducerId;
+            const currentShareInfo = currentShareId
+              ? room.getProducerInfoById(currentShareId)
+              : null;
+            return currentShareInfo &&
+              currentShareInfo.producerUserId !== currentClient.id
+              ? "Screen is already being shared"
+              : null;
+          }
+          if (isScreenShareAudio) {
+            return currentClient.getProducer("video", "screen")
+              ? null
+              : "Screen share audio requires an active screen share";
+          }
+          return null;
+        })();
+        if (screenShareConflictError) {
+          if (capacityTransitionReservation) {
+            room.cancelWebcamReceiverCapacityTransition(
+              capacityTransitionReservation,
+            );
+            capacityTransitionReservation = null;
+          }
+          try {
+            producer.close();
+          } catch {}
+          respond(callback, { error: screenShareConflictError });
+          return;
+        }
+
         const roomChannelId = room.channelId;
         const clientId = currentClient.id;
         let producerClosed = false;
@@ -1868,7 +1904,17 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           return;
         }
 
-        if (context.currentRoom.screenShareProducerId === producerId) {
+        // Clears a stale share slot (its producer is already gone) or the
+        // caller's own. Anyone can learn another sharer's producer id, so a
+        // live share owned by someone else must keep the slot.
+        const shareInfo =
+          context.currentRoom.screenShareProducerId === producerId
+            ? context.currentRoom.getProducerInfoById(producerId)
+            : undefined;
+        if (
+          context.currentRoom.screenShareProducerId === producerId &&
+          (!shareInfo || shareInfo.producerUserId === context.currentClient.id)
+        ) {
           context.currentRoom.clearScreenShareProducer(producerId);
           emitWebinarFeedChanged(io, state, context.currentRoom);
         }

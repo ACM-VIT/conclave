@@ -130,8 +130,6 @@ describe("assistant provider integration", () => {
     const tool = createSession.mock.calls[0][0].tools.find(
       (entry: { name?: string }) => entry.name === "control_shared_browser",
     );
-    // Anthropic rejects an enum alongside type: ["string", "null"] with 400.
-    // Keep the enum on the string branch and null on its own branch.
     expect(tool.parameters.properties.direction).toEqual({
       anyOf: [{ type: "string", enum: ["up", "down"] }, { type: "null" }],
       description: "Scroll direction, or null.",

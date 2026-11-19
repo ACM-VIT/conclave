@@ -27,8 +27,6 @@ const Watermark = () => (
   />
 );
 
-// Clips ship as muted autoplay loops (browsers block autoplay with sound), and
-// can be unmuted with a tap — the speaker badge doubles as the affordance.
 function ClipAttachment({
   gif,
   baseClassName,
@@ -92,8 +90,6 @@ export default function ChatGifAttachmentView({
 }: ChatGifAttachmentViewProps) {
   const hasRatio = Boolean(gif.width && gif.height);
   const sizeClassName = `${hasRatio ? "h-full" : "h-auto"} w-full object-contain ${imageClassName}`;
-  // Stickers are transparent, so they float on the chat surface without the
-  // dark media card that gifs/clips sit on.
   const isSticker = gif.kind === "sticker";
   const baseClassName = `relative block ${widthClassName} max-w-full overflow-hidden rounded-[16px] ${
     isSticker ? "" : "bg-black/25"

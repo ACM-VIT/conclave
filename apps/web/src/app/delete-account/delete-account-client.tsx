@@ -1,7 +1,7 @@
 "use client";
 
 import { Loader2 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { signIn, useSession } from "@/lib/auth-client";
 
 type Provider = "google" | "apple";
@@ -62,15 +62,27 @@ export default function DeleteAccountClient() {
   const isSignedIn = Boolean(session?.user?.id);
   const signedInEmail = session?.user?.email || "";
 
+  useEffect(() => {
+    const handlePageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) setActiveProvider(null);
+    };
+    window.addEventListener("pageshow", handlePageShow);
+    return () => window.removeEventListener("pageshow", handlePageShow);
+  }, []);
+
   const handleSignIn = async (provider: Provider) => {
     setActiveProvider(provider);
     setError(null);
     setNotice(null);
     try {
-      await signIn.social({
+      const result = await signIn.social({
         provider,
         callbackURL: `${window.location.origin}/delete-account`,
       });
+      if (result?.error) {
+        setError(result.error.message || "Unable to start sign-in.");
+        setActiveProvider(null);
+      }
     } catch (signInError) {
       const message =
         signInError instanceof Error ? signInError.message : "Unable to start sign-in.";
