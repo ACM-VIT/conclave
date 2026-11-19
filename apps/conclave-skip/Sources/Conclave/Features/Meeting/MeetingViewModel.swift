@@ -8274,11 +8274,12 @@ final class MeetingViewModel {
                   let id = state.canonicalStageUserId(rawId), id != localId, !stageIds.contains(id) else { continue }
             stageIds.insert(id)
             let participant = state.participant(for: id) ?? raw
+            let showsCamera = !participant.isCameraOff && !state.isAudioOnlyMode
             rows.append(StageParticipantInput.make(
                 userId: id,
                 displayName: displayNameForUser(id),
                 isMuted: participant.isMuted,
-                isCameraOff: participant.isCameraOff,
+                isCameraOff: !showsCamera,
                 isHandRaised: participant.isHandRaised,
                 isScreenSharing: participant.isScreenSharing,
                 isReconnecting: participant.connectionStatus?.state == .reconnecting,
@@ -8286,7 +8287,7 @@ final class MeetingViewModel {
                 reconnectReason: participant.connectionStatus?.state == .reconnecting ? (participant.connectionStatus?.reason ?? "") : "",
                 isHost: state.hostUserIds.contains(id),
                 joinSerial: state.participantJoinSerials[id] ?? 0,
-                videoKey: participant.isCameraOff ? "" : (webRTCClient.remoteVideoTrack(forUserId: id)?.id ?? ""),
+                videoKey: showsCamera ? (webRTCClient.remoteVideoTrack(forUserId: id)?.id ?? "") : "",
                 shareVideoKey: webRTCClient.remoteVideoTrack(forUserId: id + "-screen")?.id ?? ""
             ))
         }

@@ -155,6 +155,7 @@ struct PrejoinAudioOnlyLobbyTests {
         #expect(call.calls.count("consume:screen") == 0)
         #expect(viewModel.state.participant(for: cameraUser)?.isCameraOff == false)
         #expect(viewModel.state.activeScreenShareUserId == screenUser)
+        #expect(viewModel.makeStageInputs().participant(cameraUser)?.isCameraOff == true)
 
         viewModel.socketManager.testProducers.append(late)
         viewModel.socketManager.onNewProducer?(late)
@@ -166,6 +167,7 @@ struct PrejoinAudioOnlyLobbyTests {
         #expect(await settle {
             call.calls.count("consume:camera") == 1 && call.calls.count("consume:screen") == 1 && call.calls.count("consume:late") == 1
         })
+        #expect(viewModel.makeStageInputs().participant(cameraUser)?.isCameraOff == false)
         await call.finish()
     }
 
