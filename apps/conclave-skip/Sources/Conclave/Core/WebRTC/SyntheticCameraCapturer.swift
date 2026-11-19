@@ -8,7 +8,23 @@ final class SyntheticCameraCapturer: RTCCameraVideoCapturer {
     private var frames: DispatchSourceTimer?
     private var frameIndex = 0
 
+    private static let iPhone11FrontFormats = [
+        CameraFormatCandidate(width: 192, height: 144),
+        CameraFormatCandidate(width: 352, height: 288),
+        CameraFormatCandidate(width: 480, height: 360),
+        CameraFormatCandidate(width: 640, height: 480),
+        CameraFormatCandidate(width: 960, height: 540),
+        CameraFormatCandidate(width: 1280, height: 720),
+        CameraFormatCandidate(width: 1920, height: 1080),
+        CameraFormatCandidate(width: 1920, height: 1440),
+    ]
+
     func start(width: Int, height: Int, fps: Double) {
+        let format = Self.iPhone11FrontFormats[
+            CameraFormatSelectionPolicy.selectIndex(Self.iPhone11FrontFormats, targetWidth: width, targetHeight: height) ?? 0
+        ]
+        let width = format.width
+        let height = format.height
         frames?.cancel()
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now(), repeating: .nanoseconds(Int(1_000_000_000 / fps)))

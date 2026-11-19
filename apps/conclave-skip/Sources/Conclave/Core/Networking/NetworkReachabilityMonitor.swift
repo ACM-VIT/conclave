@@ -73,10 +73,7 @@ final class NetworkReachabilityMonitor {
 
     #if canImport(Network) && !SKIP
     nonisolated private static func qualityHint(for path: NWPath) -> ConnectionQuality {
-        guard path.status == .satisfied else { return .unknown }
-        if path.isConstrained && path.isExpensive { return .emergency }
-        if path.isConstrained { return .poor }
-        return .good
+        path.status == .satisfied ? .good : .unknown
     }
     #endif
 
