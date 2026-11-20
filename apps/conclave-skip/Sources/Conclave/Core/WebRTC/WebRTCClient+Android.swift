@@ -11,6 +11,7 @@ final class VideoTrackWrapper: Identifiable {
 
     var rtcVideoTrack: Any?
     var isEnabled: Bool = false
+    var isReceivingFrames: Bool = true
 
     init(
         id: String,
@@ -104,6 +105,8 @@ final class WebRTCClient {
     func closeConsumers(userIdPrefix: String) { fatalError() }
     func applyConsumerTelemetry(_ notification: ConsumerTelemetryNotification) { fatalError() }
     func hasAudioConsumer(userIdPrefix: String) -> Bool { fatalError() }
+    func setParticipantAudioGain(userId: String, gain: Double) { fatalError() }
+    func resetParticipantAudioGains() { fatalError() }
     func setAudioConsumersEnabled(userIdPrefix: String, enabled: Bool) { fatalError() }
     func setAudioEnabled(_ enabled: Bool) async throws { fatalError() }
     func suspendLocalAudioForRecovery() { fatalError() }
@@ -122,6 +125,7 @@ final class WebRTCClient {
 
     func getCaptureSession() -> Any? { nil }
     func getLocalVideoTrack() -> Any? { nil }
+    func localVideoStageKey() -> String { fatalError() }
     func remoteVideoTrack(forUserId userId: String) -> VideoTrackWrapper? { fatalError() }
 
     func sampleAudioLevels(localUserId: String? = nil) -> [String: Double] { fatalError() }

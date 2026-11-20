@@ -19,6 +19,35 @@ enum NativeRuntimeConfig {
         #endif
     }
 
+    static let silentAudioKey = "CONCLAVE_SILENT_AUDIO"
+
+    static var silentAudio: Bool {
+        #if DEBUG && !SKIP
+        return isDebugViewerProfileEnabled(configuredValue: debugLaunchValue(forKey: silentAudioKey), debugEligible: true)
+        #else
+        return false
+        #endif
+    }
+
+    #if DEBUG && os(iOS) && targetEnvironment(simulator) && !SKIP
+    private static let fakeCameraKey = "CONCLAVE_FAKE_CAMERA"
+    static let usesFakeCamera = isDebugViewerProfileEnabled(
+        configuredValue: debugLaunchValue(forKey: fakeCameraKey), debugEligible: true
+    )
+    private static let fakeCameraClipKey = "CONCLAVE_FAKE_CAMERA_CLIP"
+    static let fakeCameraClipPath = debugLaunchValue(forKey: fakeCameraClipKey)
+    private static let ignoreSystemDataSaverKey = "CONCLAVE_IGNORE_SYSTEM_DATA_SAVER"
+    static let ignoresSystemDataSaver = isDebugViewerProfileEnabled(
+        configuredValue: debugLaunchValue(forKey: ignoreSystemDataSaverKey), debugEligible: true
+    )
+    #endif
+
+    #if !SKIP
+    static func playbackVolume(_ volume: Float) -> Float {
+        silentAudio ? 0 : volume
+    }
+    #endif
+
     static func isDebugViewerProfileEnabled(configuredValue: String?, debugEligible: Bool) -> Bool {
         guard debugEligible, let value = configuredValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() else {
             return false
@@ -34,12 +63,19 @@ enum NativeRuntimeConfig {
     }
 
     #if DEBUG && !SKIP
-    private static let debugArgumentKeys = [
-        "CONCLAVE_NATIVE_ROUTES", "CONCLAVE_PREMEETING_FIXTURE", "SFU_JOIN_URL", "CONCLAVE_AUTH_BASE_URL",
-        "CONCLAVE_HOSTING_PREVIEW", "CONCLAVE_SYSTEM_FIXTURE", "CONCLAVE_SYSTEM_FIXTURE_PROVIDER",
-        "CONCLAVE_STAGE_FIXTURE", "CONCLAVE_STAGE_FIXTURE_PATTERN", "CONCLAVE_STAGE_FORCE_SCREEN_READER",
-        "CONCLAVE_PEOPLE_FIXTURE", "CONCLAVE_CHAT_FIXTURE", "CONCLAVE_TRANSCRIPT_FIXTURE"
-    ]
+    private static let debugArgumentKeys: [String] = {
+        let keys = [
+            "CONCLAVE_NATIVE_ROUTES", "CONCLAVE_PREMEETING_FIXTURE", "SFU_JOIN_URL", "CONCLAVE_AUTH_BASE_URL",
+            "CONCLAVE_HOSTING_PREVIEW", "CONCLAVE_SYSTEM_FIXTURE", "CONCLAVE_SYSTEM_FIXTURE_PROVIDER",
+            "CONCLAVE_STAGE_FIXTURE", "CONCLAVE_STAGE_FIXTURE_PATTERN", "CONCLAVE_STAGE_FORCE_SCREEN_READER",
+            "CONCLAVE_PEOPLE_FIXTURE", "CONCLAVE_CHAT_FIXTURE", "CONCLAVE_TRANSCRIPT_FIXTURE", "CONCLAVE_SILENT_AUDIO"
+        ]
+        #if DEBUG && os(iOS) && targetEnvironment(simulator) && !SKIP
+        return keys + [fakeCameraKey, fakeCameraClipKey, ignoreSystemDataSaverKey]
+        #else
+        return keys
+        #endif
+    }()
 
     static func debugLaunchValue(
         forKey key: String,

@@ -16,6 +16,10 @@ struct PremeetingRouteTarget: Equatable {
     var route: PremeetingRoute { PremeetingRoute(id: routeId, kind: kind, roomId: roomId) }
 }
 
+private enum LobbyVideoIntent {
+    case inherit, cameraOff, audioOnly
+}
+
 @MainActor
 @Observable
 final class PremeetingPresenter {
@@ -97,6 +101,7 @@ final class PremeetingPresenter {
     @ObservationIgnored private var device = LobbyDeviceInputs.initial
     @ObservationIgnored private var lobbyRouteId = 0
     @ObservationIgnored private var visibleLobbyRouteId = 0
+    @ObservationIgnored private var videoIntent = LobbyVideoIntent.inherit
     @ObservationIgnored private var guestNameDraft = ""
     @ObservationIgnored private var inviteCodeDraft = ""
     @ObservationIgnored private var formIssue = LobbyFormIssue.none
@@ -607,10 +612,20 @@ final class PremeetingPresenter {
 
     func setCameraIntent(_ on: Bool) {
         guard lobbyStatus != nil else { return }
+        if on && videoIntent == .audioOnly { return }
         if on && !mayTurnOn(LobbyMediaKind.camera) {
             return
         }
+        if on { videoIntent = .inherit }
         lobbyHooks?.setEntryMediaIntent?(inputs.micIntentOn, on)
+        refreshLobby()
+    }
+
+    func setAudioOnlyIntent(_ on: Bool) {
+        guard let status = lobbyStatus, status.intent != .promotion else { return }
+        guard (videoIntent == .audioOnly) != on else { return }
+        videoIntent = on ? .audioOnly : .cameraOff
+        refreshLobby()
     }
 
     func flipCamera() {
@@ -651,6 +666,8 @@ final class PremeetingPresenter {
 
             guard !inputs.isNetworkOffline else { return }
             joinRequests += 1
+            lobbyHooks?.setEntryAudioOnly?(videoIntent == .audioOnly)
+            lobbyHooks?.setRejoinMedia?(inputs.micIntentOn, inputs.cameraIntentOn && videoIntent == .inherit)
             sendRejoin()
             refreshLobby()
             return
@@ -1361,6 +1378,7 @@ final class PremeetingPresenter {
     private func beginLobby(_ target: PremeetingRouteTarget) {
         cancelLobbyTasks()
         lobbyRouteId = target.routeId
+        videoIntent = .inherit
         guestNameDraft = inputs.isSignedIn ? "" : DisplayNamePolicy.capped(inputs.accountName)
         inviteCodeDraft = ""
         formIssue = LobbyFormIssue.none
@@ -1453,10 +1471,11 @@ final class PremeetingPresenter {
         publishLobbyMedia(LobbySnapshotPolicy.media(
             routeId: lobbyRouteId,
             micIntentOn: inputs.micIntentOn,
-            cameraIntentOn: inputs.cameraIntentOn,
+            cameraIntentOn: inputs.cameraIntentOn && videoIntent == .inherit,
             device: device,
             avatarName: name,
-            avatarSeed: inputs.isSignedIn ? inputs.accountSeed : ""
+            avatarSeed: inputs.isSignedIn ? inputs.accountSeed : "",
+            audioOnlyOn: videoIntent == .audioOnly
         ))
     }
 
@@ -1534,7 +1553,8 @@ final class PremeetingPresenter {
         if let target = topLobbyTarget(), visibleLobbyRouteId == target.routeId {
 
             let callOwnsCamera = (root.root == .call && target.intent != .promotion) || previewHandedOff
-            wanted = LocalPreviewPolicy.isWanted(cameraIntentOn: inputs.cameraIntentOn, permission: device.cameraPermission,
+            wanted = LocalPreviewPolicy.isWanted(cameraIntentOn: inputs.cameraIntentOn && videoIntent == .inherit,
+                                                 permission: device.cameraPermission,
                                                  isLobbyVisible: true,
                                                  isCallOwningCamera: callOwnsCamera)
         }
@@ -1617,7 +1637,8 @@ final class PremeetingPresenter {
             enteredInviteCode: inviteCodeDraft,
             needsInviteCode: formIssue.needsInviteCode,
             resolvedClientId: lobbyHooks?.resolvedClientId?() ?? MeetingLinkBuilder.defaultClientId,
-            facing: device.isFrontCamera ? LocalCameraFacing.front : LocalCameraFacing.back
+            facing: device.isFrontCamera ? LocalCameraFacing.front : LocalCameraFacing.back,
+            audioOnly: videoIntent == .audioOnly
         )
         guard let request else {
             refreshLobby()
@@ -1625,6 +1646,9 @@ final class PremeetingPresenter {
         }
         formIssue = LobbyFormIssue(issue: .none, needsInviteCode: formIssue.needsInviteCode, inviteCodeInvalid: false)
         joinRequests += 1
+        if videoIntent == .cameraOff && inputs.cameraIntentOn {
+            lobbyHooks?.setEntryMediaIntent?(inputs.micIntentOn, false)
+        }
         lobbyHooks?.join?(request)
         refreshLobby()
     }

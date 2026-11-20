@@ -120,6 +120,7 @@ export const participantsSupportWebcamCodec = (
 
 export const selectRoomWebcamCodec = (
   participants: readonly WebcamCodecPolicyParticipant[],
+  { vp9Enabled = false }: { vp9Enabled?: boolean } = {},
 ): WebcamCodecPolicy["codec"] => {
   if (participants.length === 0) return "vp8";
 
@@ -127,7 +128,10 @@ export const selectRoomWebcamCodec = (
   // without profile 0, or a potential publisher without continuous L2T1
   // inter-layer prediction support keeps
   // the entire room on the interoperable baseline.
-  if (participantsSupportWebcamCodec(participants, "vp9")) {
+  // VP9 L2T1 offers only a half-resolution floor layer, so a viewer whose
+  // bandwidth falls below it receives no video at all. VP8 simulcast keeps a
+  // small base layer, so it stays the default unless VP9 is explicitly enabled.
+  if (vp9Enabled && participantsSupportWebcamCodec(participants, "vp9")) {
     return "vp9";
   }
 

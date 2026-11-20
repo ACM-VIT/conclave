@@ -137,15 +137,18 @@ struct GameScene: Equatable {
     let wordle: WordleScene?
     let chess: ChessScene?
     let zip: ZipScene?
+    let longShot: LongShotScene?
 
     static let empty = GameScene(revision: 0, kind: GameSceneKind.lobby, players: [], pendingJoiners: [], options: [],
                                  lobby: GameLobbyModel.empty, projection: GameProjection.empty, trivia: nil, bluff: nil,
-                                 wouldYouRather: nil, mostLikelyTo: nil, reaction: nil, imposter: nil, wordle: nil, chess: nil, zip: nil)
+                                 wouldYouRather: nil, mostLikelyTo: nil, reaction: nil, imposter: nil, wordle: nil, chess: nil, zip: nil,
+                                 longShot: nil)
 
     func withRevision(_ next: Int) -> GameScene {
         GameScene(revision: next, kind: kind, players: players, pendingJoiners: pendingJoiners, options: options, lobby: lobby,
                   projection: projection, trivia: trivia, bluff: bluff, wouldYouRather: wouldYouRather, mostLikelyTo: mostLikelyTo,
-                  reaction: reaction, imposter: imposter, wordle: wordle, chess: chess, zip: zip)
+                  reaction: reaction, imposter: imposter, wordle: wordle, chess: chess, zip: zip,
+                  longShot: longShot)
     }
 }
 
@@ -214,6 +217,7 @@ enum GameMoveAdapter {
     static func payloadJSON(_ intent: GameMoveIntent) -> String {
         switch intent.type {
         case "answer":
+            if intent.choice < 0 && !intent.text.isEmpty { return "{\"text\":" + quoted(intent.text) + "}" }
             return "{\"choice\":" + String(intent.choice) + "}"
         case "submit":
             return "{\"text\":" + quoted(intent.text) + "}"

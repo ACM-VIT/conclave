@@ -21,6 +21,7 @@ internal data class LobbyCardUi(
     val cameraPriming: PermissionPrimingKind,
     val micReason: PermissionPrimingKind,
     val cameraReason: PermissionPrimingKind,
+    val audioOnlyOn: Boolean = false,
 ) {
     val showsSurface: Boolean
         get() = preview == PreviewState.live || preview == PreviewState.interrupted || preview == PreviewState.published
@@ -87,6 +88,7 @@ internal class LobbyUiCache {
                 canAskAgain = media.canAskAgainMicrophone, supportsRationale = rationale),
             cameraReason = PermissionPrimingPolicy.toggleReason(permission = media.cameraPermission,
                 canAskAgain = media.canAskAgainCamera, supportsRationale = rationale),
+            audioOnlyOn = media.audioOnlyOn,
         )
         builds += 1
         lastMedia = media

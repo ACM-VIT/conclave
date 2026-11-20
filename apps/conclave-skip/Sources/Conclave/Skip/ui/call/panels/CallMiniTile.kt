@@ -11,6 +11,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -29,6 +30,7 @@ internal data class CallMiniTileModel(
     val cameraOff: Boolean,
     val isLocal: Boolean,
     val speaking: Boolean,
+    val avatarSeed: String = "",
 )
 
 internal fun callMiniTileBorderWidthDp(speaking: Boolean): Int = if (speaking) 2 else 1
@@ -59,7 +61,16 @@ internal fun CallMiniTile(
             },
         contentAlignment = Alignment.BottomStart,
     ) {
-        video?.invoke()
+        if (model.cameraOff || video == null) {
+            Box(Modifier.matchParentSize(), contentAlignment = Alignment.Center) {
+                val identity = remember(model.avatarSeed, model.displayName) {
+                    ConclaveAvatarIdentity.fromSeed(model.avatarSeed.ifEmpty { model.displayName })
+                }
+                ConclaveAvatar(identity, 44.dp)
+            }
+        } else {
+            video()
+        }
         Text(
             model.displayName,
             color = Color(DesignTokens.paper),

@@ -110,29 +110,30 @@ struct RemoteVideoView: View {
 
     var body: some View {
         GeometryReader { geometry in
-            if let track = trackWrapper.rtcVideoTrack {
-                RTCVideoViewRepresentable(track: track, isMirrored: false, contentMode: contentMode)
-                    .frame(width: geometry.size.width, height: geometry.size.height)
-            } else {
-                let displayName = MeetingState.mediaFallbackDisplayName(
-                    fallbackDisplayName,
-                    userId: trackWrapper.userId
-                )
-                let avatarSize = min(max(min(geometry.size.width, geometry.size.height) * 0.22, 44.0), 88.0)
-                ZStack {
-                    ACMColors.bgAlt
-
-                    FacehashAvatarView(name: displayName, id: trackWrapper.userId, size: avatarSize)
-
-                    if trackWrapper.isEnabled {
-                        ProgressView()
-                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                            .scaleEffect(0.8)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-                            .padding(12)
-                    }
+            ZStack {
+                if let track = trackWrapper.rtcVideoTrack {
+                    RTCVideoViewRepresentable(track: track, isMirrored: false, contentMode: contentMode)
+                        .frame(width: geometry.size.width, height: geometry.size.height)
                 }
-                .frame(width: geometry.size.width, height: geometry.size.height)
+                if trackWrapper.rtcVideoTrack == nil || !trackWrapper.isReceivingFrames {
+                    let displayName = MeetingState.mediaFallbackDisplayName(
+                        fallbackDisplayName,
+                        userId: trackWrapper.userId
+                    )
+                    let avatarSize = min(max(min(geometry.size.width, geometry.size.height) * 0.22, 44.0), 88.0)
+                    ZStack {
+                        ACMColors.bgAlt
+                        FacehashAvatarView(name: displayName, id: trackWrapper.userId, size: avatarSize)
+                        if trackWrapper.isEnabled && trackWrapper.isReceivingFrames {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                .scaleEffect(0.8)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                                .padding(12)
+                        }
+                    }
+                    .frame(width: geometry.size.width, height: geometry.size.height)
+                }
             }
         }
     }

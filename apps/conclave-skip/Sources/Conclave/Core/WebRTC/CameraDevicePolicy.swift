@@ -101,17 +101,29 @@ enum CameraFormatSelectionPolicy {
                 all += 1
             }
         }
-        var selected = pool[0]
-        var minimumDiff = Int.max
+        var covering: Int? = nil
+        var largest = pool[0]
         for candidate in pool {
             let format = formats[candidate]
-            let diff = abs(format.width - targetWidth) + abs(format.height - targetHeight)
-            if diff < minimumDiff {
-                minimumDiff = diff
-                selected = candidate
+            if format.width * format.height > formats[largest].width * formats[largest].height {
+                largest = candidate
             }
+            guard format.width >= targetWidth && format.height >= targetHeight else { continue }
+            if let current = covering, format.width * format.height >= formats[current].width * formats[current].height {
+                continue
+            }
+            covering = candidate
         }
-        return selected
+        return covering ?? largest
+    }
+}
+
+enum CameraOutputSizePolicy {
+
+    static func outputWidth(cameraWidth: Int, cameraHeight: Int, requestedWidth: Int, requestedHeight: Int) -> Int {
+        guard cameraWidth > 0, cameraHeight > 0, requestedWidth > 0, requestedHeight > 0 else { return requestedWidth }
+        let croppedWidth = min(cameraWidth, cameraHeight * requestedWidth / requestedHeight)
+        return min(requestedWidth, croppedWidth)
     }
 }
 

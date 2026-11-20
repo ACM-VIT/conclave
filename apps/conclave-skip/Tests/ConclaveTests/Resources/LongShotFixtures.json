@@ -1,0 +1,3329 @@
+{
+  "generatedBy": "packages/sfu/scripts/capture-long-shot-fixtures.ts",
+  "players": {
+    "host": {
+      "id": "host",
+      "name": "Avery"
+    },
+    "sam": {
+      "id": "p2",
+      "name": "Sam"
+    },
+    "robin": {
+      "id": "p3",
+      "name": "Robin"
+    },
+    "watcher": {
+      "id": "watch",
+      "name": "Jules"
+    },
+    "late": {
+      "id": "late",
+      "name": "Kai"
+    }
+  },
+  "catalog": {
+    "id": "long-shot",
+    "name": "Long Shot",
+    "description": "Rare answers score big",
+    "minPlayers": 1,
+    "maxPlayers": 24,
+    "options": [
+      {
+        "id": "topic",
+        "type": "text",
+        "label": "Topic",
+        "default": "",
+        "placeholder": "Movies, space, team lore",
+        "maxLength": 120
+      },
+      {
+        "id": "mode",
+        "type": "select",
+        "label": "Mode",
+        "default": "classic",
+        "choices": [
+          {
+            "value": "classic",
+            "label": "Dive together"
+          },
+          {
+            "value": "fuse",
+            "label": "Last one under"
+          }
+        ]
+      },
+      {
+        "id": "prompts",
+        "type": "number",
+        "label": "Prompts",
+        "min": 3,
+        "max": 12,
+        "default": 7,
+        "presets": [
+          5,
+          7,
+          10
+        ],
+        "showWhen": {
+          "id": "mode",
+          "equals": [
+            "classic"
+          ]
+        }
+      },
+      {
+        "id": "lives",
+        "type": "number",
+        "label": "Hearts",
+        "min": 1,
+        "max": 3,
+        "default": 2,
+        "presets": [
+          1,
+          2,
+          3
+        ],
+        "showWhen": {
+          "id": "mode",
+          "equals": [
+            "fuse"
+          ]
+        }
+      },
+      {
+        "id": "pace",
+        "type": "select",
+        "label": "Pace",
+        "default": "normal",
+        "choices": [
+          {
+            "value": "relaxed",
+            "label": "Relaxed"
+          },
+          {
+            "value": "normal",
+            "label": "Normal"
+          },
+          {
+            "value": "fast",
+            "label": "Fast"
+          }
+        ]
+      }
+    ],
+    "hasLeaderboard": true
+  },
+  "snapshots": {
+    "classic-lobby": {
+      "public": {
+        "gameId": "long-shot",
+        "name": "Long Shot",
+        "phase": "lobby",
+        "players": [
+          {
+            "id": "host",
+            "name": "Avery"
+          },
+          {
+            "id": "p2",
+            "name": "Sam"
+          },
+          {
+            "id": "p3",
+            "name": "Robin"
+          }
+        ],
+        "hostId": "host",
+        "view": {
+          "mode": "classic",
+          "phase": "lobby",
+          "serverNow": 1795003200000,
+          "deadline": null,
+          "paused": false,
+          "durationMs": 25000,
+          "promptIndex": 0,
+          "totalPrompts": 3,
+          "category": null,
+          "prompt": null,
+          "tierCounts": null,
+          "tierPoints": {
+            "obvious": 100,
+            "cliche": 150,
+            "solid": 300,
+            "rare": 600,
+            "longShot": 850,
+            "pearl": 1000
+          },
+          "answeredCount": 0,
+          "totalPlayers": 3,
+          "results": [],
+          "missedGems": [],
+          "pearl": null,
+          "obviousPicks": [],
+          "turnPlayerId": null,
+          "maxHearts": 5,
+          "heartMeter": 6000,
+          "seats": [],
+          "lastHeart": null,
+          "chain": [],
+          "usedCount": 0,
+          "lastMiss": null,
+          "popped": null,
+          "winnerId": null,
+          "survivorBonus": 2000,
+          "best": [],
+          "scoreboard": [
+            {
+              "id": "host",
+              "name": "Avery",
+              "score": 0
+            },
+            {
+              "id": "p2",
+              "name": "Sam",
+              "score": 0
+            },
+            {
+              "id": "p3",
+              "name": "Robin",
+              "score": 0
+            }
+          ],
+          "tiles": {}
+        },
+        "finished": false,
+        "hasLeaderboard": true,
+        "config": {
+          "mode": "classic",
+          "prompts": 3,
+          "lives": 2,
+          "pace": "normal"
+        },
+        "pendingJoiners": [],
+        "canJoinLate": true
+      },
+      "views": {
+        "host": {
+          "score": 0,
+          "rank": 1,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 0
+        },
+        "p2": {
+          "score": 0,
+          "rank": 2,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 0
+        },
+        "p3": {
+          "score": 0,
+          "rank": 3,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 0
+        },
+        "watch": {
+          "score": 0,
+          "rank": null,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 0
+        }
+      }
+    },
+    "classic-ready": {
+      "public": {
+        "gameId": "long-shot",
+        "name": "Long Shot",
+        "phase": "ready",
+        "players": [
+          {
+            "id": "host",
+            "name": "Avery"
+          },
+          {
+            "id": "p2",
+            "name": "Sam"
+          },
+          {
+            "id": "p3",
+            "name": "Robin"
+          }
+        ],
+        "hostId": "host",
+        "view": {
+          "mode": "classic",
+          "phase": "ready",
+          "serverNow": 1795003200000,
+          "deadline": 1795003203000,
+          "paused": false,
+          "durationMs": 3000,
+          "promptIndex": 0,
+          "totalPrompts": 3,
+          "category": "Tech",
+          "prompt": "Name a programming language",
+          "tierCounts": {
+            "obvious": 5,
+            "cliche": 3,
+            "solid": 10,
+            "rare": 15,
+            "longShot": 27,
+            "pearl": 1
+          },
+          "tierPoints": {
+            "obvious": 100,
+            "cliche": 150,
+            "solid": 300,
+            "rare": 600,
+            "longShot": 850,
+            "pearl": 1000
+          },
+          "answeredCount": 0,
+          "totalPlayers": 3,
+          "results": [],
+          "missedGems": [],
+          "pearl": null,
+          "obviousPicks": [],
+          "turnPlayerId": null,
+          "maxHearts": 5,
+          "heartMeter": 6000,
+          "seats": [],
+          "lastHeart": null,
+          "chain": [],
+          "usedCount": 0,
+          "lastMiss": null,
+          "popped": null,
+          "winnerId": null,
+          "survivorBonus": 2000,
+          "best": [],
+          "scoreboard": [
+            {
+              "id": "host",
+              "name": "Avery",
+              "score": 0
+            },
+            {
+              "id": "p2",
+              "name": "Sam",
+              "score": 0
+            },
+            {
+              "id": "p3",
+              "name": "Robin",
+              "score": 0
+            }
+          ],
+          "tiles": {}
+        },
+        "finished": false,
+        "hasLeaderboard": true,
+        "config": {
+          "mode": "classic",
+          "prompts": 3,
+          "lives": 2,
+          "pace": "normal"
+        },
+        "pendingJoiners": [],
+        "canJoinLate": true
+      },
+      "views": {
+        "host": {
+          "score": 0,
+          "rank": 1,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 0
+        },
+        "p2": {
+          "score": 0,
+          "rank": 2,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 0
+        },
+        "p3": {
+          "score": 0,
+          "rank": 3,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 0
+        },
+        "watch": {
+          "score": 0,
+          "rank": null,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 0
+        }
+      }
+    },
+    "classic-prompt-open": {
+      "public": {
+        "gameId": "long-shot",
+        "name": "Long Shot",
+        "phase": "prompt",
+        "players": [
+          {
+            "id": "host",
+            "name": "Avery"
+          },
+          {
+            "id": "p2",
+            "name": "Sam"
+          },
+          {
+            "id": "p3",
+            "name": "Robin"
+          }
+        ],
+        "hostId": "host",
+        "view": {
+          "mode": "classic",
+          "phase": "prompt",
+          "serverNow": 1795003203000,
+          "deadline": 1795003228000,
+          "paused": false,
+          "durationMs": 25000,
+          "promptIndex": 0,
+          "totalPrompts": 3,
+          "category": "Tech",
+          "prompt": "Name a programming language",
+          "tierCounts": {
+            "obvious": 5,
+            "cliche": 3,
+            "solid": 10,
+            "rare": 15,
+            "longShot": 27,
+            "pearl": 1
+          },
+          "tierPoints": {
+            "obvious": 100,
+            "cliche": 150,
+            "solid": 300,
+            "rare": 600,
+            "longShot": 850,
+            "pearl": 1000
+          },
+          "answeredCount": 0,
+          "totalPlayers": 3,
+          "results": [],
+          "missedGems": [],
+          "pearl": null,
+          "obviousPicks": [],
+          "turnPlayerId": null,
+          "maxHearts": 5,
+          "heartMeter": 6000,
+          "seats": [],
+          "lastHeart": null,
+          "chain": [],
+          "usedCount": 0,
+          "lastMiss": null,
+          "popped": null,
+          "winnerId": null,
+          "survivorBonus": 2000,
+          "best": [],
+          "scoreboard": [
+            {
+              "id": "host",
+              "name": "Avery",
+              "score": 0
+            },
+            {
+              "id": "p2",
+              "name": "Sam",
+              "score": 0
+            },
+            {
+              "id": "p3",
+              "name": "Robin",
+              "score": 0
+            }
+          ],
+          "tiles": {}
+        },
+        "finished": false,
+        "hasLeaderboard": true,
+        "config": {
+          "mode": "classic",
+          "prompts": 3,
+          "lives": 2,
+          "pace": "normal"
+        },
+        "pendingJoiners": [],
+        "canJoinLate": true
+      },
+      "views": {
+        "host": {
+          "score": 0,
+          "rank": 1,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 0
+        },
+        "p2": {
+          "score": 0,
+          "rank": 2,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 0
+        },
+        "p3": {
+          "score": 0,
+          "rank": 3,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 0
+        },
+        "watch": {
+          "score": 0,
+          "rank": null,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 0
+        }
+      }
+    },
+    "classic-prompt-miss": {
+      "public": {
+        "gameId": "long-shot",
+        "name": "Long Shot",
+        "phase": "prompt",
+        "players": [
+          {
+            "id": "host",
+            "name": "Avery"
+          },
+          {
+            "id": "p2",
+            "name": "Sam"
+          },
+          {
+            "id": "p3",
+            "name": "Robin"
+          }
+        ],
+        "hostId": "host",
+        "view": {
+          "mode": "classic",
+          "phase": "prompt",
+          "serverNow": 1795003205300,
+          "deadline": 1795003228000,
+          "paused": false,
+          "durationMs": 25000,
+          "promptIndex": 0,
+          "totalPrompts": 3,
+          "category": "Tech",
+          "prompt": "Name a programming language",
+          "tierCounts": {
+            "obvious": 5,
+            "cliche": 3,
+            "solid": 10,
+            "rare": 15,
+            "longShot": 27,
+            "pearl": 1
+          },
+          "tierPoints": {
+            "obvious": 100,
+            "cliche": 150,
+            "solid": 300,
+            "rare": 600,
+            "longShot": 850,
+            "pearl": 1000
+          },
+          "answeredCount": 1,
+          "totalPlayers": 3,
+          "results": [],
+          "missedGems": [],
+          "pearl": null,
+          "obviousPicks": [],
+          "turnPlayerId": null,
+          "maxHearts": 5,
+          "heartMeter": 6000,
+          "seats": [],
+          "lastHeart": null,
+          "chain": [],
+          "usedCount": 0,
+          "lastMiss": null,
+          "popped": null,
+          "winnerId": null,
+          "survivorBonus": 2000,
+          "best": [],
+          "scoreboard": [
+            {
+              "id": "host",
+              "name": "Avery",
+              "score": 0
+            },
+            {
+              "id": "p2",
+              "name": "Sam",
+              "score": 0
+            },
+            {
+              "id": "p3",
+              "name": "Robin",
+              "score": 0
+            }
+          ],
+          "tiles": {
+            "host": {
+              "acted": true
+            }
+          }
+        },
+        "finished": false,
+        "hasLeaderboard": true,
+        "config": {
+          "mode": "classic",
+          "prompts": 3,
+          "lives": 2,
+          "pace": "normal"
+        },
+        "pendingJoiners": [
+          {
+            "id": "late",
+            "name": "Kai"
+          }
+        ],
+        "canJoinLate": true
+      },
+      "views": {
+        "host": {
+          "score": 0,
+          "rank": 1,
+          "answer": {
+            "text": "Python",
+            "tier": "obvious",
+            "points": 100
+          },
+          "misses": 0,
+          "locked": true,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 0
+        },
+        "p2": {
+          "score": 0,
+          "rank": 2,
+          "answer": null,
+          "misses": 1,
+          "locked": false,
+          "lastMiss": {
+            "text": "Zzyzx",
+            "reason": "unknown",
+            "at": 1795003204400
+          },
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 0
+        },
+        "p3": {
+          "score": 0,
+          "rank": 3,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 0
+        },
+        "watch": {
+          "score": 0,
+          "rank": null,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 0
+        },
+        "late": {
+          "score": 0,
+          "rank": null,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 0
+        }
+      }
+    },
+    "classic-reveal": {
+      "public": {
+        "gameId": "long-shot",
+        "name": "Long Shot",
+        "phase": "reveal",
+        "players": [
+          {
+            "id": "host",
+            "name": "Avery"
+          },
+          {
+            "id": "p2",
+            "name": "Sam"
+          },
+          {
+            "id": "p3",
+            "name": "Robin"
+          }
+        ],
+        "hostId": "host",
+        "view": {
+          "mode": "classic",
+          "phase": "reveal",
+          "serverNow": 1795003207100,
+          "deadline": 1795003216100,
+          "paused": false,
+          "durationMs": 25000,
+          "promptIndex": 0,
+          "totalPrompts": 3,
+          "category": "Tech",
+          "prompt": "Name a programming language",
+          "tierCounts": {
+            "obvious": 5,
+            "cliche": 3,
+            "solid": 10,
+            "rare": 16,
+            "longShot": 27,
+            "pearl": 1
+          },
+          "tierPoints": {
+            "obvious": 100,
+            "cliche": 150,
+            "solid": 300,
+            "rare": 600,
+            "longShot": 850,
+            "pearl": 1000
+          },
+          "answeredCount": 3,
+          "totalPlayers": 3,
+          "results": [
+            {
+              "playerId": "p2",
+              "answer": "APL",
+              "tier": "pearl",
+              "points": 1000,
+              "id": "p2",
+              "name": "Sam"
+            },
+            {
+              "playerId": "p3",
+              "answer": "Modula-2",
+              "tier": "rare",
+              "points": 600,
+              "judged": true,
+              "id": "p3",
+              "name": "Robin"
+            },
+            {
+              "playerId": "host",
+              "answer": "Python",
+              "tier": "obvious",
+              "points": 100,
+              "id": "host",
+              "name": "Avery"
+            }
+          ],
+          "missedGems": [
+            "Simula",
+            "BASIC",
+            "Idris",
+            "Raku",
+            "Erlang"
+          ],
+          "pearl": {
+            "answer": "APL",
+            "foundBy": [
+              "Sam"
+            ]
+          },
+          "obviousPicks": [
+            "Python",
+            "JavaScript",
+            "Java",
+            "C++"
+          ],
+          "turnPlayerId": null,
+          "maxHearts": 5,
+          "heartMeter": 6000,
+          "seats": [],
+          "lastHeart": null,
+          "chain": [],
+          "usedCount": 0,
+          "lastMiss": null,
+          "popped": null,
+          "winnerId": null,
+          "survivorBonus": 2000,
+          "best": [],
+          "scoreboard": [
+            {
+              "id": "p2",
+              "name": "Sam",
+              "score": 1000
+            },
+            {
+              "id": "p3",
+              "name": "Robin",
+              "score": 600
+            },
+            {
+              "id": "host",
+              "name": "Avery",
+              "score": 100
+            }
+          ],
+          "tiles": {
+            "p2": {
+              "outcome": "correct",
+              "note": "1000m"
+            },
+            "p3": {
+              "outcome": "correct",
+              "note": "600m"
+            },
+            "host": {
+              "outcome": "correct",
+              "note": "100m"
+            }
+          }
+        },
+        "finished": false,
+        "hasLeaderboard": true,
+        "config": {
+          "mode": "classic",
+          "prompts": 3,
+          "lives": 2,
+          "pace": "normal"
+        },
+        "pendingJoiners": [
+          {
+            "id": "late",
+            "name": "Kai"
+          }
+        ],
+        "canJoinLate": true
+      },
+      "views": {
+        "host": {
+          "score": 100,
+          "rank": 3,
+          "answer": {
+            "text": "Python",
+            "tier": "obvious",
+            "points": 100
+          },
+          "misses": 0,
+          "locked": true,
+          "lastMiss": null,
+          "roundPoints": 100,
+          "yourTurn": false,
+          "lives": 0
+        },
+        "p2": {
+          "score": 1000,
+          "rank": 1,
+          "answer": {
+            "text": "APL",
+            "tier": "pearl",
+            "points": 1000
+          },
+          "misses": 1,
+          "locked": true,
+          "lastMiss": null,
+          "roundPoints": 1000,
+          "yourTurn": false,
+          "lives": 0
+        },
+        "p3": {
+          "score": 600,
+          "rank": 2,
+          "answer": {
+            "text": "Modula-2",
+            "tier": "rare",
+            "points": 600
+          },
+          "misses": 0,
+          "locked": true,
+          "lastMiss": null,
+          "roundPoints": 600,
+          "yourTurn": false,
+          "lives": 0
+        },
+        "watch": {
+          "score": 0,
+          "rank": null,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 0
+        },
+        "late": {
+          "score": 0,
+          "rank": null,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 0
+        }
+      }
+    },
+    "classic-ready-seated": {
+      "public": {
+        "gameId": "long-shot",
+        "name": "Long Shot",
+        "phase": "ready",
+        "players": [
+          {
+            "id": "host",
+            "name": "Avery"
+          },
+          {
+            "id": "p2",
+            "name": "Sam"
+          },
+          {
+            "id": "p3",
+            "name": "Robin"
+          },
+          {
+            "id": "late",
+            "name": "Kai"
+          }
+        ],
+        "hostId": "host",
+        "view": {
+          "mode": "classic",
+          "phase": "ready",
+          "serverNow": 1795003207100,
+          "deadline": 1795003210100,
+          "paused": false,
+          "durationMs": 3000,
+          "promptIndex": 1,
+          "totalPrompts": 3,
+          "category": "Animals",
+          "prompt": "Name a bird",
+          "tierCounts": {
+            "obvious": 7,
+            "cliche": 3,
+            "solid": 13,
+            "rare": 18,
+            "longShot": 24,
+            "pearl": 1
+          },
+          "tierPoints": {
+            "obvious": 100,
+            "cliche": 150,
+            "solid": 300,
+            "rare": 600,
+            "longShot": 850,
+            "pearl": 1000
+          },
+          "answeredCount": 0,
+          "totalPlayers": 4,
+          "results": [],
+          "missedGems": [],
+          "pearl": null,
+          "obviousPicks": [],
+          "turnPlayerId": null,
+          "maxHearts": 5,
+          "heartMeter": 6000,
+          "seats": [],
+          "lastHeart": null,
+          "chain": [],
+          "usedCount": 0,
+          "lastMiss": null,
+          "popped": null,
+          "winnerId": null,
+          "survivorBonus": 2000,
+          "best": [],
+          "scoreboard": [
+            {
+              "id": "p2",
+              "name": "Sam",
+              "score": 1000
+            },
+            {
+              "id": "p3",
+              "name": "Robin",
+              "score": 600
+            },
+            {
+              "id": "host",
+              "name": "Avery",
+              "score": 100
+            },
+            {
+              "id": "late",
+              "name": "Kai",
+              "score": 0
+            }
+          ],
+          "tiles": {}
+        },
+        "finished": false,
+        "hasLeaderboard": true,
+        "config": {
+          "mode": "classic",
+          "prompts": 3,
+          "lives": 2,
+          "pace": "normal"
+        },
+        "pendingJoiners": [],
+        "canJoinLate": true
+      },
+      "views": {
+        "host": {
+          "score": 100,
+          "rank": 3,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 0
+        },
+        "p2": {
+          "score": 1000,
+          "rank": 1,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 0
+        },
+        "p3": {
+          "score": 600,
+          "rank": 2,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 0
+        },
+        "watch": {
+          "score": 0,
+          "rank": null,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 0
+        },
+        "late": {
+          "score": 0,
+          "rank": 4,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 0
+        }
+      }
+    },
+    "classic-reveal-no-answer": {
+      "public": {
+        "gameId": "long-shot",
+        "name": "Long Shot",
+        "phase": "reveal",
+        "players": [
+          {
+            "id": "host",
+            "name": "Avery"
+          },
+          {
+            "id": "p2",
+            "name": "Sam"
+          },
+          {
+            "id": "p3",
+            "name": "Robin"
+          },
+          {
+            "id": "late",
+            "name": "Kai"
+          }
+        ],
+        "hostId": "host",
+        "view": {
+          "mode": "classic",
+          "phase": "reveal",
+          "serverNow": 1795003212100,
+          "deadline": 1795003221100,
+          "paused": false,
+          "durationMs": 25000,
+          "promptIndex": 1,
+          "totalPrompts": 3,
+          "category": "Animals",
+          "prompt": "Name a bird",
+          "tierCounts": {
+            "obvious": 7,
+            "cliche": 3,
+            "solid": 13,
+            "rare": 18,
+            "longShot": 24,
+            "pearl": 1
+          },
+          "tierPoints": {
+            "obvious": 100,
+            "cliche": 150,
+            "solid": 300,
+            "rare": 600,
+            "longShot": 850,
+            "pearl": 1000
+          },
+          "answeredCount": 3,
+          "totalPlayers": 4,
+          "results": [
+            {
+              "playerId": "p3",
+              "answer": "Hoatzin",
+              "tier": "longShot",
+              "points": 850,
+              "id": "p3",
+              "name": "Robin"
+            },
+            {
+              "playerId": "host",
+              "answer": "Pelican",
+              "tier": "rare",
+              "points": 600,
+              "id": "host",
+              "name": "Avery"
+            },
+            {
+              "playerId": "late",
+              "answer": "Kiwi",
+              "tier": "cliche",
+              "points": 150,
+              "id": "late",
+              "name": "Kai"
+            },
+            {
+              "playerId": "p2",
+              "answer": null,
+              "tier": null,
+              "points": 0,
+              "id": "p2",
+              "name": "Sam"
+            }
+          ],
+          "missedGems": [
+            "Frigatebird",
+            "Bittern",
+            "Oystercatcher",
+            "Potoo",
+            "Waxwing"
+          ],
+          "pearl": {
+            "answer": "Shoebill",
+            "foundBy": []
+          },
+          "obviousPicks": [
+            "Eagle",
+            "Penguin",
+            "Parrot",
+            "Owl"
+          ],
+          "turnPlayerId": null,
+          "maxHearts": 5,
+          "heartMeter": 6000,
+          "seats": [],
+          "lastHeart": null,
+          "chain": [],
+          "usedCount": 0,
+          "lastMiss": null,
+          "popped": null,
+          "winnerId": null,
+          "survivorBonus": 2000,
+          "best": [],
+          "scoreboard": [
+            {
+              "id": "p3",
+              "name": "Robin",
+              "score": 1450
+            },
+            {
+              "id": "p2",
+              "name": "Sam",
+              "score": 1000
+            },
+            {
+              "id": "host",
+              "name": "Avery",
+              "score": 700
+            },
+            {
+              "id": "late",
+              "name": "Kai",
+              "score": 150
+            }
+          ],
+          "tiles": {
+            "p3": {
+              "outcome": "correct",
+              "note": "850m"
+            },
+            "host": {
+              "outcome": "correct",
+              "note": "600m"
+            },
+            "late": {
+              "outcome": "correct",
+              "note": "150m"
+            },
+            "p2": {
+              "outcome": "wrong"
+            }
+          }
+        },
+        "finished": false,
+        "hasLeaderboard": true,
+        "config": {
+          "mode": "classic",
+          "prompts": 3,
+          "lives": 2,
+          "pace": "normal"
+        },
+        "pendingJoiners": [],
+        "canJoinLate": true
+      },
+      "views": {
+        "host": {
+          "score": 700,
+          "rank": 3,
+          "answer": {
+            "text": "Pelican",
+            "tier": "rare",
+            "points": 600
+          },
+          "misses": 0,
+          "locked": true,
+          "lastMiss": null,
+          "roundPoints": 600,
+          "yourTurn": false,
+          "lives": 0
+        },
+        "p2": {
+          "score": 1000,
+          "rank": 2,
+          "answer": null,
+          "misses": 1,
+          "locked": false,
+          "lastMiss": {
+            "text": "Zzyzx",
+            "reason": "unknown",
+            "at": 1795003212100
+          },
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 0
+        },
+        "p3": {
+          "score": 1450,
+          "rank": 1,
+          "answer": {
+            "text": "Hoatzin",
+            "tier": "longShot",
+            "points": 850
+          },
+          "misses": 0,
+          "locked": true,
+          "lastMiss": null,
+          "roundPoints": 850,
+          "yourTurn": false,
+          "lives": 0
+        },
+        "watch": {
+          "score": 0,
+          "rank": null,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 0
+        },
+        "late": {
+          "score": 150,
+          "rank": 4,
+          "answer": {
+            "text": "Kiwi",
+            "tier": "cliche",
+            "points": 150
+          },
+          "misses": 0,
+          "locked": true,
+          "lastMiss": null,
+          "roundPoints": 150,
+          "yourTurn": false,
+          "lives": 0
+        }
+      }
+    },
+    "classic-results": {
+      "public": {
+        "gameId": "long-shot",
+        "name": "Long Shot",
+        "phase": "results",
+        "players": [
+          {
+            "id": "host",
+            "name": "Avery"
+          },
+          {
+            "id": "p2",
+            "name": "Sam"
+          },
+          {
+            "id": "p3",
+            "name": "Robin"
+          },
+          {
+            "id": "late",
+            "name": "Kai"
+          }
+        ],
+        "hostId": "host",
+        "view": {
+          "mode": "classic",
+          "phase": "results",
+          "serverNow": 1795003224100,
+          "deadline": null,
+          "paused": false,
+          "durationMs": 25000,
+          "promptIndex": 2,
+          "totalPrompts": 3,
+          "category": null,
+          "prompt": null,
+          "tierCounts": null,
+          "tierPoints": {
+            "obvious": 100,
+            "cliche": 150,
+            "solid": 300,
+            "rare": 600,
+            "longShot": 850,
+            "pearl": 1000
+          },
+          "answeredCount": 4,
+          "totalPlayers": 4,
+          "results": [],
+          "missedGems": [],
+          "pearl": null,
+          "obviousPicks": [],
+          "turnPlayerId": null,
+          "maxHearts": 5,
+          "heartMeter": 6000,
+          "seats": [],
+          "lastHeart": null,
+          "chain": [],
+          "usedCount": 0,
+          "lastMiss": null,
+          "popped": null,
+          "winnerId": null,
+          "survivorBonus": 2000,
+          "best": [
+            {
+              "id": "p2",
+              "name": "Sam",
+              "answer": "APL",
+              "tier": "pearl",
+              "prompt": "Name a programming language",
+              "points": 1000
+            },
+            {
+              "id": "p3",
+              "name": "Robin",
+              "answer": "Hoatzin",
+              "tier": "longShot",
+              "prompt": "Name a bird",
+              "points": 850
+            },
+            {
+              "id": "host",
+              "name": "Avery",
+              "answer": "Pelican",
+              "tier": "rare",
+              "prompt": "Name a bird",
+              "points": 600
+            },
+            {
+              "id": "late",
+              "name": "Kai",
+              "answer": "Helsinki",
+              "tier": "rare",
+              "prompt": "Name a European capital city",
+              "points": 600
+            }
+          ],
+          "scoreboard": [
+            {
+              "id": "p2",
+              "name": "Sam",
+              "score": 1850
+            },
+            {
+              "id": "p3",
+              "name": "Robin",
+              "score": 1550
+            },
+            {
+              "id": "host",
+              "name": "Avery",
+              "score": 1000
+            },
+            {
+              "id": "late",
+              "name": "Kai",
+              "score": 750
+            }
+          ],
+          "tiles": {}
+        },
+        "finished": true,
+        "hasLeaderboard": true,
+        "config": {
+          "mode": "classic",
+          "prompts": 3,
+          "lives": 2,
+          "pace": "normal"
+        },
+        "pendingJoiners": [],
+        "canJoinLate": false
+      },
+      "views": {
+        "host": {
+          "score": 1000,
+          "rank": 3,
+          "answer": {
+            "text": "Amsterdam",
+            "tier": "solid",
+            "points": 300
+          },
+          "misses": 0,
+          "locked": true,
+          "lastMiss": null,
+          "roundPoints": 300,
+          "yourTurn": false,
+          "lives": 0
+        },
+        "p2": {
+          "score": 1850,
+          "rank": 1,
+          "answer": {
+            "text": "Tallinn",
+            "tier": "longShot",
+            "points": 850
+          },
+          "misses": 0,
+          "locked": true,
+          "lastMiss": null,
+          "roundPoints": 850,
+          "yourTurn": false,
+          "lives": 0
+        },
+        "p3": {
+          "score": 1550,
+          "rank": 2,
+          "answer": {
+            "text": "Paris",
+            "tier": "obvious",
+            "points": 100
+          },
+          "misses": 0,
+          "locked": true,
+          "lastMiss": null,
+          "roundPoints": 100,
+          "yourTurn": false,
+          "lives": 0
+        },
+        "watch": {
+          "score": 0,
+          "rank": null,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 0
+        },
+        "late": {
+          "score": 750,
+          "rank": 4,
+          "answer": {
+            "text": "Helsinki",
+            "tier": "rare",
+            "points": 600
+          },
+          "misses": 0,
+          "locked": true,
+          "lastMiss": null,
+          "roundPoints": 600,
+          "yourTurn": false,
+          "lives": 0
+        }
+      }
+    },
+    "fuse-lobby": {
+      "public": {
+        "gameId": "long-shot",
+        "name": "Long Shot",
+        "phase": "lobby",
+        "players": [
+          {
+            "id": "host",
+            "name": "Avery"
+          },
+          {
+            "id": "p2",
+            "name": "Sam"
+          },
+          {
+            "id": "p3",
+            "name": "Robin"
+          }
+        ],
+        "hostId": "host",
+        "view": {
+          "mode": "fuse",
+          "phase": "lobby",
+          "serverNow": 1795003224100,
+          "deadline": null,
+          "paused": false,
+          "durationMs": 15000,
+          "promptIndex": 0,
+          "totalPrompts": 16,
+          "category": null,
+          "prompt": null,
+          "tierCounts": null,
+          "tierPoints": {
+            "obvious": 100,
+            "cliche": 150,
+            "solid": 300,
+            "rare": 600,
+            "longShot": 850,
+            "pearl": 1000
+          },
+          "answeredCount": 0,
+          "totalPlayers": 3,
+          "results": [],
+          "missedGems": [],
+          "pearl": null,
+          "obviousPicks": [],
+          "turnPlayerId": null,
+          "maxHearts": 5,
+          "heartMeter": 6000,
+          "seats": [],
+          "lastHeart": null,
+          "chain": [],
+          "usedCount": 0,
+          "lastMiss": null,
+          "popped": null,
+          "winnerId": null,
+          "survivorBonus": 2000,
+          "best": [],
+          "scoreboard": [
+            {
+              "id": "host",
+              "name": "Avery",
+              "score": 0
+            },
+            {
+              "id": "p2",
+              "name": "Sam",
+              "score": 0
+            },
+            {
+              "id": "p3",
+              "name": "Robin",
+              "score": 0
+            }
+          ],
+          "tiles": {}
+        },
+        "finished": false,
+        "hasLeaderboard": true,
+        "config": {
+          "mode": "fuse",
+          "prompts": 7,
+          "lives": 2,
+          "pace": "fast"
+        },
+        "pendingJoiners": [],
+        "canJoinLate": true
+      },
+      "views": {
+        "host": {
+          "score": 0,
+          "rank": 1,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 0
+        },
+        "p2": {
+          "score": 0,
+          "rank": 2,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 0
+        },
+        "p3": {
+          "score": 0,
+          "rank": 3,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 0
+        },
+        "watch": {
+          "score": 0,
+          "rank": null,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 0
+        }
+      }
+    },
+    "fuse-turn": {
+      "public": {
+        "gameId": "long-shot",
+        "name": "Long Shot",
+        "phase": "fuse",
+        "players": [
+          {
+            "id": "host",
+            "name": "Avery"
+          },
+          {
+            "id": "p2",
+            "name": "Sam"
+          },
+          {
+            "id": "p3",
+            "name": "Robin"
+          }
+        ],
+        "hostId": "host",
+        "view": {
+          "mode": "fuse",
+          "phase": "fuse",
+          "serverNow": 1795003224100,
+          "deadline": null,
+          "paused": false,
+          "durationMs": 15000,
+          "promptIndex": 0,
+          "totalPrompts": 16,
+          "category": "Games",
+          "prompt": "Name a board game",
+          "tierCounts": {
+            "obvious": 5,
+            "cliche": 3,
+            "solid": 12,
+            "rare": 14,
+            "longShot": 25,
+            "pearl": 1
+          },
+          "tierPoints": {
+            "obvious": 100,
+            "cliche": 150,
+            "solid": 300,
+            "rare": 600,
+            "longShot": 850,
+            "pearl": 1000
+          },
+          "answeredCount": 0,
+          "totalPlayers": 3,
+          "results": [],
+          "missedGems": [],
+          "pearl": null,
+          "obviousPicks": [],
+          "turnPlayerId": "p2",
+          "maxHearts": 5,
+          "heartMeter": 6000,
+          "seats": [
+            {
+              "id": "p2",
+              "name": "Sam",
+              "lives": 2,
+              "meter": 0,
+              "out": false
+            },
+            {
+              "id": "p3",
+              "name": "Robin",
+              "lives": 2,
+              "meter": 0,
+              "out": false
+            },
+            {
+              "id": "host",
+              "name": "Avery",
+              "lives": 2,
+              "meter": 0,
+              "out": false
+            }
+          ],
+          "lastHeart": null,
+          "chain": [],
+          "usedCount": 0,
+          "lastMiss": null,
+          "popped": null,
+          "winnerId": null,
+          "survivorBonus": 2000,
+          "best": [],
+          "scoreboard": [
+            {
+              "id": "host",
+              "name": "Avery",
+              "score": 0
+            },
+            {
+              "id": "p2",
+              "name": "Sam",
+              "score": 0
+            },
+            {
+              "id": "p3",
+              "name": "Robin",
+              "score": 0
+            }
+          ],
+          "tiles": {
+            "p2": {
+              "active": true,
+              "note": "Holding breath"
+            }
+          }
+        },
+        "finished": false,
+        "hasLeaderboard": true,
+        "config": {
+          "mode": "fuse",
+          "prompts": 7,
+          "lives": 2,
+          "pace": "fast"
+        },
+        "pendingJoiners": [],
+        "canJoinLate": false
+      },
+      "views": {
+        "host": {
+          "score": 0,
+          "rank": 1,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 2
+        },
+        "p2": {
+          "score": 0,
+          "rank": 2,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": true,
+          "lives": 2
+        },
+        "p3": {
+          "score": 0,
+          "rank": 3,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 2
+        },
+        "watch": {
+          "score": 0,
+          "rank": null,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 0
+        }
+      }
+    },
+    "fuse-miss-used": {
+      "public": {
+        "gameId": "long-shot",
+        "name": "Long Shot",
+        "phase": "fuse",
+        "players": [
+          {
+            "id": "host",
+            "name": "Avery"
+          },
+          {
+            "id": "p2",
+            "name": "Sam"
+          },
+          {
+            "id": "p3",
+            "name": "Robin"
+          }
+        ],
+        "hostId": "host",
+        "view": {
+          "mode": "fuse",
+          "phase": "fuse",
+          "serverNow": 1795003226300,
+          "deadline": null,
+          "paused": false,
+          "durationMs": 15000,
+          "promptIndex": 0,
+          "totalPrompts": 16,
+          "category": "Games",
+          "prompt": "Name a board game",
+          "tierCounts": {
+            "obvious": 5,
+            "cliche": 3,
+            "solid": 12,
+            "rare": 14,
+            "longShot": 25,
+            "pearl": 1
+          },
+          "tierPoints": {
+            "obvious": 100,
+            "cliche": 150,
+            "solid": 300,
+            "rare": 600,
+            "longShot": 850,
+            "pearl": 1000
+          },
+          "answeredCount": 0,
+          "totalPlayers": 3,
+          "results": [],
+          "missedGems": [],
+          "pearl": null,
+          "obviousPicks": [],
+          "turnPlayerId": "p3",
+          "maxHearts": 5,
+          "heartMeter": 6000,
+          "seats": [
+            {
+              "id": "p2",
+              "name": "Sam",
+              "lives": 2,
+              "meter": 300,
+              "out": false
+            },
+            {
+              "id": "p3",
+              "name": "Robin",
+              "lives": 2,
+              "meter": 0,
+              "out": false
+            },
+            {
+              "id": "host",
+              "name": "Avery",
+              "lives": 2,
+              "meter": 0,
+              "out": false
+            }
+          ],
+          "lastHeart": null,
+          "chain": [
+            {
+              "playerId": "p2",
+              "answer": "Risk",
+              "tier": "solid",
+              "points": 300,
+              "name": "Sam"
+            }
+          ],
+          "usedCount": 1,
+          "lastMiss": {
+            "playerId": "p3",
+            "name": "Robin",
+            "text": "Risk",
+            "reason": "used",
+            "at": 1795003226300
+          },
+          "popped": null,
+          "winnerId": null,
+          "survivorBonus": 2000,
+          "best": [],
+          "scoreboard": [
+            {
+              "id": "p2",
+              "name": "Sam",
+              "score": 300
+            },
+            {
+              "id": "host",
+              "name": "Avery",
+              "score": 0
+            },
+            {
+              "id": "p3",
+              "name": "Robin",
+              "score": 0
+            }
+          ],
+          "tiles": {
+            "p3": {
+              "active": true,
+              "note": "Holding breath"
+            }
+          }
+        },
+        "finished": false,
+        "hasLeaderboard": true,
+        "config": {
+          "mode": "fuse",
+          "prompts": 7,
+          "lives": 2,
+          "pace": "fast"
+        },
+        "pendingJoiners": [],
+        "canJoinLate": false
+      },
+      "views": {
+        "host": {
+          "score": 0,
+          "rank": 2,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 2
+        },
+        "p2": {
+          "score": 300,
+          "rank": 1,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 2
+        },
+        "p3": {
+          "score": 0,
+          "rank": 3,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": true,
+          "lives": 2
+        },
+        "watch": {
+          "score": 0,
+          "rank": null,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 0
+        }
+      }
+    },
+    "fuse-chain-judged": {
+      "public": {
+        "gameId": "long-shot",
+        "name": "Long Shot",
+        "phase": "fuse",
+        "players": [
+          {
+            "id": "host",
+            "name": "Avery"
+          },
+          {
+            "id": "p2",
+            "name": "Sam"
+          },
+          {
+            "id": "p3",
+            "name": "Robin"
+          }
+        ],
+        "hostId": "host",
+        "view": {
+          "mode": "fuse",
+          "phase": "fuse",
+          "serverNow": 1795003227200,
+          "deadline": null,
+          "paused": false,
+          "durationMs": 15000,
+          "promptIndex": 0,
+          "totalPrompts": 16,
+          "category": "Games",
+          "prompt": "Name a board game",
+          "tierCounts": {
+            "obvious": 5,
+            "cliche": 3,
+            "solid": 12,
+            "rare": 14,
+            "longShot": 26,
+            "pearl": 1
+          },
+          "tierPoints": {
+            "obvious": 100,
+            "cliche": 150,
+            "solid": 300,
+            "rare": 600,
+            "longShot": 850,
+            "pearl": 1000
+          },
+          "answeredCount": 0,
+          "totalPlayers": 3,
+          "results": [],
+          "missedGems": [],
+          "pearl": null,
+          "obviousPicks": [],
+          "turnPlayerId": "host",
+          "maxHearts": 5,
+          "heartMeter": 6000,
+          "seats": [
+            {
+              "id": "p2",
+              "name": "Sam",
+              "lives": 2,
+              "meter": 300,
+              "out": false
+            },
+            {
+              "id": "p3",
+              "name": "Robin",
+              "lives": 2,
+              "meter": 850,
+              "out": false
+            },
+            {
+              "id": "host",
+              "name": "Avery",
+              "lives": 2,
+              "meter": 0,
+              "out": false
+            }
+          ],
+          "lastHeart": null,
+          "chain": [
+            {
+              "playerId": "p2",
+              "answer": "Risk",
+              "tier": "solid",
+              "points": 300,
+              "name": "Sam"
+            },
+            {
+              "playerId": "p3",
+              "answer": "Tigris and Euphrates",
+              "tier": "longShot",
+              "points": 850,
+              "judged": true,
+              "name": "Robin"
+            }
+          ],
+          "usedCount": 2,
+          "lastMiss": null,
+          "popped": null,
+          "winnerId": null,
+          "survivorBonus": 2000,
+          "best": [],
+          "scoreboard": [
+            {
+              "id": "p3",
+              "name": "Robin",
+              "score": 850
+            },
+            {
+              "id": "p2",
+              "name": "Sam",
+              "score": 300
+            },
+            {
+              "id": "host",
+              "name": "Avery",
+              "score": 0
+            }
+          ],
+          "tiles": {
+            "host": {
+              "active": true,
+              "note": "Holding breath"
+            }
+          }
+        },
+        "finished": false,
+        "hasLeaderboard": true,
+        "config": {
+          "mode": "fuse",
+          "prompts": 7,
+          "lives": 2,
+          "pace": "fast"
+        },
+        "pendingJoiners": [],
+        "canJoinLate": false
+      },
+      "views": {
+        "host": {
+          "score": 0,
+          "rank": 3,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": true,
+          "lives": 2
+        },
+        "p2": {
+          "score": 300,
+          "rank": 2,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 2
+        },
+        "p3": {
+          "score": 850,
+          "rank": 1,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 2
+        },
+        "watch": {
+          "score": 0,
+          "rank": null,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 0
+        }
+      }
+    },
+    "fuse-heart": {
+      "public": {
+        "gameId": "long-shot",
+        "name": "Long Shot",
+        "phase": "fuse",
+        "players": [
+          {
+            "id": "host",
+            "name": "Avery"
+          },
+          {
+            "id": "p2",
+            "name": "Sam"
+          },
+          {
+            "id": "p3",
+            "name": "Robin"
+          }
+        ],
+        "hostId": "host",
+        "view": {
+          "mode": "fuse",
+          "phase": "fuse",
+          "serverNow": 1795003240400,
+          "deadline": null,
+          "paused": false,
+          "durationMs": 15000,
+          "promptIndex": 0,
+          "totalPrompts": 16,
+          "category": "Games",
+          "prompt": "Name a board game",
+          "tierCounts": {
+            "obvious": 5,
+            "cliche": 3,
+            "solid": 12,
+            "rare": 14,
+            "longShot": 26,
+            "pearl": 1
+          },
+          "tierPoints": {
+            "obvious": 100,
+            "cliche": 150,
+            "solid": 300,
+            "rare": 600,
+            "longShot": 850,
+            "pearl": 1000
+          },
+          "answeredCount": 0,
+          "totalPlayers": 3,
+          "results": [],
+          "missedGems": [],
+          "pearl": null,
+          "obviousPicks": [],
+          "turnPlayerId": "p2",
+          "maxHearts": 5,
+          "heartMeter": 6000,
+          "seats": [
+            {
+              "id": "p2",
+              "name": "Sam",
+              "lives": 2,
+              "meter": 4500,
+              "out": false
+            },
+            {
+              "id": "p3",
+              "name": "Robin",
+              "lives": 2,
+              "meter": 5050,
+              "out": false
+            },
+            {
+              "id": "host",
+              "name": "Avery",
+              "lives": 3,
+              "meter": 800,
+              "out": false
+            }
+          ],
+          "lastHeart": {
+            "playerId": "host",
+            "at": 1795003240400,
+            "name": "Avery"
+          },
+          "chain": [
+            {
+              "playerId": "host",
+              "answer": "Agricola",
+              "tier": "longShot",
+              "points": 850,
+              "name": "Avery"
+            },
+            {
+              "playerId": "p2",
+              "answer": "Carcassonne",
+              "tier": "rare",
+              "points": 600,
+              "name": "Sam"
+            },
+            {
+              "playerId": "p3",
+              "answer": "Othello",
+              "tier": "rare",
+              "points": 600,
+              "name": "Robin"
+            },
+            {
+              "playerId": "host",
+              "answer": "Puerto Rico",
+              "tier": "longShot",
+              "points": 850,
+              "name": "Avery"
+            },
+            {
+              "playerId": "p2",
+              "answer": "Stratego",
+              "tier": "rare",
+              "points": 600,
+              "name": "Sam"
+            },
+            {
+              "playerId": "p3",
+              "answer": "Mahjong",
+              "tier": "rare",
+              "points": 600,
+              "name": "Robin"
+            },
+            {
+              "playerId": "host",
+              "answer": "Twilight Struggle",
+              "tier": "longShot",
+              "points": 850,
+              "name": "Avery"
+            },
+            {
+              "playerId": "p2",
+              "answer": "Pandemic",
+              "tier": "rare",
+              "points": 600,
+              "name": "Sam"
+            },
+            {
+              "playerId": "p3",
+              "answer": "Ticket to Ride",
+              "tier": "rare",
+              "points": 600,
+              "name": "Robin"
+            },
+            {
+              "playerId": "host",
+              "answer": "Dominion",
+              "tier": "longShot",
+              "points": 850,
+              "name": "Avery"
+            }
+          ],
+          "usedCount": 24,
+          "lastMiss": null,
+          "popped": null,
+          "winnerId": null,
+          "survivorBonus": 2000,
+          "best": [],
+          "scoreboard": [
+            {
+              "id": "host",
+              "name": "Avery",
+              "score": 6800
+            },
+            {
+              "id": "p3",
+              "name": "Robin",
+              "score": 5050
+            },
+            {
+              "id": "p2",
+              "name": "Sam",
+              "score": 4500
+            }
+          ],
+          "tiles": {
+            "p2": {
+              "active": true,
+              "note": "Holding breath"
+            }
+          }
+        },
+        "finished": false,
+        "hasLeaderboard": true,
+        "config": {
+          "mode": "fuse",
+          "prompts": 7,
+          "lives": 2,
+          "pace": "fast"
+        },
+        "pendingJoiners": [],
+        "canJoinLate": false
+      },
+      "views": {
+        "host": {
+          "score": 6800,
+          "rank": 1,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 3
+        },
+        "p2": {
+          "score": 4500,
+          "rank": 3,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": true,
+          "lives": 2
+        },
+        "p3": {
+          "score": 5050,
+          "rank": 2,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 2
+        },
+        "watch": {
+          "score": 0,
+          "rank": null,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 0
+        }
+      }
+    },
+    "fuse-paused": {
+      "public": {
+        "gameId": "long-shot",
+        "name": "Long Shot",
+        "phase": "fuse",
+        "players": [
+          {
+            "id": "host",
+            "name": "Avery"
+          },
+          {
+            "id": "p2",
+            "name": "Sam"
+          },
+          {
+            "id": "p3",
+            "name": "Robin"
+          }
+        ],
+        "hostId": "host",
+        "view": {
+          "mode": "fuse",
+          "phase": "fuse",
+          "serverNow": 1795003240650,
+          "deadline": null,
+          "paused": true,
+          "durationMs": 15000,
+          "promptIndex": 0,
+          "totalPrompts": 16,
+          "category": "Games",
+          "prompt": "Name a board game",
+          "tierCounts": {
+            "obvious": 5,
+            "cliche": 3,
+            "solid": 12,
+            "rare": 14,
+            "longShot": 26,
+            "pearl": 1
+          },
+          "tierPoints": {
+            "obvious": 100,
+            "cliche": 150,
+            "solid": 300,
+            "rare": 600,
+            "longShot": 850,
+            "pearl": 1000
+          },
+          "answeredCount": 0,
+          "totalPlayers": 1,
+          "results": [],
+          "missedGems": [],
+          "pearl": null,
+          "obviousPicks": [],
+          "turnPlayerId": "p2",
+          "maxHearts": 5,
+          "heartMeter": 6000,
+          "seats": [
+            {
+              "id": "p2",
+              "name": "Sam",
+              "lives": 2,
+              "meter": 4500,
+              "out": false
+            },
+            {
+              "id": "p3",
+              "name": "Robin",
+              "lives": 2,
+              "meter": 5050,
+              "out": false
+            },
+            {
+              "id": "host",
+              "name": "Avery",
+              "lives": 3,
+              "meter": 800,
+              "out": false
+            }
+          ],
+          "lastHeart": {
+            "playerId": "host",
+            "at": 1795003240400,
+            "name": "Avery"
+          },
+          "chain": [
+            {
+              "playerId": "host",
+              "answer": "Agricola",
+              "tier": "longShot",
+              "points": 850,
+              "name": "Avery"
+            },
+            {
+              "playerId": "p2",
+              "answer": "Carcassonne",
+              "tier": "rare",
+              "points": 600,
+              "name": "Sam"
+            },
+            {
+              "playerId": "p3",
+              "answer": "Othello",
+              "tier": "rare",
+              "points": 600,
+              "name": "Robin"
+            },
+            {
+              "playerId": "host",
+              "answer": "Puerto Rico",
+              "tier": "longShot",
+              "points": 850,
+              "name": "Avery"
+            },
+            {
+              "playerId": "p2",
+              "answer": "Stratego",
+              "tier": "rare",
+              "points": 600,
+              "name": "Sam"
+            },
+            {
+              "playerId": "p3",
+              "answer": "Mahjong",
+              "tier": "rare",
+              "points": 600,
+              "name": "Robin"
+            },
+            {
+              "playerId": "host",
+              "answer": "Twilight Struggle",
+              "tier": "longShot",
+              "points": 850,
+              "name": "Avery"
+            },
+            {
+              "playerId": "p2",
+              "answer": "Pandemic",
+              "tier": "rare",
+              "points": 600,
+              "name": "Sam"
+            },
+            {
+              "playerId": "p3",
+              "answer": "Ticket to Ride",
+              "tier": "rare",
+              "points": 600,
+              "name": "Robin"
+            },
+            {
+              "playerId": "host",
+              "answer": "Dominion",
+              "tier": "longShot",
+              "points": 850,
+              "name": "Avery"
+            }
+          ],
+          "usedCount": 24,
+          "lastMiss": null,
+          "popped": null,
+          "winnerId": null,
+          "survivorBonus": 2000,
+          "best": [],
+          "scoreboard": [
+            {
+              "id": "host",
+              "name": "Avery",
+              "score": 6800
+            },
+            {
+              "id": "p3",
+              "name": "Robin",
+              "score": 5050
+            },
+            {
+              "id": "p2",
+              "name": "Sam",
+              "score": 4500
+            }
+          ],
+          "tiles": {
+            "p2": {
+              "active": true,
+              "note": "Holding breath"
+            }
+          }
+        },
+        "finished": false,
+        "hasLeaderboard": true,
+        "config": {
+          "mode": "fuse",
+          "prompts": 7,
+          "lives": 2,
+          "pace": "fast"
+        },
+        "pendingJoiners": [],
+        "canJoinLate": false
+      },
+      "views": {
+        "host": {
+          "score": 6800,
+          "rank": 1,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 3
+        },
+        "p2": {
+          "score": 4500,
+          "rank": 3,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": true,
+          "lives": 2
+        },
+        "p3": {
+          "score": 5050,
+          "rank": 2,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 2
+        },
+        "watch": {
+          "score": 0,
+          "rank": null,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 0
+        }
+      }
+    },
+    "fuse-popped": {
+      "public": {
+        "gameId": "long-shot",
+        "name": "Long Shot",
+        "phase": "popped",
+        "players": [
+          {
+            "id": "host",
+            "name": "Avery"
+          },
+          {
+            "id": "p2",
+            "name": "Sam"
+          },
+          {
+            "id": "p3",
+            "name": "Robin"
+          }
+        ],
+        "hostId": "host",
+        "view": {
+          "mode": "fuse",
+          "phase": "popped",
+          "serverNow": 1795003248650,
+          "deadline": 1795003251450,
+          "paused": false,
+          "durationMs": 15000,
+          "promptIndex": 0,
+          "totalPrompts": 16,
+          "category": "Games",
+          "prompt": "Name a board game",
+          "tierCounts": {
+            "obvious": 5,
+            "cliche": 3,
+            "solid": 12,
+            "rare": 14,
+            "longShot": 26,
+            "pearl": 1
+          },
+          "tierPoints": {
+            "obvious": 100,
+            "cliche": 150,
+            "solid": 300,
+            "rare": 600,
+            "longShot": 850,
+            "pearl": 1000
+          },
+          "answeredCount": 0,
+          "totalPlayers": 3,
+          "results": [],
+          "missedGems": [],
+          "pearl": null,
+          "obviousPicks": [],
+          "turnPlayerId": null,
+          "maxHearts": 5,
+          "heartMeter": 6000,
+          "seats": [
+            {
+              "id": "p2",
+              "name": "Sam",
+              "lives": 1,
+              "meter": 4500,
+              "out": false
+            },
+            {
+              "id": "p3",
+              "name": "Robin",
+              "lives": 2,
+              "meter": 5050,
+              "out": false
+            },
+            {
+              "id": "host",
+              "name": "Avery",
+              "lives": 3,
+              "meter": 800,
+              "out": false
+            }
+          ],
+          "lastHeart": {
+            "playerId": "host",
+            "at": 1795003240400,
+            "name": "Avery"
+          },
+          "chain": [
+            {
+              "playerId": "host",
+              "answer": "Agricola",
+              "tier": "longShot",
+              "points": 850,
+              "name": "Avery"
+            },
+            {
+              "playerId": "p2",
+              "answer": "Carcassonne",
+              "tier": "rare",
+              "points": 600,
+              "name": "Sam"
+            },
+            {
+              "playerId": "p3",
+              "answer": "Othello",
+              "tier": "rare",
+              "points": 600,
+              "name": "Robin"
+            },
+            {
+              "playerId": "host",
+              "answer": "Puerto Rico",
+              "tier": "longShot",
+              "points": 850,
+              "name": "Avery"
+            },
+            {
+              "playerId": "p2",
+              "answer": "Stratego",
+              "tier": "rare",
+              "points": 600,
+              "name": "Sam"
+            },
+            {
+              "playerId": "p3",
+              "answer": "Mahjong",
+              "tier": "rare",
+              "points": 600,
+              "name": "Robin"
+            },
+            {
+              "playerId": "host",
+              "answer": "Twilight Struggle",
+              "tier": "longShot",
+              "points": 850,
+              "name": "Avery"
+            },
+            {
+              "playerId": "p2",
+              "answer": "Pandemic",
+              "tier": "rare",
+              "points": 600,
+              "name": "Sam"
+            },
+            {
+              "playerId": "p3",
+              "answer": "Ticket to Ride",
+              "tier": "rare",
+              "points": 600,
+              "name": "Robin"
+            },
+            {
+              "playerId": "host",
+              "answer": "Dominion",
+              "tier": "longShot",
+              "points": 850,
+              "name": "Avery"
+            }
+          ],
+          "usedCount": 24,
+          "lastMiss": null,
+          "popped": {
+            "playerId": "p2",
+            "eliminated": false,
+            "name": "Sam"
+          },
+          "winnerId": null,
+          "survivorBonus": 2000,
+          "best": [],
+          "scoreboard": [
+            {
+              "id": "host",
+              "name": "Avery",
+              "score": 6800
+            },
+            {
+              "id": "p3",
+              "name": "Robin",
+              "score": 5050
+            },
+            {
+              "id": "p2",
+              "name": "Sam",
+              "score": 4500
+            }
+          ],
+          "tiles": {
+            "p2": {
+              "outcome": "wrong",
+              "note": "Out of air"
+            }
+          }
+        },
+        "finished": false,
+        "hasLeaderboard": true,
+        "config": {
+          "mode": "fuse",
+          "prompts": 7,
+          "lives": 2,
+          "pace": "fast"
+        },
+        "pendingJoiners": [],
+        "canJoinLate": false
+      },
+      "views": {
+        "host": {
+          "score": 6800,
+          "rank": 1,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 3
+        },
+        "p2": {
+          "score": 4500,
+          "rank": 3,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 1
+        },
+        "p3": {
+          "score": 5050,
+          "rank": 2,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 2
+        },
+        "watch": {
+          "score": 0,
+          "rank": null,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 0
+        }
+      }
+    },
+    "fuse-popped-out": {
+      "public": {
+        "gameId": "long-shot",
+        "name": "Long Shot",
+        "phase": "popped",
+        "players": [
+          {
+            "id": "host",
+            "name": "Avery"
+          },
+          {
+            "id": "p2",
+            "name": "Sam"
+          },
+          {
+            "id": "p3",
+            "name": "Robin"
+          }
+        ],
+        "hostId": "host",
+        "view": {
+          "mode": "fuse",
+          "phase": "popped",
+          "serverNow": 1795003262450,
+          "deadline": 1795003265250,
+          "paused": false,
+          "durationMs": 15000,
+          "promptIndex": 1,
+          "totalPrompts": 16,
+          "category": "Food",
+          "prompt": "Name a kind of cheese",
+          "tierCounts": {
+            "obvious": 4,
+            "cliche": 3,
+            "solid": 12,
+            "rare": 15,
+            "longShot": 21,
+            "pearl": 1
+          },
+          "tierPoints": {
+            "obvious": 100,
+            "cliche": 150,
+            "solid": 300,
+            "rare": 600,
+            "longShot": 850,
+            "pearl": 1000
+          },
+          "answeredCount": 0,
+          "totalPlayers": 3,
+          "results": [],
+          "missedGems": [],
+          "pearl": null,
+          "obviousPicks": [],
+          "turnPlayerId": null,
+          "maxHearts": 5,
+          "heartMeter": 6000,
+          "seats": [
+            {
+              "id": "p2",
+              "name": "Sam",
+              "lives": 0,
+              "meter": 4500,
+              "out": true
+            },
+            {
+              "id": "p3",
+              "name": "Robin",
+              "lives": 2,
+              "meter": 5050,
+              "out": false
+            },
+            {
+              "id": "host",
+              "name": "Avery",
+              "lives": 3,
+              "meter": 800,
+              "out": false
+            }
+          ],
+          "lastHeart": {
+            "playerId": "host",
+            "at": 1795003240400,
+            "name": "Avery"
+          },
+          "chain": [],
+          "usedCount": 0,
+          "lastMiss": null,
+          "popped": {
+            "playerId": "p2",
+            "eliminated": true,
+            "name": "Sam"
+          },
+          "winnerId": null,
+          "survivorBonus": 2000,
+          "best": [],
+          "scoreboard": [
+            {
+              "id": "host",
+              "name": "Avery",
+              "score": 6800
+            },
+            {
+              "id": "p3",
+              "name": "Robin",
+              "score": 5050
+            },
+            {
+              "id": "p2",
+              "name": "Sam",
+              "score": 4500
+            }
+          ],
+          "tiles": {
+            "p2": {
+              "eliminated": true,
+              "note": "Surfaced"
+            }
+          }
+        },
+        "finished": false,
+        "hasLeaderboard": true,
+        "config": {
+          "mode": "fuse",
+          "prompts": 7,
+          "lives": 2,
+          "pace": "fast"
+        },
+        "pendingJoiners": [],
+        "canJoinLate": false
+      },
+      "views": {
+        "host": {
+          "score": 6800,
+          "rank": 1,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 3
+        },
+        "p2": {
+          "score": 4500,
+          "rank": 3,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 0
+        },
+        "p3": {
+          "score": 5050,
+          "rank": 2,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 2
+        },
+        "watch": {
+          "score": 0,
+          "rank": null,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 0
+        }
+      }
+    },
+    "fuse-results": {
+      "public": {
+        "gameId": "long-shot",
+        "name": "Long Shot",
+        "phase": "results",
+        "players": [
+          {
+            "id": "host",
+            "name": "Avery"
+          },
+          {
+            "id": "p2",
+            "name": "Sam"
+          },
+          {
+            "id": "p3",
+            "name": "Robin"
+          }
+        ],
+        "hostId": "host",
+        "view": {
+          "mode": "fuse",
+          "phase": "results",
+          "serverNow": 1795003294600,
+          "deadline": null,
+          "paused": false,
+          "durationMs": 15000,
+          "promptIndex": 3,
+          "totalPrompts": 16,
+          "category": null,
+          "prompt": null,
+          "tierCounts": null,
+          "tierPoints": {
+            "obvious": 100,
+            "cliche": 150,
+            "solid": 300,
+            "rare": 600,
+            "longShot": 850,
+            "pearl": 1000
+          },
+          "answeredCount": 0,
+          "totalPlayers": 3,
+          "results": [],
+          "missedGems": [],
+          "pearl": null,
+          "obviousPicks": [],
+          "turnPlayerId": null,
+          "maxHearts": 5,
+          "heartMeter": 6000,
+          "seats": [
+            {
+              "id": "p2",
+              "name": "Sam",
+              "lives": 0,
+              "meter": 4500,
+              "out": true
+            },
+            {
+              "id": "p3",
+              "name": "Robin",
+              "lives": 0,
+              "meter": 5050,
+              "out": true
+            },
+            {
+              "id": "host",
+              "name": "Avery",
+              "lives": 3,
+              "meter": 800,
+              "out": false
+            }
+          ],
+          "lastHeart": {
+            "playerId": "host",
+            "at": 1795003240400,
+            "name": "Avery"
+          },
+          "chain": [],
+          "usedCount": 0,
+          "lastMiss": null,
+          "popped": {
+            "playerId": "p3",
+            "eliminated": true,
+            "name": "Robin"
+          },
+          "winnerId": "host",
+          "survivorBonus": 2000,
+          "best": [
+            {
+              "id": "p3",
+              "name": "Robin",
+              "answer": "Tigris and Euphrates",
+              "tier": "longShot",
+              "prompt": "Name a board game",
+              "points": 850,
+              "judged": true
+            },
+            {
+              "id": "host",
+              "name": "Avery",
+              "answer": "Azul",
+              "tier": "longShot",
+              "prompt": "Name a board game",
+              "points": 850
+            },
+            {
+              "id": "p2",
+              "name": "Sam",
+              "answer": "Yahtzee",
+              "tier": "rare",
+              "prompt": "Name a board game",
+              "points": 600
+            }
+          ],
+          "scoreboard": [
+            {
+              "id": "host",
+              "name": "Avery",
+              "score": 8800
+            },
+            {
+              "id": "p3",
+              "name": "Robin",
+              "score": 5050
+            },
+            {
+              "id": "p2",
+              "name": "Sam",
+              "score": 4500
+            }
+          ],
+          "tiles": {
+            "p2": {
+              "eliminated": true,
+              "note": "Surfaced"
+            },
+            "p3": {
+              "eliminated": true,
+              "note": "Surfaced"
+            },
+            "host": {
+              "winner": true,
+              "note": "Last one under"
+            }
+          }
+        },
+        "finished": true,
+        "hasLeaderboard": true,
+        "config": {
+          "mode": "fuse",
+          "prompts": 7,
+          "lives": 2,
+          "pace": "fast"
+        },
+        "pendingJoiners": [],
+        "canJoinLate": false
+      },
+      "views": {
+        "host": {
+          "score": 8800,
+          "rank": 1,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 3
+        },
+        "p2": {
+          "score": 4500,
+          "rank": 3,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 0
+        },
+        "p3": {
+          "score": 5050,
+          "rank": 2,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 0
+        },
+        "watch": {
+          "score": 0,
+          "rank": null,
+          "answer": null,
+          "misses": 0,
+          "locked": false,
+          "lastMiss": null,
+          "roundPoints": 0,
+          "yourTurn": false,
+          "lives": 0
+        }
+      }
+    }
+  }
+}

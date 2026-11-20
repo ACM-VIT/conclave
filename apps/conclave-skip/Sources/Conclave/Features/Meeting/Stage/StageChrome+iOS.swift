@@ -56,6 +56,12 @@ struct StageChromeLayer: View {
                     .allowsHitTesting(!hidden)
                     .accessibilityHidden(hidden)
                     .accessibilitySortPriority(6)
+                if stage.chrome.isWatchTogetherHidden {
+                    StageWatchTogetherPill(stage: stage)
+                        .frame(maxWidth: .infinity)
+                        .accessibilitySortPriority(5.5)
+                        .transition(.opacity)
+                }
             }
             .padding(.horizontal, CGFloat(DesignTokens.space12))
             .padding(.top, CGFloat(DesignTokens.space12))
@@ -209,6 +215,44 @@ enum StageCapsuleText {
         default:
             return ConclaveStrings.format("Participants Count %lld", model.count)
         }
+    }
+}
+
+struct StageWatchTogetherPill: View {
+    let stage: StagePresenter
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: ConclaveSymbols.playRectangle)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(HostingTheme.inCallTextSecondary)
+                .accessibilityHidden(true)
+            Text(ConclaveStrings.text("Watch Together is playing"))
+                .font(.footnote)
+                .foregroundStyle(HostingTheme.inCallTextSecondary)
+                .lineLimit(1)
+            Button {
+                stage.rejoinWatchTogether()
+            } label: {
+                Text(ConclaveStrings.text("Rejoin"))
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(HostingTheme.inCallOnCoral)
+                    .padding(.horizontal, 12)
+                    .frame(minHeight: 32)
+                    .background(HostingTheme.coralFill, in: Capsule())
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(ConclaveStrings.text("Rejoin Watch Together"))
+            .accessibilityIdentifier("stage.watchTogether.rejoin")
+        }
+        .padding(.leading, 12)
+        .padding(.trailing, 6)
+        .background(HostingTheme.token(DesignTokens.iosInCallSurfaceRaised), in: Capsule())
+        .overlay(Capsule().strokeBorder(HostingTheme.inCallBorder, lineWidth: 1))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("stage.watchTogether")
     }
 }
 

@@ -24,6 +24,8 @@ enum GameCatalogPresentationPolicy {
             return GameCatalogVisual(icon: "square.grid.3x3.fill", androidIcon: "grid")
         case "chess":
             return GameCatalogVisual(icon: "checkerboard.rectangle", androidIcon: "grid")
+        case "long-shot":
+            return GameCatalogVisual(icon: "water.waves.and.arrow.down", androidIcon: "sports_esports")
         default:
             return GameCatalogVisual(icon: "gamecontroller.fill", androidIcon: "sports_esports")
         }

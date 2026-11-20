@@ -177,19 +177,21 @@ struct StageChromeSnapshot: Equatable {
 
     let isCameraPaused: Bool
     let nowPlaying: NowPlayingChip?
+    let isWatchTogetherHidden: Bool
 
     let routeKind: String
     let routeName: String
     let isAttendee: Bool
 
     static let empty = StageChromeSnapshot(revision: 0, canFlipCamera: false, isFrontCamera: true, isFlipInFlight: false,
-                                           isCameraPaused: false, nowPlaying: nil, routeKind: "unknown", routeName: "",
-                                           isAttendee: false)
+                                           isCameraPaused: false, nowPlaying: nil, isWatchTogetherHidden: false,
+                                           routeKind: "unknown", routeName: "", isAttendee: false)
 
     func withRevision(_ next: Int) -> StageChromeSnapshot {
         StageChromeSnapshot(revision: next, canFlipCamera: canFlipCamera, isFrontCamera: isFrontCamera,
                             isFlipInFlight: isFlipInFlight, isCameraPaused: isCameraPaused, nowPlaying: nowPlaying,
-                            routeKind: routeKind, routeName: routeName, isAttendee: isAttendee)
+                            isWatchTogetherHidden: isWatchTogetherHidden, routeKind: routeKind, routeName: routeName,
+                            isAttendee: isAttendee)
     }
 }
 

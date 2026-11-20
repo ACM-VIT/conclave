@@ -127,6 +127,93 @@ struct PPL4HostControlsTests {
         #expect(host.snapshot.inviteCodeSavedSerial == 1)
     }
 
+    @Test func theSavedInviteCodeStaysKnownUntilTheCodeIsTurnedOff() throws {
+        let (people, log) = makeHost()
+        let host = people.host
+        host.setMeetingInviteCode(" K7P2QX ")
+        people.finish(try #require(log.tickets.first), HostActionResult.failed(.ackTimedOut))
+        #expect(host.knownInviteCode.isEmpty)
+        host.setMeetingInviteCode(" K7P2QX ")
+        try #require(log.tickets.count == 2)
+        people.finish(log.tickets[1], HostActionResult.completed)
+        #expect(host.knownInviteCode == "K7P2QX")
+        host.apply(HostControlsInputs.make(callSession: 1, meetingRequiresInviteCode: true))
+        #expect(host.knownInviteCode == "K7P2QX")
+        #expect(HostInviteCodePolicy.status(requiresCode: host.snapshot.access.requiresCode,
+                                            knownCode: host.knownInviteCode) == .onKnown)
+        host.apply(HostControlsInputs.make(callSession: 1, meetingRequiresInviteCode: false))
+        #expect(host.knownInviteCode.isEmpty)
+        #expect(HostInviteCodePolicy.status(requiresCode: false, knownCode: host.knownInviteCode) == .off)
+    }
+
+    @Test func clearingTheInviteCodeForgetsTheKnownCode() throws {
+        let (people, log) = makeHost(host: HostControlsInputs.make(callSession: 1, meetingRequiresInviteCode: true))
+        let host = people.host
+        #expect(HostInviteCodePolicy.status(requiresCode: host.snapshot.access.requiresCode,
+                                            knownCode: host.knownInviteCode) == .onUnknown)
+        host.setMeetingInviteCode("ROOM42")
+        people.finish(try #require(log.tickets.last), HostActionResult.completed)
+        #expect(host.knownInviteCode == "ROOM42")
+        #expect(host.dispatchClearMeetingInviteCode() == .dispatched)
+        people.finish(try #require(log.tickets.last), HostActionResult.completed)
+        #expect(host.knownInviteCode.isEmpty)
+    }
+
+    @Test func theSavedAttendeeCodeStaysKnownUntilTheWebinarCodeIsTurnedOff() throws {
+        let (people, log) = makeHost(host: HostControlsInputs.make(callSession: 1, isWebinarEnabled: true))
+        let host = people.host
+        #expect(host.setAttendeeCode(" WATCH7 ") == .dispatched)
+        people.finish(try #require(log.tickets.last), HostActionResult.completed)
+        #expect(host.knownAttendeeCode == "WATCH7")
+        #expect(host.knownInviteCode.isEmpty)
+        host.apply(HostControlsInputs.make(callSession: 1, isWebinarEnabled: true, webinarRequiresCode: true))
+        #expect(host.knownAttendeeCode == "WATCH7")
+        host.apply(HostControlsInputs.make(callSession: 1, isWebinarEnabled: true, webinarRequiresCode: false))
+        #expect(host.knownAttendeeCode.isEmpty)
+    }
+
+    @Test func aCodeIsShownAsCurrentOnlyWhileTheServerVersionMatches() throws {
+        func inputs(meeting: String, webinar: String, locked: Bool = false) -> HostControlsInputs {
+            HostControlsInputs.make(callSession: 1, meetingRequiresInviteCode: true, meetingInviteCodeVersion: meeting,
+                                    isWebinarEnabled: true, isWebinarLocked: locked, webinarRequiresCode: true,
+                                    webinarInviteCodeVersion: webinar)
+        }
+        let (people, log) = makeHost(host: inputs(meeting: "m0", webinar: "w0"))
+        let host = people.host
+        host.setMeetingInviteCode("ROOM42")
+        host.apply(inputs(meeting: "m1", webinar: "w0"))
+        people.finish(try #require(log.tickets.last), HostActionResult.completed)
+        #expect(host.knownInviteCode == "ROOM42")
+        host.setAttendeeCode("WATCH7")
+        host.apply(inputs(meeting: "m1", webinar: "w1"))
+        people.finish(try #require(log.tickets.last), HostActionResult.completed)
+        #expect(host.knownAttendeeCode == "WATCH7")
+
+        host.apply(inputs(meeting: "m1", webinar: "w1", locked: true))
+        #expect(host.knownInviteCode == "ROOM42" && host.knownAttendeeCode == "WATCH7",
+                "another host changing other settings leaves both codes current")
+        host.apply(inputs(meeting: "m2", webinar: "w1", locked: true))
+        #expect(host.knownInviteCode.isEmpty)
+        #expect(HostInviteCodePolicy.status(requiresCode: host.snapshot.access.requiresCode,
+                                            knownCode: host.knownInviteCode) == .onUnknown)
+        #expect(host.knownAttendeeCode == "WATCH7")
+        host.apply(inputs(meeting: "m2", webinar: "w2", locked: true))
+        #expect(host.knownAttendeeCode.isEmpty)
+    }
+
+    @Test func generatedInviteCodesAvoidLookalikeCharacters() {
+        #expect(HostInviteCodePolicy.code(indices: [0, 1, 2]) == "ABC")
+        #expect(HostInviteCodePolicy.code(indices: [-1, HostInviteCodePolicy.alphabet.count]) == "9A")
+        for _ in 0..<50 {
+            let code = HostInviteCodePolicy.generate()
+            #expect(code.count == HostInviteCodePolicy.generatedLength)
+            #expect(!code.contains { "01OIL".contains($0) })
+        }
+        #expect(HostInviteCodePolicy.isUnchanged(" ROOM42 ", knownCode: "ROOM42"))
+        #expect(!HostInviteCodePolicy.isUnchanged("ROOM42", knownCode: ""))
+        #expect(!HostInviteCodePolicy.isUnchanged("ROOM43", knownCode: "ROOM42"))
+    }
+
     @Test func theNoticeCarriesItsLevelAndClearsItsDraftOnSuccess() throws {
         let (people, log) = makeHost()
         let host = people.host

@@ -55,7 +55,19 @@ private struct HostControlsForm<Route: Hashable>: View {
                     HostPolicyToggleRow(people: people, policy: policy)
                 }
                 NavigationLink(value: link(PeopleRoute.inviteCode)) {
-                    LabeledContent(ConclaveStrings.text("Invite Code"), value: HostText.onOff(snapshot.access.requiresCode))
+                    LabeledContent {
+                        Text(HostText.inviteCodeValue(requiresCode: snapshot.access.requiresCode,
+                                                      knownCode: people.host.knownInviteCode))
+                            .monospaced(!people.host.knownInviteCode.isEmpty && snapshot.access.requiresCode)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(ConclaveStrings.text("Invite Code"))
+                            Text(snapshot.access.requiresCode ? ConclaveStrings.text("People enter a code to join")
+                                 : ConclaveStrings.text("Anyone with the link can join"))
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
                 .accessibilityIdentifier("host.inviteCode")
                 NavigationLink(value: link(PeopleRoute.accessList)) {
@@ -64,8 +76,6 @@ private struct HostControlsForm<Route: Hashable>: View {
                 .accessibilityIdentifier("host.accessList")
             } header: {
                 Text(ConclaveStrings.text("Meeting Access"))
-            } footer: {
-                Text(ConclaveStrings.text("When the meeting is locked, new people wait until a host admits them. Guests are people who aren\u{2019}t signed in."))
             }
             .id(HostControlsAnchor.access)
             Section {

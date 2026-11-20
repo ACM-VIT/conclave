@@ -40,6 +40,12 @@ internal fun hostPolicyTitleOf(context: Context, raw: String): String = when (ra
     else -> conclaveStringOf(context, "ppl_host_controls")
 }
 
+internal fun hostPolicyDetailOf(context: Context, raw: String): String? = when (raw) {
+    HostPolicyID.lockMeeting.rawValue -> conclaveStringOf(context, "hst_lock_detail")
+    HostPolicyID.allowGuests.rawValue -> conclaveStringOf(context, "hst_guests_detail")
+    else -> null
+}
+
 internal fun hostReasonOf(context: Context, raw: String): String? = when (raw) {
     PeopleActionReason.reconnecting, PeopleActionReason.notJoined -> conclaveStringOf(context, "ds_unavailable_reconnecting")
     PeopleActionReason.offline -> conclaveStringOf(context, "ds_unavailable_offline")
@@ -67,6 +73,7 @@ internal fun HostPolicySwitchRow(people: PeoplePresenter, policy: HostPolicyID) 
     val shown = row.shownOn
     val enabled = row.isEnabled && !row.isPending
     val reason = hostReasonOf(context, row.reason)
+    val detail = hostPolicyDetailOf(context, policy.rawValue)
     val updating = conclaveString("hst_updating")
     val identifier = "host.policy.${policy.rawValue}"
     ListItem(
@@ -74,6 +81,7 @@ internal fun HostPolicySwitchRow(people: PeoplePresenter, policy: HostPolicyID) 
         supportingContent = when {
             row.isPending -> { { ConclaveText(updating, line = "$identifier.pending") } }
             reason != null -> { { ConclaveText(reason, line = "$identifier.reason") } }
+            detail != null -> { { ConclaveText(detail, line = "$identifier.detail") } }
             else -> null
         },
         trailingContent = {

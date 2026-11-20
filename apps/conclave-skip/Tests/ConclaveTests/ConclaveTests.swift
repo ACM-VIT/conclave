@@ -524,8 +524,12 @@ final class ConclaveTests: XCTestCase {
             ConnectionQuality.fair
         )
         XCTAssertEqual(
-            ConnectionQualityHintPolicy.combined(sampledQuality: ConnectionQuality.poor, networkHint: ConnectionQuality.emergency),
-            ConnectionQuality.emergency
+            ConnectionQualityHintPolicy.combined(sampledQuality: ConnectionQuality.good, networkHint: ConnectionQuality.emergency),
+            ConnectionQuality.good
+        )
+        XCTAssertEqual(
+            ConnectionQualityHintPolicy.combined(sampledQuality: ConnectionQuality.unknown, networkHint: ConnectionQuality.emergency),
+            ConnectionQuality.poor
         )
         XCTAssertEqual(
             ConnectionQualityHintPolicy.screenSharePublishQuality(
@@ -3370,6 +3374,32 @@ final class ConclaveTests: XCTestCase {
         XCTAssertEqual(viewModel.state.webinarLinkSlug, "native-briefing")
         XCTAssertEqual(viewModel.state.webinarLinkURL, "https://conclave.acmvit.in/w/native-briefing")
         XCTAssertEqual(viewModel.state.webinarFeedMode, "active-speaker")
+    }
+
+    @MainActor
+    func testConfigEventsCarryTheInviteCodeVersionToHostControls() async throws {
+        let viewModel = MeetingViewModel()
+        viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
+        viewModel.state.roomId = "room-a"
+        viewModel.state.connectionState = ConnectionState.joined
+        let data = Data(#"{"requiresInviteCode":true,"inviteCodeVersion":"w-1","locked":true}"#.utf8)
+        let webinar = try JSONDecoder().decode(WebinarConfigSnapshot.self, from: data)
+
+        viewModel.socketManager.onMeetingConfigChanged?(MeetingConfigSnapshot(roomId: nil, requiresInviteCode: true,
+                                                                              inviteCodeVersion: "m-1"))
+        viewModel.socketManager.onWebinarConfigChanged?(webinar)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        var inputs = viewModel.makeHostControlsInputs()
+        XCTAssertEqual(inputs.meetingInviteCodeVersion, "m-1")
+        XCTAssertEqual(inputs.webinarInviteCodeVersion, "w-1")
+
+        viewModel.socketManager.onWebinarConfigChanged?(WebinarConfigSnapshot(
+            roomId: nil, enabled: nil, publicAccess: nil, locked: false, maxAttendees: nil, attendeeCount: nil,
+            requiresInviteCode: nil, linkSlug: nil, feedMode: nil
+        ))
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        inputs = viewModel.makeHostControlsInputs()
+        XCTAssertEqual(inputs.webinarInviteCodeVersion, "w-1", "a snapshot without a version keeps the last one")
     }
 
     @MainActor
@@ -7232,7 +7262,7 @@ final class ConclaveTests: XCTestCase {
             participants.append(StageParticipantInput.make(userId: "remote-\(index)", joinSerial: index + 1))
         }
         let everyone = ["remote-1", "remote-2", "remote-3", "remote-4", "remote-5", "remote-6", "remote-7", "remote-8", "remote-9"]
-        let firstFour = ["remote-1", "remote-2", "remote-3", "remote-4"]
+        let firstFive = ["remote-1", "remote-2", "remote-3", "remote-4", "remote-5"]
         let inputs = StageInputs.make(callSession: 1, isInCall: true, localUserId: "local", participants: participants,
                                       selfViewMode: "tile")
 
@@ -7249,7 +7279,7 @@ final class ConclaveTests: XCTestCase {
                                       viewMaxTiles: 6, selfViewMode: "tile"))
         XCTAssertEqual(capped.layout.capacity, StageCapacity.zero)
         XCTAssertEqual(StageOrderPolicy.consumerFallbackRemoteIds(layout: capped.layout, inputs: capped.inputs,
-                                                                  speakerUserId: capped.speakerUserId), firstFour)
+                                                                  speakerUserId: capped.speakerUserId), firstFive)
 
         let measured = StagePresenter(shell: MeetingShellPresenter())
         measured.setViewport(StageViewport(width: 375.0, height: 667.0, insetTop: 76.0, insetBottom: 64.0, insetLeading: 0.0,
@@ -7260,9 +7290,9 @@ final class ConclaveTests: XCTestCase {
                                                              speakerUserId: measured.speakerUserId)
 
         XCTAssertEqual(measured.layout.capacity, StageCapacity(gridSlots: 6, railSlots: 0))
-        XCTAssertEqual(ids, firstFour)
+        XCTAssertEqual(ids, firstFive)
         XCTAssertEqual(ids, StageOrderPolicy.visibleRemoteIds(measured.layout.slots, localUserId: "local"))
-        XCTAssertEqual(measured.layout.overflowCount, 5)
+        XCTAssertEqual(measured.layout.overflowCount, 4)
         XCTAssertFalse(ids.contains("local"))
     }
 

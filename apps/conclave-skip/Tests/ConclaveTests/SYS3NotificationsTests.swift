@@ -110,6 +110,23 @@ struct SYS3NotificationsTests {
         #expect(presenter.snapshot.settingsPermission == .denied)
     }
 
+    @Test func aDismissedPrimingBannerStaysDismissedAfterARelaunch() {
+        let defaults = freshDefaults()
+        let (first, _) = make(android: true, defaults: defaults)
+        first.statusRead(androidReading())
+        first.apply(liveInputs(session: 1))
+        first.stageEntryFinished()
+        #expect(first.snapshot.showsPrimingBanner)
+        first.dismissPriming()
+        #expect(NotificationPreferences.primingDismissed(defaults: defaults))
+
+        let (relaunched, _) = make(android: true, defaults: defaults)
+        relaunched.statusRead(androidReading())
+        relaunched.apply(liveInputs(session: 1))
+        relaunched.stageEntryFinished()
+        #expect(!relaunched.snapshot.showsPrimingBanner)
+    }
+
     @Test func primingBannerShowsOnlyAfterStageEntryOncePerProcess() {
         let (presenter, recorder) = make(android: true)
         presenter.statusRead(androidReading())

@@ -12,6 +12,7 @@ import {
   getOrCreateWebinarRoomConfig,
   normalizeHostEmail,
   setCustomWebinarLinkSlug,
+  setWebinarInviteCodeHash,
   type WebinarRoomConfig,
 } from "./webinar.js";
 
@@ -115,10 +116,10 @@ const applyScheduledWebinarToConfig = (
   applyScheduledRoomControls(webinarConfig, webinar);
   webinarConfig.scheduledWebinarId = webinar.id;
   if (inviteCodeHash !== null) {
-    webinarConfig.inviteCodeHash = inviteCodeHash;
+    setWebinarInviteCodeHash(webinarConfig, inviteCodeHash);
   }
   if (!webinarConfig.inviteCodeHash && !webinar.requiresInviteCode) {
-    webinarConfig.inviteCodeHash = null;
+    setWebinarInviteCodeHash(webinarConfig, null);
   }
 
   const previousLinkSlug = webinarConfig.linkSlug;

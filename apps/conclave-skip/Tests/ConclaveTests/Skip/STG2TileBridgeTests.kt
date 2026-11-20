@@ -160,14 +160,17 @@ class STG2TileBridgeTests {
     @Test fun railGeometryAndOverlayDecisionsMatchSwift() {
         for (size in listOf(iphoneSE, android360)) {
             assertTrue(SpotlightRailPolicy.isStrip(size))
-            assertEquals(80.0, SpotlightRailPolicy.tileWidth(size), 0.001)
             assertEquals(107.0, SpotlightRailPolicy.tileHeight(size), 0.001)
             assertEquals(4, SpotlightRailPolicy.capacity(viewport = size))
+            val area = StageLayoutPolicy.contentFrame(size)
+            val gap = StageLayoutPolicy.gap(size)
+            assertTrue(SpotlightRailPolicy.tileWidth(size) >= 80.0)
+            assertEquals(area.width, 4 * SpotlightRailPolicy.tileWidth(size) + 3 * gap, 0.001)
         }
         val landscape = stageViewportFrom(width = 800.0, height = 360.0, top = 24.0, bottom = 0.0, leading = 0.0, trailing = 48.0)
         assertFalse(SpotlightRailPolicy.isStrip(landscape))
-        assertEquals(160.0, SpotlightRailPolicy.tileWidth(landscape), 0.001)
-        assertEquals(90.0, SpotlightRailPolicy.tileHeight(landscape), 0.001)
+        assertEquals(128.0, SpotlightRailPolicy.tileWidth(landscape), 0.001)
+        assertEquals(72.0, SpotlightRailPolicy.tileHeight(landscape), 0.001)
         val tablet = stageViewportFrom(width = 1280.0, height = 800.0, top = 24.0, bottom = 48.0, leading = 0.0, trailing = 0.0)
         assertEquals(200.0, SpotlightRailPolicy.tileWidth(tablet), 0.001)
         assertEquals(0, SpotlightRailPolicy.capacity(viewport = StageViewport.zero))

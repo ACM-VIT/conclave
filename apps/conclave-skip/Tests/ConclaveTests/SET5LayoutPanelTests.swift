@@ -27,6 +27,15 @@ struct SET5LayoutPanelTests {
         #expect(LayoutPanelPolicy.minimumTiles == 2 && LayoutPanelPolicy.maximumTiles == 49 && LayoutPanelPolicy.sliderSteps == 46)
     }
 
+    @Test func phonesOnlyOfferTileCountsTheyCanShow() {
+        #expect(LayoutPanelPolicy.tileUpperBound(phoneCap: 8) == 8)
+        #expect(LayoutPanelPolicy.tileUpperBound(phoneCap: 0) == LayoutPanelPolicy.maximumTiles)
+        #expect(LayoutPanelPolicy.shownTiles(16, phoneCap: 8) == 8)
+        #expect(LayoutPanelPolicy.shownTiles(6, phoneCap: 8) == 6)
+        #expect(LayoutPanelPolicy.shownTiles(16, phoneCap: 0) == 16)
+        #expect(LayoutPanelPolicy.stepCount(phoneCap: 8) == 5)
+    }
+
     @Test func positionShowsOnlyWhileTheSelfViewFloats() {
 
         #expect(!LayoutPanelPolicy.showsPosition(selfMode: "tile", isSelfFloating: true))
@@ -142,7 +151,7 @@ struct SET5LayoutPanelTests {
                                                                window: window, platform: .android)
                 #expect(resolved.style == (sheet ? .bottomSheet : .overlay), "\(panel) at \(window.width)")
                 #expect(PanelPresentationPolicy.coverage(resolved, detent: nil) == (sheet ? .partial : .full), "\(panel)")
-                #expect(resolved.showsMiniTile == !sheet && resolved.detents.isEmpty && resolved.initialDetent == nil && resolved.paneWidth == 0)
+                #expect(resolved.showsMiniTile == (!sheet && panel != .settings && panel != .hostControls) && resolved.detents.isEmpty && resolved.initialDetent == nil && resolved.paneWidth == 0)
                 #expect(!PanelPresentationPolicy.keepsSheetInCompactHeight(resolved))
                 #expect(PanelPresentationPolicy.stageInteractiveDetent(resolved) == nil)
                 if sheet { #expect(resolved.appearance == .inCall, "Q8 6: dark from every invoker") }

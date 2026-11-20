@@ -49,6 +49,12 @@ enum WebcamVideoCodecPolicy {
     }
 }
 
+enum WebcamSpatialLayerPolicy {
+    static func activeLayerCount(maxLayerIndex: Int) -> Int {
+        max(0, maxLayerIndex) + 1
+    }
+}
+
 enum WebcamTemporalLayerPolicy {
     static let temporalLayerCount = 1
     static let receiveTemporalLayer = 0
@@ -239,6 +245,7 @@ final class VideoTrackWrapper: ObservableObject, Identifiable {
     @Published var rtcVideoTrack: RTCVideoTrack?
 
     @Published var isEnabled: Bool = true
+    @Published var isReceivingFrames: Bool = true
 
     init(
         id: String,
@@ -598,6 +605,7 @@ final class WebRTCClient: NSObject, ObservableObject {
     }
 
     var consumers: [String: ConsumerInfo] = [:]
+    private var participantAudioGains: [String: Double] = [:]
     private var nextConsumerGeneration = 0
     private var firstDecodedVideoFrameSignals: [ConsumerGenerationIdentity: FirstDecodedVideoFrameSignal] = [:]
     private var firstDecodedVideoFrameRenderers: [ConsumerGenerationIdentity: FirstDecodedVideoFrameRenderer] = [:]
@@ -2054,6 +2062,8 @@ final class WebRTCClient: NSObject, ObservableObject {
     var audioSource: RTCAudioSource?
     var videoCapturer: RTCCameraVideoCapturer?
     private var cameraFrameAdapter: MacCameraFrameAdapter?
+    private var activeCameraCaptureProfile: WebcamCaptureProfile?
+    private var cameraOutputWidth: Int32?
     var rtcLocalVideoTrack: RTCVideoTrack?
     var rtcLocalAudioTrack: RTCAudioTrack?
 
@@ -2125,7 +2135,7 @@ final class WebRTCClient: NSObject, ObservableObject {
         configuredScreenContentHint == NativeScreenShareContentHint.motion.rawValue ? 3 : 2
     }
 
-    private struct WebcamCaptureProfile {
+    private struct WebcamCaptureProfile: Equatable {
         let width: Int32
         let height: Int32
         let fps: Float64
@@ -2135,7 +2145,6 @@ final class WebRTCClient: NSObject, ObservableObject {
         let rid: String
         let scaleResolutionDownBy: Double
         let maxBitrateBps: Int
-        let maxFramerate: Double
     }
 
     private struct ScreenShareEncodingCap {
@@ -2581,23 +2590,10 @@ final class WebRTCClient: NSObject, ObservableObject {
                 opusStereo: false,
                 opusFec: true,
                 opusDtx: true,
-                opusMaxAverageBitrate: opusMaxAverageBitrate(connectionQuality: currentLocalBandwidthQuality),
+                opusMaxAverageBitrate: LocalSenderPolicy.microphoneMaxAverageBitrateBps(for: currentLocalBandwidthQuality),
                 opusPtime: 20
             )
         )
-    }
-
-    private func opusMaxAverageBitrate(connectionQuality: ConnectionQuality) -> Int {
-        switch connectionQuality {
-        case .emergency:
-            return 24_000
-        case .poor:
-            return 32_000
-        case .fair:
-            return 48_000
-        case .good, .unknown:
-            return 96_000
-        }
     }
 
     private func ensureMicrophonePermission() async throws {
@@ -2665,15 +2661,7 @@ final class WebRTCClient: NSObject, ObservableObject {
             localVideoEnabled = false
         }
 
-        let status = AVCaptureDevice.authorizationStatus(for: .video)
-        if status == .notDetermined {
-            let granted = await AVCaptureDevice.requestAccess(for: .video)
-            if !granted {
-                throw WebRTCError.permissionDenied
-            }
-        } else if status != .authorized {
-            throw WebRTCError.permissionDenied
-        }
+        try await ensureCameraPermission()
         guard generation == configurationGeneration else { throw WebRTCError.staleConfiguration }
         guard localVideoOffIntentGeneration == offIntentGeneration else {
             debugLog("[WebRTC] Camera start cancelled by a camera-off before producing")
@@ -2681,15 +2669,7 @@ final class WebRTCClient: NSObject, ObservableObject {
         }
 
         let source = Self.factory.videoSource()
-        let capturer: RTCCameraVideoCapturer
-        if ProcessInfo.processInfo.isiOSAppOnMac {
-            let adapter = MacCameraFrameAdapter(source: source)
-            cameraFrameAdapter = adapter
-            capturer = RTCCameraVideoCapturer(delegate: adapter)
-        } else {
-            cameraFrameAdapter = nil
-            capturer = RTCCameraVideoCapturer(delegate: source)
-        }
+        let capturer = makeCameraCapturer(source: source)
         videoSource = source
         videoCapturer = capturer
 
@@ -2755,15 +2735,13 @@ final class WebRTCClient: NSObject, ObservableObject {
             }
             producer.delegate = self
             producer.resume()
-            try? producer.setMaxSpatialLayer(
-                webcamMaxSpatialLayer(
-                    for: currentVideoQuality,
-                    connectionQuality: currentLocalBandwidthQuality
-                )
-            )
+            try? producer.setMaxSpatialLayer(WebcamSpatialLayerPolicy.activeLayerCount(
+                maxLayerIndex: webcamMaxSpatialLayer(for: currentVideoQuality, connectionQuality: currentLocalBandwidthQuality)
+            ))
 
             rtcLocalVideoTrack = track
             videoProducer = producer
+            applyConfiguredDegradationPreference(to: producer, type: .webcam)
             webcamProducerTopology = .vp8Simulcast
             pendingProducer = nil
             localVideoEnabled = true
@@ -2792,19 +2770,61 @@ final class WebRTCClient: NSObject, ObservableObject {
         }
     }
 
+    private func ensureCameraPermission() async throws {
+        let status = cameraAuthorizationStatus
+        if status == .notDetermined {
+            let granted = await AVCaptureDevice.requestAccess(for: .video)
+            if !granted {
+                throw WebRTCError.permissionDenied
+            }
+        } else if status != .authorized {
+            throw WebRTCError.permissionDenied
+        }
+    }
+
+    private func makeCameraCapturer(source: RTCVideoSource) -> RTCCameraVideoCapturer {
+        #if DEBUG && targetEnvironment(simulator)
+        if NativeRuntimeConfig.usesFakeCamera {
+            return SyntheticCameraCapturer(delegate: source)
+        }
+        #endif
+        if ProcessInfo.processInfo.isiOSAppOnMac {
+            let adapter = MacCameraFrameAdapter(source: source)
+            cameraFrameAdapter = adapter
+            return RTCCameraVideoCapturer(delegate: adapter)
+        } else {
+            cameraFrameAdapter = nil
+            return RTCCameraVideoCapturer(delegate: source)
+        }
+    }
+
+    private var cameraAuthorizationStatus: AVAuthorizationStatus {
+        #if DEBUG && targetEnvironment(simulator)
+        if NativeRuntimeConfig.usesFakeCamera { return .authorized }
+        #endif
+        return AVCaptureDevice.authorizationStatus(for: .video)
+    }
+
     func startCameraCapture() throws {
         guard let capturer = videoCapturer else { return }
 
         LocalPreviewController.shared.releaseScopedPreviewForCallCamera()
 
+        let profile = cameraCaptureProfile
+        #if DEBUG && targetEnvironment(simulator)
+        if let synthetic = capturer as? SyntheticCameraCapturer {
+            synthetic.start(width: Int(profile.width), height: Int(profile.height), fps: profile.fps)
+            activeCameraCaptureProfile = profile
+            cameraOutputWidth = profile.width
+            adaptCameraOutput()
+            return
+        }
+        #endif
+
         guard let camera = getCameraDevice(position: currentCameraPosition) else {
             throw WebRTCError.noCameraAvailable
         }
 
-        let profile = webcamCaptureProfile(
-            for: currentVideoQuality,
-            connectionQuality: currentLocalBandwidthQuality
-        )
         let format = try selectFormat(for: camera, targetWidth: profile.width, targetHeight: profile.height)
         let fps = try selectFPS(for: format, targetFPS: profile.fps)
         let captureFps = CameraFrameRatePolicy.captureFps(fps, ranges: Self.frameRateRanges(format))
@@ -2815,17 +2835,47 @@ final class WebRTCClient: NSObject, ObservableObject {
         }
         isMultitaskingCameraAccessEnabled = session.isMultitaskingCameraAccessEnabled
         capturer.startCapture(with: camera, format: format, fps: captureFps)
+        activeCameraCaptureProfile = profile
+        let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+        cameraOutputWidth = Int32(CameraOutputSizePolicy.outputWidth(
+            cameraWidth: Int(dimensions.width), cameraHeight: Int(dimensions.height),
+            requestedWidth: Int(profile.width), requestedHeight: Int(profile.height)
+        ))
+        adaptCameraOutput()
+    }
+
+    private var isCameraCaptureRunning: Bool {
+        #if DEBUG && targetEnvironment(simulator)
+        if videoCapturer is SyntheticCameraCapturer { return true }
+        #endif
+        return videoCapturer?.captureSession.isRunning == true
+    }
+
+    private func adaptCameraOutput() {
+        let capture = cameraCaptureProfile
+        let output = webcamCaptureProfile(for: currentVideoQuality, connectionQuality: currentLocalBandwidthQuality)
+        videoSource?.adaptOutputFormat(toWidth: capture.width, height: capture.height, fps: Int32(output.fps.rounded()))
+    }
+
+    private var cameraCaptureProfile: WebcamCaptureProfile {
+        let configured = configuredWebcamCaptureProfile
+        guard configured.height < 540 else { return configured }
+        return WebcamCaptureProfile(width: 1_280, height: 720, fps: configured.fps)
+    }
+
+    private var configuredWebcamCaptureProfile: WebcamCaptureProfile {
+        WebcamCaptureProfile(
+            width: Int32(configuredCameraWidth),
+            height: Int32(configuredCameraHeight),
+            fps: Float64(configuredCameraFrameRate)
+        )
     }
 
     private func webcamCaptureProfile(
         for quality: VideoQuality,
         connectionQuality: ConnectionQuality = .unknown
     ) -> WebcamCaptureProfile {
-        let configured = WebcamCaptureProfile(
-            width: Int32(configuredCameraWidth),
-            height: Int32(configuredCameraHeight),
-            fps: Float64(configuredCameraFrameRate)
-        )
+        let configured = configuredWebcamCaptureProfile
         if connectionQuality == .emergency {
             return constrainedWebcamCaptureProfile(configured, maxWidth: 640, maxHeight: 360, maxFPS: 8)
         }
@@ -2860,16 +2910,16 @@ final class WebRTCClient: NSObject, ObservableObject {
         switch quality {
         case .low:
             defaults = [
-                WebcamEncodingSpec(rid: "q", scaleResolutionDownBy: 2, maxBitrateBps: 65_000, maxFramerate: 8),
-                WebcamEncodingSpec(rid: "h", scaleResolutionDownBy: 1, maxBitrateBps: 120_000, maxFramerate: 12),
-                WebcamEncodingSpec(rid: "f", scaleResolutionDownBy: 1, maxBitrateBps: 180_000, maxFramerate: 15)
+                WebcamEncodingSpec(rid: "q", scaleResolutionDownBy: 2, maxBitrateBps: 65_000),
+                WebcamEncodingSpec(rid: "h", scaleResolutionDownBy: 1, maxBitrateBps: 120_000),
+                WebcamEncodingSpec(rid: "f", scaleResolutionDownBy: 1, maxBitrateBps: 180_000)
             ]
             defaultMaximumBitrate = 180_000
         case .standard:
             defaults = [
-                WebcamEncodingSpec(rid: "q", scaleResolutionDownBy: 4, maxBitrateBps: 80_000, maxFramerate: 12),
-                WebcamEncodingSpec(rid: "h", scaleResolutionDownBy: 2, maxBitrateBps: 220_000, maxFramerate: 20),
-                WebcamEncodingSpec(rid: "f", scaleResolutionDownBy: 1, maxBitrateBps: 1_650_000, maxFramerate: 30)
+                WebcamEncodingSpec(rid: "q", scaleResolutionDownBy: 4, maxBitrateBps: 80_000),
+                WebcamEncodingSpec(rid: "h", scaleResolutionDownBy: 2, maxBitrateBps: 250_000),
+                WebcamEncodingSpec(rid: "f", scaleResolutionDownBy: 1, maxBitrateBps: 1_650_000)
             ]
             defaultMaximumBitrate = 1_650_000
         }
@@ -2889,15 +2939,32 @@ final class WebRTCClient: NSObject, ObservableObject {
                 maxBitrateBps: max(
                     20_000,
                     Int((Double(effectiveMaximumBitrate) * bitrateRatio * detailLayerFactor).rounded())
-                ),
-                maxFramerate: index == lastIndex
-                    ? Double(configuredCameraFrameRate)
-                    : min(spec.maxFramerate, Double(configuredCameraFrameRate))
+                )
             )
         }
     }
 
     private func webcamEncodingSpecs(
+        for quality: VideoQuality,
+        connectionQuality: ConnectionQuality
+    ) -> [WebcamEncodingSpec] {
+        let factor = webcamLayerScaleFactor(for: quality, connectionQuality: connectionQuality)
+        return networkWebcamEncodingSpecs(for: quality, connectionQuality: connectionQuality).map { spec in
+            WebcamEncodingSpec(
+                rid: spec.rid,
+                scaleResolutionDownBy: spec.scaleResolutionDownBy * factor,
+                maxBitrateBps: spec.maxBitrateBps
+            )
+        }
+    }
+
+    private func webcamLayerScaleFactor(for quality: VideoQuality, connectionQuality: ConnectionQuality) -> Double {
+        let target = webcamCaptureProfile(for: quality, connectionQuality: connectionQuality)
+        let outputWidth = cameraOutputWidth ?? cameraCaptureProfile.width
+        return max(1, Double(outputWidth) / Double(max(1, target.width)))
+    }
+
+    private func networkWebcamEncodingSpecs(
         for quality: VideoQuality,
         connectionQuality: ConnectionQuality
     ) -> [WebcamEncodingSpec] {
@@ -2915,35 +2982,29 @@ final class WebRTCClient: NSObject, ObservableObject {
         switch connectionQuality {
         case .emergency:
             let bitrateCaps = [65_000, 90_000, 120_000]
-            let framerateCaps: [Double] = [8, 8, 8]
             return base.enumerated().map { index, spec in
                 WebcamEncodingSpec(
                     rid: spec.rid,
                     scaleResolutionDownBy: constrainedScaleResolutionDownBy(index, spec),
-                    maxBitrateBps: min(spec.maxBitrateBps, bitrateCaps[min(index, bitrateCaps.count - 1)]),
-                    maxFramerate: min(spec.maxFramerate, framerateCaps[min(index, framerateCaps.count - 1)])
+                    maxBitrateBps: min(spec.maxBitrateBps, bitrateCaps[min(index, bitrateCaps.count - 1)])
                 )
             }
         case .poor:
             let bitrateCaps = [120_000, 160_000, 180_000]
-            let framerateCaps: [Double] = [12, 12, 15]
             return base.enumerated().map { index, spec in
                 WebcamEncodingSpec(
                     rid: spec.rid,
                     scaleResolutionDownBy: constrainedScaleResolutionDownBy(index, spec),
-                    maxBitrateBps: min(spec.maxBitrateBps, bitrateCaps[min(index, bitrateCaps.count - 1)]),
-                    maxFramerate: min(spec.maxFramerate, framerateCaps[min(index, framerateCaps.count - 1)])
+                    maxBitrateBps: min(spec.maxBitrateBps, bitrateCaps[min(index, bitrateCaps.count - 1)])
                 )
             }
         case .fair:
             let bitrateCaps = [90_000, 220_000, 420_000]
-            let framerateCaps: [Double] = [10, 15, 20]
             return base.enumerated().map { index, spec in
                 WebcamEncodingSpec(
                     rid: spec.rid,
                     scaleResolutionDownBy: spec.scaleResolutionDownBy,
-                    maxBitrateBps: min(spec.maxBitrateBps, bitrateCaps[min(index, bitrateCaps.count - 1)]),
-                    maxFramerate: min(spec.maxFramerate, framerateCaps[min(index, framerateCaps.count - 1)])
+                    maxBitrateBps: min(spec.maxBitrateBps, bitrateCaps[min(index, bitrateCaps.count - 1)])
                 )
             }
         case .good, .unknown:
@@ -2955,17 +3016,14 @@ final class WebRTCClient: NSObject, ObservableObject {
         for quality: VideoQuality,
         connectionQuality: ConnectionQuality = .unknown
     ) -> [RTCRtpEncodingParameters] {
-        webcamEncodingSpecs(for: quality, connectionQuality: connectionQuality).enumerated().map { index, spec in
+        let fps = webcamCaptureProfile(for: quality, connectionQuality: connectionQuality).fps
+        return webcamEncodingSpecs(for: quality, connectionQuality: connectionQuality).map { spec in
             let encoding = RTCRtpEncodingParameters()
             encoding.rid = spec.rid
-            encoding.isActive = shouldSendWebcamEncoding(
-                layerIndex: index,
-                quality: quality,
-                connectionQuality: connectionQuality
-            )
+            encoding.isActive = true
             encoding.scaleResolutionDownBy = NSNumber(value: spec.scaleResolutionDownBy)
             encoding.maxBitrateBps = NSNumber(value: spec.maxBitrateBps)
-            encoding.maxFramerate = NSNumber(value: spec.maxFramerate)
+            encoding.maxFramerate = NSNumber(value: fps)
             encoding.numTemporalLayers = NSNumber(value: WebcamTemporalLayerPolicy.temporalLayerCount)
             encoding.networkPriority = spec.rid == "f" ? .low : .veryLow
             return encoding
@@ -2975,7 +3033,9 @@ final class WebRTCClient: NSObject, ObservableObject {
     private func webcamSingleReceiverEncodings() -> [RTCRtpEncodingParameters] {
         let encoding = RTCRtpEncodingParameters()
         encoding.isActive = true
-        encoding.scaleResolutionDownBy = NSNumber(value: 1.0)
+        encoding.scaleResolutionDownBy = NSNumber(
+            value: webcamLayerScaleFactor(for: currentVideoQuality, connectionQuality: currentLocalBandwidthQuality)
+        )
         encoding.maxBitrateBps = NSNumber(value: configuredCameraMaxBitrateBps)
         encoding.maxFramerate = NSNumber(value: Double(configuredCameraFrameRate))
         encoding.numTemporalLayers = NSNumber(value: WebcamTemporalLayerPolicy.temporalLayerCount)
@@ -3005,21 +3065,6 @@ final class WebRTCClient: NSObject, ObservableObject {
             return min(base, 1)
         }
         return base
-    }
-
-    private func shouldSendWebcamEncoding(
-        layerIndex: Int,
-        quality: VideoQuality,
-        connectionQuality: ConnectionQuality
-    ) -> Bool {
-        if connectionQuality == .good || connectionQuality == .unknown {
-            return true
-        }
-
-        return layerIndex <= webcamMaxSpatialLayer(
-            for: quality,
-            connectionQuality: connectionQuality
-        )
     }
 
     private func screenShareEncodingCap(
@@ -3125,18 +3170,26 @@ final class WebRTCClient: NSObject, ObservableObject {
             appData: appData
         )
         let queue = try sendOperationQueue(for: transport)
+        let degradation = LocalSenderPolicy.videoDegradationPreference(
+            for: .screen,
+            setting: configuredScreenDegradationPreference
+        )
         let result: ScreenProducerCreationResult
         do {
             result = try await performSendTransportOperation(on: queue) {
-                ScreenProducerCreationResult(
-                    producer: try request.transport.createProducer(
-                        for: request.track,
-                        encodings: request.encodings,
-                        codecOptions: nil,
-                        codec: request.codec,
-                        appData: request.appData
-                    )
+                let producer = try request.transport.createProducer(
+                    for: request.track,
+                    encodings: request.encodings,
+                    codecOptions: nil,
+                    codec: request.codec,
+                    appData: request.appData
                 )
+                producer.updateSenderParameters { parameters in
+                    var next = parameters
+                    next.degradationPreference = Self.degradationPreference(for: degradation)
+                    return next
+                }
+                return ScreenProducerCreationResult(producer: producer)
             }
         } catch {
             _ = transportConnectOutcomes.take(transportId: transport.id)
@@ -3164,18 +3217,28 @@ final class WebRTCClient: NSObject, ObservableObject {
             appData: appData
         )
         let queue = try sendOperationQueue(for: transport)
+        let cameraDegradation = LocalSenderPolicy.videoDegradationPreference(
+            for: .webcam,
+            setting: configuredCameraDegradationPreference
+        )
         let result: MediaProducerCreationResult
         do {
             result = try await performSendTransportOperation(on: queue) {
-                MediaProducerCreationResult(
-                    producer: try request.transport.createProducer(
-                        for: request.track,
-                        encodings: request.encodings,
-                        codecOptions: request.codecOptions,
-                        codec: request.codec,
-                        appData: request.appData
-                    )
+                let producer = try request.transport.createProducer(
+                    for: request.track,
+                    encodings: request.encodings,
+                    codecOptions: request.codecOptions,
+                    codec: request.codec,
+                    appData: request.appData
                 )
+                if producer.kind != .audio {
+                    producer.updateSenderParameters { parameters in
+                        var next = parameters
+                        next.degradationPreference = Self.degradationPreference(for: cameraDegradation)
+                        return next
+                    }
+                }
+                return MediaProducerCreationResult(producer: producer)
             }
         } catch {
             _ = transportConnectOutcomes.take(transportId: transport.id)
@@ -3331,6 +3394,10 @@ final class WebRTCClient: NSObject, ObservableObject {
         let consumeConfigurationGeneration = configurationGeneration
         let producerClosureGeneration = remoteProducerClosureGenerations[producerId, default: 0]
         try await createReceiveTransportIfNeeded()
+        guard configurationGeneration == consumeConfigurationGeneration,
+              remoteProducerClosureGenerations[producerId, default: 0] == producerClosureGeneration else {
+            throw WebRTCError.staleConfiguration
+        }
         guard let socket = socketManager,
               let device,
               let receiveTransport = receiveTransport,
@@ -3397,6 +3464,10 @@ final class WebRTCClient: NSObject, ObservableObject {
         let rtpParameters: String
         let consumer: Consumer
         do {
+            guard configurationGeneration == consumeConfigurationGeneration,
+                  remoteProducerClosureGenerations[producerId, default: 0] == producerClosureGeneration else {
+                throw WebRTCError.staleConfiguration
+            }
             rtpParameters = try encodeJSONString(response.rtpParameters)
             let request = ConsumerCreationRequest(
                 transport: receiveTransport,
@@ -3434,8 +3505,9 @@ final class WebRTCClient: NSObject, ObservableObject {
             )
         }
         consumer.delegate = self
-        consumer.resume()
-
+        if response.kind == "audio", let track = consumer.track as? RTCAudioTrack {
+            track.source.volume = participantAudioGain(userId: producerUserId)
+        }
         let isScreenVideo = (producerType == "screen" && response.kind == "video")
         let trackKey = isScreenVideo ? "\(producerUserId)-screen" : producerUserId
         nextConsumerGeneration += 1
@@ -3514,6 +3586,11 @@ final class WebRTCClient: NSObject, ObservableObject {
             )
         }
         do {
+            guard configurationGeneration == consumeConfigurationGeneration,
+                  remoteProducerClosureGenerations[producerId, default: 0] == producerClosureGeneration else {
+                throw WebRTCError.staleConfiguration
+            }
+            consumer.resume()
             try await socket.resumeConsumer(
                 consumerId: response.id,
                 requestKeyFrame: response.kind == "video",
@@ -3760,6 +3837,30 @@ final class WebRTCClient: NSObject, ObservableObject {
         }
     }
 
+    private func participantAudioGain(userId: String) -> Double {
+        if NativeRuntimeConfig.silentAudio { return 0 }
+        if let gain = participantAudioGains[userId] { return gain }
+        for (target, gain) in participantAudioGains where trackKeyMatchesUser(userId, userId: target) {
+            return gain
+        }
+        return 1.0
+    }
+
+    func setParticipantAudioGain(userId: String, gain: Double) {
+        let clamped = ParticipantAudioPreference(volume: gain).gain
+        participantAudioGains[userId] = clamped
+        for info in consumers.values where info.kind == "audio" && consumerMatchesUser(info, userId: userId) {
+            (info.consumer.track as? RTCAudioTrack)?.source.volume = NativeRuntimeConfig.silentAudio ? 0 : clamped
+        }
+    }
+
+    func resetParticipantAudioGains() {
+        participantAudioGains = [:]
+        for info in consumers.values where info.kind == "audio" {
+            (info.consumer.track as? RTCAudioTrack)?.source.volume = NativeRuntimeConfig.silentAudio ? 0 : 1.0
+        }
+    }
+
     func setAudioConsumersEnabled(userIdPrefix: String, enabled: Bool) {
         for info in consumers.values where info.kind == "audio" && info.userId.hasPrefix(userIdPrefix) {
             (info.consumer.track as? RTCAudioTrack)?.isEnabled = enabled
@@ -3882,8 +3983,7 @@ final class WebRTCClient: NSObject, ObservableObject {
         let enableCapturer = videoCapturer
         do {
             if enabled {
-                let status = AVCaptureDevice.authorizationStatus(for: .video)
-                guard status == .authorized else {
+                guard cameraAuthorizationStatus == .authorized else {
                     throw WebRTCError.permissionDenied
                 }
                 if !localVideoEnabled {
@@ -4506,7 +4606,7 @@ final class WebRTCClient: NSObject, ObservableObject {
             producer.delegate = self
             producer.resume()
             if targetTopology == .vp8Simulcast {
-                try? producer.setMaxSpatialLayer(2)
+                try? producer.setMaxSpatialLayer(WebcamSpatialLayerPolicy.activeLayerCount(maxLayerIndex: 2))
             }
 
             guard self.webcamTopologyControlGeneration == topologyGeneration,
@@ -4519,6 +4619,7 @@ final class WebRTCClient: NSObject, ObservableObject {
             }
 
             videoProducer = producer
+            applyConfiguredDegradationPreference(to: producer, type: .webcam)
             webcamProducerTopology = targetTopology
             localVideoTrack = VideoTrackWrapper(
                 id: producer.id,
@@ -4579,19 +4680,26 @@ final class WebRTCClient: NSObject, ObservableObject {
         return !definitiveRejections.contains { message.contains($0) }
     }
 
-    private func degradationPreference(
-        for rawValue: String,
-        fallback: RTPParameters.DegradationPreference
+    private func applyConfiguredDegradationPreference(to producer: Producer, type: ProducerType) {
+        let setting = type == .screen ? configuredScreenDegradationPreference : configuredCameraDegradationPreference
+        let preference = LocalSenderPolicy.videoDegradationPreference(for: type, setting: setting)
+        producer.updateSenderParameters { parameters in
+            var next = parameters
+            next.degradationPreference = Self.degradationPreference(for: preference)
+            return next
+        }
+    }
+
+    nonisolated private static func degradationPreference(
+        for preference: NativeMediaDegradationPreference
     ) -> RTPParameters.DegradationPreference {
-        switch rawValue {
-        case NativeMediaDegradationPreference.balanced.rawValue:
+        switch preference {
+        case .balanced:
             return .balanced
-        case NativeMediaDegradationPreference.maintainResolution.rawValue:
+        case .maintainResolution:
             return .maintainResolution
-        case NativeMediaDegradationPreference.maintainFramerate.rawValue:
+        case .maintainFramerate:
             return .maintainFramerate
-        default:
-            return fallback
         }
     }
 
@@ -4655,7 +4763,7 @@ final class WebRTCClient: NSObject, ObservableObject {
         evaluateWebcamTopologyTransition()
 
         if let audioProducer, !audioProducer.closed {
-            let audioBitrate = opusMaxAverageBitrate(connectionQuality: connectionQuality)
+            let audioBitrate = LocalSenderPolicy.microphoneMaxAverageBitrateBps(for: connectionQuality)
             audioProducer.updateSenderParameters { parameters in
                 var next = parameters
                 if var encodings = next.encodings, !encodings.isEmpty {
@@ -4669,35 +4777,38 @@ final class WebRTCClient: NSObject, ObservableObject {
             }
         }
 
-        if let producer = videoProducer,
-           webcamProducerTopology != .vp8SingleLayer {
+        if let producer = videoProducer, !producer.closed {
+            let adaptEncodings = webcamProducerTopology != .vp8SingleLayer
+            let degradation = LocalSenderPolicy.videoDegradationPreference(
+                for: .webcam,
+                setting: configuredCameraDegradationPreference
+            )
+            if adaptEncodings, localVideoEnabled, videoCapturer != nil {
+                if activeCameraCaptureProfile == cameraCaptureProfile, isCameraCaptureRunning {
+                    adaptCameraOutput()
+                } else {
+                    try? startCameraCapture()
+                }
+            }
             let specs = webcamEncodingSpecs(
                 for: currentVideoQuality,
                 connectionQuality: connectionQuality
             )
+            let fps = webcamCaptureProfile(for: currentVideoQuality, connectionQuality: connectionQuality).fps
 
-            try? producer.setMaxSpatialLayer(
-                webcamMaxSpatialLayer(
-                    for: currentVideoQuality,
-                    connectionQuality: connectionQuality
-                )
-            )
+            if adaptEncodings {
+                try? producer.setMaxSpatialLayer(WebcamSpatialLayerPolicy.activeLayerCount(
+                    maxLayerIndex: webcamMaxSpatialLayer(for: currentVideoQuality, connectionQuality: connectionQuality)
+                ))
+            }
             producer.updateSenderParameters { parameters in
                 var next = parameters
-                next.degradationPreference = self.degradationPreference(
-                    for: self.configuredCameraDegradationPreference,
-                    fallback: .maintainFramerate
-                )
-                if var encodings = next.encodings, !encodings.isEmpty {
+                next.degradationPreference = Self.degradationPreference(for: degradation)
+                if adaptEncodings, var encodings = next.encodings {
                     for index in encodings.indices {
                         let spec = specs[min(index, specs.count - 1)]
-                        encodings[index].isActive = self.shouldSendWebcamEncoding(
-                            layerIndex: index,
-                            quality: self.currentVideoQuality,
-                            connectionQuality: connectionQuality
-                        )
                         encodings[index].maxBitrateBps = spec.maxBitrateBps
-                        encodings[index].maxFramerate = spec.maxFramerate
+                        encodings[index].maxFramerate = fps
                         encodings[index].scaleResolutionDownBy = spec.scaleResolutionDownBy
                         encodings[index].numTemporalLayers = WebcamTemporalLayerPolicy.temporalLayerCount
                     }
@@ -4705,22 +4816,20 @@ final class WebRTCClient: NSObject, ObservableObject {
                 }
                 return next
             }
-
-            if localVideoEnabled, videoCapturer != nil {
-                try? startCameraCapture()
-            }
         }
 
         if let screenProducer, !screenProducer.closed {
-            let cap = screenShareEncodingCap(connectionQuality: connectionQuality)
-            updateScreenCaptureProfile(connectionQuality: connectionQuality)
+            let screenQuality = ScreenSharePublishProfilePolicy.mostConstrained(connectionQuality, screenProducerBandwidthQuality)
+            let cap = screenShareEncodingCap(connectionQuality: screenQuality)
+            let degradation = LocalSenderPolicy.videoDegradationPreference(
+                for: .screen,
+                setting: configuredScreenDegradationPreference
+            )
+            updateScreenCaptureProfile(connectionQuality: screenQuality)
             resetScreenFrameLimiter()
             screenProducer.updateSenderParameters { parameters in
                 var next = parameters
-                next.degradationPreference = self.degradationPreference(
-                    for: self.configuredScreenDegradationPreference,
-                    fallback: .maintainResolution
-                )
+                next.degradationPreference = Self.degradationPreference(for: degradation)
                 if var encodings = next.encodings, !encodings.isEmpty {
                     for index in encodings.indices {
                         encodings[index].isActive = true
@@ -4893,6 +5002,7 @@ final class WebRTCClient: NSObject, ObservableObject {
             producer.delegate = self
             producer.resume()
             screenProducer = producer
+            applyConfiguredDegradationPreference(to: producer, type: .screen)
             screenProducerBandwidthQuality = connectionQuality
             updateScreenCaptureProfile(connectionQuality: connectionQuality)
             resetScreenFrameLimiter()
@@ -4982,6 +5092,10 @@ final class WebRTCClient: NSObject, ObservableObject {
         return rtcLocalVideoTrack
     }
 
+    func localVideoStageKey() -> String {
+        rtcLocalVideoTrack?.trackId ?? ""
+    }
+
     func remoteVideoTrack(forUserId userId: String) -> VideoTrackWrapper? {
         let normalized = userId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty else { return nil }
@@ -5054,7 +5168,8 @@ final class WebRTCClient: NSObject, ObservableObject {
         return best
     }
 
-    private var videoFreezeStats: [String: (frames: Double, bytes: Double, stalls: Int)] = [:]
+    private var videoFreezeStats: [String: RemoteVideoHealthTracker] = [:]
+    private var videoFreezeKeyFrameTasks: [ConsumerGenerationIdentity: Task<Void, Never>] = [:]
 
     private static func statsNumber(_ obj: [String: Any], _ key: String) -> Double? {
         if let d = obj[key] as? Double { return d }
@@ -5063,13 +5178,9 @@ final class WebRTCClient: NSObject, ObservableObject {
         return nil
     }
 
-    private static let outgoingBandwidthFairBps = 500_000.0
-    private static let outgoingBandwidthPoorBps = 240_000.0
-    private static let outgoingBandwidthEmergencyBps = 120_000.0
     private static let incomingBandwidthFairBps = 500_000.0
     private static let incomingBandwidthPoorBps = 240_000.0
     private static let incomingBandwidthEmergencyBps = 120_000.0
-    private static let availableBitrateSaturationRatio = 0.7
 
     private struct ConnectionStatsSample {
         let rttMs: Double?
@@ -5086,7 +5197,6 @@ final class WebRTCClient: NSObject, ObservableObject {
         let availableIncomingBitrate: Double?
         let outboundMediaBytes: Double?
         let inboundMediaBytes: Double?
-        let outboundVideoQualityLimitationReason: String?
     }
 
     private struct MediaCounterSample {
@@ -5103,7 +5213,6 @@ final class WebRTCClient: NSObject, ObservableObject {
         var lossFraction: Double?
         var availableBitrate: Double?
         var mediaBytes: Double?
-        var outboundVideoQualityLimitationReason: String?
 
         var jitterMs: Double? {
             jitterWeight > 0 ? jitterWeightedMs / jitterWeight : nil
@@ -5135,7 +5244,6 @@ final class WebRTCClient: NSObject, ObservableObject {
 
     private var previousPublishConnectionLossSample: (packetsLost: Double, packetsReceived: Double)?
     private var previousReceiveConnectionLossSample: (packetsLost: Double, packetsReceived: Double)?
-    private var previousPublishMediaCounterSample: MediaCounterSample?
     private var previousReceiveMediaCounterSample: MediaCounterSample?
 
     func sampleConnectionQuality() -> ConnectionQuality {
@@ -5165,14 +5273,8 @@ final class WebRTCClient: NSObject, ObservableObject {
                 publish.availableBitrate,
                 sample.availableOutgoingBitrate
             )
-            publish.mediaBytes = Self.addNullable(publish.mediaBytes, sample.outboundMediaBytes)
-            publish.outboundVideoQualityLimitationReason = Self.selectQualityLimitationReason(
-                publish.outboundVideoQualityLimitationReason,
-                sample.outboundVideoQualityLimitationReason
-            )
         } else {
             previousPublishConnectionLossSample = nil
-            previousPublishMediaCounterSample = nil
         }
 
         if let receiveTransport, !receiveTransport.closed, !receiveTransportConnectGate.isBusy,
@@ -5228,15 +5330,7 @@ final class WebRTCClient: NSObject, ObservableObject {
             previousReceiveConnectionLossSample = (receive.packetsLost, receive.packetsReceived)
         }
 
-        let publishMediaSample = MediaCounterSample(timestampMs: nowMs, mediaBytes: publish.mediaBytes)
         let receiveMediaSample = MediaCounterSample(timestampMs: nowMs, mediaBytes: receive.mediaBytes)
-        let publishMediaBitrate = Self.windowedBitrate(
-            currentBytes: publishMediaSample.mediaBytes,
-            previousBytes: previousPublishMediaCounterSample?.mediaBytes,
-            elapsedMs: previousPublishMediaCounterSample.map {
-                publishMediaSample.timestampMs - $0.timestampMs
-            } ?? 0
-        )
         let receiveMediaBitrate = Self.windowedBitrate(
             currentBytes: receiveMediaSample.mediaBytes,
             previousBytes: previousReceiveMediaCounterSample?.mediaBytes,
@@ -5244,9 +5338,6 @@ final class WebRTCClient: NSObject, ObservableObject {
                 receiveMediaSample.timestampMs - $0.timestampMs
             } ?? 0
         )
-        if hasPublishStats {
-            previousPublishMediaCounterSample = publishMediaSample
-        }
         if hasReceiveStats {
             previousReceiveMediaCounterSample = receiveMediaSample
         }
@@ -5265,29 +5356,15 @@ final class WebRTCClient: NSObject, ObservableObject {
             packetLoss: receivePacketLoss,
             jitterMs: receive.jitterMs
         ) : .unknown
-        let publishBandwidthQuality = Self.deriveAvailableBitrateQuality(
-            availableBitrate: publish.availableBitrate,
-            mediaBitrate: publishMediaBitrate,
-            fairBitrate: Self.outgoingBandwidthFairBps,
-            poorBitrate: Self.outgoingBandwidthPoorBps,
-            emergencyBitrate: Self.outgoingBandwidthEmergencyBps,
-            encoderLimited: Self.hasEncoderQualityLimitation(
-                publish.outboundVideoQualityLimitationReason
-            )
-        )
-        let receiveBandwidthQuality = Self.deriveAvailableBitrateQuality(
+        let receiveBandwidthQuality = AvailableBitrateQualityPolicy.receiveQuality(
             availableBitrate: receive.availableBitrate,
             mediaBitrate: receiveMediaBitrate,
             fairBitrate: Self.incomingBandwidthFairBps,
             poorBitrate: Self.incomingBandwidthPoorBps,
-            emergencyBitrate: Self.incomingBandwidthEmergencyBps,
-            encoderLimited: false
+            emergencyBitrate: Self.incomingBandwidthEmergencyBps
         )
 
-        let publishQuality = Self.worstConnectionQuality(
-            publishMediaPressureQuality,
-            publishBandwidthQuality
-        )
+        let publishQuality = publishMediaPressureQuality
         let receiveQuality = Self.worstConnectionQuality(
             receiveTransportQuality,
             receiveBandwidthQuality
@@ -5329,7 +5406,6 @@ final class WebRTCClient: NSObject, ObservableObject {
         var availableIncomingBitrate: Double?
         var outboundMediaBytes: Double?
         var inboundMediaBytes: Double?
-        var outboundVideoQualityLimitationReason: String?
         var foundMetric = false
 
         for obj in array {
@@ -5403,14 +5479,6 @@ final class WebRTCClient: NSObject, ObservableObject {
                     outboundMediaBytes = addNullable(outboundMediaBytes, bytes)
                     foundMetric = true
                 }
-                if statsMediaKind(obj) == "video",
-                   let reason = obj["qualityLimitationReason"] as? String {
-                    outboundVideoQualityLimitationReason = selectQualityLimitationReason(
-                        outboundVideoQualityLimitationReason,
-                        reason
-                    )
-                    foundMetric = true
-                }
             default:
                 continue
             }
@@ -5437,8 +5505,7 @@ final class WebRTCClient: NSObject, ObservableObject {
             availableOutgoingBitrate: availableOutgoingBitrate,
             availableIncomingBitrate: availableIncomingBitrate,
             outboundMediaBytes: outboundMediaBytes,
-            inboundMediaBytes: inboundMediaBytes,
-            outboundVideoQualityLimitationReason: outboundVideoQualityLimitationReason
+            inboundMediaBytes: inboundMediaBytes
         )
     }
 
@@ -5463,48 +5530,6 @@ final class WebRTCClient: NSObject, ObservableObject {
         let deltaReceived = max(0, current.packetsReceived - previous.packetsReceived)
         let deltaTotal = deltaLost + deltaReceived
         return deltaTotal > 0 ? deltaLost / deltaTotal : 0
-    }
-
-    private static func deriveAvailableBitrateQuality(
-        availableBitrate: Double?,
-        mediaBitrate: Double?,
-        fairBitrate: Double,
-        poorBitrate: Double,
-        emergencyBitrate: Double,
-        encoderLimited: Bool
-    ) -> ConnectionQuality {
-        guard let availableBitrate, availableBitrate > 0, availableBitrate <= fairBitrate else {
-            return .unknown
-        }
-        guard isLowAvailableBitrate(
-            availableBitrate: availableBitrate,
-            mediaBitrate: mediaBitrate,
-            encoderLimited: encoderLimited
-        ) else {
-            return .unknown
-        }
-
-        if availableBitrate <= emergencyBitrate {
-            return .emergency
-        }
-        if availableBitrate <= poorBitrate {
-            return .poor
-        }
-        return .fair
-    }
-
-    private static func isLowAvailableBitrate(
-        availableBitrate: Double,
-        mediaBitrate: Double?,
-        encoderLimited: Bool
-    ) -> Bool {
-        if encoderLimited {
-            return true
-        }
-        guard let mediaBitrate, mediaBitrate > 0 else {
-            return false
-        }
-        return mediaBitrate >= availableBitrate * availableBitrateSaturationRatio
     }
 
     private static func worstConnectionQuality(_ qualities: ConnectionQuality...) -> ConnectionQuality {
@@ -5567,34 +5592,7 @@ final class WebRTCClient: NSObject, ObservableObject {
         return (deltaBytes * 8_000) / elapsedMs
     }
 
-    private static func hasEncoderQualityLimitation(_ reason: String?) -> Bool {
-        guard let reason else {
-            return false
-        }
-        let normalized = reason.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return !normalized.isEmpty && normalized != "none"
-    }
-
-    private static func selectQualityLimitationReason(_ current: String?, _ next: String?) -> String? {
-        guard let next else {
-            return current
-        }
-        guard let current else {
-            return next
-        }
-        return qualityLimitationRank(next) > qualityLimitationRank(current) ? next : current
-    }
-
-    private static func qualityLimitationRank(_ reason: String?) -> Int {
-        switch reason?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-        case "bandwidth": return 3
-        case "cpu": return 2
-        case "other": return 1
-        default: return 0
-        }
-    }
-
-    private static func parseInboundVideoDecode(_ statsJson: String) -> (frames: Double, bytes: Double)? {
+    private static func parseInboundVideoDecode(_ statsJson: String) -> (frames: Double, bytes: Double?)? {
         guard let data = statsJson.data(using: .utf8),
               let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
             return nil
@@ -5603,41 +5601,64 @@ final class WebRTCClient: NSObject, ObservableObject {
             guard (obj["type"] as? String) == "inbound-rtp" else { continue }
             let kind = (obj["kind"] as? String) ?? (obj["mediaType"] as? String)
             guard kind == "video",
-                  let frames = statsNumber(obj, "framesDecoded"),
-                  let bytes = statsNumber(obj, "bytesReceived") else {
+                  let frames = statsNumber(obj, "framesDecoded") else {
                 continue
             }
-            return (frames: frames, bytes: bytes)
+            return (frames: frames, bytes: statsNumber(obj, "bytesReceived"))
         }
         return nil
     }
 
     func checkVideoFreezes() async {
-        let minStallByteDelta: Double = 8000
-        let stallSamplesBeforePLI = 2
         var active = Set<String>()
-        for (consumerId, info) in consumers where
-            info.kind == "video" && info.lifecycleRole.acceptsPeriodicControls {
+        var keyFrameRequests: [ConsumerGenerationIdentity] = []
+        let nowMs = Double(Self.monotonicMilliseconds())
+        for (consumerId, info) in consumers {
+            if info.kind != "video" || !info.lifecycleRole.acceptsPeriodicControls { continue }
             active.insert(consumerId)
-            guard let sample = Self.parseInboundVideoDecode(info.consumer.stats) else { continue }
-            let prev = videoFreezeStats[consumerId]
-            var stalls = 0
-            if let prev = prev {
-                let stuck = sample.frames == prev.frames
-                    && (sample.bytes - prev.bytes) >= minStallByteDelta
-                stalls = stuck ? prev.stalls + 1 : 0
+            let sample = Self.parseInboundVideoDecode(info.consumer.stats)
+            var tracker = videoFreezeStats[consumerId] ?? RemoteVideoHealthTracker()
+            let decision = tracker.sample(
+                framesDecoded: sample?.frames,
+                nowMs: nowMs,
+                isPaused: info.isConsumerPaused || info.isProducerPaused || info.isAdaptivelyPaused,
+                isScreenShare: info.type == ProducerType.screen.rawValue,
+                bytesReceived: sample?.bytes
+            )
+            videoFreezeStats[consumerId] = tracker
+            if let wrapper = remoteVideoTracks[info.trackKey],
+               wrapper.id == consumerId, wrapper.consumerGeneration == info.generation,
+               wrapper.isReceivingFrames == decision.isStalled {
+                wrapper.isReceivingFrames = !decision.isStalled
             }
-            if stalls >= stallSamplesBeforePLI {
-
-                try? await socketManager?.resumeConsumer(consumerId: consumerId, requestKeyFrame: true)
+            if decision.requestKeyFrame {
+                keyFrameRequests.append(ConsumerGenerationIdentity(consumerId: consumerId, generation: info.generation))
             }
-            videoFreezeStats[consumerId] = (frames: sample.frames, bytes: sample.bytes, stalls: stalls)
         }
-        for key in Array(videoFreezeStats.keys) where !active.contains(key) {
-            videoFreezeStats.removeValue(forKey: key)
-            remoteConsumerPreferenceSignatures.removeValue(forKey: key)
-            remoteConsumerLayerPreferenceUnsupportedIds.remove(key)
-            remoteConsumerPreferenceInFlightIds.remove(key)
+        for key in Array(videoFreezeStats.keys) {
+            if !active.contains(key) {
+                videoFreezeStats.removeValue(forKey: key)
+                remoteConsumerPreferenceSignatures.removeValue(forKey: key)
+                remoteConsumerLayerPreferenceUnsupportedIds.remove(key)
+                remoteConsumerPreferenceInFlightIds.remove(key)
+            }
+        }
+        for identity in Array(videoFreezeKeyFrameTasks.keys) {
+            if consumers[identity.consumerId]?.generation != identity.generation {
+                videoFreezeKeyFrameTasks.removeValue(forKey: identity)?.cancel()
+            }
+        }
+        for identity in keyFrameRequests {
+            guard videoFreezeKeyFrameTasks[identity] == nil else { continue }
+            videoFreezeKeyFrameTasks[identity] = Task { @MainActor [weak self] in
+                guard let self else { return }
+                defer { self.videoFreezeKeyFrameTasks.removeValue(forKey: identity) }
+                guard !Task.isCancelled,
+                      let info = self.consumers[identity.consumerId], info.generation == identity.generation,
+                      info.lifecycleRole.acceptsPeriodicControls,
+                      !info.isConsumerPaused, !info.isProducerPaused, !info.isAdaptivelyPaused else { return }
+                try? await self.socketManager?.resumeConsumer(consumerId: identity.consumerId, requestKeyFrame: true)
+            }
         }
     }
 
@@ -5693,6 +5714,8 @@ final class WebRTCClient: NSObject, ObservableObject {
         consumers.removeAll()
         remoteProducerClosureGenerations.removeAll()
         videoFreezeStats.removeAll()
+        for task in videoFreezeKeyFrameTasks.values { task.cancel() }
+        videoFreezeKeyFrameTasks.removeAll()
         remoteConsumerPreferenceSignatures.removeAll()
         remoteConsumerLayerPreferenceUnsupportedIds.removeAll()
         remoteConsumerPreferenceInFlightIds.removeAll()
@@ -5701,7 +5724,6 @@ final class WebRTCClient: NSObject, ObservableObject {
         remoteConsumerPreferencePolicyRevision += 1
         previousPublishConnectionLossSample = nil
         previousReceiveConnectionLossSample = nil
-        previousPublishMediaCounterSample = nil
         previousReceiveMediaCounterSample = nil
 
         rtcLocalVideoTrack?.isEnabled = false
@@ -6668,7 +6690,7 @@ extension WebRTCClient {
     func playTestTone() {
         testTonePlayer?.stop()
         guard let player = try? AVAudioPlayer(data: Self.testToneWAVData()) else { return }
-        player.volume = 1.0
+        player.volume = NativeRuntimeConfig.playbackVolume(1.0)
         player.prepareToPlay()
         if player.play() {
             testTonePlayer = player
@@ -6758,6 +6780,7 @@ extension WebRTCClient {
             producer.resume()
 
             screenProducer = producer
+            applyConfiguredDegradationPreference(to: producer, type: .screen)
             screenProducerBandwidthQuality = currentLocalBandwidthQuality
             evaluateWebcamTopologyTransition()
 

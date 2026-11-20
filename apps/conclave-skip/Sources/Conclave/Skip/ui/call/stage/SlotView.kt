@@ -41,9 +41,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -63,6 +65,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
@@ -95,7 +98,7 @@ internal fun SlotView(
                 onClick = { stage.openPeople(destination = PanelDestination.none) }, modifier = modifier)
         }
         StageSlot.activityId -> ActivityStageCard(stage, modifier)
-        else -> ParticipantTile(slot, stage.tileChrome.entry(slot.userId), stage.speaking.state(slot.userId),
+        else -> ParticipantTile(slot, stage.tileChrome.entry(slot.userId), stage.speaking.state(forSlot = slot),
             stage.bindings.binding(slot.id), stage, renderers, modifier)
     }
 }
@@ -116,9 +119,12 @@ internal fun stageSlotModel(model: TileChromeModel, isShare: Boolean): TileChrom
 
 @Composable
 private fun ParticipantTile(
-    slot: StageSlot, entry: TileChromeEntry, speaking: TileSpeakingState, binding: RendererBinding, stage: StagePresenter,
+    sourceSlot: StageSlot, entry: TileChromeEntry, speaking: TileSpeakingState, binding: RendererBinding, stage: StagePresenter,
     renderers: StageRenderers, modifier: Modifier,
 ) {
+    var slotSize by remember(sourceSlot.id) { mutableStateOf(IntSize.Zero) }
+    val fit = stage.videoFit(slot = sourceSlot, slotWidth = slotSize.width.toDouble(), slotHeight = slotSize.height.toDouble())
+    val slot = StageSlot(id = sourceSlot.id, role = sourceSlot.role, userId = sourceSlot.userId, fit = fit)
     val isShare = slot.id.startsWith("share:")
     val model = stageSlotModel(entry.model, isShare)
     val role = slot.role
@@ -157,6 +163,7 @@ private fun ParticipantTile(
     }
 
     val paused = model.isLocal && !isShare && !model.isCameraOff && stage.chrome.isCameraPaused
+    val bare = PipController.inPipMode
 
     val chromeVisibility = LocalStageChromeVisibility.current
     val viewport = LocalStageViewport.current ?: stage.viewport
@@ -175,6 +182,7 @@ private fun ParticipantTile(
     val renderTargetResize = LocalStageRenderTargetResize.current
     Box(
         modifier
+            .onSizeChanged { slotSize = it }
             .then(shareSemantics)
             .then(if (role.isSelfMovable) Modifier.systemGestureExclusion() else Modifier)
             .selfViewDrag(role.isSelfMovable, slot.id, stage, drag, scope, { reduceState.value }, { rtlState.value }, haptics)
@@ -208,12 +216,14 @@ private fun ParticipantTile(
             showsHandBadge = !model.isLocal,
             overlayInsets = PaddingValues(start = tileInsets.leading.dp, top = tileInsets.top.dp,
                 end = tileInsets.trailing.dp, bottom = tileInsets.bottom.dp),
+            bare = bare,
         ) {
             ShareZoomBox(zoom, zoomable, slot.id, stage, Modifier.fillMaxSize().graphicsLayer { alpha = if (minimized) 0f else 1f }) {
                 StageRendererSlot(slot.id, slot.userId, model.isLocal, isShare, slot.fit, binding, stage, renderers, Modifier.fillMaxSize())
             }
             SharePlaceholder(model, binding, isShare, Modifier.fillMaxSize())
         }
+        if (bare) return@Box
         if (minimized) {
 
             ConclaveStageChip(title = conclaveString("ds_you"), identifier = "stage.selfView.minimized",
@@ -495,7 +505,7 @@ private fun StageRendererSlot(
     stage: StagePresenter, renderers: StageRenderers, modifier: Modifier,
 ) {
     val videoKey = binding.videoKey
-    Box(modifier.semantics { hideFromAccessibility() }) {
+    Box(modifier.background(Color(DesignTokens.androidInCallBackground)).semantics { hideFromAccessibility() }) {
         if (renderers.usesProbes) {
             RendererProbe(key = slotId, slot = RendererSlot.stage, modifier = Modifier.fillMaxSize(), pattern = renderers.pattern)
         } else {
@@ -503,15 +513,33 @@ private fun StageRendererSlot(
             val mirror = if (isLocal && !isShare) {
                 LocalVideoMirrorPolicy.mirrors(isFront = stage.chrome.isFrontCamera, preference = LocalVideoMirrorPreference.shared.isOn)
             } else false
-            StageLiveVideo(slotId, userId, isLocal, isShare, videoKey, fit, mirror)
+            StageLiveVideo(slotId, userId, isLocal, isShare, videoKey, fit, mirror,
+                avatarSeed = stage.tileChrome.entry(userId).model.avatarSeed,
+                isSpotlight = stage.layout.slots.firstOrNull { it.id == slotId }?.role == StageSlotRole.spotlightMain)
         }
     }
 }
 
 @Composable
-internal fun StageLiveVideo(slotId: String, userId: String, isLocal: Boolean, isShare: Boolean, videoKey: String, fit: StageVideoFit, mirror: Boolean) {
+internal fun StageLiveVideo(
+    slotId: String, userId: String, isLocal: Boolean, isShare: Boolean, videoKey: String, fit: StageVideoFit, mirror: Boolean,
+    avatarSeed: String = "", isSpotlight: Boolean = false,
+) {
     val track = remember(videoKey, userId, isLocal, isShare) { stageLiveTrack(userId, isLocal, isShare, videoKey) }
-    VideoTrackView(track = track, mirror = mirror, fit = fit == StageVideoFit.fit, rendererKey = "stage:$slotId", clearBeforeAttach = false)
+    val wrapper = if (!isLocal && !isShare && videoKey.isNotEmpty()) {
+        MeetingViewModel.shared.webRTCClient.remoteVideoTrack(forUserId = userId)
+    } else null
+    Box(Modifier.fillMaxSize()) {
+        VideoTrackView(track = track, mirror = mirror, fit = fit == StageVideoFit.fit, rendererKey = "stage:$slotId", clearBeforeAttach = false)
+        if (wrapper != null && !wrapper.isReceivingFrames) {
+            androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize().background(LocalConclaveExtendedColors.current.tile)) {
+                val density = TileChromePolicy.density(width = maxWidth.value.toDouble(), height = maxHeight.value.toDouble(), isSpotlight = isSpotlight)
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    ConclaveAvatar(ConclaveAvatarIdentity.fromSeed(avatarSeed), TileChromePolicy.avatarSize(density).dp)
+                }
+            }
+        }
+    }
 }
 
 internal fun stageLiveTrack(userId: String, isLocal: Boolean, isShare: Boolean, videoKey: String): VideoTrack? {

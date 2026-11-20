@@ -339,6 +339,13 @@ struct GameConfigValue: Codable, Equatable {
     }
 }
 
+enum GameMoveTiming {
+    static func judgedAckTimeoutMillis(gameId: String, type: String) -> Int? {
+        guard gameId == "long-shot", type == "answer" else { return nil }
+        return 45_000
+    }
+}
+
 struct GameJSONValue: Codable, Equatable {
     let rawJSON: String
 
@@ -739,6 +746,8 @@ struct JoinRoomResponse: Codable {
     let rtpCapabilities: RtpCapabilities
     let existingProducers: [ProducerInfo]
     let status: String?
+    let activeSpeakerId: String?
+    let hasActiveSpeakerInfo: Bool
 
     let roomId: String?
     let hostUserId: String?
@@ -764,6 +773,7 @@ struct JoinRoomResponse: Codable {
         case rtpCapabilities
         case existingProducers
         case status
+        case activeSpeakerId
         case roomId
         case hostUserId
         case hostUserIds
@@ -788,6 +798,8 @@ struct JoinRoomResponse: Codable {
         rtpCapabilities: RtpCapabilities,
         existingProducers: [ProducerInfo],
         status: String? = nil,
+        activeSpeakerId: String? = nil,
+        hasActiveSpeakerInfo: Bool = false,
         roomId: String? = nil,
         hostUserId: String? = nil,
         hostUserIds: [String]? = nil,
@@ -810,6 +822,8 @@ struct JoinRoomResponse: Codable {
         self.rtpCapabilities = rtpCapabilities
         self.existingProducers = existingProducers
         self.status = status
+        self.activeSpeakerId = activeSpeakerId
+        self.hasActiveSpeakerInfo = hasActiveSpeakerInfo || activeSpeakerId != nil
         self.roomId = roomId
         self.hostUserId = hostUserId
         self.hostUserIds = hostUserIds
@@ -842,6 +856,8 @@ struct JoinRoomResponse: Codable {
         }
         self.existingProducers = try container.decodeIfPresent([ProducerInfo].self, forKey: .existingProducers) ?? []
         self.status = status
+        self.activeSpeakerId = try container.decodeIfPresent(String.self, forKey: .activeSpeakerId)
+        self.hasActiveSpeakerInfo = container.contains(.activeSpeakerId)
         self.roomId = try container.decodeIfPresent(String.self, forKey: .roomId)
         self.hostUserId = try container.decodeIfPresent(String.self, forKey: .hostUserId)
         self.hostUserIds = try container.decodeIfPresent([String].self, forKey: .hostUserIds)
@@ -1789,6 +1805,13 @@ struct RedirectUserResponse: Codable {
 struct MeetingConfigSnapshot: Codable {
     let roomId: String?
     let requiresInviteCode: Bool?
+    let inviteCodeVersion: String?
+
+    init(roomId: String?, requiresInviteCode: Bool?, inviteCodeVersion: String? = nil) {
+        self.roomId = roomId
+        self.requiresInviteCode = requiresInviteCode
+        self.inviteCodeVersion = inviteCodeVersion
+    }
 }
 
 struct MeetingConfigUpdateRequest: Encodable {
@@ -1821,6 +1844,7 @@ struct WebinarConfigSnapshot: Codable {
     let maxAttendees: Int?
     let attendeeCount: Int?
     let requiresInviteCode: Bool?
+    let inviteCodeVersion: String?
     let linkSlug: String?
     let feedMode: String?
     let hasLinkSlug: Bool
@@ -1838,7 +1862,8 @@ struct WebinarConfigSnapshot: Codable {
         linkSlug: String?,
         feedMode: String?,
         hasLinkSlug: Bool? = nil,
-        qaEnabled: Bool? = nil
+        qaEnabled: Bool? = nil,
+        inviteCodeVersion: String? = nil
     ) {
         self.roomId = roomId
         self.enabled = enabled
@@ -1847,6 +1872,7 @@ struct WebinarConfigSnapshot: Codable {
         self.maxAttendees = maxAttendees
         self.attendeeCount = attendeeCount
         self.requiresInviteCode = requiresInviteCode
+        self.inviteCodeVersion = inviteCodeVersion
         self.linkSlug = linkSlug
         self.feedMode = feedMode
         self.hasLinkSlug = hasLinkSlug ?? (linkSlug != nil)
@@ -1861,6 +1887,7 @@ struct WebinarConfigSnapshot: Codable {
         case maxAttendees
         case attendeeCount
         case requiresInviteCode
+        case inviteCodeVersion
         case linkSlug
         case feedMode
         case qaEnabled
@@ -1875,6 +1902,7 @@ struct WebinarConfigSnapshot: Codable {
         maxAttendees = try container.decodeIfPresent(Int.self, forKey: .maxAttendees)
         attendeeCount = try container.decodeIfPresent(Int.self, forKey: .attendeeCount)
         requiresInviteCode = try container.decodeIfPresent(Bool.self, forKey: .requiresInviteCode)
+        inviteCodeVersion = try container.decodeIfPresent(String.self, forKey: .inviteCodeVersion)
         linkSlug = try container.decodeIfPresent(String.self, forKey: .linkSlug)
         feedMode = try container.decodeIfPresent(String.self, forKey: .feedMode)
         hasLinkSlug = container.contains(.linkSlug)
@@ -1890,6 +1918,7 @@ struct WebinarConfigSnapshot: Codable {
         try container.encodeIfPresent(maxAttendees, forKey: .maxAttendees)
         try container.encodeIfPresent(attendeeCount, forKey: .attendeeCount)
         try container.encodeIfPresent(requiresInviteCode, forKey: .requiresInviteCode)
+        try container.encodeIfPresent(inviteCodeVersion, forKey: .inviteCodeVersion)
         if hasLinkSlug {
             if let linkSlug {
                 try container.encode(linkSlug, forKey: .linkSlug)
@@ -2077,6 +2106,11 @@ struct RedirectNotification: Codable {
 struct HostAssignedNotification: Codable {
     let roomId: String?
     let hostUserId: String?
+}
+
+struct ActiveSpeakerChangedNotification: Codable {
+    let roomId: String?
+    let userId: String?
 }
 
 struct HostChangedNotification: Codable {

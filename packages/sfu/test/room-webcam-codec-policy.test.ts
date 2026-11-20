@@ -99,6 +99,7 @@ describe("Room webcam codec transitions", () => {
       clientId: "default",
       router: fakeRouter(),
       workerPid: null,
+      webcamVp9Enabled: true,
     });
     const modern = new Client({
       id: "modern",
@@ -127,6 +128,7 @@ describe("Room webcam codec transitions", () => {
       clientId: "default",
       router: fakeRouter(),
       workerPid: null,
+      webcamVp9Enabled: true,
     });
     const modern = new Client({
       id: "modern",
@@ -164,6 +166,7 @@ describe("Room webcam codec transitions", () => {
       clientId: "default",
       router: fakeRouter(),
       workerPid: null,
+      webcamVp9Enabled: true,
     });
     const client = new Client({
       id: "modern",

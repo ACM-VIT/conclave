@@ -1,4 +1,5 @@
 import { RoomAiCredentials } from "../../server/roomAiCredentials.js";
+import { newInviteCodeVersion } from "../../server/inviteCodeVersion.js";
 import type {
   AudioLevelObserver,
   PlainTransport,
@@ -55,6 +56,7 @@ export interface RoomOptions {
   router: Router;
   clientId: string;
   workerPid: number | null;
+  webcamVp9Enabled?: boolean;
 }
 
 type AppAwarenessRemoval = {
@@ -227,6 +229,7 @@ export class Room {
   private _participantUnmuteAllowed: boolean = true;
   private _participantVideoAllowed: boolean = true;
   private _meetingInviteCodeHash: string | null = null;
+  private _meetingInviteCodeVersion = "";
   public appsState: { activeAppId: string | null; locked: boolean } = {
     activeAppId: null,
     locked: false,
@@ -283,11 +286,14 @@ export class Room {
   private readonly webcamReceiverCapacityProofCoordinator:
     WebcamReceiverCapacityProofCoordinator;
 
+  private readonly webcamVp9Enabled: boolean;
+
   constructor(options: RoomOptions) {
     this.id = options.id;
     this.router = options.router;
     this.clientId = options.clientId;
     this.workerPid = options.workerPid;
+    this.webcamVp9Enabled = options.webcamVp9Enabled ?? config.webcamVp9Enabled;
     this.channelId = `${options.clientId}:${options.id}`;
     this.webcamReceiverCapacityProofCoordinator =
       new WebcamReceiverCapacityProofCoordinator({
@@ -383,7 +389,9 @@ export class Room {
   }
 
   private selectWebcamCodecPolicyCodec(): WebcamCodecPolicy["codec"] {
-    return selectRoomWebcamCodec(this.webcamCodecPolicyParticipants());
+    return selectRoomWebcamCodec(this.webcamCodecPolicyParticipants(), {
+      vp9Enabled: this.webcamVp9Enabled,
+    });
   }
 
   private webcamCodecPolicyParticipants() {
@@ -1795,6 +1803,15 @@ export class Room {
     return Boolean(this._meetingInviteCodeHash);
   }
 
+  get meetingInviteCodeVersion(): string {
+    return this._meetingInviteCodeVersion;
+  }
+
+  private assignMeetingInviteCodeHash(hash: string | null): void {
+    this._meetingInviteCodeHash = hash;
+    this._meetingInviteCodeVersion = newInviteCodeVersion(hash);
+  }
+
   setMeetingInviteCode(inviteCode: string | null): boolean {
     const normalizedInviteCode = normalizeInviteCode(inviteCode);
     const nextHash = normalizedInviteCode
@@ -1803,7 +1820,7 @@ export class Room {
     if (this._meetingInviteCodeHash === nextHash) {
       return false;
     }
-    this._meetingInviteCodeHash = nextHash;
+    this.assignMeetingInviteCodeHash(nextHash);
     return true;
   }
 
@@ -2381,7 +2398,7 @@ export class Room {
     this.webinarQaEntries.clear();
     this.webinarPromotedUserKeys.clear();
     this.webinarDemotedUserKeys.clear();
-    this._meetingInviteCodeHash = null;
+    this.assignMeetingInviteCodeHash(null);
   }
 
   scheduleDisconnect(

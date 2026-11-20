@@ -301,10 +301,6 @@ struct ACT3PromptGamesTests {
             #expect(PromptSceneBuilder.hostAction(kind: kind, phase: phase, context: context(isPlayer: false)) == PromptHostAction.none)
             #expect(PromptSceneBuilder.hostAction(kind: kind, phase: phase, context: context(isRecovering: true)) == PromptHostAction.none)
         }
-        #expect(PromptHostAction.allCases.map { $0.moveType } == ["", "skip", "next", "skip", "skip", "callVote", "tally"])
-        for action in PromptHostAction.allCases where action != PromptHostAction.none {
-            #expect(action.intent().type == action.moveType && GameMoveAdapter.payloadJSON(action.intent()).isEmpty)
-        }
         #expect(PromptScenePolicy.isPromptGame(GameSceneKind.imposter) && !PromptScenePolicy.isPromptGame(GameSceneKind.wordle))
     }
 

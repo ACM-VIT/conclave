@@ -21,7 +21,7 @@ struct SlotView: View {
             ActivityStageContainer(stage: stage)
         } else {
             ParticipantTile(slot: slot, entry: stage.tileChrome.entry(for: slot.userId),
-                            speaking: stage.speaking.state(for: slot.userId), binding: stage.bindings.binding(for: slot.id),
+                            speaking: stage.speaking.state(forSlot: slot), binding: stage.bindings.binding(for: slot.id),
                             stage: stage, viewport: viewport, renderers: renderers)
         }
     }
@@ -84,6 +84,14 @@ struct ParticipantTile: View {
     @Environment(\.activitySession) private var session
 
     var body: some View {
+        GeometryReader { proxy in
+            let fit = stage.videoFit(slot: slot, slotWidth: Double(proxy.size.width), slotHeight: Double(proxy.size.height))
+            tile(StageSlot(id: slot.id, role: slot.role, userId: slot.userId, fit: fit))
+        }
+    }
+
+    @ViewBuilder
+    private func tile(_ slot: StageSlot) -> some View {
         let isShare = slot.id.hasPrefix("share:")
         let insets = StageViewportPolicy.tileInsets(kind: stage.kind, role: slot.role, viewport: viewport)
         let model = StageSlotViewModel.model(entry.model, isShare: isShare)
@@ -113,6 +121,7 @@ struct ParticipantTile: View {
                                  binding: binding, stage: stage, renderers: renderers)
             }
             .overlay { SharePlaceholder(model: model, binding: binding, isShare: isShare) }
+            .background(HostingTheme.token(DesignTokens.iosInCallTile))
             .opacity(slot.role == .selfMinimized ? 0 : 1)
         } selfViewAccessory: {
 
@@ -456,7 +465,8 @@ struct RendererSlotView: View {
                 probe
             } else {
                 StageLiveVideo(slotId: slotId, userId: userId, isLocal: isLocal, isShare: isShare, videoKey: videoKey,
-                               fit: fit, isMirrored: mirror)
+                               fit: fit, isMirrored: mirror, avatarSeed: stage.tileChrome.entry(for: userId).model.avatarSeed,
+                               isSpotlight: stage.layout.slots.first { $0.id == slotId }?.role == .spotlightMain)
             }
         }
         .transaction { transaction in transaction.animation = nil }

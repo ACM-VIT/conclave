@@ -77,6 +77,16 @@ internal fun SettingsMicrophonePage(settings: SettingsPresenter, reservation: Pa
     LazyColumn(Modifier.fillMaxSize().testTag("settings.page.microphone"), contentPadding = reservation) {
         item(key = "level", contentType = "level") {
             when {
+                audio.micPhase == MicTestPhase.recording -> ListItem(
+                    headlineContent = { ConclaveText(conclaveString("set_keep_speaking", audio.recordingSecondsLeft), line = "settings.mic.countdown") },
+                    supportingContent = { ConclaveText(conclaveString("set_mic_paused_recording"), line = "settings.mic.paused") },
+                    trailingContent = { SettingsLevelMeter(settings.micLevel.segments, Modifier.width(100.dp)) },
+                    colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surface),
+                )
+                audio.micPhase == MicTestPhase.unavailable -> ListItem(
+                    headlineContent = { ConclaveText(conclaveString(if (audio.micTestReason == SettingsReason.permissionDenied) "set_mic_permission_off" else "set_mic_unavailable"), line = "settings.mic.failure") },
+                    colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surface),
+                )
                 audio.isMuted -> ListItem(
                     headlineContent = { ConclaveText(conclaveString("set_speak_to_test"), line = "settings.mic.level.title") },
                     supportingContent = { ConclaveText(conclaveString("set_unmute_to_test"), line = "settings.mic.unmuteToTest") },
@@ -136,13 +146,17 @@ private fun SettingsRecordReplayItem(settings: SettingsPresenter, audio: Setting
     val busy = audio.micPhase == MicTestPhase.recording || audio.micPhase == MicTestPhase.replaying
     val phaseName = SettingsCopy.micPhaseName(audio.micPhase)
     ListItem(
-        headlineContent = { ConclaveText(conclaveString("set_record_replay"), line = "settings.mic.recordReplay.title") },
+        headlineContent = { ConclaveText(conclaveString(when (audio.micPhase) {
+            MicTestPhase.unavailable -> "set_mic_test_retry"
+            MicTestPhase.recording -> "set_stop"
+            else -> "set_record_replay"
+        }), line = "settings.mic.recordReplay.title") },
         supportingContent = {
             ConclaveText(if (busy && phaseName != null) conclaveString(phaseName) else conclaveString("set_record_replay_detail"),
                 line = "settings.mic.recordReplay.value")
         },
         colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surface),
-        modifier = Modifier.heightIn(min = 56.dp).testTag("settings.mic.recordReplay").clickable(enabled = !audio.isMuted, role = Role.Button) {
+        modifier = Modifier.heightIn(min = 56.dp).testTag("settings.mic.recordReplay").clickable(role = Role.Button) {
             if (busy) settings.micSampleFinished() else settings.recordMicSample()
         },
     )

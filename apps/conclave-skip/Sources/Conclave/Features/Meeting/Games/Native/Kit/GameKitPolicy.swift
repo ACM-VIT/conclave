@@ -77,7 +77,7 @@ enum GameKitSplitPolicy {
 }
 
 enum GameGlyph: String, CaseIterable, Equatable {
-    case trivia, bluff, wouldYouRather, mostLikelyTo, reaction, imposter, wordle, chess, zip, generic
+    case trivia, bluff, wouldYouRather, mostLikelyTo, reaction, imposter, wordle, chess, zip, longShot, generic
 }
 
 enum GameGlyphPolicy {
@@ -93,6 +93,7 @@ enum GameGlyphPolicy {
         if kind == GameSceneKind.wordle { return GameGlyph.wordle }
         if kind == GameSceneKind.chess { return GameGlyph.chess }
         if kind == GameSceneKind.zip { return GameGlyph.zip }
+        if kind == GameSceneKind.longShot { return GameGlyph.longShot }
         return GameGlyph.generic
     }
 }
@@ -154,7 +155,7 @@ enum GameShellHeaderPolicy {
     static func bodyShowsSeat(chrome: GameChromeModel, sceneKind: String) -> Bool {
         if chrome.phase != GameChromePhase.playing || chrome.seat == SeatState.player { return false }
         if sceneKind == GameSceneKind.trivia || sceneKind == GameSceneKind.bluff || sceneKind == GameSceneKind.wouldYouRather
-            || sceneKind == GameSceneKind.mostLikelyTo || sceneKind == GameSceneKind.imposter {
+            || sceneKind == GameSceneKind.mostLikelyTo || sceneKind == GameSceneKind.imposter || sceneKind == GameSceneKind.longShot {
             return true
         }
         if sceneKind == GameSceneKind.chess { return chrome.seat == SeatState.canJoin }

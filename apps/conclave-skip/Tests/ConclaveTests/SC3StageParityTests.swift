@@ -433,6 +433,23 @@ enum SC3Parity {
             visible.insert(sharer, at: 0)
         }
         let capacity = capacityFor(StageKind(rawValue: kind) ?? StageKind.grid)
+        let selfTile = legacy.selfPlacement == "tile" && pinned != me
+        let limit = kind == "grid" ? max(2, capacity.gridSlots) : max(selfTile ? 2 : 1, capacity.railSlots)
+        let initialMain = pinned.isEmpty ? firstWithVideo(visible, state) : pinned
+        let mainInRemotes = visible.contains(initialMain) ? 1 : 0
+        let count = visible.count + (selfTile ? 1 : 0)
+            + (pinOverShare ? 1 : 0) - ((kind == "spotlight" || kind == "sidebar") ? mainInRemotes : 0)
+        if count > limit && ["grid", "spotlight", "sidebar", "presentation"].contains(kind) {
+            func tier(_ id: String) -> Int {
+                if id == pinned || id == sharer { return 0 }
+                if state.isEffectiveActiveSpeaker(id) { return 1 }
+                if state.participant(for: id)?.isHandRaised == true { return 3 }
+                return state.participant(for: id)?.isCameraOff == false ? 4 : 5
+            }
+            var ordered: [String] = []
+            for rank in 0...5 { ordered.append(contentsOf: visible.filter { tier($0) == rank }) }
+            visible = ordered
+        }
         switch kind {
         case "solo":
             return SC3Shape(kind: kind, main: me, tiles: [], overflow: 0, selfPlacement: "main")

@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -17,6 +18,8 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.Switch
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -55,7 +58,7 @@ internal fun hostPageTitleName(route: String?): String = when (route) {
     else -> "hst_title"
 }
 
-internal enum class HostItemKind { Loading, Header, Bulk, Policy, Link, Footer, End }
+internal enum class HostItemKind { Loading, Header, Bulk, Policy, InviteCode, Link, Footer, End }
 
 internal data class HostListItem(val key: String, val kind: HostItemKind, val value: String = "")
 
@@ -66,9 +69,8 @@ internal fun hostListItems(snapshot: HostControlsSnapshot): List<HostListItem> {
     for (row in snapshot.visibleBulk()) items.add(HostListItem("b:${row.bulk.rawValue}", HostItemKind.Bulk, row.bulk.rawValue))
     items.add(HostListItem("h:access", HostItemKind.Header, "hst_access"))
     for (policy in HostPolicyID.accessRows) items.add(HostListItem("p:${policy.rawValue}", HostItemKind.Policy, policy.rawValue))
-    items.add(HostListItem("inviteCode", HostItemKind.Link, PeopleRoute.inviteCode.rawValue))
+    items.add(HostListItem("inviteCode", HostItemKind.InviteCode, PeopleRoute.inviteCode.rawValue))
     items.add(HostListItem("accessList", HostItemKind.Link, PeopleRoute.accessList.rawValue))
-    items.add(HostListItem("f:access", HostItemKind.Footer, "hst_access_footer"))
     items.add(HostListItem("h:media", HostItemKind.Header, "hst_media"))
     for (policy in HostPolicyID.mediaRows) items.add(HostListItem("p:${policy.rawValue}", HostItemKind.Policy, policy.rawValue))
     items.add(HostListItem("f:media", HostItemKind.Footer, "hst_media_footer"))
@@ -116,6 +118,7 @@ internal fun HostControlsContent(people: PeoplePresenter, reservation: PaddingVa
                     val policy = HostPolicyID.init(rawValue = item.value)
                     if (policy != null) HostPolicySwitchRow(people, policy)
                 }
+                HostItemKind.InviteCode -> HostInviteCodeRow(people, snapshot, onPush)
                 HostItemKind.Link -> HostLinkRow(people, snapshot, item.value, onPush)
                 HostItemKind.End -> HostEndRow(people, snapshot)
             }
@@ -135,9 +138,6 @@ private fun HostLinkRow(people: PeoplePresenter, snapshot: HostControlsSnapshot,
     ListItem(
         headlineContent = { ConclaveText(title, line = "$identifier.title") },
         supportingContent = when (route) {
-            PeopleRoute.inviteCode.rawValue -> {
-                { ConclaveText(conclaveString(if (snapshot.access.requiresCode) "stg_on" else "stg_off"), line = "$identifier.value") }
-            }
             PeopleRoute.accessList.rawValue -> {
                 {
                     val access = snapshot.access
@@ -151,6 +151,40 @@ private fun HostLinkRow(people: PeoplePresenter, snapshot: HostControlsSnapshot,
         },
         colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surface),
         modifier = Modifier.heightIn(min = 56.dp).testTag(identifier).clickable(role = Role.Button) { onPush(route) },
+    )
+}
+
+@Composable
+private fun HostInviteCodeRow(people: PeoplePresenter, snapshot: HostControlsSnapshot, onPush: (String) -> Unit) {
+    val identifier = "host.${PeopleRoute.inviteCode.rawValue}"
+    val scheme = MaterialTheme.colorScheme
+    val on = snapshot.access.requiresCode
+    val busy = snapshot.inviteCodePhase == HostFieldPhase.sending
+    val blocked = snapshot.blockedReason != MeetingBlockedReason.none.rawValue
+    val supporting = when (HostInviteCodePolicy.status(requiresCode = on, knownCode = people.host.knownInviteCode)) {
+        HostInviteCodeStatus.off -> conclaveString("hst_code_off_detail")
+        HostInviteCodeStatus.onKnown -> conclaveString("hst_code_value", people.host.knownInviteCode)
+        HostInviteCodeStatus.onUnknown -> conclaveString("hst_code_on_detail")
+    }
+    ListItem(
+        headlineContent = { ConclaveText(conclaveString("hst_invite_code"), line = "$identifier.title") },
+        supportingContent = { ConclaveText(supporting, line = "$identifier.value") },
+        trailingContent = {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                VerticalDivider(Modifier.height(32.dp), color = scheme.outlineVariant)
+                Switch(
+                    checked = on,
+                    onCheckedChange = { next ->
+                        if (next) onPush(PeopleRoute.inviteCode.rawValue) else people.host.requestClearMeetingInviteCode()
+                    },
+                    enabled = !busy && !blocked,
+                    modifier = Modifier.testTag("$identifier.switch"),
+                )
+            }
+        },
+        colors = ListItemDefaults.colors(containerColor = scheme.surface),
+        modifier = Modifier.heightIn(min = 64.dp).testTag(identifier)
+            .clickable(role = Role.Button) { onPush(PeopleRoute.inviteCode.rawValue) },
     )
 }
 

@@ -128,6 +128,9 @@
     "%@ is choosing a word." : {
       "extractionState" : "manual"
     },
+    "%@ is guessing" : {
+      "extractionState" : "manual"
+    },
     "%@ is no longer watching." : {
       "extractionState" : "manual"
     },
@@ -158,6 +161,9 @@
       "extractionState" : "manual"
     },
     "%@ left" : {
+      "extractionState" : "manual"
+    },
+    "%@ left in this turn" : {
       "extractionState" : "manual"
     },
     "%@ left. Spotlight follows the speaker." : {
@@ -240,13 +246,25 @@
     "%@ wins with %@" : {
       "extractionState" : "manual"
     },
+    "%@, away" : {
+      "extractionState" : "manual"
+    },
     "%@, correct position" : {
+      "extractionState" : "manual"
+    },
+    "%@, guessed by %@" : {
+      "extractionState" : "manual"
+    },
+    "%@, guessing now" : {
       "extractionState" : "manual"
     },
     "%@, in the word" : {
       "extractionState" : "manual"
     },
     "%@, not in the word" : {
+      "extractionState" : "manual"
+    },
+    "%@, up next" : {
       "extractionState" : "manual"
     },
     "%lld More Participants" : {
@@ -689,10 +707,16 @@
     "A takeback is pending" : {
       "extractionState" : "manual"
     },
+    "A teammate is guessing" : {
+      "extractionState" : "manual"
+    },
     "AI" : {
       "extractionState" : "manual"
     },
     "About" : {
+      "extractionState" : "manual"
+    },
+    "Abyss" : {
       "extractionState" : "manual"
     },
     "Accept Draw" : {
@@ -828,6 +852,9 @@
     "Affects this test only." : {
       "extractionState" : "manual"
     },
+    "All together · %lld of %lld tries used" : {
+      "extractionState" : "manual"
+    },
     "Allow" : {
       "extractionState" : "manual"
     },
@@ -868,6 +895,9 @@
       "extractionState" : "manual"
     },
     "Another app is using the camera." : {
+      "extractionState" : "manual"
+    },
+    "Answer" : {
       "extractionState" : "manual"
     },
     "Answer Live" : {
@@ -1035,9 +1065,6 @@
       "extractionState" : "manual"
     },
     "Attendees can watch without a code." : {
-      "extractionState" : "manual"
-    },
-    "Attendees need this code to watch." : {
       "extractionState" : "manual"
     },
     "Attendees see this under the question." : {
@@ -1287,6 +1314,9 @@
     "Camera is off for the meeting." : {
       "extractionState" : "manual"
     },
+    "Camera is off in audio-only mode" : {
+      "extractionState" : "manual"
+    },
     "Camera off" : {
       "extractionState" : "manual",
       "generatesSymbol" : false
@@ -1465,6 +1495,9 @@
       "extractionState" : "manual"
     },
     "Checking who’s here" : {
+      "extractionState" : "manual"
+    },
+    "Checking your answer" : {
       "extractionState" : "manual"
     },
     "Chess Black" : {
@@ -1734,6 +1767,9 @@
       "extractionState" : "manual"
     },
     "Clear chat on this device" : {
+      "extractionState" : "manual"
+    },
+    "Cliché" : {
       "extractionState" : "manual"
     },
     "Clip" : {
@@ -2185,6 +2221,9 @@
     "Decorative Only" : {
       "extractionState" : "manual"
     },
+    "Deepest answers" : {
+      "extractionState" : "manual"
+    },
     "Delete" : {
       "extractionState" : "manual"
     },
@@ -2254,6 +2293,9 @@
       "extractionState" : "manual",
       "generatesSymbol" : false
     },
+    "Depth" : {
+      "extractionState" : "manual"
+    },
     "Details" : {
       "extractionState" : "manual"
     },
@@ -2285,6 +2327,9 @@
       "extractionState" : "manual"
     },
     "Dismissed (%lld)" : {
+      "extractionState" : "manual"
+    },
+    "Dive" : {
       "extractionState" : "manual"
     },
     "Done" : {
@@ -2422,6 +2467,9 @@
       "extractionState" : "manual"
     },
     "Everyone returns to the meeting." : {
+      "extractionState" : "manual"
+    },
+    "Everyone surfaced" : {
       "extractionState" : "manual"
     },
     "Everyone who is presenting stops sharing." : {
@@ -2562,6 +2610,9 @@
       "extractionState" : "manual"
     },
     "Get notified about private messages and mentions while you’re in another app." : {
+      "extractionState" : "manual"
+    },
+    "Get ready" : {
       "extractionState" : "manual"
     },
     "Getting You In" : {
@@ -2972,6 +3023,9 @@
     "Join the Game" : {
       "extractionState" : "manual"
     },
+    "Join without sending or receiving video." : {
+      "extractionState" : "manual"
+    },
     "Joined %@" : {
       "extractionState" : "manual",
       "generatesSymbol" : false
@@ -2992,6 +3046,9 @@
     "Joining…" : {
       "extractionState" : "manual",
       "generatesSymbol" : false
+    },
+    "Judged" : {
+      "extractionState" : "manual"
     },
     "Jump to Latest" : {
       "extractionState" : "manual"
@@ -3065,7 +3122,13 @@
     "Leading" : {
       "extractionState" : "manual"
     },
+    "Leave" : {
+      "extractionState" : "manual"
+    },
     "Leave Call" : {
+      "extractionState" : "manual"
+    },
+    "Leave Watch Together" : {
       "extractionState" : "manual"
     },
     "Leave and Join" : {
@@ -3218,7 +3281,197 @@
     "Locking…" : {
       "extractionState" : "manual"
     },
+    "Long Shot Found %lld" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld found"
+          }
+        }
+      }
+    },
+    "Long Shot Found By %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Found by %@"
+          }
+        }
+      }
+    },
+    "Long Shot Gain %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "+%@ m"
+          }
+        }
+      }
+    },
+    "Long Shot Heart %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ earned a heart"
+          }
+        }
+      }
+    },
+    "Long Shot Hearts %lld" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hearts: %lld"
+          }
+        }
+      }
+    },
+    "Long Shot Landed %@ %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ landed on %2$@"
+          }
+        }
+      }
+    },
+    "Long Shot Locked Count %lld %lld" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld of %2$lld locked in"
+          }
+        }
+      }
+    },
+    "Long Shot Lost Heart %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ lost a heart"
+          }
+        }
+      }
+    },
+    "Long Shot Meters %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ m"
+          }
+        }
+      }
+    },
+    "Long Shot Miss By %@ %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@: %2$@"
+          }
+        }
+      }
+    },
+    "Long Shot Out %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ is out"
+          }
+        }
+      }
+    },
+    "Long Shot Prompt Count %lld %lld" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld of %2$lld"
+          }
+        }
+      }
+    },
+    "Long Shot Taken %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ is taken"
+          }
+        }
+      }
+    },
+    "Long Shot Turn %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@’s turn"
+          }
+        }
+      }
+    },
+    "Long Shot Wins %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ wins"
+          }
+        }
+      }
+    },
+    "Long Shot Your Answer %@ %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@, your answer %2$@"
+          }
+        }
+      }
+    },
+    "Long Shot Your Dive %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your dive: %@"
+          }
+        }
+      }
+    },
     "Long Text" : {
+      "extractionState" : "manual"
+    },
+    "Long shot" : {
       "extractionState" : "manual"
     },
     "Low bandwidth. Audio is being prioritized." : {
@@ -3401,6 +3654,9 @@
       "extractionState" : "manual",
       "generatesSymbol" : false
     },
+    "Midnight" : {
+      "extractionState" : "manual"
+    },
     "Mine" : {
       "extractionState" : "manual"
     },
@@ -3423,6 +3679,9 @@
       "extractionState" : "manual"
     },
     "Mirroring changes only your view. Data Saver lowers the video you send and receive." : {
+      "extractionState" : "manual"
+    },
+    "Missed" : {
       "extractionState" : "manual"
     },
     "More" : {
@@ -3589,6 +3848,9 @@
       "extractionState" : "manual",
       "generatesSymbol" : false
     },
+    "Next heart" : {
+      "extractionState" : "manual"
+    },
     "No Clips Found" : {
       "extractionState" : "manual"
     },
@@ -3614,6 +3876,9 @@
       "extractionState" : "manual"
     },
     "No Stickers Found" : {
+      "extractionState" : "manual"
+    },
+    "No answer" : {
       "extractionState" : "manual"
     },
     "No answer yet." : {
@@ -3708,6 +3973,9 @@
     "Not joined yet" : {
       "extractionState" : "manual"
     },
+    "Not on the list" : {
+      "extractionState" : "manual"
+    },
     "Not quite" : {
       "extractionState" : "manual"
     },
@@ -3741,6 +4009,9 @@
     "Now Playing" : {
       "extractionState" : "manual"
     },
+    "Obvious" : {
+      "extractionState" : "manual"
+    },
     "Off" : {
       "extractionState" : "manual"
     },
@@ -3766,6 +4037,9 @@
       "extractionState" : "manual"
     },
     "On hold" : {
+      "extractionState" : "manual"
+    },
+    "One board, no turns" : {
       "extractionState" : "manual"
     },
     "Only hosts can open apps." : {
@@ -3860,6 +4134,9 @@
     "Original message isn't available" : {
       "extractionState" : "manual"
     },
+    "Out of air" : {
+      "extractionState" : "manual"
+    },
     "Out of tries" : {
       "extractionState" : "manual"
     },
@@ -3933,6 +4210,9 @@
     "Party" : {
       "extractionState" : "manual"
     },
+    "Pass" : {
+      "extractionState" : "manual"
+    },
     "Passes" : {
       "extractionState" : "manual"
     },
@@ -3946,6 +4226,9 @@
       "extractionState" : "manual"
     },
     "Pawn" : {
+      "extractionState" : "manual"
+    },
+    "Pearl" : {
       "extractionState" : "manual"
     },
     "Pending" : {
@@ -3975,9 +4258,6 @@
       }
     },
     "People can join without a code. Anyone already waiting stays in the waiting room." : {
-      "extractionState" : "manual"
-    },
-    "People need this code to join. Share it with the meeting link." : {
       "extractionState" : "manual"
     },
     "People who are speaking or pinned always show." : {
@@ -4273,6 +4553,9 @@
         }
       }
     },
+    "Rare" : {
+      "extractionState" : "manual"
+    },
     "Ratio %@ against %@: %@" : {
       "extractionState" : "manual"
     },
@@ -4405,6 +4688,9 @@
     "Rejoin %@" : {
       "extractionState" : "manual"
     },
+    "Rejoin Watch Together" : {
+      "extractionState" : "manual"
+    },
     "Remaining %@" : {
       "extractionState" : "manual"
     },
@@ -4422,17 +4708,6 @@
     "Remove All Effects" : {
       "extractionState" : "manual"
     },
-    "Remove Attendee Code?" : {
-      "extractionState" : "manual"
-    },
-    "Remove Code" : {
-      "extractionState" : "manual",
-      "generatesSymbol" : false
-    },
-    "Remove Code…" : {
-      "extractionState" : "manual",
-      "generatesSymbol" : false
-    },
     "Remove From Meeting" : {
       "extractionState" : "manual",
       "generatesSymbol" : false
@@ -4441,9 +4716,6 @@
       "extractionState" : "manual"
     },
     "Remove Image" : {
-      "extractionState" : "manual"
-    },
-    "Remove Invite Code?" : {
       "extractionState" : "manual"
     },
     "Remove Link Preview" : {
@@ -4608,6 +4880,9 @@
     "Round %lld of %lld" : {
       "extractionState" : "manual"
     },
+    "Round complete" : {
+      "extractionState" : "manual"
+    },
     "Row %lld, column %lld" : {
       "extractionState" : "manual"
     },
@@ -4636,9 +4911,6 @@
       "extractionState" : "manual"
     },
     "Save" : {
-      "extractionState" : "manual"
-    },
-    "Save Code" : {
       "extractionState" : "manual"
     },
     "Save Link" : {
@@ -4796,6 +5068,9 @@
     "Settings closed." : {
       "extractionState" : "manual"
     },
+    "Shallows" : {
+      "extractionState" : "manual"
+    },
     "Share Again" : {
       "extractionState" : "manual"
     },
@@ -4949,6 +5224,9 @@
     "Sketch, drop sticky notes, or point things out with the laser. Everyone in the call sees it live." : {
       "extractionState" : "manual"
     },
+    "Skip Prompt" : {
+      "extractionState" : "manual"
+    },
     "Skip Question" : {
       "extractionState" : "manual"
     },
@@ -4967,7 +5245,16 @@
     "Smooth video" : {
       "extractionState" : "manual"
     },
+    "Solid" : {
+      "extractionState" : "manual"
+    },
     "Solved in %@" : {
+      "extractionState" : "manual"
+    },
+    "Solved in %lld of %lld tries." : {
+      "extractionState" : "manual"
+    },
+    "Solved in %lld of %lld tries. %@ landed the final guess." : {
       "extractionState" : "manual"
     },
     "Someone" : {
@@ -5192,6 +5479,9 @@
     "Summary" : {
       "extractionState" : "manual"
     },
+    "Surfaced" : {
+      "extractionState" : "manual"
+    },
     "Surprised" : {
       "extractionState" : "manual"
     },
@@ -5229,13 +5519,28 @@
       "extractionState" : "manual",
       "generatesSymbol" : false
     },
+    "Take turns · %lld of %lld tries used" : {
+      "extractionState" : "manual"
+    },
     "Takeback requested" : {
+      "extractionState" : "manual"
+    },
+    "Talk it through on the call. Anyone can enter the next guess." : {
+      "extractionState" : "manual"
+    },
+    "Talk it through, then enter the team’s guess." : {
       "extractionState" : "manual"
     },
     "Tap Now" : {
       "extractionState" : "manual"
     },
     "Taps" : {
+      "extractionState" : "manual"
+    },
+    "Team" : {
+      "extractionState" : "manual"
+    },
+    "Team board" : {
       "extractionState" : "manual"
     },
     "Test" : {
@@ -5387,6 +5692,9 @@
     "The shared browser took too long to respond. Try again." : {
       "extractionState" : "manual"
     },
+    "The team cracked it" : {
+      "extractionState" : "manual"
+    },
     "The transcript and minutes so far stay available to export." : {
       "extractionState" : "manual"
     },
@@ -5497,6 +5805,9 @@
     "Thumbs Up" : {
       "extractionState" : "manual"
     },
+    "Tie at the top" : {
+      "extractionState" : "manual"
+    },
     "Tie, the Imposter Survives" : {
       "extractionState" : "manual"
     },
@@ -5561,6 +5872,9 @@
     "Transcript View" : {
       "extractionState" : "manual"
     },
+    "Trench" : {
+      "extractionState" : "manual"
+    },
     "Trending" : {
       "extractionState" : "manual"
     },
@@ -5614,6 +5928,9 @@
     "Turns off the video you send and receive in this call. Your camera stays off until you turn it on." : {
       "extractionState" : "manual"
     },
+    "Twilight" : {
+      "extractionState" : "manual"
+    },
     "Two Facts %@ %@" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -5632,6 +5949,9 @@
       "extractionState" : "manual"
     },
     "Type a message" : {
+      "extractionState" : "manual"
+    },
+    "Type an answer" : {
       "extractionState" : "manual"
     },
     "Typography" : {
@@ -5914,6 +6234,9 @@
     "Waiting for others" : {
       "extractionState" : "manual"
     },
+    "Waiting for players" : {
+      "extractionState" : "manual"
+    },
     "Waiting for the Host to Start" : {
       "extractionState" : "manual"
     },
@@ -5944,7 +6267,13 @@
     "Watch Together" : {
       "extractionState" : "manual"
     },
+    "Watch Together is playing" : {
+      "extractionState" : "manual"
+    },
     "Watch on YouTube" : {
+      "extractionState" : "manual"
+    },
+    "Watch your team crack it." : {
       "extractionState" : "manual"
     },
     "Watch-only attendees can't send messages." : {
@@ -6062,9 +6391,6 @@
       }
     },
     "Wheel Sounds" : {
-      "extractionState" : "manual"
-    },
-    "When the meeting is locked, new people wait until a host admits them. Guests are people who aren’t signed in." : {
       "extractionState" : "manual"
     },
     "Which One Is the Truth?" : {
@@ -6415,6 +6741,9 @@
     "You Were Disconnected" : {
       "extractionState" : "manual"
     },
+    "You are out" : {
+      "extractionState" : "manual"
+    },
     "You asked" : {
       "extractionState" : "manual"
     },
@@ -6433,10 +6762,16 @@
     "You don’t have permission to control live notes." : {
       "extractionState" : "manual"
     },
+    "You earned a heart" : {
+      "extractionState" : "manual"
+    },
     "You haven’t asked anything yet." : {
       "extractionState" : "manual"
     },
     "You hear this for speakers without a personal voice." : {
+      "extractionState" : "manual"
+    },
+    "You lost a heart" : {
       "extractionState" : "manual"
     },
     "You pick the %lld-letter word." : {
@@ -6451,13 +6786,22 @@
     "You play White" : {
       "extractionState" : "manual"
     },
+    "You set the word" : {
+      "extractionState" : "manual"
+    },
     "You set the word. Watch everyone guess." : {
       "extractionState" : "manual"
     },
     "You solved it" : {
       "extractionState" : "manual"
     },
+    "You stay in the call. Others keep watching." : {
+      "extractionState" : "manual"
+    },
     "You vs the computer" : {
+      "extractionState" : "manual"
+    },
+    "You win" : {
       "extractionState" : "manual"
     },
     "You're already muted." : {
@@ -6582,6 +6926,9 @@
     "Your sign-in expired. Sign in again, or keep going as a guest." : {
       "extractionState" : "manual"
     },
+    "Your turn" : {
+      "extractionState" : "manual"
+    },
     "Your voice" : {
       "extractionState" : "manual",
       "generatesSymbol" : false
@@ -6620,6 +6967,9 @@
       "extractionState" : "manual"
     },
     "You’re in. Tap to return to the call." : {
+      "extractionState" : "manual"
+    },
+    "You’re next" : {
       "extractionState" : "manual"
     },
     "You’re no longer a host." : {
@@ -6821,6 +7171,134 @@
       "extractionState" : "manual"
     },
     "your current meeting" : {
+      "extractionState" : "manual"
+    },
+    "Anyone with the link can join" : {
+      "extractionState" : "manual"
+    },
+    "Ask for a Code to Join" : {
+      "extractionState" : "manual"
+    },
+    "Code" : {
+      "extractionState" : "manual"
+    },
+    "Conclave invite code: %@" : {
+      "extractionState" : "manual"
+    },
+    "Current Code" : {
+      "extractionState" : "manual"
+    },
+    "Everyone who joins needs this code, even with the meeting link." : {
+      "extractionState" : "manual"
+    },
+    "Generate a Code" : {
+      "extractionState" : "manual"
+    },
+    "Invite Code Is On" : {
+      "extractionState" : "manual"
+    },
+    "Join my Conclave meeting: %@\nInvite code: %@" : {
+      "extractionState" : "manual"
+    },
+    "New people wait until a host lets them in" : {
+      "extractionState" : "manual"
+    },
+    "People enter a code to join" : {
+      "extractionState" : "manual"
+    },
+    "People who aren’t signed in can join" : {
+      "extractionState" : "manual"
+    },
+    "Save New Code" : {
+      "extractionState" : "manual"
+    },
+    "Share Code" : {
+      "extractionState" : "manual"
+    },
+    "Short codes are easier to read out and type." : {
+      "extractionState" : "manual"
+    },
+    "The current code was set earlier or by another host. Set a new one to see and share it." : {
+      "extractionState" : "manual"
+    },
+    "Turn Off Invite Code…" : {
+      "extractionState" : "manual"
+    },
+    "Turn On Invite Code" : {
+      "extractionState" : "manual"
+    },
+    "Turn Off the Invite Code?" : {
+      "extractionState" : "manual"
+    },
+    "People need this code to join. Share it with the meeting link." : {
+      "extractionState" : "manual"
+    },
+    "Remove Invite Code?" : {
+      "extractionState" : "manual"
+    },
+    "When the meeting is locked, new people wait until a host admits them. Guests are people who aren’t signed in." : {
+      "extractionState" : "manual"
+    },
+    "Mute for me" : {
+      "extractionState" : "manual"
+    },
+    "Unmute for me" : {
+      "extractionState" : "manual"
+    },
+    "Local volume" : {
+      "extractionState" : "manual"
+    },
+    "Muted for you" : {
+      "extractionState" : "manual"
+    },
+    "Ask Attendees for a Code" : {
+      "extractionState" : "manual"
+    },
+    "Attendees need this code to watch, even with the webinar link." : {
+      "extractionState" : "manual"
+    },
+    "Attendee Code Is On" : {
+      "extractionState" : "manual"
+    },
+    "Turn On Attendee Code" : {
+      "extractionState" : "manual"
+    },
+    "Turn Off Attendee Code…" : {
+      "extractionState" : "manual"
+    },
+    "Conclave attendee code: %@" : {
+      "extractionState" : "manual"
+    },
+    "Watch my Conclave webinar: %@\nAttendee code: %@" : {
+      "extractionState" : "manual"
+    },
+    "Turn Off the Attendee Code?" : {
+      "extractionState" : "manual"
+    },
+    "Attendees need this code to watch." : {
+      "extractionState" : "manual"
+    },
+    "Remove Attendee Code?" : {
+      "extractionState" : "manual"
+    },
+    "Remove Code" : {
+      "extractionState" : "manual",
+      "generatesSymbol" : false
+    },
+    "Remove Code…" : {
+      "extractionState" : "manual",
+      "generatesSymbol" : false
+    },
+    "Save Code" : {
+      "extractionState" : "manual"
+    },
+    "Play clip" : {
+      "extractionState" : "manual"
+    },
+    "Unmute clip" : {
+      "extractionState" : "manual"
+    },
+    "Mute clip" : {
       "extractionState" : "manual"
     }
   },

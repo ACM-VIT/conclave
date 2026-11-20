@@ -180,6 +180,7 @@ internal object SocketEvent {
     val joinRejected = SfuServerEvent.joinRejected.rawValue
     val waitingRoomStatus = SfuServerEvent.waitingRoomStatus.rawValue
     val hostAssigned = SfuServerEvent.hostAssigned.rawValue
+    val activeSpeakerChanged = SfuServerEvent.activeSpeakerChanged.rawValue
     val hostChanged = SfuServerEvent.hostChanged.rawValue
     val adminUsersChanged = SfuServerEvent.adminUsersChanged.rawValue
     val participantMuted = SfuServerEvent.participantMuted.rawValue
@@ -257,6 +258,7 @@ internal class SocketIOManager {
     internal var onJoinApproved: ((JoinDecisionNotification) -> Unit)? = null
     internal var onJoinRejected: ((JoinDecisionNotification) -> Unit)? = null
     internal var onHostAssigned: ((HostAssignedNotification) -> Unit)? = null
+    internal var onActiveSpeakerChanged: ((ActiveSpeakerChangedNotification) -> Unit)? = null
     internal var onHostChanged: ((HostChangedNotification) -> Unit)? = null
     internal var onAdminUsersChanged: ((AdminUsersChangedNotification) -> Unit)? = null
     internal var onKicked: ((KickedNotification) -> Unit)? = null
@@ -1249,7 +1251,8 @@ internal class SocketIOManager {
         if (!rawPayload.isNullOrEmpty() && rawPayload != "null") {
             request.put("payload", jsonValueFromRaw(rawPayload))
         }
-        val data = emit(SocketEvent.gameMove, request)
+        val timeoutMs = GameMoveTiming.judgedAckTimeoutMillis(gameId = gameId, type = type)?.toLong() ?: ACK_TIMEOUT_MS
+        val data = emit(SocketEvent.gameMove, request, timeoutMs = timeoutMs)
         return decodeGameMoveResponse(data)
     }
 
@@ -2600,6 +2603,8 @@ internal class SocketIOManager {
             rtpCapabilities = RtpCapabilities(),
             existingProducers = skip.lib.Array(producers),
             status = stringField(obj, "status"),
+            activeSpeakerId = stringField(obj, "activeSpeakerId"),
+            hasActiveSpeakerInfo = obj.has("activeSpeakerId"),
             roomId = stringField(obj, "roomId"),
             hostUserId = stringField(obj, "hostUserId"),
             hostUserIds = stringArrayField(obj, "hostUserIds"),
@@ -2677,6 +2682,14 @@ internal class SocketIOManager {
         return HostAssignedNotification(
             roomId = stringField(obj, "roomId"),
             hostUserId = stringField(obj, "hostUserId")
+        )
+    }
+
+    private fun decodeActiveSpeakerChanged(value: Any?): ActiveSpeakerChangedNotification? {
+        val obj = jsonObject(value) ?: return decode<ActiveSpeakerChangedNotification>(value)
+        return ActiveSpeakerChangedNotification(
+            roomId = stringField(obj, "roomId"),
+            userId = stringField(obj, "userId")
         )
     }
 
@@ -3658,6 +3671,13 @@ internal class SocketIOManager {
             val notification = decodeHostAssigned(args.firstOrNull()) ?: return@Listener
             if (!eventRoomIdMatchesActiveOrPending(notification.roomId)) return@Listener
             onHostAssigned?.invoke(notification)
+        })
+
+        socket.on(SocketEvent.activeSpeakerChanged, Emitter.Listener { args ->
+            if (this.socket !== socket) return@Listener
+            val notification = decodeActiveSpeakerChanged(args.firstOrNull()) ?: return@Listener
+            if (!eventRoomIdMatchesActiveOrPending(notification.roomId)) return@Listener
+            onActiveSpeakerChanged?.invoke(notification)
         })
 
         socket.on(SocketEvent.hostChanged, Emitter.Listener { args ->

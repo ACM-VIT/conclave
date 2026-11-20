@@ -17,6 +17,7 @@ final class SocketIOManager {
     var onJoinApproved: ((JoinDecisionNotification) -> Void)?
     var onJoinRejected: ((JoinDecisionNotification) -> Void)?
     var onHostAssigned: ((HostAssignedNotification) -> Void)?
+    var onActiveSpeakerChanged: ((ActiveSpeakerChangedNotification) -> Void)?
     var onHostChanged: ((HostChangedNotification) -> Void)?
     var onAdminUsersChanged: ((AdminUsersChangedNotification) -> Void)?
     var onKicked: ((KickedNotification) -> Void)?
@@ -89,6 +90,8 @@ final class SocketIOManager {
     var onAdminBulkMediaEnforced: ((AdminBulkMediaEnforcedNotification) -> Void)?
 
     var testCallGate: (@MainActor (String) async throws -> Void)?
+
+    var testProducers: [ProducerInfo] = []
 
     var testSendChatError: Error?
 
@@ -166,7 +169,7 @@ final class SocketIOManager {
         paused: Bool? = nil,
         requestKeyFrame: Bool = false
     ) async throws { }
-    func getProducers() async throws -> GetProducersResponse { GetProducersResponse(producers: []) }
+    func getProducers() async throws -> GetProducersResponse { GetProducersResponse(producers: testProducers) }
     func getRooms() async throws -> [RoomInfo] { [] }
 
     func toggleMute(producerId: String, paused: Bool) async throws { }

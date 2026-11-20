@@ -120,22 +120,45 @@ struct STG5NoticePolicyTests {
         #expect(center.banner == nil)
     }
 
-    @Test func qualityDismissalResetsOnlyOnFairOrGood() {
+    @Test func aSingleBadStatsSampleDoesNotRaiseTheVeryPoorBanner() {
+        let center = MeetingNoticeCenter()
+        var streak = 0
+        var at = 0.0
+        for sample in [ConnectionQuality.emergency, .good, .emergency, .emergency, .emergency] {
+            streak = VeryPoorConnectionNoticePolicy.streak(previous: streak, quality: sample)
+            let quality = VeryPoorConnectionNoticePolicy.noticeQuality(sample, emergencyStreak: streak)
+            _ = center.applyState(host(quality: quality), nowMillis: at)
+            #expect(center.banner == nil)
+            at += 2_000
+        }
+        streak = VeryPoorConnectionNoticePolicy.streak(previous: streak, quality: .emergency)
+        _ = center.applyState(host(quality: VeryPoorConnectionNoticePolicy.noticeQuality(.emergency, emergencyStreak: streak)),
+                              nowMillis: at)
+        #expect(center.banner?.kind == NoticeKind.veryPoorConnection)
+    }
+
+    @Test func aDismissedWeakConnectionBannerStaysAwayForTheCall() {
         let center = MeetingNoticeCenter()
         _ = center.applyState(host(quality: .emergency), nowMillis: 0)
-        let id = center.banner?.id ?? ""
-        center.dismiss(id: id, nowMillis: 1)
+        center.dismiss(id: center.banner?.id ?? "", nowMillis: 1)
         #expect(center.banner == nil)
-        _ = center.applyState(host(quality: .poor), nowMillis: 2)
+        _ = center.applyState(host(quality: .good), nowMillis: 2)
         _ = center.applyState(host(quality: .emergency), nowMillis: 3)
         #expect(center.banner == nil)
-        _ = center.applyState(host(quality: .fair), nowMillis: 4)
-        _ = center.applyState(host(quality: .emergency), nowMillis: 5)
-        #expect(center.banner?.kind == NoticeKind.veryPoorConnection)
-        center.dismiss(id: center.banner?.id ?? "", nowMillis: 6)
-        _ = center.applyState(host(quality: .good), nowMillis: 7)
-        _ = center.applyState(host(quality: .emergency), nowMillis: 8)
-        #expect(center.banner?.kind == NoticeKind.veryPoorConnection)
+    }
+
+    @Test func theWeakConnectionBannerLeavesOnItsOwnAndDoesNotReturn() {
+        let center = MeetingNoticeCenter()
+        _ = center.applyState(host(quality: .emergency), nowMillis: 1_000)
+        let shown = center.banner
+        #expect(shown?.kind == NoticeKind.veryPoorConnection)
+        #expect(shown?.expiresAtMillis == 1_000 + MeetingNoticePolicy.infoBannerMillis)
+        #expect(!center.expireIfDue(nowMillis: 1_000 + MeetingNoticePolicy.infoBannerMillis - 1))
+        #expect(center.expireIfDue(nowMillis: 1_000 + MeetingNoticePolicy.infoBannerMillis))
+        #expect(center.banner == nil)
+        _ = center.applyState(host(quality: .good), nowMillis: 9_000)
+        _ = center.applyState(host(quality: .emergency), nowMillis: 10_000)
+        #expect(center.banner == nil)
     }
 
     @Test func aHostNoticeMaskedForSeventySecondsKeepsItsRemainingTime() {

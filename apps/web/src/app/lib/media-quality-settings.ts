@@ -97,14 +97,14 @@ export const CAMERA_QUALITY_PRESETS: Record<
     frameRate: 30,
     maxBitrateKbps: 1650,
     contentHint: "motion",
-    degradationPreference: "maintain-framerate",
+    degradationPreference: "balanced",
   },
   "data-saver": {
     resolution: "360p",
     frameRate: 20,
     maxBitrateKbps: 260,
     contentHint: "motion",
-    degradationPreference: "maintain-framerate",
+    degradationPreference: "balanced",
   },
   "high-definition": {
     resolution: "1080p",

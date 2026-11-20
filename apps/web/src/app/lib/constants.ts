@@ -99,7 +99,7 @@ export const STANDARD_VIDEO_MAX_BITRATE = 1650000;
 export const LOW_VIDEO_MAX_BITRATE = 260000;
 export const SCREEN_SHARE_MAX_BITRATE = 2500000;
 export const SCREEN_SHARE_MAX_FRAMERATE = 30;
-const OPUS_MAX_AVERAGE_BITRATE = 96000;
+const OPUS_MAX_AVERAGE_BITRATE = 40000;
 const SCREEN_AUDIO_OPUS_MAX_AVERAGE_BITRATE = 96000;
 export type AudioProducerNetworkProfile =
   | "good"
@@ -111,18 +111,18 @@ export const MICROPHONE_OPUS_MAX_AVERAGE_BITRATE_BY_PROFILE: Record<
   number
 > = {
   good: OPUS_MAX_AVERAGE_BITRATE,
-  fair: 48000,
-  poor: 32000,
-  emergency: 24000,
+  fair: 32000,
+  poor: 24000,
+  emergency: 16000,
 };
 export const SCREEN_AUDIO_OPUS_MAX_AVERAGE_BITRATE_BY_PROFILE: Record<
   AudioProducerNetworkProfile,
   number
 > = {
   good: SCREEN_AUDIO_OPUS_MAX_AVERAGE_BITRATE,
-  fair: MICROPHONE_OPUS_MAX_AVERAGE_BITRATE_BY_PROFILE.fair,
-  poor: MICROPHONE_OPUS_MAX_AVERAGE_BITRATE_BY_PROFILE.poor,
-  emergency: MICROPHONE_OPUS_MAX_AVERAGE_BITRATE_BY_PROFILE.emergency,
+  fair: 48000,
+  poor: 32000,
+  emergency: 24000,
 };
 const OPUS_PACKET_TIME_MS = 20;
 export const buildMicrophoneOpusCodecOptions = (

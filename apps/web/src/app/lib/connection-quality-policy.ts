@@ -46,16 +46,6 @@ const PUBLISH_ADAPTATION_MAX_LOSS = 0.03;
 const PUBLISH_ADAPTATION_MAX_JITTER_MS = 30;
 const PUBLISH_ADAPTATION_MIN_OUTGOING_BITRATE_BPS = 1_000_000;
 
-export const hasBlockingPublishRecoveryTelemetry = ({
-  packetLoss,
-  jitterMs,
-}: {
-  packetLoss: number | null;
-  jitterMs: number | null;
-}): boolean =>
-  (packetLoss !== null && packetLoss >= PUBLISH_ADAPTATION_MAX_LOSS) ||
-  (jitterMs !== null && jitterMs >= PUBLISH_ADAPTATION_MAX_JITTER_MS);
-
 export type PacketLossWindowSample = {
   timestampMs: number;
   packetsLost: number;

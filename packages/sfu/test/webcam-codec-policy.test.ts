@@ -32,10 +32,14 @@ describe("room webcam codec policy", () => {
     ).toBeNull();
   });
 
-  it("selects VP9 only when every receiver and publisher explicitly supports it", () => {
-    expect(selectRoomWebcamCodec([modernWeb("a"), modernWeb("b")])).toBe(
-      "vp9",
-    );
+  it("keeps every room on VP8 simulcast unless VP9 is enabled", () => {
+    expect(selectRoomWebcamCodec([modernWeb("a"), modernWeb("b")])).toBe("vp8");
+  });
+
+  it("selects VP9 only when enabled and every receiver and publisher explicitly supports it", () => {
+    expect(
+      selectRoomWebcamCodec([modernWeb("a"), modernWeb("b")], { vp9Enabled: true }),
+    ).toBe("vp9");
 
     expect(
       selectRoomWebcamCodec([
@@ -97,7 +101,7 @@ describe("room webcam codec policy", () => {
             },
           }),
         },
-      ]),
+      ], { vp9Enabled: true }),
     ).toBe("vp9");
 
     expect(
@@ -108,7 +112,7 @@ describe("room webcam codec policy", () => {
           isObserver: true,
           capabilities: null,
         },
-      ]),
+      ], { vp9Enabled: true }),
     ).toBe("vp8");
   });
 

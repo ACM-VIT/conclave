@@ -20,7 +20,7 @@ struct RendererFrameSize: Equatable {
 
 enum PipTargetPolicy {
 
-    static func choose(inputs: StageInputs, layout: StageLayoutSnapshot) -> PipTargetChoice {
+    static func choose(inputs: StageInputs, layout: StageLayoutSnapshot, speakerUserId: String = "") -> PipTargetChoice {
         let local = inputs.localUserId
         let share = inputs.screenShareUserId
         if !share.isEmpty && share != local && !inputs.isLocalScreenSharing {
@@ -34,6 +34,9 @@ enum PipTargetPolicy {
         let pinned = layout.pinnedUserId.isEmpty ? inputs.pinnedUserId : layout.pinnedUserId
         if !pinned.isEmpty && pinned != local, let row = inputs.participant(pinned), !row.isLocal {
             return person(pinned)
+        }
+        if !speakerUserId.isEmpty && speakerUserId != local, let row = inputs.participant(speakerUserId), !row.isLocal {
+            return person(row.userId)
         }
         let featured = layout.featuredUserId
         if !featured.isEmpty && featured != local, let row = inputs.participant(featured), !row.isLocal, hasVideo(row) {

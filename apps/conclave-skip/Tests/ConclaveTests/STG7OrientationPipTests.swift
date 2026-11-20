@@ -61,6 +61,34 @@ struct STG7OrientationPipTests {
         #expect(attendee.userId == "r3")
     }
 
+    @Test func pipFollowsTheLastRemoteSpeakerEvenWithTheCameraOff() {
+        let stage = StagePresenter(shell: MeetingShellPresenter())
+        stage.setViewport(StageViewport(width: 390, height: 844, insetTop: 103, insetBottom: 98, insetLeading: 0, insetTrailing: 0,
+                                        widthClass: StageSizeClass.compact, heightClass: StageSizeClass.regular, placement: .bottomBar))
+        stage.apply(Self.inputs(Self.roster))
+        #expect(stage.pipTarget.userId == "r2")
+
+        stage.speakerChanged("r1", atMillis: 1_000)
+        #expect(stage.pipTarget == PipTargetChoice(slotId: "p:r1", userId: "r1", isShare: false))
+
+        stage.speakerChanged(nil, atMillis: 2_000)
+        #expect(stage.pipTarget.userId == "r1")
+
+        stage.speakerChanged("you", atMillis: 3_000)
+        #expect(stage.pipTarget.userId == "r1")
+
+        stage.speakerChanged("r3", atMillis: 4_000)
+        #expect(stage.pipTarget.userId == "r3")
+
+        stage.apply(Self.inputs(Self.roster, pinned: "r2"))
+        #expect(stage.pipTarget.userId == "r2")
+
+        let sharing = [Self.person("you", local: true, serial: 0), Self.person("r1", cameraOn: false, serial: 1),
+                       Self.person("r2", serial: 2, sharing: true), Self.person("r3", serial: 3)]
+        stage.apply(Self.inputs(sharing, share: "r2"))
+        #expect(stage.pipTarget == PipTargetChoice(slotId: "share:r2", userId: "r2", isShare: true))
+    }
+
     @Test func presenterLayoutFeedsThePolicyAtTheWorkedSize() {
 
         let stage = StagePresenter(shell: MeetingShellPresenter())

@@ -131,8 +131,9 @@ struct STG9ActivityStageTests {
         #expect(presenter.announcementLog.filter { $0.hasPrefix(ActivityStagePolicy.startedAnnouncement) }.count == 1)
     }
 
-    @Test func youAreInTheStripLastBeforeOverflowAndNeverFloatOverTheCard() {
-        let presenter = stage(layered(ActivityFixtureState.gameTrivia6.rawValue))
+    @Test func cameraOnSelfIsInTheStripLastBeforeOverflowAndNeverFloatsOverTheCard() {
+        let presenter = stage(ActivityFixtureScript.stageInputs(named: ActivityFixtureState.gameTrivia6.rawValue,
+            base: StageFixtureScript.base(count: 6, localCameraOn: true)))
         let slots = presenter.layout.slots
         #expect(slots.first?.role == StageSlotRole.activity)
         #expect(!slots.contains { $0.role == StageSlotRole.selfFloating || $0.role == StageSlotRole.selfMinimized })

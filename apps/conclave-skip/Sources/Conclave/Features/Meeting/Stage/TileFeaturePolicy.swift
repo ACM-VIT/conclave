@@ -284,12 +284,14 @@ enum TileFeaturePolicy {
 
     static func mainFit(widthClass: String, slotWidth: Double, slotHeight: Double, videoWidth: Double,
                         videoHeight: Double) -> StageVideoFit {
-        if StageSizeClass.isCompact(widthClass) { return StageVideoFit.fill }
         if slotWidth <= 0 || slotHeight <= 0 || videoWidth <= 0 || videoHeight <= 0 { return StageVideoFit.fill }
         let slotAspect = slotWidth / slotHeight
         let videoAspect = videoWidth / videoHeight
-        let ratio = max(slotAspect, videoAspect) / min(slotAspect, videoAspect)
-        return ratio - 1.0 > mainAspectTolerance ? StageVideoFit.fit : StageVideoFit.fill
+        let landscape = 1.0 + mainAspectTolerance
+        let portrait = 1.0 / landscape
+        let opposite = (slotAspect > 1.0 && videoAspect < portrait)
+            || (slotAspect < 1.0 && videoAspect > landscape)
+        return opposite ? StageVideoFit.fit : StageVideoFit.fill
     }
 
     static func showsFlipControl(isLocal: Bool, isShare: Bool, role: StageSlotRole, canFlipCamera: Bool,
@@ -334,6 +336,7 @@ enum SpotlightRailPolicy {
     static let stripTileWidth = 80.0
     static let stripTileHeight = 107.0
     static let columnTileWidth = 160.0
+    static let compactHeightColumnTileWidth = 128.0
     static let largeColumnTileWidth = 200.0
     static let columnAspect = 16.0 / 9.0
 
@@ -347,8 +350,18 @@ enum SpotlightRailPolicy {
     }
 
     static func tileWidth(_ viewport: StageViewport) -> Double {
-        if isStrip(viewport) { return stripTileWidth }
-        return usesLargeColumn(viewport) ? largeColumnTileWidth : columnTileWidth
+        if isStrip(viewport) { return filledStripTileWidth(viewport) }
+        if usesLargeColumn(viewport) { return largeColumnTileWidth }
+        return StageLayoutPolicy.isCompactHeight(viewport) ? compactHeightColumnTileWidth : columnTileWidth
+    }
+
+    static func filledStripTileWidth(_ viewport: StageViewport) -> Double {
+        let count = capacity(viewport: viewport)
+        if count <= 0 { return stripTileWidth }
+        let area = StageLayoutPolicy.contentFrame(viewport)
+        let gap = StageLayoutPolicy.gap(viewport)
+        let filled = (area.width - Double(count - 1) * gap) / Double(count)
+        return max(stripTileWidth, filled)
     }
 
     static func tileHeight(_ viewport: StageViewport) -> Double {

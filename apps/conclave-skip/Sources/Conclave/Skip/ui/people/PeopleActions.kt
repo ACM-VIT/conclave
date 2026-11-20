@@ -1,6 +1,15 @@
 package conclave.module
 
 import android.content.Context
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Slider
+import androidx.compose.ui.semantics.contentDescription
+import com.skydoves.flexible.bottomsheet.material3.BottomSheetDefaults
+import com.skydoves.flexible.bottomsheet.material3.FlexibleBottomSheet
+import com.skydoves.flexible.core.FlexibleSheetSize
+import com.skydoves.flexible.core.FlexibleSheetValue
+import com.skydoves.flexible.core.rememberFlexibleBottomSheetState
+import kotlin.math.roundToInt
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -55,6 +64,9 @@ internal fun peopleActionTitlesOf(context: Context, name: String): PeopleActionT
     reasonNotJoined = conclaveStringOf(context, "ds_unavailable_reconnecting"),
     reasonPending = conclaveStringOf(context, "ds_in_progress"),
     reasonRenameDisabled = conclaveStringOf(context, "ppl_rename_disabled"),
+    muteForMe = conclaveStringOf(context, "ppl_mute_for_me"),
+    unmuteForMe = conclaveStringOf(context, "ppl_unmute_for_me"),
+    localVolume = conclaveStringOf(context, "ppl_local_volume"),
 )
 
 internal fun peopleRowName(context: Context, model: PersonRowModel): String =
@@ -89,6 +101,55 @@ internal fun PeopleRowMenu(people: PeoplePresenter, model: PersonRowModel, secti
             if (action != null) people.perform(action, rowId = model.id, source = PeopleActionSource.rowMenu)
         },
     )
+}
+
+@Composable
+internal fun PeopleLocalAudioSheet(people: PeoplePresenter, stage: Boolean) {
+    val rowId = people.localAudioRowId
+    if (rowId.isEmpty() || (people.localAudioSource == PeopleActionSource.tileMenu) != stage) return
+    val model = people.rows.entry(rowId).model
+    val state = rememberFlexibleBottomSheetState(
+        skipHiddenState = false,
+        skipIntermediatelyExpanded = true,
+        skipSlightlyExpanded = true,
+        initialValue = FlexibleSheetValue.Hidden,
+        isModal = true,
+        allowNestedScroll = true,
+        flexibleSheetSize = FlexibleSheetSize(fullyExpanded = 0.45f, intermediatelyExpanded = 0.45f, slightlyExpanded = 0.18f),
+    )
+    LaunchedEffect(rowId) { state.show(FlexibleSheetValue.FullyExpanded) }
+    val label = conclaveString("ppl_local_volume")
+    FlexibleBottomSheet(
+        onDismissRequest = { people.dismissLocalAudio() },
+        sheetState = state,
+        containerColor = MaterialTheme.colorScheme.surface,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        dragHandle = { BottomSheetDefaults.DragHandle() },
+    ) {
+        Column(Modifier.fillMaxWidth().padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            ConclaveText(peopleRowName(LocalContext.current, model), line = "people.localAudio.name",
+                style = MaterialTheme.typography.titleMedium)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                ConclaveText(label, line = "people.localAudio.label")
+                ConclaveText(conclaveString("ppl_local_volume_percent", (model.localAudio.volume * 100).roundToInt()),
+                    line = "people.localAudio.percent")
+            }
+            Slider(
+                value = model.localAudio.volume.toFloat(),
+                onValueChange = { people.setParticipantVolume(rowId = model.serverId, volume = it.toDouble()) },
+                valueRange = 0f..1f,
+                steps = 19,
+                modifier = Modifier.testTag("people.localAudio.volume").semantics { contentDescription = label },
+            )
+            TextButton(onClick = {
+                people.perform(if (model.localAudio.isSilent) PersonActionID.unmuteForMe else PersonActionID.muteForMe,
+                    rowId = rowId, source = people.localAudioSource)
+            }, modifier = Modifier.testTag("people.localAudio.mute")) {
+                ConclaveText(conclaveString(if (model.localAudio.isSilent) "ppl_unmute_for_me" else "ppl_mute_for_me"),
+                    line = "people.localAudio.mute.label")
+            }
+        }
+    }
 }
 
 internal data class PeopleDialogCopy(
@@ -138,6 +199,7 @@ internal fun peopleDialogCopy(context: Context, confirmation: PeopleConfirmation
 
 @Composable
 internal fun PeopleConfirmationHost(people: PeoplePresenter) {
+    PeopleLocalAudioSheet(people, stage = false)
     val confirmation = people.confirmation ?: return
     if (confirmation.source == PeopleActionSource.tileMenu || confirmation.source == PeopleActionSource.hostControls) return
     PeopleConfirmationDialog(people, confirmation)
@@ -146,6 +208,7 @@ internal fun PeopleConfirmationHost(people: PeoplePresenter) {
 @Composable
 internal fun StagePeopleConfirmationHost(people: PeoplePresenter?) {
     val presenter = people ?: return
+    PeopleLocalAudioSheet(presenter, stage = true)
     val confirmation = presenter.confirmation ?: return
     if (confirmation.source != PeopleActionSource.tileMenu) return
     HostingTheme(inCall = true) {

@@ -30,14 +30,14 @@ struct RemoteVideoView: View {
     var body: some View {
         ZStack {
             AndroidVideoView(trackWrapper: trackWrapper, isMirrored: false, contentMode: contentMode)
-            if trackWrapper.rtcVideoTrack == nil {
+            if trackWrapper.rtcVideoTrack == nil || !trackWrapper.isReceivingFrames {
                 VideoTrackFallbackView(
                     displayName: MeetingState.mediaFallbackDisplayName(
                         fallbackDisplayName,
                         userId: trackWrapper.userId
                     ),
                     identityId: trackWrapper.userId,
-                    isEnabled: trackWrapper.isEnabled
+                    isEnabled: trackWrapper.isEnabled && trackWrapper.isReceivingFrames
                 )
             }
         }
@@ -154,7 +154,7 @@ struct VideoGridItem: View {
                 isMirrored: isMirrored,
                 useOverlaySurface: usePlatformOverlaySurface
             )
-            if trackWrapper.rtcVideoTrack == nil {
+            if trackWrapper.rtcVideoTrack == nil || !trackWrapper.isReceivingFrames {
                 avatarView
             }
         }

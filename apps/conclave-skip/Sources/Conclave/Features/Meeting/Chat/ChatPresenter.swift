@@ -725,6 +725,8 @@ final class ChatPresenter {
             body = message.gifTitle.isEmpty ? message.content : message.gifTitle
         } else if kind == ChatRowKind.voice {
             body = VoiceMessageText.spokenText(normalizedContent: message.content)
+        } else if kind == ChatRowKind.text && !message.isTts {
+            body = EmojiShortcodes.replaceInMessage(body)
         }
         let spans = kind == ChatRowKind.assistant && !assistantDone ? []
             : cachedSpans(rowId: rowId, body: body, kind: kind, tokens: tokens, youToken: youToken, signature: tokenSignature)

@@ -13,6 +13,7 @@ enum GameGlyphSymbols {
         case .wordle: return "textformat.abc"
         case .chess: return "checkerboard.rectangle"
         case .zip: return "point.topleft.down.to.point.bottomright.curvepath.fill"
+        case .longShot: return "water.waves.and.arrow.down"
         case .generic: return "gamecontroller.fill"
         }
     }

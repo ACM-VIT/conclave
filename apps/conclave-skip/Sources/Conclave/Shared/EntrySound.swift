@@ -18,7 +18,7 @@ enum EntrySound {
         }
         do {
             let audioPlayer = try AVAudioPlayer(contentsOf: url)
-            audioPlayer.volume = 0.55
+            audioPlayer.volume = NativeRuntimeConfig.playbackVolume(0.55)
             audioPlayer.prepareToPlay()
             audioPlayer.play()
             player = audioPlayer

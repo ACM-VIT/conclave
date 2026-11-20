@@ -94,7 +94,7 @@ internal fun LobbyScreen(premeeting: PremeetingPresenter, key: PremeetingKey.Lob
         snackbarHost = { SnackbarHost(snackbarHostState) },
         containerColor = scheme.surface,
         contentWindowInsets = WindowInsets.safeDrawing,
-        modifier = Modifier.imePadding().testTag("lobby"),
+        modifier = Modifier.imePadding().dismissKeyboardOnInteraction().testTag("lobby"),
     ) { padding ->
         BoxWithConstraints(Modifier.fillMaxSize().padding(padding)) {
             val wide = maxWidth >= 640.dp
@@ -155,6 +155,7 @@ private fun LobbyCardSlot(premeeting: PremeetingPresenter, routeId: Int, cache: 
             bandCover = bandCover,
             onMic = { premeeting.setMicIntent(it) },
             onCamera = { premeeting.setCameraIntent(it) },
+            onAudioOnly = if (premeeting.lobbyStatus?.intent == LobbyIntent.promotion) null else { on -> premeeting.setAudioOnlyIntent(on) },
             onFlip = { premeeting.flipCamera() },
             onEffects = {
                 premeeting.openEffects()

@@ -46,7 +46,8 @@ struct WebinarSettingsPage<Route: Hashable>: View {
                 HostPolicyToggleRow(people: people, policy: HostPolicyID.webinarQa)
                 maxAttendeesRow(pending: snapshot.isFieldPending(HostFieldID.capacity), blocked: blocked)
                 NavigationLink(value: link(PeopleRoute.attendeeCode)) {
-                    LabeledContent(ConclaveStrings.text("Attendee Code"), value: HostText.onOff(webinar.requiresCode))
+                    LabeledContent(ConclaveStrings.text("Attendee Code"),
+                                   value: HostText.inviteCodeValue(requiresCode: webinar.requiresCode, knownCode: people.host.knownAttendeeCode))
                 }
                 .accessibilityIdentifier("webinar.attendeeCode")
             } header: {
@@ -261,91 +262,34 @@ private struct WebinarWatchingValue: View {
 struct AttendeeCodePage: View {
     let people: PeoplePresenter
     @Environment(\.dismiss) private var dismiss
-    @State private var draft = ""
-    @State private var didSeed = false
-    @State private var showsSaved = false
-    @State private var savedToken = 0
 
     var body: some View {
         let host = people.host
         let snapshot = host.snapshot
-        let saving = snapshot.isFieldPending(HostFieldID.attendeeCode)
-        let blocked = snapshot.blockedReason != MeetingBlockedReason.none.rawValue
-        Form {
-            Section {
-                LabeledContent(ConclaveStrings.text("Status"), value: HostText.onOff(snapshot.webinar.requiresCode))
-            }
-            Section {
-                TextField(ConclaveStrings.text("New Code"), text: $draft)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .submitLabel(.done)
-                    .onSubmit { save() }
-                    .disabled(saving || blocked)
-                    .accessibilityIdentifier("webinar.attendeeCode.field")
-                HostInlineFailureLine(people: people, sourceKey: HostFieldID.attendeeCode)
-            } footer: {
-                Text(ConclaveStrings.text("Attendees need this code to watch."))
-            }
-            Section {
-                Button {
-                    save()
-                } label: {
-                    HStack(spacing: 8) {
-                        Text(ConclaveStrings.text("Save Code"))
-                        Spacer(minLength: 0)
-                        if saving { ProgressView().accessibilityHidden(true) }
-                    }
-                }
-                .disabled(!WebinarSettingsPolicy.canSaveAttendeeCode(draft, isPending: saving, isBlocked: blocked))
-                .accessibilityIdentifier("webinar.attendeeCode.save")
-                if showsSaved {
-                    Label(ConclaveStrings.text("Code saved"), systemImage: ConclaveSymbols.checkmark)
-                        .foregroundStyle(.secondary)
-                        .accessibilityIdentifier("webinar.attendeeCode.saved")
-                }
-                if snapshot.webinar.requiresCode {
-                    Button(ConclaveStrings.text("Remove Code\u{2026}"), role: .destructive) {
-                        host.requestClearAttendeeCode()
-                    }
-                    .disabled(saving || blocked)
-                    .modifier(HostRowConfirmation(people: people, kinds: [PeopleConfirmationKind.clearAttendeeCode]))
-                    .accessibilityIdentifier("webinar.attendeeCode.remove")
-                }
-            }
-        }
-        .formStyle(.grouped)
-        .navigationTitle(ConclaveStrings.text("Attendee Code"))
-        .navigationBarTitleDisplayMode(.inline)
-        .onAppear {
-            if !didSeed {
-                didSeed = true
-                draft = host.drafts.attendeeCode
-            }
-        }
-        .onChange(of: draft) { _, value in
-            host.drafts.attendeeCode = value
-        }
-        .onChange(of: snapshot.savedSerial) { _, _ in
-            guard host.snapshot.savedField == HostFieldID.attendeeCode else { return }
-            draft = host.drafts.attendeeCode
-            showsSaved = true
-            savedToken += 1
-            AccessibilityNotification.Announcement(ConclaveStrings.text("Code saved")).post()
-        }
+        let known = host.knownAttendeeCode
+        let link = snapshot.webinar.linkURL
+        HostCodePage(
+            people: people,
+            model: HostCodePageModel(
+                tag: "webinar.attendeeCode", pageTag: "host.page.attendeeCode", title: ConclaveStrings.text("Attendee Code"),
+                requiresCode: snapshot.webinar.requiresCode, knownCode: known,
+                saving: snapshot.isFieldPending(HostFieldID.attendeeCode), fieldID: HostFieldID.attendeeCode,
+                introTitle: ConclaveStrings.text("Ask Attendees for a Code"),
+                introBody: ConclaveStrings.text("Attendees need this code to watch, even with the webinar link."),
+                onTitle: ConclaveStrings.text("Attendee Code Is On"),
+                turnOn: ConclaveStrings.text("Turn On Attendee Code"),
+                turnOff: ConclaveStrings.text("Turn Off Attendee Code\u{2026}"),
+                confirmation: PeopleConfirmationKind.clearAttendeeCode,
+                shareText: link.isEmpty ? ConclaveStrings.format("Conclave attendee code: %@", known)
+                    : ConclaveStrings.format("Watch my Conclave webinar: %@\nAttendee code: %@", link, known)),
+            savedToken: snapshot.savedField == HostFieldID.attendeeCode ? snapshot.savedSerial : 0,
+            draft: { host.drafts.attendeeCode },
+            setDraft: { host.drafts.attendeeCode = $0 },
+            onSave: { host.setAttendeeCode($0) },
+            onClear: { host.requestClearAttendeeCode() })
         .onChange(of: host.isWebinarSettingsReachable) { _, reachable in
             if !reachable { dismiss() }
         }
-        .task(id: savedToken) {
-            guard savedToken > 0 else { return }
-            try? await Task.sleep(for: .seconds(2))
-            if !Task.isCancelled { showsSaved = false }
-        }
-        .accessibilityIdentifier("host.page.attendeeCode")
-    }
-
-    private func save() {
-        people.host.setAttendeeCode(draft)
     }
 }
 
