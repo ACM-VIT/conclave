@@ -3869,7 +3869,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             VideoQuality.standard -> {
                 defaults = listOf(
                 WebcamEncodingSpec(rid = "q", scaleResolutionDownBy = 4.0, maxBitrateBps = 80_000),
-                WebcamEncodingSpec(rid = "h", scaleResolutionDownBy = 2.0, maxBitrateBps = 220_000),
+                WebcamEncodingSpec(rid = "h", scaleResolutionDownBy = 2.0, maxBitrateBps = 250_000),
                 WebcamEncodingSpec(rid = "f", scaleResolutionDownBy = 1.0, maxBitrateBps = 1_650_000),
                 )
                 defaultMaximumBitrate = 1_650_000
@@ -4555,12 +4555,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     }
 
     private fun opusMaxAverageBitrate(connectionQuality: ConnectionQuality): Int {
-        return when (connectionQuality) {
-            ConnectionQuality.emergency -> 24_000
-            ConnectionQuality.poor -> 32_000
-            ConnectionQuality.fair -> 48_000
-            ConnectionQuality.good, ConnectionQuality.unknown -> 96_000
-        }
+        return LocalSenderPolicy.microphoneMaxAverageBitrateBps(connectionQuality)
     }
 
     internal suspend fun cleanup(

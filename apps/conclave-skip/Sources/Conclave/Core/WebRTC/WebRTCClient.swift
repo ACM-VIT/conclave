@@ -2918,7 +2918,7 @@ final class WebRTCClient: NSObject, ObservableObject {
         case .standard:
             defaults = [
                 WebcamEncodingSpec(rid: "q", scaleResolutionDownBy: 4, maxBitrateBps: 80_000),
-                WebcamEncodingSpec(rid: "h", scaleResolutionDownBy: 2, maxBitrateBps: 220_000),
+                WebcamEncodingSpec(rid: "h", scaleResolutionDownBy: 2, maxBitrateBps: 250_000),
                 WebcamEncodingSpec(rid: "f", scaleResolutionDownBy: 1, maxBitrateBps: 1_650_000)
             ]
             defaultMaximumBitrate = 1_650_000
