@@ -4783,6 +4783,13 @@ final class WebRTCClient: NSObject, ObservableObject {
                 for: .webcam,
                 setting: configuredCameraDegradationPreference
             )
+            if adaptEncodings, localVideoEnabled, videoCapturer != nil {
+                if activeCameraCaptureProfile == cameraCaptureProfile, isCameraCaptureRunning {
+                    adaptCameraOutput()
+                } else {
+                    try? startCameraCapture()
+                }
+            }
             let specs = webcamEncodingSpecs(
                 for: currentVideoQuality,
                 connectionQuality: connectionQuality
@@ -4808,14 +4815,6 @@ final class WebRTCClient: NSObject, ObservableObject {
                     next.encodings = encodings
                 }
                 return next
-            }
-
-            if adaptEncodings, localVideoEnabled, videoCapturer != nil {
-                if activeCameraCaptureProfile == cameraCaptureProfile, isCameraCaptureRunning {
-                    adaptCameraOutput()
-                } else {
-                    try? startCameraCapture()
-                }
             }
         }
 
