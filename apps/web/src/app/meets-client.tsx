@@ -2970,9 +2970,6 @@ export default function MeetsClient({
   });
   useAdaptivePublishQuality({
     enabled: connectionState === "joined",
-    connectionQuality: "good",
-    capRecoveryQuality: "good",
-    emergencyMode: false,
     availableOutgoingBitrateBps: selfConnectionStats.availableOutgoingBitrate,
     publishCpuLimited: selfConnectionStats.publishMedia.video.cpuLimited,
     dataSaverMode: effectiveDataSaverMode,

@@ -300,9 +300,6 @@ export function createPublishRig(config: RigConfig = {}) {
 
   function Harness({ current }: { current: RigInputs }) {
     useAdaptivePublishQuality({
-      connectionQuality: "good",
-      capRecoveryQuality: "good",
-      emergencyMode: false,
       ...current,
       ...refs,
       setVideoQuality,
