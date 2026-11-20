@@ -72,7 +72,6 @@ import {
 } from "./hooks/useAdaptivePublishQuality";
 import {
   useConnectionQuality,
-  type ConnectionQuality,
   type ConnectionQualityStats,
 } from "./hooks/useConnectionQuality";
 import { useIsMobile } from "./hooks/useIsMobile";
@@ -110,7 +109,6 @@ import {
   getBrowserNetworkInformation,
   getBrowserNetworkSnapshot,
 } from "./lib/network-information";
-import { hasBlockingPublishRecoveryTelemetry } from "./lib/connection-quality-policy";
 import { resolveEffectiveCameraPublishSettings } from "./lib/media-quality-settings";
 import {
   generateRoomCode,
@@ -2816,16 +2814,9 @@ export default function MeetsClient({
   });
   connectionQualityDebugRef.current = selfConnectionStats;
   const {
-    publishAdaptationQuality: selfPublishAdaptationQuality,
     receiveAdaptationQuality: selfReceiveAdaptationQuality,
-    publishEmergencyMode: selfPublishEmergencyMode,
     receiveEmergencyMode: selfReceiveEmergencyMode,
   } = selfConnectionStats;
-  const hasBlockingPublishRecoverySignal =
-    hasBlockingPublishRecoveryTelemetry({
-      packetLoss: selfConnectionStats.publishPacketLoss,
-      jitterMs: selfConnectionStats.publishJitterMs,
-    });
   const hasBrowserEmergencySignal =
     selfConnectionStats.browserNetwork.emergency === true;
   const browserPublishRecoveryQuality = (
@@ -2833,19 +2824,10 @@ export default function MeetsClient({
       ? selfConnectionStats.browserNetwork.startupQuality
       : selfConnectionStats.browserNetwork.quality
   );
-  const browserAllowsPublishCapRecovery =
-    !hasBrowserEmergencySignal &&
-    selfConnectionStats.browserNetwork.saveData !== true &&
-    (browserPublishRecoveryQuality === "good" ||
-      browserPublishRecoveryQuality === "unknown");
   const browserAllowsFairWebcamLayerRecovery =
     !hasBrowserEmergencySignal &&
     selfConnectionStats.browserNetwork.saveData !== true &&
     browserPublishRecoveryQuality === "good";
-  const selfPublishCapRecoveryQuality: ConnectionQuality =
-    browserAllowsPublishCapRecovery && !hasBlockingPublishRecoverySignal
-      ? "good"
-      : selfPublishAdaptationQuality;
   const webcamReceiverCapacityProofCache = useWebcamReceiverCapacityProof({
     enabled: connectionState === "joined",
     roomId,
@@ -2988,9 +2970,9 @@ export default function MeetsClient({
   });
   useAdaptivePublishQuality({
     enabled: connectionState === "joined",
-    connectionQuality: selfPublishAdaptationQuality,
-    capRecoveryQuality: selfPublishCapRecoveryQuality,
-    emergencyMode: selfPublishEmergencyMode,
+    connectionQuality: "good",
+    capRecoveryQuality: "good",
+    emergencyMode: false,
     availableOutgoingBitrateBps: selfConnectionStats.availableOutgoingBitrate,
     publishCpuLimited: selfConnectionStats.publishMedia.video.cpuLimited,
     dataSaverMode: effectiveDataSaverMode,

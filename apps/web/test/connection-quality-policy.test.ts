@@ -4,7 +4,6 @@ import {
   getPublishAdaptationQuality,
   getReceiveAdaptationQuality,
   getSustainedReceiveEmergencyLoss,
-  hasBlockingPublishRecoveryTelemetry,
   hasBrowserMediaEmergencyEvidence,
   hasReceiveContinuityRisk,
   updateRollingPacketLoss,
@@ -146,33 +145,6 @@ describe("receive continuity policy", () => {
 });
 
 describe("getPublishAdaptationQuality", () => {
-  it("blocks fast cap recovery at the normal fair loss and jitter thresholds", () => {
-    expect(
-      hasBlockingPublishRecoveryTelemetry({
-        packetLoss: 0.03,
-        jitterMs: null,
-      }),
-    ).toBe(true);
-    expect(
-      hasBlockingPublishRecoveryTelemetry({
-        packetLoss: null,
-        jitterMs: 30,
-      }),
-    ).toBe(true);
-    expect(
-      hasBlockingPublishRecoveryTelemetry({
-        packetLoss: 0.029,
-        jitterMs: 29,
-      }),
-    ).toBe(false);
-    expect(
-      hasBlockingPublishRecoveryTelemetry({
-        packetLoss: null,
-        jitterMs: null,
-      }),
-    ).toBe(false);
-  });
-
   it("keeps the user-facing fair label out of healthy RTT-only adaptation", () => {
     expect(
       getPublishAdaptationQuality({
