@@ -40,6 +40,7 @@ final class ChatClipPlaybackPool {
     }
 
     func request(_ id: String) {
+        clips[id]?.allowRetry()
         requests.removeAll { $0 == id }
         requests.insert(id, at: 0)
         reconcile()
@@ -86,8 +87,10 @@ final class ChatClipController {
     private(set) var ready = false
     private(set) var playing = false
     private(set) var muted = true
+    @ObservationIgnored private var failed = false
     @ObservationIgnored private var player: AVQueuePlayer?
     @ObservationIgnored private var looper: AVPlayerLooper?
+    @ObservationIgnored private var looperStatus: NSKeyValueObservation?
     @ObservationIgnored private weak var surface: ChatClipSurface?
     @ObservationIgnored private var observation: NSKeyValueObservation?
 
@@ -109,15 +112,28 @@ final class ChatClipController {
     }
 
     func play() {
-        guard !playing, let url = URL(string: url) else { return }
+        guard !playing, !failed, let url = URL(string: url) else { return }
         let queue = AVQueuePlayer()
         queue.isMuted = muted || NativeRuntimeConfig.silentAudio
         queue.audiovisualBackgroundPlaybackPolicy = .pauses
         player = queue
-        looper = AVPlayerLooper(player: queue, templateItem: AVPlayerItem(url: url))
+        let looper = AVPlayerLooper(player: queue, templateItem: AVPlayerItem(url: url))
+        self.looper = looper
+        looperStatus = looper.observe(\.status, options: [.initial, .new]) { [weak self] looper, _ in
+            guard looper.status == .failed else { return }
+            Task { @MainActor [weak self] in
+                guard let self, self.looper === looper else { return }
+                self.stop()
+                self.failed = true
+            }
+        }
         surface?.playerLayer.player = queue
         playing = true
         queue.play()
+    }
+
+    func allowRetry() {
+        failed = false
     }
 
     func toggleMute() {
@@ -126,6 +142,8 @@ final class ChatClipController {
     }
 
     func stop() {
+        looperStatus?.invalidate()
+        looperStatus = nil
         player?.pause()
         surface?.playerLayer.player = nil
         looper?.disableLooping()

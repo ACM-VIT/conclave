@@ -37,6 +37,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.ExoPlayer
@@ -52,6 +53,7 @@ internal interface ChatClipPlayback {
     val id: String
     fun play()
     fun stop()
+    fun allowRetry() {}
 }
 
 internal class ChatClipPool {
@@ -100,6 +102,7 @@ internal class ChatClipPool {
     }
 
     fun request(id: String) {
+        clips[id]?.allowRetry()
         requested = listOf(id) + requested.filterNot { it == id }
         reconcile()
     }
@@ -147,6 +150,7 @@ internal class ChatClipController(override val id: String, private val url: Stri
         private set
     var muted by mutableStateOf(true)
         private set
+    private var failed = false
     private var player: ExoPlayer? = null
     private var texture: TextureView? = null
     private var videoSize = VideoSize.UNKNOWN
@@ -158,7 +162,7 @@ internal class ChatClipController(override val id: String, private val url: Stri
     }
 
     override fun play() {
-        if (playing) return
+        if (playing || failed) return
         val next = ExoPlayer.Builder(context)
             .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), false)
             .build()
@@ -166,6 +170,11 @@ internal class ChatClipController(override val id: String, private val url: Stri
         next.repeatMode = Player.REPEAT_MODE_ONE
         next.addListener(object : Player.Listener {
             override fun onRenderedFirstFrame() { if (player === next) ready = true }
+            override fun onPlayerError(error: PlaybackException) {
+                if (player !== next) return
+                stop()
+                failed = true
+            }
             override fun onVideoSizeChanged(size: VideoSize) {
                 if (player === next) {
                     videoSize = size
@@ -190,6 +199,10 @@ internal class ChatClipController(override val id: String, private val url: Stri
         if (videoAspect > viewAspect) matrix.setScale(1f, viewAspect / videoAspect, view.width / 2f, view.height / 2f)
         else matrix.setScale(videoAspect / viewAspect, 1f, view.width / 2f, view.height / 2f)
         view.setTransform(matrix)
+    }
+
+    override fun allowRetry() {
+        failed = false
     }
 
     fun toggleMute() {
