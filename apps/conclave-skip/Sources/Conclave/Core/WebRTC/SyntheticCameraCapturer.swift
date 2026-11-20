@@ -1,4 +1,5 @@
 #if DEBUG && os(iOS) && targetEnvironment(simulator) && !SKIP && canImport(WebRTC)
+import AVFoundation
 import CoreGraphics
 import CoreVideo
 import Foundation
@@ -7,6 +8,9 @@ import WebRTC
 final class SyntheticCameraCapturer: RTCCameraVideoCapturer {
     private var frames: DispatchSourceTimer?
     private var frameIndex = 0
+    private let clipURL = NativeRuntimeConfig.fakeCameraClipPath.map { URL(fileURLWithPath: $0) }
+    private var clipReader: AVAssetReader?
+    private var clipOutput: AVAssetReaderTrackOutput?
 
     private static let iPhone11FrontFormats = [
         CameraFormatCandidate(width: 192, height: 144),
@@ -45,7 +49,41 @@ final class SyntheticCameraCapturer: RTCCameraVideoCapturer {
         frames?.cancel()
     }
 
+    private func nextClipPixelBuffer() -> CVPixelBuffer? {
+        for _ in 0..<2 {
+            if clipReader?.status != .reading { openClip() }
+            if let sample = clipOutput?.copyNextSampleBuffer(), let pixels = CMSampleBufferGetImageBuffer(sample) {
+                return pixels
+            }
+            clipReader = nil
+        }
+        return nil
+    }
+
+    private func openClip() {
+        guard let clipURL else { return }
+        let asset = AVURLAsset(url: clipURL)
+        guard let track = asset.tracks(withMediaType: .video).first,
+              let reader = try? AVAssetReader(asset: asset) else { return }
+        let output = AVAssetReaderTrackOutput(track: track, outputSettings: [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+        ])
+        reader.add(output)
+        reader.startReading()
+        clipReader = reader
+        clipOutput = output
+    }
+
     private func sendFrame(width: Int, height: Int) {
+        if clipURL != nil {
+            guard let pixels = nextClipPixelBuffer() else { return }
+            delegate?.capturer(self, didCapture: RTCVideoFrame(
+                buffer: RTCCVPixelBuffer(pixelBuffer: pixels),
+                rotation: ._0,
+                timeStampNs: Int64(bitPattern: DispatchTime.now().uptimeNanoseconds)
+            ))
+            return
+        }
         var pixels: CVPixelBuffer?
         let status = CVPixelBufferCreate(
             kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA, nil, &pixels

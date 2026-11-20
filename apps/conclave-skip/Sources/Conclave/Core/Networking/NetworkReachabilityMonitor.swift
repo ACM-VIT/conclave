@@ -44,7 +44,10 @@ final class NetworkReachabilityMonitor {
                 .map { "\($0.type):\($0.index):\($0.name)" }
                 .sorted().joined(separator: "|")
             let qualityHint = Self.qualityHint(for: path)
-            let isConstrained = path.status == .satisfied && path.isConstrained
+            var isConstrained = path.status == .satisfied && path.isConstrained
+            #if DEBUG && os(iOS) && targetEnvironment(simulator)
+            if NativeRuntimeConfig.ignoresSystemDataSaver { isConstrained = false }
+            #endif
             Task { @MainActor in
                 guard let self, let monitor, self.monitor === monitor else { return }
                 let pathChanged = self.pathChangeTracker.record(usablePathId: pathId)
