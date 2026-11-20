@@ -154,6 +154,33 @@ struct ENT6OutcomeTests {
         #expect(recorder.commands == [.rejoinLastMeeting, .rejoinLastMeeting])
     }
 
+    @Test func retryingAFailedRejoinSendsTheVideoChoiceTheLobbyShows() {
+        for toggleAudioOnly in [false, true] {
+            let recorder = Recorder()
+            let presenter = presenter(recorder: recorder)
+            var media: [[Bool]] = []
+            let hooks = LobbyCoreHooks()
+            hooks.setRejoinMedia = { mic, camera in media.append([mic, camera]) }
+            presenter.lobbyHooks = hooks
+            presenter.apply(inCall(rejoin: Self.room))
+            presenter.apply(outcome(.joinFailed, origin: .recovery, rejoin: Self.room, category: MeetingErrorCategory.offline.rawValue))
+            presenter.performOutcomeAction(.tryAgain)
+            presenter.apply(PremeetingInputs.make(callSession: 2, phase: .outcome, outcomeId: 11, outcomeKind: .joinFailed,
+                                                  roomLabel: Self.room, currentRoomId: Self.room, micIntentOn: true,
+                                                  cameraIntentOn: true, rejoinRoomId: Self.room,
+                                                  joinFailureCategory: MeetingErrorCategory.serverUnreachable.rawValue))
+            #expect(presenter.lobbyStatus?.mode == .failed && presenter.lobbyStatus?.intent == .rejoin)
+            if toggleAudioOnly {
+                presenter.setAudioOnlyIntent(true)
+                presenter.setAudioOnlyIntent(false)
+            }
+            #expect(presenter.lobbyMedia?.cameraIntentOn == !toggleAudioOnly)
+            presenter.retryJoin()
+            #expect(recorder.commands == [.rejoinLastMeeting, .rejoinLastMeeting])
+            #expect(media == [[true, !toggleAudioOnly]], "audio-only toggled: \(toggleAudioOnly)")
+        }
+    }
+
     @Test func withoutAContextTheActionsFallBackToHome() {
         let recorder = Recorder()
         let presenter = presenter(recorder: recorder)
@@ -306,6 +333,19 @@ struct ENT6RejoinCoreDeltaTests {
         #expect(rejoined.first?.roomId == "room-a")
         #expect(rejoined.first?.meetingInviteCode == "invite-123")
         #expect(rejoined.first?.clientId == "acme")
+        #expect(!viewModel.state.isMuted && viewModel.state.isCameraOff)
+    }
+
+    @Test func aRejoinUsesTheMediaChosenBeforeTheRetry() async {
+        let viewModel = joinedViewModel()
+        viewModel.state.isMuted = false
+        viewModel.state.isCameraOff = false
+        viewModel.rejoinJoinOverride = { _ in }
+        viewModel.socketManager.onDisconnected?("io server disconnect")
+        #expect(await ent6Settle { viewModel.shell.session.outcome?.kind == .serverDisconnected })
+        viewModel.setRejoinMedia(mic: true, camera: false)
+        viewModel.rejoinLastMeeting()
+        #expect(viewModel.rejoinJoinCount == 1)
         #expect(!viewModel.state.isMuted && viewModel.state.isCameraOff)
     }
 

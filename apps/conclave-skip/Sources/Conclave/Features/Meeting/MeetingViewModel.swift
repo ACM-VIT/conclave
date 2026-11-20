@@ -9770,6 +9770,12 @@ final class MeetingViewModel {
         }
     }
 
+    func setRejoinMedia(mic: Bool, camera: Bool) {
+        guard rejoinContext != nil else { return }
+        rejoinMicOn = mic
+        rejoinCameraOn = camera
+    }
+
     func rejoinLastMeeting() {
         guard let context = rejoinContext else { return }
         guard state.connectionState == ConnectionState.disconnected

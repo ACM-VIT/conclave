@@ -222,6 +222,8 @@ final class LobbyCoreHooks {
 
     var setEntryAudioOnly: ((Bool) -> Void)? = nil
 
+    var setRejoinMedia: ((Bool, Bool) -> Void)? = nil
+
     var setPrejoinAudioRouteIntent: ((String, String) -> Void)? = nil
 
     var startPreview: ((LocalCameraFacing) -> Void)? = nil

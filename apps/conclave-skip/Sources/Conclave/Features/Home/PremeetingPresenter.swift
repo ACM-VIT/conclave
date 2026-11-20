@@ -667,6 +667,7 @@ final class PremeetingPresenter {
             guard !inputs.isNetworkOffline else { return }
             joinRequests += 1
             lobbyHooks?.setEntryAudioOnly?(videoIntent == .audioOnly)
+            lobbyHooks?.setRejoinMedia?(inputs.micIntentOn, inputs.cameraIntentOn && videoIntent == .inherit)
             sendRejoin()
             refreshLobby()
             return
