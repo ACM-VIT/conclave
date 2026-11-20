@@ -16,6 +16,10 @@ import {
 } from "../lib/screen-share-network-profile";
 import type { Producer, VideoQuality } from "../lib/types";
 import {
+  INITIAL_MICROPHONE_SEND_ESTIMATE_STATE,
+  stepMicrophoneSendEstimate,
+} from "../lib/microphone-send-estimate";
+import {
   selectActiveWebcamReceiverCapacityProof,
   selectStagedWebcamReceiverCapacitySuccessor,
   selectWebcamReceiverCapacityRevocation,
@@ -535,6 +539,7 @@ export function useAdaptivePublishQuality({
   debugStateRef,
 }: UseAdaptivePublishQualityOptions) {
   const recoveryWindowSinceRef = useRef<number | null>(null);
+  const microphoneSendEstimateRef = useRef(INITIAL_MICROPHONE_SEND_ESTIMATE_STATE);
   const cpuLimitedWindowRef = useRef<BooleanWindow>({
     value: false,
     since: Date.now(),
@@ -716,6 +721,28 @@ export function useAdaptivePublishQuality({
       const webcamProfile = screenShareVideoActive
         ? getScreenShareAwareWebcamProfile(profile)
         : profile;
+      const microphoneProfile =
+        getMostConstrainedWebcamProducerNetworkProfile([
+          profile,
+          microphoneSendEstimateRef.current.profile,
+        ]) ?? profile;
+      const applyMicrophoneProfile = async () => {
+        const audioProducer = audioProducerRef.current;
+        if (!audioProducer || audioProducer.closed) return;
+        const signature = `${audioProducer.id}:${microphoneProfile}`;
+        if (lastAppliedProfilesRef.current.audio === signature) return;
+        try {
+          await applyAudioProducerNetworkProfile(
+            audioProducer,
+            "webcam",
+            microphoneProfile,
+          );
+          lastAppliedProfilesRef.current.audio = signature;
+          writeDebugSnapshot();
+        } catch (error) {
+          console.warn("[Meets] Adaptive mic bitrate cap failed:", error);
+        }
+      };
       const cameraPublishSettings = resolveEffectiveCameraPublishSettings(
         mediaQualitySettingsRef.current.camera,
         activeVideoEffectsCount > 0,
@@ -805,11 +832,7 @@ export function useAdaptivePublishQuality({
             producerId: webcamProducer.id,
             profile: webcamProfile,
           };
-          const audioProducer = audioProducerRef.current;
-          if (audioProducer && !audioProducer.closed) {
-            lastAppliedProfilesRef.current.audio =
-              `${audioProducer.id}:${profile}:producer-transport`;
-          }
+          await applyMicrophoneProfile();
           writeDebugSnapshot();
           if (
             requestWebcamProducerKeyFrame &&
@@ -904,23 +927,7 @@ export function useAdaptivePublishQuality({
         }
       }
 
-      const audioProducer = audioProducerRef.current;
-      if (audioProducer && !audioProducer.closed) {
-        const signature = `${audioProducer.id}:${profile}`;
-        if (lastAppliedProfilesRef.current.audio !== signature) {
-          try {
-            await applyAudioProducerNetworkProfile(
-              audioProducer,
-              "webcam",
-              profile,
-            );
-            lastAppliedProfilesRef.current.audio = signature;
-            writeDebugSnapshot();
-          } catch (error) {
-            console.warn("[Meets] Adaptive mic bitrate cap failed:", error);
-          }
-        }
-      }
+      await applyMicrophoneProfile();
 
       if (webcamProducer && !webcamProducer.closed) {
         const nowMonotonicMs = performance.now();
@@ -1542,6 +1549,11 @@ export function useAdaptivePublishQuality({
 
     const evaluate = () => {
       const now = Date.now();
+      microphoneSendEstimateRef.current = stepMicrophoneSendEstimate(
+        microphoneSendEstimateRef.current,
+        availableOutgoingBitrateBps,
+        now,
+      );
       evaluateWebcamTopologyTransition();
       const recoveryWindowSince = recoveryWindowSinceRef.current ?? now;
       recoveryWindowSinceRef.current = recoveryWindowSince;

@@ -53,6 +53,25 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
+describe("microphone send estimate", () => {
+  it("lowers the mic when the publisher's own estimate stays low and restores it with headroom", async () => {
+    const target = await mount({ inputs: { availableOutgoingBitrateBps: 2_000_000 } });
+    await target.advance(6_000);
+    expect(micBitrate(target)).toBe(MIC_BITRATE.good);
+
+    await target.set({ availableOutgoingBitrateBps: 120_000 });
+    await target.advance(2_000);
+    expect(micBitrate(target)).toBe(MIC_BITRATE.good);
+    await target.advance(2_000);
+    expect(micBitrate(target)).toBe(MIC_BITRATE.poor);
+    expect(fullLayerBitrate(target)).toBe(VP8_FULL_LAYER_BITRATE.good);
+
+    await target.set({ availableOutgoingBitrateBps: 2_000_000 });
+    await target.advance(10_000);
+    expect(micBitrate(target)).toBe(MIC_BITRATE.good);
+  });
+});
+
 describe("CPU limitation", () => {
   it("caps the camera and mic to fair after six seconds and restores good on the tick it clears", async () => {
     const target = await mount({ inputs: { publishCpuLimited: true } });
@@ -259,7 +278,7 @@ describe("screen share", () => {
 });
 
 describe("producer transport authority", () => {
-  it("budgets the send transport instead of the senders, and requests a key frame when the budget relaxes", async () => {
+  it("budgets the send transport instead of the camera sender, and requests a key frame when the budget relaxes", async () => {
     const target = await mount({
       transport: "supported",
       inputs: { dataSaverMode: true },
@@ -270,10 +289,11 @@ describe("producer transport authority", () => {
       { at: 0, type: "transport-profile", profile: "poor" },
     ]);
     expect(target.sends("webcam")).toEqual([]);
-    expect(target.sends("mic")).toEqual([]);
+    expect(micBitrate(target)).toBe(MIC_BITRATE.poor);
 
     await target.advance(10_000);
     await target.set({ dataSaverMode: false });
+    expect(micBitrate(target)).toBe(MIC_BITRATE.good);
     expect(target.of("transport-profile").at(-1)).toEqual({
       at: 10_000,
       type: "transport-profile",
