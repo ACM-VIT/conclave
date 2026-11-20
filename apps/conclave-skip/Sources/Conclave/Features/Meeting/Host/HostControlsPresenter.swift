@@ -48,12 +48,12 @@ final class HostControlsPresenter {
         }
         announceRemoteChanges(previous: previous, next: next)
         let ownChangeInFlight = (parent?.pendingKeys() ?? []).contains { HostControlsPolicy.isConfigKey($0) }
-        let meetingChangedElsewhere = next.meetingConfigChangeCount != previous.meetingConfigChangeCount && !ownChangeInFlight
+        let meetingChangedElsewhere = next.meetingInviteCodeChangeCount != previous.meetingInviteCodeChangeCount && !ownChangeInFlight
         let meetingCodeTurnedOff = previous.meetingRequiresInviteCode && !next.meetingRequiresInviteCode
         if (meetingChangedElsewhere || meetingCodeTurnedOff) && !knownInviteCode.isEmpty {
             knownInviteCode = ""
         }
-        let webinarChangedElsewhere = next.webinarConfigChangeCount != previous.webinarConfigChangeCount && !ownChangeInFlight
+        let webinarChangedElsewhere = next.webinarInviteCodeChangeCount != previous.webinarInviteCodeChangeCount && !ownChangeInFlight
         let webinarCodeTurnedOff = previous.webinarRequiresCode && !next.webinarRequiresCode
         if (webinarChangedElsewhere || webinarCodeTurnedOff) && !knownAttendeeCode.isEmpty {
             knownAttendeeCode = ""

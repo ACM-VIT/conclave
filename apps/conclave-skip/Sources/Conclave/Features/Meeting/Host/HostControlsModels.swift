@@ -204,7 +204,7 @@ struct HostControlsInputs: Equatable {
     let isTtsDisabled: Bool
     let isReactionsDisabled: Bool
     let meetingRequiresInviteCode: Bool
-    let meetingConfigChangeCount: Int
+    let meetingInviteCodeChangeCount: Int
     let allowedKeys: [String]
     let lockedAllowedKeys: [String]
     let blockedKeys: [String]
@@ -213,7 +213,7 @@ struct HostControlsInputs: Equatable {
     let isWebinarPublic: Bool
     let isWebinarLocked: Bool
     let webinarRequiresCode: Bool
-    let webinarConfigChangeCount: Int
+    let webinarInviteCodeChangeCount: Int
     let webinarMaxAttendees: Int
     let webinarLinkSlug: String
     let webinarLinkURL: String
@@ -238,7 +238,7 @@ struct HostControlsInputs: Equatable {
         isTtsDisabled: Bool = false,
         isReactionsDisabled: Bool = false,
         meetingRequiresInviteCode: Bool = false,
-        meetingConfigChangeCount: Int = 0,
+        meetingInviteCodeChangeCount: Int = 0,
         allowedKeys: [String] = [],
         lockedAllowedKeys: [String] = [],
         blockedKeys: [String] = [],
@@ -247,7 +247,7 @@ struct HostControlsInputs: Equatable {
         isWebinarPublic: Bool = false,
         isWebinarLocked: Bool = false,
         webinarRequiresCode: Bool = false,
-        webinarConfigChangeCount: Int = 0,
+        webinarInviteCodeChangeCount: Int = 0,
         webinarMaxAttendees: Int = 500,
         webinarLinkSlug: String = "",
         webinarLinkURL: String = "",
@@ -263,11 +263,11 @@ struct HostControlsInputs: Equatable {
                            isDmEnabled: isDmEnabled, isImageAttachmentsEnabled: isImageAttachmentsEnabled,
                            isTtsDisabled: isTtsDisabled, isReactionsDisabled: isReactionsDisabled,
                            meetingRequiresInviteCode: meetingRequiresInviteCode,
-                           meetingConfigChangeCount: meetingConfigChangeCount, allowedKeys: allowedKeys,
+                           meetingInviteCodeChangeCount: meetingInviteCodeChangeCount, allowedKeys: allowedKeys,
                            lockedAllowedKeys: lockedAllowedKeys, blockedKeys: blockedKeys,
                            isAccessListRefreshing: isAccessListRefreshing, isWebinarEnabled: isWebinarEnabled,
                            isWebinarPublic: isWebinarPublic, isWebinarLocked: isWebinarLocked,
-                           webinarRequiresCode: webinarRequiresCode, webinarConfigChangeCount: webinarConfigChangeCount,
+                           webinarRequiresCode: webinarRequiresCode, webinarInviteCodeChangeCount: webinarInviteCodeChangeCount,
                            webinarMaxAttendees: webinarMaxAttendees,
                            webinarLinkSlug: webinarLinkSlug, webinarLinkURL: webinarLinkURL,
                            webinarAttendeeCount: webinarAttendeeCount, isWebinarQaEnabled: isWebinarQaEnabled,

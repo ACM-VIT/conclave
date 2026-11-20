@@ -2420,7 +2420,7 @@ final class MeetingViewModel {
                     return
                 }
                 self.applyMeetingConfigSnapshot(snapshot)
-                self.state.meetingConfigChangeCount += 1
+                self.state.meetingInviteCodeChangeCount += 1
             }
         }
 
@@ -2433,8 +2433,9 @@ final class MeetingViewModel {
                     self.bufferPendingWebinarConfigSnapshot(snapshot)
                     return
                 }
+                let settings = self.webinarSettingsKey
                 self.applyWebinarConfigSnapshot(snapshot)
-                self.state.webinarConfigChangeCount += 1
+                if self.webinarSettingsKey == settings { self.state.webinarInviteCodeChangeCount += 1 }
             }
         }
 
@@ -5330,6 +5331,12 @@ final class MeetingViewModel {
         if let requiresInviteCode = snapshot.requiresInviteCode {
             state.meetingRequiresInviteCode = requiresInviteCode
         }
+    }
+
+    private var webinarSettingsKey: [String] {
+        [String(state.isWebinarEnabled), String(state.isWebinarPublicAccess), String(state.isWebinarLocked),
+         String(state.webinarMaxAttendees), String(state.webinarRequiresInviteCode), state.webinarLinkSlug ?? "",
+         state.webinarFeedMode, String(state.isWebinarQaEnabled)]
     }
 
     private func applyWebinarConfigSnapshot(_ snapshot: WebinarConfigSnapshot) {
@@ -8721,7 +8728,7 @@ final class MeetingViewModel {
             isTtsDisabled: state.isTtsDisabled,
             isReactionsDisabled: state.isReactionsDisabled,
             meetingRequiresInviteCode: state.meetingRequiresInviteCode,
-            meetingConfigChangeCount: state.meetingConfigChangeCount,
+            meetingInviteCodeChangeCount: state.meetingInviteCodeChangeCount,
             allowedKeys: state.adminAllowedUserKeys,
             lockedAllowedKeys: state.adminLockedAllowedUserKeys,
             blockedKeys: state.adminBlockedUserKeys,
@@ -8730,7 +8737,7 @@ final class MeetingViewModel {
             isWebinarPublic: state.isWebinarPublicAccess,
             isWebinarLocked: state.isWebinarLocked,
             webinarRequiresCode: state.webinarRequiresInviteCode,
-            webinarConfigChangeCount: state.webinarConfigChangeCount,
+            webinarInviteCodeChangeCount: state.webinarInviteCodeChangeCount,
             webinarMaxAttendees: state.webinarMaxAttendees,
             webinarLinkSlug: state.webinarLinkSlug ?? "",
             webinarLinkURL: state.webinarLinkURL ?? "",

@@ -177,24 +177,24 @@ struct PPL4HostControlsTests {
                                                                    isWebinarEnabled: true, webinarRequiresCode: true))
         let host = people.host
         host.setMeetingInviteCode("ROOM42")
-        host.apply(HostControlsInputs.make(callSession: 1, meetingRequiresInviteCode: true, meetingConfigChangeCount: 1,
+        host.apply(HostControlsInputs.make(callSession: 1, meetingRequiresInviteCode: true, meetingInviteCodeChangeCount: 1,
                                            isWebinarEnabled: true, webinarRequiresCode: true))
         people.finish(try #require(log.tickets.last), HostActionResult.completed)
         #expect(host.knownInviteCode == "ROOM42", "the change event for our own save keeps the saved code")
         host.setAttendeeCode("WATCH7")
-        host.apply(HostControlsInputs.make(callSession: 1, meetingRequiresInviteCode: true, meetingConfigChangeCount: 1,
-                                           isWebinarEnabled: true, webinarRequiresCode: true, webinarConfigChangeCount: 1))
+        host.apply(HostControlsInputs.make(callSession: 1, meetingRequiresInviteCode: true, meetingInviteCodeChangeCount: 1,
+                                           isWebinarEnabled: true, webinarRequiresCode: true, webinarInviteCodeChangeCount: 1))
         people.finish(try #require(log.tickets.last), HostActionResult.completed)
         #expect(host.knownAttendeeCode == "WATCH7")
 
-        host.apply(HostControlsInputs.make(callSession: 1, meetingRequiresInviteCode: true, meetingConfigChangeCount: 2,
-                                           isWebinarEnabled: true, webinarRequiresCode: true, webinarConfigChangeCount: 1))
+        host.apply(HostControlsInputs.make(callSession: 1, meetingRequiresInviteCode: true, meetingInviteCodeChangeCount: 2,
+                                           isWebinarEnabled: true, webinarRequiresCode: true, webinarInviteCodeChangeCount: 1))
         #expect(host.knownInviteCode.isEmpty)
         #expect(HostInviteCodePolicy.status(requiresCode: host.snapshot.access.requiresCode,
                                             knownCode: host.knownInviteCode) == .onUnknown)
         #expect(host.knownAttendeeCode == "WATCH7")
-        host.apply(HostControlsInputs.make(callSession: 1, meetingRequiresInviteCode: true, meetingConfigChangeCount: 2,
-                                           isWebinarEnabled: true, webinarRequiresCode: true, webinarConfigChangeCount: 2))
+        host.apply(HostControlsInputs.make(callSession: 1, meetingRequiresInviteCode: true, meetingInviteCodeChangeCount: 2,
+                                           isWebinarEnabled: true, webinarRequiresCode: true, webinarInviteCodeChangeCount: 2))
         #expect(host.knownAttendeeCode.isEmpty)
     }
 

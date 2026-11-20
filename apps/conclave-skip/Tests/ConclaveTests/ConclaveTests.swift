@@ -3377,6 +3377,36 @@ final class ConclaveTests: XCTestCase {
     }
 
     @MainActor
+    func testOnlyConfigEventsThatChangeNoVisibleSettingCountAsCodeChanges() async throws {
+        let viewModel = MeetingViewModel()
+        viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
+        viewModel.state.roomId = "room-a"
+        viewModel.state.connectionState = ConnectionState.joined
+        func webinar(locked: Bool, attendees: Int) -> WebinarConfigSnapshot {
+            WebinarConfigSnapshot(roomId: nil, enabled: true, publicAccess: false, locked: locked, maxAttendees: 250,
+                                  attendeeCount: attendees, requiresInviteCode: true, linkSlug: "briefing",
+                                  feedMode: "active-speaker", qaEnabled: false)
+        }
+        func codeChanges() -> [Int] {
+            let inputs = viewModel.makeHostControlsInputs()
+            return [inputs.meetingInviteCodeChangeCount, inputs.webinarInviteCodeChangeCount]
+        }
+
+        viewModel.socketManager.onWebinarConfigChanged?(webinar(locked: false, attendees: 3))
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        let start = codeChanges()
+        viewModel.socketManager.onWebinarConfigChanged?(webinar(locked: true, attendees: 3))
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(codeChanges(), start, "locking the webinar leaves the attendee code alone")
+        viewModel.socketManager.onWebinarConfigChanged?(webinar(locked: true, attendees: 9))
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(codeChanges(), [start[0], start[1] + 1], "an event that moves no setting is a code change")
+        viewModel.socketManager.onMeetingConfigChanged?(MeetingConfigSnapshot(roomId: nil, requiresInviteCode: true))
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(codeChanges(), [start[0] + 1, start[1] + 1])
+    }
+
+    @MainActor
     func testWebinarConfigEncodesLinkSlugAsSinglePathSegment() async throws {
         let viewModel = MeetingViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
