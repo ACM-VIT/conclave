@@ -99,7 +99,7 @@ final class IOSMicTestAudio {
 
     func setGain(_ gain: Double) {
         self.gain = min(2, max(0, gain))
-        player?.volume = Float(self.gain / 2)
+        player?.volume = NativeRuntimeConfig.playbackVolume(Float(self.gain / 2))
     }
 
     func stop() {
