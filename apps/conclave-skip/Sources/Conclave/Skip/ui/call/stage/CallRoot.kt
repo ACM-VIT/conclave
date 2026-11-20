@@ -259,7 +259,8 @@ private fun CallPanelContent(
         val local = participant?.isLocal == true
         @Composable {
             StageLiveVideo(slotId = "mini:${miniTarget.userId}", userId = miniTarget.userId, isLocal = local, isShare = false,
-                videoKey = videoKey, fit = StageVideoFit.fill, mirror = local && stage.chrome.isFrontCamera)
+                videoKey = videoKey, fit = StageVideoFit.fill, mirror = local && LocalVideoMirrorPolicy.mirrors(
+                    isFront = stage.chrome.isFrontCamera, preference = LocalVideoMirrorPreference.shared.isOn))
         }
     } else null
     if (request.panel == MeetingPanel.meetingInfo) {
@@ -439,7 +440,8 @@ private fun EffectsPreviewContent(
         val local = stage.inputs.localUserId
         val videoKey = stage.inputs.participant(local)?.videoKey ?: ""
         StageLiveVideo(slotId = "effects:${request.presentationID}", userId = local, isLocal = true, isShare = false,
-            videoKey = videoKey, fit = StageVideoFit.fill, mirror = stage.chrome.isFrontCamera)
+            videoKey = videoKey, fit = StageVideoFit.fill, mirror = LocalVideoMirrorPolicy.mirrors(
+                isFront = stage.chrome.isFrontCamera, preference = LocalVideoMirrorPreference.shared.isOn))
     } else {
         LocalPreviewSurface(LocalPreviewController.shared.sessionId)
     }
