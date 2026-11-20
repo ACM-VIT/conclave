@@ -361,6 +361,7 @@ const routerMediaCodecs: RouterRtpCodecCapability[] = [
 ];
 
 export const config = {
+  webcamVp9Enabled: process.env.SFU_WEBCAM_VP9_ENABLED === "1",
   port: toNumber(process.env.SFU_PORT || process.env.PORT, 3031, {
     integer: true,
     min: 1,

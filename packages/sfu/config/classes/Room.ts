@@ -55,6 +55,7 @@ export interface RoomOptions {
   router: Router;
   clientId: string;
   workerPid: number | null;
+  webcamVp9Enabled?: boolean;
 }
 
 type AppAwarenessRemoval = {
@@ -283,11 +284,14 @@ export class Room {
   private readonly webcamReceiverCapacityProofCoordinator:
     WebcamReceiverCapacityProofCoordinator;
 
+  private readonly webcamVp9Enabled: boolean;
+
   constructor(options: RoomOptions) {
     this.id = options.id;
     this.router = options.router;
     this.clientId = options.clientId;
     this.workerPid = options.workerPid;
+    this.webcamVp9Enabled = options.webcamVp9Enabled ?? config.webcamVp9Enabled;
     this.channelId = `${options.clientId}:${options.id}`;
     this.webcamReceiverCapacityProofCoordinator =
       new WebcamReceiverCapacityProofCoordinator({
@@ -383,7 +387,9 @@ export class Room {
   }
 
   private selectWebcamCodecPolicyCodec(): WebcamCodecPolicy["codec"] {
-    return selectRoomWebcamCodec(this.webcamCodecPolicyParticipants());
+    return selectRoomWebcamCodec(this.webcamCodecPolicyParticipants(), {
+      vp9Enabled: this.webcamVp9Enabled,
+    });
   }
 
   private webcamCodecPolicyParticipants() {
