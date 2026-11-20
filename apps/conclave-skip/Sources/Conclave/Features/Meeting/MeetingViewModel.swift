@@ -2420,6 +2420,7 @@ final class MeetingViewModel {
                     return
                 }
                 self.applyMeetingConfigSnapshot(snapshot)
+                self.state.meetingConfigChangeCount += 1
             }
         }
 
@@ -2433,6 +2434,7 @@ final class MeetingViewModel {
                     return
                 }
                 self.applyWebinarConfigSnapshot(snapshot)
+                self.state.webinarConfigChangeCount += 1
             }
         }
 
@@ -8719,6 +8721,7 @@ final class MeetingViewModel {
             isTtsDisabled: state.isTtsDisabled,
             isReactionsDisabled: state.isReactionsDisabled,
             meetingRequiresInviteCode: state.meetingRequiresInviteCode,
+            meetingConfigChangeCount: state.meetingConfigChangeCount,
             allowedKeys: state.adminAllowedUserKeys,
             lockedAllowedKeys: state.adminLockedAllowedUserKeys,
             blockedKeys: state.adminBlockedUserKeys,
@@ -8727,6 +8730,7 @@ final class MeetingViewModel {
             isWebinarPublic: state.isWebinarPublicAccess,
             isWebinarLocked: state.isWebinarLocked,
             webinarRequiresCode: state.webinarRequiresInviteCode,
+            webinarConfigChangeCount: state.webinarConfigChangeCount,
             webinarMaxAttendees: state.webinarMaxAttendees,
             webinarLinkSlug: state.webinarLinkSlug ?? "",
             webinarLinkURL: state.webinarLinkURL ?? "",

@@ -17,6 +17,10 @@ enum HostControlsPolicy {
 
     static func fieldKey(_ field: String) -> String { "field:" + field }
 
+    static func isConfigKey(_ key: String) -> Bool {
+        key.hasPrefix("policy:") || key.hasPrefix("field:") || key.hasPrefix("rotateLink:")
+    }
+
     static func isOn(_ id: HostPolicyID, inputs: HostControlsInputs) -> Bool {
         switch id {
         case .lockMeeting: return inputs.isRoomLocked
