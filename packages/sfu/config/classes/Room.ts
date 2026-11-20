@@ -1,4 +1,5 @@
 import { RoomAiCredentials } from "../../server/roomAiCredentials.js";
+import { inviteCodeVersion } from "../../server/inviteCodeVersion.js";
 import type {
   AudioLevelObserver,
   PlainTransport,
@@ -1799,6 +1800,10 @@ export class Room {
 
   get requiresMeetingInviteCode(): boolean {
     return Boolean(this._meetingInviteCodeHash);
+  }
+
+  get meetingInviteCodeVersion(): string {
+    return inviteCodeVersion(this._meetingInviteCodeHash);
   }
 
   setMeetingInviteCode(inviteCode: string | null): boolean {

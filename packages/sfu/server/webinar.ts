@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { config } from "../config/config.js";
+import { inviteCodeVersion } from "./inviteCodeVersion.js";
 import type { Room } from "../config/classes/Room.js";
 import type {
   WebinarConfigSnapshot,
@@ -364,6 +365,7 @@ export const toWebinarConfigSnapshot = (
   maxAttendees: webinarConfig.maxAttendees,
   attendeeCount,
   requiresInviteCode: Boolean(webinarConfig.inviteCodeHash),
+  inviteCodeVersion: inviteCodeVersion(webinarConfig.inviteCodeHash),
   linkSlug: webinarConfig.linkSlug,
   feedMode: webinarConfig.feedMode,
   qaEnabled: webinarConfig.qaEnabled,
