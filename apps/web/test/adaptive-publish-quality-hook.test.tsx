@@ -6,7 +6,7 @@ import {
   type PublishRig,
 } from "./adaptive-publish-rig";
 
-const MIC_BITRATE = { good: 40_000, fair: 32_000, poor: 24_000 };
+const MIC_BITRATE = { good: 40_000, fair: 32_000, poor: 24_000, emergency: 16_000 };
 const VP8_FULL_LAYER_BITRATE = { good: 1_650_000, fair: 35_000, poor: 15_000 };
 
 let rig: PublishRig | null = null;
@@ -67,6 +67,17 @@ describe("microphone send estimate", () => {
     expect(fullLayerBitrate(target)).toBe(VP8_FULL_LAYER_BITRATE.good);
 
     await target.set({ availableOutgoingBitrateBps: 2_000_000 });
+    await target.advance(10_000);
+    expect(micBitrate(target)).toBe(MIC_BITRATE.good);
+  });
+
+  it("starts a rejoined call at the full mic bitrate when no estimate arrives", async () => {
+    const target = await mount({ inputs: { availableOutgoingBitrateBps: 60_000 } });
+    await target.advance(4_000);
+    expect(micBitrate(target)).toBe(MIC_BITRATE.emergency);
+
+    await target.set({ enabled: false, availableOutgoingBitrateBps: null });
+    await target.set({ enabled: true });
     await target.advance(10_000);
     expect(micBitrate(target)).toBe(MIC_BITRATE.good);
   });

@@ -540,6 +540,9 @@ export function useAdaptivePublishQuality({
 }: UseAdaptivePublishQualityOptions) {
   const recoveryWindowSinceRef = useRef<number | null>(null);
   const microphoneSendEstimateRef = useRef(INITIAL_MICROPHONE_SEND_ESTIMATE_STATE);
+  useEffect(() => {
+    microphoneSendEstimateRef.current = INITIAL_MICROPHONE_SEND_ESTIMATE_STATE;
+  }, [producerTransportId]);
   const cpuLimitedWindowRef = useRef<BooleanWindow>({
     value: false,
     since: Date.now(),
@@ -1517,6 +1520,7 @@ export function useAdaptivePublishQuality({
     if (!enabled) {
       const now = Date.now();
       recoveryWindowSinceRef.current = now;
+      microphoneSendEstimateRef.current = INITIAL_MICROPHONE_SEND_ESTIMATE_STATE;
       cpuLimitedWindowRef.current = {
         value: publishCpuLimited,
         since: now,
