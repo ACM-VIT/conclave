@@ -308,7 +308,7 @@ type SenderParameterPreferences = {
 };
 
 const WEBCAM_DEGRADATION_PREFERENCE: RTCDegradationPreference =
-  "maintain-framerate";
+  "balanced";
 const VP9_WEBCAM_DEGRADATION_PREFERENCE: RTCDegradationPreference =
   "maintain-resolution";
 const SCREEN_SHARE_DEGRADATION_PREFERENCE: RTCDegradationPreference =
