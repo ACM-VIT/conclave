@@ -3377,33 +3377,29 @@ final class ConclaveTests: XCTestCase {
     }
 
     @MainActor
-    func testOnlyConfigEventsThatChangeNoVisibleSettingCountAsCodeChanges() async throws {
+    func testConfigEventsCarryTheInviteCodeVersionToHostControls() async throws {
         let viewModel = MeetingViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.roomId = "room-a"
         viewModel.state.connectionState = ConnectionState.joined
-        func webinar(locked: Bool, attendees: Int) -> WebinarConfigSnapshot {
-            WebinarConfigSnapshot(roomId: nil, enabled: true, publicAccess: false, locked: locked, maxAttendees: 250,
-                                  attendeeCount: attendees, requiresInviteCode: true, linkSlug: "briefing",
-                                  feedMode: "active-speaker", qaEnabled: false)
-        }
-        func codeChanges() -> [Int] {
-            let inputs = viewModel.makeHostControlsInputs()
-            return [inputs.meetingInviteCodeChangeCount, inputs.webinarInviteCodeChangeCount]
-        }
+        let data = Data(#"{"requiresInviteCode":true,"inviteCodeVersion":"w-1","locked":true}"#.utf8)
+        let webinar = try JSONDecoder().decode(WebinarConfigSnapshot.self, from: data)
 
-        viewModel.socketManager.onWebinarConfigChanged?(webinar(locked: false, attendees: 3))
+        viewModel.socketManager.onMeetingConfigChanged?(MeetingConfigSnapshot(roomId: nil, requiresInviteCode: true,
+                                                                              inviteCodeVersion: "m-1"))
+        viewModel.socketManager.onWebinarConfigChanged?(webinar)
         try? await Task.sleep(nanoseconds: 50_000_000)
-        let start = codeChanges()
-        viewModel.socketManager.onWebinarConfigChanged?(webinar(locked: true, attendees: 3))
+        var inputs = viewModel.makeHostControlsInputs()
+        XCTAssertEqual(inputs.meetingInviteCodeVersion, "m-1")
+        XCTAssertEqual(inputs.webinarInviteCodeVersion, "w-1")
+
+        viewModel.socketManager.onWebinarConfigChanged?(WebinarConfigSnapshot(
+            roomId: nil, enabled: nil, publicAccess: nil, locked: false, maxAttendees: nil, attendeeCount: nil,
+            requiresInviteCode: nil, linkSlug: nil, feedMode: nil
+        ))
         try? await Task.sleep(nanoseconds: 50_000_000)
-        XCTAssertEqual(codeChanges(), start, "locking the webinar leaves the attendee code alone")
-        viewModel.socketManager.onWebinarConfigChanged?(webinar(locked: true, attendees: 9))
-        try? await Task.sleep(nanoseconds: 50_000_000)
-        XCTAssertEqual(codeChanges(), [start[0], start[1] + 1], "an event that moves no setting is a code change")
-        viewModel.socketManager.onMeetingConfigChanged?(MeetingConfigSnapshot(roomId: nil, requiresInviteCode: true))
-        try? await Task.sleep(nanoseconds: 50_000_000)
-        XCTAssertEqual(codeChanges(), [start[0] + 1, start[1] + 1])
+        inputs = viewModel.makeHostControlsInputs()
+        XCTAssertEqual(inputs.webinarInviteCodeVersion, "w-1", "a snapshot without a version keeps the last one")
     }
 
     @MainActor

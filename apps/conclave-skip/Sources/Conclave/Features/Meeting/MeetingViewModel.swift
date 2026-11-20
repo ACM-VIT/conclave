@@ -2420,7 +2420,6 @@ final class MeetingViewModel {
                     return
                 }
                 self.applyMeetingConfigSnapshot(snapshot)
-                self.state.meetingInviteCodeChangeCount += 1
             }
         }
 
@@ -2433,9 +2432,7 @@ final class MeetingViewModel {
                     self.bufferPendingWebinarConfigSnapshot(snapshot)
                     return
                 }
-                let settings = self.webinarSettingsKey
                 self.applyWebinarConfigSnapshot(snapshot)
-                if self.webinarSettingsKey == settings { self.state.webinarInviteCodeChangeCount += 1 }
             }
         }
 
@@ -5331,12 +5328,9 @@ final class MeetingViewModel {
         if let requiresInviteCode = snapshot.requiresInviteCode {
             state.meetingRequiresInviteCode = requiresInviteCode
         }
-    }
-
-    private var webinarSettingsKey: [String] {
-        [String(state.isWebinarEnabled), String(state.isWebinarPublicAccess), String(state.isWebinarLocked),
-         String(state.webinarMaxAttendees), String(state.webinarRequiresInviteCode), state.webinarLinkSlug ?? "",
-         state.webinarFeedMode, String(state.isWebinarQaEnabled)]
+        if let version = snapshot.inviteCodeVersion {
+            state.meetingInviteCodeVersion = version
+        }
     }
 
     private func applyWebinarConfigSnapshot(_ snapshot: WebinarConfigSnapshot) {
@@ -5358,6 +5352,9 @@ final class MeetingViewModel {
         }
         if let requiresInviteCode = snapshot.requiresInviteCode {
             state.webinarRequiresInviteCode = requiresInviteCode
+        }
+        if let version = snapshot.inviteCodeVersion {
+            state.webinarInviteCodeVersion = version
         }
         if snapshot.hasLinkSlug {
             let linkSlug = snapshot.linkSlug?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -8728,7 +8725,7 @@ final class MeetingViewModel {
             isTtsDisabled: state.isTtsDisabled,
             isReactionsDisabled: state.isReactionsDisabled,
             meetingRequiresInviteCode: state.meetingRequiresInviteCode,
-            meetingInviteCodeChangeCount: state.meetingInviteCodeChangeCount,
+            meetingInviteCodeVersion: state.meetingInviteCodeVersion,
             allowedKeys: state.adminAllowedUserKeys,
             lockedAllowedKeys: state.adminLockedAllowedUserKeys,
             blockedKeys: state.adminBlockedUserKeys,
@@ -8737,7 +8734,7 @@ final class MeetingViewModel {
             isWebinarPublic: state.isWebinarPublicAccess,
             isWebinarLocked: state.isWebinarLocked,
             webinarRequiresCode: state.webinarRequiresInviteCode,
-            webinarInviteCodeChangeCount: state.webinarInviteCodeChangeCount,
+            webinarInviteCodeVersion: state.webinarInviteCodeVersion,
             webinarMaxAttendees: state.webinarMaxAttendees,
             webinarLinkSlug: state.webinarLinkSlug ?? "",
             webinarLinkURL: state.webinarLinkURL ?? "",

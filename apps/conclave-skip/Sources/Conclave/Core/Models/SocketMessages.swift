@@ -1805,6 +1805,13 @@ struct RedirectUserResponse: Codable {
 struct MeetingConfigSnapshot: Codable {
     let roomId: String?
     let requiresInviteCode: Bool?
+    let inviteCodeVersion: String?
+
+    init(roomId: String?, requiresInviteCode: Bool?, inviteCodeVersion: String? = nil) {
+        self.roomId = roomId
+        self.requiresInviteCode = requiresInviteCode
+        self.inviteCodeVersion = inviteCodeVersion
+    }
 }
 
 struct MeetingConfigUpdateRequest: Encodable {
@@ -1837,6 +1844,7 @@ struct WebinarConfigSnapshot: Codable {
     let maxAttendees: Int?
     let attendeeCount: Int?
     let requiresInviteCode: Bool?
+    let inviteCodeVersion: String?
     let linkSlug: String?
     let feedMode: String?
     let hasLinkSlug: Bool
@@ -1854,7 +1862,8 @@ struct WebinarConfigSnapshot: Codable {
         linkSlug: String?,
         feedMode: String?,
         hasLinkSlug: Bool? = nil,
-        qaEnabled: Bool? = nil
+        qaEnabled: Bool? = nil,
+        inviteCodeVersion: String? = nil
     ) {
         self.roomId = roomId
         self.enabled = enabled
@@ -1863,6 +1872,7 @@ struct WebinarConfigSnapshot: Codable {
         self.maxAttendees = maxAttendees
         self.attendeeCount = attendeeCount
         self.requiresInviteCode = requiresInviteCode
+        self.inviteCodeVersion = inviteCodeVersion
         self.linkSlug = linkSlug
         self.feedMode = feedMode
         self.hasLinkSlug = hasLinkSlug ?? (linkSlug != nil)
@@ -1877,6 +1887,7 @@ struct WebinarConfigSnapshot: Codable {
         case maxAttendees
         case attendeeCount
         case requiresInviteCode
+        case inviteCodeVersion
         case linkSlug
         case feedMode
         case qaEnabled
@@ -1891,6 +1902,7 @@ struct WebinarConfigSnapshot: Codable {
         maxAttendees = try container.decodeIfPresent(Int.self, forKey: .maxAttendees)
         attendeeCount = try container.decodeIfPresent(Int.self, forKey: .attendeeCount)
         requiresInviteCode = try container.decodeIfPresent(Bool.self, forKey: .requiresInviteCode)
+        inviteCodeVersion = try container.decodeIfPresent(String.self, forKey: .inviteCodeVersion)
         linkSlug = try container.decodeIfPresent(String.self, forKey: .linkSlug)
         feedMode = try container.decodeIfPresent(String.self, forKey: .feedMode)
         hasLinkSlug = container.contains(.linkSlug)
@@ -1906,6 +1918,7 @@ struct WebinarConfigSnapshot: Codable {
         try container.encodeIfPresent(maxAttendees, forKey: .maxAttendees)
         try container.encodeIfPresent(attendeeCount, forKey: .attendeeCount)
         try container.encodeIfPresent(requiresInviteCode, forKey: .requiresInviteCode)
+        try container.encodeIfPresent(inviteCodeVersion, forKey: .inviteCodeVersion)
         if hasLinkSlug {
             if let linkSlug {
                 try container.encode(linkSlug, forKey: .linkSlug)

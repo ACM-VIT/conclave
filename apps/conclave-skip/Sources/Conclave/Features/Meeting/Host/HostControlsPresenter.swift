@@ -12,6 +12,10 @@ final class HostControlsPresenter {
 
     private(set) var knownAttendeeCode: String = ""
 
+    @ObservationIgnored private var knownInviteCodeVersion = ""
+
+    @ObservationIgnored private var knownAttendeeCodeVersion = ""
+
     @ObservationIgnored let drafts = HostDrafts()
 
     @ObservationIgnored weak var parent: PeoplePresenter?
@@ -47,15 +51,12 @@ final class HostControlsPresenter {
             reset()
         }
         announceRemoteChanges(previous: previous, next: next)
-        let ownChangeInFlight = (parent?.pendingKeys() ?? []).contains { HostControlsPolicy.isConfigKey($0) }
-        let meetingChangedElsewhere = next.meetingInviteCodeChangeCount != previous.meetingInviteCodeChangeCount && !ownChangeInFlight
         let meetingCodeTurnedOff = previous.meetingRequiresInviteCode && !next.meetingRequiresInviteCode
-        if (meetingChangedElsewhere || meetingCodeTurnedOff) && !knownInviteCode.isEmpty {
+        if (meetingCodeTurnedOff || next.meetingInviteCodeVersion != knownInviteCodeVersion) && !knownInviteCode.isEmpty {
             knownInviteCode = ""
         }
-        let webinarChangedElsewhere = next.webinarInviteCodeChangeCount != previous.webinarInviteCodeChangeCount && !ownChangeInFlight
         let webinarCodeTurnedOff = previous.webinarRequiresCode && !next.webinarRequiresCode
-        if (webinarChangedElsewhere || webinarCodeTurnedOff) && !knownAttendeeCode.isEmpty {
+        if (webinarCodeTurnedOff || next.webinarInviteCodeVersion != knownAttendeeCodeVersion) && !knownAttendeeCode.isEmpty {
             knownAttendeeCode = ""
         }
         inputs = next
@@ -308,6 +309,7 @@ final class HostControlsPresenter {
             if completed {
                 drafts.meetingCode = ""
                 knownInviteCode = entry.command.text
+                knownInviteCodeVersion = inputs.meetingInviteCodeVersion
                 inviteCodePhase = HostFieldPhase.sent
                 inviteCodeSavedSerial += 1
             } else {
@@ -330,6 +332,7 @@ final class HostControlsPresenter {
         case .setAttendeeCode, .clearAttendeeCode:
             if completed {
                 knownAttendeeCode = entry.command.kind == PeopleCommandKind.setAttendeeCode ? entry.command.text : ""
+                knownAttendeeCodeVersion = inputs.webinarInviteCodeVersion
                 drafts.attendeeCode = ""
                 noteSaved(HostFieldID.attendeeCode)
             }
@@ -365,6 +368,8 @@ final class HostControlsPresenter {
         inviteCodePhase = HostFieldPhase.idle
         knownInviteCode = ""
         knownAttendeeCode = ""
+        knownInviteCodeVersion = ""
+        knownAttendeeCodeVersion = ""
         linkPhase = WebinarLinkPhase.idle
         linkTask = nil
         inputs = HostControlsInputs.make()

@@ -235,7 +235,7 @@ final class MeetingState {
     var meetingRequiresInviteCode: Bool = false {
         didSet { onStageInputChanged?(); onHostInputChanged?() }
     }
-    var meetingInviteCodeChangeCount: Int = 0 {
+    var meetingInviteCodeVersion: String = "" {
         didSet { onHostInputChanged?() }
     }
     var adminAllowedUserKeys: [String] = [] {
@@ -269,7 +269,7 @@ final class MeetingState {
     var webinarRequiresInviteCode: Bool = false {
         didSet { onHostInputChanged?() }
     }
-    var webinarInviteCodeChangeCount: Int = 0 {
+    var webinarInviteCodeVersion: String = "" {
         didSet { onHostInputChanged?() }
     }
     var webinarAttendeeCount: Int = 0 {

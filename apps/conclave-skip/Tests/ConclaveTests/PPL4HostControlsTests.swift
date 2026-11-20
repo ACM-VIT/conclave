@@ -172,29 +172,32 @@ struct PPL4HostControlsTests {
         #expect(host.knownAttendeeCode.isEmpty)
     }
 
-    @Test func aCodeChangedByAnotherHostIsNoLongerShownAsCurrent() throws {
-        let (people, log) = makeHost(host: HostControlsInputs.make(callSession: 1, meetingRequiresInviteCode: true,
-                                                                   isWebinarEnabled: true, webinarRequiresCode: true))
+    @Test func aCodeIsShownAsCurrentOnlyWhileTheServerVersionMatches() throws {
+        func inputs(meeting: String, webinar: String, locked: Bool = false) -> HostControlsInputs {
+            HostControlsInputs.make(callSession: 1, meetingRequiresInviteCode: true, meetingInviteCodeVersion: meeting,
+                                    isWebinarEnabled: true, isWebinarLocked: locked, webinarRequiresCode: true,
+                                    webinarInviteCodeVersion: webinar)
+        }
+        let (people, log) = makeHost(host: inputs(meeting: "m0", webinar: "w0"))
         let host = people.host
         host.setMeetingInviteCode("ROOM42")
-        host.apply(HostControlsInputs.make(callSession: 1, meetingRequiresInviteCode: true, meetingInviteCodeChangeCount: 1,
-                                           isWebinarEnabled: true, webinarRequiresCode: true))
+        host.apply(inputs(meeting: "m1", webinar: "w0"))
         people.finish(try #require(log.tickets.last), HostActionResult.completed)
-        #expect(host.knownInviteCode == "ROOM42", "the change event for our own save keeps the saved code")
+        #expect(host.knownInviteCode == "ROOM42")
         host.setAttendeeCode("WATCH7")
-        host.apply(HostControlsInputs.make(callSession: 1, meetingRequiresInviteCode: true, meetingInviteCodeChangeCount: 1,
-                                           isWebinarEnabled: true, webinarRequiresCode: true, webinarInviteCodeChangeCount: 1))
+        host.apply(inputs(meeting: "m1", webinar: "w1"))
         people.finish(try #require(log.tickets.last), HostActionResult.completed)
         #expect(host.knownAttendeeCode == "WATCH7")
 
-        host.apply(HostControlsInputs.make(callSession: 1, meetingRequiresInviteCode: true, meetingInviteCodeChangeCount: 2,
-                                           isWebinarEnabled: true, webinarRequiresCode: true, webinarInviteCodeChangeCount: 1))
+        host.apply(inputs(meeting: "m1", webinar: "w1", locked: true))
+        #expect(host.knownInviteCode == "ROOM42" && host.knownAttendeeCode == "WATCH7",
+                "another host changing other settings leaves both codes current")
+        host.apply(inputs(meeting: "m2", webinar: "w1", locked: true))
         #expect(host.knownInviteCode.isEmpty)
         #expect(HostInviteCodePolicy.status(requiresCode: host.snapshot.access.requiresCode,
                                             knownCode: host.knownInviteCode) == .onUnknown)
         #expect(host.knownAttendeeCode == "WATCH7")
-        host.apply(HostControlsInputs.make(callSession: 1, meetingRequiresInviteCode: true, meetingInviteCodeChangeCount: 2,
-                                           isWebinarEnabled: true, webinarRequiresCode: true, webinarInviteCodeChangeCount: 2))
+        host.apply(inputs(meeting: "m2", webinar: "w2", locked: true))
         #expect(host.knownAttendeeCode.isEmpty)
     }
 
