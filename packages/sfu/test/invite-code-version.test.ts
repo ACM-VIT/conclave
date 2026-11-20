@@ -22,6 +22,20 @@ describe("invite code version", () => {
     expect(room.meetingInviteCodeVersion).toBe("");
   });
 
+  it("gives the same code a different version in every room", () => {
+    const rooms = ["a", "b"].map(
+      (id) => new Room({ id, clientId: "conclave", workerPid: null, router: {} as Router }),
+    );
+    rooms.forEach((room) => room.setMeetingInviteCode("ROOM42"));
+    const webinar = getOrCreateWebinarRoomConfig(new Map(), "conclave:a");
+    updateWebinarRoomConfig(webinar, { inviteCode: "ROOM42" });
+    const versions = new Set([
+      ...rooms.map((room) => room.meetingInviteCodeVersion),
+      toWebinarConfigSnapshot(webinar, 0).inviteCodeVersion,
+    ]);
+    expect(versions.size).toBe(3);
+  });
+
   it("changes with the webinar code but not with other webinar settings", () => {
     const config = getOrCreateWebinarRoomConfig(new Map(), "conclave:room");
     updateWebinarRoomConfig(config, { enabled: true, inviteCode: "WATCH7" });

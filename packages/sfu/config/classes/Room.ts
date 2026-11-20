@@ -1,5 +1,5 @@
 import { RoomAiCredentials } from "../../server/roomAiCredentials.js";
-import { inviteCodeVersion } from "../../server/inviteCodeVersion.js";
+import { newInviteCodeVersion } from "../../server/inviteCodeVersion.js";
 import type {
   AudioLevelObserver,
   PlainTransport,
@@ -229,6 +229,7 @@ export class Room {
   private _participantUnmuteAllowed: boolean = true;
   private _participantVideoAllowed: boolean = true;
   private _meetingInviteCodeHash: string | null = null;
+  private _meetingInviteCodeVersion = "";
   public appsState: { activeAppId: string | null; locked: boolean } = {
     activeAppId: null,
     locked: false,
@@ -1803,7 +1804,12 @@ export class Room {
   }
 
   get meetingInviteCodeVersion(): string {
-    return inviteCodeVersion(this._meetingInviteCodeHash);
+    return this._meetingInviteCodeVersion;
+  }
+
+  private assignMeetingInviteCodeHash(hash: string | null): void {
+    this._meetingInviteCodeHash = hash;
+    this._meetingInviteCodeVersion = newInviteCodeVersion(hash);
   }
 
   setMeetingInviteCode(inviteCode: string | null): boolean {
@@ -1814,7 +1820,7 @@ export class Room {
     if (this._meetingInviteCodeHash === nextHash) {
       return false;
     }
-    this._meetingInviteCodeHash = nextHash;
+    this.assignMeetingInviteCodeHash(nextHash);
     return true;
   }
 
@@ -2392,7 +2398,7 @@ export class Room {
     this.webinarQaEntries.clear();
     this.webinarPromotedUserKeys.clear();
     this.webinarDemotedUserKeys.clear();
-    this._meetingInviteCodeHash = null;
+    this.assignMeetingInviteCodeHash(null);
   }
 
   scheduleDisconnect(

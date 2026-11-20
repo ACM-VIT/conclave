@@ -1,12 +1,7 @@
-import { createHmac } from "node:crypto";
-import { config } from "../config/config.js";
+import { randomBytes } from "node:crypto";
 
-// A non-reversible tag that changes whenever the invite code changes, so a
-// host can tell whether the code it saved is still the current one.
-export const inviteCodeVersion = (inviteCodeHash: string | null): string =>
-  inviteCodeHash
-    ? createHmac("sha256", config.sfuSecret)
-        .update(`invite-code-version:${inviteCodeHash}`)
-        .digest("base64url")
-        .slice(0, 16)
-    : "";
+// A random tag drawn each time an invite code is set, so a host can tell
+// whether the code it saved is still current without the tag revealing or
+// matching anything about the code itself.
+export const newInviteCodeVersion = (inviteCodeHash: string | null): string =>
+  inviteCodeHash ? randomBytes(12).toString("base64url") : "";
