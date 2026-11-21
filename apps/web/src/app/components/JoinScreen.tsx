@@ -1050,14 +1050,11 @@ function JoinScreen({
     if (!pending || !hasIdentity) return;
     const wantAdmin = pending.mode === "new";
     if (Boolean(isAdmin) !== wantAdmin) return;
-    const { mode, roomId: targetId } = pending;
+    const { roomId: targetId } = pending;
     setPending(null);
-    if (mode === "new" && enableRoomRouting && typeof window !== "undefined") {
-      window.history.pushState(null, "", `/${targetId}`);
-    }
     onRoomIdChange(targetId);
     onJoinRoom(targetId);
-  }, [pending, hasIdentity, isAdmin, enableRoomRouting, onJoinRoom, onRoomIdChange]);
+  }, [pending, hasIdentity, isAdmin, onJoinRoom, onRoomIdChange]);
 
   const ensureGuest = (): boolean => {
     const name = liveDisplayName;

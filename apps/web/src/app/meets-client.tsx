@@ -77,6 +77,7 @@ import {
 import { useIsMobile } from "./hooks/useIsMobile";
 import { usePrewarmSocket } from "./hooks/usePrewarmSocket";
 import { useScreenWakeLock } from "./hooks/useScreenWakeLock";
+import { useMeetingAddress } from "./hooks/useMeetingAddress";
 import { useSharedBrowser } from "./hooks/useSharedBrowser";
 import { useVoiceAgentParticipant } from "./hooks/useVoiceAgentParticipant";
 import VoiceAgentDialog from "./components/VoiceAgentDialog";
@@ -2628,12 +2629,8 @@ export default function MeetsClient({
     setWaitingMessage(null);
     setCurrentIsAdmin(true);
     setRoomId(targetRoomId);
-    if (enableRoomRouting && typeof window !== "undefined") {
-      window.history.pushState(null, "", `/${targetRoomId}`);
-    }
     setPendingNewMeetingRoomId(targetRoomId);
   }, [
-    enableRoomRouting,
     handleStopVoiceAgent,
     setMeetError,
     setRoomId,
@@ -3062,6 +3059,12 @@ export default function MeetsClient({
     intentionalDisconnect: refs.intentionalDisconnectRef.current,
   });
   useScreenWakeLock({ enabled: isJoined });
+  useMeetingAddress({
+    enabled: enableRoomRouting,
+    joinMode,
+    connectionState,
+    roomId,
+  });
 
   if (!mounted) return null;
 
