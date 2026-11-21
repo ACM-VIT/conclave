@@ -217,6 +217,7 @@ private struct ParticipantsList: View {
                 }
             }
             .modifier(PeopleRenameAlertHost(people: people))
+            .modifier(PeopleLocalAudioSheet(people: people, stage: false))
             .accessibilityIdentifier("people.list")
         }
     }

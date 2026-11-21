@@ -92,15 +92,15 @@ class TypographyHapticsGalleryBridgeTests {
         }
 
         fun silent(api: Int) = FeedbackKind.values().count { FeedbackHapticContract.isSilentOnAndroid(it, api) }
-        assertEquals(16, silent(36))
-        assertEquals(16, silent(33))
-        assertEquals(15, silent(32))
-        assertEquals(15, silent(30))
-        assertEquals(16, silent(28))
+        assertEquals(9, silent(36))
+        assertEquals(9, silent(33))
+        assertEquals(9, silent(32))
+        assertEquals(9, silent(30))
+        assertEquals(9, silent(28))
 
         assertEquals("CONFIRM", FeedbackHapticContract.android(FeedbackKind.shareStarted, 34))
-        assertEquals("none", FeedbackHapticContract.android(FeedbackKind.transcriptionStopped, 34))
-        assertEquals("none", FeedbackHapticContract.android(FeedbackKind.becameHost, 36))
+        assertEquals("CONFIRM", FeedbackHapticContract.android(FeedbackKind.transcriptionStopped, 34))
+        assertEquals("CONFIRM", FeedbackHapticContract.android(FeedbackKind.becameHost, 36))
     }
 
     @Test fun gesturePartitionMatchesSwift() {
@@ -117,6 +117,7 @@ class TypographyHapticsGalleryBridgeTests {
     }
 
     @Test fun gestureRouteUsesSingleArgumentCallAndRefusesOutcomes() {
+        Settings.System.putInt(RuntimeEnvironment.getApplication().contentResolver, Settings.System.HAPTIC_FEEDBACK_ENABLED, 1)
         val single = mutableListOf<Int>()
         var flagged = 0
         val view = object : View(RuntimeEnvironment.getApplication()) {

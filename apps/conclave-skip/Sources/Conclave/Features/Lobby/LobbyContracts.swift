@@ -43,6 +43,7 @@ struct LobbyMediaSnapshot: Equatable {
 
     let canAskAgainMicrophone: Bool
     let canAskAgainCamera: Bool
+    let audioOnlyOn: Bool
 }
 
 struct LobbyPresenceSnapshot: Equatable {
@@ -209,6 +210,7 @@ struct LobbyJoinRequest: Equatable {
     let allowRoomCreation: Bool
 
     let cameraFacing: LocalCameraFacing
+    let audioOnly: Bool
 }
 
 @MainActor
@@ -217,6 +219,10 @@ final class LobbyCoreHooks {
     var join: ((LobbyJoinRequest) -> Void)? = nil
 
     var setEntryMediaIntent: ((Bool, Bool) -> Void)? = nil
+
+    var setEntryAudioOnly: ((Bool) -> Void)? = nil
+
+    var setRejoinMedia: ((Bool, Bool) -> Void)? = nil
 
     var setPrejoinAudioRouteIntent: ((String, String) -> Void)? = nil
 

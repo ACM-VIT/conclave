@@ -145,9 +145,12 @@ enum LobbyAudioPolicy {
 enum LobbySnapshotPolicy {
 
     static func media(routeId: Int, micIntentOn: Bool, cameraIntentOn: Bool, device: LobbyDeviceInputs,
-                      avatarName: String, avatarSeed: String) -> LobbyMediaSnapshot {
+                      avatarName: String, avatarSeed: String, audioOnlyOn: Bool = false) -> LobbyMediaSnapshot {
+        let cameraOn = cameraIntentOn && !audioOnlyOn
         var preview = device.previewState
-        if PermissionPrimingPolicy.showsCameraOverlay(permission: device.cameraPermission,
+        if audioOnlyOn {
+            preview = .off
+        } else if PermissionPrimingPolicy.showsCameraOverlay(permission: device.cameraPermission,
                                                       canAskAgain: device.canAskAgainCamera,
                                                       supportsRationale: PermissionPrimingPolicy.platformSupportsRationale) {
             preview = .blocked
@@ -155,13 +158,13 @@ enum LobbySnapshotPolicy {
             preview = .off
         } else if device.cameraPermission == .unavailable {
             preview = .unavailable
-        } else if !cameraIntentOn && preview != .published {
+        } else if !cameraOn && preview != .published {
             preview = .off
         }
         return LobbyMediaSnapshot(
             routeId: routeId,
             micIntentOn: micIntentOn,
-            cameraIntentOn: cameraIntentOn,
+            cameraIntentOn: cameraOn,
             micPermission: device.micPermission,
             cameraPermission: device.cameraPermission,
             canAskAgainAndroid: device.canAskAgainMicrophone && device.canAskAgainCamera,
@@ -174,7 +177,8 @@ enum LobbySnapshotPolicy {
             avatarSeed: avatarSeed,
             interruption: preview == .interrupted ? device.interruption : PreviewInterruption.none,
             canAskAgainMicrophone: device.canAskAgainMicrophone,
-            canAskAgainCamera: device.canAskAgainCamera
+            canAskAgainCamera: device.canAskAgainCamera,
+            audioOnlyOn: audioOnlyOn
         )
     }
 

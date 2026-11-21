@@ -94,7 +94,7 @@ struct ActivityStageHeader: View {
                 VStack(alignment: .leading, spacing: 8) {
                     ActivityStageIdentity(kind: kind, session: session)
                     HStack(spacing: 10) {
-                        ActivityShowVideoButton(stage: stage)
+                        ActivityStageVideoAction(kind: kind, stage: stage, session: session)
                         ActivityStageTrailing(kind: kind, session: session)
                     }
                 }
@@ -102,7 +102,7 @@ struct ActivityStageHeader: View {
                 HStack(alignment: .center, spacing: 4) {
                     ActivityStageIdentity(kind: kind, session: session)
                     Spacer(minLength: 4)
-                    ActivityShowVideoButton(stage: stage)
+                    ActivityStageVideoAction(kind: kind, stage: stage, session: session)
                     ActivityStageTrailing(kind: kind, session: session)
                 }
             }
@@ -168,6 +168,36 @@ struct ActivityStageIdentity: View {
                          status: hostStatus.isEmpty ? ActivitiesCopy.nowPlayingStatus(item) : hostStatus, appId: item.appId)
         }
         return Parts(name: ActivityStageCopy.displayName(kind: raw, name: ""), status: "", appId: "")
+    }
+}
+
+struct ActivityStageVideoAction: View {
+    let kind: String
+    let stage: StagePresenter
+    let session: ActivitySession?
+
+    var body: some View {
+        if ActivityStageCopy.kind(kind) == .app && session?.appHost.model.appId == ActivityStagePolicy.watchTogetherAppId {
+            WatchTogetherLeaveButton(stage: stage)
+        } else {
+            ActivityShowVideoButton(stage: stage)
+        }
+    }
+}
+
+struct WatchTogetherLeaveButton: View {
+    let stage: StagePresenter
+
+    var body: some View {
+        Button {
+            stage.leaveWatchTogether()
+        } label: {
+            ActivityHeaderCapsuleLabel(title: ConclaveStrings.text("Leave"))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(ConclaveStrings.text("Leave Watch Together"))
+        .accessibilityHint(ConclaveStrings.text("You stay in the call. Others keep watching."))
+        .accessibilityIdentifier("stage.activity.leaveWatch")
     }
 }
 

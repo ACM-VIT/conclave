@@ -925,7 +925,7 @@ describe("webcam encoding topology", () => {
       expect.objectContaining({
         rid: "h",
         active: true,
-        maxBitrate: 220_000,
+        maxBitrate: 250_000,
         priority: "low",
         networkPriority: "low",
       }),
@@ -1089,15 +1089,15 @@ describe("webcam encoding topology", () => {
         rid: "q",
         active: true,
         maxBitrate: 80_000,
-        maxFramerate: 12,
+        maxFramerate: 15,
         priority: "low",
         networkPriority: "low",
       }),
       expect.objectContaining({
         rid: "h",
         active: true,
-        maxBitrate: 220_000,
-        maxFramerate: 20,
+        maxBitrate: 250_000,
+        maxFramerate: 30,
       }),
       expect.objectContaining({
         rid: "f",

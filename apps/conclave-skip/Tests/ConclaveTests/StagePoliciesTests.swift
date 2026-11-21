@@ -75,7 +75,7 @@ struct StagePoliciesTests {
                 #expect(frames.count == stage.layout.slots.count, "\(viewport.width)x\(viewport.height) n=\(count)")
                 if count > cap {
                     #expect(stage.layout.slots.count == cap)
-                    #expect(stage.layout.overflowCount == count - (cap - 1))
+                    #expect(stage.layout.overflowCount == (count - 1 > cap ? count - cap : 0))
                     #expect(stage.layout.capacity.gridSlots == cap)
                 } else {
                     #expect(stage.layout.overflowCount == 0)
@@ -101,18 +101,18 @@ struct StagePoliciesTests {
         }
     }
 
-    @Test func grid12ShowsFivePlusSevenOnTheSEAndSevenPlusFiveOn390And360() throws {
+    @Test func grid12OmitsCameraOffSelfAndShowsFivePlusSixOnSEAndSevenPlusFourOn390And360() throws {
         let se = presenter(StageFixtureScript.base(count: 12), viewport: Self.iphoneSE)
         #expect(se.layout.kind == .grid)
-        #expect(personSlots(se).count == 5 && se.layout.overflowCount == 7)
+        #expect(personSlots(se).count == 5 && se.layout.overflowCount == 6)
         #expect(se.layout.slots.last?.id == StageSlot.overflowId)
 
         try #require(se.layout.slots.count >= 2)
-        #expect(se.layout.slots[se.layout.slots.count - 2].userId == StageFixtureScript.localUserId)
+        #expect(!se.layout.slots.contains { $0.userId == StageFixtureScript.localUserId })
         #expect(se.layout.overflowSeeds.count == 3)
         for viewport in [Self.iphone17e, Self.android360] {
             let stage = presenter(StageFixtureScript.base(count: 12), viewport: viewport)
-            #expect(personSlots(stage).count == 7 && stage.layout.overflowCount == 5)
+            #expect(personSlots(stage).count == 7 && stage.layout.overflowCount == 4)
         }
     }
 

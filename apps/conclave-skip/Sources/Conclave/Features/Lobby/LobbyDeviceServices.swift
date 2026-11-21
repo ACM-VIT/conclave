@@ -11,6 +11,9 @@ enum MediaPermissionStatusProvider {
         #if os(iOS) && !SKIP
         switch kind {
         case .camera:
+            #if DEBUG && targetEnvironment(simulator)
+            if NativeRuntimeConfig.usesFakeCamera { return .granted }
+            #endif
             return EntryPolicies.mediaPermissionState(authorization: cameraAuthorization(),
                                                       hasDevice: AVCaptureDevice.default(for: .video) != nil)
         case .microphone:
@@ -67,6 +70,12 @@ enum MediaPermissionStatusProvider {
         #if os(iOS) && !SKIP
         switch kind {
         case .camera:
+            #if DEBUG && targetEnvironment(simulator)
+            if NativeRuntimeConfig.usesFakeCamera {
+                completion(true)
+                return
+            }
+            #endif
             AVCaptureDevice.requestAccess(for: .video) { granted in
                 DispatchQueue.main.async { completion(granted) }
             }
@@ -193,6 +202,12 @@ enum LobbyProductionHooks {
         hooks.setEntryMediaIntent = { mic, camera in
             viewModel.setEntryMediaIntent(mic: mic, camera: camera)
         }
+        hooks.setEntryAudioOnly = { on in
+            viewModel.setEntryAudioOnly(on)
+        }
+        hooks.setRejoinMedia = { mic, camera in
+            viewModel.setRejoinMedia(mic: mic, camera: camera)
+        }
         hooks.setPrejoinAudioRouteIntent = { outputKind, inputId in
             viewModel.setPrejoinAudioRouteIntent(outputKind: outputKind, inputId: inputId)
         }
@@ -295,7 +310,8 @@ enum LobbyProductionHooks {
             meetingInviteCode: request.meetingInviteCode,
             webinarInviteCode: request.webinarInviteCode,
             clientId: request.clientId,
-            allowRoomCreation: request.allowRoomCreation
+            allowRoomCreation: request.allowRoomCreation,
+            audioOnly: request.audioOnly
         )
     }
 }

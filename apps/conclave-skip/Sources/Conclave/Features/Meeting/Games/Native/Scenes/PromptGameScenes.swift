@@ -21,12 +21,12 @@ enum ImposterResultKind: String, CaseIterable, Equatable {
 }
 
 enum PromptHostAction: String, CaseIterable, Equatable {
-    case none, skipQuestion, next, skipWriting, revealNow, callVote, endVote
+    case none, skipQuestion, next, skipWriting, revealNow, callVote, endVote, skipPrompt
 
     var moveType: String {
         switch self {
         case .none: return ""
-        case .skipQuestion, .skipWriting, .revealNow: return "skip"
+        case .skipQuestion, .skipWriting, .revealNow, .skipPrompt: return "skip"
         case .next: return "next"
         case .callVote: return "callVote"
         case .endVote: return "tally"
@@ -35,14 +35,14 @@ enum PromptHostAction: String, CaseIterable, Equatable {
 
     var isOverride: Bool {
         switch self {
-        case .skipQuestion, .skipWriting, .revealNow, .endVote: return true
+        case .skipQuestion, .skipWriting, .revealNow, .endVote, .skipPrompt: return true
         case .none, .next, .callVote: return false
         }
     }
 
     func intent() -> GameMoveIntent {
         switch self {
-        case .none, .skipQuestion, .skipWriting, .revealNow: return GameMoveIntent.skip()
+        case .none, .skipQuestion, .skipWriting, .revealNow, .skipPrompt: return GameMoveIntent.skip()
         case .next: return GameMoveIntent.next()
         case .callVote: return GameMoveIntent.callVote()
         case .endVote: return GameMoveIntent.tally()
@@ -675,6 +675,7 @@ enum PromptScenePolicy {
         if let vote = scene.mostLikelyTo { return vote.hostAction }
         if let reaction = scene.reaction { return reaction.hostAction }
         if let imposter = scene.imposter { return imposter.hostAction }
+        if let longShot = scene.longShot { return longShot.hostAction }
         return PromptHostAction.none
     }
 

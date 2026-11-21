@@ -76,6 +76,12 @@ final class TileChromeStore {
 @MainActor
 final class TileSpeakingStore {
     private var states: [String: TileSpeakingState] = [:]
+    private let quiet = TileSpeakingState()
+
+    func state(forSlot slot: StageSlot) -> TileSpeakingState {
+        if slot.id.hasPrefix("share:") { return quiet }
+        return state(for: slot.userId)
+    }
 
     func state(for userId: String) -> TileSpeakingState {
         if let existing = states[userId] { return existing }

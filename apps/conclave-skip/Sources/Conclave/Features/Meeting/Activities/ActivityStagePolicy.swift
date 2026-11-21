@@ -80,6 +80,16 @@ enum ActivityStagePolicy {
         showsVideo && !live.isEmpty
     }
 
+    static let watchTogetherAppId = "watch"
+
+    static func isWatchTogether(activeAppId: String, live: [String]) -> Bool {
+        activeAppId == watchTogetherAppId && live.contains(ActivityStageKind.app)
+    }
+
+    static func normalizedWatchOptOut(_ optedOut: Bool, activeAppId: String, live: [String]) -> Bool {
+        optedOut && isWatchTogether(activeAppId: activeAppId, live: live)
+    }
+
     static func primaryKind(live: [String], preferredKind: String) -> String {
         let preferred = normalizedPreference(preferredKind, live: live)
         if !preferred.isEmpty { return preferred }
@@ -87,17 +97,27 @@ enum ActivityStagePolicy {
     }
 
     static func resolve(live: [String], preferredKind: String, showsVideoOverActivity: Bool,
-                        names: ActivityStageNames) -> ActivityStageResolution {
+                        names: ActivityStageNames, appOptedOut: Bool = false) -> ActivityStageResolution {
         if live.isEmpty { return ActivityStageResolution.none }
-        let primary = primaryKind(live: live, preferredKind: preferredKind)
-        let showsVideo = normalizedShowsVideo(showsVideoOverActivity, live: live)
+        var stageable: [String] = []
+        for kind in live {
+            if !(appOptedOut && kind == ActivityStageKind.app) { stageable.append(kind) }
+        }
+        if stageable.isEmpty {
+            return ActivityStageResolution(liveKinds: live, activityKind: "", onStageKind: "", hiddenActivityKind: "",
+                                           showsVideoOverActivity: false, chip: nil)
+        }
+        let primary = primaryKind(live: stageable, preferredKind: preferredKind)
+        let showsVideo = normalizedShowsVideo(showsVideoOverActivity, live: stageable)
         var hidden = ""
         if showsVideo {
             hidden = primary
         } else {
-            for kind in live where kind != primary {
-                hidden = kind
-                break
+            for kind in stageable {
+                if kind != primary {
+                    hidden = kind
+                    break
+                }
             }
         }
         var chip: NowPlayingChip? = nil

@@ -763,17 +763,13 @@ const getProbeSnapshotExpression = `(() => {
     adaptivePublish: adaptivePublish
       ? {
           enabled: adaptivePublish.enabled,
-          connectionQuality: adaptivePublish.connectionQuality,
-          capRecoveryQuality: adaptivePublish.capRecoveryQuality,
-          emergencyMode: adaptivePublish.emergencyMode,
           videoQuality: adaptivePublish.videoQuality,
           networkManagedVideoQuality:
             adaptivePublish.networkManagedVideoQuality,
           autoDowngraded: adaptivePublish.autoDowngraded,
           updateInFlight: adaptivePublish.updateInFlight,
           lastAppliedProfiles: adaptivePublish.lastAppliedProfiles,
-          qualityWindow: adaptivePublish.qualityWindow,
-          capRecoveryWindow: adaptivePublish.capRecoveryWindow,
+          recoveryWindow: adaptivePublish.recoveryWindow,
           webcamProducer,
           audioProducer,
           screenProducer,

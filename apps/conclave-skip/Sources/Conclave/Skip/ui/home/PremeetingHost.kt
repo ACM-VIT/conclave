@@ -88,7 +88,7 @@ internal fun PremeetingHost(
                     }
                 }
             }
-            if (inCall && usesNativeCallRoot && stage != null) {
+            if (inCall && usesNativeCallRoot && stage != null && !PipController.chromeHiddenForPip) {
                 PromotionLobbyOverlay(premeeting)
             }
             val start = expansionStart
@@ -113,10 +113,10 @@ internal fun PremeetingHost(
                 bottomStripInCall = false, systemDark = systemDark))
         }
         val prompt = premeeting.switchPrompt
-        if (prompt != null) {
+        if (prompt != null && !PipController.chromeHiddenForPip) {
             HostingTheme(inCall = inCall) { PremeetingSwitchDialog(premeeting, prompt) }
         }
-        if (premeeting.isUpdatePromptPresented) {
+        if (premeeting.isUpdatePromptPresented && !PipController.chromeHiddenForPip) {
             PremeetingUpdateDialog(premeeting)
         }
     }

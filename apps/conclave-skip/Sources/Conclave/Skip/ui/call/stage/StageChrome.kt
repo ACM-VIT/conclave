@@ -42,6 +42,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
 
 internal class StageChromeVisibilityState {
     var state by mutableStateOf(ChromeVisibilityState.initial)
@@ -112,6 +120,12 @@ internal fun StageChrome(
             Box(Modifier.heightIn(min = ConclaveChromeMetrics.HEIGHT_DP.dp)) {
                 androidx.compose.animation.AnimatedVisibility(visible = visible, enter = enter, exit = exit) {
                     StageTopRow(stage, capsuleMax, onMinimize, routeAction)
+                }
+            }
+            androidx.compose.animation.AnimatedVisibility(visible = stage.chrome.isWatchTogetherHidden, enter = enter,
+                exit = exit, modifier = Modifier.fillMaxWidth()) {
+                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    StageWatchTogetherPill(stage)
                 }
             }
         }
@@ -196,6 +210,31 @@ internal fun stageCapsuleSubtitle(model: StageCapsuleModel): String = when (mode
     AttendeeViewerPolicy.capsuleLiveKind -> attendeeCapsuleSubtitle()
     StageCapsuleModel.aloneKind -> conclaveString("stg_just_you")
     else -> conclavePlural("stg_participants_count", model.count, model.count)
+}
+
+@Composable
+private fun StageWatchTogetherPill(stage: StagePresenter) {
+    val scheme = MaterialTheme.colorScheme
+    val ext = LocalConclaveExtendedColors.current
+    val rejoinLabel = conclaveString("stg_rejoin_watch_together")
+    Row(
+        Modifier.clip(CircleShape).background(scheme.surfaceContainerHigh).border(1.dp, ext.border, CircleShape)
+            .padding(start = 12.dp, end = 4.dp).testTag("stage.watchTogether"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Icon(ConclaveIcons.SmartDisplayFill0, contentDescription = null, tint = scheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
+        Text(conclaveString("stg_watch_together_playing"), style = MaterialTheme.typography.labelLarge, color = scheme.onSurfaceVariant,
+            maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+        Button(
+            onClick = { stage.rejoinWatchTogether() },
+            contentPadding = PaddingValues(horizontal = 14.dp),
+            modifier = Modifier.heightIn(min = 32.dp).testTag("stage.watchTogether.rejoin")
+                .semantics { contentDescription = rejoinLabel },
+        ) {
+            Text(conclaveString("pm_rejoin"), style = MaterialTheme.typography.labelLarge, maxLines = 1)
+        }
+    }
 }
 
 @Composable

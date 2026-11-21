@@ -11,14 +11,14 @@ describe("web webcam video encodings", () => {
         rid: "q",
         scaleResolutionDownBy: 4,
         maxBitrate: 80_000,
-        maxFramerate: 12,
+        maxFramerate: 15,
         scalabilityMode: "L1T1",
       },
       {
         rid: "h",
         scaleResolutionDownBy: 2,
-        maxBitrate: 220_000,
-        maxFramerate: 20,
+        maxBitrate: 250_000,
+        maxFramerate: 30,
         scalabilityMode: "L1T1",
       },
       {
@@ -31,10 +31,10 @@ describe("web webcam video encodings", () => {
     ]);
   });
 
-  it("keeps lower-layer overhead at 300 kbps while preserving the 1.65 Mbps full layer", () => {
+  it("keeps lower-layer overhead at 330 kbps while preserving the 1.65 Mbps full layer", () => {
     const [base, middle, full] = buildWebcamSimulcastEncodings("standard");
 
-    expect((base?.maxBitrate ?? 0) + (middle?.maxBitrate ?? 0)).toBe(300_000);
+    expect((base?.maxBitrate ?? 0) + (middle?.maxBitrate ?? 0)).toBe(330_000);
     expect(full?.maxBitrate).toBe(1_650_000);
     expect(buildWebcamSingleLayerEncoding("standard").maxBitrate).toBe(
       1_650_000,

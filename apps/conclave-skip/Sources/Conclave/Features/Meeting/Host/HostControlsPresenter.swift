@@ -8,6 +8,14 @@ final class HostControlsPresenter {
 
     private(set) var attendeeCount: Int = 0
 
+    private(set) var knownInviteCode: String = ""
+
+    private(set) var knownAttendeeCode: String = ""
+
+    @ObservationIgnored private var knownInviteCodeVersion = ""
+
+    @ObservationIgnored private var knownAttendeeCodeVersion = ""
+
     @ObservationIgnored let drafts = HostDrafts()
 
     @ObservationIgnored weak var parent: PeoplePresenter?
@@ -43,6 +51,14 @@ final class HostControlsPresenter {
             reset()
         }
         announceRemoteChanges(previous: previous, next: next)
+        let meetingCodeTurnedOff = previous.meetingRequiresInviteCode && !next.meetingRequiresInviteCode
+        if (meetingCodeTurnedOff || next.meetingInviteCodeVersion != knownInviteCodeVersion) && !knownInviteCode.isEmpty {
+            knownInviteCode = ""
+        }
+        let webinarCodeTurnedOff = previous.webinarRequiresCode && !next.webinarRequiresCode
+        if (webinarCodeTurnedOff || next.webinarInviteCodeVersion != knownAttendeeCodeVersion) && !knownAttendeeCode.isEmpty {
+            knownAttendeeCode = ""
+        }
         inputs = next
         if attendeeCount != next.webinarAttendeeCount { attendeeCount = next.webinarAttendeeCount }
         rebuild()
@@ -292,11 +308,15 @@ final class HostControlsPresenter {
         case .setMeetingInviteCode:
             if completed {
                 drafts.meetingCode = ""
+                knownInviteCode = entry.command.text
+                knownInviteCodeVersion = inputs.meetingInviteCodeVersion
                 inviteCodePhase = HostFieldPhase.sent
                 inviteCodeSavedSerial += 1
             } else {
                 inviteCodePhase = failed ? HostFieldPhase.failed : HostFieldPhase.idle
             }
+        case .clearMeetingInviteCode:
+            if completed { knownInviteCode = "" }
         case .allowKey, .blockKey:
             if completed && HostControlsPolicy.normalizedAccessKey(drafts.accessKey) == entry.command.targetId {
                 drafts.accessKey = ""
@@ -311,6 +331,8 @@ final class HostControlsPresenter {
             }
         case .setAttendeeCode, .clearAttendeeCode:
             if completed {
+                knownAttendeeCode = entry.command.kind == PeopleCommandKind.setAttendeeCode ? entry.command.text : ""
+                knownAttendeeCodeVersion = inputs.webinarInviteCodeVersion
                 drafts.attendeeCode = ""
                 noteSaved(HostFieldID.attendeeCode)
             }
@@ -344,6 +366,10 @@ final class HostControlsPresenter {
         requested = [:]
         noticePhase = HostFieldPhase.idle
         inviteCodePhase = HostFieldPhase.idle
+        knownInviteCode = ""
+        knownAttendeeCode = ""
+        knownInviteCodeVersion = ""
+        knownAttendeeCodeVersion = ""
         linkPhase = WebinarLinkPhase.idle
         linkTask = nil
         inputs = HostControlsInputs.make()

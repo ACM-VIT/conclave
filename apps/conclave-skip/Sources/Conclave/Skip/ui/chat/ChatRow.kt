@@ -31,8 +31,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.snapshotFlow
-import androidx.compose.material3.Surface
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -288,24 +286,9 @@ private fun ChatPhotoElement(row: ChatRowModel, actions: ChatRowActions) {
 @Composable
 private fun ChatGifElement(row: ChatRowModel, actions: ChatRowActions, media: ChatRowMediaKind) {
     val summary = chatSummarySemantics(row, actions, ChatCopyAndroid.rowLabel(row))
-    val scheme = MaterialTheme.colorScheme
     when (media) {
         ChatRowMediaKind.Clip -> {
-            val height = ChatMediaGeometry.gifHeight(row.gifAspect).dp
-            val poster = row.gifPreviewURL.ifEmpty { row.gifURL }
-            val target = row.gifVideoURL.ifEmpty { row.gifURL }
-            Box(summary.testTag("chat.row.${row.id}.gif"), contentAlignment = Alignment.Center) {
-                ChatImageBox(poster, ChatMediaGeometry.gifWidth.dp, height, shape = RoundedCornerShape(0.dp),
-                    onOpen = { actions.openLink(target) })
-                Surface(shape = CircleShape, color = scheme.surface) {
-                    Icon(ConclaveIcons.PlayArrowFill1, contentDescription = null, tint = scheme.onSurface,
-                        modifier = Modifier.padding(12.dp).size(24.dp))
-                }
-                Surface(shape = MaterialTheme.shapes.small, color = scheme.surface, modifier = Modifier.align(Alignment.BottomStart).padding(8.dp)) {
-                    ConclaveText(conclaveString("chat_clip"), line = "chat.row.${row.id}.clipTag", style = MaterialTheme.typography.labelSmall,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp))
-                }
-            }
+            ChatClipAttachment(row, summary.testTag("chat.row.${row.id}.gif"))
         }
         ChatRowMediaKind.Sticker -> ChatImageBox(
             row.gifURL, ChatMediaGeometry.stickerWidth(row.gifAspect).dp, ChatMediaGeometry.stickerHeight(row.gifAspect).dp,

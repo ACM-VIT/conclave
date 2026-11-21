@@ -37,13 +37,18 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 
-internal enum class SettingsItemKind { Header, Row, Footer, Card }
+internal enum class SettingsItemKind { Header, Row, Footer, Card, Appearance }
 
 internal data class SettingsListItem(val key: String, val kind: SettingsItemKind, val section: SettingsSection, val row: SettingsRowID? = null)
 
-internal fun settingsListItems(sections: List<SettingsRowSection>): List<SettingsListItem> {
+internal fun settingsListItems(sections: List<SettingsRowSection>, appearanceInList: Boolean = false): List<SettingsListItem> {
     val items = mutableListOf<SettingsListItem>()
+    var placedAppearance = !appearanceInList
     for (section in sections) {
+        if (!placedAppearance && section.section == SettingsSection.about) {
+            items.add(SettingsListItem("appearance", SettingsItemKind.Appearance, SettingsSection.general))
+            placedAppearance = true
+        }
         items.add(SettingsListItem("h:${section.id}", SettingsItemKind.Header, section.section))
         var hasFooter = false
         for (row in section.rows) {
@@ -53,8 +58,13 @@ internal fun settingsListItems(sections: List<SettingsRowSection>): List<Setting
             items.add(SettingsListItem("r:${row.rawValue}", SettingsItemKind.Row, section.section, row))
             if (row == SettingsRowID.knockSound || row == SettingsRowID.cameraQuality) hasFooter = true
         }
+        if (!placedAppearance && section.section == SettingsSection.general) {
+            items.add(SettingsListItem("appearance", SettingsItemKind.Appearance, SettingsSection.general))
+            placedAppearance = true
+        }
         if (hasFooter) items.add(SettingsListItem("f:${section.id}", SettingsItemKind.Footer, section.section))
     }
+    if (!placedAppearance) items.add(SettingsListItem("appearance", SettingsItemKind.Appearance, SettingsSection.general))
     return items
 }
 
@@ -67,16 +77,18 @@ internal fun SettingsRootList(
     onOpenTranscript: (() -> Unit)? = null,
 ) {
     val sections = settings.sections
-    val items = remember(sections) { settingsListItems(sections.toList()) }
+    val inCall = settings.scope == SettingsScope.call
+    val items = remember(sections, inCall) { settingsListItems(sections.toList(), appearanceInList = inCall) }
     var confirmSignOut by remember { mutableStateOf(false) }
     LazyColumn(Modifier.fillMaxSize().testTag("settings.root"), contentPadding = reservation) {
-        item("appearance", contentType = "appearance") { AppearanceSettingRow() }
+        if (!inCall) item("appearance:top", contentType = "appearance") { AppearanceSettingRow() }
         items(items, key = { it.key }, contentType = { it.kind }) { item ->
             when (item.kind) {
                 SettingsItemKind.Header -> ConclaveSectionHeader(title = conclaveString(SettingsCopy.sectionName(item.section)),
                     identifier = "settings.header.${item.section.rawValue}")
                 SettingsItemKind.Footer -> SettingsSectionFooterItem(settings, item.section)
                 SettingsItemKind.Card -> LivePreviewCard(settings, Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+                SettingsItemKind.Appearance -> AppearanceSettingRow()
                 SettingsItemKind.Row -> {
                     val row = item.row
                     if (row != null) SettingsRootRow(settings, row, onPush, onOpenTranscript, onSignOut = { confirmSignOut = true })

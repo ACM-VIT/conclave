@@ -630,6 +630,42 @@ enum RTCConnectionQualityPolicy {
     }
 }
 
+enum AvailableBitrateQualityPolicy {
+    static let saturationRatio = 0.7
+
+    static func receiveQuality(
+        availableBitrate: Double?,
+        mediaBitrate: Double?,
+        fairBitrate: Double,
+        poorBitrate: Double,
+        emergencyBitrate: Double
+    ) -> ConnectionQuality {
+        guard let availableBitrate, let mediaBitrate, mediaBitrate > 0,
+              mediaBitrate >= availableBitrate * saturationRatio else {
+            return .unknown
+        }
+        return band(availableBitrate, fairBitrate: fairBitrate, poorBitrate: poorBitrate, emergencyBitrate: emergencyBitrate)
+    }
+
+    private static func band(
+        _ availableBitrate: Double?,
+        fairBitrate: Double,
+        poorBitrate: Double,
+        emergencyBitrate: Double
+    ) -> ConnectionQuality {
+        guard let availableBitrate, availableBitrate > 0, availableBitrate <= fairBitrate else {
+            return .unknown
+        }
+        if availableBitrate <= emergencyBitrate {
+            return .emergency
+        }
+        if availableBitrate <= poorBitrate {
+            return .poor
+        }
+        return .fair
+    }
+}
+
 struct ConnectionQualityStabilizer {
     private(set) var value: ConnectionQuality
     private var candidate: ConnectionQuality?
@@ -733,11 +769,8 @@ enum ConnectionQualityHintPolicy {
         sampledQuality: ConnectionQuality,
         networkHint: ConnectionQuality
     ) -> ConnectionQuality {
-        guard networkHint != .unknown else { return sampledQuality }
-        guard sampledQuality != .unknown else { return networkHint }
-
-        guard networkHint == .emergency else { return sampledQuality }
-        return mostConstrained(sampledQuality, networkHint)
+        guard sampledQuality == .unknown else { return sampledQuality }
+        return networkHint == .emergency ? .poor : networkHint
     }
 
     static func screenSharePublishQuality(

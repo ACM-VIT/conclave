@@ -266,6 +266,7 @@ export interface WebinarConfigSnapshot {
   maxAttendees: number;
   attendeeCount: number;
   requiresInviteCode: boolean;
+  inviteCodeVersion: string;
   linkSlug: string | null;
   feedMode: WebinarFeedMode;
   qaEnabled: boolean;
@@ -338,6 +339,7 @@ export interface WebinarDemotedNotification {
 
 export interface MeetingConfigSnapshot {
   requiresInviteCode: boolean;
+  inviteCodeVersion: string;
 }
 
 export interface MeetingUpdateRequest {

@@ -2,110 +2,18 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createLatestWinsAsyncQueue,
   getPublishProducerEncodingDebugSnapshot,
-  getImmediateVp8TopologyReversionProfile,
-  getAuthoritativeLiveProducerProfile,
   getCameraCaptureRestoreMinimums,
   getStandardCaptureRestoreRetryAfter,
   hasUsableWebcamSingleLayerReplacementOffer,
-  hasStableBidirectionalPublishRecovery,
-  hasStablePublishCapRecovery,
   isReceiverCapacityProofUsableForProducer,
   isVp8SingleReceiverTopologyApplied,
   isStandardCaptureRestoreRetryDue,
   needsConfiguredCameraCaptureRestore,
-  shouldDowngradeStandardPublishQuality,
   shouldOptimizeVp8ForSingleReceiver,
   shouldRequestProducerTransportRecoveryKeyFrame,
   shouldReleaseProducerTransportProfileBeforeSenderFallback,
   shouldUseProducerTransportNetworkProfile,
 } from "../src/app/hooks/useAdaptivePublishQuality";
-
-describe("adaptive publish recovery", () => {
-  it("restores quickly only after both recovery signals stay good", () => {
-    expect(
-      hasStableBidirectionalPublishRecovery({
-        connectionQuality: "good",
-        connectionElapsedMs: 8_000,
-        capRecoveryQuality: "good",
-        capRecoveryElapsedMs: 8_000,
-      }),
-    ).toBe(true);
-    expect(
-      hasStableBidirectionalPublishRecovery({
-        connectionQuality: "good",
-        connectionElapsedMs: 7_999,
-        capRecoveryQuality: "good",
-        capRecoveryElapsedMs: 8_000,
-      }),
-    ).toBe(false);
-    expect(
-      hasStableBidirectionalPublishRecovery({
-        connectionQuality: "good",
-        connectionElapsedMs: 45_000,
-        capRecoveryQuality: "fair",
-        capRecoveryElapsedMs: 45_000,
-      }),
-    ).toBe(false);
-  });
-
-  it("breaks a self-limited fair recovery loop after a healthy cap signal", () => {
-    expect(
-      hasStablePublishCapRecovery({
-        connectionQuality: "fair",
-        capRecoveryQuality: "good",
-        capRecoveryElapsedMs: 2_000,
-      }),
-    ).toBe(true);
-    expect(
-      hasStablePublishCapRecovery({
-        connectionQuality: "fair",
-        capRecoveryQuality: "good",
-        capRecoveryElapsedMs: 1_999,
-      }),
-    ).toBe(false);
-    expect(
-      hasStablePublishCapRecovery({
-        connectionQuality: "poor",
-        capRecoveryQuality: "good",
-        capRecoveryElapsedMs: 45_000,
-      }),
-    ).toBe(false);
-    expect(
-      hasStablePublishCapRecovery({
-        connectionQuality: "unknown",
-        capRecoveryQuality: "good",
-        capRecoveryElapsedMs: 45_000,
-      }),
-    ).toBe(false);
-  });
-
-  it("does not immediately downgrade a fair sender after separate recovery proof", () => {
-    expect(
-      shouldDowngradeStandardPublishQuality({
-        connectionQuality: "fair",
-        connectionElapsedMs: 60_000,
-        capRecoveryQuality: "good",
-        capRecoveryElapsedMs: 2_000,
-      }),
-    ).toBe(false);
-    expect(
-      shouldDowngradeStandardPublishQuality({
-        connectionQuality: "fair",
-        connectionElapsedMs: 12_000,
-        capRecoveryQuality: "fair",
-        capRecoveryElapsedMs: 60_000,
-      }),
-    ).toBe(true);
-    expect(
-      shouldDowngradeStandardPublishQuality({
-        connectionQuality: "poor",
-        connectionElapsedMs: 4_500,
-        capRecoveryQuality: "good",
-        capRecoveryElapsedMs: 60_000,
-      }),
-    ).toBe(true);
-  });
-});
 
 describe("adaptive publish debug evidence", () => {
   it("reports the applied sender scalability mode", () => {
@@ -169,12 +77,6 @@ describe("adaptive live-profile application", () => {
     ]);
   });
 
-  it("selects the most constrained candidate as the authoritative target", () => {
-    expect(
-      getAuthoritativeLiveProducerProfile(["good", "poor", "fair"]),
-    ).toBe("poor");
-    expect(getAuthoritativeLiveProducerProfile([null, undefined])).toBeNull();
-  });
 });
 
 describe("producer transport profile authority", () => {
@@ -455,32 +357,5 @@ describe("single-receiver webcam optimization", () => {
         3_000,
       ),
     ).toBe(false);
-  });
-
-  it("reverts immediately on proof loss even before quality is known", () => {
-    expect(
-      getImmediateVp8TopologyReversionProfile({
-        appliedSignature: "producer-a:standard:good:single-receiver",
-        producerId: "producer-a",
-        optimizeForSingleReceiver: false,
-        observedProfile: null,
-      }),
-    ).toBe("good");
-    expect(
-      getImmediateVp8TopologyReversionProfile({
-        appliedSignature: "producer-a:standard:good:single-receiver",
-        producerId: "producer-a",
-        optimizeForSingleReceiver: false,
-        observedProfile: "poor",
-      }),
-    ).toBe("poor");
-    expect(
-      getImmediateVp8TopologyReversionProfile({
-        appliedSignature: "producer-a:standard:good:adaptive-layers",
-        producerId: "producer-a",
-        optimizeForSingleReceiver: false,
-        observedProfile: null,
-      }),
-    ).toBeNull();
   });
 });

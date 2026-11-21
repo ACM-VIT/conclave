@@ -1,5 +1,6 @@
 #if os(iOS) && !SKIP
 import SwiftUI
+import UIKit
 
 struct LobbyView: View {
     let route: PremeetingRoute
@@ -55,6 +56,9 @@ struct LobbyView: View {
                 }
             }
             .background(Color(uiColor: .systemGroupedBackground))
+            .background {
+                LobbyKeyboardDismissTap(isEnabled: isNameFocused) { isNameFocused = false }
+            }
             .scrollDismissesKeyboard(.interactively)
             .accessibilityIdentifier("lobby")
             .onGeometryChange(for: CGSize.self) { $0.size } action: {
@@ -207,6 +211,80 @@ private struct LobbyIdentitySection: View {
     }
 }
 
+private struct LobbyKeyboardDismissTap: UIViewRepresentable {
+    let isEnabled: Bool
+    let onTap: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(onTap: onTap) }
+
+    func makeUIView(context: Context) -> WindowObserver {
+        let view = WindowObserver()
+        view.isUserInteractionEnabled = false
+        let coordinator = context.coordinator
+        coordinator.setEnabled(isEnabled)
+        view.onWindowChanged = { [weak coordinator] window in coordinator?.attach(to: window) }
+        return view
+    }
+
+    func updateUIView(_ view: WindowObserver, context: Context) {
+        context.coordinator.onTap = onTap
+        context.coordinator.setEnabled(isEnabled)
+        context.coordinator.attach(to: view.window)
+    }
+
+    static func dismantleUIView(_ view: WindowObserver, coordinator: Coordinator) {
+        coordinator.attach(to: nil)
+        view.onWindowChanged = nil
+    }
+
+    final class WindowObserver: UIView {
+        var onWindowChanged: ((UIWindow?) -> Void)?
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            onWindowChanged?(window)
+        }
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var onTap: () -> Void
+        private weak var window: UIWindow?
+        private lazy var tap: UITapGestureRecognizer = {
+            let gesture = UITapGestureRecognizer(target: self, action: #selector(dismissKeyboard))
+            gesture.cancelsTouchesInView = false
+            gesture.delegate = self
+            return gesture
+        }()
+
+        init(onTap: @escaping () -> Void) { self.onTap = onTap }
+
+        func attach(to window: UIWindow?) {
+            guard self.window !== window else { return }
+            self.window?.removeGestureRecognizer(tap)
+            self.window = window
+            window?.addGestureRecognizer(tap)
+        }
+
+        func setEnabled(_ enabled: Bool) { tap.isEnabled = enabled }
+
+        @objc private func dismissKeyboard() { onTap() }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            var view = touch.view
+            while let current = view {
+                if current is UITextField || current is UITextView { return false }
+                view = current.superview
+            }
+            return true
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+            true
+        }
+    }
+}
+
 private struct LobbyGuestNameSection: View {
     let premeeting: PremeetingPresenter
     let identity: LobbyIdentitySnapshot
@@ -218,7 +296,9 @@ private struct LobbyGuestNameSection: View {
             LobbyGroupedSection {
                 LobbyGroupedRow {
                     HStack(spacing: 8) {
-                        ConclaveTextField(ConclaveStrings.text("Your Name"), text: $name, kind: .name, identifier: "lobby.name")
+                        ConclaveTextField(ConclaveStrings.text("Your Name"), text: $name, kind: .name, identifier: "lobby.name") {
+                            nameFocus.wrappedValue = false
+                        }
                             .focused(nameFocus)
                         ConclaveCharacterCounter(count: name.count, limit: identity.nameLimit,
                                                  visibleFrom: DisplayNamePolicy.counterThreshold,

@@ -57,7 +57,10 @@ final class StagePresenter {
 
     @ObservationIgnored var onActivityResolved: ((String) -> Void)? = nil
 
+    @ObservationIgnored var onWatchTogetherHiddenChanged: ((Bool) -> Void)? = nil
+
     @ObservationIgnored var onNoticeCommand: ((NoticeCommand) -> Void)? = nil
+    @ObservationIgnored var dismissNotificationsPrime: () -> Void = { SystemNotifications.shared.dismissPriming() }
 
     @ObservationIgnored weak var people: PeoplePresenter? = nil
 
@@ -86,13 +89,17 @@ final class StagePresenter {
     @ObservationIgnored private var remoteOrder: [String] = []
     @ObservationIgnored private var featuredUserId = ""
     @ObservationIgnored private var currentSpeakerId = ""
+    @ObservationIgnored private var pipSpeakerId = ""
     @ObservationIgnored private var speakerSinceMillis = 0.0
     @ObservationIgnored private var lastSwapMillis = StageOrderPolicy.neverSwappedMillis
+    @ObservationIgnored private var promotionSinceMillis = 0.0
     @ObservationIgnored private var lastSpokeAt: [String: Double] = [:]
-    @ObservationIgnored private var fitOverrides: [String: String] = [:]
+    private var fitOverrides: [String: String] = [:]
     @ObservationIgnored private var showsVideoOverActivity = false
 
     @ObservationIgnored private var preferredActivityKind = ""
+    @ObservationIgnored private var isWatchTogetherOptedOut = false
+    @ObservationIgnored private var lastWatchTogetherHidden = false
     @ObservationIgnored private var lastLiveActivities: [String] = []
     @ObservationIgnored private var hasActivityBaseline = false
     @ObservationIgnored private var lastResolvedOnStage = "~"
@@ -100,6 +107,9 @@ final class StagePresenter {
     @ObservationIgnored private var lastActivityGameName = ""
     @ObservationIgnored private var transientIds: [String] = []
     @ObservationIgnored private var promotionTask: Task<Void, Never>? = nil
+    @ObservationIgnored private var pendingPromotionDeadlineMillis = 0.0
+    @ObservationIgnored private var priorityExpiryTask: Task<Void, Never>? = nil
+    @ObservationIgnored private var priorityExpiryDeadline = 0.0
     @ObservationIgnored private var reactionIds: [String: Int] = [:]
     @ObservationIgnored private var nextReactionId = 0
     @ObservationIgnored private var nextAnnouncementId = 0
@@ -161,7 +171,12 @@ final class StagePresenter {
     func speakerChanged(_ canonicalUserId: String?, atMillis: Double) {
         let id = canonicalUserId ?? ""
         if id == currentSpeakerId { return }
+        if !currentSpeakerId.isEmpty { lastSpokeAt[currentSpeakerId] = atMillis }
         currentSpeakerId = id
+        if !id.isEmpty && id != inputs.localUserId {
+            pipSpeakerId = id
+            refreshPipTarget()
+        }
         speakerSinceMillis = atMillis
         speaking.setSpeaker(id)
         if !id.isEmpty { lastSpokeAt[id] = atMillis }
@@ -170,6 +185,11 @@ final class StagePresenter {
             rebuild()
         }
         evaluatePromotion()
+    }
+
+    private func refreshPipTarget() {
+        let next = PipTargetPolicy.choose(inputs: inputs, layout: layout, speakerUserId: pipSpeakerId)
+        if next != pipTarget { pipTarget = next }
     }
 
     func reactionsChanged(_ items: [StageReactionInput]) {
@@ -286,6 +306,15 @@ final class StagePresenter {
         rebuild()
     }
 
+    func videoFit(slot: StageSlot, slotWidth: Double, slotHeight: Double) -> StageVideoFit {
+        if let raw = fitOverrides[slot.id], let fit = StageVideoFit(rawValue: raw) { return fit }
+        if slot.role != .spotlightMain || slot.id.hasPrefix("share:") { return slot.fit }
+        let _ = frameSizes.revision
+        let size = frameSizes.size(slotId: slot.id)
+        return TileFeaturePolicy.mainFit(widthClass: viewport.widthClass, slotWidth: slotWidth, slotHeight: slotHeight,
+                                         videoWidth: Double(size.width), videoHeight: Double(size.height))
+    }
+
     func setSelfViewMode(_ raw: String) {
         if let onCommand = onCommand { onCommand(StageCommand(kind: StageCommandKind.setSelfViewMode, userId: "", value: raw)) }
     }
@@ -361,6 +390,22 @@ final class StagePresenter {
         if !ActivityStagePolicy.liveKinds(inputs).contains(kind) { return }
         preferredActivityKind = kind
         showsVideoOverActivity = false
+        if kind == ActivityStageKind.app { isWatchTogetherOptedOut = false }
+        rebuild()
+    }
+
+    func leaveWatchTogether() {
+        if isWatchTogetherOptedOut { return }
+        if !ActivityStagePolicy.isWatchTogether(activeAppId: inputs.activeAppId, live: ActivityStagePolicy.liveKinds(inputs)) { return }
+        isWatchTogetherOptedOut = true
+        rebuild()
+    }
+
+    func rejoinWatchTogether() {
+        if !isWatchTogetherOptedOut { return }
+        isWatchTogetherOptedOut = false
+        preferredActivityKind = ActivityStageKind.app
+        showsVideoOverActivity = false
         rebuild()
     }
 
@@ -390,11 +435,15 @@ final class StagePresenter {
 
     func reset() {
         cancelPromotion()
+        priorityExpiryTask?.cancel()
+        priorityExpiryTask = nil
+        priorityExpiryDeadline = 0.0
         tileChrome.removeAll()
         speaking.removeAll()
         bindings.removeAll()
         frameSizes.removeAll()
         if !pipTarget.isEmpty { pipTarget = PipTargetChoice.none }
+        pipSpeakerId = ""
         inputs = StageInputs.make()
         visibility = StageVisibilityReport.none
         hasVisibilityReport = false
@@ -404,9 +453,11 @@ final class StagePresenter {
         speakerSinceMillis = 0.0
         lastSwapMillis = StageOrderPolicy.neverSwappedMillis
         lastSpokeAt = [:]
+        promotionSinceMillis = 0.0
         fitOverrides = [:]
         showsVideoOverActivity = false
         preferredActivityKind = ""
+        isWatchTogetherOptedOut = false
         lastLiveActivities = []
         hasActivityBaseline = false
         lastResolvedOnStage = "~"
@@ -458,6 +509,7 @@ final class StagePresenter {
         for participant in present {
             presentIds.append(participant.userId)
         }
+        let needsInitialOrder = remoteOrder.isEmpty
         remoteOrder = StageOrderPolicy.reconcile(previous: remoteOrder, participants: present)
         if !featuredUserId.isEmpty && !remoteOrder.contains(featuredUserId) {
             featuredUserId = ""
@@ -467,7 +519,7 @@ final class StagePresenter {
                                                               localUserId: inputs.localUserId)
         }
         let activityResolution = resolveActivities()
-        var nextKind = StageLayoutPolicy.kind(inputs, showsVideoOverActivity: activityResolution.showsVideoOverActivity)
+        var nextKind = StageLayoutPolicy.kind(inputs, showsVideoOverActivity: activityResolution.onStageKind.isEmpty)
         if nextKind.isActivity, let card = activityResolution.stageKind { nextKind = card }
 
         attendeeFeed = inputs.isWebinarAttendee ? AttendeeViewerPolicy.feed(inputs) : AttendeeFeed.none
@@ -478,7 +530,13 @@ final class StagePresenter {
         let filtered = StageOrderPolicy.applyHideFilter(remoteOrder, participants: present,
                                                         hideTilesWithoutVideo: inputs.hideTilesWithoutVideo,
                                                         featuredUserId: keepSpeaker, pinnedUserId: inputs.pinnedUserId)
-        let plan = StageOrderPolicy.plan(StageSlotPlanInputs(
+        var retainedMain = ""
+        if layout.overflowCount > 0 && layout.kind == nextKind && featuredUserId == layout.featuredUserId {
+            for slot in layout.slots {
+                if slot.role == StageSlotRole.spotlightMain { retainedMain = slot.userId }
+            }
+        }
+        let planInputs = StageSlotPlanInputs(
             kind: nextKind,
             isCompactPortrait: StageLayoutPolicy.isCompactPortrait(viewport),
             capacity: capacity,
@@ -492,8 +550,28 @@ final class StagePresenter {
             webinarSpeakerUserId: inputs.webinarSpeakerUserId,
             fitOverrides: fitOverrides,
             viewMode: inputs.viewMode,
-            hasActivitySurface: !inputs.activeAppId.isEmpty || inputs.isBrowserActive
-        ))
+            hasActivitySurface: !inputs.activeAppId.isEmpty || inputs.isBrowserActive,
+            retainedMainUserId: retainedMain
+        )
+        var plan = StageOrderPolicy.plan(planInputs)
+        if (needsInitialOrder || layout.kind != nextKind || layout.capacity == StageCapacity.zero) && plan.overflowCount > 0 {
+            remoteOrder = StageOrderPolicy.priorityOrder(remoteOrder, participants: present, lastSpokeAt: lastSpokeAt,
+                protected: [inputs.pinnedUserId, inputs.screenShareUserId], speakerUserId: currentSpeakerId, nowMillis: now())
+            featuredUserId = StageOrderPolicy.defaultFeatured(remoteOrder: remoteOrder, presenterUserId: inputs.screenShareUserId,
+                                                              localUserId: inputs.localUserId)
+            var prioritized = planInputs
+            prioritized.remoteOrder = StageOrderPolicy.applyHideFilter(remoteOrder, participants: present,
+                hideTilesWithoutVideo: inputs.hideTilesWithoutVideo, featuredUserId: currentSpeakerId, pinnedUserId: inputs.pinnedUserId)
+            prioritized.featuredUserId = featuredUserId
+            prioritized.retainedMainUserId = ""
+            plan = StageOrderPolicy.plan(prioritized)
+        }
+
+        if (nextKind == StageKind.spotlight || nextKind == StageKind.sidebar) && inputs.pinnedUserId.isEmpty {
+            for slot in plan.slots {
+                if slot.role == StageSlotRole.spotlightMain { featuredUserId = slot.userId }
+            }
+        }
 
         let corner = EffectsSelfViewPolicy.corner(selfViewCorner: inputs.selfViewCorner,
                                                   lifted: EffectsSelfViewPolicy.liftsSelfView(platform: effectsPlatform,
@@ -525,8 +603,7 @@ final class StagePresenter {
         if kind != nextKind { kind = nextKind }
         let nextAlone = StageAlonePolicy.snapshot(inputs, kind: nextKind)
         if nextAlone != alone { alone = nextAlone }
-        let nextPip = PipTargetPolicy.choose(inputs: inputs, layout: layout)
-        if nextPip != pipTarget { pipTarget = nextPip }
+        refreshPipTarget()
 
         for participant in present {
             tileChrome.write(tileModel(participant))
@@ -537,7 +614,7 @@ final class StagePresenter {
 
         let nextCapsule = capsuleModel(present)
         if nextCapsule != capsule { capsule = nextCapsule }
-        let nextChrome = chromeSnapshot(present, chip: activityResolution.chip)
+        let nextChrome = chromeSnapshot(present, chip: activityResolution.chip, watchTogetherHidden: isWatchTogetherOptedOut)
         if nextChrome != chrome.withRevision(0) {
             chrome = nextChrome.withRevision(chrome.revision + 1)
         }
@@ -559,6 +636,7 @@ final class StagePresenter {
         refreshMeetingInfo()
 
         layoutPanel.apply(layoutPanelInputs())
+        evaluatePromotion()
     }
 
     func layoutPanelInputs() -> LayoutPanelInputs {
@@ -658,22 +736,26 @@ final class StagePresenter {
                                  isLocked: inputs.isRoomLocked, captionsOn: inputs.captionsOn, liveNotes: inputs.liveNotes)
     }
 
-    private func chromeSnapshot(_ present: [StageParticipantInput], chip: NowPlayingChip?) -> StageChromeSnapshot {
+    private func chromeSnapshot(_ present: [StageParticipantInput], chip: NowPlayingChip?,
+                                watchTogetherHidden: Bool) -> StageChromeSnapshot {
         let local = StageOrderPolicy.participant(inputs.localUserId, in: present)
         let cameraOn = !(local?.isCameraOff ?? true)
         return StageChromeSnapshot(revision: 0, canFlipCamera: inputs.canFlipCamera && cameraOn, isFrontCamera: inputs.isFrontCamera,
                                    isFlipInFlight: inputs.isFlipInFlight && cameraOn, isCameraPaused: inputs.isCameraPaused && cameraOn,
-                                   nowPlaying: chip, routeKind: inputs.routeKind, routeName: inputs.routeName,
-                                   isAttendee: inputs.isWebinarAttendee)
+                                   nowPlaying: chip, isWatchTogetherHidden: watchTogetherHidden, routeKind: inputs.routeKind,
+                                   routeName: inputs.routeName, isAttendee: inputs.isWebinarAttendee)
     }
 
     private func resolveActivities() -> ActivityStageResolution {
         let live = ActivityStagePolicy.liveKinds(inputs)
         preferredActivityKind = ActivityStagePolicy.normalizedPreference(preferredActivityKind, live: live)
         showsVideoOverActivity = ActivityStagePolicy.normalizedShowsVideo(showsVideoOverActivity, live: live)
+        isWatchTogetherOptedOut = ActivityStagePolicy.normalizedWatchOptOut(isWatchTogetherOptedOut, activeAppId: inputs.activeAppId,
+                                                                            live: live)
         return ActivityStagePolicy.resolve(live: live, preferredKind: preferredActivityKind,
                                            showsVideoOverActivity: showsVideoOverActivity,
-                                           names: ActivityStageNames(appId: inputs.activeAppId, gameName: inputs.gameName))
+                                           names: ActivityStageNames(appId: inputs.activeAppId, gameName: inputs.gameName),
+                                           appOptedOut: isWatchTogetherOptedOut)
     }
 
     private func publishActivityChanges(_ resolution: ActivityStageResolution) {
@@ -698,6 +780,10 @@ final class StagePresenter {
         if resolution.onStageKind != lastResolvedOnStage {
             lastResolvedOnStage = resolution.onStageKind
             onActivityResolved?(resolution.onStageKind)
+        }
+        if isWatchTogetherOptedOut != lastWatchTogetherHidden {
+            lastWatchTogetherHidden = isWatchTogetherOptedOut
+            onWatchTogetherHiddenChanged?(isWatchTogetherOptedOut)
         }
     }
 
@@ -804,10 +890,14 @@ final class StagePresenter {
 
     func dismissNotice(id: String) {
         let wasHostNotice = banner?.id == id && banner?.kind == NoticeKind.hostNotice
+        let wasNotificationsPrime = banner?.id == id && banner?.kind == NoticeKind.notificationsOff
         notices.dismiss(id: id, nowMillis: now())
         if wasHostNotice {
             onNoticeCommand?(NoticeCommand(actionId: NoticeCommand.dismissHostNotice, noticeKind: NoticeKind.hostNotice,
                                            userId: "", detail: ""))
+        }
+        if wasNotificationsPrime {
+            dismissNotificationsPrime()
         }
         publishNotices()
     }
@@ -857,8 +947,7 @@ final class StagePresenter {
         case NoticeAction.notNow:
             notices.dismiss(id: notice.id, nowMillis: now())
             if notice.kind == NoticeKind.notificationsOff {
-
-                SystemNotifications.shared.dismissPriming()
+                dismissNotificationsPrime()
             }
         case NoticeAction.expand:
             return
@@ -1038,13 +1127,59 @@ final class StagePresenter {
         lastAttendeeState = next.state
     }
 
+    private func promotionSince(_ candidate: String) -> Double {
+        candidate == currentSpeakerId ? speakerSinceMillis : promotionSinceMillis
+    }
+
+    private func bypassPromotionHold(_ candidate: String) -> Bool {
+        inputs.participant(candidate)?.isHandRaised == true
+    }
+
+    private func schedulePriorityExpiry() {
+        var deadline = 0.0
+        let at = now()
+        if layout.overflowCount > 0 {
+            for row in inputs.presentParticipants {
+                if row.userId == currentSpeakerId { continue }
+                if let spoke = lastSpokeAt[row.userId] {
+                    let expiry = spoke + StageOrderPolicy.recentSpeakerMillis
+                    if expiry > at && (deadline == 0.0 || expiry < deadline) { deadline = expiry }
+                }
+            }
+        }
+        if deadline == priorityExpiryDeadline { return }
+        priorityExpiryTask?.cancel()
+        priorityExpiryTask = nil
+        priorityExpiryDeadline = deadline
+        if deadline == 0.0 { return }
+        let wait = sleep
+        priorityExpiryTask = Task { @MainActor [weak self] in
+            await wait(max(0.0, deadline - at))
+            if Task.isCancelled { return }
+            guard let self = self else { return }
+            self.priorityExpiryTask = nil
+            self.priorityExpiryDeadline = 0.0
+            self.evaluatePromotion()
+        }
+    }
+
     private func evaluatePromotion() {
-        cancelPromotion()
+        schedulePriorityExpiry()
         let candidate = promotionCandidate()
+        let at = now()
+        let since = candidate == pendingPromotionCandidate ? promotionSinceMillis : at
+        let holdSince = candidate == currentSpeakerId ? speakerSinceMillis : since
+        let delay = StageOrderPolicy.promotionDelay(nowMillis: at, speakerSinceMillis: holdSince,
+            lastSwapMillis: lastSwapMillis, bypassHold: bypassPromotionHold(candidate))
+        let deadline = at + delay
+        if candidate == pendingPromotionCandidate && promotionTask != nil && abs(deadline - pendingPromotionDeadlineMillis) < 0.5 {
+            return
+        }
+        cancelPromotion()
         if candidate.isEmpty { return }
-        let delay = StageOrderPolicy.promotionDelay(nowMillis: now(), speakerSinceMillis: speakerSinceMillis,
-                                                    lastSwapMillis: lastSwapMillis)
         pendingPromotionCandidate = candidate
+        promotionSinceMillis = since
+        pendingPromotionDeadlineMillis = deadline
         pendingPromotionDelayMillis = delay
         promotionTasksStarted += 1
         let wait = sleep
@@ -1059,51 +1194,63 @@ final class StagePresenter {
 
     func firePendingPromotion() {
         let candidate = pendingPromotionCandidate
-        pendingPromotionCandidate = ""
-        if candidate.isEmpty || candidate != currentSpeakerId || promotionCandidate() != candidate { return }
-        let at = now()
-        if !StageOrderPolicy.mayPromote(nowMillis: at, speakerSinceMillis: speakerSinceMillis, lastSwapMillis: lastSwapMillis) {
+        cancelPromotion()
+        if candidate.isEmpty || promotionCandidate() != candidate {
             evaluatePromotion()
             return
         }
-        if layout.kind == StageKind.grid {
+        let at = now()
+        if !StageOrderPolicy.mayPromote(nowMillis: at, speakerSinceMillis: promotionSince(candidate),
+            lastSwapMillis: lastSwapMillis, bypassHold: bypassPromotionHold(candidate)) {
+            pendingPromotionCandidate = candidate
+            evaluatePromotion()
+            return
+        }
+        let spotlight = spotlightPromotionCandidate()
+        if candidate == spotlight && !spotlight.isEmpty {
+            featuredUserId = candidate
+        } else {
             let visible = StageOrderPolicy.visibleRemoteIds(layout.slots, localUserId: inputs.localUserId)
             let target = StageOrderPolicy.swapTarget(visibleRemoteIds: visible, lastSpokeAt: lastSpokeAt,
-                                                     participants: inputs.presentParticipants,
-                                                     protected: [inputs.pinnedUserId, inputs.screenShareUserId])
+                participants: inputs.presentParticipants, protected: protectedPromotionIds(),
+                speakerUserId: currentSpeakerId, nowMillis: at)
             guard let demote = target else { return }
             remoteOrder = StageOrderPolicy.swapped(remoteOrder, promote: candidate, demote: demote)
-        } else {
-            featuredUserId = candidate
+            for slot in layout.slots {
+                if slot.role == StageSlotRole.spotlightMain && slot.userId == demote { featuredUserId = candidate }
+            }
         }
         lastSwapMillis = at
         rebuild()
     }
 
-    private func promotionCandidate() -> String {
-        let id = currentSpeakerId
-        if id.isEmpty || id == inputs.localUserId || inputs.participant(id) == nil { return "" }
-        switch layout.kind {
-        case .grid:
-            if layout.overflowCount == 0 || inputs.presentParticipants.count < StageOrderPolicy.minimumParticipantsForSwap {
-                return ""
-            }
-            let visible = StageOrderPolicy.visibleRemoteIds(layout.slots, localUserId: inputs.localUserId)
-            return visible.contains(id) ? "" : id
-        case .spotlight, .sidebar:
+    private func protectedPromotionIds() -> [String] {
+        [inputs.pinnedUserId, inputs.screenShareUserId]
+    }
 
-            return TileFeaturePolicy.spotlightCandidate(speakerUserId: id, featuredUserId: featuredUserId,
-                                                        pinnedUserId: inputs.pinnedUserId,
-                                                        participants: inputs.presentParticipants)
-        default:
-            return ""
-        }
+    private func spotlightPromotionCandidate() -> String {
+        if layout.kind != StageKind.spotlight && layout.kind != StageKind.sidebar { return "" }
+        return TileFeaturePolicy.spotlightCandidate(speakerUserId: currentSpeakerId, featuredUserId: featuredUserId,
+            pinnedUserId: inputs.pinnedUserId, participants: inputs.presentParticipants)
+    }
+
+    private func promotionCandidate() -> String {
+        let spotlight = spotlightPromotionCandidate()
+        if !spotlight.isEmpty { return spotlight }
+        if !StageOrderPolicy.isCapped(layout.kind) || layout.overflowCount == 0 { return "" }
+        let visible = StageOrderPolicy.visibleRemoteIds(layout.slots, localUserId: inputs.localUserId)
+        let filtered = StageOrderPolicy.applyHideFilter(remoteOrder, participants: inputs.presentParticipants,
+            hideTilesWithoutVideo: inputs.hideTilesWithoutVideo, featuredUserId: currentSpeakerId, pinnedUserId: inputs.pinnedUserId)
+        return StageOrderPolicy.promotionCandidate(order: filtered, visibleRemoteIds: visible,
+            participants: inputs.presentParticipants, lastSpokeAt: lastSpokeAt, protected: protectedPromotionIds(),
+            speakerUserId: currentSpeakerId, nowMillis: now())
     }
 
     private func cancelPromotion() {
         promotionTask?.cancel()
         promotionTask = nil
         pendingPromotionCandidate = ""
+        pendingPromotionDeadlineMillis = 0.0
     }
 }
 

@@ -12,6 +12,7 @@ enum PromptGameCopy {
         case .revealNow: return ConclaveStrings.text("Reveal Now")
         case .callVote: return ConclaveStrings.text("Call the Vote")
         case .endVote: return ConclaveStrings.text("End Vote")
+        case .skipPrompt: return ConclaveStrings.text("Skip Prompt")
         }
     }
 

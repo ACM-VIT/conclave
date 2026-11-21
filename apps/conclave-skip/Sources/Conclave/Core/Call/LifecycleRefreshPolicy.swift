@@ -11,6 +11,8 @@ enum LifecycleRefreshKind: String, CaseIterable, Equatable {
 
 enum LifecycleRefreshPolicy {
 
+    static let videoStartKeyFrameRetryMillis: [Int] = [700, 2000, 5000]
+
     static func depth(_ phase: ConclaveAppLifecyclePhase) -> Int {
         switch phase {
         case .active: return 0
@@ -131,6 +133,14 @@ enum RecoveryRetryPolicy {
 
     static func isAttemptInFlight(isRejoinInFlight: Bool, isRetryPending: Bool) -> Bool {
         isRejoinInFlight || isRetryPending
+    }
+}
+
+enum NetworkUsablePolicy {
+    static func isUsable(hasInternet: Bool, isValidated: Bool, hasCaptivePortalCapability: Bool) -> Bool {
+        guard hasInternet else { return false }
+        return !NetworkCaptivePortalPolicy.isCaptivePortal(hasCaptivePortalCapability: hasCaptivePortalCapability,
+                                                          isValidated: isValidated)
     }
 }
 

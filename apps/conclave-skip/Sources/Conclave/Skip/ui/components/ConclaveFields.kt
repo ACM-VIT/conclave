@@ -85,6 +85,7 @@ internal fun ConclaveTextField(
     label: String, value: String, onValueChange: (String) -> Unit, kind: ConclaveTextFieldKind, identifier: String,
     modifier: Modifier = Modifier, error: String? = null, enabled: Boolean = true, onSubmit: () -> Unit = {},
 ) {
+    val dismissKeyboard = rememberKeyboardDismissal()
     val options = when (kind) {
         ConclaveTextFieldKind.Name -> KeyboardOptions(capitalization = KeyboardCapitalization.Words, imeAction = ImeAction.Done)
         ConclaveTextFieldKind.Code -> KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false,
@@ -102,7 +103,7 @@ internal fun ConclaveTextField(
         },
         isError = error != null,
         keyboardOptions = options,
-        keyboardActions = KeyboardActions(onDone = { onSubmit() }, onGo = { onSubmit() }),
+        keyboardActions = KeyboardActions(onDone = { dismissKeyboard(); onSubmit() }, onGo = { dismissKeyboard(); onSubmit() }),
         singleLine = true,
     )
 }

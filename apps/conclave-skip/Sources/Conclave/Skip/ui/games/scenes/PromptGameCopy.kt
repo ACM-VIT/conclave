@@ -10,6 +10,7 @@ internal fun promptHostActionResource(action: PromptHostAction): String? = when 
     PromptHostAction.revealNow -> "gm_reveal_now"
     PromptHostAction.callVote -> "gm_imp_call_vote"
     PromptHostAction.endVote -> "gm_imp_end_vote"
+    PromptHostAction.skipPrompt -> "gm_skip_prompt"
 }
 
 internal fun triviaOutcomeResource(outcome: TriviaOutcome, hasPoints: Boolean): String? = when (outcome) {

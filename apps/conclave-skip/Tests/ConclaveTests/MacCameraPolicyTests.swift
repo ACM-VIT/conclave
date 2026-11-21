@@ -55,7 +55,7 @@ struct MacCameraPolicyTests {
         #expect(!CameraDeviceSelectionPolicy.canSwitch(backOnly))
     }
 
-    @Test func formatSelectionKeepsTheNearestLandscapeFormat() {
+    @Test func formatSelectionKeepsTheSmallestFormatThatCoversTheRequest() {
         let phone = [
             CameraFormatCandidate(width: 640, height: 480),
             CameraFormatCandidate(width: 1280, height: 720),
@@ -65,6 +65,23 @@ struct MacCameraPolicyTests {
         #expect(CameraFormatSelectionPolicy.selectIndex(phone, targetWidth: 1280, targetHeight: 720) == 1)
         #expect(CameraFormatSelectionPolicy.selectIndex(phone, targetWidth: 640, targetHeight: 360) == 0)
         #expect(CameraFormatSelectionPolicy.selectIndex([], targetWidth: 1280, targetHeight: 720) == nil)
+
+        let iPhone11Front = [
+            CameraFormatCandidate(width: 192, height: 144),
+            CameraFormatCandidate(width: 352, height: 288),
+            CameraFormatCandidate(width: 480, height: 360),
+            CameraFormatCandidate(width: 640, height: 480),
+            CameraFormatCandidate(width: 960, height: 540),
+            CameraFormatCandidate(width: 1280, height: 720),
+            CameraFormatCandidate(width: 1920, height: 1080),
+            CameraFormatCandidate(width: 1920, height: 1440),
+        ]
+        #expect(CameraFormatSelectionPolicy.selectIndex(iPhone11Front, targetWidth: 640, targetHeight: 360) == 3)
+        #expect(CameraFormatSelectionPolicy.selectIndex(iPhone11Front, targetWidth: 1280, targetHeight: 720) == 5)
+        let noFullHD = [CameraFormatCandidate(width: 640, height: 360), CameraFormatCandidate(width: 1920, height: 1440)]
+        #expect(CameraFormatSelectionPolicy.selectIndex(noFullHD, targetWidth: 1920, targetHeight: 1080) == 1)
+        let smallOnly = [CameraFormatCandidate(width: 640, height: 480), CameraFormatCandidate(width: 960, height: 540)]
+        #expect(CameraFormatSelectionPolicy.selectIndex(smallOnly, targetWidth: 1920, targetHeight: 1080) == 1)
 
         let macBook = [
             CameraFormatCandidate(width: 640, height: 480),
@@ -82,6 +99,18 @@ struct MacCameraPolicyTests {
         #expect(CameraFormatSelectionPolicy.selectIndex(sideways, targetWidth: 1280, targetHeight: 720) == 1)
         let portraitOnly = [CameraFormatCandidate(width: 720, height: 1280)]
         #expect(CameraFormatSelectionPolicy.selectIndex(portraitOnly, targetWidth: 1280, targetHeight: 720) == 0)
+    }
+
+    @Test func cameraOutputIsTheRequestedShapeCappedByWhatTheCameraSupplies() {
+        let width = { (camera: (Int, Int), request: (Int, Int)) in
+            CameraOutputSizePolicy.outputWidth(cameraWidth: camera.0, cameraHeight: camera.1,
+                                               requestedWidth: request.0, requestedHeight: request.1)
+        }
+        #expect(width((1280, 720), (1280, 720)) == 1280)
+        #expect(width((1280, 960), (1280, 720)) == 1280)
+        #expect(width((1920, 1080), (1280, 720)) == 1280)
+        #expect(width((1280, 720), (1920, 1080)) == 1280)
+        #expect(width((640, 480), (1280, 720)) == 640)
     }
 
     @Test func frameRateStaysInsideTheCameraRange() throws {

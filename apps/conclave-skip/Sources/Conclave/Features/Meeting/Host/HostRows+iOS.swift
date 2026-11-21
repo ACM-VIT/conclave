@@ -21,6 +21,22 @@ enum HostText {
         }
     }
 
+    static func policyDetail(_ id: HostPolicyID) -> String? {
+        switch id {
+        case .lockMeeting: return ConclaveStrings.text("New people wait until a host lets them in")
+        case .allowGuests: return ConclaveStrings.text("People who aren\u{2019}t signed in can join")
+        default: return nil
+        }
+    }
+
+    static func inviteCodeValue(requiresCode: Bool, knownCode: String) -> String {
+        switch HostInviteCodePolicy.status(requiresCode: requiresCode, knownCode: knownCode) {
+        case .off: return ConclaveStrings.text("Off")
+        case .onKnown: return knownCode
+        case .onUnknown: return ConclaveStrings.text("On")
+        }
+    }
+
     static func bulkTitle(_ row: HostBulkRow) -> String {
         if row.isPending {
             switch row.bulk {
@@ -74,6 +90,10 @@ struct HostPolicyToggleRow: View {
                         Text(HostText.policyTitle(policy))
                         if let reason = HostText.reason(row?.reason ?? PeopleActionReason.none) {
                             Text(reason)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        } else if let detail = HostText.policyDetail(policy) {
+                            Text(detail)
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }

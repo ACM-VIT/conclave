@@ -16,6 +16,10 @@ import {
 } from "../lib/screen-share-network-profile";
 import type { Producer, VideoQuality } from "../lib/types";
 import {
+  INITIAL_MICROPHONE_SEND_ESTIMATE_STATE,
+  stepMicrophoneSendEstimate,
+} from "../lib/microphone-send-estimate";
+import {
   selectActiveWebcamReceiverCapacityProof,
   selectStagedWebcamReceiverCapacitySuccessor,
   selectWebcamReceiverCapacityRevocation,
@@ -29,7 +33,6 @@ import {
   type WebcamTopologyReplacementCommand,
   type WebcamTopologyTransitionInput,
 } from "../lib/webcam-topology-transition";
-import type { ConnectionQuality } from "./useConnectionQuality";
 import {
   resolveEffectiveCameraPublishSettings,
   resolveScreenSharePublishSettings,
@@ -52,9 +55,6 @@ export {
 
 interface UseAdaptivePublishQualityOptions {
   enabled: boolean;
-  connectionQuality: ConnectionQuality;
-  capRecoveryQuality: ConnectionQuality;
-  emergencyMode: boolean;
   availableOutgoingBitrateBps?: number | null;
   publishCpuLimited?: boolean;
   dataSaverMode?: boolean;
@@ -129,13 +129,7 @@ export const shouldUseProducerTransportNetworkProfile = ({
   !senderParametersPreviouslyMutated;
 
 const CHECK_INTERVAL_MS = 1000;
-const FAIR_DOWNGRADE_AFTER_MS = 12000;
-const POOR_DOWNGRADE_AFTER_MS = 4500;
-const GOOD_UPGRADE_AFTER_MS = 45000;
-const BIDIRECTIONAL_GOOD_UPGRADE_AFTER_MS = 8000;
-const CAP_RECOVERY_UPGRADE_AFTER_MS = 2000;
-const FAIR_LIVE_CAP_AFTER_MS = 5000;
-const POOR_LIVE_CAP_AFTER_MS = 2500;
+const AUTOMATIC_RECOVERY_AFTER_MS = 2000;
 const GOOD_LIVE_RESTORE_AFTER_MS = 5000;
 const CPU_LIVE_CAP_AFTER_MS = 6000;
 const CPU_SCREEN_SHARE_POOR_CAP_AFTER_MS = 20000;
@@ -157,11 +151,6 @@ const networkProfileRank: Record<WebcamProducerNetworkProfile, number> = {
   emergency: 4,
 };
 
-type QualityWindow = {
-  quality: ConnectionQuality;
-  since: number;
-};
-
 type BooleanWindow = {
   value: boolean;
   since: number;
@@ -176,69 +165,6 @@ type StandardCaptureRestoreAttempt = {
   signature: string;
   retryAfter: number;
 };
-
-export const hasStableBidirectionalPublishRecovery = ({
-  connectionQuality,
-  connectionElapsedMs,
-  capRecoveryQuality,
-  capRecoveryElapsedMs,
-}: {
-  connectionQuality: ConnectionQuality;
-  connectionElapsedMs: number;
-  capRecoveryQuality: ConnectionQuality;
-  capRecoveryElapsedMs: number;
-}): boolean =>
-  connectionQuality === "good" &&
-  capRecoveryQuality === "good" &&
-  connectionElapsedMs >= BIDIRECTIONAL_GOOD_UPGRADE_AFTER_MS &&
-  capRecoveryElapsedMs >= BIDIRECTIONAL_GOOD_UPGRADE_AFTER_MS;
-
-export const hasStablePublishCapRecovery = ({
-  connectionQuality,
-  capRecoveryQuality,
-  capRecoveryElapsedMs,
-}: {
-  connectionQuality: ConnectionQuality;
-  capRecoveryQuality: ConnectionQuality;
-  capRecoveryElapsedMs: number;
-}): boolean =>
-  (connectionQuality === "good" || connectionQuality === "fair") &&
-  capRecoveryQuality === "good" &&
-  capRecoveryElapsedMs >= CAP_RECOVERY_UPGRADE_AFTER_MS;
-
-export const shouldDowngradeStandardPublishQuality = ({
-  connectionQuality,
-  connectionElapsedMs,
-  capRecoveryQuality,
-  capRecoveryElapsedMs,
-}: {
-  connectionQuality: ConnectionQuality;
-  connectionElapsedMs: number;
-  capRecoveryQuality: ConnectionQuality;
-  capRecoveryElapsedMs: number;
-}): boolean => {
-  if (connectionQuality === "poor") {
-    return connectionElapsedMs >= POOR_DOWNGRADE_AFTER_MS;
-  }
-  if (connectionQuality !== "fair") return false;
-  if (
-    hasStablePublishCapRecovery({
-      connectionQuality,
-      capRecoveryQuality,
-      capRecoveryElapsedMs,
-    })
-  ) {
-    return false;
-  }
-  return connectionElapsedMs >= FAIR_DOWNGRADE_AFTER_MS;
-};
-
-export const getAuthoritativeLiveProducerProfile = (
-  profiles: readonly (WebcamProducerNetworkProfile | null | undefined)[],
-): WebcamProducerNetworkProfile | null =>
-  getMostConstrainedWebcamProducerNetworkProfile(
-    profiles.map((profile) => profile ?? null),
-  );
 
 export const getStandardCaptureRestoreRetryAfter = (
   now: number,
@@ -282,19 +208,6 @@ export const isVp8SingleReceiverTopologyApplied = (
 ): boolean =>
   signature?.startsWith(`${producerId}:`) === true &&
   signature.endsWith(":single-receiver");
-
-export const getImmediateVp8TopologyReversionProfile = (options: {
-  appliedSignature: string | null;
-  producerId: string;
-  optimizeForSingleReceiver: boolean;
-  observedProfile: WebcamProducerNetworkProfile | null;
-}): WebcamProducerNetworkProfile | null =>
-  isVp8SingleReceiverTopologyApplied(
-    options.appliedSignature,
-    options.producerId,
-  ) && !options.optimizeForSingleReceiver
-    ? options.observedProfile ?? "good"
-    : null;
 
 export const isReceiverCapacityProofUsableForProducer = (
   proof: ActiveWebcamReceiverCapacityProof | null | undefined,
@@ -437,9 +350,6 @@ const getScreenShareProducerProfileSignature = (
 export type AdaptivePublishQualityDebugSnapshot = {
   enabled: boolean;
   timestamp: number;
-  connectionQuality: ConnectionQuality;
-  capRecoveryQuality: ConnectionQuality;
-  emergencyMode: boolean;
   availableOutgoingBitrateBps: number | null;
   publishCpuLimited: boolean;
   dataSaverMode: boolean;
@@ -460,16 +370,10 @@ export type AdaptivePublishQualityDebugSnapshot = {
   networkManagedVideoQuality: boolean;
   autoDowngraded: boolean;
   updateInFlight: boolean;
-  qualityWindow: {
-    quality: ConnectionQuality;
+  recoveryWindow: {
     since: number;
     elapsedMs: number;
-  };
-  capRecoveryWindow: {
-    quality: ConnectionQuality;
-    since: number;
-    elapsedMs: number;
-  };
+  } | null;
   cpuLimitedWindow: {
     value: boolean;
     since: number;
@@ -488,13 +392,7 @@ export type AdaptivePublishQualityDebugSnapshot = {
     screenAudio: PublishProducerDebugSnapshot | null;
   };
   thresholdsMs: {
-    fairDowngrade: number;
-    poorDowngrade: number;
-    goodUpgrade: number;
-    bidirectionalGoodUpgrade: number;
-    capRecoveryUpgrade: number;
-    fairLiveCap: number;
-    poorLiveCap: number;
+    automaticRecovery: number;
     goodLiveRestore: number;
     cpuLiveCap: number;
     cpuScreenSharePoorCap: number;
@@ -594,16 +492,6 @@ export const shouldReleaseProducerTransportProfileBeforeSenderFallback = ({
   applied?.transportId === transportId &&
   applied?.profile !== "good";
 
-const getLiveProfileForObservedQuality = (
-  quality: ConnectionQuality,
-  emergencyMode: boolean,
-): WebcamProducerNetworkProfile | null => {
-  if (quality === "poor") return emergencyMode ? "emergency" : "poor";
-  if (quality === "fair") return "fair";
-  if (quality === "good") return "good";
-  return null;
-};
-
 const getCpuLimitedLiveProfile = (
   cpuLimited: boolean,
   elapsedMs: number,
@@ -624,9 +512,6 @@ const getCpuLimitedLiveProfile = (
 
 export function useAdaptivePublishQuality({
   enabled,
-  connectionQuality,
-  capRecoveryQuality,
-  emergencyMode,
   availableOutgoingBitrateBps = null,
   publishCpuLimited = false,
   dataSaverMode = false,
@@ -653,14 +538,11 @@ export function useAdaptivePublishQuality({
   requestWebcamProducerKeyFrame,
   debugStateRef,
 }: UseAdaptivePublishQualityOptions) {
-  const qualityWindowRef = useRef<QualityWindow>({
-    quality: "unknown",
-    since: Date.now(),
-  });
-  const capRecoveryWindowRef = useRef<QualityWindow>({
-    quality: "unknown",
-    since: Date.now(),
-  });
+  const recoveryWindowSinceRef = useRef<number | null>(null);
+  const microphoneSendEstimateRef = useRef(INITIAL_MICROPHONE_SEND_ESTIMATE_STATE);
+  useEffect(() => {
+    microphoneSendEstimateRef.current = INITIAL_MICROPHONE_SEND_ESTIMATE_STATE;
+  }, [producerTransportId]);
   const cpuLimitedWindowRef = useRef<BooleanWindow>({
     value: false,
     since: Date.now(),
@@ -710,15 +592,11 @@ export function useAdaptivePublishQuality({
   const writeDebugSnapshot = useCallback(
     (now = Date.now()) => {
       if (!debugStateRef) return;
-      const qualityWindow = qualityWindowRef.current;
-      const capRecoveryWindow = capRecoveryWindowRef.current;
+      const recoveryWindowSince = recoveryWindowSinceRef.current;
       const cpuLimitedWindow = cpuLimitedWindowRef.current;
       debugStateRef.current = {
         enabled,
         timestamp: now,
-        connectionQuality,
-        capRecoveryQuality,
-        emergencyMode,
         availableOutgoingBitrateBps,
         publishCpuLimited,
         dataSaverMode,
@@ -764,14 +642,13 @@ export function useAdaptivePublishQuality({
           networkManagedVideoQualityRef?.current === true,
         autoDowngraded: autoDowngradedRef.current,
         updateInFlight: updateInFlightRef.current,
-        qualityWindow: {
-          ...qualityWindow,
-          elapsedMs: Math.max(0, now - qualityWindow.since),
-        },
-        capRecoveryWindow: {
-          ...capRecoveryWindow,
-          elapsedMs: Math.max(0, now - capRecoveryWindow.since),
-        },
+        recoveryWindow:
+          recoveryWindowSince === null
+            ? null
+            : {
+                since: recoveryWindowSince,
+                elapsedMs: Math.max(0, now - recoveryWindowSince),
+              },
         cpuLimitedWindow: {
           ...cpuLimitedWindow,
           elapsedMs: Math.max(0, now - cpuLimitedWindow.since),
@@ -786,13 +663,7 @@ export function useAdaptivePublishQuality({
           ),
         },
         thresholdsMs: {
-          fairDowngrade: FAIR_DOWNGRADE_AFTER_MS,
-          poorDowngrade: POOR_DOWNGRADE_AFTER_MS,
-          goodUpgrade: GOOD_UPGRADE_AFTER_MS,
-          bidirectionalGoodUpgrade: BIDIRECTIONAL_GOOD_UPGRADE_AFTER_MS,
-          capRecoveryUpgrade: CAP_RECOVERY_UPGRADE_AFTER_MS,
-          fairLiveCap: FAIR_LIVE_CAP_AFTER_MS,
-          poorLiveCap: POOR_LIVE_CAP_AFTER_MS,
+          automaticRecovery: AUTOMATIC_RECOVERY_AFTER_MS,
           goodLiveRestore: GOOD_LIVE_RESTORE_AFTER_MS,
           cpuLiveCap: CPU_LIVE_CAP_AFTER_MS,
           cpuScreenSharePoorCap: CPU_SCREEN_SHARE_POOR_CAP_AFTER_MS,
@@ -801,14 +672,11 @@ export function useAdaptivePublishQuality({
       };
     },
     [
-      connectionQuality,
-      capRecoveryQuality,
       availableOutgoingBitrateBps,
       dataSaverMode,
       publishCpuLimited,
       debugStateRef,
       enabled,
-      emergencyMode,
       isCameraOff,
       participantCount,
       producerTransportId,
@@ -856,6 +724,28 @@ export function useAdaptivePublishQuality({
       const webcamProfile = screenShareVideoActive
         ? getScreenShareAwareWebcamProfile(profile)
         : profile;
+      const microphoneProfile =
+        getMostConstrainedWebcamProducerNetworkProfile([
+          profile,
+          microphoneSendEstimateRef.current.profile,
+        ]) ?? profile;
+      const applyMicrophoneProfile = async () => {
+        const audioProducer = audioProducerRef.current;
+        if (!audioProducer || audioProducer.closed) return;
+        const signature = `${audioProducer.id}:${microphoneProfile}`;
+        if (lastAppliedProfilesRef.current.audio === signature) return;
+        try {
+          await applyAudioProducerNetworkProfile(
+            audioProducer,
+            "webcam",
+            microphoneProfile,
+          );
+          lastAppliedProfilesRef.current.audio = signature;
+          writeDebugSnapshot();
+        } catch (error) {
+          console.warn("[Meets] Adaptive mic bitrate cap failed:", error);
+        }
+      };
       const cameraPublishSettings = resolveEffectiveCameraPublishSettings(
         mediaQualitySettingsRef.current.camera,
         activeVideoEffectsCount > 0,
@@ -945,11 +835,7 @@ export function useAdaptivePublishQuality({
             producerId: webcamProducer.id,
             profile: webcamProfile,
           };
-          const audioProducer = audioProducerRef.current;
-          if (audioProducer && !audioProducer.closed) {
-            lastAppliedProfilesRef.current.audio =
-              `${audioProducer.id}:${profile}:producer-transport`;
-          }
+          await applyMicrophoneProfile();
           writeDebugSnapshot();
           if (
             requestWebcamProducerKeyFrame &&
@@ -1044,23 +930,7 @@ export function useAdaptivePublishQuality({
         }
       }
 
-      const audioProducer = audioProducerRef.current;
-      if (audioProducer && !audioProducer.closed) {
-        const signature = `${audioProducer.id}:${profile}`;
-        if (lastAppliedProfilesRef.current.audio !== signature) {
-          try {
-            await applyAudioProducerNetworkProfile(
-              audioProducer,
-              "webcam",
-              profile,
-            );
-            lastAppliedProfilesRef.current.audio = signature;
-            writeDebugSnapshot();
-          } catch (error) {
-            console.warn("[Meets] Adaptive mic bitrate cap failed:", error);
-          }
-        }
-      }
+      await applyMicrophoneProfile();
 
       if (webcamProducer && !webcamProducer.closed) {
         const nowMonotonicMs = performance.now();
@@ -1363,6 +1233,7 @@ export function useAdaptivePublishQuality({
           retryAfter: getStandardCaptureRestoreRetryAfter(Date.now(), false),
         };
       }
+      cameraCaptureCadenceApplicationRef.current = null;
       if (activeProducer && !activeProducer.closed) {
         lastAppliedProfilesRef.current.webcam = null;
         lastAppliedWebcamProfileRef.current = null;
@@ -1436,27 +1307,6 @@ export function useAdaptivePublishQuality({
     ],
   );
 
-  const getStableLiveProfile = useCallback(
-    (
-      quality: ConnectionQuality,
-      elapsedMs: number,
-    ): WebcamProducerNetworkProfile | null => {
-      const profile = getLiveProfileForObservedQuality(quality, emergencyMode);
-      if (profile === "poor" || profile === "emergency") {
-        if (elapsedMs < POOR_LIVE_CAP_AFTER_MS) return null;
-        return profile;
-      }
-      if (profile === "fair") {
-        return elapsedMs >= FAIR_LIVE_CAP_AFTER_MS ? "fair" : null;
-      }
-      if (profile === "good") {
-        return elapsedMs >= GOOD_LIVE_RESTORE_AFTER_MS ? "good" : null;
-      }
-      return null;
-    },
-    [emergencyMode],
-  );
-
   const getWebcamTopologyTransitionInput = useCallback(
     (): WebcamTopologyTransitionInput => {
       const nowMonotonicMs = performance.now();
@@ -1518,17 +1368,11 @@ export function useAdaptivePublishQuality({
       const screenShareVideoActive = Boolean(
         screenProducerRef.current && !screenProducerRef.current.closed,
       );
-      const observedProfile = getLiveProfileForObservedQuality(
-        connectionQuality,
-        emergencyMode,
-      );
       const hardSingleReceiverConditionsMet =
         enabled &&
         !isCameraOff &&
         participantCount === 2 &&
         videoQualityRef.current === "standard" &&
-        observedProfile === "good" &&
-        capRecoveryQuality !== "poor" &&
         !dataSaverMode &&
         !publishCpuLimited &&
         !screenShareVideoActive;
@@ -1572,10 +1416,7 @@ export function useAdaptivePublishQuality({
       };
     },
     [
-      capRecoveryQuality,
-      connectionQuality,
       dataSaverMode,
-      emergencyMode,
       enabled,
       isCameraOff,
       participantCount,
@@ -1603,17 +1444,12 @@ export function useAdaptivePublishQuality({
   const executeWebcamTopologyCommand = useCallback(
     (command: WebcamTopologyReplacementCommand) => {
       const replace = replaceWebcamProducerTopology;
-      const observedProfile = getLiveProfileForObservedQuality(
-        connectionQuality,
-        emergencyMode,
-      );
       const screenShareVideoActive = Boolean(
         screenProducerRef.current && !screenProducerRef.current.closed,
       );
-      const baseProfile = observedProfile ?? "good";
       const networkProfile = screenShareVideoActive
-        ? getScreenShareAwareWebcamProfile(baseProfile)
-        : baseProfile;
+        ? getScreenShareAwareWebcamProfile("good")
+        : "good";
       const request: WebcamProducerTopologyReplacementRequest = {
         target: command.target,
         expectedProducerId: command.expectedProducerId,
@@ -1658,8 +1494,6 @@ export function useAdaptivePublishQuality({
         });
     },
     [
-      connectionQuality,
-      emergencyMode,
       replaceWebcamProducerTopology,
       screenProducerRef,
       videoProducerRef,
@@ -1686,14 +1520,8 @@ export function useAdaptivePublishQuality({
   useEffect(() => {
     if (!enabled) {
       const now = Date.now();
-      qualityWindowRef.current = {
-        quality: connectionQuality,
-        since: now,
-      };
-      capRecoveryWindowRef.current = {
-        quality: capRecoveryQuality,
-        since: now,
-      };
+      recoveryWindowSinceRef.current = now;
+      microphoneSendEstimateRef.current = INITIAL_MICROPHONE_SEND_ESTIMATE_STATE;
       cpuLimitedWindowRef.current = {
         value: publishCpuLimited,
         since: now,
@@ -1726,46 +1554,35 @@ export function useAdaptivePublishQuality({
 
     const evaluate = () => {
       const now = Date.now();
+      microphoneSendEstimateRef.current = stepMicrophoneSendEstimate(
+        microphoneSendEstimateRef.current,
+        availableOutgoingBitrateBps,
+        now,
+      );
       evaluateWebcamTopologyTransition();
-      const previous = qualityWindowRef.current;
-      const previousRecovery = capRecoveryWindowRef.current;
+      const recoveryWindowSince = recoveryWindowSinceRef.current ?? now;
+      recoveryWindowSinceRef.current = recoveryWindowSince;
       const previousCpuLimited = cpuLimitedWindowRef.current;
-      if (previousRecovery.quality !== capRecoveryQuality) {
-        capRecoveryWindowRef.current = {
-          quality: capRecoveryQuality,
-          since: now,
-        };
-      }
       if (previousCpuLimited.value !== publishCpuLimited) {
         cpuLimitedWindowRef.current = {
           value: publishCpuLimited,
           since: now,
         };
       }
-      if (previous.quality !== connectionQuality) {
-        qualityWindowRef.current = { quality: connectionQuality, since: now };
-        writeDebugSnapshot(now);
-      }
 
-      const elapsedMs = now - qualityWindowRef.current.since;
-      const capRecoveryElapsedMs = now - capRecoveryWindowRef.current.since;
+      const recoveryElapsedMs = now - recoveryWindowSince;
       const cpuLimitedElapsedMs = now - cpuLimitedWindowRef.current.since;
       const currentPublishQuality = videoQualityRef.current;
       const screenShareVideoActive = Boolean(
         screenProducerRef.current && !screenProducerRef.current.closed,
       );
-      const topologyProfile = getLiveProfileForObservedQuality(
-        connectionQuality,
-        emergencyMode,
-      );
-      let topologyProfileToApply: WebcamProducerNetworkProfile | null = null;
+      let topologyRefreshDue = false;
       const webcamProducer = videoProducerRef.current;
       if (webcamProducer && !webcamProducer.closed) {
         const quality = videoQualityRef.current;
-        const safeTopologyProfile = topologyProfile ?? "good";
         const webcamProfile = screenShareVideoActive
-          ? getScreenShareAwareWebcamProfile(safeTopologyProfile)
-          : safeTopologyProfile;
+          ? getScreenShareAwareWebcamProfile("good")
+          : "good";
         const nowMonotonicMs = performance.now();
         const hasNegotiatedReplacementOffer =
           hasUsableWebcamSingleLayerReplacementOffer(
@@ -1774,7 +1591,6 @@ export function useAdaptivePublishQuality({
             nowMonotonicMs,
           );
         const optimizeForSingleReceiver =
-          topologyProfile !== null &&
           !hasNegotiatedReplacementOffer &&
           !canUseProducerTransportProfile(
             webcamProducer,
@@ -1796,25 +1612,23 @@ export function useAdaptivePublishQuality({
                 nowMonotonicMs,
               ),
           });
-        const immediateTopologyReversionProfile =
-          getImmediateVp8TopologyReversionProfile({
-            appliedSignature: lastAppliedProfilesRef.current.webcam,
-            producerId: webcamProducer.id,
-            optimizeForSingleReceiver,
-            observedProfile: topologyProfile,
-          });
+        const revertTopologyNow =
+          isVp8SingleReceiverTopologyApplied(
+            lastAppliedProfilesRef.current.webcam,
+            webcamProducer.id,
+          ) && !optimizeForSingleReceiver;
         const topologySignature = [
           webcamProducer.id,
           quality,
           webcamProfile,
           optimizeForSingleReceiver ? "single-receiver" : "adaptive-layers",
         ].join(":");
-        if (immediateTopologyReversionProfile) {
+        if (revertTopologyNow) {
           topologyWindowRef.current = {
             signature: topologySignature,
             since: now,
           };
-          topologyProfileToApply = immediateTopologyReversionProfile;
+          topologyRefreshDue = true;
         } else if (topologyWindowRef.current.signature !== topologySignature) {
           topologyWindowRef.current = {
             signature: topologySignature,
@@ -1825,124 +1639,53 @@ export function useAdaptivePublishQuality({
             SINGLE_RECEIVER_TOPOLOGY_STABLE_MS &&
           lastAppliedProfilesRef.current.webcam !== topologySignature
         ) {
-          topologyProfileToApply = safeTopologyProfile;
+          topologyRefreshDue = true;
         }
       }
       if (dataSaverMode) {
-        const dataSaverProfile: WebcamProducerNetworkProfile = emergencyMode
-          ? "emergency"
-          : "poor";
         autoDowngradedRef.current = true;
-        requestLiveProducerProfile(dataSaverProfile);
+        requestLiveProducerProfile("poor");
         writeDebugSnapshot(now);
         return;
       }
-      const connectionLiveProfile =
-        getStableLiveProfile(capRecoveryQuality, capRecoveryElapsedMs) ??
-        getStableLiveProfile(connectionQuality, elapsedMs);
+      const startupSettled = recoveryElapsedMs >= GOOD_LIVE_RESTORE_AFTER_MS;
       const cpuLimitedProfile = getCpuLimitedLiveProfile(
         publishCpuLimited,
         cpuLimitedElapsedMs,
         screenShareVideoActive,
       );
-      const liveProfile = getMostConstrainedWebcamProducerNetworkProfile([
-        connectionLiveProfile,
-        cpuLimitedProfile,
-      ]);
-      const screenShareTargetProfile = screenShareVideoActive
+      const liveProfile = cpuLimitedProfile ?? (startupSettled ? "good" : null);
+      const effectiveLiveProfile = screenShareVideoActive
         ? getMostConstrainedWebcamProducerNetworkProfile([
-            liveProfile,
-            !liveProfile
-              ? getLiveProfileForObservedQuality(
-                  connectionQuality,
-                  emergencyMode,
-                )
-              : null,
-            !liveProfile
-              ? getLiveProfileForObservedQuality(
-                  capRecoveryQuality,
-                  emergencyMode,
-                )
-              : null,
+            liveProfile ?? "good",
             getScreenSharePublishNetworkProfileForAvailableOutgoingBitrate(
               availableOutgoingBitrateBps,
-              emergencyMode,
+              false,
             ),
-          ]) ?? (!liveProfile ? "good" : null)
-        : null;
-      const effectiveLiveProfile = screenShareVideoActive
-        ? screenShareTargetProfile
+          ])
         : liveProfile;
-      const screenShareImmediateProfile =
-        screenShareVideoActive && !liveProfile
-          ? screenShareTargetProfile ?? "good"
-          : null;
-      const authoritativeLiveProfile = getAuthoritativeLiveProducerProfile([
-        effectiveLiveProfile ?? screenShareImmediateProfile,
-        topologyProfileToApply,
-      ]);
+      const authoritativeLiveProfile =
+        effectiveLiveProfile ?? (topologyRefreshDue ? "good" : null);
       const applyAuthoritativeLiveProfile = () => {
         if (authoritativeLiveProfile && !updateInFlightRef.current) {
           requestLiveProducerProfile(authoritativeLiveProfile);
         }
       };
-      const shouldRestoreStableConfiguredCapture =
-        capRecoveryQuality === "good" &&
-        capRecoveryElapsedMs >= GOOD_LIVE_RESTORE_AFTER_MS &&
-        connectionQuality !== "poor";
       if (isCameraOff) {
         applyAuthoritativeLiveProfile();
         writeDebugSnapshot(now);
         return;
       }
 
-      if (
-        currentPublishQuality === "standard" &&
-        shouldDowngradeStandardPublishQuality({
-          connectionQuality,
-          connectionElapsedMs: elapsedMs,
-          capRecoveryQuality,
-          capRecoveryElapsedMs,
-        })
-      ) {
-        autoDowngradedRef.current = true;
-        applyAuthoritativeLiveProfile();
-        writeDebugSnapshot(now);
-        return;
-      }
-
-      const hasFastRecoveryProof =
-        hasStableBidirectionalPublishRecovery({
-          connectionQuality,
-          connectionElapsedMs: elapsedMs,
-          capRecoveryQuality,
-          capRecoveryElapsedMs,
-        }) ||
-        hasStablePublishCapRecovery({
-          connectionQuality,
-          capRecoveryQuality,
-          capRecoveryElapsedMs,
-        });
       const canRecoverAutomaticPressure =
-        (hasFastRecoveryProof ||
-          (connectionQuality === "good" && elapsedMs >= GOOD_UPGRADE_AFTER_MS) ||
-          (capRecoveryQuality === "good" &&
-            capRecoveryElapsedMs >= GOOD_UPGRADE_AFTER_MS)) &&
-        participantCount <= MAX_AUTO_UPGRADE_PARTICIPANTS &&
-        capRecoveryQuality !== "poor";
+        recoveryElapsedMs >= AUTOMATIC_RECOVERY_AFTER_MS &&
+        participantCount <= MAX_AUTO_UPGRADE_PARTICIPANTS;
       if (
         networkManagedVideoQualityRef?.current === true &&
         currentPublishQuality === "low" &&
         canRecoverAutomaticPressure
       ) {
-        void switchQuality(
-          "standard",
-          hasFastRecoveryProof ||
-            (capRecoveryQuality === "good" &&
-              capRecoveryElapsedMs >= GOOD_UPGRADE_AFTER_MS)
-            ? "good"
-            : undefined,
-        ).then((switched) => {
+        void switchQuality("standard", "good").then((switched) => {
           if (!switched) return;
           autoDowngradedRef.current = false;
           if (networkManagedVideoQualityRef) {
@@ -1962,7 +1705,9 @@ export function useAdaptivePublishQuality({
         writeDebugSnapshot(now);
         return;
       }
-      if (shouldRestoreStableConfiguredCapture) {
+      const captureCapped =
+        authoritativeLiveProfile !== null && authoritativeLiveProfile !== "good";
+      if (startupSettled && !captureCapped) {
         void restoreConfiguredCaptureIfNeeded().finally(() => {
           if (!updateInFlightRef.current) {
             requestLiveProducerProfile(authoritativeLiveProfile ?? "good");
@@ -1986,14 +1731,10 @@ export function useAdaptivePublishQuality({
     };
   }, [
     availableOutgoingBitrateBps,
-    capRecoveryQuality,
     canUseProducerTransportProfile,
-    connectionQuality,
     dataSaverMode,
     enabled,
-    emergencyMode,
     evaluateWebcamTopologyTransition,
-    getStableLiveProfile,
     isCameraOff,
     networkManagedVideoQualityRef,
     participantCount,

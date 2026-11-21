@@ -19,6 +19,7 @@ enum PersonActionID: String, CaseIterable, Equatable {
     case pin, unpin, sendPrivateMessage, hideMessages, showMessages, changeName, lowerOwnHand
     case mute, turnOffCamera, stopScreenShare, stopScreenAudio, makeCoHost, makeHost, moveToAudience
     case remove, admit, deny, bringOnStage, cancelStageInvite
+    case muteForMe, unmuteForMe, localVolume
 }
 
 struct PersonActionModel: Equatable, Identifiable {
@@ -61,6 +62,8 @@ struct PersonRowModel: Equatable, Identifiable {
     let pendingAction: String
 
     let messagesHidden: Bool
+
+    var localAudio = ParticipantAudioPreference()
 
     static func placeholder(_ key: String) -> PersonRowModel {
         PersonRowModel(id: key, serverId: key, name: "", avatarSeed: key, isSelf: false, role: PersonRole.participant,

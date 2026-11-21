@@ -221,6 +221,7 @@ private enum SocketEvent {
     static let joinRejected = SfuServerEvent.joinRejected.rawValue
     static let waitingRoomStatus = SfuServerEvent.waitingRoomStatus.rawValue
     static let hostAssigned = SfuServerEvent.hostAssigned.rawValue
+    static let activeSpeakerChanged = SfuServerEvent.activeSpeakerChanged.rawValue
     static let hostChanged = SfuServerEvent.hostChanged.rawValue
     static let adminUsersChanged = SfuServerEvent.adminUsersChanged.rawValue
     static let participantMuted = SfuServerEvent.participantMuted.rawValue
@@ -314,6 +315,7 @@ final class SocketIOManager {
     var onJoinApproved: ((JoinDecisionNotification) -> Void)?
     var onJoinRejected: ((JoinDecisionNotification) -> Void)?
     var onHostAssigned: ((HostAssignedNotification) -> Void)?
+    var onActiveSpeakerChanged: ((ActiveSpeakerChangedNotification) -> Void)?
     var onHostChanged: ((HostChangedNotification) -> Void)?
     var onAdminUsersChanged: ((AdminUsersChangedNotification) -> Void)?
     var onKicked: ((KickedNotification) -> Void)?
@@ -1311,7 +1313,9 @@ final class SocketIOManager {
 
     func sendGameMove(gameId: String, type: String, payload: GameJSONValue? = nil) async throws -> GameMoveResponse {
         let request = GameMoveRequest(gameId: gameId, type: type, payload: payload)
-        let data = try await emit(event: SocketEvent.gameMove, payload: request)
+        let timeoutMillis = GameMoveTiming.judgedAckTimeoutMillis(gameId: gameId, type: type)
+        let timeoutSeconds = timeoutMillis.map { Double($0) / 1_000.0 } ?? 30.0
+        let data = try await emit(event: SocketEvent.gameMove, payload: request, timeoutSeconds: timeoutSeconds)
         return try JSONDecoder().decode(GameMoveResponse.self, from: data)
     }
 
@@ -2384,6 +2388,14 @@ final class SocketIOManager {
                   let notification = self.decode(HostAssignedNotification.self, from: first),
                   self.eventRoomIdMatchesActiveOrPending(notification.roomId) else { return }
             self.onHostAssigned?(notification)
+        }
+
+        socket.on(SocketEvent.activeSpeakerChanged) { [weak self] data, _ in
+            guard let self, let first = data.first,
+                  self.socket === socket,
+                  let notification = self.decode(ActiveSpeakerChangedNotification.self, from: first),
+                  self.eventRoomIdMatchesActiveOrPending(notification.roomId) else { return }
+            self.onActiveSpeakerChanged?(notification)
         }
 
         socket.on(SocketEvent.hostChanged) { [weak self] data, _ in

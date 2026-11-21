@@ -28,6 +28,7 @@ const toMeetingConfigSnapshot = (
 ): MeetingConfigSnapshot => {
   return {
     requiresInviteCode: Boolean(context.currentRoom?.requiresMeetingInviteCode),
+    inviteCodeVersion: context.currentRoom?.meetingInviteCodeVersion ?? "",
   };
 };
 

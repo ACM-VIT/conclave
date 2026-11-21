@@ -719,6 +719,7 @@ final class AppHostPresenter {
     @ObservationIgnored private var wheelRevision = 0
     @ObservationIgnored private var watchRevision = 0
     @ObservationIgnored private var sawAppStatus = false
+    @ObservationIgnored private(set) var isHiddenLocally = false
 
     @ObservationIgnored var fixtureSeedNames: [String] = []
 
@@ -750,6 +751,17 @@ final class AppHostPresenter {
         rebuild()
     }
 
+    func setHiddenLocally(_ hidden: Bool) {
+        if isHiddenLocally == hidden { return }
+        isHiddenLocally = hidden
+        if hidden {
+            session?.releaseEmbed()
+            rebuild()
+        } else {
+            retry()
+        }
+    }
+
     func closeFailed() {
         if !closePending { return }
         closePending = false
@@ -772,11 +784,15 @@ final class AppHostPresenter {
             rebuild()
         case .loadStarted:
             followSession()
-            if event.appSessionId != appSessionId { return }
+            if event.appSessionId != appSessionId || isHiddenLocally { return }
             embedReady = false
             issue = AppHostIssue.none
             startReadyTimer()
             rebuild()
+        case .loadDetached:
+            if event.appSessionId != appSessionId { return }
+            cancelReadyTimer()
+            embedReady = false
         case .ready:
             if event.appSessionId != appSessionId { return }
             embedReady = true
@@ -1153,6 +1169,7 @@ final class AppHostPresenter {
 
     func reset() {
         resetLocal()
+        isHiddenLocally = false
         inputs = AppHostInputs.make()
         trendingItems = []
         trendingRequested = false
@@ -1306,7 +1323,7 @@ final class AppHostPresenter {
 
     func fireReadyTimeout(appSessionId expectedSession: String, reloadSerial expectedReload: Int) {
         if appSessionId != expectedSession || reloadSerial != expectedReload { return }
-        if embedReady || issue != AppHostIssue.none { return }
+        if readyTimeoutTask == nil || embedReady || issue != AppHostIssue.none { return }
         issue = AppHostIssue.timedOut
         readyTimeoutTask = nil
         rebuild()
@@ -1372,7 +1389,7 @@ final class AppHostPresenter {
         let canEdit = hasApp && AppHostPresenter.canEdit(isAttendee: inputs.isAttendee, isHost: inputs.isHost, isLocked: inputs.isLocked)
         let phase = AppHostPresenter.phase(hasApp: hasApp, hasEmbed: hasEmbed, issue: issue, embedReady: embedReady,
                                            closePending: closePending, canEdit: canEdit)
-        let wantsWebView = hasEmbed && !appSessionId.isEmpty
+        let wantsWebView = hasEmbed && !appSessionId.isEmpty && !isHiddenLocally
             && (phase == AppHostPhase.opening || phase == AppHostPhase.ready || phase == AppHostPhase.readOnly || phase == AppHostPhase.closing)
         let next = AppHostModel(
             revision: revision,

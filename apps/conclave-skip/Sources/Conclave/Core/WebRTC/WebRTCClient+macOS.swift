@@ -10,6 +10,7 @@ final class VideoTrackWrapper: Identifiable {
 
     var rtcVideoTrack: Any?
     var isEnabled: Bool = false
+    var isReceivingFrames: Bool = true
 
     init(
         id: String,
@@ -77,7 +78,9 @@ final class WebRTCClient {
     func createReceiveTransport() async throws { }
     func restartIce() async -> Bool { false }
     func restartIce(transportKind: String) async -> Bool { false }
-    func consumeProducer(producerId: String, producerUserId: String, producerKind: String? = nil, producerType: String = "webcam", preferHighWebcamLayer: Bool = false, initialReceiveConnectionQuality: ConnectionQuality = .unknown, roomId: String? = nil, meetingLifecycleGeneration: Int = 0) async throws { }
+    func consumeProducer(producerId: String, producerUserId: String, producerKind: String? = nil, producerType: String = "webcam", preferHighWebcamLayer: Bool = false, initialReceiveConnectionQuality: ConnectionQuality = .unknown, roomId: String? = nil, meetingLifecycleGeneration: Int = 0) async throws {
+        try await testCallGate?("consume:" + producerId)
+    }
     func closeConsumer(producerId: String, userId: String) { }
     func applyRemoteConsumerBandwidthPolicy(
         focusedUserIds: Set<String>,
@@ -167,6 +170,8 @@ final class WebRTCClient {
     func consumeIntentionalLocalVideoProducerClose(producerId: String) -> Bool { false }
     func consumeIntentionalLocalAudioProducerClose(producerId: String) -> Bool { false }
     func hasAudioConsumer(userIdPrefix: String) -> Bool { false }
+    func setParticipantAudioGain(userId: String, gain: Double) { }
+    func resetParticipantAudioGains() { }
     func setAudioConsumersEnabled(userIdPrefix: String, enabled: Bool) { }
     func setAudioEnabled(_ enabled: Bool) async throws {
         let muteIntent = testLocalAudioMuteIntent
@@ -264,13 +269,20 @@ final class WebRTCClient {
 
     func getCaptureSession() -> Any? { nil }
     func getLocalVideoTrack() -> Any? { nil }
+    func localVideoStageKey() -> String { "" }
     func remoteVideoTrack(forUserId userId: String) -> VideoTrackWrapper? {
         let normalized = userId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty else { return nil }
         return remoteVideoTracks[normalized]
     }
 
-    func sampleAudioLevels(localUserId: String? = nil) -> [String: Double] { [:] }
+    var testAudioLevels: [String: Double] = [:]
+    private(set) var testAudioLevelSampleCount = 0
+
+    func sampleAudioLevels(localUserId: String? = nil) -> [String: Double] {
+        testAudioLevelSampleCount += 1
+        return testAudioLevels
+    }
 
     func availableAudioInputs() -> [AudioDevice] { [] }
     func availableAudioOutputs() -> [AudioDevice] { [] }

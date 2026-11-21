@@ -303,6 +303,15 @@ enum NotificationPreferences {
     static let messageNotificationsKey = "conclave.pref.messageNotifications"
     static let admissionNotifyKey = "conclave.pref.admissionNotify"
     static let permissionAskedKey = "conclave.pref.notificationsPermissionAsked"
+    static let primingDismissedKey = "conclave.pref.notificationsPrimingDismissed"
+
+    static func primingDismissed(defaults: UserDefaults = UserDefaults.standard) -> Bool {
+        boolValue(primingDismissedKey, fallback: false, defaults: defaults)
+    }
+
+    static func setPrimingDismissed(defaults: UserDefaults = UserDefaults.standard) {
+        defaults.set(true, forKey: primingDismissedKey)
+    }
 
     static func messageNotifications(defaults: UserDefaults = UserDefaults.standard) -> Bool {
         boolValue(messageNotificationsKey, fallback: true, defaults: defaults)
@@ -589,6 +598,7 @@ final class SystemNotifications {
     func requestPermission(reason: NotificationRequestReason) {
         if reason == NotificationRequestReason.call {
             primingDismissedSession = inputs.callSession
+            NotificationPreferences.setPrimingDismissed(defaults: defaults)
         }
         guard !isRequesting,
               NotificationPermissionStatePolicy.canRequest(currentPermission, isAndroid: isAndroid) else {
@@ -602,6 +612,7 @@ final class SystemNotifications {
     }
 
     func dismissPriming() {
+        NotificationPreferences.setPrimingDismissed(defaults: defaults)
         guard primingDismissedSession != inputs.callSession else { return }
         primingDismissedSession = inputs.callSession
         publishAndNotify()
@@ -751,7 +762,8 @@ final class SystemNotifications {
             stageEntryFinished: session != 0 && stageEntryFinishedSession == session, isEntering: inputs.isEntering,
             isInPictureInPicture: inputs.isInPictureInPicture, isRequesting: isRequesting,
             dismissedThisSession: session != 0 && primingDismissedSession == session,
-            offeredInAnotherSession: primingOfferedSession != 0 && primingOfferedSession != session)
+            offeredInAnotherSession: (primingOfferedSession != 0 && primingOfferedSession != session)
+                || NotificationPreferences.primingDismissed(defaults: defaults))
         let showsBanner = NotificationPrimingPolicy.showsBanner(priming)
         if showsBanner && primingOfferedSession == 0 {
 

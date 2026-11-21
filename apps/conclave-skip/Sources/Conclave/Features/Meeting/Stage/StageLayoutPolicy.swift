@@ -305,8 +305,10 @@ enum StageLayoutPolicy {
         let tileHeight = SpotlightRailPolicy.tileHeight(viewport)
         if isCompactPortrait(viewport) {
             let y = area.y + area.height - tileHeight
+            let rowWidth = Double(slots.count) * tileWidth + Double(slots.count - 1) * gap
+            let left = area.x + max(0.0, (area.width - rowWidth) / 2.0)
             for slot in slots {
-                result.append(StageFrame(slotId: slot.id, x: area.x + Double(index) * (tileWidth + gap), y: y,
+                result.append(StageFrame(slotId: slot.id, x: left + Double(index) * (tileWidth + gap), y: y,
                                          width: tileWidth, height: tileHeight))
                 index += 1
             }

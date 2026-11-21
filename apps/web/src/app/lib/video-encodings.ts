@@ -7,7 +7,7 @@ import {
 } from "./constants";
 
 const STANDARD_BASE_LAYER_MAX_BITRATE = 80_000;
-const STANDARD_MIDDLE_LAYER_MAX_BITRATE = 220_000;
+const STANDARD_MIDDLE_LAYER_MAX_BITRATE = 250_000;
 
 const {
   buildWebcamSimulcastEncodings: buildBaseWebcamSimulcastEncodings,
@@ -49,7 +49,7 @@ const {
           bitrateRatio:
             STANDARD_BASE_LAYER_MAX_BITRATE / STANDARD_VIDEO_MAX_BITRATE,
           minBitrate: STANDARD_BASE_LAYER_MAX_BITRATE,
-          maxFramerate: 12,
+          maxFramerate: 15,
         },
         {
           rid: "h",
@@ -57,7 +57,7 @@ const {
           bitrateRatio:
             STANDARD_MIDDLE_LAYER_MAX_BITRATE / STANDARD_VIDEO_MAX_BITRATE,
           minBitrate: STANDARD_MIDDLE_LAYER_MAX_BITRATE,
-          maxFramerate: 20,
+          maxFramerate: 30,
         },
         {
           rid: "f",

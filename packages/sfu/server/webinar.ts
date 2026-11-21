@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { config } from "../config/config.js";
+import { newInviteCodeVersion } from "./inviteCodeVersion.js";
 import type { Room } from "../config/classes/Room.js";
 import type {
   WebinarConfigSnapshot,
@@ -26,6 +27,7 @@ export type WebinarRoomConfig = {
   maxAttendees: number;
   locked: boolean;
   inviteCodeHash: string | null;
+  inviteCodeVersion: string;
   linkVersion: number;
   linkSlug: string | null;
   feedMode: WebinarFeedMode;
@@ -50,6 +52,7 @@ const createDefaultWebinarRoomConfig = (): WebinarRoomConfig => ({
   maxAttendees: DEFAULT_WEBINAR_MAX_ATTENDEES,
   locked: false,
   inviteCodeHash: null,
+  inviteCodeVersion: "",
   linkVersion: 1,
   linkSlug: null,
   feedMode: "active-speaker",
@@ -295,6 +298,16 @@ export const resolveWebinarLinkTarget = (
   return target;
 };
 
+export const setWebinarInviteCodeHash = (
+  webinarConfig: WebinarRoomConfig,
+  inviteCodeHash: string | null,
+): boolean => {
+  if (webinarConfig.inviteCodeHash === inviteCodeHash) return false;
+  webinarConfig.inviteCodeHash = inviteCodeHash;
+  webinarConfig.inviteCodeVersion = newInviteCodeVersion(inviteCodeHash);
+  return true;
+};
+
 export const updateWebinarRoomConfig = (
   webinarConfig: WebinarRoomConfig,
   update: WebinarUpdateRequest,
@@ -337,10 +350,7 @@ export const updateWebinarRoomConfig = (
     const nextHash = normalizedInviteCode
       ? hashInviteCode(normalizedInviteCode)
       : null;
-    if (webinarConfig.inviteCodeHash !== nextHash) {
-      webinarConfig.inviteCodeHash = nextHash;
-      changed = true;
-    }
+    changed = setWebinarInviteCodeHash(webinarConfig, nextHash) || changed;
   }
 
   if (
@@ -364,6 +374,7 @@ export const toWebinarConfigSnapshot = (
   maxAttendees: webinarConfig.maxAttendees,
   attendeeCount,
   requiresInviteCode: Boolean(webinarConfig.inviteCodeHash),
+  inviteCodeVersion: webinarConfig.inviteCodeVersion,
   linkSlug: webinarConfig.linkSlug,
   feedMode: webinarConfig.feedMode,
   qaEnabled: webinarConfig.qaEnabled,

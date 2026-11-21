@@ -77,6 +77,10 @@ enum PanelPresentationPolicy {
         return PanelPresentationPolicy.usesAndroidBottomSheet(panel) ? PanelHostStyle.bottomSheet : PanelHostStyle.overlay
     }
 
+    static func allowsMiniTile(_ panel: MeetingPanel) -> Bool {
+        panel != MeetingPanel.settings && panel != MeetingPanel.hostControls
+    }
+
     static func usesAndroidBottomSheet(_ panel: MeetingPanel) -> Bool {
         panel == MeetingPanel.layout || panel == MeetingPanel.effects
     }
@@ -108,7 +112,7 @@ enum PanelPresentationPolicy {
             detents: detents,
             initialDetent: initialDetent,
             appearance: PanelPresentationPolicy.appearance(request.panel, invoker: request.invoker),
-            showsMiniTile: hostStyle == PanelHostStyle.overlay,
+            showsMiniTile: hostStyle == PanelHostStyle.overlay && PanelPresentationPolicy.allowsMiniTile(request.panel),
             paneWidth: isPane ? PanelPresentationPolicy.paneWidth : 0.0,
             hasBottomComposer: PanelPresentationPolicy.hasBottomComposer(request.panel)
         )

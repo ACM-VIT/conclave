@@ -147,7 +147,7 @@ const makeHarness = (
 };
 
 describe("current consumer generation controls", () => {
-  it("defaults T1 webcam consumers to temporal layer zero for a low-quality room", async () => {
+  it("defaults webcam consumers in a low-quality room to the lowest layer at full frame rate", async () => {
     const { client, handlers } = makeHarness({ roomQuality: "low" });
     const consumer = makeConsumer("consumer-webcam");
     client.consumerTransport = {
@@ -167,8 +167,24 @@ describe("current consumer generation controls", () => {
 
     expect(consumer.setPreferredLayers).toHaveBeenCalledWith({
       spatialLayer: 0,
-      temporalLayer: 0,
     });
+  });
+
+  it("keeps the sender's full frame rate when a viewer asks for a webcam temporal layer", async () => {
+    const { client, handlers } = makeHarness();
+    const consumer = makeConsumer("consumer-webcam");
+    client.addConsumer(consumer);
+    const handler = handlers.get("setConsumerPreferences") as unknown as (
+      data: { consumerId: string; preferredLayers: { spatialLayer: number; temporalLayer: number } },
+      callback: (response: unknown) => void,
+    ) => Promise<void>;
+
+    await handler(
+      { consumerId: consumer.id, preferredLayers: { spatialLayer: 2, temporalLayer: 0 } },
+      vi.fn(),
+    );
+
+    expect(consumer.setPreferredLayers).toHaveBeenCalledWith({ spatialLayer: 2 });
   });
 
   it("lets webinar attendees consume the full-quality program feed", async () => {

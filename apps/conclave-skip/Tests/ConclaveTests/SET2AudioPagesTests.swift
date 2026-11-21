@@ -113,7 +113,7 @@ struct SET2AudioPagesTests {
         capable.micSampleFinished()
         capable.setTestGain(3.0)
         #expect(capable.audio.testGain == 2.0)
-        #expect(capableCore.calls == ["recordMicSample", "setTestGain"])
+        #expect(capableCore.calls == ["recordMicSample", "cancelMicSample", "setTestGain"])
     }
 
     @Test func levelSegmentsFollowTheSquareRootCurve() {

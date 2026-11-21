@@ -1,5 +1,8 @@
 package conclave.module
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioDeviceCallback
@@ -50,6 +53,7 @@ import skip.lib.*
 import skip.ui.UIApplication
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -162,6 +166,7 @@ internal class VideoTrackWrapper(
 ) : Identifiable<String> {
     internal var rtcVideoTrack: VideoTrack? = track
     internal var isEnabled: Boolean = track?.enabled() ?: false
+    internal var isReceivingFrames: Boolean by mutableStateOf(true)
 
     internal fun setTrack(track: VideoTrack?) {
         rtcVideoTrack = track
@@ -1687,6 +1692,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     private var audioSource: AudioSource? = null
     private var videoCapturer: VideoCapturer? = null
     private var isWebcamCaptureActive = false
+    @Volatile private var activeWebcamCaptureProfile: WebcamCaptureProfile? = null
     internal val currentCameraFacing: LocalCameraFacing
         get() = activeCameraFacing
     private var activeCameraFacing: LocalCameraFacing = LocalCameraFacing.front
@@ -1828,7 +1834,6 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         val rid: String,
         val scaleResolutionDownBy: Double,
         val maxBitrateBps: Int,
-        val maxFramerate: Int,
     )
 
     private data class ScreenShareEncodingCap(
@@ -2202,7 +2207,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             producer.resume()
             try {
                 producer.setMaxSpatialLayer(
-                    webcamMaxSpatialLayer(currentVideoQuality, currentLocalBandwidthQuality)
+                    WebcamSpatialLayerPolicy.activeLayerCount(webcamMaxSpatialLayer(currentVideoQuality, currentLocalBandwidthQuality))
                 )
             } catch (_: Throwable) {
             }
@@ -2428,6 +2433,12 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         val consumeConfigurationGeneration = configurationGeneration
         val producerClosureGeneration = remoteProducerClosureGenerations[producerId] ?: 0
         createReceiveTransportIfNeeded()
+        if (
+            configurationGeneration != consumeConfigurationGeneration ||
+            (remoteProducerClosureGenerations[producerId] ?: 0) != producerClosureGeneration
+        ) {
+            throw ErrorException("WebRTC session or remote producer changed while opening the receive transport")
+        }
         val socket = socketManager ?: throw ErrorException("Socket not configured")
         val loadedDevice = device ?: throw ErrorException("Device not configured")
         val rtpCapsJson = loadedDevice.getRtpCapabilities().takeIf { it.isNotBlank() }
@@ -2485,6 +2496,12 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             )
         }
         val consumer = try {
+            if (
+                configurationGeneration != consumeConfigurationGeneration ||
+                (remoteProducerClosureGenerations[producerId] ?: 0) != producerClosureGeneration
+            ) {
+                throw ErrorException("WebRTC session or remote producer changed before creating the consumer")
+            }
             receiveTransport.consume(
                 this,
                 response.id,
@@ -2503,8 +2520,9 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             )
             throw ConsumerGenerationRegistrationException(error, rollbackAcknowledged)
         }
-        consumer.resume()
-
+        if (response.kind == "audio") {
+            (consumer.track as? AudioTrack)?.setVolume(participantAudioGain(producerUserId))
+        }
         val isScreenVideo = producerType == "screen" && response.kind == "video"
         val trackKey = if (isScreenVideo) "${producerUserId}-screen" else producerUserId
         nextConsumerGeneration += 1
@@ -2578,6 +2596,13 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             }
         }
         try {
+            if (
+                configurationGeneration != consumeConfigurationGeneration ||
+                (remoteProducerClosureGenerations[producerId] ?: 0) != producerClosureGeneration
+            ) {
+                throw ErrorException("WebRTC session or remote producer changed before resuming the consumer")
+            }
+            consumer.resume()
             socket.resumeConsumer(
                 response.id,
                 response.kind == "video",
@@ -2823,6 +2848,30 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
 
     internal fun hasAudioConsumer(userIdPrefix: String): Boolean {
         return consumers.values.any { it.kind == "audio" && it.userId.startsWith(userIdPrefix) }
+    }
+
+    private val participantAudioGains = mutableMapOf<String, Double>()
+
+    private fun participantAudioGain(userId: String): Double {
+        participantAudioGains[userId]?.let { return it }
+        return participantAudioGains.entries.firstOrNull { trackKeyMatchesUser(userId, it.key) }?.value ?: 1.0
+    }
+
+    internal fun setParticipantAudioGain(userId: String, gain: Double) {
+        val clamped = if (gain.isNaN()) 1.0 else gain.coerceIn(0.0, 1.0)
+        participantAudioGains[userId] = clamped
+        for (info in consumers.values) {
+            if (info.kind == "audio" && consumerMatchesUser(info, userId)) {
+                (info.consumer.track as? AudioTrack)?.setVolume(clamped)
+            }
+        }
+    }
+
+    internal fun resetParticipantAudioGains() {
+        participantAudioGains.clear()
+        for (info in consumers.values) {
+            if (info.kind == "audio") (info.consumer.track as? AudioTrack)?.setVolume(1.0)
+        }
     }
 
     internal fun setAudioConsumersEnabled(userIdPrefix: String, enabled: Boolean) {
@@ -3442,16 +3491,9 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         val producer = videoProducer ?: return
         try {
             producer.setMaxSpatialLayer(
-                webcamMaxSpatialLayer(quality, currentLocalBandwidthQuality)
+                WebcamSpatialLayerPolicy.activeLayerCount(webcamMaxSpatialLayer(quality, currentLocalBandwidthQuality))
             )
         } catch (_: Throwable) {
-        }
-        if (localVideoEnabled) {
-            val profile = webcamCaptureProfile(quality, currentLocalBandwidthQuality)
-            try {
-                videoCapturer?.changeCaptureFormat(profile.width, profile.height, profile.fps)
-            } catch (_: Throwable) {
-            }
         }
     }
 
@@ -3477,23 +3519,25 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             videoProducer?.let { producer ->
                 try {
                     producer.setMaxSpatialLayer(
-                        webcamMaxSpatialLayer(currentVideoQuality, connectionQuality)
+                        WebcamSpatialLayerPolicy.activeLayerCount(webcamMaxSpatialLayer(currentVideoQuality, connectionQuality))
                     )
                 } catch (_: Throwable) {
                 }
             }
 
-            if (localVideoEnabled) {
-                val profile = webcamCaptureProfile(currentVideoQuality, connectionQuality)
+            val capturer = videoCapturer
+            if (localVideoEnabled && isWebcamCaptureActive && capturer != null) {
                 try {
-                    videoCapturer?.changeCaptureFormat(profile.width, profile.height, profile.fps)
+                    startWebcamCapture(capturer, "update")
                 } catch (_: Throwable) {
                 }
             }
         }
 
         if (screenProducer != null && screenCapturer != null) {
-            applyScreenOutputFormat(connectionQuality)
+            applyScreenOutputFormat(
+                ScreenSharePublishProfilePolicy.mostConstrained(connectionQuality, screenProducerBandwidthQuality)
+            )
         }
     }
 
@@ -3518,7 +3562,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             nextProducer.resume()
             try {
                 nextProducer.setMaxSpatialLayer(
-                    webcamMaxSpatialLayer(currentVideoQuality, connectionQuality)
+                    WebcamSpatialLayerPolicy.activeLayerCount(webcamMaxSpatialLayer(currentVideoQuality, connectionQuality))
                 )
             } catch (_: Throwable) {
             }
@@ -3736,6 +3780,43 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         }
     }
 
+    private fun requestedWebcamCaptureProfile(): WebcamCaptureProfile {
+        return if (configuredCameraHeight >= 540) {
+            WebcamCaptureProfile(width = configuredCameraWidth, height = configuredCameraHeight, fps = configuredCameraFrameRate)
+        } else {
+            WebcamCaptureProfile(width = 1_280, height = 720, fps = configuredCameraFrameRate)
+        }
+    }
+
+    private fun configuredWebcamCaptureProfile(): WebcamCaptureProfile {
+        val configured = requestedWebcamCaptureProfile()
+        return try {
+            val enumerator = createCameraEnumerator(ProcessInfo.processInfo.androidContext)
+            val name = cameraNameForFacing(enumerator, activeCameraFacing) ?: return configured
+            val sizes = (enumerator.getSupportedFormats(name) ?: emptyList()).map { format ->
+                CameraFormatCandidate(width = format.width, height = format.height)
+            }
+            val index = CameraFormatSelectionPolicy.selectIndex(
+                skip.lib.Array(sizes),
+                targetWidth = configured.width,
+                targetHeight = configured.height,
+            ) ?: return configured
+            WebcamCaptureProfile(width = sizes[index].width, height = sizes[index].height, fps = configured.fps)
+        } catch (_: Throwable) {
+            configured
+        }
+    }
+
+    private fun adaptWebcamOutput() {
+        if (activeWebcamCaptureProfile == null) return
+        val requested = requestedWebcamCaptureProfile()
+        val output = webcamCaptureProfile(currentVideoQuality, currentLocalBandwidthQuality)
+        try {
+            videoSource?.adaptOutputFormat(requested.width, requested.height, output.fps)
+        } catch (_: Throwable) {
+        }
+    }
+
     private fun webcamCaptureProfile(
         quality: VideoQuality,
         connectionQuality: ConnectionQuality = ConnectionQuality.unknown,
@@ -3779,17 +3860,17 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         when (quality) {
             VideoQuality.low -> {
                 defaults = listOf(
-                WebcamEncodingSpec(rid = "q", scaleResolutionDownBy = 2.0, maxBitrateBps = 65_000, maxFramerate = 8),
-                WebcamEncodingSpec(rid = "h", scaleResolutionDownBy = 1.0, maxBitrateBps = 120_000, maxFramerate = 12),
-                WebcamEncodingSpec(rid = "f", scaleResolutionDownBy = 1.0, maxBitrateBps = 180_000, maxFramerate = 15),
+                WebcamEncodingSpec(rid = "q", scaleResolutionDownBy = 2.0, maxBitrateBps = 65_000),
+                WebcamEncodingSpec(rid = "h", scaleResolutionDownBy = 1.0, maxBitrateBps = 120_000),
+                WebcamEncodingSpec(rid = "f", scaleResolutionDownBy = 1.0, maxBitrateBps = 180_000),
                 )
                 defaultMaximumBitrate = 180_000
             }
             VideoQuality.standard -> {
                 defaults = listOf(
-                WebcamEncodingSpec(rid = "q", scaleResolutionDownBy = 4.0, maxBitrateBps = 80_000, maxFramerate = 12),
-                WebcamEncodingSpec(rid = "h", scaleResolutionDownBy = 2.0, maxBitrateBps = 220_000, maxFramerate = 20),
-                WebcamEncodingSpec(rid = "f", scaleResolutionDownBy = 1.0, maxBitrateBps = 1_650_000, maxFramerate = 30),
+                WebcamEncodingSpec(rid = "q", scaleResolutionDownBy = 4.0, maxBitrateBps = 80_000),
+                WebcamEncodingSpec(rid = "h", scaleResolutionDownBy = 2.0, maxBitrateBps = 250_000),
+                WebcamEncodingSpec(rid = "f", scaleResolutionDownBy = 1.0, maxBitrateBps = 1_650_000),
                 )
                 defaultMaximumBitrate = 1_650_000
             }
@@ -3812,11 +3893,6 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                     20_000,
                     (effectiveMaximumBitrate.toDouble() * bitrateRatio * detailLayerFactor).toInt(),
                 ),
-                maxFramerate = if (index == lastIndex) {
-                    configuredCameraFrameRate
-                } else {
-                    minOf(spec.maxFramerate, configuredCameraFrameRate)
-                },
             )
         }
     }
@@ -3825,21 +3901,44 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         quality: VideoQuality,
         connectionQuality: ConnectionQuality,
     ): List<WebcamEncodingSpec> {
+        val factor = webcamLayerScaleFactor(quality, connectionQuality)
+        return networkWebcamEncodingSpecs(quality, connectionQuality).map { spec ->
+            WebcamEncodingSpec(
+                rid = spec.rid,
+                scaleResolutionDownBy = spec.scaleResolutionDownBy * factor,
+                maxBitrateBps = spec.maxBitrateBps,
+            )
+        }
+    }
+
+    private fun webcamLayerScaleFactor(quality: VideoQuality, connectionQuality: ConnectionQuality): Double {
+        val capture = activeWebcamCaptureProfile ?: configuredWebcamCaptureProfile()
+        val requested = requestedWebcamCaptureProfile()
+        val outputWidth = CameraOutputSizePolicy.outputWidth(
+            cameraWidth = capture.width,
+            cameraHeight = capture.height,
+            requestedWidth = requested.width,
+            requestedHeight = requested.height,
+        )
+        val target = webcamCaptureProfile(quality, connectionQuality)
+        return maxOf(1.0, outputWidth.toDouble() / maxOf(1, target.width).toDouble())
+    }
+
+    private fun networkWebcamEncodingSpecs(
+        quality: VideoQuality,
+        connectionQuality: ConnectionQuality,
+    ): List<WebcamEncodingSpec> {
         val base = webcamEncodingSpecs(quality)
         val bitrateCaps: List<Int>
-        val framerateCaps: List<Int>
         when (connectionQuality) {
             ConnectionQuality.emergency -> {
                 bitrateCaps = listOf(65_000, 90_000, 120_000)
-                framerateCaps = listOf(8, 8, 8)
             }
             ConnectionQuality.poor -> {
                 bitrateCaps = listOf(120_000, 160_000, 180_000)
-                framerateCaps = listOf(12, 12, 15)
             }
             ConnectionQuality.fair -> {
                 bitrateCaps = listOf(90_000, 220_000, 420_000)
-                framerateCaps = listOf(10, 15, 20)
             }
             ConnectionQuality.good, ConnectionQuality.unknown -> return base
         }
@@ -3861,7 +3960,6 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 rid = spec.rid,
                 scaleResolutionDownBy = scaleResolutionDownBy,
                 maxBitrateBps = minOf(spec.maxBitrateBps, bitrateCaps[minOf(index, bitrateCaps.size - 1)]),
-                maxFramerate = minOf(spec.maxFramerate, framerateCaps[minOf(index, framerateCaps.size - 1)]),
             )
         }
     }
@@ -3870,14 +3968,15 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         quality: VideoQuality,
         connectionQuality: ConnectionQuality = ConnectionQuality.unknown,
     ): List<RtpParameters.Encoding> {
-        return webcamEncodingSpecs(quality, connectionQuality).mapIndexed { index, spec ->
+        val fps = webcamCaptureProfile(quality, connectionQuality).fps
+        return webcamEncodingSpecs(quality, connectionQuality).map { spec ->
             RtpParameters.Encoding(
                 spec.rid,
-                shouldSendWebcamEncoding(index, quality, connectionQuality),
+                true,
                 spec.scaleResolutionDownBy,
             ).also { encoding ->
                 encoding.maxBitrateBps = spec.maxBitrateBps
-                encoding.maxFramerate = spec.maxFramerate
+                encoding.maxFramerate = fps
                 encoding.numTemporalLayers = WebcamTemporalLayerPolicy.temporalLayerCount
                 encoding.networkPriority = if (spec.rid == "f") {
                     WEBRTC_NETWORK_PRIORITY_LOW
@@ -3890,7 +3989,11 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
 
     private fun webcamSingleReceiverEncodings(): List<RtpParameters.Encoding> {
         return listOf(
-            RtpParameters.Encoding(null, true, 1.0).also { encoding ->
+            RtpParameters.Encoding(
+                null,
+                true,
+                webcamLayerScaleFactor(currentVideoQuality, currentLocalBandwidthQuality),
+            ).also { encoding ->
                 encoding.maxBitrateBps = configuredCameraMaxBitrateBps
                 encoding.maxFramerate = configuredCameraFrameRate
                 encoding.numTemporalLayers = WebcamTemporalLayerPolicy.temporalLayerCount
@@ -3910,7 +4013,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         return listOf(
             RtpParameters.Encoding(null, true, spec.scaleResolutionDownBy).also { encoding ->
                 encoding.maxBitrateBps = spec.maxBitrateBps
-                encoding.maxFramerate = spec.maxFramerate
+                encoding.maxFramerate = webcamCaptureProfile(quality, connectionQuality).fps
                 encoding.numTemporalLayers = WebcamTemporalLayerPolicy.temporalLayerCount
                 encoding.networkPriority = WEBRTC_NETWORK_PRIORITY_LOW
             },
@@ -3934,21 +4037,6 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             return minOf(base, 1)
         }
         return base
-    }
-
-    private fun shouldSendWebcamEncoding(
-        layerIndex: Int,
-        quality: VideoQuality,
-        connectionQuality: ConnectionQuality,
-    ): Boolean {
-        if (
-            connectionQuality == ConnectionQuality.good ||
-            connectionQuality == ConnectionQuality.unknown
-        ) {
-            return true
-        }
-
-        return layerIndex <= webcamMaxSpatialLayer(quality, connectionQuality)
     }
 
     private fun screenShareEncodingCap(
@@ -4381,7 +4469,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             producer.resume()
             if (targetTopology == WebcamProducerTopology.vp8Simulcast) {
                 try {
-                    producer.setMaxSpatialLayer(2)
+                    producer.setMaxSpatialLayer(WebcamSpatialLayerPolicy.activeLayerCount(2))
                 } catch (_: Throwable) {
                 }
             }
@@ -4467,12 +4555,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     }
 
     private fun opusMaxAverageBitrate(connectionQuality: ConnectionQuality): Int {
-        return when (connectionQuality) {
-            ConnectionQuality.emergency -> 24_000
-            ConnectionQuality.poor -> 32_000
-            ConnectionQuality.fair -> 48_000
-            ConnectionQuality.good, ConnectionQuality.unknown -> 96_000
-        }
+        return LocalSenderPolicy.microphoneMaxAverageBitrateBps(connectionQuality)
     }
 
     internal suspend fun cleanup(
@@ -4534,6 +4617,8 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         consumers.clear()
         remoteProducerClosureGenerations.clear()
         videoFreezeStats.clear()
+        videoFreezeKeyFrameJobs.values.toList().forEach { it.cancel() }
+        videoFreezeKeyFrameJobs.clear()
         remoteConsumerPreferenceSignatures.clear()
         remoteConsumerLayerPreferenceUnsupportedIds.clear()
         remoteConsumerPreferenceInFlightIds.clear()
@@ -4542,7 +4627,6 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         remoteConsumerPreferencePolicyRevision += 1
         previousPublishConnectionLossSample = null
         previousReceiveConnectionLossSample = null
-        previousPublishMediaCounterSample = null
         previousReceiveMediaCounterSample = null
 
         localVideoTrack?.setEnabled(false)
@@ -4581,6 +4665,8 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
 
     internal fun getCaptureSession(): Any? = null
     internal fun getLocalVideoTrack(): Any? = localVideoTrackWrapper
+
+    internal fun localVideoStageKey(): String = localVideoTrack?.id() ?: ""
 
     internal fun remoteVideoTrack(forUserId: String): VideoTrackWrapper? {
         val normalized = forUserId.trim()
@@ -6434,16 +6520,12 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         return parseAudioLevel(statsJson) ?: 0.0
     }
 
-    private val outgoingBandwidthFairBps = 500_000.0
-    private val outgoingBandwidthPoorBps = 240_000.0
-    private val outgoingBandwidthEmergencyBps = 120_000.0
     private val screenShareOutgoingFairBps = 1_500_000.0
     private val screenShareOutgoingPoorBps = 550_000.0
     private val screenShareOutgoingEmergencyBps = 280_000.0
     private val incomingBandwidthFairBps = 500_000.0
     private val incomingBandwidthPoorBps = 240_000.0
     private val incomingBandwidthEmergencyBps = 120_000.0
-    private val availableBitrateSaturationRatio = 0.7
 
     private data class ConnectionLossSample(
         val packetsLost: Double,
@@ -6465,7 +6547,6 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         val availableIncomingBitrate: Double?,
         val outboundMediaBytes: Double?,
         val inboundMediaBytes: Double?,
-        val outboundVideoQualityLimitationReason: String?,
     )
 
     private data class MediaCounterSample(
@@ -6482,7 +6563,6 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         var lossFraction: Double? = null,
         var availableBitrate: Double? = null,
         var mediaBytes: Double? = null,
-        var outboundVideoQualityLimitationReason: String? = null,
     ) {
         val jitterMs: Double?
             get() = if (jitterWeight > 0.0) jitterWeightedMs / jitterWeight else null
@@ -6512,7 +6592,6 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
 
     private var previousPublishConnectionLossSample: ConnectionLossSample? = null
     private var previousReceiveConnectionLossSample: ConnectionLossSample? = null
-    private var previousPublishMediaCounterSample: MediaCounterSample? = null
     private var previousReceiveMediaCounterSample: MediaCounterSample? = null
 
     internal fun sampleConnectionQuality(): ConnectionQuality {
@@ -6545,16 +6624,10 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                     publish.availableBitrate,
                     sample.availableOutgoingBitrate,
                 )
-                publish.mediaBytes = addNullable(publish.mediaBytes, sample.outboundMediaBytes)
-                publish.outboundVideoQualityLimitationReason = selectQualityLimitationReason(
-                    publish.outboundVideoQualityLimitationReason,
-                    sample.outboundVideoQualityLimitationReason,
-                )
             }
         }
         if (!hasPublishStats) {
             previousPublishConnectionLossSample = null
-            previousPublishMediaCounterSample = null
         }
 
         val receiveTransportValue = receiveTransport
@@ -6615,15 +6688,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         }
 
         val nowMs = System.currentTimeMillis().toDouble()
-        val publishMediaSample = MediaCounterSample(nowMs, publish.mediaBytes)
         val receiveMediaSample = MediaCounterSample(nowMs, receive.mediaBytes)
-        val publishMediaBitrate = windowedBitrate(
-            currentBytes = publishMediaSample.mediaBytes,
-            previousBytes = previousPublishMediaCounterSample?.mediaBytes,
-            elapsedMs = previousPublishMediaCounterSample?.let {
-                publishMediaSample.timestampMs - it.timestampMs
-            } ?: 0.0,
-        )
         val receiveMediaBitrate = windowedBitrate(
             currentBytes = receiveMediaSample.mediaBytes,
             previousBytes = previousReceiveMediaCounterSample?.mediaBytes,
@@ -6631,9 +6696,6 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 receiveMediaSample.timestampMs - it.timestampMs
             } ?: 0.0,
         )
-        if (hasPublishStats) {
-            previousPublishMediaCounterSample = publishMediaSample
-        }
         if (hasReceiveStats) {
             previousReceiveMediaCounterSample = receiveMediaSample
         }
@@ -6664,27 +6726,15 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         } else {
             ConnectionQuality.unknown
         }
-        val publishBandwidthQuality = deriveAvailableBitrateQuality(
-            availableBitrate = publish.availableBitrate,
-            mediaBitrate = publishMediaBitrate,
-            fairBitrate = outgoingBandwidthFairBps,
-            poorBitrate = outgoingBandwidthPoorBps,
-            emergencyBitrate = outgoingBandwidthEmergencyBps,
-            encoderLimited = hasEncoderQualityLimitation(publish.outboundVideoQualityLimitationReason),
-        )
-        val receiveBandwidthQuality = deriveAvailableBitrateQuality(
+        val receiveBandwidthQuality = AvailableBitrateQualityPolicy.receiveQuality(
             availableBitrate = receive.availableBitrate,
             mediaBitrate = receiveMediaBitrate,
             fairBitrate = incomingBandwidthFairBps,
             poorBitrate = incomingBandwidthPoorBps,
             emergencyBitrate = incomingBandwidthEmergencyBps,
-            encoderLimited = false,
         )
 
-        val publishQuality = worstConnectionQuality(
-            publishMediaPressureQuality,
-            publishBandwidthQuality,
-        )
+        val publishQuality = publishMediaPressureQuality
         val receiveQuality = worstConnectionQuality(
             receiveTransportQuality,
             receiveBandwidthQuality,
@@ -6727,7 +6777,6 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         var availableIncomingBitrate: Double? = null
         var outboundMediaBytes: Double? = null
         var inboundMediaBytes: Double? = null
-        var outboundVideoQualityLimitationReason: String? = null
         var foundMetric = false
 
         for (i in 0 until array.length()) {
@@ -6818,13 +6867,6 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                             foundMetric = true
                         }
                     }
-                    if (statsMediaKind(obj) == "video" && obj.has("qualityLimitationReason")) {
-                        outboundVideoQualityLimitationReason = selectQualityLimitationReason(
-                            outboundVideoQualityLimitationReason,
-                            obj.optString("qualityLimitationReason", ""),
-                        )
-                        foundMetric = true
-                    }
                 }
             }
         }
@@ -6853,7 +6895,6 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             availableIncomingBitrate = availableIncomingBitrate,
             outboundMediaBytes = outboundMediaBytes,
             inboundMediaBytes = inboundMediaBytes,
-            outboundVideoQualityLimitationReason = outboundVideoQualityLimitationReason,
         )
     }
 
@@ -6907,29 +6948,6 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         return if (deltaTotal > 0.0) deltaLost / deltaTotal else 0.0
     }
 
-    private fun deriveAvailableBitrateQuality(
-        availableBitrate: Double?,
-        mediaBitrate: Double?,
-        fairBitrate: Double,
-        poorBitrate: Double,
-        emergencyBitrate: Double,
-        encoderLimited: Boolean,
-    ): ConnectionQuality {
-        if (availableBitrate == null || availableBitrate <= 0.0 || availableBitrate > fairBitrate) {
-            return ConnectionQuality.unknown
-        }
-        if (!isLowAvailableBitrate(availableBitrate, mediaBitrate, encoderLimited)) {
-            return ConnectionQuality.unknown
-        }
-        if (availableBitrate <= emergencyBitrate) {
-            return ConnectionQuality.emergency
-        }
-        if (availableBitrate <= poorBitrate) {
-            return ConnectionQuality.poor
-        }
-        return ConnectionQuality.fair
-    }
-
     private fun deriveScreenSharePublishQuality(
         availableBitrate: Double?,
         emergencyMode: Boolean,
@@ -6949,16 +6967,6 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             return ConnectionQuality.fair
         }
         return ConnectionQuality.good
-    }
-
-    private fun isLowAvailableBitrate(
-        availableBitrate: Double,
-        mediaBitrate: Double?,
-        encoderLimited: Boolean,
-    ): Boolean {
-        if (encoderLimited) return true
-        if (mediaBitrate == null || mediaBitrate <= 0.0) return false
-        return mediaBitrate >= availableBitrate * availableBitrateSaturationRatio
     }
 
     private fun worstConnectionQuality(vararg qualities: ConnectionQuality): ConnectionQuality {
@@ -6981,26 +6989,6 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         return when (statsMediaKind(obj)) {
             "audio", "video" -> true
             else -> false
-        }
-    }
-
-    private fun hasEncoderQualityLimitation(reason: String?): Boolean {
-        val normalized = reason?.trim()?.lowercase() ?: return false
-        return normalized.isNotEmpty() && normalized != "none"
-    }
-
-    private fun selectQualityLimitationReason(current: String?, next: String?): String? {
-        if (next == null) return current
-        if (current == null) return next
-        return if (qualityLimitationRank(next) > qualityLimitationRank(current)) next else current
-    }
-
-    private fun qualityLimitationRank(reason: String?): Int {
-        return when (reason?.trim()?.lowercase()) {
-            "bandwidth" -> 3
-            "cpu" -> 2
-            "other" -> 1
-            else -> 0
         }
     }
 
@@ -7070,39 +7058,38 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         }
     }
 
-    private val videoFreezeStats: MutableMap<String, Triple<Double, Double, Int>> =
+    private val videoFreezeStats: MutableMap<String, RemoteVideoHealthTracker> =
         mutableMapOf()
+    private val videoFreezeKeyFrameJobs: MutableMap<ConsumerGenerationIdentity, Job> = mutableMapOf()
 
     internal suspend fun checkVideoFreezes() {
-        val minStallByteDelta = 8000.0
-        val stallSamplesBeforePLI = 2
         val active = mutableSetOf<String>()
+        val keyFrameRequests = mutableListOf<ConsumerGenerationIdentity>()
+        val nowMs = SystemClock.elapsedRealtime().toDouble()
         for ((consumerId, info) in consumers) {
             if (info.kind != "video" || !info.lifecycleRole.acceptsPeriodicControls) continue
             active.add(consumerId)
-            val statsJson = try {
-                info.consumer.getStats()
+            val sample = try {
+                parseInboundVideoDecode(info.consumer.getStats())
             } catch (_: Throwable) {
-                continue
+                null
             }
-            val sample = parseInboundVideoDecode(statsJson) ?: continue
-            val frames = sample.first
-            val bytes = sample.second
-            val prev = videoFreezeStats[consumerId]
-            var stalls = 0
-            if (prev != null) {
-                val stuck = frames == prev.first &&
-                    (bytes - prev.second) >= minStallByteDelta
-                stalls = if (stuck) prev.third + 1 else 0
+            val tracker = videoFreezeStats[consumerId] ?: RemoteVideoHealthTracker()
+            val decision = tracker.sample(
+                framesDecoded = sample?.first,
+                nowMs = nowMs,
+                isPaused = info.isConsumerPaused || info.isProducerPaused || info.isAdaptivelyPaused,
+                isScreenShare = info.type == ProducerType.screen.rawValue,
+                bytesReceived = sample?.second,
+            )
+            videoFreezeStats[consumerId] = tracker
+            val wrapper = remoteVideoTracks[info.trackKey]
+            if (wrapper != null && wrapper.id == consumerId && wrapper.consumerGeneration == info.generation) {
+                wrapper.isReceivingFrames = !decision.isStalled
             }
-            if (stalls >= stallSamplesBeforePLI) {
-
-                try {
-                    socketManager?.resumeConsumer(consumerId, true)
-                } catch (_: Throwable) {
-                }
+            if (decision.requestKeyFrame) {
+                keyFrameRequests.add(ConsumerGenerationIdentity(consumerId, info.generation))
             }
-            videoFreezeStats[consumerId] = Triple(frames, bytes, stalls)
         }
         for (key in videoFreezeStats.keys.toList()) {
             if (!active.contains(key)) {
@@ -7111,6 +7098,27 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 remoteConsumerLayerPreferenceUnsupportedIds.remove(key)
                 remoteConsumerPreferenceInFlightIds.remove(key)
             }
+        }
+        for (identity in videoFreezeKeyFrameJobs.keys.toList()) {
+            if (consumers[identity.consumerId]?.generation != identity.generation) {
+                videoFreezeKeyFrameJobs.remove(identity)?.cancel()
+            }
+        }
+        for (identity in keyFrameRequests) {
+            if (videoFreezeKeyFrameJobs.containsKey(identity)) continue
+            val job = remoteConsumerPreferenceScope.launch(start = CoroutineStart.LAZY) {
+                try {
+                    val info = consumers[identity.consumerId] ?: return@launch
+                    if (info.generation != identity.generation || !info.lifecycleRole.acceptsPeriodicControls ||
+                        info.isConsumerPaused || info.isProducerPaused || info.isAdaptivelyPaused) return@launch
+                    socketManager?.resumeConsumer(identity.consumerId, true)
+                } catch (_: Throwable) {
+                } finally {
+                    videoFreezeKeyFrameJobs.remove(identity)
+                }
+            }
+            videoFreezeKeyFrameJobs[identity] = job
+            job.start()
         }
     }
 
@@ -7157,7 +7165,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         }
     }
 
-    private fun parseInboundVideoDecode(statsJson: String): Pair<Double, Double>? {
+    private fun parseInboundVideoDecode(statsJson: String): Pair<Double, Double?>? {
         val array = try {
             org.json.JSONArray(statsJson)
         } catch (_: Throwable) {
@@ -7168,10 +7176,10 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             if (obj.optString("type") != "inbound-rtp") continue
             val kind = if (obj.has("kind")) obj.optString("kind") else obj.optString("mediaType")
             if (kind != "video") continue
-            if (!obj.has("framesDecoded") || !obj.has("bytesReceived")) continue
+            if (!obj.has("framesDecoded")) continue
             val frames = obj.optDouble("framesDecoded", -1.0)
-            val bytes = obj.optDouble("bytesReceived", -1.0)
-            if (frames < 0 || bytes < 0) continue
+            if (!frames.isFinite() || frames < 0) continue
+            val bytes = if (obj.has("bytesReceived")) obj.optDouble("bytesReceived") else null
             return Pair(frames, bytes)
         }
         return null
@@ -7391,7 +7399,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             throw ErrorException("Camera switch unavailable")
         }
 
-        return suspendCancellableCoroutine { cont ->
+        suspendCancellableCoroutine<Unit> { cont ->
             capturer.switchCamera(object : CameraVideoCapturer.CameraSwitchHandler {
                 override fun onCameraSwitchDone(isFrontCamera: Boolean) {
                     activeCameraFacing = if (isFrontCamera) LocalCameraFacing.front else LocalCameraFacing.back
@@ -7409,6 +7417,12 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                     }
                 }
             })
+        }
+        if (localVideoEnabled && isWebcamCaptureActive) {
+            try {
+                startWebcamCapture(capturer, "switch")
+            } catch (_: Throwable) {
+            }
         }
     }
 
@@ -7460,9 +7474,11 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
 
     private val callCameraEvents = object : org.webrtc.CameraVideoCapturer.CameraEventsHandler {
         override fun onCameraError(errorDescription: String?) {
+            activeWebcamCaptureProfile = null
             LocalPreviewController.shared.noteCallCameraInterruption(PreviewInterruption.cameraError)
         }
         override fun onCameraDisconnected() {
+            activeWebcamCaptureProfile = null
             LocalPreviewController.shared.noteCallCameraInterruption(PreviewInterruption.inUseByAnotherClient)
         }
         override fun onCameraFreezed(errorDescription: String?) {}
@@ -7475,10 +7491,16 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
 
     private fun startWebcamCapture(capturer: VideoCapturer?, action: String) {
         val activeCapturer = capturer ?: throw ErrorException("Camera capturer unavailable")
-        val profile = webcamCaptureProfile(currentVideoQuality, currentLocalBandwidthQuality)
+        val profile = configuredWebcamCaptureProfile()
         if (isWebcamCaptureActive) {
+            if (profile == activeWebcamCaptureProfile) {
+                adaptWebcamOutput()
+                return
+            }
             try {
                 activeCapturer.changeCaptureFormat(profile.width, profile.height, profile.fps)
+                activeWebcamCaptureProfile = profile
+                adaptWebcamOutput()
                 return
             } catch (error: Throwable) {
                 debugLog("[WebRTC] Failed to update active camera capture format before $action: ${error}")
@@ -7498,6 +7520,8 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 throw ErrorException("Camera capture failed to $action: $detail")
             }
         }
+        activeWebcamCaptureProfile = profile
+        adaptWebcamOutput()
     }
 
     private fun stopWebcamCapture() {
@@ -7510,6 +7534,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         } catch (_: Throwable) {
         } finally {
             isWebcamCaptureActive = false
+            activeWebcamCaptureProfile = null
         }
     }
 

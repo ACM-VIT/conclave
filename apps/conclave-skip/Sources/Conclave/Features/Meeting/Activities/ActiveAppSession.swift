@@ -5,7 +5,7 @@ enum ActiveAppLifecycle: String, CaseIterable, Equatable {
 }
 
 enum ActiveAppEventKind: String, CaseIterable, Equatable {
-    case lifecycle, loadStarted, ready, failed, status, ack
+    case lifecycle, loadStarted, loadDetached, ready, failed, status, ack
 }
 
 struct ActiveAppEvent: Equatable {
@@ -146,6 +146,12 @@ final class ActiveAppSession {
         embedReady = false
         lifecycle = ActiveAppLifecycle.ended
         emit(ActiveAppEvent.make(kind: ActiveAppEventKind.lifecycle, appSessionId: ended, lifecycle: lifecycle))
+    }
+
+    func releaseEmbed() {
+        if appSessionId.isEmpty { return }
+        detachBridge(appSessionId: appSessionId)
+        onBridgeEnded?(appSessionId)
     }
 
     func reset() {
@@ -316,6 +322,7 @@ final class ActiveAppSession {
         snapshotDelivered = false
         syncTask?.cancel()
         syncTask = nil
+        emit(ActiveAppEvent.make(kind: ActiveAppEventKind.loadDetached, appSessionId: id, lifecycle: lifecycle))
     }
 
     func embedFailed(appSessionId id: String, issue: AppHostIssue, mount: Int = 0) {

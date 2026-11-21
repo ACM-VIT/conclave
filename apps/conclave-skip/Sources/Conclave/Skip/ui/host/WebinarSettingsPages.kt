@@ -163,7 +163,13 @@ internal fun WebinarSettingsPage(people: PeoplePresenter, reservation: PaddingVa
                             ConclaveText(conclaveString(if (isCode) "hst_attendee_code" else "hst_custom_link"), line = "webinar.${item.key}.title")
                         },
                         supportingContent = {
-                            val value = if (isCode) conclaveString(if (snapshot.webinar.requiresCode) "stg_on" else "stg_off") else snapshot.webinar.linkSlug
+                            val known = people.host.knownAttendeeCode
+                            val value = if (!isCode) snapshot.webinar.linkSlug
+                                else when (HostInviteCodePolicy.status(requiresCode = snapshot.webinar.requiresCode, knownCode = known)) {
+                                    HostInviteCodeStatus.off -> conclaveString("stg_off")
+                                    HostInviteCodeStatus.onKnown -> conclaveString("hst_code_value", known)
+                                    HostInviteCodeStatus.onUnknown -> conclaveString("stg_on")
+                                }
                             ConclaveText(value, line = "webinar.${item.key}.value")
                         },
                         colors = ListItemDefaults.colors(containerColor = scheme.surface),
@@ -282,75 +288,30 @@ internal fun AttendeeCodePage(people: PeoplePresenter, reservation: PaddingValue
     val host = people.host
     val snapshot = host.snapshot
     val context = LocalContext.current
-    val scheme = MaterialTheme.colorScheme
-    val saving = snapshot.isFieldPending(HostFieldID.attendeeCode)
-    val blocked = snapshot.blockedReason != MeetingBlockedReason.none.rawValue
-    var draft by rememberSaveable { mutableStateOf(host.drafts.attendeeCode) }
-    var seenSaved by rememberSaveable { mutableIntStateOf(snapshot.savedSerial) }
-    val canSave = WebinarSettingsPolicy.canSaveAttendeeCode(draft, isPending = saving, isBlocked = blocked)
-    val save = { if (canSave) host.setAttendeeCode(draft) }
     val reachable = host.isWebinarSettingsReachable
     LaunchedEffect(reachable) { if (!reachable) onPop() }
-    LaunchedEffect(snapshot.savedSerial) {
-        if (snapshot.savedSerial == seenSaved) return@LaunchedEffect
-        seenSaved = snapshot.savedSerial
-        if (host.snapshot.savedField != HostFieldID.attendeeCode) return@LaunchedEffect
-        draft = host.drafts.attendeeCode
-        snackbar.showSnackbar(conclaveStringOf(context, "hst_code_saved"))
-    }
-    val reason = hostReasonOf(context, snapshot.blockedReason)
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(reservation).padding(16.dp)
-            .testTag("host.page.attendeeCode"),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        ListItem(
-            headlineContent = { ConclaveText(conclaveString("hst_status"), line = "webinar.attendeeCode.status") },
-            trailingContent = {
-                ConclaveText(conclaveString(if (snapshot.webinar.requiresCode) "stg_on" else "stg_off"),
-                    line = "webinar.attendeeCode.status.value", color = scheme.onSurfaceVariant)
-            },
-            colors = ListItemDefaults.colors(containerColor = scheme.surface),
-            modifier = Modifier.widthIn(max = WebinarFieldMaxWidth).testTag("webinar.attendeeCode.status"),
-        )
-        OutlinedTextField(
-            value = draft,
-            onValueChange = {
-                draft = it
-                host.drafts.attendeeCode = it
-            },
-            modifier = Modifier.fillMaxWidth().widthIn(max = WebinarFieldMaxWidth).testTag("webinar.attendeeCode.field"),
-            enabled = !saving && !blocked,
-            label = { ConclaveText(conclaveString("hst_new_code"), line = "webinar.attendeeCode.field.label") },
-            supportingText = {
-                ConclaveText(reason ?: conclaveString("hst_attendee_code_footer"), line = "webinar.attendeeCode.field.footer")
-            },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false,
-                keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Done),
-            keyboardActions = KeyboardActions(onDone = { save() }),
-        )
-        Button(
-            onClick = { save() },
-            enabled = canSave,
-            colors = ButtonDefaults.buttonColors(containerColor = scheme.primaryContainer, contentColor = scheme.onPrimaryContainer),
-            modifier = Modifier.widthIn(max = WebinarFieldMaxWidth).heightIn(min = 48.dp).testTag("webinar.attendeeCode.save"),
-        ) {
-            if (saving) {
-                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = scheme.onPrimaryContainer)
-            } else {
-                ConclaveText(conclaveString("hst_save_code"), line = "webinar.attendeeCode.save")
-            }
-        }
-        if (snapshot.webinar.requiresCode) {
-            TextButton(
-                onClick = { host.requestClearAttendeeCode() },
-                enabled = !saving && !blocked,
-                colors = ButtonDefaults.textButtonColors(contentColor = scheme.error),
-                modifier = Modifier.heightIn(min = 48.dp).testTag("webinar.attendeeCode.remove"),
-            ) { ConclaveText(conclaveString("hst_remove_code"), line = "webinar.attendeeCode.remove") }
-        }
-    }
+    val model = HostCodePageModel(
+        tag = "webinar.attendeeCode",
+        pageTag = "host.page.attendeeCode",
+        requiresCode = snapshot.webinar.requiresCode,
+        knownCode = host.knownAttendeeCode,
+        saving = snapshot.isFieldPending(HostFieldID.attendeeCode),
+        savedToken = if (snapshot.savedField == HostFieldID.attendeeCode) snapshot.savedSerial else 0,
+        introTitle = conclaveString("hst_attendee_intro_title"),
+        introBody = conclaveString("hst_attendee_intro_body"),
+        onTitle = conclaveString("hst_attendee_on_title"),
+        turnOn = conclaveString("hst_attendee_turn_on"),
+        turnOff = conclaveString("hst_attendee_turn_off"),
+        copyLabel = conclaveString("hst_attendee_code"),
+        shareText = { code ->
+            val link = snapshot.webinar.linkURL
+            if (link.isEmpty()) conclaveStringOf(context, "hst_attendee_share_text_code", code)
+            else conclaveStringOf(context, "hst_attendee_share_text", link, code)
+        },
+    )
+    HostCodePage(people, model, reservation, snackbar,
+        draft = { host.drafts.attendeeCode }, setDraft = { host.drafts.attendeeCode = it },
+        onSave = { host.setAttendeeCode(it) }, onClear = { host.requestClearAttendeeCode() })
 }
 
 @Composable

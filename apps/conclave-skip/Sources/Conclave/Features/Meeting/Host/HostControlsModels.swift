@@ -204,6 +204,7 @@ struct HostControlsInputs: Equatable {
     let isTtsDisabled: Bool
     let isReactionsDisabled: Bool
     let meetingRequiresInviteCode: Bool
+    let meetingInviteCodeVersion: String
     let allowedKeys: [String]
     let lockedAllowedKeys: [String]
     let blockedKeys: [String]
@@ -212,6 +213,7 @@ struct HostControlsInputs: Equatable {
     let isWebinarPublic: Bool
     let isWebinarLocked: Bool
     let webinarRequiresCode: Bool
+    let webinarInviteCodeVersion: String
     let webinarMaxAttendees: Int
     let webinarLinkSlug: String
     let webinarLinkURL: String
@@ -236,6 +238,7 @@ struct HostControlsInputs: Equatable {
         isTtsDisabled: Bool = false,
         isReactionsDisabled: Bool = false,
         meetingRequiresInviteCode: Bool = false,
+        meetingInviteCodeVersion: String = "",
         allowedKeys: [String] = [],
         lockedAllowedKeys: [String] = [],
         blockedKeys: [String] = [],
@@ -244,6 +247,7 @@ struct HostControlsInputs: Equatable {
         isWebinarPublic: Bool = false,
         isWebinarLocked: Bool = false,
         webinarRequiresCode: Bool = false,
+        webinarInviteCodeVersion: String = "",
         webinarMaxAttendees: Int = 500,
         webinarLinkSlug: String = "",
         webinarLinkURL: String = "",
@@ -258,11 +262,13 @@ struct HostControlsInputs: Equatable {
                            isParticipantVideoAllowed: isParticipantVideoAllowed, isChatLocked: isChatLocked,
                            isDmEnabled: isDmEnabled, isImageAttachmentsEnabled: isImageAttachmentsEnabled,
                            isTtsDisabled: isTtsDisabled, isReactionsDisabled: isReactionsDisabled,
-                           meetingRequiresInviteCode: meetingRequiresInviteCode, allowedKeys: allowedKeys,
+                           meetingRequiresInviteCode: meetingRequiresInviteCode,
+                           meetingInviteCodeVersion: meetingInviteCodeVersion, allowedKeys: allowedKeys,
                            lockedAllowedKeys: lockedAllowedKeys, blockedKeys: blockedKeys,
                            isAccessListRefreshing: isAccessListRefreshing, isWebinarEnabled: isWebinarEnabled,
                            isWebinarPublic: isWebinarPublic, isWebinarLocked: isWebinarLocked,
-                           webinarRequiresCode: webinarRequiresCode, webinarMaxAttendees: webinarMaxAttendees,
+                           webinarRequiresCode: webinarRequiresCode, webinarInviteCodeVersion: webinarInviteCodeVersion,
+                           webinarMaxAttendees: webinarMaxAttendees,
                            webinarLinkSlug: webinarLinkSlug, webinarLinkURL: webinarLinkURL,
                            webinarAttendeeCount: webinarAttendeeCount, isWebinarQaEnabled: isWebinarQaEnabled,
                            isConfigLoading: isConfigLoading, canEndForEveryone: canEndForEveryone, isEnding: isEnding)

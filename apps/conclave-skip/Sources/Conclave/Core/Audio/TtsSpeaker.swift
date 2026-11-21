@@ -104,7 +104,7 @@ final class TtsSpeaker {
         let utterance = AVSpeechUtterance(string: item.text)
         utterance.rate = AVSpeechUtteranceDefaultSpeechRate * TtsSpeaker.rateFactor
         utterance.pitchMultiplier = 1.0
-        utterance.volume = 1.0
+        utterance.volume = NativeRuntimeConfig.playbackVolume(1.0)
         utterance.voice = voice(for: item)
         utteranceTokens[ObjectIdentifier(utterance)] = token
         speech.speak(utterance)
@@ -190,7 +190,7 @@ final class TtsSpeaker {
             self?.personalEnded(item: item, token: token, succeeded: succeeded)
         }
         created.delegate = delegate
-        created.volume = 1.0
+        created.volume = NativeRuntimeConfig.playbackVolume(1.0)
         created.prepareToPlay()
         guard canStartPlayback(token: token), created.play() else { return false }
         player = created

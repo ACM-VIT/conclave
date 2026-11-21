@@ -18,6 +18,8 @@ final class GameStagePresenter {
 
     private(set) var chessPendingMove: ChessPendingMoveModel = ChessPendingMoveModel.none
 
+    private(set) var longShotDraft: String = ""
+
     @ObservationIgnored var onCommand: ((GameStageCommand) -> Void)? = nil
     @ObservationIgnored var sleep: (Double) async -> Void = { millis in
         try? await Task.sleep(nanoseconds: UInt64(max(0.0, millis) * 1_000_000.0))
@@ -53,6 +55,11 @@ final class GameStagePresenter {
     @ObservationIgnored private var chessMoveRequestId = ""
     @ObservationIgnored private var chessFenAtSend = ""
 
+    @ObservationIgnored private var longShotDraftKey = ""
+    @ObservationIgnored private var longShotSubmitted = ""
+
+    @ObservationIgnored private var lateJudgedRequestId = ""
+
     static let moveTimeoutMillis = 10000.0
 
     init() {}
@@ -75,6 +82,7 @@ final class GameStagePresenter {
             wordleSubmitted = ""
 
             chessMoveRequestId = ""
+            longShotSubmitted = ""
         }
         if next.phase == "lobby" { announced = [] }
         if rematchPending && (!next.isFinished || next.phase == "lobby") { rematchPending = false }
@@ -97,11 +105,17 @@ final class GameStagePresenter {
     }
 
     func moveAcknowledged(requestId: String, success: Bool, serverText: String) {
-        if requestId.isEmpty || requestId != pendingRequestId { return }
-        cancelTimeout()
-        let ackedType = pendingType
-        pendingRequestId = ""
-        pendingType = ""
+        if requestId.isEmpty { return }
+        let ackedType: String
+        if requestId == pendingRequestId {
+            ackedType = pendingType
+            clearPending()
+        } else if requestId == lateJudgedRequestId {
+            ackedType = LongShotIntent.answerType
+            lateJudgedRequestId = ""
+        } else {
+            return
+        }
 
         let isChessMove = !chessMoveRequestId.isEmpty && chessMoveRequestId == requestId
         if isChessMove { settleChessMove(rejected: !success) }
@@ -112,6 +126,9 @@ final class GameStagePresenter {
             if (ackedType == WordleIntent.guessType || ackedType == WordleIntent.setWordType) && !wordleSubmitted.isEmpty
                 && wordleDraft == wordleSubmitted {
                 wordleDraft = ""
+            }
+            if ackedType == LongShotIntent.answerType && !longShotSubmitted.isEmpty && longShotDraft == longShotSubmitted {
+                longShotDraft = ""
             }
         } else {
             failure = GameFailurePolicy.failure(serverText: serverText)
@@ -126,6 +143,7 @@ final class GameStagePresenter {
             }
         }
         if ackedType == WordleIntent.guessType || ackedType == WordleIntent.setWordType { wordleSubmitted = "" }
+        if ackedType == LongShotIntent.answerType { longShotSubmitted = "" }
         publishInteraction()
     }
 
@@ -147,6 +165,7 @@ final class GameStagePresenter {
         nextRequestNumber += 1
         let requestId = "g" + String(inputs.callSession) + "-" + String(nextRequestNumber)
         let stamped = intent.withRequestId(requestId)
+        lateJudgedRequestId = ""
         pendingRequestId = requestId
         pendingType = stamped.type
         failure = GameFailure.none
@@ -247,6 +266,13 @@ final class GameStagePresenter {
         return result
     }
 
+    func passWordleTurn() -> ActivityTapResult {
+        guard let team = scene.wordle?.team else { return ActivityTapResult.explained }
+        if !pendingRequestId.isEmpty { return ActivityTapResult.ignored }
+        if !team.canPass { return ActivityTapResult.explained }
+        return send(WordleIntent.passTurn())
+    }
+
     private func canEditWordleDraft(_ wordle: WordleScene) -> Bool {
         if !wordle.canGuess && !wordle.canSetWord { return false }
 
@@ -320,6 +346,33 @@ final class GameStagePresenter {
         }
     }
 
+    func setLongShotDraft(_ text: String) {
+        guard let longShot = scene.longShot, longShot.entry.canSubmit else { return }
+        let next = LongShotDraftPolicy.normalized(text)
+        if next != longShotDraft { longShotDraft = next }
+    }
+
+    func submitLongShot() -> ActivityTapResult {
+        guard let longShot = scene.longShot else { return ActivityTapResult.explained }
+        if !pendingRequestId.isEmpty { return ActivityTapResult.ignored }
+        if !longShot.entry.canSubmit { return ActivityTapResult.explained }
+        let text = LongShotDraftPolicy.submission(longShotDraft)
+        if text.isEmpty { return ActivityTapResult.ignored }
+        longShotSubmitted = longShotDraft
+        let result = send(LongShotIntent.answer(text))
+        if result != ActivityTapResult.dispatched { longShotSubmitted = "" }
+        return result
+    }
+
+    private func syncLongShotDraft(_ longShot: LongShotScene?) {
+        var key = ""
+        if let longShot = longShot, !longShot.entry.draftKey.isEmpty { key = inputs.gameId + "|" + longShot.entry.draftKey }
+        if key == longShotDraftKey { return }
+        longShotDraftKey = key
+        longShotSubmitted = ""
+        if !longShotDraft.isEmpty { longShotDraft = "" }
+    }
+
     func summary() -> ActivityGameSummary {
         if !inputs.isActive { return ActivityGameSummary.none }
         return ActivityGameSummary(gameId: inputs.gameId, name: inputs.name, isActive: true, isFinished: inputs.isFinished,
@@ -327,14 +380,12 @@ final class GameStagePresenter {
     }
 
     func reset() {
-        cancelTimeout()
+        clearPending()
         inputs = GameStageInputs.make()
         projection = GameProjection.empty
         parsedKey = ""
         pushReceivedAtMillis = 0.0
         emitLog = []
-        pendingRequestId = ""
-        pendingType = ""
         failure = GameFailure.none
         failureText = ""
         endPending = false
@@ -348,6 +399,9 @@ final class GameStagePresenter {
         chessMoveRequestId = ""
         chessFenAtSend = ""
         if chessPendingMove != ChessPendingMoveModel.none { chessPendingMove = ChessPendingMoveModel.none }
+        longShotDraftKey = ""
+        longShotSubmitted = ""
+        if !longShotDraft.isEmpty { longShotDraft = "" }
         if chrome.withRevision(0) != GameChromeModel.empty { chrome = GameChromeModel.empty.withRevision(chrome.revision + 1) }
         if scene.withRevision(0) != GameScene.empty { scene = GameScene.empty.withRevision(scene.revision + 1) }
         syncTileAdornments()
@@ -411,8 +465,9 @@ final class GameStagePresenter {
                                                hasActed: false))
             }
         }
+        let minPlayers = LongShotSceneBuilder.minimumPlayers(projection.longShot, catalogMinimum: inputs.minPlayers)
         let lobby = GameStagePresenter.lobby(isHost: inputs.isHost, isSeated: holdsLobbySeat, seat: seat, isRecovering: inputs.isRecovering,
-                                             minPlayers: inputs.minPlayers, playerCount: inputs.players.count)
+                                             minPlayers: minPlayers, playerCount: inputs.players.count)
         rememberPlayers()
 
         let context = PromptSceneContext(localId: localId, isPlayer: seat == SeatState.player, isHost: inputs.isHost,
@@ -444,18 +499,23 @@ final class GameStagePresenter {
             zip = ZipSceneBuilder.scene(projected, context: context, serverNowMillis: common.serverNowMillis,
                                         receivedAtMillis: pushReceivedAtMillis)
         }
+        var longShot: LongShotScene? = nil
+        if let projected = projection.longShot { longShot = LongShotSceneBuilder.scene(projected, context: context) }
         let outcomes = [PromptOutcomePolicy.trivia(previous: scene.trivia, next: trivia),
                         PromptOutcomePolicy.reaction(previous: scene.reaction, next: reaction),
                         WordleOutcomePolicy.solved(previous: scene.wordle, next: wordle),
-                        ZipOutcomePolicy.solved(previous: scene.zip, next: zip)]
+                        ZipOutcomePolicy.solved(previous: scene.zip, next: zip),
+                        LongShotOutcomePolicy.feedback(previous: scene.longShot, next: longShot)]
         let nextScene = GameScene(revision: scene.revision, kind: sceneKind(phase: phase, isSeated: isSeated), players: players,
                                   pendingJoiners: pending, options: GameStagePresenter.optionSummary(config: inputs.config, options: inputs.options),
                                   lobby: lobby, projection: projection, trivia: trivia, bluff: bluff, wouldYouRather: wouldYouRather,
-                                  mostLikelyTo: mostLikelyTo, reaction: reaction, imposter: imposter, wordle: wordle, chess: chess, zip: zip)
+                                  mostLikelyTo: mostLikelyTo, reaction: reaction, imposter: imposter, wordle: wordle, chess: chess, zip: zip,
+                                  longShot: longShot)
         if nextScene != scene { scene = nextScene.withRevision(scene.revision + 1) }
         syncTileAdornments()
         syncWordleDraft(wordle)
         syncChessPending(chess)
+        syncLongShotDraft(longShot)
         for outcome in outcomes where outcome != FeedbackKind.none {
             advanceFeedback(outcome)
         }
@@ -509,6 +569,7 @@ final class GameStagePresenter {
     }
 
     private func clearPending() {
+        lateJudgedRequestId = ""
         cancelTimeout()
         pendingRequestId = ""
         pendingType = ""
@@ -551,6 +612,7 @@ final class GameStagePresenter {
         var result: [GameOptionSummaryModel] = []
         for option in options {
             guard let value = ActivitiesCatalogPolicy.draft(option.id, in: config) else { continue }
+            if !ActivitiesCatalogPolicy.isVisible(option, among: options, drafts: config) { continue }
             var text = ""
             if value.isNumber {
                 text = ActivitiesCatalogPolicy.numberLabel(value.number, suffix: option.suffix)
@@ -592,8 +654,10 @@ final class GameStagePresenter {
     private func startTimeout(requestId: String) {
         cancelTimeout()
         let wait = sleep
+        let deadlineMillis = GameMoveTiming.judgedAckTimeoutMillis(gameId: inputs.gameId, type: pendingType)
+        let timeoutMillis = deadlineMillis.map { Double($0) } ?? GameStagePresenter.moveTimeoutMillis
         timeoutTask = Task { @MainActor [weak self] in
-            await wait(GameStagePresenter.moveTimeoutMillis)
+            await wait(timeoutMillis)
             if Task.isCancelled { return }
             guard let self = self else { return }
             self.fireTimeout(requestId: requestId)
@@ -604,6 +668,9 @@ final class GameStagePresenter {
         if requestId != pendingRequestId { return }
         timeoutTask?.cancel()
         timeoutTask = nil
+        if GameMoveTiming.judgedAckTimeoutMillis(gameId: inputs.gameId, type: pendingType) != nil {
+            lateJudgedRequestId = requestId
+        }
         pendingRequestId = ""
         pendingType = ""
         failure = GameFailure.server
@@ -719,6 +786,8 @@ struct WordleScene: Equatable {
 
     let canAdvanceRound: Bool
 
+    let team: WordleTeamScene?
+
     var triesUsed: Int { myRows.count }
 
     var showsDraftRow: Bool {
@@ -727,8 +796,9 @@ struct WordleScene: Equatable {
 
     var draftKey: String {
         if phase == WordlePhase.setWord && isSetter { return "secret-" + String(round) }
-        if phase == WordlePhase.playing && role == WordleRole.guesser { return "guess-" + String(round) }
-        return ""
+        if phase != WordlePhase.playing || role != WordleRole.guesser { return "" }
+        guard let team = team, team.mode == WordleMode.relay else { return "guess-" + String(round) }
+        return team.turn == WordleTurn.yours ? "guess-" + String(round) + "-" + String(team.triesUsed) : ""
     }
 
     var outcomeKey: String {
@@ -790,8 +860,14 @@ enum WordleSceneBuilder {
             }
             myOutcome = parseOutcome(projection.myOutcome)
         }
+        var team: WordleTeamScene? = nil
+        if let shared = projection.team {
+            myRows = WordleTeamSceneBuilder.rows(shared, length: length)
+            team = WordleTeamSceneBuilder.scene(shared, mode: projection.mode, phase: phase, round: projection.currentRound, maxTries: tries,
+                                                turnTimeMillis: projection.turnTimeMillis, role: role, context: context)
+        }
         var liveBoards: [WordleBoardStatusModel] = []
-        if isSetter {
+        if isSetter && team == nil {
             for board in projection.boards {
                 var rows: [WordleRowModel] = []
                 var index = 0
@@ -805,8 +881,9 @@ enum WordleSceneBuilder {
         }
         let recovering = context.isRecovering
         let isResults = phase == WordlePhase.results
+        let isTurnOpen = team == nil || team?.turn == WordleTurn.yours || team?.turn == WordleTurn.anyone
         let canGuess = role == WordleRole.guesser && phase == WordlePhase.playing && projection.canGuess
-            && myOutcome == WordleOutcome.none && myRows.count < tries && !recovering
+            && myOutcome == WordleOutcome.none && myRows.count < tries && !recovering && isTurnOpen
         let canSetWord = isSetter && phase == WordlePhase.setWord && projection.canSetWord && !recovering
         return WordleScene(phase: phase, round: projection.currentRound, roundTotal: projection.totalRounds, wordLength: length,
                            maxTries: tries, isRandomWord: projection.wordSource != "setter", role: role,
@@ -816,7 +893,8 @@ enum WordleSceneBuilder {
                            winnerName: isResults ? projection.resultWinnerName : "", isFinalRound: projection.isFinalRound,
                            finishedCount: projection.finishedCount, totalContestants: projection.totalContestants, isPlayer: isPlayer,
                            isReconnecting: recovering,
-                           canAdvanceRound: isResults && !projection.isFinalRound && context.isHost && isPlayer && !recovering)
+                           canAdvanceRound: isResults && !projection.isFinalRound && context.isHost && isPlayer && !recovering,
+                           team: team)
     }
 
     static func guessRow(index: Int, word: String, feedback: [String], length: Int, showsLetters: Bool) -> WordleRowModel {
@@ -1008,10 +1086,12 @@ enum WordleIntent {
     static let guessType = "guess"
     static let setWordType = "setWord"
     static let nextRoundType = "nextRound"
+    static let passTurnType = "passTurn"
 
     static func guess(_ word: String) -> GameMoveIntent { GameMoveIntent.make(type: guessType, text: word) }
     static func setWord(_ word: String) -> GameMoveIntent { GameMoveIntent.make(type: setWordType, text: word) }
     static func nextRound() -> GameMoveIntent { GameMoveIntent.make(type: nextRoundType) }
+    static func passTurn() -> GameMoveIntent { GameMoveIntent.make(type: passTurnType) }
 }
 
 enum WordleFixtureState: String, CaseIterable, Equatable {

@@ -34,6 +34,7 @@ enum PeopleText {
         if let role = roleWord(model.role) { parts.append(role) }
         if let detail = detailWord(model.detail) { parts.append(detail) }
         if model.messagesHidden { parts.append(ConclaveStrings.text("Messages hidden")) }
+        if model.localAudio.isSilent { parts.append(ConclaveStrings.text("Muted for you")) }
         return parts.isEmpty ? nil : parts.joined(separator: separator)
     }
 
@@ -55,6 +56,7 @@ enum PeopleText {
         if model.isPresenting { parts.append(ConclaveStrings.text("Presenting")) }
         if model.isCameraOff { parts.append(ConclaveStrings.text("Camera Off")) }
         if model.isMuted { parts.append(ConclaveStrings.text("Muted")) }
+        if model.localAudio.isSilent { parts.append(ConclaveStrings.text("Muted for you")) }
         if model.isReconnecting { parts.append(ConclaveStrings.text("Reconnecting")) }
         return parts
     }
