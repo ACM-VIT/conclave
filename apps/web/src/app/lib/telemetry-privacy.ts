@@ -19,17 +19,27 @@ const EMAIL_PATTERN = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
 const JWT_PATTERN = /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g;
 const LONG_TOKEN_PATTERN = /\b[A-Za-z0-9_-]{40,}\b/g;
 const URL_IN_TEXT_PATTERN = /\bhttps?:\/\/[^\s"'<>)]+/gi;
+// Our own script folders. Their files keep the path so PostHog can match a
+// stack frame to its source map.
+const ASSET_PATH_PREFIXES = [
+  "/_next/static/",
+  "/mediapipe/",
+  "/effects/",
+  "/noise-suppressor/",
+  "/_/rtcvidproc/",
+];
 
 /**
  * Replaces room codes, invite slugs and booking handles in a path with the
- * route they belong to. Static assets keep their path, because PostHog needs
- * it to find the source map for a stack frame.
+ * route they belong to. Paths under our script folders stay as they are.
  */
 export function templatePath(pathname: string): string {
+  if (ASSET_PATH_PREFIXES.some((prefix) => pathname.startsWith(prefix))) {
+    return pathname;
+  }
   const segments = pathname.split("/").filter(Boolean);
   const [first] = segments;
   if (!first) return "/";
-  if (first === "_next" || segments.at(-1)?.includes(".")) return pathname;
   if (first === "w") return "/w/[code]";
   if (first === "book") return "/book/[username]/[eventSlug]";
   if (segments.length === 1) {
@@ -38,25 +48,28 @@ export function templatePath(pathname: string): string {
   return STATIC_PAGES.has(first) ? `/${first}/[path]` : "/[path]";
 }
 
+/** The origin and route of an http(s) URL, or null when it is not one. */
+const scrubHttpUrl = (value: string): string | null => {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    return `${url.origin}${templatePath(url.pathname)}`;
+  } catch {
+    return null;
+  }
+};
+
 /** Keeps the origin and route of a URL and drops its query and hash. */
 export function scrubUrl(value: string): string {
   if (value.startsWith("/")) return templatePath(value.split(/[?#]/, 1)[0]);
-  try {
-    const url = new URL(value);
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
-      return scrubText(value);
-    }
-    return `${url.origin}${templatePath(url.pathname)}`;
-  } catch {
-    return scrubText(value);
-  }
+  return scrubHttpUrl(value) ?? scrubText(value);
 }
 
 /** Removes emails, tokens and URL details from free text. */
 export function scrubText(value: string): string {
   return value
     .slice(0, MAX_TEXT_LENGTH)
-    .replace(URL_IN_TEXT_PATTERN, (url) => scrubUrl(url))
+    .replace(URL_IN_TEXT_PATTERN, (url) => scrubHttpUrl(url) ?? "[url]")
     .replace(JWT_PATTERN, "[token]")
     .replace(EMAIL_PATTERN, "[email]")
     .replace(LONG_TOKEN_PATTERN, "[token]");

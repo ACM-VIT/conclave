@@ -96,8 +96,19 @@ describe("scrubUrl", () => {
     ],
     ["/my-private-room#x", "/[code]"],
     ["https://conclave.acmvit.in/mediapipe/vision.js", "https://conclave.acmvit.in/mediapipe/vision.js"],
+    ["https://example.org/users/alice@example.com", "https://example.org/[path]"],
+    ["https://conclave.acmvit.in/ishaan.sharma", "https://conclave.acmvit.in/[code]"],
+    ["https://conclave.acmvit.in/_next/image?url=%2Fa.png", "https://conclave.acmvit.in/[path]"],
   ])("%s becomes %s", (input, expected) => {
     expect(scrubUrl(input)).toBe(expected);
+  });
+
+  it("keeps a dotted referrer path out of the event", () => {
+    const event = exceptionEvent();
+    event.properties.$referrer = "https://example.org/users/alice@example.com";
+    const { properties } = scrubTelemetryEvent(event);
+
+    expect(properties.$referrer).toBe("https://example.org/[path]");
   });
 });
 
@@ -106,5 +117,20 @@ describe("scrubText", () => {
     expect(
       scrubText("fetch https://sfu-a.acmvit.in/rooms/team-sync?token=1 failed"),
     ).toBe("fetch https://sfu-a.acmvit.in/[path] failed");
+  });
+
+  it.each(["Failed to fetch http://%", "Failed to fetch https://["])(
+    "redacts the malformed URL in %s",
+    (input) => {
+      expect(scrubText(input)).toBe("Failed to fetch [url]");
+    },
+  );
+
+  it("returns an exception event whose message has a malformed URL", () => {
+    const event = exceptionEvent();
+    event.properties.$exception_list[0].value = "Failed to fetch http://%";
+    const { properties } = scrubTelemetryEvent(event);
+
+    expect(properties.$exception_list[0].value).toBe("Failed to fetch [url]");
   });
 });
