@@ -48,7 +48,8 @@ fi
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${ROOT_DIR}/.env"
 SFU_ENV_FILE="${ROOT_DIR}/packages/sfu/.env"
-COMPOSE_FILE="${ROOT_DIR}/docker-compose.sfu.yml"
+# Staging deploys its single instance with docker-compose.sfu-staging.yml.
+COMPOSE_FILE="${ROOT_DIR}/${SFU_COMPOSE_FILE:-docker-compose.sfu.yml}"
 
 if [[ ! -f "$ENV_FILE" ]]; then
   echo "Missing .env at ${ENV_FILE}" >&2
@@ -246,7 +247,7 @@ if [[ -f "$SFU_ENV_FILE" ]]; then
 fi
 COMPOSE=(docker compose "${COMPOSE_ENV_FILES[@]}" -f "$COMPOSE_FILE")
 HAS_REDIS_SERVICE="false"
-if "${COMPOSE[@]}" config --services | rg -x "redis" >/dev/null 2>&1; then
+if "${COMPOSE[@]}" config --services 2>/dev/null | grep -x "redis" >/dev/null; then
   HAS_REDIS_SERVICE="true"
 fi
 
@@ -283,13 +284,15 @@ fi
 
 # SFU dependencies are installed inside the Docker image; the host does not need them.
 
+# A compose file that defines its own Redis (staging) gets it started; the
+# production file has none and uses the host Redis from .env.
 if [[ "$HAS_UPSTASH" == "true" ]]; then
   echo "Using Upstash Redis; skipping local Redis container."
-elif [[ -n "${SFU_REDIS_URL:-}" || -n "${REDIS_URL:-}" ]]; then
-  echo "Using Redis at $(redis_url_host); skipping compose Redis container."
 elif [[ "$HAS_REDIS_SERVICE" == "true" ]]; then
   echo "Ensuring Redis is running..."
   "${COMPOSE[@]}" up -d redis
+elif [[ -n "${SFU_REDIS_URL:-}" || -n "${REDIS_URL:-}" ]]; then
+  echo "Using Redis at $(redis_url_host); skipping compose Redis container."
 else
   echo "Redis service not present in ${COMPOSE_FILE}; using host Redis credentials from .env."
 fi

@@ -1,0 +1,51 @@
+# Staging SFU: one instance on the production VM, run from a separate checkout
+# of the staging branch with its own .env (secret, Redis password, URLs).
+# Deploy it with:
+#   SFU_COMPOSE_FILE=docker-compose.sfu-staging.yml ./scripts/deploy-sfu.sh
+# Runbook: docs/ops/staging.md.
+services:
+  sfu-staging:
+    extends:
+      file: docker-compose.sfu.yml
+      service: sfu-a
+    environment:
+      SFU_PORT: "${SFU_STAGING_PORT:-3033}"
+      SFU_INSTANCE_ID: "sfu-staging"
+      SFU_PUBLIC_URL: ${SFU_STAGING_PUBLIC_URL:-}
+      SFU_REGION: ${SFU_REGION:-staging}
+      RTC_MIN_PORT: "${SFU_STAGING_RTC_MIN_PORT:-42001}"
+      RTC_MAX_PORT: "${SFU_STAGING_RTC_MAX_PORT:-42200}"
+      SFU_VERSION: "staging"
+      SFU_WORKER_COUNT: "1"
+      RECORDING_STORAGE_PATH: /var/lib/conclave/recordings
+    # Its own state directory, so a staging build can never open the
+    # production SQLite file.
+    volumes:
+      - ${STAGING_STATE_DIR:-/var/lib/conclave-staging}:/var/lib/conclave/recordings
+    # Staging shares the host with production calls, so it gets a fixed
+    # slice of it.
+    mem_limit: 768m
+    cpus: 0.75
+    depends_on:
+      - redis
+
+  # Staging's own Redis. Redis pub/sub ignores the database number, so a
+  # staging SFU on the production Redis would join production's socket.io
+  # channels even on another database.
+  redis:
+    image: redis:7.2
+    network_mode: "host"
+    command:
+      - redis-server
+      - --port
+      - "${STAGING_REDIS_PORT:-6380}"
+      - --bind
+      - 127.0.0.1
+      - --requirepass
+      - "${STAGING_REDIS_PASSWORD:?set STAGING_REDIS_PASSWORD in .env}"
+      - --appendonly
+      - "yes"
+    volumes:
+      - ${STAGING_STATE_DIR:-/var/lib/conclave-staging}/redis:/data
+    mem_limit: 128m
+    restart: unless-stopped
