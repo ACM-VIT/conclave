@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowRight, CalendarPlus, Check, Copy } from "lucide-react";
 import { useSession } from "@/lib/auth-client";
+import type { GuestSession } from "@/lib/guest-identity";
 import MeetsClientPage from "../../meets-client-page";
 
 const GUEST_USER_STORAGE_KEY = "conclave:guest-user";
@@ -66,6 +67,7 @@ export type PublicScheduledWebinar = {
 type Props = {
   webinarLinkCode: string;
   initialWebinar: PublicScheduledWebinar | null;
+  guest?: GuestSession;
 };
 
 const pad = (n: number): string => String(n).padStart(2, "0");
@@ -140,6 +142,7 @@ const StatusCard = ({ children }: { children: React.ReactNode }) => (
 export default function WebinarLandingClient({
   webinarLinkCode,
   initialWebinar,
+  guest,
 }: Props) {
   const [webinar, setWebinar] = useState<PublicScheduledWebinar | null>(
     initialWebinar,
@@ -284,6 +287,7 @@ export default function WebinarLandingClient({
         autoJoinOnMount={true}
         hideJoinUI={true}
         webinarTitle={webinar?.title}
+        guest={guest}
       />
     );
   }

@@ -10,6 +10,7 @@ import type { Socket } from "socket.io-client";
 import { SFU_EVENTS } from "@conclave/meeting-core/sfu-events";
 import type { RoomInfo } from "@/lib/sfu-types";
 import { useSession } from "@/lib/auth-client";
+import { buildGuestUserKey } from "@/lib/guest-identity";
 import { shouldRetainMeetingSurface } from "./lib/meeting-surface-policy";
 import {
   AppsProvider,
@@ -374,6 +375,8 @@ export type MeetsClientProps = {
     email?: string | null;
     name?: string | null;
   };
+  /** The guest id the server issued this browser; see lib/guest-identity. */
+  guestId?: string;
   isAdmin?: boolean;
   getJoinInfo: (
     roomId: string,
@@ -403,6 +406,7 @@ export default function MeetsClient({
   forceJoinOnly = false,
   bypassMediaPermissions = false,
   user,
+  guestId,
   isAdmin = false,
   getJoinInfo,
   joinMode = "meeting",
@@ -1000,9 +1004,12 @@ export default function MeetsClient({
     currentUser?.id ||
     "You";
   const isGuestIdentity = !currentUser || isGuestUser(currentUser);
+  const guestUserKey = guestId
+    ? buildGuestUserKey(guestId, sessionId)
+    : `guest-${sessionId}`;
   const userKey = isGuestIdentity
-    ? `guest-${sessionId}`
-    : currentUser.email || currentUser.id || `guest-${sessionId}`;
+    ? guestUserKey
+    : currentUser.email || currentUser.id || guestUserKey;
   const userId = `${userKey}#${sessionId}`;
 
   useEffect(() => {

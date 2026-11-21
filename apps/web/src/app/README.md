@@ -9,6 +9,7 @@ Required props for `MeetsClient` in `src/app/meets-client.tsx`:
 - `getRoomsForRedirect(roomId)`: optional room list for host redirects (receives current room id).
 - `reactionAssets`: optional array of reaction asset filenames (without `/reactions/`).
 - `user`, `isAdmin`: current user metadata (used as host flag).
+- `guestId`: the guest id the server issued this browser (optional). With it, a guest's user key is `guest-<guestId>.<sessionId>`, the same key the join route signs. `MeetsClientPage` gets the id from the server render and sends it with every join request.
 
 For Next.js, avoid passing raw functions from a Server Component. Use a client wrapper like `src/app/meets-client-page.tsx` to provide the functions.
 
