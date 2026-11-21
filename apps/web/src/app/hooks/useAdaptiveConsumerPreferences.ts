@@ -361,9 +361,8 @@ const readPresentationElementMetrics = (
     null;
   if (!tile) return { width: null, height: null, size: null };
 
-  const rect = tile.getBoundingClientRect();
-  const width = rect.width > 0 ? Math.round(rect.width) : null;
-  const height = rect.height > 0 ? Math.round(rect.height) : null;
+  const width = tile.offsetWidth || null;
+  const height = tile.offsetHeight || null;
   return {
     width,
     height,
@@ -390,9 +389,10 @@ const readParticipantTileMetrics = (
     const userId = tile.dataset.userid;
     if (!userId || !visibleRemoteIds.has(userId)) return;
 
-    const rect = tile.getBoundingClientRect();
-    const width = rect.width > 1 ? Math.round(rect.width) : 0;
-    const height = rect.height > 1 ? Math.round(rect.height) : 0;
+    // Request the layer for the committed tile size while its visual
+    // position and scale are still animating.
+    const width = tile.offsetWidth;
+    const height = tile.offsetHeight;
     if (width <= 1 || height <= 1) return;
 
     const existing = metrics.get(userId);
