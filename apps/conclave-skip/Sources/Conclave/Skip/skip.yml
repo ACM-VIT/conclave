@@ -3,7 +3,7 @@ build:
     - block: 'dependencies'
       contents:
         - 'implementation("io.socket:socket.io-client:2.1.2")'
-        - 'implementation("com.mediasfu:mediasoup-client:1.0.8")'
+        - 'implementation("com.mediasfu:mediasoup-client:1.0.10")'
         - 'implementation("com.google.android.gms:play-services-auth:22.0.0")'
         - 'implementation("androidx.credentials:credentials:1.6.0")'
         - 'implementation("androidx.credentials:credentials-play-services-auth:1.6.0")'
