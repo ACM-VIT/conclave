@@ -50,6 +50,7 @@ import {
   type WebcamReceiverCapacityEvaluation,
   type WebcamReceiverCapacityTransitionReservation,
 } from "../../server/webcamReceiverCapacityProof.js";
+import { PollBook } from "../../server/polls.js";
 
 export interface RoomOptions {
   id: string;
@@ -265,6 +266,7 @@ export class Room {
   private webinarRaisedHandAt: Map<string, number> = new Map();
   /** Q&A entries in insertion order, id → entry. */
   private webinarQaEntries: Map<string, WebinarQaEntryState> = new Map();
+  readonly polls = new PollBook();
   private webinarQaSequence = 0;
   /**
    * Identities the host invited on stage (userKey → invite expiry). Checked
@@ -2367,6 +2369,7 @@ export class Room {
     this.meetingParticipantCount = 0;
     this.clearApps();
     this.clearGame();
+    this.polls.clear();
     for (const expiryTimer of this.chatImageExpiryTimers.values()) {
       clearTimeout(expiryTimer);
     }

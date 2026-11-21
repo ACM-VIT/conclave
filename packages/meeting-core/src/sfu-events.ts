@@ -122,7 +122,16 @@ export const SFU_EVENTS = {
     webinarGenerateLink: "webinar:generateLink",
     webinarRotateLink: "webinar:rotateLink",
 
-    // Webinar interaction (attendee Q&A, stage invites)
+    // Polls (server-owned ballots)
+    pollGetState: "poll:getState",
+    pollCreate: "poll:create",
+    pollVote: "poll:vote",
+    pollEnd: "poll:end",
+    pollShare: "poll:share",
+    pollExport: "poll:export",
+
+    // Q&A (webinar attendees, and everyone in a regular meeting) and
+    // webinar stage invites
     webinarQaSubmit: "webinar:qa:submit",
     webinarQaUpvote: "webinar:qa:upvote",
     webinarQaModerate: "webinar:qa:moderate",
@@ -241,6 +250,9 @@ export const SFU_EVENTS = {
     gameSnapshot: "game:snapshot",
     gameEnded: "game:ended",
     gameVote: "game:vote",
+
+    // Polls
+    pollChanged: "poll:changed",
 
     // Webinar
     webinarFeedChanged: "webinar:feedChanged",

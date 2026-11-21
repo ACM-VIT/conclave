@@ -467,6 +467,68 @@ export interface WebinarQaModerateRequest {
   answerText?: string;
 }
 
+export type PollChoiceMode = "single" | "multiple";
+export type PollStatus = "open" | "ended";
+
+export interface PollOptionView {
+  id: string;
+  text: string;
+  /** Present only when the viewer may see results. */
+  votes?: number;
+}
+
+/**
+ * One poll as a single viewer may see it. Hosts always get tallies;
+ * everyone else gets them once the host shares results. `myVote` is filled
+ * in per-viewer replies only (snapshot and vote acks), never in broadcasts.
+ */
+export interface PollView {
+  id: string;
+  question: string;
+  choiceMode: PollChoiceMode;
+  status: PollStatus;
+  resultsShared: boolean;
+  options: PollOptionView[];
+  /** Present only when the viewer may see results. */
+  voterCount?: number;
+  createdAt: number;
+  endedAt?: number;
+  createdByName: string;
+  myVote?: string[];
+}
+
+export interface PollSnapshot {
+  roomId: string;
+  polls: PollView[];
+}
+
+export interface PollChangedNotification {
+  roomId: string;
+  poll: PollView;
+}
+
+export interface PollCreateRequest {
+  question: string;
+  options: string[];
+  choiceMode: PollChoiceMode;
+}
+
+export interface PollVoteRequest {
+  pollId: string;
+  optionIds: string[];
+}
+
+export interface PollBallotExport {
+  name: string;
+  optionIds: string[];
+  votedAt: number;
+}
+
+export interface PollExportResponse {
+  poll: PollView;
+  ballots: PollBallotExport[];
+}
+
 export interface WebinarHandQueueEntry {
   userId: string;
   displayName: string;

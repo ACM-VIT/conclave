@@ -163,4 +163,8 @@ export const RATE_LIMITS = {
   gameMove: { capacity: 20, refillPerSec: 8 },
   // Game lifecycle (start/end/state): low frequency, admin-driven.
   gameControl: { capacity: 10, refillPerSec: 2 },
+  // Poll ballots: each person votes once per poll, so a small budget is plenty.
+  pollVote: { capacity: 10, refillPerSec: 2 },
+  // Poll snapshots are requested on every (re)join.
+  pollState: { capacity: 6, refillPerSec: 1 },
 } as const satisfies Record<string, TokenBucketOptions>;
