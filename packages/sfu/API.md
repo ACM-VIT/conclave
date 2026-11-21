@@ -25,6 +25,22 @@ This means:
 - Allow/block lists should store stable identity keys (email/userId), not session ids.
 - Pending room entries are keyed by `userKey`.
 
+### Guest identities
+
+A participant can read every `userKey` and `userId` in the room, so a guest key is not a credential.
+The web join route (`apps/web/src/app/api/sfu/join/route.ts`) issues each browser a guest pass in an HttpOnly cookie and builds the guest `userKey` from it: `guest-<guestId>.<sessionId>`.
+The route also signs a `guestProof` claim into the join token. `guestProof` is a keyed hash of the pass. The SFU never sends it to clients.
+
+The SFU binds a guest `userKey` to the `guestProof` it enters a room with. The binding lasts while the key holds anything in the room: a seat, a waiting-room entry, host, an admission, a stage invite, or a block.
+A later join under that `userKey` must carry the same `guestProof`. Otherwise the SFU refuses the join.
+Blocking a guest also keeps out every other identity of the same pass, so the guest's other tabs stay out. Unblocking the guest lifts that.
+
+Clients that predate guest passes still send their own session id and get `guest-<sessionId>`.
+Such a client that keeps cookies proves its pass from its second join call on, and the SFU binds that identity the same way.
+A guest identity that enters a room with no `guestProof` stays unbound in that room, as before guest passes.
+
+A token minted by another service for a guest should carry a `guestProof` that only the owner of that guest identity can obtain.
+
 ## HTTP Admin Endpoints
 
 Base routes live in `packages/sfu/server/http/createApp.ts`.

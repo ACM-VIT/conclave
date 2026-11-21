@@ -14,6 +14,13 @@ export type SfuAuthPayload = JwtPayload & {
   userId?: string;
   name?: string;
   sessionId?: string;
+  /**
+   * Keyed hash of the guest pass behind a guest `userId`. Never sent to other
+   * participants, so holding a guest's public id is not enough to rejoin as
+   * that guest. Absent on signed-in tokens and on guests from clients that
+   * predate guest passes.
+   */
+  guestProof?: string;
   isHost?: boolean;
   isAdmin?: boolean;
   isForcedHost?: boolean;

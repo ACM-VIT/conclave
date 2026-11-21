@@ -217,6 +217,13 @@ export class Room {
   private chatImageBytes = 0;
   public lockedAllowedUsers: Set<string> = new Set();
   public blockedUsers: Set<string> = new Set();
+  /**
+   * Guest identities bound to the proof of the guest pass they entered this
+   * room with. The proof is a keyed hash the web join route signs into the
+   * token; the pass itself never reaches the SFU. A binding only counts while
+   * the identity holds something here (see `claimGuestIdentity`).
+   */
+  private guestProofsByUserKey: Map<string, string> = new Map();
   public cleanupTimer: NodeJS.Timeout | null = null;
   public hostUserKey: string | null = null;
   private _isLocked: boolean = false;
@@ -686,13 +693,70 @@ export class Room {
     this.webcamReceiverCapacityProofCoordinator.refreshAll(producerIds);
   }
 
+  // Whether `userKey` still has a seat, a waiting-room entry, or anything a
+  // later join under that key would inherit.
+  private holdsUserKey(userKey: string): boolean {
+    if (
+      this.hostUserKey === userKey ||
+      this.adminUserKeys.has(userKey) ||
+      this.allowedUsers.has(userKey) ||
+      this.lockedAllowedUsers.has(userKey) ||
+      this.blockedUsers.has(userKey) ||
+      this.pendingClients.has(userKey) ||
+      this.webinarPromotedUserKeys.has(userKey) ||
+      this.webinarDemotedUserKeys.has(userKey)
+    ) {
+      return true;
+    }
+    for (const key of this.userKeysById.values()) {
+      if (key === userKey) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Decides whether a join may enter as the guest `userKey`, and which pass
+   * proof to bind the identity to once the join gets a seat or a waiting-room
+   * entry (pass `bindTo` on to `setUserIdentity` or `addPendingClient`).
+   *
+   * An identity that holds something here under a proof needs that proof. One
+   * that holds something with no proof entered through a client without a
+   * pass. It stays open, as before guest passes: binding it to a later caller
+   * would lock the original client out.
+   */
+  claimGuestIdentity(
+    userKey: string,
+    guestProof: string | undefined,
+  ): { ok: false } | { ok: true; bindTo: string | undefined } {
+    if (!this.holdsUserKey(userKey)) {
+      this.guestProofsByUserKey.delete(userKey);
+      return { ok: true, bindTo: guestProof };
+    }
+    const bound = this.guestProofsByUserKey.get(userKey);
+    if (bound !== undefined && bound !== guestProof) {
+      return { ok: false };
+    }
+    return { ok: true, bindTo: bound };
+  }
+
+  // Keeps the map from growing with every guest that ever passed through a
+  // long-lived room.
+  private releaseGuestIdentity(userKey: string): void {
+    if (!this.holdsUserKey(userKey)) {
+      this.guestProofsByUserKey.delete(userKey);
+    }
+  }
+
   setUserIdentity(
     userId: string,
     userKey: string,
     displayName: string,
-    options?: { forceDisplayName?: boolean },
+    options?: { forceDisplayName?: boolean; guestProof?: string },
   ): void {
     this.userKeysById.set(userId, userKey);
+    if (options?.guestProof) {
+      this.guestProofsByUserKey.set(userKey, options.guestProof);
+    }
     if (options?.forceDisplayName || !this.displayNamesByKey.has(userKey)) {
       this.displayNamesByKey.set(userKey, displayName);
     }
@@ -771,6 +835,7 @@ export class Room {
       }
       if (!stillPresent) {
         this.displayNamesByKey.delete(departingUserKey);
+        this.releaseGuestIdentity(departingUserKey);
       }
     }
     if (this.webinarActiveSpeakerUserId === clientId) {
@@ -2391,6 +2456,7 @@ export class Room {
     this.adminUserKeys.clear();
     this.displayNamesByKey.clear();
     this.blockedUsers.clear();
+    this.guestProofsByUserKey.clear();
     this.webinarActiveSpeakerUserId = null;
     this.webinarDominantSpeakerUserId = null;
     this.webinarFeedProducerIds = [];
@@ -2494,12 +2560,17 @@ export class Room {
     userId: string,
     socket: Socket,
     displayName?: string,
+    guestProof?: string,
   ) {
     this.pendingClients.set(userKey, { userKey, userId, socket, displayName });
+    if (guestProof) {
+      this.guestProofsByUserKey.set(userKey, guestProof);
+    }
   }
 
   removePendingClient(userKey: string) {
     this.pendingClients.delete(userKey);
+    this.releaseGuestIdentity(userKey);
   }
 
   allowUser(userKey: string) {
@@ -2541,7 +2612,18 @@ export class Room {
     this.blockedUsers.delete(userKey);
   }
 
-  isBlocked(userKey: string): boolean {
-    return this.blockedUsers.has(userKey);
+  /**
+   * A blocked guest's other tabs carry the same pass, so `guestProof` keeps
+   * them out too for as long as any identity of that pass is blocked.
+   */
+  isBlocked(userKey: string, guestProof?: string): boolean {
+    if (this.blockedUsers.has(userKey)) return true;
+    if (guestProof === undefined) return false;
+    for (const blockedKey of this.blockedUsers) {
+      if (this.guestProofsByUserKey.get(blockedKey) === guestProof) {
+        return true;
+      }
+    }
+    return false;
   }
 }

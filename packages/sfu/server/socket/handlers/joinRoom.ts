@@ -63,6 +63,7 @@ const MAX_CLIENT_ID_LENGTH = 256;
 const MAX_ROOM_ID_LENGTH = 256;
 const MAX_SESSION_ID_LENGTH = 128;
 const MAX_INVITE_CODE_LENGTH = 256;
+const MAX_GUEST_PROOF_LENGTH = 128;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
 
 const normalizeIdentifier = (
@@ -433,6 +434,22 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           }
         }
 
+        const guestProof = isGuestUserKey(userKey)
+          ? (normalizeIdentifier(user?.guestProof, MAX_GUEST_PROOF_LENGTH) ??
+            undefined)
+          : undefined;
+        const guestClaim = room.claimGuestIdentity(userKey, guestProof);
+        if (!guestClaim.ok) {
+          Logger.warn(
+            `Join as ${userKey} in room ${roomId} refused: guest pass does not match`,
+          );
+          respond(callback, {
+            error:
+              "This guest session could not be verified. Reload the page to join again.",
+          });
+          return;
+        }
+
         const existingClient = room.getClient(userId);
         const staleSameIdentitySeats = Array.from(
           room.userKeysById.entries(),
@@ -539,7 +556,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         if (
           !hasPrivilegedJoinAccess &&
           user?.isSuperAdmin !== true &&
-          room.isBlocked(userKey)
+          room.isBlocked(userKey, guestProof)
         ) {
           Logger.info(`Blocked identity ${userKey} denied access to room ${roomId}`);
           respond(callback, { error: "You are not allowed to join this meeting." });
@@ -633,7 +650,13 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           Logger.info(
             `User ${userKey} trying to join locked room ${roomId}, adding to waiting room`,
           );
-          room.addPendingClient(userKey, userId, socket, displayName);
+          room.addPendingClient(
+            userKey,
+            userId,
+            socket,
+            displayName,
+            guestClaim.bindTo,
+          );
           context.pendingRoomId = roomId;
           context.pendingRoomChannelId = roomChannelId;
           context.pendingUserKey = userKey;
@@ -684,7 +707,13 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           !(room.isLocked && room.isLockedAllowed(userKey))
         ) {
           Logger.info(`User ${userKey} added to waiting room ${roomId}`);
-          room.addPendingClient(userKey, userId, socket, displayName);
+          room.addPendingClient(
+            userKey,
+            userId,
+            socket,
+            displayName,
+            guestClaim.bindTo,
+          );
           context.pendingRoomId = roomId;
           context.pendingRoomChannelId = roomChannelId;
           context.pendingUserKey = userKey;
@@ -825,6 +854,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
 
         context.currentRoom.setUserIdentity(userId, userKey, displayName, {
           forceDisplayName: hasDisplayNameOverride,
+          guestProof: guestClaim.bindTo,
         });
         context.currentRoom.addClient(context.currentClient);
 

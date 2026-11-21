@@ -75,8 +75,10 @@ const publicIdentity = (user: SfuAuthPayload): SfuAuthPayload => {
   return visible;
 };
 
-const refused = expect.objectContaining({ error: expect.any(String) });
-const joined = expect.objectContaining({ status: "joined" });
+const refused: unknown = expect.objectContaining({
+  error: expect.any(String) as unknown,
+});
+const joined: unknown = expect.objectContaining({ status: "joined" });
 
 const guestHost = {
   userId: "guest-gp_AAAAAAAAAAAAAAAAAAAAAA.tab-1",
@@ -274,5 +276,144 @@ describe("waiting room admission", () => {
 
     const admitted = await join(state, guest);
     expect(admitted.ack).toHaveBeenCalledWith(joined);
+  });
+});
+
+describe("blocking a guest", () => {
+  const tab = (sessionId: string, guestProof: string, guestId: string) =>
+    ({
+      userId: `guest-gp_${guestId.repeat(22)}.${sessionId}`,
+      clientId: "conclave",
+      sessionId,
+      guestProof,
+    }) satisfies SfuAuthPayload;
+  const notAllowed = { error: "You are not allowed to join this meeting." };
+
+  it("keeps the blocked guest's other tabs out, and no one else", async () => {
+    const state = makeState();
+    await join(state, guestHost);
+    const room = state.rooms.get("conclave:room")!;
+    const blockedTab = tab("tab-1", "proof-of-pass-e", "E");
+    await join(state, blockedTab);
+    room.blockUser(blockedTab.userId);
+    room.removeClient(`${blockedTab.userId}#tab-1`);
+
+    const sameTab = await join(state, blockedTab);
+    const otherTab = await join(state, tab("tab-2", "proof-of-pass-e", "E"));
+    const someoneElse = await join(state, tab("tab-1", "proof-of-pass-f", "F"));
+
+    expect(sameTab.ack).toHaveBeenCalledWith(notAllowed);
+    expect(otherTab.ack).toHaveBeenCalledWith(notAllowed);
+    expect(someoneElse.ack).toHaveBeenCalledWith(joined);
+  });
+
+  it("lets every tab of the pass back in once the host unblocks it", async () => {
+    const state = makeState();
+    await join(state, guestHost);
+    const room = state.rooms.get("conclave:room")!;
+    const blockedTab = tab("tab-1", "proof-of-pass-e", "E");
+    await join(state, blockedTab);
+    room.blockUser(blockedTab.userId);
+    room.removeClient(`${blockedTab.userId}#tab-1`);
+    room.unblockUser(blockedTab.userId);
+
+    const otherTab = await join(state, tab("tab-2", "proof-of-pass-e", "E"));
+    expect(otherTab.ack).toHaveBeenCalledWith(joined);
+  });
+
+  it("keeps the pass out while any of its tabs is still blocked", async () => {
+    const state = makeState();
+    await join(state, guestHost);
+    const room = state.rooms.get("conclave:room")!;
+    const first = tab("tab-1", "proof-of-pass-e", "E");
+    const second = tab("tab-2", "proof-of-pass-e", "E");
+    await join(state, first);
+    await join(state, second);
+    room.blockUser(first.userId);
+    room.blockUser(second.userId);
+    room.removeClient(`${first.userId}#tab-1`);
+    room.removeClient(`${second.userId}#tab-2`);
+    room.unblockUser(first.userId);
+
+    const third = await join(state, tab("tab-3", "proof-of-pass-e", "E"));
+    expect(third.ack).toHaveBeenCalledWith(notAllowed);
+  });
+});
+
+describe("guests on clients that predate guest passes", () => {
+  const olderHost = {
+    userId: "guest-1700000000000-abc123",
+    clientId: "conclave",
+    sessionId: "1700000000000-abc123",
+    allowRoomCreation: true,
+  } satisfies SfuAuthPayload;
+  const olderHostSeat = `${olderHost.userId}#${olderHost.sessionId}`;
+
+  it("are bound to their pass when they enter with one", async () => {
+    const state = makeState();
+    const host = await join(state, { ...olderHost, guestProof: "proof-of-the-older-pass" });
+    const room = state.rooms.get("conclave:room")!;
+
+    const replay = await join(state, olderHost);
+    const replayWithOwnPass = await join(state, { ...olderHost, guestProof: "proof-of-another-pass" });
+
+    expect(replay.ack).toHaveBeenCalledWith(refused);
+    expect(replayWithOwnPass.ack).toHaveBeenCalledWith(refused);
+    expect(room.getClient(olderHostSeat)).toBe(host.context.currentClient);
+  });
+
+  it("that entered without a pass can still come back, even after someone joined with one", async () => {
+    const state = makeState();
+    await join(state, olderHost);
+    const room = state.rooms.get("conclave:room")!;
+
+    const withPass = await join(state, { ...olderHost, guestProof: "proof-of-a-later-pass" });
+    expect(withPass.ack).toHaveBeenCalledWith(joined);
+
+    const original = await join(state, olderHost);
+    expect(original.ack).toHaveBeenCalledWith(joined);
+    expect(original.context.currentClient).toBeInstanceOf(Admin);
+    expect(room.getClient(olderHostSeat)).toBe(original.context.currentClient);
+  });
+});
+
+describe("a guest identity that holds nothing in the room", () => {
+  it("is not kept after the guest leaves", async () => {
+    const state = makeState();
+    await join(state, guestHost);
+    const room = state.rooms.get("conclave:room")!;
+    const visitor = {
+      userId: "guest-gp_GGGGGGGGGGGGGGGGGGGGGG.tab-1",
+      clientId: "conclave",
+      sessionId: "tab-1",
+      guestProof: "proof-of-pass-g",
+    } satisfies SfuAuthPayload;
+    await join(state, visitor);
+    room.removeClient(`${visitor.userId}#tab-1`);
+
+    const fresh = await join(state, { ...visitor, guestProof: "proof-of-pass-h" });
+    expect(fresh.ack).toHaveBeenCalledWith(joined);
+  });
+
+  it("is still held while the guest waits to be let in", async () => {
+    const state = makeState();
+    await join(state, guestHost);
+    const room = state.rooms.get("conclave:room")!;
+    room.setLocked(true);
+    const visitor = {
+      userId: "guest-gp_GGGGGGGGGGGGGGGGGGGGGG.tab-1",
+      clientId: "conclave",
+      sessionId: "tab-1",
+      guestProof: "proof-of-pass-g",
+    } satisfies SfuAuthPayload;
+    await join(state, visitor);
+
+    const attempt = await join(state, { ...visitor, guestProof: "proof-of-pass-h" });
+    expect(attempt.ack).toHaveBeenCalledWith(refused);
+    expect(room.pendingClients.get(visitor.userId)?.socket.id).not.toBe(attempt.peer.socket.id);
+
+    room.removePendingClient(visitor.userId);
+    const later = await join(state, { ...visitor, guestProof: "proof-of-pass-h" });
+    expect(later.ack).toHaveBeenCalledWith(expect.objectContaining({ status: "waiting" }));
   });
 });
