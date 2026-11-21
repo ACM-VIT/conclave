@@ -42,6 +42,8 @@ id per attempt that ties the three together. Times are milliseconds; "from the
 click" means from the moment the join started (`connecting`). Stats are sampled
 from the transports every 250 ms from joining until first media arrives, then
 every 5 s, so first-media times are stamped at the first sample that shows them.
+A gap of more than 15 s between readable
+samples, and any time the call sits in an error, is left out of every total.
 
 ### `call_join`
 
@@ -69,7 +71,8 @@ Skipped when nobody else is in the room.
 
 ### `call_summary`
 
-Sent on leave, on a terminal error, or with sendBeacon when the tab closes.
+Sent on leave, as soon as reconnecting gives up, or with sendBeacon when the tab
+closes. A call left in any other error ends where the error began.
 
 | Property | Meaning |
 | --- | --- |

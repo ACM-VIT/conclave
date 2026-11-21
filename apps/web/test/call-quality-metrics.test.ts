@@ -21,7 +21,12 @@ const setup = () => {
     next: ConnectionState,
     at: number,
     error: MeetError | null = null,
-  ) => tracker.onConnectionState(next, error, "meeting", at);
+    reconnectGaveUp = false,
+  ) =>
+    tracker.onConnectionState(
+      { state: next, error, joinMode: "meeting", reconnectGaveUp },
+      at,
+    );
   const named = (name: CallMetricEvent["name"]) =>
     events.filter((event) => event.name === name);
   return { tracker, events, state, named };
@@ -369,6 +374,146 @@ describe("call_summary", () => {
       reconnect_count: 1,
       reconnect_total_ms: 35_000,
       reconnect_unrecovered: true,
+    });
+  });
+
+  it("sends the summary the moment reconnecting gives up", () => {
+    const { state, named, events } = setup();
+    state("connecting", 0);
+    state("joined", 1000);
+    state("reconnecting", 5000);
+    state("error", 40_000, null, true);
+
+    expect(named("call_summary")).toHaveLength(1);
+    expect(named("call_summary")[0]).toMatchObject({
+      immediate: false,
+      props: {
+        end_reason: "reconnect_failed",
+        duration_ms: 39_000,
+        reconnect_count: 1,
+        reconnect_total_ms: 35_000,
+        reconnect_unrecovered: true,
+      },
+    });
+
+    state("disconnected", 60_000);
+    expect(named("call_summary")).toHaveLength(1);
+    expect(events.map((event) => event.name)).toEqual(["call_join", "call_summary"]);
+  });
+
+  it("counts a manual retry after giving up as a new call", () => {
+    const { state, named } = setup();
+    state("connecting", 0);
+    state("joined", 1000);
+    state("reconnecting", 5000);
+    state("error", 40_000, null, true);
+    state("reconnecting", 50_000);
+    state("connecting", 50_100);
+    state("joined", 51_000);
+    state("disconnected", 61_000);
+
+    expect(named("call_join").map((event) => event.props.call_id)).toEqual([
+      "call-1",
+      "call-2",
+    ]);
+    expect(named("call_summary").map((event) => event.props.duration_ms)).toEqual([
+      39_000,
+      10_000,
+    ]);
+  });
+
+  it("stops media totals where a call stuck in error ended", () => {
+    const { tracker, state, named } = setup();
+    state("connecting", 0);
+    state("joined", 1000);
+    tracker.onStats(sample([video()], { outboundVideo: [layer()] }), 2000);
+    tracker.onStats(
+      sample([video({ bytesReceived: 100_000, framesDecoded: 150 })], {
+        outboundVideo: [layer({ bytesSent: 500_000 })],
+      }),
+      7000,
+    );
+    state("error", 8000);
+    tracker.onStats(
+      sample([video({ bytesReceived: 200_000, framesDecoded: 300 })], {
+        outboundVideo: [layer({ bytesSent: 1_000_000 })],
+      }),
+      12_000,
+    );
+    tracker.onPageHidden(20_000);
+
+    expect(named("call_summary")[0].props).toMatchObject({
+      end_reason: "reconnect_failed",
+      duration_ms: 7000,
+      remote_video_ms: 5000,
+      outbound_video_ms: 5000,
+    });
+  });
+
+  it("measures again once a call stuck in error recovers", () => {
+    const { tracker, state, named } = setup();
+    state("connecting", 0);
+    state("joined", 1000);
+    tracker.onStats(sample([video()]), 2000);
+    tracker.onStats(sample([video({ bytesReceived: 100_000, framesDecoded: 150 })]), 7000);
+    state("error", 8000);
+    tracker.onStats(sample([video({ bytesReceived: 200_000, framesDecoded: 300 })]), 12_000);
+    state("reconnecting", 13_000);
+    state("joined", 14_000);
+    tracker.onStats(sample([video({ bytesReceived: 300_000, framesDecoded: 450 })]), 17_000);
+    state("disconnected", 18_000);
+
+    expect(named("call_summary")[0].props).toMatchObject({
+      end_reason: "left",
+      remote_video_ms: 10_000,
+    });
+  });
+
+  it("measures the sample after a failed read over the whole interval", () => {
+    const { tracker, state, named } = setup();
+    state("connecting", 0);
+    state("joined", 1000);
+    tracker.onStats(sample([], { outboundVideo: [layer()] }), 2000);
+    tracker.onStats(sample([], { outboundVideo: null }), 7000);
+    tracker.onStats(
+      sample([], {
+        outboundVideo: [layer({ bytesSent: 1_000_000, cpuLimitedSec: 10 })],
+      }),
+      12_000,
+    );
+    state("disconnected", 13_000);
+
+    expect(named("call_summary")[0].props).toMatchObject({
+      outbound_video_ms: 10_000,
+      outbound_video_kbps: 800,
+      outbound_cpu_limited_pct: 100,
+    });
+  });
+
+  it("drops a sample gap too long to measure instead of inflating rates", () => {
+    const { tracker, state, named } = setup();
+    state("connecting", 0);
+    state("joined", 1000);
+    tracker.onStats(sample([video()], { outboundVideo: [layer()] }), 2000);
+    tracker.onStats(
+      sample([video({ bytesReceived: 900_000, framesDecoded: 1800 })], {
+        outboundVideo: [layer({ bytesSent: 6_000_000, cpuLimitedSec: 60 })],
+      }),
+      62_000,
+    );
+    tracker.onStats(
+      sample([video({ bytesReceived: 1_000_000, framesDecoded: 1950 })], {
+        outboundVideo: [layer({ bytesSent: 6_500_000, cpuLimitedSec: 60 })],
+      }),
+      67_000,
+    );
+    state("disconnected", 68_000);
+
+    expect(named("call_summary")[0].props).toMatchObject({
+      remote_video_ms: 5000,
+      outbound_video_ms: 5000,
+      outbound_video_kbps: 800,
+      outbound_cpu_limited_pct: 0,
     });
   });
 

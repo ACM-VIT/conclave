@@ -50,6 +50,14 @@ export type CallStatsSample = {
 
 export type JoinMode = "meeting" | "webinar_attendee";
 
+export type ConnectionSnapshot = {
+  state: ConnectionState;
+  error: MeetError | null;
+  joinMode: JoinMode;
+  /** Reconnecting stopped for good: retries ran out or the failure cannot be retried. */
+  reconnectGaveUp: boolean;
+};
+
 export type JoinFailureReason =
   | "rejected"
   | "invite_code"
@@ -145,7 +153,9 @@ type Call = Attempt & {
   firstAudioAt: number | null;
   firstVideoAt: number | null;
   firstMediaReported: boolean;
-  lastSampleAt: number | null;
+  /** When each direction was last read; a failed read leaves it in place. */
+  lastInboundAt: number | null;
+  lastOutboundAt: number | null;
   /** Last counters per stream and layer id; kept for the whole call so one that
    *  drops out of a report and comes back is not counted twice. */
   streams: Map<string, StreamMemory>;
@@ -160,12 +170,7 @@ type Phase =
   | { name: "in_call"; call: Call };
 
 export type CallMetricsTracker = {
-  onConnectionState(
-    state: ConnectionState,
-    error: MeetError | null,
-    joinMode: JoinMode,
-    at: number,
-  ): void;
+  onConnectionState(snapshot: ConnectionSnapshot, at: number): void;
   onParticipants(count: number, at: number): void;
   onStats(sample: CallStatsSample, at: number): void;
   onPageHidden(at: number): void;
@@ -343,26 +348,24 @@ export function createCallMetricsTracker({
     firstAudioAt: null,
     firstVideoAt: null,
     firstMediaReported: false,
-    lastSampleAt: null,
+    lastInboundAt: null,
+    lastOutboundAt: null,
     streams: new Map(),
     outboundLayers: new Map(),
     lastProfile: null,
     totals: emptyTotals(),
   });
 
-  const foldInbound = (call: Call, stream: InboundStreamStats, dt: number, at: number) => {
-    const previous = call.streams.get(stream.id);
+  /** Adds one stream's progress over `dt` to the totals; returns whether it stalled. */
+  const addInbound = (
+    totals: MediaTotals,
+    stream: InboundStreamStats,
+    previous: StreamMemory | undefined,
+    dt: number,
+  ): boolean => {
     const delta = (current: number | null, prior: number | undefined) =>
       current === null ? 0 : counterDelta(current, prior ?? 0);
-    const bytes = delta(stream.bytesReceived, previous?.bytesReceived);
-    const frames = delta(stream.framesDecoded, previous?.framesDecoded);
-    const { totals } = call;
-    let stalled = false;
-
     if (stream.kind === "audio") {
-      if (call.firstAudioAt === null && stream.packetsReceived > 0) {
-        call.firstAudioAt = at;
-      }
       totals.concealedSamples += delta(
         stream.concealedSamples,
         previous?.concealedSamples,
@@ -371,22 +374,42 @@ export function createCallMetricsTracker({
         stream.totalSamplesReceived,
         previous?.totalSamplesReceived,
       );
-    } else {
-      if (call.firstVideoAt === null && stream.framesDecoded > 0) {
-        call.firstVideoAt = at;
-      }
-      // Credits whole sample intervals: a consumer swapped out between two
-      // samples leaves no stats, so its replacement covers the interval.
-      if (bytes > 0 || frames > 0) totals.remoteVideoMs += dt;
-      totals.freezeCount += delta(stream.freezeCount, previous?.freezeCount);
-      totals.freezeMs +=
-        delta(stream.totalFreezesDurationSec, previous?.freezesSec) * 1000;
-      stalled = dt > 0 && frames === 0 && bytes >= STALL_MIN_BYTE_DELTA;
-      if (stalled) {
-        totals.stallMs += dt;
-        if (!previous?.stalled) totals.stallCount += 1;
-      }
+      return false;
     }
+    const bytes = delta(stream.bytesReceived, previous?.bytesReceived);
+    const frames = delta(stream.framesDecoded, previous?.framesDecoded);
+    // Credits whole sample intervals: a consumer swapped out between two
+    // samples leaves no stats, so its replacement covers the interval.
+    if (bytes > 0 || frames > 0) totals.remoteVideoMs += dt;
+    totals.freezeCount += delta(stream.freezeCount, previous?.freezeCount);
+    totals.freezeMs +=
+      delta(stream.totalFreezesDurationSec, previous?.freezesSec) * 1000;
+    const stalled = dt > 0 && frames === 0 && bytes >= STALL_MIN_BYTE_DELTA;
+    if (stalled) {
+      totals.stallMs += dt;
+      if (!previous?.stalled) totals.stallCount += 1;
+    }
+    return stalled;
+  };
+
+  /** `dt` is null for an interval that is not measured: only the baseline moves. */
+  const foldInbound = (
+    call: Call,
+    stream: InboundStreamStats,
+    dt: number | null,
+    at: number,
+  ) => {
+    if (stream.kind === "audio" && call.firstAudioAt === null && stream.packetsReceived > 0) {
+      call.firstAudioAt = at;
+    }
+    if (stream.kind === "video" && call.firstVideoAt === null && stream.framesDecoded > 0) {
+      call.firstVideoAt = at;
+    }
+    const previous = call.streams.get(stream.id);
+    const stalled =
+      dt === null
+        ? (previous?.stalled ?? false)
+        : addInbound(call.totals, stream, previous, dt);
 
     call.streams.set(stream.id, {
       packetsReceived: stream.packetsReceived,
@@ -400,11 +423,15 @@ export function createCallMetricsTracker({
     });
   };
 
-  const foldOutbound = (call: Call, sample: CallStatsSample, dt: number) => {
-    const layers = sample.outboundVideo;
-    if (layers === null) return;
+  const foldOutbound = (
+    call: Call,
+    layers: OutboundLayerStats[],
+    profile: VideoQuality,
+    dt: number | null,
+  ) => {
     const previous = new Map(call.outboundLayers);
     layers.forEach((layer) => call.outboundLayers.set(layer.id, layer));
+    if (dt === null) return;
 
     let sentBytes = 0;
     let height = 0;
@@ -429,11 +456,11 @@ export function createCallMetricsTracker({
     const { totals } = call;
     totals.sendingMs += dt;
     totals.sentBytes += sentBytes;
-    totals.profileMs[sample.outboundProfile] += dt;
-    if (call.lastProfile !== null && call.lastProfile !== sample.outboundProfile) {
+    totals.profileMs[profile] += dt;
+    if (call.lastProfile !== null && call.lastProfile !== profile) {
       totals.profileSwitches += 1;
     }
-    call.lastProfile = sample.outboundProfile;
+    call.lastProfile = profile;
     if (height > 0) {
       totals.heightMs.set(height, (totals.heightMs.get(height) ?? 0) + dt);
     }
@@ -441,8 +468,21 @@ export function createCallMetricsTracker({
     totals.bandwidthLimitedMs += bandwidthSec * 1000;
   };
 
+  /**
+   * The time since a direction's last read, or null when that interval cannot
+   * be measured: a call stuck in error ended where it got stuck unless it
+   * recovers, and a gap this long (a throttled tab, failed reads) cannot say
+   * when its bytes and freezes happened.
+   */
+  const measuredInterval = (call: Call, since: number | null, at: number) => {
+    if (call.stuckSince !== null) return null;
+    if (since === null) return 0;
+    const dt = at - since;
+    return dt > MAX_SAMPLE_GAP_MS ? null : dt;
+  };
+
   return {
-    onConnectionState(state, error, joinMode, at) {
+    onConnectionState({ state, error, joinMode, reconnectGaveUp }, at) {
       if (phase.name === "idle") {
         if (!JOINING_STATES.has(state)) return;
         phase = {
@@ -497,6 +537,8 @@ export function createCallMetricsTracker({
           at,
           false,
         );
+      } else if (state === "error" && reconnectGaveUp) {
+        endCall(call, "reconnect_failed", at, false);
       } else {
         call.reconnectingSince ??= at;
         // An error between reconnect attempts clears on the next attempt; one
@@ -516,14 +558,16 @@ export function createCallMetricsTracker({
     onStats(sample, at) {
       if (phase.name !== "in_call") return;
       const { call } = phase;
-      const dt =
-        call.lastSampleAt === null
-          ? 0
-          : Math.min(at - call.lastSampleAt, MAX_SAMPLE_GAP_MS);
-      call.lastSampleAt = at;
-
-      sample.inbound?.forEach((stream) => foldInbound(call, stream, dt, at));
-      foldOutbound(call, sample, dt);
+      if (sample.inbound) {
+        const dt = measuredInterval(call, call.lastInboundAt, at);
+        call.lastInboundAt = at;
+        sample.inbound.forEach((stream) => foldInbound(call, stream, dt, at));
+      }
+      if (sample.outboundVideo) {
+        const dt = measuredInterval(call, call.lastOutboundAt, at);
+        call.lastOutboundAt = at;
+        foldOutbound(call, sample.outboundVideo, sample.outboundProfile, dt);
+      }
       reportFirstMedia(call, at);
     },
 

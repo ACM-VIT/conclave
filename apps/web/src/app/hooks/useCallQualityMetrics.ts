@@ -10,6 +10,7 @@ import { telemetry } from "../lib/telemetry";
 import type {
   ConnectionState,
   MeetError,
+  ReconnectRecoveryStatus,
   Transport,
   VideoQuality,
 } from "../lib/types";
@@ -34,6 +35,7 @@ const readReport = async (transport: Transport | null) => {
 export function useCallQualityMetrics({
   connectionState,
   meetError,
+  reconnectRecoveryStatus,
   participantCount,
   joinMode,
   consumerTransportRef,
@@ -42,6 +44,7 @@ export function useCallQualityMetrics({
 }: {
   connectionState: ConnectionState;
   meetError: MeetError | null;
+  reconnectRecoveryStatus: ReconnectRecoveryStatus | null;
   participantCount: number;
   joinMode: JoinMode;
   consumerTransportRef: MutableRefObject<Transport | null>;
@@ -56,14 +59,13 @@ export function useCallQualityMetrics({
     }),
   );
 
+  const reconnectGaveUp = reconnectRecoveryStatus?.phase === "failed";
   useEffect(() => {
     tracker.onConnectionState(
-      connectionState,
-      meetError,
-      joinMode,
+      { state: connectionState, error: meetError, joinMode, reconnectGaveUp },
       performance.now(),
     );
-  }, [tracker, connectionState, meetError, joinMode]);
+  }, [tracker, connectionState, meetError, joinMode, reconnectGaveUp]);
 
   useEffect(() => {
     tracker.onParticipants(participantCount, performance.now());

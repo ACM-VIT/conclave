@@ -2817,6 +2817,7 @@ export default function MeetsClient({
   useCallQualityMetrics({
     connectionState,
     meetError,
+    reconnectRecoveryStatus,
     participantCount,
     joinMode: isWebinarAttendee ? "webinar_attendee" : "meeting",
     consumerTransportRef: refs.consumerTransportRef,
