@@ -115,15 +115,19 @@ Server behavior:
 Client payload:
 
 ```ts
-{ locked: boolean }
+{ locked: boolean; expectedRevision?: number }
 ```
 
 Server behavior:
 
 1. reject non-admins
-2. update `locked`
-3. broadcast `apps:state`
-4. ack `{ success: true, locked }`
+2. succeed without change when `locked` already matches
+3. reject a stale `expectedRevision`
+4. update `locked`
+5. broadcast `apps:state`
+6. ack `{ success: true, locked }`
+
+Present, close, discard and lock share one rate limit per socket.
 
 ## Sync Flow
 

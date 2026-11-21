@@ -135,7 +135,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     return state;
   };
 
-  // Shared by present, close and discard: rate limit, permission and
+  // Shared by present, close, discard and lock: rate limit, permission and
   // revision checks, then the room command, the presence removal and the
   // state broadcast.
   const runStageCommand = (
@@ -241,25 +241,22 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
   socket.on(
     "apps:lock",
     (data: AppsLockData, callback: (response: AppsLockResponse) => void) => {
-      if (!context.currentRoom || !context.currentClient) {
-        respond(callback, { success: false, error: "Not in a room" });
-        return;
-      }
-
-      if (!canControlStage(context)) {
-        respond(callback, { success: false, error: "Only admins can lock apps" });
-        return;
-      }
-
-      if (typeof data?.locked !== "boolean") {
+      const locked = data?.locked;
+      if (typeof locked !== "boolean") {
         respond(callback, { success: false, error: "Invalid app lock state" });
         return;
       }
-
-      const state = context.currentRoom.apps.setLocked(data.locked)
-        ? emitAppsState()
-        : getRoomAppsState(context);
-      respond(callback, { success: true, locked: state.locked });
+      const outcome = runStageCommand(
+        data.expectedRevision,
+        "Only admins can lock apps",
+        (revision) => context.currentRoom!.apps.setLocked(locked, revision),
+      );
+      respond(
+        callback,
+        outcome.success
+          ? { success: true, locked: outcome.state.locked }
+          : outcome,
+      );
     }
   );
 

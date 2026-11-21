@@ -78,7 +78,8 @@ const makeRoom = () => {
         ask<{ success: boolean; error?: string }>("apps:close", { expectedRevision }),
       discard: (appId: string, expectedRevision?: number) =>
         ask<{ success: boolean; error?: string }>("apps:discard", { appId, expectedRevision }),
-      lock: (locked: boolean) => ask<{ success: boolean }>("apps:lock", { locked }),
+      lock: (locked: boolean, expectedRevision?: number) =>
+        ask<{ success: boolean; error?: string }>("apps:lock", { locked, expectedRevision }),
       state: () => ask<AppsState>("apps:getState"),
       draw: (appId: string, key: string) => {
         const before = Y.encodeStateVector(doc);
@@ -259,6 +260,30 @@ describe("stage revision", () => {
 
     expect(new Set(revisions).size).toBe(revisions.length);
     expect([...revisions].sort((a, b) => a - b)).toEqual(revisions);
+  });
+
+  it("rejects a lock made against an older stage", () => {
+    const { join } = makeRoom();
+    const first = join("host#1", "host");
+    const second = join("host#2", "host");
+    first.present("whiteboard");
+    const seen = first.state().revision;
+
+    second.present("watch", seen);
+
+    expect(first.lock(true, seen)).toMatchObject({ success: false });
+    expect(first.state()).toMatchObject({ activeAppId: "watch", locked: false });
+  });
+
+  it("limits how fast one host can change the stage", () => {
+    const { join } = makeRoom();
+    const host = join("host#1", "host");
+    host.present("whiteboard");
+    const outcomes = Array.from({ length: 12 }, (_, index) => host.lock(index % 2 === 0).success);
+
+    expect(outcomes.slice(0, 9).every(Boolean)).toBe(true);
+    expect(outcomes.at(-1)).toBe(false);
+    expect(host.present("watch")).toEqual({ success: false, error: "Too many app changes" });
   });
 
   it("starts a newly presented app unlocked", () => {

@@ -1167,6 +1167,7 @@ export interface AppsDiscardResponse {
 
 export interface AppsLockData {
   locked: boolean;
+  expectedRevision?: number;
 }
 
 export interface AppsLockResponse {

@@ -175,11 +175,16 @@ export class RoomApps {
     return { ok: true, changed: true, awarenessRemoval };
   }
 
-  setLocked(locked: boolean): boolean {
-    if (this.stage.locked === locked) return false;
+  setLocked(locked: boolean, expectedRevision?: number): StageCommandResult {
+    if (this.stage.locked === locked) {
+      return { ok: true, changed: false, awarenessRemoval: null };
+    }
+    if (expectedRevision !== undefined && expectedRevision !== this.revision) {
+      return { ok: false, reason: "stale" };
+    }
     this.stage = { ...this.stage, locked };
     this.revision += 1;
-    return true;
+    return { ok: true, changed: true, awarenessRemoval: null };
   }
 
   /**
