@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createProducerSlotOrder } from "../lib/producer-slot-order";
 import { toError } from "../lib/utils";
 import type { Socket } from "socket.io-client";
 import type { Device } from "mediasoup-client";
@@ -1153,13 +1154,7 @@ export function useMeetSocket({
   audioOnlyModeRef.current = audioOnlyMode;
   const pendingScreenProducerCloseIdsRef = useRef<Set<string>>(new Set());
   const screenShareRepublishPromiseRef = useRef<Promise<boolean> | null>(null);
-  const producerAnnounceOrderRef = useRef<{
-    slotById: Map<string, string>;
-    latestBySlot: Map<string, string>;
-  }>({
-    slotById: new Map(),
-    latestBySlot: new Map(),
-  });
+  const [producerSlotOrder] = useState(createProducerSlotOrder);
   const consumeProducerRef = useRef<
     (producerInfo: ProducerInfo, options?: ConsumeProducerOptions) => Promise<void>
   >(async () => {});
@@ -1413,46 +1408,17 @@ export function useMeetSocket({
     [userId],
   );
 
-  const getProducerSlotKey = (
-    info: Pick<ProducerInfo, "producerUserId" | "kind" | "type">,
-  ): string => `${info.producerUserId}:${info.kind}:${info.type}`;
+  const isSupersededProducer = producerSlotOrder.isSuperseded;
 
-  const noteAnnouncedProducer = useCallback((info: ProducerInfo) => {
-    const state = producerAnnounceOrderRef.current;
-    if (state.slotById.has(info.producerId)) return;
-    const slotKey = getProducerSlotKey(info);
-    state.slotById.set(info.producerId, slotKey);
-    state.latestBySlot.set(slotKey, info.producerId);
-  }, []);
-
-  const isSupersededProducer = useCallback(
-    (info: Pick<
-      ProducerInfo,
-      "producerId" | "producerUserId" | "kind" | "type"
-    >): boolean => {
-      const state = producerAnnounceOrderRef.current;
-      const slotKey =
-        state.slotById.get(info.producerId) ?? getProducerSlotKey(info);
-      const latest = state.latestBySlot.get(slotKey);
-      return latest !== undefined && latest !== info.producerId;
+  const noteRemoteProducerList = useCallback(
+    (producers: readonly ProducerInfo[], requestedAt: number) => {
+      producerSlotOrder.noteServerList(
+        producers.filter((producer) => producer.producerUserId !== userId),
+        requestedAt,
+      );
     },
-    [],
+    [producerSlotOrder, userId],
   );
-
-  const forgetAnnouncedProducer = useCallback((producerId: string) => {
-    const state = producerAnnounceOrderRef.current;
-    const slotKey = state.slotById.get(producerId);
-    state.slotById.delete(producerId);
-    if (slotKey && state.latestBySlot.get(slotKey) === producerId) {
-      state.latestBySlot.delete(slotKey);
-    }
-  }, []);
-
-  const resetAnnouncedProducers = useCallback(() => {
-    const state = producerAnnounceOrderRef.current;
-    state.slotById.clear();
-    state.latestBySlot.clear();
-  }, []);
 
   useEffect(() => {
     isMutedRef.current = isMuted;
@@ -1836,7 +1802,7 @@ export function useMeetSocket({
         }
       }
       consumerResumeRetryStateRef.current.clear();
-      resetAnnouncedProducers();
+      producerSlotOrder.reset();
       if (!preserveMeetingState) {
         const statusTimeouts =
           participantConnectionStatusTimeoutsRef.current.values();
@@ -2978,7 +2944,7 @@ export function useMeetSocket({
         webcamStartupLatencyResetQueueRef.current.filter(
           (queuedProducerId) => queuedProducerId !== producerId,
         );
-      forgetAnnouncedProducer(producerId);
+      producerSlotOrder.forget(producerId);
       mutedConsumerSinceRef.current.delete(producerId);
       producerPausedStateRef.current.delete(producerId);
       suppressedVideoProducersRef.current.delete(producerId);
@@ -3156,7 +3122,7 @@ export function useMeetSocket({
       consumerTelemetryRef,
       clearConsumerResumeRetry,
       clearStaleConsumerRecoveryTimeout,
-      forgetAnnouncedProducer,
+      producerSlotOrder,
       mutedConsumerSinceRef,
       producerPausedStateRef,
       consumerRecoveryInFlightRef,
@@ -6055,6 +6021,7 @@ export function useMeetSocket({
     if (!currentRoomIdRef.current) return;
 
     try {
+      const listRequestedAt = producerSlotOrder.markListRequested();
       const producers = await new Promise<ProducerInfo[]>((resolve, reject) => {
         socket.emit(
           "getProducers",
@@ -6062,7 +6029,9 @@ export function useMeetSocket({
             if ("error" in response) {
               reject(new Error(response.error));
             } else {
-              resolve(response.producers || []);
+              const listedProducers = response.producers || [];
+              noteRemoteProducerList(listedProducers, listRequestedAt);
+              resolve(listedProducers);
             }
           },
         );
@@ -6101,9 +6070,6 @@ export function useMeetSocket({
             dropDepartedProducer(producerInfo);
             continue;
           }
-        }
-        if (producerInfo.producerUserId !== userId) {
-          noteAnnouncedProducer(producerInfo);
         }
         setProducerPausedState(
           producerInfo.producerId,
@@ -6240,7 +6206,8 @@ export function useMeetSocket({
     dropDepartedProducer,
     handleProducerClosed,
     joinMode,
-    noteAnnouncedProducer,
+    noteRemoteProducerList,
+    producerSlotOrder,
     restoreWebinarFeedParticipant,
     resumeConsumerReliably,
     setProducerPausedState,
@@ -6606,6 +6573,7 @@ export function useMeetSocket({
       setWaitingMessage(null);
       setConnectionState("joining");
 
+      const joinRequestedAt = producerSlotOrder.markListRequested();
       return new Promise<"joined" | "waiting">((resolve, reject) => {
         const settleJoinRoom = startSocketAckTimeout(
           "joinRoom",
@@ -6704,6 +6672,12 @@ export function useMeetSocket({
               console.info(
                 "[Meets] Joined room, existing producers:",
                 response.existingProducers,
+              );
+              // The snapshot is ordered against live producer events by when
+              // it arrived, so note it before anything here awaits.
+              noteRemoteProducerList(
+                response.existingProducers,
+                joinRequestedAt,
               );
               currentRoomIdRef.current = targetRoomId;
               serverRoomIdRef.current = response.roomId ?? targetRoomId;
@@ -6851,11 +6825,6 @@ export function useMeetSocket({
                     })
                   : Promise.resolve();
 
-              for (const producer of response.existingProducers) {
-                if (producer.producerUserId !== userId) {
-                  noteAnnouncedProducer(producer);
-                }
-              }
               const snapshotHasScreenShareVideo =
                 response.existingProducers.some(
                   (producer) =>
@@ -7353,7 +7322,7 @@ export function useMeetSocket({
               if (data.producerUserId === userId) {
                 return;
               }
-              noteAnnouncedProducer(data);
+              producerSlotOrder.noteAnnounced(data);
               if (joinMode === "webinar_attendee") {
                 void syncProducers();
                 return;
@@ -7533,6 +7502,7 @@ export function useMeetSocket({
                   }
                 }
 
+                producerSlotOrder.noteClosed(producerId);
                 handleProducerClosed(producerId);
               },
             );
