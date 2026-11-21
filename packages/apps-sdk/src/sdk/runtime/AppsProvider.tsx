@@ -248,15 +248,14 @@ export function AppsProvider({
     initialUpdateSentRef.current.delete(appId);
   }, []);
 
-  // Only the presented app is live. The local copy of an app that leaves the
-  // stage is dropped, and presenting it again resyncs whatever the room kept,
-  // so a document a host cleared never comes back from a client's memory.
+  // Only the presented app is live. Every other local copy is dropped, and
+  // presenting an app again resyncs whatever the room kept, so a document a
+  // host cleared never comes back from a client's memory.
   const applyServerAppsState = useCallback(
     (next: AppsState) => {
-      const previous = serverStateRef.current.activeAppId;
       serverStateRef.current = next;
-      if (previous && previous !== next.activeAppId) {
-        discardLocalApp(previous);
+      for (const appId of Array.from(docsRef.current.keys())) {
+        if (appId !== next.activeAppId) discardLocalApp(appId);
       }
       setState(next);
     },
@@ -544,7 +543,9 @@ export function AppsProvider({
 
   const setLocked = useCallback(
     (locked: boolean) => {
-      const payload: AppsLockPayload = { locked };
+      const { revision } = serverStateRef.current;
+      const payload: AppsLockPayload =
+        revision === null ? { locked } : { locked, expectedRevision: revision };
       return sendStageCommand("apps:lock", payload);
     },
     [sendStageCommand],

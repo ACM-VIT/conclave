@@ -65,7 +65,7 @@ Returns the full runtime context:
 Ack behavior:
 
 - control methods resolve `false` if socket is unavailable or ack times out
-- stage commands send the `revision` the client last saw, and the SFU refuses
+- stage commands (present, close, clear, lock) send the `revision` the client last saw, and the SFU refuses
   them when the stage has changed since
 - `clearApp` resolves `false` on an older SFU, which cannot clear a document
 - current timeout is 8 seconds in provider implementation

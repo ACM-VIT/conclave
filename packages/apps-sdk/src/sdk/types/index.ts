@@ -75,6 +75,7 @@ export type AppsDiscardResponse = {
 
 export type AppsLockPayload = {
   locked: boolean;
+  expectedRevision?: number;
 };
 
 export type AppsLockResponse = {
