@@ -34,10 +34,10 @@ import SystemAudioPlayers from "./SystemAudioPlayers";
 import ParticipantVideo from "./ParticipantVideo";
 import ParticipantAudio from "./ParticipantAudio";
 import WebinarViewerChrome, {
-  WebinarQaPanel,
   WebinarStageInviteDialog,
   WebinarWaitingCard,
 } from "./WebinarViewer";
+import { QaPanel } from "./qa/QaPanel";
 import ToastQueue from "./ToastQueue";
 import TranscriptPanel from "./TranscriptPanel";
 import RoomAiPanel from "./RoomAiPanel";
@@ -2200,7 +2200,7 @@ export default function MeetsMainContent({
       ) : isWebinarAttendee ? (
         <div
           ref={webinarStageRef}
-          className={`relative flex min-h-0 flex-1 flex-col overflow-hidden bg-[#0a0a0b] ${isWebinarQaOpen ? "sm:mr-[380px]" : ""}`}
+          className={`relative flex min-h-0 flex-1 flex-col overflow-hidden bg-[#0a0a0b] ${isWebinarQaOpen ? "sm:mr-[360px]" : ""}`}
         >
           <div
             className="pointer-events-none h-0 w-0 overflow-hidden"
@@ -2284,7 +2284,8 @@ export default function MeetsMainContent({
           />
 
           {isWebinarQaOpen && isWebinarQaEnabled ? (
-            <WebinarQaPanel
+            <QaPanel
+              audience="webinar"
               entries={webinarQaEntries}
               qaEnabled={isWebinarQaEnabled}
               currentUserId={currentUserId}

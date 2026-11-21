@@ -27,6 +27,7 @@ import type {
   WebinarQaModerateRequest,
 } from "../lib/types";
 import { formatDisplayName, isSystemUserId } from "../lib/utils";
+import { QaModerationActions } from "./qa/QaPanel";
 
 interface ParticipantsPanelProps {
   participants: Map<string, Participant>;
@@ -587,13 +588,12 @@ function ParticipantsPanel({
               {openWebinarQuestions.length === 0 ? (
                 <p className="text-[12px] leading-snug text-[#71717a]">
                   Attendee questions land here for you to answer live or
-                  dismiss.
+                  hide.
                 </p>
               ) : (
                 <div className="max-h-56 space-y-1.5 overflow-y-auto">
                   {openWebinarQuestions.map((entry) => {
                     const isAnswering = entry.status === "answering";
-                    const isAnswered = entry.status === "answered";
                     return (
                       <div
                         key={entry.id}
@@ -616,62 +616,19 @@ function ParticipantsPanel({
                           {entry.question}
                         </p>
                         {onModerateWebinarQuestion && (
-                          <div className="mt-2 flex flex-wrap gap-1.5">
-                            {!isAnswering && !isAnswered && (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  void runWebinarAction(
-                                    `qa-${entry.id}`,
-                                    () =>
-                                      onModerateWebinarQuestion({
-                                        id: entry.id,
-                                        action: "answering",
-                                      }),
-                                  )
-                                }
-                                disabled={busyWebinarActionKey === `qa-${entry.id}`}
-                                className={hostActionClass}
-                              >
-                                Answer live
-                              </button>
-                            )}
-                            {!isAnswered && (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  void runWebinarAction(
-                                    `qa-${entry.id}`,
-                                    () =>
-                                      onModerateWebinarQuestion({
-                                        id: entry.id,
-                                        action: "answered",
-                                      }),
-                                  )
-                                }
-                                disabled={busyWebinarActionKey === `qa-${entry.id}`}
-                                className={neutralActionClass}
-                              >
-                                {isAnswering ? "Done" : "Mark answered"}
-                              </button>
-                            )}
-                            <button
-                              type="button"
-                              onClick={() =>
-                                void runWebinarAction(
-                                  `qa-${entry.id}`,
-                                  () =>
-                                    onModerateWebinarQuestion({
-                                      id: entry.id,
-                                      action: "dismissed",
-                                    }),
+                          <div className="mt-2">
+                            <QaModerationActions
+                              status={entry.status}
+                              disabled={busyWebinarActionKey === `qa-${entry.id}`}
+                              onAction={(action) =>
+                                void runWebinarAction(`qa-${entry.id}`, () =>
+                                  onModerateWebinarQuestion({
+                                    id: entry.id,
+                                    action,
+                                  }),
                                 )
                               }
-                              disabled={busyWebinarActionKey === `qa-${entry.id}`}
-                              className={neutralActionClass}
-                            >
-                              Dismiss
-                            </button>
+                            />
                           </div>
                         )}
                       </div>
