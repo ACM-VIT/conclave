@@ -251,7 +251,7 @@ const toRoomSummary = (
   locked: room.isLocked,
   screenShare: Boolean(room.screenShareProducerId),
   quality: room.currentQuality,
-  activeAppId: room.appsState.activeAppId,
+  activeAppId: room.apps.state.activeAppId,
   activeGame:
     room.gameSession && !room.gameSession.isFinished()
       ? room.gameSession.gameId

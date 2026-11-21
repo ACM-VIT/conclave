@@ -29,7 +29,7 @@ describe("app document size", () => {
     state.rooms.set(room.channelId, room);
     const admin = new Admin({ id: "a#1", socket });
     room.addClient(admin);
-    room.appsState.activeAppId = "board";
+    room.apps.state.activeAppId = "board";
     const context = createConnectionContext({ to: () => ({ emit: vi.fn() }) } as unknown as SocketIOServer, socket, state);
     context.currentRoom = room;
     context.currentClient = admin;
@@ -45,7 +45,7 @@ describe("app document size", () => {
       listeners.get("apps:yjs:update")!({ appId: "board", update });
     }
 
-    const serverDoc = room.getOrCreateAppDoc("board");
+    const serverDoc = room.apps.getOrCreateDoc("board");
     expect(Y.encodeStateAsUpdate(serverDoc).length).toBeLessThanOrEqual(1024 * 1024);
     expect(serverDoc.getText("t").length).toBeGreaterThan(0);
   });
@@ -69,7 +69,7 @@ describe("app document size with deletions", () => {
     state.rooms.set(room.channelId, room);
     const admin = new Admin({ id: "a#2", socket });
     room.addClient(admin);
-    room.appsState.activeAppId = "board";
+    room.apps.state.activeAppId = "board";
     const context = createConnectionContext({ to: () => ({ emit: vi.fn() }) } as unknown as SocketIOServer, socket, state);
     context.currentRoom = room;
     context.currentClient = admin;
@@ -91,7 +91,7 @@ describe("app document size with deletions", () => {
       send(Y.encodeStateAsUpdate(attacker, before));
     }
 
-    const serverDoc = room.getOrCreateAppDoc("board");
+    const serverDoc = room.apps.getOrCreateDoc("board");
     expect(Y.encodeStateAsUpdate(serverDoc).length).toBeLessThanOrEqual(1024 * 1024);
   }, 60_000);
 });

@@ -69,7 +69,7 @@ export const registerDisconnectHandlers = (
 
         const wasAdmin = activeClient instanceof Admin && !activeClient.isObserver;
         const isWebinarAttendee = activeClient.isWebinarAttendee;
-        const awarenessRemovals = activeRoom.clearUserAwareness(userId);
+        const awarenessRemovals = activeRoom.apps.clearUserAwareness(userId);
 
         for (const removal of awarenessRemovals) {
           io.to(roomChannelId).emit("apps:awareness", {

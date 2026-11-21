@@ -151,8 +151,8 @@ const getRoomAppsState = (context: ConnectionContext): AppsState => {
     return { activeAppId: null, locked: false };
   }
   return {
-    activeAppId: context.currentRoom.appsState.activeAppId,
-    locked: context.currentRoom.appsState.locked,
+    activeAppId: context.currentRoom.apps.state.activeAppId,
+    locked: context.currentRoom.apps.state.locked,
     roomId: context.currentRoom.id,
   };
 };
@@ -183,18 +183,18 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
         return;
       }
 
-      const previousAppId = context.currentRoom.appsState.activeAppId;
+      const previousAppId = context.currentRoom.apps.state.activeAppId;
       if (previousAppId && previousAppId !== appId) {
         emitAppAwarenessRemoval(
           context,
           previousAppId,
-          context.currentRoom.clearAppState(previousAppId),
+          context.currentRoom.apps.clearAppState(previousAppId),
         );
       }
 
-      context.currentRoom.appsState.activeAppId = appId;
-      context.currentRoom.getOrCreateAppDoc(appId);
-      context.currentRoom.getOrCreateAppAwareness(appId);
+      context.currentRoom.apps.state.activeAppId = appId;
+      context.currentRoom.apps.getOrCreateDoc(appId);
+      context.currentRoom.apps.getOrCreateAwareness(appId);
 
       const state = getRoomAppsState(context);
       io.to(context.currentRoom.channelId).emit("apps:state", state);
@@ -213,17 +213,17 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       return;
     }
 
-    const activeAppId = context.currentRoom.appsState.activeAppId;
+    const activeAppId = context.currentRoom.apps.state.activeAppId;
     if (activeAppId) {
       emitAppAwarenessRemoval(
         context,
         activeAppId,
-        context.currentRoom.clearAppState(activeAppId),
+        context.currentRoom.apps.clearAppState(activeAppId),
       );
     }
 
-    context.currentRoom.appsState.activeAppId = null;
-    context.currentRoom.appsState.locked = false;
+    context.currentRoom.apps.state.activeAppId = null;
+    context.currentRoom.apps.state.locked = false;
     const state = getRoomAppsState(context);
     io.to(context.currentRoom.channelId).emit("apps:state", state);
     respond(callback, { success: true });
@@ -247,7 +247,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
         return;
       }
 
-      context.currentRoom.appsState.locked = data.locked;
+      context.currentRoom.apps.state.locked = data.locked;
       const state = getRoomAppsState(context);
       io.to(context.currentRoom.channelId).emit("apps:state", state);
       respond(callback, { success: true, locked: state.locked });
@@ -272,12 +272,12 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
         return;
       }
 
-      if (context.currentRoom.appsState.activeAppId !== appId) {
+      if (context.currentRoom.apps.state.activeAppId !== appId) {
         respond(callback, { error: "App not active" });
         return;
       }
 
-      const doc = context.currentRoom.getOrCreateAppDoc(appId);
+      const doc = context.currentRoom.apps.getOrCreateDoc(appId);
       const stateVector = toUint8Array(data.syncMessage);
       if (!stateVector) {
         respond(callback, { error: "Invalid sync payload" });
@@ -294,7 +294,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
         return;
       }
       const awarenessSnapshot =
-        context.currentRoom.encodeAppAwarenessSnapshot(appId) ?? undefined;
+        context.currentRoom.apps.encodeAwarenessSnapshot(appId) ?? undefined;
       const awarenessUpdate =
         awarenessSnapshot && awarenessSnapshot.length <= MAX_APPS_AWARENESS_BYTES
           ? awarenessSnapshot
@@ -314,16 +314,16 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
 
     const appId = normalizeAppId(data?.appId);
     if (!appId) return;
-    if (context.currentRoom.appsState.activeAppId !== appId) return;
+    if (context.currentRoom.apps.state.activeAppId !== appId) return;
 
     if (
-      context.currentRoom.appsState.locked &&
+      context.currentRoom.apps.state.locked &&
       (!(context.currentClient instanceof Admin) || context.currentClient.isObserver)
     ) {
       return;
     }
 
-    const doc = context.currentRoom.getOrCreateAppDoc(appId);
+    const doc = context.currentRoom.apps.getOrCreateDoc(appId);
     const update = toUint8Array(data.update);
     if (!update || update.length === 0) return;
     if (update.length > MAX_APPS_UPDATE_BYTES) return;
@@ -353,7 +353,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
 
     const appId = normalizeAppId(data?.appId);
     if (!appId) return;
-    if (context.currentRoom.appsState.activeAppId !== appId) return;
+    if (context.currentRoom.apps.state.activeAppId !== appId) return;
     const awarenessUpdate = toUint8Array(data.awarenessUpdate);
     if (!awarenessUpdate || awarenessUpdate.length === 0) return;
     if (awarenessUpdate.length > MAX_APPS_AWARENESS_BYTES) return;
@@ -363,7 +363,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
         : undefined;
 
     try {
-      context.currentRoom.applyAppAwarenessUpdate(
+      context.currentRoom.apps.applyAwarenessUpdate(
         appId,
         awarenessUpdate,
         context.currentClient.id,

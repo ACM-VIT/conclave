@@ -339,8 +339,8 @@ export const toRoomSnapshot = (room: Room): RoomSnapshot => {
     screenShareProducerId: room.screenShareProducerId,
     quality: room.currentQuality,
     appsState: {
-      activeAppId: room.appsState.activeAppId,
-      locked: room.appsState.locked,
+      activeAppId: room.apps.state.activeAppId,
+      locked: room.apps.state.locked,
     },
     policies: {
       locked: room.isLocked,
@@ -964,7 +964,7 @@ export const forceRemoveClientNow = (options: {
   room.clearPendingDisconnect(userId);
 
   // Clear awareness before removing the client so peers stop seeing its cursor.
-  const awarenessRemovals = room.clearUserAwareness(userId);
+  const awarenessRemovals = room.apps.clearUserAwareness(userId);
   for (const removal of awarenessRemovals) {
     io.to(roomChannelId).emit("apps:awareness", {
       appId: removal.appId,

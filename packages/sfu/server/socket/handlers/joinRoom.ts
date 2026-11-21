@@ -489,7 +489,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           const client = room.getClient(targetUserId);
           if (!client) return;
 
-          const awarenessRemovals = room.clearUserAwareness(targetUserId);
+          const awarenessRemovals = room.apps.clearUserAwareness(targetUserId);
           for (const removal of awarenessRemovals) {
             io.to(roomChannelId).emit("apps:awareness", {
               appId: removal.appId,
@@ -765,7 +765,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           );
 
           const awarenessRemovals =
-            previousRoom.clearUserAwareness(previousClientId);
+            previousRoom.apps.clearUserAwareness(previousClientId);
           for (const removal of awarenessRemovals) {
             socket.to(previousChannelId).emit("apps:awareness", {
               appId: removal.appId,
@@ -968,8 +968,8 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         });
 
         socket.emit("apps:state", {
-          activeAppId: context.currentRoom.appsState.activeAppId,
-          locked: context.currentRoom.appsState.locked,
+          activeAppId: context.currentRoom.apps.state.activeAppId,
+          locked: context.currentRoom.apps.state.locked,
           roomId: context.currentRoom.id,
         });
         emitGameSnapshot(socket, context.currentRoom, context.currentClient.id);
