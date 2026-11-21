@@ -9,6 +9,20 @@ export type GuestSession = {
   grant?: string;
 };
 
+export const GUEST_GRANT_TTL_SECONDS = 24 * 60 * 60;
+
+/**
+ * Whether a page that has held `guest` for `heldMs` should take the guest of
+ * a new render before it joins. Only a grant goes stale: a guest with a pass
+ * cookie proves itself for as long as the cookie lasts. Half the grant's life
+ * leaves room for a browser clock that runs behind the server's.
+ */
+export const isGuestGrantStale = (
+  guest: GuestSession | undefined,
+  heldMs: number,
+): boolean =>
+  Boolean(guest?.grant) && heldMs > (GUEST_GRANT_TTL_SECONDS * 1000) / 2;
+
 const GUEST_ID_PREFIX = "gp_";
 const GUEST_ID_PATTERN = /^gp_[A-Za-z0-9_-]{22}$/;
 const GUEST_SESSION_ID_PATTERN = /^[^\u0000-\u001f\u007f#@]{1,128}$/;

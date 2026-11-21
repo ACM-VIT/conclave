@@ -1,13 +1,16 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { ArrowRight, CalendarPlus, Check, Copy } from "lucide-react";
 import { useSession } from "@/lib/auth-client";
-import type { GuestSession } from "@/lib/guest-identity";
+import { isGuestGrantStale, type GuestSession } from "@/lib/guest-identity";
+import RouteLoadingState from "../../components/RouteLoadingState";
 import MeetsClientPage from "../../meets-client-page";
 
 const GUEST_USER_STORAGE_KEY = "conclave:guest-user";
 const MAX_ATTENDEE_NAME_LENGTH = 60;
+const GUEST_REFRESH_RETRY_MS = 10_000;
 
 const readStoredGuestName = (): string | null => {
   if (typeof window === "undefined") return null;
@@ -149,7 +152,12 @@ export default function WebinarLandingClient({
   );
   const [now, setNow] = useState(() => Date.now());
   const [copied, setCopied] = useState(false);
+  const router = useRouter();
   const { data: authSession, isPending: isAuthSessionPending } = useSession();
+  const [heldGuest, setHeldGuest] = useState({ guest, since: now });
+  if (heldGuest.guest !== guest) {
+    setHeldGuest({ guest, since: now });
+  }
   const [storedGuestName, setStoredGuestName] = useState<string | null>(null);
   const [isGuestNameReady, setIsGuestNameReady] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
@@ -211,16 +219,42 @@ export default function WebinarLandingClient({
     return now >= webinar.scheduledStartAt - earlyMs;
   }, [webinar, now]);
 
+  // A first-time visitor's guest grant lasts a day, and this page can wait for
+  // longer than that. Such a visitor joins with the guest of a new render.
+  const awaitsFreshGuest =
+    !isAuthSessionPending &&
+    !authSession?.user &&
+    isGuestGrantStale(guest, now - heldGuest.since);
+  const refreshesGuest = isOpen && !isAttendeeReady && awaitsFreshGuest;
+
+  useEffect(() => {
+    if (!refreshesGuest) return;
+    router.refresh();
+    const retry = window.setInterval(
+      () => router.refresh(),
+      GUEST_REFRESH_RETRY_MS,
+    );
+    return () => window.clearInterval(retry);
+  }, [refreshesGuest, router]);
+
   useEffect(() => {
     if (
       isOpen &&
       isGuestNameReady &&
       !isAuthSessionPending &&
-      (authSession?.user || storedGuestName)
+      (authSession?.user || storedGuestName) &&
+      !awaitsFreshGuest
     ) {
       setIsAttendeeReady(true);
     }
-  }, [authSession?.user, isAuthSessionPending, isGuestNameReady, isOpen, storedGuestName]);
+  }, [
+    authSession?.user,
+    awaitsFreshGuest,
+    isAuthSessionPending,
+    isGuestNameReady,
+    isOpen,
+    storedGuestName,
+  ]);
 
   if (isOpen) {
     if (!isAttendeeReady && (!isGuestNameReady || isAuthSessionPending)) {
@@ -276,6 +310,9 @@ export default function WebinarLandingClient({
           </StatusCard>
         </PageShell>
       );
+    }
+    if (!isAttendeeReady && awaitsFreshGuest) {
+      return <RouteLoadingState title="Opening webinar" />;
     }
     return (
       <MeetsClientPage

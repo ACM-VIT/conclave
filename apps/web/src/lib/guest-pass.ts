@@ -1,6 +1,7 @@
 import { createHmac, randomBytes } from "node:crypto";
 import jwt from "jsonwebtoken";
 import {
+  GUEST_GRANT_TTL_SECONDS,
   buildGuestUserKey,
   isGuestId,
   isGuestSessionId,
@@ -11,7 +12,6 @@ import {
 const PASS_AUDIENCE = "conclave-guest-pass";
 const GRANT_AUDIENCE = "conclave-guest-grant";
 const PASS_TTL_SECONDS = 30 * 24 * 60 * 60;
-const GRANT_TTL_SECONDS = 24 * 60 * 60;
 
 const GUEST_SESSION_EXPIRED =
   "Your guest session has expired. Reload the page to join again.";
@@ -131,7 +131,7 @@ export const resolveGuestSession = (
   const fresh = mintGuestId();
   return {
     id: fresh,
-    grant: sign(sfuSecret, fresh, GRANT_AUDIENCE, GRANT_TTL_SECONDS),
+    grant: sign(sfuSecret, fresh, GRANT_AUDIENCE, GUEST_GRANT_TTL_SECONDS),
   };
 };
 
@@ -229,7 +229,7 @@ export const resolveGuestJoinIdentity = (input: {
               sfuSecret,
               guestId,
               GRANT_AUDIENCE,
-              GRANT_TTL_SECONDS,
+              GUEST_GRANT_TTL_SECONDS,
             ),
           }),
     },
