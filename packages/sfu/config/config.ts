@@ -474,11 +474,6 @@ export const config = {
       BACKGROUND_SOCKET_RECOVERY_WINDOW_MS,
       { min: 0 },
     ),
-    recoveryMaxDisconnectionMs: toNumber(
-      process.env.SFU_SOCKET_RECOVERY_MAX_MS,
-      BACKGROUND_SOCKET_RECOVERY_WINDOW_MS,
-      { min: 0 },
-    ),
     redisUrl: socketRedisUrl,
     redisConnectTimeoutMs: toNumber(
       process.env.SFU_REDIS_CONNECT_TIMEOUT_MS,
