@@ -105,6 +105,21 @@ describe("caption language picker", () => {
     expect(window.localStorage.getItem("conclave:captions-language")).toBe("hi");
   });
 
+  it("resumes someone else's notes in the language they were in", async () => {
+    window.localStorage.setItem("conclave:captions-language", "en");
+    const transcript = controller({ status: "takeover_needed", language: "ta" });
+    await render(transcript);
+
+    expect(select("captions-language-start")?.value).toBe("ta");
+    await act(async () => {
+      container.querySelector("form")?.requestSubmit();
+    });
+
+    expect(transcript.takeover).toHaveBeenCalledWith(
+      expect.objectContaining({ language: "ta" }),
+    );
+  });
+
   it("only offers languages Sarvam can transcribe", async () => {
     window.localStorage.setItem("conclave:captions-language", "es");
     await render(controller({}));

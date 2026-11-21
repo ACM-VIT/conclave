@@ -272,13 +272,18 @@ function StartStage({
   );
   const defaultQaModel = roomAi?.state.features?.questions?.model ?? roomAi?.state.assistantModel ?? transcript.session.qaModel;
   const [qaModel, setQaModel] = useState(defaultQaModel);
-  const [preferredLanguage, setPreferredLanguage] = useState(readCaptionLanguage);
+  const [savedLanguage] = useState(readCaptionLanguage);
+  const [chosenLanguage, setChosenLanguage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
   const needsTakeover = transcript.session.status === "takeover_needed";
   const provider = getTranscriptTranscriptionProvider(transcriptModel);
   const isSarvam = provider === "sarvam";
-  const language = captionLanguageFor(provider, preferredLanguage);
+  const resumedLanguage = needsTakeover ? transcript.session.language : undefined;
+  const language = captionLanguageFor(
+    provider,
+    chosenLanguage ?? resumedLanguage ?? savedLanguage,
+  );
   const assistantProvider = getResponseProvider(qaModel);
   const available = (name: typeof provider | typeof assistantProvider) =>
     transcript.globalProviderKeysAvailable[name] === true ||
@@ -479,7 +484,7 @@ function StartStage({
                 id="captions-language-start"
                 value={language}
                 provider={provider}
-                onChange={setPreferredLanguage}
+                onChange={setChosenLanguage}
                 className="h-10 w-full rounded-lg border border-white/10 bg-[#18181b] px-3 text-[12px] text-[#fafafa] outline-none focus:border-[#4F9CF9]/60"
               />
             </fieldset>
