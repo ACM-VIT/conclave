@@ -136,7 +136,7 @@ describe("caption language picker", () => {
 
   it("lets the controller switch the language of live captions", async () => {
     const transcript = controller(
-      { status: "live", language: "hi" },
+      { status: "live", language: "hi", keySource: "global" },
       { isController: true },
     );
     await render(transcript);
@@ -149,8 +149,22 @@ describe("caption language picker", () => {
     );
   });
 
+  it("hides the live switch when the session runs on a key typed for this session", async () => {
+    await render(
+      controller(
+        { status: "live", language: "hi", keySource: "controller" },
+        { isController: true },
+      ),
+    );
+
+    expect(select("captions-language-live")).toBeNull();
+    expect(container.textContent).toContain("Hindi");
+  });
+
   it("hides the live switch when the worker does not report a language", async () => {
-    await render(controller({ status: "live" }, { isController: true }));
+    await render(
+      controller({ status: "live", keySource: "global" }, { isController: true }),
+    );
 
     expect(select("captions-language-live")).toBeNull();
   });
