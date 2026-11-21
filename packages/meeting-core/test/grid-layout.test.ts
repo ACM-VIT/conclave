@@ -136,6 +136,44 @@ const rowsOf = (r: ReturnType<typeof computeGridLayout>) =>
     return rows;
   }, []);
 
+const rowEdges = (r: ReturnType<typeof computeGridLayout>) =>
+  rowsOf(r).map((row) => {
+    const first = r.positions[row[0]];
+    const last = r.positions[row[row.length - 1]];
+    return { left: first.x, right: last.x + last.width };
+  });
+
+const expectAlignedEdges = (
+  r: ReturnType<typeof computeGridLayout>,
+  rows: number[],
+) => {
+  const edges = rowEdges(r);
+  rows.forEach((row) => {
+    expect(edges[row]).toEqual(edges[rows[0]]);
+  });
+  expect(edges[rows[0]].right - edges[rows[0]].left).toBe(r.contentWidth);
+};
+
+// Rows may widen or narrow a tile by up to 1.25x to line up their edges.
+const expectWithinStretch = (position: { width: number; height: number }, aspect: number) => {
+  const natural = Math.floor(position.height * aspect);
+  expect(position.width).toBeGreaterThanOrEqual(Math.ceil(natural / 1.25));
+  expect(position.width).toBeLessThanOrEqual(Math.floor(natural * 1.25));
+};
+
+const expectEvenGaps = (r: ReturnType<typeof computeGridLayout>) => {
+  rowsOf(r).forEach((row) => {
+    row.slice(1).forEach((index) => {
+      const left = r.positions[index - 1];
+      expect(r.positions[index].x - (left.x + left.width)).toBe(12);
+    });
+  });
+  r.positions.forEach((position) => {
+    expect(Number.isInteger(position.width)).toBe(true);
+    expect(Number.isInteger(position.height)).toBe(true);
+  });
+};
+
 describe("computeGridLayout — mixed tile aspects", () => {
   it("puts a portrait and a landscape tile in one row at one height", () => {
     const r = computeGridLayout(2, 1280, 720, {
@@ -167,7 +205,7 @@ describe("computeGridLayout — mixed tile aspects", () => {
     ).toEqual(computeGridLayout(count, w, h, opts));
   });
 
-  it("moves only the rotated tile's row when a phone turns portrait", () => {
+  it("keeps every tile's row and height when a phone turns portrait", () => {
     const before = computeGridLayout(4, 1920, 1080, {
       tileAspects: [PORTRAIT, LANDSCAPE, LANDSCAPE, LANDSCAPE],
     });
@@ -177,14 +215,9 @@ describe("computeGridLayout — mixed tile aspects", () => {
 
     expect(rowsOf(before)).toEqual([[0, 1], [2, 3]]);
     expect(rowsOf(after)).toEqual([[0, 1], [2, 3]]);
-    expect(after.positions.slice(0, 2)).toEqual(before.positions.slice(0, 2));
+    expect(after.tileHeight).toBe(before.tileHeight);
     expect(after.positions[3].width).toBeLessThan(before.positions[3].width);
-    expect(after.positions[3].height).toBe(before.positions[3].height);
-    // The shorter row re-centres.
-    expect(after.positions[2].x).toBeGreaterThan(before.positions[2].x);
-    const row = after.positions.slice(2);
-    const rowWidth = row[0].width + 12 + row[1].width;
-    expect(row[0].x).toBeCloseTo((1920 - rowWidth) / 2);
+    expectAlignedEdges(after, [0, 1]);
   });
 
   it("never puts more than maxCols tiles in a row", () => {
@@ -217,7 +250,7 @@ describe("computeGridLayout — mixed tile aspects", () => {
     expect(reading.map((position) => position.index)).toEqual([0, 1, 2, 3, 4, 5]);
     r.positions.forEach((position, index) => {
       expect(position.index).toBe(index);
-      expect(position.width).toBe(Math.floor(position.height * aspects[index]));
+      expectWithinStretch(position, aspects[index]);
     });
     rowsOf(r).forEach((row) => {
       row.slice(1).forEach((index) => {
@@ -241,6 +274,66 @@ describe("computeGridLayout — mixed tile aspects", () => {
     expect(
       computeGridLayout(3, 1280, 720, { tileAspects: [Number.NaN, -1] }),
     ).toEqual(computeGridLayout(3, 1280, 720));
+  });
+});
+
+describe("computeGridLayout — mixed rows line up", () => {
+  it("lines up 2 portrait and 3 landscape tiles, growing landscape tiles first", () => {
+    const aspects = [PORTRAIT, LANDSCAPE, PORTRAIT, LANDSCAPE, LANDSCAPE];
+    const r = computeGridLayout(5, 1416, 780, { tileAspects: aspects });
+
+    expect(rowsOf(r)).toEqual([[0, 1, 2], [3, 4]]);
+    expectAlignedEdges(r, [0, 1]);
+    expectEvenGaps(r);
+    expect(new Set(r.positions.map((position) => position.height)).size).toBe(1);
+    // The two-laptop row sets the width and keeps its 16:9 tiles.
+    expect(r.positions[3].width).toBe(Math.floor(r.tileHeight * LANDSCAPE));
+    // Phones widen no further than 4:5, so the laptop takes the rest.
+    const [phone, laptop] = r.positions;
+    expect(phone.width).toBeGreaterThan(Math.floor(phone.height * PORTRAIT));
+    expect(phone.width).toBeLessThanOrEqual(Math.floor(phone.height * 0.8));
+    expect(laptop.width / Math.floor(laptop.height * LANDSCAPE)).toBeGreaterThan(
+      phone.width / Math.floor(phone.height * PORTRAIT),
+    );
+    r.positions.forEach((position, index) => expectWithinStretch(position, aspects[index]));
+  });
+
+  it("lines up 1 portrait and 3 landscape tiles", () => {
+    const aspects = [PORTRAIT, LANDSCAPE, LANDSCAPE, LANDSCAPE];
+    const r = computeGridLayout(4, 1416, 780, { tileAspects: aspects });
+
+    expect(rowsOf(r)).toEqual([[0, 1], [2, 3]]);
+    expectAlignedEdges(r, [0, 1]);
+    expectEvenGaps(r);
+    expect(r.offsetX).toBe((1416 - r.contentWidth) / 2);
+    expect(r.positions[0].width).toBeLessThanOrEqual(Math.floor(r.tileHeight * 0.8));
+    r.positions.forEach((position, index) => expectWithinStretch(position, aspects[index]));
+  });
+
+  it.each([
+    ["a lone last tile", [PORTRAIT, LANDSCAPE, LANDSCAPE], [[0, 1], [2]]],
+    [
+      "two tiles under four",
+      [PORTRAIT, LANDSCAPE, PORTRAIT, LANDSCAPE, LANDSCAPE, LANDSCAPE],
+      [[0, 1, 2, 3], [4, 5]],
+    ],
+  ])("centres %s at its own width when the cap can't stretch it", (_, aspects, rows) => {
+    const r = computeGridLayout(aspects.length, 1416, 780, { tileAspects: aspects });
+
+    expect(rowsOf(r)).toEqual(rows);
+    const lastRow = rows[rows.length - 1];
+    lastRow.forEach((index) => {
+      expect(r.positions[index].width).toBe(Math.floor(r.tileHeight * aspects[index]));
+    });
+    // The full row above keeps its own tiles too.
+    rows[0].forEach((index) => {
+      expect(r.positions[index].width).toBe(Math.floor(r.tileHeight * aspects[index]));
+    });
+    const edges = rowEdges(r);
+    const last = edges[edges.length - 1];
+    expect((last.left + last.right) / 2).toBeCloseTo(1416 / 2);
+    expect(last.right - last.left).toBeLessThan(r.contentWidth);
+    expectEvenGaps(r);
   });
 });
 

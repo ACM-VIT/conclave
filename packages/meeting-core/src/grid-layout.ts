@@ -23,7 +23,8 @@ export interface GridLayoutOptions {
   /**
    * Width / height of each tile on the page, in order. When any tile differs
    * from `targetAspect`, the page packs into justified rows: every tile shares
-   * one height and keeps its own width. Missing or invalid entries count as
+   * one height, and rows widen their tiles up to 1.25x so they line up with the
+   * widest row. Missing or invalid entries count as
    * `targetAspect`.
    */
   tileAspects?: readonly number[];
@@ -153,6 +154,102 @@ const readTileAspects = (
     : null;
 };
 
+const MAX_ROW_STRETCH = 1.25;
+const PORTRAIT_STRETCH_ASPECT = 4 / 5;
+
+const sum = (values: readonly number[]) =>
+  values.reduce((total, value) => total + value, 0);
+
+const rowWidthOf = (widths: readonly number[], gap: number) =>
+  sum(widths) + (widths.length - 1) * gap;
+
+/** Floor each size, then give the pixels left over to the largest remainders. */
+const roundToTotal = (sizes: number[], total: number) => {
+  const floored = sizes.map(Math.floor);
+  sizes
+    .map((size, index) => ({ index, remainder: size - floored[index] }))
+    .sort((a, b) => b.remainder - a.remainder)
+    .slice(0, Math.round(total - sum(floored)))
+    .forEach(({ index }) => {
+      floored[index] += 1;
+    });
+  return floored;
+};
+
+/**
+ * How wide each tile may grow: `hard` is the 1.25x cap, and `soft` holds
+ * portrait tiles at 4:5, since a portrait tile crops a face sooner.
+ */
+const growthCaps = (widths: number[], height: number) => {
+  const hard = widths.map((width) => Math.floor(width * MAX_ROW_STRETCH));
+  const soft = widths.map((width, index) =>
+    width < height
+      ? Math.min(hard[index], Math.max(width, Math.floor(height * PORTRAIT_STRETCH_ASPECT)))
+      : hard[index],
+  );
+  return { soft, hard };
+};
+
+/**
+ * Widen a row's tiles by `extra` px in total, in proportion to their width.
+ * Tiles fill their soft caps first, then their hard caps. Returns null when
+ * the hard caps cannot absorb `extra`.
+ */
+const stretchRow = (widths: number[], height: number, extra: number) => {
+  const { soft: softCaps, hard: hardCaps } = growthCaps(widths, height);
+  if (sum(hardCaps) - sum(widths) < extra) return null;
+
+  const grown = [...widths];
+  let left = extra;
+  for (const caps of [softCaps, hardCaps]) {
+    let open = grown.flatMap((width, index) => (width < caps[index] ? [index] : []));
+    while (left > ASPECT_EPSILON && open.length > 0) {
+      const base = sum(open.map((index) => widths[index]));
+      const step = Math.min(
+        left / base,
+        ...open.map((index) => (caps[index] - grown[index]) / widths[index]),
+      );
+      open.forEach((index) => {
+        grown[index] += widths[index] * step;
+      });
+      left -= base * step;
+      open = open.filter((index) => grown[index] < caps[index] - ASPECT_EPSILON);
+    }
+  }
+  return roundToTotal(grown, sum(widths) + extra);
+};
+
+/**
+ * Resize each row's tiles so the rows share one width and the grid's edges
+ * line up. Rows stretch to the widest row. When a row holding `cols` tiles
+ * cannot stretch that far, every row meets at the width that row reaches with
+ * its portrait tiles held at 4:5, and wider rows narrow by at most 1.25x. A
+ * shorter row the cap cannot stretch, such as a lone last tile, keeps its
+ * width and centres.
+ */
+const alignRows = (rowTiles: number[][], height: number, gap: number, cols: number) => {
+  const natural = rowTiles.map((tiles) => rowWidthOf(tiles, gap));
+  const reach = (tiles: number[]) => rowWidthOf(growthCaps(tiles, height).soft, gap);
+  const narrowest = (tiles: number[]) =>
+    rowWidthOf(tiles.map((width) => Math.ceil(width / MAX_ROW_STRETCH)), gap);
+  const widest = Math.max(...natural);
+  const fullRowReach = Math.min(
+    widest,
+    ...rowTiles.filter((tiles) => tiles.length === cols).map(reach),
+  );
+  const target = Math.max(...rowTiles.map(narrowest)) <= fullRowReach ? fullRowReach : widest;
+
+  return rowTiles.map((tiles, row) => {
+    const extra = target - natural[row];
+    if (extra >= 0) return stretchRow(tiles, height, extra) ?? tiles;
+    const scale = (sum(tiles) + extra) / sum(tiles);
+    return roundToTotal(
+      tiles.map((width) => width * scale),
+      sum(tiles) + extra,
+    );
+  });
+};
+
 /**
  * Pack tiles of differing aspect into rows that share one height, keeping the
  * given order. For each row count, a DP splits the tiles into contiguous rows
@@ -250,19 +347,17 @@ const computeJustifiedRows = ({
   if (!best) return null;
 
   const tileHeight = Math.floor(best.tileHeight);
-  const widths = aspects.map((aspect) => Math.floor(tileHeight * aspect));
-  const rowWidths: number[] = [];
+  const naturalWidths = aspects.map((aspect) => Math.floor(tileHeight * aspect));
   let start = 0;
-  best.rowCounts.forEach((rowCount) => {
-    let rowWidth = (rowCount - 1) * gap;
-    for (let index = start; index < start + rowCount; index += 1) {
-      rowWidth += widths[index];
-    }
-    rowWidths.push(rowWidth);
+  const rowTiles = best.rowCounts.map((rowCount) => {
     start += rowCount;
+    return naturalWidths.slice(start - rowCount, start);
   });
   const rows = best.rowCounts.length;
   const cols = Math.max(...best.rowCounts);
+  const alignedRows = alignRows(rowTiles, tileHeight, gap, cols);
+  const widths = alignedRows.flat();
+  const rowWidths = alignedRows.map((tiles) => rowWidthOf(tiles, gap));
   const contentWidth = Math.max(...rowWidths);
   const contentHeight = rows * tileHeight + (rows - 1) * gap;
   const offsetX = Math.max(0, (width - contentWidth) / 2);
