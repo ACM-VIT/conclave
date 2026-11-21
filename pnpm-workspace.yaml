@@ -6,7 +6,7 @@ nodeLinker: hoisted
 # Keep security fixes available when upstream packages retain older ranges.
 # mediasoup-client and yjs must resolve to one version across the workspace.
 overrides:
-  "@node-minify/core>glob": "13.0.6"
+  "@opennextjs/cloudflare>glob": "^14.0.2"
   "esbuild@>=0.27.3 <0.28.2": "0.28.2"
   "brace-expansion@>=2.0.0 <2.1.7": "2.1.7"
   "socket.io-parser@>=4.0.0 <4.2.7": "4.2.7"

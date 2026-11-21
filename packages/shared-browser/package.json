@@ -17,7 +17,7 @@
         "cors": "^2.8.6",
         "dockerode": "^5.0.1",
         "express": "^5.3.0",
-        "puppeteer-core": "^25.18.0"
+        "puppeteer-core": "^25.18.1"
     },
     "devDependencies": {
         "@types/cors": "^2.8.19",
