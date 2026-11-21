@@ -1117,7 +1117,11 @@ final class MeetingViewModel {
         if let userId = normalizedSfuUserId(user?.id) {
             return userId
         }
-        return "guest-\(sessionId)"
+        return GuestJoinIdentityPolicy.provisionalUserKey(
+            sessionId: sessionId,
+            currentUserKey: state.sfuUserId,
+            currentUserId: state.userId
+        )
     }
 
     func applyLocalJoinIdentity(_ identity: SfuJoinIdentity, isHostHint: Bool) {
