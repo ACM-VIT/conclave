@@ -1145,10 +1145,16 @@ export class Room {
       userId,
     };
 
+    const recipients: string[] = [];
+    let namespace: Socket["nsp"] | undefined;
     for (const client of this.clients.values()) {
       if (client.isWebinarAttendee) continue;
-      client.socket.emit("activeSpeakerChanged", notification);
+      recipients.push(client.socket.id);
+      namespace ??= client.socket.nsp;
     }
+    // Encode once for the local meeting sockets. Webinar attendees have a
+    // separate active-speaker signal and must stay out of this audience.
+    namespace?.local.to(recipients).emit("activeSpeakerChanged", notification);
   }
 
   private setMeetingActiveSpeakerUserId(
