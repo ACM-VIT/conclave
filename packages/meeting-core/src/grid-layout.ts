@@ -20,6 +20,13 @@ export interface GridLayoutOptions {
   maxTilesPerPage?: number;
   /** Target tile aspect ratio = width / height (16:9 = 1.7778 landscape). */
   targetAspect?: number;
+  /**
+   * Width / height of each tile on the page, in order. When any tile differs
+   * from `targetAspect`, the page packs into justified rows: every tile shares
+   * one height and keeps its own width. Missing or invalid entries count as
+   * `targetAspect`.
+   */
+  tileAspects?: readonly number[];
 }
 
 export interface GridTilePosition {
@@ -43,7 +50,10 @@ export interface GridLayoutResult {
   /** Columns and rows for a full page. */
   cols: number;
   rows: number;
-  /** Size of each tile in px (already aspect-constrained to targetAspect). */
+  /**
+   * Size of a `targetAspect` tile in px. With `tileAspects`, tiles share this
+   * height but not this width, so read each tile's size from `positions`.
+   */
   tileWidth: number;
   tileHeight: number;
   /** Tiles in the final (possibly partial) row — render centered. */
@@ -64,7 +74,7 @@ export interface GridLayoutResult {
   positions: GridTilePosition[];
 }
 
-const DEFAULTS: Required<GridLayoutOptions> = {
+const DEFAULTS: Required<Omit<GridLayoutOptions, "tileAspects">> = {
   gap: 12,
   maxCols: 7,
   maxTilesPerPage: 49,
@@ -124,6 +134,173 @@ const buildGridTilePositions = ({
   };
 };
 
+const ASPECT_EPSILON = 1e-6;
+
+const readTileAspects = (
+  tileAspects: readonly number[] | undefined,
+  perPage: number,
+  targetAspect: number,
+): number[] | null => {
+  if (!tileAspects) return null;
+  const aspects = Array.from({ length: perPage }, (_, index) => {
+    const aspect = tileAspects[index];
+    return aspect !== undefined && Number.isFinite(aspect) && aspect > 0
+      ? aspect
+      : targetAspect;
+  });
+  return aspects.some((aspect) => Math.abs(aspect - targetAspect) > ASPECT_EPSILON)
+    ? aspects
+    : null;
+};
+
+/**
+ * Pack tiles of differing aspect into rows that share one height, keeping the
+ * given order. For each row count, a DP splits the tiles into contiguous rows
+ * so the row that runs out of width first allows the tallest tiles. Every
+ * candidate holds the same tiles, so the tallest height is the most video
+ * area. Returns null when no row count fits a tile at all.
+ */
+const computeJustifiedRows = ({
+  aspects,
+  width,
+  height,
+  gap,
+  colCap,
+  targetAspect,
+}: {
+  aspects: number[];
+  width: number;
+  height: number;
+  gap: number;
+  colCap: number;
+  targetAspect: number;
+}) => {
+  const count = aspects.length;
+  const prefix = [0];
+  aspects.forEach((aspect, index) => prefix.push(prefix[index] + aspect));
+  const rowHeightLimit = (start: number, end: number) => {
+    const room = width - (end - start - 1) * gap;
+    return room > 0 ? room / (prefix[end] - prefix[start]) : 0;
+  };
+
+  // limit[rows][end]: the tallest height the first `end` tiles reach in
+  // `rows` rows. split[rows][end]: where the last of those rows starts.
+  const limit = Array.from({ length: count + 1 }, () =>
+    new Array<number>(count + 1).fill(Number.NEGATIVE_INFINITY),
+  );
+  const split = Array.from({ length: count + 1 }, () =>
+    new Array<number>(count + 1).fill(0),
+  );
+  limit[0][0] = Number.POSITIVE_INFINITY;
+  for (let rows = 1; rows <= count; rows += 1) {
+    for (let end = rows; end <= count; end += 1) {
+      for (let start = Math.max(rows - 1, end - colCap); start < end; start += 1) {
+        const candidate = Math.min(limit[rows - 1][start], rowHeightLimit(start, end));
+        // Ties go to the later start, which keeps earlier rows fuller.
+        if (candidate >= limit[rows][end] - ASPECT_EPSILON) {
+          limit[rows][end] = candidate;
+          split[rows][end] = start;
+        }
+      }
+    }
+  }
+
+  const rowCountsFor = (rows: number) => {
+    const counts: number[] = [];
+    let end = count;
+    for (let row = rows; row > 0; row -= 1) {
+      const start = split[row][end];
+      counts.unshift(end - start);
+      end = start;
+    }
+    return counts;
+  };
+
+  const containerAspect = width / height;
+  let best: { rowCounts: number[]; tileHeight: number; aspectDist: number } | null =
+    null;
+  for (let rows = Math.ceil(count / colCap); rows <= count; rows += 1) {
+    const tileHeight = Math.min(
+      (height - (rows - 1) * gap) / rows,
+      limit[rows][count],
+    );
+    if (!(tileHeight > 0)) continue;
+    const rowCounts = rowCountsFor(rows);
+    let start = 0;
+    let boxW = 0;
+    rowCounts.forEach((rowCount) => {
+      const end = start + rowCount;
+      boxW = Math.max(
+        boxW,
+        tileHeight * (prefix[end] - prefix[start]) + (rowCount - 1) * gap,
+      );
+      start = end;
+    });
+    const boxH = rows * tileHeight + (rows - 1) * gap;
+    const aspectDist = Math.abs(boxW / boxH - containerAspect);
+
+    // Same near-tie rule as the uniform packer, then fewer rows.
+    const better =
+      best === null ||
+      tileHeight > best.tileHeight + 0.5 ||
+      (Math.abs(tileHeight - best.tileHeight) <= 0.5 &&
+        aspectDist < best.aspectDist - 0.01);
+    if (better) best = { rowCounts, tileHeight, aspectDist };
+  }
+  if (!best) return null;
+
+  const tileHeight = Math.floor(best.tileHeight);
+  const widths = aspects.map((aspect) => Math.floor(tileHeight * aspect));
+  const rowWidths: number[] = [];
+  let start = 0;
+  best.rowCounts.forEach((rowCount) => {
+    let rowWidth = (rowCount - 1) * gap;
+    for (let index = start; index < start + rowCount; index += 1) {
+      rowWidth += widths[index];
+    }
+    rowWidths.push(rowWidth);
+    start += rowCount;
+  });
+  const rows = best.rowCounts.length;
+  const cols = Math.max(...best.rowCounts);
+  const contentWidth = Math.max(...rowWidths);
+  const contentHeight = rows * tileHeight + (rows - 1) * gap;
+  const offsetX = Math.max(0, (width - contentWidth) / 2);
+  const offsetY = Math.max(0, (height - contentHeight) / 2);
+
+  const positions: GridTilePosition[] = [];
+  let index = 0;
+  best.rowCounts.forEach((rowCount, row) => {
+    let x = offsetX + (contentWidth - rowWidths[row]) / 2;
+    for (let col = 0; col < rowCount; col += 1) {
+      positions.push({
+        index,
+        row,
+        col: col + (cols - rowCount) / 2,
+        x,
+        y: offsetY + row * (tileHeight + gap),
+        width: widths[index],
+        height: tileHeight,
+      });
+      x += widths[index] + gap;
+      index += 1;
+    }
+  });
+
+  return {
+    cols,
+    rows,
+    tileWidth: Math.floor(tileHeight * targetAspect),
+    tileHeight,
+    lastRowCount: best.rowCounts[rows - 1],
+    contentWidth,
+    contentHeight,
+    offsetX,
+    offsetY,
+    positions,
+  };
+};
+
 /**
  * Find the arrangement of `count` aspect-locked tiles that fits the largest
  * tile inside a `width` × `height` container.
@@ -132,7 +309,8 @@ const buildGridTilePositions = ({
  * (i.e. maximise the displayed-video area). For each candidate column count we
  * derive rows = ceil(N/cols), compute the largest tile that fits the cell while
  * respecting `targetAspect`, and keep the candidate whose tile is biggest;
- * ties break toward fewer empty cells (fuller grid).
+ * ties break toward fewer empty cells (fuller grid). With `tileAspects` that
+ * differ from `targetAspect`, tiles pack into justified rows instead.
  */
 export function computeGridLayout(
   count: number,
@@ -174,6 +352,12 @@ export function computeGridLayout(
   }
 
   const colCap = Math.min(perPage, Math.max(1, Math.floor(maxCols)));
+  const aspects = readTileAspects(options.tileAspects, perPage, targetAspect);
+  const justified =
+    aspects &&
+    computeJustifiedRows({ aspects, width, height, gap, colCap, targetAspect });
+  if (justified) return { ...justified, pages, perPage };
+
   const containerAspect = width / height;
 
   let best:

@@ -71,6 +71,7 @@ import {
 } from "../lib/captured-surface-control";
 import { useElementSize } from "../hooks/useElementSize";
 import { computeTileChrome } from "../lib/tile-chrome";
+import { readVideoAspect, resolveTileAspect } from "../lib/tile-video-framing";
 
 interface GridLayoutProps {
   localStream: MediaStream | null;
@@ -133,9 +134,11 @@ const computeGridMaxCols = (isMobile: boolean, usableWidth: number) => {
   );
 };
 
+const GRID_TILE_ASPECT = 16 / 9;
+
 const getGridPackingParams = (isMobile: boolean, usableWidth: number) => ({
   maxCols: computeGridMaxCols(isMobile, usableWidth),
-  targetAspect: 16 / 9,
+  targetAspect: GRID_TILE_ASPECT,
   minTileWidth: AUTO_GRID_MIN_TILE_WIDTH,
   minTileHeight: AUTO_GRID_MIN_TILE_HEIGHT,
 });
@@ -755,8 +758,10 @@ const computeMeetAutoTileLimit = (
   return Math.min(requestedMaxTiles, MEET_VIEW_MIN_TILES);
 };
 
+// A change to `signature` (tile order and shapes) animates the tiles. A change
+// to `layoutSignature` alone, such as a window resize, snaps them.
 function useFlip(
-  flipKeys: string[],
+  signature: string,
   layoutSignature: string,
   enabled: boolean,
   reflowNonce: number,
@@ -767,7 +772,6 @@ function useFlip(
   const prevReflowNonce = useRef(reflowNonce);
   const pendingReflowFirst = useRef<Map<string, DOMRect> | null>(null);
   const frameIds = useRef<number[]>([]);
-  const signature = flipKeys.join("~");
 
   const register = useCallback((key: string, node: HTMLElement | null) => {
     if (node) nodeMap.current.set(key, node);
@@ -920,6 +924,27 @@ function GridLayout({
   const [fullVideoTileIds, setFullVideoTileIds] = useState<Set<string>>(
     () => new Set(),
   );
+  const [videoAspectById, setVideoAspectById] = useState<
+    ReadonlyMap<string, number>
+  >(() => new Map());
+  const videoAspectCallbacks = useRef(
+    new Map<string, (aspect: number | null) => void>(),
+  );
+  const getVideoAspectCallback = useCallback((tileId: string) => {
+    let callback = videoAspectCallbacks.current.get(tileId);
+    if (!callback) {
+      callback = (aspect) =>
+        setVideoAspectById((prev) => {
+          if ((prev.get(tileId) ?? null) === aspect) return prev;
+          const next = new Map(prev);
+          if (aspect === null) next.delete(tileId);
+          else next.set(tileId, aspect);
+          return next;
+        });
+      videoAspectCallbacks.current.set(tileId, callback);
+    }
+    return callback;
+  }, []);
   const togglePin = useCallback(
     (userId: string) => setPinnedId((prev) => (prev === userId ? null : userId)),
     [],
@@ -1261,6 +1286,14 @@ function GridLayout({
       });
       return changed ? next : prev;
     });
+    setVideoAspectById((prev) => {
+      const next = new Map(
+        Array.from(prev).filter(
+          ([tileId]) => tileId === "local" || orderedRemoteParticipantIds.has(tileId),
+        ),
+      );
+      return next.size === prev.size ? prev : next;
+    });
   }, [orderedRemoteParticipantIds]);
   const pinnedParticipant =
     pinnedId && pinnedId !== LOCAL_STAGE_ID && pinnedId !== PRESENTATION_TILE_ID
@@ -1386,6 +1419,39 @@ function GridLayout({
       }
     };
   }, [isCameraOff, localStream, localVideoTrack, usesStageLayout]);
+
+  useEffect(() => {
+    const reportAspect = getVideoAspectCallback("local");
+    if (!localVideoTrack || isCameraOff) {
+      reportAspect(null);
+      return;
+    }
+    const video = localVideoRef.current;
+    // The track settings give the shape before the first frame. After that
+    // the frames on screen decide.
+    let aspect: number | null = null;
+    const readAspect = () => {
+      const { width = 0, height = 0 } = localVideoTrack.getSettings();
+      aspect =
+        video && video.videoWidth > 0
+          ? readVideoAspect(video.videoWidth, video.videoHeight, aspect)
+          : readVideoAspect(width, height, aspect);
+      reportAspect(aspect);
+    };
+    readAspect();
+    video?.addEventListener("loadedmetadata", readAspect);
+    video?.addEventListener("resize", readAspect);
+    return () => {
+      video?.removeEventListener("loadedmetadata", readAspect);
+      video?.removeEventListener("resize", readAspect);
+    };
+  }, [
+    getVideoAspectCallback,
+    isCameraOff,
+    localVideoTrack,
+    shouldShowSelfAsTile,
+    usesStageLayout,
+  ]);
 
   const sideBySideFeaturedRemoteParticipant =
     featuredRemoteParticipant && participantHasLiveVideo(featuredRemoteParticipant)
@@ -1897,26 +1963,14 @@ function GridLayout({
 
   const localDisplayName = getDisplayName(currentUserId);
 
-  const layout = useMemo(() => {
-    const usableWidth = Math.max(0, gridSize.width - GRID_PADDING * 2);
-    const usableHeight = Math.max(0, gridSize.height - GRID_PADDING * 2);
-    if (isMobilePortrait(isMobile, usableWidth, usableHeight)) {
-      return computeMobilePortraitGridLayout(
-        totalParticipants,
-        usableWidth,
-        usableHeight,
-        GRID_GAP,
-        maxGridTiles,
-      );
-    }
-    const { maxCols, targetAspect } = getGridPackingParams(isMobile, usableWidth);
-    return computeGridLayout(totalParticipants, usableWidth, usableHeight, {
-      gap: GRID_GAP,
-      maxCols,
-      maxTilesPerPage: maxGridTiles,
-      targetAspect,
-    });
-  }, [totalParticipants, gridSize.width, gridSize.height, maxGridTiles, isMobile]);
+  const gridUsableWidth = Math.max(0, gridSize.width - GRID_PADDING * 2);
+  const gridUsableHeight = Math.max(0, gridSize.height - GRID_PADDING * 2);
+  const isMobilePortraitGrid = isMobilePortrait(
+    isMobile,
+    gridUsableWidth,
+    gridUsableHeight,
+  );
+  const usesVideoShapedTiles = usesAutoDynamicCrop && !isMobilePortraitGrid;
   const tiledGridTileIds = useMemo(() => {
     if (usesStageLayout) return [];
     const ids: string[] = [];
@@ -1932,15 +1986,63 @@ function GridLayout({
     usesStageLayout,
     visibleParticipants,
   ]);
+  const tileAspects = useMemo(
+    () =>
+      usesVideoShapedTiles
+        ? tiledGridTileIds.map((id) =>
+            resolveTileAspect(
+              videoAspectById.get(id) ?? null,
+              fullVideoTileIds.has(id),
+            ),
+          )
+        : undefined,
+    [fullVideoTileIds, tiledGridTileIds, usesVideoShapedTiles, videoAspectById],
+  );
+  const layout = useMemo(() => {
+    if (isMobilePortraitGrid) {
+      return computeMobilePortraitGridLayout(
+        totalParticipants,
+        gridUsableWidth,
+        gridUsableHeight,
+        GRID_GAP,
+        maxGridTiles,
+      );
+    }
+    const { maxCols, targetAspect } = getGridPackingParams(
+      isMobile,
+      gridUsableWidth,
+    );
+    return computeGridLayout(totalParticipants, gridUsableWidth, gridUsableHeight, {
+      gap: GRID_GAP,
+      maxCols,
+      maxTilesPerPage: maxGridTiles,
+      targetAspect,
+      tileAspects,
+    });
+  }, [
+    totalParticipants,
+    gridUsableWidth,
+    gridUsableHeight,
+    isMobilePortraitGrid,
+    maxGridTiles,
+    isMobile,
+    tileAspects,
+  ]);
   const tileStyle =
     layout.tileWidth > 0
       ? { width: layout.tileWidth, height: layout.tileHeight }
       : undefined;
-  const tiledGridTileStyleById = useMemo(() => {
-    const styles = new Map<string, CSSProperties>();
+  const tiledGridPositionById = useMemo(() => {
+    const positions = new Map<string, GridTilePosition>();
     tiledGridTileIds.forEach((id, index) => {
       const position = layout.positions[index];
-      if (!position) return;
+      if (position) positions.set(id, position);
+    });
+    return positions;
+  }, [layout.positions, tiledGridTileIds]);
+  const tiledGridTileStyleById = useMemo(() => {
+    const styles = new Map<string, CSSProperties>();
+    tiledGridPositionById.forEach((position, id) => {
       styles.set(id, {
         left: GRID_PADDING + position.x,
         top: GRID_PADDING + position.y,
@@ -1949,19 +2051,11 @@ function GridLayout({
       });
     });
     return styles;
-  }, [layout.positions, tiledGridTileIds]);
+  }, [tiledGridPositionById]);
   const gridTilePlacements = useMemo(
     () =>
-      tiledGridTileIds
-        .map((id, index) => {
-          const position = layout.positions[index];
-          return position ? { ...position, id } : null;
-        })
-        .filter(
-          (position): position is GridTilePosition & { id: string } =>
-            position !== null,
-        ),
-    [layout.positions, tiledGridTileIds],
+      Array.from(tiledGridPositionById, ([id, position]) => ({ ...position, id })),
+    [tiledGridPositionById],
   );
   const getTiledGridTileStyle = useCallback(
     (id: string) => tiledGridTileStyleById.get(id) ?? tileStyle,
@@ -1970,13 +2064,7 @@ function GridLayout({
   const tileClass = layout.tileWidth > 0
     ? "absolute will-change-transform"
     : "relative h-full w-full will-change-transform";
-  const usesMobileScrollGrid =
-    !usesStageLayout &&
-    isMobilePortrait(
-      isMobile,
-      Math.max(0, gridSize.width - GRID_PADDING * 2),
-      Math.max(0, gridSize.height - GRID_PADDING * 2),
-    );
+  const usesMobileScrollGrid = !usesStageLayout && isMobilePortraitGrid;
   const layoutSignature = `${renderedViewMode}-${layout.cols}x${layout.rows}-${layout.tileWidth}x${layout.tileHeight}-${layout.offsetX}x${layout.offsetY}-${gridSize.width}x${gridSize.height}`;
   const hasMeasuredGrid = gridSize.width > 0 && gridSize.height > 0;
 
@@ -2356,9 +2444,14 @@ function GridLayout({
       }
     : undefined;
 
-  const flipKeys = tiledGridTileIds;
+  const flipSignature = tiledGridTileIds
+    .map((id, index) => {
+      const aspect = tileAspects?.[index] ?? GRID_TILE_ASPECT;
+      return aspect === GRID_TILE_ASPECT ? id : `${id}@${aspect}`;
+    })
+    .join("~");
   const registerTile = useFlip(
-    flipKeys,
+    flipSignature,
     layoutSignature,
     hasMeasuredGrid,
     sidePanelReserve,
@@ -2642,6 +2735,10 @@ function GridLayout({
                       pinnedId === sideBySideCompanionParticipant.userId
                     }
                     onTogglePin={togglePin}
+                    isFullVideoShown={fullVideoTileIds.has(
+                      sideBySideCompanionParticipant.userId,
+                    )}
+                    onToggleFullVideo={toggleFullVideoTile}
                   />
                 ) : null}
               </div>
@@ -2776,6 +2873,10 @@ function GridLayout({
                   onAdminClick={onParticipantClick}
                   isPinned={pinnedId === stageMainParticipant.userId}
                   onTogglePin={togglePin}
+                  isFullVideoShown={fullVideoTileIds.has(
+                    stageMainParticipant.userId,
+                  )}
+                  onToggleFullVideo={toggleFullVideoTile}
                 />
               ) : null}
 
@@ -3133,8 +3234,14 @@ function GridLayout({
               isDynamicCropEnabled={usesAutoDynamicCrop}
               isFullVideoShown={fullVideoTileIds.has(participant.userId)}
               onToggleFullVideo={toggleFullVideoTile}
-              tileWidth={layout.tileWidth || undefined}
-              tileHeight={layout.tileHeight || undefined}
+              isTileShapedToVideo={usesVideoShapedTiles}
+              onVideoAspectChange={getVideoAspectCallback(participant.userId)}
+              tileWidth={
+                tiledGridPositionById.get(participant.userId)?.width || undefined
+              }
+              tileHeight={
+                tiledGridPositionById.get(participant.userId)?.height || undefined
+              }
             />
           </div>
         ))}
