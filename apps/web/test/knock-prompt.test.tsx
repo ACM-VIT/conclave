@@ -83,6 +83,21 @@ describe("host knock prompt", () => {
     expect(host.textContent).toBe("");
   });
 
+  it("stays busy for an admit in flight when someone else knocks", async () => {
+    await render([["guest-1", "Bob"]]);
+    await act(async () => button("Admit Bob").click());
+
+    await render([
+      ["guest-1", "Bob"],
+      ["guest-2", "Cleo"],
+    ]);
+    expect(host.textContent).toContain("2 people want to join");
+    expect(button("Admit all").disabled).toBe(true);
+
+    await render([["guest-2", "Cleo"]]);
+    expect(button("Admit Cleo").disabled).toBe(false);
+  });
+
   it("denies one person", async () => {
     await render([["guest-1", "Bob"]]);
     await act(async () => button("Deny Bob").click());

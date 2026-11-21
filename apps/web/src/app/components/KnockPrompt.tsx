@@ -34,15 +34,24 @@ export default function KnockPrompt({
   onViewAll,
   onPendingUserStale,
 }: KnockPromptProps) {
-  const [isBusy, setIsBusy] = useState(false);
+  // The people an action in flight is for. It settles once they have all
+  // left the waiting list (or on a failed admit-all ack, or a timeout), not
+  // when someone else knocks meanwhile.
+  const [actionTargets, setActionTargets] = useState<string[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const settleTimerRef = useRef<number | null>(null);
+  const isBusy = actionTargets !== null;
 
-  // Any change to the waiting list settles the action that was in flight.
-  useEffect(() => {
-    setIsBusy(false);
+  const settleAction = () => {
+    setActionTargets(null);
     if (settleTimerRef.current) window.clearTimeout(settleTimerRef.current);
-  }, [pendingUsers]);
+  };
+
+  useEffect(() => {
+    if (actionTargets?.every((userId) => !pendingUsers.has(userId))) {
+      settleAction();
+    }
+  }, [actionTargets, pendingUsers]);
 
   useEffect(
     () => () => {
@@ -67,12 +76,15 @@ export default function KnockPrompt({
       ? `${people[0].name}, ${people[1].name} and ${people.length - 2} more`
       : people.map((person) => person.name).join(" and ");
 
-  const startAction = (action: (activeSocket: Socket) => void) => {
+  const startAction = (
+    targets: string[],
+    action: (activeSocket: Socket) => void,
+  ) => {
     if (!socket || isBusy) return;
     setError(null);
-    setIsBusy(true);
+    setActionTargets(targets);
     settleTimerRef.current = window.setTimeout(
-      () => setIsBusy(false),
+      () => setActionTargets(null),
       ACTION_SETTLE_FALLBACK_MS,
     );
     action(socket);
@@ -118,7 +130,7 @@ export default function KnockPrompt({
               type="button"
               disabled={isBusy}
               onClick={() =>
-                startAction((activeSocket) =>
+                startAction([single.userId], (activeSocket) =>
                   denyPendingUser(activeSocket, single.userId, onPendingUserStale),
                 )
               }
@@ -131,7 +143,7 @@ export default function KnockPrompt({
               type="button"
               disabled={isBusy}
               onClick={() =>
-                startAction((activeSocket) =>
+                startAction([single.userId], (activeSocket) =>
                   admitPendingUser(activeSocket, single.userId, onPendingUserStale),
                 )
               }
@@ -150,12 +162,14 @@ export default function KnockPrompt({
               type="button"
               disabled={isBusy}
               onClick={() =>
-                startAction((activeSocket) =>
-                  admitAllPendingUsers(activeSocket, (failure) => {
-                    if (!failure) return;
-                    setIsBusy(false);
-                    setError(failure);
-                  }),
+                startAction(
+                  people.map((person) => person.userId),
+                  (activeSocket) =>
+                    admitAllPendingUsers(activeSocket, (failure) => {
+                      if (!failure) return;
+                      settleAction();
+                      setError(failure);
+                    }),
                 )
               }
               className={BUTTON_PRIMARY}

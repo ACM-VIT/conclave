@@ -394,7 +394,14 @@ function JoinScreen({
   // how to unblock it.
   const [blockedDevices, setBlockedDevices] = useState<BlockedDevice[]>([]);
   const [isRetryingBlocked, setIsRetryingBlocked] = useState(false);
+  // Bumped on every capture outcome, so a slow permission check for an
+  // older failure cannot re-block a device that has since worked.
+  const captureOutcomeRef = useRef<Record<BlockedDevice, number>>({
+    camera: 0,
+    microphone: 0,
+  });
   const markDeviceAvailable = (device: BlockedDevice) => {
+    captureOutcomeRef.current[device] += 1;
     setBlockedDevices((current) =>
       current.includes(device)
         ? current.filter((candidate) => candidate !== device)
@@ -402,8 +409,9 @@ function JoinScreen({
     );
   };
   const reportCaptureFailure = (device: BlockedDevice, error: unknown) => {
+    const outcome = (captureOutcomeRef.current[device] += 1);
     void isCaptureBlocked(device, error).then((blocked) => {
-      if (!blocked) return;
+      if (!blocked || captureOutcomeRef.current[device] !== outcome) return;
       setBlockedDevices((current) =>
         current.includes(device)
           ? current
