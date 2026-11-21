@@ -7,7 +7,7 @@ import {
   type JoinMode,
   type StatsRead,
 } from "../lib/call-quality-metrics";
-import { telemetry } from "../lib/telemetry";
+import { telemetry, telemetryEnabled } from "../lib/telemetry";
 import type {
   ConnectionState,
   MeetError,
@@ -85,7 +85,7 @@ export function useCallQualityMetrics({
     tracker.onParticipants(participantCount, performance.now());
   }, [tracker, participantCount]);
 
-  const sampling = connectionState !== "disconnected";
+  const sampling = telemetryEnabled && connectionState !== "disconnected";
   useEffect(() => {
     if (!sampling) return;
     let cancelled = false;

@@ -123,6 +123,17 @@ describe("useCallQualityMetrics", () => {
     });
   });
 
+  it("reads no stats while telemetry is off", async () => {
+    telemetryMock.enabled = false;
+    const { render, camera, consumer } = mount();
+    await render({ state: "connecting" });
+    await render({ state: "joined" });
+    await vi.advanceTimersByTimeAsync(31_000);
+
+    expect(camera.getStats).not.toHaveBeenCalled();
+    expect(consumer.getStats).not.toHaveBeenCalled();
+  });
+
   it("sends the summary as soon as reconnecting gives up", async () => {
     const { render } = mount();
     await render({ state: "connecting" });

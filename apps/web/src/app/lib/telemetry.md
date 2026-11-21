@@ -7,7 +7,7 @@ names, emails, chat text or room codes.
 
 | Where | Variable | Effect |
 | --- | --- | --- |
-| Web build | `NEXT_PUBLIC_POSTHOG_KEY` | Project key. Without it the browser sends nothing. |
+| Web build | `NEXT_PUBLIC_POSTHOG_KEY` | Project key. Without it the browser loads nothing, reads no call stats and sends nothing. |
 | Web build | `NEXT_PUBLIC_POSTHOG_HOST` | Defaults to `https://eu.posthog.com`. |
 | Web dev | `NEXT_PUBLIC_POSTHOG_DEV=1` | `next dev` only sends events with this set. |
 | Web deploy | `POSTHOG_CLI_API_KEY`, `POSTHOG_CLI_PROJECT_ID`, `POSTHOG_CLI_HOST` | `cf:build` builds, uploads and deletes browser source maps (needs `posthog-cli` on PATH). |
