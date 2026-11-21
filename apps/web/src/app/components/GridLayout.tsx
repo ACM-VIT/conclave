@@ -2642,6 +2642,10 @@ function GridLayout({
                       pinnedId === sideBySideCompanionParticipant.userId
                     }
                     onTogglePin={togglePin}
+                    isFullVideoShown={fullVideoTileIds.has(
+                      sideBySideCompanionParticipant.userId,
+                    )}
+                    onToggleFullVideo={toggleFullVideoTile}
                   />
                 ) : null}
               </div>
@@ -2776,6 +2780,10 @@ function GridLayout({
                   onAdminClick={onParticipantClick}
                   isPinned={pinnedId === stageMainParticipant.userId}
                   onTogglePin={togglePin}
+                  isFullVideoShown={fullVideoTileIds.has(
+                    stageMainParticipant.userId,
+                  )}
+                  onToggleFullVideo={toggleFullVideoTile}
                 />
               ) : null}
 
