@@ -135,7 +135,9 @@ function ParticipantVideo({
       return;
     }
     const readShape = () =>
-      setVideoAspect(readVideoAspect(video.videoWidth, video.videoHeight));
+      setVideoAspect((previous) =>
+        readVideoAspect(video.videoWidth, video.videoHeight, previous),
+      );
     readShape();
     video.addEventListener("loadedmetadata", readShape);
     video.addEventListener("resize", readShape);

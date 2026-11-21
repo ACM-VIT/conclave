@@ -133,6 +133,11 @@ describe("grid tile shape", () => {
     expect(tileAspectFor(1080, 1440, true)).toBe(3 / 4);
   });
 
+  it("treats a nearly square portrait camera as portrait", () => {
+    expect(tileAspectFor(479, 480, false)).toBe(3 / 4);
+    expect(tileAspectFor(480, 480, false)).toBe(16 / 9);
+  });
+
   it("never makes a full-video tile narrower than 9:16", () => {
     expect(tileAspectFor(720, 1600, true)).toBe(9 / 16);
   });
@@ -167,6 +172,20 @@ describe("remote tile shape reporting", () => {
 
     tile.receiveFrames(1280, 720);
     expect(onVideoAspectChange.mock.calls).toEqual([[9 / 16], [16 / 9]]);
+  });
+
+  it("holds a shape between two camera shapes across layer switches", () => {
+    const onVideoAspectChange = vi.fn();
+    const tile = renderTile({ onVideoAspectChange });
+    onVideoAspectChange.mockClear();
+
+    // 0.773 and 0.775 sit either side of the 3:4 / 4:5 midpoint.
+    tile.receiveFrames(495, 640);
+    tile.receiveFrames(124, 160);
+    expect(onVideoAspectChange.mock.calls).toEqual([[3 / 4]]);
+
+    tile.receiveFrames(512, 640);
+    expect(onVideoAspectChange.mock.calls).toEqual([[3 / 4], [4 / 5]]);
   });
 
   it("fills a tile already shaped to the video without zoom or blur", () => {

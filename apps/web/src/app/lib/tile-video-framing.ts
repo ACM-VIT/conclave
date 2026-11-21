@@ -11,19 +11,33 @@ export type TileVideoFraming =
   | "portrait-full";
 
 // Cameras send a few shapes, and simulcast layers of one camera can miss
-// that shape by a pixel of rounding. Snapping to the nearest keeps a layer
-// switch from reshaping a tile.
-const CAMERA_ASPECTS = [9 / 16, 3 / 5, 2 / 3, 3 / 4, 4 / 5, 1, 5 / 4, 4 / 3, 3 / 2, 16 / 9];
+// that shape by a pixel of rounding. Snapping to the nearest shape of the
+// same orientation, and keeping the previous shape unless a frame is clearly
+// nearer another, keeps a layer switch from reshaping a tile.
+const PORTRAIT_ASPECTS = [9 / 16, 3 / 5, 2 / 3, 3 / 4, 4 / 5];
+const LANDSCAPE_ASPECTS = [1, 5 / 4, 4 / 3, 3 / 2, 16 / 9];
+const SNAP_HYSTERESIS = 0.02;
 
-const snapAspect = (aspect: number) => {
-  const distance = (candidate: number) => Math.abs(Math.log(candidate / aspect));
-  return CAMERA_ASPECTS.reduce((best, candidate) =>
-    distance(candidate) < distance(best) ? candidate : best,
+const logDistance = (a: number, b: number) => Math.abs(Math.log(a / b));
+
+const snapAspect = (aspect: number, previous: number | null = null) => {
+  const shapes = aspect < 1 ? PORTRAIT_ASPECTS : LANDSCAPE_ASPECTS;
+  const nearest = shapes.reduce((best, candidate) =>
+    logDistance(candidate, aspect) < logDistance(best, aspect) ? candidate : best,
   );
+  return previous !== null &&
+    shapes.includes(previous) &&
+    logDistance(previous, aspect) - logDistance(nearest, aspect) < SNAP_HYSTERESIS
+    ? previous
+    : nearest;
 };
 
-export const readVideoAspect = (width: number, height: number): number | null =>
-  width > 0 && height > 0 ? snapAspect(width / height) : null;
+export const readVideoAspect = (
+  width: number,
+  height: number,
+  previous: number | null = null,
+): number | null =>
+  width > 0 && height > 0 ? snapAspect(width / height, previous) : null;
 
 export const isPortraitAspect = (aspect: number | null): boolean =>
   aspect !== null && aspect < 1;

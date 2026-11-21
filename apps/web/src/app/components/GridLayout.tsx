@@ -134,9 +134,11 @@ const computeGridMaxCols = (isMobile: boolean, usableWidth: number) => {
   );
 };
 
+const GRID_TILE_ASPECT = 16 / 9;
+
 const getGridPackingParams = (isMobile: boolean, usableWidth: number) => ({
   maxCols: computeGridMaxCols(isMobile, usableWidth),
-  targetAspect: 16 / 9,
+  targetAspect: GRID_TILE_ASPECT,
   minTileWidth: AUTO_GRID_MIN_TILE_WIDTH,
   minTileHeight: AUTO_GRID_MIN_TILE_HEIGHT,
 });
@@ -1425,13 +1427,14 @@ function GridLayout({
       return;
     }
     const video = localVideoRef.current;
+    // The track settings give the shape before the first frame. After that
+    // the frames on screen decide.
     const readAspect = () => {
-      const { width, height } = localVideoTrack.getSettings();
+      const { width = 0, height = 0 } = localVideoTrack.getSettings();
       reportAspect(
-        readVideoAspect(
-          width ?? video?.videoWidth ?? 0,
-          height ?? video?.videoHeight ?? 0,
-        ),
+        video && video.videoWidth > 0
+          ? readVideoAspect(video.videoWidth, video.videoHeight)
+          : readVideoAspect(width, height),
       );
     };
     readAspect();
@@ -2441,7 +2444,10 @@ function GridLayout({
     : undefined;
 
   const flipSignature = tiledGridTileIds
-    .map((id, index) => `${id}@${tileAspects?.[index] ?? ""}`)
+    .map((id, index) => {
+      const aspect = tileAspects?.[index] ?? GRID_TILE_ASPECT;
+      return aspect === GRID_TILE_ASPECT ? id : `${id}@${aspect}`;
+    })
     .join("~");
   const registerTile = useFlip(
     flipSignature,
