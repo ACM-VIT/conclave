@@ -35,6 +35,13 @@ import {
   LIVE_TRANSCRIPT_TRANSCRIPTION_MODELS,
 } from "../lib/transcript-models";
 import type { TranscriptMinutesEntry, TranscriptSegment } from "../lib/types";
+import {
+  captionLanguageFor,
+  captionLanguageLabel,
+  captionLanguagesFor,
+  readCaptionLanguage,
+  saveCaptionLanguage,
+} from "../lib/caption-languages";
 import { formatTranscriptTimestamp } from "../lib/transcript-reducer";
 import {
   Conversation,
@@ -217,6 +224,38 @@ function MinutesStatusBar({
 
 const START_ACCENT = "#4F9CF9";
 
+function CaptionLanguageSelect({
+  id,
+  value,
+  provider,
+  onChange,
+  className,
+}: {
+  id: string;
+  value: string;
+  provider: ReturnType<typeof getTranscriptTranscriptionProvider>;
+  onChange: (code: string) => void;
+  className: string;
+}) {
+  return (
+    <select
+      id={id}
+      value={value}
+      onChange={(event) => {
+        saveCaptionLanguage(event.target.value);
+        onChange(event.target.value);
+      }}
+      className={className}
+    >
+      {captionLanguagesFor(provider).map(({ code, label }) => (
+        <option key={code} value={code}>
+          {label}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 function StartStage({
   transcript,
   roomAi,
@@ -233,11 +272,13 @@ function StartStage({
   );
   const defaultQaModel = roomAi?.state.features?.questions?.model ?? roomAi?.state.assistantModel ?? transcript.session.qaModel;
   const [qaModel, setQaModel] = useState(defaultQaModel);
+  const [preferredLanguage, setPreferredLanguage] = useState(readCaptionLanguage);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
   const needsTakeover = transcript.session.status === "takeover_needed";
   const provider = getTranscriptTranscriptionProvider(transcriptModel);
   const isSarvam = provider === "sarvam";
+  const language = captionLanguageFor(provider, preferredLanguage);
   const assistantProvider = getResponseProvider(qaModel);
   const available = (name: typeof provider | typeof assistantProvider) =>
     transcript.globalProviderKeysAvailable[name] === true ||
@@ -312,6 +353,7 @@ function StartStage({
         transcriptModel,
         qaModel,
         transportMode: "sfu" as const,
+        language,
       };
       const ok = needsTakeover
         ? await transcript.takeover(options)
@@ -422,6 +464,24 @@ function StartStage({
               {requiredTextProviders.map(name => missingTextProviders.includes(name)
                 ? <div key={name}>{keyInput(name, textKeys[name] ?? "", value => setTextKey(name, value))}</div>
                 : available(name) ? <div key={name}>{covered(name)}</div> : null)}
+            </fieldset>
+            <fieldset
+              disabled={isSubmitting}
+              className="space-y-2 border-t border-white/10 pt-4"
+            >
+              <label
+                htmlFor="captions-language-start"
+                className="block text-[12px] font-semibold text-[#fafafa]"
+              >
+                Meeting language
+              </label>
+              <CaptionLanguageSelect
+                id="captions-language-start"
+                value={language}
+                provider={provider}
+                onChange={setPreferredLanguage}
+                className="h-10 w-full rounded-lg border border-white/10 bg-[#18181b] px-3 text-[12px] text-[#fafafa] outline-none focus:border-[#4F9CF9]/60"
+              />
             </fieldset>
             <div className="space-y-2.5">
               <button
@@ -975,6 +1035,11 @@ export default function TranscriptPanel({
     session.status === "live" ||
     session.status === "paused" ||
     session.status === "stopping";
+  const sessionProvider = getTranscriptTranscriptionProvider(session.transcriptModel);
+  const canSwitchLanguage =
+    session.status === "live" &&
+    transcript.isController &&
+    transcript.canTakeover;
   const tabs = useMemo<TranscriptTab[]>(
     () =>
       transcript.isViewOnly
@@ -1150,8 +1215,33 @@ export default function TranscriptPanel({
                         : "Connecting audio"
                       : "Following live"}
               </span>
+              {session.language && !canSwitchLanguage ? (
+                <span className="shrink-0 text-[#d4d4d8]">
+                  {captionLanguageLabel(session.language)}
+                </span>
+              ) : null}
             </div>
             <div className="flex shrink-0 items-center gap-1">
+              {canSwitchLanguage && session.language ? (
+                <>
+                  <label htmlFor="captions-language-live" className="sr-only">
+                    Meeting language
+                  </label>
+                  <CaptionLanguageSelect
+                    id="captions-language-live"
+                    value={session.language}
+                    provider={sessionProvider}
+                    onChange={(code) => {
+                      void transcript.takeover({
+                        language: code,
+                        transcriptModel: session.transcriptModel,
+                        qaModel: session.qaModel,
+                      });
+                    }}
+                    className="h-7 max-w-[7.5rem] rounded-lg border border-white/10 bg-[#18181b] px-1.5 text-[11.5px] text-[#d4d4d8] outline-none hover:text-[#fafafa] focus:border-[#4F9CF9]/60"
+                  />
+                </>
+              ) : null}
               {transcript.canPause &&
               (session.status === "live" || session.status === "paused") ? (
                 <button

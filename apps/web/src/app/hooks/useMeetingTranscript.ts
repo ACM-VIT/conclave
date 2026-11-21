@@ -81,6 +81,7 @@ interface StartTranscriptOptions {
   transcriptModel?: string;
   qaModel?: string;
   transportMode?: TranscriptTransportMode;
+  language?: string;
 }
 
 type ServerEnvelope =
@@ -1148,6 +1149,7 @@ export function useMeetingTranscript({
           options.transcriptModel ?? DEFAULT_TRANSCRIPT_TRANSCRIPTION_MODEL,
         qaModel: options.qaModel ?? DEFAULT_TRANSCRIPT_QA_MODEL,
         transportMode,
+        language: options.language,
       });
       if (!sent) return false;
       if (transportMode === "sfu") {
@@ -1217,6 +1219,7 @@ export function useMeetingTranscript({
           options.transcriptModel ?? session.transcriptModel,
         qaModel: options.qaModel ?? session.qaModel,
         transportMode,
+        language: options.language,
       });
       if (!sent) return false;
       if (transportMode === "sfu") {

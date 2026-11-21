@@ -66,6 +66,7 @@ export interface TranscriptSessionState {
   transcriptModel: string;
   qaModel: string;
   transportMode: TranscriptTransportMode;
+  language?: string;
   keySource?: TranscriptOpenAiKeySource | null;
   startedAt: number | null;
   updatedAt: number;

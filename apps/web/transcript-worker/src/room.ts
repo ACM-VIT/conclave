@@ -368,7 +368,9 @@ export class TranscriptRoom {
 
     const wasPaused = snapshot.session.status === "paused";
     const config = snapshot.transcriptionConfig ?? {
-      language: normalizeLanguage(this.env.TRANSCRIPT_TRANSCRIPTION_LANGUAGE),
+      language: normalizeLanguage(
+        snapshot.session.language ?? this.env.TRANSCRIPT_TRANSCRIPTION_LANGUAGE,
+      ),
       delay: normalizeDelay(undefined),
       locale: normalizeLocale(this.env.TRANSCRIPT_TRANSCRIPTION_LOCALE),
     };
@@ -376,6 +378,7 @@ export class TranscriptRoom {
     this.session = {
       ...snapshot.session,
       status: "starting",
+      language: config.language,
       updatedAt: Date.now(),
       error: null,
     };
@@ -896,6 +899,11 @@ export class TranscriptRoom {
     this.responseEnvironment = { ...this.env, ...effectiveEnv };
     const transportMode = normalizeTransportMode(message.transportMode);
     const wasIdle = existingStatus === "idle" || existingStatus === "error";
+    const language = normalizeLanguage(
+      message.language ??
+        (takeover ? this.session?.language : undefined) ??
+        this.env.TRANSCRIPT_TRANSCRIPTION_LANGUAGE,
+    );
     this.responseApiKey = responseKey.ok ? responseKey.apiKey : null;
     this.responseRoute = viewer.sfuUrl && viewer.clientId && viewer.channelId ? {sfuUrl: viewer.sfuUrl, identity: {userId: viewer.userId, roomId, clientId: viewer.clientId, channelId: viewer.channelId}} : null;
     this.personalResponseKeys = personalResponseKeys;
@@ -912,6 +920,7 @@ export class TranscriptRoom {
       transcriptModel,
       qaModel,
       transportMode,
+      language,
       keySource:
         !usesRoomKey && transcriptionKey.source === "global" && (!responseKey.ok || responseKey.source === "global")
           ? "global"
@@ -935,9 +944,6 @@ export class TranscriptRoom {
 
     if (acceptedRevision !== this.sessionRevision) return;
     try {
-      const language = normalizeLanguage(
-        message.language ?? this.env.TRANSCRIPT_TRANSCRIPTION_LANGUAGE,
-      );
       const delay = normalizeDelay(message.delay);
       const locale = normalizeLocale(this.env.TRANSCRIPT_TRANSCRIPTION_LOCALE);
       await this.connectTranscriptionProvider({

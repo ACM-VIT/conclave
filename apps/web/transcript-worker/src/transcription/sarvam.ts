@@ -74,6 +74,18 @@ const normalizeSarvamLanguageCode = (
   return SARVAM_DEFAULT_LANGUAGE_CODE;
 };
 
+export const sarvamLanguageCode = (
+  language: string,
+  deploymentLanguageCode: string | undefined,
+): string => {
+  const base = language.trim().toLowerCase().split("-")[0] ?? "";
+  const regional = `${base}-IN`;
+  if (base !== "en" && SARVAM_SUPPORTED_LANGUAGE_CODES.has(regional)) {
+    return regional;
+  }
+  return deploymentLanguageCode ?? language;
+};
+
 const normalizeSarvamMode = (value: string | undefined): string => {
   const candidate = value?.trim() || SARVAM_DEFAULT_MODE;
   return SARVAM_SUPPORTED_MODES.has(candidate) ? candidate : SARVAM_DEFAULT_MODE;
@@ -343,8 +355,10 @@ export const connectSarvamTranscription = async (
     sarvamEndpoint({
       baseUrl: options.env.SARVAM_STT_WS_URL,
       model: options.transcriptModel,
-      language:
-        options.env.TRANSCRIPT_SARVAM_LANGUAGE_CODE ?? options.language,
+      language: sarvamLanguageCode(
+        options.language,
+        options.env.TRANSCRIPT_SARVAM_LANGUAGE_CODE,
+      ),
       locale: options.locale,
       mode: options.env.TRANSCRIPT_SARVAM_MODE,
     }),
