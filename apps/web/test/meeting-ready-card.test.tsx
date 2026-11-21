@@ -3,7 +3,9 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import GridLayout from "../src/app/components/GridLayout";
-import MeetingReadyCard from "../src/app/components/MeetingReadyCard";
+import MeetingReadyCard, {
+  useMeetingReadyCard,
+} from "../src/app/components/MeetingReadyCard";
 import { DEFAULT_MEET_VIEW_SETTINGS } from "../src/app/lib/meet-view";
 import type { Participant } from "../src/app/lib/types";
 
@@ -130,48 +132,98 @@ describe("GridLayout meeting-ready card", () => {
     isHandRaised: false,
   };
 
-  const renderGrid = (peers: Participant[]) =>
+  function Stage({
+    peers,
+    showsGrid,
+    roomId,
+  }: {
+    peers: Participant[];
+    showsGrid: boolean;
+    roomId: string;
+  }) {
+    const card = useMeetingReadyCard(roomId, peers.length > 0);
+    if (!showsGrid) return <p>Whiteboard</p>;
+    return (
+      <GridLayout
+        localStream={null}
+        isCameraOff={false}
+        isMuted
+        isHandRaised={false}
+        participants={new Map(peers.map((p) => [p.userId, p]))}
+        userEmail="local"
+        currentUserId="local"
+        isMirrorCamera={false}
+        activeSpeakerId={null}
+        getDisplayName={(id) => id}
+        viewSettings={{ ...DEFAULT_MEET_VIEW_SETTINGS, hideTilesWithoutVideo: false }}
+        meetingReadyCard={
+          card.isOpen ? (
+            <MeetingReadyCard
+              roomId={roomId}
+              isHost
+              isMobile={false}
+              onDismiss={card.dismiss}
+            />
+          ) : null
+        }
+      />
+    );
+  }
+
+  const renderStage = (
+    peers: Participant[],
+    { showsGrid = true, roomId = "abc-defg-hij" } = {},
+  ) =>
     act(async () =>
-      root.render(
-        <GridLayout
-          localStream={null}
-          isCameraOff={false}
-          isMuted
-          isHandRaised={false}
-          participants={new Map(peers.map((p) => [p.userId, p]))}
-          userEmail="local"
-          currentUserId="local"
-          isMirrorCamera={false}
-          activeSpeakerId={null}
-          getDisplayName={(id) => id}
-          viewSettings={{ ...DEFAULT_MEET_VIEW_SETTINGS, hideTilesWithoutVideo: false }}
-          roomId="abc-defg-hij"
-          isHost
-        />,
-      ),
+      root.render(<Stage peers={peers} showsGrid={showsGrid} roomId={roomId} />),
     );
 
-  it("greets a solo host with the camera on", async () => {
-    await renderGrid([]);
+  const greets = () => container.textContent?.includes("Your meeting's ready");
 
-    expect(container.textContent).toContain("Your meeting's ready");
+  it("greets a solo host with the camera on", async () => {
+    await renderStage([]);
+
+    expect(greets()).toBe(true);
     expect(button("Add others")).toBeDefined();
   });
 
   it("goes away once someone joins and stays away after they leave", async () => {
-    await renderGrid([]);
-    await renderGrid([peer]);
-    expect(container.textContent).not.toContain("Your meeting's ready");
+    await renderStage([]);
+    await renderStage([peer]);
+    expect(greets()).toBe(false);
 
-    await renderGrid([]);
-    expect(container.textContent).not.toContain("Your meeting's ready");
+    await renderStage([]);
+    expect(greets()).toBe(false);
   });
 
-  it("can be dismissed", async () => {
-    await renderGrid([]);
+  it("stays dismissed after the stage switches to an app and back", async () => {
+    await renderStage([]);
+    await click("Dismiss");
+    expect(greets()).toBe(false);
 
+    await renderStage([], { showsGrid: false });
+    await renderStage([]);
+
+    expect(greets()).toBe(false);
+  });
+
+  it("stays away when a guest came and went while an app had the stage", async () => {
+    await renderStage([]);
+    await renderStage([], { showsGrid: false });
+    await renderStage([peer], { showsGrid: false });
+    await renderStage([], { showsGrid: false });
+
+    await renderStage([]);
+
+    expect(greets()).toBe(false);
+  });
+
+  it("greets you again in a new meeting", async () => {
+    await renderStage([]);
     await click("Dismiss");
 
-    expect(container.textContent).not.toContain("Your meeting's ready");
+    await renderStage([], { roomId: "xyz-wxyz-xyz" });
+
+    expect(greets()).toBe(true);
   });
 });

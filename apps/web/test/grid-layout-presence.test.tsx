@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import GridLayout from "../src/app/components/GridLayout";
+import MeetingReadyCard from "../src/app/components/MeetingReadyCard";
 import {
   DEFAULT_MEET_VIEW_SETTINGS,
   type MeetSelfViewMode,
@@ -46,6 +47,14 @@ function renderGrid(
       getDisplayName={(id) => id}
       viewSettings={{ ...DEFAULT_MEET_VIEW_SETTINGS, hideTilesWithoutVideo }}
       isMobile={isMobile}
+      meetingReadyCard={
+        <MeetingReadyCard
+          roomId="abc-defg-hij"
+          isHost={false}
+          isMobile={isMobile}
+          onDismiss={() => {}}
+        />
+      }
     />,
   );
 }

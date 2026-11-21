@@ -1,11 +1,20 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, Copy, UserPlus, X } from "lucide-react";
 import { copyText, meetingLinkFor } from "../lib/meeting-link";
 
+export function useMeetingReadyCard(roomId: string, hasCompany: boolean) {
+  const [finishedRoomId, setFinishedRoomId] = useState<string | null>(null);
+  useEffect(() => {
+    if (hasCompany) setFinishedRoomId(roomId);
+  }, [hasCompany, roomId]);
+  const dismiss = useCallback(() => setFinishedRoomId(roomId), [roomId]);
+  return { isOpen: finishedRoomId !== roomId, dismiss };
+}
+
 interface MeetingReadyCardProps {
-  roomId?: string;
+  roomId: string;
   isHost: boolean;
   isMobile: boolean;
   onDismiss: () => void;

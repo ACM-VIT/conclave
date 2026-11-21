@@ -40,6 +40,7 @@ import WebinarViewerChrome, {
 } from "./WebinarViewer";
 import ToastQueue from "./ToastQueue";
 import MeetingAnnouncer from "./MeetingAnnouncer";
+import MeetingReadyCard, { useMeetingReadyCard } from "./MeetingReadyCard";
 import TranscriptPanel from "./TranscriptPanel";
 import RoomAiPanel from "./RoomAiPanel";
 import AndroidUpsellSheet from "./AndroidUpsellSheet";
@@ -679,6 +680,10 @@ export default function MeetsMainContent({
           !isSystemUserId(participant.userId),
       ),
     [currentUserId, participantsArray],
+  );
+  const meetingReadyCard = useMeetingReadyCard(
+    roomId,
+    isJoined && nonSystemParticipants.length > 0,
   );
 
   const coachAvatars = useMemo(() => {
@@ -2420,8 +2425,16 @@ export default function MeetsMainContent({
           getDisplayName={resolveDisplayName}
           sidePanelReserve={dockedPanelReserve}
           isMobile={isMobile}
-          roomId={roomId}
-          isHost={isAdmin}
+          meetingReadyCard={
+            meetingReadyCard.isOpen ? (
+              <MeetingReadyCard
+                roomId={roomId}
+                isHost={isAdmin}
+                isMobile={isMobile}
+                onDismiss={meetingReadyCard.dismiss}
+              />
+            ) : null
+          }
         />
       )}
 

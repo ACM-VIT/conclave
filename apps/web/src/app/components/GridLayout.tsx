@@ -21,6 +21,7 @@ import {
   type CSSProperties,
   type Dispatch,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
   type SetStateAction,
   useCallback,
   useEffect,
@@ -30,7 +31,6 @@ import {
   useState,
 } from "react";
 import { useSmartParticipantOrder } from "../hooks/useSmartParticipantOrder";
-import MeetingReadyCard from "./MeetingReadyCard";
 import { useStableSpeakerId } from "../hooks/useStableSpeakerId";
 import {
   getRenderableParticipantVideoStream,
@@ -104,8 +104,7 @@ interface GridLayoutProps {
   getDisplayName: (userId: string) => string;
   sidePanelReserve?: number;
   isMobile?: boolean;
-  roomId?: string;
-  isHost?: boolean;
+  meetingReadyCard?: ReactNode;
 }
 
 const WARM_BUFFER_TILES = 4;
@@ -904,8 +903,7 @@ function GridLayout({
   getDisplayName,
   sidePanelReserve = 0,
   isMobile = false,
-  roomId,
-  isHost = false,
+  meetingReadyCard = null,
 }: GridLayoutProps) {
   const stageRootRef = useRef<HTMLDivElement>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
@@ -917,8 +915,6 @@ function GridLayout({
     x: number;
     y: number;
   } | null>(null);
-  const [isMeetingReadyDismissed, setIsMeetingReadyDismissed] = useState(false);
-  const [hasHadCompany, setHasHadCompany] = useState(false);
   const [pinnedId, setPinnedId] = useState<string | null>(null);
   const [fullVideoTileIds, setFullVideoTileIds] = useState<Set<string>>(
     () => new Set(),
@@ -1303,11 +1299,6 @@ function GridLayout({
     }
   }, [pinnedId, hasPresentation]);
   const isSolo = allRemoteParticipants.length === 0 && !hasPresentation;
-  useEffect(() => {
-    if (allRemoteParticipants.length > 0) setHasHadCompany(true);
-  }, [allRemoteParticipants.length]);
-  const showsMeetingReadyCard =
-    isSolo && !hasHadCompany && !isMeetingReadyDismissed;
   const visibleParticipants = useMemo(() => {
     if (maxVisibleRemoteParticipants <= 0) {
       return [];
@@ -2470,14 +2461,7 @@ function GridLayout({
       className="relative flex flex-1 min-h-0 flex-col"
       style={{ fontFamily: FONT_SANS }}
     >
-      {showsMeetingReadyCard ? (
-        <MeetingReadyCard
-          roomId={roomId}
-          isHost={isHost}
-          isMobile={isMobile}
-          onDismiss={() => setIsMeetingReadyDismissed(true)}
-        />
-      ) : null}
+      {isSolo ? meetingReadyCard : null}
       <div
         className="pointer-events-none h-0 w-0 overflow-hidden"
         aria-hidden={true}
