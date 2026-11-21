@@ -13,18 +13,19 @@ type Handler = (...args: never[]) => void | Promise<void>;
 
 const makeSocket = (id: string, user: SfuAuthPayload) => {
   const handlers = new Map<string, Handler>();
+  const emit = vi.fn();
   const socket = {
     id,
     data: { user },
     on: (event: string, handler: Handler) => handlers.set(event, handler),
-    emit: vi.fn(),
+    emit,
     disconnect: vi.fn(),
     connected: true,
     join: vi.fn(),
     leave: vi.fn(),
     to: () => ({ emit: vi.fn() }),
   } as unknown as Socket;
-  return { socket, handlers };
+  return { socket, handlers, emit };
 };
 
 const io = { to: () => ({ emit: vi.fn() }) } as unknown as SocketIOServer;
@@ -76,14 +77,14 @@ describe("new meetings make people knock", () => {
 
     const knocking = await join(state, guest);
     expect(knocking.status).toBe("waiting");
-    expect(knocking.peer.socket.emit).toHaveBeenCalledWith(
-      "waitingRoomStatus",
-      expect.objectContaining({ message: expect.stringContaining("locked") }),
-    );
-    expect(created.peer.socket.emit).toHaveBeenCalledWith(
-      "userRequestedJoin",
-      expect.objectContaining({ userId: "guest-visitor" }),
-    );
+    const status = knocking.peer.emit.mock.calls.find(
+      ([event]) => event === "waitingRoomStatus",
+    )?.[1] as { message?: string } | undefined;
+    expect(status?.message).toContain("locked");
+    const knock = created.peer.emit.mock.calls.find(
+      ([event]) => event === "userRequestedJoin",
+    )?.[1] as { userId?: string } | undefined;
+    expect(knock?.userId).toBe("guest-visitor");
 
     const room = state.rooms.get("conclave:abc-mnop-xyz")!;
     room.allowLockedUser("guest-visitor");
