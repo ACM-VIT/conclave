@@ -13,7 +13,7 @@ import type {
 import { io, type Socket } from "socket.io-client";
 import { MediaStreamTrack, RtpHeader, RtpPacket } from "werift";
 import { createDummyRegister, installPolyfill } from "werift/polyfill";
-import { asArray, asRecord, readBoolean, readNumber, readString } from "../utilities/untrusted.js";
+import { asArray, asRecord, readBoolean, readString } from "../utilities/untrusted.js";
 
 // A real two-person call against one SFU instance, with no browser: two
 // clients join one room, each publishes Opus audio and consumes the other's,
@@ -238,8 +238,6 @@ const countRtp = (consumer: Consumer): (() => number) => {
   return () => packets;
 };
 
-const roomsOf = (status: Record<string, unknown>) => readNumber(status, "rooms") ?? -1;
-
 // Samples both directions once a second for the hold and returns the longest
 // run of seconds in which either side received nothing.
 const holdCall = async (counters: Array<() => number>, sockets: Socket[]) => {
@@ -259,20 +257,14 @@ const holdCall = async (counters: Array<() => number>, sockets: Socket[]) => {
 
 const clients: CanaryClient[] = [];
 try {
-  const before = await admin("GET", "/status");
-  console.log(`Canary against ${readString(before, "instanceId")} at ${sfuUrl}, room ${roomId}`);
-  // A draining instance only hosts a new room that holds a placement, and a
-  // placement is only granted while not draining. Lift the drain for the one
-  // reservation, then restore it; the deploy keeps fresh builds drained until
-  // this call passes.
-  if (readBoolean(before, "draining") === true) {
-    await admin("POST", "/drain", { draining: false });
-    try {
-      await admin("POST", `/routing/placements/${encodeURIComponent(clientId)}/${roomId}`);
-    } finally {
-      await admin("POST", "/drain", { draining: true });
-    }
-  }
+  const status = await admin("GET", "/status");
+  console.log(`Canary against ${readString(status, "instanceId")} at ${sfuUrl}, room ${roomId}`);
+  // The deploy keeps a fresh build drained until this call passes. A
+  // draining instance hosts a new room only with a placement, which it grants
+  // to this authenticated request alone.
+  await admin("POST", `/routing/placements/${encodeURIComponent(clientId)}/${roomId}`, {
+    allowDraining: true,
+  });
 
   const alice = await connectClient("Alice");
   clients.push(alice);
@@ -308,13 +300,14 @@ try {
     client.stopAudio?.();
     client.socket.close();
   }
-  let roomsAfter = -1;
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    roomsAfter = roomsOf(await admin("GET", "/status"));
-    if (roomsAfter <= roomsOf(before)) break;
-    await new Promise((resolve) => setTimeout(resolve, 500));
+  // A lingering canary room would hold the next drain open forever.
+  const roomPath = `/rooms/${roomId}?clientId=${encodeURIComponent(clientId)}`;
+  let roomOpen = true;
+  for (let attempt = 0; attempt < 20 && roomOpen; attempt += 1) {
+    roomOpen = asRecord(await admin("GET", roomPath)).room != null;
+    if (roomOpen) await new Promise((resolve) => setTimeout(resolve, 500));
   }
-  check("canary room closed after both left", roomsAfter <= roomsOf(before), `rooms ${roomsOf(before)} -> ${roomsAfter}`);
+  check("canary room closed after both left", !roomOpen);
 } catch (error) {
   check("canary call", false, error instanceof Error ? error.message : String(error));
 } finally {
