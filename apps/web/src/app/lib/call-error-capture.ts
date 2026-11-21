@@ -76,7 +76,10 @@ const createLimiter = (now: () => number) => {
  */
 export function installCallErrorCapture(
   report: CallErrorReport,
-  { target = console as ConsoleLike, now = Date.now } = {},
+  {
+    target = console,
+    now = Date.now,
+  }: { target?: ConsoleLike; now?: () => number } = {},
 ): () => void {
   const original = target.error;
   const allow = createLimiter(now);

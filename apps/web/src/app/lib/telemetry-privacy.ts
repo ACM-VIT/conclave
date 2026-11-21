@@ -92,10 +92,11 @@ const scrubExceptionEntry = (entry: ExceptionEntry): ExceptionEntry => ({
 
 function scrubProperties(properties: Properties): Properties {
   const scrubbed: Properties = {};
-  for (const [key, value] of Object.entries(properties)) {
+  const entries: Array<[string, unknown]> = Object.entries(properties);
+  for (const [key, value] of entries) {
     if (DROPPED_PROPERTIES.has(key)) continue;
     if (key === "$exception_list" && Array.isArray(value)) {
-      scrubbed[key] = value.map(scrubExceptionEntry);
+      scrubbed[key] = (value as ExceptionEntry[]).map(scrubExceptionEntry);
     } else if (typeof value === "string" && URL_PROPERTY.test(key)) {
       scrubbed[key] = scrubUrl(value);
     } else if (

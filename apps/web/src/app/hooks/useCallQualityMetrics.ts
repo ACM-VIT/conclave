@@ -87,9 +87,12 @@ export function useCallQualityMetrics({
           performance.now(),
         );
       }
-      timer = window.setTimeout(sample, delay ?? IDLE_POLL_MS);
+      schedule(delay ?? IDLE_POLL_MS);
     };
-    timer = window.setTimeout(sample, IDLE_POLL_MS);
+    const schedule = (ms: number) => {
+      timer = window.setTimeout(() => void sample(), ms);
+    };
+    schedule(IDLE_POLL_MS);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
