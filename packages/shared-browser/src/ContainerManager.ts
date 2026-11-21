@@ -1,4 +1,5 @@
 import Docker from "dockerode";
+import { randomInt } from "node:crypto";
 import type {
     BrowserCapabilities,
     BrowserManager,
@@ -23,9 +24,9 @@ export class ContainerManager implements BrowserManager {
     private usedPorts: Set<number> = new Set();
     private idleTimers: Map<string, NodeJS.Timeout> = new Map();
 
-    constructor(config: Partial<BrowserServiceConfig> = {}) {
+    constructor(config: Partial<BrowserServiceConfig> = {}, docker: Docker = new Docker()) {
         this.config = { ...defaultConfig, ...config };
-        this.docker = new Docker();
+        this.docker = docker;
     }
 
     private sanitizeContainerName(roomId: string): string {
@@ -92,7 +93,22 @@ export class ContainerManager implements BrowserManager {
         }
     }
 
-    private buildNoVncUrl(port: number): string {
+    /**
+     * VNC authentication reads only the first 8 password characters. A fresh
+     * random one per session (about 47 bits) means a participant of one room
+     * cannot open another room's display.
+     */
+    private createVncPassword(): string {
+        const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+        return Array.from({ length: 8 }, () => alphabet[randomInt(alphabet.length)]).join("");
+    }
+
+    /**
+     * The password travels in the URL fragment, which browsers never send to a
+     * server or proxy log. noVNC's vnc_lite.html only matches `[?&]password=`,
+     * so the fragment starts with `&`.
+     */
+    private buildNoVncUrl(port: number, vncPassword: string): string {
         const params = new URLSearchParams({
             autoconnect: "true",
             resize: "scale",
@@ -103,11 +119,12 @@ export class ContainerManager implements BrowserManager {
                 ? `novnc/${port}/websockify`
                 : "websockify",
         }).toString();
+        const fragment = `&${new URLSearchParams({ password: vncPassword })}`;
         if (this.config.publicBaseUrl) {
             const base = this.config.publicBaseUrl.replace(/\/+$/, "");
-            return `${base}/novnc/${port}/vnc_lite.html?${params}`;
+            return `${base}/novnc/${port}/vnc_lite.html?${params}#${fragment}`;
         }
-        return `http://${this.config.hostAddress}:${port}/vnc_lite.html?${params}`;
+        return `http://${this.config.hostAddress}:${port}/vnc_lite.html?${params}#${fragment}`;
     }
 
     private resetIdleTimer(roomId: string): void {
@@ -165,9 +182,11 @@ export class ContainerManager implements BrowserManager {
             } catch {
             }
 
+            const vncPassword = this.createVncPassword();
             const containerEnv = [
                 `START_URL=${url}`,
                 "RESOLUTION=1280x720x24",
+                `VNC_PASSWORD=${vncPassword}`,
             ];
 
             if (audioTarget?.ip && audioTarget?.port) {
@@ -194,7 +213,7 @@ export class ContainerManager implements BrowserManager {
                 Env: containerEnv,
                 HostConfig: {
                     PortBindings: {
-                        "6080/tcp": [{ HostIp: "0.0.0.0", HostPort: port.toString() }],
+                        "6080/tcp": [{ HostIp: this.config.noVncBindAddress, HostPort: port.toString() }],
                     },
                     AutoRemove: true,
                     ExtraHosts: ["host.docker.internal:host-gateway"],
@@ -208,7 +227,7 @@ export class ContainerManager implements BrowserManager {
 
             await container.start();
 
-            const noVncUrl = this.buildNoVncUrl(port);
+            const noVncUrl = this.buildNoVncUrl(port, vncPassword);
 
             const session: BrowserSession = {
                 roomId,

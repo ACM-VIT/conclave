@@ -34,6 +34,13 @@ else
   COMPOSE=(docker compose -f "$COMPOSE_FILE")
 fi
 
+BROWSER_SERVICE_TOKEN="${BROWSER_SERVICE_TOKEN:-}"
+if (( ${#BROWSER_SERVICE_TOKEN} < 32 )); then
+  echo "BROWSER_SERVICE_TOKEN must be set to a random value of at least 32 characters (openssl rand -hex 32)." >&2
+  echo "Set the same value on every SFU that uses this service." >&2
+  exit 1
+fi
+
 BROWSER_PROVIDER="${BROWSER_PROVIDER:-chromium}"
 if [[ "$BROWSER_PROVIDER" == "kitesurf" ]]; then
   BUILD_RUNTIME_IMAGE="false"
@@ -58,7 +65,7 @@ echo "Deploying shared browser service..."
 
 echo ""
 echo "Shared browser service deployed."
-echo "Control API: http://<browser-host>:${BROWSER_SERVICE_PORT:-3040}/health"
+echo "Control API: http://${BROWSER_SERVICE_HOST:-127.0.0.1}:${BROWSER_SERVICE_PORT:-3040}/health"
 echo "Provider: ${BROWSER_PROVIDER}"
 if [[ "$BROWSER_PROVIDER" == "chromium" ]]; then
   echo "noVNC ports: ${NOVNC_PORT_START:-6080}-${NOVNC_PORT_END:-6100}"

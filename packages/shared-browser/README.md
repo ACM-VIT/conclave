@@ -53,9 +53,9 @@ and starts `browser-service` using `docker-compose.browser.yml`.
 
 Set these environment variables for each SFU instance:
 
-- `BROWSER_SERVICE_URL=http://<browser-vm-ip>:3040`
+- `BROWSER_SERVICE_URL=http://<browser-vm-private-ip>:3040`
 - `PLAIN_TRANSPORT_ANNOUNCED_IP=<public-or-routable-sfu-ip>`
-- `BROWSER_SERVICE_TOKEN=<shared-secret>` (recommended)
+- `BROWSER_SERVICE_TOKEN=<shared-secret>` (required, the same value as the browser VM)
 
 `PLAIN_TRANSPORT_ANNOUNCED_IP` is only needed in Chromium mode and must be
 reachable from the browser VM so RTP can reach the SFU.
@@ -64,13 +64,22 @@ reachable from the browser VM so RTP can reach the SFU.
 
 These are read from root `.env` (or current shell env):
 
+- `BROWSER_SERVICE_TOKEN` (required; at least 32 random characters, for example
+  `openssl rand -hex 32`. The service refuses to start without it.)
+- `BROWSER_SERVICE_HOST` (default `127.0.0.1`; set the private address the SFU
+  reaches when the SFU runs on another VM. Public and wildcard addresses are
+  refused.)
+- `BROWSER_SERVICE_CORS_ORIGINS` (optional comma-separated web origins allowed
+  to call the control API from a browser; none by default because the SFU calls
+  it server to server)
 - `BROWSER_SERVICE_PORT` (default `3040`)
 - `BROWSER_PROVIDER` (`chromium` by default; standalone Kitesurf remains
   supported for backwards compatibility)
 - `NOVNC_PORT_START` / `NOVNC_PORT_END` (defaults `6080`-`6100`)
+- `NOVNC_BIND_ADDRESS` (default `0.0.0.0`; use `127.0.0.1` when a reverse proxy
+  on the same host serves `BROWSER_PUBLIC_BASE_URL`)
 - `BROWSER_PUBLIC_BASE_URL` (recommended for public/proxied noVNC URLs)
 - `BROWSER_HOST_ADDRESS` (used if `BROWSER_PUBLIC_BASE_URL` is unset)
-- `BROWSER_SERVICE_TOKEN` (token expected by control endpoints)
 - `BROWSER_RTP_TARGET_HOST` (optional override for RTP destination host)
 - `BROWSER_AUDIO_TARGET_HOST` / `BROWSER_VIDEO_TARGET_HOST` (optional per-media overrides)
 - `SFU_HOST` (legacy alias for RTP target host)
@@ -81,6 +90,13 @@ These are read from root `.env` (or current shell env):
 
 If `BROWSER_PUBLIC_BASE_URL` is unset and `BROWSER_HOST_ADDRESS=localhost`, clients will receive localhost noVNC links.
 
+Each Chromium session gets a random VNC password. The service puts it in the
+URL fragment of the noVNC link it returns to the SFU, so only that room's
+participants receive it and it never reaches proxy logs. The runtime image
+refuses to start a display without a password, so rebuild
+`conclave-browser:latest` (the default in `deploy-browser-service.sh`) whenever
+you update the service.
+
 ## Network / Firewall Checklist
 
 In Chromium mode, open between Browser VM and SFU VM:
@@ -90,6 +106,7 @@ In Chromium mode, open between Browser VM and SFU VM:
 Open to clients for browser access in Chromium mode:
 
 - Browser service API: `BROWSER_SERVICE_PORT` (default `3040`) from SFU host(s)
+  only, over a private network
 - noVNC TCP range: `NOVNC_PORT_START`-`NOVNC_PORT_END` (default `6080`-`6100`)
 
 Kitesurf Live View is hosted by Cloudflare over HTTPS, so clients do not need

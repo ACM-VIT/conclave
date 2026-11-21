@@ -75,6 +75,10 @@ if (Test-Path -Path $envFile -PathType Leaf) {
 }
 $composeArgs += @("-f", $composeFile)
 
+if ([string]::IsNullOrWhiteSpace($env:BROWSER_SERVICE_TOKEN) -or $env:BROWSER_SERVICE_TOKEN.Length -lt 32) {
+  Exit-WithError "BROWSER_SERVICE_TOKEN must be set to a random value of at least 32 characters (openssl rand -hex 32).`nSet the same value on every SFU that uses this service."
+}
+
 $runtimeImageName = if (-not [string]::IsNullOrWhiteSpace($env:BROWSER_IMAGE_NAME)) {
   $env:BROWSER_IMAGE_NAME
 } else {
@@ -109,6 +113,11 @@ $novncPortEnd = if (-not [string]::IsNullOrWhiteSpace($env:NOVNC_PORT_END)) {
 } else {
   "6100"
 }
+$browserServiceHost = if (-not [string]::IsNullOrWhiteSpace($env:BROWSER_SERVICE_HOST)) {
+  $env:BROWSER_SERVICE_HOST
+} else {
+  "127.0.0.1"
+}
 $browserHostAddress = if (-not [string]::IsNullOrWhiteSpace($env:BROWSER_HOST_ADDRESS)) {
   $env:BROWSER_HOST_ADDRESS
 } else {
@@ -117,7 +126,7 @@ $browserHostAddress = if (-not [string]::IsNullOrWhiteSpace($env:BROWSER_HOST_AD
 
 Write-Host ""
 Write-Host "Shared browser service deployed."
-Write-Host "Control API: http://<browser-host>:$browserServicePort/health"
+Write-Host "Control API: http://${browserServiceHost}:$browserServicePort/health"
 Write-Host "noVNC ports: $novncPortStart-$novncPortEnd"
 
 if ([string]::IsNullOrWhiteSpace($env:BROWSER_PUBLIC_BASE_URL) -and ($browserHostAddress -eq "localhost")) {
