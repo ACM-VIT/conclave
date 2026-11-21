@@ -1003,11 +1003,11 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
 
         const activeRoom = state.rooms.get(roomChannelId);
         const activeClient = activeRoom?.getClient(clientId);
-        const producerStillActive = Boolean(
-          activeClient && activeRoom?.getProducerInfoById(producer.id),
-        );
+        const activeProducerInfo = activeClient
+          ? activeRoom?.getProducerInfoById(producer.id)
+          : null;
 
-        if (producer.closed || producerClosed || !activeRoom || !producerStillActive) {
+        if (producer.closed || producerClosed || !activeRoom || !activeProducerInfo) {
           notifyProducerClosed();
           respond(callback, { error: "Producer closed during setup" });
           return;
@@ -1024,6 +1024,7 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
             kind,
             type,
             paused: producer.paused,
+            producerSeq: activeProducerInfo.producerSeq,
             roomId: activeRoom.id,
           });
         }
