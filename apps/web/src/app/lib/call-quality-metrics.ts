@@ -146,6 +146,8 @@ type Call = Attempt & {
   firstVideoAt: number | null;
   firstMediaReported: boolean;
   lastSampleAt: number | null;
+  /** Last counters per stream and layer id; kept for the whole call so one that
+   *  drops out of a report and comes back is not counted twice. */
   streams: Map<string, StreamMemory>;
   outboundLayers: Map<string, OutboundLayerStats>;
   lastProfile: VideoQuality | null;
@@ -401,8 +403,8 @@ export function createCallMetricsTracker({
   const foldOutbound = (call: Call, sample: CallStatsSample, dt: number) => {
     const layers = sample.outboundVideo;
     if (layers === null) return;
-    const previous = call.outboundLayers;
-    call.outboundLayers = new Map(layers.map((layer) => [layer.id, layer]));
+    const previous = new Map(call.outboundLayers);
+    layers.forEach((layer) => call.outboundLayers.set(layer.id, layer));
 
     let sentBytes = 0;
     let height = 0;
@@ -520,16 +522,7 @@ export function createCallMetricsTracker({
           : Math.min(at - call.lastSampleAt, MAX_SAMPLE_GAP_MS);
       call.lastSampleAt = at;
 
-      if (sample.inbound) {
-        const seen = new Set<string>();
-        sample.inbound.forEach((stream) => {
-          seen.add(stream.id);
-          foldInbound(call, stream, dt, at);
-        });
-        call.streams.forEach((_memory, id) => {
-          if (!seen.has(id)) call.streams.delete(id);
-        });
-      }
+      sample.inbound?.forEach((stream) => foldInbound(call, stream, dt, at));
       foldOutbound(call, sample, dt);
       reportFirstMedia(call, at);
     },

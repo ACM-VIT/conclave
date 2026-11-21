@@ -403,6 +403,25 @@ describe("call_summary", () => {
     });
   });
 
+  it("does not re-count a layer that drops out of one report and comes back", () => {
+    const { tracker, state, named } = setup();
+    state("connecting", 0);
+    state("joined", 1000);
+    const low = (bytesSent: number) => layer({ id: "send:L0", bytesSent });
+    const high = (bytesSent: number) => layer({ id: "send:L2", bytesSent, frameHeight: 720 });
+
+    tracker.onStats(sample([], { outboundVideo: [low(0), high(0)] }), 2000);
+    tracker.onStats(sample([], { outboundVideo: [low(100_000), high(500_000)] }), 7000);
+    tracker.onStats(sample([], { outboundVideo: [low(200_000)] }), 12_000);
+    tracker.onStats(sample([], { outboundVideo: [low(300_000), high(600_000)] }), 17_000);
+    state("disconnected", 18_000);
+
+    expect(named("call_summary")[0].props).toMatchObject({
+      outbound_video_ms: 15_000,
+      outbound_video_kbps: 480,
+    });
+  });
+
   it("keeps outbound bitrate right when a simulcast layer stops", () => {
     const { tracker, state, named } = setup();
     state("connecting", 0);
