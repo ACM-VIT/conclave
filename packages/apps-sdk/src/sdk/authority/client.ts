@@ -1,0 +1,712 @@
+import type {
+  ActionInput,
+  ActionName,
+  ActionReceipt,
+  AuthorityContract,
+  QueryInput,
+  QueryName,
+  QueryOutput,
+  ViewName,
+  ViewRow,
+} from "#authority/contract";
+import type { Json } from "#authority/schema";
+import {
+  AUTHORITY_EVENTS,
+  AUTHORITY_LIMITS,
+  AUTHORITY_PROTOCOL,
+  type ActRequest,
+  type AuthorityAppEntry,
+  type AuthorityCapability,
+  type AuthorityFailure,
+  type AuthorityFailureCode,
+  type AuthorityFrame,
+  type AuthorityResult,
+  type AuthorityRevokeReason,
+  type CapabilitiesRequest,
+  type OperationId,
+  type ProjectedRow,
+  type QueryReply,
+  type QueryRequest,
+  type ReplaceFrame,
+  type SubscribeRequest,
+} from "#authority/wire";
+
+/** The part of a socket.io client socket this needs. */
+export type AuthoritySocket = {
+  readonly connected: boolean;
+  on(event: string, listener: (...args: never[]) => void): unknown;
+  off(event: string, listener: (...args: never[]) => void): unknown;
+  emit(event: string, ...args: unknown[]): unknown;
+};
+
+export type AuthorityClientOptions = {
+  socket: AuthoritySocket;
+  /** How long to wait for an ack before treating it as lost. */
+  ackTimeoutMs?: number;
+  now?: () => number;
+};
+
+export type CapabilityState =
+  /** Not answered yet. Apps stay hidden. */
+  | { kind: "unknown" }
+  /** The server has no authority runtime, or none this client speaks. */
+  | { kind: "unsupported" }
+  | { kind: "ready"; capability: AuthorityCapability };
+
+export type AuthorityView<C extends AuthorityContract> = {
+  readonly [K in ViewName<C>]: ReadonlyMap<string, ViewRow<C, K>>;
+};
+
+export type AuthoritySessionState<C extends AuthorityContract> =
+  /** This server does not offer the app to this connection. */
+  | { kind: "unsupported" }
+  | { kind: "connecting" }
+  /** The server withdrew the view. Everything held was forgotten. */
+  | { kind: "revoked"; reason: AuthorityRevokeReason }
+  | {
+      kind: "ready";
+      view: AuthorityView<C>;
+      /** What this connection may call. The server checks again on use. */
+      actions: ReadonlySet<ActionName<C>>;
+      /** Actions refused only for want of a verified identity. */
+      needsIdentity: ReadonlySet<ActionName<C>>;
+      queries: ReadonlySet<QueryName<C>>;
+      /** The server's clock, for countdowns that ignore local skew. */
+      serverNowMs(): number;
+    };
+
+const DEFAULT_ACK_TIMEOUT_MS = 5_000;
+const NOT_JOINED_RETRY_MS = [500, 1_000, 2_000, 4_000, 8_000];
+const RETRY_PAUSE_MS = 400;
+const NONCE_ALPHABET =
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+
+const randomId = (length = 20): string => {
+  const bytes = new Uint8Array(length);
+  globalThis.crypto.getRandomValues(bytes);
+  let id = "";
+  for (const byte of bytes) id += NONCE_ALPHABET[byte % NONCE_ALPHABET.length];
+  return id;
+};
+
+const failure = (code: AuthorityFailureCode): AuthorityFailure => ({
+  ok: false,
+  code,
+});
+
+const LOST = Symbol("lost");
+
+type Listener = () => void;
+
+/** Codes that mean "ask again once the view is back", not "refused". */
+const RESUBSCRIBE_CODES: ReadonlySet<AuthorityFailureCode> = new Set([
+  "stale-generation",
+  "not-subscribed",
+  "stale-epoch",
+  "not-in-room",
+]);
+
+/**
+ * The client half of the authority transport for one socket: the capability
+ * exchange, and one session per app. React-free, so the web hook, tests and
+ * a native embed share it.
+ */
+export class AuthorityClient {
+  private state: CapabilityState = { kind: "unknown" };
+  private readonly listeners = new Set<Listener>();
+  private readonly sessions = new Map<string, AuthoritySession<AuthorityContract>>();
+  private readonly socket: AuthoritySocket;
+  private readonly ackTimeoutMs: number;
+  private readonly localNow: () => number;
+  private negotiation = 0;
+  private notJoinedAttempts = 0;
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  private disposed = false;
+
+  constructor(options: AuthorityClientOptions) {
+    this.socket = options.socket;
+    this.ackTimeoutMs = options.ackTimeoutMs ?? DEFAULT_ACK_TIMEOUT_MS;
+    this.localNow = options.now ?? (() => Date.now());
+    this.socket.on(AUTHORITY_EVENTS.frame, this.onFrame);
+    this.socket.on(AUTHORITY_EVENTS.capabilitiesChanged, this.onCapabilitiesChanged);
+    this.socket.on("connect", this.onConnect);
+    this.socket.on("disconnect", this.onDisconnect);
+    if (this.socket.connected) this.refresh();
+  }
+
+  get capabilities(): CapabilityState {
+    return this.state;
+  }
+
+  subscribe = (listener: Listener): (() => void) => {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  };
+
+  /** The server's entry for an app this client can render, if offered. */
+  entryFor(contract: AuthorityContract): AuthorityAppEntry | null {
+    if (this.state.kind !== "ready") return null;
+    return (
+      this.state.capability.apps.find(
+        (entry) => entry.app === contract.id && entry.major === contract.major,
+      ) ?? null
+    );
+  }
+
+  /**
+   * Asks the server what it offers. Call after joining a room; it is also
+   * called on every reconnect. A server that never answers is one without
+   * the runtime, and every app stays hidden.
+   */
+  refresh(): void {
+    if (this.disposed || !this.socket.connected) return;
+    this.clearRetry();
+    const attempt = ++this.negotiation;
+    const request: CapabilitiesRequest = { protocols: [AUTHORITY_PROTOCOL] };
+    void this.request<AuthorityResult<AuthorityCapability>>(
+      AUTHORITY_EVENTS.capabilities,
+      request,
+    ).then((reply) => {
+      if (this.disposed || attempt !== this.negotiation) return;
+      if (reply === LOST) {
+        this.setCapabilities({ kind: "unsupported" });
+        return;
+      }
+      if (reply.ok) {
+        this.notJoinedAttempts = 0;
+        this.setCapabilities({ kind: "ready", capability: reply.value });
+        return;
+      }
+      if (reply.code === "not-in-room" || reply.code === "rate-limited") {
+        // Asked before the join finished. Try again shortly.
+        const wait = NOT_JOINED_RETRY_MS[this.notJoinedAttempts];
+        if (wait !== undefined) {
+          this.notJoinedAttempts += 1;
+          this.retryTimer = setTimeout(() => this.refresh(), wait);
+          return;
+        }
+      }
+      this.setCapabilities({ kind: "unsupported" });
+    });
+  }
+
+  /** Starts a new attempt budget. Call when the room is (re)joined. */
+  joined(): void {
+    this.notJoinedAttempts = 0;
+    this.refresh();
+  }
+
+  open<C extends AuthorityContract>(contract: C): AuthoritySession<C> {
+    let session = this.sessions.get(contract.id);
+    if (!session) {
+      session = new AuthoritySession<AuthorityContract>(this, contract);
+      this.sessions.set(contract.id, session);
+    }
+    session.retain();
+    return session as unknown as AuthoritySession<C>;
+  }
+
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.clearRetry();
+    this.socket.off(AUTHORITY_EVENTS.frame, this.onFrame);
+    this.socket.off(AUTHORITY_EVENTS.capabilitiesChanged, this.onCapabilitiesChanged);
+    this.socket.off("connect", this.onConnect);
+    this.socket.off("disconnect", this.onDisconnect);
+    for (const session of this.sessions.values()) session.close();
+    this.sessions.clear();
+    this.listeners.clear();
+  }
+
+  /* ---- Used by sessions -------------------------------------------------- */
+
+  /** @internal */
+  forget(session: AuthoritySession<AuthorityContract>): void {
+    if (this.sessions.get(session.contract.id) === session) {
+      this.sessions.delete(session.contract.id);
+    }
+  }
+
+  /** @internal Emits with an ack, resolving `LOST` when none arrives. */
+  request<Reply>(event: string, payload: unknown): Promise<Reply | typeof LOST> {
+    return new Promise((resolve) => {
+      if (!this.socket.connected) {
+        resolve(LOST);
+        return;
+      }
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        resolve(LOST);
+      }, this.ackTimeoutMs);
+      this.socket.emit(event, payload, (reply: Reply) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(reply);
+      });
+    });
+  }
+
+  /** @internal */
+  send(event: string, payload: unknown): void {
+    if (this.socket.connected) this.socket.emit(event, payload);
+  }
+
+  /** @internal */
+  now(): number {
+    return this.localNow();
+  }
+
+  /** @internal */
+  get isDisposed(): boolean {
+    return this.disposed;
+  }
+
+  /* ---- Socket events ----------------------------------------------------- */
+
+  private readonly onFrame = (frame: AuthorityFrame): void => {
+    for (const session of this.sessions.values()) session.receive(frame);
+  };
+
+  private readonly onCapabilitiesChanged = (
+    capability: AuthorityCapability,
+  ): void => {
+    if (capability?.protocol !== AUTHORITY_PROTOCOL) return;
+    this.negotiation += 1;
+    this.setCapabilities({ kind: "ready", capability });
+  };
+
+  private readonly onConnect = (): void => {
+    this.joined();
+  };
+
+  private readonly onDisconnect = (): void => {
+    this.negotiation += 1;
+    this.clearRetry();
+    this.setCapabilities({ kind: "unknown" });
+  };
+
+  private setCapabilities(next: CapabilityState): void {
+    this.state = next;
+    for (const session of this.sessions.values()) session.capabilitiesChanged();
+    for (const listener of [...this.listeners]) listener();
+  }
+
+  private clearRetry(): void {
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.retryTimer = null;
+  }
+}
+
+type Rows = Map<string, ReadonlyMap<string, Json>>;
+
+/**
+ * One app's view on one socket: subscribes, applies frames, and sends actions
+ * and queries. It holds exactly what the server sent it and nothing else.
+ */
+export class AuthoritySession<C extends AuthorityContract> {
+  private state: AuthoritySessionState<C> = { kind: "connecting" };
+  private readonly listeners = new Set<Listener>();
+  private readonly readyWaiters = new Set<Listener>();
+  private readonly streams = new Map<
+    string,
+    { generation: number; parts: string[]; settle(result: AuthorityResult<Json>): void }
+  >();
+  private refs = 0;
+  private closed = false;
+  private subscription: string | null = null;
+  private subscribedEpoch: string | null = null;
+  private generation = 0;
+  private seq = 0;
+  private incoming: { generation: number; frames: ReplaceFrame[] } | null = null;
+  private rows: Rows = new Map();
+  private clockOffsetMs = 0;
+
+  constructor(
+    private readonly client: AuthorityClient,
+    readonly contract: C,
+  ) {
+    this.capabilitiesChanged();
+  }
+
+  getState = (): AuthoritySessionState<C> => this.state;
+
+  subscribe = (listener: Listener): (() => void) => {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  };
+
+  /** @internal */
+  retain(): void {
+    this.refs += 1;
+  }
+
+  /** Ends this holder's use. The subscription closes with the last one. */
+  release(): void {
+    this.refs -= 1;
+    if (this.refs > 0) return;
+    this.close();
+    this.client.forget(this);
+  }
+
+  /** @internal */
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.unsubscribe();
+    this.failStreams();
+    this.listeners.clear();
+    for (const waiter of [...this.readyWaiters]) waiter();
+  }
+
+  /**
+   * Sends an action and resolves with the server's answer. If the answer is
+   * lost, or the view is being replaced, the same operation id is sent again
+   * until it is answered or the id expires, so one press is one action however
+   * many times it is sent.
+   */
+  async act<K extends ActionName<C>>(
+    action: K,
+    input: ActionInput<C, K>,
+  ): Promise<AuthorityResult<ActionReceipt<C, K>>> {
+    const operation: OperationId = {
+      issuedAtMs: Math.round(this.serverNow()),
+      nonce: randomId(),
+    };
+    const deadline =
+      this.client.now() + AUTHORITY_LIMITS.operationMaxAgeMs - RETRY_PAUSE_MS * 4;
+
+    for (;;) {
+      if (this.closed || this.client.isDisposed) return failure("unknown-outcome");
+      // Only a view that is on its way is worth waiting for.
+      if (this.state.kind === "unsupported") return failure("unsupported");
+      if (this.state.kind === "revoked") return failure("forbidden");
+      const remaining = deadline - this.client.now();
+      if (remaining <= 0) return failure("unknown-outcome");
+      if (!(await this.whenReady(remaining))) continue;
+      const epoch = this.subscribedEpoch;
+      if (this.state.kind !== "ready" || !this.subscription || !epoch) continue;
+
+      const request: ActRequest = {
+        roomEpoch: epoch,
+        subscription: this.subscription,
+        generation: this.generation,
+        operation,
+        action,
+        input,
+      };
+      const reply = await this.client.request<AuthorityResult<Json>>(
+        AUTHORITY_EVENTS.act,
+        request,
+      );
+      if (reply === LOST) {
+        await pause(RETRY_PAUSE_MS);
+        continue;
+      }
+      if (!reply.ok && RESUBSCRIBE_CODES.has(reply.code)) {
+        if (reply.code === "stale-epoch" || reply.code === "not-in-room") {
+          this.client.refresh();
+        }
+        await pause(RETRY_PAUSE_MS);
+        continue;
+      }
+      return reply as AuthorityResult<ActionReceipt<C, K>>;
+    }
+  }
+
+  /** A one-shot read. The result goes to this caller and is not kept. */
+  async query<K extends QueryName<C>>(
+    query: K,
+    input: QueryInput<C, K>,
+  ): Promise<AuthorityResult<QueryOutput<C, K>>> {
+    const epoch = this.subscribedEpoch;
+    if (this.state.kind !== "ready" || !this.subscription || !epoch) {
+      return failure("not-subscribed");
+    }
+    const generation = this.generation;
+    const request: QueryRequest = {
+      roomEpoch: epoch,
+      subscription: this.subscription,
+      generation,
+      request: randomId(),
+      query,
+      input,
+    };
+    // Registered before sending: the first part can arrive before the ack.
+    const streamed = new Promise<AuthorityResult<Json>>((settle) => {
+      this.streams.set(request.request, { generation, parts: [], settle });
+    });
+
+    const reply = await this.client.request<QueryReply>(
+      AUTHORITY_EVENTS.query,
+      request,
+    );
+    let result: AuthorityResult<Json>;
+    if (reply === LOST) result = failure("unknown-outcome");
+    else if (!reply.ok) result = reply;
+    else if ("streamed" in reply) result = await streamed;
+    else result = { ok: true, value: reply.value };
+    this.streams.delete(request.request);
+
+    // A role change or reconnect while the read was in flight voids it.
+    if (result.ok && (this.closed || this.generation !== generation)) {
+      return failure("stale-generation");
+    }
+    return result as AuthorityResult<QueryOutput<C, K>>;
+  }
+
+  /* ---- Driven by the client --------------------------------------------- */
+
+  /** @internal */
+  capabilitiesChanged(): void {
+    if (this.closed) return;
+    const capabilities = this.client.capabilities;
+    if (capabilities.kind === "unknown") {
+      this.reset({ kind: "connecting" });
+      return;
+    }
+    const entry = this.client.entryFor(this.contract);
+    if (!entry || capabilities.kind !== "ready") {
+      this.reset({ kind: "unsupported" });
+      return;
+    }
+    const epoch = capabilities.capability.roomEpoch;
+    if (this.subscription && this.subscribedEpoch === epoch) return;
+    this.start(entry, epoch);
+  }
+
+  /** @internal */
+  receive(frame: AuthorityFrame): void {
+    if (this.closed || frame.subscription !== this.subscription) return;
+    this.clockOffsetMs = frame.serverNowMs - this.client.now();
+
+    if (frame.kind === "query" || frame.kind === "queryAbort") {
+      this.receiveQuery(frame);
+      return;
+    }
+    if (frame.kind === "revoke") {
+      this.subscription = null;
+      this.reset({ kind: "revoked", reason: frame.reason }, { keepSubscription: true });
+      return;
+    }
+    if (frame.generation < this.generation) return;
+
+    if (frame.kind === "replace") {
+      if (!this.incoming || this.incoming.generation !== frame.generation) {
+        if (frame.part !== 0) {
+          this.resubscribe();
+          return;
+        }
+        this.incoming = { generation: frame.generation, frames: [] };
+      }
+      if (frame.part !== this.incoming.frames.length) {
+        this.resubscribe();
+        return;
+      }
+      this.incoming.frames.push(frame);
+      if (frame.last) this.install(this.incoming.frames);
+      return;
+    }
+
+    // A patch for a view not yet installed, or out of order: start over.
+    if (frame.generation !== this.generation || frame.seq !== this.seq + 1) {
+      this.resubscribe();
+      return;
+    }
+    this.seq = frame.seq;
+    const next: Rows = new Map(this.rows);
+    const touched = new Map<string, Map<string, Json>>();
+    const bucketOf = (name: string): Map<string, Json> => {
+      let bucket = touched.get(name);
+      if (!bucket) {
+        bucket = new Map(next.get(name));
+        touched.set(name, bucket);
+        next.set(name, bucket);
+      }
+      return bucket;
+    };
+    for (const ref of frame.remove) bucketOf(ref.bucket).delete(ref.key);
+    for (const row of frame.put) bucketOf(row.bucket).set(row.key, row.value);
+    this.rows = next;
+    if (this.state.kind === "ready") {
+      this.setState({ ...this.state, view: this.viewOf(next) });
+    }
+  }
+
+  /* ---- Internals --------------------------------------------------------- */
+
+  private start(entry: AuthorityAppEntry, epoch: string): void {
+    this.unsubscribe();
+    this.failStreams();
+    this.subscription = randomId();
+    this.subscribedEpoch = epoch;
+    this.generation = 0;
+    this.seq = 0;
+    this.incoming = null;
+    this.rows = new Map();
+    this.setState({ kind: "connecting" });
+
+    const subscription = this.subscription;
+    const request: SubscribeRequest = {
+      roomEpoch: epoch,
+      instance: entry.instance,
+      app: entry.app,
+      major: entry.major,
+      subscription,
+    };
+    void this.client
+      .request<AuthorityResult<null>>(AUTHORITY_EVENTS.subscribe, request)
+      .then((reply) => {
+        if (this.closed || this.subscription !== subscription) return;
+        if (reply === LOST) {
+          // The view may still arrive. If it does not, a reconnect retries.
+          return;
+        }
+        if (reply.ok) return;
+        this.subscription = null;
+        if (reply.code === "forbidden") {
+          this.reset({ kind: "revoked", reason: "forbidden" }, { keepSubscription: true });
+        } else {
+          this.reset({ kind: "unsupported" }, { keepSubscription: true });
+          if (reply.code === "stale-epoch" || reply.code === "not-in-room") {
+            this.client.refresh();
+          }
+        }
+      });
+  }
+
+  /** Drops the current subscription and asks for a fresh one. */
+  private resubscribe(): void {
+    const entry = this.client.entryFor(this.contract);
+    const capabilities = this.client.capabilities;
+    if (!entry || capabilities.kind !== "ready") {
+      this.reset({ kind: "connecting" });
+      return;
+    }
+    this.start(entry, capabilities.capability.roomEpoch);
+  }
+
+  private install(frames: ReplaceFrame[]): void {
+    const rows: Rows = new Map();
+    const buckets = new Map<string, Map<string, Json>>();
+    const put = (row: ProjectedRow): void => {
+      let bucket = buckets.get(row.bucket);
+      if (!bucket) {
+        bucket = new Map();
+        buckets.set(row.bucket, bucket);
+        rows.set(row.bucket, bucket);
+      }
+      bucket.set(row.key, row.value);
+    };
+    for (const frame of frames) for (const row of frame.rows) put(row);
+
+    const grants = frames[0].grants;
+    this.generation = frames[0].generation;
+    this.seq = 0;
+    this.incoming = null;
+    this.rows = rows;
+    this.failStreams();
+    this.setState({
+      kind: "ready",
+      view: this.viewOf(rows),
+      actions: new Set(grants?.actions ?? []),
+      needsIdentity: new Set(grants?.needsIdentity ?? []),
+      queries: new Set(grants?.queries ?? []),
+      serverNowMs: () => this.serverNow(),
+    });
+    for (const waiter of [...this.readyWaiters]) waiter();
+  }
+
+  private viewOf(rows: Rows): AuthorityView<C> {
+    const view: Record<string, ReadonlyMap<string, Json>> = {};
+    for (const name of Object.keys(this.contract.views)) {
+      view[name] = rows.get(name) ?? EMPTY_BUCKET;
+    }
+    return view as AuthorityView<C>;
+  }
+
+  private receiveQuery(
+    frame: Extract<AuthorityFrame, { kind: "query" | "queryAbort" }>,
+  ): void {
+    const stream = this.streams.get(frame.request);
+    if (!stream) return;
+    if (frame.kind === "queryAbort" || frame.part !== stream.parts.length) {
+      this.streams.delete(frame.request);
+      stream.settle(failure("stale-generation"));
+      return;
+    }
+    stream.parts.push(frame.data);
+    if (!frame.last) return;
+    this.streams.delete(frame.request);
+    try {
+      stream.settle({ ok: true, value: JSON.parse(stream.parts.join("")) as Json });
+    } catch {
+      stream.settle(failure("unknown-outcome"));
+    }
+  }
+
+  private failStreams(): void {
+    for (const [request, stream] of [...this.streams]) {
+      this.streams.delete(request);
+      stream.settle(failure("stale-generation"));
+    }
+  }
+
+  private unsubscribe(): void {
+    if (!this.subscription) return;
+    this.client.send(AUTHORITY_EVENTS.unsubscribe, {
+      subscription: this.subscription,
+    });
+    this.subscription = null;
+  }
+
+  /** Forgets everything held, so nothing privileged outlives its grant. */
+  private reset(
+    state: AuthoritySessionState<C>,
+    options?: { keepSubscription?: boolean },
+  ): void {
+    if (!options?.keepSubscription) this.unsubscribe();
+    this.subscribedEpoch = null;
+    this.generation = 0;
+    this.seq = 0;
+    this.incoming = null;
+    this.rows = new Map();
+    this.failStreams();
+    this.setState(state);
+  }
+
+  private setState(next: AuthoritySessionState<C>): void {
+    const unchanged =
+      this.state.kind === next.kind &&
+      (next.kind === "connecting" || next.kind === "unsupported");
+    if (unchanged) return;
+    this.state = next;
+    for (const listener of [...this.listeners]) listener();
+  }
+
+  /** Resolves true once the view is ready, false when `timeoutMs` passes. */
+  private whenReady(timeoutMs: number): Promise<boolean> {
+    if (this.state.kind === "ready") return Promise.resolve(true);
+    return new Promise((resolve) => {
+      const done = (): void => {
+        clearTimeout(timer);
+        this.readyWaiters.delete(done);
+        resolve(this.state.kind === "ready" && !this.closed);
+      };
+      const timer = setTimeout(done, Math.min(timeoutMs, 1_000));
+      this.readyWaiters.add(done);
+    });
+  }
+
+  private serverNow(): number {
+    return this.client.now() + this.clockOffsetMs;
+  }
+}
+
+const EMPTY_BUCKET: ReadonlyMap<string, Json> = new Map();
+
+const pause = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));

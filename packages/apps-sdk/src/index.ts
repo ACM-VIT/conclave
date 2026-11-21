@@ -5,6 +5,7 @@ export * from "./sdk/doc/createAppDoc";
 export * from "./sdk/hooks/useApps";
 export * from "./sdk/hooks/useAppDoc";
 export * from "./sdk/hooks/useAppPresence";
+export * from "./sdk/authority/react";
 export * from "./games/index";
 
 export * as WhiteboardCore from "./apps/whiteboard/core/index";
