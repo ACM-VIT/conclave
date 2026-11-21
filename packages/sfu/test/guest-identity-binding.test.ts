@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Router, Worker } from "mediasoup/types";
 import type { Server as SocketIOServer, Socket } from "socket.io";
 import { Admin } from "../config/classes/Admin.js";
+import type { Room } from "../config/classes/Room.js";
 import { LocalRoomRegistry } from "../server/roomRegistry.js";
 import type { SfuAuthPayload } from "../server/socket/auth.js";
 import { createConnectionContext } from "../server/socket/context.js";
@@ -425,6 +426,110 @@ describe("guests on clients that predate guest passes", () => {
 });
 
 describe("a guest identity that holds nothing in the room", () => {
+  const signedInHost = {
+    email: "host@example.com",
+    userId: "host@example.com",
+    clientId: "conclave",
+    sessionId: "s1",
+    allowRoomCreation: true,
+  } satisfies SfuAuthPayload;
+  const guest = {
+    userId: "guest-gp_HHHHHHHHHHHHHHHHHHHHHH.tab-1",
+    clientId: "conclave",
+    sessionId: "tab-1",
+    guestProof: "proof-of-pass-h",
+  } satisfies SfuAuthPayload;
+  const guestSeat = `${guest.userId}#${guest.sessionId}`;
+
+  // A guest that joined, got `retain` from the host, and left. The right it
+  // was given outlives its seat, and so does the proof it is bound to.
+  const departedGuestWith = async (retain: (room: Room) => void) => {
+    const state = makeState();
+    await join(state, signedInHost);
+    const room = state.rooms.get("conclave:room")!;
+    expect((await join(state, guest)).ack).toHaveBeenCalledWith(joined);
+    retain(room);
+    room.removeClient(guestSeat);
+    expect(room.boundGuestIdentityCount).toBe(1);
+    return room;
+  };
+
+  it.each<[string, (room: Room) => void, (room: Room) => void]>([
+    [
+      "the host locks the room again, which ends its admission",
+      (room) => room.allowLockedUser(guest.userId),
+      (room) => room.setLocked(true),
+    ],
+    [
+      "the host revokes its admission past the lock",
+      (room) => room.allowLockedUser(guest.userId),
+      (room) => room.revokeLockedAllowedUser(guest.userId),
+    ],
+    [
+      "the host revokes its waiting-room admission",
+      (room) => room.allowUser(guest.userId),
+      (room) => room.revokeAllowedUser(guest.userId),
+    ],
+    [
+      "the host unblocks it",
+      (room) => room.blockUser(guest.userId),
+      (room) => room.unblockUser(guest.userId),
+    ],
+    [
+      "the host withdraws its stage invite",
+      (room) => room.promoteWebinarUserKey(guest.userId),
+      (room) => room.revokeWebinarPromotion(guest.userId),
+    ],
+    [
+      "newer stage invites push its invite out",
+      (room) => room.promoteWebinarUserKey(guest.userId),
+      (room) => {
+        for (let invited = 0; invited < 200; invited += 1) {
+          room.promoteWebinarUserKey(`invited-${invited}@example.com`);
+        }
+      },
+    ],
+  ])("is not kept once %s", async (_label, retain, lose) => {
+    const room = await departedGuestWith(retain);
+
+    lose(room);
+
+    expect(room.boundGuestIdentityCount).toBe(0);
+  });
+
+  it("is not kept once its stage invite has expired", async () => {
+    vi.useFakeTimers();
+    try {
+      const room = await departedGuestWith((live) =>
+        live.promoteWebinarUserKey(guest.userId),
+      );
+
+      vi.advanceTimersByTime(5 * 60 * 60 * 1000);
+
+      expect(room.isWebinarPromotedUserKey(guest.userId)).toBe(false);
+      expect(room.boundGuestIdentityCount).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("is kept for as long as it is still seated, whatever the host withdraws", async () => {
+    const state = makeState();
+    await join(state, signedInHost);
+    const room = state.rooms.get("conclave:room")!;
+    await join(state, guest);
+    room.allowLockedUser(guest.userId);
+
+    room.setLocked(true);
+    room.revokeAllowedUser(guest.userId);
+    room.unblockUser(guest.userId);
+    room.revokeWebinarPromotion(guest.userId);
+
+    const attempt = await join(state, publicIdentity(guest));
+    expect(attempt.ack).toHaveBeenCalledWith(refused);
+    expect(room.boundGuestIdentityCount).toBe(1);
+  });
+
   it("is not kept after the guest leaves", async () => {
     const state = makeState();
     await join(state, guestHost);

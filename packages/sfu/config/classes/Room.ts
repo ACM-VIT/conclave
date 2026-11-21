@@ -739,9 +739,16 @@ export class Room {
     return { ok: true, bindTo: bound };
   }
 
+  /** How many guest identities this room holds a pass proof for. */
+  get boundGuestIdentityCount(): number {
+    return this.guestProofsByUserKey.size;
+  }
+
   // Keeps the map from growing with every guest that ever passed through a
-  // long-lived room.
+  // long-lived room. Every method that removes something `holdsUserKey`
+  // counts calls this, so the map keeps no proof for a key that holds nothing.
   private releaseGuestIdentity(userKey: string): void {
+    if (!this.guestProofsByUserKey.has(userKey)) return;
     if (!this.holdsUserKey(userKey)) {
       this.guestProofsByUserKey.delete(userKey);
     }
@@ -1053,7 +1060,7 @@ export class Room {
     if (this.webinarPromotedUserKeys.size >= MAX_WEBINAR_PROMOTED_USER_KEYS) {
       const oldest = this.webinarPromotedUserKeys.keys().next().value;
       if (oldest !== undefined) {
-        this.webinarPromotedUserKeys.delete(oldest);
+        this.revokeWebinarPromotion(oldest);
       }
     }
     this.webinarPromotedUserKeys.set(
@@ -1064,14 +1071,16 @@ export class Room {
   }
 
   revokeWebinarPromotion(userKey: string): boolean {
-    return this.webinarPromotedUserKeys.delete(userKey);
+    const revoked = this.webinarPromotedUserKeys.delete(userKey);
+    this.releaseGuestIdentity(userKey);
+    return revoked;
   }
 
   isWebinarPromotedUserKey(userKey: string): boolean {
     const expiresAt = this.webinarPromotedUserKeys.get(userKey);
     if (expiresAt === undefined) return false;
     if (expiresAt <= Date.now()) {
-      this.webinarPromotedUserKeys.delete(userKey);
+      this.revokeWebinarPromotion(userKey);
       return false;
     }
     return true;
@@ -1726,7 +1735,9 @@ export class Room {
   setLocked(locked: boolean): void {
     this._isLocked = locked;
     if (locked) {
-      this.lockedAllowedUsers.clear();
+      for (const userKey of Array.from(this.lockedAllowedUsers)) {
+        this.revokeLockedAllowedUser(userKey);
+      }
     }
   }
 
@@ -2585,6 +2596,7 @@ export class Room {
 
   revokeAllowedUser(userKey: string) {
     this.allowedUsers.delete(userKey);
+    this.releaseGuestIdentity(userKey);
   }
 
   allowLockedUser(userKey: string) {
@@ -2599,6 +2611,7 @@ export class Room {
 
   revokeLockedAllowedUser(userKey: string) {
     this.lockedAllowedUsers.delete(userKey);
+    this.releaseGuestIdentity(userKey);
   }
 
   blockUser(userKey: string) {
@@ -2610,6 +2623,7 @@ export class Room {
 
   unblockUser(userKey: string) {
     this.blockedUsers.delete(userKey);
+    this.releaseGuestIdentity(userKey);
   }
 
   /**
