@@ -1,12 +1,15 @@
 "use client";
 
-import { Loader2, MicOff, VideoOff, X } from "lucide-react";
+import { Loader2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import {
   BROWSER_FAMILIES,
   BROWSER_LABELS,
+  blockedFooter,
+  blockedLead,
   blockedTitle,
   detectBrowserFamily,
+  isTouchDevice,
   unblockSteps,
   type BlockedDevice,
   type BrowserFamily,
@@ -19,13 +22,6 @@ interface BlockedMediaDialogProps {
   onClose: () => void;
 }
 
-const leadFor = (devices: readonly BlockedDevice[]): string =>
-  devices.length > 1
-    ? "To let others see and hear you, allow both in your browser."
-    : devices[0] === "camera"
-      ? "To let others see you, allow it in your browser."
-      : "To let others hear you, allow it in your browser.";
-
 export default function BlockedMediaDialog({
   devices,
   isRetrying,
@@ -35,6 +31,7 @@ export default function BlockedMediaDialog({
   const [browser, setBrowser] = useState<BrowserFamily>(() =>
     detectBrowserFamily(navigator.userAgent),
   );
+  const [touch] = useState(() => isTouchDevice(navigator.userAgent));
   const dialogRef = useRef<HTMLDivElement>(null);
   const retryRef = useRef<HTMLButtonElement>(null);
 
@@ -70,8 +67,6 @@ export default function BlockedMediaDialog({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
 
-  const Icon = devices.includes("camera") ? VideoOff : MicOff;
-
   return (
     <div
       className="fixed inset-0 z-[150] flex items-center justify-center bg-black/70 px-4"
@@ -85,21 +80,18 @@ export default function BlockedMediaDialog({
         aria-modal="true"
         aria-labelledby="blocked-media-title"
         aria-describedby="blocked-media-lead"
-        className="w-full max-w-[400px] rounded-2xl border border-white/10 bg-[#18181b] p-5 text-[#fafafa]"
+        className="w-full max-w-[440px] rounded-2xl border border-white/10 bg-[#18181b] p-5 text-[#fafafa]"
       >
         <div className="flex items-start gap-3">
-          <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#ea4335]/15 text-[#ea4335]">
-            <Icon size={18} aria-hidden="true" />
-          </span>
-          <div className="min-w-0 flex-1 pt-0.5">
-            <h2 id="blocked-media-title" className="text-[16px] font-semibold leading-tight">
+          <div className="min-w-0 flex-1">
+            <h2 id="blocked-media-title" className="text-[16px] font-semibold leading-snug">
               {blockedTitle(devices)}
             </h2>
             <p
               id="blocked-media-lead"
               className="mt-1 text-[13px] leading-snug text-[#fafafa]/60"
             >
-              {leadFor(devices)}
+              {blockedLead(devices)}
             </p>
           </div>
           <button
@@ -135,7 +127,7 @@ export default function BlockedMediaDialog({
         </div>
 
         <ol className="mt-4 space-y-2.5">
-          {unblockSteps(browser, devices).map((step, index) => (
+          {unblockSteps(browser, devices, touch).map((step, index) => (
             <li key={step} className="flex gap-2.5 text-[13.5px] leading-snug">
               <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-white/15 text-[11px] font-semibold tabular-nums text-[#fafafa]/70">
                 {index + 1}
@@ -146,8 +138,7 @@ export default function BlockedMediaDialog({
         </ol>
 
         <p className="mt-4 text-[12px] leading-snug text-[#fafafa]/45">
-          Still blocked? Your computer&apos;s privacy settings may be blocking
-          the browser.
+          {blockedFooter(devices, touch)}
         </p>
 
         <div className="mt-5 grid grid-cols-2 gap-2">

@@ -28,7 +28,15 @@ export const detectBrowserFamily = (userAgent: string): BrowserFamily => {
   return "chrome";
 };
 
-const deviceNoun = (devices: readonly BlockedDevice[]): string =>
+// Phones and tablets: their browsers have no menu bar and are tapped.
+export const isTouchDevice = (userAgent: string): boolean =>
+  /iPhone|iPad|iPod|Android/.test(userAgent);
+
+const devicesInWords = (devices: readonly BlockedDevice[]): string =>
+  devices.length > 1 ? "camera and microphone" : devices[0];
+
+// The name on the browser's own switch.
+const settingName = (devices: readonly BlockedDevice[]): string =>
   devices.length > 1
     ? "Camera and Microphone"
     : devices[0] === "camera"
@@ -36,35 +44,58 @@ const deviceNoun = (devices: readonly BlockedDevice[]): string =>
       : "Microphone";
 
 export const blockedTitle = (devices: readonly BlockedDevice[]): string =>
+  `Your browser is blocking your ${devicesInWords(devices)}`;
+
+export const blockedLead = (devices: readonly BlockedDevice[]): string =>
   devices.length > 1
-    ? "Camera and microphone are blocked"
+    ? "Allow them so people can see and hear you."
     : devices[0] === "camera"
-      ? "Camera is blocked"
-      : "Microphone is blocked";
+      ? "Allow it so people can see you."
+      : "Allow it so people can hear you.";
+
+// When the browser's own setting is already on, the device is blocked one
+// level up, by the computer or the phone.
+export const blockedFooter = (
+  devices: readonly BlockedDevice[],
+  touch: boolean,
+): string =>
+  `Still not working? In your ${
+    touch ? "device's settings" : "computer's privacy settings"
+  }, allow your browser to use your ${devicesInWords(devices)}.`;
 
 export const unblockSteps = (
   browser: BrowserFamily,
   devices: readonly BlockedDevice[],
+  touch: boolean,
 ): string[] => {
-  const noun = deviceNoun(devices);
+  const setting = settingName(devices);
+  const [press, pressLower] = touch ? ["Tap", "tap"] : ["Click", "click"];
   switch (browser) {
     case "chrome":
       return [
-        "Select the site settings icon to the left of the web address.",
-        `Turn on ${noun}.`,
-        "Come back here and select Try again.",
+        `${press} the icon to the left of the web address.`,
+        touch
+          ? `Tap Permissions, then turn on ${setting}.`
+          : `Turn on ${setting}.`,
+        `Come back and ${pressLower} Try again.`,
       ];
     case "safari":
-      return [
-        "Choose Safari > Settings for This Website. On iPhone or iPad, tap aA in the address bar, then Website Settings.",
-        `Set ${noun} to Allow.`,
-        "Come back here and select Try again.",
-      ];
+      return touch
+        ? [
+            "Tap the button at the left of the address bar, then Website Settings.",
+            `Set ${setting} to Allow.`,
+            "Come back and tap Try again.",
+          ]
+        : [
+            "In the menu bar, click Safari, then Settings for This Website.",
+            `Next to ${setting}, choose Allow.`,
+            "Come back and click Try again.",
+          ];
     case "firefox":
       return [
-        "Select the crossed-out icon to the left of the web address.",
-        "Select the X next to Blocked to clear it.",
-        "Select Try again, then choose Allow.",
+        `${press} the crossed-out icon to the left of the web address.`,
+        `${press} the X next to Blocked.`,
+        `${press} Try again, then Allow.`,
       ];
   }
 };
