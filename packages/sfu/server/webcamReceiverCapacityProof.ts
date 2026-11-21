@@ -92,8 +92,21 @@ const AUXILIARY_VIDEO_CODEC_MIME_TYPES = new Set([
   "video/flexfec-03",
 ]);
 
-const hasOnlyVp8MediaCodec = (producer: Producer): boolean => {
-  const mediaCodecs = producer.rtpParameters.codecs.filter(
+type ProducerRtpParameters = Producer["rtpParameters"];
+
+// mediasoup clones this immutable snapshot on every getter read.
+const producerRtpParameters = new WeakMap<Producer, ProducerRtpParameters>();
+
+const getProducerRtpParameters = (producer: Producer): ProducerRtpParameters => {
+  const cached = producerRtpParameters.get(producer);
+  if (cached) return cached;
+  const parameters = producer.rtpParameters;
+  producerRtpParameters.set(producer, parameters);
+  return parameters;
+};
+
+const hasOnlyVp8MediaCodec = (parameters: ProducerRtpParameters): boolean => {
+  const mediaCodecs = parameters.codecs.filter(
     (codec) =>
       !AUXILIARY_VIDEO_CODEC_MIME_TYPES.has(codec.mimeType.toLowerCase()),
   );
@@ -103,8 +116,9 @@ const hasOnlyVp8MediaCodec = (producer: Producer): boolean => {
   );
 };
 
-const parseMaxTemporalLayer = (producer: Producer): number | null => {
-  const encodings = producer.rtpParameters.encodings ?? [];
+const parseMaxTemporalLayer = (
+  encodings: NonNullable<ProducerRtpParameters["encodings"]>,
+): number | null => {
   const highestEncoding = encodings[encodings.length - 1];
   const scalabilityMode = highestEncoding?.scalabilityMode;
   if (typeof scalabilityMode !== "string") return null;
@@ -115,17 +129,18 @@ const parseMaxTemporalLayer = (producer: Producer): number | null => {
     : null;
 };
 
-export const isVp8SimulcastProducer = (producer: Producer): boolean =>
-  producer.kind === "video" &&
-  producer.type === "simulcast" &&
-  (producer.rtpParameters.encodings?.length ?? 0) > 1 &&
-  hasOnlyVp8MediaCodec(producer);
+export const isVp8SimulcastProducer = (producer: Producer): boolean => {
+  if (producer.kind !== "video" || producer.type !== "simulcast") return false;
+  const parameters = getProducerRtpParameters(producer);
+  return (parameters.encodings?.length ?? 0) > 1 &&
+    hasOnlyVp8MediaCodec(parameters);
+};
 
-export const isVp8SingleLayerProducer = (producer: Producer): boolean =>
-  producer.kind === "video" &&
-  producer.type === "simple" &&
-  (producer.rtpParameters.encodings?.length ?? 0) === 1 &&
-  hasOnlyVp8MediaCodec(producer);
+export const isVp8SingleLayerProducer = (producer: Producer): boolean => {
+  if (producer.kind !== "video" || producer.type !== "simple") return false;
+  const parameters = getProducerRtpParameters(producer);
+  return parameters.encodings?.length === 1 && hasOnlyVp8MediaCodec(parameters);
+};
 
 const hasFullLayers = (
   layers: { spatialLayer: number; temporalLayer?: number } | undefined,
@@ -288,9 +303,9 @@ export const evaluateWebcamReceiverCapacity = (
     };
   }
 
-  const encodings = producer.rtpParameters.encodings ?? [];
+  const encodings = getProducerRtpParameters(producer).encodings ?? [];
   const maxSpatialLayer = encodings.length - 1;
-  const maxTemporalLayer = parseMaxTemporalLayer(producer);
+  const maxTemporalLayer = parseMaxTemporalLayer(encodings);
   if (maxTemporalLayer === null) {
     return disqualified("producer_not_vp8_simulcast", ownerClientId, {
       basis,
