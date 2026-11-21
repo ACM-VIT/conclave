@@ -120,7 +120,29 @@ const parsePublicUrl = (value, service, errors) => {
   return url;
 };
 
-const normalizeRedisRegistry = (value, service, errors) => {
+/**
+ * Redis carries room placement and the Socket.IO adapter. Only a Redis on this
+ * host's loopback may skip TLS and credentials; anything else must use both,
+ * and a public IP is refused unless the operator explicitly allows it.
+ */
+const checkRedisExposure = (url, service, errors, allowPublicRedis) => {
+  const host = url.hostname.replace(/^\[|\]$/g, "");
+  if (host.toLowerCase() === "localhost" || isLoopbackIp(host)) return;
+
+  if (url.protocol !== "rediss:") {
+    errors.push(`${service}: a Redis that is not on loopback must use TLS (rediss://).`);
+  }
+  if (!url.password) {
+    errors.push(`${service}: a Redis that is not on loopback must require credentials in the URL.`);
+  }
+  if (isPublicIp(host) && !allowPublicRedis) {
+    errors.push(
+      `${service}: Redis at public IP ${host} is refused. Use a private address, or set SFU_DEPLOY_ALLOW_PUBLIC_REDIS=1 if it is firewalled to the SFU hosts.`,
+    );
+  }
+};
+
+const normalizeRedisRegistry = (value, service, errors, allowPublicRedis) => {
   if (!value?.trim()) {
     errors.push(`${service}: SFU_REDIS_URL or REDIS_URL is required.`);
     return null;
@@ -136,6 +158,7 @@ const normalizeRedisRegistry = (value, service, errors) => {
       errors.push(`${service}: the shared registry URL must include a host.`);
       return null;
     }
+    checkRedisExposure(url, service, errors, allowPublicRedis);
     const port = url.port || "6379";
     const database = !url.pathname || url.pathname === "/" ? "/0" : url.pathname;
     url.searchParams.sort();
@@ -149,7 +172,7 @@ const normalizeRedisRegistry = (value, service, errors) => {
 const isRequiredRedisMode = (value) =>
   value === true || value === 1 || String(value).trim().toLowerCase() === "true" || String(value).trim() === "1";
 
-export const resolveSfuTargets = ({ compose, serviceNames }) => {
+export const resolveSfuTargets = ({ allowPublicRedis = false, compose, serviceNames }) => {
   const services = compose?.services;
   if (!services || typeof services !== "object") {
     throw new SfuDeployPreflightError(["Rendered compose JSON has no services object."]);
@@ -185,6 +208,7 @@ export const resolveSfuTargets = ({ compose, serviceNames }) => {
       String(env.SFU_REDIS_URL || env.REDIS_URL || ""),
       service,
       errors,
+      allowPublicRedis,
     );
 
     if (!INSTANCE_ID_PATTERN.test(instanceId)) {
@@ -355,13 +379,14 @@ const probeTarget = async ({ target, fetchImpl, timeoutMs }) => {
 };
 
 export const runSfuDeployPreflight = async ({
+  allowPublicRedis = false,
   compose,
   configOnly = false,
   fetchImpl = globalThis.fetch,
   serviceNames,
   timeoutMs = DEFAULT_TIMEOUT_MS,
 }) => {
-  const targets = resolveSfuTargets({ compose, serviceNames });
+  const targets = resolveSfuTargets({ allowPublicRedis, compose, serviceNames });
   if (configOnly) return { configOnly: true, probes: [], targets };
   if (typeof fetchImpl !== "function") {
     throw new SfuDeployPreflightError(["This Node.js runtime does not provide fetch()."]);
@@ -419,6 +444,7 @@ const main = async () => {
         : await readFile(options.composeJson, "utf8");
     const compose = JSON.parse(rawCompose);
     const result = await runSfuDeployPreflight({
+      allowPublicRedis: process.env.SFU_DEPLOY_ALLOW_PUBLIC_REDIS === "1",
       compose,
       configOnly: options.configOnly,
       serviceNames: options.serviceNames,

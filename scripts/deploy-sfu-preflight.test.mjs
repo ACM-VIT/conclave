@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 
 import {
@@ -213,4 +214,72 @@ test("a public route resolving to the wrong instance or region is fatal", async 
     runSfuDeployPreflight({ compose: makeCompose(), fetchImpl }),
     /public route returned instance.*public route returned region/s,
   );
+});
+
+const composeWithRedis = (redisUrl) => {
+  const compose = makeCompose();
+  for (const service of Object.values(compose.services)) {
+    service.environment.SFU_REDIS_URL = redisUrl;
+  }
+  return compose;
+};
+
+const redisErrors = (redisUrl, options = {}) => {
+  try {
+    resolveSfuTargets({ compose: composeWithRedis(redisUrl), ...options });
+    return [];
+  } catch (error) {
+    assert.ok(error instanceof SfuDeployPreflightError);
+    return error.errors;
+  }
+};
+
+test("Redis on this host's loopback passes with or without credentials", () => {
+  for (const url of [
+    "redis://:prod-password@127.0.0.1:6379",
+    "redis://127.0.0.1:6379/0",
+    "redis://localhost:6379",
+    "redis://[::1]:6379",
+  ]) {
+    assert.deepEqual(redisErrors(url), [], url);
+  }
+});
+
+test("Redis off loopback must use TLS and credentials", () => {
+  assert.match(redisErrors("redis://user:secret@10.0.0.5:6379").join("\n"), /must use TLS/);
+  assert.match(redisErrors("rediss://10.0.0.5:6380").join("\n"), /require credentials/);
+  assert.match(redisErrors("redis://redis.internal:6379").join("\n"), /must use TLS[\s\S]*require credentials/);
+  assert.deepEqual(redisErrors("rediss://user:secret@10.0.0.5:6380"), []);
+  assert.deepEqual(redisErrors("rediss://:secret@redis.internal:6380"), []);
+});
+
+test("Redis at a public IP needs an explicit override", () => {
+  assert.match(redisErrors("rediss://user:secret@57.159.28.54:6380").join("\n"), /public IP 57\.159\.28\.54 is refused/);
+  assert.match(redisErrors("rediss://user:secret@[2606:4700::1111]:6380").join("\n"), /public IP/);
+  assert.deepEqual(redisErrors("rediss://user:secret@57.159.28.54:6380", { allowPublicRedis: true }), []);
+  assert.match(
+    redisErrors("redis://57.159.28.54:6379", { allowPublicRedis: true }).join("\n"),
+    /must use TLS[\s\S]*require credentials/,
+  );
+});
+
+test("the CLI refuses a public Redis unless SFU_DEPLOY_ALLOW_PUBLIC_REDIS=1", () => {
+  const script = new URL("./deploy-sfu-preflight.mjs", import.meta.url).pathname;
+  const run = (redisUrl, env = {}) =>
+    spawnSync(process.execPath, [script, "--compose-json", "-", "--config-only"], {
+      input: JSON.stringify(composeWithRedis(redisUrl)),
+      env: { PATH: process.env.PATH, ...env },
+      encoding: "utf8",
+    });
+
+  const prodShape = run("redis://:prod-password@127.0.0.1:6379");
+  assert.equal(prodShape.status, 0, prodShape.stderr);
+  assert.ok(!`${prodShape.stdout}${prodShape.stderr}`.includes("prod-password"));
+
+  const publicRedis = run("rediss://user:redis-pw-sentinel@57.159.28.54:6380");
+  assert.equal(publicRedis.status, 1);
+  assert.match(publicRedis.stderr, /public IP/);
+  assert.ok(!publicRedis.stderr.includes("redis-pw-sentinel"));
+
+  assert.equal(run("rediss://user:secret@57.159.28.54:6380", { SFU_DEPLOY_ALLOW_PUBLIC_REDIS: "1" }).status, 0);
 });
