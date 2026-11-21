@@ -5,6 +5,7 @@ import type {
   WebinarQaModerateRequest,
 } from "../../../types.js";
 import { forceRemoveClientNow } from "../../admin/controlPlane.js";
+import { getQaMode, isQaStatusPublic, type QaMode } from "../../qaPolicy.js";
 import { getOrCreateWebinarRoomConfig } from "../../webinar.js";
 import {
   emitWebinarHandQueueChanged,
@@ -39,9 +40,9 @@ const QA_MODERATE_ACTIONS = new Set([
 ]);
 
 /**
- * Webinar attendee interaction: Q&A, stage-request hands, and the host's
- * promote/demote controls. Registered for every socket; each handler guards
- * on the caller's current role.
+ * Q&A (webinar attendees, or everyone in a regular meeting), webinar
+ * stage-request hands, and the host's promote/demote controls. Registered
+ * for every socket; each handler guards on the caller's current role.
  */
 export const registerWebinarInteractionHandlers = (
   context: ConnectionContext,
@@ -58,6 +59,46 @@ export const registerWebinarInteractionHandlers = (
       return { error: "Only webinar attendees can do this" };
     }
     return { room: context.currentRoom, userId: context.currentClient.id };
+  };
+
+  /**
+   * Who may ask and upvote: webinar attendees while the host has Q&A on, or
+   * every participant in a regular meeting.
+   */
+  const requireQaMember = ():
+    | { error: string }
+    | {
+        room: NonNullable<ConnectionContext["currentRoom"]>;
+        userId: string;
+        mode: QaMode;
+        isModerator: boolean;
+      } => {
+    const room = context.currentRoom;
+    const client = context.currentClient;
+    if (!room || !client) {
+      return { error: "Not in a room" };
+    }
+    const mode = getQaMode(state, room.channelId);
+    if (mode === "webinar") {
+      if (!client.isWebinarAttendee) {
+        return { error: "Only webinar attendees can do this" };
+      }
+      const webinarConfig = getOrCreateWebinarRoomConfig(
+        state.webinarConfigs,
+        room.channelId,
+      );
+      if (!webinarConfig.qaEnabled) {
+        return { error: "Q&A is turned off for this webinar" };
+      }
+    } else if (client.isWebinarAttendee) {
+      return { error: "Q&A is not available to you here" };
+    }
+    return {
+      room,
+      userId: client.id,
+      mode,
+      isModerator: room.isAdminClient(client),
+    };
   };
 
   const requireHost = ():
@@ -90,18 +131,9 @@ export const registerWebinarInteractionHandlers = (
       ) => void,
     ) => {
       try {
-        const guard = requireAttendee();
+        const guard = requireQaMember();
         if ("error" in guard) {
           respond(callback, guard);
-          return;
-        }
-
-        const webinarConfig = getOrCreateWebinarRoomConfig(
-          state.webinarConfigs,
-          guard.room.channelId,
-        );
-        if (!webinarConfig.enabled || !webinarConfig.qaEnabled) {
-          respond(callback, { error: "Q&A is turned off for this webinar" });
           return;
         }
 
@@ -122,7 +154,7 @@ export const registerWebinarInteractionHandlers = (
         }
 
         const displayName =
-          guard.room.getDisplayNameForUser(guard.userId) || "Attendee";
+          guard.room.getDisplayNameForUser(guard.userId) || "Guest";
         const result = guard.room.submitWebinarQuestion(
           guard.userId,
           displayName,
@@ -141,7 +173,9 @@ export const registerWebinarInteractionHandlers = (
             removedId,
           });
         }
-        emitWebinarQaEntryChanged(io, guard.room, result.entry);
+        emitWebinarQaEntryChanged(io, guard.room, result.entry, {
+          mode: guard.mode,
+        });
         respond(callback, { success: true, id: result.entry.id });
       } catch (error) {
         respond(callback, { error: (error as Error).message });
@@ -160,18 +194,9 @@ export const registerWebinarInteractionHandlers = (
       ) => void,
     ) => {
       try {
-        const guard = requireAttendee();
+        const guard = requireQaMember();
         if ("error" in guard) {
           respond(callback, guard);
-          return;
-        }
-
-        const webinarConfig = getOrCreateWebinarRoomConfig(
-          state.webinarConfigs,
-          guard.room.channelId,
-        );
-        if (!webinarConfig.enabled || !webinarConfig.qaEnabled) {
-          respond(callback, { error: "Q&A is turned off for this webinar" });
           return;
         }
 
@@ -195,9 +220,14 @@ export const registerWebinarInteractionHandlers = (
           return;
         }
 
-        // Attendees may only vote on questions they can see.
+        // People may only vote on questions they can see.
         if (
-          !guard.room.isWebinarQaEntryVisibleTo(entryState, guard.userId, false)
+          !guard.room.isWebinarQaEntryVisibleTo(
+            entryState,
+            guard.userId,
+            guard.isModerator,
+            guard.mode,
+          )
         ) {
           guard.room.toggleWebinarQuestionUpvote(guard.userId, questionId);
           respond(callback, { error: "Question not found" });
@@ -212,6 +242,7 @@ export const registerWebinarInteractionHandlers = (
           io,
           guard.room,
           guard.room.projectWebinarQaEntry(entryState),
+          { mode: guard.mode },
         );
         respond(callback, {
           success: true,
@@ -249,8 +280,8 @@ export const registerWebinarInteractionHandlers = (
           respond(callback, { error: "Question not found" });
           return;
         }
-        const wasPublished =
-          before.status === "answering" || before.status === "answered";
+        const mode = getQaMode(state, guard.room.channelId);
+        const wasPublished = isQaStatusPublic(before.status, mode);
 
         const moderatorName =
           guard.room.getDisplayNameForUser(guard.hostUserId) || "Host";
@@ -273,7 +304,7 @@ export const registerWebinarInteractionHandlers = (
           io,
           guard.room,
           guard.room.projectWebinarQaEntry(updated),
-          { wasPublished },
+          { mode, wasPublished },
         );
         respond(callback, { success: true });
       } catch (error) {

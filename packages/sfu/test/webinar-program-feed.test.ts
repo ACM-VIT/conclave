@@ -291,15 +291,15 @@ describe("webinar attendee interaction state", () => {
 
     // Pending questions are private to the asker (and moderators).
     expect(
-      room.getWebinarQaSnapshotFor("attendee-a", false).map((entry) => entry.id),
+      room.getWebinarQaSnapshotFor("attendee-a", false, "webinar").map((entry) => entry.id),
     ).toHaveLength(1);
-    expect(room.getWebinarQaSnapshotFor("attendee-a", true)).toHaveLength(2);
+    expect(room.getWebinarQaSnapshotFor("attendee-a", true, "webinar")).toHaveLength(2);
 
     room.moderateWebinarQuestion(otherSubmitted.entry.id, "answered", {
       answerText: "Yes, shared afterwards.",
       moderatorName: "Host",
     });
-    const visible = room.getWebinarQaSnapshotFor("attendee-a", false);
+    const visible = room.getWebinarQaSnapshotFor("attendee-a", false, "webinar");
     expect(visible).toHaveLength(2);
     const answered = visible.find(
       (entry) => entry.id === otherSubmitted.entry.id,
@@ -323,7 +323,7 @@ describe("webinar attendee interaction state", () => {
     const overflow = room.submitWebinarQuestion("attendee-a", "Asha", "One more");
     expect("error" in overflow).toBe(true);
 
-    const [first] = room.getWebinarQaSnapshotFor("attendee-a", true);
+    const [first] = room.getWebinarQaSnapshotFor("attendee-a", true, "webinar");
     room.moderateWebinarQuestion(first.id, "dismissed");
     const afterDismiss = room.submitWebinarQuestion(
       "attendee-a",

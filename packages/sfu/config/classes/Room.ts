@@ -51,6 +51,7 @@ import {
   type WebcamReceiverCapacityTransitionReservation,
 } from "../../server/webcamReceiverCapacityProof.js";
 import { PollBook } from "../../server/polls.js";
+import { isQaStatusPublic, type QaMode } from "../../server/qaPolicy.js";
 
 export interface RoomOptions {
   id: string;
@@ -934,24 +935,28 @@ export class Room {
     };
   }
 
-  /** Attendees see their own questions plus everything the host surfaced. */
+  /** Hosts see every question, askers their own, everyone the public ones. */
   isWebinarQaEntryVisibleTo(
     state: WebinarQaEntryState,
     viewerUserId: string,
     isModerator: boolean,
+    mode: QaMode,
   ): boolean {
     if (isModerator) return true;
     if (state.userId === viewerUserId) return true;
-    return state.status === "answering" || state.status === "answered";
+    return isQaStatusPublic(state.status, mode);
   }
 
   getWebinarQaSnapshotFor(
     viewerUserId: string,
     isModerator: boolean,
+    mode: QaMode,
   ): WebinarQaEntry[] {
     const entries: WebinarQaEntry[] = [];
     for (const state of this.webinarQaEntries.values()) {
-      if (!this.isWebinarQaEntryVisibleTo(state, viewerUserId, isModerator)) {
+      if (
+        !this.isWebinarQaEntryVisibleTo(state, viewerUserId, isModerator, mode)
+      ) {
         continue;
       }
       entries.push(this.projectWebinarQaEntry(state, viewerUserId));

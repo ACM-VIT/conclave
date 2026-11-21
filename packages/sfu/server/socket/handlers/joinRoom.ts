@@ -31,6 +31,7 @@ import {
   type RoomAssignmentRecord,
 } from "../../roomRegistry.js";
 import {
+  emitQaSnapshotTo,
   emitWebinarAttendeeCountChanged,
   emitWebinarFeedChanged,
 } from "../../webinarNotifications.js";
@@ -913,18 +914,10 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         const isModeratorClient =
           context.currentClient instanceof Admin &&
           !context.currentClient.isObserver;
-        if (
-          webinarConfig.enabled &&
-          (isModeratorClient || context.currentClient.isWebinarAttendee)
-        ) {
-          socket.emit("webinar:qaSnapshot", {
-            roomId: context.currentRoom.id,
-            entries: context.currentRoom.getWebinarQaSnapshotFor(
-              userId,
-              isModeratorClient,
-            ),
-          });
-        }
+        // Every joiner gets Q&A: webinar attendees and hosts as before, and
+        // everyone in a regular meeting. Receiving it also tells a client
+        // this server supports meeting Q&A.
+        emitQaSnapshotTo(state, context.currentRoom, context.currentClient);
         if (webinarConfig.enabled && isModeratorClient) {
           socket.emit("webinar:handQueueChanged", {
             roomId: context.currentRoom.id,

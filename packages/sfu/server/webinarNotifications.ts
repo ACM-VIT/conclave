@@ -1,4 +1,5 @@
 import type { Server as SocketIOServer } from "socket.io";
+import type { Client } from "../config/classes/Client.js";
 import type { Room } from "../config/classes/Room.js";
 import type {
   WebinarAttendeeCountChangedNotification,
@@ -8,7 +9,9 @@ import type {
   WebinarLinkResponse,
   WebinarQaChangedNotification,
   WebinarQaEntry,
+  WebinarQaSnapshot,
 } from "../types.js";
+import { getQaMode, isQaStatusPublic, type QaMode } from "./qaPolicy.js";
 import type { SfuState } from "./state.js";
 import {
   ensureWebinarLinkSlug,
@@ -52,6 +55,37 @@ export const emitWebinarConfigChanged = (
     "webinar:configChanged",
     getWebinarConfigSnapshot(state, room),
   );
+  // Turning webinar mode on or off changes who may see unanswered
+  // questions, so every list is rebuilt under the new rule.
+  if (qaModeOfLists.get(room) !== getQaMode(state, room.channelId)) {
+    emitQaSnapshots(state, room);
+  }
+};
+
+/** The Q&A rule every connected client's list was last built under. */
+const qaModeOfLists = new WeakMap<Room, QaMode>();
+
+export const emitQaSnapshotTo = (
+  state: SfuState,
+  room: Room,
+  client: Client,
+): void => {
+  const mode = getQaMode(state, room.channelId);
+  qaModeOfLists.set(room, mode);
+  client.socket.emit("webinar:qaSnapshot", {
+    roomId: room.id,
+    entries: room.getWebinarQaSnapshotFor(
+      client.id,
+      room.isAdminClient(client),
+      mode,
+    ),
+  } satisfies WebinarQaSnapshot);
+};
+
+const emitQaSnapshots = (state: SfuState, room: Room): void => {
+  for (const client of room.clients.values()) {
+    emitQaSnapshotTo(state, room, client);
+  }
 };
 
 const emitWebinarAttendeeCountNow = (
@@ -125,31 +159,28 @@ export const emitWebinarAttendeeCountChanged = (
   emitState.timer.unref?.();
 };
 
-const isPublishedQaStatus = (status: WebinarQaEntry["status"]): boolean =>
-  status === "answering" || status === "answered";
-
 /**
- * Fan out a Q&A change with the same visibility rules as snapshots: published
- * entries go to the whole room; pending/dismissed ones only to moderators and
- * the asker. When an entry leaves the published state, everyone else receives
- * a `removedId` so attendee lists stay pruned. Entries are projected without
- * per-viewer upvote state; clients track their own votes.
+ * Fan out a Q&A change with the same visibility rules as snapshots: public
+ * entries go to the whole room; the rest only to moderators and the asker.
+ * When an entry stops being public, everyone else receives a `removedId` so
+ * their lists stay pruned. Entries are projected without per-viewer upvote
+ * state; clients track their own votes.
  */
 export const emitWebinarQaEntryChanged = (
   io: SocketIOServer,
   room: Room,
   entry: WebinarQaEntry,
-  options?: { wasPublished?: boolean },
+  options: { mode: QaMode; wasPublished?: boolean },
 ): void => {
   const payload: WebinarQaChangedNotification = { roomId: room.id, entry };
 
-  if (isPublishedQaStatus(entry.status)) {
+  if (isQaStatusPublic(entry.status, options.mode)) {
     io.to(room.channelId).emit("webinar:qaChanged", payload);
     return;
   }
 
   const removalPayload: WebinarQaChangedNotification | null =
-    options?.wasPublished
+    options.wasPublished
       ? { roomId: room.id, removedId: entry.id }
       : null;
 
