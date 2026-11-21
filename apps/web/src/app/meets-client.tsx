@@ -2842,18 +2842,35 @@ export default function MeetsClient({
     typeof performance === "undefined" ? 0 : performance.now(),
   );
   const producerTransportId = refs.producerTransportRef.current?.id ?? null;
+  const acknowledgedProducerProfileRef = useRef<{
+    connection: Socket["io"]["engine"];
+    application: ProducerTransportNetworkProfileApplication;
+  } | null>(null);
   const setProducerTransportNetworkProfile = useCallback(
     (
       profile: ProducerTransportNetworkProfileApplication["profile"],
     ): Promise<ProducerTransportNetworkProfileApplication> => {
       const socket = refs.socketRef.current;
-      const transportId = refs.producerTransportRef.current?.id ?? null;
+      const transport = refs.producerTransportRef.current;
       if (!socket?.connected) {
         return Promise.reject(new Error("Socket not connected"));
       }
-      if (!transportId) {
+      if (!transport || transport.closed) {
         return Promise.reject(new Error("Producer transport not found"));
       }
+      const transportId = transport.id;
+      const connection = socket.io.engine;
+      const acknowledged = acknowledgedProducerProfileRef.current;
+      if (
+        acknowledged &&
+        acknowledged.connection === connection &&
+        acknowledged.application.transportId === transportId &&
+        acknowledged.application.profile === profile
+      ) {
+        return Promise.resolve(acknowledged.application);
+      }
+      // An unanswered change may already have reached the SFU.
+      acknowledgedProducerProfileRef.current = null;
 
       return new Promise((resolve, reject) => {
         let settled = false;
@@ -2874,11 +2891,20 @@ export default function MeetsClient({
             reject(new Error(response.error));
             return;
           }
-          resolve({
+          const application = {
             transportId: response.transportId,
             profile: response.profile,
             maxIncomingBitrate: response.maxIncomingBitrate,
-          });
+          };
+          if (
+            application.transportId === transportId &&
+            application.profile === profile &&
+            Number.isFinite(application.maxIncomingBitrate) &&
+            application.maxIncomingBitrate > 0
+          ) {
+            acknowledgedProducerProfileRef.current = { connection, application };
+          }
+          resolve(application);
         };
 
         try {

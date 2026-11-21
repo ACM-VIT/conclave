@@ -26,6 +26,7 @@ import {
   type SetStateAction,
   useCallback,
   useEffect,
+  useEffectEvent,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -2110,13 +2111,8 @@ function GridLayout({
       : usesMeasuredAutoTileLimit && autoGridTileLimit < requestedMaxTiles
         ? 1
         : 0;
-  const roomTilingSequenceRef = useRef(0);
   const roomTilingMetadataRef = useRef<MeetRoomTilingMetadata | null>(null);
   const roomTilingHistoryRef = useRef<MeetRoomTilingMetadata[]>([]);
-  const lastPublishedRoomTilingSignatureRef = useRef<string | null>(null);
-  const latestRoomTilingMetadataBaseRef =
-    useRef<MeetRoomTilingMetadataBase | null>(null);
-  const latestRoomTilingMetadataSignatureRef = useRef("");
   const roomTilingMetadataBase = useMemo<MeetRoomTilingMetadataBase>(
     () => ({
       source: "client",
@@ -2292,71 +2288,70 @@ function GridLayout({
     [roomTilingMetadataBase],
   );
 
-  useEffect(() => {
-    latestRoomTilingMetadataBaseRef.current = roomTilingMetadataBase;
-    latestRoomTilingMetadataSignatureRef.current = roomTilingMetadataSignature;
-  }, [roomTilingMetadataBase, roomTilingMetadataSignature]);
-
-  useEffect(() => {
-    const getSnapshot = (): MeetRoomTilingDebugSnapshot => ({
+  const getRoomTilingSnapshot = useCallback(
+    (): MeetRoomTilingDebugSnapshot => ({
       current: roomTilingMetadataRef.current,
       history: roomTilingHistoryRef.current,
-      sequence: roomTilingSequenceRef.current,
+      sequence: roomTilingMetadataRef.current?.sequence ?? 0,
       intervalMs: ROOM_TILING_METADATA_INTERVAL_MS,
-    });
-    const publish = ({
-      force = false,
-      heartbeat = false,
-    }: {
-      force?: boolean;
-      heartbeat?: boolean;
-    } = {}) => {
-      const base = latestRoomTilingMetadataBaseRef.current;
-      const signature = latestRoomTilingMetadataSignatureRef.current;
-      if (!base || !signature) return;
+    }),
+    [],
+  );
+
+  const publishRoomTiling = useEffectEvent(
+    (heartbeat = false) => {
+      const previous = roomTilingMetadataRef.current;
       if (
-        lastPublishedRoomTilingSignatureRef.current === signature &&
         !heartbeat &&
-        (!force || roomTilingMetadataRef.current)
+        previous?.signature === roomTilingMetadataSignature
       ) {
         return;
       }
 
       const metadata: MeetRoomTilingMetadata = {
-        ...base,
-        sequence: roomTilingSequenceRef.current + 1,
+        ...roomTilingMetadataBase,
+        sequence: (previous?.sequence ?? 0) + 1,
         timestamp: Date.now(),
         performanceTime: Math.round(performance.now()),
-        signature,
+        signature: roomTilingMetadataSignature,
       };
-      roomTilingSequenceRef.current = metadata.sequence;
       roomTilingMetadataRef.current = metadata;
       roomTilingHistoryRef.current = [
         ...roomTilingHistoryRef.current,
         metadata,
       ].slice(-24);
-      lastPublishedRoomTilingSignatureRef.current = signature;
-      window.__conclaveMeetRoomTilingDebug = getSnapshot();
+      window.__conclaveMeetRoomTilingDebug = getRoomTilingSnapshot();
       window.dispatchEvent(
         new CustomEvent("conclave:meet-room-tiling", { detail: metadata }),
       );
-    };
+    },
+  );
 
-    window.__conclaveGetMeetRoomTilingDebug = getSnapshot;
-    publish({ force: true });
-    const interval = window.setInterval(
-      () => publish({ heartbeat: true }),
-      ROOM_TILING_METADATA_INTERVAL_MS,
-    );
+  useEffect(() => {
+    window.__conclaveGetMeetRoomTilingDebug = getRoomTilingSnapshot;
+    window.__conclaveMeetRoomTilingDebug = getRoomTilingSnapshot();
+    let interval: number | undefined;
+    try {
+      if (window.localStorage.getItem("conclave:debug-video-effects") === "1") {
+        interval = window.setInterval(
+          () => publishRoomTiling(true),
+          ROOM_TILING_METADATA_INTERVAL_MS,
+        );
+      }
+    } catch {}
 
     return () => {
       window.clearInterval(interval);
-      if (window.__conclaveGetMeetRoomTilingDebug === getSnapshot) {
+      if (window.__conclaveGetMeetRoomTilingDebug === getRoomTilingSnapshot) {
         delete window.__conclaveGetMeetRoomTilingDebug;
+        delete window.__conclaveMeetRoomTilingDebug;
       }
-      delete window.__conclaveMeetRoomTilingDebug;
     };
-  }, []);
+  }, [getRoomTilingSnapshot]);
+
+  useEffect(() => {
+    publishRoomTiling();
+  }, [roomTilingMetadataSignature]);
   const setSelfViewMode = useCallback(
     (selfViewMode: MeetSelfViewMode) => {
       onViewSettingsChange?.((current) => ({ ...current, selfViewMode }));

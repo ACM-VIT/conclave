@@ -277,6 +277,11 @@ const assertCurrentConsumerGeneration = (
   }
 };
 
+const lastConsumerScore = new WeakMap<
+  Consumer,
+  { socket: Client["socket"]; signature: string }
+>();
+
 const emitConsumerTelemetry = (
   target: ConsumerTelemetryTarget,
   event: ConsumerTelemetryNotification["event"],
@@ -293,8 +298,7 @@ const emitConsumerTelemetry = (
     return;
   }
 
-  client.socket.emit("consumerTelemetry", {
-    event,
+  const fields = {
     roomId: room.id,
     userId: client.id,
     consumerId: snapshot.consumerId,
@@ -306,6 +310,18 @@ const emitConsumerTelemetry = (
     priority: snapshot.priority,
     preferredLayers: snapshot.preferredLayers,
     currentLayers: snapshot.currentLayers,
+  };
+  const socket = client.socket;
+  if (event === "score") {
+    const signature = JSON.stringify(fields);
+    const last = lastConsumerScore.get(consumer);
+    if (last && last.socket === socket && last.signature === signature) return;
+    lastConsumerScore.set(consumer, { socket, signature });
+  }
+
+  socket.emit("consumerTelemetry", {
+    ...fields,
+    event,
     timestamp: snapshot.updatedAt,
   } satisfies ConsumerTelemetryNotification);
 };
