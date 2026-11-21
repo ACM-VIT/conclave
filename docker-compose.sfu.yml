@@ -1,5 +1,19 @@
+x-sfu-hardening: &sfu-hardening
+  # The image runs as the unprivileged node user. mediasoup binds only ports
+  # above 1024 on the host network, so the SFU needs no Linux capabilities.
+  # The root filesystem is read-only; tsx caches compiled sources in /tmp, and
+  # the recordings volume is the only persistent writable path.
+  read_only: true
+  tmpfs:
+    - /tmp
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
 services:
   sfu-a:
+    <<: *sfu-hardening
     build:
       context: .
       dockerfile: packages/sfu/Dockerfile
@@ -59,6 +73,7 @@ services:
     restart: unless-stopped
 
   sfu-b:
+    <<: *sfu-hardening
     build:
       context: .
       dockerfile: packages/sfu/Dockerfile

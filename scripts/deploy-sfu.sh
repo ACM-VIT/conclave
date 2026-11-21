@@ -228,6 +228,23 @@ if [[ -f "$SFU_ENV_FILE" ]]; then
   COMPOSE_ENV_FILES+=(--env-file "$SFU_ENV_FILE")
 fi
 COMPOSE=(docker compose "${COMPOSE_ENV_FILES[@]}" -f "$COMPOSE_FILE")
+# The SFU image runs as the unprivileged node user. Containers from earlier
+# images ran as root and left root-owned files (the SQLite database among them)
+# in the recordings volume. Hand anything node does not own over before a new
+# container starts. Safe to repeat; it only touches mismatched files.
+ensure_state_ownership() {
+  local service="$1"
+  "${COMPOSE[@]}" run --rm --no-deps --user root --cap-add CHOWN --entrypoint find "$service" \
+    /var/lib/conclave/recordings \( ! -user node -o ! -group node \) -exec chown node:node {} +
+}
+
+build_and_start() {
+  local service="$1"
+  "${COMPOSE[@]}" build "$service"
+  ensure_state_ownership "$service"
+  "${COMPOSE[@]}" up -d "$service"
+}
+
 HAS_REDIS_SERVICE="false"
 if "${COMPOSE[@]}" config --services | rg -x "redis" >/dev/null 2>&1; then
   HAS_REDIS_SERVICE="true"
@@ -347,7 +364,7 @@ echo "Active service: ${ACTIVE_SERVICE}"
 echo "Inactive service: ${INACTIVE_SERVICE}"
 
 echo "Building and starting ${INACTIVE_SERVICE}..."
-"${COMPOSE[@]}" up -d --build "$INACTIVE_SERVICE"
+build_and_start "$INACTIVE_SERVICE"
 if [[ "$INACTIVE_SERVICE" == "sfu-a" ]]; then
   validate_public_route "sfu-a" "$SFU_A_PUBLIC_URL"
 else
@@ -417,7 +434,7 @@ elif [[ -n "$ACTIVE_URL" && "$HAS_STATUS_A" == "true" && "$ACTIVE_SERVICE" == "s
 fi
 
 echo "Rebuilding and starting ${ACTIVE_SERVICE}..."
-"${COMPOSE[@]}" up -d --build "$ACTIVE_SERVICE"
+build_and_start "$ACTIVE_SERVICE"
 if [[ "$ACTIVE_SERVICE" == "sfu-a" ]]; then
   validate_public_route "sfu-a" "$SFU_A_PUBLIC_URL"
 else

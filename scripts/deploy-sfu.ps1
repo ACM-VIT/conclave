@@ -201,6 +201,22 @@ function Get-PublicUrl {
   return ""
 }
 
+# The SFU image runs as the unprivileged node user. Containers from earlier
+# images ran as root and left root-owned files (the SQLite database among them)
+# in the recordings volume. Hand anything node does not own over before a new
+# container starts. Safe to repeat; it only touches mismatched files.
+function Start-SfuService {
+  param([string]$Service)
+
+  Invoke-Checked -Command "docker" -Arguments ($composeBaseArgs + @("build", $Service))
+  Invoke-Checked -Command "docker" -Arguments ($composeBaseArgs + @(
+    "run", "--rm", "--no-deps", "--user", "root", "--cap-add", "CHOWN", "--entrypoint", "find", $Service,
+    "/var/lib/conclave/recordings", "(", "!", "-user", "node", "-o", "!", "-group", "node", ")",
+    "-exec", "chown", "node:node", "{}", "+"
+  ))
+  Invoke-Checked -Command "docker" -Arguments ($composeBaseArgs + @("up", "-d", $Service))
+}
+
 function Get-StatusJson {
   param([string]$Url)
 
@@ -431,7 +447,7 @@ Write-Host "Active service: $activeService"
 Write-Host "Inactive service: $inactiveService"
 
 Write-Host "Building and starting $inactiveService..."
-Invoke-Checked -Command "docker" -Arguments ($composeBaseArgs + @("up", "-d", "--build", $inactiveService))
+Start-SfuService -Service $inactiveService
 
 $forcedDrainActive = $false
 if ($activeService -eq "sfu-a" -and -not $hasStatusA) {
@@ -508,7 +524,7 @@ if ($forcedDrainActive) {
 }
 
 Write-Host "Rebuilding and starting $activeService..."
-Invoke-Checked -Command "docker" -Arguments ($composeBaseArgs + @("up", "-d", "--build", $activeService))
+Start-SfuService -Service $activeService
 
 if ($deployBrowserLocal) {
   Write-Host ""

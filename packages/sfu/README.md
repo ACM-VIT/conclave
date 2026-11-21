@@ -11,6 +11,28 @@ services, the server-authoritative game runtime, and transcript relays.
 - **Deploy:** built via the included [Dockerfile](./Dockerfile); configuration
   comes from `.env` (see `config/config.ts` for every knob and default).
 
+## Container
+
+The image is multi-stage. Compilers and pnpm stay in the build stage; the
+runtime stage holds Node, the production dependencies (with the mediasoup
+worker binary) and the sources, owned by root. The SFU runs as the `node`
+user (uid 1000), and only `/var/lib/conclave` is writable.
+`docker-compose.sfu.yml` adds a read-only root filesystem with a `/tmp`
+tmpfs, `no-new-privileges` and `cap_drop: ALL`. mediasoup binds only ports
+above 1024, so it needs no capabilities.
+
+Containers built before this change ran as root, so the recordings volume
+(and the SQLite database in it) is root-owned on existing hosts.
+`scripts/deploy-sfu.sh` builds each instance, then runs a one-shot root
+`find ... -exec chown node:node` on the volume before starting the new
+container, and repeats it before the second instance restarts. A manual
+`docker compose up` on such a host needs the same step first:
+
+```sh
+docker compose -f docker-compose.sfu.yml run --rm --no-deps --user root \
+  --cap-add CHOWN --entrypoint chown sfu-a -R node:node /var/lib/conclave/recordings
+```
+
 ## Development
 
 ```sh
