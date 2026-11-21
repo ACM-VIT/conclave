@@ -3,6 +3,10 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import ParticipantVideo from "../src/app/components/ParticipantVideo";
+import {
+  readVideoAspect,
+  resolveTileAspect,
+} from "../src/app/lib/tile-video-framing";
 import type { Participant } from "../src/app/lib/types";
 
 vi.mock("../src/app/components/games/GameTileOverlay", () => ({
@@ -109,5 +113,71 @@ describe("remote tile framing", () => {
 
     tile.receiveFrames(720, 1280);
     expect(tile.video.dataset.meetTileVideoFraming).toBe("portrait-zoom");
+  });
+});
+
+describe("grid tile shape", () => {
+  const tileAspectFor = (width: number, height: number, full: boolean) =>
+    resolveTileAspect(readVideoAspect(width, height), full);
+
+  it("gives landscape, unknown and camera-off video a 16:9 tile", () => {
+    expect(tileAspectFor(1280, 720, false)).toBe(16 / 9);
+    expect(tileAspectFor(640, 480, true)).toBe(16 / 9);
+    expect(tileAspectFor(0, 0, false)).toBe(16 / 9);
+    expect(resolveTileAspect(null, true)).toBe(16 / 9);
+  });
+
+  it("crops a portrait phone to 3:4 and shows its own shape in full", () => {
+    expect(tileAspectFor(720, 1280, false)).toBe(3 / 4);
+    expect(tileAspectFor(720, 1280, true)).toBe(9 / 16);
+    expect(tileAspectFor(1080, 1440, true)).toBe(3 / 4);
+  });
+
+  it("never makes a full-video tile narrower than 9:16", () => {
+    expect(tileAspectFor(720, 1600, true)).toBe(9 / 16);
+  });
+
+  it("keeps one shape across the simulcast layers of a camera", () => {
+    const layers = [
+      [720, 1280],
+      [540, 960],
+      [360, 640],
+      [136, 240],
+      [180, 318],
+    ];
+    for (const full of [false, true]) {
+      const shapes = new Set(layers.map(([w, h]) => tileAspectFor(w, h, full)));
+      expect(shapes.size).toBe(1);
+    }
+  });
+});
+
+describe("remote tile shape reporting", () => {
+  it("reports the video's shape only when it changes", () => {
+    const onVideoAspectChange = vi.fn();
+    const tile = renderTile({ onVideoAspectChange });
+    onVideoAspectChange.mockClear();
+
+    tile.receiveFrames(720, 1280);
+    expect(onVideoAspectChange.mock.calls).toEqual([[9 / 16]]);
+
+    tile.receiveFrames(360, 640);
+    tile.receiveFrames(136, 240);
+    expect(onVideoAspectChange).toHaveBeenCalledTimes(1);
+
+    tile.receiveFrames(1280, 720);
+    expect(onVideoAspectChange.mock.calls).toEqual([[9 / 16], [16 / 9]]);
+  });
+
+  it("fills a tile already shaped to the video without zoom or blur", () => {
+    const tile = renderTile({ videoObjectFit: "cover", isTileShapedToVideo: true });
+    tile.receiveFrames(720, 1280);
+    expect(tile.video.dataset.meetTileVideoFraming).toBe("cover");
+    expect(tile.video.style.height).toBe("");
+    expect(tile.backdrop()).toBeNull();
+
+    tile.render({ videoObjectFit: "contain", isFullVideoShown: true });
+    expect(tile.video.dataset.meetTileVideoFraming).toBe("contain");
+    expect(tile.backdrop()).toBeNull();
   });
 });

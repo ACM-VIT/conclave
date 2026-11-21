@@ -24,8 +24,9 @@ import {
   PORTRAIT_BACKDROP_STYLE,
   PORTRAIT_FULL_STYLE,
   PORTRAIT_ZOOM_STYLE,
+  isPortraitAspect,
   isPortraitFraming,
-  isPortraitFrame,
+  readVideoAspect,
   resolveTileVideoFraming,
 } from "../lib/tile-video-framing";
 
@@ -48,6 +49,10 @@ interface ParticipantVideoProps {
   isDynamicCropEnabled?: boolean;
   isFullVideoShown?: boolean;
   onToggleFullVideo?: (userId: string) => void;
+  // The grid gave this tile the video's own shape, so portrait video needs no
+  // zoom or blurred fill.
+  isTileShapedToVideo?: boolean;
+  onVideoAspectChange?: (aspect: number | null) => void;
   tileWidth?: number;
   tileHeight?: number;
 }
@@ -71,6 +76,8 @@ function ParticipantVideo({
   isDynamicCropEnabled = false,
   isFullVideoShown = false,
   onToggleFullVideo,
+  isTileShapedToVideo = false,
+  onVideoAspectChange,
   tileWidth,
   tileHeight,
 }: ParticipantVideoProps) {
@@ -110,23 +117,25 @@ function ParticipantVideo({
   const videoTrack = videoStream?.getVideoTracks()[0] ?? null;
   const connectionStatus = participant.connectionStatus;
   const isReconnecting = connectionStatus?.state === "reconnecting";
-  const [isPortraitVideo, setIsPortraitVideo] = useState(false);
+  const [videoAspect, setVideoAspect] = useState<number | null>(null);
+  const isPortraitVideo = isPortraitAspect(videoAspect);
   const videoFraming = resolveTileVideoFraming({
     objectFit: videoObjectFit,
     isPortrait: isPortraitVideo,
     isFullVideoShown,
     isScreenShare: isRenderingScreenShare,
+    isTileShapedToVideo,
   });
   const showsPortraitBackdrop = isPortraitFraming(videoFraming);
 
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !videoStream) {
-      setIsPortraitVideo(false);
+      setVideoAspect(null);
       return;
     }
     const readShape = () =>
-      setIsPortraitVideo(isPortraitFrame(video.videoWidth, video.videoHeight));
+      setVideoAspect(readVideoAspect(video.videoWidth, video.videoHeight));
     readShape();
     video.addEventListener("loadedmetadata", readShape);
     video.addEventListener("resize", readShape);
@@ -135,6 +144,10 @@ function ParticipantVideo({
       video.removeEventListener("resize", readShape);
     };
   }, [videoStream]);
+
+  useEffect(() => {
+    onVideoAspectChange?.(isRenderingScreenShare ? null : videoAspect);
+  }, [isRenderingScreenShare, videoAspect, onVideoAspectChange]);
 
   useEffect(() => {
     const backdrop = backdropRef.current;
