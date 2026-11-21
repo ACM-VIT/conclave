@@ -8,7 +8,7 @@ import {
   canonicalizeSfuClientId,
   resolveBrowserSfuClientId,
 } from "@/lib/sfu-client-id";
-import { readResponseError } from "./lib/utils";
+import { getOrCreateSessionId, readResponseError } from "./lib/utils";
 
 const reactionAssets = [
   "aura.gif",
@@ -151,13 +151,17 @@ export default function MeetsClientPage({
     const normalizedRoomId = roomId.trim();
     if (!normalizedRoomId) return null;
 
+    // The headcount is only for people in or let into the room; the server
+    // answers 403 to everyone else, which shows nothing.
+    const query = new URLSearchParams({ sessionId: getOrCreateSessionId() });
     const response = await fetch(
-      `/api/sfu/rooms/${encodeURIComponent(normalizedRoomId)}`,
+      `/api/sfu/rooms/${encodeURIComponent(normalizedRoomId)}?${query}`,
       {
         cache: "no-store",
         headers: { "x-sfu-client": resolvedClientId },
       },
     );
+    if (response.status === 403) return null;
     if (!response.ok) {
       throw new Error(await readError(response));
     }

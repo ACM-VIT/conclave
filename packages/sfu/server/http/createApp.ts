@@ -42,6 +42,7 @@ import { secretsMatch } from "../secret.js";
 import { readBoolean, requestBody } from "../../utilities/untrusted.js";
 import { registerScheduledWebinarRoutes } from "./scheduledWebinarRoutes.js";
 import { registerScheduledMeetingRoutes } from "./scheduledMeetingRoutes.js";
+import { isScheduledMeetingInvitee } from "../scheduledMeetings.js";
 import { registerSchedulingRoutes } from "./schedulingRoutes.js";
 import type { SfuState } from "../state.js";
 import type { RedisPublisherHealth } from "../socket/redisPublisher.js";
@@ -838,9 +839,21 @@ export const createSfuApp = ({
     const clientId = resolveClientId(req) || "conclave";
     const channelId = getRoomChannelId(clientId, roomId);
     const room = state.rooms.get(channelId);
+    // The web asks on behalf of a visitor and shows the headcount only when
+    // that visitor belongs to the room or was invited to it.
+    const viewerKey = normalizeIdentifier(req.query.viewerKey);
+    const viewerIsMember = viewerKey
+      ? Boolean(room?.isMemberUserKey(viewerKey)) ||
+        isScheduledMeetingInvitee(
+          state.scheduledMeetings,
+          clientId,
+          roomId,
+          viewerKey.toLowerCase(),
+        )
+      : undefined;
     res.set("Cache-Control", "no-store");
     if (!room) {
-      return res.json({ room: null });
+      return res.json({ room: null, viewerIsMember });
     }
 
     return res.json({
@@ -849,6 +862,7 @@ export const createSfuApp = ({
         userCount:
           room.getMeetingParticipantCount() + room.getWebinarAttendeeCount(),
       },
+      viewerIsMember,
     });
   });
 

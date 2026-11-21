@@ -3,30 +3,21 @@
 import { color } from "@conclave/ui-tokens";
 
 interface RoomPresenceBadgeProps {
-  count: number | null;
-  loading?: boolean;
+  count: number;
   className?: string;
 }
 
 export default function RoomPresenceBadge({
   count,
-  loading = false,
   className = "",
 }: RoomPresenceBadgeProps) {
-  const isChecking = loading && count == null;
-  const hasPeople = typeof count === "number" && count > 0;
-
-  const label = isChecking
-    ? "Checking…"
-    : count == null
-      ? null
-      : count === 0
-        ? "No one here yet"
-        : count === 1
-          ? "1 person here"
-          : `${count} people here`;
-
-  if (!label) return null;
+  const hasPeople = count > 0;
+  const label =
+    count === 0
+      ? "No one here yet"
+      : count === 1
+        ? "1 person here"
+        : `${count} people here`;
 
   return (
     <span

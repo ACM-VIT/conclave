@@ -1872,6 +1872,24 @@ export class Room {
     this.adminUserKeys.add(userKey);
   }
 
+  // Someone who is in this meeting, hosts it, or was let in. Only they may
+  // see how many people are in it.
+  isMemberUserKey(userKey: string): boolean {
+    if (this.blockedUsers.has(userKey)) return false;
+    if (
+      this.hostUserKey === userKey ||
+      this.adminUserKeys.has(userKey) ||
+      this.allowedUsers.has(userKey) ||
+      this.lockedAllowedUsers.has(userKey)
+    ) {
+      return true;
+    }
+    for (const key of this.userKeysById.values()) {
+      if (key === userKey) return true;
+    }
+    return false;
+  }
+
   isAdminUserKey(userKey: string): boolean {
     return this.adminUserKeys.has(userKey);
   }

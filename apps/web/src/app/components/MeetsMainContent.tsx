@@ -152,7 +152,6 @@ interface MeetsMainContentProps {
   isAdmin: boolean;
   showPermissionHint: boolean;
   availableRooms: RoomInfo[];
-  roomsStatus: "idle" | "loading" | "error";
   refreshRooms: () => void;
   displayNameInput: string;
   setDisplayNameInput: Dispatch<SetStateAction<string>>;
@@ -430,7 +429,6 @@ export default function MeetsMainContent({
   isAdmin,
   showPermissionHint,
   availableRooms,
-  roomsStatus,
   refreshRooms,
   displayNameInput,
   setDisplayNameInput,
@@ -2182,7 +2180,6 @@ export default function MeetsMainContent({
             forceJoinOnly={forceJoinOnly}
             showPermissionHint={showPermissionHint}
             rooms={availableRooms}
-            roomsStatus={roomsStatus}
             onRefreshRooms={refreshRooms}
             onJoinRoom={joinRoomById}
             displayNameInput={displayNameInput}

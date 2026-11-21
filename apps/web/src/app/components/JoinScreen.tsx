@@ -156,7 +156,6 @@ interface JoinScreenProps {
   forceJoinOnly: boolean;
   showPermissionHint: boolean;
   rooms: RoomInfo[];
-  roomsStatus: "idle" | "loading" | "error";
   onRefreshRooms: () => void;
   displayNameInput: string;
   onDisplayNameInputChange: (value: string) => void;
@@ -300,7 +299,6 @@ function JoinScreen({
   enableRoomRouting,
   showPermissionHint,
   rooms,
-  roomsStatus,
   displayNameInput,
   onDisplayNameInputChange,
   onUserChange,
@@ -349,8 +347,6 @@ function JoinScreen({
   const [isEffectsOpen, setIsEffectsOpen] = useState(false);
   const [guestName, setGuestName] = useState("");
   const [isSigningOut, setIsSigningOut] = useState(false);
-  const [presenceChecked, setPresenceChecked] = useState(false);
-  const [presenceSettled, setPresenceSettled] = useState(false);
   const [audioInputs, setAudioInputs] = useState<DeviceOption[]>([]);
   const [videoInputs, setVideoInputs] = useState<DeviceOption[]>([]);
   const [selectedAudioId, setSelectedAudioId] = useState("");
@@ -1215,18 +1211,12 @@ function JoinScreen({
   const presenceTarget = enforceShortCode
     ? sanitizeRoomCode(normalizedRoomId)
     : normalizedRoomId.trim();
-  useEffect(() => {
-    if (roomsStatus === "loading") setPresenceChecked(true);
-    else if (roomsStatus === "idle" && presenceChecked) setPresenceSettled(true);
-  }, [roomsStatus, presenceChecked]);
+  // Only visitors who belong to the room get its headcount back.
   const matchedRoom = presenceTarget
     ? rooms.find(
         (room) => room.id.toLowerCase() === presenceTarget.toLowerCase(),
       )
     : undefined;
-  const showPresence = presenceTarget.length > 0 && presenceChecked;
-  const presenceCount = presenceSettled ? matchedRoom?.userCount ?? 0 : null;
-  const presenceLoading = !presenceSettled;
 
   const refreshDevices = useCallback(async () => {
     if (!navigator.mediaDevices?.enumerateDevices) return;
@@ -1621,11 +1611,8 @@ function JoinScreen({
                   <label className="text-[11.5px] font-semibold text-[#fafafa]/40">
                     {isRoutedRoom ? "Room" : "Join with a code"}
                   </label>
-                  {showPresence ? (
-                    <RoomPresenceBadge
-                      count={presenceCount}
-                      loading={presenceLoading}
-                    />
+                  {matchedRoom ? (
+                    <RoomPresenceBadge count={matchedRoom.userCount} />
                   ) : null}
                 </div>
                 <input

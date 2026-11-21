@@ -1050,7 +1050,7 @@ export default function MeetsClient({
     [userId, displayNameInput, normalizedCurrentUserName, currentUser],
   );
 
-  const { availableRooms, roomsStatus, refreshRooms } = useMeetRooms({
+  const { availableRooms, refreshRooms } = useMeetRooms({
     isAdmin: isAdminFlag,
     getRooms,
     getRoom,
@@ -3287,7 +3287,6 @@ export default function MeetsClient({
         isAdmin={canModerateMeeting}
         showPermissionHint={showPermissionHint}
         availableRooms={availableRooms}
-        roomsStatus={roomsStatus}
         refreshRooms={refreshRooms}
         displayNameInput={displayNameInput}
         setDisplayNameInput={setDisplayNameInput}
