@@ -41,7 +41,7 @@ SwiftPM graph fail on the default engine, shipped about 100 MB per ABI of
 Swift runtime/ICU/Foundation `.so` files, and made `assembleRelease`
 cross-compile Swift with a separate Swift-for-Android toolchain.
 
-Android uses the checked-in Gradle wrapper (`Android/gradlew`, Gradle 9.7.1,
+Android uses the checked-in Gradle wrapper (`Android/gradlew`, Gradle 9.9.2,
 distribution SHA-256 pinned). The gates are verified with JDK 21 (AGP 9.2
 needs JDK 17 or newer); pin `JAVA_HOME` so Gradle does not pick up whatever
 the machine default JDK happens to be:
