@@ -9,12 +9,16 @@ import {
   type MeetingAnnouncement,
   type RoomRoster,
 } from "../lib/meeting-announcements";
+import type { AssistantChatMessage } from "../lib/conclave-assistant";
 import type { ChatMessage, Participant } from "../lib/types";
 
 const SETTLE_MS = 3000;
 const BATCH_MS = 1200;
 const MIN_GAP_MS = 2500;
 const CLEAR_AFTER_MS = 7000;
+
+const isStreamingReply = (message: AssistantChatMessage) =>
+  message.assistantStatus === "streaming";
 
 interface MeetingAnnouncerProps {
   isLive: boolean;
@@ -87,19 +91,21 @@ export default function MeetingAnnouncer({
 
   useEffect(() => {
     const state = stateRef.current;
-    const ids = chatMessages.map((message) => message.id);
     if (!state.seenMessageIds) {
-      state.seenMessageIds = new Set(ids);
+      state.seenMessageIds = new Set(chatMessages.map((message) => message.id));
       return;
     }
     const seen = state.seenMessageIds;
-    const fresh = chatMessages.filter((message) => !seen.has(message.id));
-    ids.forEach((id) => seen.add(id));
-    const isHistoryLoad = fresh.length > 1;
-    if (!isLive || isHistoryLoad) return;
+    const fresh = chatMessages.filter(
+      (message) => !seen.has(message.id) && !isStreamingReply(message),
+    );
+    fresh.forEach((message) => seen.add(message.id));
+    if (!isLive) return;
     enqueue(
       fresh
-        .filter((message) => message.userId !== currentUserId)
+        .filter(
+          (message) => !message.isHistory && message.userId !== currentUserId,
+        )
         .map(chatAnnouncement),
     );
   }, [isLive, chatMessages, currentUserId]);

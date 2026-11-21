@@ -55,6 +55,11 @@ export interface ChatMessage {
    * render them as spoken voice messages. Never sent over the wire.
    */
   isTts?: boolean;
+  /**
+   * Set client-side on messages that arrived in a chat history snapshot
+   * rather than live. Never sent over the wire.
+   */
+  isHistory?: boolean;
   /** Encrypted capability for the sender's consented cloned TTS voice. */
   ttsVoiceToken?: string;
   /** Sender dismissed the link preview; clients must not render embeds. */

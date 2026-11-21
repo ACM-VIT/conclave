@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import MeetingAnnouncer from "../src/app/components/MeetingAnnouncer";
+import type { AssistantChatMessage } from "../src/app/lib/conclave-assistant";
 import type { ChatMessage, Participant } from "../src/app/lib/types";
 
 let container: HTMLDivElement;
@@ -30,6 +31,22 @@ const message = (id: string, userId: string, content: string): ChatMessage => ({
   displayName: userId,
   content,
   timestamp: 0,
+});
+
+const fromHistory = (chat: ChatMessage): ChatMessage => ({
+  ...chat,
+  isHistory: true,
+});
+
+const assistantReply = (
+  id: string,
+  content: string,
+  assistantStatus: AssistantChatMessage["assistantStatus"],
+): AssistantChatMessage => ({
+  ...message(id, "conclave-assistant", content),
+  displayName: "Conclave",
+  isAssistant: true,
+  assistantStatus,
 });
 
 const names = (userId: string) => userId;
@@ -126,13 +143,52 @@ it("does not read out chat history loaded in one go", async () => {
   await wait(3500);
 
   await show([person("Ann")], [
-    message("1", "Ann", "earlier one"),
-    message("2", "Ann", "earlier two"),
-    message("3", "Ann", "earlier three"),
+    fromHistory(message("1", "Ann", "earlier one")),
+    fromHistory(message("2", "Ann", "earlier two")),
+    fromHistory(message("3", "Ann", "earlier three")),
   ]);
   await wait(3000);
 
   expect(announced()).toBe("");
+});
+
+it("does not read out a single message of history", async () => {
+  await show([person("Ann")]);
+  await wait(3500);
+
+  await show([person("Ann")], [fromHistory(message("1", "Ann", "earlier one"))]);
+  await wait(3000);
+
+  expect(announced()).toBe("");
+});
+
+it("reads out live messages that arrive in the same render", async () => {
+  await show([person("Ann"), person("Ben")]);
+  await wait(3500);
+
+  await show([person("Ann"), person("Ben")], [
+    message("1", "Ann", "first"),
+    message("2", "Ben", "second"),
+  ]);
+  await wait(1300);
+
+  expect(announced()).toBe("2 new messages from Ann and Ben");
+});
+
+it("waits for an assistant reply to finish and reads the full answer", async () => {
+  await show([person("Ann")]);
+  await wait(3500);
+
+  await show([person("Ann")], [assistantReply("a1", "", "streaming")]);
+  await show([person("Ann")], [assistantReply("a1", "The sync is", "streaming")]);
+  await wait(3000);
+  expect(announced()).toBe("");
+
+  await show([person("Ann")], [
+    assistantReply("a1", "The sync is on Friday", "done"),
+  ]);
+  await wait(1300);
+  expect(announced()).toBe("Conclave says: The sync is on Friday");
 });
 
 it("drops a queued announcement when the connection drops before it is read", async () => {

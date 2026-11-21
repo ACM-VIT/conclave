@@ -7765,7 +7765,10 @@ export function useMeetSocket({
                   for (const message of visible) {
                     if (seen.has(message.id)) continue;
                     seen.add(message.id);
-                    seeded.push(normalizeChatMessage(message).message);
+                    seeded.push({
+                      ...normalizeChatMessage(message).message,
+                      isHistory: true,
+                    });
                   }
                   seeded.sort((a, b) => a.timestamp - b.timestamp);
                   return seeded;
