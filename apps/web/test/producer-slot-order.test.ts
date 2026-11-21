@@ -127,6 +127,35 @@ describe("producer slot order", () => {
     expect(order.isSuperseded(announced)).toBe(false);
   });
 
+  it("reports only producers announced after a list was requested", () => {
+    const order = createProducerSlotOrder();
+    order.noteAnnounced(camera("before"));
+    const requestedAt = order.markListRequested();
+    order.noteAnnounced(camera("during"));
+
+    expect(order.wasAnnouncedAfter("before", requestedAt)).toBe(false);
+    expect(order.wasAnnouncedAfter("during", requestedAt)).toBe(true);
+    expect(order.wasAnnouncedAfter("never-announced", requestedAt)).toBe(false);
+  });
+
+  it("uses one rule for a slot that mixes producers with and without a sequence", () => {
+    const order = createProducerSlotOrder();
+    const sequencedFirst = camera("sequence-3", 3);
+    const unsequenced = camera("no-sequence");
+    const sequencedLast = camera("sequence-2", 2);
+    order.noteAnnounced(sequencedFirst);
+    order.noteAnnounced(unsequenced);
+    order.noteAnnounced(sequencedLast);
+
+    expect(order.isSuperseded(sequencedLast)).toBe(false);
+    expect(order.isSuperseded(sequencedFirst)).toBe(true);
+
+    order.noteClosed(unsequenced.producerId);
+
+    expect(order.isSuperseded(sequencedFirst)).toBe(false);
+    expect(order.isSuperseded(sequencedLast)).toBe(true);
+  });
+
   it("never brings a closed producer back", () => {
     const order = createProducerSlotOrder();
     const closed = camera("closed", 1);

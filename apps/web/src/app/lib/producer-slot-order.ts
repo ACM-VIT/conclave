@@ -22,14 +22,6 @@ const readProducerSeq = (info: AnnouncedProducer): number | null =>
     ? info.producerSeq
     : null;
 
-// The server's creation sequence decides which producer is newer. A server
-// that predates it sends none, so the order the announcements arrived in
-// decides instead.
-const isNewer = (candidate: KnownProducer, current: KnownProducer): boolean =>
-  candidate.seq !== null && current.seq !== null && candidate.seq !== current.seq
-    ? candidate.seq > current.seq
-    : candidate.arrival > current.arrival;
-
 /**
  * Tracks which producer currently owns each slot (one user's camera, mic or
  * screen), so a viewer follows the newest live producer whatever order its
@@ -50,17 +42,21 @@ export function createProducerSlotOrder() {
     });
   };
 
+  // The server's creation sequence decides which producer is newest. A server
+  // that predates it sends none, so arrival order decides instead. One rule
+  // covers the whole slot, which keeps the order consistent if the two mix.
   const getLatestInSlot = (slotKey: string): string | null => {
-    let latestId: string | null = null;
-    let latest: KnownProducer | null = null;
-    for (const [producerId, producer] of known) {
-      if (producer.slotKey !== slotKey) continue;
-      if (!latest || isNewer(producer, latest)) {
-        latestId = producerId;
-        latest = producer;
-      }
+    const inSlot = [...known].filter(
+      ([, producer]) => producer.slotKey === slotKey,
+    );
+    const rank = inSlot.every(([, producer]) => producer.seq !== null)
+      ? (producer: KnownProducer) => producer.seq ?? producer.arrival
+      : (producer: KnownProducer) => producer.arrival;
+    let latest: [string, KnownProducer] | null = null;
+    for (const entry of inSlot) {
+      if (!latest || rank(entry[1]) > rank(latest[1])) latest = entry;
     }
-    return latestId;
+    return latest?.[0] ?? null;
   };
 
   /** Call when asking the server for its producer list. */
@@ -83,6 +79,10 @@ export function createProducerSlotOrder() {
     }
     for (const producer of producers) noteAnnounced(producer);
   };
+
+  /** True for a producer first announced after that request was sent. */
+  const wasAnnouncedAfter = (producerId: string, requestedAt: number): boolean =>
+    (known.get(producerId)?.arrival ?? 0) > requestedAt;
 
   /** This viewer dropped the producer. The server may still list it. */
   const forget = (producerId: string): void => {
@@ -121,6 +121,7 @@ export function createProducerSlotOrder() {
     noteAnnounced,
     markListRequested,
     noteServerList,
+    wasAnnouncedAfter,
     forget,
     noteClosed,
     isSuperseded,

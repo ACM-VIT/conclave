@@ -6050,8 +6050,13 @@ export function useMeetSocket({
       const serverProducerIds = new Set(
         producers.map((producer) => producer.producerId),
       );
+      // The list may predate a producer announced while it was in flight, so
+      // leaving that producer out says nothing about it.
+      const isGoneFromServer = (producerId: string): boolean =>
+        !serverProducerIds.has(producerId) &&
+        !producerSlotOrder.wasAnnouncedAfter(producerId, listRequestedAt);
       for (const producerId of announcedRemoteProducersRef.current.keys()) {
-        if (!serverProducerIds.has(producerId)) {
+        if (isGoneFromServer(producerId)) {
           announcedRemoteProducersRef.current.delete(producerId);
         }
       }
@@ -6102,7 +6107,7 @@ export function useMeetSocket({
       }
 
       for (const producerId of producerMapRef.current.keys()) {
-        if (!serverProducerIds.has(producerId)) {
+        if (isGoneFromServer(producerId)) {
           handleProducerClosed(producerId);
         }
       }
@@ -6344,6 +6349,9 @@ export function useMeetSocket({
         }
         return !isDeparted;
       });
+      for (const producer of activeProducers) {
+        producerSlotOrder.noteAnnounced(producer);
+      }
       const serverProducerIds = new Set(
         activeProducers.map((producer) => producer.producerId),
       );
@@ -6383,6 +6391,7 @@ export function useMeetSocket({
       handleProducerClosed,
       pendingProducersRef,
       producerMapRef,
+      producerSlotOrder,
       restoreWebinarFeedParticipant,
       shouldIgnoreDepartedParticipant,
     ],

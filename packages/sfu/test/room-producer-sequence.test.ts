@@ -103,6 +103,27 @@ describe("Room producer sequence", () => {
     room.close();
   });
 
+  it("keeps the sequence rising when the clock steps back", () => {
+    vi.useFakeTimers();
+    try {
+      const { room, clients } = createRoomWithClients("alice", "bob");
+      const [alice, bob] = clients;
+      vi.setSystemTime(new Date("2030-01-01T00:00:10Z"));
+      publish(room, alice, fakeProducer("before-rollback", "video"));
+      vi.setSystemTime(new Date("2030-01-01T00:00:00Z"));
+      publish(room, bob, fakeProducer("after-rollback", "video"));
+
+      expect(
+        Number(room.getProducerInfoById("after-rollback")?.producerSeq),
+      ).toBeGreaterThan(
+        Number(room.getProducerInfoById("before-rollback")?.producerSeq),
+      );
+      room.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps the sequence rising across rooms", () => {
     const first = createRoomWithClients("alice");
     publish(first.room, first.clients[0], fakeProducer("in-first-room", "video"));
