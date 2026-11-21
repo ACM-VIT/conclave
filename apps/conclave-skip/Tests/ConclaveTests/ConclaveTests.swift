@@ -3121,6 +3121,24 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(notification.locked)
     }
 
+    func testAppsStateDecodesTheRevisionAndSavedAppsANewerSfuAdds() throws {
+        let json = """
+        {
+          "roomId": "room-a",
+          "activeAppId": "wheel",
+          "locked": false,
+          "revision": 7,
+          "savedAppIds": ["watch", "whiteboard"]
+        }
+        """.data(using: .utf8)!
+
+        let notification = try JSONDecoder().decode(AppsStateNotification.self, from: json)
+
+        XCTAssertEqual(notification.roomId, "room-a")
+        XCTAssertEqual(notification.activeAppId, "wheel")
+        XCTAssertFalse(notification.locked)
+    }
+
     @MainActor
     func testActiveAppNameUsesReadableFallbackForUnknownIds() throws {
         let state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
