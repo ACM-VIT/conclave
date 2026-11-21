@@ -2,6 +2,7 @@ import type { NextConfig } from "next";
 import { execSync } from "node:child_process";
 import path from "path";
 import { fileURLToPath } from "url";
+import { buildSecurityHeaders } from "./src/lib/security-headers";
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 const workspaceRoot = path.resolve(currentDir, "../..");
@@ -100,6 +101,13 @@ const nextConfig: NextConfig = {
       {
         source: "/:path*",
         headers: noStoreResponseHeaders,
+      },
+      {
+        source: "/:path*",
+        headers: buildSecurityHeaders({
+          env: process.env,
+          isDevelopment: process.env.NODE_ENV === "development",
+        }),
       },
       {
         source: "/transcript-pcm-processor.js",

@@ -15,6 +15,40 @@ Integration notes
 - Reaction assets are served from `public/reactions` and passed via `reactionAssets`.
 - Set `NEXT_PUBLIC_SFU_CLIENT_ID` to tag requests with `x-sfu-client` so the SFU can apply per-client policies.
 
+## Security headers
+
+`src/lib/security-headers.ts` builds the headers that `next.config.ts` applies to
+every page and API route. Both `next start` and the OpenNext worker serve them.
+Files served straight from the Cloudflare assets binding skip the worker, so
+`public/_headers` gives them HSTS, `nosniff` and `Referrer-Policy`.
+
+- Framing is blocked by `X-Frame-Options: DENY` and an enforced
+  `Content-Security-Policy: frame-ancestors 'none'`.
+- `Permissions-Policy` allows camera, microphone and screen capture for this
+  origin only. Fullscreen also extends to the YouTube embeds.
+- The full Content Security Policy is sent as `Content-Security-Policy-Report-Only`.
+  Browsers post violations to `/api/csp-report` (`report-uri`). The route logs
+  one `[csp-report] {...}` line per report with query strings removed, and the
+  `CSP_REPORT_RATE_LIMITER` binding caps it at 30 reports per minute per client.
+
+The allowlist comes from local runs, in development and production builds, of
+a two-client call, a YouTube link embed and playback, the GIF picker, background
+blur, an image background and a face filter, noise cancellation and the mic
+test, Watch together, PostHog, sign-in and the static pages. Those runs
+produced no violations. When a feature loads from a new origin, add the origin
+in `security-headers.ts`.
+
+**Switching to enforcement.** Enforce once the worker logs show no
+`[csp-report]` lines from real pages for two weeks that include a release.
+Ignore reports whose source is a browser extension. Then rename the
+report-only header to `Content-Security-Policy` (folding in `frame-ancestors`),
+keep `report-uri`, add the same policy to the `/*` block of `public/_headers`
+so worker scripts are covered, and watch the reports for a day after deploy.
+Removing `'unsafe-inline'` from `script-src` needs per-request nonces from
+`proxy.ts`. Most routes already render dynamically. Only `/privacy`,
+`/delete-account`, `/sfu-admin` and the not-found page are static and would
+become dynamic.
+
 ## Chat image moderation
 
 The SFU sends every uploaded chat image to OpenAI's
