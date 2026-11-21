@@ -69,6 +69,14 @@ export const unblockSteps = (
   }
 };
 
+// The blocked devices the visitor has since allowed in the browser. Each is
+// worth trying again by itself, whatever the other one's state.
+export const blockedDevicesNowGranted = (
+  blocked: readonly BlockedDevice[],
+  permissionStates: Record<BlockedDevice, string>,
+): BlockedDevice[] =>
+  blocked.filter((device) => permissionStates[device] === "granted");
+
 /**
  * Whether a failed capture means the browser or the OS blocks the device, as
  * opposed to a dismissed prompt (state stays "prompt", so asking again

@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import BlockedMediaDialog from "../src/app/components/BlockedMediaDialog";
 import {
+  blockedDevicesNowGranted,
   detectBrowserFamily,
   isCaptureBlocked,
 } from "../src/app/lib/blocked-media";
@@ -142,5 +143,34 @@ describe("telling a blocked device from a dismissed prompt", () => {
   it("assumes blocked when the browser cannot say", async () => {
     vi.stubGlobal("navigator", {});
     await expect(isCaptureBlocked("camera", notAllowed)).resolves.toBe(true);
+  });
+});
+
+describe("recovering once a blocked device is allowed", () => {
+  it("retries the microphone as soon as it is allowed, with the camera still blocked", () => {
+    expect(
+      blockedDevicesNowGranted(["camera", "microphone"], {
+        camera: "denied",
+        microphone: "granted",
+      }),
+    ).toEqual(["microphone"]);
+  });
+
+  it("retries both when both are allowed", () => {
+    expect(
+      blockedDevicesNowGranted(["camera", "microphone"], {
+        camera: "granted",
+        microphone: "granted",
+      }),
+    ).toEqual(["camera", "microphone"]);
+  });
+
+  it("leaves a device that was never blocked alone", () => {
+    expect(
+      blockedDevicesNowGranted(["camera"], {
+        camera: "denied",
+        microphone: "granted",
+      }),
+    ).toEqual([]);
   });
 });

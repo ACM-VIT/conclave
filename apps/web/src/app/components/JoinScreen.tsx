@@ -45,7 +45,11 @@ import {
 import RoomPresenceBadge from "./RoomPresenceBadge";
 import BlockedMediaDialog from "./BlockedMediaDialog";
 import { useMediaPermissionState } from "../hooks/useMediaPermissionState";
-import { isCaptureBlocked, type BlockedDevice } from "../lib/blocked-media";
+import {
+  blockedDevicesNowGranted,
+  isCaptureBlocked,
+  type BlockedDevice,
+} from "../lib/blocked-media";
 import {
   useBandwidthHeavyPreloadDeferred,
 } from "../hooks/useBandwidthHeavyPreloadDeferred";
@@ -1154,31 +1158,32 @@ function JoinScreen({
     setPending({ mode: "join", roomId: candidate });
   };
 
-  const retryBlockedDevices = async () => {
+  const retryBlockedDevices = async (
+    devices: readonly BlockedDevice[] = blockedDevices,
+  ) => {
     if (isRetryingBlocked) return;
     setIsRetryingBlocked(true);
     try {
-      if (blockedDevices.includes("microphone") && !isMicOn) await toggleMic();
-      if (blockedDevices.includes("camera") && !isCameraOn && !isAudioOnly) {
+      if (devices.includes("microphone") && !isMicOn) await toggleMic();
+      if (devices.includes("camera") && !isCameraOn && !isAudioOnly) {
         await toggleCamera();
       }
     } finally {
       setIsRetryingBlocked(false);
     }
   };
-  // Flipping the permission in the browser's site settings fires a change;
-  // try again then, so the dialog closes on its own.
-  const blockedPermissionStates: Record<BlockedDevice, string> = {
+  // Flipping a permission in the browser's site settings fires a change; try
+  // that device again then, so it leaves the dialog without a click. One
+  // device allowed while the other stays blocked still recovers.
+  const grantedBlockedDevices = blockedDevicesNowGranted(blockedDevices, {
     camera: cameraPermissionState,
     microphone: microphonePermissionState,
-  };
-  const allBlockedNowGranted = blockedDevices.every(
-    (device) => blockedPermissionStates[device] === "granted",
-  );
+  });
+  const grantedBlockedKey = grantedBlockedDevices.join(",");
   useEffect(() => {
-    if (!allBlockedNowGranted || blockedDevices.length === 0) return;
-    void retryBlockedDevices();
-  }, [allBlockedNowGranted]);
+    if (grantedBlockedDevices.length === 0) return;
+    void retryBlockedDevices(grantedBlockedDevices);
+  }, [grantedBlockedKey]);
 
   const handleSignOut = async () => {
     if (isSigningOut) return;
