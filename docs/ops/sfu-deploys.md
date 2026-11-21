@@ -6,21 +6,27 @@ at a time, emptiest first:
 
 1. Mark the instance draining. New meetings go to the other instance; meetings
    already on this one continue.
-2. Wait until its rooms reach 0, up to `DRAIN_TIMEOUT_SECONDS` (3600). There is
-   no force drain unless you pass `--force-drain`.
-3. Recreate it from the new image, and drain it again as soon as it answers, so
-   no new meeting lands on it yet.
+2. Wait until its rooms reach 0, up to `DRAIN_TIMEOUT_SECONDS` (3600). An
+   unreadable `/status` counts as unknown, not as empty. There is no force
+   drain unless you pass `--force-drain`.
+3. Recreate it from the new image with `SFU_START_DRAINING=true`, so it boots
+   out of rotation and no meeting can land on an unverified build.
 4. Run the canary: a real two-person call against that instance
-   (`packages/sfu/scripts/canary-call.ts`, run from the new image). Two clients
-   join a room, publish Opus audio and must receive each other's RTP through
-   the SFU, and the room must close when they leave.
-5. Canary passed: put the instance back into rotation and move to the next one.
-   Canary failed: recreate the instance from the image it ran before, stop,
-   and exit 4. The instances not yet touched were never drained and keep
-   serving.
+   (`packages/sfu/scripts/canary-call.ts`, run from the new image). It takes
+   its room through the secret-protected placement endpoint with
+   `allowDraining`, the one placement a draining instance grants. Two clients
+   join, publish Opus audio and must receive each other's RTP through the SFU,
+   and the room must close when they leave.
+5. Canary passed: recreate the instance once more from the same image with the
+   normal config, so it serves undrained and stays that way across restarts,
+   then move to the next one. Canary failed: recreate the instance from the
+   image it ran before, stop, and exit 4. The instances not yet touched were
+   never drained and keep serving.
 
-An instance already running the target image and config is skipped, so a
-rerun only does what is left.
+An instance that is serving, undrained, on the target image and config is
+skipped, so a rerun only does what is left. An instance that answers HTTP but
+whose `/status` cannot be read is left alone (exit 1), because its rooms are
+unknown.
 
 ## Exit codes
 
@@ -77,9 +83,6 @@ It fails if either side goes more than 2 s without audio or is disconnected.
 
 ## Known limits
 
-- The new container answers for about a second before the script drains it, so
-  a meeting created in that second can land on an unverified build. If the
-  canary then fails, that meeting is cut by the rollback.
 - The canary reaches the transports on loopback, so it proves the media path
   inside the SFU, not the public UDP route. The preflight and the NSG rules
   cover that route.

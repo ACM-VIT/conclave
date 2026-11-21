@@ -373,34 +373,29 @@ service_rooms() {
   fi
 }
 
-post_drain() {
+set_draining() {
+  local payload="{\"draining\": $2}"
+  if [[ "$2" == "true" && "$FORCE_DRAIN" == "true" ]]; then
+    payload="{\"draining\": true, \"force\": true, \"noticeMs\": ${FORCE_DRAIN_NOTICE_MS}}"
+  fi
   curl -fsS --connect-timeout 3 --max-time 10 -X POST "${1}/drain" \
     -H "x-sfu-secret: ${SFU_SECRET}" \
     -H "content-type: application/json" \
-    -d "$2"
+    -d "$payload"
 }
 
-set_draining() {
-  local url="$1"
-  if [[ "$2" == "true" && "$FORCE_DRAIN" == "true" ]]; then
-    post_drain "$url" "{\"draining\": true, \"force\": true, \"noticeMs\": ${FORCE_DRAIN_NOTICE_MS}}"
-  else
-    post_drain "$url" "{\"draining\": $2}"
-  fi
-}
-
-# Waits for an instance to report zero rooms. Returns 1 at the deadline.
+# Waits for an instance to report zero rooms. An unreadable status is not
+# zero: it keeps waiting. Returns 1 at the deadline.
 wait_for_empty() {
   local svc="$1"
   local url="$2"
   local start_ts
   start_ts="$(date +%s)"
   while true; do
-    local status rooms
+    local status rooms="unknown"
     status="$(status_json "$url")"
-    rooms="0"
     if [[ -n "$status" ]]; then
-      rooms="$(printf "%s" "$status" | json_field rooms || echo "0")"
+      rooms="$(printf "%s" "$status" | json_field rooms || echo "unknown")"
     fi
     echo "${svc} active rooms: ${rooms}"
     if [[ "$rooms" == "0" ]]; then
@@ -423,6 +418,11 @@ wait_for_healthy() {
     fi
     sleep 1
   done
+}
+
+# Any HTTP answer, even an error, means the process is up.
+answers_http() {
+  [[ "$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time 3 "${1}/health" || true)" != "000" ]]
 }
 
 # Two clients join a room on the instance, publish audio and must hear each
@@ -455,20 +455,25 @@ rollback_service() {
 
 # Moves one instance onto TARGET_IMAGE without cutting a call: drain it, wait
 # for its rooms to finish (or give up at the deadline and put it back), and
-# only then recreate it. The new container is drained again as soon as it
-# answers and joins the pool only after its canary call passes.
+# only then recreate it. The new container boots drained, takes the canary
+# call, and is recreated undrained from the same image only once it passes.
 deploy_service() {
   local svc="$1"
-  local url image_name container status previous_image=""
+  local url image_name container status="" previous_image=""
   url="$(service_url "$svc")"
   image_name="$(service_image_name "$svc")"
   container="$(service_container "$svc")"
-  status="$(status_json "$url")"
+  for _ in 1 2 3; do
+    status="$(status_json "$url")"
+    [[ -n "$status" ]] && break
+    sleep 5
+  done
   if [[ -n "$container" ]]; then
     previous_image="$(docker inspect -f '{{.Image}}' "$container")"
   fi
 
   if [[ -n "$container" && -n "$status" ]] &&
+     [[ "$(printf "%s" "$status" | json_field draining)" == "false" ]] &&
      [[ "$(docker inspect -f '{{.Image}}' "$container")" == "$TARGET_IMAGE" ]] &&
      [[ "$(docker inspect -f '{{index .Config.Labels "com.docker.compose.config-hash"}}' "$container")" == "$("${COMPOSE[@]}" config --hash "$svc" | awk '{print $2}')" ]]; then
     echo "${svc} already runs ${TARGET_COMMIT} with the current config; leaving it alone."
@@ -495,25 +500,30 @@ deploy_service() {
       echo "${svc} was not rebuilt and keeps serving its calls. Rerun this script once the meeting ends." >&2
       return "$EXIT_BLOCKED_BY_ROOMS"
     fi
+  elif answers_http "$url"; then
+    # Up but its status is unreadable: its rooms are unknown, so leave it.
+    echo "${svc} answers but its /status cannot be read; not rebuilding it." >&2
+    return 1
   else
-    echo "${svc} is not reachable; rebuilding it without a drain."
+    echo "${svc} is not running; starting it without a drain."
   fi
 
   if [[ -n "$previous_image" ]]; then
     docker tag "$previous_image" "${IMAGE_REPO}:rollback-${svc}"
   fi
-  echo "Starting ${svc} on ${TARGET_COMMIT}..."
+  echo "Starting ${svc} on ${TARGET_COMMIT}, out of rotation until its canary passes..."
   docker tag "$TARGET_IMAGE" "$image_name"
-  "${COMPOSE[@]}" up -d --no-build --no-deps --force-recreate "$svc"
+  SFU_START_DRAINING=true "${COMPOSE[@]}" up -d --no-build --no-deps --force-recreate "$svc"
   local failure=""
   if ! wait_for_healthy "$url"; then
     failure="${svc} did not report healthy within ${HEALTH_TIMEOUT_SECONDS}s"
-  elif ! post_drain "$url" '{"draining": true}' >/dev/null; then
-    failure="could not hold ${svc} out of rotation for its canary"
   elif ! run_canary "$svc" "$url"; then
     failure="the canary call against ${svc} failed"
-  elif ! post_drain "$url" '{"draining": false}' >/dev/null; then
-    failure="could not put ${svc} back into rotation after its canary"
+  else
+    # Same image, normal config: the serving container boots undrained and
+    # stays that way across restarts.
+    "${COMPOSE[@]}" up -d --no-build --no-deps --force-recreate "$svc"
+    wait_for_healthy "$url" || failure="${svc} did not come back healthy after its canary"
   fi
   if [[ -n "$failure" ]]; then
     echo "" >&2
