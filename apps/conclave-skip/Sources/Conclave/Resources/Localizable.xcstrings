@@ -5588,9 +5588,6 @@
     "That’s a Wrap" : {
       "extractionState" : "manual"
     },
-    "The %@ board clears for everyone." : {
-      "extractionState" : "manual"
-    },
     "The Done button uses the confirmation action placement, which iOS 26 can draw as a white label on the accent fill. It does nothing." : {
       "extractionState" : "manual"
     },
@@ -5600,7 +5597,7 @@
     "The Webinar Will Begin Soon" : {
       "extractionState" : "manual"
     },
-    "The board clears for everyone." : {
+    "The board stays saved for this meeting." : {
       "extractionState" : "manual"
     },
     "The camera isn’t available in the background." : {

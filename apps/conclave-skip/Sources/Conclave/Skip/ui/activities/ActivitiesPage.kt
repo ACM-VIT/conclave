@@ -305,7 +305,7 @@ private fun ActivitiesRoot(session: ActivitySession, reservation: PaddingValues,
             onDismissRequest = { replaceTarget = null },
             title = { Text(conclaveString("act_replace_title", openName)) },
             text = {
-                Text(if (openApp?.appId == "whiteboard") conclaveString("act_replace_message", openName) else conclaveString("act_close_message"))
+                Text(if (openApp?.appId == "whiteboard") conclaveString("act_close_board_message") else conclaveString("act_close_message"))
             },
             confirmButton = {
                 TextButton(onClick = { replaceTarget = null; activities.openApp(replace) },

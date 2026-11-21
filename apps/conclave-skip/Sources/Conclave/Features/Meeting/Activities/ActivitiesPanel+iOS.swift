@@ -139,7 +139,7 @@ private struct ActivitiesRootList: View {
 
     private func replaceMessage(_ s: ActivitiesSnapshot) -> String {
         if s.nowPlayingItem(kind: .app)?.appId == "whiteboard" {
-            return ConclaveStrings.format("The %@ board clears for everyone.", openAppName(s))
+            return ConclaveStrings.text("The board stays saved for this meeting.")
         }
         return ConclaveStrings.text("Everyone returns to the meeting.")
     }

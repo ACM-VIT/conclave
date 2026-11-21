@@ -128,7 +128,7 @@ struct NativeAppHostMenu: View {
                 Button(ConclaveStrings.text("Close"), role: .destructive) { _ = host.confirmClose() }
                 Button(ConclaveStrings.text("Cancel"), role: .cancel) {}
             } message: {
-                Text(model.appId == "whiteboard" ? ConclaveStrings.text("The board clears for everyone.")
+                Text(model.appId == "whiteboard" ? ConclaveStrings.text("The board stays saved for this meeting.")
                      : ConclaveStrings.text("Everyone returns to the meeting."))
             }
         }
