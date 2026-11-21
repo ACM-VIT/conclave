@@ -127,6 +127,9 @@ The preflight also fails before making a request when:
 - Redis is not on the host's loopback and its URL lacks TLS (`rediss://`) or
   credentials, or it is a public IP literal (set
   `SFU_DEPLOY_ALLOW_PUBLIC_REDIS=1` only for a firewalled public Redis); or
+- `NODE_ENV` is not `production`, or `SFU_CORS_ORIGINS` is missing, a
+  wildcard, or not a list of http(s) origins (the SFU itself refuses to start
+  that way in production unless `SFU_ALLOW_OPEN_CORS=1`); or
 - an RTC port range is invalid, reversed, or overlaps another SFU on the same
   announced IP.
 

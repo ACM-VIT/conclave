@@ -169,6 +169,38 @@ const normalizeRedisRegistry = (value, service, errors, allowPublicRedis) => {
   }
 };
 
+/**
+ * Mirrors the SFU's production startup checks (server/cors.ts), so a value the
+ * new container would refuse to boot with fails here, before the live
+ * instance starts draining.
+ */
+const checkProductionMode = (env, service, errors) => {
+  if (String(env.NODE_ENV || "").trim() !== "production") {
+    errors.push(`${service}: NODE_ENV must be production.`);
+    return;
+  }
+  if (String(env.SFU_ALLOW_OPEN_CORS || "").trim() === "1") return;
+  const origins = String(env.SFU_CORS_ORIGINS || "")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+  if (origins.length === 0 || origins.includes("*")) {
+    errors.push(`${service}: SFU_CORS_ORIGINS must list the web app origins; the SFU will not start in production without it.`);
+    return;
+  }
+  for (const origin of origins) {
+    let protocol = "";
+    try {
+      protocol = new URL(origin).protocol;
+    } catch {
+      protocol = "";
+    }
+    if (protocol !== "http:" && protocol !== "https:") {
+      errors.push(`${service}: SFU_CORS_ORIGINS entry ${JSON.stringify(origin)} is not an http(s) origin.`);
+    }
+  }
+};
+
 const isRequiredRedisMode = (value) =>
   value === true || value === 1 || String(value).trim().toLowerCase() === "true" || String(value).trim() === "1";
 
@@ -231,6 +263,7 @@ export const resolveSfuTargets = ({ allowPublicRedis = false, compose, serviceNa
     if (!String(env.SFU_SECRET || "").trim() || env.SFU_SECRET === "development-secret") {
       errors.push(`${service}: SFU_SECRET must be a non-default value.`);
     }
+    checkProductionMode(env, service, errors);
 
     targets.push({
       announcedIp,

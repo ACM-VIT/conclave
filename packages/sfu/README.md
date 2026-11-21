@@ -21,6 +21,13 @@ user (uid 1000), and only `/var/lib/conclave` is writable.
 tmpfs, `no-new-privileges` and `cap_drop: ALL`. mediasoup binds only ports
 above 1024, so it needs no capabilities.
 
+Both services run with `NODE_ENV=production`, which makes the SFU refuse to
+start with the default `SFU_SECRET` or without `SFU_CORS_ORIGINS` (compose
+defaults it to `https://conclave.acmvit.in`; list every web origin that
+uploads chat images or polls the socket). The deploy preflight checks both
+before anything restarts. Logs default to `warn` in production; set
+`SFU_LOG_LEVEL=info` in `.env` for join and room logs.
+
 Containers built before this change ran as root, so the recordings volume
 (and the SQLite database in it) is root-owned on existing hosts.
 `scripts/deploy-sfu.sh` builds each instance, then runs a one-shot root

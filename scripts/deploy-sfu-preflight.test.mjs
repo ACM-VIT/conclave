@@ -20,6 +20,8 @@ const makeService = ({
 }) => ({
   environment: {
     ANNOUNCED_IP: announcedIp,
+    NODE_ENV: "production",
+    SFU_CORS_ORIGINS: "https://conclave.example",
     RTC_MAX_PORT: String(maxPort),
     RTC_MIN_PORT: String(minPort),
     SFU_INSTANCE_ID: instanceId,
@@ -282,4 +284,34 @@ test("the CLI refuses a public Redis unless SFU_DEPLOY_ALLOW_PUBLIC_REDIS=1", ()
   assert.ok(!publicRedis.stderr.includes("redis-pw-sentinel"));
 
   assert.equal(run("rediss://user:secret@57.159.28.54:6380", { SFU_DEPLOY_ALLOW_PUBLIC_REDIS: "1" }).status, 0);
+});
+
+const productionErrors = (environment) => {
+  const compose = makeCompose();
+  for (const service of Object.values(compose.services)) {
+    Object.assign(service.environment, environment);
+    for (const [key, value] of Object.entries(environment)) {
+      if (value === undefined) delete service.environment[key];
+    }
+  }
+  try {
+    resolveSfuTargets({ compose });
+    return [];
+  } catch (error) {
+    assert.ok(error instanceof SfuDeployPreflightError);
+    return error.errors;
+  }
+};
+
+test("SFU services must run in production mode", () => {
+  assert.match(productionErrors({ NODE_ENV: undefined }).join("\n"), /NODE_ENV must be production/);
+  assert.match(productionErrors({ NODE_ENV: "development" }).join("\n"), /NODE_ENV must be production/);
+});
+
+test("production mode needs the CORS allow-list the SFU checks at startup", () => {
+  assert.match(productionErrors({ SFU_CORS_ORIGINS: undefined }).join("\n"), /SFU_CORS_ORIGINS must list/);
+  assert.match(productionErrors({ SFU_CORS_ORIGINS: "*" }).join("\n"), /SFU_CORS_ORIGINS must list/);
+  assert.match(productionErrors({ SFU_CORS_ORIGINS: "conclave.example" }).join("\n"), /not an http\(s\) origin/);
+  assert.deepEqual(productionErrors({ SFU_CORS_ORIGINS: "https://conclave.example, https://admin.example" }), []);
+  assert.deepEqual(productionErrors({ SFU_CORS_ORIGINS: "*", SFU_ALLOW_OPEN_CORS: "1" }), []);
 });
