@@ -4,30 +4,7 @@ import { Check, Copy } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { color } from "@conclave/ui-tokens";
 import { useOneTimeHint } from "../hooks/useOneTimeHint";
-
-async function copyText(value: string): Promise<boolean> {
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(value);
-      return true;
-    }
-  } catch {
-  }
-  try {
-    const textarea = document.createElement("textarea");
-    textarea.value = value;
-    textarea.setAttribute("readonly", "");
-    textarea.style.position = "absolute";
-    textarea.style.left = "-9999px";
-    document.body.appendChild(textarea);
-    textarea.select();
-    const ok = document.execCommand("copy");
-    document.body.removeChild(textarea);
-    return ok;
-  } catch {
-    return false;
-  }
-}
+import { copyText, meetingLinkFor } from "../lib/meeting-link";
 
 function useClock() {
   const [time, setTime] = useState("");
@@ -63,9 +40,13 @@ export default function MeetingInfoTag({ roomId }: { roomId?: string }) {
     return () => window.clearTimeout(t);
   }, [hint.visible, hint.dismiss]);
 
+  const canHover =
+    typeof window !== "undefined" &&
+    window.matchMedia?.("(hover: hover)").matches === true;
+
   const handleCopy = useCallback(() => {
     if (!roomId) return;
-    void copyText(roomId).then((ok) => {
+    void copyText(meetingLinkFor(roomId)).then((ok) => {
       if (!ok) return;
       hint.dismiss();
       setCopied(true);
@@ -119,9 +100,9 @@ export default function MeetingInfoTag({ roomId }: { roomId?: string }) {
           type="button"
           onClick={handleCopy}
           aria-label={
-            copied ? "Meeting code copied" : `Copy meeting code ${roomId}`
+            copied ? "Meeting link copied" : `Copy meeting link for ${roomId}`
           }
-          title="Copy meeting code"
+          title="Copy meeting link"
           className="group -mx-1.5 -my-1 min-w-0 rounded-md px-1.5 py-1 transition-colors duration-150 hover:bg-white/[0.06]"
         >
           {content}
@@ -135,7 +116,7 @@ export default function MeetingInfoTag({ roomId }: { roomId?: string }) {
           style={{ color: color.textFaint }}
         >
           <Copy size={11} strokeWidth={1.75} />
-          Tap to copy code
+          {canHover ? "Click" : "Tap"} to copy link
         </span>
       ) : null}
     </div>

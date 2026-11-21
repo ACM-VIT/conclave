@@ -2410,6 +2410,8 @@ export default function MeetsMainContent({
           getDisplayName={resolveDisplayName}
           sidePanelReserve={dockedPanelReserve}
           isMobile={isMobile}
+          roomId={roomId}
+          isHost={isAdmin}
         />
       )}
 

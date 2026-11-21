@@ -58,12 +58,12 @@ describe("GridLayout meeting presence", () => {
 
       expect(html).toContain('data-meet-view-ordered-count="0"');
       expect(html).not.toContain("You are the only one here");
-      expect(html).not.toContain("Invite people");
+      expect(html).not.toContain("Add others");
     },
   );
 
   it("does not show the mobile solo invite when peers are hidden", () => {
-    expect(renderGrid(["peer"], true, true)).not.toContain("Invite people");
+    expect(renderGrid(["peer"], true, true)).not.toContain("Add others");
   });
 
   it("does not show a solo invite when camera-off peers are visible", () => {
