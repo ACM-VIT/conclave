@@ -18,6 +18,9 @@ const exceptionEvent = (): CaptureResult => ({
     $referrer: "https://conclave.acmvit.in/w/spring-demo?code=xyz",
     $title: "yato-sokka-akane · c0nclav3",
     $browser: "Chrome",
+    client_version: "0b2d3b480f4621392a4151d750c90965b7c8b76c",
+    roomId: "yato-sokka-akane",
+    userId: "ishaan@example.com#s1",
     call_log: "[Meets] Failed to produce video for ishaan@example.com",
     $exception_list: [
       {
@@ -52,6 +55,8 @@ describe("scrubTelemetryEvent", () => {
     expect(properties.$pathname).toBe("/[code]");
     expect(properties.$referrer).toBe("https://conclave.acmvit.in/w/[code]");
     expect(properties).not.toHaveProperty("$title");
+    expect(properties).not.toHaveProperty("roomId");
+    expect(properties).not.toHaveProperty("userId");
     expect(properties.call_log).toBe("[Meets] Failed to produce video for [email]");
 
     const [entry] = properties.$exception_list;
@@ -70,6 +75,9 @@ describe("scrubTelemetryEvent", () => {
     );
     expect(properties.distinct_id).toBe("0196f0a1-0000-7000-8000-000000000000");
     expect(properties.$browser).toBe("Chrome");
+    expect(properties.client_version).toBe(
+      "0b2d3b480f4621392a4151d750c90965b7c8b76c",
+    );
     expect(properties.$exception_list[0].stacktrace.frames[0]).toEqual({
       filename: "https://conclave.acmvit.in/_next/static/chunks/0f3e9d.js",
       lineno: 1,

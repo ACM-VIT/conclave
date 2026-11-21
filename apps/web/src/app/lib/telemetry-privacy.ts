@@ -7,9 +7,11 @@ const STATIC_PAGES = new Set([
   "delete-account",
   "sign-in",
 ]);
-const DROPPED_PROPERTIES = new Set(["$title"]);
-// posthog-js puts the project key in `token`; scrubbing it breaks ingestion.
-const SDK_IDENTITY_PROPERTIES = new Set(["token", "distinct_id"]);
+// Room codes let anyone join, and user ids can embed an email.
+const DROPPED_PROPERTIES = new Set(["$title", "roomId", "userId"]);
+// Values we set or the SDK needs as-is: the project key in `token` must
+// survive for ingestion, and `client_version` is a git sha, not a secret.
+const TRUSTED_PROPERTIES = new Set(["token", "distinct_id", "client_version"]);
 const URL_PROPERTY = /url|referrer|pathname|href/i;
 const MAX_TEXT_LENGTH = 1000;
 
@@ -99,7 +101,7 @@ function scrubProperties(properties: Properties): Properties {
     } else if (
       typeof value === "string" &&
       !key.startsWith("$") &&
-      !SDK_IDENTITY_PROPERTIES.has(key)
+      !TRUSTED_PROPERTIES.has(key)
     ) {
       scrubbed[key] = scrubText(value);
     } else {
@@ -111,7 +113,7 @@ function scrubProperties(properties: Properties): Properties {
 
 /**
  * posthog-js `before_send` hook. Every event leaves the browser without room
- * codes, query strings, page titles, emails or tokens.
+ * codes, user ids, query strings, page titles, emails or tokens.
  */
 export function scrubTelemetryEvent(event: CaptureResult): CaptureResult {
   return {
