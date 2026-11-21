@@ -2280,6 +2280,7 @@ export default function MeetsClient({
       detail: string | null = null,
       rejoinMedia: RejoinMedia | null = null,
     ): boolean => {
+      stopTts();
       const joinedAt = callJoinedAtRef.current;
       const endedRoomId = latestRoomIdRef.current.trim();
       if (!showsCallOutcome || joinedAt === null || !endedRoomId) return false;
@@ -2293,7 +2294,7 @@ export default function MeetsClient({
       });
       return true;
     },
-    [showsCallOutcome],
+    [showsCallOutcome, stopTts],
   );
 
   const handleRemoteCallEnded = useCallback(
