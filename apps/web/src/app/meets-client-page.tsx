@@ -8,6 +8,7 @@ import {
   canonicalizeSfuClientId,
   resolveBrowserSfuClientId,
 } from "@/lib/sfu-client-id";
+import { requestJoinInfo } from "./lib/join-info";
 import { getOrCreateSessionId, readResponseError } from "./lib/utils";
 
 const reactionAssets = [
@@ -22,36 +23,11 @@ const reactionAssets = [
 const readError = readResponseError;
 
 const defaultClientId = resolveBrowserSfuClientId();
-const JOIN_INFO_REQUEST_TIMEOUT_MS = 15000;
-
-const fetchJoinInfoWithTimeout = async (
-  init: RequestInit,
-): Promise<Response> => {
-  const controller = new AbortController();
-  const timeoutId = window.setTimeout(
-    () => controller.abort(),
-    JOIN_INFO_REQUEST_TIMEOUT_MS,
-  );
-  try {
-    return await fetch("/api/sfu/join", {
-      ...init,
-      signal: controller.signal,
-    });
-  } catch (error) {
-    if (controller.signal.aborted) {
-      throw new Error("Join info request timeout");
-    }
-    throw error;
-  } finally {
-    window.clearTimeout(timeoutId);
-  }
-};
-
 type MeetsClientPageProps = {
   initialRoomId?: string;
   forceJoinOnly?: boolean;
   // A join may open the room when the code is known to be real (a scheduled
-  // meeting). Otherwise only hosts and rejoins create rooms.
+  // meeting). Otherwise only hosts and tabs that were in the room create it.
   allowRoomCreation?: boolean;
   bypassMediaPermissions?: boolean;
   sfuClientId?: string;
@@ -87,51 +63,24 @@ export default function MeetsClientPage({
   const usesRoomRouting = resolvedClientId === "conclave";
 
   const getJoinInfo = useCallback(
-    async (
+    (
       roomId: string,
       sessionId: string,
       options?: {
         user?: { id?: string; email?: string | null; name?: string | null };
         isHost?: boolean;
         joinMode?: JoinMode;
-        allowRoomCreation?: boolean;
       }
-    ) => {
-      const resolvedUser = options?.user ?? defaultUser;
-      const isHost = Boolean(options?.isHost);
-      const resolvedJoinMode = options?.joinMode ?? joinMode;
-      const response = await fetchJoinInfoWithTimeout({
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-sfu-client": resolvedClientId,
-        },
-        body: JSON.stringify({
-          roomId,
-          sessionId,
-          user: resolvedUser,
-          isHost,
-          allowRoomCreation:
-            allowRoomCreation || Boolean(options?.allowRoomCreation),
-          clientId: resolvedClientId,
-          joinMode: resolvedJoinMode,
-        }),
-      });
-
-      if (!response.ok) {
-        const error = new Error(await readError(response)) as Error & {
-          responseStatus?: number;
-        };
-        error.responseStatus = response.status;
-        throw error;
-      }
-
-      return (await response.json()) as {
-        token: string;
-        sfuUrl: string;
-        iceServers?: RTCIceServer[];
-      };
-    },
+    ) =>
+      requestJoinInfo({
+        roomId,
+        sessionId,
+        user: options?.user ?? defaultUser,
+        isHost: Boolean(options?.isHost),
+        isKnownMeeting: allowRoomCreation,
+        clientId: resolvedClientId,
+        joinMode: options?.joinMode ?? joinMode,
+      }),
     [allowRoomCreation, joinMode, defaultUser, resolvedClientId]
   );
 

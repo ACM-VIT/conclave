@@ -18,6 +18,11 @@ import {
 } from "../lib/constants";
 import { emitWithAckTimeout } from "../lib/socket-ack";
 import {
+  forgetJoinedRoom,
+  getJoinedRoom,
+  rememberJoinedRoom,
+} from "../lib/joined-room";
+import {
   resolveInFlightReconnectRequest,
   resolveReconnectStartAttempts,
   type ReconnectRequest,
@@ -867,7 +872,6 @@ interface UseMeetSocketOptions {
       user?: { id?: string; email?: string | null; name?: string | null };
       isHost?: boolean;
       joinMode?: JoinMode;
-      allowRoomCreation?: boolean;
     },
   ) => Promise<JoinInfo>;
   joinMode?: JoinMode;
@@ -2143,6 +2147,7 @@ export function useMeetSocket({
   const finishLocalRoomEnded = useCallback(() => {
     if (localRoomEndedHandledRef.current) return;
     localRoomEndedHandledRef.current = true;
+    forgetJoinedRoom();
     setMeetError(null);
     setMeetingEndedNotice?.(null);
     setWaitingMessage(null);
@@ -6622,6 +6627,8 @@ export function useMeetSocket({
             webinarInviteCode: joinOptions.webinarInviteCode,
             meetingInviteCode: joinOptions.meetingInviteCode,
             mediaCapabilities,
+            roomRecoveryPass:
+              getJoinedRoom(targetRoomId)?.recoveryPass ?? undefined,
           },
           async (response: JoinRoomResponse | JoinRoomErrorResponse) => {
             if (!settleJoinRoom()) return;
@@ -6706,6 +6713,11 @@ export function useMeetSocket({
                 "[Meets] Joined room, existing producers:",
                 response.existingProducers,
               );
+              // Only being let into a meeting counts: a tab that was left
+              // knocking must not reopen the room or skip the knock later.
+              if (joinOptions.joinMode === "meeting") {
+                rememberJoinedRoom(targetRoomId, response.roomRecoveryPass);
+              }
               currentRoomIdRef.current = targetRoomId;
               serverRoomIdRef.current = response.roomId ?? targetRoomId;
               setIsRoomLocked(response.isLocked ?? false);
@@ -6997,10 +7009,6 @@ export function useMeetSocket({
                     user,
                     isHost: isAdmin,
                     joinMode,
-                    // A tab that was in this room may open it again, so a
-                    // reconnect survives the room closing under it.
-                    allowRoomCreation:
-                      currentRoomIdRef.current === roomIdForJoin,
                   });
 
             const [{ token, sfuUrl, iceServers }, { io }] = await Promise.all([
@@ -7089,6 +7097,7 @@ export function useMeetSocket({
 
             socket.on("roomClosed", ({ reason }: { reason: string }) => {
               console.info("[Meets] Room closed:", reason);
+              forgetJoinedRoom();
               setMeetError({
                 code: "UNKNOWN",
                 message: `Room closed: ${reason}`,
@@ -7113,6 +7122,7 @@ export function useMeetSocket({
                   return;
                 }
 
+                forgetJoinedRoom();
                 setMeetError(null);
                 setMeetingEndedNotice?.(resolveRoomEndedNoticeMessage(message));
                 setWaitingMessage(null);
@@ -8155,6 +8165,7 @@ export function useMeetSocket({
             );
 
             socket.on("kicked", () => {
+              forgetJoinedRoom();
               cleanup();
               setMeetError({
                 code: "UNKNOWN",

@@ -383,7 +383,6 @@ export type MeetsClientProps = {
       user?: { id?: string; email?: string | null; name?: string | null };
       isHost?: boolean;
       joinMode?: JoinMode;
-      allowRoomCreation?: boolean;
     },
   ) => Promise<{
     token: string;
