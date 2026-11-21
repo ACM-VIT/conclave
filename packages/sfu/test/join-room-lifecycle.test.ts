@@ -205,6 +205,34 @@ describe("reconnect grace timer", () => {
 });
 
 describe("concurrent room creation", () => {
+  it("puts simultaneous new rooms on separate idle workers", async () => {
+    let finishedCreatingRouter!: () => void;
+    const routersReady = new Promise<void>((resolve) => { finishedCreatingRouter = resolve; });
+    const workers = [1, 2, 3].map((pid) => ({
+      pid,
+      closed: false,
+      createRouter: vi.fn(async () => {
+        await routersReady;
+        return { closed: false } as Router;
+      }),
+    }));
+    const state = makeState(workers as unknown as Worker[]);
+    const pending = ["a", "b", "c"].map((id) =>
+      getOrCreateRoomWithOrigin(state, "conclave", id),
+    );
+
+    try {
+      await vi.waitFor(() => {
+        for (const worker of workers) {
+          expect(worker.createRouter).toHaveBeenCalledOnce();
+        }
+      });
+    } finally {
+      finishedCreatingRouter();
+      await Promise.all(pending);
+    }
+  });
+
   it("makes only the joiner whose call created the room its host", async () => {
     let releaseRouter!: () => void;
     const routerReady = new Promise<void>((resolve) => { releaseRouter = resolve; });
