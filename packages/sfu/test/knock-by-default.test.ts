@@ -103,6 +103,8 @@ const host = { userId: "guest-host", clientId: "conclave", sessionId: "h", allow
 const guest = { userId: "guest-visitor", clientId: "conclave", sessionId: "v" };
 const second = { userId: "guest-second", clientId: "conclave", sessionId: "s2" };
 const knocker = { userId: "guest-knocker", clientId: "conclave", sessionId: "k" };
+// The voice agent joins as a brand new guest that nobody has let in.
+const agent = { userId: "guest-agent-session-1", clientId: "conclave", sessionId: "agent-session-1" };
 
 afterEach(() => {
   vi.useRealTimers();
@@ -229,6 +231,36 @@ describe("new meetings make people knock", () => {
 
     await send(created.peer, "admitUser", { userId: "invitee@example.com" });
     expect((await join(state, invitee)).status).toBe("joined");
+  });
+});
+
+describe("a participant the host admits before it joins", () => {
+  it("joins a locked meeting without knocking, and nobody else does", async () => {
+    const state = makeState();
+    const created = await join(state, host);
+    expect((await join(state, agent)).status).toBe("waiting");
+
+    const admitted = await send(created.peer, "admin:allowUsers", {
+      userKeys: [agent.userId],
+    });
+    expect(admitted?.success).toBe(true);
+
+    expect((await join(state, agent)).status).toBe("joined");
+    expect((await join(state, knocker)).status).toBe("waiting");
+    expect(roomOf(state).isLocked).toBe(true);
+  });
+
+  it("cannot be admitted by someone who is not a host", async () => {
+    const state = makeState();
+    await join(state, host);
+    roomOf(state).allowLockedUser(guest.userId);
+    const participant = await join(state, guest);
+    expect(participant.status).toBe("joined");
+
+    await send(participant.peer, "admin:allowUsers", {
+      userKeys: [agent.userId],
+    });
+    expect((await join(state, agent)).status).toBe("waiting");
   });
 });
 

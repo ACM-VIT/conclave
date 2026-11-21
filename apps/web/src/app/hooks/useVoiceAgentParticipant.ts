@@ -27,6 +27,7 @@ import {
   buildMicrophoneOpusCodecOptions,
   type AudioProducerNetworkProfile,
 } from "../lib/constants";
+import { admitBeforeJoin, revokeAdmission } from "../lib/admissions";
 import { getBrowserNetworkSnapshot } from "../lib/network-information";
 import { resolveBrowserSfuClientId } from "@/lib/sfu-client-id";
 
@@ -51,10 +52,13 @@ type RuntimeState = {
   sfuSocket: Socket | null;
   producerTransport: Transport | null;
   producer: Producer | null;
+  revokeAdmission: (() => void) | null;
 };
 
 type UseVoiceAgentParticipantOptions = {
   roomAi?: RoomAiController;
+  // The host's own connection to the meeting, which admits the agent.
+  hostSocketRef: React.MutableRefObject<Socket | null>;
   roomId: string;
   isJoined: boolean;
   isAdmin: boolean;
@@ -338,6 +342,7 @@ const createRuntimeState = (): RuntimeState => ({
   sfuSocket: null,
   producerTransport: null,
   producer: null,
+  revokeAdmission: null,
 });
 
 const disconnectMixSources = (runtime: RuntimeState) => {
@@ -365,6 +370,8 @@ const closeRuntimeState = (runtime: RuntimeState) => {
       runtime.sfuSocket.disconnect();
     } catch {}
   }
+  runtime.revokeAdmission?.();
+  runtime.revokeAdmission = null;
   if (runtime.openAiDataChannel) {
     try {
       runtime.openAiDataChannel.close();
@@ -632,6 +639,7 @@ const waitForDataChannelOpen = (channel: RTCDataChannel) => {
 
 export function useVoiceAgentParticipant({
   roomAi,
+  hostSocketRef,
   roomId,
   isJoined,
   isAdmin,
@@ -1278,6 +1286,27 @@ export function useVoiceAgentParticipant({
       }
       if (runtimeRef.current !== runtime) return;
 
+      // New meetings are locked, and the agent arrives as a guest nobody has
+      // let in. The host starting it is the admission: their connection lets
+      // in the identity /api/sfu/join gave the agent, and takes that back
+      // when the agent stops.
+      const agentUserKey = `guest-${agentSessionId}`;
+      const revokeAgentAdmission = () => {
+        const hostSocket = hostSocketRef.current;
+        if (hostSocket?.connected) revokeAdmission(hostSocket, agentUserKey);
+      };
+      const hostSocket = hostSocketRef.current;
+      if (hostSocket?.connected) {
+        await admitBeforeJoin(hostSocket, agentUserKey).catch((error) => {
+          console.warn("[Voice Agent] Could not admit the agent ahead of its join.", error);
+        });
+      }
+      if (runtimeRef.current !== runtime) {
+        revokeAgentAdmission();
+        return;
+      }
+      runtime.revokeAdmission = revokeAgentAdmission;
+
       const connectAgentSocket = async (url: string) => {
         const socket = await createSocketConnection(url, token);
         runtime.sfuSocket = socket;
@@ -1375,6 +1404,7 @@ export function useVoiceAgentParticipant({
     buildSessionInstructions,
     failRuntime,
     handleRealtimeToolCall,
+    hostSocketRef,
     isAdmin,
     isJoined,
     model,

@@ -1,6 +1,6 @@
 import type { Socket } from "socket.io-client";
 
-const ADMIT_ALL_ACK_TIMEOUT_MS = 10000;
+const ADMISSION_ACK_TIMEOUT_MS = 10000;
 
 type AdmissionAck = { success?: boolean; error?: string } | undefined;
 
@@ -40,7 +40,7 @@ export const admitAllPendingUsers = (
   onDone: (error: string | null) => void,
 ) => {
   socket
-    .timeout(ADMIT_ALL_ACK_TIMEOUT_MS)
+    .timeout(ADMISSION_ACK_TIMEOUT_MS)
     .emit(
       "admin:admitAllPending",
       (timeoutError: Error | null, response: unknown) => {
@@ -51,4 +51,32 @@ export const admitAllPendingUsers = (
         );
       },
     );
+};
+
+// Lets a participant this host is bringing in, such as the voice agent, join
+// a locked meeting without knocking. The SFU takes this from hosts only, and
+// it admits that one key and nobody else.
+export const admitBeforeJoin = (socket: Socket, userKey: string) =>
+  new Promise<void>((resolve, reject) => {
+    socket
+      .timeout(ADMISSION_ACK_TIMEOUT_MS)
+      .emit(
+        "admin:allowUsers",
+        { userKeys: [userKey] },
+        (timeoutError: Error | null, response: unknown) => {
+          const error = timeoutError
+            ? "The meeting did not answer."
+            : readAckError(response, "Couldn’t admit the participant.");
+          if (error) {
+            reject(new Error(error));
+            return;
+          }
+          resolve();
+        },
+      );
+  });
+
+// Once that participant is gone its key must not stay a way in.
+export const revokeAdmission = (socket: Socket, userKey: string) => {
+  socket.emit("admin:revokeAllowedUsers", { userKeys: [userKey] });
 };

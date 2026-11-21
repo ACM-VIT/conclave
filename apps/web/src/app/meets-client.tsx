@@ -2475,6 +2475,7 @@ export default function MeetsClient({
   useEffect(() => { roomAiRef.current = roomAi; }, [roomAi]);
   const voiceAgent = useVoiceAgentParticipant({
     roomAi,
+    hostSocketRef: refs.socketRef,
     roomId,
     isJoined: connectionState === "joined",
     isAdmin: canModerateMeeting,
