@@ -65,6 +65,7 @@ const MAX_SAMPLE_GAP_MS = 15_000;
 // Same threshold as the freeze watchdog in useMeetSocket: bytes arriving
 // without decoded frames means the decoder is stuck, not that video paused.
 const STALL_MIN_BYTE_DELTA = 8_000;
+const MEDIASOUP_PROBATOR_MID = "probator";
 export const FAST_SAMPLE_MS = 250;
 export const STEADY_SAMPLE_MS = 5_000;
 
@@ -363,6 +364,8 @@ export function createCallMetricsTracker({
       if (call.firstVideoAt === null && stream.framesDecoded > 0) {
         call.firstVideoAt = at;
       }
+      // Credits whole sample intervals: a consumer swapped out between two
+      // samples leaves no stats, so its replacement covers the interval.
       if (bytes > 0 || frames > 0) totals.remoteVideoMs += dt;
       totals.freezeCount += delta(stream.freezeCount, previous?.freezeCount);
       totals.freezeMs +=
@@ -551,6 +554,8 @@ export function parseCallStats({
     if (stat.type !== "inbound-rtp" || (kind !== "audio" && kind !== "video")) {
       return;
     }
+    // mediasoup's bandwidth probe: padding bytes, never frames.
+    if (stat.mid === MEDIASOUP_PROBATOR_MID) return;
     inbound.push({
       id: `${receive.transportId}:${String(stat.id)}`,
       kind,

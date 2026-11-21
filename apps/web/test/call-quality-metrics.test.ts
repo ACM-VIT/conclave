@@ -301,6 +301,29 @@ describe("call_summary", () => {
     ]);
   });
 
+  it("counts a consumer swapped between samples once", () => {
+    const { tracker, state, named } = setup();
+    state("connecting", 0);
+    state("joined", 1000);
+
+    tracker.onStats(sample([video({ id: "recv:v1" })]), 2000);
+    tracker.onStats(
+      sample([video({ id: "recv:v1", bytesReceived: 90_000, framesDecoded: 60 })]),
+      7000,
+    );
+    tracker.onStats(
+      sample([video({ id: "recv:v2", bytesReceived: 60_000, framesDecoded: 40 })]),
+      12_000,
+    );
+    tracker.onStats(
+      sample([video({ id: "recv:v2", bytesReceived: 60_000, framesDecoded: 40 })]),
+      17_000,
+    );
+    state("disconnected", 18_000);
+
+    expect(named("call_summary")[0].props.remote_video_ms).toBe(10_000);
+  });
+
   it("sends the summary with sendBeacon when the tab closes mid-reconnect", () => {
     const { state, tracker, named } = setup();
     state("connecting", 0);
@@ -362,11 +385,12 @@ describe("call_summary", () => {
 });
 
 describe("parseCallStats", () => {
-  it("reads inbound streams and folds simulcast layers into one outbound entry", () => {
+  it("reads inbound streams, skips the mediasoup probator and folds simulcast layers", () => {
     const receive = new Map<string, unknown>([
       ["a", { type: "inbound-rtp", id: "IA1", kind: "audio", packetsReceived: 9, bytesReceived: 900, concealedSamples: 3, totalSamplesReceived: 960 }],
       ["v", { type: "inbound-rtp", id: "IV1", kind: "video", packetsReceived: 20, bytesReceived: 20_000, framesDecoded: 30, freezeCount: 2, totalFreezesDuration: 1.25 }],
       ["c", { type: "candidate-pair", id: "CP1", bytesReceived: 1 }],
+      ["p", { type: "inbound-rtp", id: "IT01V1234", kind: "video", mid: "probator", bytesReceived: 76_100, framesDecoded: 0 }],
     ]);
     const send = new Map<string, unknown>([
       ["l", { type: "outbound-rtp", kind: "video", bytesSent: 1000, frameHeight: 180, qualityLimitationDurations: { cpu: 0, bandwidth: 4, none: 10 } }],
@@ -388,7 +412,7 @@ describe("parseCallStats", () => {
           packetsReceived: 9,
           bytesReceived: 900,
           framesDecoded: 0,
-          freezeCount: null,
+                  freezeCount: null,
           totalFreezesDurationSec: null,
           concealedSamples: 3,
           totalSamplesReceived: 960,

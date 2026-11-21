@@ -39,7 +39,8 @@ Each tab sends at most one `call_join` per join attempt, one `call_first_media`
 and one `call_summary` per call, whatever the room size. `call_id` is a random
 id per attempt that ties the three together. Times are milliseconds; "from the
 click" means from the moment the join started (`connecting`). Stats are sampled
-from the transports every 250 ms until first media arrives, then every 5 s.
+from the transports every 250 ms from joining until first media arrives, then
+every 5 s, so first-media times are stamped at the first sample that shows them.
 
 ### `call_join`
 
@@ -77,9 +78,9 @@ Sent on leave, on a terminal error, or with sendBeacon when the tab closes.
 | `first_remote_audio_ms`, `first_remote_video_ms` | As above |
 | `reconnect_count`, `reconnect_total_ms`, `reconnect_longest_ms` | Times the call left `joined` mid-call, and how long it took to get back |
 | `reconnect_unrecovered` | The call ended while still reconnecting |
-| `remote_video_ms` | Stream-time of remote video received, summed over streams. Divide freeze and stall time by it for a rate |
+| `remote_video_ms` | Time remote video was arriving, summed over streams, in 5 s sample steps. Divide freeze and stall time by it for a rate |
 | `video_freeze_count`, `video_freeze_ms` | The browser's `freezeCount` and `totalFreezesDuration` over all remote video |
-| `video_stall_count`, `video_stall_ms` | Intervals where bytes arrived but no frame decoded (the freeze watchdog's signal) |
+| `video_stall_count`, `video_stall_ms` | Intervals where bytes arrived but no frame decoded (the freeze watchdog's signal). mediasoup's padding-only probator stream is ignored |
 | `audio_concealed_pct` | Share of remote audio samples the browser had to conceal |
 | `outbound_video_ms` | Time the camera was sending |
 | `outbound_low_ms`, `outbound_standard_ms`, `outbound_profile_switches` | Time in each publish profile and how often it changed |
@@ -87,13 +88,14 @@ Sent on leave, on a terminal error, or with sendBeacon when the tab closes.
 | `outbound_cpu_limited_pct`, `outbound_bandwidth_limited_pct` | Share of send time the encoder was limited, from `qualityLimitationDurations` |
 
 The older `meet_*` events (reconnect attempts, consumer recovery and so on)
-still flow through `telemetry.capture` and are unchanged.
+still flow through `telemetry.capture`, minus their `roomId` and `userId`.
 
 ## Privacy
 
 `telemetry-privacy.ts` runs as posthog-js `before_send`. It rewrites every URL
 property and stack frame URL to its route (`/[code]`, `/w/[code]`), drops query
-strings, hashes and the page title, and replaces emails and tokens in free text.
+strings, hashes, the page title and any `roomId` or `userId` property, and
+replaces emails and tokens in free text.
 Asset URLs under `/_next/` stay intact so stack frames can be symbolicated.
 Session replay, surveys, DOM autocapture, feature flags and pageviews are off,
 and no user is ever identified. The SFU scrubs emails, tokens and URL queries
