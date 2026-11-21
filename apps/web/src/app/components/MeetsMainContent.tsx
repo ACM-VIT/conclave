@@ -14,7 +14,7 @@ import {
 import type { Socket } from "socket.io-client";
 import type { RoomInfo } from "@/lib/sfu-types";
 import ChatOverlay from "./ChatOverlay";
-import ChatPanel from "./ChatPanel";
+import JoinScreen from "./JoinScreen";
 import type { RoomAiController } from "../hooks/useRoomAi";
 import ControlsBar, { type ControlsBarProps } from "./ControlsBar";
 import CommandPalette from "./CommandPalette";
@@ -39,7 +39,6 @@ import WebinarViewerChrome, {
   WebinarWaitingCard,
 } from "./WebinarViewer";
 import ToastQueue from "./ToastQueue";
-import TranscriptPanel from "./TranscriptPanel";
 import RoomAiPanel from "./RoomAiPanel";
 import AndroidUpsellSheet from "./AndroidUpsellSheet";
 import type { BrowserState } from "../hooks/useSharedBrowser";
@@ -112,7 +111,10 @@ import type {
 import { getRenderableParticipantVideoStream } from "../lib/participant-media";
 import { prewarmVideoEffectsAssetsDeferred } from "../lib/video-effects-lazy";
 
-const JoinScreen = dynamic(() => import("./JoinScreen"), {
+const ChatPanel = dynamic(() => import("./ChatPanel"), {
+  ssr: false,
+});
+const TranscriptPanel = dynamic(() => import("./TranscriptPanel"), {
   ssr: false,
 });
 const VideoEffectsPanel = dynamic(() => import("./VideoEffectsPanel"), {
