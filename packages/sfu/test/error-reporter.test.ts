@@ -31,15 +31,18 @@ const eventsIn = (payload: unknown): CapturedEvent[] => {
 
 const startFakePostHog = async () => {
   const events: CapturedEvent[] = [];
-  const server = createServer(async (request, response) => {
-    if (request.method === "POST") {
-      const body = await readBody(request);
-      try {
-        events.push(...eventsIn(JSON.parse(body.toString("utf8"))));
-      } catch {}
-    }
-    response.writeHead(200, { "content-type": "application/json" });
-    response.end('{"status":1}');
+  const record = async (request: IncomingMessage) => {
+    if (request.method !== "POST") return;
+    const body = await readBody(request);
+    try {
+      events.push(...eventsIn(JSON.parse(body.toString("utf8"))));
+    } catch {}
+  };
+  const server = createServer((request, response) => {
+    void record(request).finally(() => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end('{"status":1}');
+    });
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address() as AddressInfo;
@@ -215,6 +218,32 @@ describe("SFU error reporter", () => {
     now += 60_000;
     reporter.report(new Error("Producer not found"), { source: "socket_handler" });
     expect(sent).toHaveLength(7);
+  });
+
+  it("never throws even when logging the failure throws", async () => {
+    const brokenClient: ExceptionClient = {
+      captureException: () => {
+        throw new Error("queue full");
+      },
+      captureExceptionImmediate: () => Promise.reject(new Error("queue full")),
+      flush: () => Promise.reject(new Error("queue full")),
+    };
+    const reporter = createErrorReporter({
+      getClient: () => brokenClient,
+      instanceId: "sfu-a",
+      region: null,
+      version: "v2",
+      onReportFailure: () => {
+        throw new Error("stdout closed");
+      },
+    });
+
+    expect(() =>
+      reporter.report(new Error("boom"), { source: "socket_handler" }),
+    ).not.toThrow();
+    await expect(
+      reporter.reportFatal(new Error("boom"), { source: "uncaught_exception" }, 200),
+    ).resolves.toBeUndefined();
   });
 
   it("does nothing when analytics is off", async () => {

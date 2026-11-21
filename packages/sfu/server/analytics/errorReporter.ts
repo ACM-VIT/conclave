@@ -52,13 +52,13 @@ export type ServerErrorContext = {
 };
 
 export type ErrorReporter = {
-  report(error: unknown, context: ServerErrorContext): void;
+  report: (error: unknown, context: ServerErrorContext) => void;
   /** Sends the exception and everything queued, waiting at most `timeoutMs`. Never rejects. */
-  reportFatal(
+  reportFatal: (
     error: unknown,
     context: ServerErrorContext,
     timeoutMs: number,
-  ): Promise<void>;
+  ) => Promise<void>;
 };
 
 const RATE_WINDOW_MS = 60_000;
@@ -105,6 +105,11 @@ export const createErrorReporter = ({
 }: ErrorReporterOptions): ErrorReporter => {
   const allow = createRateLimiter(now);
   const distinctId = `sfu_${instanceId}`;
+  const failed = (failure: unknown) => {
+    try {
+      onReportFailure(failure);
+    } catch {}
+  };
 
   const prepare = (
     error: unknown,
@@ -131,16 +136,16 @@ export const createErrorReporter = ({
   };
 
   return {
-    report(error, context) {
+    report: (error, context) => {
       try {
         const prepared = prepare(error, context);
         prepared?.client.captureException(error, prepared.options);
       } catch (failure) {
-        onReportFailure(failure);
+        failed(failure);
       }
     },
 
-    async reportFatal(error, context, timeoutMs) {
+    reportFatal: async (error, context, timeoutMs) => {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         const prepared = prepare(error, { level: "fatal", ...context });
@@ -154,7 +159,7 @@ export const createErrorReporter = ({
         });
         await Promise.race([delivery, deadline]);
       } catch (failure) {
-        onReportFailure(failure);
+        failed(failure);
       } finally {
         if (timer) clearTimeout(timer);
       }
