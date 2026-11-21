@@ -1121,24 +1121,47 @@ export interface BrowserClosedNotification {
 }
 
 export interface AppsState {
+  /** The app presented on the stage. */
   activeAppId: string | null;
   locked: boolean;
+  /** Bumped by every change to this state. Older SFUs send none. */
+  revision: number;
+  /** Apps off the stage whose document the room keeps. */
+  savedAppIds: string[];
   roomId?: string;
 }
 
 export interface AppsOpenData {
   appId: string;
+  expectedRevision?: number;
   options?: Record<string, unknown>;
 }
 
 export interface AppsOpenResponse {
   success: boolean;
   activeAppId?: string;
+  revision?: number;
   error?: string;
+}
+
+export interface AppsCloseData {
+  expectedRevision?: number;
 }
 
 export interface AppsCloseResponse {
   success: boolean;
+  revision?: number;
+  error?: string;
+}
+
+export interface AppsDiscardData {
+  appId: string;
+  expectedRevision?: number;
+}
+
+export interface AppsDiscardResponse {
+  success: boolean;
+  revision?: number;
   error?: string;
 }
 

@@ -339,8 +339,8 @@ export const toRoomSnapshot = (room: Room): RoomSnapshot => {
     screenShareProducerId: room.screenShareProducerId,
     quality: room.currentQuality,
     appsState: {
-      activeAppId: room.apps.state.activeAppId,
-      locked: room.apps.state.locked,
+      activeAppId: room.apps.activeAppId,
+      locked: room.apps.locked,
     },
     policies: {
       locked: room.isLocked,

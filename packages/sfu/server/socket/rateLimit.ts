@@ -99,6 +99,9 @@ export const RATE_LIMITS = {
   aiModels: { capacity: 12, refillPerSec: 0.5 },
   // Awareness updates are the chattiest (cursor moves, presence). ~20/s sustained.
   appsAwareness: { capacity: 40, refillPerSec: 20 },
+  // Presenting, closing or clearing an app measures the document leaving the
+  // stage; hosts change the stage a few times a minute.
+  appsStage: { capacity: 10, refillPerSec: 1 },
   // Full Yjs sync can encode a large document; keep request bursts modest.
   appsYjsSync: { capacity: 10, refillPerSec: 2 },
   // Yjs document updates: bursty while typing, so allow a generous burst.

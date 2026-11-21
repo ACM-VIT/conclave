@@ -1,7 +1,10 @@
 import * as Y from "yjs";
 import type {
   AppsAwarenessData,
+  AppsCloseData,
   AppsCloseResponse,
+  AppsDiscardData,
+  AppsDiscardResponse,
   AppsLockData,
   AppsLockResponse,
   AppsOpenData,
@@ -12,69 +15,19 @@ import type {
   AppsUpdateData,
 } from "../../../types.js";
 import { Admin } from "../../../config/classes/Admin.js";
+import {
+  MAX_APP_DOC_BYTES,
+  type AppAwarenessRemoval,
+  type StageCommandResult,
+} from "../../roomApps.js";
 import { Logger } from "../../../utilities/loggers.js";
 import type { ConnectionContext } from "../context.js";
 import { RATE_LIMITS, takeToken } from "../rateLimit.js";
 import { respond } from "./ack.js";
 
 const MAX_APPS_SYNC_BYTES = 64 * 1024;
-const MAX_APPS_SYNC_RESPONSE_BYTES = 1024 * 1024;
 const MAX_APPS_UPDATE_BYTES = 256 * 1024;
 const MAX_APPS_AWARENESS_BYTES = 64 * 1024;
-// A document larger than one sync response can no longer reach new joiners,
-// so it is also the most a document may grow to.
-const MAX_APPS_DOC_BYTES = MAX_APPS_SYNC_RESPONSE_BYTES;
-
-// Encoded size of each document after the last accepted update. Without a
-// bound, a participant could stream 256 KB updates into a room's app until the
-// SFU ran out of memory.
-const appDocSizes = new WeakMap<Y.Doc, { measured: number; sinceMeasured: number }>();
-
-// An update can grow the encoded document by more than its own size: a
-// deletion splits existing items, and alternating single-character deletions
-// grew a document by about six times the update's bytes in testing. Far from
-// the limit the cheap estimate is safe with this margin; near it, measure the
-// actual result exactly.
-const UPDATE_GROWTH_MARGIN = 16;
-
-const encodedSizeAfter = (doc: Y.Doc, update: Uint8Array): number => {
-  const trial = new Y.Doc({ gc: doc.gc });
-  try {
-    Y.applyUpdate(trial, Y.encodeStateAsUpdate(doc));
-    Y.applyUpdate(trial, update);
-    return Y.encodeStateAsUpdate(trial).length;
-  } finally {
-    trial.destroy();
-  }
-};
-
-/**
- * Whether `doc` stays within MAX_APPS_DOC_BYTES once `update` is applied.
- * Records the expected size when it does; the caller then applies it.
- */
-const reserveAppDocBytes = (doc: Y.Doc, update: Uint8Array): boolean => {
-  let size = appDocSizes.get(doc);
-  if (!size) {
-    size = { measured: Y.encodeStateAsUpdate(doc).length, sinceMeasured: 0 };
-    appDocSizes.set(doc, size);
-  }
-  const estimate =
-    size.measured + size.sinceMeasured + update.length * UPDATE_GROWTH_MARGIN;
-  if (estimate <= MAX_APPS_DOC_BYTES) {
-    size.sinceMeasured += update.length * UPDATE_GROWTH_MARGIN;
-    return true;
-  }
-  let resulting: number;
-  try {
-    resulting = encodedSizeAfter(doc, update);
-  } catch {
-    return false;
-  }
-  if (resulting > MAX_APPS_DOC_BYTES) return false;
-  size.measured = resulting;
-  size.sinceMeasured = 0;
-  return true;
-};
 
 const MAX_APP_ID_LENGTH = 128;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
@@ -96,15 +49,14 @@ const normalizeAppId = (value: unknown): string | null => {
 
 const emitAppAwarenessRemoval = (
   context: ConnectionContext,
-  appId: string,
-  awarenessUpdate: Uint8Array | null,
+  removal: AppAwarenessRemoval | null,
 ): void => {
-  if (!awarenessUpdate) {
+  if (!removal) {
     return;
   }
   context.io.to(context.currentRoom!.channelId).emit("apps:awareness", {
-    appId,
-    awarenessUpdate,
+    appId: removal.appId,
+    awarenessUpdate: removal.awarenessUpdate,
   } satisfies AppsAwarenessData);
 };
 
@@ -148,17 +100,72 @@ const toUint8Array = (value: unknown): Uint8Array | null => {
 
 const getRoomAppsState = (context: ConnectionContext): AppsState => {
   if (!context.currentRoom) {
-    return { activeAppId: null, locked: false };
+    return { activeAppId: null, locked: false, revision: 0, savedAppIds: [] };
   }
-  return {
-    activeAppId: context.currentRoom.apps.state.activeAppId,
-    locked: context.currentRoom.apps.state.locked,
-    roomId: context.currentRoom.id,
-  };
+  return { ...context.currentRoom.apps.snapshot(), roomId: context.currentRoom.id };
 };
+
+const INVALID_REVISION = Symbol("invalid revision");
+
+// Older clients send no revision; their stage commands apply to whatever is
+// presented now.
+const parseExpectedRevision = (
+  value: unknown,
+): number | undefined | typeof INVALID_REVISION => {
+  if (value === undefined || value === null) return undefined;
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : INVALID_REVISION;
+};
+
+const STAGE_COMMAND_ERRORS = {
+  stale: "The stage changed. Try again.",
+  full: "Clear an app to present another.",
+} as const;
+
+const canControlStage = (context: ConnectionContext): boolean =>
+  context.currentClient instanceof Admin && !context.currentClient.isObserver;
 
 export const registerAppsHandlers = (context: ConnectionContext): void => {
   const { socket, io } = context;
+
+  const emitAppsState = (): AppsState => {
+    const state = getRoomAppsState(context);
+    io.to(context.currentRoom!.channelId).emit("apps:state", state);
+    return state;
+  };
+
+  // Shared by present, close and discard: rate limit, permission and
+  // revision checks, then the room command, the presence removal and the
+  // state broadcast.
+  const runStageCommand = (
+    expectedRevision: unknown,
+    deniedError: string,
+    command: (expectedRevision: number | undefined) => StageCommandResult,
+  ): { success: true; state: AppsState } | { success: false; error: string } => {
+    if (!context.currentRoom || !context.currentClient) {
+      return { success: false, error: "Not in a room" };
+    }
+    if (!canControlStage(context)) {
+      return { success: false, error: deniedError };
+    }
+    if (!takeToken(socket, "apps:stage", RATE_LIMITS.appsStage)) {
+      return { success: false, error: "Too many app changes" };
+    }
+    const revision = parseExpectedRevision(expectedRevision);
+    if (revision === INVALID_REVISION) {
+      return { success: false, error: "Invalid stage revision" };
+    }
+    const result = command(revision);
+    if (!result.ok) {
+      return { success: false, error: STAGE_COMMAND_ERRORS[result.reason] };
+    }
+    emitAppAwarenessRemoval(context, result.awarenessRemoval);
+    return {
+      success: true,
+      state: result.changed ? emitAppsState() : getRoomAppsState(context),
+    };
+  };
 
   socket.on("apps:getState", (callback: (state: AppsState) => void) => {
     respond(callback, getRoomAppsState(context));
@@ -167,67 +174,69 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
   socket.on(
     "apps:open",
     (data: AppsOpenData, callback: (response: AppsOpenResponse) => void) => {
-      if (!context.currentRoom || !context.currentClient) {
-        respond(callback, { success: false, error: "Not in a room" });
-        return;
-      }
-
-      if (!(context.currentClient instanceof Admin) || context.currentClient.isObserver) {
-        respond(callback, { success: false, error: "Only admins can open apps" });
-        return;
-      }
-
       const appId = normalizeAppId(data?.appId);
       if (!appId) {
         respond(callback, { success: false, error: "Invalid app id" });
         return;
       }
-
-      const previousAppId = context.currentRoom.apps.state.activeAppId;
-      if (previousAppId && previousAppId !== appId) {
-        emitAppAwarenessRemoval(
-          context,
-          previousAppId,
-          context.currentRoom.apps.clearAppState(previousAppId),
-        );
-      }
-
-      context.currentRoom.apps.state.activeAppId = appId;
-      context.currentRoom.apps.getOrCreateDoc(appId);
-      context.currentRoom.apps.getOrCreateAwareness(appId);
-
-      const state = getRoomAppsState(context);
-      io.to(context.currentRoom.channelId).emit("apps:state", state);
-      respond(callback, { success: true, activeAppId: state.activeAppId ?? undefined });
+      const outcome = runStageCommand(
+        data?.expectedRevision,
+        "Only admins can open apps",
+        (revision) => context.currentRoom!.apps.present(appId, revision),
+      );
+      respond(
+        callback,
+        outcome.success
+          ? {
+              success: true,
+              activeAppId: outcome.state.activeAppId ?? undefined,
+              revision: outcome.state.revision,
+            }
+          : outcome,
+      );
     }
   );
 
-  socket.on("apps:close", (callback: (response: AppsCloseResponse) => void) => {
-    if (!context.currentRoom || !context.currentClient) {
-      respond(callback, { success: false, error: "Not in a room" });
-      return;
-    }
+  // Older clients send only the ack; newer ones send their revision first.
+  socket.on("apps:close", (first: unknown, second: unknown) => {
+    const callback = typeof first === "function" ? first : second;
+    const data = (typeof first === "function" ? undefined : first) as
+      | AppsCloseData
+      | undefined;
+    const outcome = runStageCommand(
+      data?.expectedRevision,
+      "Only admins can close apps",
+      (revision) => context.currentRoom!.apps.close(revision),
+    );
+    respond<AppsCloseResponse>(
+      callback,
+      outcome.success
+        ? { success: true, revision: outcome.state.revision }
+        : outcome,
+    );
+  });
 
-    if (!(context.currentClient instanceof Admin) || context.currentClient.isObserver) {
-      respond(callback, { success: false, error: "Only admins can close apps" });
-      return;
-    }
-
-    const activeAppId = context.currentRoom.apps.state.activeAppId;
-    if (activeAppId) {
-      emitAppAwarenessRemoval(
-        context,
-        activeAppId,
-        context.currentRoom.apps.clearAppState(activeAppId),
+  socket.on(
+    "apps:discard",
+    (data: AppsDiscardData, callback: (response: AppsDiscardResponse) => void) => {
+      const appId = normalizeAppId(data?.appId);
+      if (!appId) {
+        respond(callback, { success: false, error: "Invalid app id" });
+        return;
+      }
+      const outcome = runStageCommand(
+        data?.expectedRevision,
+        "Only admins can clear apps",
+        (revision) => context.currentRoom!.apps.discard(appId, revision),
+      );
+      respond(
+        callback,
+        outcome.success
+          ? { success: true, revision: outcome.state.revision }
+          : outcome,
       );
     }
-
-    context.currentRoom.apps.state.activeAppId = null;
-    context.currentRoom.apps.state.locked = false;
-    const state = getRoomAppsState(context);
-    io.to(context.currentRoom.channelId).emit("apps:state", state);
-    respond(callback, { success: true });
-  });
+  );
 
   socket.on(
     "apps:lock",
@@ -237,7 +246,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
         return;
       }
 
-      if (!(context.currentClient instanceof Admin) || context.currentClient.isObserver) {
+      if (!canControlStage(context)) {
         respond(callback, { success: false, error: "Only admins can lock apps" });
         return;
       }
@@ -247,9 +256,9 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
         return;
       }
 
-      context.currentRoom.apps.state.locked = data.locked;
-      const state = getRoomAppsState(context);
-      io.to(context.currentRoom.channelId).emit("apps:state", state);
+      const state = context.currentRoom.apps.setLocked(data.locked)
+        ? emitAppsState()
+        : getRoomAppsState(context);
       respond(callback, { success: true, locked: state.locked });
     }
   );
@@ -272,12 +281,12 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
         return;
       }
 
-      if (context.currentRoom.apps.state.activeAppId !== appId) {
+      const doc = context.currentRoom.apps.liveDoc(appId);
+      if (!doc) {
         respond(callback, { error: "App not active" });
         return;
       }
 
-      const doc = context.currentRoom.apps.getOrCreateDoc(appId);
       const stateVector = toUint8Array(data.syncMessage);
       if (!stateVector) {
         respond(callback, { error: "Invalid sync payload" });
@@ -289,7 +298,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       }
 
       const update = Y.encodeStateAsUpdate(doc, stateVector);
-      if (update.length > MAX_APPS_SYNC_RESPONSE_BYTES) {
+      if (update.length > MAX_APP_DOC_BYTES) {
         respond(callback, { error: "App document too large to sync" });
         return;
       }
@@ -314,20 +323,17 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
 
     const appId = normalizeAppId(data?.appId);
     if (!appId) return;
-    if (context.currentRoom.apps.state.activeAppId !== appId) return;
+    const doc = context.currentRoom.apps.liveDoc(appId);
+    if (!doc) return;
 
-    if (
-      context.currentRoom.apps.state.locked &&
-      (!(context.currentClient instanceof Admin) || context.currentClient.isObserver)
-    ) {
+    if (context.currentRoom.apps.locked && !canControlStage(context)) {
       return;
     }
 
-    const doc = context.currentRoom.apps.getOrCreateDoc(appId);
     const update = toUint8Array(data.update);
     if (!update || update.length === 0) return;
     if (update.length > MAX_APPS_UPDATE_BYTES) return;
-    if (!reserveAppDocBytes(doc, update)) {
+    if (!context.currentRoom.apps.reserveUpdate(appId, update)) {
       Logger.warn(`[Apps] Dropping update for ${appId}: document size limit reached`);
       return;
     }
@@ -353,7 +359,6 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
 
     const appId = normalizeAppId(data?.appId);
     if (!appId) return;
-    if (context.currentRoom.apps.state.activeAppId !== appId) return;
     const awarenessUpdate = toUint8Array(data.awarenessUpdate);
     if (!awarenessUpdate || awarenessUpdate.length === 0) return;
     if (awarenessUpdate.length > MAX_APPS_AWARENESS_BYTES) return;
@@ -363,12 +368,16 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
         : undefined;
 
     try {
-      context.currentRoom.apps.applyAwarenessUpdate(
-        appId,
-        awarenessUpdate,
-        context.currentClient.id,
-        clientId,
-      );
+      if (
+        !context.currentRoom.apps.applyAwarenessUpdate(
+          appId,
+          awarenessUpdate,
+          context.currentClient.id,
+          clientId,
+        )
+      ) {
+        return;
+      }
     } catch (error) {
       Logger.warn("[Apps] Dropping invalid awareness update", error);
       return;
