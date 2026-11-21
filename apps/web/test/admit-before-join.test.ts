@@ -49,9 +49,9 @@ describe("admitting a participant the host brings in", () => {
     await expect(admitted).rejects.toThrow();
   });
 
-  it("takes the admission back when the participant is gone", () => {
+  it("takes the admission back when the participant is gone", async () => {
     const host = makeHostSocket();
-    revokeAdmission(host.socket, "guest-agent-session-1");
+    const revoked = revokeAdmission(host.socket, "guest-agent-session-1");
 
     expect(host.sent).toEqual([
       {
@@ -59,5 +59,15 @@ describe("admitting a participant the host brings in", () => {
         payload: { userKeys: ["guest-agent-session-1"] },
       },
     ]);
+    host.answer(null, { success: true });
+    await expect(revoked).resolves.toBeUndefined();
+  });
+
+  it("reports a revoke the SFU did not take, so it can be sent again", async () => {
+    const host = makeHostSocket();
+    const revoked = revokeAdmission(host.socket, "guest-agent-session-1");
+    host.answer(null, { error: "Room not found" });
+
+    await expect(revoked).rejects.toThrow("Room not found");
   });
 });

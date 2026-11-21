@@ -675,6 +675,24 @@ export function useVoiceAgentParticipant({
   const lastHeldSpeakerRef = useRef<{ id: string; ts: number } | null>(null);
   const holdExpiryTimeoutRef = useRef<number | null>(null);
 
+  // Agent admissions still to take back. A revoke only lands while the host
+  // is in the meeting, and the agent often stops because the host dropped, so
+  // one that missed is sent again when the host is back.
+  const pendingRevocationsRef = useRef(new Set<string>());
+  const flushRevocations = useCallback(() => {
+    const hostSocket = hostSocketRef.current;
+    if (!hostSocket?.connected) return;
+    for (const userKey of pendingRevocationsRef.current) {
+      revokeAdmission(hostSocket, userKey).then(
+        () => pendingRevocationsRef.current.delete(userKey),
+        () => {},
+      );
+    }
+  }, [hostSocketRef]);
+  useEffect(() => {
+    if (isJoined) flushRevocations();
+  }, [isJoined, flushRevocations]);
+
   const [status, setStatus] = useState<VoiceAgentStatus>("idle");
   const [error, setError] = useState<string | null>(null);
   const [errorCode, setErrorCode] = useState<VoiceAgentErrorCode | null>(null);
@@ -1292,8 +1310,8 @@ export function useVoiceAgentParticipant({
       // when the agent stops.
       const agentUserKey = `guest-${agentSessionId}`;
       const revokeAgentAdmission = () => {
-        const hostSocket = hostSocketRef.current;
-        if (hostSocket?.connected) revokeAdmission(hostSocket, agentUserKey);
+        pendingRevocationsRef.current.add(agentUserKey);
+        flushRevocations();
       };
       const hostSocket = hostSocketRef.current;
       if (hostSocket?.connected) {
@@ -1403,6 +1421,7 @@ export function useVoiceAgentParticipant({
   }, [
     buildSessionInstructions,
     failRuntime,
+    flushRevocations,
     handleRealtimeToolCall,
     hostSocketRef,
     isAdmin,
