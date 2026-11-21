@@ -1,12 +1,15 @@
 import { spawnSync } from "node:child_process";
 import { readdir, rm } from "node:fs/promises";
 import path from "node:path";
+import nextEnv from "@next/env";
 
 // Runs after the OpenNext build, on the exact files wrangler deploys:
 // PostHog matches a stack frame to its source map by the chunk id that
 // `sourcemap inject` writes into each served file.
 const assetsDir = path.join(process.cwd(), ".open-next/assets");
 const staticDir = path.join(assetsDir, "_next/static");
+// The same .env files `next build` read when it decided to build the maps.
+nextEnv.loadEnvConfig(process.cwd());
 const uploadRequested = Boolean(
   process.env.POSTHOG_CLI_API_KEY && process.env.POSTHOG_CLI_PROJECT_ID,
 );

@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "cf:build": "opennextjs-cloudflare build && node scripts/prune-open-next-og.mjs && node scripts/upload-posthog-sourcemaps.mjs",
+    "cf:build": "POSTHOG_SOURCEMAPS=upload opennextjs-cloudflare build && node scripts/prune-open-next-og.mjs && node scripts/upload-posthog-sourcemaps.mjs",
     "cf:preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
     "cf:deploy": "pnpm run cf:build && pnpm run cf:deploy:direct",
     "cf:deploy:direct": "wrangler deploy --config wrangler.jsonc --domain conclave.acmvit.in --autoconfig false",

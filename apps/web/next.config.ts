@@ -24,12 +24,12 @@ const conclaveClientVersion =
   process.env.GITHUB_SHA ||
   readGitSha() ||
   "local";
-// Browser source maps are built only for a deploy that uploads them to PostHog
-// error tracking; scripts/upload-posthog-sourcemaps.mjs then deletes them so
-// they are never served.
-const uploadPostHogSourceMaps = Boolean(
-  process.env.POSTHOG_CLI_API_KEY && process.env.POSTHOG_CLI_PROJECT_ID,
-);
+// Browser source maps are built only by `cf:build`, which uploads them to
+// PostHog error tracking and then deletes them in
+// scripts/upload-posthog-sourcemaps.mjs, so they are never served.
+const uploadPostHogSourceMaps =
+  process.env.POSTHOG_SOURCEMAPS === "upload" &&
+  Boolean(process.env.POSTHOG_CLI_API_KEY && process.env.POSTHOG_CLI_PROJECT_ID);
 const yjsTurbopackAlias = "./node_modules/yjs/dist/yjs.mjs";
 const yProtocolsTurbopackAlias = "./node_modules/y-protocols";
 const yjsWebpackAlias = path.resolve(
