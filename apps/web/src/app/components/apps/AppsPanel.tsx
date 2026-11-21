@@ -104,7 +104,8 @@ export function AppsPanel({
             const isBusy = busyAppId === app.id;
             const interactive = canManage && !busyAppId;
             const isConfirmingClear = confirmingClearId === app.id;
-            const subtitle = isSaved ? "Saved for this meeting" : app.description;
+            const canClear = canManage && isSaved && !isBusy;
+            const subtitle = isSaved ? "Saved" : app.description;
             return (
               <div
                 key={app.id}
@@ -172,9 +173,11 @@ export function AppsPanel({
                       </>
                     ) : canManage ? (
                       <>
-                        <span className="text-[11.5px] text-[#71717a] opacity-0 transition-opacity group-hover:opacity-100">
-                          Present
-                        </span>
+                        {!canClear && (
+                          <span className="text-[11.5px] text-[#71717a] opacity-0 transition-opacity group-hover:opacity-100">
+                            Present
+                          </span>
+                        )}
                         <svg
                           width={16}
                           height={16}
@@ -195,7 +198,7 @@ export function AppsPanel({
                     ) : null}
                   </span>
                 </button>
-                {canManage && isSaved && !isBusy && (
+                {canClear && (
                   <button
                     type="button"
                     disabled={!interactive}
@@ -213,7 +216,7 @@ export function AppsPanel({
                       color: isConfirmingClear ? color.danger : "#a1a1aa",
                     }}
                   >
-                    {isConfirmingClear ? "Clear for everyone" : "Clear"}
+                    {isConfirmingClear ? "Confirm clear" : "Clear"}
                   </button>
                 )}
               </div>

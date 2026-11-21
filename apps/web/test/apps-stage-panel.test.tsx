@@ -147,7 +147,7 @@ describe("the apps panel", () => {
   it("clears a saved board only after the host confirms", async () => {
     await serverState({ activeAppId: "wheel", revision: 7, savedAppIds: ["whiteboard"] });
     await act(async () => setPanelOpen(true));
-    expect(host.textContent).toContain("Saved for this meeting");
+    expect(host.textContent).toContain("Saved");
 
     await click("Clear Whiteboard");
     expect(sent("apps:discard")).toEqual([]);
