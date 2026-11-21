@@ -326,6 +326,7 @@ function JoinScreen({
   const processedPreviewTrackRef = useRef<MediaStreamTrack | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const handedOffTrackIdsRef = useRef<Set<string>>(new Set());
+  const isMountedRef = useRef(true);
   const prejoinAudioRequestGenerationRef = useRef(0);
   const prejoinVideoRequestGenerationRef = useRef(0);
   const toggleCameraInFlightRef = useRef(false);
@@ -458,7 +459,18 @@ function JoinScreen({
     tracks.forEach((track) => track.stop());
   };
 
+  const stopUnownedTracks = (stream: MediaStream | null) => {
+    stream?.getTracks().forEach((track) => {
+      if (handedOffTrackIdsRef.current.has(track.id)) return;
+      track.stop();
+    });
+  };
+
   const commitLocalPreviewStream = (stream: MediaStream | null) => {
+    if (!isMountedRef.current) {
+      stopUnownedTracks(stream);
+      return;
+    }
     localStreamRef.current = stream;
     setLocalStream(stream);
   };
@@ -771,16 +783,14 @@ function JoinScreen({
     }
   }, [localStream, previewStream]);
   useEffect(() => {
+    isMountedRef.current = true;
     return () => {
-      const handedOffTrackIds = handedOffTrackIdsRef.current;
+      isMountedRef.current = false;
       logJoinMedia("unmount_stop_local_stream", {
         localStream: getJoinStreamDebugSnapshot(localStreamRef.current),
-        handedOffTrackIds: Array.from(handedOffTrackIds),
+        handedOffTrackIds: Array.from(handedOffTrackIdsRef.current),
       });
-      localStreamRef.current?.getTracks().forEach((track) => {
-        if (handedOffTrackIds.has(track.id)) return;
-        track.stop();
-      });
+      stopUnownedTracks(localStreamRef.current);
     };
   }, []);
 
