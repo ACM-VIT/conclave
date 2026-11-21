@@ -129,9 +129,11 @@ get_deploy_url() {
   fi
 
   if [[ "$id" == "sfu-a" ]]; then
-    printf "%s" "${SFU_A_URL:-http://127.0.0.1:3031}"
+    printf "%s" "${SFU_A_URL:-http://127.0.0.1:${SFU_A_PORT:-3031}}"
+  elif [[ "$id" == "sfu-b" ]]; then
+    printf "%s" "${SFU_B_URL:-http://127.0.0.1:${SFU_B_PORT:-3032}}"
   else
-    printf "%s" "${SFU_B_URL:-http://127.0.0.1:3032}"
+    printf "http://127.0.0.1:%s" "$(compose_service_env "$id" SFU_PORT)"
   fi
 }
 
@@ -185,6 +187,11 @@ json_field() {
   node -e "const fs=require('fs');const data=JSON.parse(fs.readFileSync(0,'utf8'));const val=data['$field'];if(typeof val==='boolean'){console.log(val?'true':'false');}else if(val===undefined||val===null){console.log('');}else{console.log(val);}"
 }
 
+# Reads one environment value of one service from the rendered compose file.
+compose_service_env() {
+  printf "%s" "$COMPOSE_JSON" | node -e "const c=JSON.parse(require('fs').readFileSync(0,'utf8'));const env=c.services?.[process.argv[1]]?.environment??{};const v=Array.isArray(env)?(env.find((e)=>e.startsWith(process.argv[2]+'='))??'').slice(process.argv[2].length+1):env[process.argv[2]];console.log(v??'');" "$1" "$2"
+}
+
 redis_url_host() {
   node -e "try{const value=process.env.SFU_REDIS_URL||process.env.REDIS_URL||'';const url=new URL(value);console.log(url.host||'configured Redis');}catch{console.log('configured Redis');}"
 }
@@ -216,10 +223,8 @@ validate_public_route() {
   fi
 }
 
-SFU_A_URL="$(get_deploy_url "sfu-a")"
-SFU_B_URL="$(get_deploy_url "sfu-b")"
-SFU_A_PUBLIC_URL="$(get_public_url "sfu-a" "$SFU_A_URL")"
-SFU_B_PUBLIC_URL="$(get_public_url "sfu-b" "$SFU_B_URL")"
+SFU_A_PUBLIC_URL="$(get_public_url "sfu-a" "$(get_deploy_url "sfu-a")")"
+SFU_B_PUBLIC_URL="$(get_public_url "sfu-b" "$(get_deploy_url "sfu-b")")"
 export SFU_A_PUBLIC_URL
 export SFU_B_PUBLIC_URL
 
@@ -232,11 +237,6 @@ HAS_REDIS_SERVICE="false"
 if "${COMPOSE[@]}" config --services | rg -x "redis" >/dev/null 2>&1; then
   HAS_REDIS_SERVICE="true"
 fi
-
-echo "Using SFU A deploy URL: ${SFU_A_URL}"
-echo "Using SFU B deploy URL: ${SFU_B_URL}"
-echo "Using SFU A public URL: ${SFU_A_PUBLIC_URL:-<unset>}"
-echo "Using SFU B public URL: ${SFU_B_PUBLIC_URL:-<unset>}"
 
 run_deploy_preflight() {
   local preflight=(node "${ROOT_DIR}/scripts/deploy-sfu-preflight.mjs" --compose-json -)
@@ -264,10 +264,9 @@ fi
 
 echo "Pulling latest code..."
 git -C "$ROOT_DIR" pull
+TARGET_COMMIT="$(git -C "$ROOT_DIR" rev-parse --short=12 HEAD)"
 
 # SFU dependencies are installed inside the Docker image; the host does not need them.
-# (Previously this step tried `npm -C packages/sfu install` on the host, which fails on
-#  hosts without Node and is unnecessary because the build context COPYs the source in.)
 
 if [[ "$HAS_UPSTASH" == "true" ]]; then
   echo "Using Upstash Redis; skipping local Redis container."
@@ -280,149 +279,165 @@ else
   echo "Redis service not present in ${COMPOSE_FILE}; using host Redis credentials from .env."
 fi
 
-STATUS_A="$(status_json "$SFU_A_URL")"
-STATUS_B="$(status_json "$SFU_B_URL")"
-
-ROOMS_A="0"
-ROOMS_B="0"
-DRAINING_A="unknown"
-DRAINING_B="unknown"
-HAS_STATUS_A="false"
-HAS_STATUS_B="false"
-
-if [[ -n "$STATUS_A" ]]; then
-  HAS_STATUS_A="true"
-  ROOMS_A="$(printf "%s" "$STATUS_A" | json_field rooms || echo "0")"
-  DRAINING_A="$(printf "%s" "$STATUS_A" | json_field draining || echo "unknown")"
-fi
-
-if [[ -n "$STATUS_B" ]]; then
-  HAS_STATUS_B="true"
-  ROOMS_B="$(printf "%s" "$STATUS_B" | json_field rooms || echo "0")"
-  DRAINING_B="$(printf "%s" "$STATUS_B" | json_field draining || echo "unknown")"
-fi
-
-ACTIVE_SERVICE=""
-ACTIVE_URL=""
-
-if [[ "$HAS_STATUS_A" == "true" && "$HAS_STATUS_B" == "true" ]]; then
-  if (( ROOMS_A > 0 && ROOMS_B == 0 )); then
-    ACTIVE_SERVICE="sfu-a"
-    ACTIVE_URL="$SFU_A_URL"
-  elif (( ROOMS_B > 0 && ROOMS_A == 0 )); then
-    ACTIVE_SERVICE="sfu-b"
-    ACTIVE_URL="$SFU_B_URL"
-  elif [[ "$DRAINING_A" == "false" && "$DRAINING_B" == "true" ]]; then
-    ACTIVE_SERVICE="sfu-a"
-    ACTIVE_URL="$SFU_A_URL"
-  elif [[ "$DRAINING_B" == "false" && "$DRAINING_A" == "true" ]]; then
-    ACTIVE_SERVICE="sfu-b"
-    ACTIVE_URL="$SFU_B_URL"
-  else
-    ACTIVE_SERVICE="sfu-a"
-    ACTIVE_URL="$SFU_A_URL"
-  fi
-elif [[ "$HAS_STATUS_A" == "true" ]]; then
-  ACTIVE_SERVICE="sfu-a"
-  ACTIVE_URL="$SFU_A_URL"
-elif [[ "$HAS_STATUS_B" == "true" ]]; then
-  ACTIVE_SERVICE="sfu-b"
-  ACTIVE_URL="$SFU_B_URL"
+# The pulled compose file decides the services, ports and image names.
+COMPOSE_JSON="$("${COMPOSE[@]}" config --format json)"
+if [[ -n "${SFU_DEPLOY_SERVICES:-}" ]]; then
+  IFS=',' read -ra SERVICES <<< "${SFU_DEPLOY_SERVICES// /}"
 else
-  ACTIVE_SERVICE="sfu-a"
-  ACTIVE_URL="$SFU_A_URL"
-fi
-
-if [[ "$ACTIVE_SERVICE" == "sfu-a" ]]; then
-  INACTIVE_SERVICE="sfu-b"
-  INACTIVE_URL="$SFU_B_URL"
-  ACTIVE_ROOMS="$ROOMS_A"
-else
-  INACTIVE_SERVICE="sfu-a"
-  INACTIVE_URL="$SFU_A_URL"
-  ACTIVE_ROOMS="$ROOMS_B"
-fi
-
-echo "Active service: ${ACTIVE_SERVICE}"
-echo "Inactive service: ${INACTIVE_SERVICE}"
-
-echo "Building and starting ${INACTIVE_SERVICE}..."
-"${COMPOSE[@]}" up -d --build "$INACTIVE_SERVICE"
-if [[ "$INACTIVE_SERVICE" == "sfu-a" ]]; then
-  validate_public_route "sfu-a" "$SFU_A_PUBLIC_URL"
-else
-  validate_public_route "sfu-b" "$SFU_B_PUBLIC_URL"
-fi
-
-FORCED_DRAIN_ACTIVE="false"
-if [[ "$ACTIVE_SERVICE" == "sfu-a" && "$HAS_STATUS_A" != "true" ]]; then
-  echo "Active SFU not reachable; skipping drain."
-elif [[ "$ACTIVE_SERVICE" == "sfu-b" && "$HAS_STATUS_B" != "true" ]]; then
-  echo "Active SFU not reachable; skipping drain."
-elif [[ -n "$ACTIVE_URL" ]]; then
-  echo "Draining ${ACTIVE_SERVICE}..."
-  DRAIN_PAYLOAD='{"draining": true}'
-  if [[ "$FORCE_DRAIN" == "true" ]]; then
-    if [[ "$ACTIVE_ROOMS" =~ ^[0-9]+$ && "$ACTIVE_ROOMS" -gt 0 ]]; then
-      echo "Force drain enabled; notifying clients before disconnecting active rooms."
-    else
-      echo "Force drain enabled; no active rooms detected at pre-check."
-    fi
-    DRAIN_PAYLOAD="{\"draining\": true, \"force\": true, \"noticeMs\": ${FORCE_DRAIN_NOTICE_MS}}"
-  fi
-  DRAIN_RESPONSE=""
-  if DRAIN_RESPONSE="$(curl -fsS -X POST "${ACTIVE_URL}/drain" \
-    -H "x-sfu-secret: ${SFU_SECRET}" \
-    -H "content-type: application/json" \
-    -d "${DRAIN_PAYLOAD}")"; then
-    if [[ "$FORCE_DRAIN" == "true" ]]; then
-      forced_result="$(printf "%s" "$DRAIN_RESPONSE" | json_field forced || echo "false")"
-      if [[ "$forced_result" == "true" ]]; then
-        FORCED_DRAIN_ACTIVE="true"
-      else
-        echo "Force drain was requested but was not applied by ${ACTIVE_SERVICE}."
-      fi
-    fi
-  else
-    echo "Failed to drain ${ACTIVE_SERVICE}; continuing." >&2
-  fi
+  read -ra SERVICES <<< "$(printf "%s" "$COMPOSE_JSON" | node -e "const c=JSON.parse(require('fs').readFileSync(0,'utf8'));const env=(s)=>Array.isArray(s.environment)?Object.fromEntries(s.environment.map((e)=>e.split('='))):(s.environment??{});console.log(Object.entries(c.services).filter(([,s])=>env(s).SFU_INSTANCE_ID).map(([n])=>n).join(' '));")"
 fi
 
 DRAIN_TIMEOUT_SECONDS="${DRAIN_TIMEOUT_SECONDS:-3600}"
 DRAIN_POLL_SECONDS="${DRAIN_POLL_SECONDS:-10}"
+HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-120}"
+# Exit code when a meeting outlasts the drain deadline: nothing was rebuilt
+# under it, and rerunning the deploy later finishes the job.
+EXIT_BLOCKED_BY_ROOMS=3
 
-if [[ "$FORCED_DRAIN_ACTIVE" == "true" ]]; then
-  echo "Force drain requested; skipping room-drain wait."
-elif [[ -n "$ACTIVE_URL" && "$HAS_STATUS_A" == "true" && "$ACTIVE_SERVICE" == "sfu-a" ]] || \
-   [[ -n "$ACTIVE_URL" && "$HAS_STATUS_B" == "true" && "$ACTIVE_SERVICE" == "sfu-b" ]]; then
-  echo "Waiting for ${ACTIVE_SERVICE} rooms to drain..."
+service_url() {
+  get_deploy_url "$1"
+}
+
+service_public_url() {
+  case "$1" in
+    sfu-a) printf "%s" "$SFU_A_PUBLIC_URL" ;;
+    sfu-b) printf "%s" "$SFU_B_PUBLIC_URL" ;;
+    *) compose_service_env "$1" SFU_PUBLIC_URL ;;
+  esac
+}
+
+service_image_name() {
+  "${COMPOSE[@]}" config --images "$1" | head -n 1
+}
+
+service_container() {
+  "${COMPOSE[@]}" ps -aq "$1" 2>/dev/null | head -n 1
+}
+
+service_rooms() {
+  local status
+  status="$(status_json "$(service_url "$1")")"
+  if [[ -z "$status" ]]; then
+    echo "0"
+  else
+    printf "%s" "$status" | json_field rooms
+  fi
+}
+
+set_draining() {
+  local url="$1"
+  local payload="{\"draining\": $2}"
+  if [[ "$2" == "true" && "$FORCE_DRAIN" == "true" ]]; then
+    payload="{\"draining\": true, \"force\": true, \"noticeMs\": ${FORCE_DRAIN_NOTICE_MS}}"
+  fi
+  curl -fsS --connect-timeout 3 --max-time 10 -X POST "${url}/drain" \
+    -H "x-sfu-secret: ${SFU_SECRET}" \
+    -H "content-type: application/json" \
+    -d "$payload"
+}
+
+# Waits for an instance to report zero rooms. Returns 1 at the deadline.
+wait_for_empty() {
+  local svc="$1"
+  local url="$2"
+  local start_ts
   start_ts="$(date +%s)"
   while true; do
-    status="$(status_json "$ACTIVE_URL")"
+    local status rooms
+    status="$(status_json "$url")"
     rooms="0"
     if [[ -n "$status" ]]; then
       rooms="$(printf "%s" "$status" | json_field rooms || echo "0")"
     fi
-    echo "Active rooms: ${rooms}"
+    echo "${svc} active rooms: ${rooms}"
     if [[ "$rooms" == "0" ]]; then
-      break
+      return 0
     fi
-    now_ts="$(date +%s)"
-    if (( now_ts - start_ts > DRAIN_TIMEOUT_SECONDS )); then
-      echo "Timed out waiting for rooms to drain." >&2
-      exit 1
+    if (( $(date +%s) - start_ts >= DRAIN_TIMEOUT_SECONDS )); then
+      return 1
     fi
     sleep "$DRAIN_POLL_SECONDS"
   done
-fi
+}
 
-echo "Rebuilding and starting ${ACTIVE_SERVICE}..."
-"${COMPOSE[@]}" up -d --build "$ACTIVE_SERVICE"
-if [[ "$ACTIVE_SERVICE" == "sfu-a" ]]; then
-  validate_public_route "sfu-a" "$SFU_A_PUBLIC_URL"
-else
-  validate_public_route "sfu-b" "$SFU_B_PUBLIC_URL"
-fi
+wait_for_healthy() {
+  local url="$1"
+  local start_ts
+  start_ts="$(date +%s)"
+  until curl -fsS --connect-timeout 2 --max-time 3 "${url}/health" 2>/dev/null | json_field status | grep -qx healthy; do
+    if (( $(date +%s) - start_ts >= HEALTH_TIMEOUT_SECONDS )); then
+      return 1
+    fi
+    sleep 1
+  done
+}
+
+# Moves one instance onto TARGET_IMAGE without cutting a call: drain it, wait
+# for its rooms to finish (or give up at the deadline and put it back), and
+# only then recreate it.
+deploy_service() {
+  local svc="$1"
+  local url image_name container status
+  url="$(service_url "$svc")"
+  image_name="$(service_image_name "$svc")"
+  container="$(service_container "$svc")"
+  status="$(status_json "$url")"
+
+  if [[ -n "$container" && -n "$status" ]] &&
+     [[ "$(docker inspect -f '{{.Image}}' "$container")" == "$TARGET_IMAGE" ]] &&
+     [[ "$(docker inspect -f '{{index .Config.Labels "com.docker.compose.config-hash"}}' "$container")" == "$("${COMPOSE[@]}" config --hash "$svc" | awk '{print $2}')" ]]; then
+    echo "${svc} already runs ${TARGET_COMMIT} with the current config; leaving it alone."
+    return 0
+  fi
+
+  if [[ -n "$status" ]]; then
+    local was_draining
+    was_draining="$(printf "%s" "$status" | json_field draining || echo "false")"
+    echo "Draining ${svc}..."
+    local drain_response=""
+    if ! drain_response="$(set_draining "$url" true)"; then
+      echo "Failed to drain ${svc}; not rebuilding it." >&2
+      return 1
+    fi
+    if [[ "$FORCE_DRAIN" == "true" && "$(printf "%s" "$drain_response" | json_field forced || echo false)" == "true" ]]; then
+      echo "Force drain applied to ${svc}; skipping the room wait."
+    elif ! wait_for_empty "$svc" "$url"; then
+      if [[ "$was_draining" != "true" ]]; then
+        set_draining "$url" false >/dev/null || true
+      fi
+      echo "" >&2
+      echo "Deploy paused: ${svc} still hosts a meeting after ${DRAIN_TIMEOUT_SECONDS}s." >&2
+      echo "${svc} was not rebuilt and keeps serving its calls. Rerun this script once the meeting ends." >&2
+      return "$EXIT_BLOCKED_BY_ROOMS"
+    fi
+  else
+    echo "${svc} is not reachable; rebuilding it without a drain."
+  fi
+
+  echo "Starting ${svc} on ${TARGET_COMMIT}..."
+  docker tag "$TARGET_IMAGE" "$image_name"
+  "${COMPOSE[@]}" up -d --no-build --no-deps --force-recreate "$svc"
+  if ! wait_for_healthy "$url"; then
+    echo "${svc} did not report healthy within ${HEALTH_TIMEOUT_SECONDS}s." >&2
+    return 1
+  fi
+  validate_public_route "$svc" "$(service_public_url "$svc")"
+}
+
+# Emptiest instance first, so the first drain usually has nothing to wait for.
+ORDERED_SERVICES=()
+while read -r _rooms svc; do
+  ORDERED_SERVICES+=("$svc")
+done < <(for svc in "${SERVICES[@]}"; do echo "$(service_rooms "$svc") $svc"; done | sort -n -k1,1 -k2,2)
+echo "Deploy order: ${ORDERED_SERVICES[*]}"
+
+echo "Building the SFU image for ${TARGET_COMMIT}..."
+"${COMPOSE[@]}" build "${ORDERED_SERVICES[0]}"
+TARGET_IMAGE="$(docker image inspect -f '{{.Id}}' "$(service_image_name "${ORDERED_SERVICES[0]}")")"
+
+for svc in "${ORDERED_SERVICES[@]}"; do
+  deploy_service "$svc"
+done
 
 if [[ "$DEPLOY_BROWSER_LOCAL" == "true" ]]; then
   echo ""
@@ -431,7 +446,7 @@ if [[ "$DEPLOY_BROWSER_LOCAL" == "true" ]]; then
 fi
 
 echo ""
-echo "SFU deploy complete."
+echo "SFU deploy complete: ${ORDERED_SERVICES[*]} on ${TARGET_COMMIT}."
 if [[ "$DEPLOY_BROWSER_LOCAL" == "true" ]]; then
   echo "Browser service deploy complete."
 fi
