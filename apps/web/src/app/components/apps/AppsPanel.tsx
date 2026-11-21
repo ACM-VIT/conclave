@@ -29,9 +29,20 @@ export function AppsPanel({
   maxDockWidth?: number;
   onDockWidthChange?: (width: number) => void;
 }) {
-  const { apps, state, presentApp, closeApp, setLocked, isAdmin, isReadOnly } =
-    useApps();
+  const {
+    apps,
+    state,
+    presentApp,
+    closeApp,
+    clearApp,
+    setLocked,
+    isAdmin,
+    isReadOnly,
+  } = useApps();
   const [busyAppId, setBusyAppId] = useState<string | null>(null);
+  const [confirmingClearId, setConfirmingClearId] = useState<string | null>(
+    null,
+  );
   const [error, setError] = useState<string | null>(null);
 
   const canManage = Boolean(isAdmin) && !isReadOnly;
@@ -49,6 +60,16 @@ export function AppsPanel({
     if (!canManage || busyAppId) return;
     const isActive = state.activeAppId === appId;
     void run(appId, () => (isActive ? closeApp() : presentApp(appId)));
+  };
+
+  const handleClear = (appId: string) => {
+    if (!canManage || busyAppId) return;
+    if (confirmingClearId !== appId) {
+      setConfirmingClearId(appId);
+      return;
+    }
+    setConfirmingClearId(null);
+    void run(appId, () => clearApp(appId));
   };
 
   return (
@@ -71,95 +92,131 @@ export function AppsPanel({
         <div className="flex flex-col gap-2">
           <p className="mb-1 text-[13px] leading-relaxed text-[#a1a1aa]">
             {isReadOnly
-              ? "Observer mode can use apps but not open them."
+              ? "Observer mode can use apps but not present them."
               : canManage
-                ? "Open a shared app for everyone in the room."
-                : "The host opens apps; they appear here for everyone."}
+                ? "Present an app to everyone in the room."
+                : "The host presents apps here for everyone."}
           </p>
 
           {apps.map((app) => {
             const isActive = state.activeAppId === app.id;
+            const isSaved = state.savedAppIds.includes(app.id);
             const isBusy = busyAppId === app.id;
             const interactive = canManage && !busyAppId;
+            const isConfirmingClear = confirmingClearId === app.id;
+            const subtitle = isSaved ? "Saved for this meeting" : app.description;
             return (
-              <button
+              <div
                 key={app.id}
-                type="button"
-                disabled={!interactive}
-                onClick={() => handlePick(app.id)}
-                aria-label={
-                  isActive ? `Close ${app.name}` : `Open ${app.name}`
-                }
-                className="group relative flex w-full items-center gap-3 overflow-hidden rounded-xl border p-3 text-left transition-colors disabled:cursor-default"
+                className="group relative flex w-full items-center overflow-hidden rounded-xl border transition-colors"
                 style={{
                   borderColor: isActive ? color.accent : "rgba(255,255,255,0.1)",
                   background: color.surfaceRaised,
-                  cursor: interactive ? "pointer" : "default",
+                }}
+                onMouseLeave={() => {
+                  if (isConfirmingClear) setConfirmingClearId(null);
                 }}
               >
-                <span
-                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border"
-                  style={{
-                    borderColor: "rgba(255,255,255,0.08)",
-                    background: "rgba(255,255,255,0.04)",
-                    color: isActive ? color.accent : "#d4d4d8",
-                  }}
-                  aria-hidden="true"
+                <button
+                  type="button"
+                  disabled={!interactive}
+                  onClick={() => handlePick(app.id)}
+                  aria-label={
+                    isActive ? `Close ${app.name}` : `Present ${app.name}`
+                  }
+                  className="flex min-w-0 flex-1 items-center gap-3 p-3 text-left disabled:cursor-default"
+                  style={{ cursor: interactive ? "pointer" : "default" }}
                 >
-                  {app.icon ?? <Blocks size={19} strokeWidth={1.75} />}
-                </span>
-                <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                  <span className="text-[14.5px] font-medium text-[#fafafa]">
-                    {app.name}
+                  <span
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border"
+                    style={{
+                      borderColor: "rgba(255,255,255,0.08)",
+                      background: "rgba(255,255,255,0.04)",
+                      color: isActive ? color.accent : "#d4d4d8",
+                    }}
+                    aria-hidden="true"
+                  >
+                    {app.icon ?? <Blocks size={19} strokeWidth={1.75} />}
                   </span>
-                  {app.description && (
-                    <span className="truncate text-[12px] text-[#a1a1aa]">
-                      {app.description}
+                  <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                    <span className="text-[14.5px] font-medium text-[#fafafa]">
+                      {app.name}
                     </span>
-                  )}
-                </span>
-                <span className="flex shrink-0 items-center gap-2">
-                  {isBusy ? (
-                    <LoaderCircle
-                      size={15}
-                      strokeWidth={2}
-                      className="animate-spin text-[#a1a1aa]"
-                      aria-hidden="true"
-                    />
-                  ) : isActive ? (
-                    <>
-                      {canManage && (
-                        <span className="text-[11.5px] text-[#71717a] opacity-0 transition-opacity group-hover:opacity-100">
-                          Close
-                        </span>
-                      )}
-                      <span
+                    {subtitle && (
+                      <span className="truncate text-[12px] text-[#a1a1aa]">
+                        {subtitle}
+                      </span>
+                    )}
+                  </span>
+                  <span className="flex shrink-0 items-center gap-2">
+                    {isBusy ? (
+                      <LoaderCircle
+                        size={15}
+                        strokeWidth={2}
+                        className="animate-spin text-[#a1a1aa]"
                         aria-hidden="true"
-                        className="h-1.5 w-1.5 rounded-full"
-                        style={{ background: color.accent }}
                       />
-                      <span className="sr-only">Open now</span>
-                    </>
-                  ) : canManage ? (
-                    <svg
-                      width={16}
-                      height={16}
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      aria-hidden="true"
-                      className="text-[#71717a]"
-                    >
-                      <path
-                        d="M9 6l6 6-6 6"
-                        stroke="currentColor"
-                        strokeWidth={1.6}
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                  ) : null}
-                </span>
-              </button>
+                    ) : isActive ? (
+                      <>
+                        {canManage && (
+                          <span className="text-[11.5px] text-[#71717a] opacity-0 transition-opacity group-hover:opacity-100">
+                            Close
+                          </span>
+                        )}
+                        <span
+                          aria-hidden="true"
+                          className="h-1.5 w-1.5 rounded-full"
+                          style={{ background: color.accent }}
+                        />
+                        <span className="sr-only">Presenting now</span>
+                      </>
+                    ) : canManage ? (
+                      <>
+                        <span className="text-[11.5px] text-[#71717a] opacity-0 transition-opacity group-hover:opacity-100">
+                          Present
+                        </span>
+                        <svg
+                          width={16}
+                          height={16}
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          aria-hidden="true"
+                          className="text-[#71717a]"
+                        >
+                          <path
+                            d="M9 6l6 6-6 6"
+                            stroke="currentColor"
+                            strokeWidth={1.6}
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
+                      </>
+                    ) : null}
+                  </span>
+                </button>
+                {canManage && isSaved && !isBusy && (
+                  <button
+                    type="button"
+                    disabled={!interactive}
+                    onClick={() => handleClear(app.id)}
+                    onBlur={() => {
+                      if (isConfirmingClear) setConfirmingClearId(null);
+                    }}
+                    aria-label={
+                      isConfirmingClear
+                        ? `Clear ${app.name} for everyone`
+                        : `Clear ${app.name}`
+                    }
+                    className="mr-2 shrink-0 rounded-md px-2 py-1 text-[12px] transition-colors hover:bg-white/[0.06] disabled:cursor-default"
+                    style={{
+                      color: isConfirmingClear ? color.danger : "#a1a1aa",
+                    }}
+                  >
+                    {isConfirmingClear ? "Clear for everyone" : "Clear"}
+                  </button>
+                )}
+              </div>
             );
           })}
 
