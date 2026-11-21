@@ -2,7 +2,7 @@
 
 import { errorName } from "../lib/utils";
 import { Crop, Hand, Info, Maximize2, MicOff, Pin, PinOff } from "lucide-react";
-import { memo, useLayoutEffect, useRef } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPlaybackRecoveryScheduler } from "../lib/playback-recovery";
 import {
   getRenderableParticipantVideoStream,
@@ -20,6 +20,14 @@ import { color } from "@conclave/ui-tokens";
 import { useElementSize } from "../hooks/useElementSize";
 import { computeTileChrome } from "../lib/tile-chrome";
 import { observeRemoteVideoPresentation } from "../lib/remote-video-presentation";
+import {
+  PORTRAIT_BACKDROP_STYLE,
+  PORTRAIT_FULL_STYLE,
+  PORTRAIT_ZOOM_STYLE,
+  isPortraitFraming,
+  isPortraitFrame,
+  resolveTileVideoFraming,
+} from "../lib/tile-video-framing";
 
 interface ParticipantVideoProps {
   participant: Participant;
@@ -67,6 +75,7 @@ function ParticipantVideo({
   tileHeight,
 }: ParticipantVideoProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const backdropRef = useRef<HTMLVideoElement>(null);
   const tileRef = useRef<HTMLDivElement>(null);
   const hasKnownTileSize =
     typeof tileWidth === "number" &&
@@ -101,6 +110,41 @@ function ParticipantVideo({
   const videoTrack = videoStream?.getVideoTracks()[0] ?? null;
   const connectionStatus = participant.connectionStatus;
   const isReconnecting = connectionStatus?.state === "reconnecting";
+  const [isPortraitVideo, setIsPortraitVideo] = useState(false);
+  const videoFraming = resolveTileVideoFraming({
+    objectFit: videoObjectFit,
+    isPortrait: isPortraitVideo,
+    isFullVideoShown,
+    isScreenShare: isRenderingScreenShare,
+  });
+  const showsPortraitBackdrop = isPortraitFraming(videoFraming);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !videoStream) {
+      setIsPortraitVideo(false);
+      return;
+    }
+    const readShape = () =>
+      setIsPortraitVideo(isPortraitFrame(video.videoWidth, video.videoHeight));
+    readShape();
+    video.addEventListener("loadedmetadata", readShape);
+    video.addEventListener("resize", readShape);
+    return () => {
+      video.removeEventListener("loadedmetadata", readShape);
+      video.removeEventListener("resize", readShape);
+    };
+  }, [videoStream]);
+
+  useEffect(() => {
+    const backdrop = backdropRef.current;
+    if (!backdrop || !videoStream) return;
+    backdrop.srcObject = videoStream;
+    backdrop.play().catch(() => {});
+    return () => {
+      backdrop.srcObject = null;
+    };
+  }, [videoStream, showsPortraitBackdrop]);
 
   useLayoutEffect(() => {
     const video = videoRef.current;
@@ -261,7 +305,9 @@ function ParticipantVideo({
   const speakerHighlight = isActiveSpeaker ? "speaking" : "";
   const handRaisedHighlight = participant.isHandRaised ? "!border-amber-400/60" : "";
   const showFullVideoToggle =
-    isDynamicCropEnabled && Boolean(videoStream) && Boolean(onToggleFullVideo);
+    (isDynamicCropEnabled || (isPortraitVideo && !isRenderingScreenShare)) &&
+    Boolean(videoStream) &&
+    Boolean(onToggleFullVideo);
   const fullVideoToggleLabel = isFullVideoShown
     ? "Crop this video"
     : "Show the full video";
@@ -299,12 +345,36 @@ function ParticipantVideo({
           isRenderingScreenShare ? "screen" : "webcam"
         }
         data-video-object-fit={videoObjectFit}
+        data-meet-tile-video-framing={videoFraming}
+        style={
+          videoFraming === "portrait-zoom"
+            ? PORTRAIT_ZOOM_STYLE
+            : videoFraming === "portrait-full"
+              ? PORTRAIT_FULL_STYLE
+              : undefined
+        }
         className={`w-full h-full ${
-          videoObjectFit === "contain" ? "object-contain bg-black" : "object-cover"
+          videoFraming === "cover"
+            ? "object-cover"
+            : videoFraming === "contain"
+              ? "object-contain bg-black"
+              : "object-contain"
         } ${
           showPlaceholder ? "hidden" : ""
         } ${isReconnecting ? "opacity-75 saturate-90" : ""}`}
       />
+      {showsPortraitBackdrop && !showPlaceholder && (
+        <video
+          ref={backdropRef}
+          autoPlay
+          muted
+          playsInline
+          aria-hidden
+          tabIndex={-1}
+          data-meet-tile-video-backdrop="true"
+          style={PORTRAIT_BACKDROP_STYLE}
+        />
+      )}
       {showPlaceholder && (
         <div
           className={`absolute inset-0 flex items-center justify-center bg-[#18181b] ${
