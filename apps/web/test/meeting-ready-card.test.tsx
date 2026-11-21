@@ -50,11 +50,12 @@ afterEach(async () => {
 });
 
 describe("MeetingReadyCard", () => {
-  const renderCard = () =>
+  const renderCard = (clientId?: string) =>
     act(async () =>
       root.render(
         <MeetingReadyCard
           roomId="abc-defg-hij"
+          clientId={clientId}
           isHost
           isMobile={false}
           onDismiss={() => {}}
@@ -70,6 +71,16 @@ describe("MeetingReadyCard", () => {
 
     expect(writeText).toHaveBeenCalledWith(`${location.origin}/abc-defg-hij`);
     expect(button("Meeting link copied")).toBeDefined();
+  });
+
+  it("keeps a non-default client ID in the link so guests reach the same room", async () => {
+    await renderCard("acme");
+
+    await click("Copy meeting link");
+
+    expect(writeText).toHaveBeenCalledWith(
+      `${location.origin}/abc-defg-hij?clientId=acme`,
+    );
   });
 
   it("opens the system share sheet for Add others when the browser has one", async () => {

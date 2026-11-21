@@ -18,7 +18,13 @@ function useClock() {
   return time;
 }
 
-export default function MeetingInfoTag({ roomId }: { roomId?: string }) {
+export default function MeetingInfoTag({
+  roomId,
+  clientId,
+}: {
+  roomId?: string;
+  clientId?: string;
+}) {
   const time = useClock();
   const [copied, setCopied] = useState(false);
   const copiedTimer = useRef<number | null>(null);
@@ -46,14 +52,14 @@ export default function MeetingInfoTag({ roomId }: { roomId?: string }) {
 
   const handleCopy = useCallback(() => {
     if (!roomId) return;
-    void copyText(meetingLinkFor(roomId)).then((ok) => {
+    void copyText(meetingLinkFor(roomId, clientId)).then((ok) => {
       if (!ok) return;
       hint.dismiss();
       setCopied(true);
       if (copiedTimer.current) window.clearTimeout(copiedTimer.current);
       copiedTimer.current = window.setTimeout(() => setCopied(false), 1500);
     });
-  }, [roomId, hint]);
+  }, [roomId, clientId, hint]);
 
   const content = (
     <div className="flex min-w-0 items-center gap-1.5 text-[12px] font-medium leading-none">

@@ -137,6 +137,7 @@ interface MeetsMainContentProps {
   connectionState: ConnectionState;
   isLoading: boolean;
   roomId: string;
+  clientId?: string;
   setRoomId: Dispatch<SetStateAction<string>>;
   joinRoomById: (roomId: string) => void;
   retryReconnect?: () => Promise<void> | void;
@@ -420,6 +421,7 @@ export default function MeetsMainContent({
   connectionState,
   isLoading,
   roomId,
+  clientId,
   setRoomId,
   joinRoomById,
   retryReconnect,
@@ -1765,6 +1767,7 @@ export default function MeetsMainContent({
     slim: useSlimControls,
     coachAvatars,
     roomId,
+    clientId,
     isMuted,
     isMicrophoneUnmuteDisabled: isParticipantMicrophoneActivationBlocked,
     isCameraOff,
@@ -2429,6 +2432,7 @@ export default function MeetsMainContent({
             meetingReadyCard.isOpen ? (
               <MeetingReadyCard
                 roomId={roomId}
+                clientId={clientId}
                 isHost={isAdmin}
                 isMobile={isMobile}
                 onDismiss={meetingReadyCard.dismiss}

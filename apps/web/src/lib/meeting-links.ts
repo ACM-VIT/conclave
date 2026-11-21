@@ -1,7 +1,7 @@
 import {
   canonicalizeSfuClientId,
   CONCLAVE_SFU_CLIENT_ID,
-} from "@/lib/sfu-client-id";
+} from "./sfu-client-id";
 
 type MeetingLinkInput = {
   roomCode: string;

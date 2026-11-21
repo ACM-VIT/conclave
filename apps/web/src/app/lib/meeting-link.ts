@@ -1,8 +1,11 @@
-export function meetingLinkFor(roomId: string | undefined): string {
-  if (typeof window === "undefined") return roomId ? `/${roomId}` : "";
-  return roomId
-    ? `${window.location.origin}/${encodeURIComponent(roomId)}`
-    : window.location.href;
+import { buildMeetingUrl } from "../../lib/meeting-links";
+
+export function meetingLinkFor(
+  roomId: string,
+  clientId: string | null | undefined,
+): string {
+  const origin = typeof window === "undefined" ? "" : window.location.origin;
+  return buildMeetingUrl(origin, { roomCode: roomId, clientId });
 }
 
 export async function copyText(value: string): Promise<boolean> {

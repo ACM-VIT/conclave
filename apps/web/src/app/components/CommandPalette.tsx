@@ -13,6 +13,7 @@ import {
 import { formatForDisplay, useHotkey } from "@tanstack/react-hotkeys";
 import { color } from "@conclave/ui-tokens";
 import { HOTKEYS } from "../lib/hotkeys";
+import { meetingLinkFor } from "../lib/meeting-link";
 import { requestShortcutsHelp } from "./ShortcutsHelpDialog";
 import {
   announceOverlayOpen,
@@ -99,8 +100,8 @@ export default function CommandPalette({
   }, [controls.roomId]);
   const copyMeetingLink = useCallback(() => {
     if (controls.roomId)
-      void copyText(`${window.location.origin}/${controls.roomId}`);
-  }, [controls.roomId]);
+      void copyText(meetingLinkFor(controls.roomId, controls.clientId));
+  }, [controls.roomId, controls.clientId]);
 
   const actions = useMemo(
     () =>

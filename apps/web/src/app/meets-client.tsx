@@ -34,6 +34,7 @@ import {
   type RejoinMedia,
 } from "./lib/call-outcome";
 import { telemetry } from "./lib/telemetry";
+import { buildMeetingPath } from "@/lib/meeting-links";
 
 const MEETING_APPS =
   process.env.NODE_ENV === "development"
@@ -376,6 +377,7 @@ const normalizeSessionUser = (user: {
 
 export type MeetsClientProps = {
   initialRoomId?: string;
+  clientId?: string;
   enableRoomRouting?: boolean;
   forceJoinOnly?: boolean;
   bypassMediaPermissions?: boolean;
@@ -409,6 +411,7 @@ export type MeetsClientProps = {
 
 export default function MeetsClient({
   initialRoomId,
+  clientId,
   enableRoomRouting = false,
   forceJoinOnly = false,
   bypassMediaPermissions = false,
@@ -3277,7 +3280,9 @@ export default function MeetsClient({
           if (outcome.rejoinMedia) {
             saveRejoinIntent(outcome.roomId, outcome.rejoinMedia);
           }
-          window.location.assign(`/${encodeURIComponent(outcome.roomId)}`);
+          window.location.assign(
+            buildMeetingPath({ roomCode: outcome.roomId, clientId }),
+          );
         }}
         onReturnHome={() => window.location.assign("/")}
         onRate={(rating) =>
@@ -3435,6 +3440,7 @@ export default function MeetsClient({
         }
         onEnterMeetingStart={handleEnterMeetingStart}
         prejoinInitialMedia={rejoinMedia}
+        clientId={clientId}
         isParticipantsOpen={isParticipantsOpen}
         setIsParticipantsOpen={setIsParticipantsOpen}
         pendingUsers={pendingUsers}

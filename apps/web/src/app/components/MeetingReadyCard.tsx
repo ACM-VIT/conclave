@@ -15,6 +15,7 @@ export function useMeetingReadyCard(roomId: string, hasCompany: boolean) {
 
 interface MeetingReadyCardProps {
   roomId: string;
+  clientId?: string;
   isHost: boolean;
   isMobile: boolean;
   onDismiss: () => void;
@@ -26,13 +27,14 @@ const FEEDBACK_MS = 2000;
 
 export default function MeetingReadyCard({
   roomId,
+  clientId,
   isHost,
   isMobile,
   onDismiss,
 }: MeetingReadyCardProps) {
   const [feedback, setFeedback] = useState<Feedback>("idle");
   const resetTimerRef = useRef<number | null>(null);
-  const link = meetingLinkFor(roomId);
+  const link = meetingLinkFor(roomId, clientId);
 
   useEffect(
     () => () => {
