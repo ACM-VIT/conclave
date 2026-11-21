@@ -2821,7 +2821,7 @@ export default function MeetsClient({
     participantCount,
     joinMode: isWebinarAttendee ? "webinar_attendee" : "meeting",
     consumerTransportRef: refs.consumerTransportRef,
-    producerTransportRef: refs.producerTransportRef,
+    cameraProducerRef: refs.videoProducerRef,
     videoQualityRef: refs.videoQualityRef,
   });
   const {

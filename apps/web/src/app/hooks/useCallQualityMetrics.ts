@@ -5,11 +5,13 @@ import {
   createCallMetricsTracker,
   parseCallStats,
   type JoinMode,
+  type StatsRead,
 } from "../lib/call-quality-metrics";
 import { telemetry } from "../lib/telemetry";
 import type {
   ConnectionState,
   MeetError,
+  Producer,
   ReconnectRecoveryStatus,
   Transport,
   VideoQuality,
@@ -22,16 +24,28 @@ const newCallId = (): string =>
     ? crypto.randomUUID()
     : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 
-const readReport = async (transport: Transport | null) => {
-  if (!transport || transport.closed) return null;
+type StatsSource = Pick<Transport | Producer, "id" | "closed" | "getStats">;
+
+// A missing or closed source has nothing flowing through it, which is a
+// reading of zero streams. Only a getStats that fails is unreadable.
+const NOTHING_FLOWING: StatsRead = { sourceId: "none", report: new Map() };
+
+const readReport = async (
+  source: StatsSource | null,
+): Promise<StatsRead | null> => {
+  if (!source || source.closed) return NOTHING_FLOWING;
   try {
-    return { transportId: transport.id, report: await transport.getStats() };
+    return { sourceId: source.id, report: await source.getStats() };
   } catch {
     return null;
   }
 };
 
-/** Feeds the call-quality tracker from connection state, roster size and getStats. */
+/**
+ * Feeds the call-quality tracker from connection state, roster size and
+ * getStats. Outbound numbers come from the camera producer alone, so a screen
+ * share on the same send transport never counts as camera video.
+ */
 export function useCallQualityMetrics({
   connectionState,
   meetError,
@@ -39,7 +53,7 @@ export function useCallQualityMetrics({
   participantCount,
   joinMode,
   consumerTransportRef,
-  producerTransportRef,
+  cameraProducerRef,
   videoQualityRef,
 }: {
   connectionState: ConnectionState;
@@ -48,7 +62,7 @@ export function useCallQualityMetrics({
   participantCount: number;
   joinMode: JoinMode;
   consumerTransportRef: MutableRefObject<Transport | null>;
-  producerTransportRef: MutableRefObject<Transport | null>;
+  cameraProducerRef: MutableRefObject<Producer | null>;
   videoQualityRef: MutableRefObject<VideoQuality>;
 }): void {
   const [tracker] = useState(() =>
@@ -79,13 +93,13 @@ export function useCallQualityMetrics({
     const sample = async () => {
       const delay = tracker.nextSampleDelayMs(performance.now());
       if (delay !== null) {
-        const [receive, send] = await Promise.all([
+        const [receive, camera] = await Promise.all([
           readReport(consumerTransportRef.current),
-          readReport(producerTransportRef.current),
+          readReport(cameraProducerRef.current),
         ]);
         if (cancelled) return;
         tracker.onStats(
-          parseCallStats({ receive, send, profile: videoQualityRef.current }),
+          parseCallStats({ receive, camera, profile: videoQualityRef.current }),
           performance.now(),
         );
       }
@@ -103,7 +117,7 @@ export function useCallQualityMetrics({
     tracker,
     sampling,
     consumerTransportRef,
-    producerTransportRef,
+    cameraProducerRef,
     videoQualityRef,
   ]);
 

@@ -31,7 +31,7 @@ export type InboundStreamStats = {
 };
 
 export type OutboundLayerStats = {
-  /** Unique per simulcast layer for the call: transport id plus stats id. */
+  /** Unique per simulcast layer for the call: camera producer id plus stats id. */
   id: string;
   bytesSent: number;
   frameHeight: number | null;
@@ -43,7 +43,7 @@ export type OutboundLayerStats = {
 export type CallStatsSample = {
   /** Null when the receive transport's stats could not be read this time. */
   inbound: InboundStreamStats[] | null;
-  /** Video layers being sent; null when the send transport's stats could not be read. */
+  /** Camera layers being sent; null when the camera producer's stats could not be read. */
   outboundVideo: OutboundLayerStats[] | null;
   outboundProfile: VideoQuality;
 };
@@ -599,16 +599,20 @@ const finite = (value: unknown): number | null =>
 const statKind = (stat: Record<string, unknown>): unknown =>
   stat.kind ?? stat.mediaType;
 
-type TransportReport = { transportId: string; report: StatsReportLike };
+/** One getStats reading; `sourceId` keeps stats ids unique across sources. */
+export type StatsRead = { sourceId: string; report: StatsReportLike };
 
-/** Reads the getStats reports of the receive and send transports into a sample. */
+/**
+ * Reads the receive transport's report and the camera producer's report into
+ * a sample. A null read is one whose getStats failed.
+ */
 export function parseCallStats({
   receive,
-  send,
+  camera,
   profile,
 }: {
-  receive: TransportReport | null;
-  send: TransportReport | null;
+  receive: StatsRead | null;
+  camera: StatsRead | null;
   profile: VideoQuality;
 }): CallStatsSample {
   let inbound: InboundStreamStats[] | null = null;
@@ -623,7 +627,7 @@ export function parseCallStats({
       // mediasoup's bandwidth probe: padding bytes, never frames.
       if (stat.mid === MEDIASOUP_PROBATOR_MID) return;
       streams.push({
-        id: `${receive.transportId}:${String(stat.id)}`,
+        id: `${receive.sourceId}:${String(stat.id)}`,
         kind,
         packetsReceived: finite(stat.packetsReceived) ?? 0,
         bytesReceived: finite(stat.bytesReceived) ?? 0,
@@ -638,9 +642,9 @@ export function parseCallStats({
   }
 
   let outboundVideo: OutboundLayerStats[] | null = null;
-  if (send) {
+  if (camera) {
     const layers: OutboundLayerStats[] = [];
-    send.report.forEach((raw) => {
+    camera.report.forEach((raw) => {
       const stat = raw as Record<string, unknown>;
       if (stat.type !== "outbound-rtp" || statKind(stat) !== "video") return;
       const limits = (stat.qualityLimitationDurations ?? {}) as Record<
@@ -648,7 +652,7 @@ export function parseCallStats({
         unknown
       >;
       layers.push({
-        id: `${send.transportId}:${String(stat.id)}`,
+        id: `${camera.sourceId}:${String(stat.id)}`,
         bytesSent: finite(stat.bytesSent) ?? 0,
         frameHeight: finite(stat.frameHeight),
         cpuLimitedSec: finite(limits.cpu) ?? 0,

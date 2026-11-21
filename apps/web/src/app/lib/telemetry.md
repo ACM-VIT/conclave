@@ -40,9 +40,9 @@ Each tab sends at most one `call_join` per join attempt, one `call_first_media`
 and one `call_summary` per call, whatever the room size. `call_id` is a random
 id per attempt that ties the three together. Times are milliseconds; "from the
 click" means from the moment the join started (`connecting`). Stats are sampled
-from the transports every 250 ms from joining until first media arrives, then
-every 5 s, so first-media times are stamped at the first sample that shows them.
-A gap of more than 15 s between readable
+from the receive transport and the camera producer every 250 ms from joining
+until first media arrives, then every 5 s, so first-media times are stamped at
+the first sample that shows them. A gap of more than 15 s between readable
 samples, and any time the call sits in an error, is left out of every total.
 
 ### `call_join`
@@ -86,7 +86,7 @@ closes. A call left in any other error ends where the error began.
 | `video_freeze_count`, `video_freeze_ms` | The browser's `freezeCount` and `totalFreezesDuration` over all remote video |
 | `video_stall_count`, `video_stall_ms` | Intervals where bytes arrived but no frame decoded (the freeze watchdog's signal). mediasoup's padding-only probator stream is ignored |
 | `audio_concealed_pct` | Share of remote audio samples the browser had to conceal |
-| `outbound_video_ms` | Time the camera was sending |
+| `outbound_video_ms` | Time the camera was sending. Screen sharing is not counted |
 | `outbound_low_ms`, `outbound_standard_ms`, `outbound_profile_switches` | Time in each publish profile and how often it changed |
 | `outbound_video_kbps`, `outbound_video_height` | Average send bitrate, and the frame height sent for the longest time |
 | `outbound_cpu_limited_pct`, `outbound_bandwidth_limited_pct` | Share of send time the encoder was limited, from `qualityLimitationDurations` |

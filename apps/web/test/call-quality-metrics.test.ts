@@ -625,7 +625,7 @@ describe("parseCallStats", () => {
       ["c", { type: "candidate-pair", id: "CP1", bytesReceived: 1 }],
       ["p", { type: "inbound-rtp", id: "IT01V1234", kind: "video", mid: "probator", bytesReceived: 76_100, framesDecoded: 0 }],
     ]);
-    const send = new Map<string, unknown>([
+    const camera = new Map<string, unknown>([
       ["l", { type: "outbound-rtp", id: "OT0", kind: "video", bytesSent: 1000, frameHeight: 180, qualityLimitationDurations: { cpu: 0, bandwidth: 4, none: 10 } }],
       ["h", { type: "outbound-rtp", id: "OT2", kind: "video", bytesSent: 5000, frameHeight: 720, qualityLimitationDurations: { cpu: 1, bandwidth: 4, none: 9 } }],
       ["m", { type: "outbound-rtp", id: "OA", kind: "audio", bytesSent: 800 }],
@@ -633,8 +633,8 @@ describe("parseCallStats", () => {
 
     expect(
       parseCallStats({
-        receive: { transportId: "recv", report: receive },
-        send: { transportId: "send", report: send },
+        receive: { sourceId: "recv", report: receive },
+        camera: { sourceId: "send", report: camera },
         profile: "standard",
       }),
     ).toEqual({
