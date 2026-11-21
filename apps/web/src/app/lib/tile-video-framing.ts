@@ -1,7 +1,8 @@
 import type { CSSProperties } from "react";
 
 // A portrait phone in a landscape tile would lose two thirds of its height to
-// a full crop. Zoom it only far enough to keep this share of the height.
+// a full crop. Zoom it only far enough to keep this share of the height. A
+// tile nearer portrait runs out of width first and shows more of it.
 export const PORTRAIT_VISIBLE_HEIGHT = 0.6;
 
 export type TileVideoFraming =
@@ -72,7 +73,8 @@ export const resolveTileVideoFraming = ({
   isScreenShare: boolean;
   isTileShapedToVideo: boolean;
 }): TileVideoFraming => {
-  if (isScreenShare || !isPortrait || isTileShapedToVideo) return objectFit;
+  if (isScreenShare || isTileShapedToVideo) return objectFit;
+  if (!isPortrait) return isFullVideoShown ? "contain" : objectFit;
   return isFullVideoShown ? "portrait-full" : "portrait-zoom";
 };
 

@@ -1429,13 +1429,14 @@ function GridLayout({
     const video = localVideoRef.current;
     // The track settings give the shape before the first frame. After that
     // the frames on screen decide.
+    let aspect: number | null = null;
     const readAspect = () => {
       const { width = 0, height = 0 } = localVideoTrack.getSettings();
-      reportAspect(
+      aspect =
         video && video.videoWidth > 0
-          ? readVideoAspect(video.videoWidth, video.videoHeight)
-          : readVideoAspect(width, height),
-      );
+          ? readVideoAspect(video.videoWidth, video.videoHeight, aspect)
+          : readVideoAspect(width, height, aspect);
+      reportAspect(aspect);
     };
     readAspect();
     video?.addEventListener("loadedmetadata", readAspect);

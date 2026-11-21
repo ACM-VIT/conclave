@@ -46,12 +46,16 @@ afterEach(() => {
 
 const renderTile = (
   props: Partial<Parameters<typeof ParticipantVideo>[0]> = {},
+  asScreenShare = false,
 ) => {
   vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
-  const participant = cameraParticipant(fakeStream());
+  const stream = fakeStream();
+  const participant = asScreenShare
+    ? { ...cameraParticipant(stream), screenShareStream: stream, screenShareProducerId: "share" }
+    : cameraParticipant(stream);
   const render = (next: Partial<Parameters<typeof ParticipantVideo>[0]>) =>
     act(() =>
       root!.render(
@@ -113,6 +117,26 @@ describe("remote tile framing", () => {
 
     tile.receiveFrames(720, 1280);
     expect(tile.video.dataset.meetTileVideoFraming).toBe("portrait-zoom");
+  });
+
+  it("keeps the full video and the way back after the phone turns landscape", () => {
+    const tile = renderTile();
+    tile.receiveFrames(720, 1280);
+    tile.render({ isFullVideoShown: true });
+    expect(tile.video.dataset.meetTileVideoFraming).toBe("portrait-full");
+
+    tile.receiveFrames(1280, 720);
+    expect(tile.video.dataset.meetTileVideoFraming).toBe("contain");
+    expect(tile.toggle()?.getAttribute("aria-label")).toBe("Crop this video");
+  });
+
+  it("never crops a portrait shared screen", () => {
+    const tile = renderTile({ videoObjectFit: "contain" }, true);
+    tile.receiveFrames(720, 1280);
+    expect(tile.video.dataset.meetVideoStreamType).toBe("screen");
+    expect(tile.video.dataset.meetTileVideoFraming).toBe("contain");
+    expect(tile.toggle()).toBeNull();
+    expect(tile.backdrop()).toBeNull();
   });
 });
 

@@ -319,8 +319,11 @@ function ParticipantVideo({
 
   const speakerHighlight = isActiveSpeaker ? "speaking" : "";
   const handRaisedHighlight = participant.isHandRaised ? "!border-amber-400/60" : "";
+  // A viewer who chose the full video keeps the way back after the camera
+  // turns landscape.
   const showFullVideoToggle =
-    (isDynamicCropEnabled || (isPortraitVideo && !isRenderingScreenShare)) &&
+    (isDynamicCropEnabled ||
+      ((isPortraitVideo || isFullVideoShown) && !isRenderingScreenShare)) &&
     Boolean(videoStream) &&
     Boolean(onToggleFullVideo);
   const fullVideoToggleLabel = isFullVideoShown
