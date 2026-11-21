@@ -24,6 +24,7 @@ import {
   type RedisPersistenceClient,
 } from "./redisPersistence.js";
 import { canonicalizeClientId } from "./clientIds.js";
+import { generateMeetingCode } from "./meetingCodes.js";
 
 type MaybePromise<T> = T | Promise<T>;
 
@@ -73,33 +74,6 @@ const normalizeEmailNotificationStatus = (
   value === "pending" || value === "sent" || value === "failed"
     ? value
     : "not_configured";
-
-const generateRoomCode = (): string => {
-  const adjectives = [
-    "swift",
-    "lucid",
-    "amber",
-    "calm",
-    "still",
-    "bright",
-    "quiet",
-    "vivid",
-  ];
-  const nouns = [
-    "river",
-    "harbor",
-    "ember",
-    "thicket",
-    "atrium",
-    "summit",
-    "meadow",
-    "comet",
-  ];
-  const a = adjectives[Math.floor(Math.random() * adjectives.length)];
-  const n = nouns[Math.floor(Math.random() * nouns.length)];
-  const suffix = Math.floor(1000 + Math.random() * 9000);
-  return `${a}-${n}-${suffix}`;
-};
 
 export type ScheduledMeetingStore = {
   byId: Map<string, ScheduledMeeting>;
@@ -230,7 +204,7 @@ export const createScheduledMeeting = (
   let roomCode = requestedRoomCode;
   if (!roomCode) {
     do {
-      roomCode = generateRoomCode();
+      roomCode = generateMeetingCode();
     } while (isCodeTaken(store, clientId, roomCode));
   } else {
     if (roomCode.length < ROOM_CODE_MIN_LENGTH) {

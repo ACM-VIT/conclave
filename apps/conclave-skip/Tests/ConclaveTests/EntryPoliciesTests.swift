@@ -42,14 +42,26 @@ struct EntryPoliciesTests {
         #expect(EntryPolicies.sanitizeRoomCodeInput(String(repeating: "a", count: 80)).count == EntryPolicies.roomCodeMaxLength)
     }
 
-    @Test func theGeneratorMakesThreeKnownWords() {
-        let code = EntryPolicies.generateRoomCode()
-        let words = code.split(separator: "-").map { String($0) }
-        #expect(words.count == 3)
-        #expect(words.allSatisfy { EntryPolicies.roomWords.contains($0) })
-        #expect(EntryPolicies.generateRoomCode(pick: { $0 }) == "aloe-aster-bloom")
-        #expect(EntryPolicies.generateRoomCode(pick: { _ in -1 }) == "zoro-zoro-zoro")
-        #expect(EntryPolicies.roomWords.count == 58)
+    @Test func theGeneratorMakesMeetStyleCodes() {
+        var codes = Set<String>()
+        for _ in 0..<500 {
+            let code = EntryPolicies.generateRoomCode()
+            let groups = code.split(separator: "-").map { String($0) }
+            #expect(groups.map { $0.count } == [3, 4, 3])
+            #expect(groups.joined().allSatisfy { "abcdefghijklmnopqrstuvwxyz".contains($0) })
+            codes.insert(code)
+        }
+        #expect(codes.count == 500)
+        #expect(EntryPolicies.generateRoomCode(pick: { $0 }) == "abc-defg-hij")
+        #expect(EntryPolicies.generateRoomCode(pick: { _ in -1 }) == "zzz-zzzz-zzz")
+    }
+
+    @Test func newAndOldCodesBothJoin() {
+        #expect(EntryPolicies.parseJoinInput("abc-mnop-xyz").roomId == "abc-mnop-xyz")
+        #expect(EntryPolicies.parseJoinInput("ABC MNOP XYZ").roomId == "abc-mnop-xyz")
+        #expect(EntryPolicies.parseJoinInput("https://conclave.acmvit.in/abc-mnop-xyz").roomId == "abc-mnop-xyz")
+        #expect(EntryPolicies.parseJoinInput("conclave://abc-mnop-xyz").roomId == "abc-mnop-xyz")
+        #expect(EntryPolicies.parseJoinInput("https://conclave.acmvit.in/poppy-erica-yuki").roomId == "poppy-erica-yuki")
     }
 
     @Test func joinInputValidityAndTheInvalidLine() {
