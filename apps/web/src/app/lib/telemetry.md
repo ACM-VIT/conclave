@@ -15,7 +15,8 @@ names, emails, chat text or room codes.
 
 ## Exceptions (`$exception`)
 
-Web, from `TelemetryProvider`:
+Web, from `lib/telemetry.ts`. It loads PostHog when the first page mounts or
+the first report arrives, and holds up to 50 reports until it has loaded:
 
 - Unhandled errors and promise rejections (posthog-js autocapture, rate limited per error type by the SDK).
 - Errors caught by `app/error.tsx` and `app/global-error.tsx`: `source: "react_error_boundary"`, `boundary: "route" | "root"`, `digest`.
