@@ -39,6 +39,7 @@ import WebinarViewerChrome, {
   WebinarWaitingCard,
 } from "./WebinarViewer";
 import ToastQueue from "./ToastQueue";
+import MeetingAnnouncer from "./MeetingAnnouncer";
 import TranscriptPanel from "./TranscriptPanel";
 import RoomAiPanel from "./RoomAiPanel";
 import AndroidUpsellSheet from "./AndroidUpsellSheet";
@@ -1981,6 +1982,15 @@ export default function MeetsMainContent({
         </div>
       )}
       {isJoined && <AdminNoticePill notice={adminNotice} />}
+      {isJoined && !isWebinarAttendee ? (
+        <MeetingAnnouncer
+          isLive={connectionState === "joined"}
+          participants={participants}
+          chatMessages={chatMessages}
+          currentUserId={currentUserId}
+          resolveDisplayName={resolveDisplayName}
+        />
+      ) : null}
       {isJoined && !isWebinarAttendee && !isTranscriptOpen && transcript.isLive ? (
         <CatchUpPill
           startedAt={transcript.session.startedAt}
