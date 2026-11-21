@@ -203,4 +203,9 @@ describe("Sarvam language routing", () => {
     expect(await requestedLanguageCode("ta", "unknown", "hi")).toBe("ta-IN");
     expect(await requestedLanguageCode("en", "unknown", "hi")).toBe("en-IN");
   });
+
+  it("asks for the regional code of the deployment's language when no Sarvam code is set", async () => {
+    expect(await requestedLanguageCode("hi", undefined, "hi")).toBe("hi-IN");
+    expect(await requestedLanguageCode("ta", undefined, "ta")).toBe("ta-IN");
+  });
 });

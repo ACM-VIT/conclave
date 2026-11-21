@@ -83,12 +83,15 @@ const sarvamLanguageCode = (
 ): string => {
   const base = baseLanguage(language);
   const regional = `${base}-IN`;
+  const override = env.TRANSCRIPT_SARVAM_LANGUAGE_CODE;
   const isDeploymentLanguage =
     base === baseLanguage(normalizeLanguage(env.TRANSCRIPT_TRANSCRIPTION_LANGUAGE));
-  if (!isDeploymentLanguage && SARVAM_SUPPORTED_LANGUAGE_CODES.has(regional)) {
-    return regional;
-  }
-  return env.TRANSCRIPT_SARVAM_LANGUAGE_CODE ?? language;
+  // The operator's code wins for the deployment's own language, so clients
+  // that send none keep it. Without one, every supported pick gets its
+  // regional code, including the deployment language.
+  if (override && isDeploymentLanguage) return override;
+  if (SARVAM_SUPPORTED_LANGUAGE_CODES.has(regional)) return regional;
+  return override ?? language;
 };
 
 const normalizeSarvamMode = (value: string | undefined): string => {
