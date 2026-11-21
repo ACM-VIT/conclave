@@ -34,7 +34,7 @@
     "mediasoup": "^3.32.2",
     "openai": "^7.62.0",
     "opusscript": "0.1.1",
-    "posthog-node": "^5.74.0",
+    "posthog-node": "^6.0.5",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "react-email": "^6.11.16",
