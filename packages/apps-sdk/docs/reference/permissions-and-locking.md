@@ -14,8 +14,9 @@ At runtime, app controls are role-based:
 
 | Capability | Admin | Non-admin unlocked | Non-admin locked |
 | --- | --- | --- | --- |
-| Open app | yes | no | no |
+| Present app | yes | no | no |
 | Close app | yes | no | no |
+| Clear app | yes | no | no |
 | Toggle lock | yes | no | no |
 | Read app state | yes | yes | yes |
 | Receive Yjs updates | yes | yes | yes |
@@ -24,17 +25,28 @@ At runtime, app controls are role-based:
 
 ## Operations
 
-### `openApp(appId)`
+### `presentApp(appId)`
 
 - Intended admin action.
 - Server-side handlers reject non-admin attempts.
-- Sets room app state `activeAppId`.
+- Sets room app state `activeAppId`. The app that leaves the stage keeps its
+  document, and presenting it again resyncs that document.
 
 ### `closeApp()`
 
 - Intended admin action.
 - Server-side handlers reject non-admin attempts.
-- Clears active app and resets lock.
+- Clears the active app and resets lock. The room keeps the app's document.
+
+### `clearApp(appId)`
+
+- Intended admin action.
+- Server-side handlers reject non-admin attempts.
+- Destroys the app's document for everyone. Clearing the presented app also
+  closes it.
+
+A room keeps at most eight app documents and 4 MiB of them. Presenting a new
+app fails while the room is full; clear one first.
 
 ### `setLocked(true | false)`
 
@@ -65,13 +77,14 @@ When `closeApp()` succeeds, server resets:
 - `activeAppId` to `null`
 - `locked` to `false`
 
-This prevents stale lock state from carrying into the next opened app.
+This prevents stale lock state from carrying into the next presented app.
+Presenting a different app also starts it unlocked.
 
 ## Host UI Responsibilities
 
 Host meeting controls should:
 
-- expose open/close/lock controls only for admins
+- expose present/close/clear/lock controls only for admins
 - show lock state to all users
 - use `refreshState()` after join/reconnect
 

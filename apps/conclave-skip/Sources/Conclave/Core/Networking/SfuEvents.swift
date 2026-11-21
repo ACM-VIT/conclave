@@ -65,6 +65,7 @@ enum SfuClientEvent: String {
     case browserActivity = "browser:activity"
     case appsOpen = "apps:open"
     case appsClose = "apps:close"
+    case appsDiscard = "apps:discard"
     case appsLock = "apps:lock"
     case appsGetState = "apps:getState"
     case appsYjsSync = "apps:yjs:sync"

@@ -13,10 +13,11 @@ Use this page when debugging:
 
 | Event | Direction | Ack | Purpose |
 | --- | --- | --- | --- |
-| `apps:getState` | client -> server | yes | fetch current `{ activeAppId, locked }` |
+| `apps:getState` | client -> server | yes | fetch current `AppsState` |
 | `apps:state` | server -> room | no | broadcast room app state changes |
-| `apps:open` | client -> server | yes | set active app id (admin-only) |
-| `apps:close` | client -> server | yes | clear active app and unlock (admin-only) |
+| `apps:open` | client -> server | yes | present an app on the stage (admin-only) |
+| `apps:close` | client -> server | yes | take the presented app off the stage and unlock (admin-only) |
+| `apps:discard` | client -> server | yes | destroy an app's document (admin-only) |
 | `apps:lock` | client -> server | yes | set lock flag (admin-only) |
 | `apps:yjs:sync` | client -> server | yes | request state diff for active app |
 | `apps:yjs:update` | bi-directional | no | relay Yjs content updates |
@@ -27,8 +28,26 @@ Use this page when debugging:
 ### `apps:getState`
 
 - Emitted by provider via `refreshState()`.
-- Server callback returns `AppsState`.
+- Server callback returns `AppsState`:
+  `{ activeAppId, locked, revision, savedAppIds, roomId }`.
 - Used on initial mount and reconnect paths.
+
+`revision` moves forward with every change to this state. An older SFU sends
+no `revision` or `savedAppIds`; it destroys an app's document when the app
+leaves the stage, and has no `apps:discard`.
+
+### Document lifetime
+
+The room keeps each app's document when the app leaves the stage, so
+presenting it again shows the same content. Only `apps:discard` and room
+teardown destroy a document; an app nobody wrote to is not kept. A room keeps
+at most eight documents and 4 MiB of them, on top of the 256 KiB update and
+1 MiB document limits.
+
+Only the presented app is live: `apps:yjs:sync`, `apps:yjs:update` and
+`apps:awareness` for any other app are refused or dropped. Clients drop their
+local copy of an app that leaves the stage and resync from the server when it
+returns.
 
 ### `apps:open`
 
@@ -37,28 +56,59 @@ Client payload:
 ```ts
 {
   appId: string;
-  options?: Record<string, unknown>;
+  expectedRevision?: number;
 }
 ```
 
 Server behavior:
 
 1. reject non-admins
-2. set `activeAppId`
-3. create app doc/awareness if needed
-4. broadcast `apps:state`
-5. ack `{ success: true, activeAppId }`
+2. succeed without change when `appId` is already presented
+3. reject with "The stage changed. Try again." when `expectedRevision` is
+   sent and is not the current revision
+4. reject with "Clear an app to present another." when the room has no space
+   for a new document
+5. remove the outgoing app's awareness and keep its document
+6. set `activeAppId`, set `locked = false`, create the app's document if needed
+7. broadcast `apps:state`
+8. ack `{ success: true, activeAppId, revision }`
 
 ### `apps:close`
+
+Client payload: either only the ack (older clients), or
+`{ expectedRevision: number }` followed by the ack.
 
 Server behavior:
 
 1. reject non-admins
-2. clear active app awareness
-3. set `activeAppId = null`
-4. set `locked = false`
-5. broadcast `apps:state`
-6. ack `{ success: true }`
+2. succeed without change when nothing is presented
+3. reject a stale `expectedRevision`
+4. remove the presented app's awareness and keep its document
+5. set `activeAppId = null`
+6. set `locked = false`
+7. broadcast `apps:state`
+8. ack `{ success: true, revision }`
+
+### `apps:discard`
+
+Client payload:
+
+```ts
+{
+  appId: string;
+  expectedRevision?: number;
+}
+```
+
+Server behavior:
+
+1. reject non-admins
+2. succeed without change when the room keeps no document for `appId`
+3. reject a stale `expectedRevision`
+4. close the stage first when `appId` is presented
+5. destroy the document
+6. broadcast `apps:state`
+7. ack `{ success: true, revision }`
 
 ### `apps:lock`
 
@@ -161,15 +211,16 @@ This keeps sync stable across browser, native, and server runtimes.
 
 `AppsProvider` uses an 8 second timeout for ack-based calls:
 
-- `openApp(...)`
+- `presentApp(...)`
 - `closeApp()`
+- `clearApp(...)`
 - `setLocked(...)`
 
 If no ack is received in time, those methods resolve `false`.
 
 ## Debug Checklist
 
-1. Confirm app is registered on the host process before calling `openApp`.
+1. Confirm app is registered on the host process before calling `presentApp`.
 2. Confirm `AppsProvider` wraps the UI where hooks are used.
 3. Confirm `state.activeAppId` matches the app id used in `useAppDoc(appId)`.
 4. Confirm app is active before expecting `apps:yjs:sync` or update flow.

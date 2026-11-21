@@ -9,8 +9,16 @@ export type AppUser = {
 };
 
 export type AppsState = {
+  /** The app presented on the room's stage. Only hosts change it. */
   activeAppId: string | null;
   locked: boolean;
+  /**
+   * Bumped by every change to this state. Null on an older SFU, which
+   * erases an app's document when it leaves the stage and cannot clear one.
+   */
+  revision: number | null;
+  /** Apps off the stage whose document the room keeps. */
+  savedAppIds: string[];
 };
 
 export type AppsSyncPayload = {
@@ -37,7 +45,7 @@ export type AppsAwarenessPayload = {
 
 export type AppsOpenPayload = {
   appId: string;
-  options?: Record<string, unknown>;
+  expectedRevision?: number;
 };
 
 export type AppsOpenResponse = {
@@ -46,7 +54,21 @@ export type AppsOpenResponse = {
   error?: string;
 };
 
+export type AppsClosePayload = {
+  expectedRevision: number;
+};
+
 export type AppsCloseResponse = {
+  success: boolean;
+  error?: string;
+};
+
+export type AppsDiscardPayload = {
+  appId: string;
+  expectedRevision: number;
+};
+
+export type AppsDiscardResponse = {
   success: boolean;
   error?: string;
 };
@@ -64,8 +86,12 @@ export type AppsLockResponse = {
 export type AppsContextValue = {
   state: AppsState;
   apps: ConclaveApp[];
-  openApp: (appId: string, options?: Record<string, unknown>) => Promise<boolean>;
+  /** Presents an app on the room's stage. Hosts only. */
+  presentApp: (appId: string) => Promise<boolean>;
+  /** Takes the presented app off the stage. The room keeps its document unless `revision` is null. */
   closeApp: () => Promise<boolean>;
+  /** Erases an app's document for everyone. False on an older SFU. */
+  clearApp: (appId: string) => Promise<boolean>;
   setLocked: (locked: boolean) => Promise<boolean>;
   refreshState: () => void;
   getDoc: (appId: string) => Y.Doc;

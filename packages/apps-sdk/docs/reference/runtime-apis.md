@@ -37,7 +37,7 @@ Provider responsibilities:
 
 - create doc/awareness lazily per app id
 - relay Yjs and awareness events over socket
-- hold room app state (`activeAppId`, `locked`)
+- hold room app state (`activeAppId`, `locked`, `revision`, `savedAppIds`)
 - expose control methods and runtime metadata through context
 
 If provider is missing, SDK hooks throw immediately.
@@ -48,10 +48,14 @@ If provider is missing, SDK hooks throw immediately.
 
 Returns the full runtime context:
 
-- `state`: `{ activeAppId: string | null, locked: boolean }`
+- `state`: `{ activeAppId: string | null, locked: boolean, revision: number | null, savedAppIds: string[] }`
+  - `activeAppId` is the app presented on the room's stage
+  - `revision` moves forward with every change; it is `null` on an older SFU
+  - `savedAppIds` lists apps off the stage whose document the room keeps
 - `apps`: app definitions supplied by the host
-- `openApp(appId, options?) => Promise<boolean>`
-- `closeApp() => Promise<boolean>`
+- `presentApp(appId) => Promise<boolean>`: present an app on the stage
+- `closeApp() => Promise<boolean>`: take it off the stage; the room keeps its document
+- `clearApp(appId) => Promise<boolean>`: erase an app's document for everyone
 - `setLocked(locked) => Promise<boolean>`
 - `refreshState() => void`
 - `getDoc(appId) => Y.Doc`
@@ -61,6 +65,9 @@ Returns the full runtime context:
 Ack behavior:
 
 - control methods resolve `false` if socket is unavailable or ack times out
+- stage commands send the `revision` the client last saw, and the SFU refuses
+  them when the stage has changed since
+- `clearApp` resolves `false` on an older SFU, which cannot clear a document
 - current timeout is 8 seconds in provider implementation
 
 ### `useAppDoc(appId)`

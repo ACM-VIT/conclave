@@ -5,8 +5,11 @@ import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from "y-protoc
 import type {
   ConclaveApp,
   AppsAwarenessPayload,
+  AppsClosePayload,
   AppsCloseResponse,
   AppsContextValue,
+  AppsDiscardPayload,
+  AppsDiscardResponse,
   AppsLockPayload,
   AppsLockResponse,
   AppsOpenPayload,
@@ -45,12 +48,41 @@ const rosterSignature = (roster: AppUser[]): string =>
     .map((member) => `${member.id}\u0001${member.name ?? ""}\u0001${member.email ?? ""}`)
     .join("\u0000");
 
-const isAppsState = (value: unknown): value is AppsState => {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const record = value as { activeAppId?: unknown; locked?: unknown };
+type StageCommandResponse =
+  | AppsOpenResponse
+  | AppsCloseResponse
+  | AppsDiscardResponse
+  | AppsLockResponse;
+
+const EMPTY_APPS_STATE: AppsState = {
+  activeAppId: null,
+  locked: false,
+  revision: null,
+  savedAppIds: [],
+};
+
+const parseAppsState = (value: unknown): AppsState | null => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as {
+    activeAppId?: unknown;
+    locked?: unknown;
+    revision?: unknown;
+    savedAppIds?: unknown;
+  };
   const activeAppIdValid =
     typeof record.activeAppId === "string" || record.activeAppId === null;
-  return activeAppIdValid && typeof record.locked === "boolean";
+  if (!activeAppIdValid || typeof record.locked !== "boolean") return null;
+  return {
+    activeAppId: record.activeAppId as string | null,
+    locked: record.locked,
+    revision:
+      typeof record.revision === "number" && Number.isSafeInteger(record.revision)
+        ? record.revision
+        : null,
+    savedAppIds: Array.isArray(record.savedAppIds)
+      ? record.savedAppIds.filter((appId): appId is string => typeof appId === "string")
+      : [],
+  };
 };
 
 const decodeBase64 = (value: string): Uint8Array | null => {
@@ -124,7 +156,7 @@ export function AppsProvider({
   isReadOnly = false,
   children,
 }: AppsProviderProps) {
-  const [state, setState] = useState<AppsState>({ activeAppId: null, locked: false });
+  const [state, setState] = useState<AppsState>(EMPTY_APPS_STATE);
   const [roster, setRoster] = useState<AppUser[]>(() => participants ?? []);
 
   useEffect(() => {
@@ -151,7 +183,7 @@ export function AppsProvider({
     isReadOnlyRef.current = isReadOnly;
   }, [isReadOnly]);
 
-  const serverActiveAppIdRef = useRef<string | null>(null);
+  const serverStateRef = useRef<AppsState>(EMPTY_APPS_STATE);
 
   const resetLocalData = useCallback(() => {
     for (const [appId, doc] of docsRef.current.entries()) {
@@ -180,8 +212,8 @@ export function AppsProvider({
     awarenessHandlersRef.current.clear();
     pendingInitialUpdatesRef.current.clear();
     initialUpdateSentRef.current.clear();
-    serverActiveAppIdRef.current = null;
-    setState({ activeAppId: null, locked: false });
+    serverStateRef.current = EMPTY_APPS_STATE;
+    setState(EMPTY_APPS_STATE);
   }, []);
 
   useEffect(() => {
@@ -216,10 +248,13 @@ export function AppsProvider({
     initialUpdateSentRef.current.delete(appId);
   }, []);
 
+  // Only the presented app is live. The local copy of an app that leaves the
+  // stage is dropped, and presenting it again resyncs whatever the room kept,
+  // so a document a host cleared never comes back from a client's memory.
   const applyServerAppsState = useCallback(
     (next: AppsState) => {
-      const previous = serverActiveAppIdRef.current;
-      serverActiveAppIdRef.current = next.activeAppId;
+      const previous = serverStateRef.current.activeAppId;
+      serverStateRef.current = next;
       if (previous && previous !== next.activeAppId) {
         discardLocalApp(previous);
       }
@@ -322,8 +357,9 @@ export function AppsProvider({
     if (!currentSocket) return;
 
     currentSocket.emit("apps:getState", (response?: unknown) => {
-      if (isAppsState(response)) {
-        applyServerAppsState(response);
+      const next = parseAppsState(response);
+      if (next) {
+        applyServerAppsState(next);
       }
     });
   }, [applyServerAppsState]);
@@ -377,9 +413,9 @@ export function AppsProvider({
   useEffect(() => {
     if (!socket) return;
 
-    const handleState = (next: unknown) => {
-      if (!isAppsState(next)) return;
-      applyServerAppsState(next);
+    const handleState = (payload: unknown) => {
+      const next = parseAppsState(payload);
+      if (next) applyServerAppsState(next);
     };
 
     const handleUpdate = (payload: AppsUpdatePayload) => {
@@ -446,84 +482,81 @@ export function AppsProvider({
     syncApp(state.activeAppId);
   }, [socket, state.activeAppId, syncApp]);
 
-  const openApp = useCallback(async (appId: string, options?: Record<string, unknown>) => {
-    const currentSocket = socketRef.current;
-    if (!currentSocket) return false;
-    if (isReadOnlyRef.current) return false;
-    if (!apps.some((app) => app.id === appId)) {
-      console.warn(`[Apps] Attempted to open unregistered app: ${appId}`);
-      return false;
-    }
+  const sendStageCommand = useCallback(
+    (event: string, payload: object | null): Promise<boolean> => {
+      const currentSocket = socketRef.current;
+      if (!currentSocket || isReadOnlyRef.current) return Promise.resolve(false);
 
-    return new Promise<boolean>((resolve) => {
-      let completed = false;
-      const timer = setTimeout(() => {
-        if (completed) return;
-        completed = true;
-        resolve(false);
-      }, ACK_TIMEOUT_MS);
-
-      const payload: AppsOpenPayload = { appId, options };
-      currentSocket.emit("apps:open", payload, (response?: AppsOpenResponse) => {
-        if (completed) return;
-        completed = true;
-        clearTimeout(timer);
-        resolve(Boolean(response?.success));
+      return new Promise<boolean>((resolve) => {
+        let completed = false;
+        const timer = setTimeout(() => {
+          if (completed) return;
+          completed = true;
+          resolve(false);
+        }, ACK_TIMEOUT_MS);
+        const ack = (response?: StageCommandResponse) => {
+          if (completed) return;
+          completed = true;
+          clearTimeout(timer);
+          resolve(Boolean(response?.success));
+        };
+        if (payload) {
+          currentSocket.emit(event, payload, ack);
+        } else {
+          currentSocket.emit(event, ack);
+        }
       });
-    });
-  }, [apps]);
+    },
+    [],
+  );
 
-  const closeApp = useCallback(async () => {
-    const currentSocket = socketRef.current;
-    if (!currentSocket) return false;
-    if (isReadOnlyRef.current) return false;
+  const presentApp = useCallback(
+    (appId: string) => {
+      if (!apps.some((app) => app.id === appId)) {
+        console.warn(`[Apps] Attempted to present unregistered app: ${appId}`);
+        return Promise.resolve(false);
+      }
+      const { revision } = serverStateRef.current;
+      const payload: AppsOpenPayload =
+        revision === null ? { appId } : { appId, expectedRevision: revision };
+      return sendStageCommand("apps:open", payload);
+    },
+    [apps, sendStageCommand],
+  );
 
-    return new Promise<boolean>((resolve) => {
-      let completed = false;
-      const timer = setTimeout(() => {
-        if (completed) return;
-        completed = true;
-        resolve(false);
-      }, ACK_TIMEOUT_MS);
+  // An older SFU's apps:close takes only the ack.
+  const closeApp = useCallback(() => {
+    const { revision } = serverStateRef.current;
+    const payload: AppsClosePayload | null =
+      revision === null ? null : { expectedRevision: revision };
+    return sendStageCommand("apps:close", payload);
+  }, [sendStageCommand]);
 
-      currentSocket.emit("apps:close", (response?: AppsCloseResponse) => {
-        if (completed) return;
-        completed = true;
-        clearTimeout(timer);
-        resolve(Boolean(response?.success));
-      });
-    });
-  }, []);
+  const clearApp = useCallback(
+    (appId: string) => {
+      const { revision } = serverStateRef.current;
+      if (revision === null) return Promise.resolve(false);
+      const payload: AppsDiscardPayload = { appId, expectedRevision: revision };
+      return sendStageCommand("apps:discard", payload);
+    },
+    [sendStageCommand],
+  );
 
-  const setLocked = useCallback(async (locked: boolean) => {
-    const currentSocket = socketRef.current;
-    if (!currentSocket) return false;
-    if (isReadOnlyRef.current) return false;
-
-    return new Promise<boolean>((resolve) => {
-      let completed = false;
-      const timer = setTimeout(() => {
-        if (completed) return;
-        completed = true;
-        resolve(false);
-      }, ACK_TIMEOUT_MS);
-
+  const setLocked = useCallback(
+    (locked: boolean) => {
       const payload: AppsLockPayload = { locked };
-      currentSocket.emit("apps:lock", payload, (response?: AppsLockResponse) => {
-        if (completed) return;
-        completed = true;
-        clearTimeout(timer);
-        resolve(Boolean(response?.success));
-      });
-    });
-  }, []);
+      return sendStageCommand("apps:lock", payload);
+    },
+    [sendStageCommand],
+  );
 
   const contextValue = useMemo<AppsContextValue>(
     () => ({
       state,
       apps,
-      openApp,
+      presentApp,
       closeApp,
+      clearApp,
       setLocked,
       refreshState,
       getDoc,
@@ -536,8 +569,9 @@ export function AppsProvider({
     [
       state,
       apps,
-      openApp,
+      presentApp,
       closeApp,
+      clearApp,
       setLocked,
       refreshState,
       getDoc,

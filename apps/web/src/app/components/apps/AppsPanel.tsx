@@ -29,7 +29,7 @@ export function AppsPanel({
   maxDockWidth?: number;
   onDockWidthChange?: (width: number) => void;
 }) {
-  const { apps, state, openApp, closeApp, setLocked, isAdmin, isReadOnly } =
+  const { apps, state, presentApp, closeApp, setLocked, isAdmin, isReadOnly } =
     useApps();
   const [busyAppId, setBusyAppId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -48,7 +48,7 @@ export function AppsPanel({
   const handlePick = (appId: string) => {
     if (!canManage || busyAppId) return;
     const isActive = state.activeAppId === appId;
-    void run(appId, () => (isActive ? closeApp() : openApp(appId)));
+    void run(appId, () => (isActive ? closeApp() : presentApp(appId)));
   };
 
   return (

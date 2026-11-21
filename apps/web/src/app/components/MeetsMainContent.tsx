@@ -606,7 +606,7 @@ export default function MeetsMainContent({
   const {
     state: appsState,
     apps,
-    openApp,
+    presentApp,
     closeApp,
     setLocked,
     refreshState,
@@ -624,11 +624,11 @@ export default function MeetsMainContent({
     [apps, appsState.activeAppId],
   );
   const handleOpenWhiteboard = useCallback(
-    () => openApp("whiteboard"),
-    [openApp],
+    () => presentApp("whiteboard"),
+    [presentApp],
   );
   const handleCloseWhiteboard = useCallback(() => closeApp(), [closeApp]);
-  const handleOpenWatch = useCallback(() => openApp("watch"), [openApp]);
+  const handleOpenWatch = useCallback(() => presentApp("watch"), [presentApp]);
   const handleCloseWatch = useCallback(() => closeApp(), [closeApp]);
   // Opting out of Watch together is local: this participant goes back to the
   // call view while everyone else keeps watching. It lasts until the current
@@ -649,8 +649,8 @@ export default function MeetsMainContent({
     [],
   );
   const handleOpenDevPlayground = useCallback(
-    () => openApp("dev-playground"),
-    [openApp],
+    () => presentApp("dev-playground"),
+    [presentApp],
   );
   const handleCloseDevPlayground = useCallback(() => closeApp(), [closeApp]);
   const handleToggleAppsLock = useCallback(
