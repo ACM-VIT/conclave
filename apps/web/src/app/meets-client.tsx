@@ -602,6 +602,8 @@ export default function MeetsClient({
     setWebinarSpeakerUserId,
     webinarQaEntries,
     setWebinarQaEntries,
+    isQaAvailable,
+    setIsQaAvailable,
     webinarHandQueue,
     setWebinarHandQueue,
     isWebinarHandRaised,
@@ -2311,6 +2313,7 @@ export default function MeetsClient({
     setWebinarRole,
     setWebinarSpeakerUserId,
     setWebinarQaEntries,
+    setIsQaAvailable,
     setWebinarHandQueue,
     setIsWebinarHandRaised,
     setWebinarStageInvite,
@@ -3441,17 +3444,14 @@ export default function MeetsClient({
         webinarLink={webinarLink}
         webinarTitle={webinarTitle}
         webinarQaEntries={webinarQaEntries}
+        isQaAvailable={isQaAvailable}
         webinarHandQueue={webinarHandQueue}
         isWebinarHandRaised={isWebinarHandRaised}
         webinarStageInvite={webinarStageInvite}
         onDismissWebinarStageInvite={handleDismissWebinarStageInvite}
         onAcceptWebinarStageInvite={handleAcceptWebinarStageInvite}
-        onSubmitWebinarQuestion={
-          isWebinarAttendee ? socket.submitWebinarQuestion : undefined
-        }
-        onUpvoteWebinarQuestion={
-          isWebinarAttendee ? socket.upvoteWebinarQuestion : undefined
-        }
+        onSubmitWebinarQuestion={socket.submitWebinarQuestion}
+        onUpvoteWebinarQuestion={socket.upvoteWebinarQuestion}
         onModerateWebinarQuestion={
           canModerateMeeting ? socket.moderateWebinarQuestion : undefined
         }

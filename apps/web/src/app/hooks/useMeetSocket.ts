@@ -898,6 +898,7 @@ interface UseMeetSocketOptions {
   setWebinarRole: (role: "attendee" | "participant" | "host" | null) => void;
   setWebinarSpeakerUserId: (userId: string | null) => void;
   setWebinarQaEntries: React.Dispatch<React.SetStateAction<WebinarQaEntry[]>>;
+  setIsQaAvailable: (available: boolean) => void;
   setWebinarHandQueue: React.Dispatch<
     React.SetStateAction<WebinarHandQueueEntry[]>
   >;
@@ -1016,6 +1017,7 @@ export function useMeetSocket({
   setWebinarRole,
   setWebinarSpeakerUserId,
   setWebinarQaEntries,
+  setIsQaAvailable,
   setWebinarHandQueue,
   setIsWebinarHandRaised,
   setWebinarStageInvite,
@@ -1906,6 +1908,7 @@ export function useMeetSocket({
         setWebinarRole(null);
         setWebinarSpeakerUserId(null);
         setWebinarQaEntries([]);
+        setIsQaAvailable(false);
         setWebinarHandQueue([]);
         setIsWebinarHandRaised(false);
         setWebinarStageInvite(null);
@@ -2042,6 +2045,7 @@ export function useMeetSocket({
       setWebinarRole,
       setWebinarSpeakerUserId,
       setWebinarQaEntries,
+      setIsQaAvailable,
       setWebinarHandQueue,
       setIsWebinarHandRaised,
       setWebinarStageInvite,
@@ -8553,6 +8557,7 @@ export function useMeetSocket({
               "webinar:qaSnapshot",
               (snapshot: WebinarQaSnapshot) => {
                 if (!isRoomEvent(snapshot.roomId)) return;
+                setIsQaAvailable(true);
                 setWebinarQaEntries(
                   [...(snapshot.entries ?? [])].sort(
                     (a, b) => a.askedAt - b.askedAt,
@@ -8749,6 +8754,7 @@ export function useMeetSocket({
       setWebinarSpeakerUserId,
       setWebinarConfig,
       setWebinarQaEntries,
+      setIsQaAvailable,
       setWebinarHandQueue,
       setWebinarStageInvite,
       onWebinarDemoted,

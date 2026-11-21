@@ -61,3 +61,16 @@ describe("shared browser controls", () => {
     });
   });
 });
+
+describe("activity controls", () => {
+  it("offers Polls and Q&A only when the meeting supports them", () => {
+    const labels = (props: ControlsBarProps) =>
+      buildControlsConfig({ ...props, compact: true }).overflow.map((row) => row.label);
+
+    expect(labels(buildProps(false))).not.toContain("Polls");
+    expect(labels(buildProps(false))).not.toContain("Q&A");
+    expect(
+      labels({ ...buildProps(false), onTogglePolls: noop, onToggleQa: noop }),
+    ).toEqual(expect.arrayContaining(["Polls", "Q&A"]));
+  });
+});

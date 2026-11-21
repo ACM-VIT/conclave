@@ -774,6 +774,8 @@ function ControlsBar(props: ControlsBarProps) {
   const gamesItem = withTipDismiss(leftById.get("games"), gamesTip.dismiss);
   const appsItem = withTipDismiss(leftById.get("apps"), watchTip.dismiss);
   const transcriptItem = leftById.get("transcript");
+  const pollsItem = leftById.get("polls");
+  const qaItem = leftById.get("qa");
 
   const gamesEntry: DockEntry | null = gamesItem
     ? {
@@ -785,6 +787,18 @@ function ControlsBar(props: ControlsBarProps) {
     ? {
         d: { ...appsItem, variant: props.isAppsOpen ? "active" : "default" },
         dot: props.hasActiveApp ? { color: color.accent } : null,
+      }
+    : null;
+  const pollsEntry: DockEntry | null = pollsItem
+    ? {
+        d: pollsItem,
+        dot: props.hasPollAwaitingVote ? { color: color.accent } : null,
+      }
+    : null;
+  const qaEntry: DockEntry | null = qaItem
+    ? {
+        d: qaItem,
+        dot: props.hasUnseenQaQuestion ? { color: color.accent } : null,
       }
     : null;
   const transcriptEntry: DockEntry | null = transcriptItem
@@ -807,6 +821,8 @@ function ControlsBar(props: ControlsBarProps) {
     chatItem ? { d: chatItem } : null,
   ].filter((entry): entry is DockEntry => entry !== null);
   const dockActivities: DockEntry[] = [
+    pollsEntry,
+    qaEntry,
     gamesEntry,
     appsEntry,
     transcriptEntry,
@@ -814,12 +830,16 @@ function ControlsBar(props: ControlsBarProps) {
 
   const promotedEntry =
     (transcriptEntry?.dot?.pulse ? transcriptEntry : null) ??
+    (pollsEntry?.dot ? pollsEntry : null) ??
     (props.hasActiveApp ? appsEntry : null) ??
     (props.hasActiveGame ? gamesEntry : null) ??
     (transcriptEntry?.dot ? transcriptEntry : null) ??
     (props.isGamesOpen ? gamesEntry : null) ??
     (props.isAppsOpen ? appsEntry : null) ??
     (props.isTranscriptOpen ? transcriptEntry : null) ??
+    (props.isPollsOpen ? pollsEntry : null) ??
+    (qaEntry?.dot ? qaEntry : null) ??
+    (props.isQaOpen ? qaEntry : null) ??
     null;
 
   const hostEntry: DockEntry | null =
@@ -945,6 +965,7 @@ function ControlsBar(props: ControlsBarProps) {
           />
           {filtersTip.visible &&
           !watchTip.visible &&
+          !props.isToastShowing &&
           !moreOpen &&
           !reactionsOpen &&
           !browserOpen ? (

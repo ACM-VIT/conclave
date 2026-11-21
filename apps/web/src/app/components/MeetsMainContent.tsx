@@ -38,7 +38,8 @@ import WebinarViewerChrome, {
   WebinarWaitingCard,
 } from "./WebinarViewer";
 import { QaPanel } from "./qa/QaPanel";
-import ToastQueue from "./ToastQueue";
+import { PollsPanel } from "./polls/PollsPanel";
+import ToastQueue, { type ToastItem } from "./ToastQueue";
 import TranscriptPanel from "./TranscriptPanel";
 import RoomAiPanel from "./RoomAiPanel";
 import AndroidUpsellSheet from "./AndroidUpsellSheet";
@@ -93,6 +94,8 @@ import { useApps, useGame } from "@conclave/apps-sdk";
 import { GamePanel } from "./games/GamePanel";
 import { GamesPanel } from "./games/GamesPanel";
 import { AppsPanel } from "./apps/AppsPanel";
+import { useMeetPolls } from "../hooks/useMeetPolls";
+import { hasVoted } from "../lib/polls";
 import {
   GAME_DOCK_DEFAULT_WIDTH,
   GAME_DOCK_MAX_WIDTH,
@@ -318,6 +321,8 @@ interface MeetsMainContentProps {
   webinarLink?: string | null;
   webinarTitle?: string;
   webinarQaEntries?: WebinarQaEntry[];
+  /** The server sent a Q&A snapshot, so it supports Q&A in meetings. */
+  isQaAvailable?: boolean;
   webinarHandQueue?: WebinarHandQueueEntry[];
   isWebinarHandRaised?: boolean;
   webinarStageInvite?: {
@@ -582,6 +587,7 @@ export default function MeetsMainContent({
   webinarLink,
   webinarTitle,
   webinarQaEntries = [],
+  isQaAvailable = false,
   webinarHandQueue = [],
   isWebinarHandRaised = false,
   webinarStageInvite = null,
@@ -614,6 +620,9 @@ export default function MeetsMainContent({
   const { isActive: isGameActive, refresh: refreshGameState } = useGame();
   const [isGamesOpen, setIsGamesOpen] = useState(false);
   const [isAppsOpen, setIsAppsOpen] = useState(false);
+  const [activityPanel, setActivityPanel] = useState<"polls" | "qa" | null>(
+    null,
+  );
   const isDevToolsEnabled = process.env.NODE_ENV === "development";
   const isDevPlaygroundEnabled = isDevToolsEnabled;
   const isWhiteboardActive = appsState.activeAppId === "whiteboard";
@@ -1178,6 +1187,7 @@ export default function MeetsMainContent({
       setIsDeviceSettingsOpen(false);
       setIsTranscriptOpen(false);
       setIsAiPanelOpen(false);
+      setActivityPanel(null);
     }
     setIsParticipantsOpen(opening);
   }, [isParticipantsOpen, isChatOpen, setIsParticipantsOpen, toggleChat]);
@@ -1197,6 +1207,7 @@ export default function MeetsMainContent({
     setIsDeviceSettingsOpen(false);
     setIsTranscriptOpen(false);
     setIsAiPanelOpen(false);
+    setActivityPanel(null);
     setIsParticipantsOpen(true);
   }, [toggleChat, setIsParticipantsOpen]);
 
@@ -1232,7 +1243,8 @@ export default function MeetsMainContent({
     isViewPanelOpen ||
     isDeviceSettingsOpen ||
     isTranscriptOpen ||
-    isAiPanelOpen;
+    isAiPanelOpen ||
+    activityPanel !== null;
   const isGameDockPresent = isGameActive || isGamesOpen || isAppsOpen;
   const gameDockOffset =
     canReserveDockedPanel && isSecondaryPanelOpen ? DOCKED_PANEL_WIDTH : 0;
@@ -1269,6 +1281,7 @@ export default function MeetsMainContent({
       setIsDeviceSettingsOpen(false);
       setIsTranscriptOpen(false);
       setIsAiPanelOpen(false);
+      setActivityPanel(null);
     }
     setIsHostControlsOpen(opening);
   }, [isHostControlsOpen, toggleChat, setIsParticipantsOpen]);
@@ -1305,6 +1318,7 @@ export default function MeetsMainContent({
       setIsDeviceSettingsOpen(false);
       setIsTranscriptOpen(false);
       setIsAiPanelOpen(false);
+      setActivityPanel(null);
     }
     setIsVideoEffectsOpen(opening);
   }, [
@@ -1331,6 +1345,7 @@ export default function MeetsMainContent({
       setIsDeviceSettingsOpen(false);
       setIsTranscriptOpen(false);
       setIsAiPanelOpen(false);
+      setActivityPanel(null);
     }
     setIsViewPanelOpen(opening);
   }, [isViewPanelOpen, setIsParticipantsOpen, toggleChat]);
@@ -1351,6 +1366,7 @@ export default function MeetsMainContent({
       setIsViewPanelOpen(false);
       setIsTranscriptOpen(false);
       setIsAiPanelOpen(false);
+      setActivityPanel(null);
     }
     setIsDeviceSettingsOpen(opening);
   }, [isDeviceSettingsOpen, setIsParticipantsOpen, toggleChat]);
@@ -1377,6 +1393,7 @@ export default function MeetsMainContent({
       setIsViewPanelOpen(false);
       setIsDeviceSettingsOpen(false);
       setIsAiPanelOpen(false);
+      setActivityPanel(null);
     } else {
       setTranscriptInitialTab("transcript");
     }
@@ -1395,6 +1412,7 @@ export default function MeetsMainContent({
       setIsViewPanelOpen(false);
       setIsDeviceSettingsOpen(false);
       setIsTranscriptOpen(false);
+      setActivityPanel(null);
     }
     setIsAiPanelOpen(opening);
   }, [isAiPanelOpen, setIsParticipantsOpen, toggleChat]);
@@ -1402,6 +1420,87 @@ export default function MeetsMainContent({
   const handleOpenAiPanel = useCallback(() => {
     if (!isAiPanelOpen) handleToggleAiPanel();
   }, [isAiPanelOpen, handleToggleAiPanel]);
+
+  const toggleActivityPanel = useCallback(
+    (panel: "polls" | "qa") => {
+      const opening = activityPanel !== panel;
+      if (opening) {
+        if (isChatOpenRef.current) toggleChat();
+        setIsParticipantsOpen(false);
+        setIsHostControlsOpen(false);
+        setIsVideoEffectsOpen(false);
+        setIsViewPanelOpen(false);
+        setIsDeviceSettingsOpen(false);
+        setIsTranscriptOpen(false);
+        setIsAiPanelOpen(false);
+      }
+      setActivityPanel(opening ? panel : null);
+    },
+    [activityPanel, setIsParticipantsOpen, toggleChat],
+  );
+  const handleTogglePolls = useCallback(
+    () => toggleActivityPanel("polls"),
+    [toggleActivityPanel],
+  );
+  const handleToggleQa = useCallback(
+    () => toggleActivityPanel("qa"),
+    [toggleActivityPanel],
+  );
+
+  const [startedPoll, setStartedPoll] = useState<{
+    id: string;
+    createdByName: string;
+  } | null>(null);
+  const handlePollStarted = useCallback(
+    (poll: { id: string; createdByName: string }) => {
+      setStartedPoll(poll);
+    },
+    [],
+  );
+  const polls = useMeetPolls({
+    socket,
+    isInMeeting: isJoined && !isWebinarAttendee,
+    isConnected: connectionState === "joined",
+    onPollStarted: handlePollStarted,
+  });
+  const isPollsOpen = activityPanel === "polls";
+  const hasPollAwaitingVote =
+    !isAdmin &&
+    polls.polls.some((poll) => poll.status === "open" && !hasVoted(poll));
+  const startedPollStillOpen =
+    startedPoll !== null &&
+    polls.polls.some(
+      (poll) => poll.id === startedPoll.id && poll.status === "open" && !hasVoted(poll),
+    );
+  useEffect(() => {
+    if (isPollsOpen && startedPoll) setStartedPoll(null);
+  }, [isPollsOpen, startedPoll]);
+  useEffect(() => {
+    if (activityPanel === "polls" && !polls.isSupported) setActivityPanel(null);
+  }, [activityPanel, polls.isSupported]);
+
+  const isMeetingQaAvailable =
+    isQaAvailable && !webinarConfig?.enabled && !isWebinarAttendee;
+  const isMeetingQaOpen = activityPanel === "qa" && isMeetingQaAvailable;
+  useEffect(() => {
+    if (activityPanel === "qa" && !isMeetingQaAvailable) setActivityPanel(null);
+  }, [activityPanel, isMeetingQaAvailable]);
+  const [seenMeetingQuestionIds, setSeenMeetingQuestionIds] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
+  useEffect(() => {
+    if (isMeetingQaOpen) {
+      setSeenMeetingQuestionIds(new Set(webinarQaEntries.map((entry) => entry.id)));
+    }
+  }, [isMeetingQaOpen, webinarQaEntries]);
+  const hasUnseenMeetingQuestion =
+    !isMeetingQaOpen &&
+    webinarQaEntries.some(
+      (entry) =>
+        entry.status !== "dismissed" &&
+        entry.userId !== currentUserId &&
+        !seenMeetingQuestionIds.has(entry.id),
+    );
 
   const handleCloseTranscript = useCallback(() => {
     setIsTranscriptOpen(false);
@@ -1531,6 +1630,7 @@ export default function MeetsMainContent({
       setIsDeviceSettingsOpen(false);
       setIsTranscriptOpen(false);
       setIsAiPanelOpen(false);
+      setActivityPanel(null);
     }
     toggleChat();
   }, [isChatOpen, isParticipantsOpen, setIsParticipantsOpen, toggleChat]);
@@ -1554,6 +1654,7 @@ export default function MeetsMainContent({
     setIsDeviceSettingsOpen(false);
     setIsTranscriptOpen(false);
     setIsAiPanelOpen(false);
+    setActivityPanel(null);
     if (chatOpened && isParticipantsOpen && !participantsOpened) {
       setIsParticipantsOpen(false);
     } else if (participantsOpened && isChatOpen && !chatOpened) {
@@ -1751,6 +1852,36 @@ export default function MeetsMainContent({
     !isAdmin && !isParticipantUnmuteAllowed;
   const isParticipantCameraActivationBlocked =
     !isAdmin && !isParticipantVideoAllowed;
+  const toasts: (ToastItem | null)[] = [
+    browserLaunchError
+      ? {
+          id: "browser",
+          label: "Shared browser",
+          message: browserLaunchError,
+          tone: "danger",
+          onDismiss: onClearBrowserError,
+        }
+      : null,
+    startedPollStillOpen && !isPollsOpen && startedPoll
+      ? {
+          id: `poll-${startedPoll.id}`,
+          label: "Poll",
+          message: `${startedPoll.createdByName} started a poll`,
+          action: { label: "Vote", onPress: handleTogglePolls },
+          onDismiss: () => setStartedPoll(null),
+        }
+      : null,
+    voiceAgentError
+      ? {
+          id: "voice",
+          label: "Voice agent error",
+          message: voiceAgentError,
+          tone: "danger",
+          onDismiss: onClearVoiceAgentError,
+        }
+      : null,
+  ];
+
   const controlsBarProps: ControlsBarProps = {
     compact: useCompactControls,
     slim: useSlimControls,
@@ -1838,6 +1969,13 @@ export default function MeetsMainContent({
     isAppsOpen,
     hasActiveApp: Boolean(appsState.activeAppId),
     onToggleApps: handleToggleApps,
+    isPollsOpen,
+    hasPollAwaitingVote,
+    onTogglePolls: polls.isSupported ? handleTogglePolls : undefined,
+    isQaOpen: isMeetingQaOpen,
+    hasUnseenQaQuestion: hasUnseenMeetingQuestion,
+    onToggleQa: isMeetingQaAvailable ? handleToggleQa : undefined,
+    isToastShowing: isJoined && toasts.some(Boolean),
     isDevPlaygroundEnabled,
     isDevPlaygroundActive,
     onOpenDevPlayground: isAdmin ? openDevPlayground : undefined,
@@ -2418,28 +2556,7 @@ export default function MeetsMainContent({
       )}
 
       {isJoined && (
-        <ToastQueue
-          toasts={[
-            browserLaunchError
-              ? {
-                  id: "browser",
-                  label: "Shared browser",
-                  message: browserLaunchError,
-                  tone: "danger" as const,
-                  onDismiss: onClearBrowserError,
-                }
-              : null,
-            voiceAgentError
-              ? {
-                  id: "voice",
-                  label: "Voice agent error",
-                  message: voiceAgentError,
-                  tone: "danger" as const,
-                  onDismiss: onClearVoiceAgentError,
-                }
-              : null,
-          ]}
-        />
+        <ToastQueue toasts={toasts} />
       )}
 
       {isJoined && viewSettings.audioOnlyMode && (
@@ -2556,6 +2673,32 @@ export default function MeetsMainContent({
           onClose={handleCloseTranscript}
           initialTab={transcriptInitialTab}
           onPostRecap={canPostRecapToChat ? handlePostRecap : undefined}
+        />
+      )}
+
+      {isJoined && !isWebinarAttendee && isPollsOpen && polls.isSupported && (
+        <PollsPanel
+          polls={polls.polls}
+          isHost={isAdmin}
+          onClose={handleTogglePolls}
+          onCreate={polls.createPoll}
+          onVote={polls.vote}
+          onEnd={polls.endPoll}
+          onShare={polls.shareResults}
+          onExport={polls.exportCsv}
+        />
+      )}
+
+      {isJoined && isMeetingQaOpen && (
+        <QaPanel
+          audience="meeting"
+          entries={webinarQaEntries}
+          qaEnabled
+          currentUserId={currentUserId}
+          onClose={handleToggleQa}
+          onSubmit={onSubmitWebinarQuestion}
+          onUpvote={onUpvoteWebinarQuestion}
+          onModerate={isAdmin ? onModerateWebinarQuestion : undefined}
         />
       )}
 

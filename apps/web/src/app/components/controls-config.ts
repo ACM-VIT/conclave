@@ -2,6 +2,7 @@ import type { RegisterableHotkey } from "@tanstack/hotkeys";
 import {
   AudioLines,
   Blocks,
+  ChartBar,
   Gamepad2,
   FileText,
   Globe,
@@ -9,6 +10,7 @@ import {
   LayoutGrid,
   Lock,
   LockOpen,
+  MessageCircleQuestion,
   MessageSquare,
   Mic,
   MicOff,
@@ -127,6 +129,15 @@ export interface ControlsBarProps {
   isAppsOpen?: boolean;
   hasActiveApp?: boolean;
   onToggleApps?: () => void;
+  isPollsOpen?: boolean;
+  /** An open poll this viewer has not voted in yet. */
+  hasPollAwaitingVote?: boolean;
+  onTogglePolls?: () => void;
+  isQaOpen?: boolean;
+  hasUnseenQaQuestion?: boolean;
+  onToggleQa?: () => void;
+  /** A toast sits above the bar, where the More coachmark would go. */
+  isToastShowing?: boolean;
   isDevPlaygroundEnabled?: boolean;
   isDevPlaygroundActive?: boolean;
   onOpenDevPlayground?: () => void;
@@ -240,6 +251,26 @@ export function buildControlsConfig(p: ControlsBarProps): ControlsConfig {
       showTooltipWithoutHotkey: true,
       variant: p.isAppsOpen || p.hasActiveApp ? "active" : "default",
       onPress: p.onToggleApps,
+    });
+  }
+  if (p.onTogglePolls) {
+    sideControls.push({
+      id: "polls",
+      icon: ChartBar,
+      label: "Polls",
+      showTooltipWithoutHotkey: true,
+      variant: p.isPollsOpen ? "active" : "default",
+      onPress: p.onTogglePolls,
+    });
+  }
+  if (p.onToggleQa) {
+    sideControls.push({
+      id: "qa",
+      icon: MessageCircleQuestion,
+      label: "Q&A",
+      showTooltipWithoutHotkey: true,
+      variant: p.isQaOpen ? "active" : "default",
+      onPress: p.onToggleQa,
     });
   }
   if (p.onToggleTranscript) {
