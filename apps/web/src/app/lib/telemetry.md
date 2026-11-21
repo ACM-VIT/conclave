@@ -1,0 +1,100 @@
+# Telemetry
+
+Conclave sends errors and call-quality numbers to PostHog. Nothing here carries
+names, emails, chat text or room codes.
+
+## Turning it on
+
+| Where | Variable | Effect |
+| --- | --- | --- |
+| Web build | `NEXT_PUBLIC_POSTHOG_KEY` | Project key. Without it the browser sends nothing. |
+| Web build | `NEXT_PUBLIC_POSTHOG_HOST` | Defaults to `https://eu.posthog.com`. |
+| Web dev | `NEXT_PUBLIC_POSTHOG_DEV=1` | `next dev` only sends events with this set. |
+| Web deploy | `POSTHOG_CLI_API_KEY`, `POSTHOG_CLI_PROJECT_ID`, `POSTHOG_CLI_HOST` | `cf:build` builds, uploads and deletes browser source maps (needs `posthog-cli` on PATH). |
+| SFU | `SFU_POSTHOG_KEY`, `SFU_POSTHOG_HOST` | Server exceptions and game events. `SFU_POSTHOG_ENABLED=0` turns both off. Always off under vitest. |
+
+## Exceptions (`$exception`)
+
+Web, from `TelemetryProvider`:
+
+- Unhandled errors and promise rejections (posthog-js autocapture, rate limited per error type by the SDK).
+- Errors caught by `app/error.tsx` and `app/global-error.tsx`: `source: "react_error_boundary"`, `boundary: "route" | "root"`, `digest`.
+- `console.error("[Meets] ...")` lines from the call code: `source: "call_log"`, `call_log` (the log label). The logged Error keeps its stack; otherwise the message is the label plus short server error strings. Other logged objects are dropped. At most 3 per label and 30 in total per minute.
+
+SFU, from `server/analytics/errorReporter.ts`, every event tagged `sfu_instance_id`, `sfu_region`, `sfu_version`:
+
+| `source` | When | Extra properties |
+| --- | --- | --- |
+| `uncaught_exception`, `unhandled_rejection` | The process is about to exit (level `fatal`, waits at most 2s to send) | |
+| `startup_failed` | `server.start()` rejected | |
+| `socket_handler` | A socket.io handler threw or rejected | `socket_event` |
+| `worker_died`, `worker_respawn_failed` | A mediasoup worker died or could not be replaced | `worker_label`, `worker_pid` |
+| `redis_transient` | A Redis error the crash guard swallowed (level `warning`) | `process_event` |
+
+At most 5 reports per distinct error and 60 in total per minute per instance.
+
+## Call-quality events
+
+Each tab sends at most one `call_join` per join attempt, one `call_first_media`
+and one `call_summary` per call, whatever the room size. `call_id` is a random
+id per attempt that ties the three together. Times are milliseconds; "from the
+click" means from the moment the join started (`connecting`). Stats are sampled
+from the transports every 250 ms until first media arrives, then every 5 s.
+
+### `call_join`
+
+| Property | Meaning |
+| --- | --- |
+| `outcome` | `joined`, `failed`, or `abandoned` (left or closed the tab before getting in) |
+| `failure_reason` | `rejected`, `invite_code`, `room_not_found`, `room_unavailable`, `auth`, `timeout`, `permission_denied`, `media_error`, `transport_error`, `connection_failed`, `unknown`; null unless failed |
+| `join_ms` | Click to outcome |
+| `waited`, `waiting_ms` | Whether the waiting room held the user, and for how long |
+| `join_mode` | `meeting` or `webinar_attendee` |
+| `prior_failed_attempts` | Failed attempts in this tab since the last successful join |
+
+### `call_first_media`
+
+Sent when both first remote audio and video have arrived, or 20 s after joining.
+Skipped when nobody else is in the room.
+
+| Property | Meaning |
+| --- | --- |
+| `first_remote_audio_ms` | Click to the first remote audio packet; null if none |
+| `first_remote_video_ms` | Click to the first decoded remote video frame; null if none |
+| `join_ms` | Click to joined |
+| `remote_present_at_join` | Someone else was already in the room within 3 s of joining. Filter on this for a clean time-to-media number |
+| `timed_out` | The 20 s deadline passed with audio or video missing |
+
+### `call_summary`
+
+Sent on leave, on a terminal error, or with sendBeacon when the tab closes.
+
+| Property | Meaning |
+| --- | --- |
+| `end_reason` | `left`, `error`, `reconnect_failed`, `page_closed` |
+| `duration_ms` | Joined to end |
+| `peak_participants` | Largest roster, including the local user |
+| `first_remote_audio_ms`, `first_remote_video_ms` | As above |
+| `reconnect_count`, `reconnect_total_ms`, `reconnect_longest_ms` | Times the call left `joined` mid-call, and how long it took to get back |
+| `reconnect_unrecovered` | The call ended while still reconnecting |
+| `remote_video_ms` | Stream-time of remote video received, summed over streams. Divide freeze and stall time by it for a rate |
+| `video_freeze_count`, `video_freeze_ms` | The browser's `freezeCount` and `totalFreezesDuration` over all remote video |
+| `video_stall_count`, `video_stall_ms` | Intervals where bytes arrived but no frame decoded (the freeze watchdog's signal) |
+| `audio_concealed_pct` | Share of remote audio samples the browser had to conceal |
+| `outbound_video_ms` | Time the camera was sending |
+| `outbound_low_ms`, `outbound_standard_ms`, `outbound_profile_switches` | Time in each publish profile and how often it changed |
+| `outbound_video_kbps`, `outbound_video_height` | Average send bitrate, and the frame height sent for the longest time |
+| `outbound_cpu_limited_pct`, `outbound_bandwidth_limited_pct` | Share of send time the encoder was limited, from `qualityLimitationDurations` |
+
+The older `meet_*` events (reconnect attempts, consumer recovery and so on)
+still flow through `telemetry.capture` and are unchanged.
+
+## Privacy
+
+`telemetry-privacy.ts` runs as posthog-js `before_send`. It rewrites every URL
+property and stack frame URL to its route (`/[code]`, `/w/[code]`), drops query
+strings, hashes and the page title, and replaces emails and tokens in free text.
+Asset URLs under `/_next/` stay intact so stack frames can be symbolicated.
+Session replay, surveys, DOM autocapture, feature flags and pageviews are off,
+and no user is ever identified. The SFU scrubs emails, tokens and URL queries
+from exception messages before sending.

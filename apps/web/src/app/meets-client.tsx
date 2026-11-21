@@ -74,6 +74,7 @@ import {
   useConnectionQuality,
   type ConnectionQualityStats,
 } from "./hooks/useConnectionQuality";
+import { useCallQualityMetrics } from "./hooks/useCallQualityMetrics";
 import { useIsMobile } from "./hooks/useIsMobile";
 import { usePrewarmSocket } from "./hooks/usePrewarmSocket";
 import { useScreenWakeLock } from "./hooks/useScreenWakeLock";
@@ -2813,6 +2814,15 @@ export default function MeetsClient({
     enabled: connectionState === "joined",
   });
   connectionQualityDebugRef.current = selfConnectionStats;
+  useCallQualityMetrics({
+    connectionState,
+    meetError,
+    participantCount,
+    joinMode: isWebinarAttendee ? "webinar_attendee" : "meeting",
+    consumerTransportRef: refs.consumerTransportRef,
+    producerTransportRef: refs.producerTransportRef,
+    videoQualityRef: refs.videoQualityRef,
+  });
   const {
     receiveAdaptationQuality: selfReceiveAdaptationQuality,
     receiveEmergencyMode: selfReceiveEmergencyMode,
