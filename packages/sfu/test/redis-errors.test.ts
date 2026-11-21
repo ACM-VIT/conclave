@@ -103,12 +103,13 @@ describe("Redis crash guards", () => {
   const runGuard = (
     event: "unhandledRejection" | "uncaughtException",
     errorExpression: string,
+    reportingExpression = "",
   ) => {
     const guardUrl = new URL("../server/redisErrors.ts", import.meta.url).href;
     const code = `
       import { TimeoutError, AbortError } from "redis";
       import { installRedisCrashGuards } from ${JSON.stringify(guardUrl)};
-      installRedisCrashGuards();
+      installRedisCrashGuards(${reportingExpression});
       const error = ${errorExpression};
       ${event === "unhandledRejection"
         ? "void Promise.reject(error);"
@@ -140,6 +141,30 @@ describe("Redis crash guards", () => {
           expect(result.stderr).toContain("Suppressed");
         },
       );
+
+      it("reports a fatal error before exiting", () => {
+        const result = runGuard(
+          event,
+          'new TypeError("programming bug")',
+          `{ onFatal: (error) => new Promise((resolve) => setTimeout(() => {
+              console.log("REPORTED " + error.message);
+              resolve();
+            }, 50)) }`,
+        );
+        expect(result.status).toBe(1);
+        expect(result.stdout).toContain("REPORTED programming bug");
+      });
+
+      it("reports a suppressed Redis error and stays up", () => {
+        const result = runGuard(
+          event,
+          "new TimeoutError()",
+          `{ onSuppressed: (_error, kind) => console.log("SUPPRESSED " + kind) }`,
+        );
+        expect(result.status).toBe(0);
+        expect(result.stdout).toContain(`SUPPRESSED ${event}`);
+        expect(result.stdout).toContain("SFU_STILL_RUNNING");
+      });
 
       it("still exits for an unrelated programming error", () => {
         const result = runGuard(event, 'new TypeError("programming bug")');

@@ -3,6 +3,7 @@ import type { Worker } from "mediasoup/types";
 import os from "os";
 import { config } from "../config/config.js";
 import { Logger } from "./loggers.js";
+import { captureServerException } from "../server/analytics/posthog.js";
 
 const getAutoWorkerCount = (): number => {
   if (typeof os.availableParallelism === "function") {
@@ -40,8 +41,12 @@ const createWorkers = async (
   // on the dead worker degrade (their producers/consumers error) and their
   // clients rejoin via the normal reconnect path, landing on a healthy worker.
   const attachDiedHandler = (worker: Worker, label: string): void => {
-    worker.on("died", () => {
+    worker.on("died", (error) => {
       Logger.error(`Worker ${label} has died; recreating a replacement`);
+      captureServerException(error, {
+        source: "worker_died",
+        properties: { worker_label: label, worker_pid: worker.pid },
+      });
       void Promise.resolve(options.onWorkerDied?.(worker, label)).catch(
         (error) => {
           Logger.error(
@@ -64,6 +69,10 @@ const createWorkers = async (
           Logger.error(
             `Failed to recreate dead worker ${label}: ${String(err)}`,
           );
+          captureServerException(err, {
+            source: "worker_respawn_failed",
+            properties: { worker_label: label },
+          });
         });
     });
   };

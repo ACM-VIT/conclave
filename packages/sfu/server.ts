@@ -1,13 +1,38 @@
+import {
+  captureFatalServerException,
+  captureServerException,
+} from "./server/analytics/posthog.js";
 import { createSfuServer } from "./server/createSfuServer.js";
 import { installRedisCrashGuards } from "./server/redisErrors.js";
 
-installRedisCrashGuards();
+const FATAL_REPORT_TIMEOUT_MS = 2000;
+const crashSource = (event: "unhandledRejection" | "uncaughtException") =>
+  event === "unhandledRejection" ? "unhandled_rejection" : "uncaught_exception";
+
+installRedisCrashGuards({
+  onSuppressed: (error, event) =>
+    captureServerException(error, {
+      source: "redis_transient",
+      level: "warning",
+      properties: { process_event: event },
+    }),
+  onFatal: (error, event) =>
+    captureFatalServerException(
+      error,
+      { source: crashSource(event) },
+      FATAL_REPORT_TIMEOUT_MS,
+    ),
+});
 
 const server = createSfuServer();
 
 server.start().catch((error) => {
   console.error("[SFU] Failed to start", error);
-  process.exit(1);
+  void captureFatalServerException(
+    error,
+    { source: "startup_failed" },
+    FATAL_REPORT_TIMEOUT_MS,
+  ).finally(() => process.exit(1));
 });
 
 // Graceful shutdown: on a termination signal, run the server's teardown

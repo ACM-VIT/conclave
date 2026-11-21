@@ -22,6 +22,10 @@
 import { PostHog } from "posthog-node";
 import { config as sfuConfig } from "../../config/config.js";
 import { Logger } from "../../utilities/loggers.js";
+import {
+  createErrorReporter,
+  scrubExceptionEvent,
+} from "./errorReporter.js";
 
 /** The PostHog group type used to roll events up by meeting/room. */
 const ROOM_GROUP_TYPE = "room" as const;
@@ -66,6 +70,11 @@ const getClient = (): PostHog | null => {
       host: sfuConfig.analytics.host,
       flushAt: sfuConfig.analytics.flushAt,
       flushInterval: sfuConfig.analytics.flushIntervalMs,
+      requestTimeout: sfuConfig.analytics.requestTimeoutMs,
+      // The crash guards decide what is fatal (transient Redis errors are
+      // not), so they report exceptions themselves.
+      enableExceptionAutocapture: false,
+      beforeSend: scrubExceptionEvent,
     });
     Logger.info(
       `[Analytics] PostHog enabled (host: ${sfuConfig.analytics.host})`,
@@ -76,6 +85,21 @@ const getClient = (): PostHog | null => {
   }
   return client;
 };
+
+const errorReporter = createErrorReporter({
+  getClient,
+  instanceId: sfuConfig.instanceId,
+  region: sfuConfig.region,
+  version: sfuConfig.version,
+  onReportFailure: (error) =>
+    Logger.warn("[Analytics] exception capture failed", error),
+});
+
+/** Reports a server error to PostHog error tracking. No-op when analytics is off. */
+export const captureServerException = errorReporter.report;
+
+/** Reports a crash and waits (bounded) for delivery before the process exits. */
+export const captureFatalServerException = errorReporter.reportFatal;
 
 // Track which (room, distinctId) pairs we've already sent a `$groupidentify`
 // for, so we register the group once instead of on every event. Bounded in

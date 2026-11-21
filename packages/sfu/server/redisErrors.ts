@@ -82,18 +82,43 @@ export const isRedisTransientError = (error: unknown): boolean => {
   return false;
 };
 
-export const installRedisCrashGuards = (): void => {
+export type CrashGuardReporting = {
+  /** A transient Redis error the guard swallowed. */
+  onSuppressed?: (error: unknown, event: CrashEvent) => void;
+  /** A fatal error; the process exits once the returned promise settles. */
+  onFatal?: (error: unknown, event: CrashEvent) => Promise<void>;
+};
+
+type CrashEvent = "unhandledRejection" | "uncaughtException";
+
+export const installRedisCrashGuards = (
+  reporting: CrashGuardReporting = {},
+): void => {
+  let exiting = false;
+  const exitAfterReport = (error: unknown, event: CrashEvent): void => {
+    if (exiting || !reporting.onFatal) {
+      process.exit(1);
+    }
+    exiting = true;
+    const { onFatal } = reporting;
+    void Promise.resolve()
+      .then(() => onFatal(error, event))
+      .catch(() => {})
+      .finally(() => process.exit(1));
+  };
+
   process.on("unhandledRejection", (reason) => {
     if (isRedisTransientError(reason)) {
       Logger.warn(
         "[Redis] Suppressed unhandled transient Redis rejection; SFU remains online.",
         reason,
       );
+      reporting.onSuppressed?.(reason, "unhandledRejection");
       return;
     }
 
     Logger.error("[Process] Unhandled promise rejection", reason);
-    process.exit(1);
+    exitAfterReport(reason, "unhandledRejection");
   });
 
   process.on("uncaughtException", (error) => {
@@ -102,10 +127,11 @@ export const installRedisCrashGuards = (): void => {
         "[Redis] Suppressed uncaught transient Redis exception; SFU remains online.",
         error,
       );
+      reporting.onSuppressed?.(error, "uncaughtException");
       return;
     }
 
     Logger.error("[Process] Uncaught exception", error);
-    process.exit(1);
+    exitAfterReport(error, "uncaughtException");
   });
 };

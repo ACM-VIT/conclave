@@ -278,9 +278,12 @@ const posthogProjectApiKey =
   process.env.SFU_POSTHOG_KEY?.trim() ||
   process.env.SFU_POSTHOG_PROJECT_API_KEY?.trim() ||
   "";
+// Test runs load the same .env files as dev, so a developer's real key would
+// otherwise send test crashes to the production project.
 const posthogDisabled =
   process.env.SFU_POSTHOG_ENABLED === "0" ||
-  process.env.SFU_POSTHOG_ENABLED?.toLowerCase() === "false";
+  process.env.SFU_POSTHOG_ENABLED?.toLowerCase() === "false" ||
+  Boolean(process.env.VITEST);
 // Default to the PostHog EU cloud ingestion host (region-correct for this
 // deployment). Override with SFU_POSTHOG_HOST for self-hosted / US cloud.
 const posthogHost =
@@ -426,6 +429,13 @@ export const config = {
       integer: true,
       min: 0,
       max: 300000,
+    }),
+    // Per-request cap, so an unreachable PostHog only ever holds a socket
+    // open this long.
+    requestTimeoutMs: toNumber(process.env.SFU_POSTHOG_REQUEST_TIMEOUT_MS, 5000, {
+      integer: true,
+      min: 500,
+      max: 60000,
     }),
     // Bounded time to flush buffered events on graceful shutdown.
     shutdownTimeoutMs: toNumber(
