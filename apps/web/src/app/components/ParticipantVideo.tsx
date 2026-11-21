@@ -21,7 +21,10 @@ import { useElementSize } from "../hooks/useElementSize";
 import { computeTileChrome } from "../lib/tile-chrome";
 import { observeRemoteVideoPresentation } from "../lib/remote-video-presentation";
 import {
+  PORTRAIT_BACKDROP_STYLE,
+  PORTRAIT_FULL_STYLE,
   PORTRAIT_ZOOM_STYLE,
+  isPortraitFraming,
   isPortraitFrame,
   resolveTileVideoFraming,
 } from "../lib/tile-video-framing";
@@ -72,6 +75,7 @@ function ParticipantVideo({
   tileHeight,
 }: ParticipantVideoProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const backdropRef = useRef<HTMLVideoElement>(null);
   const tileRef = useRef<HTMLDivElement>(null);
   const hasKnownTileSize =
     typeof tileWidth === "number" &&
@@ -113,6 +117,7 @@ function ParticipantVideo({
     isFullVideoShown,
     isScreenShare: isRenderingScreenShare,
   });
+  const showsPortraitBackdrop = isPortraitFraming(videoFraming);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -130,6 +135,16 @@ function ParticipantVideo({
       video.removeEventListener("resize", readShape);
     };
   }, [videoStream]);
+
+  useEffect(() => {
+    const backdrop = backdropRef.current;
+    if (!backdrop || !videoStream) return;
+    backdrop.srcObject = videoStream;
+    backdrop.play().catch(() => {});
+    return () => {
+      backdrop.srcObject = null;
+    };
+  }, [videoStream, showsPortraitBackdrop]);
 
   useLayoutEffect(() => {
     const video = videoRef.current;
@@ -331,13 +346,35 @@ function ParticipantVideo({
         }
         data-video-object-fit={videoObjectFit}
         data-meet-tile-video-framing={videoFraming}
-        style={videoFraming === "portrait-zoom" ? PORTRAIT_ZOOM_STYLE : undefined}
+        style={
+          videoFraming === "portrait-zoom"
+            ? PORTRAIT_ZOOM_STYLE
+            : videoFraming === "portrait-full"
+              ? PORTRAIT_FULL_STYLE
+              : undefined
+        }
         className={`w-full h-full ${
-          videoFraming === "cover" ? "object-cover" : "object-contain bg-black"
+          videoFraming === "cover"
+            ? "object-cover"
+            : videoFraming === "contain"
+              ? "object-contain bg-black"
+              : "object-contain"
         } ${
           showPlaceholder ? "hidden" : ""
         } ${isReconnecting ? "opacity-75 saturate-90" : ""}`}
       />
+      {showsPortraitBackdrop && !showPlaceholder && (
+        <video
+          ref={backdropRef}
+          autoPlay
+          muted
+          playsInline
+          aria-hidden
+          tabIndex={-1}
+          data-meet-tile-video-backdrop="true"
+          style={PORTRAIT_BACKDROP_STYLE}
+        />
+      )}
       {showPlaceholder && (
         <div
           className={`absolute inset-0 flex items-center justify-center bg-[#18181b] ${

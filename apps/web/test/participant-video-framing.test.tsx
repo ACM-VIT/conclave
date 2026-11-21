@@ -73,24 +73,31 @@ const renderTile = (
     });
   };
   const toggle = () => host!.querySelector("[data-meet-tile-crop-toggle]");
-  return { video, receiveFrames, toggle, render };
+  const backdrop = () =>
+    host!.querySelector<HTMLVideoElement>("[data-meet-tile-video-backdrop]");
+  return { video, receiveFrames, toggle, backdrop, render };
 };
 
 describe("remote tile framing", () => {
-  it("zooms a portrait phone part way and offers the full video", () => {
+  it("zooms a portrait phone part way over a blurred copy and offers the full video", () => {
     const tile = renderTile({ videoObjectFit: "contain" });
     expect(tile.video.dataset.meetTileVideoFraming).toBe("contain");
     expect(tile.toggle()).toBeNull();
+    expect(tile.backdrop()).toBeNull();
 
     tile.receiveFrames(720, 1280);
     expect(tile.video.dataset.meetTileVideoFraming).toBe("portrait-zoom");
     expect(tile.video.style.height).toBe("166.66666666666669%");
     expect(tile.video.style.top).toBe("-33.33333333333334%");
+    expect(tile.video.className).not.toContain("bg-black");
+    expect(tile.backdrop()?.srcObject).toBe(tile.video.srcObject);
+    expect(tile.backdrop()?.style.filter).toBe("blur(32px) brightness(1.05) saturate(1.15)");
     expect(tile.toggle()?.getAttribute("aria-label")).toBe("Show the full video");
 
     tile.render({ isFullVideoShown: true });
-    expect(tile.video.dataset.meetTileVideoFraming).toBe("contain");
+    expect(tile.video.dataset.meetTileVideoFraming).toBe("portrait-full");
     expect(tile.video.style.height).toBe("");
+    expect(tile.backdrop()).not.toBeNull();
   });
 
   it("keeps cropping landscape video and zooms less when the phone turns portrait", () => {
@@ -98,6 +105,7 @@ describe("remote tile framing", () => {
     tile.receiveFrames(1280, 720);
     expect(tile.video.dataset.meetTileVideoFraming).toBe("cover");
     expect(tile.toggle()).toBeNull();
+    expect(tile.backdrop()).toBeNull();
 
     tile.receiveFrames(720, 1280);
     expect(tile.video.dataset.meetTileVideoFraming).toBe("portrait-zoom");
