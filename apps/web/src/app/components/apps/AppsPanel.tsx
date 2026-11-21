@@ -40,9 +40,12 @@ export function AppsPanel({
     isReadOnly,
   } = useApps();
   const [busyAppId, setBusyAppId] = useState<string | null>(null);
-  const [confirmingClearId, setConfirmingClearId] = useState<string | null>(
-    null,
-  );
+  // The confirm step is armed for one app at one stage revision, so a change
+  // to the room in between asks again.
+  const [confirmingClear, setConfirmingClear] = useState<{
+    appId: string;
+    revision: number | null;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const canManage = Boolean(isAdmin) && !isReadOnly;
@@ -62,13 +65,17 @@ export function AppsPanel({
     void run(appId, () => (isActive ? closeApp() : presentApp(appId)));
   };
 
+  const isConfirmingClear = (appId: string) =>
+    confirmingClear?.appId === appId &&
+    confirmingClear.revision === state.revision;
+
   const handleClear = (appId: string) => {
     if (!canManage || busyAppId) return;
-    if (confirmingClearId !== appId) {
-      setConfirmingClearId(appId);
+    if (!isConfirmingClear(appId)) {
+      setConfirmingClear({ appId, revision: state.revision });
       return;
     }
-    setConfirmingClearId(null);
+    setConfirmingClear(null);
     void run(appId, () => clearApp(appId));
   };
 
@@ -103,7 +110,7 @@ export function AppsPanel({
             const isSaved = state.savedAppIds.includes(app.id);
             const isBusy = busyAppId === app.id;
             const interactive = canManage && !busyAppId;
-            const isConfirmingClear = confirmingClearId === app.id;
+            const confirming = isConfirmingClear(app.id);
             const canClear = canManage && isSaved && !isBusy;
             const subtitle = isSaved ? "Saved" : app.description;
             return (
@@ -115,7 +122,7 @@ export function AppsPanel({
                   background: color.surfaceRaised,
                 }}
                 onMouseLeave={() => {
-                  if (isConfirmingClear) setConfirmingClearId(null);
+                  if (confirming) setConfirmingClear(null);
                 }}
               >
                 <button
@@ -204,19 +211,19 @@ export function AppsPanel({
                     disabled={!interactive}
                     onClick={() => handleClear(app.id)}
                     onBlur={() => {
-                      if (isConfirmingClear) setConfirmingClearId(null);
+                      if (confirming) setConfirmingClear(null);
                     }}
                     aria-label={
-                      isConfirmingClear
+                      confirming
                         ? `Clear ${app.name} for everyone`
                         : `Clear ${app.name}`
                     }
                     className="mr-2 shrink-0 rounded-md px-2 py-1 text-[12px] transition-colors hover:bg-white/[0.06] disabled:cursor-default"
                     style={{
-                      color: isConfirmingClear ? color.danger : "#a1a1aa",
+                      color: confirming ? color.danger : "#a1a1aa",
                     }}
                   >
-                    {isConfirmingClear ? "Confirm clear" : "Clear"}
+                    {confirming ? "Confirm clear" : "Clear"}
                   </button>
                 )}
               </div>

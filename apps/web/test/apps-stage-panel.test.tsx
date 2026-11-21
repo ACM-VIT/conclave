@@ -115,6 +115,22 @@ describe("the presented board", () => {
     expect(ctx.getDoc("whiteboard").getMap("shapes").get("circle")).toBe(1);
   });
 
+  it("never uploads a stray local copy of an app that is off the stage", async () => {
+    await serverState({ activeAppId: "whiteboard", revision: 1, savedAppIds: ["wheel"] });
+    ctx.getDoc("wheel").getMap("entries").set("stale", 1);
+
+    await serverState({ activeAppId: "whiteboard", revision: 2, savedAppIds: [] });
+    emitted.length = 0;
+    await serverState({ activeAppId: "wheel", revision: 3, savedAppIds: ["whiteboard"] });
+
+    expect(ctx.getDoc("wheel").getMap("entries").get("stale")).toBeUndefined();
+    for (const upload of sent("apps:yjs:update")) {
+      const received = new Y.Doc();
+      Y.applyUpdate(received, (upload.args[0] as { update: Uint8Array }).update);
+      expect(received.getMap("entries").get("stale")).toBeUndefined();
+    }
+  });
+
   it("keeps drawing while anyone opens and closes the apps panel", async () => {
     await serverState({ activeAppId: "whiteboard", revision: 1, savedAppIds: [] });
     const board = ctx.getDoc("whiteboard");
@@ -155,6 +171,34 @@ describe("the apps panel", () => {
 
     expect(sent("apps:discard").map((entry) => entry.args[0])).toEqual([
       { appId: "whiteboard", expectedRevision: 7 },
+    ]);
+  });
+
+  it("asks again when the room changes between the two clicks", async () => {
+    await serverState({ activeAppId: "wheel", revision: 7, savedAppIds: ["whiteboard"] });
+    await act(async () => setPanelOpen(true));
+
+    await click("Clear Whiteboard");
+    await serverState({ activeAppId: "watch", revision: 8, savedAppIds: ["whiteboard", "wheel"] });
+
+    expect(host.querySelector('button[aria-label="Clear Whiteboard for everyone"]')).toBeNull();
+    await click("Clear Whiteboard");
+    expect(sent("apps:discard")).toEqual([]);
+    await click("Clear Whiteboard for everyone");
+    expect(sent("apps:discard").map((entry) => entry.args[0])).toEqual([
+      { appId: "whiteboard", expectedRevision: 8 },
+    ]);
+  });
+
+  it("sends a lock against the stage the host saw", async () => {
+    await serverState({ activeAppId: "whiteboard", revision: 5, savedAppIds: [] });
+
+    await act(async () => {
+      await ctx.setLocked(true);
+    });
+
+    expect(sent("apps:lock").map((entry) => entry.args[0])).toEqual([
+      { locked: true, expectedRevision: 5 },
     ]);
   });
 
