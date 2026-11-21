@@ -122,6 +122,18 @@ describe("new meetings make people knock", () => {
     expect((await join(state, guest)).status).toBe("joined");
   });
 
+  // A guest's session id is their identity until guest passes land, so a
+  // host's user id in this reply would let a knocker come back as that host.
+  it("does not tell someone who is still knocking who is in the meeting", async () => {
+    const state = makeState();
+    const created = await join(state, host);
+    expect(created.response.hostUserId).toBe("guest-host#h");
+
+    const knocking = await join(state, guest);
+    expect(knocking.status).toBe("waiting");
+    expect(JSON.stringify(knocking.response)).not.toContain("guest-host");
+  });
+
   it("lets people straight in once the host opens the room", async () => {
     const state = makeState();
     await join(state, host);

@@ -669,13 +669,13 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             });
           }
 
+          // Nothing here names anyone in the meeting: a user id holds its
+          // owner's guest session, and that is all a guest needs to be them.
           respond(callback, {
             roomId,
             rtpCapabilities: room.rtpCapabilities,
             existingProducers: [],
             status: "waiting",
-            hostUserId: room.getHostUserId(),
-            hostUserIds: room.getAdminUserIds(),
             isLocked: room.isLocked,
             isTtsDisabled: room.isTtsDisabled,
             isChatLocked: room.isChatLocked,
@@ -725,8 +725,6 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             rtpCapabilities: room.rtpCapabilities,
             existingProducers: [],
             status: "waiting",
-            hostUserId: room.getHostUserId(),
-            hostUserIds: room.getAdminUserIds(),
             isLocked: room.isLocked,
             isTtsDisabled: room.isTtsDisabled,
             isChatLocked: room.isChatLocked,
