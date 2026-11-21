@@ -64,6 +64,20 @@ const join = async (state: SfuState, user: SfuAuthPayload, roomId = "room") => {
   return { context, peer, ack };
 };
 
+// The same socket asks for another room, as a client does when it switches.
+const switchRoom = async (
+  from: Awaited<ReturnType<typeof join>>,
+  user: SfuAuthPayload,
+  roomId: string,
+) => {
+  const ack = vi.fn();
+  await from.peer.handlers.get("joinRoom")!(...[
+    { roomId, sessionId: user.sessionId },
+    ack,
+  ] as never[]);
+  return ack;
+};
+
 const dropConnection = (peer: { socket: Socket }) => {
   (peer.socket as { connected: boolean }).connected = false;
 };
@@ -361,6 +375,39 @@ describe("guests on clients that predate guest passes", () => {
     expect(replayWithOwnPass.ack).toHaveBeenCalledWith(refused);
     expect(room.getClient(olderHostSeat)).toBe(host.context.currentClient);
   });
+
+  it.each([
+    ["no pass", olderHost],
+    ["another pass", { ...olderHost, guestProof: "proof-of-another-pass" }],
+  ])(
+    "keep host when a join with %s arrives while they are still leaving their previous room",
+    async (_label, intruder) => {
+      const state = makeState();
+      const owner = { ...olderHost, guestProof: "proof-of-the-older-pass" };
+      const host = await join(state, owner, "previous-room");
+      let finishLeaving = () => {};
+      vi.mocked(host.peer.socket.leave).mockReturnValueOnce(
+        new Promise<void>((resolve) => {
+          finishLeaving = resolve;
+        }),
+      );
+
+      const switching = switchRoom(host, owner, "room");
+      await vi.waitFor(() => expect(host.peer.socket.leave).toHaveBeenCalled());
+      const attempt = await join(state, intruder);
+      finishLeaving();
+      const switched = await switching;
+
+      const room = state.rooms.get("conclave:room")!;
+      expect(switched).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "joined", hostUserId: olderHostSeat }),
+      );
+      expect(attempt.ack).toHaveBeenCalledWith(refused);
+      expect(attempt.context.currentClient).toBeNull();
+      expect(host.context.currentClient).toBeInstanceOf(Admin);
+      expect(room.getClient(olderHostSeat)).toBe(host.context.currentClient);
+    },
+  );
 
   it("that entered without a pass can still come back, even after someone joined with one", async () => {
     const state = makeState();

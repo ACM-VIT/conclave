@@ -781,6 +781,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           clearBrowserState(roomChannelId);
         }
 
+        let previousChannelIdToLeave: string | null = null;
         if (
           context.currentRoom &&
           context.currentRoom.channelId !== roomChannelId &&
@@ -816,9 +817,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           emitWebinarAttendeeCountChanged(io, state, previousRoom);
           emitWebinarFeedChanged(io, state, previousRoom);
 
-          await socket.leave(previousChannelId);
-          cleanupRoom(state, previousChannelId);
-
+          previousChannelIdToLeave = previousChannelId;
           context.currentRoom = null;
           context.currentClient = null;
         }
@@ -858,6 +857,13 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         });
         context.currentRoom.addClient(context.currentClient);
 
+        // The previous room's channel is left only now. Nothing awaits between
+        // the identity checks above and this seat, so a second join under the
+        // same user key is always judged against the seat.
+        if (previousChannelIdToLeave) {
+          await socket.leave(previousChannelIdToLeave);
+          cleanupRoom(state, previousChannelIdToLeave);
+        }
         await socket.join(roomChannelId);
 
         io.to(roomChannelId).emit("hostChanged", {
