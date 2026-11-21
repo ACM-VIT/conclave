@@ -36,26 +36,28 @@ const posthogCli = (args) => {
   }
 };
 
-if (uploadRequested) {
-  if ((await listSourceMaps(staticDir)).length === 0) {
-    throw new Error("No source maps were built; check productionBrowserSourceMaps in next.config.ts.");
+try {
+  if (uploadRequested) {
+    if ((await listSourceMaps(staticDir)).length === 0) {
+      throw new Error("No source maps were built; check productionBrowserSourceMaps in next.config.ts.");
+    }
+    posthogCli(["sourcemap", "inject", "--directory", staticDir]);
+    posthogCli([
+      "sourcemap",
+      "upload",
+      "--directory",
+      staticDir,
+      "--release-name",
+      "conclave-web",
+      "--delete-after",
+    ]);
+    console.log("[sourcemaps] uploaded to PostHog");
+  } else {
+    console.log("[sourcemaps] upload skipped (POSTHOG_CLI_API_KEY and POSTHOG_CLI_PROJECT_ID not set)");
   }
-  posthogCli(["sourcemap", "inject", "--directory", staticDir]);
-  posthogCli([
-    "sourcemap",
-    "upload",
-    "--directory",
-    staticDir,
-    "--release-name",
-    "conclave-web",
-    "--delete-after",
-  ]);
+} finally {
+  // Maps never ship, even when the upload failed.
+  const leftover = await listSourceMaps(assetsDir);
+  await Promise.all(leftover.map((file) => rm(file)));
+  if (leftover.length > 0) console.log(`[sourcemaps] removed ${leftover.length} map files from the deploy`);
 }
-
-const leftover = await listSourceMaps(assetsDir);
-await Promise.all(leftover.map((file) => rm(file)));
-console.log(
-  uploadRequested
-    ? `[sourcemaps] uploaded to PostHog; removed ${leftover.length} leftover map files`
-    : "[sourcemaps] upload skipped (POSTHOG_CLI_API_KEY and POSTHOG_CLI_PROJECT_ID not set)",
-);
