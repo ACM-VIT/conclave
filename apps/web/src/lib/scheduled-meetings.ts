@@ -7,6 +7,7 @@ import { readResponseError } from "@/app/lib/utils";
 import {
   canonicalizeSfuClientId,
   CONCLAVE_SFU_CLIENT_ID,
+  resolveSfuClientIdCandidates,
 } from "@/lib/sfu-client-id";
 
 export interface PublicScheduledMeeting {
@@ -35,31 +36,52 @@ export const readScheduledMeetingError = (
   response: Response,
 ): Promise<string> => readResponseError(response);
 
-export const lookupPublicScheduledMeetingByRoomCode = async (
+export type ScheduledMeetingLookup =
+  | { kind: "scheduled"; clientId: string; meeting: PublicScheduledMeeting }
+  | { kind: "unscheduled" }
+  // The SFU could not say. The code may well be a real meeting.
+  | { kind: "unknown" };
+
+// `null` is the SFU saying no meeting is scheduled at this code. A failed
+// lookup throws, so it is never read as that answer.
+const fetchPublicScheduledMeeting = async (
   clientId: string,
   roomCode: string,
 ): Promise<PublicScheduledMeeting | null> => {
-  try {
-    const resolvedClientId =
-      canonicalizeSfuClientId(clientId) || CONCLAVE_SFU_CLIENT_ID;
-    const base = resolveScheduledMeetingsBase();
-    const url = `${base}/public/by-room/${encodeURIComponent(roomCode)}?clientId=${encodeURIComponent(resolvedClientId)}`;
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        "x-sfu-secret": resolveSfuSecret(),
-        accept: "application/json",
-      },
-      cache: "no-store",
-    });
-    if (!response.ok) return null;
-    const data = (await response.json()) as {
-      scheduledMeeting?: PublicScheduledMeeting;
-    };
-    return data?.scheduledMeeting ?? null;
-  } catch {
-    return null;
+  const base = resolveScheduledMeetingsBase();
+  const url = `${base}/public/by-room/${encodeURIComponent(roomCode)}?clientId=${encodeURIComponent(clientId)}`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      "x-sfu-secret": resolveSfuSecret(),
+      accept: "application/json",
+    },
+    cache: "no-store",
+  });
+  if (response.status === 404) return null;
+  if (!response.ok) {
+    throw new Error(`Scheduled meeting lookup failed (${response.status})`);
   }
+  const data = (await response.json()) as {
+    scheduledMeeting?: PublicScheduledMeeting;
+  };
+  return data?.scheduledMeeting ?? null;
+};
+
+export const lookupScheduledMeetingForCode = async (
+  roomCode: string,
+  preferredClientId?: string,
+): Promise<ScheduledMeetingLookup> => {
+  let failed = false;
+  for (const clientId of resolveSfuClientIdCandidates(preferredClientId)) {
+    try {
+      const meeting = await fetchPublicScheduledMeeting(clientId, roomCode);
+      if (meeting) return { kind: "scheduled", clientId, meeting };
+    } catch {
+      failed = true;
+    }
+  }
+  return failed ? { kind: "unknown" } : { kind: "unscheduled" };
 };
 
 export const lookupScheduledMeetingHostEmail = async (

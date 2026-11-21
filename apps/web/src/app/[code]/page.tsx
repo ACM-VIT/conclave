@@ -6,12 +6,10 @@ import { sanitizeRoomCode, sanitizeWebinarLinkCode } from "../lib/utils";
 import ScheduledMeetingLanding from "../components/ScheduledMeetingLanding";
 import {
   isMeetingJoinable,
-  lookupPublicScheduledMeetingByRoomCode,
+  lookupScheduledMeetingForCode,
   lookupScheduledMeetingHostEmail,
-  type PublicScheduledMeeting,
 } from "@/lib/scheduled-meetings";
 import { auth } from "@/lib/auth";
-import { resolveSfuClientIdCandidates } from "@/lib/sfu-client-id";
 
 type MeetRoomPageProps = {
   params: Promise<{ code: string }>;
@@ -53,22 +51,6 @@ const resolveSessionEmail = async (): Promise<string | null> => {
   } catch {
     return null;
   }
-};
-
-const lookupScheduledMeetingCandidate = async (
-  roomCode: string,
-  preferredClientId?: string,
-): Promise<{ clientId: string; meeting: PublicScheduledMeeting } | null> => {
-  for (const clientId of resolveSfuClientIdCandidates(preferredClientId)) {
-    const meeting = await lookupPublicScheduledMeetingByRoomCode(
-      clientId,
-      roomCode,
-    );
-    if (meeting) {
-      return { clientId, meeting };
-    }
-  }
-  return null;
 };
 
 export default function MeetRoomPage({
@@ -119,37 +101,40 @@ async function MeetRoomContent({ params, searchParams }: MeetRoomPageProps) {
     : undefined;
   const sfuClientId = sanitizeClientId(resolvedSearchParams.clientId);
   let resolvedSfuClientId = sfuClientId;
-  let isScheduledMeeting = false;
+  // A join may open the room when the code is a scheduled meeting. If the
+  // lookup failed, the code may be one too, so its first visitor is not told
+  // to check their meeting code.
+  let mayOpenRoom = false;
   const user = displayName ? { name: displayName } : undefined;
   const isAdmin =
     devOverridesEnabled && isTruthyParam(resolvedSearchParams.admin);
 
-  if (sanitizedRoomCode && !bypassMediaPermissions) {
-    const scheduledCandidate = await lookupScheduledMeetingCandidate(
+  if (sanitizedRoomCode) {
+    const lookup = await lookupScheduledMeetingForCode(
       sanitizedRoomCode,
       sfuClientId,
     );
-    const scheduled = scheduledCandidate?.meeting ?? null;
-    if (scheduledCandidate) {
-      resolvedSfuClientId = scheduledCandidate.clientId;
-      isScheduledMeeting = true;
+    mayOpenRoom = lookup.kind !== "unscheduled";
+    if (lookup.kind === "scheduled") {
+      resolvedSfuClientId = lookup.clientId;
     }
-    if (scheduledCandidate && scheduled && !isMeetingJoinable(scheduled)) {
-      const scheduledClientId = scheduledCandidate.clientId;
+    // Recorders go straight to the join.
+    if (
+      lookup.kind === "scheduled" &&
+      !bypassMediaPermissions &&
+      !isMeetingJoinable(lookup.meeting)
+    ) {
       const [sessionEmail, hostEmail] = await Promise.all([
         resolveSessionEmail(),
-        lookupScheduledMeetingHostEmail(
-          scheduledClientId,
-          sanitizedRoomCode,
-        ),
+        lookupScheduledMeetingHostEmail(lookup.clientId, sanitizedRoomCode),
       ]);
       const viewerIsHost = Boolean(
         sessionEmail && hostEmail && sessionEmail === hostEmail,
       );
       return (
         <ScheduledMeetingLanding
-          meeting={scheduled}
-          clientId={scheduledClientId}
+          meeting={lookup.meeting}
+          clientId={lookup.clientId}
           viewerIsHost={viewerIsHost}
         />
       );
@@ -160,7 +145,7 @@ async function MeetRoomContent({ params, searchParams }: MeetRoomPageProps) {
     <MeetsClientShell
       initialRoomId={sanitizedRoomCode}
       forceJoinOnly={true}
-      allowRoomCreation={isScheduledMeeting}
+      allowRoomCreation={mayOpenRoom}
       bypassMediaPermissions={bypassMediaPermissions}
       sfuClientId={resolvedSfuClientId}
       autoJoinOnMount={autoJoinOnMount}
