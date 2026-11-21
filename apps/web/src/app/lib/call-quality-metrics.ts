@@ -30,17 +30,21 @@ export type InboundStreamStats = {
   totalSamplesReceived: number | null;
 };
 
-export type OutboundVideoStats = {
-  /** Summed across simulcast layers. */
+export type OutboundLayerStats = {
+  /** Unique per simulcast layer for the call: transport id plus stats id. */
+  id: string;
   bytesSent: number;
   frameHeight: number | null;
   /** Cumulative seconds the encoder was limited, from qualityLimitationDurations. */
-  limitedSec: { cpu: number; bandwidth: number } | null;
+  cpuLimitedSec: number;
+  bandwidthLimitedSec: number;
 };
 
 export type CallStatsSample = {
-  inbound: InboundStreamStats[];
-  outboundVideo: OutboundVideoStats | null;
+  /** Null when the receive transport's stats could not be read this time. */
+  inbound: InboundStreamStats[] | null;
+  /** Video layers being sent; null when the send transport's stats could not be read. */
+  outboundVideo: OutboundLayerStats[] | null;
   outboundProfile: VideoQuality;
 };
 
@@ -131,6 +135,8 @@ type Call = Attempt & {
   joinedAt: number;
   waitingMs: number | null;
   reconnectingSince: number | null;
+  /** When the call settled into an error it has not left; the call ends there. */
+  stuckSince: number | null;
   reconnectCount: number;
   reconnectTotalMs: number;
   reconnectLongestMs: number;
@@ -141,7 +147,7 @@ type Call = Attempt & {
   firstMediaReported: boolean;
   lastSampleAt: number | null;
   streams: Map<string, StreamMemory>;
-  lastOutbound: OutboundVideoStats | null;
+  outboundLayers: Map<string, OutboundLayerStats>;
   lastProfile: VideoQuality | null;
   totals: MediaTotals;
 };
@@ -268,10 +274,12 @@ export function createCallMetricsTracker({
 
   const endCall = (
     call: Call,
-    endReason: "left" | "error" | "reconnect_failed" | "page_closed",
-    at: number,
+    reason: "left" | "error" | "reconnect_failed" | "page_closed",
+    endedAt: number,
     immediate: boolean,
   ) => {
+    const at = call.stuckSince ?? endedAt;
+    const endReason = call.stuckSince === null ? reason : "reconnect_failed";
     const unrecoveredMs =
       call.reconnectingSince === null ? 0 : at - call.reconnectingSince;
     const { totals } = call;
@@ -324,6 +332,7 @@ export function createCallMetricsTracker({
     joinedAt: at,
     waitingMs: attempt.waitingSince === null ? null : at - attempt.waitingSince,
     reconnectingSince: null,
+    stuckSince: null,
     reconnectCount: 0,
     reconnectTotalMs: 0,
     reconnectLongestMs: 0,
@@ -334,7 +343,7 @@ export function createCallMetricsTracker({
     firstMediaReported: false,
     lastSampleAt: null,
     streams: new Map(),
-    lastOutbound: null,
+    outboundLayers: new Map(),
     lastProfile: null,
     totals: emptyTotals(),
   });
@@ -390,11 +399,29 @@ export function createCallMetricsTracker({
   };
 
   const foldOutbound = (call: Call, sample: CallStatsSample, dt: number) => {
-    const current = sample.outboundVideo;
-    const previous = call.lastOutbound;
-    call.lastOutbound = current;
-    if (!current) return;
-    const sentBytes = counterDelta(current.bytesSent, previous?.bytesSent ?? 0);
+    const layers = sample.outboundVideo;
+    if (layers === null) return;
+    const previous = call.outboundLayers;
+    call.outboundLayers = new Map(layers.map((layer) => [layer.id, layer]));
+
+    let sentBytes = 0;
+    let height = 0;
+    let cpuSec = 0;
+    let bandwidthSec = 0;
+    layers.forEach((layer) => {
+      const prior = previous.get(layer.id);
+      const bytes = counterDelta(layer.bytesSent, prior?.bytesSent ?? 0);
+      if (bytes === 0) return;
+      sentBytes += bytes;
+      height = Math.max(height, layer.frameHeight ?? 0);
+      if (!prior) return;
+      // Every layer comes from one encoder, so they share one limitation clock.
+      cpuSec = Math.max(cpuSec, counterDelta(layer.cpuLimitedSec, prior.cpuLimitedSec));
+      bandwidthSec = Math.max(
+        bandwidthSec,
+        counterDelta(layer.bandwidthLimitedSec, prior.bandwidthLimitedSec),
+      );
+    });
     if (dt === 0 || sentBytes === 0) return;
 
     const { totals } = call;
@@ -405,19 +432,11 @@ export function createCallMetricsTracker({
       totals.profileSwitches += 1;
     }
     call.lastProfile = sample.outboundProfile;
-    if (current.frameHeight) {
-      totals.heightMs.set(
-        current.frameHeight,
-        (totals.heightMs.get(current.frameHeight) ?? 0) + dt,
-      );
+    if (height > 0) {
+      totals.heightMs.set(height, (totals.heightMs.get(height) ?? 0) + dt);
     }
-    if (current.limitedSec && previous?.limitedSec) {
-      totals.cpuLimitedMs +=
-        counterDelta(current.limitedSec.cpu, previous.limitedSec.cpu) * 1000;
-      totals.bandwidthLimitedMs +=
-        counterDelta(current.limitedSec.bandwidth, previous.limitedSec.bandwidth) *
-        1000;
-    }
+    totals.cpuLimitedMs += cpuSec * 1000;
+    totals.bandwidthLimitedMs += bandwidthSec * 1000;
   };
 
   return {
@@ -464,6 +483,7 @@ export function createCallMetricsTracker({
           call.reconnectLongestMs = Math.max(call.reconnectLongestMs, lasted);
           call.reconnectingSince = null;
         }
+        call.stuckSince = null;
       } else if (state === "disconnected") {
         endCall(
           call,
@@ -475,8 +495,11 @@ export function createCallMetricsTracker({
           at,
           false,
         );
-      } else if (call.reconnectingSince === null) {
-        call.reconnectingSince = at;
+      } else {
+        call.reconnectingSince ??= at;
+        // An error between reconnect attempts clears on the next attempt; one
+        // that stays (the give-up screen) ends the call at that moment.
+        call.stuckSince = state === "error" ? (call.stuckSince ?? at) : null;
       }
     },
 
@@ -497,14 +520,16 @@ export function createCallMetricsTracker({
           : Math.min(at - call.lastSampleAt, MAX_SAMPLE_GAP_MS);
       call.lastSampleAt = at;
 
-      const seen = new Set<string>();
-      sample.inbound.forEach((stream) => {
-        seen.add(stream.id);
-        foldInbound(call, stream, dt, at);
-      });
-      call.streams.forEach((_memory, id) => {
-        if (!seen.has(id)) call.streams.delete(id);
-      });
+      if (sample.inbound) {
+        const seen = new Set<string>();
+        sample.inbound.forEach((stream) => {
+          seen.add(stream.id);
+          foldInbound(call, stream, dt, at);
+        });
+        call.streams.forEach((_memory, id) => {
+          if (!seen.has(id)) call.streams.delete(id);
+        });
+      }
       foldOutbound(call, sample, dt);
       reportFirstMedia(call, at);
     },
@@ -537,68 +562,64 @@ const finite = (value: unknown): number | null =>
 const statKind = (stat: Record<string, unknown>): unknown =>
   stat.kind ?? stat.mediaType;
 
+type TransportReport = { transportId: string; report: StatsReportLike };
+
 /** Reads the getStats reports of the receive and send transports into a sample. */
 export function parseCallStats({
   receive,
   send,
   profile,
 }: {
-  receive: { transportId: string; report: StatsReportLike } | null;
-  send: StatsReportLike | null;
+  receive: TransportReport | null;
+  send: TransportReport | null;
   profile: VideoQuality;
 }): CallStatsSample {
-  const inbound: InboundStreamStats[] = [];
-  receive?.report.forEach((raw) => {
-    const stat = raw as Record<string, unknown>;
-    const kind = statKind(stat);
-    if (stat.type !== "inbound-rtp" || (kind !== "audio" && kind !== "video")) {
-      return;
-    }
-    // mediasoup's bandwidth probe: padding bytes, never frames.
-    if (stat.mid === MEDIASOUP_PROBATOR_MID) return;
-    inbound.push({
-      id: `${receive.transportId}:${String(stat.id)}`,
-      kind,
-      packetsReceived: finite(stat.packetsReceived) ?? 0,
-      bytesReceived: finite(stat.bytesReceived) ?? 0,
-      framesDecoded: finite(stat.framesDecoded) ?? 0,
-      freezeCount: finite(stat.freezeCount),
-      totalFreezesDurationSec: finite(stat.totalFreezesDuration),
-      concealedSamples: finite(stat.concealedSamples),
-      totalSamplesReceived: finite(stat.totalSamplesReceived),
+  let inbound: InboundStreamStats[] | null = null;
+  if (receive) {
+    const streams: InboundStreamStats[] = [];
+    receive.report.forEach((raw) => {
+      const stat = raw as Record<string, unknown>;
+      const kind = statKind(stat);
+      if (stat.type !== "inbound-rtp" || (kind !== "audio" && kind !== "video")) {
+        return;
+      }
+      // mediasoup's bandwidth probe: padding bytes, never frames.
+      if (stat.mid === MEDIASOUP_PROBATOR_MID) return;
+      streams.push({
+        id: `${receive.transportId}:${String(stat.id)}`,
+        kind,
+        packetsReceived: finite(stat.packetsReceived) ?? 0,
+        bytesReceived: finite(stat.bytesReceived) ?? 0,
+        framesDecoded: finite(stat.framesDecoded) ?? 0,
+        freezeCount: finite(stat.freezeCount),
+        totalFreezesDurationSec: finite(stat.totalFreezesDuration),
+        concealedSamples: finite(stat.concealedSamples),
+        totalSamplesReceived: finite(stat.totalSamplesReceived),
+      });
     });
-  });
+    inbound = streams;
+  }
 
-  let outboundVideo: OutboundVideoStats | null = null;
-  send?.forEach((raw) => {
-    const stat = raw as Record<string, unknown>;
-    if (stat.type !== "outbound-rtp" || statKind(stat) !== "video") return;
-    const limits = stat.qualityLimitationDurations as
-      | Record<string, unknown>
-      | undefined;
-    const height = finite(stat.frameHeight);
-    const previous: OutboundVideoStats = outboundVideo ?? {
-      bytesSent: 0,
-      frameHeight: null,
-      limitedSec: null,
-    };
-    outboundVideo = {
-      bytesSent: previous.bytesSent + (finite(stat.bytesSent) ?? 0),
-      frameHeight:
-        height === null
-          ? previous.frameHeight
-          : Math.max(height, previous.frameHeight ?? 0),
-      limitedSec: limits
-        ? {
-            cpu: Math.max(finite(limits.cpu) ?? 0, previous.limitedSec?.cpu ?? 0),
-            bandwidth: Math.max(
-              finite(limits.bandwidth) ?? 0,
-              previous.limitedSec?.bandwidth ?? 0,
-            ),
-          }
-        : previous.limitedSec,
-    };
-  });
+  let outboundVideo: OutboundLayerStats[] | null = null;
+  if (send) {
+    const layers: OutboundLayerStats[] = [];
+    send.report.forEach((raw) => {
+      const stat = raw as Record<string, unknown>;
+      if (stat.type !== "outbound-rtp" || statKind(stat) !== "video") return;
+      const limits = (stat.qualityLimitationDurations ?? {}) as Record<
+        string,
+        unknown
+      >;
+      layers.push({
+        id: `${send.transportId}:${String(stat.id)}`,
+        bytesSent: finite(stat.bytesSent) ?? 0,
+        frameHeight: finite(stat.frameHeight),
+        cpuLimitedSec: finite(limits.cpu) ?? 0,
+        bandwidthLimitedSec: finite(limits.bandwidth) ?? 0,
+      });
+    });
+    outboundVideo = layers;
+  }
 
   return { inbound, outboundVideo, outboundProfile: profile };
 }

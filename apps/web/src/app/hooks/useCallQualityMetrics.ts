@@ -24,7 +24,7 @@ const newCallId = (): string =>
 const readReport = async (transport: Transport | null) => {
   if (!transport || transport.closed) return null;
   try {
-    return await transport.getStats();
+    return { transportId: transport.id, report: await transport.getStats() };
   } catch {
     return null;
   }
@@ -77,21 +77,13 @@ export function useCallQualityMetrics({
     const sample = async () => {
       const delay = tracker.nextSampleDelayMs(performance.now());
       if (delay !== null) {
-        const receiveTransport = consumerTransportRef.current;
         const [receive, send] = await Promise.all([
-          readReport(receiveTransport),
+          readReport(consumerTransportRef.current),
           readReport(producerTransportRef.current),
         ]);
         if (cancelled) return;
         tracker.onStats(
-          parseCallStats({
-            receive:
-              receive && receiveTransport
-                ? { transportId: receiveTransport.id, report: receive }
-                : null,
-            send,
-            profile: videoQualityRef.current,
-          }),
+          parseCallStats({ receive, send, profile: videoQualityRef.current }),
           performance.now(),
         );
       }

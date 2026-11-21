@@ -6,6 +6,7 @@ import {
   type CallMetricEvent,
   type CallStatsSample,
   type InboundStreamStats,
+  type OutboundLayerStats,
 } from "../src/app/lib/call-quality-metrics";
 import type { ConnectionState, MeetError } from "../src/app/lib/types";
 
@@ -52,12 +53,21 @@ const video = (overrides: Partial<InboundStreamStats> = {}): InboundStreamStats 
   ...overrides,
 });
 
+const layer = (overrides: Partial<OutboundLayerStats> = {}): OutboundLayerStats => ({
+  id: "send:L1",
+  bytesSent: 0,
+  frameHeight: 180,
+  cpuLimitedSec: 0,
+  bandwidthLimitedSec: 0,
+  ...overrides,
+});
+
 const sample = (
-  inbound: InboundStreamStats[],
+  inbound: InboundStreamStats[] | null,
   outbound: Partial<CallStatsSample> = {},
 ): CallStatsSample => ({
   inbound,
-  outboundVideo: null,
+  outboundVideo: [],
   outboundProfile: "standard",
   ...outbound,
 });
@@ -215,7 +225,7 @@ describe("call_summary", () => {
 
     tracker.onStats(
       sample([audio({ totalSamplesReceived: 0 }), video()], {
-        outboundVideo: { bytesSent: 0, frameHeight: 180, limitedSec: { cpu: 0, bandwidth: 0 } },
+        outboundVideo: [layer()],
         outboundProfile: "low",
       }),
       5000,
@@ -232,7 +242,7 @@ describe("call_summary", () => {
           }),
         ],
         {
-          outboundVideo: { bytesSent: 250_000, frameHeight: 180, limitedSec: { cpu: 0, bandwidth: 2 } },
+          outboundVideo: [layer({ bytesSent: 250_000, bandwidthLimitedSec: 2 })],
           outboundProfile: "low",
         },
       ),
@@ -250,7 +260,9 @@ describe("call_summary", () => {
           }),
         ],
         {
-          outboundVideo: { bytesSent: 875_000, frameHeight: 720, limitedSec: { cpu: 0, bandwidth: 2 } },
+          outboundVideo: [
+            layer({ bytesSent: 875_000, frameHeight: 720, bandwidthLimitedSec: 2 }),
+          ],
           outboundProfile: "standard",
         },
       ),
@@ -341,15 +353,72 @@ describe("call_summary", () => {
     });
   });
 
-  it("calls a call that never came back from a reconnect a failed reconnect", () => {
-    const { state, named } = setup();
+  it("ends a call that gave up reconnecting when it gave up, not when the tab closed", () => {
+    const { state, tracker, named } = setup();
     state("connecting", 0);
     state("joined", 1000);
     state("reconnecting", 5000);
+    state("error", 12_000);
+    state("reconnecting", 13_000);
     state("error", 40_000);
-    state("disconnected", 45_000);
+    tracker.onPageHidden(300_000);
 
-    expect(named("call_summary")[0].props.end_reason).toBe("reconnect_failed");
+    expect(named("call_summary")[0].props).toMatchObject({
+      end_reason: "reconnect_failed",
+      duration_ms: 39_000,
+      reconnect_count: 1,
+      reconnect_total_ms: 35_000,
+      reconnect_unrecovered: true,
+    });
+  });
+
+  it("does not double count after a sample whose stats could not be read", () => {
+    const { tracker, state, named } = setup();
+    state("connecting", 0);
+    state("joined", 1000);
+    const frozenOnce = video({
+      bytesReceived: 200_000,
+      framesDecoded: 100,
+      freezeCount: 1,
+      totalFreezesDurationSec: 0.4,
+    });
+
+    tracker.onStats(sample([video()], { outboundVideo: [layer()] }), 2000);
+    tracker.onStats(
+      sample([frozenOnce], { outboundVideo: [layer({ bytesSent: 500_000 })] }),
+      7000,
+    );
+    tracker.onStats(sample(null, { outboundVideo: null }), 12_000);
+    tracker.onStats(
+      sample([frozenOnce], { outboundVideo: [layer({ bytesSent: 500_000 })] }),
+      17_000,
+    );
+    state("disconnected", 18_000);
+
+    expect(named("call_summary")[0].props).toMatchObject({
+      video_freeze_count: 1,
+      video_freeze_ms: 400,
+      outbound_video_ms: 5000,
+      outbound_video_kbps: 800,
+    });
+  });
+
+  it("keeps outbound bitrate right when a simulcast layer stops", () => {
+    const { tracker, state, named } = setup();
+    state("connecting", 0);
+    state("joined", 1000);
+    const low = (bytesSent: number) => layer({ id: "send:L0", bytesSent, frameHeight: 180 });
+    const high = (bytesSent: number) => layer({ id: "send:L2", bytesSent, frameHeight: 720 });
+
+    tracker.onStats(sample([], { outboundVideo: [low(0), high(0)] }), 2000);
+    tracker.onStats(sample([], { outboundVideo: [low(100_000), high(500_000)] }), 7000);
+    tracker.onStats(sample([], { outboundVideo: [low(200_000)] }), 12_000);
+    state("disconnected", 13_000);
+
+    expect(named("call_summary")[0].props).toMatchObject({
+      outbound_video_ms: 10_000,
+      outbound_video_kbps: 560,
+    });
   });
 
   it("keeps a long 12-person call to three events per client", () => {
@@ -385,7 +454,7 @@ describe("call_summary", () => {
 });
 
 describe("parseCallStats", () => {
-  it("reads inbound streams, skips the mediasoup probator and folds simulcast layers", () => {
+  it("reads inbound streams and outbound layers and skips the mediasoup probator", () => {
     const receive = new Map<string, unknown>([
       ["a", { type: "inbound-rtp", id: "IA1", kind: "audio", packetsReceived: 9, bytesReceived: 900, concealedSamples: 3, totalSamplesReceived: 960 }],
       ["v", { type: "inbound-rtp", id: "IV1", kind: "video", packetsReceived: 20, bytesReceived: 20_000, framesDecoded: 30, freezeCount: 2, totalFreezesDuration: 1.25 }],
@@ -393,15 +462,15 @@ describe("parseCallStats", () => {
       ["p", { type: "inbound-rtp", id: "IT01V1234", kind: "video", mid: "probator", bytesReceived: 76_100, framesDecoded: 0 }],
     ]);
     const send = new Map<string, unknown>([
-      ["l", { type: "outbound-rtp", kind: "video", bytesSent: 1000, frameHeight: 180, qualityLimitationDurations: { cpu: 0, bandwidth: 4, none: 10 } }],
-      ["h", { type: "outbound-rtp", kind: "video", bytesSent: 5000, frameHeight: 720, qualityLimitationDurations: { cpu: 1, bandwidth: 4, none: 9 } }],
-      ["m", { type: "outbound-rtp", kind: "audio", bytesSent: 800 }],
+      ["l", { type: "outbound-rtp", id: "OT0", kind: "video", bytesSent: 1000, frameHeight: 180, qualityLimitationDurations: { cpu: 0, bandwidth: 4, none: 10 } }],
+      ["h", { type: "outbound-rtp", id: "OT2", kind: "video", bytesSent: 5000, frameHeight: 720, qualityLimitationDurations: { cpu: 1, bandwidth: 4, none: 9 } }],
+      ["m", { type: "outbound-rtp", id: "OA", kind: "audio", bytesSent: 800 }],
     ]);
 
     expect(
       parseCallStats({
         receive: { transportId: "recv", report: receive },
-        send,
+        send: { transportId: "send", report: send },
         profile: "standard",
       }),
     ).toEqual({
@@ -429,11 +498,10 @@ describe("parseCallStats", () => {
           totalSamplesReceived: null,
         },
       ],
-      outboundVideo: {
-        bytesSent: 6000,
-        frameHeight: 720,
-        limitedSec: { cpu: 1, bandwidth: 4 },
-      },
+      outboundVideo: [
+        { id: "send:OT0", bytesSent: 1000, frameHeight: 180, cpuLimitedSec: 0, bandwidthLimitedSec: 4 },
+        { id: "send:OT2", bytesSent: 5000, frameHeight: 720, cpuLimitedSec: 1, bandwidthLimitedSec: 4 },
+      ],
       outboundProfile: "standard",
     });
   });
