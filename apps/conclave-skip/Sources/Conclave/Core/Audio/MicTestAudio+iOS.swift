@@ -28,7 +28,7 @@ final class IOSMicTestAudio {
         return min(1, pow(10, Double(recorder.averagePower(forChannel: 0)) / 20))
     }
 
-    func record(noiseSuppression: Bool) {
+    func record(noiseSuppression _: Bool) {
         stop()
         guard hasPermission else { failed = true; return }
         do {

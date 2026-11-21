@@ -849,9 +849,6 @@
     "Advanced" : {
       "extractionState" : "manual"
     },
-    "Affects this test only." : {
-      "extractionState" : "manual"
-    },
     "All together · %lld of %lld tries used" : {
       "extractionState" : "manual"
     },
@@ -2554,6 +2551,9 @@
       "extractionState" : "manual"
     },
     "Full-Quality Bitrate" : {
+      "extractionState" : "manual"
+    },
+    "Gain affects this test only. The replay doesn’t include noise suppression." : {
       "extractionState" : "manual"
     },
     "Get answers drawn from everything that’s been said so far." : {

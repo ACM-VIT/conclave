@@ -63,7 +63,7 @@ struct SettingsMicrophonePage: View {
                 Text(ConclaveStrings.text("Test"))
             } footer: {
                 if audio.canRecordMicTest {
-                    Text(ConclaveStrings.text("Affects this test only."))
+                    Text(ConclaveStrings.text("Gain affects this test only. The replay doesn’t include noise suppression."))
                 }
             }
             if route.canShowMicModes {
