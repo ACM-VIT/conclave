@@ -529,11 +529,11 @@ select:focus {
 
 .web-chat-message-new-peer,
 .web-chat-message-new-self {
-  animation: acm-fade-in 0.11s cubic-bezier(0.2, 0.75, 0.15, 1) both;
+  animation: acm-fade-in 0.11s cubic-bezier(0.2, 0.75, 0.15, 1);
 }
 
 .web-chat-action-new {
-  animation: acm-fade-in 0.11s ease-out both;
+  animation: acm-fade-in 0.11s ease-out;
 }
 
 .web-chat-send-active {
