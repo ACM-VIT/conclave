@@ -85,6 +85,25 @@ struct STG5NoticePolicyTests {
         #expect(NoticeKind.bannerKinds.count == 18)
     }
 
+    @Test func closingOrDecliningTheNotificationsPromptBothRememberTheChoice() {
+        for actionId in ["close", NoticeAction.notNow] {
+            let stage = StagePresenter(shell: MeetingShellPresenter())
+            var remembered = 0
+            stage.dismissNotificationsPrime = { remembered += 1 }
+            stage.setNoticePlatform(NoticePlatform.android)
+            stage.applyNotices(StageNoticeInputs.make(callSession: 1, localUserId: "you", showsNotificationsPrime: true))
+            let shown = stage.banner
+            #expect(shown?.kind == NoticeKind.notificationsOff)
+            if actionId == "close" {
+                stage.dismissNotice(id: shown?.id ?? "")
+            } else {
+                stage.performNoticeAction(noticeId: shown?.id ?? "", actionId: actionId)
+            }
+            #expect(remembered == 1)
+            #expect(stage.banner?.kind != NoticeKind.notificationsOff)
+        }
+    }
+
     @Test func offlineMasksTheKnockAndOnHoldOutranksIt() {
         let center = MeetingNoticeCenter()
         _ = center.applyState(host(pending: ["w1"], isOffline: true), nowMillis: 0)

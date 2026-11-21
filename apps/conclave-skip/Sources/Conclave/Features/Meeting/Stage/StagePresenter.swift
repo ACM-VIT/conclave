@@ -60,6 +60,7 @@ final class StagePresenter {
     @ObservationIgnored var onWatchTogetherHiddenChanged: ((Bool) -> Void)? = nil
 
     @ObservationIgnored var onNoticeCommand: ((NoticeCommand) -> Void)? = nil
+    @ObservationIgnored var dismissNotificationsPrime: () -> Void = { SystemNotifications.shared.dismissPriming() }
 
     @ObservationIgnored weak var people: PeoplePresenter? = nil
 
@@ -889,10 +890,14 @@ final class StagePresenter {
 
     func dismissNotice(id: String) {
         let wasHostNotice = banner?.id == id && banner?.kind == NoticeKind.hostNotice
+        let wasNotificationsPrime = banner?.id == id && banner?.kind == NoticeKind.notificationsOff
         notices.dismiss(id: id, nowMillis: now())
         if wasHostNotice {
             onNoticeCommand?(NoticeCommand(actionId: NoticeCommand.dismissHostNotice, noticeKind: NoticeKind.hostNotice,
                                            userId: "", detail: ""))
+        }
+        if wasNotificationsPrime {
+            dismissNotificationsPrime()
         }
         publishNotices()
     }
@@ -942,8 +947,7 @@ final class StagePresenter {
         case NoticeAction.notNow:
             notices.dismiss(id: notice.id, nowMillis: now())
             if notice.kind == NoticeKind.notificationsOff {
-
-                SystemNotifications.shared.dismissPriming()
+                dismissNotificationsPrime()
             }
         case NoticeAction.expand:
             return
