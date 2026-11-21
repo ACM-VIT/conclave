@@ -29,13 +29,15 @@ export type AppsAuthorityRuntime = {
  * WebSocket reports the bytes still buffered below that.
  */
 export const socketPressure = (socket: Socket): SocketPressure => {
-  const connection = socket.conn as unknown as {
-    writeBuffer?: unknown[];
-    transport?: { socket?: { bufferedAmount?: unknown } };
-  };
-  const buffered = connection.transport?.socket?.bufferedAmount;
+  const connection = socket.conn as unknown as
+    | {
+        writeBuffer?: unknown[];
+        transport?: { socket?: { bufferedAmount?: unknown } };
+      }
+    | undefined;
+  const buffered = connection?.transport?.socket?.bufferedAmount;
   return {
-    packets: connection.writeBuffer?.length ?? 0,
+    packets: connection?.writeBuffer?.length ?? 0,
     bytes: typeof buffered === "number" ? buffered : 0,
   };
 };
