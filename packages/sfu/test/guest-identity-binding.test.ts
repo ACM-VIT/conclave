@@ -17,6 +17,7 @@ type Handler = (...args: never[]) => void | Promise<void>;
 
 const makeSocket = (id: string, user: SfuAuthPayload) => {
   const handlers = new Map<string, Handler>();
+  const leave = vi.fn();
   const socket = {
     id,
     data: { user },
@@ -25,10 +26,10 @@ const makeSocket = (id: string, user: SfuAuthPayload) => {
     disconnect: vi.fn(),
     connected: true,
     join: vi.fn(),
-    leave: vi.fn(),
+    leave,
     to: () => ({ emit: vi.fn() }),
   } as unknown as Socket;
-  return { socket, handlers };
+  return { socket, handlers, leave };
 };
 
 const makeState = (): SfuState => {
@@ -387,14 +388,14 @@ describe("guests on clients that predate guest passes", () => {
       const owner = { ...olderHost, guestProof: "proof-of-the-older-pass" };
       const host = await join(state, owner, "previous-room");
       let finishLeaving = () => {};
-      vi.mocked(host.peer.socket.leave).mockReturnValueOnce(
+      host.peer.leave.mockReturnValueOnce(
         new Promise<void>((resolve) => {
           finishLeaving = resolve;
         }),
       );
 
       const switching = switchRoom(host, owner, "room");
-      await vi.waitFor(() => expect(host.peer.socket.leave).toHaveBeenCalled());
+      await vi.waitFor(() => expect(host.peer.leave).toHaveBeenCalled());
       const attempt = await join(state, intruder);
       finishLeaving();
       const switched = await switching;
