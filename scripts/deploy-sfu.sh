@@ -1,7 +1,16 @@
 #!/usr/bin/env bash
+# Blue-green SFU deploy. Builds one image, then moves each instance onto it in
+# turn: drain, wait for its calls to end, recreate, run a real two-client
+# canary call against it, and put it back into service. A failed canary rolls
+# that instance back to the image it ran before, and the instances not yet
+# touched keep serving. Runbook: docs/ops/sfu-deploys.md.
+#
+# Exit codes: 0 deployed, 3 a meeting outlasted the drain deadline (rerun
+# later), 4 the canary failed and the instance was rolled back.
 set -euo pipefail
 
 DEPLOY_BROWSER_LOCAL="false"
+ROLLBACK="false"
 FORCE_DRAIN="false"
 PREFLIGHT_ONLY="false"
 PREFLIGHT_CONFIG_ONLY="false"
@@ -24,6 +33,9 @@ for arg in "$@"; do
     --preflight-config-only)
       PREFLIGHT_ONLY="true"
       PREFLIGHT_CONFIG_ONLY="true"
+      ;;
+    --rollback)
+      ROLLBACK="true"
       ;;
   esac
 done
@@ -262,9 +274,12 @@ if [[ "$PREFLIGHT_ONLY" == "true" ]]; then
   exit 0
 fi
 
-echo "Pulling latest code..."
-git -C "$ROOT_DIR" pull
-TARGET_COMMIT="$(git -C "$ROOT_DIR" rev-parse --short=12 HEAD)"
+if [[ "$ROLLBACK" == "true" ]]; then
+  echo "Rollback: the checkout stays at $(git -C "$ROOT_DIR" rev-parse --short=12 HEAD); no pull, no build."
+else
+  echo "Pulling latest code..."
+  git -C "$ROOT_DIR" pull
+fi
 
 # SFU dependencies are installed inside the Docker image; the host does not need them.
 
@@ -293,6 +308,37 @@ HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-120}"
 # Exit code when a meeting outlasts the drain deadline: nothing was rebuilt
 # under it, and rerunning the deploy later finishes the job.
 EXIT_BLOCKED_BY_ROOMS=3
+EXIT_CANARY_FAILED=4
+
+PROJECT="$(printf "%s" "$COMPOSE_JSON" | json_field name)"
+IMAGE_REPO="${PROJECT}-sfu"
+# The last two deploys whose canaries passed on every instance, so --rollback
+# can return to the one before the current release without a rebuild.
+DEPLOY_STATE_DIR="${SFU_DEPLOY_STATE_DIR:-${HOME}/.local/state/conclave-sfu-deploy}"
+DEPLOY_STATE_FILE="${DEPLOY_STATE_DIR}/${PROJECT}.env"
+LAST_GOOD_COMMIT=""
+LAST_GOOD_IMAGE=""
+PREVIOUS_GOOD_COMMIT=""
+PREVIOUS_GOOD_IMAGE=""
+if [[ -f "$DEPLOY_STATE_FILE" ]]; then
+  # shellcheck disable=SC1090
+  source "$DEPLOY_STATE_FILE"
+fi
+
+save_deploy_state() {
+  mkdir -p "$DEPLOY_STATE_DIR"
+  local tmp="${DEPLOY_STATE_FILE}.tmp"
+  printf 'LAST_GOOD_COMMIT=%q\nLAST_GOOD_IMAGE=%q\nPREVIOUS_GOOD_COMMIT=%q\nPREVIOUS_GOOD_IMAGE=%q\n' \
+    "$LAST_GOOD_COMMIT" "$LAST_GOOD_IMAGE" "$PREVIOUS_GOOD_COMMIT" "$PREVIOUS_GOOD_IMAGE" > "$tmp"
+  mv "$tmp" "$DEPLOY_STATE_FILE"
+  # The tags keep both images safe from docker image prune.
+  [[ -n "$LAST_GOOD_IMAGE" ]] && docker tag "$LAST_GOOD_IMAGE" "${IMAGE_REPO}:last-good"
+  if [[ -n "$PREVIOUS_GOOD_IMAGE" ]]; then
+    docker tag "$PREVIOUS_GOOD_IMAGE" "${IMAGE_REPO}:previous-good"
+  else
+    docker rmi "${IMAGE_REPO}:previous-good" >/dev/null 2>&1 || true
+  fi
+}
 
 service_url() {
   get_deploy_url "$1"
@@ -324,16 +370,20 @@ service_rooms() {
   fi
 }
 
-set_draining() {
-  local url="$1"
-  local payload="{\"draining\": $2}"
-  if [[ "$2" == "true" && "$FORCE_DRAIN" == "true" ]]; then
-    payload="{\"draining\": true, \"force\": true, \"noticeMs\": ${FORCE_DRAIN_NOTICE_MS}}"
-  fi
-  curl -fsS --connect-timeout 3 --max-time 10 -X POST "${url}/drain" \
+post_drain() {
+  curl -fsS --connect-timeout 3 --max-time 10 -X POST "${1}/drain" \
     -H "x-sfu-secret: ${SFU_SECRET}" \
     -H "content-type: application/json" \
-    -d "$payload"
+    -d "$2"
+}
+
+set_draining() {
+  local url="$1"
+  if [[ "$2" == "true" && "$FORCE_DRAIN" == "true" ]]; then
+    post_drain "$url" "{\"draining\": true, \"force\": true, \"noticeMs\": ${FORCE_DRAIN_NOTICE_MS}}"
+  else
+    post_drain "$url" "{\"draining\": $2}"
+  fi
 }
 
 # Waits for an instance to report zero rooms. Returns 1 at the deadline.
@@ -372,16 +422,48 @@ wait_for_healthy() {
   done
 }
 
+# Two clients join a room on the instance, publish audio and must hear each
+# other through it. The canary ships inside the image under test.
+run_canary() {
+  echo "Running the canary call against ${1}..."
+  docker run --rm --network host -e SFU_SECRET --entrypoint node "$TARGET_IMAGE" \
+    --import tsx scripts/canary-call.ts --url "$2"
+}
+
+# Puts an instance back on the image it ran before this deploy. With no
+# previous image there is nothing known-good to return to, so it is stopped
+# rather than left serving a build that failed its canary.
+rollback_service() {
+  local svc="$1" url="$2" image_name="$3" previous_image="$4"
+  if [[ -z "$previous_image" ]]; then
+    "${COMPOSE[@]}" stop "$svc"
+    echo "${svc} had no previous image; it is stopped." >&2
+    return
+  fi
+  echo "Rolling ${svc} back to its previous image..." >&2
+  docker tag "$previous_image" "$image_name"
+  "${COMPOSE[@]}" up -d --no-build --no-deps --force-recreate "$svc"
+  if wait_for_healthy "$url"; then
+    echo "${svc} is serving on its previous image again." >&2
+  else
+    echo "WARNING: ${svc} did not report healthy after the rollback; check it now." >&2
+  fi
+}
+
 # Moves one instance onto TARGET_IMAGE without cutting a call: drain it, wait
 # for its rooms to finish (or give up at the deadline and put it back), and
-# only then recreate it.
+# only then recreate it. The new container is drained again as soon as it
+# answers and joins the pool only after its canary call passes.
 deploy_service() {
   local svc="$1"
-  local url image_name container status
+  local url image_name container status previous_image=""
   url="$(service_url "$svc")"
   image_name="$(service_image_name "$svc")"
   container="$(service_container "$svc")"
   status="$(status_json "$url")"
+  if [[ -n "$container" ]]; then
+    previous_image="$(docker inspect -f '{{.Image}}' "$container")"
+  fi
 
   if [[ -n "$container" && -n "$status" ]] &&
      [[ "$(docker inspect -f '{{.Image}}' "$container")" == "$TARGET_IMAGE" ]] &&
@@ -406,7 +488,7 @@ deploy_service() {
         set_draining "$url" false >/dev/null || true
       fi
       echo "" >&2
-      echo "Deploy paused: ${svc} still hosts a meeting after ${DRAIN_TIMEOUT_SECONDS}s." >&2
+      echo "Deploy paused: ${svc} did not drain within ${DRAIN_TIMEOUT_SECONDS}s; a meeting is still running on it." >&2
       echo "${svc} was not rebuilt and keeps serving its calls. Rerun this script once the meeting ends." >&2
       return "$EXIT_BLOCKED_BY_ROOMS"
     fi
@@ -414,13 +496,31 @@ deploy_service() {
     echo "${svc} is not reachable; rebuilding it without a drain."
   fi
 
+  if [[ -n "$previous_image" ]]; then
+    docker tag "$previous_image" "${IMAGE_REPO}:rollback-${svc}"
+  fi
   echo "Starting ${svc} on ${TARGET_COMMIT}..."
   docker tag "$TARGET_IMAGE" "$image_name"
   "${COMPOSE[@]}" up -d --no-build --no-deps --force-recreate "$svc"
+  local failure=""
   if ! wait_for_healthy "$url"; then
-    echo "${svc} did not report healthy within ${HEALTH_TIMEOUT_SECONDS}s." >&2
-    return 1
+    failure="${svc} did not report healthy within ${HEALTH_TIMEOUT_SECONDS}s"
+  elif ! post_drain "$url" '{"draining": true}' >/dev/null; then
+    failure="could not hold ${svc} out of rotation for its canary"
+  elif ! run_canary "$svc" "$url"; then
+    failure="the canary call against ${svc} failed"
+  elif ! post_drain "$url" '{"draining": false}' >/dev/null; then
+    failure="could not put ${svc} back into rotation after its canary"
   fi
+  if [[ -n "$failure" ]]; then
+    echo "" >&2
+    echo "Deploy stopped: ${failure}." >&2
+    rollback_service "$svc" "$url" "$image_name" "$previous_image"
+    echo "Instances not yet deployed were left untouched and keep serving." >&2
+    return "$EXIT_CANARY_FAILED"
+  fi
+  CANARIES_PASSED=$((CANARIES_PASSED + 1))
+  echo "${svc} passed its canary on ${TARGET_COMMIT} and is serving."
   validate_public_route "$svc" "$(service_public_url "$svc")"
 }
 
@@ -431,13 +531,42 @@ while read -r _rooms svc; do
 done < <(for svc in "${SERVICES[@]}"; do echo "$(service_rooms "$svc") $svc"; done | sort -n -k1,1 -k2,2)
 echo "Deploy order: ${ORDERED_SERVICES[*]}"
 
-echo "Building the SFU image for ${TARGET_COMMIT}..."
-"${COMPOSE[@]}" build "${ORDERED_SERVICES[0]}"
-TARGET_IMAGE="$(docker image inspect -f '{{.Id}}' "$(service_image_name "${ORDERED_SERVICES[0]}")")"
+if [[ "$ROLLBACK" == "true" ]]; then
+  if [[ -z "$PREVIOUS_GOOD_IMAGE" ]] || ! docker image inspect "$PREVIOUS_GOOD_IMAGE" >/dev/null 2>&1; then
+    echo "No earlier canary-verified image is recorded in ${DEPLOY_STATE_FILE}; revert the commit and deploy instead." >&2
+    exit 1
+  fi
+  TARGET_IMAGE="$PREVIOUS_GOOD_IMAGE"
+  TARGET_COMMIT="$PREVIOUS_GOOD_COMMIT"
+  echo "Rolling every instance back to ${TARGET_COMMIT}."
+else
+  TARGET_COMMIT="$(git -C "$ROOT_DIR" rev-parse --short=12 HEAD)"
+  echo "Building the SFU image for ${TARGET_COMMIT}..."
+  "${COMPOSE[@]}" build "${ORDERED_SERVICES[0]}"
+  TARGET_IMAGE="$(docker image inspect -f '{{.Id}}' "$(service_image_name "${ORDERED_SERVICES[0]}")")"
+  docker tag "$TARGET_IMAGE" "${IMAGE_REPO}:${TARGET_COMMIT}"
+fi
 
+CANARIES_PASSED=0
 for svc in "${ORDERED_SERVICES[@]}"; do
   deploy_service "$svc"
 done
+
+if [[ "$ROLLBACK" == "true" ]]; then
+  # One step back only: a second --rollback has nothing older to go to.
+  LAST_GOOD_COMMIT="$TARGET_COMMIT"
+  LAST_GOOD_IMAGE="$TARGET_IMAGE"
+  PREVIOUS_GOOD_COMMIT=""
+  PREVIOUS_GOOD_IMAGE=""
+  save_deploy_state
+elif [[ "$TARGET_IMAGE" != "$LAST_GOOD_IMAGE" ]] && (( CANARIES_PASSED > 0 )); then
+  PREVIOUS_GOOD_COMMIT="$LAST_GOOD_COMMIT"
+  PREVIOUS_GOOD_IMAGE="$LAST_GOOD_IMAGE"
+  LAST_GOOD_COMMIT="$TARGET_COMMIT"
+  LAST_GOOD_IMAGE="$TARGET_IMAGE"
+  save_deploy_state
+fi
+echo "Last good release: ${LAST_GOOD_COMMIT}${PREVIOUS_GOOD_COMMIT:+ (--rollback returns to ${PREVIOUS_GOOD_COMMIT})}."
 
 if [[ "$DEPLOY_BROWSER_LOCAL" == "true" ]]; then
   echo ""
