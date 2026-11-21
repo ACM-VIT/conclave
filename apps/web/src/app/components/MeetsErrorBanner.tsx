@@ -20,7 +20,7 @@ export default function MeetsErrorBanner({
 }: MeetsErrorBannerProps) {
   const isGuestBlockedError =
     meetError.message === "Guests are not allowed in this meeting.";
-  const isRoomNotFoundError = meetError.message === "No room found.";
+  const isRoomNotFoundError = meetError.code === "ROOM_NOT_FOUND";
   const helperText = isGuestBlockedError
     ? "This room only allows signed-in users. Sign in to join."
     : isRoomNotFoundError

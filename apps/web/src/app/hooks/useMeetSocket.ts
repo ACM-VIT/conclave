@@ -867,6 +867,7 @@ interface UseMeetSocketOptions {
       user?: { id?: string; email?: string | null; name?: string | null };
       isHost?: boolean;
       joinMode?: JoinMode;
+      allowRoomCreation?: boolean;
     },
   ) => Promise<JoinInfo>;
   joinMode?: JoinMode;
@@ -6996,6 +6997,10 @@ export function useMeetSocket({
                     user,
                     isHost: isAdmin,
                     joinMode,
+                    // A tab that was in this room may open it again, so a
+                    // reconnect survives the room closing under it.
+                    allowRoomCreation:
+                      currentRoomIdRef.current === roomIdForJoin,
                   });
 
             const [{ token, sfuUrl, iceServers }, { io }] = await Promise.all([
@@ -9394,7 +9399,12 @@ export function useMeetSocket({
           joinGeneration !== reconnectGenerationRef.current ||
           intentionalDisconnectRef.current
         ) return;
-        console.error("[Meets] Error joining room:", err);
+        const joinError = createMeetError(err);
+        if (joinError.code === "ROOM_NOT_FOUND") {
+          console.info("[Meets] No room at this code:", targetRoomId);
+        } else {
+          console.error("[Meets] Error joining room:", err);
+        }
         telemetry.capture("meet_join_failure", {
           roomId: targetRoomId,
           joinMode,
@@ -9405,7 +9415,7 @@ export function useMeetSocket({
           stream.getTracks().forEach((track) => stopLocalTrack(track));
           setLocalStream(null);
         }
-        setMeetError(createMeetError(err));
+        setMeetError(joinError);
         setConnectionState("error");
       }
     },

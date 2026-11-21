@@ -141,12 +141,19 @@ export function extractRoomCode(input: string): string {
   return sanitizeRoomCode(trimmed);
 }
 
+// The SFU's reply when a join asks for a room that does not exist and may
+// not create it.
+const ROOM_NOT_FOUND_MESSAGE = "No room found.";
+
 export function createMeetError(
   error: unknown,
   defaultCode: MeetError["code"] = "UNKNOWN"
 ): MeetError {
   const message = error instanceof Error ? error.message : String(error);
 
+  if (message === ROOM_NOT_FOUND_MESSAGE) {
+    return { code: "ROOM_NOT_FOUND", message, recoverable: true };
+  }
   if (
     message.includes("Permission denied") ||
     message.includes("NotAllowedError")

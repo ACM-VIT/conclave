@@ -119,6 +119,7 @@ async function MeetRoomContent({ params, searchParams }: MeetRoomPageProps) {
     : undefined;
   const sfuClientId = sanitizeClientId(resolvedSearchParams.clientId);
   let resolvedSfuClientId = sfuClientId;
+  let isScheduledMeeting = false;
   const user = displayName ? { name: displayName } : undefined;
   const isAdmin =
     devOverridesEnabled && isTruthyParam(resolvedSearchParams.admin);
@@ -131,6 +132,7 @@ async function MeetRoomContent({ params, searchParams }: MeetRoomPageProps) {
     const scheduled = scheduledCandidate?.meeting ?? null;
     if (scheduledCandidate) {
       resolvedSfuClientId = scheduledCandidate.clientId;
+      isScheduledMeeting = true;
     }
     if (scheduledCandidate && scheduled && !isMeetingJoinable(scheduled)) {
       const scheduledClientId = scheduledCandidate.clientId;
@@ -158,6 +160,7 @@ async function MeetRoomContent({ params, searchParams }: MeetRoomPageProps) {
     <MeetsClientShell
       initialRoomId={sanitizedRoomCode}
       forceJoinOnly={true}
+      allowRoomCreation={isScheduledMeeting}
       bypassMediaPermissions={bypassMediaPermissions}
       sfuClientId={resolvedSfuClientId}
       autoJoinOnMount={autoJoinOnMount}

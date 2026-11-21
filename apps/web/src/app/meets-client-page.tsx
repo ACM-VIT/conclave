@@ -50,6 +50,9 @@ const fetchJoinInfoWithTimeout = async (
 type MeetsClientPageProps = {
   initialRoomId?: string;
   forceJoinOnly?: boolean;
+  // A join may open the room when the code is known to be real (a scheduled
+  // meeting). Otherwise only hosts and rejoins create rooms.
+  allowRoomCreation?: boolean;
   bypassMediaPermissions?: boolean;
   sfuClientId?: string;
   joinMode?: JoinMode;
@@ -67,6 +70,7 @@ type MeetsClientPageProps = {
 export default function MeetsClientPage({
   initialRoomId,
   forceJoinOnly = false,
+  allowRoomCreation = false,
   bypassMediaPermissions = false,
   sfuClientId,
   joinMode = "meeting",
@@ -90,6 +94,7 @@ export default function MeetsClientPage({
         user?: { id?: string; email?: string | null; name?: string | null };
         isHost?: boolean;
         joinMode?: JoinMode;
+        allowRoomCreation?: boolean;
       }
     ) => {
       const resolvedUser = options?.user ?? defaultUser;
@@ -106,7 +111,8 @@ export default function MeetsClientPage({
           sessionId,
           user: resolvedUser,
           isHost,
-          allowRoomCreation: forceJoinOnly,
+          allowRoomCreation:
+            allowRoomCreation || Boolean(options?.allowRoomCreation),
           clientId: resolvedClientId,
           joinMode: resolvedJoinMode,
         }),
@@ -126,7 +132,7 @@ export default function MeetsClientPage({
         iceServers?: RTCIceServer[];
       };
     },
-    [forceJoinOnly, joinMode, defaultUser, resolvedClientId]
+    [allowRoomCreation, joinMode, defaultUser, resolvedClientId]
   );
 
   const getRooms = useCallback(async () => {

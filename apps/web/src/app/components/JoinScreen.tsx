@@ -292,6 +292,7 @@ function JoinScreen({
   isAdmin,
   user,
   userEmail,
+  connectionState,
   forceJoinOnly,
   enableRoomRouting,
   showPermissionHint,
@@ -780,6 +781,26 @@ function JoinScreen({
       });
     };
   }, []);
+
+  // A failed join stops the tracks handed to the meeting. Back on setup, show
+  // those devices as off instead of a frozen preview with the toggles on.
+  useEffect(() => {
+    if (connectionState !== "error") return;
+    const tracks = localStreamRef.current?.getTracks() ?? [];
+    const liveTracks = tracks.filter((track) => track.readyState === "live");
+    if (liveTracks.length === tracks.length) return;
+    commitLocalPreviewStream(
+      liveTracks.length > 0 ? new MediaStream(liveTracks) : null,
+    );
+    if (!liveTracks.some((track) => track.kind === "video")) {
+      cameraIntentRef.current = false;
+      setIsCameraOn(false);
+    }
+    if (!liveTracks.some((track) => track.kind === "audio")) {
+      micIntentRef.current = false;
+      setIsMicOn(false);
+    }
+  }, [connectionState]);
 
   const commitPrejoinMedia = () => {
     if (!onPrejoinMediaCommit) return;

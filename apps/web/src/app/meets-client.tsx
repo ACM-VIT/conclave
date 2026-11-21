@@ -383,6 +383,7 @@ export type MeetsClientProps = {
       user?: { id?: string; email?: string | null; name?: string | null };
       isHost?: boolean;
       joinMode?: JoinMode;
+      allowRoomCreation?: boolean;
     },
   ) => Promise<{
     token: string;
@@ -2617,10 +2618,21 @@ export default function MeetsClient({
     socket.cleanup,
   ]);
 
-  const startNewMeeting = useCallback((keepAudioOnly: boolean) => {
-    const targetRoomId = generateRoomCode();
+  const startNewMeeting = useCallback((
+    keepAudioOnly: boolean,
+    targetRoomId: string = generateRoomCode(),
+  ) => {
+    // A join that never landed still owes the visitor the camera and mic
+    // they picked on setup; cleanup would otherwise forget that choice. The
+    // mute and camera state must agree with it, as on the first handoff.
+    const pendingMediaIntent = refs.prejoinMediaIntentRef.current;
     handleStopVoiceAgent();
     socket.cleanup();
+    if (pendingMediaIntent) {
+      refs.prejoinMediaIntentRef.current = pendingMediaIntent;
+      setIsMuted(!pendingMediaIntent.isMicOn);
+      setIsCameraOff(!pendingMediaIntent.isCameraOn);
+    }
     if (!keepAudioOnly) {
       setViewSettings((settings) => ({ ...settings, audioOnlyMode: false }));
     }
@@ -2632,6 +2644,9 @@ export default function MeetsClient({
     setPendingNewMeetingRoomId(targetRoomId);
   }, [
     handleStopVoiceAgent,
+    refs.prejoinMediaIntentRef,
+    setIsCameraOff,
+    setIsMuted,
     setMeetError,
     setRoomId,
     setWaitingMessage,
@@ -3026,6 +3041,15 @@ export default function MeetsClient({
     setMeetError,
   ]);
 
+  // "Check your meeting code": the visitor chose to open the room at the code
+  // they followed, and becomes its host.
+  const handleStartMeetingAtCode = useCallback(() => {
+    if (!roomId) return;
+    setEnterErrored(false);
+    setEnterAction("new");
+    startNewMeeting(true, roomId);
+  }, [roomId, startNewMeeting]);
+
   const handleEnterDismiss = useCallback(() => {
     setEnterAction(null);
     setEnterErrored(false);
@@ -3068,6 +3092,7 @@ export default function MeetsClient({
 
   if (!mounted) return null;
 
+  const isRoomNotFound = enterErrored && meetError?.code === "ROOM_NOT_FOUND";
   const isLoading =
     connectionState === "connecting" ||
     connectionState === "joining" ||
@@ -3120,8 +3145,17 @@ export default function MeetsClient({
               })
             : null
         }
+        roomId={roomId}
+        dismissLabel={
+          isRoomNotFound && forceJoinOnly
+            ? "Return to home screen"
+            : "Back to setup"
+        }
         onRetry={handleEnterRetry}
-        onDismiss={handleEnterDismiss}
+        onDismiss={
+          isRoomNotFound && forceJoinOnly ? handleGoHome : handleEnterDismiss
+        }
+        onStartNewMeeting={isRoomNotFound ? handleStartMeetingAtCode : undefined}
       />
     </>
   );
