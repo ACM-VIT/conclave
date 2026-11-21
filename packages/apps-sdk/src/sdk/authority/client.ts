@@ -31,11 +31,13 @@ import {
   type SubscribeRequest,
 } from "#authority/wire";
 
+type SocketListener = (...args: unknown[]) => void;
+
 /** The part of a socket.io client socket this needs. */
 export type AuthoritySocket = {
   readonly connected: boolean;
-  on(event: string, listener: (...args: never[]) => void): unknown;
-  off(event: string, listener: (...args: never[]) => void): unknown;
+  on(event: string, listener: SocketListener): unknown;
+  off(event: string, listener: SocketListener): unknown;
   emit(event: string, ...args: unknown[]): unknown;
 };
 
@@ -241,11 +243,11 @@ export class AuthorityClient {
         settled = true;
         resolve(LOST);
       }, this.ackTimeoutMs);
-      this.socket.emit(event, payload, (reply: Reply) => {
+      this.socket.emit(event, payload, (reply: unknown) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
-        resolve(reply);
+        resolve(reply as Reply);
       });
     });
   }
@@ -267,23 +269,32 @@ export class AuthorityClient {
 
   /* ---- Socket events ----------------------------------------------------- */
 
-  private readonly onFrame = (frame: AuthorityFrame): void => {
+  private readonly onFrame: SocketListener = (frame) => {
+    if (!isFrame(frame)) return;
     for (const session of this.sessions.values()) session.receive(frame);
   };
 
-  private readonly onCapabilitiesChanged = (
-    capability: AuthorityCapability,
-  ): void => {
-    if (capability?.protocol !== AUTHORITY_PROTOCOL) return;
+  private readonly onCapabilitiesChanged: SocketListener = (payload) => {
+    const capability = payload as Partial<AuthorityCapability> | null;
+    if (
+      capability?.protocol !== AUTHORITY_PROTOCOL ||
+      typeof capability.roomEpoch !== "string" ||
+      !Array.isArray(capability.apps)
+    ) {
+      return;
+    }
     this.negotiation += 1;
-    this.setCapabilities({ kind: "ready", capability });
+    this.setCapabilities({
+      kind: "ready",
+      capability: capability as AuthorityCapability,
+    });
   };
 
-  private readonly onConnect = (): void => {
+  private readonly onConnect: SocketListener = () => {
     this.joined();
   };
 
-  private readonly onDisconnect = (): void => {
+  private readonly onDisconnect: SocketListener = () => {
     this.negotiation += 1;
     this.clearRetry();
     this.setCapabilities({ kind: "unknown" });
@@ -410,7 +421,11 @@ export class AuthoritySession<C extends AuthorityContract> {
         if (reply.code === "stale-epoch" || reply.code === "not-in-room") {
           this.client.refresh();
         }
-        await pause(RETRY_PAUSE_MS);
+        // The replacement view usually arrives ahead of this refusal. When
+        // it has, send again at once under the new generation.
+        const replaced =
+          this.state.kind === "ready" && this.generation !== request.generation;
+        if (!replaced) await pause(RETRY_PAUSE_MS);
         continue;
       }
       return reply as AuthorityResult<ActionReceipt<C, K>>;
@@ -707,6 +722,25 @@ export class AuthoritySession<C extends AuthorityContract> {
 }
 
 const EMPTY_BUCKET: ReadonlyMap<string, Json> = new Map();
+
+const FRAME_KINDS: ReadonlySet<unknown> = new Set([
+  "replace",
+  "patch",
+  "revoke",
+  "query",
+  "queryAbort",
+]);
+
+/** Enough of a shape check to route a frame. The server is the authority. */
+const isFrame = (value: unknown): value is AuthorityFrame => {
+  if (value === null || typeof value !== "object") return false;
+  const frame = value as Partial<AuthorityFrame>;
+  return (
+    typeof frame.subscription === "string" &&
+    typeof frame.generation === "number" &&
+    FRAME_KINDS.has(frame.kind)
+  );
+};
 
 const pause = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));

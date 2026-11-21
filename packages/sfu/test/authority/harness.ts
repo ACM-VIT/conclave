@@ -31,7 +31,7 @@ import { registerAuthorityHandlers } from "../../server/socket/handlers/authorit
 import { createSfuState, type SfuState } from "../../server/state.js";
 import { getOrCreateWebinarRoomConfig } from "../../server/webinar.js";
 
-type Listener = (...args: never[]) => void;
+type Listener = (...args: unknown[]) => void;
 
 /** What crosses a socket is JSON, so both directions are copied through it. */
 const overWire = <T>(value: T): T =>
@@ -62,7 +62,7 @@ const makeSocketPair = (id: string, onServerEmit: (event: string, payload: unkno
   const clientListeners = new Map<string, Set<Listener>>();
   const call = (listeners: Iterable<Listener> | undefined, ...args: unknown[]) => {
     for (const listener of [...(listeners ?? [])]) {
-      (listener as (...values: unknown[]) => void)(...args);
+      (listener)(...args);
     }
   };
 
@@ -250,11 +250,17 @@ export class Harness {
         ...options.runtime,
       }),
     });
+    const router = {
+      closed: false,
+      close: () => {
+        router.closed = true;
+      },
+    };
     this.room = new Room({
       id: options.roomId ?? "room",
       clientId: "conclave",
       workerPid: null,
-      router: {} as Router,
+      router: router as unknown as Router,
     });
     this.state.rooms.set(this.room.channelId, this.room);
   }
@@ -319,14 +325,21 @@ export class Harness {
     return tab;
   }
 
-  /** Resolves a promise that needs timers or microtasks to run. */
+  /**
+   * Resolves a promise that needs timers or microtasks to run. Turns the
+   * event loop without moving the clock first, then in small steps, so a
+   * retry pause inside the client does not stall the test.
+   */
   async settle<T>(promise: Promise<T>): Promise<T> {
     let done = false;
     const tracked = promise.finally(() => {
       done = true;
     });
-    for (let turn = 0; turn < 50 && !done; turn += 1) {
+    for (let turn = 0; turn < 40 && !done; turn += 1) {
       await vi.advanceTimersByTimeAsync(0);
+    }
+    for (let turn = 0; turn < 100 && !done; turn += 1) {
+      await vi.advanceTimersByTimeAsync(100);
     }
     return tracked;
   }
@@ -334,6 +347,17 @@ export class Harness {
   /** Lets pending microtasks and zero-delay timers run. */
   async idle(): Promise<void> {
     await vi.advanceTimersByTimeAsync(0);
+  }
+
+  /**
+   * Runs chains of zero-delay work, such as a snapshot sent in parts. Fake
+   * timers give a timer scheduled from inside another a 1 ms delay, so each
+   * turn moves the clock by that much.
+   */
+  async drain(): Promise<void> {
+    for (let turn = 0; turn < 40; turn += 1) {
+      await vi.advanceTimersByTimeAsync(1);
+    }
   }
 
   /** Flushes view changes now and returns the frames that went out. */
