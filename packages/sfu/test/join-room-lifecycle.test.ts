@@ -70,6 +70,52 @@ const join = async (
   return { context, peer, ack };
 };
 
+describe("host roster on join", () => {
+  it("sends an unchanged roster to the guest and broadcasts a new co-host", async () => {
+    const state = makeState();
+    const room = new Room({
+      id: "room",
+      clientId: "conclave",
+      workerPid: null,
+      router: {} as Router,
+    });
+    state.rooms.set(room.channelId, room);
+    const host = new Admin({ id: "host#h", socket: makeSocket("host-socket").socket });
+    room.setUserIdentity(host.id, "host", "Host");
+    room.hostUserKey = "host";
+    room.addClient(host);
+    broadcast.mockClear();
+
+    const guest = await join(state, "guest-socket", {
+      userId: "guest-bob",
+      clientId: "conclave",
+      sessionId: "guest",
+    });
+    expect(guest.peer.socket.emit).toHaveBeenCalledWith("hostChanged", {
+      roomId: room.id,
+      hostUserId: host.id,
+    });
+    expect(guest.peer.socket.emit).toHaveBeenCalledWith("adminUsersChanged", {
+      roomId: room.id,
+      hostUserIds: [host.id],
+    });
+    expect(broadcast).not.toHaveBeenCalledWith("hostChanged", expect.anything());
+    expect(broadcast).not.toHaveBeenCalledWith("adminUsersChanged", expect.anything());
+
+    await join(state, "cohost-socket", {
+      userId: "carol",
+      clientId: "conclave",
+      sessionId: "cohost",
+      isForcedHost: true,
+    });
+    expect(broadcast).not.toHaveBeenCalledWith("hostChanged", expect.anything());
+    expect(broadcast).toHaveBeenCalledWith("adminUsersChanged", {
+      roomId: room.id,
+      hostUserIds: [host.id, "carol#cohost"],
+    });
+  });
+});
+
 describe("reconnect grace timer", () => {
   const guest = {
     userId: "guest-abc",

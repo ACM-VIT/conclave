@@ -726,6 +726,14 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           return;
         }
 
+        const mayChangeRoster = isAdminJoin ||
+          existingClient instanceof Admin ||
+          staleSameIdentitySeats.some(({ userId: staleUserId }) =>
+            room.getClient(staleUserId) instanceof Admin,
+          );
+        const previousHostUserId = mayChangeRoster ? room.getHostUserId() : null;
+        const previousAdminUserIds = mayChangeRoster ? room.getAdminUserIds() : [];
+
         room.clearPendingDisconnect(userId);
 
         for (const { userId: staleUserId } of staleSameIdentitySeats) {
@@ -830,13 +838,21 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
 
         await socket.join(roomChannelId);
 
-        io.to(roomChannelId).emit("hostChanged", {
-          roomId: context.currentRoom.id,
-          hostUserId: context.currentRoom.getHostUserId(),
+        const hostUserId = room.getHostUserId();
+        const hostUserIds = room.getAdminUserIds();
+        const hasPeers = room.clients.size > 1;
+        const hostChanged = mayChangeRoster && hostUserId !== previousHostUserId;
+        const adminsChanged = mayChangeRoster && (
+          hostUserIds.length !== previousAdminUserIds.length ||
+          previousAdminUserIds.some((id) => !hostUserIds.includes(id))
+        );
+        (hasPeers && hostChanged ? io.to(roomChannelId) : socket).emit("hostChanged", {
+          roomId,
+          hostUserId,
         });
-        io.to(roomChannelId).emit("adminUsersChanged", {
-          roomId: context.currentRoom.id,
-          hostUserIds: context.currentRoom.getAdminUserIds(),
+        (hasPeers && adminsChanged ? io.to(roomChannelId) : socket).emit("adminUsersChanged", {
+          roomId,
+          hostUserIds,
         });
 
         if (context.currentClient instanceof Admin && !context.currentClient.isObserver) {
@@ -1057,8 +1073,8 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             : {}),
           displayNameSnapshot,
           status: "joined",
-          hostUserId: context.currentRoom.getHostUserId(),
-          hostUserIds: context.currentRoom.getAdminUserIds(),
+          hostUserId,
+          hostUserIds,
           isLocked: context.currentRoom.isLocked,
           isTtsDisabled: context.currentRoom.isTtsDisabled,
           isChatLocked: context.currentRoom.isChatLocked,
