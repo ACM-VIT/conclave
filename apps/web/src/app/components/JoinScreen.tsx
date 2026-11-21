@@ -43,7 +43,9 @@ import {
   sanitizeRoomCode,
 } from "../lib/utils";
 import RoomPresenceBadge from "./RoomPresenceBadge";
-import { useCameraPermissionState } from "../hooks/useCameraPermissionState";
+import BlockedMediaDialog from "./BlockedMediaDialog";
+import { useMediaPermissionState } from "../hooks/useMediaPermissionState";
+import { isCaptureBlocked, type BlockedDevice } from "../lib/blocked-media";
 import {
   useBandwidthHeavyPreloadDeferred,
 } from "../hooks/useBandwidthHeavyPreloadDeferred";
@@ -176,6 +178,7 @@ const CTA_PRIMARY =
 const CTA_GHOST =
   "inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] text-[15px] font-medium text-[#fafafa] transition-colors duration-150 hover:bg-white/[0.08] disabled:opacity-50";
 const DEBUG_VIDEO_EFFECTS_STORAGE_KEY = "conclave:debug-video-effects";
+const BLOCKED_DEVICE_ORDER: readonly BlockedDevice[] = ["camera", "microphone"];
 
 const getSignInHref = (): string => {
   if (typeof window === "undefined") return "/sign-in";
@@ -389,7 +392,31 @@ function JoinScreen({
     ? videoEffectsBridgeState.debugStats
     : null;
   const previewStream = processedPreviewStream ?? localStream;
-  const cameraPermissionState = useCameraPermissionState();
+  const cameraPermissionState = useMediaPermissionState("camera");
+  const microphonePermissionState = useMediaPermissionState("microphone");
+  // Devices the browser or OS blocks. While any is listed, a dialog explains
+  // how to unblock it.
+  const [blockedDevices, setBlockedDevices] = useState<BlockedDevice[]>([]);
+  const [isRetryingBlocked, setIsRetryingBlocked] = useState(false);
+  const markDeviceAvailable = (device: BlockedDevice) => {
+    setBlockedDevices((current) =>
+      current.includes(device)
+        ? current.filter((candidate) => candidate !== device)
+        : current,
+    );
+  };
+  const reportCaptureFailure = (device: BlockedDevice, error: unknown) => {
+    void isCaptureBlocked(device, error).then((blocked) => {
+      if (!blocked) return;
+      setBlockedDevices((current) =>
+        current.includes(device)
+          ? current
+          : BLOCKED_DEVICE_ORDER.filter(
+              (candidate) => candidate === device || current.includes(candidate),
+            ),
+      );
+    });
+  };
   const hasLivePreviewCamera = Boolean(
     localStream
       ?.getVideoTracks()
@@ -604,6 +631,8 @@ function JoinScreen({
         "get_user_media_full_done",
         requestGeneration,
       );
+      markDeviceAvailable("microphone");
+      if (wantsVideo) markDeviceAvailable("camera");
     } catch (err) {
       warnJoinMedia("get_user_media_full_failed", {
         error:
@@ -637,7 +666,9 @@ function JoinScreen({
 
       if (audioResult.status === "fulfilled") {
         fallbackTracks.push(...audioResult.value.getAudioTracks());
+        markDeviceAvailable("microphone");
       } else {
+        reportCaptureFailure("microphone", audioResult.reason);
         warnJoinMedia("get_user_media_audio_fallback_failed", {
           error:
             audioResult.reason instanceof Error
@@ -650,7 +681,9 @@ function JoinScreen({
       }
       if (videoResult.status === "fulfilled") {
         fallbackTracks.push(...videoResult.value.getVideoTracks());
+        if (wantsVideo) markDeviceAvailable("camera");
       } else {
+        reportCaptureFailure("camera", videoResult.reason);
         warnJoinMedia("get_user_media_video_fallback_failed", {
           error:
             videoResult.reason instanceof Error
@@ -949,6 +982,7 @@ function JoinScreen({
         }
         cameraIntentRef.current = true;
         setIsCameraOn(true);
+        markDeviceAvailable("camera");
         prewarmLiveCameraEffects("prejoin-camera-toggle-live");
         logJoinMedia("toggle_camera_on_done", {
           track: getJoinTrackDebugSnapshot(videoTrack),
@@ -961,6 +995,7 @@ function JoinScreen({
               : err,
         });
         cameraIntentRef.current = false;
+        reportCaptureFailure("camera", err);
       }
     } finally {
       toggleCameraInFlightRef.current = false;
@@ -1051,6 +1086,7 @@ function JoinScreen({
       }
       micIntentRef.current = true;
       setIsMicOn(true);
+      markDeviceAvailable("microphone");
       logJoinMedia("toggle_mic_on_done", {
         track: getJoinTrackDebugSnapshot(audioTrack),
       });
@@ -1062,6 +1098,7 @@ function JoinScreen({
             : err,
       });
       micIntentRef.current = false;
+      reportCaptureFailure("microphone", err);
     } finally {
       toggleMicInFlightRef.current = false;
     }
@@ -1112,6 +1149,32 @@ function JoinScreen({
     onIsAdminChange(false);
     setPending({ mode: "join", roomId: candidate });
   };
+
+  const retryBlockedDevices = async () => {
+    if (isRetryingBlocked) return;
+    setIsRetryingBlocked(true);
+    try {
+      if (blockedDevices.includes("microphone") && !isMicOn) await toggleMic();
+      if (blockedDevices.includes("camera") && !isCameraOn && !isAudioOnly) {
+        await toggleCamera();
+      }
+    } finally {
+      setIsRetryingBlocked(false);
+    }
+  };
+  // Flipping the permission in the browser's site settings fires a change;
+  // try again then, so the dialog closes on its own.
+  const blockedPermissionStates: Record<BlockedDevice, string> = {
+    camera: cameraPermissionState,
+    microphone: microphonePermissionState,
+  };
+  const allBlockedNowGranted = blockedDevices.every(
+    (device) => blockedPermissionStates[device] === "granted",
+  );
+  useEffect(() => {
+    if (!allBlockedNowGranted || blockedDevices.length === 0) return;
+    void retryBlockedDevices();
+  }, [allBlockedNowGranted]);
 
   const handleSignOut = async () => {
     if (isSigningOut) return;
@@ -1624,6 +1687,14 @@ function JoinScreen({
           effects={videoEffects}
           processedVideoTrackRef={processedPreviewTrackRef}
           onStateChange={setVideoEffectsBridgeState}
+        />
+      ) : null}
+      {blockedDevices.length > 0 ? (
+        <BlockedMediaDialog
+          devices={blockedDevices}
+          isRetrying={isRetryingBlocked}
+          onRetry={() => void retryBlockedDevices()}
+          onClose={() => setBlockedDevices([])}
         />
       ) : null}
       {isEffectsOpen && (

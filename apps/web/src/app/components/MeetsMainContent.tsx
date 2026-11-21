@@ -98,7 +98,7 @@ import {
   GAME_DOCK_MAX_WIDTH,
   GAME_DOCK_MIN_WIDTH,
 } from "./games/gameUi";
-import { useCameraPermissionState } from "../hooks/useCameraPermissionState";
+import { useMediaPermissionState } from "../hooks/useMediaPermissionState";
 import { useStableSpeakerId } from "../hooks/useStableSpeakerId";
 import {
   type VideoEffectsState,
@@ -803,7 +803,7 @@ export default function MeetsMainContent({
     useState<MediaStream | null>(null);
   const [devCameraStream, setDevCameraStream] =
     useState<MediaStream | null>(null);
-  const cameraPermissionState = useCameraPermissionState();
+  const cameraPermissionState = useMediaPermissionState("camera");
   const hasLiveLocalCamera = Boolean(getLiveVideoStream(localStream));
   const hasLiveDevCamera = Boolean(getLiveVideoStream(devCameraStream));
   const isCameraPermissionBlocked =
