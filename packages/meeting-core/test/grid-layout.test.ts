@@ -127,6 +127,123 @@ describe("computeGridLayout — degenerate inputs", () => {
   });
 });
 
+const PORTRAIT = 3 / 4;
+const LANDSCAPE = 16 / 9;
+
+const rowsOf = (r: ReturnType<typeof computeGridLayout>) =>
+  r.positions.reduce<number[][]>((rows, position) => {
+    (rows[position.row] ??= []).push(position.index);
+    return rows;
+  }, []);
+
+describe("computeGridLayout — mixed tile aspects", () => {
+  it("puts a portrait and a landscape tile in one row at one height", () => {
+    const r = computeGridLayout(2, 1280, 720, {
+      tileAspects: [PORTRAIT, LANDSCAPE],
+    });
+    const [portrait, landscape] = r.positions;
+
+    expect(r.rows).toBe(1);
+    expect(portrait.height).toBe(landscape.height);
+    expect(portrait.width).toBeLessThan(landscape.width);
+    expect(portrait.width / portrait.height).toBeCloseTo(PORTRAIT, 2);
+    expect(landscape.width / landscape.height).toBeCloseTo(LANDSCAPE, 2);
+    // The narrow tile frees width, so both tiles grow past the uniform grid.
+    expect(portrait.height).toBeGreaterThan(computeGridLayout(2, 1280, 720).tileHeight);
+    expect(portrait.width + 12 + landscape.width).toBeLessThanOrEqual(1280);
+  });
+
+  it.each([
+    [2, 1920, 1080, {}],
+    [5, 1800, 700, { maxCols: 3 }],
+    [9, 1280, 720, {}],
+    [16, 1440, 800, { maxCols: 6 }],
+  ])("lays out %i landscape tiles exactly as the uniform grid", (count, w, h, opts) => {
+    expect(
+      computeGridLayout(count, w, h, {
+        ...opts,
+        tileAspects: Array.from({ length: count }, () => LANDSCAPE),
+      }),
+    ).toEqual(computeGridLayout(count, w, h, opts));
+  });
+
+  it("moves only the rotated tile's row when a phone turns portrait", () => {
+    const before = computeGridLayout(4, 1920, 1080, {
+      tileAspects: [PORTRAIT, LANDSCAPE, LANDSCAPE, LANDSCAPE],
+    });
+    const after = computeGridLayout(4, 1920, 1080, {
+      tileAspects: [PORTRAIT, LANDSCAPE, LANDSCAPE, PORTRAIT],
+    });
+
+    expect(rowsOf(before)).toEqual([[0, 1], [2, 3]]);
+    expect(rowsOf(after)).toEqual([[0, 1], [2, 3]]);
+    expect(after.positions.slice(0, 2)).toEqual(before.positions.slice(0, 2));
+    expect(after.positions[3].width).toBeLessThan(before.positions[3].width);
+    expect(after.positions[3].height).toBe(before.positions[3].height);
+    // The shorter row re-centres.
+    expect(after.positions[2].x).toBeGreaterThan(before.positions[2].x);
+    const row = after.positions.slice(2);
+    const rowWidth = row[0].width + 12 + row[1].width;
+    expect(row[0].x).toBeCloseTo((1920 - rowWidth) / 2);
+  });
+
+  it("never puts more than maxCols tiles in a row", () => {
+    // Uncapped, the five narrow tiles would share one row.
+    const r = computeGridLayout(6, 4000, 400, {
+      maxCols: 3,
+      tileAspects: [LANDSCAPE, PORTRAIT, PORTRAIT, PORTRAIT, PORTRAIT, PORTRAIT],
+    });
+
+    expect(r.positions).toHaveLength(6);
+    expect(rowsOf(r).map((row) => row.length)).toEqual([3, 3]);
+    expect(r.cols).toBe(3);
+  });
+
+  it("puts a partial row last, like the uniform grid", () => {
+    const r = computeGridLayout(5, 1000, 900, {
+      maxCols: 3,
+      tileAspects: Array.from({ length: 5 }, () => PORTRAIT),
+    });
+
+    expect(rowsOf(r)).toEqual([[0, 1, 2], [3, 4]]);
+    expect(r.lastRowCount).toBe(2);
+  });
+
+  it("keeps the given order in reading order with even gaps", () => {
+    const aspects = [LANDSCAPE, PORTRAIT, LANDSCAPE, 9 / 16, PORTRAIT, LANDSCAPE];
+    const r = computeGridLayout(aspects.length, 1440, 860, { tileAspects: aspects });
+    const reading = [...r.positions].sort((a, b) => a.y - b.y || a.x - b.x);
+
+    expect(reading.map((position) => position.index)).toEqual([0, 1, 2, 3, 4, 5]);
+    r.positions.forEach((position, index) => {
+      expect(position.index).toBe(index);
+      expect(position.width).toBe(Math.floor(position.height * aspects[index]));
+    });
+    rowsOf(r).forEach((row) => {
+      row.slice(1).forEach((index) => {
+        const left = r.positions[index - 1];
+        expect(r.positions[index].x - (left.x + left.width)).toBeCloseTo(12);
+      });
+    });
+    expect(new Set(r.positions.map((position) => position.height)).size).toBe(1);
+  });
+
+  it("still returns a position for every tile in a degenerate container", () => {
+    const aspects = [PORTRAIT, LANDSCAPE, PORTRAIT];
+    expect(computeGridLayout(3, 0, 0, { tileAspects: aspects }).positions).toHaveLength(3);
+    expect(
+      computeGridLayout(3, Number.NaN, 720, { tileAspects: aspects }).positions,
+    ).toHaveLength(3);
+    expect(computeGridLayout(3, 20, 20, { tileAspects: aspects }).positions).toHaveLength(3);
+  });
+
+  it("treats missing and invalid aspects as the target aspect", () => {
+    expect(
+      computeGridLayout(3, 1280, 720, { tileAspects: [Number.NaN, -1] }),
+    ).toEqual(computeGridLayout(3, 1280, 720));
+  });
+});
+
 describe("chooseStageMode", () => {
   const input = (overrides: Partial<StageModeInput> = {}): StageModeInput => ({
     count: 5,
