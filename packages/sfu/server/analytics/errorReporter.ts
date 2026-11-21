@@ -4,7 +4,8 @@
  * Every exception carries the instance id, region and version so a spike can
  * be tied to one box. Reporting never throws, never waits on the network
  * (except `reportFatal`, which is bounded), and is rate limited per error so a
- * client that keeps sending a malformed packet cannot flood the project.
+ * client that keeps sending a malformed packet cannot flood the project. The
+ * fatal report sits outside that budget: the process sends it once, then exits.
  */
 
 export type ServerErrorSource =
@@ -114,10 +115,11 @@ export const createErrorReporter = ({
   const prepare = (
     error: unknown,
     { source, level = "error", properties = {} }: ServerErrorContext,
+    { budgeted }: { budgeted: boolean },
   ): { client: ExceptionClient; options: CaptureOptions } | null => {
     const client = getClient();
     if (!client) return null;
-    if (!allow(errorFingerprint(error, source))) return null;
+    if (budgeted && !allow(errorFingerprint(error, source))) return null;
     return {
       client,
       options: {
@@ -138,7 +140,7 @@ export const createErrorReporter = ({
   return {
     report: (error, context) => {
       try {
-        const prepared = prepare(error, context);
+        const prepared = prepare(error, context, { budgeted: true });
         prepared?.client.captureException(error, prepared.options);
       } catch (failure) {
         failed(failure);
@@ -148,7 +150,11 @@ export const createErrorReporter = ({
     reportFatal: async (error, context, timeoutMs) => {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        const prepared = prepare(error, { level: "fatal", ...context });
+        const prepared = prepare(
+          error,
+          { level: "fatal", ...context },
+          { budgeted: false },
+        );
         if (!prepared) return;
         const delivery = Promise.allSettled([
           prepared.client.captureExceptionImmediate(error, prepared.options),

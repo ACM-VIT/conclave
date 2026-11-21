@@ -220,6 +220,31 @@ describe("SFU error reporter", () => {
     expect(sent).toHaveLength(7);
   });
 
+  it("still sends and flushes a crash that follows a burst of errors", async () => {
+    const sent: Array<{ error: unknown; level: string }> = [];
+    let flushes = 0;
+    const fakeClient: ExceptionClient = {
+      captureException: (error, options) => sent.push({ error, level: options.level }),
+      captureExceptionImmediate: async (error, options) => {
+        sent.push({ error, level: options.level });
+      },
+      flush: async () => {
+        flushes += 1;
+      },
+    };
+    const reporter = reporterFor(fakeClient, () => 0);
+
+    for (let index = 0; index < 80; index += 1) {
+      reporter.report(new Error(`handler failed ${index}`), { source: "socket_handler" });
+    }
+    const crash = new Error("worker pool exhausted");
+    await reporter.reportFatal(crash, { source: "uncaught_exception" }, 200);
+
+    expect(sent.filter((entry) => entry.level === "error")).toHaveLength(60);
+    expect(sent.at(-1)).toEqual({ error: crash, level: "fatal" });
+    expect(flushes).toBe(1);
+  });
+
   it("never throws even when logging the failure throws", async () => {
     const brokenClient: ExceptionClient = {
       captureException: () => {

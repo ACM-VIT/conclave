@@ -33,6 +33,7 @@ SFU, from `server/analytics/errorReporter.ts`, every event tagged `sfu_instance_
 | `redis_transient` | A Redis error the crash guard swallowed (level `warning`) | `process_event` |
 
 At most 5 reports per distinct error and 60 in total per minute per instance.
+The fatal report before an exit is outside that limit.
 
 ## Call-quality events
 
