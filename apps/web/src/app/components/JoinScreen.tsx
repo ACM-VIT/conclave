@@ -1180,10 +1180,21 @@ function JoinScreen({
     microphone: microphonePermissionState,
   });
   const grantedBlockedKey = grantedBlockedDevices.join(",");
+  // One automatic retry per grant. A grant that arrives while another retry
+  // runs is taken up when that one ends.
+  const autoRetriedRef = useRef<BlockedDevice[]>([]);
   useEffect(() => {
-    if (grantedBlockedDevices.length === 0) return;
-    void retryBlockedDevices(grantedBlockedDevices);
-  }, [grantedBlockedKey]);
+    autoRetriedRef.current = autoRetriedRef.current.filter((device) =>
+      grantedBlockedDevices.includes(device),
+    );
+    if (isRetryingBlocked) return;
+    const due = grantedBlockedDevices.filter(
+      (device) => !autoRetriedRef.current.includes(device),
+    );
+    if (due.length === 0) return;
+    autoRetriedRef.current = [...autoRetriedRef.current, ...due];
+    void retryBlockedDevices(due);
+  }, [grantedBlockedKey, isRetryingBlocked]);
 
   const handleSignOut = async () => {
     if (isSigningOut) return;
