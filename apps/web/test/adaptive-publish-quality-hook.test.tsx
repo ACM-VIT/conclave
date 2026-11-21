@@ -100,9 +100,15 @@ describe("CPU limitation", () => {
 
     await target.advance(4_000);
     expect(micBitrate(target)).toBe(MIC_BITRATE.fair);
+    expect(captureRefreshes(target)).toEqual([]);
+    expect(target.of("capture").map((effect) => effect.frameRate)).toEqual([20]);
     await target.set({ publishCpuLimited: false });
     expect(micBitrate(target)).toBe(MIC_BITRATE.good);
     expect(fullLayerBitrate(target)).toBe(VP8_FULL_LAYER_BITRATE.good);
+    await target.advance(1_000);
+    expect(captureRefreshes(target)).toEqual([
+      { at: 10_000, quality: "standard", profile: "good" },
+    ]);
   });
 
   it("steps a screen-sharing sender down to poor after twenty limited seconds", async () => {
@@ -285,6 +291,19 @@ describe("screen share", () => {
     await target.advance(1_000);
     await target.set({ availableOutgoingBitrateBps: 3_000_000 });
     expect(micBitrate(target)).toBe(MIC_BITRATE.good);
+  });
+
+  it("keeps the camera capture cap while sharing on a weak uplink", async () => {
+    const target = createPublishRig({
+      inputs: { availableOutgoingBitrateBps: 400_000 },
+    });
+    rig = target;
+    await target.startScreenShare();
+    await target.mount();
+
+    await target.advance(12_000);
+    expect(captureRefreshes(target)).toEqual([]);
+    expect(target.of("capture").map((effect) => effect.frameRate)).toEqual([12]);
   });
 });
 

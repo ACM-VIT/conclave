@@ -1233,6 +1233,7 @@ export function useAdaptivePublishQuality({
           retryAfter: getStandardCaptureRestoreRetryAfter(Date.now(), false),
         };
       }
+      cameraCaptureCadenceApplicationRef.current = null;
       if (activeProducer && !activeProducer.closed) {
         lastAppliedProfilesRef.current.webcam = null;
         lastAppliedWebcamProfileRef.current = null;
@@ -1704,7 +1705,9 @@ export function useAdaptivePublishQuality({
         writeDebugSnapshot(now);
         return;
       }
-      if (startupSettled) {
+      const captureCapped =
+        authoritativeLiveProfile !== null && authoritativeLiveProfile !== "good";
+      if (startupSettled && !captureCapped) {
         void restoreConfiguredCaptureIfNeeded().finally(() => {
           if (!updateInFlightRef.current) {
             requestLiveProducerProfile(authoritativeLiveProfile ?? "good");
