@@ -3234,17 +3234,9 @@ export default function MeetsClient({
   );
 
   if (connectionState === "waiting") {
-    const waitingTitle = waitingMessage ?? "Waiting for host to let you in";
-    const isLockedRoom = waitingMessage?.toLowerCase().includes("locked");
-    const waitingIntro = isLockedRoom
-      ? "Please wait while the host reviews your request."
-      : waitingMessage
-        ? "The host left the room, so there is no one available to admit you right now."
-        : "Hang tight.";
     return renderWithApps(
       <MeetsWaitingScreen
-        waitingTitle={waitingTitle}
-        waitingIntro={waitingIntro}
+        waitingMessage={waitingMessage}
         roomId={roomId}
         isAdmin={canModerateMeeting}
       />,

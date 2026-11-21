@@ -186,11 +186,13 @@ describe("concurrent room creation", () => {
 
     expect(createRouter).toHaveBeenCalledOnce();
     expect(a.ack).toHaveBeenCalledWith(expect.objectContaining({ status: "joined" }));
-    expect(b.ack).toHaveBeenCalledWith(expect.objectContaining({ status: "joined" }));
+    // New rooms start locked, so the joiner who lost the race knocks.
+    expect(b.ack).toHaveBeenCalledWith(expect.objectContaining({ status: "waiting" }));
     expect(a.context.currentClient).toBeInstanceOf(Admin);
     expect(b.context.currentClient).not.toBeInstanceOf(Admin);
 
     const room = state.rooms.get("conclave:room")!;
+    expect(room.pendingClients.has("bob")).toBe(true);
     expect(room.hostUserKey).toBe("alice");
     expect(room.isAdminUserKey("bob")).toBe(false);
     expect(room.getAdminUserIds()).toEqual(["alice#a"]);

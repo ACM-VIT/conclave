@@ -48,6 +48,7 @@ import {
   resolveScheduledWebinarAttendeeEntry,
 } from "../../scheduledWebinars.js";
 import { ensureWebinarRoomConfig } from "../../scheduledWebinarScheduler.js";
+import { isScheduledMeetingInvitee } from "../../scheduledMeetings.js";
 import { getSocketAuthUser } from "../auth.js";
 import type { ConnectionContext } from "../context.js";
 import { registerAdminHandlers } from "./adminHandlers.js";
@@ -385,6 +386,9 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
               `Re-opened ended room ${roomId} (${clientId}) for ${userId}`,
             );
           }
+          if (createdRoom && clientPolicy.knockByDefault) {
+            room.setLocked(true);
+          }
         }
 
         const webinarConfig = getOrCreateWebinarRoomConfig(
@@ -623,11 +627,20 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         const hasDisplayNameOverride = Boolean(requestedDisplayName);
         context.currentUserKey = userKey;
 
+        const isInvitedJoin =
+          !isWebinarAttendeeJoin &&
+          isScheduledMeetingInvitee(
+            state.scheduledMeetings,
+            clientId,
+            roomId,
+            normalizedJoinEmail,
+          );
         if (
           !isWebinarAttendeeJoin &&
           room.isLocked &&
           !hasPrivilegedJoinAccess &&
           !isWebinarPromotedJoin &&
+          !isInvitedJoin &&
           !room.isLockedAllowed(userKey)
         ) {
           Logger.info(

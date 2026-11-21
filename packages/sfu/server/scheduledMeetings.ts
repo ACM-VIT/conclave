@@ -461,6 +461,23 @@ export const getScheduledMeetingByRoomCode = (
   return owner ? store.byId.get(owner) ?? null : null;
 };
 
+/**
+ * Whether `email` (verified, lower case) was invited to the scheduled meeting
+ * at this room code, as its host or its booked attendee. Invitees skip the
+ * knock, like people on a calendar invite.
+ */
+export const isScheduledMeetingInvitee = (
+  store: ScheduledMeetingStore,
+  clientId: string,
+  roomCode: string,
+  email: string,
+): boolean => {
+  if (!email) return false;
+  const meeting = getScheduledMeetingByRoomCode(store, clientId, roomCode);
+  if (!meeting || meeting.status === "cancelled") return false;
+  return meeting.hostEmail === email || meeting.attendeeEmail === email;
+};
+
 export const moveScheduledMeetingToClient = (
   store: ScheduledMeetingStore,
   meetingId: string,
