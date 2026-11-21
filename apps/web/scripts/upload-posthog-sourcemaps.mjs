@@ -41,14 +41,14 @@ try {
     if ((await listSourceMaps(staticDir)).length === 0) {
       throw new Error("No source maps were built; check productionBrowserSourceMaps in next.config.ts.");
     }
-    posthogCli(["sourcemap", "inject", "--directory", staticDir]);
+    const release = ["--release-name", "conclave-web"];
+    posthogCli(["sourcemap", "inject", "--directory", staticDir, ...release]);
     posthogCli([
       "sourcemap",
       "upload",
       "--directory",
       staticDir,
-      "--release-name",
-      "conclave-web",
+      ...release,
       "--delete-after",
     ]);
     console.log("[sourcemaps] uploaded to PostHog");
