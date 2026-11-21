@@ -114,6 +114,49 @@ describe("caption language in the transcript worker", () => {
 
     expect(providerLanguages(room)).toEqual(["hi", "en"]);
   });
+
+  it("restores the session's language after a restart in the middle of a switch", async () => {
+    type Restorable = {
+      connectTranscriptionProvider: (options: { language: string }) => Promise<void>;
+      persist: () => Promise<void>;
+    };
+    const prototype = TranscriptRoom.prototype as unknown as Restorable;
+    const connect = vi
+      .spyOn(prototype, "connectTranscriptionProvider")
+      .mockResolvedValue(undefined);
+    vi.spyOn(prototype, "persist").mockResolvedValue(undefined);
+    const snapshot = {
+      session: {
+        roomId: "room",
+        status: "starting",
+        controller: null,
+        transcriptModel: "gpt-live-transcribe",
+        qaModel: "gpt-6.1-sol",
+        transportMode: "sfu",
+        language: "ta",
+        keySource: "global",
+        startedAt: 1,
+        updatedAt: 1,
+        error: null,
+      },
+      segments: [],
+      sequence: 0,
+      transcriptionConfig: { language: "hi", delay: "medium", locale: "en-IN" },
+    };
+    const room = new TranscriptRoom(
+      {
+        storage: { get: async () => snapshot, delete: async () => true },
+        waitUntil: () => undefined,
+      } as unknown as DurableObjectState,
+      { TRANSCRIPT_TRANSCRIPTION_LANGUAGE: "en", OPENAI_API_KEY: "sk-global" } as Env,
+    ) as unknown as TestRoom;
+    await room.loaded;
+
+    await vi.waitFor(() => expect(connect).toHaveBeenCalled());
+    expect(connect.mock.calls[0][0].language).toBe("ta");
+    expect(room.session?.language).toBe("ta");
+    vi.restoreAllMocks();
+  });
 });
 
 describe("Sarvam language routing", () => {

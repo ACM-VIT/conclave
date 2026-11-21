@@ -367,12 +367,17 @@ export class TranscriptRoom {
     if (!transcriptionKey.ok || !responseKey.ok) return;
 
     const wasPaused = snapshot.session.status === "paused";
-    const config = snapshot.transcriptionConfig ?? {
+    const savedConfig = snapshot.transcriptionConfig;
+    const config = {
       language: normalizeLanguage(
-        snapshot.session.language ?? this.env.TRANSCRIPT_TRANSCRIPTION_LANGUAGE,
+        snapshot.session.language ??
+          savedConfig?.language ??
+          this.env.TRANSCRIPT_TRANSCRIPTION_LANGUAGE,
       ),
-      delay: normalizeDelay(undefined),
-      locale: normalizeLocale(this.env.TRANSCRIPT_TRANSCRIPTION_LOCALE),
+      delay: savedConfig?.delay ?? normalizeDelay(undefined),
+      locale:
+        savedConfig?.locale ??
+        normalizeLocale(this.env.TRANSCRIPT_TRANSCRIPTION_LOCALE),
     };
     this.responseApiKey = responseKey.apiKey;
     this.session = {
