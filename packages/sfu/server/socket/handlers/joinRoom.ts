@@ -627,8 +627,10 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         const hasDisplayNameOverride = Boolean(requestedDisplayName);
         context.currentUserKey = userKey;
 
+        const wasRemoved = room.wasRemoved(userKey);
         const isInvitedJoin =
           !isWebinarAttendeeJoin &&
+          !wasRemoved &&
           isScheduledMeetingInvitee(
             state.scheduledMeetings,
             clientId,

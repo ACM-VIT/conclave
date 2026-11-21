@@ -52,17 +52,48 @@ const makeState = (): SfuState => {
   return state;
 };
 
-const join = async (state: SfuState, user: SfuAuthPayload, roomId = "abc-mnop-xyz") => {
+type JoinAck = {
+  status?: string;
+  error?: string;
+  isLocked?: boolean;
+  hostUserId?: string | null;
+  hostUserIds?: string[];
+  roomRecoveryPass?: string;
+};
+
+const join = async (
+  state: SfuState,
+  user: SfuAuthPayload,
+  options: { roomId?: string; roomRecoveryPass?: string } = {},
+) => {
   const peer = makeSocket(`${user.userId}-socket`, user);
   const context = createConnectionContext(io, peer.socket, state);
   registerJoinRoomHandler(context);
   const ack = vi.fn();
   await peer.handlers.get("joinRoom")!(...[
-    { roomId, sessionId: user.sessionId },
+    {
+      roomId: options.roomId ?? "abc-mnop-xyz",
+      sessionId: user.sessionId,
+      roomRecoveryPass: options.roomRecoveryPass,
+    },
     ack,
   ] as never[]);
-  return { context, peer, ack, status: (ack.mock.calls[0]?.[0] as { status?: string })?.status };
+  const response = (ack.mock.calls[0]?.[0] ?? {}) as JoinAck;
+  return { context, peer, ack, response, status: response.status };
 };
+
+// What a host's socket sends: an admin event with a payload and an ack.
+const send = async (
+  peer: ReturnType<typeof makeSocket>,
+  event: string,
+  payload: unknown,
+) => {
+  const ack = vi.fn();
+  await peer.handlers.get(event)?.(...([payload, ack] as never[]));
+  return ack.mock.calls[0]?.[0] as { success?: boolean; error?: string } | undefined;
+};
+
+const roomOf = (state: SfuState) => state.rooms.get("conclave:abc-mnop-xyz")!;
 
 const host = { userId: "guest-host", clientId: "conclave", sessionId: "h", allowRoomCreation: true };
 const guest = { userId: "guest-visitor", clientId: "conclave", sessionId: "v" };
@@ -142,5 +173,39 @@ describe("new meetings make people knock", () => {
       sessionId: "s",
     });
     expect(stranger.status).toBe("waiting");
+  });
+
+  it("keeps an invited attendee the host removed out until they are let in again", async () => {
+    const state = makeState();
+    createScheduledMeeting(
+      state.scheduledMeetings,
+      {
+        title: "Intro call",
+        scheduledStartAt: Date.now(),
+        roomCode: "abc-mnop-xyz",
+        hostEmail: "host@example.com",
+        attendeeEmail: "invitee@example.com",
+      },
+      {
+        clientId: "conclave",
+        createdBy: "host@example.com",
+        defaultHostEmail: "host@example.com",
+        defaultHostUserId: null,
+      },
+    );
+    const created = await join(state, host);
+    const invitee = {
+      userId: "user-2",
+      email: "invitee@example.com",
+      clientId: "conclave",
+      sessionId: "i",
+    };
+    expect((await join(state, invitee)).status).toBe("joined");
+
+    await send(created.peer, "kickUser", { userId: "invitee@example.com#i" });
+    expect((await join(state, invitee)).status).toBe("waiting");
+
+    await send(created.peer, "admitUser", { userId: "invitee@example.com" });
+    expect((await join(state, invitee)).status).toBe("joined");
   });
 });
