@@ -8336,14 +8336,14 @@ export function useMeetSocket({
               }
             });
 
+            // Back on setup with a plain notice. As an error it read as a
+            // camera permission problem there.
             socket.on("joinRejected", () => {
               console.info("[Meets] Join rejected.");
-              setMeetError({
-                code: "PERMISSION_DENIED",
-                message: "The host has denied your request to join.",
-                recoverable: false,
-              });
-              setConnectionState("error");
+              setMeetError(null);
+              setMeetingEndedNotice?.(
+                "Someone in the call denied your request to join.",
+              );
               setWaitingMessage(null);
               cleanup();
             });

@@ -39,6 +39,7 @@ import WebinarViewerChrome, {
   WebinarWaitingCard,
 } from "./WebinarViewer";
 import ToastQueue from "./ToastQueue";
+import KnockPrompt from "./KnockPrompt";
 import TranscriptPanel from "./TranscriptPanel";
 import RoomAiPanel from "./RoomAiPanel";
 import AndroidUpsellSheet from "./AndroidUpsellSheet";
@@ -2438,6 +2439,15 @@ export default function MeetsMainContent({
                 }
               : null,
           ]}
+        />
+      )}
+
+      {isJoined && !isWebinarAttendee && isAdmin && !isParticipantsOpen && (
+        <KnockPrompt
+          socket={socket}
+          pendingUsers={pendingUsers}
+          onViewAll={handleOpenParticipants}
+          onPendingUserStale={handlePendingUserStale}
         />
       )}
 
