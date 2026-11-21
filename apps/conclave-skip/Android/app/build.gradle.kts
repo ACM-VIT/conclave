@@ -185,7 +185,7 @@ android {
 }
 
 dependencies {
-    implementation(platform("com.squareup.okhttp3:okhttp-bom:5.5.0"))
+    implementation(platform("com.squareup.okhttp3:okhttp-bom:5.5.1"))
     implementation("com.squareup.okhttp3:okhttp")
 
     implementation("com.google.android.material:material:1.14.0")
