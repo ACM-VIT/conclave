@@ -132,6 +132,7 @@ import {
 } from "../lib/consumer-resume-retry";
 import {
   advanceVideoFreezeRecovery,
+  isProducerGoneConsumeError,
   shouldRecreateProducerTransport,
   type VideoFreezeRecoveryState,
 } from "../lib/media-recovery-policy";
@@ -1161,6 +1162,7 @@ export function useMeetSocket({
   const recoverStaleConsumerRef = useRef<
     (producerInfo: ProducerInfo, reason: string) => Promise<void>
   >(async () => {});
+  const syncProducersRef = useRef<() => Promise<void>>(async () => {});
   const resumeConsumerReliablyRef = useRef<
     (
       producerId: string,
@@ -4461,7 +4463,9 @@ export function useMeetSocket({
               screenShareVideoActive: knownScreenShareVideoActive,
             }),
           },
-          async (response: ConsumeResponse | { error: string }) => {
+          async (
+            response: ConsumeResponse | { error: string; code?: string },
+          ) => {
             if (!settleConsume()) {
               if (!("error" in response)) {
                 pendingConsumerTelemetryByIdRef.current.delete(response.id);
@@ -4480,7 +4484,13 @@ export function useMeetSocket({
 
             if ("error" in response) {
               console.error("[Meets] Consume error:", response.error);
-              queueFailureRetry(300);
+              if (isProducerGoneConsumeError(response)) {
+                producerSlotOrder.noteClosed(producerInfo.producerId);
+                handleProducerClosed(producerInfo.producerId);
+                void syncProducersRef.current();
+              } else {
+                queueFailureRetry(300);
+              }
               resolve();
               return;
             }
@@ -6219,6 +6229,7 @@ export function useMeetSocket({
     videoFreezeStatsRef,
     announcedRemoteProducersRef,
   ]);
+  syncProducersRef.current = syncProducers;
 
   const applyDisplayNameSnapshot = useCallback(
     (users: DisplayNameSnapshotEntry[] = []) => {

@@ -1087,7 +1087,10 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
         }
         const producerInfo = room.getProducerInfoById(producerId);
         if (!producerInfo) {
-          respond(callback, { error: "Producer not found" });
+          respond(callback, {
+            error: "Producer not found",
+            code: "producer_not_found",
+          });
           return;
         }
         // Attendees may only consume the curated program feed. Without this,
