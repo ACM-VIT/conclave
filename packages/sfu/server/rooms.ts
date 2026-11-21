@@ -1,6 +1,7 @@
 import { Room } from "../config/classes/Room.js";
 import { config } from "../config/config.js";
 import getWorker, { type WorkerLoad } from "../utilities/getWorker.js";
+import { getWorkerWebRtcServer } from "../utilities/createWorkers.js";
 import type { Worker } from "mediasoup/types";
 import { Logger } from "../utilities/loggers.js";
 import {
@@ -174,6 +175,7 @@ export const getOrCreateRoomWithOrigin = async (
         id: roomId,
         router,
         clientId,
+        webRtcServer: getWorkerWebRtcServer(worker),
         workerPid: typeof worker.pid === "number" ? worker.pid : null,
       });
       state.rooms.set(channelId, createdRoom);

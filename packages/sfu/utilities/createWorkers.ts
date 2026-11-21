@@ -1,5 +1,5 @@
 import * as mediasoup from "mediasoup";
-import type { Worker } from "mediasoup/types";
+import type { TransportListenInfo, WebRtcServer, Worker } from "mediasoup/types";
 import os from "os";
 import { config } from "../config/config.js";
 import { Logger } from "./loggers.js";
@@ -18,18 +18,47 @@ type CreateWorkersOptions = {
   onWorkerDied?: (worker: Worker, label: string) => void | Promise<void>;
 };
 
-const spawnWorker = (): Promise<Worker> =>
-  mediasoup.createWorker({
-    rtcMinPort: config.workerSettings.rtcMinPort,
+const webRtcServers = new WeakMap<Worker, WebRtcServer>();
+
+export const getWorkerWebRtcServer = (worker: Worker): WebRtcServer | undefined =>
+  webRtcServers.get(worker);
+
+const spawnWorker = async (port: number, plainMinPort: number): Promise<Worker> => {
+  const worker = await mediasoup.createWorker({
+    rtcMinPort: plainMinPort,
     rtcMaxPort: config.workerSettings.rtcMaxPort,
     logLevel: config.workerSettings.logLevel,
     logTags: config.workerSettings.logTags,
   });
+  const { enableUdp, enableTcp, listenIps: [{ ip, announcedIp }] } = config.webRtcTransport;
+  const listenInfos: TransportListenInfo[] = [];
+  if (enableUdp) listenInfos.push({ protocol: "udp", ip, announcedAddress: announcedIp, port });
+  if (enableTcp) listenInfos.push({ protocol: "tcp", ip, announcedAddress: announcedIp, port });
+  try {
+    const server = await worker.createWebRtcServer({ listenInfos });
+    webRtcServers.set(worker, server);
+    return worker;
+  } catch (error) {
+    worker.close();
+    throw error;
+  }
+};
 
 const createWorkers = async (
   options: CreateWorkersOptions = {},
 ): Promise<Worker[]> => {
   const workers: Worker[] = [];
+  const workerCount = getWorkerCount();
+  const { rtcMinPort, rtcMaxPort, webRtcPortBase } = config.workerSettings;
+  const lastWebRtcPort = webRtcPortBase + workerCount - 1;
+  const plainMinPort = webRtcPortBase === rtcMinPort ? lastWebRtcPort + 1 : rtcMinPort;
+  if (
+    lastWebRtcPort > 65535 ||
+    plainMinPort > rtcMaxPort ||
+    (webRtcPortBase <= rtcMaxPort && lastWebRtcPort >= plainMinPort)
+  ) {
+    throw new Error("Worker WebRTC ports must fit in 1-65535 without overlapping the plain RTP range");
+  }
 
   // A dead mediasoup worker takes its routers - and the rooms running on them -
   // with it. Previously the handler did `process.exit(1)`, which killed the
@@ -39,7 +68,8 @@ const createWorkers = async (
   // `state.workers`, so mutating it here updates the live pool. Rooms that were
   // on the dead worker degrade (their producers/consumers error) and their
   // clients rejoin via the normal reconnect path, landing on a healthy worker.
-  const attachDiedHandler = (worker: Worker, label: string): void => {
+  const attachDiedHandler = (worker: Worker, index: number): void => {
+    const label = String(index);
     worker.on("died", () => {
       Logger.error(`Worker ${label} has died; recreating a replacement`);
       void Promise.resolve(options.onWorkerDied?.(worker, label)).catch(
@@ -50,14 +80,14 @@ const createWorkers = async (
         },
       );
       const deadIndex = workers.indexOf(worker);
-      spawnWorker()
+      spawnWorker(webRtcPortBase + index, plainMinPort)
         .then((replacement) => {
           if (deadIndex >= 0) {
             workers[deadIndex] = replacement;
           } else {
             workers.push(replacement);
           }
-          attachDiedHandler(replacement, label);
+          attachDiedHandler(replacement, index);
           Logger.info(`Worker ${label} replacement created`);
         })
         .catch((err) => {
@@ -68,11 +98,10 @@ const createWorkers = async (
     });
   };
 
-  const workerCount = getWorkerCount();
   Logger.info(`Creating ${workerCount} mediasoup worker(s)`);
   for (let i = 0; i < workerCount; i++) {
-    const worker = await spawnWorker();
-    attachDiedHandler(worker, String(i));
+    const worker = await spawnWorker(webRtcPortBase + i, plainMinPort);
+    attachDiedHandler(worker, i);
     workers.push(worker);
     Logger.info(`Worker ${i} created`);
   }

@@ -444,6 +444,11 @@ export const config = {
     }),
     rtcMinPort,
     rtcMaxPort,
+    webRtcPortBase: toNumber(process.env.SFU_WEBRTC_PORT_BASE, rtcMinPort, {
+      integer: true,
+      min: 1,
+      max: 65535,
+    }),
     logLevel: "warn" as WorkerLogLevel,
     logTags: ["info", "ice", "dtls", "rtp", "srtp", "rtcp"] as WorkerLogTag[],
   },

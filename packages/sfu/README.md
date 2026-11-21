@@ -11,6 +11,19 @@ services, the server-authoritative game runtime, and transcript relays.
 - **Deploy:** built via the included [Dockerfile](./Dockerfile); configuration
   comes from `.env` (see `config/config.ts` for every knob and default).
 
+## To apply in production
+
+Before deploying shared WebRTC sockets, allow inbound UDP and TCP to the SFU VM
+on ports 40000 through 40003 for `sfu-a` and 41001 through 41004 for `sfu-b`.
+Each of the four workers binds one port for both protocols. Keep the existing
+UDP rules until calls on the old version have drained and both instances have
+restarted.
+
+After the rollout, the public WebRTC rules need only those ports. Shared browser
+relays still need plain RTP over UDP on 40004 through 41000 and 41005 through
+42000. Preserve access from the relay sources for those ranges. Update the
+firewall when changing `SFU_WORKER_COUNT` or `SFU_WEBRTC_PORT_BASE`.
+
 ## Development
 
 ```sh
