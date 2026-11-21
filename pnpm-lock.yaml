@@ -419,6 +419,9 @@ importers:
       '@conclave/ai':
         specifier: workspace:*
         version: link:../ai
+      '@conclave/apps-sdk':
+        specifier: workspace:*
+        version: link:../apps-sdk
       '@conclave/shared-browser':
         specifier: workspace:*
         version: link:../shared-browser
@@ -498,6 +501,9 @@ importers:
       '@typescript/native':
         specifier: npm:typescript@^7.0.2
         version: typescript@7.0.2
+      socket.io-client:
+        specifier: ^4.8.4
+        version: 4.8.4(supports-color@11.0.0)
       tsx:
         specifier: ^4.23.15
         version: 4.23.15
