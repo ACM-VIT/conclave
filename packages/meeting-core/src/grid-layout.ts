@@ -222,22 +222,27 @@ const stretchRow = (widths: number[], height: number, extra: number) => {
 /**
  * Resize each row's tiles so the rows share one width and the grid's edges
  * line up. Rows stretch to the widest row. When a row holding `cols` tiles
- * cannot stretch that far, every row meets at the width that row reaches with
- * its portrait tiles held at 4:5, and wider rows narrow by at most 1.25x. A
- * shorter row the cap cannot stretch, such as a lone last tile, keeps its
- * width and centres.
+ * cannot stretch that far, every row meets at the width that row reaches,
+ * preferably with its portrait tiles held at 4:5, and wider rows narrow by at
+ * most 1.25x. A shorter row the cap cannot stretch, such as a lone last tile,
+ * keeps its width and centres.
  */
 const alignRows = (rowTiles: number[][], height: number, gap: number, cols: number) => {
   const natural = rowTiles.map((tiles) => rowWidthOf(tiles, gap));
-  const reach = (tiles: number[]) => rowWidthOf(growthCaps(tiles, height).soft, gap);
-  const narrowest = (tiles: number[]) =>
-    rowWidthOf(tiles.map((width) => Math.ceil(width / MAX_ROW_STRETCH)), gap);
   const widest = Math.max(...natural);
-  const fullRowReach = Math.min(
-    widest,
-    ...rowTiles.filter((tiles) => tiles.length === cols).map(reach),
+  const fullRows = rowTiles.filter((tiles) => tiles.length === cols);
+  const reach = (cap: "soft" | "hard") =>
+    Math.min(
+      widest,
+      ...fullRows.map((tiles) => rowWidthOf(growthCaps(tiles, height)[cap], gap)),
+    );
+  const narrowest = Math.max(
+    ...rowTiles.map((tiles) =>
+      rowWidthOf(tiles.map((width) => Math.ceil(width / MAX_ROW_STRETCH)), gap),
+    ),
   );
-  const target = Math.max(...rowTiles.map(narrowest)) <= fullRowReach ? fullRowReach : widest;
+  const meet = Math.max(reach("soft"), narrowest);
+  const target = meet <= reach("hard") ? meet : widest;
 
   return rowTiles.map((tiles, row) => {
     const extra = target - natural[row];

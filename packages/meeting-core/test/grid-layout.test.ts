@@ -154,10 +154,11 @@ const expectAlignedEdges = (
   expect(edges[rows[0]].right - edges[rows[0]].left).toBe(r.contentWidth);
 };
 
-// Rows may widen or narrow a tile by up to 1.25x to line up their edges.
+// Rows may widen or narrow a tile by up to 1.25x, in whole pixels, to line up
+// their edges.
 const expectWithinStretch = (position: { width: number; height: number }, aspect: number) => {
   const natural = Math.floor(position.height * aspect);
-  expect(position.width).toBeGreaterThanOrEqual(Math.ceil(natural / 1.25));
+  expect(position.width).toBeGreaterThanOrEqual(Math.floor(natural / 1.25));
   expect(position.width).toBeLessThanOrEqual(Math.floor(natural * 1.25));
 };
 
@@ -307,6 +308,20 @@ describe("computeGridLayout — mixed rows line up", () => {
     expectEvenGaps(r);
     expect(r.offsetX).toBe((1416 - r.contentWidth) / 2);
     expect(r.positions[0].width).toBeLessThanOrEqual(Math.floor(r.tileHeight * 0.8));
+    r.positions.forEach((position, index) => expectWithinStretch(position, aspects[index]));
+  });
+
+  it.each([
+    // Two phones reach the square row only past 4:5.
+    [1025, 467, [PORTRAIT, PORTRAIT, 1, 1]],
+    // A sliver of a tile narrows without dropping below its floor.
+    [458, 498, [1.5, 0.1, PORTRAIT, 0.4]],
+  ])("lines up two full rows in %ix%i within the 1.25x cap", (w, h, aspects) => {
+    const r = computeGridLayout(4, w, h, { maxCols: 2, tileAspects: aspects });
+
+    expect(rowsOf(r)).toEqual([[0, 1], [2, 3]]);
+    expectAlignedEdges(r, [0, 1]);
+    expectEvenGaps(r);
     r.positions.forEach((position, index) => expectWithinStretch(position, aspects[index]));
   });
 
