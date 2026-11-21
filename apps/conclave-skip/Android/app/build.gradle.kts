@@ -98,7 +98,7 @@ kotlin {
 android {
     namespace = group as String
 
-    compileSdk = 37
+    compileSdk = libs.versions.android.sdk.compile.get().toInt()
     compileOptions {
         sourceCompatibility = JavaVersion.toVersion(libs.versions.jvm.get())
         targetCompatibility = JavaVersion.toVersion(libs.versions.jvm.get())
@@ -113,7 +113,7 @@ android {
 
     defaultConfig {
         minSdk = libs.versions.android.sdk.min.get().toInt()
-        targetSdk = libs.versions.android.sdk.compile.get().toInt()
+        targetSdk = 36
         manifestPlaceholders["GOOGLE_SIGN_IN_WEB_CLIENT_ID"] = googleSignInWebClientId
         manifestPlaceholders["CONCLAVE_AUTH_BASE_URL"] = conclaveAuthBaseUrl
         manifestPlaceholders["SFU_JOIN_URL"] = sfuJoinUrl

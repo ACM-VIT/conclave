@@ -86,8 +86,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/skiptools/skip.git",
       "state" : {
-        "revision" : "2d1573ab56761bc334272d8ef4f16566c49970d8",
-        "version" : "1.9.16"
+        "revision" : "3dfa66fff39837ffce12e5eaa6039922c191ae3a",
+        "version" : "1.9.21"
       }
     },
     {
@@ -95,8 +95,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/skiptools/skip-foundation.git",
       "state" : {
-        "revision" : "8b50c7dc61610f0bfff5512db4ea628554003bfa",
-        "version" : "1.4.8"
+        "revision" : "ba10460923b9e495bbd54ad494b8b0cb3dd7ba26",
+        "version" : "1.4.9"
       }
     },
     {
@@ -104,8 +104,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/skiptools/skip-kit.git",
       "state" : {
-        "revision" : "151f466e56189fe4bf2b19a7104fb19bc080836a",
-        "version" : "1.1.6"
+        "revision" : "6035242c6544fa68ca7a463496e68013da2ffdd6",
+        "version" : "1.1.7"
       }
     },
     {
@@ -131,8 +131,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/skiptools/skip-ui.git",
       "state" : {
-        "revision" : "d170d85b9b337b82b630439c633aea2d0eb6ca3e",
-        "version" : "1.64.0"
+        "revision" : "e6126ca693c6712fa5cc29d06ec3bf4591ce9b84",
+        "version" : "1.66.4"
       }
     },
     {
@@ -140,8 +140,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/skiptools/skip-unit.git",
       "state" : {
-        "revision" : "fc58e058f3d25675e047a758281c39dba5d52570",
-        "version" : "1.7.2"
+        "revision" : "b42420e38fbf968e39ef1ca953dac7e9f562d8b4",
+        "version" : "1.8.0"
       }
     },
     {
