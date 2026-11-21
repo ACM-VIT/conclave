@@ -87,8 +87,9 @@ if [[ "$apply" != "true" ]]; then
   exit 0
 fi
 
+# Any HTTP answer, a 503 included, means an SFU process still holds the files.
 for url in ${CONCLAVE_SFU_HEALTH_URLS:-http://127.0.0.1:3031/health http://127.0.0.1:3032/health}; do
-  if curl -fsS --max-time 3 "$url" >/dev/null 2>&1; then
+  if [[ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "$url" || true)" != "000" ]]; then
     die "an SFU still answers at ${url}; stop the SFU containers before restoring"
   fi
 done

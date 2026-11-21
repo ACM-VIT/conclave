@@ -77,8 +77,8 @@ blob_base_url() {
   printf "%s/%s" "${endpoint%/}" "${AZURE_STORAGE_CONTAINER:?AZURE_STORAGE_CONTAINER is not set}"
 }
 
-# Writes the request headers to a private file so the bearer token stays out
-# of argv. Prints the file path.
+# Prints the request headers, bearer token included. Callers pipe them into
+# curl -H @-, so the token never reaches argv or a file.
 blob_auth_headers() {
   local imds="${AZURE_IMDS_ENDPOINT:-http://169.254.169.254}"
   local url="${imds%/}/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https%3A%2F%2Fstorage.azure.com%2F"
@@ -86,10 +86,7 @@ blob_auth_headers() {
   local token
   token="$(curl -fsS --max-time 10 --retry 3 -H "Metadata: true" "$url" | sed -nE 's/.*"access_token" *: *"([^"]+)".*/\1/p')"
   [[ -n "$token" ]] || die "the managed identity returned no storage token (is an identity assigned to this VM?)"
-  local headers
-  headers="$(mktemp)"
-  printf 'Authorization: Bearer %s\nx-ms-version: 2021-08-06\n' "$token" > "$headers"
-  printf "%s" "$headers"
+  printf 'Authorization: Bearer %s\nx-ms-version: 2021-08-06\n' "$token"
 }
 
 # Uploads a file. If-None-Match makes an existing blob an error rather than
@@ -98,27 +95,24 @@ blob_put() {
   local file="$1" blob="$2" headers md5 status
   headers="$(blob_auth_headers)"
   md5="$(openssl dgst -md5 -binary "$file" | openssl base64)"
-  status="$(curl -sS --max-time 900 -o /dev/null -w '%{http_code}' -X PUT -H @"$headers" \
+  status="$(curl -sS --max-time 900 -o /dev/null -w '%{http_code}' -X PUT -H @- \
     -H "x-ms-blob-type: BlockBlob" -H "If-None-Match: *" -H "Content-MD5: ${md5}" \
-    -H "Content-Type: application/octet-stream" --data-binary @"$file" "$(blob_base_url)/${blob}")"
-  rm -f "$headers"
+    -H "Content-Type: application/octet-stream" --data-binary @"$file" "$(blob_base_url)/${blob}" <<< "$headers" || true)"
   [[ "$status" == "201" ]] || die "upload of ${blob} failed with HTTP ${status}"
 }
 
 blob_get() {
   local blob="$1" out="$2" headers
   headers="$(blob_auth_headers)"
-  curl -fsS --max-time 900 -H @"$headers" -o "$out" "$(blob_base_url)/${blob}" ||
-    { rm -f "$headers"; die "download of ${blob} failed"; }
-  rm -f "$headers"
+  curl -fsS --max-time 900 -H @- -o "$out" "$(blob_base_url)/${blob}" <<< "$headers" ||
+    die "download of ${blob} failed"
 }
 
 # Prints blob names under a prefix, oldest name first (names sort by time).
 blob_list() {
   local prefix="$1" headers listing
   headers="$(blob_auth_headers)"
-  listing="$(curl -fsS --max-time 60 -H @"$headers" "$(blob_base_url)?restype=container&comp=list&prefix=${prefix}")" ||
-    { rm -f "$headers"; die "listing ${prefix} failed"; }
-  rm -f "$headers"
+  listing="$(curl -fsS --max-time 60 -H @- "$(blob_base_url)?restype=container&comp=list&prefix=${prefix}" <<< "$headers")" ||
+    die "listing ${prefix} failed"
   { grep -oE '<Name>[^<]+</Name>' <<< "$listing" || true; } | sed -E 's#</?Name>##g' | sort
 }
