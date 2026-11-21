@@ -75,8 +75,8 @@ The local release APK is written to:
 apps/conclave-skip/.build/Android/app/outputs/apk/release/app-release.apk
 ```
 
-It is about 120 MB (mostly un-minified DEX) with 7 small native libs per ABI
-(mediasoup, libc++, dotLottie, CameraX, androidx graphics); the arm64 and
+It is about 120 MB (mostly un-minified DEX) with 6 small native libs per ABI
+(mediasoup, dotLottie, CameraX, androidx graphics); the arm64 and
 x86_64 ones are all 16 KB aligned. If `libswiftCore.so`, `libFoundation*.so`, `lib_FoundationICU.so` or
 `libSkipAndroidBridge.so` ever reappear in `unzip -l`, something pulled
 SkipFuse or a native-mode Skip module back in.
