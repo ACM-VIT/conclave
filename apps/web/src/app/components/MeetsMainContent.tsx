@@ -104,6 +104,7 @@ import {
   type VideoEffectsState,
 } from "../lib/video-effects";
 import type { MeetViewSettings } from "../lib/meet-view";
+import type { RejoinMedia } from "../lib/call-outcome";
 import type { MediaQualitySettings } from "../lib/media-quality-settings";
 import type {
   ClonedTtsVoice,
@@ -223,6 +224,7 @@ interface MeetsMainContentProps {
   onGoHome?: () => void;
   onStartNewMeeting?: () => void;
   onEnterMeetingStart?: (action: "new" | "join") => void;
+  prejoinInitialMedia?: RejoinMedia | null;
   isParticipantsOpen: boolean;
   setIsParticipantsOpen: Dispatch<SetStateAction<boolean>>;
   pendingUsers: Map<string, string>;
@@ -499,6 +501,7 @@ export default function MeetsMainContent({
   onGoHome,
   onStartNewMeeting,
   onEnterMeetingStart,
+  prejoinInitialMedia,
   isParticipantsOpen,
   setIsParticipantsOpen,
   pendingUsers,
@@ -2195,6 +2198,7 @@ export default function MeetsMainContent({
             onVideoEffectsChange={onVideoEffectsChange}
             onPrejoinMediaCommit={onPrejoinMediaCommit}
             onEnterStart={onEnterMeetingStart}
+            initialMedia={prejoinInitialMedia}
           />
         )
       ) : isWebinarAttendee ? (

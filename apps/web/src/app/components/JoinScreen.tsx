@@ -18,13 +18,14 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
 import { prefetchConclaveAnimation } from "../lib/conclaveAnimation";
 import { prefetchConclaveLock } from "../lib/conclaveSound";
 import type { Dispatch, SetStateAction } from "react";
 import { Avatar } from "@conclave/ui-tokens/web";
 import { signOut, useSession } from "@/lib/auth-client";
 import type { RoomInfo } from "@/lib/sfu-types";
+import type { RejoinMedia } from "../lib/call-outcome";
 import type {
   ConnectionState,
   MeetError,
@@ -167,6 +168,7 @@ interface JoinScreenProps {
   onVideoEffectsChange: Dispatch<SetStateAction<VideoEffectsState>>;
   onPrejoinMediaCommit?: (handoff: PrejoinMediaHandoff) => void;
   onEnterStart?: (action: "new" | "join") => void;
+  initialMedia?: RejoinMedia | null;
 }
 
 const FIELD =
@@ -308,6 +310,7 @@ function JoinScreen({
   onVideoEffectsChange,
   onPrejoinMediaCommit,
   onEnterStart,
+  initialMedia,
 }: JoinScreenProps) {
   const normalizedRoomId =
     roomId === "undefined" || roomId === "null" ? "" : roomId;
@@ -1045,6 +1048,18 @@ function JoinScreen({
       toggleMicInFlightRef.current = false;
     }
   };
+
+  const applyInitialMedia = useEffectEvent((media: RejoinMedia) => {
+    if (media.isAudioOnly) toggleAudioOnly();
+    if (media.isCameraOn && !media.isAudioOnly) void toggleCamera();
+    if (media.isMicOn) void toggleMic();
+  });
+  const appliedInitialMediaRef = useRef(false);
+  useEffect(() => {
+    if (!initialMedia || appliedInitialMediaRef.current) return;
+    appliedInitialMediaRef.current = true;
+    applyInitialMedia(initialMedia);
+  }, [initialMedia]);
 
   useEffect(() => {
     if (!pending || !hasIdentity) return;

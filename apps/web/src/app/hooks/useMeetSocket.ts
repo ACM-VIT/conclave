@@ -844,13 +844,25 @@ const isRoomEndedByLocalUser = (
   return localUserKey.length > 0 && normalizedEndedBy === localUserKey;
 };
 
-const resolveRoomEndedNoticeMessage = (message?: string): string => {
-  const trimmed = message?.trim() ?? "";
-  if (!trimmed || trimmed === "This meeting has been ended by the host.") {
-    return "The host ended this meeting. You are no longer connected.";
-  }
-  return trimmed;
+const DEFAULT_ROOM_ENDED_MESSAGE = "This meeting has been ended by the host.";
+const DEFAULT_KICK_REASON = "Removed by host";
+
+const customServerText = (
+  text: string | undefined,
+  fallback: string,
+): string | null => {
+  const trimmed = text?.trim() ?? "";
+  return trimmed && trimmed !== fallback ? trimmed : null;
 };
+
+const resolveRoomEndedNoticeMessage = (message?: string): string =>
+  customServerText(message, DEFAULT_ROOM_ENDED_MESSAGE) ??
+  "The host ended this meeting. You are no longer connected.";
+
+export interface RemoteCallEnding {
+  kind: "endedByHost" | "removed";
+  detail: string | null;
+}
 
 interface UseMeetSocketOptions {
   refs: MeetRefs;
@@ -980,6 +992,7 @@ interface UseMeetSocketOptions {
   };
   onSocketReady?: (socket: Socket | null) => void;
   onLocalRoomEnded?: () => void;
+  onCallEnded?: (ending: RemoteCallEnding) => void;
   bypassMediaPermissions?: boolean;
 }
 
@@ -1063,6 +1076,7 @@ export function useMeetSocket({
   prewarm,
   onSocketReady,
   onLocalRoomEnded,
+  onCallEnded,
   bypassMediaPermissions = false,
 }: UseMeetSocketOptions) {
   const participantIdsRef = useRef<Set<string>>(new Set([userId]));
@@ -7112,6 +7126,10 @@ export function useMeetSocket({
                 setMeetingEndedNotice?.(resolveRoomEndedNoticeMessage(message));
                 setWaitingMessage(null);
                 cleanup();
+                onCallEnded?.({
+                  kind: "endedByHost",
+                  detail: customServerText(message, DEFAULT_ROOM_ENDED_MESSAGE),
+                });
               },
             );
 
@@ -8149,12 +8167,16 @@ export function useMeetSocket({
               },
             );
 
-            socket.on("kicked", () => {
+            socket.on("kicked", (payload?: { reason?: string }) => {
               cleanup();
               setMeetError({
                 code: "UNKNOWN",
                 message: "You have been kicked from the meeting.",
                 recoverable: false,
+              });
+              onCallEnded?.({
+                kind: "removed",
+                detail: customServerText(payload?.reason, DEFAULT_KICK_REASON),
               });
             });
 
@@ -8752,6 +8774,7 @@ export function useMeetSocket({
       setWebinarHandQueue,
       setWebinarStageInvite,
       onWebinarDemoted,
+      onCallEnded,
       setServerRestartNotice,
       setAdminNotice,
       setServerActiveSpeakerAvailable,
