@@ -403,6 +403,9 @@ export interface JoinRoomResponse {
   webinarQaEnabled?: boolean;
   webinarSpeakerUserId?: string | null;
   webcamCodecPolicy?: WebcamCodecPolicy;
+  // Proof of having been let in, to send back on a rejoin. Absent while
+  // waiting, for webinar attendees, and from SFUs that predate it.
+  roomRecoveryPass?: string;
 }
 
 export interface JoinRoomErrorResponse {

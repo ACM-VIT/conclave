@@ -49,6 +49,10 @@ import {
 } from "../../scheduledWebinars.js";
 import { ensureWebinarRoomConfig } from "../../scheduledWebinarScheduler.js";
 import { isScheduledMeetingInvitee } from "../../scheduledMeetings.js";
+import {
+  issueRoomRecoveryPass,
+  provesEarlierRoomMembership,
+} from "../../roomRecoveryPass.js";
 import { getSocketAuthUser } from "../auth.js";
 import type { ConnectionContext } from "../context.js";
 import { registerAdminHandlers } from "./adminHandlers.js";
@@ -637,6 +641,27 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             roomId,
             normalizedJoinEmail,
           );
+        // This room was recreated after the SFU lost the one this person was
+        // in. Record the admission they prove, so they rejoin as they would
+        // have and everyone who was only knocking still knocks.
+        if (
+          !isWebinarAttendeeJoin &&
+          !hasPrivilegedJoinAccess &&
+          !wasRemoved &&
+          room.isLocked &&
+          !room.isLockedAllowed(userKey) &&
+          provesEarlierRoomMembership(
+            data?.roomRecoveryPass,
+            room,
+            userKey,
+            config.sfuSecret,
+          )
+        ) {
+          Logger.info(
+            `Recovered ${userKey}'s admission to recreated room ${roomId} (${clientId})`,
+          );
+          room.allowLockedUser(userKey);
+        }
         if (
           !isWebinarAttendeeJoin &&
           room.isLocked &&
@@ -1098,6 +1123,16 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             ? { webinarSpeakerUserId: feedSnapshot.speakerUserId }
             : {}),
           webcamCodecPolicy: context.currentRoom.webcamCodecPolicy,
+          ...(context.currentClient.isWebinarAttendee ||
+          context.currentClient.isObserver
+            ? {}
+            : {
+                roomRecoveryPass: issueRoomRecoveryPass(
+                  context.currentRoom,
+                  userKey,
+                  config.sfuSecret,
+                ),
+              }),
         });
       } catch (error) {
         Logger.error("Error joining room:", error);

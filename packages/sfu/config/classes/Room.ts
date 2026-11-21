@@ -9,7 +9,7 @@ import type {
   WebRtcTransport,
 } from "mediasoup/types";
 import type { Socket } from "socket.io";
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import {
   Awareness,
   applyAwarenessUpdate,
@@ -188,6 +188,8 @@ export class Room {
   public readonly clientId: string;
   public readonly workerPid: number | null;
   public readonly channelId: string;
+  // Tells this room apart from an earlier or later one at the same code.
+  public readonly incarnationId: string = randomUUID();
   public clients: Map<string, Client> = new Map();
   public pendingClients: Map<
     string,
