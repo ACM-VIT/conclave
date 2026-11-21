@@ -1,6 +1,6 @@
 import { AI_ENDPOINTS } from "@conclave/ai/models";
 import { DEFAULT_TRANSCRIPTION_LOCALE } from "../constants";
-import { safeJsonParse, trimText } from "../utils";
+import { normalizeLanguage, safeJsonParse, trimText } from "../utils";
 import type {
   LiveTranscriptionCallbacks,
   LiveTranscriptionConnectOptions,
@@ -74,16 +74,21 @@ const normalizeSarvamLanguageCode = (
   return SARVAM_DEFAULT_LANGUAGE_CODE;
 };
 
-export const sarvamLanguageCode = (
+const baseLanguage = (language: string): string =>
+  language.trim().toLowerCase().split("-")[0] ?? "";
+
+const sarvamLanguageCode = (
   language: string,
-  deploymentLanguageCode: string | undefined,
+  env: LiveTranscriptionConnectOptions["env"],
 ): string => {
-  const base = language.trim().toLowerCase().split("-")[0] ?? "";
+  const base = baseLanguage(language);
   const regional = `${base}-IN`;
-  if (base !== "en" && SARVAM_SUPPORTED_LANGUAGE_CODES.has(regional)) {
+  const isDeploymentLanguage =
+    base === baseLanguage(normalizeLanguage(env.TRANSCRIPT_TRANSCRIPTION_LANGUAGE));
+  if (!isDeploymentLanguage && SARVAM_SUPPORTED_LANGUAGE_CODES.has(regional)) {
     return regional;
   }
-  return deploymentLanguageCode ?? language;
+  return env.TRANSCRIPT_SARVAM_LANGUAGE_CODE ?? language;
 };
 
 const normalizeSarvamMode = (value: string | undefined): string => {
@@ -355,10 +360,7 @@ export const connectSarvamTranscription = async (
     sarvamEndpoint({
       baseUrl: options.env.SARVAM_STT_WS_URL,
       model: options.transcriptModel,
-      language: sarvamLanguageCode(
-        options.language,
-        options.env.TRANSCRIPT_SARVAM_LANGUAGE_CODE,
-      ),
+      language: sarvamLanguageCode(options.language, options.env),
       locale: options.locale,
       mode: options.env.TRANSCRIPT_SARVAM_MODE,
     }),

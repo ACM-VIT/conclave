@@ -163,11 +163,15 @@ describe("Sarvam language routing", () => {
   const requestedLanguageCode = async (
     language: string,
     deploymentCode: string | undefined,
+    deploymentLanguage?: string,
   ) => {
     const fetchMock = vi.fn(async () => ({ webSocket: null, status: 401 }));
     vi.stubGlobal("fetch", fetchMock);
     await connectSarvamTranscription({
-      env: { TRANSCRIPT_SARVAM_LANGUAGE_CODE: deploymentCode } as Env,
+      env: {
+        TRANSCRIPT_SARVAM_LANGUAGE_CODE: deploymentCode,
+        TRANSCRIPT_TRANSCRIPTION_LANGUAGE: deploymentLanguage,
+      } as Env,
       apiKey: "sarvam-key",
       transcriptModel: "saaras:v3",
       language,
@@ -192,5 +196,11 @@ describe("Sarvam language routing", () => {
   it("keeps the deployment default for English and unsupported languages", async () => {
     expect(await requestedLanguageCode("en", "unknown")).toBe("unknown");
     expect(await requestedLanguageCode("es", "en-IN")).toBe("en-IN");
+  });
+
+  it("keeps the deployment code for the deployment's own language, so clients that send none are unchanged", async () => {
+    expect(await requestedLanguageCode("hi", "unknown", "hi")).toBe("unknown");
+    expect(await requestedLanguageCode("ta", "unknown", "hi")).toBe("ta-IN");
+    expect(await requestedLanguageCode("en", "unknown", "hi")).toBe("en-IN");
   });
 });
