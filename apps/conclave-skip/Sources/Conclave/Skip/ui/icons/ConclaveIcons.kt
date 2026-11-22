@@ -1,5 +1,5 @@
-// Profile material-rounded-24-absolute-v1; manifest SHA256 a8f815b7cd4ceb7bf9c5d04f6fed8528a3cf77981e3994e91cace24d6e25b541; generator SHA256 9fc85a5e8dc29f43b2874bf96215c440f7cc5581630795b486be96640271e71a.
-/* Material Symbols by Google, licensed under the Apache License, Version 2.0.
+// Profile material-rounded-24-absolute-v1; manifest SHA256 a8f815b7cd4ceb7bf9c5d04f6fed8528a3cf77981e3994e91cace24d6e25b541; generator SHA256 f1e8b67eb1f14199ad0d0a689f22cb267add644d38075f2bc8554788841ef685.
+/* Licensed under the Apache License, Version 2.0: Material Symbols by Google.
  * Conclave converted the original SVGs (strict SVG parsing, exact-decimal font960
  * translation or sealed implicit24 scaling) to absolute native paths.
  * Source commit 49d4db35df873165d6bd6ba09b063c7dafbac2f4; per-input SHA256 above each vector and in the build-time manifest.

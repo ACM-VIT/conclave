@@ -225,7 +225,7 @@ test("an attribution header may follow a directive prologue", () => {
     ["license-header", null],
   );
   const apache = [
-    "/* Material Symbols by Google, licensed under the Apache License, Version 2.0.",
+    "/* Licensed under the Apache License, Version 2.0: Material Symbols by Google.",
     " * Complete license text: LICENSE */",
     "package a",
   ].join("\n");
@@ -395,7 +395,7 @@ test("a license block counts only comments that are notices themselves", () => {
   assert.deepEqual(extractComments(todo, "a.ts").map((c) => c.allowed), [null, null]);
   const spdx = ["// SPDX-License-Identifier: MIT", "/* TODO clean this module up */", "export {};"].join("\n");
   assert.deepEqual(extractComments(spdx, "b.ts").map((c) => c.allowed), ["license-header", null]);
-  const facehash = ["/**", " * Face geometry from facehash 0.1.0, Copyright (c) Cossistant team.", " * MIT License", " */", "export {};"].join("\n");
+  const facehash = ["/**", " * Copyright (c) Cossistant team: face geometry from facehash 0.1.0.", " * MIT License", " */", "export {};"].join("\n");
   assert.deepEqual(extractComments(facehash, "c.ts").map((c) => c.allowed), ["license-header"]);
 });
 
@@ -484,4 +484,15 @@ test("the no-python fallback keeps format specs as code", () => {
   assert.deepEqual(scanPythonByHand('x = f"{42:=#8x}"  # real\n').length, 1);
   const [[start]] = scanPythonByHand('x = f"{42:=#8x}"  # real\n');
   assert.equal('x = f"{42:=#8x}"  # real\n'.slice(start, start + 6), "# real");
+});
+
+test("a license notice must start its comment", () => {
+  const source = [
+    "// SPDX-License-Identifier: MIT",
+    "// TODO: Update the Copyright 2026 label in Settings.",
+    "export {};",
+  ].join("\n");
+  assert.deepEqual(extractComments(source, "a.ts").map((c) => c.allowed), ["license-header", null]);
+  const later = ["// Copyright 2026 Example Inc.", "// Notes on the Copyright (c) dialog", "export {};"].join("\n");
+  assert.deepEqual(extractComments(later, "b.ts").map((c) => c.allowed), ["license-header", null]);
 });

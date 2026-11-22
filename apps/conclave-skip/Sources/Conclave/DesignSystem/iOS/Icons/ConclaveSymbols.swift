@@ -1,4 +1,4 @@
-// Profile material-rounded-24-absolute-v1; manifest SHA256 a8f815b7cd4ceb7bf9c5d04f6fed8528a3cf77981e3994e91cace24d6e25b541; generator SHA256 9fc85a5e8dc29f43b2874bf96215c440f7cc5581630795b486be96640271e71a.
+// Profile material-rounded-24-absolute-v1; manifest SHA256 a8f815b7cd4ceb7bf9c5d04f6fed8528a3cf77981e3994e91cace24d6e25b541; generator SHA256 f1e8b67eb1f14199ad0d0a689f22cb267add644d38075f2bc8554788841ef685.
 #if os(iOS) && !SKIP
 enum ConclaveSymbols {
     static let arrowTriangle2CirclepathCamera: String = "arrow.triangle.2.circlepath.camera"

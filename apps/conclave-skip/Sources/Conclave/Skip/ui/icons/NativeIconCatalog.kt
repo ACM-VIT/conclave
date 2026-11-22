@@ -1,10 +1,10 @@
-// Profile material-rounded-24-absolute-v1; manifest SHA256 a8f815b7cd4ceb7bf9c5d04f6fed8528a3cf77981e3994e91cace24d6e25b541; generator SHA256 9fc85a5e8dc29f43b2874bf96215c440f7cc5581630795b486be96640271e71a.
+// Profile material-rounded-24-absolute-v1; manifest SHA256 a8f815b7cd4ceb7bf9c5d04f6fed8528a3cf77981e3994e91cace24d6e25b541; generator SHA256 f1e8b67eb1f14199ad0d0a689f22cb267add644d38075f2bc8554788841ef685.
 package conclave.module
 
 internal object NativeIconCatalog {
-    const val vectorSourceSHA256 = "9b715e33b938f4655031a5dad4b1169c1e664caaa5b9eab2ebcc11ad827c78b1"
+    const val vectorSourceSHA256 = "f4a9c5b00b36558c184552aeb76fa553aa0320158b0b227882cd28c956d7d617"
     const val manifestSHA256 = "a8f815b7cd4ceb7bf9c5d04f6fed8528a3cf77981e3994e91cace24d6e25b541"
-    const val generatorSHA256 = "9fc85a5e8dc29f43b2874bf96215c440f7cc5581630795b486be96640271e71a"
+    const val generatorSHA256 = "f1e8b67eb1f14199ad0d0a689f22cb267add644d38075f2bc8554788841ef685"
     val artwork: List<NativeIconArtwork> = listOf(
         NativeIconArtwork("add_reaction.fill0", "AddReactionFill0", "22f2f8040a258b8a34daaa0287686bf1fa67699de5cab2fd71fe32c60ef5d96e", false) { ConclaveIcons.AddReactionFill0 },
         NativeIconArtwork("apps.fill0", "AppsFill0", "c11e79be76394ee701595f8978628e80d6cc11a2af408596548a706b04331cb4", false) { ConclaveIcons.AppsFill0 },

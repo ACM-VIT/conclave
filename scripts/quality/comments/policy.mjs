@@ -35,10 +35,11 @@ export const vendoredIgnores = (packageDir) =>
 
 const LICENSE_NOTICE_LINE = [
   /^SPDX-(?:License-Identifier|FileCopyrightText):\s*\S/,
-  /\bCopyright\s+(?:\(c\)|\(C\)|©|\d{4})/,
-  /^©\s*\d{4}/,
-  /\blicensed under the (?:Apache|MIT|BSD|GNU|Mozilla|ISC|Creative Commons)\b/i,
+  /^Copyright\s+(?:\(c\)|\(C\)|©|\d{4}|[A-Z])/,
+  /^(?:\(c\)|\(C\)|©)\s*\S/,
+  /^Licensed under the (?:Apache|MIT|BSD|GNU|Mozilla|ISC|Creative Commons)\b/,
   /^Permission is hereby granted\b/,
+  /^(?:The )?(?:MIT|ISC|Apache|Mozilla Public|BSD(?: [0-4]-Clause)?) License\b/,
   /^Ported (?:verbatim |\(and trimmed\) )?from \S/,
 ];
 

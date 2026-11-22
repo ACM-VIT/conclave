@@ -833,7 +833,7 @@ def generate(root):
     m, manifest_sha = validate(root)
     generator_sha = digest(Path(__file__).read_bytes())
     header = f'// Profile {PROFILE}; manifest SHA256 {manifest_sha}; generator SHA256 {generator_sha}.\n'
-    attribution = ('/* Material Symbols by Google, licensed under the Apache License, Version 2.0.\n'
+    attribution = ('/* Licensed under the Apache License, Version 2.0: Material Symbols by Google.\n'
                    ' * Conclave converted the original SVGs (strict SVG parsing, exact-decimal font960\n'
                    ' * translation or sealed implicit24 scaling) to absolute native paths.\n'
                    f' * Source commit {PIN}; per-input SHA256 above each vector and in the build-time manifest.\n'
