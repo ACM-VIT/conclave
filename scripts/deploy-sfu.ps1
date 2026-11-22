@@ -359,8 +359,11 @@ if ($LASTEXITCODE -ne 0) {
 }
 if ($deployBrowserLocal) {
   # The browser service deploys last, after both SFUs changed; refuse its
-  # configuration now rather than after the SFU swap.
-  & (Join-Path $rootDir "scripts/deploy-browser-service.ps1") --check-config
+  # configuration now rather than after the SFU swap. It runs in a child
+  # process because it imports the root .env, which would replace values that
+  # packages/sfu/.env set in this one (SFU_SECRET among them).
+  $powershell = (Get-Process -Id $PID).Path
+  & $powershell -NoProfile -File (Join-Path $rootDir "scripts/deploy-browser-service.ps1") --check-config
   if ($LASTEXITCODE -ne 0) {
     Exit-WithError "Browser service configuration is invalid."
   }
