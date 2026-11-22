@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
   Router,
+  WebRtcServer,
   WebRtcTransport,
   WebRtcTransportOptions,
 } from "mediasoup/types";
@@ -20,15 +21,18 @@ const makeRoomHarness = () => {
     async (_options: WebRtcTransportOptions) => transport,
   );
   const router = { createWebRtcTransport } as unknown as Router;
+  const webRtcServer = { id: "webrtc-server" } as WebRtcServer;
   const room = new Room({
     id: "room-id",
     router,
+    webRtcServer,
     clientId: "client-id",
     workerPid: null,
   });
 
   return {
     createWebRtcTransport,
+    webRtcServer,
     room,
     setMaxIncomingBitrate,
   };
@@ -65,6 +69,7 @@ describe("Room WebRTC transport policy", () => {
 
     expect(harness.createWebRtcTransport).toHaveBeenCalledWith(
       expect.objectContaining({
+        webRtcServer: harness.webRtcServer,
         enableUdp: config.webRtcTransport.enableUdp,
         enableTcp: config.webRtcTransport.enableTcp,
         preferUdp: config.webRtcTransport.preferUdp,

@@ -68,7 +68,6 @@ import {
 import {
   useAdaptivePublishQuality,
   type AdaptivePublishQualityDebugSnapshot,
-  type ProducerTransportNetworkProfileApplication,
 } from "./hooks/useAdaptivePublishQuality";
 import {
   useConnectionQuality,
@@ -76,6 +75,10 @@ import {
 } from "./hooks/useConnectionQuality";
 import { useIsMobile } from "./hooks/useIsMobile";
 import { usePrewarmSocket } from "./hooks/usePrewarmSocket";
+import {
+  createProducerTransportNetworkProfileSetter,
+  PRODUCER_TRANSPORT_PROFILE_ACK_TIMEOUT_MS,
+} from "./lib/producer-transport-network-profile";
 import { useScreenWakeLock } from "./hooks/useScreenWakeLock";
 import { useSharedBrowser } from "./hooks/useSharedBrowser";
 import { useVoiceAgentParticipant } from "./hooks/useVoiceAgentParticipant";
@@ -286,7 +289,6 @@ const serializeMeetVideoDebugPayload = (payload: unknown) => {
   }
 };
 
-const PRODUCER_TRANSPORT_PROFILE_ACK_TIMEOUT_MS = 2_500;
 
 const logMeetVideo = (event: string, payload?: unknown) => {
   if (!isMeetVideoDebugEnabled()) return;
@@ -2842,60 +2844,13 @@ export default function MeetsClient({
     typeof performance === "undefined" ? 0 : performance.now(),
   );
   const producerTransportId = refs.producerTransportRef.current?.id ?? null;
-  const setProducerTransportNetworkProfile = useCallback(
-    (
-      profile: ProducerTransportNetworkProfileApplication["profile"],
-    ): Promise<ProducerTransportNetworkProfileApplication> => {
-      const socket = refs.socketRef.current;
-      const transportId = refs.producerTransportRef.current?.id ?? null;
-      if (!socket?.connected) {
-        return Promise.reject(new Error("Socket not connected"));
-      }
-      if (!transportId) {
-        return Promise.reject(new Error("Producer transport not found"));
-      }
-
-      return new Promise((resolve, reject) => {
-        let settled = false;
-        const timeoutId = window.setTimeout(() => {
-          if (settled) return;
-          settled = true;
-          reject(new Error("Producer transport profile acknowledgement timed out"));
-        }, PRODUCER_TRANSPORT_PROFILE_ACK_TIMEOUT_MS);
-        const settle = (
-          response:
-            | (ProducerTransportNetworkProfileApplication & { success: true })
-            | { error: string },
-        ) => {
-          if (settled) return;
-          settled = true;
-          window.clearTimeout(timeoutId);
-          if ("error" in response) {
-            reject(new Error(response.error));
-            return;
-          }
-          resolve({
-            transportId: response.transportId,
-            profile: response.profile,
-            maxIncomingBitrate: response.maxIncomingBitrate,
-          });
-        };
-
-        try {
-          socket.emit(
-            SFU_EVENTS.clientToServer.setProducerTransportNetworkProfile,
-            { transportId, profile },
-            settle,
-          );
-        } catch (error) {
-          if (settled) return;
-          settled = true;
-          window.clearTimeout(timeoutId);
-          reject(error instanceof Error ? error : new Error(String(error)));
-        }
-      });
-    },
-    [refs.producerTransportRef, refs.socketRef],
+  const setProducerTransportNetworkProfile = useMemo(
+    () =>
+      createProducerTransportNetworkProfileSetter(
+        refs.socketRef,
+        refs.producerTransportRef,
+      ),
+    [refs.socketRef, refs.producerTransportRef],
   );
   const requestWebcamProducerKeyFrame = useCallback(
     (producerId: string): Promise<void> => {
