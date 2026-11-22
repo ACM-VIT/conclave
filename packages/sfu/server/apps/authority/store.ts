@@ -6,6 +6,7 @@ import {
   type RuntimeDefinition,
   type RuntimeRead,
   type RuntimeTransaction,
+  type ScanPage,
   type TableKey,
 } from "@conclave/apps-sdk/authority/server";
 import type { AuthorityLimits } from "./limits.js";
@@ -32,6 +33,9 @@ export type TransactionOutcome<R> =
   | { ok: false; kind: "rejected"; reason: string }
   | { ok: false; kind: "capacity"; message: string }
   | { ok: false; kind: "fault"; error: unknown };
+
+/** How many rows a paged scan passes over for the cost of one it returns. */
+const SCAN_SKIPPED_ROWS_PER_OP = 64;
 
 const DELETED = Symbol("deleted");
 type Staged = Row | typeof DELETED;
@@ -265,22 +269,43 @@ class Draft implements RuntimeTransaction {
     return total;
   }
 
-  scan(table: string, prefix?: TableKey): readonly (readonly [TableKey, Row])[] {
+  scan(
+    table: string,
+    prefix?: TableKey,
+    page?: ScanPage,
+  ): readonly (readonly [TableKey, Row])[] {
+    const offset = page?.offset ?? 0;
+    const limit = page?.limit ?? Number.POSITIVE_INFINITY;
+    if (!Number.isInteger(offset) || offset < 0 || !(limit >= 1)) {
+      throw new Error("A scan page needs an offset of 0 or more and a limit of 1 or more");
+    }
     const committed = this.store.table(table);
     const writes = this.writes.get(table);
     const result: (readonly [TableKey, Row])[] = [];
-    for (const key of committed.keysUnder(prefix)) {
-      const staged = writes?.get(key);
-      if (staged === DELETED) continue;
-      const row = staged ?? committed.rows.get(key);
-      if (row) result.push([key, row]);
+    let passed = 0;
+    /** Takes the next row in order. False once the page is full. */
+    const take = (key: TableKey, row: Row): boolean => {
+      passed += 1;
+      if (passed > offset) result.push([key, row]);
+      return result.length < limit;
+    };
+    read: {
+      for (const key of committed.keysUnder(prefix)) {
+        const staged = writes?.get(key);
+        if (staged === DELETED) continue;
+        const row = staged ?? committed.rows.get(key);
+        if (row && !take(key, row)) break read;
+      }
+      for (const [key, staged] of writes ?? []) {
+        if (staged === DELETED || committed.rows.has(key)) continue;
+        if (prefix !== undefined && !keyHasPrefix(key, prefix)) continue;
+        if (!take(key, staged)) break read;
+      }
     }
-    for (const [key, staged] of writes ?? []) {
-      if (staged === DELETED || committed.rows.has(key)) continue;
-      if (prefix !== undefined && !keyHasPrefix(key, prefix)) continue;
-      result.push([key, staged]);
-    }
-    this.spend(result.length + 1);
+    // A row passed over is cheap but not free, or a handler could walk a
+    // large table from the start any number of times.
+    const skipped = passed - result.length;
+    this.spend(result.length + 1 + Math.floor(skipped / SCAN_SKIPPED_ROWS_PER_OP));
     return result;
   }
 

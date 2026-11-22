@@ -43,6 +43,10 @@ export const probeContract = defineContract({
     cancel: { input: s.object({ id: s.string({ min: 1, max: 64 }) }), receipt: s.object({ cancelled: s.boolean() }) },
   },
   queries: {
+    page: {
+      input: s.object({ offset: s.int({ min: 0 }), limit: s.int({ min: 1 }) }),
+      output: s.object({ ids: s.array(s.string({ max: 64 }), { max: 100 }) }),
+    },
     dump: {
       input: s.null(),
       output: s.object({
@@ -205,6 +209,13 @@ export const probeAuthority = defineAuthority({
     },
   },
   queries: {
+    page: {
+      roles: ["moderator"],
+      rate: RATE,
+      read(_ctx, db, input) {
+        return { ids: db.scan("notes", undefined, input).map(([, row]) => row.id) };
+      },
+    },
     dump: {
       roles: ["moderator"],
       // Off while the room's Q&A switch is off, so a test can withdraw the

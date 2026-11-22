@@ -100,7 +100,7 @@ export const signUpAuthority = defineAuthority({
 
 The four things a module has:
 
-- **Tables.** Keyed rows with a row cap. Writes happen only inside a handler's transaction: `get`, `insertIfAbsent`, `put`, `delete`, `count` and `scan` by key prefix. Committed rows are frozen.
+- **Tables.** Keyed rows with a row cap. Writes happen only inside a handler's transaction: `get`, `insertIfAbsent`, `put`, `delete`, `count` and `scan` by key prefix. A table too large to read in one transaction is scanned a page at a time, with `scan(table, prefix, { offset, limit })`. Committed rows are frozen.
 - **Actions.** A role list, an optional `when` condition, a rate, and a synchronous handler. The host checks the gate and parses the input before your code runs. Return the receipt, or call `reject("reason")` to refuse and keep nothing.
 - **Views.** A shared view is projected once per audience role and cannot see who is looking. A personal view names an `owner` and reaches every connection of that subject and nobody else.
 - **Timers.** `tx.schedule(kind, key, atMs, payload)` inside a transaction, handled in `onTimer`. Recheck the phase in the handler: a timer for a round that has moved on should do nothing. Handlers are synchronous. An `async` timer handler does not compile, and any handler that returns a promise is a fault that keeps none of its writes.

@@ -681,6 +681,25 @@ describe("bounds", () => {
     expect(hostTab.rows("notes")).toEqual([{ id: "kept", text: "original" }]);
   });
 
+  it("reads a table a page at a time, for the price of the rows it returns", async () => {
+    const room = new Harness([probeAuthority], {
+      runtime: { limits: { ...DEFAULT_AUTHORITY_LIMITS, transactionOps: 4 } },
+    });
+    const hostTab = await room.open(host, probeContract);
+    for (let index = 0; index < 5; index += 1) {
+      await hostTab.act("put", { id: `n${index}`, text: `${index}` });
+    }
+
+    // Five rows are more than one transaction may read here.
+    const whole = await hostTab.query("dump");
+    const first = await hostTab.query("page", { offset: 0, limit: 3 });
+    const rest = await hostTab.query("page", { offset: 3, limit: 3 });
+
+    expect(whole).toEqual({ ok: false, code: "app-fault" });
+    expect(first).toEqual({ ok: true, value: { ids: ["n0", "n1", "n2"] } });
+    expect(rest).toEqual({ ok: true, value: { ids: ["n3", "n4"] } });
+  });
+
   it("limits a person across their tabs, and the room as a whole", async () => {
     const room = new Harness([pollsAuthority, probeAuthority], {
       runtime: { limits: { ...DEFAULT_AUTHORITY_LIMITS, mutationBurst: 3, mutationsPerSecond: 1 } },

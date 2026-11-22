@@ -100,16 +100,26 @@ type RowOf<T extends Tables, K extends keyof T> =
   T[K] extends TableSpec<infer Row> ? Row : never;
 type TableName<T extends Tables> = keyof T & string;
 
+/** A stretch of a scan: pass over `offset` rows, then return at most `limit`. */
+export type ScanPage = { offset?: number; limit: number };
+
 export interface AuthorityRead<T extends Tables> {
   get<K extends TableName<T>>(
     table: K,
     key: TableKey,
   ): Readonly<RowOf<T, K>> | undefined;
   count<K extends TableName<T>>(table: K, prefix?: TableKey): number;
-  /** Rows under `prefix`, oldest insert first. Bounded by the table's cap. */
+  /**
+   * Rows under `prefix`, oldest insert first. Without `page` it returns them
+   * all, which a transaction can afford only for a table of modest size.
+   * With `page` it returns one stretch and costs little more than the rows
+   * it returns, so a large table is read a page at a time. Rows are never
+   * reordered, so in a table that only grows a page stays where it was.
+   */
   scan<K extends TableName<T>>(
     table: K,
     prefix?: TableKey,
+    page?: ScanPage,
   ): readonly (readonly [TableKey, Readonly<RowOf<T, K>>])[];
 }
 
@@ -285,7 +295,11 @@ export type AuthorityDefinition<
 export interface RuntimeRead {
   get(table: string, key: TableKey): object | undefined;
   count(table: string, prefix?: TableKey): number;
-  scan(table: string, prefix?: TableKey): readonly (readonly [TableKey, object])[];
+  scan(
+    table: string,
+    prefix?: TableKey,
+    page?: ScanPage,
+  ): readonly (readonly [TableKey, object])[];
 }
 
 export interface RuntimeTransaction extends RuntimeRead {
