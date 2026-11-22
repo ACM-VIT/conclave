@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile, execFileSync, spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, readdir, readlink, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -368,6 +368,60 @@ test(
       restored.close();
     } finally {
       if (db?.isOpen) db.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "the SFU container's named user:group is settled as ids from its image, not host accounts",
+  { skip: missing.length > 0 && `needs ${missing.join(", ")} on PATH` },
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+    try {
+      const { state, config, backup, latestArchive, restore } = await setUp(root);
+      // No owner configured, so restore.sh asks the SFU container.
+      await writeFile(config, `${await readFile(config, "utf8")}\nBACKUP_RESTORE_OWNER=\n`);
+      const db = new DatabaseSync(path.join(state, "conclave.sqlite"));
+      db.exec("CREATE TABLE scheduled_webinars (id TEXT PRIMARY KEY)");
+      db.close();
+      await backup("--local-only");
+      const archive = await latestArchive();
+
+      // A stand-in docker: one stopped SFU container mounting the state dir,
+      // running as node:node, an account this host does not have. Inside its
+      // image node resolves to this test's own ids, the one owner a non-root
+      // restore can hand files to.
+      const bin = path.join(root, "bin");
+      await mkdir(bin);
+      const uid = process.getuid();
+      const gid = process.getgid();
+      await writeFile(
+        path.join(bin, "docker"),
+        [
+          "#!/bin/sh",
+          'case "$*" in',
+          '  "ps -aq") echo sfu-a ;;',
+          `  *Mounts*) echo "${state}" ;;`,
+          '  *Config.User*) echo node:node ;;',
+          '  *"{{.Image}}"*) echo sha256:sfu-image ;;',
+          `  "run --rm --entrypoint id sha256:sfu-image -u node") echo ${uid} ;;`,
+          `  "run --rm --entrypoint getent sha256:sfu-image group node") echo node:x:${gid}: ;;`,
+          "  *) exit 1 ;;",
+          "esac",
+        ].join("\n"),
+      );
+      await chmod(path.join(bin, "docker"), 0o755);
+
+      const result = await run("bash", [path.join(scripts, "restore.sh"), "--identity", path.join(root, "key.txt"), "--file", archive, "--yes"], {
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, BACKUP_CONFIG: config, REDIS_URL: "", SFU_REDIS_URL: "" },
+      });
+      assert.match(result.stdout, new RegExp(`Gave the files in .* to ${uid}:${gid}, the user the SFU runs as`));
+
+      // An owner given by name that this host does not know is refused
+      // before any file changes.
+      await assert.rejects(restore("--file", archive, "--yes", "--owner", "node:node"), /cannot tell which user the SFU runs as/);
+    } finally {
       await rm(root, { recursive: true, force: true });
     }
   },
