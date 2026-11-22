@@ -78,6 +78,7 @@ import { useIsMobile } from "./hooks/useIsMobile";
 import { usePrewarmSocket } from "./hooks/usePrewarmSocket";
 import { useScreenWakeLock } from "./hooks/useScreenWakeLock";
 import { useMeetingAddress } from "./hooks/useMeetingAddress";
+import { isKnocking, settledConnectionState } from "./lib/knocking";
 import { useSharedBrowser } from "./hooks/useSharedBrowser";
 import { useVoiceAgentParticipant } from "./hooks/useVoiceAgentParticipant";
 import VoiceAgentDialog from "./components/VoiceAgentDialog";
@@ -3088,6 +3089,12 @@ export default function MeetsClient({
     roomId,
   });
 
+  // Where the tab last stood, kept across the states it passes through
+  // while reconnecting.
+  const [lastSettledState, setLastSettledState] = useState(connectionState);
+  const settledState = settledConnectionState(lastSettledState, connectionState);
+  if (settledState !== lastSettledState) setLastSettledState(settledState);
+
   if (!mounted) return null;
 
   const isRoomNotFound = enterErrored && meetError?.code === "ROOM_NOT_FOUND";
@@ -3231,7 +3238,7 @@ export default function MeetsClient({
     />
   );
 
-  if (connectionState === "waiting") {
+  if (isKnocking(connectionState, settledState)) {
     return renderWithApps(
       <MeetsWaitingScreen
         waitingMessage={waitingMessage}
