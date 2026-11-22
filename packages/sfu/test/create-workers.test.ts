@@ -172,6 +172,24 @@ it.each([
   }
 });
 
+it.each([
+  { affinity: 2, instances: 1, mediasoup: 2, warns: true },
+  { affinity: 2, instances: 1, mediasoup: 1, warns: false },
+  { affinity: 2, instances: 3, mediasoup: undefined, warns: false },
+])("warns when $mediasoup configured mediasoup workers and the app document worker exceed $affinity CPUs for $instances instances: $warns", ({ affinity, instances, mediasoup, warns }) => {
+  vi.mocked(availableParallelism).mockReturnValue(affinity);
+  vi.mocked(readFileSync).mockImplementation(() => { throw new Error("no cgroup limit"); });
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    expect(resolveAppDocumentWorkerCount({ appDocumentWorkerCount: 1, hostInstanceCount: instances, workerCount: mediasoup })).toBe(1);
+    if (warns) expect(warn).toHaveBeenCalledWith(expect.stringContaining("SFU_WORKER_COUNT=2"));
+    else expect(warn).not.toHaveBeenCalled();
+  } finally {
+    warn.mockRestore();
+    vi.mocked(readFileSync).mockReset();
+  }
+});
+
 it("uses the inherited Compose budget for staging WebRTC and plain RTP", async ({ skip }) => {
   if (spawnSync("docker", ["compose", "version"], { stdio: "ignore" }).status !== 0) {
     skip("Docker Compose is not installed");
