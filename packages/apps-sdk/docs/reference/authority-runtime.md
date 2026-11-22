@@ -9,12 +9,12 @@ These hold whatever an app's code or a client does.
 | Area | Guarantee |
 | --- | --- |
 | Membership | Every request and every frame resolves the connection against the live room: the registered room, the exact client object, its socket, and that the socket is connected. A saved room or client is never trusted. |
-| Invalidation | A subscription ends when its seat is replaced, removed or disconnected, or when its socket switches room. It restarts under a new generation when the seat's role changes or the room's mode changes. |
+| Invalidation | A subscription ends when its seat is replaced, removed or disconnected, or when its socket switches room. It restarts under a new generation when the seat's role changes or the room's mode changes. The room's mode and flags are read again before every frame, each later part of a large view or result included, so a change nobody announced still takes effect before the next send. |
 | Subjects | One identity adapter turns a connection into an opaque room-scoped subject. Apps never see a user key, an email or a socket. |
 | Personal rows | Reach every live connection of their owner and nobody else. |
-| Retries | An operation id carries a nonce and an issue time. Its receipt is bound to the subject and the parsed request and is kept for as long as the id is valid. A repeat replays the first answer. The same id with a different request fails. An expired id fails. |
+| Retries | An operation id carries a nonce and an issue time. Its receipt is bound to the subject and the parsed request and is kept for as long as the id is valid. A repeat replays the first answer. The same id with a different request fails. An expired id fails. A resend stays in the room it was first sent to: when the room epoch changes, the client ends the action as `unknown-outcome`. |
 | Delivery | Written rows are projected once per audience role. A recipient is sent a row only when its projection differs from what that audience holds, so a write nobody in an audience can see sends that audience nothing. |
-| Transactions | A handler runs to completion alone. A rejection or a throw keeps none of its writes. |
+| Transactions | A handler runs to completion alone. A rejection or a throw keeps none of its writes. A handler must be done when it returns: one that returns a promise is a fault and keeps nothing. A gate, `canView` or identity rule admits only on its exact answer, so one that returns a promise admits nobody. |
 | Outputs | A projection or query result with a field its schema does not name is withheld. |
 
 The uniqueness guarantee is one per verified subject. Two guest passes issued separately cannot be shown to be different people.
@@ -52,6 +52,8 @@ The room epoch changes when the room is recreated. A request under an old epoch 
 | Accepted mutations per app per room | 120 a second, burst 240 |
 | Subscriptions per socket | 16 |
 | Socket behind (resnapshot later) | more than 256 queued packets or 1 MiB |
+| Query on a socket that is behind | refused with `busy` |
+| Streamed result on a socket that falls behind | waits for it, cut off after 5 s |
 | Socket disconnected | more than 4,096 queued packets or 8 MiB |
 
 Each table declares its own row cap. Per-action rates are declared by the module and follow the person across tabs. All of these are starting budgets in `limits.ts`.
@@ -80,9 +82,9 @@ State lives in the SFU process for the lifetime of the room. It is lost if the p
 The native app does not speak this transport yet. To host an authority app it needs:
 
 1. The seven events above in `SfuEvents.swift`, generated from one source with the web names.
-2. A Swift/Skip session per app: the capabilities exchange, subscribe, frame application (`replace` in parts, `patch` with the sequence check, `revoke`), and `act` with a retained operation id and retry. `client.ts` is the reference, about 500 lines with no framework in it.
+2. A Swift/Skip session per app: the capabilities exchange, subscribe, frame application (`replace` in parts, `patch` with the sequence check, `revoke`), and `act` with a retained operation id and retry inside one room epoch. `client.ts` is the reference, about 500 lines with no framework in it.
 3. Fixtures shared with TypeScript: recorded frame sequences that both decoders must turn into the same view.
-4. Clearing held rows on leave, reconnect and revoke, and on any reuse of a web view.
+4. Clearing held rows on leave, reconnect and revoke, and on any reuse of a web view. On web, `AuthorityProvider` does this when `joined` goes false, through the client's `left()`.
 5. A local panel selection in the Activities sheet, separate from the stage.
 
 Until then native keeps its existing activities and ignores the new events. Legacy `webinar:qa:*` keeps working against a new SFU.

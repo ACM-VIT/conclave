@@ -18,7 +18,7 @@ This creates three entry points:
 | `server/index.ts` | SFU only | tables, rules, projections, timers |
 | `web/index.ts` | browser | the panel that renders the view |
 
-`check:apps` fails any browser or native file that imports a `server` entry, so private rules and answer keys cannot reach a bundle.
+`check:apps` fails any browser or native file that imports a `server` entry, so private rules and answer keys cannot reach a bundle. It reads imports from the syntax tree, however the path is written. It also fails an import whose path is built at run time where that path could reach server code, because a bundler ships every file such a path could name.
 
 ## 1. Write the contract
 
@@ -103,7 +103,7 @@ The four things a module has:
 - **Tables.** Keyed rows with a row cap. Writes happen only inside a handler's transaction: `get`, `insertIfAbsent`, `put`, `delete`, `count` and `scan` by key prefix. Committed rows are frozen.
 - **Actions.** A role list, an optional `when` condition, a rate, and a synchronous handler. The host checks the gate and parses the input before your code runs. Return the receipt, or call `reject("reason")` to refuse and keep nothing.
 - **Views.** A shared view is projected once per audience role and cannot see who is looking. A personal view names an `owner` and reaches every connection of that subject and nobody else.
-- **Timers.** `tx.schedule(kind, key, atMs, payload)` inside a transaction, handled in `onTimer`. Recheck the phase in the handler: a timer for a round that has moved on should do nothing.
+- **Timers.** `tx.schedule(kind, key, atMs, payload)` inside a transaction, handled in `onTimer`. Recheck the phase in the handler: a timer for a round that has moved on should do nothing. Handlers are synchronous. An `async` timer handler does not compile, and any handler that returns a promise is a fault that keeps none of its writes.
 
 ### Once per person
 
