@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
-import { extractComments, iconGeneratorOutputs, pythonScannerFallback } from "./extract.mjs";
+import { extractComments, iconGeneratorOutputs, pythonScannerFallback, scanPythonByHand } from "./extract.mjs";
 import { configuresNoComments } from "./policy.mjs";
+
+const pythonHasPep701 =
+  spawnSync("python3", ["-I", "-c", "import sys; print(sys.version_info >= (3, 12))"], { encoding: "utf8" }).stdout?.trim() === "True";
 
 const texts = (source, file) => extractComments(source, file).map((comment) => comment.text);
 const disallowed = (source, file) =>
@@ -301,7 +304,7 @@ test("CSS unquoted url() is not a comment", () => {
   assert.deepEqual(texts(source, "a.css"), ["/* real */"]);
 });
 
-test("Python f-string replacement fields can hold comments, format specs cannot", () => {
+test("Python f-string replacement fields can hold comments, format specs cannot", { skip: !pythonHasPep701 && "comments in f-string fields need Python 3.12 (PEP 701)" }, () => {
   const source = [
     'value = f"""{',
     "    total  # inside a replacement field",
@@ -421,7 +424,11 @@ test("escapes in CSS, shell and Kotlin never open a comment", () => {
 
 test("Python comments come from tokenize, so format specs stay code", () => {
   assert.equal(pythonScannerFallback(), undefined);
-  assert.deepEqual(texts('print(f"{1:=#6x}")  # real\nvalue = f"""{\n    total  # inside\n}"""\n', "a.py"), ["# real", "# inside"]);
+  assert.deepEqual(texts('print(f"{1:=#6x}")  # real\n', "a.py"), ["# real"]);
+});
+
+test("Python 3.12 comments inside a multiline f-string field", { skip: !pythonHasPep701 && "comments in f-string fields need Python 3.12 (PEP 701)" }, () => {
+  assert.deepEqual(texts('value = f"""{\n    total  # inside\n}"""\n', "a.py"), ["# inside"]);
 });
 
 test("shell fixtures that bash runs agree with the extractor", (t) => {
@@ -453,4 +460,28 @@ test("shell fixtures that bash runs agree with the extractor", (t) => {
     "16",
   ]);
   assert.deepEqual(texts(source, "fixture.sh"), ["# after quoted arithmetic", "# real", "# last"]);
+});
+
+test("a # inside ${...} and a comment after a line continuation, run by bash", (t) => {
+  if (spawnSync("bash", ["--version"]).error) {
+    t.skip("bash is not installed");
+    return;
+  }
+  const source = [
+    "printf '%s\\n' ${GREETING:-hello #world}",
+    "echo one \\",
+    "  two # it's a comment",
+    "echo three",
+    "# last",
+  ].join("\n");
+  const run = spawnSync("bash", ["-c", source], { encoding: "utf8", env: { PATH: process.env.PATH } });
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(run.stdout.split("\n").filter(Boolean), ["hello", "#world", "one two", "three"]);
+  assert.deepEqual(texts(source, "fixture.sh"), ["# it's a comment", "# last"]);
+});
+
+test("the no-python fallback keeps format specs as code", () => {
+  assert.deepEqual(scanPythonByHand('x = f"{42:=#8x}"  # real\n').length, 1);
+  const [[start]] = scanPythonByHand('x = f"{42:=#8x}"  # real\n');
+  assert.equal('x = f"{42:=#8x}"  # real\n'.slice(start, start + 6), "# real");
 });

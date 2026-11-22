@@ -237,6 +237,7 @@ const scanShell = (text) => {
     i += 1;
     while (i < text.length && text[i] !== '"') {
       if (text[i] === "\\") i += 2;
+      else if (text.startsWith("${", i)) parameterExpansion();
       else if (text.startsWith("$((", i)) {
         i += 1;
         arithmetic();
@@ -247,6 +248,27 @@ const scanShell = (text) => {
     }
     i += 1;
   };
+
+  function parameterExpansion() {
+    i += 2;
+    let depth = 1;
+    while (i < text.length) {
+      if (text[i] === "\\") i += 2;
+      else if (text[i] === "'") i = skipQuoted(text, i, "'", false);
+      else if (text[i] === '"') doubleQuoted();
+      else if (text.startsWith("${", i)) {
+        depth += 1;
+        i += 2;
+      } else if (text.startsWith("$(", i)) {
+        i += 2;
+        code(")");
+      } else if (text[i] === "}") {
+        depth -= 1;
+        i += 1;
+        if (depth === 0) return;
+      } else i += 1;
+    }
+  }
 
   const heredocWord = () => {
     let word = "";
@@ -279,9 +301,12 @@ const scanShell = (text) => {
         return;
       }
       if (c === "\\") {
+        const continuation = text[i + 1] === "\n";
+        const before = text[i - 1];
         i += 2;
-        if (text[i] === "#") i += 1;
+        if (text[i] === "#" && !(continuation && (before === undefined || /[\s;|&(]/.test(before)))) i += 1;
       } else if (c === "'") i = skipQuoted(text, i, "'", false);
+      else if (text.startsWith("${", i)) parameterExpansion();
       else if (c === "$" && text[i + 1] === "'") i = skipQuoted(text, i + 1, "'", true);
       else if (c === '"') doubleQuoted();
       else if (text.startsWith("$((", i)) {
@@ -361,7 +386,7 @@ const scanPython = (text, file) => {
   return scanPythonByHand(text);
 };
 
-const scanPythonByHand = (text) => {
+export const scanPythonByHand = (text) => {
   const comments = [];
   let i = 0;
 
@@ -391,7 +416,7 @@ const scanPythonByHand = (text) => {
       else if (c === "}") {
         i += 1;
         return;
-      } else if (c === ":" && depth === 0 && text[i + 1] !== "=") {
+      } else if (c === ":" && depth === 0) {
         i += 1;
         formatSpec(triple);
         return;
