@@ -59,22 +59,27 @@ const describe = (failure: AuthorityFailure, doing: Doing): string =>
     : FAILURES[failure.code]?.[doing]) ?? "That did not go through.";
 
 /**
- * What the viewer last asked for on one question. It is shown in place of
- * the server's state while it is on its way, and after the answer until the
- * view moves, which is when the server's own row for it arrives.
+ * What the viewer last asked for on one question, shown in place of the
+ * view only until the view can answer for itself. The button's state is the
+ * view's: a wish is an optimistic flag over it. `sentOn` is the viewer's own
+ * upvotes as the view held them when the request for the wish left. Once
+ * they change, by that request landing or by another tab, the view is newer
+ * than the request and is shown, whatever the request's answer says. A wish
+ * not sent yet, a change of mind waiting for the request before it, stands
+ * until it is sent.
  */
-type UpvoteWish = { value: boolean; answeredOn?: object | null };
+type UpvoteWish = { value: boolean; sentOn?: ReadonlyMap<string, unknown> | null };
 
 const NO_WISHES: ReadonlyMap<string, UpvoteWish> = new Map();
 
 const wishedUpvote = (
   wishes: ReadonlyMap<string, UpvoteWish>,
   id: string,
-  view: object | null,
+  myUpvotes: ReadonlyMap<string, unknown> | null,
 ): boolean | undefined => {
   const wish = wishes.get(id);
   if (!wish) return undefined;
-  const stands = wish.answeredOn === undefined || wish.answeredOn === view;
+  const stands = wish.sentOn === undefined || wish.sentOn === myUpvotes;
   return stands ? wish.value : undefined;
 };
 
@@ -87,7 +92,7 @@ export function useQa() {
   const questions = useMemo<QaItem[]>(() => {
     if (!view) return [];
     const hasUpvoted = (id: string): boolean =>
-      wishedUpvote(wishes, id, view) ?? view.myUpvotes.has(id);
+      wishedUpvote(wishes, id, view.myUpvotes) ?? view.myUpvotes.has(id);
     const items = new Map<string, QaItem>();
     for (const question of view.questions.values()) {
       items.set(question.id, {
@@ -158,7 +163,7 @@ export function useQa() {
       };
       const current = viewRef.current;
       const shown =
-        wishedUpvote(wishesRef.current, id, current) ??
+        wishedUpvote(wishesRef.current, id, current?.myUpvotes ?? null) ??
         current?.myUpvotes.has(id) ??
         false;
       wish({ value: !shown });
@@ -175,16 +180,30 @@ export function useQa() {
             wish(null);
             return { ok: true };
           }
+          const flag: UpvoteWish = { value, sentOn: viewRef.current?.myUpvotes ?? null };
+          wish(flag);
           const result = await act("upvote", { id, value });
           if (!result.ok) {
             wish(null);
             return { ok: false, error: describe(result, "upvote") };
           }
           onServer = value;
-          if (wishesRef.current.get(id)?.value === value) {
-            wish({ value, answeredOn: viewRef.current });
-            return { ok: true };
+          // The answer can be a retry's, replaying an outcome the view has
+          // moved past since. With no click since, the flag stands only until
+          // the view's own upvotes change, which may already have happened.
+          const wanted = wishesRef.current.get(id);
+          if (!wanted || wanted === flag) return { ok: true };
+          if (wanted.value !== value) continue;
+          // A click since asked for what was just sent. If the view moved
+          // past the request first, the click was made against the view, and
+          // the view is what is on the server as far as anyone can tell.
+          const now = viewRef.current?.myUpvotes ?? null;
+          if (now !== flag.sentOn) {
+            onServer = now?.has(id) ?? value;
+            continue;
           }
+          wish(flag);
+          return { ok: true };
         }
       } finally {
         sendingRef.current.delete(id);

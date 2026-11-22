@@ -194,3 +194,90 @@ it("goes back to the server's state and says why when an upvote is refused", asy
   expect(await outcome).toEqual({ ok: false, error: "You are voting too quickly" });
   expect(qa.questions[0].hasUpvoted).toBe(false);
 });
+
+it("shows what the view says when a lost answer's retry comes back after another tab took the upvote away", async () => {
+  const myUpvote = (seq: number, voted: boolean) =>
+    act(async () =>
+      push({
+        kind: "patch",
+        subscription,
+        generation: 1,
+        serverNowMs: Date.now(),
+        seq,
+        put: voted ? [{ bucket: "myUpvotes", key: "q1", value: {} }] : [],
+        remove: voted ? [] : [{ bucket: "myUpvotes", key: "q1" }],
+      }),
+    );
+  const { outcome } = await click();
+  const shownWhileSending = qa.questions[0].hasUpvoted;
+  // The first answer is lost on the way back. The upvote landed, and its row
+  // arrives. Then the same person takes the upvote back in another tab.
+  await myUpvote(1, true);
+  await myUpvote(2, false);
+  const shownAfterTheOtherTab = qa.questions[0].hasUpvoted;
+  // No answer came, so the same operation is sent again, and the server
+  // answers it with the result it kept for that operation.
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(6_000);
+  });
+  const requests = sent.filter((entry) => entry.event === AUTHORITY_EVENTS.act);
+  await act(async () => {
+    requests[1]?.ack?.({ ok: true, value: null });
+    await vi.advanceTimersByTimeAsync(0);
+  });
+
+  expect(shownWhileSending).toBe(true);
+  expect(shownAfterTheOtherTab).toBe(false);
+  expect(requests.length).toBe(2);
+  expect(requests[1].payload.operation).toEqual(requests[0].payload.operation);
+  expect(await outcome).toEqual({ ok: true });
+  // The view says the upvote is gone, and nothing newer says otherwise.
+  expect(qa.questions[0].hasUpvoted).toBe(false);
+});
+
+it("sends a click made against the newer view again, when a lost answer's retry comes back for the same value", async () => {
+  const myUpvote = (seq: number, voted: boolean) =>
+    act(async () =>
+      push({
+        kind: "patch",
+        subscription,
+        generation: 1,
+        serverNowMs: Date.now(),
+        seq,
+        put: voted ? [{ bucket: "myUpvotes", key: "q1", value: {} }] : [],
+        remove: voted ? [] : [{ bucket: "myUpvotes", key: "q1" }],
+      }),
+    );
+  await click();
+  await myUpvote(1, true);
+  await myUpvote(2, false);
+  // The button shows the upvote gone, so the viewer clicks to upvote again
+  // while the first request is still waiting for its answer.
+  await click();
+  const shownAfterTheClick = qa.questions[0].hasUpvoted;
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(6_000);
+  });
+  const retried = sent.filter((entry) => entry.event === AUTHORITY_EVENTS.act);
+  await act(async () => {
+    retried[1]?.ack?.({ ok: true, value: null });
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  const requests = sent.filter((entry) => entry.event === AUTHORITY_EVENTS.act);
+  await act(async () => {
+    requests[2]?.ack?.({ ok: true, value: null });
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  await myUpvote(3, true);
+
+  expect(shownAfterTheClick).toBe(true);
+  // The retry, then a new request for the click: the server held no upvote.
+  expect(requests.map((entry) => (entry.payload.input as { value: boolean }).value)).toEqual([
+    true,
+    true,
+    true,
+  ]);
+  expect(requests[2].payload.operation).not.toEqual(requests[0].payload.operation);
+  expect(qa.questions[0].hasUpvoted).toBe(true);
+});
+
