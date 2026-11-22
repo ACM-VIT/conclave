@@ -80,6 +80,42 @@ describe("app document engine", () => {
     expect(replies).toEqual(["applied", "yielded"]);
   });
 
+  it("measures an update that unlocks pending edits after applying it and refuses it past the limit", () => {
+    vi.spyOn(performance, "now").mockReturnValue(0);
+    const engine = createAppDocumentEngine({ maxDocumentBytes: 10_000 });
+    const first = new Y.Doc();
+    first.clientID = 1;
+    const second = new Y.Doc();
+    second.clientID = 2;
+    const base = edit(first, (text) => text.insert(0, "x".repeat(5000)));
+    const unlock = edit(first, (text) => text.insert(5000, "y"));
+    Y.applyUpdate(second, base);
+    Y.applyUpdate(second, unlock);
+    const inserts = edit(second, (text) => {
+      text.insert(5001, "z");
+      for (let index = 4990; index > 0; index -= 12) text.insert(index, "b");
+    });
+    const replies: FromWorker[] = [];
+
+    engine.handle(
+      {
+        type: "run",
+        document: 1,
+        load: { base: null, tail: [] },
+        operations: [base, inserts, unlock].map((update) => ({ kind: "apply" as const, update })),
+      },
+      (reply) => replies.push(reply),
+    );
+
+    expect(unlock.length * 16).toBeLessThan(10_000 - 8_745);
+    expect(replies.map((reply) => (reply.type === "refused" ? reply.reason : reply.type))).toEqual([
+      "loaded",
+      "applied",
+      "applied",
+      "too-large",
+    ]);
+  });
+
   it("yields before any operation when rebuilding used the time slice", () => {
     steppingClock();
     const engine = createAppDocumentEngine({ maxDocumentBytes: 1024 * 1024 });
