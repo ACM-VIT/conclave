@@ -22,6 +22,7 @@ services:
       SFU_PORT: "3031"
       NODE_ENV: production
       SFU_CORS_ORIGINS: ${SFU_CORS_ORIGINS:-https://conclave.acmvit.in}
+      SFU_ALLOW_OPEN_CORS: ${SFU_ALLOW_OPEN_CORS:-}
       SFU_LOG_LEVEL: ${SFU_LOG_LEVEL:-}
       SFU_INSTANCE_ID: "sfu-a"
       SFU_PUBLIC_URL: ${SFU_A_PUBLIC_URL:-}
@@ -85,6 +86,7 @@ services:
       SFU_PORT: "3032"
       NODE_ENV: production
       SFU_CORS_ORIGINS: ${SFU_CORS_ORIGINS:-https://conclave.acmvit.in}
+      SFU_ALLOW_OPEN_CORS: ${SFU_ALLOW_OPEN_CORS:-}
       SFU_LOG_LEVEL: ${SFU_LOG_LEVEL:-}
       SFU_INSTANCE_ID: "sfu-b"
       SFU_PUBLIC_URL: ${SFU_B_PUBLIC_URL:-}
