@@ -10,6 +10,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import {
+  findLaneGap,
   InCallNoticeLaneContext,
   placeNoticeLane,
   type LaneObstacle,
@@ -19,6 +20,8 @@ const NOTICE_GAP_PX = 8;
 const TOGGLE_HEIGHT_PX = 36;
 const COMPACT_HEIGHT_PX = 44;
 const MAX_PEEKS = 2;
+const PANEL_NOTICE_SHARE = 0.5;
+const MAX_LANE_WIDTH_PX = 560;
 
 const PEEK_STEP_PX = 6;
 const PEEK_SHRINK = 0.07;
@@ -41,19 +44,35 @@ interface LaneState {
   offset: number;
   count: number;
   room: number;
+  narrow?: { left: number; width: number };
+  bare?: boolean;
+  cramped?: boolean;
 }
 
 const sameLane = (a: LaneState, b: LaneState) =>
   a.compact === b.compact &&
   a.offset === b.offset &&
   a.count === b.count &&
-  a.room === b.room;
+  a.room === b.room &&
+  a.narrow?.left === b.narrow?.left &&
+  a.narrow?.width === b.narrow?.width &&
+  a.bare === b.bare &&
+  a.cramped === b.cramped;
+
+const narrowLane = (
+  placement: { left?: number; right?: number },
+  padLeft: number,
+): LaneState["narrow"] =>
+  placement.left === undefined || placement.right === undefined
+    ? undefined
+    : { left: Math.round(placement.left - padLeft), width: Math.round(placement.right - placement.left) };
 
 function layoutStack(
   list: HTMLElement,
   items: HTMLElement[],
   heights: number[],
   expanded: boolean,
+  bare: boolean,
 ) {
   if (expanded || items.length <= 1) {
     let y = 0;
@@ -79,15 +98,15 @@ function layoutStack(
       item.setAttribute("data-peek", "");
       item.style.height = `${top}px`;
     }
-    item.style.translate = `0 ${depth * PEEK_STEP_PX}px`;
+    item.style.translate = `0 ${bare ? 0 : depth * PEEK_STEP_PX}px`;
     item.style.scale = `${1 - depth * PEEK_SHRINK} 1`;
     item.style.zIndex = String(items.length - index);
     item.style.setProperty(
       "--notice-opacity",
-      index === 0 ? "1" : index <= MAX_PEEKS ? String(PEEK_OPACITY[index - 1]) : "0",
+      index === 0 ? "1" : index <= MAX_PEEKS && !bare ? String(PEEK_OPACITY[index - 1]) : "0",
     );
   });
-  list.style.height = `${top + Math.min(MAX_PEEKS, items.length - 1) * PEEK_STEP_PX}px`;
+  list.style.height = `${top + (bare ? 0 : Math.min(MAX_PEEKS, items.length - 1) * PEEK_STEP_PX)}px`;
 }
 
 function collectObstacles(
@@ -141,6 +160,7 @@ export default function InCallNoticeSlot({
   const rowRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const fullHeightsRef = useRef(new WeakMap<Element, { key: string; height: number }>());
+  const fullListHeightRef = useRef<{ key: string; height: number } | null>(null);
   const [lane, setLane] = useState<LaneState>({ compact: false, offset: 0, count: 0, room: 0 });
   const [expanded, setExpanded] = useState(false);
   const [announcements, setAnnouncements] = useState<
@@ -195,7 +215,7 @@ export default function InCallNoticeSlot({
       for (const item of items) item.style.height = "";
       const heights = items.map((item) => item.offsetHeight);
       const isExpanded = expandedRef.current && count > 1;
-      layoutStack(list, items, heights, isExpanded);
+      layoutStack(list, items, heights, isExpanded, Boolean(laneRef.current.bare));
 
       const peekSpace = Math.min(MAX_PEEKS, count - 1) * PEEK_STEP_PX;
       const footerSpace = count > 1 ? TOGGLE_HEIGHT_PX : 0;
@@ -205,15 +225,32 @@ export default function InCallNoticeSlot({
       const cssMinTop = parseFloat(getComputedStyle(column).paddingTop) || 0;
       const maxBottom = column.clientHeight;
 
-      if (panelTargetRef.current) {
-        commit({ compact: !isExpanded, offset: 0, count, room: 0 });
+      const target = panelTargetRef.current;
+      if (target) {
+        const panelRect = (target.closest(".fixed") ?? target.parentElement ?? target).getBoundingClientRect();
+        const listTop = list.getBoundingClientRect().top;
+        const panelRoom = Math.min(
+          panelRect.bottom - listTop - TOGGLE_HEIGHT_PX - NOTICE_GAP_PX,
+          panelRect.height * PANEL_NOTICE_SHARE - TOGGLE_HEIGHT_PX,
+        );
+        commit({
+          compact: !isExpanded,
+          offset: 0,
+          count,
+          room: Math.max(COMPACT_HEIGHT_PX, Math.floor(panelRoom)),
+        });
         return;
       }
 
-      const rowRect = row.getBoundingClientRect();
+      const columnStyle = getComputedStyle(column);
+      const padLeft = parseFloat(columnStyle.paddingLeft) || 0;
+      const contentWidth =
+        column.clientWidth - padLeft - (parseFloat(columnStyle.paddingRight) || 0);
+      const laneWidth = Math.min(MAX_LANE_WIDTH_PX, contentWidth);
+      const laneLeft = column.getBoundingClientRect().left - slotRect.left + padLeft + (contentWidth - laneWidth) / 2;
       const bounds = {
-        left: rowRect.left - slotRect.left,
-        right: rowRect.right - slotRect.left,
+        left: laneLeft,
+        right: laneLeft + laneWidth,
         minTop: cssMinTop,
         maxBottom,
       };
@@ -238,25 +275,47 @@ export default function InCallNoticeSlot({
 
       const obstacles = collectObstacles(slot, slotRect, slot.parentElement);
       if (isExpanded) {
-        const placement = placeNoticeLane(obstacles, {
-          ...bounds,
-          count: 1,
-          fullHeight: listHeight + TOGGLE_HEIGHT_PX,
-          collapsedHeight: Number.POSITIVE_INFINITY,
-          compactHeight: Number.POSITIVE_INFINITY,
-        });
-        const top = placement.mode === "full" ? placement.top : cssMinTop;
+        const listKey = `${Math.round(laneWidth)}:${items
+          .map((item) => item.querySelector("[data-notice-content]")?.getAttribute("data-notice-content") ?? "")
+          .join("|")}`;
+        const crampedNow = Boolean(laneRef.current.cramped);
+        if (!crampedNow) {
+          fullListHeightRef.current = { key: listKey, height: listHeight };
+        } else if (fullListHeightRef.current?.key !== listKey) {
+          commit({ ...laneRef.current, cramped: false, count });
+          return;
+        }
+        const desired = (fullListHeightRef.current?.height ?? listHeight) + TOGGLE_HEIGHT_PX;
+        const gap = findLaneGap(
+          obstacles,
+          bounds,
+          desired,
+          Math.min(desired, COMPACT_HEIGHT_PX + TOGGLE_HEIGHT_PX),
+        );
+        const fallback = gap
+          ? null
+          : placeNoticeLane(obstacles, {
+              ...bounds,
+              count: 1,
+              fullHeight: Number.POSITIVE_INFINITY,
+              collapsedHeight: Number.POSITIVE_INFINITY,
+              compactHeight: COMPACT_HEIGHT_PX + TOGGLE_HEIGHT_PX,
+            });
+        const top = gap ? gap.top : (fallback?.top ?? cssMinTop);
+        const height = gap ? Math.min(gap.height, desired) : COMPACT_HEIGHT_PX + TOGGLE_HEIGHT_PX;
         commit({
           compact: false,
           offset: Math.max(0, top - cssMinTop),
           count,
-          room: maxBottom - top - TOGGLE_HEIGHT_PX,
+          room: Math.max(COMPACT_HEIGHT_PX, height - TOGGLE_HEIGHT_PX),
+          narrow: fallback ? narrowLane(fallback, padLeft) : undefined,
+          cramped: !gap || gap.height < desired,
         });
         return;
       }
 
       const compactNow = laneRef.current.compact;
-      const key = `${row.clientWidth}:${
+      const key = `${Math.round(laneWidth)}:${
         items[0].querySelector("[data-notice-content]")?.getAttribute("data-notice-content") ?? ""
       }`;
       let topFullHeight = heights[0];
@@ -282,6 +341,8 @@ export default function InCallNoticeSlot({
         offset: Math.max(0, placement.top - cssMinTop),
         count,
         room: maxBottom - placement.top,
+        narrow: narrowLane(placement, padLeft),
+        bare: Boolean(placement.blocked),
       });
     };
 
@@ -339,7 +400,7 @@ export default function InCallNoticeSlot({
 
   useLayoutEffect(() => {
     scheduleRef.current();
-  }, [expanded, lane.compact]);
+  }, [expanded, lane.compact, lane.bare, lane.cramped]);
 
   const announce = useCallback((id: string, text: string | null, urgent: boolean) => {
     setAnnouncements((prev) => {
@@ -355,7 +416,7 @@ export default function InCallNoticeSlot({
   }, []);
 
   const isExpanded = expanded && lane.count > 1;
-  const compact = lane.compact && !isExpanded;
+  const compact = isExpanded ? Boolean(lane.cramped) : lane.compact;
   const laneContext = useMemo(
     () => ({ compact, expanded: isExpanded, announce }),
     [compact, isExpanded, announce],
@@ -387,7 +448,16 @@ export default function InCallNoticeSlot({
       <div
         ref={rowRef}
         className="relative flex w-full max-w-[560px] items-start gap-1"
-        style={{ marginTop: lane.offset }}
+        style={
+          lane.narrow
+            ? {
+                marginTop: lane.offset,
+                alignSelf: "flex-start",
+                marginLeft: lane.narrow.left,
+                width: lane.narrow.width,
+              }
+            : { marginTop: lane.offset }
+        }
       >
         <div
           ref={listRef}

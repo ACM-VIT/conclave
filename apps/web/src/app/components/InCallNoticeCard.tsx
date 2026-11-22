@@ -66,7 +66,7 @@ export default function InCallNoticeCard({
         role={announce ? undefined : isError ? "alert" : "status"}
         aria-live={announce || isError ? undefined : "polite"}
         onClick={cardAction}
-        className={`flex min-w-0 items-center gap-3 py-3 pl-4 pr-3 ${cardAction ? "cursor-pointer" : ""}`}
+        className={`flex min-w-0 items-center gap-3 pl-4 pr-3 ${compact ? "h-[42px]" : "py-3"} ${cardAction ? "cursor-pointer" : ""}`}
       >
         <span
           aria-hidden
@@ -80,9 +80,9 @@ export default function InCallNoticeCard({
             className={`${ICON_TONE[tone]} ${spinIcon ? "motion-safe:animate-spin" : ""}`}
           />
         </span>
-        <div className="flex min-h-7 min-w-0 flex-1 flex-col justify-center">
+        <div className={`flex min-w-0 flex-1 flex-col justify-center ${compact ? "" : "min-h-7"}`}>
           <span
-            className="line-clamp-2 text-[13.5px] font-medium leading-5 text-[#fafafa]"
+            className={`text-[13.5px] font-medium leading-5 text-[#fafafa] ${compact ? "truncate" : "line-clamp-2"}`}
             title={title}
           >
             {title}
