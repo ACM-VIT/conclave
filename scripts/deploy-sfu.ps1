@@ -205,6 +205,35 @@ function Get-PublicUrl {
 # images ran as root and left root-owned files (the SQLite database among them)
 # in the recordings volume. Hand anything node does not own over before a new
 # container starts. Safe to repeat; it only touches mismatched files.
+# Older images fell back to JSON files in the container layer when SQLite was
+# locked. Copy them from the container being replaced onto the volume; the new
+# SFU imports them on startup and renames each file .imported.
+function Copy-FallbackJson {
+  param([string]$Service)
+
+  $container = (& docker @($composeBaseArgs + @("ps", "-a", "-q", $Service)) 2>$null | Select-Object -First 1)
+  if ([string]::IsNullOrWhiteSpace($container)) {
+    return
+  }
+  $staging = Join-Path ([System.IO.Path]::GetTempPath()) ("conclave-fallback-" + [guid]::NewGuid())
+  New-Item -ItemType Directory -Path $staging | Out-Null
+  try {
+    foreach ($name in @("scheduling.json", "scheduled-meetings.json", "scheduled-webinars.json")) {
+      & docker cp "${container}:/app/packages/sfu/data/$name" (Join-Path $staging $name) *> $null
+    }
+    $copied = @(Get-ChildItem -Path $staging -Filter "*.json" | ForEach-Object { $_.Name })
+    if ($copied.Count -gt 0) {
+      Invoke-Checked -Command "docker" -Arguments ($composeBaseArgs + @(
+        "run", "--rm", "--no-deps", "--user", "node", "-v", "${staging}:/fallback-json:ro", "--entrypoint", "sh", $Service, "-c",
+        "mkdir -p /var/lib/conclave/recordings/json-fallback-import/$Service && cp /fallback-json/*.json /var/lib/conclave/recordings/json-fallback-import/$Service/"
+      ))
+      Write-Host "Copied JSON fallback files from the old $Service container onto the volume: $($copied -join ' ')"
+    }
+  } finally {
+    Remove-Item -Recurse -Force -Path $staging -ErrorAction SilentlyContinue
+  }
+}
+
 function Start-SfuService {
   param([string]$Service)
 
@@ -214,6 +243,7 @@ function Start-SfuService {
     "/var/lib/conclave/recordings", "(", "!", "-user", "node", "-o", "!", "-group", "node", ")",
     "-exec", "chown", "node:node", "{}", "+"
   ))
+  Copy-FallbackJson -Service $Service
   Invoke-Checked -Command "docker" -Arguments ($composeBaseArgs + @("up", "-d", $Service))
 }
 

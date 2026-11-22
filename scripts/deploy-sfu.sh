@@ -234,10 +234,27 @@ COMPOSE=(docker compose "${COMPOSE_ENV_FILES[@]}" -f "$COMPOSE_FILE")
 # container starts. Safe to repeat; it only touches mismatched files.
 # Compose drops every capability, so root also needs DAC_READ_SEARCH to walk
 # directories it does not own.
+#
+# Older images fell back to JSON files in the container layer when SQLite was
+# locked. Copy them from the container being replaced onto the volume; the new
+# SFU imports them on startup and renames each file .imported.
 ensure_state_ownership() {
-  local service="$1"
+  local service="$1" container staging name
   "${COMPOSE[@]}" run --rm --no-deps --user root --cap-add CHOWN --cap-add DAC_READ_SEARCH --entrypoint find "$service" \
     /var/lib/conclave/recordings \( ! -user node -o ! -group node \) -exec chown node:node {} +
+  container="$("${COMPOSE[@]}" ps -a -q "$service" 2>/dev/null | head -n 1)"
+  [[ -n "$container" ]] || return 0
+  staging="$(mktemp -d)"
+  for name in scheduling.json scheduled-meetings.json scheduled-webinars.json; do
+    docker cp "${container}:/app/packages/sfu/data/${name}" "${staging}/${name}" >/dev/null 2>&1 || true
+  done
+  if compgen -G "${staging}/*.json" >/dev/null; then
+    chmod -R a+rX "$staging"
+    "${COMPOSE[@]}" run --rm --no-deps --user node -v "${staging}:/fallback-json:ro" --entrypoint sh "$service" -c \
+      "mkdir -p /var/lib/conclave/recordings/json-fallback-import/${service} && cp /fallback-json/*.json /var/lib/conclave/recordings/json-fallback-import/${service}/"
+    echo "Copied JSON fallback files from the old ${service} container onto the volume: $(cd "$staging" && echo *.json)"
+  fi
+  rm -rf "$staging"
 }
 
 build_and_start() {
