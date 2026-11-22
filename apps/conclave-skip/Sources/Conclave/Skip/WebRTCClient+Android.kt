@@ -309,6 +309,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         private const val CONSUMER_RESET_CANDIDATE_STAGGER_MS = 350L
         private const val CONSUMER_RESET_MAX_ATTEMPTS = 2
         private const val PRE_JOIN_CAMERA_RELEASE_SETTLE_MS = 350L
+        private const val RETIRED_TRANSPORT_DISPOSE_DELAY_MS = 45_000L
         private const val WEBRTC_NETWORK_PRIORITY_VERY_LOW = 0
         private const val WEBRTC_NETWORK_PRIORITY_LOW = 1
         private const val WEBRTC_NETWORK_PRIORITY_HIGH = 3
@@ -1871,6 +1872,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         this.socketManager = socketManager
         this.serverRtpCapabilities = rtpCapabilities
         this.runtimeIceServersJSON = iceServersJSON?.trim()?.takeIf { it.isNotEmpty() }
+        disposeRetiredTransportsIfIdle()
 
         val context = ProcessInfo.processInfo.androidContext
         try {
@@ -1959,11 +1961,11 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         }
 
         if (generation != configurationGeneration) {
-            nextSendTransport.close()
+            retireTransport(nextSendTransport)
             throw ErrorException("WebRTC session was replaced")
         }
 
-        sendTransport?.close()
+        retireTransport(sendTransport)
         sendTransportId = producerTransportParams.id
         sendTransport = nextSendTransport
         NativePerformanceDiagnostics.timingAlways("webrtc_create_send_transport_local", localCreateStartedAt)
@@ -2016,11 +2018,11 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         }
 
         if (generation != configurationGeneration) {
-            nextReceiveTransport.close()
+            retireTransport(nextReceiveTransport)
             throw ErrorException("WebRTC session was replaced")
         }
 
-        receiveTransport?.close()
+        retireTransport(receiveTransport)
         receiveTransportId = consumerTransportParams.id
         receiveTransport = nextReceiveTransport
         NativePerformanceDiagnostics.timingAlways("webrtc_create_receive_transport_local", localCreateStartedAt)
@@ -2038,6 +2040,46 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         return producerRestarted && consumerRestarted
     }
 
+    // close() leaves a mediasoup transport's native peer connection alive, and with it the factory mediasoup
+    // builds per Device (signaling, network, rtc-low-prio and its legacy voiceengine audio module): every call
+    // left one set of threads behind. dispose() frees them, with two constraints:
+    // - that audio module registers its JNI natives per instance but unregisters them for the whole class when
+    //   destroyed, so a factory may only be freed while no other mediasoup device or transport is alive, and
+    //   always before the next Device is created (freeing it later strips the natives from the live call);
+    // - base Transport methods reach native code without a disposed check, so a suspended caller must not be
+    //   able to touch a freed transport (restartIce re-checks identity after its ack).
+    // Retired transports are therefore freed when the next call is configured, or after the app sat idle
+    // long enough for any outstanding socket ack (30 s) to settle.
+    private val retiredTransports: MutableList<Transport> = mutableListOf()
+
+    private fun retireTransport(transport: Transport?) {
+        if (transport == null) return
+        try {
+            transport.close()
+        } catch (_: Throwable) {
+        }
+        synchronized(retiredTransports) { retiredTransports.add(transport) }
+        mainHandler.postDelayed({ disposeRetiredTransportsIfIdle() }, RETIRED_TRANSPORT_DISPOSE_DELAY_MS)
+    }
+
+    private fun disposeRetiredTransportsIfIdle() {
+        if (Looper.myLooper() != Looper.getMainLooper()) return
+        if (device != null || sendTransport != null || receiveTransport != null) return
+        val retired = synchronized(retiredTransports) {
+            retiredTransports.toList().also { retiredTransports.clear() }
+        }
+        for (transport in retired) {
+            try {
+                when (transport) {
+                    is SendTransport -> transport.dispose()
+                    is RecvTransport -> transport.dispose()
+                }
+            } catch (error: Throwable) {
+                debugLog("[WebRTC] Failed to dispose retired transport: ${error}")
+            }
+        }
+    }
+
     internal suspend fun restartIce(transportKind: String): Boolean {
         val socket = socketManager ?: return false
         try {
@@ -2046,12 +2088,14 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                     val transport = sendTransport ?: return false
                     val transportId = sendTransportId ?: return false
                     val response = socket.restartIce(transport = transportKind, transportId = transportId)
+                    if (transport !== sendTransport) return false
                     transport.restartIce(encodeJSONString(response.iceParameters))
                 }
                 "consumer" -> {
                     val transport = receiveTransport ?: return false
                     val transportId = receiveTransportId ?: return false
                     val response = socket.restartIce(transport = transportKind, transportId = transportId)
+                    if (transport !== receiveTransport) return false
                     transport.restartIce(encodeJSONString(response.iceParameters))
                 }
                 else -> return false
@@ -4659,8 +4703,8 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         localVideoTrackWrapper = null
         remoteVideoTracks.removeAll()
 
-        sendTransport?.close()
-        receiveTransport?.close()
+        retireTransport(sendTransport)
+        retireTransport(receiveTransport)
         sendTransport = null
         receiveTransport = null
         transportConnectionStates.clear()
