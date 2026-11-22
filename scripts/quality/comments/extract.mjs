@@ -108,12 +108,15 @@ const scanCLike = (text, language) => {
   };
 
   const kotlinString = () => {
+    let dollars = 0;
+    while (text[i - 1 - dollars] === "$") dollars += 1;
+    const interpolation = "$".repeat(Math.max(1, dollars)) + "{";
     const raw = text.startsWith('"""', i);
     i += raw ? 3 : 1;
     while (i < text.length) {
       if (!raw && text[i] === "\\") i += 2;
-      else if (text.startsWith("${", i)) {
-        i += 2;
+      else if (text.startsWith(interpolation, i) && text[i - 1] !== "$") {
+        i += interpolation.length;
         code("}");
       } else if (raw && text.startsWith('"""', i)) {
         i += 3;
@@ -135,6 +138,12 @@ const scanCLike = (text, language) => {
 
   const opener = { ")": "(", "}": "{" };
 
+  const hashesThen = (marker) => {
+    let j = i;
+    while (text[j] === "#") j += 1;
+    return j > i && text[j] === marker;
+  };
+
   function code(closer) {
     let depth = 0;
     while (i < text.length) {
@@ -145,8 +154,8 @@ const scanCLike = (text, language) => {
       }
       if (text.startsWith("//", i)) lineComment();
       else if (text.startsWith("/*", i)) blockComment();
-      else if (language === "swift" && (c === '"' || (c === "#" && /^#+"/.test(text.slice(i, i + 8))))) swiftString();
-      else if (language === "swift" && c === "#" && /^#+\//.test(text.slice(i, i + 8))) swiftExtendedRegex();
+      else if (language === "swift" && (c === '"' || (c === "#" && hashesThen('"')))) swiftString();
+      else if (language === "swift" && c === "#" && hashesThen("/")) swiftExtendedRegex();
       else if (language === "swift" && c === "/" && swiftBareRegex()) continue;
       else if (language === "kotlin" && c === '"') kotlinString();
       else if (language === "kotlin" && c === "'") kotlinChar();
@@ -173,7 +182,10 @@ const scanCss = (text) => {
   let i = 0;
   while (i < text.length) {
     if (text[i] === '"' || text[i] === "'") i = skipQuoted(text, i, text[i], true);
-    else if (text.startsWith("/*", i)) {
+    else if (/^url\(\s*[^\s"')]/i.test(text.slice(i, i + 64)) && !/[\w-]/.test(text[i - 1] ?? "")) {
+      const close = text.indexOf(")", i);
+      i = close === -1 ? text.length : close + 1;
+    } else if (text.startsWith("/*", i)) {
       const end = text.indexOf("*/", i + 2);
       const stop = end === -1 ? text.length : end + 2;
       comments.push([i, stop]);
@@ -196,6 +208,21 @@ const scanShell = (text) => {
         i = lineEnd + 1;
         if ((stripTabs ? line.replace(/^\t+/, "") : line) === delimiter) break;
       }
+    }
+  };
+
+  const arithmetic = () => {
+    let depth = 0;
+    while (i < text.length) {
+      if (text[i] === "(") depth += 1;
+      else if (text[i] === ")") {
+        depth -= 1;
+        if (depth === 0) {
+          i += 1;
+          return;
+        }
+      }
+      i += 1;
     }
   };
 
@@ -223,6 +250,10 @@ const scanShell = (text) => {
       else if (c === "'") i = skipQuoted(text, i, "'", false);
       else if (c === "$" && text[i + 1] === "'") i = skipQuoted(text, i + 1, "'", true);
       else if (c === '"') doubleQuoted();
+      else if (text.startsWith("$((", i)) {
+        i += 1;
+        arithmetic();
+      } else if (text.startsWith("((", i)) arithmetic();
       else if (text.startsWith("$(", i)) {
         i += 2;
         code(")");
@@ -230,10 +261,11 @@ const scanShell = (text) => {
         const start = i;
         while (i < text.length && text[i] !== "\n") i += 1;
         comments.push([start, i]);
-      } else if (text.startsWith("<<", i) && text[i + 2] !== "<") {
-        const match = /^<<(-?)\s*(['"]?)([\w.-]+)\2/.exec(text.slice(i));
+      } else if (text.startsWith("<<<", i)) i += 3;
+      else if (text.startsWith("<<", i)) {
+        const match = /^<<(-?)[ \t]*(?:\\([\w.-]+)|'([^'\n]+)'|"([^"\n]+)"|([\w.-]+))/.exec(text.slice(i, i + 256));
         if (match) {
-          heredocs.push({ delimiter: match[3], stripTabs: match[1] === "-" });
+          heredocs.push({ delimiter: match[2] ?? match[3] ?? match[4] ?? match[5], stripTabs: match[1] === "-" });
           i += match[0].length;
         } else i += 2;
       } else if (c === "\n") {
@@ -254,24 +286,73 @@ const scanShell = (text) => {
 const scanPython = (text) => {
   const comments = [];
   let i = 0;
+
+  const lineComment = () => {
+    const start = i;
+    while (i < text.length && text[i] !== "\n") i += 1;
+    comments.push([start, i]);
+  };
+
+  const stringPrefix = () => {
+    let j = i;
+    while (j > 0 && /[rRbBuUfFtT]/.test(text[j - 1]) && i - j < 2) j -= 1;
+    if (j > 0 && /[\w]/.test(text[j - 1])) return "";
+    return text.slice(j, i).toLowerCase();
+  };
+
+  function replacementField(triple) {
+    i += 1;
+    let depth = 0;
+    while (i < text.length) {
+      const c = text[i];
+      if (c === "#") lineComment();
+      else if (c === '"' || c === "'") string();
+      else if (c === "\n" && !triple && depth === 0) return;
+      else if ("([{".includes(c)) (depth += 1), (i += 1);
+      else if (depth > 0 && ")]}".includes(c)) (depth -= 1), (i += 1);
+      else if (c === "}") {
+        i += 1;
+        return;
+      } else if (c === ":" && depth === 0 && text[i + 1] !== "=") {
+        i += 1;
+        formatSpec(triple);
+        return;
+      } else i += 1;
+    }
+  }
+
+  function formatSpec(triple) {
+    while (i < text.length) {
+      if (text[i] === "{") replacementField(triple);
+      else if (text[i] === "}") {
+        i += 1;
+        return;
+      } else if (text[i] === "\n" && !triple) return;
+      else i += 1;
+    }
+  }
+
+  function string() {
+    const formatted = /[ft]/.test(stringPrefix());
+    const quote = text[i];
+    const triple = text.startsWith(quote.repeat(3), i);
+    const close = triple ? quote.repeat(3) : quote;
+    i += close.length;
+    while (i < text.length && !text.startsWith(close, i)) {
+      if (text[i] === "\\") i += 2;
+      else if (formatted && text.startsWith("{{", i)) i += 2;
+      else if (formatted && text[i] === "{") replacementField(triple);
+      else if (!triple && text[i] === "\n") return;
+      else i += 1;
+    }
+    i += close.length;
+  }
+
   while (i < text.length) {
     const c = text[i];
-    if (c === "#") {
-      const start = i;
-      while (i < text.length && text[i] !== "\n") i += 1;
-      comments.push([start, i]);
-    } else if (c === '"' || c === "'") {
-      const triple = c.repeat(3);
-      if (text.startsWith(triple, i)) {
-        i += 3;
-        while (i < text.length && !text.startsWith(triple, i)) i += text[i] === "\\" ? 2 : 1;
-        i += 3;
-      } else {
-        i += 1;
-        while (i < text.length && text[i] !== c && text[i] !== "\n") i += text[i] === "\\" ? 2 : 1;
-        i += 1;
-      }
-    } else i += 1;
+    if (c === "#") lineComment();
+    else if (c === '"' || c === "'") string();
+    else i += 1;
   }
   return comments;
 };

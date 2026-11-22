@@ -284,6 +284,57 @@ test("a directive is never part of a license header", () => {
   );
 });
 
+test("shell here-strings, arithmetic shifts and escaped heredoc delimiters", () => {
+  const source = [
+    "#!/bin/bash",
+    "cat <<< hello",
+    "# after here-string",
+    "x=$((1 << 4))",
+    "(( y = x << 2 ))",
+    "# after arithmetic",
+    "python3 - <<\\PY",
+    "# inside the escaped heredoc",
+    "PY",
+    "cat <<'EOF'",
+    "# inside the quoted heredoc",
+    "EOF",
+    "echo done # trailing",
+  ].join("\n");
+  assert.deepEqual(texts(source, "run.sh").slice(1), ["# after here-string", "# after arithmetic", "# trailing"]);
+});
+
+test("Kotlin multi-dollar strings interpolate only with the full dollar run", () => {
+  const source = [
+    'val a = $$"""value ${ /* literal */ } and $${ x /* real one */ }"""',
+    'val b = "plain ${ y /* real two */ }"',
+    'val c = $$"price ${1}"',
+  ].join("\n");
+  assert.deepEqual(texts(source, "a.kt"), ["/* real one */", "/* real two */"]);
+});
+
+test("CSS unquoted url() is not a comment", () => {
+  const source = ["a { background: url(img/*2x*/a.png); }", "/* real */", 'b { background: URL( "x/*y" ); }'].join("\n");
+  assert.deepEqual(texts(source, "a.css"), ["/* real */"]);
+});
+
+test("Python f-string replacement fields can hold comments, format specs cannot", () => {
+  const source = [
+    'value = f"""{',
+    "    total  # inside a replacement field",
+    '}"""',
+    'hexed = f"{x:#x} {{#not}}"',
+    "raw = rf\"{y}\\\"#not\"",
+    "# real",
+  ].join("\n");
+  assert.deepEqual(texts(source, "a.py"), ["# inside a replacement field", "# real"]);
+});
+
+test("Swift raw strings take any number of hashes", () => {
+  const hashes = "#".repeat(12);
+  const source = [`let s = ${hashes}"// not a comment "${"#".repeat(11)} still raw"${hashes}`, "// real"].join("\n");
+  assert.deepEqual(texts(source, "Raw.swift"), ["// real"]);
+});
+
 test("Skip directives follow the pinned skipstone grammar in line and block form", () => {
   const source = [
     "// SKIP INSERT: val x = 1",
