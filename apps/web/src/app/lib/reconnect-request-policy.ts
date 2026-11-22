@@ -1,12 +1,27 @@
+export type MediaDirection = "producer" | "consumer";
+
 export type ReconnectRequest = {
   immediate?: boolean;
   userInitiated?: boolean;
   /**
-   * Ask the join route for a fresh answer on a new socket, even while the
-   * socket is still connected, so rebuilt transports get current TURN
-   * credentials instead of the ones that just failed.
+   * Ask the join route for current ICE servers before rebuilding, so rebuilt
+   * transports get current TURN credentials instead of the ones that failed.
    */
   refreshIceServers?: boolean;
+  /** The media directions whose transports failed, for a media-path rebuild. */
+  failedDirections?: MediaDirection[];
+};
+
+/**
+ * The one direction to rebuild on its own, or null to rejoin. While
+ * signaling is up, a failure in one direction never takes the other down.
+ */
+export const planMediaRebuildScope = (
+  request: ReconnectRequest | undefined,
+  { socketConnected }: { socketConnected: boolean },
+): MediaDirection | null => {
+  const failed = new Set(request?.failedDirections ?? []);
+  return socketConnected && failed.size === 1 ? [...failed][0] : null;
 };
 
 export type InFlightReconnectDecision = {

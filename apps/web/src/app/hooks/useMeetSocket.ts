@@ -29,6 +29,7 @@ import {
   canReuseSocketAfterFailure,
   classifyReconnectFailure,
   planRoomUnavailableRetry,
+  planMediaRebuildScope,
   resolveInFlightReconnectRequest,
   resolveReconnectStartAttempts,
   type ReconnectFailureKind,
@@ -1511,7 +1512,10 @@ export function useMeetSocket({
           recoverable: true,
         });
       }
-      void handleReconnectRef.current?.({ refreshIceServers: true });
+      void handleReconnectRef.current?.({
+        refreshIceServers: true,
+        failedDirections: [transportKind],
+      });
     },
     [
       consumerTransportRef,
@@ -1866,6 +1870,80 @@ export function useMeetSocket({
     [republishScreenShareOnce],
   );
 
+  // Everything kept for receiving: consumers, their timers and retries, and
+  // what is known about remote producers. A rejoin and a rebuild of the
+  // receive transport both start from here.
+  const resetReceiveState = useCallback(() => {
+    if (pendingProducerRetryTimeoutRef.current) {
+      window.clearTimeout(pendingProducerRetryTimeoutRef.current);
+      pendingProducerRetryTimeoutRef.current = null;
+    }
+
+    consumersRef.current.forEach((consumer, producerId) => {
+      if (consumer.kind === "video") {
+        adaptiveVideoReceiverLifecycleRef.current({
+          type: "removing",
+          producerId,
+          consumer,
+        });
+      }
+      try {
+        consumer.close();
+      } catch {}
+    });
+    consumersRef.current.clear();
+    for (const timeoutId of videoStallRecoveryTimeoutsRef.current.values()) {
+      window.clearTimeout(timeoutId);
+    }
+    videoStallRecoveryTimeoutsRef.current.clear();
+    for (const entry of consumerResumeRetryStateRef.current.values()) {
+      if (entry.timeoutId != null) {
+        window.clearTimeout(entry.timeoutId);
+      }
+    }
+    consumerResumeRetryStateRef.current.clear();
+    producerSlotOrder.reset();
+    for (const timeoutId of staleConsumerRecoveryTimeoutsRef.current.values()) {
+      window.clearTimeout(timeoutId);
+    }
+    staleConsumerRecoveryTimeoutsRef.current.clear();
+    for (const timeoutId of webcamStartupLatencyResetTimeoutsRef.current.values()) {
+      window.clearTimeout(timeoutId);
+    }
+    webcamStartupLatencyResetTimeoutsRef.current.clear();
+    webcamStartupLatencyResetStateRef.current.clear();
+    webcamStartupLatencyResetQueueRef.current = [];
+    webcamStartupLatencyResetActiveRef.current = null;
+    webcamStartupLatencyResetLastFinishedAtRef.current = 0;
+    webcamStartupLatencyResetEpochRef.current += 1;
+    if (webcamStartupLatencyResetDrainTimeoutRef.current != null) {
+      window.clearTimeout(webcamStartupLatencyResetDrainTimeoutRef.current);
+      webcamStartupLatencyResetDrainTimeoutRef.current = null;
+    }
+    consumerGenerationResetDebugRef.current = [];
+    for (const timeoutId of staleReplacementCleanupTimeoutsRef.current.values()) {
+      window.clearTimeout(timeoutId);
+    }
+    staleReplacementCleanupTimeoutsRef.current.clear();
+    mutedConsumerSinceRef.current.clear();
+    producerPausedStateRef.current.clear();
+    producerPausedStateRevisionRef.current.clear();
+    videoFreezeStatsRef.current.clear();
+    consumerRecoveryInFlightRef.current.clear();
+    consumerConsumeInFlightRef.current.clear();
+    announcedRemoteProducersRef.current.clear();
+    suppressedVideoProducersRef.current.clear();
+    consumerTelemetryRef.current.clear();
+    pendingConsumerTelemetryByIdRef.current.clear();
+    producerMapRef.current.clear();
+    pendingProducersRef.current.clear();
+    consumeRetryAttemptsRef.current.clear();
+  }, [
+    adaptiveVideoReceiverLifecycleRef,
+    consumersRef,
+    producerSlotOrder,
+  ]);
+
   const cleanupRoomResources = useCallback(
     (options?: { resetRoomId?: boolean; preserveMeetingState?: boolean }) => {
       const resetRoomId = options?.resetRoomId !== false;
@@ -1875,35 +1953,7 @@ export function useMeetSocket({
         window.clearInterval(producerSyncIntervalRef.current);
         producerSyncIntervalRef.current = null;
       }
-      if (pendingProducerRetryTimeoutRef.current) {
-        window.clearTimeout(pendingProducerRetryTimeoutRef.current);
-        pendingProducerRetryTimeoutRef.current = null;
-      }
-
-      consumersRef.current.forEach((consumer, producerId) => {
-        if (consumer.kind === "video") {
-          adaptiveVideoReceiverLifecycleRef.current({
-            type: "removing",
-            producerId,
-            consumer,
-          });
-        }
-        try {
-          consumer.close();
-        } catch {}
-      });
-      consumersRef.current.clear();
-      for (const timeoutId of videoStallRecoveryTimeoutsRef.current.values()) {
-        window.clearTimeout(timeoutId);
-      }
-      videoStallRecoveryTimeoutsRef.current.clear();
-      for (const entry of consumerResumeRetryStateRef.current.values()) {
-        if (entry.timeoutId != null) {
-          window.clearTimeout(entry.timeoutId);
-        }
-      }
-      consumerResumeRetryStateRef.current.clear();
-      producerSlotOrder.reset();
+      resetReceiveState();
       if (!preserveMeetingState) {
         const statusTimeouts =
           participantConnectionStatusTimeoutsRef.current.values();
@@ -1914,28 +1964,6 @@ export function useMeetSocket({
         participantConnectionStatusExpiresAtRef.current.clear();
         visibleParticipantReconnectingIdsRef.current.clear();
       }
-      for (const timeoutId of staleConsumerRecoveryTimeoutsRef.current.values()) {
-        window.clearTimeout(timeoutId);
-      }
-      staleConsumerRecoveryTimeoutsRef.current.clear();
-      for (const timeoutId of webcamStartupLatencyResetTimeoutsRef.current.values()) {
-        window.clearTimeout(timeoutId);
-      }
-      webcamStartupLatencyResetTimeoutsRef.current.clear();
-      webcamStartupLatencyResetStateRef.current.clear();
-      webcamStartupLatencyResetQueueRef.current = [];
-      webcamStartupLatencyResetActiveRef.current = null;
-      webcamStartupLatencyResetLastFinishedAtRef.current = 0;
-      webcamStartupLatencyResetEpochRef.current += 1;
-      if (webcamStartupLatencyResetDrainTimeoutRef.current != null) {
-        window.clearTimeout(webcamStartupLatencyResetDrainTimeoutRef.current);
-        webcamStartupLatencyResetDrainTimeoutRef.current = null;
-      }
-      consumerGenerationResetDebugRef.current = [];
-      for (const timeoutId of staleReplacementCleanupTimeoutsRef.current.values()) {
-        window.clearTimeout(timeoutId);
-      }
-      staleReplacementCleanupTimeoutsRef.current.clear();
       if (!preserveMeetingState) {
         for (const timeoutId of closeConsumerRetryTimeoutsRef.current.values()) {
           window.clearTimeout(timeoutId);
@@ -1946,20 +1974,7 @@ export function useMeetSocket({
         }
         closeConsumerOperationsRef.current.clear();
       }
-      mutedConsumerSinceRef.current.clear();
-      producerPausedStateRef.current.clear();
-      producerPausedStateRevisionRef.current.clear();
-      videoFreezeStatsRef.current.clear();
-      consumerRecoveryInFlightRef.current.clear();
-      consumerConsumeInFlightRef.current.clear();
-      announcedRemoteProducersRef.current.clear();
-      suppressedVideoProducersRef.current.clear();
-      consumerTelemetryRef.current.clear();
-      pendingConsumerTelemetryByIdRef.current.clear();
-      producerMapRef.current.clear();
-      pendingProducersRef.current.clear();
       intentionalLocalProducerCloseIdsRef.current.clear();
-      consumeRetryAttemptsRef.current.clear();
       leaveTimeoutsRef.current.forEach((timeoutId) => {
         window.clearTimeout(timeoutId);
       });
@@ -2081,6 +2096,7 @@ export function useMeetSocket({
       }
     },
     [
+      resetReceiveState,
       audioProducerRef,
       adaptiveVideoReceiverLifecycleRef,
       consumerTransportRef,
@@ -6748,7 +6764,7 @@ export function useMeetSocket({
           if (intentionalDisconnectRef.current) return;
           // A transport replaced on purpose while its restart was checked
           // says nothing about the path in use now.
-          const failedPathStillInUse = disconnectedTransportKinds.some(
+          const failedKindsStillInUse = disconnectedTransportKinds.filter(
             (kind, index) => {
               const transport = restartedTransports[index];
               return (
@@ -6759,7 +6775,7 @@ export function useMeetSocket({
               );
             },
           );
-          if (!failedPathStillInUse) {
+          if (failedKindsStillInUse.length === 0) {
             void syncProducers()
               .then(() => flushPendingProducers())
               .catch((error) => {
@@ -6770,7 +6786,10 @@ export function useMeetSocket({
               });
             return;
           }
-          void handleReconnectRef.current?.({ refreshIceServers: true });
+          void handleReconnectRef.current?.({
+            refreshIceServers: true,
+            failedDirections: failedKindsStillInUse,
+          });
         });
         return;
       }
@@ -9179,6 +9198,63 @@ export function useMeetSocket({
     ],
   );
 
+  // A failed receive path is rebuilt on its own: a new receive transport, then
+  // every published stream consumed again. Sending is not touched.
+  const rebuildReceivePath = useCallback(async (): Promise<boolean> => {
+    const socket = socketRef.current;
+    const device = deviceRef.current;
+    if (!socket?.connected || !device) return false;
+    resetReceiveState();
+    const transport = consumerTransportRef.current;
+    if (transport && !transport.closed) {
+      intentionallyClosedTransportsRef.current.add(transport);
+      try {
+        transport.close();
+      } catch {}
+    }
+    consumerTransportRef.current = null;
+    try {
+      await createConsumerTransport(socket, device);
+    } catch (error) {
+      console.warn("[Meets] Could not rebuild the receive transport:", error);
+      return false;
+    }
+    await syncProducers();
+    const rebuilt = consumerTransportRef.current as Transport | null;
+    return Boolean(rebuilt && !rebuilt.closed);
+  }, [
+    consumerTransportRef,
+    createConsumerTransport,
+    deviceRef,
+    resetReceiveState,
+    socketRef,
+    syncProducers,
+  ]);
+
+  // A failed send path is rebuilt on its own: a new send transport, then the
+  // microphone, camera and screen share published on it again.
+  const rebuildSendPath = useCallback(async (): Promise<boolean> => {
+    const transport = producerTransportRef.current;
+    if (transport && !transport.closed) {
+      intentionallyClosedTransportsRef.current.add(transport);
+      try {
+        transport.close();
+      } catch {}
+    }
+    if (producerTransportRef.current === transport) {
+      producerTransportRef.current = null;
+    }
+    if (!(await ensureProducerTransport())) return false;
+    if (!isMutedRef.current) requestAudioProducerRecovery();
+    if (!isCameraOffRef.current) requestCameraProducerRecovery();
+    return true;
+  }, [
+    ensureProducerTransport,
+    producerTransportRef,
+    requestAudioProducerRecovery,
+    requestCameraProducerRecovery,
+  ]);
+
   const handleReconnect = useCallback(async (options?: ReconnectRequest) => {
     if (reconnectInFlightRef.current) {
       const cancelBackoff = reconnectBackoffCancelRef.current;
@@ -9246,6 +9322,36 @@ export function useMeetSocket({
     setMeetError(null);
 
     try {
+      // One direction failed while signaling is up: get current credentials
+      // with the working direction still flowing, then rebuild only the
+      // failed one. Rejoin only if that does not work.
+      const scopedDirection = planMediaRebuildScope(options, {
+        socketConnected: socketRef.current?.connected === true,
+      });
+      const scopedRoomId = currentRoomIdRef.current;
+      if (scopedDirection && scopedRoomId) {
+        if (pendingIceServersRefresh) {
+          pendingIceServersRefresh = false;
+          await refreshIceServersOnOpenSocket(scopedRoomId);
+        }
+        if (reconnectGeneration !== reconnectGenerationRef.current) return;
+        if (intentionalDisconnectRef.current) return;
+        const rebuilt =
+          scopedDirection === "consumer"
+            ? await rebuildReceivePath()
+            : await rebuildSendPath();
+        if (reconnectGeneration !== reconnectGenerationRef.current) return;
+        if (intentionalDisconnectRef.current) return;
+        if (rebuilt) {
+          reconnectAttemptsRef.current = 0;
+          clearMeetErrorUnlessMediaBlocked();
+          rejoined = true;
+          return;
+        }
+        console.warn(
+          `[Meets] Could not rebuild the ${scopedDirection} transport on its own; rejoining.`,
+        );
+      }
       while (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
         if (reconnectGeneration !== reconnectGenerationRef.current) return;
         if (intentionalDisconnectRef.current) return;
@@ -9335,6 +9441,18 @@ export function useMeetSocket({
               ),
             );
           }
+          // Fetch current credentials before closing anything, so media that
+          // still flows keeps flowing while the join route answers.
+          if (
+            pendingIceServersRefresh &&
+            mayReuseSocket &&
+            socketRef.current?.connected === true
+          ) {
+            pendingIceServersRefresh = false;
+            await refreshIceServersOnOpenSocket(reconnectRoomId);
+            if (reconnectGeneration !== reconnectGenerationRef.current) return;
+            if (intentionalDisconnectRef.current) return;
+          }
           const canReuseSocket =
             mayReuseSocket && socketRef.current?.connected === true;
           mayReuseSocket = true;
@@ -9354,10 +9472,6 @@ export function useMeetSocket({
             await connectSocket(reconnectRoomId, { reconnectJoinInfo });
             pendingIceServersRefresh = false;
           } else {
-            if (pendingIceServersRefresh) {
-              pendingIceServersRefresh = false;
-              await refreshIceServersOnOpenSocket(reconnectRoomId);
-            }
             clearMeetErrorUnlessMediaBlocked();
           }
           if (reconnectGeneration !== reconnectGenerationRef.current) return;
@@ -9618,6 +9732,8 @@ export function useMeetSocket({
     refreshIceServersOnOpenSocket,
     clearMeetErrorUnlessMediaBlocked,
     escalateMediaPathFailure,
+    rebuildReceivePath,
+    rebuildSendPath,
     getJoinMediaNeeds,
     intentionalDisconnectRef,
     joinOptionsRef,

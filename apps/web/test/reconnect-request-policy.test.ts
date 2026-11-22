@@ -3,6 +3,7 @@ import {
   ROOM_UNAVAILABLE_RETRY_WINDOW_MS,
   canReuseSocketAfterFailure,
   classifyReconnectFailure,
+  planMediaRebuildScope,
   planRoomUnavailableRetry,
   resolveInFlightReconnectRequest,
   resolveReconnectStartAttempts,
@@ -168,4 +169,32 @@ describe("the socket a failed reconnect attempt leaves open", () => {
       ).toBe(false);
     },
   );
+});
+
+describe("how much a media failure rebuilds", () => {
+  it("rebuilds only the failed direction while signaling is up", () => {
+    expect(
+      planMediaRebuildScope({ failedDirections: ["consumer"] }, { socketConnected: true }),
+    ).toBe("consumer");
+    expect(
+      planMediaRebuildScope({ failedDirections: ["producer"] }, { socketConnected: true }),
+    ).toBe("producer");
+  });
+
+  it("rejoins when both directions failed", () => {
+    expect(
+      planMediaRebuildScope(
+        { failedDirections: ["producer", "consumer"] },
+        { socketConnected: true },
+      ),
+    ).toBeNull();
+  });
+
+  it("rejoins when signaling is down or the request is not about one direction", () => {
+    expect(
+      planMediaRebuildScope({ failedDirections: ["consumer"] }, { socketConnected: false }),
+    ).toBeNull();
+    expect(planMediaRebuildScope({ refreshIceServers: true }, { socketConnected: true })).toBeNull();
+    expect(planMediaRebuildScope(undefined, { socketConnected: true })).toBeNull();
+  });
 });
