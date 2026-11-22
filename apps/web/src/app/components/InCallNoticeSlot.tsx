@@ -16,15 +16,19 @@ export default function InCallNoticeSlot({
   return (
     <div
       data-in-call-notices
-      className="pointer-events-none absolute inset-x-0 top-0 z-40 flex flex-col items-center gap-2 px-3 pt-3 md:px-40"
-      style={{
-        right: rightInset,
-        paddingTop: belowWebinarHeader
-          ? "calc(env(safe-area-inset-top, 0px) + 92px)"
-          : undefined,
-      }}
+      className="@container pointer-events-none absolute inset-x-0 top-0 z-40"
+      style={{ right: rightInset }}
     >
-      {children}
+      <div
+        className="flex flex-col items-center gap-2 px-3 pt-3 @3xl:px-16 @5xl:px-40"
+        style={{
+          paddingTop: belowWebinarHeader
+            ? "calc(env(safe-area-inset-top, 0px) + 92px)"
+            : undefined,
+        }}
+      >
+        {children}
+      </div>
     </div>
   );
 }
