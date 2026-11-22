@@ -1,7 +1,7 @@
 /**
  * View versions over random interleavings of actions, flushes, sockets that
  * fall behind and recover, fresh tabs, new subscriptions and policy changes.
- * Two properties hold in every run:
+ * Three properties hold in every run:
  *
  * (a) When a client's version reaches the one an answer named, its view
  *     already shows the action: it equals the viewer's committed view at
@@ -9,6 +9,8 @@
  * (b) A member's frames and answers, versions included, are the same
  *     whether or not other people cast votes the member cannot see, before
  *     or after the member's snapshots.
+ * (c) Every viewer's frames and answers are the same whether or not other
+ *     people open the app at any moment, flushed or not.
  */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
@@ -47,7 +49,7 @@ const HIDDEN_POLLS = 2;
 type Op =
   | { kind: "create"; by: "h1" | "h2" }
   | { kind: "end"; by: "h1" | "h2"; poll: number }
-  | { kind: "share"; poll: number }
+  | { kind: "share"; by: "h1" | "h2"; poll: number; shared: boolean }
   | { kind: "vote"; by: number; poll: number; option: number }
   | { kind: "memberVote"; poll: number; option: number }
   | { kind: "hiddenVote"; by: number; poll: number }
@@ -56,7 +58,9 @@ type Op =
   | { kind: "recover" }
   | { kind: "freshTab" }
   | { kind: "resubscribe" }
-  | { kind: "policy" };
+  | { kind: "policy" }
+  | { kind: "watch"; host: boolean }
+  | { kind: "flicker"; by: "h1" | "h2"; poll: number; watchers: number };
 
 const opsFor = (seed: number, steps: number): Op[] => {
   const next = random(seed);
@@ -65,14 +69,22 @@ const opsFor = (seed: number, steps: number): Op[] => {
   for (let step = 0; step < steps; step += 1) {
     const roll = next();
     // Weighted toward what has gone wrong before: a co-host who falls behind
-    // and repeats an end or a share that someone else already made.
-    if (roll < 0.08) ops.push({ kind: "create", by: next() < 0.5 ? "h1" : "h2" });
-    else if (roll < 0.2) ops.push({ kind: "end", by: next() < 0.5 ? "h1" : "h2", poll: pick(4) });
-    else if (roll < 0.26) ops.push({ kind: "share", poll: pick(4) });
-    else if (roll < 0.36) ops.push({ kind: "vote", by: pick(VOTERS), poll: pick(4), option: pick(2) });
+    // and repeats an end or a share that someone else already made, and
+    // someone opening the app while a share is made and undone unflushed.
+    if (roll < 0.07) ops.push({ kind: "create", by: next() < 0.5 ? "h1" : "h2" });
+    else if (roll < 0.17) ops.push({ kind: "end", by: next() < 0.5 ? "h1" : "h2", poll: pick(4) });
+    else if (roll < 0.29) {
+      ops.push({ kind: "share", by: next() < 0.5 ? "h1" : "h2", poll: pick(4), shared: next() < 0.6 });
+    } else if (roll < 0.37) ops.push({ kind: "vote", by: pick(VOTERS), poll: pick(4), option: pick(2) });
     else if (roll < 0.41) ops.push({ kind: "memberVote", poll: pick(4), option: pick(2) });
-    else if (roll < 0.58) ops.push({ kind: "hiddenVote", by: pick(VOTERS), poll: pick(HIDDEN_POLLS) });
-    else if (roll < 0.74) ops.push({ kind: "deliver" });
+    else if (roll < 0.53) ops.push({ kind: "hiddenVote", by: pick(VOTERS), poll: pick(HIDDEN_POLLS) });
+    else if (roll < 0.58) ops.push({ kind: "watch", host: next() < 0.3 });
+    else if (roll < 0.62) {
+      // A share made and undone with nothing flushed, others opening the app
+      // in between, then the other host sets what is already there.
+      ops.push({ kind: "flicker", by: next() < 0.5 ? "h1" : "h2", poll: pick(4), watchers: 1 + pick(3) });
+    }
+    else if (roll < 0.75) ops.push({ kind: "deliver" });
     else if (roll < 0.82) ops.push({ kind: "behind", who: next() < 0.7 ? "h2" : "m1" });
     else if (roll < 0.86) ops.push({ kind: "recover" });
     else if (roll < 0.9) ops.push({ kind: "freshTab" });
@@ -83,17 +95,22 @@ const opsFor = (seed: number, steps: number): Op[] => {
 };
 
 type Internals = {
-  bySocket: Map<string, Map<string, { actor: unknown; instance: { committedView(actor: unknown): CommittedView } }>>;
+  bySocket: Map<string, Map<string, { actor: unknown; instance: { projectedView(actor: unknown): CommittedView } }>>;
 };
 
-/** A viewer's committed view, sorted as `Tab.held()` sorts what a client holds. */
+/**
+ * A viewer's committed view, sorted as `Tab.held()` sorts what a client
+ * holds. It is worked out afresh from the tables: reading the views'
+ * cache would take pending writes in, and that is itself one of the
+ * things that must not change what anyone is told.
+ */
 const committedFor = (room: Harness, tab: Tab): string | null => {
   const subscription = [...tab.frames].reverse().find((frame) => frame.kind === "replace")?.subscription;
   if (!subscription) return null;
   const internals = room.authority as unknown as Internals;
   const held = internals.bySocket.get(tab.seat.socket.id)?.get(subscription);
   if (!held) return null;
-  const view = held.instance.committedView(held.actor);
+  const view = held.instance.projectedView(held.actor);
   const triples: [string, string, Json][] = [];
   for (const bucket of Object.keys(pollsContract.views)) {
     for (const key of view.keys(bucket)) triples.push([bucket, key, view.get(bucket, key)!]);
@@ -109,7 +126,7 @@ const seen = (frame: AuthorityFrame): string => {
   return JSON.stringify(rest);
 };
 
-const run = async (ops: Op[], withHidden: boolean) => {
+const run = async (ops: Op[], { withHidden, withWatchers }: { withHidden: boolean; withWatchers: boolean }) => {
   // Both runs start at the same moment, so timestamps in rows agree.
   vi.setSystemTime(1_000_000);
   const behind = new Set<string>();
@@ -145,18 +162,29 @@ const run = async (ops: Op[], withHidden: boolean) => {
   const ravi = person("ravi@example.com", "Ravi");
   const m1Tabs: Tab[] = [await room.open(ravi, pollsContract)];
   const polls: string[] = [];
+  const shared = new Map<string, boolean>();
   let webinar = false;
+  const watch = async (step: number, index: number, host: boolean) => {
+    // Someone else opens the app, with nothing flushed and no timer moved:
+    // their snapshot is read in the middle of what is pending.
+    if (!withWatchers) return;
+    await room.open(
+      person(`watcher${step}-${index}@example.com`, "Watcher", host ? "host" : "participant"),
+      pollsContract,
+      { quiet: true },
+    );
+  };
 
   const observed = () => [h1, h2, ...voters, ...m1Tabs];
   const moments: Map<Tab, string | null>[] = [];
   const record = () => moments.push(new Map(observed().map((tab) => [tab, committedFor(room, tab)])));
   const outstanding: { tab: Tab; revision: number; moment: number; what: string }[] = [];
   const violations: string[] = [];
-  const answers: string[] = [];
+  const answers = new Map<Tab, string[]>();
 
   const answered = (tab: Tab, what: string, result: AuthorityResult<Json>) => {
     record();
-    if (m1Tabs.includes(tab)) answers.push(JSON.stringify(result));
+    answers.set(tab, [...(answers.get(tab) ?? []), JSON.stringify(result)]);
     if (result.ok && result.revision !== undefined) {
       outstanding.push({ tab, revision: result.revision, moment: moments.length - 1, what });
     }
@@ -190,9 +218,26 @@ const run = async (ops: Op[], withHidden: boolean) => {
       case "share": {
         if (polls.length === 0) break;
         const pollId = polls[op.poll % polls.length];
-        const tab = op.kind === "share" || op.by === "h1" ? h1 : h2;
-        const input = op.kind === "end" ? { pollId } : { pollId, shared: true };
-        answered(tab, `${op.kind} at ${step}`, await act(tab, op.kind, input));
+        const tab = op.by === "h1" ? h1 : h2;
+        const input = op.kind === "end" ? { pollId } : { pollId, shared: op.shared };
+        const result = await act(tab, op.kind, input);
+        if (op.kind === "share" && result.ok) shared.set(pollId, op.shared);
+        answered(tab, `${op.kind} at ${step}`, result);
+        break;
+      }
+      case "flicker": {
+        if (polls.length === 0) break;
+        const pollId = polls[op.poll % polls.length];
+        const was = shared.get(pollId) ?? false;
+        const by = op.by === "h1" ? h1 : h2;
+        const other = op.by === "h1" ? h2 : h1;
+        // From a moment when nothing is waiting to be told, so the other
+        // host has no version promised yet that would hide the difference.
+        await deliver();
+        answered(by, `share at ${step}`, await act(by, "share", { pollId, shared: !was }));
+        for (let index = 0; index < op.watchers; index += 1) await watch(step, index, index % 2 === 1);
+        answered(by, `unshare at ${step}`, await act(by, "share", { pollId, shared: was }));
+        answered(other, `same share at ${step}`, await act(other, "share", { pollId, shared: was }));
         break;
       }
       case "vote":
@@ -247,8 +292,12 @@ const run = async (ops: Op[], withHidden: boolean) => {
         webinar = !webinar;
         room.setWebinar(webinar);
         break;
+      case "watch":
+        await watch(step, 0, op.host);
+        break;
     }
-    if (op.kind !== "create" && op.kind !== "end" && op.kind !== "share" && op.kind !== "vote" && op.kind !== "memberVote") {
+    const acted = ["create", "end", "share", "vote", "memberVote", "flicker"].includes(op.kind);
+    if (!acted) {
       record();
     }
     check(step);
@@ -267,25 +316,35 @@ const run = async (ops: Op[], withHidden: boolean) => {
   // each id is named by the order it was made in.
   const named = (text: string): string =>
     [...hidden, ...polls].reduce((out, id, index) => out.replaceAll(id, `poll-${index}`), text);
-  const member = m1Tabs.map((tab) => tab.frames.map((frame) => named(seen(frame))));
-  return { violations, member, answers: answers.map(named) };
+  const framesOf = (tab: Tab) => tab.frames.map((frame) => named(seen(frame)));
+  const answersOf = (tab: Tab) => (answers.get(tab) ?? []).map(named);
+  const everyone = [h1, h2, ...voters, ...m1Tabs];
+  return {
+    violations,
+    member: { frames: m1Tabs.map(framesOf), answers: m1Tabs.map(answersOf) },
+    everyone: { frames: everyone.map(framesOf), answers: everyone.map(answersOf) },
+  };
 };
 
-it("reaches an answer's version only once the view shows the action, and never shows a member what it cannot see", async () => {
+it("reaches an answer's version only once the view shows the action, and shows nobody what others did out of their sight", async () => {
   const failures: string[] = [];
   for (let seed = 1; seed <= 24; seed += 1) {
     const ops = opsFor(seed, 60);
-    const withHidden = await run(ops, true);
-    const without = await run(ops, false);
-    for (const violation of [...withHidden.violations, ...without.violations]) {
+    const full = await run(ops, { withHidden: true, withWatchers: true });
+    const noHidden = await run(ops, { withHidden: false, withWatchers: true });
+    const noWatchers = await run(ops, { withHidden: true, withWatchers: false });
+    for (const violation of [...full.violations, ...noHidden.violations, ...noWatchers.violations]) {
       failures.push(`seed ${seed}: ${violation}`);
     }
-    if (JSON.stringify(withHidden.member) !== JSON.stringify(without.member)) {
-      failures.push(`seed ${seed}: the member's frames differ when others vote out of their sight`);
+    if (JSON.stringify(full.member) !== JSON.stringify(noHidden.member)) {
+      failures.push(`seed ${seed}: the member's frames or answers differ when others vote out of their sight`);
     }
-    if (JSON.stringify(withHidden.answers) !== JSON.stringify(without.answers)) {
-      failures.push(`seed ${seed}: the member's answers differ when others vote out of their sight`);
+    if (JSON.stringify(full.everyone.frames) !== JSON.stringify(noWatchers.everyone.frames)) {
+      failures.push(`seed ${seed}: a viewer's frames differ when others open the app`);
+    }
+    if (JSON.stringify(full.everyone.answers) !== JSON.stringify(noWatchers.everyone.answers)) {
+      failures.push(`seed ${seed}: a viewer's answers differ when others open the app`);
     }
   }
   expect(failures).toEqual([]);
-}, 120_000);
+}, 180_000);
