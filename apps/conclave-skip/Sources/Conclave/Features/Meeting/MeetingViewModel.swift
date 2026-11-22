@@ -14089,19 +14089,13 @@ final class MeetingViewModel {
     }
 
     private func syncChatPanelOpenState() {
-        let snapshot = shell.panels.snapshot
-        let isCurrent = snapshot.current?.panel == MeetingPanel.chat && !snapshot.isDismissing
+        let isCurrent = shell.chatPanelIsCurrent
         guard isCurrent != nativeChatPanelIsCurrent else { return }
         nativeChatPanelIsCurrent = isCurrent
         state.isChatOpen = isCurrent
         if isCurrent {
             state.unreadChatCount = 0
             clearChatOverlayMessages()
-            let opened = Date().timeIntervalSince1970 * 1000.0
-            chat.openPanel()
-            ChatDiagnostics.counters?.recordOpenLatency(Date().timeIntervalSince1970 * 1000.0 - opened)
-        } else {
-            chat.closePanel()
         }
     }
 

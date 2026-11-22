@@ -80,6 +80,27 @@ final class MeetingShellPresenter {
 
     var snapshotPublishCount: Int { publishCount }
 
+    var chatPanelIsCurrent: Bool {
+        panels.snapshot.current?.panel == MeetingPanel.chat && !panels.snapshot.isDismissing
+    }
+
+    init() {
+        panels.afterSnapshotChanged = { [weak self] in
+            self?.syncChatWithPanels()
+        }
+    }
+
+    private func syncChatWithPanels() {
+        guard chatPanelIsCurrent else {
+            chat.closePanel()
+            return
+        }
+        guard !chat.isOpen else { return }
+        let opened = Date().timeIntervalSince1970 * 1000.0
+        chat.openPanel()
+        ChatDiagnostics.counters?.recordOpenLatency(Date().timeIntervalSince1970 * 1000.0 - opened)
+    }
+
     func apply(_ next: MeetingShellInputs) {
         guard next != inputs else { return }
         let previous = inputs

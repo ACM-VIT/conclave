@@ -8,6 +8,7 @@ final class PanelCoordinator {
     private(set) var destinationRequest: PanelDestinationRequest? = nil
 
     @ObservationIgnored var onSnapshotChanged: (() -> Void)? = nil
+    @ObservationIgnored var afterSnapshotChanged: (() -> Void)? = nil
     private var nextID = 0
     private var nextDestinationSequence = 0
 
@@ -98,5 +99,6 @@ final class PanelCoordinator {
         guard next != snapshot else { return }
         snapshot = next
         onSnapshotChanged?()
+        afterSnapshotChanged?()
     }
 }
