@@ -8,28 +8,29 @@ import React, {
 } from "react";
 import type { WheelEntry, WheelSpin } from "../../core/doc/index";
 import {
-  fitLineLabel,
+  HUB_RADIUS,
+  LABEL_PAD,
+  RIM_WIDTH,
+  SINGLE_LABEL_SIZE,
+  SINGLE_LABEL_Y,
+  VIEW_EXTENT,
+  VIEW_SIZE,
+  WHEEL_RADIUS,
+} from "../geometry";
+import {
+  fitSingleLabel,
   fitWheelLabels,
   isLabelFlipped,
   labelFlipSignature,
+  wheelLabelGeometry,
   type MeasureText,
 } from "../labelFit";
 import type { WheelSounds } from "../sounds";
 
-const WHEEL_RADIUS = 96;
-const RIM_WIDTH = 7;
-const HUB_RADIUS = 12;
-const LABEL_PAD = 6;
 const POINTER_ANGLE = 90;
 const POINTER_BASE = WHEEL_RADIUS + RIM_WIDTH + 3;
 const POINTER_TIP = WHEEL_RADIUS - 1.5;
-const VIEW_EXTENT = 109;
-const VIEWBOX = `${-VIEW_EXTENT} ${-VIEW_EXTENT} ${VIEW_EXTENT * 2} ${VIEW_EXTENT * 2}`;
-const MIN_LABEL_PX = 10;
-const SINGLE_LABEL_SIZE = 13;
-const SINGLE_LABEL_Y = -((HUB_RADIUS + WHEEL_RADIUS) / 2);
-const SINGLE_LABEL_WIDTH =
-  2 * Math.sqrt(WHEEL_RADIUS ** 2 - SINGLE_LABEL_Y ** 2) - 2 * LABEL_PAD;
+const VIEWBOX = `${-VIEW_EXTENT} ${-VIEW_EXTENT} ${VIEW_SIZE} ${VIEW_SIZE}`;
 const EMPTY_SEGMENT_COUNT = 8;
 
 const IDLE_DEG_PER_SEC = 3.6;
@@ -158,9 +159,6 @@ const canvasMeasure = (fontFamily: string): MeasureText => {
   return (text) => context.measureText(text).width / 100;
 };
 
-const maxFontFor = (count: number): number =>
-  count <= 2 ? 15 : count <= 6 ? 13 : count <= 12 ? 11 : 9.5;
-
 export function WheelStage({
   entries,
   spin,
@@ -191,7 +189,7 @@ export function WheelStage({
   const [displayedSpin, setDisplayedSpin] = useState<WheelSpin | null>(null);
   const [flipRotation, setFlipRotation] = useState(0);
   const [measure, setMeasure] = useState<MeasureText>(() => fallbackMeasure);
-  const [pxPerUnit, setPxPerUnit] = useState(2);
+  const [wheelPx, setWheelPx] = useState(0);
 
   const onSettledRef = useRef(onSettled);
   const onSpinningChangeRef = useRef(onSpinningChange);
@@ -210,16 +208,22 @@ export function WheelStage({
   const displayedEntriesRef = useRef(displayedEntries);
   displayedEntriesRef.current = displayedEntries;
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const svg = svgRef.current;
     if (!svg) return;
     const updateScale = () => {
-      const size = Math.min(svg.clientWidth, svg.clientHeight);
-      if (size > 0) setPxPerUnit(size / (VIEW_EXTENT * 2));
+      const box = svg.getBoundingClientRect();
+      setWheelPx(Math.max(0, Math.min(box.width, box.height)));
     };
     updateScale();
     const observer = new ResizeObserver(updateScale);
     observer.observe(svg);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
     const family = window.getComputedStyle(svg).fontFamily || "sans-serif";
     setMeasure(() => canvasMeasure(family));
     let cancelled = false;
@@ -228,7 +232,6 @@ export function WheelStage({
     });
     return () => {
       cancelled = true;
-      observer.disconnect();
     };
   }, []);
 
@@ -411,19 +414,12 @@ export function WheelStage({
 
   const fitted = useMemo(() => {
     if (count < 2) return null;
-    const maxFontSize = maxFontFor(count);
     return fitWheelLabels(
       displayedEntries.map((entry) => entry.label),
-      {
-        count,
-        outerRadius: WHEEL_RADIUS - LABEL_PAD,
-        innerRadius: HUB_RADIUS + 3.5,
-        maxFontSize,
-        minFontSize: Math.min(maxFontSize, MIN_LABEL_PX / pxPerUnit),
-      },
+      wheelLabelGeometry(count, wheelPx),
       measure
     );
-  }, [count, displayedEntries, measure, pxPerUnit]);
+  }, [count, displayedEntries, measure, wheelPx]);
 
   const segments = useMemo(() => {
     if (count === 0) {
@@ -448,12 +444,7 @@ export function WheelStage({
 
   const labels = useMemo(() => {
     if (count === 1) {
-      const text = fitLineLabel(
-        displayedEntries[0].label,
-        SINGLE_LABEL_WIDTH,
-        SINGLE_LABEL_SIZE,
-        measure
-      );
+      const text = fitSingleLabel(displayedEntries[0].label, wheelPx, measure);
       return text ? (
         <text
           x={0}
@@ -494,7 +485,7 @@ export function WheelStage({
         </text>
       );
     });
-  }, [displayedEntries, count, fitted, flipRotation, highlightIndex, hasHighlight, measure]);
+  }, [displayedEntries, count, fitted, flipRotation, highlightIndex, hasHighlight, measure, wheelPx]);
 
   return (
     <div className="flex h-full w-full items-center justify-center p-4">

@@ -1,3 +1,13 @@
+import {
+  HUB_RADIUS,
+  LABEL_PAD,
+  MIN_LABEL_PX,
+  SINGLE_LABEL_SIZE,
+  SINGLE_LABEL_WIDTH,
+  WHEEL_RADIUS,
+  pxPerUnitFor,
+} from "./geometry";
+
 export type MeasureText = (text: string) => number;
 
 export type LabelGeometry = {
@@ -5,7 +15,8 @@ export type LabelGeometry = {
   outerRadius: number;
   innerRadius: number;
   maxFontSize: number;
-  minFontSize: number;
+  pxPerUnit: number;
+  minScreenPx: number;
 };
 
 export type FittedLabel = {
@@ -25,6 +36,18 @@ const OUTLIER_RATIO = 0.7;
 const MIN_FULL_RATIO = 0.75;
 
 const mod360 = (value: number): number => ((value % 360) + 360) % 360;
+
+const maxFontFor = (count: number): number =>
+  count <= 2 ? 15 : count <= 6 ? 13 : count <= 12 ? 11 : 9.5;
+
+export const wheelLabelGeometry = (count: number, wheelPx: number): LabelGeometry => ({
+  count,
+  outerRadius: WHEEL_RADIUS - LABEL_PAD,
+  innerRadius: HUB_RADIUS + 3.5,
+  maxFontSize: maxFontFor(count),
+  pxPerUnit: pxPerUnitFor(wheelPx),
+  minScreenPx: MIN_LABEL_PX,
+});
 
 const halfTan = (count: number): number =>
   count <= 2 ? Number.POSITIVE_INFINITY : Math.tan(Math.PI / count);
@@ -81,13 +104,17 @@ export const fitWheelLabels = (
   measure: MeasureText
 ): FittedLabels => {
   if (labels.length === 0) return { fontSize: geometry.maxFontSize, labels: [] };
+  const minFontSize = geometry.minScreenPx / geometry.pxPerUnit;
+  if (!(geometry.pxPerUnit > 0) || !(minFontSize <= geometry.maxFontSize)) {
+    return { fontSize: geometry.maxFontSize, labels: labels.map(() => null) };
+  }
   const sizes = labels
     .map((label) => largestFittingSize(measure(label), geometry))
     .sort((a, b) => a - b);
   const typical = sizes[Math.floor((sizes.length - 1) / 2)];
   const chosen = sizes[0] >= typical * OUTLIER_RATIO ? sizes[0] : typical;
   const fontSize = Math.max(
-    geometry.minFontSize,
+    minFontSize,
     Math.floor(Math.min(geometry.maxFontSize, chosen) * 20) / 20
   );
   const limit = maxLabelWidth(fontSize, geometry);
@@ -117,10 +144,16 @@ export const labelFlipSignature = (rotation: number, count: number): string => {
   return signature;
 };
 
-export const fitLineLabel = (
+export const fitSingleLabel = (
   label: string,
-  width: number,
-  fontSize: number,
+  wheelPx: number,
   measure: MeasureText
-): string | null =>
-  truncateToWidth(label, (text) => measure(text) * fontSize, width)?.text ?? null;
+): string | null => {
+  if (!(wheelPx > 0) || !(SINGLE_LABEL_SIZE * pxPerUnitFor(wheelPx) >= MIN_LABEL_PX)) {
+    return null;
+  }
+  return (
+    truncateToWidth(label, (text) => measure(text) * SINGLE_LABEL_SIZE, SINGLE_LABEL_WIDTH)
+      ?.text ?? null
+  );
+};

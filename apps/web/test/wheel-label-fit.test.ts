@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
-  fitLineLabel,
+  SINGLE_LABEL_SIZE,
+  SINGLE_LABEL_WIDTH,
+  pxPerUnitFor,
+} from "../../../packages/apps-sdk/src/apps/wheel/web/geometry";
+import {
+  fitSingleLabel,
   fitWheelLabels,
   isLabelFlipped,
+  wheelLabelGeometry,
   type LabelGeometry,
   type MeasureText,
 } from "../../../packages/apps-sdk/src/apps/wheel/web/labelFit";
@@ -11,14 +17,7 @@ const WIDE = new Set(["M", "W", "H", "m", "w"]);
 const measure: MeasureText = (text) =>
   Array.from(text).reduce((width, character) => width + (WIDE.has(character) ? 0.8 : 0.55), 0);
 
-const geometry = (count: number, overrides: Partial<LabelGeometry> = {}): LabelGeometry => ({
-  count,
-  outerRadius: 90,
-  innerRadius: 15.5,
-  maxFontSize: count <= 12 ? 11 : 9.5,
-  minFontSize: 3.1,
-  ...overrides,
-});
+const geometry = (count: number, wheelPx = 700): LabelGeometry => wheelLabelGeometry(count, wheelPx);
 
 const fitsInSlice = (text: string, fontSize: number, shape: LabelGeometry): boolean => {
   const innerEnd = shape.outerRadius - measure(text) * fontSize;
@@ -72,7 +71,7 @@ describe("wheel label fitting", () => {
     const fitted = fitWheelLabels(forty, shape, measure);
     expect(fitted.labels.every((label) => label && !label.truncated)).toBe(true);
     expect(fitted.labels.map((label) => label?.text)).toEqual(forty);
-    expect(fitted.fontSize).toBeGreaterThanOrEqual(shape.minFontSize);
+    expect(fitted.fontSize * shape.pxPerUnit).toBeGreaterThanOrEqual(shape.minScreenPx);
     for (const label of fitted.labels) {
       expect(fitsInSlice(label!.text, fitted.fontSize, shape)).toBe(true);
     }
@@ -81,16 +80,17 @@ describe("wheel label fitting", () => {
   it("hides every label on a small wheel rather than showing stubs", () => {
     const names = ["Ava", "Ben", "Cleo", "Dev", "Eli", "Fay", "Gus", "Hana", "Ivo", "Jun", "Kai", "Lea", "Mo", "Nia", "Oto", "Pia", "Quin", "Rae", "Sol", "Tia"];
     const forty = [...names, ...names.map((name, i) => `${name} ${String.fromCharCode(65 + i)}.`)];
-    const phoneWheel = fitWheelLabels(forty, geometry(40, { minFontSize: 10 }), measure);
+    const phoneWheel = fitWheelLabels(forty, geometry(40, 218), measure);
     expect(phoneWheel.labels.every((label) => label === null)).toBe(true);
   });
 
-  it("cuts a lone long name to the width of the wheel", () => {
+  it("cuts a lone long name to the width of the wheel, and hides it on a tiny wheel", () => {
     const name = "Maximiliana Featherstonehaugh-Worthington of Somewhere";
-    const text = fitLineLabel(name, 160, 13, measure)!;
+    const text = fitSingleLabel(name, 600, measure)!;
     expect(text.endsWith("…")).toBe(true);
-    expect(measure(text) * 13).toBeLessThanOrEqual(160);
-    expect(fitLineLabel("Ada", 160, 13, measure)).toBe("Ada");
+    expect(measure(text) * SINGLE_LABEL_SIZE).toBeLessThanOrEqual(SINGLE_LABEL_WIDTH);
+    expect(fitSingleLabel("Ada", 600, measure)).toBe("Ada");
+    expect(fitSingleLabel("Ada", 120, measure)).toBeNull();
   });
 
   it("keeps 64 names readable at the smallest allowed size, or hides them when nothing fits", () => {
@@ -101,9 +101,49 @@ describe("wheel label fitting", () => {
       expect(fitsInSlice(label!.text, desktop.fontSize, geometry(64))).toBe(true);
     }
 
-    const phone = fitWheelLabels(names, geometry(64, { minFontSize: 7.7 }), measure);
-    expect(phone.fontSize).toBe(7.7);
+    const phone = fitWheelLabels(names, geometry(64, 280), measure);
     expect(phone.labels.every((label) => label === null)).toBe(true);
+  });
+});
+
+describe("wheel label screen size", () => {
+  const twelve = ["Ada", "Grace", "Linus", "Margaret", "Alan", "Barbara", "Dennis", "Katherine", "Ken", "Radia", "Tim", "Frances"];
+
+  it("converts the wheel's on-screen size into pixels per SVG unit", () => {
+    expect(pxPerUnitFor(218)).toBe(1);
+    expect(pxPerUnitFor(120)).toBeCloseTo(0.55, 2);
+    expect(pxPerUnitFor(654)).toBe(3);
+  });
+
+  it("shows nothing before the wheel has been measured", () => {
+    for (const scale of [0, -0, Number.NaN]) {
+      const fitted = fitWheelLabels(twelve, { ...geometry(12), pxPerUnit: scale }, measure);
+      expect(fitted.labels.every((label) => label === null)).toBe(true);
+    }
+    expect(fitSingleLabel("Ada", 0, measure)).toBeNull();
+  });
+
+  it("hides labels on a 120px wheel, where they would render under 10px", () => {
+    const fitted = fitWheelLabels(twelve, geometry(12, 120), measure);
+    expect(fitted.labels.every((label) => label === null)).toBe(true);
+  });
+
+  it("never shows a label smaller than 10 screen pixels at any wheel size", () => {
+    const names = Array.from({ length: 64 }, (_, i) => `Name ${i + 1}`);
+    for (const count of [2, 6, 12, 40, 64]) {
+      for (let wheelPx = 80; wheelPx <= 900; wheelPx += 20) {
+        const fitted = fitWheelLabels(names.slice(0, count), geometry(count, wheelPx), measure);
+        if (fitted.labels.some((label) => label !== null)) {
+          expect(fitted.fontSize * pxPerUnitFor(wheelPx)).toBeGreaterThanOrEqual(10 - 1e-9);
+        }
+      }
+    }
+  });
+
+  it("shows all twelve names on a desktop-sized wheel at 10px or more", () => {
+    const fitted = fitWheelLabels(twelve, geometry(12, 600), measure);
+    expect(fitted.labels.map((label) => label?.text)).toEqual(twelve);
+    expect(fitted.fontSize * pxPerUnitFor(600)).toBeGreaterThanOrEqual(10);
   });
 });
 
