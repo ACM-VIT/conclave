@@ -1,6 +1,9 @@
 # Cloudflare Workers Static Assets headers.
 # These apply only to files served by the assets binding, not SSR/API responses.
 
+/_next/static/*
+  Cache-Control: public, max-age=31536000, immutable
+
 /noise-suppressor/*
   Cache-Control: public, max-age=31536000, immutable
   Cross-Origin-Resource-Policy: same-origin
