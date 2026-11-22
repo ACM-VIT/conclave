@@ -66,6 +66,9 @@ const makeDurable = (): Durable => {
         stored = JSON.stringify(snapshot);
       },
       load: () => JSON.parse(stored) as ScheduledMeeting[],
+      loadOne: (id) =>
+        (JSON.parse(stored) as ScheduledMeeting[]).find((meeting) => meeting.id === id) ??
+        null,
     },
   };
 };
@@ -928,6 +931,24 @@ describe("an invited attendee the host removed, after a restart", () => {
         "invitee@example.com",
       ),
     ).toBe(false);
+  });
+});
+
+describe("an invited attendee removed on one SFU", () => {
+  it("still has to be let in again on the SFU the meeting fails over to", async () => {
+    // Both SFUs use one schedule store. B loaded the meeting when it started,
+    // before the removal.
+    const shared = makeDurable();
+    const sfuA = makeState(shared);
+    schedule(sfuA);
+    const sfuB = makeState(shared);
+    await initScheduledMeetings(sfuB, shared.schedule);
+    const created = await join(sfuA, host);
+    await join(sfuA, invitee);
+    await send(created.peer, "kickUser", { userId: "invitee@example.com#i" });
+
+    await join(sfuB, host);
+    expect((await join(sfuB, invitee)).status).toBe("waiting");
   });
 });
 

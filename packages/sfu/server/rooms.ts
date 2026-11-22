@@ -11,6 +11,7 @@ import {
 import {
   getScheduledMeetingByRoomCode,
   persistScheduledMeetingChanges,
+  refreshScheduledMeeting,
   setScheduledInviteeReadmission,
 } from "./scheduledMeetings.js";
 import { cleanupRoomBrowser } from "./socket/handlers/sharedBrowserHandlers.js";
@@ -211,6 +212,14 @@ export const getOrCreateRoomWithOrigin = async (
     if (!ownership.ok) {
       throw new RoomOwnershipError(ownership.owner);
     }
+    // Another SFU may have changed this meeting's invitations since this one
+    // loaded them.
+    await refreshScheduledMeeting(
+      state.scheduledMeetings,
+      state.scheduledMeetingPersistence,
+      clientId,
+      roomId,
+    );
 
     let worker: Worker | undefined;
     try {

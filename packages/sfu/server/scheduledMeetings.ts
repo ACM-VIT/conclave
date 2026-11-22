@@ -453,6 +453,43 @@ export const isScheduledMeetingInvitee = (
   return meeting.hostEmail === email || meeting.attendeeEmail === email;
 };
 
+const FRESH_READ_DEADLINE_MS = 1000;
+
+/**
+ * Brings this SFU's copy of the meeting at a room code up to date with the
+ * store, if the store holds a newer one. Each SFU loads meetings when it
+ * starts, so without this an SFU that takes over a room would grant entry on
+ * invitations another SFU has since changed, such as a removed invitee's.
+ * A store that cannot be read one meeting at a time, or does not answer in
+ * a second, leaves the copy as it is: a room must not wait on it.
+ */
+export const refreshScheduledMeeting = async (
+  store: ScheduledMeetingStore,
+  persistence: ScheduledMeetingPersistence | null,
+  clientId: string,
+  roomCode: string,
+): Promise<void> => {
+  const known = getScheduledMeetingByRoomCode(store, clientId, roomCode);
+  if (!known || !persistence?.loadOne) return;
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    const stored = await Promise.race([
+      Promise.resolve(persistence.loadOne(known.id)),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), FRESH_READ_DEADLINE_MS);
+      }),
+    ]);
+    if (stored && stored.updatedAt > known.updatedAt) {
+      unregisterStore(store, known);
+      registerStore(store, stored);
+    }
+  } catch (error) {
+    Logger.warn(`Failed to refresh scheduled meeting ${known.id}`, error);
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
 /**
  * Records that a host removed an invited person from the meeting at this room
  * code (`required`), or let them in again. Returns the meeting when that
@@ -532,6 +569,9 @@ export type ScheduledMeetingPersistence = {
     claim: EmailReminderClaim,
   ) => MaybePromise<ScheduledMeeting | null>;
   load: () => MaybePromise<ScheduledMeeting[]>;
+  // One meeting as the store holds it now, or null if it holds none by that
+  // id. SFUs that share a store read each other's changes through this.
+  loadOne?: (id: string) => MaybePromise<ScheduledMeeting | null>;
   close?: () => MaybePromise<void>;
   flush?: () => Promise<void>;
 };
@@ -584,6 +624,7 @@ const writeJsonAtomic = (path: string, data: string): void => {
 type SqliteStatement = {
   run: (...params: unknown[]) => unknown;
   all: (...params: unknown[]) => unknown[];
+  get: (...params: unknown[]) => unknown;
 };
 
 type SqliteDatabase = {
@@ -753,6 +794,9 @@ const createSqliteScheduledMeetingPersistence = (
     ORDER BY scheduled_start_at ASC, id ASC
   `);
   const deleteById = db.prepare("DELETE FROM scheduled_meetings WHERE id = ?");
+  const loadRowById = db.prepare(
+    "SELECT payload_json FROM scheduled_meetings WHERE id = ?",
+  );
   let knownIds = new Set<string>();
 
   const upsertMeeting = (meeting: ScheduledMeeting): void => {
@@ -842,8 +886,25 @@ const createSqliteScheduledMeetingPersistence = (
         return [];
       }
     },
+    loadOne: (id) => {
+      const row = loadRowById.get(id);
+      const payload =
+        row && typeof row === "object" && "payload_json" in row
+          ? String(row.payload_json)
+          : "";
+      return payload ? normalizeStoredMeeting(JSON.parse(payload)) : null;
+    },
     close: () => db.close(),
   };
+};
+
+const readStoredMeetings = (path: string): ScheduledMeeting[] => {
+  if (!existsSync(path)) return [];
+  const data: unknown = JSON.parse(readFileSync(path, "utf8"));
+  if (!Array.isArray(data)) return [];
+  return data
+    .map((entry) => normalizeStoredMeeting(entry))
+    .filter((entry): entry is ScheduledMeeting => Boolean(entry));
 };
 
 const createFileScheduledMeetingPersistence = (
@@ -858,18 +919,14 @@ const createFileScheduledMeetingPersistence = (
   },
   load: () => {
     try {
-      if (!existsSync(path)) return [];
-      const raw = readFileSync(path, "utf8");
-      const data: unknown = JSON.parse(raw);
-      if (!Array.isArray(data)) return [];
-      return data
-        .map((entry) => normalizeStoredMeeting(entry))
-        .filter((entry): entry is ScheduledMeeting => Boolean(entry));
+      return readStoredMeetings(path);
     } catch (error) {
       Logger.error("Failed to load scheduled meetings from JSON", error);
       return [];
     }
   },
+  loadOne: (id) =>
+    readStoredMeetings(path).find((meeting) => meeting.id === id) ?? null,
 });
 
 const RELEASE_BOOKING_SLOT_LOCK_SCRIPT = `
@@ -1089,6 +1146,12 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
       );
     }
     return meeting;
+  }
+
+  async loadOne(id: string): Promise<ScheduledMeeting | null> {
+    await this.start();
+    const payload = await this.client.hGet(this.key, id);
+    return payload ? normalizeStoredMeeting(JSON.parse(payload)) : null;
   }
 
   async load(): Promise<ScheduledMeeting[]> {
