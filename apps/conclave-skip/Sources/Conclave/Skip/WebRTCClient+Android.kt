@@ -2270,19 +2270,21 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
 
     internal suspend fun startProducingVideo() {
         val offIntentGeneration = localVideoOffIntentGeneration
+        val generation = configurationGeneration
         videoStartGate.run {
+            ensureCurrentConfiguration(generation)
             if (localVideoOffIntentGeneration != offIntentGeneration) {
                 debugLog("[WebRTC] Camera start cancelled by a camera-off while joining an in-flight start")
                 return@run
             }
-            performStartProducingVideo(offIntentGeneration)
+            performStartProducingVideo(offIntentGeneration, generation)
         }
     }
 
-    private suspend fun performStartProducingVideo(offIntentGeneration: Int) {
+    private suspend fun performStartProducingVideo(offIntentGeneration: Int, generation: Long) {
         createSendTransportIfNeeded()
+        ensureCurrentConfiguration(generation)
         val sendTransport = sendTransport ?: throw ErrorException("Send transport not ready")
-        val generation = configurationGeneration
         if (hasLocalVideoProducer) {
             if (localVideoOffIntentGeneration != offIntentGeneration) return
             setVideoEnabled(true)
