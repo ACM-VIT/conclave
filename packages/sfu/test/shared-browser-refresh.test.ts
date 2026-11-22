@@ -5,10 +5,12 @@ import type { Server as SocketIOServer, Socket } from "socket.io";
 const FIRST_URL = "https://browser.example/novnc/6080/vnc_lite.html?autoconnect=true#&password=first111";
 const SECOND_URL = "https://browser.example/novnc/6080/vnc_lite.html?autoconnect=true#&password=second22";
 
-const service = vi.hoisted(() => ({
-  sessionsGate: null as null | Promise<void>,
-  sessionsResponse: {} as { session?: { noVncUrl?: string; currentUrl?: string } },
-}));
+type BrowserServiceState = {
+  sessionsGate: Promise<void> | null;
+  sessionsResponse: { session?: { noVncUrl?: string; currentUrl?: string } };
+};
+
+const service = vi.hoisted((): BrowserServiceState => ({ sessionsGate: null, sessionsResponse: {} }));
 
 vi.mock("../server/browserServiceClient.js", () => ({
   getBrowserServiceCapabilities: vi.fn(async () => ({ audio: false, video: false, provider: "chromium" })),
