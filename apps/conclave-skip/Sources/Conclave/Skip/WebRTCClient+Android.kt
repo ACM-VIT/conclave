@@ -2050,25 +2050,10 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     //   able to touch a freed transport (restartIce re-checks identity after its ack).
     // Retired transports are therefore freed when the next call is configured, or after the app sat idle
     // long enough for any outstanding socket ack (30 s) to settle.
-    private val retiredTransports: MutableList<Transport> = mutableListOf()
-
-    private fun retireTransport(transport: Transport?) {
-        if (transport == null) return
-        try {
-            transport.close()
-        } catch (_: Throwable) {
-        }
-        synchronized(retiredTransports) { retiredTransports.add(transport) }
-        mainHandler.postDelayed({ disposeRetiredTransportsIfIdle() }, RETIRED_TRANSPORT_DISPOSE_DELAY_MS)
-    }
-
-    private fun disposeRetiredTransportsIfIdle() {
-        if (Looper.myLooper() != Looper.getMainLooper()) return
-        if (device != null || sendTransport != null || receiveTransport != null) return
-        val retired = synchronized(retiredTransports) {
-            retiredTransports.toList().also { retiredTransports.clear() }
-        }
-        for (transport in retired) {
+    private val retiredTransports = RetiredTransportReaper<Transport>(
+        idleDelayMs = RETIRED_TRANSPORT_DISPOSE_DELAY_MS,
+        isIdle = { device == null && sendTransport == null && receiveTransport == null },
+        dispose = { transport ->
             try {
                 when (transport) {
                     is SendTransport -> transport.dispose()
@@ -2077,7 +2062,21 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             } catch (error: Throwable) {
                 debugLog("[WebRTC] Failed to dispose retired transport: ${error}")
             }
+        },
+        handler = mainHandler,
+    )
+
+    private fun retireTransport(transport: Transport?) {
+        if (transport == null) return
+        try {
+            transport.close()
+        } catch (_: Throwable) {
         }
+        retiredTransports.retire(transport)
+    }
+
+    private fun disposeRetiredTransportsIfIdle() {
+        retiredTransports.disposeIfIdle()
     }
 
     internal suspend fun restartIce(transportKind: String): Boolean {
