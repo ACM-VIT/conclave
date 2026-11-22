@@ -43,8 +43,36 @@ export const createTranscriptRelayRegistry = (options: {
   ) => TranscriptRelayInstance;
 }): TranscriptRelayRegistry => {
   const relays = new Map<string, TranscriptRelayInstance>();
+  // Every relay opened for a room and not yet closed, oldest first. A start
+  // that loses a race or a stop must not leave an older relay running.
+  const opened = new Map<string, Set<TranscriptRelayInstance>>();
   const roomKey = (room: Pick<Room, "channelId" | "id">): string =>
     room.channelId || room.id;
+  const forget = (key: string, relay: TranscriptRelayInstance): void => {
+    const roomRelays = opened.get(key);
+    roomRelays?.delete(relay);
+    if (roomRelays?.size === 0) opened.delete(key);
+  };
+  const closeRelay = (
+    key: string,
+    relay: TranscriptRelayInstance,
+    closeOptions?: Parameters<TranscriptRelayInstance["close"]>[0],
+  ): void => {
+    forget(key, relay);
+    relay.close(closeOptions);
+  };
+  const closeOlderThan = (key: string, relay: TranscriptRelayInstance): void => {
+    for (const older of Array.from(opened.get(key) ?? [])) {
+      if (older === relay) return;
+      closeRelay(key, older);
+    }
+  };
+  const closeRoom = (key: string): void => {
+    for (const relay of Array.from(opened.get(key) ?? [])) {
+      closeRelay(key, relay);
+    }
+    relays.delete(key);
+  };
 
   const getStatus = (): TranscriptSfuRelayStatusResponse => {
     if (!options.enabled) {
@@ -102,16 +130,18 @@ export const createTranscriptRelayRegistry = (options: {
         controllerUserId: startOptions.controllerUserId,
         controllerDisplayName: startOptions.controllerDisplayName,
         onClosed: () => {
+          forget(key, relay);
           if (relays.get(key) === relay) {
             relays.delete(key);
           }
         },
       });
+      opened.set(key, (opened.get(key) ?? new Set()).add(relay));
       relays.set(key, relay);
       try {
         await relay.start();
         if (relays.get(key) !== relay) {
-          relay.close();
+          closeRelay(key, relay);
           return {
             mode: "sfu",
             success: false,
@@ -126,7 +156,7 @@ export const createTranscriptRelayRegistry = (options: {
             if (relays.get(key) === relay) {
               relays.set(key, existingRelay);
             }
-            relay.close();
+            closeRelay(key, relay);
             return {
               mode: "sfu",
               success: false,
@@ -135,8 +165,8 @@ export const createTranscriptRelayRegistry = (options: {
               updatedAt: Date.now(),
             };
           }
-          existingRelay.close();
         }
+        closeOlderThan(key, relay);
         return {
           mode: "sfu",
           success: true,
@@ -151,7 +181,7 @@ export const createTranscriptRelayRegistry = (options: {
             relays.delete(key);
           }
         }
-        relay.close();
+        closeRelay(key, relay);
         return {
           mode: "sfu",
           success: false,
@@ -165,8 +195,7 @@ export const createTranscriptRelayRegistry = (options: {
       }
     },
     stopRoom(roomKey) {
-      relays.get(roomKey)?.close();
-      relays.delete(roomKey);
+      closeRoom(roomKey);
       return { success: true };
     },
     async stopRoomForUser({ roomKey, userId, canStopAnyRelay }) {
@@ -183,7 +212,8 @@ export const createTranscriptRelayRegistry = (options: {
           `Transcript SFU relay stop for room ${roomKey} could not prepare worker disconnect suppression.`,
         );
       }
-      relay.close({ flushBufferedAudio: true });
+      closeOlderThan(roomKey, relay);
+      closeRelay(roomKey, relay, { flushBufferedAudio: true });
       // A host can start a replacement relay while prepareHandoff() awaits;
       // only remove the entry if it is still the relay this call stopped, or
       // the newer relay would keep running with no way to stop it.
@@ -203,8 +233,8 @@ export const createTranscriptRelayRegistry = (options: {
       }
     },
     closeAll() {
-      for (const relay of relays.values()) {
-        relay.close();
+      for (const key of Array.from(opened.keys())) {
+        closeRoom(key);
       }
       relays.clear();
     },

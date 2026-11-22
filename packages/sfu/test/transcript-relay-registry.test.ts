@@ -289,4 +289,50 @@ describe("TranscriptRelayRegistry", () => {
     registry.stopRoom(room.channelId);
     expect(closed).toContain("u2");
   });
+
+  it("leaves only the newest relay open when replacements overlap, and stop closes it", async () => {
+    const opened: Array<{ closed: boolean; finishStart: () => void }> = [];
+    const registry = createTranscriptRelayRegistry({
+      enabled: true,
+      createRelay: () => {
+        let finishStart!: () => void;
+        const started = new Promise<void>((resolve) => {
+          finishStart = resolve;
+        });
+        const relay = { closed: false, finishStart: () => finishStart() };
+        opened.push(relay);
+        return {
+          controllerUserId: "u1",
+          start: () => started,
+          prepareHandoff: async () => true,
+          syncProducers: async () => {},
+          close: () => {
+            relay.closed = true;
+          },
+        };
+      },
+    });
+    const start = () =>
+      registry.start({
+        room,
+        workerUrl: "http://worker.test",
+        workerToken: "token",
+        controllerUserId: "u1",
+        controllerDisplayName: "Ada",
+        canReplaceExistingRelay: true,
+      });
+
+    const live = start();
+    opened[0].finishStart();
+    await live;
+    const replacements = [start(), start()];
+    opened[1].finishStart();
+    opened[2].finishStart();
+    await Promise.all(replacements);
+
+    expect(opened.map(({ closed }) => closed)).toEqual([true, true, false]);
+    registry.stopRoom(room.channelId);
+    expect(opened.every(({ closed }) => closed)).toBe(true);
+  });
 });
+
