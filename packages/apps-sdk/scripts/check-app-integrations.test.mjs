@@ -503,6 +503,41 @@ test("the longest id a contract may have is scaffolded and passes the check", ()
   assert.equal(checked.status, 0, checked.output);
 });
 
+test("a hand-made authority app whose id breaks the contract's grammar fails the check", () => {
+  for (const id of ["3d-viewer", "sign_up"]) {
+    const repo = makeRepo();
+    repo.scaffold("sign-up", "--runtime", "authority");
+    // The same app made by hand under an id defineContract would refuse,
+    // with every other part of it consistent: its contract, its imports
+    // and its package exports all use that id.
+    const from = path.join(repo.root, "src", "apps", "sign-up");
+    const to = path.join(repo.root, "src", "apps", id);
+    fs.cpSync(from, to, { recursive: true });
+    fs.rmSync(from, { recursive: true });
+    const rename = (dir) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const target = path.join(dir, entry.name);
+        if (entry.isDirectory()) rename(target);
+        else fs.writeFileSync(target, fs.readFileSync(target, "utf8").replaceAll("sign-up", id));
+      }
+    };
+    rename(to);
+    const manifest = path.join(repo.root, "package.json");
+    const pkg = JSON.parse(fs.readFileSync(manifest, "utf8"));
+    for (const part of ["core", "web", "server"]) {
+      delete pkg.exports[`./sign-up/${part}`];
+      pkg.exports[`./${id}/${part}`] = `./src/apps/${id}/${part}/index.ts`;
+    }
+    fs.writeFileSync(manifest, `${JSON.stringify(pkg, null, 2)}\n`);
+
+    const checked = repo.check();
+
+    assert.equal(checked.status, 1, `${id}: ${checked.output}`);
+    assert.match(checked.output, new RegExp(`\\[${id}\\] is not a valid app id: does not match`));
+    assert.match(fs.readFileSync(path.join(to, "core", "index.ts"), "utf8"), new RegExp(`id: "${id}"`));
+  }
+});
+
 test("an app folder whose name no contract could have is reported", () => {
   const repo = makeRepo();
   repo.scaffold("sign-up", "--runtime", "authority");
