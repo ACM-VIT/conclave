@@ -47,6 +47,7 @@ const initPostHog = (client: PostHog, key: string): void => {
     disable_surveys: true,
     advanced_disable_flags: true,
     disable_external_dependency_loading: true,
+    save_campaign_params: false,
     person_profiles: "identified_only",
     capture_exceptions: {
       capture_unhandled_errors: true,

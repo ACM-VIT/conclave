@@ -9,6 +9,10 @@ const STATIC_PAGES = new Set([
 ]);
 // Room codes let anyone join, and user ids can embed an email.
 const DROPPED_PROPERTIES = new Set(["$title", "roomId", "userId"]);
+// Campaign and click-id parameters, plus the SDK's $initial_ and
+// $session_entry_ copies. They can carry emails and ad ids.
+const ATTRIBUTION_PROPERTY =
+  /^(?:\$initial_|\$session_entry_)?(?:utm_\w+|gad_source|mc_cid|gclsrc|gbraid|wbraid|msclkid|li_fat_id|igshid|rdt_cid|epik|sccid|oppref|bfcid|_kx|\w*clid|\$fb[cp])$/;
 // Values we set or the SDK needs as-is: the project key in `token` must
 // survive for ingestion, and `client_version` is a git sha, not a secret.
 const TRUSTED_PROPERTIES = new Set(["token", "distinct_id", "client_version"]);
@@ -19,8 +23,8 @@ const EMAIL_PATTERN = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
 const JWT_PATTERN = /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g;
 const LONG_TOKEN_PATTERN = /\b[A-Za-z0-9_-]{40,}\b/g;
 const URL_IN_TEXT_PATTERN = /\bhttps?:\/\/[^\s"'<>)]+/gi;
-// Our own script folders. Their files keep the path so PostHog can match a
-// stack frame to its source map.
+// Our own script folders. A stack frame in one keeps its path so PostHog can
+// match it to a source map.
 const ASSET_PATH_PREFIXES = [
   "/_next/static/",
   "/mediapipe/",
@@ -31,12 +35,9 @@ const ASSET_PATH_PREFIXES = [
 
 /**
  * Replaces room codes, invite slugs and booking handles in a path with the
- * route they belong to. Paths under our script folders stay as they are.
+ * route they belong to.
  */
 export function templatePath(pathname: string): string {
-  if (ASSET_PATH_PREFIXES.some((prefix) => pathname.startsWith(prefix))) {
-    return pathname;
-  }
   const segments = pathname.split("/").filter(Boolean);
   const [first] = segments;
   if (!first) return "/";
@@ -81,11 +82,23 @@ type ExceptionEntry = {
   stacktrace?: { frames?: ExceptionFrame[] } & Record<string, unknown>;
 } & Record<string, unknown>;
 
+const scrubFrameUrl = (value: string): string => {
+  try {
+    const url = new URL(value);
+    const ownScript =
+      (url.protocol === "http:" || url.protocol === "https:") &&
+      ASSET_PATH_PREFIXES.some((prefix) => url.pathname.startsWith(prefix));
+    if (ownScript) return `${url.origin}${url.pathname}`;
+  } catch {
+  }
+  return scrubUrl(value);
+};
+
 const scrubFrame = (frame: ExceptionFrame): ExceptionFrame => {
   const next = { ...frame };
   for (const key of ["filename", "abs_path"]) {
     const value = next[key];
-    if (typeof value === "string") next[key] = scrubUrl(value);
+    if (typeof value === "string") next[key] = scrubFrameUrl(value);
   }
   return next;
 };
@@ -115,7 +128,7 @@ function scrubProperties(properties: Properties): Properties {
   const scrubbed: Properties = {};
   const entries: Array<[string, unknown]> = Object.entries(properties);
   for (const [key, value] of entries) {
-    if (DROPPED_PROPERTIES.has(key)) continue;
+    if (DROPPED_PROPERTIES.has(key) || ATTRIBUTION_PROPERTY.test(key)) continue;
     if (key === "$exception_list" && Array.isArray(value)) {
       scrubbed[key] = (value as ExceptionEntry[]).map(scrubExceptionEntry);
     } else if (typeof value === "string" && URL_PROPERTY.test(key)) {

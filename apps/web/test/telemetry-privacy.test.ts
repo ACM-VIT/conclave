@@ -94,6 +94,56 @@ describe("scrubTelemetryEvent", () => {
   });
 });
 
+describe("attribution and asset paths", () => {
+  it("drops campaign and click-id properties, including the SDK's copies", () => {
+    const event = exceptionEvent();
+    Object.assign(event.properties, {
+      utm_source: "newsletter",
+      utm_content: "ishaan@example.com",
+      fbclid: "IwAR0abcDEF123",
+      gclid: "Cj0KCQiA",
+      $fbc: "fb.1.1700000000.IwAR0abcDEF123",
+      $session_entry_utm_content: "ishaan@example.com",
+      $session_entry_fbclid: "IwAR0abcDEF123",
+      $initial_utm_campaign: "launch",
+      $initial_msclkid: "abc123",
+    });
+    event.$set_once = {
+      $initial_utm_content: "ishaan@example.com",
+      $initial_fbclid: "IwAR0abcDEF123",
+      $initial_browser: "Chrome",
+    };
+    const scrubbed = scrubTelemetryEvent(event);
+
+    const keys = [
+      ...Object.keys(scrubbed.properties),
+      ...Object.keys(scrubbed.$set_once ?? {}),
+    ];
+    expect(keys.filter((key) => /utm_|clid|fbc|msclkid/.test(key))).toEqual([]);
+    expect(JSON.stringify(scrubbed)).not.toMatch(/ishaan|IwAR0|Cj0KCQiA|newsletter/);
+    expect(scrubbed.$set_once?.$initial_browser).toBe("Chrome");
+  });
+
+  it("templates an external referrer even under an asset folder name", () => {
+    const event = exceptionEvent();
+    event.properties.$referrer = "https://example.org/mediapipe/alice@example.com";
+    const { properties } = scrubTelemetryEvent(event);
+
+    expect(properties.$referrer).toBe("https://example.org/[path]");
+  });
+
+  it("keeps the path of a stack frame in our script folders", () => {
+    const event = exceptionEvent();
+    event.properties.$exception_list[0].stacktrace.frames[1].filename =
+      "https://conclave.acmvit.in/mediapipe/vision_bundle.js";
+    const { properties } = scrubTelemetryEvent(event);
+
+    expect(properties.$exception_list[0].stacktrace.frames[1].filename).toBe(
+      "https://conclave.acmvit.in/mediapipe/vision_bundle.js",
+    );
+  });
+});
+
 describe("server text", () => {
   it("drops the message of an error the server wrote", () => {
     const event = exceptionEvent();
@@ -123,7 +173,7 @@ describe("scrubUrl", () => {
       "https://conclave.acmvit.in/book/[username]/[eventSlug]",
     ],
     ["/my-private-room#x", "/[code]"],
-    ["https://conclave.acmvit.in/mediapipe/vision.js", "https://conclave.acmvit.in/mediapipe/vision.js"],
+    ["https://conclave.acmvit.in/mediapipe/vision.js", "https://conclave.acmvit.in/[path]"],
     ["https://example.org/users/alice@example.com", "https://example.org/[path]"],
     ["https://conclave.acmvit.in/ishaan.sharma", "https://conclave.acmvit.in/[code]"],
     ["https://conclave.acmvit.in/_next/image?url=%2Fa.png", "https://conclave.acmvit.in/[path]"],
