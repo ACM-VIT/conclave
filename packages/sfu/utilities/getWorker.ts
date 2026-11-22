@@ -18,8 +18,8 @@ const getWorker = (
   for (const worker of workers) {
     if (worker.closed) continue;
     const load = loads.get(worker.pid) ?? idle;
-    const score = load.consumers + load.pendingRooms;
     const rooms = load.rooms + load.pendingRooms;
+    const score = load.consumers + rooms;
     if (
       score < leastScore ||
       (score === leastScore && rooms < fewestRooms)

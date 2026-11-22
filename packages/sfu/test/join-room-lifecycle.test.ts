@@ -316,6 +316,30 @@ describe("concurrent room creation", () => {
     expect(new Set(rooms.map(({ room }) => room.workerPid))).toEqual(new Set([1, 2]));
   });
 
+  it("spreads sequential rooms that have no consumers across workers", async () => {
+    const workers = [1, 2].map((pid) => ({
+      pid,
+      closed: false,
+      createRouter: async () => ({ closed: false } as Router),
+    }));
+    const state = makeState(workers as unknown as Worker[]);
+    const { room: busy } = await getOrCreateRoomWithOrigin(state, "conclave", "busy");
+    const client = new Client({ id: "viewer", socket: makeSocket("viewer").socket });
+    busy.addClient(client);
+    client.consumers.set("first-video", {} as Consumer);
+    client.consumers.set("second-video", {} as Consumer);
+
+    const placements = [];
+    for (let i = 0; i < 8; i++) {
+      const { room } = await getOrCreateRoomWithOrigin(state, "conclave", `room-${i}`);
+      placements.push(room.workerPid);
+    }
+
+    expect(placements[0]).toBe(2);
+    expect(placements.filter((pid) => pid === 1)).toHaveLength(3);
+    expect(placements.filter((pid) => pid === 2)).toHaveLength(5);
+  });
+
   it("makes only the joiner whose call created the room its host", async () => {
     let releaseRouter!: () => void;
     const routerReady = new Promise<void>((resolve) => { releaseRouter = resolve; });
