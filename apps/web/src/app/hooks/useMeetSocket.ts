@@ -19,8 +19,11 @@ import {
 } from "../lib/constants";
 import { emitWithAckTimeout } from "../lib/socket-ack";
 import {
+  classifyReconnectFailure,
+  planRoomUnavailableRetry,
   resolveInFlightReconnectRequest,
   resolveReconnectStartAttempts,
+  type ReconnectFailureKind,
   type ReconnectRequest,
 } from "../lib/reconnect-request-policy";
 import type {
@@ -468,20 +471,11 @@ const getResponseStatusFromError = (error: unknown): number | null => {
   return typeof fallbackStatus === "number" ? fallbackStatus : null;
 };
 
-const isRecoverableJoinInfoStatus = (status: number): boolean =>
-  status >= 500 && status < 600;
-
-const isRecoverableReconnectFailure = (error: unknown): boolean => {
-  const responseStatus = getResponseStatusFromError(error);
-  if (responseStatus !== null) {
-    return isRecoverableJoinInfoStatus(responseStatus);
-  }
-  const message = getRawReconnectErrorMessage(error).trim();
-  if (!message) return true;
-  return /timeout|xhr poll|websocket|transport|socket|network|fetch|load failed|connection/i.test(
-    message,
-  );
-};
+const getReconnectFailureKind = (error: unknown): ReconnectFailureKind =>
+  classifyReconnectFailure({
+    message: getRawReconnectErrorMessage(error),
+    responseStatus: getResponseStatusFromError(error),
+  });
 
 const buildReconnectRecoveryStatus = (
   phase: ReconnectRecoveryStatus["phase"],
@@ -8661,11 +8655,10 @@ export function useMeetSocket({
             }
             console.error("Failed to get join info:", err);
             const reconnectFailure = describeReconnectFailure(err);
-            const isRecoverable = isRecoverableReconnectFailure(err);
             setMeetError({
               code: "CONNECTION_FAILED",
               message: reconnectFailure,
-              recoverable: isRecoverable,
+              recoverable: getReconnectFailureKind(err) !== "final",
             });
             setConnectionState("error");
             reject(toError(err));
@@ -8808,6 +8801,9 @@ export function useMeetSocket({
     const reconnectGeneration = reconnectGenerationRef.current;
     let skipNextDelay = options?.immediate === true;
     let lastReconnectError: unknown = null;
+    let roomUnavailableSince: number | null = null;
+    let roomUnavailableRetries = 0;
+    let nextDelayOverrideMs: number | null = null;
     reconnectInFlightRef.current = true;
     reconnectAttemptsRef.current = resolveReconnectStartAttempts(
       reconnectAttemptsRef.current,
@@ -8831,8 +8827,9 @@ export function useMeetSocket({
         const attempt = reconnectAttemptsRef.current + 1;
         const delay = skipNextDelay
           ? 0
-          : RECONNECT_DELAY_MS * 2 ** (attempt - 1);
+          : (nextDelayOverrideMs ?? RECONNECT_DELAY_MS * 2 ** (attempt - 1));
         skipNextDelay = false;
+        nextDelayOverrideMs = null;
         reconnectAttemptsRef.current = attempt;
 
         if (shouldSurfaceReconnectState) {
@@ -8993,7 +8990,25 @@ export function useMeetSocket({
           if (reconnectGeneration !== reconnectGenerationRef.current) return;
           lastReconnectError = err;
           const reconnectFailure = describeReconnectFailure(err);
-          const isRecoverable = isRecoverableReconnectFailure(err);
+          const failureKind = getReconnectFailureKind(err);
+          let isRecoverable = failureKind !== "final";
+          if (failureKind === "room-unavailable") {
+            roomUnavailableSince ??= Date.now();
+            const retryPlan = planRoomUnavailableRetry({
+              unavailableSince: roomUnavailableSince,
+              now: Date.now(),
+              retries: roomUnavailableRetries,
+            });
+            if (retryPlan.retry) {
+              // These waits are bounded by time, so they do not use up the
+              // attempts kept for an unreachable server.
+              roomUnavailableRetries += 1;
+              nextDelayOverrideMs = retryPlan.delayMs;
+              reconnectAttemptsRef.current = attempt - 1;
+            } else {
+              isRecoverable = false;
+            }
+          }
           console.warn(
             `[Meets] Reconnect attempt ${attempt} failed:`,
             err,
@@ -9046,7 +9061,9 @@ export function useMeetSocket({
                 attempt,
                 attempt >= MAX_RECONNECT_ATTEMPTS
                   ? "Could not reconnect to the meeting."
-                  : "Reconnect attempt failed. Retrying automatically.",
+                  : failureKind === "room-unavailable"
+                    ? "Waiting for the meeting to come back."
+                    : "Reconnect attempt failed. Retrying automatically.",
                 reconnectFailure,
               ),
             );
