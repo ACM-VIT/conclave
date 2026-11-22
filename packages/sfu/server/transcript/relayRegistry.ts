@@ -47,6 +47,12 @@ export const createTranscriptRelayRegistry = (options: {
   // start that loses a race or a stop must not leave an older relay running,
   // and must never close one created after it.
   const opened = new Map<string, Map<TranscriptRelayInstance, number>>();
+  // The outcome of every start still in flight, by its relay. A start that
+  // a newer one overtakes waits for this before it reports anything.
+  const startsInFlight = new Map<
+    TranscriptRelayInstance,
+    Promise<TranscriptSfuRelayStartResponse>
+  >();
   let nextGeneration = 0;
   const roomKey = (room: Pick<Room, "channelId" | "id">): string =>
     room.channelId || room.id;
@@ -142,82 +148,88 @@ export const createTranscriptRelayRegistry = (options: {
         opened.get(key) ?? new Map<TranscriptRelayInstance, number>();
       opened.set(key, roomRelays.set(relay, generation));
       relays.set(key, relay);
-      // A newer start took the room while this one waited, and closing this
-      // relay fails its start or handoff. The room has a relay, so report it:
-      // a failure would make the browser retry and close the newer one. A
-      // stop leaves the room with none, and still fails the start.
-      const superseded = (): TranscriptSfuRelayStartResponse | null => {
-        const current = relays.get(key);
-        if (!current || current === relay) return null;
-        if (opened.get(key)?.has(relay)) closeRelay(key, relay);
-        return {
-          mode: "sfu",
-          success: true,
-          status: "available",
-          updatedAt: Date.now(),
-        };
+      let settle!: (response: TranscriptSfuRelayStartResponse) => void;
+      startsInFlight.set(
+        relay,
+        new Promise((resolve) => {
+          settle = resolve;
+        }),
+      );
+      const finish = (
+        response: TranscriptSfuRelayStartResponse,
+      ): TranscriptSfuRelayStartResponse => {
+        startsInFlight.delete(relay);
+        settle(response);
+        return response;
+      };
+      const failure = (reason: string): TranscriptSfuRelayStartResponse => ({
+        mode: "sfu",
+        success: false,
+        status: "error",
+        reason,
+        updatedAt: Date.now(),
+      });
+      const isOpen = (candidate: TranscriptRelayInstance): boolean =>
+        opened.get(key)?.has(candidate) === true;
+      // Report success only while a relay really runs. When a newer start
+      // took the room, wait for it to settle: it either runs, so the room has
+      // a relay, or it fails and hands the room back to this one, which
+      // carries on. A room left with no relay fails, so the browser retries.
+      const outcomeOfNewerStart = async (): Promise<TranscriptSfuRelayStartResponse | null> => {
+        for (;;) {
+          const current = relays.get(key);
+          if (current === relay) return null;
+          const newer = current ? startsInFlight.get(current) : undefined;
+          if (newer) {
+            await newer;
+            continue;
+          }
+          if (isOpen(relay)) closeRelay(key, relay);
+          return current && isOpen(current)
+            ? { mode: "sfu", success: true, status: "available", updatedAt: Date.now() }
+            : failure("No SFU transcript relay is running for this room.");
+        }
+      };
+      // A failed start hands the room back to the relay before it, never to
+      // one that has closed.
+      const giveRoomBack = (): void => {
+        if (relays.get(key) !== relay) return;
+        if (existingRelay && existingRelay !== relay && isOpen(existingRelay)) {
+          relays.set(key, existingRelay);
+        } else {
+          relays.delete(key);
+        }
       };
       try {
         await relay.start();
-        const overtaken = superseded();
-        if (overtaken) return overtaken;
-        if (relays.get(key) !== relay) {
-          closeRelay(key, relay);
-          return {
-            mode: "sfu",
-            success: false,
-            status: "error",
-            reason: "Notes stopped before the SFU transcript relay started.",
-            updatedAt: Date.now(),
-          };
-        }
-        if (existingRelay && existingRelay !== relay) {
-          const handoffReady = await relay.prepareHandoff();
-          if (!handoffReady) {
-            const overtakenDuringHandoff = superseded();
-            if (overtakenDuringHandoff) return overtakenDuringHandoff;
-            if (relays.get(key) === relay) {
-              relays.set(key, existingRelay);
-            }
-            closeRelay(key, relay);
-            return {
-              mode: "sfu",
-              success: false,
-              status: "error",
-              reason: "Transcript worker did not prepare SFU relay handoff.",
-              updatedAt: Date.now(),
-            };
-          }
-        }
-        closeOlderThan(key, generation);
-        return {
-          mode: "sfu",
-          success: true,
-          status: "available",
-          updatedAt: Date.now(),
-        };
       } catch (error) {
-        const overtaken = superseded();
-        if (overtaken) return overtaken;
-        if (relays.get(key) === relay) {
-          if (existingRelay) {
-            relays.set(key, existingRelay);
-          } else {
-            relays.delete(key);
-          }
-        }
+        const settled = await outcomeOfNewerStart();
+        if (settled) return finish(settled);
+        giveRoomBack();
         closeRelay(key, relay);
-        return {
-          mode: "sfu",
-          success: false,
-          status: "error",
-          reason:
-            error instanceof Error
-              ? error.message
-              : "Failed to start SFU transcript relay.",
-          updatedAt: Date.now(),
-        };
+        return finish(
+          failure(error instanceof Error ? error.message : "Failed to start SFU transcript relay."),
+        );
       }
+      const overtaken = await outcomeOfNewerStart();
+      if (overtaken) return finish(overtaken);
+      if (existingRelay && existingRelay !== relay) {
+        const handoffReady = await relay.prepareHandoff();
+        const overtakenDuringHandoff = await outcomeOfNewerStart();
+        if (overtakenDuringHandoff) return finish(overtakenDuringHandoff);
+        if (!handoffReady) {
+          giveRoomBack();
+          closeRelay(key, relay);
+          return finish(failure("Transcript worker did not prepare SFU relay handoff."));
+        }
+      }
+      closeOlderThan(key, generation);
+      return finish({
+        mode: "sfu",
+        success: true,
+        status: "available",
+        updatedAt: Date.now(),
+      });
     },
     stopRoom(roomKey) {
       closeRoom(roomKey);

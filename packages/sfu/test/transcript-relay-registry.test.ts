@@ -459,6 +459,7 @@ class FakeWorkerSocket {
   static sockets: FakeWorkerSocket[] = [];
   static answering = new Set<string>();
   static opening = new Map<string, Promise<void>>();
+  static failing = new Set<string>();
   readyState = 0;
   onopen: (() => void) | null = null;
   onmessage: ((event: { data: string }) => void) | null = null;
@@ -470,6 +471,10 @@ class FakeWorkerSocket {
     this.token = new URL(url).searchParams.get("token") ?? "";
     FakeWorkerSocket.sockets.push(this);
     void (FakeWorkerSocket.opening.get(this.token) ?? Promise.resolve()).then(() => {
+      if (FakeWorkerSocket.failing.has(this.token)) {
+        this.onerror?.();
+        return;
+      }
       this.readyState = 1;
       this.onopen?.();
     });
@@ -494,12 +499,14 @@ describe("relay handoffs through the real worker client", () => {
     FakeWorkerSocket.sockets = [];
     FakeWorkerSocket.answering.clear();
     FakeWorkerSocket.opening.clear();
+    FakeWorkerSocket.failing.clear();
     vi.unstubAllGlobals();
   });
 
   const workerFixture = () => {
     vi.stubGlobal("WebSocket", FakeWorkerSocket);
     const closed = new Set<string>();
+    const synced: string[] = [];
     const registry = createTranscriptRelayRegistry({
       enabled: true,
       createRelay: ({ workerToken, controllerUserId }) => {
@@ -512,7 +519,9 @@ describe("relay handoffs through the real worker client", () => {
           controllerUserId,
           start: () => client.connect(),
           prepareHandoff: () => client.prepareHandoff(),
-          syncProducers: async () => {},
+          syncProducers: async () => {
+            synced.push(workerToken);
+          },
           close: () => {
             closed.add(workerToken);
             client.close();
@@ -537,7 +546,12 @@ describe("relay handoffs through the real worker client", () => {
       return start(`${workerToken}-retry`);
     };
     const stop = () => registry.stopRoom(room.channelId);
-    return { closed, start, startLikeTheBrowser, stop };
+    const roomRelay = async () => {
+      synced.length = 0;
+      await registry.syncRoom(room);
+      return synced[0];
+    };
+    return { closed, start, startLikeTheBrowser, stop, roomRelay };
   };
 
   it("reports an overtaken handoff as the room's relay, so the browser's retry never closes the winner", async () => {
@@ -555,6 +569,28 @@ describe("relay handoffs through the real worker client", () => {
     expect(results.map(({ success }) => success)).toEqual([true, true, true]);
     expect(closed.has("D")).toBe(false);
     expect([...closed].sort()).toEqual(["A", "B", "C"]);
+    stop();
+  });
+
+  it("keeps the older start's relay running when the newer overlapping start fails to connect", async () => {
+    const { closed, start, stop, roomRelay } = workerFixture();
+    FakeWorkerSocket.answering.add("B");
+    await start("A");
+    let failC!: () => void;
+    FakeWorkerSocket.opening.set("C", new Promise<void>((resolve) => { failC = resolve; }));
+    FakeWorkerSocket.failing.add("C");
+    const b = start("B");
+    const c = start("C");
+    await vi.waitFor(() => expect(FakeWorkerSocket.sockets.some(({ token }) => token === "B")).toBe(true));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    failC();
+    const [fromB, fromC] = await Promise.all([b, c]);
+
+    expect(fromC.success).toBe(false);
+    expect(fromB.success).toBe(true);
+    const running = await roomRelay();
+    expect(running).toBe("B");
+    expect(closed.has("B")).toBe(false);
     stop();
   });
 
@@ -585,5 +621,80 @@ describe("relay handoffs through the real worker client", () => {
     expect((await b).success).toBe(true);
     expect(closed.has("C")).toBe(false);
     stop();
+  });
+});
+
+describe("a start reports success only while a relay runs", () => {
+  const controlled = () => {
+    const closed = new Set<string>();
+    const synced: string[] = [];
+    const starts = new Map<string, { finish: () => void; fail: () => void }>();
+    const registry = createTranscriptRelayRegistry({
+      enabled: true,
+      createRelay: ({ workerToken, controllerUserId }) => ({
+        controllerUserId,
+        start: () =>
+          new Promise<void>((resolve, reject) => {
+            starts.set(workerToken, { finish: resolve, fail: () => reject(new Error("start failed")) });
+          }),
+        prepareHandoff: async () => true,
+        syncProducers: async () => {
+          synced.push(workerToken);
+        },
+        close: () => {
+          closed.add(workerToken);
+        },
+      }),
+    });
+    const start = (workerToken: string) =>
+      registry.start({
+        room,
+        workerUrl: "http://worker.test",
+        workerToken,
+        controllerUserId: "host",
+        controllerDisplayName: "Host",
+        canReplaceExistingRelay: true,
+      });
+    const roomRelay = async () => {
+      synced.length = 0;
+      await registry.syncRoom(room);
+      return synced[0];
+    };
+    return { closed, starts, start, roomRelay, registry };
+  };
+
+  it("never reports success with no relay running when the newer of two overlapping starts fails", async () => {
+    const { closed, starts, start, roomRelay, registry } = controlled();
+    const b = start("B");
+    const c = start("C");
+    starts.get("B")!.finish();
+    await Promise.resolve();
+    await Promise.resolve();
+    starts.get("C")!.fail();
+    const results = await Promise.all([b, c]);
+
+    const running = await roomRelay();
+    if (results.some(({ success }) => success)) {
+      expect(running).toBeDefined();
+      expect(closed.has(running!)).toBe(false);
+    }
+    expect(results.map(({ success }) => success)).toEqual([true, false]);
+    registry.closeAll();
+  });
+
+  it("lets the older start report the newer one's success once it runs", async () => {
+    const { closed, starts, start, roomRelay, registry } = controlled();
+    const b = start("B");
+    const c = start("C");
+    starts.get("B")!.finish();
+    await Promise.resolve();
+    starts.get("C")!.finish();
+    const results = await Promise.all([b, c]);
+
+    expect(results.map(({ success }) => success)).toEqual([true, true]);
+    expect(await roomRelay()).toBe("C");
+    expect(closed.has("C")).toBe(false);
+    expect(closed.has("B")).toBe(true);
+    registry.closeAll();
   });
 });
