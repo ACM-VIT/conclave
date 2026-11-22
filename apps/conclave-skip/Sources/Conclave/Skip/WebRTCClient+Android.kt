@@ -59,6 +59,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -201,6 +203,9 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
 
     internal val isConfigured: Boolean get() = device != null
     private var sendTransport: SendTransport? = null
+    private var sendTransportLane: SendTransportLane? = null
+    private var sendTransportLaneSequence = 0
+    private val sendProducerLanes = java.util.IdentityHashMap<Producer, SendTransportLane>()
     private var receiveTransport: RecvTransport? = null
     private var sendTransportId: String? = null
     private var receiveTransportId: String? = null
@@ -1726,7 +1731,10 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     private var webcamTopologyWakeJob: Job? = null
     private var webcamTopologyControlGeneration = 0
     private val intentionalLocalVideoProducerCloseIds: MutableSet<String> = mutableSetOf()
-    private var lastWebcamProducerSignalingError: Throwable? = null
+    private val intentionalLocalAudioProducerCloseIds: MutableSet<String> = mutableSetOf()
+    private var audioStartInFlight: CompletableDeferred<Unit>? = null
+    private val transportConnectScope = CoroutineScope(Dispatchers.Main.immediate + SupervisorJob())
+    @Volatile private var lastWebcamProducerSignalingError: Throwable? = null
     private val intentionalLocalScreenProducerCloseIds: MutableSet<String> = mutableSetOf()
     @Volatile private var lastScreenProducerSignalingError: Throwable? = null
     @Volatile private var screenProduceSignalCount = 0
@@ -1957,7 +1965,9 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             throw ErrorException("WebRTC session was replaced")
         }
 
-        sendTransport?.close()
+        retireSendTransport()
+        sendTransportLaneSequence += 1
+        sendTransportLane = SendTransportLane("ConclaveSendTransport-$sendTransportLaneSequence")
         sendTransportId = producerTransportParams.id
         sendTransport = nextSendTransport
         NativePerformanceDiagnostics.timingAlways("webrtc_create_send_transport_local", localCreateStartedAt)
@@ -2022,6 +2032,87 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         NativePerformanceDiagnostics.memory("after_webrtc_create_transports")
     }
 
+    /** Throws when the transport was replaced meanwhile, so no caller commits work for a closed session. */
+    private suspend fun <T> onSendTransportLane(transport: SendTransport, operation: () -> T): T {
+        val lane = sendTransportLane
+        if (lane == null || transport !== sendTransport) throw ErrorException("WebRTC session was replaced")
+        val result = lane.run(operation)
+        if (lane !== sendTransportLane) throw ErrorException("WebRTC session was replaced")
+        return result
+    }
+
+    /** A caller cancelled mid-ack still gets its producer closed on both ends, since the SFU already registered it. */
+    private suspend fun produceOnSendTransportLane(transport: SendTransport, produce: () -> Producer): Producer {
+        val lane = sendTransportLane
+        var created: Producer? = null
+        try {
+            val producer = withContext(NonCancellable) {
+                onSendTransportLane(transport, produce).also { producer ->
+                    if (lane != null) sendProducerLanes[producer] = lane
+                    created = producer
+                }
+            }
+            currentCoroutineContext().ensureActive()
+            return producer
+        } catch (cancelled: CancellationException) {
+            created?.let { orphan ->
+                withContext(NonCancellable) {
+                    try {
+                        socketManager?.closeProducer(orphan.id)
+                    } catch (_: Throwable) {
+                    }
+                }
+                closeSendProducer(orphan)
+            }
+            throw cancelled
+        }
+    }
+
+    private fun closeSendProducer(producer: Producer?) {
+        if (producer == null) return
+        val lane = sendProducerLanes.remove(producer) ?: return
+        lane.post { producer.close() }
+    }
+
+    private fun setSendProducerMaxSpatialLayer(producer: Producer, layers: Int) {
+        val lane = sendProducerLanes[producer] ?: return
+        lane.post { producer.setMaxSpatialLayer(layers) }
+    }
+
+    /** Stats read the send handler, so they skip a sample while the lane has work rather than race it. */
+    private val isSendTransportQuiet: Boolean get() = sendTransportLane?.isIdle ?: true
+
+    /** The lane disposes [device] after the transport close: libmediasoupclient's send transport reads it while producing. */
+    private fun retireSendTransport(device: Device? = null) {
+        val transport = sendTransport
+        val lane = sendTransportLane
+        sendTransport = null
+        sendTransportLane = null
+        if (lane == null) {
+            transport?.close()
+            device?.dispose()
+            return
+        }
+        sendProducerLanes.values.removeAll { it === lane }
+        lane.retire {
+            transport?.close()
+            device?.dispose()
+        }
+    }
+
+    /** A queued produce holds tracks and sources without a libwebrtc reference until it reaches the peer connection. */
+    private fun releaseAfterSendTransportWork(release: () -> Unit) {
+        val lane = sendTransportLane
+        if (lane == null) {
+            try {
+                release()
+            } catch (_: Throwable) {
+            }
+            return
+        }
+        lane.post(release)
+    }
+
     internal suspend fun restartIce(): Boolean {
         val producerReady = sendTransport != null && sendTransportId != null
         val consumerReady = receiveTransport != null && receiveTransportId != null
@@ -2040,7 +2131,8 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                     val transport = sendTransport ?: return false
                     val transportId = sendTransportId ?: return false
                     val response = socket.restartIce(transport = transportKind, transportId = transportId)
-                    transport.restartIce(encodeJSONString(response.iceParameters))
+                    val iceParameters = encodeJSONString(response.iceParameters)
+                    onSendTransportLane(transport) { transport.restartIce(iceParameters) }
                 }
                 "consumer" -> {
                     val transport = receiveTransport ?: return false
@@ -2061,6 +2153,26 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     internal suspend fun startProducingAudio() {
         val muteIntentGeneration = localAudioMuteIntentGeneration
         val generation = configurationGeneration
+        while (true) {
+            val inFlight = audioStartInFlight ?: break
+            inFlight.await()
+        }
+        ensureCurrentConfiguration(generation)
+        if (localAudioMuteIntentGeneration != muteIntentGeneration) {
+            debugLog("[WebRTC] Microphone start cancelled by a mute while joining an in-flight start")
+            return
+        }
+        val gate = CompletableDeferred<Unit>()
+        audioStartInFlight = gate
+        try {
+            performStartProducingAudio(muteIntentGeneration, generation)
+        } finally {
+            if (audioStartInFlight === gate) audioStartInFlight = null
+            gate.complete(Unit)
+        }
+    }
+
+    private suspend fun performStartProducingAudio(muteIntentGeneration: Int, generation: Long) {
         createSendTransportIfNeeded()
         ensureCurrentConfiguration(generation)
         val sendTransport = sendTransport ?: throw ErrorException("Send transport not ready")
@@ -2070,7 +2182,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             return
         }
         if (audioProducer != null || localAudioTrack != null || audioSource != null) {
-            audioProducer?.close()
+            closeSendProducer(audioProducer)
             audioProducer = null
             audioProducerBandwidthQuality = ConnectionQuality.unknown
             audioCaptureReassertionGeneration += 1
@@ -2108,6 +2220,26 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
 
             val producer = produceMicrophoneAudio(sendTransport, audioTrack)
             pendingProducer = producer
+            ensureCurrentConfiguration(generation)
+            if (
+                localAudioMuteIntentGeneration != muteIntentGeneration ||
+                audioProducer != null ||
+                localAudioTrack !== audioTrack
+            ) {
+                pendingProducer = null
+                audioTrack.setEnabled(false)
+                socketManager?.let { socket ->
+                    closeUncommittedReplacementProducer(producer, socket, "superseded audio start")
+                } ?: closeSendProducer(producer)
+                if (localAudioTrack === audioTrack) {
+                    clearLocalAudioCapture()
+                    audioDeviceModule?.setMicrophoneMute(true)
+                    localAudioEnabled = false
+                    localAudioTargetEnabled = false
+                }
+                debugLog("[WebRTC] Dropped microphone producer superseded during its acknowledgement: ${producer.id}")
+                return
+            }
             producer.resume()
 
             audioProducer = producer
@@ -2125,18 +2257,22 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 onLocalAudioEnabledChanged?.invoke(true)
             }
         } catch (t: Throwable) {
-            pendingProducer?.close()
-            if (pendingProducer != null && audioProducer?.id == pendingProducer.id) {
-                audioProducer = null
+            closeSendProducer(pendingProducer)
+            if (generation == configurationGeneration) {
+                if (pendingProducer != null && audioProducer === pendingProducer) {
+                    audioProducer = null
+                }
+                clearLocalAudioCapture()
+                audioDeviceModule?.setMicrophoneMute(true)
+                audioProducerBandwidthQuality = ConnectionQuality.unknown
+                localAudioEnabled = false
+                localAudioTargetEnabled = false
             }
-            clearLocalAudioCapture()
-            audioDeviceModule?.setMicrophoneMute(true)
-            audioProducerBandwidthQuality = ConnectionQuality.unknown
-            localAudioEnabled = false
-            localAudioTargetEnabled = false
             throw t
         } finally {
-            audioStartOrEnableInFlight = false
+            if (generation == configurationGeneration) {
+                audioStartOrEnableInFlight = false
+            }
         }
     }
 
@@ -2167,6 +2303,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         ensureCurrentConfiguration(generation)
 
         var pendingProducer: Producer? = null
+        var startedCapturer: VideoCapturer? = null
         try {
             releasePreJoinCameraPreview()
 
@@ -2186,6 +2323,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             }
 
             val capturer = videoCapturer ?: throw ErrorException("No camera capturer")
+            startedCapturer = capturer
             val textureHelper = surfaceTextureHelper ?: throw ErrorException("Camera texture helper unavailable")
             videoSource = peerConnectionFactory?.createVideoSource(false)
             val source = videoSource ?: throw ErrorException("Video source unavailable")
@@ -2204,13 +2342,31 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 currentLocalBandwidthQuality
             )
             pendingProducer = producer
-            producer.resume()
-            try {
-                producer.setMaxSpatialLayer(
-                    WebcamSpatialLayerPolicy.activeLayerCount(webcamMaxSpatialLayer(currentVideoQuality, currentLocalBandwidthQuality))
-                )
-            } catch (_: Throwable) {
+            ensureCurrentConfiguration(generation)
+            if (
+                localVideoOffIntentGeneration != offIntentGeneration ||
+                videoCapturer !== capturer ||
+                videoProducer != null
+            ) {
+                pendingProducer = null
+                videoTrack.setEnabled(false)
+                closeSendProducer(producer)
+                if (videoCapturer === capturer) {
+                    clearLocalWebcamCaptureState(notifyLocalState = false)
+                }
+                try {
+                    socketManager?.closeProducer(producer.id)
+                } catch (error: Throwable) {
+                    debugLog("[WebRTC] Failed to notify SFU of a superseded camera producer: ${error}")
+                }
+                debugLog("[WebRTC] Dropped camera producer superseded during its acknowledgement: ${producer.id}")
+                return
             }
+            producer.resume()
+            setSendProducerMaxSpatialLayer(
+                producer,
+                WebcamSpatialLayerPolicy.activeLayerCount(webcamMaxSpatialLayer(currentVideoQuality, currentLocalBandwidthQuality)),
+            )
 
             videoProducer = producer
             webcamProducerTopology = if (lastWebcamProduceUsedSingleLayerFallback) {
@@ -2228,9 +2384,12 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             localVideoEnabled = true
             onLocalVideoEnabledChanged?.invoke(true)
         } catch (t: Throwable) {
-            pendingProducer?.close()
+            closeSendProducer(pendingProducer)
 
-            if (generation == configurationGeneration) {
+            if (
+                generation == configurationGeneration &&
+                (startedCapturer == null || videoCapturer === startedCapturer)
+            ) {
                 clearLocalWebcamCaptureState(notifyLocalState = false)
             }
             throw t
@@ -2239,6 +2398,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
 
     internal suspend fun startScreenSharing() {
         lastScreenProducerSignalingError = null
+        val generation = configurationGeneration
         createSendTransportIfNeeded()
         val sendTransport = sendTransport ?: throw ErrorException("Send transport not ready")
         val context = ProcessInfo.processInfo.androidContext
@@ -2283,6 +2443,10 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             val appData = encodeJSONString(ProducerAppData(type = ProducerType.screen.rawValue, paused = false))
             val producer = produceScreenVideo(sendTransport, track, appData, currentLocalBandwidthQuality)
             pendingProducer = producer
+            ensureCurrentConfiguration(generation)
+            if (screenCapturer !== capturer) {
+                throw ErrorException("Screen sharing stopped before the SFU acknowledged it")
+            }
             producer.resume()
             screenProducer = producer
             screenProducerBandwidthQuality = currentLocalBandwidthQuality
@@ -2290,7 +2454,15 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             evaluateWebcamTopologyTransition()
             debugLog("[WebRTC] Screen sharing producer created: ${producer.id}")
         } catch (t: Throwable) {
-            pendingProducer?.close()
+            val droppedProducer = pendingProducer
+            closeSendProducer(droppedProducer)
+            if (droppedProducer != null && generation == configurationGeneration) {
+                try {
+                    socketManager?.closeProducer(droppedProducer.id)
+                } catch (error: Throwable) {
+                    ScreenShareAndroidLog.warn("produceFence", error)
+                }
+            }
             try {
                 capturer.stopCapture()
             } catch (_: Throwable) {
@@ -2299,47 +2471,55 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 capturer.dispose()
             } catch (_: Throwable) {
             }
-            screenCapturer = null
-            screenSurfaceTextureHelper?.dispose()
-            screenSurfaceTextureHelper = null
-            clearScreenVideoSource()
-            screenVideoTrack?.setEnabled(false)
-            screenVideoTrack = null
+            val ownsCapture = screenCapturer === capturer
+            if (ownsCapture) {
+                screenCapturer = null
+                screenSurfaceTextureHelper?.dispose()
+                screenSurfaceTextureHelper = null
+                clearScreenVideoSource()
+                screenVideoTrack?.setEnabled(false)
+                screenVideoTrack = null
+            }
 
-            ScreenCaptureManager.stopCapture()
+            if (ownsCapture || screenCapturer == null) {
+                ScreenCaptureManager.stopCapture()
+            }
             val reported = lastScreenProducerSignalingError ?: t
             ScreenShareAndroidLog.warn("produce", reported)
             throw ErrorException("Screen sharing failed to start: ${reported}", reported)
         }
     }
 
-    private fun produceScreenVideo(
+    private suspend fun produceScreenVideo(
         transport: SendTransport,
         track: VideoTrack,
         appData: String,
         connectionQuality: ConnectionQuality,
     ): Producer {
-        val signalsBefore = screenProduceSignalCount
-        val producer = try {
-            transport.produce(
-                this,
-                track as MediaStreamTrack,
-                screenShareEncodings(connectionQuality),
-                null,
-                null,
-                appData,
-            )
-        } catch (t: Throwable) {
-            if (screenProduceSignalCount != signalsBefore) throw t
-            ScreenShareAndroidLog.warn("produceRetry", t)
-            transport.produce(
-                this,
-                track as MediaStreamTrack,
-                null,
-                null,
-                null,
-                appData,
-            )
+        val encodings = screenShareEncodings(connectionQuality)
+        val producer = produceOnSendTransportLane(transport) {
+            val signalsBefore = screenProduceSignalCount
+            try {
+                transport.produce(
+                    this,
+                    track as MediaStreamTrack,
+                    encodings,
+                    null,
+                    null,
+                    appData,
+                )
+            } catch (t: Throwable) {
+                if (screenProduceSignalCount != signalsBefore) throw t
+                ScreenShareAndroidLog.warn("produceRetry", t)
+                transport.produce(
+                    this,
+                    track as MediaStreamTrack,
+                    null,
+                    null,
+                    null,
+                    appData,
+                )
+            }
         }
         return requireRegisteredProducer(producer, "screen")
     }
@@ -2360,7 +2540,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     }
 
     internal suspend fun stopScreenSharing() {
-        screenProducer?.close()
+        closeSendProducer(screenProducer)
         screenProducer = null
         screenProducerBandwidthQuality = ConnectionQuality.unknown
         screenProducerBandwidthSignature = null
@@ -3183,7 +3363,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         }
 
         if (kind == "audio" && isWebcam && matchesProducer(audioProducer, producerId)) {
-            audioProducer?.close()
+            closeSendProducer(audioProducer)
             audioProducer = null
             audioProducerBandwidthQuality = ConnectionQuality.unknown
             clearLocalAudioCapture()
@@ -3196,7 +3376,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
 
         if (kind == "video" && isWebcam && matchesProducer(videoProducer, producerId)) {
             resetWebcamTopologyControl()
-            videoProducer?.close()
+            closeSendProducer(videoProducer)
             videoProducer = null
             videoProducerBandwidthQuality = ConnectionQuality.unknown
             videoProducerBandwidthSignature = null
@@ -3231,7 +3411,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
 
     private fun clearLocalWebcamCaptureState(notifyLocalState: Boolean = true) {
         resetWebcamTopologyControl()
-        videoProducer?.close()
+        closeSendProducer(videoProducer)
         videoProducer = null
         videoProducerBandwidthQuality = ConnectionQuality.unknown
         videoProducerBandwidthSignature = null
@@ -3285,11 +3465,12 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             track.setEnabled(false)
         } catch (_: Throwable) {
         }
-        try {
-            track.dispose()
-        } catch (error: Throwable) {
-            debugLog("[WebRTC] Failed to dispose audio track: ${error}")
-        }
+        releaseAfterSendTransportWork { track.dispose() }
+    }
+
+    private fun disposeAudioSource(source: AudioSource?) {
+        if (source == null) return
+        releaseAfterSendTransportWork { source.dispose() }
     }
 
     private fun clearLocalAudioTrack() {
@@ -3298,7 +3479,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     }
 
     private fun clearAudioSource() {
-        audioSource?.dispose()
+        disposeAudioSource(audioSource)
         audioSource = null
     }
 
@@ -3332,13 +3513,15 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     }
 
     private fun clearVideoSource() {
-        videoSource?.dispose()
+        val source = videoSource ?: return
         videoSource = null
+        releaseAfterSendTransportWork { source.dispose() }
     }
 
     private fun clearScreenVideoSource() {
-        screenVideoSource?.dispose()
+        val source = screenVideoSource ?: return
         screenVideoSource = null
+        releaseAfterSendTransportWork { source.dispose() }
     }
 
     private fun matchesProducer(producer: Producer?, producerId: String?): Boolean {
@@ -3372,7 +3555,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         }
     }
 
-    private fun produceWebcamVideo(
+    private suspend fun produceWebcamVideo(
         transport: SendTransport,
         track: VideoTrack,
         appData: String,
@@ -3384,46 +3567,101 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             currentVideoQuality,
             connectionQuality,
         )
+        val simulcastEncodings = webcamEncodings(currentVideoQuality, connectionQuality)
+        val singleLayerEncodings = webcamFallbackSingleLayerEncodings(currentVideoQuality, connectionQuality)
+        var usedSingleLayerFallback = false
         lastWebcamProduceUsedSingleLayerFallback = false
-        val producer = try {
-            transport.produce(
-                this,
-                mediaTrack,
-                webcamEncodings(currentVideoQuality, connectionQuality),
-                codecOptions,
-                preferredCodec,
-                appData
-            )
-        } catch (error: Throwable) {
-            debugLog("[WebRTC] Webcam simulcast produce failed; retrying single-layer: ${error}")
-            lastWebcamProduceUsedSingleLayerFallback = true
-            transport.produce(
-                this,
-                mediaTrack,
-                webcamFallbackSingleLayerEncodings(currentVideoQuality, connectionQuality),
-                codecOptions,
-                preferredCodec,
-                appData
-            )
+        val producer = produceOnSendTransportLane(transport) {
+            try {
+                transport.produce(
+                    this,
+                    mediaTrack,
+                    simulcastEncodings,
+                    codecOptions,
+                    preferredCodec,
+                    appData
+                )
+            } catch (error: Throwable) {
+                debugLog("[WebRTC] Webcam simulcast produce failed; retrying single-layer: ${error}")
+                usedSingleLayerFallback = true
+                transport.produce(
+                    this,
+                    mediaTrack,
+                    singleLayerEncodings,
+                    codecOptions,
+                    preferredCodec,
+                    appData
+                )
+            }
         }
+        lastWebcamProduceUsedSingleLayerFallback = usedSingleLayerFallback
         return requireRegisteredProducer(producer, "webcam")
     }
 
-    private fun produceMicrophoneAudio(
+    private suspend fun produceMicrophoneAudio(
         transport: SendTransport,
         track: AudioTrack,
     ): Producer {
         val appData = encodeJSONString(ProducerAppData(type = ProducerType.webcam.rawValue, paused = false))
+        val codecOptions = microphoneOpusCodecOptionsJson()
 
-        val producer = transport.produce(
-            this,
-            track as MediaStreamTrack,
-            null,
-            microphoneOpusCodecOptionsJson(),
-            null,
-            appData
-        )
+        val producer = produceOnSendTransportLane(transport) {
+            transport.produce(
+                this,
+                track as MediaStreamTrack,
+                null,
+                codecOptions,
+                null,
+                appData
+            )
+        }
         return requireRegisteredProducer(producer, "microphone")
+    }
+
+    private suspend fun markMicrophoneProducerMuted(producerId: String, reason: String) {
+        try {
+            socketManager?.toggleMute(producerId, paused = true)
+        } catch (error: Throwable) {
+            debugLog("[WebRTC] Failed to mute microphone producer after ${reason}: ${error}")
+        }
+    }
+
+    private fun markIntentionalLocalAudioProducerClose(producerId: String) {
+        if (intentionalLocalAudioProducerCloseIds.size >= 32) {
+            intentionalLocalAudioProducerCloseIds.clear()
+        }
+        intentionalLocalAudioProducerCloseIds.add(producerId)
+    }
+
+    /** The SFU closed [oldProducer] when it acknowledged [nextProducer], so a mute that landed meanwhile pauses the replacement instead of falling back. */
+    private fun commitMicrophoneReplacement(
+        nextProducer: Producer,
+        oldProducer: Producer,
+        bandwidthQuality: ConnectionQuality,
+        muted: Boolean,
+    ) {
+        intentionalLocalAudioProducerCloseIds.remove(oldProducer.id)
+        audioProducer = nextProducer
+        audioProducerBandwidthQuality = bandwidthQuality
+        if (muted) {
+            nextProducer.pause()
+            localAudioTrack?.setEnabled(false)
+            audioDeviceModule?.setMicrophoneMute(true)
+            localAudioEnabled = false
+        } else {
+            nextProducer.resume()
+            localAudioEnabled = true
+            localAudioTargetEnabled = true
+        }
+    }
+
+    private suspend fun closeUncommittedSendProducer(producer: Producer, socket: SocketIOManager, reason: String) {
+        try {
+            socket.closeProducer(producer.id)
+        } catch (error: Throwable) {
+            debugLog("[WebRTC] Failed to notify SFU of an uncommitted producer close after ${reason}: ${error}")
+        }
+        closeSendProducer(producer)
     }
 
     private suspend fun markMicrophoneProducerUnmuted(producerId: String, reason: String) {
@@ -3436,10 +3674,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
 
     private fun requireRegisteredProducer(producer: Producer, label: String): Producer {
         if (producer.id.isBlank() || producer.isClosed) {
-            try {
-                producer.close()
-            } catch (_: Throwable) {
-            }
+            closeSendProducer(producer)
             throw ErrorException("SFU did not acknowledge $label producer")
         }
         return producer
@@ -3489,12 +3724,10 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         applyLocalBandwidthProfile(currentLocalBandwidthQuality)
         if (webcamProducerTopology == WebcamProducerTopology.vp8SingleLayer) return
         val producer = videoProducer ?: return
-        try {
-            producer.setMaxSpatialLayer(
-                WebcamSpatialLayerPolicy.activeLayerCount(webcamMaxSpatialLayer(quality, currentLocalBandwidthQuality))
-            )
-        } catch (_: Throwable) {
-        }
+        setSendProducerMaxSpatialLayer(
+            producer,
+            WebcamSpatialLayerPolicy.activeLayerCount(webcamMaxSpatialLayer(quality, currentLocalBandwidthQuality)),
+        )
     }
 
     internal fun applyLocalBandwidthProfile(connectionQuality: ConnectionQuality) {
@@ -3517,12 +3750,10 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
 
         if (webcamProducerTopology != WebcamProducerTopology.vp8SingleLayer) {
             videoProducer?.let { producer ->
-                try {
-                    producer.setMaxSpatialLayer(
-                        WebcamSpatialLayerPolicy.activeLayerCount(webcamMaxSpatialLayer(currentVideoQuality, connectionQuality))
-                    )
-                } catch (_: Throwable) {
-                }
+                setSendProducerMaxSpatialLayer(
+                    producer,
+                    WebcamSpatialLayerPolicy.activeLayerCount(webcamMaxSpatialLayer(currentVideoQuality, connectionQuality)),
+                )
             }
 
             val capturer = videoCapturer
@@ -3554,18 +3785,33 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         val transport = sendTransport ?: return
         val oldProducer = videoProducer ?: return
         val track = localVideoTrack ?: return
+        val generation = configurationGeneration
+        val offIntentGeneration = localVideoOffIntentGeneration
         videoBandwidthRefreshInFlight = true
         try {
             val appData = encodeJSONString(ProducerAppData(type = ProducerType.webcam.rawValue, paused = false))
             intentionalLocalVideoProducerCloseIds.add(oldProducer.id)
             val nextProducer = produceWebcamVideo(transport, track, appData, connectionQuality)
-            nextProducer.resume()
-            try {
-                nextProducer.setMaxSpatialLayer(
-                    WebcamSpatialLayerPolicy.activeLayerCount(webcamMaxSpatialLayer(currentVideoQuality, connectionQuality))
-                )
-            } catch (_: Throwable) {
+            if (generation != configurationGeneration) {
+                closeSendProducer(nextProducer)
+                return
             }
+            if (videoProducer !== oldProducer || localVideoTrack !== track) {
+                intentionalLocalVideoProducerCloseIds.remove(oldProducer.id)
+                closeUncommittedSendProducer(nextProducer, socket, "superseded webcam refresh")
+                return
+            }
+            if (localVideoOffIntentGeneration != offIntentGeneration || !localVideoEnabled) {
+                closeLocalMedia(kind = "video", type = ProducerType.webcam.rawValue, producerId = oldProducer.id)
+                closeUncommittedSendProducer(nextProducer, socket, "webcam refresh after a camera-off")
+                debugLog("[WebRTC] Camera-off landed during a webcam refresh; closed the camera")
+                return
+            }
+            nextProducer.resume()
+            setSendProducerMaxSpatialLayer(
+                nextProducer,
+                WebcamSpatialLayerPolicy.activeLayerCount(webcamMaxSpatialLayer(currentVideoQuality, connectionQuality)),
+            )
             videoProducer = nextProducer
             webcamProducerTopology = if (lastWebcamProduceUsedSingleLayerFallback) {
                 WebcamProducerTopology.vp8SingleLayer
@@ -3590,10 +3836,11 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             } catch (error: Throwable) {
                 debugLog("[WebRTC] Failed to notify SFU of refreshed webcam producer close: ${error}")
             }
-            oldProducer.close()
+            closeSendProducer(oldProducer)
             evaluateWebcamTopologyTransition()
             debugLog("[WebRTC] Refreshed webcam producer for ${connectionQuality} bandwidth")
         } catch (error: Throwable) {
+            if (generation != configurationGeneration) return
             intentionalLocalVideoProducerCloseIds.remove(oldProducer.id)
             val recovery = WebcamTopologyTransitionMachine.forceAdaptiveRecovery(
                 webcamTopologyTransitionState,
@@ -3619,6 +3866,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         val transport = sendTransport ?: return
         val oldProducer = audioProducer ?: return
         val track = localAudioTrack ?: return
+        val generation = configurationGeneration
         audioBandwidthRefreshInFlight = true
         val callback = onLocalAudioEnabledChanged
         onLocalAudioEnabledChanged = null
@@ -3627,31 +3875,49 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             configureCallAudioMode(unmuted = true)
             forceUnmuteMicrophoneCapture()
             track.setEnabled(true)
-            val nextProducer = produceMicrophoneAudio(transport, track)
-            nextProducer.resume()
-            audioProducer = nextProducer
-            audioProducerBandwidthQuality = connectionQuality
-            localAudioEnabled = true
-            localAudioTargetEnabled = true
-            forceUnmuteMicrophoneCapture()
-            track.setEnabled(true)
-            configureCallAudioMode(unmuted = true)
-            markMicrophoneProducerUnmuted(nextProducer.id, "bandwidth refresh")
+            markIntentionalLocalAudioProducerClose(oldProducer.id)
+            val nextProducer = try {
+                produceMicrophoneAudio(transport, track)
+            } catch (error: Throwable) {
+                intentionalLocalAudioProducerCloseIds.remove(oldProducer.id)
+                throw error
+            }
+            if (generation != configurationGeneration) {
+                closeSendProducer(nextProducer)
+                return
+            }
+            if (audioProducer !== oldProducer || localAudioTrack !== track) {
+                intentionalLocalAudioProducerCloseIds.remove(oldProducer.id)
+                closeUncommittedReplacementProducer(nextProducer, socket, "superseded bandwidth refresh")
+                return
+            }
+            val muted = !localAudioTargetEnabled || !localAudioEnabled
+            commitMicrophoneReplacement(nextProducer, oldProducer, connectionQuality, muted)
+            if (muted) {
+                markMicrophoneProducerMuted(nextProducer.id, "bandwidth refresh")
+            } else {
+                forceUnmuteMicrophoneCapture()
+                track.setEnabled(true)
+                configureCallAudioMode(unmuted = true)
+                markMicrophoneProducerUnmuted(nextProducer.id, "bandwidth refresh")
+            }
 
             try {
                 socket.closeProducer(oldProducer.id)
             } catch (error: Throwable) {
                 debugLog("[WebRTC] Failed to notify SFU of refreshed microphone producer close: ${error}")
             }
-            oldProducer.close()
+            closeSendProducer(oldProducer)
             debugLog("[WebRTC] Refreshed microphone producer for ${connectionQuality} bandwidth")
         } catch (error: Throwable) {
             debugLog("[WebRTC] Failed to refresh microphone producer for bandwidth: ${error}")
         } finally {
             onLocalAudioEnabledChanged = callback
-            audioBandwidthRefreshInFlight = false
-            if (!localAudioEnabled) {
-                callback?.invoke(false)
+            if (generation == configurationGeneration) {
+                audioBandwidthRefreshInFlight = false
+                if (!localAudioEnabled) {
+                    callback?.invoke(false)
+                }
             }
         }
     }
@@ -3666,6 +3932,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         val transport = sendTransport ?: return
         val oldProducer = screenProducer ?: return
         val track = screenVideoTrack ?: return
+        val generation = configurationGeneration
         screenBandwidthRefreshInFlight = true
         lastScreenProducerSignalingError = null
         try {
@@ -3686,13 +3953,19 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 }
                 throw t
             }
-            if (screenProducer !== oldProducer || screenVideoTrack !== track) {
-                try {
-                    socket.closeProducer(nextProducer.id)
-                } catch (error: Throwable) {
-                    ScreenShareAndroidLog.warn("refreshFence", error)
+            if (
+                generation != configurationGeneration ||
+                screenProducer !== oldProducer ||
+                screenVideoTrack !== track
+            ) {
+                if (generation == configurationGeneration) {
+                    try {
+                        socket.closeProducer(nextProducer.id)
+                    } catch (error: Throwable) {
+                        ScreenShareAndroidLog.warn("refreshFence", error)
+                    }
                 }
-                nextProducer.close()
+                closeSendProducer(nextProducer)
                 return
             }
             nextProducer.resume()
@@ -3706,7 +3979,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             } catch (error: Throwable) {
                 debugLog("[WebRTC] Failed to notify SFU of refreshed screen producer close: ${error}")
             }
-            oldProducer.close()
+            closeSendProducer(oldProducer)
             debugLog("[WebRTC] Refreshed screen producer for ${connectionQuality} bandwidth")
         } catch (error: Throwable) {
             ScreenShareAndroidLog.warn("refresh", error)
@@ -4163,8 +4436,8 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         return intentionalLocalVideoProducerCloseIds.remove(producerId)
     }
 
-    internal fun consumeIntentionalLocalAudioProducerClose(@Suppress("UNUSED_PARAMETER") producerId: String): Boolean {
-        return false
+    internal fun consumeIntentionalLocalAudioProducerClose(producerId: String): Boolean {
+        return intentionalLocalAudioProducerCloseIds.remove(producerId)
     }
 
     private fun webcamTopologyMonotonicMs(): Double = SystemClock.elapsedRealtime().toDouble()
@@ -4446,19 +4719,24 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 intentionalLocalVideoProducerCloseIds.clear()
             }
             intentionalLocalVideoProducerCloseIds.add(oldProducer.id)
+            val encodings = if (command.target == WebcamTopologyReplacementTarget.singleReceiver) {
+                webcamSingleReceiverEncodings()
+            } else {
+                restoredAdaptiveWebcamEncodings()
+            }
+            val codecOptions = webcamVideoCodecOptionsJson(VideoQuality.standard, ConnectionQuality.good)
+            val preferredCodec = preferredVideoCodecJson()
             val producer = requireRegisteredProducer(
-                transport.produce(
-                    this,
-                    track as MediaStreamTrack,
-                    if (command.target == WebcamTopologyReplacementTarget.singleReceiver) {
-                        webcamSingleReceiverEncodings()
-                    } else {
-                        restoredAdaptiveWebcamEncodings()
-                    },
-                    webcamVideoCodecOptionsJson(VideoQuality.standard, ConnectionQuality.good),
-                    preferredVideoCodecJson(),
-                    appData,
-                ),
+                produceOnSendTransportLane(transport) {
+                    transport.produce(
+                        this,
+                        track as MediaStreamTrack,
+                        encodings,
+                        codecOptions,
+                        preferredCodec,
+                        appData,
+                    )
+                },
                 if (command.target == WebcamTopologyReplacementTarget.singleReceiver) {
                     "single-receiver webcam"
                 } else {
@@ -4468,10 +4746,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             pendingProducer = producer
             producer.resume()
             if (targetTopology == WebcamProducerTopology.vp8Simulcast) {
-                try {
-                    producer.setMaxSpatialLayer(WebcamSpatialLayerPolicy.activeLayerCount(2))
-                } catch (_: Throwable) {
-                }
+                setSendProducerMaxSpatialLayer(producer, WebcamSpatialLayerPolicy.activeLayerCount(2))
             }
 
             if (
@@ -4508,7 +4783,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             } catch (error: Throwable) {
                 debugLog("[WebRTC] Predecessor webcam close after topology handoff: ${error}")
             }
-            oldProducer.close()
+            closeSendProducer(oldProducer)
             lastAppliedLocalBandwidthSignature = null
             return WebcamTopologyReplacementResult(
                 status = WebcamTopologyReplacementStatus.applied,
@@ -4524,7 +4799,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 } catch (closeError: Throwable) {
                     debugLog("[WebRTC] Failed to close uncommitted topology producer: ${closeError}")
                 }
-                producer.close()
+                closeSendProducer(producer)
             }
             val signalingError = lastWebcamProducerSignalingError ?: error
             val ambiguous = pendingProducer != null || isAmbiguousWebcamTopologyError(signalingError)
@@ -4592,12 +4867,14 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         clearScreenVideoSource()
         screenVideoTrack = null
 
-        audioProducer?.close()
-        videoProducer?.close()
-        screenProducer?.close()
+        closeSendProducer(audioProducer)
+        closeSendProducer(videoProducer)
+        closeSendProducer(screenProducer)
         audioProducer = null
         videoProducer = null
         screenProducer = null
+        audioStartInFlight = null
+        intentionalLocalAudioProducerCloseIds.clear()
         currentLocalBandwidthQuality = ConnectionQuality.unknown
         audioProducerBandwidthQuality = ConnectionQuality.unknown
         videoProducerBandwidthQuality = ConnectionQuality.unknown
@@ -4653,12 +4930,12 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         localVideoTrackWrapper = null
         remoteVideoTracks.removeAll()
 
-        sendTransport?.close()
         receiveTransport?.close()
-        sendTransport = null
         receiveTransport = null
+        sendTransportId = null
+        receiveTransportId = null
         transportConnectionStates.clear()
-        device?.dispose()
+        retireSendTransport(device)
         device = null
         runtimeIceServersJSON = null
     }
@@ -4666,7 +4943,8 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     internal fun getCaptureSession(): Any? = null
     internal fun getLocalVideoTrack(): Any? = localVideoTrackWrapper
 
-    internal fun localVideoStageKey(): String = localVideoTrack?.id() ?: ""
+    /** Keys the self tile on the committed renderable, which an off-main camera start installs only after its produce. */
+    internal fun localVideoStageKey(): String = localVideoTrackWrapper?.rtcVideoTrack?.id() ?: ""
 
     internal fun remoteVideoTrack(forUserId: String): VideoTrackWrapper? {
         val normalized = forUserId.trim()
@@ -5170,50 +5448,54 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 forceUnmuteMicrophoneCapture()
                 track.setEnabled(true)
 
-                val replacement = produceMicrophoneAudio(transport, track)
+                markIntentionalLocalAudioProducerClose(producerAtSchedule.id)
+                val replacement = try {
+                    produceMicrophoneAudio(transport, track)
+                } catch (error: Throwable) {
+                    intentionalLocalAudioProducerCloseIds.remove(producerAtSchedule.id)
+                    throw error
+                }
                 nextProducer = replacement
-                replacement.resume()
 
                 if (
                     generation != configurationGeneration ||
-                    !isCallAudioModeActive ||
-                    !shouldLocalAudioCaptureStayActive()
+                    audioProducer !== producerAtSchedule ||
+                    !isCallAudioModeActive
                 ) {
+                    intentionalLocalAudioProducerCloseIds.remove(producerAtSchedule.id)
                     return@launch
                 }
 
-                val previousProducer = audioProducer
                 val previousTrack = localAudioTrack
                 val previousSource = audioSource
-
-                audioProducer = replacement
-                audioProducerBandwidthQuality = currentLocalBandwidthQuality
+                val muted = !localAudioTargetEnabled || !localAudioEnabled
                 audioSource = nextSource
                 localAudioTrack = track
-                localAudioEnabled = true
-                localAudioTargetEnabled = true
-                onLocalAudioEnabledChanged?.invoke(true)
                 nextSource = null
                 nextTrack = null
                 nextProducer = null
+                commitMicrophoneReplacement(replacement, producerAtSchedule, currentLocalBandwidthQuality, muted)
 
-                forceUnmuteMicrophoneCapture()
-                audioManager()?.let { manager ->
-                    applyPreferredCommunicationRoute(manager)
-                    applyLocalAudioCaptureState(manager, true)
-                }
-                markMicrophoneProducerUnmuted(replacement.id, "route recovery")
-
-                if (previousProducer != null && previousProducer.id != replacement.id) {
-                    try {
-                        socket.closeProducer(previousProducer.id)
-                    } catch (error: Throwable) {
-                        debugLog("[WebRTC] Failed to notify SFU of recovered microphone producer close: ${error}")
+                if (muted) {
+                    markMicrophoneProducerMuted(replacement.id, "route recovery")
+                } else {
+                    onLocalAudioEnabledChanged?.invoke(true)
+                    forceUnmuteMicrophoneCapture()
+                    audioManager()?.let { manager ->
+                        applyPreferredCommunicationRoute(manager)
+                        applyLocalAudioCaptureState(manager, true)
                     }
-                    previousProducer.close()
+                    markMicrophoneProducerUnmuted(replacement.id, "route recovery")
                 }
+
+                try {
+                    socket.closeProducer(producerAtSchedule.id)
+                } catch (error: Throwable) {
+                    debugLog("[WebRTC] Failed to notify SFU of recovered microphone producer close: ${error}")
+                }
+                closeSendProducer(producerAtSchedule)
                 disposeAudioTrack(previousTrack)
-                previousSource?.dispose()
+                disposeAudioSource(previousSource)
                 debugLog("[WebRTC] Recreated microphone producer after ${reason}")
             } catch (error: Throwable) {
                 debugLog("[WebRTC] Failed to recreate microphone producer after ${reason}: ${error}")
@@ -5238,7 +5520,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                     reason = "route recovery",
                 )
                 disposeAudioTrack(nextTrack)
-                nextSource?.dispose()
+                disposeAudioSource(nextSource)
                 audioProducerRouteRecoveryInFlight = false
             }
         }
@@ -5258,7 +5540,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 debugLog("[WebRTC] Failed to notify SFU of uncommitted microphone producer close after ${reason}: ${error}")
             }
         }
-        producer.close()
+        closeSendProducer(producer)
     }
 
     private fun recoverCallAudioAfterAdmError(reason: String, recoverCapture: Boolean) {
@@ -6386,7 +6668,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     }
 
     internal fun sampleConnectionStatsCounters(): ConnectionStatsCounters? {
-        val sendJson = sendTransport?.takeIf { !it.isClosed }?.let { transport ->
+        val sendJson = sendTransport?.takeIf { !it.isClosed && isSendTransportQuiet }?.let { transport ->
             try { transport.getStats() } catch (_: Throwable) { null }
         }
         val receiveJson = receiveTransport?.takeIf { !it.isClosed }?.let { transport ->
@@ -6489,7 +6771,8 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             nextTrack = factory.createAudioTrack(nextLocalAudioTrackId(), nextSource)
             val track = nextTrack ?: return false
             track.setEnabled(false)
-            producer.replaceTrack(track)
+            val transport = sendTransport ?: return false
+            onSendTransportLane(transport) { producer.replaceTrack(track) }
             if (generation != configurationGeneration || audioProducer !== producer || !hasUsableProducer(producer)) {
                 return false
             }
@@ -6502,20 +6785,20 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
 
             track.setEnabled(localAudioTargetEnabled && localAudioEnabled)
             disposeAudioTrack(previousTrack)
-            previousSource?.dispose()
+            disposeAudioSource(previousSource)
             return true
         } catch (error: Throwable) {
             debugLog("[WebRTC] Noise suppression track replacement failed: ${error}")
             return false
         } finally {
             disposeAudioTrack(nextTrack)
-            nextSource?.dispose()
+            disposeAudioSource(nextSource)
         }
     }
 
     internal fun sampleLocalMicrophoneLevel(): Double {
         val producer = audioProducer ?: return 0.0
-        if (!localAudioEnabled || localAudioTrack?.enabled() != true) return 0.0
+        if (!localAudioEnabled || localAudioTrack?.enabled() != true || !isSendTransportQuiet) return 0.0
         val statsJson = try { producer.getStats() } catch (_: Throwable) { return 0.0 }
         return parseAudioLevel(statsJson) ?: 0.0
     }
@@ -6605,7 +6888,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         var hasReceiveStats = false
 
         val send = sendTransport
-        if (send != null && !send.isClosed) {
+        if (send != null && !send.isClosed && isSendTransportQuiet) {
             val sample = try {
                 parseConnectionStats(send.getStats())
             } catch (_: Throwable) {
@@ -7014,7 +7297,8 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             normalizedLocalUserId != null &&
             localAudioEnabled &&
             localTrack?.enabled() == true &&
-            localProducer != null
+            localProducer != null &&
+            isSendTransportQuiet
         ) {
             val statsJson = try {
                 localProducer.getStats()
@@ -7187,28 +7471,39 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
 
     override fun onConnect(transport: Transport, dtlsParameters: String) {
         val socket = socketManager ?: return
-        runBlocking {
+        val params = decodeJSONString<DtlsParameters>(dtlsParameters, allowFailure = true) ?: return
+        val transportId = transport.id
+        val isSendTransport = transport is SendTransport
+        val connect: suspend () -> Unit = {
             try {
-                val params = decodeJSONString<DtlsParameters>(dtlsParameters) ?: return@runBlocking
-                if (transport.id == sendTransportId) {
-                    socket.connectProducerTransport(transport.id, params)
+                if (isSendTransport) {
+                    socket.connectProducerTransport(transportId, params)
                 } else {
-                    socket.connectConsumerTransport(transport.id, params)
+                    socket.connectConsumerTransport(transportId, params)
                 }
-            } catch (_: Throwable) {
+            } catch (error: Throwable) {
+                debugLog("[WebRTC] Transport connect failed for ${transportId}: ${error}")
             }
         }
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            transportConnectScope.launch(start = CoroutineStart.UNDISPATCHED) { connect() }
+            return
+        }
+        runBlocking { connect() }
     }
 
     override fun onConnectionStateChange(transport: Transport, connectionState: String) {
         val stateName = connectionState.lowercase()
-        transportConnectionStates[transport.id] = stateName
-        val transportKind = when (transport.id) {
-            sendTransportId -> "producer"
-            receiveTransportId -> "consumer"
-            else -> return
+        val transportId = transport.id
+        mainHandler.post {
+            val transportKind = when (transportId) {
+                sendTransportId -> "producer"
+                receiveTransportId -> "consumer"
+                else -> return@post
+            }
+            transportConnectionStates[transportId] = stateName
+            onTransportConnectionStateChanged?.invoke(transportKind, stateName)
         }
-        onTransportConnectionStateChanged?.invoke(transportKind, stateName)
     }
 
     override fun onProduce(transport: Transport, kind: String, rtpParameters: String, appData: String): String {
@@ -7253,6 +7548,10 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     }
 
     override fun onTransportClose(producer: Producer) {
+        mainHandler.post { handleLocalProducerTransportClose(producer) }
+    }
+
+    private fun handleLocalProducerTransportClose(producer: Producer) {
         if (producer.id == audioProducer?.id) {
             audioProducer = null
             audioProducerBandwidthQuality = ConnectionQuality.unknown
