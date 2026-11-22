@@ -28,8 +28,6 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.webrtc.AudioSource
 import org.webrtc.AudioTrack
-import org.webrtc.Camera1Enumerator
-import org.webrtc.Camera2Enumerator
 import org.webrtc.CameraVideoCapturer
 import org.webrtc.DefaultVideoDecoderFactory
 import org.webrtc.DefaultVideoEncoderFactory
@@ -179,6 +177,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     internal var onLocalVideoEnabledChanged: ((Boolean) -> Unit)? = null
     internal var onTransportConnectionStateChanged: ((String, String) -> Unit)? = null
     internal var onCallAudioRouteChanged: (() -> Unit)? = null
+    internal var onCameraFacingsChanged: (() -> Unit)? = null
     internal var onLocalAudioProducerLost: (() -> Unit)? = null
     internal var onLocalVideoProducerLost: (() -> Unit)? = null
     internal var onLocalScreenProducerLost: (() -> Unit)? = null
@@ -1801,7 +1800,14 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         get() = if (configuredScreenContentHint == "motion") 3 else 2
     private val audioRouteRecoveryScope = CoroutineScope(Dispatchers.Main.immediate + SupervisorJob())
 
+    private val cameraFacings: CameraFacingCatalog by lazy {
+        CameraFacingCatalog.system(ProcessInfo.processInfo.androidContext).also { catalog ->
+            catalog.onChanged = { onCameraFacingsChanged?.invoke() }
+        }
+    }
+
     internal fun prewarmMediaStack() {
+        cameraFacings
         if (mediaStackPrewarmStarted || peerConnectionFactory != null) return
         mediaStackPrewarmStarted = true
         Thread {
@@ -7367,23 +7373,19 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             .createPeerConnectionFactory()
     }
 
-    internal fun canSwitchCamera(): Boolean {
-        val enumerator = createCameraEnumerator(ProcessInfo.processInfo.androidContext)
-        return cameraNameForFacing(enumerator, LocalCameraFacing.front) != null &&
-            cameraNameForFacing(enumerator, LocalCameraFacing.back) != null
-    }
+    // Read on every stage, controls and settings refresh: never enumerate cameras here. Until the first
+    // off-main probe lands this says no; onCameraFacingsChanged then refreshes the callers.
+    internal fun canSwitchCamera(): Boolean = cameraFacings.current?.canSwitch ?: false
 
     internal fun setPreferredCameraFacing(facing: LocalCameraFacing) {
         if (localVideoEnabled && videoCapturer != null) return
-        val enumerator = createCameraEnumerator(ProcessInfo.processInfo.androidContext)
-        if (cameraNameForFacing(enumerator, facing) == null) return
+        if (cameraFacings.snapshotOrProbe().name(facing) == null) return
         activeCameraFacing = facing
     }
 
     internal suspend fun switchCamera() {
         val nextFacing = oppositeCameraFacing(activeCameraFacing)
-        val enumerator = createCameraEnumerator(ProcessInfo.processInfo.androidContext)
-        if (cameraNameForFacing(enumerator, nextFacing) == null) {
+        if (cameraFacings.snapshotOrProbe().name(nextFacing) == null) {
             throw ErrorException("No ${cameraFacingLabel(nextFacing).lowercase()} available")
         }
 
@@ -7426,13 +7428,8 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         }
     }
 
-    private fun createCameraEnumerator(context: Context): org.webrtc.CameraEnumerator {
-        return if (Camera2Enumerator.isSupported(context)) {
-            Camera2Enumerator(context)
-        } else {
-            Camera1Enumerator(true)
-        }
-    }
+    private fun createCameraEnumerator(context: Context): org.webrtc.CameraEnumerator =
+        CameraFacingCatalog.enumerator(context)
 
     private fun cameraNameForFacing(
         enumerator: org.webrtc.CameraEnumerator,
