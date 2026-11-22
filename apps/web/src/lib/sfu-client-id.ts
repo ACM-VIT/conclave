@@ -55,16 +55,12 @@ export const findScheduledMeetingForLink = async <
   lookup: (clientId: string) => Promise<Meeting | null>,
 ): Promise<{ clientId: string; meeting: Meeting } | null> => {
   const named = canonicalizeSfuClientId(linkedClientId);
-  // An older booking service leaves the booking's tenant out. Assume the
-  // tenant the link named, or the server's own default; never the browser's.
-  const assumed =
-    named ||
-    canonicalizeSfuClientId(process.env.SFU_CLIENT_ID) ||
-    CONCLAVE_SFU_CLIENT_ID;
   for (const candidate of resolveSfuClientIdCandidates(linkedClientId)) {
     const meeting = await lookup(candidate);
     if (!meeting) continue;
-    const booked = meeting.clientId?.trim() || assumed;
+    // An older booking service leaves the booking's tenant out; take the
+    // tenant it was looked up under, as before.
+    const booked = meeting.clientId?.trim() || candidate;
     if (named && canonicalizeSfuClientId(booked) !== named) continue;
     return { clientId: booked, meeting };
   }

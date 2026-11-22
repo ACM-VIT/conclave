@@ -11,14 +11,17 @@ afterEach(() => vi.unstubAllEnvs());
 const ROOM = "abc-defg-hij";
 
 type Booking = { clientId: string; roomCode: string };
+type SfuOptions = { reportsClientId?: boolean; sfuDefault?: string };
 const olderSfu = { reportsClientId: false };
 
-// The SFU's by-room lookup: the asked tenant first, then the deployment's
+// The SFU's by-room lookup: the asked tenant first, then the SFU's own
 // default and Conclave's legacy ids, returning the booking with its own id.
+// An older SFU leaves the id out.
 const sfuLookup =
-  (bookedUnder: string[], { reportsClientId = true } = {}) =>
+  (bookedUnder: string[], { reportsClientId = true, sfuDefault }: SfuOptions = {}) =>
   async (clientId: string) => {
-    const serverDefault = canonicalizeSfuClientId(process.env.SFU_CLIENT_ID) ?? "conclave";
+    const serverDefault =
+      sfuDefault ?? canonicalizeSfuClientId(process.env.SFU_CLIENT_ID) ?? "conclave";
     for (const candidate of [clientId, serverDefault, "conclave", "default", "public"]) {
       if (bookedUnder.includes(candidate)) {
         return reportsClientId
@@ -34,7 +37,7 @@ const sfuLookup =
 const tenantOpenedBy = async (
   path: string,
   bookedUnder: string[] = [],
-  options?: { reportsClientId?: boolean },
+  options?: SfuOptions,
 ) => {
   const linked =
     new URL(path, "https://web.test").searchParams.get("clientId") ?? undefined;
@@ -114,14 +117,21 @@ describe("meeting links", () => {
     expect(await tenantOpenedBy(path, ["other"])).toBe("conclave");
   });
 
-  it("never labels an older SFU's booking with the browser default", async () => {
+  it("labels an older SFU's booking with the tenant it was looked up under, as base did", async () => {
     vi.stubEnv("NEXT_PUBLIC_SFU_CLIENT_ID", "acme");
     vi.stubEnv("SFU_CLIENT_ID", "");
+    const acmeSfu = { ...olderSfu, sfuDefault: "acme" };
 
-    expect(await tenantOpenedBy(`/${ROOM}`, ["conclave"], olderSfu)).toBe("conclave");
+    expect(await tenantOpenedBy(`/${ROOM}`, ["acme"], acmeSfu)).toBe("acme");
     expect(await tenantOpenedBy(`/${ROOM}?clientId=conclave`, ["conclave"], olderSfu)).toBe(
       "conclave",
     );
+  });
+
+  it("labels an older SFU's booking with the server's default when one is set", async () => {
+    deployment("acme", "beta");
+
+    expect(await tenantOpenedBy(`/${ROOM}`, ["beta"], olderSfu)).toBe("beta");
   });
 });
 
