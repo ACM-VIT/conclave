@@ -283,3 +283,48 @@ test("a directive is never part of a license header", () => {
     ["eslint-directive", null],
   );
 });
+
+test("Skip directives follow the pinned skipstone grammar in line and block form", () => {
+  const source = [
+    "// SKIP INSERT: val x = 1",
+    "// val y = 2",
+    "// SKIP TODO remove this workaround",
+    "// continuation of nothing",
+    "/* SKIP INSERT: println(\"hello\") */",
+    "/* SKIP REPLACE:",
+    "fun f() = Unit",
+    "*/",
+    "// SKIP NOWARN(conversion)",
+    "// SKIP NOWARNING",
+    "// SKIP EXTERN",
+    "let a = 1 // SKIP NOWARN",
+  ].join("\n");
+  assert.deepEqual(
+    extractComments(source, "Bridge.swift").map((comment) => comment.allowed),
+    ["skip-directive", "skip-directive", null, null, "skip-directive", "skip-directive", "skip-directive", null, "skip-directive", null],
+  );
+});
+
+test("provenance hashes are allowed only under the icon generator's exact header", () => {
+  const hash = "a8f815b7cd4ceb7bf9c5d04f6fed8528a3cf77981e3994e91cace24d6e25b541";
+  const header = `// Profile material-rounded-24-absolute-v1; manifest SHA256 ${hash}; generator SHA256 ${hash}.`;
+  const vector = `    // mic.fill1; input SHA256 ${hash}.`;
+  assert.deepEqual(
+    extractComments(`${header}\npackage a\n${vector}\n// a sentence ending in SHA256 ${hash}.\n`, "Icons.kt").map((c) => c.allowed),
+    ["provenance-hash", "provenance-hash", null],
+  );
+  assert.deepEqual(
+    extractComments(`package a\n${vector}\n// We pinned it; input SHA256 ${hash}.\n`, "Other.kt").map((c) => c.allowed),
+    [null, null],
+  );
+});
+
+test("a license header needs a real marker and covers only the top block", () => {
+  const todo = ["// TODO revisit the copyright dialog", "// and the licensed under review copy", "export {};"].join("\n");
+  assert.deepEqual(extractComments(todo, "a.ts").map((c) => c.allowed), [null, null]);
+  const split = ["// Copyright (c) 2024 Example Inc.", "", "// Narrative about the module.", "export {};"].join("\n");
+  assert.deepEqual(extractComments(split, "b.ts").map((c) => c.allowed), ["license-header", null]);
+  for (const marker of ["// SPDX-License-Identifier: MIT", "// © 2024 Example", "// Licensed under the Apache License, Version 2.0"]) {
+    assert.deepEqual(extractComments(`${marker}\nexport {};\n`, "c.ts").map((c) => c.allowed), ["license-header"], marker);
+  }
+});
