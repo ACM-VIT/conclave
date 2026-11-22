@@ -636,7 +636,7 @@ describe("a call whose server lost the room", () => {
     ).toBe("joined");
   });
 
-  it("stops renewing a removed member's pass at once, and the one they kept runs out", async () => {
+  it("stops renewing a removed member's pass at once, and the one they kept gets them nowhere", async () => {
     useTestClock();
     const state = makeState();
     const created = await join(state, host);
@@ -652,19 +652,12 @@ describe("a call whose server lost the room", () => {
     expect(passesHeldBy(created).length).toBeGreaterThan(3);
     stopRefreshing();
 
-    // Still inside the kept pass's last minutes, a recreated room cannot
-    // know about the removal and takes it.
-    const soon = makeState();
+    // The removal is in the ledger, so the recreated room knows of it even
+    // while the kept pass has minutes left.
+    const soon = await restart(state);
     await join(soon, rejoining(host));
     expect(
       (await join(soon, guest, { roomRecoveryPass: kept.at(-1) })).status,
-    ).toBe("joined");
-
-    vi.setSystemTime(Date.now() + 4 * MINUTE_MS + 1000);
-    const later = makeState();
-    await join(later, rejoining(host));
-    expect(
-      (await join(later, guest, { roomRecoveryPass: kept.at(-1) })).status,
     ).toBe("waiting");
   });
 
