@@ -530,6 +530,11 @@ deploy_service() {
     # Up but its status is unreadable: its rooms are unknown, so leave it.
     echo "${svc} answers but its /status cannot be read; not rebuilding it." >&2
     return 1
+  elif [[ -n "$container" && "$(docker inspect -f '{{.State.Status}}' "$container")" == "running" ]]; then
+    # Silent is not stopped: a wrong URL or proxy hides a container that may
+    # still carry calls.
+    echo "${svc}'s container is running but nothing answers at ${url}; check that URL, or stop ${svc} if it is hung. Not rebuilding it." >&2
+    return 1
   else
     echo "${svc} is not running; starting it without a drain."
   fi
