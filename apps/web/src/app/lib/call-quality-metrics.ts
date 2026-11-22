@@ -414,10 +414,18 @@ export function createCallMetricsTracker({
     const frames = delta(stream.framesDecoded, previous?.framesDecoded);
     // Credits whole sample intervals: a consumer swapped out between two
     // samples leaves no stats, so its replacement covers the interval.
-    if (bytes > 0 || frames > 0) totals.remoteVideoMs += dt;
+    const receiving = bytes > 0 || frames > 0;
+    if (receiving) totals.remoteVideoMs += dt;
     totals.freezeCount += delta(stream.freezeCount, previous?.freezeCount);
-    totals.freezeMs +=
-      delta(stream.totalFreezesDurationSec, previous?.freezesSec) * 1000;
+    // Chrome adds a freeze's whole duration when video resumes, so one that
+    // began before the baseline (before joined, or across a dropped gap)
+    // lands at once. Each interval adds at most the video time it measured.
+    if (receiving) {
+      totals.freezeMs += Math.min(
+        delta(stream.totalFreezesDurationSec, previous?.freezesSec) * 1000,
+        dt,
+      );
+    }
     const stalled = dt > 0 && frames === 0 && bytes >= STALL_MIN_BYTE_DELTA;
     if (stalled) {
       totals.stallMs += dt;

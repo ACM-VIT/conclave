@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   createCallMetricsTracker,
@@ -765,6 +767,55 @@ describe("call_summary", () => {
       video_freeze_count: 1,
       video_freeze_ms: 300,
     });
+  });
+
+  // Chrome adds a freeze's whole duration to totalFreezesDuration only when
+  // video resumes, so these replays land it all in one short interval.
+  const replay = (file: string) =>
+    (JSON.parse(readFileSync(path.join(import.meta.dirname, "fixtures", file), "utf8")) as {
+      samples: Array<{ at: number; stat: Record<string, unknown> }>;
+    }).samples.map(({ at, stat }) => ({
+      at,
+      sample: parseCallStats({
+        receive: { sourceId: "recv", report: new Map([["video", stat]]) },
+        camera: null,
+        profile: "standard",
+      }),
+    }));
+
+  it("keeps a freeze that began before joined within the call's video time (Sol's replay)", () => {
+    const { tracker, state, named } = setup();
+    const [beforeJoin, firstInCall, resumed] = replay("freeze-replay-join.json");
+    tracker.onParticipants(2, 0);
+    state("connecting", 0);
+    tracker.onStats(beforeJoin.sample, beforeJoin.at);
+    state("joined", 7199);
+    tracker.onStats(firstInCall.sample, firstInCall.at);
+    tracker.onStats(resumed.sample, resumed.at);
+    state("disconnected", 7951);
+
+    const { props } = named("call_summary")[0];
+    expect(props.duration_ms).toBe(752);
+    expect(props.remote_video_ms).toBe(602);
+    expect(props.video_freeze_count).toBe(1);
+    expect(props.video_freeze_ms).toBe(602);
+  });
+
+  it("keeps a freeze that spanned a dropped stats gap within the measured video time (Sol's replay)", () => {
+    const { tracker, state, named } = setup();
+    const [before, afterGap, resumed] = replay("freeze-replay-gap.json");
+    tracker.onParticipants(2, 0);
+    state("connecting", 0);
+    state("joined", 1000);
+    tracker.onStats(before.sample, before.at);
+    tracker.onStats(afterGap.sample, afterGap.at);
+    tracker.onStats(resumed.sample, resumed.at);
+    state("disconnected", 23_000);
+
+    const { props } = named("call_summary")[0];
+    expect(props.remote_video_ms).toBe(603);
+    expect(props.video_freeze_ms).toBe(603);
+    expect(props.video_freeze_ms as number).toBeLessThanOrEqual(props.remote_video_ms as number);
   });
 
   it("charges nothing from before joined to a call", () => {
