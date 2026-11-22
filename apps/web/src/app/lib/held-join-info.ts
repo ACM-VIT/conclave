@@ -5,7 +5,7 @@ export type JoinGrant = {
   isHost: boolean;
 };
 
-import { isRelayFresh, splitIceServersByType } from "./relay-credentials";
+import { isRelayDueForRefresh, splitIceServersByType } from "./relay-credentials";
 
 type HoldableJoinInfo = {
   token: string;
@@ -132,7 +132,7 @@ export const planJoinInfo = <T extends HoldableJoinInfo>({
   const reusable = getReusableJoinInfo(held, { roomId, grant, now });
   return reusable &&
     isFirstReconnectAttempt &&
-    isRelayFresh(held?.relayExpiresAt ?? null, now)
+    !isRelayDueForRefresh(held?.relayExpiresAt ?? null, now)
     ? { source: "held", joinInfo: reusable }
     : { source: "fresh", fallback: reusable };
 };

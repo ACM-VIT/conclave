@@ -177,6 +177,20 @@ describe("where a reconnect gets its join info", () => {
     ).toEqual({ source: "fresh", fallback: joinInfo });
   });
 
+  it("asks the join route first when the held relay has under a minute left", () => {
+    const joinInfo = {
+      token: tokenExpiringIn(12 * 60 * 60_000),
+      sfuUrl: "s",
+      iceServers: [turn],
+      iceServersTtlSeconds: 60,
+    };
+    const current = held({ joinInfo, receivedAt: NOW - 10_000 });
+
+    expect(
+      planJoinInfo({ held: current, ...wanted, isFirstReconnectAttempt: true }),
+    ).toEqual({ source: "fresh", fallback: joinInfo });
+  });
+
   it("goes straight to the SFU while the held relay still has time left", () => {
     const joinInfo = {
       token: tokenExpiringIn(12 * 60 * 60_000),

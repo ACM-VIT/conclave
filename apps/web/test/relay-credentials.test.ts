@@ -51,11 +51,31 @@ describe("ICE servers after a join answer", () => {
   it("drops expired TURN credentials when an answer brings no relay", () => {
     expect(
       applyJoinAnswerToIceServers(
-        holding(NOW + 30_000),
+        holding(NOW + 2_000),
         { iceServers: [stun], relayExpiresAt: null },
         NOW,
       ),
     ).toEqual({ stun: [stun], turn: null, turnExpiresAt: null });
+  });
+
+  it("uses a fresh answer's short-lived TURN credentials", () => {
+    expect(
+      applyJoinAnswerToIceServers(
+        NO_RUNTIME_ICE_SERVERS,
+        { iceServers: [stun, turnB], relayExpiresAt: NOW + 60_000 },
+        NOW,
+      ).turn,
+    ).toEqual([turnB]);
+  });
+
+  it("keeps held TURN credentials with under a minute left over an answer without a relay", () => {
+    expect(
+      applyJoinAnswerToIceServers(
+        holding(NOW + 45_000),
+        { iceServers: [stun], relayExpiresAt: null },
+        NOW,
+      ).turn,
+    ).toEqual([turnA]);
   });
 
   it("ignores an answer's TURN credentials that have already expired", () => {

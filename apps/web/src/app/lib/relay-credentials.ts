@@ -57,18 +57,25 @@ export const NO_RUNTIME_ICE_SERVERS: RuntimeIceServers = {
   turnExpiresAt: null,
 };
 
-/** How long before TURN credentials expire to stop handing them out. */
-export const RELAY_EXPIRY_MARGIN_MS = 60_000;
+/** TURN credentials this close to expiry are no longer handed out. */
+const RELAY_USABLE_MARGIN_MS = 5_000;
+/** A reconnect asks for new TURN credentials once the held ones are this close. */
+const RELAY_REFRESH_MARGIN_MS = 60_000;
 
-export const isRelayFresh = (expiresAt: number | null, now: number): boolean =>
-  expiresAt === null || expiresAt - now > RELAY_EXPIRY_MARGIN_MS;
+export const isRelayUsable = (expiresAt: number | null, now: number): boolean =>
+  expiresAt === null || expiresAt - now > RELAY_USABLE_MARGIN_MS;
+
+export const isRelayDueForRefresh = (
+  expiresAt: number | null,
+  now: number,
+): boolean => expiresAt !== null && expiresAt - now <= RELAY_REFRESH_MARGIN_MS;
 
 /** TURN servers whose credentials still have time left, or null. */
 export const getUsableTurnIceServers = (
   servers: RuntimeIceServers,
   now: number,
 ): RTCIceServer[] | null =>
-  servers.turn && isRelayFresh(servers.turnExpiresAt, now) ? servers.turn : null;
+  servers.turn && isRelayUsable(servers.turnExpiresAt, now) ? servers.turn : null;
 
 /**
  * The ICE servers to offer after a join answer. A route whose TURN provider
@@ -84,7 +91,7 @@ export const applyJoinAnswerToIceServers = (
     answer.iceServers,
   );
   const stun = stunIceServers.length > 0 ? stunIceServers : null;
-  if (turnIceServers.length > 0 && isRelayFresh(answer.relayExpiresAt, now)) {
+  if (turnIceServers.length > 0 && isRelayUsable(answer.relayExpiresAt, now)) {
     return { stun, turn: turnIceServers, turnExpiresAt: answer.relayExpiresAt };
   }
   return getUsableTurnIceServers(current, now)
