@@ -59,6 +59,8 @@ export const createTranscriptRelayRegistry = (options: {
   // relay never gets the room back and never counts as running; relays
   // started after the stop began are newer and keep it.
   const stoppedThrough = new Map<string, number>();
+  // Relays whose start finished; one still starting does not count as running.
+  const running = new Set<TranscriptRelayInstance>();
   let nextGeneration = 0;
   const isRetired = (key: string, relay: TranscriptRelayInstance): boolean => {
     const generation = opened.get(key)?.get(relay);
@@ -77,6 +79,7 @@ export const createTranscriptRelayRegistry = (options: {
   const roomKey = (room: Pick<Room, "channelId" | "id">): string =>
     room.channelId || room.id;
   const forget = (key: string, relay: TranscriptRelayInstance): void => {
+    running.delete(relay);
     const roomRelays = opened.get(key);
     roomRelays?.delete(relay);
     if (roomRelays?.size === 0) opened.delete(key);
@@ -185,15 +188,17 @@ export const createTranscriptRelayRegistry = (options: {
       });
       const isOpen = (candidate: TranscriptRelayInstance): boolean =>
         !isRetired(key, candidate);
+      const isRunning = (candidate: TranscriptRelayInstance | undefined): boolean =>
+        Boolean(candidate && running.has(candidate) && isOpen(candidate));
       // The outcome is decided as it is returned: a success stands only if
-      // the room's relay is open right now, since a stop can land while this
-      // start is still settling.
+      // the room's relay, this one or its replacement, has finished starting
+      // and is open right now. A stop or a new start can land while this
+      // start settles, and a relay still starting does not count.
       const finish = (
         response: TranscriptSfuRelayStartResponse,
       ): TranscriptSfuRelayStartResponse => {
-        const current = relays.get(key);
         const settled =
-          response.success && !(current && isOpen(current))
+          response.success && !isRunning(relays.get(key))
             ? failure("No SFU transcript relay is running for this room.")
             : response;
         startsInFlight.delete(relay);
@@ -214,7 +219,7 @@ export const createTranscriptRelayRegistry = (options: {
             continue;
           }
           if (isOpen(relay)) closeRelay(key, relay);
-          return current && isOpen(current)
+          return isRunning(current)
             ? { mode: "sfu", success: true, status: "available", updatedAt: Date.now() }
             : failure("No SFU transcript relay is running for this room.");
         }
@@ -253,6 +258,7 @@ export const createTranscriptRelayRegistry = (options: {
         }
       }
       closeOlderThan(key, generation);
+      if (isOpen(relay)) running.add(relay);
       return finish({
         mode: "sfu",
         success: true,
@@ -314,6 +320,7 @@ export const createTranscriptRelayRegistry = (options: {
       }
       relays.clear();
       stoppedThrough.clear();
+      running.clear();
     },
     trackedRoomCount() {
       return new Set([...relays.keys(), ...opened.keys(), ...stoppedThrough.keys()]).size;

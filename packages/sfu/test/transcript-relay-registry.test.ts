@@ -840,3 +840,175 @@ describe("the registry keeps no state for rooms that are done", () => {
     expect(registry.trackedRoomCount()).toBe(0);
   });
 });
+
+describe("a start's success always comes with a running relay", () => {
+  type FakeRelay = {
+    token: string;
+    open: boolean;
+    started: boolean;
+    settled: boolean;
+    finishStart: () => void;
+    failStart: () => void;
+    handoffs: ((ok: boolean) => void)[];
+  };
+  const harness = ({ holdHandoffs = false } = {}) => {
+    const made: FakeRelay[] = [];
+    const synced: string[] = [];
+    const registry = createTranscriptRelayRegistry({
+      enabled: true,
+      createRelay: ({ workerToken, controllerUserId }) => {
+        let finishStart!: () => void;
+        let failStart!: () => void;
+        const started = new Promise<void>((resolve, reject) => {
+          finishStart = resolve;
+          failStart = () => reject(new Error("Transcript SFU relay was closed before it started."));
+        });
+        const relay: FakeRelay = {
+          token: workerToken,
+          open: true,
+          started: false,
+          settled: false,
+          finishStart: () => {
+            relay.settled = true;
+            finishStart();
+          },
+          failStart: () => {
+            relay.settled = true;
+            failStart();
+          },
+          handoffs: [],
+        };
+        void started.then(
+          () => {
+            relay.started = true;
+          },
+          () => {},
+        );
+        made.push(relay);
+        return {
+          controllerUserId,
+          start: () => started,
+          prepareHandoff: () =>
+            holdHandoffs
+              ? new Promise<boolean>((settle) => {
+                  relay.handoffs.push(settle);
+                })
+              : Promise.resolve(true),
+          syncProducers: async () => {
+            synced.push(workerToken);
+          },
+          // Like a real relay, a closed one fails its start only when that
+          // start's pending work resumes, which the test chooses.
+          close: () => {
+            relay.open = false;
+            for (const settle of relay.handoffs.splice(0)) settle(false);
+          },
+        };
+      },
+    });
+    let nextToken = 0;
+    const violations: string[] = [];
+    const start = () => {
+      const workerToken = `relay-${nextToken++}`;
+      const result = registry.start({
+        room,
+        workerUrl: "http://worker.test",
+        workerToken,
+        controllerUserId: "host",
+        controllerDisplayName: "Host",
+        canReplaceExistingRelay: true,
+      });
+      // Checked as the result arrives: a success needs the room's relay to be
+      // one that finished starting and is still open.
+      const checked = result.then((response) => {
+        if (!response.success) return response;
+        synced.length = 0;
+        void registry.syncRoom(room);
+        const current = made.find(({ token }) => token === synced[0]);
+        if (!current || !current.open || !current.started) {
+          violations.push(`${workerToken} reported success with ${current?.token ?? "no relay"} not running`);
+        }
+        return response;
+      });
+      return checked;
+    };
+    return { made, registry, start, violations };
+  };
+  const flush = async () => {
+    for (let tick = 0; tick < 20; tick += 1) await Promise.resolve();
+  };
+
+  it("fails an overtaken start when the winner is stopped and a third start is still pending", async () => {
+    const { made, registry } = harness();
+    const options = {
+      room,
+      workerUrl: "http://worker.test",
+      workerToken: "relay",
+      controllerUserId: "host",
+      controllerDisplayName: "Host",
+      canReplaceExistingRelay: true,
+    };
+    const older = registry.start(options);
+    const newer = registry.start(options);
+    made[1].finishStart();
+    expect((await newer).success).toBe(true);
+    expect(made[0].open).toBe(false);
+
+    made[0].failStart();
+    let third!: Promise<unknown>;
+    queueMicrotask(() => {
+      registry.stopRoom(room.channelId);
+      third = registry.start(options);
+    });
+    const result = await older;
+
+    expect(made.slice(0, 2).every(({ open }) => !open)).toBe(true);
+    expect(made[2].started).toBe(false);
+    expect(result.success).toBe(false);
+    made[2].failStart();
+    await third;
+  });
+
+  it.each(Array.from({ length: 300 }, (_, index) => index + 1))("random starts and stops, seed %i", async (seed) => {
+    let state = seed;
+    const random = () => {
+      state = (state + 0x6d2b79f5) | 0;
+      let value = Math.imul(state ^ (state >>> 15), state | 1);
+      value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+      return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+    };
+    const { made, registry, start, violations } = harness({ holdHandoffs: seed % 2 === 0 });
+    const results: Promise<unknown>[] = [];
+    for (let step = 0; step < 14; step += 1) {
+      const roll = random();
+      const pending = made.filter((relay) => !relay.settled);
+      const awaitingHandoff = made.filter((relay) => relay.handoffs.length > 0);
+      if (roll < 0.3) results.push(start());
+      else if (roll < 0.5 && pending.length) pending[Math.floor(random() * pending.length)].finishStart();
+      else if (roll < 0.6 && pending.length) pending[Math.floor(random() * pending.length)].failStart();
+      else if (roll < 0.75 && awaitingHandoff.length) {
+        const relay = awaitingHandoff[Math.floor(random() * awaitingHandoff.length)];
+        relay.handoffs.shift()!(random() < 0.7);
+      } else if (roll < 0.83) registry.stopRoom(room.channelId);
+      else if (roll < 0.9) {
+        // A stop and a fresh start in the same turn, while older starts settle.
+        if (pending.length) pending[Math.floor(random() * pending.length)].failStart();
+        queueMicrotask(() => {
+          registry.stopRoom(room.channelId);
+          results.push(start());
+        });
+      } else void registry.stopRoomForUser({ roomKey: room.channelId, userId: "host", canStopAnyRelay: true });
+      await flush();
+    }
+    for (const relay of made) {
+      if (!relay.settled) (relay.open ? relay.finishStart : relay.failStart)();
+      for (const settle of relay.handoffs.splice(0)) settle(true);
+    }
+    await flush();
+    for (const relay of made) for (const settle of relay.handoffs.splice(0)) settle(true);
+    await Promise.all(results);
+
+    expect(violations).toEqual([]);
+    registry.closeAll();
+  });
+});
