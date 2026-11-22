@@ -25,6 +25,7 @@ import type { Dispatch, SetStateAction } from "react";
 import { Avatar } from "@conclave/ui-tokens/web";
 import { signOut, useSession } from "@/lib/auth-client";
 import type { RoomInfo } from "@/lib/sfu-types";
+import { buildMeetingUrl } from "@/lib/meeting-links";
 import type { RejoinMedia } from "../lib/call-outcome";
 import type {
   ConnectionState,
@@ -169,6 +170,7 @@ interface JoinScreenProps {
   onPrejoinMediaCommit?: (handoff: PrejoinMediaHandoff) => void;
   onEnterStart?: (action: "new" | "join") => void;
   initialMedia?: RejoinMedia | null;
+  clientId?: string;
 }
 
 const FIELD =
@@ -311,6 +313,7 @@ function JoinScreen({
   onPrejoinMediaCommit,
   onEnterStart,
   initialMedia,
+  clientId,
 }: JoinScreenProps) {
   const normalizedRoomId =
     roomId === "undefined" || roomId === "null" ? "" : roomId;
@@ -1304,13 +1307,9 @@ function JoinScreen({
   };
 
   const inviteLink =
-    typeof window === "undefined"
+    typeof window === "undefined" || !presenceTarget
       ? ""
-      : isRoutedRoom
-        ? window.location.href
-        : presenceTarget
-          ? `${window.location.origin}/${presenceTarget}`
-          : "";
+      : buildMeetingUrl(window.location.origin, { roomCode: presenceTarget, clientId });
   const handleCopyLink = async () => {
     if (!inviteLink || !navigator.clipboard?.writeText) return;
     try {

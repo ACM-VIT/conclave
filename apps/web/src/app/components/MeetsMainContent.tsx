@@ -2217,6 +2217,7 @@ export default function MeetsMainContent({
             onPrejoinMediaCommit={onPrejoinMediaCommit}
             onEnterStart={onEnterMeetingStart}
             initialMedia={prejoinInitialMedia}
+            clientId={clientId}
           />
         )
       ) : isWebinarAttendee ? (
