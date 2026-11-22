@@ -21,6 +21,7 @@ import { createSfuApp } from "../server/http/createApp.js";
 import { LocalRoomRegistry } from "../server/roomRegistry.js";
 import type { SfuAuthPayload } from "../server/socket/auth.js";
 import { createConnectionContext } from "../server/socket/context.js";
+import { registerDisconnectHandlers } from "../server/socket/handlers/disconnectHandlers.js";
 import { registerJoinRoomHandler } from "../server/socket/handlers/joinRoom.js";
 import { registerWebinarInteractionHandlers } from "../server/socket/handlers/webinarInteractionHandlers.js";
 import { createSfuState, type SfuState } from "../server/state.js";
@@ -2554,12 +2555,22 @@ describe("the room's last co-host, blocked through a pass link", () => {
     return ack;
   };
 
+  // Socket.IO runs the disconnect handler inside a server-side disconnect.
+  const disconnectsLikeSocketIo = (joined: Awaited<ReturnType<typeof join>>) => {
+    registerDisconnectHandlers(joined.context);
+    joined.peer.disconnect.mockImplementation(() => {
+      (joined.peer.socket as { connected: boolean }).connected = false;
+      void joined.peer.handlers.get("disconnect")?.(...(["server namespace disconnect"] as never[]));
+    });
+    return joined;
+  };
+
   it("hands the room to someone else, and the guest holds no host right once the block is lifted (Greptile)", async () => {
     const state = makeState();
     const host = await join(state, guestHost);
     const room = state.rooms.get("conclave:room")!;
-    await join(state, coHostTab);
-    await join(state, otherTab);
+    disconnectsLikeSocketIo(await join(state, coHostTab));
+    disconnectsLikeSocketIo(await join(state, otherTab));
     expect(await ask(host.peer, "promoteHost", { userId: seatOf(coHostTab) })).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
     await join(state, blockedTab);
     blockUserKey(room, blockedTab.userId, { reason: "Blocked by host", kickPresent: true, io, state });
@@ -3873,6 +3884,12 @@ describe("who may come in, against a slow reading of every decision", () => {
           ...(names.length > 0
             ? { guestWas: names.map((other) => ({ userKey: `guest-gp_${tab.session}-under-${other}`, guestProof: other })) }
             : {}),
+        });
+        // Socket.IO runs the disconnect handler inside a server-side disconnect.
+        registerDisconnectHandlers(joinedTab.context);
+        joinedTab.peer.disconnect.mockImplementation(() => {
+          (joinedTab.peer.socket as { connected: boolean }).connected = false;
+          void joinedTab.peer.handlers.get("disconnect")?.(...(["server namespace disconnect"] as never[]));
         });
         const earlier = peerOf.get(tab.key);
         earlierPeerOf.delete(tab.key);

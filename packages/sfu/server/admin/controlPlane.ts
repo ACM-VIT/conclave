@@ -1235,9 +1235,11 @@ const removeSeats = (
     if (!target) continue;
     removedAdmin ||= target instanceof Admin && !target.isObserver;
     target.socket.emit("kicked", { reason, roomId: room.id });
-    target.socket.disconnect(true);
-    // When io/state are available, also deterministically stop media now so a
-    // concurrent network drop's disconnect grace cannot keep producers flowing.
+    // The seat leaves the room before its socket is closed. Socket.IO runs
+    // the disconnect handler inside `disconnect`, and that handler hands the
+    // room on by itself, to anyone, if it still finds the seat; here it
+    // finds none. Stopping media now also keeps a network drop's grace
+    // period from keeping producers flowing.
     if (options?.io && options.state) {
       forceRemoveClientNow({
         io: options.io,
@@ -1247,6 +1249,7 @@ const removeSeats = (
         handOff: false,
       });
     }
+    target.socket.disconnect(true);
   }
   if (
     removedAdmin &&
