@@ -2618,7 +2618,10 @@ export class Room {
     this.lockedAllowedUsers.delete(userKey);
   }
 
+  // A block takes admission back as well. Unblocking alone does not return
+  // it: a host lets the person in again.
   blockUser(userKey: string) {
+    this.setReadmissionRequired(userKey, true);
     this.blockedUsers.add(userKey);
     this.allowedUsers.delete(userKey);
     this.lockedAllowedUsers.delete(userKey);

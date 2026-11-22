@@ -917,3 +917,33 @@ describe("a meeting a host ended for everyone", () => {
     expect(back.context.currentClient).toBeInstanceOf(Admin);
   });
 });
+
+describe("someone a host blocked without removing them", () => {
+  it("gets no more passes until a host lets them in again", async () => {
+    useTestClock();
+    const state = makeState();
+    const created = await join(state, host);
+    roomOf(state).allowLockedUser(guest.userId);
+    const member = await join(state, guest);
+    const stopRefreshing = startRoomRecoveryPassRefresh(state, config.sfuSecret);
+
+    await send(created.peer, "admin:blockUsers", {
+      userKeys: [guest.userId],
+      kickPresent: false,
+    });
+    const heldWhenBlocked = passesHeldBy(member).length;
+    vi.advanceTimersByTime(3 * MINUTE_MS);
+    expect(passesHeldBy(member)).toHaveLength(heldWhenBlocked);
+    expect(passesHeldBy(created).length).toBeGreaterThan(1);
+
+    await send(created.peer, "admin:unblockUsers", { userKeys: [guest.userId] });
+    vi.advanceTimersByTime(2 * MINUTE_MS);
+    expect(passesHeldBy(member)).toHaveLength(heldWhenBlocked);
+
+    await send(created.peer, "admin:allowUsers", { userKeys: [guest.userId] });
+    vi.advanceTimersByTime(2 * MINUTE_MS);
+    stopRefreshing();
+    expect(passesHeldBy(member).length).toBeGreaterThan(heldWhenBlocked);
+  });
+});
+
