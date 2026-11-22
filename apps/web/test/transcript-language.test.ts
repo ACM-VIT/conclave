@@ -163,7 +163,7 @@ describe("Sarvam language routing", () => {
   const requestedLanguageCode = async (
     language: string,
     deploymentCode: string | undefined,
-    deploymentLanguage?: string,
+    { chosen = true, deploymentLanguage }: { chosen?: boolean; deploymentLanguage?: string } = {},
   ) => {
     const fetchMock = vi.fn(async () => ({ webSocket: null, status: 401 }));
     vi.stubGlobal("fetch", fetchMock);
@@ -175,6 +175,7 @@ describe("Sarvam language routing", () => {
       apiKey: "sarvam-key",
       transcriptModel: "saaras:v3",
       language,
+      languageChosen: chosen,
       delay: "medium",
       locale: "en-IN",
       callbacks: {
@@ -188,24 +189,23 @@ describe("Sarvam language routing", () => {
     return new URL(url).searchParams.get("language-code");
   };
 
-  it("asks Sarvam for the picked Indian language", async () => {
+  it("asks Sarvam for the picked Indian language, English included", async () => {
     expect(await requestedLanguageCode("hi", "en-IN")).toBe("hi-IN");
     expect(await requestedLanguageCode("ta", "unknown")).toBe("ta-IN");
+    expect(await requestedLanguageCode("en", "hi-IN")).toBe("en-IN");
   });
 
-  it("keeps the deployment default for English and unsupported languages", async () => {
-    expect(await requestedLanguageCode("en", "unknown")).toBe("unknown");
+  it("keeps the operator's code when nobody picked a language", async () => {
+    expect(await requestedLanguageCode("en", "unknown", { chosen: false })).toBe("unknown");
+    expect(await requestedLanguageCode("hi", "hi-IN", { chosen: false, deploymentLanguage: "hi" })).toBe("hi-IN");
+  });
+
+  it("falls back to the operator's code for a language Sarvam does not support", async () => {
     expect(await requestedLanguageCode("es", "en-IN")).toBe("en-IN");
   });
 
-  it("keeps the deployment code for the deployment's own language, so clients that send none are unchanged", async () => {
-    expect(await requestedLanguageCode("hi", "unknown", "hi")).toBe("unknown");
-    expect(await requestedLanguageCode("ta", "unknown", "hi")).toBe("ta-IN");
-    expect(await requestedLanguageCode("en", "unknown", "hi")).toBe("en-IN");
-  });
-
   it("asks for the regional code of the deployment's language when no Sarvam code is set", async () => {
-    expect(await requestedLanguageCode("hi", undefined, "hi")).toBe("hi-IN");
-    expect(await requestedLanguageCode("ta", undefined, "ta")).toBe("ta-IN");
+    expect(await requestedLanguageCode("hi", undefined, { chosen: false, deploymentLanguage: "hi" })).toBe("hi-IN");
+    expect(await requestedLanguageCode("ta", undefined, { chosen: false, deploymentLanguage: "ta" })).toBe("ta-IN");
   });
 });

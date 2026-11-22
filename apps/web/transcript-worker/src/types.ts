@@ -78,6 +78,7 @@ export type PersistedSnapshot = {
 
 export type PersistedTranscriptionConfig = {
   language: string;
+  languageChosen?: boolean;
   delay: string;
   locale: string;
 };

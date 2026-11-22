@@ -13,6 +13,7 @@ export type LiveTranscriptionConnectOptions = {
   apiKey: string;
   transcriptModel: string;
   language: string;
+  languageChosen?: boolean;
   delay: string;
   locale: string;
   localizationPrompt?: string;

@@ -16,8 +16,10 @@ export type { LiveTranscriptionSession } from "./types";
 export const canTranscribeLanguage = (
   provider: TranscriptTranscriptionProvider,
   language: string,
+  languageChosen: boolean,
   env: LiveTranscriptionConnectOptions["env"],
-): boolean => provider !== "sarvam" || sarvamCanTranscribe(language, env);
+): boolean =>
+  provider !== "sarvam" || sarvamCanTranscribe(language, languageChosen, env);
 
 export const connectLiveTranscriptionProvider = async (
   options: LiveTranscriptionConnectOptions,

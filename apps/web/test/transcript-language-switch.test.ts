@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TranscriptRoom } from "../transcript-worker/src/room";
+import { connectSarvamTranscription } from "../transcript-worker/src/transcription/sarvam";
 import type {
   LiveTranscriptionConnectOptions,
   LiveTranscriptionSession,
@@ -40,7 +41,7 @@ const roomSession = {
   transportMode: "sfu",
 };
 
-async function fixture() {
+async function fixture(env: Partial<Env> = {}) {
   const providers: (LiveTranscriptionConnectOptions & LiveTranscriptionSession)[] = [];
   connectProvider.mockImplementation(async (options: LiveTranscriptionConnectOptions) => {
     const provider = {
@@ -68,6 +69,7 @@ async function fixture() {
     {
       TRANSCRIPT_TRANSCRIPTION_LANGUAGE: "en",
       TRANSCRIPT_SARVAM_LANGUAGE_CODE: "en-IN",
+      ...env,
     } as Env,
   ) as unknown as TestRoom;
   await room.loaded;
@@ -185,5 +187,44 @@ describe("caption language support", () => {
     expect(sent.find(({ type }) => type === "snapshot")).toMatchObject({
       supportsCaptionLanguage: true,
     });
+  });
+});
+
+describe("the language code Sarvam is asked for", () => {
+  const sarvamSession = { ...roomSession, transcriptModel: "saaras:v3" };
+  const requestedCode = async (options: LiveTranscriptionConnectOptions) => {
+    const fetchMock = vi.fn(async (_url: string) => ({ webSocket: null, status: 401 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await connectSarvamTranscription(options).catch(() => {});
+    vi.unstubAllGlobals();
+    return new URL(fetchMock.mock.calls[0][0]).searchParams.get("language-code");
+  };
+
+  it("honors a picked language over the operator's Sarvam code", async () => {
+    const { room, viewer, providers } = await fixture({ TRANSCRIPT_SARVAM_LANGUAGE_CODE: "hi-IN" });
+    moveRoomToSarvam();
+
+    await room.startSession(viewer, { ...sarvamSession, type: "session.start", language: "en" });
+
+    expect(await requestedCode(providers[0])).toBe("en-IN");
+  });
+
+  it("keeps the operator's Sarvam code for clients that send no language", async () => {
+    const { room, viewer, providers } = await fixture({ TRANSCRIPT_SARVAM_LANGUAGE_CODE: "hi-IN" });
+    moveRoomToSarvam();
+
+    await room.startSession(viewer, { ...sarvamSession, type: "session.start" });
+
+    expect(await requestedCode(providers[0])).toBe("hi-IN");
+  });
+
+  it("keeps a picked language when a client that sends none takes over", async () => {
+    const { room, viewer, providers } = await fixture({ TRANSCRIPT_SARVAM_LANGUAGE_CODE: "hi-IN" });
+    moveRoomToSarvam();
+
+    await room.startSession(viewer, { ...sarvamSession, type: "session.start", language: "ta" });
+    await room.startSession(viewer, { ...sarvamSession, type: "session.takeover" });
+
+    expect(await requestedCode(providers[1])).toBe("ta-IN");
   });
 });

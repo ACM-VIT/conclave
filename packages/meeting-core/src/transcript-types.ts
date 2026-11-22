@@ -67,6 +67,8 @@ export interface TranscriptSessionState {
   qaModel: string;
   transportMode: TranscriptTransportMode;
   language?: string;
+  /** True when a participant picked the language, not the deployment default. */
+  languageChosen?: boolean;
   keySource?: TranscriptOpenAiKeySource | null;
   startedAt: number | null;
   updatedAt: number;

@@ -1,6 +1,6 @@
 import { AI_ENDPOINTS } from "@conclave/ai/models";
 import { DEFAULT_TRANSCRIPTION_LOCALE } from "../constants";
-import { normalizeLanguage, safeJsonParse, trimText } from "../utils";
+import { safeJsonParse, trimText } from "../utils";
 import type {
   LiveTranscriptionCallbacks,
   LiveTranscriptionConnectOptions,
@@ -77,34 +77,33 @@ const normalizeSarvamLanguageCode = (
 const baseLanguage = (language: string): string =>
   language.trim().toLowerCase().split("-")[0] ?? "";
 
+// A picked language gets its regional code. The operator's code applies only
+// when nobody picked one, as with clients that send no language.
 const supportedSarvamLanguageCode = (
   language: string,
+  languageChosen: boolean,
   env: LiveTranscriptionConnectOptions["env"],
 ): string | null => {
-  const base = baseLanguage(language);
-  const regional = `${base}-IN`;
   const override = env.TRANSCRIPT_SARVAM_LANGUAGE_CODE;
-  const isDeploymentLanguage =
-    base === baseLanguage(normalizeLanguage(env.TRANSCRIPT_TRANSCRIPTION_LANGUAGE));
-  // The operator's code wins for the deployment's own language, so clients
-  // that send none keep it. Without one, every supported pick gets its
-  // regional code, including the deployment language.
-  if (override && isDeploymentLanguage) return override;
+  if (override && !languageChosen) return override;
+  const regional = `${baseLanguage(language)}-IN`;
   return SARVAM_SUPPORTED_LANGUAGE_CODES.has(regional) ? regional : null;
 };
 
 export const sarvamCanTranscribe = (
   language: string,
+  languageChosen: boolean,
   env: LiveTranscriptionConnectOptions["env"],
-): boolean => supportedSarvamLanguageCode(language, env) !== null;
+): boolean => supportedSarvamLanguageCode(language, languageChosen, env) !== null;
 
-const sarvamLanguageCode = (
-  language: string,
-  env: LiveTranscriptionConnectOptions["env"],
-): string =>
-  supportedSarvamLanguageCode(language, env) ??
-  env.TRANSCRIPT_SARVAM_LANGUAGE_CODE ??
-  language;
+const sarvamLanguageCode = (options: LiveTranscriptionConnectOptions): string =>
+  supportedSarvamLanguageCode(
+    options.language,
+    options.languageChosen === true,
+    options.env,
+  ) ??
+  options.env.TRANSCRIPT_SARVAM_LANGUAGE_CODE ??
+  options.language;
 
 const normalizeSarvamMode = (value: string | undefined): string => {
   const candidate = value?.trim() || SARVAM_DEFAULT_MODE;
@@ -375,7 +374,7 @@ export const connectSarvamTranscription = async (
     sarvamEndpoint({
       baseUrl: options.env.SARVAM_STT_WS_URL,
       model: options.transcriptModel,
-      language: sarvamLanguageCode(options.language, options.env),
+      language: sarvamLanguageCode(options),
       locale: options.locale,
       mode: options.env.TRANSCRIPT_SARVAM_MODE,
     }),

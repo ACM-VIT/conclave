@@ -383,6 +383,9 @@ export class TranscriptRoom {
           savedConfig?.language ??
           this.env.TRANSCRIPT_TRANSCRIPTION_LANGUAGE,
       ),
+      languageChosen: snapshot.session.language
+        ? snapshot.session.languageChosen === true
+        : savedConfig?.languageChosen === true,
       delay: savedConfig?.delay ?? normalizeDelay(undefined),
       locale:
         savedConfig?.locale ??
@@ -393,6 +396,7 @@ export class TranscriptRoom {
       ...snapshot.session,
       status: "starting",
       language: config.language,
+      languageChosen: config.languageChosen,
       updatedAt: Date.now(),
       error: null,
     };
@@ -917,9 +921,13 @@ export class TranscriptRoom {
         (takeover ? this.session?.language : undefined) ??
         deploymentLanguage,
     );
+    const requestedLanguageChosen =
+      Boolean(message.language) ||
+      (takeover && this.session?.languageChosen === true);
     const canCaption = canTranscribeLanguage(
       transcriptionProvider,
       requestedLanguage,
+      requestedLanguageChosen,
       providerEnv,
     );
     if (!canCaption && message.language) {
@@ -930,6 +938,7 @@ export class TranscriptRoom {
       return;
     }
     const language = canCaption ? requestedLanguage : deploymentLanguage;
+    const languageChosen = canCaption && requestedLanguageChosen;
 
     this.responseAbort.abort();
     this.responseAbort = new AbortController();
@@ -954,6 +963,7 @@ export class TranscriptRoom {
       qaModel,
       transportMode,
       language,
+      languageChosen,
       keySource:
         !usesRoomKey && transcriptionKey.source === "global" && (!responseKey.ok || responseKey.source === "global")
           ? "global"
@@ -984,6 +994,7 @@ export class TranscriptRoom {
         apiKey: transcriptionKey.apiKey,
         transcriptModel,
         language,
+        languageChosen,
         delay,
         locale,
         localizationPrompt: this.env.TRANSCRIPT_TRANSCRIPTION_PROMPT,
@@ -1421,6 +1432,7 @@ export class TranscriptRoom {
     apiKey: string;
     transcriptModel: string;
     language: string;
+    languageChosen?: boolean;
     delay: string;
     locale: string;
     localizationPrompt?: string;
@@ -1478,6 +1490,7 @@ export class TranscriptRoom {
     apiKey: string;
     transcriptModel: string;
     language: string;
+    languageChosen?: boolean;
     delay: string;
     locale: string;
     localizationPrompt?: string;
@@ -2416,6 +2429,7 @@ export class TranscriptRoom {
     const transcriptionConfig = this.transcriptionConnectionOptions
       ? {
           language: this.transcriptionConnectionOptions.language,
+          languageChosen: this.transcriptionConnectionOptions.languageChosen,
           delay: this.transcriptionConnectionOptions.delay,
           locale: this.transcriptionConnectionOptions.locale,
         }
