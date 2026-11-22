@@ -22,7 +22,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
-private class RecordingBackend : VideoRenderBackend {
+private class RecordingBackend(private val eglLock: Any = Any()) : VideoRenderBackend {
     private val queue = LinkedBlockingDeque<Runnable>()
     private val thread = Thread {
         try {
@@ -47,7 +47,9 @@ private class RecordingBackend : VideoRenderBackend {
     @Volatile var height = 400
     @Volatile var sizeOfTheNextSurface: Pair<Int, Int>? = null
     @Volatile var duringDraw: (() -> Unit)? = null
-    @Volatile private var stalledSwap: CountDownLatch? = null
+    @Volatile private var stallsNextSwap = false
+    @Volatile private var swapInStall: Pair<Any, CountDownLatch>? = null
+    private val destroyed: MutableSet<Any> = Collections.synchronizedSet(mutableSetOf())
     @Volatile private var stalledBind: CountDownLatch? = null
     @Volatile private var stalledUnbind: CountDownLatch? = null
     private val stalled = CountDownLatch(1)
@@ -83,21 +85,34 @@ private class RecordingBackend : VideoRenderBackend {
         }
         return "surface-" + surfaces.incrementAndGet()
     }
-    override fun destroySurface(surface: Any) { calls.add("destroy $surface") }
+    override fun destroySurface(surface: Any) {
+        calls.add("destroy $surface")
+        destroyed.add(surface)
+        swapInStall?.takeIf { it.first == surface }?.second?.countDown()
+    }
     override fun unbindSurface(surface: Any) {
         stallOn(stalledUnbind) { stalledUnbind = null }
         unbound.add(surface)
     }
     override fun makeCurrent(surface: Any): Boolean {
         stallOn(stalledBind) { stalledBind = null }
-        return bindSucceeds
+        return synchronized(eglLock) { bindSucceeds }
     }
     override fun surfaceWidth(surface: Any): Int = width
     override fun surfaceHeight(surface: Any): Int = height
-    override fun swap(surface: Any): Boolean {
+    override fun swap(surface: Any): Boolean = synchronized(eglLock) {
         calls.add("swap $surface")
-        stallOn(stalledSwap) { stalledSwap = null }
-        return swapSucceeds
+        if (stallsNextSwap) {
+            stallsNextSwap = false
+            val endsWithItsSurface = CountDownLatch(1)
+            swapInStall = surface to endsWithItsSurface
+            if (surface !in destroyed) {
+                stalled.countDown()
+                endsWithItsSurface.await()
+            }
+            swapInStall = null
+        }
+        swapSucceeds && surface !in destroyed
     }
 
     private fun stallOn(stall: CountDownLatch?, taken: () -> Unit) {
@@ -136,7 +151,13 @@ private class RecordingBackend : VideoRenderBackend {
         return gate
     }
 
-    fun stallNextSwap(): CountDownLatch = CountDownLatch(1).also { stalledSwap = it }
+    fun stallNextSwapUntilItsSurfaceIsDestroyed() { stallsNextSwap = true }
+
+    fun finishesWorkWithin(millis: Long): Boolean {
+        val done = CountDownLatch(1)
+        queue.addLast { done.countDown() }
+        return done.await(millis, TimeUnit.MILLISECONDS)
+    }
     fun stallNextBind(): CountDownLatch = CountDownLatch(1).also { stalledBind = it }
     fun stallNextUnbind(): CountDownLatch = CountDownLatch(1).also { stalledUnbind = it }
 
@@ -1116,27 +1137,29 @@ class VideoRenderingTests {
         assertEveryFrameGivenBack()
     }
 
-    @Test fun aStalledSwapDoesNotHoldTheSurfaceCallbackAndItsSurfaceIsDestroyedWhileOtherTilesKeepDrawing() {
-        val stalled = RecordingBackend()
-        val others = List(2) { RecordingBackend() }
+    @Test fun aStalledSwapHoldsEveryTileOnTheSharedEglLockUntilTheCallbackDestroysItsSurfaceWithinTheWait() {
+        val eglLock = Any()
+        val stalled = RecordingBackend(eglLock)
+        val others = List(2) { RecordingBackend(eglLock) }
         try {
             val wait = VideoDetachWait(limitMillis = 100, windowMillis = 60_000)
             val host = SurfaceVideoHost(RuntimeEnvironment.getApplication(), stalled, overlay = false, detachWait = wait)
             val neighbours = others.map { SurfaceVideoHost(RuntimeEnvironment.getApplication(), it, overlay = false, detachWait = wait) }
             host.surfaceAvailable("window")
             neighbours.forEach { it.surfaceAvailable("window") }
-            val stall = stalled.stallNextSwap()
+            others.forEach { it.settle() }
+            stalled.stallNextSwapUntilItsSurfaceIsDestroyed()
             host.sink.onFrame(frame())
             stalled.awaitStall()
+            neighbours.forEach { it.sink.onFrame(frame()) }
+            others.forEach { assertFalse("a tile drew while another tile's swap held the shared EGL lock", it.finishesWorkWithin(200)) }
+            others.forEach { assertEquals(listOf("create"), it.calls.toList()) }
             val started = System.nanoTime()
             host.surfaceDestroyed(host.holder)
             val heldMillis = (System.nanoTime() - started) / 1_000_000
             assertTrue("a stalled swap held the main thread for $heldMillis ms", heldMillis < 1_000)
-            assertEquals(listOf("create", "draw", "swap surface-1", "destroy surface-1"), stalled.calls.toList())
-            neighbours.forEach { it.sink.onFrame(frame()) }
             others.forEach { it.settle() }
             others.forEach { assertEquals(listOf("create", "draw", "swap surface-1"), it.calls.toList()) }
-            stall.countDown()
             stalled.settle()
             assertEquals(listOf("create", "draw", "swap surface-1", "destroy surface-1"), stalled.calls.toList())
             assertEquals(listOf<Any>("surface-1"), stalled.unbound.toList())
@@ -1174,22 +1197,23 @@ class VideoRenderingTests {
     }
 
     @Test fun twoStalledSwapsInARowCostTheMainThreadOneShortWaitAndBothSurfacesAreDestroyed() {
-        val stalled = List(2) { RecordingBackend() }
+        val eglLock = Any()
+        val stalled = List(2) { RecordingBackend(eglLock) }
         try {
             val wait = VideoDetachWait(limitMillis = 100, windowMillis = 60_000)
             val hosts = stalled.map { SurfaceVideoHost(RuntimeEnvironment.getApplication(), it, overlay = false, detachWait = wait) }
             hosts.forEach { it.surfaceAvailable("window") }
-            val stalls = stalled.map { it.stallNextSwap() }
-            hosts.forEach { it.sink.onFrame(frame()) }
-            stalled.forEach { it.awaitStall() }
+            stalled.forEach { it.settle() }
+            stalled.forEach { it.stallNextSwapUntilItsSurfaceIsDestroyed() }
+            hosts[0].sink.onFrame(frame())
+            stalled[0].awaitStall()
+            hosts[1].sink.onFrame(frame())
             val started = System.nanoTime()
             hosts.forEach { it.surfaceDestroyed(it.holder) }
             val heldMillis = (System.nanoTime() - started) / 1_000_000
             assertTrue("two stalled swaps held the main thread for $heldMillis ms", heldMillis < 1_000)
-            stalled.forEach { assertEquals(1, it.count("destroy")) }
-            stalls.forEach { it.countDown() }
             stalled.forEach { it.settle() }
-            stalled.forEach { assertEquals("a surface was destroyed twice", 1, it.count("destroy")) }
+            stalled.forEach { assertEquals("a surface was not destroyed exactly once", 1, it.count("destroy")) }
             assertEveryFrameGivenBack()
         } finally {
             stalled.forEach { it.shutdown() }
