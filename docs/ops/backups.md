@@ -32,7 +32,9 @@ milliseconds; such a night archives nothing.
 Silence is not proof that an SFU writes nothing. Every SFU in the list must
 hold the fence, or Docker must report the container on that URL's port
 exited, dead or created; and every running container that mounts the state
-dir must hold it. When Docker cannot answer, or an SFU answers but will not
+dir must hold it. Mounts are matched on real paths, so a `CONCLAVE_STATE_DIR`
+that is a symlink to the mounted directory works, and an SFU container with a
+mount that does not resolve counts as running. When Docker cannot answer, or an SFU answers but will not
 hold the fence (one from before the fence existed), the backup stops, so
 deploy the SFU before turning backups on, and keep the health URLs on the
 SFUs' local ports (`http://127.0.0.1:3031/health`). One backup or restore

@@ -236,21 +236,21 @@ image_ids() {
 # Otherwise the SFU containers that mount the state dir are asked for the user
 # their image runs as. Names are never handed to chown.
 sfu_file_owner() {
-  local explicit="$1" state_dir="${2%/}" id spec ids
+  local explicit="$1" state_dir="$2" containers id status port instance spec image ids
   if [[ -n "$explicit" ]]; then
     [[ "$explicit" == ?*:?* ]] || return 1
     host_ids "$explicit"
     return
   fi
   command -v docker >/dev/null 2>&1 || return 0
-  for id in $(docker ps -aq 2>/dev/null); do
-    docker inspect -f '{{range .Mounts}}{{println .Source}}{{end}}' "$id" 2>/dev/null | grep -qxF "$state_dir" || continue
-    spec="$(docker inspect -f '{{.Config.User}}' "$id")"
+  containers="$(sfu_containers "$state_dir")" || return 1
+  while IFS='|' read -r id status port instance spec image; do
+    [[ -n "$id" && "$status" != unknown ]] || continue
     [[ -n "$spec" ]] || return 0
-    ids="$(image_ids "$(docker inspect -f '{{.Image}}' "$id")" "$spec")" || return 1
+    ids="$(image_ids "$image" "$spec")" || return 1
     [[ "${ids%%:*}" == 0 ]] || printf '%s\n' "$ids"
     return 0
-  done
+  done <<< "$containers"
 }
 
 # One backup or restore at a time on this host. The lock lives in the local
@@ -279,22 +279,43 @@ now_ms() {
   python3 -c 'import time; print(int(time.time() * 1000))'
 }
 
-# Prints "<container><TAB><state><TAB><SFU_PORT><TAB><SFU_INSTANCE_ID>" for
-# every container that mounts the state dir. Fails when Docker cannot list or
-# inspect them, since then nobody can say which SFUs run.
+# Prints the containers that mount the state dir, one per line as
+# "<container>|<state>|<SFU_PORT>|<SFU_INSTANCE_ID>|<user>|<image>" (empty
+# fields stay in place, which a tab separator would not do for read).
+# Paths are compared once every symlink is resolved on both sides, so a state
+# dir named through a link still finds the containers that mount its target.
+# An SFU container (one with SFU_INSTANCE_ID) with a mount that does not
+# resolve is listed with the state "unknown": nobody can say whether it
+# writes here. Fails when Docker cannot list or inspect the containers, or
+# the state dir itself does not resolve.
 sfu_containers() {
-  local state_dir="${1%/}" id ids mounts status env
+  local state_dir="$1" ids
   command -v docker >/dev/null 2>&1 || return 1
   ids="$(docker ps -aq)" || return 1
-  for id in $ids; do
-    mounts="$(docker inspect -f '{{range .Mounts}}{{println .Source}}{{end}}' "$id")" || return 1
-    grep -qxF "$state_dir" <<< "$mounts" || continue
-    status="$(docker inspect -f '{{.State.Status}}' "$id")" || return 1
-    env="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$id")" || return 1
-    printf '%s\t%s\t%s\t%s\n' "$id" "$status" \
-      "$(sed -n 's/^SFU_PORT=//p' <<< "$env" | head -n 1)" \
-      "$(sed -n 's/^SFU_INSTANCE_ID=//p' <<< "$env" | head -n 1)"
-  done
+  [[ -n "$ids" ]] || return 0
+  # shellcheck disable=SC2086
+  docker inspect $ids | STATE_IN="$state_dir" python3 -c '
+import json, os, sys
+def real(path):
+    try:
+        return os.path.realpath(path, strict=True)
+    except OSError:
+        return None
+state = real(os.environ["STATE_IN"])
+if state is None:
+    sys.exit("cannot resolve the state dir " + os.environ["STATE_IN"])
+for container in json.load(sys.stdin):
+    config = container.get("Config") or {}
+    env = dict(entry.split("=", 1) for entry in config.get("Env") or [] if "=" in entry)
+    sources = [real(mount["Source"]) for mount in container.get("Mounts") or [] if mount.get("Source")]
+    if state in sources:
+        status = (container.get("State") or {}).get("Status") or "unknown"
+    elif "SFU_INSTANCE_ID" in env and None in sources:
+        status = "unknown"
+    else:
+        continue
+    print("|".join([container["Id"][:12], status, env.get("SFU_PORT", ""), env.get("SFU_INSTANCE_ID", ""), config.get("User") or "", container.get("Image") or ""]))
+'
 }
 
 # Succeeds only when no SFU can write unseen: every SFU container that mounts
@@ -311,10 +332,16 @@ writers_fenced() {
     echo "Docker cannot list the SFU containers, so a running SFU could go unseen" >&2
     return 1
   fi
-  while IFS=$'\t' read -r id status port instance; do
+  while IFS='|' read -r id status port instance _; do
     [[ -n "$id" ]] || continue
     case "$status" in
       exited|dead|created) ;;
+      unknown)
+        if [[ "$held" != *" ${instance} "* ]]; then
+          echo "Docker cannot tell whether the SFU container ${id} (${instance}) mounts the state dir, since one of its mounts does not resolve, and it does not hold the write fence" >&2
+          return 1
+        fi
+        ;;
       *)
         if [[ "$held" != *" ${instance} "* ]]; then
           echo "the SFU container ${id} (${instance:-no SFU_INSTANCE_ID}) is ${status} but does not hold the write fence" >&2
@@ -328,7 +355,7 @@ writers_fenced() {
     url_port="${url_port%%/*}"
     url_port="${url_port##*:}"
     stopped=""
-    while IFS=$'\t' read -r id status port instance; do
+    while IFS='|' read -r id status port instance _; do
       [[ -n "$id" && "$port" == "$url_port" ]] || continue
       case "$status" in
         exited|dead|created) stopped="$id" ;;

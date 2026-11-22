@@ -34,6 +34,18 @@ const args = process.argv.slice(2);
 const out = (lines) => process.stdout.write(lines.map((line) => line + "\\n").join(""));
 if (listed.fail) process.exit(1);
 if (args[0] === "ps") return void out(listed.map((c) => c.id));
+// docker inspect <ids...>: the JSON Docker prints, for the fields read.
+if (args[0] === "inspect" && args[1] !== "-f") {
+  const found = args.slice(1).map((id) => listed.find((entry) => entry.id === id));
+  if (found.some((entry) => !entry)) process.exit(1);
+  return void out([JSON.stringify(found.map((entry) => ({
+    Id: entry.id,
+    State: { Status: entry.status },
+    Config: { Env: entry.env ?? [], User: entry.user ?? "" },
+    Image: entry.image ?? "sha256:sfu-image",
+    Mounts: (entry.mounts ?? []).map((source) => ({ Type: "bind", Source: source })),
+  })))]);
+}
 const c = listed.find((entry) => entry.id === args.at(-1));
 if (args[0] !== "inspect" || !c) process.exit(1);
 const format = args[2];
@@ -494,6 +506,7 @@ test(
           "#!/bin/sh",
           'case "$*" in',
           '  "ps -aq") echo sfu-a ;;',
+          `  "inspect sfu-a") echo '[{"Id":"sfu-a","State":{"Status":"exited"},"Config":{"Env":[],"User":"node:node"},"Image":"sha256:sfu-image","Mounts":[{"Type":"bind","Source":"${state}"}]}]' ;;`,
           `  *Mounts*) echo "${state}" ;;`,
           '  *Config.User*) echo node:node ;;',
           '  *"{{.Image}}"*) echo sha256:sfu-image ;;',
@@ -984,6 +997,49 @@ test(
       await setDocker([sfu.container(state)]);
       await assert.rejects(backup("--local-only"), /only -?\d+ ms of the write fence was left when the copy finished \(at least 2000 ms needed\)/);
       assert.deepEqual(await archives(local), []);
+    } finally {
+      await sfu.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "a state dir named through a symlink still finds the SFU containers that mount its target",
+  { skip: missing.length > 0 && `needs ${missing.join(", ")} on PATH` },
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+    const sfu = await fencedSfu({ instanceId: "sfu-a" });
+    try {
+      // Compose mounts real-state; the backup is configured with a link to it.
+      const real = path.join(root, "real-state");
+      const linked = path.join(root, "state-link");
+      await mkdir(real);
+      await symlink(real, linked);
+      const { local, setDocker, backup } = await setUp(root, [`CONCLAVE_STATE_DIR=${linked}`]);
+      withDatabase(linked);
+
+      // The SFU is stopped and its health URL silent: the backup goes ahead.
+      await setDocker([{ id: "sfu-a", mounts: [real], status: "exited", env: ["SFU_PORT=9", "SFU_INSTANCE_ID=sfu-a"] }]);
+      await backup("--local-only");
+      assert.equal((await archives(local)).length, 1);
+
+      // A running SFU that mounts the target but is not configured, and so
+      // holds no fence, stops it.
+      await writeFile(path.join(root, "backup.env"), `${await readFile(path.join(root, "backup.env"), "utf8")}\nCONCLAVE_SFU_HEALTH_URLS="${sfu.health}"\n`);
+      await setDocker([
+        sfu.container(real),
+        { id: "sfu-b", mounts: [real], status: "running", env: ["SFU_PORT=1", "SFU_INSTANCE_ID=sfu-b"] },
+      ]);
+      await assert.rejects(backup("--local-only"), /the SFU container sfu-b \(sfu-b\) is running but does not hold the write fence/);
+
+      // An SFU container whose mount does not resolve may be writing here.
+      await setDocker([
+        sfu.container(real),
+        { id: "sfu-c", mounts: [path.join(root, "gone")], status: "running", env: ["SFU_PORT=2", "SFU_INSTANCE_ID=sfu-c"] },
+      ]);
+      await assert.rejects(backup("--local-only"), /cannot tell whether the SFU container sfu-c \(sfu-c\) mounts the state dir/);
+      assert.equal((await archives(local)).length, 1);
     } finally {
       await sfu.close();
       await rm(root, { recursive: true, force: true });
