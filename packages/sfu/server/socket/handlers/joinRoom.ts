@@ -844,7 +844,10 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
 
         room.clearPendingDisconnect(userId);
         // This tab is let in, so a request it left in the lobby is over.
-        withdrawWaitingRequest(room, userKey);
+        // Another tab under the same key keeps its own request.
+        if (room.pendingClients.get(userKey)?.userId === userId) {
+          withdrawWaitingRequest(room, userKey);
+        }
 
         for (const stale of staleSameIdentitySeats) {
           Logger.warn(

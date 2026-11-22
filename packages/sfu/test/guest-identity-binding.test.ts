@@ -3,6 +3,7 @@ import type { Router, Worker } from "mediasoup/types";
 import type { Server as SocketIOServer, Socket } from "socket.io";
 import { Admin } from "../config/classes/Admin.js";
 import {
+  admitWaitingGuest,
   blockUserKey,
   toClusterSnapshot,
   toPendingUserSnapshots,
@@ -2964,6 +2965,24 @@ describe("what a participant's own action adds to the decision record", () => {
     expect(room.getClient(seatOf(newTab))).toBeUndefined();
     // The refusal keeps the legacy key bound to its pass.
     expect(room.isGuestKeyOfPass(legacy.userId, legacy.guestProof)).toBe(true);
+  });
+
+  it("leaves an account's waiting tab in the lobby when its other tab joins the audience (Greptile)", async () => {
+    const { state, room } = await webinar({ locked: true });
+    const meetingTab = {
+      email: "alice@example.com",
+      userId: "alice@example.com",
+      clientId: "conclave",
+      sessionId: "alice-1",
+    } satisfies SfuAuthPayload;
+    const waiting = await join(state, meetingTab);
+    expect(waiting.ack).toHaveBeenCalledWith(expect.objectContaining({ status: "waiting" }));
+
+    await inTheAudience(state, { ...meetingTab, sessionId: "alice-2", joinMode: "webinar_attendee" });
+
+    expect(room.pendingClients.get(meetingTab.userId)?.userId).toBe(seatOf(meetingTab));
+    expect(admitWaitingGuest(room, meetingTab.userId)).toEqual([meetingTab.userId]);
+    expect(waiting.peer.emit).toHaveBeenCalledWith("joinApproved", { roomId: "room" });
   });
 });
 
