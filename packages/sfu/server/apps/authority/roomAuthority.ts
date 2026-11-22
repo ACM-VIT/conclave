@@ -160,6 +160,8 @@ export class RoomAuthority {
   private sweepTimer: NodeJS.Timeout | null = null;
   private wakeTimer: NodeJS.Timeout | null = null;
   private lagTimer: NodeJS.Timeout | null = null;
+  /** Streamed results waiting for their socket to catch up. */
+  private readonly stalled = new Set<NodeJS.Timeout>();
   private wakeAt: number | null = null;
   private lastFlushAt = 0;
   private lastNow = 0;
@@ -280,6 +282,13 @@ export class RoomAuthority {
     const target = this.target(context, request);
     if (!target.ok) return target;
     const { subscription } = target;
+    // A result can be a megabyte. A socket that is not keeping up is sent
+    // none until it has caught up.
+    const congestion = this.congestion(subscription.socket);
+    if (congestion === "full") this.disconnect(subscription.socket);
+    if (congestion !== "clear") {
+      return failure("busy", { retryAfterMs: this.limits.lagRecheckMs });
+    }
     const result = subscription.instance.query(
       subscription.actor,
       request.query,
@@ -332,6 +341,8 @@ export class RoomAuthority {
       if (timer) clearTimeout(timer);
     }
     this.flushTimer = this.sweepTimer = this.wakeTimer = this.lagTimer = null;
+    for (const timer of this.stalled) clearTimeout(timer);
+    this.stalled.clear();
     this.bySocket.clear();
     this.byInstance.clear();
     this.watchers.clear();
@@ -678,6 +689,12 @@ export class RoomAuthority {
     });
   }
 
+  /**
+   * Sends a large result in parts, each on a later turn of the event loop.
+   * Access is checked again before each part leaves. A part waits while the
+   * socket is behind, so the result reaches a slow reader at the reader's
+   * pace, and the result is cut off if the socket stays behind.
+   */
   private streamQuery(
     subscription: Subscription,
     request: QueryRequest,
@@ -687,64 +704,98 @@ export class RoomAuthority {
     const size = Math.max(1, Math.floor(this.limits.chunkBytes / 3));
     const total = Math.ceil(text.length / size);
     const generation = subscription.generation;
-    const send = (part: number): void => {
-      setImmediate(() => {
-        const base = {
-          subscription: subscription.id,
-          generation,
-          serverNowMs: this.now(),
-          request: request.request,
-        };
-        // Access is checked again before each part leaves.
-        const allowed =
-          !subscription.dropped &&
-          subscription.generation === generation &&
-          this.refresh(subscription) === "live" &&
-          subscription.instance.mayQuery(
-            subscription.actor,
-            request.query,
-            this.now(),
-          );
-        if (!allowed) {
-          if (!subscription.dropped) {
-            this.emit(subscription, { ...base, kind: "queryAbort" });
-          }
+    const base = () => ({
+      subscription: subscription.id,
+      generation,
+      serverNowMs: this.now(),
+      request: request.request,
+    });
+    const abort = (): void => {
+      if (subscription.dropped) return;
+      this.emit(subscription, { ...base(), kind: "queryAbort" });
+    };
+    const send = (part: number, waitedMs: number): void => {
+      const allowed =
+        !subscription.dropped &&
+        subscription.generation === generation &&
+        this.refresh(subscription) === "live" &&
+        subscription.instance.mayQuery(
+          subscription.actor,
+          request.query,
+          this.now(),
+        );
+      if (!allowed) {
+        abort();
+        return;
+      }
+      const congestion = this.congestion(subscription.socket);
+      if (congestion === "full") {
+        this.disconnect(subscription.socket);
+        return;
+      }
+      if (congestion === "behind") {
+        if (waitedMs >= this.limits.queryStallMs) {
+          abort();
           return;
         }
-        this.emit(subscription, {
-          ...base,
-          kind: "query",
-          part,
-          last: part === total - 1,
-          data: text.slice(part * size, (part + 1) * size),
-        });
-        if (part < total - 1) send(part + 1);
+        const wait = this.limits.lagRecheckMs;
+        const timer = setTimeout(() => {
+          this.stalled.delete(timer);
+          send(part, waitedMs + wait);
+        }, wait);
+        timer.unref?.();
+        this.stalled.add(timer);
+        return;
+      }
+      this.emit(subscription, {
+        ...base(),
+        kind: "query",
+        part,
+        last: part === total - 1,
+        data: text.slice(part * size, (part + 1) * size),
       });
+      if (part < total - 1) setImmediate(() => send(part + 1, 0));
     };
-    send(0);
+    setImmediate(() => send(0, 0));
   }
 
-  /**
-   * Whether the socket can take another frame. One that has fallen behind is
-   * marked lagging and caught up later with a fresh snapshot. One whose queue
-   * is full is disconnected: it is too far behind for any signalling.
-   */
-  private hasRoom(subscription: Subscription): boolean {
-    const pressure = this.options.pressure(subscription.socket);
+  /** How far a socket's unsent queue has grown. */
+  private congestion(socket: Socket): "clear" | "behind" | "full" {
+    const pressure = this.options.pressure(socket);
     if (
       pressure.packets > this.limits.socketHardPackets ||
       pressure.bytes > this.limits.socketHardBytes
     ) {
-      this.stats.disconnects += 1;
-      const socket = subscription.socket;
-      this.dropSocket(socket.id);
-      socket.disconnect(true);
-      return false;
+      return "full";
     }
     if (
       pressure.packets > this.limits.socketSoftPackets ||
       pressure.bytes > this.limits.socketSoftBytes
     ) {
+      return "behind";
+    }
+    return "clear";
+  }
+
+  /** Ends a socket whose queue is full: too far behind for any signalling. */
+  private disconnect(socket: Socket): void {
+    this.stats.disconnects += 1;
+    this.dropSocket(socket.id);
+    socket.disconnect(true);
+  }
+
+  /**
+   * Whether the socket can take another frame of this view. One that has
+   * fallen behind is marked lagging and caught up later with a fresh
+   * snapshot. One whose queue is full is disconnected.
+   */
+  private hasRoom(subscription: Subscription): boolean {
+    const congestion = this.congestion(subscription.socket);
+    if (congestion === "full") {
+      this.disconnect(subscription.socket);
+      return false;
+    }
+    if (congestion === "behind") {
       subscription.lagging = true;
       subscription.transfer = null;
       subscription.backlog = [];

@@ -840,6 +840,89 @@ describe("large views and slow sockets", () => {
     expect(cutResult.ok).toBe(false);
   });
 
+  it("holds a streamed result back while the socket is behind, then finishes it", async () => {
+    const pressure = new Map<string, { packets: number; bytes: number }>();
+    const room = new Harness([probeAuthority], {
+      runtime: {
+        limits: small,
+        pressure: (socket) => pressure.get(socket.id) ?? { packets: 0, bytes: 0 },
+      },
+    });
+    const hostTab = await room.open(host, probeContract);
+    for (let index = 0; index < 5; index += 1) {
+      await hostTab.act("put", { id: `n${index}`, text: `${index}`.repeat(300) });
+    }
+    await room.deliver();
+    const parts = () => hostTab.frames.filter((frame) => frame.kind === "query").length;
+
+    const slow = hostTab.session.query("dump", null);
+    await Promise.resolve();
+    vi.advanceTimersToNextTimer();
+    const sentBefore = parts();
+    pressure.set(hostTab.seat.socket.id, { packets: 300, bytes: 0 });
+    await vi.advanceTimersByTimeAsync(1_000);
+    const sentWhileBehind = parts();
+    pressure.delete(hostTab.seat.socket.id);
+    const result = await room.settle(slow);
+
+    expect(sentBefore).toBe(1);
+    expect(sentWhileBehind).toBe(sentBefore);
+    expect(result.ok && (field(result.value, "notes") as Json[]).length).toBe(5);
+  });
+
+  it("gives up on a streamed result when the socket stays behind", async () => {
+    const pressure = new Map<string, { packets: number; bytes: number }>();
+    const room = new Harness([probeAuthority], {
+      runtime: {
+        limits: small,
+        pressure: (socket) => pressure.get(socket.id) ?? { packets: 0, bytes: 0 },
+      },
+    });
+    const hostTab = await room.open(host, probeContract);
+    for (let index = 0; index < 5; index += 1) {
+      await hostTab.act("put", { id: `n${index}`, text: `${index}`.repeat(300) });
+    }
+    await room.deliver();
+
+    const stuck = hostTab.session.query("dump", null);
+    await Promise.resolve();
+    vi.advanceTimersToNextTimer();
+    pressure.set(hostTab.seat.socket.id, { packets: 300, bytes: 0 });
+    const result = await room.settle(stuck);
+
+    expect(result.ok).toBe(false);
+    expect(hostTab.frames.filter((frame) => frame.kind === "query").length).toBe(1);
+    expect(hostTab.seat.socket.connected).toBe(true);
+  });
+
+  it("answers no query on a socket that is behind, and drops one whose queue is full", async () => {
+    const pressure = new Map<string, { packets: number; bytes: number }>();
+    const room = new Harness([probeAuthority], {
+      runtime: { pressure: (socket) => pressure.get(socket.id) ?? { packets: 0, bytes: 0 } },
+    });
+    const hostTab = await room.open(host, probeContract);
+    await hostTab.act("put", { id: "a", text: "one" });
+    await room.deliver();
+    const request = (name: string) =>
+      hostTab.raw<AuthorityResult<Json>>(AUTHORITY_EVENTS.query, {
+        roomEpoch: room.authority.roomEpoch,
+        subscription: hostTab.frames[0].subscription,
+        generation: 1,
+        request: name,
+        query: "dump",
+        input: null,
+      });
+
+    pressure.set(hostTab.seat.socket.id, { packets: 300, bytes: 0 });
+    const behind = await request("while-behind");
+    pressure.set(hostTab.seat.socket.id, { packets: 5_000, bytes: 0 });
+    void request("while-full");
+
+    expect(behind).toMatchObject({ ok: false, code: "busy" });
+    expect(hostTab.seat.socket.connected).toBe(false);
+    expect(room.authority.stats.disconnects).toBe(1);
+  });
+
   it("refuses a view too large to send", async () => {
     const room = new Harness([probeAuthority], {
       runtime: { limits: { ...DEFAULT_AUTHORITY_LIMITS, snapshotBytes: 500 } },
