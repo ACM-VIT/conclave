@@ -282,6 +282,17 @@ describe("caption language picker", () => {
     expect(transcript.takeover).toHaveBeenCalledWith(expect.objectContaining({ language: "ta" }));
   });
 
+  it("can switch a Sarvam room's auto-detect session to a fixed language", async () => {
+    const transcript = controller(
+      { status: "live", transcriptModel: "saaras:v3", languageChosen: false, keySource: "global" },
+      { isController: true },
+    );
+    await render(transcript, roomUsing("saaras:v3"));
+
+    await choose("captions-language-live", "hi");
+    expect(transcript.takeover).toHaveBeenCalledWith(expect.objectContaining({ language: "hi" }));
+  });
+
   it("shows other people the language captions are in", async () => {
     await render(controller({ status: "live", language: "hi" }));
 

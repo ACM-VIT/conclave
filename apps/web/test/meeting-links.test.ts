@@ -98,6 +98,22 @@ describe("meeting links", () => {
     expect(await tenantOpenedBy(`/${ROOM}`)).toBe("acme");
   });
 
+  it("keeps an old bare link's server-default booking when two tenants booked the code", async () => {
+    deployment("other", "conclave");
+
+    expect(await tenantOpenedBy(`/${ROOM}`, ["conclave", "other"])).toBe("conclave");
+  });
+
+  it("does not put a named Conclave room behind the server default's booking", async () => {
+    deployment("other", "other");
+    const path = buildMeetingPath({ roomCode: ROOM, clientId: "conclave" });
+
+    expect(
+      await findScheduledMeetingForLink("conclave", sfuLookup(["other"])),
+    ).toBeNull();
+    expect(await tenantOpenedBy(path, ["other"])).toBe("conclave");
+  });
+
   it("never labels an older SFU's booking with the browser default", async () => {
     vi.stubEnv("NEXT_PUBLIC_SFU_CLIENT_ID", "acme");
     vi.stubEnv("SFU_CLIENT_ID", "");

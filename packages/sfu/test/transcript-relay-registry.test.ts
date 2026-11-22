@@ -383,3 +383,72 @@ describe("TranscriptRelayRegistry", () => {
   });
 });
 
+
+describe("relay handoffs that overlap", () => {
+  const overlapping = () => {
+    const closed: string[] = [];
+    const handoffs = new Map<string, Promise<boolean>>();
+    const registry = createTranscriptRelayRegistry({
+      enabled: true,
+      createRelay: ({ workerToken, controllerUserId }) => ({
+        controllerUserId,
+        start: async () => {},
+        prepareHandoff: async () => handoffs.get(workerToken) ?? true,
+        syncProducers: async () => {},
+        close: () => {
+          closed.push(workerToken);
+        },
+      }),
+    });
+    const start = (workerToken: string) =>
+      registry.start({
+        room,
+        workerUrl: "http://worker.test",
+        workerToken,
+        controllerUserId: "host",
+        controllerDisplayName: "Host",
+        canReplaceExistingRelay: true,
+      });
+    const stop = () =>
+      registry.stopRoomForUser({ roomKey: room.channelId, userId: "host", canStopAnyRelay: true });
+    const holdHandoff = (workerToken: string) => {
+      let release!: () => void;
+      handoffs.set(workerToken, new Promise<boolean>((resolve) => {
+        release = () => resolve(true);
+      }));
+      return release;
+    };
+    return { closed, start, stop, holdHandoff };
+  };
+
+  it("a stop waiting on one relay never closes the three started after it", async () => {
+    const { closed, start, stop, holdHandoff } = overlapping();
+    await start("A");
+    const release = holdHandoff("A");
+    const stopping = stop();
+    for (const workerToken of ["B", "C", "D"]) {
+      expect((await start(workerToken)).success).toBe(true);
+    }
+    release();
+    await stopping;
+
+    expect(closed).toEqual(["A", "B", "C"]);
+    await stop();
+    expect(closed).toEqual(["A", "B", "C", "D"]);
+  });
+
+  it("closes a relay overtaken during its handoff and keeps the newer one open", async () => {
+    const { closed, start, stop, holdHandoff } = overlapping();
+    await start("A");
+    const release = holdHandoff("B");
+    const overtaken = start("B");
+    await Promise.resolve();
+    expect((await start("C")).success).toBe(true);
+    release();
+    await overtaken;
+
+    expect(closed).toEqual(["A", "B"]);
+    await stop();
+    expect(closed).toEqual(["A", "B", "C"]);
+  });
+});
