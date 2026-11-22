@@ -40,17 +40,13 @@ export type FallbackImporter<T> = {
   noun: string;
   records: (data: unknown) => T[];
   describe: (record: T, index: number) => string;
-  importIfNewer: ((record: T) => boolean | Promise<boolean>) | undefined;
+  importIfNewer: (record: T) => boolean | Promise<boolean>;
 };
 
 export const importFallbackFiles = async <T>(importer: FallbackImporter<T>): Promise<number> => {
   const files = pendingFallbackFiles(importer.fileName);
   if (files.length === 0) return 0;
   const { importIfNewer } = importer;
-  if (!importIfNewer) {
-    Logger.warn(`Left ${files.length} JSON fallback file(s) in place: this ${importer.noun} store cannot import them (${files.join(", ")})`);
-    return 0;
-  }
   let imported = 0;
   for (const file of files) {
     const failures: string[] = [];
@@ -86,6 +82,30 @@ export const requireArray = (data: unknown, what: string): unknown[] => {
 export const describeEntry = (noun: string) => (entry: unknown, index: number): string => {
   const id = entry && typeof entry === "object" && "id" in entry ? String(entry.id) : "";
   return id ? `${noun} ${id}` : `${noun} #${index + 1}`;
+};
+
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+export const finiteNumber = (value: unknown): number | null =>
+  typeof value === "number" && Number.isFinite(value) ? value : null;
+
+export const readJsonStore = (path: string): unknown =>
+  existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : undefined;
+
+export const replaceIfNewer = (
+  entries: unknown[],
+  matches: (entry: Record<string, unknown>) => boolean,
+  incoming: unknown,
+  incomingUpdatedAt: number,
+  storedUpdatedAt: (entry: Record<string, unknown>) => number = (entry) => finiteNumber(entry.updatedAt) ?? 0,
+): boolean => {
+  const index = entries.findIndex((entry) => isObject(entry) && matches(entry));
+  const stored = entries[index];
+  if (isObject(stored) && storedUpdatedAt(stored) >= incomingUpdatedAt) return false;
+  if (index >= 0) entries[index] = incoming;
+  else entries.push(incoming);
+  return true;
 };
 
 export const requireRecord = <T>(record: T | null, noun: string): T => {

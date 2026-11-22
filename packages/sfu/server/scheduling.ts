@@ -32,7 +32,7 @@ import {
   CONCLAVE_CLIENT_ID,
 } from "./clientIds.js";
 import { assertSqliteWritable } from "./sqliteWriteCheck.js";
-import { importFallbackFiles, requireArray } from "./fallbackImport.js";
+import { finiteNumber, importFallbackFiles, readJsonStore, replaceIfNewer, requireArray } from "./fallbackImport.js";
 
 type MaybePromise<T> = T | Promise<T>;
 
@@ -80,7 +80,7 @@ export type SchedulingRecordWrite = {
 
 export type SchedulingPersistence = {
   save: (snapshot: SchedulingSnapshot) => MaybePromise<void>;
-  importIfNewer?: (record: SchedulingRecordWrite) => MaybePromise<boolean>;
+  importIfNewer: (record: SchedulingRecordWrite) => MaybePromise<boolean>;
   load: () => MaybePromise<SchedulingSnapshot>;
   close?: () => MaybePromise<void>;
   flush?: () => Promise<void>;
@@ -1245,9 +1245,49 @@ const createSqliteSchedulingPersistence = (
   };
 };
 
+/** Hours without their own updatedAt take their profile's, which every hours edit bumps, else 0 so they only fill a gap. */
+const hoursUpdatedAt = (hours: unknown, profile: unknown): number =>
+  finiteNumber((hours as { updatedAt?: unknown } | null)?.updatedAt) ??
+  finiteNumber((profile as { updatedAt?: unknown } | null)?.updatedAt) ??
+  0;
+
+const SNAPSHOT_FIELD: Record<SchedulingRecordKind, keyof SchedulingSnapshot> = {
+  profile: "profiles",
+  availability: "availability",
+  event_type: "eventTypes",
+  calendar: "calendars",
+};
+
+const importIntoJsonSnapshot = (path: string, record: SchedulingRecordWrite): boolean => {
+  const stored = readJsonStore(path) ?? {};
+  if (!stored || typeof stored !== "object" || Array.isArray(stored)) {
+    throw new Error(`${path} is not a scheduling snapshot`);
+  }
+  const snapshot = stored as Record<string, unknown>;
+  const field = SNAPSHOT_FIELD[record.kind];
+  const entries = snapshot[field] === undefined ? [] : requireArray(snapshot[field], field);
+  const profiles = snapshot.profiles === undefined ? [] : requireArray(snapshot.profiles, "profiles");
+  const keyField = record.kind === "profile" || record.kind === "event_type" ? "id" : "profileId";
+  const storedHoursAt = (entry: Record<string, unknown>) =>
+    hoursUpdatedAt(
+      entry.availability,
+      profiles.find((profile) => (profile as { id?: unknown } | null)?.id === entry.profileId),
+    );
+  const replaced = replaceIfNewer(
+    entries,
+    (entry) => entry[keyField] === record.id,
+    record.payload,
+    record.updatedAt,
+    record.kind === "availability" ? storedHoursAt : undefined,
+  );
+  if (replaced) writeJsonAtomic(path, JSON.stringify({ ...snapshot, [field]: entries }, null, 2));
+  return replaced;
+};
+
 const createFileSchedulingPersistence = (
   path: string = getSchedulingJsonPath(),
 ): SchedulingPersistence => ({
+  importIfNewer: (record) => importIntoJsonSnapshot(path, record),
   save: (snapshot) => {
     try {
       writeJsonAtomic(
@@ -1472,7 +1512,7 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
       JSON.stringify({ updatedAt: record.updatedAt, payload: record.payload }),
       "newer",
     ]);
-    await this.fallback.importIfNewer?.(record);
+    await this.fallback.importIfNewer(record);
     return Number(applied) === 1;
   }
 
@@ -1704,9 +1744,6 @@ type SchedulingFallbackEntry = {
   profilesById: Map<unknown, Record<string, unknown>>;
 };
 
-const finiteNumber = (value: unknown): number | null =>
-  typeof value === "number" && Number.isFinite(value) ? value : null;
-
 const requireString = (record: Record<string, unknown>, field: string): string => {
   const value = record[field];
   if (typeof value !== "string" || !value) throw new Error(`${field} is missing`);
@@ -1743,7 +1780,6 @@ const schedulingFallbackEntries = (data: unknown): SchedulingFallbackEntry[] => 
   ];
 };
 
-/** Hours without their own updatedAt take their profile's, which every hours edit bumps, else 0 so they only fill a gap. */
 const schedulingRecordFromFallback = ({
   kind,
   entry,
@@ -1762,10 +1798,7 @@ const schedulingRecordFromFallback = ({
       kind,
       id: profileId,
       clientId: normalizeSnapshotClientId(profile?.clientId),
-      updatedAt:
-        finiteNumber((hours as Record<string, unknown>).updatedAt) ??
-        finiteNumber(profile?.updatedAt) ??
-        0,
+      updatedAt: hoursUpdatedAt(hours, profile),
       payload: { profileId, availability: hours },
     };
   }
@@ -1787,7 +1820,6 @@ const schedulingRecordFromFallback = ({
 export const importFallbackScheduling = (
   persistence: SchedulingPersistence,
 ): Promise<number> => {
-  const importIfNewer = persistence.importIfNewer?.bind(persistence);
   return importFallbackFiles({
     fileName: "scheduling.json",
     noun: "scheduling record",
@@ -1797,7 +1829,7 @@ export const importFallbackScheduling = (
       const id = record.id ?? record.profileId;
       return typeof id === "string" ? `${kind} ${id}` : `${kind} #${index + 1}`;
     },
-    importIfNewer: importIfNewer && ((entry) => importIfNewer(schedulingRecordFromFallback(entry))),
+    importIfNewer: (entry) => persistence.importIfNewer(schedulingRecordFromFallback(entry)),
   });
 };
 

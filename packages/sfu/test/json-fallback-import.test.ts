@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -133,5 +133,73 @@ describe("importing JSON fallback files copied from old containers", () => {
 
     expect(await importFallbackScheduling(persistence)).toBe(1);
     expect((await createSchedulingPersistence().load()).availability).toEqual([hours(200, 600)]);
+  });
+});
+
+describe("importing JSON fallback files into a single-instance JSON store", () => {
+  const store = (file: string) => join(stateDir, "store", file);
+
+  beforeEach(() => {
+    for (const prefix of ["SCHEDULING", "SCHEDULED_MEETINGS", "SCHEDULED_WEBINARS"]) {
+      vi.stubEnv(`${prefix}_PERSISTENCE`, "json");
+    }
+    vi.stubEnv("SCHEDULING_PATH", store("scheduling.json"));
+    vi.stubEnv("SCHEDULED_MEETINGS_PATH", store("scheduled-meetings.json"));
+    vi.stubEnv("SCHEDULED_WEBINARS_PATH", store("scheduled-webinars.json"));
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  it("merges meetings by updated time and imports each file once", async () => {
+    const persistence = createScheduledMeetingPersistence();
+    await persistence.save([meeting("stored-newer", 50, "kept from the store")]);
+    writeFallback("sfu-a", "scheduled-meetings.json", [meeting("prior-meeting", 1), meeting("stored-newer", 10, "older copy")]);
+
+    expect(await importFallbackMeetings(persistence)).toBe(1);
+    const saved = await createScheduledMeetingPersistence().load();
+    expect(new Map(saved.map((entry) => [entry.id, entry.title]))).toEqual(new Map([["stored-newer", "kept from the store"], ["prior-meeting", "fixture"]]));
+    expect(readdirSync(importDir("sfu-a"))).toEqual(["scheduled-meetings.json.imported"]);
+    expect(readdirSync(join(stateDir, "store"))).toEqual(["scheduled-meetings.json"]);
+  });
+
+  it("merges webinars by updated time", async () => {
+    const persistence = createScheduledWebinarPersistence();
+    persistence.save([webinar("stored-newer", 50)]);
+    writeFallback("sfu-a", "scheduled-webinars.json", [webinar("prior-webinar", 1), webinar("stored-newer", 10)]);
+
+    expect(await importFallbackWebinars(persistence)).toBe(1);
+    const saved = createScheduledWebinarPersistence().load();
+    expect(new Map(saved.map((entry) => [entry.id, entry.updatedAt]))).toEqual(new Map([["stored-newer", 50], ["prior-webinar", 1]]));
+  });
+
+  it("merges scheduling records and booking hours by updated time", async () => {
+    const persistence = createSchedulingPersistence();
+    const profile = { id: "host", clientId: "conclave", userId: "user-host", email: "host@example.test", name: "Host", username: "host", timeZone: "Asia/Kolkata", createdAt: 1, updatedAt: 100 };
+    const hours = (updatedAt: number, startMinutes: number) => ({
+      profileId: "host",
+      availability: { timeZone: "Asia/Kolkata", windows: [{ day: 1 as const, startMinutes, endMinutes: 1020 }], overrides: [], updatedAt },
+    });
+    await persistence.save({ profiles: [profile], availability: [hours(100, 540)], eventTypes: [], calendars: [] });
+    writeFallback("sfu-a", "scheduling.json", {
+      profiles: [{ ...profile, id: "prior-host", userId: "user-prior", username: "prior-host", updatedAt: 1 }],
+      availability: [hours(200, 600)],
+      eventTypes: [],
+      calendars: [],
+    });
+    writeFallback("sfu-b", "scheduling.json", { profiles: [], availability: [hours(50, 480)], eventTypes: [], calendars: [] });
+
+    expect(await importFallbackScheduling(persistence)).toBe(2);
+    const saved = await createSchedulingPersistence().load();
+    expect(saved.profiles.map((entry) => entry.id).sort()).toEqual(["host", "prior-host"]);
+    expect(saved.availability).toEqual([hours(200, 600)]);
+  });
+
+  it("keeps the fallback file and leaves a damaged store untouched", async () => {
+    mkdirSync(join(stateDir, "store"), { recursive: true });
+    writeFileSync(store("scheduled-meetings.json"), '[{"id": "half-written"');
+    writeFallback("sfu-a", "scheduled-meetings.json", [meeting("prior-meeting", 1)]);
+
+    expect(await importFallbackMeetings(createScheduledMeetingPersistence())).toBe(0);
+    expect(readFileSync(store("scheduled-meetings.json"), "utf8")).toBe('[{"id": "half-written"');
+    expect(readdirSync(importDir("sfu-a"))).toEqual(["scheduled-meetings.json"]);
   });
 });

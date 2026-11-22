@@ -25,7 +25,7 @@ import {
 } from "./redisPersistence.js";
 import { canonicalizeClientId } from "./clientIds.js";
 import { assertSqliteWritable } from "./sqliteWriteCheck.js";
-import { describeEntry, importFallbackFiles, requireArray, requireRecord } from "./fallbackImport.js";
+import { describeEntry, importFallbackFiles, readJsonStore, replaceIfNewer, requireArray, requireRecord } from "./fallbackImport.js";
 
 type MaybePromise<T> = T | Promise<T>;
 
@@ -510,7 +510,7 @@ export const listScheduledMeetings = (
 export type ScheduledMeetingPersistence = {
   save: (snapshot: ScheduledMeeting[]) => MaybePromise<void>;
   saveChanged?: (meetings: ScheduledMeeting[]) => MaybePromise<void>;
-  importIfNewer?: (meeting: ScheduledMeeting) => MaybePromise<boolean>;
+  importIfNewer: (meeting: ScheduledMeeting) => MaybePromise<boolean>;
   deleteIds?: (ids: string[]) => MaybePromise<void>;
   reserveBookingSlot?: (
     reservation: BookingSlotReservation,
@@ -847,6 +847,12 @@ const createFileScheduledMeetingPersistence = (
       Logger.error("Failed to persist scheduled meetings to JSON", error);
     }
   },
+  importIfNewer: (meeting) => {
+    const entries = requireArray(readJsonStore(path) ?? [], "scheduled meetings");
+    if (!replaceIfNewer(entries, (entry) => entry.id === meeting.id, meeting, meeting.updatedAt)) return false;
+    writeJsonAtomic(path, JSON.stringify(entries, null, 2));
+    return true;
+  },
   load: () => {
     try {
       if (!existsSync(path)) return [];
@@ -1053,7 +1059,7 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
       String(meeting.updatedAt),
       JSON.stringify(meeting),
     ]);
-    await this.fallback.importIfNewer?.(meeting);
+    await this.fallback.importIfNewer(meeting);
     return Number(applied) === 1;
   }
 
@@ -1235,13 +1241,12 @@ export const createScheduledMeetingPersistence = (): ScheduledMeetingPersistence
 export const importFallbackMeetings = (
   persistence: ScheduledMeetingPersistence,
 ): Promise<number> => {
-  const importIfNewer = persistence.importIfNewer?.bind(persistence);
   return importFallbackFiles({
     fileName: "scheduled-meetings.json",
     noun: "scheduled meeting",
     records: (data) => requireArray(data, "scheduled meetings"),
     describe: describeEntry("meeting"),
-    importIfNewer: importIfNewer && ((entry) => importIfNewer(requireRecord(normalizeStoredMeeting(entry), "meeting"))),
+    importIfNewer: (entry) => persistence.importIfNewer(requireRecord(normalizeStoredMeeting(entry), "meeting")),
   });
 };
 

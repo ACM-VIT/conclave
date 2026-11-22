@@ -21,7 +21,7 @@ import {
 } from "./webinar.js";
 import { canonicalizeClientId } from "./clientIds.js";
 import { assertSqliteWritable } from "./sqliteWriteCheck.js";
-import { describeEntry, importFallbackFiles, requireArray, requireRecord } from "./fallbackImport.js";
+import { describeEntry, importFallbackFiles, readJsonStore, replaceIfNewer, requireArray, requireRecord } from "./fallbackImport.js";
 
 const DEFAULT_EARLY_ENTRY_MINUTES = 10;
 const MAX_EARLY_ENTRY_MINUTES = 240;
@@ -266,7 +266,7 @@ export const listScheduledWebinars = (
 export type ScheduledWebinarPersistence = {
   save: (snapshot: ScheduledWebinar[]) => void;
   saveChanged?: (webinars: ScheduledWebinar[]) => void;
-  importIfNewer?: (webinar: ScheduledWebinar) => boolean;
+  importIfNewer: (webinar: ScheduledWebinar) => boolean;
   deleteIds?: (ids: string[]) => void;
   load: () => ScheduledWebinar[];
   close?: () => void;
@@ -311,6 +311,12 @@ const createFileScheduledWebinarPersistence = (
     } catch (error) {
       Logger.error("Failed to persist scheduled webinars", error);
     }
+  },
+  importIfNewer: (webinar) => {
+    const entries = requireArray(readJsonStore(path) ?? [], "scheduled webinars");
+    if (!replaceIfNewer(entries, (entry) => entry.id === webinar.id, webinar, webinar.updatedAt)) return false;
+    writeJsonAtomic(path, JSON.stringify(entries, null, 2));
+    return true;
   },
   load: () => {
     try {
@@ -603,13 +609,12 @@ const normalizeStoredWebinar = (raw: unknown): ScheduledWebinar | null => {
 };
 
 export const importFallbackWebinars = (persistence: ScheduledWebinarPersistence): Promise<number> => {
-  const importIfNewer = persistence.importIfNewer?.bind(persistence);
   return importFallbackFiles({
     fileName: "scheduled-webinars.json",
     noun: "scheduled webinar",
     records: (data) => requireArray(data, "scheduled webinars"),
     describe: describeEntry("webinar"),
-    importIfNewer: importIfNewer && ((entry) => importIfNewer(requireRecord(normalizeStoredWebinar(entry), "webinar"))),
+    importIfNewer: (entry) => persistence.importIfNewer(requireRecord(normalizeStoredWebinar(entry), "webinar")),
   });
 };
 
