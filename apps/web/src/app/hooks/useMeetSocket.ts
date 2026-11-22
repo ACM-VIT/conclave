@@ -7395,7 +7395,6 @@ export function useMeetSocket({
               setMeetError(null);
               serverRestartNoticeRef.current = null;
               setServerRestartNotice(null);
-              reconnectAttemptsRef.current = 0;
               intentionalDisconnectRef.current = false;
               resolve(socket);
             });
