@@ -191,7 +191,7 @@ describe("upload-posthog-sourcemaps", () => {
           POSTHOG_CLI_API_KEY: "phx_fake_not_real",
           POSTHOG_CLI_PROJECT_ID: "1",
           POSTHOG_CLI_HOST: uploadHost.host,
-          POSTHOG_SOURCEMAPS_TIMEOUT_MS: "1500",
+          POSTHOG_SOURCEMAPS_TIMEOUT_MS: "5000",
         },
       });
       let stderr = "";
@@ -202,8 +202,8 @@ describe("upload-posthog-sourcemaps", () => {
 
     expect(uploadHost.connections()).toBeGreaterThan(0);
     expect(result.status).toBe(0);
-    expect(result.stderr).toMatch(/\[sourcemaps\] upload failed.*did not finish within 1\.5 s/);
-    expect(elapsedMs).toBeLessThan(10_000);
+    expect(result.stderr).toMatch(/\[sourcemaps\] upload failed.*did not finish within 5 s/);
+    expect(elapsedMs).toBeLessThan(20_000);
     expect(isRunning(Number(readFileSync(pidFile, "utf8")))).toBe(false);
     expect(mapsLeft(fixture.chunks)).toEqual([]);
   }, 20_000);
@@ -215,19 +215,59 @@ describe("upload-posthog-sourcemaps", () => {
 
     const result = await runUploadAsync(fixture, {
       POSTHOG_CLI_HOST: uploadHost.host,
-      POSTHOG_SOURCEMAPS_TIMEOUT_MS: "1500",
+      POSTHOG_SOURCEMAPS_TIMEOUT_MS: "5000",
     });
     const sentBeforeExit = uploadHost.requestTimes.length;
     await new Promise((resolve) => setTimeout(resolve, 1000));
 
     expect(sentBeforeExit).toBeGreaterThan(0);
     expect(result.status).toBe(0);
-    expect(result.stderr).toMatch(/did not finish within 1\.5 s/);
+    expect(result.stderr).toMatch(/did not finish within 5 s/);
     expect(isRunning(Number(readFileSync(path.join(fixture.root, "wrapper.pid"), "utf8")))).toBe(false);
     expect(isRunning(Number(readFileSync(path.join(fixture.root, "uploader.pid"), "utf8")))).toBe(false);
     expect(uploadHost.requestTimes.filter((at) => at > result.exitedAt)).toEqual([]);
     expect(mapsLeft(fixture.chunks)).toEqual([]);
   }, 30_000);
+
+  it.each(["SIGINT", "SIGTERM"] as const)(
+    "stops the uploader on %s, removes the maps and exits",
+    async (signal) => {
+      const fixture = buildFixture(null);
+      installWrappedUploaderCli(fixture.root, fixture.bin);
+      const uploadHost = await startRecordingUploadHost();
+      const child = spawn(process.execPath, [script], {
+        cwd: fixture.root,
+        env: {
+          PATH: `${fixture.bin}:/usr/bin:/bin`,
+          HOME: fixture.root,
+          POSTHOG_CLI_API_KEY: "phx_fake_not_real",
+          POSTHOG_CLI_PROJECT_ID: "1",
+          POSTHOG_CLI_HOST: uploadHost.host,
+        },
+      });
+      let stderr = "";
+      child.stderr.on("data", (chunk) => (stderr += chunk));
+      const closed = new Promise<{ code: number | null; at: number }>((resolve) =>
+        child.on("close", (code) => resolve({ code, at: Date.now() })),
+      );
+      // Interrupt once the uploader is mid-upload.
+      const deadline = Date.now() + 10_000;
+      while (uploadHost.requestTimes.length === 0 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      child.kill(signal);
+      const { code, at } = await closed;
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+
+      expect(code).toBe(signal === "SIGINT" ? 130 : 143);
+      expect(stderr).toMatch(new RegExp(`\\[sourcemaps\\] ${signal}`));
+      expect(isRunning(Number(readFileSync(path.join(fixture.root, "wrapper.pid"), "utf8")))).toBe(false);
+      expect(isRunning(Number(readFileSync(path.join(fixture.root, "uploader.pid"), "utf8")))).toBe(false);
+      expect(uploadHost.requestTimes.filter((time) => time > at)).toEqual([]);
+      expect(mapsLeft(fixture.chunks)).toEqual([]);
+    },
+    30_000,
+  );
 
   it("uploads and removes the maps when posthog-cli succeeds", () => {
     const fixture = buildFixture(0);

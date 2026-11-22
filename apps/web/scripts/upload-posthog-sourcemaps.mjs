@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { readdir, rm } from "node:fs/promises";
 import path from "node:path";
 import nextEnv from "@next/env";
+import { groupAlive, signalGroup } from "./process-group.mjs";
 
 // Runs after the OpenNext build, on the exact files wrangler deploys:
 // PostHog matches a stack frame to its source map by the chunk id that
@@ -22,6 +23,23 @@ const uploadDeadline = Date.now() + uploadTimeoutMs;
 const stopGraceMs = 2000;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// Ctrl-C (SIGINT) or a stop (SIGTERM) reaches this script, not the uploader in
+// its own process group, so it is passed on there. The maps are still removed
+// before the script exits with the signal's status.
+let interruptedBy = null;
+let markInterrupted;
+const interruption = new Promise((resolve) => {
+  markInterrupted = resolve;
+});
+for (const signal of ["SIGINT", "SIGTERM"]) {
+  process.on(signal, () => {
+    if (interruptedBy) return;
+    interruptedBy = signal;
+    console.warn(`[sourcemaps] ${signal}: stopping the upload and removing the maps`);
+    markInterrupted(signal);
+  });
+}
+
 const listSourceMaps = async (dir) => {
   const entries = await readdir(dir, { recursive: true, withFileTypes: true });
   return entries
@@ -32,22 +50,6 @@ const listSourceMaps = async (dir) => {
 // The npm posthog-cli is a node wrapper that runs the native uploader as its
 // own child. It runs in a process group of its own, so stopping it stops that
 // child too, and nothing of it outlives this step.
-const groupAlive = (groupId) => {
-  try {
-    process.kill(-groupId, 0);
-    return true;
-  } catch (error) {
-    return error.code === "EPERM";
-  }
-};
-
-const signalGroup = (groupId, signal) => {
-  try {
-    process.kill(-groupId, signal);
-  } catch {
-  }
-};
-
 const waitForGroupExit = async (groupId, ms) => {
   const deadline = Date.now() + ms;
   while (groupAlive(groupId)) {
@@ -57,9 +59,9 @@ const waitForGroupExit = async (groupId, ms) => {
   return true;
 };
 
-const stopGroup = async (groupId) => {
+const stopGroup = async (groupId, signal = "SIGTERM") => {
   if (!groupAlive(groupId)) return;
-  signalGroup(groupId, "SIGTERM");
+  signalGroup(groupId, signal);
   if (await waitForGroupExit(groupId, stopGraceMs)) return;
   signalGroup(groupId, "SIGKILL");
   if (!(await waitForGroupExit(groupId, stopGraceMs))) {
@@ -68,6 +70,7 @@ const stopGroup = async (groupId) => {
 };
 
 const posthogCli = async (args) => {
+  if (interruptedBy) throw new Error(`interrupted by ${interruptedBy}`);
   const child = spawn("posthog-cli", args, {
     stdio: "inherit",
     detached: true,
@@ -81,10 +84,13 @@ const posthogCli = async (args) => {
     timer = setTimeout(() => resolve({ timedOut: true }), Math.max(1, uploadDeadline - Date.now()));
     child.once("error", (error) => resolve({ error }));
     child.once("exit", (status) => resolve({ status }));
+    void interruption.then((signal) => resolve({ interrupted: signal }));
   });
   clearTimeout(timer);
-  // On a timeout this stops the stalled upload; otherwise it reaps stragglers.
-  if (child.pid) await stopGroup(child.pid);
+  // Stops a stalled or interrupted upload with the signal that stopped us;
+  // after a normal exit it reaps stragglers.
+  if (child.pid) await stopGroup(child.pid, outcome.interrupted ?? "SIGTERM");
+  if (outcome.interrupted) throw new Error(`interrupted by ${outcome.interrupted}`);
   if (outcome.error?.code === "ENOENT") {
     throw new Error(
       "posthog-cli is not installed. Install it with `npm install -g @posthog/cli` or unset POSTHOG_CLI_API_KEY.",
@@ -127,10 +133,14 @@ try {
 } catch (error) {
   // A failed upload only costs this release its readable stack traces, so it
   // warns instead of blocking the deploy.
-  console.warn(`[sourcemaps] upload failed; deploying without readable stacks: ${error.message}`);
+  if (!interruptedBy) {
+    console.warn(`[sourcemaps] upload failed; deploying without readable stacks: ${error.message}`);
+  }
 } finally {
   // Maps never ship: if one cannot be removed, this throws and stops the deploy.
   const leftover = await listSourceMaps(assetsDir);
   await Promise.all(leftover.map((file) => rm(file)));
   if (leftover.length > 0) console.log(`[sourcemaps] removed ${leftover.length} map files from the deploy`);
 }
+// An interrupted build stops here, with the status a shell gives that signal.
+if (interruptedBy) process.exit(interruptedBy === "SIGINT" ? 130 : 143);
