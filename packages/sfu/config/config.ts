@@ -448,6 +448,13 @@ export const config = {
   adminCleanupTimeout: toNumber(process.env.ADMIN_CLEANUP_TIMEOUT, 120000, {
     min: 1000,
   }),
+  // How many passes and keys one room keeps lobby decisions for (see
+  // `AdmissionLedger`). A refusal is kept past it.
+  lobbyDecisionRecordLimit: toNumber(
+    process.env.SFU_LOBBY_DECISION_RECORD_LIMIT,
+    5000,
+    { integer: true, min: 1 },
+  ),
   socket: {
     pingIntervalMs: toNumber(
       process.env.SFU_SOCKET_PING_INTERVAL_MS,

@@ -10,6 +10,8 @@ import {
   withdrawWaitingRequest,
 } from "../server/admin/controlPlane.js";
 import type { Room } from "../config/classes/Room.js";
+import { config as sfuConfig } from "../config/config.js";
+import { Logger } from "../utilities/loggers.js";
 import { LocalRoomRegistry } from "../server/roomRegistry.js";
 import type { SfuAuthPayload } from "../server/socket/auth.js";
 import { createConnectionContext } from "../server/socket/context.js";
@@ -2004,6 +2006,71 @@ describe("a host's answer to a guest whose tabs the room has not linked yet", ()
     expect(room.waitingGuestCount).toBe(1);
   });
 
+  // The room keeps a lobby decision record of `limit` passes and keys.
+  const withDecisionRecordLimit = async (limit: number, body: () => Promise<void>) => {
+    const before = sfuConfig.lobbyDecisionRecordLimit;
+    sfuConfig.lobbyDecisionRecordLimit = limit;
+    try {
+      await body();
+    } finally {
+      sfuConfig.lobbyDecisionRecordLimit = before;
+    }
+  };
+  const otherGuest = (index: number) =>
+    ({
+      userId: `guest-gp_other-guest-${index}`,
+      clientId: "conclave",
+      sessionId: `other-${index}`,
+      guestProof: `proof-of-other-pass-${index}`,
+      guestRoom: "room",
+    }) satisfies SfuAuthPayload;
+
+  it("admitted under one pass and denied under the other stays refused once the record is full (Greptile)", async () => {
+    await withDecisionRecordLimit(4, async () => {
+      const { state, room, host } = await bothKnock();
+      await hostAsks(host, "admitUser", { userId: tabA.userId });
+      await hostAsks(host, "rejectUser", { userId: tabB.userId });
+      const linking = await join(state, {
+        ...tabA,
+        userId: "guest-gp_tab-3-under-pass-A",
+        sessionId: "tab-3",
+        guestWas: [{ userKey: "guest-gp_tab-3-under-pass-B", guestProof: tabB.guestProof }],
+      });
+      expect(linking.ack).toHaveBeenCalledWith(waiting);
+
+      // Enough other decisions to fill the record, and one more.
+      for (let index = 0; index < 3; index += 1) {
+        await join(state, otherGuest(index));
+        await hostAsks(host, "admitUser", { userId: otherGuest(index).userId });
+      }
+      const retry = await join(state, tabB);
+
+      expect(retry.ack).toHaveBeenCalledWith(waiting);
+      expect(room.isLockedAllowed(tabB.userId, tabB.guestProof)).toBe(false);
+      expect(room.isAllowed(tabB.userId, tabB.guestProof)).toBe(false);
+    });
+  });
+
+  it("fails closed when the record holds only refusals: an admission is not kept, and it is logged", async () => {
+    await withDecisionRecordLimit(2, async () => {
+      const warn = vi.spyOn(Logger, "warn");
+      const { state, room, host, first } = await bothKnock();
+      await hostAsks(host, "rejectUser", { userId: tabA.userId });
+      await hostAsks(host, "rejectUser", { userId: tabB.userId });
+      const third = await join(state, otherGuest(0));
+
+      await hostAsks(host, "admitUser", { userId: otherGuest(0).userId });
+      const back = await join(state, otherGuest(0));
+
+      expect(third.peer.emit).toHaveBeenCalledWith(...approved);
+      expect(back.ack).toHaveBeenCalledWith(waiting);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("full of refusals"));
+      expect(first.peer.emit).toHaveBeenCalledWith(...turnedAway);
+      expect(room.isLockedAllowed(tabA.userId, tabA.guestProof)).toBe(false);
+      warn.mockRestore();
+    });
+  });
+
   it("a denial does not turn away a tab that knocks after it", async () => {
     const { state, room, host } = await bothKnock();
     await hostAsks(host, "rejectUser", { userId: tabA.userId });
@@ -2674,10 +2741,16 @@ describe("who may come in, against a slow reading of every decision", () => {
     }) satisfies SfuAuthPayload;
 
   type Mark = { admitted: boolean; at: number };
+  type PassRecord = { lock?: Mark; answer?: Mark };
   class Oracle {
+    constructor(readonly limit?: number) {}
+    // Every decision ever made, never trimmed, to check that trimming the
+    // room's record never lets in anyone this history refuses.
+    full = new Map<string, PassRecord>();
+    activity = new Map<string, number>();
     clock = 0;
     root = new Map<string, string>();
-    records = new Map<string, { lock?: Mark; answer?: Mark }>();
+    records = new Map<string, PassRecord>();
     blocked = new Set<string>();
     status = new Map<string, "idle" | "pending" | "seated">();
     arrival = new Map<string, number>();
@@ -2719,18 +2792,44 @@ describe("who may come in, against a slow reading of every decision", () => {
     admits(pass: string): boolean {
       return this.latest(pass, "lock")?.admitted === true;
     }
+    admitsWithWholeHistory(pass: string): boolean {
+      let latest: Mark | undefined;
+      for (const other of this.group(pass)) {
+        const mark = this.full.get(other)?.lock;
+        if (mark && (!latest || mark.at > latest.at)) latest = mark;
+      }
+      return latest?.admitted === true;
+    }
+    refuses(record: PassRecord): boolean {
+      return record.lock?.admitted === false || record.answer?.admitted === false;
+    }
     guestBlocked(pass: string): boolean {
       const group = this.group(pass);
       return [...this.blocked].some((key) => group.has(tabByKey.get(key)!.pass));
     }
     record(pass: string, admitted: boolean) {
       const at = this.tick();
+      this.full.set(pass, { lock: { admitted, at }, answer: { admitted, at } });
+      if (!this.records.has(pass) && this.limit !== undefined && this.records.size >= this.limit) {
+        const evictable = [...this.records.keys()]
+          .filter((other) => !this.refuses(this.records.get(other)!))
+          .sort((a, b) => this.activity.get(a)! - this.activity.get(b)!);
+        if (evictable.length > 0) this.records.delete(evictable[0]);
+        else if (admitted) return;
+      }
       this.records.set(pass, { lock: { admitted, at }, answer: { admitted, at } });
+      this.activity.set(pass, at);
     }
     revokeGuest(pass: string) {
       for (const other of this.group(pass)) {
+        const at = this.tick();
         const record = this.records.get(other);
-        if (record?.lock?.admitted) record.lock = { admitted: false, at: this.tick() };
+        if (record?.lock?.admitted) {
+          record.lock = { admitted: false, at };
+          this.activity.set(other, at);
+        }
+        const whole = this.full.get(other);
+        if (whole?.lock?.admitted) whole.lock = { admitted: false, at };
       }
     }
     prune() {
@@ -2799,6 +2898,7 @@ describe("who may come in, against a slow reading of every decision", () => {
       if (this.blocked.has(tab.key) || this.guestBlocked(tab.pass)) {
         outcome = "refused";
       } else if (this.admits(tab.pass)) {
+        expect(this.admitsWithWholeHistory(tab.pass), `${tab.key} let in although the whole history refuses it`).toBe(true);
         outcome = "joined";
         this.status.set(tab.key, "seated");
       } else {
@@ -2859,7 +2959,7 @@ describe("who may come in, against a slow reading of every decision", () => {
     return rows.sort();
   };
 
-  const run = async (seed: number, steps: number) => {
+  const run = async (seed: number, steps: number, limit?: number) => {
     // A host who acts once a second stays inside the admin rate limit.
     let now = Date.UTC(2026, 10, 22);
     vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -2869,11 +2969,15 @@ describe("who may come in, against a slow reading of every decision", () => {
       return random % below;
     };
     const state = makeState();
-    const firstHost = await join(state, hostTab("host-0"));
+    const limitBefore = sfuConfig.lobbyDecisionRecordLimit;
+    if (limit !== undefined) sfuConfig.lobbyDecisionRecordLimit = limit;
+    const firstHost = await join(state, hostTab("host-0")).finally(() => {
+      sfuConfig.lobbyDecisionRecordLimit = limitBefore;
+    });
     const room = state.rooms.get("conclave:room")!;
     room.setLocked(true);
     const hosts = [firstHost];
-    const oracle = new Oracle();
+    const oracle = new Oracle(limit);
     const peerOf = new Map<string, Awaited<ReturnType<typeof join>>["peer"]>();
     const history: string[] = [];
     const hostAsks = async (event: string, payload: unknown) => {
@@ -2882,6 +2986,9 @@ describe("who may come in, against a slow reading of every decision", () => {
       const answer = ack.mock.calls[0]?.[0] as { error?: string } | undefined;
       expect(answer?.error, `${event} ${JSON.stringify(payload)}, seed ${seed}`).toBeUndefined();
     };
+    // A tab that knocks again on a new socket leaves its old request on the
+    // old one, and an answer to that request goes there.
+    const earlierPeerOf = new Map<string, Awaited<ReturnType<typeof join>>["peer"]>();
     const expectAgreement = (events: Map<string, string>, callsBefore: Map<string, number>) => {
       const where = `seed ${seed}, after: ${history.slice(-6).join(" | ")}`;
       const pending = [...room.pendingClients.keys()].sort();
@@ -2895,7 +3002,13 @@ describe("who may come in, against a slow reading of every decision", () => {
         const fresh = (peer.emit.mock.calls as Array<[string, ...unknown[]]>)
           .slice(callsBefore.get(key) ?? 0)
           .map(([name]) => name);
-        expect(fresh, `${key} told ${event}, ${where}`).toContain(event);
+        const earlier = earlierPeerOf.get(key);
+        const freshOnEarlier = earlier
+          ? (earlier.emit.mock.calls as Array<[string, ...unknown[]]>)
+              .slice(callsBefore.get(`earlier:${key}`) ?? 0)
+              .map(([name]) => name)
+          : [];
+        expect([...fresh, ...freshOnEarlier], `${key} told ${event}, ${where}`).toContain(event);
       }
       const rows = oracle.rows();
       expect(toPendingUserSnapshots(room).map((row) => row.userId).sort(), `lobby, ${where}`).toEqual(rows);
@@ -2930,6 +3043,12 @@ describe("who may come in, against a slow reading of every decision", () => {
             ? { guestWas: names.map((other) => ({ userKey: `guest-gp_${tab.session}-under-${other}`, guestProof: other })) }
             : {}),
         });
+        const earlier = peerOf.get(tab.key);
+        earlierPeerOf.delete(tab.key);
+        if (earlier) {
+          earlierPeerOf.set(tab.key, earlier);
+          callsBefore.set(`earlier:${tab.key}`, callsBefore.get(tab.key) ?? 0);
+        }
         peerOf.set(tab.key, joinedTab.peer);
         callsBefore.set(tab.key, 0);
         const ack = joinedTab.ack.mock.calls[0]?.[0] as { status?: string; error?: string };
@@ -2975,5 +3094,16 @@ describe("who may come in, against a slow reading of every decision", () => {
 
   it.each([1, 7, 42, 2026, 31337, 99991])("agrees with the oracle over 300 random steps (seed %i)", async (seed) => {
     await run(seed, 300);
+  });
+
+  it.each([
+    [3, 2],
+    [11, 3],
+    [42, 2],
+    [2026, 3],
+    [31337, 1],
+    [99991, 4],
+  ])("agrees with the oracle when the decision record is small (seed %i, %i records)", async (seed, limit) => {
+    await run(seed, 300, limit);
   });
 });

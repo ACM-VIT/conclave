@@ -264,7 +264,15 @@ export class Room {
   // after it.
   private lobbyClock = 0;
   // Who may come in is decided from this alone (see `AdmissionLedger`).
-  private admissions = new AdmissionLedger();
+  private admissions = new AdmissionLedger(config.lobbyDecisionRecordLimit, {
+    onEvicted: (userKeys) => {
+      for (const userKey of userKeys) this.releaseGuestIdentity(userKey);
+    },
+    onFull: () =>
+      Logger.warn(
+        `Room ${this.id}: the lobby decision record is full of refusals; an admission was not kept and the guest has to knock again.`,
+      ),
+  });
   // The request each waiting guest's row shows on the hosts' screens, as
   // they were last told, and the guests whose rows may have changed since.
   private shownRowByGuest: Map<string, string> = new Map();
@@ -1048,12 +1056,19 @@ export class Room {
     this.removePendingClient(userKey);
   }
 
-  private recordAdmission(userKey: string, scopes: AdmissionScope[]): void {
-    this.admissions.admit(this.principalOf(userKey), userKey, scopes, this.tick());
+  // Returns false when the ledger could not keep the admission.
+  private recordAdmission(userKey: string, scopes: AdmissionScope[]): boolean {
+    const kept = this.admissions.admit(
+      this.principalOf(userKey),
+      userKey,
+      scopes,
+      this.tick(),
+    );
     if (this.pendingClients.has(userKey)) {
       this.lobbyOutcomes.set(userKey, "admitted");
     }
     this.removePendingClient(userKey);
+    return kept;
   }
 
   private recordRevocation(userKey: string, scopes: AdmissionScope[]): void {
@@ -1183,11 +1198,10 @@ export class Room {
     if (guestProof !== undefined && isGuestUserKey(userKey)) {
       this.bindGuestProof(userKey, guestProof);
     }
-    this.recordAdmission(
+    return this.recordAdmission(
       userKey,
       options.pastLock ? ["waitingRoom", "lock"] : ["waitingRoom"],
     );
-    return true;
   }
 
   /**
