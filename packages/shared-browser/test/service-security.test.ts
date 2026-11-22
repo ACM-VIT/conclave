@@ -151,7 +151,7 @@ const startService = (env: NodeJS.ProcessEnv) => {
 
 test("the service process exits instead of starting without a strong token", async () => {
     const { child, output } = startService({ BROWSER_SERVICE_TOKEN: "" });
-    const [code] = await once(child, "exit");
+    const [code] = await once(child, "close");
     assert.equal(code, 1);
     assert.match(output(), /BROWSER_SERVICE_TOKEN is required/);
 });
