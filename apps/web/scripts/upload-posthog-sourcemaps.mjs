@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { readdir, rm } from "node:fs/promises";
 import path from "node:path";
 import nextEnv from "@next/env";
@@ -18,6 +18,9 @@ const uploadRequested = Boolean(
 // wrangler deploy is waiting on cf:build behind it.
 const uploadTimeoutMs = Number(process.env.POSTHOG_SOURCEMAPS_TIMEOUT_MS) || 90_000;
 const uploadDeadline = Date.now() + uploadTimeoutMs;
+// How long the CLI's process group gets to exit after SIGTERM before SIGKILL.
+const stopGraceMs = 2000;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const listSourceMaps = async (dir) => {
   const entries = await readdir(dir, { recursive: true, withFileTypes: true });
@@ -26,28 +29,75 @@ const listSourceMaps = async (dir) => {
     .map((entry) => path.join(entry.parentPath, entry.name));
 };
 
-const posthogCli = (args) => {
-  const result = spawnSync("posthog-cli", args, {
+// The npm posthog-cli is a node wrapper that runs the native uploader as its
+// own child. It runs in a process group of its own, so stopping it stops that
+// child too, and nothing of it outlives this step.
+const groupAlive = (groupId) => {
+  try {
+    process.kill(-groupId, 0);
+    return true;
+  } catch (error) {
+    return error.code === "EPERM";
+  }
+};
+
+const signalGroup = (groupId, signal) => {
+  try {
+    process.kill(-groupId, signal);
+  } catch {
+  }
+};
+
+const waitForGroupExit = async (groupId, ms) => {
+  const deadline = Date.now() + ms;
+  while (groupAlive(groupId)) {
+    if (Date.now() >= deadline) return false;
+    await sleep(50);
+  }
+  return true;
+};
+
+const stopGroup = async (groupId) => {
+  if (!groupAlive(groupId)) return;
+  signalGroup(groupId, "SIGTERM");
+  if (await waitForGroupExit(groupId, stopGraceMs)) return;
+  signalGroup(groupId, "SIGKILL");
+  if (!(await waitForGroupExit(groupId, stopGraceMs))) {
+    throw new Error("posthog-cli did not stop after SIGKILL");
+  }
+};
+
+const posthogCli = async (args) => {
+  const child = spawn("posthog-cli", args, {
     stdio: "inherit",
-    timeout: Math.max(1, uploadDeadline - Date.now()),
-    killSignal: "SIGKILL",
+    detached: true,
     env: {
       ...process.env,
       POSTHOG_CLI_HOST: process.env.POSTHOG_CLI_HOST ?? "https://eu.posthog.com",
     },
   });
-  if (result.error?.code === "ENOENT") {
+  let timer;
+  const outcome = await new Promise((resolve) => {
+    timer = setTimeout(() => resolve({ timedOut: true }), Math.max(1, uploadDeadline - Date.now()));
+    child.once("error", (error) => resolve({ error }));
+    child.once("exit", (status) => resolve({ status }));
+  });
+  clearTimeout(timer);
+  // On a timeout this stops the stalled upload; otherwise it reaps stragglers.
+  if (child.pid) await stopGroup(child.pid);
+  if (outcome.error?.code === "ENOENT") {
     throw new Error(
       "posthog-cli is not installed. Install it with `npm install -g @posthog/cli` or unset POSTHOG_CLI_API_KEY.",
     );
   }
-  if (result.error?.code === "ETIMEDOUT") {
+  if (outcome.error) throw outcome.error;
+  if (outcome.timedOut) {
     throw new Error(
       `posthog-cli ${args.slice(0, 2).join(" ")} did not finish within ${uploadTimeoutMs / 1000} s and was stopped`,
     );
   }
-  if (result.status !== 0) {
-    throw new Error(`posthog-cli ${args.join(" ")} exited with ${result.status}`);
+  if (outcome.status !== 0) {
+    throw new Error(`posthog-cli ${args.join(" ")} exited with ${outcome.status}`);
   }
 };
 
@@ -60,8 +110,8 @@ const upload = async () => {
     throw new Error("No source maps were built; check productionBrowserSourceMaps in next.config.ts.");
   }
   const release = ["--release-name", "conclave-web"];
-  posthogCli(["sourcemap", "inject", "--directory", staticDir, ...release]);
-  posthogCli([
+  await posthogCli(["sourcemap", "inject", "--directory", staticDir, ...release]);
+  await posthogCli([
     "sourcemap",
     "upload",
     "--directory",

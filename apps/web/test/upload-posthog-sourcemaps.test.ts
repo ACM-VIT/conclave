@@ -88,6 +88,65 @@ setInterval(() => {}, 1000);
   chmodSync(cli, 0o755);
 };
 
+/** Records when each upload request arrives, and never answers. */
+const startRecordingUploadHost = async () => {
+  const requestTimes: number[] = [];
+  const server = createServer((request) => {
+    requestTimes.push(Date.now());
+    request.resume();
+  });
+  servers.push(server);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as AddressInfo;
+  return { host: `http://127.0.0.1:${port}`, requestTimes };
+};
+
+// Shaped like the npm @posthog/cli: a node wrapper that runs the real
+// uploader as its own child and waits on it. This uploader sends a request
+// every 200 ms, never finishes, and ignores SIGTERM.
+const installWrappedUploaderCli = (root: string, bin: string) => {
+  const uploader = path.join(root, "uploader.cjs");
+  writeFileSync(
+    uploader,
+    `require("node:fs").writeFileSync(${JSON.stringify(path.join(root, "uploader.pid"))}, String(process.pid));
+process.on("SIGTERM", () => {});
+const http = require("node:http");
+setInterval(() => {
+  const request = http.request(process.env.POSTHOG_CLI_HOST + "/api/sourcemaps", { method: "POST" });
+  request.on("error", () => {});
+  request.end("chunk");
+}, 200);
+`,
+  );
+  const cli = path.join(bin, "posthog-cli");
+  writeFileSync(
+    cli,
+    `#!${process.execPath}
+require("node:fs").writeFileSync(${JSON.stringify(path.join(root, "wrapper.pid"))}, String(process.pid));
+const result = require("node:child_process").spawnSync(process.execPath, [${JSON.stringify(uploader)}, ...process.argv.slice(2)], { stdio: "inherit" });
+process.exit(result.status ?? 1);
+`,
+  );
+  chmodSync(cli, 0o755);
+};
+
+const runUploadAsync = (fixture: { root: string; bin: string }, env: Record<string, string>) =>
+  new Promise<{ status: number | null; stderr: string; exitedAt: number }>((resolve) => {
+    const child = spawn(process.execPath, [script], {
+      cwd: fixture.root,
+      env: {
+        PATH: `${fixture.bin}:/usr/bin:/bin`,
+        HOME: fixture.root,
+        POSTHOG_CLI_API_KEY: "phx_fake_not_real",
+        POSTHOG_CLI_PROJECT_ID: "1",
+        ...env,
+      },
+    });
+    let stderr = "";
+    child.stderr.on("data", (chunk) => (stderr += chunk));
+    child.on("close", (status) => resolve({ status, stderr, exitedAt: Date.now() }));
+  });
+
 const isRunning = (pid: number) => {
   try {
     process.kill(pid, 0);
@@ -148,6 +207,27 @@ describe("upload-posthog-sourcemaps", () => {
     expect(isRunning(Number(readFileSync(pidFile, "utf8")))).toBe(false);
     expect(mapsLeft(fixture.chunks)).toEqual([]);
   }, 20_000);
+
+  it("stops the uploader the npm wrapper started before removing the maps", async () => {
+    const fixture = buildFixture(null);
+    installWrappedUploaderCli(fixture.root, fixture.bin);
+    const uploadHost = await startRecordingUploadHost();
+
+    const result = await runUploadAsync(fixture, {
+      POSTHOG_CLI_HOST: uploadHost.host,
+      POSTHOG_SOURCEMAPS_TIMEOUT_MS: "1500",
+    });
+    const sentBeforeExit = uploadHost.requestTimes.length;
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+
+    expect(sentBeforeExit).toBeGreaterThan(0);
+    expect(result.status).toBe(0);
+    expect(result.stderr).toMatch(/did not finish within 1\.5 s/);
+    expect(isRunning(Number(readFileSync(path.join(fixture.root, "wrapper.pid"), "utf8")))).toBe(false);
+    expect(isRunning(Number(readFileSync(path.join(fixture.root, "uploader.pid"), "utf8")))).toBe(false);
+    expect(uploadHost.requestTimes.filter((at) => at > result.exitedAt)).toEqual([]);
+    expect(mapsLeft(fixture.chunks)).toEqual([]);
+  }, 30_000);
 
   it("uploads and removes the maps when posthog-cli succeeds", () => {
     const fixture = buildFixture(0);
