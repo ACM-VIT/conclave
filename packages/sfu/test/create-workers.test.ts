@@ -149,14 +149,21 @@ it.each([
 });
 
 it.each([
-  { affinity: 2, instances: 3, appDocuments: 1, allowed: true },
-  { affinity: 2, instances: 3, appDocuments: 2, allowed: false },
-  { affinity: 8, instances: 2, appDocuments: 4, allowed: true },
-  { affinity: 8, instances: 2, appDocuments: 5, allowed: false },
-])("allows $appDocuments app document workers on $affinity CPUs shared by $instances instances: $allowed", ({ affinity, instances, appDocuments, allowed }) => {
+  { affinity: 2, instances: 3, mediasoup: undefined, appDocuments: 1, allowed: true },
+  { affinity: 2, instances: 3, mediasoup: undefined, appDocuments: 2, allowed: false },
+  { affinity: 2, instances: 1, mediasoup: undefined, appDocuments: 2, allowed: false },
+  { affinity: 8, instances: 2, mediasoup: undefined, appDocuments: 3, allowed: true },
+  { affinity: 8, instances: 2, mediasoup: undefined, appDocuments: 4, allowed: false },
+  { affinity: 8, instances: 1, mediasoup: 6, appDocuments: 2, allowed: true },
+  { affinity: 8, instances: 1, mediasoup: 6, appDocuments: 3, allowed: false },
+])("allows $appDocuments app document workers beside $mediasoup mediasoup workers on $affinity CPUs for $instances instances: $allowed", ({ affinity, instances, mediasoup, appDocuments, allowed }) => {
   vi.mocked(availableParallelism).mockReturnValue(affinity);
   vi.mocked(readFileSync).mockImplementation(() => { throw new Error("no cgroup limit"); });
-  const resolve = () => resolveAppDocumentWorkerCount({ appDocumentWorkerCount: appDocuments, hostInstanceCount: instances });
+  const resolve = () => resolveAppDocumentWorkerCount({
+    appDocumentWorkerCount: appDocuments,
+    hostInstanceCount: instances,
+    workerCount: mediasoup,
+  });
   try {
     if (allowed) expect(resolve()).toBe(appDocuments);
     else expect(resolve).toThrow(`SFU_APP_DOC_WORKERS=${appDocuments}`);

@@ -61,14 +61,18 @@ export const instanceCpuCount = (hostInstanceCount: number): number =>
 export const resolveAppDocumentWorkerCount = ({
   appDocumentWorkerCount,
   hostInstanceCount,
+  workerCount,
 }: {
   appDocumentWorkerCount: number;
   hostInstanceCount: number;
+  workerCount: number | undefined;
 }): number => {
   const cpus = instanceCpuCount(hostInstanceCount);
-  if (appDocumentWorkerCount > cpus) {
+  const mediasoupWorkers = workerCount ?? 1;
+  const allowed = Math.max(1, cpus - mediasoupWorkers);
+  if (appDocumentWorkerCount > allowed) {
     throw new Error(
-      `SFU_APP_DOC_WORKERS=${appDocumentWorkerCount} exceeds the ${cpus} CPU(s) this instance's share of the host allows`,
+      `SFU_APP_DOC_WORKERS=${appDocumentWorkerCount} leaves no CPU for ${mediasoupWorkers} mediasoup worker(s) in this instance's share of ${cpus} CPU(s); use at most ${allowed}`,
     );
   }
   return appDocumentWorkerCount;
