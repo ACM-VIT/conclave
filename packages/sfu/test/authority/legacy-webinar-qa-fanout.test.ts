@@ -449,4 +449,67 @@ describe("telling a webinar of old clients about a change", () => {
     expect(slow.heard.snapshots).toBe(heardBefore.snapshots + 1);
     expect(slow.entries.get(id)?.status).toBe("answered");
   });
+
+  it("holds a client that is behind to one whole list, the latest, however often its saved upvote is corrected", async () => {
+    const pressure = new Map<string, { packets: number; bytes: number }>();
+    const room = new Harness([pollsAuthority, qaAuthority], {
+      runtime: { pressure: (socket) => pressure.get(socket.id) ?? { packets: 0, bytes: 0 } },
+    });
+    room.setWebinar(true);
+    const hostTab = await room.open(host, qaContract);
+    const asker = listen(await room.open(person("a@example.com", "A", "attendee"), pollsContract));
+    // One person on two old clients: a phone, and a tab.
+    const vik = person("vik@example.com", "Vik", "attendee");
+    const phone = listen(await room.open(vik, pollsContract));
+    const tab = listen(await room.open(vik, pollsContract));
+    const asked = legacyQaSubmit(room.authority, asker.tab.context, "Upvoted, and then not, over and over");
+    const id = "id" in asked ? asked.id : "";
+    await hostTab.act("moderate", { id, action: "answering" });
+    await room.deliver();
+    await room.drain();
+    // The phone upvotes, and saves that it did.
+    const tapped = legacyQaUpvote(room.authority, phone.tab.context, id);
+    await room.advance(100);
+    await room.drain();
+    const listsBefore = phone.heard.snapshots;
+    const changesBefore = phone.heard.changes;
+
+    // The phone's socket falls behind. On the tab the person takes the
+    // upvote back, then gives and takes it again inside one flush, twice.
+    // Each time the phone's saved upvote is found wrong and a list is due.
+    pressure.set(phone.tab.seat.socket.id, { packets: 300, bytes: 0 });
+    const taps = [legacyQaUpvote(room.authority, tab.tab.context, id)];
+    await vi.advanceTimersByTimeAsync(120);
+    await room.drain();
+    for (let round = 0; round < 2; round += 1) {
+      taps.push(legacyQaUpvote(room.authority, tab.tab.context, id));
+      taps.push(legacyQaUpvote(room.authority, tab.tab.context, id));
+      await vi.advanceTimersByTimeAsync(120);
+      await room.drain();
+    }
+    const whileBehind = {
+      lists: phone.heard.snapshots - listsBefore,
+      changes: phone.heard.changes - changesBefore,
+    };
+
+    // It catches up, and is sent what there is to know, once.
+    pressure.delete(phone.tab.seat.socket.id);
+    await vi.advanceTimersByTimeAsync(400);
+    await room.drain();
+
+    expect(tapped).toEqual({ success: true, upvotes: 1, hasUpvoted: true });
+    expect(taps.map((tap) => ("hasUpvoted" in tap ? tap.hasUpvoted : tap))).toEqual([
+      false,
+      true,
+      false,
+      true,
+      false,
+    ]);
+    // Nothing is queued for a socket that is not keeping up.
+    expect(whileBehind).toEqual({ lists: 0, changes: 0 });
+    expect(phone.heard.snapshots - listsBefore).toBe(1);
+    expect(phone.entries.get(id)).toMatchObject({ hasUpvoted: false, upvotes: 0 });
+    // The tab kept up, and was never sent a list over any of it.
+    expect(tab.entries.get(id)).toMatchObject({ hasUpvoted: false, upvotes: 0 });
+  });
 });

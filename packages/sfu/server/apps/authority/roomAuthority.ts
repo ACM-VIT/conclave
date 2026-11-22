@@ -104,6 +104,15 @@ export type Observer = {
    */
   isLive: () => boolean;
   /**
+   * Whether the connection's socket can take more right now. Ask before
+   * anything is sent to it later than the frame that caused it. A socket
+   * that is behind gets nothing more queued: it is marked so, and once it
+   * has caught up the observer is told that its view was replaced, which is
+   * the time to say everything again, once. One whose queue is full is
+   * disconnected.
+   */
+  hasRoom: () => boolean;
+  /**
    * The connection's view as committed at this moment, to read rows from
    * before saying them. Ask `isLive` first. The reader is good only for the
    * turn it was taken in.
@@ -402,6 +411,10 @@ export class RoomAuthority {
     return {
       close: () => this.drop(subscription),
       isLive: () => this.refresh(subscription) === "live",
+      hasRoom: () =>
+        !subscription.dropped &&
+        !this.dormant.has(subscription) &&
+        this.hasRoom(subscription),
       view: () => subscription.instance.committedView(subscription.actor),
       subject: () => subscription.actor.subject,
     };

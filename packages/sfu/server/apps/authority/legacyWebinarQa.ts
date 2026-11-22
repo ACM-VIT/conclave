@@ -308,7 +308,8 @@ type SharedChange = { payload: WebinarQaChangedNotification; sockets: string[] }
  * Everything said is read from the connection's view as committed now, and
  * the seat is checked against the room as it is now. A seat removed since
  * the change was noted is sent nothing, and a question hidden since is not
- * said as it was.
+ * said as it was. The socket is checked too: one that is behind is sent
+ * nothing until it has caught up, and then one whole list.
  *
  * A changed question reads the same for nearly everyone, so its event is
  * built and encoded once for each distinct reading and written to all the
@@ -385,6 +386,18 @@ const say = (authority: RoomAuthority, room: RoomFeeds): void => {
         if (feed.said.has(id) && sees(view, id)) feed.listDue = true;
         else feed.saved.delete(id);
       }
+    }
+
+    // A socket that is behind is sent nothing more, whatever asked for it:
+    // a frame, the room's policy, or a check of what its client saved. The
+    // runtime marks it behind and tells this feed that its view was
+    // replaced once it has caught up. That is one whole list, read then, so
+    // however much was due in between, the socket is owed at most one list
+    // and gets the latest.
+    if ((feed.listDue || feed.pending.size > 0) && !observer.hasRoom()) {
+      feed.listDue = false;
+      feed.pending.clear();
+      continue;
     }
 
     if (feed.listDue) {
