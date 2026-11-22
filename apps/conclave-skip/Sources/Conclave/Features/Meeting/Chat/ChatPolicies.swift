@@ -1,8 +1,6 @@
 import Foundation
 
 enum ChatLinkifyPolicy {
-    private static let lettersLower = "abcdefghijklmnopqrstuvwxyz"
-    private static let digits = "0123456789"
     private static let trailingPunctuation = "),.!?;:"
 
     static func spans(_ content: String) -> [ChatSpan] {
@@ -136,12 +134,14 @@ enum ChatLinkifyPolicy {
         return first.isWhitespace || first.isNewline
     }
 
+    // Range checks on one-character strings, not a substring search per character: the scanner runs
+    // these for every character of every message.
     private static func isAsciiLetter(_ character: String) -> Bool {
-        lettersLower.contains(character.lowercased()) && character.count == 1
+        character.count == 1 && ((character >= "a" && character <= "z") || (character >= "A" && character <= "Z"))
     }
 
     private static func isAlphanumeric(_ character: String) -> Bool {
-        isAsciiLetter(character) || (digits.contains(character) && character.count == 1)
+        isAsciiLetter(character) || (character.count == 1 && character >= "0" && character <= "9")
     }
 
     private static func isLabelCharacter(_ character: String) -> Bool {

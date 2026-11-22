@@ -70,6 +70,11 @@ final class ChatPresenter {
     @ObservationIgnored private var serverToClientRowId: [String: String] = [:]
 
     @ObservationIgnored private var spansCache: [String: [ChatSpan]] = [:]
+    /// Emoji shortcode replacement per row, keyed by the text it was made from. The replacement runs
+    /// the link scanner over the whole message, so each message pays for it once, not on every rebuild.
+    @ObservationIgnored private var emojiBodySource: [String: String] = [:]
+    @ObservationIgnored private var emojiBodyCache: [String: String] = [:]
+    @ObservationIgnored private(set) var emojiParseCount = 0
     @ObservationIgnored private var spansSignature: [String: String] = [:]
 
     @ObservationIgnored private var slowTasks: [String: Task<Void, Never>] = [:]
@@ -726,7 +731,7 @@ final class ChatPresenter {
         } else if kind == ChatRowKind.voice {
             body = VoiceMessageText.spokenText(normalizedContent: message.content)
         } else if kind == ChatRowKind.text && !message.isTts {
-            body = EmojiShortcodes.replaceInMessage(body)
+            body = cachedEmojiBody(rowId: rowId, content: body)
         }
         let spans = kind == ChatRowKind.assistant && !assistantDone ? []
             : cachedSpans(rowId: rowId, body: body, kind: kind, tokens: tokens, youToken: youToken, signature: tokenSignature)
@@ -858,6 +863,17 @@ final class ChatPresenter {
         return min(1.8, max(0.6, aspect))
     }
 
+    private func cachedEmojiBody(rowId: String, content: String) -> String {
+        if emojiBodySource[rowId] == content, let cached = emojiBodyCache[rowId] {
+            return cached
+        }
+        let replaced = EmojiShortcodes.replaceInMessage(content)
+        emojiParseCount += 1
+        emojiBodySource[rowId] = content
+        emojiBodyCache[rowId] = replaced
+        return replaced
+    }
+
     private func cachedSpans(rowId: String, body: String, kind: ChatRowKind, tokens: [String], youToken: String,
                              signature: String) -> [ChatSpan] {
         let key = kind.rawValue + "|" + signature + "|" + body
@@ -905,6 +921,14 @@ final class ChatPresenter {
         for key in stale {
             spansCache.removeValue(forKey: key)
             spansSignature.removeValue(forKey: key)
+        }
+        var staleEmoji: [String] = []
+        for key in emojiBodyCache.keys {
+            if live[key] == nil { staleEmoji.append(key) }
+        }
+        for key in staleEmoji {
+            emojiBodyCache.removeValue(forKey: key)
+            emojiBodySource.removeValue(forKey: key)
         }
         var staleEmbeds: [String] = []
         for key in embedURLCache.keys {
