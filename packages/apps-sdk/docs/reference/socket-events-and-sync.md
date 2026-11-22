@@ -235,7 +235,7 @@ This keeps sync stable across browser, native, and server runtimes.
 - `clearApp(...)`
 - `setLocked(...)`
 
-If no ack is received in time, those methods resolve `false`.
+If no ack is received in time, those methods resolve `{ ok: false, reason: "failed" }`.
 
 ## Debug Checklist
 
