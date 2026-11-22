@@ -1069,11 +1069,11 @@ export function useMeetSocket({
   const relayOnlyIceRef = useRef(false);
   const mediaPathReconnectTriedRef = useRef({ producer: false, consumer: false });
   const escalatedTransportsRef = useRef(new WeakSet<Transport>());
-  const pendingMediaPathRecoveryRef = useRef<{
-    transportKind: "producer" | "consumer";
-    transport: Transport;
-    reason: string;
-  } | null>(null);
+  // Rebuilds asked for while a rejoin was running, one per direction, so a
+  // send failure cannot overwrite a receive failure that is still waiting.
+  const pendingMediaPathRecoveryRef = useRef(
+    new Map<"producer" | "consumer", { transport: Transport; reason: string }>(),
+  );
   const blockedMediaPathsRef = useRef(new Set<"producer" | "consumer">());
   const reconnectGenerationRef = useRef(0);
   const reconnectBackoffCancelRef = useRef<(() => void) | null>(null);
@@ -1469,11 +1469,10 @@ export function useMeetSocket({
         reconnectInFlight: reconnectInFlightRef.current,
       });
       if (step === "wait-for-reconnect") {
-        pendingMediaPathRecoveryRef.current = {
-          transportKind,
+        pendingMediaPathRecoveryRef.current.set(transportKind, {
           transport,
           reason,
-        };
+        });
         return;
       }
       escalatedTransportsRef.current.add(transport);
@@ -1532,8 +1531,9 @@ export function useMeetSocket({
   const noteMediaPathConnected = useCallback(
     (transportKind: "producer" | "consumer", transport: Transport) => {
       escalatedTransportsRef.current.delete(transport);
-      if (pendingMediaPathRecoveryRef.current?.transport === transport) {
-        pendingMediaPathRecoveryRef.current = null;
+      const pending = pendingMediaPathRecoveryRef.current;
+      if (pending.get(transportKind)?.transport === transport) {
+        pending.delete(transportKind);
       }
       mediaPathReconnectTriedRef.current[transportKind] = false;
       const blockedPaths = blockedMediaPathsRef.current;
@@ -9581,14 +9581,12 @@ export function useMeetSocket({
         reconnectInFlightRef.current = false;
         // A transport this rejoin built may have failed before it finished.
         // Its rebuild waited for the rejoin, so run it now.
-        const pending = pendingMediaPathRecoveryRef.current;
-        pendingMediaPathRecoveryRef.current = null;
-        if (rejoined && pending) {
-          escalateMediaPathFailure(
-            pending.transportKind,
-            pending.transport,
-            pending.reason,
-          );
+        const pending = [...pendingMediaPathRecoveryRef.current];
+        pendingMediaPathRecoveryRef.current.clear();
+        if (rejoined) {
+          for (const [transportKind, { transport, reason }] of pending) {
+            escalateMediaPathFailure(transportKind, transport, reason);
+          }
         }
       }
     }
