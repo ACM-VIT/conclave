@@ -1,4 +1,4 @@
-import type { ConnectionState, MeetError, VideoQuality } from "./types";
+import type { ConnectionState, MeetError, MeetFailureReason, VideoQuality } from "./types";
 
 /**
  * Call-quality metrics for one browser tab, sent as at most three PostHog
@@ -63,18 +63,7 @@ export type ConnectionSnapshot = {
   reconnecting: boolean;
 };
 
-export type JoinFailureReason =
-  | "rejected"
-  | "invite_code"
-  | "room_not_found"
-  | "room_unavailable"
-  | "auth"
-  | "timeout"
-  | "permission_denied"
-  | "media_error"
-  | "transport_error"
-  | "connection_failed"
-  | "unknown";
+export type JoinFailureReason = MeetFailureReason;
 
 const FIRST_MEDIA_DEADLINE_MS = 20_000;
 const REMOTE_AT_JOIN_GRACE_MS = 3_000;
@@ -103,8 +92,10 @@ const FAILURE_CODES: Record<MeetError["code"], JoinFailureReason> = {
   UNKNOWN: "unknown",
 };
 
+/** The failure's category: its own reason when it carries one, else read from it. */
 export function joinFailureReason(error: MeetError | null): JoinFailureReason {
   if (!error) return "unknown";
+  if (error.reason) return error.reason;
   const match = FAILURE_PATTERNS.find(([pattern]) => pattern.test(error.message));
   return match ? match[1] : FAILURE_CODES[error.code];
 }

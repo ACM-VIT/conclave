@@ -75,7 +75,12 @@ import type {
   WebinarUpdateRequest,
 } from "../lib/types";
 import type { ParticipantAction } from "../lib/participant-reducer";
-import { createMeetError, isSystemUserId, normalizeDisplayName } from "../lib/utils";
+import {
+  createMeetError,
+  isSystemUserId,
+  MeetFailure,
+  normalizeDisplayName,
+} from "../lib/utils";
 import { normalizeChatMessage } from "../lib/chat-commands";
 import {
   type AssistantChatMessage,
@@ -7018,7 +7023,7 @@ export function useMeetSocket({
 
             const connectionTimeout = setTimeout(() => {
               socket.disconnect();
-              reject(new Error("Connection timeout"));
+              reject(new MeetFailure("Connection timeout", "timeout"));
             }, SOCKET_CONNECT_TIMEOUT_MS);
 
             socket.on("connect", () => {

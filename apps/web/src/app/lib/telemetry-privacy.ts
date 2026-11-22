@@ -189,7 +189,7 @@ const KNOWN_ERROR_TYPES = new Set([
   "SecurityError", "TimeoutError", "TransactionInactiveError", "TypeMismatchError",
   "UnknownError", "URLMismatchError", "VersionError", "WrongDocumentError",
   "ChunkLoadError", "UnhandledRejection", "UnsupportedError", "CallError",
-  "ServerError", "JoinRoomRedirectError",
+  "ServerError", "JoinRoomRedirectError", "MeetFailure",
 ]);
 const MESSAGE_WITHHELD = "[message withheld]";
 const TYPE_WITHHELD = "[type withheld]";

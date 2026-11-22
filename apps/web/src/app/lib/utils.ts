@@ -1,6 +1,6 @@
 import { EMOJI_REACTIONS, type ReactionEmoji } from "./constants";
 import { isMediaCaptureTimeoutError } from "./media-capture-timeout";
-import type { MeetError, ReactionOption } from "./types";
+import type { MeetError, MeetFailureReason, ReactionOption } from "./types";
 
 export const toError = (value: unknown): Error =>
   value instanceof Error ? value : new Error(String(value));
@@ -141,9 +141,29 @@ export function extractRoomCode(input: string): string {
   return sanitizeRoomCode(trimmed);
 }
 
+/** An error that knows why it happened, so reports need not read its message. */
+export class MeetFailure extends Error {
+  constructor(
+    message: string,
+    readonly reason: MeetFailureReason,
+  ) {
+    super(message);
+    this.name = "MeetFailure";
+  }
+}
+
 export function createMeetError(
   error: unknown,
   defaultCode: MeetError["code"] = "UNKNOWN"
+): MeetError {
+  const reason = error instanceof MeetFailure ? error.reason : undefined;
+  const meetError = describeMeetError(error, defaultCode);
+  return reason ? { ...meetError, reason } : meetError;
+}
+
+function describeMeetError(
+  error: unknown,
+  defaultCode: MeetError["code"],
 ): MeetError {
   const message = error instanceof Error ? error.message : String(error);
 
