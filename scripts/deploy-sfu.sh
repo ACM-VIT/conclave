@@ -316,6 +316,10 @@ fi
 DRAIN_TIMEOUT_SECONDS="${DRAIN_TIMEOUT_SECONDS:-3600}"
 DRAIN_POLL_SECONDS="${DRAIN_POLL_SECONDS:-10}"
 HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-120}"
+# A placement reserved just before a drain can still turn into a room on that
+# instance until it expires (the SFU's placement TTL is 20 s), so an instance
+# only counts as empty once that long has passed since its drain.
+PLACEMENT_SETTLE_SECONDS="${PLACEMENT_SETTLE_SECONDS:-25}"
 # Exit code when a meeting outlasts the drain deadline: nothing was rebuilt
 # under it, and rerunning the deploy later finishes the job.
 EXIT_BLOCKED_BY_ROOMS=3
@@ -398,11 +402,13 @@ set_draining() {
     -d "$payload"
 }
 
-# Waits for an instance to report zero rooms. An unreadable status is not
-# zero: it keeps waiting. Returns 1 at the deadline.
+# Waits for an instance to report zero rooms, and not before settle_until (a
+# Unix time). An unreadable status is not zero: it keeps waiting. Returns 1 at
+# the deadline.
 wait_for_empty() {
   local svc="$1"
   local url="$2"
+  local settle_until="${3:-0}"
   local start_ts
   start_ts="$(date +%s)"
   while true; do
@@ -413,9 +419,9 @@ wait_for_empty() {
     fi
     echo "${svc} active rooms: ${rooms}"
     if [[ "$rooms" == "0" ]]; then
-      return 0
-    fi
-    if (( $(date +%s) - start_ts >= DRAIN_TIMEOUT_SECONDS )); then
+      (( $(date +%s) >= settle_until )) && return 0
+      echo "${svc} waiting for placements reserved before the drain to expire"
+    elif (( $(date +%s) - start_ts >= DRAIN_TIMEOUT_SECONDS )); then
       return 1
     fi
     sleep "$DRAIN_POLL_SECONDS"
@@ -475,7 +481,7 @@ rollback_service() {
 # call, and is recreated undrained from the same image only once it passes.
 deploy_service() {
   local svc="$1"
-  local url image_name container status="" previous_image=""
+  local url image_name container status="" previous_image="" settle_until=0
   url="$(service_url "$svc")"
   image_name="$(service_image_name "$svc")"
   container="$(service_container "$svc")"
@@ -515,9 +521,10 @@ deploy_service() {
       echo "Failed to drain ${svc}; not rebuilding it." >&2
       return 1
     fi
+    settle_until=$(( $(date +%s) + PLACEMENT_SETTLE_SECONDS ))
     if [[ "$FORCE_DRAIN" == "true" && "$(printf "%s" "$drain_response" | json_field forced || echo false)" == "true" ]]; then
       echo "Force drain applied to ${svc}; skipping the room wait."
-    elif ! wait_for_empty "$svc" "$url"; then
+    elif ! wait_for_empty "$svc" "$url" "$settle_until"; then
       if [[ "$was_draining" != "true" ]]; then
         set_draining "$url" false >/dev/null || true
       fi
@@ -537,6 +544,7 @@ deploy_service() {
     return 1
   else
     echo "${svc} is not running; starting it without a drain."
+    settle_until=$(( $(date +%s) + PLACEMENT_SETTLE_SECONDS ))
   fi
 
   if [[ -n "$previous_image" ]]; then
@@ -550,6 +558,16 @@ deploy_service() {
     failure="${svc} did not report healthy within ${HEALTH_TIMEOUT_SECONDS}s"
   elif ! run_canary "$svc" "$url"; then
     failure="the canary call against ${svc} failed"
+  elif ! wait_for_empty "$svc" "$url" "$settle_until"; then
+    # The build passed, but a call reached it while it was out of rotation.
+    # The recreate below would cut that call, so the instance stays drained
+    # on the new image until a rerun finds it empty.
+    VERIFIED_IMAGE="$TARGET_IMAGE"
+    save_deploy_state
+    echo "" >&2
+    echo "Deploy paused: ${svc} passed its canary, but a call is running on it while it is out of rotation." >&2
+    echo "Rerun this script once that call ends." >&2
+    return "$EXIT_BLOCKED_BY_ROOMS"
   else
     # Same image, normal config: the serving container boots undrained and
     # stays that way across restarts.
