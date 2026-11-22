@@ -1687,12 +1687,22 @@ export class TranscriptRoom {
     }
   }
 
-  /** Saves the drained lines still on screen, unless a final already landed. */
+  /**
+   * Saves the drained lines still on screen, unless a final already landed,
+   * in one snapshot write, and only then lets the drain go.
+   */
   private async finishProviderDrain(drain: ProviderDrain): Promise<void> {
-    for (const segment of this.discardProviderDrain(drain)) {
+    if (this.providerDrains.get(drain.epoch) !== drain) return;
+    let saved = false;
+    for (const segment of drain.partials.values()) {
       if (this.hasFinalSegment(segment.itemId)) continue;
-      await this.saveFinalSegment(segment, "");
+      saved = this.recordFinalSegment(segment, "") || saved;
     }
+    if (saved) {
+      await this.persist();
+      this.scheduleMinutes();
+    }
+    this.discardProviderDrain(drain);
   }
 
   /**
@@ -2263,14 +2273,24 @@ export class TranscriptRoom {
     segment: TranscriptSegment,
     transcript: string,
   ): Promise<void> {
+    if (!this.recordFinalSegment(segment, transcript)) return;
+    await this.persist();
+    this.scheduleMinutes();
+  }
+
+  /** Puts a final in its place and shows it; false when nothing changed. */
+  private recordFinalSegment(
+    segment: TranscriptSegment,
+    transcript: string,
+  ): boolean {
     const text = transcript.trim() || segment.text.trim();
-    if (!text) return;
+    if (!text) return false;
     const existingIndex = this.segments.findIndex(
       (candidate) => candidate.itemId === segment.itemId,
     );
     const existing = existingIndex >= 0 ? this.segments[existingIndex] : null;
     // A repeated final changes nothing; a corrected one keeps its place.
-    if (existing?.text === text) return;
+    if (existing?.text === text) return false;
 
     const now = Date.now();
     const finalSegment: TranscriptSegment = {
@@ -2288,8 +2308,7 @@ export class TranscriptRoom {
     this.segments.sort((left, right) => left.sequence - right.sequence);
     this.trimSegments();
     this.broadcast({ type: "segment.final", segment: finalSegment });
-    await this.persist();
-    this.scheduleMinutes();
+    return true;
   }
 
   private trimSegments(): void {

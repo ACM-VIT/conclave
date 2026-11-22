@@ -114,8 +114,9 @@ async function fixture(transcriptModel: string, env: Partial<Env> = {}) {
   const lastSnapshotTexts = () => snapshots.at(-1)?.segments.map(({ text }) => text) ?? [];
   const lastSnapshotSegment = (text: string) =>
     snapshots.at(-1)?.segments.find((segment) => segment.text === text);
-  const restartedTexts = async () => {
-    const saved = structuredClone(snapshots.at(-1));
+  const snapshotCount = () => snapshots.length;
+  const restartedTexts = async (snapshotIndex = snapshots.length - 1) => {
+    const saved = structuredClone(snapshots[snapshotIndex]);
     const restarted = new TranscriptRoom(
       {
         storage: {
@@ -151,6 +152,7 @@ async function fixture(transcriptModel: string, env: Partial<Env> = {}) {
     lastSnapshotTexts,
     lastSnapshotSegment,
     restartedTexts,
+    snapshotCount,
     viewerSnapshot,
   };
 }
@@ -420,6 +422,28 @@ describe("drain cases reproduced across review rounds", () => {
     await settle();
 
     expect(await restartedTexts()).toEqual(["Friday at noon"]);
+  });
+
+  it("keeps every drained line in the snapshot that finishes the drain", async () => {
+    vi.useFakeTimers();
+    const { sockets, start, switchTo, speak, commit, restartedTexts, snapshotCount } = await fixture(OPENAI);
+    await start("en");
+    const before = sockets[0];
+    for (const [itemId, text] of [["item_1", "First line"], ["item_2", "Second line"]]) {
+      await speak();
+      await commit();
+      before.emit(openAiCommitted(itemId));
+      before.emit(openAiDelta(itemId, text));
+      await settle();
+    }
+
+    await switchTo("hi");
+    const finishing = snapshotCount();
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    expect(snapshotCount()).toBeGreaterThan(finishing);
+    expect(await restartedTexts(finishing)).toEqual(["First line", "Second line"]);
+    expect(before.closed).toBe(true);
   });
 
   it("orders reverse-arriving finals across three switches and closes every old socket", async () => {
