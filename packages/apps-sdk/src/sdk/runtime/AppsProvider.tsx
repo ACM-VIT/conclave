@@ -38,6 +38,7 @@ const SYNC_GIVE_UP_MS = 30_000;
 
 type SyncRun = {
   appId: string;
+  doc: Y.Doc;
   startedAt: number;
   attempt: number;
   timer?: ReturnType<typeof setTimeout>;
@@ -166,7 +167,14 @@ export function AppsProvider({
 
   const serverActiveAppIdRef = useRef<string | null>(null);
 
+  const stopSync = useCallback(() => {
+    clearTimeout(syncRunRef.current?.timer);
+    syncRunRef.current = null;
+  }, []);
+
   const resetLocalData = useCallback(() => {
+    stopSync();
+    setSyncStatus("idle");
     for (const [appId, doc] of docsRef.current.entries()) {
       const handler = docHandlersRef.current.get(appId);
       if (handler) {
@@ -195,7 +203,7 @@ export function AppsProvider({
     initialUpdateSentRef.current.clear();
     serverActiveAppIdRef.current = null;
     setState({ activeAppId: null, locked: false });
-  }, []);
+  }, [stopSync]);
 
   useEffect(() => {
     if (socketRef.current !== socket) {
@@ -228,18 +236,6 @@ export function AppsProvider({
     pendingInitialUpdatesRef.current.delete(appId);
     initialUpdateSentRef.current.delete(appId);
   }, []);
-
-  const applyServerAppsState = useCallback(
-    (next: AppsState) => {
-      const previous = serverActiveAppIdRef.current;
-      serverActiveAppIdRef.current = next.activeAppId;
-      if (previous && previous !== next.activeAppId) {
-        discardLocalApp(previous);
-      }
-      setState(next);
-    },
-    [discardLocalApp],
-  );
 
   const registerDocHandlers = useCallback((appId: string, doc: Y.Doc) => {
     if (docHandlersRef.current.has(appId)) return;
@@ -330,70 +326,48 @@ export function AppsProvider({
     [getDoc, registerAwarenessHandlers]
   );
 
-  const refreshState = useCallback(() => {
-    const currentSocket = socketRef.current;
-    if (!currentSocket) return;
-
-    currentSocket.emit("apps:getState", (response?: unknown) => {
-      if (isAppsState(response)) {
-        applyServerAppsState(response);
-      }
-    });
-  }, [applyServerAppsState]);
-
   const applySync = useCallback(
-    (appId: string, response: AppsSyncResponse, currentSocket: Socket) => {
-      if (!response.syncMessage) return;
-      const doc = getDoc(appId);
-      const awareness = getAwareness(appId);
-
+    (run: SyncRun, response: AppsSyncResponse, currentSocket: Socket): boolean => {
       const update = toUint8Array(response.syncMessage);
-      if (!update || update.length === 0) return;
-
-      try {
-        Y.applyUpdate(doc, update, "remote");
-      } catch (err) {
-        console.warn("[Apps] Failed to apply sync update", err);
+      if (!update) return false;
+      if (update.length > 0) {
+        try {
+          Y.applyUpdate(run.doc, update, "remote");
+        } catch (err) {
+          console.warn("[Apps] Failed to apply sync update", err);
+          return false;
+        }
       }
 
       if (response.awarenessUpdate) {
         const awarenessUpdate = toUint8Array(response.awarenessUpdate);
         if (awarenessUpdate && awarenessUpdate.length > 0) {
           try {
-            applyAwarenessUpdate(awareness, awarenessUpdate, "remote");
+            applyAwarenessUpdate(getAwareness(run.appId), awarenessUpdate, "remote");
           } catch (err) {
             console.warn("[Apps] Failed to apply awareness update", err);
           }
         }
       }
 
-      if (response.stateVector) {
-        const serverVector = toUint8Array(response.stateVector);
-        if (!serverVector) return;
-        const updateForServer = Y.encodeStateAsUpdate(doc, serverVector);
-        if (updateForServer.length > 0 && !isReadOnlyRef.current) {
-          currentSocket.emit("apps:yjs:update", { appId, update: updateForServer });
+      const serverVector = response.stateVector ? toUint8Array(response.stateVector) : null;
+      if (serverVector && !isReadOnlyRef.current) {
+        const updateForServer = Y.encodeStateAsUpdate(run.doc, serverVector);
+        if (updateForServer.length > 0) {
+          currentSocket.emit("apps:yjs:update", { appId: run.appId, update: updateForServer });
         }
       }
+      return true;
     },
-    [getDoc, getAwareness]
+    [getAwareness]
   );
-
-  const stopSync = useCallback(() => {
-    clearTimeout(syncRunRef.current?.timer);
-    syncRunRef.current = null;
-  }, []);
 
   const attemptSync = useCallback(
     (run: SyncRun) => {
       const currentSocket = socketRef.current;
       if (syncRunRef.current !== run || !currentSocket?.connected) return;
 
-      getAwareness(run.appId);
-      const payload: AppsSyncPayload = {
-        appId: run.appId,
-        syncMessage: Y.encodeStateVector(getDoc(run.appId)),
-      };
+      const payload: AppsSyncPayload = { appId: run.appId, syncMessage: Y.encodeStateVector(run.doc) };
       let answered = false;
       const answer = (response?: AppsSyncResponse | AppsSyncError) => {
         if (answered) return;
@@ -403,13 +377,14 @@ export function AppsProvider({
 
         if (response && !("error" in response)) {
           syncRunRef.current = null;
-          setSyncStatus("synced");
-          applySync(run.appId, response, currentSocket);
+          setSyncStatus(applySync(run, response, currentSocket) ? "synced" : "failed");
           return;
         }
 
+        const hint = response?.retryAfterMs;
+        const usableHint = typeof hint === "number" && Number.isFinite(hint) ? Math.max(hint, 0) : 0;
         const backoff = SYNC_RETRY_DELAYS_MS[Math.min(run.attempt, SYNC_RETRY_DELAYS_MS.length - 1)];
-        const delay = Math.max(backoff, response?.retryAfterMs ?? 0);
+        const delay = Math.max(backoff, usableHint);
         const retryable = !response || response.retryable === true;
         if (!retryable || Date.now() - run.startedAt + delay > SYNC_GIVE_UP_MS) {
           syncRunRef.current = null;
@@ -420,27 +395,57 @@ export function AppsProvider({
         run.timer = setTimeout(() => attemptSync(run), delay);
       };
 
-      run.timer = setTimeout(() => answer(), ACK_TIMEOUT_MS);
+      const remaining = SYNC_GIVE_UP_MS - (Date.now() - run.startedAt);
+      run.timer = setTimeout(() => answer(), Math.max(0, Math.min(ACK_TIMEOUT_MS, remaining)));
       currentSocket.emit("apps:yjs:sync", payload, answer);
     },
-    [getDoc, getAwareness, applySync]
+    [applySync]
   );
 
   const startSync = useCallback(
     (appId: string) => {
       stopSync();
-      const run: SyncRun = { appId, startedAt: Date.now(), attempt: 0 };
+      const doc = getDoc(appId);
+      getAwareness(appId);
+      const run: SyncRun = { appId, doc, startedAt: Date.now(), attempt: 0 };
       syncRunRef.current = run;
       setSyncStatus("syncing");
       attemptSync(run);
     },
-    [stopSync, attemptSync]
+    [stopSync, getDoc, getAwareness, attemptSync]
   );
 
   const retrySync = useCallback(() => {
     const appId = serverActiveAppIdRef.current;
     if (appId) startSync(appId);
   }, [startSync]);
+
+  const applyServerAppsState = useCallback(
+    (next: AppsState) => {
+      const previous = serverActiveAppIdRef.current;
+      serverActiveAppIdRef.current = next.activeAppId;
+      if (previous !== next.activeAppId) {
+        stopSync();
+        if (previous) discardLocalApp(previous);
+        if (next.activeAppId) startSync(next.activeAppId);
+        else setSyncStatus("idle");
+      }
+      setState(next);
+    },
+    [discardLocalApp, startSync, stopSync],
+  );
+
+  const refreshState = useCallback(() => {
+    const currentSocket = socketRef.current;
+    if (!currentSocket) return;
+
+    currentSocket.emit("apps:getState", (response?: unknown) => {
+      if (socketRef.current !== currentSocket) return;
+      if (isAppsState(response)) {
+        applyServerAppsState(response);
+      }
+    });
+  }, [applyServerAppsState]);
 
   useEffect(() => {
     if (!socket) return;
@@ -509,23 +514,7 @@ export function AppsProvider({
     };
   }, [socket]);
 
-  useEffect(() => {
-    if (!socket || !state.activeAppId) {
-      stopSync();
-      setSyncStatus("idle");
-      return;
-    }
-    startSync(state.activeAppId);
-    return stopSync;
-  }, [socket, state.activeAppId, startSync, stopSync]);
-
-  useEffect(() => {
-    if (!socket) return;
-    socket.on("connect", retrySync);
-    return () => {
-      socket.off("connect", retrySync);
-    };
-  }, [socket, retrySync]);
+  useEffect(() => stopSync, [stopSync]);
 
   const openApp = useCallback(async (appId: string, options?: Record<string, unknown>) => {
     const currentSocket = socketRef.current;
