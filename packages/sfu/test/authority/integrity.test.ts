@@ -111,6 +111,125 @@ describe("cleared rows", () => {
   });
 });
 
+describe("the transaction budget", () => {
+  const mark = (noteId: string, n: number) => ({ noteId, n, shown: false });
+
+  it("keeps the rows when a clear runs a handler out of budget and the handler carries on", () => {
+    const store = new AuthorityStore(probeAuthority.runtime, {
+      ...DEFAULT_AUTHORITY_LIMITS,
+      transactionOps: 700,
+    });
+    for (const from of [0, 300]) {
+      store.transact((tx) => {
+        for (let n = from; n < from + 300; n += 1) tx.put("marks", key("a", String(n)), mark("a", n));
+      });
+    }
+
+    // 695 operations spent, and clearing 600 rows costs ten more.
+    const outcome = store.transact((tx) => {
+      for (let turn = 0; turn < 695; turn += 1) tx.count("marks");
+      try {
+        return tx.clear("marks", key("a"));
+      } catch {
+        return "carried on";
+      }
+    });
+
+    expect(outcome).toMatchObject({ ok: false, kind: "fault" });
+    expect(store.rows("marks").size).toBe(600);
+  });
+
+  it("answers thousands of checks on lists inside a large workspace for what they find", () => {
+    // Rows keyed workspace, list, item: 100 lists of 200 items in one workspace.
+    const store = new AuthorityStore(probeAuthority.runtime, {
+      ...DEFAULT_AUTHORITY_LIMITS,
+      transactionOps: 6_000,
+    });
+    for (let list = 0; list < 100; list += 1) {
+      store.transact((tx) => {
+        for (let item = 0; item < 200; item += 1) {
+          tx.put("marks", key("big", `list-${list}`, String(item)), mark("big", item));
+        }
+      });
+    }
+    store.transact((tx) => tx.put("marks", key("small", "list-0", "0"), mark("small", 0)));
+    const cpuMs = (run: () => void): number => {
+      const before = process.cpuUsage();
+      run();
+      const used = process.cpuUsage(before);
+      return (used.user + used.system) / 1_000;
+    };
+    /** 5,000 checks of lists that hold nothing, and clears of 500 of them. */
+    const checks = (workspace: string) => () => {
+      const outcome = store.transact((tx) => {
+        let found = 0;
+        for (let check = 0; check < 5_000; check += 1) {
+          found += tx.count("marks", key(workspace, `no-such-list-${check}`));
+        }
+        for (let check = 0; check < 500; check += 1) {
+          found += tx.clear("marks", key(workspace, `no-such-list-${check}`));
+        }
+        return found;
+      });
+      if (!outcome.ok) throw new Error(`the checks failed: ${outcome.kind}`);
+    };
+
+    const small = cpuMs(checks("small"));
+    const big = cpuMs(checks("big"));
+    const oneList = store.transact((tx) => tx.scan("marks", key("big", "list-3")).length);
+    // A list of 200 costs its 200 rows to read: a budget of 150 is not enough.
+    const tight = new AuthorityStore(probeAuthority.runtime, {
+      ...DEFAULT_AUTHORITY_LIMITS,
+      transactionOps: 450,
+    });
+    tight.transact((tx) => {
+      for (let item = 0; item < 200; item += 1) {
+        tx.put("marks", key("big", "list-3", String(item)), mark("big", item));
+      }
+    });
+    const twice = tight.transact((tx) => {
+      tx.scan("marks", key("big", "list-3"));
+      tx.scan("marks", key("big", "list-3"));
+      tx.scan("marks", key("big", "list-3"));
+    });
+
+    // The same work whatever else the workspace holds, not a walk of all of it.
+    expect(big).toBeLessThan(Math.max(small, 2) * 25);
+    expect(oneList).toEqual({ ok: true, value: 200, changed: false });
+    expect(twice).toMatchObject({ ok: false, kind: "fault" });
+  });
+
+  it("keeps a row and the rows under its key in the order they were written", () => {
+    const store = new AuthorityStore(probeAuthority.runtime, DEFAULT_AUTHORITY_LIMITS);
+    const keysUnder = (prefix: ReturnType<typeof key>) => {
+      const scanned = store.transact((tx) => tx.scan("marks", prefix).map(([rowKey]) => rowKey));
+      return scanned.ok ? scanned.value : [];
+    };
+    store.transact((tx) => tx.put("marks", key("a", "x"), mark("a", 1)));
+    store.transact((tx) => tx.put("marks", key("a"), mark("a", 2)));
+    store.transact((tx) => tx.put("marks", key("a", "y"), mark("a", 3)));
+    store.transact((tx) => tx.put("marks", key("a", "x", "deep"), mark("a", 4)));
+
+    const all = keysUnder(key("a"));
+    const underX = keysUnder(key("a", "x"));
+    store.transact((tx) => tx.delete("marks", key("a", "x")));
+    const afterDelete = keysUnder(key("a"));
+    const counted = store.transact((tx) => [
+      tx.count("marks", key("a")),
+      tx.count("marks", key("a", "x")),
+      tx.count("marks", key("a", "y")),
+      tx.count("marks", key("b")),
+    ]);
+    store.transact((tx) => tx.clear("marks", key("a", "x")));
+
+    expect(all).toEqual([key("a", "x"), key("a"), key("a", "y"), key("a", "x", "deep")]);
+    expect(underX).toEqual([key("a", "x"), key("a", "x", "deep")]);
+    expect(afterDelete).toEqual([key("a"), key("a", "y"), key("a", "x", "deep")]);
+    expect(counted.ok && counted.value).toEqual([3, 1, 1, 0]);
+    expect(keysUnder(key("a"))).toEqual([key("a"), key("a", "y")]);
+  });
+});
+
 describe("projected keys", () => {
   it("keeps the first row when two rows claim one key, through the second's removal", async () => {
     const room = new Harness([probeAuthority], { runtime: { verifyViews: false } });

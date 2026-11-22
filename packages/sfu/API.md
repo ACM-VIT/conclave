@@ -27,7 +27,7 @@ This means:
 
 ## Authority Apps
 
-`SFU_APPS_AUTHORITY_ENABLED=1` turns on the server-authoritative app runtime (`server/apps/authority`). It is off by default. With it off, no `apps:authority:*` event has a listener and the SFU answers like one that predates the runtime.
+`SFU_APPS_AUTHORITY_ENABLED=1` turns on the server-authoritative app runtime (`server/apps/authority`). It is off by default. With it off, no `apps:authority:*` event has a listener and the SFU answers like one that predates the runtime. The value is read once at startup: changing it needs a restart, and a process that is still running keeps the mode it started with for its rooms.
 
 The runtime runs only the modules imported in `server/apps/authority/registry.ts`. It resolves each connection against the live room on every request and before every frame, so a removed or replaced seat receives nothing more. The wire, the guarantees and the limits are in `packages/apps-sdk/docs/reference/authority-runtime.md`.
 

@@ -669,7 +669,7 @@ describe("making room in a Q&A book that a large webinar upvoted", () => {
       subjects: new Set(attendees.map((attendee) => attendee.subject)),
     };
     const heldUpvotes = (who: Actor): number =>
-      qa.snapshot(who).filter((sized) => sized.row.bucket === "myUpvotes").length;
+      qa.snapshot(who).rows.filter((sized) => sized.row.bucket === "myUpvotes").length;
     for (const attendee of attendees) qa.snapshot(attendee);
     qa.flushViews(live);
     const heldBefore = heldUpvotes(attendees[4_999]);
@@ -693,7 +693,8 @@ describe("making room in a Q&A book that a large webinar upvoted", () => {
       const flushed = qa.flushViews(live);
       removedPerFlush.push(
         [...flushed.personal.values()]
-          .flatMap((ops) => ops.remove)
+          // As told to someone who has held their view all along.
+          .flatMap((changes) => changes.for(0)?.remove ?? [])
           .filter((row) => row.bucket === "myUpvotes").length,
       );
     }

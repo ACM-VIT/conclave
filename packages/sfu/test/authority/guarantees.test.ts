@@ -635,6 +635,217 @@ describe("delivery", () => {
   });
 });
 
+describe("a view taken between a write and its flush", () => {
+  /** The rows of one bucket a tab was handed whole when it opened the app. */
+  const handed = (tab: Tab, bucket: string) =>
+    replaces(tab.frames)
+      .flatMap((frame) => frame.rows)
+      .filter((row) => row.bucket === bucket);
+  /** Every key a tab was told to drop. */
+  const toldToDrop = (tab: Tab): string[] =>
+    patches(tab.frames).flatMap((frame) => frame.remove.map((row) => row.key));
+
+  it("leaves out a question the host hid a moment before", async () => {
+    const room = new Harness([qaAuthority]);
+    const hostTab = await room.open(host, qaContract);
+    const priyaTab = await room.open(priya, qaContract);
+    const asked = await priyaTab.act("ask", { text: "A question to hide" });
+    const id = field(asked.ok ? asked.value : null, "id") as string;
+    await room.deliver();
+    const shownBefore = priyaTab.rows("questions").length;
+
+    // The hide has committed. The flush that follows it is 50 ms away.
+    const flushesBefore = room.authority.stats.flushes;
+    const hidden = await hostTab.act("moderate", { id, action: "dismissed" });
+    const late = await room.open(ravi, qaContract);
+    const flushedMeanwhile = room.authority.stats.flushes - flushesBefore;
+    const handedToLate = handed(late, "questions").map((row) => row.key);
+    await room.deliver();
+
+    expect(shownBefore).toBe(1);
+    expect(hidden.ok).toBe(true);
+    expect(flushedMeanwhile).toBe(0);
+    expect(handedToLate).toEqual([]);
+    expect(JSON.stringify(late.frames)).not.toContain("A question to hide");
+    // Whoever held it loses it at the flush. Ravi never held it, so he is
+    // told nothing, not even the id of a question that was gone before he came.
+    expect(priyaTab.rows("questions")).toEqual([]);
+    expect(patches(late.frames)).toEqual([]);
+    expect(await room.converged()).toBe(true);
+  });
+
+  it("leaves out a poll's results the host stopped sharing a moment before", async () => {
+    const room = new Harness([pollsAuthority]);
+    const hostTab = await room.open(host, pollsContract);
+    const priyaTab = await room.open(priya, pollsContract);
+    const pollId = await createPoll(room, hostTab);
+    await priyaTab.act("vote", { pollId, optionIds: ["o1"] });
+    await hostTab.act("share", { pollId, shared: true });
+    await room.deliver();
+    const sharedBefore = field(priyaTab.row("results", pollId), "voterCount");
+
+    const flushesBefore = room.authority.stats.flushes;
+    await hostTab.act("share", { pollId, shared: false });
+    const late = await room.open(ravi, pollsContract);
+    const flushedMeanwhile = room.authority.stats.flushes - flushesBefore;
+    const handedToLate = handed(late, "polls").map((row) => [
+      row.key,
+      field(row.value, "resultsShared"),
+    ]);
+    const resultsHandedToLate = handed(late, "results").map((row) => row.key);
+    await room.deliver();
+
+    expect(sharedBefore).toBe(1);
+    expect(flushedMeanwhile).toBe(0);
+    expect(handedToLate).toEqual([[pollId, false]]);
+    expect(resultsHandedToLate).toEqual([]);
+    expect(priyaTab.row("results", pollId)).toBeNull();
+    expect(patches(late.frames)).toEqual([]);
+    expect(await room.converged()).toBe(true);
+  });
+
+  it("shows a poll the host closed a moment before as closed", async () => {
+    const room = new Harness([pollsAuthority]);
+    const hostTab = await room.open(host, pollsContract);
+    const priyaTab = await room.open(priya, pollsContract);
+    const pollId = await createPoll(room, hostTab);
+    const statusBefore = field(priyaTab.row("polls", pollId), "status");
+
+    const flushesBefore = room.authority.stats.flushes;
+    const ended = await hostTab.act("end", { pollId });
+    const late = await room.open(ravi, pollsContract);
+    const flushedMeanwhile = room.authority.stats.flushes - flushesBefore;
+    const handedToLate = handed(late, "polls").map((row) => field(row.value, "status"));
+    // Someone who was already watching still shows it open, until the flush.
+    const earlyStillShows = field(priyaTab.row("polls", pollId), "status");
+    const vote = await late.act("vote", { pollId, optionIds: ["o1"] });
+    await room.deliver();
+
+    expect(statusBefore).toBe("open");
+    expect(ended.ok).toBe(true);
+    expect(flushedMeanwhile).toBe(0);
+    expect(handedToLate).toEqual(["ended"]);
+    expect(earlyStillShows).toBe("open");
+    expect(vote.ok).toBe(false);
+    expect(field(priyaTab.row("polls", pollId), "status")).toBe("ended");
+    expect(patches(late.frames)).toEqual([]);
+    expect(await room.converged()).toBe(true);
+  });
+
+  it("holds a person's own row they gave up a moment before", async () => {
+    const room = new Harness([qaAuthority]);
+    const hostTab = await room.open(host, qaContract);
+    const priyaTab = await room.open(priya, qaContract);
+    const asked = await hostTab.act("ask", { text: "Upvote me" });
+    const id = field(asked.ok ? asked.value : null, "id") as string;
+    await priyaTab.act("upvote", { id, value: true });
+    await room.deliver();
+    const heldBefore = priyaTab.rows("myUpvotes").length;
+
+    await priyaTab.act("upvote", { id, value: false });
+    const secondTab = await room.open(priya, qaContract);
+
+    expect(heldBefore).toBe(1);
+    expect(handed(secondTab, "myUpvotes")).toEqual([]);
+    expect(field(handed(secondTab, "votes")[0]?.value ?? null, "upvotes")).toBe(0);
+    expect(await room.converged()).toBe(true);
+  });
+
+  it("tells each viewer what changed since their own view, and nothing older", async () => {
+    const room = new Harness([probeAuthority]);
+    const hostTab = await room.open(host, probeContract);
+    const early = await room.open(priya, probeContract);
+    await hostTab.act("put", { id: "kept", text: "stays" });
+    await room.deliver();
+    const earlyFrames = early.frames.length;
+
+    // A note is written, Ravi opens the app and is handed it, and it is
+    // removed again, all before the flush.
+    await hostTab.act("put", { id: "brief", text: "here and gone" });
+    const late = await room.open(ravi, probeContract);
+    const handedToLate = handed(late, "notes").map((row) => row.key);
+    await hostTab.act("remove", { id: "brief" });
+    await room.deliver();
+
+    expect(handedToLate).toEqual(["kept", "brief"]);
+    // Ravi holds the note, so he is told to drop it. Priya never held it and
+    // gets no frame at all.
+    expect(toldToDrop(late)).toEqual(expect.arrayContaining(["brief"]));
+    expect(late.rows("notes")).toEqual([{ id: "kept", text: "stays" }]);
+    expect(early.frames.slice(earlyFrames)).toEqual([]);
+    expect(await room.converged()).toBe(true);
+  });
+
+  it("sends a change made after a view was taken to that viewer too", async () => {
+    const room = new Harness([probeAuthority]);
+    const hostTab = await room.open(host, probeContract);
+    const early = await room.open(priya, probeContract);
+    await room.deliver();
+
+    await hostTab.act("put", { id: "note", text: "first" });
+    const late = await room.open(ravi, probeContract);
+    const handedToLate = handed(late, "notes").map((row) => field(row.value, "text"));
+    await hostTab.act("put", { id: "note", text: "second" });
+    await room.deliver();
+
+    expect(handedToLate).toEqual(["first"]);
+    expect(late.rows("notes")).toEqual([{ id: "note", text: "second" }]);
+    expect(early.rows("notes")).toEqual([{ id: "note", text: "second" }]);
+    expect(await room.converged()).toBe(true);
+  });
+});
+
+describe("views nobody holds", () => {
+  it("are forgotten when their last viewer leaves, in a room where nothing is written", async () => {
+    const room = new Harness([qaAuthority]);
+    const hostTab = await room.open(host, qaContract);
+    const priyaTab = await room.open(priya, qaContract);
+    const raviTab = await room.open(ravi, qaContract);
+    await priyaTab.act("ask", { text: "Mine" });
+    await room.deliver();
+    const held = () => room.authority.viewsHeld;
+    const atFirst = held();
+    const flushesBefore = room.authority.stats.flushes;
+
+    // Priya's socket drops. Nothing is written afterwards, so no flush runs.
+    priyaTab.seat.socket.disconnect(true);
+    await vi.advanceTimersByTimeAsync(100);
+    const afterPriyaLeft = held();
+    // Ravi closes the app and stays in the room.
+    raviTab.session.close();
+    await vi.advanceTimersByTimeAsync(100);
+    const afterRaviClosed = held();
+    // The only host closes it too.
+    hostTab.session.close();
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(atFirst).toEqual({ roles: 2, subjects: 3 });
+    expect(afterPriyaLeft).toEqual({ roles: 2, subjects: 2 });
+    expect(afterRaviClosed).toEqual({ roles: 1, subjects: 1 });
+    expect(held()).toEqual({ roles: 0, subjects: 0 });
+    expect(room.authority.stats.flushes).toBe(flushesBefore);
+  });
+
+  it("are kept while another tab of the same person still holds them", async () => {
+    const room = new Harness([qaAuthority]);
+    const one = await room.open(priya, qaContract);
+    const two = await room.open(priya, qaContract);
+    await one.act("ask", { text: "Mine" });
+    await room.deliver();
+
+    one.session.close();
+    await vi.advanceTimersByTimeAsync(100);
+    const afterOneClosed = room.authority.viewsHeld;
+    await two.act("ask", { text: "Also mine" });
+    await room.deliver();
+
+    // The tab that stayed goes on being told of its own rows.
+    expect(afterOneClosed).toEqual({ roles: 1, subjects: 1 });
+    expect(two.rows("myQuestions").length).toBe(2);
+    expect(two.rows("questions").length).toBe(2);
+  });
+});
+
 describe("bounds", () => {
   it("refuses an oversized command before any app code runs", async () => {
     const room = new Harness([probeAuthority]);
@@ -730,6 +941,31 @@ describe("bounds", () => {
     expect(await hostTab.query("countMarks", { id: "b" })).toEqual({ ok: true, value: { count: 3 } });
   });
 
+  it("keeps nothing from a handler that ran out of budget, even one that carries on", async () => {
+    const room = new Harness([probeAuthority], {
+      runtime: { limits: { ...DEFAULT_AUTHORITY_LIMITS, transactionOps: 1_000 } },
+    });
+    const hostTab = await room.open(host, probeContract);
+    for (const from of [0, 200, 400]) {
+      await hostTab.act("mark", { id: "a", from, count: 200, shown: false });
+    }
+    const marks = async () => {
+      const counted = await hostTab.query("countMarks", { id: "a" });
+      return counted.ok ? field(counted.value, "count") : null;
+    };
+
+    // It deletes a few rows, runs out on the scan of all 600, catches the
+    // error and returns as if all were well.
+    const carriedOn = await hostTab.act("unmark", {
+      id: "a",
+      how: "one at a time, whatever goes wrong",
+    });
+    const afterLoop = await marks();
+
+    expect(carriedOn).toEqual({ ok: false, code: "app-fault" });
+    expect(afterLoop).toBe(600);
+  });
+
   it("shows a handler its own clear at once, and keeps what it writes afterwards", async () => {
     const room = new Harness([probeAuthority]);
     const hostTab = await room.open(host, probeContract);
@@ -791,6 +1027,9 @@ describe("bounds", () => {
     expect(afterTwo).toBe(52);
     expect(raviTab.rows("marks").length).toBe(2);
     expect(hostTab.rows("marks").length).toBe(2);
+    // The batches still to come are for those who held the rows. Priya never
+    // did, and is sent none of their keys: no frame at all.
+    expect(patches(late.frames)).toEqual([]);
     expect(await room.converged()).toBe(true);
   });
 
@@ -847,6 +1086,9 @@ describe("bounds", () => {
     await room.deliver();
 
     expect(lateAtFirst).toBe(0);
+    // All Priya is ever told is the row that came back.
+    expect(patches(late.frames).flatMap((frame) => frame.remove)).toEqual([]);
+    expect(patches(late.frames).flatMap((frame) => frame.put.map((row) => row.key))).toEqual(["a/200"]);
     expect(late.rows("marks")).toEqual([{ n: 200 }]);
     expect(raviTab.rows("marks")).toEqual([{ n: 200 }]);
     expect(hostTab.rows("marks")).toEqual([{ n: 200 }]);
@@ -880,6 +1122,9 @@ describe("bounds", () => {
 
     expect(flushedMeanwhile).toBe(0);
     expect(sentToLate).toEqual(["b/0", "b/1"]);
+    // Of the 250 keys the others are told to drop, Priya is sent none.
+    expect(patches(late.frames).flatMap((frame) => frame.remove)).toEqual([]);
+    expect(patches(raviTab.frames).flatMap((frame) => frame.remove).length).toBeGreaterThanOrEqual(249);
     expect(raviStillHolds).toBe(252);
     expect(late.rows("marks")).toEqual([{ n: 0 }, { n: 1 }, { n: 200 }]);
     expect(raviTab.rows("marks").length).toBe(3);
@@ -916,7 +1161,7 @@ describe("bounds", () => {
       subjects: new Set(voters.map((voter) => voter.subject)),
     };
     const ownUpvotes = (who: Actor): number =>
-      qa.snapshot(who).filter((sized) => sized.row.bucket === "myUpvotes").length;
+      qa.snapshot(who).rows.filter((sized) => sized.row.bucket === "myUpvotes").length;
 
     const first = act(actor("asker-0", "member"), "ask", { text: "The popular one" });
     const popular = first.ok ? (field(first.value, "id") as string) : "";
@@ -939,7 +1184,8 @@ describe("bounds", () => {
       const flushed = qa.flushViews(live);
       toldPerFlush.push(
         [...flushed.personal.values()]
-          .flatMap((ops) => ops.remove)
+          // As told to someone who has held their view all along.
+          .flatMap((changes) => changes.for(0)?.remove ?? [])
           .filter((row) => row.bucket === "myUpvotes").length,
       );
       if (toldPerFlush.length === 1) heldAfterFirstFlush.push(...voters.map(ownUpvotes));
@@ -983,6 +1229,32 @@ describe("bounds", () => {
     expect(limited.length).toBe(2);
     expect(limited[0]).toMatchObject({ retryAfterMs: expect.any(Number) as number });
     expect(budget.filter((result) => !result.ok && result.code === "busy").length).toBe(2);
+  });
+
+  it("keeps a budget for hosts that a crowd cannot spend", async () => {
+    const room = new Harness([probeAuthority], {
+      runtime: { limits: { ...DEFAULT_AUTHORITY_LIMITS, mutationBurst: 3, mutationsPerSecond: 1 } },
+    });
+    const hostTab = await room.open(host, probeContract);
+    const crowd = [await room.open(priya, probeContract), await room.open(ravi, probeContract)];
+
+    // Everyone acts in the same instant. The crowd asks for twice what the
+    // room takes from it.
+    const fromCrowd: AuthorityResult<Json>[] = [];
+    for (let index = 0; index < 6; index += 1) {
+      fromCrowd.push(await crowd[index % 2].act("put", { id: `n${index % 3}`, text: "crowd" }));
+    }
+    const fromHost: AuthorityResult<Json>[] = [];
+    for (let index = 0; index < 5; index += 1) {
+      fromHost.push(await hostTab.act("put", { id: "host", text: `host ${index}` }));
+    }
+    const busy = (results: AuthorityResult<Json>[]): number =>
+      results.filter((result) => !result.ok && result.code === "busy").length;
+
+    expect(busy(fromCrowd)).toBe(3);
+    // The host's actions were never in that queue. Theirs is bounded too.
+    expect(fromHost.slice(0, 3).map((result) => result.ok)).toEqual([true, true, true]);
+    expect(busy(fromHost)).toBe(2);
   });
 
   it("caps subscriptions per socket", async () => {

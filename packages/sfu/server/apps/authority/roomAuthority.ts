@@ -32,7 +32,7 @@ import { Logger } from "../../../utilities/loggers.js";
 import type { IdentityAdapter } from "./identity.js";
 import { AuthorityInstance, type Actor } from "./instance.js";
 import type { AuthorityLimits } from "./limits.js";
-import type { SizedRow, ViewOps } from "./views.js";
+import type { LiveAudiences, SizedRow, ViewOps } from "./views.js";
 
 export type SocketPressure = { packets: number; bytes: number };
 
@@ -67,6 +67,11 @@ type Subscription = {
   backlog: PatchFrame[];
   /** The socket fell behind. Patches are skipped until it is replaced. */
   lagging: boolean;
+  /**
+   * The version of the app's views its last snapshot was read at. A flush
+   * tells it only what changed after that.
+   */
+  viewVersion: number;
   dropped: boolean;
   /**
    * Where frames go when not to the socket: an in-process observer, such as
@@ -178,6 +183,9 @@ export class RoomAuthority {
   private sweepTimer: NodeJS.Timeout | null = null;
   private wakeTimer: NodeJS.Timeout | null = null;
   private lagTimer: NodeJS.Timeout | null = null;
+  private pruneTimer: NodeJS.Timeout | null = null;
+  /** Apps a viewer has left since their unheld views were last forgotten. */
+  private readonly left = new Set<AuthorityInstance>();
   /** Streamed results waiting for their socket to catch up. */
   private readonly stalled = new Set<NodeJS.Timeout>();
   private wakeAt: number | null = null;
@@ -271,6 +279,7 @@ export class RoomAuthority {
       transfer: null,
       backlog: [],
       lagging: false,
+      viewVersion: 0,
       dropped: false,
       sink: null,
     };
@@ -320,6 +329,7 @@ export class RoomAuthority {
       transfer: null,
       backlog: [],
       lagging: false,
+      viewVersion: 0,
       dropped: false,
       sink,
     };
@@ -455,10 +465,18 @@ export class RoomAuthority {
       }
     }
     this.closed = true;
-    for (const timer of [this.flushTimer, this.sweepTimer, this.wakeTimer, this.lagTimer]) {
+    for (const timer of [
+      this.flushTimer,
+      this.sweepTimer,
+      this.wakeTimer,
+      this.lagTimer,
+      this.pruneTimer,
+    ]) {
       if (timer) clearTimeout(timer);
     }
     this.flushTimer = this.sweepTimer = this.wakeTimer = this.lagTimer = null;
+    this.pruneTimer = null;
+    this.left.clear();
     for (const timer of this.stalled) clearTimeout(timer);
     this.stalled.clear();
     this.bySocket.clear();
@@ -471,6 +489,17 @@ export class RoomAuthority {
 
   get isClosed(): boolean {
     return this.closed;
+  }
+
+  /** How many audiences' views are kept, across the room's apps. */
+  get viewsHeld(): { roles: number; subjects: number } {
+    const held = { roles: 0, subjects: 0 };
+    for (const instance of this.instances.values()) {
+      const { roles, subjects } = instance.viewsHeld;
+      held.roles += roles;
+      held.subjects += subjects;
+    }
+    return held;
   }
 
   /** Flushes pending view changes now. For tests and orderly shutdown. */
@@ -608,6 +637,7 @@ export class RoomAuthority {
     }
     this.byInstance.get(subscription.instance)?.delete(subscription);
     this.dormant.add(subscription);
+    this.viewerLeft(subscription.instance);
     subscription.transfer = null;
     subscription.backlog = [];
     this.send(subscription, {
@@ -745,27 +775,57 @@ export class RoomAuthority {
       // Every recipient is checked against the room before anything leaves.
       for (const subscription of [...subscriptions]) this.refresh(subscription);
 
-      const roles = new Set<Role>();
-      const subjects = new Set<Subject>();
-      for (const subscription of subscriptions) {
-        roles.add(subscription.actor.role);
-        subjects.add(subscription.actor.subject);
-      }
-      const changes = instance.flushViews({ roles, subjects });
+      const changes = instance.flushViews(this.audiencesOf(instance));
+      this.left.delete(instance);
       if (changes.shared.size === 0 && changes.personal.size === 0) continue;
       for (const subscription of [...subscriptions]) {
-        const shared = changes.shared.get(subscription.actor.role);
-        const personal = changes.personal.get(subscription.actor.subject);
+        // Each is told from its own snapshot on: a change that snapshot
+        // already had, or a row gone before it was read, is not sent.
+        const shared = changes.shared
+          .get(subscription.actor.role)
+          ?.for(subscription.viewVersion);
+        const personal = changes.personal
+          .get(subscription.actor.subject)
+          ?.for(subscription.viewVersion);
         if (shared || personal) this.sendPatch(subscription, shared, personal);
       }
     }
-    // A large clear is told to the views a batch per flush.
+    // A large clear is told to its viewers a batch per flush.
     for (const instance of this.instances.values()) {
       if (instance.hasPendingChanges) {
         this.scheduleFlush(false);
         break;
       }
     }
+  }
+
+  /** The roles and subjects that hold a view of the app right now. */
+  private audiencesOf(instance: AuthorityInstance): LiveAudiences {
+    const roles = new Set<Role>();
+    const subjects = new Set<Subject>();
+    for (const subscription of this.byInstance.get(instance) ?? []) {
+      roles.add(subscription.actor.role);
+      subjects.add(subscription.actor.subject);
+    }
+    return { roles, subjects };
+  }
+
+  /**
+   * A viewer left an app, or changed role. Once nobody holds an audience's
+   * view it is forgotten, at the pace of a flush and whether or not the room
+   * ever writes again, so a quiet room does not keep the views of everyone
+   * who has passed through it.
+   */
+  private viewerLeft(instance: AuthorityInstance): void {
+    if (this.closed) return;
+    this.left.add(instance);
+    if (this.pruneTimer) return;
+    this.pruneTimer = setTimeout(() => {
+      this.pruneTimer = null;
+      for (const left of this.left) left.keepViews(this.audiencesOf(left));
+      this.left.clear();
+    }, this.limits.flushIntervalMs);
+    this.pruneTimer.unref?.();
   }
 
   private sendPatch(
@@ -806,6 +866,12 @@ export class RoomAuthority {
 
   /** A whole view under a new generation. */
   private regenerate(subscription: Subscription, actor: Actor): void {
+    if (
+      subscription.actor.role !== actor.role ||
+      subscription.actor.subject !== actor.subject
+    ) {
+      this.viewerLeft(subscription.instance);
+    }
     subscription.actor = actor;
     subscription.generation += 1;
     this.sendReplace(subscription);
@@ -818,7 +884,8 @@ export class RoomAuthority {
     subscription.lagging = false;
     if (!this.hasRoom(subscription)) return;
 
-    const rows = subscription.instance.snapshot(subscription.actor);
+    const { rows, version } = subscription.instance.snapshot(subscription.actor);
+    subscription.viewVersion = version;
     const bytes = rows.reduce((total, sized) => total + sized.bytes, 0);
     if (bytes > this.limits.snapshotBytes) {
       this.revoke(subscription, "too-large");
@@ -1053,6 +1120,7 @@ export class RoomAuthority {
     const subscriptions = this.bySocket.get(subscription.socket.id);
     subscriptions?.delete(subscription.id);
     if (subscriptions?.size === 0) this.bySocket.delete(subscription.socket.id);
+    this.viewerLeft(subscription.instance);
   }
 
   /* ---- Timers ------------------------------------------------------------ */

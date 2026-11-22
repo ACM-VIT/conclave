@@ -54,7 +54,12 @@ export const probeContract = defineContract({
     unmark: {
       input: s.object({
         id: s.string({ min: 1, max: 64 }),
-        how: s.oneOf(["clear", "one at a time", "clear then refuse"]),
+        how: s.oneOf([
+          "clear",
+          "one at a time",
+          "clear then refuse",
+          "one at a time, whatever goes wrong",
+        ]),
       }),
       receipt: s.object({ removed: s.int({ min: 0 }) }),
     },
@@ -273,6 +278,24 @@ export const probeAuthority = defineAuthority({
           for (const [markKey] of rows) tx.delete("marks", markKey);
           return { removed: rows.length };
         }
+        // A handler that swallows whatever the host throws and carries on.
+        if (input.how === "one at a time, whatever goes wrong") {
+          let removed = 0;
+          try {
+            for (const [markKey] of tx.scan("marks", key(input.id, "1"))) {
+              tx.delete("marks", markKey);
+              removed += 1;
+            }
+            for (const [markKey] of tx.scan("marks", key(input.id))) {
+              tx.delete("marks", markKey);
+              removed += 1;
+            }
+          } catch {
+            return { removed };
+          }
+          return { removed };
+        }
+
         const removed = tx.clear("marks", key(input.id));
         if (input.how === "clear then refuse") return reject("changed-my-mind");
         return { removed };

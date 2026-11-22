@@ -25,7 +25,12 @@ import type { AuthorityLimits } from "./limits.js";
 import { RateBuckets } from "./rate.js";
 import { ReceiptBook, requestDigest } from "./receipts.js";
 import { AuthorityStore } from "./store.js";
-import { ViewTracker, type SizedRow, type ViewFlush } from "./views.js";
+import {
+  ViewTracker,
+  type LiveAudiences,
+  type ViewFlush,
+  type ViewSnapshot,
+} from "./views.js";
 
 /** One person on one connection, as the host resolved them just now. */
 export type Actor = {
@@ -200,8 +205,13 @@ export class AuthorityInstance {
       return failure("capacity");
     }
 
+    // The app's budget of accepted mutations is held twice: once for
+    // moderators and once for everyone else. However much a crowd asks for,
+    // it spends only its own, and a host can still run the session.
     const budget = this.rates.take(
-      "\u0000mutations",
+      actor.role === "moderator"
+        ? "\u0000mutations\u0000moderators"
+        : "\u0000mutations",
       {
         burst: this.options.limits.mutationBurst,
         perSecond: this.options.limits.mutationsPerSecond,
@@ -343,22 +353,26 @@ export class AuthorityInstance {
 
   /** Rows the views have yet to take in, or viewers have yet to be told of. */
   get hasPendingChanges(): boolean {
-    return this.store.hasDirty || this.views.owesRemovals;
+    return this.store.hasDirty || this.views.hasUntold;
   }
 
-  flushViews(live: {
-    roles: ReadonlySet<Role>;
-    subjects: ReadonlySet<Subject>;
-  }): ViewFlush {
+  flushViews(live: LiveAudiences): ViewFlush {
     return this.views.flush(live);
   }
 
+  /** Forgets the views of everyone but these audiences. */
+  keepViews(live: LiveAudiences): void {
+    this.views.keep(live);
+  }
+
+  /** How many audiences' views are kept. */
+  get viewsHeld(): { roles: number; subjects: number } {
+    return this.views.held;
+  }
+
   /** A whole view for one audience: its role's rows and its own. */
-  snapshot(actor: Actor): SizedRow[] {
-    return [
-      ...this.views.sharedRows(actor.role),
-      ...this.views.personalRows(actor.subject),
-    ];
+  snapshot(actor: Actor): ViewSnapshot {
+    return this.views.snapshot(actor.role, actor.subject);
   }
 
   /** Whether the actor could run this query right now. Spends no budget. */
