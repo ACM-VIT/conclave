@@ -589,7 +589,10 @@ final class ChatPresenter {
             if known.contains(rowId) || closedSeenRowIds.contains(rowId) { continue }
             closedSeenRowIds.insert(rowId)
             if message.isHistory || message.isOwn { continue }
-            if message.isAssistant && (message.content.isEmpty || message.assistant?.errorKind != AssistantErrorKind.none) { continue }
+            if message.isAssistant {
+                let state = AssistantRowPolicy.state(input: message.assistant, content: message.content)
+                if message.content.isEmpty || state == AssistantRowState.error || state == AssistantRowState.needsKey { continue }
+            }
             if pendingFirstUnreadId.isEmpty || message.timestampMillis < pendingFirstUnreadAtMillis {
                 pendingFirstUnreadId = rowId
                 pendingFirstUnreadAtMillis = message.timestampMillis
