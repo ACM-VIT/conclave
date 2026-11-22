@@ -1,125 +1,72 @@
-/**
- * Polls on the authority runtime, as a test fixture: the rules the design's
- * reference harness checks. The shipped app lives in the apps SDK.
- */
-import { defineContract, s, type Infer } from "@conclave/apps-sdk/authority";
+import {
+  MAX_POLLS_PER_ROOM,
+  POLL_MAX_OPTIONS,
+  POLL_MIN_OPTIONS,
+  pollsContract,
+  type PollCard,
+  type PollResults,
+} from "@conclave/apps-sdk/polls/core";
 import {
   defineAuthority,
   key,
   reject,
   table,
+  type Role,
   type Subject,
 } from "@conclave/apps-sdk/authority/server";
 
-const POLL_MIN_OPTIONS = 2;
-const POLL_MAX_OPTIONS = 10;
-const MAX_POLLS_PER_ROOM = 50;
-
-const pollId = s.string({ min: 1, max: 64 });
-const optionId = s.string({ min: 1, max: 16 });
-const results = s.object({
-  voterCount: s.int({ min: 0 }),
-  votes: s.record(s.int({ min: 0 }), { maxKeys: POLL_MAX_OPTIONS }),
-});
-const pollCard = s.object({
-  id: pollId,
-  question: s.string({ max: 300 }),
-  choiceMode: s.oneOf(["single", "multiple"]),
-  options: s.array(s.object({ id: optionId, text: s.string({ max: 120 }) }), {
-    max: POLL_MAX_OPTIONS,
-  }),
-  status: s.oneOf(["open", "ended"]),
-  resultsShared: s.boolean(),
-  createdAt: s.number(),
-  endedAt: s.nullable(s.number()),
-  createdByName: s.string({ max: 200 }),
-  /** Present exactly when this audience may see results. */
-  results: s.nullable(results),
-});
-
-export const pollsContract = defineContract({
-  id: "polls",
-  major: 1,
-  surface: "panel",
-  actions: {
-    create: {
-      input: s.object({
-        question: s.string({ max: 300, collapse: true, truncate: true }),
-        options: s.array(s.string({ max: 120, collapse: true, truncate: true }), {
-          max: 2 * POLL_MAX_OPTIONS,
-        }),
-        choiceMode: s.optional(s.oneOf(["single", "multiple"])),
-      }),
-      receipt: s.object({ pollId }),
-    },
-    vote: {
-      input: s.object({
-        pollId,
-        optionIds: s.array(optionId, { max: POLL_MAX_OPTIONS }),
-      }),
-      receipt: s.null(),
-    },
-    end: { input: s.object({ pollId }), receipt: s.null() },
-    share: { input: s.object({ pollId, shared: s.boolean() }), receipt: s.null() },
-  },
-  queries: {
-    exportBallots: {
-      input: s.object({ pollId }),
-      output: s.object({
-        poll: pollCard,
-        ballots: s.array(
-          s.object({
-            name: s.string({ max: 200 }),
-            optionIds: s.array(optionId, { max: POLL_MAX_OPTIONS }),
-            votedAt: s.number(),
-          }),
-          { max: 100_000 },
-        ),
-      }),
-    },
-  },
-  views: {
-    polls: pollCard,
-    myVotes: s.object({ optionIds: s.array(optionId, { max: POLL_MAX_OPTIONS }) }),
-  },
-});
-
-type PollCard = Infer<typeof pollCard>;
-type PollRow = Omit<PollCard, "results"> & {
+/**
+ * The poll rules. They run on the SFU, which is the only writer, so they hold
+ * whatever a client sends: one ballot per person, none after the end, only
+ * listed options, and totals for hosts alone until a host shares them.
+ */
+type PollRow = PollCard & {
   /** Kept in step with the ballots, so a view never recounts. */
-  tally: { voterCount: number; votes: Record<string, number> };
+  tally: PollResults;
 };
+
 type Ballot = {
   pollId: string;
   subject: Subject;
+  /** The voter's name when they voted, for the host's export. */
   voterName: string;
   votedAt: number;
   optionIds: string[];
 };
 
-const card = (row: PollRow, showResults: boolean): PollCard => ({
+/** Ballots a room can hold across all its polls. */
+const MAX_BALLOTS = 100_000;
+const HOST_RATE = { burst: 40, perSecond: 8 };
+
+const card = (row: PollRow): PollCard => ({
   id: row.id,
   question: row.question,
   choiceMode: row.choiceMode,
-  options: row.options,
+  options: row.options.map((option) => ({ id: option.id, text: option.text })),
   status: row.status,
   resultsShared: row.resultsShared,
   createdAt: row.createdAt,
   endedAt: row.endedAt,
   createdByName: row.createdByName,
-  results: showResults ? row.tally : null,
 });
 
-const HOST_RATE = { burst: 40, perSecond: 8 };
+const totals = (row: PollRow): PollResults => ({
+  voterCount: row.tally.voterCount,
+  votes: { ...row.tally.votes },
+});
+
+const seesResults = (row: PollRow, role: Role): boolean =>
+  role === "moderator" || row.resultsShared;
 
 export const pollsAuthority = defineAuthority({
   contract: pollsContract,
   tables: {
     polls: table<PollRow>({ maxRows: MAX_POLLS_PER_ROOM }),
-    ballots: table<Ballot>({ maxRows: 100_000 }),
+    ballots: table<Ballot>({ maxRows: MAX_BALLOTS }),
   },
   timers: {},
-  // Webinar attendees never see meeting polls.
+  // Meeting polls are for the people in the meeting. Webinar attendees never
+  // see them.
   canView: ({ role }) => role === "moderator" || role === "member",
   actions: {
     create: {
@@ -156,6 +103,7 @@ export const pollsAuthority = defineAuthority({
     },
     vote: {
       roles: ["moderator", "member"],
+      // Each person votes once per poll, so a small budget is plenty.
       rate: { burst: 10, perSecond: 2 },
       run(ctx, tx, input) {
         const poll = tx.get("polls", key(input.pollId));
@@ -174,9 +122,10 @@ export const pollsAuthority = defineAuthority({
         ) {
           reject("invalid-choice");
         }
-        // Stored in the poll's option order so exports read naturally.
+        // Kept in the poll's option order so exports read naturally.
         const optionIds = known.filter((id) => chosen.has(id));
-        // One ballot per person: the key is the poll and the voter.
+        // One ballot per person: the row's key is the poll and the voter, so
+        // a second tab, a reconnect or a retry cannot add another.
         const inserted = tx.insertIfAbsent("ballots", ballotKey, {
           pollId: input.pollId,
           subject: ctx.subject,
@@ -185,6 +134,7 @@ export const pollsAuthority = defineAuthority({
           optionIds,
         });
         if (inserted === "exists") reject("already-voted");
+
         const votes = { ...poll.tally.votes };
         for (const id of optionIds) votes[id] = (votes[id] ?? 0) + 1;
         tx.put("polls", key(poll.id), {
@@ -202,7 +152,11 @@ export const pollsAuthority = defineAuthority({
         const poll = tx.get("polls", key(input.pollId));
         if (!poll) return reject("not-found");
         if (poll.status === "open") {
-          tx.put("polls", key(poll.id), { ...poll, status: "ended", endedAt: ctx.now });
+          tx.put("polls", key(poll.id), {
+            ...poll,
+            status: "ended",
+            endedAt: ctx.now,
+          });
         }
         return null;
       },
@@ -236,7 +190,7 @@ export const pollsAuthority = defineAuthority({
             votedAt: ballot.votedAt,
           }))
           .sort((a, b) => a.votedAt - b.votedAt);
-        return { poll: card(poll, true), ballots };
+        return { poll: card(poll), results: totals(poll), ballots };
       },
     },
   },
@@ -245,12 +199,18 @@ export const pollsAuthority = defineAuthority({
     polls: {
       kind: "shared",
       source: "polls",
-      project: (row, role) => ({
-        key: row.id,
-        value: card(row, role === "moderator" || row.resultsShared),
-      }),
+      project: (row) => ({ key: row.id, value: card(row) }),
     },
-    // Keyed by person, so every tab of the voter learns of the vote at once.
+    // The same row projected again, with only the totals. A vote changes
+    // this small row and not the card, and it goes to nobody who may not see
+    // results: for them the row is absent and stays absent.
+    results: {
+      kind: "shared",
+      source: "polls",
+      project: (row, role) =>
+        seesResults(row, role) ? { key: row.id, value: totals(row) } : null,
+    },
+    // Owned by the voter, so every tab of theirs learns of the vote at once.
     myVotes: {
       kind: "personal",
       source: "ballots",

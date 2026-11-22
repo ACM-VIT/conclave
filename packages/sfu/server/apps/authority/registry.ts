@@ -1,4 +1,6 @@
 import type { AuthorityModule } from "@conclave/apps-sdk/authority/server";
+import { pollsAuthority } from "@conclave/apps-sdk/polls/server";
+import { qaAuthority } from "@conclave/apps-sdk/qa/server";
 
 /**
  * The authority apps this SFU runs: reviewed modules from this repository,
@@ -6,7 +8,10 @@ import type { AuthorityModule } from "@conclave/apps-sdk/authority/server";
  * client or a URL names is ever loaded. To add an app, import its `server`
  * entry here.
  */
-export const AUTHORITY_MODULES: readonly AuthorityModule[] = [];
+export const AUTHORITY_MODULES: readonly AuthorityModule[] = [
+  pollsAuthority,
+  qaAuthority,
+];
 
 export const assertUniqueModules = (
   modules: readonly AuthorityModule[],

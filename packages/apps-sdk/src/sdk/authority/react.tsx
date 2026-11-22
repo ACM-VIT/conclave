@@ -62,14 +62,14 @@ export function AuthorityProvider({ socket, joined, children }: AuthorityProvide
 
 export type AuthorityAppClient<C extends AuthorityContract> = {
   state: AuthoritySessionState<C>;
-  act<K extends ActionName<C>>(
+  act: <K extends ActionName<C>>(
     action: K,
     input: ActionInput<C, K>,
-  ): Promise<AuthorityResult<ActionReceipt<C, K>>>;
-  query<K extends QueryName<C>>(
+  ) => Promise<AuthorityResult<ActionReceipt<C, K>>>;
+  query: <K extends QueryName<C>>(
     query: K,
     input: QueryInput<C, K>,
-  ): Promise<AuthorityResult<QueryOutput<C, K>>>;
+  ) => Promise<AuthorityResult<QueryOutput<C, K>>>;
 };
 
 const UNSUPPORTED = { kind: "unsupported" } as const;

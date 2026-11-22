@@ -30,8 +30,8 @@ import {
   type AuthoritySession,
   type Json,
 } from "@conclave/apps-sdk/authority";
-import { pollsContract } from "../test/authority/fixtures/polls.js";
-import { qaContract } from "../test/authority/fixtures/qa.js";
+import { pollsContract } from "@conclave/apps-sdk/polls/core";
+import { qaContract } from "@conclave/apps-sdk/qa/core";
 
 const flag = (name: string, fallback: number): number => {
   const index = process.argv.indexOf(`--${name}`);
@@ -100,9 +100,9 @@ const audit = (tab: Tab, frame: AuthorityFrame): void => {
   if (frame.kind === "query") return;
   const ledger = ledgerOf(tab.person);
   for (const row of frame.kind === "replace" ? frame.rows : frame.put) {
-    if (row.bucket === "polls") {
-      const visible = tab.person.host || sharedPolls.has(row.key);
-      if (field(row.value, "results") !== null && !visible) {
+    if (row.bucket === "results") {
+      // Totals exist only for hosts until a host shares them.
+      if (!tab.person.host && !sharedPolls.has(row.key)) {
         violations.push(`${tab.person.name}: private tally for poll ${row.key}`);
       }
     } else if (row.bucket === "myVotes") {

@@ -18,9 +18,11 @@ import { getRoomAuthority } from "../../server/apps/authority/index.js";
 import { DEFAULT_AUTHORITY_LIMITS } from "../../server/apps/authority/limits.js";
 import type { Router } from "mediasoup/types";
 import { Harness, person, type Tab } from "./harness.js";
-import { pollsAuthority, pollsContract } from "./fixtures/polls.js";
+import { pollsContract } from "@conclave/apps-sdk/polls/core";
+import { pollsAuthority } from "@conclave/apps-sdk/polls/server";
 import { probeAuthority, probeContract } from "./fixtures/probe.js";
-import { qaAuthority, qaContract } from "./fixtures/qa.js";
+import { qaContract } from "@conclave/apps-sdk/qa/core";
+import { qaAuthority } from "@conclave/apps-sdk/qa/server";
 
 const host = person("asha@example.com", "Asha", "host");
 const priya = person("priya@example.com", "Priya");
@@ -87,7 +89,7 @@ describe("retries", () => {
       { ok: true, value: null },
       { ok: true, value: null },
     ]);
-    expect(field(hostTab.row("polls", pollId), "results", "voterCount")).toBe(1);
+    expect(field(hostTab.row("results", pollId), "voterCount")).toBe(1);
   });
 
   it("refuses an id reused for a different request", async () => {
@@ -125,7 +127,7 @@ describe("retries", () => {
       { ok: false, code: "operation-expired" },
       { ok: false, code: "invalid-operation" },
     ]);
-    expect(field(hostTab.row("polls", pollId), "results", "voterCount")).toBe(0);
+    expect(field(hostTab.row("results", pollId), "voterCount")).toBe(0);
   });
 
   it("an id that ran is refused once it expires, even after its receipt is gone", async () => {
@@ -143,7 +145,7 @@ describe("retries", () => {
     await room.deliver();
 
     expect(late).toEqual({ ok: false, code: "operation-expired" });
-    expect(field(hostTab.row("polls", pollId), "results", "voterCount")).toBe(1);
+    expect(field(hostTab.row("results", pollId), "voterCount")).toBe(1);
   });
 
   it("binds a receipt to its subject", async () => {
@@ -159,7 +161,7 @@ describe("retries", () => {
     await raviTab.actWith(operation, "vote", { pollId, optionIds: ["o2"] });
     await room.deliver();
 
-    expect(field(hostTab.row("polls", pollId), "results", "votes")).toEqual({ o1: 1, o2: 1 });
+    expect(field(hostTab.row("results", pollId), "votes")).toEqual({ o1: 1, o2: 1 });
   });
 
   it("refuses new operations when receipts are full, and never drops a live one", async () => {
@@ -217,7 +219,7 @@ describe("retries", () => {
 
     expect(dropped).toBe(1);
     expect(result).toEqual({ ok: true, value: null });
-    expect(field(hostTab.row("polls", pollId), "results", "voterCount")).toBe(1);
+    expect(field(hostTab.row("results", pollId), "voterCount")).toBe(1);
   });
 });
 
@@ -274,7 +276,7 @@ describe("identity", () => {
     expect(second).toEqual({ ok: false, code: "rejected", reason: "already-voted" });
     expect(otherGuest.ok).toBe(true);
     expect(field(tabB.row("myVotes", pollId), "optionIds")).toEqual(["o1"]);
-    expect(field(hostTab.row("polls", pollId), "results", "voterCount")).toBe(2);
+    expect(field(hostTab.row("results", pollId), "voterCount")).toBe(2);
   });
 
   it("keeps webinar Q&A open to guest attendees and meeting Q&A to verified people", async () => {
@@ -406,14 +408,14 @@ describe("membership", () => {
     const pollId = await createPoll(room, hostTab);
     await priyaTab.act("vote", { pollId, optionIds: ["o1"] });
     await room.deliver();
-    expect(field(raviTab.row("polls", pollId), "results", "voterCount")).toBe(1);
+    expect(field(raviTab.row("results", pollId), "voterCount")).toBe(1);
 
     Object.setPrototypeOf(raviTab.seat, Client.prototype);
     room.authority.membershipChanged();
     await room.deliver();
 
     const state = raviTab.state;
-    expect(field(raviTab.row("polls", pollId), "results")).toBeNull();
+    expect(raviTab.row("results", pollId)).toBeNull();
     expect(state.kind === "ready" && state.actions.has("create")).toBe(false);
   });
 
@@ -435,7 +437,7 @@ describe("membership", () => {
     const tallies = after.flatMap((frame) =>
       frame.kind === "patch" || frame.kind === "replace"
         ? (frame.kind === "patch" ? frame.put : frame.rows).filter(
-            (row) => row.bucket === "polls" && field(row.value, "results") !== null,
+            (row) => row.bucket === "results",
           )
         : [],
     );
@@ -498,7 +500,7 @@ describe("delivery", () => {
 
     const sent = patches(watcher.frames.slice(before));
     expect(sent.length).toBeLessThanOrEqual(2);
-    expect(field(watcher.row("polls", pollId), "results", "voterCount")).toBe(10);
+    expect(field(watcher.row("results", pollId), "voterCount")).toBe(10);
     expect(
       sent.every((frame, index) => index === 0 || frame.seq === sent[index - 1].seq + 1),
     ).toBe(true);

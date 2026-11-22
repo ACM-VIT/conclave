@@ -35,9 +35,10 @@ import {
   setCustomWebinarLinkSlug,
 } from "../../server/webinar.js";
 import { emitWebinarConfigChanged } from "../../server/webinarNotifications.js";
-import { pollsAuthority, pollsContract } from "./fixtures/polls.js";
+import { pollsContract } from "@conclave/apps-sdk/polls/core";
+import { pollsAuthority } from "@conclave/apps-sdk/polls/server";
 import { probeAuthority, probeContract } from "./fixtures/probe.js";
-import { qaAuthority } from "./fixtures/qa.js";
+import { qaAuthority } from "@conclave/apps-sdk/qa/server";
 
 const CLIENT_ID = "conclave";
 const ROOM_ID = "wire";
@@ -216,7 +217,7 @@ const tallies = (frames: AuthorityFrame[]) =>
   frames.flatMap((frame) =>
     frame.kind === "replace" || frame.kind === "patch"
       ? (frame.kind === "replace" ? frame.rows : frame.put).filter(
-          (entry) => entry.bucket === "polls" && field(entry.value, "results") !== null,
+          (entry) => entry.bucket === "results",
         )
       : [],
   );
@@ -245,7 +246,7 @@ describe("authority transport on real sockets", () => {
 
     const voted = await voter.session.act("vote", { pollId, optionIds: ["o1"] });
     await until(
-      () => field(row(host, "polls", pollId), "results", "voterCount") === 1,
+      () => field(row(host, "results", pollId), "voterCount") === 1,
       "tally reaches the host",
     );
     await wait(120);
@@ -275,7 +276,7 @@ describe("authority transport on real sockets", () => {
     expect([first.ok, second.ok].filter(Boolean).length).toBe(1);
     expect(row(tabA, "myVotes", pollId)).toEqual(row(tabB, "myVotes", pollId));
     await until(
-      () => field(row(host, "polls", pollId), "results", "voterCount") === 1,
+      () => field(row(host, "results", pollId), "voterCount") === 1,
       "one voter counted",
     );
   });
@@ -287,7 +288,7 @@ describe("authority transport on real sockets", () => {
     const pollId = await createPoll(host);
     await ask(host.socket, "promoteHost", { userId: cohost.seatId });
     await until(
-      () => field(row(cohost, "polls", pollId), "results") !== null,
+      () => row(cohost, "results", pollId) !== null,
       "promotion shows the tally",
     );
 
@@ -409,7 +410,7 @@ describe("authority transport on real sockets", () => {
 
     expect(field(row(voter, "myVotes", pollId), "optionIds")).toEqual(["o1"]);
     expect(again).toEqual({ ok: false, code: "rejected", reason: "already-voted" });
-    expect(field(row(host, "polls", pollId), "results", "voterCount")).toBe(1);
+    expect(field(row(host, "results", pollId), "voterCount")).toBe(1);
   });
 
   it("resends an action whose answer was lost, and it runs once", async () => {
@@ -431,7 +432,7 @@ describe("authority transport on real sockets", () => {
 
     const result = await voter.session.act("vote", { pollId, optionIds: ["o1"] });
     await until(
-      () => field(row(host, "polls", pollId), "results", "voterCount") === 1,
+      () => field(row(host, "results", pollId), "voterCount") === 1,
       "the vote counted",
     );
 

@@ -1,10 +1,12 @@
-/**
- * Q&A on the authority runtime, as a test fixture: one book, two audience
- * rules. In a webinar, attendees ask and a question becomes public when a
- * host takes it. In a meeting, everyone asks and a question is public until
- * a host dismisses it.
- */
-import { defineContract, s, type Infer } from "@conclave/apps-sdk/authority";
+import {
+  QA_MAX_ENTRIES,
+  QA_MAX_OPEN_PER_PERSON,
+  QA_MIN_QUESTION_LENGTH,
+  isQaStatusPublic,
+  qaContract,
+  type QaStatus,
+  type QuestionCard,
+} from "@conclave/apps-sdk/qa/core";
 import {
   defineAuthority,
   key,
@@ -12,81 +14,31 @@ import {
   table,
   type AuthorityTransaction,
   type GateContext,
+  type IdentityRequirement,
   type RoomPolicy,
   type Subject,
   type TableSpec,
 } from "@conclave/apps-sdk/authority/server";
 
-const QA_MAX_ENTRIES = 300;
-const QA_MAX_OPEN_PER_PERSON = 3;
+/**
+ * The Q&A rules. One book serves meetings and webinars, and stays the same
+ * book when a host turns webinar mode on or off: only who may see and ask
+ * changes.
+ */
+type QuestionRow = QuestionCard & {
+  author: Subject;
+  upvotes: number;
+};
 
-const questionId = s.string({ min: 1, max: 64 });
-const status = s.oneOf(["pending", "answering", "answered", "dismissed"]);
-const questionCard = s.object({
-  id: questionId,
-  askerName: s.string({ max: 200 }),
-  text: s.string({ max: 500 }),
-  status,
-  askedAt: s.number(),
-  updatedAt: s.number(),
-  upvotes: s.int({ min: 0 }),
-  answerText: s.nullable(s.string({ max: 1000 })),
-  answeredByName: s.nullable(s.string({ max: 200 })),
-});
-
-export const qaContract = defineContract({
-  id: "qa",
-  major: 1,
-  surface: "panel",
-  actions: {
-    ask: {
-      input: s.object({
-        text: s.string({ max: 500, collapse: true, truncate: true }),
-      }),
-      receipt: s.object({ id: questionId }),
-    },
-    upvote: {
-      // The wanted state, not a toggle, so a repeated send changes nothing.
-      input: s.object({ id: questionId, value: s.boolean() }),
-      receipt: s.null(),
-    },
-    moderate: {
-      input: s.object({
-        id: questionId,
-        action: s.oneOf(["answering", "answered", "dismissed", "reopen"]),
-        answerText: s.optional(
-          s.string({ max: 1000, collapse: true, truncate: true }),
-        ),
-      }),
-      receipt: s.null(),
-    },
-  },
-  queries: {},
-  views: {
-    /** Every question for hosts; the public ones for everyone else. */
-    questions: questionCard,
-    /** Marks a question as mine, and carries it when my list would not. */
-    myQuestions: s.object({ hidden: s.nullable(questionCard) }),
-    myUpvotes: s.object({}),
-  },
-});
-
-type QuestionCard = Infer<typeof questionCard>;
-type QaStatus = QuestionCard["status"];
-type QuestionRow = QuestionCard & { author: Subject };
 type Upvote = { questionId: string; voter: Subject };
+
 type QaTables = {
   questions: TableSpec<QuestionRow>;
   upvotes: TableSpec<Upvote>;
 };
 
-const PUBLIC_STATUSES: Record<RoomPolicy["mode"], readonly QaStatus[]> = {
-  webinar: ["answering", "answered"],
-  meeting: ["pending", "answering", "answered"],
-};
-
-const isPublic = (row: QuestionRow, room: RoomPolicy): boolean =>
-  PUBLIC_STATUSES[room.mode].includes(row.status);
+/** Upvotes a room can hold across all its questions. */
+const MAX_UPVOTES = 200_000;
 
 const card = (row: QuestionRow): QuestionCard => ({
   id: row.id,
@@ -95,26 +47,43 @@ const card = (row: QuestionRow): QuestionCard => ({
   status: row.status,
   askedAt: row.askedAt,
   updatedAt: row.updatedAt,
-  upvotes: row.upvotes,
   answerText: row.answerText,
   answeredByName: row.answeredByName,
 });
 
-/** Who may ask and upvote: attendees of a webinar with Q&A on, or meeting members. */
+const isPublic = (row: QuestionRow, room: RoomPolicy): boolean =>
+  isQaStatusPublic(row.status, room.mode);
+
+/** Hosts see every question, askers their own, everyone the public ones. */
+const isVisibleTo = (row: QuestionRow, ctx: GateContext): boolean =>
+  ctx.role === "moderator" ||
+  row.author === ctx.subject ||
+  isPublic(row, ctx.room);
+
+/**
+ * Who may ask and upvote: attendees of a webinar while the host has Q&A on,
+ * or everyone in a regular meeting.
+ */
 const mayContribute = (ctx: GateContext): boolean =>
   ctx.room.mode === "webinar"
     ? ctx.role === "attendee" && ctx.room.qaEnabled
     : ctx.role === "member" || ctx.role === "moderator";
 
 /**
- * Webinar Q&A has always been per session for guests, and old webinar
- * clients depend on that. Meeting Q&A is new and needs a verified person.
+ * Webinar Q&A has always counted a guest per session, and released webinar
+ * clients depend on that. Meeting Q&A is new and counts one verified person.
  */
-const contributorIdentity = (ctx: GateContext) =>
+const contributorIdentity = (ctx: GateContext): IdentityRequirement =>
   ctx.room.mode === "webinar" ? "any" : "verified";
 
-/** Over the cap, drop dismissed first, then answered, then pending, then oldest. */
-const evictOverflow = (tx: AuthorityTransaction<QaTables, Record<never, never>>): void => {
+/**
+ * Trims the book to its cap: hidden questions first, then answered, then
+ * waiting, then whatever is oldest. A dropped question takes its upvotes
+ * with it, and leaves every list on the next flush.
+ */
+const evictOverflow = (
+  tx: AuthorityTransaction<QaTables, Record<never, never>>,
+): void => {
   const order: (QaStatus | null)[] = ["dismissed", "answered", "pending", null];
   for (const wanted of order) {
     for (const [rowKey, row] of tx.scan("questions")) {
@@ -131,8 +100,9 @@ const evictOverflow = (tx: AuthorityTransaction<QaTables, Record<never, never>>)
 export const qaAuthority = defineAuthority({
   contract: qaContract,
   tables: {
+    // One over the cap, so a new question lands before an old one is dropped.
     questions: table<QuestionRow>({ maxRows: QA_MAX_ENTRIES + 1 }),
-    upvotes: table<Upvote>({ maxRows: 200_000 }),
+    upvotes: table<Upvote>({ maxRows: MAX_UPVOTES }),
   },
   timers: {},
   canView: ({ role }, room) =>
@@ -147,7 +117,7 @@ export const qaAuthority = defineAuthority({
       // A short burst, then one question every ten seconds.
       rate: { burst: 3, perSecond: 0.1 },
       run(ctx, tx, input) {
-        if (input.text.length < 2) reject("too-short");
+        if (input.text.length < QA_MIN_QUESTION_LENGTH) reject("too-short");
         const open = tx
           .scan("questions")
           .filter(
@@ -180,15 +150,16 @@ export const qaAuthority = defineAuthority({
       rate: { burst: 10, perSecond: 2 },
       run(ctx, tx, input) {
         const question = tx.get("questions", key(input.id));
-        // People may only vote on questions they can see.
-        const visible =
-          question &&
-          question.status !== "dismissed" &&
-          (ctx.role === "moderator" ||
-            question.author === ctx.subject ||
-            isPublic(question, ctx.room));
-        if (!question || !visible) return reject("not-found");
-
+        // People may only vote on questions they can see, and a hidden
+        // question answers exactly like one that does not exist.
+        if (
+          !question ||
+          question.status === "dismissed" ||
+          !isVisibleTo(question, ctx)
+        ) {
+          return reject("not-found");
+        }
+        // One upvote per person per question: the key is both.
         const voteKey = key(input.id, ctx.subject);
         if (input.value) {
           const inserted = tx.insertIfAbsent("upvotes", voteKey, {
@@ -202,7 +173,6 @@ export const qaAuthority = defineAuthority({
         tx.put("questions", key(question.id), {
           ...question,
           upvotes: question.upvotes + (input.value ? 1 : -1),
-          updatedAt: ctx.now,
         });
         return null;
       },
@@ -239,7 +209,28 @@ export const qaAuthority = defineAuthority({
       },
     },
   },
-  queries: {},
+  queries: {
+    upvoteState: {
+      roles: ["moderator", "member", "attendee"],
+      when: mayContribute,
+      rate: { burst: 20, perSecond: 4 },
+      read(ctx, db, input) {
+        const question = db.get("questions", key(input.id));
+        if (
+          !question ||
+          question.status === "dismissed" ||
+          !isVisibleTo(question, ctx)
+        ) {
+          return reject("not-found");
+        }
+        return {
+          upvotes: question.upvotes,
+          hasUpvoted:
+            db.get("upvotes", key(input.id, ctx.subject)) !== undefined,
+        };
+      },
+    },
+  },
   onTimer: {},
   views: {
     questions: {
@@ -250,13 +241,27 @@ export const qaAuthority = defineAuthority({
           ? { key: row.id, value: card(row) }
           : null,
     },
+    // The same row projected again with only its count. An upvote changes
+    // this small row and not the card.
+    votes: {
+      kind: "shared",
+      source: "questions",
+      project: (row, role, room) =>
+        role === "moderator" || isPublic(row, room)
+          ? { key: row.id, value: { upvotes: row.upvotes } }
+          : null,
+    },
     myQuestions: {
       kind: "personal",
       source: "questions",
       owner: (row) => row.author,
       project: (row, room) => ({
         key: row.id,
-        value: { hidden: isPublic(row, room) ? null : card(row) },
+        value: {
+          hidden: isPublic(row, room)
+            ? null
+            : { question: card(row), upvotes: row.upvotes },
+        },
       }),
     },
     myUpvotes: {

@@ -11,8 +11,10 @@ import {
   type Json,
 } from "@conclave/apps-sdk/authority";
 import { Harness, person, type Sent, type Tab } from "./harness.js";
-import { pollsAuthority, pollsContract } from "./fixtures/polls.js";
-import { qaAuthority, qaContract } from "./fixtures/qa.js";
+import { pollsContract } from "@conclave/apps-sdk/polls/core";
+import { pollsAuthority } from "@conclave/apps-sdk/polls/server";
+import { qaContract } from "@conclave/apps-sdk/qa/core";
+import { qaAuthority } from "@conclave/apps-sdk/qa/server";
 import { quizAuthority, quizContract } from "./fixtures/quiz.js";
 import { wheelAuthority, wheelContract } from "./fixtures/wheel.js";
 
@@ -121,16 +123,16 @@ describe("polls", () => {
       "a private vote reaches hosts as a tally and the voter as their own ballot, and nobody else",
     ).toEqual({
       receivers: 3,
-      host: ["polls"],
+      host: ["results"],
       voter: ["myVotes"],
       voterOtherTab: ["myVotes"],
     });
     expect(
-      at(hostTab.row("polls", pollId), "results", "votes", "o1"),
+      at(hostTab.row("results", pollId), "votes", "o1"),
       "the host sees the tally",
     ).toBe(1);
     expect(
-      at(raviTab.row("polls", pollId), "results"),
+      raviTab.row("results", pollId),
       "participants see no results until they are shared",
     ).toBeNull();
     expect(
@@ -144,7 +146,7 @@ describe("polls", () => {
     const retried = await priyaTab.actWith(operation, "vote", { pollId, optionIds: ["o1"] });
     await room.deliver();
     expect(
-      [retried.ok, at(hostTab.row("polls", pollId), "results", "voterCount")],
+      [retried.ok, at(hostTab.row("results", pollId), "voterCount")],
       "a retry of the same attempt returns the first answer and counts once",
     ).toEqual([true, 1]);
 
@@ -152,14 +154,14 @@ describe("polls", () => {
     room.room.promoteClientToAdmin(raviTab.seat.id);
     await room.deliver();
     expect(
-      at(raviTab.row("polls", pollId), "results", "voterCount"),
+      at(raviTab.row("results", pollId), "voterCount"),
       "a participant promoted to host gets the tallies at once (review: new hosts see wrong totals)",
     ).toBe(1);
 
     await hostTab.act("share", { pollId, shared: true });
     await room.deliver();
     expect(
-      at(priyaSecondTab.row("polls", pollId), "results", "votes", "o1"),
+      at(priyaSecondTab.row("results", pollId), "votes", "o1"),
       "shared results reach people who have not voted (review: shared results stay hidden)",
     ).toBe(1);
 
@@ -188,7 +190,7 @@ describe("polls", () => {
     expect(
       [
         at(late.row("polls", pollId), "status"),
-        at(late.row("polls", pollId), "results", "voterCount"),
+        at(late.row("results", pollId), "voterCount"),
       ],
       "a late joiner gets the ended poll with its shared results",
     ).toEqual(["ended", 1]);
@@ -238,7 +240,7 @@ describe("Q&A", () => {
     await raviTab.act("upvote", { id, value: true });
     await room.deliver();
     expect(
-      [at(hostTab.row("questions", id), "upvotes"), raviTab.row("myUpvotes", id)],
+      [at(hostTab.row("votes", id), "upvotes"), raviTab.row("myUpvotes", id)],
       "an upvote counts once per person however often it is sent",
     ).toEqual([1, {}]);
 
@@ -254,7 +256,7 @@ describe("Q&A", () => {
     ).toBeNull();
     expect(
       [
-        at(priyaTab.row("myQuestions", id), "hidden", "status"),
+        at(priyaTab.row("myQuestions", id), "hidden", "question", "status"),
         at(hostTab.row("questions", id), "status"),
       ],
       "the asker and the host still see it",
@@ -295,7 +297,7 @@ describe("Q&A", () => {
     expect(
       [
         at(stageHost.row("questions", qid), "status"),
-        at(asker.row("myQuestions", qid), "hidden", "status"),
+        at(asker.row("myQuestions", qid), "hidden", "question", "status"),
         otherViewer.row("questions", qid),
         panelist.row("questions", qid),
       ],
