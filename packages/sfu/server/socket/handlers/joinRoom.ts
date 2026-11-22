@@ -1036,15 +1036,14 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             attendeeCount,
           );
           if (state.scheduledWebinarPersistence && webinarWithJoinMetric) {
-            try {
-              persistScheduledWebinarChanges(
-                state.scheduledWebinars,
-                state.scheduledWebinarPersistence,
-                [webinarWithJoinMetric],
-              );
-            } catch (error) {
+            // Not awaited: a join never waits on persistence.
+            persistScheduledWebinarChanges(
+              state.scheduledWebinars,
+              state.scheduledWebinarPersistence,
+              [webinarWithJoinMetric],
+            ).catch((error) => {
               Logger.warn("Failed to persist join metric", error);
-            }
+            });
           }
         }
 

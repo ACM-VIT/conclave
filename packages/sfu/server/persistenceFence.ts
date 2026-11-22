@@ -1,77 +1,104 @@
-import { Logger } from "../utilities/loggers.js";
+import { z } from "zod";
 import type { ScheduledMeetingPersistence } from "./scheduledMeetings.js";
 import type { ScheduledWebinarPersistence } from "./scheduledWebinars.js";
 import type { SchedulingPersistence } from "./scheduling.js";
 
-// A short write fence for backups. While a backup holds it, every durable
-// persistence write (scheduled meetings, scheduling, webinars) waits, so the
-// backup copies SQLite and Redis at one point in time. Writes queue in the
-// order they were made and run when the backup releases the fence, or at its
-// hard timeout if the backup never comes back. The services keep serving from
-// memory meanwhile.
-export type PersistenceFence = {
-  hold: (holdMs: number) => Promise<{ until: number }>;
-  release: () => void;
-  held: () => boolean;
-  defer: <T>(write: () => T) => T | undefined;
-  whenOpen: () => Promise<void>;
-  addFlusher: (flush: () => Promise<void>) => void;
-};
+// A write fence for backups, as one gate in front of every persistence call
+// (scheduled meetings, scheduling, webinars, booking locks, reminder claims).
+// Calls pass it one at a time in the order they were made: each starts once
+// the call before it has finished and the fence is open. While a backup holds
+// the fence, calls wait their turn, so the backup copies SQLite and Redis at
+// one point in time; afterwards they run in arrival order, and each caller
+// gets its own call's result or error. Only persistence waits on the gate:
+// media and signalling never await it, and the services serve from memory.
+// A hold belongs to the owner token that took it. Only that token renews or
+// releases it, and it lifts itself at its deadline if the backup never comes
+// back.
 
 export const MAX_PERSISTENCE_FENCE_MS = 30_000;
 
+const fenceOwner = z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/);
+
+export const persistenceFenceHoldRequest = z.object({
+  owner: fenceOwner,
+  holdMs: z.number().int().min(1_000).max(MAX_PERSISTENCE_FENCE_MS),
+  renew: z.boolean().optional(),
+});
+
+export const persistenceFenceReleaseRequest = z.object({ owner: fenceOwner });
+
+type MaybePromise<T> = T | Promise<T>;
+
+export type PersistenceFence = {
+  hold: (owner: string, holdMs: number) => Promise<{ until: number } | null>;
+  renew: (owner: string, holdMs: number) => { until: number } | null;
+  release: (owner: string) => boolean;
+  holder: () => string | null;
+  run: <T>(call: () => MaybePromise<T>) => Promise<T>;
+  open: () => void;
+};
+
+const settle = (): void => undefined;
+
 export const createPersistenceFence = (): PersistenceFence => {
+  let owner: string | null = null;
   let until = 0;
   let timer: ReturnType<typeof setTimeout> | null = null;
-  let queue: Array<() => unknown> = [];
   let waiters: Array<() => void> = [];
-  const flushers: Array<() => Promise<void>> = [];
-
-  const runDeferred = (write: () => unknown): void => {
-    try {
-      const result = write();
-      if (result instanceof Promise) {
-        result.catch((error) => Logger.error("A write held by the persistence fence failed", error));
-      }
-    } catch (error) {
-      Logger.error("A write held by the persistence fence failed", error);
-    }
-  };
+  let tail: Promise<void> = Promise.resolve();
+  // Calls are numbered as they are made. A hold marks a point: the calls
+  // made before it run and land before the hold answers, and the calls from
+  // heldFrom on wait until it lifts.
+  let made = 0;
+  let heldFrom = Infinity;
 
   const open = (): void => {
+    owner = null;
     until = 0;
+    heldFrom = Infinity;
     if (timer) clearTimeout(timer);
     timer = null;
-    const writes = queue;
-    queue = [];
-    writes.forEach(runDeferred);
     const ready = waiters;
     waiters = [];
     ready.forEach((resolve) => resolve());
   };
 
+  const arm = (holdMs: number): { until: number } => {
+    until = Date.now() + holdMs;
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(open, holdMs);
+    timer.unref?.();
+    return { until };
+  };
+
   return {
-    async hold(holdMs) {
-      until = Date.now() + holdMs;
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(open, holdMs);
-      timer.unref?.();
-      // Writes that started before the hold land first, so the backup sees
-      // all of them or none.
-      await Promise.all(flushers.map((flush) => flush().catch(() => undefined)));
-      return { until };
+    async hold(who, holdMs) {
+      if (owner !== null && owner !== who) return null;
+      if (owner === null) heldFrom = made;
+      owner = who;
+      arm(holdMs);
+      await tail;
+      return owner === who ? { until } : null;
     },
-    release: open,
-    held: () => until > 0,
-    defer(write) {
-      if (until === 0) return write();
-      queue.push(write);
-      return undefined;
+    renew: (who, holdMs) => (owner === who ? arm(holdMs) : null),
+    release(who) {
+      if (owner !== who) return false;
+      open();
+      return true;
     },
-    whenOpen: () => (until === 0 ? Promise.resolve() : new Promise((resolve) => waiters.push(resolve))),
-    addFlusher(flush) {
-      flushers.push(flush);
+    holder: () => owner,
+    run(call) {
+      const number = made++;
+      const result = tail.then(async () => {
+        while (owner !== null && number >= heldFrom) await new Promise<void>((resolve) => waiters.push(resolve));
+        // Started in the same turn as the check above, so a hold cannot slip
+        // in between them.
+        return call();
+      });
+      tail = result.then(settle, settle);
+      return result;
     },
+    open,
   };
 };
 
@@ -79,60 +106,62 @@ export const fenceScheduledMeetingPersistence = (
   persistence: ScheduledMeetingPersistence,
   fence: PersistenceFence,
 ): ScheduledMeetingPersistence => {
-  if (persistence.flush) fence.addFlusher(() => persistence.flush!());
+  // Redis queues its writes, so a write is done once flush() says it landed;
+  // its error is the caller's.
+  const write = (call: () => MaybePromise<void>) =>
+    fence.run(async () => {
+      await call();
+      await persistence.flush?.();
+    });
   return {
-    save: (snapshot) => fence.defer(() => persistence.save(snapshot)),
-    saveChanged: persistence.saveChanged && ((meetings) => fence.defer(() => persistence.saveChanged!(meetings))),
-    deleteIds: persistence.deleteIds && ((ids) => fence.defer(() => persistence.deleteIds!(ids))),
-    // Booking locks are short-lived keys, not data a restore brings back.
-    reserveBookingSlot: persistence.reserveBookingSlot && ((reservation) => persistence.reserveBookingSlot!(reservation)),
-    claimEmailReminder:
-      persistence.claimEmailReminder &&
-      (async (claim) => {
-        await fence.whenOpen();
-        return persistence.claimEmailReminder!(claim);
-      }),
+    save: (snapshot) => write(() => persistence.save(snapshot)),
+    saveChanged: persistence.saveChanged && ((meetings) => write(() => persistence.saveChanged!(meetings))),
+    deleteIds: persistence.deleteIds && ((ids) => write(() => persistence.deleteIds!(ids))),
+    reserveBookingSlot:
+      persistence.reserveBookingSlot && ((reservation) => fence.run(() => persistence.reserveBookingSlot!(reservation))),
+    claimEmailReminder: persistence.claimEmailReminder && ((claim) => fence.run(() => persistence.claimEmailReminder!(claim))),
     load: () => persistence.load(),
+    flush: persistence.flush && (() => fence.run(() => persistence.flush!())),
     close:
       persistence.close &&
       (() => {
-        fence.release();
-        return persistence.close!();
+        fence.open();
+        return fence.run(() => persistence.close!());
       }),
-    flush: persistence.flush && (() => persistence.flush!()),
   };
 };
 
 export const fenceSchedulingPersistence = (
   persistence: SchedulingPersistence,
   fence: PersistenceFence,
-): SchedulingPersistence => {
-  if (persistence.flush) fence.addFlusher(() => persistence.flush!());
-  return {
-    save: (snapshot) => fence.defer(() => persistence.save(snapshot)),
-    load: () => persistence.load(),
-    close:
-      persistence.close &&
-      (() => {
-        fence.release();
-        return persistence.close!();
-      }),
-    flush: persistence.flush && (() => persistence.flush!()),
-  };
-};
+): SchedulingPersistence => ({
+  save: (snapshot) =>
+    fence.run(async () => {
+      await persistence.save(snapshot);
+      await persistence.flush?.();
+    }),
+  load: () => persistence.load(),
+  flush: persistence.flush && (() => fence.run(() => persistence.flush!())),
+  close:
+    persistence.close &&
+    (() => {
+      fence.open();
+      return fence.run(() => persistence.close!());
+    }),
+});
 
 export const fenceScheduledWebinarPersistence = (
   persistence: ScheduledWebinarPersistence,
   fence: PersistenceFence,
 ): ScheduledWebinarPersistence => ({
-  save: (snapshot) => void fence.defer(() => persistence.save(snapshot)),
-  saveChanged: persistence.saveChanged && ((webinars) => void fence.defer(() => persistence.saveChanged!(webinars))),
-  deleteIds: persistence.deleteIds && ((ids) => void fence.defer(() => persistence.deleteIds!(ids))),
+  save: (snapshot) => fence.run(() => persistence.save(snapshot)),
+  saveChanged: persistence.saveChanged && ((webinars) => fence.run(() => persistence.saveChanged!(webinars))),
+  deleteIds: persistence.deleteIds && ((ids) => fence.run(() => persistence.deleteIds!(ids))),
   load: () => persistence.load(),
   close:
     persistence.close &&
     (() => {
-      fence.release();
-      persistence.close!();
+      fence.open();
+      return fence.run(() => persistence.close!());
     }),
 });
