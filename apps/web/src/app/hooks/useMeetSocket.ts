@@ -9340,6 +9340,9 @@ export function useMeetSocket({
         setIsAdmin(false);
       }
       const normalizedDisplayName = normalizeDisplayName(displayNameInput);
+      // An attempt that starts over keeps what the meeting was joined with:
+      // the codes asked for along the way, and the name.
+      const carried = continuesAttempt ? joinOptionsRef.current : null;
       const joinOptions: {
         displayName?: string;
         isRecorder?: boolean;
@@ -9347,9 +9350,17 @@ export function useMeetSocket({
         webinarInviteCode?: string;
         meetingInviteCode?: string;
       } = {
-        displayName: isAdmin ? normalizedDisplayName || undefined : undefined,
+        displayName:
+          (isAdmin ? normalizedDisplayName || undefined : undefined) ??
+          carried?.displayName,
         isRecorder: bypassMediaPermissions,
         joinMode,
+        ...(carried?.webinarInviteCode
+          ? { webinarInviteCode: carried.webinarInviteCode }
+          : {}),
+        ...(carried?.meetingInviteCode
+          ? { meetingInviteCode: carried.meetingInviteCode }
+          : {}),
       };
       joinOptionsRef.current = joinOptions;
       const candidateStream = localStreamRef.current ?? localStream;

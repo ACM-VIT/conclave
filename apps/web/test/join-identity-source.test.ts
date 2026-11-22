@@ -37,6 +37,7 @@ const createHarness = (
   let api!: ReturnType<typeof useMeetSocket>;
   function Harness() {
     const refs = useMeetRefs();
+    (overrides as { captureRefs?: (captured: typeof refs) => void }).captureRefs?.(refs);
     const noop = () => {};
     const supplied = {
       refs, roomId: "room-a", userId: "guest-before#session", localStream: null,
@@ -171,5 +172,59 @@ describe("a join that starts over under the identity its token named", () => {
     expect(requestMediaPermissions).toHaveBeenCalledTimes(1);
     expect(stopLocalTrack).toHaveBeenCalledWith(captures[0].track);
     expect(pageStream).toBeNull();
+  });
+});
+
+describe("a reconnect that starts over under the identity its token named", () => {
+  it("keeps the codes and the name the meeting was joined with", async () => {
+    const adoptJoinIdentity = vi.fn(() => false).mockReturnValueOnce(true);
+    let refs!: ReturnType<typeof useMeetRefs>;
+    const h = createHarness({
+      adoptJoinIdentity,
+      joinMode: "webinar_attendee",
+      bypassMediaPermissions: true,
+      captureRefs: (captured: ReturnType<typeof useMeetRefs>) => {
+        refs = captured;
+      },
+    } as Partial<Options>);
+    refs.joinOptionsRef.current = {
+      joinMode: "webinar_attendee",
+      displayName: "Asha",
+      webinarInviteCode: "webinar-code",
+      meetingInviteCode: "meeting-code",
+    };
+
+    // The reconnect asks for a token, which names another identity.
+    await expect(h.api.connectSocket("room-a")).rejects.toThrow("another identity");
+    // The page has taken that identity and joins again.
+    void h.api.joinRoomById("room-a");
+    await vi.waitFor(() => expect(h.io).toHaveBeenCalledTimes(1));
+
+    expect(refs.joinOptionsRef.current).toEqual(
+      expect.objectContaining({
+        joinMode: "webinar_attendee",
+        displayName: "Asha",
+        webinarInviteCode: "webinar-code",
+        meetingInviteCode: "meeting-code",
+      }),
+    );
+  });
+
+  it("does not carry the codes into a join that is not a restart", async () => {
+    let refs!: ReturnType<typeof useMeetRefs>;
+    const h = createHarness({
+      adoptJoinIdentity: () => false,
+      joinMode: "webinar_attendee",
+      bypassMediaPermissions: true,
+      captureRefs: (captured: ReturnType<typeof useMeetRefs>) => {
+        refs = captured;
+      },
+    } as Partial<Options>);
+    refs.joinOptionsRef.current = { joinMode: "webinar_attendee", webinarInviteCode: "code-of-another-meeting" };
+
+    void h.api.joinRoomById("room-b");
+    await vi.waitFor(() => expect(h.io).toHaveBeenCalledTimes(1));
+
+    expect(refs.joinOptionsRef.current?.webinarInviteCode).toBeUndefined();
   });
 });
