@@ -612,6 +612,18 @@ describe("app documents", { timeout: 30_000 }, () => {
     expect(await fixture.next("dropped")).toMatchObject({ document: firstId });
   });
 
+  it("puts aside a document that alone outgrows the worker's budget once its run ends", async () => {
+    const fixture = createFixture();
+    const pool = createPool({ residentBytes: RESIDENT_OVERHEAD_BYTES, workerUrl: STALLING_WORKER, workerData: fixture.workerData });
+    const only = pool.open();
+
+    expect(await only.apply(writer()("grows past the budget"))).toEqual({ ok: true });
+
+    const { document: loadedId } = await fixture.next("loaded");
+    expect(await fixture.next("dropped")).toMatchObject({ document: loadedId });
+    expect(await joinedText(only)).toBe("grows past the budget");
+  });
+
   it("charges every resident document, even an empty one, against the worker's budget", async () => {
     const fixture = createFixture();
     const pool = createPool({ residentBytes: RESIDENT_OVERHEAD_BYTES, workerUrl: STALLING_WORKER, workerData: fixture.workerData });

@@ -188,16 +188,20 @@ export const createAppDocumentPool = ({
   const startClock = (slot: Slot, run: Run): void =>
     arm(slot, run, run.loading ? loadDeadlineMs : deadlineMs);
 
+  const putAside = (slot: Slot, entry: Entry): void => {
+    slot.resident.delete(entry);
+    entry.loadedIn = -1;
+    slot.worker?.postMessage({ type: "drop", document: entry.id } satisfies ToWorker);
+  };
+
   const fit = (slot: Slot, keep: Entry): void => {
     let used = 0;
     for (const entry of slot.resident) used += residentCost(entry);
     for (const other of slot.resident) {
       if (used <= residentBytes) return;
       if (other === keep) continue;
-      slot.resident.delete(other);
-      other.loadedIn = -1;
+      putAside(slot, other);
       used -= residentCost(other);
-      slot.worker?.postMessage({ type: "drop", document: other.id } satisfies ToWorker);
     }
   };
 
@@ -205,6 +209,7 @@ export const createAppDocumentPool = ({
     clock.clearTimeout(run.timer);
     slot.run = null;
     fit(slot, run.entry);
+    if (slot.resident.has(run.entry) && residentCost(run.entry) > residentBytes) putAside(slot, run.entry);
     markReady(run.entry);
     pump(slot);
   };
