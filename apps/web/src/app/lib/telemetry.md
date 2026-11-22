@@ -20,7 +20,7 @@ the first report arrives, and holds up to 50 reports until it has loaded:
 
 - Unhandled errors and promise rejections (posthog-js autocapture, rate limited per error type by the SDK).
 - Errors caught by `app/error.tsx` and `app/global-error.tsx`: `source: "react_error_boundary"`, `boundary: "route" | "root"`, `digest`.
-- `console.error("[Meets] ...")` lines from the call code: `source: "call_log"`, `call_log` (the log label). The exception's message is the label. A logged Error keeps its type and stack frames, never its message. Other logged values are dropped. At most 3 per label and 30 in total per minute.
+- `console.error("[Meets] ...")` lines from the call code: `source: "call_log"`, `call_log` (the log label). The exception's message is the label. A logged Error keeps its type and stack frames, never its message. Other logged values are dropped. mediasoup ids in a label become `[id]`, so one failure type shares one budget: at most 3 per label and 30 in total per minute.
 - Errors built from server text (socket ack `error` fields and the like) are thrown as `ServerError`, and their message leaves the browser as `[server message]`. Server text can carry words people typed, such as a host's end-room note. A lint rule flags `new Error(x.error)`.
 
 SFU, from `server/analytics/errorReporter.ts`, every event tagged `sfu_instance_id`, `sfu_region`, `sfu_version`:

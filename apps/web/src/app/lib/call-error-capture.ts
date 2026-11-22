@@ -9,6 +9,10 @@ export type CallErrorReport = (error: unknown, props: TelemetryProps) => void;
 
 type ConsoleLike = { error: (...args: unknown[]) => void };
 
+// mediasoup producer, consumer and transport ids. In a label they would give
+// every failure its own rate-limit budget and its own issue in PostHog.
+const ID_PATTERN = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
+
 // V8 writes "Name: message" above the frames; Firefox and Safari write frames only.
 const framesOf = (stack: string): string => {
   const firstFrame = stack.indexOf("\n    at ");
@@ -28,7 +32,7 @@ export function describeCallError(
   if (typeof first !== "string" || !first.startsWith(CALL_LOG_PREFIX)) {
     return null;
   }
-  const label = first.trim().replace(/:$/, "");
+  const label = first.trim().replace(/:$/, "").replace(ID_PATTERN, "[id]");
   const thrown = rest.find((value): value is Error => value instanceof Error);
   const error = new Error(label);
   error.name = thrown?.name ?? "CallError";

@@ -5719,7 +5719,8 @@ export function useMeetSocket({
           webcamStartupLatencyResetStateRef.current.get(producerId) === state
         ) {
           console.error(
-            `[Meets] Planned webcam consumer generation reset failed for ${producerId}:`,
+            "[Meets] Planned webcam consumer generation reset failed:",
+            producerId,
             error,
           );
           if (state.attempt < WEBCAM_STARTUP_RESET_MAX_ATTEMPTS) {
@@ -5879,7 +5880,8 @@ export function useMeetSocket({
         }
       } catch (error) {
         console.error(
-          `[Meets] Failed to recover stale consumer ${producerInfo.producerId}:`,
+          "[Meets] Failed to recover stale consumer:",
+          producerInfo.producerId,
           error,
         );
         telemetry.capture("meet_stale_consumer_recovery_failed", {

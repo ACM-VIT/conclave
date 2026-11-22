@@ -89,6 +89,25 @@ describe("installCallErrorCapture", () => {
     expect(reported).toHaveLength(5);
   });
 
+  it("keeps a producer id in the log line from defeating the per-label cap", () => {
+    const { target, reported } = setup();
+
+    for (let failure = 0; failure < 40; failure += 1) {
+      const producerId = `0f8c2a1e-5b7d-4c3e-9a10-${String(failure).padStart(12, "0")}`;
+      target.error(`[Meets] Failed to recover stale consumer ${producerId}:`, new Error("gone"));
+    }
+
+    expect(reported).toHaveLength(3);
+    expect(reported.map(({ props }) => props.call_log)).toEqual([
+      "[Meets] Failed to recover stale consumer [id]",
+      "[Meets] Failed to recover stale consumer [id]",
+      "[Meets] Failed to recover stale consumer [id]",
+    ]);
+    expect(JSON.stringify(reported.map(({ error, props }) => [error.message, props]))).not.toMatch(
+      /0f8c2a1e/,
+    );
+  });
+
   it("restores console.error when uninstalled", () => {
     const { target, reported, uninstall } = setup();
 
