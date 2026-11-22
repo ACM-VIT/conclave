@@ -11,7 +11,6 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -45,9 +44,6 @@ internal fun ChatPanel(
         val opened = System.currentTimeMillis()
         presenter.panelDidOpen(ChatPresenter.destination(request.destination), request.targetId)
         ChatDiagnostics.counters?.recordOpenLatency((System.currentTimeMillis() - opened).toDouble())
-    }
-    DisposableEffect(presenter) {
-        onDispose { presenter.panelDidClose() }
     }
 
     val destination = panels.destinationRequest

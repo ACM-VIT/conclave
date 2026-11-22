@@ -221,7 +221,6 @@ struct ChatPanelHost: View {
             ChatDiagnostics.counters?.recordOpenLatency(Date().timeIntervalSince1970 * 1000.0 - opened)
             #endif
         }
-        .onDisappear { chat.panelDidClose() }
         .onChange(of: panels.destinationRequest) { _, _ in
             guard let request = panels.latestDestination(for: presentation.request.presentationID) else { return }
             chat.panelDidOpen(destination: ChatPresenter.destination(for: request.destination), targetId: request.targetId)

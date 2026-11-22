@@ -14098,6 +14098,8 @@ final class MeetingViewModel {
             state.unreadChatCount = 0
             clearChatOverlayMessages()
             chat.willShow()
+        } else {
+            chat.panelDidClose()
         }
     }
 

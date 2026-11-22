@@ -33,7 +33,6 @@ struct ChatInputMemoTests {
         #expect(!viewModel.chat.hasDeferredRows, "rows are current before the panel's first frame")
         #expect(viewModel.chat.currentTimeline.rowIds.contains("m-pending"))
         viewModel.shell.panels.dismiss(cancelPending: true)
-        viewModel.chat.panelDidClose()
 
         viewModel.state.displayNames = ["remote@example.com#w": "Remote Person"]
         #expect(viewModel.chatMessageInputBuildCount >= before + 1 + 202)
