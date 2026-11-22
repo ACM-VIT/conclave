@@ -55,22 +55,41 @@ const authors = () => {
 };
 
 describe("app document engine", () => {
-  it("yields the rest of a run once the run has used its time slice", () => {
+  const steppingClock = () => {
     let clock = 0;
     vi.spyOn(performance, "now").mockImplementation(() => (clock += 15));
-    const engine = createAppDocumentEngine({ maxDocumentBytes: 1024 * 1024 });
+  };
+  const applies = (words: string[]) => {
     const author = new Y.Doc();
-    const operations = ["a", "b", "c"].map((word) => ({
+    return words.map((word) => ({
       kind: "apply" as const,
       update: edit(author, (text) => text.insert(text.length, word)),
     }));
+  };
+
+  it("yields the rest of a run once the run has used its time slice", () => {
+    const engine = createAppDocumentEngine({ maxDocumentBytes: 1024 * 1024 });
+    engine.handle({ type: "run", document: 1, load: { base: null, tail: [] }, operations: [] }, () => {});
+    steppingClock();
     const replies: FromWorker["type"][] = [];
 
-    engine.handle({ type: "run", document: 1, load: { base: null, tail: [] }, operations }, (reply) => {
+    engine.handle({ type: "run", document: 1, load: null, operations: applies(["a", "b", "c"]) }, (reply) => {
       replies.push(reply.type);
     });
 
-    expect(replies).toEqual(["loaded", "applied", "yielded"]);
+    expect(replies).toEqual(["applied", "yielded"]);
+  });
+
+  it("yields before any operation when rebuilding used the time slice", () => {
+    steppingClock();
+    const engine = createAppDocumentEngine({ maxDocumentBytes: 1024 * 1024 });
+    const replies: FromWorker["type"][] = [];
+
+    engine.handle({ type: "run", document: 1, load: { base: null, tail: [] }, operations: applies(["a"]) }, (reply) => {
+      replies.push(reply.type);
+    });
+
+    expect(replies).toEqual(["loaded", "yielded"]);
   });
 });
 
@@ -229,6 +248,20 @@ describe("app documents", () => {
     const joined = new Y.Doc();
     Y.applyUpdate(joined, synced.update);
     expect(joined.getText("t").toString()).toBe("hello");
+  });
+
+  it("keeps what it accepted when the sender reuses its buffer", async () => {
+    const pool = createPool({ deadlineMs: 300, workerUrl: STALLING_WORKER });
+    const kept = pool.open();
+    const other = pool.open();
+    const { hello, fromOther } = authors();
+    const sent = Buffer.from(edit(new Y.Doc(), (text) => text.insert(0, "original")));
+    expect(await kept.apply(sent)).toEqual({ ok: true });
+    sent.fill(0);
+    expect(await other.apply(hello)).toEqual({ ok: true });
+    expect(await other.apply(fromOther("STALL"))).toEqual({ ok: false, reason: "timed-out" });
+
+    expect(await joinedText(kept)).toBe("original");
   });
 
   it("refuses every queued update when the worker cannot start", async () => {

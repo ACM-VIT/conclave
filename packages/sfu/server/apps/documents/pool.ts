@@ -332,27 +332,29 @@ export const createAppDocumentPool = ({
     }
     entry.loadedIn = slot.generation;
     if (slot.booted) startClock(slot, run);
-    worker.postMessage(message);
+    try {
+      worker.postMessage(message);
+    } catch (error) {
+      Logger.error("[Apps] Could not send work to an app document worker", error);
+      fail(slot, "crashed");
+    }
+  };
+
+  const admit = (entry: Entry, bytes: number): Refusal | null => {
+    if (closed || entry.status === "closed") return "closed";
+    if (entry.status === "broken") return "unavailable";
+    if (
+      entry.queued.jobs + 1 > limits.document.jobs ||
+      entry.queued.bytes + bytes > limits.document.bytes ||
+      total.jobs + 1 > limits.total.jobs ||
+      total.bytes + bytes > limits.total.bytes
+    ) {
+      return "queue-full";
+    }
+    return null;
   };
 
   const enqueue = (entry: Entry, job: Job): void => {
-    if (closed || entry.status === "closed") {
-      refuse(job, "closed");
-      return;
-    }
-    if (entry.status === "broken") {
-      refuse(job, "unavailable");
-      return;
-    }
-    if (
-      entry.queued.jobs + 1 > limits.document.jobs ||
-      entry.queued.bytes + job.bytes > limits.document.bytes ||
-      total.jobs + 1 > limits.total.jobs ||
-      total.bytes + job.bytes > limits.total.bytes
-    ) {
-      refuse(job, "queue-full");
-      return;
-    }
     entry.queued.jobs += 1;
     entry.queued.bytes += job.bytes;
     total.jobs += 1;
@@ -362,19 +364,23 @@ export const createAppDocumentPool = ({
     pump(entry.slot);
   };
 
-  const closeEntry = (entry: Entry): void => {
-    if (entry.status === "closed") return;
-    const { slot } = entry;
-    const loaded = entry.loadedIn === slot.generation;
+  const forget = (entry: Entry): void => {
     entry.status = "closed";
     entries.delete(entry);
-    slot.documents -= 1;
-    if (entry.ready) slot.ready.splice(slot.ready.indexOf(entry), 1);
+    entry.slot.documents -= 1;
     entry.ready = false;
     drop(entry, entry.waiting, "closed");
     entry.waiting = [];
     entry.base = null;
     entry.tail = [];
+  };
+
+  const closeEntry = (entry: Entry): void => {
+    if (entry.status === "closed") return;
+    const { slot } = entry;
+    const loaded = entry.loadedIn === slot.generation;
+    if (entry.ready) slot.ready.splice(slot.ready.indexOf(entry), 1);
+    forget(entry);
     if (loaded) slot.worker?.postMessage({ type: "drop", document: entry.id } satisfies ToWorker);
   };
 
@@ -382,8 +388,6 @@ export const createAppDocumentPool = ({
     const slot = slots.reduce((least, candidate) =>
       candidate.documents < least.documents ? candidate : least,
     );
-    slot.documents += 1;
-    if (!slot.worker && !closed) start(slot);
     const entry: Entry = {
       id: nextId++,
       slot,
@@ -393,23 +397,27 @@ export const createAppDocumentPool = ({
       queued: { jobs: 0, bytes: 0 },
       loadedIn: -1,
       loadFailures: 0,
-      status: "open",
+      status: closed ? "closed" : "open",
       ready: false,
     };
-    entries.add(entry);
+    if (!closed) {
+      entries.add(entry);
+      slot.documents += 1;
+      if (!slot.worker) start(slot);
+    }
     return {
-      apply: (update) => {
-        const owned = update.slice();
-        return new Promise((settle) =>
-          enqueue(entry, { kind: "apply", update: owned, bytes: owned.length, settle }),
-        );
-      },
-      sync: (stateVector) => {
-        const owned = stateVector.slice();
-        return new Promise((settle) =>
-          enqueue(entry, { kind: "sync", stateVector: owned, bytes: owned.length, settle }),
-        );
-      },
+      apply: (update) =>
+        new Promise((settle) => {
+          const refusal = admit(entry, update.length);
+          if (refusal) settle({ ok: false, reason: refusal });
+          else enqueue(entry, { kind: "apply", update: new Uint8Array(update), bytes: update.length, settle });
+        }),
+      sync: (stateVector) =>
+        new Promise((settle) => {
+          const refusal = admit(entry, stateVector.length);
+          if (refusal) settle({ ok: false, reason: refusal });
+          else enqueue(entry, { kind: "sync", stateVector: new Uint8Array(stateVector), bytes: stateVector.length, settle });
+        }),
       close: () => closeEntry(entry),
     };
   };
@@ -426,11 +434,7 @@ export const createAppDocumentPool = ({
       slot.ready = [];
       retire(slot);
     }
-    for (const entry of entries) {
-      drop(entry, entry.waiting, "closed");
-      entry.waiting = [];
-      entry.ready = false;
-    }
+    for (const entry of entries) forget(entry);
     await Promise.all(terminating);
   };
 
