@@ -111,6 +111,15 @@ tar -C "$payload" -czf - . | age --encrypt -R "$recipients" -o "${work}/${name}.
 # the heartbeat is not sent.
 mv "${work}/${name}.tar.gz.age" "${BACKUP_LOCAL_DIR}/"
 archive="${BACKUP_LOCAL_DIR}/${name}.tar.gz.age"
+# From here every exit keeps only the newest BACKUP_LOCAL_KEEP archives, so
+# nights whose upload failed cannot fill the disk.
+keep="${BACKUP_LOCAL_KEEP:-3}"
+prune_local_archives() {
+  find "$BACKUP_LOCAL_DIR" -maxdepth 1 -name 'conclave-*.tar.gz.age' | sort -r | tail -n "+$((keep + 1))" | while read -r old; do
+    rm -f "$old"
+  done
+}
+trap 'rm -rf "$work"; prune_local_archives' EXIT
 size="$(wc -c < "$archive" | tr -d ' ')"
 log "Encrypted archive ${archive} (${size} bytes)"
 
@@ -126,11 +135,6 @@ if [[ "$UPLOAD" == "true" ]]; then
     log "Uploaded monthly/${year}-${month}/${name}.tar.gz.age"
   fi
 fi
-
-keep="${BACKUP_LOCAL_KEEP:-3}"
-find "$BACKUP_LOCAL_DIR" -maxdepth 1 -name 'conclave-*.tar.gz.age' | sort -r | tail -n "+$((keep + 1))" | while read -r old; do
-  rm -f "$old"
-done
 
 if [[ -n "${BACKUP_HEARTBEAT_URL:-}" ]]; then
   curl -fsS --max-time 10 --retry 3 "$BACKUP_HEARTBEAT_URL" >/dev/null || log "warning: heartbeat ping failed"

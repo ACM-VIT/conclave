@@ -211,7 +211,7 @@ test(
 );
 
 test(
-  "a failed upload keeps the night's archive on the VM and sends no heartbeat",
+  "a failed upload keeps the night's archive within the local retention and sends no heartbeat",
   { skip: missing.length > 0 && `needs ${missing.join(", ")} on PATH` },
   async () => {
     const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
@@ -244,11 +244,17 @@ test(
       const db = new DatabaseSync(path.join(state, "conclave.sqlite"));
       db.exec("CREATE TABLE scheduled_webinars (id TEXT PRIMARY KEY)");
       db.close();
+      // Four earlier nights whose uploads failed too.
+      const earlier = ["20260101", "20260102", "20260103", "20260104"].map((day) => `conclave-test-${day}T000000Z.tar.gz.age`);
+      for (const name of earlier) await writeFile(path.join(local, name), "earlier");
 
       await assert.rejects(backup(), /upload of daily\/.* failed with HTTP 503/);
       assert.equal(hits.upload, 1);
       assert.equal(hits.heartbeat, 0, "a failed backup must not send the heartbeat");
-      assert.equal((await readdir(local)).filter((name) => name.endsWith(".tar.gz.age")).length, 1);
+      const kept = (await readdir(local)).filter((name) => name.endsWith(".tar.gz.age")).sort();
+      assert.equal(kept.length, 3, "BACKUP_LOCAL_KEEP (3) holds after a failed upload");
+      assert.deepEqual(kept.slice(0, 2), earlier.slice(2), "the oldest archives go first");
+      assert.ok(!earlier.includes(kept[2]), "tonight's archive is kept");
     } finally {
       azure.close();
       await rm(root, { recursive: true, force: true });

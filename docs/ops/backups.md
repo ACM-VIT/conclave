@@ -98,7 +98,9 @@ state dir. A path outside the volume lives inside the container and is lost on
 every deploy, so the backup fails until it is moved.
 
 If the upload fails, the encrypted archive stays in `/var/backups/conclave`,
-the job fails, and the heartbeat is not sent.
+the job fails, and the heartbeat is not sent. The newest
+`BACKUP_LOCAL_KEEP` (3) archives are kept either way, so failed nights cannot
+fill the disk.
 
 For alerts on a missed night, create a free healthchecks.io check with a
 1-day period and put its ping URL in `BACKUP_HEARTBEAT_URL`.
