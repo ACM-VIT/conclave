@@ -1139,6 +1139,9 @@ export class Room {
       }
       this.webinarPromotedUserKeys.delete(invitedKey);
       this.webinarPromotedUserKeys.set(userKey, expiresAt);
+      // A fresh invite ends an earlier move back to the audience, for the
+      // key the invite lands on as for the key the host invited.
+      this.webinarDemotedUserKeys.delete(userKey);
       this.guestProofsByUserKey.set(userKey, guestProof);
       this.releaseGuestIdentity(invitedKey);
       return true;

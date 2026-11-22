@@ -341,6 +341,23 @@ describe("a stage invite for a guest whose key differs between the audience and 
     expect(room.isWebinarPromotedUserKey(audience.userId)).toBe(true);
   });
 
+  it("lets a guest the host moved back to the audience take a fresh invite", async () => {
+    const { state, room } = await invited();
+    await join(state, onStage);
+    // What the host's "move to audience" does to a speaker.
+    room.revokeWebinarPromotion(onStage.userId);
+    room.markWebinarDemotedUserKey(onStage.userId);
+    room.removeClient(`${onStage.userId}#view-1`);
+    expect((await join(state, onStage)).ack).toHaveBeenCalledWith(refused);
+
+    room.promoteWebinarUserKey(audience.userId);
+    const back = await join(state, onStage);
+
+    expect(back.ack).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "joined", webinarRole: "participant" }),
+    );
+  });
+
   it("keeps the invited guest bound to its pass once it is on the stage", async () => {
     const { state } = await invited();
     await join(state, onStage);
