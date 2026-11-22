@@ -128,7 +128,7 @@ struct CrashReportingTests {
         #expect(exception["type"] as? String == "ApplicationNotResponding")
         #expect((exception["mechanism"] as? [String: Any])?["type"] as? String == "freeze")
         let frames = try #require((exception["stacktrace"] as? [String: Any])?["frames"] as? [[String: Any]])
-        #expect(frames.map { $0["function"] as? String } == ["syscall", "onProduce", "joinBlocking"])
+        #expect(frames.map { $0["function"] as? String } == ["?", "?", "?"])
         #expect(frames[0]["module"] as? String == "libc.so")
         #expect(frames[1]["filename"] as? String == "WebRTCClient+Android.kt" && frames[1]["lineno"] as? Int == 7216)
         #expect(frames[1]["in_app"] as? Bool == true && frames[2]["in_app"] as? Bool == false)
@@ -173,15 +173,13 @@ struct CrashReportingTests {
         #expect(frames[1]["in_app"] as? Bool == true && frames[1]["lang"] as? String == "swift")
     }
 
-    @Test func iOSExceptionSymbolsParseIntoFrames() {
-        let frames = CrashCaptureRecord.symbolFrames([
-            "0   CoreFoundation                      0x00000001804b10ec __exceptionPreprocess + 160",
-            "3   Conclave.debug.dylib                0x0000000104a2b1c8 $s8Conclave12CrashCaptureV5forceyyF + 120",
-            "short line",
-        ])
-        #expect(frames.count == 2)
-        #expect(frames[0].function == "__exceptionPreprocess" && frames[0].module == "CoreFoundation" && !frames[0].inApp)
-        #expect(frames[1].function == "$s8Conclave12CrashCaptureV5forceyyF" && frames[1].inApp)
+    @Test func iOSExceptionFramesComeFromTheDynamicLinkerNotSymbolText() {
+        let frames = CrashCaptureRecord.addressFrames(Thread.callStackReturnAddresses)
+        #expect(frames.count >= 2)
+        #expect(frames.allSatisfy { $0.module == "[path]" || CrashReportPrivacy.isKnownModule($0.module) })
+        #expect(frames.contains { CrashReportPrivacy.isKnownModule($0.module) && $0.function != "?" })
+        let unresolved = CrashCaptureRecord.addressFrames([NSNumber(value: 1)])
+        #expect(unresolved.map { $0.function } == ["?"] && unresolved.map { $0.module } == ["[path]"])
     }
 
     @Test func plannerSkipsReportedAndUnreportablePayloadsAndBatchesTheRest() {
@@ -286,7 +284,7 @@ struct CrashReportingTests {
     }
 
     @Test func pathsKeepOnlyFileNamesAndDropDirectories() {
-        #expect(CrashReportPrivacy.symbol("#00 pc 000000 /system/lib64/libc.so (syscall+28)") == "#00 pc 000000 libc.so (syscall+28)")
+        #expect(CrashReportPrivacy.symbol("#00 pc 000000 /system/lib64/libc.so (syscall+28)") == "#00 pc 000000 libc.so")
         #expect(CrashReportPrivacy.symbol("at (/Users/Jane Doe/private/notes") == "at ([path]")
         #expect(!CrashReportPrivacy.symbol("load /Users/Jane").contains("Jane"))
         #expect(CrashReportPrivacy.symbol("conclave.module.WebRTCClient$onProduce$1") == "conclave.module.WebRTCClient$onProduce$1")
@@ -385,7 +383,7 @@ struct CrashReportingTests {
         #expect(CrashReportPrivacy.symbol("native: /Users/Jane.Doe Smith/private/libExample.so") == "native: [path]")
         let frame = CrashReportPrivacy.symbol(
             "#00 pc 0001 /data/app/~~a==/com.acmvit.conclave-b==/lib/arm64/libmediasoupclient_so.so (Produce+8)")
-        #expect(frame == "#00 pc 0001 libmediasoupclient_so.so (Produce+8)")
+        #expect(frame == "#00 pc 0001 libmediasoupclient_so.so")
         for leaked in ["Jane", "Doe", "Smith", "private", "/data/app"] {
             #expect(!cleaned.contains(leaked) && !frame.contains(leaked), "\(leaked)")
         }
@@ -397,7 +395,7 @@ struct CrashReportingTests {
         #expect(dottedFolder == "native: [path]")
         let spacedLibrary = CrashReportPrivacy.symbol(
             "#03 pc 0004 /data/user/0/com.acmvit.conclave/files/Jane Doe Plugins/libmediasoupclient_so.so (run+4)")
-        #expect(spacedLibrary == "#03 pc 0004 libmediasoupclient_so.so (run+4)")
+        #expect(spacedLibrary == "#03 pc 0004 libmediasoupclient_so.so")
         let unknownLibrary = CrashReportPrivacy.symbol(
             "#03 pc 0004 /data/user/0/com.acmvit.conclave/files/Jane Doe Plugins/libplugin.so (run+4)")
         #expect(unknownLibrary == "#03 pc 0004 [path]")
@@ -409,7 +407,7 @@ struct CrashReportingTests {
                                (unknownLibrary, "plugin"), (dottedFile, "Jane"), (dottedFile, "Smith"), (relative, "Jane")] {
             #expect(!text.contains(leaked), "\(leaked) in \(text)")
         }
-        #expect(CrashReportPrivacy.symbol("at /System/Library/Frameworks/UIKit.framework/UIKit (run)") == "at UIKit (run)")
+        #expect(CrashReportPrivacy.symbol("at /System/Library/Frameworks/UIKit.framework/UIKit (run)") == "at UIKit")
         #expect(CrashReportPrivacy.symbol("/private/var/containers/Bundle/Application/A1/Conclave.app/Conclave") == "Conclave")
         #expect(CrashReportPrivacy.symbol("/usr/lib/system/libsystem_kernel.dylib") == "libsystem_kernel.dylib")
     }
@@ -430,10 +428,10 @@ struct CrashReportingTests {
         #expect(CrashReportPrivacy.fileName("Jane Doe") == "[path]")
 
         let folder = try #require(CrashReportEventBuilder.traceFrame("native: #01 pc 0002 /Users/Jane.so Smith (Jane+4)"))
-        #expect(folder.function == "[path]" && folder.module == "[path]")
+        #expect(folder.function == "?" && folder.module == "[path]")
         let known = try #require(CrashReportEventBuilder.traceFrame(
             "native: #00 pc 000000000004e8b8  /apex/com.android.runtime/lib64/bionic/libc.so (syscall+28) (BuildId: ab12)"))
-        #expect(known.function == "syscall" && known.module == "libc.so")
+        #expect(known.function == "?" && known.module == "libc.so")
 
         let trace = """
         {"traceLines":["\\"main\\" prio=5 tid=1 Blocked","native: #00 pc 0001 /Users/Jane.so Smith/notes (Jane+1)",\
@@ -442,7 +440,7 @@ struct CrashReportingTests {
         let text = try #require(CrashReportEventBuilder.event(for: exitRecord("anr", trace: trace), eventId: "id-1",
                                                                context: Self.context))
         #expect(!text.contains("Jane") && !text.contains("Smith") && !text.contains("notes") && !text.contains("/Users"))
-        #expect(text.contains("onProduce"))
+        #expect(text.contains("conclave.module.WebRTCClient") && !text.contains("onProduce"))
     }
 
     /// The ANR an external review captured on a loopback PostHog, with a Unix and a Windows home path and a native
@@ -461,9 +459,72 @@ struct CrashReportingTests {
         let properties = try #require(try json(text)["properties"] as? [String: Any])
         let exception = try #require((properties["$exception_list"] as? [[String: Any]])?.first)
         let frames = try #require((exception["stacktrace"] as? [String: Any])?["frames"] as? [[String: Any]])
-        #expect(frames.map { $0["function"] as? String } == ["[path]", "start", "start"])
+        #expect(frames.map { $0["function"] as? String } == ["?", "?", "?"])
         #expect(frames.map { $0["module"] as? String } == ["[path]", "conclave.Camera", "conclave.Camera"])
         #expect(frames[1]["filename"] as? String == "[path]" && frames[2]["filename"] as? String == "[path]")
+    }
+
+    /// A mapping can end in a parenthesized name, so a trailing group is never uploaded as the frame's function.
+    @Test func aParenthesizedNameAfterAKnownModuleNeverBecomesTheFunction() throws {
+        let mapping = "/data/user/0/com.acmvit.conclave/files/libc.so (Jane Smith)"
+        #expect(CrashReportPrivacy.symbol(mapping) == "libc.so")
+        let frame = try #require(CrashReportEventBuilder.traceFrame("native: #00 pc 0001 " + mapping))
+        #expect(frame.function == "?" && frame.module == "libc.so")
+        let trace = try JSONSerialization.data(withJSONObject: ["traceLines": ["\"main\" prio=5 tid=1 Blocked",
+                                                                              "native: #00 pc 0001 " + mapping]])
+        let text = try #require(CrashReportEventBuilder.event(for: exitRecord("anr", trace: String(decoding: trace, as: UTF8.self)),
+                                                               eventId: "id-1", context: Self.context))
+        #expect(!text.contains("Jane") && !text.contains("Smith"))
+        let properties = try #require(try json(text)["properties"] as? [String: Any])
+        let exception = try #require((properties["$exception_list"] as? [[String: Any]])?.first)
+        let frames = try #require((exception["stacktrace"] as? [String: Any])?["frames"] as? [[String: Any]])
+        #expect(frames.map { $0["function"] as? String } == ["?"] && frames.map { $0["module"] as? String } == ["libc.so"])
+    }
+
+    @Test func onlyExactSdkNamesPassForSwiftAndSystemLibraries() {
+        for name in ["libswiftReviewFixture.dylib", "libsystem_Jane.dylib", "libswift.dylib", "libsystem_.dylib"] {
+            #expect(CrashReportPrivacy.moduleName(name) == "[path]", "\(name)")
+            #expect(CrashReportPrivacy.moduleNameFromPath("/usr/lib/swift/" + name) == "[path]", "\(name)")
+        }
+        for name in ["libswiftCore.dylib", "libswift_Concurrency.dylib", "libsystem_kernel.dylib", "libsystem_pthread.dylib"] {
+            #expect(CrashReportPrivacy.moduleName(name) == name, "\(name)")
+        }
+    }
+
+    /// ANR native lines are free text: every parenthesized group (`(deleted)`, `(offset 0x1234)`, a symbol, a name) is
+    /// dropped unread, the frame keeps its pc, and its module is a known one or `[path]`.
+    @Test func anrNativeFramesKeepOnlyTheirPcAndAKnownModule() throws {
+        let fixtures: [(line: String, module: String, address: String)] = [
+            ("native: #00 pc 0001234 /data/app/~~x==/com.acmvit.conclave-y==/base.apk (offset 0x1234) (SomeFunction+12)",
+             "base.apk", "0x0001234"),
+            ("native: #01 pc 000789 /system/lib64/libc.so (deleted)", "libc.so", "0x000789"),
+            ("native: #02 pc 0001 /data/user/0/com.acmvit.conclave/files/libc.so (Jane Smith)", "libc.so", "0x0001"),
+            ("native: #03 pc 000456 /usr/lib/swift/libswiftReviewFixture.dylib", "[path]", "0x000456"),
+            ("native: #04 pc 0002 Users/Jane.Doe Smith", "[path]", "0x0002"),
+            ("native: #05 pc 0003 /Users/Jane.so Smith", "[path]", "0x0003"),
+            ("native: #06 pc 0004 a.so room-1234", "[path]", "0x0004"),
+        ]
+        for fixture in fixtures {
+            let frame = try #require(CrashReportEventBuilder.traceFrame(fixture.line))
+            #expect(frame.function == "?" && frame.module == fixture.module && frame.address == fixture.address,
+                    "\(fixture.line)")
+        }
+        var lines = ["\"main\" prio=5 tid=1 Blocked"]
+        for fixture in fixtures {
+            lines.append(fixture.line)
+        }
+        let trace = try JSONSerialization.data(withJSONObject: ["traceLines": lines])
+        let text = try #require(CrashReportEventBuilder.event(for: exitRecord("anr", trace: String(decoding: trace, as: UTF8.self)),
+                                                               eventId: "id-1", context: Self.context))
+        for leaked in ["Jane", "Smith", "room-1234", "SomeFunction", "deleted", "ReviewFixture", "Users", "offset"] {
+            #expect(!text.contains(leaked), "\(leaked)")
+        }
+        let properties = try #require(try json(text)["properties"] as? [String: Any])
+        let exception = try #require((properties["$exception_list"] as? [[String: Any]])?.first)
+        let frames = try #require((exception["stacktrace"] as? [String: Any])?["frames"] as? [[String: Any]])
+        #expect(frames.count == fixtures.count)
+        #expect(frames.last?["module"] as? String == "base.apk" && frames.last?["instruction_addr"] as? String == "0x0001234")
+        #expect(frames.allSatisfy { $0["function"] as? String == "?" })
     }
 
     @Test func theStoreMeasuresRetentionAgainstItsOwnClock() {

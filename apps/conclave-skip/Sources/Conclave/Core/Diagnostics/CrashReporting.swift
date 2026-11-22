@@ -46,6 +46,8 @@ struct CrashReportFrame: Equatable {
     let filename: String
     let line: Int
     let inApp: Bool
+    /// The frame's program counter (`0x4e8b8`), when its source gives one.
+    var address: String = ""
 }
 
 struct CrashReportException: Equatable {
@@ -60,13 +62,13 @@ enum CrashReportPrivacy {
     static let uploadedTextKeys: [String] = [
         "reason", "summaryPhase", "appVersion", "osVersion", "appBuild", "architecture", "exceptionName", "exceptionKind",
     ]
-    static let symbolCharacters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.$:<>()[]+-#/ ,"
+    static let symbolCharacters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.$:<>()[]+-#/ ,?"
     static let maxSymbolLength = 160
     static let pathPlaceholder = "[path]"
 
     /// Binaries a frame may name: Conclave's own on both platforms, then the system ones crashes pass through.
     static let knownModules: Set<String> = [
-        "Conclave", "Mediasoup", "WebRTC",
+        "Conclave", "Conclave.debug.dylib", "Mediasoup", "WebRTC",
         "libmediasoupclient_so.so", "libjingle_peerconnection_so.so", "libdotlottie_player.so", "libdlplayer.so",
         "libandroidx.graphics.path.so", "libimage_processing_util_jni.so", "libsurface_util_jni.so",
         "base.apk", "base.odex", "base.vdex", "base.art",
@@ -86,6 +88,49 @@ enum CrashReportPrivacy {
         "dyld", "libobjc.A.dylib", "libdyld.dylib", "libdispatch.dylib", "libc++.1.dylib", "libc++abi.dylib",
         "libxpc.dylib",
     ]
+    /// libSystem's re-exported dylibs, exactly as the iOS SDK lists them (`usr/lib/libSystem.B.tbd`).
+    static let appleSystemLibraries: Set<String> = [
+        "libsystem_asl.dylib", "libsystem_blocks.dylib", "libsystem_c.dylib", "libsystem_collections.dylib",
+        "libsystem_configuration.dylib", "libsystem_containermanager.dylib", "libsystem_coreservices.dylib",
+        "libsystem_darwin.dylib", "libsystem_darwindirectory.dylib", "libsystem_dnssd.dylib",
+        "libsystem_eligibility.dylib", "libsystem_featureflags.dylib", "libsystem_info.dylib",
+        "libsystem_kernel.dylib", "libsystem_m.dylib", "libsystem_malloc.dylib", "libsystem_networkextension.dylib",
+        "libsystem_notify.dylib", "libsystem_platform.dylib", "libsystem_pthread.dylib", "libsystem_sandbox.dylib",
+        "libsystem_sanitizers.dylib", "libsystem_symptoms.dylib", "libsystem_trace.dylib", "libsystem_trial.dylib",
+        "libSystem.B.dylib", "libcache.dylib", "libcommonCrypto.dylib", "libcompiler_rt.dylib", "libcopyfile.dylib",
+        "libcorecrypto.dylib", "libmacho.dylib", "libremovefile.dylib", "libunwind.dylib",
+    ]
+    /// The Swift runtime and overlay dylibs, exactly as the iOS SDK ships them (`usr/lib/swift`).
+    static let swiftRuntimeLibraries: Set<String> = [
+        "libswiftARKit.dylib", "libswiftAVFoundation.dylib", "libswiftAccelerate.dylib",
+        "libswiftAppleArchive.dylib", "libswiftAssetsLibrary.dylib", "libswiftCallKit.dylib",
+        "libswiftCarPlay.dylib", "libswiftCloudKit.dylib", "libswiftCompatibilitySpan.dylib",
+        "libswiftCompression.dylib", "libswiftContacts.dylib", "libswiftCore.dylib", "libswiftCoreAudio.dylib",
+        "libswiftCoreData.dylib", "libswiftCoreFoundation.dylib", "libswiftCoreGraphics.dylib",
+        "libswiftCoreImage.dylib", "libswiftCoreLocation.dylib", "libswiftCoreMIDI.dylib", "libswiftCoreML.dylib",
+        "libswiftCoreMedia.dylib", "libswiftCoreNFC.dylib", "libswiftCryptoTokenKit.dylib", "libswiftDarwin.dylib",
+        "libswiftDataDetection.dylib", "libswiftDemangle.dylib", "libswiftDispatch.dylib",
+        "libswiftDistributed.dylib", "libswiftExtensionFoundation.dylib", "libswiftExtensionKit.dylib",
+        "libswiftFileProvider.dylib", "libswiftFoundation.dylib", "libswiftGLKit.dylib", "libswiftGameplayKit.dylib",
+        "libswiftHealthKit.dylib", "libswiftHomeKit.dylib", "libswiftIdentityLookup.dylib", "libswiftIntents.dylib",
+        "libswiftMLCompute.dylib", "libswiftMapKit.dylib", "libswiftMediaPlayer.dylib", "libswiftMetal.dylib",
+        "libswiftMetalKit.dylib", "libswiftMetricKit.dylib", "libswiftModelIO.dylib",
+        "libswiftNaturalLanguage.dylib", "libswiftNearbyInteraction.dylib", "libswiftNetwork.dylib",
+        "libswiftOSLog.dylib", "libswiftObjectiveC.dylib", "libswiftObservation.dylib", "libswiftPassKit.dylib",
+        "libswiftPencilKit.dylib", "libswiftPhotos.dylib", "libswiftPhotosUI.dylib", "libswiftQuartzCore.dylib",
+        "libswiftQuickLook.dylib", "libswiftRegexBuilder.dylib", "libswiftRemoteMirror.dylib",
+        "libswiftSceneKit.dylib", "libswiftShazamKit.dylib", "libswiftSoundAnalysis.dylib",
+        "libswiftSoundAnalysis_Private.dylib", "libswiftSpatial.dylib", "libswiftSpeech.dylib",
+        "libswiftSpriteKit.dylib", "libswiftSwiftOnoneSupport.dylib", "libswiftSynchronization.dylib",
+        "libswiftSystem.dylib", "libswiftSystem_Foundation.dylib", "libswiftUIKit.dylib",
+        "libswiftUniformTypeIdentifiers.dylib", "libswiftVideoToolbox.dylib", "libswiftVision.dylib",
+        "libswiftXPC.dylib", "libswift_Builtin_float.dylib", "libswift_Concurrency.dylib",
+        "libswift_DarwinFoundation1.dylib", "libswift_DarwinFoundation2.dylib", "libswift_DarwinFoundation3.dylib",
+        "libswift_RegexParser.dylib", "libswift_StringProcessing.dylib", "libswift_Volatile.dylib",
+        "libswift_errno.dylib", "libswift_math.dylib", "libswift_signal.dylib", "libswift_stdio.dylib",
+        "libswift_time.dylib", "libswiftos.dylib", "libswiftsimd.dylib", "libswiftsys_time.dylib",
+        "libswiftunistd.dylib",
+    ]
     /// Package roots of the code a Java or Kotlin frame names as its module (`conclave.module.WebRTCClient`).
     static let knownCodePackages: [String] = [
         "java.", "javax.", "jdk.", "sun.", "kotlin.", "kotlinx.", "android.", "androidx.", "com.android.", "dalvik.",
@@ -94,7 +139,6 @@ enum CrashReportPrivacy {
     ]
     static let sourceFileSuffixes: [String] = [".kt", ".java", ".swift", ".m", ".mm", ".c", ".cc", ".cpp", ".h"]
     static let knownSourceLocations: [String] = ["Native Method", "Unknown Source", "SourceFile"]
-    static let familyCharacters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
     static let codeNameCharacters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_$."
     static let sourceFileCharacters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_$+-."
     /// A `/` right after one of these belongs to a relative path, whose start cannot be told from the text around it.
@@ -116,17 +160,19 @@ enum CrashReportPrivacy {
     }
 
     static func isKnownModule(_ name: String) -> Bool {
-        if knownModules.contains(name) { return true }
-        return isFamily(name, prefix: "libsystem_", suffix: ".dylib") || isFamily(name, prefix: "libswift", suffix: ".dylib")
+        knownModules.contains(name) || appleSystemLibraries.contains(name) || swiftRuntimeLibraries.contains(name)
     }
 
-    private static func isFamily(_ name: String, prefix: String, suffix: String) -> Bool {
-        if !name.hasPrefix(prefix) || !name.hasSuffix(suffix) || name.count <= prefix.count + suffix.count { return false }
-        let middle = String(String(name.dropFirst(prefix.count)).dropLast(suffix.count))
-        for character in middle where !familyCharacters.contains(character) {
-            return false
+    static let hexCharacters = "0123456789abcdefABCDEF"
+
+    /// `0x` plus the hex digits of a program counter, or empty when the text is not one.
+    static func address(_ hex: String) -> String {
+        let digits = hex.hasPrefix("0x") ? String(hex.dropFirst(2)) : hex
+        if digits.isEmpty || digits.count > 16 { return "" }
+        for character in digits where !hexCharacters.contains(character) {
+            return ""
         }
-        return true
+        return "0x" + digits
     }
 
     static func isKnownCodeName(_ name: String) -> Bool {
@@ -189,9 +235,8 @@ enum CrashReportPrivacy {
 
     /// Fails closed, counting `\` as a separator like `/`. A relative path's start is unknowable, so its text becomes
     /// `[path]` whole. An absolute path keeps only the name after its last separator, and only when that name is a
-    /// known module (a dotted or spaced folder such as `/Users/Jane.so Smith` never is); otherwise it and everything
-    /// after it become `[path]`. Text after a known module survives only as the parenthesized symbol native frames
-    /// carry, `libc.so (syscall+28)`.
+    /// known module (a dotted or spaced folder such as `/Users/Jane.so Smith` never is), else `[path]`. Nothing after
+    /// the path survives: `libc.so (Jane Smith)` can be one file name, so a trailing group is never read as a symbol.
     static func withoutPaths(_ text: String) -> String {
         var characters: [String] = []
         for character in text {
@@ -222,19 +267,13 @@ enum CrashReportPrivacy {
             index += 1
         }
         if !isKnownModule(name) { return result + pathPlaceholder }
-        result += name
-        var rest = ""
-        while index < characters.count {
-            rest += characters[index]
-            index += 1
-        }
-        if rest.hasPrefix("(") || rest.hasPrefix(" (") { result += rest }
-        return result
+        return result + name
     }
 
     static func frame(_ frame: CrashReportFrame) -> CrashReportFrame {
         CrashReportFrame(function: symbol(frame.function), module: moduleName(frame.module),
-                         filename: fileName(frame.filename), line: frame.line, inApp: frame.inApp)
+                         filename: fileName(frame.filename), line: frame.line, inApp: frame.inApp,
+                         address: address(frame.address))
     }
 }
 
@@ -423,7 +462,9 @@ enum CrashReportEventBuilder {
         return frames
     }
 
-    /// Parses `at a.b.Class.method(File.kt:12)` and `native: #00 pc ... (symbol+8)` trace lines.
+    /// Parses `at a.b.Class.method(File.kt:12)` and `native: #00 pc ... (symbol+8)` trace lines. They are free text, so
+    /// a frame from them never carries a function name (`?`); only a function from a structured field (a tombstone's
+    /// `function_name`, a stack trace element, a dynamic-linker symbol) is uploaded.
     static func traceFrame(_ line: String) -> CrashReportFrame? {
         if line.hasPrefix("native: ") {
             return nativeTraceFrame(String(line.dropFirst(8)))
@@ -438,7 +479,6 @@ enum CrashReportEventBuilder {
             location = String(callParts.dropFirst().joined(separator: "(").dropLast())
         }
         let nameParts = qualified.components(separatedBy: ".")
-        let function = nameParts.last ?? qualified
         let module = nameParts.count > 1 ? nameParts.dropLast().joined(separator: ".") : ""
         let locationParts = location.components(separatedBy: ":")
         var filename = location
@@ -447,42 +487,28 @@ enum CrashReportEventBuilder {
             filename = locationParts.dropLast().joined(separator: ":")
             lineNumber = Int(locationParts[locationParts.count - 1]) ?? 0
         }
-        return CrashReportFrame(function: function, module: module, filename: filename, line: lineNumber,
+        return CrashReportFrame(function: unknownFunction, module: module, filename: filename, line: lineNumber,
                                 inApp: module.hasPrefix("conclave."))
     }
 
-    /// Splits `#00 pc 000000000004e8b8  /apex/.../libc.so (syscall+28) (BuildId: ab12)` into its symbol and the
-    /// mapping's file name. A mapping that is not a known module could be any folder, so its symbol is not trusted
-    /// either and the whole frame becomes `[path]`.
+    static let unknownFunction = "?"
+
+    /// `#00 pc 000000000004e8b8  /apex/.../libc.so (syscall+28) (BuildId: ab12)`: the frame keeps its pc, and its module
+    /// is read from the text before the first ` (` only when that is an absolute path ending in a known module. Every
+    /// parenthesized group (`(deleted)`, `(offset 0x1234)`, a symbol) is dropped unread.
     static func nativeTraceFrame(_ body: String) -> CrashReportFrame {
-        let unknown = CrashReportFrame(function: CrashReportPrivacy.pathPlaceholder, module: CrashReportPrivacy.pathPlaceholder,
-                                       filename: "", line: 0, inApp: false)
         var parts: [String] = []
         for part in body.components(separatedBy: " ") where !part.isEmpty {
             parts.append(part)
         }
-        if parts.count < 4 || !parts[0].hasPrefix("#") || parts[1] != "pc" { return unknown }
-        let pc = parts[2]
-        var rest = Array(parts.dropFirst(3)).joined(separator: " ")
-        let withoutBuildId = rest.components(separatedBy: " (BuildId: ")
-        if withoutBuildId.count >= 2 { rest = withoutBuildId[0] }
-        var mapping = rest
-        var symbolText = ""
-        let groups = rest.components(separatedBy: " (")
-        if rest.hasSuffix(")") && groups.count >= 2 {
-            let last = String(groups[groups.count - 1].dropLast())
-            mapping = Array(groups.dropLast()).joined(separator: " (")
-            if !last.hasPrefix("offset ") { symbolText = last }
+        if parts.count < 4 || !parts[0].hasPrefix("#") || parts[1] != "pc" {
+            return CrashReportFrame(function: unknownFunction, module: CrashReportPrivacy.pathPlaceholder, filename: "",
+                                    line: 0, inApp: false)
         }
-        let library = CrashReportPrivacy.moduleNameFromPath(mapping)
-        if library == CrashReportPrivacy.pathPlaceholder || library.isEmpty { return unknown }
-        var symbolName = symbolText
-        let offsetParts = symbolText.components(separatedBy: "+")
-        if offsetParts.count >= 2 && Int(offsetParts[offsetParts.count - 1]) != nil {
-            symbolName = Array(offsetParts.dropLast()).joined(separator: "+")
-        }
-        return CrashReportFrame(function: symbolName.isEmpty ? "pc " + pc : symbolName, module: library, filename: "",
-                                line: 0, inApp: mapping.contains("com.acmvit.conclave"))
+        let mapping = Array(parts.dropFirst(3)).joined(separator: " ").components(separatedBy: " (")[0]
+        return CrashReportFrame(function: unknownFunction, module: CrashReportPrivacy.moduleNameFromPath(mapping),
+                                filename: "", line: 0, inApp: mapping.contains("com.acmvit.conclave"),
+                                address: CrashReportPrivacy.address(parts[2]))
     }
 
     static func exceptionList(_ exceptions: [CrashReportException], kind: CrashReportKind, lang: String) -> String {
@@ -522,6 +548,9 @@ enum CrashReportEventBuilder {
         }
         if frame.line > 0 {
             fields.append(DiagnosticsJSON.string("lineno") + ": " + String(frame.line))
+        }
+        if !frame.address.isEmpty {
+            fields.append(DiagnosticsJSON.string("instruction_addr") + ": " + DiagnosticsJSON.string(frame.address))
         }
         return "{ " + fields.joined(separator: ", ") + " }"
     }
@@ -657,25 +686,28 @@ enum CrashCaptureRecord {
             + DiagnosticsJSON.string(DiagnosticsRedactionPolicy.sanitizedPhase(phase)) + " }"
     }
 
-    /// Parses `callStackSymbols` lines such as `3   Conclave   0x0000000104a2b1c8 symbol + 120`.
-    static func symbolFrames(_ symbols: [String]) -> [CrashReportFrame] {
-        var result: [CrashReportFrame] = []
-        for line in symbols {
-            var parts: [String] = []
-            for part in line.components(separatedBy: " ") where !part.isEmpty {
-                parts.append(part)
+    #if !SKIP
+    /// Frames for an exception's return addresses. The image path and symbol come from the dynamic linker (`dladdr`),
+    /// never from parsing `callStackSymbols` text; the image counts only when its full path ends in a known module.
+    static func addressFrames(_ addresses: [NSNumber]) -> [CrashReportFrame] {
+        var frames: [CrashReportFrame] = []
+        for number in addresses {
+            if frames.count >= CrashReportEventBuilder.maxFrames { break }
+            var info = Dl_info()
+            guard let address = UnsafeRawPointer(bitPattern: number.uintValue), dladdr(address, &info) != 0 else {
+                frames.append(CrashReportFrame(function: CrashReportEventBuilder.unknownFunction,
+                                               module: CrashReportPrivacy.pathPlaceholder, filename: "", line: 0, inApp: false))
+                continue
             }
-            if parts.count < 4 { continue }
-            let binary = parts[1]
-            var symbolParts: [String] = Array(parts.dropFirst(3))
-            if symbolParts.count >= 3 && symbolParts[symbolParts.count - 2] == "+" {
-                symbolParts.removeLast(2)
-            }
-            result.append(CrashReportFrame(function: symbolParts.joined(separator: " "), module: binary, filename: "",
-                                           line: 0, inApp: binary.hasPrefix("Conclave")))
+            let image = info.dli_fname.map { String(cString: $0) } ?? ""
+            let module = CrashReportPrivacy.moduleNameFromPath(image)
+            let symbol = info.dli_sname.map { String(cString: $0) } ?? CrashReportEventBuilder.unknownFunction
+            frames.append(CrashReportFrame(function: symbol, module: module, filename: "", line: 0,
+                                           inApp: module.hasPrefix("Conclave")))
         }
-        return result
+        return frames
     }
+    #endif
 
     static func payload(exceptions: [CrashReportException], breadcrumbs: [String], phase: String,
                         createdAtMillis: Double, appVersion: String = "") -> DiagnosticsStoredPayload {
