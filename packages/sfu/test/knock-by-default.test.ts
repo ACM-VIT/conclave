@@ -1252,6 +1252,29 @@ describe("the account a code belongs to", () => {
     expect(attendee.context.currentClient).not.toBeInstanceOf(Admin);
   });
 
+  it("is never a member whose pass brings an earlier call back on an SFU with no record of it", async () => {
+    const member = {
+      userId: "member@example.com",
+      email: "member@example.com",
+      clientId: "conclave",
+      sessionId: "m",
+    };
+    const before = makeState();
+    await join(before, host);
+    roomOf(before).allowLockedUser("member@example.com");
+    const inCall = await join(before, member);
+    const elsewhere = makeState();
+
+    const back = await join(
+      elsewhere,
+      { ...member, allowRoomCreation: true },
+      { roomRecoveryPass: inCall.response.roomRecoveryPass },
+    );
+    expect(back.status).toBe("joined");
+    expect(back.context.currentClient).not.toBeInstanceOf(Admin);
+    expect(roomOf(elsewhere).ownerEmail).toBeNull();
+  });
+
   it("is not an account a guest made the code with: the first to arrive hosts", async () => {
     useClock();
     const state = makeState();

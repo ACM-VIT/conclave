@@ -108,6 +108,28 @@ export const startRoomRecoveryPassRefresh = (
  * knows who it admitted and who it removed. A pass from before a host ended
  * the meeting for everyone proves nothing either: that call is over.
  */
+// Whether `pass` is a recovery pass this SFU's secret signed for this code,
+// from any room at it: proof that a call ran at the code before.
+export const isRecoveryPassFor = (
+  pass: unknown,
+  channelId: string,
+  secret: string,
+): boolean => {
+  if (typeof pass !== "string" || !pass || pass.length > MAX_PASS_LENGTH) {
+    return false;
+  }
+  try {
+    const claims = jwt.verify(pass, secret, { algorithms: ["HS256"] });
+    return (
+      typeof claims === "object" &&
+      claims.tokenUse === TOKEN_USE &&
+      claims.channelId === channelId
+    );
+  } catch {
+    return false;
+  }
+};
+
 export const provesEarlierRoomMembership = (
   pass: unknown,
   room: RecoveryRoom,

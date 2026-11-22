@@ -54,6 +54,7 @@ import {
 } from "../../scheduledMeetings.js";
 import {
   issueRoomRecoveryPass,
+  isRecoveryPassFor,
   provesEarlierRoomMembership,
   ROOM_RECOVERY_PASS_TTL_MS,
 } from "../../roomRecoveryPass.js";
@@ -393,7 +394,10 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
               room.openedBy = userKey;
               // Whose code it is: who booked it, else whoever made it, which
               // the record keeps. A code with no record is made by this join,
-              // and belongs to its account, if it is signed in.
+              // and belongs to its account if it is signed in, unless the join
+              // brings a recovery pass for the code: then a call ran here
+              // before, on an SFU whose record this one cannot read, and
+              // nobody here knows whose it was.
               const booking = getScheduledMeetingByRoomCode(
                 state.scheduledMeetings,
                 clientId,
@@ -404,7 +408,12 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
                   ? booking.hostEmail
                   : recalled.owner
                     ? recalled.owner.email
-                    : isWebinarAttendeeJoin
+                    : isWebinarAttendeeJoin ||
+                        isRecoveryPassFor(
+                          data?.roomRecoveryPass,
+                          roomChannelId,
+                          config.sfuSecret,
+                        )
                       ? null
                       : normalizedJoinEmail || null;
             }
