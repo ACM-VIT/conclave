@@ -350,6 +350,30 @@ class VideoRenderingTests {
         assertEveryFrameGivenBack()
     }
 
+    @Test fun givingUpOnOneWindowSizeStillChecksTheBufferAfterTheNextResize() {
+        val renderer = rendererWithA160By62Window()
+        backend.width = 1032
+        backend.height = 400
+        renderer.attachSurface("window", 1)
+        renderer.onFrame(frame())
+        backend.settle()
+        clockNanos.addAndGet(TimeUnit.MILLISECONDS.toNanos(1_100))
+        renderer.onFrame(frame())
+        backend.settle()
+        assertEquals(1, backend.count("swap"))
+        backend.width = 160
+        backend.height = 62
+        renderer.onFrame(frame())
+        backend.settle()
+        renderer.windowSized(320, 124)
+        backend.sizeOfTheNextSurface = 320 to 124
+        val before = backend.calls.size
+        renderer.onFrame(frame())
+        backend.settle()
+        assertEquals(listOf("destroy surface-3", "create", "draw", "swap surface-4"), backend.calls.toList().drop(before))
+        assertEveryFrameGivenBack()
+    }
+
     @Test fun afterAResizeTheNextFrameGoesIntoABufferOfTheNewSizeNotTheOneTakenBefore() {
         val renderer = rendererWithA160By62Window()
         renderer.attachSurface("window", 1)
@@ -991,6 +1015,24 @@ class VideoRenderingTests {
         host.sink.onFrame(picture)
         backend.settle()
         settleMainFrames()
+    }
+
+    @Test fun aWindowSizeIsForgottenWithItsSurfaceSoTheNextSurfacesFirstFrameIsNotHeldBack() {
+        val host = surfaceHost()
+        backend.width = 160
+        backend.height = 62
+        host.surfaceAvailable("window")
+        host.surfaceChanged(host.holder, 0, 160, 62)
+        host.sink.onFrame(frame())
+        backend.settle()
+        host.surfaceDestroyed(host.holder)
+        backend.width = 504
+        backend.height = 400
+        host.surfaceAvailable("window")
+        host.sink.onFrame(frame())
+        backend.settle()
+        assertEquals(listOf("create", "draw", "swap surface-1", "destroy surface-1", "create", "draw", "swap surface-2"), backend.calls.toList())
+        assertEveryFrameGivenBack()
     }
 
     @Test fun aSurfaceTilesFirstPictureGoesIntoTheBufferItWasCreatedWithAndTheResizeFollows() {
