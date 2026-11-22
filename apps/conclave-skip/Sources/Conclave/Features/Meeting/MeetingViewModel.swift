@@ -5809,7 +5809,8 @@ final class MeetingViewModel {
             isHost: state.isAdmin,
             isAttendee: state.isWebinarAttendee,
             isLocked: state.isAppsLocked,
-            isReconnecting: !live
+            isReconnecting: !live,
+            keepsAppDocuments: state.appsRevision != nil
         ))
     }
 
@@ -9480,6 +9481,7 @@ final class MeetingViewModel {
             activeAppId: state.activeAppId ?? "",
             isAppsLocked: state.isAppsLocked,
             isAppsActionInFlight: state.isAppsActionInFlight,
+            keepsAppDocuments: state.appsRevision != nil,
             appIds: ActivitiesCatalogPolicy.defaultAppIds,
 
             isBrowserAvailable: state.isBrowserAvailable,

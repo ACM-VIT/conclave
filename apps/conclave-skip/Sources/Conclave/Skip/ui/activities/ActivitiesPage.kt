@@ -305,7 +305,8 @@ private fun ActivitiesRoot(session: ActivitySession, reservation: PaddingValues,
             onDismissRequest = { replaceTarget = null },
             title = { Text(conclaveString("act_replace_title", openName)) },
             text = {
-                Text(if (openApp?.appId == "whiteboard") conclaveString("act_close_board_message") else conclaveString("act_close_message"))
+                val effect = openApp?.closeEffect ?: AppCloseEffect.returnsToMeeting
+                Text(if (effect == AppCloseEffect.clearsBoard) conclaveString("act_replace_message", openName) else activitiesCloseMessage(effect))
             },
             confirmButton = {
                 TextButton(onClick = { replaceTarget = null; activities.openApp(replace) },

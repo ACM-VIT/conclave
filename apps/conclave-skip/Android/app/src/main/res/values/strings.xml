@@ -1114,11 +1114,12 @@
     <string name="act_apps">Apps</string>
     <string name="act_below_range">%1$s needs %2$s players. %3$d people are here.</string>
     <string name="act_below_range_generic">Not enough people are here yet.</string>
+    <string name="act_board_saved_message">The board stays saved for this meeting.</string>
     <string name="act_browser">Shared browser</string>
     <string name="act_cancel_vote">Cancel vote</string>
     <string name="act_char_count">%1$d of %2$d characters</string>
     <string name="act_close_app">Close %1$s</string>
-    <string name="act_close_board_message">The board stays saved for this meeting.</string>
+    <string name="act_close_board_message">The board clears for everyone.</string>
     <string name="act_close_browser">Close shared browser</string>
     <string name="act_close_browser_title">Close the shared browser for everyone?</string>
     <string name="act_close_confirm">Close</string>
@@ -1149,6 +1150,7 @@
     <string name="act_players_range_short">%1$d to %2$d</string>
     <string name="act_put_to_vote">Put it to a vote</string>
     <string name="act_replace">Replace</string>
+    <string name="act_replace_message">The %1$s board clears for everyone.</string>
     <string name="act_replace_title">Replace %1$s?</string>
     <string name="act_round_of">Round %1$d of %2$d</string>
     <string name="act_show">Show</string>

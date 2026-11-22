@@ -3190,6 +3190,25 @@ final class ConclaveTests: XCTestCase {
     }
 
     @MainActor
+    func testClosingTheWhiteboardPromisesASavedBoardOnlyWhenTheSfuKeepsIt() async throws {
+        let viewModel = MeetingViewModel()
+        viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
+        viewModel.state.roomId = "demo-room"
+        viewModel.state.connectionState = ConnectionState.joined
+
+        await applyServerWhiteboardState(viewModel, revision: nil, docGeneration: nil)
+        XCTAssertEqual(viewModel.activitySession.activities.snapshot.nowPlayingItem(kind: ActivityKind.app)?.closeEffect,
+                       AppCloseEffect.clearsBoard)
+        XCTAssertEqual(viewModel.activitySession.appHost.model.closeEffect, AppCloseEffect.clearsBoard)
+
+        await applyServerWhiteboardState(viewModel, revision: 4, docGeneration: 1)
+        XCTAssertEqual(viewModel.activitySession.activities.snapshot.nowPlayingItem(kind: ActivityKind.app)?.closeEffect,
+                       AppCloseEffect.keepsBoard)
+        XCTAssertEqual(viewModel.activitySession.appHost.model.closeEffect, AppCloseEffect.keepsBoard)
+        XCTAssertEqual(AppCloseEffect.of(appId: "wheel", keepsAppDocuments: false), AppCloseEffect.returnsToMeeting)
+    }
+
+    @MainActor
     private func applyServerWhiteboardState(_ viewModel: MeetingViewModel, revision: Int?, docGeneration: Int?,
                                             locked: Bool = false) async {
         viewModel.bufferPendingAppsState(AppsStateNotification(activeAppId: "whiteboard", locked: locked, roomId: "demo-room",

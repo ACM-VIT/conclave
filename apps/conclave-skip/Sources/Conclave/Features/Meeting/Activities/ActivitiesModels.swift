@@ -28,6 +28,17 @@ enum BrowserFailure: String, CaseIterable, Equatable {
     case none, startFailed, navigateFailed, unavailable, timedOut, loadFailed
 }
 
+/// What closing or replacing the presented app does to its content. An older SFU
+/// erases the whiteboard when it leaves the stage; a newer one keeps it for the meeting.
+enum AppCloseEffect: String, CaseIterable, Equatable {
+    case returnsToMeeting, keepsBoard, clearsBoard
+
+    static func of(appId: String, keepsAppDocuments: Bool) -> AppCloseEffect {
+        if appId != "whiteboard" { return AppCloseEffect.returnsToMeeting }
+        return keepsAppDocuments ? AppCloseEffect.keepsBoard : AppCloseEffect.clearsBoard
+    }
+}
+
 enum ActivityTapResult: String, CaseIterable, Equatable {
     case dispatched, ignored, explained
 }
@@ -45,6 +56,7 @@ struct NowPlayingModel: Equatable, Identifiable {
     let roundTotal: Int
     let playerCount: Int
     let isEditingLocked: Bool
+    let closeEffect: AppCloseEffect
     let isOnStage: Bool
     let canEnd: Bool
     let endPending: Bool
@@ -250,6 +262,7 @@ struct ActivitiesInputs: Equatable {
     let activeAppId: String
     let isAppsLocked: Bool
     let isAppsActionInFlight: Bool
+    let keepsAppDocuments: Bool
 
     let appIds: [String]
 
@@ -267,7 +280,7 @@ struct ActivitiesInputs: Equatable {
                      catalog: [ActivityGameInput] = [], catalogLoaded: Bool = false, isVoteOpen: Bool = false,
                      voteCandidates: [ActivityGameInput] = [], voteCounts: [ActivityVoteCount] = [], myVoteId: String = "",
                      voteCastCount: Int = 0, votePlayers: Int = 0, playersHere: Int = 1, activeAppId: String = "",
-                     isAppsLocked: Bool = false, isAppsActionInFlight: Bool = false,
+                     isAppsLocked: Bool = false, isAppsActionInFlight: Bool = false, keepsAppDocuments: Bool = false,
                      appIds: [String] = ["whiteboard", "wheel", "watch"], isBrowserAvailable: Bool = true,
                      isBrowserActive: Bool = false, isBrowserLaunching: Bool = false, isBrowserNavigating: Bool = false,
                      browserHostLabel: String = "", browserProvider: String = "", hasBrowserAudio: Bool = false,
@@ -276,7 +289,7 @@ struct ActivitiesInputs: Equatable {
                          catalog: catalog, catalogLoaded: catalogLoaded, isVoteOpen: isVoteOpen, voteCandidates: voteCandidates,
                          voteCounts: voteCounts, myVoteId: myVoteId, voteCastCount: voteCastCount, votePlayers: votePlayers,
                          playersHere: playersHere, activeAppId: activeAppId, isAppsLocked: isAppsLocked,
-                         isAppsActionInFlight: isAppsActionInFlight, appIds: appIds, isBrowserAvailable: isBrowserAvailable,
+                         isAppsActionInFlight: isAppsActionInFlight, keepsAppDocuments: keepsAppDocuments, appIds: appIds, isBrowserAvailable: isBrowserAvailable,
                          isBrowserActive: isBrowserActive, isBrowserLaunching: isBrowserLaunching,
                          isBrowserNavigating: isBrowserNavigating, browserHostLabel: browserHostLabel,
                          browserProvider: browserProvider, hasBrowserAudio: hasBrowserAudio,
