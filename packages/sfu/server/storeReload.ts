@@ -6,8 +6,9 @@ import type { SfuState } from "./state.js";
 /**
  * Each SFU loads its stores once at startup, so records another SFU recovered
  * or saved later are missing here until a reload. This merges them in, newest
- * wins, and then writes the merged scheduling records back, which restores any
- * that an older SFU's whole-table save erased.
+ * stamp wins over values and deletions, and then writes the merged scheduling
+ * records back, which restores any that an older SFU's whole-table save erased.
+ * Any failed read or write rejects, so the caller can report it.
  */
 export const reloadPersistedStores = async (
   state: SfuState,
@@ -21,7 +22,7 @@ export const reloadPersistedStores = async (
   let scheduling = 0;
   if (state.schedulingPersistence) {
     scheduling = await mergePersistedScheduling(state.scheduling, state.schedulingPersistence, { strict: true });
-    await persistScheduling(state.scheduling, state.schedulingPersistence);
+    await persistScheduling(state.scheduling, state.schedulingPersistence, { strict: true });
   }
   return { webinars, meetings, scheduling };
 };

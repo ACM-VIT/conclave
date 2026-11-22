@@ -1005,22 +1005,6 @@ export const createSfuApp = ({
     await handleDrain(req, res);
   });
 
-  app.post("/admin/reload-stores", async (req, res) => {
-    if (!requireSecret(req, res)) {
-      return;
-    }
-    try {
-      const merged = await reloadPersistedStores(state);
-      Logger.warn(
-        `Reloaded stores from shared persistence: ${merged.webinars} webinar(s), ${merged.meetings} meeting(s), ${merged.scheduling} scheduling record(s) merged`,
-      );
-      res.json({ ok: true, merged });
-    } catch (error) {
-      Logger.error("Failed to reload stores from shared persistence", error);
-      res.status(500).json({ error: "Store reload failed" });
-    }
-  });
-
   // Every successful admin mutation lands in the audit trail with the
   // operator identity the web proxy forwards; the admin gateway streams the
   // trail to dashboards.
@@ -1045,6 +1029,22 @@ export const createSfuApp = ({
       }
     });
     next();
+  });
+
+  app.post("/admin/reload-stores", async (req, res) => {
+    if (!requireSecret(req, res)) {
+      return;
+    }
+    try {
+      const merged = await reloadPersistedStores(state);
+      Logger.warn(
+        `Reloaded stores from shared persistence: ${merged.webinars} webinar(s), ${merged.meetings} meeting(s), ${merged.scheduling} scheduling record(s) merged`,
+      );
+      res.json({ ok: true, merged });
+    } catch (error) {
+      Logger.error("Failed to reload stores from shared persistence", error);
+      res.status(500).json({ error: "Store reload failed" });
+    }
   });
 
   app.get("/admin/overview", (req, res) => {

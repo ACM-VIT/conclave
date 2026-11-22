@@ -1,9 +1,11 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
+import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { config } from "../config/config.js";
+import { getAdminAuditEntries } from "../server/admin/adminAudit.js";
 import { createSfuApp } from "../server/http/createApp.js";
 import { initScheduledMeetings, initScheduledWebinars, initScheduling } from "../server/init.js";
 import { LocalRoomRegistry } from "../server/roomRegistry.js";
@@ -119,6 +121,25 @@ describe("a rolling restart where the second SFU recovers records", () => {
     const stored = await createSchedulingPersistence().load();
     expect(stored.profiles.map((entry) => entry.id)).toEqual(["original-profile"]);
   });
+
+  it("records a reload in the admin activity feed with the operator", async () => {
+    const sfu = await startSfu();
+    expect((await sfu.call("POST", "/admin/reload-stores", { "x-sfu-operator": "ops@example.test" })).status).toBe(200);
+    const reloads = getAdminAuditEntries().filter((entry) => entry.path === "/admin/reload-stores");
+    expect(reloads.at(-1)).toMatchObject({ operator: "ops@example.test", method: "POST", ok: true });
+  });
+
+  it("answers 500 when writing the merged records back fails", async () => {
+    const sfu = await startSfu();
+    const holder = new DatabaseSync(join(stateDir, "conclave.sqlite"));
+    holder.exec("BEGIN IMMEDIATE");
+    try {
+      expect((await sfu.call("POST", "/admin/reload-stores")).status).toBe(500);
+    } finally {
+      holder.exec("ROLLBACK");
+      holder.close();
+    }
+  }, 30_000);
 
   it("refuses a reload without the SFU secret", async () => {
     const sfu = await startSfu();
