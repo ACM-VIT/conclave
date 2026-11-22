@@ -32,6 +32,7 @@ The web join route (`apps/web/src/app/api/sfu/join/route.ts`) issues each browse
 The guest `userKey` is a keyed hash of the pass, the room id the join asked for, and the tab's session id: `guest-gp_<hash>`.
 The same browser gets a different key in every room and tab, and the key does not reveal the pass.
 A client learns its own `userKey` from the join token.
+The token names the room the key was issued for in `guestRoom`, and the SFU lets it join no other room. Tokens without that claim, from signed-in users and from older clients, join as before.
 
 The route also signs a `guestProof` claim into the join token. `guestProof` is a keyed hash of the pass alone, so it is the same in every room and tab. The SFU never sends it to clients.
 
@@ -43,8 +44,15 @@ The proof is how the SFU treats two keys as one guest:
 - Blocking a guest removes and keeps out every other key of the same pass, so the guest's other tabs leave too. Unblocking the guest lifts that.
 - A stage invite follows the pass. An invited attendee returns through the room's own id, under another key than the one the host invited, and the SFU hands the invite to the key that presents the same proof.
 
-A host action can admit a guest key only while the room knows the guest: the key holds something in the room, or it lost its last right earlier in the same action.
-`admin:allowUsers` and `POST /admin/rooms/:roomId/access/allow` answer with `allowed` and `refused` key lists. A guest the room no longer knows knocks and is admitted from its waiting entry. Account keys can still be admitted ahead of time.
+A browser can end up with a join under one pass and a cookie for another, when two of its tabs are each given a pass before either has a cookie. The cookie wins. On its next join the tab sends the token of its previous join, and the route signs the seat it held into `guestWas`. The SFU then moves what that seat held (host, admissions, a stage invite, a block) to the new key, if the old key is bound to the proof the token names.
+
+A host action can admit a guest key only while the room knows who the guest is: its proof is on record, it is seated or waiting, or it is already admitted.
+`admin:allowUsers` and `POST /admin/rooms/:roomId/access/allow` answer with `allowed` and `refused` key lists. When no key could be admitted the answer is a failure (`success: false` with an `error`, HTTP 409), and a block on a refused key stays. A guest the room does not know knocks and is admitted from its waiting entry. An account key, which is an email, can still be admitted ahead of time.
+
+Two calls admit a guest the host cannot name yet:
+
+- `admin:createAdmission` answers `{ success, admissionCode, expiresAt }`. One join that sends `admissionCode` in its `joinRoom` payload within two minutes is let in past the waiting room and the lock, and its key stays admitted until `admin:revokeAllowedUsers`.
+- `Room.restoreAdmission(userKey, guestProof, { pastLock })` is for server code that vouches for a join it is deciding, such as one that presents a recovery pass after a restart. It binds the admission to the proof.
 
 Clients that predate guest passes still send their own session id and get `guest-<sessionId>`.
 Such a client that keeps cookies proves its pass from its second join call on, and the SFU binds that identity the same way.
