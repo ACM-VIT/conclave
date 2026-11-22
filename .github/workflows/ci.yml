@@ -10,7 +10,7 @@ name: CI
   workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -46,9 +46,10 @@ jobs:
             next-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}-
             next-v1-${{ runner.os }}-${{ runner.arch }}-
 
-      - run: node scripts/ci/run.mjs ${{ matrix.job }}
+      - id: run
+        run: node scripts/ci/run.mjs ${{ matrix.job }}
 
-      - if: always() && github.event_name == 'push' && matrix.job == 'typecheck' && steps.setup.outputs.modules-hit != 'true'
+      - if: always() && github.event_name == 'push' && matrix.job == 'typecheck' && steps.setup.outcome == 'success' && steps.setup.outputs.modules-hit != 'true'
         uses: actions/cache/save@v6.1.0
         with:
           path: |
@@ -57,13 +58,13 @@ jobs:
             packages/*/node_modules
           key: ${{ steps.setup.outputs.modules-key }}
 
-      - if: always() && github.event_name == 'push' && matrix.job == 'typecheck' && steps.setup.outputs.modules-hit != 'true'
+      - if: always() && github.event_name == 'push' && matrix.job == 'typecheck' && steps.setup.outcome == 'success' && steps.setup.outputs.modules-hit != 'true'
         uses: actions/cache/save@v6.1.0
         with:
           path: ${{ steps.setup.outputs.store-path }}
           key: ${{ steps.setup.outputs.store-key }}
 
-      - if: always() && github.event_name == 'push' && matrix.job == 'build'
+      - if: github.event_name == 'push' && matrix.job == 'build' && steps.run.outcome == 'success' && steps.next-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6.1.0
         with:
           path: apps/web/.next/cache

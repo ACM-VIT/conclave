@@ -42,10 +42,33 @@ test("every job has a budget", () => {
   }
 });
 
-test("the workflow runs every job in scripts/ci/jobs.mjs", async () => {
+test("the workflow runs every job in scripts/ci/jobs.mjs and never skips one", async () => {
   const workflow = await readFile(path.join(repoRoot, ".github/workflows/ci.yml"), "utf8");
   const matrix = workflow.match(/^\s+job: \[(.*)\]$/m)?.[1].split(",").map((name) => name.trim());
   assert.deepEqual(matrix?.toSorted(), Object.keys(jobs).toSorted());
+  assert.doesNotMatch(workflow, /^ {4}if:/m, "a job-level if: could skip a required job");
+  assert.match(workflow, /^ {6}- id: run\n {8}run: node scripts\/ci\/run\.mjs \$\{\{ matrix\.job \}\}$/m);
+});
+
+test("pnpm filters, -C and missing scripts expand the way pnpm runs them", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "ci-jobs-"));
+  try {
+    await mkdir(path.join(root, "apps/web"), { recursive: true });
+    await mkdir(path.join(root, "packages/sfu"), { recursive: true });
+    await writeFile(path.join(root, "package.json"), JSON.stringify({
+      scripts: {
+        mixed: "pnpm -C apps/web --filter=sfu run fixtures",
+        none: "pnpm --filter web --filter sfu run absent",
+      },
+    }));
+    await writeFile(path.join(root, "apps/web/package.json"), JSON.stringify({ name: "web", scripts: {} }));
+    await writeFile(path.join(root, "packages/sfu/package.json"), JSON.stringify({ name: "sfu", scripts: { fixtures: "tsx f.ts" } }));
+    const packages = workspacePackages(root);
+    assert.deepEqual(expandScript(".", "mixed", [], packages).map(taskName), ["packages/sfu fixtures"]);
+    assert.throws(() => expandScript(".", "none", [], packages), /no selected package has a "absent" script/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("a step added to pnpm check that CI does not run is reported", async () => {

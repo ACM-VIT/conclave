@@ -97,18 +97,19 @@ function tokenize(command) {
 function parsePnpmRun(command, cwd, byName) {
   const tokens = tokenize(command);
   if (tokens[0] !== "pnpm") return null;
-  const dirs = [];
+  let dir = cwd;
+  const selected = [];
   let i = 1;
   while (i < tokens.length && tokens[i] !== "run") {
-    const flag = tokens[i];
-    const value = tokens[i + 1];
-    if ((flag === "-C" || flag === "--dir") && value) dirs.push(path.posix.join(cwd, value));
-    else if (flag === "--filter" && byName.has(value)) dirs.push(byName.get(value).dir);
+    const [flag, inline] = tokens[i].split("=", 2);
+    const value = inline ?? tokens[i + 1];
+    if ((flag === "-C" || flag === "--dir") && value) dir = path.posix.join(cwd, value);
+    else if (flag === "--filter" && byName.has(value)) selected.push(byName.get(value).dir);
     else return null;
-    i += 2;
+    i += inline === undefined ? 2 : 1;
   }
   if (tokens[i] !== "run" || !tokens[i + 1]) return null;
-  return { dirs: dirs.length ? dirs : [cwd], script: tokens[i + 1], args: tokens.slice(i + 2) };
+  return { dirs: selected.length ? selected : [dir], filtered: selected.length > 0, script: tokens[i + 1], args: tokens.slice(i + 2) };
 }
 
 export function expandScript(dir, script, args = [], packages = workspacePackages()) {
@@ -117,11 +118,13 @@ export function expandScript(dir, script, args = [], packages = workspacePackage
   const parts = body.split("&&").map((part) => part.trim());
   const runs = parts.map((part) => parsePnpmRun(part, dir, packages.byName));
   if (args.length || runs.some((run) => run === null)) return [{ dir, script, args }];
-  return runs.flatMap((run) =>
-    run.dirs
-      .filter((target) => run.dirs.length === 1 || packages.scriptsByDir.get(target)?.[run.script] !== undefined)
-      .flatMap((target) => expandScript(target, run.script, run.args, packages)),
-  );
+  return runs.flatMap((run) => {
+    const targets = run.filtered
+      ? run.dirs.filter((target) => packages.scriptsByDir.get(target)?.[run.script] !== undefined)
+      : run.dirs;
+    if (!targets.length) throw new Error(`no selected package has a "${run.script}" script in ${dir} ${script}`);
+    return targets.flatMap((target) => expandScript(target, run.script, run.args, packages));
+  });
 }
 
 export function leafKey(task) {

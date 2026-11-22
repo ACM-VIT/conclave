@@ -31,19 +31,24 @@ for (let page = 1; runs.length < wanted; page++) {
 runs.length = Math.min(runs.length, wanted);
 
 const buckets = { waiting: [], setup: [], running: [], after: [] };
+let unmatched = 0;
 const perJob = new Map();
 const result = [];
 for (const run of runs) {
   const jobs = gh(`repos/${values.repo}/actions/runs/${run.id}/jobs?per_page=100`).jobs.filter((job) => job.started_at && job.completed_at && job.conclusion !== "skipped");
   if (!jobs.length) continue;
   for (const job of jobs) {
-    const waiting = Math.max(0, seconds(job.created_at, job.started_at));
-    const steps = job.steps.filter((step) => step.started_at && step.completed_at);
+    const steps = (job.steps ?? []).filter((step) => step.started_at && step.completed_at);
     const workIndex = steps.findIndex((step) => workStep.test(step.name));
+    if (!job.created_at || workIndex < 0) {
+      unmatched += 1;
+      continue;
+    }
+    const waiting = Math.max(0, seconds(job.created_at, job.started_at));
     const span = (list) => (list.length ? seconds(list[0].started_at, list.at(-1).completed_at) : 0);
-    const setup = workIndex < 0 ? span(steps) : span(steps.slice(0, workIndex));
-    const running = workIndex < 0 ? 0 : span([steps[workIndex]]);
-    const after = workIndex < 0 ? 0 : span(steps.slice(workIndex + 1));
+    const setup = span(steps.slice(0, workIndex));
+    const running = span([steps[workIndex]]);
+    const after = span(steps.slice(workIndex + 1));
     for (const [bucket, value] of Object.entries({ waiting, setup, running, after })) buckets[bucket].push(value);
     const name = job.name.replace(/\s+/g, " ");
     if (!perJob.has(name)) perJob.set(name, { total: [], waiting: [], setup: [], running: [] });
@@ -58,6 +63,7 @@ for (const run of runs) {
 
 const fmt = (x) => (Number.isNaN(x) ? "-" : x.toFixed(1));
 console.log(`${values.repo} ${values.workflow}: ${result.length} completed runs${values.event ? ` (${values.event})` : ""}`);
+if (unmatched) console.log(`${unmatched} jobs had no step matching /${values["work-step"]}/ or no created_at and are left out of the buckets`);
 console.log(`time to result  p50 ${fmt(pct(result, 0.5))}s  p95 ${fmt(pct(result, 0.95))}s`);
 console.log("\nbucket\tp50_s\tp95_s\tsum_s");
 for (const [bucket, xs] of Object.entries(buckets)) {

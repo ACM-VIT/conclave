@@ -21,6 +21,7 @@ function run(task) {
     const chunks = [];
     child.stdout.on("data", (chunk) => chunks.push(chunk));
     child.stderr.on("data", (chunk) => chunks.push(chunk));
+    child.on("error", (error) => chunks.push(Buffer.from(`${error.stack ?? error}\n`)));
     child.on("close", (code, signal) => {
       resolve({
         name: taskName(task),
@@ -65,7 +66,8 @@ for (const task of job.before ?? []) {
   results.push(result);
 }
 if (results.every((result) => result.code === 0)) {
-  results.push(...(await runAll(job.tasks, Number(process.env.CI_TASK_CONCURRENCY) || availableParallelism())));
+  const limit = Math.max(1, Math.floor(Number(process.env.CI_TASK_CONCURRENCY) || availableParallelism()));
+  results.push(...(await runAll(job.tasks, limit)));
 }
 
 const elapsed = (Date.now() - startedAt) / 1000;
@@ -73,8 +75,9 @@ const failures = results.filter((result) => result.code !== 0);
 const overBudget = elapsed > job.budgetSeconds;
 const skipped = job.tasks.length + (job.before?.length ?? 0) - results.length;
 
+const verdict = failures.length ? `${failures.length} failed` : skipped ? `${skipped} did not start` : "all passed";
 const lines = [
-  `### ${jobName}: ${failures.length ? `${failures.length} failed` : "all passed"}, ${elapsed.toFixed(1)}s of a ${job.budgetSeconds}s budget`,
+  `### ${jobName}: ${verdict}, ${elapsed.toFixed(1)}s since the job's first step, budget ${job.budgetSeconds}s`,
   "",
   "| task | result | seconds |",
   "| --- | --- | ---: |",
