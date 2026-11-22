@@ -15,12 +15,20 @@ const posthog = vi.hoisted(() => ({
   persistence: { properties: vi.fn((): Record<string, unknown> => ({})) },
   sessionPersistence: { properties: vi.fn((): Record<string, unknown> => ({})) },
 }));
-vi.mock("posthog-js", () => ({ default: posthog }));
+// Telemetry makes its own instance with `new PostHog()`; this one stands in.
+vi.mock("posthog-js", () => ({
+  default: posthog,
+  PostHog: function PostHog() {
+    return posthog;
+  },
+}));
 vi.mock("posthog-js/dist/exception-autocapture", () => ({}));
 vi.mock("../src/app/components/ErrorStateView", () => ({ default: () => null }));
 
 type BoundaryProps = { error: Error & { digest?: string }; reset: () => void };
 type SentEvent = { event: string; properties: Record<string, unknown> };
+
+let built = 0;
 
 const sdkUuid = "0196f0a1-0000-7000-8000-00000000000a";
 
@@ -34,6 +42,7 @@ beforeEach(() => {
   vi.stubEnv("NEXT_PUBLIC_POSTHOG_KEY", "phc_test_project");
   vi.stubEnv("NEXT_PUBLIC_POSTHOG_DEV", "1");
   vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 404 })));
+  Object.defineProperty(navigator, "sendBeacon", { configurable: true, value: () => false });
 });
 
 afterEach(() => {
@@ -134,18 +143,31 @@ describe("error boundaries on the first page load", () => {
 describe("what each event carries", () => {
   // Merges the stores under the payload the way posthog-js does, then runs the
   // configured before_send, which the SDK calls inside capture.
+  // What /ingest is sent for an event the SDK builds: before_send puts it in
+  // the outbox, and a frozen page sends the outbox at once. With no beacon,
+  // that is a keepalive fetch, whose body this reads back.
   const sendThroughSdk = (event: string, payload: Record<string, unknown>): SentEvent => {
-    const [, config] = posthog.init.mock.calls[0] as [string, { before_send: (event: SentEvent) => SentEvent }];
-    return config.before_send({
-      event,
-      properties: {
-        $os: "Mac OS X",
-        token: "phc_test_project",
-        ...posthog.persistence.properties(),
-        ...posthog.sessionPersistence.properties(),
-        ...payload,
-      },
-    });
+    const [, config] = posthog.init.mock.calls[0] as [string, { before_send: (event: SentEvent) => SentEvent | null }];
+    expect(
+      config.before_send({
+        uuid: `0196f0a1-0000-7000-8000-${String(++built).padStart(12, "0")}`,
+        event,
+        properties: {
+          $os: "Mac OS X",
+          token: "phc_test_project",
+          ...posthog.persistence.properties(),
+          ...posthog.sessionPersistence.properties(),
+          ...payload,
+        },
+      } as SentEvent),
+    ).toBeNull();
+    document.dispatchEvent(new Event("freeze"));
+    const posts = (fetch as unknown as { mock: { calls: Array<[unknown, RequestInit?]> } }).mock.calls.filter(([url]) =>
+      String(url).includes("/ingest/e/"),
+    );
+    const last = posts.at(-1)?.[1]?.body;
+    const batch = (JSON.parse(String(last)) as { batch: SentEvent[] }).batch;
+    return batch.at(-1) as SentEvent;
   };
 
   it("reports a meeting panel that fails to render, through before_send", async () => {
@@ -309,19 +331,13 @@ describe("what each event carries", () => {
 
     window.dispatchEvent(new Event("pagehide"));
 
-    expect(posthog.captureException).not.toHaveBeenCalled();
-    expect(posthog.capture).toHaveBeenCalledWith(
-      "$exception",
-      { $exception_list: [], source: "react_error_boundary", boundary: "route" },
-      { transport: "sendBeacon", send_instantly: true },
-    );
-    expect(posthog.capture).toHaveBeenCalledWith(
-      "meet_join_attempt",
-      { attempt: 1 },
-      { transport: "sendBeacon", send_instantly: true },
-    );
+    expect(posthog.captureException).toHaveBeenCalledWith(expect.any(Error), {
+      source: "react_error_boundary",
+      boundary: "route",
+    });
+    expect(posthog.capture).toHaveBeenCalledWith("meet_join_attempt", { attempt: 1 });
     telemetry.capture("meet_join_success", { attempt: 1 });
-    expect(posthog.capture).toHaveBeenCalledTimes(3);
+    expect(posthog.capture).toHaveBeenCalledTimes(2);
   });
 
   it("sends held reports at once when the tab is hidden", async () => {
@@ -340,11 +356,10 @@ describe("what each event carries", () => {
       visibility.mockRestore();
     }
 
-    expect(posthog.capture).toHaveBeenCalledWith(
-      "$exception",
-      { $exception_list: [], source: "react_error_boundary", boundary: "route" },
-      { transport: "sendBeacon", send_instantly: true },
-    );
+    expect(posthog.captureException).toHaveBeenCalledWith(expect.any(Error), {
+      source: "react_error_boundary",
+      boundary: "route",
+    });
   });
 
   it("keeps a chunk's path only when the build's manifest pairs its id with that file", async () => {

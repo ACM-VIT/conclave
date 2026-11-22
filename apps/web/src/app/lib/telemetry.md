@@ -22,22 +22,34 @@ first report arrives, and from the moment the module loads every report
 installed then) goes into one queue of up to 50. The queue waits while the SDK
 downloads and, once it has loaded, until the build's chunk manifest has too,
 or 3 s have passed, so a first-render error keeps its chunk paths. Then each
-report goes to the SDK, which sends it as it is captured: request batching is
-off, so posthog-js never holds a queue of its own that a tab hidden and then
-frozen or dropped would lose.
+report goes to the SDK, which only builds the event: `before_send` puts it in
+the outbox (`lib/telemetry-outbox.ts`), and posthog-js never sends a request
+of its own, so it holds no queue that a tab hidden and then frozen or dropped
+would lose.
+
+The outbox sends events to `/ingest` in batches, so a call costs a handful
+of requests rather than one per event. A batch goes 5 s after its first event,
+as soon as it holds 20 events, or before it would pass 48 KB (under the
+browser's 64 KB budget for keepalive requests and beacons), whichever comes
+first. An exception sends early, at most once every 3 s. Each event is in
+exactly one batch: it is queued once by its uuid, a delivered batch is never
+sent again, and a batch that fails (no answer, 429 or 5xx) is retried with the
+very same body after 2, 4, 8, 16 and 30 s, which `/ingest` and PostHog take as
+the same events. A batch `/ingest` refuses is dropped. Batches go by keepalive
+fetch, without cookies.
 
 A lifecycle flush is installed when telemetry starts, before the SDK
 downloads, and stays for the page's life. On `visibilitychange` to hidden, on
-`pagehide` and on `freeze`, everything still queued goes out at once by
-beacon, once: through the SDK if it has loaded, with whatever manifest has
-loaded (none leaves chunk frames as `[path]`); before it has, as events we
-build ourselves from the outbound schema. Those carry the fields we can vouch
+`pagehide` and on `freeze`, everything still queued, and any batch waiting to
+retry, goes out at once by beacon, once, split to stay within the beacon
+limit; a batch in flight is left to finish. Held reports are built first:
+through the SDK if it has loaded, with whatever manifest has loaded (none
+leaves chunk frames as `[path]`); before it has, as events we build ourselves
+from the outbound schema. Those carry the fields we can vouch
 for without the SDK: the project token, the stored SDK id (or a new uuid), the
 build, our host and the report's own fields; an exception keeps its type and,
 for a call-log label, its message, but no frames. If the SDK fails to load,
-reports go the same way. posthog-js's `captureException` takes no transport,
-so a closing page builds the same `$exception` event and sends it by beacon.
-Only an answer to the manifest request ends the wait early: a page that
+reports go the same way. Only an answer to the manifest request ends the wait early: a page that
 navigates away aborts that request before the `pagehide` listener runs, and
 the abort must not release the reports as if the page stayed. PostHog's own
 error capture starts as soon as it loads. Each report is built once, when it

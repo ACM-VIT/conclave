@@ -1,8 +1,9 @@
 "use client";
 
-import type { PostHog } from "posthog-js";
+import type { CaptureResult, PostHog } from "posthog-js";
 import { installCallErrorCapture } from "./call-error-capture";
 import { randomUuid } from "./random-uuid";
+import { createOutbox, type Outbox, type OutboxEvent } from "./telemetry-outbox";
 import {
   beforeSend,
   buildOutboundEvent,
@@ -46,8 +47,9 @@ type Report =
 /**
  * Where telemetry is in the page's life. Reports wait in `pending` while the
  * SDK downloads and, once it has loaded, until the chunk manifest has too;
- * then each goes straight to the SDK, which sends it at once (no batching),
- * so nothing is ever left queued in posthog-js.
+ * then each goes straight to the SDK. The SDK only builds events: before_send
+ * hands each one to the outbox, which sends them to /ingest in batches, so
+ * nothing is ever left queued in posthog-js.
  */
 type Phase =
   | { name: "idle" }
@@ -57,12 +59,26 @@ type Phase =
   | { name: "failed" };
 
 let phase: Phase = { name: "idle" };
+let outbox: Outbox | null = null;
+
+// True while reports are built for a page that is going away: they all go in
+// the one beacon that follows, so an exception asks for no early send.
+let buildingForUnload = false;
+
+/** Builds reports with `build`, then sends the whole outbox by beacon. */
+const sendForUnload = (build: () => void): void => {
+  const outer = buildingForUnload;
+  buildingForUnload = true;
+  try {
+    build();
+  } finally {
+    buildingForUnload = outer;
+  }
+  outbox?.flushForUnload();
+};
 
 // Capped so a load that never finishes cannot grow the queue.
 const MAX_PENDING = 50;
-
-// How a report is sent while the page goes away: by beacon, now.
-const UNLOADING = { transport: "sendBeacon", send_instantly: true } as const;
 
 // pagehide until a pageshow brings the page back.
 let unloading = false;
@@ -137,27 +153,29 @@ const emit = (payload: TelemetryProps, capture: () => void): void => {
   }
 };
 
-/** Sends one report through the SDK; by beacon when the page is going away. */
-const sendWithSdk = (client: PostHog, report: Report, closing: boolean): void => {
+/** Has the SDK build one report, which before_send puts in the outbox. */
+const buildWithSdk = (client: PostHog, report: Report): void => {
   try {
     emit(report.props, () => {
-      if (report.kind === "event") {
-        client.capture(report.name, report.props, report.immediate || closing ? UNLOADING : undefined);
-        return;
-      }
-      if (!closing) {
-        client.captureException(report.error, report.props);
-        return;
-      }
-      // captureException takes no transport, so a closing page builds the
-      // same event and sends it by beacon.
-      const exception = client.exceptions?.buildProperties(report.error, {
-        handled: true,
-        syntheticException: new Error("PostHog syntheticException"),
-      });
-      if (exception) client.capture("$exception", { ...exception, ...report.props }, UNLOADING);
+      if (report.kind === "event") client.capture(report.name, report.props);
+      else client.captureException(report.error, report.props);
     });
   } catch {}
+};
+
+// A report that must go now, as a call summary captured while the page
+// unloads does.
+const isImmediate = (report: Report): boolean => report.kind === "event" && report.immediate;
+
+const queueBuilt = (built: CaptureResult): void => {
+  const timestamp: unknown = built.timestamp;
+  const event: OutboxEvent = {
+    uuid: built.uuid,
+    event: built.event,
+    properties: built.properties,
+    ...(timestamp instanceof Date ? { timestamp: timestamp.toISOString() } : typeof timestamp === "string" ? { timestamp } : {}),
+  };
+  outbox?.add(event, { urgent: built.event === "$exception" && !buildingForUnload });
 };
 
 const storedDistinctId = (key: string): string | null => {
@@ -171,13 +189,13 @@ const storedDistinctId = (key: string): string | null => {
 };
 
 /**
- * Sends reports by beacon without the SDK, for a page going away before it
- * has loaded (or one whose SDK failed to load): each event is built from the
- * outbound schema with the fields we can vouch for ourselves. An exception
- * keeps its type and, for a call-log label, its message, but no frames, which
- * only the SDK can read.
+ * Puts reports in the outbox without the SDK, for a page going away before
+ * it has loaded (or one whose SDK failed to load): each event is built from
+ * the outbound schema with the fields we can vouch for ourselves. An
+ * exception keeps its type and, for a call-log label, its message, but no
+ * frames, which only the SDK can read.
  */
-const beaconWithoutSdk = (reports: Report[]): void => {
+const queueWithoutSdk = (reports: Report[]): void => {
   if (!posthogKey || reports.length === 0) return;
   const distinctId = storedDistinctId(posthogKey) ?? randomUuid();
   const source = {
@@ -210,32 +228,31 @@ const beaconWithoutSdk = (reports: Report[]): void => {
     );
     return built ? [{ ...built, timestamp: new Date().toISOString() }] : [];
   });
-  if (batch.length === 0) return;
-  try {
-    navigator.sendBeacon(
-      `${INGEST_PATH}/e/`,
-      new Blob([JSON.stringify({ api_key: posthogKey, batch })], { type: "application/json" }),
-    );
-  } catch {}
+  for (const event of batch) outbox?.add(event, { urgent: event.event === "$exception" && !buildingForUnload });
 };
 
-/** Sends every pending report through the SDK, from now on straight away. */
+/**
+ * Builds every pending report through the SDK, and from now on each report
+ * straight away; when the page is going away they all go in one beacon.
+ */
 const open = (client: PostHog, closing: boolean): void => {
   const pending = phase.name === "holding" ? phase.pending : [];
   phase = { name: "open", client };
-  pending.forEach((report) => sendWithSdk(client, report, closing));
+  const build = () => pending.forEach((report) => buildWithSdk(client, report));
+  if (closing || pending.some(isImmediate)) sendForUnload(build);
+  else build();
 };
 
 // The page is going away, or may be dropped while hidden or frozen: every
-// pending report goes now, by beacon. With the SDK loaded that is through it,
-// with whatever manifest has loaded (none leaves chunk frames as [path]);
-// before it has, without it. A report is sent once: this empties the queue.
+// pending report and the whole outbox go now, by beacon. With the SDK loaded
+// the reports are built through it, with whatever manifest has loaded (none
+// leaves chunk frames as [path]); before it has, without it. A report is sent
+// once: this empties both queues.
 const flushForLifecycle = (): void => {
-  if (phase.name === "holding") {
-    open(phase.client, true);
-  } else if (phase.name === "loading") {
-    beaconWithoutSdk(phase.pending.splice(0));
-  }
+  sendForUnload(() => {
+    if (phase.name === "holding") open(phase.client, true);
+    else if (phase.name === "loading") queueWithoutSdk(phase.pending.splice(0));
+  });
 };
 
 // For the page's whole life, from before the SDK downloads, never removed.
@@ -264,9 +281,6 @@ const initPostHog = (client: PostHog, key: string): void => {
   client.init(key, {
     api_host: INGEST_PATH,
     ui_host: "https://eu.posthog.com",
-    // Each event is sent as it is captured, so a tab that is hidden and then
-    // frozen or dropped has nothing left in the SDK's queue.
-    request_batching: false,
     capture_pageview: false,
     capture_pageleave: false,
     autocapture: false,
@@ -281,16 +295,22 @@ const initPostHog = (client: PostHog, key: string): void => {
       capture_unhandled_rejections: true,
       capture_console_errors: false,
     },
-    before_send: (event) =>
-      event &&
-      beforeSend(event, {
-        payload: emitting,
-        storedKeys: storedKeys(client),
-        token: key,
-        clientVersion,
-        chunkFiles,
-        siteOrigin: window.location.origin,
-      }),
+    // posthog-js only builds events: each goes to the outbox, never out
+    // through the SDK's own requests.
+    before_send: (event) => {
+      const built =
+        event &&
+        beforeSend(event, {
+          payload: emitting,
+          storedKeys: storedKeys(client),
+          token: key,
+          clientVersion,
+          chunkFiles,
+          siteOrigin: window.location.origin,
+        });
+      if (built) queueBuilt(built);
+      return null;
+    },
   });
   dropStoredProperties(client);
 };
@@ -307,13 +327,36 @@ export function startTelemetry(): void {
   if (phase.name !== "idle" || !posthogKey || !telemetryEnabled) return;
   if (typeof window === "undefined") return;
   phase = { name: "loading", pending: [] };
+  outbox = createOutbox({
+    token: posthogKey,
+    now: Date.now,
+    setTimer: (run, ms) => window.setTimeout(run, ms),
+    clearTimer: (timer) => window.clearTimeout(timer as number),
+    post: (body, keepalive) =>
+      fetch(`${INGEST_PATH}/e/`, {
+        method: "POST",
+        body,
+        keepalive,
+        credentials: "omit",
+        headers: { "content-type": "application/json" },
+      }).then((response) => response.status),
+    beacon: (body) => {
+      try {
+        return navigator.sendBeacon(`${INGEST_PATH}/e/`, new Blob([body], { type: "application/json" }));
+      } catch {
+        return false;
+      }
+    },
+  });
   installLifecycleFlush();
   const manifestReady = manifestOrTimeout();
   void Promise.all([
     import("posthog-js"),
     import("posthog-js/dist/exception-autocapture"),
   ]).then(
-    async ([{ default: client }]) => {
+    async ([{ PostHog: Client }]) => {
+      // Our own instance, never the module's shared one.
+      const client = new Client();
       initPostHog(client, posthogKey);
       phase = { name: "holding", client, pending: phase.name === "loading" ? phase.pending : [] };
       await manifestReady;
@@ -322,7 +365,7 @@ export function startTelemetry(): void {
     () => {
       const pending = phase.name === "loading" ? phase.pending : [];
       phase = { name: "failed" };
-      beaconWithoutSdk(pending);
+      queueWithoutSdk(pending);
     },
   );
 }
@@ -330,12 +373,14 @@ export function startTelemetry(): void {
 const report = (next: Report): void => {
   if (!telemetryEnabled || typeof window === "undefined") return;
   if (phase.name === "open") {
-    sendWithSdk(phase.client, next, leaving());
+    const { client } = phase;
+    if (leaving() || isImmediate(next)) sendForUnload(() => buildWithSdk(client, next));
+    else buildWithSdk(client, next);
     return;
   }
   startTelemetry();
   if (phase.name === "failed") {
-    beaconWithoutSdk([next]);
+    queueWithoutSdk([next]);
   } else if ((phase.name === "loading" || phase.name === "holding") && phase.pending.length < MAX_PENDING) {
     phase.pending.push(next);
   }

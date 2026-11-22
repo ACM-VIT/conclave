@@ -31,8 +31,10 @@ let sent: Sent[] = [];
 let manifest: "pending" | "missing" = "pending";
 let abortManifest: () => void = () => {};
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.resetModules();
+  const { PostHog } = await import("posthog-js");
+  vi.spyOn(PostHog.prototype, "init");
   sent = [];
   manifest = "pending";
   sdk.release = () => {};
@@ -75,6 +77,7 @@ afterEach(() => {
   window.dispatchEvent(new Event("pageshow"));
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 type Event_ = { event: string; properties: Record<string, unknown> };
@@ -111,10 +114,17 @@ const sentEvents = async (list: Sent[] = sent): Promise<Event_[]> => {
 };
 const names = async (list?: Sent[]) => (await sentEvents(list)).map((event) => event.event).sort();
 
+// Telemetry makes its own posthog-js instance; this finds it as it initialises.
 const loaded = async () => {
-  const { default: client } = await import("posthog-js");
-  await vi.waitFor(() => expect((client as unknown as { __loaded: boolean }).__loaded).toBe(true));
+  const { PostHog } = await import("posthog-js");
+  await vi.waitFor(() =>
+    expect((initialised(PostHog) as { __loaded?: boolean } | undefined)?.__loaded).toBe(true),
+  );
   await new Promise((resolve) => setTimeout(resolve, 0));
+};
+const initialised = (PostHog: { prototype: object }): unknown => {
+  const init = (PostHog.prototype as { init: { mock?: { instances: unknown[] } } }).init;
+  return init.mock?.instances.at(-1);
 };
 
 describe("a report made while the SDK downloads", () => {

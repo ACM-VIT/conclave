@@ -27,8 +27,10 @@ let sent: Sent[] = [];
 let manifest: "pending" | "missing" = "pending";
 let abortManifest: () => void = () => {};
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.resetModules();
+  const { PostHog } = await import("posthog-js");
+  vi.spyOn(PostHog.prototype, "init");
   sent = [];
   manifest = "pending";
   sdk.release = () => {};
@@ -71,6 +73,7 @@ afterEach(() => {
   window.dispatchEvent(new Event("pageshow"));
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 type Event_ = { event: string; properties: Record<string, unknown> };
@@ -108,10 +111,17 @@ const sentEvents = async (list: Sent[] = sent): Promise<Event_[]> => {
 const names = async (list?: Sent[]) => (await sentEvents(list)).map((event) => event.event).sort();
 const beacons = () => sent.filter((item) => item.via === "beacon");
 
+// Telemetry makes its own posthog-js instance; this finds it as it initialises.
 const loaded = async () => {
-  const { default: client } = await import("posthog-js");
-  await vi.waitFor(() => expect((client as unknown as { __loaded: boolean }).__loaded).toBe(true));
+  const { PostHog } = await import("posthog-js");
+  await vi.waitFor(() =>
+    expect((initialised(PostHog) as { __loaded?: boolean } | undefined)?.__loaded).toBe(true),
+  );
   await new Promise((resolve) => setTimeout(resolve, 0));
+};
+const initialised = (PostHog: { prototype: object }): unknown => {
+  const init = (PostHog.prototype as { init: { mock?: { instances: unknown[] } } }).init;
+  return init.mock?.instances.at(-1);
 };
 
 const loadHeld = async () => {
@@ -172,6 +182,25 @@ describe("reports held for the chunk manifest when the page goes away", () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
 
     expect(await names()).toEqual(["$exception", "meet_join_attempt"]);
+  });
+});
+
+describe("batches", () => {
+  it("sends the events of a few seconds as one request, and the rest as one beacon when the tab is hidden", async () => {
+    manifest = "missing";
+    const { telemetry, startTelemetry } = await import("../src/app/lib/telemetry");
+    startTelemetry();
+    await loaded();
+
+    telemetry.capture("meet_join_attempt", { joinMode: "meeting", isAdmin: false });
+    telemetry.capture("meet_join_success", { joinMode: "meeting", status: "joined" });
+    telemetry.capture("meet_reconnect_attempt", { attempt: 1, maxAttempts: 8, usingTurnFallback: false });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(sent).toHaveLength(0);
+
+    hide();
+    expect(sent.map((item) => item.via)).toEqual(["beacon"]);
+    expect(await names()).toEqual(["meet_join_attempt", "meet_join_success", "meet_reconnect_attempt"]);
   });
 });
 
