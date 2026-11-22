@@ -214,6 +214,7 @@ struct ChatPanelHost: View {
             ChatPanel(chat: chat, path: $path, hostStyle: resolved.style)
         }
         .task(id: presentation.id) {
+            panels.didPresent(session: presentation.session, presentationID: presentation.request.presentationID)
             chat.route(to: ChatPresenter.destination(for: presentation.request.destination),
                        targetId: presentation.request.targetId)
         }

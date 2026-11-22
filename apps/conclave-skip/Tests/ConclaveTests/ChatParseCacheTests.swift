@@ -14,6 +14,7 @@ struct ChatParseCacheTests {
         }
         let chat = Chat.presenter(Chat.inputs(messages))
         chat.openPanel()
+        chat.panelDidAppear()
         let parsed = chat.emojiParseCount
         #expect(parsed == 300)
         for index in 0..<20 {

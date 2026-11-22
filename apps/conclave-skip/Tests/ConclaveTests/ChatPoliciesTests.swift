@@ -166,6 +166,7 @@ struct ChatPoliciesTests {
         chat.apply(Self.inputs(messages), change: .messages)
         #expect(chat.pendingUnreadCount == 2)
         chat.openPanel()
+        chat.panelDidAppear()
         let ids = chat.timeline.rowIds
         let divider = ids.firstIndex(of: "unread")
         #expect(divider != nil)
@@ -175,6 +176,7 @@ struct ChatPoliciesTests {
         chat.closePanel()
         #expect(!chat.timeline.rowIds.contains("unread"))
         chat.openPanel()
+        chat.panelDidAppear()
         #expect(!chat.timeline.rowIds.contains("unread"))
     }
 
@@ -182,6 +184,7 @@ struct ChatPoliciesTests {
         var messages = [Self.peer("s-1", "old", at: 0)]
         let chat = Self.presenter(Self.inputs(messages))
         chat.openPanel()
+        chat.panelDidAppear()
         messages.append(Self.peer("s-2", "Can you share the deck?", at: 1000, history: false))
         chat.apply(Self.inputs(messages), change: .messages)
         #expect(chat.announcement?.kind == "newMessage" && chat.announcement?.name == "Avery Lee")

@@ -41,6 +41,7 @@ internal fun ChatPanel(
     val sidePane = variant == InCallPageVariant.SidePane
     val copiedText = conclaveString("chat_copied")
     LaunchedEffect(request.presentationID) {
+        panels.didPresent(panels.snapshot.session, request.presentationID)
         presenter.route(ChatPresenter.destination(request.destination), request.targetId)
     }
 

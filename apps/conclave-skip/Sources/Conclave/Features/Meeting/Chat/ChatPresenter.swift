@@ -52,6 +52,7 @@ final class ChatPresenter {
     @ObservationIgnored private(set) var timelinePublishCount = 0
     @ObservationIgnored private(set) var composerPublishCount = 0
     @ObservationIgnored private(set) var isOpen = false
+    @ObservationIgnored private(set) var isShown = false
 
     @ObservationIgnored private(set) var hiddenSenderIds: [String] = []
     @ObservationIgnored private var hiddenSenderNames: [String: String] = [:]
@@ -181,9 +182,14 @@ final class ChatPresenter {
         guard !isOpen else { return }
         isOpen = true
         firstUnreadId = pendingFirstUnreadId
+        rebuildRows(previousRowIds: currentTimeline.rowIds)
+    }
+
+    func panelDidAppear() {
+        guard isOpen, !isShown else { return }
+        isShown = true
         pendingFirstUnreadId = ""
         pendingUnreadCount = 0
-        rebuildRows(previousRowIds: currentTimeline.rowIds)
     }
 
     func route(to destination: ChatDestination, targetId: String) {
@@ -203,6 +209,7 @@ final class ChatPresenter {
     func closePanel() {
         guard isOpen else { return }
         isOpen = false
+        isShown = false
         firstUnreadId = ""
         rebuildRows(previousRowIds: currentTimeline.rowIds)
     }
@@ -213,6 +220,7 @@ final class ChatPresenter {
         hasBuilt = false
         hasTimeline = false
         isOpen = false
+        isShown = false
         hasDeferredRows = false
         closedSeenRowIds = []
         if currentTimeline != ChatTimelineSnapshot.empty { currentTimeline = ChatTimelineSnapshot.empty }

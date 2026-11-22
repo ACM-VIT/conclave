@@ -9,6 +9,12 @@ final class PanelCoordinator {
 
     @ObservationIgnored var onSnapshotChanged: (() -> Void)? = nil
     @ObservationIgnored var afterSnapshotChanged: (() -> Void)? = nil
+    @ObservationIgnored private var shownPresentationID: Int? = nil
+
+    var currentWasShown: Bool {
+        guard let shown = shownPresentationID, !snapshot.isDismissing else { return false }
+        return snapshot.current?.presentationID == shown
+    }
     private var nextID = 0
     private var nextDestinationSequence = 0
 
@@ -89,6 +95,13 @@ final class PanelCoordinator {
         publish(PanelSnapshot(session: session, current: snapshot.pending, pending: nil, isDismissing: false))
     }
 
+    func didPresent(session: Int, presentationID: Int) {
+        guard snapshot.session == session, snapshot.current?.presentationID == presentationID, !snapshot.isDismissing,
+              shownPresentationID != presentationID else { return }
+        shownPresentationID = presentationID
+        afterSnapshotChanged?()
+    }
+
     func reset(session: Int) {
 
         if destinationRequest != nil { destinationRequest = nil }
@@ -97,6 +110,7 @@ final class PanelCoordinator {
 
     private func publish(_ next: PanelSnapshot) {
         guard next != snapshot else { return }
+        if next.current?.presentationID != shownPresentationID { shownPresentationID = nil }
         snapshot = next
         onSnapshotChanged?()
         afterSnapshotChanged?()

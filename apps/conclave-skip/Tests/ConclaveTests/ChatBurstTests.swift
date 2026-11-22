@@ -30,6 +30,8 @@ struct ClosedChatWorkTests {
         #expect(chat.pendingUnreadCount == 5)
 
         chat.openPanel()
+
+        chat.panelDidAppear()
         #expect(!chat.hasDeferredRows)
         #expect(chat.rebuildCount > built)
         let rowIds = chat.timeline.rowIds
@@ -51,6 +53,7 @@ struct ClosedChatWorkTests {
         }
         #expect(chat.emojiParseCount == parsed)
         chat.openPanel()
+        chat.panelDidAppear()
         #expect(chat.emojiParseCount == parsed + 30)
     }
 
@@ -62,6 +65,7 @@ struct ClosedChatWorkTests {
         messages.append(Chat.peer("early", "sent first", at: 150, history: false))
         chat.apply(Chat.inputs(messages), change: .messages)
         chat.openPanel()
+        chat.panelDidAppear()
         let rowIds = chat.timeline.rowIds
         let divider = rowIds.firstIndex(of: "unread")
         #expect(divider.map { rowIds[$0 + 1] } == "late")
@@ -87,6 +91,7 @@ struct ClosedChatWorkTests {
         var log: [ChatCommandRequest] = []
         chat.onCommand = { log.append($0) }
         chat.openPanel()
+        chat.panelDidAppear()
         chat.beginReply(rowId: "h-1")
         #expect(chat.composer.reply?.messageId == "h-1")
         chat.closePanel()
@@ -95,6 +100,7 @@ struct ClosedChatWorkTests {
         chat.hideSender(userId: Chat.avery)
         chat.showSender(userId: Chat.avery)
         chat.openPanel()
+        chat.panelDidAppear()
         #expect(chat.composer.reply == nil)
         chat.send(text: "hello")
         #expect(log.last?.kind == .send)
@@ -116,6 +122,7 @@ struct ClosedChatWorkTests {
         chat.apply(Chat.inputs(messages), change: .messages)
         #expect(chat.pendingUnreadCount == 1)
         chat.openPanel()
+        chat.panelDidAppear()
         let rowIds = chat.timeline.rowIds
         let divider = rowIds.firstIndex(of: "unread")
         #expect(divider.map { rowIds[$0 + 1] } == "answer")
@@ -130,6 +137,7 @@ struct ClosedChatWorkTests {
         }
         let built = chat.rebuildCount
         chat.openPanel()
+        chat.panelDidAppear()
         chat.route(to: .none, targetId: "")
         #expect(chat.rebuildCount == built + 1)
         #expect(chat.timeline.rowIds.contains("unread"))
@@ -149,6 +157,7 @@ struct ClosedChatWorkTests {
         var messages = history(3)
         let chat = Chat.presenter(Chat.inputs(messages))
         chat.openPanel()
+        chat.panelDidAppear()
         let built = chat.rebuildCount
         messages.append(Chat.peer("n-0", "hello there", at: 100, history: false))
         chat.apply(Chat.inputs(messages), change: .messages)

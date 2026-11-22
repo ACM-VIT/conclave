@@ -140,6 +140,7 @@ class OwnerChatPolishTests {
         })
         chat.apply(inputs(), ChatInputChange.messages)
         chat.openPanel()
+        chat.panelDidAppear()
         assertEquals("new-0", chat.timeline.firstUnreadId)
         val cache = ChatTimelineCache(chat)
         val activity = activity()

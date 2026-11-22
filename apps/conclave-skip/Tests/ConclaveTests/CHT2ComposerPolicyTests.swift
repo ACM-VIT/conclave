@@ -161,6 +161,7 @@ struct CHT2ComposerPolicyTests {
         chat.drafts.setText("kept", for: chat.composer.draftKey)
         chat.closePanel()
         chat.openPanel()
+        chat.panelDidAppear()
         #expect(chat.drafts.text(for: chat.composer.draftKey) == "kept")
         chat.reset()
         #expect(chat.drafts.count == 0)

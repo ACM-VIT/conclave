@@ -103,10 +103,12 @@ final class MeetingShellPresenter {
             chat.closePanel()
             return
         }
-        guard !chat.isOpen else { return }
-        let opened = Date().timeIntervalSince1970 * 1000.0
-        chat.openPanel()
-        ChatDiagnostics.counters?.recordOpenLatency(Date().timeIntervalSince1970 * 1000.0 - opened)
+        if !chat.isOpen {
+            let opened = Date().timeIntervalSince1970 * 1000.0
+            chat.openPanel()
+            ChatDiagnostics.counters?.recordOpenLatency(Date().timeIntervalSince1970 * 1000.0 - opened)
+        }
+        if panels.currentWasShown { chat.panelDidAppear() }
     }
 
     func apply(_ next: MeetingShellInputs) {

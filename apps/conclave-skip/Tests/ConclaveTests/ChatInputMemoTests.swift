@@ -18,7 +18,16 @@ struct ChatInputMemoTests {
         viewModel.state.chatMessages = [ChatMessage(id: "m-0", userId: "remote@example.com#w", displayName: "Remote",
                                                     content: "earlier", roomId: "room-a")]
         _ = viewModel.chat.timeline
+        readChat(viewModel)
         return viewModel
+    }
+
+    private func readChat(_ viewModel: MeetingViewModel) {
+        let panels = viewModel.shell.panels
+        panels.present(.chat, from: .call)
+        panels.didPresent(session: panels.snapshot.session, presentationID: panels.snapshot.current?.presentationID ?? 0)
+        panels.dismiss(cancelPending: true)
+        panels.didDismiss(session: panels.snapshot.session, presentationID: panels.snapshot.current?.presentationID ?? 0)
     }
 
     @Test func chatClosesWhileTheCallSurfaceIsHiddenAndShowsTheDividerWhenItReturns() {
@@ -70,6 +79,37 @@ struct ChatInputMemoTests {
         viewModel.shell.panels.toggle(.chat, from: .call)
         let rowIds = viewModel.chat.timeline.rowIds
         #expect(rowIds.firstIndex(of: "unread").map { rowIds[$0 + 1] } == "m-a")
+    }
+
+    @Test func aChatThatAppearedConsumesItsUnreadAnchor() {
+        let viewModel = joinedViewModel()
+        viewModel.state.chatMessages.append(ChatMessage(id: "m-a", userId: "remote@example.com#w", displayName: "Remote",
+                                                        content: "seen", roomId: "room-a"))
+        viewModel.shell.panels.toggle(.chat, from: .call)
+        let shown = viewModel.shell.panels.snapshot
+        viewModel.shell.panels.didPresent(session: shown.session, presentationID: shown.current?.presentationID ?? 0)
+        #expect(viewModel.chat.isShown)
+        viewModel.shell.panels.toggle(.chat, from: .call)
+        let dismissing = viewModel.shell.panels.snapshot
+        viewModel.shell.panels.didDismiss(session: dismissing.session, presentationID: dismissing.current?.presentationID ?? 0)
+        viewModel.state.chatMessages.append(ChatMessage(id: "m-b", userId: "remote@example.com#w", displayName: "Remote",
+                                                        content: "new", roomId: "room-a"))
+        #expect(viewModel.chat.pendingUnreadCount == 1)
+
+        viewModel.shell.panels.toggle(.chat, from: .call)
+        let rowIds = viewModel.chat.timeline.rowIds
+        #expect(rowIds.firstIndex(of: "unread").map { rowIds[$0 + 1] } == "m-b")
+    }
+
+    @Test func aChatShownBeforeBackgroundingIsShownAgainWhenTheAppReturns() {
+        let viewModel = joinedViewModel()
+        viewModel.shell.panels.present(.chat, from: .call)
+        let shown = viewModel.shell.panels.snapshot
+        viewModel.shell.panels.didPresent(session: shown.session, presentationID: shown.current?.presentationID ?? 0)
+        viewModel.handleAppEnteredBackground()
+        #expect(!viewModel.chat.isShown)
+        viewModel.handleAppBecameActive()
+        #expect(viewModel.chat.isShown)
     }
 
     @Test func backgroundingTheAppClosesChatUntilItComesBack() {
@@ -145,6 +185,7 @@ struct ChatInputMemoTests {
         viewModel.state.chatMessages = [ChatMessage(id: "m-0", userId: "remote@example.com#w", displayName: "Remote",
                                                     content: "earlier", roomId: "room-a")]
         _ = viewModel.chat.timeline
+        readChat(viewModel)
         viewModel.shell.panels.toggle(.chat, from: .call)
         viewModel.shell.panels.toggle(.chat, from: .call)
         #expect(!viewModel.state.isChatOpen)

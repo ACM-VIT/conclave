@@ -169,6 +169,7 @@ class CHT7AssistantBridgeTests {
         assertEquals(first, chat.rows.entry("ans").assistant?.blocks?.get(0))
         assertEquals(publishes, chat.timelinePublishCount)
         chat.openPanel()
+        chat.panelDidAppear()
         chat.apply(inputs(listOf(answer("Launch moved. Details", ChatAssistantInput.make(isDone = true)))), ChatInputChange.assistant)
         assertEquals("assistantAnswered", chat.announcement?.kind)
         assertEquals("Launch moved.", chat.announcement?.text)
