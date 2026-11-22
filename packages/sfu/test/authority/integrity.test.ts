@@ -8,7 +8,8 @@ import { s, SchemaError, type Json } from "@conclave/apps-sdk/authority";
 import { Client } from "../../config/classes/Client.js";
 import { DEFAULT_AUTHORITY_LIMITS } from "../../server/apps/authority/limits.js";
 import { Harness, person } from "./harness.js";
-import { pollsAuthority, pollsContract } from "./fixtures/polls.js";
+import { pollsContract } from "@conclave/apps-sdk/polls/core";
+import { pollsAuthority } from "@conclave/apps-sdk/polls/server";
 import { probeAuthority, probeContract } from "./fixtures/probe.js";
 
 const host = person("asha@example.com", "Asha", "host");
