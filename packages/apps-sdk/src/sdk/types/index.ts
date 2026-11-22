@@ -33,6 +33,12 @@ export type AppsSyncError = {
 
 export type AppSyncStatus = "idle" | "syncing" | "synced" | "failed";
 
+export type AppDocuments = {
+  version: number;
+  doc: (appId: string) => Y.Doc;
+  awareness: (appId: string) => Awareness;
+};
+
 export type AppsUpdatePayload = {
   appId: string;
   update: Uint8Array;
@@ -88,7 +94,7 @@ export type AppsContextValue = {
   getAwareness: (appId: string) => Awareness;
   syncStatus: AppSyncStatus;
   retrySync: () => void;
-  docsVersion: number;
+  documents: AppDocuments;
   rejectedChanges: number;
   user?: AppUser;
   participants?: AppUser[];

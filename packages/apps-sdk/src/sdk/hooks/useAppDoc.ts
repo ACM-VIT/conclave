@@ -2,9 +2,9 @@ import { useMemo } from "react";
 import { useApps } from "./useApps";
 
 export const useAppDoc = (appId: string) => {
-  const { getDoc, getAwareness, state, docsVersion } = useApps();
-  const doc = useMemo(() => getDoc(appId), [appId, getDoc, docsVersion]);
-  const awareness = useMemo(() => getAwareness(appId), [appId, getAwareness, docsVersion]);
+  const { documents, state } = useApps();
+  const doc = useMemo(() => documents.doc(appId), [appId, documents]);
+  const awareness = useMemo(() => documents.awareness(appId), [appId, documents]);
   return {
     doc,
     awareness,

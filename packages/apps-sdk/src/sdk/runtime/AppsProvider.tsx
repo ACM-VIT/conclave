@@ -3,6 +3,7 @@ import type { Socket } from "socket.io-client";
 import * as Y from "yjs";
 import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from "y-protocols/awareness";
 import type {
+  AppDocuments,
   ConclaveApp,
   AppsAwarenessPayload,
   AppsCloseResponse,
@@ -630,6 +631,11 @@ export function AppsProvider({
     });
   }, []);
 
+  const documents = useMemo<AppDocuments>(
+    () => ({ version: docsVersion, doc: getDoc, awareness: getAwareness }),
+    [docsVersion, getDoc, getAwareness]
+  );
+
   const contextValue = useMemo<AppsContextValue>(
     () => ({
       state,
@@ -642,7 +648,7 @@ export function AppsProvider({
       getAwareness,
       syncStatus,
       retrySync,
-      docsVersion,
+      documents,
       rejectedChanges,
       user,
       participants: roster,
@@ -660,7 +666,7 @@ export function AppsProvider({
       getAwareness,
       syncStatus,
       retrySync,
-      docsVersion,
+      documents,
       rejectedChanges,
       user,
       roster,
