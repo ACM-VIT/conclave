@@ -840,17 +840,24 @@ export const createSfuApp = ({
     const channelId = getRoomChannelId(clientId, roomId);
     const room = state.rooms.get(channelId);
     // The web asks on behalf of a visitor and shows the headcount only when
-    // that visitor belongs to the room or was invited to it.
+    // that visitor belongs to the room or was invited to it. A host blocking
+    // or removing someone outranks their invitation.
     const viewerKey = normalizeIdentifier(req.query.viewerKey);
-    const viewerIsMember = viewerKey
-      ? Boolean(room?.isMemberUserKey(viewerKey)) ||
+    const vouchesFor = (userKey: string): boolean => {
+      if (room?.isBlocked(userKey) || room?.needsReadmission(userKey)) {
+        return false;
+      }
+      return (
+        Boolean(room?.isMemberUserKey(userKey)) ||
         isScheduledMeetingInvitee(
           state.scheduledMeetings,
           clientId,
           roomId,
-          viewerKey.toLowerCase(),
+          userKey.toLowerCase(),
         )
-      : undefined;
+      );
+    };
+    const viewerIsMember = viewerKey ? vouchesFor(viewerKey) : undefined;
     res.set("Cache-Control", "no-store");
     if (!room) {
       return res.json({ room: null, viewerIsMember });

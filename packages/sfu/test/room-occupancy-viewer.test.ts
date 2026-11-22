@@ -7,6 +7,10 @@ import { Room } from "../config/classes/Room.js";
 import { config } from "../config/config.js";
 import { createSfuApp } from "../server/http/createApp.js";
 import { LocalRoomRegistry } from "../server/roomRegistry.js";
+import {
+  createScheduledMeeting,
+  setScheduledInviteeReadmission,
+} from "../server/scheduledMeetings.js";
 import { createSfuState, type SfuState } from "../server/state.js";
 
 const servers: Server[] = [];
@@ -79,5 +83,65 @@ describe("room occupancy for a viewer", () => {
       headers: { "x-sfu-secret": config.sfuSecret },
     });
     expect(await response.json()).toEqual({ room: null, viewerIsMember: false });
+  });
+
+  describe("for someone invited to a scheduled meeting", () => {
+    const scheduled = () => {
+      const state = setup();
+      createScheduledMeeting(
+        state.scheduledMeetings,
+        {
+          title: "Intro call",
+          scheduledStartAt: Date.now(),
+          roomCode: "abc-mnop-xyz",
+          hostEmail: "host@example.com",
+          attendeeEmail: "invitee@example.com",
+        },
+        {
+          clientId: "conclave",
+          createdBy: "host@example.com",
+          defaultHostEmail: "host@example.com",
+          defaultHostUserId: null,
+        },
+      );
+      return { state, room: state.rooms.get("conclave:abc-mnop-xyz")! };
+    };
+
+    it("vouches for them while the invitation stands", async () => {
+      const { state } = scheduled();
+      const url = await start(state);
+      expect((await occupancy(url, "invitee@example.com")).viewerIsMember).toBe(true);
+    });
+
+    it("stops vouching once a host blocks them", async () => {
+      const { state, room } = scheduled();
+      room.blockUser("invitee@example.com");
+      const url = await start(state);
+      expect((await occupancy(url, "invitee@example.com")).viewerIsMember).toBe(false);
+    });
+
+    it("stops vouching once a host removes them", async () => {
+      const { state, room } = scheduled();
+      room.revokeLockedAllowedUser("invitee@example.com");
+      const url = await start(state);
+      expect((await occupancy(url, "invitee@example.com")).viewerIsMember).toBe(false);
+    });
+
+    it("does not vouch for a removed invitee while the meeting has no room", async () => {
+      const { state } = scheduled();
+      setScheduledInviteeReadmission(
+        state.scheduledMeetings,
+        "conclave",
+        "abc-mnop-xyz",
+        "invitee@example.com",
+        true,
+      );
+      state.rooms.clear();
+      const url = await start(state);
+      expect(await occupancy(url, "invitee@example.com")).toEqual({
+        room: null,
+        viewerIsMember: false,
+      });
+    });
   });
 });
