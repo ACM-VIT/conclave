@@ -2,7 +2,7 @@
 
 import React, { useState } from "react";
 import { Blocks, ExternalLink, LoaderCircle } from "lucide-react";
-import { useApps } from "@conclave/apps-sdk";
+import { useApps, type AppsState } from "@conclave/apps-sdk";
 import { color } from "@conclave/ui-tokens";
 import {
   GAME_DOCK_HEADER_CLASS,
@@ -40,11 +40,11 @@ export function AppsPanel({
     isReadOnly,
   } = useApps();
   const [busyAppId, setBusyAppId] = useState<string | null>(null);
-  // The confirm step is armed for one app at one stage revision, so a change
-  // to the room in between asks again.
+  // The confirm step is armed for one app against one room state, so any
+  // change in between, including a move to another room, asks again.
   const [confirmingClear, setConfirmingClear] = useState<{
     appId: string;
-    revision: number | null;
+    state: AppsState;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -66,13 +66,12 @@ export function AppsPanel({
   };
 
   const isConfirmingClear = (appId: string) =>
-    confirmingClear?.appId === appId &&
-    confirmingClear.revision === state.revision;
+    confirmingClear?.appId === appId && confirmingClear.state === state;
 
   const handleClear = (appId: string) => {
     if (!canManage || busyAppId) return;
     if (!isConfirmingClear(appId)) {
-      setConfirmingClear({ appId, revision: state.revision });
+      setConfirmingClear({ appId, state });
       return;
     }
     setConfirmingClear(null);

@@ -131,6 +131,26 @@ describe("the presented board", () => {
     }
   });
 
+  it("starts an app entering the stage from the room's copy, not a stray local one", async () => {
+    const kept = new Y.Doc();
+    kept.getMap("entries").set("room", 1);
+    serverDocs.set("wheel", kept);
+    await serverState({ activeAppId: "whiteboard", revision: 1, savedAppIds: ["wheel"] });
+    ctx.getDoc("wheel").getMap("entries").set("stale", 1);
+    emitted.length = 0;
+
+    await serverState({ activeAppId: "wheel", revision: 2, savedAppIds: ["whiteboard"] });
+
+    const wheel = ctx.getDoc("wheel").getMap("entries");
+    expect(wheel.get("room")).toBe(1);
+    expect(wheel.get("stale")).toBeUndefined();
+    for (const upload of sent("apps:yjs:update")) {
+      const received = new Y.Doc();
+      Y.applyUpdate(received, (upload.args[0] as { update: Uint8Array }).update);
+      expect(received.getMap("entries").get("stale")).toBeUndefined();
+    }
+  });
+
   it("keeps drawing while anyone opens and closes the apps panel", async () => {
     await serverState({ activeAppId: "whiteboard", revision: 1, savedAppIds: [] });
     const board = ctx.getDoc("whiteboard");
@@ -188,6 +208,17 @@ describe("the apps panel", () => {
     expect(sent("apps:discard").map((entry) => entry.args[0])).toEqual([
       { appId: "whiteboard", expectedRevision: 8 },
     ]);
+  });
+
+  it("asks again after a move to another room with the same revision", async () => {
+    await serverState({ activeAppId: "wheel", revision: 7, savedAppIds: ["whiteboard"] });
+    await act(async () => setPanelOpen(true));
+
+    await click("Clear Whiteboard");
+    await serverState({ activeAppId: "wheel", revision: 7, savedAppIds: ["whiteboard"], roomId: "other" });
+
+    expect(host.querySelector('button[aria-label="Clear Whiteboard for everyone"]')).toBeNull();
+    expect(sent("apps:discard")).toEqual([]);
   });
 
   it("sends a lock against the stage the host saw", async () => {
