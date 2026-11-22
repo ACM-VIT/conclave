@@ -834,6 +834,9 @@ const createSqliteScheduledMeetingPersistence = (
       email TEXT NOT NULL,
       PRIMARY KEY (meeting_id, email)
     );
+    CREATE TABLE IF NOT EXISTS scheduled_meeting_removals_moved (
+      meeting_id TEXT PRIMARY KEY
+    );
   `);
 
   const insert = db.prepare(`
@@ -878,6 +881,15 @@ const createSqliteScheduledMeetingPersistence = (
   const takeCarriedRemovals = db.prepare(
     "UPDATE scheduled_meetings SET payload_json = ? WHERE id = ? AND payload_json = ?",
   );
+  const markRemovalsMoved = db.prepare(
+    "INSERT OR IGNORE INTO scheduled_meeting_removals_moved (meeting_id) VALUES (?)",
+  );
+  const removalsMoved = db.prepare(
+    "SELECT 1 AS moved FROM scheduled_meeting_removals_moved WHERE meeting_id = ?",
+  );
+  const forgetRemovalsMoved = db.prepare(
+    "DELETE FROM scheduled_meeting_removals_moved WHERE meeting_id = ?",
+  );
   let knownIds = new Set<string>();
 
   const upsertMeeting = (meeting: ScheduledMeeting): void => {
@@ -895,11 +907,18 @@ const createSqliteScheduledMeetingPersistence = (
   const deleteMeeting = (id: string): void => {
     deleteById.run(id);
     forgetRemovedInvitees.run(id);
+    forgetRemovalsMoved.run(id);
   };
   // A row written before removed invitees had a table of their own carries
   // them inside the meeting. Reading such a row moves them to the table and
   // takes them out of the row, in one step. Left in the row they would come
   // back at every read, also after a host had let the person in again.
+  //
+  // Once a meeting's removed invitees live in the table it is marked so, and
+  // a list found inside its row after that is ignored: it can only be an old
+  // copy saved by an earlier build, which would block people a host has let
+  // back in since. The mark is kept beside the table, where no save of a
+  // meeting reaches it.
   const readRow = (row: unknown): ScheduledMeeting | null => {
     const payload = textColumn(row, "payload_json");
     const meeting = payload ? normalizeStoredMeeting(JSON.parse(payload)) : null;
@@ -907,13 +926,15 @@ const createSqliteScheduledMeetingPersistence = (
     if (!meeting || carried.length === 0) return meeting;
     try {
       db.exec("BEGIN IMMEDIATE");
+      const alreadyMoved = removalsMoved.get(meeting.id) !== undefined;
       const taken = takeCarriedRemovals.run(
         meetingRecord(JSON.parse(payload) as object),
         meeting.id,
         payload,
       );
-      if (Number(taken.changes) > 0) {
+      if (Number(taken.changes) > 0 && !alreadyMoved) {
         for (const email of carried) removeInvitee.run(meeting.id, email);
+        markRemovalsMoved.run(meeting.id);
       }
       db.exec("COMMIT");
     } catch (error) {
@@ -1011,8 +1032,14 @@ const createSqliteScheduledMeetingPersistence = (
     },
     setInviteeReadmission: (meetingId, email, required) => {
       try {
+        db.exec("BEGIN IMMEDIATE");
         (required ? removeInvitee : restoreInvitee).run(meetingId, email);
+        markRemovalsMoved.run(meetingId);
+        db.exec("COMMIT");
       } catch (error) {
+        try {
+          db.exec("ROLLBACK");
+        } catch {}
         Logger.error("Failed to persist a removed invitee", error);
       }
     },
@@ -1173,15 +1200,30 @@ return nextPayload
 // Moves the removed invitees a meeting's record still carries into their
 // set, and takes them out of the record, only if the record still is the one
 // that was read. Otherwise another SFU has moved them already, and a host may
-// have let someone back in since.
+// have let someone back in since. A meeting already marked as moved keeps
+// its set as it is: a list inside its record then is an old copy.
+//
+// Redis does not undo a script's earlier writes when a later one fails, so
+// everything that could fail is checked first and the record is rewritten
+// last. A failure leaves the record with its list, for the next read.
 const MOVE_CARRIED_REMOVALS_SCRIPT = `
+local function holds(key, kind)
+  local found = redis.call("TYPE", key).ok
+  return found == kind or found == "none"
+end
+if not holds(KEYS[1], "hash") or not holds(KEYS[2], "set") or not holds(KEYS[3], "set") then
+  return redis.error_reply("WRONGTYPE removed invitees cannot be moved")
+end
 if redis.call("HGET", KEYS[1], ARGV[1]) ~= ARGV[2] then
   return 0
 end
-redis.call("HSET", KEYS[1], ARGV[1], ARGV[3])
-for i = 4, #ARGV do
-  redis.call("SADD", KEYS[2], ARGV[i])
+if redis.call("SISMEMBER", KEYS[3], ARGV[1]) == 0 then
+  for i = 4, #ARGV do
+    redis.call("SADD", KEYS[2], ARGV[i])
+  end
+  redis.call("SADD", KEYS[3], ARGV[1])
 end
+redis.call("HSET", KEYS[1], ARGV[1], ARGV[3])
 return 1
 `;
 
@@ -1249,6 +1291,12 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
     return `${this.key}:removed-invitees`;
   }
 
+  // Meetings whose removed invitees live in that set, so a list found inside
+  // their record is an old copy (see MOVE_CARRIED_REMOVALS_SCRIPT).
+  private get removalsMovedKey(): string {
+    return `${this.key}:removed-invitees-moved`;
+  }
+
   private removedInvitee(meetingId: string, email: string): string {
     return `${meetingId} ${email}`;
   }
@@ -1275,9 +1323,10 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
     const moved = await this.client.sendCommand([
       "EVAL",
       MOVE_CARRIED_REMOVALS_SCRIPT,
-      "2",
+      "3",
       this.key,
       this.removedInviteesKey,
+      this.removalsMovedKey,
       meeting.id,
       record,
       meetingRecord(JSON.parse(record) as object),
@@ -1334,8 +1383,11 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
     void this.fallback.setInviteeReadmission?.(meetingId, email, required);
     const member = this.removedInvitee(meetingId, email);
     this.queueWrite("set a removed invitee", async () => {
-      if (required) await this.client.sAdd(this.removedInviteesKey, member);
-      else await this.client.sRem(this.removedInviteesKey, member);
+      const write = this.client.multi();
+      if (required) write.sAdd(this.removedInviteesKey, member);
+      else write.sRem(this.removedInviteesKey, member);
+      write.sAdd(this.removalsMovedKey, meetingId);
+      await write.exec();
     });
   }
 
@@ -1352,6 +1404,7 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
         (removed.get(id) ?? []).map((email) => this.removedInvitee(id, email)),
       );
       if (gone.length > 0) await this.client.sRem(this.removedInviteesKey, gone);
+      await this.client.sRem(this.removalsMovedKey, ids);
     });
   }
 

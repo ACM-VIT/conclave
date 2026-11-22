@@ -249,6 +249,16 @@ describe("an SFU whose Redis holds no meetings yet", () => {
   });
 });
 
+const openSqlite = (path: string) => {
+  const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as {
+    DatabaseSync: new (file: string) => {
+      prepare: (sql: string) => { get: (...p: unknown[]) => unknown; run: (...p: unknown[]) => unknown };
+      close: () => void;
+    };
+  };
+  return new DatabaseSync(path);
+};
+
 // Before removed invitees had writes of their own, every store kept them as
 // a field of the meeting. The JSON file still does. Wherever such a meeting
 // is read from, the people in that field stay removed.
@@ -297,13 +307,7 @@ describe("removed invitees kept inside the meeting, as stores used to keep them"
   it("are read from a SQLite row that still carries them, and a host can bring the person back", async () => {
     const dir = useStore("sqlite");
     const meeting = await scheduleIntroCall(await startSfu("sqlite"));
-    const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as {
-      DatabaseSync: new (path: string) => {
-        prepare: (sql: string) => { get: (...p: unknown[]) => unknown; run: (...p: unknown[]) => unknown };
-        close: () => void;
-      };
-    };
-    const db = new DatabaseSync(join(dir, "conclave.sqlite"));
+    const db = openSqlite(join(dir, "conclave.sqlite"));
     const row = db
       .prepare("SELECT payload_json FROM scheduled_meetings WHERE id = ?")
       .get(meeting.id) as { payload_json: string };
@@ -333,6 +337,68 @@ describe("removed invitees kept inside the meeting, as stores used to keep them"
     expect(isInvited(sfu)).toBe(false);
     await setRemoved(sfu, false);
     expect(isInvited(await startSfu("redis"))).toBe(true);
+  });
+
+  // What builds of this PR before removed invitees had writes of their own
+  // do when they save a meeting: write their copy with the list inside.
+  const earlierBuildSaves = async (kind: "sqlite" | "redis", dir: string, meetingId: string, carried: string[]) => {
+    const inside = (record: string) =>
+      JSON.stringify({ ...(JSON.parse(record) as object), readmissionRequiredEmails: carried });
+    if (kind === "sqlite") {
+      const db = openSqlite(join(dir, "conclave.sqlite"));
+      const row = db
+        .prepare("SELECT payload_json FROM scheduled_meetings WHERE id = ?")
+        .get(meetingId) as { payload_json: string };
+      db.prepare("UPDATE scheduled_meetings SET payload_json = ? WHERE id = ?").run(
+        inside(row.payload_json),
+        meetingId,
+      );
+      db.close();
+      return;
+    }
+    const client = createClient({ url: process.env.SFU_PERSISTENCE_REDIS_URL });
+    await client.connect();
+    const key = `${process.env.SFU_PERSISTENCE_REDIS_KEY_PREFIX}:scheduled-meetings`;
+    const record = await client.hGet(key, meetingId);
+    await client.hSet(key, meetingId, inside(record!));
+    await client.quit();
+  };
+
+  for (const kind of ["sqlite", "redis"] as const) {
+    const storeTest = kind === "redis" ? redisTest : it;
+    storeTest(`stay let back in on ${kind} when an earlier build saves its old copy with the list inside`, async () => {
+      const dir = useStore(kind);
+      const sfu = await startSfu(kind);
+      const meeting = await scheduleIntroCall(sfu);
+      await setRemoved(sfu, true);
+      await setRemoved(sfu, false);
+      expect(isInvited(await startSfu(kind))).toBe(true);
+
+      await earlierBuildSaves(kind, dir, meeting.id, [INVITEE]);
+
+      expect(isInvited(await startSfu(kind))).toBe(true);
+    });
+  }
+
+  redisTest("are not lost when moving them fails part way", async () => {
+    useStore("redis");
+    const meeting = await scheduleIntroCall(await startSfu("redis"));
+    const client = createClient({ url: process.env.SFU_PERSISTENCE_REDIS_URL });
+    await client.connect();
+    const prefix = process.env.SFU_PERSISTENCE_REDIS_KEY_PREFIX;
+    const key = `${prefix}:scheduled-meetings`;
+    const record = await client.hGet(key, meeting.id);
+    const carried = withRemovalInside(record!);
+    await client.hSet(key, meeting.id, carried);
+    // A key of the wrong type where the removed invitees go.
+    await client.set(`${key}:removed-invitees`, "not a set");
+
+    await startSfu("redis");
+    expect(await client.hGet(key, meeting.id)).toBe(carried);
+
+    await client.del(`${key}:removed-invitees`);
+    await client.quit();
+    expect(isInvited(await startSfu("redis"))).toBe(false);
   });
 
   redisTest("are not put back by an SFU that read the old record before another moved them", async () => {
