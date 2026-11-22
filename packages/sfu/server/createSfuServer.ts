@@ -27,6 +27,7 @@ import {
   type SocketAdapterLifecycle,
 } from "./socket/createSocketServer.js";
 import { createRoomRegistry } from "./roomRegistry.js";
+import { createFileRoomRecoveryStore } from "./roomRecoveryLedger.js";
 import { startRoomRecoveryPassRefresh } from "./roomRecoveryPass.js";
 import {
   AUDIO_CONSUMER_HEAL_INTERVAL_MS,
@@ -62,6 +63,7 @@ export const createSfuServer = (
   const state = createSfuState({
     isDraining: config.draining,
     roomRegistry,
+    roomRecoveryStore: createFileRoomRecoveryStore(),
   });
   let io: SocketIOServer | null = null;
   let socketAdapterLifecycle: SocketAdapterLifecycle | null = null;

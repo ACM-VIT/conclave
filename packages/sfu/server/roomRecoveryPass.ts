@@ -2,6 +2,7 @@ import jwt from "jsonwebtoken";
 import type { Client } from "../config/classes/Client.js";
 import type { Room } from "../config/classes/Room.js";
 import { Logger } from "../utilities/loggers.js";
+import type { SfuState } from "./state.js";
 
 const TOKEN_USE = "room-recovery";
 const MAX_PASS_LENGTH = 2048;
@@ -16,6 +17,13 @@ const MAX_PASS_LENGTH = 2048;
 // that signed.
 const TTL_SECONDS = 5 * 60;
 const REFRESH_INTERVAL_MS = 60 * 1000;
+const CLOCK_SKEW_MS = 60 * 1000;
+
+export const ROOM_RECOVERY_PASS_TTL_MS = TTL_SECONDS * 1000 + CLOCK_SKEW_MS;
+// How long after the SFU last saw a room running a pass from it can still be
+// good. Until then a recreated room is that call coming back, not a new one.
+export const LOST_ROOM_WINDOW_MS =
+  REFRESH_INTERVAL_MS + ROOM_RECOVERY_PASS_TTL_MS;
 
 type RecoveryRoom = Pick<Room, "channelId" | "incarnationId">;
 type PassIssuingRoom = RecoveryRoom &
@@ -53,15 +61,22 @@ export const issueRoomRecoveryPass = (
 
 /**
  * Hands everyone in every room a new pass from time to time, so the one they
- * hold never runs out while they are in the call. Returns how to stop.
+ * hold never runs out while they are in the call, and notes in the recovery
+ * ledger that the room is still running. Returns how to stop.
  */
 export const startRoomRecoveryPassRefresh = (
-  state: { rooms: ReadonlyMap<string, Room> },
+  state: Pick<SfuState, "rooms" | "endedRooms" | "roomRecovery">,
   secret: string,
 ): (() => void) => {
   const timer = setInterval(() => {
     try {
       for (const room of state.rooms.values()) {
+        if (
+          room.restorerState(Date.now()) === "none" &&
+          !state.endedRooms.has(room.channelId)
+        ) {
+          state.roomRecovery.noteRunning(room);
+        }
         for (const client of room.clients.values()) {
           if (!client.socket.connected) continue;
           const roomRecoveryPass = issueRoomRecoveryPass(room, client, secret);

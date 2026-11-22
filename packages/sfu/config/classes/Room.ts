@@ -193,6 +193,9 @@ export class Room {
   public readonly channelId: string;
   // Tells this room apart from an earlier or later one at the same code.
   public readonly incarnationId: string = randomUUID();
+  // Set when this code was ended for everyone a moment ago: recovery passes
+  // signed up to then are from the ended meeting, not from this one.
+  public recoveryPassesVoidUntil: number | null = null;
   public clients: Map<string, Client> = new Map();
   public pendingClients: Map<
     string,
@@ -288,6 +291,11 @@ export class Room {
   // a host letting them in again gets them past the lock: not an invite, not
   // proof they were here before.
   private readmissionRequiredUserKeys: Set<string> = new Set();
+  // Set while this room stands in for a call the SFU lost and nobody from
+  // that call has come back yet. Until one does, or until no pass from the
+  // lost call can still be good, the room has no host and whoever recreated
+  // it waits like anyone else.
+  private restorerDeadline: number | null = null;
   private meetingParticipantCount = 0;
   private currentWebcamCodecPolicy: WebcamCodecPolicy =
     buildWebcamCodecPolicy("vp8", 0);
@@ -2539,6 +2547,26 @@ export class Room {
 
   needsReadmission(userKey: string): boolean {
     return this.readmissionRequiredUserKeys.has(userKey);
+  }
+
+  awaitRestorer(until: number) {
+    this.restorerDeadline = until;
+  }
+
+  // "awaited": only someone from the lost call may take the host's seat.
+  // "lapsed": that call is not coming back, so the room is open to claim.
+  restorerState(now: number): "none" | "awaited" | "lapsed" {
+    if (this.restorerDeadline === null) return "none";
+    return now <= this.restorerDeadline ? "awaited" : "lapsed";
+  }
+
+  markRestored() {
+    this.restorerDeadline = null;
+  }
+
+  restoreHosts(hosts: { hostUserKey: string | null; adminUserKeys: string[] }) {
+    this.hostUserKey = hosts.hostUserKey;
+    for (const userKey of hosts.adminUserKeys) this.adminUserKeys.add(userKey);
   }
 
   allowUser(userKey: string) {

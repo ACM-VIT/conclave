@@ -53,6 +53,7 @@ import {
   issueRoomRecoveryPass,
   provesEarlierRoomMembership,
 } from "../../roomRecoveryPass.js";
+import type { LostRoom } from "../../roomRecoveryLedger.js";
 import { getSocketAuthUser } from "../auth.js";
 import type { ConnectionContext } from "../context.js";
 import { registerAdminHandlers } from "./adminHandlers.js";
@@ -294,6 +295,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         const roomChannelId = getRoomChannelId(clientId, roomId);
         let room = state.rooms.get(roomChannelId);
         let createdRoom = false;
+        let lostRoom: LostRoom | null = null;
         const respondWithRoomOwner = (owner: RoomAssignmentRecord): void => {
           Logger.info(
             `Join for ${roomId} (${clientId}) routed to SFU instance ${owner.instanceId}`,
@@ -366,6 +368,9 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             respond(callback, { error: "No room found." });
             return;
           }
+          // Read before the room exists, so nothing can await between
+          // creating it and settling who hosts it.
+          const recalled = await state.roomRecovery.recall(roomChannelId);
           try {
             // Several joiners can miss the lookup above while the room is
             // still being created; only the one whose call created it is the
@@ -377,6 +382,9 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             );
             room = result.room;
             createdRoom = result.created;
+            if (createdRoom) {
+              lostRoom = recalled.lost;
+            }
           } catch (error) {
             if (error instanceof RoomOwnershipError) {
               respondWithRoomOwner(error.owner);
@@ -392,6 +400,11 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           }
           if (createdRoom && clientPolicy.knockByDefault) {
             room.setLocked(true);
+          }
+          // The SFU lost this call and it is coming back: its hosts are
+          // hosts again when they return.
+          if (lostRoom) {
+            room.restoreHosts(lostRoom);
           }
         }
 
@@ -537,11 +550,42 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             isPersistedAdminForExistingRoom ||
             (hostRequested &&
               (clientPolicy.allowHostJoin || forcedHostJoin)));
+        const needsReadmission = room.needsReadmission(userKey);
+        const provesMembership =
+          !isWebinarAttendeeJoin &&
+          !needsReadmission &&
+          provesEarlierRoomMembership(
+            data?.roomRecoveryPass,
+            room,
+            userKey,
+            config.sfuSecret,
+          );
+        // Recreating a room the SFU lost is restoring a call, not starting
+        // one. Its host's seat goes to someone from that call: a host of it,
+        // or a member who holds its pass. Anyone else who recreates it, such
+        // as a tab that was only knocking, waits as before, and the room
+        // waits for its people. A room with no gate has nothing to wait at.
+        const isFromLostCall =
+          provesMembership || hostRequested || isAdminForExistingRoom;
+        if (
+          createdRoom &&
+          lostRoom &&
+          !isWebinarAttendeeJoin &&
+          !isFromLostCall &&
+          (clientPolicy.knockByDefault || clientPolicy.useWaitingRoom)
+        ) {
+          room.awaitRestorer(lostRoom.claimableUntil);
+        }
+        const restorerState = room.restorerState(Date.now());
+        const takesOverRecreatedRoom =
+          restorerState === "awaited"
+            ? isFromLostCall
+            : restorerState === "lapsed" && (allowRoomCreation || hostRequested);
         const isAdminJoin = isWebinarAttendeeJoin
           ? false
           : createdRoom
-            ? true
-            : isAdminForExistingRoom;
+            ? restorerState === "none"
+            : isAdminForExistingRoom || takesOverRecreatedRoom;
         const hasPrivilegedJoinAccess = isAdminJoin;
 
         if (
@@ -601,6 +645,10 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         if (isAdminJoin && !room.hostUserKey) {
           room.hostUserKey = userKey;
         }
+        if (isAdminJoin && (createdRoom || restorerState !== "none")) {
+          room.markRestored();
+          state.roomRecovery.noteRunning(room);
+        }
         const isPrimaryHost = room.hostUserKey === userKey;
 
         if (
@@ -639,7 +687,6 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         const hasDisplayNameOverride = Boolean(requestedDisplayName);
         context.currentUserKey = userKey;
 
-        const needsReadmission = room.needsReadmission(userKey);
         const isInvitedJoin =
           !isWebinarAttendeeJoin &&
           !needsReadmission &&
@@ -653,17 +700,10 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         // in. Record the admission they prove, so they rejoin as they would
         // have and everyone who was only knocking still knocks.
         if (
-          !isWebinarAttendeeJoin &&
+          provesMembership &&
           !hasPrivilegedJoinAccess &&
-          !needsReadmission &&
           room.isLocked &&
-          !room.isLockedAllowed(userKey) &&
-          provesEarlierRoomMembership(
-            data?.roomRecoveryPass,
-            room,
-            userKey,
-            config.sfuSecret,
-          )
+          !room.isLockedAllowed(userKey)
         ) {
           Logger.info(
             `Recovered ${userKey}'s admission to recreated room ${roomId} (${clientId})`,

@@ -19,6 +19,12 @@ import {
 } from "./scheduling.js";
 import { createRoomRegistry, type RoomRegistry } from "./roomRegistry.js";
 import {
+  createMemoryRoomRecoveryStore,
+  createRoomRecoveryLedger,
+  type RoomRecoveryLedger,
+  type RoomRecoveryStore,
+} from "./roomRecoveryLedger.js";
+import {
   createTranscriptRelayRegistry,
   type TranscriptRelayRegistry,
 } from "./transcript/relayRegistry.js";
@@ -47,6 +53,7 @@ export type SfuState = {
   scheduling: SchedulingStore;
   schedulingPersistence: SchedulingPersistence | null;
   roomRegistry: RoomRegistry;
+  roomRecovery: RoomRecoveryLedger;
   transcriptRelays: TranscriptRelayRegistry;
   isDraining: boolean;
 };
@@ -54,6 +61,9 @@ export type SfuState = {
 export const createSfuState = (options?: {
   isDraining?: boolean;
   roomRegistry?: RoomRegistry;
+  // Defaults to memory, which forgets with the process. The server passes a
+  // store that outlives it.
+  roomRecoveryStore?: RoomRecoveryStore;
 }): SfuState => {
   return {
     workers: [],
@@ -71,6 +81,9 @@ export const createSfuState = (options?: {
     scheduling: createSchedulingStore(),
     schedulingPersistence: null,
     roomRegistry: options?.roomRegistry ?? createRoomRegistry(config),
+    roomRecovery: createRoomRecoveryLedger(
+      options?.roomRecoveryStore ?? createMemoryRoomRecoveryStore(),
+    ),
     transcriptRelays: createTranscriptRelayRegistry(config.transcriptRelay),
     isDraining: options?.isDraining ?? config.draining,
   };

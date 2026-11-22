@@ -2,16 +2,27 @@ import jwt from "jsonwebtoken";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Router, Worker } from "mediasoup/types";
 import type { Server as SocketIOServer, Socket } from "socket.io";
+import type { ScheduledMeeting } from "../types.js";
 import { Admin } from "../config/classes/Admin.js";
 import { config } from "../config/config.js";
+import { initScheduledMeetings } from "../server/init.js";
+import {
+  createMemoryRoomRecoveryStore,
+  type RoomRecoveryStore,
+} from "../server/roomRecoveryLedger.js";
 import { startRoomRecoveryPassRefresh } from "../server/roomRecoveryPass.js";
 import { LocalRoomRegistry } from "../server/roomRegistry.js";
-import { createScheduledMeeting } from "../server/scheduledMeetings.js";
+import { forceCloseRoom } from "../server/rooms.js";
+import {
+  createScheduledMeeting,
+  type ScheduledMeetingPersistence,
+} from "../server/scheduledMeetings.js";
 import {
   isNonJoinToken,
   type SfuAuthPayload,
 } from "../server/socket/auth.js";
 import { createConnectionContext } from "../server/socket/context.js";
+import { registerDisconnectHandlers } from "../server/socket/handlers/disconnectHandlers.js";
 import { registerJoinRoomHandler } from "../server/socket/handlers/joinRoom.js";
 import { createSfuState, type SfuState } from "../server/state.js";
 
@@ -34,9 +45,38 @@ const makeSocket = (id: string, user: SfuAuthPayload) => {
   return { socket, handlers, emit };
 };
 
-const io = { to: () => ({ emit: vi.fn() }) } as unknown as SocketIOServer;
+const io = {
+  to: () => ({ emit: vi.fn() }),
+  in: () => ({ disconnectSockets: vi.fn() }),
+} as unknown as SocketIOServer;
 
-const makeState = (): SfuState => {
+// What outlives an SFU process: the recovery ledger and the schedule. A new
+// state built on the same two is the SFU after a restart.
+type Durable = {
+  recovery: RoomRecoveryStore;
+  schedule: ScheduledMeetingPersistence;
+};
+const makeDurable = (): Durable => {
+  let stored = "[]";
+  return {
+    recovery: createMemoryRoomRecoveryStore(),
+    schedule: {
+      save: (snapshot) => {
+        stored = JSON.stringify(snapshot);
+      },
+      load: () => JSON.parse(stored) as ScheduledMeeting[],
+    },
+  };
+};
+const durableOf = new WeakMap<SfuState, Durable>();
+const restart = async (before: SfuState): Promise<SfuState> => {
+  const durable = durableOf.get(before)!;
+  const after = makeState(durable);
+  await initScheduledMeetings(after, durable.schedule);
+  return after;
+};
+
+const makeState = (durable: Durable = makeDurable()): SfuState => {
   const router = {
     closed: false,
     rtpCapabilities: { codecs: [], headerExtensions: [] },
@@ -53,9 +93,32 @@ const makeState = (): SfuState => {
       instanceUrl: "http://localhost",
       ttlMs: 45000,
     }),
+    roomRecoveryStore: durable.recovery,
   });
   state.workers = [worker];
+  state.scheduledMeetingPersistence = durable.schedule;
+  durableOf.set(state, durable);
   return state;
+};
+
+const schedule = (state: SfuState, attendeeEmail = "invitee@example.com") => {
+  createScheduledMeeting(
+    state.scheduledMeetings,
+    {
+      title: "Intro call",
+      scheduledStartAt: Date.now(),
+      roomCode: "abc-mnop-xyz",
+      hostEmail: "host@example.com",
+      attendeeEmail,
+    },
+    {
+      clientId: "conclave",
+      createdBy: "host@example.com",
+      defaultHostEmail: "host@example.com",
+      defaultHostUserId: null,
+    },
+  );
+  void durableOf.get(state)!.schedule.save([...state.scheduledMeetings.byId.values()]);
 };
 
 type JoinAck = {
@@ -75,6 +138,7 @@ const join = async (
   const peer = makeSocket(`${user.userId}-socket`, user);
   const context = createConnectionContext(io, peer.socket, state);
   registerJoinRoomHandler(context);
+  registerDisconnectHandlers(context);
   const ack = vi.fn();
   await peer.handlers.get("joinRoom")!(...[
     {
@@ -99,7 +163,17 @@ const send = async (
   return ack.mock.calls[0]?.[0] as { success?: boolean; error?: string } | undefined;
 };
 
-const roomOf = (state: SfuState) => state.rooms.get("conclave:abc-mnop-xyz")!;
+const CHANNEL = "conclave:abc-mnop-xyz";
+const roomOf = (state: SfuState) => state.rooms.get(CHANNEL)!;
+const hangUp = async (peer: ReturnType<typeof makeSocket>) => {
+  await peer.handlers.get("disconnect")?.(...(["client namespace disconnect"] as never[]));
+};
+// The people a host's tab is told are waiting to be let in.
+const knocksShownTo = (member: Awaited<ReturnType<typeof join>>): string[] =>
+  member.peer.emit.mock.calls
+    .filter(([event]) => event === "pendingUsersSnapshot")
+    .flatMap(([, sent]) => (sent as { users: Array<{ userId: string }> }).users)
+    .map((user) => user.userId);
 
 // Every pass a member's tab has been handed: with the join reply, then by the
 // SFU during the call. A tab keeps the newest.
@@ -342,8 +416,8 @@ describe("a call whose server lost the room", () => {
   const rejoining = (user: SfuAuthPayload) => ({ ...user, allowRoomCreation: true });
 
   it("brings everyone who was in it back without anyone admitting them", async () => {
-    const { passes } = await callBeforeRestart();
-    const after = makeState();
+    const { before, passes } = await callBeforeRestart();
+    const after = await restart(before);
 
     const first = await join(after, rejoining(guest), {
       roomRecoveryPass: passes.guest,
@@ -368,9 +442,9 @@ describe("a call whose server lost the room", () => {
   });
 
   it("keeps the recovered meeting locked for people who were only knocking", async () => {
-    const { passes, knock } = await callBeforeRestart();
+    const { before, passes, knock } = await callBeforeRestart();
     expect(knock.response.roomRecoveryPass).toBeUndefined();
-    const after = makeState();
+    const after = await restart(before);
     await join(after, rejoining(guest), { roomRecoveryPass: passes.guest });
 
     expect(roomOf(after).isLocked).toBe(true);
@@ -385,8 +459,8 @@ describe("a call whose server lost the room", () => {
   });
 
   it("lets a member back in again after a second drop in the recovered meeting", async () => {
-    const { passes } = await callBeforeRestart();
-    const after = makeState();
+    const { before, passes } = await callBeforeRestart();
+    const after = await restart(before);
     await join(after, rejoining(guest), { roomRecoveryPass: passes.guest });
     const back = await join(after, rejoining(second), {
       roomRecoveryPass: passes.second,
@@ -412,8 +486,8 @@ describe("a call whose server lost the room", () => {
   });
 
   it("keeps someone removed from the recovered meeting out as well", async () => {
-    const { passes } = await callBeforeRestart();
-    const after = makeState();
+    const { before, passes } = await callBeforeRestart();
+    const after = await restart(before);
     const first = await join(after, rejoining(guest), {
       roomRecoveryPass: passes.guest,
     });
@@ -426,8 +500,8 @@ describe("a call whose server lost the room", () => {
   });
 
   it("does not take back someone whose admission a host revoked in the recovered meeting", async () => {
-    const { passes } = await callBeforeRestart();
-    const after = makeState();
+    const { before, passes } = await callBeforeRestart();
+    const after = await restart(before);
     const first = await join(after, rejoining(guest), {
       roomRecoveryPass: passes.guest,
     });
@@ -449,8 +523,8 @@ describe("a call whose server lost the room", () => {
   });
 
   it("does not take back someone a host revoked before they came back", async () => {
-    const { passes } = await callBeforeRestart();
-    const after = makeState();
+    const { before, passes } = await callBeforeRestart();
+    const after = await restart(before);
     const first = await join(after, rejoining(guest), {
       roomRecoveryPass: passes.guest,
     });
@@ -484,8 +558,8 @@ describe("a call whose server lost the room", () => {
 
   it("stops honouring a pass a few minutes after the SFU last renewed it", async () => {
     useTestClock();
-    const { passes } = await callBeforeRestart();
-    const after = makeState();
+    const { before, passes } = await callBeforeRestart();
+    const after = await restart(before);
     await join(after, rejoining(guest), { roomRecoveryPass: passes.guest });
 
     vi.setSystemTime(Date.now() + 5 * MINUTE_MS + 1000);
@@ -513,7 +587,7 @@ describe("a call whose server lost the room", () => {
     // Quietly: a renewal every so often, not a stream of them.
     expect(passesHeldBy(guestJoin).length).toBeLessThanOrEqual(31);
 
-    const after = makeState();
+    const after = await restart(before);
     const first = await join(after, rejoining(guest), {
       roomRecoveryPass: passesHeldBy(guestJoin).at(-1),
     });
@@ -548,7 +622,7 @@ describe("a call whose server lost the room", () => {
     // The room comes back on an instance a minute ahead of the one that
     // signed the pass, and the tab gets through two minutes after the crash.
     vi.setSystemTime(Date.now() + 3 * MINUTE_MS);
-    const after = makeState();
+    const after = await restart(before);
     await join(after, rejoining(host), {
       roomRecoveryPass: passesHeldBy(hostJoin).at(-1),
     });
@@ -612,5 +686,126 @@ describe("a call whose server lost the room", () => {
     const claims = jwt.decode(passes.guest ?? "");
     expect(claims).toBeTypeOf("object");
     expect(isNonJoinToken(claims as jwt.JwtPayload)).toBe(true);
+  });
+});
+
+describe("who hosts a call the server lost", () => {
+  // A host, a member and someone still knocking, then the SFU loses the room.
+  // Scheduled links and links from older web tabs ask to open the room on
+  // every join, so the knocker's tab asks too.
+  const knockerAsking = { ...knocker, allowRoomCreation: true };
+  const lostCall = async (options: { scheduled?: boolean } = {}) => {
+    const before = makeState();
+    if (options.scheduled) schedule(before);
+    const hostJoin = await join(before, host);
+    roomOf(before).allowLockedUser(guest.userId);
+    const guestJoin = await join(before, guest);
+    expect((await join(before, knockerAsking)).status).toBe("waiting");
+    return {
+      before,
+      hostPass: hostJoin.response.roomRecoveryPass,
+      guestPass: guestJoin.response.roomRecoveryPass,
+    };
+  };
+
+  it.each([
+    ["a scheduled link", true],
+    ["an older link that always asks to open the room", false],
+  ])(
+    "keeps someone who was only knocking out of the host's seat when they are first back, on %s",
+    async (_link, scheduled) => {
+      const { before, hostPass, guestPass } = await lostCall({ scheduled });
+      const after = await restart(before);
+
+      const knockerBack = await join(after, knockerAsking);
+      expect(knockerBack.status).toBe("waiting");
+      expect(roomOf(after).getAdmins()).toHaveLength(0);
+
+      const member = await join(
+        after,
+        { ...guest, allowRoomCreation: true },
+        { roomRecoveryPass: guestPass },
+      );
+      expect(member.status).toBe("joined");
+      expect(member.context.currentClient).toBeInstanceOf(Admin);
+      expect(knocksShownTo(member)).toContain(knocker.userId);
+
+      const realHost = await join(after, host, { roomRecoveryPass: hostPass });
+      expect(realHost.status).toBe("joined");
+      expect(realHost.context.currentClient).toBeInstanceOf(Admin);
+      expect(roomOf(after).isLocked).toBe(true);
+      expect(roomOf(after).pendingClients.has(knocker.userId)).toBe(true);
+    },
+  );
+
+  it("gives the call back to its host from an app that keeps no pass", async () => {
+    const { before } = await lostCall();
+    const after = await restart(before);
+    expect((await join(after, knockerAsking)).status).toBe("waiting");
+
+    const hostBack = await join(after, host);
+    expect(hostBack.status).toBe("joined");
+    expect(hostBack.context.currentClient).toBeInstanceOf(Admin);
+    expect(knocksShownTo(hostBack)).toContain(knocker.userId);
+  });
+
+  it("makes a member without a pass wait for a host when they are first back", async () => {
+    const { before } = await lostCall();
+    const after = await restart(before);
+
+    const memberBack = await join(after, { ...guest, allowRoomCreation: true });
+    expect(memberBack.status).toBe("waiting");
+    const hostBack = await join(after, host);
+    expect(hostBack.context.currentClient).toBeInstanceOf(Admin);
+    expect(knocksShownTo(hostBack)).toContain(guest.userId);
+  });
+
+  it("still makes a knocker wait if they leave and come straight back", async () => {
+    const { before } = await lostCall();
+    const after = await restart(before);
+
+    const firstTry = await join(after, knockerAsking);
+    expect(firstTry.status).toBe("waiting");
+    await hangUp(firstTry.peer);
+    expect(after.rooms.size).toBe(0);
+
+    expect((await join(after, knockerAsking)).status).toBe("waiting");
+  });
+
+  it("treats a room lost with its media worker the same way", async () => {
+    const { before, guestPass } = await lostCall();
+    forceCloseRoom(before, CHANNEL);
+
+    expect((await join(before, knockerAsking)).status).toBe("waiting");
+    const member = await join(before, guest, { roomRecoveryPass: guestPass });
+    expect(member.context.currentClient).toBeInstanceOf(Admin);
+  });
+
+  it("lets the next visitor open the meeting once the lost call is long gone", async () => {
+    useTestClock();
+    const { before } = await lostCall();
+    const after = await restart(before);
+    expect((await join(after, knockerAsking)).status).toBe("waiting");
+
+    vi.advanceTimersByTime(8 * MINUTE_MS);
+    const later = await join(after, knockerAsking);
+    expect(later.status).toBe("joined");
+    expect(later.context.currentClient).toBeInstanceOf(Admin);
+  });
+
+  it("opens a meeting that emptied on purpose for its next visitor", async () => {
+    vi.useFakeTimers({
+      toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
+    const before = makeState();
+    const created = await join(before, host);
+    await hangUp(created.peer);
+    vi.advanceTimersByTime(10 * MINUTE_MS);
+    expect(before.rooms.size).toBe(0);
+    const after = await restart(before);
+
+    const visitor = await join(after, knockerAsking);
+    expect(visitor.status).toBe("joined");
+    expect(visitor.context.currentClient).toBeInstanceOf(Admin);
   });
 });
