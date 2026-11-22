@@ -1,4 +1,4 @@
-export type MediaDirection = "producer" | "consumer";
+import type { MediaDirection } from "./media-path-recovery";
 
 export type ReconnectRequest = {
   immediate?: boolean;

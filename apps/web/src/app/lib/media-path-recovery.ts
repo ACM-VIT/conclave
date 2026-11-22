@@ -122,3 +122,52 @@ export const planMediaPathEscalation = ({
   if (reconnectInFlight) return "wait-for-reconnect";
   return hasTurnServers && !relayOnly ? "reconnect-relay-only" : "reconnect";
 };
+
+export type MediaDirection = "producer" | "consumer";
+
+/** What a producer sync got back: the server's list, or why there is none. */
+export type ProducerListResult<P> =
+  | { listed: true; producers: P[] }
+  | { listed: false; reason: string };
+
+/** Whether rebuilding one media direction worked, and why not. */
+export type DirectionRebuildResult =
+  | { rebuilt: true }
+  | { rebuilt: false; reason: string };
+
+/**
+ * A rebuilt receive path counts only once the producer list arrived over the
+ * same live socket and the new transport is still open. Without the list
+ * nothing was consumed, so there is no media for the watchdog to check.
+ */
+export const judgeReceiveRebuild = <P>({
+  list,
+  socketStillConnected,
+  transportOpen,
+}: {
+  list: ProducerListResult<P>;
+  socketStillConnected: boolean;
+  transportOpen: boolean;
+}): DirectionRebuildResult => {
+  if (!list.listed) return { rebuilt: false, reason: list.reason };
+  if (!socketStillConnected) {
+    return { rebuilt: false, reason: "signaling dropped during the rebuild" };
+  }
+  if (!transportOpen) {
+    return { rebuilt: false, reason: "the new receive transport closed" };
+  }
+  return { rebuilt: true };
+};
+
+/**
+ * The blocked directions left once a rebuild starts. Only the directions
+ * being rebuilt get a fresh verdict; any other one is still blocked.
+ */
+export const blockedPathsAfterRebuildStarts = (
+  blocked: ReadonlySet<MediaDirection>,
+  rebuilding: readonly MediaDirection[],
+): Set<MediaDirection> => {
+  const next = new Set(blocked);
+  for (const direction of rebuilding) next.delete(direction);
+  return next;
+};

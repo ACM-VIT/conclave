@@ -3,6 +3,8 @@ import {
   INITIAL_MEDIA_PATH_WATCH,
   MEDIA_PATH_STALL_MS,
   advanceMediaPathWatch,
+  blockedPathsAfterRebuildStarts,
+  judgeReceiveRebuild,
   planMediaPathEscalation,
   readRtpBytes,
   type MediaPathSample,
@@ -194,5 +196,58 @@ describe("escalating when an ICE restart did not help", () => {
         ...state,
       }),
     ).toBe("report-blocked");
+  });
+});
+
+describe("judging a rebuilt receive path", () => {
+  const listed = { listed: true as const, producers: [{ producerId: "p1" }] };
+
+  it("counts it as rebuilt only once the producer list arrived on a live socket", () => {
+    expect(
+      judgeReceiveRebuild({ list: listed, socketStillConnected: true, transportOpen: true }),
+    ).toEqual({ rebuilt: true });
+  });
+
+  it("is not rebuilt when the producer list never arrived", () => {
+    expect(
+      judgeReceiveRebuild({
+        list: { listed: false, reason: "signaling dropped before the list arrived" },
+        socketStillConnected: true,
+        transportOpen: true,
+      }),
+    ).toEqual({ rebuilt: false, reason: "signaling dropped before the list arrived" });
+  });
+
+  it("is not rebuilt when signaling dropped, even with a list", () => {
+    expect(
+      judgeReceiveRebuild({ list: listed, socketStillConnected: false, transportOpen: true }).rebuilt,
+    ).toBe(false);
+  });
+
+  it("is not rebuilt when the new transport closed", () => {
+    expect(
+      judgeReceiveRebuild({ list: listed, socketStillConnected: true, transportOpen: false }).rebuilt,
+    ).toBe(false);
+  });
+});
+
+describe("blocked directions when a rebuild starts", () => {
+  it("keeps a blocked direction the rebuild does not touch", () => {
+    expect([...blockedPathsAfterRebuildStarts(new Set(["producer"]), ["consumer"])]).toEqual([
+      "producer",
+    ]);
+  });
+
+  it("clears the direction being rebuilt", () => {
+    expect([...blockedPathsAfterRebuildStarts(new Set(["consumer"]), ["consumer"])]).toEqual([]);
+  });
+
+  it("clears both when both are rebuilt", () => {
+    expect([
+      ...blockedPathsAfterRebuildStarts(new Set(["producer", "consumer"]), [
+        "producer",
+        "consumer",
+      ]),
+    ]).toEqual([]);
   });
 });

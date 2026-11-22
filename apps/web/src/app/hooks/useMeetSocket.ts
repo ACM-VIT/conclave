@@ -144,6 +144,10 @@ import {
 } from "../lib/consumer-resume-retry";
 import {
   INITIAL_MEDIA_PATH_WATCH,
+  blockedPathsAfterRebuildStarts,
+  judgeReceiveRebuild,
+  type DirectionRebuildResult,
+  type ProducerListResult,
   MEDIA_PATH_STALL_MS,
   MEDIA_PATH_VERIFY_MS,
   NETWORK_BLOCKED_MESSAGE,
@@ -262,6 +266,7 @@ type JoinInfo = {
 };
 
 const MAX_JOIN_ROOM_REDIRECTS = 1;
+type ProducerSyncResult = ProducerListResult<ProducerInfo>;
 const NETWORK_BLOCKED_ERROR: MeetError = {
   code: "NETWORK_BLOCKED",
   message: NETWORK_BLOCKED_MESSAGE,
@@ -1157,14 +1162,18 @@ export function useMeetSocket({
   const pendingScreenProducerCloseIdsRef = useRef<Set<string>>(new Set());
   const screenShareRepublishPromiseRef = useRef<Promise<boolean> | null>(null);
   const [producerSlotOrder] = useState(createProducerSlotOrder);
-  const [coalesceProducerSync] = useState(createCoalescedRunner);
+  const [coalesceProducerSync] = useState(() =>
+    createCoalescedRunner<ProducerSyncResult>(),
+  );
   const consumeProducerRef = useRef<
     (producerInfo: ProducerInfo, options?: ConsumeProducerOptions) => Promise<void>
   >(async () => {});
   const recoverStaleConsumerRef = useRef<
     (producerInfo: ProducerInfo, reason: string) => Promise<void>
   >(async () => {});
-  const syncProducersRef = useRef<() => Promise<void>>(async () => {});
+  const syncProducersRef = useRef<() => Promise<ProducerSyncResult>>(
+    async () => ({ listed: false, reason: "not in a room" }),
+  );
   const resumeConsumerReliablyRef = useRef<
     (
       producerId: string,
@@ -6301,11 +6310,15 @@ export function useMeetSocket({
     videoProducerRef,
   ]);
 
-  const runProducerSync = useCallback(async () => {
+  const runProducerSync = useCallback(async (): Promise<ProducerSyncResult> => {
     const socket = socketRef.current;
     const device = deviceRef.current;
-    if (!socket || !socket.connected || !device) return;
-    if (!currentRoomIdRef.current) return;
+    if (!socket || !socket.connected || !device) {
+      return { listed: false, reason: "signaling is not connected" };
+    }
+    if (!currentRoomIdRef.current) {
+      return { listed: false, reason: "not in a room" };
+    }
 
     try {
       const listRequestedAt = producerSlotOrder.markListRequested();
@@ -6328,7 +6341,12 @@ export function useMeetSocket({
           );
         },
       );
-      if (!producers) return;
+      if (!producers) {
+        return {
+          listed: false,
+          reason: "signaling dropped before the producer list arrived",
+        };
+      }
 
       const serverProducerIds = new Set(
         producers.map((producer) => producer.producerId),
@@ -6486,6 +6504,7 @@ export function useMeetSocket({
           });
         }
       }
+      return { listed: true, producers };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err ?? "");
       if (/not in a room/i.test(message)) {
@@ -6494,9 +6513,10 @@ export function useMeetSocket({
           socketConnected: socketRef.current?.connected ?? false,
           error: message,
         });
-        return;
+        return { listed: false, reason: message };
       }
       console.error("[Meets] Failed to sync producers:", err);
+      return { listed: false, reason: message || "producer sync failed" };
     }
   }, [
     socketRef,
@@ -9200,10 +9220,12 @@ export function useMeetSocket({
 
   // A failed receive path is rebuilt on its own: a new receive transport, then
   // every published stream consumed again. Sending is not touched.
-  const rebuildReceivePath = useCallback(async (): Promise<boolean> => {
+  const rebuildReceivePath = useCallback(async (): Promise<DirectionRebuildResult> => {
     const socket = socketRef.current;
     const device = deviceRef.current;
-    if (!socket?.connected || !device) return false;
+    if (!socket?.connected || !device) {
+      return { rebuilt: false, reason: "signaling is not connected" };
+    }
     resetReceiveState();
     const transport = consumerTransportRef.current;
     if (transport && !transport.closed) {
@@ -9216,12 +9238,20 @@ export function useMeetSocket({
     try {
       await createConsumerTransport(socket, device);
     } catch (error) {
-      console.warn("[Meets] Could not rebuild the receive transport:", error);
-      return false;
+      return {
+        rebuilt: false,
+        reason: `could not create a receive transport: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      };
     }
-    await syncProducers();
+    const list = await syncProducers();
     const rebuilt = consumerTransportRef.current as Transport | null;
-    return Boolean(rebuilt && !rebuilt.closed);
+    return judgeReceiveRebuild({
+      list,
+      socketStillConnected: socketRef.current === socket && socket.connected,
+      transportOpen: Boolean(rebuilt && !rebuilt.closed),
+    });
   }, [
     consumerTransportRef,
     createConsumerTransport,
@@ -9233,7 +9263,11 @@ export function useMeetSocket({
 
   // A failed send path is rebuilt on its own: a new send transport, then the
   // microphone, camera and screen share published on it again.
-  const rebuildSendPath = useCallback(async (): Promise<boolean> => {
+  const rebuildSendPath = useCallback(async (): Promise<DirectionRebuildResult> => {
+    const socket = socketRef.current;
+    if (!socket?.connected) {
+      return { rebuilt: false, reason: "signaling is not connected" };
+    }
     const transport = producerTransportRef.current;
     if (transport && !transport.closed) {
       intentionallyClosedTransportsRef.current.add(transport);
@@ -9244,13 +9278,19 @@ export function useMeetSocket({
     if (producerTransportRef.current === transport) {
       producerTransportRef.current = null;
     }
-    if (!(await ensureProducerTransport())) return false;
+    if (!(await ensureProducerTransport())) {
+      return { rebuilt: false, reason: "could not create a send transport" };
+    }
+    if (socketRef.current !== socket || !socket.connected) {
+      return { rebuilt: false, reason: "signaling dropped during the rebuild" };
+    }
     if (!isMutedRef.current) requestAudioProducerRecovery();
     if (!isCameraOffRef.current) requestCameraProducerRecovery();
-    return true;
+    return { rebuilt: true };
   }, [
     ensureProducerTransport,
     producerTransportRef,
+    socketRef,
     requestAudioProducerRecovery,
     requestCameraProducerRecovery,
   ]);
@@ -9316,10 +9356,6 @@ export function useMeetSocket({
       reconnectAttemptsRef.current,
       MAX_RECONNECT_ATTEMPTS,
     );
-    // The rebuilt transports get a fresh verdict, and a fresh banner if media
-    // is still blocked.
-    blockedMediaPathsRef.current.clear();
-    setMeetError(null);
 
     try {
       // One direction failed while signaling is up: get current credentials
@@ -9330,28 +9366,42 @@ export function useMeetSocket({
       });
       const scopedRoomId = currentRoomIdRef.current;
       if (scopedDirection && scopedRoomId) {
+        // Only the rebuilt direction gets a fresh verdict; a direction that is
+        // still blocked keeps its warning and Try again.
+        blockedMediaPathsRef.current = blockedPathsAfterRebuildStarts(
+          blockedMediaPathsRef.current,
+          [scopedDirection],
+        );
+        clearMeetErrorUnlessMediaBlocked();
         if (pendingIceServersRefresh) {
           pendingIceServersRefresh = false;
           await refreshIceServersOnOpenSocket(scopedRoomId);
         }
         if (reconnectGeneration !== reconnectGenerationRef.current) return;
         if (intentionalDisconnectRef.current) return;
-        const rebuilt =
+        const result =
           scopedDirection === "consumer"
             ? await rebuildReceivePath()
             : await rebuildSendPath();
         if (reconnectGeneration !== reconnectGenerationRef.current) return;
         if (intentionalDisconnectRef.current) return;
-        if (rebuilt) {
+        if (result.rebuilt) {
           reconnectAttemptsRef.current = 0;
           clearMeetErrorUnlessMediaBlocked();
           rejoined = true;
           return;
         }
         console.warn(
-          `[Meets] Could not rebuild the ${scopedDirection} transport on its own; rejoining.`,
+          `[Meets] Could not rebuild the ${scopedDirection} transport on its own (${result.reason}); rejoining.`,
         );
       }
+      // A rejoin rebuilds both directions, so both get a fresh verdict, and a
+      // fresh warning if media is still blocked.
+      blockedMediaPathsRef.current = blockedPathsAfterRebuildStarts(
+        blockedMediaPathsRef.current,
+        ["producer", "consumer"],
+      );
+      setMeetError(null);
       while (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
         if (reconnectGeneration !== reconnectGenerationRef.current) return;
         if (intentionalDisconnectRef.current) return;
