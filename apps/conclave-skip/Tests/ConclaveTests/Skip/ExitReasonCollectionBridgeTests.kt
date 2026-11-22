@@ -140,6 +140,40 @@ class ExitReasonCollectionBridgeTests {
         assertFalse(text.contains("Jane") || text.contains("/data/app") || text.contains("com.acmvit.conclave-def"))
     }
 
+    /** The tombstone an external review captured on a loopback PostHog: the crashing frame's mapping ends in chat text. */
+    @Test
+    fun aReviewedTombstoneCaptureUploadsNoPrivateMappingName() {
+        val tombstone = Proto().apply {
+            uint(6, 42)
+            message(10) { uint(1, 11); string(2, "SIGSEGV") }
+            thread(42, "ConclaveSendTra", listOf(
+                Triple("mediasoupclient::SendTransport::Produce",
+                    "/data/app/~~abc==/com.acmvit.conclave-def==/private/Cedar Finch Room ABC123 chat marker", 0x1234),
+                Triple("__start_thread", "/apex/com.android.runtime/lib64/bionic/libc.so", 0x99),
+            ))
+        }.out.toByteArray()
+        val info = ShadowActivityManager.ApplicationExitInfoBuilder.newBuilder()
+            .setReason(ApplicationExitInfo.REASON_CRASH_NATIVE)
+            .setTimestamp(1_795_000_000_000)
+            .setImportance(100)
+            .setTraceInputStream(ByteArrayInputStream(tombstone))
+            .setProcessStateSummary(NativePerformanceDiagnostics.processStateSummary(3, "live", "2.0.0 (63)"))
+            .build()
+
+        val event = upload(collect(info))
+        val text = event.toString()
+
+        for (leaked in listOf("Cedar", "Finch", "ABC123", "chat marker", "private", "/data/app")) {
+            assertFalse(leaked, text.contains(leaked))
+        }
+        val frames = event.getJSONObject("properties").getJSONArray("\$exception_list").getJSONObject(0)
+            .getJSONObject("stacktrace").getJSONArray("frames")
+        val crashSite = frames.getJSONObject(frames.length() - 1)
+        assertEquals("mediasoupclient::SendTransport::Produce", crashSite.getString("function"))
+        assertEquals("[path]", crashSite.getString("module"))
+        assertEquals("[path]", crashSite.getString("filename"))
+    }
+
     @Test
     fun anExitRecordNamesTheReleaseThatWasRunningNotTheOneUploading() {
         val info = ShadowActivityManager.ApplicationExitInfoBuilder.newBuilder()

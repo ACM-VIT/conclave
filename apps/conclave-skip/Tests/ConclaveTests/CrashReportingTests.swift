@@ -441,6 +441,27 @@ struct CrashReportingTests {
         #expect(text.contains("onProduce"))
     }
 
+    /// The ANR an external review captured on a loopback PostHog, with a Unix and a Windows home path and a native
+    /// line naming a folder like a library.
+    @Test func aReviewedAnrCaptureUploadsNoPrivateText() throws {
+        let lines = ["\"main\" prio=5", "at conclave.Camera.start(/Users/Control Name/private/Source.kt:1)",
+                     #"at conclave.Camera.start(C:\Users\Cedar Finch\private\Source.kt:1)"#,
+                     "native: #01 pc 000123 /Users/lib.so Cedar Finch"]
+        let trace = try JSONSerialization.data(withJSONObject: ["traceLines": lines, "message": "CONTROL_SECRET_CHAT",
+                                                                "room": "CONTROL_ROOM"])
+        let text = try #require(CrashReportEventBuilder.event(for: exitRecord("anr", trace: String(decoding: trace, as: UTF8.self)),
+                                                               eventId: "id-1", context: Self.context))
+        for leaked in ["Control", "Cedar", "Finch", "CONTROL_SECRET_CHAT", "CONTROL_ROOM", "Users", "private"] {
+            #expect(!text.contains(leaked), "\(leaked)")
+        }
+        let properties = try #require(try json(text)["properties"] as? [String: Any])
+        let exception = try #require((properties["$exception_list"] as? [[String: Any]])?.first)
+        let frames = try #require((exception["stacktrace"] as? [String: Any])?["frames"] as? [[String: Any]])
+        #expect(frames.map { $0["function"] as? String } == ["[path]", "start", "start"])
+        #expect(frames.map { $0["module"] as? String } == ["[path]", "conclave.Camera", "conclave.Camera"])
+        #expect(frames[1]["filename"] as? String == "[path]" && frames[2]["filename"] as? String == "[path]")
+    }
+
     @Test func theLedgerForgetsReportsRetentionDeleted() {
         let store = temporaryStore()
         let ledger = CrashReportLedger(store: store)

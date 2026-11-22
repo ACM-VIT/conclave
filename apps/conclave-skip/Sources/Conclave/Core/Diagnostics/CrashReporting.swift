@@ -157,15 +157,41 @@ enum CrashReportPrivacy {
         return pathPlaceholder
     }
 
+    /// A frame's module from the full path of its mapping, never a pre-stripped name: the path must be absolute and
+    /// the name after its last separator (`/` or `\`) must be a known module. A bare name must be known itself.
+    static func moduleNameFromPath(_ path: String) -> String {
+        if path.isEmpty { return "" }
+        var characters: [String] = []
+        for character in path {
+            characters.append(String(character))
+        }
+        var lastSeparator = -1
+        var index = 0
+        while index < characters.count {
+            if characters[index] == "/" || characters[index] == "\\" { lastSeparator = index }
+            index += 1
+        }
+        if lastSeparator < 0 { return isKnownModule(path) ? path : pathPlaceholder }
+        if characters[0] != "/" { return pathPlaceholder }
+        var name = ""
+        index = lastSeparator + 1
+        while index < characters.count {
+            name += characters[index]
+            index += 1
+        }
+        return isKnownModule(name) ? name : pathPlaceholder
+    }
+
     static func fileName(_ name: String) -> String {
         if name.isEmpty || isKnownModule(name) || isSourceFileName(name) { return name }
         return pathPlaceholder
     }
 
-    /// Fails closed. A relative path's start is unknowable, so its text becomes `[path]` whole. An absolute path keeps
-    /// only the name after its last `/`, and only when that name is a known module (a dotted or spaced folder such as
-    /// `/Users/Jane.so Smith` never is); otherwise it and everything after it become `[path]`. Text after a known
-    /// module survives only as the parenthesized symbol native frames carry, `libc.so (syscall+28)`.
+    /// Fails closed, counting `\` as a separator like `/`. A relative path's start is unknowable, so its text becomes
+    /// `[path]` whole. An absolute path keeps only the name after its last separator, and only when that name is a
+    /// known module (a dotted or spaced folder such as `/Users/Jane.so Smith` never is); otherwise it and everything
+    /// after it become `[path]`. Text after a known module survives only as the parenthesized symbol native frames
+    /// carry, `libc.so (syscall+28)`.
     static func withoutPaths(_ text: String) -> String {
         var characters: [String] = []
         for character in text {
@@ -175,7 +201,7 @@ enum CrashReportPrivacy {
         var lastSlash = -1
         var index = 0
         while index < characters.count {
-            if characters[index] == "/" {
+            if characters[index] == "/" || characters[index] == "\\" {
                 if firstSlash < 0 { firstSlash = index }
                 lastSlash = index
             }
@@ -448,8 +474,8 @@ enum CrashReportEventBuilder {
             mapping = Array(groups.dropLast()).joined(separator: " (")
             if !last.hasPrefix("offset ") { symbolText = last }
         }
-        let library = mapping.components(separatedBy: "/").last ?? mapping
-        if !CrashReportPrivacy.isKnownModule(library) { return unknown }
+        let library = CrashReportPrivacy.moduleNameFromPath(mapping)
+        if library == CrashReportPrivacy.pathPlaceholder || library.isEmpty { return unknown }
         var symbolName = symbolText
         let offsetParts = symbolText.components(separatedBy: "+")
         if offsetParts.count >= 2 && Int(offsetParts[offsetParts.count - 1]) != nil {

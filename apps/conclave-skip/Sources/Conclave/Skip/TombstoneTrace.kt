@@ -3,7 +3,7 @@ package conclave.module
 /**
  * Reads a native-crash tombstone (AOSP `debuggerd/proto/tombstone.proto`, what ApplicationExitInfo returns for
  * `REASON_CRASH_NATIVE` from Android 12) and keeps only the signal name and the crashing thread's backtrace. Each
- * frame's module comes from its mapping's file name and survives only when it is a known module, else `[path]`.
+ * frame's module comes from its mapping's full path and survives only when that ends in a known module, else `[path]`.
  * Abort messages, other threads, memory, logs and open files stay on the device.
  */
 internal object TombstoneTrace {
@@ -141,7 +141,7 @@ internal object TombstoneTrace {
                 else -> false
             }
         }
-        val module = CrashReportPrivacy.moduleName(file.substringAfterLast('/'))
+        val module = CrashReportPrivacy.moduleNameFromPath(file)
         return CrashReportFrame(
             function = function.ifEmpty { "$module+0x${java.lang.Long.toHexString(relPc)}" },
             module = module,
