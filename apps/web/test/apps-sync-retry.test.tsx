@@ -251,6 +251,24 @@ it("does not bring back a closed board when an old sync answer lands after it re
   }
 });
 
+it("keeps the new board's retry on schedule when an old reply lands", async () => {
+  await openBoard();
+  const oldAnswer = first.unanswered.shift()!;
+  first.control.answerSync = (attempt) => (attempt === 2 ? busy : boardContent());
+
+  await act(async () => {
+    first.fire("apps:state", { activeAppId: null, locked: false });
+    first.fire("apps:state", { activeAppId: "board", locked: false });
+  });
+  expect(first.syncTimes).toHaveLength(2);
+  await act(async () => oldAnswer({ error: "App not active" }));
+  await wait(250);
+
+  expect(first.syncTimes).toHaveLength(3);
+  expect(boardText()).toBe("drawn before you joined");
+  expect(ctx.syncStatus).toBe("synced");
+});
+
 it("syncs the board again on the new socket after a reconnect", async () => {
   await openBoard();
   expect(first.syncTimes).toHaveLength(1);
