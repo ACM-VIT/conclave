@@ -184,6 +184,10 @@ export const createMemoryRoomRecoveryStore = (): RoomRecoveryStore => {
 
 const PRUNE_EVERY_MS = 10 * 60 * 1000;
 const ABANDONED_TEMP_FILE_MS = 60 * 1000;
+// A record's lock is held for one small write or one read and delete. One
+// held this long belongs to an SFU that died holding it.
+const ABANDONED_LOCK_MS = 5_000;
+const LOCK_RETRY_MS = 5;
 
 const roomRecoveryDirectory = (): string => {
   const configured = process.env.SFU_ROOM_RECOVERY_PATH?.trim();
@@ -208,15 +212,73 @@ const unlessGone = <T>(operation: () => T): T | null => {
   }
 };
 
+// Back where it was, unless something newer is there already.
+const putBack = (aside: string, path: string) => {
+  try {
+    linkSync(aside, path);
+  } catch (error) {
+    if (!failedWith(error, "EEXIST")) throw error;
+  }
+};
+
+type HeldLock = { path: string; token: string };
+
+const holds = (lock: HeldLock): boolean =>
+  unlessGone(() => readFileSync(lock.path, "utf8")) === lock.token;
+
+// Takes away a lock held for far longer than anything holds one: its holder
+// is gone. The lock is moved aside first, and goes back if what was moved is
+// not the lock found abandoned but one taken since.
+const clearIfAbandoned = (lockPath: string): void => {
+  const takenAt = unlessGone(() => statSync(lockPath).mtimeMs);
+  if (takenAt === null || Date.now() - takenAt <= ABANDONED_LOCK_MS) return;
+  const holder = unlessGone(() => readFileSync(lockPath, "utf8"));
+  if (holder === null) return;
+  const aside = `${lockPath}.${randomBytes(6).toString("hex")}.abandoned`;
+  if (unlessGone(() => renameSync(lockPath, aside)) === null) return;
+  if (unlessGone(() => readFileSync(aside, "utf8")) !== holder) {
+    putBack(aside, lockPath);
+  }
+  rmSync(aside, { force: true });
+};
+
+const tryLock = (lockPath: string): HeldLock | null => {
+  const token = `${process.pid} ${randomBytes(8).toString("hex")}`;
+  try {
+    writeFileSync(lockPath, token, { encoding: "utf8", flag: "wx" });
+    return { path: lockPath, token };
+  } catch (error) {
+    if (!failedWith(error, "EEXIST")) throw error;
+    clearIfAbandoned(lockPath);
+    return null;
+  }
+};
+
+const lock = async (lockPath: string): Promise<HeldLock> => {
+  for (;;) {
+    const held = tryLock(lockPath);
+    if (held) return held;
+    await new Promise((resolve) => setTimeout(resolve, LOCK_RETRY_MS));
+  }
+};
+
+// Never one taken over as abandoned: that is someone else's now.
+const unlock = (lock: HeldLock): void => {
+  if (holds(lock)) rmSync(lock.path, { force: true });
+};
+
 /**
  * One small file per room, in a directory every SFU container on the host
- * shares. A room runs on one instance at a time, so instances never write the
- * same record, and whichever instance recreates a lost room can read it.
+ * shares. A room runs on one instance at a time, and whichever instance
+ * recreates a lost room can read its record.
  *
- * Instances do share the tidying up, so one may be clearing out a room's
- * expired record just as another writes that room a new one. A record is
- * therefore never deleted where it lies: it is moved aside, which takes
- * whatever is there in one step, and looked at again before it goes.
+ * Writing a record and clearing out an expired one each take that record's
+ * lock, a file beside it created only if it is not there. So a record is
+ * deleted only while it is still the expired one that was read, and never
+ * moved: another SFU reading without the lock finds the room's record, or
+ * finds it gone because it had expired. This SFU's own reads of a room wait
+ * for its writes to that room, which wait for the lock when another SFU
+ * holds it.
  */
 export const createFileRoomRecoveryStore = (
   directory: string = roomRecoveryDirectory(),
@@ -230,39 +292,43 @@ export const createFileRoomRecoveryStore = (
     const stored = unlessGone(() => readFileSync(path, "utf8"));
     return stored === null ? null : JSON.parse(stored);
   };
-  // What a file holds now. Another instance may have taken it meanwhile.
-  const stateOf = (path: string): "gone" | "expired" | "current" => {
+  const lockOf = (path: string): string => `${path}.lock`;
+  const isExpired = (path: string): boolean => {
     try {
       const stored = read(path);
-      if (stored === null) return "gone";
-      return hasExpired(stored) ? "expired" : "current";
+      return stored !== null && hasExpired(stored);
     } catch {
-      return "expired";
+      return true;
     }
   };
-  // Back where it was, unless the room has a newer record there already.
-  const putBack = (aside: string, path: string) => {
-    try {
-      linkSync(aside, path);
-    } catch (error) {
-      if (!failedWith(error, "EEXIST")) throw error;
-    }
+  const writeNow = (path: string, record: RoomRecoveryRecord) => {
+    const pending = `${path}.${randomBytes(6).toString("hex")}.tmp`;
+    writeFileSync(pending, JSON.stringify(record), "utf8");
+    renameSync(pending, path);
   };
   const pruneOne = (name: string) => {
     const path = resolve(directory, name);
+    if (name.endsWith(".lock")) {
+      clearIfAbandoned(path);
+      return;
+    }
     if (!name.endsWith(".json")) {
-      // What is left of a write or a clear-out that never finished.
+      // What is left of a write that never finished.
       const written = unlessGone(() => statSync(path).mtimeMs);
       if (written !== null && Date.now() - written > ABANDONED_TEMP_FILE_MS) {
         rmSync(path, { force: true });
       }
       return;
     }
-    if (stateOf(path) !== "expired") return;
-    const aside = `${path}.${randomBytes(6).toString("hex")}.expired`;
-    if (unlessGone(() => renameSync(path, aside)) === null) return;
-    if (stateOf(aside) === "current") putBack(aside, path);
-    rmSync(aside, { force: true });
+    // A record whose lock someone holds is being written or cleared out
+    // already: it waits for the next round.
+    const held = tryLock(lockOf(path));
+    if (!held) return;
+    try {
+      if (isExpired(path) && holds(held)) rmSync(path, { force: true });
+    } finally {
+      unlock(held);
+    }
   };
   // Nothing touches the disk until the first room does.
   let prunedAt = 0;
@@ -275,15 +341,44 @@ export const createFileRoomRecoveryStore = (
       Logger.warn(`Failed to clear out old recovery records in ${directory}`, error);
     }
   };
+  // This SFU's writes to a room that had to wait for its lock, in order.
+  const waitingWrites = new Map<string, Promise<void>>();
   return {
-    read: async (channelId) => read(pathOf(channelId)),
+    read: async (channelId) => {
+      const waiting = waitingWrites.get(channelId);
+      if (waiting) await waiting.catch(() => undefined);
+      return read(pathOf(channelId));
+    },
     write: async (channelId, record) => {
       mkdirSync(directory, { recursive: true });
       tidy();
       const path = pathOf(channelId);
-      const pending = `${path}.${randomBytes(6).toString("hex")}.tmp`;
-      writeFileSync(pending, JSON.stringify(record), "utf8");
-      renameSync(pending, path);
+      const waiting = waitingWrites.get(channelId);
+      const held = waiting ? null : tryLock(lockOf(path));
+      if (held) {
+        try {
+          writeNow(path, record);
+        } finally {
+          unlock(held);
+        }
+        return;
+      }
+      const written = (waiting ?? Promise.resolve())
+        .catch(() => undefined)
+        .then(async () => {
+          const taken = await lock(lockOf(path));
+          try {
+            writeNow(path, record);
+          } finally {
+            unlock(taken);
+          }
+        });
+      waitingWrites.set(channelId, written);
+      const settle = () => {
+        if (waitingWrites.get(channelId) === written) waitingWrites.delete(channelId);
+      };
+      written.then(settle, settle);
+      return written;
     },
   };
 };
