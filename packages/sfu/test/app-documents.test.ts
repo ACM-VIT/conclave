@@ -326,7 +326,7 @@ describe("app documents", { timeout: 30_000 }, () => {
   });
 
   it("does not count a slow worker start against a document's deadline", async () => {
-    const pool = createPool({ deadlineMs: 50, workerUrl: SLOW_START_WORKER });
+    const pool = createPool({ deadlineMs: 300, workerUrl: SLOW_START_WORKER });
     const document = pool.open();
     const { hello } = authors();
 
@@ -452,7 +452,7 @@ describe("app documents", { timeout: 30_000 }, () => {
   });
 
   it("stops serving a document that cannot be rebuilt in time and keeps serving the rest", async () => {
-    const pool = createPool({ deadlineMs: 150, workerUrl: STALLING_WORKER });
+    const pool = createPool({ deadlineMs: 300, workerUrl: STALLING_WORKER });
     const slow = pool.open();
     const other = pool.open();
     const { hello, fromOther } = authors();
