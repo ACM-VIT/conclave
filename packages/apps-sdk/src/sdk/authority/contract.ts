@@ -1,4 +1,4 @@
-import type { Infer, Schema } from "#authority/schema";
+import { SchemaError, s, type Infer, type Schema } from "#authority/schema";
 
 export type ActionSpec = {
   input: Schema<unknown>;
@@ -62,12 +62,55 @@ export type ViewRow<
   K extends ViewName<C>,
 > = Infer<C["views"][K]>;
 
-const APP_ID_PATTERN = /^[a-z][a-z0-9-]{0,47}$/;
-const NAME_PATTERN = /^[a-zA-Z][a-zA-Z0-9]{0,47}$/;
+/** The most characters an app id may have. */
+export const APP_ID_MAX_LENGTH = 48;
+
+/**
+ * What an app may be called: lowercase letters, digits and dashes, starting
+ * with a letter. The id is a folder name, a package subpath and a name on
+ * the wire, so this is the one statement of the rule. `defineContract`,
+ * `new:app` and `check:apps` all read it, and none keeps a copy.
+ */
+export const appIdSchema: Schema<string> = s.string({
+  max: APP_ID_MAX_LENGTH,
+  pattern: /^[a-z][a-z0-9-]*$/,
+});
+
+/** What a schema has against a value, or null when it takes it. */
+const problemOf = (schema: Schema<unknown>, value: unknown): string | null => {
+  try {
+    schema.parse(value, "strict", "it");
+    return null;
+  } catch (error) {
+    if (!(error instanceof SchemaError)) throw error;
+    return error.message.replace(/^it: /, "");
+  }
+};
+
+/** Why a value cannot be an app id, in words for whoever chose it, or null. */
+export const appIdProblem = (id: unknown): string | null => {
+  const reason = problemOf(appIdSchema, id);
+  return reason === null
+    ? null
+    : `${reason}. An app id is at most ${APP_ID_MAX_LENGTH} lowercase letters, digits and dashes, starting with a letter`;
+};
+
+/**
+ * What an action, a query or a view may be called. A contract is held to it
+ * when it is defined, and the SFU reads a request's action and query names
+ * with it, so a name a contract may have is a name the wire carries.
+ */
+export const authorityNameSchema: Schema<string> = s.string({
+  max: 48,
+  pattern: /^[a-zA-Z][a-zA-Z0-9]*$/,
+});
+
+export const isAuthorityName = (value: unknown): value is string =>
+  problemOf(authorityNameSchema, value) === null;
 
 const assertNames = (appId: string, kind: string, names: string[]): void => {
   for (const name of names) {
-    if (!NAME_PATTERN.test(name)) {
+    if (!isAuthorityName(name)) {
       throw new Error(`App ${appId}: invalid ${kind} name "${name}"`);
     }
   }
@@ -80,8 +123,9 @@ export const defineContract = <
 >(
   contract: AuthorityContract<Actions, Queries, Views>,
 ): AuthorityContract<Actions, Queries, Views> => {
-  if (!APP_ID_PATTERN.test(contract.id)) {
-    throw new Error(`Invalid authority app id "${contract.id}"`);
+  const problem = appIdProblem(contract.id);
+  if (problem) {
+    throw new Error(`Invalid authority app id "${contract.id}": ${problem}`);
   }
   if (!Number.isInteger(contract.major) || contract.major < 1) {
     throw new Error(`App ${contract.id}: major must be a positive integer`);

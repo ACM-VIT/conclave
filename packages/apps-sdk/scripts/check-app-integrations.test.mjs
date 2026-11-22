@@ -440,7 +440,7 @@ test("new:app refuses the names the SDK keeps for itself and ids that are not na
   }
   const digit = repo.scaffold("3d-viewer");
   assert.equal(digit.status, 1, digit.output);
-  assert.match(digit.output, /must start with a letter/);
+  assert.match(digit.output, /"3d-viewer" is not a valid app id: does not match/);
   assert.deepEqual(repo.files(), before);
 });
 
@@ -473,3 +473,50 @@ test("an app folder that took one of the SDK's names is reported, and --fix leav
   assert.equal(exported["./kit/server"], "./src/sdk/kit.ts");
   assert.equal(exported["./sign-up/server"], "./src/apps/sign-up/server/index.ts");
 });
+
+test("new:app refuses an id longer than a contract may have, before writing anything", () => {
+  const repo = makeRepo();
+  const before = repo.files();
+  const tooLong = `a${"b".repeat(48)}`;
+
+  const asAuthority = repo.scaffold(tooLong, "--runtime", "authority");
+  const asDoc = repo.scaffold(tooLong);
+  const dryRun = repo.scaffold(tooLong, "--runtime", "authority", "--dry-run");
+
+  assert.equal(tooLong.length, 49);
+  for (const refused of [asAuthority, asDoc, dryRun]) {
+    assert.equal(refused.status, 1, refused.output);
+    assert.match(refused.output, /is not a valid app id: longer than 48/);
+    assert.doesNotMatch(refused.output, /create |Scaffold complete/);
+  }
+  assert.deepEqual(repo.files(), before);
+});
+
+test("the longest id a contract may have is scaffolded and passes the check", () => {
+  const repo = makeRepo();
+  const longest = `a${"b".repeat(47)}`;
+
+  const scaffolded = repo.scaffold(longest, "--runtime", "authority");
+  const checked = repo.check();
+
+  assert.equal(scaffolded.status, 0, scaffolded.output);
+  assert.equal(checked.status, 0, checked.output);
+});
+
+test("an app folder whose name no contract could have is reported", () => {
+  const repo = makeRepo();
+  repo.scaffold("sign-up", "--runtime", "authority");
+  const tooLong = `a${"b".repeat(48)}`;
+  // Made by hand, or by a scaffolder older than the rule.
+  fs.cpSync(
+    path.join(repo.root, "src", "apps", "sign-up"),
+    path.join(repo.root, "src", "apps", tooLong),
+    { recursive: true },
+  );
+
+  const checked = repo.check();
+
+  assert.equal(checked.status, 1);
+  assert.match(checked.output, new RegExp(`\\[${tooLong}\\] is not a valid app id: longer than 48`));
+});
+

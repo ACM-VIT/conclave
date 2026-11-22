@@ -1,5 +1,6 @@
 import {
   AUTHORITY_EVENTS,
+  isAuthorityName,
   type ActRequest,
   type AuthorityFailure,
   type CapabilitiesRequest,
@@ -16,7 +17,6 @@ import { RATE_LIMITS, takeToken } from "../rateLimit.js";
 import { respond } from "./ack.js";
 
 const ID_PATTERN = /^[A-Za-z0-9._-]{1,96}$/;
-const NAME_PATTERN = /^[a-zA-Z][a-zA-Z0-9]{0,47}$/;
 
 const fail = (code: AuthorityFailure["code"]): AuthorityFailure => ({
   ok: false,
@@ -31,8 +31,9 @@ const record = (value: unknown): Record<string, unknown> | null =>
 const id = (value: unknown): string | null =>
   typeof value === "string" && ID_PATTERN.test(value) ? value : null;
 
+// The rule a contract's own action and query names are held to.
 const name = (value: unknown): string | null =>
-  typeof value === "string" && NAME_PATTERN.test(value) ? value : null;
+  isAuthorityName(value) ? value : null;
 
 const generation = (value: unknown): number | null =>
   typeof value === "number" && Number.isSafeInteger(value) && value > 0

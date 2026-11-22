@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
-import { RESERVED_APP_IDS } from "./app-id-rules.mjs";
+import { RESERVED_APP_IDS, appFolderProblem } from "./app-id-rules.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -425,11 +425,11 @@ const nextExports = { ...pkgExports };
 
 const expectedExports = {};
 for (const app of apps) {
-  if (RESERVED_APP_IDS.has(app.appId)) {
-    // Its subpaths are the SDK's own, so none of them is expected or fixed.
-    errors.push(
-      `[${app.appId}] is a name the SDK keeps for itself. Rename src/apps/${app.appId}`,
-    );
+  const problem = appFolderProblem(app.appId);
+  if (problem) {
+    // No app can have this name, so none of its subpaths is expected or
+    // fixed. A reserved name's subpaths are the SDK's own.
+    errors.push(`[${app.appId}] ${problem}. Rename src/apps/${app.appId}`);
     continue;
   }
   for (const part of APP_PARTS) {
