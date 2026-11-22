@@ -34,11 +34,21 @@ export type TransactionOutcome<R> =
   | { ok: false; kind: "capacity"; message: string }
   | { ok: false; kind: "fault"; error: unknown };
 
-/** How many rows a paged scan passes over for the cost of one it returns. */
-const SCAN_SKIPPED_ROWS_PER_OP = 64;
+/**
+ * How many rows the store handles in bulk for the cost of one row a handler
+ * touches itself. A bulk row is cheap, but not free.
+ */
+const BULK_ROWS_PER_OP = 64;
 
 const DELETED = Symbol("deleted");
 type Staged = Row | typeof DELETED;
+
+/**
+ * What a transaction cleared in one table: whole groups, and prefixes longer
+ * than a group. None is inside another. Groups are the common case, a
+ * parent's rows, and are looked up in one step.
+ */
+type Cleared = { groups: Set<string>; longer: TableKey[] };
 
 const deepFreeze = (value: unknown): void => {
   if (value === null || typeof value !== "object") return;
@@ -88,6 +98,31 @@ class TableStore {
     group?.delete(key);
     if (group?.size === 0) this.groups.delete(groupId);
   }
+
+  countUnder(prefix: TableKey | undefined): number {
+    if (prefix === undefined) return this.rows.size;
+    const group = this.groups.get(keyGroup(prefix));
+    if (!group) return 0;
+    if (keyGroup(prefix) === prefix) return group.size;
+    let count = 0;
+    for (const key of group) if (keyHasPrefix(key, prefix)) count += 1;
+    return count;
+  }
+
+  /** Removes every row under `prefix` and returns the keys it removed. */
+  deleteUnder(prefix: TableKey): TableKey[] {
+    const groupId = keyGroup(prefix);
+    const group = this.groups.get(groupId);
+    if (!group) return [];
+    const keys =
+      groupId === prefix
+        ? [...group]
+        : [...group].filter((key) => keyHasPrefix(key, prefix));
+    for (const key of keys) this.rows.delete(key);
+    if (keys.length === group.size) this.groups.delete(groupId);
+    else for (const key of keys) group.delete(key);
+    return keys;
+  }
 }
 
 /**
@@ -101,6 +136,12 @@ export class AuthorityStore {
   private readonly timers = new Map<TableKey, TimerEntry>();
   /** Rows written since the views last caught up, by table. */
   private readonly dirty = new Map<string, Set<TableKey>>();
+  /**
+   * Rows a `clear` removed that the views have not been told of yet, oldest
+   * clear first. They are gone from the tables already. `next` is how far
+   * into `keys` the views have been told.
+   */
+  private readonly cleared: { table: string; keys: TableKey[]; next: number }[] = [];
 
   constructor(
     private readonly definition: RuntimeDefinition,
@@ -125,15 +166,39 @@ export class AuthorityStore {
     return this.table(table).rows;
   }
 
-  /** Hands over the rows written since the last call and forgets them. */
+  /**
+   * Hands over the rows written since the last call and forgets them, along
+   * with the next batch of rows a `clear` removed.
+   */
   takeDirty(): Map<string, Set<TableKey>> {
+    // At least one row, or a clear would never finish being told.
+    let room = Math.max(1, this.limits.clearedRowsPerFlush);
+    while (room > 0 && this.cleared.length > 0) {
+      const batch = this.cleared[0];
+      const keys = batch.keys.slice(batch.next, batch.next + room);
+      for (const key of keys) this.markDirty(batch.table, key);
+      batch.next += keys.length;
+      room -= keys.length;
+      if (batch.next >= batch.keys.length) this.cleared.shift();
+    }
     const taken = new Map(this.dirty);
     this.dirty.clear();
     return taken;
   }
 
   get hasDirty(): boolean {
-    return this.dirty.size > 0;
+    return this.dirty.size > 0 || this.cleared.length > 0;
+  }
+
+  /** Whether a `clear` removed rows the views still hold. */
+  get hasUntoldClears(): boolean {
+    return this.cleared.length > 0;
+  }
+
+  private markDirty(table: string, key: TableKey): void {
+    const dirty = this.dirty.get(table);
+    if (dirty) dirty.add(key);
+    else this.dirty.set(table, new Set([key]));
   }
 
   nextTimerAt(): number | null {
@@ -186,6 +251,16 @@ export class AuthorityStore {
 
   private commit(draft: Draft): boolean {
     let changed = false;
+    // Clears first: what a handler wrote under a prefix after clearing it stays.
+    for (const [tableName, cleared] of draft.clears) {
+      const table = this.table(tableName);
+      for (const prefix of [...cleared.groups, ...cleared.longer] as TableKey[]) {
+        const keys = table.deleteUnder(prefix);
+        if (keys.length === 0) continue;
+        changed = true;
+        this.cleared.push({ table: tableName, keys, next: 0 });
+      }
+    }
     for (const [tableName, writes] of draft.writes) {
       const table = this.table(tableName);
       for (const [key, staged] of writes) {
@@ -196,9 +271,7 @@ export class AuthorityStore {
           table.set(key, staged);
         }
         changed = true;
-        const dirty = this.dirty.get(tableName);
-        if (dirty) dirty.add(key);
-        else this.dirty.set(tableName, new Set([key]));
+        this.markDirty(tableName, key);
       }
     }
     for (const [key, staged] of draft.timerWrites) {
@@ -221,6 +294,11 @@ export class AuthorityStore {
 /** Staged writes with read-your-writes. Dropped whole on any throw. */
 class Draft implements RuntimeTransaction {
   readonly writes = new Map<string, Map<TableKey, Staged>>();
+  /**
+   * What was cleared so far, by table. A staged write is always newer than
+   * the clear that covers its key: clearing drops the staged writes under it.
+   */
+  readonly clears = new Map<string, Cleared>();
   readonly timerWrites = new Map<TableKey, TimerEntry | typeof DELETED>();
   private ops = 0;
 
@@ -247,22 +325,43 @@ class Draft implements RuntimeTransaction {
     else this.writes.set(table, new Map([[key, value]]));
   }
 
+  /** Whether a committed row with this key was cleared in this transaction. */
+  private isCleared(table: string, key: TableKey): boolean {
+    const cleared = this.clears.get(table);
+    if (!cleared) return false;
+    return (
+      cleared.groups.has(keyGroup(key)) ||
+      cleared.longer.some((prefix) => keyHasPrefix(key, prefix))
+    );
+  }
+
   get(table: string, key: TableKey): Row | undefined {
     this.spend();
     const staged = this.staged(table, key);
     if (staged !== undefined) return staged === DELETED ? undefined : staged;
-    return this.store.get(table, key);
+    return this.isCleared(table, key) ? undefined : this.store.get(table, key);
   }
 
   count(table: string, prefix?: TableKey): number {
     this.spend();
+    return this.liveCount(table, prefix);
+  }
+
+  /** Rows a read sees under `prefix`: committed and not cleared, or staged. */
+  private liveCount(table: string, prefix?: TableKey): number {
     const committed = this.store.table(table);
-    let total = 0;
-    if (prefix === undefined) total = committed.rows.size;
-    else for (const _key of committed.keysUnder(prefix)) total += 1;
+    let total = committed.countUnder(prefix);
+    const cleared = this.clears.get(table);
+    for (const gone of [...(cleared?.groups ?? []), ...(cleared?.longer ?? [])] as TableKey[]) {
+      if (prefix === undefined || keyHasPrefix(gone, prefix)) {
+        total -= committed.countUnder(gone);
+      } else if (keyHasPrefix(prefix, gone)) {
+        total = 0;
+      }
+    }
     for (const [key, staged] of this.writes.get(table) ?? []) {
       if (prefix !== undefined && !keyHasPrefix(key, prefix)) continue;
-      const exists = committed.rows.has(key);
+      const exists = committed.rows.has(key) && !this.isCleared(table, key);
       if (staged === DELETED && exists) total -= 1;
       if (staged !== DELETED && !exists) total += 1;
     }
@@ -283,6 +382,7 @@ class Draft implements RuntimeTransaction {
     const writes = this.writes.get(table);
     const result: (readonly [TableKey, Row])[] = [];
     let passed = 0;
+    let passedOver = 0;
     /** Takes the next row in order. False once the page is full. */
     const take = (key: TableKey, row: Row): boolean => {
       passed += 1;
@@ -291,21 +391,27 @@ class Draft implements RuntimeTransaction {
     };
     read: {
       for (const key of committed.keysUnder(prefix)) {
+        // A cleared row written again is a new row, and comes last.
+        if (this.isCleared(table, key)) {
+          passedOver += 1;
+          continue;
+        }
         const staged = writes?.get(key);
         if (staged === DELETED) continue;
         const row = staged ?? committed.rows.get(key);
         if (row && !take(key, row)) break read;
       }
       for (const [key, staged] of writes ?? []) {
-        if (staged === DELETED || committed.rows.has(key)) continue;
+        if (staged === DELETED) continue;
+        if (committed.rows.has(key) && !this.isCleared(table, key)) continue;
         if (prefix !== undefined && !keyHasPrefix(key, prefix)) continue;
         if (!take(key, staged)) break read;
       }
     }
     // A row passed over is cheap but not free, or a handler could walk a
     // large table from the start any number of times.
-    const skipped = passed - result.length;
-    this.spend(result.length + 1 + Math.floor(skipped / SCAN_SKIPPED_ROWS_PER_OP));
+    passedOver += passed - result.length;
+    this.spend(result.length + 1 + Math.floor(passedOver / BULK_ROWS_PER_OP));
     return result;
   }
 
@@ -336,6 +442,24 @@ class Draft implements RuntimeTransaction {
     if (this.get(table, key) === undefined) return false;
     this.stage(table, key, DELETED);
     return true;
+  }
+
+  clear(table: string, prefix: TableKey): number {
+    const removed = this.liveCount(table, prefix);
+    const writes = this.writes.get(table);
+    for (const key of [...(writes?.keys() ?? [])]) {
+      if (keyHasPrefix(key, prefix)) writes?.delete(key);
+    }
+    const cleared = this.clears.get(table) ?? { groups: new Set(), longer: [] };
+    this.clears.set(table, cleared);
+    if (!this.isCleared(table, prefix)) {
+      // The new prefix takes the place of any cleared before that lie inside it.
+      cleared.longer = cleared.longer.filter((held) => !keyHasPrefix(held, prefix));
+      if (keyGroup(prefix) === prefix) cleared.groups.add(prefix);
+      else cleared.longer.push(prefix);
+    }
+    this.spend(1 + Math.floor(removed / BULK_ROWS_PER_OP));
+    return removed;
   }
 
   private timerExists(key: TableKey): boolean {

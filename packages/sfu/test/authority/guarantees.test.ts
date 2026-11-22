@@ -700,6 +700,99 @@ describe("bounds", () => {
     expect(rest).toEqual({ ok: true, value: { ids: ["n3", "n4"] } });
   });
 
+  it("drops a parent's rows in one step where one at a time would not fit", async () => {
+    // A fiftieth of the real budget, so the test needs a fiftieth of the rows.
+    const room = new Harness([probeAuthority], {
+      runtime: { limits: { ...DEFAULT_AUTHORITY_LIMITS, transactionOps: 1_000 } },
+    });
+    const hostTab = await room.open(host, probeContract);
+    const marks = async () => {
+      const counted = await hostTab.query("countMarks", { id: "a" });
+      return counted.ok ? field(counted.value, "count") : null;
+    };
+    for (const from of [0, 200, 400]) {
+      await hostTab.act("mark", { id: "a", from, count: 200, shown: false });
+    }
+    await hostTab.act("mark", { id: "b", from: 0, count: 3, shown: false });
+
+    // Reading and deleting 600 rows one by one is 1,200 operations, more
+    // than the 1,000 a transaction may make here.
+    const oneAtATime = await hostTab.act("unmark", { id: "a", how: "one at a time" });
+    const stillThere = await marks();
+    const cleared = await hostTab.act("unmark", { id: "a", how: "clear" });
+
+    expect(oneAtATime).toEqual({ ok: false, code: "app-fault" });
+    expect(stillThere).toBe(600);
+    expect(cleared).toEqual({ ok: true, value: { removed: 600 } });
+    expect(await marks()).toBe(0);
+    // Another parent's rows are not touched.
+    expect(await hostTab.query("countMarks", { id: "b" })).toEqual({ ok: true, value: { count: 3 } });
+  });
+
+  it("shows a handler its own clear at once, and keeps what it writes afterwards", async () => {
+    const room = new Harness([probeAuthority]);
+    const hostTab = await room.open(host, probeContract);
+    await hostTab.act("mark", { id: "a", from: 0, count: 5, shown: true });
+    await room.deliver();
+
+    const remarked = await hostTab.act("remark", { id: "a" });
+    await room.deliver();
+
+    expect(remarked).toEqual({
+      ok: true,
+      value: { removed: 5, leftAfterClear: 0, oldRowStillThere: false, leftAfterWrite: 1 },
+    });
+    expect(await hostTab.query("countMarks", { id: "a" })).toEqual({ ok: true, value: { count: 1 } });
+    expect(hostTab.rows("marks")).toEqual([{ n: 0 }]);
+  });
+
+  it("keeps the rows when the handler that cleared them is refused", async () => {
+    const room = new Harness([probeAuthority]);
+    const hostTab = await room.open(host, probeContract);
+    await hostTab.act("mark", { id: "a", from: 0, count: 5, shown: true });
+    await room.deliver();
+
+    const refused = await hostTab.act("unmark", { id: "a", how: "clear then refuse" });
+    await room.deliver();
+
+    expect(refused).toEqual({ ok: false, code: "rejected", reason: "changed-my-mind" });
+    expect(hostTab.rows("marks").length).toBe(5);
+  });
+
+  it("tells viewers of a large clear a batch at a time, until none of its rows is left", async () => {
+    const room = new Harness([probeAuthority], {
+      runtime: { limits: { ...DEFAULT_AUTHORITY_LIMITS, clearedRowsPerFlush: 100 } },
+    });
+    const hostTab = await room.open(host, probeContract);
+    const raviTab = await room.open(ravi, probeContract);
+    await hostTab.act("mark", { id: "a", from: 0, count: 250, shown: true });
+    await hostTab.act("mark", { id: "b", from: 0, count: 2, shown: true });
+    await room.deliver();
+    const before = raviTab.rows("marks").length;
+
+    await hostTab.act("unmark", { id: "a", how: "clear" });
+    // The rows are gone for every handler at once.
+    const leftForHandlers = await hostTab.query("countMarks", { id: "a" });
+    await room.deliver();
+    const afterOneFlush = raviTab.rows("marks").length;
+    // Someone who opens the app now is not handed rows that are already gone.
+    const late = await room.open(priya, probeContract);
+    const lateSees = late.rows("marks").length;
+    // The host goes on by itself, a batch every flush interval.
+    await vi.advanceTimersByTimeAsync(50);
+    const afterTwo = raviTab.rows("marks").length;
+    await vi.advanceTimersByTimeAsync(50);
+
+    expect(before).toBe(252);
+    expect(leftForHandlers).toEqual({ ok: true, value: { count: 0 } });
+    expect(afterOneFlush).toBe(152);
+    expect(lateSees).toBe(2);
+    expect(afterTwo).toBe(52);
+    expect(raviTab.rows("marks").length).toBe(2);
+    expect(hostTab.rows("marks").length).toBe(2);
+    expect(await room.converged()).toBe(true);
+  });
+
   it("limits a person across their tabs, and the room as a whole", async () => {
     const room = new Harness([pollsAuthority, probeAuthority], {
       runtime: { limits: { ...DEFAULT_AUTHORITY_LIMITS, mutationBurst: 3, mutationsPerSecond: 1 } },

@@ -50,6 +50,8 @@ The room epoch changes when the room is recreated. A request under an old epoch 
 | Flush interval | 50 ms, immediate after a quiet period |
 | Operation id validity | 120 s, issue time at most 5 s ahead |
 | Accepted mutations per app per room | 120 a second, burst 240 |
+| Reads and writes in one transaction | 50,000. `clear` removes any number of rows for about one per 64 |
+| Rows of a `clear` told to viewers per flush | 1,000 |
 | Subscriptions per socket | 16 |
 | Socket behind (resnapshot later) | more than 256 queued packets or 1 MiB |
 | Query on a socket that is behind | refused with `busy` |

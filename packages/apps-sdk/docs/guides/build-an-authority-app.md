@@ -100,10 +100,14 @@ export const signUpAuthority = defineAuthority({
 
 The four things a module has:
 
-- **Tables.** Keyed rows with a row cap. Writes happen only inside a handler's transaction: `get`, `insertIfAbsent`, `put`, `delete`, `count` and `scan` by key prefix. A table too large to read in one transaction is scanned a page at a time, with `scan(table, prefix, { offset, limit })`. Committed rows are frozen.
+- **Tables.** Keyed rows with a row cap. Writes happen only inside a handler's transaction: `get`, `insertIfAbsent`, `put`, `delete`, `clear`, `count` and `scan` by key prefix. A table too large to read in one transaction is scanned a page at a time, with `scan(table, prefix, { offset, limit })`. Committed rows are frozen.
 - **Actions.** A role list, an optional `when` condition, a rate, and a synchronous handler. The host checks the gate and parses the input before your code runs. Return the receipt, or call `reject("reason")` to refuse and keep nothing.
 - **Views.** A shared view is projected once per audience role and cannot see who is looking. A personal view names an `owner` and reaches every connection of that subject and nobody else.
 - **Timers.** `tx.schedule(kind, key, atMs, payload)` inside a transaction, handled in `onTimer`. Recheck the phase in the handler: a timer for a round that has moved on should do nothing. Handlers are synchronous. An `async` timer handler does not compile, and any handler that returns a promise is a fault that keeps none of its writes.
+
+### A parent and its rows
+
+Key a parent's rows by the parent, as in `key(questionId, ctx.subject)`, and drop them with `tx.clear("upvotes", key(questionId))`. A transaction may make 50,000 reads and writes, and deleting rows one at a time costs two each, so a loop over a parent's rows fails the whole action once there are enough of them. `clear` costs about one operation per 64 rows. The rows are gone for every handler when the transaction commits, and viewers are told a batch at a time.
 
 ### Once per person
 

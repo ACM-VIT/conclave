@@ -25,6 +25,12 @@ export type AuthorityLimits = {
   timersPerWake: number;
   /** Reads and writes one transaction may make before it is cut off. */
   transactionOps: number;
+  /**
+   * Rows removed by a `clear` that the views are told of in one flush. A
+   * larger clear is spread over the flushes that follow, so removing a
+   * hundred thousand rows never holds the event loop for all of them at once.
+   */
+  clearedRowsPerFlush: number;
   subscriptionsPerSocket: number;
   /** Patches held for a subscription while its snapshot is still in flight. */
   backlogFrames: number;
@@ -52,6 +58,7 @@ export const DEFAULT_AUTHORITY_LIMITS: AuthorityLimits = {
   timersPerInstance: 1_024,
   timersPerWake: 64,
   transactionOps: 50_000,
+  clearedRowsPerFlush: 1_000,
   subscriptionsPerSocket: 16,
   backlogFrames: 32,
   socketSoftPackets: 256,

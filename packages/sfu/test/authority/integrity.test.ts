@@ -5,8 +5,10 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { s, SchemaError, type Json } from "@conclave/apps-sdk/authority";
+import { key } from "@conclave/apps-sdk/authority/server";
 import { Client } from "../../config/classes/Client.js";
 import { DEFAULT_AUTHORITY_LIMITS } from "../../server/apps/authority/limits.js";
+import { AuthorityStore } from "../../server/apps/authority/store.js";
 import { Harness, person } from "./harness.js";
 import { pollsContract } from "@conclave/apps-sdk/polls/core";
 import { pollsAuthority } from "@conclave/apps-sdk/polls/server";
@@ -61,6 +63,51 @@ describe("stored rows", () => {
     expect(dumped.ok && field(dumped.value, "notes")).toEqual([
       { id: "a", text: "small", stars: 0 },
     ]);
+  });
+});
+
+describe("cleared rows", () => {
+  it("counts each cleared row once when a prefix and then its group are cleared", () => {
+    const store = new AuthorityStore(probeAuthority.runtime, DEFAULT_AUTHORITY_LIMITS);
+    const mark = (n: number) => ({ noteId: "a", n, shown: false });
+    store.transact((tx) => {
+      tx.put("marks", key("a", "x", "1"), mark(1));
+      tx.put("marks", key("a", "x", "2"), mark(2));
+      tx.put("marks", key("a", "y", "1"), mark(3));
+      tx.put("marks", key("b", "x", "1"), mark(4));
+    });
+
+    const seen = store.transact((tx) => {
+      const inner = tx.clear("marks", key("a", "x"));
+      const afterInner = [tx.count("marks", key("a")), tx.count("marks")];
+      const outer = tx.clear("marks", key("a"));
+      const afterOuter = [
+        tx.count("marks", key("a")),
+        tx.count("marks", key("a", "x")),
+        tx.count("marks"),
+      ];
+      tx.put("marks", key("a", "x", "9"), mark(9));
+      const again = tx.clear("marks", key("a", "x"));
+      tx.put("marks", key("a", "x", "9"), mark(9));
+      return {
+        inner,
+        afterInner,
+        outer,
+        afterOuter,
+        again,
+        scanned: tx.scan("marks").map(([rowKey]) => rowKey),
+      };
+    });
+
+    expect(seen.ok && seen.value).toEqual({
+      inner: 2,
+      afterInner: [1, 2],
+      outer: 1,
+      afterOuter: [0, 0, 1],
+      again: 1,
+      scanned: [key("b", "x", "1"), key("a", "x", "9")],
+    });
+    expect([...store.rows("marks").keys()]).toEqual([key("b", "x", "1"), key("a", "x", "9")]);
   });
 });
 

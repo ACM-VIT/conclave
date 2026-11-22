@@ -53,19 +53,6 @@ export type SizedRow = { row: ProjectedRow; bytes: number };
 /** Framing around one row on the wire: its field names and punctuation. */
 const ROW_OVERHEAD_BYTES = 32;
 
-const rowsOf = (audience: Audience): SizedRow[] => {
-  const rows: SizedRow[] = [];
-  for (const [bucket, state] of audience) {
-    for (const [key, delivered] of state.rows) {
-      rows.push({
-        row: { bucket, key, value: delivered.value },
-        bytes: delivered.bytes,
-      });
-    }
-  }
-  return rows;
-};
-
 /**
  * Turns private rows into what each audience may see, and remembers what
  * each audience already holds. A change is sent only when the projected row
@@ -121,11 +108,35 @@ export class ViewTracker {
    * next flush sends them as a patch on top of this.
    */
   sharedRows(role: Role): SizedRow[] {
-    return rowsOf(this.roleAudience(role));
+    return this.rowsOf(this.roleAudience(role));
   }
 
   personalRows(subject: Subject): SizedRow[] {
-    return rowsOf(this.subjectAudience(subject));
+    return this.rowsOf(this.subjectAudience(subject));
+  }
+
+  /**
+   * An audience's rows, for a snapshot. A clear's rows leave the held views
+   * a batch at a time, and the ones still waiting to leave are left out
+   * here, so nobody is newly sent a row that is already gone.
+   */
+  private rowsOf(audience: Audience): SizedRow[] {
+    const leaving = this.store.hasUntoldClears;
+    const rows: SizedRow[] = [];
+    for (const [bucket, state] of audience) {
+      const table = this.definition.views[bucket].source;
+      for (const [key, delivered] of state.rows) {
+        if (leaving) {
+          const source = state.owner.get(key);
+          if (source !== undefined && !this.store.get(table, source)) continue;
+        }
+        rows.push({
+          row: { bucket, key, value: delivered.value },
+          bytes: delivered.bytes,
+        });
+      }
+    }
+    return rows;
   }
 
   /**
@@ -215,7 +226,9 @@ export class ViewTracker {
     for (const [subject, ops] of personal) {
       if (isEmpty(ops)) personal.delete(subject);
     }
-    if (this.options.verify) this.verify();
+    // While a clear is still being told, the views hold rows the tables no
+    // longer have, by design. The check resumes on the flush that ends it.
+    if (this.options.verify && !this.store.hasUntoldClears) this.verify();
     return { shared, personal };
   }
 
