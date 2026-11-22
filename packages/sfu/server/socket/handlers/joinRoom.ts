@@ -403,9 +403,10 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             room.setLocked(true);
           }
           // The SFU lost this call and it is coming back: its hosts are
-          // hosts again when they return.
+          // hosts again when they return, and the people a host had put out
+          // still have to be let in.
           if (lostRoom) {
-            room.restoreHosts(lostRoom);
+            room.restoreLostCall(lostRoom);
           }
         }
 

@@ -72,6 +72,14 @@ export const markRoomEnded = (
   return endedRoom;
 };
 
+// A change to who hosts, or to who has to be let in again, goes to the
+// ledger at once. The SFU may not live to the next renewal sweep.
+const recordRecoverableChanges = (state: SfuState, room: Room): void => {
+  room.onRecoverableChange = () => {
+    if (room.recordsItsCall) state.roomRecovery.noteRunning(room);
+  };
+};
+
 /**
  * A scheduled meeting's invitations outlive its room, so a host removing an
  * invited person has to outlive it too. The room starts with the removals the
@@ -221,6 +229,7 @@ export const getOrCreateRoomWithOrigin = async (
         workerPid: typeof worker.pid === "number" ? worker.pid : null,
       });
       bindScheduledInvitations(state, createdRoom);
+      recordRecoverableChanges(state, createdRoom);
       state.rooms.set(channelId, createdRoom);
       Logger.success(`Created room: ${roomId} (${clientId})`);
       return createdRoom;
@@ -324,10 +333,7 @@ export const cleanupRoom = (state: SfuState, channelId: string): boolean => {
   // Emptying is a close on purpose, so the next visitor opens a new meeting.
   // Not so for a room that only stood in for a lost call, or one a host
   // ended: what the ledger says about those still holds.
-  if (
-    closedRoom.restorerState(Date.now()) === "none" &&
-    !state.endedRooms.has(channelId)
-  ) {
+  if (closedRoom.recordsItsCall) {
     state.roomRecovery.noteClosed(closedRoom);
   }
 

@@ -13,6 +13,7 @@ const room = {
   channelId: CHANNEL,
   hostUserKey: "host@example.com",
   adminUserKeys: new Set(["host@example.com", "guest-cohost"]),
+  usersNeedingReadmission: ["guest-removed"],
   recoveryPassesVoidUntil: null,
 };
 
@@ -31,13 +32,14 @@ afterEach(() => {
 });
 
 describe("what the SFU remembers about a room across a restart", () => {
-  it("knows a room it lost, and who hosted it", async () => {
+  it("knows a room it lost, who hosted it and who had been put out of it", async () => {
     sfu().noteRunning(room);
 
     expect(await sfu().recall(CHANNEL)).toEqual({
       lost: {
         hostUserKey: "host@example.com",
         adminUserKeys: ["host@example.com", "guest-cohost"],
+        readmissionRequiredUserKeys: ["guest-removed"],
         claimableUntil: Date.now() + 7 * MINUTE_MS,
       },
       passesVoidUntil: null,

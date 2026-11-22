@@ -29,6 +29,8 @@ export type RoomRecoveryRecord = {
   liveAt: number | null;
   hostUserKey: string | null;
   adminUserKeys: string[];
+  // People a host removed, blocked or took admission back from.
+  readmissionRequiredUserKeys: string[];
   // When a host ended it for everyone. Recovery passes signed up to then are
   // void: an ended meeting is not one to recover.
   endedAt: number | null;
@@ -43,6 +45,7 @@ export type RoomRecoveryStore = {
 export type LostRoom = {
   hostUserKey: string | null;
   adminUserKeys: string[];
+  readmissionRequiredUserKeys: string[];
   // After this no pass from the lost call can still be good, so the room is
   // anyone's to open again.
   claimableUntil: number;
@@ -55,7 +58,11 @@ export type RecalledRoom = {
 
 type LedgerRoom = Pick<
   Room,
-  "channelId" | "hostUserKey" | "adminUserKeys" | "recoveryPassesVoidUntil"
+  | "channelId"
+  | "hostUserKey"
+  | "adminUserKeys"
+  | "usersNeedingReadmission"
+  | "recoveryPassesVoidUntil"
 >;
 
 export type RoomRecoveryLedger = {
@@ -71,15 +78,32 @@ const isStringList = (value: unknown): value is string[] =>
 // The one place a stored record is read back into its shape.
 const parseRoomRecoveryRecord = (raw: unknown): RoomRecoveryRecord | null => {
   if (!raw || typeof raw !== "object") return null;
-  const { liveAt, hostUserKey, adminUserKeys, endedAt } = raw as Record<
-    string,
-    unknown
-  >;
+  const {
+    liveAt,
+    hostUserKey,
+    adminUserKeys,
+    readmissionRequiredUserKeys,
+    endedAt,
+  } = raw as Record<string, unknown>;
   if (liveAt !== null && typeof liveAt !== "number") return null;
   if (endedAt !== null && typeof endedAt !== "number") return null;
   if (hostUserKey !== null && typeof hostUserKey !== "string") return null;
   if (!isStringList(adminUserKeys)) return null;
-  return { liveAt, hostUserKey, adminUserKeys, endedAt };
+  if (!isStringList(readmissionRequiredUserKeys)) return null;
+  return {
+    liveAt,
+    hostUserKey,
+    adminUserKeys,
+    readmissionRequiredUserKeys,
+    endedAt,
+  };
+};
+
+const NOT_RUNNING = {
+  liveAt: null,
+  hostUserKey: null,
+  adminUserKeys: [],
+  readmissionRequiredUserKeys: [],
 };
 
 export const createRoomRecoveryLedger = (
@@ -104,6 +128,7 @@ export const createRoomRecoveryLedger = (
         liveAt: Date.now(),
         hostUserKey: room.hostUserKey,
         adminUserKeys: [...room.adminUserKeys],
+        readmissionRequiredUserKeys: room.usersNeedingReadmission,
         endedAt: stillVoids(room.recoveryPassesVoidUntil),
       }),
     noteClosed: (room) => {
@@ -112,16 +137,11 @@ export const createRoomRecoveryLedger = (
         room.channelId,
         endedAt === null
           ? null
-          : { liveAt: null, hostUserKey: null, adminUserKeys: [], endedAt },
+          : { ...NOT_RUNNING, endedAt },
       );
     },
     noteEnded: (room) =>
-      save(room.channelId, {
-        liveAt: null,
-        hostUserKey: null,
-        adminUserKeys: [],
-        endedAt: Date.now(),
-      }),
+      save(room.channelId, { ...NOT_RUNNING, endedAt: Date.now() }),
     recall: async (channelId) => {
       const record = parseRoomRecoveryRecord(
         await store.read(channelId).catch((error) => {
@@ -136,6 +156,7 @@ export const createRoomRecoveryLedger = (
             ? {
                 hostUserKey: record.hostUserKey,
                 adminUserKeys: record.adminUserKeys,
+                readmissionRequiredUserKeys: record.readmissionRequiredUserKeys,
                 claimableUntil: liveAt + LOST_ROOM_WINDOW_MS,
               }
             : null,

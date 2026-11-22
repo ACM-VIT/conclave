@@ -795,6 +795,84 @@ describe("who hosts a call the server lost", () => {
     expect(later.context.currentClient).toBeInstanceOf(Admin);
   });
 
+  describe("when a host's seat changed just before the loss", () => {
+    const guestSeat = "guest-visitor#v";
+    // Alice hosts, Bob (guest) and Cara (second) are in the call.
+    const callOfThree = async () => {
+      useTestClock();
+      const before = makeState();
+      const created = await join(before, host);
+      roomOf(before).allowLockedUser(guest.userId);
+      roomOf(before).allowLockedUser(second.userId);
+      const bob = await join(before, guest);
+      const cara = await join(before, second);
+      const stopRefreshing = startRoomRecoveryPassRefresh(before, config.sfuSecret);
+      return { before, created, bob, cara, stopRefreshing };
+    };
+
+    it("does not hand a removed co-host their seat back", async () => {
+      const { before, created, bob, stopRefreshing } = await callOfThree();
+      await send(created.peer, "promoteHost", { userId: guestSeat });
+      vi.advanceTimersByTime(MINUTE_MS);
+      await send(created.peer, "kickUser", { userId: guestSeat });
+      stopRefreshing();
+      const after = await restart(before);
+
+      // First back, from a tab that asks to open the room, with the pass
+      // they kept.
+      const bobBack = await join(
+        after,
+        { ...guest, allowRoomCreation: true },
+        { roomRecoveryPass: passesHeldBy(bob).at(-1) },
+      );
+      expect(bobBack.status).toBe("waiting");
+      const hostBack = await join(after, host);
+      expect(hostBack.context.currentClient).toBeInstanceOf(Admin);
+      expect(knocksShownTo(hostBack)).toContain(guest.userId);
+    });
+
+    it("does not hand it back when another member recreates the room first", async () => {
+      const { before, created, cara, stopRefreshing } = await callOfThree();
+      await send(created.peer, "promoteHost", { userId: guestSeat });
+      vi.advanceTimersByTime(MINUTE_MS);
+      await send(created.peer, "kickUser", { userId: guestSeat });
+      stopRefreshing();
+      const after = await restart(before);
+
+      const caraBack = await join(
+        after,
+        { ...second, allowRoomCreation: true },
+        { roomRecoveryPass: passesHeldBy(cara).at(-1) },
+      );
+      expect(caraBack.context.currentClient).toBeInstanceOf(Admin);
+      const bobBack = await join(after, { ...guest, allowRoomCreation: true });
+      expect(bobBack.status).toBe("waiting");
+      expect(roomOf(after).isAdminUserKey(guest.userId)).toBe(false);
+    });
+
+    it("keeps a co-host who was promoted a moment before", async () => {
+      const { before, created, stopRefreshing } = await callOfThree();
+      await send(created.peer, "promoteHost", { userId: guestSeat });
+      stopRefreshing();
+      const after = await restart(before);
+
+      const bobBack = await join(after, { ...guest, allowRoomCreation: true });
+      expect(bobBack.status).toBe("joined");
+      expect(bobBack.context.currentClient).toBeInstanceOf(Admin);
+    });
+
+    it("gives the seat to whoever it was transferred to a moment before", async () => {
+      const { before, created, stopRefreshing } = await callOfThree();
+      await send(created.peer, "admin:transferHost", { userId: guestSeat });
+      stopRefreshing();
+      const after = await restart(before);
+
+      const bobBack = await join(after, { ...guest, allowRoomCreation: true });
+      expect(bobBack.context.currentClient).toBeInstanceOf(Admin);
+      expect(bobBack.response.hostUserId).toBe(guestSeat);
+    });
+  });
+
   it("opens a meeting that emptied on purpose for its next visitor", async () => {
     vi.useFakeTimers({
       toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],

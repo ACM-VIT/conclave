@@ -195,6 +195,32 @@ const verifyInviteCodeHash = (
   return timingSafeEqual(expected, candidate);
 };
 
+// A set that tells its owner whenever its contents change.
+class ObservedSet<T> extends Set<T> {
+  constructor(private readonly changed: () => void) {
+    super();
+  }
+
+  add(value: T): this {
+    const isNew = !this.has(value);
+    super.add(value);
+    if (isNew) this.changed();
+    return this;
+  }
+
+  delete(value: T): boolean {
+    const removed = super.delete(value);
+    if (removed) this.changed();
+    return removed;
+  }
+
+  clear(): void {
+    const hadAny = this.size > 0;
+    super.clear();
+    if (hadAny) this.changed();
+  }
+}
+
 export class Room {
   public readonly id: string;
   public readonly router: Router;
@@ -226,7 +252,11 @@ export class Room {
   public currentScreenShareProducerId: string | null = null;
   public currentQuality: VideoQuality = "standard";
   public userKeysById: Map<string, string> = new Map();
-  public adminUserKeys: Set<string> = new Set();
+  // Who hosts is written to the recovery ledger the moment it changes, so
+  // every change has to be seen: the set and `hostUserKey` both report it.
+  public readonly adminUserKeys: Set<string> = new ObservedSet<string>(() =>
+    this.onRecoverableChange?.(),
+  );
   public displayNamesByKey: Map<string, string> = new Map();
   public handRaisedByUserId: Set<string> = new Set();
   private recentChatMessages: ChatMessage[] = [];
@@ -237,7 +267,7 @@ export class Room {
   public lockedAllowedUsers: Set<string> = new Set();
   public blockedUsers: Set<string> = new Set();
   public cleanupTimer: NodeJS.Timeout | null = null;
-  public hostUserKey: string | null = null;
+  private primaryHostUserKey: string | null = null;
   private _isLocked: boolean = false;
   private _isChatLocked: boolean = false;
   private _noGuests: boolean = false;
@@ -306,6 +336,9 @@ export class Room {
   // outlive the room (a scheduled meeting's invitations) can keep up.
   public onReadmissionChange: ((userKey: string, required: boolean) => void) | null =
     null;
+  // Told when what a recreated room would need changes: who hosts, and who
+  // has to be let in again.
+  public onRecoverableChange: (() => void) | null = null;
   // A host ended the meeting for everyone. It may stay open a little longer
   // to say so, but it is over: it hands out no more recovery passes.
   private endedForEveryone = false;
@@ -2413,6 +2446,9 @@ export class Room {
   }
 
   close(): void {
+    // Closing empties the room. That is not a change to the call.
+    this.onRecoverableChange = null;
+    this.onReadmissionChange = null;
     this.aiCredentials.clear();
     this.stopCleanupTimer();
     this.cancelWebcamCodecPolicyUpgrade();
@@ -2578,12 +2614,27 @@ export class Room {
     this.readmissionRequiredUserKeys.add(userKey);
   }
 
+  get usersNeedingReadmission(): string[] {
+    return [...this.readmissionRequiredUserKeys];
+  }
+
   private setReadmissionRequired(userKey: string, required: boolean) {
     const marked = this.readmissionRequiredUserKeys.has(userKey);
     if (marked === required) return;
     if (required) this.readmissionRequiredUserKeys.add(userKey);
     else this.readmissionRequiredUserKeys.delete(userKey);
     this.onReadmissionChange?.(userKey, required);
+    this.onRecoverableChange?.();
+  }
+
+  get hostUserKey(): string | null {
+    return this.primaryHostUserKey;
+  }
+
+  set hostUserKey(userKey: string | null) {
+    if (userKey === this.primaryHostUserKey) return;
+    this.primaryHostUserKey = userKey;
+    this.onRecoverableChange?.();
   }
 
   markEnded() {
@@ -2592,6 +2643,12 @@ export class Room {
 
   get hasEnded(): boolean {
     return this.endedForEveryone;
+  }
+
+  // Whether this room is a call of its own that the ledger should describe:
+  // not one standing in for a lost call, and not one a host has ended.
+  get recordsItsCall(): boolean {
+    return this.restorerDeadline === null && !this.endedForEveryone;
   }
 
   awaitRestorer(until: number) {
@@ -2609,9 +2666,26 @@ export class Room {
     this.restorerDeadline = null;
   }
 
-  restoreHosts(hosts: { hostUserKey: string | null; adminUserKeys: string[] }) {
-    this.hostUserKey = hosts.hostUserKey;
-    for (const userKey of hosts.adminUserKeys) this.adminUserKeys.add(userKey);
+  // Puts back what the ledger held of the call this room recreates: who has
+  // to be let in again, then its hosts, less anyone among those. It reports
+  // nothing: none of this is news to the ledger.
+  restoreLostCall(lost: {
+    hostUserKey: string | null;
+    adminUserKeys: string[];
+    readmissionRequiredUserKeys: string[];
+  }) {
+    const report = this.onRecoverableChange;
+    this.onRecoverableChange = null;
+    for (const userKey of lost.readmissionRequiredUserKeys) {
+      this.readmissionRequiredUserKeys.add(userKey);
+    }
+    const mayHost = (userKey: string) => !this.needsReadmission(userKey);
+    this.hostUserKey =
+      lost.hostUserKey && mayHost(lost.hostUserKey) ? lost.hostUserKey : null;
+    for (const userKey of lost.adminUserKeys.filter(mayHost)) {
+      this.adminUserKeys.add(userKey);
+    }
+    this.onRecoverableChange = report;
   }
 
   allowUser(userKey: string) {
