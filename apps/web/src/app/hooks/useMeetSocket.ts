@@ -1109,6 +1109,7 @@ export function useMeetSocket({
   const runtimeTurnIceServersRef = useRef<RTCIceServer[] | null>(null);
   const relayOnlyIceRef = useRef(false);
   const mediaPathReconnectTriedRef = useRef({ producer: false, consumer: false });
+  const escalatedTransportsRef = useRef(new WeakSet<Transport>());
   const networkBlockedReportedRef = useRef(false);
   const reconnectGenerationRef = useRef(0);
   const reconnectBackoffCancelRef = useRef<(() => void) | null>(null);
@@ -1485,9 +1486,16 @@ export function useMeetSocket({
 
   // An ICE restart could not bring this transport back. Rebuild the
   // transports once, through TURN alone when TURN is configured, and tell the
-  // user if media still cannot get through.
+  // user if media still cannot get through. Several watchers can see the same
+  // failure, so each transport escalates once until it connects again.
   const escalateMediaPathFailure = useCallback(
-    (transportKind: "producer" | "consumer", reason: string) => {
+    (
+      transportKind: "producer" | "consumer",
+      transport: Transport,
+      reason: string,
+    ) => {
+      if (escalatedTransportsRef.current.has(transport)) return;
+      escalatedTransportsRef.current.add(transport);
       const step = planMediaPathEscalation({
         hasReconnected: mediaPathReconnectTriedRef.current[transportKind],
         relayOnly: relayOnlyIceRef.current,
@@ -1532,7 +1540,8 @@ export function useMeetSocket({
   );
 
   const noteMediaPathConnected = useCallback(
-    (transportKind: "producer" | "consumer") => {
+    (transportKind: "producer" | "consumer", transport: Transport) => {
+      escalatedTransportsRef.current.delete(transport);
       mediaPathReconnectTriedRef.current[transportKind] = false;
       if (networkBlockedReportedRef.current) {
         networkBlockedReportedRef.current = false;
@@ -3781,7 +3790,7 @@ export function useMeetSocket({
                   );
                   producerTransportDisconnectTimeoutRef.current = null;
                 }
-                noteMediaPathConnected("producer");
+                noteMediaPathConnected("producer", transport);
                 return;
               }
 
@@ -3801,6 +3810,7 @@ export function useMeetSocket({
                           if (!restarted) {
                             escalateMediaPathFailure(
                               "producer",
+                              transport,
                               "Producer transport interrupted",
                             );
                           }
@@ -3824,6 +3834,7 @@ export function useMeetSocket({
                     if (!restarted) {
                       escalateMediaPathFailure(
                         "producer",
+                        transport,
                         "Producer transport failed",
                       );
                     }
@@ -4024,7 +4035,7 @@ export function useMeetSocket({
                   );
                   consumerTransportDisconnectTimeoutRef.current = null;
                 }
-                noteMediaPathConnected("consumer");
+                noteMediaPathConnected("consumer", transport);
                 return;
               }
 
@@ -4044,6 +4055,7 @@ export function useMeetSocket({
                           if (!restarted) {
                             escalateMediaPathFailure(
                               "consumer",
+                              transport,
                               "Consumer transport interrupted",
                             );
                           }
@@ -4067,6 +4079,7 @@ export function useMeetSocket({
                     if (!restarted) {
                       escalateMediaPathFailure(
                         "consumer",
+                        transport,
                         "Consumer transport failed",
                       );
                     }
@@ -6233,6 +6246,7 @@ export function useMeetSocket({
       if (entry.transport !== transport || reconnectInFlightRef.current) return;
       escalateMediaPathFailure(
         kind,
+        transport,
         kind === "producer"
           ? "Producer transport could not connect"
           : "Consumer transport could not connect",
