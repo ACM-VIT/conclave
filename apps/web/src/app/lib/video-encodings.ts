@@ -26,6 +26,9 @@ const {
   },
   profile: {
     simulcast: {
+      // Low keeps the same three layers as standard with the top one switched
+      // off, so a quality change adjusts the live producer and never has to
+      // replace it. A producer cannot gain or lose layers after it is created.
       low: [
         {
           rid: "q",
@@ -35,11 +38,19 @@ const {
           maxFramerate: 12,
         },
         {
+          rid: "h",
+          scaleResolutionDownBy: 1,
+          bitrateRatio: 1,
+          minBitrate: 0,
+          maxFramerate: 20,
+        },
+        {
           rid: "f",
           scaleResolutionDownBy: 1,
           bitrateRatio: 1,
           minBitrate: 0,
           maxFramerate: 20,
+          active: false,
         },
       ],
       standard: [
