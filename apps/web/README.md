@@ -35,6 +35,11 @@ Files served straight from the Cloudflare assets binding skip the worker, so
   or `next dev` every caller shares one bucket, and a production server with no
   limiter at all answers 503.
 
+A self-hosted Chromium shared browser is framed from the browser service's
+URL. Give the web build the same `BROWSER_PUBLIC_BASE_URL` as the service (or
+`BROWSER_HOST_ADDRESS` when it links noVNC ports directly) so `frame-src`
+allows it.
+
 The allowlist comes from local runs, in development and production builds, of
 a two-client call, a YouTube link embed and playback, the GIF picker, background
 blur, an image background and a face filter, noise cancellation and the mic

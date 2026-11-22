@@ -70,6 +70,23 @@ const originsFromEnv = (env: EnvSource, keys: readonly string[]): string[] => {
   return [...origins];
 };
 
+/**
+ * A self-hosted Chromium viewer is framed from the URL the browser service
+ * builds: BROWSER_PUBLIC_BASE_URL when set, otherwise each noVNC port on
+ * BROWSER_HOST_ADDRESS.
+ */
+const chromiumViewerSources = (env: EnvSource): string[] => {
+  const proxied = originsFromEnv(env, ["BROWSER_PUBLIC_BASE_URL"]);
+  if (proxied.length > 0) return proxied;
+  const host = env.BROWSER_HOST_ADDRESS?.trim();
+  if (!host) return [];
+  try {
+    return [`http://${new URL(`http://${host.includes(":") ? `[${host}]` : host}`).hostname}:*`];
+  } catch {
+    return [];
+  }
+};
+
 const withSocketScheme = (origin: string): string[] => [
   origin,
   origin.replace(/^http/, "ws"),
@@ -129,7 +146,12 @@ export const buildContentSecurityPolicy = ({
         OPENAI_API_ORIGIN,
       ]),
     ],
-    "frame-src": ["'self'", ...YOUTUBE_FRAME_ORIGINS, SHARED_BROWSER_FRAME_ORIGIN],
+    "frame-src": [
+      "'self'",
+      ...YOUTUBE_FRAME_ORIGINS,
+      SHARED_BROWSER_FRAME_ORIGIN,
+      ...chromiumViewerSources(env),
+    ],
     "worker-src": ["'self'", "blob:"],
     "manifest-src": ["'self'"],
     "object-src": ["'none'"],

@@ -40,6 +40,17 @@ describe("web security headers", () => {
     expect(local.get("img-src")).not.toContain("ws://localhost:3031");
   });
 
+  it("lets the shared browser frame a self-hosted Chromium viewer", () => {
+    const policyFor = (env: Record<string, string>) =>
+      directives(headerMap(false, env).get("Content-Security-Policy-Report-Only") ?? "");
+    const proxied = policyFor({ BROWSER_PUBLIC_BASE_URL: "https://browser.example.org/", BROWSER_HOST_ADDRESS: "10.0.4.7" });
+    expect(proxied.get("frame-src")).toContain("https://browser.example.org");
+    expect(proxied.get("frame-src")).not.toContain("http://10.0.4.7:*");
+    // Without a public base URL, the service links each noVNC port on the host directly.
+    expect(policyFor({ BROWSER_HOST_ADDRESS: "browser.internal" }).get("frame-src")).toContain("http://browser.internal:*");
+    expect(policyFor({}).get("frame-src")).not.toEqual(expect.arrayContaining([expect.stringMatching(/:\*$/)]));
+  });
+
   it("lets only this origin use the camera, microphone and screen capture", () => {
     const policy = headerMap(false).get("Permissions-Policy") ?? "";
     for (const feature of ["camera", "microphone", "display-capture"]) {
