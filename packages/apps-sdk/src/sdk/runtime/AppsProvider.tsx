@@ -248,14 +248,16 @@ export function AppsProvider({
     initialUpdateSentRef.current.delete(appId);
   }, []);
 
-  // Only the presented app is live. Every other local copy is dropped, and
-  // presenting an app again resyncs whatever the room kept, so a document a
-  // host cleared never comes back from a client's memory.
+  // Only the presented app is live, and only from the moment it was
+  // presented. Every other local copy is dropped, and an app entering the
+  // stage starts from the room's copy, so a document a host cleared never
+  // comes back from a client's memory.
   const applyServerAppsState = useCallback(
     (next: AppsState) => {
+      const stageChanged = serverStateRef.current.activeAppId !== next.activeAppId;
       serverStateRef.current = next;
       for (const appId of Array.from(docsRef.current.keys())) {
-        if (appId !== next.activeAppId) discardLocalApp(appId);
+        if (stageChanged || appId !== next.activeAppId) discardLocalApp(appId);
       }
       setState(next);
     },
