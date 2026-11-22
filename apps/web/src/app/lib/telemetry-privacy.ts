@@ -141,6 +141,8 @@ export function templatePath(pathname: string): string {
   const segments = pathname.split("/").filter(Boolean);
   const [first] = segments;
   if (!first) return "/";
+  // Already templated, as when /ingest scrubs the browser's scrubbed event.
+  if (segments.length === 1 && (first === "[code]" || first === "[path]")) return `/${first}`;
   if (first === "w") return "/w/[code]";
   if (first === "book") return "/book/[username]/[eventSlug]";
   if (segments.length === 1) {
@@ -228,8 +230,9 @@ const isPosition = (value: unknown): value is number =>
   typeof value === "number" && Number.isInteger(value) && value >= 0;
 
 /**
- * A frame keeps only its file, line, column, in-app flag and the chunk id
- * posthog-cli injected (a uuid), in the shape posthog-js sends.
+ * A frame keeps only its file, line, column, in-app flag and a chunk id the
+ * build's manifest lists, in the shape posthog-js sends. Any other id, uuid
+ * or not, is dropped: a made-up one could carry data.
  */
 const scrubFrame = (
   frame: ExceptionFrame,
@@ -249,7 +252,7 @@ const scrubFrame = (
     ...(isPosition(frame.lineno) ? { lineno: frame.lineno } : {}),
     ...(isPosition(frame.colno) ? { colno: frame.colno } : {}),
     ...(typeof frame.in_app === "boolean" ? { in_app: frame.in_app } : {}),
-    ...(chunkId === null ? {} : { chunk_id: chunkId }),
+    ...(chunkId !== null && chunkFiles.has(chunkId) ? { chunk_id: chunkId } : {}),
   };
 };
 

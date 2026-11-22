@@ -484,8 +484,17 @@ describe("stack frames", () => {
       "https://conclave.acmvit.in/[path]",
       "https://conclave.acmvit.in/[path]",
     ]);
+    expect(frames.map((frame: { chunk_id?: string }) => frame.chunk_id)).toEqual([
+      chunkId,
+      undefined,
+      undefined,
+      chunkId,
+      undefined,
+      chunkId,
+    ]);
     const unproven = scrub(event, { chunkFiles: new Map() }).properties.$exception_list[0].stacktrace.frames;
     expect(unproven[0].filename).toBe("https://conclave.acmvit.in/[path]");
+    expect(unproven.some((frame: { chunk_id?: string }) => frame.chunk_id)).toBe(false);
   });
 
   it("rebuilds an exception entry from the fields the SDK sets", () => {
@@ -669,6 +678,20 @@ describe("scrubUrl", () => {
 
     expect(properties).not.toHaveProperty("$referrer");
     expect(JSON.stringify(properties)).not.toMatch(/alice/);
+  });
+});
+
+describe("scrubbing twice", () => {
+  it.each([
+    "https://conclave.acmvit.in/lime-pear-plum/notes/today",
+    "https://conclave.acmvit.in/lime-pear-plum",
+    "https://conclave.acmvit.in/w/spring-demo",
+    "https://conclave.acmvit.in/privacy/terms",
+    "/lime-pear-plum/notes",
+  ])("leaves %s as the first scrub left it", (url) => {
+    const once = scrubUrl(url);
+
+    expect(scrubUrl(once)).toBe(once);
   });
 });
 
