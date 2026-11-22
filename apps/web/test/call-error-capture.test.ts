@@ -24,36 +24,46 @@ const setup = () => {
 };
 
 describe("installCallErrorCapture", () => {
-  it("reports a logged call failure with its original error and label", () => {
+  it("reports a logged call failure under its label, never the error's own text", () => {
     const { target, logged, reported } = setup();
-    const failure = new Error("Producer not found");
+    // A host's custom end-room message comes back from the SFU as the join error.
+    const failure = new Error("Riya, continue in room lime-pear-plum");
 
-    target.error("[Meets] Failed to produce video:", failure);
+    target.error("[Meets] Error joining room:", failure);
 
-    expect(logged).toEqual([["[Meets] Failed to produce video:", failure]]);
-    expect(reported).toEqual([
-      {
-        error: failure,
-        props: { source: "call_log", call_log: "[Meets] Failed to produce video" },
-      },
-    ]);
+    expect(logged).toEqual([["[Meets] Error joining room:", failure]]);
+    expect(reported).toHaveLength(1);
+    const [{ error, props }] = reported;
+    expect(props).toEqual({ source: "call_log", call_log: "[Meets] Error joining room" });
+    expect(error.name).toBe("Error");
+    expect(error.message).toBe("[Meets] Error joining room");
+    expect(error.stack).toContain("call-error-capture.test.ts");
+    expect(error.stack).not.toMatch(/Riya|lime-pear-plum/);
   });
 
-  it("builds an error from a server error string and drops logged objects", () => {
+  it("keeps the type of a browser error so failures stay grouped", () => {
+    const { target, reported } = setup();
+    const denied = new DOMException("Permission denied by system", "NotAllowedError");
+
+    target.error("[Meets] Failed to produce video:", denied);
+
+    expect(reported[0].error.name).toBe("NotAllowedError");
+    expect(reported[0].error.message).toBe("[Meets] Failed to produce video");
+  });
+
+  it("drops server error strings and logged objects", () => {
     const { target, reported } = setup();
 
     target.error(
       "[Meets] Consume error:",
       "Producer not found",
-      { error: "rate limited" },
+      { error: "Riya, continue in room lime-pear-plum" },
       { displayName: "Alice", chat: "secret plans" },
     );
 
     expect(reported).toHaveLength(1);
     expect(reported[0].error.name).toBe("CallError");
-    expect(reported[0].error.message).toBe(
-      "[Meets] Consume error Producer not found rate limited",
-    );
+    expect(reported[0].error.message).toBe("[Meets] Consume error");
   });
 
   it("ignores logs outside the call code", () => {

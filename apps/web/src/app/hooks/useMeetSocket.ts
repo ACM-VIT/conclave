@@ -86,6 +86,13 @@ import {
   completeAssistantTasks,
   mergeAssistantTask,
 } from "../lib/conclave-assistant";
+import { joinFailureReason } from "../lib/call-quality-metrics";
+import {
+  describeReconnectFailure,
+  reconnectErrorMessage,
+  reconnectFailureKind,
+} from "../lib/reconnect-failure";
+import { ServerError } from "../lib/server-error";
 import { telemetry } from "../lib/telemetry";
 import {
   applyAudioProducerNetworkProfile,
@@ -428,35 +435,6 @@ const getTransportDisconnectGraceMs = (): number => {
 const isMeetingDocumentHidden = (): boolean =>
   typeof document !== "undefined" && document.visibilityState !== "visible";
 
-const getRawReconnectErrorMessage = (error: unknown): string => {
-  if (error instanceof Error) return error.message;
-  if (typeof error === "string") return error;
-  return "";
-};
-
-const describeReconnectFailure = (error: unknown): string => {
-  const message = getRawReconnectErrorMessage(error).trim();
-  if (!message) {
-    return "The meeting server did not return an error reason.";
-  }
-  if (/timeout/i.test(message)) {
-    return "The meeting server did not respond before the timeout.";
-  }
-  if (/permission|notallowed/i.test(message)) {
-    return "Browser permission is blocking camera or microphone access.";
-  }
-  if (/missing live local media/i.test(message)) {
-    return "Local media was not ready yet. We will rejoin the room first and retry your devices.";
-  }
-  if (/missing room id/i.test(message)) {
-    return "The meeting room could not be found for reconnect.";
-  }
-  if (/xhr poll|websocket|transport|socket|network|fetch/i.test(message)) {
-    return "The browser could not reach the meeting server.";
-  }
-  return message;
-};
-
 const getResponseStatusFromError = (error: unknown): number | null => {
   if (!error || typeof error !== "object") return null;
   const status = (error as { responseStatus?: unknown; status?: unknown })
@@ -474,7 +452,7 @@ const isRecoverableReconnectFailure = (error: unknown): boolean => {
   if (responseStatus !== null) {
     return isRecoverableJoinInfoStatus(responseStatus);
   }
-  const message = getRawReconnectErrorMessage(error).trim();
+  const message = reconnectErrorMessage(error).trim();
   if (!message) return true;
   return /timeout|xhr poll|websocket|transport|socket|network|fetch|load failed|connection/i.test(
     message,
@@ -2796,7 +2774,7 @@ export function useMeetSocket({
               }
               return;
             }
-            scheduleRetry(code ?? error);
+            scheduleRetry(code ?? "server_error");
             return;
           }
           clearConsumerResumeRetry(producerId, consumerId);
@@ -3590,7 +3568,7 @@ export function useMeetSocket({
                   settled = true;
                   window.clearTimeout(timeoutId);
                   if ("error" in res) {
-                    reject(new Error(res.error));
+                    reject(new ServerError(res.error));
                   } else {
                     resolve(res);
                   }
@@ -3639,7 +3617,7 @@ export function useMeetSocket({
           (response: TransportResponse | { error: string }) => {
             if (!settleCreateTransport()) return;
             if ("error" in response) {
-              reject(new Error(response.error));
+              reject(new ServerError(response.error));
               return;
             }
 
@@ -3664,7 +3642,7 @@ export function useMeetSocket({
                   { transportId: transport.id, dtlsParameters },
                   (res: { success: boolean } | { error: string }) => {
                     if (!settleConnectTransport()) return;
-                    if ("error" in res) errback(new Error(res.error));
+                    if ("error" in res) errback(new ServerError(res.error));
                     else callback();
                   },
                 );
@@ -3695,7 +3673,7 @@ export function useMeetSocket({
                   { transportId: transport.id, kind, rtpParameters, appData },
                   (res: { producerId: string } | { error: string }) => {
                     if (!settleProduce()) return;
-                    if ("error" in res) errback(new Error(res.error));
+                    if ("error" in res) errback(new ServerError(res.error));
                     else callback({ id: res.producerId });
                   },
                 );
@@ -3927,7 +3905,7 @@ export function useMeetSocket({
           (response: TransportResponse | { error: string }) => {
             if (!settleCreateTransport()) return;
             if ("error" in response) {
-              reject(new Error(response.error));
+              reject(new ServerError(response.error));
               return;
             }
 
@@ -3952,7 +3930,7 @@ export function useMeetSocket({
                   { transportId: transport.id, dtlsParameters },
                   (res: { success: boolean } | { error: string }) => {
                     if (!settleConnectTransport()) return;
-                    if ("error" in res) errback(new Error(res.error));
+                    if ("error" in res) errback(new ServerError(res.error));
                     else callback();
                   },
                 );
@@ -6060,7 +6038,7 @@ export function useMeetSocket({
           "getProducers",
           (response: { producers: ProducerInfo[] } | { error: string }) => {
             if ("error" in response) {
-              reject(new Error(response.error));
+              reject(new ServerError(response.error));
             } else {
               resolve(response.producers || []);
             }
@@ -6631,7 +6609,7 @@ export function useMeetSocket({
               return;
             }
             if ("error" in response) {
-              reject(getJoinRoomRedirectError(response) ?? new Error(response.error));
+              reject(getJoinRoomRedirectError(response) ?? new ServerError(response.error));
               return;
             }
 
@@ -7675,7 +7653,6 @@ export function useMeetSocket({
                   roomId: payload.roomId,
                   userId: targetUserId,
                   state,
-                  reason: payload.reason,
                   downtimeMs: payload.downtimeMs,
                 });
               },
@@ -9012,7 +8989,7 @@ export function useMeetSocket({
             roomId: currentRoomIdRef.current ?? undefined,
             attempt,
             maxAttempts: MAX_RECONNECT_ATTEMPTS,
-            error: reconnectFailure,
+            failure_reason: reconnectFailureKind(err),
             usingTurnFallback: useTurnFallbackRef.current,
           });
           if (!isRecoverable) {
@@ -9072,7 +9049,7 @@ export function useMeetSocket({
       telemetry.capture("meet_reconnect_give_up", {
         roomId: currentRoomIdRef.current ?? undefined,
         attempts: reconnectAttemptsRef.current,
-        error: reconnectFailure,
+        failure_reason: reconnectFailureKind(lastReconnectError),
         usingTurnFallback: useTurnFallbackRef.current,
       });
       updateReconnectRecoveryStatus(
@@ -9398,7 +9375,7 @@ export function useMeetSocket({
         telemetry.capture("meet_join_failure", {
           roomId: targetRoomId,
           joinMode,
-          error: err instanceof Error ? err.message : String(err ?? ""),
+          failure_reason: joinFailureReason(createMeetError(err)),
         });
         const stream = localStreamRef.current;
         if (stream) {

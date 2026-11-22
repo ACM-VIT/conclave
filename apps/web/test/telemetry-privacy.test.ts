@@ -94,6 +94,26 @@ describe("scrubTelemetryEvent", () => {
   });
 });
 
+describe("server text", () => {
+  it("drops the message of an error the server wrote", () => {
+    const event = exceptionEvent();
+    event.properties.$exception_list = [
+      {
+        type: "ServerError",
+        value: "Riya, continue in room lime-pear-plum",
+        stacktrace: { type: "raw", frames: [] },
+      },
+    ];
+    const { properties } = scrubTelemetryEvent(event);
+
+    expect(properties.$exception_list[0]).toMatchObject({
+      type: "ServerError",
+      value: "[server message]",
+    });
+    expect(JSON.stringify(properties)).not.toMatch(/Riya|lime-pear-plum/);
+  });
+});
+
 describe("scrubUrl", () => {
   it.each([
     ["https://conclave.acmvit.in/", "https://conclave.acmvit.in/"],

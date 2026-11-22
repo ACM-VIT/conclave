@@ -1,7 +1,6 @@
 import type { TelemetryProps } from "./telemetry";
 
 const CALL_LOG_PREFIX = "[Meets]";
-const MAX_DETAIL_LENGTH = 200;
 const RATE_WINDOW_MS = 60_000;
 const MAX_REPORTS_PER_LABEL = 3;
 const MAX_REPORTS_PER_WINDOW = 30;
@@ -10,25 +9,17 @@ export type CallErrorReport = (error: unknown, props: TelemetryProps) => void;
 
 type ConsoleLike = { error: (...args: unknown[]) => void };
 
-const detailText = (value: unknown): string | null => {
-  if (typeof value === "string") return value.slice(0, MAX_DETAIL_LENGTH);
-  if (value && typeof value === "object") {
-    const record = value as { error?: unknown; message?: unknown };
-    const text =
-      typeof record.error === "string"
-        ? record.error
-        : typeof record.message === "string"
-          ? record.message
-          : null;
-    return text ? text.slice(0, MAX_DETAIL_LENGTH) : null;
-  }
-  return null;
+// V8 writes "Name: message" above the frames; Firefox and Safari write frames only.
+const framesOf = (stack: string): string => {
+  const firstFrame = stack.indexOf("\n    at ");
+  return firstFrame >= 0 ? stack.slice(firstFrame + 1) : stack;
 };
 
 /**
- * Turns a `console.error("[Meets] ...", ...)` call into an exception. Only the
- * developer-written label, Error objects and short server error strings are
- * kept; any other logged object is dropped.
+ * Turns a `console.error("[Meets] ...", ...)` call into an exception named by
+ * its developer-written label. A logged Error keeps its type and stack frames
+ * but never its message, which can carry server text such as a host's
+ * end-room note. Every other logged value is dropped.
  */
 export function describeCallError(
   args: unknown[],
@@ -39,13 +30,11 @@ export function describeCallError(
   }
   const label = first.trim().replace(/:$/, "");
   const thrown = rest.find((value): value is Error => value instanceof Error);
-  if (thrown) return { label, error: thrown };
-
-  const details = rest
-    .map(detailText)
-    .filter((text): text is string => Boolean(text));
-  const error = new Error([label, ...details].join(" "));
-  error.name = "CallError";
+  const error = new Error(label);
+  error.name = thrown?.name ?? "CallError";
+  if (thrown?.stack) {
+    error.stack = `${error.name}: ${label}\n${framesOf(thrown.stack)}`;
+  }
   return { label, error };
 }
 

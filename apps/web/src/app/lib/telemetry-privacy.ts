@@ -90,9 +90,17 @@ const scrubFrame = (frame: ExceptionFrame): ExceptionFrame => {
   return next;
 };
 
+// Thrown as ServerError (lib/server-error.ts): text the server wrote.
+const SERVER_ERROR_TYPE = "ServerError";
+
+const scrubExceptionValue = (entry: ExceptionEntry): unknown => {
+  if (entry.type === SERVER_ERROR_TYPE) return "[server message]";
+  return typeof entry.value === "string" ? scrubText(entry.value) : entry.value;
+};
+
 const scrubExceptionEntry = (entry: ExceptionEntry): ExceptionEntry => ({
   ...entry,
-  ...(typeof entry.value === "string" ? { value: scrubText(entry.value) } : {}),
+  value: scrubExceptionValue(entry),
   ...(entry.stacktrace && Array.isArray(entry.stacktrace.frames)
     ? {
         stacktrace: {

@@ -28,6 +28,7 @@ import {
   isSupportedChatImageType,
 } from "../lib/chat-images";
 import { replaceEmojiShortcodesInMessage } from "../lib/emoji-shortcodes";
+import { ServerError } from "../lib/server-error";
 import {
   ConclaveAssistantApiKeyRequiredError,
   type AssistantChatMessage,
@@ -215,7 +216,7 @@ export function useMeetChat({
             window.clearTimeout(timeoutId);
             if (!response || "error" in response) {
               reject(
-                new Error(
+                new ServerError(
                   response?.error || "Conclave could not authorize this answer.",
                 ),
               );
@@ -962,7 +963,7 @@ export function useMeetChat({
             ) => {
               window.clearTimeout(timeoutId);
               if (!response || "error" in response) {
-                reject(new Error(response?.error || "Image upload unavailable."));
+                reject(new ServerError(response?.error || "Image upload unavailable."));
                 return;
               }
               resolve(response);

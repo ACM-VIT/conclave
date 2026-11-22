@@ -111,6 +111,7 @@ import {
   getBrowserNetworkSnapshot,
 } from "./lib/network-information";
 import { resolveEffectiveCameraPublishSettings } from "./lib/media-quality-settings";
+import { ServerError } from "./lib/server-error";
 import {
   generateRoomCode,
   isSystemUserId,
@@ -2882,7 +2883,7 @@ export default function MeetsClient({
           settled = true;
           window.clearTimeout(timeoutId);
           if ("error" in response) {
-            reject(new Error(response.error));
+            reject(new ServerError(response.error));
             return;
           }
           resolve({
@@ -2939,7 +2940,7 @@ export default function MeetsClient({
           settled = true;
           window.clearTimeout(timeoutId);
           if (response?.error) {
-            reject(new Error(response.error));
+            reject(new ServerError(response.error));
             return;
           }
           if (response?.success !== true) {
