@@ -314,15 +314,17 @@ file_id() {
 # Readable by every user that deploys or backs up, whoever made it.
 [[ -e "$DEPLOY_LOCK" ]] || (umask 0111 && : >> "$DEPLOY_LOCK")
 lock_id="$(file_id "$DEPLOY_LOCK")"
-# A restarted run inherits fd 9 and SFU_DEPLOY_LOCK_HELD, the device and inode
-# of the lock it holds. It is trusted only when both name this very file. An
-# older release locked another file (and marked it with a bare flag), so its
-# lock is kept on fd 10 until this run ends, and this one is taken too.
+# A restarted run inherits fd 9; SFU_DEPLOY_LOCK_HELD only says to look at
+# it, whatever value an older release put there. What decides is the file:
+# when the inherited fd is this very lock (same device and inode), the lock is
+# already held and is used in place. When it is another file (an older
+# release locked elsewhere), that lock is kept on fd 10 until this run ends,
+# so deploys of either version stay out, and this one is taken too.
 inherited=""
 if [[ -n "${SFU_DEPLOY_LOCK_HELD:-}" ]] && { : <&9; } 2>/dev/null; then
   inherited="$(file_id 9 2>/dev/null || true)"
 fi
-if [[ -z "$inherited" || "$inherited" != "$lock_id" || "${SFU_DEPLOY_LOCK_HELD}" != "$lock_id" ]]; then
+if [[ "$inherited" != "$lock_id" ]]; then
   [[ -n "$inherited" ]] && exec 10<&9
   exec 9<"$DEPLOY_LOCK"
 fi

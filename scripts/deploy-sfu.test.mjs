@@ -739,18 +739,44 @@ test("a silent instance whose container state Docker cannot report is not rebuil
   });
 });
 
+// The release before this lock code: it locked OLD_DEPLOY_LOCK_FILE and
+// marked the lock held with a bare flag. A pull then brings this script and
+// the deploy restarts into it.
+const olderScript = async () => {
+  const current = await readFile(path.join(scripts, "deploy-sfu.sh"), "utf8");
+  const older = current.replace(
+    /^if \[\[ -d \/run\/lock \]\]; then\n[\s\S]*?^export SFU_DEPLOY_LOCK_HELD=.*\n/m,
+    'DEPLOY_LOCK="$OLD_DEPLOY_LOCK_FILE"\n[[ -n "${SFU_DEPLOY_LOCK_HELD:-}" ]] || exec 9>>"$DEPLOY_LOCK"\nflock -n 9 || exit 1\nexport SFU_DEPLOY_LOCK_HELD=1\n',
+  );
+  assert.notEqual(older, current);
+  return { current, older };
+};
+
+test("a deploy that restarts into this script holding the same lock file under the old flag deploys at once", async () => {
+  await withSfus({ "sfu-a": {}, "sfu-b": {} }, async (sfus) => {
+    const dir = await mkdtemp(path.join(tmpdir(), "conclave-deploy-lock-"));
+    const lock = path.join(dir, "deploy.lock");
+    const { current, older } = await olderScript();
+    try {
+      const result = await deploy(sfus, {
+        script: older,
+        upstream: { "scripts/deploy-sfu.sh": current },
+        env: { OLD_DEPLOY_LOCK_FILE: lock, SFU_DEPLOY_LOCK_FILE: lock, SFU_DEPLOY_LOCK_WAIT_SECONDS: "3" },
+      });
+      assert.equal(result.code, 0, result.output);
+      assert.match(result.output, /This pull changed deploy-sfu.sh; restarting with the new version/);
+      assert.doesNotMatch(result.output, /waiting up to/, "it never waits on its own lock");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 test("a deploy that restarts into this script from one that locked another file takes this lock too", async () => {
   await withSfus({ "sfu-a": { rooms: 1 }, "sfu-b": { rooms: 1 } }, async (sfus) => {
     const dir = await mkdtemp(path.join(tmpdir(), "conclave-deploy-lock-"));
     const lock = path.join(dir, "deploy.lock");
-    const current = await readFile(path.join(scripts, "deploy-sfu.sh"), "utf8");
-    // The release before: it locked another file and marked the lock held
-    // with a bare flag, then the pull brought this script and it restarted.
-    const older = current.replace(
-      /^if \[\[ -d \/run\/lock \]\]; then\n[\s\S]*?^export SFU_DEPLOY_LOCK_HELD=.*\n/m,
-      'DEPLOY_LOCK="$OLD_DEPLOY_LOCK_FILE"\n[[ -n "${SFU_DEPLOY_LOCK_HELD:-}" ]] || exec 9>>"$DEPLOY_LOCK"\nflock -n 9 || exit 1\nexport SFU_DEPLOY_LOCK_HELD=1\n',
-    );
-    assert.notEqual(older, current);
+    const { current, older } = await olderScript();
     let releaseDrains;
     const drainsReleased = new Promise((resolve) => (releaseDrains = resolve));
     let firstAtDrain;
