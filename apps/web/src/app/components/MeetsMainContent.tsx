@@ -623,8 +623,9 @@ export default function MeetsMainContent({
     refreshState,
   } = useApps();
   const { isActive: isGameActive, refresh: refreshGameState } = useGame();
-  // Q&A comes from the Q&A app when this server offers it, and from the old
-  // webinar events when it does not. Everything below reads this one source.
+  // Q&A comes from the Q&A app once this connection has the app's view, and
+  // from the old webinar events until then, or for good on a server that
+  // does not offer the app. Everything below reads this one source.
   const meetingQa = useMeetingQa({
     legacy: {
       entries: legacyQaEntries,
@@ -632,6 +633,7 @@ export default function MeetsMainContent({
       upvote: legacyUpvoteQuestion,
       moderate: legacyModerateQuestion,
     },
+    isWebinar: Boolean(webinarConfig?.enabled) || isWebinarAttendee,
     currentUserId,
   });
   const webinarQaEntries = meetingQa.entries;
@@ -1499,7 +1501,7 @@ export default function MeetsMainContent({
   }, [activityPanel, isPollsAvailable]);
 
   const isMeetingQaAvailable =
-    meetingQa.fromApp && isJoined && !webinarConfig?.enabled && !isWebinarAttendee;
+    meetingQa.offered && isJoined && !webinarConfig?.enabled && !isWebinarAttendee;
   const isMeetingQaOpen = activityPanel === "qa" && isMeetingQaAvailable;
   useEffect(() => {
     if (activityPanel === "qa" && !isMeetingQaAvailable) setActivityPanel(null);

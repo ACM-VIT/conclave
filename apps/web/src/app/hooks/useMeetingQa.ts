@@ -7,6 +7,8 @@ import type { WebinarQaEntry, WebinarQaModerateRequest } from "../lib/types";
 
 type Result = { ok: boolean; error?: string };
 
+const NO_ENTRIES: WebinarQaEntry[] = [];
+
 type LegacyQa = {
   entries: WebinarQaEntry[];
   submit?: (question: string) => Promise<Result>;
@@ -43,23 +45,32 @@ export const hasUnseenMeetingQuestion = ({
   );
 
 /**
- * The room's Q&A from whichever source this server has.
+ * The room's Q&A from whichever source this connection has right now.
  *
  * A server that runs the Q&A app offers it in its capabilities, and the list
- * and every action then go through the app. An older server does not, and
- * webinar Q&A keeps running on the `webinar:qa:*` events it always used.
- * Nothing is inferred from those events: without the capability, Q&A in a
- * regular meeting is simply not offered.
+ * and every action go through the app once the app's view has arrived. An
+ * older server does not offer it, and webinar Q&A keeps running on the
+ * `webinar:qa:*` events it always used.
+ *
+ * In between, a webinar stays on the old events: after the server has
+ * offered the app and before its view is in, however long that takes. The
+ * server feeds a connection the old events until that connection holds its
+ * own view, so one of the two is always current and nothing is shown twice.
+ * Nothing is inferred from the old events about a regular meeting, which
+ * they do not carry: there Q&A is offered when the server offers the app.
  */
 export function useMeetingQa({
   legacy,
+  isWebinar,
   currentUserId,
 }: {
   legacy: LegacyQa;
+  isWebinar: boolean;
   currentUserId?: string | null;
 }) {
-  const fromApp = useAuthorityAvailable(qaContract);
+  const offered = useAuthorityAvailable(qaContract);
   const qa = useQa();
+  const fromApp = offered && qa.isReady;
 
   const appEntries = useMemo<WebinarQaEntry[]>(
     () =>
@@ -88,22 +99,36 @@ export function useMeetingQa({
     [moderate],
   );
 
-  if (!fromApp) {
+  if (fromApp) {
     return {
+      offered,
+      fromApp: true as const,
+      entries: appEntries,
+      askNeedsIdentity: qa.askNeedsIdentity,
+      onSubmit: qa.canAsk ? ask : undefined,
+      onUpvote: qa.canUpvote ? toggleUpvote : undefined,
+      onModerate: qa.canModerate ? appModerate : undefined,
+    };
+  }
+  if (offered && !isWebinar) {
+    // A meeting whose view of the app is on its way: nothing to show yet.
+    return {
+      offered,
       fromApp: false as const,
-      entries: legacy.entries,
+      entries: NO_ENTRIES,
       askNeedsIdentity: false,
-      onSubmit: legacy.submit,
-      onUpvote: legacy.upvote,
-      onModerate: legacy.moderate,
+      onSubmit: undefined,
+      onUpvote: undefined,
+      onModerate: undefined,
     };
   }
   return {
-    fromApp: true as const,
-    entries: appEntries,
-    askNeedsIdentity: qa.askNeedsIdentity,
-    onSubmit: qa.canAsk ? ask : undefined,
-    onUpvote: qa.canUpvote ? toggleUpvote : undefined,
-    onModerate: qa.canModerate ? appModerate : undefined,
+    offered,
+    fromApp: false as const,
+    entries: legacy.entries,
+    askNeedsIdentity: false,
+    onSubmit: legacy.submit,
+    onUpvote: legacy.upvote,
+    onModerate: legacy.moderate,
   };
 }
