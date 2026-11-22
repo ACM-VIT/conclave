@@ -27,6 +27,16 @@ const MAX_QUEUED = 50;
 
 type Delivery = (posthog: PostHog) => void;
 
+// Super properties ride on every event. Only the SDK's own (`$`, `__`,
+// distinct_id) and the ones registered below may stay in storage; anything
+// else, such as a value a script seeded there, is dropped on load.
+const REGISTERED_PROPERTIES = new Set(["client_version"]);
+const isAllowedSuperProperty = (key: string): boolean =>
+  key.startsWith("$") ||
+  key.startsWith("__") ||
+  key === "distinct_id" ||
+  REGISTERED_PROPERTIES.has(key);
+
 let posthog: PostHog | null = null;
 let queue: Delivery[] | null = null;
 
@@ -56,6 +66,9 @@ const initPostHog = (client: PostHog, key: string): void => {
     },
     before_send: scrubTelemetryEvent,
   });
+  for (const key of Object.keys(client.persistence?.props ?? {})) {
+    if (!isAllowedSuperProperty(key)) client.unregister(key);
+  }
   client.register({
     client_version: process.env.NEXT_PUBLIC_CONCLAVE_CLIENT_VERSION,
   });

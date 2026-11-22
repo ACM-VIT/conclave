@@ -6,8 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const posthog = vi.hoisted(() => ({
   init: vi.fn(),
   register: vi.fn(),
+  unregister: vi.fn(),
   capture: vi.fn(),
   captureException: vi.fn(),
+  persistence: { props: {} as Record<string, unknown> },
 }));
 vi.mock("posthog-js", () => ({ default: posthog }));
 vi.mock("posthog-js/dist/exception-autocapture", () => ({}));
@@ -71,6 +73,26 @@ describe("error boundaries on the first page load", () => {
         digest: "digest-1",
       }),
     );
+  });
+
+  it("drops super properties seeded in storage, keeping the SDK's and ours", async () => {
+    posthog.persistence.props = {
+      distinct_id: "0196f0a1",
+      $device_id: "0196f0a1",
+      $sesid: [1, "s", 2],
+      __timers: {},
+      client_version: "0b2d3b48",
+      meeting_note: "Meet Mira in sample-room at seven",
+      room: { id: "hazel-lime-pine" },
+    };
+    const { default: RouteError } = await import("../src/app/error");
+    await renderOnFirstLoad(RouteError);
+
+    await vi.waitFor(() => expect(posthog.captureException).toHaveBeenCalled());
+    expect(posthog.unregister.mock.calls.map(([key]) => key).sort()).toEqual([
+      "meeting_note",
+      "room",
+    ]);
   });
 
   it("loads nothing and sends nothing without a project key", async () => {

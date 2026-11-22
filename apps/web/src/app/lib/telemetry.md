@@ -113,6 +113,8 @@ properties (`utm_*`, `fbclid`, `gclid` and friends) and the search keywords the
 SDK takes from a search-engine referrer (`ph_keyword`), with their `$initial_`
 and `$session_entry_` copies, and `save_campaign_params` is off. `$search_engine`
 stays. Any object or array property other than `$exception_list` is dropped.
+Super properties are an allowlist: on load, `lib/telemetry.ts` unregisters any
+stored one that is not the SDK's own or `client_version`.
 Stack frames in our own scripts (`/_next/static/`, `/mediapipe/`, the
 transcript and effects worklets and so on) on the page's own origin keep their path so they can be symbolicated. URL
 properties never do.
