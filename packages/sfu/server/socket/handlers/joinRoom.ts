@@ -60,7 +60,7 @@ import {
   ROOM_RECOVERY_PASS_TTL_MS,
 } from "../../roomRecoveryPass.js";
 import { offerLapsedRoom } from "../../admin/controlPlane.js";
-import type { LostRoom } from "../../roomRecoveryLedger.js";
+import type { LostRoom, RecalledRoom } from "../../roomRecoveryLedger.js";
 import { getSocketAuthUser } from "../auth.js";
 import type { ConnectionContext } from "../context.js";
 import { registerAdminHandlers } from "./adminHandlers.js";
@@ -93,6 +93,18 @@ const normalizeIdentifier = (
   }
   return normalized;
 };
+
+// Whose code it is, as far as anyone recorded: who booked it, else whoever
+// made it, which the recovery record keeps. Undefined when no one recorded.
+const recordedOwnerOf = (
+  booking: ReturnType<typeof getScheduledMeetingByRoomCode>,
+  recalled: RecalledRoom,
+): string | null | undefined =>
+  booking && booking.status !== "cancelled"
+    ? booking.hostEmail
+    : recalled.owner
+      ? recalled.owner.email
+      : undefined;
 
 export const registerJoinRoomHandler = (context: ConnectionContext): void => {
   const { socket, io, state } = context;
@@ -376,11 +388,21 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             });
             return;
           }
+          // The account a code belongs to opens it from anywhere: ownership
+          // is on the server, not in what a tab remembers.
+          const opensOwnCode = async (): Promise<boolean> =>
+            !isWebinarAttendeeJoin &&
+            Boolean(normalizedJoinEmail) &&
+            recordedOwnerOf(
+              getScheduledMeetingByRoomCode(state.scheduledMeetings, clientId, roomId),
+              await state.roomRecovery.recall(roomChannelId),
+            ) === normalizedJoinEmail;
           if (
             !scheduledWebinarForAttendee &&
             !hostRequested &&
             !allowRoomCreation &&
-            !clientPolicy.allowNonHostRoomCreation
+            !clientPolicy.allowNonHostRoomCreation &&
+            !(await opensOwnCode())
           ) {
             respond(callback, { error: "No room found." });
             return;
@@ -402,30 +424,26 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             const recalled = result.recalled;
             if (createdRoom && recalled) {
               lostRoom = recalled.lost;
-              // Whose code it is: who booked it, else whoever made it, which
-              // the record keeps. A code with no record is made by this join,
-              // and belongs to its account if it is signed in, unless the join
-              // brings a recovery pass for the code: then a call ran here
-              // before, on an SFU whose record this one cannot read, and
+              // A code no one has recorded an owner for is made by this
+              // join, and belongs to its account if it is signed in, unless
+              // the join brings a recovery pass for the code: then a call ran
+              // here before, on an SFU whose record this one cannot read, and
               // nobody here knows whose it was.
-              const booking = getScheduledMeetingByRoomCode(
-                state.scheduledMeetings,
-                clientId,
-                roomId,
+              const recordedOwner = recordedOwnerOf(
+                getScheduledMeetingByRoomCode(state.scheduledMeetings, clientId, roomId),
+                recalled,
               );
               room.ownerEmail =
-                booking && booking.status !== "cancelled"
-                  ? booking.hostEmail
-                  : recalled.owner
-                    ? recalled.owner.email
-                    : isWebinarAttendeeJoin ||
-                        isRecoveryPassFor(
-                          data?.roomRecoveryPass,
-                          roomChannelId,
-                          config.sfuSecret,
-                        )
-                      ? null
-                      : normalizedJoinEmail || null;
+                recordedOwner !== undefined
+                  ? recordedOwner
+                  : isWebinarAttendeeJoin ||
+                      isRecoveryPassFor(
+                        data?.roomRecoveryPass,
+                        roomChannelId,
+                        config.sfuSecret,
+                      )
+                    ? null
+                    : normalizedJoinEmail || null;
             }
           } catch (error) {
             if (error instanceof RoomOwnershipError) {

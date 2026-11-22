@@ -1342,6 +1342,61 @@ describe("the account a code belongs to", () => {
     expect((await join(state, guestOpener)).status).toBe("waiting");
   });
 
+  // A fresh tab, or another browser on the same account, keeps no record of
+  // having been in the meeting, so the web does not ask to open the code.
+  const inAFreshTab = (account: typeof owner, sessionId: string) => ({
+    ...account,
+    sessionId,
+    allowRoomCreation: false,
+  });
+
+  it.each([
+    ["a fresh tab", "fresh-tab"],
+    ["another browser signed in to the same account", "other-browser"],
+  ])("reopens their emptied meeting from %s, as its host", async (_, sessionId) => {
+    useClock();
+    const state = makeState();
+    const created = await join(state, owner);
+    await emptyOut(state, created.peer);
+
+    const back = await join(state, inAFreshTab(owner, sessionId));
+    expect(back.status).toBe("joined");
+    expect(back.context.currentClient).toBeInstanceOf(Admin);
+  });
+
+  it("reopens it from a fresh tab after the SFU restarts", async () => {
+    useClock();
+    const before = makeState();
+    const created = await join(before, owner);
+    await emptyOut(before, created.peer);
+    const after = await restart(before);
+
+    const back = await join(after, inAFreshTab(owner, "fresh-tab"));
+    expect(back.status).toBe("joined");
+    expect(back.context.currentClient).toBeInstanceOf(Admin);
+  });
+
+  it("reopens the scheduled meeting they booked from a fresh tab", async () => {
+    useClock();
+    const state = makeState();
+    schedule(state);
+    const back = await join(state, inAFreshTab(scheduledHost, "fresh-tab"));
+    expect(back.status).toBe("joined");
+    expect(back.context.currentClient).toBeInstanceOf(Admin);
+  });
+
+  it("does not let another account or a guest open the emptied code from a fresh tab", async () => {
+    useClock();
+    const state = makeState();
+    const created = await join(state, owner);
+    await emptyOut(state, created.peer);
+    const other = { ...owner, userId: "other@example.com", email: "other@example.com" };
+
+    expect((await join(state, inAFreshTab(other, "x"))).response.error).toBe("No room found.");
+    expect((await join(state, guest)).response.error).toBe("No room found.");
+    expect(state.rooms.size).toBe(0);
+  });
+
   it("is not whoever signs in next: another account knocks", async () => {
     useClock();
     const state = makeState();
