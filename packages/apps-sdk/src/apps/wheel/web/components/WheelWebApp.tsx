@@ -83,16 +83,23 @@ export function WheelWebApp() {
   const reducedMotion = useReducedMotion();
 
   const [isSpinning, setIsSpinning] = useState(false);
-  const [heldSpin, setHeldSpin] = useState<WheelSpin | null>(null);
-  const [revealed, setRevealed] = useState(false);
+  const [landedSpinId, setLandedSpinId] = useState<string | null>(null);
+  const [revealedSpinId, setRevealedSpinId] = useState<string | null>(null);
+  const [dismissedSpinId, setDismissedSpinId] = useState<string | null>(null);
   const [announcement, setAnnouncement] = useState("");
   const [soundOn, setSoundOn] = useState(readSoundPreference);
 
   const revealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const failoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const liveLabelRef = useRef<HTMLSpanElement | null>(null);
+  const spinCountRef = useRef(0);
   const canEditRef = useRef(canEdit);
   canEditRef.current = canEdit;
+
+  const frozen = spin && spin.spinId !== dismissedSpinId ? spin : null;
+  const landed = Boolean(frozen && !isSpinning && landedSpinId === frozen.spinId);
+  const winner = frozen && landed ? frozen.entries[frozen.winnerIndex] ?? null : null;
+  const showReveal = Boolean(winner && frozen && revealedSpinId === frozen.spinId);
 
   const soundsRef = useRef<WheelSounds | null>(null);
   if (soundsRef.current === null && typeof window !== "undefined") {
@@ -118,8 +125,6 @@ export function WheelWebApp() {
 
   const activeSpinId = spin?.spinId;
   useEffect(() => {
-    setHeldSpin(null);
-    setRevealed(false);
     if (revealTimerRef.current) {
       clearTimeout(revealTimerRef.current);
       revealTimerRef.current = null;
@@ -130,19 +135,19 @@ export function WheelWebApp() {
     }
   }, [activeSpinId]);
 
+  const shownSpinId = showReveal && frozen ? frozen.spinId : null;
   const closeReveal = useCallback(() => {
-    setHeldSpin(null);
-    setRevealed(false);
-  }, []);
+    if (shownSpinId) setDismissedSpinId(shownSpinId);
+  }, [shownSpinId]);
 
   useEffect(() => {
-    if (!revealed) return;
+    if (!shownSpinId) return;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") closeReveal();
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [revealed, closeReveal]);
+  }, [shownSpinId, closeReveal]);
 
   const handleRequestSpin = useCallback(() => {
     if (!canEdit || isSpinning || revealTimerRef.current) return;
@@ -166,13 +171,15 @@ export function WheelWebApp() {
 
   const handleSettled = useCallback(
     (settled: WheelSpin, fresh: boolean) => {
-      if (!fresh) return;
+      setLandedSpinId(settled.spinId);
       const winner = settled.entries[settled.winnerIndex];
       if (!winner) return;
-
-      setAnnouncement(`Winner: ${winner.label}`);
-      setHeldSpin(settled);
-      setRevealed(false);
+      spinCountRef.current += 1;
+      setAnnouncement(`Spin ${spinCountRef.current} winner: ${winner.label}`);
+      if (!fresh) {
+        setRevealedSpinId(settled.spinId);
+        return;
+      }
 
       const isSpinner = Boolean(user?.id) && user?.id === settled.spunById;
       const finalizeResult = () => {
@@ -200,7 +207,7 @@ export function WheelWebApp() {
       revealTimerRef.current = setTimeout(() => {
         revealTimerRef.current = null;
         soundsRef.current?.win();
-        setRevealed(true);
+        setRevealedSpinId(settled.spinId);
         if (isSpinner && canEditRef.current) finalizeResult();
       }, REVEAL_DELAY_MS);
     },
@@ -225,15 +232,6 @@ export function WheelWebApp() {
     const existing = new Set(entries.map((entry) => entry.label.toLowerCase()));
     return rosterLabels.filter((label) => !existing.has(label.toLowerCase()));
   }, [entries, rosterLabels]);
-
-  const editing = useCallback(
-    <Args extends unknown[]>(action: (...args: Args) => void) =>
-      (...args: Args) => {
-        closeReveal();
-        action(...args);
-      },
-    [closeReveal]
-  );
 
   const handleAddParticipants = useCallback(() => {
     if (missingParticipantLabels.length === 0) return;
@@ -260,9 +258,6 @@ export function WheelWebApp() {
     replaceEntries(doc, sorted);
   }, [doc]);
 
-  const held = heldSpin && !isSpinning ? heldSpin : null;
-  const winner = held ? held.entries[held.winnerIndex] ?? null : null;
-  const showReveal = Boolean(winner && revealed);
   const winnerOnWheel = Boolean(
     winner && entries.some((entry) => entry.id === winner.id)
   );
@@ -329,7 +324,7 @@ export function WheelWebApp() {
                 <div className="h-[38px]" />
               ))}
             <p className="min-h-4 max-w-full text-[12px] leading-4 text-[#fafafa]/55 [overflow-wrap:anywhere]">
-              {showReveal && held ? `Spun by ${held.spunByName}` : null}
+              {showReveal && frozen ? `Spun by ${frozen.spunByName}` : null}
             </p>
           </div>
 
@@ -342,12 +337,12 @@ export function WheelWebApp() {
             }
           >
             <WheelStage
-              entries={held ? held.entries : entries}
+              entries={frozen ? frozen.entries : entries}
               spin={spin}
               canSpin={canEdit}
               sounds={soundsRef.current}
               reducedMotion={reducedMotion}
-              highlightIndex={held ? held.winnerIndex : null}
+              highlightIndex={frozen && landed ? frozen.winnerIndex : null}
               onRequestSpin={handleRequestSpin}
               onSettled={handleSettled}
               onSpinningChange={setIsSpinning}
@@ -365,10 +360,7 @@ export function WheelWebApp() {
                   <button
                     type="button"
                     data-wheel-action="spin-again"
-                    onClick={() => {
-                      closeReveal();
-                      handleRequestSpin();
-                    }}
+                    onClick={handleRequestSpin}
                     disabled={entries.length < 2}
                     className={`${PRIMARY_BUTTON} w-full @min-[720px]:w-auto`}
                   >
@@ -399,7 +391,7 @@ export function WheelWebApp() {
                 type="button"
                 data-wheel-action="spin"
                 onClick={handleRequestSpin}
-                disabled={!canSpin || Boolean(held)}
+                disabled={!canSpin || Boolean(frozen)}
                 className={`${PRIMARY_BUTTON} w-full @min-[720px]:w-auto @min-[720px]:min-w-40`}
               >
                 {isSpinning ? "Spinning" : "Spin"}
@@ -420,12 +412,12 @@ export function WheelWebApp() {
             removeWinnerOnDone={removeWinnerOnDone}
             missingParticipantCount={missingParticipantLabels.length}
             onToggleSound={() => setSoundOn((value) => !value)}
-            onAddEntries={editing((labels: string[]) => addEntries(doc, labels))}
-            onAddParticipants={editing(handleAddParticipants)}
-            onRemoveEntry={editing((entryId: string) => removeEntryById(doc, entryId))}
-            onShuffle={editing(handleShuffle)}
-            onSort={editing(handleSort)}
-            onClearEntries={editing(() => clearEntries(doc))}
+            onAddEntries={(labels) => addEntries(doc, labels)}
+            onAddParticipants={handleAddParticipants}
+            onRemoveEntry={(entryId) => removeEntryById(doc, entryId)}
+            onShuffle={handleShuffle}
+            onSort={handleSort}
+            onClearEntries={() => clearEntries(doc)}
             onClearHistory={() => clearHistory(doc)}
             onToggleRemoveWinner={(value) => setRemoveWinnerOnDone(doc, value)}
           />
