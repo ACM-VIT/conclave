@@ -1170,13 +1170,19 @@ redis.call("HSET", key, meetingId, nextPayload)
 return nextPayload
 `;
 
-// Replaces a meeting's record only if it still is the one that was read.
-const REPLACE_RECORD_IF_UNCHANGED_SCRIPT = `
-if redis.call("HGET", KEYS[1], ARGV[1]) == ARGV[2] then
-  redis.call("HSET", KEYS[1], ARGV[1], ARGV[3])
-  return 1
+// Moves the removed invitees a meeting's record still carries into their
+// set, and takes them out of the record, only if the record still is the one
+// that was read. Otherwise another SFU has moved them already, and a host may
+// have let someone back in since.
+const MOVE_CARRIED_REMOVALS_SCRIPT = `
+if redis.call("HGET", KEYS[1], ARGV[1]) ~= ARGV[2] then
+  return 0
 end
-return 0
+redis.call("HSET", KEYS[1], ARGV[1], ARGV[3])
+for i = 4, #ARGV do
+  redis.call("SADD", KEYS[2], ARGV[i])
+end
+return 1
 `;
 
 const bookingSlotLockTtlMs = (): number => {
@@ -1258,29 +1264,30 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
   }
 
   // A record written before removed invitees had a set of their own carries
-  // them inside the meeting. Reading one moves them to the set, then takes
-  // them out of the record. Left there they would come back at every read,
-  // also after a host had let the person in again.
+  // them inside the meeting. Reading one moves them to the set and takes them
+  // out of the record, in one step. Left there they would come back at every
+  // read, also after a host had let the person in again. Callers take the
+  // meeting's removed invitees from the set.
   private async readRecord(record: string): Promise<ScheduledMeeting | null> {
     const meeting = normalizeStoredMeeting(JSON.parse(record));
     const carried = meeting?.readmissionRequiredEmails ?? [];
     if (!meeting || carried.length === 0) return meeting;
-    await this.client.sAdd(
-      this.removedInviteesKey,
-      carried.map((email) => this.removedInvitee(meeting.id, email)),
-    );
-    for (const email of carried) {
-      void this.fallback.setInviteeReadmission?.(meeting.id, email, true);
-    }
-    await this.client.sendCommand([
+    const moved = await this.client.sendCommand([
       "EVAL",
-      REPLACE_RECORD_IF_UNCHANGED_SCRIPT,
-      "1",
+      MOVE_CARRIED_REMOVALS_SCRIPT,
+      "2",
       this.key,
+      this.removedInviteesKey,
       meeting.id,
       record,
       meetingRecord(JSON.parse(record) as object),
+      ...carried.map((email) => this.removedInvitee(meeting.id, email)),
     ]);
+    if (Number(moved) === 1) {
+      for (const email of carried) {
+        void this.fallback.setInviteeReadmission?.(meeting.id, email, true);
+      }
+    }
     return meeting;
   }
 

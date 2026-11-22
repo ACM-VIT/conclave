@@ -334,6 +334,50 @@ describe("removed invitees kept inside the meeting, as stores used to keep them"
     await setRemoved(sfu, false);
     expect(isInvited(await startSfu("redis"))).toBe(true);
   });
+
+  redisTest("are not put back by an SFU that read the old record before another moved them", async () => {
+    useStore("redis");
+    const meeting = await scheduleIntroCall(await startSfu("redis"));
+    const client = createClient({ url: process.env.SFU_PERSISTENCE_REDIS_URL });
+    await client.connect();
+    const key = `${process.env.SFU_PERSISTENCE_REDIS_KEY_PREFIX}:scheduled-meetings`;
+    const record = await client.hGet(key, meeting.id);
+    await client.hSet(key, meeting.id, withRemovalInside(record!));
+    await client.quit();
+
+    // A slow SFU: Redis has answered its read of the old record, and it has
+    // not acted on that answer yet.
+    const slow = {
+      persistence: createScheduledMeetingPersistence(),
+      meetings: createScheduledMeetingStore(),
+    };
+    running.push(slow);
+    const slowClient = (slow.persistence as unknown as {
+      client: { hVals: (key: string) => Promise<string[]> };
+    }).client;
+    const hVals = slowClient.hVals.bind(slowClient);
+    let answered = false;
+    let goOn: () => void = () => {};
+    const held = new Promise<void>((resolve) => (goOn = resolve));
+    slowClient.hVals = async (hashKey) => {
+      const values = await hVals(hashKey);
+      answered = true;
+      await held;
+      return values;
+    };
+    const slowLoading = loadPersistedMeetings(slow.meetings, slow.persistence);
+    await vi.waitFor(() => expect(answered).toBe(true), { timeout: 10_000, interval: 10 });
+
+    // Meanwhile another SFU moves the removal, and a host lets the person in.
+    const quick = await startSfu("redis");
+    expect(isInvited(quick)).toBe(false);
+    await setRemoved(quick, false);
+
+    goOn();
+    await slowLoading;
+    expect(isInvited(slow)).toBe(true);
+    expect(isInvited(await startSfu("redis"))).toBe(true);
+  });
 });
 
 describe("a json schedule store whose file cannot be read", () => {
