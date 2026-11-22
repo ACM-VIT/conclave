@@ -103,8 +103,9 @@ if [[ "$apply" != "true" ]]; then
 fi
 
 # A backup taken while files are being replaced would archive a half-restored
-# state dir.
+# state dir, and a deploy could start an SFU on them.
 take_backup_lock
+take_sfu_host_lock
 
 # Any HTTP answer, a 503 included, means an SFU process still holds the files.
 for url in ${CONCLAVE_SFU_HEALTH_URLS:-http://127.0.0.1:3031/health http://127.0.0.1:3032/health}; do

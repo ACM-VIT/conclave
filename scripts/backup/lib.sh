@@ -262,6 +262,24 @@ take_backup_lock() {
   flock -n 8 || die "another backup or restore is running on this host (${BACKUP_LOCAL_DIR}/.backup.lock)"
 }
 
+# No deploy may start or replace an SFU while a backup copies or a restore
+# replaces files, so both hold the host's deploy lock (the one deploy-sfu.sh
+# takes, in /run/lock, which the backup's systemd unit sees despite its
+# private /tmp) for their whole run, waiting up to
+# BACKUP_DEPLOY_LOCK_WAIT_SECONDS for a deploy already under way. The file is
+# made readable by every user that deploys.
+take_sfu_host_lock() {
+  local lock="${SFU_DEPLOY_LOCK_FILE:-}" wait="${BACKUP_DEPLOY_LOCK_WAIT_SECONDS:-900}"
+  if [[ -z "$lock" ]]; then
+    if [[ -d /run/lock ]]; then lock=/run/lock/conclave-sfu-deploy.lock; else lock=/tmp/conclave-sfu-deploy.lock; fi
+  fi
+  [[ -e "$lock" ]] || (umask 0111 && : >> "$lock") || die "cannot create the host deploy lock ${lock}"
+  exec 7<"$lock" || die "cannot open the host deploy lock ${lock}"
+  flock -n 7 && return 0
+  log "An SFU deploy holds ${lock}; waiting up to ${wait}s for it"
+  flock -w "$wait" 7 || die "an SFU deploy held ${lock} for ${wait}s, so nothing was copied or replaced; rerun once the deploy ends"
+}
+
 # Prints one string or integer field of a JSON object read from stdin, or
 # nothing.
 json_field() {

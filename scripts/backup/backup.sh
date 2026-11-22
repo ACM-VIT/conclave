@@ -29,8 +29,10 @@ recipients="${BACKUP_AGE_RECIPIENTS_FILE:-/etc/conclave/backup-recipients.txt}"
 for tool in age sqlite3 sha256sum openssl tar python3; do
   command -v "$tool" >/dev/null || die "${tool} is not installed"
 done
-# A second backup could release this one's fence or copy around it.
+# A second backup could release this one's fence or copy around it, and a
+# deploy could start an SFU between the copies.
 take_backup_lock
+take_sfu_host_lock
 # Nothing to back up is a failure, never an empty success.
 [[ -d "$STATE_DIR" ]] || die "the state dir ${STATE_DIR} does not exist, so there is nothing to back up; check CONCLAVE_STATE_DIR"
 
@@ -103,7 +105,10 @@ note_until() {
 # SFU that started meanwhile.
 renew_fences() {
   local base reply left
-  (( ${#fenced[@]} > 0 )) || return 0
+  if (( ${#fenced[@]} == 0 )); then
+    writers_fenced "$STATE_DIR" "${held_ids[*]}" "${unanswered[@]}" || die "an SFU could write while the backup copies; nothing was archived"
+    return 0
+  fi
   left=$(( fence_until - $(now_ms) ))
   (( left >= FENCE_MARGIN_MS )) ||
     die "only ${left} ms of the write fence was left when the copy finished (at least ${FENCE_MARGIN_MS} ms needed); raise BACKUP_FENCE_HOLD_MS"

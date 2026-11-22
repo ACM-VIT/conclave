@@ -25,8 +25,10 @@ const missingWithRedis = [...missing, ...["redis-server", "redis-cli"].filter((t
 
 // A stand-in docker CLI that answers from a JSON list of containers, so a
 // backup sees the SFU containers a test describes and never this host's.
-// Each entry: { id, mounts, status, env, user, image }; { "fail": true }
-// makes every command fail.
+// Each entry: { id, mounts, status, env, user, image, runningAfterChecks };
+// runningAfterChecks: the container is reported running from that many
+// inspections on, as a deploy starting it would. { "fail": true } makes every
+// command fail.
 const dockerStandIn = `#!/usr/bin/env node
 const fs = require("node:fs");
 const listed = JSON.parse(fs.readFileSync(process.env.BACKUP_TEST_DOCKER, "utf8"));
@@ -38,6 +40,10 @@ if (args[0] === "ps") return void out(listed.map((c) => c.id));
 if (args[0] === "inspect" && args[1] !== "-f") {
   const found = args.slice(1).map((id) => listed.find((entry) => entry.id === id));
   if (found.some((entry) => !entry)) process.exit(1);
+  const countFile = process.env.BACKUP_TEST_DOCKER + ".inspections";
+  const seen = fs.existsSync(countFile) ? Number(fs.readFileSync(countFile, "utf8")) : 0;
+  fs.writeFileSync(countFile, String(seen + 1));
+  for (const entry of found) if (entry.runningAfterChecks !== undefined && seen >= entry.runningAfterChecks) entry.status = "running";
   return void out([JSON.stringify(found.map((entry) => ({
     Id: entry.id,
     State: { Status: entry.status },
@@ -78,6 +84,8 @@ const setUp = async (root, extraConfig = []) => {
     config,
     [
       `BACKUP_ID_LOOKUP=${lookup}`,
+      // The host's deploy lock, per test.
+      `SFU_DEPLOY_LOCK_FILE=${path.join(root, "deploy.lock")}`,
       `CONCLAVE_REPO=${repo}`,
       `CONCLAVE_STATE_DIR=${state}`,
       `BACKUP_AGE_RECIPIENTS_FILE=${path.join(root, "recipients.txt")}`,
@@ -805,7 +813,7 @@ test(
       const { state, local, env, backup } = await setUp(root);
       withDatabase(state);
       await mkdir(local, { recursive: true });
-      holder = spawn("bash", ["-c", 'exec 8>>"$1"; flock -n 8 && echo locked && sleep 30', "_", path.join(local, ".backup.lock")], { env });
+      holder = spawn("bash", ["-c", 'exec 8>>"$1"; flock -n 8 && echo locked && exec sleep 30', "_", path.join(local, ".backup.lock")], { env });
       await new Promise((done) => holder.stdout.once("data", done));
       await assert.rejects(backup("--local-only"), /another backup or restore is running on this host/);
       assert.deepEqual(await archives(local), []);
@@ -1164,6 +1172,51 @@ test(
     } finally {
       await sfu.close();
       await extras.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "an SFU that a deploy starts between the copies stops the backup, even when no SFU held the fence",
+  { skip: missing.length > 0 && `needs ${missing.join(", ")} on PATH` },
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+    try {
+      const { state, local, setDocker, backup } = await setUp(root);
+      withDatabase(state);
+      // Stopped at the first check, running from the second on.
+      await setDocker([{ id: "sfu-a", mounts: [state], status: "exited", env: ["SFU_PORT=9", "SFU_INSTANCE_ID=sfu-a"], runningAfterChecks: 1 }]);
+      await assert.rejects(backup("--local-only"), /the SFU container sfu-a \(sfu-a\) is running but does not hold the write fence/);
+      assert.deepEqual(await archives(local), []);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "a backup holds the host's deploy lock, and a deploy holding it past the wait stops the backup",
+  { skip: missing.length > 0 && `needs ${missing.join(", ")} on PATH` },
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+    let deploy;
+    try {
+      const { state, local, env, backup } = await setUp(root, ["BACKUP_DEPLOY_LOCK_WAIT_SECONDS=1"]);
+      withDatabase(state);
+      deploy = spawn("bash", ["-c", 'exec 9>>"$1"; flock -n 9 && echo locked && exec sleep 30', "_", path.join(root, "deploy.lock")], { env });
+      await new Promise((done) => deploy.stdout.once("data", done));
+      await assert.rejects(backup("--local-only"), /an SFU deploy held .*deploy\.lock for 1s/);
+      assert.deepEqual(await archives(local), []);
+      // The deploy ends; the next backup runs.
+      const ended = new Promise((done) => deploy.once("exit", done));
+      deploy.kill();
+      await ended;
+      deploy = null;
+      await backup("--local-only");
+      assert.equal((await archives(local)).length, 1);
+    } finally {
+      deploy?.kill();
       await rm(root, { recursive: true, force: true });
     }
   },

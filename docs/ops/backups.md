@@ -39,7 +39,12 @@ hold the fence (one from before the fence existed), the backup stops, so
 deploy the SFU before turning backups on, and keep the health URLs on the
 SFUs' local ports (`http://127.0.0.1:3031/health`). One backup or restore
 runs at a time on the host (`flock` on `BACKUP_LOCAL_DIR/.backup.lock`); a
-second one exits at once.
+second one exits at once. Both also hold the host's deploy lock
+(`/run/lock/conclave-sfu-deploy.lock`, the one `deploy-sfu.sh` takes) for
+their whole run, so no deploy starts or replaces an SFU mid-copy; they wait
+up to `BACKUP_DEPLOY_LOCK_WAIT_SECONDS` (900) for a deploy already under way,
+then fail, and a deploy waits for them the same way. The Docker check runs
+again after every copy, even when no SFU holds the fence.
 
 A backup is complete or it fails, with no archive and no heartbeat: a
 missing state dir fails it, and so does a missing database the SFU opens
