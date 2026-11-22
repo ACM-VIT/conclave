@@ -61,25 +61,30 @@ Returns the full runtime context:
 - `refreshState() => void`
 - `getDoc(appId) => Y.Doc`
 - `getAwareness(appId) => Awareness`
-- `presentedDoc`: `{ key: string, status: "loading" | "ready" | "failed" } | null` for the presented app's local document
-- `retryPresentedDoc() => void`: start the presented app's first sync over
+- `syncStatus`: `"idle" | "syncing" | "synced" | "failed"`, the presented app's first sync
+- `retrySync() => void`: start the presented app's first sync over
+- `presentedDocKey`: `string | null`, names the presented app's local document
 - `user`, `isAdmin`, `isReadOnly`
 
 ### Mounting the presented app
 
-Mount the presented app only when `presentedDoc.status` is `ready`, with
-`key={presentedDoc.key}`. Show a short loading state while it is `loading`,
-and a retry that calls `retryPresentedDoc()` when it is `failed`.
+Mount the presented app only when `syncStatus` is `synced`, with
+`key={presentedDocKey}`. Show a short loading state while it is `syncing`,
+and a retry that calls `retrySync()` when it is `failed`.
 
-- `ready` means the room's first sync reply has filled the local copy. Edits
+- `synced` means the room's first sync reply has filled the local copy. Edits
   made before that would build a second document tree and could hide the
   saved one for everyone.
-- A refused or unanswered first sync is retried after 250 ms, doubling to a
-  4 s cap, about 28 s in all, and again when the socket connects. Only then
-  does the status turn `failed`.
-- `key` changes with every new local copy: a new `docGeneration`, a close and
-  present in one batch, or a new socket. The app then mounts again on the new
-  document instead of keeping the one the provider dropped.
+- Each sync belongs to one activation of the app on the stage and owns its
+  own timer and attempt count. A reply to an earlier sync, or to an earlier
+  attempt, changes nothing.
+- A retryable refusal, an unanswered request or a disconnected socket is
+  retried after 250 ms, doubling to a 4 s cap, or after the refusal's
+  `retryAfterMs` when that is longer. After about 30 s, or on a refusal that
+  is not retryable, the status turns `failed`.
+- `presentedDocKey` changes with every new local copy: a new `docGeneration`,
+  a close and present in one batch, or a new socket. The app then mounts
+  again on the new document instead of keeping the one the provider dropped.
 
 Ack behavior:
 

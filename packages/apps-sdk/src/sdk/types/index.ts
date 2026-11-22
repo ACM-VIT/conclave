@@ -38,6 +38,14 @@ export type AppsSyncResponse = {
   awarenessUpdate?: Uint8Array;
 };
 
+export type AppsSyncError = {
+  error: string;
+  retryable?: true;
+  retryAfterMs?: number;
+};
+
+export type AppSyncStatus = "idle" | "syncing" | "synced" | "failed";
+
 export type AppsUpdatePayload = {
   appId: string;
   update: Uint8Array;
@@ -107,9 +115,6 @@ export type AppsCommandResult =
   | { ok: true }
   | { ok: false; reason: "roomFull" | "staleStage" | "failed" };
 
-/** Where the presented app's local document stands; see `presentedDoc`. */
-export type PresentedDocStatus = "loading" | "ready" | "failed";
-
 export type AppsContextValue = {
   state: AppsState;
   apps: ConclaveApp[];
@@ -124,15 +129,18 @@ export type AppsContextValue = {
   getDoc: (appId: string) => Y.Doc;
   getAwareness: (appId: string) => Awareness;
   /**
-   * The presented app's local document. `key` changes with every new local
-   * copy. `status` is `ready` once the room's first sync reply has filled it,
-   * and `failed` when every retry of that sync was refused or unanswered.
-   * Hosts mount the app only when ready, keyed by `key`, so an app never
-   * edits a copy the room has not filled yet or one the provider dropped.
+   * Where the presented app's sync stands: `synced` once the room's reply has
+   * filled its local document, `failed` after the retries ran out.
    */
-  presentedDoc: { key: string; status: PresentedDocStatus } | null;
-  /** Starts the presented app's first sync over, as after `failed`. */
-  retryPresentedDoc: () => void;
+  syncStatus: AppSyncStatus;
+  /** Starts the presented app's sync over, as after `failed`. */
+  retrySync: () => void;
+  /**
+   * Changes with every new local copy of the presented app's document. Hosts
+   * mount the app only when `syncStatus` is `synced`, keyed by this, so an app
+   * never edits a copy the room has not filled yet or one the provider dropped.
+   */
+  presentedDocKey: string | null;
   user?: AppUser;
   participants?: AppUser[];
   isAdmin?: boolean;

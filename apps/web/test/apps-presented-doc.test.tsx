@@ -29,6 +29,9 @@ type SyncPolicy = {
   autoAnswer?: boolean;
 };
 
+// The refusal an SFU sends when a socket's sync budget is spent.
+const REFUSED = { error: "Too many app sync requests", retryable: true, retryAfterMs: 500 };
+
 type Room = {
   status: () => string | null;
   retry: () => void;
@@ -36,6 +39,8 @@ type Room = {
   receive: () => void;
   room: RoomApps;
   deliverSync: () => void;
+  // Answers the nth sync request (1-based), however late.
+  deliverSyncNumber: (n: number) => void;
   syncRequests: () => number;
   // Draws on the mounted board, as the canvas would; false when no board is
   // mounted, so there is nothing to draw on.
@@ -60,6 +65,7 @@ async function withSavedBoard(run: (room: Room) => Promise<void>, policy: SyncPo
 
   const listeners = new Map<string, (payload: unknown) => void>();
   let pendingSync = () => {};
+  const syncReplies: Array<() => void> = [];
   let syncs = 0;
   let syncsAllowed = false;
   const socket = {
@@ -77,12 +83,13 @@ async function withSavedBoard(run: (room: Room) => Promise<void>, policy: SyncPo
         const refused =
           policy.refuse === "all" ? !syncsAllowed : syncs <= (policy.refuse ?? 0);
         if (refused) {
-          ack!({ error: "Too many app sync requests" });
+          ack!(REFUSED);
           return;
         }
         const update = Y.encodeStateAsUpdate(roomDoc, data.syncMessage);
         const stateVector = Y.encodeStateVector(roomDoc);
         pendingSync = () => ack!({ syncMessage: update, stateVector });
+        syncReplies[syncs - 1] = pendingSync;
         if (policy.autoAnswer) pendingSync();
       }
       if (
@@ -98,7 +105,7 @@ async function withSavedBoard(run: (room: Room) => Promise<void>, policy: SyncPo
 
   let drawOnBoard: (() => void) | null = null;
   let lastStatus: string | null = null;
-  let retryPresentedDoc = () => {};
+  let retrySync = () => {};
   function Board() {
     const { doc } = useAppDoc(APP_ID);
     // The canvas binds its document once, as the whiteboard's tool engine does.
@@ -110,14 +117,13 @@ async function withSavedBoard(run: (room: Room) => Promise<void>, policy: SyncPo
   }
   function Stage() {
     const context = useContext(AppsContext)!;
-    const { presentedDoc } = context;
-    lastStatus = presentedDoc?.status ?? null;
-    retryPresentedDoc = context.retryPresentedDoc;
-    if (presentedDoc?.status !== "ready") {
+    lastStatus = context.syncStatus;
+    retrySync = context.retrySync;
+    if (context.syncStatus !== "synced" || context.presentedDocKey === null) {
       drawOnBoard = null;
       return null;
     }
-    return <Board key={presentedDoc.key} />;
+    return <Board key={context.presentedDocKey} />;
   }
 
   const apps = [{ id: APP_ID, name: "Whiteboard", createDoc: createWhiteboardDoc, web: () => null }] as never;
@@ -136,13 +142,14 @@ async function withSavedBoard(run: (room: Room) => Promise<void>, policy: SyncPo
     await act(async () => receive());
     await run({
       status: () => lastStatus,
-      retry: () => retryPresentedDoc(),
+      retry: () => retrySync(),
       allowSyncs: () => {
         syncsAllowed = true;
       },
       receive,
       room,
       deliverSync: () => pendingSync(),
+      deliverSyncNumber: (n: number) => syncReplies[n - 1]?.(),
       syncRequests: () => syncs,
       draw: () => {
         if (!drawOnBoard) return false;
@@ -208,15 +215,15 @@ it("hands the board a fresh document when Close and Present arrive in one batch"
 });
 
 it("retries a refused first sync and opens the board once a sync is answered", async () => {
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
   await withSavedBoard(
     async ({ status, syncRequests, draw, roomStrokes }) => {
-      expect(status()).toBe("loading");
-      await advance(250);
+      expect(status()).toBe("syncing");
+      await advance(500);
       await advance(500);
 
       expect(syncRequests()).toBe(3);
-      expect(status()).toBe("ready");
+      expect(status()).toBe("synced");
       await act(async () => {
         draw();
       });
@@ -227,7 +234,7 @@ it("retries a refused first sync and opens the board once a sync is answered", a
 });
 
 it("offers a retry once every sync is refused, and the retry opens the board", async () => {
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
   await withSavedBoard(
     async ({ status, syncRequests, retry, allowSyncs }) => {
       await advance(40_000);
@@ -240,8 +247,30 @@ it("offers a retry once every sync is refused, and the retry opens the board", a
       allowSyncs();
       await act(async () => retry());
 
-      expect(status()).toBe("ready");
+      expect(status()).toBe("synced");
     },
     { refuse: "all", autoAnswer: true },
   );
+});
+
+it("keeps retrying the current sync when a reply to an earlier one arrives late", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  await withSavedBoard(async ({ receive, room, deliverSyncNumber, syncRequests, status }) => {
+    expect(syncRequests()).toBe(1);
+    await act(async () => {
+      room.close();
+      receive();
+      room.present(APP_ID);
+      receive();
+    });
+    expect(syncRequests()).toBe(2);
+
+    await act(async () => deliverSyncNumber(1));
+    // The current sync's 8 s ack timeout, then its first 250 ms retry.
+    await advance(8_250);
+
+    expect(syncRequests()).toBe(3);
+    await advance(40_000);
+    expect(status()).toBe("failed");
+  });
 });

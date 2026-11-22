@@ -1,8 +1,7 @@
 "use client";
 
 import { memo, type ComponentType } from "react";
-import type { PresentedDocStatus } from "@conclave/apps-sdk";
-import { LoaderCircle, LogOut } from "lucide-react";
+import { LoaderCircle, LogOut, RotateCw } from "lucide-react";
 import { useSmartParticipantOrder } from "../hooks/useSmartParticipantOrder";
 import type { Participant } from "../lib/types";
 import { isSystemUserId } from "../lib/utils";
@@ -15,8 +14,9 @@ interface MeetingAppLayoutProps {
   /** Mounts the app again when it changes, as on a new document. */
   appKey: string;
   /** The app mounts once the room has filled its document. */
-  appStatus: PresentedDocStatus;
-  onRetryApp: () => void;
+  appSynced: boolean;
+  syncFailed?: boolean;
+  onRetrySync?: () => void;
   frameContent?: boolean;
   localStream: MediaStream | null;
   isCameraOff: boolean;
@@ -40,8 +40,9 @@ function MeetingAppLayout({
   app: App,
   appName,
   appKey,
-  appStatus,
-  onRetryApp,
+  appSynced,
+  syncFailed = false,
+  onRetrySync,
   frameContent = true,
   localStream,
   isCameraOff,
@@ -97,19 +98,22 @@ function MeetingAppLayout({
               : "min-h-0 min-w-0 flex-1 overflow-hidden"
           }
         >
-          {appStatus === "ready" ? (
+          {appSynced ? (
             <App key={appKey} />
-          ) : appStatus === "failed" ? (
+          ) : syncFailed ? (
             <div
-              role="alert"
-              className="flex h-full min-h-0 w-full items-center justify-center gap-3 text-[13px] text-[#a1a1aa]"
+              role="status"
+              className="flex h-full min-h-0 w-full items-center justify-center gap-3"
             >
-              Couldn&apos;t load {appName}.
+              <span className="text-[12.5px] text-[#fafafa]/80">
+                {"Couldn't load this app"}
+              </span>
               <button
                 type="button"
-                onClick={onRetryApp}
-                className="rounded-full border border-white/10 px-3 py-1 text-[12.5px] font-medium text-[#fafafa] transition-colors hover:border-white/25 hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/30"
+                onClick={onRetrySync}
+                className="inline-flex h-7 items-center gap-1.5 rounded-full border border-white/10 px-3 text-[12px] font-medium text-[#fafafa]/85 transition-colors hover:border-white/25 hover:bg-white/[0.06] hover:text-[#fafafa] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/30"
               >
+                <RotateCw size={13} strokeWidth={1.75} aria-hidden="true" />
                 Retry
               </button>
             </div>

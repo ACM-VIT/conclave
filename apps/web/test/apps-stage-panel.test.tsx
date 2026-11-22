@@ -68,9 +68,9 @@ function MountedWhiteboard() {
 
 // Mounts the whiteboard once its document is ready, keyed as the meeting stage keys it.
 function Stage() {
-  const { state, presentedDoc } = useContext(AppsContext)!;
-  return state.activeAppId === "whiteboard" && presentedDoc?.status === "ready" ? (
-    <MountedWhiteboard key={presentedDoc.key} />
+  const { state, syncStatus, presentedDocKey } = useContext(AppsContext)!;
+  return state.activeAppId === "whiteboard" && syncStatus === "synced" ? (
+    <MountedWhiteboard key={presentedDocKey ?? ""} />
   ) : null;
 }
 

@@ -16,7 +16,8 @@ import type {
   AppsOpenPayload,
   AppsOpenResponse,
   AppsState,
-  PresentedDocStatus,
+  AppsSyncError,
+  AppSyncStatus,
   AppsSyncPayload,
   AppsSyncResponse,
   AppsUpdatePayload,
@@ -42,11 +43,20 @@ export type AppsProviderProps = {
 
 const ACK_TIMEOUT_MS = 8_000;
 
-// After a refused or unanswered first sync, try again after each of these
-// delays, about 28 s in all, then let the host offer a retry.
-const SYNC_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 4_000, 4_000, 4_000, 4_000, 4_000, 4_000];
+// A refused or unanswered sync is retried after these delays, the last one
+// repeating, until about 30 s have passed; then the app shows a retry.
+const SYNC_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 4_000];
+const SYNC_GIVE_UP_MS = 30_000;
 
-type CopyStatus = { copy: string; status: PresentedDocStatus };
+// One sync of one app's local document. A reply acts only on its own run, so
+// a reply that arrives after the stage moved on does nothing.
+type SyncRun = {
+  appId: string;
+  doc: Y.Doc;
+  startedAt: number;
+  attempt: number;
+  timer?: ReturnType<typeof setTimeout>;
+};
 
 const createAwareness = (doc: Y.Doc) => new Awareness(doc);
 
@@ -212,20 +222,13 @@ export function AppsProvider({
 
   const [droppedCopies, setDroppedCopies] = useState<Readonly<Record<string, number>>>({});
   const droppedCopiesRef = useRef<Readonly<Record<string, number>>>({});
-  // Where the first sync of the presented app's local copy stands.
-  const [copyStatus, setCopyStatus] = useState<CopyStatus | null>(null);
-  const copyStatusRef = useRef<CopyStatus | null>(null);
-  // The pending retry or ack timeout of the current first sync.
-  const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [syncStatus, setSyncStatus] = useState<AppSyncStatus>("idle");
+  const syncRunRef = useRef<SyncRun | null>(null);
+  const disposedRef = useRef(false);
 
-  const updateCopyStatus = useCallback((next: CopyStatus | null) => {
-    copyStatusRef.current = next;
-    setCopyStatus(next);
-  }, []);
-
-  const clearSyncTimer = useCallback(() => {
-    if (syncTimerRef.current !== null) clearTimeout(syncTimerRef.current);
-    syncTimerRef.current = null;
+  const stopSync = useCallback(() => {
+    clearTimeout(syncRunRef.current?.timer);
+    syncRunRef.current = null;
   }, []);
 
   const noteDropped = useCallback((appIds: string[]) => {
@@ -237,6 +240,8 @@ export function AppsProvider({
   }, []);
 
   const resetLocalData = useCallback(() => {
+    stopSync();
+    setSyncStatus("idle");
     noteDropped(Array.from(docsRef.current.keys()));
     for (const [appId, doc] of docsRef.current.entries()) {
       const handler = docHandlersRef.current.get(appId);
@@ -266,9 +271,7 @@ export function AppsProvider({
     initialUpdateSentRef.current.clear();
     serverStateRef.current = EMPTY_APPS_STATE;
     setState(EMPTY_APPS_STATE);
-    clearSyncTimer();
-    updateCopyStatus(null);
-  }, [noteDropped, clearSyncTimer, updateCopyStatus]);
+  }, [noteDropped, stopSync]);
 
   useEffect(() => {
     if (socketRef.current !== socket) {
@@ -302,25 +305,6 @@ export function AppsProvider({
     pendingInitialUpdatesRef.current.delete(appId);
     initialUpdateSentRef.current.delete(appId);
   }, [noteDropped]);
-
-  // Only the presented app is live, and only from the moment it was
-  // presented. Every other local copy is dropped, and an app entering the
-  // stage, or starting over on a new document, starts from the room's copy,
-  // so a document a host cleared never comes back from a client's memory.
-  const applyServerAppsState = useCallback(
-    (next: AppsState) => {
-      const previous = serverStateRef.current;
-      const stageChanged =
-        previous.activeAppId !== next.activeAppId ||
-        previous.docGeneration !== next.docGeneration;
-      serverStateRef.current = next;
-      for (const appId of Array.from(docsRef.current.keys())) {
-        if (stageChanged || appId !== next.activeAppId) discardLocalApp(appId);
-      }
-      setState(next);
-    },
-    [discardLocalApp],
-  );
 
   const registerDocHandlers = useCallback((appId: string, doc: Y.Doc) => {
     if (docHandlersRef.current.has(appId)) return;
@@ -411,11 +395,143 @@ export function AppsProvider({
     [getDoc, registerAwarenessHandlers]
   );
 
+  const applySync = useCallback(
+    (run: SyncRun, response: AppsSyncResponse, currentSocket: Socket): boolean => {
+      const update = toUint8Array(response.syncMessage);
+      if (!update) return false;
+      try {
+        Y.applyUpdate(run.doc, update, "remote");
+      } catch (err) {
+        console.warn("[Apps] Failed to apply sync update", err);
+        return false;
+      }
+
+      if (response.awarenessUpdate) {
+        const awarenessUpdate = toUint8Array(response.awarenessUpdate);
+        if (awarenessUpdate && awarenessUpdate.length > 0) {
+          try {
+            applyAwarenessUpdate(getAwareness(run.appId), awarenessUpdate, "remote");
+          } catch (err) {
+            console.warn("[Apps] Failed to apply awareness update", err);
+          }
+        }
+      }
+
+      const serverVector = response.stateVector ? toUint8Array(response.stateVector) : null;
+      if (serverVector && !isReadOnlyRef.current) {
+        try {
+          const updateForServer = Y.encodeStateAsUpdate(run.doc, serverVector);
+          if (updateForServer.length > 0) {
+            currentSocket.emit("apps:yjs:update", { appId: run.appId, update: updateForServer });
+          }
+        } catch (err) {
+          console.warn("[Apps] Failed to read the server state vector", err);
+        }
+      }
+      return true;
+    },
+    [getAwareness]
+  );
+
+  const attemptSync = useCallback(
+    (run: SyncRun) => {
+      if (syncRunRef.current !== run) return;
+
+      const retryLater = (response?: AppsSyncError) => {
+        const hint = response?.retryAfterMs;
+        const usableHint = typeof hint === "number" && Number.isFinite(hint) ? Math.max(hint, 0) : 0;
+        const backoff = SYNC_RETRY_DELAYS_MS[Math.min(run.attempt, SYNC_RETRY_DELAYS_MS.length - 1)];
+        const delay = Math.max(backoff, usableHint);
+        const retryable = !response || response.retryable === true;
+        if (!retryable || Date.now() - run.startedAt + delay > SYNC_GIVE_UP_MS) {
+          syncRunRef.current = null;
+          setSyncStatus("failed");
+          return;
+        }
+        run.attempt += 1;
+        run.timer = setTimeout(() => attemptSync(run), delay);
+      };
+
+      const currentSocket = socketRef.current;
+      if (!currentSocket?.connected) {
+        retryLater();
+        return;
+      }
+
+      const payload: AppsSyncPayload = { appId: run.appId, syncMessage: Y.encodeStateVector(run.doc) };
+      let answered = false;
+      const answer = (response?: AppsSyncResponse | AppsSyncError) => {
+        if (answered) return;
+        answered = true;
+        clearTimeout(run.timer);
+        if (syncRunRef.current !== run) return;
+
+        if (response && !("error" in response)) {
+          syncRunRef.current = null;
+          setSyncStatus(applySync(run, response, currentSocket) ? "synced" : "failed");
+          return;
+        }
+        retryLater(response);
+      };
+
+      const remaining = SYNC_GIVE_UP_MS - (Date.now() - run.startedAt);
+      run.timer = setTimeout(() => answer(), Math.max(0, Math.min(ACK_TIMEOUT_MS, remaining)));
+      currentSocket.emit("apps:yjs:sync", payload, answer);
+    },
+    [applySync]
+  );
+
+  const startSync = useCallback(
+    (appId: string) => {
+      if (disposedRef.current) return;
+      stopSync();
+      const doc = getDoc(appId);
+      getAwareness(appId);
+      const run: SyncRun = { appId, doc, startedAt: Date.now(), attempt: 0 };
+      syncRunRef.current = run;
+      setSyncStatus("syncing");
+      attemptSync(run);
+    },
+    [stopSync, getDoc, getAwareness, attemptSync]
+  );
+
+  const retrySync = useCallback(() => {
+    const appId = serverStateRef.current.activeAppId;
+    if (appId) startSync(appId);
+  }, [startSync]);
+
+  // Only the presented app is live, and only from the moment it was
+  // presented. Every other local copy is dropped, and an app entering the
+  // stage, or starting over on a new document, starts from the room's copy,
+  // so a document a host cleared never comes back from a client's memory.
+  // Its sync starts in the same update, so the app never sees a new copy
+  // marked as synced.
+  const applyServerAppsState = useCallback(
+    (next: AppsState) => {
+      const previous = serverStateRef.current;
+      const stageChanged =
+        previous.activeAppId !== next.activeAppId ||
+        previous.docGeneration !== next.docGeneration;
+      serverStateRef.current = next;
+      if (stageChanged) stopSync();
+      for (const appId of Array.from(docsRef.current.keys())) {
+        if (stageChanged || appId !== next.activeAppId) discardLocalApp(appId);
+      }
+      if (stageChanged) {
+        if (next.activeAppId) startSync(next.activeAppId);
+        else setSyncStatus("idle");
+      }
+      setState(next);
+    },
+    [discardLocalApp, startSync, stopSync],
+  );
+
   const refreshState = useCallback(() => {
     const currentSocket = socketRef.current;
     if (!currentSocket) return;
 
     currentSocket.emit("apps:getState", (response?: unknown) => {
+      if (socketRef.current !== currentSocket) return;
       const next = parseAppsState(response);
       if (next) {
         applyServerAppsState(next);
@@ -423,103 +539,13 @@ export function AppsProvider({
     });
   }, [applyServerAppsState]);
 
-  // Fills the local copy `copy` from the room. Until a sync reply is applied
-  // the copy is loading and the app may not edit it; a refused or unanswered
-  // sync is retried with backoff, and after the last retry the copy fails.
-  const startSync = useCallback(
-    (appId: string, copy: string) => {
-      clearSyncTimer();
-      updateCopyStatus({ copy, status: "loading" });
-      const isCurrent = () =>
-        serverStateRef.current.activeAppId === appId &&
-        localCopyKey(appId, droppedCopiesRef.current) === copy;
-
-      const attempt = (retries: number) => {
-        syncTimerRef.current = null;
-        if (!isCurrent()) return;
-        const retryLater = () => {
-          if (!isCurrent()) return;
-          const delay = SYNC_RETRY_DELAYS_MS[retries];
-          if (delay === undefined) {
-            updateCopyStatus({ copy, status: "failed" });
-            return;
-          }
-          syncTimerRef.current = setTimeout(() => attempt(retries + 1), delay);
-        };
-        const currentSocket = socketRef.current;
-        if (!currentSocket || !currentSocket.connected) {
-          retryLater();
-          return;
-        }
-
-        const doc = getDoc(appId);
-        const awareness = getAwareness(appId);
-        const payload: AppsSyncPayload = { appId, syncMessage: Y.encodeStateVector(doc) };
-        let answered = false;
-        syncTimerRef.current = setTimeout(() => {
-          if (answered) return;
-          answered = true;
-          retryLater();
-        }, ACK_TIMEOUT_MS);
-
-        currentSocket.emit("apps:yjs:sync", payload, (response?: AppsSyncResponse) => {
-          if (answered) return;
-          answered = true;
-          clearSyncTimer();
-          if (!isCurrent() || docsRef.current.get(appId) !== doc) return;
-
-          if (!response?.syncMessage) {
-            retryLater();
-            return;
-          }
-          const update = toUint8Array(response.syncMessage);
-          if (!update || update.length === 0) {
-            retryLater();
-            return;
-          }
-          try {
-            Y.applyUpdate(doc, update, "remote");
-          } catch (err) {
-            console.warn("[Apps] Failed to apply sync update", err);
-            retryLater();
-            return;
-          }
-          updateCopyStatus({ copy, status: "ready" });
-
-          if (response.awarenessUpdate) {
-            const awarenessUpdate = toUint8Array(response.awarenessUpdate);
-            if (awarenessUpdate && awarenessUpdate.length > 0) {
-              try {
-                applyAwarenessUpdate(awareness, awarenessUpdate, "remote");
-              } catch (err) {
-                console.warn("[Apps] Failed to apply awareness update", err);
-              }
-            }
-          }
-
-          if (response.stateVector) {
-            const serverVector = toUint8Array(response.stateVector);
-            if (!serverVector) return;
-            const updateForServer = Y.encodeStateAsUpdate(doc, serverVector);
-            if (updateForServer.length > 0 && !isReadOnlyRef.current) {
-              currentSocket.emit("apps:yjs:update", { appId, update: updateForServer });
-            }
-          }
-        });
-      };
-
-      attempt(0);
-    },
-    [getDoc, getAwareness, clearSyncTimer, updateCopyStatus]
-  );
-
-  const retryPresentedDoc = useCallback(() => {
-    const appId = serverStateRef.current.activeAppId;
-    if (!appId) return;
-    startSync(appId, localCopyKey(appId, droppedCopiesRef.current));
-  }, [startSync]);
-
-  useEffect(() => clearSyncTimer, [clearSyncTimer]);
+  useEffect(() => {
+    disposedRef.current = false;
+    return () => {
+      disposedRef.current = true;
+      stopSync();
+    };
+  }, [stopSync]);
 
   useEffect(() => {
     if (!socket) return;
@@ -581,42 +607,15 @@ export function AppsProvider({
       }
     };
 
-    // A socket that connects again syncs a presented copy still not filled.
-    const handleConnect = () => {
-      flushPending();
-      const appId = serverStateRef.current.activeAppId;
-      if (!appId) return;
-      const copy = localCopyKey(appId, droppedCopiesRef.current);
-      const current = copyStatusRef.current;
-      if (current?.copy === copy && current.status === "ready") return;
-      startSync(appId, copy);
-    };
-
     flushPending();
-    socket.on("connect", handleConnect);
+    socket.on("connect", flushPending);
     return () => {
-      socket.off("connect", handleConnect);
+      socket.off("connect", flushPending);
     };
-  }, [socket, startSync]);
+  }, [socket]);
 
-  const presentedCopy =
+  const presentedDocKey =
     state.activeAppId === null ? null : localCopyKey(state.activeAppId, droppedCopies);
-
-  useEffect(() => {
-    if (!socket || !state.activeAppId || !presentedCopy) return;
-    startSync(state.activeAppId, presentedCopy);
-  }, [socket, state.activeAppId, presentedCopy, startSync]);
-
-  const presentedDoc = useMemo(
-    () =>
-      presentedCopy === null
-        ? null
-        : {
-            key: presentedCopy,
-            status: copyStatus?.copy === presentedCopy ? copyStatus.status : "loading",
-          },
-    [presentedCopy, copyStatus],
-  );
 
   const sendStageCommand = useCallback(
     (event: string, payload: object | null): Promise<AppsCommandResult> => {
@@ -699,8 +698,9 @@ export function AppsProvider({
       refreshState,
       getDoc,
       getAwareness,
-      presentedDoc,
-      retryPresentedDoc,
+      syncStatus,
+      retrySync,
+      presentedDocKey,
       user,
       participants: roster,
       isAdmin,
@@ -716,8 +716,9 @@ export function AppsProvider({
       refreshState,
       getDoc,
       getAwareness,
-      presentedDoc,
-      retryPresentedDoc,
+      syncStatus,
+      retrySync,
+      presentedDocKey,
       user,
       roster,
       isAdmin,

@@ -156,7 +156,10 @@ Present, close, discard and lock share one rate limit per socket.
 `apps:yjs:sync` has its own per-socket limit, but a socket's first sync of the
 presented app after each stage change is free. Every stage change makes each
 client sync once, so other hosts switching apps cannot use up a viewer's
-budget; repeated syncs of the same stage still spend it.
+budget; repeated syncs of the same stage still spend it. A sync refused by the
+limit acks `{ error, retryable: true, retryAfterMs }`, and the client tries
+again after at least `retryAfterMs`. Any other refusal acks `{ error }` and is
+final.
 
 ## Sync Flow
 
