@@ -61,6 +61,7 @@ export const createSfuServer = (
   const state = createSfuState({
     isDraining: config.draining,
     roomRegistry,
+    config,
   });
   let io: SocketIOServer | null = null;
   let socketAdapterLifecycle: SocketAdapterLifecycle | null = null;

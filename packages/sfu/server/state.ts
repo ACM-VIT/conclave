@@ -1,5 +1,5 @@
 import type { Worker } from "mediasoup/types";
-import { config } from "../config/config.js";
+import { config as defaultConfig } from "../config/config.js";
 import { Room } from "../config/classes/Room.js";
 import type { WebinarLinkTarget, WebinarRoomConfig } from "./webinar.js";
 import {
@@ -62,7 +62,9 @@ export const createSfuState = (options?: {
   isDraining?: boolean;
   roomRegistry?: RoomRegistry;
   appDocuments?: AppDocumentPool;
+  config?: typeof defaultConfig;
 }): SfuState => {
+  const config = options?.config ?? defaultConfig;
   return {
     workers: [],
     rooms: new Map(),
