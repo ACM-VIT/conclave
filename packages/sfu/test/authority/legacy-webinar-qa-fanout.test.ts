@@ -7,12 +7,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { pollsContract } from "@conclave/apps-sdk/polls/core";
 import { pollsAuthority } from "@conclave/apps-sdk/polls/server";
-import { qaContract } from "@conclave/apps-sdk/qa/core";
+import { QA_MAX_ENTRIES, qaContract } from "@conclave/apps-sdk/qa/core";
 import { qaAuthority } from "@conclave/apps-sdk/qa/server";
 import {
   LEGACY_QA_LISTS_PER_TURN,
+  LEGACY_QA_SAVED_MAX,
   LEGACY_QA_SENDS_PER_TURN,
   attachLegacyQaFeed,
+  legacyQaModerate,
   legacyQaSubmit,
   legacyQaUpvote,
 } from "../../server/apps/authority/legacyWebinarQa.js";
@@ -512,4 +514,39 @@ describe("telling a webinar of old clients about a change", () => {
     // The tab kept up, and was never sent a list over any of it.
     expect(tab.entries.get(id)).toMatchObject({ hasUpvoted: false, upvotes: 0 });
   });
+
+  it("sends one whole list when a client has saved more upvotes than the book could ever show it again", async () => {
+    const { room, hostTab, listeners } = await webinar(2, 0);
+    const [asker, voter] = listeners;
+    const lists: number[] = [];
+    // The voter upvotes every question. The book keeps the newest, so the
+    // upvotes it saved for the ones dropped are for nothing it can be shown.
+    for (let index = 0; index <= LEGACY_QA_SAVED_MAX; index += 1) {
+      const asked = legacyQaSubmit(room.authority, asker.tab.context, `Question ${index}?`);
+      if (!("id" in asked)) throw new Error(`ask failed: ${JSON.stringify(asked)}`);
+      const moderate = (action: "answering" | "answered") =>
+        legacyQaModerate(room.authority, hostTab.context, { id: asked.id, action });
+      const shown = moderate("answering");
+      const voted = legacyQaUpvote(room.authority, voter.tab.context, asked.id);
+      const closed = moderate("answered");
+      if (![shown, voted, closed].every((reply) => "success" in reply)) {
+        throw new Error(`round ${index} failed: ${JSON.stringify([shown, voted, closed])}`);
+      }
+      // Now and then, and for the last two rounds, long enough for the
+      // flush and for the check of what the voter saved.
+      if (index % 25 === 0 || index >= LEGACY_QA_SAVED_MAX - 1) {
+        await vi.advanceTimersByTimeAsync(120);
+      }
+      // One person may ask a question every ten seconds.
+      vi.setSystemTime(Date.now() + 10_000);
+      lists.push(voter.heard.snapshots);
+    }
+    await room.drain();
+
+    // No list while what it saved could still be on show, then one.
+    expect(lists[LEGACY_QA_SAVED_MAX - 1]).toBe(lists[0]);
+    expect(voter.heard.snapshots).toBe(lists[0] + 1);
+    expect(voter.entries.size).toBe(QA_MAX_ENTRIES);
+    expect([...voter.entries.values()].every((entry) => entry.hasUpvoted === true)).toBe(true);
+  }, 60_000);
 });

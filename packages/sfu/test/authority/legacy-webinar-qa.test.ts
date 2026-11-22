@@ -371,6 +371,70 @@ describe("webinar Q&A with old and new clients in one room", () => {
     expect(native.showsUpvoted(id)).toBe(true);
   });
 
+  it("takes an upvote off a native build 63 screen when the question was hidden as the vote was taken back, and is shown again", async () => {
+    const stack = await startWebinar();
+    const host = await open(stack, asha, qaContract);
+    const asker = await open(stack, omar, qaContract, asAttendee);
+    const native = await build63(stack, vik);
+    // The same person on a released web build in another tab.
+    const otherTab = await oldClient(stack, { ...vik, session: "v2" }, asAttendee);
+    const asked = await asker.session.act("ask", { text: "Upvoted on a phone, taken back, hidden, shown" });
+    const id = asked.ok ? asked.value.id : "";
+    await host.session.act("moderate", { id, action: "answering" });
+    await until(() => native.shownCount(id) === 0, "the phone lists the question");
+    await until(() => otherTab.entries.has(id), "the other tab lists it");
+
+    const tapped = await native.tapUpvote(id);
+    // The tab takes the vote back as the host hides the question, so the
+    // phone is told the question is gone before anything about the vote.
+    const [takenBack, hidden] = await Promise.all([
+      otherTab.upvote(id),
+      host.session.act("moderate", { id, action: "dismissed" }),
+    ]);
+    await until(() => native.shownCount(id) === undefined, "the question leaves the phone");
+    await wait(200);
+    const restored = await host.session.act("moderate", { id, action: "answering" });
+    await until(() => native.shownCount(id) === 0, "the question is back on the phone");
+    await until(() => !native.showsUpvoted(id), "the phone shows the upvote gone");
+    // The button is off, so the next tap puts the upvote back.
+    const tappedAgain = await native.tapUpvote(id);
+    await until(() => field(row(host, "votes", id), "upvotes") === 1, "the upvote counts again");
+
+    expect(tapped).toEqual({ success: true, upvotes: 1, hasUpvoted: true });
+    expect(takenBack).toEqual({ success: true, upvotes: 0, hasUpvoted: false });
+    expect([hidden.ok, restored.ok]).toEqual([true, true]);
+    expect(tappedAgain).toEqual({ success: true, upvotes: 1, hasUpvoted: true });
+    expect(native.showsUpvoted(id)).toBe(true);
+  });
+
+  it("keeps an upvote on a native build 63 screen through a hide and a show, with no whole list", async () => {
+    const stack = await startWebinar();
+    const host = await open(stack, asha, qaContract);
+    const asker = await open(stack, omar, qaContract, asAttendee);
+    const native = await build63(stack, vik);
+    const asked = await asker.session.act("ask", { text: "Upvoted, hidden, shown" });
+    const id = asked.ok ? asked.value.id : "";
+    await host.session.act("moderate", { id, action: "answering" });
+    await until(() => native.shownCount(id) === 0, "the phone lists the question");
+    await native.tapUpvote(id);
+    await until(() => field(row(host, "votes", id), "upvotes") === 1, "the upvote counts");
+    await wait(120);
+    const snapshotsBefore = native.snapshots();
+
+    await host.session.act("moderate", { id, action: "dismissed" });
+    await until(() => native.shownCount(id) === undefined, "the question leaves the phone");
+    await wait(120);
+    await host.session.act("moderate", { id, action: "answering" });
+    await until(() => native.shownCount(id) === 1, "the question is back with its upvote");
+    await wait(120);
+    // The button is on, so the next tap takes the upvote back.
+    const tappedAgain = await native.tapUpvote(id);
+
+    expect(native.snapshots()).toBe(snapshotsBefore);
+    expect(tappedAgain).toEqual({ success: true, upvotes: 0, hasUpvoted: false });
+    expect(native.showsUpvoted(id)).toBe(false);
+  });
+
   it("takes a hidden question off its asker's native build 63 screen, and puts it back when the host unhides it", async () => {
     const stack = await startWebinar();
     const host = await open(stack, asha, qaContract);

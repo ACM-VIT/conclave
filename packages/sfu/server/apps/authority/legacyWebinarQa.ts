@@ -70,6 +70,14 @@ export const LEGACY_QA_LISTS_PER_TURN = 100;
  */
 export const LEGACY_QA_SAVED_CHECK_MS = 50;
 
+/**
+ * How many upvotes a client may be taken to have saved before it is sent a
+ * whole list to start over. The book holds no more than its cap of
+ * questions, hidden ones included, so past twice the cap at least half of
+ * what the client saved is for questions that are gone for good.
+ */
+export const LEGACY_QA_SAVED_MAX = QA_MAX_ENTRIES * 2;
+
 type Feed = {
   context: ConnectionContext;
   roomId: string;
@@ -94,8 +102,9 @@ type Feed = {
    * Questions the client keeps as upvoted by itself. The native app up to
    * build 63 saves an upvote from a list or from its own upvote's answer,
    * and from then on shows that over what a change event says. Only a whole
-   * list makes it forget one, which matters while it still lists the
-   * question. A saved upvote on a question that is gone shows nowhere.
+   * list makes it forget one. A saved upvote on a question the client no
+   * longer lists shows nowhere, but the client keeps it, so it is kept here
+   * too: a hidden question can be shown again, and the saved upvote with it.
    */
   saved: Set<string>;
 };
@@ -377,15 +386,20 @@ const say = (authority: RoomAuthority, room: RoomFeeds): void => {
 
     if (feed.checkSaved) {
       feed.checkSaved = false;
+      // Too many saved to all be for questions the book still holds. A
+      // whole list makes both sides forget the ones that are gone for good.
+      let owed = feed.saved.size > LEGACY_QA_SAVED_MAX;
       for (const id of feed.saved) {
-        if (view.get("myUpvotes", id) !== undefined) continue;
+        if (owed) break;
         // The book no longer has an upvote this client saved, and not by
-        // its own tap. If it still lists the question, a change event
-        // cannot make it forget: a whole list can. If the question went
-        // too, the saved vote shows nowhere.
-        if (feed.said.has(id) && sees(view, id)) feed.listDue = true;
-        else feed.saved.delete(id);
+        // its own tap. A change event cannot make the client forget it: a
+        // whole list can, and is owed once the client is shown the
+        // question. While the question is hidden the saved upvote shows
+        // nowhere and nothing is said, but it is not forgotten here: the
+        // question may be shown again, and the list is owed then.
+        owed = view.get("myUpvotes", id) === undefined && sees(view, id);
       }
+      if (owed) feed.listDue = true;
     }
 
     // A socket that is behind is sent nothing more, whatever asked for it:
@@ -586,7 +600,9 @@ export const attachLegacyQaFeed = (context: ConnectionContext): boolean => {
 
     for (const ref of [...frame.remove, ...frame.put]) {
       feed.pending.add(ref.key);
-      if (ref.bucket === "myUpvotes" && feed.saved.size > 0) feed.checkSaved = true;
+      // A question whose upvote the client saved: its upvote may have gone,
+      // or the question may be back after a time hidden.
+      if (feed.saved.has(ref.key)) feed.checkSaved = true;
     }
     if (feed.pending.size > 0) queue(authority, room, feed);
   };
