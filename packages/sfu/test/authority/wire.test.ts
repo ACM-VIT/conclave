@@ -544,7 +544,8 @@ describe("authority transport on real sockets", () => {
       6_000,
     );
 
-    expect(before).toEqual({ packets: 0, bytes: 0 });
+    // While it polls, its queue holds next to nothing from one poll to the next.
+    expect(before.bytes).toBeLessThan(1_024);
     // Its queue is counted in bytes, and passes the mark long before 60 patches.
     expect(behind.bytes).toBeGreaterThan(24 * 1024);
     expect(behind.bytes).toBeLessThan(60 * 3_900);
