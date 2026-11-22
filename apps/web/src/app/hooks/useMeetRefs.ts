@@ -155,10 +155,6 @@ export function useMeetRefs() {
   const producerTransportDisconnectTimeoutRef = useRef<number | null>(null);
   const consumerTransportDisconnectTimeoutRef = useRef<number | null>(null);
   const pendingProducerRetryTimeoutRef = useRef<number | null>(null);
-  const iceRestartInFlightRef = useRef({
-    producer: false,
-    consumer: false,
-  });
   const producerSyncIntervalRef = useRef<number | null>(null);
 
   return {
@@ -207,7 +203,6 @@ export function useMeetRefs() {
     producerTransportDisconnectTimeoutRef,
     consumerTransportDisconnectTimeoutRef,
     pendingProducerRetryTimeoutRef,
-    iceRestartInFlightRef,
     producerSyncIntervalRef,
   };
 }

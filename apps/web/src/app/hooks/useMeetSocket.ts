@@ -1208,12 +1208,7 @@ export function useMeetSocket({
     null,
   );
   const pendingCameraCodecTransportResetEpochRef = useRef<number | null>(null);
-  const iceRestartPromiseRef = useRef<
-    Record<"producer" | "consumer", Promise<boolean> | null>
-  >({
-    producer: null,
-    consumer: null,
-  });
+  const iceRestartsRef = useRef(new WeakMap<Transport, Promise<boolean>>());
   const intentionallyClosedTransportsRef = useRef<WeakSet<Transport>>(
     new WeakSet<Transport>(),
   );
@@ -1253,7 +1248,6 @@ export function useMeetSocket({
     producerTransportDisconnectTimeoutRef,
     consumerTransportDisconnectTimeoutRef,
     pendingProducerRetryTimeoutRef,
-    iceRestartInFlightRef,
     producerSyncIntervalRef,
   } = refs;
 
@@ -1494,6 +1488,13 @@ export function useMeetSocket({
       transport: Transport,
       reason: string,
     ) => {
+      const currentTransport =
+        transportKind === "producer"
+          ? producerTransportRef.current
+          : consumerTransportRef.current;
+      // A check that ends after its transport was replaced on purpose says
+      // nothing about the path in use now.
+      if (transport !== currentTransport || transport.closed) return;
       if (escalatedTransportsRef.current.has(transport)) return;
       escalatedTransportsRef.current.add(transport);
       const step = planMediaPathEscalation({
@@ -3624,22 +3625,17 @@ export function useMeetSocket({
 
   const attemptIceRestart = useCallback(
     async (transportKind: "producer" | "consumer"): Promise<boolean> => {
-      const existingRestart = iceRestartPromiseRef.current[transportKind];
-      if (existingRestart) return existingRestart;
-
-      const socket = socketRef.current;
-      if (!socket || !socket.connected) return false;
-
       const transport =
         transportKind === "producer"
           ? producerTransportRef.current
           : consumerTransportRef.current;
-
       if (!transport) return false;
 
-      const inFlight = iceRestartInFlightRef.current;
-      if (inFlight[transportKind]) return false;
-      inFlight[transportKind] = true;
+      const existingRestart = iceRestartsRef.current.get(transport);
+      if (existingRestart) return existingRestart;
+
+      const socket = socketRef.current;
+      if (!socket || !socket.connected) return false;
 
       const restartPromise: Promise<boolean> = (async () => {
         try {
@@ -3692,20 +3688,14 @@ export function useMeetSocket({
           );
           return false;
         } finally {
-          inFlight[transportKind] = false;
-          iceRestartPromiseRef.current[transportKind] = null;
+          iceRestartsRef.current.delete(transport);
         }
       })();
 
-      iceRestartPromiseRef.current[transportKind] = restartPromise;
+      iceRestartsRef.current.set(transport, restartPromise);
       return restartPromise;
     },
-    [
-      socketRef,
-      producerTransportRef,
-      consumerTransportRef,
-      iceRestartInFlightRef,
-    ],
+    [socketRef, producerTransportRef, consumerTransportRef],
   );
 
   const createProducerTransport = useCallback(
@@ -6766,7 +6756,6 @@ export function useMeetSocket({
       flushPendingProducers,
       handleReconnectRef,
       attemptIceRestart,
-      iceRestartInFlightRef,
       intentionalDisconnectRef,
       producerTransportRef,
       socketRef,
