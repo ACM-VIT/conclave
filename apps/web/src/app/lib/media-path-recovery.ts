@@ -94,6 +94,11 @@ export type MediaPathEscalation =
   /** Rebuild the transports, forcing every candidate through TURN. */
   | "reconnect-relay-only"
   | "reconnect"
+  /**
+   * A rejoin is already rebuilding the transports. Hold the rebuild until it
+   * settles, because the transport it just built is the one that failed.
+   */
+  | "wait-for-reconnect"
   /** Rebuilding did not help either: tell the user. */
   | "report-blocked";
 
@@ -106,11 +111,14 @@ export const planMediaPathEscalation = ({
   hasReconnected,
   relayOnly,
   hasTurnServers,
+  reconnectInFlight,
 }: {
   hasReconnected: boolean;
   relayOnly: boolean;
   hasTurnServers: boolean;
+  reconnectInFlight: boolean;
 }): MediaPathEscalation => {
   if (hasReconnected) return "report-blocked";
+  if (reconnectInFlight) return "wait-for-reconnect";
   return hasTurnServers && !relayOnly ? "reconnect-relay-only" : "reconnect";
 };

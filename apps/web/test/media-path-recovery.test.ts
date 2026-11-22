@@ -141,8 +141,34 @@ describe("escalating when an ICE restart did not help", () => {
         hasReconnected: false,
         relayOnly: false,
         hasTurnServers: true,
+        reconnectInFlight: false,
       }),
     ).toBe("reconnect-relay-only");
+  });
+
+  it.each([
+    { relayOnly: false, hasTurnServers: true },
+    { relayOnly: false, hasTurnServers: false },
+    { relayOnly: true, hasTurnServers: true },
+  ])("waits for a rejoin in progress rather than dropping the rebuild: %o", (state) => {
+    expect(
+      planMediaPathEscalation({
+        hasReconnected: false,
+        reconnectInFlight: true,
+        ...state,
+      }),
+    ).toBe("wait-for-reconnect");
+  });
+
+  it("reports a blocked path at once, even while a rejoin is running", () => {
+    expect(
+      planMediaPathEscalation({
+        hasReconnected: true,
+        relayOnly: true,
+        hasTurnServers: true,
+        reconnectInFlight: true,
+      }),
+    ).toBe("report-blocked");
   });
 
   it("rebuilds once without TURN", () => {
@@ -151,6 +177,7 @@ describe("escalating when an ICE restart did not help", () => {
         hasReconnected: false,
         relayOnly: false,
         hasTurnServers: false,
+        reconnectInFlight: false,
       }),
     ).toBe("reconnect");
   });
@@ -160,8 +187,12 @@ describe("escalating when an ICE restart did not help", () => {
     { relayOnly: false, hasTurnServers: false },
     { relayOnly: false, hasTurnServers: true },
   ])("tells the user once a rebuild has also failed: %o", (state) => {
-    expect(planMediaPathEscalation({ hasReconnected: true, ...state })).toBe(
-      "report-blocked",
-    );
+    expect(
+      planMediaPathEscalation({
+        hasReconnected: true,
+        reconnectInFlight: false,
+        ...state,
+      }),
+    ).toBe("report-blocked");
   });
 });

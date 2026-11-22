@@ -1080,6 +1080,11 @@ export function useMeetSocket({
   const relayOnlyIceRef = useRef(false);
   const mediaPathReconnectTriedRef = useRef({ producer: false, consumer: false });
   const escalatedTransportsRef = useRef(new WeakSet<Transport>());
+  const pendingMediaPathRecoveryRef = useRef<{
+    transportKind: "producer" | "consumer";
+    transport: Transport;
+    reason: string;
+  } | null>(null);
   const blockedMediaPathsRef = useRef(new Set<"producer" | "consumer">());
   const reconnectGenerationRef = useRef(0);
   const reconnectBackoffCancelRef = useRef<(() => void) | null>(null);
@@ -1466,14 +1471,23 @@ export function useMeetSocket({
       // nothing about the path in use now.
       if (transport !== currentTransport || transport.closed) return;
       if (escalatedTransportsRef.current.has(transport)) return;
-      escalatedTransportsRef.current.add(transport);
       const step = planMediaPathEscalation({
         hasReconnected: mediaPathReconnectTriedRef.current[transportKind],
         relayOnly: relayOnlyIceRef.current,
         hasTurnServers:
           getUsableTurnIceServers(runtimeIceServersRef.current, Date.now()) !==
           null,
+        reconnectInFlight: reconnectInFlightRef.current,
       });
+      if (step === "wait-for-reconnect") {
+        pendingMediaPathRecoveryRef.current = {
+          transportKind,
+          transport,
+          reason,
+        };
+        return;
+      }
+      escalatedTransportsRef.current.add(transport);
       if (step === "report-blocked") {
         const blockedPaths = blockedMediaPathsRef.current;
         if (blockedPaths.has(transportKind)) return;
@@ -1513,6 +1527,7 @@ export function useMeetSocket({
       currentRoomIdRef,
       handleReconnectRef,
       producerTransportRef,
+      reconnectInFlightRef,
       setMeetError,
     ],
   );
@@ -1528,6 +1543,9 @@ export function useMeetSocket({
   const noteMediaPathConnected = useCallback(
     (transportKind: "producer" | "consumer", transport: Transport) => {
       escalatedTransportsRef.current.delete(transport);
+      if (pendingMediaPathRecoveryRef.current?.transport === transport) {
+        pendingMediaPathRecoveryRef.current = null;
+      }
       mediaPathReconnectTriedRef.current[transportKind] = false;
       const blockedPaths = blockedMediaPathsRef.current;
       if (blockedPaths.delete(transportKind) && blockedPaths.size === 0) {
@@ -6224,7 +6242,7 @@ export function useMeetSocket({
         if (kind === "consumer") void syncProducersRef.current();
         return;
       }
-      if (entry.transport !== transport || reconnectInFlightRef.current) return;
+      if (entry.transport !== transport) return;
       escalateMediaPathFailure(
         kind,
         transport,
@@ -9204,6 +9222,7 @@ export function useMeetSocket({
     let hasTriedHeldJoinInfo = pendingIceServersRefresh;
     let mayReuseSocket = true;
     let roomWaitExpired = false;
+    let rejoined = false;
     reconnectInFlightRef.current = true;
     reconnectAttemptsRef.current = resolveReconnectStartAttempts(
       reconnectAttemptsRef.current,
@@ -9401,6 +9420,7 @@ export function useMeetSocket({
           manualReconnectRetryRequestedRef.current = false;
           updateReconnectRecoveryStatus(null);
           clearMeetErrorUnlessMediaBlocked();
+          rejoined = true;
           return;
         } catch (err) {
           if (reconnectGeneration !== reconnectGenerationRef.current) return;
@@ -9538,6 +9558,17 @@ export function useMeetSocket({
     } finally {
       if (reconnectGeneration === reconnectGenerationRef.current) {
         reconnectInFlightRef.current = false;
+        // A transport this rejoin built may have failed before it finished.
+        // Its rebuild waited for the rejoin, so run it now.
+        const pending = pendingMediaPathRecoveryRef.current;
+        pendingMediaPathRecoveryRef.current = null;
+        if (rejoined && pending) {
+          escalateMediaPathFailure(
+            pending.transportKind,
+            pending.transport,
+            pending.reason,
+          );
+        }
       }
     }
   }, [
@@ -9547,6 +9578,7 @@ export function useMeetSocket({
     ensureLiveLocalMediaForJoin,
     refreshIceServersOnOpenSocket,
     clearMeetErrorUnlessMediaBlocked,
+    escalateMediaPathFailure,
     getJoinMediaNeeds,
     intentionalDisconnectRef,
     joinOptionsRef,
