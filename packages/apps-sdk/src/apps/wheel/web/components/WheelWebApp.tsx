@@ -51,6 +51,17 @@ const useReducedMotion = (): boolean => {
   return reduced;
 };
 
+const readoutSize = (label: string): string => {
+  const length = Array.from(label).length;
+  const narrow =
+    length <= 16
+      ? "text-[30px] leading-[38px]"
+      : length <= 30
+        ? "text-[22px] leading-[28px]"
+        : "text-[18px] leading-6";
+  return `${narrow} @min-[720px]:text-[30px] @min-[720px]:leading-[38px]`;
+};
+
 const readSoundPreference = (): boolean => {
   if (typeof window === "undefined") return true;
   try {
@@ -263,12 +274,25 @@ export function WheelWebApp() {
     <div className="@container h-full min-h-0 w-full">
       <div className="flex h-full min-h-0 w-full flex-col bg-[#0a0a0b] text-[#fafafa] @min-[720px]:flex-row">
         <section className="relative flex min-h-[260px] min-w-0 flex-1 flex-col">
-          <div className="flex h-[76px] shrink-0 flex-col items-center justify-end px-4 text-center">
-            <p className="h-[38px] max-w-full truncate text-[30px] font-semibold leading-[38px]">
-              {winner && !isSpinning ? winner.label : null}
-              <span ref={liveLabelRef} hidden={!isSpinning} />
+          <div className="flex min-h-[62px] shrink-0 flex-col items-center justify-end px-4 pt-2 text-center @min-[720px]:min-h-[76px]">
+            <p
+              className="h-[38px] max-w-full truncate text-[30px] font-semibold leading-[38px]"
+              hidden={!isSpinning}
+            >
+              <span ref={liveLabelRef} />
             </p>
-            <p className="h-4 text-[12px] leading-4 text-[#fafafa]/55">
+            {!isSpinning &&
+              (winner ? (
+                <p
+                  data-wheel-readout
+                  className={`max-w-full text-balance font-semibold [overflow-wrap:anywhere] ${readoutSize(winner.label)}`}
+                >
+                  {winner.label}
+                </p>
+              ) : (
+                <div className="h-[38px]" />
+              ))}
+            <p className="min-h-4 max-w-full text-[12px] leading-4 text-[#fafafa]/55 [overflow-wrap:anywhere]">
               {showReveal && held ? `Spun by ${held.spunByName}` : null}
             </p>
           </div>

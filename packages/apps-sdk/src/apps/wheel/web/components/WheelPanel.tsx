@@ -319,7 +319,7 @@ export function WheelPanel({
             </div>
           )}
 
-          <div className="mt-2 min-h-0 flex-1 overflow-y-auto px-3 pb-3">
+          <div className="mt-1 min-h-0 flex-1 overflow-y-auto px-3 pb-3 pt-1">
             {entries.length === 0 ? (
               <div className="flex h-full flex-col items-center justify-center gap-3 px-4 py-2 text-center">
                 <p className="text-[13px] text-[#fafafa]/55">
@@ -341,11 +341,11 @@ export function WheelPanel({
             ) : (
               <ol>
                 {entries.map((entry, index) => (
-                  <li key={entry.id} className="group flex h-9 items-center gap-3">
-                    <span className="w-6 shrink-0 text-right text-[12px] tabular-nums text-[#fafafa]/40">
+                  <li key={entry.id} className="group flex min-h-9 items-start gap-3 py-2">
+                    <span className="w-6 shrink-0 text-right text-[12px] leading-5 tabular-nums text-[#fafafa]/40">
                       {index + 1}
                     </span>
-                    <span className="min-w-0 flex-1 truncate text-[13px] text-[#fafafa]/90">
+                    <span className="min-w-0 flex-1 text-[13px] leading-5 text-[#fafafa]/90 [overflow-wrap:anywhere]">
                       {entry.label}
                     </span>
                     {canEdit && !isSpinning && (
@@ -354,7 +354,7 @@ export function WheelPanel({
                         onClick={() => onRemoveEntry(entry.id)}
                         aria-label={`Remove ${entry.label}`}
                         title="Remove"
-                        className={`${ICON_BUTTON} [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:focus-visible:opacity-100 [@media(hover:hover)]:group-hover:opacity-100`}
+                        className={`${ICON_BUTTON} -my-1.5 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:focus-visible:opacity-100 [@media(hover:hover)]:group-hover:opacity-100`}
                       >
                         <XIcon />
                       </button>
@@ -392,14 +392,14 @@ export function WheelPanel({
             ) : (
               <ol>
                 {history.map((result, index) => (
-                  <li key={result.spinId} className="flex h-9 items-center gap-3">
-                    <span className="w-6 shrink-0 text-right text-[12px] tabular-nums text-[#fafafa]/40">
+                  <li key={result.spinId} className="flex min-h-9 items-start gap-3 py-2">
+                    <span className="w-6 shrink-0 text-right text-[12px] leading-5 tabular-nums text-[#fafafa]/40">
                       {history.length - index}
                     </span>
-                    <span className="min-w-0 flex-1 truncate text-[13px] text-[#fafafa]/90">
+                    <span className="min-w-0 flex-1 text-[13px] leading-5 text-[#fafafa]/90 [overflow-wrap:anywhere]">
                       {result.label}
                     </span>
-                    <span className="shrink-0 text-[12px] tabular-nums text-[#fafafa]/40">
+                    <span className="shrink-0 text-[12px] leading-5 tabular-nums text-[#fafafa]/40">
                       {formatTime(result.at)}
                     </span>
                   </li>
