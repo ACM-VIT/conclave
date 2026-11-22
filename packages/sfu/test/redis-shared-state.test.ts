@@ -3,7 +3,12 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createServer, type Server } from "node:http";
+import { DatabaseSync } from "node:sqlite";
+import { createClient } from "redis";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { config } from "../config/config.js";
+import { createSfuApp } from "../server/http/createApp.js";
 import type { ScheduledMeeting } from "../types.js";
 import { initScheduledMeetings, initScheduledWebinars, initScheduling } from "../server/init.js";
 import { LocalRoomRegistry } from "../server/roomRegistry.js";
@@ -137,6 +142,57 @@ describe.skipIf(!hasRedis)("SFUs sharing one Redis", () => {
     expect(await sfuA.exited, sfuA.stderr()).toBe(0);
     expect(JSON.parse(sfuA.stdout().trim().split("\n").at(-1) ?? "[]")).toEqual(saved.sort());
   }, 120_000);
+
+  it.each(["meetings", "scheduling"] as const)("treats an established Redis %s store as authoritative on the first start of the new image", async (store) => {
+    const keyPrefix = process.env.SFU_PERSISTENCE_REDIS_KEY_PREFIX!;
+    const raw = createClient({ url: redis!.url });
+    await raw.connect();
+    if (store === "meetings") {
+      vi.stubEnv("SCHEDULED_MEETINGS_PERSISTENCE", "sqlite");
+      await track(createScheduledMeetingPersistence()).saveChanged?.([meeting("kept"), meeting("deleted-in-redis")]);
+      vi.stubEnv("SCHEDULED_MEETINGS_PERSISTENCE", "redis");
+      await raw.hSet(`${keyPrefix}:scheduled-meetings`, "kept", JSON.stringify(meeting("kept")));
+    } else {
+      vi.stubEnv("SCHEDULING_PERSISTENCE", "sqlite");
+      await track(createSchedulingPersistence()).save({ profiles: [profile("kept"), profile("deleted-in-redis")], availability: [], eventTypes: [], calendars: [] });
+      vi.stubEnv("SCHEDULING_PERSISTENCE", "redis");
+      await raw.hSet(`${keyPrefix}:scheduling:profiles`, "kept", JSON.stringify({ updatedAt: 1, payload: profile("kept") }));
+    }
+    await raw.quit();
+
+    const upgraded = store === "meetings" ? track(createScheduledMeetingPersistence()) : track(createSchedulingPersistence());
+    const loaded = await upgraded.load();
+    const ids = Array.isArray(loaded) ? loaded.map((entry) => entry.id) : loaded.profiles.map((entry) => entry.id);
+    expect(ids).toEqual(["kept"]);
+  });
+
+  it("answers 500 when the SQLite mirror cannot take a reload's write-back", async () => {
+    const state = createSfuState({
+      roomRegistry: new LocalRoomRegistry({ instanceId: "mirror-lock", instanceUrl: "http://localhost", ttlMs: 45000 }),
+    });
+    await initScheduledWebinars(state);
+    await initScheduledMeetings(state);
+    await initScheduling(state);
+    track(state.scheduledMeetingPersistence!);
+    track(state.schedulingPersistence!);
+    const server: Server = createServer(createSfuApp({ state, config, getIo: () => null }));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("no port");
+    const holder = new DatabaseSync(join(stateDir, "conclave.sqlite"));
+    holder.exec("BEGIN IMMEDIATE");
+    try {
+      const response = await fetch(`http://127.0.0.1:${address.port}/admin/reload-stores`, {
+        method: "POST",
+        headers: { "x-sfu-secret": config.sfuSecret },
+      });
+      expect(response.status).toBe(500);
+    } finally {
+      holder.exec("ROLLBACK");
+      holder.close();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  }, 30_000);
 
   it("keeps a meeting deleted while the reload's Redis read was in flight deleted", async () => {
     const doomed = meeting("doomed");

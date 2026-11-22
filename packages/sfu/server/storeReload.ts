@@ -22,7 +22,7 @@ export const reloadPersistedStores = async (
   let scheduling = 0;
   if (state.schedulingPersistence) {
     scheduling = await mergePersistedScheduling(state.scheduling, state.schedulingPersistence, { strict: true });
-    await persistScheduling(state.scheduling, state.schedulingPersistence, { strict: true });
+    await persistScheduling(state.scheduling, state.schedulingPersistence);
   }
   return { webinars, meetings, scheduling };
 };

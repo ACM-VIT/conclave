@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
@@ -140,6 +140,20 @@ describe("a rolling restart where the second SFU recovers records", () => {
       holder.close();
     }
   }, 30_000);
+
+  it("answers 500 when a JSON store cannot take the write-back", async () => {
+    vi.stubEnv("SCHEDULING_PERSISTENCE", "json");
+    vi.stubEnv("SCHEDULING_PATH", join(stateDir, "json-store", "scheduling.json"));
+    mkdirSync(join(stateDir, "json-store"));
+    writeFileSync(join(stateDir, "json-store", "scheduling.json"), JSON.stringify({ profiles: [profile], availability: [], eventTypes: [], calendars: [] }));
+    const sfu = await startSfu();
+    chmodSync(join(stateDir, "json-store"), 0o500);
+    try {
+      expect((await sfu.call("POST", "/admin/reload-stores")).status).toBe(500);
+    } finally {
+      chmodSync(join(stateDir, "json-store"), 0o700);
+    }
+  });
 
   it("refuses a reload without the SFU secret", async () => {
     const sfu = await startSfu();

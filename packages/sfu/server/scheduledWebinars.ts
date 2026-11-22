@@ -312,11 +312,7 @@ const createFileScheduledWebinarPersistence = (
   path: string = scheduledWebinarsPath(),
 ): ScheduledWebinarPersistence => ({
   save: (snapshot) => {
-    try {
-      writeJsonAtomic(path, JSON.stringify(snapshot, null, 2));
-    } catch (error) {
-      Logger.error("Failed to persist scheduled webinars", error);
-    }
+    writeJsonAtomic(path, JSON.stringify(snapshot, null, 2));
   },
   importIfNewer: (webinar) => {
     const entries = requireArray(readJsonStore(path) ?? [], "scheduled webinars");
@@ -457,7 +453,7 @@ const createSqliteScheduledWebinarPersistence = (
     return Number(result.changes) > 0;
   };
 
-  const inTransaction = (label: string, write: () => void): void => {
+  const inTransaction = (write: () => void): void => {
     try {
       db.exec("BEGIN IMMEDIATE");
       write();
@@ -466,7 +462,7 @@ const createSqliteScheduledWebinarPersistence = (
       try {
         db.exec("ROLLBACK");
       } catch {}
-      Logger.error(label, error);
+      throw error;
     }
   };
 
@@ -502,20 +498,20 @@ const createSqliteScheduledWebinarPersistence = (
 
   return {
     save: (snapshot) => {
-      inTransaction("Failed to persist scheduled webinars to SQLite", () => {
+      inTransaction(() => {
         for (const webinar of snapshot) upsertWebinar(webinar);
       });
     },
     saveChanged: (webinars) => {
       if (webinars.length === 0) return;
-      inTransaction("Failed to persist changed scheduled webinars", () => {
+      inTransaction(() => {
         for (const webinar of webinars) upsertWebinar(webinar);
       });
     },
     importIfNewer: (webinar) => upsertWebinar(webinar, insertIfNewer),
     deleteRecords: (deletions) => {
       if (deletions.length === 0) return;
-      inTransaction("Failed to delete scheduled webinars", () => {
+      inTransaction(() => {
         for (const { id, deletedAt } of deletions) {
           deleteOlder.run(id, deletedAt);
           markDeleted.run(id, deletedAt);

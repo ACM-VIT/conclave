@@ -86,7 +86,7 @@ export type SchedulingRecordWrite = {
 };
 
 export type SchedulingPersistence = {
-  save: (snapshot: SchedulingSnapshot, options?: { strict?: boolean }) => MaybePromise<void>;
+  save: (snapshot: SchedulingSnapshot) => MaybePromise<void>;
   importIfNewer: (record: SchedulingRecordWrite) => MaybePromise<boolean>;
   load: (options?: { strict?: boolean }) => MaybePromise<SchedulingSnapshot>;
   close?: () => MaybePromise<void>;
@@ -1227,7 +1227,7 @@ const createSqliteSchedulingPersistence = (
     return Number(result.changes) > 0;
   };
   return {
-    save: (snapshot, options) => {
+    save: (snapshot) => {
       try {
         db.exec("BEGIN IMMEDIATE");
         for (const record of schedulingRecordsOf(snapshot)) write(upsert, record);
@@ -1240,8 +1240,7 @@ const createSqliteSchedulingPersistence = (
         try {
           db.exec("ROLLBACK");
         } catch {}
-        if (options?.strict) throw error;
-        Logger.error("Failed to persist scheduling records", error);
+        throw error;
       }
     },
     importIfNewer: (record) => write(upsertIfNewer, record),
@@ -1359,21 +1358,17 @@ const createFileSchedulingPersistence = (
       return importIntoJsonSnapshot(path, record, profilesBeforeImport);
     },
     save: (snapshot) => {
-      try {
-        writeJsonAtomic(
-          path,
-          JSON.stringify(
-            {
-              ...snapshot,
-              calendars: snapshot.calendars.map(serializeCalendar),
-            },
-            null,
-            2,
-          ),
-        );
-      } catch (error) {
-        Logger.error("Failed to persist scheduling records to JSON", error);
-      }
+      writeJsonAtomic(
+        path,
+        JSON.stringify(
+          {
+            ...snapshot,
+            calendars: snapshot.calendars.map(serializeCalendar),
+          },
+          null,
+          2,
+        ),
+      );
     },
     load: (options) => {
       try {
@@ -1429,8 +1424,19 @@ end
 return 1
 `;
 
-/** Copies the given records and deletions in newest-wins and marks the hashes seeded, in one step. */
+/**
+ * Seeds an empty Redis from the legacy snapshot and SQLite and marks it
+ * seeded, in one step. A Redis that already holds scheduling records is the
+ * authority: it is only marked, never topped up from rows that may be stale.
+ */
 const SEED_SCHEDULING_SCRIPT = `${SCHEDULING_LUA}
+if redis.call("EXISTS", KEYS[6]) == 1 then return 0 end
+for keyIndex = 1, 5 do
+  if redis.call("HLEN", KEYS[keyIndex]) > 0 then
+    redis.call("SET", KEYS[6], "1")
+    return 0
+  end
+end
 local count = tonumber(ARGV[1]) or 0
 local index = 2
 for _ = 1, count do
@@ -1475,6 +1481,7 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
   private startPromise: Promise<void> | null = null;
   private started = false;
   private pendingWrite: Promise<void> = Promise.resolve();
+  private seeded: Promise<void> | null = null;
 
   constructor(options: {
     redisUrl: string;
@@ -1513,11 +1520,11 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
     }
   }
 
-  save(snapshot: SchedulingSnapshot): void {
-    void this.fallback.save(snapshot);
+  save(snapshot: SchedulingSnapshot): Promise<void> {
     const records = schedulingRecordsOf(snapshot);
     const deleted = snapshot.deleted ?? [];
-    this.queueWrite("save snapshot", async () => {
+    return this.queueWrite(async () => {
+      await this.fallback.save(snapshot);
       for (const record of records) await this.upsertRecord(record, "save");
       if (deleted.length > 0) {
         await this.client.sendCommand([
@@ -1534,20 +1541,16 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
 
   async importIfNewer(record: SchedulingRecordWrite): Promise<boolean> {
     await this.start();
+    await this.ensureSeeded();
     const applied = await this.upsertRecord(record, "newer");
     await this.fallback.importIfNewer(record);
     return Number(applied) === 1;
   }
 
-  /**
-   * Another SFU trusts the hashes only once the seeded marker exists, and the
-   * seed sets it in the same script that copies the legacy snapshot and SQLite
-   * in, so nobody reads a half-copied store. Seeding twice merges newest-wins.
-   */
   async load(options?: { strict?: boolean }): Promise<SchedulingSnapshot> {
     try {
       await this.start();
-      if (!(await this.client.exists(this.seededKey))) await this.seed(options);
+      await this.ensureSeeded();
       return await this.loadHashes();
     } catch (error) {
       if (options?.strict) throw error;
@@ -1575,12 +1578,22 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
     return [this.profilesKey, this.availabilityKey, this.eventTypesKey, this.calendarsKey];
   }
 
-  private async seed(options?: { strict?: boolean }): Promise<void> {
+  /** Runs before the first read or write, so nothing this SFU writes can make an empty Redis look established. */
+  private ensureSeeded(): Promise<void> {
+    this.seeded ??= this.seed().catch((error: unknown) => {
+      this.seeded = null;
+      throw error;
+    });
+    return this.seeded;
+  }
+
+  private async seed(): Promise<void> {
+    if (await this.client.exists(this.seededKey)) return;
     const legacy = await this.loadLegacySnapshot();
-    const local = await this.fallback.load(options);
+    const local = await this.fallback.load({ strict: true });
     const records = [...schedulingRecordsOf(legacy), ...schedulingRecordsOf(local)];
     const deleted = [...(legacy.deleted ?? []), ...(local.deleted ?? [])];
-    await this.client.sendCommand([
+    const seeded = await this.client.sendCommand([
       "EVAL",
       SEED_SCHEDULING_SCRIPT,
       "6",
@@ -1597,7 +1610,7 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
       ]),
       ...deleted.flatMap(({ kind, id, deletedAt }) => [kindIndex(kind), kind, id, String(deletedAt)]),
     ]);
-    if (records.length > 0) {
+    if (Number(seeded) === 1 && records.length > 0) {
       Logger.info(`Seeded Redis with ${records.length} scheduling record(s) from local persistence`);
     }
   }
@@ -1617,17 +1630,15 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
     ]);
   }
 
-  private queueWrite(label: string, write: () => Promise<void>): void {
-    const writePromise = this.pendingWrite
-      .catch(() => undefined)
-      .then(async () => {
-        await this.start();
-        await write();
-      });
-    this.pendingWrite = writePromise.catch((error) => {
-      Logger.error(`Failed to persist scheduling records to Redis (${label})`, error);
-      throw error;
+  /** Writes in order; each caller gets its own write's result, mirror included. */
+  private queueWrite(write: () => Promise<void>): Promise<void> {
+    const writePromise = this.pendingWrite.then(async () => {
+      await this.start();
+      await this.ensureSeeded();
+      await write();
     });
+    this.pendingWrite = writePromise.catch(() => undefined);
+    return writePromise;
   }
 
   private async loadHashes(): Promise<SchedulingSnapshot> {
@@ -1716,10 +1727,9 @@ const snapshotSchedulingStore = (
 export const persistScheduling = (
   store: SchedulingStore,
   persistence: SchedulingPersistence | null,
-  options?: { strict?: boolean },
 ): Promise<void> => {
   if (!persistence) return Promise.resolve();
-  return Promise.resolve(persistence.save(snapshotSchedulingStore(store), options)).then(() =>
+  return Promise.resolve(persistence.save(snapshotSchedulingStore(store))).then(() =>
     persistence.flush?.(),
   );
 };

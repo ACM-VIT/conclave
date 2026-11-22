@@ -778,7 +778,7 @@ const createSqliteScheduledMeetingPersistence = (
     return Number(result.changes) > 0;
   };
 
-  const inTransaction = (label: string, write: () => void): void => {
+  const inTransaction = (write: () => void): void => {
     try {
       db.exec("BEGIN IMMEDIATE");
       write();
@@ -787,7 +787,7 @@ const createSqliteScheduledMeetingPersistence = (
       try {
         db.exec("ROLLBACK");
       } catch {}
-      Logger.error(label, error);
+      throw error;
     }
   };
 
@@ -823,20 +823,20 @@ const createSqliteScheduledMeetingPersistence = (
 
   return {
     save: (snapshot) => {
-      inTransaction("Failed to persist scheduled meetings", () => {
+      inTransaction(() => {
         for (const meeting of snapshot) upsertMeeting(meeting);
       });
     },
     saveChanged: (meetings) => {
       if (meetings.length === 0) return;
-      inTransaction("Failed to persist changed scheduled meetings", () => {
+      inTransaction(() => {
         for (const meeting of meetings) upsertMeeting(meeting);
       });
     },
     importIfNewer: (meeting) => upsertMeeting(meeting, insertIfNewer),
     deleteRecords: (deletions) => {
       if (deletions.length === 0) return;
-      inTransaction("Failed to delete scheduled meetings", () => {
+      inTransaction(() => {
         for (const { id, deletedAt } of deletions) {
           deleteOlder.run(id, deletedAt);
           markDeleted.run(id, deletedAt);
@@ -853,11 +853,7 @@ const createFileScheduledMeetingPersistence = (
   path: string = scheduledMeetingsPath(),
 ): ScheduledMeetingPersistence => ({
   save: (snapshot) => {
-    try {
-      writeJsonAtomic(path, JSON.stringify(snapshot, null, 2));
-    } catch (error) {
-      Logger.error("Failed to persist scheduled meetings to JSON", error);
-    }
+    writeJsonAtomic(path, JSON.stringify(snapshot, null, 2));
   },
   importIfNewer: (meeting) => {
     const entries = requireArray(readJsonStore(path) ?? [], "scheduled meetings");
@@ -987,8 +983,17 @@ end
 return 1
 `;
 
-/** Copies the given meetings and deletions in newest-wins and marks the hash seeded, in one step. */
+/**
+ * Seeds an empty Redis from SQLite and marks it seeded, in one step. A Redis
+ * that already holds meetings is the authority: it is only marked, never
+ * topped up from SQLite, whose rows an older SFU may have left stale.
+ */
 const SEED_MEETINGS_SCRIPT = `${STORED_AT_LUA}
+if redis.call("EXISTS", KEYS[3]) == 1 then return 0 end
+if redis.call("HLEN", KEYS[1]) > 0 or redis.call("HLEN", KEYS[2]) > 0 then
+  redis.call("SET", KEYS[3], "1")
+  return 0
+end
 local count = tonumber(ARGV[1]) or 0
 local index = 2
 for _ = 1, count do
@@ -1026,6 +1031,7 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
   private startPromise: Promise<void> | null = null;
   private started = false;
   private pendingWrite: Promise<void> = Promise.resolve();
+  private seeded: Promise<void> | null = null;
 
   constructor(options: {
     redisUrl: string;
@@ -1064,25 +1070,23 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
     }
   }
 
-  save(snapshot: ScheduledMeeting[]): void {
-    void this.fallback.save(snapshot);
-    this.queueWrite("save snapshot", async () => {
+  save(snapshot: ScheduledMeeting[]): Promise<void> {
+    return this.queueWrite(async () => {
+      await this.fallback.save(snapshot);
       for (const meeting of snapshot) await this.setIfNewer(meeting, "save");
     });
   }
 
-  saveChanged(meetings: ScheduledMeeting[]): void {
-    if (meetings.length === 0) return;
-    void this.fallback.saveChanged?.(meetings);
-    this.queueWrite("save changed meetings", async () => {
+  saveChanged(meetings: ScheduledMeeting[]): Promise<void> {
+    return this.queueWrite(async () => {
+      await this.fallback.saveChanged?.(meetings);
       for (const meeting of meetings) await this.setIfNewer(meeting, "save");
     });
   }
 
-  deleteRecords(deletions: MeetingDeletion[]): void {
-    if (deletions.length === 0) return;
-    void this.fallback.deleteRecords?.(deletions);
-    this.queueWrite("delete meetings", async () => {
+  deleteRecords(deletions: MeetingDeletion[]): Promise<void> {
+    return this.queueWrite(async () => {
+      await this.fallback.deleteRecords?.(deletions);
       await this.client.sendCommand([
         "EVAL",
         DELETE_MEETINGS_SCRIPT,
@@ -1096,6 +1100,7 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
 
   async importIfNewer(meeting: ScheduledMeeting): Promise<boolean> {
     await this.start();
+    await this.ensureSeeded();
     const applied = await this.setIfNewer(meeting, "newer");
     await this.fallback.importIfNewer(meeting);
     return Number(applied) === 1;
@@ -1149,15 +1154,10 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
     return meeting;
   }
 
-  /**
-   * Another SFU trusts the hash only once the seeded marker exists, and the
-   * seed sets it in the same script that copies SQLite in, so nobody reads a
-   * half-copied hash. Seeding twice is harmless: it merges newest-wins.
-   */
   async loadState(options?: { strict?: boolean }): Promise<StoredMeetings> {
     try {
       await this.start();
-      if (!(await this.client.exists(this.seededKey))) await this.seed(options);
+      await this.ensureSeeded();
       const [values, tombstones] = (await this.client
         .multi()
         .hVals(this.key)
@@ -1195,9 +1195,19 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
     await this.client.quit();
   }
 
-  private async seed(options?: { strict?: boolean }): Promise<void> {
-    const local = await this.fallback.loadState(options);
-    await this.client.sendCommand([
+  /** Runs before the first read or write, so nothing this SFU writes can make an empty Redis look established. */
+  private ensureSeeded(): Promise<void> {
+    this.seeded ??= this.seed().catch((error: unknown) => {
+      this.seeded = null;
+      throw error;
+    });
+    return this.seeded;
+  }
+
+  private async seed(): Promise<void> {
+    if (await this.client.exists(this.seededKey)) return;
+    const local = await this.fallback.loadState({ strict: true });
+    const seeded = await this.client.sendCommand([
       "EVAL",
       SEED_MEETINGS_SCRIPT,
       "3",
@@ -1208,7 +1218,7 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
       ...local.records.flatMap((meeting) => [meeting.id, String(meeting.updatedAt), JSON.stringify(meeting)]),
       ...[...local.deletedAt].flatMap(([id, deletedAt]) => [id, String(deletedAt)]),
     ]);
-    if (local.records.length > 0) {
+    if (Number(seeded) === 1 && local.records.length > 0) {
       Logger.info(`Seeded Redis with ${local.records.length} scheduled meeting(s) from local persistence`);
     }
   }
@@ -1227,17 +1237,15 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
     ]);
   }
 
-  private queueWrite(label: string, write: () => Promise<void>): void {
-    const writePromise = this.pendingWrite
-      .catch(() => undefined)
-      .then(async () => {
-        await this.start();
-        await write();
-      });
-    this.pendingWrite = writePromise.catch((error) => {
-      Logger.error(`Failed to persist scheduled meetings to Redis (${label})`, error);
-      throw error;
+  /** Writes in order; each caller gets its own write's result, mirror included. */
+  private queueWrite(write: () => Promise<void>): Promise<void> {
+    const writePromise = this.pendingWrite.then(async () => {
+      await this.start();
+      await this.ensureSeeded();
+      await write();
     });
+    this.pendingWrite = writePromise.catch(() => undefined);
+    return writePromise;
   }
 }
 

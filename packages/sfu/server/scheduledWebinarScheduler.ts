@@ -198,11 +198,15 @@ const advanceScheduledWebinars = (
   }
 
   if (changed > 0 && state.scheduledWebinarPersistence) {
-    persistScheduledWebinarChanges(
-      state.scheduledWebinars,
-      state.scheduledWebinarPersistence,
-      changedWebinars,
-    );
+    try {
+      persistScheduledWebinarChanges(
+        state.scheduledWebinars,
+        state.scheduledWebinarPersistence,
+        changedWebinars,
+      );
+    } catch (error) {
+      Logger.warn("Failed to persist scheduled webinar status changes", error);
+    }
   }
 
   return changed;
