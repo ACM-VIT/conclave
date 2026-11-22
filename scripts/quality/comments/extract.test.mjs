@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
-import { extractComments, pythonScannerFallback } from "./extract.mjs";
+import { extractComments, iconGeneratorOutputs, pythonScannerFallback } from "./extract.mjs";
+import { configuresNoComments } from "./policy.mjs";
 
 const texts = (source, file) => extractComments(source, file).map((comment) => comment.text);
 const disallowed = (source, file) =>
@@ -104,7 +105,7 @@ test("a license header is allowed only at the very top of the file", () => {
     [
       [1, "license-header"],
       [2, "license-header"],
-      [3, "license-header"],
+      [3, null],
       [5, null],
       [7, null],
     ],
@@ -207,25 +208,6 @@ test("Skip transpiler directives are allowed in Swift and nowhere else", () => {
   );
 });
 
-test("generated provenance hashes are allowed, prose beside a hash is not", () => {
-  const hash = "a8f815b7cd4ceb7bf9c5d04f6fed8528a3cf77981e3994e91cace24d6e25b541";
-  const source = [
-    `// Profile material-rounded-24-absolute-v1; manifest SHA256 ${hash}; generator SHA256 ${hash}.`,
-    "val a = 1",
-    `    // mic.fill1; input SHA256 ${hash}.`,
-    `// We pinned this because the upstream glyph moved; input SHA256 ${hash}.`,
-    `// input SHA256 ${hash.slice(1)}.`,
-  ].join("\n");
-  assert.deepEqual(
-    extractComments(source, "Icons.kt").map((comment) => comment.allowed),
-    ["provenance-hash", "provenance-hash", null, null],
-  );
-  assert.deepEqual(
-    extractComments(`// mic.fill1; input SHA256 ${hash}.\nconst a = 1;\n`, "a.ts").map((comment) => comment.allowed),
-    [null],
-  );
-});
-
 test("an attribution header may follow a directive prologue", () => {
   const source = [
     '"use client";',
@@ -239,11 +221,12 @@ test("an attribution header may follow a directive prologue", () => {
     extractComments(source, "prompt-input.tsx").map((comment) => comment.allowed),
     ["license-header", null],
   );
-  const apache = ["// Material Symbols by Google.", "// Apache-2.0, complete text: LICENSE", "package a"].join("\n");
-  assert.deepEqual(
-    extractComments(apache, "Icons.kt").map((comment) => comment.allowed),
-    ["license-header", "license-header"],
-  );
+  const apache = [
+    "/* Material Symbols by Google, licensed under the Apache License, Version 2.0.",
+    " * Complete license text: LICENSE */",
+    "package a",
+  ].join("\n");
+  assert.deepEqual(extractComments(apache, "Icons.kt").map((comment) => comment.allowed), ["license-header"]);
   assert.deepEqual(
     extractComments('const a = "use client";\n// Copyright 2024 Example\n', "a.ts").map((comment) => comment.allowed),
     [null],
@@ -346,7 +329,7 @@ test("Skip directives follow the pinned skipstone grammar in line and block form
     "/* SKIP REPLACE:",
     "fun f() = Unit",
     "*/",
-    "// SKIP NOWARN(conversion)",
+    "// SKIP NOWARN(EXTENSION_MERGING)",
     "// SKIP NOWARNING",
     "// SKIP EXTERN",
     "let a = 1 // SKIP NOWARN",
@@ -354,20 +337,6 @@ test("Skip directives follow the pinned skipstone grammar in line and block form
   assert.deepEqual(
     extractComments(source, "Bridge.swift").map((comment) => comment.allowed),
     ["skip-directive", "skip-directive", null, null, "skip-directive", "skip-directive", "skip-directive", null, "skip-directive", null],
-  );
-});
-
-test("provenance hashes are allowed only under the icon generator's exact header", () => {
-  const hash = "a8f815b7cd4ceb7bf9c5d04f6fed8528a3cf77981e3994e91cace24d6e25b541";
-  const header = `// Profile material-rounded-24-absolute-v1; manifest SHA256 ${hash}; generator SHA256 ${hash}.`;
-  const vector = `    // mic.fill1; input SHA256 ${hash}.`;
-  assert.deepEqual(
-    extractComments(`${header}\npackage a\n${vector}\n// a sentence ending in SHA256 ${hash}.\n`, "Icons.kt").map((c) => c.allowed),
-    ["provenance-hash", "provenance-hash", null],
-  );
-  assert.deepEqual(
-    extractComments(`package a\n${vector}\n// We pinned it; input SHA256 ${hash}.\n`, "Other.kt").map((c) => c.allowed),
-    [null, null],
   );
 });
 
@@ -379,6 +348,66 @@ test("a license header needs a real marker and covers only the top block", () =>
   for (const marker of ["// SPDX-License-Identifier: MIT", "// © 2024 Example", "// Licensed under the Apache License, Version 2.0"]) {
     assert.deepEqual(extractComments(`${marker}\nexport {};\n`, "c.ts").map((c) => c.allowed), ["license-header"], marker);
   }
+});
+
+test("NOWARN takes only skipstone's diagnostic ids, and trailing spaces are trimmed", () => {
+  const source = [
+    "// SKIP NOWARN   ",
+    "// SKIP NOWARN(free text)",
+    "// SKIP NOWARN( EXTENSION_MERGING , EXTENSION_MERGING )",
+    "// SKIP NOWARN()",
+    "let a = 1",
+  ].join("\n");
+  assert.deepEqual(
+    extractComments(source, "Bridge.swift").map((comment) => comment.allowed),
+    ["skip-directive", null, "skip-directive", null],
+  );
+});
+
+test("provenance hashes are allowed only in files the icon generator writes", () => {
+  const hash = "a8f815b7cd4ceb7bf9c5d04f6fed8528a3cf77981e3994e91cace24d6e25b541";
+  const header = `// Profile material-rounded-24-absolute-v1; manifest SHA256 ${hash}; generator SHA256 ${hash}.`;
+  const vector = `    // mic.fill1; input SHA256 ${hash}.`;
+  const generated = "apps/conclave-skip/Sources/Conclave/Skip/ui/icons/ConclaveIcons.kt";
+  const source = `${header}\npackage a\n${vector}\n// a sentence ending in SHA256 ${hash}.\n`;
+  assert.deepEqual(extractComments(source, generated).map((c) => c.allowed), ["provenance-hash", "provenance-hash", null]);
+  assert.deepEqual(
+    extractComments(source, "apps/conclave-skip/Sources/Conclave/Skip/Other.kt").map((c) => c.allowed),
+    [null, null, null],
+  );
+});
+
+test("the icon generator's output list is read from the generator", () => {
+  assert.deepEqual([...iconGeneratorOutputs()].sort(), [
+    "apps/conclave-skip/Sources/Conclave/DesignSystem/iOS/Icons/ConclaveSymbols.swift",
+    "apps/conclave-skip/Sources/Conclave/DesignSystem/iOS/Icons/NativeSymbolCatalog.swift",
+    "apps/conclave-skip/Sources/Conclave/Skip/ui/icons/ConclaveIcons.kt",
+    "apps/conclave-skip/Sources/Conclave/Skip/ui/icons/NativeConvertedIconFixtures.kt",
+    "apps/conclave-skip/Sources/Conclave/Skip/ui/icons/NativeIconCatalog.kt",
+  ]);
+});
+
+test("a license block counts only comments that are notices themselves", () => {
+  const todo = ["// TODO change the MIT License dialog", "// and the copy next to it", "export {};"].join("\n");
+  assert.deepEqual(extractComments(todo, "a.ts").map((c) => c.allowed), [null, null]);
+  const spdx = ["// SPDX-License-Identifier: MIT", "/* TODO clean this module up */", "export {};"].join("\n");
+  assert.deepEqual(extractComments(spdx, "b.ts").map((c) => c.allowed), ["license-header", null]);
+  const facehash = ["/**", " * Face geometry from facehash 0.1.0, Copyright (c) Cossistant team.", " * MIT License", " */", "export {};"].join("\n");
+  assert.deepEqual(extractComments(facehash, "c.ts").map((c) => c.allowed), ["license-header"]);
+});
+
+test("inline config that enables the rule is not a bypass, escaped names are decoded", () => {
+  const source = [
+    '/* eslint conclave/no-comments: "error" */',
+    '/* eslint "conclave\\u002fno-comments": "off" */',
+    "/* eslint conclave/no-comments: [0] */",
+    "export {};",
+  ].join("\n");
+  assert.deepEqual(extractComments(source, "a.ts").map((c) => c.allowed), [null, null, null]);
+  assert.deepEqual(
+    [configuresNoComments('/* eslint conclave/no-comments: "error" */'), configuresNoComments('/* eslint "conclave\\u002fno-comments": "off" */'), configuresNoComments("/* eslint conclave/no-comments: [0] */")],
+    [false, true, true],
+  );
 });
 
 test("escapes in CSS, shell and Kotlin never open a comment", () => {

@@ -1,9 +1,10 @@
-// Profile material-rounded-24-absolute-v1; manifest SHA256 a8f815b7cd4ceb7bf9c5d04f6fed8528a3cf77981e3994e91cace24d6e25b541; generator SHA256 fbff2029aaba8d8f7b4c982da1566ccbcaa30ddeae11dd629e913ebc03804567.
-// Material Symbols by Google. Conclave converted the original SVGs (strict SVG parsing,
-// exact-decimal font960 translation or sealed implicit24 scaling) to absolute native paths.
-// Source commit 49d4db35df873165d6bd6ba09b063c7dafbac2f4; per-input SHA256 above each vector and in the build-time manifest.
-// Apache-2.0, complete text: packages/ui-tokens/icons/vendor/material-symbols/upstream/LICENSE
-// (packaged as MaterialSymbols-LICENSE.txt).
+// Profile material-rounded-24-absolute-v1; manifest SHA256 a8f815b7cd4ceb7bf9c5d04f6fed8528a3cf77981e3994e91cace24d6e25b541; generator SHA256 9fc85a5e8dc29f43b2874bf96215c440f7cc5581630795b486be96640271e71a.
+/* Material Symbols by Google, licensed under the Apache License, Version 2.0.
+ * Conclave converted the original SVGs (strict SVG parsing, exact-decimal font960
+ * translation or sealed implicit24 scaling) to absolute native paths.
+ * Source commit 49d4db35df873165d6bd6ba09b063c7dafbac2f4; per-input SHA256 above each vector and in the build-time manifest.
+ * Complete license text: packages/ui-tokens/icons/vendor/material-symbols/upstream/LICENSE
+ * (packaged as MaterialSymbols-LICENSE.txt). */
 package conclave.module
 
 import androidx.compose.ui.graphics.Color

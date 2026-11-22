@@ -16,7 +16,7 @@
 - Adaptive icon layers scale the 400 unit mark to 66 dp, centred in the 108 dp canvas, so it fits the 66 dp safe zone.
 - Upstream `auto_awesome` uses implicit 24 px coordinates. It is an exact, pinned exception to the strict font960 profile.
 - The script and its tests stay compatible with Python 3.9, the macOS system `python3`. For example the tests use an explicit length check instead of `zip(strict=True)`, which needs 3.10.
-- Each output carries a provenance line with the manifest and generator SHA-256 and a per-vector input SHA-256, and the Compose vectors keep the Material Symbols Apache-2.0 attribution. The comment lint allows exactly these lines.
+- Each output carries a provenance line with the manifest and generator SHA-256 and a per-vector input SHA-256, and the Compose vectors open with one Material Symbols license notice (Apache License, Version 2.0, with Conclave's conversion note and the source commit). The comment lint allows exactly these, and only in the files the generator writes.
 
 ## Consequences
 

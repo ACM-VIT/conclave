@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync, spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import tseslint from "typescript-eslint";
@@ -462,10 +462,28 @@ const lineIndexOf = (starts, offset) => {
   return low;
 };
 
+const ICON_GENERATOR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../packages/ui-tokens/scripts/gen-native-icons.py");
+
+let iconOutputs;
+
+export const iconGeneratorOutputs = () => {
+  if (iconOutputs) return iconOutputs;
+  iconOutputs = new Set();
+  if (!existsSync(ICON_GENERATOR)) return iconOutputs;
+  const source = readFileSync(ICON_GENERATOR, "utf8");
+  const roots = Object.fromEntries([...source.matchAll(/^([A-Z_]+) = Path\('([^']+)'\)$/gm)].map((match) => [match[1], match[2]]));
+  for (const [, root, name] of source.matchAll(/\b([A-Z_]+) \/ '([^'\/]+\.(?:kt|swift))'/g)) {
+    if (roots[root]) iconOutputs.add(`${roots[root]}/${name}`);
+  }
+  return iconOutputs;
+};
+
 export const extractComments = (rawText, file) => {
   const text = rawText.replace(/^﻿/, "");
   const comments = scanComments(text, file).map(([start, end]) => ({ start, end, text: text.slice(start, end) }));
-  const verdicts = classifyComments(text, comments, languageOf(file));
+  const verdicts = classifyComments(text, comments, languageOf(file), {
+    generatedIconOutput: iconGeneratorOutputs().has(file),
+  });
   const starts = lineStartsOf(text);
   return comments.map((comment, index) => {
     const first = lineIndexOf(starts, comment.start);

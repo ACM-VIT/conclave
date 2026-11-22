@@ -33,34 +33,51 @@ export const isFirstPartySource = (file) =>
 export const vendoredIgnores = (packageDir) =>
   VENDORED_PREFIXES.filter((prefix) => prefix.startsWith(packageDir)).map((prefix) => prefix.slice(packageDir.length));
 
-const LICENSE_MARKERS = [
-  /SPDX-License-Identifier:\s*\S/,
-  /@license\b/,
-  /\bCopyright\s+(?:\(c\)|\(C\)|©)\s*\S/,
-  /\bCopyright\s+(?:\d{4}|[A-Z][\w&.,-]+)/,
-  /©\s*\d{4}/,
-  /\bPermission is hereby granted\b/i,
-  /\bLicensed under the (?:Apache|MIT|BSD|GNU|Mozilla|ISC)\b/,
-  /\b(?:Apache-2\.0|Apache License|MIT License|BSD-[0-4]-Clause|(?:L|A)?GPL-[23]\.0|MPL-2\.0|ISC License|CC-BY-[\d.]+)\b/,
-  /^\/\/ Ported (?:verbatim |\(and trimmed\) )?from \S/,
+const LICENSE_NOTICE_LINE = [
+  /^SPDX-(?:License-Identifier|FileCopyrightText):\s*\S/,
+  /\bCopyright\s+(?:\(c\)|\(C\)|©|\d{4})/,
+  /^©\s*\d{4}/,
+  /\blicensed under the (?:Apache|MIT|BSD|GNU|Mozilla|ISC|Creative Commons)\b/i,
+  /^Permission is hereby granted\b/,
+  /^Ported (?:verbatim |\(and trimmed\) )?from \S/,
 ];
 
-const hasLicenseMarker = (text) => LICENSE_MARKERS.some((marker) => marker.test(text));
+const commentContentLines = (text) =>
+  text
+    .replace(/^\/\/+|^\/\*+|\*+\/$/g, "")
+    .split("\n")
+    .map((line) => line.replace(/^\s*\*?\s?/, "").trim())
+    .filter((line) => line !== "");
+
+export const isLicenseNotice = (text) => {
+  const [first] = commentContentLines(text);
+  return first !== undefined && LICENSE_NOTICE_LINE.some((pattern) => pattern.test(first));
+};
 
 const DIRECTIVE_PROLOGUE = /^\s*(?:(["'])use [a-z ]+\1;?\s*)*$/;
 
 const ESLINT_DIRECTIVE = /^(?:\/\/|\/\*)\s*eslint-(disable|enable)(?:-next-line|-line)?(?=\s|\*\/|$)/;
 const ESLINT_INLINE_CONFIG = /^\/\*\s*eslint(?:-env)?\s/;
+
+const decodeInlineConfig = (text) =>
+  text.replace(/\\u\{([0-9a-fA-F]+)\}|\\u([0-9a-fA-F]{4})|\\x([0-9a-fA-F]{2})|\\(.)/g, (_, braced, unicode, hex, other) =>
+    braced || unicode || hex ? String.fromCodePoint(parseInt(braced || unicode || hex, 16)) : other,
+  );
+
+const ENABLING_SEVERITY = /^\[?\s*(["']?)(?:error|warn|1|2)\1\s*(?:[,\]}]|\*\/|$)/;
 const ESLINT_REASON = /\s-{2,}\s+\S/;
 const TS_EXPECT_ERROR = /^(?:\/\/|\/\*)\s*@ts-expect-error\b([\s\S]*?)(?:\*\/)?$/;
 
 const SOURCE_MAP_URL = /^(?:\/\/|\/\*)[#@]\s*sourceMappingURL=\S+\s*(?:\*\/)?$/;
 
-const SKIP_KEYWORD = /^SKIP (?:@\S|ATTRIBUTES:|INSERT:|REPLACE:|DECLARE:|NOWARN(?:\([^)\n]*\))?$|EXTERN|SYMBOLFILE)/;
+const SKIP_DIAGNOSTIC_ID = "EXTENSION_MERGING";
+const SKIP_KEYWORD = new RegExp(
+  `^SKIP (?:@\\S|ATTRIBUTES:|INSERT:|REPLACE:|DECLARE:|NOWARN(?:\\(\\s*${SKIP_DIAGNOSTIC_ID}(?:\\s*,\\s*${SKIP_DIAGNOSTIC_ID})*\\s*\\))?$|EXTERN|SYMBOLFILE)`,
+);
 const SKIP_CONTINUES = /^SKIP (?:@\S|ATTRIBUTES:|INSERT:|REPLACE:|DECLARE:)/;
 
 const skipDirectiveBody = (text) => {
-  if (text.startsWith("// ")) return text.slice(3);
+  if (text.startsWith("// ")) return text.slice(3).trimEnd();
   if (text.startsWith("/* ") && text.endsWith("*/")) {
     const body = text.slice(3, -2);
     return body.includes("\n") ? body.split("\n")[0].trimEnd() : body.trim();
@@ -85,8 +102,18 @@ export const disablesNoComments = (text) => {
   return rules === "" || rules.split(/[\s,]+/).includes(NO_COMMENTS_RULE);
 };
 
-export const configuresNoComments = (text) =>
-  ESLINT_INLINE_CONFIG.test(text) && text.includes(NO_COMMENTS_RULE);
+export const configuresNoComments = (text) => {
+  if (!ESLINT_INLINE_CONFIG.test(text)) return false;
+  const decoded = decodeInlineConfig(text);
+  let from = decoded.indexOf(NO_COMMENTS_RULE);
+  if (from === -1) return false;
+  while (from !== -1) {
+    const value = decoded.slice(from + NO_COMMENTS_RULE.length).replace(/^["']?\s*:\s*/, "");
+    if (!ENABLING_SEVERITY.test(value)) return true;
+    from = decoded.indexOf(NO_COMMENTS_RULE, from + 1);
+  }
+  return false;
+};
 
 export const switchesOffNoComments = (text) => disablesNoComments(text) || configuresNoComments(text);
 
@@ -159,21 +186,22 @@ const iconProvenanceIndexes = (comments) => {
 };
 
 const licenseHeaderIndexes = (source, comments, isDirective) => {
-  const block = [];
+  const indexes = new Set();
   let previousEnd = 0;
   for (let index = 0; index < comments.length; index += 1) {
     const gap = source.slice(previousEnd, comments[index].start);
     if (index === 0 ? !DIRECTIVE_PROLOGUE.test(gap) : !/^[ \t]*\n[ \t]*$/.test(gap)) break;
-    block.push(index);
     previousEnd = comments[index].end;
+    if (isDirective(index)) continue;
+    if (!isLicenseNotice(comments[index].text)) break;
+    indexes.add(index);
   }
-  const hasMarker = block.some((index) => !isDirective(index) && hasLicenseMarker(comments[index].text));
-  return new Set(hasMarker ? block : []);
+  return indexes;
 };
 
-export const classifyComments = (source, comments, language) => {
+export const classifyComments = (source, comments, language, { generatedIconOutput = false } = {}) => {
   const skip = language === "swift" ? skipDirectiveIndexes(source, comments) : new Set();
-  const provenance = language === "swift" || language === "kotlin" ? iconProvenanceIndexes(comments) : new Set();
+  const provenance = generatedIconOutput ? iconProvenanceIndexes(comments) : new Set();
   const directives = comments.map((comment, index) => {
     if (skip.has(index)) return { kind: "skip-directive" };
     if (provenance.has(index)) return { kind: "provenance-hash" };
