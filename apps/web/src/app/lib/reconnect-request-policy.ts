@@ -69,7 +69,8 @@ export const classifyReconnectFailure = ({
   if (/no room found|shared room registry unavailable/i.test(text)) {
     return "room-unavailable";
   }
-  return /timeout|xhr poll|websocket|transport|socket|network|fetch|load failed|connection/i.test(
+  // A join cut short because its socket dropped is worth another attempt.
+  return /timeout|xhr poll|websocket|transport|socket|network|fetch|load failed|connection|join was cancelled/i.test(
     text,
   )
     ? "transient"

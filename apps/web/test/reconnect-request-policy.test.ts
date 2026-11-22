@@ -63,6 +63,13 @@ describe("reconnect failures", () => {
     expect(classify(message)).toBe("room-unavailable");
   });
 
+  it.each(["Meeting join was cancelled", "Meeting connection was cancelled"])(
+    "keeps retrying when a dropped socket cut a join short: %s",
+    (message) => {
+      expect(classify(message)).toBe("transient");
+    },
+  );
+
   it("tells a draining server apart from a missing room", () => {
     expect(classify("Meeting server is draining. Try again shortly.")).toBe(
       "server-draining",
