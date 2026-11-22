@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Router, Worker } from "mediasoup/types";
+import type { Consumer, Router, Worker } from "mediasoup/types";
 import type { Server as SocketIOServer, Socket } from "socket.io";
 import { Admin } from "../config/classes/Admin.js";
 import { Client } from "../config/classes/Client.js";
@@ -274,6 +274,45 @@ describe("concurrent room creation", () => {
       finishedCreatingRouter();
       await Promise.all(pending);
     }
+  });
+
+  it("spreads a burst across workers with unequal consumer counts", async () => {
+    const { promise: routersReady, resolve: finishRouters } = Promise.withResolvers<void>();
+    const workers = [1, 2].map((pid) => ({
+      pid,
+      closed: false,
+      createRouter: vi.fn(async () => {
+        await routersReady;
+        return { closed: false } as Router;
+      }),
+    }));
+    const state = makeState(workers as unknown as Worker[]);
+    const busy = new Room({
+      id: "busy",
+      clientId: "conclave",
+      workerPid: 1,
+      router: { closed: false } as Router,
+    });
+    const client = new Client({ id: "viewer", socket: makeSocket("viewer").socket });
+    busy.addClient(client);
+    client.consumers.set("first-video", {} as Consumer);
+    client.consumers.set("second-video", {} as Consumer);
+    state.rooms.set(busy.channelId, busy);
+
+    const pending = ["a", "b", "c", "d"].map((id) =>
+      getOrCreateRoomWithOrigin(state, "conclave", id),
+    );
+    try {
+      await vi.waitFor(() => {
+        const creations = workers.reduce((total, worker) => total + worker.createRouter.mock.calls.length, 0);
+        expect(creations).toBe(pending.length);
+      });
+    } finally {
+      finishRouters();
+    }
+    const rooms = await Promise.all(pending);
+    expect(rooms[0].room.workerPid).toBe(2);
+    expect(new Set(rooms.map(({ room }) => room.workerPid))).toEqual(new Set([1, 2]));
   });
 
   it("makes only the joiner whose call created the room its host", async () => {

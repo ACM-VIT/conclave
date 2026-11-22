@@ -23,8 +23,8 @@ export const getEndedRoom = (
 
 const getRoomWorkerLoads = (state: SfuState): Map<number, WorkerLoad> => {
   const loads = new Map<number, WorkerLoad>();
-  for (const [pid, rooms] of state.workerRoomReservations) {
-    loads.set(pid, { consumers: 0, rooms });
+  for (const [pid, pendingRooms] of state.workerRoomReservations) {
+    loads.set(pid, { consumers: 0, rooms: 0, pendingRooms });
   }
 
   for (const room of state.rooms.values()) {
@@ -32,7 +32,7 @@ const getRoomWorkerLoads = (state: SfuState): Map<number, WorkerLoad> => {
       continue;
     }
 
-    const load = loads.get(room.workerPid) ?? { consumers: 0, rooms: 0 };
+    const load = loads.get(room.workerPid) ?? { consumers: 0, rooms: 0, pendingRooms: 0 };
     load.rooms++;
     for (const client of room.clients.values()) {
       load.consumers += client.consumers.size;

@@ -3,26 +3,30 @@ import type { Worker } from "mediasoup/types";
 export type WorkerLoad = {
   consumers: number;
   rooms: number;
+  pendingRooms: number;
 };
 
-const idle: WorkerLoad = { consumers: 0, rooms: 0 };
+const idle: WorkerLoad = { consumers: 0, rooms: 0, pendingRooms: 0 };
 
 const getWorker = (
   workers: Worker[],
   loads: ReadonlyMap<number, WorkerLoad>,
 ): Worker => {
   let leastLoadedWorker: Worker | undefined;
-  let leastLoad = idle;
+  let leastScore = Infinity;
+  let fewestRooms = Infinity;
   for (const worker of workers) {
     if (worker.closed) continue;
     const load = loads.get(worker.pid) ?? idle;
+    const score = load.consumers + load.pendingRooms;
+    const rooms = load.rooms + load.pendingRooms;
     if (
-      !leastLoadedWorker ||
-      load.consumers < leastLoad.consumers ||
-      (load.consumers === leastLoad.consumers && load.rooms < leastLoad.rooms)
+      score < leastScore ||
+      (score === leastScore && rooms < fewestRooms)
     ) {
       leastLoadedWorker = worker;
-      leastLoad = load;
+      leastScore = score;
+      fewestRooms = rooms;
     }
   }
 
