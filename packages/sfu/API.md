@@ -25,6 +25,12 @@ This means:
 - Allow/block lists should store stable identity keys (email/userId), not session ids.
 - Pending room entries are keyed by `userKey`.
 
+## Authority Apps
+
+`SFU_APPS_AUTHORITY_ENABLED=1` turns on the server-authoritative app runtime (`server/apps/authority`). It is off by default. With it off, no `apps:authority:*` event has a listener and the SFU answers like one that predates the runtime.
+
+The runtime runs only the modules imported in `server/apps/authority/registry.ts`. It resolves each connection against the live room on every request and before every frame, so a removed or replaced seat receives nothing more. The wire, the guarantees and the limits are in `packages/apps-sdk/docs/reference/authority-runtime.md`.
+
 ## HTTP Admin Endpoints
 
 Base routes live in `packages/sfu/server/http/createApp.ts`.
