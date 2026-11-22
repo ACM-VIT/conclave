@@ -1553,6 +1553,13 @@ function JoinScreen({
                     type="text"
                     value={normalizedRoomId}
                     onChange={(e) => onCodeChange(e.target.value)}
+                    onPaste={(e) => {
+                      const pasted = e.clipboardData.getData("text");
+                      if (isRoutedRoom || !pasted.includes("/")) return;
+                      e.preventDefault();
+                      const code = extractRoomCode(pasted);
+                      if (code) onCodeChange(code);
+                    }}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" && canJoin) joinMeeting();
                     }}
