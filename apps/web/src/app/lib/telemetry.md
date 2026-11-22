@@ -16,7 +16,10 @@ names, emails, chat text or room codes.
 ## Exceptions (`$exception`)
 
 Web, from `lib/telemetry.ts`. It loads PostHog when the first page mounts or
-the first report arrives, and holds up to 50 reports until it has loaded:
+the first report arrives, and holds up to 50 reports until it has loaded and
+the build's chunk manifest has too, or 3 s have passed, so a first-render error
+keeps its chunk paths. PostHog's own error capture starts as soon as it loads.
+Each report is scrubbed once, when it is sent:
 
 - Unhandled errors and promise rejections (posthog-js autocapture, rate limited per error type by the SDK).
 - Errors caught by `app/error.tsx` and `app/global-error.tsx`: `source: "react_error_boundary"`, `boundary: "route" | "root"`, `digest`. A meeting panel that fails to render or load (`MeetingPanelBoundary`) reports `boundary: "panel"` while the call goes on; the panel's name is not sent.

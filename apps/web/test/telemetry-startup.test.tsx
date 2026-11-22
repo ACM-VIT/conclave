@@ -230,6 +230,71 @@ describe("what each event carries", () => {
     }
   });
 
+  it("holds a first-render report until the build's chunk manifest has loaded", async () => {
+    vi.stubEnv("NEXT_PUBLIC_CONCLAVE_CLIENT_VERSION", "0b2d3b480f4621392a4151d750c90965b7c8b76c");
+    const chunk = "http://localhost:3000/_next/static/chunks/3u-6_1om1fv26.js";
+    const manifest = { "147fc2df-e663-5d76-aa13-f67e1e894071": "/_next/static/chunks/3u-6_1om1fv26.js" };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        () =>
+          new Promise<Response>((resolve) =>
+            setTimeout(() => resolve(new Response(JSON.stringify(manifest), { status: 200 })), 300),
+          ),
+      ),
+    );
+    const sent: SentEvent[] = [];
+    posthog.captureException.mockImplementation((_error: unknown, props?: Record<string, unknown>) => {
+      sent.push(
+        sendThroughSdk("$exception", {
+          $current_url: "http://localhost:3000/",
+          $exception_list: [
+            {
+              type: "Error",
+              value: "x",
+              stacktrace: { type: "raw", frames: [{ filename: chunk, lineno: 1, chunk_id: "147fc2df-e663-5d76-aa13-f67e1e894071" }] },
+            },
+          ],
+          ...props,
+        }),
+      );
+    });
+    try {
+      const { default: RouteError } = await import("../src/app/error");
+      await renderOnFirstLoad(RouteError);
+
+      await vi.waitFor(() => expect(sent).toHaveLength(1), { timeout: 3000 });
+      const frames = (sent[0].properties.$exception_list as Array<{ stacktrace: { frames: Array<{ filename: string }> } }>)[0]
+        .stacktrace.frames;
+      expect(frames[0].filename).toBe(chunk);
+    } finally {
+      posthog.captureException.mockReset();
+    }
+  });
+
+  it("sends held reports after 3 s when the manifest does not come", async () => {
+    vi.stubEnv("NEXT_PUBLIC_CONCLAVE_CLIENT_VERSION", "0b2d3b480f4621392a4151d750c90965b7c8b76c");
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const { telemetry } = await import("../src/app/lib/telemetry");
+      telemetry.captureException(new Error("first render"), { source: "react_error_boundary", boundary: "route" });
+      await vi.dynamicImportSettled();
+      await vi.advanceTimersByTimeAsync(2900);
+      expect(posthog.init).toHaveBeenCalled();
+      expect(posthog.captureException).not.toHaveBeenCalled();
+
+      const { logCallError } = await import("../src/app/lib/call-error-capture");
+      logCallError("[Meets] Consume error", new Error("while held"));
+      expect(posthog.captureException).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(200);
+      expect(posthog.captureException).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps a chunk's path only when the build's manifest pairs its id with that file", async () => {
     vi.stubEnv("NEXT_PUBLIC_CONCLAVE_CLIENT_VERSION", "0b2d3b480f4621392a4151d750c90965b7c8b76c");
     const manifest = { "147fc2df-e663-5d76-aa13-f67e1e894071": "/_next/static/chunks/3u-6_1om1fv26.js" };

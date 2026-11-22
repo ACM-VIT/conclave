@@ -70,6 +70,20 @@ const loadChunkManifest = async (): Promise<void> => {
   } catch {}
 };
 
+// Reports made before the manifest has loaded wait for it this long, so a
+// first-render error keeps its chunk paths; past it they go without, and the
+// manifest still applies to later reports once it arrives.
+const MANIFEST_WAIT_MS = 3000;
+
+const manifestOrTimeout = (): Promise<void> =>
+  new Promise((resolve) => {
+    const timer = setTimeout(resolve, MANIFEST_WAIT_MS);
+    void loadChunkManifest().finally(() => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+
 const emit = (payload: TelemetryProps | undefined, capture: () => void): void => {
   const outer = emitting;
   emitting = payload ?? {};
@@ -118,27 +132,32 @@ const initPostHog = (client: PostHog, key: string): void => {
       }),
   });
   dropStoredProperties(client);
-  void loadChunkManifest();
+  // Through send, so a call failure logged while reports are held waits too.
   installCallErrorCapture((error, props) => {
-    emit(props, () => client.captureException(error, props));
+    send((ready) => emit(props, () => ready.captureException(error, props)));
   });
 };
 
 /**
  * Loads PostHog once for the page's lifetime. Every report starts it too, so
- * an error boundary that replaced the root layout can still send.
+ * an error boundary that replaced the root layout can still send. PostHog's
+ * own error capture starts as soon as it loads; our reports are held until
+ * the chunk manifest has loaded too, or MANIFEST_WAIT_MS has passed, and each
+ * is scrubbed once, when it is sent.
  */
 export function startTelemetry(): void {
   if (posthog || queue || !posthogKey || !telemetryEnabled) return;
   if (typeof window === "undefined") return;
   const pending: Delivery[] = [];
   queue = pending;
+  const manifestReady = manifestOrTimeout();
   void Promise.all([
     import("posthog-js"),
     import("posthog-js/dist/exception-autocapture"),
   ])
-    .then(([{ default: client }]) => {
+    .then(async ([{ default: client }]) => {
       initPostHog(client, posthogKey);
+      await manifestReady;
       posthog = client;
       pending.forEach((delivery) => deliver(client, delivery));
     })
