@@ -264,6 +264,45 @@ describe("clearing an app", () => {
     });
   });
 
+  it("keeps another app's copied bytes from blocking the board when that app is cleared", () => {
+    const { join } = makeRoom();
+    const host = join("host#1", "host");
+    const artist = join("artist#1", "participant");
+    const attacker = join("attacker#1", "participant");
+    host.present("whiteboard");
+    artist.draw("whiteboard", "circle");
+    attacker.resync("whiteboard");
+    host.present("wheel");
+    attacker.sendWholeCopy("wheel");
+    host.present("whiteboard");
+    host.discard("wheel");
+    host.lock(true);
+
+    const returning = join("host#2", "host");
+    returning.resync("whiteboard");
+    returning.relayed.length = 0;
+    returning.draw("whiteboard", "circle", "moved");
+
+    expect(returning.relayed.map((sent) => sent.event)).toEqual(["apps:yjs:update"]);
+  });
+
+  it("stops only the cleared app's writers", () => {
+    const { join } = makeRoom();
+    const host = join("host#1", "host");
+    const wheelWriter = join("wheel#1", "participant");
+    const boardWriter = join("board#1", "participant");
+    wheelWriter.doc.clientID = 7;
+    boardWriter.doc.clientID = 7;
+    host.present("wheel");
+    wheelWriter.draw("wheel", "name");
+    host.discard("wheel");
+    host.present("whiteboard");
+
+    boardWriter.draw("whiteboard", "circle");
+
+    expect(boardWriter.relayed.map((sent) => sent.event)).toEqual(["apps:yjs:update"]);
+  });
+
   it("starts a cleared app on a new document generation", () => {
     const { join } = makeRoom();
     const host = join("host#1", "host");
@@ -382,7 +421,8 @@ describe("room document budget", () => {
     const host = join("host#1", "host");
     for (let index = 0; index < MAX_ROOM_APP_DOCS; index += 1) {
       host.present(`app-${index}`);
-      host.draw(`app-${index}`, "mark");
+      // Every app gets its own local document, as on a real client.
+      join(`writer#${index}`, "participant").draw(`app-${index}`, "mark");
     }
 
     expect(host.present("one-more")).toEqual({

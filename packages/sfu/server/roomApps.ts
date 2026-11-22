@@ -13,8 +13,8 @@ export const MAX_APP_DOC_BYTES = 1024 * 1024;
 // documents are also bounded per room: by count, and by total encoded bytes.
 export const MAX_ROOM_APP_DOCS = 8;
 export const MAX_ROOM_APP_DOC_BYTES = 4 * 1024 * 1024;
-// Yjs client IDs that wrote to a cleared document, kept so a client that
-// missed the clear cannot write that content back. Oldest are forgotten first.
+// Yjs client IDs that wrote to a cleared document, per app, kept so a client
+// that missed the clear cannot write that content back. Oldest go first.
 export const MAX_CLEARED_WRITERS = 4096;
 
 // An update can grow the encoded document by more than its own size: a
@@ -83,6 +83,13 @@ const encodedSizeAfter = (doc: Y.Doc, update: Uint8Array): number => {
 const appDocBytes = (entry: AppDoc): number =>
   entry.measuredBytes + entry.unmeasuredBytes;
 
+const writersOf = (doc: Y.Doc): Iterable<number> =>
+  Y.decodeStateVector(Y.encodeStateVector(doc)).keys();
+
+// App ids hold no control characters, so this joins them unambiguously.
+const clearedWriterKey = (appId: string, client: number): string =>
+  `${appId}\u0000${client}`;
+
 // Every Yjs client an update writes as, builds on or deletes from.
 const clientsTouchedBy = (update: Uint8Array): Set<number> => {
   const { structs, ds } = Y.decodeUpdate(update);
@@ -124,7 +131,10 @@ export class RoomApps {
   private revision = 0;
   private generations = 0;
   private docs: Map<string, AppDoc> = new Map();
-  private clearedWriters: Set<number> = new Set();
+  private clearedWriters: Set<string> = new Set();
+  // Writers of every kept document other than the presented one. Documents
+  // off the stage take no updates, so this changes only with the stage.
+  private otherAppWriters: Set<number> = new Set();
   private awareness: Map<string, Awareness> = new Map();
   private awarenessClientIdsByUser: Map<string, Map<string, Set<number>>> =
     new Map();
@@ -179,6 +189,7 @@ export class RoomApps {
     }
     this.stage = { activeAppId: appId, locked: false };
     this.revision += 1;
+    this.refreshOtherAppWriters();
     return { ok: true, changed: true, awarenessRemoval };
   }
 
@@ -192,6 +203,7 @@ export class RoomApps {
     const awarenessRemoval = this.leaveStage();
     this.stage = { activeAppId: null, locked: false };
     this.revision += 1;
+    this.refreshOtherAppWriters();
     return { ok: true, changed: true, awarenessRemoval };
   }
 
@@ -209,9 +221,10 @@ export class RoomApps {
       awarenessRemoval = this.removeAwareness(appId);
       this.stage = { activeAppId: null, locked: false };
     }
-    this.markCleared(Y.decodeStateVector(Y.encodeStateVector(entry.doc)).keys());
+    this.markCleared(appId, writersOf(entry.doc));
     this.destroyDoc(appId, entry);
     this.revision += 1;
+    this.refreshOtherAppWriters();
     return { ok: true, changed: true, awarenessRemoval };
   }
 
@@ -228,13 +241,16 @@ export class RoomApps {
   }
 
   /**
-   * False when `update` holds, builds on or deletes content of a cleared
-   * document, or comes from a client that wrote to one, as a client that
-   * missed the clear sends when it resyncs. Only a clear names cleared
-   * writers, so no update can get another writer's edits dropped.
+   * False when an update for `appId` holds, builds on or deletes content of
+   * one of that app's cleared documents, as a client that missed the clear
+   * sends when it resyncs, or of another app's document. Only a clear names
+   * an app's cleared writers, and bytes copied from one app never land in
+   * another, so no update can get another writer's edits dropped.
    */
-  acceptsContent(update: Uint8Array): boolean {
-    if (this.clearedWriters.size === 0) return true;
+  acceptsContent(appId: string, update: Uint8Array): boolean {
+    if (this.clearedWriters.size === 0 && this.otherAppWriters.size === 0) {
+      return true;
+    }
     let touched: Set<number>;
     try {
       touched = clientsTouchedBy(update);
@@ -242,7 +258,8 @@ export class RoomApps {
       return false;
     }
     for (const client of touched) {
-      if (this.clearedWriters.has(client)) return false;
+      if (this.otherAppWriters.has(client)) return false;
+      if (this.clearedWriters.has(clearedWriterKey(appId, client))) return false;
     }
     return true;
   }
@@ -314,14 +331,23 @@ export class RoomApps {
     return awarenessRemoval;
   }
 
-  private markCleared(clients: Iterable<number>): void {
+  private markCleared(appId: string, clients: Iterable<number>): void {
     for (const client of clients) {
-      this.clearedWriters.delete(client);
-      this.clearedWriters.add(client);
+      const key = clearedWriterKey(appId, client);
+      this.clearedWriters.delete(key);
+      this.clearedWriters.add(key);
     }
-    for (const client of this.clearedWriters) {
+    for (const key of this.clearedWriters) {
       if (this.clearedWriters.size <= MAX_CLEARED_WRITERS) break;
-      this.clearedWriters.delete(client);
+      this.clearedWriters.delete(key);
+    }
+  }
+
+  private refreshOtherAppWriters(): void {
+    this.otherAppWriters = new Set();
+    for (const [appId, entry] of this.docs) {
+      if (appId === this.stage.activeAppId) continue;
+      for (const client of writersOf(entry.doc)) this.otherAppWriters.add(client);
     }
   }
 
@@ -484,6 +510,7 @@ export class RoomApps {
       this.destroyDoc(appId, entry);
     }
     this.clearedWriters.clear();
+    this.otherAppWriters.clear();
     this.stage = { activeAppId: null, locked: false };
     this.revision += 1;
   }

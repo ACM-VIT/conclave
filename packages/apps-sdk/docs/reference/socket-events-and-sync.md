@@ -52,10 +52,12 @@ Only the presented app is live: `apps:yjs:sync`, `apps:yjs:update` and
 local copy of an app that leaves the stage and resync from the server when it
 returns.
 
-A cleared document stays cleared. The SFU remembers the Yjs clients that wrote
-to it and drops any later `apps:yjs:update` from those clients or that holds,
-builds on or deletes their content, as a client that missed the clear would
-send on resync. Only a clear adds to that list, so no update can get another
+A cleared document stays cleared. The SFU remembers, per app, the Yjs clients
+that wrote to it and drops any later `apps:yjs:update` for that app from those
+clients or that holds, builds on or deletes their content, as a client that
+missed the clear would send on resync. An update that touches another kept
+app's document is dropped too, so bytes copied from one app never land in
+another. Only a clear adds to an app's list, so no update can get another
 writer's edits dropped.
 
 A refused stage command acks `{ success: false, error, code }`. `code` is

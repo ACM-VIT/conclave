@@ -339,8 +339,8 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     const update = toUint8Array(data.update);
     if (!update || update.length === 0) return;
     if (update.length > MAX_APPS_UPDATE_BYTES) return;
-    if (!context.currentRoom.apps.acceptsContent(update)) {
-      Logger.warn(`[Apps] Dropping update for ${appId}: it carries a cleared document`);
+    if (!context.currentRoom.apps.acceptsContent(appId, update)) {
+      Logger.warn(`[Apps] Dropping update for ${appId}: it carries a cleared or another app's document`);
       return;
     }
     if (!context.currentRoom.apps.reserveUpdate(appId, update)) {
