@@ -1326,3 +1326,82 @@ test(
     }
   },
 );
+
+// Rewrites an archive with an extra recorded link and checksums to match.
+const withExtraLink = async (root, archive, line, out) => {
+  const work = await mkdtemp(path.join(root, "tamper-"));
+  await run("bash", [
+    "-c",
+    'set -e; age --decrypt -i "$1" "$2" | tar -C "$3" -xzf -; printf "%s\\n" "$4" >> "$3/sqlite-links"; ' +
+      '(cd "$3" && rm SHA256SUMS && find . -type f | sort | xargs sha256sum > "$5" && mv "$5" SHA256SUMS); ' +
+      'tar -C "$3" -czf - . | age --encrypt -R "$6" -o "$7"',
+    "_",
+    path.join(root, "key.txt"),
+    archive,
+    work,
+    line,
+    path.join(root, "sums.tmp"),
+    path.join(root, "recipients.txt"),
+    out,
+  ]);
+  return out;
+};
+
+test(
+  "a populated staging dir whose link names the container's path restores, as it does when empty",
+  { skip: missing.length > 0 && `needs ${missing.join(", ")} on PATH` },
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+    try {
+      const staging = path.join(root, "conclave-staging");
+      const { setDocker, backup, latestArchive, restore } = await setUp(root, [`CONCLAVE_STATE_DIR=${staging}`]);
+      await mkdir(path.join(staging, "data"), { recursive: true });
+      await setDocker([{ id: "sfu-staging", mounts: [staging], status: "exited", env: ["SFU_PORT=9", "SFU_INSTANCE_ID=sfu-staging"] }]);
+      const db = new DatabaseSync(path.join(staging, "data", "live.db"));
+      db.exec("CREATE TABLE meetings (id TEXT PRIMARY KEY); INSERT INTO meetings VALUES ('kept')");
+      db.close();
+      // Written for the SFU container, which mounts this dir at /var/lib/conclave/recordings.
+      await symlink("/var/lib/conclave/recordings/data/live.db", path.join(staging, "conclave.sqlite"));
+      await backup("--local-only");
+      const archive = await latestArchive();
+      const check = async () => {
+        assert.equal(await readlink(path.join(staging, "conclave.sqlite")), "/var/lib/conclave/recordings/data/live.db");
+        const restored = new DatabaseSync(path.join(staging, "data", "live.db"), { readOnly: true });
+        assert.deepEqual(restored.prepare("SELECT id FROM meetings").all().map((row) => row.id), ["kept"]);
+        restored.close();
+      };
+
+      await restore("--file", archive, "--yes");
+      await check();
+      await rm(staging, { recursive: true });
+      await restore("--file", archive, "--yes");
+      await check();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "a recorded link whose container path still leaves the state dir once mapped is refused",
+  { skip: missing.length > 0 && `needs ${missing.join(", ")} on PATH` },
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+    try {
+      const { state, backup, latestArchive, restore } = await setUp(root);
+      withDatabase(state);
+      await backup("--local-only");
+      const tampered = await withExtraLink(
+        root,
+        await latestArchive(),
+        "escape\t/var/lib/conclave/recordings/../../../outside",
+        path.join(root, "local", "conclave-test-20260101T000000Z.tar.gz.age"),
+      );
+      await rm(state, { recursive: true });
+      await assert.rejects(restore("--file", tampered, "--only", "sqlite", "--yes"), /the recorded link escape leads outside the state dir/);
+      assert.equal(await readlink(path.join(state, "escape")).catch(() => "absent"), "absent");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
