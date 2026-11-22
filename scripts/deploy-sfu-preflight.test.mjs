@@ -258,6 +258,11 @@ test("Redis off loopback must use TLS and credentials", () => {
 test("Redis at a public IP needs an explicit override", () => {
   assert.match(redisErrors("rediss://user:secret@57.159.28.54:6380").join("\n"), /public IP 57\.159\.28\.54 is refused/);
   assert.match(redisErrors("rediss://user:secret@[2606:4700::1111]:6380").join("\n"), /public IP/);
+  for (const mapped of ["[::ffff:57.159.28.54]", "[::ffff:399f:1c36]", "[0:0:0:0:0:FFFF:57.159.28.54]"]) {
+    assert.match(redisErrors(`rediss://user:secret@${mapped}:6380`).join("\n"), /public IP/, mapped);
+  }
+  assert.deepEqual(redisErrors("rediss://user:secret@[::ffff:10.0.0.5]:6380"), []);
+  assert.deepEqual(redisErrors("redis://[::ffff:127.0.0.1]:6379"), []);
   assert.deepEqual(redisErrors("rediss://user:secret@57.159.28.54:6380", { allowPublicRedis: true }), []);
   assert.match(
     redisErrors("redis://57.159.28.54:6379", { allowPublicRedis: true }).join("\n"),

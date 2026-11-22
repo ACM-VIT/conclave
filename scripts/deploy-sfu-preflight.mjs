@@ -40,10 +40,23 @@ const parseRequiredPort = (value, label, errors) => {
   return parsed;
 };
 
+const IPV4_MAPPED_PATTERN = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/;
+
+/** Canonical IP literal, with IPv4-mapped IPv6 (::ffff:a.b.c.d) unwrapped to IPv4. */
+const canonicalIp = (value) => {
+  if (isIP(value) !== 6) return value;
+  const canonical = new URL(`http://[${value}]`).hostname.slice(1, -1);
+  const mapped = IPV4_MAPPED_PATTERN.exec(canonical);
+  if (!mapped) return canonical;
+  const [high, low] = [mapped[1], mapped[2]].map((group) => Number.parseInt(group, 16));
+  return [high >> 8, high & 0xff, low >> 8, low & 0xff].join(".");
+};
+
 const isLoopbackIp = (value) => {
-  if (value === "::1") return true;
-  if (isIP(value) !== 4) return false;
-  return Number(value.split(".")[0]) === 127;
+  const ip = canonicalIp(value);
+  if (ip === "::1") return true;
+  if (isIP(ip) !== 4) return false;
+  return Number(ip.split(".")[0]) === 127;
 };
 
 const isPublicIpv4 = (value) => {
@@ -71,9 +84,10 @@ const isPublicIpv6 = (value) => {
 };
 
 const isPublicIp = (value) => {
-  const version = isIP(value);
-  if (version === 4) return isPublicIpv4(value);
-  if (version === 6) return isPublicIpv6(value);
+  const ip = canonicalIp(value);
+  const version = isIP(ip);
+  if (version === 4) return isPublicIpv4(ip);
+  if (version === 6) return isPublicIpv6(ip);
   return false;
 };
 
