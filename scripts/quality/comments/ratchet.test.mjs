@@ -214,3 +214,31 @@ test("a native comment removed without --update cannot be added back later", (t)
   assert.equal(result.status, 1);
   assert.match(result.stderr, /App\.swift: comments rose from 1 to 2 since/);
 });
+
+const ratchetWith = (repo, env) =>
+  spawnSync(process.execPath, [RATCHET, "--repo", repo], { encoding: "utf8", env: { ...process.env, ...env } });
+
+test("push mode compares a force push with the tip it replaced, not their merge base", (t) => {
+  const repo = repoWith(t, { "App.swift": "// one\n// two\nlet a = 1\n", [BASELINE]: { "App.swift": 2 } });
+  write(repo, { "App.swift": "// one\nlet a = 1\n" });
+  git(repo, "commit", "-q", "-m", "delete a comment");
+  const replacedTip = git(repo, "rev-parse", "HEAD").trim();
+  git(repo, "reset", "-q", "--hard", "HEAD^1");
+  write(repo, { "App.swift": "// one\n// two\nlet a = 2\n" });
+  git(repo, "commit", "-q", "-m", "force-pushed rewrite that brings the comment back");
+  const mergeBase = ratchetWith(repo, { COMMENT_RATCHET_BASE: replacedTip, COMMENT_RATCHET_MODE: "merge-base" });
+  assert.equal(mergeBase.status, 0, mergeBase.stderr);
+  const exact = ratchetWith(repo, { COMMENT_RATCHET_BASE: replacedTip, COMMENT_RATCHET_MODE: "exact" });
+  assert.equal(exact.status, 1);
+  assert.match(exact.stderr, /App\.swift: comments rose from 1 to 2 since/);
+});
+
+test("push mode falls back to HEAD^1 when the previous tip is gone, and says so", (t) => {
+  const repo = repoWith(t, { "App.swift": "// one\nlet a = 1\n", [BASELINE]: { "App.swift": 1 } });
+  write(repo, { "App.swift": "// one\n// two\nlet a = 1\n", [BASELINE]: { "App.swift": 2 } });
+  git(repo, "commit", "-q", "-m", "raise");
+  const result = ratchetWith(repo, { COMMENT_RATCHET_BASE: "0123456789abcdef0123456789abcdef01234567", COMMENT_RATCHET_MODE: "exact" });
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /is not available, so comparing with HEAD\^1/);
+  assert.match(result.stderr, /App\.swift rose from 1 to 2 since/);
+});

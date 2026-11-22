@@ -58,15 +58,23 @@ const RATCHET_FILES = [
 
 const readJson = (file) => JSON.parse(readFileSync(file, "utf8"));
 
-export const resolveBase = (repo, baseRef) => {
-  if (tryGit(repo, ["rev-parse", "--verify", "--quiet", `${baseRef}^{commit}`]) === undefined) {
-    return { skipped: `${baseRef} is not available` };
+const parentOfHead = (repo) => tryGit(repo, ["rev-parse", "--verify", "--quiet", "HEAD^1"])?.trim();
+
+export const resolveBase = (repo, baseRef, mode = "merge-base") => {
+  const commit = tryGit(repo, ["rev-parse", "--verify", "--quiet", `${baseRef}^{commit}`])?.trim();
+  if (mode === "exact") {
+    if (commit) return { base: commit };
+    const parent = parentOfHead(repo);
+    return parent
+      ? { base: parent, note: `${baseRef} is not available, so comparing with HEAD^1` }
+      : { skipped: `${baseRef} is not available and HEAD has no parent` };
   }
+  if (!commit) return { skipped: `${baseRef} is not available` };
   const base = tryGit(repo, ["merge-base", "HEAD", baseRef])?.trim();
   if (!base) return { skipped: `HEAD shares no history with ${baseRef}` };
   if (base !== tryGit(repo, ["rev-parse", "HEAD"])?.trim()) return { base };
   if (tryGit(repo, ["status", "--porcelain", "--untracked-files=no"])?.trim()) return { base };
-  const parent = tryGit(repo, ["rev-parse", "--verify", "--quiet", "HEAD^1"])?.trim();
+  const parent = parentOfHead(repo);
   return parent ? { base: parent } : { skipped: "HEAD has no parent to compare with" };
 };
 
@@ -86,10 +94,10 @@ export const countRisesSinceBase = (repo, base) =>
     }))
     .filter(({ from, to }) => to > from);
 
-export const growthSinceBase = (repo, baseRef) => {
-  const resolved = resolveBase(repo, baseRef);
+export const growthSinceBase = (repo, baseRef, mode) => {
+  const resolved = resolveBase(repo, baseRef, mode);
   if (resolved.skipped) return resolved;
-  const { base } = resolved;
+  const { base, note } = resolved;
   const rises = RATCHET_FILES.flatMap(({ file, flatten }) => {
     const before = tryGit(repo, ["show", `${base}:${file}`]);
     const local = path.join(repo, file);
@@ -99,7 +107,7 @@ export const growthSinceBase = (repo, baseRef) => {
       baseline: file,
     }));
   });
-  return { base, rises, countRises: countRisesSinceBase(repo, base) };
+  return { base, note, rises, countRises: countRisesSinceBase(repo, base) };
 };
 
 export const inlineNoCommentsDisables = (repo) => {
@@ -119,10 +127,11 @@ const describe = (records, file) =>
     .map((record) => `    ${record.file}:${record.line}  ${record.text.split("\n")[0].slice(0, 100)}`)
     .join("\n");
 
-const check = (repo, baseline, baseRef) => {
+const check = (repo, baseline, baseRef, mode) => {
   const records = ratchetedRecords(repo);
   const { rises, falls } = compareCounts(baseline, countDisallowed(records));
-  const growth = growthSinceBase(repo, baseRef);
+  const growth = growthSinceBase(repo, baseRef, mode);
+  if (growth.note) console.log(`comment ratchet: ${growth.note}.`);
   const disables = inlineNoCommentsDisables(repo);
   const failures = [];
   for (const { file, from, to } of rises) {
@@ -199,7 +208,7 @@ const main = () => {
   if (args.includes("--init")) return init(repo, baselineFile);
   const baseline = existsSync(baselineFile) ? readJson(baselineFile) : {};
   if (args.includes("--update")) return update(repo, baselineFile, baseline);
-  return check(repo, baseline, process.env.COMMENT_RATCHET_BASE || DEFAULT_BASE);
+  return check(repo, baseline, process.env.COMMENT_RATCHET_BASE || DEFAULT_BASE, process.env.COMMENT_RATCHET_MODE || "merge-base");
 };
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) process.exitCode = main();
