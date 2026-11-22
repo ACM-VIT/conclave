@@ -2098,14 +2098,18 @@ export function useMeetMedia({
           acquiredTracks.filter((track) => track.kind === "video"),
         ) ?? reusableVideoTrack;
       if (nextAudioTrack) {
-        nextAudioTrack = await prepareAudioPublishTrack(nextAudioTrack);
+        try {
+          nextAudioTrack = await prepareAudioPublishTrack(nextAudioTrack);
+        } catch (prepareErr) {
+          failures.microphone = prepareErr;
+          nextAudioTrack = null;
+        }
       }
-      const liveTracks = [nextAudioTrack, nextVideoTrack].filter(
-        (track): track is MediaStreamTrack =>
-          Boolean(track && track.readyState === "live"),
+      const hasAudio = nextAudioTrack?.readyState === "live";
+      const hasVideo = nextVideoTrack?.readyState === "live";
+      const liveTracks = [hasAudio ? nextAudioTrack : null, hasVideo ? nextVideoTrack : null].filter(
+        (track): track is MediaStreamTrack => Boolean(track),
       );
-      const hasAudio = Boolean(nextAudioTrack);
-      const hasVideo = Boolean(nextVideoTrack);
 
       setMediaState({
         hasAudioPermission: hasAudio,
@@ -2124,9 +2128,12 @@ export function useMeetMedia({
         setIsCameraOff(true);
       }
       const requiredError = createMediaDeviceError(requiredFailures, "PERMISSION_DENIED");
-      if (requiredError) {
-        setMeetError((current) => mergeMediaDeviceError(current, requiredError));
-      }
+      setMeetError((current) => {
+        let next = current;
+        if (hasAudio) next = clearMediaDeviceError(next, "microphone");
+        if (hasVideo) next = clearMediaDeviceError(next, "camera");
+        return requiredError ? mergeMediaDeviceError(next, requiredError) : next;
+      });
 
       if (nextAudioTrack) {
         setNoiseCancellationTrackEnabled(nextAudioTrack, !isMuted);
@@ -2151,43 +2158,6 @@ export function useMeetMedia({
       setIsCameraOff(true);
       if (meetErr.code === "PERMISSION_DENIED") {
         setIsMuted(true);
-      }
-
-      if (
-        meetErr.code === "PERMISSION_DENIED" ||
-        meetErr.code === "MEDIA_ERROR"
-      ) {
-        try {
-          if (isMuted) {
-            return null;
-          }
-
-          const audioOnlyConstraints = buildAudioConstraints(
-            selectedAudioInputDeviceId
-          );
-
-          const audioStream = await getUserMediaWithTimeout(
-            { audio: audioOnlyConstraints },
-            {
-              label: "fallback microphone permission request",
-              timeoutMs: MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS,
-            },
-          );
-          const audioTrack = audioStream.getAudioTracks()[0];
-          const publishAudioTrack = audioTrack
-            ? await prepareAudioPublishTrack(audioTrack)
-            : null;
-          setMediaState({
-            hasAudioPermission: true,
-            hasVideoPermission: false,
-          });
-          setIsCameraOff(true);
-          return publishAudioTrack
-            ? new MediaStream([publishAudioTrack])
-            : audioStream;
-        } catch {
-          return null;
-        }
       }
       return null;
     } finally {

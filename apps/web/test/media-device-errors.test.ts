@@ -186,3 +186,13 @@ describe("keeping each device's own cause", () => {
   });
 });
 
+
+describe("errors that name no device", () => {
+  it("keeps a screen share's own message when the source is busy", () => {
+    const busy = new DOMException("Could not start video source", "NotReadableError");
+    expect(createMeetError(busy, "MEDIA_ERROR")).toMatchObject({
+      code: "MEDIA_ERROR",
+      message: "Could not start video source",
+    });
+  });
+});

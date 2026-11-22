@@ -249,7 +249,7 @@ function mediaErrorFromCauses(causes: MediaCauses): MeetError | null {
     return {
       code: [camera.code, microphone.code].includes("PERMISSION_DENIED")
         ? "PERMISSION_DENIED"
-        : microphone.code,
+        : camera.code,
       message: sharedKind
         ? MEDIA_ERROR_MESSAGES[sharedKind].both
         : `${microphone.message} and ${lowerFirst(camera.message)}`,
@@ -302,7 +302,7 @@ export function createMeetError(
     if (deviceError) return deviceError;
   }
   const kind = classifyMediaFailure(error);
-  if (kind) {
+  if (kind && kind !== "busy") {
     return { code: MEDIA_FAILURE_CODES[kind], message: MEDIA_ERROR_MESSAGES[kind].both, recoverable: true };
   }
   if (isConnectionFailure(error)) {
