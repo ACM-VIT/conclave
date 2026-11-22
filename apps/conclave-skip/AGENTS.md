@@ -307,11 +307,22 @@ has the numbers.
   long as the draw in progress. All surface tiles share one allowance for
   that wait (`VideoDetachWait`, 150 ms in any second), because a rotation or
   a move to the background destroys several surfaces in a row and a wait per
-  tile adds up on the main thread. A surface destroyed after the allowance is
-  spent is let go of when its render thread gets to the detach: a swap in
-  progress fails, and the next attach builds a new surface. After `release()`
-  the callback waits for the release that is already queued, from the same
-  allowance.
+  tile adds up on the main thread.
+- A surface is destroyed by the time `surfaceDestroyed` returns, whatever its
+  render thread is doing. When the detach has not been answered within the
+  allowance, the main thread destroys the EGL surface itself
+  (`VideoTileRenderer.abandonSurface`). Android disconnects the window from
+  EGL at that point, which also ends a swap stalled inside it. The render
+  thread then finds its surface gone: a swap about to start is skipped, a
+  swap in progress fails, no new surface is made on the dead window, and the
+  task queued ahead of the detach takes the surface off its context. After
+  `release()` the callback waits for the release that is already queued, from
+  the same allowance and with the same fallback.
+- The loop takes WebRTC's `EglBase.lock` around make-current, swap and context
+  creation, as WebRTC's own renderers, encoders and camera helper do. Some
+  drivers deadlock between one thread's swap and another thread's context
+  creation, so the lock stays, and a stalled swap holds up every tile's swap
+  until it ends. Destroying its surface is what ends it.
 - A TextureView's SurfaceTexture may only be released after the EGL surface on
   it is gone, so `TextureVideoHost` keeps its listener after `release()` and
   hands a texture destroyed in between to the render thread's acknowledgement.
@@ -345,11 +356,13 @@ has the numbers.
   other buffer away (`rejecting buffer` in logcat) and its frame is never
   shown. A window with no buffer yet takes a new size at once. Three rules keep
   such buffers out of the queue:
-  - The host resizes a window's buffer only while the window shows a picture
-    (`hasFrame`). The first picture goes into the buffer the window was created
-    with, and the resize follows. A resize that reached a window with no
-    buffer would make the compositor throw the first buffer away, after the
-    tile's cover had been lifted for it.
+  - The host asks a window for a new buffer size only while the window shows
+    a picture in a buffer of the size it has now (`shownBufferSize`). So one
+    resize is under way at a time, and a buffer drawn for the size before it
+    always has a size the window knows. A window with no picture is never
+    resized: its first picture goes into the buffer it was created with. A
+    resize that reached it first would make the compositor throw that buffer
+    away, after the tile's cover had been lifted for it.
   - The host asks for a buffer size only once a frame has passed with no
     change to the view's size. A tile's fit follows its size by one frame
     (`slotSize` in `SlotView`), and a window moving into picture-in-picture
