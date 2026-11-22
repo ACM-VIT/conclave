@@ -75,12 +75,10 @@ const isPublicIpv4 = (value) => {
   return true;
 };
 
-const isPublicIpv6 = (value) => {
-  const normalized = value.toLowerCase();
-  if (normalized === "::" || normalized === "::1") return false;
-  if (normalized.startsWith("fc") || normalized.startsWith("fd")) return false;
-  if (/^fe[89ab]/.test(normalized) || normalized.startsWith("ff")) return false;
-  return /^[23]/.test(normalized);
+/** Global unicast is 2000::/3. Canonical IPv6 drops leading zeros, so compare the first hextet as a number. */
+const isPublicIpv6 = (canonical) => {
+  const firstHextet = Number.parseInt(canonical.split(":", 1)[0] || "0", 16);
+  return (firstHextet & 0xe000) === 0x2000;
 };
 
 const isPublicIp = (value) => {

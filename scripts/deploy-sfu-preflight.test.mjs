@@ -155,6 +155,28 @@ test("overlapping RTC ranges are fatal on one announced IP", () => {
   );
 });
 
+test("a non-local SFU must announce a globally routable IP", () => {
+  const announce = (ip) => {
+    const compose = makeCompose();
+    const dxb = compose.services["edge-dxb"].environment;
+    dxb.SFU_PUBLIC_URL = "https://dxb.example.com";
+    dxb.ANNOUNCED_IP = ip;
+    try {
+      resolveSfuTargets({ compose, serviceNames: ["edge-dxb"] });
+      return true;
+    } catch (error) {
+      assert.match(error.message, /ANNOUNCED_IP must be a publicly routable IP/);
+      return false;
+    }
+  };
+  assert.equal(announce("2606:4700::1111"), true);
+  assert.equal(announce("::ffff:8.8.8.8"), true);
+  // 2::1 is 0002::1, outside the global unicast 2000::/3 block.
+  assert.equal(announce("2::1"), false);
+  assert.equal(announce("fd00::1"), false);
+  assert.equal(announce("::ffff:10.0.0.1"), false);
+});
+
 test("matching RTC ranges are allowed on different public IPs", () => {
   const compose = makeCompose();
   const dxb = compose.services["edge-dxb"].environment;
