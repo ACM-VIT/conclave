@@ -1805,6 +1805,8 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     private var audioProducerRouteRecoveryInFlight = false
     private var requestedMicrophoneBandwidthQuality: ConnectionQuality = ConnectionQuality.unknown
     private var microphoneBandwidthRefreshPending = false
+    private var audioNoiseSuppressionChangeInFlight = false
+    private var pendingNoiseSuppression: Boolean? = null
     private var videoBandwidthRefreshInFlight = false
     private var screenBandwidthRefreshInFlight = false
     private var lastAppliedLocalBandwidthSignature: String? = null
@@ -2267,7 +2269,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         } finally {
             if (generation == configurationGeneration) {
                 audioStartOrEnableInFlight = false
-                runPendingMicrophoneBandwidthRefresh()
+                runPendingMicrophoneChanges()
             }
         }
     }
@@ -3155,7 +3157,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         } finally {
             if (enabled && generation == configurationGeneration) {
                 audioStartOrEnableInFlight = false
-                runPendingMicrophoneBandwidthRefresh()
+                runPendingMicrophoneChanges()
             }
         }
     }
@@ -3656,21 +3658,27 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         return true
     }
 
-    /** One microphone change at a time: a start, an enable, a bandwidth refresh or a route recovery. */
+    /** One microphone change at a time: a start, an enable, a bandwidth refresh, a route recovery or a noise change. */
     private val isMicrophoneChangeInFlight: Boolean
-        get() = audioStartOrEnableInFlight || audioBandwidthRefreshInFlight || audioProducerRouteRecoveryInFlight
+        get() = audioStartOrEnableInFlight || audioBandwidthRefreshInFlight || audioProducerRouteRecoveryInFlight ||
+            audioNoiseSuppressionChangeInFlight
 
     /**
-     * A bandwidth refresh skipped while another microphone change was in flight, which had already encoded for an
-     * older quality. The replay reads the newest requested quality when it runs, so a refresh that ran in between is
-     * never undone by an older one.
+     * Microphone changes skipped while another one was in flight: a noise-suppression change and a bandwidth refresh
+     * (whose in-flight predecessor had encoded for an older quality). The replay reads the newest request of each when
+     * it runs, so a change that ran in between is never undone by an older one.
      */
-    private fun runPendingMicrophoneBandwidthRefresh() {
-        if (!microphoneBandwidthRefreshPending || isMicrophoneChangeInFlight) return
-        microphoneBandwidthRefreshPending = false
+    private fun runPendingMicrophoneChanges() {
+        if (isMicrophoneChangeInFlight) return
+        if (pendingNoiseSuppression == null && !microphoneBandwidthRefreshPending) return
         val generation = configurationGeneration
         audioRouteRecoveryScope.launch(Dispatchers.Main) {
-            if (generation == configurationGeneration) refreshMicrophoneForRequestedBandwidth()
+            if (generation != configurationGeneration) return@launch
+            applyPendingNoiseSuppression()
+            if (microphoneBandwidthRefreshPending && !isMicrophoneChangeInFlight) {
+                microphoneBandwidthRefreshPending = false
+                refreshMicrophoneForRequestedBandwidth()
+            }
         }
     }
 
@@ -3945,7 +3953,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 return
             }
             if (audioProducer !== oldProducer || localAudioTrack !== track) {
-                intentionalLocalAudioProducerCloseIds.remove(oldProducer.id)
+                handedToRecovery = settleFailedMicrophoneReplacement(oldProducer, generation)
                 closeUncommittedReplacementProducer(nextProducer, socket, "superseded bandwidth refresh")
                 return
             }
@@ -3976,7 +3984,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 if (!localAudioEnabled && !handedToRecovery) {
                     callback?.invoke(false)
                 }
-                runPendingMicrophoneBandwidthRefresh()
+                runPendingMicrophoneChanges()
             }
         }
     }
@@ -4945,6 +4953,8 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         audioProducerRouteRecoveryInFlight = false
         requestedMicrophoneBandwidthQuality = ConnectionQuality.unknown
         microphoneBandwidthRefreshPending = false
+        audioNoiseSuppressionChangeInFlight = false
+        pendingNoiseSuppression = null
         videoBandwidthRefreshInFlight = false
         screenBandwidthRefreshInFlight = false
         lastAppliedLocalBandwidthSignature = null
@@ -5524,7 +5534,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                     audioProducer !== producerAtSchedule ||
                     !isCallAudioModeActive
                 ) {
-                    intentionalLocalAudioProducerCloseIds.remove(producerAtSchedule.id)
+                    settleFailedMicrophoneReplacement(producerAtSchedule, generation)
                     return@launch
                 }
 
@@ -5584,7 +5594,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 disposeAudioTrack(nextTrack)
                 disposeAudioSource(nextSource)
                 audioProducerRouteRecoveryInFlight = false
-                if (generation == configurationGeneration) runPendingMicrophoneBandwidthRefresh()
+                if (generation == configurationGeneration) runPendingMicrophoneChanges()
             }
         }
     }
@@ -6822,11 +6832,35 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     private fun isNominatedPair(obj: JSONObject): Boolean =
         obj.optBoolean("nominated", false) || obj.optString("state") == "succeeded"
 
+    /**
+     * Swaps the microphone track for one with noise suppression [enabled]. It is a microphone change like the others:
+     * one that arrives during another is saved, and the newest saved request runs once that change is done.
+     */
     internal suspend fun applyNoiseSuppression(enabled: Boolean): Boolean {
+        pendingNoiseSuppression = enabled
+        return applyPendingNoiseSuppression()
+    }
+
+    private suspend fun applyPendingNoiseSuppression(): Boolean {
+        val enabled = pendingNoiseSuppression ?: return true
+        if (isMicrophoneChangeInFlight) return true
+        pendingNoiseSuppression = null
+        val generation = configurationGeneration
+        audioNoiseSuppressionChangeInFlight = true
+        try {
+            return replaceMicrophoneTrackForNoiseSuppression(enabled, generation)
+        } finally {
+            if (generation == configurationGeneration) {
+                audioNoiseSuppressionChangeInFlight = false
+                runPendingMicrophoneChanges()
+            }
+        }
+    }
+
+    private suspend fun replaceMicrophoneTrackForNoiseSuppression(enabled: Boolean, generation: Long): Boolean {
         val producer = audioProducer ?: return false
         if (!hasUsableProducer(producer)) return false
         val factory = peerConnectionFactory ?: return false
-        val generation = configurationGeneration
         var nextSource: AudioSource? = null
         var nextTrack: AudioTrack? = null
         try {

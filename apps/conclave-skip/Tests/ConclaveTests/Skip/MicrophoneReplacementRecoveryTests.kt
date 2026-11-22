@@ -8,11 +8,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -49,6 +51,7 @@ class MicrophoneReplacementRecoveryTests {
         override fun close() { closed = true }
         override fun pause() {}
         override fun resume() {}
+        override fun replaceTrack(track: MediaStreamTrack?) {}
     }
 
     class FakeSendTransport : SendTransport(0L) {
@@ -239,7 +242,7 @@ class MicrophoneReplacementRecoveryTests {
         field("audioBandwidthRefreshInFlight").setBoolean(media, true)
         runBlocking { media.refreshLocalAudioProducerForBandwidthProfile(ConnectionQuality.emergency) }
         field("audioBandwidthRefreshInFlight").setBoolean(media, false)
-        WebRTCClient::class.java.getDeclaredMethod("runPendingMicrophoneBandwidthRefresh")
+        WebRTCClient::class.java.getDeclaredMethod("runPendingMicrophoneChanges")
             .apply { isAccessible = true }
             .invoke(media)
 
@@ -256,6 +259,53 @@ class MicrophoneReplacementRecoveryTests {
         assertEquals(ConnectionQuality.poor, field("audioProducerBandwidthQuality").get(media))
         assertEquals(LocalSenderPolicy.microphoneMaxAverageBitrateBps(ConnectionQuality.poor), bitrate(produces.codecOptions.last()))
         assertEquals(1, produces.codecOptions.size)
+    }
+
+    @Test
+    fun aNoiseSuppressionChangeDuringABandwidthRefreshKeepsTheMicPublished() {
+        val call = liveCall()
+        val media = call.media
+        val produces = producingCall(call)
+        val laneBusy = CountDownLatch(1)
+        call.lane.post { laneBusy.await(5, TimeUnit.SECONDS) }
+        val scope = CoroutineScope(Dispatchers.Main.immediate + SupervisorJob())
+        val noise = scope.async(start = CoroutineStart.UNDISPATCHED) { media.applyNoiseSuppression(true) }
+        val refresh = scope.async(start = CoroutineStart.UNDISPATCHED) {
+            media.refreshLocalAudioProducerForBandwidthProfile(ConnectionQuality.emergency)
+        }
+        laneBusy.countDown()
+        pumpMainLooperUntil { noise.isCompleted && refresh.isCompleted && produces.codecOptions.size == 1 }
+        assertTrue(runBlocking { noise.await() })
+        assertTrue(media.consumeIntentionalLocalAudioProducerClose(call.old.id))
+        produces.firstAck.countDown()
+        pumpMainLooperUntil { (field("audioProducer").get(media) as Producer).id == "mic-2" }
+
+        assertEquals("mic-2", (field("audioProducer").get(media) as Producer).id)
+        assertTrue(media.isLocalAudioPublishingHealthy)
+        assertEquals(ConnectionQuality.emergency, field("audioProducerBandwidthQuality").get(media))
+        assertEquals(LocalSenderPolicy.microphoneMaxAverageBitrateBps(ConnectionQuality.emergency), bitrate(produces.codecOptions.last()))
+        assertNotSame(call.track, field("localAudioTrack").get(media))
+        assertEquals(0, call.lost)
+    }
+
+    @Test
+    fun aRefreshThatDiscardsItsReplacementAfterThePredecessorClosedHandsTheMicToRecovery() {
+        val call = liveCall()
+        val media = call.media
+        val produces = producingCall(call)
+        CoroutineScope(Dispatchers.Main.immediate + SupervisorJob()).launch(start = CoroutineStart.UNDISPATCHED) {
+            media.refreshLocalAudioProducerForBandwidthProfile(ConnectionQuality.emergency)
+        }
+        pumpMainLooperUntil { produces.codecOptions.size == 1 }
+        field("localAudioTrack").set(media, (unsafe.allocateInstance(FakeTrack::class.java) as FakeTrack).also { it.live = true })
+        assertTrue(media.consumeIntentionalLocalAudioProducerClose(call.old.id))
+        produces.firstAck.countDown()
+        pumpMainLooperUntil { call.lost > 0 }
+
+        assertEquals(1, call.lost)
+        assertFalse(media.isLocalAudioPublishingHealthy)
+        awaitLane(call.lane)
+        assertTrue(call.old.closed)
     }
 
     @Test
