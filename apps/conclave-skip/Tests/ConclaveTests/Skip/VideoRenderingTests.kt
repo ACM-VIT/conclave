@@ -846,6 +846,24 @@ class VideoRenderingTests {
         assertNotEquals(0, store.revision)
     }
 
+    @Test fun destroyingSeveralBusySurfaceTilesHoldsTheMainThreadForOneShortWaitInTotal() {
+        val busy = List(4) { RecordingBackend() }
+        try {
+            val hosts = busy.map { SurfaceVideoHost(RuntimeEnvironment.getApplication(), it, overlay = false) }
+            hosts.forEach { it.surfaceAvailable("window") }
+            val gates = busy.map { it.park() }
+            val started = System.nanoTime()
+            hosts.forEach { it.surfaceDestroyed(it.holder) }
+            val heldMillis = (System.nanoTime() - started) / 1_000_000
+            assertTrue("destroying 4 busy tiles held the main thread for $heldMillis ms", heldMillis < 1_000)
+            gates.forEach { it.countDown() }
+            busy.forEach { it.settle() }
+            busy.forEach { assertEquals(listOf("create", "destroy surface-1"), it.calls.toList()) }
+        } finally {
+            busy.forEach { it.shutdown() }
+        }
+    }
+
     private fun textureHost(): TextureVideoHost = TextureVideoHost(RuntimeEnvironment.getApplication(), backend)
 
     @Test fun aTextureDestroyedUnderTheRendererIsReleasedOnlyOnceItsSurfaceIsGone() {
