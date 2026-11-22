@@ -4,7 +4,7 @@
  * that runs the Q&A app both read and write the same book.
  */
 import { afterEach, describe, expect, it } from "vitest";
-import { AUTHORITY_EVENTS } from "@conclave/apps-sdk/authority";
+import { AUTHORITY_EVENTS, AuthorityClient } from "@conclave/apps-sdk/authority";
 import { pollsAuthority } from "@conclave/apps-sdk/polls/server";
 import { qaContract } from "@conclave/apps-sdk/qa/core";
 import { qaAuthority } from "@conclave/apps-sdk/qa/server";
@@ -325,6 +325,100 @@ describe("webinar Q&A with old and new clients in one room", () => {
     await wait(120);
 
     expect(legacyEvents).toEqual([]);
+  });
+
+  it("keeps the old feed for a client whose capability answer came too late to use", async () => {
+    const stack = await startWebinar();
+    const host = await open(stack, asha, qaContract);
+    const attendee = await oldClient(stack, vik, asAttendee);
+    await until(() => attendee.snapshots() > 0, "the attendee gets its first list");
+
+    // A new client asks what the server offers, gives up waiting and falls
+    // back to the old events. The answer still arrives, late, and is ignored.
+    const late = await ask<{ ok: boolean }>(attendee.socket, AUTHORITY_EVENTS.capabilities, {
+      protocols: [1],
+    });
+    const asked = await attendee.submit("Did the fallback survive?");
+    const id = asked.id ?? "";
+    await host.session.act("moderate", { id, action: "answered", answerText: "It did" });
+    await until(
+      () => attendee.entries.get(id)?.status === "answered",
+      "the answer arrives on the old events",
+    );
+
+    expect(late.ok).toBe(true);
+    expect(attendee.entries.get(id)?.answerText).toBe("It did");
+  });
+
+  it("keeps the old feed when a client's subscribe never takes", async () => {
+    const stack = await startWebinar();
+    const host = await open(stack, asha, qaContract);
+    const attendee = await oldClient(stack, vik, asAttendee);
+    await until(() => attendee.snapshots() > 0, "the attendee gets its first list");
+
+    const capability = await ask<{
+      ok: boolean;
+      value?: { apps: { instance: string; app: string; major: number }[] };
+    }>(attendee.socket, AUTHORITY_EVENTS.capabilities, { protocols: [1] });
+    const qa = capability.value?.apps.find((entry) => entry.app === "qa");
+    // The subscribe is refused: it names a room that has since been recreated.
+    const refused = await ask<{ ok: boolean; code?: string }>(
+      attendee.socket,
+      AUTHORITY_EVENTS.subscribe,
+      { roomEpoch: "an-older-epoch", instance: qa?.instance, app: "qa", major: qa?.major, subscription: "s1" },
+    );
+    const asked = await attendee.submit("Am I still being told?");
+    const id = asked.id ?? "";
+    await host.session.act("moderate", { id, action: "answered" });
+    await until(
+      () => attendee.entries.get(id)?.status === "answered",
+      "the answer arrives on the old events",
+    );
+
+    expect(refused).toMatchObject({ ok: false, code: "stale-epoch" });
+    expect(attendee.frames).toEqual([]);
+  });
+
+  it("rests the old feed while a client reads Q&A itself, and picks it up when that ends", async () => {
+    const stack = await startWebinar();
+    const host = await open(stack, asha, qaContract);
+    const asker = await open(stack, omar, qaContract, asAttendee);
+    const attendee = await oldClient(stack, vik, asAttendee);
+    await until(() => attendee.snapshots() > 0, "the attendee gets its first list");
+    const ask1 = await asker.session.act("ask", { text: "While it reads the new way" });
+    const ask2 = await asker.session.act("ask", { text: "After it stopped" });
+    const first = ask1.ok ? ask1.value.id : "";
+    const second = ask2.ok ? ask2.value.id : "";
+
+    // The same connection opens Q&A over the new transport.
+    const client = new AuthorityClient({ socket: attendee.socket, ackTimeoutMs: 1_000 });
+    const session = client.open(qaContract);
+    client.joined();
+    await until(() => session.getState().kind === "ready", "its own view is ready");
+    const snapshotsBefore = attendee.snapshots();
+    await host.session.act("moderate", { id: first, action: "answered" });
+    await until(() => {
+      const state = session.getState();
+      return state.kind === "ready" && state.view.questions.has(first);
+    }, "the answer arrives over the new transport");
+    await wait(120);
+    const oldEventsMeanwhile = [...attendee.events];
+    const snapshotsMeanwhile = attendee.snapshots() - snapshotsBefore;
+
+    // It closes that view. The old events are all it has again.
+    client.dispose();
+    await until(() => attendee.snapshots() > snapshotsBefore, "the old feed sends a fresh list");
+    const caughtUp = attendee.entries.get(first)?.status;
+    await host.session.act("moderate", { id: second, action: "answered" });
+    await until(
+      () => attendee.entries.get(second)?.status === "answered",
+      "later answers arrive on the old events",
+    );
+
+    // Nothing was said twice while it read Q&A itself.
+    expect(oldEventsMeanwhile).toEqual([]);
+    expect(snapshotsMeanwhile).toBe(0);
+    expect(caughtUp).toBe("answered");
   });
 
   it("says nothing on the old events in a regular meeting", async () => {

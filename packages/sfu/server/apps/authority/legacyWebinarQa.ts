@@ -29,6 +29,12 @@ import type { RoomAuthority } from "./roomAuthority.js";
  *
  * The old wire carries webinar Q&A only, so nothing is sent on it while the
  * room is a regular meeting.
+ *
+ * A connection is fed for as long as it does not read Q&A itself. Once it
+ * holds its own subscription to the app the feed rests, and it resumes with
+ * a whole list when that subscription ends. A client that only asked what
+ * the server offers is not taken to have switched: its answer may have come
+ * too late for it to use, and the old events are then all it has.
  */
 const QA_APP = "qa";
 
@@ -217,11 +223,8 @@ export const attachLegacyQaFeed = (context: ConnectionContext): boolean => {
   return true;
 };
 
-/**
- * Ends a connection's old-wire feed. Called when the client says it speaks
- * the authority transport, so it is not told everything twice.
- */
-export const detachLegacyQaFeed = (context: ConnectionContext): void => {
+/** Ends a connection's old-wire feed, before a new one takes its place. */
+const detachLegacyQaFeed = (context: ConnectionContext): void => {
   const feed = feeds.get(context.socket);
   if (!feed) return;
   feed.close();

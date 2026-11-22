@@ -190,12 +190,17 @@ export class RoomAuthority {
   private readonly stalled = new Set<NodeJS.Timeout>();
   private wakeAt: number | null = null;
   private observers = 0;
-  /** Observers whose seat may not view the app right now. */
+  /**
+   * Observers that are sent nothing right now. Either the seat may not view
+   * the app, or the connection reads the app through a subscription of its
+   * own and has no use for being told twice.
+   */
   private readonly dormant = new Set<Subscription>();
   private readonly actionListeners = new Set<(notice: ActionNotice) => void>();
   private lastFlushAt = 0;
   private lastNow = 0;
   private closed = false;
+  private closing = false;
 
   constructor(private readonly options: RoomAuthorityOptions) {
     this.room = options.room;
@@ -286,6 +291,7 @@ export class RoomAuthority {
     subscriptions.set(subscription.id, subscription);
     this.byInstance.get(instance)!.add(subscription);
     this.sendReplace(subscription);
+    if (!subscription.dropped) this.rest(context.socket.id, instance);
     return { ok: true, value: null };
   }
 
@@ -301,6 +307,12 @@ export class RoomAuthority {
    * exactly the one that connection would be sent: the same binding, role
    * and identity checks run before every frame. Used to feed a legacy event
    * from an app, so no second copy of its visibility rules exists.
+   *
+   * An observer stands in for a subscription the connection does not have.
+   * While the connection holds its own subscription to the app the observer
+   * rests, and it starts again with a whole view when that subscription
+   * ends. Nothing but a live subscription rests it: a client that only asked
+   * what the server offers, or whose subscribe was refused, is still told.
    */
   observe(
     context: ConnectionContext,
@@ -334,9 +346,8 @@ export class RoomAuthority {
       sink,
     };
     subscriptions.set(subscription.id, subscription);
-    this.byInstance.get(instance)!.add(subscription);
-    if (instance.canView(bound.actor)) this.sendReplace(subscription);
-    else this.dormant.add(subscription);
+    this.dormant.add(subscription);
+    this.resume(subscription);
     return { close: () => this.drop(subscription) };
   }
 
@@ -359,19 +370,6 @@ export class RoomAuthority {
     const result = instance.act(bound.actor, action, input, null, this.now());
     this.afterAction(instance, action, bound.client.id, result);
     return result;
-  }
-
-  queryAs(
-    context: ConnectionContext,
-    app: string,
-    query: string,
-    input: unknown,
-  ): AuthorityResult<Json> {
-    const bound = this.bind(context);
-    const instance = this.instanceOf(app);
-    if (!bound || !instance) return failure("not-in-room");
-    this.syncPolicy();
-    return instance.query(bound.actor, query, input, this.now());
   }
 
   /** Called after every action that succeeded, whoever sent it. */
@@ -456,6 +454,7 @@ export class RoomAuthority {
 
   close(): void {
     if (this.closed) return;
+    this.closing = true;
     // Closing a room does not close its sockets. Tell each one that still
     // holds a view to forget it, or it would keep showing the room's last
     // state for as long as the tab stays open.
@@ -556,7 +555,7 @@ export class RoomAuthority {
   private refresh(subscription: Subscription): "live" | "replaced" | "gone" {
     if (subscription.dropped) return "gone";
     const generation = subscription.generation;
-    if (this.applyPolicy()) this.wakeDormant();
+    this.syncPolicy();
     if (subscription.dropped || this.dormant.has(subscription)) return "gone";
     if (subscription.generation !== generation) return "replaced";
     const bound = this.bind(subscription.context);
@@ -599,8 +598,8 @@ export class RoomAuthority {
 
   /** Applies a changed room policy: every view is rebuilt and resent. */
   private syncPolicy(): void {
-    this.applyPolicy();
-    this.wakeDormant();
+    // A new policy may let a resting observer's seat view the app again.
+    if (this.applyPolicy()) this.wakeDormant();
   }
 
   /** Whether the room's policy had changed. If so, every view was redone. */
@@ -650,17 +649,52 @@ export class RoomAuthority {
   }
 
   private wakeDormant(): void {
-    for (const subscription of [...this.dormant]) {
-      const bound = this.bind(subscription.context);
-      if (!bound || bound.client !== subscription.client) {
-        this.drop(subscription);
-        continue;
-      }
-      if (!subscription.instance.canView(bound.actor)) continue;
-      this.dormant.delete(subscription);
-      this.byInstance.get(subscription.instance)?.add(subscription);
-      this.regenerate(subscription, bound.actor);
+    for (const observer of [...this.dormant]) this.resume(observer);
+  }
+
+  /**
+   * Starts a resting observer again if it has a use: its seat is still here
+   * and may view the app, and the connection is not reading the app through
+   * a subscription of its own. It starts with a whole view.
+   */
+  private resume(observer: Subscription): void {
+    const bound = this.bind(observer.context);
+    if (!bound || bound.client !== observer.client) {
+      this.drop(observer);
+      return;
     }
+    if (!observer.instance.canView(bound.actor)) return;
+    if (this.observersOf(observer.socket.id, observer.instance, false).length > 0) {
+      return;
+    }
+    this.dormant.delete(observer);
+    this.byInstance.get(observer.instance)?.add(observer);
+    this.regenerate(observer, bound.actor);
+  }
+
+  /**
+   * Rests a connection's observers of an app, without a word to them: the
+   * connection has just opened the app itself.
+   */
+  private rest(socketId: string, instance: AuthorityInstance): void {
+    for (const observer of this.observersOf(socketId, instance, true)) {
+      if (this.dormant.has(observer)) continue;
+      this.byInstance.get(instance)?.delete(observer);
+      this.dormant.add(observer);
+      observer.transfer = null;
+      observer.backlog = [];
+    }
+  }
+
+  /** A connection's observers of an app, or its own subscriptions to it. */
+  private observersOf(
+    socketId: string,
+    instance: AuthorityInstance,
+    observers: boolean,
+  ): Subscription[] {
+    return [...(this.bySocket.get(socketId)?.values() ?? [])].filter(
+      (held) => held.instance === instance && Boolean(held.sink) === observers,
+    );
   }
 
   private appsFor(actor: Actor): AuthorityAppEntry[] {
@@ -1121,6 +1155,17 @@ export class RoomAuthority {
     subscriptions?.delete(subscription.id);
     if (subscriptions?.size === 0) this.bySocket.delete(subscription.socket.id);
     this.viewerLeft(subscription.instance);
+    // The connection's own view of the app ended. An observer that rested
+    // for it is all the connection has now.
+    if (!subscription.sink && !this.closing) {
+      for (const observer of this.observersOf(
+        subscription.socket.id,
+        subscription.instance,
+        true,
+      )) {
+        if (this.dormant.has(observer)) this.resume(observer);
+      }
+    }
   }
 
   /* ---- Timers ------------------------------------------------------------ */
