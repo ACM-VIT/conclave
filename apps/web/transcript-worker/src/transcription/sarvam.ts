@@ -102,31 +102,24 @@ export const sarvamCanTranscribe = (
   env: LiveTranscriptionConnectOptions["env"],
 ): boolean => supportedSarvamLanguageCode(language, languageChosen, env) !== null;
 
-/**
- * The language a Sarvam session really transcribes, or undefined when it
- * auto-detects ("unknown").
- */
-export const sarvamReportedLanguage = (
-  language: string,
-  languageChosen: boolean,
-  env: LiveTranscriptionConnectOptions["env"],
-): string | undefined => {
-  const code =
-    supportedSarvamLanguageCode(language, languageChosen, env) ??
-    env.TRANSCRIPT_SARVAM_LANGUAGE_CODE ??
-    language;
-  return code === "unknown" ? undefined : baseLanguage(code) || language;
-};
-
-const sarvamLanguageCode = (options: LiveTranscriptionConnectOptions): string =>
-  supportedSarvamLanguageCode(
-    options.language,
-    options.languageChosen === true,
-    options.env,
-    options.locale,
-  ) ??
-  options.env.TRANSCRIPT_SARVAM_LANGUAGE_CODE ??
-  options.language;
+/** The exact language-code a Sarvam connection is sent; "unknown" auto-detects. */
+export const sarvamProviderLanguage = (options: {
+  language: string;
+  languageChosen?: boolean;
+  locale: string;
+  env: LiveTranscriptionConnectOptions["env"];
+}): string =>
+  normalizeSarvamLanguageCode(
+    supportedSarvamLanguageCode(
+      options.language,
+      options.languageChosen === true,
+      options.env,
+      options.locale,
+    ) ??
+      options.env.TRANSCRIPT_SARVAM_LANGUAGE_CODE ??
+      options.language,
+    options.locale || DEFAULT_TRANSCRIPTION_LOCALE,
+  );
 
 const normalizeSarvamMode = (value: string | undefined): string => {
   const candidate = value?.trim() || SARVAM_DEFAULT_MODE;
@@ -401,7 +394,7 @@ export const connectSarvamTranscription = async (
     sarvamEndpoint({
       baseUrl: options.env.SARVAM_STT_WS_URL,
       model: options.transcriptModel,
-      language: sarvamLanguageCode(options),
+      language: options.providerLanguage ?? sarvamProviderLanguage(options),
       locale: options.locale,
       mode: options.env.TRANSCRIPT_SARVAM_MODE,
     }),

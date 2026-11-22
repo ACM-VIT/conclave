@@ -93,7 +93,8 @@ import type {
 } from "./types";
 import {
   canTranscribeLanguage,
-  reportedTranscriptionLanguage,
+  shownTranscriptionLanguage,
+  transcriptionProviderLanguage,
   connectLiveTranscriptionProvider,
   type LiveTranscriptionSession,
 } from "./transcription";
@@ -178,6 +179,9 @@ export class TranscriptRoom {
   private segments: TranscriptSegment[] = [];
   private minutes: TranscriptMinutesSnapshot = createEmptyMinutes();
   private sequence = 0;
+  // The exact language code this session's provider is sent, fixed when the
+  // session is accepted and saved with it, so a restore resends it unchanged.
+  private sessionProviderLanguage: string | undefined;
   private responseApiKey: string | null = null;
   private responseEnvironment: Env | null = null;
   private responseAbort = new AbortController();
@@ -422,16 +426,17 @@ export class TranscriptRoom {
         savedConfig?.locale ??
         normalizeLocale(this.env.TRANSCRIPT_TRANSCRIPTION_LOCALE),
     };
+    // A saved session resends the code it was sent, whatever the environment
+    // is now; only a snapshot without one resolves it from its saved config.
+    const providerLanguage =
+      snapshot.providerLanguage ??
+      transcriptionProviderLanguage(provider, { ...config, env: this.env });
+    this.sessionProviderLanguage = providerLanguage;
     this.responseApiKey = responseKey.apiKey;
     this.session = {
       ...snapshot.session,
       status: "starting",
-      language: reportedTranscriptionLanguage(
-        provider,
-        config.language,
-        config.languageChosen,
-        this.env,
-      ),
+      language: shownTranscriptionLanguage(providerLanguage),
       languageChosen: config.languageChosen,
       updatedAt: Date.now(),
       error: null,
@@ -441,6 +446,7 @@ export class TranscriptRoom {
         apiKey: transcriptionKey.apiKey,
         transcriptModel,
         ...config,
+        providerLanguage,
         localizationPrompt: this.env.TRANSCRIPT_TRANSCRIPTION_PROMPT,
       });
       this.audioPaused = wasPaused;
@@ -580,11 +586,15 @@ export class TranscriptRoom {
 
   /** Per provider, what a session uses when nobody picks a language; null is auto-detect. */
   private captionLanguageDefaults(): Record<"openai" | "sarvam", string | null> {
-    const language = normalizeLanguage(this.env.TRANSCRIPT_TRANSCRIPTION_LANGUAGE);
-    return {
-      openai: reportedTranscriptionLanguage("openai", language, false, this.env) ?? null,
-      sarvam: reportedTranscriptionLanguage("sarvam", language, false, this.env) ?? null,
+    const unpicked = {
+      language: normalizeLanguage(this.env.TRANSCRIPT_TRANSCRIPTION_LANGUAGE),
+      languageChosen: false,
+      locale: normalizeLocale(this.env.TRANSCRIPT_TRANSCRIPTION_LOCALE),
+      env: this.env,
     };
+    const shown = (provider: "openai" | "sarvam") =>
+      shownTranscriptionLanguage(transcriptionProviderLanguage(provider, unpicked)) ?? null;
+    return { openai: shown("openai"), sarvam: shown("sarvam") };
   }
 
   private sendError(viewer: Viewer, message: string, requestId?: string): void {
@@ -982,6 +992,13 @@ export class TranscriptRoom {
     }
     const language = canCaption ? requestedLanguage : deploymentLanguage;
     const languageChosen = canCaption && requestedLanguageChosen;
+    const locale = normalizeLocale(this.env.TRANSCRIPT_TRANSCRIPTION_LOCALE);
+    const providerLanguage = transcriptionProviderLanguage(transcriptionProvider, {
+      language,
+      languageChosen,
+      locale,
+      env: providerEnv,
+    });
 
     this.responseAbort.abort();
     this.responseAbort = new AbortController();
@@ -1005,12 +1022,7 @@ export class TranscriptRoom {
       transcriptModel,
       qaModel,
       transportMode,
-      language: reportedTranscriptionLanguage(
-        transcriptionProvider,
-        language,
-        languageChosen,
-        providerEnv,
-      ),
+      language: shownTranscriptionLanguage(providerLanguage),
       languageChosen,
       requestId,
       keySource:
@@ -1021,6 +1033,7 @@ export class TranscriptRoom {
       updatedAt: now,
       error: null,
     };
+    this.sessionProviderLanguage = providerLanguage;
     if (!wasIdle) this.drainTranscriptionProvider();
     this.resetTranscriptionAudioState();
     this.audioPaused = false;
@@ -1038,12 +1051,12 @@ export class TranscriptRoom {
     if (acceptedRevision !== this.sessionRevision) return;
     try {
       const delay = normalizeDelay(message.delay);
-      const locale = normalizeLocale(this.env.TRANSCRIPT_TRANSCRIPTION_LOCALE);
       await this.connectTranscriptionProvider({
         apiKey: transcriptionKey.apiKey,
         transcriptModel,
         language,
         languageChosen,
+        providerLanguage,
         delay,
         locale,
         localizationPrompt: this.env.TRANSCRIPT_TRANSCRIPTION_PROMPT,
@@ -1485,6 +1498,7 @@ export class TranscriptRoom {
     transcriptModel: string;
     language: string;
     languageChosen?: boolean;
+    providerLanguage?: string;
     delay: string;
     locale: string;
     localizationPrompt?: string;
@@ -1543,6 +1557,7 @@ export class TranscriptRoom {
     transcriptModel: string;
     language: string;
     languageChosen?: boolean;
+    providerLanguage?: string;
     delay: string;
     locale: string;
     localizationPrompt?: string;
@@ -2691,6 +2706,7 @@ export class TranscriptRoom {
       sequence: this.sequence,
       serviceVersion: this.serviceVersion(),
       transcriptionConfig,
+      providerLanguage: this.sessionProviderLanguage,
     } satisfies PersistedSnapshot);
     await this.armCleanupAlarm();
   }

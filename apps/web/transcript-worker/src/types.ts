@@ -74,6 +74,8 @@ export type PersistedSnapshot = {
   sequence: number;
   serviceVersion?: TranscriptServiceVersion;
   transcriptionConfig?: PersistedTranscriptionConfig;
+  /** The exact language code the session's provider is sent, decided when the session was accepted. */
+  providerLanguage?: string;
 };
 
 export type PersistedTranscriptionConfig = {

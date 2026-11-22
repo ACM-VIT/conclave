@@ -137,7 +137,7 @@ export const connectOpenAiRealtimeTranscription = async (
 
   const transcription = buildRealtimeTranscriptionConfig({
     model: options.transcriptModel,
-    language: options.language,
+    language: options.providerLanguage ?? options.language,
     delay: options.delay,
     locale: options.locale,
     localizationPrompt: options.localizationPrompt,

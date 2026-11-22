@@ -14,6 +14,8 @@ export type LiveTranscriptionConnectOptions = {
   transcriptModel: string;
   language: string;
   languageChosen?: boolean;
+  /** The exact code to send the provider; resolved from the rest when absent. */
+  providerLanguage?: string;
   delay: string;
   locale: string;
   localizationPrompt?: string;

@@ -9,7 +9,7 @@ import { connectOpenAiRealtimeTranscription } from "./openai-realtime";
 import {
   connectSarvamTranscription,
   sarvamCanTranscribe,
-  sarvamReportedLanguage,
+  sarvamProviderLanguage,
 } from "./sarvam";
 import type {
   LiveTranscriptionConnectOptions,
@@ -26,21 +26,24 @@ export const canTranscribeLanguage = (
 ): boolean =>
   provider !== "sarvam" || sarvamCanTranscribe(language, languageChosen, env);
 
-/**
- * The language a session reports: what the provider really transcribes, as
- * the caption language table's code, so clients show the same language.
- */
-export const reportedTranscriptionLanguage = (
+/** The exact language code a provider connection is sent. */
+export const transcriptionProviderLanguage = (
   provider: TranscriptTranscriptionProvider,
-  language: string,
-  languageChosen: boolean,
-  env: LiveTranscriptionConnectOptions["env"],
-): string | undefined =>
-  captionLanguageCode(
-    provider === "sarvam"
-      ? sarvamReportedLanguage(language, languageChosen, env)
-      : language,
-  );
+  options: {
+    language: string;
+    languageChosen?: boolean;
+    locale: string;
+    env: LiveTranscriptionConnectOptions["env"];
+  },
+): string => (provider === "sarvam" ? sarvamProviderLanguage(options) : options.language);
+
+/**
+ * The language a session shows, derived only from the code its provider is
+ * sent, through the shared caption language table.
+ */
+export const shownTranscriptionLanguage = (
+  providerLanguage: string,
+): string | undefined => captionLanguageCode(providerLanguage);
 
 export const connectLiveTranscriptionProvider = async (
   options: LiveTranscriptionConnectOptions,
