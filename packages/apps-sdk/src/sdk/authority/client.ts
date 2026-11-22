@@ -75,9 +75,8 @@ export type AuthoritySessionState<C extends AuthorityContract> =
       needsIdentity: ReadonlySet<ActionName<C>>;
       queries: ReadonlySet<QueryName<C>>;
       /**
-       * The app's commit revision the view reflects. An action's answer
-       * carries one, and once this has reached it the view shows the action
-       * and everything committed before the answer.
+       * The view's own version, which only ever goes up. An action's answer
+       * names one, and once this has reached it the view shows the action.
        */
       revision: number;
       /** The server's clock, for countdowns that ignore local skew. */

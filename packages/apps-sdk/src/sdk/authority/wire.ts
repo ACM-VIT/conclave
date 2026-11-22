@@ -69,9 +69,9 @@ export type AuthorityResult<T> =
       ok: true;
       value: T;
       /**
-       * On an action's answer, a replayed one included: the app's commit
-       * revision when the answer was sent. A view whose frames have reached
-       * it reflects the action and everything committed before the answer.
+       * On an action's answer, a replayed one included: the version of the
+       * actor's own view that shows the action. Once their frames reach it,
+       * the view reflects what they did.
        */
       revision?: number;
     }
@@ -176,9 +176,8 @@ export type ReplaceFrame = FrameBase & {
   /** Sent with part 0. */
   grants?: AuthorityGrants;
   /**
-   * Sent with part 0: the app's commit revision the view was read at. The
-   * later parts can be newer, and the catch-up after the last part says how
-   * far the whole view has come.
+   * Sent with part 0: the view's own version. It counts only this viewer's
+   * view, and moves when a frame completes a change to it or replaces it.
    */
   revision?: number;
 };
@@ -196,9 +195,9 @@ export type PatchFrame = FrameBase & {
    */
   grants?: AuthorityGrants;
   /**
-   * The app's commit revision the view reflects once this patch is applied.
-   * A viewer who acted is sent a patch for it even when nothing in their
-   * view changed, so an answer's revision is always reached.
+   * The view's own version once this patch is applied. A version an answer
+   * named is sent even when nothing in the view changed, so it is always
+   * reached, and removals still owed from a large clear hold it back.
    */
   revision?: number;
 };
