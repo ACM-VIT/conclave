@@ -55,6 +55,12 @@ function describeError(
           "The media connection didn't go through. Another try usually does it.",
         canRetry: true,
       };
+    case "NETWORK_BLOCKED":
+      return {
+        title: "Your network is blocking this call",
+        detail: "Try another network, or turn off your VPN or firewall.",
+        canRetry: true,
+      };
     case "UNKNOWN": {
       const raw = (error.message || "").trim();
       const technical =

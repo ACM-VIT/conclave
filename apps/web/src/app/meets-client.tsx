@@ -3226,13 +3226,17 @@ export default function MeetsClient({
               ? "Retry Permissions"
               : meetError.code === "MEDIA_ERROR"
                 ? "Retry Devices"
-                : undefined
+                : meetError.code === "NETWORK_BLOCKED"
+                  ? "Try again"
+                  : undefined
           }
           onPrimaryAction={
             meetError.code === "PERMISSION_DENIED" ||
             meetError.code === "MEDIA_ERROR"
               ? handleRetryMedia
-              : undefined
+              : meetError.code === "NETWORK_BLOCKED"
+                ? () => void retryReconnect()
+                : undefined
           }
         />
       )}

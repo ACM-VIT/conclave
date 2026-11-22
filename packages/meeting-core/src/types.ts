@@ -623,6 +623,8 @@ export interface MeetError {
     | "CONNECTION_FAILED"
     | "MEDIA_ERROR"
     | "TRANSPORT_ERROR"
+    /** Signaling works but this network lets no audio or video through. */
+    | "NETWORK_BLOCKED"
     | "UNKNOWN";
   message: string;
   recoverable: boolean;

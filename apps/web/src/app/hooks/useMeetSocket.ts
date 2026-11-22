@@ -135,6 +135,16 @@ import {
   type ConsumerResumeRetryState,
 } from "../lib/consumer-resume-retry";
 import {
+  INITIAL_MEDIA_PATH_WATCH,
+  MEDIA_PATH_STALL_MS,
+  MEDIA_PATH_VERIFY_MS,
+  NETWORK_BLOCKED_MESSAGE,
+  advanceMediaPathWatch,
+  planMediaPathEscalation,
+  readRtpBytes,
+  type MediaPathWatch,
+} from "../lib/media-path-recovery";
+import {
   advanceVideoFreezeRecovery,
   isProducerGoneConsumeError,
   shouldRecreateProducerTransport,
@@ -242,6 +252,7 @@ const getResumeConsumerRetryDelayMs = (attempt: number): number =>
   Math.min(8000, 400 * 2 ** attempt) + Math.floor(Math.random() * 250);
 const JOIN_ROOM_ACK_TIMEOUT_MS = 15000;
 const RESTART_ICE_ACK_TIMEOUT_MS = 5000;
+const MEDIA_PATH_SAMPLE_INTERVAL_MS = 2500;
 const PARTICIPANT_RECONNECTING_STATUS_FALLBACK_MS = 30000;
 const PARTICIPANT_RECONNECTING_STATUS_BUFFER_MS = 5000;
 const PARTICIPANT_RECONNECTED_STATUS_MS = 4500;
@@ -647,6 +658,20 @@ const getUsableProducerTransport = (
     return null;
   }
   return transport;
+};
+
+const waitForTransportConnected = async (
+  transport: Transport,
+  timeoutMs: number,
+): Promise<boolean> => {
+  const deadline = Date.now() + timeoutMs;
+  while (!transport.closed && Date.now() < deadline) {
+    if (transport.connectionState === "connected") return true;
+    await new Promise<void>((resolve) => {
+      window.setTimeout(resolve, 250);
+    });
+  }
+  return !transport.closed && transport.connectionState === "connected";
 };
 
 class JoinRoomRedirectError extends Error {
@@ -1074,7 +1099,9 @@ export function useMeetSocket({
   const lastJoinInfoSourceRef = useRef<"held" | "fresh">("fresh");
   const runtimeStunIceServersRef = useRef<RTCIceServer[] | null>(null);
   const runtimeTurnIceServersRef = useRef<RTCIceServer[] | null>(null);
-  const useTurnFallbackRef = useRef(false);
+  const relayOnlyIceRef = useRef(false);
+  const mediaPathReconnectTriedRef = useRef({ producer: false, consumer: false });
+  const networkBlockedReportedRef = useRef(false);
   const reconnectGenerationRef = useRef(0);
   const reconnectBackoffCancelRef = useRef<(() => void) | null>(null);
   const manualReconnectRetryRequestedRef = useRef(false);
@@ -1447,33 +1474,80 @@ export function useMeetSocket({
     isTtsDisabledRef.current = isTtsDisabled;
   }, [isTtsDisabled]);
 
-  const enableTurnFallback = useCallback((reason: string): boolean => {
-    if (useTurnFallbackRef.current) return false;
+  // An ICE restart could not bring this transport back. Rebuild the
+  // transports once, through TURN alone when TURN is configured, and tell the
+  // user if media still cannot get through.
+  const escalateMediaPathFailure = useCallback(
+    (transportKind: "producer" | "consumer", reason: string) => {
+      const step = planMediaPathEscalation({
+        hasReconnected: mediaPathReconnectTriedRef.current[transportKind],
+        relayOnly: relayOnlyIceRef.current,
+        hasTurnServers: (runtimeTurnIceServersRef.current?.length ?? 0) > 0,
+      });
+      if (step === "report-blocked") {
+        if (networkBlockedReportedRef.current) return;
+        console.warn(`[Meets] ${reason}. Media cannot get through this network.`);
+        telemetry.capture("meet_media_path_blocked", {
+          reason,
+          transport: transportKind,
+          relayOnly: relayOnlyIceRef.current,
+          roomId: currentRoomIdRef.current ?? undefined,
+        });
+        networkBlockedReportedRef.current = true;
+        setMeetError({
+          code: "NETWORK_BLOCKED",
+          message: NETWORK_BLOCKED_MESSAGE,
+          recoverable: true,
+        });
+        return;
+      }
 
-    const turnIceServers = runtimeTurnIceServersRef.current ?? [];
-    if (turnIceServers.length === 0) return false;
+      mediaPathReconnectTriedRef.current[transportKind] = true;
+      if (step === "reconnect-relay-only") {
+        relayOnlyIceRef.current = true;
+        console.warn(`[Meets] ${reason}. Retrying through TURN only.`);
+        telemetry.capture("meet_turn_relay_activated", {
+          reason,
+          roomId: currentRoomIdRef.current ?? undefined,
+        });
+      } else {
+        setMeetError({
+          code: "TRANSPORT_ERROR",
+          message: reason,
+          recoverable: true,
+        });
+      }
+      void handleReconnectRef.current?.();
+    },
+    [currentRoomIdRef, handleReconnectRef, setMeetError],
+  );
 
-    useTurnFallbackRef.current = true;
-    console.warn(`[Meets] ${reason}. Retrying with TURN fallback.`);
-    telemetry.capture("meet_turn_relay_activated", {
-      reason,
-      roomId: currentRoomIdRef.current ?? undefined,
-    });
-    return true;
-  }, [currentRoomIdRef]);
+  const noteMediaPathConnected = useCallback(
+    (transportKind: "producer" | "consumer") => {
+      mediaPathReconnectTriedRef.current[transportKind] = false;
+      if (networkBlockedReportedRef.current) {
+        networkBlockedReportedRef.current = false;
+        setMeetError(null);
+      }
+    },
+    [setMeetError],
+  );
 
+  // TURN servers are offered from the first attempt, so a network that blocks
+  // the direct path connects through the relay without a failed attempt first.
   const resolveIceServers = useCallback((): RTCIceServer[] | undefined => {
     const stunIceServers =
       runtimeStunIceServersRef.current && runtimeStunIceServersRef.current.length > 0
         ? runtimeStunIceServersRef.current
         : MEETS_ICE_SERVERS;
 
-    const turnIceServers = useTurnFallbackRef.current
-      ? runtimeTurnIceServersRef.current
-      : undefined;
-
-    return mergeIceServers(stunIceServers, turnIceServers);
+    return mergeIceServers(stunIceServers, runtimeTurnIceServersRef.current);
   }, []);
+
+  const resolveIceTransportPolicy = useCallback(
+    (): RTCIceTransportPolicy => (relayOnlyIceRef.current ? "relay" : "all"),
+    [],
+  );
 
   const stopScreenShareCapture = useCallback(() => {
     const screenStream = screenShareStreamRef.current;
@@ -1974,7 +2048,9 @@ export function useMeetSocket({
         currentRoomIdRef.current = null;
         runtimeStunIceServersRef.current = null;
         runtimeTurnIceServersRef.current = null;
-        useTurnFallbackRef.current = false;
+        relayOnlyIceRef.current = false;
+        mediaPathReconnectTriedRef.current = { producer: false, consumer: false };
+        networkBlockedReportedRef.current = false;
       }
     },
     [
@@ -2021,7 +2097,7 @@ export function useMeetSocket({
       userId,
       runtimeStunIceServersRef,
       runtimeTurnIceServersRef,
-      useTurnFallbackRef,
+      relayOnlyIceRef,
       producerTransportDisconnectTimeoutRef,
       consumerTransportDisconnectTimeoutRef,
       pendingProducerRetryTimeoutRef,
@@ -3566,10 +3642,22 @@ export function useMeetSocket({
           );
 
           await transport.restartIce({ iceParameters: response.iceParameters });
-          console.info(
-            `[Meets] ${transportKind} transport ICE restart succeeded.`,
+          // The acknowledgement only means new credentials were exchanged.
+          // The restart worked if the transport is connected again.
+          const connected = await waitForTransportConnected(
+            transport,
+            MEDIA_PATH_VERIFY_MS,
           );
-          return true;
+          if (connected) {
+            console.info(
+              `[Meets] ${transportKind} transport ICE restart succeeded.`,
+            );
+          } else {
+            console.warn(
+              `[Meets] ${transportKind} transport did not reconnect after an ICE restart.`,
+            );
+          }
+          return connected;
         } catch (err) {
           console.error(
             `[Meets] ${transportKind} transport ICE restart failed:`,
@@ -3612,6 +3700,7 @@ export function useMeetSocket({
             const transport = device.createSendTransport({
               ...response,
               iceServers: resolveIceServers(),
+              iceTransportPolicy: resolveIceTransportPolicy(),
             });
 
             transport.on(
@@ -3683,6 +3772,7 @@ export function useMeetSocket({
                   );
                   producerTransportDisconnectTimeoutRef.current = null;
                 }
+                noteMediaPathConnected("producer");
                 return;
               }
 
@@ -3700,19 +3790,10 @@ export function useMeetSocket({
                       ) {
                         void attemptIceRestart("producer").then((restarted) => {
                           if (!restarted) {
-                            const enabledTurnFallback = enableTurnFallback(
-                              "Producer transport could not recover with STUN-only ICE",
+                            escalateMediaPathFailure(
+                              "producer",
+                              "Producer transport interrupted",
                             );
-                            if (enabledTurnFallback) {
-                              void handleReconnectRef.current?.();
-                              return;
-                            }
-                            setMeetError({
-                              code: "TRANSPORT_ERROR",
-                              message: "Producer transport interrupted",
-                              recoverable: true,
-                            });
-                            void handleReconnectRef.current?.();
                           }
                         });
                       }
@@ -3732,19 +3813,10 @@ export function useMeetSocket({
                 if (!intentionalDisconnectRef.current) {
                   void attemptIceRestart("producer").then((restarted) => {
                     if (!restarted) {
-                      const enabledTurnFallback = enableTurnFallback(
-                        "Producer transport failed with STUN-only ICE",
+                      escalateMediaPathFailure(
+                        "producer",
+                        "Producer transport failed",
                       );
-                      if (enabledTurnFallback) {
-                        void handleReconnectRef.current?.();
-                        return;
-                      }
-                      setMeetError({
-                        code: "TRANSPORT_ERROR",
-                        message: "Producer transport failed",
-                        recoverable: true,
-                      });
-                      void handleReconnectRef.current?.();
                     }
                   });
                 }
@@ -3773,7 +3845,9 @@ export function useMeetSocket({
       intentionalDisconnectRef,
       producerTransportDisconnectTimeoutRef,
       attemptIceRestart,
-      enableTurnFallback,
+      escalateMediaPathFailure,
+      noteMediaPathConnected,
+      resolveIceTransportPolicy,
       resolveIceServers,
     ],
   );
@@ -3900,6 +3974,7 @@ export function useMeetSocket({
             const transport = device.createRecvTransport({
               ...response,
               iceServers: resolveIceServers(),
+              iceTransportPolicy: resolveIceTransportPolicy(),
             });
 
             transport.on(
@@ -3940,6 +4015,7 @@ export function useMeetSocket({
                   );
                   consumerTransportDisconnectTimeoutRef.current = null;
                 }
+                noteMediaPathConnected("consumer");
                 return;
               }
 
@@ -3957,14 +4033,10 @@ export function useMeetSocket({
                       ) {
                         void attemptIceRestart("consumer").then((restarted) => {
                           if (!restarted) {
-                            const enabledTurnFallback = enableTurnFallback(
-                              "Consumer transport could not recover with STUN-only ICE",
+                            escalateMediaPathFailure(
+                              "consumer",
+                              "Consumer transport interrupted",
                             );
-                            if (enabledTurnFallback) {
-                              void handleReconnectRef.current?.();
-                              return;
-                            }
-                            void handleReconnectRef.current?.();
                           }
                         });
                       }
@@ -3984,14 +4056,10 @@ export function useMeetSocket({
                 if (!intentionalDisconnectRef.current) {
                   void attemptIceRestart("consumer").then((restarted) => {
                     if (!restarted) {
-                      const enabledTurnFallback = enableTurnFallback(
-                        "Consumer transport failed with STUN-only ICE",
+                      escalateMediaPathFailure(
+                        "consumer",
+                        "Consumer transport failed",
                       );
-                      if (enabledTurnFallback) {
-                        void handleReconnectRef.current?.();
-                        return;
-                      }
-                      void handleReconnectRef.current?.();
                     }
                   });
                 }
@@ -4015,7 +4083,9 @@ export function useMeetSocket({
       intentionalDisconnectRef,
       consumerTransportDisconnectTimeoutRef,
       attemptIceRestart,
-      enableTurnFallback,
+      escalateMediaPathFailure,
+      noteMediaPathConnected,
+      resolveIceTransportPolicy,
       resolveIceServers,
     ],
   );
@@ -6020,6 +6090,162 @@ export function useMeetSocket({
     adaptivelyPausedConsumerProducerIdsRef,
     producerPausedStateRef,
     videoFreezeStatsRef,
+  ]);
+
+  // A transport can sit in "connecting", or stay connected while no media
+  // moves, without ever reporting a failure. Sample both transports and start
+  // the recovery a reported failure would get.
+  useEffect(() => {
+    const watched: Record<
+      "producer" | "consumer",
+      { transport: Transport | null; watch: MediaPathWatch }
+    > = {
+      producer: { transport: null, watch: INITIAL_MEDIA_PATH_WATCH },
+      consumer: { transport: null, watch: INITIAL_MEDIA_PATH_WATCH },
+    };
+    const restartedWhileConnected = new WeakSet<Transport>();
+    const connectedOnce = new WeakSet<Transport>();
+    let sampling = false;
+
+    const isSending = (producer: Producer | null): boolean =>
+      Boolean(
+        producer &&
+          !producer.closed &&
+          !producer.paused &&
+          producer.track?.readyState === "live" &&
+          producer.track.enabled &&
+          !producer.track.muted,
+      );
+    // A connected transport is judged only on streams that never go quiet
+    // on their own: a live microphone or camera, or an unmuted remote
+    // microphone. A transport that is not connected fails every stream.
+    const expectsMedia = (
+      kind: "producer" | "consumer",
+      connected: boolean,
+    ): boolean => {
+      if (kind === "producer") {
+        return connected
+          ? isSending(audioProducerRef.current) ||
+              isSending(videoProducerRef.current)
+          : [audioProducerRef, videoProducerRef, screenProducerRef].some(
+              (ref) => ref.current && !ref.current.closed,
+            );
+      }
+      for (const [producerId, consumer] of consumersRef.current) {
+        if (consumer.closed) continue;
+        if (!connected) return true;
+        if (
+          consumer.kind === "audio" &&
+          !consumer.paused &&
+          producerPausedStateRef.current.get(producerId) !== true
+        ) {
+          return true;
+        }
+      }
+      return false;
+    };
+
+    const sample = async (kind: "producer" | "consumer") => {
+      const transport =
+        kind === "producer"
+          ? producerTransportRef.current
+          : consumerTransportRef.current;
+      const entry = watched[kind];
+      if (
+        !transport ||
+        transport.closed ||
+        entry.transport !== transport ||
+        intentionalDisconnectRef.current ||
+        reconnectInFlightRef.current
+      ) {
+        entry.transport = transport ?? null;
+        entry.watch = INITIAL_MEDIA_PATH_WATCH;
+        return;
+      }
+
+      let rtpBytes: number;
+      try {
+        rtpBytes = readRtpBytes(
+          (await transport.getStats()).values(),
+          kind === "producer" ? "send" : "recv",
+        );
+      } catch {
+        return;
+      }
+      if (entry.transport !== transport) return;
+      if (transport.connectionState === "connected") {
+        connectedOnce.add(transport);
+      }
+
+      const result = advanceMediaPathWatch(entry.watch, {
+        at: Date.now(),
+        connectionState: transport.connectionState,
+        expectsMedia: expectsMedia(
+          kind,
+          transport.connectionState === "connected",
+        ),
+        rtpBytes,
+      });
+      entry.watch = result.watch;
+      if (result.stalledForMs < MEDIA_PATH_STALL_MS) return;
+
+      entry.watch = INITIAL_MEDIA_PATH_WATCH;
+      if (result.condition === "connected-without-media") {
+        // The network path is up, so an ICE restart is only worth one try.
+        if (restartedWhileConnected.has(transport)) return;
+        restartedWhileConnected.add(transport);
+      }
+      console.warn(
+        `[Meets] ${kind} transport has carried no media for ${Math.round(
+          result.stalledForMs / 1000,
+        )}s (${result.condition}).`,
+      );
+      telemetry.capture("meet_media_path_stalled", {
+        transport: kind,
+        condition: result.condition,
+        roomId: currentRoomIdRef.current ?? undefined,
+      });
+      // An ICE restart can revive a path that worked before. One that never
+      // connected needs different candidates, so go straight to a rebuild.
+      const restarted =
+        connectedOnce.has(transport) && (await attemptIceRestart(kind));
+      if (restarted) {
+        if (kind === "consumer") void syncProducersRef.current();
+        return;
+      }
+      if (entry.transport !== transport || reconnectInFlightRef.current) return;
+      escalateMediaPathFailure(
+        kind,
+        kind === "producer"
+          ? "Producer transport could not connect"
+          : "Consumer transport could not connect",
+      );
+    };
+
+    const interval = window.setInterval(() => {
+      if (sampling) return;
+      sampling = true;
+      void Promise.all([sample("producer"), sample("consumer")]).finally(
+        () => {
+          sampling = false;
+        },
+      );
+    }, MEDIA_PATH_SAMPLE_INTERVAL_MS);
+
+    return () => window.clearInterval(interval);
+  }, [
+    attemptIceRestart,
+    audioProducerRef,
+    consumerTransportRef,
+    consumersRef,
+    currentRoomIdRef,
+    escalateMediaPathFailure,
+    intentionalDisconnectRef,
+    producerPausedStateRef,
+    producerTransportRef,
+    reconnectInFlightRef,
+    screenProducerRef,
+    videoProducerRef,
   ]);
 
   const syncProducers = useCallback(async () => {
@@ -8850,6 +9076,9 @@ export function useMeetSocket({
       reconnectAttemptsRef.current,
       MAX_RECONNECT_ATTEMPTS,
     );
+    // The rebuilt transports get a fresh verdict, and a fresh banner if media
+    // is still blocked.
+    networkBlockedReportedRef.current = false;
     setMeetError(null);
 
     try {
@@ -8897,7 +9126,7 @@ export function useMeetSocket({
           roomId: currentRoomIdRef.current ?? undefined,
           attempt,
           maxAttempts: MAX_RECONNECT_ATTEMPTS,
-          usingTurnFallback: useTurnFallbackRef.current,
+          usingTurnFallback: relayOnlyIceRef.current,
         });
         if (delay > 0) {
           await waitForReconnectBackoff(delay);
@@ -9026,7 +9255,7 @@ export function useMeetSocket({
           telemetry.capture("meet_reconnect_success", {
             roomId: reconnectRoomId ?? undefined,
             attempt,
-            usingTurnFallback: useTurnFallbackRef.current,
+            usingTurnFallback: relayOnlyIceRef.current,
           });
           reconnectAttemptsRef.current = 0;
           manualReconnectRetryRequestedRef.current = false;
@@ -9076,7 +9305,7 @@ export function useMeetSocket({
             attempt,
             maxAttempts: MAX_RECONNECT_ATTEMPTS,
             error: reconnectFailure,
-            usingTurnFallback: useTurnFallbackRef.current,
+            usingTurnFallback: relayOnlyIceRef.current,
           });
           if (!isRecoverable) {
             manualReconnectRetryRequestedRef.current = false;
@@ -9138,7 +9367,7 @@ export function useMeetSocket({
         roomId: currentRoomIdRef.current ?? undefined,
         attempts: reconnectAttemptsRef.current,
         error: reconnectFailure,
-        usingTurnFallback: useTurnFallbackRef.current,
+        usingTurnFallback: relayOnlyIceRef.current,
       });
       updateReconnectRecoveryStatus(
         buildReconnectRecoveryStatus(
@@ -9311,7 +9540,9 @@ export function useMeetSocket({
       serverRoomIdRef.current = null;
       runtimeStunIceServersRef.current = null;
       runtimeTurnIceServersRef.current = null;
-      useTurnFallbackRef.current = false;
+      relayOnlyIceRef.current = false;
+      mediaPathReconnectTriedRef.current = { producer: false, consumer: false };
+      networkBlockedReportedRef.current = false;
       setRoomId(targetRoomId);
       if (joinMode === "webinar_attendee") {
         setIsAdmin(false);
@@ -9549,6 +9780,9 @@ export function useMeetSocket({
 
     reconnectGenerationRef.current += 1;
     reconnectAttemptsRef.current = 0;
+    relayOnlyIceRef.current = false;
+    mediaPathReconnectTriedRef.current = { producer: false, consumer: false };
+    networkBlockedReportedRef.current = false;
     setMeetError(null);
     updateReconnectRecoveryStatus(
       buildReconnectRecoveryStatus(

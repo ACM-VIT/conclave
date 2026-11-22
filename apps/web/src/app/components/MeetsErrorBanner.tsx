@@ -29,6 +29,8 @@ export default function MeetsErrorBanner({
     ? "Allow camera and microphone access in your browser, then try again."
     : meetError.code === "MEDIA_ERROR"
     ? "Check that your camera and microphone aren’t in use by another app."
+    : meetError.code === "NETWORK_BLOCKED"
+    ? "Try another network, or turn off your VPN or firewall."
     : null;
 
   const shellClass =
