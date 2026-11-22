@@ -30,12 +30,14 @@ export default function ConnectionBanner({
     <InCallNotice show={show}>
       {isOffline ? (
         <InCallNoticeCard
+          tone="warning"
           icon={WifiOff}
           title="You’re offline"
           detail="Check your internet connection."
         />
       ) : isReconnecting ? (
         <InCallNoticeCard
+          tone="warning"
           icon={Loader2}
           spinIcon
           title={

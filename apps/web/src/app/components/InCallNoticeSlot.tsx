@@ -13,12 +13,16 @@ import {
   InCallNoticeLaneContext,
   placeNoticeLane,
   type LaneObstacle,
-  type NoticeLaneMode,
 } from "../lib/in-call-notice-lane";
 
 const NOTICE_GAP_PX = 8;
-const TOGGLE_HEIGHT_PX = 30;
-const COMPACT_HEIGHT_PX = 40;
+const TOGGLE_HEIGHT_PX = 36;
+const COMPACT_HEIGHT_PX = 44;
+const MAX_PEEKS = 2;
+
+const PEEK_STEP_PX = 6;
+const PEEK_SHRINK = 0.07;
+const PEEK_OPACITY = [0.6, 0.35] as const;
 const REMEASURE_INTERVAL_MS = 600;
 const POINTER_REMEASURE_MS = 150;
 const CONTROL_SELECTOR =
@@ -33,13 +37,58 @@ interface InCallNoticeSlotProps {
 }
 
 interface LaneState {
-  mode: NoticeLaneMode;
+  compact: boolean;
   offset: number;
   count: number;
+  room: number;
 }
 
 const sameLane = (a: LaneState, b: LaneState) =>
-  a.mode === b.mode && a.offset === b.offset && a.count === b.count;
+  a.compact === b.compact &&
+  a.offset === b.offset &&
+  a.count === b.count &&
+  a.room === b.room;
+
+function layoutStack(
+  list: HTMLElement,
+  items: HTMLElement[],
+  heights: number[],
+  expanded: boolean,
+) {
+  if (expanded || items.length <= 1) {
+    let y = 0;
+    items.forEach((item, index) => {
+      item.removeAttribute("data-peek");
+      item.style.height = "";
+      item.style.translate = `0 ${y}px`;
+      item.style.scale = "1";
+      item.style.zIndex = String(items.length - index);
+      item.style.setProperty("--notice-opacity", "1");
+      y += heights[index] + NOTICE_GAP_PX;
+    });
+    list.style.height = `${Math.max(0, y - NOTICE_GAP_PX)}px`;
+    return;
+  }
+  const top = heights[0];
+  items.forEach((item, index) => {
+    const depth = Math.min(index, MAX_PEEKS);
+    if (index === 0) {
+      item.removeAttribute("data-peek");
+      item.style.height = "";
+    } else {
+      item.setAttribute("data-peek", "");
+      item.style.height = `${top}px`;
+    }
+    item.style.translate = `0 ${depth * PEEK_STEP_PX}px`;
+    item.style.scale = `${1 - depth * PEEK_SHRINK} 1`;
+    item.style.zIndex = String(items.length - index);
+    item.style.setProperty(
+      "--notice-opacity",
+      index === 0 ? "1" : index <= MAX_PEEKS ? String(PEEK_OPACITY[index - 1]) : "0",
+    );
+  });
+  list.style.height = `${top + Math.min(MAX_PEEKS, items.length - 1) * PEEK_STEP_PX}px`;
+}
 
 function collectObstacles(
   slot: HTMLElement,
@@ -92,7 +141,7 @@ export default function InCallNoticeSlot({
   const rowRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const fullHeightsRef = useRef(new WeakMap<Element, { key: string; height: number }>());
-  const [lane, setLane] = useState<LaneState>({ mode: "full", offset: 0, count: 0 });
+  const [lane, setLane] = useState<LaneState>({ compact: false, offset: 0, count: 0, room: 0 });
   const [expanded, setExpanded] = useState(false);
   const [announcements, setAnnouncements] = useState<
     ReadonlyMap<string, { text: string; urgent: boolean }>
@@ -106,6 +155,7 @@ export default function InCallNoticeSlot({
   const [panelTarget, setPanelTarget] = useState<HTMLElement | null>(null);
   const panelTargetRef = useRef(panelTarget);
   panelTargetRef.current = panelTarget;
+  const scheduleRef = useRef<() => void>(() => {});
 
   useLayoutEffect(() => {
     if (!overPanel) {
@@ -130,79 +180,108 @@ export default function InCallNoticeSlot({
     if (!slot || !column || !row || !list) return;
 
     const commit = (next: LaneState) => {
-      if (next.mode === "full") setExpanded(false);
+      if (next.count <= 1) setExpanded(false);
       setLane((prev) => (sameLane(prev, next) ? prev : next));
     };
 
     const measure = () => {
-      const notices = [...list.children] as HTMLElement[];
-      const count = notices.length;
+      const items = [...list.children] as HTMLElement[];
+      const count = items.length;
       if (count === 0) {
-        commit({ mode: "full", offset: 0, count: 0 });
+        list.style.height = "0px";
+        commit({ compact: false, offset: 0, count: 0, room: 0 });
         return;
       }
+      for (const item of items) item.style.height = "";
+      const heights = items.map((item) => item.offsetHeight);
+      const isExpanded = expandedRef.current && count > 1;
+      layoutStack(list, items, heights, isExpanded);
+
+      const peekSpace = Math.min(MAX_PEEKS, count - 1) * PEEK_STEP_PX;
+      const footerSpace = count > 1 ? TOGGLE_HEIGHT_PX : 0;
+      const listHeight =
+        heights.reduce((sum, height) => sum + height, 0) + NOTICE_GAP_PX * (count - 1);
       const slotRect = slot.getBoundingClientRect();
       const cssMinTop = parseFloat(getComputedStyle(column).paddingTop) || 0;
-      const rowRect = row.getBoundingClientRect();
-      const laneLeft = rowRect.left - slotRect.left;
-      const laneRight = rowRect.right - slotRect.left;
+      const maxBottom = column.clientHeight;
+
       if (panelTargetRef.current) {
-        commit({ mode: "compact", offset: 0, count });
+        commit({ compact: !isExpanded, offset: 0, count, room: 0 });
         return;
       }
+
+      const rowRect = row.getBoundingClientRect();
+      const bounds = {
+        left: rowRect.left - slotRect.left,
+        right: rowRect.right - slotRect.left,
+        minTop: cssMinTop,
+        maxBottom,
+      };
       if (overPanelRef.current) {
         const { panel, headerBottom } = fullScreenPanel();
         const placement = placeNoticeLane(collectObstacles(slot, slotRect, panel), {
-          left: laneLeft,
-          right: laneRight,
+          ...bounds,
           minTop: Math.max(cssMinTop, headerBottom - slotRect.top + NOTICE_GAP_PX),
-          maxBottom: column.clientHeight,
-          count,
+          count: 1,
           fullHeight: Number.POSITIVE_INFINITY,
           collapsedHeight: Number.POSITIVE_INFINITY,
-          compactHeight: COMPACT_HEIGHT_PX,
+          compactHeight: COMPACT_HEIGHT_PX + peekSpace,
         });
-        commit({ mode: "compact", offset: Math.max(0, placement.top - cssMinTop), count });
+        commit({
+          compact: true,
+          offset: Math.max(0, placement.top - cssMinTop),
+          count,
+          room: maxBottom - placement.top,
+        });
         return;
       }
 
-      const compactNow = laneRef.current.mode === "compact" && !expandedRef.current;
-      const width = row.clientWidth;
-      const heights: number[] = [];
-      for (const notice of notices) {
-        const content =
-          notice.querySelector("[data-notice-content]")?.getAttribute("data-notice-content") ?? "";
-        const key = `${width}:${content}`;
-        if (!compactNow) {
-          const height = notice.offsetHeight;
-          fullHeightsRef.current.set(notice, { key, height });
-          heights.push(height);
-          continue;
-        }
-        const cached = fullHeightsRef.current.get(notice);
-        if (!cached || cached.key !== key) {
-          commit({ ...laneRef.current, mode: "full", count });
-          return;
-        }
-        heights.push(cached.height);
+      const obstacles = collectObstacles(slot, slotRect, slot.parentElement);
+      if (isExpanded) {
+        const placement = placeNoticeLane(obstacles, {
+          ...bounds,
+          count: 1,
+          fullHeight: listHeight + TOGGLE_HEIGHT_PX,
+          collapsedHeight: Number.POSITIVE_INFINITY,
+          compactHeight: Number.POSITIVE_INFINITY,
+        });
+        const top = placement.mode === "full" ? placement.top : cssMinTop;
+        commit({
+          compact: false,
+          offset: Math.max(0, top - cssMinTop),
+          count,
+          room: maxBottom - top - TOGGLE_HEIGHT_PX,
+        });
+        return;
       }
 
-      const placement = placeNoticeLane(collectObstacles(slot, slotRect, slot.parentElement), {
-        left: laneLeft,
-        right: laneRight,
-        minTop: cssMinTop,
-        maxBottom: column.clientHeight,
-        count,
-        fullHeight:
-          heights.reduce((sum, height) => sum + height, 0) +
-          NOTICE_GAP_PX * (count - 1),
-        collapsedHeight: heights[0] + NOTICE_GAP_PX + TOGGLE_HEIGHT_PX,
-        compactHeight: compactNow ? notices[0].offsetHeight : COMPACT_HEIGHT_PX,
+      const compactNow = laneRef.current.compact;
+      const key = `${row.clientWidth}:${
+        items[0].querySelector("[data-notice-content]")?.getAttribute("data-notice-content") ?? ""
+      }`;
+      let topFullHeight = heights[0];
+      if (compactNow) {
+        const cached = fullHeightsRef.current.get(items[0]);
+        if (!cached || cached.key !== key) {
+          commit({ ...laneRef.current, compact: false, count });
+          return;
+        }
+        topFullHeight = cached.height;
+      } else {
+        fullHeightsRef.current.set(items[0], { key, height: heights[0] });
+      }
+      const placement = placeNoticeLane(obstacles, {
+        ...bounds,
+        count: 1,
+        fullHeight: topFullHeight + peekSpace + footerSpace,
+        collapsedHeight: Number.POSITIVE_INFINITY,
+        compactHeight: COMPACT_HEIGHT_PX + peekSpace,
       });
       commit({
-        mode: placement.mode,
+        compact: placement.mode !== "full",
         offset: Math.max(0, placement.top - cssMinTop),
         count,
+        room: maxBottom - placement.top,
       });
     };
 
@@ -244,6 +323,7 @@ export default function InCallNoticeSlot({
     const interval = window.setInterval(() => {
       if (list.children.length > 0) schedule();
     }, REMEASURE_INTERVAL_MS);
+    scheduleRef.current = schedule;
     observeNotices();
     return () => {
       cancelAnimationFrame(frame);
@@ -256,6 +336,10 @@ export default function InCallNoticeSlot({
       resizes.disconnect();
     };
   }, [panelTarget]);
+
+  useLayoutEffect(() => {
+    scheduleRef.current();
+  }, [expanded, lane.compact]);
 
   const announce = useCallback((id: string, text: string | null, urgent: boolean) => {
     setAnnouncements((prev) => {
@@ -270,49 +354,66 @@ export default function InCallNoticeSlot({
     });
   }, []);
 
-  const compact = lane.mode === "compact" && !expanded;
-  const hidesRest = lane.mode !== "full" && !expanded && lane.count > 1;
-  const laneContext = useMemo(() => ({ compact, announce }), [compact, announce]);
+  const isExpanded = expanded && lane.count > 1;
+  const compact = lane.compact && !isExpanded;
+  const laneContext = useMemo(
+    () => ({ compact, expanded: isExpanded, announce }),
+    [compact, isExpanded, announce],
+  );
   const toggleExpanded = () => setExpanded((value) => !value);
+  const more = lane.count - 1;
+  const expandFromPeek = (event: { target: EventTarget }) => {
+    if (!isExpanded && more > 0 && (event.target as Element).closest("[data-peek]")) {
+      setExpanded(true);
+    }
+  };
+
+  const inlineCount = more > 0 && compact && !isExpanded;
+  const footer =
+    more > 0 && !inlineCount ? (
+      <button
+        type="button"
+        onClick={toggleExpanded}
+        aria-expanded={isExpanded}
+        aria-label={isExpanded ? "Collapse notices" : `Show ${more} more notices`}
+        className="pointer-events-auto mt-2 inline-flex h-7 shrink-0 items-center rounded-full px-3 text-[12px] font-medium text-[#fafafa]/60 transition-colors duration-100 hover:text-[#fafafa]"
+      >
+        {isExpanded ? "Show less" : `+${more} more`}
+      </button>
+    ) : null;
+
   const laneContent = (
     <>
       <div
         ref={rowRef}
-        className="flex min-h-0 w-full max-w-[560px] items-start gap-2"
+        className="relative flex w-full max-w-[560px] items-start gap-1"
         style={{ marginTop: lane.offset }}
       >
         <div
           ref={listRef}
-          className={`relative flex max-h-full min-h-0 min-w-0 flex-1 flex-col items-center overscroll-contain [&>*+*]:mt-2 ${
-            hidesRest
-              ? "overflow-hidden [&>*:nth-child(n+2)]:invisible [&>*:nth-child(n+2)]:absolute [&>*:nth-child(n+2)]:top-0 [&>*:nth-child(n+2)]:mt-0"
-              : "overflow-y-auto"
-          } ${expanded ? "pointer-events-auto" : ""}`}
+          onClick={expandFromPeek}
+          className="relative min-w-0 flex-1 overscroll-contain [&>*]:absolute [&>*]:inset-x-0 [&>*]:top-0 [&>*]:origin-top [&>*]:transition-[translate,scale] [&>*]:duration-[120ms] [&>*]:ease-out motion-reduce:[&>*]:transition-none [&>[data-peek]]:cursor-pointer [&>[data-peek]_[data-in-call-notice]>*]:invisible"
+          style={
+            isExpanded && lane.room > 0
+              ? { maxHeight: lane.room, overflowY: "auto" }
+              : undefined
+          }
         >
           {children}
         </div>
-        {compact && lane.count > 1 ? (
+        {inlineCount ? (
           <button
             type="button"
             onClick={toggleExpanded}
             aria-expanded={false}
-            aria-label={`Show ${lane.count - 1} more notices`}
-            className="pointer-events-auto h-10 shrink-0 rounded-xl border border-[#fafafa]/10 bg-[#18181b] px-3 text-[12.5px] font-medium text-[#fafafa]/80 transition-colors hover:bg-[#232327] hover:text-[#fafafa]"
+            aria-label={`Show ${more} more notices`}
+            className="pointer-events-auto inline-flex h-11 shrink-0 items-center rounded-xl px-2 text-[12px] font-medium tabular-nums text-[#fafafa]/60 transition-colors duration-100 hover:text-[#fafafa]"
           >
-            +{lane.count - 1}
+            +{more}
           </button>
         ) : null}
       </div>
-      {(lane.mode === "collapsed" || expanded) && lane.count > 1 ? (
-        <button
-          type="button"
-          onClick={toggleExpanded}
-          aria-expanded={expanded}
-          className="pointer-events-auto mt-2 shrink-0 rounded-full border border-[#fafafa]/10 bg-[#18181b] px-3 py-1 text-[12px] font-medium text-[#fafafa]/80 transition-colors hover:bg-[#232327] hover:text-[#fafafa]"
-        >
-          {expanded ? "Show less" : `+${lane.count - 1} more`}
-        </button>
-      ) : null}
+      {footer}
     </>
   );
 
@@ -327,7 +428,7 @@ export default function InCallNoticeSlot({
       <div
         ref={slotRef}
         data-in-call-notices
-        data-lane-mode={lane.count > 0 ? lane.mode : undefined}
+        data-lane-mode={lane.count > 0 ? (isExpanded ? "expanded" : compact ? "compact" : lane.count > 1 ? "stack" : "full") : undefined}
         className={`@container pointer-events-none absolute inset-x-0 top-0 ${
           overPanel ? "z-[45]" : "z-40"
         }`}

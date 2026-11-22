@@ -82,12 +82,13 @@ describe("in-call notices", () => {
     expect(alertRegion()?.textContent).toBe("");
   });
 
-  it("announces the offline notice politely and clears it once back online", async () => {
+  it("announces the offline warning right away and clears it once back online", async () => {
     await render(<ConnectionBanner state="joined" isOffline />);
-    const live = slot()?.querySelector('[aria-live="polite"]');
-    expect(live?.textContent).toContain("You’re offline");
-    expect(live?.textContent).toContain("Check your internet connection.");
-    expect(slot()?.querySelector("[data-in-call-notice]")?.textContent).toContain("You’re offline");
+    expect(alertRegion()?.textContent).toContain("You’re offline");
+    expect(alertRegion()?.textContent).toContain("Check your internet connection.");
+    const card = slot()?.querySelector("[data-in-call-notice]");
+    expect(card?.getAttribute("data-tone")).toBe("warning");
+    expect(card?.textContent).toContain("You’re offline");
 
     await render(<ConnectionBanner state="joined" />);
     await waitOutExit();
@@ -136,37 +137,46 @@ describe("in-call notices", () => {
     expect(fading?.closest('[aria-hidden="true"]')).not.toBeNull();
   });
 
-  it("collapses to the first notice with a more toggle when the stack does not fit", async () => {
-    // happy-dom has no layout: every notice is 60px tall and the slot has 150px of room.
+  it("stacks several notices behind the first and fans them out on demand", async () => {
     vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(60);
-    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(150);
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
     const stack = (count: number) =>
-      ["Camera or microphone not found", "Reconnecting", "Audio-only mode active"]
+      ["Camera is blocked", "You’re offline", "Audio-only mode is on"]
         .slice(0, count)
         .map((text) => (
           <InCallNotice key={text} show>
-            <div role="status">{text}</div>
+            <InCallNoticeCard icon={Headphones} title={text} />
           </InCallNotice>
         ));
     const toggle = () =>
       [...(slot()?.querySelectorAll("button") ?? [])].find((b) =>
         /more|less/.test(b.textContent ?? ""),
       );
+    const peeks = () => slot()?.querySelectorAll("[data-peek]").length ?? 0;
 
-    await render(stack(2));
+    await render(stack(1));
     await waitOutExit();
     expect(toggle()).toBeUndefined();
+    expect(peeks()).toBe(0);
 
     await render(stack(3));
     await waitOutExit();
     expect(toggle()?.textContent).toBe("+2 more");
     expect(toggle()?.getAttribute("aria-expanded")).toBe("false");
+    expect(peeks()).toBe(2);
 
     await act(async () => toggle()?.click());
+    await waitOutExit();
     expect(toggle()?.textContent).toBe("Show less");
     expect(toggle()?.getAttribute("aria-expanded")).toBe("true");
+    expect(peeks()).toBe(0);
 
-    await render(stack(2));
+    await act(async () => toggle()?.click());
+    await waitOutExit();
+    expect(toggle()?.textContent).toBe("+2 more");
+    expect(peeks()).toBe(2);
+
+    await render(stack(1));
     await waitOutExit();
     expect(toggle()).toBeUndefined();
   });

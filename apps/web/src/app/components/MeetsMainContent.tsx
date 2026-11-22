@@ -2031,7 +2031,7 @@ export default function MeetsMainContent({
           ) : null}
           <InCallNotice show={!isWebinarAttendee && participantAudioBlocked}>
             <InCallNoticeCard
-              tone="error"
+              tone="warning"
               icon={VolumeX}
               title="Your browser paused audio"
               actionLabel="Turn on audio"
