@@ -106,39 +106,38 @@ export const initMediaSoup = async (
   Logger.info(`Created ${state.workers.length} mediasoup workers`);
 };
 
-export const initScheduledWebinars = (
+export const initScheduledWebinars = async (
   state: SfuState,
   persistence: ScheduledWebinarPersistence = createScheduledWebinarPersistence(),
 ): Promise<void> => {
   state.scheduledWebinarPersistence = persistence;
-  return importFallbackWebinars(persistence).then(() => {
-    const loaded = loadPersistedSchedules(state.scheduledWebinars, persistence);
-    if (loaded > 0) {
-      Logger.info(`Restored ${loaded} scheduled webinar(s) from persistence`);
-    }
-  });
+  await importFallbackWebinars(persistence);
+  const loaded = loadPersistedSchedules(state.scheduledWebinars, persistence);
+  if (loaded > 0) {
+    Logger.info(`Restored ${loaded} scheduled webinar(s) from persistence`);
+  }
 };
 
-export const initScheduledMeetings = (
+export const initScheduledMeetings = async (
   state: SfuState,
   persistence: ScheduledMeetingPersistence = createScheduledMeetingPersistence(),
 ): Promise<void> => {
   state.scheduledMeetingPersistence = persistence;
-  return importFallbackMeetings(persistence).then(() => loadPersistedMeetings(state.scheduledMeetings, persistence)).then((loaded) => {
-    if (loaded > 0) {
-      Logger.info(`Restored ${loaded} scheduled meeting(s) from persistence`);
-    }
-  });
+  await importFallbackMeetings(persistence);
+  const loaded = await loadPersistedMeetings(state.scheduledMeetings, persistence);
+  if (loaded > 0) {
+    Logger.info(`Restored ${loaded} scheduled meeting(s) from persistence`);
+  }
 };
 
-export const initScheduling = (
+export const initScheduling = async (
   state: SfuState,
   persistence: SchedulingPersistence = createSchedulingPersistence(),
 ): Promise<void> => {
   state.schedulingPersistence = persistence;
-  return importFallbackScheduling(persistence).then(() => loadPersistedScheduling(state.scheduling, persistence)).then((loaded) => {
-    if (loaded > 0) {
-      Logger.info(`Restored ${loaded} scheduling record(s) from persistence`);
-    }
-  });
+  await importFallbackScheduling(persistence);
+  const loaded = await loadPersistedScheduling(state.scheduling, persistence);
+  if (loaded > 0) {
+    Logger.info(`Restored ${loaded} scheduling record(s) from persistence`);
+  }
 };

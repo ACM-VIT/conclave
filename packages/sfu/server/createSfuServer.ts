@@ -10,11 +10,6 @@ import {
   initScheduledMeetings,
   initScheduledWebinars,
 } from "./init.js";
-import {
-  advanceScheduledMeetings,
-  persistScheduledMeetingChanges,
-} from "./scheduledMeetings.js";
-import { sendDueSchedulingEmailReminders } from "./schedulingEmailReminders.js";
 import { createSfuApp } from "./http/createApp.js";
 import { registerAdminGateway, type AdminGateway } from "./admin/adminGateway.js";
 import {
@@ -40,6 +35,8 @@ import { createSfuState } from "./state.js";
 import type { SfuState } from "./state.js";
 import { shutdownBrowserBackend } from "./browserServiceClient.js";
 import { retryWhileSqliteLocked } from "./sqliteWriteCheck.js";
+import { startBackgroundTimer } from "./backgroundTimer.js";
+import { runScheduledMeetingTick } from "./scheduledMeetingTick.js";
 
 export type SfuServer = {
   app: Express;
@@ -95,42 +92,18 @@ export const createSfuServer = (
     await retryWhileSqliteLocked(() => initScheduledMeetings(state));
     await retryWhileSqliteLocked(() => initScheduling(state));
     startScheduledWebinarTimer(state, () => io, undefined);
-    roomOwnershipRenewTimer = setInterval(() => {
-      renewRoomOwnerships(state).catch((error) => {
-        Logger.error("Failed to renew room ownerships", error);
-      });
-    }, config.roomRegistry.renewIntervalMs);
-    if (roomOwnershipRenewTimer.unref) {
-      roomOwnershipRenewTimer.unref();
-    }
-    scheduledMeetingTickTimer = setInterval(() => {
-      const changedMeetings = advanceScheduledMeetings(state.scheduledMeetings);
-      if (changedMeetings.length > 0 && state.scheduledMeetingPersistence) {
-        persistScheduledMeetingChanges(
-          state.scheduledMeetings,
-          state.scheduledMeetingPersistence,
-          changedMeetings,
-        ).catch((error) => {
-          Logger.warn("Failed to persist scheduled-meeting tick", error);
-        });
-      }
-      sendDueSchedulingEmailReminders(state).catch((error) => {
-        Logger.warn("Failed to send scheduling reminders", error);
-      });
-    }, 5000);
-
-    if (scheduledMeetingTickTimer.unref) {
-      scheduledMeetingTickTimer.unref();
-    }
-
-    audioConsumerHealTimer = setInterval(() => {
-      healAllRooms(state).catch((error) => {
-        Logger.warn("Audio consumer heal sweep failed", error);
-      });
-    }, AUDIO_CONSUMER_HEAL_INTERVAL_MS);
-    if (audioConsumerHealTimer.unref) {
-      audioConsumerHealTimer.unref();
-    }
+    roomOwnershipRenewTimer = startBackgroundTimer(
+      "Room ownership renewal",
+      config.roomRegistry.renewIntervalMs,
+      () => renewRoomOwnerships(state),
+      Logger.error,
+    );
+    scheduledMeetingTickTimer = startBackgroundTimer("Scheduled meeting tick", 5000, () =>
+      runScheduledMeetingTick(state),
+    );
+    audioConsumerHealTimer = startBackgroundTimer("Audio consumer heal sweep", AUDIO_CONSUMER_HEAL_INTERVAL_MS, () =>
+      healAllRooms(state),
+    );
 
     await new Promise<void>((resolve) => {
       httpServer.listen(config.port, () => {

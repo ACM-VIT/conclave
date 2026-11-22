@@ -9,10 +9,17 @@ import {
   listScheduledMeetings,
   moveScheduledMeetingToClient,
   persistScheduledMeetingChanges,
+  forgetMeeting,
   persistScheduledMeetingDeletes,
+  rememberMeeting,
   updateScheduledMeeting,
 } from "../scheduledMeetings.js";
 import type { SfuState } from "../state.js";
+import {
+  PersistenceUnavailableError,
+  persistOrFail,
+  sendPersistenceUnavailable,
+} from "./persistenceUnavailable.js";
 import {
   canonicalizeClientId,
   canMigrateClientNamespace,
@@ -138,32 +145,24 @@ export const registerScheduledMeetingRoutes = (
     return false;
   };
 
-  const persistChanged = async (meeting: ScheduledMeeting): Promise<void> => {
-    if (state.scheduledMeetingPersistence) {
-      try {
-        await persistScheduledMeetingChanges(
-          state.scheduledMeetings,
-          state.scheduledMeetingPersistence,
-          [meeting],
-        );
-      } catch (error) {
-        Logger.warn("Failed to persist scheduled meetings", error);
-      }
-    }
-  };
+  const persistChanged = async (meeting: ScheduledMeeting): Promise<void> =>
+    persistOrFail("scheduled meeting", () =>
+      state.scheduledMeetingPersistence &&
+      persistScheduledMeetingChanges(state.scheduledMeetings, state.scheduledMeetingPersistence, [meeting]),
+    );
 
-  const persistDeleted = async (id: string): Promise<void> => {
-    if (state.scheduledMeetingPersistence) {
-      try {
-        await persistScheduledMeetingDeletes(
-          state.scheduledMeetings,
-          state.scheduledMeetingPersistence,
-          [id],
-        );
-      } catch (error) {
-        Logger.warn("Failed to delete scheduled meeting", error);
-      }
+  const persistDeleted = async (id: string): Promise<void> =>
+    persistOrFail("scheduled meeting deletion", () =>
+      state.scheduledMeetingPersistence &&
+      persistScheduledMeetingDeletes(state.scheduledMeetings, state.scheduledMeetingPersistence, [id]),
+    );
+
+  const answerFailure = (res: Response, error: unknown): void => {
+    if (error instanceof PersistenceUnavailableError) {
+      sendPersistenceUnavailable(res);
+      return;
     }
+    res.status(400).json({ error: (error as Error).message });
   };
 
   const migrateMeetingNamespace = async (
@@ -172,6 +171,7 @@ export const registerScheduledMeetingRoutes = (
   ): Promise<ScheduledMeeting | null> => {
     if (meeting.clientId === clientId) return meeting;
     if (!canMigrateClientNamespace(meeting.clientId, clientId)) return null;
+    const undo = rememberMeeting(state.scheduledMeetings, meeting.id);
     try {
       const migrated = moveScheduledMeetingToClient(
         state.scheduledMeetings,
@@ -183,6 +183,7 @@ export const registerScheduledMeetingRoutes = (
       }
       return migrated;
     } catch (error) {
+      undo();
       Logger.warn(
         `Failed to migrate scheduled meeting ${meeting.id} from ${meeting.clientId} to ${clientId}`,
         error,
@@ -276,13 +277,18 @@ export const registerScheduledMeetingRoutes = (
         defaultHostUserId: user.userId,
       });
 
-      await persistChanged(meeting);
+      try {
+        await persistChanged(meeting);
+      } catch (error) {
+        forgetMeeting(state.scheduledMeetings, meeting);
+        throw error;
+      }
       Logger.info(
         `Scheduled meeting created ${meeting.id} (${meeting.roomCode}) by ${user.email}`,
       );
       res.status(201).json({ scheduledMeeting: serializeMeeting(meeting) });
     } catch (error) {
-      res.status(400).json({ error: (error as Error).message });
+      answerFailure(res, error);
     }
   });
 
@@ -359,6 +365,7 @@ export const registerScheduledMeetingRoutes = (
     if (!requireSecret(req, res)) return;
     const target = requireMeetingAccess(req, res);
     if (!target) return;
+    const undo = rememberMeeting(state.scheduledMeetings, target.id);
     try {
       const body = (req.body ?? {}) as UpdateScheduledMeetingRequest;
       const meeting = updateScheduledMeeting(
@@ -369,7 +376,8 @@ export const registerScheduledMeetingRoutes = (
       await persistChanged(meeting);
       res.json({ scheduledMeeting: serializeMeeting(meeting) });
     } catch (error) {
-      res.status(400).json({ error: (error as Error).message });
+      undo();
+      answerFailure(res, error);
     }
   });
 
@@ -377,12 +385,19 @@ export const registerScheduledMeetingRoutes = (
     if (!requireSecret(req, res)) return;
     const target = requireMeetingAccess(req, res);
     if (!target) return;
+    const undo = rememberMeeting(state.scheduledMeetings, target.id);
     const meeting = deleteScheduledMeeting(state.scheduledMeetings, target.id);
     if (!meeting) {
       res.status(404).json({ error: "Scheduled meeting not found" });
       return;
     }
-    await persistDeleted(meeting.id);
+    try {
+      await persistDeleted(meeting.id);
+    } catch (error) {
+      undo();
+      answerFailure(res, error);
+      return;
+    }
     res.json({ success: true, id: meeting.id });
   });
 
@@ -390,6 +405,7 @@ export const registerScheduledMeetingRoutes = (
     if (!requireSecret(req, res)) return;
     const target = requireMeetingAccess(req, res);
     if (!target) return;
+    const undo = rememberMeeting(state.scheduledMeetings, target.id);
     try {
       const meeting = updateScheduledMeeting(
         state.scheduledMeetings,
@@ -399,7 +415,8 @@ export const registerScheduledMeetingRoutes = (
       await persistChanged(meeting);
       res.json({ scheduledMeeting: serializeMeeting(meeting) });
     } catch (error) {
-      res.status(400).json({ error: (error as Error).message });
+      undo();
+      answerFailure(res, error);
     }
   });
 
@@ -407,6 +424,7 @@ export const registerScheduledMeetingRoutes = (
     if (!requireSecret(req, res)) return;
     const target = requireMeetingAccess(req, res);
     if (!target) return;
+    const undo = rememberMeeting(state.scheduledMeetings, target.id);
     try {
       const meeting = updateScheduledMeeting(
         state.scheduledMeetings,
@@ -416,7 +434,8 @@ export const registerScheduledMeetingRoutes = (
       await persistChanged(meeting);
       res.json({ scheduledMeeting: serializeMeeting(meeting) });
     } catch (error) {
-      res.status(400).json({ error: (error as Error).message });
+      undo();
+      answerFailure(res, error);
     }
   });
 };

@@ -13,7 +13,10 @@ import {
   buildCoHostInviteLink,
   createScheduledWebinarCoHostInvite,
   createScheduledWebinar,
+  coHostInviteWebinarId,
   deleteScheduledWebinar,
+  forgetWebinar,
+  rememberWebinar,
   getScheduledWebinarById,
   getScheduledWebinarBySlug,
   getScheduledWebinarForRoom,
@@ -25,6 +28,11 @@ import {
 } from "../scheduledWebinars.js";
 import { clearWebinarLinkSlug } from "../webinar.js";
 import type { SfuState } from "../state.js";
+import {
+  PersistenceUnavailableError,
+  persistOrFailSync,
+  sendPersistenceUnavailable,
+} from "./persistenceUnavailable.js";
 import {
   canonicalizeClientId,
   canMigrateClientNamespace,
@@ -154,31 +162,27 @@ export const registerScheduledWebinarRoutes = (
   };
 
   const persistChanged = (webinar: ScheduledWebinar): void => {
-    if (state.scheduledWebinarPersistence) {
-      try {
-        persistScheduledWebinarChanges(
-          state.scheduledWebinars,
-          state.scheduledWebinarPersistence,
-          [webinar],
-        );
-      } catch (error) {
-        Logger.warn("Failed to persist scheduled webinars", error);
+    persistOrFailSync("scheduled webinar", () => {
+      if (state.scheduledWebinarPersistence) {
+        persistScheduledWebinarChanges(state.scheduledWebinars, state.scheduledWebinarPersistence, [webinar]);
       }
-    }
+    });
   };
 
   const persistDeleted = (id: string): void => {
-    if (state.scheduledWebinarPersistence) {
-      try {
-        persistScheduledWebinarDeletes(
-          state.scheduledWebinars,
-          state.scheduledWebinarPersistence,
-          [id],
-        );
-      } catch (error) {
-        Logger.warn("Failed to delete scheduled webinar", error);
+    persistOrFailSync("scheduled webinar deletion", () => {
+      if (state.scheduledWebinarPersistence) {
+        persistScheduledWebinarDeletes(state.scheduledWebinars, state.scheduledWebinarPersistence, [id]);
       }
+    });
+  };
+
+  const answerFailure = (res: Response, error: unknown): void => {
+    if (error instanceof PersistenceUnavailableError) {
+      sendPersistenceUnavailable(res);
+      return;
     }
+    res.status(400).json({ error: (error as Error).message });
   };
 
   const migrateWebinarNamespace = (
@@ -187,6 +191,7 @@ export const registerScheduledWebinarRoutes = (
   ): ScheduledWebinar | null => {
     if (webinar.clientId === clientId) return webinar;
     if (!canMigrateClientNamespace(webinar.clientId, clientId)) return null;
+    const undo = rememberWebinar(state.scheduledWebinars, webinar.id);
     try {
       const migrated = moveScheduledWebinarToClient(
         state.scheduledWebinars,
@@ -198,6 +203,7 @@ export const registerScheduledWebinarRoutes = (
       }
       return migrated;
     } catch (error) {
+      undo();
       Logger.warn(
         `Failed to migrate scheduled webinar ${webinar.id} from ${webinar.clientId} to ${clientId}`,
         error,
@@ -294,14 +300,19 @@ export const registerScheduledWebinarRoutes = (
         },
       );
 
+      try {
+        persistChanged(webinar);
+      } catch (error) {
+        forgetWebinar(state.scheduledWebinars, webinar);
+        throw error;
+      }
       ensureWebinarRoomConfig(state, webinar, inviteCodeHash);
-      persistChanged(webinar);
       Logger.info(
         `Scheduled webinar created ${webinar.id} (${webinar.linkSlug}) by ${user.email}`,
       );
       res.status(201).json({ scheduledWebinar: serializeScheduledWebinar(webinar) });
     } catch (error) {
-      res.status(400).json({ error: (error as Error).message });
+      answerFailure(res, error);
     }
   });
 
@@ -384,6 +395,7 @@ export const registerScheduledWebinarRoutes = (
     const target = requireWebinarAccess(req, res);
     if (!target) return;
 
+    const undo = rememberWebinar(state.scheduledWebinars, target.id);
     try {
       const body = (req.body ?? {}) as UpdateScheduledWebinarRequest;
       const { webinar, inviteCodeHashChange } = updateScheduledWebinar(
@@ -391,6 +403,7 @@ export const registerScheduledWebinarRoutes = (
         target.id,
         body,
       );
+      persistChanged(webinar);
 
       ensureWebinarRoomConfig(state, webinar, inviteCodeHashChange?.value ?? null);
 
@@ -401,11 +414,11 @@ export const registerScheduledWebinarRoutes = (
         emitWebinarConfigChanged(io, state, room);
         emitWebinarAttendeeCountChanged(io, state, room);
       }
-      persistChanged(webinar);
 
       res.json({ scheduledWebinar: serializeScheduledWebinar(webinar) });
     } catch (error) {
-      res.status(400).json({ error: (error as Error).message });
+      undo();
+      answerFailure(res, error);
     }
   });
 
@@ -414,9 +427,17 @@ export const registerScheduledWebinarRoutes = (
     const target = requireWebinarAccess(req, res);
     if (!target) return;
 
+    const undo = rememberWebinar(state.scheduledWebinars, target.id);
     const webinar = deleteScheduledWebinar(state.scheduledWebinars, target.id);
     if (!webinar) {
       res.status(404).json({ error: "Scheduled webinar not found" });
+      return;
+    }
+    try {
+      persistDeleted(webinar.id);
+    } catch (error) {
+      undo();
+      answerFailure(res, error);
       return;
     }
 
@@ -436,7 +457,6 @@ export const registerScheduledWebinarRoutes = (
       if (io && room) emitWebinarConfigChanged(io, state, room);
     }
 
-    persistDeleted(webinar.id);
     res.json({ success: true, id: webinar.id });
   });
 
@@ -445,17 +465,19 @@ export const registerScheduledWebinarRoutes = (
     const target = requireWebinarAccess(req, res);
     if (!target) return;
 
+    const undo = rememberWebinar(state.scheduledWebinars, target.id);
     try {
       const { webinar } = updateScheduledWebinar(
         state.scheduledWebinars,
         target.id,
         { status: "live" },
       );
-      ensureWebinarRoomConfig(state, webinar, null);
       persistChanged(webinar);
+      ensureWebinarRoomConfig(state, webinar, null);
       res.json({ scheduledWebinar: serializeScheduledWebinar(webinar) });
     } catch (error) {
-      res.status(400).json({ error: (error as Error).message });
+      undo();
+      answerFailure(res, error);
     }
   });
 
@@ -464,22 +486,24 @@ export const registerScheduledWebinarRoutes = (
     const target = requireWebinarAccess(req, res);
     if (!target) return;
 
+    const undo = rememberWebinar(state.scheduledWebinars, target.id);
     try {
       const { webinar } = updateScheduledWebinar(
         state.scheduledWebinars,
         target.id,
         { status: "ended" },
       );
+      persistChanged(webinar);
       const channelId = getRoomChannelId(webinar.clientId, webinar.roomId);
       // Locks the room through the same path that records the schedule's
       // status, so a later reopen of the schedule reopens the room.
       if (state.webinarConfigs.has(channelId)) {
         ensureWebinarRoomConfig(state, webinar, null);
       }
-      persistChanged(webinar);
       res.json({ scheduledWebinar: serializeScheduledWebinar(webinar) });
     } catch (error) {
-      res.status(400).json({ error: (error as Error).message });
+      undo();
+      answerFailure(res, error);
     }
   });
 
@@ -488,21 +512,23 @@ export const registerScheduledWebinarRoutes = (
     const target = requireWebinarAccess(req, res);
     if (!target) return;
 
+    const undo = rememberWebinar(state.scheduledWebinars, target.id);
     try {
       const { webinar } = updateScheduledWebinar(
         state.scheduledWebinars,
         target.id,
         { status: "cancelled" },
       );
+      persistChanged(webinar);
       const channelId = getRoomChannelId(webinar.clientId, webinar.roomId);
       // Disables and locks the room (see the /end route).
       if (state.webinarConfigs.has(channelId)) {
         ensureWebinarRoomConfig(state, webinar, null);
       }
-      persistChanged(webinar);
       res.json({ scheduledWebinar: serializeScheduledWebinar(webinar) });
     } catch (error) {
-      res.status(400).json({ error: (error as Error).message });
+      undo();
+      answerFailure(res, error);
     }
   });
 
@@ -511,6 +537,7 @@ export const registerScheduledWebinarRoutes = (
     const target = requireWebinarAccess(req, res);
     if (!target) return;
 
+    const undo = rememberWebinar(state.scheduledWebinars, target.id);
     try {
       const { webinar, token } = createScheduledWebinarCoHostInvite(
         state.scheduledWebinars,
@@ -522,7 +549,8 @@ export const registerScheduledWebinarRoutes = (
         scheduledWebinar: serializeScheduledWebinar(webinar),
       });
     } catch (error) {
-      res.status(400).json({ error: (error as Error).message });
+      undo();
+      answerFailure(res, error);
     }
   });
 
@@ -534,6 +562,7 @@ export const registerScheduledWebinarRoutes = (
       return;
     }
 
+    let undo = (): void => {};
     try {
       const token = normalizeIdentifier(
         req.params.token,
@@ -543,6 +572,8 @@ export const registerScheduledWebinarRoutes = (
         res.status(400).json({ error: "Co-host invite token is required" });
         return;
       }
+      const invitedId = coHostInviteWebinarId(state.scheduledWebinars, token);
+      if (invitedId) undo = rememberWebinar(state.scheduledWebinars, invitedId);
       const webinar = acceptScheduledWebinarCoHostInvite(
         state.scheduledWebinars,
         token,
@@ -551,8 +582,8 @@ export const registerScheduledWebinarRoutes = (
           name: user.name,
         },
       );
-      ensureWebinarRoomConfig(state, webinar, null);
       persistChanged(webinar);
+      ensureWebinarRoomConfig(state, webinar, null);
       const io = getIo?.() ?? null;
       const channelId = getRoomChannelId(webinar.clientId, webinar.roomId);
       const room = state.rooms.get(channelId);
@@ -562,7 +593,8 @@ export const registerScheduledWebinarRoutes = (
       }
       res.json({ scheduledWebinar: serializeScheduledWebinar(webinar) });
     } catch (error) {
-      res.status(400).json({ error: (error as Error).message });
+      undo();
+      answerFailure(res, error);
     }
   });
 };

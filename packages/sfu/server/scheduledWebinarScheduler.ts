@@ -1,5 +1,6 @@
 import type { Server as SocketIOServer } from "socket.io";
 import { Logger } from "../utilities/loggers.js";
+import { startBackgroundTimer } from "./backgroundTimer.js";
 import { getRoomChannelId } from "./rooms.js";
 import type { ScheduledWebinar } from "../types.js";
 import {
@@ -218,16 +219,12 @@ export const startScheduledWebinarTimer = (
   intervalMs = DEFAULT_TICK_MS,
 ): void => {
   if (state.scheduledWebinarTimer) return;
-  state.scheduledWebinarTimer = setInterval(() => {
-    try {
-      advanceScheduledWebinars(state, getIo(), Date.now());
-    } catch (error) {
-      Logger.error("scheduled webinar tick failed", error);
-    }
-  }, intervalMs);
-  if (state.scheduledWebinarTimer.unref) {
-    state.scheduledWebinarTimer.unref();
-  }
+  state.scheduledWebinarTimer = startBackgroundTimer(
+    "Scheduled webinar tick",
+    intervalMs,
+    () => advanceScheduledWebinars(state, getIo(), Date.now()),
+    Logger.error,
+  );
 };
 
 export const stopScheduledWebinarTimer = (state: SfuState): void => {

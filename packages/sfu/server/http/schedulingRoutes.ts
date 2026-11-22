@@ -33,7 +33,7 @@ import {
 } from "../scheduling.js";
 import {
   createScheduledMeeting,
-  deleteScheduledMeeting,
+  forgetMeeting,
   moveScheduledMeetingToClient,
   persistScheduledMeetingChanges,
   updateScheduledMeeting,
@@ -45,6 +45,11 @@ import {
   type SchedulingEmailDeliveryResult,
 } from "../schedulingEmails.js";
 import { buildSchedulingMeetingLink } from "../schedulingLinks.js";
+import {
+  PersistenceUnavailableError,
+  persistOrFail,
+  sendPersistenceUnavailable,
+} from "./persistenceUnavailable.js";
 import type { SfuState } from "../state.js";
 import {
   canonicalizeClientId,
@@ -279,7 +284,7 @@ const requireHostProfile = async (
     name: user.name,
     timeZone: readString(requestBody(req), "timeZone"),
   });
-  await persistScheduling(state.scheduling, state.schedulingPersistence);
+  await persistSchedulingOrFail(state);
   return profile;
 };
 
@@ -355,16 +360,21 @@ const acquireBookingSlotLease = async (
   }
 };
 
-const persistMeetingChange = async (
-  state: SfuState,
-  meeting: ScheduledMeeting,
-): Promise<void> => {
-  if (!state.scheduledMeetingPersistence) return;
-  await persistScheduledMeetingChanges(
-    state.scheduledMeetings,
-    state.scheduledMeetingPersistence,
-    [meeting],
+const persistMeetingChange = async (state: SfuState, meeting: ScheduledMeeting): Promise<void> =>
+  persistOrFail("scheduled meeting", () =>
+    state.scheduledMeetingPersistence &&
+    persistScheduledMeetingChanges(state.scheduledMeetings, state.scheduledMeetingPersistence, [meeting]),
   );
+
+const persistSchedulingOrFail = async (state: SfuState): Promise<void> =>
+  persistOrFail("scheduling records", () => persistScheduling(state.scheduling, state.schedulingPersistence));
+
+const answerFailure = (res: Response, error: unknown, status: number): void => {
+  if (error instanceof PersistenceUnavailableError) {
+    sendPersistenceUnavailable(res);
+    return;
+  }
+  res.status(status).json({ error: (error as Error).message });
 };
 
 class GoogleCalendarApiError extends Error {
@@ -464,7 +474,7 @@ const refreshGoogleAccessToken = async (
   connection.status = "connected";
   connection.error = null;
   connection.updatedAt = Date.now();
-  await persistScheduling(state.scheduling, state.schedulingPersistence);
+  await persistSchedulingOrFail(state);
   return connection.accessToken;
 };
 
@@ -476,7 +486,7 @@ const markCalendarError = async (
   connection.status = "needs_reconnect";
   connection.error = (error as Error).message || "Google Calendar sync failed.";
   connection.updatedAt = Date.now();
-  await persistScheduling(state.scheduling, state.schedulingPersistence);
+  await persistSchedulingOrFail(state);
 };
 
 const shouldMarkCalendarReconnectRequired = (error: unknown): boolean =>
@@ -769,10 +779,10 @@ export const registerSchedulingRoutes = (
           timeZone: updated.timeZone,
         });
       }
-      await persistScheduling(state.scheduling, state.schedulingPersistence);
+      await persistSchedulingOrFail(state);
       res.json(profilePayload(state, updated));
     } catch (error) {
-      res.status(400).json({ error: (error as Error).message });
+      answerFailure(res, error, 400);
     }
   });
 
@@ -792,7 +802,7 @@ export const registerSchedulingRoutes = (
       profile,
       requestBody(req),
     );
-    await persistScheduling(state.scheduling, state.schedulingPersistence);
+    await persistSchedulingOrFail(state);
     res.json({ availability, profile });
   });
 
@@ -813,10 +823,10 @@ export const registerSchedulingRoutes = (
         profile,
         eventTypeInput(requestBody(req)),
       );
-      await persistScheduling(state.scheduling, state.schedulingPersistence);
+      await persistSchedulingOrFail(state);
       res.status(201).json({ eventType });
     } catch (error) {
-      res.status(400).json({ error: (error as Error).message });
+      answerFailure(res, error, 400);
     }
   });
 
@@ -831,10 +841,10 @@ export const registerSchedulingRoutes = (
         req.params.id,
         eventTypeInput(requestBody(req)),
       );
-      await persistScheduling(state.scheduling, state.schedulingPersistence);
+      await persistSchedulingOrFail(state);
       res.json({ eventType });
     } catch (error) {
-      res.status(400).json({ error: (error as Error).message });
+      answerFailure(res, error, 400);
     }
   });
 
@@ -847,7 +857,7 @@ export const registerSchedulingRoutes = (
       res.status(404).json({ error: "Event type not found." });
       return;
     }
-    await persistScheduling(state.scheduling, state.schedulingPersistence);
+    await persistSchedulingOrFail(state);
     res.json({ success: true, id: eventType.id });
   });
 
@@ -883,7 +893,7 @@ export const registerSchedulingRoutes = (
       status: "connected",
       error: null,
     });
-    await persistScheduling(state.scheduling, state.schedulingPersistence);
+    await persistSchedulingOrFail(state);
     res.json({ calendar: getCalendarSummary(state.scheduling, connection.profileId) });
   });
 
@@ -892,7 +902,7 @@ export const registerSchedulingRoutes = (
     const profile = await requireHostProfile(req, res, state);
     if (!profile) return;
     clearGoogleCalendarConnection(state.scheduling, profile);
-    await persistScheduling(state.scheduling, state.schedulingPersistence);
+    await persistSchedulingOrFail(state);
     res.json({
       calendar: getCalendarSummary(state.scheduling, profile.id),
       eventTypes: listEventTypes(state.scheduling, profile.id),
@@ -1021,7 +1031,7 @@ export const registerSchedulingRoutes = (
       });
       res.json({ slots });
     } catch (error) {
-      res.status(502).json({ error: (error as Error).message });
+      answerFailure(res, error, 502);
     }
   });
 
@@ -1148,7 +1158,7 @@ export const registerSchedulingRoutes = (
       try {
         await persistMeetingChange(state, meeting);
       } catch (persistError) {
-        deleteScheduledMeeting(state.scheduledMeetings, meeting.id);
+        forgetMeeting(state.scheduledMeetings, meeting);
         await releaseSlotLease();
         throw persistError;
       }
@@ -1208,6 +1218,7 @@ export const registerSchedulingRoutes = (
           ...(emailResult.error ? { emailError: emailResult.error } : {}),
         });
       } catch (calendarError) {
+        if (calendarError instanceof PersistenceUnavailableError) throw calendarError;
         const message =
           (calendarError as Error).message || "Could not create the calendar event.";
         const failed = updateScheduledMeeting(state.scheduledMeetings, meeting.id, {
@@ -1231,7 +1242,7 @@ export const registerSchedulingRoutes = (
       }
     } catch (error) {
       Logger.warn("Booking request failed", error);
-      res.status(502).json({ error: (error as Error).message });
+      answerFailure(res, error, 502);
     }
   });
 };

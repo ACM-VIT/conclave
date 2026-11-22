@@ -166,6 +166,40 @@ describe.skipIf(!hasRedis)("SFUs sharing one Redis", () => {
     expect(ids).toEqual(["kept"]);
   });
 
+  it.each(["meetings", "scheduling"] as const)("reseeds when Redis loses its %s data while the SFUs run", async (store) => {
+    const saved = ["first", "second"];
+    if (store === "meetings") {
+      vi.stubEnv("SCHEDULED_MEETINGS_PERSISTENCE", "sqlite");
+      await track(createScheduledMeetingPersistence()).saveChanged?.(saved.map(meeting));
+      vi.stubEnv("SCHEDULED_MEETINGS_PERSISTENCE", "redis");
+    } else {
+      vi.stubEnv("SCHEDULING_PERSISTENCE", "sqlite");
+      await track(createSchedulingPersistence()).save({ profiles: saved.map(profile), availability: [], eventTypes: [], calendars: [] });
+      vi.stubEnv("SCHEDULING_PERSISTENCE", "redis");
+    }
+    const sfuA = store === "meetings" ? track(createScheduledMeetingPersistence()) : track(createSchedulingPersistence());
+    await sfuA.load();
+
+    const raw = createClient({ url: redis!.url });
+    await raw.connect();
+    await raw.flushDb();
+    await raw.quit();
+    if (store === "meetings") {
+      await (sfuA as ScheduledMeetingPersistence).saveChanged?.([meeting("after-loss")]);
+    } else {
+      await (sfuA as SchedulingPersistence).save({ profiles: [profile("after-loss")], availability: [], eventTypes: [], calendars: [] });
+    }
+    await sfuA.flush?.();
+
+    const ids = async (persistence: ScheduledMeetingPersistence | SchedulingPersistence) => {
+      const loaded = await persistence.load();
+      return (Array.isArray(loaded) ? loaded.map((entry) => entry.id) : loaded.profiles.map((entry) => entry.id)).sort();
+    };
+    const sfuB = store === "meetings" ? track(createScheduledMeetingPersistence()) : track(createSchedulingPersistence());
+    expect(await ids(sfuB)).toEqual(["after-loss", "first", "second"]);
+    expect(await ids(sfuA)).toEqual(["after-loss", "first", "second"]);
+  });
+
   it("answers 500 when the SQLite mirror cannot take a reload's write-back", async () => {
     const state = createSfuState({
       roomRegistry: new LocalRoomRegistry({ instanceId: "mirror-lock", instanceUrl: "http://localhost", ttlMs: 45000 }),

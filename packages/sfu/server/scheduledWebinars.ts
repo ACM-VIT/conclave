@@ -616,7 +616,7 @@ const normalizeStoredWebinar = (raw: unknown): ScheduledWebinar | null => {
   };
 };
 
-export const importFallbackWebinars = (persistence: ScheduledWebinarPersistence): Promise<number> => {
+export const importFallbackWebinars = async (persistence: ScheduledWebinarPersistence): Promise<number> => {
   return importFallbackFiles({
     fileName: "scheduled-webinars.json",
     noun: "scheduled webinar",
@@ -949,6 +949,40 @@ export const updateScheduledWebinar = (
   void linkSlugChanged;
 
   return { webinar: existing, inviteCodeHashChange };
+};
+
+const restoreInPlace = <T extends object>(target: T, before: T): T => {
+  for (const key of Object.keys(target)) {
+    if (!(key in before)) delete (target as Record<string, unknown>)[key];
+  }
+  return Object.assign(target, before);
+};
+
+/** Captures one webinar so a request whose save fails can put it back as it was. */
+export const rememberWebinar = (store: ScheduledWebinarStore, id: string): (() => void) => {
+  const held = store.byId.get(id);
+  const before = held ? structuredClone(held) : null;
+  const deletedAt = store.deletedAt.get(id);
+  return () => {
+    const current = store.byId.get(id);
+    if (current) removeFromIndexes(store, current);
+    if (deletedAt === undefined) store.deletedAt.delete(id);
+    else store.deletedAt.set(id, deletedAt);
+    if (before) indexScheduledWebinar(store, restoreInPlace(current ?? held ?? before, before));
+  };
+};
+
+/** Drops a webinar a request created but could not save. */
+export const forgetWebinar = (store: ScheduledWebinarStore, webinar: ScheduledWebinar): void => {
+  removeFromIndexes(store, webinar);
+};
+
+export const coHostInviteWebinarId = (store: ScheduledWebinarStore, token: string): string | null => {
+  const tokenHash = hashCoHostInviteToken(token.trim());
+  for (const webinar of store.byId.values()) {
+    if (webinar.coHostInviteTokenHash === tokenHash) return webinar.id;
+  }
+  return null;
 };
 
 export const deleteScheduledWebinar = (

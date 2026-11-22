@@ -26,6 +26,7 @@ import {
   resolveRedisPersistenceUrl,
   shouldUseRedisPersistence,
   type RedisPersistenceClient,
+  isNotSeededError,
 } from "./redisPersistence.js";
 import {
   canonicalizeClientId,
@@ -1227,7 +1228,7 @@ const createSqliteSchedulingPersistence = (
     return Number(result.changes) > 0;
   };
   return {
-    save: (snapshot) => {
+    save: async (snapshot) => {
       try {
         db.exec("BEGIN IMMEDIATE");
         for (const record of schedulingRecordsOf(snapshot)) write(upsert, record);
@@ -1243,8 +1244,8 @@ const createSqliteSchedulingPersistence = (
         throw error;
       }
     },
-    importIfNewer: (record) => write(upsertIfNewer, record),
-    load: (options) => {
+    importIfNewer: async (record) => write(upsertIfNewer, record),
+    load: async (options) => {
       const snapshot: SchedulingSnapshot = {
         profiles: [],
         availability: [],
@@ -1353,11 +1354,11 @@ const createFileSchedulingPersistence = (
 ): SchedulingPersistence => {
   let profilesBeforeImport: Map<unknown, unknown> | null = null;
   return {
-    importIfNewer: (record) => {
+    importIfNewer: async (record) => {
       profilesBeforeImport ??= storedProfilesById(readJsonSnapshot(path));
       return importIntoJsonSnapshot(path, record, profilesBeforeImport);
     },
-    save: (snapshot) => {
+    save: async (snapshot) => {
       writeJsonAtomic(
         path,
         JSON.stringify(
@@ -1370,7 +1371,7 @@ const createFileSchedulingPersistence = (
         ),
       );
     },
-    load: (options) => {
+    load: async (options) => {
       try {
         if (!existsSync(path)) return normalizeSnapshot({});
         // Own serialized writes; normalizeSnapshot re-checks the array shape.
@@ -1413,10 +1414,12 @@ end
 `;
 
 const UPSERT_SCHEDULING_RECORD_SCRIPT = `${SCHEDULING_LUA}
+if redis.call("EXISTS", KEYS[3]) == 0 then return redis.error_reply("NOSEED the scheduling store is not seeded") end
 return setIfNewer(KEYS[1], KEYS[2], ARGV[2], ARGV[1], tonumber(ARGV[3]) or 0, ARGV[4], ARGV[5] == "newer")
 `;
 
 const DELETE_SCHEDULING_RECORDS_SCRIPT = `${SCHEDULING_LUA}
+if redis.call("EXISTS", KEYS[6]) == 0 then return redis.error_reply("NOSEED the scheduling store is not seeded") end
 for index = 1, #ARGV, 4 do
   local kindIndex, kind, id = tonumber(ARGV[index]), ARGV[index + 1], ARGV[index + 2]
   markDeleted(KEYS[kindIndex], KEYS[5], kind .. ":" .. id, id, tonumber(ARGV[index + 3]) or 0)
@@ -1497,6 +1500,9 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
     this.calendarsKey = `${options.keyPrefix}:scheduling:calendars`;
     this.tombstonesKey = `${options.keyPrefix}:scheduling:tombstones`;
     this.seededKey = `${options.keyPrefix}:scheduling:seeded`;
+    this.client.on("ready", () => {
+      this.seeded = null;
+    });
   }
 
   async start(): Promise<void> {
@@ -1520,19 +1526,20 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
     }
   }
 
-  save(snapshot: SchedulingSnapshot): Promise<void> {
+  async save(snapshot: SchedulingSnapshot): Promise<void> {
     const records = schedulingRecordsOf(snapshot);
     const deleted = snapshot.deleted ?? [];
     return this.queueWrite(async () => {
       await this.fallback.save(snapshot);
       for (const record of records) await this.upsertRecord(record, "save");
       if (deleted.length > 0) {
-        await this.client.sendCommand([
+        await this.evalSeeded([
           "EVAL",
           DELETE_SCHEDULING_RECORDS_SCRIPT,
-          "5",
+          "6",
           ...this.hashKeys,
           this.tombstonesKey,
+          this.seededKey,
           ...deleted.flatMap(({ kind, id, deletedAt }) => [kindIndex(kind), kind, id, String(deletedAt)]),
         ]);
       }
@@ -1551,7 +1558,13 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
     try {
       await this.start();
       await this.ensureSeeded();
-      return await this.loadHashes();
+      const loaded = await this.loadHashes();
+      if (loaded) return loaded;
+      this.seeded = null;
+      await this.ensureSeeded();
+      const reseeded = await this.loadHashes();
+      if (!reseeded) throw new Error("Redis lost its scheduling records while reseeding");
+      return reseeded;
     } catch (error) {
       if (options?.strict) throw error;
       Logger.error(
@@ -1579,6 +1592,18 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
   }
 
   /** Runs before the first read or write, so nothing this SFU writes can make an empty Redis look established. */
+  /** Runs a write script; if Redis lost its data since the seed, reseeds and retries once. */
+  private async evalSeeded(command: string[]): Promise<unknown> {
+    try {
+      return await this.client.sendCommand(command);
+    } catch (error) {
+      if (!isNotSeededError(error)) throw error;
+      this.seeded = null;
+      await this.ensureSeeded();
+      return this.client.sendCommand(command);
+    }
+  }
+
   private ensureSeeded(): Promise<void> {
     this.seeded ??= this.seed().catch((error: unknown) => {
       this.seeded = null;
@@ -1615,13 +1640,14 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
     }
   }
 
-  private upsertRecord(record: SchedulingRecordWrite, mode: "save" | "newer"): Promise<unknown> {
-    return this.client.sendCommand([
+  private async upsertRecord(record: SchedulingRecordWrite, mode: "save" | "newer"): Promise<unknown> {
+    return this.evalSeeded([
       "EVAL",
       UPSERT_SCHEDULING_RECORD_SCRIPT,
-      "2",
+      "3",
       this.hashKeys[SCHEDULING_KINDS.indexOf(record.kind)],
       this.tombstonesKey,
+      this.seededKey,
       record.id,
       `${record.kind}:${record.id}`,
       String(record.updatedAt),
@@ -1641,15 +1667,17 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
     return writePromise;
   }
 
-  private async loadHashes(): Promise<SchedulingSnapshot> {
-    const [profiles, availability, eventTypes, calendars, tombstones] = (await this.client
+  private async loadHashes(): Promise<SchedulingSnapshot | null> {
+    const [seeded, profiles, availability, eventTypes, calendars, tombstones] = (await this.client
       .multi()
+      .exists(this.seededKey)
       .hVals(this.profilesKey)
       .hVals(this.availabilityKey)
       .hVals(this.eventTypesKey)
       .hVals(this.calendarsKey)
       .hGetAll(this.tombstonesKey)
-      .exec()) as unknown as [string[], string[], string[], string[], Record<string, string>];
+      .exec()) as unknown as [number, string[], string[], string[], string[], Record<string, string>];
+    if (Number(seeded) !== 1) return null;
     return normalizeSnapshot({
       profiles: profiles
         .map((value) => parseRedisRecord<SchedulingProfile>(value))
@@ -1724,14 +1752,13 @@ const snapshotSchedulingStore = (
   ),
 });
 
-export const persistScheduling = (
+export const persistScheduling = async (
   store: SchedulingStore,
   persistence: SchedulingPersistence | null,
 ): Promise<void> => {
-  if (!persistence) return Promise.resolve();
-  return Promise.resolve(persistence.save(snapshotSchedulingStore(store))).then(() =>
-    persistence.flush?.(),
-  );
+  if (!persistence) return;
+  await persistence.save(snapshotSchedulingStore(store));
+  await persistence.flush?.();
 };
 
 type SchedulingFallbackEntry = {
@@ -1814,7 +1841,7 @@ const schedulingRecordFromFallback = ({
   return { kind, id: requireString(record, "id"), clientId, updatedAt, payload: { ...record, clientId } };
 };
 
-export const importFallbackScheduling = (
+export const importFallbackScheduling = async (
   persistence: SchedulingPersistence,
 ): Promise<number> => {
   return importFallbackFiles({
@@ -1941,10 +1968,11 @@ export const mergePersistedScheduling = async (
   return merged;
 };
 
-export const loadPersistedScheduling = (
+export const loadPersistedScheduling = async (
   store: SchedulingStore,
   persistence: SchedulingPersistence,
-): Promise<number> => Promise.resolve(persistence.load()).then((snapshot) => {
+): Promise<number> => {
+  const snapshot = await persistence.load();
   for (const profile of snapshot.profiles) {
     registerProfile(store, profile);
   }
@@ -1970,4 +1998,4 @@ export const loadPersistedScheduling = (
     snapshot.eventTypes.length +
     snapshot.calendars.length
   );
-});
+};

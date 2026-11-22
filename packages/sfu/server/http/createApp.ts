@@ -44,6 +44,7 @@ import { registerScheduledWebinarRoutes } from "./scheduledWebinarRoutes.js";
 import { registerScheduledMeetingRoutes } from "./scheduledMeetingRoutes.js";
 import { registerSchedulingRoutes } from "./schedulingRoutes.js";
 import { reloadPersistedStores } from "../storeReload.js";
+import { persistenceUnavailableHandler } from "./persistenceUnavailable.js";
 import type { SfuState } from "../state.js";
 import type { RedisPublisherHealth } from "../socket/redisPublisher.js";
 import { resolveWebinarLinkTarget } from "../webinar.js";
@@ -1959,6 +1960,8 @@ export const createSfuApp = ({
     state,
     sfuSecret: config.sfuSecret,
   });
+
+  app.use(persistenceUnavailableHandler);
 
   return app;
 };
