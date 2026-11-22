@@ -134,8 +134,6 @@ enum ChatLinkifyPolicy {
         return first.isWhitespace || first.isNewline
     }
 
-    // Set lookups instead of a substring search per character: the scanner runs these for every character
-    // of every message. Non-ASCII characters keep the original case-folded check.
     private static let asciiLetters: Set<String> = Set(characters("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"))
     private static let asciiDigits: Set<String> = Set(characters("0123456789"))
     private static let asciiCharacters: Set<String> = Set(characters(

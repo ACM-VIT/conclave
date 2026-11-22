@@ -24,8 +24,6 @@ final class ChatPresenter {
 
     @ObservationIgnored private let rowStore = ChatRowStore()
 
-    /// The timeline and rows a chat panel shows. While the panel is closed new messages only update the
-    /// unread bookkeeping; the rows are rebuilt once, on the first read or when the panel opens.
     var timeline: ChatTimelineSnapshot {
         flushDeferredRows()
         return currentTimeline
@@ -85,8 +83,6 @@ final class ChatPresenter {
     @ObservationIgnored private var serverToClientRowId: [String: String] = [:]
 
     @ObservationIgnored private var spansCache: [String: [ChatSpan]] = [:]
-    /// Emoji shortcode replacement per row, keyed by the text it was made from. The replacement runs
-    /// the link scanner over the whole message, so each message pays for it once, not on every rebuild.
     @ObservationIgnored private var emojiBodySource: [String: String] = [:]
     @ObservationIgnored private var emojiBodyCache: [String: String] = [:]
     @ObservationIgnored private(set) var emojiParseCount = 0
@@ -182,8 +178,6 @@ final class ChatPresenter {
         }
     }
 
-    /// Called as soon as the chat panel becomes current, before it renders, so the first frame reads rows
-    /// that are already up to date. `panelDidOpen` runs later, from the panel's own task.
     func willShow() {
         if !isOpen {
             isOpen = true
@@ -586,9 +580,6 @@ final class ChatPresenter {
         rebuildRows(previousRowIds: currentTimeline.rowIds)
     }
 
-    /// The closed-panel half of `trackNewRows`: remembers where the unread divider goes without building
-    /// any row. It counts the same messages a rebuild would: not your own, not history, not from a hidden
-    /// sender, and not an assistant answer that has no text yet.
     private func trackUnreadWhileClosed() {
         var known: Set<String> = []
         for id in currentTimeline.rowIds { known.insert(id) }
@@ -597,8 +588,6 @@ final class ChatPresenter {
             if message.isOwn && !message.isAssistant { continue }
             if hiddenSenderIds.contains(message.senderId) { continue }
             if known.contains(rowId) || closedSeenRowIds.contains(rowId) { continue }
-            // Like a rebuild, a row counts only when it first appears: history, an empty assistant
-            // placeholder or a failed answer is remembered as seen without counting.
             closedSeenRowIds.insert(rowId)
             if message.isHistory || message.isOwn { continue }
             if message.isAssistant && (message.content.isEmpty || message.assistant?.errorKind != AssistantErrorKind.none) { continue }

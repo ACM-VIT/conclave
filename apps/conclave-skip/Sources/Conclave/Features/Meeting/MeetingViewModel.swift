@@ -630,8 +630,6 @@ final class MeetingViewModel {
     private var lastChatRoster: [ChatRosterEntry] = []
 
     private(set) var chatRefreshCount = 0
-    /// Messages converted for the chat presenter. A new message converts only itself; a roster or local
-    /// identity change converts everything again, since names and "you" come from them.
     @ObservationIgnored private(set) var chatMessageInputBuildCount = 0
     @ObservationIgnored private var chatInputMemo: [String: ChatInputMemo] = [:]
     @ObservationIgnored private var chatInputMemoContext: ChatInputMemoContext? = nil
@@ -15985,8 +15983,6 @@ struct ChatInputMemo {
     let input: ChatMessageInput
 }
 
-/// Everything a converted message's names and "you" flags are resolved from. Names come from the snapshot
-/// names, participant names and their session aliases, not just the roster.
 struct ChatInputMemoContext: Equatable {
     let roster: [ChatRosterEntry]
     let displayNames: [String: String]

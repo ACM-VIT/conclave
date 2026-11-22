@@ -321,7 +321,6 @@ struct CHT7AssistantRowTests {
         let chat = ChatPresenter()
         chat.now = { Self.base + clock.value }
         chat.apply(Self.inputs([Self.answer("", input: ChatAssistantInput.make())]), change: .messages)
-        // The counter drives the open timeline's follow scroll; a closed panel builds no rows.
         chat.panelDidOpen(destination: .none, targetId: "")
         let start = chat.tailGrowth
         var text = "A"
