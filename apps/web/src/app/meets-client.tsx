@@ -1359,6 +1359,31 @@ export default function MeetsClient({
           : !intent.isMuted && hasLiveTrack(stream?.getAudioTracks());
       },
       turnOn: async (target) => {
+        const intent = mediaIntentRef.current;
+        const intendedOn =
+          target === "camera" ? !intent.isCameraOff : !intent.isMuted;
+        if (intendedOn) {
+          const kind = target === "camera" ? "video" : "audio";
+          const stream = await requestMediaPermissions({
+            audio: target === "microphone",
+            video: target === "camera",
+            audioRequired: target === "microphone",
+            videoRequired: target === "camera",
+          });
+          const fresh = stream?.getTracks().filter((track) => track.kind === kind) ?? [];
+          if (fresh.length === 0) return;
+          const current = refs.localStreamRef.current;
+          current?.getTracks().forEach((track) => {
+            if (track.kind === kind && !fresh.includes(track)) stopLocalTrack(track);
+          });
+          setLocalStream(
+            new MediaStream([
+              ...(current?.getTracks().filter((track) => track.kind !== kind) ?? []),
+              ...fresh,
+            ]),
+          );
+          return;
+        }
         await (target === "camera"
           ? toggleCameraCommandRef.current?.()
           : toggleMuteCommandRef.current?.());
@@ -1368,7 +1393,14 @@ export default function MeetsClient({
     }).finally(() => {
       mediaRetryRef.current = null;
     });
-  }, [meetError, refs.localStreamRef, setMeetError]);
+  }, [
+    meetError,
+    refs.localStreamRef,
+    requestMediaPermissions,
+    setLocalStream,
+    setMeetError,
+    stopLocalTrack,
+  ]);
 
   const handlePrejoinMediaCommit = useCallback(
     (handoff: PrejoinMediaHandoff) => {

@@ -49,7 +49,7 @@ export default function InCallNoticeCard({
     <div className="w-full min-w-0 rounded-xl bg-[#18181b] shadow-[0_12px_32px_rgba(0,0,0,0.35)]">
       <div
         data-in-call-notice
-        data-notice-content={content}
+        data-notice-content={`${content}|${actionLabel && onAction ? actionLabel : ""}|${onDismiss ? "dismiss" : ""}`}
         data-tone={tone}
         role={announce ? undefined : isError ? "alert" : "status"}
         aria-live={announce || isError ? undefined : "polite"}

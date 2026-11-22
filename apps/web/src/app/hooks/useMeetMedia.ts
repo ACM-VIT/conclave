@@ -3754,6 +3754,7 @@ export function useMeetMedia({
 
         audioProducerRef.current = audioProducer;
         createdTrack = null;
+        setMeetError((current) => clearMediaDeviceError(current, "microphone"));
         audioProducer.on("transportclose", () => {
           if (audioProducerRef.current?.id === audioProducer.id) {
             audioProducerRef.current = null;
