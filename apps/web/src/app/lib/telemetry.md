@@ -118,7 +118,9 @@ trust, instead of scrubbing what looks bad:
   own ids (`distinct_id`, `$device_id`, `$session_id`, `$window_id`), and only
   as uuids. The referrer and the session's entry page live in storage, so they
   are not sent. Nor is the raw user agent, which can carry a device or fleet
-  tag; the parsed browser, version and OS are. `client_version` comes from the build. On load,
+  tag; the parsed browser, version and OS are. The browser language sends only
+  its primary subtag, and only when it is an ISO 639-1 code (`en-US-x-labunit`
+  goes out as `en`). `client_version` comes from the build. On load,
   `lib/telemetry.ts` removes everything but those ids from both stores. Person
   properties (`$set`, `$set_once`) are never sent. A new event field has to be
   added to the list to be sent.

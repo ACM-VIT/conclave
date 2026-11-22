@@ -513,6 +513,25 @@ describe("user agent", () => {
   });
 });
 
+describe("browser language", () => {
+  it.each([
+    ["en-US-x-labunit", "en"],
+    ["pt_BR", "pt"],
+    ["ZH-hant-TW", "zh"],
+    ["x-labunit", undefined],
+    ["qq-Review", undefined],
+    ["Meet Mira", undefined],
+  ])("sends %s as its primary ISO 639-1 subtag (%s), or not at all", (language, sent) => {
+    const event = exceptionEvent();
+    Object.assign(event.properties, { $browser_language: language, $browser_language_prefix: language });
+    const { properties } = scrub(event);
+
+    expect(properties.$browser_language).toBe(sent);
+    expect(properties.$browser_language_prefix).toBe(sent);
+    expect(JSON.stringify(properties)).not.toMatch(/labunit|Review|Mira|hant|BR|TW/);
+  });
+});
+
 describe("stored state", () => {
   const sdkUuid = "0196f0a1-0000-7000-8000-000000000001";
 
