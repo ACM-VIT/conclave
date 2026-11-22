@@ -85,6 +85,9 @@ export type CommittedView = {
 /** A whole view, and the version of the views it was read at. */
 export type ViewSnapshot = { rows: SizedRow[]; version: number };
 
+/** What a viewer was sent of its view, bucket by bucket: each row as sent. */
+export type HeldRows = Map<string, Map<string, Json>>;
+
 /** Framing around one row on the wire: its field names and punctuation. */
 const ROW_OVERHEAD_BYTES = 32;
 
@@ -335,6 +338,40 @@ export class ViewTracker {
       keys: (bucket) => bucketOf(bucket)?.rows.keys() ?? [],
       size: (bucket) => bucketOf(bucket)?.rows.size ?? 0,
     };
+  }
+
+  /**
+   * What a viewer who holds `held` must be told to hold their view as
+   * committed now, and the version that is. It is read at the moment of
+   * asking, so nothing in it is older than what the viewer has, and nothing
+   * is a row their view no longer has. A row is put where what is held is
+   * not the row as committed, and removed only where it is held.
+   */
+  catchUp(role: Role, subject: Subject, held: HeldRows): { ops: ViewOps; version: number } {
+    this.absorb();
+    const shared = this.roleAudience(role).buckets;
+    const own = this.subjectAudience(subject).buckets;
+    const ops: ViewOps = { put: [], remove: [], bytes: 0 };
+    for (const buckets of [shared, own]) {
+      for (const [bucket, state] of buckets) {
+        const had = held.get(bucket);
+        for (const [key, delivered] of state.rows) {
+          // A row's value is replaced only when its encoding changes.
+          if (had?.get(key) === delivered.value) continue;
+          ops.put.push({ bucket, key, value: delivered.value });
+          ops.bytes += delivered.bytes;
+        }
+      }
+    }
+    for (const [bucket, rows] of held) {
+      const now = (shared.get(bucket) ?? own.get(bucket))?.rows;
+      for (const key of rows.keys()) {
+        if (now?.has(key)) continue;
+        ops.remove.push({ bucket, key });
+        ops.bytes += bucket.length + key.length + ROW_OVERHEAD_BYTES;
+      }
+    }
+    return { ops, version: this.version };
   }
 
   /** Forgets the views of audiences nobody holds any more. */

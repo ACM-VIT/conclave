@@ -28,8 +28,10 @@ import { AuthorityStore } from "./store.js";
 import {
   ViewTracker,
   type CommittedView,
+  type HeldRows,
   type LiveAudiences,
   type ViewFlush,
+  type ViewOps,
   type ViewSnapshot,
 } from "./views.js";
 
@@ -379,6 +381,11 @@ export class AuthorityInstance {
   /** A whole view for one audience: its role's rows and its own. */
   snapshot(actor: Actor): ViewSnapshot {
     return this.views.snapshot(actor.role, actor.subject);
+  }
+
+  /** What a viewer holding `held` must be told to be up to date, read now. */
+  catchUp(actor: Actor, held: HeldRows): { ops: ViewOps; version: number } {
+    return this.views.catchUp(actor.role, actor.subject, held);
   }
 
   /** Whether the actor could run this query right now. Spends no budget. */
