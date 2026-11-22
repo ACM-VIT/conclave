@@ -6,6 +6,9 @@ import type { SfuState } from "./state.js";
 export const MEETING_ENDED_WHILE_WAITING =
   "The meeting ended when everyone left. No one to let you in until it starts again.";
 
+const MEETING_OPENED_ELSEWHERE =
+  "The meeting started again on another server. Taking you there.";
+
 // Someone waiting for the next meeting at a code. `retryAt` is their own:
 // when the meeting they knocked on stood in for a lost call, the moment that
 // call stops holding the code, from which they may ask again and open it.
@@ -124,4 +127,35 @@ export const takeNextMeetingLobby = (
   if (!lobby) return [];
   close(state, channelId, lobby);
   return [...lobby.guests.values()];
+};
+
+// Everyone waiting here asks again through the usual route, which leads to
+// the meeting wherever it is. Apps reconnect on this notice and disconnect.
+export const sendNextMeetingLobbyOn = (
+  state: SfuState,
+  channelId: string,
+  message: string,
+): void => {
+  const lobby = state.nextMeetingLobbies.get(channelId);
+  if (!lobby) return;
+  close(state, channelId, lobby);
+  for (const guest of lobby.guests.values()) {
+    guest.socket.emit("serverRestarting", {
+      roomId: lobby.roomId,
+      message,
+      reconnecting: true,
+    });
+    guest.socket.disconnect(true);
+  }
+};
+
+// Where the next meeting at a code opened on another server, those waiting
+// for it here go there. The shared room registry says where each code is.
+export const followMeetingsOpenedElsewhere = async (state: SfuState): Promise<void> => {
+  for (const channelId of [...state.nextMeetingLobbies.keys()]) {
+    const assignment = await state.roomRegistry.getAssignment(channelId);
+    if (assignment && !state.roomRegistry.isLocalOwner(assignment)) {
+      sendNextMeetingLobbyOn(state, channelId, MEETING_OPENED_ELSEWHERE);
+    }
+  }
 };

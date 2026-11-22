@@ -20,6 +20,7 @@ import type { EndedRoom, SfuState } from "./state.js";
 import type { RecalledRoom } from "./roomRecoveryLedger.js";
 import { clearWebinarLinkSlug } from "./webinar.js";
 import {
+  followMeetingsOpenedElsewhere,
   takeNextMeetingLobby,
   waitForNextMeeting,
 } from "./nextMeetingLobby.js";
@@ -449,6 +450,7 @@ export const renewRoomOwnerships = async (state: SfuState): Promise<void> => {
     );
     cleanupRoomState(state, room.channelId);
   }
+  await followMeetingsOpenedElsewhere(state);
 };
 
 export const releaseAllRoomOwnerships = async (

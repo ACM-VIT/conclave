@@ -1,5 +1,10 @@
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { createConnection, createServer } from "node:net";
+import { tmpdir } from "node:os";
+import { join as joinPath } from "node:path";
 import jwt from "jsonwebtoken";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Router, Worker } from "mediasoup/types";
 import type { Server as SocketIOServer, Socket } from "socket.io";
 import type { ScheduledMeeting } from "../types.js";
@@ -11,8 +16,12 @@ import {
   type RoomRecoveryStore,
 } from "../server/roomRecoveryLedger.js";
 import { startRoomRecoveryPassRefresh } from "../server/roomRecoveryPass.js";
-import { LocalRoomRegistry } from "../server/roomRegistry.js";
-import { forceCloseRoom } from "../server/rooms.js";
+import {
+  LocalRoomRegistry,
+  createRoomRegistry,
+  type RoomRegistry,
+} from "../server/roomRegistry.js";
+import { forceCloseRoom, renewRoomOwnerships } from "../server/rooms.js";
 import {
   createScheduledMeeting,
   isScheduledMeetingInvitee,
@@ -80,7 +89,14 @@ const restart = async (before: SfuState): Promise<SfuState> => {
   return after;
 };
 
-const makeState = (durable: Durable = makeDurable()): SfuState => {
+const makeState = (
+  durable: Durable = makeDurable(),
+  roomRegistry: RoomRegistry = new LocalRoomRegistry({
+    instanceId: "knock-test",
+    instanceUrl: "http://localhost",
+    ttlMs: 45000,
+  }),
+): SfuState => {
   const router = {
     closed: false,
     rtpCapabilities: { codecs: [], headerExtensions: [] },
@@ -92,11 +108,7 @@ const makeState = (durable: Durable = makeDurable()): SfuState => {
     createRouter: vi.fn(async () => router),
   } as unknown as Worker;
   const state = createSfuState({
-    roomRegistry: new LocalRoomRegistry({
-      instanceId: "knock-test",
-      instanceUrl: "http://localhost",
-      ttlMs: 45000,
-    }),
+    roomRegistry,
     roomRecoveryStore: durable.recovery,
   });
   state.workers = [worker];
@@ -1582,6 +1594,118 @@ describe("a meeting whose last participant leaves while someone is still knockin
     const reopened = await join(state, host);
     expect(knocksShownTo(reopened)).toEqual([]);
   });
+});
+
+// SFUs that share a room registry over a real Redis, where one is installed.
+const redisServerPath = (() => {
+  try {
+    return execFileSync("which", ["redis-server"], { encoding: "utf8" }).trim();
+  } catch {
+    return "";
+  }
+})();
+
+describe.skipIf(!redisServerPath)("knockers waiting on an SFU when the next meeting opens on another", () => {
+  let redis: { process: ChildProcess; port: number; dir: string } | null = null;
+  const registries: RoomRegistry[] = [];
+  beforeAll(async () => {
+    const port = await new Promise<number>((resolve) => {
+      const probe = createServer();
+      probe.listen(0, "127.0.0.1", () => {
+        const { port: free } = probe.address() as { port: number };
+        probe.close(() => resolve(free));
+      });
+    });
+    const dir = mkdtempSync(joinPath(tmpdir(), "knock-redis-"));
+    redis = {
+      process: spawn(
+        redisServerPath,
+        ["--port", String(port), "--bind", "127.0.0.1", "--save", "", "--appendonly", "no", "--dir", dir],
+        { stdio: "ignore" },
+      ),
+      port,
+      dir,
+    };
+    await vi.waitFor(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          const socket = createConnection({ port, host: "127.0.0.1" });
+          socket.once("connect", () => {
+            socket.destroy();
+            resolve();
+          });
+          socket.once("error", reject);
+        }),
+      { timeout: 20_000, interval: 50 },
+    );
+  }, 30_000);
+  afterEach(async () => {
+    for (const registry of registries.splice(0)) await registry.close();
+  });
+  afterAll(() => {
+    redis?.process.kill();
+    if (redis) rmSync(redis.dir, { recursive: true, force: true });
+  });
+
+  let prefix = 0;
+  // Two SFUs, A and B, that know where each code is through one registry.
+  const twoSfus = async () => {
+    prefix += 1;
+    const sfu = async (instanceId: string) => {
+      const registry = createRoomRegistry({
+        ...config,
+        instanceId,
+        instancePublicUrl: `http://${instanceId}.test`,
+        socket: { ...config.socket, redisUrl: `redis://127.0.0.1:${redis!.port}` },
+        roomRegistry: { ...config.roomRegistry, keyPrefix: `knock:${process.pid}:${prefix}` },
+      });
+      registries.push(registry);
+      await registry.start();
+      return makeState(makeDurable(), registry);
+    };
+    return { a: await sfu("sfu-a"), b: await sfu("sfu-b") };
+  };
+  const toldToReconnect = (member: Awaited<ReturnType<typeof join>>) =>
+    member.peer.emit.mock.calls.some(
+      ([event, sent]) =>
+        event === "serverRestarting" && (sent as { reconnecting?: boolean }).reconnecting === true,
+    ) && vi.mocked(member.peer.socket.disconnect).mock.calls.length > 0;
+
+  it("sends them there through the usual route when A drains, and the host on B lets them in", async () => {
+    const { a, b } = await twoSfus();
+    const created = await join(a, host);
+    const knocking = await join(a, knocker);
+    expect(knocking.status).toBe("waiting");
+    await hangUp(created.peer);
+    expect(a.rooms.size).toBe(0);
+    await vi.waitFor(async () => expect(await b.roomRegistry.getAssignment(CHANNEL)).toBeNull());
+
+    // A drains. While no meeting is open at the code anywhere, the knocker
+    // keeps waiting on A, also when the tab asks again.
+    a.isDraining = true;
+    await renewRoomOwnerships(a);
+    expect(toldToReconnect(knocking)).toBe(false);
+    expect((await askAgain(knocking)).status).toBe("waiting");
+
+    // The host reopens the meeting, which the web places on B.
+    const reopened = await join(b, host);
+    expect(reopened.status).toBe("joined");
+    await renewRoomOwnerships(a);
+    expect(toldToReconnect(knocking)).toBe(true);
+    expect(a.nextMeetingLobbies.size).toBe(0);
+
+    // The tab reconnects through the usual route, which leads to B.
+    const there = await join(b, knocker);
+    expect(there.status).toBe("waiting");
+    expect(reopened.peer.emit).toHaveBeenCalledWith(
+      "userRequestedJoin",
+      expect.objectContaining({ userId: knocker.userId }),
+    );
+    expect(await send(reopened.peer, "admitUser", { userId: knocker.userId })).toEqual({
+      success: true,
+    });
+    expect((await join(b, knocker)).status).toBe("joined");
+  }, 30_000);
 });
 
 describe("an invited attendee removed on one SFU", () => {

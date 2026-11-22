@@ -37,6 +37,7 @@ import {
 import { recordAdminAudit } from "../admin/adminAudit.js";
 import { createTranscriptSpectatorToken } from "../socket/handlers/transcriptHandlers.js";
 import { forceCloseRoom, getRoomChannelId, isCurrentRoom, markRoomEnded } from "../rooms.js";
+import { takeNextMeetingLobby } from "../nextMeetingLobby.js";
 import { resolveCorsOrigins } from "../cors.js";
 import { secretsMatch } from "../secret.js";
 import { readBoolean, requestBody } from "../../utilities/untrusted.js";
@@ -463,6 +464,16 @@ export const createSfuApp = ({
       for (const pending of room.pendingClients.values()) {
         pendingSockets.add(pending.socket);
       }
+    }
+    // Those waiting here for a meeting to open again reconnect too, and the
+    // usual route takes them to wherever it opens.
+    for (const lobby of state.nextMeetingLobbies.values()) {
+      for (const guest of lobby.guests.values()) {
+        pendingSockets.add(guest.socket);
+      }
+    }
+    for (const channelId of [...state.nextMeetingLobbies.keys()]) {
+      takeNextMeetingLobby(state, channelId);
     }
 
     for (const pendingSocket of pendingSockets) {
