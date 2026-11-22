@@ -255,6 +255,7 @@ type JoinInfo = {
   sfuUrl: string;
   iceServers?: RTCIceServer[];
   iceServersTtlSeconds?: number;
+  relayExpiresAt?: number;
 };
 
 const MAX_JOIN_ROOM_REDIRECTS = 1;

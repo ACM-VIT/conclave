@@ -12,6 +12,8 @@ type HoldableJoinInfo = {
   iceServers?: RTCIceServer[];
   /** How long the answer's TURN credentials last, when it has any. */
   iceServersTtlSeconds?: number;
+  /** The TURN deadline stamped when the answer was requested. */
+  relayExpiresAt?: number;
 };
 
 /**
@@ -60,17 +62,21 @@ export const holdJoinInfo = <T extends HoldableJoinInfo>(
   const turnTtlSeconds = joinInfo.iceServersTtlSeconds;
   const hasRelay =
     splitIceServersByType(joinInfo.iceServers).turnIceServers.length > 0;
+  const stampedDeadline =
+    typeof joinInfo.relayExpiresAt === "number" &&
+    Number.isFinite(joinInfo.relayExpiresAt)
+      ? joinInfo.relayExpiresAt
+      : null;
+  const deadlineFromReceipt =
+    typeof turnTtlSeconds === "number" && Number.isFinite(turnTtlSeconds)
+      ? receivedAt + turnTtlSeconds * 1000
+      : null;
   return {
     joinInfo,
     roomId,
     grant,
     tokenExpiresAt: readTokenExpiryMs(joinInfo.token),
-    relayExpiresAt:
-      hasRelay &&
-      typeof turnTtlSeconds === "number" &&
-      Number.isFinite(turnTtlSeconds)
-        ? receivedAt + turnTtlSeconds * 1000
-        : null,
+    relayExpiresAt: hasRelay ? (stampedDeadline ?? deadlineFromReceipt) : null,
   };
 };
 

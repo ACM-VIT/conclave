@@ -75,3 +75,34 @@ it("keeps the route's error and status on a refusal", async () => {
     responseStatus: 403,
   });
 });
+
+it("counts the TURN lifetime from when the request was sent", async () => {
+  const url = await serve((_request, response) => {
+    setTimeout(() => {
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(
+        JSON.stringify({
+          token: "t",
+          sfuUrl: "https://sfu.example",
+          iceServers: [{ urls: "turn:turn.example", username: "u", credential: "c" }],
+          iceServersTtlSeconds: 60,
+        }),
+      );
+    }, 400);
+  });
+
+  const sentAt = Date.now();
+  const answer = await requestJoinInfo(url, { method: "POST" });
+
+  expect(answer.relayExpiresAt).toBeGreaterThanOrEqual(sentAt + 60_000);
+  expect(answer.relayExpiresAt).toBeLessThan(sentAt + 60_000 + 200);
+});
+
+it("gives an answer without a TURN lifetime no relay deadline", async () => {
+  const url = await serve((_request, response) => {
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ token: "t", sfuUrl: "https://sfu.example" }));
+  });
+
+  expect((await requestJoinInfo(url, { method: "POST" })).relayExpiresAt).toBeUndefined();
+});

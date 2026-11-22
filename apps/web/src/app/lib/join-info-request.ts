@@ -5,11 +5,20 @@ export type JoinInfoAnswer = {
   sfuUrl: string;
   iceServers?: RTCIceServer[];
   iceServersTtlSeconds?: number;
+  /**
+   * When the TURN credentials run out on this device's clock, counted from
+   * when the request was sent. The route issues them after that moment, so
+   * this is never late, and it needs no agreement between the two clocks.
+   */
+  relayExpiresAt?: number;
 };
 
 export const JOIN_INFO_REQUEST_TIMEOUT_MS = 15000;
 
-const readJoinInfo = async (response: Response): Promise<JoinInfoAnswer> => {
+const readJoinInfo = async (
+  response: Response,
+  sentAt: number,
+): Promise<JoinInfoAnswer> => {
   if (!response.ok) {
     const error = new Error(await readResponseError(response)) as Error & {
       responseStatus?: number;
@@ -17,7 +26,11 @@ const readJoinInfo = async (response: Response): Promise<JoinInfoAnswer> => {
     error.responseStatus = response.status;
     throw error;
   }
-  return (await response.json()) as JoinInfoAnswer;
+  const answer = (await response.json()) as JoinInfoAnswer;
+  const ttlSeconds = answer.iceServersTtlSeconds;
+  return typeof ttlSeconds === "number" && Number.isFinite(ttlSeconds)
+    ? { ...answer, relayExpiresAt: sentAt + ttlSeconds * 1000 }
+    : answer;
 };
 
 /**
@@ -39,8 +52,10 @@ export const requestJoinInfo = async (
   if (cancel?.aborted) abort();
   cancel?.addEventListener("abort", abort, { once: true });
   try {
+    const sentAt = Date.now();
     return await readJoinInfo(
       await fetch(url, { ...init, signal: controller.signal }),
+      sentAt,
     );
   } catch (error) {
     if (cancel?.aborted) throw new Error("Join info request was cancelled");

@@ -391,6 +391,7 @@ export type MeetsClientProps = {
     sfuUrl: string;
     iceServers?: RTCIceServer[];
     iceServersTtlSeconds?: number;
+    relayExpiresAt?: number;
   }>;
   joinMode?: JoinMode;
   autoJoinOnMount?: boolean;

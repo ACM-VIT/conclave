@@ -28,6 +28,7 @@ type Answer = {
   sfuUrl: string;
   iceServers?: RTCIceServer[];
   iceServersTtlSeconds?: number;
+  relayExpiresAt?: number;
 };
 
 const turn = { urls: "turn:turn.example:3478", username: "u", credential: "c" };
@@ -75,6 +76,20 @@ describe("reusing the SFU token on reconnect", () => {
     expect(getReusableJoinInfo(answer, wanted)).toBe(joinInfo);
     expect(answer.tokenExpiresAt).toBe(NOW + 12 * 60 * 60_000);
     expect(answer.relayExpiresAt).toBe(NOW - 10 * 60_000 + 120_000);
+  });
+
+  it("keeps the relay deadline stamped when the answer was requested", () => {
+    const joinInfo = {
+      token: tokenExpiringIn(12 * 60 * 60_000),
+      sfuUrl: "s",
+      iceServers: [turn],
+      iceServersTtlSeconds: 120,
+      relayExpiresAt: NOW + 90_000,
+    };
+
+    expect(held({ joinInfo, receivedAt: NOW + 30_000 }).relayExpiresAt).toBe(
+      NOW + 90_000,
+    );
   });
 
   it("gives an answer without TURN servers no relay lifetime", () => {
