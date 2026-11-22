@@ -588,8 +588,10 @@ export type ScheduledMeetingPersistence = {
   // them now, or takes them off. Saves never write that list: they carry an
   // SFU's whole copy of a meeting, and a copy from before a removal would
   // undo it.
-  // `at` is when the host acted, which a removal is stamped with, however
-  // long the write then waits.
+  // `at` is when the host acted. Each invitee keeps only the newest decision,
+  // a removal or a readmission, so writes land in any order and end at the
+  // newest; on a tie the removal stands. A write that is not newer changes
+  // nothing.
   setInviteeReadmission?: (
     meetingId: string,
     email: string,
@@ -597,8 +599,8 @@ export type ScheduledMeetingPersistence = {
     at: number,
   ) => MaybePromise<void>;
   // Takes back the removals of a meeting that is over: those made at or
-  // before `endedAt`. Each removal is stamped when it is written, so one made
-  // for the next meeting, after this end, stays even if this lands later.
+  // before `endedAt`, also any that arrive after this does. One made for the
+  // next meeting, after this end, stays even if this lands later.
   endRemovals?: (meetingId: string, endedAt: number) => MaybePromise<void>;
   close?: () => MaybePromise<void>;
   flush?: () => Promise<void>;
@@ -769,6 +771,24 @@ const normalizeStoredMeeting = (raw: unknown): ScheduledMeeting | null => {
   };
 };
 
+// A host's decision about an invitee: removed, or let back in.
+type InviteeDecision = { removed: boolean; at: number };
+
+// When a removal found inside a meeting's record was made, at the latest:
+// before that record was last saved.
+const carriedRemovalAt = (meeting: Pick<ScheduledMeeting, "updatedAt">): number =>
+  meeting.updatedAt - 1;
+
+// Whether `next` replaces `current`: a newer decision does, and on a tie a
+// removal does. So any order of the same decisions ends in the same place.
+const replacesDecision = (
+  current: InviteeDecision | undefined,
+  next: InviteeDecision,
+): boolean =>
+  !current ||
+  next.at > current.at ||
+  (next.at === current.at && next.removed && !current.removed);
+
 // A meeting as a save writes it, without its removed invitees (see
 // setInviteeReadmission). An SFU from before that list existed writes the
 // same, and so cannot undo a removal either.
@@ -786,7 +806,7 @@ const handOver = (
 ): void => {
   for (const meeting of meetings) {
     for (const email of meeting.readmissionRequiredEmails ?? []) {
-      void store.setInviteeReadmission?.(meeting.id, email, true, Date.now());
+      void store.setInviteeReadmission?.(meeting.id, email, true, carriedRemovalAt(meeting));
     }
   }
   void store.save(meetings);
@@ -839,24 +859,34 @@ const createSqliteScheduledMeetingPersistence = (
       ON scheduled_meetings(client_id, room_code);
     CREATE INDEX IF NOT EXISTS scheduled_meetings_status_start_idx
       ON scheduled_meetings(status, scheduled_start_at);
+    -- Each invitee's newest decision: removed_at is when the host made it,
+    -- readmitted whether it let them back in.
     CREATE TABLE IF NOT EXISTS scheduled_meeting_removed_invitees (
       meeting_id TEXT NOT NULL,
       email TEXT NOT NULL,
       removed_at INTEGER NOT NULL DEFAULT 0,
+      readmitted INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (meeting_id, email)
+    );
+    -- When a meeting was last over: removals made up to then count for nothing.
+    CREATE TABLE IF NOT EXISTS scheduled_meeting_removals_ended (
+      meeting_id TEXT PRIMARY KEY,
+      ended_at INTEGER NOT NULL
     );
     CREATE TABLE IF NOT EXISTS scheduled_meeting_removals_moved (
       meeting_id TEXT PRIMARY KEY
     );
   `);
 
-  // A table made before removals were stamped has no removed_at column.
-  try {
-    db.exec(
-      "ALTER TABLE scheduled_meeting_removed_invitees ADD COLUMN removed_at INTEGER NOT NULL DEFAULT 0",
-    );
-  } catch {
-    // It has one already.
+  // A table made before decisions were stamped lacks these columns.
+  for (const column of ["removed_at", "readmitted"]) {
+    try {
+      db.exec(
+        `ALTER TABLE scheduled_meeting_removed_invitees ADD COLUMN ${column} INTEGER NOT NULL DEFAULT 0`,
+      );
+    } catch {
+      // It has it already.
+    }
   }
 
   const insert = db.prepare(`
@@ -883,26 +913,41 @@ const createSqliteScheduledMeetingPersistence = (
   const loadRowById = db.prepare(
     "SELECT payload_json FROM scheduled_meetings WHERE id = ?",
   );
-  const removeInvitee = db.prepare(
-    `INSERT INTO scheduled_meeting_removed_invitees (meeting_id, email, removed_at)
-     VALUES (?, ?, ?)
-     ON CONFLICT(meeting_id, email) DO UPDATE SET removed_at = excluded.removed_at`,
+  // Lands only if newer than the decision stored (see replacesDecision).
+  const decide = db.prepare(
+    `INSERT INTO scheduled_meeting_removed_invitees (meeting_id, email, removed_at, readmitted)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(meeting_id, email) DO UPDATE
+       SET removed_at = excluded.removed_at, readmitted = excluded.readmitted
+       WHERE excluded.removed_at > scheduled_meeting_removed_invitees.removed_at
+          OR (excluded.removed_at = scheduled_meeting_removed_invitees.removed_at
+              AND excluded.readmitted < scheduled_meeting_removed_invitees.readmitted)`,
   );
-  const endRemovalsBefore = db.prepare(
-    "DELETE FROM scheduled_meeting_removed_invitees WHERE meeting_id = ? AND removed_at <= ?",
+  const markEnded = db.prepare(
+    `INSERT INTO scheduled_meeting_removals_ended (meeting_id, ended_at) VALUES (?, ?)
+     ON CONFLICT(meeting_id) DO UPDATE SET ended_at = MAX(ended_at, excluded.ended_at)`,
   );
-  const restoreInvitee = db.prepare(
-    "DELETE FROM scheduled_meeting_removed_invitees WHERE meeting_id = ? AND email = ?",
+  const clearEndedDecisions = db.prepare(
+    `DELETE FROM scheduled_meeting_removed_invitees
+     WHERE meeting_id = ? AND removed_at <= (
+       SELECT ended_at FROM scheduled_meeting_removals_ended WHERE meeting_id = ?
+     )`,
   );
   const forgetRemovedInvitees = db.prepare(
     "DELETE FROM scheduled_meeting_removed_invitees WHERE meeting_id = ?",
   );
-  const loadRemovedInvitees = db.prepare(
-    "SELECT meeting_id, email FROM scheduled_meeting_removed_invitees",
+  const forgetEnded = db.prepare(
+    "DELETE FROM scheduled_meeting_removals_ended WHERE meeting_id = ?",
   );
-  const loadRemovedInviteesOf = db.prepare(
-    "SELECT email FROM scheduled_meeting_removed_invitees WHERE meeting_id = ?",
-  );
+  // The invitees whose newest decision removed them, after the meeting was
+  // last over.
+  const stillRemoved = `
+    SELECT r.meeting_id AS meeting_id, r.email AS email
+    FROM scheduled_meeting_removed_invitees r
+    LEFT JOIN scheduled_meeting_removals_ended e ON e.meeting_id = r.meeting_id
+    WHERE r.readmitted = 0 AND r.removed_at > COALESCE(e.ended_at, -1)`;
+  const loadRemovedInvitees = db.prepare(stillRemoved);
+  const loadRemovedInviteesOf = db.prepare(`${stillRemoved} AND r.meeting_id = ?`);
   const takeCarriedRemovals = db.prepare(
     "UPDATE scheduled_meetings SET payload_json = ? WHERE id = ? AND payload_json = ?",
   );
@@ -932,6 +977,7 @@ const createSqliteScheduledMeetingPersistence = (
   const deleteMeeting = (id: string): void => {
     deleteById.run(id);
     forgetRemovedInvitees.run(id);
+    forgetEnded.run(id);
     forgetRemovalsMoved.run(id);
   };
   // A row written before removed invitees had a table of their own carries
@@ -958,7 +1004,9 @@ const createSqliteScheduledMeetingPersistence = (
         payload,
       );
       if (Number(taken.changes) > 0 && !alreadyMoved) {
-        for (const email of carried) removeInvitee.run(meeting.id, email, Date.now());
+        for (const email of carried) {
+          decide.run(meeting.id, email, carriedRemovalAt(meeting), 0);
+        }
         markRemovalsMoved.run(meeting.id);
       }
       db.exec("COMMIT");
@@ -1058,8 +1106,7 @@ const createSqliteScheduledMeetingPersistence = (
     setInviteeReadmission: (meetingId, email, required, at) => {
       try {
         db.exec("BEGIN IMMEDIATE");
-        if (required) removeInvitee.run(meetingId, email, at);
-        else restoreInvitee.run(meetingId, email);
+        decide.run(meetingId, email, at, required ? 0 : 1);
         markRemovalsMoved.run(meetingId);
         db.exec("COMMIT");
       } catch (error) {
@@ -1071,8 +1118,14 @@ const createSqliteScheduledMeetingPersistence = (
     },
     endRemovals: (meetingId, endedAt) => {
       try {
-        endRemovalsBefore.run(meetingId, endedAt);
+        db.exec("BEGIN IMMEDIATE");
+        markEnded.run(meetingId, endedAt);
+        clearEndedDecisions.run(meetingId, meetingId);
+        db.exec("COMMIT");
       } catch (error) {
+        try {
+          db.exec("ROLLBACK");
+        } catch {}
         Logger.error("Failed to take back a meeting's removals", error);
       }
     },
@@ -1088,8 +1141,6 @@ const readStoredMeetings = (path: string): ScheduledMeeting[] => {
     .map((entry) => normalizeStoredMeeting(entry))
     .filter((entry): entry is ScheduledMeeting => Boolean(entry));
 };
-
-type StoredRemovals = { emails: string[]; removedAt: Record<string, number> };
 
 // The meetings in the file as stored, every field kept. A file that cannot
 // be read holds none, and the write about to replace it goes ahead.
@@ -1107,49 +1158,73 @@ const readRawMeetings = (path: string): Record<string, unknown>[] => {
   }
 };
 
-// A stored meeting's removed invitees and when each was removed. One with no
-// time was removed before removals were stamped.
-const storedRemovalsOf = (raw: Record<string, unknown>): StoredRemovals => {
-  const emails = Array.isArray(raw.readmissionRequiredEmails)
-    ? raw.readmissionRequiredEmails.filter(
-        (email): email is string => typeof email === "string",
-      )
-    : [];
-  const stamps =
-    raw.readmissionRemovedAt && typeof raw.readmissionRemovedAt === "object"
-      ? (raw.readmissionRemovedAt as Record<string, unknown>)
-      : {};
-  const removedAt: Record<string, number> = {};
-  for (const email of emails) {
-    const at = stamps[email];
-    removedAt[email] = typeof at === "number" ? at : 0;
-  }
-  return { emails, removedAt };
+type StoredDecisions = {
+  decisions: Record<string, InviteeDecision>;
+  // When the meeting was last over, if it was.
+  endedAt: number | null;
 };
 
-// One file holding every meeting, rewritten whole. A save keeps the removed
-// invitees the file already has, with when each was removed. Two SFUs
-// writing it at once can still lose each other's whole write, as they always
-// could: this store is for one SFU.
+// A stored meeting's decisions about its invitees. A file written before
+// decisions were kept lists the removed invitees only: each was removed, at
+// a time before anything stamped.
+const storedDecisionsOf = (raw: Record<string, unknown>): StoredDecisions => {
+  const decisions: Record<string, InviteeDecision> = {};
+  const stored =
+    raw.readmissionDecisions && typeof raw.readmissionDecisions === "object"
+      ? (raw.readmissionDecisions as Record<string, unknown>)
+      : null;
+  if (stored) {
+    for (const [email, value] of Object.entries(stored)) {
+      const decision = value as { removed?: unknown; at?: unknown } | null;
+      if (typeof decision?.removed === "boolean" && typeof decision.at === "number") {
+        decisions[email] = { removed: decision.removed, at: decision.at };
+      }
+    }
+  } else if (Array.isArray(raw.readmissionRequiredEmails)) {
+    for (const email of raw.readmissionRequiredEmails) {
+      if (typeof email !== "string") continue;
+      const updatedAt = typeof raw.updatedAt === "number" ? raw.updatedAt : 1;
+      decisions[email] = { removed: true, at: carriedRemovalAt({ updatedAt }) };
+    }
+  }
+  return {
+    decisions,
+    endedAt: typeof raw.readmissionEndedAt === "number" ? raw.readmissionEndedAt : null,
+  };
+};
+
+const stillRemovedIn = ({ decisions, endedAt }: StoredDecisions): string[] =>
+  Object.entries(decisions)
+    .filter(([, decision]) => decision.removed && decision.at > (endedAt ?? -1))
+    .map(([email]) => email);
+
+const withDecisions = (
+  meeting: object,
+  stored: StoredDecisions,
+): Record<string, unknown> => ({
+  ...meeting,
+  readmissionRequiredEmails: stillRemovedIn(stored),
+  readmissionDecisions: stored.decisions,
+  readmissionEndedAt: stored.endedAt,
+});
+
+// One file holding every meeting, rewritten whole. A save keeps the
+// decisions about invitees the file already has. Two SFUs writing it at once
+// can still lose each other's whole write, as they always could: this store
+// is for one SFU.
 const createFileScheduledMeetingPersistence = (
   path: string = scheduledMeetingsPath(),
 ): ScheduledMeetingPersistence => {
-  const rewriteRemovals = (
+  const rewriteDecisions = (
     meetingId: string,
-    change: (removals: StoredRemovals) => StoredRemovals,
+    change: (stored: StoredDecisions) => StoredDecisions,
   ) => {
     writeJsonAtomic(
       path,
       JSON.stringify(
-        readRawMeetings(path).map((raw) => {
-          if (raw.id !== meetingId) return raw;
-          const { emails, removedAt } = change(storedRemovalsOf(raw));
-          return {
-            ...raw,
-            readmissionRequiredEmails: emails,
-            readmissionRemovedAt: removedAt,
-          };
-        }),
+        readRawMeetings(path).map((raw) =>
+          raw.id === meetingId ? withDecisions(raw, change(storedDecisionsOf(raw))) : raw,
+        ),
         null,
         2,
       ),
@@ -1159,20 +1234,17 @@ const createFileScheduledMeetingPersistence = (
     save: (snapshot) => {
       try {
         const stored = new Map(
-          readRawMeetings(path).map((raw) => [raw.id, storedRemovalsOf(raw)]),
+          readRawMeetings(path).map((raw) => [raw.id, storedDecisionsOf(raw)]),
         );
         writeJsonAtomic(
           path,
           JSON.stringify(
-            snapshot.map((meeting) => {
-              const kept = stored.get(meeting.id);
-              return {
-                ...meeting,
-                readmissionRequiredEmails:
-                  kept?.emails ?? meeting.readmissionRequiredEmails,
-                readmissionRemovedAt: kept?.removedAt ?? {},
-              };
-            }),
+            snapshot.map((meeting) =>
+              withDecisions(
+                meeting,
+                stored.get(meeting.id) ?? storedDecisionsOf({ ...meeting }),
+              ),
+            ),
             null,
             2,
           ),
@@ -1183,12 +1255,10 @@ const createFileScheduledMeetingPersistence = (
     },
     setInviteeReadmission: (meetingId, email, required, at) => {
       try {
-        rewriteRemovals(meetingId, ({ emails, removedAt }) => {
-          const others = emails.filter((candidate) => candidate !== email);
-          const stamps = { ...removedAt };
-          delete stamps[email];
-          if (required) stamps[email] = at;
-          return { emails: required ? [...others, email] : others, removedAt: stamps };
+        rewriteDecisions(meetingId, (stored) => {
+          const next = { removed: required, at };
+          if (!replacesDecision(stored.decisions[email], next)) return stored;
+          return { ...stored, decisions: { ...stored.decisions, [email]: next } };
         });
       } catch (error) {
         Logger.error("Failed to persist a removed invitee to JSON", error);
@@ -1196,11 +1266,13 @@ const createFileScheduledMeetingPersistence = (
     },
     endRemovals: (meetingId, endedAt) => {
       try {
-        rewriteRemovals(meetingId, ({ emails, removedAt }) => {
-          const kept = emails.filter((email) => (removedAt[email] ?? 0) > endedAt);
+        rewriteDecisions(meetingId, ({ decisions, endedAt: before }) => {
+          const over = Math.max(before ?? -1, endedAt);
           return {
-            emails: kept,
-            removedAt: Object.fromEntries(kept.map((email) => [email, removedAt[email]])),
+            decisions: Object.fromEntries(
+              Object.entries(decisions).filter(([, decision]) => decision.at > over),
+            ),
+            endedAt: over,
           };
         });
       } catch (error) {
@@ -1306,7 +1378,7 @@ if redis.call("HGET", KEYS[1], ARGV[1]) ~= ARGV[2] then
 end
 if redis.call("SISMEMBER", KEYS[3], ARGV[1]) == 0 then
   for i = 5, #ARGV do
-    redis.call("HSETNX", KEYS[2], ARGV[i], ARGV[4])
+    redis.call("HSETNX", KEYS[2], ARGV[i], ARGV[4] .. ":removed")
   end
   redis.call("SADD", KEYS[3], ARGV[1])
 end
@@ -1314,15 +1386,44 @@ redis.call("HSET", KEYS[1], ARGV[1], ARGV[3])
 return 1
 `;
 
-// Takes back a meeting's removals stamped at or before the end it applies.
-// One stamped later was made for a meeting after that end, and stays.
+// An invitee's decision is "<when>:removed" or "<when>:readmitted". A write
+// lands only if newer than the one stored (see replacesDecision).
+const DECIDE_SCRIPT = `
+local stored = redis.call("HGET", KEYS[1], ARGV[1])
+local at = tonumber(ARGV[2])
+local replaces = true
+if stored then
+  local storedAt, storedState = string.match(stored, "^(%d+):(%a+)$")
+  storedAt = tonumber(storedAt)
+  if storedAt ~= nil then
+    replaces = at > storedAt or (at == storedAt and ARGV[3] == "removed" and storedState ~= "removed")
+  end
+end
+if replaces then
+  redis.call("HSET", KEYS[1], ARGV[1], ARGV[2] .. ":" .. ARGV[3])
+end
+redis.call("SADD", KEYS[2], ARGV[4])
+return replaces and 1 or 0
+`;
+
+// Marks a meeting over at the latest end it has had, and clears the
+// decisions made up to then. A removal made up to then that arrives later
+// still counts for nothing; one made after stays.
 const END_REMOVALS_SCRIPT = `
-local stamped = redis.call("HGETALL", KEYS[1])
-local prefix = ARGV[1] .. " "
 local endedAt = tonumber(ARGV[2])
-for i = 1, #stamped, 2 do
-  if string.sub(stamped[i], 1, #prefix) == prefix and tonumber(stamped[i + 1]) <= endedAt then
-    redis.call("HDEL", KEYS[1], stamped[i])
+local before = tonumber(redis.call("HGET", KEYS[2], ARGV[1]))
+if before ~= nil and before > endedAt then
+  endedAt = before
+end
+redis.call("HSET", KEYS[2], ARGV[1], string.format("%.0f", endedAt))
+local decided = redis.call("HGETALL", KEYS[1])
+local prefix = ARGV[1] .. " "
+for i = 1, #decided, 2 do
+  if string.sub(decided[i], 1, #prefix) == prefix then
+    local at = tonumber(string.match(decided[i + 1], "^(%d+)"))
+    if at == nil or at <= endedAt then
+      redis.call("HDEL", KEYS[1], decided[i])
+    end
   end
 end
 return 1
@@ -1386,10 +1487,15 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
     }
   }
 
-  // Removed invitees are fields of one hash, "<meeting id> <email>", each
-  // holding when the removal was written. No save of a meeting touches it.
+  // Each invitee's newest decision is a field of one hash, "<meeting id>
+  // <email>" (see DECIDE_SCRIPT). No save of a meeting touches it.
   private get removedInviteesKey(): string {
     return `${this.key}:removed-invitees`;
+  }
+
+  // When each meeting was last over (see END_REMOVALS_SCRIPT).
+  private get removalsEndedKey(): string {
+    return `${this.key}:removed-invitees-ended`;
   }
 
   // Meetings whose removed invitees live in that set, so a list found inside
@@ -1402,14 +1508,34 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
     return `${meetingId} ${email}`;
   }
 
-  private async removedInvitees(): Promise<Map<string, string[]>> {
-    const stamped = await this.client.hGetAll(this.removedInviteesKey);
-    return removedInviteesByMeeting(
-      Object.keys(stamped).map((member) => {
-        const split = member.indexOf(" ");
-        return [member.slice(0, split), member.slice(split + 1)];
+  // Every decision stored, by "<meeting id> <email>".
+  private async decisions(): Promise<Map<string, InviteeDecision>> {
+    const decided = await this.client.hGetAll(this.removedInviteesKey);
+    return new Map(
+      Object.entries(decided).map(([member, value]) => {
+        const [at, state] = value.split(":");
+        return [member, { removed: state !== "readmitted", at: Number(at) || 0 }];
       }),
     );
+  }
+
+  // The invitees whose newest decision removed them after their meeting was
+  // last over.
+  private async removedInvitees(): Promise<Map<string, string[]>> {
+    const [decisions, ended] = await Promise.all([
+      this.decisions(),
+      this.client.hGetAll(this.removalsEndedKey),
+    ]);
+    const removed: Array<[meetingId: string, email: string]> = [];
+    for (const [member, decision] of decisions) {
+      const split = member.indexOf(" ");
+      const meetingId = member.slice(0, split);
+      const endedAt = Number(ended[meetingId] ?? -1);
+      if (decision.removed && decision.at > endedAt) {
+        removed.push([meetingId, member.slice(split + 1)]);
+      }
+    }
+    return removedInviteesByMeeting(removed);
   }
 
   // A record written before removed invitees had a set of their own carries
@@ -1431,12 +1557,17 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
       meeting.id,
       record,
       meetingRecord(JSON.parse(record) as object),
-      String(Date.now()),
+      String(carriedRemovalAt(meeting)),
       ...carried.map((email) => this.removedInvitee(meeting.id, email)),
     ]);
     if (Number(moved) === 1) {
       for (const email of carried) {
-        void this.fallback.setInviteeReadmission?.(meeting.id, email, true, Date.now());
+        void this.fallback.setInviteeReadmission?.(
+          meeting.id,
+          email,
+          true,
+          carriedRemovalAt(meeting),
+        );
       }
     }
     return meeting;
@@ -1490,11 +1621,17 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
     void this.fallback.setInviteeReadmission?.(meetingId, email, required, at);
     const member = this.removedInvitee(meetingId, email);
     this.queueWrite("set a removed invitee", async () => {
-      const write = this.client.multi();
-      if (required) write.hSet(this.removedInviteesKey, member, String(at));
-      else write.hDel(this.removedInviteesKey, member);
-      write.sAdd(this.removalsMovedKey, meetingId);
-      await write.exec();
+      await this.client.sendCommand([
+        "EVAL",
+        DECIDE_SCRIPT,
+        "2",
+        this.removedInviteesKey,
+        this.removalsMovedKey,
+        member,
+        String(at),
+        required ? "removed" : "readmitted",
+        meetingId,
+      ]);
     });
   }
 
@@ -1504,8 +1641,9 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
       await this.client.sendCommand([
         "EVAL",
         END_REMOVALS_SCRIPT,
-        "1",
+        "2",
         this.removedInviteesKey,
+        this.removalsEndedKey,
         meetingId,
         String(endedAt),
       ]);
@@ -1520,11 +1658,11 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
     void this.fallback.save(Array.from(this.knownMeetings.values()));
     this.queueWrite("delete meetings", async () => {
       await this.client.hDel(this.key, ids);
-      const removed = await this.removedInvitees();
-      const gone = ids.flatMap((id) =>
-        (removed.get(id) ?? []).map((email) => this.removedInvitee(id, email)),
+      const gone = [...(await this.decisions()).keys()].filter((member) =>
+        ids.includes(member.slice(0, member.indexOf(" "))),
       );
       if (gone.length > 0) await this.client.hDel(this.removedInviteesKey, gone);
+      await this.client.hDel(this.removalsEndedKey, ids);
       await this.client.sRem(this.removalsMovedKey, ids);
     });
   }
@@ -1801,6 +1939,18 @@ export const endScheduledMeetingRemovals = (
   );
 };
 
+// The time of this SFU's last decision about each invitee of a meeting, so
+// its own decisions about one person never share a time and land in the
+// order it made them.
+const lastDecisionAt = new WeakMap<ScheduledMeeting, Map<string, number>>();
+const decisionTime = (meeting: ScheduledMeeting, email: string): number => {
+  const made = lastDecisionAt.get(meeting) ?? new Map<string, number>();
+  lastDecisionAt.set(meeting, made);
+  const at = Math.max(Date.now(), (made.get(email) ?? 0) + 1);
+  made.set(email, at);
+  return at;
+};
+
 // Stores one invitee's removal, or the end of it. A store with no write of
 // its own for that gets the whole meeting, removed invitees included.
 export const persistInviteeReadmission = (
@@ -1814,7 +1964,12 @@ export const persistInviteeReadmission = (
     return persistScheduledMeetingChanges(store, persistence, [meeting]);
   }
   return Promise.resolve(
-    persistence.setInviteeReadmission(meeting.id, email, required, Date.now()),
+    persistence.setInviteeReadmission(
+      meeting.id,
+      email,
+      required,
+      decisionTime(meeting, email),
+    ),
   ).then(() => persistence.flush?.());
 };
 

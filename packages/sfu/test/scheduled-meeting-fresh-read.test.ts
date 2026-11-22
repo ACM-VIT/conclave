@@ -334,6 +334,66 @@ describe("a removal still queued for Redis when its meeting ends", () => {
   });
 });
 
+// A small seeded generator, so a failing order can be replayed.
+const seededRandom = (seed: number) => () => {
+  seed = (seed * 1664525 + 1013904223) % 4294967296;
+  return seed / 4294967296;
+};
+
+describe.each(["sqlite", "redis", "json"] as const)(
+  "removals and readmissions on a %s store, from two SFUs in any order",
+  (kind) => {
+    const test = kind === "redis" && !redisServerPath ? it.skip : it;
+    const invitees = ["a@example.com", "b@example.com", "c@example.com", "d@example.com"];
+
+    test("end at each invitee's newest decision, a removal winning a tie", async () => {
+      useStore(kind);
+      const sfuA = await startSfu(kind);
+      const meeting = await scheduleIntroCall(sfuA);
+      const sfuB = await startSfu(kind);
+
+      // Every decision so far: an invitee no round decides about keeps the
+      // state an earlier round left.
+      const made: Array<{ email: string; removed: boolean; at: number }> = [];
+      for (let round = 1; round <= 12; round += 1) {
+        const random = seededRandom(round);
+        const base = round * 1_000_000;
+        const decisions = Array.from({ length: 10 }, () => ({
+          email: invitees[Math.floor(random() * invitees.length)],
+          removed: random() < 0.5,
+          // A narrow range, so stamps collide now and then.
+          at: base + Math.floor(random() * 6),
+          sfu: random() < 0.5 ? sfuA : sfuB,
+        }));
+        const delivery = [...decisions].sort(() => random() - 0.5);
+        for (const decision of delivery) {
+          await decision.sfu.persistence.setInviteeReadmission?.(
+            meeting.id,
+            decision.email,
+            decision.removed,
+            decision.at,
+          );
+          await decision.sfu.persistence.flush?.();
+        }
+
+        made.push(...decisions);
+        const expected = new Set<string>();
+        for (const email of invitees) {
+          const newest = made
+            .filter((decision) => decision.email === email)
+            .sort((x, y) => y.at - x.at || Number(y.removed) - Number(x.removed))[0];
+          if (newest?.removed) expected.add(email);
+        }
+        const reader = await startSfu(kind);
+        const removed = new Set(reader.meetings.byId.get(meeting.id)?.readmissionRequiredEmails);
+        expect([...removed].sort(), `round ${round}`).toEqual([...expected].sort());
+        await reader.persistence.close?.();
+        running.splice(running.indexOf(reader), 1);
+      }
+    }, 60_000);
+  },
+);
+
 describe("an SFU whose Redis holds no meetings yet", () => {
   const test = redisServerPath ? it : it.skip;
 
