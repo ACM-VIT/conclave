@@ -1654,7 +1654,7 @@ export const importFallbackScheduling = async (
     await persistence.flush?.();
   }
   files.forEach(markFallbackImported);
-  Logger.info(`Imported ${imported} scheduling record(s) from ${files.length} JSON fallback file(s)`);
+  Logger.warn(`Imported ${imported} scheduling record(s) from ${files.length} JSON fallback file(s)`);
   return imported;
 };
 

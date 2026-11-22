@@ -59,7 +59,10 @@ describe("importing JSON fallback files copied from old containers", () => {
     writeFallback("sfu-a", "scheduled-meetings.json", [meeting("prior-meeting", 1), meeting("stored-newer", 10, "older copy")]);
     writeFallback("sfu-b", "scheduled-meetings.json", [meeting("other-instance", 1)]);
 
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     expect(await importFallbackMeetings(persistence)).toBe(2);
+    // Production logs at warn by default; the count must reach the operator there.
+    expect(warn.mock.calls.flat().join(" ")).toMatch(/Imported 2 scheduled meeting\(s\) from 2 JSON fallback file\(s\)/);
     const saved = (await createScheduledMeetingPersistence().load());
     expect(saved.map((entry) => entry.id).sort()).toEqual(["other-instance", "prior-meeting", "stored-newer"]);
     expect(saved.find((entry) => entry.id === "stored-newer")?.title).toBe("kept from SQLite");
@@ -78,7 +81,7 @@ describe("importing JSON fallback files copied from old containers", () => {
   it("imports scheduling profiles the old container saved", async () => {
     const persistence = createSchedulingPersistence();
     writeFallback("sfu-a", "scheduling.json", {
-      profiles: [{ id: "prior-profile", clientId: "conclave", updatedAt: 1 }],
+      profiles: [{ id: "prior-profile", clientId: "conclave", userId: "user-prior", email: "host@example.test", name: "Prior Host", username: "prior-host", timeZone: "Asia/Kolkata", createdAt: 1, updatedAt: 1 }],
       availability: [], eventTypes: [], calendars: [],
     });
     expect(await importFallbackScheduling(persistence)).toBe(1);

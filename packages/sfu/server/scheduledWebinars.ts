@@ -603,7 +603,7 @@ export const importFallbackWebinars = (persistence: ScheduledWebinarPersistence)
     else persistence.save(merged);
   }
   files.forEach(markFallbackImported);
-  Logger.info(`Imported ${changed.length} scheduled webinar(s) from ${files.length} JSON fallback file(s)`);
+  Logger.warn(`Imported ${changed.length} scheduled webinar(s) from ${files.length} JSON fallback file(s)`);
   return changed.length;
 };
 

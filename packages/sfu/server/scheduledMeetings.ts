@@ -1205,7 +1205,7 @@ export const importFallbackMeetings = async (
     await persistence.flush?.();
   }
   files.forEach(markFallbackImported);
-  Logger.info(`Imported ${changed.length} scheduled meeting(s) from ${files.length} JSON fallback file(s)`);
+  Logger.warn(`Imported ${changed.length} scheduled meeting(s) from ${files.length} JSON fallback file(s)`);
   return changed.length;
 };
 
