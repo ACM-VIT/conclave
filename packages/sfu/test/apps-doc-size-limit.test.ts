@@ -109,15 +109,15 @@ describe("app document size with deletions", () => {
     attacker.clientID = 0xffffffff;
     const deletionsUpTo = (end: number) => singleCharacterDeletions(attacker.clientID, everyOtherClock(0, end));
 
-    attacker.getText("t").insert(0, "x".repeat(120_000));
+    attacker.getText("t").insert(0, "x".repeat(120_001));
     send(Y.encodeStateAsUpdate(attacker));
-    expect(serverText()).toBe(120_000);
+    expect(serverText()).toBe(120_001);
 
     send(deletionsUpTo(40_000));
-    expect(serverText()).toBe(100_000);
+    expect(serverText()).toBe(100_001);
     send(deletionsUpTo(82_898));
-    expect(serverText()).toBe(78_551);
-    expect(Y.encodeStateAsUpdate(serverDoc()).length).toBeLessThanOrEqual(MAX_DOC_BYTES);
+    expect(serverText()).toBe(78_552);
+    expect(Y.encodeStateAsUpdate(serverDoc()).length).toBe(MAX_DOC_BYTES);
 
     const oneMoreDeletion = deletionsUpTo(82_900);
     const trial = new Y.Doc();
@@ -126,7 +126,7 @@ describe("app document size with deletions", () => {
     expect(Y.encodeStateAsUpdate(trial).length).toBeGreaterThan(MAX_DOC_BYTES);
 
     send(oneMoreDeletion);
-    expect(serverText()).toBe(78_551);
-    expect(Y.encodeStateAsUpdate(serverDoc()).length).toBeLessThanOrEqual(MAX_DOC_BYTES);
+    expect(serverText()).toBe(78_552);
+    expect(Y.encodeStateAsUpdate(serverDoc()).length).toBe(MAX_DOC_BYTES);
   }, 30_000);
 });
