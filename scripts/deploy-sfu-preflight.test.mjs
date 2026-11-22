@@ -474,7 +474,12 @@ test("SFU_SECRET must be a non-default value with no surrounding whitespace", ()
   assert.throws(() => resolveSfuTargets({ compose }), /edge-dxb: SFU_SECRET has leading or trailing whitespace/);
 });
 
-test("compose forwards SCHEDULING_TOKEN_SECRET to both SFUs, padding included", () => {
+const composeMissing = spawnSync("docker", ["compose", "version"]).status !== 0;
+const composeSkip = composeMissing && process.env.CONCLAVE_REQUIRE_DOCKER !== "1"
+  ? "docker compose is not installed; pnpm test:deploy-compose renders the real compose file and fails without it"
+  : false;
+
+test("compose forwards SCHEDULING_TOKEN_SECRET to both SFUs, padding included", { skip: composeSkip }, () => {
   const rendered = spawnSync("docker", ["compose", "--env-file", "/dev/null", "-f", "docker-compose.sfu.yml", "config", "--format", "json"], {
     cwd: fileURLToPath(new URL("..", import.meta.url)),
     env: { PATH: process.env.PATH, HOME: process.env.HOME, ANNOUNCED_IP: "127.0.0.1", SFU_SECRET: "clean-secret-value", SCHEDULING_TOKEN_SECRET: "  padded-secret-value " },
