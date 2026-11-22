@@ -9,11 +9,11 @@ import {
   blockedLead,
   blockedTitle,
   detectBrowserFamily,
-  isTouchDevice,
   unblockSteps,
   type BlockedDevice,
   type BrowserFamily,
 } from "../lib/blocked-media";
+import { isLikelyMobileOrTabletNavigator } from "../lib/network-information";
 
 interface BlockedMediaDialogProps {
   devices: readonly BlockedDevice[];
@@ -31,7 +31,9 @@ export default function BlockedMediaDialog({
   const [browser, setBrowser] = useState<BrowserFamily>(() =>
     detectBrowserFamily(navigator.userAgent),
   );
-  const [touch] = useState(() => isTouchDevice(navigator.userAgent));
+  // Phones and tablets: their browsers have no menu bar and are tapped. That
+  // includes an iPad, which presents itself to sites as a Mac.
+  const [touch] = useState(isLikelyMobileOrTabletNavigator);
   const dialogRef = useRef<HTMLDivElement>(null);
   const retryRef = useRef<HTMLButtonElement>(null);
 

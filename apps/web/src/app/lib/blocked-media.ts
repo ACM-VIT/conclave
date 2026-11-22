@@ -28,10 +28,6 @@ export const detectBrowserFamily = (userAgent: string): BrowserFamily => {
   return "chrome";
 };
 
-// Phones and tablets: their browsers have no menu bar and are tapped.
-export const isTouchDevice = (userAgent: string): boolean =>
-  /iPhone|iPad|iPod|Android/.test(userAgent);
-
 const devicesInWords = (devices: readonly BlockedDevice[]): string =>
   devices.length > 1 ? "camera and microphone" : devices[0];
 

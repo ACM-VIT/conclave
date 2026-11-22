@@ -65,6 +65,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount());
   host.remove();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -119,6 +120,27 @@ describe("blocked camera or microphone dialog", () => {
     await act(async () => button("Chrome").click());
     expect(text()).toContain("Tap the icon to the left of the web address.");
     expect(text()).toContain("Tap Permissions, then turn on Camera and Microphone.");
+  });
+
+  // An iPad asks for desktop sites, so Safari there calls itself a Mac.
+  it("gives tablet steps to an iPad that presents itself as a Mac", async () => {
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue(UA.safari);
+    vi.spyOn(navigator, "maxTouchPoints", "get").mockReturnValue(5);
+    await renderDialog();
+
+    expect(button("Safari").getAttribute("aria-pressed")).toBe("true");
+    expect(text()).toContain("Tap the button at the left of the address bar, then Website Settings.");
+    expect(text()).toContain("Come back and tap Try again.");
+    expect(text()).toContain("In your device's settings, allow your browser to use your camera.");
+    expect(text()).not.toContain("menu bar");
+  });
+
+  it("keeps the menu bar steps for Safari on a Mac", async () => {
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue(UA.safari);
+    await renderDialog();
+
+    expect(text()).toContain("In the menu bar, click Safari, then Settings for This Website.");
+    expect(text()).toContain("In your computer's privacy settings");
   });
 
   it("shows no icon beside the title", async () => {
