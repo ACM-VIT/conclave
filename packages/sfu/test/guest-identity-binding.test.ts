@@ -275,6 +275,83 @@ describe("webinar attendee seats", () => {
   });
 });
 
+describe("a stage invite for a guest whose key differs between the audience and the stage", () => {
+  const audience = {
+    userId: "guest-gp_KKKKKKKKKKKKKKKKKKKKKK",
+    clientId: "conclave",
+    sessionId: "view-1",
+    joinMode: "webinar_attendee",
+    guestProof: "proof-of-the-viewer-pass",
+  } satisfies SfuAuthPayload;
+  // The same browser tab asking for the room itself: another seat key, the
+  // same pass.
+  const onStage = {
+    ...audience,
+    userId: "guest-gp_LLLLLLLLLLLLLLLLLLLLLL",
+    joinMode: "meeting",
+  } satisfies SfuAuthPayload;
+
+  // A locked webinar: only the host's invite gets anyone past the lock.
+  const invited = async () => {
+    const state = makeState();
+    await join(state, guestHost);
+    const room = state.rooms.get("conclave:room")!;
+    const config = getOrCreateWebinarRoomConfig(state.webinarConfigs, room.channelId);
+    config.enabled = true;
+    config.publicAccess = true;
+    setCustomWebinarLinkSlug({
+      webinarConfig: config,
+      webinarLinks: state.webinarLinks,
+      room: { channelId: room.channelId, id: room.id, clientId: room.clientId },
+      slug: "launch",
+    });
+    expect((await join(state, audience, "launch")).ack).toHaveBeenCalledWith(joined);
+    room.setLocked(true);
+    room.promoteWebinarUserKey(audience.userId);
+    return { state, room };
+  };
+
+  it("lets the invited guest onto the stage under its other key", async () => {
+    const { state, room } = await invited();
+
+    const promoted = await join(state, onStage);
+
+    expect(promoted.ack).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "joined", webinarRole: "participant" }),
+    );
+    expect(room.isWebinarPromotedUserKey(onStage.userId)).toBe(true);
+    expect(room.isWebinarPromotedUserKey(audience.userId)).toBe(false);
+  });
+
+  it.each([
+    ["no pass", {}],
+    ["another pass", { guestProof: "proof-of-another-pass" }],
+  ])("does not let a join with %s use the invite", async (_label, intruderPass) => {
+    const { state, room } = await invited();
+
+    const attempt = await join(state, {
+      ...publicIdentity(onStage),
+      userId: "guest-gp_MMMMMMMMMMMMMMMMMMMMMM",
+      ...intruderPass,
+    });
+
+    expect(attempt.ack).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "waiting" }),
+    );
+    expect(room.isWebinarPromotedUserKey(audience.userId)).toBe(true);
+  });
+
+  it("keeps the invited guest bound to its pass once it is on the stage", async () => {
+    const { state } = await invited();
+    await join(state, onStage);
+
+    const attempt = await join(state, publicIdentity(onStage));
+
+    expect(attempt.ack).toHaveBeenCalledWith(refused);
+    expect(attempt.context.currentClient).toBeNull();
+  });
+});
+
 describe("waiting room admission", () => {
   it("admits the guest the host let in, not another holder of its public id", async () => {
     const state = makeState();

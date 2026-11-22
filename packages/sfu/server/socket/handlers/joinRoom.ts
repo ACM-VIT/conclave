@@ -234,6 +234,10 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           Boolean(scheduledWebinarForRoom) &&
           scheduledWebinarForRoom?.status !== "ended" &&
           scheduledWebinarForRoom?.status !== "cancelled";
+        const guestProof = isGuestUserKey(userKey)
+          ? (normalizeIdentifier(user?.guestProof, MAX_GUEST_PROOF_LENGTH) ??
+            undefined)
+          : undefined;
         // A host invite ("bring on stage") lets an attendee identity rejoin as
         // a full participant; the promotion registry lives on the live room.
         // Honored only while webinar mode is on, so a stale invite can never
@@ -244,7 +248,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           Boolean(
             state.rooms
               .get(resolvedChannelId)
-              ?.isWebinarPromotedUserKey(userKey),
+              ?.takeWebinarPromotion(userKey, guestProof),
           );
         if (
           isActiveScheduledWebinarRoom &&
@@ -434,10 +438,6 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           }
         }
 
-        const guestProof = isGuestUserKey(userKey)
-          ? (normalizeIdentifier(user?.guestProof, MAX_GUEST_PROOF_LENGTH) ??
-            undefined)
-          : undefined;
         const guestClaim = room.claimGuestIdentity(userKey, guestProof);
         if (!guestClaim.ok) {
           Logger.warn(

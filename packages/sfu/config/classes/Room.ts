@@ -1111,6 +1111,41 @@ export class Room {
     return revoked;
   }
 
+  /**
+   * Whether a join as `userKey` holds a stage invite, taking the invite over
+   * when it was given to another key of the same guest pass.
+   *
+   * A guest's key is scoped to the room id it asked to join. An attendee
+   * joins through the webinar link and comes back for the stage through the
+   * room's own id, so it returns under another key than the one the host
+   * invited. The invite follows the pass: it moves to the key that presents
+   * the proof the invited key is bound to.
+   */
+  takeWebinarPromotion(
+    userKey: string,
+    guestProof: string | undefined,
+  ): boolean {
+    if (this.isWebinarPromotedUserKey(userKey)) return true;
+    const bound = this.guestProofsByUserKey.get(userKey);
+    if (guestProof === undefined || (bound !== undefined && bound !== guestProof)) {
+      return false;
+    }
+    for (const [invitedKey, expiresAt] of this.webinarPromotedUserKeys) {
+      if (
+        expiresAt <= Date.now() ||
+        this.guestProofsByUserKey.get(invitedKey) !== guestProof
+      ) {
+        continue;
+      }
+      this.webinarPromotedUserKeys.delete(invitedKey);
+      this.webinarPromotedUserKeys.set(userKey, expiresAt);
+      this.guestProofsByUserKey.set(userKey, guestProof);
+      this.releaseGuestIdentity(invitedKey);
+      return true;
+    }
+    return false;
+  }
+
   isWebinarPromotedUserKey(userKey: string): boolean {
     const expiresAt = this.webinarPromotedUserKeys.get(userKey);
     if (expiresAt === undefined) return false;
