@@ -20,6 +20,14 @@ describe("web security headers", () => {
     expect(headers.get("Referrer-Policy")).toBe("strict-origin-when-cross-origin");
   });
 
+  it("lets the development server frame itself for the dev bots panel", () => {
+    const headers = headerMap(true);
+    expect(headers.get("X-Frame-Options")).toBe("SAMEORIGIN");
+    expect(headers.get("Content-Security-Policy")).toBe("frame-ancestors 'self'");
+    const policy = directives(headers.get("Content-Security-Policy-Report-Only") ?? "");
+    expect(policy.get("frame-ancestors")).toEqual(["'self'"]);
+  });
+
   it("lets chat images load from the SFU that stored them", () => {
     const production = directives(headerMap(false).get("Content-Security-Policy-Report-Only") ?? "");
     expect(production.get("img-src")).toContain("https://*.acmvit.in");

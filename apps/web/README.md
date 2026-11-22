@@ -23,7 +23,8 @@ Files served straight from the Cloudflare assets binding skip the worker, so
 `public/_headers` gives them HSTS, `nosniff` and `Referrer-Policy`.
 
 - Framing is blocked by `X-Frame-Options: DENY` and an enforced
-  `Content-Security-Policy: frame-ancestors 'none'`.
+  `Content-Security-Policy: frame-ancestors 'none'`. `next dev` allows
+  same-origin frames instead, for the dev bots panel's inline participants.
 - `Permissions-Policy` allows camera, microphone and screen capture for this
   origin only. Fullscreen also extends to the YouTube embeds.
 - The full Content Security Policy is sent as `Content-Security-Policy-Report-Only`.

@@ -67,6 +67,10 @@ const withSocketScheme = (origin: string): string[] => [
   origin.replace(/^http/, "ws"),
 ];
 
+// The development server frames itself for the dev bots panel's inline participants.
+const frameAncestors = (isDevelopment: boolean): string =>
+  isDevelopment ? "'self'" : "'none'";
+
 const serializePolicy = (directives: Record<string, string[]>): string =>
   Object.entries(directives)
     .map(([name, sources]) => [name, ...sources].join(" "))
@@ -123,7 +127,7 @@ export const buildContentSecurityPolicy = ({
     "object-src": ["'none'"],
     "base-uri": ["'self'"],
     "form-action": ["'self'"],
-    "frame-ancestors": ["'none'"],
+    "frame-ancestors": [frameAncestors(isDevelopment)],
     // report-uri, not report-to: Chrome drops report-uri when report-to is
     // present, Firefox and Safari only send report-uri, and Reporting API
     // batches were not delivered at all in local runs.
@@ -136,8 +140,8 @@ export const buildSecurityHeaders = (options: {
   env: EnvSource;
   isDevelopment: boolean;
 }): HeaderEntry[] => [
-  { key: "X-Frame-Options", value: "DENY" },
-  { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+  { key: "X-Frame-Options", value: options.isDevelopment ? "SAMEORIGIN" : "DENY" },
+  { key: "Content-Security-Policy", value: `frame-ancestors ${frameAncestors(options.isDevelopment)}` },
   {
     key: "Content-Security-Policy-Report-Only",
     value: buildContentSecurityPolicy(options),
