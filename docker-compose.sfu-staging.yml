@@ -45,7 +45,7 @@ services:
       - sh
       - -c
       - >-
-        printf 'requirepass %s\n' "$$REDIS_PASSWORD" |
+        printf 'requirepass "%s"\n' "$$(printf '%s' "$$REDIS_PASSWORD" | sed 's/[\\"]/\\&/g')" |
         exec docker-entrypoint.sh redis-server - --port "$$REDIS_PORT" --bind 127.0.0.1 --appendonly yes
     volumes:
       - ${STAGING_STATE_DIR:-/var/lib/conclave-staging}/redis:/data
