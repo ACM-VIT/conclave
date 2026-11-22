@@ -267,6 +267,38 @@ describe("two SFUs writing recovery records into one directory", () => {
     });
   }, 120_000);
 
+  it("does not clear out a room another SFU is in the middle of writing its first record to", async () => {
+    const directory = tempDir("room-recovery-writers-");
+    const signals = tempDir("room-recovery-signals-");
+    const firstWrite = sfuProcess(`
+      ${holdAt(signals, "writeFileSync", ["host-first"])}
+      await createFileRoomRecoveryStore(${JSON.stringify(directory)}).write(
+        ${JSON.stringify(CHANNEL)},
+        { liveAt: Date.now(), hostUserKey: "host-first", adminUserKeys: [], readmissionRequiredUserKeys: [], overAt: null, ownerEmail: null, writer: "room-first" },
+        null,
+      );
+    `);
+    const signalled = signalsOf(signals);
+    await signalled.reaches("host-first");
+
+    // This SFU's first write tidies the directory.
+    await createFileRoomRecoveryStore(directory).write(
+      "conclave:another-room",
+      record("another-host", "another-room"),
+      null,
+    );
+    const roomsWhileWriting = readdirSync(directory).filter((name) =>
+      statSync(join(directory, name)).isDirectory(),
+    );
+    signalled.goOnPast("host-first");
+    expect(await firstWrite).toEqual({ code: 0, stderr: "" });
+
+    expect(roomsWhileWriting).toHaveLength(2);
+    expect(await createFileRoomRecoveryStore(directory).read(CHANNEL)).toMatchObject({
+      hostUserKey: "host-first",
+    });
+  }, 120_000);
+
   it("is not held up by an SFU that crashed in the middle of writing", async () => {
     const interrupted = await writeInterrupted();
     interrupted.roomA.crash();

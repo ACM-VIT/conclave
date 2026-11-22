@@ -380,6 +380,10 @@ export const createFileRoomRecoveryStore = (
   const pruneRoom = (room: string) => {
     const [newest, ...older] = versionsIn(room);
     if (newest === undefined) {
+      // A room with no record yet: one a write is about to fill, or one a
+      // write that never finished left behind. Only the second goes.
+      const madeAt = unlessGone(() => statSync(room).mtimeMs);
+      if (madeAt === null || Date.now() - madeAt <= ABANDONED_TEMP_FILE_MS) return;
       try {
         rmdirSync(room);
       } catch (error) {
@@ -449,8 +453,8 @@ export const createFileRoomRecoveryStore = (
             return true;
           } catch (error) {
             // Someone created that version first, or the room was just
-            // cleared out: look again.
-            if (!failedWith(error, "EEXIST", "ENOENT")) throw error;
+            // cleared out (macOS can say EINVAL while it goes): look again.
+            if (!failedWith(error, "EEXIST", "ENOENT", "EINVAL")) throw error;
           }
         }
         throw new Error(`Gave up writing the recovery record of ${channelId}`);
