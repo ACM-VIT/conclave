@@ -28,11 +28,22 @@ let beforeDrain = null;
 // container. replacementHealthy: false for a build whose containers
 // never report healthy. bootExit: "exited" or "crash-looping", the state a
 // container of the target image ends in right after it starts; the previous
-// image still boots. onTarget: already runs the target image with the
-// current compose config.
+// image still boots. stateInspectFails: docker inspect of the container's
+// state fails. onTarget: already runs the target image with the current
+// compose config.
 const startSfu = async (
   instanceId,
-  { rooms = 0, statusAnswers = true, container = "running", replacementHealthy = true, bootExit = null, draining = false, onTarget = false, failRecreate = 0 } = {},
+  {
+    rooms = 0,
+    statusAnswers = true,
+    container = "running",
+    replacementHealthy = true,
+    bootExit = null,
+    stateInspectFails = false,
+    draining = false,
+    onTarget = false,
+    failRecreate = 0,
+  } = {},
 ) => {
   const sfu = {
     instanceId,
@@ -58,7 +69,15 @@ const startSfu = async (
       const startedAt = new Date(Date.now() - (["crash-looping", "young"].includes(sfu.container) ? 3_000 : 3_600_000)).toISOString();
       if (sfu.container === "crash-looping") sfu.restartCount += 1;
       const status = { exited: "exited", "crash-looping": "restarting" }[sfu.container] ?? "running";
-      return json({ status, startedAt, restartCount: sfu.restartCount, bootDrained: sfu.bootDrained, image: sfu.image, configHash: sfu.configHash });
+      return json({
+        status,
+        startedAt,
+        restartCount: sfu.restartCount,
+        bootDrained: sfu.bootDrained,
+        image: sfu.image,
+        configHash: sfu.configHash,
+        stateInspectFails,
+      });
     }
     if (sfu.container !== "running" && !url.pathname.startsWith("/stand-in/")) return req.socket.destroy();
     if (url.pathname === "/health") return sfu.healthy ? json({ status: "healthy" }) : json({ status: "starting" }, 503);
@@ -158,6 +177,10 @@ const main = async () => {
     if (format.includes(".Config.Env")) return out("SFU_DRAINING=" + (await state(name)).bootDrained);
     if (format.includes(".State.Status")) {
       const current = await state(name);
+      if (current.stateInspectFails) {
+        process.exitCode = 1;
+        return;
+      }
       if (format.includes(".RestartCount")) return out(current.status + ":" + current.restartCount);
       return out(format.includes(".State.StartedAt") ? current.status + " " + current.startedAt : current.status);
     }
@@ -602,6 +625,15 @@ test("--rollback after a partial rollout returns every instance to the last rele
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
+  });
+});
+
+test("a silent instance whose container state Docker cannot report is not rebuilt", async () => {
+  await withSfus({ "sfu-a": {}, "sfu-b": { container: "hung", rooms: 1, stateInspectFails: true } }, async (sfus) => {
+    const result = await deploy(sfus, { env: { SFU_DEPLOY_SERVICES: "sfu-b", CONTAINER_SAMPLE_SECONDS: "0" } });
+    assert.equal(result.code, 1, result.output);
+    assert.match(result.output, /Docker could not report the state of sfu-b's container/);
+    assert.deepEqual(sfus["sfu-b"].recreates, []);
   });
 });
 

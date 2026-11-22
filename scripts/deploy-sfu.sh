@@ -441,7 +441,9 @@ service_image_name() {
 }
 
 service_container() {
-  "${COMPOSE[@]}" ps -aq "$1" 2>/dev/null | head -n 1
+  local ids
+  ids="$("${COMPOSE[@]}" ps -aq "$1" 2>/dev/null)" || return 1
+  printf "%s" "${ids%%$'\n'*}"
 }
 
 # An instance's /status, only when it answers as that instance: a management
@@ -461,17 +463,29 @@ instance_status() {
   printf "%s" "$status"
 }
 
-# True when Docker runs the container steadily, so it may carry calls however
-# silent it is; unknown is busy. Two samples a moment apart: a container that
-# is restarting, or whose restart count moves, is crash-looping and carries
-# none.
-container_running() {
-  local container="$1" first second
-  [[ -n "$container" ]] || return 1
-  first="$(docker inspect -f '{{.State.Status}}:{{.RestartCount}}' "$container" 2>/dev/null || true)"
+# What Docker reports for a service's container, from two samples a moment
+# apart: "running" when it runs steadily, so it may carry calls however silent
+# it is; "stopped" when it is exited, dead, created or restarting, or its
+# restart count moves (crash-looping), so it carries none; "absent" when
+# compose has no container for it; "unknown" when compose or Docker cannot
+# say. Only stopped and absent may be rebuilt without a drain: unknown is busy.
+container_state() {
+  local container first second
+  container="$(service_container "$1")" || { echo unknown; return; }
+  [[ -n "$container" ]] || { echo absent; return; }
+  first="$(docker inspect -f '{{.State.Status}}:{{.RestartCount}}' "$container" 2>/dev/null)" || { echo unknown; return; }
   sleep "${CONTAINER_SAMPLE_SECONDS:-2}"
-  second="$(docker inspect -f '{{.State.Status}}:{{.RestartCount}}' "$container" 2>/dev/null || true)"
-  [[ "$first" == running:* && "$first" == "$second" ]]
+  second="$(docker inspect -f '{{.State.Status}}:{{.RestartCount}}' "$container" 2>/dev/null)" || { echo unknown; return; }
+  case "${second%%:*}" in
+    exited|dead|created|restarting) echo stopped ;;
+    running)
+      case "${first%%:*}" in
+        running|exited|dead|created|restarting)
+          if [[ "${first#*:}" != "${second#*:}" ]]; then echo stopped; else echo running; fi ;;
+        *) echo unknown ;;
+      esac ;;
+    *) echo unknown ;;
+  esac
 }
 
 # An instance's place in the deploy order, as "<class> <rooms>". Instances
@@ -497,8 +511,7 @@ deploy_rank() {
     fi
     return
   fi
-  container="$(service_container "$svc")"
-  if ! answers_http "$url" && ! container_running "$container"; then
+  if ! answers_http "$url" && [[ "$(container_state "$svc")" =~ ^(stopped|absent)$ ]]; then
     echo "0 0"
   else
     echo "3 0"
@@ -746,14 +759,23 @@ deploy_service() {
     # Up but its status is unreadable: its rooms are unknown, so leave it.
     echo "${svc} answers but its /status cannot be read; not rebuilding it." >&2
     return 1
-  elif container_running "$container"; then
+  else
     # Silent is not stopped: a wrong URL or proxy hides a container that may
     # still carry calls, however recently it started.
-    echo "${svc}'s container is running but nothing answers at ${url}; check that URL, or stop ${svc} if it is hung. Not rebuilding it." >&2
-    return 1
-  else
-    echo "${svc} is not running; starting it without a drain."
-    settle_until=$(( $(date +%s) + PLACEMENT_SETTLE_SECONDS ))
+    case "$(container_state "$svc")" in
+      stopped|absent)
+        echo "${svc} is not running; starting it without a drain."
+        settle_until=$(( $(date +%s) + PLACEMENT_SETTLE_SECONDS ))
+        ;;
+      running)
+        echo "${svc}'s container is running but nothing answers at ${url}; check that URL, or stop ${svc} if it is hung. Not rebuilding it." >&2
+        return 1
+        ;;
+      *)
+        echo "Docker could not report the state of ${svc}'s container, so it may still carry calls; not rebuilding it." >&2
+        return 1
+        ;;
+    esac
   fi
 
   if [[ -n "$previous_image" ]]; then

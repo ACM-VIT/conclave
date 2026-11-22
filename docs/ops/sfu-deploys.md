@@ -66,9 +66,12 @@ left; an earlier run that stopped on that route stops again there. An instance t
 whose `/status` cannot be read is left alone (exit 1), because its rooms are
 unknown. So is one whose container Docker runs while nothing answers at its
 URL (exit 1), however recently it started: a wrong `SFU_A_URL` or proxy can
-hide calls. Only a container Docker reports restarting, or whose restart count
-moves, counts as crash-looping and is redeployed first. Fix the URL, or stop
-the container if it is hung, and rerun.
+hide calls. A silent instance is started without a drain only when Docker
+affirmatively reports its container exited, dead, created or restarting, or
+its restart count moves (crash-looping), or compose has no container for it.
+When compose or `docker inspect` cannot answer, its state is unknown, so it
+counts as busy and is left alone (exit 1). Fix the URL, or stop the container
+if it is hung, and rerun.
 
 ## Exit codes
 
