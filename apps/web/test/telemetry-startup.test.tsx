@@ -7,9 +7,12 @@ const posthog = vi.hoisted(() => ({
   init: vi.fn(),
   register: vi.fn(),
   unregister: vi.fn(),
+  unregister_for_session: vi.fn(),
   capture: vi.fn(),
   captureException: vi.fn(),
-  persistence: { props: {} as Record<string, unknown> },
+  // properties() is what posthog-js attaches to every event from each store.
+  persistence: { properties: vi.fn((): Record<string, unknown> => ({})) },
+  sessionPersistence: { properties: vi.fn((): Record<string, unknown> => ({})) },
 }));
 vi.mock("posthog-js", () => ({ default: posthog }));
 vi.mock("posthog-js/dist/exception-autocapture", () => ({}));
@@ -75,24 +78,28 @@ describe("error boundaries on the first page load", () => {
     );
   });
 
-  it("drops super properties seeded in storage, keeping the SDK's and ours", async () => {
-    posthog.persistence.props = {
-      distinct_id: "0196f0a1",
-      $device_id: "0196f0a1",
-      $sesid: [1, "s", 2],
-      __timers: {},
+  it("drops every stored super property that is not on the exact allowlist", async () => {
+    posthog.persistence.properties.mockReturnValue({
+      $initialization_time: "2026-11-22T00:00:00Z",
       client_version: "0b2d3b48",
-      meeting_note: "Meet Mira in sample-room at seven",
-      room: { id: "hazel-lime-pine" },
-    };
+      meeting_note: "Meet Mira in sample-room",
+      $meeting_note: "Meet Mira in sample-room",
+      __meeting_note: "Meet Mira in sample-room",
+    });
+    posthog.sessionPersistence.properties.mockReturnValue({
+      $session_entry_url: "https://conclave.acmvit.in/",
+      visit_note: "Meet Mira in sample-room",
+    });
     const { default: RouteError } = await import("../src/app/error");
     await renderOnFirstLoad(RouteError);
 
     await vi.waitFor(() => expect(posthog.captureException).toHaveBeenCalled());
     expect(posthog.unregister.mock.calls.map(([key]) => key).sort()).toEqual([
+      "$meeting_note",
+      "__meeting_note",
       "meeting_note",
-      "room",
     ]);
+    expect(posthog.unregister_for_session.mock.calls.map(([key]) => key)).toEqual(["visit_note"]);
   });
 
   it("loads nothing and sends nothing without a project key", async () => {

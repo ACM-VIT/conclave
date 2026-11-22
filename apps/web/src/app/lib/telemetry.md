@@ -21,7 +21,7 @@ the first report arrives, and holds up to 50 reports until it has loaded:
 - Unhandled errors and promise rejections (posthog-js autocapture, rate limited per error type by the SDK).
 - Errors caught by `app/error.tsx` and `app/global-error.tsx`: `source: "react_error_boundary"`, `boundary: "route" | "root"`, `digest`.
 - `console.error("[Meets] ...")` lines from the call code: `source: "call_log"`, `call_log` (the log label). The exception's message is the label. A logged Error keeps its type and stack frames, never its message. Other logged values are dropped. mediasoup ids in a label become `[id]`, so one failure type shares one budget: at most 3 per label and 30 in total per minute.
-- Errors built from server text (socket ack `error` fields and the like) are thrown as `ServerError`, and their message leaves the browser as `[server message]`. Server text can carry words people typed, such as a host's end-room note. A lint rule flags `new Error(x.error)`.
+- Errors built from server text (socket ack `error` fields and the like) are thrown as `ServerError`, so the type says where the text came from. Like every message that is not a call-log label, theirs is withheld. A lint rule flags `new Error(x.error)`.
 
 SFU, from `server/analytics/errorReporter.ts`, every event tagged `sfu_instance_id`, `sfu_region`, `sfu_version`:
 
@@ -100,24 +100,28 @@ and reconnect failures carry a `failure_reason` category, never the error text.
 
 ## Privacy
 
-`telemetry-privacy.ts` runs as posthog-js `before_send`. It rewrites every URL
-property and stack frame URL to its route (`/[code]`, `/w/[code]`), drops query
-strings, hashes, the page title and any `roomId` or `userId` property, and
-replaces emails, tokens and credentials in free text: the whole value of a
-`Cookie`, `Set-Cookie`, `Authorization` or `Proxy-Authorization` line, Bearer
-and Basic tokens, and `password=` / `token:` style values, at any length. An
-exception built from something that was not an Error (a rejected string or
-object, a thrown value) sends only its kind, `[primitive rejection]` or
-`[non-error value]`, never the value. It also drops campaign and click-id
-properties (`utm_*`, `fbclid`, `gclid` and friends) and the search keywords the
-SDK takes from a search-engine referrer (`ph_keyword`), with their `$initial_`
-and `$session_entry_` copies, and `save_campaign_params` is off. `$search_engine`
-stays. Any object or array property other than `$exception_list` is dropped.
-Super properties are an allowlist: on load, `lib/telemetry.ts` unregisters any
-stored one that is not the SDK's own or `client_version`.
-Stack frames in our own scripts (`/_next/static/`, `/mediapipe/`, the
-transcript and effects worklets and so on) on the page's own origin keep their path so they can be symbolicated. URL
-properties never do.
+`telemetry-privacy.ts` runs as posthog-js `before_send` and sends only what we
+trust, instead of scrubbing what looks bad:
+
+- **Properties.** Only keys on an exact allowlist leave the browser: SDK fields
+  checked against real traffic, and our own event fields. Anything else is
+  dropped whatever its prefix, and person properties (`$set`, `$set_once`) are
+  never sent. On load, `lib/telemetry.ts` also removes every stored super
+  property that is not on the list, from local and session storage. A new
+  event field has to be added to the list to be sent.
+- **Exception messages.** A message is sent only when it is the `[Meets]`
+  call-log label. Every other one, from an engine, a library, the server or a
+  rejected value, becomes `[message withheld]`. Type names are kept only from
+  a list of known error kinds (built-in, DOM, ours); any other, such as a
+  rejected object's `name`, becomes `[type withheld]`. Frames keep their line
+  numbers and chunk ids.
+- **URLs.** Every URL property and stack frame URL becomes its origin and route
+  (`/[code]`, `/w/[code]`), without query or hash. A frame keeps its path only
+  for an exact first-party script file on the page's own origin, or a hashed
+  `/_next/static` chunk. A frame from another scheme keeps only the scheme.
+- Our own string fields still go through the credential, email and token
+  scrubber, and `save_campaign_params` is off.
+
 Session replay, surveys, DOM autocapture, feature flags and pageviews are off,
 and no user is ever identified. The SFU scrubs emails, tokens and credentials
 (any URI with user info, the whole value of `Cookie`, `Set-Cookie`,

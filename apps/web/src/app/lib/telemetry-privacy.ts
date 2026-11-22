@@ -7,16 +7,49 @@ const STATIC_PAGES = new Set([
   "delete-account",
   "sign-in",
 ]);
-// Room codes let anyone join, and user ids can embed an email.
-const DROPPED_PROPERTIES = new Set(["$title", "roomId", "userId"]);
-// Campaign and click-id parameters and the search keywords the SDK pulls out
-// of a search-engine referrer, plus their $initial_ and $session_entry_
-// copies. They can carry emails, ad ids and whatever someone searched for.
-const ATTRIBUTION_PROPERTY =
-  /^(?:\$initial_|\$session_entry_)?(?:utm_\w+|gad_source|mc_cid|gclsrc|gbraid|wbraid|msclkid|li_fat_id|igshid|rdt_cid|epik|sccid|oppref|bfcid|_kx|\w*clid|\$fb[cp]|ph_keyword)$/;
-// The one structured property PostHog needs; any other object or array is
-// dropped, such as a super property someone seeded into storage.
-const STRUCTURED_PROPERTIES = new Set(["$exception_list"]);
+// The only property keys that leave the browser: SDK fields checked against
+// real traffic, and our own event fields. Anything else, such as a super
+// property seeded into local or session storage, is dropped whatever its
+// prefix. A new event field must be added here to be sent.
+const SDK_PROPERTIES = [
+  "$browser", "$browser_language", "$browser_language_prefix", "$browser_version",
+  "$config_defaults", "$configured_session_timeout_ms", "$current_url", "$device_id",
+  "$device_type", "$exception_level", "$exception_list", "$host", "$initialization_time",
+  "$insert_id", "$is_identified", "$lib", "$lib_custom_api_host",
+  "$lib_rate_limit_remaining_tokens", "$lib_version", "$os", "$os_version", "$pathname",
+  "$process_person_profile", "$raw_user_agent", "$recording_status", "$referrer",
+  "$referring_domain", "$screen_height", "$screen_width",
+  "$sdk_debug_extensions_init_method", "$sdk_debug_extensions_init_time_ms",
+  "$sdk_dist_channel", "$search_engine", "$session_entry_host", "$session_entry_pathname",
+  "$session_entry_referrer", "$session_entry_referring_domain",
+  "$session_entry_search_engine", "$session_entry_url", "$session_id", "$time",
+  "$timezone", "$timezone_offset", "$viewport_height", "$viewport_width", "$window_id",
+];
+const OUR_PROPERTIES = [
+  // Ingestion and release.
+  "token", "distinct_id", "client_version",
+  // Exceptions.
+  "source", "call_log", "boundary", "digest",
+  // call_join, call_first_media, call_summary.
+  "call_id", "outcome", "failure_reason", "join_ms", "waited", "waiting_ms", "join_mode",
+  "prior_failed_attempts", "first_remote_audio_ms", "first_remote_video_ms",
+  "remote_present_at_join", "timed_out", "end_reason", "duration_ms", "peak_participants",
+  "reconnect_count", "reconnect_total_ms", "reconnect_longest_ms", "reconnect_unrecovered",
+  "remote_video_ms", "video_freeze_count", "video_freeze_ms", "video_stall_count",
+  "video_stall_ms", "audio_concealed_pct", "outbound_video_ms", "outbound_low_ms",
+  "outbound_standard_ms", "outbound_profile_switches", "outbound_video_kbps",
+  "outbound_video_height", "outbound_cpu_limited_pct", "outbound_bandwidth_limited_pct",
+  // meet_* events.
+  "attempt", "attempts", "maxAttempts", "usingTurnFallback", "joinMode", "isAdmin", "status",
+  "reason", "failureReason", "durationMs", "maximumSpatialLayer", "observedSpatialLayer",
+  "from", "to", "epoch", "kind", "type", "level", "pausedForMs", "state", "downtimeMs",
+  "autoplayBlocked",
+];
+const SENT_PROPERTIES = new Set([...SDK_PROPERTIES, ...OUR_PROPERTIES]);
+
+/** Whether a property may be sent, as an event field or a stored super property. */
+export const isSentProperty = (key: string): boolean => SENT_PROPERTIES.has(key);
+
 // Values we set or the SDK needs as-is: the project key in `token` must
 // survive for ingestion, and `client_version` is a git sha, not a secret.
 const TRUSTED_PROPERTIES = new Set(["token", "distinct_id", "client_version"]);
@@ -33,19 +66,29 @@ const CREDENTIAL_HEADER_PATTERN =
 const AUTH_SCHEME_PATTERN = /\b(bearer|basic)\s+[^\s,;"']+/gi;
 const SECRET_ASSIGNMENT_PATTERN =
   /\b(password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|session)(\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;&"']+)/gi;
-// Our own scripts. A stack frame in one keeps its path so PostHog can match it
-// to a source map.
-const ASSET_PATHS = new Set([
+// Our own script files, exactly. A stack frame in one keeps its path so
+// PostHog can match it to a source map; any other path is templated.
+const FIRST_PARTY_SCRIPTS = new Set([
   "/transcript-pcm-processor.js",
   "/effects/video-effects-output-writer.js",
+  "/noise-suppressor/0.3.5/rnnoise-worklet.js",
+  "/noise-suppressor/0.4.0/rnnoise-worklet.js",
+  "/noise-suppressor/0.4.1/rnnoise-worklet.js",
+  ...["0.10.35", "1.0.1", "1.1.0"].flatMap((version) =>
+    ["vision_wasm_internal.js", "vision_wasm_module_internal.js", "vision_wasm_nosimd_internal.js"].map(
+      (file) => `/mediapipe/tasks-vision/${version}/wasm/${file}`,
+    ),
+  ),
+  ...["async_processor_worker_bundle.js", "audio_processing_worker_bundle.js", "render_worker_bundle.js", "timer_worker.js", "videopipe_bundle.js"].map(
+    (file) => `/_/rtcvidproc/release/929503300/${file}`,
+  ),
 ]);
-const ASSET_PATH_PREFIXES = [
-  "/_next/static/",
-  "/mediapipe/",
-  "/effects/",
-  "/noise-suppressor/",
-  "/_/rtcvidproc/",
-];
+// Build chunks have hashed names, so they are matched by shape instead.
+const NEXT_STATIC_SCRIPT = /^\/_next\/static\/[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*\.m?js$/;
+const isFirstPartyScript = (pathname: string): boolean =>
+  FIRST_PARTY_SCRIPTS.has(pathname) || NEXT_STATIC_SCRIPT.test(pathname);
+// Frame names the browser gives code with no file, such as <anonymous>.
+const PLACEHOLDER_FRAME = /^(?:<[a-z ]+>|native|)$/;
 
 /**
  * Replaces room codes, invite slugs and booking handles in a path with the
@@ -109,17 +152,17 @@ const originOf = (value: unknown): string | null => {
 };
 
 const scrubFrameUrl = (value: string, pageOrigin: string | null): string => {
+  if (PLACEHOLDER_FRAME.test(value)) return value;
   try {
     const url = new URL(value);
-    const ownScript =
-      (url.protocol === "http:" || url.protocol === "https:") &&
-      url.origin === pageOrigin &&
-      (ASSET_PATHS.has(url.pathname) ||
-        ASSET_PATH_PREFIXES.some((prefix) => url.pathname.startsWith(prefix)));
-    if (ownScript) return `${url.origin}${url.pathname}`;
+    if (url.protocol !== "http:" && url.protocol !== "https:") return `${url.protocol}//[path]`;
+    if (url.origin === pageOrigin && isFirstPartyScript(url.pathname)) {
+      return `${url.origin}${url.pathname}`;
+    }
+    return `${url.origin}${templatePath(url.pathname)}`;
   } catch {
+    return "[path]";
   }
-  return scrubUrl(value);
 };
 
 const scrubFrame = (frame: ExceptionFrame, pageOrigin: string | null): ExceptionFrame => {
@@ -131,33 +174,42 @@ const scrubFrame = (frame: ExceptionFrame, pageOrigin: string | null): Exception
   return next;
 };
 
-// Thrown as ServerError (lib/server-error.ts): text the server wrote.
-const SERVER_ERROR_TYPE = "ServerError";
+// Type names that name a kind of failure, never data: built-in errors, DOM
+// exceptions, posthog-js's own, libraries we call, and ours. A rejected
+// object's `name` becomes its type, so any other type is withheld too.
+const KNOWN_ERROR_TYPES = new Set([
+  "Error", "EvalError", "RangeError", "ReferenceError", "SyntaxError", "TypeError",
+  "URIError", "AggregateError", "InternalError", "DOMException", "AbortError",
+  "ConstraintError", "DataCloneError", "DataError", "EncodingError",
+  "HierarchyRequestError", "IndexSizeError", "InvalidAccessError",
+  "InvalidCharacterError", "InvalidModificationError", "InvalidNodeTypeError",
+  "InvalidStateError", "NamespaceError", "NetworkError", "NoModificationAllowedError",
+  "NotAllowedError", "NotFoundError", "NotReadableError", "NotSupportedError",
+  "OperationError", "OverconstrainedError", "QuotaExceededError", "ReadOnlyError",
+  "SecurityError", "TimeoutError", "TransactionInactiveError", "TypeMismatchError",
+  "UnknownError", "URLMismatchError", "VersionError", "WrongDocumentError",
+  "ChunkLoadError", "UnhandledRejection", "UnsupportedError", "CallError",
+  "ServerError", "JoinRoomRedirectError",
+]);
+const MESSAGE_WITHHELD = "[message withheld]";
+const TYPE_WITHHELD = "[type withheld]";
 
-type Mechanism = { synthetic?: unknown };
+const knownType = (type: unknown): string =>
+  typeof type === "string" && KNOWN_ERROR_TYPES.has(type) ? type : TYPE_WITHHELD;
 
-// posthog-js marks an exception built from something that was not an Error
-// (a rejected string or object, a thrown value) as synthetic and puts that
-// value in the message. Only its kind leaves the browser: a rejected
-// primitive is typed UnhandledRejection, anything else cannot be told apart.
-const syntheticKind = (entry: ExceptionEntry): string | null => {
-  if ((entry.mechanism as Mechanism | undefined)?.synthetic !== true) return null;
-  return entry.type === "UnhandledRejection" ? "[primitive rejection]" : "[non-error value]";
-};
-
-const scrubExceptionValue = (entry: ExceptionEntry): unknown => {
-  if (entry.type === SERVER_ERROR_TYPE) return "[server message]";
-  const synthetic = syntheticKind(entry);
-  if (synthetic) return synthetic;
-  return typeof entry.value === "string" ? scrubText(entry.value) : entry.value;
-};
-
+/**
+ * An exception keeps its message only when we wrote it: the `[Meets]` label
+ * that call-error-capture sets. Every other message, from an engine, a
+ * library, the server or a rejected value, is withheld.
+ */
 const scrubExceptionEntry = (
   entry: ExceptionEntry,
+  trustedMessage: string | null,
   pageOrigin: string | null,
 ): ExceptionEntry => ({
   ...entry,
-  value: scrubExceptionValue(entry),
+  type: knownType(entry.type),
+  value: trustedMessage ?? MESSAGE_WITHHELD,
   ...(entry.stacktrace && Array.isArray(entry.stacktrace.frames)
     ? {
         stacktrace: {
@@ -169,16 +221,20 @@ const scrubExceptionEntry = (
 });
 
 function scrubProperties(properties: Properties, pageOrigin: string | null): Properties {
+  const trustedMessage =
+    properties.source === "call_log" && typeof properties.call_log === "string"
+      ? scrubText(properties.call_log)
+      : null;
   const scrubbed: Properties = {};
   const entries: Array<[string, unknown]> = Object.entries(properties);
   for (const [key, value] of entries) {
-    if (DROPPED_PROPERTIES.has(key) || ATTRIBUTION_PROPERTY.test(key)) continue;
+    if (!SENT_PROPERTIES.has(key)) continue;
     if (key === "$exception_list" && Array.isArray(value)) {
       scrubbed[key] = (value as ExceptionEntry[]).map((entry) =>
-        scrubExceptionEntry(entry, pageOrigin),
+        scrubExceptionEntry(entry, trustedMessage, pageOrigin),
       );
     } else if (value !== null && typeof value === "object") {
-      if (STRUCTURED_PROPERTIES.has(key)) scrubbed[key] = value;
+      continue;
     } else if (typeof value === "string" && URL_PROPERTY.test(key)) {
       scrubbed[key] = scrubUrl(value);
     } else if (
@@ -195,18 +251,13 @@ function scrubProperties(properties: Properties, pageOrigin: string | null): Pro
 }
 
 /**
- * posthog-js `before_send` hook. Every event leaves the browser without room
- * codes, user ids, query strings, page titles, emails or tokens.
+ * posthog-js `before_send` hook, on "send only what we trust": known property
+ * keys, known error types, call-log labels as the only messages, and paths
+ * only for exact first-party scripts. Person properties are never sent.
  */
 export function scrubTelemetryEvent(event: CaptureResult): CaptureResult {
-  // Stack frames keep asset paths only for scripts the page itself served.
+  // Stack frames keep a path only for scripts the page itself served.
   const pageOrigin = originOf(event.properties.$current_url);
-  return {
-    ...event,
-    properties: scrubProperties(event.properties, pageOrigin),
-    ...(event.$set ? { $set: scrubProperties(event.$set, pageOrigin) } : {}),
-    ...(event.$set_once
-      ? { $set_once: scrubProperties(event.$set_once, pageOrigin) }
-      : {}),
-  };
+  const { $set: _set, $set_once: _setOnce, ...rest } = event;
+  return { ...rest, properties: scrubProperties(event.properties, pageOrigin) };
 }
