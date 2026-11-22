@@ -48,15 +48,16 @@ If provider is missing, SDK hooks throw immediately.
 
 Returns the full runtime context:
 
-- `state`: `{ activeAppId: string | null, locked: boolean, revision: number | null, savedAppIds: string[] }`
+- `state`: `{ activeAppId: string | null, locked: boolean, revision: number | null, savedAppIds: string[], docGeneration: number | null }`
   - `activeAppId` is the app presented on the room's stage
   - `revision` moves forward with every change; it is `null` on an older SFU
   - `savedAppIds` lists apps off the stage whose document the room keeps
+  - `docGeneration` names the presented app's document; a new number means the room started it over
 - `apps`: app definitions supplied by the host
-- `presentApp(appId) => Promise<boolean>`: present an app on the stage
-- `closeApp() => Promise<boolean>`: take it off the stage; the room keeps its document
-- `clearApp(appId) => Promise<boolean>`: erase an app's document for everyone
-- `setLocked(locked) => Promise<boolean>`
+- `presentApp(appId) => Promise<AppsCommandResult>`: present an app on the stage
+- `closeApp() => Promise<AppsCommandResult>`: take it off the stage; the room keeps its document
+- `clearApp(appId) => Promise<AppsCommandResult>`: erase an app's document for everyone
+- `setLocked(locked) => Promise<AppsCommandResult>`
 - `refreshState() => void`
 - `getDoc(appId) => Y.Doc`
 - `getAwareness(appId) => Awareness`
@@ -64,10 +65,13 @@ Returns the full runtime context:
 
 Ack behavior:
 
-- control methods resolve `false` if socket is unavailable or ack times out
+- control methods resolve `{ ok: true }`, or `{ ok: false, reason }` with `reason` one of:
+  - `"roomFull"`: the room keeps as many app documents as it can; clear one to present another
+  - `"staleStage"`: another host changed the stage first
+  - `"failed"`: anything else, such as no socket, no permission, a rate limit or an ack timeout
 - stage commands (present, close, clear, lock) send the `revision` the client last saw, and the SFU refuses
   them when the stage has changed since
-- `clearApp` resolves `false` on an older SFU, which cannot clear a document
+- `clearApp` fails on an older SFU, which cannot clear a document
 - current timeout is 8 seconds in provider implementation
 
 ### `useAppDoc(appId)`

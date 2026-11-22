@@ -46,7 +46,7 @@ At runtime, app controls are role-based:
   closes it.
 
 A room keeps at most eight app documents and 4 MiB of them. Presenting a new
-app fails while the room is full; clear one first.
+app resolves `{ ok: false, reason: "roomFull" }` while the room is full; clear one first.
 
 ### `setLocked(true | false)`
 

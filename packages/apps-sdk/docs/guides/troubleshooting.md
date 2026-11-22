@@ -49,10 +49,13 @@ Test with separate admin and non-admin participants.
 
 ## Controls time out
 
-`presentApp`, `closeApp`, `clearApp`, and `setLocked` return `false` when the
-socket is absent, the user is read-only, or the acknowledgement does not arrive
-within eight seconds. Stage commands also fail when another host changed the
-stage first; the new state arrives with the failure, so try again from it. Inspect the matching SFU handler and permission check rather than
+`presentApp`, `closeApp`, `clearApp`, and `setLocked` resolve
+`{ ok: false, reason: "failed" }` when the socket is absent, the user is
+read-only, or the acknowledgement does not arrive within eight seconds. They
+resolve `reason: "staleStage"` when another host changed the stage first; the
+new state arrives with the failure, so try again from it. `reason: "roomFull"`
+means the room keeps as many app documents as it can, and retrying will not
+help until a host clears one. Inspect the matching SFU handler and permission check rather than
 retrying indefinitely.
 
 ## Game state or identity looks wrong

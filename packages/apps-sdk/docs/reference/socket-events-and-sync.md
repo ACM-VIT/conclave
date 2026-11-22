@@ -29,12 +29,15 @@ Use this page when debugging:
 
 - Emitted by provider via `refreshState()`.
 - Server callback returns `AppsState`:
-  `{ activeAppId, locked, revision, savedAppIds, roomId }`.
+  `{ activeAppId, locked, revision, savedAppIds, docGeneration, roomId }`.
 - Used on initial mount and reconnect paths.
 
-`revision` moves forward with every change to this state. An older SFU sends
-no `revision` or `savedAppIds`; it destroys an app's document when the app
-leaves the stage, and has no `apps:discard`.
+`revision` moves forward with every change to this state. `docGeneration`
+names the presented app's document: a new number means the room started that
+app over, so a client drops its local copy and resyncs even when `activeAppId`
+did not change. It is `null` when nothing is presented. An older SFU sends no
+`revision`, `savedAppIds` or `docGeneration`; it destroys an app's document
+when the app leaves the stage, and has no `apps:discard`.
 
 ### Document lifetime
 
@@ -48,6 +51,16 @@ Only the presented app is live: `apps:yjs:sync`, `apps:yjs:update` and
 `apps:awareness` for any other app are refused or dropped. Clients drop their
 local copy of an app that leaves the stage and resync from the server when it
 returns.
+
+A cleared document stays cleared. The SFU remembers the Yjs clients that wrote
+to it and drops any later `apps:yjs:update` that holds, builds on or deletes
+its content, as a client that missed the clear would send on resync. The
+writers in such an update are dropped from then on too.
+
+A refused stage command acks `{ success: false, error, code }`. `code` is
+`"stale_revision"` when the stage changed first, and `"room_full"` when the
+room keeps as many documents as it can, so a host clears one before presenting
+another.
 
 ### `apps:open`
 
@@ -64,12 +77,12 @@ Server behavior:
 
 1. reject non-admins
 2. succeed without change when `appId` is already presented
-3. reject with "The stage changed. Try again." when `expectedRevision` is
-   sent and is not the current revision
-4. reject with "Clear an app to present another." when the room has no space
-   for a new document
+3. reject with code `stale_revision` when `expectedRevision` is sent and is
+   not the current revision
+4. reject with code `room_full` when the room has no space for a new document
 5. remove the outgoing app's awareness and keep its document
-6. set `activeAppId`, set `locked = false`, create the app's document if needed
+6. set `activeAppId`, set `locked = false`, create the app's document if
+   needed, on a new `docGeneration`
 7. broadcast `apps:state`
 8. ack `{ success: true, activeAppId, revision }`
 
@@ -106,7 +119,8 @@ Server behavior:
 2. succeed without change when the room keeps no document for `appId`
 3. reject a stale `expectedRevision`
 4. close the stage first when `appId` is presented
-5. destroy the document
+5. destroy the document and remember its writers, so their content cannot
+   come back
 6. broadcast `apps:state`
 7. ack `{ success: true, revision }`
 
