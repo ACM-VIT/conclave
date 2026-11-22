@@ -21,6 +21,7 @@ import {
 } from "./webinar.js";
 import { canonicalizeClientId } from "./clientIds.js";
 import { ensureJsonFallbackAllowed } from "./jsonFallback.js";
+import { assertSqliteWritable } from "./sqliteWriteCheck.js";
 
 const DEFAULT_EARLY_ENTRY_MINUTES = 10;
 const MAX_EARLY_ENTRY_MINUTES = 240;
@@ -355,6 +356,7 @@ const createSqliteScheduledWebinarPersistence = (
   const { DatabaseSync } = loadNodeSqlite();
   const db = new DatabaseSync(path);
   db.exec("PRAGMA busy_timeout = 5000");
+  assertSqliteWritable(db, path);
   db.exec("PRAGMA journal_mode = WAL");
   db.exec(`
     CREATE TABLE IF NOT EXISTS scheduled_webinars (

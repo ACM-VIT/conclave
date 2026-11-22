@@ -41,10 +41,13 @@ docker compose -f docker-compose.sfu.yml run --rm --no-deps --user root \
 ```
 
 Both SFUs keep scheduled meetings, webinars and scheduling records in one
-SQLite file on the recordings volume. If it will not open, a production SFU
-exits at startup instead of falling back to a JSON copy that the other instance
-would overwrite and SQLite would never import back. The container restart then
-retries SQLite. Set `SCHEDULING_PERSISTENCE`, `SCHEDULED_MEETINGS_PERSISTENCE`
+SQLite file on the recordings volume. At startup each store proves it can
+write that file and its directory with a rolled-back test transaction. If it
+cannot, or SQLite will not open, a production SFU exits before it reports
+healthy, instead of accepting saves it cannot keep or falling back to a JSON
+copy that the other instance would overwrite and SQLite would never import
+back. A permission failure names the ownership step above. The container
+restart then retries. Set `SCHEDULING_PERSISTENCE`, `SCHEDULED_MEETINGS_PERSISTENCE`
 or `SCHEDULED_WEBINARS_PERSISTENCE` to `json` only for a single instance.
 
 ## To apply in production

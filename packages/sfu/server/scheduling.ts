@@ -32,6 +32,7 @@ import {
   CONCLAVE_CLIENT_ID,
 } from "./clientIds.js";
 import { ensureJsonFallbackAllowed } from "./jsonFallback.js";
+import { assertSqliteWritable } from "./sqliteWriteCheck.js";
 
 type MaybePromise<T> = T | Promise<T>;
 
@@ -1078,6 +1079,7 @@ const createSqliteSchedulingPersistence = (
   const { DatabaseSync } = loadNodeSqlite();
   const db = new DatabaseSync(path);
   db.exec("PRAGMA busy_timeout = 5000");
+  assertSqliteWritable(db, path);
   db.exec("PRAGMA journal_mode = WAL");
   db.exec(`
     CREATE TABLE IF NOT EXISTS scheduling_records (
