@@ -139,6 +139,7 @@ export class AuthorityStore {
    * from them again, and its viewers are told later.
    */
   private readonly cleared = new Map<string, TableKey[]>();
+  private commits = 0;
 
   constructor(
     private readonly definition: RuntimeDefinition,
@@ -175,6 +176,14 @@ export class AuthorityStore {
     const taken = new Map(this.cleared);
     this.cleared.clear();
     return taken;
+  }
+
+  /**
+   * How many transactions have changed something. A view read after the
+   * views take in every committed write is the rows as of this revision.
+   */
+  get revision(): number {
+    return this.commits;
   }
 
   get hasCleared(): boolean {
@@ -277,6 +286,7 @@ export class AuthorityStore {
       else this.timers.set(key, staged);
       changed = true;
     }
+    if (changed) this.commits += 1;
     return changed;
   }
 

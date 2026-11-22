@@ -74,6 +74,12 @@ export type AuthoritySessionState<C extends AuthorityContract> =
       /** Actions refused only for want of a verified identity. */
       needsIdentity: ReadonlySet<ActionName<C>>;
       queries: ReadonlySet<QueryName<C>>;
+      /**
+       * The app's commit revision the view reflects. An action's answer
+       * carries one, and once this has reached it the view shows the action
+       * and everything committed before the answer.
+       */
+      revision: number;
       /** The server's clock, for countdowns that ignore local skew. */
       serverNowMs(): number;
     };
@@ -353,6 +359,7 @@ export class AuthoritySession<C extends AuthorityContract> {
   private seq = 0;
   private incoming: { generation: number; frames: ReplaceFrame[] } | null = null;
   private rows: Rows = new Map();
+  private revision = 0;
   private clockOffsetMs = 0;
 
   constructor(
@@ -583,10 +590,12 @@ export class AuthoritySession<C extends AuthorityContract> {
     for (const ref of frame.remove) bucketOf(ref.bucket).delete(ref.key);
     for (const row of frame.put) bucketOf(row.bucket).set(row.key, row.value);
     this.rows = next;
+    if (frame.revision !== undefined) this.revision = frame.revision;
     if (this.state.kind === "ready") {
       this.setState({
         ...this.state,
         view: this.viewOf(next),
+        revision: this.revision,
         ...(frame.grants ? grantSets(frame.grants) : {}),
       });
     }
@@ -663,10 +672,12 @@ export class AuthoritySession<C extends AuthorityContract> {
     this.seq = 0;
     this.incoming = null;
     this.rows = rows;
+    this.revision = frames[0].revision ?? 0;
     this.failStreams();
     this.setState({
       kind: "ready",
       view: this.viewOf(rows),
+      revision: this.revision,
       ...grantSets(frames[0].grants),
       serverNowMs: () => this.serverNow(),
     });

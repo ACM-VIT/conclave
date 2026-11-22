@@ -26,6 +26,7 @@ import { getOrCreateWebinarRoomConfig } from "../../server/webinar.js";
 import type { ScheduledWebinar } from "../../types.js";
 import type { Router } from "mediasoup/types";
 import { Harness, person, type Tab } from "./harness.js";
+import { answer } from "./answer.js";
 import { pollsAuthority, pollsContract } from "./fixtures/polls.js";
 import { probeAuthority, probeContract } from "./fixtures/probe.js";
 import { qaAuthority, qaContract } from "./fixtures/qa.js";
@@ -128,7 +129,7 @@ describe("retries", () => {
     const retried = await priyaTab.actWith(operation, "vote", { pollId, optionIds: ["o1"] });
     await room.deliver();
 
-    expect([first, retried]).toEqual([
+    expect([first, retried].map(answer)).toEqual([
       { ok: true, value: null },
       { ok: true, value: null },
     ]);
@@ -230,7 +231,7 @@ describe("retries", () => {
       { pollId, shared: false },
     );
 
-    expect([full, replayed, afterExpiry]).toEqual([
+    expect([full, replayed, afterExpiry].map(answer)).toEqual([
       { ok: false, code: "capacity" },
       { ok: true, value: null },
       { ok: true, value: null },
@@ -261,7 +262,7 @@ describe("retries", () => {
     await room.deliver();
 
     expect(dropped).toBe(1);
-    expect(result).toEqual({ ok: true, value: null });
+    expect(answer(result)).toEqual({ ok: true, value: null });
     expect(field(hostTab.row("polls", pollId), "results", "voterCount")).toBe(1);
   });
 });
@@ -1072,7 +1073,7 @@ describe("bounds", () => {
 
     expect(oneAtATime).toEqual({ ok: false, code: "app-fault" });
     expect(stillThere).toBe(600);
-    expect(cleared).toEqual({ ok: true, value: { removed: 600 } });
+    expect(answer(cleared)).toEqual({ ok: true, value: { removed: 600 } });
     expect(await marks()).toBe(0);
     // Another parent's rows are not touched.
     expect(await hostTab.query("countMarks", { id: "b" })).toEqual({ ok: true, value: { count: 3 } });
@@ -1112,7 +1113,7 @@ describe("bounds", () => {
     const remarked = await hostTab.act("remark", { id: "a" });
     await room.deliver();
 
-    expect(remarked).toEqual({
+    expect(answer(remarked)).toEqual({
       ok: true,
       value: { removed: 5, leftAfterClear: 0, oldRowStillThere: false, leftAfterWrite: 1 },
     });
@@ -1194,7 +1195,7 @@ describe("bounds", () => {
     await room.deliver();
 
     expect(heldAfterOneFlush).toBe(150);
-    expect(replaced).toEqual({ ok: true, value: null });
+    expect(answer(replaced)).toEqual({ ok: true, value: null });
     expect(takenAtOnce).toEqual(["b", "b"]);
     // The late batches take the cleared note's slots, not the ones that replaced them.
     expect(raviTab.rows("slots").map((row) => field(row, "of"))).toEqual(Array(10).fill("b"));
@@ -2116,6 +2117,68 @@ describe("large views and slow sockets", () => {
   });
 });
 
+describe("revisions", () => {
+  it("answers an action with the room's revision, and tells a viewer who acted when their view reaches it, even when their changes cancelled out", async () => {
+    const room = new Harness([qaAuthority]);
+    const hostTab = await room.open(host, qaContract);
+    const asked = await hostTab.act("ask", { text: "Can we get the slides?" });
+    const id = field(asked.ok ? asked.value : null, "id") as string;
+    await room.deliver();
+    const tabA = await room.open(ravi, qaContract);
+    const tabB = await room.open(ravi, qaContract, { session: "ravi-2" });
+    const revisionOf = (tab: Tab): number =>
+      tab.state.kind === "ready" ? tab.state.revision : -1;
+    const fromA = tabA.frames.length;
+    const fromHost = hostTab.frames.length;
+    const operation = { issuedAtMs: Date.now(), nonce: "answer-lost-on-the-way-back" };
+
+    // Tab A upvotes. Its answer is lost on the way back.
+    const first = await tabA.actWith(operation, "upvote", { id, value: true });
+    const viewBeforeTheFlush = revisionOf(tabA);
+    // Tab B, the same person, takes the upvote back before any flush, so
+    // nothing in their view changes once both are counted.
+    const takenBack = await tabB.act("upvote", { id, value: false });
+    await room.deliver();
+    const toldA = tabA.frames.slice(fromA);
+    // Tab A sends the same operation again and is answered as before, with
+    // the room's revision as it is now.
+    const retried = await tabA.actWith(operation, "upvote", { id, value: true });
+    await room.deliver();
+    const revisionOfAnswer = (result: AuthorityResult<Json>): number =>
+      result.ok ? (result.revision ?? -1) : -1;
+
+    expect([first.ok, takenBack.ok, retried.ok]).toEqual([true, true, true]);
+    // The first answer is ahead of the view until the flush.
+    expect(revisionOfAnswer(first)).toBeGreaterThan(viewBeforeTheFlush);
+    expect(revisionOfAnswer(retried)).toBeGreaterThanOrEqual(revisionOfAnswer(takenBack));
+    // Nothing in tab A's view changed, and it was told how far it has come.
+    expect(toldA.map((frame) => frame.kind)).toEqual(["patch"]);
+    expect(patches(toldA).map((frame) => [frame.put, frame.remove])).toEqual([[[], []]]);
+    expect(patches(toldA)[0].revision).toBeGreaterThanOrEqual(revisionOfAnswer(retried));
+    expect(revisionOf(tabA)).toBeGreaterThanOrEqual(revisionOfAnswer(retried));
+    expect(revisionOf(tabB)).toBeGreaterThanOrEqual(revisionOfAnswer(retried));
+    expect(tabA.row("myUpvotes", id)).toBeNull();
+    // A viewer who did not act is sent no frame with nothing in it.
+    expect(hostTab.frames.slice(fromHost)).toEqual([]);
+  });
+
+  it("puts the revision a view reflects on every frame that carries rows", async () => {
+    const room = new Harness([probeAuthority]);
+    const hostTab = await room.open(host, probeContract);
+    await hostTab.act("put", { id: "a", text: "one" });
+    await room.deliver();
+    const raviTab = await room.open(ravi, probeContract);
+    await hostTab.act("put", { id: "b", text: "two" });
+    await room.deliver();
+
+    const replace = replaces(raviTab.frames)[0];
+    const patch = patches(raviTab.frames)[0];
+    expect(typeof replace.revision).toBe("number");
+    expect(patch.revision).toBeGreaterThan(replace.revision ?? Infinity);
+    expect(raviTab.state.kind === "ready" ? raviTab.state.revision : -1).toBe(patch.revision);
+  });
+});
+
 describe("timers", () => {
   it("runs timers in due order on the server clock", async () => {
     const room = new Harness([probeAuthority]);
@@ -2133,7 +2196,7 @@ describe("timers", () => {
     const afterFirst = hostTab.rows("fired");
     await room.advance(5_000);
 
-    expect(cancelled).toEqual({ ok: true, value: { cancelled: true } });
+    expect(answer(cancelled)).toEqual({ ok: true, value: { cancelled: true } });
     expect(none).toBe(0);
     expect(afterFirst).toEqual([{ label: "early", at: 1_001_000, order: 0 }]);
     expect(hostTab.rows("fired").map((row) => field(row, "label"))).toEqual([

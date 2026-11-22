@@ -79,6 +79,8 @@ type Subscription = {
   grantsSent: string;
   /** The room's policy changed, so what it may do is worked out again. */
   grantsDue: boolean;
+  /** The commit revision it was last told its view reflects. */
+  revisionSent: number;
   dropped: boolean;
 };
 
@@ -190,6 +192,8 @@ export class RoomAuthority {
   private readonly left = new Set<AuthorityInstance>();
   /** Apps whose viewers are due a word on what they may now do. */
   private readonly grantsDue = new Set<AuthorityInstance>();
+  /** Who has acted on each app since its last flush. */
+  private readonly acted = new Map<AuthorityInstance, Set<Subject>>();
   /** Streamed results waiting for their socket to catch up. */
   private readonly stalled = new Set<NodeJS.Timeout>();
   private wakeAt: number | null = null;
@@ -280,6 +284,7 @@ export class RoomAuthority {
       viewVersion: 0,
       grantsSent: "",
       grantsDue: false,
+      revisionSent: 0,
       dropped: false,
     };
     subscriptions.set(subscription.id, subscription);
@@ -299,15 +304,24 @@ export class RoomAuthority {
     const target = this.target(context, request);
     if (!target.ok) return target;
     const { subscription } = target;
-    const result = subscription.instance.act(
-      subscription.actor,
+    const { instance, actor } = subscription;
+    const result = instance.act(
+      actor,
       request.action,
       request.input,
       request.operation,
       this.now(),
     );
-    this.afterWrite(subscription.instance);
-    return result;
+    this.afterWrite(instance);
+    if (!result.ok) return result;
+    // The answer says how far a view must come to reflect it. Whoever acted
+    // is told at the next flush how far theirs has come, even if nothing in
+    // it changed, so that revision is always reached.
+    const acted = this.acted.get(instance);
+    if (acted) acted.add(actor.subject);
+    else this.acted.set(instance, new Set([actor.subject]));
+    this.scheduleFlush(false);
+    return { ...result, revision: instance.revision };
   }
 
   query(context: ConnectionContext, request: QueryRequest): QueryReply {
@@ -643,9 +657,17 @@ export class RoomAuthority {
       const changes = instance.flushViews(this.audiencesOf(instance));
       this.left.delete(instance);
       const grantsDue = this.grantsDue.delete(instance);
-      if (changes.shared.size === 0 && changes.personal.size === 0 && !grantsDue) {
+      const acted = this.acted.get(instance);
+      this.acted.delete(instance);
+      if (
+        changes.shared.size === 0 &&
+        changes.personal.size === 0 &&
+        !grantsDue &&
+        !acted
+      ) {
         continue;
       }
+      const revision = instance.revision;
       for (const subscription of [...subscriptions]) {
         // One whose snapshot is still in parts is caught up after its last
         // part, from what the parts carried. Nothing is held for it here.
@@ -661,7 +683,12 @@ export class RoomAuthority {
         const grants = subscription.grantsDue
           ? this.changedGrants(subscription)
           : undefined;
-        if (shared || personal || grants) {
+        // Someone who acted is told how far their view has come, even when
+        // what they did cancelled out and there is no row to send.
+        const owed =
+          acted?.has(subscription.actor.subject) === true &&
+          subscription.revisionSent < revision;
+        if (shared || personal || grants || owed) {
           this.sendPatch(subscription, shared, personal, grants);
         }
       }
@@ -721,6 +748,7 @@ export class RoomAuthority {
       return;
     }
     subscription.seq += 1;
+    subscription.revisionSent = subscription.instance.revision;
     this.emit(subscription, {
       kind: "patch",
       subscription: subscription.id,
@@ -729,6 +757,7 @@ export class RoomAuthority {
       seq: subscription.seq,
       put: [...(shared?.put ?? []), ...(personal?.put ?? [])],
       remove: [...(shared?.remove ?? []), ...(personal?.remove ?? [])],
+      revision: subscription.revisionSent,
       ...(grants ? { grants } : {}),
     });
   }
@@ -754,6 +783,7 @@ export class RoomAuthority {
 
     const { rows, version } = subscription.instance.snapshot(subscription.actor);
     subscription.viewVersion = version;
+    subscription.revisionSent = subscription.instance.revision;
     const bytes = rows.reduce((total, sized) => total + sized.bytes, 0);
     if (bytes > this.limits.snapshotBytes) {
       this.revoke(subscription, "too-large");
@@ -773,7 +803,7 @@ export class RoomAuthority {
         part: index,
         last: index === parts.length - 1,
         rows: part.map((sized) => sized.row),
-        ...(index === 0 ? { grants } : {}),
+        ...(index === 0 ? { grants, revision: subscription.revisionSent } : {}),
       }),
     );
     this.stats.replaces += 1;
@@ -845,7 +875,8 @@ export class RoomAuthority {
     const { ops, version } = subscription.instance.catchUp(subscription.actor, held);
     subscription.viewVersion = version;
     const grants = subscription.grantsDue ? this.changedGrants(subscription) : undefined;
-    if (ops.put.length === 0 && ops.remove.length === 0 && !grants) return;
+    const behind = subscription.revisionSent < subscription.instance.revision;
+    if (ops.put.length === 0 && ops.remove.length === 0 && !grants && !behind) return;
     this.sendPatch(subscription, ops, undefined, grants);
   }
 

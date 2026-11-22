@@ -17,6 +17,7 @@ import { key } from "@conclave/apps-sdk/authority/server";
 import { Client } from "../../config/classes/Client.js";
 import { DEFAULT_AUTHORITY_LIMITS } from "../../server/apps/authority/limits.js";
 import { AuthorityStore } from "../../server/apps/authority/store.js";
+import { answer } from "./answer.js";
 import { Harness, person } from "./harness.js";
 import { pollsAuthority, pollsContract } from "./fixtures/polls.js";
 import { probeAuthority, probeContract } from "./fixtures/probe.js";
@@ -51,7 +52,7 @@ describe("stored rows", () => {
     await room.deliver();
     const dumped = await hostTab.query("dump");
 
-    expect(result).toEqual({ ok: true, value: null });
+    expect(answer(result)).toEqual({ ok: true, value: null });
     expect(hostTab.row("notes", "a")).toEqual({ id: "a", text: "small" });
     expect(dumped.ok && field(dumped.value, "notes")).toEqual([
       { id: "a", text: "small", stars: 0 },
@@ -295,7 +296,7 @@ describe("repeats under rate pressure", () => {
     const retried = await priyaTab.actWith(operation, "vote", { pollId, optionIds: ["o1"] });
 
     expect(limited).toBe(true);
-    expect(retried).toEqual({ ok: true, value: null });
+    expect(answer(retried)).toEqual({ ok: true, value: null });
   });
 });
 
