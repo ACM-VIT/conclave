@@ -8220,14 +8220,14 @@ export function useMeetSocket({
               },
             );
 
+            // Back on setup, where an error banner never shows: a notice
+            // there says why, as it does for a denied request.
             socket.on("kicked", () => {
               forgetJoinedRoom();
+              setMeetError(null);
+              setMeetingEndedNotice?.("You were removed from this meeting.");
+              setWaitingMessage(null);
               cleanup();
-              setMeetError({
-                code: "UNKNOWN",
-                message: "You have been kicked from the meeting.",
-                recoverable: false,
-              });
             });
 
             socket.on(
