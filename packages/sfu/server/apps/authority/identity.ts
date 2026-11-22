@@ -3,6 +3,7 @@ import type { Subject } from "@conclave/apps-sdk/authority/server";
 import type { Client } from "../../../config/classes/Client.js";
 import type { Room } from "../../../config/classes/Room.js";
 import { isGuestUserKey } from "../../identity.js";
+import { getSocketAuthUser } from "../../socket/auth.js";
 
 export type ResolvedIdentity = {
   subject: Subject;
@@ -27,7 +28,26 @@ export type GuestPassProofSource = (
  */
 export const guestPassProofOf: GuestPassProofSource = () => undefined;
 
-type Cached = { userKey: string; proof: string | undefined; identity: ResolvedIdentity };
+/**
+ * Whether the join token says this seat is a signed-in account. The web join
+ * route signs an `email` claim only from an authenticated session, so its
+ * presence is the server's own word. A guest key always starts with
+ * `guest-`, but so can an account's email, so the prefix alone would turn
+ * `guest-services@example.com` into an unverified guest.
+ */
+export type AccountSource = (client: Client) => boolean;
+
+export const hasSignedInAccount: AccountSource = (client) => {
+  const email = getSocketAuthUser(client.socket)?.email;
+  return typeof email === "string" && email.trim().length > 0;
+};
+
+type Cached = {
+  userKey: string;
+  account: boolean;
+  proof: string | undefined;
+  identity: ResolvedIdentity;
+};
 
 /**
  * The one place a connection becomes a subject. Apps never see a user key,
@@ -45,29 +65,35 @@ export class IdentityAdapter {
 
   constructor(
     private readonly guestProofOf: GuestPassProofSource = guestPassProofOf,
+    private readonly isAccount: AccountSource = hasSignedInAccount,
   ) {}
 
   resolve(room: Room, client: Client): ResolvedIdentity | null {
     const userKey = room.userKeysById.get(client.id);
     if (!userKey) return null;
-    const proof = isGuestUserKey(userKey)
-      ? this.guestProofOf(room, userKey)
-      : undefined;
+    const account = !isGuestUserKey(userKey) || this.isAccount(client);
+    const proof = account ? undefined : this.guestProofOf(room, userKey);
     const cached = this.cache.get(client);
-    if (cached && cached.userKey === userKey && cached.proof === proof) {
+    if (
+      cached &&
+      cached.userKey === userKey &&
+      cached.account === account &&
+      cached.proof === proof
+    ) {
       return cached.identity;
     }
-    const identity = this.derive(userKey, proof, client.id);
-    this.cache.set(client, { userKey, proof, identity });
+    const identity = this.derive(userKey, account, proof, client.id);
+    this.cache.set(client, { userKey, account, proof, identity });
     return identity;
   }
 
   private derive(
     userKey: string,
+    account: boolean,
     proof: string | undefined,
     seatId: string,
   ): ResolvedIdentity {
-    if (!isGuestUserKey(userKey)) {
+    if (account) {
       return { subject: this.subject("account", userKey), verified: true };
     }
     if (proof) {

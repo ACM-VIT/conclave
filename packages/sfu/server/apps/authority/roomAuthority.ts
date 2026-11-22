@@ -319,16 +319,19 @@ export class RoomAuthority {
 
   close(): void {
     if (this.closed) return;
+    // Closing a room does not close its sockets. Tell each one that still
+    // holds a view to forget it, or it would keep showing the room's last
+    // state for as long as the tab stays open.
+    for (const subscriptions of [...this.bySocket.values()]) {
+      for (const subscription of [...subscriptions.values()]) {
+        this.revoke(subscription, "closed");
+      }
+    }
     this.closed = true;
     for (const timer of [this.flushTimer, this.sweepTimer, this.wakeTimer, this.lagTimer]) {
       if (timer) clearTimeout(timer);
     }
     this.flushTimer = this.sweepTimer = this.wakeTimer = this.lagTimer = null;
-    for (const subscriptions of this.bySocket.values()) {
-      for (const subscription of subscriptions.values()) {
-        subscription.dropped = true;
-      }
-    }
     this.bySocket.clear();
     this.byInstance.clear();
     this.watchers.clear();

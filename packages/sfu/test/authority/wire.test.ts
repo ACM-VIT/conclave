@@ -473,7 +473,10 @@ describe("authority transport on real sockets", () => {
     });
 
     expect(authority.isClosed).toBe(true);
-    expect(host.frames.slice(framesAtClose)).toEqual([]);
+    expect(host.frames.slice(framesAtClose)).toMatchObject([
+      { kind: "revoke", reason: "closed" },
+    ]);
+    expect(host.session.getState()).toEqual({ kind: "revoked", reason: "closed" });
     expect(afterClose).toEqual({ ok: false, code: "not-in-room" });
   });
 

@@ -22,6 +22,11 @@ export const probeContract = defineContract({
       receipt: s.null(),
     },
     remove: { input: s.object({ id: s.string({ min: 1, max: 64 }) }), receipt: s.null() },
+    putThenGrow: {
+      input: s.object({ id: s.string({ min: 1, max: 64 }) }),
+      receipt: s.null(),
+    },
+    star: { input: s.object({ id: s.string({ max: 64 }) }), receipt: s.null() },
     throwAfterWrite: { input: s.null(), receipt: s.null() },
     rejectAfterWrite: { input: s.null(), receipt: s.null() },
     mutateCommitted: { input: s.object({ id: s.string({ max: 64 }) }), receipt: s.null() },
@@ -39,16 +44,27 @@ export const probeContract = defineContract({
   queries: {
     dump: {
       input: s.null(),
-      output: s.object({ notes: s.array(note, { max: 10_000 }) }),
+      output: s.object({
+        notes: s.array(
+          s.object({
+            id: s.string({ max: 64 }),
+            text: s.string({ max: 20_000 }),
+            stars: s.int({ min: 0 }),
+          }),
+          { max: 10_000 },
+        ),
+      }),
     },
   },
   views: {
     notes: note,
+    /** Keyed by a note's text, so two notes with one text collide. */
+    byText: s.object({ id: s.string({ max: 64 }) }),
     fired: s.object({ label: s.string({ max: 64 }), at: s.number(), order: s.int() }),
   },
 });
 
-type Note = { id: string; text: string; secret?: string };
+type Note = { id: string; text: string; secret?: string; stars?: number[] };
 type Fired = { label: string; at: number; order: number };
 
 const RATE = { burst: 1_000, perSecond: 1_000 };
@@ -78,6 +94,31 @@ export const probeAuthority = defineAuthority({
       rate: RATE,
       run(_ctx, tx, input) {
         tx.delete("notes", key(input.id));
+        return null;
+      },
+    },
+    putThenGrow: {
+      roles: everyone,
+      identity: "any",
+      rate: RATE,
+      run(_ctx, tx, input) {
+        const row: Note = { id: input.id, text: "small", stars: [] };
+        tx.put("notes", key(input.id), row);
+        // Changing the object after it is staged must not reach the store.
+        row.text = "x".repeat(9 * 1024);
+        row.stars?.push(1, 2, 3);
+        return null;
+      },
+    },
+    star: {
+      roles: everyone,
+      identity: "any",
+      rate: RATE,
+      run(_ctx, tx, input) {
+        const row = tx.get("notes", key(input.id));
+        if (!row) return reject("not-found");
+        // A committed row is frozen all the way down.
+        (row.stars as number[]).push(1);
         return null;
       },
     },
@@ -145,7 +186,11 @@ export const probeAuthority = defineAuthority({
       rate: RATE,
       read(_ctx, db) {
         return {
-          notes: db.scan("notes").map(([, row]) => ({ id: row.id, text: row.text })),
+          notes: db.scan("notes").map(([, row]) => ({
+            id: row.id,
+            text: row.text,
+            stars: row.stars?.length ?? 0,
+          })),
         };
       },
     },
@@ -168,6 +213,11 @@ export const probeAuthority = defineAuthority({
           ? { id: row.id, text: row.text, secret: row.secret }
           : { id: row.id, text: row.text },
       }),
+    },
+    byText: {
+      kind: "shared",
+      source: "notes",
+      project: (row) => ({ key: row.text.slice(0, 64) || "empty", value: { id: row.id } }),
     },
     fired: {
       kind: "shared",

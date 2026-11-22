@@ -35,7 +35,11 @@ export const signUpContract = defineContract({
   },
   queries: {},
   views: {
-    entries: s.object({ name: s.string({ max: 200 }), joinedAt: s.number() }),
+    entries: s.object({
+      id: s.string({ max: 64 }),
+      name: s.string({ max: 200 }),
+      joinedAt: s.number(),
+    }),
     mine: s.object({}),
   },
 });
@@ -50,7 +54,7 @@ import {
   defineAuthority, key, reject, table, type Subject,
 } from "@conclave/apps-sdk/authority/server";
 
-type Entry = { subject: Subject; name: string; joinedAt: number };
+type Entry = { id: string; subject: Subject; name: string; joinedAt: number };
 
 export const signUpAuthority = defineAuthority({
   contract: signUpContract,
@@ -63,7 +67,10 @@ export const signUpAuthority = defineAuthority({
       rate: { burst: 5, perSecond: 1 },
       run(ctx, tx) {
         tx.insertIfAbsent("entries", key(ctx.subject), {
-          subject: ctx.subject, name: ctx.displayName, joinedAt: ctx.now,
+          id: ctx.nextId("e"),
+          subject: ctx.subject,
+          name: ctx.displayName,
+          joinedAt: ctx.now,
         });
         return null;
       },
@@ -77,8 +84,8 @@ export const signUpAuthority = defineAuthority({
       kind: "shared",
       source: "entries",
       project: (row) => ({
-        key: `${row.joinedAt}-${row.name}`,
-        value: { name: row.name, joinedAt: row.joinedAt },
+        key: row.id,
+        value: { id: row.id, name: row.name, joinedAt: row.joinedAt },
       }),
     },
     mine: {
@@ -109,6 +116,10 @@ Key the row by the subject and use `insertIfAbsent`. `key(pollId, ctx.subject)` 
 An action needs a verified subject by default. A signed-in participant has one. A guest has one once the guest pass vouches for them. A guest without a verified pass gets `identity-required`, and the renderer is told through `state.needsIdentity`, so it can say why.
 
 Set `identity: "any"` on an action whose rule does not rest on one-per-person, such as a host-only control.
+
+### Projected keys
+
+Each row a view projects needs its own key within its bucket. Use an id from `ctx.nextId()` stored on the row. If two rows project to one key, the runtime keeps the first and withholds the second.
 
 ### Cross-row data
 
