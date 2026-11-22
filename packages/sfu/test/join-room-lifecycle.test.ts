@@ -24,18 +24,19 @@ afterEach(() => {
 
 const makeSocket = (id: string, user: SfuAuthPayload = {}) => {
   const handlers = new Map<string, Handler>();
+  const emit = vi.fn();
   const socket = {
     id,
     data: { user },
     on: (event: string, handler: Handler) => handlers.set(event, handler),
-    emit: vi.fn(),
+    emit,
     disconnect: vi.fn(),
     connected: true,
     join: vi.fn(),
     leave: vi.fn(),
     to: () => ({ emit: vi.fn() }),
   } as unknown as Socket;
-  return { socket, handlers };
+  return { socket, handlers, emit };
 };
 
 const makeState = (workers: Worker[] = []): SfuState => {
@@ -91,11 +92,11 @@ describe("host roster on join", () => {
       clientId: "conclave",
       sessionId: "guest",
     });
-    expect(guest.peer.socket.emit).toHaveBeenCalledWith("hostChanged", {
+    expect(guest.peer.emit).toHaveBeenCalledWith("hostChanged", {
       roomId: room.id,
       hostUserId: host.id,
     });
-    expect(guest.peer.socket.emit).toHaveBeenCalledWith("adminUsersChanged", {
+    expect(guest.peer.emit).toHaveBeenCalledWith("adminUsersChanged", {
       roomId: room.id,
       hostUserIds: [host.id],
     });
