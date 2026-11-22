@@ -231,9 +231,10 @@ describe("what each event carries", () => {
   });
 
   it("keeps a chunk's path only when the build's manifest pairs its id with that file", async () => {
+    vi.stubEnv("NEXT_PUBLIC_CONCLAVE_CLIENT_VERSION", "0b2d3b480f4621392a4151d750c90965b7c8b76c");
     const manifest = { "147fc2df-e663-5d76-aa13-f67e1e894071": "/_next/static/chunks/3u-6_1om1fv26.js" };
     const fetchManifest = vi.fn(async (url: string) =>
-      url === "/_next/static/posthog-chunk-ids.json"
+      url === "/_next/static/posthog-chunk-ids/0b2d3b480f4621392a4151d750c90965b7c8b76c.json"
         ? new Response(JSON.stringify(manifest), { status: 200 })
         : new Response("{}", { status: 404 }),
     );

@@ -86,8 +86,19 @@ export type EventOrigin = {
   chunkFiles?: ReadonlyMap<string, string>;
 };
 
-/** Where the build serves its chunk manifest (scripts/posthog-chunk-manifest.mjs). */
-export const CHUNK_MANIFEST_URL = "/_next/static/posthog-chunk-ids.json";
+// A build's version is the git sha it was built from (next.config.ts).
+const BUILD_VERSION = /^[0-9a-f]{7,40}$/;
+
+/** Whether a value is a build's version, which names its chunk manifest. */
+export const isBuildVersion = (value: unknown): value is string =>
+  typeof value === "string" && BUILD_VERSION.test(value);
+
+/**
+ * Where a build serves its own chunk manifest (scripts/posthog-chunk-manifest.mjs),
+ * or null for a version that is not a build's.
+ */
+export const chunkManifestUrl = (version: unknown): string | null =>
+  isBuildVersion(version) ? `/_next/static/posthog-chunk-ids/${version}.json` : null;
 
 const ChunkManifest = z.record(
   z.uuid(),

@@ -112,7 +112,11 @@ The browser sends its events to `/ingest` on our own site (`app/ingest/[...path]
 endpoint (`/ingest/e/`) as a POST of at most 256 KB, 1 MB once decoded, and 200
 events. It decodes the body (gzip, base64 or JSON), drops events for any project
 but ours, and scrubs every event again with the rules below, so the browser's
-scrub is not the only guard. It forwards the batch to PostHog as plain JSON with
+scrub is not the only guard. Chunk paths are checked against the manifest of
+the build the event came from (its `client_version`), fetched from our static
+files with `?dpl=<build>` and kept for 10 minutes, so a tab still running an
+older build is not judged by the newest one; a build whose manifest cannot be
+found keeps no chunk path or id. It forwards the batch to PostHog as plain JSON with
 the fixed User-Agent `conclave-web-ingest/1` and no header of the browser's: no
 cookie, no IP address and no forwarded or referrer header reaches PostHog. If
 PostHog fails, the browser is told to retry (503).
@@ -148,8 +152,9 @@ trust, instead of scrubbing what looks bad:
   for a script on the page's own origin that is one of the exact files under
   `public/` (a test keeps that list equal to the folder), or a build chunk
   whose frame carries a chunk id the build's manifest maps to that very file.
-  `cf:build` writes the manifest (`/_next/static/posthog-chunk-ids.json`) right
-  after `posthog-cli sourcemap inject`, and the page loads it at startup. An id
+  `cf:build` writes each build's manifest at
+  `/_next/static/posthog-chunk-ids/<build>.json` (the build's git sha) right
+  after `posthog-cli sourcemap inject`, and the page loads its own at startup. An id
   the build never produced, or a real id on another file, proves nothing, so
   until the manifest loads, and in a build without one, chunk frames are
   `[path]`. A frame from another scheme keeps only the scheme.

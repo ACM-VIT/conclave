@@ -3,7 +3,7 @@
 import type { PostHog } from "posthog-js";
 import { installCallErrorCapture } from "./call-error-capture";
 import {
-  CHUNK_MANIFEST_URL,
+  chunkManifestUrl,
   isStoredProperty,
   parseChunkManifest,
   scrubTelemetryEvent,
@@ -57,13 +57,15 @@ const storedKeys = (client: PostHog): Set<string> =>
 // merged into the event. An event the SDK raised itself has none.
 let emitting: TelemetryProps | null = null;
 
-// The build's chunk ids by file. Until it loads, and in a build with no
+// This build's chunk ids by file. Until it loads, and in a build with no
 // injected chunks, chunk frames keep no path.
 let chunkFiles: ReadonlyMap<string, string> = new Map();
 
 const loadChunkManifest = async (): Promise<void> => {
+  const url = chunkManifestUrl(clientVersion);
+  if (!url) return;
   try {
-    const response = await fetch(CHUNK_MANIFEST_URL, { cache: "no-store" });
+    const response = await fetch(url, { cache: "no-store" });
     if (response.ok) chunkFiles = parseChunkManifest(await response.json());
   } catch {}
 };

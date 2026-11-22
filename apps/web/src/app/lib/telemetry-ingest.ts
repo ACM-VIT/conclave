@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { scrubTelemetryEvent } from "./telemetry-privacy";
+import {
+  chunkManifestUrl,
+  isBuildVersion,
+  parseChunkManifest,
+  scrubTelemetryEvent,
+} from "./telemetry-privacy";
 
 /**
  * The browser's PostHog traffic goes through /ingest on our own site, so the
@@ -23,8 +28,11 @@ export type IngestDeps = {
   ingestHost: string;
   /** Our project key: events for any other project are not relayed. */
   projectKey: string;
-  /** The build's chunk ids by file (see telemetry-privacy's chunk manifest). */
-  chunkFiles: () => Promise<ReadonlyMap<string, string>>;
+  /**
+   * The chunk manifest of the build an event came from, by its version (the
+   * event's client_version), or an empty one when it is not known.
+   */
+  chunkFiles: (version: string | null) => Promise<ReadonlyMap<string, string>>;
 };
 
 const CapturedEvent = z.object({
@@ -44,7 +52,6 @@ const CaptureBody = z.union([
   CapturedEvent,
 ]);
 
-const CLIENT_VERSION = /^[0-9a-f]{7,40}$/;
 
 class Refused extends Error {
   constructor(readonly status: number) {
@@ -118,10 +125,14 @@ const decodeBody = async (request: Request, url: URL): Promise<unknown> => {
   }
 };
 
+/** The build an event came from, when its client_version names one. */
+const buildOf = (event: CapturedEvent): string | null =>
+  isBuildVersion(event.properties.client_version) ? event.properties.client_version : null;
+
 /**
  * One event scrubbed again on our side: our fields are the event's own (the
  * browser already took them from the capture's payload), nothing counts as
- * stored, and chunk paths need the build's manifest here too.
+ * stored, and chunk paths need the manifest of the event's own build.
  */
 const scrubForwarded = (
   event: CapturedEvent,
@@ -133,10 +144,7 @@ const scrubForwarded = (
       ([key]) => !key.startsWith("$") && key !== "token" && key !== "distinct_id" && key !== "client_version",
     ),
   );
-  const clientVersion =
-    typeof properties.client_version === "string" && CLIENT_VERSION.test(properties.client_version)
-      ? properties.client_version
-      : undefined;
+  const clientVersion = buildOf(event) ?? undefined;
   const scrubbed = scrubTelemetryEvent(
     { uuid: event.uuid ?? "", event: event.event, properties },
     { payload, storedKeys: new Set(), clientVersion, chunkFiles },
@@ -175,10 +183,15 @@ export async function forwardCapture(
     const events = Array.isArray(body) ? body : "batch" in body ? body.batch : [body];
     const ours = events.filter((event) => event.properties.token === deps.projectKey);
     if (ours.length === 0) return reply(400);
-    const chunkFiles = await deps.chunkFiles();
+    // A tab can still run an older build than the one deployed, so each event
+    // is checked against the manifest of the build it came from.
+    const builds = [...new Set(ours.map(buildOf))];
+    const manifests = new Map(
+      await Promise.all(builds.map(async (build) => [build, await deps.chunkFiles(build)] as const)),
+    );
     const forwarded = {
       api_key: deps.projectKey,
-      batch: ours.map((event) => scrubForwarded(event, chunkFiles)),
+      batch: ours.map((event) => scrubForwarded(event, manifests.get(buildOf(event)) ?? new Map())),
       ...(!Array.isArray(body) && "sent_at" in body && body.sent_at ? { sent_at: body.sent_at } : {}),
     };
     const upstream = await deps.fetch(`${deps.ingestHost.replace(/\/$/, "")}/e/`, {
@@ -192,4 +205,44 @@ export async function forwardCapture(
   } catch (error) {
     return reply(error instanceof Refused ? error.status : 503);
   }
+}
+
+const MANIFEST_TTL_MS = 10 * 60_000;
+const MISSING_MANIFEST_TTL_MS = 60_000;
+const MAX_MANIFESTS = 16;
+
+/**
+ * Loads a build's chunk manifest from our own static files, by the build's
+ * version, and keeps it for a while; an older build's tabs report against
+ * their own manifest, which `dpl` (the build's deployment id) can reach while
+ * that build is still served. A manifest it cannot find or read counts as
+ * empty, so those frames keep no path or chunk id.
+ */
+export function createChunkManifestLoader({
+  origin,
+  fetch,
+  now = Date.now,
+}: {
+  origin: string;
+  fetch: (url: string, init?: RequestInit) => Promise<Response>;
+  now?: () => number;
+}): (version: string | null) => Promise<ReadonlyMap<string, string>> {
+  const known = new Map<string, { files: ReadonlyMap<string, string>; until: number }>();
+  return async (version) => {
+    const url = chunkManifestUrl(version);
+    if (!url || !version) return new Map();
+    const cached = known.get(version);
+    if (cached && cached.until > now()) return cached.files;
+    let files: ReadonlyMap<string, string> = new Map();
+    try {
+      const response = await fetch(`${origin}${url}?dpl=${version}`, {
+        headers: { "user-agent": INGEST_USER_AGENT },
+      });
+      if (response.ok) files = parseChunkManifest(await response.json());
+    } catch {}
+    known.delete(version);
+    if (known.size >= MAX_MANIFESTS) known.delete(known.keys().next().value as string);
+    known.set(version, { files, until: now() + (files.size > 0 ? MANIFEST_TTL_MS : MISSING_MANIFEST_TTL_MS) });
+    return files;
+  };
 }

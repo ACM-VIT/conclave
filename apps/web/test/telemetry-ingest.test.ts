@@ -1,10 +1,16 @@
 import { gzipSync } from "node:zlib";
 import { describe, expect, it, vi } from "vitest";
-import { forwardCapture, INGEST_USER_AGENT, type IngestDeps } from "../src/app/lib/telemetry-ingest";
+import {
+  createChunkManifestLoader,
+  forwardCapture,
+  INGEST_USER_AGENT,
+  type IngestDeps,
+} from "../src/app/lib/telemetry-ingest";
 
 const KEY = "phc_test_project";
 const UUID = "0196f0a1-0000-7000-8000-000000000000";
 const CHUNK_ID = "147fc2df-e663-5d76-aa13-f67e1e894071";
+const BUILD = "0b2d3b480f4621392a4151d750c90965b7c8b76c";
 
 // An event as the browser sends it, with what a modified or buggy client might add.
 const event = (properties: Record<string, unknown> = {}) => ({
@@ -51,7 +57,8 @@ const forward = async (request: Request, path = ["e"], deps: Partial<IngestDeps>
     },
     ingestHost: "https://eu.i.posthog.com",
     projectKey: KEY,
-    chunkFiles: async () => new Map([[CHUNK_ID, "/_next/static/chunks/3u-6_1om1fv26.js"]]),
+    chunkFiles: async (version) =>
+      new Map(version === BUILD ? [[CHUNK_ID, "/_next/static/chunks/3u-6_1om1fv26.js"]] : []),
     ...deps,
   });
   return { response, upstream };
@@ -145,6 +152,65 @@ describe("forwardCapture", () => {
     expect((await forward(post(json, "application/json"), ["e"], { fetch: offline })).response.status).toBe(503);
   });
 
+  it("checks each event's chunks against its own build's manifest, after a newer build is live", async () => {
+    const releaseA = "aaaaaaa1111111111111111111111111111111aa";
+    const releaseB = "bbbbbbb2222222222222222222222222222222bb";
+    const idA = "0196f0a1-0000-7000-8000-00000000a001";
+    const idB = "0196f0a1-0000-7000-8000-00000000b001";
+    const manifests = new Map([
+      [releaseA, new Map([[idA, "/_next/static/chunks/0aaaaaaaaaaaa.js"]])],
+      [releaseB, new Map([[idB, "/_next/static/chunks/0bbbbbbbbbbbb.js"]])],
+    ]);
+    const requested: Array<string | null> = [];
+    const exceptionFrom = (release: string | undefined, id: string, file: string) => ({
+      event: "$exception",
+      properties: {
+        token: KEY,
+        distinct_id: UUID,
+        ...(release ? { client_version: release } : {}),
+        $current_url: "https://conclave.acmvit.in/[code]",
+        $exception_list: [
+          {
+            type: "Error",
+            value: "x",
+            stacktrace: { type: "raw", frames: [{ filename: `https://conclave.acmvit.in${file}`, lineno: 1, chunk_id: id }] },
+          },
+        ],
+      },
+    });
+    const batch = [
+      exceptionFrom(releaseA, idA, "/_next/static/chunks/0aaaaaaaaaaaa.js"),
+      exceptionFrom(releaseB, idB, "/_next/static/chunks/0bbbbbbbbbbbb.js"),
+      exceptionFrom(releaseA, idB, "/_next/static/chunks/0bbbbbbbbbbbb.js"),
+      exceptionFrom("ccccccc3333333333333333333333333333333cc", idA, "/_next/static/chunks/0aaaaaaaaaaaa.js"),
+      exceptionFrom(undefined, idA, "/_next/static/chunks/0aaaaaaaaaaaa.js"),
+    ];
+    const { upstream } = await forward(post(JSON.stringify(captureBody(batch)), "application/json"), ["e"], {
+      chunkFiles: async (version) => {
+        requested.push(version);
+        return manifests.get(version ?? "") ?? new Map();
+      },
+    });
+
+    const frames = sentBody(upstream).batch.map(
+      (event) => (event.properties as { $exception_list: Array<{ stacktrace: { frames: Array<{ filename: string; chunk_id?: string }> } }> })
+        .$exception_list[0].stacktrace.frames[0],
+    );
+    expect(frames).toEqual([
+      expect.objectContaining({ filename: "https://conclave.acmvit.in/_next/static/chunks/0aaaaaaaaaaaa.js", chunk_id: idA }),
+      expect.objectContaining({ filename: "https://conclave.acmvit.in/_next/static/chunks/0bbbbbbbbbbbb.js", chunk_id: idB }),
+      expect.not.objectContaining({ chunk_id: expect.anything() }),
+      expect.not.objectContaining({ chunk_id: expect.anything() }),
+      expect.not.objectContaining({ chunk_id: expect.anything() }),
+    ]);
+    expect(frames.slice(2).map((frame) => frame.filename)).toEqual([
+      "https://conclave.acmvit.in/[path]",
+      "https://conclave.acmvit.in/[path]",
+      "https://conclave.acmvit.in/[path]",
+    ]);
+    expect(new Set(requested)).toEqual(new Set([releaseA, releaseB, "ccccccc3333333333333333333333333333333cc", null]));
+  });
+
   it("checks chunk paths against the build's manifest and leaves a scrubbed event as it was", async () => {
     const chunk = "https://conclave.acmvit.in/_next/static/chunks/3u-6_1om1fv26.js";
     const exception = {
@@ -153,6 +219,7 @@ describe("forwardCapture", () => {
       properties: {
         token: KEY,
         distinct_id: UUID,
+        client_version: BUILD,
         $current_url: "https://conclave.acmvit.in/[code]",
         $exception_list: [
           {
@@ -178,5 +245,43 @@ describe("forwardCapture", () => {
     expect(frames.map((frame) => frame.filename)).toEqual([chunk, "https://conclave.acmvit.in/[path]", "https://conclave.acmvit.in/[path]"]);
     expect({ ...sent.properties, $exception_list: undefined }).toEqual({ ...exception.properties, $exception_list: undefined });
     expect(frames[0]).toEqual(exception.properties.$exception_list[0].stacktrace.frames[0]);
+  });
+});
+
+describe("createChunkManifestLoader", () => {
+  const manifest = { [CHUNK_ID]: "/_next/static/chunks/3u-6_1om1fv26.js" };
+
+  it("fetches a build's own manifest once, by its id, and keeps it", async () => {
+    const urls: string[] = [];
+    const load = createChunkManifestLoader({
+      origin: "https://conclave.acmvit.in",
+      fetch: async (url) => {
+        urls.push(url);
+        return new Response(JSON.stringify(manifest), { status: 200 });
+      },
+    });
+
+    expect([...(await load(BUILD))]).toEqual([[CHUNK_ID, "/_next/static/chunks/3u-6_1om1fv26.js"]]);
+    await load(BUILD);
+    expect(urls).toEqual([`https://conclave.acmvit.in/_next/static/posthog-chunk-ids/${BUILD}.json?dpl=${BUILD}`]);
+  });
+
+  it("trusts no manifest it cannot find, and fetches nothing for an id that is not a build's", async () => {
+    const urls: string[] = [];
+    const load = createChunkManifestLoader({
+      origin: "https://conclave.acmvit.in",
+      fetch: async (url) => {
+        urls.push(url);
+        if (url.includes("deadbee")) throw new TypeError("fetch failed");
+        return new Response("not found", { status: 404 });
+      },
+    });
+
+    expect([...(await load(BUILD))]).toEqual([]);
+    expect([...(await load("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"))]).toEqual([]);
+    expect([...(await load(null))]).toEqual([]);
+    expect([...(await load("../../secrets"))]).toEqual([]);
+    expect([...(await load("local"))]).toEqual([]);
+    expect(urls).toHaveLength(2);
   });
 });

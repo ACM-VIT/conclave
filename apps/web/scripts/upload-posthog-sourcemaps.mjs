@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { readdir, rm } from "node:fs/promises";
 import path from "node:path";
 import nextEnv from "@next/env";
-import { writeChunkManifest } from "./posthog-chunk-manifest.mjs";
+import { readBuildVersion, writeChunkManifest } from "./posthog-chunk-manifest.mjs";
 import { groupAlive, signalGroup } from "./process-group.mjs";
 
 // Runs after the OpenNext build, on the exact files wrangler deploys:
@@ -118,8 +118,13 @@ const upload = async () => {
   }
   const release = ["--release-name", "conclave-web"];
   await posthogCli(["sourcemap", "inject", "--directory", staticDir, ...release]);
-  const manifest = await writeChunkManifest(staticDir);
-  console.log(`[sourcemaps] chunk manifest lists ${Object.keys(manifest).length} injected chunks`);
+  const version = await readBuildVersion(path.join(process.cwd(), ".next"));
+  const manifest = await writeChunkManifest(staticDir, version);
+  console.log(
+    manifest
+      ? `[sourcemaps] chunk manifest for ${version} lists ${Object.keys(manifest).length} injected chunks`
+      : `[sourcemaps] no chunk manifest: build version ${version ?? "unknown"} is not a git sha`,
+  );
   await posthogCli([
     "sourcemap",
     "upload",
