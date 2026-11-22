@@ -8,7 +8,7 @@ IST to Azure Blob Storage in another region.
 
 | Data | Where it lives | How it is copied |
 | --- | --- | --- |
-| Scheduled meetings, scheduling, webinars | `*.sqlite` in the state dir (`/var/lib/conclave/recordings`, the SFU volume) | SQLite online backup (`.backup`), then `PRAGMA integrity_check` |
+| Scheduled meetings, scheduling, webinars | Every `*.sqlite` under the state dir (`/var/lib/conclave/recordings`, the SFU volume), at any depth | SQLite online backup (`.backup`), then `PRAGMA integrity_check`. Each keeps its path below the state dir. |
 | Scheduled meetings and scheduling (Redis mode) | Host Redis, keys `conclave:sfu:persistence*` | `redis-cli --rdb`: the server forks a fresh snapshot, the same way `BGSAVE` does, and streams it |
 | Anything else in the state dir | JSON stores and similar files | `tar` |
 
@@ -80,7 +80,7 @@ Install on the VM (through `az vm run-command invoke ... --scripts @file.sh`,
 as root):
 
 ```bash
-apt-get update && apt-get install -y age sqlite3 redis-tools
+apt-get update && apt-get install -y age sqlite3 redis-tools psmisc
 install -d -m 0700 /etc/conclave /var/backups/conclave
 echo "age1...your public key..." > /etc/conclave/backup-recipients.txt
 R=/home/azureuser/repos/conclave
@@ -93,9 +93,12 @@ systemctl enable --now conclave-backup.timer
 systemctl list-timers conclave-backup.timer
 ```
 
-Check that `CONCLAVE_SQLITE_PATH` in the repo `.env` (if set) points inside
-the state dir. A path outside the volume lives inside the container and is
-lost on every deploy.
+`CONCLAVE_SQLITE_PATH` in the repo `.env` (if set) must point inside the
+state dir. A path outside the volume lives inside the container and is lost on
+every deploy, so the backup fails until it is moved.
+
+If the upload fails, the encrypted archive stays in `/var/backups/conclave`,
+the job fails, and the heartbeat is not sent.
 
 For alerts on a missed night, create a free healthchecks.io check with a
 1-day period and put its ping URL in `BACKUP_HEARTBEAT_URL`.
@@ -117,8 +120,14 @@ To apply it:
 1. Stop new work: drain both SFUs and wait for 0 rooms, as the deploy does.
 2. `cd $R && docker compose -f docker-compose.sfu.yml stop sfu-a sfu-b`
 3. `sudo $R/scripts/backup/restore.sh --identity /root/conclave-backup.key --latest --yes`
-   The current databases are kept as `*.pre-restore-<stamp>`. Redis gets back
-   only the `conclave:sfu:persistence*` keys (`--redis-pattern '*'` for all).
+   It refuses while an SFU answers or any process holds a database open. The
+   current databases are kept as `*.pre-restore-<stamp>`. The Redis keys
+   matching `conclave:sfu:persistence*` end up exactly as in the backup: those
+   it has are restored, and those it lacks are deleted, so a meeting created
+   after the backup cannot outlive the restore. Other keys, such as room
+   leases, are left alone. `--redis-pattern '*'` makes the whole database match
+   the backup. A TLS (`rediss://`) Redis is refused before anything changes;
+   use `--only sqlite,files` there.
 4. `docker compose -f docker-compose.sfu.yml up -d sfu-a sfu-b`
 5. Check the scheduled meetings and webinars, then `shred -u /root/conclave-backup.key`.
 
