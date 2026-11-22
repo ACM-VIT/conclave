@@ -172,7 +172,9 @@ const roundWithin = (sizes: number[], low: number[], high: number[], total: numb
   const pixels = sizes.map((size, index) =>
     Math.min(Math.max(Math.floor(size), low[index]), high[index]),
   );
-  for (let left = total - sum(pixels); left !== 0; ) {
+  // Flooring leaves at most a couple of px per tile to move, and each pass
+  // moves at least one; the cap only matters when pixels outgrow float steps.
+  for (let left = total - sum(pixels), pass = 0; left !== 0 && pass < 4 * sizes.length + 4; pass += 1) {
     const grow = left > 0;
     const movable = pixels
       .map((pixel, index) => ({ index, remainder: sizes[index] - pixel }))
@@ -215,7 +217,9 @@ const fillToward = (weights: number[], sizes: number[], limits: number[], amount
   const room = (index: number) => (limits[index] - sizes[index]) * direction;
   let left = Math.abs(amount);
   let open = sizes.flatMap((_, index) => (room(index) > ASPECT_EPSILON ? [index] : []));
-  while (left > ASPECT_EPSILON && open.length > 0) {
+  // Each pass fills at least one tile or the whole amount, so this many passes
+  // always suffice; the bound only matters when float precision runs out.
+  for (let pass = 0; pass <= sizes.length && left > ASPECT_EPSILON && open.length > 0; pass += 1) {
     const base = sum(open.map((index) => weights[index]));
     const step = Math.min(left / base, ...open.map((index) => room(index) / weights[index]));
     open.forEach((index) => {

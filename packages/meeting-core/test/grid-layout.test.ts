@@ -609,7 +609,7 @@ describe("computeGridLayout — mixed rows, random layouts", () => {
       );
     return {
       natural: span((natural) => natural),
-      low: span((natural) => Math.ceil(natural / 1.25)),
+      low: span((natural) => Math.min(Math.ceil(natural / 1.25), Math.floor(natural))),
       high: span((natural) => Math.floor(natural * 1.25)),
     };
   };
@@ -728,6 +728,12 @@ describe("computeGridLayout — mixed rows, random layouts", () => {
     expect(jumps).toEqual([]);
     expect(compared).toBeGreaterThan(40000);
   }, 30_000);
+
+  it("returns for a container far larger than any screen", () => {
+    const r = computeGridLayout(4, 2 ** 54, 2 ** 53, { tileAspects: [PORTRAIT, PORTRAIT, PORTRAIT, LANDSCAPE] });
+
+    expect(r.positions).toHaveLength(4);
+  });
 
   it("returns finite, non-negative rects for tiny containers", () => {
     const tiny = seededRandom(30);
