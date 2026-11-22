@@ -9775,57 +9775,52 @@ export function useVideoEffects({
       }
       return false;
     };
-    const ingestRoomTilingMetadataFromDom = () => {
-      const context = readRoomTilingPolicyContextFromDom();
-      if (context) {
-        roomTilingPolicyContextRef.current = context;
-        return true;
-      }
-      return false;
-    };
     const windowWithRoomTiling = window as Window & {
       __conclaveGetMeetRoomTilingDebug?: () => { current?: unknown };
     };
-    try {
-      const ingestedDebugMetadata = ingestRoomTilingMetadata(
-        windowWithRoomTiling.__conclaveGetMeetRoomTilingDebug?.().current,
-      );
-      if (!ingestedDebugMetadata) {
-        ingestRoomTilingMetadataFromDom();
+    const refreshRoomTilingMetadata = () => {
+      try {
+        if (
+          ingestRoomTilingMetadata(
+            windowWithRoomTiling.__conclaveGetMeetRoomTilingDebug?.().current,
+          )
+        ) {
+          return;
+        }
+      } catch {}
+      const context = readRoomTilingPolicyContextFromDom();
+      if (context) {
+        roomTilingPolicyContextRef.current = context;
       }
-    } catch {
-      ingestRoomTilingMetadataFromDom();
-    }
+    };
+    refreshRoomTilingMetadata();
     const handleRoomTiling = (event: Event) => {
       if (!ingestRoomTilingMetadata((event as CustomEvent<unknown>).detail)) {
-        ingestRoomTilingMetadataFromDom();
+        refreshRoomTilingMetadata();
       }
     };
-    const handleViewportRoomTilingUpdate = () => {
-      ingestRoomTilingMetadataFromDom();
-    };
     window.addEventListener("conclave:meet-room-tiling", handleRoomTiling);
-    window.addEventListener("resize", handleViewportRoomTilingUpdate);
-    window.addEventListener("orientationchange", handleViewportRoomTilingUpdate);
+    window.addEventListener("resize", refreshRoomTilingMetadata);
+    window.addEventListener("orientationchange", refreshRoomTilingMetadata);
     window.visualViewport?.addEventListener(
       "resize",
-      handleViewportRoomTilingUpdate,
+      refreshRoomTilingMetadata,
     );
     const fallbackInterval = window.setInterval(
-      ingestRoomTilingMetadataFromDom,
+      refreshRoomTilingMetadata,
       1000,
     );
     return () => {
       window.clearInterval(fallbackInterval);
       window.removeEventListener("conclave:meet-room-tiling", handleRoomTiling);
-      window.removeEventListener("resize", handleViewportRoomTilingUpdate);
+      window.removeEventListener("resize", refreshRoomTilingMetadata);
       window.removeEventListener(
         "orientationchange",
-        handleViewportRoomTilingUpdate,
+        refreshRoomTilingMetadata,
       );
       window.visualViewport?.removeEventListener(
         "resize",
-        handleViewportRoomTilingUpdate,
+        refreshRoomTilingMetadata,
       );
     };
   }, []);

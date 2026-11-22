@@ -23,11 +23,11 @@ describe("Socket.IO Redis publisher", () => {
     client.publish.mockImplementation(() => new Promise(() => {}));
     const sends = Array.from({ length: 1000 }, () => guard.client.publish("room", "packet"));
     expect(client.publish).toHaveBeenCalledTimes(4);
-    expect(guard.health()).toMatchObject({ pending: 4, dropped: 996, healthy: false });
+    expect(guard.health()).toMatchObject({ pending: 4, dropped: 996, healthy: true });
     expect(onFailure).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(100);
     expect(await Promise.all(sends)).toEqual(Array(1000).fill(0));
-    expect(guard.health()).toMatchObject({ pending: 0, pendingBytes: 0, recovering: true });
+    expect(guard.health()).toMatchObject({ pending: 0, pendingBytes: 0, recovering: true, healthy: false });
     expect(client.destroy).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(250);
     expect(client.connect).toHaveBeenCalledTimes(1);

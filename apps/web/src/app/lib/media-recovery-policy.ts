@@ -178,3 +178,15 @@ export const shouldReopenCameraAfterConstraintFailure = ({
     );
   });
 };
+
+/**
+ * The SFU no longer has this producer, so consuming it can never succeed.
+ * Servers that predate the error code are recognised by their message.
+ */
+export const isProducerGoneConsumeError = (response: {
+  error: string;
+  code?: string;
+}): boolean =>
+  response.code === "producer_not_found" ||
+  (response.code === undefined &&
+    response.error.trim().toLowerCase() === "producer not found");
