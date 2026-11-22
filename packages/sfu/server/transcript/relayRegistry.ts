@@ -155,13 +155,6 @@ export const createTranscriptRelayRegistry = (options: {
           settle = resolve;
         }),
       );
-      const finish = (
-        response: TranscriptSfuRelayStartResponse,
-      ): TranscriptSfuRelayStartResponse => {
-        startsInFlight.delete(relay);
-        settle(response);
-        return response;
-      };
       const failure = (reason: string): TranscriptSfuRelayStartResponse => ({
         mode: "sfu",
         success: false,
@@ -171,6 +164,21 @@ export const createTranscriptRelayRegistry = (options: {
       });
       const isOpen = (candidate: TranscriptRelayInstance): boolean =>
         opened.get(key)?.has(candidate) === true;
+      // The outcome is decided as it is returned: a success stands only if
+      // the room's relay is open right now, since a stop can land while this
+      // start is still settling.
+      const finish = (
+        response: TranscriptSfuRelayStartResponse,
+      ): TranscriptSfuRelayStartResponse => {
+        const current = relays.get(key);
+        const settled =
+          response.success && !(current && isOpen(current))
+            ? failure("No SFU transcript relay is running for this room.")
+            : response;
+        startsInFlight.delete(relay);
+        settle(settled);
+        return settled;
+      };
       // Report success only while a relay really runs. When a newer start
       // took the room, wait for it to settle: it either runs, so the room has
       // a relay, or it fails and hands the room back to this one, which

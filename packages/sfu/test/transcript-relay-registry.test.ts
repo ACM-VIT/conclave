@@ -698,3 +698,52 @@ describe("a start reports success only while a relay runs", () => {
     registry.closeAll();
   });
 });
+
+describe("a start's outcome is decided when it is returned", () => {
+  it("fails an overtaken start when a room stop closes the winner before the start returns", async () => {
+    const relays: { ready: () => void; rejectClosed: () => void; open: boolean }[] = [];
+    const registry = createTranscriptRelayRegistry({
+      enabled: true,
+      createRelay: () => {
+        let ready!: () => void;
+        let rejectClosed!: () => void;
+        const started = new Promise<void>((resolve, reject) => {
+          ready = resolve;
+          rejectClosed = () => reject(new Error("Transcript SFU relay was closed before it started."));
+        });
+        const relay = { ready, rejectClosed, open: true };
+        relays.push(relay);
+        return {
+          controllerUserId: "host",
+          start: () => started,
+          prepareHandoff: async () => true,
+          syncProducers: async () => {},
+          close: () => {
+            relay.open = false;
+          },
+        };
+      },
+    });
+    const start = () =>
+      registry.start({
+        room,
+        workerUrl: "http://worker.test",
+        workerToken: "token",
+        controllerUserId: "host",
+        controllerDisplayName: "Host",
+        canReplaceExistingRelay: true,
+      });
+    const older = start();
+    const newer = start();
+    relays[1].ready();
+    expect((await newer).success).toBe(true);
+    expect(relays[0].open).toBe(false);
+
+    relays[0].rejectClosed();
+    queueMicrotask(() => registry.stopRoom(room.channelId));
+    const result = await older;
+
+    expect(relays.some(({ open }) => open)).toBe(false);
+    expect(result.success).toBe(false);
+  });
+});
