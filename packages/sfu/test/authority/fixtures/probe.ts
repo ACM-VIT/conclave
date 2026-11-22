@@ -183,6 +183,9 @@ export const probeAuthority = defineAuthority({
   queries: {
     dump: {
       roles: ["moderator"],
+      // Off while the room's Q&A switch is off, so a test can withdraw the
+      // query without changing anyone's role.
+      when: ({ room }) => room.qaEnabled,
       rate: RATE,
       read(_ctx, db) {
         return {

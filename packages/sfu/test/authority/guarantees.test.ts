@@ -16,6 +16,7 @@ import { Client } from "../../config/classes/Client.js";
 import { Room } from "../../config/classes/Room.js";
 import { getRoomAuthority } from "../../server/apps/authority/index.js";
 import { DEFAULT_AUTHORITY_LIMITS } from "../../server/apps/authority/limits.js";
+import { getOrCreateWebinarRoomConfig } from "../../server/webinar.js";
 import type { Router } from "mediasoup/types";
 import { Harness, person, type Tab } from "./harness.js";
 import { pollsAuthority, pollsContract } from "./fixtures/polls.js";
@@ -784,6 +785,59 @@ describe("large views and slow sockets", () => {
     expect(hostTab.frames.filter((frame) => frame.kind === "query").length).toBeGreaterThan(1);
     expect(cutResult.ok).toBe(false);
     expect(raviTab.frames.some((frame) => frame.kind === "query" && frame.last)).toBe(false);
+  });
+
+  it("stops a snapshot between parts when the room's mode changes unannounced", async () => {
+    const room = new Harness([qaAuthority], { runtime: { limits: small } });
+    const hostTab = await room.open(host, qaContract);
+    const priyaTab = await room.open(priya, qaContract);
+    for (let index = 0; index < 3; index += 1) {
+      await priyaTab.act("ask", { text: `Question ${index}? `.repeat(20) });
+    }
+    await room.deliver();
+    const raviTab = await room.open(ravi, qaContract);
+    const entry = hostTab.client.entryFor(qaContract)!;
+    const before = raviTab.frames.length;
+
+    void raviTab.raw(AUTHORITY_EVENTS.subscribe, {
+      roomEpoch: room.authority.roomEpoch,
+      instance: entry.instance,
+      app: entry.app,
+      major: entry.major,
+      subscription: "mode-change",
+    });
+    // The room becomes a webinar, where a waiting question is not public.
+    // Nothing tells the runtime: it has to notice before the next part.
+    getOrCreateWebinarRoomConfig(room.state.webinarConfigs, room.room.channelId).enabled = true;
+    await room.drain();
+
+    const [first, ...rest] = replaces(
+      raviTab.frames.slice(before).filter((frame) => frame.subscription === "mode-change"),
+    );
+    expect(first).toMatchObject({ generation: 1, part: 0, last: false });
+    expect(rest.map((frame) => frame.generation)).toEqual([2]);
+    expect(rest.flatMap((frame) => frame.rows)).toEqual([]);
+  });
+
+  it("cuts a streamed result off when the room's policy withdraws the query unannounced", async () => {
+    const room = new Harness([probeAuthority], { runtime: { limits: small } });
+    const hostTab = await room.open(host, probeContract);
+    for (let index = 0; index < 5; index += 1) {
+      await hostTab.act("put", { id: `n${index}`, text: `${index}`.repeat(300) });
+    }
+    await room.deliver();
+    const parts = () => hostTab.frames.filter((frame) => frame.kind === "query").length;
+
+    const cut = hostTab.session.query("dump", null);
+    await Promise.resolve();
+    vi.advanceTimersToNextTimer();
+    const sentBefore = parts();
+    getOrCreateWebinarRoomConfig(room.state.webinarConfigs, room.room.channelId).qaEnabled = false;
+    const cutResult = await room.settle(cut);
+
+    expect(sentBefore).toBe(1);
+    expect(parts()).toBe(sentBefore);
+    expect(cutResult.ok).toBe(false);
   });
 
   it("refuses a view too large to send", async () => {

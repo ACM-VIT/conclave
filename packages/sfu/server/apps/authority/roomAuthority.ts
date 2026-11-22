@@ -388,11 +388,17 @@ export class RoomAuthority {
   /**
    * Brings one subscription in line with the room. It ends when its seat is
    * gone or may no longer view the app, and restarts under a new generation
-   * when the seat's role or identity changed, so a promoted host gets the
-   * host's rows at once and a demoted one loses them.
+   * when the room's policy or the seat's role or identity changed, so a
+   * promoted host gets the host's rows at once and a demoted one loses them.
+   * Every path that sends later than the request that asked, such as the
+   * next part of a snapshot or of a query result, goes through here first.
    */
   private refresh(subscription: Subscription): "live" | "replaced" | "gone" {
     if (subscription.dropped) return "gone";
+    const generation = subscription.generation;
+    this.syncPolicy();
+    if (subscription.dropped) return "gone";
+    if (subscription.generation !== generation) return "replaced";
     const bound = this.bind(subscription.context);
     if (!bound || bound.client !== subscription.client) {
       this.revoke(subscription, "forbidden");
