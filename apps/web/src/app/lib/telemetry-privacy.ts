@@ -1,93 +1,31 @@
 import type { CaptureResult, Properties } from "posthog-js";
 import { z } from "zod";
 import { isCallLogLabel } from "./call-log-labels";
+import {
+  BUILD_VERSION,
+  createOutboundSchemas,
+  FIRST_PARTY_SCRIPTS,
+  FRAME_PLACEHOLDERS,
+  isOutboundEventName,
+  KNOWN_ERROR_TYPES,
+  LANGUAGES,
+  MECHANISM_TYPES,
+  MESSAGE_WITHHELD,
+  type OutboundContext,
+  type OutboundEventName,
+  PATH_WITHHELD,
+  STATIC_PAGES,
+  TELEMETRY_EVENTS,
+  TELEMETRY_HOST,
+  TYPE_WITHHELD,
+} from "./telemetry-schema";
 
-const STATIC_PAGES = new Set([
-  "schedule",
-  "sfu-admin",
-  "privacy",
-  "delete-account",
-  "sign-in",
-]);
-// What posthog-js works out for each event from the page and its own config,
-// checked against real traffic. Fields it keeps in storage, such as the
-// referrer and the session's entry page, are not here, and neither is the raw
-// user agent, which can carry a device or fleet tag; the parsed browser,
-// version and OS stay.
-const SDK_PROPERTIES = new Set([
-  "token", "$browser", "$browser_language", "$browser_language_prefix", "$browser_version",
-  "$config_defaults", "$configured_session_timeout_ms", "$current_url", "$device_type",
-  "$exception_level", "$exception_list", "$host", "$insert_id", "$is_identified", "$lib",
-  "$lib_custom_api_host", "$lib_version", "$os", "$os_version", "$pathname",
-  "$process_person_profile", "$recording_status", "$screen_height",
-  "$screen_width", "$sdk_debug_extensions_init_method", "$sdk_debug_extensions_init_time_ms",
-  "$sdk_dist_channel", "$search_engine", "$time", "$timezone", "$timezone_offset",
-  "$viewport_height", "$viewport_width",
-]);
 // The SDK's identity and session ids: the only values an event may carry out
 // of storage. The SDK makes each one as a uuid.
 const SDK_IDS = new Set(["distinct_id", "$device_id", "$session_id", "$window_id"]);
-const SDK_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-// Our own event fields. Each is read from the payload of the capture that
-// sent it, never from the event, so nothing in storage can supply one. A new
-// event field must be added here to be sent.
-const APP_PROPERTIES = new Set([
-  // Exceptions.
-  "source", "call_log", "boundary", "digest",
-  // call_join, call_first_media, call_summary.
-  "call_id", "outcome", "failure_reason", "join_ms", "waited", "waiting_ms", "join_mode",
-  "prior_failed_attempts", "first_remote_audio_ms", "first_remote_video_ms",
-  "remote_present_at_join", "timed_out", "end_reason", "duration_ms", "peak_participants",
-  "reconnect_count", "reconnect_total_ms", "reconnect_longest_ms", "reconnect_unrecovered",
-  "remote_video_ms", "video_freeze_count", "video_freeze_ms", "video_stall_count",
-  "video_stall_ms", "audio_concealed_pct", "outbound_video_ms", "outbound_low_ms",
-  "outbound_standard_ms", "outbound_profile_switches", "outbound_video_kbps",
-  "outbound_video_height", "outbound_cpu_limited_pct", "outbound_bandwidth_limited_pct",
-  // meet_* events.
-  "attempt", "attempts", "maxAttempts", "usingTurnFallback", "joinMode", "isAdmin", "status",
-  "reason", "failureReason", "durationMs", "maximumSpatialLayer", "observedSpatialLayer",
-  "from", "to", "epoch", "kind", "type", "level", "pausedForMs", "state", "downtimeMs",
-  "autoplayBlocked",
-]);
-
-// The browser's language settings can carry a private-use or device tag
-// (en-US-x-labunit), so they send only the primary subtag, and only when it is
-// an ISO 639-1 code.
-const LANGUAGE_PROPERTIES = new Set(["$browser_language", "$browser_language_prefix"]);
-const ISO_639_1 = new Set(
-  (
-    "aa ab ae af ak am an ar as av ay az ba be bg bh bi bm bn bo br bs ca ce ch co cr cs cu cv cy " +
-    "da de dv dz ee el en eo es et eu fa ff fi fj fo fr fy ga gd gl gn gu gv ha he hi ho hr ht hu " +
-    "hy hz ia id ie ig ii ik io is it iu ja jv ka kg ki kj kk kl km kn ko kr ks ku kv kw ky la lb " +
-    "lg li ln lo lt lu lv mg mh mi mk ml mn mr ms mt my na nb nd ne ng nl nn no nr nv ny oc oj om " +
-    "or os pa pi pl ps pt qu rm rn ro ru rw sa sc sd se sg si sk sl sm sn so sq sr ss st su sv sw " +
-    "ta te tg th ti tk tl tn to tr ts tt tw ty ug uk ur uz ve vi vo wa wo xh yi yo za zh zu"
-  ).split(" "),
-);
-
-const primaryLanguage = (value: unknown): string | null => {
-  if (typeof value !== "string") return null;
-  const subtag = value.split(/[-_]/, 1)[0].toLowerCase();
-  return ISO_639_1.has(subtag) ? subtag : null;
-};
 
 /** Whether posthog-js may keep a property in storage: only its own ids. */
 export const isStoredProperty = (key: string): boolean => SDK_IDS.has(key);
-
-/** Where the fields of the event in `before_send` came from. */
-export type EventOrigin = {
-  /** What our code passed to capture; null for an event the SDK raised itself. */
-  payload: Properties | null;
-  /** Keys posthog-js merged in from local and session storage. */
-  storedKeys: ReadonlySet<string>;
-  /** The build's git sha. */
-  clientVersion?: string;
-  /** The build's chunk ids and the file each was injected into. */
-  chunkFiles?: ReadonlyMap<string, string>;
-};
-
-// A build's version is the git sha it was built from (next.config.ts).
-const BUILD_VERSION = /^[0-9a-f]{7,40}$/;
 
 /** Whether a value is a build's version, which names its chunk manifest. */
 export const isBuildVersion = (value: unknown): value is string =>
@@ -105,44 +43,13 @@ const ChunkManifest = z.record(
   z.string().regex(/^\/_next\/static\/[A-Za-z0-9_./-]+\.js$/),
 );
 
-/** The chunk manifest as a map, or an empty one when it is not one. */
-export const parseChunkManifest = (value: unknown): ReadonlyMap<string, string> => {
+/** The chunk manifest as a map, or null when it is not one. */
+export const parseChunkManifest = (value: unknown): ReadonlyMap<string, string> | null => {
   const parsed = ChunkManifest.safeParse(value);
-  return new Map(parsed.success ? Object.entries(parsed.data) : []);
+  return parsed.success ? new Map(Object.entries(parsed.data)) : null;
 };
 
-const URL_PROPERTY = /url|referrer|pathname|href/i;
-const MAX_TEXT_LENGTH = 1000;
-
-const EMAIL_PATTERN = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
-const JWT_PATTERN = /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g;
-const LONG_TOKEN_PATTERN = /\b[A-Za-z0-9_-]{40,}\b/g;
-const URL_IN_TEXT_PATTERN = /\bhttps?:\/\/[^\s"'<>)]+/gi;
-// Headers whose whole value is a credential: everything to the end of the line.
-const CREDENTIAL_HEADER_PATTERN =
-  /\b(cookie|set-cookie|authorization|proxy-authorization)(\s*:)[^\r\n]*/gi;
-const AUTH_SCHEME_PATTERN = /\b(bearer|basic)\s+[^\s,;"']+/gi;
-const SECRET_ASSIGNMENT_PATTERN =
-  /\b(password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|session)(\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;&"']+)/gi;
-// Our own script files under public/, exactly. A stack frame in one keeps its
-// path; any other path is templated.
-export const FIRST_PARTY_SCRIPTS: ReadonlySet<string> = new Set([
-  "/transcript-pcm-processor.js",
-  "/effects/video-effects-output-writer.js",
-  "/noise-suppressor/0.3.5/rnnoise-worklet.js",
-  "/noise-suppressor/0.4.0/rnnoise-worklet.js",
-  "/noise-suppressor/0.4.1/rnnoise-worklet.js",
-  ...["0.10.35", "1.0.1", "1.1.0"].flatMap((version) =>
-    ["vision_wasm_internal.js", "vision_wasm_module_internal.js", "vision_wasm_nosimd_internal.js"].map(
-      (file) => `/mediapipe/tasks-vision/${version}/wasm/${file}`,
-    ),
-  ),
-  ...["async_processor_worker_bundle.js", "audio_processing_worker_bundle.js", "render_worker_bundle.js", "timer_worker.js", "videopipe_bundle.js"].map(
-    (file) => `/_/rtcvidproc/release/929503300/${file}`,
-  ),
-]);
-// Frame names the browser gives code with no file, such as <anonymous>.
-const PLACEHOLDER_FRAME = /^(?:<[a-z ]+>|native|)$/;
+const STATIC = new Set<string>(STATIC_PAGES);
 
 /**
  * Replaces room codes, invite slugs and booking handles in a path with the
@@ -152,130 +59,101 @@ export function templatePath(pathname: string): string {
   const segments = pathname.split("/").filter(Boolean);
   const [first] = segments;
   if (!first) return "/";
-  // Already templated, as when /ingest scrubs the browser's scrubbed event.
+  // Already templated, as when /ingest builds an event the browser built.
   if (segments.length === 1 && (first === "[code]" || first === "[path]")) return `/${first}`;
   if (first === "w") return "/w/[code]";
   if (first === "book") return "/book/[username]/[eventSlug]";
-  if (segments.length === 1) {
-    return STATIC_PAGES.has(first) ? `/${first}` : "/[code]";
-  }
-  return STATIC_PAGES.has(first) ? `/${first}/[path]` : "/[path]";
+  if (segments.length === 1) return STATIC.has(first) ? `/${first}` : "/[code]";
+  return STATIC.has(first) ? `/${first}/[path]` : "/[path]";
 }
 
-/** The origin and route of an http(s) URL, or null when it is not one. */
-const scrubHttpUrl = (value: string): string | null => {
-  try {
-    const url = new URL(value);
-    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
-    return `${url.origin}${templatePath(url.pathname)}`;
-  } catch {
-    return null;
-  }
-};
-
-/** Keeps the origin and route of a URL and drops its query and hash. */
-export function scrubUrl(value: string): string {
+/** The route of a URL or path, with no origin, query or hash. */
+const routeOf = (value: unknown): string | undefined => {
+  if (typeof value !== "string") return undefined;
   if (value.startsWith("/")) return templatePath(value.split(/[?#]/, 1)[0]);
-  return scrubHttpUrl(value) ?? scrubText(value);
-}
-
-/** Removes credentials, emails, tokens and URL details from free text. */
-export function scrubText(value: string): string {
-  return value
-    .slice(0, MAX_TEXT_LENGTH)
-    .replace(URL_IN_TEXT_PATTERN, (url) => scrubHttpUrl(url) ?? "[url]")
-    .replace(CREDENTIAL_HEADER_PATTERN, "$1$2 [redacted]")
-    .replace(AUTH_SCHEME_PATTERN, "$1 [redacted]")
-    .replace(SECRET_ASSIGNMENT_PATTERN, "$1$2[redacted]")
-    .replace(JWT_PATTERN, "[token]")
-    .replace(EMAIL_PATTERN, "[email]")
-    .replace(LONG_TOKEN_PATTERN, "[token]");
-}
-
-type ExceptionFrame = Record<string, unknown>;
-type ExceptionEntry = Record<string, unknown> & {
-  stacktrace?: Record<string, unknown> & { frames?: unknown };
-};
-
-const originOf = (value: unknown): string | null => {
-  if (typeof value !== "string") return null;
-  try {
-    return new URL(value).origin;
-  } catch {
-    return null;
-  }
-};
-
-/**
- * A path is kept only for a script the page's own origin served that we can
- * prove is ours: one of the exact files under public/, or a build chunk whose
- * frame carries a chunk id the build's manifest maps to that very file. A
- * name or an id alone proves nothing, so any other path is templated.
- */
-const scrubFrameUrl = (
-  value: string,
-  pageOrigin: string | null,
-  chunkId: string | null,
-  chunkFiles: ReadonlyMap<string, string>,
-): string => {
-  if (PLACEHOLDER_FRAME.test(value)) return value;
   try {
     const url = new URL(value);
-    if (url.protocol !== "http:" && url.protocol !== "https:") return `${url.protocol}//[path]`;
-    const ours =
-      FIRST_PARTY_SCRIPTS.has(url.pathname) ||
-      (chunkId !== null && chunkFiles.get(chunkId) === url.pathname);
-    if (url.origin === pageOrigin && ours) {
-      return `${url.origin}${url.pathname}`;
-    }
-    return `${url.origin}${templatePath(url.pathname)}`;
+    return url.protocol === "http:" || url.protocol === "https:" ? templatePath(url.pathname) : undefined;
   } catch {
-    return "[path]";
+    return undefined;
   }
 };
 
-// What posthog-js writes for a frame with no function name. Names are
-// dropped: source maps restore them in PostHog.
-const UNKNOWN_FUNCTION = "?";
+const ISO_639_1 = new Set(LANGUAGES);
+const primaryLanguage = (value: unknown): string | undefined => {
+  if (typeof value !== "string") return undefined;
+  const subtag = value.split(/[-_]/, 1)[0].toLowerCase();
+  return ISO_639_1.has(subtag) ? subtag : undefined;
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
 const isPosition = (value: unknown): value is number =>
   typeof value === "number" && Number.isInteger(value) && value >= 0;
+const placeholders = new Set<string>(FRAME_PLACEHOLDERS);
+const knownTypes = new Set<string>(KNOWN_ERROR_TYPES);
+const mechanisms = new Set<string>(MECHANISM_TYPES);
+
+/** Where an event came from, beyond what the schema's forms depend on. */
+export type EventSource = OutboundContext & {
+  /**
+   * Our own fields: the payload of the capture in the browser, the event's
+   * own at /ingest; null for an event the SDK raised itself.
+   */
+  payload: Properties | null;
+  /** Keys posthog-js merged in from local and session storage. */
+  storedKeys: ReadonlySet<string>;
+  /** The origin our scripts are served from; a frame from any other names no file. */
+  siteOrigin: string | null;
+};
 
 /**
- * A frame keeps only its file, line, column, in-app flag and a chunk id the
- * build's manifest lists, in the shape posthog-js sends. Any other id, uuid
- * or not, is dropped: a made-up one could carry data.
+ * A frame's file as its path, only for a script of ours served from our own
+ * origin: an exact file under public/, or a chunk whose injected id the
+ * build's manifest pairs with that very file. A name or an id alone proves
+ * nothing, so any other file is [path]. Never an origin.
  */
-const scrubFrame = (
-  frame: ExceptionFrame,
-  pageOrigin: string | null,
-  chunkFiles: ReadonlyMap<string, string>,
-): ExceptionFrame => {
+const framePath = (value: string, chunkId: string | null, source: EventSource): string => {
+  if (placeholders.has(value) || value === PATH_WITHHELD) return value;
+  let path: string;
+  if (value.startsWith("/")) {
+    path = value.split(/[?#]/, 1)[0];
+  } else {
+    try {
+      const url = new URL(value);
+      if (url.origin !== source.siteOrigin) return PATH_WITHHELD;
+      path = url.pathname;
+    } catch {
+      return PATH_WITHHELD;
+    }
+  }
+  const ours =
+    FIRST_PARTY_SCRIPTS.has(path) || (chunkId !== null && source.chunkFiles.get(chunkId) === path);
+  return ours ? path : PATH_WITHHELD;
+};
+
+// A frame keeps its file, line, column, in-app flag and a chunk id the
+// build's manifest lists. Its function name is dropped: source maps restore
+// it in PostHog.
+const shapeFrame = (frame: Record<string, unknown>, source: EventSource) => {
   const chunkId =
-    typeof frame.chunk_id === "string" && SDK_ID_PATTERN.test(frame.chunk_id)
-      ? frame.chunk_id
-      : null;
+    typeof frame.chunk_id === "string" && source.chunkFiles.has(frame.chunk_id) ? frame.chunk_id : null;
   return {
     platform: "web:javascript",
-    function: UNKNOWN_FUNCTION,
-    ...(typeof frame.filename === "string"
-      ? { filename: scrubFrameUrl(frame.filename, pageOrigin, chunkId, chunkFiles) }
-      : {}),
+    function: "?",
+    ...(typeof frame.filename === "string" ? { filename: framePath(frame.filename, chunkId, source) } : {}),
     ...(isPosition(frame.lineno) ? { lineno: frame.lineno } : {}),
     ...(isPosition(frame.colno) ? { colno: frame.colno } : {}),
     ...(typeof frame.in_app === "boolean" ? { in_app: frame.in_app } : {}),
-    ...(chunkId !== null && chunkFiles.has(chunkId) ? { chunk_id: chunkId } : {}),
+    ...(chunkId !== null ? { chunk_id: chunkId } : {}),
   };
 };
 
-// The mechanisms posthog-js reports: a caught or captured error, a cause in a
-// chain, and console capture.
-const MECHANISM_TYPES = new Set(["generic", "chained", "onconsole"]);
-
-const scrubMechanism = (mechanism: unknown): Record<string, unknown> | null => {
-  if (mechanism === null || typeof mechanism !== "object") return null;
-  const { type, handled, synthetic, exception_id, parent_id } = mechanism as Record<string, unknown>;
+const shapeMechanism = (mechanism: unknown) => {
+  if (!isRecord(mechanism)) return undefined;
+  const { type, handled, synthetic, exception_id, parent_id } = mechanism;
   return {
-    type: typeof type === "string" && MECHANISM_TYPES.has(type) ? type : "generic",
+    type: typeof type === "string" && mechanisms.has(type) ? type : "generic",
     ...(typeof handled === "boolean" ? { handled } : {}),
     ...(typeof synthetic === "boolean" ? { synthetic } : {}),
     ...(isPosition(exception_id) ? { exception_id } : {}),
@@ -283,113 +161,96 @@ const scrubMechanism = (mechanism: unknown): Record<string, unknown> | null => {
   };
 };
 
-// Type names that name a kind of failure, never data: built-in errors, DOM
-// exceptions, posthog-js's own, libraries we call, and ours. A rejected
-// object's `name` becomes its type, so any other type is withheld too.
-const KNOWN_ERROR_TYPES = new Set([
-  "Error", "EvalError", "RangeError", "ReferenceError", "SyntaxError", "TypeError",
-  "URIError", "AggregateError", "InternalError", "DOMException", "AbortError",
-  "ConstraintError", "DataCloneError", "DataError", "EncodingError",
-  "HierarchyRequestError", "IndexSizeError", "InvalidAccessError",
-  "InvalidCharacterError", "InvalidModificationError", "InvalidNodeTypeError",
-  "InvalidStateError", "NamespaceError", "NetworkError", "NoModificationAllowedError",
-  "NotAllowedError", "NotFoundError", "NotReadableError", "NotSupportedError",
-  "OperationError", "OverconstrainedError", "QuotaExceededError", "ReadOnlyError",
-  "SecurityError", "TimeoutError", "TransactionInactiveError", "TypeMismatchError",
-  "UnknownError", "URLMismatchError", "VersionError", "WrongDocumentError",
-  "ChunkLoadError", "UnhandledRejection", "UnsupportedError", "CallError",
-  "ServerError", "JoinRoomRedirectError", "MeetFailure",
-]);
-const MESSAGE_WITHHELD = "[message withheld]";
-const TYPE_WITHHELD = "[type withheld]";
-
-const knownType = (type: unknown): string =>
-  typeof type === "string" && KNOWN_ERROR_TYPES.has(type) ? type : TYPE_WITHHELD;
-
 /**
  * An exception keeps its message only when we wrote it: a registered `[Meets]`
  * label that call-error-capture set. Every other message, from an engine, a
- * library, the server or a rejected value, is withheld. The entry is rebuilt
- * from the fields posthog-js sets, so nothing else rides along.
+ * library, the server or a rejected value, is withheld, and a type that is
+ * not a known kind of failure too.
  */
-const scrubExceptionEntry = (
-  entry: ExceptionEntry,
-  trustedMessage: string | null,
-  pageOrigin: string | null,
-  chunkFiles: ReadonlyMap<string, string>,
-): ExceptionEntry => {
-  const mechanism = scrubMechanism(entry.mechanism);
-  const frames = entry.stacktrace?.frames;
-  return {
-    type: knownType(entry.type),
-    value: trustedMessage ?? MESSAGE_WITHHELD,
-    ...(mechanism ? { mechanism } : {}),
-    ...(Array.isArray(frames)
-      ? {
-          stacktrace: {
-            type: "raw",
-            frames: (frames as ExceptionFrame[]).map((frame) =>
-              scrubFrame(frame, pageOrigin, chunkFiles),
-            ),
-          },
-        }
-      : {}),
-  };
+const shapeExceptionList = (value: unknown, trustedMessage: string | null, source: EventSource) => {
+  if (!Array.isArray(value)) return undefined;
+  return value.filter(isRecord).map((entry) => {
+    const mechanism = shapeMechanism(entry.mechanism);
+    const frames = isRecord(entry.stacktrace) ? entry.stacktrace.frames : undefined;
+    return {
+      type: typeof entry.type === "string" && knownTypes.has(entry.type) ? entry.type : TYPE_WITHHELD,
+      value: trustedMessage ?? MESSAGE_WITHHELD,
+      ...(mechanism ? { mechanism } : {}),
+      ...(Array.isArray(frames)
+        ? { stacktrace: { type: "raw", frames: frames.filter(isRecord).map((frame) => shapeFrame(frame, source)) } }
+        : {}),
+    };
+  });
 };
 
-const isPrimitive = (value: unknown): boolean => value === null || typeof value !== "object";
-
-const scrubAppValue = (key: string, value: unknown): unknown => {
-  if (typeof value !== "string") return value;
-  return URL_PROPERTY.test(key) ? scrubUrl(value) : scrubText(value);
+// Values we set ourselves, whatever the event says.
+const GENERATED: Record<string, unknown> = {
+  $host: TELEMETRY_HOST,
+  $lib: "web",
+  $process_person_profile: false,
 };
 
-function scrubProperties(
+/** One property's value, shaped for its form, from where that property may come. */
+const shapeValue = (
+  key: string,
+  name: OutboundEventName,
   properties: Properties,
-  { payload, storedKeys, clientVersion, chunkFiles = new Map() }: EventOrigin,
-  pageOrigin: string | null,
-): Properties {
-  const trustedMessage =
-    payload?.source === "call_log" && isCallLogLabel(payload.call_log) ? payload.call_log : null;
-  const scrubbed: Properties = {};
-  const sdkEntries: Array<[string, unknown]> = Object.entries(properties);
-  const appEntries: Array<[string, unknown]> = Object.entries(payload ?? {});
-  for (const [key, value] of sdkEntries) {
-    if (SDK_IDS.has(key)) {
-      if (typeof value === "string" && SDK_ID_PATTERN.test(value)) scrubbed[key] = value;
-    } else if (!SDK_PROPERTIES.has(key) || storedKeys.has(key)) {
-      continue;
-    } else if (LANGUAGE_PROPERTIES.has(key)) {
-      const language = primaryLanguage(value);
-      if (language) scrubbed[key] = language;
-    } else if (key === "$exception_list" && Array.isArray(value)) {
-      scrubbed[key] = (value as ExceptionEntry[]).map((entry) =>
-        scrubExceptionEntry(entry, trustedMessage, pageOrigin, chunkFiles),
-      );
-    } else if (typeof value === "string" && URL_PROPERTY.test(key)) {
-      scrubbed[key] = scrubUrl(value);
-    } else if (isPrimitive(value)) {
-      scrubbed[key] = value;
+  source: EventSource,
+): unknown => {
+  if (key === "token") return source.token;
+  if (key === "client_version") return source.clientVersion;
+  if (Object.hasOwn(GENERATED, key)) return GENERATED[key];
+  // Our fields come only from the capture that set them, never from the
+  // event, so nothing in storage can supply one.
+  if (Object.hasOwn(TELEMETRY_EVENTS[name].shape, key)) return source.payload?.[key];
+  if (!SDK_IDS.has(key) && source.storedKeys.has(key)) return undefined;
+  const value: unknown = properties[key];
+  switch (key) {
+    case "$browser_language":
+    case "$browser_language_prefix":
+      return primaryLanguage(value);
+    case "$current_url":
+    case "$pathname":
+      return routeOf(value);
+    case "$exception_list": {
+      const label: unknown = source.payload?.call_log;
+      const trusted = source.payload?.source === "call_log" && isCallLogLabel(label) ? label : null;
+      return shapeExceptionList(value, trusted, source);
     }
+    default:
+      return value;
   }
-  for (const [key, value] of appEntries) {
-    if (key === "call_log" && !isCallLogLabel(value)) continue;
-    if (APP_PROPERTIES.has(key) && isPrimitive(value)) scrubbed[key] = scrubAppValue(key, value);
-  }
-  if (clientVersion) scrubbed.client_version = clientVersion;
-  return scrubbed;
-}
+};
+
+export type OutboundEvent = {
+  uuid: string;
+  event: OutboundEventName;
+  properties: Properties;
+};
 
 /**
- * posthog-js `before_send` hook, on "send only what we trust": the SDK's own
- * fields unless they came from storage, its ids only as uuids, our fields only
- * from the capture's payload, known error types, call-log labels as the only
- * messages, and paths only for exact first-party scripts. Person properties
- * are never sent.
+ * Builds the event we send from scratch: only an event on the list, only the
+ * properties its schema lists, each shaped for its form and kept only when it
+ * fits. Anything else in the event is never read. Person properties are
+ * never sent.
  */
-export function scrubTelemetryEvent(event: CaptureResult, origin: EventOrigin): CaptureResult {
-  // Stack frames keep a path only for scripts the page itself served.
-  const pageOrigin = originOf(event.properties.$current_url);
-  const { $set: _set, $set_once: _setOnce, ...rest } = event;
-  return { ...rest, properties: scrubProperties(event.properties, origin, pageOrigin) };
+export function buildOutboundEvent(
+  event: { uuid: string; event: string; properties: Properties },
+  source: EventSource,
+  schemas = createOutboundSchemas(source),
+): OutboundEvent | null {
+  if (!isOutboundEventName(event.event)) return null;
+  const name = event.event;
+  const properties: Properties = {};
+  for (const [key, form] of Object.entries(schemas(name).shape)) {
+    const parsed = form.safeParse(shapeValue(key, name, event.properties, source));
+    if (parsed.success && parsed.data !== undefined) properties[key] = parsed.data;
+  }
+  return { uuid: event.uuid, event: name, properties };
 }
+
+/** The posthog-js `before_send` hook: the event rebuilt from the schema, or null to drop it. */
+export const beforeSend = (event: CaptureResult, source: EventSource): CaptureResult | null => {
+  const built = buildOutboundEvent(event, source);
+  return built && { ...built, ...(event.timestamp ? { timestamp: event.timestamp } : {}) };
+};

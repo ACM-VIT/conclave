@@ -267,7 +267,7 @@ describe("what each event carries", () => {
       await vi.waitFor(() => expect(sent).toHaveLength(1), { timeout: 3000 });
       const frames = (sent[0].properties.$exception_list as Array<{ stacktrace: { frames: Array<{ filename: string }> } }>)[0]
         .stacktrace.frames;
-      expect(frames[0].filename).toBe(chunk);
+      expect(frames[0].filename).toBe("/_next/static/chunks/3u-6_1om1fv26.js");
     } finally {
       posthog.captureException.mockReset();
     }
@@ -382,7 +382,7 @@ describe("what each event carries", () => {
 
     const frames = (sent.properties.$exception_list as Array<{ stacktrace: { frames: Array<{ filename: string }> } }>)[0]
       .stacktrace.frames;
-    expect(frames.map((frame) => frame.filename)).toEqual([chunk, "http://localhost:3000/[path]"]);
+    expect(frames.map((frame) => frame.filename)).toEqual(["/_next/static/chunks/3u-6_1om1fv26.js", "[path]"]);
   });
 
   it("sends application fields only from the capture that set them", async () => {

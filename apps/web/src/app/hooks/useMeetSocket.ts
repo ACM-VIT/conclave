@@ -189,6 +189,20 @@ import type {
   ScreenShareRepublishOptions,
 } from "./useMeetMedia";
 import { logCallError } from "../lib/call-error-capture";
+import {
+  RESUME_FAILURE,
+  type ResumeFailure,
+  type StaleConsumerReason,
+  type TurnFallbackReason,
+  type WebcamResetFailure,
+} from "../lib/telemetry-schema";
+
+const TURN_FALLBACK_MESSAGES: Record<TurnFallbackReason, string> = {
+  producer_ice_unrecovered: "Producer transport could not recover with STUN-only ICE",
+  producer_ice_failed: "Producer transport failed with STUN-only ICE",
+  consumer_ice_unrecovered: "Consumer transport could not recover with STUN-only ICE",
+  consumer_ice_failed: "Consumer transport failed with STUN-only ICE",
+};
 
 type ConsumerTelemetryPayload = Omit<
   ConsumerTelemetrySnapshot,
@@ -1147,7 +1161,7 @@ export function useMeetSocket({
     (producerInfo: ProducerInfo, options?: ConsumeProducerOptions) => Promise<void>
   >(async () => {});
   const recoverStaleConsumerRef = useRef<
-    (producerInfo: ProducerInfo, reason: string) => Promise<void>
+    (producerInfo: ProducerInfo, reason: StaleConsumerReason) => Promise<void>
   >(async () => {});
   const syncProducersRef = useRef<() => Promise<void>>(async () => {});
   const resumeConsumerReliablyRef = useRef<
@@ -1246,7 +1260,7 @@ export function useMeetSocket({
     (
       state: WebcamStartupLatencyResetRuntime,
       status: "completed" | "failed" | "cancelled",
-      failureReason: string | null,
+      failureReason: WebcamResetFailure | null,
     ) => {
       if (
         state.status === "completed" ||
@@ -1444,20 +1458,17 @@ export function useMeetSocket({
     isTtsDisabledRef.current = isTtsDisabled;
   }, [isTtsDisabled]);
 
-  const enableTurnFallback = useCallback((reason: string): boolean => {
+  const enableTurnFallback = useCallback((reason: TurnFallbackReason): boolean => {
     if (useTurnFallbackRef.current) return false;
 
     const turnIceServers = runtimeTurnIceServersRef.current ?? [];
     if (turnIceServers.length === 0) return false;
 
     useTurnFallbackRef.current = true;
-    console.warn(`[Meets] ${reason}. Retrying with TURN fallback.`);
-    telemetry.capture("meet_turn_relay_activated", {
-      reason,
-      roomId: currentRoomIdRef.current ?? undefined,
-    });
+    console.warn(`[Meets] ${TURN_FALLBACK_MESSAGES[reason]}. Retrying with TURN fallback.`);
+    telemetry.capture("meet_turn_relay_activated", { reason });
     return true;
-  }, [currentRoomIdRef]);
+  }, []);
 
   const resolveIceServers = useCallback((): RTCIceServer[] | undefined => {
     const stunIceServers =
@@ -2677,7 +2688,7 @@ export function useMeetSocket({
         };
       };
 
-      const scheduleRetry = (reason: string) => {
+      const scheduleRetry = (reason: ResumeFailure) => {
         if (!ownsCurrentResumeState()) return;
         const nextAttempt = effectiveAttempt + 1;
         if (nextAttempt >= RESUME_CONSUMER_MAX_ATTEMPTS) {
@@ -2694,7 +2705,7 @@ export function useMeetSocket({
           if (producerInfo) {
             void recoverStaleConsumerRef.current(
               producerInfo,
-              `resume retries exhausted (${reason})`,
+              "resume_retries_exhausted",
             );
           }
           return;
@@ -2724,7 +2735,7 @@ export function useMeetSocket({
 
       const settleResume = startSocketAckTimeout(
         "resumeConsumer",
-        () => scheduleRetry("ack timeout"),
+        () => scheduleRetry("ack_timeout"),
         RESUME_CONSUMER_ACK_TIMEOUT_MS,
       );
       socket.emit(
@@ -2754,12 +2765,13 @@ export function useMeetSocket({
               if (producerInfo) {
                 void recoverStaleConsumerRef.current(
                   producerInfo,
-                  "server lost consumer on resume",
+                  "server_lost_consumer",
                 );
               }
               return;
             }
-            scheduleRetry(code ?? "server_error");
+            const failure = RESUME_FAILURE.safeParse(code);
+            scheduleRetry(failure.success ? failure.data : "server_error");
             return;
           }
           clearConsumerResumeRetry(producerId, consumerId);
@@ -3700,7 +3712,7 @@ export function useMeetSocket({
                         void attemptIceRestart("producer").then((restarted) => {
                           if (!restarted) {
                             const enabledTurnFallback = enableTurnFallback(
-                              "Producer transport could not recover with STUN-only ICE",
+                              "producer_ice_unrecovered",
                             );
                             if (enabledTurnFallback) {
                               void handleReconnectRef.current?.();
@@ -3732,7 +3744,7 @@ export function useMeetSocket({
                   void attemptIceRestart("producer").then((restarted) => {
                     if (!restarted) {
                       const enabledTurnFallback = enableTurnFallback(
-                        "Producer transport failed with STUN-only ICE",
+                        "producer_ice_failed",
                       );
                       if (enabledTurnFallback) {
                         void handleReconnectRef.current?.();
@@ -3957,7 +3969,7 @@ export function useMeetSocket({
                         void attemptIceRestart("consumer").then((restarted) => {
                           if (!restarted) {
                             const enabledTurnFallback = enableTurnFallback(
-                              "Consumer transport could not recover with STUN-only ICE",
+                              "consumer_ice_unrecovered",
                             );
                             if (enabledTurnFallback) {
                               void handleReconnectRef.current?.();
@@ -3984,7 +3996,7 @@ export function useMeetSocket({
                   void attemptIceRestart("consumer").then((restarted) => {
                     if (!restarted) {
                       const enabledTurnFallback = enableTurnFallback(
-                        "Consumer transport failed with STUN-only ICE",
+                        "consumer_ice_failed",
                       );
                       if (enabledTurnFallback) {
                         void handleReconnectRef.current?.();
@@ -4763,7 +4775,7 @@ export function useMeetSocket({
                   }
                   void recoverStaleConsumerRef.current(
                     producerInfo,
-                    `${response.kind} consumer stayed muted`,
+                    "consumer_stayed_muted",
                   );
                 }, getStaleConsumerRecoveryDelayMs(producerInfo));
                 staleConsumerRecoveryTimeoutsRef.current.set(
@@ -5826,7 +5838,7 @@ export function useMeetSocket({
     scheduleWebcamStartupLatencyReset;
 
   const recoverStaleConsumer = useCallback(
-    async (producerInfo: ProducerInfo, reason: string) => {
+    async (producerInfo: ProducerInfo, reason: StaleConsumerReason) => {
       if (consumerRecoveryInFlightRef.current.has(producerInfo.producerId)) {
         return;
       }
@@ -6003,7 +6015,7 @@ export function useMeetSocket({
                   type: info.type,
                   paused: false,
                 },
-                "decoder remained frozen after bounded keyframe requests",
+                "decoder_frozen",
               );
               return;
             }
@@ -6163,7 +6175,7 @@ export function useMeetSocket({
             ) {
               void recoverStaleConsumerRef.current(
                 producerInfo,
-                "producer sync observed muted live track",
+                "muted_live_track",
               );
             }
             continue;
@@ -7205,7 +7217,6 @@ export function useMeetSocket({
               }, ADMIN_NOTICE_DURATION_MS);
 
               telemetry.capture("meet_admin_notice_received", {
-                roomId: notification.roomId,
                 level,
               });
             });
@@ -7686,8 +7697,6 @@ export function useMeetSocket({
                 });
 
                 telemetry.capture("meet_participant_connection_state", {
-                  roomId: payload.roomId,
-                  userId: targetUserId,
                   state,
                   downtimeMs: payload.downtimeMs,
                 });
@@ -8881,7 +8890,6 @@ export function useMeetSocket({
           `[Meets] Reconnecting in ${delay}ms (attempt ${attempt})`,
         );
         telemetry.capture("meet_reconnect_attempt", {
-          roomId: currentRoomIdRef.current ?? undefined,
           attempt,
           maxAttempts: MAX_RECONNECT_ATTEMPTS,
           usingTurnFallback: useTurnFallbackRef.current,
@@ -9005,7 +9013,6 @@ export function useMeetSocket({
           }
           if (reconnectGeneration !== reconnectGenerationRef.current) return;
           telemetry.capture("meet_reconnect_success", {
-            roomId: reconnectRoomId ?? undefined,
             attempt,
             usingTurnFallback: useTurnFallbackRef.current,
           });
@@ -9024,7 +9031,6 @@ export function useMeetSocket({
             err,
           );
           telemetry.capture("meet_reconnect_attempt_failure", {
-            roomId: currentRoomIdRef.current ?? undefined,
             attempt,
             maxAttempts: MAX_RECONNECT_ATTEMPTS,
             failure_reason: reconnectFailureKind(err),
@@ -9085,7 +9091,6 @@ export function useMeetSocket({
       const reconnectFailure = describeReconnectFailure(lastReconnectError);
       manualReconnectRetryRequestedRef.current = false;
       telemetry.capture("meet_reconnect_give_up", {
-        roomId: currentRoomIdRef.current ?? undefined,
         attempts: reconnectAttemptsRef.current,
         failure_reason: reconnectFailureKind(lastReconnectError),
         usingTurnFallback: useTurnFallbackRef.current,
@@ -9245,7 +9250,6 @@ export function useMeetSocket({
       const joinGeneration = reconnectGenerationRef.current;
 
       telemetry.capture("meet_join_attempt", {
-        roomId: targetRoomId,
         joinMode,
         isAdmin,
       });
@@ -9331,7 +9335,6 @@ export function useMeetSocket({
               nextJoinOptions,
             );
             telemetry.capture("meet_join_success", {
-              roomId: targetRoomId,
               joinMode: nextJoinOptions.joinMode,
               status: joinResult,
             });
@@ -9412,7 +9415,6 @@ export function useMeetSocket({
         ) return;
         logCallError("[Meets] Error joining room", err);
         telemetry.capture("meet_join_failure", {
-          roomId: targetRoomId,
           joinMode,
           failure_reason: joinFailureReason(createMeetError(err)),
         });

@@ -1,3 +1,4 @@
+import type { TelemetryEventProps } from "./telemetry-schema";
 import type { ConnectionState, MeetError, MeetFailureReason, VideoQuality } from "./types";
 
 /**
@@ -8,14 +9,16 @@ import type { ConnectionState, MeetError, MeetFailureReason, VideoQuality } from
  * as a 2-person one.
  */
 
-export type CallMetricProps = Record<string, string | number | boolean | null>;
+type CallMetricName = "call_join" | "call_first_media" | "call_summary";
 
 export type CallMetricEvent = {
-  name: "call_join" | "call_first_media" | "call_summary";
-  props: CallMetricProps;
-  /** Captured while the page unloads, so it must go out with sendBeacon. */
-  immediate: boolean;
-};
+  [N in CallMetricName]: {
+    name: N;
+    props: TelemetryEventProps<N>;
+    /** Captured while the page unloads, so it must go out with sendBeacon. */
+    immediate: boolean;
+  };
+}[CallMetricName];
 
 export type InboundStreamStats = {
   /** Unique per stream for the call: transport id plus stats id. */

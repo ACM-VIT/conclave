@@ -6,6 +6,7 @@ import {
   INGEST_USER_AGENT,
   type IngestDeps,
 } from "../src/app/lib/telemetry-ingest";
+import { beforeSend } from "../src/app/lib/telemetry-privacy";
 
 const KEY = "phc_test_project";
 const UUID = "0196f0a1-0000-7000-8000-000000000000";
@@ -25,7 +26,8 @@ const event = (properties: Record<string, unknown> = {}) => ({
     $raw_user_agent: "Mozilla/5.0 ReviewDevice/FleetAsset123",
     $browser_language: "en-US-x-labunit",
     $current_url: "https://conclave.acmvit.in/[code]",
-    attempt: 1,
+    joinMode: "meeting",
+    isAdmin: false,
     note: "Meet Mira in sample-room",
     ...properties,
   },
@@ -48,6 +50,8 @@ const post = (body: BodyInit, contentType: string, query = "?ver=1.453.1") =>
     headers: { ...browserHeaders, "content-type": contentType },
   });
 
+const NOW = Date.parse("2026-11-22T00:00:05.000Z");
+
 const forward = async (request: Request, path = ["e"], deps: Partial<IngestDeps> = {}) => {
   const upstream: Array<{ url: string; init: RequestInit }> = [];
   const response = await forwardCapture(request, path, {
@@ -57,8 +61,11 @@ const forward = async (request: Request, path = ["e"], deps: Partial<IngestDeps>
     },
     ingestHost: "https://eu.i.posthog.com",
     projectKey: KEY,
-    chunkFiles: async (version) =>
-      new Map(version === BUILD ? [[CHUNK_ID, "/_next/static/chunks/3u-6_1om1fv26.js"]] : []),
+    currentBuild: BUILD,
+    manifest: async (version) =>
+      version === BUILD ? new Map([[CHUNK_ID, "/_next/static/chunks/3u-6_1om1fv26.js"]]) : null,
+    siteOrigin: "https://conclave.acmvit.in",
+    now: () => NOW,
     ...deps,
   });
   return { response, upstream };
@@ -81,19 +88,24 @@ describe("forwardCapture", () => {
     });
     const body = sentBody(upstream);
     expect(body.api_key).toBe(KEY);
-    expect(body.sent_at).toBe("2026-11-22T00:00:01.000Z");
+    expect(body).not.toHaveProperty("sent_at");
     expect(body.batch).toEqual([
       {
         uuid: "0196f0a1-0000-7000-8000-0000000000aa",
         event: "meet_join_attempt",
-        timestamp: "2026-11-22T00:00:00.000Z",
+        timestamp: "2026-11-22T00:00:04.000Z",
         properties: {
           token: KEY,
           distinct_id: UUID,
+          client_version: "unknown",
+          $host: "conclave-web",
+          $lib: "web",
+          $process_person_profile: false,
           $os: "Mac OS X",
           $browser_language: "en",
-          $current_url: "https://conclave.acmvit.in/[code]",
-          attempt: 1,
+          $current_url: "/[code]",
+          joinMode: "meeting",
+          isAdmin: false,
         },
       },
     ]);
@@ -108,7 +120,7 @@ describe("forwardCapture", () => {
     const { response, upstream } = await forward(request());
 
     expect(response.status).toBe(200);
-    expect(sentBody(upstream).batch[0].properties).toMatchObject({ attempt: 1, $browser_language: "en" });
+    expect(sentBody(upstream).batch[0].properties).toMatchObject({ joinMode: "meeting", $browser_language: "en" });
   });
 
   it("accepts only the event capture endpoint", async () => {
@@ -177,10 +189,10 @@ describe("forwardCapture", () => {
       [releaseA, new Map([[idA, "/_next/static/chunks/0aaaaaaaaaaaa.js"]])],
       [releaseB, new Map([[idB, "/_next/static/chunks/0bbbbbbbbbbbb.js"]])],
     ]);
-    const requested: Array<string | null> = [];
-    const chunkFiles = async (version: string | null) => {
+    const requested: string[] = [];
+    const manifest = async (version: string) => {
       requested.push(version);
-      return manifests.get(version ?? "") ?? new Map();
+      return manifests.get(version) ?? null;
     };
     const exceptionFrom = (release: string | undefined, id: string, file: string) => ({
       event: "$exception",
@@ -199,7 +211,7 @@ describe("forwardCapture", () => {
       },
     });
     const sendFrom = async (events: unknown[]) => {
-      const { upstream } = await forward(post(JSON.stringify(captureBody(events)), "application/json"), ["e"], { chunkFiles });
+      const { upstream } = await forward(post(JSON.stringify(captureBody(events)), "application/json"), ["e"], { manifest });
       return sentBody(upstream).batch.map(
         (event) => (event.properties as { $exception_list: Array<{ stacktrace: { frames: Array<{ filename: string; chunk_id?: string }> } }> })
           .$exception_list[0].stacktrace.frames[0],
@@ -216,24 +228,22 @@ describe("forwardCapture", () => {
     const fromNoBuild = await sendFrom([exceptionFrom(undefined, idA, "/_next/static/chunks/0aaaaaaaaaaaa.js")]);
 
     expect(fromA).toEqual([
-      expect.objectContaining({ filename: "https://conclave.acmvit.in/_next/static/chunks/0aaaaaaaaaaaa.js", chunk_id: idA }),
-      { platform: "web:javascript", function: "?", filename: "https://conclave.acmvit.in/[path]", lineno: 1 },
+      expect.objectContaining({ filename: "/_next/static/chunks/0aaaaaaaaaaaa.js", chunk_id: idA }),
+      { platform: "web:javascript", function: "?", filename: "[path]", lineno: 1 },
     ]);
-    expect(fromB).toEqual([
-      expect.objectContaining({ filename: "https://conclave.acmvit.in/_next/static/chunks/0bbbbbbbbbbbb.js", chunk_id: idB }),
-    ]);
-    expect(fromUnknown).toEqual([{ platform: "web:javascript", function: "?", filename: "https://conclave.acmvit.in/[path]", lineno: 1 }]);
-    expect(fromNoBuild).toEqual([{ platform: "web:javascript", function: "?", filename: "https://conclave.acmvit.in/[path]", lineno: 1 }]);
+    expect(fromB).toEqual([expect.objectContaining({ filename: "/_next/static/chunks/0bbbbbbbbbbbb.js", chunk_id: idB })]);
+    expect(fromUnknown).toEqual([{ platform: "web:javascript", function: "?", filename: "[path]", lineno: 1 }]);
+    expect(fromNoBuild).toEqual([{ platform: "web:javascript", function: "?", filename: "[path]", lineno: 1 }]);
     expect(requested).toEqual([releaseA, releaseB, "ccccccc3333333333333333333333333333333cc"]);
   });
 
   it("looks up at most one build's manifest per request, however many builds the batch names", async () => {
-    const calls: Array<string | null> = [];
+    const calls: string[] = [];
     const events = Array.from({ length: 200 }, (_, index) =>
       event({ client_version: index.toString(16).padStart(40, "0").replace(/^0/, "a") }),
     );
     const { response, upstream } = await forward(post(JSON.stringify(captureBody(events)), "application/json"), ["e"], {
-      chunkFiles: async (version) => {
+      manifest: async (version) => {
         calls.push(version);
         return new Map();
       },
@@ -245,40 +255,269 @@ describe("forwardCapture", () => {
     expect(sentBody(upstream).batch[0].properties).toMatchObject({ client_version: events[0].properties.client_version });
   });
 
-  it("checks chunk paths against the build's manifest and leaves a scrubbed event as it was", async () => {
+  it("forwards an event the browser built unchanged, building it again from the schema", async () => {
     const chunk = "https://conclave.acmvit.in/_next/static/chunks/3u-6_1om1fv26.js";
-    const exception = {
+    const captured = {
       uuid: "0196f0a1-0000-7000-8000-0000000000ab",
       event: "$exception",
       properties: {
         token: KEY,
         distinct_id: UUID,
-        client_version: BUILD,
-        $current_url: "https://conclave.acmvit.in/[code]",
+        $current_url: "https://conclave.acmvit.in/lime-pear-plum?invite=1",
+        $browser_language: "en-US-x-labunit",
         $exception_list: [
           {
             type: "TypeError",
-            value: "[message withheld]",
+            value: "Meet Mira",
             mechanism: { type: "generic", handled: false },
             stacktrace: {
               type: "raw",
               frames: [
-                { platform: "web:javascript", function: "?", filename: chunk, lineno: 1, colno: 2, chunk_id: CHUNK_ID },
-                { platform: "web:javascript", function: "?", filename: chunk, lineno: 3, chunk_id: "0f8c2a1e-5b7d-4c3e-9a10-000000000001" },
-                { platform: "web:javascript", function: "?", filename: "https://conclave.acmvit.in/[path]", lineno: 4 },
+                { filename: chunk, function: "joinRoom", lineno: 1, colno: 2, chunk_id: CHUNK_ID },
+                { filename: chunk, lineno: 3, chunk_id: "0f8c2a1e-5b7d-4c3e-9a10-000000000001" },
+                { filename: "https://conclave.acmvit.in/lime-pear-plum", lineno: 4 },
               ],
             },
           },
         ],
       },
     };
-    const { upstream } = await forward(post(JSON.stringify(captureBody([exception])), "application/json"));
+    const browserBuilt = beforeSend(captured, {
+      payload: null,
+      storedKeys: new Set(),
+      token: KEY,
+      clientVersion: BUILD,
+      chunkFiles: new Map([[CHUNK_ID, "/_next/static/chunks/3u-6_1om1fv26.js"]]),
+      siteOrigin: "https://conclave.acmvit.in",
+    });
+    const { upstream } = await forward(post(JSON.stringify(captureBody([browserBuilt])), "application/json"));
 
-    const [sent] = sentBody(upstream).batch as Array<typeof exception>;
-    const frames = sent.properties.$exception_list[0].stacktrace.frames;
-    expect(frames.map((frame) => frame.filename)).toEqual([chunk, "https://conclave.acmvit.in/[path]", "https://conclave.acmvit.in/[path]"]);
-    expect({ ...sent.properties, $exception_list: undefined }).toEqual({ ...exception.properties, $exception_list: undefined });
-    expect(frames[0]).toEqual(exception.properties.$exception_list[0].stacktrace.frames[0]);
+    const [sent] = sentBody(upstream).batch as Array<{ properties: Record<string, unknown> }>;
+    expect(sent.properties).toEqual(browserBuilt?.properties);
+    expect((sent.properties.$exception_list as Array<{ stacktrace: { frames: unknown[] } }>)[0].stacktrace.frames).toEqual([
+      { platform: "web:javascript", function: "?", filename: "/_next/static/chunks/3u-6_1om1fv26.js", lineno: 1, colno: 2, chunk_id: CHUNK_ID },
+      { platform: "web:javascript", function: "?", filename: "[path]", lineno: 3 },
+      { platform: "web:javascript", function: "?", filename: "[path]", lineno: 4 },
+    ]);
+  });
+});
+
+describe("the outbound schema at /ingest", () => {
+  const RECEIVED = Date.parse("2026-11-22T12:00:00.000Z");
+  const OLD_BUILD = "aaaaaaa1111111111111111111111111111111aa";
+  const manifests = new Map<string, ReadonlyMap<string, string>>([
+    [BUILD, new Map([[CHUNK_ID, "/_next/static/chunks/3u-6_1om1fv26.js"]])],
+    [OLD_BUILD, new Map()],
+  ]);
+  const deps = {
+    currentBuild: BUILD,
+    manifest: async (version: string) => manifests.get(version) ?? null,
+    now: () => RECEIVED,
+  } as Partial<IngestDeps>;
+  const send = async (events: unknown[], body: Record<string, unknown> = {}) => {
+    const { response, upstream } = await forward(
+      post(JSON.stringify({ ...captureBody(events), ...body }), "application/json"),
+      ["e"],
+      deps,
+    );
+    return { response, upstream, batch: upstream.length ? sentBody(upstream).batch : [] };
+  };
+
+  it("sends a constant host and only templated paths, never an origin", async () => {
+    const { batch, upstream } = await send([
+      event({
+        client_version: BUILD,
+        $host: "audit-operator-site.localhost:5815",
+        $current_url: "http://audit-operator-site.localhost:5815/privacy?from=mail",
+        $pathname: "/privacy",
+      }),
+      {
+        uuid: "0196f0a1-0000-7000-8000-0000000000ab",
+        event: "$exception",
+        timestamp: "2026-11-22T11:59:59.000Z",
+        properties: {
+          token: KEY,
+          distinct_id: UUID,
+          client_version: BUILD,
+          $host: "audit-operator-site.localhost:5815",
+          $current_url: "https://conclave.acmvit.in/lime-pear-plum",
+          $exception_list: [
+            {
+              type: "TypeError",
+              value: "x",
+              stacktrace: {
+                type: "raw",
+                frames: [
+                  { filename: "https://conclave.acmvit.in/_next/static/chunks/3u-6_1om1fv26.js", lineno: 1, chunk_id: CHUNK_ID },
+                  { filename: "https://audit-operator-site.localhost:5815/_next/static/chunks/3u-6_1om1fv26.js", lineno: 2, chunk_id: CHUNK_ID },
+                  { filename: "chrome-extension://fleetassetabcdefgh/inject.js", lineno: 3 },
+                  { filename: "https://conclave.acmvit.in/transcript-pcm-processor.js", lineno: 4 },
+                ],
+              },
+            },
+          ],
+        },
+      },
+    ]);
+
+    expect(batch.map((sent) => (sent.properties as Record<string, unknown>).$host)).toEqual(["conclave-web", "conclave-web"]);
+    expect(batch.map((sent) => (sent.properties as Record<string, unknown>).$current_url)).toEqual(["/privacy", "/[code]"]);
+    const frames = (batch[1].properties as { $exception_list: Array<{ stacktrace: { frames: Array<{ filename: string }> } }> })
+      .$exception_list[0].stacktrace.frames;
+    expect(frames.map((frame) => frame.filename)).toEqual([
+      "/_next/static/chunks/3u-6_1om1fv26.js",
+      "[path]",
+      "[path]",
+      "/transcript-pcm-processor.js",
+    ]);
+    expect(String(upstream[0].init.body)).not.toMatch(/https?:|chrome-extension|audit-operator|acmvit|localhost|fleetasset|from=mail/);
+  });
+
+  it("names only a build this deployment shipped, and sends any other as unknown", async () => {
+    const { batch: current } = await send([event({ client_version: BUILD })]);
+    const { batch: older } = await send([event({ client_version: OLD_BUILD })]);
+    const { batch: unpublished } = await send([event({ client_version: "facade00" })]);
+    const { batch: none } = await send([event({ client_version: "Meet Mira" })]);
+
+    expect([current, older, unpublished, none].map((batch) => (batch[0].properties as Record<string, unknown>).client_version)).toEqual([
+      BUILD,
+      OLD_BUILD,
+      "unknown",
+      "unknown",
+    ]);
+  });
+
+  it("forwards only the events on the list", async () => {
+    const { batch } = await send([
+      event(),
+      { ...event(), event: "$pageview" },
+      { ...event(), event: "Meet Mira joined sample-room" },
+      { ...event(), event: "$identify" },
+    ]);
+
+    expect(batch.map((sent) => sent.event)).toEqual(["meet_join_attempt"]);
+  });
+
+  it("dates each event by when we received it, within a small window", async () => {
+    const at = (timestamp: string) => ({ ...event(), timestamp });
+    const { batch: skewed, upstream } = await send(
+      [at("2031-01-01T00:00:00.000Z"), at("2031-01-01T00:00:00.000Z"), at("2030-12-31T23:59:58.500Z"), at("2030-12-31T22:00:00.000Z")],
+      { sent_at: "2031-01-01T00:00:00.000Z" },
+    );
+    const { batch: unsent } = await send([at("1999-01-01T00:00:00.000Z"), at("2099-01-01T00:00:00.000Z"), at("not a time")], {
+      sent_at: undefined,
+    });
+
+    expect(skewed.map((sent) => sent.timestamp)).toEqual([
+      "2026-11-22T12:00:00.000Z",
+      "2026-11-22T12:00:00.000Z",
+      "2026-11-22T11:59:58.500Z",
+      "2026-11-22T11:55:00.000Z",
+    ]);
+    expect(sentBody(upstream)).not.toHaveProperty("sent_at");
+    expect(unsent.map((sent) => sent.timestamp)).toEqual([
+      "2026-11-22T11:55:00.000Z",
+      "2026-11-22T12:00:00.000Z",
+      "2026-11-22T12:00:00.000Z",
+    ]);
+  });
+
+  it("drops every field the schema does not list, at any depth, and any value not in its form", async () => {
+    const { batch, upstream } = await send([
+      {
+        uuid: "0196f0a1-0000-7000-8000-0000000000ac",
+        event: "$exception",
+        timestamp: "2026-11-22T12:00:00.000Z",
+        $set: { email: "mira@example.com" },
+        extra: "UnknownTopLevelCanary",
+        properties: {
+          token: KEY,
+          distinct_id: UUID,
+          $device_id: "not-a-uuid UnknownIdCanary",
+          client_version: BUILD,
+          $browser: "ReviewBrowser UnknownBrowserCanary",
+          $browser_version: 157,
+          $os: "Mac OS X",
+          $os_version: "Xbox FleetAsset123",
+          $lib: "web",
+          $lib_version: "1.453.1",
+          $timezone: "Asia/Calcutta",
+          $insert_id: "UnknownInsertCanary",
+          $unknown_sdk_field: "UnknownSdkCanary",
+          unknown_app_field: "UnknownAppCanary",
+          source: "react_error_boundary UnknownSourceCanary",
+          boundary: "panel",
+          digest: "UnknownDigestCanary",
+          $exception_list: [
+            {
+              type: "TypeError",
+              value: "UnknownMessageCanary",
+              module: "UnknownModuleCanary",
+              mechanism: { type: "generic", handled: true, data: "UnknownMechanismCanary" },
+              stacktrace: {
+                type: "raw",
+                extra: "UnknownStacktraceCanary",
+                frames: [
+                  {
+                    filename: "https://conclave.acmvit.in/_next/static/chunks/3u-6_1om1fv26.js",
+                    function: "UnknownFunctionCanary",
+                    lineno: 1,
+                    colno: 2,
+                    in_app: true,
+                    chunk_id: CHUNK_ID,
+                    abs_path: "UnknownAbsPathCanary",
+                    context_line: "UnknownContextCanary",
+                    vars: { secret: "UnknownVarsCanary" },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      },
+    ]);
+
+    expect(batch).toEqual([
+      {
+        uuid: "0196f0a1-0000-7000-8000-0000000000ac",
+        event: "$exception",
+        timestamp: "2026-11-22T12:00:00.000Z",
+        properties: {
+          token: KEY,
+          distinct_id: UUID,
+          client_version: BUILD,
+          $browser_version: 157,
+          $os: "Mac OS X",
+          $lib: "web",
+          $lib_version: "1.453.1",
+          $host: "conclave-web",
+          $process_person_profile: false,
+          boundary: "panel",
+          $exception_list: [
+            {
+              type: "TypeError",
+              value: "[message withheld]",
+              mechanism: { type: "generic", handled: true },
+              stacktrace: {
+                type: "raw",
+                frames: [
+                  {
+                    platform: "web:javascript",
+                    function: "?",
+                    filename: "/_next/static/chunks/3u-6_1om1fv26.js",
+                    lineno: 1,
+                    colno: 2,
+                    in_app: true,
+                    chunk_id: CHUNK_ID,
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      },
+    ]);
+    expect(String(upstream[0].init.body)).not.toMatch(/Canary|mira@|FleetAsset|ReviewBrowser|Calcutta/);
   });
 });
 
@@ -295,7 +534,7 @@ describe("createChunkManifestLoader", () => {
       },
     });
 
-    expect([...(await load(BUILD))]).toEqual([[CHUNK_ID, "/_next/static/chunks/3u-6_1om1fv26.js"]]);
+    expect([...((await load(BUILD)) ?? [])]).toEqual([[CHUNK_ID, "/_next/static/chunks/3u-6_1om1fv26.js"]]);
     await load(BUILD);
     expect(urls).toEqual([`https://conclave.acmvit.in/_next/static/posthog-chunk-ids/${BUILD}.json?dpl=${BUILD}`]);
   });
@@ -345,22 +584,23 @@ describe("createChunkManifestLoader", () => {
     expect(urls.at(-1)).toContain(builds[1]);
   });
 
-  it("trusts no manifest it cannot find, and fetches nothing for an id that is not a build's", async () => {
+  it("finds no manifest for a build it cannot fetch or read, and fetches nothing for an id that is not a build's", async () => {
     const urls: string[] = [];
     const load = createChunkManifestLoader({
       origin: "https://conclave.acmvit.in",
       fetch: async (url) => {
         urls.push(url);
         if (url.includes("deadbee")) throw new TypeError("fetch failed");
+        if (url.includes("facade0")) return new Response('{"not-a-uuid": "x"}', { status: 200 });
         return new Response("not found", { status: 404 });
       },
     });
 
-    expect([...(await load(BUILD))]).toEqual([]);
-    expect([...(await load("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"))]).toEqual([]);
-    expect([...(await load(null))]).toEqual([]);
-    expect([...(await load("../../secrets"))]).toEqual([]);
-    expect([...(await load("local"))]).toEqual([]);
-    expect(urls).toHaveLength(2);
+    expect(await load(BUILD)).toBeNull();
+    expect(await load("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")).toBeNull();
+    expect(await load("facade00")).toBeNull();
+    expect(await load("../../secrets")).toBeNull();
+    expect(await load("local")).toBeNull();
+    expect(urls).toHaveLength(3);
   });
 });

@@ -23,7 +23,7 @@ they go out at once by beacon, exceptions included, with whatever manifest has
 loaded (none leaves chunk frames as `[path]`), so none is lost. posthog-js's
 `captureException` would only queue an exception for its next batch, so a
 closing page builds the same `$exception` event and sends it by beacon. PostHog's own error capture
-starts as soon as it loads. Each report is scrubbed once, when it is sent:
+starts as soon as it loads. Each report is built once, when it is sent:
 
 - Unhandled errors and promise rejections (posthog-js autocapture, rate limited per error type by the SDK).
 - Errors caught by `app/error.tsx` and `app/global-error.tsx`: `source: "react_error_boundary"`, `boundary: "route" | "root"`, `digest`. A meeting panel that fails to render or load (`MeetingPanelBoundary`) reports `boundary: "panel"` while the call goes on; the panel's name is not sent.
@@ -108,9 +108,17 @@ closes. Errors between reconnect attempts never end a call; one call id spans ev
 | `outbound_video_kbps`, `outbound_video_height` | Average send bitrate, and the frame height sent for the longest time |
 | `outbound_cpu_limited_pct`, `outbound_bandwidth_limited_pct` | Share of send time the encoder was limited, from `qualityLimitationDurations`: once per sample interval, the most any layer shows, never more than the interval |
 
-The older `meet_*` events (reconnect attempts, consumer recovery and so on)
-still flow through `telemetry.capture`, minus their `roomId` and `userId`. Join
-and reconnect failures carry a `failure_reason` category, never the error text.
+The `meet_*` events (reconnect attempts, consumer recovery and so on) are
+listed in `lib/telemetry-schema.ts` with the form of each field, and none
+carries a room or user id. Their reasons are fixed codes, never log or server
+text: join and reconnect failures carry a `failure_reason` category;
+`meet_turn_relay_activated` names which transport gave up on STUN-only ICE
+(`producer_ice_unrecovered`, `producer_ice_failed`, `consumer_ice_unrecovered`,
+`consumer_ice_failed`); `meet_consumer_resume_exhausted` says why the last
+resume failed (`ack_timeout`, or the SFU's `displaced` or `rate_limited`, else
+`server_error`); and `meet_stale_consumer_*` say what found the stale consumer
+(`resume_retries_exhausted`, `server_lost_consumer`, `consumer_stayed_muted`,
+`decoder_frozen`, `muted_live_track`).
 
 ## Privacy
 
@@ -118,60 +126,78 @@ The browser sends its events to `/ingest` on our own site (`app/ingest/[...path]
 `lib/telemetry-ingest.ts`), never to PostHog. The route takes only the event
 endpoint (`/ingest/e/`) as a POST of at most 256 KB, 1 MB once decoded, and 200
 events. It decodes the body (gzip, base64 or JSON), drops events for any project
-but ours, and scrubs every event again with the rules below, so the browser's
-scrub is not the only guard. A request carries one build, the first event's
-`client_version`; events from any other build are dropped, so a request costs
-at most one manifest lookup. Chunk paths are checked against that build's
-manifest, fetched from our static files with `?dpl=<build>` (a version that is
-not a git sha is never fetched), shared by concurrent requests, and kept for 10
-minutes, or 1 minute when missing, for the 16 most recently used builds. A tab
-still running an older build is not judged by the newest one, and a build whose
-manifest cannot be found keeps no chunk path or id. It forwards the batch to PostHog as plain JSON with
-the fixed User-Agent `conclave-web-ingest/1` and no header of the browser's: no
-cookie, no IP address and no forwarded or referrer header reaches PostHog. If
-PostHog fails or cannot be reached, the browser is told to retry (503). A body
-that fails validation, an exception list of the wrong shape included, gets 400
-with an empty body, so the browser drops it and learns nothing of what failed.
+but ours, and builds every event again from the outbound schema, so the
+browser's before_send is not the only guard. A request carries one build, the
+first event's `client_version`; events naming any other build are dropped, so
+a request costs at most one manifest lookup. That build's chunk manifest is
+fetched from our configured site (`lib/site-url.ts`, never the request's Host)
+with `?dpl=<build>` (a version that is not a git sha is never fetched), shared
+by concurrent requests, and kept for 10 minutes, or 1 minute when missing, for
+the 16 most recently used builds. A tab still running an older build is judged
+by its own manifest, not the newest one. It forwards the batch to PostHog as
+plain JSON with the fixed User-Agent `conclave-web-ingest/1` and no header of
+the browser's: no cookie, no IP address and no forwarded or referrer header
+reaches PostHog. If PostHog fails or cannot be reached, the browser is told to
+retry (503). A body that fails validation, an exception list of the wrong shape
+included, gets 400 with an empty body, so the browser drops it and learns
+nothing of what failed.
 
-`telemetry-privacy.ts` runs as posthog-js `before_send` and sends only what we
-trust, instead of scrubbing what looks bad:
+Both the browser's `before_send` and `/ingest` build each event from scratch
+through the outbound schema in `lib/telemetry-schema.ts` (`buildOutboundEvent`
+in `lib/telemetry-privacy.ts`). The schema lists every event, every property
+each may carry, and the form of each value: an enum, a constant, a bounded
+number or an id we generated, never free text. Nothing else in an event is read,
+at any depth, and a value that does not fit its form is dropped. The scrubber
+only shapes the values of listed properties:
 
-- **Properties.** Our own event fields are read from the payload of the
-  capture that sent them, never from the event, so nothing in local or session
-  storage can supply one. An event the SDK raised itself, such as an unhandled
-  error, carries none. SDK fields come from an exact list checked against real
-  traffic, and never from storage: the only stored values sent are the SDK's
-  own ids (`distinct_id`, `$device_id`, `$session_id`, `$window_id`), and only
-  as uuids. The referrer and the session's entry page live in storage, so they
-  are not sent. Nor is the raw user agent, which can carry a device or fleet
-  tag; the parsed browser, version and OS are. The browser language sends only
-  its primary subtag, and only when it is an ISO 639-1 code (`en-US-x-labunit`
-  goes out as `en`). `client_version` comes from the build. On load,
-  `lib/telemetry.ts` removes everything but those ids from both stores. Person
-  properties (`$set`, `$set_once`) are never sent. A new event field has to be
-  added to the list to be sent.
+- **Events.** Only the listed events are sent. posthog-js's own (`$pageview`,
+  `$identify` and the like) and any other name are dropped.
+  `telemetry.capture` and `telemetry.captureException` take each event's fields
+  by its schema, so a call site that passes a field it does not list, or text
+  where a code belongs, does not compile.
+- **Fields we set.** `$host` is always `conclave-web`, `token` is our project
+  key, `$lib` is `web` and `$process_person_profile` is false. `client_version`
+  is the browser's own build; at `/ingest` it names a build only when this
+  deployment shipped it, the one it serves or one whose chunk manifest it still
+  has, and is `unknown` otherwise.
+- **Our fields** come only from the payload of the capture that sent them,
+  never from the event, so nothing in local or session storage can supply one.
+  An event the SDK raised itself, such as an unhandled error, carries none.
+- **SDK fields** never come from storage: the only stored values sent are the
+  SDK's own ids (`distinct_id`, `$device_id`, `$session_id`, `$window_id`), and
+  only as uuids. On load, `lib/telemetry.ts` removes everything but those ids
+  from both stores. The parsed browser, its version, the OS (its version only
+  as a version number), the device type, screen and viewport sizes, the time
+  zone offset and the posthog-js version are sent; the browser language only as
+  its primary subtag from the ISO 639-1 list (`en-US-x-labunit` goes out as
+  `en`). The referrer, the session's entry page, the raw user agent, the time
+  zone name and the SDK's debug fields are not. Person properties (`$set`,
+  `$set_once`) are never sent, and `save_campaign_params` is off.
+- **URLs.** `$current_url` and `$pathname` are the route alone (`/[code]`,
+  `/w/[code]`), with no origin, query or hash.
 - **Exception messages.** A message is sent only when it is a registered
-  `[Meets]` call-log label from the capture's own payload. Every other one, from an engine, a library, the server or a
-  rejected value, becomes `[message withheld]`. Type names are kept only from
-  a list of known error kinds (built-in, DOM, ours); any other, such as a
-  rejected object's `name`, becomes `[type withheld]`. Each entry is rebuilt
-  from the fields posthog-js sets, and each frame keeps only its file, line,
-  column, in-app flag and a chunk id the build's manifest lists; any other id,
-  uuid-shaped or not, is dropped. Function names are dropped; source maps
-  restore them in PostHog.
-- **URLs.** Every URL property and stack frame URL becomes its origin and route
-  (`/[code]`, `/w/[code]`), without query or hash. A frame keeps its path only
-  for a script on the page's own origin that is one of the exact files under
-  `public/` (a test keeps that list equal to the folder), or a build chunk
-  whose frame carries a chunk id the build's manifest maps to that very file.
-  `cf:build` writes each build's manifest at
+  `[Meets]` call-log label from the capture's own payload. Every other one,
+  from an engine, a library, the server or a rejected value, becomes
+  `[message withheld]`. Type names are kept only from a list of known error
+  kinds (built-in, DOM, ours); any other, such as a rejected object's `name`,
+  becomes `[type withheld]`.
+- **Stack frames** keep only their file, line, column, in-app flag and a chunk
+  id the build's manifest lists. Function names are dropped; source maps
+  restore them in PostHog. A frame's file is a path, never an origin, and only
+  for a script our own site served that is one of the exact files under
+  `public/` (a test keeps that list equal to the folder), or a build chunk whose
+  frame carries a chunk id the build's manifest maps to that very file; any
+  other file is `[path]`. `cf:build` writes each build's manifest at
   `/_next/static/posthog-chunk-ids/<build>.json` (the build's git sha) right
-  after `posthog-cli sourcemap inject`, and the page loads its own at startup. An id
-  the build never produced, or a real id on another file, proves nothing, so
-  until the manifest loads, and in a build without one, chunk frames are
-  `[path]`. A frame from another scheme keeps only the scheme.
-- Our own string fields still go through the credential, email and token
-  scrubber, and `save_campaign_params` is off.
+  after `posthog-cli sourcemap inject`, and the page loads its own at startup.
+  An id the build never produced, or a real id on another file, proves nothing,
+  so until the manifest loads, and in a build without one, chunk frames are
+  `[path]`.
+- **Times.** `/ingest` dates each event from when it received it: the event is
+  as old as the browser says it was when sent (posthog-js's send time against
+  the event's own), at most 5 minutes, so a skewed or made-up clock moves
+  nothing. With no send time, the event's own time is held within 5 minutes
+  before receipt. The browser's send time is not forwarded.
 
 Session replay, surveys, DOM autocapture, feature flags and pageviews are off,
 and no user is ever identified. The SFU follows the same rule: a thrown or

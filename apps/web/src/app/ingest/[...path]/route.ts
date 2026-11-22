@@ -3,18 +3,15 @@ import {
   DEFAULT_INGEST_HOST,
   forwardCapture,
 } from "@/app/lib/telemetry-ingest";
+import { getPublicSiteUrl } from "@/lib/site-url";
 
-// Chunk manifests by build, kept per origin we are served from.
-const loaders = new Map<string, ReturnType<typeof createChunkManifestLoader>>();
-
-const loaderFor = (origin: string) => {
-  let loader = loaders.get(origin);
-  if (!loader) {
-    loader = createChunkManifestLoader({ origin, fetch: (url, init) => fetch(url, init) });
-    loaders.set(origin, loader);
-  }
-  return loader;
-};
+// Manifests come from our configured site, never from the request's Host,
+// which the client chooses.
+const siteOrigin = getPublicSiteUrl();
+const manifest = createChunkManifestLoader({
+  origin: siteOrigin,
+  fetch: (url, init) => fetch(url, init),
+});
 
 const handle = async (
   request: Request,
@@ -25,7 +22,10 @@ const handle = async (
     fetch: (url, init) => fetch(url, init),
     ingestHost: process.env.POSTHOG_INGEST_HOST?.trim() || DEFAULT_INGEST_HOST,
     projectKey: process.env.NEXT_PUBLIC_POSTHOG_KEY ?? "",
-    chunkFiles: loaderFor(new URL(request.url).origin),
+    currentBuild: process.env.NEXT_PUBLIC_CONCLAVE_CLIENT_VERSION,
+    manifest,
+    siteOrigin,
+    now: Date.now,
   });
 };
 

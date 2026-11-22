@@ -58,7 +58,10 @@ const beaconedEvents = async (sent: Beacon[]): Promise<string[]> => {
         },
         ingestHost: "https://ingest.example",
         projectKey: KEY,
-        chunkFiles: async () => new Map(),
+        currentBuild: BUILD,
+        manifest: async () => null,
+        siteOrigin: "https://conclave.example",
+        now: () => Date.now(),
       },
     );
     for (const body of forwarded) {

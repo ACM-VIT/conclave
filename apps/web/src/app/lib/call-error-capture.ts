@@ -1,11 +1,11 @@
 import type { CallLogLabel } from "./call-log-labels";
-import type { TelemetryProps } from "./telemetry";
+import type { ExceptionProps } from "./telemetry-schema";
 
 const RATE_WINDOW_MS = 60_000;
 const MAX_REPORTS_PER_LABEL = 3;
 const MAX_REPORTS_PER_WINDOW = 30;
 
-export type CallErrorReport = (error: Error, props: TelemetryProps) => void;
+export type CallErrorReport = (error: Error, props: ExceptionProps) => void;
 
 // V8 writes "Name: message" above the frames; Firefox and Safari write frames only.
 const framesOf = (stack: string): string => {

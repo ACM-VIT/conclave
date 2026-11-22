@@ -23,13 +23,13 @@ it("maps each chunk id posthog-cli injected to its file, and nothing else", asyn
     "c304faa4-4e32-54fe-8740-db63d2d9f56f": "/_next/static/chunks/app2.js",
     "147fc2df-e663-5d76-aa13-f67e1e894071": "/_next/static/chunks/app3.js",
   });
-  expect([...parseChunkManifest(written)]).toHaveLength(3);
+  expect([...(parseChunkManifest(written) ?? [])]).toHaveLength(3);
 });
 
 it("reads no manifest that is not ids to build chunk files", () => {
-  expect([...parseChunkManifest({ "not-a-uuid": "/_next/static/chunks/a.js" })]).toEqual([]);
-  expect([...parseChunkManifest({ "147fc2df-e663-5d76-aa13-f67e1e894071": "https://cdn.example.net/a.js" })]).toEqual([]);
-  expect([...parseChunkManifest(["/_next/static/chunks/a.js"])]).toEqual([]);
+  expect(parseChunkManifest({ "not-a-uuid": "/_next/static/chunks/a.js" })).toBeNull();
+  expect(parseChunkManifest({ "147fc2df-e663-5d76-aa13-f67e1e894071": "https://cdn.example.net/a.js" })).toBeNull();
+  expect(parseChunkManifest(["/_next/static/chunks/a.js"])).toBeNull();
 });
 
 it("names the manifest after the build, and writes none for a build without a git version", async () => {

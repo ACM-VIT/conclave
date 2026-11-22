@@ -3,13 +3,20 @@
 import type { PostHog } from "posthog-js";
 import { installCallErrorCapture } from "./call-error-capture";
 import {
+  beforeSend,
   chunkManifestUrl,
+  isBuildVersion,
   isStoredProperty,
   parseChunkManifest,
-  scrubTelemetryEvent,
 } from "./telemetry-privacy";
+import {
+  type ExceptionProps,
+  type TelemetryEventName,
+  type TelemetryEventProps,
+  UNKNOWN_BUILD,
+} from "./telemetry-schema";
 
-export type TelemetryProps = Record<string, unknown>;
+type TelemetryProps = Record<string, unknown>;
 
 export type TelemetryCaptureOptions = {
   /** Send now with sendBeacon; for events captured while the page unloads. */
@@ -20,7 +27,8 @@ const posthogKey = process.env.NEXT_PUBLIC_POSTHOG_KEY;
 // Events go to /ingest on our own site (app/ingest), which scrubs them again
 // and forwards them to PostHog without the browser's headers.
 const INGEST_PATH = "/ingest";
-const clientVersion = process.env.NEXT_PUBLIC_CONCLAVE_CLIENT_VERSION;
+const buildVersion = process.env.NEXT_PUBLIC_CONCLAVE_CLIENT_VERSION;
+const clientVersion = isBuildVersion(buildVersion) ? buildVersion : UNKNOWN_BUILD;
 
 /** False without a project key, and in `next dev` unless someone opts in. */
 export const telemetryEnabled =
@@ -70,7 +78,7 @@ const loadChunkManifest = async (): Promise<void> => {
   if (!url) return;
   try {
     const response = await fetch(url, { cache: "no-store" });
-    if (response.ok) chunkFiles = parseChunkManifest(await response.json());
+    if (response.ok) chunkFiles = parseChunkManifest(await response.json()) ?? chunkFiles;
   } catch {}
 };
 
@@ -150,11 +158,13 @@ const initPostHog = (client: PostHog, key: string): void => {
     },
     before_send: (event) =>
       event &&
-      scrubTelemetryEvent(event, {
+      beforeSend(event, {
         payload: emitting,
         storedKeys: storedKeys(client),
+        token: key,
         clientVersion,
         chunkFiles,
+        siteOrigin: window.location.origin,
       }),
   });
   dropStoredProperties(client);
@@ -207,7 +217,7 @@ const send = (delivery: Delivery): void => {
 // posthog-js's captureException queues the event for its next batch, which
 // a closing page may never send, so a closing page builds the same event and
 // sends it by beacon like any other.
-const sendException = (error: unknown, props?: TelemetryProps): void => {
+const sendException = (error: unknown, props: ExceptionProps): void => {
   send((client, closing) => {
     emit(props, () => {
       if (!closing) {
@@ -224,9 +234,9 @@ const sendException = (error: unknown, props?: TelemetryProps): void => {
 };
 
 export const telemetry = {
-  capture(
-    event: string,
-    props?: TelemetryProps,
+  capture<N extends TelemetryEventName>(
+    event: N,
+    props: TelemetryEventProps<N>,
     options?: TelemetryCaptureOptions,
   ): void {
     send((client, closing) => {

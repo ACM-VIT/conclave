@@ -1,15 +1,17 @@
 import { z } from "zod";
 import {
+  buildOutboundEvent,
   chunkManifestUrl,
   isBuildVersion,
   parseChunkManifest,
-  scrubTelemetryEvent,
 } from "./telemetry-privacy";
+import { createOutboundSchemas, UNKNOWN_BUILD } from "./telemetry-schema";
 
 /**
  * The browser's PostHog traffic goes through /ingest on our own site, so the
  * browser's User-Agent, IP address and cookies never reach PostHog, and every
- * body is scrubbed here again rather than trusting the browser's before_send.
+ * event is built here again from the outbound schema rather than trusting the
+ * browser's before_send.
  */
 
 /** The capture endpoints posthog-js uses with our config: events only. */
@@ -28,12 +30,22 @@ export type IngestDeps = {
   ingestHost: string;
   /** Our project key: events for any other project are not relayed. */
   projectKey: string;
+  /** The build this deployment serves. */
+  currentBuild: string | undefined;
   /**
-   * The chunk manifest of the build an event came from, by its version (the
-   * event's client_version), or an empty one when it is not known.
+   * The chunk manifest of a build, by its version (the event's
+   * client_version), or null when this deployment has none for it: a build
+   * it did not ship.
    */
-  chunkFiles: (version: string | null) => Promise<ReadonlyMap<string, string>>;
+  manifest: (version: string) => Promise<ReadonlyMap<string, string> | null>;
+  /** Our site's origin: a frame of a script served from any other names no file. */
+  siteOrigin: string;
+  now: () => number;
 };
+
+// How far an event's time may be from when we received it: posthog-js sends
+// within seconds, and retries for a few minutes at most.
+const MAX_EVENT_AGE_MS = 5 * 60_000;
 
 // The parts of an exception posthog-js sends that the scrubber reads, typed
 // as posthog-js writes them; anything else in an entry or frame is dropped.
@@ -153,36 +165,37 @@ const decodeBody = async (request: Request, url: URL): Promise<unknown> => {
   }
 };
 
-/** The build an event came from, when its client_version names one. */
+/** The build an event says it came from, when its client_version names one. */
 const buildOf = (event: CapturedEvent): string | null =>
   isBuildVersion(event.properties.client_version) ? event.properties.client_version : null;
 
+const timeOf = (value: unknown): number | null => {
+  const time = typeof value === "string" ? Date.parse(value) : NaN;
+  return Number.isFinite(time) ? time : null;
+};
+
+/** When the browser sent the request, by its own clock: posthog-js's query flag or the body's. */
+const clientSentAt = (url: URL, body: unknown): number | null => {
+  const query = url.searchParams.get("sent_at");
+  if (query && /^\d{1,15}$/.test(query)) return Number(query);
+  return body !== null && typeof body === "object" && "sent_at" in body ? timeOf(body.sent_at) : null;
+};
+
 /**
- * One event scrubbed again on our side: our fields are the event's own (the
- * browser already took them from the capture's payload), nothing counts as
- * stored, and chunk paths need the manifest of the event's own build.
+ * An event's time, from when we received it: how long before sending the
+ * browser says it captured the event, at most MAX_EVENT_AGE_MS, so a skewed
+ * or made-up clock moves nothing. With no send time, its own time within
+ * that window of when we received it.
  */
-const scrubForwarded = (
-  event: CapturedEvent,
-  chunkFiles: ReadonlyMap<string, string>,
-): CapturedEvent => {
-  const { properties } = event;
-  const payload = Object.fromEntries(
-    Object.entries(properties).filter(
-      ([key]) => !key.startsWith("$") && key !== "token" && key !== "distinct_id" && key !== "client_version",
-    ),
-  );
-  const clientVersion = buildOf(event) ?? undefined;
-  const scrubbed = scrubTelemetryEvent(
-    { uuid: event.uuid ?? "", event: event.event, properties },
-    { payload, storedKeys: new Set(), clientVersion, chunkFiles },
-  );
-  return {
-    ...(event.uuid ? { uuid: event.uuid } : {}),
-    event: event.event,
-    ...(event.timestamp ? { timestamp: event.timestamp } : {}),
-    properties: scrubbed.properties,
-  };
+const eventTime = (timestamp: unknown, sentAt: number | null, receivedAt: number): string => {
+  const time = timeOf(timestamp);
+  const at =
+    time === null
+      ? receivedAt
+      : sentAt === null
+        ? Math.min(Math.max(time, receivedAt - MAX_EVENT_AGE_MS), receivedAt)
+        : receivedAt - Math.min(Math.max(sentAt - time, 0), MAX_EVENT_AGE_MS);
+  return new Date(at).toISOString();
 };
 
 const reply = (status: number) =>
@@ -228,24 +241,44 @@ export async function forwardCapture(
 
 /** The batch to send PostHog for one request, or a Refused error. */
 const prepareForward = async (request: Request, deps: IngestDeps) => {
-  const parsed = CaptureBody.safeParse(await decodeBody(request, new URL(request.url)));
+  const receivedAt = deps.now();
+  const url = new URL(request.url);
+  const decoded = await decodeBody(request, url);
+  const parsed = CaptureBody.safeParse(decoded);
   if (!parsed.success) throw new Refused(400);
   const body = parsed.data;
   const events = Array.isArray(body) ? body : "batch" in body ? body.batch : [body];
   const ours = events.filter((event) => event.properties.token === deps.projectKey);
   if (ours.length === 0) throw new Refused(400);
   // A tab sends only its own build's events, so a request carries one build:
-  // the first event's. Events from any other build are dropped, which holds
+  // the first event's. Events naming any other build are dropped, which holds
   // a request to at most one manifest lookup. A tab can still run an older
-  // build than the one deployed, so that build's own manifest is used.
+  // build than the one deployed, so that build's own manifest is used, and a
+  // build is named only when this deployment shipped it: the one it serves,
+  // or one whose manifest it still has.
   const build = buildOf(ours[0]);
   const sameBuild = ours.filter((event) => buildOf(event) === build);
-  const chunkFiles = build ? await deps.chunkFiles(build) : new Map<string, string>();
-  return {
-    api_key: deps.projectKey,
-    batch: sameBuild.map((event) => scrubForwarded(event, chunkFiles)),
-    ...(!Array.isArray(body) && "sent_at" in body && body.sent_at ? { sent_at: body.sent_at } : {}),
+  const manifest = build ? await deps.manifest(build) : null;
+  const shipped = build !== null && (build === deps.currentBuild || manifest !== null);
+  const context = {
+    token: deps.projectKey,
+    clientVersion: shipped ? build : UNKNOWN_BUILD,
+    chunkFiles: manifest ?? new Map<string, string>(),
   };
+  const schemas = createOutboundSchemas(context);
+  const sentAt = clientSentAt(url, decoded);
+  const batch = sameBuild.flatMap((event) => {
+    const built = buildOutboundEvent(
+      { uuid: event.uuid ?? crypto.randomUUID(), event: event.event, properties: event.properties },
+      // Our fields are the event's own: the browser took them from the
+      // capture's payload, and nothing here counts as stored.
+      { ...context, payload: event.properties, storedKeys: new Set(), siteOrigin: deps.siteOrigin },
+      schemas,
+    );
+    return built ? [{ ...built, timestamp: eventTime(event.timestamp, sentAt, receivedAt) }] : [];
+  });
+  if (batch.length === 0) throw new Refused(400);
+  return { api_key: deps.projectKey, batch };
 };
 
 const MANIFEST_TTL_MS = 10 * 60_000;
@@ -257,9 +290,10 @@ const MAX_MANIFESTS = 16;
  * version, and keeps the 16 most recently used, found or not; an older
  * build's tabs report against their own manifest, which `dpl` (the build's
  * deployment id) can reach while that build is still served. Concurrent
- * loads of one build share a fetch. A manifest it cannot find or read counts
- * as empty, so those frames keep no path or chunk id, and a version that is
- * not a build's is never fetched.
+ * loads of one build share a fetch. A manifest it cannot find or read is
+ * null: that build was not shipped here, its frames keep no path or chunk id,
+ * and its events name no build. A version that is not a build's is never
+ * fetched.
  */
 export function createChunkManifestLoader({
   origin,
@@ -269,18 +303,19 @@ export function createChunkManifestLoader({
   origin: string;
   fetch: (url: string, init?: RequestInit) => Promise<Response>;
   now?: () => number;
-}): (version: string | null) => Promise<ReadonlyMap<string, string>> {
-  const known = new Map<string, { files: ReadonlyMap<string, string>; until: number }>();
-  const loading = new Map<string, Promise<ReadonlyMap<string, string>>>();
+}): (version: string) => Promise<ReadonlyMap<string, string> | null> {
+  type Manifest = ReadonlyMap<string, string> | null;
+  const known = new Map<string, { files: Manifest; until: number }>();
+  const loading = new Map<string, Promise<Manifest>>();
 
-  const remember = (version: string, files: ReadonlyMap<string, string>) => {
+  const remember = (version: string, files: Manifest) => {
     known.delete(version);
     if (known.size >= MAX_MANIFESTS) known.delete(known.keys().next().value as string);
-    known.set(version, { files, until: now() + (files.size > 0 ? MANIFEST_TTL_MS : MISSING_MANIFEST_TTL_MS) });
+    known.set(version, { files, until: now() + (files ? MANIFEST_TTL_MS : MISSING_MANIFEST_TTL_MS) });
   };
 
-  const fetchManifest = async (version: string, url: string): Promise<ReadonlyMap<string, string>> => {
-    let files: ReadonlyMap<string, string> = new Map();
+  const fetchManifest = async (version: string, url: string): Promise<Manifest> => {
+    let files: Manifest = null;
     try {
       const response = await fetch(`${origin}${url}?dpl=${version}`, {
         headers: { "user-agent": INGEST_USER_AGENT },
@@ -293,7 +328,7 @@ export function createChunkManifestLoader({
 
   return (version) => {
     const url = chunkManifestUrl(version);
-    if (!url || !version) return Promise.resolve(new Map());
+    if (!url) return Promise.resolve(null);
     const cached = known.get(version);
     if (cached && cached.until > now()) {
       known.delete(version);
