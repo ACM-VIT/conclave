@@ -139,7 +139,7 @@ class OwnerChatPolishTests {
                 content = "Unread message $index", timestampMillis = base + (25 + index) * 1_000.0, isHistory = false)
         })
         chat.apply(inputs(), ChatInputChange.messages)
-        chat.panelDidOpen(destination = ChatDestination.none, targetId = "")
+        chat.openPanel()
         assertEquals("new-0", chat.timeline.firstUnreadId)
         val cache = ChatTimelineCache(chat)
         val activity = activity()

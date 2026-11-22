@@ -214,16 +214,12 @@ struct ChatPanelHost: View {
             ChatPanel(chat: chat, path: $path, hostStyle: resolved.style)
         }
         .task(id: presentation.id) {
-            let opened = Date().timeIntervalSince1970 * 1000.0
-            chat.panelDidOpen(destination: ChatPresenter.destination(for: presentation.request.destination),
-                              targetId: presentation.request.targetId)
-            #if DEBUG
-            ChatDiagnostics.counters?.recordOpenLatency(Date().timeIntervalSince1970 * 1000.0 - opened)
-            #endif
+            chat.route(to: ChatPresenter.destination(for: presentation.request.destination),
+                       targetId: presentation.request.targetId)
         }
         .onChange(of: panels.destinationRequest) { _, _ in
             guard let request = panels.latestDestination(for: presentation.request.presentationID) else { return }
-            chat.panelDidOpen(destination: ChatPresenter.destination(for: request.destination), targetId: request.targetId)
+            chat.route(to: ChatPresenter.destination(for: request.destination), targetId: request.targetId)
         }
     }
 }

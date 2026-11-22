@@ -178,19 +178,17 @@ final class ChatPresenter {
         }
     }
 
-    func willShow() {
-        if !isOpen {
-            isOpen = true
-            firstUnreadId = pendingFirstUnreadId
-            pendingFirstUnreadId = ""
-            pendingFirstUnreadAtMillis = 0.0
-            pendingUnreadCount = 0
-        }
-        flushDeferredRows()
+    func openPanel() {
+        guard !isOpen else { return }
+        isOpen = true
+        firstUnreadId = pendingFirstUnreadId
+        pendingFirstUnreadId = ""
+        pendingFirstUnreadAtMillis = 0.0
+        pendingUnreadCount = 0
+        rebuildRows(previousRowIds: currentTimeline.rowIds)
     }
 
-    func panelDidOpen(destination: ChatDestination, targetId: String) {
-        willShow()
+    func route(to destination: ChatDestination, targetId: String) {
         switch destination {
         case .message:
             jumpTo(messageId: targetId)
@@ -202,10 +200,9 @@ final class ChatPresenter {
         default:
             break
         }
-        rebuildRows(previousRowIds: currentTimeline.rowIds)
     }
 
-    func panelDidClose() {
+    func closePanel() {
         guard isOpen else { return }
         isOpen = false
         firstUnreadId = ""

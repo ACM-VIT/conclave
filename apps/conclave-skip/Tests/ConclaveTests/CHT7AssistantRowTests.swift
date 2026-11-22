@@ -303,7 +303,7 @@ struct CHT7AssistantRowTests {
 
     @Test func aCompletedAnswerIsAnnouncedOnce() {
         let chat = Self.presenter([Self.answer("", input: ChatAssistantInput.make())])
-        chat.panelDidOpen(destination: .none, targetId: "")
+        chat.openPanel()
         chat.apply(Self.inputs([Self.answer("The agenda has three items. More", input: ChatAssistantInput.make())]), change: .assistant)
         #expect(chat.announcement?.kind != "newMessage", "an open panel announces the answer when it completes, not when it appears")
         chat.apply(Self.inputs([Self.answer("The agenda has three items. More", input: ChatAssistantInput.make(isDone: true))]),
@@ -321,7 +321,7 @@ struct CHT7AssistantRowTests {
         let chat = ChatPresenter()
         chat.now = { Self.base + clock.value }
         chat.apply(Self.inputs([Self.answer("", input: ChatAssistantInput.make())]), change: .messages)
-        chat.panelDidOpen(destination: .none, targetId: "")
+        chat.openPanel()
         let start = chat.tailGrowth
         var text = "A"
         for step in 1...6 {

@@ -14097,9 +14097,11 @@ final class MeetingViewModel {
         if isCurrent {
             state.unreadChatCount = 0
             clearChatOverlayMessages()
-            chat.willShow()
+            let opened = Date().timeIntervalSince1970 * 1000.0
+            chat.openPanel()
+            ChatDiagnostics.counters?.recordOpenLatency(Date().timeIntervalSince1970 * 1000.0 - opened)
         } else {
-            chat.panelDidClose()
+            chat.closePanel()
         }
     }
 

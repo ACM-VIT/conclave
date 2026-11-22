@@ -13,7 +13,7 @@ struct ChatParseCacheTests {
             messages.append(Chat.peer("h-" + String(index), "see :smile: at 10:30 on example.com", at: Double(index)))
         }
         let chat = Chat.presenter(Chat.inputs(messages))
-        chat.panelDidOpen(destination: .none, targetId: "")
+        chat.openPanel()
         let parsed = chat.emojiParseCount
         #expect(parsed == 300)
         for index in 0..<20 {

@@ -165,23 +165,23 @@ struct ChatPoliciesTests {
         messages.append(Self.peer("s-5", "history", at: 4000, history: true))
         chat.apply(Self.inputs(messages), change: .messages)
         #expect(chat.pendingUnreadCount == 2)
-        chat.panelDidOpen(destination: .none, targetId: "")
+        chat.openPanel()
         let ids = chat.timeline.rowIds
         let divider = ids.firstIndex(of: "unread")
         #expect(divider != nil)
 
         if let divider { #expect(ids.dropFirst(divider + 1).first == "s-3") }
         #expect(chat.timeline.firstUnreadId == "s-3")
-        chat.panelDidClose()
+        chat.closePanel()
         #expect(!chat.timeline.rowIds.contains("unread"))
-        chat.panelDidOpen(destination: .none, targetId: "")
+        chat.openPanel()
         #expect(!chat.timeline.rowIds.contains("unread"))
     }
 
     @Test func anOpenPanelAnnouncesNewRemoteMessagesAndCoalescesBursts() {
         var messages = [Self.peer("s-1", "old", at: 0)]
         let chat = Self.presenter(Self.inputs(messages))
-        chat.panelDidOpen(destination: .none, targetId: "")
+        chat.openPanel()
         messages.append(Self.peer("s-2", "Can you share the deck?", at: 1000, history: false))
         chat.apply(Self.inputs(messages), change: .messages)
         #expect(chat.announcement?.kind == "newMessage" && chat.announcement?.name == "Avery Lee")
