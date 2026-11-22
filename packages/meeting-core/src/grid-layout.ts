@@ -177,82 +177,84 @@ const roundToTotal = (sizes: number[], total: number) => {
 };
 
 /**
- * How wide each tile may grow: `hard` is the 1.25x cap, and `soft` holds
- * portrait tiles at 4:5, since a portrait tile crops a face sooner.
+ * How far each tile may resize, in whole pixels: `floor` and `hard` are the
+ * 1.25x caps either way, and `soft` holds portrait tiles at 4:5, since a
+ * portrait tile crops a face sooner.
  */
-const growthCaps = (widths: number[], height: number) => {
+const resizeLimits = (widths: number[], height: number) => {
+  const floor = widths.map((width) => Math.ceil(width / MAX_ROW_STRETCH));
   const hard = widths.map((width) => Math.floor(width * MAX_ROW_STRETCH));
   const soft = widths.map((width, index) =>
     width < height
       ? Math.min(hard[index], Math.max(width, Math.floor(height * PORTRAIT_STRETCH_ASPECT)))
       : hard[index],
   );
-  return { soft, hard };
+  return { floor, soft, hard };
 };
 
 /**
- * Widen a row's tiles by `extra` px in total, in proportion to their width.
- * Tiles fill their soft caps first, then their hard caps. Returns null when
- * the hard caps cannot absorb `extra`.
+ * Move `sizes` by `amount` px in total, each tile in proportion to its natural
+ * width, until it reaches its limit. Returns the px no tile could take.
  */
-const stretchRow = (widths: number[], height: number, extra: number) => {
-  const { soft: softCaps, hard: hardCaps } = growthCaps(widths, height);
-  if (sum(hardCaps) - sum(widths) < extra) return null;
-
-  const grown = [...widths];
-  let left = extra;
-  for (const caps of [softCaps, hardCaps]) {
-    let open = grown.flatMap((width, index) => (width < caps[index] ? [index] : []));
-    while (left > ASPECT_EPSILON && open.length > 0) {
-      const base = sum(open.map((index) => widths[index]));
-      const step = Math.min(
-        left / base,
-        ...open.map((index) => (caps[index] - grown[index]) / widths[index]),
-      );
-      open.forEach((index) => {
-        grown[index] += widths[index] * step;
-      });
-      left -= base * step;
-      open = open.filter((index) => grown[index] < caps[index] - ASPECT_EPSILON);
-    }
+const fillToward = (widths: number[], sizes: number[], limits: number[], amount: number) => {
+  const direction = Math.sign(amount);
+  const room = (index: number) => (limits[index] - sizes[index]) * direction;
+  let left = Math.abs(amount);
+  let open = sizes.flatMap((_, index) => (room(index) > ASPECT_EPSILON ? [index] : []));
+  while (left > ASPECT_EPSILON && open.length > 0) {
+    const base = sum(open.map((index) => widths[index]));
+    const step = Math.min(left / base, ...open.map((index) => room(index) / widths[index]));
+    open.forEach((index) => {
+      sizes[index] += direction * widths[index] * step;
+      // Land exactly on a limit, so rounding can never cross it.
+      if (room(index) <= ASPECT_EPSILON) sizes[index] = limits[index];
+    });
+    left -= base * step;
+    open = open.filter((index) => room(index) > ASPECT_EPSILON);
   }
-  return roundToTotal(grown, sum(widths) + extra);
+  return direction * left;
 };
 
 /**
- * Resize each row's tiles so the rows share one width and the grid's edges
- * line up. Rows stretch to the widest row. When a row holding `cols` tiles
- * cannot stretch that far, every row meets at the width that row reaches,
- * preferably with its portrait tiles held at 4:5, and wider rows narrow by at
- * most 1.25x. A shorter row the cap cannot stretch, such as a lone last tile,
- * keeps its width and centres.
+ * Resize a row's tiles so the row spans `rowWidth`. Tiles grow to their soft
+ * caps before their hard caps, and shrink no further than their floors.
+ * Returns null when the caps cannot reach `rowWidth`.
+ */
+const resizeRow = (widths: number[], height: number, gap: number, rowWidth: number) => {
+  const total = rowWidth - (widths.length - 1) * gap;
+  const { floor, soft, hard } = resizeLimits(widths, height);
+  if (total < sum(floor) || total > sum(hard)) return null;
+  const sizes = [...widths];
+  if (total < sum(widths)) {
+    fillToward(widths, sizes, floor, total - sum(widths));
+  } else {
+    fillToward(widths, sizes, hard, fillToward(widths, sizes, soft, total - sum(widths)));
+  }
+  return roundToTotal(sizes, total);
+};
+
+/**
+ * Resize each row's tiles so the full rows, those holding `cols` tiles, share
+ * one width and the grid's edges line up. They meet at the widest row when
+ * they can reach it, preferably with portrait tiles held at 4:5, and otherwise
+ * at the widest width every full row reaches. Other rows join that width when
+ * the caps allow, and a row they don't, such as a lone last tile, keeps its
+ * width and centres.
  */
 const alignRows = (rowTiles: number[][], height: number, gap: number, cols: number) => {
-  const natural = rowTiles.map((tiles) => rowWidthOf(tiles, gap));
-  const widest = Math.max(...natural);
-  const fullRows = rowTiles.filter((tiles) => tiles.length === cols);
-  const reach = (cap: "soft" | "hard") =>
-    Math.min(
-      widest,
-      ...fullRows.map((tiles) => rowWidthOf(growthCaps(tiles, height)[cap], gap)),
-    );
-  const narrowest = Math.max(
-    ...rowTiles.map((tiles) =>
-      rowWidthOf(tiles.map((width) => Math.ceil(width / MAX_ROW_STRETCH)), gap),
-    ),
-  );
-  const meet = Math.max(reach("soft"), narrowest);
-  const target = meet <= reach("hard") ? meet : widest;
-
-  return rowTiles.map((tiles, row) => {
-    const extra = target - natural[row];
-    if (extra >= 0) return stretchRow(tiles, height, extra) ?? tiles;
-    const scale = (sum(tiles) + extra) / sum(tiles);
-    return roundToTotal(
-      tiles.map((width) => width * scale),
-      sum(tiles) + extra,
-    );
-  });
+  const widest = Math.max(...rowTiles.map((tiles) => rowWidthOf(tiles, gap)));
+  const fullRows = rowTiles
+    .filter((tiles) => tiles.length === cols)
+    .map((tiles) => resizeLimits(tiles, height));
+  const span = (limit: "floor" | "soft" | "hard") =>
+    fullRows.map((limits) => rowWidthOf(limits[limit], gap));
+  const narrowest = Math.max(...span("floor"));
+  const reach = Math.min(...span("hard"));
+  const target =
+    narrowest <= reach
+      ? Math.min(Math.max(Math.min(widest, ...span("soft")), narrowest), reach)
+      : widest;
+  return rowTiles.map((tiles) => resizeRow(tiles, height, gap, target) ?? tiles);
 };
 
 /**
