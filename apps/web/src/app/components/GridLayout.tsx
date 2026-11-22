@@ -2349,7 +2349,7 @@ function GridLayout({
     };
   }, [getRoomTilingSnapshot]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     publishRoomTiling();
   }, [roomTilingMetadataSignature]);
   const setSelfViewMode = useCallback(
