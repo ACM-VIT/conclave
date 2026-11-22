@@ -89,13 +89,6 @@ const isPublicIp = (value) => {
   return false;
 };
 
-const normalizeIp = (value) => {
-  if (isIP(value) === 6) {
-    return new URL(`http://[${value}]`).hostname.slice(1, -1);
-  }
-  return value;
-};
-
 const isLocalUrl = (url) =>
   url.hostname === "localhost" || isLoopbackIp(url.hostname.replace(/^\[|\]$/g, ""));
 
@@ -245,7 +238,7 @@ export const resolveSfuTargets = ({ allowPublicRedis = false, compose, serviceNa
     const region = String(env.SFU_REGION || "").trim();
     const publicUrl = parsePublicUrl(String(env.SFU_PUBLIC_URL || ""), service, errors);
     const announcedIpInput = String(env.ANNOUNCED_IP || "").trim();
-    const announcedIp = normalizeIp(announcedIpInput);
+    const announcedIp = canonicalIp(announcedIpInput);
     const rtcMinPort = parseRequiredPort(env.RTC_MIN_PORT, `${service}: RTC_MIN_PORT`, errors);
     const rtcMaxPort = parseRequiredPort(env.RTC_MAX_PORT, `${service}: RTC_MAX_PORT`, errors);
     const serverPort = parseRequiredPort(env.SFU_PORT || env.PORT, `${service}: SFU_PORT`, errors);

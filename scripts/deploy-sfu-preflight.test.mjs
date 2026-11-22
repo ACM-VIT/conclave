@@ -177,6 +177,21 @@ test("a non-local SFU must announce a globally routable IP", () => {
   assert.equal(announce("::ffff:10.0.0.1"), false);
 });
 
+test("overlapping RTC ranges are fatal on one address however it is spelled", () => {
+  for (const [first, second] of [["8.8.8.8", "::ffff:8.8.8.8"], ["2606:4700::1111", "2606:4700:0:0::1111"]]) {
+    const compose = makeCompose();
+    const dxb = compose.services["edge-dxb"].environment;
+    const fra = compose.services["edge-fra"].environment;
+    dxb.SFU_PUBLIC_URL = "https://dxb.example.com";
+    fra.SFU_PUBLIC_URL = "https://fra.example.com";
+    dxb.ANNOUNCED_IP = first;
+    fra.ANNOUNCED_IP = second;
+    fra.RTC_MIN_PORT = dxb.RTC_MIN_PORT;
+    fra.RTC_MAX_PORT = dxb.RTC_MAX_PORT;
+    assert.throws(() => resolveSfuTargets({ compose }), /RTC port ranges overlap on 8\.8\.8\.8|RTC port ranges overlap on 2606:4700::1111/, `${first} vs ${second}`);
+  }
+});
+
 test("matching RTC ranges are allowed on different public IPs", () => {
   const compose = makeCompose();
   const dxb = compose.services["edge-dxb"].environment;
