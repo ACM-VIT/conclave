@@ -36,7 +36,7 @@ The token names the room the key was issued for in `guestRoom`, and the SFU lets
 
 The route also signs a `guestProof` claim into the join token. `guestProof` is a keyed hash of the pass alone, so it is the same in every room and tab. The SFU never sends it to clients.
 
-The SFU binds a guest `userKey` to the `guestProof` it enters a room with. The binding lasts while the key holds anything in the room: a seat, a waiting-room entry, host, an admission, a stage invite, or a block.
+The SFU binds a guest `userKey` to the `guestProof` it enters a room with. The binding lasts while the key holds anything in the room: a seat, a waiting-room entry, host, an admission, a stage invite, a block, or a refusal recorded under the key.
 A later join under that `userKey` must carry the same `guestProof`. Otherwise the SFU refuses the join.
 
 The proof is how the SFU treats two keys as one guest. What a guest may do does not depend on the tab:
@@ -58,7 +58,8 @@ The guest claims of a join token (`userId`, `guestProof`, `guestRoom`, `clientId
 
 Who may come in is decided from one record of host decisions, kept per pass (for seat keys) or per key (for accounts and keys a client chose itself), on the same clock as requests to be let in (`config/classes/AdmissionLedger.ts`). There are no separate allow lists. A room keeps decisions for up to `SFU_LOBBY_DECISION_RECORD_LIMIT` passes and keys (5000). When it is full it drops the least recently active record that holds only admissions, never one that holds a refusal, so trimming can only make a guest knock again. When only refusals are left, a refusal is still kept and a new admission is not, and the SFU logs it.
 
-- A join may pass the lock, or the waiting room, only if the latest decision for that scope across everything the join speaks for is an admission. For a token issued for the room that is every linked pass of the guest; for any other token it is its own key. An admission, a denial, a revocation, a removal and a block are all decisions; a later one always wins. Every refusal is recorded, whether or not the pass or key had a record before. Locking the room starts lock admissions afresh.
+- A join may pass the lock, or the waiting room, only if the latest decision for that scope across everything the join speaks for is an admission. For a token issued for the room that is every linked pass of the guest; for any other token it is its own key. An admission, a denial, a revocation, a removal and a block are all decisions; a later one always wins. Every refusal a host makes is recorded, whether or not the pass or key had a record before, and also against the pass when a proof ties a key a client chose itself to one. Locking the room starts lock admissions afresh.
+- Only a host's decision adds a record. Nothing a participant does adds one: an attendee who declines a stage invite uses it up and leaves no refusal, a decline without an invite changes nothing, and a join that links passes to a blocked guest ends what the existing records hold and turns the guest's seats and requests away without recording anything.
 - A waiting request is answered only by a decision made after it arrived. When a join links passes, the guest's waiting requests are judged again: a later denial turns a request away, a later admission lets it in if the guest still holds it, and any other request stays. Applying an earlier decision records nothing new, so the decision keeps its time.
 - After every change to who waits, the SFU tells hosts the difference between the rows they were shown and the rows that are now true: removals (`userAdmitted`, `userRejected`, `pendingUserLeft`) and additions (`userRequestedJoin`). `pendingUsersSnapshot` and the admin counts come from the same rows.
 
