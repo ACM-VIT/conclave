@@ -2,7 +2,7 @@
 
 import type { PostHog } from "posthog-js";
 import { installCallErrorCapture } from "./call-error-capture";
-import { isSentProperty, scrubTelemetryEvent } from "./telemetry-privacy";
+import { isStoredProperty, scrubTelemetryEvent } from "./telemetry-privacy";
 
 export type TelemetryProps = Record<string, unknown>;
 
@@ -14,6 +14,7 @@ export type TelemetryCaptureOptions = {
 const posthogKey = process.env.NEXT_PUBLIC_POSTHOG_KEY;
 const posthogHost =
   process.env.NEXT_PUBLIC_POSTHOG_HOST ?? "https://eu.posthog.com";
+const clientVersion = process.env.NEXT_PUBLIC_CONCLAVE_CLIENT_VERSION;
 
 /** False without a project key, and in `next dev` unless someone opts in. */
 export const telemetryEnabled =
@@ -27,15 +28,36 @@ const MAX_QUEUED = 50;
 
 type Delivery = (posthog: PostHog) => void;
 
-// Stored super properties ride on every event, from local storage and, merged
-// in after it, session storage. Any that is not on the exact allowlist, such
-// as a value a script seeded there, is removed from both on load.
-const dropUntrustedSuperProperties = (client: PostHog): void => {
+// posthog-js merges local storage, then session storage, into every event.
+// Storage keeps only the SDK's own ids; anything else, such as a value a
+// script seeded there, is removed from both on load.
+const dropStoredProperties = (client: PostHog): void => {
   for (const key of Object.keys(client.persistence?.properties() ?? {})) {
-    if (!isSentProperty(key)) client.unregister(key);
+    if (!isStoredProperty(key)) client.unregister(key);
   }
   for (const key of Object.keys(client.sessionPersistence?.properties() ?? {})) {
-    if (!isSentProperty(key)) client.unregister_for_session(key);
+    if (!isStoredProperty(key)) client.unregister_for_session(key);
+  }
+};
+
+const storedKeys = (client: PostHog): Set<string> =>
+  new Set([
+    ...Object.keys(client.persistence?.properties() ?? {}),
+    ...Object.keys(client.sessionPersistence?.properties() ?? {}),
+  ]);
+
+// The payload of the capture in progress. posthog-js calls before_send inside
+// capture, so the scrubber takes our fields from here, never from what storage
+// merged into the event. An event the SDK raised itself has none.
+let emitting: TelemetryProps | null = null;
+
+const emit = (payload: TelemetryProps | undefined, capture: () => void): void => {
+  const outer = emitting;
+  emitting = payload ?? {};
+  try {
+    capture();
+  } finally {
+    emitting = outer;
   }
 };
 
@@ -66,14 +88,17 @@ const initPostHog = (client: PostHog, key: string): void => {
       capture_unhandled_rejections: true,
       capture_console_errors: false,
     },
-    before_send: scrubTelemetryEvent,
+    before_send: (event) =>
+      event &&
+      scrubTelemetryEvent(event, {
+        payload: emitting,
+        storedKeys: storedKeys(client),
+        clientVersion,
+      }),
   });
-  dropUntrustedSuperProperties(client);
-  client.register({
-    client_version: process.env.NEXT_PUBLIC_CONCLAVE_CLIENT_VERSION,
-  });
+  dropStoredProperties(client);
   installCallErrorCapture((error, props) => {
-    client.captureException(error, props);
+    emit(props, () => client.captureException(error, props));
   });
 };
 
@@ -117,18 +142,20 @@ export const telemetry = {
     options?: TelemetryCaptureOptions,
   ): void {
     send((client) => {
-      client.capture(
-        event,
-        props,
-        options?.immediate
-          ? { transport: "sendBeacon", send_instantly: true }
-          : undefined,
+      emit(props, () =>
+        client.capture(
+          event,
+          props,
+          options?.immediate
+            ? { transport: "sendBeacon", send_instantly: true }
+            : undefined,
+        ),
       );
     });
   },
   captureException(error: unknown, props?: TelemetryProps): void {
     send((client) => {
-      client.captureException(error, props);
+      emit(props, () => client.captureException(error, props));
     });
   },
 };

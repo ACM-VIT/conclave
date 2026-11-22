@@ -19,6 +19,9 @@ vi.mock("posthog-js/dist/exception-autocapture", () => ({}));
 vi.mock("../src/app/components/ErrorStateView", () => ({ default: () => null }));
 
 type BoundaryProps = { error: Error & { digest?: string }; reset: () => void };
+type SentEvent = { event: string; properties: Record<string, unknown> };
+
+const sdkUuid = "0196f0a1-0000-7000-8000-00000000000a";
 
 const originalConsoleError = console.error;
 let root: Root | null = null;
@@ -78,28 +81,36 @@ describe("error boundaries on the first page load", () => {
     );
   });
 
-  it("drops every stored super property that is not on the exact allowlist", async () => {
+  it("keeps only the SDK's own ids in storage", async () => {
     posthog.persistence.properties.mockReturnValue({
+      distinct_id: sdkUuid,
+      $device_id: sdkUuid,
       $initialization_time: "2026-11-22T00:00:00Z",
       client_version: "0b2d3b48",
-      meeting_note: "Meet Mira in sample-room",
+      reason: "Meet Mira in sample-room",
       $meeting_note: "Meet Mira in sample-room",
       __meeting_note: "Meet Mira in sample-room",
     });
     posthog.sessionPersistence.properties.mockReturnValue({
-      $session_entry_url: "https://conclave.acmvit.in/",
-      visit_note: "Meet Mira in sample-room",
+      $referrer: "https://example.org/",
+      call_log: "[Meets] Fixture meeting note",
     });
     const { default: RouteError } = await import("../src/app/error");
     await renderOnFirstLoad(RouteError);
 
     await vi.waitFor(() => expect(posthog.captureException).toHaveBeenCalled());
     expect(posthog.unregister.mock.calls.map(([key]) => key).sort()).toEqual([
+      "$initialization_time",
       "$meeting_note",
       "__meeting_note",
-      "meeting_note",
+      "client_version",
+      "reason",
     ]);
-    expect(posthog.unregister_for_session.mock.calls.map(([key]) => key)).toEqual(["visit_note"]);
+    expect(posthog.unregister_for_session.mock.calls.map(([key]) => key).sort()).toEqual([
+      "$referrer",
+      "call_log",
+    ]);
+    expect(posthog.register).not.toHaveBeenCalled();
   });
 
   it("loads nothing and sends nothing without a project key", async () => {
@@ -110,5 +121,60 @@ describe("error boundaries on the first page load", () => {
 
     expect(posthog.init).not.toHaveBeenCalled();
     expect(posthog.captureException).not.toHaveBeenCalled();
+  });
+});
+
+describe("what each event carries", () => {
+  // Merges the stores under the payload the way posthog-js does, then runs the
+  // configured before_send, which the SDK calls inside capture.
+  const sendThroughSdk = (event: string, payload: Record<string, unknown>): SentEvent => {
+    const [, config] = posthog.init.mock.calls[0] as [string, { before_send: (event: SentEvent) => SentEvent }];
+    return config.before_send({
+      event,
+      properties: {
+        $os: "Mac OS X",
+        token: "phc_test_project",
+        ...posthog.persistence.properties(),
+        ...posthog.sessionPersistence.properties(),
+        ...payload,
+      },
+    });
+  };
+
+  it("sends application fields only from the capture that set them", async () => {
+    posthog.persistence.properties.mockReturnValue({
+      distinct_id: sdkUuid,
+      reason: "Meet Mira in sample-room",
+    });
+    posthog.sessionPersistence.properties.mockReturnValue({
+      source: "call_log",
+      call_log: "[Meets] Fixture meeting note",
+    });
+    const sent: SentEvent[] = [];
+    posthog.capture.mockImplementation((event: string, props?: Record<string, unknown>) => {
+      sent.push(sendThroughSdk(event, props ?? {}));
+    });
+    try {
+      const { telemetry } = await import("../src/app/lib/telemetry");
+      telemetry.capture("meet_reconnect_attempt", { attempt: 1 });
+      await vi.waitFor(() => expect(sent).toHaveLength(1));
+      sent.push(
+        sendThroughSdk("$exception", {
+          $exception_list: [{ type: "TypeError", value: "Mira is not a function" }],
+        }),
+      );
+
+      expect(sent[0].properties).toMatchObject({ attempt: 1, distinct_id: sdkUuid, $os: "Mac OS X" });
+      for (const { properties } of sent) {
+        expect(properties).not.toHaveProperty("reason");
+        expect(properties).not.toHaveProperty("source");
+        expect(properties).not.toHaveProperty("call_log");
+      }
+      expect(JSON.stringify(sent)).not.toMatch(/Mira|sample-room|Fixture/);
+    } finally {
+      posthog.capture.mockReset();
+      posthog.persistence.properties.mockReset().mockReturnValue({});
+      posthog.sessionPersistence.properties.mockReset().mockReturnValue({});
+    }
   });
 });

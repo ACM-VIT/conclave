@@ -7,27 +7,27 @@ const STATIC_PAGES = new Set([
   "delete-account",
   "sign-in",
 ]);
-// The only property keys that leave the browser: SDK fields checked against
-// real traffic, and our own event fields. Anything else, such as a super
-// property seeded into local or session storage, is dropped whatever its
-// prefix. A new event field must be added here to be sent.
-const SDK_PROPERTIES = [
-  "$browser", "$browser_language", "$browser_language_prefix", "$browser_version",
-  "$config_defaults", "$configured_session_timeout_ms", "$current_url", "$device_id",
-  "$device_type", "$exception_level", "$exception_list", "$host", "$initialization_time",
-  "$insert_id", "$is_identified", "$lib", "$lib_custom_api_host",
-  "$lib_rate_limit_remaining_tokens", "$lib_version", "$os", "$os_version", "$pathname",
-  "$process_person_profile", "$raw_user_agent", "$recording_status", "$referrer",
-  "$referring_domain", "$screen_height", "$screen_width",
-  "$sdk_debug_extensions_init_method", "$sdk_debug_extensions_init_time_ms",
-  "$sdk_dist_channel", "$search_engine", "$session_entry_host", "$session_entry_pathname",
-  "$session_entry_referrer", "$session_entry_referring_domain",
-  "$session_entry_search_engine", "$session_entry_url", "$session_id", "$time",
-  "$timezone", "$timezone_offset", "$viewport_height", "$viewport_width", "$window_id",
-];
-const OUR_PROPERTIES = [
-  // Ingestion and release.
-  "token", "distinct_id", "client_version",
+// What posthog-js works out for each event from the page and its own config,
+// checked against real traffic. Fields it keeps in storage, such as the
+// referrer and the session's entry page, are not here.
+const SDK_PROPERTIES = new Set([
+  "token", "$browser", "$browser_language", "$browser_language_prefix", "$browser_version",
+  "$config_defaults", "$configured_session_timeout_ms", "$current_url", "$device_type",
+  "$exception_level", "$exception_list", "$host", "$insert_id", "$is_identified", "$lib",
+  "$lib_custom_api_host", "$lib_version", "$os", "$os_version", "$pathname",
+  "$process_person_profile", "$raw_user_agent", "$recording_status", "$screen_height",
+  "$screen_width", "$sdk_debug_extensions_init_method", "$sdk_debug_extensions_init_time_ms",
+  "$sdk_dist_channel", "$search_engine", "$time", "$timezone", "$timezone_offset",
+  "$viewport_height", "$viewport_width",
+]);
+// The SDK's identity and session ids: the only values an event may carry out
+// of storage. The SDK makes each one as a uuid.
+const SDK_IDS = new Set(["distinct_id", "$device_id", "$session_id", "$window_id"]);
+const SDK_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// Our own event fields. Each is read from the payload of the capture that
+// sent it, never from the event, so nothing in storage can supply one. A new
+// event field must be added here to be sent.
+const APP_PROPERTIES = new Set([
   // Exceptions.
   "source", "call_log", "boundary", "digest",
   // call_join, call_first_media, call_summary.
@@ -44,15 +44,21 @@ const OUR_PROPERTIES = [
   "reason", "failureReason", "durationMs", "maximumSpatialLayer", "observedSpatialLayer",
   "from", "to", "epoch", "kind", "type", "level", "pausedForMs", "state", "downtimeMs",
   "autoplayBlocked",
-];
-const SENT_PROPERTIES = new Set([...SDK_PROPERTIES, ...OUR_PROPERTIES]);
+]);
 
-/** Whether a property may be sent, as an event field or a stored super property. */
-export const isSentProperty = (key: string): boolean => SENT_PROPERTIES.has(key);
+/** Whether posthog-js may keep a property in storage: only its own ids. */
+export const isStoredProperty = (key: string): boolean => SDK_IDS.has(key);
 
-// Values we set or the SDK needs as-is: the project key in `token` must
-// survive for ingestion, and `client_version` is a git sha, not a secret.
-const TRUSTED_PROPERTIES = new Set(["token", "distinct_id", "client_version"]);
+/** Where the fields of the event in `before_send` came from. */
+export type EventOrigin = {
+  /** What our code passed to capture; null for an event the SDK raised itself. */
+  payload: Properties | null;
+  /** Keys posthog-js merged in from local and session storage. */
+  storedKeys: ReadonlySet<string>;
+  /** The build's git sha. */
+  clientVersion?: string;
+};
+
 const URL_PROPERTY = /url|referrer|pathname|href/i;
 const MAX_TEXT_LENGTH = 1000;
 
@@ -220,44 +226,57 @@ const scrubExceptionEntry = (
     : {}),
 });
 
-function scrubProperties(properties: Properties, pageOrigin: string | null): Properties {
+const isPrimitive = (value: unknown): boolean => value === null || typeof value !== "object";
+
+const scrubAppValue = (key: string, value: unknown): unknown => {
+  if (typeof value !== "string") return value;
+  return URL_PROPERTY.test(key) ? scrubUrl(value) : scrubText(value);
+};
+
+function scrubProperties(
+  properties: Properties,
+  { payload, storedKeys, clientVersion }: EventOrigin,
+  pageOrigin: string | null,
+): Properties {
   const trustedMessage =
-    properties.source === "call_log" && typeof properties.call_log === "string"
-      ? scrubText(properties.call_log)
+    payload?.source === "call_log" && typeof payload.call_log === "string"
+      ? scrubText(payload.call_log)
       : null;
   const scrubbed: Properties = {};
-  const entries: Array<[string, unknown]> = Object.entries(properties);
-  for (const [key, value] of entries) {
-    if (!SENT_PROPERTIES.has(key)) continue;
-    if (key === "$exception_list" && Array.isArray(value)) {
+  const sdkEntries: Array<[string, unknown]> = Object.entries(properties);
+  const appEntries: Array<[string, unknown]> = Object.entries(payload ?? {});
+  for (const [key, value] of sdkEntries) {
+    if (SDK_IDS.has(key)) {
+      if (typeof value === "string" && SDK_ID_PATTERN.test(value)) scrubbed[key] = value;
+    } else if (!SDK_PROPERTIES.has(key) || storedKeys.has(key)) {
+      continue;
+    } else if (key === "$exception_list" && Array.isArray(value)) {
       scrubbed[key] = (value as ExceptionEntry[]).map((entry) =>
         scrubExceptionEntry(entry, trustedMessage, pageOrigin),
       );
-    } else if (value !== null && typeof value === "object") {
-      continue;
     } else if (typeof value === "string" && URL_PROPERTY.test(key)) {
       scrubbed[key] = scrubUrl(value);
-    } else if (
-      typeof value === "string" &&
-      !key.startsWith("$") &&
-      !TRUSTED_PROPERTIES.has(key)
-    ) {
-      scrubbed[key] = scrubText(value);
-    } else {
+    } else if (isPrimitive(value)) {
       scrubbed[key] = value;
     }
   }
+  for (const [key, value] of appEntries) {
+    if (APP_PROPERTIES.has(key) && isPrimitive(value)) scrubbed[key] = scrubAppValue(key, value);
+  }
+  if (clientVersion) scrubbed.client_version = clientVersion;
   return scrubbed;
 }
 
 /**
- * posthog-js `before_send` hook, on "send only what we trust": known property
- * keys, known error types, call-log labels as the only messages, and paths
- * only for exact first-party scripts. Person properties are never sent.
+ * posthog-js `before_send` hook, on "send only what we trust": the SDK's own
+ * fields unless they came from storage, its ids only as uuids, our fields only
+ * from the capture's payload, known error types, call-log labels as the only
+ * messages, and paths only for exact first-party scripts. Person properties
+ * are never sent.
  */
-export function scrubTelemetryEvent(event: CaptureResult): CaptureResult {
+export function scrubTelemetryEvent(event: CaptureResult, origin: EventOrigin): CaptureResult {
   // Stack frames keep a path only for scripts the page itself served.
   const pageOrigin = originOf(event.properties.$current_url);
   const { $set: _set, $set_once: _setOnce, ...rest } = event;
-  return { ...rest, properties: scrubProperties(event.properties, pageOrigin) };
+  return { ...rest, properties: scrubProperties(event.properties, origin, pageOrigin) };
 }

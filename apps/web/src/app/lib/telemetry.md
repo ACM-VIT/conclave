@@ -104,12 +104,17 @@ and reconnect failures carry a `failure_reason` category, never the error text.
 `telemetry-privacy.ts` runs as posthog-js `before_send` and sends only what we
 trust, instead of scrubbing what looks bad:
 
-- **Properties.** Only keys on an exact allowlist leave the browser: SDK fields
-  checked against real traffic, and our own event fields. Anything else is
-  dropped whatever its prefix, and person properties (`$set`, `$set_once`) are
-  never sent. On load, `lib/telemetry.ts` also removes every stored super
-  property that is not on the list, from local and session storage. A new
-  event field has to be added to the list to be sent.
+- **Properties.** Our own event fields are read from the payload of the
+  capture that sent them, never from the event, so nothing in local or session
+  storage can supply one. An event the SDK raised itself, such as an unhandled
+  error, carries none. SDK fields come from an exact list checked against real
+  traffic, and never from storage: the only stored values sent are the SDK's
+  own ids (`distinct_id`, `$device_id`, `$session_id`, `$window_id`), and only
+  as uuids. The referrer and the session's entry page live in storage, so they
+  are not sent. `client_version` comes from the build. On load,
+  `lib/telemetry.ts` removes everything but those ids from both stores. Person
+  properties (`$set`, `$set_once`) are never sent. A new event field has to be
+  added to the list to be sent.
 - **Exception messages.** A message is sent only when it is the `[Meets]`
   call-log label. Every other one, from an engine, a library, the server or a
   rejected value, becomes `[message withheld]`. Type names are kept only from

@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { createCallMetricsTracker } from "../src/app/lib/call-quality-metrics";
 import type { ConnectionState } from "../src/app/lib/types";
 import {
+  type EventOrigin,
   scrubTelemetryEvent,
   scrubText,
   scrubUrl,
@@ -17,6 +18,19 @@ const sampleJwt = [
   "eyJzdWIiOiIxMjM0NTY3ODkwIn0",
   "bm90LWEtcmVhbC1zaWduYXR1cmU",
 ].join(".");
+
+// As before_send sees an event our own code captured: the event's own
+// application fields are the emitter's payload, and nothing came from storage.
+const scrub = (event: CaptureResult, origin: Partial<EventOrigin> = {}) =>
+  scrubTelemetryEvent(event, {
+    payload: Object.fromEntries(
+      Object.entries(event.properties).filter(
+        ([key]) => !key.startsWith("$") && key !== "token" && key !== "distinct_id",
+      ),
+    ),
+    storedKeys: new Set(),
+    ...origin,
+  });
 
 const exceptionEvent = (): CaptureResult => ({
   uuid: "0196-uuid",
@@ -61,11 +75,11 @@ const exceptionEvent = (): CaptureResult => ({
 
 describe("scrubTelemetryEvent", () => {
   it("removes room codes, query strings, titles, emails and tokens", () => {
-    const { properties } = scrubTelemetryEvent(exceptionEvent());
+    const { properties } = scrub(exceptionEvent());
 
     expect(properties.$current_url).toBe("https://conclave.acmvit.in/[code]");
     expect(properties.$pathname).toBe("/[code]");
-    expect(properties.$referrer).toBe("https://conclave.acmvit.in/w/[code]");
+    expect(properties).not.toHaveProperty("$referrer");
     expect(properties).not.toHaveProperty("$title");
     expect(properties).not.toHaveProperty("roomId");
     expect(properties).not.toHaveProperty("userId");
@@ -80,7 +94,9 @@ describe("scrubTelemetryEvent", () => {
   });
 
   it("keeps what ingestion and symbolication need", () => {
-    const { properties } = scrubTelemetryEvent(exceptionEvent());
+    const { properties } = scrub(exceptionEvent(), {
+      clientVersion: "0b2d3b480f4621392a4151d750c90965b7c8b76c",
+    });
 
     expect(properties.token).toBe(
       "phc_test_project_key_00000000000000000000000",
@@ -117,7 +133,7 @@ describe("attribution and asset paths", () => {
       $initial_fbclid: "IwAR0abcDEF123",
       $initial_browser: "Chrome",
     };
-    const scrubbed = scrubTelemetryEvent(event);
+    const scrubbed = scrub(event);
 
     const keys = [
       ...Object.keys(scrubbed.properties),
@@ -128,19 +144,24 @@ describe("attribution and asset paths", () => {
     expect(scrubbed).not.toHaveProperty("$set_once");
   });
 
-  it("templates an external referrer even under an asset folder name", () => {
+  it("does not send the referrer, which the SDK keeps in session storage", () => {
     const event = exceptionEvent();
-    event.properties.$referrer = "https://example.org/mediapipe/alice@example.com";
-    const { properties } = scrubTelemetryEvent(event);
+    Object.assign(event.properties, {
+      $referrer: "https://example.org/mediapipe/alice@example.com",
+      $referring_domain: "alice.example.org",
+      $session_entry_referrer: "https://example.org/alice",
+      $session_entry_url: "https://conclave.acmvit.in/yato-sokka-akane",
+    });
+    const { properties } = scrub(event);
 
-    expect(properties.$referrer).toBe("https://example.org/[path]");
+    expect(JSON.stringify(properties)).not.toMatch(/alice|referr|session_entry|yato/);
   });
 
   it("keeps the path of a stack frame in our script folders", () => {
     const event = exceptionEvent();
     event.properties.$exception_list[0].stacktrace.frames[1].filename =
       "https://conclave.acmvit.in/noise-suppressor/0.4.1/rnnoise-worklet.js";
-    const { properties } = scrubTelemetryEvent(event);
+    const { properties } = scrub(event);
 
     expect(properties.$exception_list[0].stacktrace.frames[1].filename).toBe(
       "https://conclave.acmvit.in/noise-suppressor/0.4.1/rnnoise-worklet.js",
@@ -158,11 +179,11 @@ describe("referrer keywords, nested values and other origins", () => {
       $session_entry_ph_keyword: "Meet Sylvia in hazel-lime-pine",
     });
     event.$set_once = { $initial_ph_keyword: "Meet Sylvia in hazel-lime-pine" };
-    const scrubbed = scrubTelemetryEvent(event);
+    const scrubbed = scrub(event);
 
     expect(JSON.stringify(scrubbed)).not.toMatch(/Sylvia|hazel|ph_keyword/);
     expect(scrubbed.properties.$search_engine).toBe("google");
-    expect(scrubbed.properties.$referrer).toBe("https://www.google.com/[code]");
+    expect(scrubbed.properties).not.toHaveProperty("$referrer");
   });
 
   it("drops nested values such as a seeded super property", () => {
@@ -172,7 +193,7 @@ describe("referrer keywords, nested values and other origins", () => {
       recent: ["hazel-lime-pine"],
     });
     event.$set = { profile: { note: "see you at five" } };
-    const scrubbed = scrubTelemetryEvent(event);
+    const scrubbed = scrub(event);
 
     expect(JSON.stringify(scrubbed)).not.toMatch(/hazel|see you/);
     expect(scrubbed.properties.$exception_list).toHaveLength(1);
@@ -183,7 +204,7 @@ describe("referrer keywords, nested values and other origins", () => {
     const frames = event.properties.$exception_list[0].stacktrace.frames;
     frames[0].filename = "https://cdn.example.net/mediapipe/alice@example.com.js";
     frames[1].filename = "https://conclave.acmvit.in/mediapipe/tasks-vision/1.1.0/wasm/vision_wasm_internal.js";
-    const scrubbed = scrubTelemetryEvent(event);
+    const scrubbed = scrub(event);
 
     const [other, own] = scrubbed.properties.$exception_list[0].stacktrace.frames;
     expect(other.filename).toBe("https://cdn.example.net/[path]");
@@ -201,7 +222,7 @@ describe("credentials, non-error rejections and first-party scripts", () => {
       "Request failed: Authorization: Bearer short_private\nretry with Basic dXNlcjpw " +
       "password=pw_secret1 token: tok_secret2\nCookie: theme=dark; session=second_private\n" +
       "api_key=key_secret3 and Proxy-Authorization: Basic cHJveHk";
-    const scrubbed = scrubTelemetryEvent(event);
+    const scrubbed = scrub(event);
 
     expect(JSON.stringify(scrubbed)).not.toMatch(
       /short_private|dXNlcjpw|pw_secret1|tok_secret2|theme=dark|second_private|key_secret3|cHJveHk/,
@@ -220,7 +241,7 @@ describe("credentials, non-error rejections and first-party scripts", () => {
     event.properties.$exception_list = [
       { type, value, mechanism: { type: "generic", handled: false, synthetic }, stacktrace: { type: "raw", frames: [] } },
     ];
-    const scrubbed = scrubTelemetryEvent(event);
+    const scrubbed = scrub(event);
 
     expect(scrubbed.properties.$exception_list[0]).toMatchObject({
       type: sentType,
@@ -235,7 +256,7 @@ describe("credentials, non-error rejections and first-party scripts", () => {
     event.properties.call_log = "[Meets] Error joining room";
     event.properties.$exception_list[0].type = "ServerError";
     event.properties.$exception_list[0].value = "Riya, continue in room lime-pear-plum";
-    const { properties } = scrubTelemetryEvent(event);
+    const { properties } = scrub(event);
 
     expect(properties.$exception_list[0]).toMatchObject({
       type: "ServerError",
@@ -252,7 +273,7 @@ describe("credentials, non-error rejections and first-party scripts", () => {
     (path) => {
       const event = exceptionEvent();
       event.properties.$exception_list[0].stacktrace.frames[1].filename = `https://conclave.acmvit.in${path}`;
-      const scrubbed = scrubTelemetryEvent(event);
+      const scrubbed = scrub(event);
 
       expect(scrubbed.properties.$exception_list[0].stacktrace.frames[1].filename).toBe(
         `https://conclave.acmvit.in${path}`,
@@ -273,7 +294,7 @@ describe("only trusted properties and paths", () => {
     });
     event.$set = { $initial_note: "Meet Mira in sample-room" };
     event.$set_once = { $initial_browser: "Chrome" };
-    const scrubbed = scrubTelemetryEvent(event);
+    const scrubbed = scrub(event);
 
     expect(JSON.stringify(scrubbed)).not.toMatch(/Mira|sample-room|meeting_note|visit_note/);
     expect(scrubbed).not.toHaveProperty("$set");
@@ -296,7 +317,7 @@ describe("only trusted properties and paths", () => {
   ])("sends the frame path %s as %s", (filename, expected) => {
     const event = exceptionEvent();
     event.properties.$exception_list[0].stacktrace.frames[1].filename = filename;
-    const scrubbed = scrubTelemetryEvent(event);
+    const scrubbed = scrub(event);
 
     expect(scrubbed.properties.$exception_list[0].stacktrace.frames[1].filename).toBe(expected);
   });
@@ -325,7 +346,7 @@ describe("only trusted properties and paths", () => {
 
     const event = exceptionEvent();
     Object.assign(event.properties, Object.fromEntries(keys.map((key) => [key, 1])));
-    const sent = scrubTelemetryEvent(event).properties;
+    const sent = scrub(event).properties;
     expect(keys.filter((key) => !(key in sent))).toEqual([]);
   });
 
@@ -339,9 +360,88 @@ describe("only trusted properties and paths", () => {
     for (const script of scripts) {
       const event = exceptionEvent();
       event.properties.$exception_list[0].stacktrace.frames[1].filename = `https://conclave.acmvit.in${script}`;
-      const frame = scrubTelemetryEvent(event).properties.$exception_list[0].stacktrace.frames[1];
+      const frame = scrub(event).properties.$exception_list[0].stacktrace.frames[1];
       expect(frame.filename).toBe(`https://conclave.acmvit.in${script}`);
     }
+  });
+});
+
+describe("stored state", () => {
+  const sdkUuid = "0196f0a1-0000-7000-8000-000000000001";
+
+  it("takes application fields from the emitter's payload, never from storage", () => {
+    const event = exceptionEvent();
+    Object.assign(event.properties, {
+      reason: "Meet Mira in sample-room",
+      source: "call_log",
+      call_log: "[Meets] Fixture meeting note",
+      attempt: 2,
+    });
+    const scrubbed = scrub(event, {
+      payload: { attempt: 2 },
+      storedKeys: new Set(["reason", "source", "call_log"]),
+    });
+
+    expect(JSON.stringify(scrubbed)).not.toMatch(/Mira|sample-room|Fixture/);
+    expect(scrubbed.properties).not.toHaveProperty("reason");
+    expect(scrubbed.properties).not.toHaveProperty("call_log");
+    expect(scrubbed.properties.attempt).toBe(2);
+    expect(scrubbed.properties.$exception_list[0].value).toBe("[message withheld]");
+  });
+
+  it("sends no application field on an event the SDK raised itself", () => {
+    const event = exceptionEvent();
+    Object.assign(event.properties, { source: "call_log", reason: "Meet Mira" });
+    const scrubbed = scrub(event, { payload: null });
+
+    expect(Object.keys(scrubbed.properties).filter((key) => !key.startsWith("$")).sort()).toEqual([
+      "distinct_id",
+      "token",
+    ]);
+    expect(JSON.stringify(scrubbed)).not.toMatch(/Mira|call_log|Failed to produce/);
+  });
+
+  it("drops an SDK field that came from storage", () => {
+    const event = exceptionEvent();
+    Object.assign(event.properties, {
+      $browser: "Meet Mira in sample-room",
+      $initialization_time: "2026-11-22T00:00:00Z",
+      $os: "Mac OS X",
+    });
+    const scrubbed = scrub(event, {
+      storedKeys: new Set(["$browser", "$initialization_time", "distinct_id", "$device_id"]),
+    });
+
+    expect(scrubbed.properties).not.toHaveProperty("$browser");
+    expect(scrubbed.properties).not.toHaveProperty("$initialization_time");
+    expect(scrubbed.properties.$os).toBe("Mac OS X");
+    expect(scrubbed.properties.distinct_id).toBe("0196f0a1-0000-7000-8000-000000000000");
+  });
+
+  it("keeps the SDK's ids only when they are uuids it made", () => {
+    const event = exceptionEvent();
+    Object.assign(event.properties, {
+      distinct_id: "Meet Mira in sample-room",
+      $device_id: sdkUuid,
+      $session_id: "sample-room",
+      $window_id: sdkUuid,
+    });
+    const scrubbed = scrub(event, { storedKeys: new Set(["distinct_id", "$device_id"]) });
+
+    expect(scrubbed.properties).not.toHaveProperty("distinct_id");
+    expect(scrubbed.properties).not.toHaveProperty("$session_id");
+    expect(scrubbed.properties.$device_id).toBe(sdkUuid);
+    expect(scrubbed.properties.$window_id).toBe(sdkUuid);
+  });
+
+  it("sends the build's client version, never a stored or passed one", () => {
+    const event = exceptionEvent();
+    event.properties.client_version = "Meet Mira in sample-room";
+    const stored = scrub(event, { clientVersion: "0b2d3b48", storedKeys: new Set(["client_version"]) });
+    const passed = scrub(event, { payload: { client_version: "Meet Mira" } });
+
+    expect(stored.properties.client_version).toBe("0b2d3b48");
+    expect(passed.properties).not.toHaveProperty("client_version");
   });
 });
 
@@ -355,7 +455,7 @@ describe("server text", () => {
         stacktrace: { type: "raw", frames: [] },
       },
     ];
-    const { properties } = scrubTelemetryEvent(event);
+    const { properties } = scrub(event);
 
     expect(properties.$exception_list[0]).toMatchObject({
       type: "ServerError",
@@ -385,9 +485,10 @@ describe("scrubUrl", () => {
   it("keeps a dotted referrer path out of the event", () => {
     const event = exceptionEvent();
     event.properties.$referrer = "https://example.org/users/alice@example.com";
-    const { properties } = scrubTelemetryEvent(event);
+    const { properties } = scrub(event);
 
-    expect(properties.$referrer).toBe("https://example.org/[path]");
+    expect(properties).not.toHaveProperty("$referrer");
+    expect(JSON.stringify(properties)).not.toMatch(/alice/);
   });
 });
 
@@ -408,7 +509,7 @@ describe("scrubText", () => {
   it("returns an exception event whose message has a malformed URL", () => {
     const event = exceptionEvent();
     event.properties.$exception_list[0].value = "Failed to fetch http://%";
-    const { properties } = scrubTelemetryEvent(event);
+    const { properties } = scrub(event);
 
     expect(properties.$exception_list[0].value).toBe("[message withheld]");
   });
