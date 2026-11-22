@@ -25,6 +25,8 @@ internal interface VideoRenderBackend {
     fun release()
     fun createSurface(target: Any): Any?
     fun destroySurface(surface: Any)
+    fun abandonSurface(surface: Any)
+    fun forgetSurface(surface: Any)
     fun makeCurrent(surface: Any): Boolean
     fun surfaceWidth(surface: Any): Int
     fun surfaceHeight(surface: Any): Int
@@ -103,13 +105,21 @@ internal class VideoRenderLoop : VideoRenderBackend {
     }
 
     override fun destroySurface(surface: Any) {
-        if (currentSurface == surface) unbind()
-        if (EGL14.eglDestroySurface(display, surface as EGLSurface)) {
+        forgetSurface(surface)
+        abandonSurface(surface)
+    }
+
+    override fun abandonSurface(surface: Any) {
+        if (EGL14.eglDestroySurface(EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY), surface as EGLSurface)) {
             liveSurfaces.decrementAndGet()
             reportLive()
         } else {
             Log.w(TAG, "eglDestroySurface failed: 0x" + Integer.toHexString(EGL14.eglGetError()))
         }
+    }
+
+    override fun forgetSurface(surface: Any) {
+        if (currentSurface == surface) unbind()
     }
 
     override fun makeCurrent(surface: Any): Boolean {

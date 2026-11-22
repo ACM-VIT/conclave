@@ -5,6 +5,7 @@ import org.webrtc.VideoFrame
 import org.webrtc.VideoSink
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 internal data class VideoDrawLayout(
     val x: Int, val y: Int, val width: Int, val height: Int, val scaleX: Float, val scaleY: Float, val mirror: Boolean,
@@ -77,7 +78,7 @@ internal class VideoTileRenderer(
     private val surfaceGoneAfterRelease = CountDownLatch(1)
 
     private var window: Any? = null
-    private var surface: Any? = null
+    private val surface = AtomicReference<Any?>(null)
     private var surfaceFailures = 0
     private var framesUntilRetry = 0
     private var appliedToken = 0
@@ -157,6 +158,12 @@ internal class VideoTileRenderer(
         return CountDownLatch(1).also { gone -> detachSurface { gone.countDown() } }
     }
 
+    fun abandonSurface() {
+        val abandoned = surface.getAndSet(null) ?: return
+        backend.abandonSurface(abandoned)
+        backend.postFirst { backend.forgetSurface(abandoned) }
+    }
+
     fun windowSized(width: Int, height: Int) {
         windowSize = sizeOf(width, height)
     }
@@ -204,21 +211,22 @@ internal class VideoTileRenderer(
     }
 
     private fun destroySurface() {
-        surface?.let { backend.destroySurface(it) }
-        surface = null
+        surface.getAndSet(null)?.let { backend.destroySurface(it) }
     }
 
     private fun ensureSurface(): Any? {
-        surface?.let { return it }
+        surface.get()?.let { return it }
         val target = window ?: return null
+        if (appliedToken <= tokenAtLastDetach) return null
         if (framesUntilRetry > 0) {
             framesUntilRetry -= 1
             return null
         }
         val created = backend.createSurface(target)
         if (created == null) retryLater()
-        surface = created
-        return created
+        surface.set(created)
+        if (appliedToken <= tokenAtLastDetach) destroySurface()
+        return surface.get()
     }
 
     private fun surfaceStoppedWorking() {
@@ -232,7 +240,7 @@ internal class VideoTileRenderer(
     }
 
     private fun paintBackground() {
-        val target = surface ?: return
+        val target = surface.get() ?: return
         if (!backend.makeCurrent(target)) return surfaceStoppedWorking()
         val width = backend.surfaceWidth(target)
         val height = backend.surfaceHeight(target)
@@ -262,7 +270,7 @@ internal class VideoTileRenderer(
                 letterboxInBuffer = letterboxInBuffer, mirror = mirror)
             if (layout.clearsSurface) backend.clear(backgroundRed, backgroundGreen, backgroundBlue)
             if (!backend.draw(frame, layout) || !cutCorners(width, height)) return
-            if (!windowTakesBufferOf(target)) return
+            if (surface.get() !== target || !windowTakesBufferOf(target)) return
             if (!backend.swap(target)) return surfaceStoppedWorking()
             surfaceFailures = 0
             bufferWaitStartedAt = null

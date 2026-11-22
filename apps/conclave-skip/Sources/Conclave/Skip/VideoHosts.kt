@@ -241,7 +241,8 @@ internal class SurfaceVideoHost(
         shownBufferSize = null
         hasFrame = false
         if (!detachWait.await(renderer.surfaceGoneAfterDetach())) {
-            Log.w(VideoRenderLoop.TAG, "a surface was destroyed before the render thread let go of it")
+            renderer.abandonSurface()
+            Log.w(VideoRenderLoop.TAG, "a render thread did not let go of its surface in time, so the main thread destroyed it")
         }
     }
 
