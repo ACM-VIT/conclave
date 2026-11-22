@@ -28,10 +28,10 @@ import {
   AuthorityClient,
   type AuthorityFrame,
   type AuthoritySession,
-  type Json,
 } from "@conclave/apps-sdk/authority";
 import { pollsContract } from "../test/authority/fixtures/polls.js";
 import { qaContract } from "../test/authority/fixtures/qa.js";
+import { LoadAudit } from "./authority-load-audit.js";
 
 const flag = (name: string, fallback: number): number => {
   const index = process.argv.indexOf(`--${name}`);
@@ -69,101 +69,7 @@ type Tab = {
   tcpAtStart: number;
 };
 
-/**
- * What one person has done, across their tabs: the oracle for their rows.
- * `upvoteTakenBackAt` is when each upvote was last taken back. A person's
- * two tabs are two sockets with no order between them, so one tab's
- * "upvoted" frame can land just after the other tab took the upvote back.
- * That row is still theirs for a moment. A row for a question they do not
- * hold an upvote on, and did not just release, is someone else's.
- */
-type Ledger = {
-  votes: Set<string>;
-  upvotes: Set<string>;
-  upvoteTakenBackAt: Map<string, number>;
-  asked: Set<string>;
-};
-
-/** How long after taking an upvote back its row may still arrive. */
-const CROSS_TAB_GRACE_MS = 1_000;
-
-const ledgers = new Map<string, Ledger>();
-const ledgerOf = (person: Person): Ledger => {
-  let ledger = ledgers.get(person.key);
-  if (!ledger) {
-    ledger = {
-      votes: new Set(),
-      upvotes: new Set(),
-      upvoteTakenBackAt: new Map(),
-      asked: new Set(),
-    };
-    ledgers.set(person.key, ledger);
-  }
-  return ledger;
-};
-
-const violations: string[] = [];
-const sharedPolls = new Set<string>();
-/**
- * Question rows that reached a person before the ack that names their new
- * question. Only the ack says which id is theirs, so these are judged once
- * every ack is in.
- */
-const unsettledQuestions: { person: Person; key: string }[] = [];
-let questionRowsJudgedLate = 0;
-
-const settleQuestions = (): void => {
-  questionRowsJudgedLate += unsettledQuestions.length;
-  for (const { person, key } of unsettledQuestions.splice(0)) {
-    if (!ledgerOf(person).asked.has(key)) {
-      violations.push(`${person.name}: someone else's question ${key}`);
-    }
-  }
-};
-
-const field = (value: Json, name: string): Json | null =>
-  value !== null && typeof value === "object" && !Array.isArray(value)
-    ? ((value as { readonly [key: string]: Json })[name] ?? null)
-    : null;
-
-/** Checks one received frame against what this connection may see. */
-const audit = (tab: Tab, frame: AuthorityFrame): void => {
-  if (frame.kind === "revoke" || frame.kind === "queryAbort") return;
-  if (tab.kickedAt !== null) {
-    violations.push(`${tab.person.name}: ${frame.kind} frame after removal`);
-    return;
-  }
-  if (frame.kind === "query") return;
-  const ledger = ledgerOf(tab.person);
-  for (const row of frame.kind === "replace" ? frame.rows : frame.put) {
-    if (row.bucket === "polls") {
-      const visible = tab.person.host || sharedPolls.has(row.key);
-      if (field(row.value, "results") !== null && !visible) {
-        violations.push(`${tab.person.name}: private tally for poll ${row.key}`);
-      }
-    } else if (row.bucket === "myVotes") {
-      if (!ledger.votes.has(row.key)) {
-        violations.push(`${tab.person.name}: someone else's ballot ${row.key}`);
-      }
-    } else if (row.bucket === "myUpvotes") {
-      const takenBackAt = ledger.upvoteTakenBackAt.get(row.key);
-      const justTakenBack =
-        takenBackAt !== undefined &&
-        Date.now() - takenBackAt < CROSS_TAB_GRACE_MS;
-      if (!ledger.upvotes.has(row.key) && !justTakenBack) {
-        violations.push(`${tab.person.name}: someone else's upvote ${row.key}`);
-      }
-    } else if (row.bucket === "myQuestions") {
-      if (!ledger.asked.has(row.key)) {
-        unsettledQuestions.push({ person: tab.person, key: row.key });
-      }
-    } else if (row.bucket === "questions") {
-      if (field(row.value, "status") === "dismissed" && !tab.person.host) {
-        violations.push(`${tab.person.name}: dismissed question ${row.key}`);
-      }
-    }
-  }
-};
+const audit = new LoadAudit();
 
 const until = async (check: () => boolean, label: string, timeoutMs = 20_000) => {
   const started = Date.now();
@@ -271,7 +177,7 @@ const openTab = async (person: Person, session: string): Promise<Tab> => {
   socket.on(AUTHORITY_EVENTS.frame, (frame: AuthorityFrame) => {
     tab.frames += 1;
     tab.payloadBytes += Buffer.byteLength(JSON.stringify(frame));
-    audit(tab, frame);
+    audit.frame({ person: tab.person, removed: tab.kickedAt !== null }, frame);
   });
   // The server tells a socket it was removed before closing it, and a socket
   // delivers in order, so any frame after this point was sent after removal.
@@ -337,12 +243,11 @@ const main = async (): Promise<void> => {
     };
     await createPoll();
     for (const tab of members.slice(0, 40)) {
-      const ledger = ledgerOf(tab.person);
       const asked = await tab.qa.act("ask", {
         text: `What does ${tab.person.name} want to know about this?`,
       });
       if (asked.ok) {
-        ledger.asked.add(asked.value.id);
+        audit.asked(tab.person, asked.value.id);
         questionIds.push(asked.value.id);
       }
     }
@@ -394,26 +299,19 @@ const main = async (): Promise<void> => {
           );
           if (roll < 0.7 && questionIds.length > 0) {
             const tab = pick(live);
-            const ledger = ledgerOf(tab.person);
             const id = pick(questionIds);
-            const value = !ledger.upvotes.has(id);
-            // Recorded before sending: the row may arrive before the ack.
-            if (value) ledger.upvotes.add(id);
+            const value = !audit.holdsUpvote(tab.person, id);
+            const answered = audit.upvote(tab.person, id, value);
             pending.push(
               tab.qa.act("upvote", { id, value }).then((result) => {
                 record("upvote", result);
-                if (result.ok && !value) {
-                  ledger.upvotes.delete(id);
-                  ledger.upvoteTakenBackAt.set(id, Date.now());
-                }
+                answered(result.ok);
               }),
             );
           } else if (roll < 0.9 && pollIds.length > 0) {
             const tab = pick(live);
-            const ledger = ledgerOf(tab.person);
             const pollId = pick(pollIds);
-            const first = !ledger.votes.has(pollId);
-            ledger.votes.add(pollId);
+            const first = audit.vote(tab.person, pollId);
             pending.push(
               tab.polls
                 .act("vote", { pollId, optionIds: [pick(["o1", "o2", "o3"])] })
@@ -421,12 +319,11 @@ const main = async (): Promise<void> => {
             );
           } else if (roll < 0.93) {
             const tab = pick(live);
-            const ledger = ledgerOf(tab.person);
             pending.push(
               tab.qa.act("ask", { text: `A later question from ${tab.person.name}` }).then((result) => {
                 record("ask", result);
                 if (result.ok) {
-                  ledger.asked.add(result.value.id);
+                  audit.asked(tab.person, result.value.id);
                   questionIds.push(result.value.id);
                 }
               }),
@@ -469,7 +366,7 @@ const main = async (): Promise<void> => {
       new Promise((resolve) => setTimeout(resolve, 5_000)),
     ]);
     await new Promise((resolve) => setTimeout(resolve, 300));
-    settleQuestions();
+    audit.settleQuestions();
     const seconds = (Date.now() - startedAt) / 1000;
     const server = await request<Record<string, unknown>>(sfu, "report", "report");
 
@@ -493,13 +390,13 @@ const main = async (): Promise<void> => {
         roomWireBytesPerSecond: Math.round(sum(wire) / seconds),
       },
       removedMidRun: tabs.filter((tab) => tab.kickedAt !== null).length,
-      questionRowsJudgedLate,
-      unauthorizedFrames: violations.length,
-      unauthorizedSamples: violations.slice(0, 10),
+      questionRowsJudgedLate: audit.questionRowsJudgedLate,
+      unauthorizedFrames: audit.violations.length,
+      unauthorizedSamples: audit.violations.slice(0, 10),
     };
     console.log(JSON.stringify(report, null, 2));
     if (OUT) writeFileSync(OUT, `${JSON.stringify(report, null, 2)}\n`);
-    process.exitCode = violations.length === 0 ? 0 : 1;
+    process.exitCode = audit.violations.length === 0 ? 0 : 1;
   } finally {
     for (const tab of tabs) tab.socket.disconnect();
     sfu.send("stop");
