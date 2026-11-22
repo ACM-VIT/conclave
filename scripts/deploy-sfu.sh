@@ -257,10 +257,9 @@ fi
 COMPOSE=(docker compose "${COMPOSE_ENV_FILES[@]}" -f "$COMPOSE_FILE")
 
 run_deploy_preflight() {
+  # Every service, whatever SFU_DEPLOY_SERVICES selects: the checks across
+  # services (overlapping RTC ranges, shared secrets) need all of them.
   local preflight=(node "${ROOT_DIR}/scripts/deploy-sfu-preflight.mjs" --compose-json -)
-  if [[ -n "${SFU_DEPLOY_SERVICES:-}" ]]; then
-    preflight+=(--services "${SFU_DEPLOY_SERVICES}")
-  fi
   # A normal deployment must be able to revive a stopped inactive SFU, so its
   # pre-mutation gate validates rendered configuration only. Explicit
   # --preflight-only remains the operator-facing live route check.
@@ -291,6 +290,36 @@ if [[ "$PREFLIGHT_ONLY" == "true" ]]; then
   echo "Preflight-only run complete; no code, container, drain, or DNS changes were made."
   exit 0
 fi
+
+# One deploy at a time on this host: two runs against different instances can
+# each find the other serving and drain both. flock where the host has it
+# (the VM does); elsewhere an atomic mkdir, reclaimed from a holder that died.
+# The lock survives the re-exec below.
+DEPLOY_LOCK="${SFU_DEPLOY_LOCK_FILE:-/tmp/conclave-sfu-deploy.lock}"
+take_deploy_lock() {
+  if command -v flock >/dev/null 2>&1; then
+    [[ -n "${SFU_DEPLOY_LOCK_HELD:-}" ]] && return 0
+    exec 9>>"$DEPLOY_LOCK"
+    flock -n 9
+    return
+  fi
+  local dir="${DEPLOY_LOCK}.d" holder
+  if ! mkdir "$dir" 2>/dev/null; then
+    holder="$(cat "${dir}/pid" 2>/dev/null || true)"
+    if [[ "$holder" != "$$" ]]; then
+      [[ -n "$holder" ]] && kill -0 "$holder" 2>/dev/null && return 1
+      rm -rf "$dir"
+      mkdir "$dir" 2>/dev/null || return 1
+    fi
+  fi
+  echo "$$" > "${dir}/pid"
+  trap 'rm -rf "'"$dir"'"' EXIT
+}
+if ! take_deploy_lock; then
+  echo "Another SFU deploy is running on this host (${DEPLOY_LOCK}); not starting a second one." >&2
+  exit 1
+fi
+export SFU_DEPLOY_LOCK_HELD=1
 
 if [[ "$ROLLBACK" == "true" ]]; then
   echo "Rollback: the checkout stays at $(git -C "$ROOT_DIR" rev-parse --short=12 HEAD); no pull, no build."
@@ -367,6 +396,10 @@ PREVIOUS_GOOD_IMAGE=""
 # The image whose canary passed most recently, saved at the moment it passed,
 # so a rerun after an interruption can still record the release.
 VERIFIED_IMAGE=""
+# Set while a rollback has reached some instances but not all, so a later
+# --rollback finishes it rather than choosing a new target.
+ROLLBACK_TARGET_COMMIT=""
+ROLLBACK_TARGET_IMAGE=""
 if [[ -f "$DEPLOY_STATE_FILE" ]]; then
   # shellcheck disable=SC1090
   source "$DEPLOY_STATE_FILE"
@@ -375,8 +408,9 @@ fi
 save_deploy_state() {
   mkdir -p "$DEPLOY_STATE_DIR"
   local tmp="${DEPLOY_STATE_FILE}.tmp"
-  printf 'LAST_GOOD_COMMIT=%q\nLAST_GOOD_IMAGE=%q\nPREVIOUS_GOOD_COMMIT=%q\nPREVIOUS_GOOD_IMAGE=%q\nVERIFIED_IMAGE=%q\n' \
-    "$LAST_GOOD_COMMIT" "$LAST_GOOD_IMAGE" "$PREVIOUS_GOOD_COMMIT" "$PREVIOUS_GOOD_IMAGE" "$VERIFIED_IMAGE" > "$tmp"
+  printf 'LAST_GOOD_COMMIT=%q\nLAST_GOOD_IMAGE=%q\nPREVIOUS_GOOD_COMMIT=%q\nPREVIOUS_GOOD_IMAGE=%q\nVERIFIED_IMAGE=%q\nROLLBACK_TARGET_COMMIT=%q\nROLLBACK_TARGET_IMAGE=%q\n' \
+    "$LAST_GOOD_COMMIT" "$LAST_GOOD_IMAGE" "$PREVIOUS_GOOD_COMMIT" "$PREVIOUS_GOOD_IMAGE" "$VERIFIED_IMAGE" \
+    "$ROLLBACK_TARGET_COMMIT" "$ROLLBACK_TARGET_IMAGE" > "$tmp"
   mv "$tmp" "$DEPLOY_STATE_FILE"
   # The tags keep both images safe from docker image prune.
   [[ -n "$LAST_GOOD_IMAGE" ]] && docker tag "$LAST_GOOD_IMAGE" "${IMAGE_REPO}:last-good"
@@ -410,15 +444,34 @@ service_container() {
   "${COMPOSE[@]}" ps -aq "$1" 2>/dev/null | head -n 1
 }
 
-# True when a container has been running for a minute or more, so it may
-# carry calls even while nothing answers. One that is restarting, or that
-# started moments ago as a crash-looping container does, carries none.
-container_long_running() {
-  local container="$1" state started
+# An instance's /status, only when it answers as that instance: a management
+# URL that reaches another instance reports that one's rooms. Returns 1 when
+# nothing can be read and 2 when another instance answers.
+instance_status() {
+  local svc="$1" url status expected id
+  url="$(service_url "$svc")"
+  status="$(status_json "$url")"
+  [[ -n "$status" ]] || return 1
+  expected="$(compose_service_env "$svc" SFU_INSTANCE_ID)"
+  id="$(printf "%s" "$status" | json_field instanceId || true)"
+  if [[ "$id" != "$expected" ]]; then
+    echo "${svc}'s management URL ${url} answers as '${id:-unknown}', not ${expected}; fix that URL." >&2
+    return 2
+  fi
+  printf "%s" "$status"
+}
+
+# True when Docker runs the container steadily, so it may carry calls however
+# silent it is; unknown is busy. Two samples a moment apart: a container that
+# is restarting, or whose restart count moves, is crash-looping and carries
+# none.
+container_running() {
+  local container="$1" first second
   [[ -n "$container" ]] || return 1
-  read -r state started < <(docker inspect -f '{{.State.Status}} {{.State.StartedAt}}' "$container")
-  [[ "$state" == "running" ]] || return 1
-  (( $(node -e 'console.log(Math.floor((Date.now() - Date.parse(process.argv[1])) / 1000))' "$started") >= 60 ))
+  first="$(docker inspect -f '{{.State.Status}}:{{.RestartCount}}' "$container" 2>/dev/null || true)"
+  sleep "${CONTAINER_SAMPLE_SECONDS:-2}"
+  second="$(docker inspect -f '{{.State.Status}}:{{.RestartCount}}' "$container" 2>/dev/null || true)"
+  [[ "$first" == running:* && "$first" == "$second" ]]
 }
 
 # An instance's place in the deploy order, as "<class> <rooms>". Instances
@@ -429,9 +482,9 @@ container_long_running() {
 # /status cannot be read: its rooms are unknown, so it is never taken for
 # the idle instance.
 deploy_rank() {
-  local svc="$1" url status rooms draining container
+  local svc="$1" url status="" rooms draining container
   url="$(service_url "$svc")"
-  status="$(status_json "$url")"
+  status="$(instance_status "$svc" 2>/dev/null)" || status=""
   if [[ -n "$status" ]]; then
     rooms="$(printf "%s" "$status" | json_field rooms || true)"
     draining="$(printf "%s" "$status" | json_field draining || true)"
@@ -445,7 +498,7 @@ deploy_rank() {
     return
   fi
   container="$(service_container "$svc")"
-  if ! answers_http "$url" && ! container_long_running "$container"; then
+  if ! answers_http "$url" && ! container_running "$container"; then
     echo "0 0"
   else
     echo "3 0"
@@ -473,8 +526,8 @@ wait_for_empty() {
   local start_ts
   start_ts="$(date +%s)"
   while true; do
-    local status rooms="unknown"
-    status="$(status_json "$url")"
+    local status="" rooms="unknown"
+    status="$(instance_status "$svc")" || status=""
     if [[ -n "$status" ]]; then
       rooms="$(printf "%s" "$status" | json_field rooms || echo "unknown")"
     fi
@@ -508,12 +561,13 @@ wait_for_healthy() {
 }
 
 # A drain sends an instance's new meetings to the others, so each of them must
-# be serving first: healthy, and a readable /status that says it is not
-# draining. /health stays healthy while an instance drains, so a status that
-# cannot be read within HEALTH_TIMEOUT_SECONDS is unknown, and unknown is
-# unsafe.
+# be serving first: healthy, a readable /status from that instance saying it
+# is not draining, and a public URL that reaches it. /health stays healthy
+# while an instance drains, so a status that cannot be read within
+# HEALTH_TIMEOUT_SECONDS is unknown, and unknown is unsafe. Every SFU counts,
+# whatever SFU_DEPLOY_SERVICES selects.
 peers_serving() {
-  local svc="$1" peer url status start_ts
+  local svc="$1" peer url status start_ts code
   for peer in "${ALL_SFU_SERVICES[@]}"; do
     [[ "$peer" == "$svc" ]] && continue
     url="$(service_url "$peer")"
@@ -522,8 +576,11 @@ peers_serving() {
       return 1
     fi
     start_ts="$(date +%s)"
-    until status="$(status_json "$url")" && [[ -n "$status" ]]; do
-      if (( $(date +%s) - start_ts >= HEALTH_TIMEOUT_SECONDS )); then
+    while true; do
+      code=0
+      status="$(instance_status "$peer")" || code=$?
+      (( code == 0 )) && break
+      if (( code == 2 )) || (( $(date +%s) - start_ts >= HEALTH_TIMEOUT_SECONDS )); then
         echo "Not draining ${svc}: ${peer}'s /status cannot be read at ${url}, so whether it takes new meetings is unknown." >&2
         return 1
       fi
@@ -533,6 +590,33 @@ peers_serving() {
       echo "Not draining ${svc}: ${peer} is draining too, so new meetings would have nowhere to go." >&2
       return 1
     fi
+    if ! validate_public_route "$peer" "$(service_public_url "$peer")"; then
+      echo "Not draining ${svc}: clients cannot reach ${peer} at its public URL, so new meetings would have nowhere to go." >&2
+      return 1
+    fi
+  done
+}
+
+# A run that was interrupted can leave every instance drained, and then none
+# takes new meetings. Holding the deploy lock, no other run is midway, so an
+# instance that is healthy and was drained while serving (its container did
+# not boot drained, as an unverified build does) goes back into service before
+# this run drains anything.
+restore_service_when_none_serves() {
+  local svc status container
+  for svc in "${ALL_SFU_SERVICES[@]}"; do
+    status="$(instance_status "$svc" 2>/dev/null)" || continue
+    [[ "$(printf "%s" "$status" | json_field draining)" == "false" ]] && is_healthy "$(service_url "$svc")" && return 0
+  done
+  for svc in "${ALL_SFU_SERVICES[@]}"; do
+    status="$(instance_status "$svc" 2>/dev/null)" || continue
+    [[ "$(printf "%s" "$status" | json_field draining)" == "true" ]] || continue
+    is_healthy "$(service_url "$svc")" || continue
+    container="$(service_container "$svc")"
+    [[ -n "$container" ]] || continue
+    docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$container" | grep -qx 'SFU_DRAINING=true' && continue
+    echo "No SFU is taking new meetings; putting ${svc} back into service before this deploy drains anything."
+    set_draining "$(service_url "$svc")" false >/dev/null || true
   done
 }
 
@@ -570,7 +654,10 @@ rollback_service() {
   fi
   echo "Rolling ${svc} back to its previous image..." >&2
   docker tag "$previous_image" "$image_name"
-  "${COMPOSE[@]}" up -d --no-build --no-deps --force-recreate "$svc"
+  if ! "${COMPOSE[@]}" up -d --no-build --no-deps --force-recreate "$svc"; then
+    echo "ERROR: compose could not restart ${svc} on its previous image; it is down. Check it now." >&2
+    return
+  fi
   if wait_for_healthy "$url"; then
     echo "${svc} is serving on its previous image again." >&2
   else
@@ -588,11 +675,17 @@ deploy_service() {
   url="$(service_url "$svc")"
   image_name="$(service_image_name "$svc")"
   container="$(service_container "$svc")"
+  local status_code=1
   for _ in 1 2 3; do
-    status="$(status_json "$url")"
-    [[ -n "$status" ]] && break
+    status_code=0
+    status="$(instance_status "$svc")" || status_code=$?
+    (( status_code == 1 )) || break
     sleep 5
   done
+  if (( status_code == 2 )); then
+    echo "${svc} was not drained or rebuilt." >&2
+    return 1
+  fi
   if [[ -n "$container" ]]; then
     previous_image="$(docker inspect -f '{{.Image}}' "$container")"
   fi
@@ -652,9 +745,9 @@ deploy_service() {
     # Up but its status is unreadable: its rooms are unknown, so leave it.
     echo "${svc} answers but its /status cannot be read; not rebuilding it." >&2
     return 1
-  elif container_long_running "$container"; then
+  elif container_running "$container"; then
     # Silent is not stopped: a wrong URL or proxy hides a container that may
-    # still carry calls.
+    # still carry calls, however recently it started.
     echo "${svc}'s container is running but nothing answers at ${url}; check that URL, or stop ${svc} if it is hung. Not rebuilding it." >&2
     return 1
   else
@@ -667,9 +760,10 @@ deploy_service() {
   fi
   echo "Starting ${svc} on ${TARGET_COMMIT}, out of rotation until its canary passes..."
   docker tag "$TARGET_IMAGE" "$image_name"
-  SFU_START_DRAINING=true "${COMPOSE[@]}" up -d --no-build --no-deps --force-recreate "$svc"
   local failure=""
-  if ! wait_for_healthy "$url"; then
+  if ! SFU_START_DRAINING=true "${COMPOSE[@]}" up -d --no-build --no-deps --force-recreate "$svc"; then
+    failure="compose could not start ${svc} on ${TARGET_COMMIT}"
+  elif ! wait_for_healthy "$url"; then
     failure="${svc} did not report healthy within ${HEALTH_TIMEOUT_SECONDS}s"
   elif ! run_canary "$svc" "$url"; then
     failure="the canary call against ${svc} failed"
@@ -686,8 +780,11 @@ deploy_service() {
   else
     # Same image, normal config: the serving container boots undrained and
     # stays that way across restarts.
-    "${COMPOSE[@]}" up -d --no-build --no-deps --force-recreate "$svc"
-    wait_for_healthy "$url" || failure="${svc} did not come back healthy after its canary"
+    if ! "${COMPOSE[@]}" up -d --no-build --no-deps --force-recreate "$svc"; then
+      failure="compose could not recreate ${svc} after its canary"
+    elif ! wait_for_healthy "$url"; then
+      failure="${svc} did not come back healthy after its canary"
+    fi
   fi
   if [[ -n "$failure" ]]; then
     echo "" >&2
@@ -707,20 +804,36 @@ deploy_service() {
   fi
 }
 
+restore_service_when_none_serves
+
 ORDERED_SERVICES=()
 while read -r _class _rooms svc; do
   ORDERED_SERVICES+=("$svc")
 done < <(for svc in "${SERVICES[@]}"; do echo "$(deploy_rank "$svc") $svc"; done | sort -n -k1,1 -k2,2 -k3,3)
 echo "Deploy order: ${ORDERED_SERVICES[*]}"
 
+# --rollback goes to the last release that served on every instance: the one
+# before the current release when every instance runs it, the current one when
+# a rollout reached only some of them, or the target of a rollback that is not
+# finished yet.
 if [[ "$ROLLBACK" == "true" ]]; then
-  if [[ -z "$PREVIOUS_GOOD_IMAGE" ]] || ! docker image inspect "$PREVIOUS_GOOD_IMAGE" >/dev/null 2>&1; then
-    echo "No earlier canary-verified image is recorded in ${DEPLOY_STATE_FILE}; revert the commit and deploy instead." >&2
+  if [[ -n "$ROLLBACK_TARGET_IMAGE" ]]; then
+    TARGET_IMAGE="$ROLLBACK_TARGET_IMAGE"
+    TARGET_COMMIT="$ROLLBACK_TARGET_COMMIT"
+    echo "Finishing the rollback to ${TARGET_COMMIT}."
+  elif all_on_image "$LAST_GOOD_IMAGE"; then
+    TARGET_IMAGE="$PREVIOUS_GOOD_IMAGE"
+    TARGET_COMMIT="$PREVIOUS_GOOD_COMMIT"
+    echo "Rolling every instance back to ${TARGET_COMMIT}, the release before ${LAST_GOOD_COMMIT}."
+  else
+    TARGET_IMAGE="$LAST_GOOD_IMAGE"
+    TARGET_COMMIT="$LAST_GOOD_COMMIT"
+    echo "Not every instance runs ${LAST_GOOD_COMMIT}; rolling them all back to it, the last release that served on every instance."
+  fi
+  if [[ -z "$TARGET_IMAGE" ]] || ! docker image inspect "$TARGET_IMAGE" >/dev/null 2>&1; then
+    echo "No canary-verified release to roll back to is recorded in ${DEPLOY_STATE_FILE}; revert the commit and deploy instead." >&2
     exit 1
   fi
-  TARGET_IMAGE="$PREVIOUS_GOOD_IMAGE"
-  TARGET_COMMIT="$PREVIOUS_GOOD_COMMIT"
-  echo "Rolling every instance back to ${TARGET_COMMIT}."
 else
   TARGET_COMMIT="$(git -C "$ROOT_DIR" rev-parse --short=12 HEAD)"
   # A rebuild of the same commit gets a new image ID even when every layer is
@@ -754,19 +867,29 @@ done
 # deploy or rollback of some instances (SFU_DEPLOY_SERVICES) keeps what the
 # others still need: a partial rollback keeps its target for the rest.
 if [[ "$ROLLBACK" == "true" ]] && ! all_on_image "$TARGET_IMAGE"; then
-  echo "The other instances still run ${LAST_GOOD_COMMIT}; --rollback keeps ${TARGET_COMMIT} as its target until they are back on it too."
+  ROLLBACK_TARGET_COMMIT="$TARGET_COMMIT"
+  ROLLBACK_TARGET_IMAGE="$TARGET_IMAGE"
+  save_deploy_state
+  echo "Not every instance runs ${TARGET_COMMIT} yet; --rollback continues to it until every instance is back on it."
 elif [[ "$ROLLBACK" == "true" ]]; then
-  # One step back only: a second --rollback has nothing older to go to.
-  LAST_GOOD_COMMIT="$TARGET_COMMIT"
-  LAST_GOOD_IMAGE="$TARGET_IMAGE"
-  PREVIOUS_GOOD_COMMIT=""
-  PREVIOUS_GOOD_IMAGE=""
+  # Back past the current release, one step only: a second --rollback has
+  # nothing older to go to. Undoing a partial rollout leaves the record as is.
+  if [[ "$TARGET_IMAGE" != "$LAST_GOOD_IMAGE" ]]; then
+    LAST_GOOD_COMMIT="$TARGET_COMMIT"
+    LAST_GOOD_IMAGE="$TARGET_IMAGE"
+    PREVIOUS_GOOD_COMMIT=""
+    PREVIOUS_GOOD_IMAGE=""
+  fi
+  ROLLBACK_TARGET_COMMIT=""
+  ROLLBACK_TARGET_IMAGE=""
   save_deploy_state
 elif [[ "$TARGET_IMAGE" != "$LAST_GOOD_IMAGE" && "$VERIFIED_IMAGE" == "$TARGET_IMAGE" ]] && all_on_image "$TARGET_IMAGE"; then
   PREVIOUS_GOOD_COMMIT="$LAST_GOOD_COMMIT"
   PREVIOUS_GOOD_IMAGE="$LAST_GOOD_IMAGE"
   LAST_GOOD_COMMIT="$TARGET_COMMIT"
   LAST_GOOD_IMAGE="$TARGET_IMAGE"
+  ROLLBACK_TARGET_COMMIT=""
+  ROLLBACK_TARGET_IMAGE=""
   save_deploy_state
 fi
 echo "Last good release: ${LAST_GOOD_COMMIT}${PREVIOUS_GOOD_COMMIT:+ (--rollback returns to ${PREVIOUS_GOOD_COMMIT})}."

@@ -1,9 +1,15 @@
 # SFU deploys: drain, canary, rollback
 
 `scripts/deploy-sfu.sh` deploys the SFU instances on one host without cutting
-a call. It pulls, restarts itself if the pull changed the script (bash would
+a call or leaving fewer instances serving than it found; anything it cannot
+read counts as busy. One deploy runs at a time per host: it takes a lock
+(`flock` on `/tmp/conclave-sfu-deploy.lock`, or `SFU_DEPLOY_LOCK_FILE`) for
+the whole run, and a second one exits 1 at once. If an interrupted run left
+every instance drained, it first puts the healthy ones that were drained while
+serving back into service. It pulls, restarts itself if the pull changed the script (bash would
 otherwise keep running the old file), and runs the pulled revision's own
-config-only preflight against the rendered compose env, stopping (exit 1)
+config-only preflight over every service, whatever `SFU_DEPLOY_SERVICES`
+selects, against the rendered compose env, stopping (exit 1)
 before anything is built if it fails or reports no result. The preflight runs
 the same through a symlinked checkout, and a run it cannot recognize as its
 own fails rather than passing. Then it builds one image for the commit
@@ -14,9 +20,12 @@ emptiest first. An instance whose `/status` cannot be read goes last, so an
 idle instance is always rebuilt before one that may carry calls. No instance
 is recreated while it has rooms unless you pass `--force-drain`:
 
-1. Check that every other instance is serving: healthy, and a readable
-   `/status` that says it is not draining (`/health` stays healthy while an
-   instance drains, so a status that cannot be read counts as unsafe). If one
+1. Check that every other instance is serving: healthy, a readable `/status`
+   that says it is not draining (`/health` stays healthy while an instance
+   drains, so a status that cannot be read counts as unsafe), and a public URL
+   that reaches it. Every instance counts, deployed in this run or not. Every
+   `/status` read checks the `instanceId` it answers with, so a management URL
+   that reaches another instance is refused rather than trusted. If one
    is not, the deploy stops (exit 1) before this drain, because new meetings
    would have nowhere to go. An instance that is down is deployed
    first for that reason, and if its new container never gets healthy the
@@ -44,16 +53,19 @@ is recreated while it has rooms unless you pass `--force-drain`:
    if not, the deploy stops (exit 1) before the next drain. If a call did
    reach it, the deploy waits for that
    call like a drain, and at the deadline exits 3 with the instance still
-   drained on the new image. Canary failed: recreate the instance from the
-   image it ran before, stop, and exit 4. The instances not yet touched were
+   drained on the new image. Canary failed, or compose could not recreate the
+   instance at either step: recreate it from the image it ran before, stop,
+   and exit 4. The instances not yet touched were
    never drained and keep serving.
 
 An instance that is serving, undrained, on the target image and config is
 skipped once its public URL still reaches it, so a rerun only does what is
 left; an earlier run that stopped on that route stops again there. An instance that answers HTTP but
 whose `/status` cannot be read is left alone (exit 1), because its rooms are
-unknown. So is one whose container is running while nothing answers at its
-URL (exit 1): a wrong `SFU_A_URL` or proxy can hide calls. Fix the URL, or stop
+unknown. So is one whose container Docker runs while nothing answers at its
+URL (exit 1), however recently it started: a wrong `SFU_A_URL` or proxy can
+hide calls. Only a container Docker reports restarting, or whose restart count
+moves, counts as crash-looping and is redeployed first. Fix the URL, or stop
 the container if it is hung, and rerun.
 
 ## Exit codes
@@ -80,9 +92,11 @@ Each fully deployed release is recorded in
 ./scripts/deploy-sfu.sh --rollback
 ```
 
-This runs the same drain and canary steps with the previous good image instead
-of a build, so it needs no `git` change and takes minutes. It goes back one
-release only. Afterwards, revert the bad commit on `main` before the next
+This runs the same drain and canary steps with a recorded image instead of a
+build, so it needs no `git` change and takes minutes. It goes to the last
+release that served on every instance: the one before the current release when
+every instance runs the current one, or the current release itself when a
+rollout reached only some instances. It goes back one release only. Afterwards, revert the bad commit on `main` before the next
 deploy, because a normal deploy builds whatever `main` holds. A rollback of
 some instances (`SFU_DEPLOY_SERVICES`) keeps its target until every instance
 is back on it, so the rest can follow with another `--rollback`; likewise a
@@ -124,6 +138,6 @@ It fails if either side goes more than 2 s without audio or is disconnected.
 - A rollback reuses the current checkout's compose file. A release that changed
   `docker-compose.sfu.yml` is rolled back to the old image with the new
   container config.
-- `scripts/deploy-sfu.ps1` does not have the canary; the VM runs the bash
-  script. It does restart itself when the pull changed it, and runs the pulled
-  revision's preflight, like the bash script.
+- `scripts/deploy-sfu.ps1` only runs `scripts/deploy-sfu.sh` with the same
+  arguments, so a deploy started from PowerShell follows every rule above. It
+  needs bash on PATH with Docker reachable from it (WSL or Git Bash).

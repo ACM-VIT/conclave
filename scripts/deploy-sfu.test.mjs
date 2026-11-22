@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -18,15 +18,19 @@ const secret = "deploy-test-secret";
 
 // Every drain and recreate across the fake SFUs, in the order they happened.
 const events = [];
+// Called before a fake SFU applies a drain, so a test can line two up.
+let beforeDrain = null;
 
-// container: "running" for an hour, "exited", "crash-looping" (restarted
-// seconds ago) or "hung" (running for an hour). Only "running" answers HTTP
-// until a recreate. replacementHealthy: false for a build whose containers
+// container: "running" for an hour, "exited", "crash-looping" (Docker keeps
+// restarting it), "hung" (running for an hour) or "young" (running for a few
+// seconds). Only "running" answers HTTP until a recreate. failRecreate: the
+// recreate (1st, 2nd...) at which compose fails after stopping the old
+// container. replacementHealthy: false for a build whose containers
 // never report healthy. onTarget: already runs the target image with the
 // current compose config.
 const startSfu = async (
   instanceId,
-  { rooms = 0, statusAnswers = true, container = "running", replacementHealthy = true, draining = false, onTarget = false } = {},
+  { rooms = 0, statusAnswers = true, container = "running", replacementHealthy = true, draining = false, onTarget = false, failRecreate = 0 } = {},
 ) => {
   const sfu = {
     instanceId,
@@ -37,6 +41,9 @@ const startSfu = async (
     healthy: true,
     image: onTarget ? "sha256:target" : "sha256:running",
     configHash: onTarget ? "current-hash" : "older-hash",
+    restartCount: 0,
+    bootDrained: false,
+    failRecreate,
     drains: [],
     recreates: [],
   };
@@ -46,8 +53,10 @@ const startSfu = async (
     const url = new URL(req.url, "http://sfu");
     const json = (value, status = 200) => res.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(value));
     if (url.pathname === "/stand-in/state") {
-      const startedAt = new Date(Date.now() - (sfu.container === "crash-looping" ? 3_000 : 3_600_000)).toISOString();
-      return json({ status: sfu.container === "exited" ? "exited" : "running", startedAt, image: sfu.image, configHash: sfu.configHash });
+      const startedAt = new Date(Date.now() - (["crash-looping", "young"].includes(sfu.container) ? 3_000 : 3_600_000)).toISOString();
+      if (sfu.container === "crash-looping") sfu.restartCount += 1;
+      const status = { exited: "exited", "crash-looping": "restarting" }[sfu.container] ?? "running";
+      return json({ status, startedAt, restartCount: sfu.restartCount, bootDrained: sfu.bootDrained, image: sfu.image, configHash: sfu.configHash });
     }
     if (sfu.container !== "running" && !url.pathname.startsWith("/stand-in/")) return req.socket.destroy();
     if (url.pathname === "/health") return sfu.healthy ? json({ status: "healthy" }) : json({ status: "starting" }, 503);
@@ -57,6 +66,7 @@ const startSfu = async (
     }
     if (url.pathname === "/drain" && req.method === "POST") {
       const request = JSON.parse(body || "{}");
+      if (request.draining && beforeDrain) await beforeDrain();
       sfu.drains.push(request);
       events.push(`drain ${instanceId}`);
       sfu.draining = request.draining === true;
@@ -68,7 +78,12 @@ const startSfu = async (
       sfu.recreates.push({ roomsCut: sfu.rooms });
       events.push(`recreate ${instanceId}`);
       sfu.rooms = 0;
+      if (sfu.failRecreate === sfu.recreates.length) {
+        sfu.container = "exited";
+        return json({ error: "compose failed after stopping the old container" }, 500);
+      }
       sfu.container = "running";
+      sfu.bootDrained = url.searchParams.get("draining") === "true";
       sfu.healthy = replacementHealthy;
       sfu.draining = url.searchParams.get("draining") === "true";
       sfu.image = url.searchParams.get("image");
@@ -96,8 +111,10 @@ const state = async (name) => (await fetch("http://127.0.0.1:" + sfus[name].port
 const service = (name, sfu, index) => ({
   environment: {
     ANNOUNCED_IP: "127.0.0.1",
-    RTC_MIN_PORT: String(40000 + index * 1000),
-    RTC_MAX_PORT: String(40999 + index * 1000),
+    // DEPLOY_TEST_OVERLAP gives both services one RTC range, which the full
+    // preflight rejects.
+    RTC_MIN_PORT: process.env.DEPLOY_TEST_OVERLAP ? "41001" : String(40000 + index * 1000),
+    RTC_MAX_PORT: process.env.DEPLOY_TEST_OVERLAP ? "42000" : String(40999 + index * 1000),
     SFU_INSTANCE_ID: name,
     SFU_PORT: String(sfu.port),
     SFU_PUBLIC_URL: "http://127.0.0.1:" + sfu.port,
@@ -126,7 +143,8 @@ const main = async () => {
       const name = rest.at(-1);
       const draining = process.env.SFU_START_DRAINING === "true";
       const image = tags["vm-" + name] || "sha256:target";
-      await fetch("http://127.0.0.1:" + sfus[name].port + "/stand-in/recreate?draining=" + draining + "&image=" + image);
+      const response = await fetch("http://127.0.0.1:" + sfus[name].port + "/stand-in/recreate?draining=" + draining + "&image=" + image);
+      if (!response.ok) process.exitCode = 1;
       return;
     }
     return;
@@ -134,8 +152,10 @@ const main = async () => {
   if (args[0] === "inspect") {
     const format = args[2];
     const name = args.at(-1).replace(/^ctr-/, "");
+    if (format.includes(".Config.Env")) return out("SFU_DRAINING=" + (await state(name)).bootDrained);
     if (format.includes(".State.Status")) {
       const current = await state(name);
+      if (format.includes(".RestartCount")) return out(current.status + ":" + current.restartCount);
       return out(format.includes(".State.StartedAt") ? current.status + " " + current.startedAt : current.status);
     }
     if (format.includes("config-hash")) return out((await state(name)).configHash);
@@ -154,7 +174,7 @@ main();
 
 // upstream: files the next commit on origin changes, so the checkout is one
 // pull behind the revision it will deploy.
-const deploy = async (sfus, { args: extraArgs = [], env: extraEnv = {}, envLines = [], upstream } = {}) => {
+const deploy = async (sfus, { args: extraArgs = [], env: extraEnv = {}, envLines = [], upstream, powershell = false } = {}) => {
   // On macOS this path sits behind the /var symlink, so the preflight also
   // runs through one.
   const root = await mkdtemp(path.join(tmpdir(), "conclave-deploy-"));
@@ -162,6 +182,7 @@ const deploy = async (sfus, { args: extraArgs = [], env: extraEnv = {}, envLines
     const src = path.join(root, "src");
     await mkdir(path.join(src, "scripts"), { recursive: true });
     await copyFile(path.join(scripts, "deploy-sfu.sh"), path.join(src, "scripts", "deploy-sfu.sh"));
+    await copyFile(path.join(scripts, "deploy-sfu.ps1"), path.join(src, "scripts", "deploy-sfu.ps1"));
     await copyFile(path.join(scripts, "deploy-sfu-preflight.mjs"), path.join(src, "scripts", "deploy-sfu-preflight.mjs"));
     // The preflight shares the SFU's own worker and port rules.
     await mkdir(path.join(src, "packages", "sfu", "config"), { recursive: true });
@@ -210,9 +231,13 @@ const deploy = async (sfus, { args: extraArgs = [], env: extraEnv = {}, envLines
       DRAIN_POLL_SECONDS: "0.2",
       PLACEMENT_SETTLE_SECONDS: "0",
       HEALTH_TIMEOUT_SECONDS: "5",
+      SFU_DEPLOY_LOCK_FILE: path.join(root, "deploy.lock"),
       ...extraEnv,
     };
-    const result = await run("bash", [path.join(vm, "scripts", "deploy-sfu.sh"), ...extraArgs], { env }).then(
+    const command = powershell
+      ? ["pwsh", ["-NoProfile", "-File", path.join(vm, "scripts", "deploy-sfu.ps1"), ...extraArgs]]
+      : ["bash", [path.join(vm, "scripts", "deploy-sfu.sh"), ...extraArgs]];
+    const result = await run(...command, { env }).then(
       ({ stdout, stderr }) => ({ code: 0, output: stdout + stderr }),
       (error) => ({ code: error.code, output: `${error.stdout}${error.stderr}` }),
     );
@@ -447,5 +472,134 @@ test("a pull that changes deploy-sfu.sh hands the deploy to the new script", asy
     assert.match(result.output, /This pull changed deploy-sfu.sh; restarting with the new version/);
     assert.equal(result.output.split("The pulled deploy-sfu.sh is running.").length - 1, 1, "the new script runs once");
     assert.match(result.output, /SFU deploy complete/);
+  });
+});
+
+const hasPowerShell = (() => {
+  try {
+    execFileSync("pwsh", ["-NoProfile", "-Command", "exit 0"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
+test("two deploys at once on one host: the second refuses and only one instance drains", async () => {
+  await withSfus({ "sfu-a": { rooms: 1 }, "sfu-b": { rooms: 1 } }, async (sfus) => {
+    const lock = path.join(await mkdtemp(path.join(tmpdir(), "conclave-deploy-lock-")), "deploy.lock");
+    // Hold every drain until both runs have reached one, as Sol's probe did.
+    let release;
+    const both = new Promise((resolve) => (release = resolve));
+    const guard = setTimeout(release, 8000);
+    let reached = 0;
+    beforeDrain = async () => {
+      reached += 1;
+      if (reached === 2) release();
+      await both;
+    };
+    try {
+      const runs = await Promise.all(
+        ["sfu-a", "sfu-b"].map((svc) => deploy(sfus, { env: { SFU_DEPLOY_SERVICES: svc, SFU_DEPLOY_LOCK_FILE: lock, DRAIN_TIMEOUT_SECONDS: "3" } })),
+      );
+      assert.equal(runs.filter((run) => /Another SFU deploy is running on this host/.test(run.output)).length, 1, runs.map((run) => run.output).join("\n"));
+      assert.equal(Object.values(sfus).filter((sfu) => sfu.drains.some((drain) => drain.draining)).length, 1);
+    } finally {
+      beforeDrain = null;
+      clearTimeout(guard);
+    }
+  });
+});
+
+test("a rerun after an interrupted pair of deploys puts a healthy instance back into service and continues", async () => {
+  await withSfus({ "sfu-a": { draining: true }, "sfu-b": { draining: true } }, async (sfus) => {
+    const result = await deploy(sfus);
+    assert.equal(result.code, 0, result.output);
+    assert.match(result.output, /No SFU is taking new meetings; putting sfu-a back into service/);
+    assert.deepEqual(sfus["sfu-a"].drains[0], { draining: false });
+    assert.equal(sfus["sfu-a"].recreates.length, 2);
+    assert.equal(sfus["sfu-b"].recreates.length, 2);
+  });
+});
+
+test("a management URL that answers as another instance is refused before any drain", async () => {
+  await withSfus({ "sfu-a": { rooms: 2 }, "sfu-b": { rooms: 0 } }, async (sfus) => {
+    // sfu-a's management URL reaches sfu-b, as in Astra's probe.
+    const result = await deploy(sfus, { envLines: [`SFU_A_URL=http://127.0.0.1:${sfus["sfu-b"].port}`] });
+    assert.equal(result.code, 1, result.output);
+    assert.match(result.output, /sfu-a's management URL .* answers as 'sfu-b', not sfu-a/);
+    assert.deepEqual(events, []);
+  });
+});
+
+test("a running container whose probes are silent is refused even when it started seconds ago", async () => {
+  await withSfus({ "sfu-a": { rooms: 1, container: "young" }, "sfu-b": { rooms: 0 } }, async (sfus) => {
+    const result = await deploy(sfus, { env: { SFU_DEPLOY_SERVICES: "sfu-a" } });
+    assert.equal(result.code, 1, result.output);
+    assert.match(result.output, /sfu-a's container is running but nothing answers/);
+    assert.deepEqual(cutRooms(sfus), []);
+  });
+});
+
+test("a deploy of one instance refuses while the other is not publicly reachable", async () => {
+  await withSfus({ "sfu-a": { rooms: 1 }, "sfu-b": {} }, async (sfus) => {
+    const result = await deploy(sfus, { env: { SFU_DEPLOY_SERVICES: "sfu-a" }, envLines: ["SFU_B_PUBLIC_URL=http://127.0.0.1:9"] });
+    assert.equal(result.code, 1, result.output);
+    assert.match(result.output, /Not draining sfu-a: clients cannot reach sfu-b/);
+    assert.equal(sfus["sfu-a"].drains.length, 0);
+  });
+});
+
+test("a deploy of one instance still runs the full preflight", async () => {
+  await withSfus({ "sfu-a": { rooms: 0 }, "sfu-b": { rooms: 0 } }, async (sfus) => {
+    const result = await deploy(sfus, { env: { SFU_DEPLOY_SERVICES: "sfu-a", DEPLOY_TEST_OVERLAP: "1" } });
+    assert.equal(result.code, 1, result.output);
+    assert.match(result.output, /overlap/i);
+    assert.deepEqual(events, []);
+  });
+});
+
+test("a compose error at either recreate puts the instance back on its previous image", async () => {
+  for (const failing of [1, 2]) {
+    await withSfus({ "sfu-a": { rooms: 1 }, "sfu-b": { rooms: 0, failRecreate: failing } }, async (sfus) => {
+      const result = await deploy(sfus, { env: { SFU_DEPLOY_SERVICES: "sfu-b" } });
+      assert.equal(result.code, 4, result.output);
+      assert.match(result.output, /Rolling sfu-b back to its previous image/);
+      assert.equal(sfus["sfu-b"].container, "running");
+      assert.equal(sfus["sfu-b"].image, "sha256:running");
+      assert.equal(sfus["sfu-a"].drains.length, 0);
+    });
+  }
+});
+
+test("--rollback after a partial rollout returns every instance to the last release that fully served", async () => {
+  await withSfus({ "sfu-a": {}, "sfu-b": {} }, async (sfus) => {
+    const stateDir = await mkdtemp(path.join(tmpdir(), "conclave-deploy-state-"));
+    try {
+      // B served on both; A came before it; C reached sfu-b only.
+      await writeFile(path.join(stateDir, "vm.env"), "LAST_GOOD_COMMIT=B\nLAST_GOOD_IMAGE=sha256:running\nPREVIOUS_GOOD_COMMIT=A\nPREVIOUS_GOOD_IMAGE=sha256:older\n");
+      const partial = await deploy(sfus, { env: { SFU_DEPLOY_SERVICES: "sfu-b", SFU_DEPLOY_STATE_DIR: stateDir } });
+      assert.equal(partial.code, 0, partial.output);
+      assert.deepEqual(Object.values(sfus).map((sfu) => sfu.image), ["sha256:running", "sha256:target"]);
+      const rollback = await deploy(sfus, { args: ["--rollback"], env: { SFU_DEPLOY_STATE_DIR: stateDir } });
+      assert.equal(rollback.code, 0, rollback.output);
+      assert.deepEqual(Object.values(sfus).map((sfu) => sfu.image), ["sha256:running", "sha256:running"]);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+});
+
+test("deploy-sfu.ps1 hands the deploy, --rollback included, to deploy-sfu.sh", { skip: !hasPowerShell && "needs pwsh on PATH" }, async () => {
+  await withSfus({ "sfu-a": { onTarget: true }, "sfu-b": { onTarget: true } }, async (sfus) => {
+    const stateDir = await mkdtemp(path.join(tmpdir(), "conclave-deploy-state-"));
+    try {
+      await writeFile(path.join(stateDir, "vm.env"), "LAST_GOOD_COMMIT=bad\nLAST_GOOD_IMAGE=sha256:target\nPREVIOUS_GOOD_COMMIT=good\nPREVIOUS_GOOD_IMAGE=sha256:previous\n");
+      const result = await deploy(sfus, { powershell: true, args: ["--rollback"], env: { SFU_DEPLOY_STATE_DIR: stateDir } });
+      assert.equal(result.code, 0, result.output);
+      assert.match(result.output, /Rollback: the checkout stays at/);
+      assert.deepEqual(Object.values(sfus).map((sfu) => sfu.image), ["sha256:previous", "sha256:previous"]);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
   });
 });
