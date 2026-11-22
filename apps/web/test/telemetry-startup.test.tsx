@@ -10,6 +10,7 @@ const posthog = vi.hoisted(() => ({
   unregister_for_session: vi.fn(),
   capture: vi.fn(),
   captureException: vi.fn(),
+  exceptions: { buildProperties: vi.fn(() => ({ $exception_list: [] })) },
   // properties() is what posthog-js attaches to every event from each store.
   persistence: { properties: vi.fn((): Record<string, unknown> => ({})) },
   sessionPersistence: { properties: vi.fn((): Record<string, unknown> => ({})) },
@@ -308,14 +309,19 @@ describe("what each event carries", () => {
 
     window.dispatchEvent(new Event("pagehide"));
 
-    expect(posthog.captureException).toHaveBeenCalledTimes(1);
+    expect(posthog.captureException).not.toHaveBeenCalled();
+    expect(posthog.capture).toHaveBeenCalledWith(
+      "$exception",
+      { $exception_list: [], source: "react_error_boundary", boundary: "route" },
+      { transport: "sendBeacon", send_instantly: true },
+    );
     expect(posthog.capture).toHaveBeenCalledWith(
       "meet_join_attempt",
       { attempt: 1 },
       { transport: "sendBeacon", send_instantly: true },
     );
     telemetry.capture("meet_join_success", { attempt: 1 });
-    expect(posthog.capture).toHaveBeenCalledTimes(2);
+    expect(posthog.capture).toHaveBeenCalledTimes(3);
   });
 
   it("sends held reports at once when the tab is hidden", async () => {
@@ -334,7 +340,11 @@ describe("what each event carries", () => {
       visibility.mockRestore();
     }
 
-    expect(posthog.captureException).toHaveBeenCalledTimes(1);
+    expect(posthog.capture).toHaveBeenCalledWith(
+      "$exception",
+      { $exception_list: [], source: "react_error_boundary", boundary: "route" },
+      { transport: "sendBeacon", send_instantly: true },
+    );
   });
 
   it("keeps a chunk's path only when the build's manifest pairs its id with that file", async () => {

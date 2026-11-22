@@ -19,8 +19,10 @@ Web, from `lib/telemetry.ts`. It loads PostHog when the first page mounts or
 the first report arrives, and holds up to 50 reports until it has loaded and
 the build's chunk manifest has too, or 3 s have passed, so a first-render error
 keeps its chunk paths. If the page closes or is hidden while reports are held,
-they go out at once, events by beacon, with whatever manifest has loaded (none
-leaves chunk frames as `[path]`), so none is lost. PostHog's own error capture
+they go out at once by beacon, exceptions included, with whatever manifest has
+loaded (none leaves chunk frames as `[path]`), so none is lost. posthog-js's
+`captureException` would only queue an exception for its next batch, so a
+closing page builds the same `$exception` event and sends it by beacon. PostHog's own error capture
 starts as soon as it loads. Each report is scrubbed once, when it is sent:
 
 - Unhandled errors and promise rejections (posthog-js autocapture, rate limited per error type by the SDK).

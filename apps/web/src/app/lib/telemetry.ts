@@ -35,6 +35,9 @@ const MAX_QUEUED = 50;
 /** Sends one report; `closing` when the page is going away. */
 type Delivery = (posthog: PostHog, closing: boolean) => void;
 
+// How a report captured while the page goes away is sent: by beacon, now.
+const UNLOADING = { transport: "sendBeacon", send_instantly: true } as const;
+
 // posthog-js merges local storage, then session storage, into every event.
 // Storage keeps only the SDK's own ids; anything else, such as a value a
 // script seeded there, is removed from both on load.
@@ -156,9 +159,7 @@ const initPostHog = (client: PostHog, key: string): void => {
   });
   dropStoredProperties(client);
   // Through send, so a call failure logged while reports are held waits too.
-  installCallErrorCapture((error, props) => {
-    send((ready) => emit(props, () => ready.captureException(error, props)));
-  });
+  installCallErrorCapture(sendException);
 };
 
 /**
@@ -203,6 +204,25 @@ const send = (delivery: Delivery): void => {
   if (queue && queue.length < MAX_QUEUED) queue.push(delivery);
 };
 
+// posthog-js's captureException queues the event for its next batch, which
+// a closing page may never send, so a closing page builds the same event and
+// sends it by beacon like any other.
+const sendException = (error: unknown, props?: TelemetryProps): void => {
+  send((client, closing) => {
+    emit(props, () => {
+      if (!closing) {
+        client.captureException(error, props);
+        return;
+      }
+      const exception = client.exceptions?.buildProperties(error, {
+        handled: true,
+        syntheticException: new Error("PostHog syntheticException"),
+      });
+      if (exception) client.capture("$exception", { ...exception, ...props }, UNLOADING);
+    });
+  });
+};
+
 export const telemetry = {
   capture(
     event: string,
@@ -211,19 +231,9 @@ export const telemetry = {
   ): void {
     send((client, closing) => {
       emit(props, () =>
-        client.capture(
-          event,
-          props,
-          options?.immediate || closing
-            ? { transport: "sendBeacon", send_instantly: true }
-            : undefined,
-        ),
+        client.capture(event, props, options?.immediate || closing ? UNLOADING : undefined),
       );
     });
   },
-  captureException(error: unknown, props?: TelemetryProps): void {
-    send((client) => {
-      emit(props, () => client.captureException(error, props));
-    });
-  },
+  captureException: sendException,
 };
