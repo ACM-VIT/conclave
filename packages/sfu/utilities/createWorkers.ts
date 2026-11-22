@@ -1,11 +1,10 @@
 import { setTimeout as delay } from "node:timers/promises";
 import * as mediasoup from "mediasoup";
 import type { TransportListenInfo, WebRtcServer, Worker } from "mediasoup/types";
-import { availableParallelism } from "node:os";
 import { config } from "../config/config.js";
 import { resolveWebRtcPortBudget } from "../config/workerSettings.mjs";
 import { Logger } from "./loggers.js";
-import { getWorkerCpuQuota } from "./workerCpuQuota.js";
+import { instanceCpuCount } from "./workerCpuQuota.js";
 
 type CreateWorkersOptions = {
   onWorkerDied?: (worker: Worker, label: string) => void | Promise<void>;
@@ -85,11 +84,10 @@ const createWorkers = async (
     workerCount: override,
     hostInstanceCount,
     webRtcPortBudget,
+    appDocumentWorkerCount,
   } = config.workerSettings;
   const effectiveBudget = resolveWebRtcPortBudget(config.workerSettings);
-  const cpuWorkerCount = override ?? Math.max(1, Math.floor(
-    Math.min(availableParallelism(), getWorkerCpuQuota()) / hostInstanceCount,
-  ));
+  const cpuWorkerCount = override ?? Math.max(1, instanceCpuCount(hostInstanceCount) - appDocumentWorkerCount);
   if (override === undefined && cpuWorkerCount > effectiveBudget) {
     Logger.warn(`CPU capacity allows ${cpuWorkerCount} workers. Capping the derived count at the WebRTC port budget of ${effectiveBudget}.`);
   }
@@ -129,7 +127,9 @@ const createWorkers = async (
     });
   };
 
-  const sizing = override === undefined ? `derived for ${hostInstanceCount} host instance(s)` : "configured";
+  const sizing = override === undefined
+    ? `derived for ${hostInstanceCount} host instance(s) and ${appDocumentWorkerCount} app document worker(s)`
+    : "configured";
   console.log(`[SFU] Creating ${workerCount} mediasoup worker(s) (${sizing})`);
   try {
     for (let i = 0; i < workerCount; i++) {

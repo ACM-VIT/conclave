@@ -9,6 +9,7 @@ import { expect, it, vi } from "vitest";
 import { config } from "../config/config.js";
 import { readWorkerSizing } from "../config/workerSettings.mjs";
 import createWorkers, { getWorkerWebRtcServer } from "../utilities/createWorkers.js";
+import { resolveAppDocumentWorkerCount } from "../utilities/workerCpuQuota.js";
 
 vi.mock("mediasoup", () => ({ createWorker: vi.fn() }));
 vi.mock("node:fs", () => ({ readFileSync: vi.fn() }));
@@ -22,6 +23,7 @@ vi.mock("../config/config.js", () => ({
       workerCount: 1,
       hostInstanceCount: 1,
       webRtcPortBudget: undefined,
+      appDocumentWorkerCount: 1,
       rtcMinPort: 42001,
       rtcMaxPort: 42200,
     },
@@ -94,32 +96,35 @@ it.each([
 });
 
 it.each([
-  { name: "affinity shared by two instances", affinity: 8, files: {}, instances: 2, override: undefined, expected: 4 },
-  { name: "2-vCPU host shared by three instances", affinity: 2, files: {}, instances: 3, override: undefined, expected: 1 },
+  { name: "affinity shared by two instances", affinity: 8, files: {}, instances: 2, override: undefined, appDocuments: 1, expected: 3 },
+  { name: "two app document workers", affinity: 8, files: {}, instances: 1, override: undefined, appDocuments: 2, expected: 6 },
+  { name: "2-vCPU host shared by three instances", affinity: 2, files: {}, instances: 3, override: undefined, appDocuments: 1, expected: 1 },
   {
     name: "nested cgroup quota shared by two instances",
     affinity: 8,
     files: { "/proc/self/cgroup": "0::/sfu/current", "/sys/fs/cgroup/sfu/cpu.max": "350000 100000" },
-    instances: 2, override: undefined, expected: 1,
+    instances: 2, override: undefined, appDocuments: 1, expected: 1,
   },
   {
     name: "legacy CPU quota",
     affinity: 8,
     files: { "/sys/fs/cgroup/cpu/cpu.cfs_quota_us": "250000", "/sys/fs/cgroup/cpu/cpu.cfs_period_us": "100000" },
-    instances: 1, override: undefined, expected: 2,
+    instances: 1, override: undefined, appDocuments: 1, expected: 1,
   },
   {
     name: "explicit worker count",
     affinity: 8,
     files: { "/sys/fs/cgroup/cpu.max": "75000 100000" },
-    instances: 3, override: 3, expected: 3,
+    instances: 3, override: 3, appDocuments: 1, expected: 3,
   },
-])("chooses the worker count for $name", async ({ affinity, files, instances, override, expected }) => {
+])("chooses the worker count for $name", async ({ affinity, files, instances, override, appDocuments, expected }) => {
   const settings = config.workerSettings;
   const oldCount = settings.workerCount;
   const oldInstances = settings.hostInstanceCount;
+  const oldAppDocuments = settings.appDocumentWorkerCount;
   settings.workerCount = override;
   settings.hostInstanceCount = instances;
+  settings.appDocumentWorkerCount = appDocuments;
   vi.mocked(availableParallelism).mockReturnValue(affinity);
   const contents: Readonly<Record<string, string | undefined>> = files;
   vi.mocked(readFileSync).mockImplementation((path) => {
@@ -137,7 +142,25 @@ it.each([
   } finally {
     settings.workerCount = oldCount;
     settings.hostInstanceCount = oldInstances;
+    settings.appDocumentWorkerCount = oldAppDocuments;
     vi.mocked(createWorker).mockReset();
+    vi.mocked(readFileSync).mockReset();
+  }
+});
+
+it.each([
+  { affinity: 2, instances: 3, appDocuments: 1, allowed: true },
+  { affinity: 2, instances: 3, appDocuments: 2, allowed: false },
+  { affinity: 8, instances: 2, appDocuments: 4, allowed: true },
+  { affinity: 8, instances: 2, appDocuments: 5, allowed: false },
+])("allows $appDocuments app document workers on $affinity CPUs shared by $instances instances: $allowed", ({ affinity, instances, appDocuments, allowed }) => {
+  vi.mocked(availableParallelism).mockReturnValue(affinity);
+  vi.mocked(readFileSync).mockImplementation(() => { throw new Error("no cgroup limit"); });
+  const resolve = () => resolveAppDocumentWorkerCount({ appDocumentWorkerCount: appDocuments, hostInstanceCount: instances });
+  try {
+    if (allowed) expect(resolve()).toBe(appDocuments);
+    else expect(resolve).toThrow(`SFU_APP_DOC_WORKERS=${appDocuments}`);
+  } finally {
     vi.mocked(readFileSync).mockReset();
   }
 });

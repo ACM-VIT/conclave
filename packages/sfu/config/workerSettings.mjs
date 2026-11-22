@@ -37,6 +37,7 @@ export const readWorkerSizing = (environment) => ({
   workerCount: readPositiveInteger(environment, "SFU_WORKER_COUNT"),
   hostInstanceCount: readPositiveInteger(environment, "SFU_WORKER_HOST_INSTANCES") ?? 1,
   webRtcPortBudget: readPositiveInteger(environment, "SFU_WEBRTC_PORT_BUDGET"),
+  appDocumentWorkerCount: readPositiveInteger(environment, "SFU_APP_DOC_WORKERS") ?? 1,
 });
 
 export const resolveWebRtcPortBudget = ({ rtcMinPort, rtcMaxPort, workerCount, webRtcPortBudget }) => {

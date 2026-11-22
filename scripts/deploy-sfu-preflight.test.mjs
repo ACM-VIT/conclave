@@ -167,7 +167,7 @@ test("deploy preflight and SFU startup agree on configured RTC ports", () => {
   assert.ok(startupResults.slice(valid.length).every((result) => typeof result === "string"));
 });
 
-for (const name of ["SFU_WEBRTC_PORT_BUDGET", "SFU_WORKER_COUNT", "SFU_WORKER_HOST_INSTANCES"]) {
+for (const name of ["SFU_WEBRTC_PORT_BUDGET", "SFU_WORKER_COUNT", "SFU_WORKER_HOST_INSTANCES", "SFU_APP_DOC_WORKERS"]) {
   for (const invalid of ["", " ", "0", "-1", "1.5", "1e0", "bad"]) {
     test(`config-only rejects ${name}=${JSON.stringify(invalid)}`, async () => {
       const compose = makeCompose();

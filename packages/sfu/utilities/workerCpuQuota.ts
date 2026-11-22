@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { availableParallelism } from "node:os";
 import { posix } from "node:path";
 
 const read = (file: string): string => {
@@ -52,4 +53,23 @@ export const getWorkerCpuQuota = (): number => {
     ),
   );
   return Math.min(...unified, ...legacy);
+};
+
+export const instanceCpuCount = (hostInstanceCount: number): number =>
+  Math.max(1, Math.floor(Math.min(availableParallelism(), getWorkerCpuQuota()) / hostInstanceCount));
+
+export const resolveAppDocumentWorkerCount = ({
+  appDocumentWorkerCount,
+  hostInstanceCount,
+}: {
+  appDocumentWorkerCount: number;
+  hostInstanceCount: number;
+}): number => {
+  const cpus = instanceCpuCount(hostInstanceCount);
+  if (appDocumentWorkerCount > cpus) {
+    throw new Error(
+      `SFU_APP_DOC_WORKERS=${appDocumentWorkerCount} exceeds the ${cpus} CPU(s) this instance's share of the host allows`,
+    );
+  }
+  return appDocumentWorkerCount;
 };
