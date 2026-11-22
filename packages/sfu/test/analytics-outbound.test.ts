@@ -9,7 +9,10 @@ import { PostHog } from "posthog-node";
 import { afterEach, describe, expect, it } from "vitest";
 import { createErrorReporter, SFU_RELEASE } from "../server/analytics/errorReporter.js";
 import { createFramePath, createOutboundEvent, SFU_ROOT } from "../server/analytics/outbound.js";
+import { isSocketEvent } from "../server/analytics/socketEvents.js";
 import { getGameCatalog } from "../server/games/registry.js";
+import { guardSocketListeners } from "../server/socket/guardListeners.js";
+import type { Socket } from "socket.io";
 
 const RELEASE = SFU_RELEASE;
 const beforeSend = createOutboundEvent({
@@ -288,6 +291,24 @@ describe("the SFU's outbound schema", () => {
         },
       },
     ]);
+  });
+
+  it("names a socket event only when the server registered a handler for it", () => {
+    const socket = { id: "s1", on: () => socket } as unknown as Socket;
+    guardSocketListeners(socket);
+    socket.on("game:move", () => {});
+    const outbound = createOutboundEvent({
+      release: RELEASE,
+      framePath: createFramePath({ root: SFU_ROOT, cwd: () => process.cwd() }),
+      games: getGameCatalog,
+      isSocketEvent,
+    });
+    const sent = (socket_event: string): unknown =>
+      outbound({ distinctId: SFU_ID, event: "$exception", properties: { source: "socket_handler", socket_event } })
+        ?.properties?.socket_event;
+
+    expect(sent("game:move")).toBe("game:move");
+    expect(sent("Meet Mira in sample-room")).toBeUndefined();
   });
 
   it("sends only the events on the list", () => {
