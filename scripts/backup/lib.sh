@@ -62,13 +62,17 @@ print("1" if p.scheme == "rediss" else "0")
 }
 
 # redis-cli against the parsed URL. The password goes through REDISCLI_AUTH so
-# it never shows up in the process list.
-redis_cli() {
-  local args=(-h "$REDIS_HOST" -p "$REDIS_PORT" -n "$REDIS_DB")
+# it never shows up in the process list. An empty REDISCLI_AUTH still sends
+# AUTH, which a Redis without a password rejects, so it is only set when there
+# is one.
+redis_cli() (
+  args=(-h "$REDIS_HOST" -p "$REDIS_PORT" -n "$REDIS_DB")
   [[ -n "$REDIS_USER" ]] && args+=(--user "$REDIS_USER")
   [[ "$REDIS_TLS" == "1" ]] && args+=(--tls)
-  REDISCLI_AUTH="$REDIS_PASS" redis-cli "${args[@]}" --no-auth-warning "$@"
-}
+  unset REDISCLI_AUTH
+  [[ -n "$REDIS_PASS" ]] && export REDISCLI_AUTH="$REDIS_PASS"
+  exec redis-cli "${args[@]}" --no-auth-warning "$@"
+)
 
 # --- Azure Blob Storage over REST, authenticated by the VM's managed identity.
 
