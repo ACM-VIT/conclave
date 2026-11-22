@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
+import { RESERVED_APP_IDS } from "./app-id-rules.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -424,6 +425,13 @@ const nextExports = { ...pkgExports };
 
 const expectedExports = {};
 for (const app of apps) {
+  if (RESERVED_APP_IDS.has(app.appId)) {
+    // Its subpaths are the SDK's own, so none of them is expected or fixed.
+    errors.push(
+      `[${app.appId}] is a name the SDK keeps for itself. Rename src/apps/${app.appId}`,
+    );
+    continue;
+  }
   for (const part of APP_PARTS) {
     if (app[part]) {
       expectedExports[`./${app.appId}/${part}`] =
@@ -437,6 +445,12 @@ for (const [key, expected] of Object.entries(expectedExports)) {
   if (current === expected) continue;
   if (typeof current === "undefined") {
     errors.push(`package.json exports missing ${key}`);
+  } else if (typeof current !== "string" || !current.startsWith("./src/apps/")) {
+    // Not an app's entry: a fix here would replace a piece of the SDK.
+    errors.push(
+      `package.json exports ${key} is the SDK's own (${JSON.stringify(current)}), so no app can have it. Rename the app`,
+    );
+    continue;
   } else {
     errors.push(`package.json exports mismatch for ${key} (got "${current}")`);
   }
@@ -451,7 +465,7 @@ for (const key of Object.keys(nextExports)) {
   if (!match) continue;
   const [, appId, part] = match;
   // `./authority/server` is the SDK's own subpath, not an app's.
-  if (appId === "authority") continue;
+  if (RESERVED_APP_IDS.has(appId)) continue;
   const app = apps.find((item) => item.appId === appId);
   if (!app) {
     warnings.push(`package.json exports has stale entry ${key}`);

@@ -57,6 +57,25 @@ const makeRepo = () => {
     write,
     check: () => run("check-app-integrations.mjs", ["--root", root]),
     scaffold: (id, ...args) => run("create-app-integration.mjs", [id, "--root", root, ...args]),
+    /** Every file in the repo with its contents, to show a run wrote nothing. */
+    files: () => {
+      const found = {};
+      const walk = (dir) => {
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+          const target = path.join(dir, entry.name);
+          if (entry.isDirectory()) walk(target);
+          else found[path.relative(repo, target)] = fs.readFileSync(target, "utf8");
+        }
+      };
+      walk(repo);
+      return found;
+    },
+    setExports: (more) => {
+      const manifest = path.join(root, "package.json");
+      const pkg = JSON.parse(fs.readFileSync(manifest, "utf8"));
+      pkg.exports = { ...pkg.exports, ...more };
+      fs.writeFileSync(manifest, `${JSON.stringify(pkg, null, 2)}\n`);
+    },
   };
 };
 
@@ -373,4 +392,84 @@ test("a missing server export is reported and fixed", () => {
   assert.equal(broken.status, 1);
   assert.match(broken.output, /exports missing \.\/sign-up\/server/);
   assert.equal(fixed.status, 0, fixed.output);
+});
+
+test("new:app refuses an id that would take over the SDK's own server export, and writes nothing", () => {
+  const repo = makeRepo();
+  const before = repo.files();
+
+  const asAuthority = repo.scaffold("authority", "--runtime", "authority");
+  const asDoc = repo.scaffold("authority");
+  const dryRun = repo.scaffold("authority", "--runtime", "authority", "--dry-run");
+
+  for (const refused of [asAuthority, asDoc, dryRun]) {
+    assert.equal(refused.status, 1, refused.output);
+    assert.match(refused.output, /"authority" is a name the SDK keeps for itself/);
+    assert.doesNotMatch(refused.output, /create |Scaffold complete/);
+  }
+  assert.deepEqual(repo.files(), before);
+});
+
+test("new:app refuses an id the package already exports something under", () => {
+  const repo = makeRepo();
+  repo.setExports({ "./kit/server": "./src/sdk/kit.ts", "./theme": "./src/theme.ts" });
+  const before = repo.files();
+
+  const exact = repo.scaffold("kit", "--runtime", "authority");
+  const sameFolder = repo.scaffold("kit");
+  const root = repo.scaffold("theme");
+  const byFlag = repo.scaffold("anything", "--id", "Kit", "--runtime", "authority");
+
+  for (const refused of [exact, sameFolder, byFlag]) {
+    assert.equal(refused.status, 1, refused.output);
+    assert.match(refused.output, /"kit" is taken: package\.json already exports \.\/kit\/server/);
+  }
+  assert.equal(root.status, 1, root.output);
+  assert.match(root.output, /"theme" is taken: package\.json already exports \.\/theme/);
+  assert.deepEqual(repo.files(), before);
+});
+
+test("new:app refuses the names the SDK keeps for itself and ids that are not names", () => {
+  const repo = makeRepo();
+  const before = repo.files();
+
+  for (const id of ["native-embed", "sdk", "apps", "core", "web", "server", "native"]) {
+    const refused = repo.scaffold(id, "--runtime", "authority");
+    assert.equal(refused.status, 1, `${id}: ${refused.output}`);
+    assert.match(refused.output, /is a name the SDK keeps for itself/);
+  }
+  const digit = repo.scaffold("3d-viewer");
+  assert.equal(digit.status, 1, digit.output);
+  assert.match(digit.output, /must start with a letter/);
+  assert.deepEqual(repo.files(), before);
+});
+
+test("an app folder that took one of the SDK's names is reported, and --fix leaves the SDK's export alone", () => {
+  const repo = makeRepo();
+  repo.scaffold("sign-up", "--runtime", "authority");
+  // Made by hand, or by a scaffolder older than the rule.
+  for (const part of ["core", "web", "server"]) {
+    const from = path.join(repo.root, "src", "apps", "sign-up", part);
+    fs.cpSync(from, path.join(repo.root, "src", "apps", "authority", part), { recursive: true });
+  }
+
+  // And a folder whose server subpath the SDK exports under another name.
+  repo.setExports({ "./kit/server": "./src/sdk/kit.ts" });
+  fs.cpSync(
+    path.join(repo.root, "src", "apps", "sign-up", "server"),
+    path.join(repo.root, "src", "apps", "kit", "server"),
+    { recursive: true },
+  );
+
+  const checked = repo.check();
+  run("check-app-integrations.mjs", ["--root", repo.root, "--fix"]);
+  const exported = JSON.parse(fs.readFileSync(path.join(repo.root, "package.json"), "utf8")).exports;
+
+  assert.equal(checked.status, 1);
+  assert.match(checked.output, /\[authority\] is a name the SDK keeps for itself/);
+  assert.match(checked.output, /exports \.\/kit\/server is the SDK's own/);
+  assert.equal(exported["./authority/server"], "./src/sdk/authority/server.ts");
+  assert.equal(exported["./authority/core"], undefined);
+  assert.equal(exported["./kit/server"], "./src/sdk/kit.ts");
+  assert.equal(exported["./sign-up/server"], "./src/apps/sign-up/server/index.ts");
 });

@@ -16,6 +16,8 @@ pnpm -C packages/apps-sdk run new:app polls --name "Quick Polls"
 pnpm -C packages/apps-sdk run new:app polls --dry-run
 ```
 
+The id is the app's folder and the first part of its package subpaths, so `new:app` refuses one the SDK already uses (`authority`, `native-embed`, `sdk`, `apps`, `core`, `web`, `server`, `native`), one `package.json` already exports something under, and one that does not start with a letter. It refuses before writing any file.
+
 The command creates:
 
 ```text
