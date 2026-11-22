@@ -319,12 +319,17 @@ has the numbers.
   render thread. So a frame that arrives after a clear is never painted over
   by it, and the first-frame notice a host acts on is for the picture it is
   showing now.
-- A detach goes to the front of the render thread's queue and
-  `surfaceDestroyed` waits for it, at most the draw in progress. An attach it
+- A detach goes to the front of the render thread's queue. An attach it
   overtakes is skipped: its window is gone, and Android throws on a released
-  window. The wait gives up after 3 seconds so a stuck render thread cannot
-  freeze the app. After `release()` the callback still waits, for the release
-  that is already queued.
+  window. `surfaceDestroyed` waits for the detach, which normally takes as
+  long as the draw in progress. All surface tiles share one allowance for
+  that wait (`VideoDetachWait`, 150 ms in any second), because a rotation or
+  a move to the background destroys several surfaces in a row and a wait per
+  tile adds up on the main thread. A surface destroyed after the allowance is
+  spent is let go of when its render thread gets to the detach: a swap in
+  progress fails, and the next attach builds a new surface. After `release()`
+  the callback waits for the release that is already queued, from the same
+  allowance.
 - A TextureView's SurfaceTexture may only be released after the EGL surface on
   it is gone, so `TextureVideoHost` keeps its listener after `release()` and
   hands a texture destroyed in between to the render thread's acknowledgement.
@@ -353,6 +358,32 @@ has the numbers.
   (`VideoBufferSizePolicy`, through `SurfaceHolder.setFixedSize`). The display
   scales the small buffer. The buffer follows a resize one frame late, so the
   renderer asks EGL for its size on every frame.
+- A SurfaceView's window takes a buffer only if its size is the one the
+  window shows now or the one it was last asked for. The compositor throws any
+  other buffer away (`rejecting buffer` in logcat) and its frame is never
+  shown. A window with no buffer yet takes a new size at once. Three rules keep
+  such buffers out of the queue:
+  - The host resizes a window's buffer only while the window shows a picture
+    (`hasFrame`). The first picture goes into the buffer the window was created
+    with, and the resize follows. A resize that reached a window with no
+    buffer would make the compositor throw the first buffer away, after the
+    tile's cover had been lifted for it.
+  - The host asks for a buffer size only once a frame has passed with no
+    change to the view's size. A tile's fit follows its size by one frame
+    (`slotSize` in `SlotView`), and a window moving into picture-in-picture
+    changes size on every frame. The sizes in between are ones the tile never
+    settles on.
+  - The renderer queues a buffer only if its size is the window's
+    (`surfaceChanged`) or the one last shown. Any other buffer was taken from
+    the queue before a resize: the EGL surface is destroyed and created again,
+    which hands that buffer back and takes one of the current size. The check
+    runs again after the draw, because the window can be resized while a frame
+    is drawn. A window that gives no buffer of its size for a second gets a
+    warning in the log, and frames are then drawn into what there is.
+- Every loop counts its live EGL context and window surfaces. With
+  `adb shell setprop log.tag.ConclavePerf DEBUG` each change is logged as
+  `event video.gl contexts=N surfaces=M`, summed over all loops. Both are 0
+  after a call.
 
 The pieces without GL are unit tested in
 `Tests/ConclaveTests/Skip/VideoRenderingTests.kt` through a fake

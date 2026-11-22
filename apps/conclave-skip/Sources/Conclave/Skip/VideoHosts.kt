@@ -7,6 +7,7 @@ import android.graphics.SurfaceTexture
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.view.Choreographer
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.TextureView
@@ -135,9 +136,25 @@ internal class SurfaceVideoHost(
     private val records = VideoHostRecords()
     private var released = false
     private var fit = false
-    private var bufferSize = VideoBufferSize(0, 0)
+    var bufferSize = VideoBufferSize(0, 0)
+        private set
+    private var shownBufferSize: VideoBufferSize? = null
     private var presentationToken = 0
+    private var surfaceToken = 0
     private var surfaceLive = false
+    private var bufferSizeSettling = false
+    private var changedSinceLastFrame = false
+    private val settleFrame = object : Choreographer.FrameCallback {
+        override fun doFrame(frameTimeNanos: Long) {
+            if (changedSinceLastFrame) {
+                changedSinceLastFrame = false
+                Choreographer.getInstance().postFrameCallback(this)
+            } else {
+                bufferSizeSettling = false
+                updateBufferSize()
+            }
+        }
+    }
     private val renderer = VideoTileRenderer(
         backend = backend,
         letterboxInBuffer = true,
@@ -151,6 +168,13 @@ internal class SurfaceVideoHost(
         },
         onFirstFramePresented = { token ->
             videoHostMain.post { if (!released && surfaceLive && token == presentationToken) hasFrame = true }
+        },
+        onBufferSizeShown = { token, width, height ->
+            videoHostMain.post {
+                if (released || !surfaceLive || token < surfaceToken) return@post
+                shownBufferSize = VideoBufferSize(width, height)
+                sizeBufferOnceSettled()
+            }
         },
     )
     override var hasFrame by mutableStateOf(false)
@@ -185,6 +209,7 @@ internal class SurfaceVideoHost(
     override fun release() {
         if (released) return
         released = true
+        Choreographer.getInstance().removeFrameCallback(settleFrame)
         renderer.release()
         backend.release()
     }
@@ -199,16 +224,21 @@ internal class SurfaceVideoHost(
     fun surfaceAvailable(target: Any) {
         records.surfaceAvailable()
         surfaceLive = true
+        shownBufferSize = null
         presentationToken += 1
+        surfaceToken = presentationToken
         renderer.attachSurface(target, presentationToken)
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+        bufferSize = VideoBufferSize(width, height)
+        renderer.windowSized(width, height)
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
         records.surfaceDestroyed()
         surfaceLive = false
+        shownBufferSize = null
         hasFrame = false
         if (!detachWait.await(renderer.surfaceGoneAfterDetach())) {
             Log.w(VideoRenderLoop.TAG, "a surface was destroyed before the render thread let go of it")
@@ -219,11 +249,18 @@ internal class SurfaceVideoHost(
         super.onSizeChanged(width, height, oldWidth, oldHeight)
         renderer.viewAspect = if (width > 0 && height > 0) width.toFloat() / height.toFloat() else 0f
         renderer.viewWidth = width
-        updateBufferSize()
+        sizeBufferOnceSettled()
+    }
+
+    private fun sizeBufferOnceSettled() {
+        changedSinceLastFrame = true
+        if (released || bufferSizeSettling) return
+        bufferSizeSettling = true
+        Choreographer.getInstance().postFrameCallback(settleFrame)
     }
 
     private fun updateBufferSize() {
-        if (width <= 0 || height <= 0) return
+        if (bufferSizeSettling || shownBufferSize != bufferSize || width <= 0 || height <= 0) return
         val size = VideoBufferSizePolicy.bufferSize(viewWidth = width, viewHeight = height, frameWidth = renderer.frameWidth,
             frameHeight = renderer.frameHeight, fit = fit)
         if (size == bufferSize) return

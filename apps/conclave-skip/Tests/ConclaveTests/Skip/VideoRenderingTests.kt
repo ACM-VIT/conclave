@@ -12,12 +12,15 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
+import org.robolectric.shadows.ShadowChoreographer
 import org.webrtc.VideoFrame
+import java.time.Duration
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingDeque
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 private class RecordingBackend : VideoRenderBackend {
     private val queue = LinkedBlockingDeque<Runnable>()
@@ -42,6 +45,8 @@ private class RecordingBackend : VideoRenderBackend {
     @Volatile var bindSucceeds = true
     @Volatile var width = 400
     @Volatile var height = 400
+    @Volatile var sizeOfTheNextSurface: Pair<Int, Int>? = null
+    @Volatile var duringDraw: (() -> Unit)? = null
     @Volatile var stopped = false
         private set
     private val surfaces = AtomicInteger(0)
@@ -66,6 +71,11 @@ private class RecordingBackend : VideoRenderBackend {
             return null
         }
         calls.add("create")
+        sizeOfTheNextSurface?.let { size ->
+            width = size.first
+            height = size.second
+            sizeOfTheNextSurface = null
+        }
         return "surface-" + surfaces.incrementAndGet()
     }
     override fun destroySurface(surface: Any) { calls.add("destroy $surface") }
@@ -81,6 +91,7 @@ private class RecordingBackend : VideoRenderBackend {
         calls.add("draw")
         drawn.add(frame)
         layouts.add(layout)
+        duringDraw?.invoke()
         return drawSucceeds
     }
     override fun cutCorners(width: Int, height: Int, radius: Float): Boolean {
@@ -131,6 +142,8 @@ class VideoRenderingTests {
     private val buffers = mutableListOf<CountingBuffer>()
     private val frameSizes: MutableList<String> = Collections.synchronizedList(mutableListOf())
     private val firstFrames: MutableList<Int> = Collections.synchronizedList(mutableListOf())
+    private val shownSizes: MutableList<String> = Collections.synchronizedList(mutableListOf())
+    private val clockNanos = AtomicLong(1)
 
     @After fun tearDown() { backend.shutdown() }
 
@@ -138,6 +151,8 @@ class VideoRenderingTests {
         backend = backend, letterboxInBuffer = letterboxInBuffer, backgroundRgb = 0x0A0A0BL,
         onFrameSizeChanged = { width, height -> frameSizes.add("$width x $height") },
         onFirstFramePresented = { generation -> firstFrames.add(generation) },
+        onBufferSizeShown = { generation, width, height -> shownSizes.add("$generation: $width x $height") },
+        nanoTime = { clockNanos.get() },
     )
 
     private fun frame(width: Int = 640, height: Int = 360, rotation: Int = 0): VideoFrame {
@@ -258,6 +273,114 @@ class VideoRenderingTests {
         backend.settle()
         assertLayout(VideoDrawLayout(0, 87, 400, 225, 1f, 1f, mirror = false, clearsSurface = true), backend.layouts[0])
         assertLayout(VideoDrawLayout(0, 110, 320, 180, 1f, 1f, mirror = false, clearsSurface = true), backend.layouts[1])
+    }
+
+    private fun rendererWithA160By62Window(): VideoTileRenderer = renderer().also {
+        it.windowSized(160, 62)
+        backend.width = 160
+        backend.height = 62
+    }
+
+    @Test fun aBufferTheWindowWouldRefuseIsGivenUpByRebuildingTheSurface() {
+        val renderer = rendererWithA160By62Window()
+        backend.width = 1032
+        backend.height = 400
+        renderer.attachSurface("window", 1)
+        renderer.onFrame(frame())
+        backend.settle()
+        assertEquals(listOf("create", "destroy surface-1", "create"), backend.calls.toList())
+        assertTrue(firstFrames.isEmpty())
+        backend.sizeOfTheNextSurface = 160 to 62
+        renderer.onFrame(frame())
+        backend.settle()
+        assertEquals(listOf("create", "destroy surface-1", "create", "destroy surface-2", "create", "draw", "swap surface-3"),
+            backend.calls.toList())
+        assertEquals(listOf(1), firstFrames.toList())
+        assertEveryFrameGivenBack()
+    }
+
+    @Test fun aBufferThatNeverGetsTheWindowsSizeIsDrawnIntoAfterASecond() {
+        val renderer = rendererWithA160By62Window()
+        backend.width = 1032
+        backend.height = 400
+        renderer.attachSurface("window", 1)
+        renderer.onFrame(frame())
+        backend.settle()
+        clockNanos.addAndGet(TimeUnit.MILLISECONDS.toNanos(900))
+        renderer.onFrame(frame())
+        backend.settle()
+        assertEquals(0, backend.count("draw"))
+        clockNanos.addAndGet(TimeUnit.MILLISECONDS.toNanos(200))
+        renderer.onFrame(frame())
+        backend.settle()
+        renderer.onFrame(frame())
+        backend.settle()
+        assertEquals(2, backend.count("draw"))
+        assertEquals(2, backend.count("swap"))
+        assertEquals("a window given up on is not rebuilt for every frame", 4, backend.count("create"))
+        assertEquals(listOf(1), firstFrames.toList())
+        assertEveryFrameGivenBack()
+    }
+
+    @Test fun whileAWindowIsResizedFramesKeepGoingIntoBuffersOfTheSizeItShows() {
+        val renderer = rendererWithA160By62Window()
+        renderer.attachSurface("window", 1)
+        renderer.onFrame(frame())
+        backend.settle()
+        renderer.windowSized(320, 124)
+        renderer.onFrame(frame())
+        backend.settle()
+        backend.width = 320
+        backend.height = 124
+        renderer.onFrame(frame())
+        backend.settle()
+        assertEquals(listOf("create", "draw", "swap surface-1", "draw", "swap surface-1", "draw", "swap surface-1"), backend.calls.toList())
+        assertEveryFrameGivenBack()
+    }
+
+    @Test fun theSizeOfTheBufferOnScreenIsReportedEachTimeItChanges() {
+        val renderer = rendererWithA160By62Window()
+        renderer.attachSurface("window", 1)
+        renderer.onFrame(frame())
+        backend.settle()
+        renderer.onFrame(frame())
+        backend.settle()
+        renderer.windowSized(320, 124)
+        backend.width = 320
+        backend.height = 124
+        renderer.onFrame(frame())
+        backend.settle()
+        renderer.attachSurface("window", 2)
+        renderer.onFrame(frame())
+        backend.settle()
+        assertEquals(listOf("1: 160 x 62", "1: 320 x 124", "2: 320 x 124"), shownSizes.toList())
+        assertEveryFrameGivenBack()
+    }
+
+    @Test fun aBufferLeftOverFromASizeTheWindowHasMovedOnFromIsNotQueued() {
+        val renderer = rendererWithA160By62Window()
+        renderer.attachSurface("window", 1)
+        renderer.onFrame(frame())
+        backend.settle()
+        backend.width = 320
+        backend.height = 124
+        backend.sizeOfTheNextSurface = 160 to 62
+        renderer.onFrame(frame())
+        backend.settle()
+        assertEquals(listOf("create", "draw", "swap surface-1", "destroy surface-1", "create", "draw", "swap surface-2"), backend.calls.toList())
+        assertEquals(listOf(1), firstFrames.toList())
+        assertEveryFrameGivenBack()
+    }
+
+    @Test fun aWindowResizedWhileItsFirstFrameIsDrawnDoesNotGetThatBuffer() {
+        val renderer = rendererWithA160By62Window()
+        renderer.attachSurface("window", 1)
+        backend.duringDraw = { renderer.windowSized(320, 124) }
+        renderer.onFrame(frame())
+        backend.settle()
+        assertEquals(listOf("create", "draw"), backend.calls.toList())
+        assertTrue(firstFrames.isEmpty())
+        assertEveryFrameGivenBack()
     }
 
     @Test fun aDetachIsAnsweredOnlyAfterTheSurfaceIsDestroyedAndLaterFramesAreDropped() {
@@ -753,6 +876,14 @@ class VideoRenderingTests {
     private fun surfaceHost(overlay: Boolean = false, detachWait: VideoDetachWait = VideoDetachWait(limitMillis = 5_000, windowMillis = 5_000)) =
         SurfaceVideoHost(RuntimeEnvironment.getApplication(), backend, overlay, detachWait)
 
+    private fun settleMainFrames() {
+        shadowOf(Looper.getMainLooper()).idleFor(200, TimeUnit.MILLISECONDS)
+    }
+
+    private fun runOneMainFrame() {
+        shadowOf(Looper.getMainLooper()).idleFor(ShadowChoreographer.getFrameDelay())
+    }
+
     @Test fun aSurfaceTileStaysCoveredUntilItsFirstFrameIsOnScreen() {
         val host = surfaceHost()
         assertFalse(host.hasFrame)
@@ -839,6 +970,78 @@ class VideoRenderingTests {
         shadowOf(Looper.getMainLooper()).idle()
         assertEquals(RendererFrameSize(width = 360, height = 640), store.size(slotId = "p:r1"))
         assertNotEquals(0, store.revision)
+    }
+
+    private fun showPicture(host: SurfaceVideoHost, bufferWidth: Int, bufferHeight: Int, picture: VideoFrame) {
+        backend.width = bufferWidth
+        backend.height = bufferHeight
+        host.surfaceChanged(host.holder, 0, bufferWidth, bufferHeight)
+        host.sink.onFrame(picture)
+        backend.settle()
+        settleMainFrames()
+    }
+
+    @Test fun aSurfaceTilesFirstPictureGoesIntoTheBufferItWasCreatedWithAndTheResizeFollows() {
+        val host = surfaceHost()
+        host.layout(0, 0, 1032, 400)
+        host.sink.onFrame(frame(160, 90))
+        settleMainFrames()
+        assertEquals("a window with no picture was asked to resize", VideoBufferSize(0, 0), host.bufferSize)
+        host.surfaceAvailable("window")
+        showPicture(host, 1032, 400, frame(160, 90))
+        assertEquals(listOf("create", "draw", "swap surface-1"), backend.calls.toList())
+        assertTrue(host.hasFrame)
+        assertEquals(VideoBufferSize(160, 62), host.bufferSize)
+        assertEveryFrameGivenBack()
+    }
+
+    @Test fun aSurfaceTileAsksForItsNextBufferSizeOnlyOnceTheLastOneIsOnScreen() {
+        val host = surfaceHost()
+        host.layout(0, 0, 1032, 400)
+        host.surfaceAvailable("window")
+        showPicture(host, 1032, 400, frame(160, 90))
+        assertEquals(VideoBufferSize(160, 62), host.bufferSize)
+        host.sink.onFrame(frame(320, 180))
+        backend.settle()
+        settleMainFrames()
+        assertEquals("a second size was asked for before the first was on screen", VideoBufferSize(160, 62), host.bufferSize)
+        showPicture(host, 160, 62, frame(320, 180))
+        assertEquals(VideoBufferSize(320, 124), host.bufferSize)
+        assertEveryFrameGivenBack()
+    }
+
+    private fun hostShowingA320By180Picture(width: Int, height: Int): SurfaceVideoHost {
+        val host = surfaceHost()
+        host.layout(0, 0, width, height)
+        host.surfaceAvailable("window")
+        showPicture(host, width, height, frame(320, 180))
+        showPicture(host, host.bufferSize.width, host.bufferSize.height, frame(320, 180))
+        return host
+    }
+
+    @Test fun aSurfaceTileAsksForItsBufferOnlyOnceANewLayoutHasSettled() {
+        val host = hostShowingA320By180Picture(1920, 1080)
+        assertEquals(VideoBufferSize(320, 180), host.bufferSize)
+        host.layout(0, 0, 1080, 1920)
+        assertEquals("the size of a layout whose fit has not followed yet was asked for", VideoBufferSize(320, 180), host.bufferSize)
+        host.setFit(true)
+        settleMainFrames()
+        assertEquals(VideoBufferSize(320, 569), host.bufferSize)
+        assertEveryFrameGivenBack()
+    }
+
+    @Test fun aSurfaceTileKeepsItsBufferWhileItsSizeChangesFrameAfterFrame() {
+        ShadowChoreographer.setFrameDelay(Duration.ofMillis(16))
+        val host = hostShowingA320By180Picture(1920, 1080)
+        for (width in listOf(1600, 1200, 800)) {
+            host.layout(0, 0, width, width * 9 / 16)
+            runOneMainFrame()
+            assertEquals(VideoBufferSize(320, 180), host.bufferSize)
+        }
+        host.layout(0, 0, 160, 90)
+        settleMainFrames()
+        assertEquals(VideoBufferSize(160, 90), host.bufferSize)
+        assertEveryFrameGivenBack()
     }
 
     @Test fun aSurfaceDestroyedUnderABusyRenderThreadIsLetGoOfLaterAndTheNextOneAttaches() {
