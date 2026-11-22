@@ -58,7 +58,7 @@ const UPDATE_REFUSALS: Partial<Record<Refusal, string>> = {
 const normalizeReplicaId = (value: unknown): string | undefined =>
   typeof value === "string" && value.length > 0 && value.length <= MAX_REPLICA_ID_LENGTH ? value : undefined;
 
-type SyncScope = { room: Room; document: AppDocument };
+type SyncScope = { room: Room; appId: string; document: AppDocument };
 
 const MAX_APP_ID_LENGTH = 128;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
@@ -248,30 +248,36 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
   const activeDocument = (room: Room, appId: string): AppDocument | null =>
     room.appsState.activeAppId === appId ? room.getOrCreateAppDoc(appId, documents) : null;
 
-  const syncOnce = async (
-    data: AppsSyncData,
-    pinned: { scope?: SyncScope },
-    rateLimited: boolean,
-  ): Promise<AppsSyncResponse | AppsSyncError> => {
+  const scopeOf = (data: AppsSyncData): SyncScope | AppsSyncError => {
     const room = context.currentRoom;
-    if (!room) return pinned.scope ? { error: "App not active" } : retryLater("Not in a room", 500);
-    if (rateLimited && !takeToken(socket, "apps:yjs:sync", RATE_LIMITS.appsYjsSync)) {
-      return retryLater("Too many app sync requests", 500);
-    }
+    if (!room) return retryLater("Not in a room", 500);
     const appId = normalizeAppId(data?.appId);
     if (!appId) return { error: "Invalid app id" };
     const document = activeDocument(room, appId);
     if (!document) return { error: "App not active" };
-    pinned.scope ??= { room, document };
-    if (pinned.scope.room !== room || pinned.scope.document !== document) return { error: "App not active" };
+    return { room, appId, document };
+  };
+
+  const isCurrent = ({ room, appId, document }: SyncScope): boolean =>
+    context.currentRoom === room && activeDocument(room, appId) === document;
+
+  const syncIn = async (
+    scope: SyncScope,
+    data: AppsSyncData,
+    rateLimited: boolean,
+  ): Promise<AppsSyncResponse | AppsSyncError> => {
+    if (!isCurrent(scope)) return { error: "App not active" };
+    if (rateLimited && !takeToken(socket, "apps:yjs:sync", RATE_LIMITS.appsYjsSync)) {
+      return retryLater("Too many app sync requests", 500);
+    }
     const stateVector = toUint8Array(data.syncMessage);
     if (!stateVector) return { error: "Invalid sync payload" };
     if (stateVector.length > MAX_APPS_SYNC_BYTES) return { error: "Sync payload too large" };
 
-    const result = await document.sync(stateVector);
-    if (context.currentRoom !== room || activeDocument(room, appId) !== document) return { error: "App not active" };
+    const result = await scope.document.sync(stateVector);
+    if (!isCurrent(scope)) return { error: "App not active" };
     if (!result.ok) return SYNC_REFUSALS[result.reason];
-    const awarenessSnapshot = room.encodeAppAwarenessSnapshot(appId) ?? undefined;
+    const awarenessSnapshot = scope.room.encodeAppAwarenessSnapshot(scope.appId) ?? undefined;
     return {
       syncMessage: result.update,
       stateVector: result.stateVector,
@@ -280,8 +286,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     };
   };
 
-  const holdSync = (data: AppsSyncData, callback: (response: AppsSyncResponse | AppsSyncError) => void): void => {
-    const pinned: { scope?: SyncScope } = {};
+  const holdSync = (scope: SyncScope, data: AppsSyncData, callback: (response: AppsSyncResponse | AppsSyncError) => void): void => {
     let lastError = "App document is busy";
     let held = false;
     let settled = false;
@@ -302,7 +307,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     const deadline = setTimeout(() => settle({ error: lastError }), LEGACY_SYNC_HOLD_MS);
     openLegacySyncs.add(stop);
     const attempt = (rateLimited: boolean): void => {
-      void syncOnce(data, pinned, rateLimited).then((outcome) => {
+      void syncIn(scope, data, rateLimited).then((outcome) => {
         if (settled) return;
         if (!("error" in outcome) || !outcome.retryable) {
           settle(outcome);
@@ -326,11 +331,17 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
   socket.on(
     "apps:yjs:sync",
     (data: AppsSyncData, callback: (response: AppsSyncResponse | AppsSyncError) => void) => {
-      if (data?.canRetry !== true) {
-        holdSync(data, callback);
+      const scope = scopeOf(data);
+      const canRetry = data?.canRetry === true;
+      if ("error" in scope) {
+        respond(callback, canRetry ? scope : { error: scope.error });
         return;
       }
-      void syncOnce(data, {}, true).then((outcome) => respond(callback, outcome));
+      if (!canRetry) {
+        holdSync(scope, data, callback);
+        return;
+      }
+      void syncIn(scope, data, true).then((outcome) => respond(callback, outcome));
     }
   );
 

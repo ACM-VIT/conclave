@@ -434,6 +434,31 @@ describe("app documents", { timeout: 30_000 }, () => {
     expect(await settledNow(older)).toEqual({ error: "App not active" });
   });
 
+  it("pins an older client's sync to the app it arrived for, even when the rate limit holds it first", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const room = inRoom(createPool(), "pinned-on-arrival");
+    await room.open();
+    room.send(writer()("before"));
+    await Promise.all(Array.from({ length: 10 }, () => room.requestSync(new Y.Doc())));
+    const older = room.requestSync(new Y.Doc(), false);
+    expect(await settledNow(older)).toBeUndefined();
+
+    await room.close();
+    await room.open();
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(await settledNow(older)).toEqual({ error: "App not active" });
+  });
+
+  it("answers a sync from outside a room at once, with a retry hint only for a client that can retry", async () => {
+    const room = inRoom(createPool(), "no-room");
+    await room.open();
+    room.leave();
+
+    expect(await room.requestSync(new Y.Doc(), false)).toEqual({ error: "Not in a room" });
+    expect(await room.requestSync(new Y.Doc(), true)).toEqual({ error: "Not in a room", retryable: true, retryAfterMs: 500 });
+  });
+
   it("drops an older client's held sync when its socket disconnects", async () => {
     fakeHandlerTimers();
     const { stuck, room, write } = await stuckBehindAnotherRoom("gone", 3);
