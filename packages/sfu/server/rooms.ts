@@ -9,6 +9,7 @@ import {
   RoomOwnershipError,
 } from "./roomRegistry.js";
 import {
+  endScheduledMeetingRemovals,
   getScheduledMeetingByRoomCode,
   persistInviteeReadmission,
   refreshScheduledMeeting,
@@ -97,30 +98,15 @@ const noteMeetingOver = (
   >,
 ): void => {
   state.roomRecovery.noteOver(room);
-  const meeting = getScheduledMeetingByRoomCode(
+  endScheduledMeetingRemovals(
     state.scheduledMeetings,
+    state.scheduledMeetingPersistence,
     room.clientId,
     room.id,
-  );
-  for (const email of [...(meeting?.readmissionRequiredEmails ?? [])]) {
-    const changed = setScheduledInviteeReadmission(
-      state.scheduledMeetings,
-      room.clientId,
-      room.id,
-      email,
-      false,
-    );
-    if (!changed || !state.scheduledMeetingPersistence) continue;
-    persistInviteeReadmission(
-      state.scheduledMeetings,
-      state.scheduledMeetingPersistence,
-      changed,
-      email,
-      false,
-    ).catch((error) => {
-      Logger.warn(`Failed to persist the end of a removal from ${room.id}`, error);
-    });
-  }
+    Date.now(),
+  ).catch((error) => {
+    Logger.warn(`Failed to persist the end of the removals from ${room.id}`, error);
+  });
 };
 
 // A change to who hosts, or to who has to be let in again, goes to the

@@ -19,6 +19,8 @@ import {
   setScheduledInviteeReadmission,
   type ScheduledMeetingPersistence,
 } from "../server/scheduledMeetings.js";
+import { markRoomEnded } from "../server/rooms.js";
+import { createSfuState } from "../server/state.js";
 
 type Sfu = {
   persistence: ScheduledMeetingPersistence;
@@ -204,6 +206,83 @@ describe.each(["sqlite", "json", "redis"] as const)(
       expect(isInvited(await startSfu(kind))).toBe(true);
       await readFresh(sfuB);
       expect(isInvited(sfuB)).toBe(true);
+    });
+  },
+);
+
+describe("the end of a meeting on one SFU and a removal at the next on another", () => {
+  const test = redisServerPath ? it : it.skip;
+
+  test("keeps the newer removal when the end's reset reaches Redis after it", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const startedAt = Date.parse("2026-11-23T08:00:00Z");
+    vi.setSystemTime(startedAt);
+    useStore("redis");
+    const sfuA = await startSfu("redis");
+    await scheduleIntroCall(sfuA);
+    const sfuB = await startSfu("redis");
+    await setRemoved(sfuA, true);
+
+    // SFU A's writes to Redis are slow from here on.
+    const persistenceA = sfuA.persistence as unknown as { start: () => Promise<void> };
+    const start = persistenceA.start.bind(persistenceA);
+    let goOn: () => void = () => {};
+    const slow = new Promise<void>((resolve) => (goOn = resolve));
+    persistenceA.start = async () => {
+      await slow;
+      return start();
+    };
+
+    // The meeting ends on SFU A.
+    const stateA = createSfuState();
+    stateA.scheduledMeetings = sfuA.meetings;
+    stateA.scheduledMeetingPersistence = sfuA.persistence;
+    vi.setSystemTime(startedAt + 60_000);
+    markRoomEnded(
+      stateA,
+      {
+        id: CODE,
+        clientId: "conclave",
+        channelId: `conclave:${CODE}`,
+        markEnded: () => {},
+        incarnationId: "room-a",
+        takesOverRecordOf: null,
+        ownerEmail: null,
+      },
+      { message: "The host ended this meeting.", endedBy: "host" },
+    );
+
+    // The next meeting runs on SFU B, whose host removes the invitee again.
+    vi.setSystemTime(startedAt + 120_000);
+    await setRemoved(sfuB, true);
+
+    goOn();
+    await sfuA.persistence.flush?.();
+    expect(isInvited(await startSfu("redis"))).toBe(false);
+  });
+});
+
+describe.each(["sqlite", "redis"] as const)(
+  "a %s store taking back the removals of a meeting that is over",
+  (kind) => {
+    const test = kind === "redis" && !redisServerPath ? it.skip : it;
+
+    test("takes back only those made at or before the end it applies", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const removedAt = Date.parse("2026-11-23T08:00:00Z");
+      vi.setSystemTime(removedAt);
+      useStore(kind);
+      const sfu = await startSfu(kind);
+      const meeting = await scheduleIntroCall(sfu);
+      await setRemoved(sfu, true);
+
+      await sfu.persistence.endRemovals?.(meeting.id, removedAt - 1);
+      await sfu.persistence.flush?.();
+      expect(isInvited(await startSfu(kind))).toBe(false);
+
+      await sfu.persistence.endRemovals?.(meeting.id, removedAt);
+      await sfu.persistence.flush?.();
+      expect(isInvited(await startSfu(kind))).toBe(true);
     });
   },
 );
