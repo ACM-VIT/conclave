@@ -292,19 +292,35 @@ if [[ "$PREFLIGHT_ONLY" == "true" ]]; then
 fi
 
 # One deploy at a time on this host: two runs against different instances can
-# each find the other serving and drain both. The kernel holds the flock on
-# fd 9 until this process, and the re-exec below that inherits the fd, exit,
-# however they exit. The re-exec takes the lock again on that same fd, which
-# succeeds only while it is still this run's.
-DEPLOY_LOCK="${SFU_DEPLOY_LOCK_FILE:-/tmp/conclave-sfu-deploy.lock}"
+# each find the other serving and drain both. The nightly backup holds the
+# same lock while it copies, so no deploy starts or replaces an SFU under it;
+# a deploy waits for it a while (SFU_DEPLOY_LOCK_WAIT_SECONDS). The lock lives
+# in /run/lock, which the backup's systemd unit (with its private /tmp) sees
+# too. The kernel holds the flock on fd 9 until this process, and the re-exec
+# below that inherits the fd, exit, however they exit. The re-exec takes the
+# lock again on that same fd, which succeeds only while it is still this
+# run's.
+if [[ -d /run/lock ]]; then
+  DEPLOY_LOCK="${SFU_DEPLOY_LOCK_FILE:-/run/lock/conclave-sfu-deploy.lock}"
+else
+  DEPLOY_LOCK="${SFU_DEPLOY_LOCK_FILE:-/tmp/conclave-sfu-deploy.lock}"
+fi
 if ! command -v flock >/dev/null 2>&1; then
   echo "deploy-sfu.sh needs flock (util-linux) so two deploys cannot run at once; install it and rerun." >&2
   exit 1
 fi
-[[ -n "${SFU_DEPLOY_LOCK_HELD:-}" ]] || exec 9>>"$DEPLOY_LOCK"
+if [[ -z "${SFU_DEPLOY_LOCK_HELD:-}" ]]; then
+  # Readable by every user that deploys or backs up, whoever made it.
+  [[ -e "$DEPLOY_LOCK" ]] || (umask 0111 && : >> "$DEPLOY_LOCK")
+  exec 9<"$DEPLOY_LOCK"
+fi
 if ! flock -n 9 2>/dev/null; then
-  echo "Another SFU deploy is running on this host (${DEPLOY_LOCK}); not starting a second one." >&2
-  exit 1
+  lock_wait="${SFU_DEPLOY_LOCK_WAIT_SECONDS:-120}"
+  echo "Another SFU deploy or a backup holds ${DEPLOY_LOCK}; waiting up to ${lock_wait}s for it..."
+  if ! flock -w "$lock_wait" 9 2>/dev/null; then
+    echo "Another SFU deploy or a backup still holds ${DEPLOY_LOCK} after ${lock_wait}s; not starting a second one." >&2
+    exit 1
+  fi
 fi
 export SFU_DEPLOY_LOCK_HELD=1
 

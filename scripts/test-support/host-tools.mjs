@@ -4,23 +4,36 @@ import path from "node:path";
 
 // flock(1) for hosts without util-linux, such as macOS. Python's fcntl.flock
 // takes the same kernel lock on the descriptor the shell hands down, so a
-// test locks the way the VM does. Only the forms the scripts use: flock [-n] FD.
+// test locks the way the VM does. Only the forms the scripts use:
+// flock [-n] [-w SECONDS] FD.
 const flockStandIn = `#!/usr/bin/env python3
-import fcntl, sys
-flags, fd = fcntl.LOCK_EX, None
-for arg in sys.argv[1:]:
-    if arg in ("-n", "--nonblock"):
-        flags |= fcntl.LOCK_NB
-    elif arg.isdigit():
-        fd = int(arg)
+import fcntl, sys, time
+args, fd, nonblock, wait = sys.argv[1:], None, False, None
+i = 0
+while i < len(args):
+    if args[i] in ("-n", "--nonblock"):
+        nonblock = True
+    elif args[i] in ("-w", "--timeout"):
+        wait = float(args[i + 1])
+        i += 1
+    elif args[i].isdigit():
+        fd = int(args[i])
     else:
-        sys.exit("flock stand-in: unsupported argument " + arg)
+        sys.exit("flock stand-in: unsupported argument " + args[i])
+    i += 1
 if fd is None:
     sys.exit("flock stand-in: needs a file descriptor")
-try:
-    fcntl.flock(fd, flags)
-except OSError:
-    sys.exit(1)
+deadline = None if wait is None else time.monotonic() + wait
+while True:
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | (fcntl.LOCK_NB if nonblock or deadline is not None else 0))
+        break
+    except BlockingIOError:
+        if deadline is None or time.monotonic() >= deadline:
+            sys.exit(1)
+        time.sleep(0.05)
+    except OSError:
+        sys.exit(1)
 `;
 
 export const hasHostTool = (name) => {

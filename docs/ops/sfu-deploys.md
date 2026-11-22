@@ -3,8 +3,11 @@
 `scripts/deploy-sfu.sh` deploys the SFU instances on one host without cutting
 a call or leaving fewer instances serving than it found; anything it cannot
 read counts as busy. One deploy runs at a time per host: it takes a lock
-(`flock` on `/tmp/conclave-sfu-deploy.lock`, or `SFU_DEPLOY_LOCK_FILE`) for
-the whole run, and a second one exits 1 at once. The kernel drops the lock
+(`flock` on `/run/lock/conclave-sfu-deploy.lock`, or `SFU_DEPLOY_LOCK_FILE`)
+for the whole run. The nightly backup holds the same lock while it copies, so
+no deploy starts or replaces an SFU under it. A deploy that finds the lock
+taken waits up to `SFU_DEPLOY_LOCK_WAIT_SECONDS` (120) and then exits 1
+without changing anything. The kernel drops the lock
 when the run exits, however it exits. A host without `flock` (util-linux, on
 the VM already) is refused before anything changes. If an interrupted run left
 every instance drained, it first puts the healthy ones that were drained while

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFile, execFileSync } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -587,9 +587,11 @@ test("two deploys at once on one host: the second refuses and only one instance 
     };
     try {
       const runs = await Promise.all(
-        ["sfu-a", "sfu-b"].map((svc) => deploy(sfus, { env: { SFU_DEPLOY_SERVICES: svc, SFU_DEPLOY_LOCK_FILE: lock, DRAIN_TIMEOUT_SECONDS: "3" } })),
+        ["sfu-a", "sfu-b"].map((svc) =>
+          deploy(sfus, { env: { SFU_DEPLOY_SERVICES: svc, SFU_DEPLOY_LOCK_FILE: lock, SFU_DEPLOY_LOCK_WAIT_SECONDS: "1", DRAIN_TIMEOUT_SECONDS: "3" } }),
+        ),
       );
-      assert.equal(runs.filter((run) => /Another SFU deploy is running on this host/.test(run.output)).length, 1, runs.map((run) => run.output).join("\n"));
+      assert.equal(runs.filter((run) => /still holds .* not starting a second one/.test(run.output)).length, 1, runs.map((run) => run.output).join("\n"));
       assert.equal(Object.values(sfus).filter((sfu) => sfu.drains.some((drain) => drain.draining)).length, 1);
     } finally {
       beforeDrain = null;
@@ -724,6 +726,29 @@ test("a silent instance whose container state Docker cannot report is not rebuil
     assert.equal(result.code, 1, result.output);
     assert.match(result.output, /Docker could not report the state of sfu-b's container/);
     assert.deepEqual(sfus["sfu-b"].recreates, []);
+  });
+});
+
+test("a deploy waits for a backup holding the host lock, then runs", async () => {
+  await withSfus({ "sfu-a": {}, "sfu-b": {} }, async (sfus) => {
+    const dir = await mkdtemp(path.join(tmpdir(), "conclave-deploy-lock-"));
+    const lock = path.join(dir, "deploy.lock");
+    const bin = path.join(dir, "bin");
+    await mkdir(bin);
+    await provideFlock(bin);
+    // The backup: holds the lock for 2 s.
+    const backup = spawn("bash", ["-c", 'exec 7>>"$1"; flock -n 7 && echo locked && sleep 2', "_", lock], {
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+    });
+    try {
+      await new Promise((done) => backup.stdout.once("data", done));
+      const result = await deploy(sfus, { env: { SFU_DEPLOY_LOCK_FILE: lock, SFU_DEPLOY_LOCK_WAIT_SECONDS: "30" } });
+      assert.equal(result.code, 0, result.output);
+      assert.match(result.output, /Another SFU deploy or a backup holds .*; waiting up to 30s/);
+    } finally {
+      backup.kill();
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 
