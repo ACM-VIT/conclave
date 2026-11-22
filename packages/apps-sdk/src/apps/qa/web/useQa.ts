@@ -258,6 +258,11 @@ export function useQa() {
   const ready = state.kind === "ready" ? state : null;
   return {
     isReady: ready !== null,
+    /**
+     * A view is on its way: the first one, or a replacement that dropped the
+     * one before it because it may hold rows this viewer can no longer see.
+     */
+    isConnecting: state.kind === "connecting",
     questions,
     canAsk: ready?.actions.has("ask") ?? false,
     /** Asking is closed to this viewer only for want of a verified identity. */

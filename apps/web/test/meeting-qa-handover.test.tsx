@@ -51,16 +51,16 @@ const legacy = {
 let root: Root;
 let qa: ReturnType<typeof useMeetingQa>;
 
-function Probe({ isWebinar }: { isWebinar: boolean }) {
-  qa = useMeetingQa({ legacy, isWebinar, currentUserId: "me" });
+function Probe({ isWebinar, legacyQa }: { isWebinar: boolean; legacyQa: typeof legacy }) {
+  qa = useMeetingQa({ legacy: legacyQa, isWebinar, currentUserId: "me" });
   return null;
 }
 
-const mount = async (isWebinar: boolean) => {
+const mount = async (isWebinar: boolean, legacyQa: typeof legacy = legacy) => {
   await act(async () =>
     root.render(
       <AuthorityProvider socket={socket} joined>
-        <Probe isWebinar={isWebinar} />
+        <Probe isWebinar={isWebinar} legacyQa={legacyQa} />
       </AuthorityProvider>,
     ),
   );
@@ -179,3 +179,83 @@ it("offers meeting Q&A as soon as the server does, with nothing borrowed from th
   expect(qa).toMatchObject({ offered: true, fromApp: true });
   expect(qa.entries.length).toBe(1);
 });
+
+it("never falls back to the old events once the app's view has arrived, even while a new view comes in parts", async () => {
+  // The old events stop once the app's view is in, so this list is as it
+  // was at the handover, with a question the host hides afterwards.
+  const offTopic: WebinarQaEntry = {
+    ...fromOldEvents,
+    id: "q2",
+    question: "Off-topic: who is getting lunch?",
+    status: "pending",
+  };
+  await mount(true, { ...legacy, entries: [fromOldEvents, offTopic] });
+  await offerQa();
+  const subscription = last(AUTHORITY_EVENTS.subscribe)!.payload.subscription as string;
+  const question = (id: string, text: string) => ({
+    bucket: "questions",
+    key: id,
+    value: { id, askerName: "Gia", text, status: "pending", askedAt: 1, updatedAt: 1, answerText: null, answeredByName: null },
+  });
+  await act(async () =>
+    push({
+      kind: "replace",
+      subscription,
+      generation: 1,
+      serverNowMs: Date.now(),
+      part: 0,
+      last: true,
+      rows: [question("q1", "Is this recorded?"), question("q2", "Off-topic: who is getting lunch?")],
+      grants: { actions: ["ask", "upvote"], needsIdentity: [], queries: [] },
+    }),
+  );
+  const atHandover = qa.entries.map((entry) => entry.id);
+  // The host hides the second question.
+  await act(async () =>
+    push({
+      kind: "patch",
+      subscription,
+      generation: 1,
+      serverNowMs: Date.now(),
+      seq: 1,
+      put: [],
+      remove: [{ bucket: "questions", key: "q2" }],
+    }),
+  );
+  const afterTheHide = qa.entries.map((entry) => entry.id);
+  // Then a new view comes in two parts.
+  await act(async () =>
+    push({
+      kind: "replace",
+      subscription,
+      generation: 2,
+      serverNowMs: Date.now(),
+      part: 0,
+      last: false,
+      rows: [question("q1", "Is this recorded?")],
+      grants: { actions: ["ask", "upvote"], needsIdentity: [], queries: [] },
+    }),
+  );
+  const betweenTheParts = qa;
+  await act(async () =>
+    push({
+      kind: "replace",
+      subscription,
+      generation: 2,
+      serverNowMs: Date.now(),
+      part: 1,
+      last: true,
+      rows: [],
+    }),
+  );
+
+  expect(atHandover).toEqual(["q1", "q2"]);
+  expect(afterTheHide).toEqual(["q1"]);
+  // Between the parts nothing stale is shown, and nothing goes out on the old events.
+  expect(betweenTheParts.entries.map((entry) => entry.id)).not.toContain("q2");
+  expect(betweenTheParts.onSubmit).not.toBe(legacy.submit);
+  expect(betweenTheParts.onUpvote).not.toBe(legacy.upvote);
+  expect(qa.fromApp).toBe(true);
+  expect(qa.entries.map((entry) => entry.id)).toEqual(["q1"]);
+});
+
