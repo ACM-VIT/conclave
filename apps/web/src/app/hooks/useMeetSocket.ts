@@ -144,6 +144,7 @@ import {
   decideWebcamStartupResetVerification,
   enqueueWebcamStartupResetProducer,
   getConsumerMaximumSpatialLayer,
+  getHighestActiveSpatialLayer,
   getWebcamStartupResetQueueDelayMs,
   isCurrentConsumerGeneration,
   isProducerPauseSnapshotCurrent,
@@ -5331,9 +5332,9 @@ export function useMeetSocket({
       }
 
       const consumer = consumersRef.current.get(producerId);
+      const consumerTelemetry = consumerTelemetryRef.current.get(producerId);
       const observedSpatialLayer =
-        consumerTelemetryRef.current.get(producerId)?.currentLayers
-          ?.spatialLayer ?? null;
+        consumerTelemetry?.currentLayers?.spatialLayer ?? null;
       state.observedSpatialLayer = observedSpatialLayer;
       const decision = decideWebcamStartupResetPoll({
         now: Date.now(),
@@ -5351,6 +5352,10 @@ export function useMeetSocket({
           adaptivelyPausedConsumerProducerIdsRef.current.has(producerId),
         observedSpatialLayer,
         maximumSpatialLayer: state.maximumSpatialLayer,
+        highestActiveSpatialLayer: getHighestActiveSpatialLayer(
+          consumerTelemetry?.score,
+          state.maximumSpatialLayer,
+        ),
       });
 
       if (decision.action === "queue") {
@@ -5494,9 +5499,9 @@ export function useMeetSocket({
         }
 
         const preflightConsumer = consumersRef.current.get(producerId);
+        const consumerTelemetry = consumerTelemetryRef.current.get(producerId);
         const observedSpatialLayer =
-          consumerTelemetryRef.current.get(producerId)?.currentLayers
-            ?.spatialLayer ?? null;
+          consumerTelemetry?.currentLayers?.spatialLayer ?? null;
         state.observedSpatialLayer = observedSpatialLayer;
         const preflight = decideWebcamStartupResetPoll({
           now: Date.now(),
@@ -5514,6 +5519,10 @@ export function useMeetSocket({
             adaptivelyPausedConsumerProducerIdsRef.current.has(producerId),
           observedSpatialLayer,
           maximumSpatialLayer: state.maximumSpatialLayer,
+          highestActiveSpatialLayer: getHighestActiveSpatialLayer(
+            consumerTelemetry?.score,
+            state.maximumSpatialLayer,
+          ),
         });
         if (
           preflight.action === "queue" ||
