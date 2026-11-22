@@ -69,13 +69,11 @@ describe("scheduled webinar room config", () => {
     const state = makeState();
     const webinar = scheduledWebinar();
     const config = ensureWebinarRoomConfig(state, webinar);
-    // The host locks the webinar, turns Q&A off and lowers the cap.
     config.locked = true;
     config.qaEnabled = false;
     config.maxAttendees = 50;
     config.publicAccess = false;
 
-    // A panelist joins (or the scheduler ticks): the schedule is re-applied.
     ensureWebinarRoomConfig(state, webinar);
     expect(config).toMatchObject({
       enabled: true,

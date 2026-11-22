@@ -471,8 +471,6 @@ export const registerScheduledWebinarRoutes = (
         { status: "ended" },
       );
       const channelId = getRoomChannelId(webinar.clientId, webinar.roomId);
-      // Locks the room through the same path that records the schedule's
-      // status, so a later reopen of the schedule reopens the room.
       if (state.webinarConfigs.has(channelId)) {
         ensureWebinarRoomConfig(state, webinar, null);
       }
@@ -495,7 +493,6 @@ export const registerScheduledWebinarRoutes = (
         { status: "cancelled" },
       );
       const channelId = getRoomChannelId(webinar.clientId, webinar.roomId);
-      // Disables and locks the room (see the /end route).
       if (state.webinarConfigs.has(channelId)) {
         ensureWebinarRoomConfig(state, webinar, null);
       }

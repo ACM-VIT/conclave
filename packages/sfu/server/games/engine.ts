@@ -12,14 +12,6 @@ import {
   type GameRng,
 } from "./types.js";
 
-/**
- * Owns the authoritative state for one running game in one room.
- *
- * The session is transport-agnostic: it never touches socket.io. It exposes
- * pure operations (`applyMove`, `tick`) and projection getters
- * (`getPublicState`, `getPlayerView`). The handler layer is responsible for
- * mapping projections onto sockets (room broadcast vs. per-player emit).
- */
 export const MAX_MOVE_HOLD_MS = 8_000;
 
 export class GameSession {
@@ -36,7 +28,6 @@ export class GameSession {
   private finished = false;
   private readonly prepareCache = new Map<string, unknown>();
   private readonly pendingMoves = new Map<string, number>();
-  /** Room members waiting for a seat at the next round boundary. */
   private pendingJoiners: GamePlayer[] = [];
 
   constructor(options: {
@@ -108,7 +99,6 @@ export class GameSession {
     };
   }
 
-  /** Whether non-players may receive a projected view of this game. */
   get spectatable(): boolean {
     return this.module.spectatable !== false;
   }
@@ -126,12 +116,6 @@ export class GameSession {
     return phases;
   }
 
-  /**
-   * Seat a room member at once while the game is still in its lobby, or queue
-   * them for a seat at the next round boundary. The seat is
-   * granted when the game transitions into one of the module's declared
-   * `lateJoinPhases`, so a joiner never lands mid-round with impossible state.
-   */
   requestSeat(
     player: GamePlayer,
   ): { ok: true } | { ok: false; error: string } {
@@ -166,12 +150,6 @@ export class GameSession {
     return { ok: true };
   }
 
-  /**
-   * Seat queued joiners when the phase just transitioned into a declared
-   * late-join phase (a fresh round). Round state in the modules is keyed by
-   * player id with absent-means-not-acted semantics, so a newly seated player
-   * simply participates from this round on; scores default to zero.
-   */
   private seatPendingIfBoundary(previousPhase: string): void {
     if (this.pendingJoiners.length === 0 || this.finished) return;
     const phases = this.getLateJoinPhases();
@@ -187,11 +165,6 @@ export class GameSession {
     this.pendingJoiners = [];
   }
 
-  /**
-   * Apply a player move. Returns `{ ok: true }` if the state advanced, or
-   * `{ ok: false, error }` if the module rejected it (illegal move), in which
-   * case state is unchanged. Unexpected errors are surfaced generically.
-   */
   async prepareMove(
     playerId: string,
     type: string,
@@ -287,7 +260,6 @@ export class GameSession {
     }
   }
 
-  /** Advance time-driven state. Returns true if the projection changed. */
   tick(now: number = Date.now()): boolean {
     if (this.finished || !this.module.onTick) return false;
     const held = this.heldPendingMoves(now);
@@ -354,8 +326,6 @@ const publicRematchConfig = (
     } else if (opt.type === "select") {
       if (typeof value === "string") safe[opt.id] = value;
     }
-    // Text options can contain user-authored/private topic text. They are
-    // intentionally omitted from public state; rematches fall back to defaults.
   }
   return safe;
 };

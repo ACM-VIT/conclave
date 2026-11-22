@@ -6,11 +6,6 @@ import { wordleModule } from "../server/games/modules/wordle.js";
 import { GameMoveError, type GameConfig, type GameContext, type GamePlayer } from "../server/games/types.js";
 import { WORDLE_WORDS } from "../server/games/wordleWordList.js";
 
-// Records what the real Wordle engine sends native clients, so the native projection tests parse server output
-// instead of hand-typed payloads. Run from the repo root:
-//   npx tsx packages/sfu/scripts/capture-wordle-native-fixtures.ts          (rewrite the fixture)
-//   npx tsx packages/sfu/scripts/capture-wordle-native-fixtures.ts --check  (exit 1 when the engine drifted)
-
 const OUTPUT = resolve(
   dirname(fileURLToPath(import.meta.url)),
   "../../../apps/conclave-skip/Tests/ConclaveTests/Resources/WordleServerViews.json",

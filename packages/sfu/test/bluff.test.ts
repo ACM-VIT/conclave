@@ -8,8 +8,6 @@ const players: GamePlayer[] = [
   { id: "p3", name: "Robin" },
 ];
 
-// Identity shuffle keeps the prompt bank order: the first prompt is the owls
-// prompt whose real answer is "parliament".
 const rng: GameRng = {
   next: () => 0,
   int: () => 0,
@@ -56,8 +54,6 @@ describe("bluff game", () => {
   });
 
   it("scores finding the truth and fooling others deterministically", () => {
-    // Only host and p2 are present for this round so the write/choose gates
-    // resolve on those two.
     const active: GamePlayer[] = [players[0], players[1]];
 
     let state = bluffModule.onMove(
@@ -70,7 +66,6 @@ describe("bluff game", () => {
       { playerId: "p2", type: "submit", payload: { text: "senate" } },
       context(2_000, { activePlayers: active }),
     );
-    // Everyone present has written -> deadline collapses, tick builds options.
     state = bluffModule.onTick!(state, context(2_000, { activePlayers: active }));
     expect(bluffModule.getPhase(state)).toBe("choose");
 
@@ -83,7 +78,6 @@ describe("bluff game", () => {
     const truthId = idOf("parliament");
     const hostFakeId = idOf("cabinet");
 
-    // host finds the truth (+1000); p2 falls for host's bluff (host +500).
     state = bluffModule.onMove(
       state,
       { playerId: "host", type: "choose", payload: { optionId: truthId } },
@@ -150,7 +144,6 @@ describe("bluff game", () => {
   });
 
   it("collapses the write deadline once every present player submits", () => {
-    // p3 holds a seat but is absent; only host and p2 are active.
     const active = players.filter((player) => player.id !== "p3");
 
     let state = bluffModule.onMove(
@@ -158,7 +151,6 @@ describe("bluff game", () => {
       { playerId: "host", type: "submit", payload: { text: "cabinet" } },
       context(2_000, { activePlayers: active }),
     );
-    // Still open: one present player has not written yet.
     expect(state.deadline).toBe(1_000 + 40_000);
 
     state = bluffModule.onMove(
@@ -166,8 +158,6 @@ describe("bluff game", () => {
       { playerId: "p2", type: "submit", payload: { text: "senate" } },
       context(2_000, { activePlayers: active }),
     );
-    // Both present players wrote -> deadline collapses to now. Under the old
-    // ctx.players logic (length 3) this would still sit at the full deadline.
     expect(state.deadline).toBe(2_000);
 
     state = bluffModule.onTick!(state, context(2_000, { activePlayers: active }));
@@ -209,7 +199,6 @@ describe("bluff game", () => {
       { playerId: "host", type: "choose", payload: { optionId: truthId } },
       context(3_000, { activePlayers: active }),
     );
-    // Not everyone present has chosen yet.
     expect(state.deadline).toBe(chooseDeadline);
 
     state = bluffModule.onMove(
@@ -217,7 +206,6 @@ describe("bluff game", () => {
       { playerId: "p2", type: "choose", payload: { optionId: truthId } },
       context(3_000, { activePlayers: active }),
     );
-    // Both present players chose -> collapse to now.
     expect(state.deadline).toBe(3_000);
   });
 });

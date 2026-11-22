@@ -338,7 +338,7 @@ describe("room AI credentials", () => {
     );
     keys.setModel("claude-opus-5-5", "host", true);
     keys.remove("anthropic", "alice", false);
-    expect(keys.assistantModel).toBe("claude-opus-5-5"); // Missing keys prompt setup; never silently switch providers.
+    expect(keys.assistantModel).toBe("claude-opus-5-5");
     keys.clear();
     expect(keys.assistantModel).toBeNull();
   });

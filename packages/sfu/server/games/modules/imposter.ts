@@ -15,17 +15,6 @@ import {
   normalizeGeneratedKey,
 } from "../aiContent.js";
 
-/**
- * Imposter: a Spyfall-style social deduction game, built for a video call.
- *
- * Everyone shares a secret word EXCEPT one imposter, who only sees the
- * category. Players take turns describing the word vaguely out loud (on camera),
- * trying to expose the imposter without naming the word outright. Then everyone
- * votes. This game exists to exercise the runtime's hidden-information path:
- * `playerView` returns a DIFFERENT projection for the imposter than for crew,
- * and the secret never appears in `publicView` until the result.
- */
-
 const REVEAL_MS = 6_000;
 
 type Phase = "lobby" | "reveal" | "discuss" | "vote" | "result";
@@ -129,12 +118,6 @@ const everyoneVoted = (state: ImposterState, ctx: GameContext): boolean =>
   ctx.activePlayers.length > 0 &&
   ctx.activePlayers.every((player) => Boolean(state.votes[player.id]));
 
-/**
- * Typed move contract. Decoded from the untrusted `GameMove` at the top of
- * `onMove`. The vote target stays `unknown` on the decoded move because it is
- * validated against the live roster by `requirePlayerTarget` (which needs ctx)
- * inside the case, preserving the "Invalid vote target" / self-vote messages.
- */
 export type ImposterMove =
   | { type: "start" }
   | { type: "callVote" }
@@ -160,9 +143,6 @@ export const imposterModule: GameModule<ImposterState> = {
   description: "Spot the faker in the room",
   minPlayers: 3,
   maxPlayers: 12,
-  // Roles are drawn from the final lobby roster at start and the crew view
-  // carries the secret word, so this game supports neither mid-game seating
-  // nor spectating.
   spectatable: false,
   tickMs: 500,
   options: [

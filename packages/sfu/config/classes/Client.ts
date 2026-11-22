@@ -86,10 +86,6 @@ type ConsumerHandoffRecord = ConsumerHandoffKey & {
   completionSettled: boolean;
 };
 
-// Request ids are replay fences for the lifetime of one socket-owned Client.
-// Keep terminal tombstones instead of recycling ids: accepting an old aborted
-// id again would turn a delayed duplicate into a second consumer creation.
-// The high, fail-closed ceiling is well above any legitimate reset cadence.
 const MAX_CONSUMER_HANDOFF_RECORDS = 1_024;
 
 function createProducerKey(
@@ -99,7 +95,6 @@ function createProducerKey(
   return `${kind}-${type}`;
 }
 
-/** The current consumer of a producer plus at most two predecessors. */
 export const MAX_LIVE_CONSUMER_GENERATIONS = 3;
 
 export class Client {
@@ -115,10 +110,6 @@ export class Client {
   private producerKeysById: Map<string, ProducerKey> = new Map();
 
   public consumers: Map<string, Consumer> = new Map();
-  // `consumers` exposes the current generation per producer. Keep every live
-  // generation addressable by id during an overlapping handoff so the client
-  // can close the displaced server Consumer as soon as its successor is
-  // attached instead of waiting for the safety timeout.
   private consumersById: Map<string, Consumer> = new Map();
   private consumerIdsByProducerId: Map<string, string[]> = new Map();
   private consumerGenerationMetadataById: Map<
@@ -149,9 +140,6 @@ export class Client {
     const next = normalizeClientMediaCapabilities(value);
     if (!next) return false;
 
-    // Browser codec capabilities are stable for a loaded WebRTC handler. A
-    // post-join update may refine an initially incomplete declaration, but it
-    // must never remove support and churn the room codec policy.
     if (this.mediaCapabilities) {
       for (const capability of this.mediaCapabilities.receive) {
         if (!next.receive.has(capability)) return false;
@@ -291,10 +279,6 @@ export class Client {
         this.consumers.delete(consumer.producerId);
         this.consumerStates.delete(consumer.producerId);
 
-        // A successor is provisional until its predecessor is retired. If the
-        // successor closes during that overlap, restore the newest live
-        // predecessor so controls and telemetry immediately bind to flowing
-        // media again instead of leaving the receiver with no current entry.
         for (
           let index = remainingGenerationIds.length - 1;
           index >= 0;
@@ -323,8 +307,6 @@ export class Client {
             createdAt: predecessorMetadata?.createdAt ?? restoredAt,
             updatedAt: restoredAt,
           });
-          // Invalidate any retirement timer created by the predecessor's old
-          // displacement. A later displacement receives a fresh revision.
           this.consumerRetirementRevisions.set(
             predecessor.id,
             (this.consumerRetirementRevisions.get(predecessor.id) ?? 0) + 1,
@@ -338,12 +320,6 @@ export class Client {
     consumer.on("producerclose", cleanup);
     consumer.observer.on("close", cleanup);
 
-    // Bound overlapping generations per producer. Displaced generations are
-    // retired by a delayed timer, but each new consume re-arms every
-    // predecessor's retirement, so a client re-consuming one producer faster
-    // than that delay kept every generation alive: unbounded consumers on the
-    // worker and timers in the process. Restoration only ever uses the newest
-    // live predecessor, so anything older than the last two is closed now.
     const generationIdsForProducer =
       this.consumerIdsByProducerId.get(consumer.producerId) ?? [];
     const excessGenerations =
@@ -379,12 +355,6 @@ export class Client {
     return this.consumersById.get(consumerId);
   }
 
-  /**
-   * Reserve a cryptographically named planned handoff before the first async
-   * consumer-creation step. A duplicate request with the same exact key joins
-   * the original completion; a request-id collision with different ownership
-   * is rejected. Only a server-current exact predecessor may start a new one.
-   */
   reserveConsumerHandoff(key: ConsumerHandoffKey): ConsumerHandoffReservation {
     const existing = this.consumerHandoffs.get(key.requestId);
     if (existing) {
@@ -431,7 +401,6 @@ export class Client {
     return { isOwner: true, completion };
   }
 
-  /** Bind the one created server Consumer to its pre-reserved request. */
   attachConsumerHandoff(
     requestId: string,
     consumer: Consumer,
@@ -493,11 +462,6 @@ export class Client {
     });
   }
 
-  /**
-   * Abort one exact request. Pending creation is fenced by the terminal state;
-   * an already-created successor is synchronously closed, which restores the
-   * newest live predecessor through the normal generation cleanup callback.
-   */
   abortConsumerHandoff(key: ConsumerHandoffKey): ConsumerHandoffAbortResult {
     const record = this.consumerHandoffs.get(key.requestId);
     if (!record) {
@@ -528,10 +492,6 @@ export class Client {
         code: "aborted",
       });
 
-      // An ACK-lost client cannot name the successor, so the reservation is
-      // its authority. Mutate media only when the reservation still owns the
-      // exact live producer generation and its exact predecessor remains
-      // available for synchronous restoration.
       const current = this.consumers.get(key.producerId);
       const predecessor = this.consumersById.get(key.predecessorConsumerId);
       const ownsSuccessor =
@@ -594,12 +554,6 @@ export class Client {
     }
   }
 
-  /**
-   * Capture every still-live predecessor behind the supplied current
-   * generation. Capturing refreshes their retirement revisions, so timers
-   * from an earlier overlapping setup cannot retire them inside this
-   * generation's verification window.
-   */
   captureDisplacedConsumerRetirements(
     currentConsumer: Consumer,
   ): DisplacedConsumerGeneration[] {
@@ -625,11 +579,6 @@ export class Client {
     return retirements;
   }
 
-  /**
-   * Retire a predecessor only if this is still the same displacement epoch.
-   * Restoration invalidates the old epoch, preventing an old timer from
-   * closing a predecessor after it was restored and displaced again.
-   */
   retireDisplacedConsumer(
     displaced: DisplacedConsumerGeneration,
   ): boolean {
@@ -705,9 +654,6 @@ export class Client {
   }
 
   closeConsumers(): void {
-    // Fence every pending async creation before closing current generations.
-    // A creation that completes after teardown cannot attach because its
-    // reservation has been removed below.
     this.abortAllConsumerHandoffs();
     for (const consumer of this.consumersById.values()) {
       try {

@@ -280,12 +280,10 @@ describe("TranscriptRelayRegistry", () => {
       userId: "u1",
       canStopAnyRelay: false,
     });
-    // A host replaces the relay while u1's stop is still preparing handoff.
     await expect(start("u2", true)).resolves.toMatchObject({ success: true });
     releaseHandoff();
     await expect(stopping).resolves.toEqual({ success: true });
 
-    // The replacement is still registered, so the room can stop it.
     registry.stopRoom(room.channelId);
     expect(closed).toContain("u2");
   });

@@ -23,18 +23,11 @@ const startedTriviaSession = (): GameSession => {
   return session;
 };
 
-/**
- * Drive every seated player through an answer, then tick through the reveal
- * into the next question. `applyMove` stamps deadlines with the real clock, so
- * the ticks ride real-time offsets rather than synthetic timestamps.
- */
 const advanceToNextQuestion = (session: GameSession): void => {
   for (const player of session.getPublicState().players) {
     const result = session.applyMove(player.id, "answer", { choice: 0 });
     expect(result.ok).toBe(true);
   }
-  // Everyone answered, so the question deadline collapsed to now; tick into
-  // reveal, then tick far past the reveal deadline into the next question.
   session.tick(Date.now() + 1_000);
   session.tick(Date.now() + 60_000);
 };
@@ -139,7 +132,6 @@ describe("late-join seats", () => {
     expect(after.players.map((p) => p.id)).toEqual(["host", "p2", "late"]);
     expect(session.hasPlayer("late")).toBe(true);
 
-    // The new seat plays this round like anyone else.
     expect(session.applyMove("late", "answer", { choice: 1 }).ok).toBe(true);
   });
 
@@ -147,7 +139,6 @@ describe("late-join seats", () => {
     const session = startedTriviaSession();
     session.requestSeat({ id: "late", name: "Late Joiner" });
 
-    // A single answer does not end the round, so no boundary is crossed.
     expect(session.applyMove("host", "answer", { choice: 0 }).ok).toBe(true);
     expect(session.hasPlayer("late")).toBe(false);
     expect(session.getPublicState(0).pendingJoiners.length).toBe(1);

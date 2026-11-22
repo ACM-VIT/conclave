@@ -10,7 +10,6 @@ const players: GamePlayer[] = [
   { id: "p2", name: "Pat" },
 ];
 
-/** Identity shuffle: host seats as White, p2 as Black. */
 const rng = (next = 0.99): GameRng => ({
   next: () => next,
   int: () => 0,
@@ -113,7 +112,6 @@ describe("chess config", () => {
 describe("chess clocks", () => {
   it("charges thinking time to the side to move and adds the increment", () => {
     let state = started({ timeControl: "120+1" });
-    // White thinks for 5s, then moves: 120 - 5 + 1 = 116s.
     state = play(state, "host", "e2", "e4", 6_000);
     const pub = view(state, 6_000);
     expect(pub.clocks.white).toBe(116_000);
@@ -134,7 +132,6 @@ describe("chess clocks", () => {
       [key: string]: unknown;
       clocks: Record<string, number | null>;
     };
-    // Black to move and out of time; white has only a king left.
     state = {
       ...state,
       fen: "k7/8/8/8/8/8/8/K7 b - - 0 1",
@@ -151,9 +148,7 @@ describe("chess clocks", () => {
 describe("chess rapid fire", () => {
   it("auto-plays a random legal move when the per-move timer expires", () => {
     let state = started({ timeControl: "unlimited", rapidFire: "10" });
-    // Not yet expired.
     expect(chessModule.onTick!(state, context(10_500))).toBe(state);
-    // Expired (turn started at 1s, cap 10s).
     state = chessModule.onTick!(state, context(11_200));
     const pub = view(state, 11_200);
     expect(pub.moves).toHaveLength(1);
@@ -238,7 +233,6 @@ describe("chess vs computer", () => {
   it("answers with a legal move after its thinking delay", () => {
     let state = solo();
     state = play(state, "host", "e2", "e4", 2_000, soloConfig);
-    // Bot delay is at most 1.2s; well past it the bot must have replied.
     state = chessModule.onTick!(state, context(10_000, { config: soloConfig }));
     const pub = view(state, 10_000);
     expect(pub.moves).toHaveLength(2);
@@ -303,13 +297,11 @@ describe("chess bot engine", () => {
   });
 
   it("finds mate in one on hard", () => {
-    // White: Ra1, Rb7, Ke1 vs Black: Kh8. Ra8 is mate.
     const move = pickBotMove("7k/1R6/8/8/8/8/8/R3K3 w - - 0 1", "hard", rng(0.99));
     expect(move).toEqual({ from: "a1", to: "a8", promotion: undefined });
   });
 
   it("returns null when the game is over", () => {
-    // Fool's mate final position: white is checkmated.
     const game = new Chess();
     for (const san of ["f3", "e5", "g4", "Qh4#"]) game.move(san);
     expect(pickBotMove(game.fen(), "medium", rng())).toBeNull();

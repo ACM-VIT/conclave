@@ -56,7 +56,6 @@ export const registerTransportHandlers = (context: ConnectionContext): void => {
           return;
         }
 
-        // Throttle transport allocation (roughly once per kind, small retry burst).
         if (
           !takeToken(
             socket,
@@ -73,9 +72,6 @@ export const registerTransportHandlers = (context: ConnectionContext): void => {
         const room = context.currentRoom;
         const client = context.currentClient;
         const transport = await room.createWebRtcTransport("producer");
-        // The socket can disconnect, be kicked or switch rooms while the
-        // transport is created. Never attach it to a client that is no
-        // longer this socket's seat (or to a seat on another router).
         if (
           context.currentRoom !== room ||
           context.currentClient !== client ||
@@ -131,7 +127,6 @@ export const registerTransportHandlers = (context: ConnectionContext): void => {
           return;
         }
 
-        // Throttle transport allocation (roughly once per kind, small retry burst).
         if (
           !takeToken(
             socket,
@@ -148,9 +143,6 @@ export const registerTransportHandlers = (context: ConnectionContext): void => {
         const room = context.currentRoom;
         const client = context.currentClient;
         const transport = await room.createWebRtcTransport("consumer");
-        // The socket can disconnect, be kicked or switch rooms while the
-        // transport is created. Never attach it to a client that is no
-        // longer this socket's seat (or to a seat on another router).
         if (
           context.currentRoom !== room ||
           context.currentClient !== client ||

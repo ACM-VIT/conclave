@@ -55,9 +55,6 @@ const resolveBackendMode = (): BrowserBackendMode => {
   if (configured === "service" || configured === "chromium") return "service";
   if (configured === "kitesurf") return "kitesurf";
 
-  // Preserve the earlier BROWSER_PROVIDER switch, but make the default truly
-  // zero-service: valid Cloudflare credentials are enough to embed Kitesurf in
-  // the SFU. Chromium remains available through the external service.
   if (process.env.BROWSER_PROVIDER?.trim().toLowerCase() === "kitesurf") {
     return "kitesurf";
   }
@@ -239,8 +236,6 @@ export const getBrowserServiceCapabilities = async (
     if (response.capabilities) return response.capabilities;
     throw new Error("Browser service returned an invalid capabilities response");
   } catch (error) {
-    // Older browser-service deployments do not expose capabilities. Preserve
-    // the legacy Chromium behavior during rolling deployments.
     if (!(error instanceof BrowserServiceHttpError) || error.status !== 404) throw error;
   }
   return { provider: "chromium", audio: true, video: true, agentic: false };

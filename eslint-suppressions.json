@@ -114,11 +114,6 @@
       "count": 2
     }
   },
-  "packages/sfu/config/classes/Client.ts": {
-    "conclave/no-comments": {
-      "count": 36
-    }
-  },
   "packages/sfu/config/classes/Room.ts": {
     "conclave/no-comments": {
       "count": 43
@@ -129,29 +124,9 @@
       "count": 21
     }
   },
-  "packages/sfu/scripts/bot-strength.ts": {
-    "conclave/no-comments": {
-      "count": 6
-    }
-  },
-  "packages/sfu/scripts/capture-wordle-native-fixtures.ts": {
-    "conclave/no-comments": {
-      "count": 4
-    }
-  },
-  "packages/sfu/scripts/new-game.mjs": {
-    "conclave/no-comments": {
-      "count": 3
-    }
-  },
   "packages/sfu/server.ts": {
     "conclave/no-comments": {
       "count": 4
-    }
-  },
-  "packages/sfu/server/admin/adminAudit.ts": {
-    "conclave/no-comments": {
-      "count": 2
     }
   },
   "packages/sfu/server/admin/adminGateway.ts": {
@@ -164,34 +139,9 @@
       "count": 18
     }
   },
-  "packages/sfu/server/admin/moderation.ts": {
-    "conclave/no-comments": {
-      "count": 2
-    }
-  },
   "packages/sfu/server/analytics/posthog.ts": {
     "conclave/no-comments": {
       "count": 27
-    }
-  },
-  "packages/sfu/server/audioConsumerHeal.ts": {
-    "conclave/no-comments": {
-      "count": 14
-    }
-  },
-  "packages/sfu/server/browserServiceClient.ts": {
-    "conclave/no-comments": {
-      "count": 5
-    }
-  },
-  "packages/sfu/server/clientIds.ts": {
-    "conclave/no-comments": {
-      "count": 1
-    }
-  },
-  "packages/sfu/server/cors.ts": {
-    "conclave/no-comments": {
-      "count": 3
     }
   },
   "packages/sfu/server/createSfuServer.ts": {
@@ -199,154 +149,14 @@
       "count": 4
     }
   },
-  "packages/sfu/server/email/schedulingTemplates.tsx": {
-    "conclave/no-comments": {
-      "count": 7
-    }
-  },
-  "packages/sfu/server/games/chessBot.ts": {
-    "conclave/no-comments": {
-      "count": 17
-    }
-  },
-  "packages/sfu/server/games/config.ts": {
-    "conclave/no-comments": {
-      "count": 2
-    }
-  },
-  "packages/sfu/server/games/engine.ts": {
-    "conclave/no-comments": {
-      "count": 9
-    }
-  },
-  "packages/sfu/server/games/modules/bluff.ts": {
-    "conclave/no-comments": {
-      "count": 5
-    }
-  },
-  "packages/sfu/server/games/modules/chess.ts": {
-    "conclave/no-comments": {
-      "count": 16
-    }
-  },
-  "packages/sfu/server/games/modules/imposter.ts": {
-    "conclave/no-comments": {
-      "count": 5
-    }
-  },
-  "packages/sfu/server/games/modules/mostLikelyTo.ts": {
-    "conclave/no-comments": {
-      "count": 3
-    }
-  },
-  "packages/sfu/server/games/modules/reaction.ts": {
-    "conclave/no-comments": {
-      "count": 2
-    }
-  },
-  "packages/sfu/server/games/modules/trivia.ts": {
-    "conclave/no-comments": {
-      "count": 8
-    }
-  },
-  "packages/sfu/server/games/modules/wordle.ts": {
-    "conclave/no-comments": {
-      "count": 36
-    }
-  },
-  "packages/sfu/server/games/modules/wouldYouRather.ts": {
-    "conclave/no-comments": {
-      "count": 2
-    }
-  },
-  "packages/sfu/server/games/modules/zip.ts": {
-    "conclave/no-comments": {
-      "count": 24
-    }
-  },
-  "packages/sfu/server/games/registry.ts": {
-    "conclave/no-comments": {
-      "count": 1
-    }
-  },
-  "packages/sfu/server/games/rng.ts": {
-    "conclave/no-comments": {
-      "count": 1
-    }
-  },
-  "packages/sfu/server/games/roundLoop.ts": {
-    "conclave/no-comments": {
-      "count": 13
-    }
-  },
-  "packages/sfu/server/games/types.ts": {
-    "conclave/no-comments": {
-      "count": 35
-    }
-  },
-  "packages/sfu/server/games/validation.ts": {
-    "conclave/no-comments": {
-      "count": 5
-    }
-  },
-  "packages/sfu/server/games/wordleWordList.ts": {
-    "conclave/no-comments": {
-      "count": 3
-    }
-  },
-  "packages/sfu/server/games/zipSolver.ts": {
-    "conclave/no-comments": {
-      "count": 7
-    }
-  },
   "packages/sfu/server/http/createApp.ts": {
     "conclave/no-comments": {
       "count": 22
     }
   },
-  "packages/sfu/server/http/scheduledWebinarRoutes.ts": {
-    "conclave/no-comments": {
-      "count": 3
-    }
-  },
-  "packages/sfu/server/http/schedulingRoutes.ts": {
-    "conclave/no-comments": {
-      "count": 3
-    }
-  },
-  "packages/sfu/server/inviteCodeVersion.ts": {
-    "conclave/no-comments": {
-      "count": 3
-    }
-  },
-  "packages/sfu/server/mediaPolicy.ts": {
-    "conclave/no-comments": {
-      "count": 5
-    }
-  },
-  "packages/sfu/server/producerTransportNetworkProfile.ts": {
-    "conclave/no-comments": {
-      "count": 6
-    }
-  },
   "packages/sfu/server/redisErrors.ts": {
     "conclave/no-comments": {
       "count": 5
-    }
-  },
-  "packages/sfu/server/regions.ts": {
-    "conclave/no-comments": {
-      "count": 2
-    }
-  },
-  "packages/sfu/server/roomAiCredentials.ts": {
-    "conclave/no-comments": {
-      "count": 2
-    }
-  },
-  "packages/sfu/server/roomAiSettings.ts": {
-    "conclave/no-comments": {
-      "count": 2
     }
   },
   "packages/sfu/server/rooms.ts": {
@@ -374,11 +184,6 @@
       "count": 4
     }
   },
-  "packages/sfu/server/socket/context.ts": {
-    "conclave/no-comments": {
-      "count": 10
-    }
-  },
   "packages/sfu/server/socket/createSocketServer.ts": {
     "conclave/no-comments": {
       "count": 6
@@ -389,39 +194,14 @@
       "count": 3
     }
   },
-  "packages/sfu/server/socket/handlers/adminHandlers.ts": {
-    "conclave/no-comments": {
-      "count": 15
-    }
-  },
   "packages/sfu/server/socket/handlers/appsHandlers.ts": {
     "conclave/no-comments": {
       "count": 12
     }
   },
-  "packages/sfu/server/socket/handlers/chatHandlers.ts": {
-    "conclave/no-comments": {
-      "count": 35
-    }
-  },
-  "packages/sfu/server/socket/handlers/chatReactionHandlers.ts": {
-    "conclave/no-comments": {
-      "count": 6
-    }
-  },
   "packages/sfu/server/socket/handlers/disconnectHandlers.ts": {
     "conclave/no-comments": {
       "count": 12
-    }
-  },
-  "packages/sfu/server/socket/handlers/gameHandlers.ts": {
-    "conclave/no-comments": {
-      "count": 51
-    }
-  },
-  "packages/sfu/server/socket/handlers/handHandlers.ts": {
-    "conclave/no-comments": {
-      "count": 1
     }
   },
   "packages/sfu/server/socket/handlers/joinRoom.ts": {
@@ -434,34 +214,9 @@
       "count": 46
     }
   },
-  "packages/sfu/server/socket/handlers/reactionHandlers.ts": {
-    "conclave/no-comments": {
-      "count": 2
-    }
-  },
-  "packages/sfu/server/socket/handlers/roomAiHandlers.ts": {
-    "conclave/no-comments": {
-      "count": 2
-    }
-  },
   "packages/sfu/server/socket/handlers/sharedBrowserHandlers.ts": {
     "conclave/no-comments": {
       "count": 13
-    }
-  },
-  "packages/sfu/server/socket/handlers/transcriptHandlers.ts": {
-    "conclave/no-comments": {
-      "count": 1
-    }
-  },
-  "packages/sfu/server/socket/handlers/transportHandlers.ts": {
-    "conclave/no-comments": {
-      "count": 8
-    }
-  },
-  "packages/sfu/server/socket/handlers/webinarHandlers.ts": {
-    "conclave/no-comments": {
-      "count": 3
     }
   },
   "packages/sfu/server/socket/handlers/webinarInteractionHandlers.ts": {
@@ -484,26 +239,6 @@
       "count": 1
     }
   },
-  "packages/sfu/server/socket/transportConnect.ts": {
-    "conclave/no-comments": {
-      "count": 2
-    }
-  },
-  "packages/sfu/server/transcript/relayRegistry.ts": {
-    "conclave/no-comments": {
-      "count": 3
-    }
-  },
-  "packages/sfu/server/transcript/workerClient.ts": {
-    "conclave/no-comments": {
-      "count": 3
-    }
-  },
-  "packages/sfu/server/webcamCodecPolicy.ts": {
-    "conclave/no-comments": {
-      "count": 14
-    }
-  },
   "packages/sfu/server/webcamReceiverCapacityProof.ts": {
     "conclave/no-comments": {
       "count": 4
@@ -519,59 +254,9 @@
       "count": 1
     }
   },
-  "packages/sfu/test/audio-consumer-heal.test.ts": {
-    "conclave/no-comments": {
-      "count": 6
-    }
-  },
-  "packages/sfu/test/bluff.test.ts": {
-    "conclave/no-comments": {
-      "count": 12
-    }
-  },
-  "packages/sfu/test/chat-message-reactions.test.ts": {
-    "conclave/no-comments": {
-      "count": 8
-    }
-  },
-  "packages/sfu/test/chat-reaction-handlers.test.ts": {
-    "conclave/no-comments": {
-      "count": 3
-    }
-  },
-  "packages/sfu/test/chess.test.ts": {
-    "conclave/no-comments": {
-      "count": 8
-    }
-  },
-  "packages/sfu/test/chessNativeFixture.test.ts": {
-    "conclave/no-comments": {
-      "count": 3
-    }
-  },
-  "packages/sfu/test/clear-raised-hands.test.ts": {
-    "conclave/no-comments": {
-      "count": 2
-    }
-  },
-  "packages/sfu/test/game-ai-content.test.ts": {
-    "conclave/no-comments": {
-      "count": 1
-    }
-  },
-  "packages/sfu/test/imposter.test.ts": {
-    "conclave/no-comments": {
-      "count": 11
-    }
-  },
   "packages/sfu/test/join-room-lifecycle.test.ts": {
     "conclave/no-comments": {
       "count": 8
-    }
-  },
-  "packages/sfu/test/late-join.test.ts": {
-    "conclave/no-comments": {
-      "count": 5
     }
   },
   "packages/sfu/test/media-consumer-generation-controls.test.ts": {
@@ -579,24 +264,9 @@
       "count": 4
     }
   },
-  "packages/sfu/test/media-screen-share-race.test.ts": {
-    "conclave/no-comments": {
-      "count": 1
-    }
-  },
-  "packages/sfu/test/mostLikelyTo.test.ts": {
-    "conclave/no-comments": {
-      "count": 6
-    }
-  },
   "packages/sfu/test/redis-errors.test.ts": {
     "conclave/no-comments": {
       "count": 2
-    }
-  },
-  "packages/sfu/test/room-ai.test.ts": {
-    "conclave/no-comments": {
-      "count": 1
     }
   },
   "packages/sfu/test/room-placement-http.test.ts": {
@@ -604,54 +274,9 @@
       "count": 2
     }
   },
-  "packages/sfu/test/scheduled-webinar-config.test.ts": {
-    "conclave/no-comments": {
-      "count": 2
-    }
-  },
-  "packages/sfu/test/transcript-relay-registry.test.ts": {
-    "conclave/no-comments": {
-      "count": 2
-    }
-  },
-  "packages/sfu/test/transport-connect.test.ts": {
-    "conclave/no-comments": {
-      "count": 2
-    }
-  },
-  "packages/sfu/test/trivia.test.ts": {
-    "conclave/no-comments": {
-      "count": 13
-    }
-  },
-  "packages/sfu/test/webcam-receiver-capacity-proof.test.ts": {
-    "conclave/no-comments": {
-      "count": 2
-    }
-  },
   "packages/sfu/test/webinar-program-feed.test.ts": {
     "conclave/no-comments": {
       "count": 8
-    }
-  },
-  "packages/sfu/test/wordle.test.ts": {
-    "conclave/no-comments": {
-      "count": 4
-    }
-  },
-  "packages/sfu/test/wouldYouRather.test.ts": {
-    "conclave/no-comments": {
-      "count": 7
-    }
-  },
-  "packages/sfu/test/zip.test.ts": {
-    "conclave/no-comments": {
-      "count": 6
-    }
-  },
-  "packages/sfu/test/zipSolver.test.ts": {
-    "conclave/no-comments": {
-      "count": 3
     }
   },
   "packages/sfu/types.ts": {
@@ -667,11 +292,6 @@
   "packages/sfu/utilities/getWorker.ts": {
     "conclave/no-comments": {
       "count": 2
-    }
-  },
-  "packages/sfu/utilities/untrusted.ts": {
-    "conclave/no-comments": {
-      "count": 10
     }
   },
   "packages/shared-browser/src/KitesurfManager.ts": {

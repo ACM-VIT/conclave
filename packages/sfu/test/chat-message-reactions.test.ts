@@ -11,11 +11,6 @@ const message = (id: string): ChatMessage => ({
   timestamp: 1_000,
 });
 
-/**
- * Constructing a real Room needs a mediasoup router, so bind the reaction logic
- * to the only state it actually touches. This still exercises the shipped
- * implementation rather than a reimplementation of it.
- */
 const roomWithHistory = (messages: ChatMessage[]): Room => {
   const room = Object.create(Room.prototype) as Room;
   (room as unknown as { recentChatMessages: ChatMessage[] }).recentChatMessages =
@@ -33,8 +28,6 @@ describe("Room.toggleChatMessageReaction", () => {
       reactions: [{ emoji: "👍", userIds: ["u1"] }],
     });
 
-    // Toggling off must clear the emoji entirely rather than leave a zero
-    // count, and must drop `reactions` so the field stays absent-when-empty.
     expect(room.toggleChatMessageReaction("m1", "u1", "👍")).toEqual({
       ok: true,
       reactions: [],
@@ -95,13 +88,10 @@ describe("Room.toggleChatMessageReaction", () => {
     const room = roomWithHistory([message("m1")]);
     const emojis = ["👍", "👏", "😂", "❤️", "🎉", "😮", "😢", "🤔"];
 
-    // Fill to the cap using distinct emoji, repeating reactors as needed.
     for (let i = 0; i < MAX_REACTIONS_PER_CHAT_MESSAGE; i += 1) {
       const result = room.toggleChatMessageReaction(
         "m1",
         `u${i}`,
-        // Past the allowlist length, synthesize unique strings; the cap is
-        // enforced by Room, and emoji validity is the handler's job.
         emojis[i] ?? `x${i}`,
       );
       expect(result.ok).toBe(true);
@@ -112,8 +102,6 @@ describe("Room.toggleChatMessageReaction", () => {
       reason: "too-many-reactions",
     });
 
-    // At the cap, toggling an *existing* emoji must still work — the limit is
-    // on distinct emoji, not on participation.
     expect(room.toggleChatMessageReaction("m1", "u99", "👍")).toMatchObject({
       ok: true,
     });

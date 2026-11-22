@@ -54,8 +54,6 @@ const makeConsumer = (
     score: {
       score: 10,
       producerScore: 10,
-      // Lower streams become inactive during the optimization. Only the
-      // selected full-layer producer score must remain healthy.
       producerScores: [0, 0, 10],
     },
     ...overrides,

@@ -164,7 +164,6 @@ describe("wordle team modes", () => {
 
   const pub = (s: GameSession, now = 0) => s.getPublicState(now).view as TeamPublic;
 
-  /** Starts a setter round where the seeded setter picks AALII. */
   const startRound = (s: GameSession) => {
     expect(s.applyMove("host", "start", undefined)).toEqual({ ok: true });
     const setterId = (s.getPublicState(0).view as { setterId: string }).setterId;
@@ -190,7 +189,6 @@ describe("wordle team modes", () => {
 
     expect(s.applyMove(first, "guess", { word: "ABACK" })).toEqual({ ok: true });
     expect(pub(s).team!.currentTurnId).toBe(second);
-    // Both teammates see the same rows.
     expect(s.getPlayerView(second, 0)).toMatchObject({
       myGuesses: [{ word: "ABACK" }],
       canGuess: true,
@@ -205,7 +203,6 @@ describe("wordle team modes", () => {
     expect(done.phase).toBe("results");
     expect(done.team!.outcome).toBe("win");
     expect(done.result!.winnerId).toBe(second);
-    // Two rows used out of six: every teammate banks 5, the setter nothing.
     const scores = Object.fromEntries(done.scores.map((entry) => [entry.playerId, entry.score]));
     expect(scores[first]).toBe(5);
     expect(scores[second]).toBe(5);
@@ -235,7 +232,6 @@ describe("wordle team modes", () => {
       players: team.filter((player) => player.id !== first),
       adminIds: ["host"],
     });
-    // First tick only notes the absence; a quick reconnect keeps the turn.
     expect(s.tick(1_000)).toBe(true);
     expect(pub(s, 1_000).team!.currentTurnId).toBe(first);
     expect(s.tick(3_000)).toBe(false);

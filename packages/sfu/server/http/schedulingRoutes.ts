@@ -109,11 +109,6 @@ const normalizeText = (value: unknown, maxLength = MAX_TEXT_LENGTH): string =>
     ? value.trim().replace(/\s+/g, " ").slice(0, maxLength)
     : "";
 
-/**
- * Decode the client-editable event-type fields from an untrusted body.
- * Type-invalid fields decode to undefined ("not provided"); scheduling.ts
- * sanitizes and clamps every value again before storing it.
- */
 const eventTypeInput = (body: UntrustedRecord): Partial<SchedulingEventType> => ({
   title: readString(body, "title"),
   slug: readString(body, "slug"),
@@ -260,8 +255,6 @@ const requireHostProfile = async (
         user.userId,
       );
       if (!legacyProfile) continue;
-      // Only into the deployment's default client: the requested id comes
-      // from the request and must not move a profile's booking meetings out.
       if (!canMigrateClientNamespace(legacyProfile.clientId, clientId)) break;
       await migrateProfileNamespace(state, legacyProfile, clientId);
       break;

@@ -30,7 +30,6 @@ type ChessMoveRecord = {
   promotion: Promotion | null;
   byPlayerId: string;
   byName: string;
-  /** True when the move was played by the server (rapid-fire expiry). */
   auto: boolean;
   at: number;
 };
@@ -63,16 +62,13 @@ type ChessState = {
   mode: ChessMode;
   timeControlMs: number | null;
   incrementMs: number;
-  /** Rapid fire: hard per-move cap; expiry plays a random legal move. */
   moveTimeMs: number | null;
   allowTakebacks: boolean;
   botSide: ChessSide | null;
   botLevel: BotLevel;
-  /** Server time after which the bot answers (small human-feeling delay). */
   botMoveDueAt: number | null;
   clocks: Record<ChessSide, number | null>;
   fen: string;
-  /** Position after every ply, starting position first (for takebacks). */
   fens: string[];
   pgn: string;
   turn: ChessTurn;
@@ -105,7 +101,6 @@ export const CHESS_BOT_ID = "@chess-bot";
 const PROMOTIONS = ["q", "r", "b", "n"] as const;
 const SQUARE_RE = /^[a-h][1-8]$/;
 
-/** "base+increment" in seconds, or "unlimited". */
 const TIME_CONTROL_RE = /^(\d+)\+(\d+)$/;
 
 const BOT_NAMES: Record<BotLevel, string> = {
@@ -183,8 +178,6 @@ const seatedTeams = (
   if (state.mode === "computer") {
     if (shuffled.length < 1) throw new GameMoveError("Chess needs at least 1 player");
     const humanSide = state.botSide ? otherSide(state.botSide) : "white";
-    // The starter leads the human side; everyone else in the room joins their
-    // team and can talk strategy while the captain moves the pieces.
     const starter = shuffled.find((player) => player.id === starterId);
     const humanIds = [
       ...(starter ? [starter.id] : []),
@@ -239,7 +232,6 @@ const resultForGame = (game: Chess): ChessResult | null => {
   if (game.isStalemate()) return { winner: "draw", reason: "stalemate" };
   if (game.isThreefoldRepetition()) return { winner: "draw", reason: "threefold" };
   if (game.isInsufficientMaterial()) return { winner: "draw", reason: "insufficient" };
-  // chess.js's only remaining game-over condition is the fifty-move rule.
   return { winner: "draw", reason: "fifty-move" };
 };
 
@@ -262,11 +254,6 @@ const resolveClocks = (state: ChessState, now: number): Record<ChessSide, number
   };
 };
 
-/**
- * Whether `side` can still deliver mate in some line. Lone king, or king with
- * a single minor piece, cannot - a flag fall against them scores a draw
- * instead of a loss (the standard online timeout rule).
- */
 const hasMatingMaterial = (game: Chess, side: ChessTurn): boolean => {
   let minors = 0;
   for (const row of game.board()) {
@@ -298,7 +285,6 @@ const timeoutState = (state: ChessState, ctx: GameContext): ChessState | null =>
   };
 };
 
-/** Small human-feeling pause before the bot answers. */
 const botThinkDelayMs = (state: ChessState, ctx: GameContext): number => {
   let delay = 500 + Math.round(ctx.rng.next() * 700);
   if (state.moveTimeMs != null) delay = Math.min(delay, Math.round(state.moveTimeMs / 2));
@@ -309,7 +295,6 @@ const botThinkDelayMs = (state: ChessState, ctx: GameContext): number => {
   return delay;
 };
 
-/** Queue (or clear) the bot's reply after the position changed. */
 const scheduleBot = (state: ChessState, ctx: GameContext): ChessState => {
   if (state.mode !== "computer" || state.phase !== "playing" || state.botSide == null) {
     return state;
@@ -333,7 +318,6 @@ type Mover = {
   auto: boolean;
 };
 
-/** Apply one board move (human, bot, or rapid-fire auto) to the position. */
 const applyBoardMove = (
   state: ChessState,
   ctx: GameContext,
@@ -395,10 +379,6 @@ const rebuildPgn = (moves: ChessMoveRecord[]): string => {
   return game.pgn();
 };
 
-/**
- * Rewind so the requesting side is to move again, before their last move:
- * one ply when they just moved, two when the opponent already replied.
- */
 const applyTakeback = (state: ChessState, ctx: GameContext, side: ChessSide): ChessState => {
   const plies = sideForTurn(state.turn) === side ? 2 : 1;
   if (state.moves.length < plies) throw new GameMoveError("Nothing to take back");
@@ -684,7 +664,6 @@ export const chessModule: GameModule<ChessState> = {
         requireCaptain(state, move.playerId, side);
         if (!sideHasMoved(state, side)) throw new GameMoveError("You have not moved yet");
         if (state.takebackRequest) throw new GameMoveError("A takeback is already pending");
-        // The computer is a good sport: takebacks against it apply instantly.
         if (state.mode === "computer") {
           return scheduleBot(applyTakeback(state, ctx, side), ctx);
         }
@@ -732,7 +711,6 @@ export const chessModule: GameModule<ChessState> = {
 
     const turnSide = sideForTurn(state.turn);
 
-    // Bot reply, after its scheduled "thinking" delay.
     if (state.mode === "computer" && state.botSide === turnSide) {
       if (state.botMoveDueAt == null) return scheduleBot(state, ctx);
       if (ctx.now < state.botMoveDueAt) return state;
@@ -745,7 +723,6 @@ export const chessModule: GameModule<ChessState> = {
       });
     }
 
-    // Rapid fire: the per-move timer expired, play a random legal move.
     if (
       state.moveTimeMs != null &&
       state.turnStartedAt != null &&

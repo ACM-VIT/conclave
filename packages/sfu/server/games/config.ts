@@ -1,11 +1,5 @@
 import type { GameConfig, GameOptionSpec } from "./types.js";
 
-/**
- * Validate a raw (untrusted) config from the client against the module's option
- * specs. Unknown keys are dropped; numbers are clamped to range and rounded;
- * selects must be a known choice; text is trimmed and capped. Anything invalid
- * falls back to the default.
- */
 export const normalizeConfig = (
   options: GameOptionSpec[] = [],
   raw: unknown,
@@ -33,7 +27,6 @@ export const normalizeConfig = (
   return config;
 };
 
-/** Typed accessors for module setup code. */
 export const numberOption = (config: GameConfig, id: string, fallback: number): number => {
   const value = config[id];
   return typeof value === "number" ? value : fallback;

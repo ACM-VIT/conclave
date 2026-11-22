@@ -8,8 +8,6 @@ const players: GamePlayer[] = [
   { id: "p3", name: "Robin" },
 ];
 
-// pick() always returns the first element, so setup is fully deterministic:
-// word set = Places, secret word = "Airport", imposter = host, starter = host.
 const rng: GameRng = {
   next: () => 0,
   int: () => 0,
@@ -33,7 +31,6 @@ const context = (
   };
 };
 
-// Drive lobby -> reveal -> discuss -> vote.
 const inVote = (options?: {
   activePlayers?: GamePlayer[];
   roster?: GamePlayer[];
@@ -44,7 +41,6 @@ const inVote = (options?: {
     { playerId: "host", type: "start", payload: undefined },
     context(1_000, options),
   );
-  // Advance past the reveal deadline (start + 6_000ms).
   state = imposterModule.onTick!(state, context(7_100, options));
   expect(imposterModule.getPhase(state)).toBe("discuss");
   state = imposterModule.onMove(
@@ -72,7 +68,6 @@ describe("imposter game", () => {
     expect(view.totalPlayers).toBe(3);
     expect(view.players.map((entry) => entry.id)).toEqual(["host", "p2", "p3"]);
     expect(view.result).toBeNull();
-    // The word never leaks into the public projection.
     expect(JSON.stringify(view)).not.toContain("Airport");
   });
 
@@ -104,7 +99,6 @@ describe("imposter game", () => {
 
   it("resolves a crew win when the room votes out the imposter", () => {
     let state = inVote();
-    // host is the imposter and cannot vote for itself.
     state = imposterModule.onMove(
       state,
       { playerId: "host", type: "vote", payload: { target: "p2" } },
@@ -170,7 +164,6 @@ describe("imposter game", () => {
   });
 
   it("resolves once every present player votes, ignoring an absent seat", () => {
-    // Four seats, but p4 is disconnected: only host, p2, p3 are active.
     const roster: GamePlayer[] = [...players, { id: "p4", name: "Sam" }];
     const active = roster.filter((player) => player.id !== "p4");
     const options = { roster, activePlayers: active };
@@ -186,7 +179,6 @@ describe("imposter game", () => {
       { playerId: "p2", type: "vote", payload: { target: "host" } },
       context(8_000, options),
     );
-    // Still voting: not every present player has voted yet.
     expect(imposterModule.getPhase(state)).toBe("vote");
 
     state = imposterModule.onMove(
@@ -194,9 +186,6 @@ describe("imposter game", () => {
       { playerId: "p3", type: "vote", payload: { target: "host" } },
       context(8_000, options),
     );
-    // All three present players voted -> resolves without waiting on the
-    // absent p4. Under the old ctx.players logic (length 4) this would stay
-    // stuck in the vote phase.
     expect(imposterModule.getPhase(state)).toBe("result");
 
     const view = imposterModule.publicView(state, context(8_000, options)) as {

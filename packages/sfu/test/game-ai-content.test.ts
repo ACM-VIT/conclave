@@ -105,7 +105,6 @@ describe("game AI content", () => {
             option.type === "number" ? option.max : option.default,
           ]),
         );
-        // Long Shot plays its curated bank unless the host names a topic.
         if (game.id === "long-shot") gameConfig.topic = "Fixture topic";
         const count = Number(
           gameConfig.questions ?? gameConfig.rounds ?? gameConfig.prompts ?? 12,

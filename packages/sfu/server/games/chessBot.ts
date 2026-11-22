@@ -1,22 +1,6 @@
 import { Chess, type Move as ChessJsMove } from "chess.js";
 import type { GameRng } from "./types.js";
 
-/**
- * Small built-in chess engine for the "vs computer" mode.
- *
- * Runs synchronously inside the game tick, so every level is capped by BOTH a
- * node budget and a wall-clock deadline: the search aborts mid-iteration and
- * falls back to the best move from the last fully completed depth. Worst case
- * is a ~200ms event-loop pause once per bot move in one room, which is fine at
- * party scale.
- *
- * Strength comes from classic ingredients: material + piece-square tables
- * (Michniewski's "simplified evaluation function"), alpha-beta with MVV-LVA
- * move ordering, and a capture-only quiescence search on the hardest level.
- * Easy/medium add score noise and (for easy) occasional random moves so they
- * feel beatable rather than artificially hesitant.
- */
-
 export type BotLevel = "easy" | "medium" | "hard";
 
 export type BotMove = {
@@ -29,18 +13,11 @@ type LevelProfile = {
   depth: number;
   maxNodes: number;
   maxMs: number;
-  /** Uniform score noise (centipawns) applied per root move before picking. */
   noise: number;
-  /** Probability of ignoring the search and playing a random legal move. */
   randomMoveChance: number;
   quiescence: boolean;
 };
 
-/**
- * Budgets bound the synchronous pause per bot move. Media is not affected
- * (mediasoup routes RTP in separate worker processes); only signaling shares
- * this event loop, so ~400ms worst case on hard is acceptable.
- */
 const LEVELS: Record<BotLevel, LevelProfile> = {
   easy: { depth: 1, maxNodes: 1_500, maxMs: 60, noise: 90, randomMoveChance: 0.18, quiescence: false },
   medium: { depth: 2, maxNodes: 8_000, maxMs: 160, noise: 25, randomMoveChance: 0, quiescence: false },
@@ -128,21 +105,12 @@ const checkBudget = (budget: SearchBudget): void => {
   if ((budget.nodes & 63) === 0 && Date.now() > budget.deadline) throw new SearchAbort();
 };
 
-/** Manhattan distance from the nearest of the four centre squares. */
 const centreDistance = (rank: number, file: number): number => {
   const dr = rank <= 3 ? 3 - rank : rank - 4;
   const df = file <= 3 ? 3 - file : file - 4;
   return dr + df;
 };
 
-/**
- * Static evaluation from White's perspective, in centipawns.
- *
- * Material + piece-square tables, plus a "mop-up" term once one side has a
- * bare king against a winning material edge: reward pushing the losing king
- * to the edge and marching the winning king in. Without it the search has no
- * gradient in trivially won endgames (K+R vs K) and shuffles to a draw.
- */
 const evaluate = (game: Chess): number => {
   let score = 0;
   let whiteMaterial = 0;
@@ -183,7 +151,6 @@ const evaluate = (game: Chess): number => {
   return score;
 };
 
-/** Score for the side to move (negamax convention). */
 const evaluateForTurn = (game: Chess): number =>
   game.turn() === "w" ? evaluate(game) : -evaluate(game);
 
@@ -256,7 +223,6 @@ const negamax = (
 
 type ScoredMove = { move: ChessJsMove; score: number };
 
-/** Search all root moves at a fixed depth. Throws SearchAbort on budget end. */
 const searchRoot = (
   game: Chess,
   depth: number,
@@ -281,18 +247,8 @@ const toBotMove = (move: ChessJsMove): BotMove => ({
   promotion: move.promotion as BotMove["promotion"],
 });
 
-/** Position identity for repetition tracking: fen without the move counters. */
 const positionKey = (fen: string): string => fen.split(" ").slice(0, 4).join(" ");
 
-/**
- * Pick the bot's move for the given position. Always returns a legal move
- * (or null when the position has none, i.e. the game is already over).
- *
- * `recentFens` is the game's position history. The search itself is built
- * from a bare fen and cannot see threefold repetition, so when the bot is
- * clearly winning, root moves that revisit an earlier position are penalized
- * - otherwise it happily shuffles a won endgame into a draw.
- */
 export const pickBotMove = (
   fen: string,
   level: BotLevel,
@@ -309,8 +265,6 @@ export const pickBotMove = (
     return toBotMove(rng.pick(legal));
   }
 
-  // Read before searching: an aborted search unwinds without undoing the
-  // moves currently on `game`'s stack, so `game` must not be used after it.
   const winningNow = evaluateForTurn(game) >= 300;
 
   const budget: SearchBudget = {
@@ -319,16 +273,11 @@ export const pickBotMove = (
     deadline: Date.now() + profile.maxMs,
   };
 
-  // Low-material endgames have a tiny branching factor, and shallow search
-  // cannot execute a mating plan (K+R vs K needs ~6 plies of foresight).
-  // Extend the depth cap there; the node/time budget still bounds the work.
   const pieceCount = (fen.split(" ")[0].match(/[a-zA-Z]/g) ?? []).length;
   const extraDepth =
     level === "easy" ? 0 : pieceCount <= 6 ? 5 : pieceCount <= 10 ? 2 : 0;
   const depthCap = profile.depth + extraDepth;
 
-  // Iterative deepening: keep the last fully completed depth's scores so a
-  // mid-iteration abort still leaves a sensibly ranked move list.
   let completed: ScoredMove[] | null = null;
   for (let depth = 1; depth <= depthCap; depth += 1) {
     try {
