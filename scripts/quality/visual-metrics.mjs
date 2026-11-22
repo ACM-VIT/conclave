@@ -6,11 +6,6 @@ const DEFAULT_MS_SSIM_WEIGHTS = [
   0.1333,
 ];
 
-/**
- * Pure visual-metric implementation shared by the injected browser harness
- * and direct Node canary tests. Keep every dependency inside this factory so
- * its source can be serialized into Page.addScriptToEvaluateOnNewDocument.
- */
 export function createVisualMetricToolkit({ maskFactory = null } = {}) {
   const clamp = (value, minimum, maximum) =>
     Math.min(maximum, Math.max(minimum, value));
@@ -50,8 +45,6 @@ export function createVisualMetricToolkit({ maskFactory = null } = {}) {
       const red = imageData.data[offset];
       const green = imageData.data[offset + 1];
       const blue = imageData.data[offset + 2];
-      // BT.709 full-range YCbCr. Keeping chroma independent from luma makes
-      // equal-luminance hue damage visible to the quality gate.
       cb[index] = 128 - 0.114572 * red - 0.385428 * green + 0.5 * blue;
       cr[index] = 128 + 0.5 * red - 0.454153 * green - 0.045847 * blue;
     }

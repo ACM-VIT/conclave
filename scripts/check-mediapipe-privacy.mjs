@@ -31,10 +31,6 @@ const server = createServer((request, response) => {
   if (bundles.includes(bundle)) {
     let source = readFileSync(resolve(sdkRoot, bundle), "utf8");
     if (url.searchParams.has("control")) {
-      // Restore upstream initialization only for the negative control. All
-      // reporting requests are intercepted below before they leave Chrome.
-      // Minified names are from @mediapipe/tasks-vision 1.2.3; update them
-      // with the patch when MediaPipe is upgraded.
       const logger = bundle.endsWith(".js") ? "Oh" : "Nh";
       const restored = source.replace(
         disabledLogger,
@@ -68,8 +64,6 @@ if (!isMainThread) {
   await new Promise((done) => server.listen(0, "127.0.0.1", done));
   parentPort.postMessage(server.address().port);
 } else {
-  // Browser authority checks can block the driving thread. Keep HTTP responses
-  // on a separate event loop so navigation never waits on the driver itself.
   const serverWorker = new Worker(new URL(import.meta.url));
   const port = await new Promise((done, reject) => {
     serverWorker.once("message", done);

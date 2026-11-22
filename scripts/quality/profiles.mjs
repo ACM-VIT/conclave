@@ -6,13 +6,8 @@ export const VIDEO_QUALITY_PROFILES = Object.freeze({
     devicePixelRatio: 2,
     targetVideoBitrateBps: 1_800_000,
     minimumDecodedFps: 26,
-    // Hybrid-photo v5 exploratory VP9 runs measured 89.10–89.80. The floor
-    // retains 0.60 points beneath that observed band while the final contract
-    // requires five independent repetitions and rejects harness-invalid runs.
     minimumVisualScore: 88.5,
     minimumVisualScoreByCodecScenario: Object.freeze({
-      // Stable VP8 compatibility runs clustered at 88.82–88.89; a frozen,
-      // phase-incomplete 90.74 outlier is intentionally not used as the floor.
       "native-compat": 88,
     }),
     minimumFixturePhaseCoverage: 0.95,
@@ -23,18 +18,12 @@ export const VIDEO_QUALITY_PROFILES = Object.freeze({
     maximumReceiverPacketLossRatio: 0.01,
     maximumReceiverVideoBitrateBps: 2_100_000,
     maximumJitterBufferDelayMsPerFrame: 70,
-    // Conservative temporary end-to-end guards. Recalibrate downward from at
-    // least five valid schema-matched rooms; never infer these from jitter-
-    // buffer delay because capture/encode/decode/render queues are additional.
     maximumCaptureToDisplayP95Ms: 250,
     maximumCaptureToDisplayMs: 500,
     minimumDecodedHeight: 640,
     maximumNavigationToTargetMs: 7_000,
     maximumFirstDecodeToTargetMs: 4_000,
     maximumConsumerGenerationResetInterruptionMs: 250,
-    // Provisional hard ceilings for exact 500 ms codec deltas. These are
-    // intentionally independent of the full-window average so one expensive
-    // encode/decode interval cannot hide inside an otherwise healthy room.
     maximumEncodeMeanMsPerFrame: 20,
     maximumEncodeP95MsPerFrame: 35,
     maximumEncodeMsPerFrame: 75,

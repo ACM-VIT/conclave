@@ -91,12 +91,6 @@ export function parseCodecScenario(value) {
   return normalized;
 }
 
-/**
- * Build a pre-document capability override for the active Skip/native contract.
- * It only removes VP9 from video RTP capabilities. No media capture or output
- * API is touched, so the runner's independent synthetic-silence guarantees stay
- * in force.
- */
 export function buildCodecCapabilityOverrideScript(scenario) {
   const normalized = parseCodecScenario(scenario);
   if (normalized !== "native-compat") return "";
@@ -197,10 +191,6 @@ export function buildCodecCapabilityOverrideScript(scenario) {
   })();`;
 }
 
-/**
- * Assess negotiated media from receiver stats, publisher RTP stats, and the
- * publisher's live RTCRtpSender parameters. Missing evidence is a failure.
- */
 export function assessCodecNegotiation({
   scenario,
   receiverRtc,

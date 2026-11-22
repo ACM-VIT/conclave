@@ -1,9 +1,4 @@
 {
-  "eslint.config.mjs": {
-    "conclave/no-comments": {
-      "count": 15
-    }
-  },
   "packages/meeting-core/src/grid-layout.ts": {
     "conclave/no-comments": {
       "count": 53
@@ -217,101 +212,6 @@
   "packages/shared-browser/src/server.ts": {
     "conclave/no-comments": {
       "count": 4
-    }
-  },
-  "scripts/check-mediapipe-privacy.mjs": {
-    "conclave/no-comments": {
-      "count": 6
-    }
-  },
-  "scripts/cloudflare-manifests.test.mjs": {
-    "conclave/no-comments": {
-      "count": 3
-    }
-  },
-  "scripts/gen-native-emoji-shortcodes.mjs": {
-    "conclave/no-comments": {
-      "count": 1
-    }
-  },
-  "scripts/quality/browser-fixture.mjs": {
-    "conclave/no-comments": {
-      "count": 47
-    }
-  },
-  "scripts/quality/codec-negotiation.mjs": {
-    "conclave/no-comments": {
-      "count": 2
-    }
-  },
-  "scripts/quality/consumer-generation-reset.mjs": {
-    "conclave/no-comments": {
-      "count": 1
-    }
-  },
-  "scripts/quality/dynamic-network-runner.mjs": {
-    "conclave/no-comments": {
-      "count": 12
-    }
-  },
-  "scripts/quality/dynamic-network-transition.mjs": {
-    "conclave/no-comments": {
-      "count": 27
-    }
-  },
-  "scripts/quality/dynamic-network-transition.test.mjs": {
-    "conclave/no-comments": {
-      "count": 5
-    }
-  },
-  "scripts/quality/epoch-aligned-observer.mjs": {
-    "conclave/no-comments": {
-      "count": 2
-    }
-  },
-  "scripts/quality/media-latency.mjs": {
-    "conclave/no-comments": {
-      "count": 6
-    }
-  },
-  "scripts/quality/process-performance.mjs": {
-    "conclave/no-comments": {
-      "count": 4
-    }
-  },
-  "scripts/quality/profiles.mjs": {
-    "conclave/no-comments": {
-      "count": 11
-    }
-  },
-  "scripts/quality/publisher-codec-observer.mjs": {
-    "conclave/no-comments": {
-      "count": 4
-    }
-  },
-  "scripts/quality/rtc-summary.mjs": {
-    "conclave/no-comments": {
-      "count": 4
-    }
-  },
-  "scripts/quality/run-headless-video-quality.mjs": {
-    "conclave/no-comments": {
-      "count": 12
-    }
-  },
-  "scripts/quality/scoring.mjs": {
-    "conclave/no-comments": {
-      "count": 22
-    }
-  },
-  "scripts/quality/visual-metrics.mjs": {
-    "conclave/no-comments": {
-      "count": 3
-    }
-  },
-  "scripts/quality/visual-metrics.test.mjs": {
-    "conclave/no-comments": {
-      "count": 1
     }
   }
 }

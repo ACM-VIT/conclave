@@ -87,10 +87,6 @@ export const summarizeJitterBufferDelayObservations = (observations) => {
         String(left[field]) === String(right[field]),
     );
 
-  // Track cadence between observations that can independently serve as
-  // latency evidence. Keeping this separate from delta calculation makes a
-  // missing middle counter visible as one larger observation gap instead of
-  // silently reporting the nominal timer cadence on either side of it.
   for (const observation of observations) {
     const sampledAtMs = finite(observation?.sampledAtMs);
     const hasLatencyEvidence =
@@ -260,9 +256,6 @@ export const scoreVisualMetrics = ({
   chromaSsim = null,
   chromaError = null,
 }) => {
-  // These high-end bounds intentionally retain ranking headroom. The previous
-  // .96 / 40 dB ceilings made visibly different VP8 and VP9 output both score
-  // 100 after the atomic-frame sampler removed a one-frame comparison race.
   const ssimScore = linearScore(ssim, 0.75, 0.999);
   const psnrScore = linearScore(psnrDb, 20, 55);
   const edgeScore = linearScore(edgeRetention, 0.5, 0.999);
@@ -416,8 +409,6 @@ const summarizeVisual = (samples) => {
       tailScore: percentile(scores, 0.1),
     };
   });
-  // Weight the three camera scenes equally. A callback stall can otherwise
-  // under-sample the hardest scene and make the same damaged run look better.
   const populatedSceneScores = sceneScoreDetails.filter(
     (scene) => scene.sampleCount > 0,
   );
@@ -491,9 +482,6 @@ const summarizeMotion = (cadence, rtc, durationMs, targetFps) => {
       : finite(rtc?.framesDecodedDelta) !== null
         ? rtc.framesDecodedDelta / durationSeconds
         : null;
-  // rVFC's presentedFrames counter includes compositor frames whose callbacks
-  // the JS sampler missed while calculating a visual sample. Prefer it over
-  // callback count and decoder counters when it is available.
   const decodedFps = presentedFps ?? rtcDecodedFps ?? callbackFps;
   const compositorFreezeDurationMs = Math.max(
     0,
@@ -503,10 +491,6 @@ const summarizeMotion = (cadence, rtc, durationMs, targetFps) => {
     0,
     finite(rtc?.totalFreezesDurationMs) ?? 0,
   );
-  // rVFC observes what the compositor presented, while inbound-rtp's
-  // totalFreezesDuration is maintained by the decoder. Either can catch a
-  // freeze that the other misses, so use the larger duration instead of
-  // allowing one observer to erase corroborating evidence from the other.
   const freezeDurationMs = Math.max(
     compositorFreezeDurationMs,
     rtcFreezeDurationMs,
@@ -580,8 +564,6 @@ const summarizeEfficiency = (visual, motion, rtc, profile) => {
     bitrateBps === null || bitrateBps <= 0
       ? null
       : deliveredQuality / (bitrateBps / 1_000_000);
-  // Leave room to rank high-quality encoders instead of treating every local
-  // run above the old 0.48 threshold as equally efficient.
   const qualityDensityTarget = 0.62;
   const densityScore = linearScore(qualityDensity, 0.12, qualityDensityTarget);
   const score = densityScore * 0.6 + budgetScore * 0.4;
@@ -670,10 +652,6 @@ const summarizeReliability = (input, motion, profile) => {
     worstLatencyMs > latencyBudgetMs
       ? (worstLatencyMs - latencyBudgetMs) / latencyBudgetMs
       : 0;
-  // Crossing an explicit product gate must be reflected in the ranked score,
-  // not only in pass/fail metadata. The fixed five-point penalty makes even a
-  // narrow threshold miss visible after score rounding; severe misses remain
-  // bounded so packet loss and freezes still retain independent headroom.
   const latencyScorePenalty =
     latencyBudgetExcessRatio > 0
       ? Math.min(35, 5 + latencyBudgetExcessRatio * 55)
