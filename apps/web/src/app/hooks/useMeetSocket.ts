@@ -8743,6 +8743,13 @@ export function useMeetSocket({
               reject(toError(err));
               return;
             }
+            // Adopting the identity the token names is the expected way in:
+            // the join starts over from the render that knows it, and only a
+            // failure of that join is an error.
+            if (err instanceof JoinIdentityChangedError) {
+              reject(err);
+              return;
+            }
             console.error("Failed to get join info:", err);
             const reconnectFailure = describeReconnectFailure(err);
             const isRecoverable = isRecoverableReconnectFailure(err);

@@ -109,6 +109,43 @@ describe("the identity a socket is opened as", () => {
   });
 });
 
+describe("a join that adopts the identity its token names", () => {
+  it("shows no connection error and logs none, and only a failed retry is an error (Astra)", async () => {
+    const adoptJoinIdentity = vi.fn<(token: string, roomId: string) => boolean>(() => true);
+    const setMeetError = vi.fn();
+    const setConnectionState = vi.fn();
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    let fetches = 0;
+    const h = createHarness({
+      adoptJoinIdentity,
+      setMeetError,
+      setConnectionState,
+      getJoinInfo: async (roomId: string): Promise<JoinInfo> => {
+        fetches += 1;
+        if (fetches === 2) throw new Error("join route 503");
+        return { token: tokenFor(roomId), sfuUrl: "http://localhost:3031" };
+      },
+    });
+    const connectionFailed = expect.objectContaining({ code: "CONNECTION_FAILED" }) as unknown;
+
+    await expect(h.api.connectSocket("room-a")).rejects.toThrow("another identity");
+
+    expect(setMeetError).not.toHaveBeenCalledWith(connectionFailed);
+    expect(setConnectionState).not.toHaveBeenCalledWith("error");
+    expect(consoleError).not.toHaveBeenCalled();
+
+    adoptJoinIdentity.mockReturnValue(false);
+    await h.connect("room-a", 1);
+    expect(setMeetError).not.toHaveBeenCalledWith(connectionFailed);
+
+    h.socket.connected = false;
+    await expect(h.api.connectSocket("room-b")).rejects.toThrow("join route 503");
+    expect(setMeetError).toHaveBeenCalledWith(connectionFailed);
+    expect(setConnectionState).toHaveBeenCalledWith("error");
+    consoleError.mockRestore();
+  });
+});
+
 describe("a socket that is still open after a join failed", () => {
   it("is reused for the same room", async () => {
     const h = createHarness({ adoptJoinIdentity: () => false });
