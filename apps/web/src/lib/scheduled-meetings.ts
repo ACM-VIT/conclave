@@ -3,6 +3,7 @@ import {
   type SfuAuthenticatedUser,
 } from "@/lib/sfu-user-auth";
 import { resolveSfuSecret, resolveSfuUrl } from "@/lib/sfu-admin-auth";
+import { resolveSfuUrls } from "@/lib/sfu-url";
 import { readResponseError } from "@/app/lib/utils";
 import {
   canonicalizeSfuClientId,
@@ -42,13 +43,19 @@ export type ScheduledMeetingLookup =
   // The SFU could not say. The code may well be a real meeting.
   | { kind: "unknown" };
 
+// The link page waits for this lookup before it renders, so all of it shares
+// one short deadline. An SFU that has not answered by then counts as failed.
+const LOOKUP_DEADLINE_MS = 2500;
+
 // `null` is the SFU saying no meeting is scheduled at this code. A failed
 // lookup throws, so it is never read as that answer.
 const fetchPublicScheduledMeeting = async (
+  sfuUrl: string,
   clientId: string,
   roomCode: string,
+  signal: AbortSignal,
 ): Promise<PublicScheduledMeeting | null> => {
-  const base = resolveScheduledMeetingsBase();
+  const base = `${sfuUrl.replace(/\/$/, "")}/scheduled-meetings`;
   const url = `${base}/public/by-room/${encodeURIComponent(roomCode)}?clientId=${encodeURIComponent(clientId)}`;
   const response = await fetch(url, {
     method: "GET",
@@ -57,6 +64,7 @@ const fetchPublicScheduledMeeting = async (
       accept: "application/json",
     },
     cache: "no-store",
+    signal,
   });
   if (response.status === 404) return null;
   if (!response.ok) {
@@ -68,19 +76,34 @@ const fetchPublicScheduledMeeting = async (
   return data?.scheduledMeeting ?? null;
 };
 
+// Asks every SFU, for every client the code could belong to, at once. The
+// code is unscheduled only when all of them said so.
 export const lookupScheduledMeetingForCode = async (
   roomCode: string,
   preferredClientId?: string,
 ): Promise<ScheduledMeetingLookup> => {
-  let failed = false;
-  for (const clientId of resolveSfuClientIdCandidates(preferredClientId)) {
-    try {
-      const meeting = await fetchPublicScheduledMeeting(clientId, roomCode);
-      if (meeting) return { kind: "scheduled", clientId, meeting };
-    } catch {
-      failed = true;
+  const deadline = AbortSignal.timeout(LOOKUP_DEADLINE_MS);
+  const sfuUrls = resolveSfuUrls();
+  const answers = await Promise.all(
+    resolveSfuClientIdCandidates(preferredClientId).map(async (clientId) => ({
+      clientId,
+      results: await Promise.allSettled(
+        sfuUrls.map((sfuUrl) =>
+          fetchPublicScheduledMeeting(sfuUrl, clientId, roomCode, deadline),
+        ),
+      ),
+    })),
+  );
+  for (const { clientId, results } of answers) {
+    for (const result of results) {
+      if (result.status === "fulfilled" && result.value) {
+        return { kind: "scheduled", clientId, meeting: result.value };
+      }
     }
   }
+  const failed = answers.some(({ results }) =>
+    results.some((result) => result.status === "rejected"),
+  );
   return failed ? { kind: "unknown" } : { kind: "unscheduled" };
 };
 
