@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ROOM_UNAVAILABLE_RETRY_WINDOW_MS,
+  canReuseSocketAfterFailure,
   classifyReconnectFailure,
   planRoomUnavailableRetry,
   resolveInFlightReconnectRequest,
@@ -58,9 +59,14 @@ describe("reconnect failures", () => {
     "No room found.",
     "Shared room registry unavailable during room claim",
     "Shared room registry unavailable during confirmed lease expiry for conclave:room",
-    "Meeting server is draining. Try again shortly.",
   ])("waits for the room when the server says %s", (message) => {
     expect(classify(message)).toBe("room-unavailable");
+  });
+
+  it("tells a draining server apart from a missing room", () => {
+    expect(classify("Meeting server is draining. Try again shortly.")).toBe(
+      "server-draining",
+    );
   });
 
   it.each([
@@ -114,4 +120,36 @@ describe("waiting for a room to come back", () => {
     });
     expect(plan(ROOM_UNAVAILABLE_RETRY_WINDOW_MS, 12)).toEqual({ retry: false });
   });
+});
+
+describe("the socket a failed reconnect attempt leaves open", () => {
+  it("is kept while a room the join route sent us to comes back", () => {
+    expect(
+      canReuseSocketAfterFailure({
+        failureKind: "room-unavailable",
+        usedHeldJoinInfo: false,
+      }),
+    ).toBe(true);
+  });
+
+  it.each(["room-unavailable", "final"] as const)(
+    "is replaced through the join route after a %s refusal of the held answer",
+    (failureKind) => {
+      expect(
+        canReuseSocketAfterFailure({ failureKind, usedHeldJoinInfo: true }),
+      ).toBe(false);
+    },
+  );
+
+  it.each([true, false])(
+    "is replaced when the server is draining (held answer: %s)",
+    (usedHeldJoinInfo) => {
+      expect(
+        canReuseSocketAfterFailure({
+          failureKind: "server-draining",
+          usedHeldJoinInfo,
+        }),
+      ).toBe(false);
+    },
+  );
 });

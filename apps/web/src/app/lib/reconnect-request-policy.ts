@@ -45,6 +45,8 @@ export type ReconnectFailureKind =
    * outage clears up on its own, so this is worth waiting out for a while.
    */
   | "room-unavailable"
+  /** The server answered, but it is draining and will not take the room. */
+  | "server-draining"
   | "final";
 
 export const ROOM_UNAVAILABLE_RETRY_WINDOW_MS = 60_000;
@@ -63,11 +65,8 @@ export const classifyReconnectFailure = ({
   }
   const text = message.trim();
   if (!text) return "transient";
-  if (
-    /no room found|shared room registry unavailable|server is draining/i.test(
-      text,
-    )
-  ) {
+  if (/server is draining/i.test(text)) return "server-draining";
+  if (/no room found|shared room registry unavailable/i.test(text)) {
     return "room-unavailable";
   }
   return /timeout|xhr poll|websocket|transport|socket|network|fetch|load failed|connection/i.test(
@@ -76,6 +75,20 @@ export const classifyReconnectFailure = ({
     ? "transient"
     : "final";
 };
+
+/**
+ * Whether the next attempt can reuse the socket a failed one left open. A
+ * refusal of the held answer may not hold for the join route's answer (the
+ * room moved, or the user was made host), and a draining server never takes
+ * the room, so both make the next attempt ask the join route on a new socket.
+ */
+export const canReuseSocketAfterFailure = ({
+  failureKind,
+  usedHeldJoinInfo,
+}: {
+  failureKind: ReconnectFailureKind;
+  usedHeldJoinInfo: boolean;
+}): boolean => !usedHeldJoinInfo && failureKind !== "server-draining";
 
 export type RoomUnavailableRetryPlan =
   | { retry: true; delayMs: number }

@@ -21,6 +21,7 @@ import {
 } from "../lib/constants";
 import { emitWithAckTimeout } from "../lib/socket-ack";
 import {
+  canReuseSocketAfterFailure,
   classifyReconnectFailure,
   planRoomUnavailableRetry,
   resolveInFlightReconnectRequest,
@@ -9095,6 +9096,7 @@ export function useMeetSocket({
     let roomUnavailableRetries = 0;
     let nextDelayOverrideMs: number | null = null;
     let hasTriedHeldJoinInfo = false;
+    let mayReuseSocket = true;
     reconnectInFlightRef.current = true;
     reconnectAttemptsRef.current = resolveReconnectStartAttempts(
       reconnectAttemptsRef.current,
@@ -9193,7 +9195,9 @@ export function useMeetSocket({
               ),
             );
           }
-          const canReuseSocket = socketRef.current?.connected === true;
+          const canReuseSocket =
+            mayReuseSocket && socketRef.current?.connected === true;
+          mayReuseSocket = true;
           cleanupRoomResources({
             resetRoomId: false,
             preserveMeetingState: true,
@@ -9292,7 +9296,15 @@ export function useMeetSocket({
           const reconnectFailure = describeReconnectFailure(err);
           const failureKind = getReconnectFailureKind(err);
           let isRecoverable = failureKind !== "final";
-          if (lastJoinInfoSourceRef.current === "held") {
+          const usedHeldJoinInfo = lastJoinInfoSourceRef.current === "held";
+          mayReuseSocket = canReuseSocketAfterFailure({
+            failureKind,
+            usedHeldJoinInfo,
+          });
+          if (failureKind === "server-draining") {
+            heldJoinInfoRef.current = null;
+          }
+          if (usedHeldJoinInfo) {
             // The SFU refused or could not use the held token, which says
             // nothing about a new one. Ask the join route before giving up.
             lastJoinInfoSourceRef.current = "fresh";
@@ -9303,7 +9315,10 @@ export function useMeetSocket({
               reconnectAttemptsRef.current = attempt - 1;
             }
           }
-          if (failureKind === "room-unavailable") {
+          if (
+            failureKind === "room-unavailable" ||
+            failureKind === "server-draining"
+          ) {
             roomUnavailableSince ??= Date.now();
             const retryPlan = planRoomUnavailableRetry({
               unavailableSince: roomUnavailableSince,
