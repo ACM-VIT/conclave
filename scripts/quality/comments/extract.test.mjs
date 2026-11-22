@@ -109,7 +109,7 @@ test("a license header is allowed only at the very top of the file", () => {
     extractComments(source, "a.ts").map((comment) => [comment.line, comment.allowed]),
     [
       [1, "license-header"],
-      [2, "license-header"],
+      [2, null],
       [3, null],
       [5, null],
       [7, null],
@@ -213,25 +213,18 @@ test("Skip transpiler directives are allowed in Swift and nowhere else", () => {
   );
 });
 
-test("an attribution header may follow a directive prologue", () => {
+test("a license notice may follow a directive prologue, an attribution is a comment", () => {
   const source = [
     '"use client";',
     "",
+    "// SPDX-License-Identifier: MIT",
     '// Ported (and trimmed) from AI SDK Elements (elements.ai-sdk.dev) "PromptInput".',
     "",
     "import { a } from \"a\";",
-    "// Ported from somewhere, but not at the top.",
   ].join("\n");
-  assert.deepEqual(
-    extractComments(source, "prompt-input.tsx").map((comment) => comment.allowed),
-    ["license-header", null],
-  );
-  const apache = [
-    "/* Licensed under the Apache License, Version 2.0: Material Symbols by Google.",
-    " * Complete license text: LICENSE */",
-    "package a",
-  ].join("\n");
-  assert.deepEqual(extractComments(apache, "Icons.kt").map((comment) => comment.allowed), ["license-header"]);
+  assert.deepEqual(extractComments(source, "prompt-input.tsx").map((comment) => comment.allowed), ["license-header", null]);
+  const apache = ["/* Licensed under the Apache License, Version 2.0: Material Symbols by Google. */", "package a"].join("\n");
+  assert.deepEqual(extractComments(apache, "Icons.kt").map((comment) => comment.allowed), [null]);
   assert.deepEqual(
     extractComments('const a = "use client";\n// Copyright 2024 Example\n', "a.ts").map((comment) => comment.allowed),
     [null],
@@ -350,8 +343,11 @@ test("a license header needs a real marker and covers only the top block", () =>
   assert.deepEqual(extractComments(todo, "a.ts").map((c) => c.allowed), [null, null]);
   const split = ["// Copyright (c) 2024 Example Inc.", "", "// Narrative about the module.", "export {};"].join("\n");
   assert.deepEqual(extractComments(split, "b.ts").map((c) => c.allowed), ["license-header", null]);
-  for (const marker of ["// SPDX-License-Identifier: MIT", "// © 2024 Example", "// Licensed under the Apache License, Version 2.0"]) {
-    assert.deepEqual(extractComments(`${marker}\nexport {};\n`, "c.ts").map((c) => c.allowed), ["license-header"], marker);
+  for (const notice of ["// SPDX-License-Identifier: MIT", "// SPDX-License-Identifier: Apache-2.0 OR MIT", "// Copyright 2024-2026 Example Inc.", "// Copyright (c) 2026 ACM-VIT"]) {
+    assert.deepEqual(extractComments(`${notice}\nexport {};\n`, "c.ts").map((c) => c.allowed), ["license-header"], notice);
+  }
+  for (const prose of ["// © 2024 Example", "// Licensed under the Apache License, Version 2.0", "// MIT License", "// SPDX-License-Identifier: MIT, see LICENSE"]) {
+    assert.deepEqual(extractComments(`${prose}\nexport {};\n`, "d.ts").map((c) => c.allowed), [null], prose);
   }
 });
 
@@ -398,7 +394,9 @@ test("a license block counts only comments that are notices themselves", () => {
   const spdx = ["// SPDX-License-Identifier: MIT", "/* TODO clean this module up */", "export {};"].join("\n");
   assert.deepEqual(extractComments(spdx, "b.ts").map((c) => c.allowed), ["license-header", null]);
   const facehash = ["/**", " * Copyright (c) Cossistant team: face geometry from facehash 0.1.0.", " * MIT License", " */", "export {};"].join("\n");
-  assert.deepEqual(extractComments(facehash, "c.ts").map((c) => c.allowed), ["license-header"]);
+  assert.deepEqual(extractComments(facehash, "c.ts").map((c) => c.allowed), [null]);
+  const block = ["/*", " * SPDX-License-Identifier: MIT", " * Copyright 2026 Example Inc.", " */", "export {};"].join("\n");
+  assert.deepEqual(extractComments(block, "e.ts").map((c) => c.allowed), ["license-header"]);
 });
 
 test("inline config that enables the rule is not a bypass, escaped names are decoded", () => {
@@ -490,7 +488,10 @@ test("a license notice must start its comment", () => {
   assert.deepEqual(extractComments(source, "a.ts").map((c) => c.allowed), ["license-header", null]);
   const later = ["// Copyright 2026 Example Inc.", "// Notes on the Copyright (c) dialog", "export {};"].join("\n");
   assert.deepEqual(extractComments(later, "b.ts").map((c) => c.allowed), ["license-header", null]);
+  const dialog = ["// SPDX-License-Identifier: MIT", "// Copyright Dialog uses the same layout as Settings.", "export {};"].join("\n");
+  assert.deepEqual(extractComments(dialog, "c.ts").map((c) => c.allowed), ["license-header", null]);
 });
+
 test("a Swift raw string #\"\"\"# holds one quote and does not open a multiline string", () => {
   assert.deepEqual(texts('let a = #"""#\n// real\nlet b = ##"""##\n// two\n', "A.swift"), ["// real", "// two"]);
   assert.deepEqual(texts('let c = #"""\n  // inside\n  """#\n// three\n', "B.swift"), ["// three"]);
@@ -498,6 +499,16 @@ test("a Swift raw string #\"\"\"# holds one quote and does not open a multiline 
 
 test("an unquoted CSS url() is scanned to its closing paren however much whitespace it has", () => {
   assert.deepEqual(texts(`a { b: url(${" ".repeat(60)}img/*large*/x.png); }\n/* real */\n`, "a.css"), ["/* real */"]);
+});
+
+test("a # license notice in shell or Python is recognised", () => {
+  for (const [file, source] of [
+    ["a.sh", "# SPDX-License-Identifier: MIT\necho\n"],
+    ["b.sh", "#!/bin/sh\n# SPDX-License-Identifier: MIT\necho\n"],
+    ["a.py", "# SPDX-License-Identifier: MIT\nx = 1\n"],
+  ]) {
+    assert.equal(extractComments(source, file).at(-1).allowed, "license-header", file);
+  }
 });
 
 test("every tracked file's last comment is an end marker appended to it", () => {

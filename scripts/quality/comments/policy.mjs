@@ -33,26 +33,19 @@ export const isFirstPartySource = (file) =>
 export const vendoredIgnores = (packageDir) =>
   VENDORED_PREFIXES.filter((prefix) => prefix.startsWith(packageDir)).map((prefix) => prefix.slice(packageDir.length));
 
-const LICENSE_NOTICE_LINE = [
-  /^SPDX-(?:License-Identifier|FileCopyrightText):\s*\S/,
-  /^Copyright\s+(?:\(c\)|\(C\)|©|\d{4}|[A-Z])/,
-  /^(?:\(c\)|\(C\)|©)\s*\S/,
-  /^Licensed under the (?:Apache|MIT|BSD|GNU|Mozilla|ISC|Creative Commons)\b/,
-  /^Permission is hereby granted\b/,
-  /^(?:The )?(?:MIT|ISC|Apache|Mozilla Public|BSD(?: [0-4]-Clause)?) License\b/,
-  /^Ported (?:verbatim |\(and trimmed\) )?from \S/,
-];
+const SPDX_LINE = /^SPDX-License-Identifier: [A-Za-z0-9.+()-]+(?: (?:AND|OR|WITH) [A-Za-z0-9.+()-]+)*$/;
+const COPYRIGHT_LINE = /^Copyright (?:\(c\) |\(C\) |© )?\d{4}(?:\s*[-,]\s*\d{4})*,? \S.*$/;
 
 const commentContentLines = (text) =>
   text
-    .replace(/^\/\/+|^\/\*+|\*+\/$/g, "")
+    .replace(/^\/\/+|^\/\*+|^#+|\*+\/$/g, "")
     .split("\n")
     .map((line) => line.replace(/^\s*\*?\s?/, "").trim())
     .filter((line) => line !== "");
 
 export const isLicenseNotice = (text) => {
-  const [first] = commentContentLines(text);
-  return first !== undefined && LICENSE_NOTICE_LINE.some((pattern) => pattern.test(first));
+  const lines = commentContentLines(text);
+  return lines.length > 0 && lines.every((line) => SPDX_LINE.test(line) || COPYRIGHT_LINE.test(line));
 };
 
 const DIRECTIVE_PROLOGUE = /^\s*(?:(["'])use [a-z ]+\1;?\s*)*$/;
