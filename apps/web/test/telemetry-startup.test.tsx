@@ -295,6 +295,48 @@ describe("what each event carries", () => {
     }
   });
 
+  it("sends held reports at once when the page closes before the manifest arrives", async () => {
+    vi.stubEnv("NEXT_PUBLIC_CONCLAVE_CLIENT_VERSION", "0b2d3b480f4621392a4151d750c90965b7c8b76c");
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
+    const { telemetry } = await import("../src/app/lib/telemetry");
+    telemetry.captureException(new Error("first render"), { source: "react_error_boundary", boundary: "route" });
+    telemetry.capture("meet_join_attempt", { attempt: 1 });
+    await vi.waitFor(() => expect(posthog.init).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(posthog.captureException).not.toHaveBeenCalled();
+    expect(posthog.capture).not.toHaveBeenCalled();
+
+    window.dispatchEvent(new Event("pagehide"));
+
+    expect(posthog.captureException).toHaveBeenCalledTimes(1);
+    expect(posthog.capture).toHaveBeenCalledWith(
+      "meet_join_attempt",
+      { attempt: 1 },
+      { transport: "sendBeacon", send_instantly: true },
+    );
+    telemetry.capture("meet_join_success", { attempt: 1 });
+    expect(posthog.capture).toHaveBeenCalledTimes(2);
+  });
+
+  it("sends held reports at once when the tab is hidden", async () => {
+    vi.stubEnv("NEXT_PUBLIC_CONCLAVE_CLIENT_VERSION", "0b2d3b480f4621392a4151d750c90965b7c8b76c");
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
+    const { telemetry } = await import("../src/app/lib/telemetry");
+    telemetry.captureException(new Error("first render"), { source: "react_error_boundary", boundary: "route" });
+    await vi.waitFor(() => expect(posthog.init).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(posthog.captureException).not.toHaveBeenCalled();
+
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    try {
+      document.dispatchEvent(new Event("visibilitychange"));
+    } finally {
+      visibility.mockRestore();
+    }
+
+    expect(posthog.captureException).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps a chunk's path only when the build's manifest pairs its id with that file", async () => {
     vi.stubEnv("NEXT_PUBLIC_CONCLAVE_CLIENT_VERSION", "0b2d3b480f4621392a4151d750c90965b7c8b76c");
     const manifest = { "147fc2df-e663-5d76-aa13-f67e1e894071": "/_next/static/chunks/3u-6_1om1fv26.js" };

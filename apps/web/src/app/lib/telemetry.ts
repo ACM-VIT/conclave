@@ -32,7 +32,8 @@ export const telemetryEnabled =
 // on the first render. Capped so a failing load cannot grow it.
 const MAX_QUEUED = 50;
 
-type Delivery = (posthog: PostHog) => void;
+/** Sends one report; `closing` when the page is going away. */
+type Delivery = (posthog: PostHog, closing: boolean) => void;
 
 // posthog-js merges local storage, then session storage, into every event.
 // Storage keeps only the SDK's own ids; anything else, such as a value a
@@ -97,11 +98,33 @@ const emit = (payload: TelemetryProps | undefined, capture: () => void): void =>
 let posthog: PostHog | null = null;
 let queue: Delivery[] | null = null;
 
-const deliver = (client: PostHog, delivery: Delivery): void => {
+const deliver = (client: PostHog, delivery: Delivery, closing = false): void => {
   try {
-    delivery(client);
+    delivery(client, closing);
   } catch {
   }
+};
+
+// Reports held once PostHog has loaded, until the chunk manifest is in.
+let held: { client: PostHog; pending: Delivery[] } | null = null;
+
+/** Sends the held reports now; `closing` when the page is going away. */
+const releaseHeld = (closing: boolean): void => {
+  const current = held;
+  if (!current) return;
+  held = null;
+  queue = null;
+  posthog = current.client;
+  current.pending.forEach((delivery) => deliver(current.client, delivery, closing));
+};
+
+// The page can close, or be hidden and then dropped, while reports are held:
+// they go out at once, with whatever manifest has loaded (none leaves chunk
+// frames as [path]). These listen in the capture phase so they run before
+// posthog-js's own pagehide handler, which sends its queue by beacon.
+const onPageHide = (): void => releaseHeld(true);
+const onVisibilityChange = (): void => {
+  if (document.visibilityState === "hidden") releaseHeld(true);
 };
 
 const initPostHog = (client: PostHog, key: string): void => {
@@ -157,12 +180,16 @@ export function startTelemetry(): void {
   ])
     .then(async ([{ default: client }]) => {
       initPostHog(client, posthogKey);
+      held = { client, pending };
+      window.addEventListener("pagehide", onPageHide, { capture: true });
+      document.addEventListener("visibilitychange", onVisibilityChange, { capture: true });
       await manifestReady;
-      posthog = client;
-      pending.forEach((delivery) => deliver(client, delivery));
+      releaseHeld(false);
     })
     .catch(() => {})
     .finally(() => {
+      window.removeEventListener("pagehide", onPageHide, { capture: true });
+      document.removeEventListener("visibilitychange", onVisibilityChange, { capture: true });
       queue = null;
     });
 }
@@ -182,12 +209,12 @@ export const telemetry = {
     props?: TelemetryProps,
     options?: TelemetryCaptureOptions,
   ): void {
-    send((client) => {
+    send((client, closing) => {
       emit(props, () =>
         client.capture(
           event,
           props,
-          options?.immediate
+          options?.immediate || closing
             ? { transport: "sendBeacon", send_instantly: true }
             : undefined,
         ),
