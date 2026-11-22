@@ -63,6 +63,10 @@ configured="$(configured_database "$STATE_DIR")" ||
 # Every configured SFU must hold the fence or be one Docker reports stopped;
 # an SFU that answers but will not hold it stops the backup.
 FENCE_HOLD_MS="${BACKUP_FENCE_HOLD_MS:-20000}"
+# A copy must finish with this much of the hold left, so a deadline that
+# lapses while the copy wraps up never passes.
+FENCE_MARGIN_MS=2000
+fence_until=0
 owner="backup-$(od -An -tx1 -N12 /dev/urandom | tr -d ' \n')"
 fence_request() {
   curl -s --max-time 30 -w $'\n%{http_code}' -X "$1" -H "x-sfu-secret: ${SFU_SECRET:-}" \
@@ -75,14 +79,31 @@ release_fences() {
   done
   fenced=()
 }
-# A renewal succeeds only while this run's hold has never lapsed: an SFU that
-# restarted, or whose hold ran out, has no hold for this owner. The Docker
-# check runs again too, for an SFU that started meanwhile.
+# The earliest deadline among the held fences, in milliseconds.
+note_until() {
+  local until
+  until="$(json_field until <<< "$1")"
+  [[ "$until" =~ ^[0-9]+$ ]] || die "the SFU at ${2} answered the fence without a deadline"
+  (( fence_until == 0 || until < fence_until )) && fence_until="$until"
+  return 0
+}
+# Runs after each copy. The hold that covered it must still have
+# FENCE_MARGIN_MS left, and a renewal must succeed, which it does only while
+# this run's hold has never lapsed: an SFU that restarted, or whose hold ran
+# out, has no hold for this owner. The Docker check runs again too, for an
+# SFU that started meanwhile.
 renew_fences() {
-  local base
+  local base reply left
+  (( ${#fenced[@]} > 0 )) || return 0
+  left=$(( fence_until - $(now_ms) ))
+  (( left >= FENCE_MARGIN_MS )) ||
+    die "only ${left} ms of the write fence was left when the copy finished (at least ${FENCE_MARGIN_MS} ms needed); raise BACKUP_FENCE_HOLD_MS"
+  fence_until=0
   for base in "${fenced[@]}"; do
-    [[ "$(fence_request POST "$base" "{\"owner\": \"${owner}\", \"holdMs\": ${FENCE_HOLD_MS}, \"renew\": true}" | tail -n 1)" == 200 ]] ||
+    reply="$(fence_request POST "$base" "{\"owner\": \"${owner}\", \"holdMs\": ${FENCE_HOLD_MS}, \"renew\": true}")"
+    [[ "${reply##*$'\n'}" == 200 ]] ||
       die "the SFU at ${base} no longer holds this backup's write fence (it lapsed or the SFU restarted), so the copies may not be from one point in time; rerun the backup"
+    note_until "${reply%$'\n'*}" "$base"
   done
   writers_fenced "$STATE_DIR" "${held_ids[*]}" "${unanswered[@]}" || die "an SFU could write while the backup copies; nothing was archived"
 }
@@ -102,6 +123,7 @@ for health in ${CONCLAVE_SFU_HEALTH_URLS:-http://127.0.0.1:3031/health http://12
   fi
   fenced+=("$base")
   held_ids+=("$instance")
+  note_until "${reply%$'\n'*}" "$base"
 done
 writers_fenced "$STATE_DIR" "${held_ids[*]}" "${unanswered[@]}" || die "an SFU could write while the backup copies; nothing was archived"
 (( ${#fenced[@]} > 0 )) && log "Holding the write fence on ${#fenced[@]} SFU(s)"

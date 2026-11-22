@@ -22,8 +22,9 @@ from memory, and media and signalling never wait on it. The hold belongs to
 the backup's random owner token: only that token renews or releases it, and
 the SFU lifts it at its deadline, never later than 30 s after it was taken,
 if the backup dies. The backup renews between the SQLite and Redis copies and
-again after both, which fails once an SFU restarted or its hold lapsed, so
-such a night archives nothing.
+again after both, which fails once an SFU restarted or its hold lapsed, and
+each copy must finish with at least 2 s of the hold left, compared in
+milliseconds; such a night archives nothing.
 
 Silence is not proof that an SFU writes nothing. Every SFU in the list must
 hold the fence, or Docker must report the container on that URL's port

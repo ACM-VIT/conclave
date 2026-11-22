@@ -263,14 +263,20 @@ take_backup_lock() {
   flock -n 8 || die "another backup or restore is running on this host (${BACKUP_LOCAL_DIR}/.backup.lock)"
 }
 
-# Prints one field of a JSON object read from stdin, or nothing.
+# Prints one string or integer field of a JSON object read from stdin, or
+# nothing.
 json_field() {
   python3 -c 'import json, sys
 try:
     value = json.load(sys.stdin).get(sys.argv[1], "")
 except Exception:
     value = ""
-print(value if isinstance(value, str) else "")' "$1"
+print(value if isinstance(value, str) or (isinstance(value, int) and not isinstance(value, bool)) else "")' "$1"
+}
+
+# The time in milliseconds, the precision the SFU's fence deadlines use.
+now_ms() {
+  python3 -c 'import time; print(int(time.time() * 1000))'
 }
 
 # Prints "<container><TAB><state><TAB><SFU_PORT><TAB><SFU_INSTANCE_ID>" for

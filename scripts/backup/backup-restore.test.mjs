@@ -107,8 +107,8 @@ const setUp = async (root, extraConfig = []) => {
 // A stand-in SFU with the real fence's rules: a hold belongs to its owner
 // token, a renewal succeeds only while that owner holds it, and only that
 // owner releases it. forgetHold drops the hold right after granting it, as a
-// restart would.
-const fencedSfu = async ({ instanceId = "sfu-a", forgetHold = false, onHold, onRelease } = {}) => {
+// restart would. reportUntil overrides the deadline the SFU reports.
+const fencedSfu = async ({ instanceId = "sfu-a", forgetHold = false, reportUntil, onHold, onRelease } = {}) => {
   const requests = [];
   let holder = null;
   const server = createHttpServer(async (req, res) => {
@@ -120,15 +120,16 @@ const fencedSfu = async ({ instanceId = "sfu-a", forgetHold = false, onHold, onR
     requests.push({ method: req.method, ...body });
     const reply = (code, value) =>
       res.writeHead(code, { "content-type": "application/json" }).end(JSON.stringify({ ...value, instanceId }));
+    const until = () => (reportUntil ? reportUntil() : Date.now() + body.holdMs);
     if (req.method === "POST" && body.renew) {
-      return holder === body.owner ? reply(200, { held: true, until: Date.now() + body.holdMs }) : reply(409, { held: false });
+      return holder === body.owner ? reply(200, { held: true, until: until() }) : reply(409, { held: false });
     }
     if (req.method === "POST") {
       if (holder && holder !== body.owner) return reply(409, { held: false });
       holder = body.owner;
       await onHold?.();
       if (forgetHold) holder = null;
-      return reply(200, { held: true, until: Date.now() + body.holdMs });
+      return reply(200, { held: true, until: until() });
     }
     if (holder && holder !== body.owner) return reply(409, { released: false });
     const released = holder !== null;
@@ -965,6 +966,26 @@ test(
       assert.deepEqual(after.map((s) => [s.ino, s.ctimeMs, s.uid, s.gid]), before.map((s) => [s.ino, s.ctimeMs, s.uid, s.gid]));
       for (const file of redisFiles) assert.equal(await readFile(path.join(redisData, file), "utf8"), `redis ${file}`);
     } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "a copy that finishes with under 2 s of the hold left archives nothing",
+  { skip: missing.length > 0 && `needs ${missing.join(", ")} on PATH` },
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+    // A hold that runs out 1.5 s after it is granted.
+    const sfu = await fencedSfu({ reportUntil: () => Date.now() + 1_500 });
+    try {
+      const { state, local, setDocker, backup } = await setUp(root, [`CONCLAVE_SFU_HEALTH_URLS="${sfu.health}"`]);
+      withDatabase(state);
+      await setDocker([sfu.container(state)]);
+      await assert.rejects(backup("--local-only"), /only -?\d+ ms of the write fence was left when the copy finished \(at least 2000 ms needed\)/);
+      assert.deepEqual(await archives(local), []);
+    } finally {
+      await sfu.close();
       await rm(root, { recursive: true, force: true });
     }
   },
