@@ -9,10 +9,14 @@ final class DiagnosticsFileStore {
 
     let directoryPath: String
     let exportDirectoryPath: String
+    /// The clock retention is measured against when a payload is written; tests pin it.
+    let wallClock: () -> Double
 
-    init(directoryPath: String, exportDirectoryPath: String) {
+    init(directoryPath: String, exportDirectoryPath: String,
+         wallClock: @escaping () -> Double = { DiagnosticsClock.wallMillis() }) {
         self.directoryPath = directoryPath
         self.exportDirectoryPath = exportDirectoryPath
+        self.wallClock = wallClock
     }
 
     static func standard() -> DiagnosticsFileStore {
@@ -51,7 +55,7 @@ final class DiagnosticsFileStore {
         } catch {
             return false
         }
-        prune(nowMillis: DiagnosticsClock.wallMillis())
+        prune(nowMillis: wallClock())
         return true
     }
 

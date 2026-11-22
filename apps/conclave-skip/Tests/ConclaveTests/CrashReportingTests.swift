@@ -19,13 +19,17 @@ struct CrashReportingTests {
         }
     }
 
+    /// The store's clock, an hour after the fixed capture times below, so retention never depends on today's date.
+    static let storeNow = 1_795_000_000_000.0 + 3_600_000.0
+
     static let context = CrashReportContext(installId: "install-1", platform: "android", appVersion: "2.0.0 (64)",
                                             osVersion: "Android 16 (API 36)", deviceClass: "phone")
 
     private func temporaryStore() -> DiagnosticsFileStore {
         let base = FileManager.default.temporaryDirectory.appendingPathComponent("crash-" + UUID().uuidString, isDirectory: true)
         return DiagnosticsFileStore(directoryPath: base.appendingPathComponent("store").path,
-                                    exportDirectoryPath: base.appendingPathComponent("exports").path)
+                                    exportDirectoryPath: base.appendingPathComponent("exports").path,
+                                    wallClock: { Self.storeNow })
     }
 
     private func config(key: String = "phc_test", host: String = "https://eu.i.posthog.com", debug: Bool = false,
@@ -460,6 +464,19 @@ struct CrashReportingTests {
         #expect(frames.map { $0["function"] as? String } == ["[path]", "start", "start"])
         #expect(frames.map { $0["module"] as? String } == ["[path]", "conclave.Camera", "conclave.Camera"])
         #expect(frames[1]["filename"] as? String == "[path]" && frames[2]["filename"] as? String == "[path]")
+    }
+
+    @Test func theStoreMeasuresRetentionAgainstItsOwnClock() {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("crash-" + UUID().uuidString, isDirectory: true)
+        let eightDaysLater = 1_795_000_000_000.0 + 8.0 * 24.0 * 3_600_000.0
+        let later = DiagnosticsFileStore(directoryPath: base.appendingPathComponent("later").path,
+                                         exportDirectoryPath: base.appendingPathComponent("exports").path,
+                                         wallClock: { eightDaysLater })
+        #expect(later.writePayload(crashPayload()))
+        #expect(later.loadPayloads().isEmpty)
+        let store = temporaryStore()
+        #expect(store.writePayload(crashPayload()))
+        #expect(store.loadPayloads().count == 1)
     }
 
     @Test func theLedgerForgetsReportsRetentionDeleted() {

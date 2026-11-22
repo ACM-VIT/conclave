@@ -88,7 +88,7 @@ class ExitReasonCollectionBridgeTests {
         shadowOf(context.getSystemService(ActivityManager::class.java)).addApplicationExitInfo(info)
         val directory = Files.createTempDirectory("exit-reasons").toFile()
         val store = DiagnosticsFileStore(directoryPath = directory.resolve("store").path,
-            exportDirectoryPath = directory.resolve("exports").path)
+            exportDirectoryPath = directory.resolve("exports").path, wallClock = { 1_795_000_000_000.0 + 3_600_000.0 })
         NativePerformanceDiagnostics::class.java
             .getDeclaredMethod("collectExitReasons", Context::class.java, DiagnosticsFileStore::class.java)
             .apply { isAccessible = true }
