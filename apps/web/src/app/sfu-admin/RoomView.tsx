@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { color } from "@conclave/ui-tokens";
+import { meetingLinkFor } from "../lib/meeting-link";
 import { ChatSpectator } from "./ChatSpectator";
 import { ParticipantRow } from "./ParticipantRow";
 import { TranscriptSpectator } from "./TranscriptSpectator";
@@ -185,7 +186,7 @@ export function RoomView({
             className={btnSecondary}
             onClick={() => {
               void navigator.clipboard
-                ?.writeText(`${window.location.origin}/${encodeURIComponent(room.id)}`)
+                ?.writeText(meetingLinkFor(room.id, room.clientId))
                 .then(() => setCopied(true))
                 .catch(() => {});
             }}
