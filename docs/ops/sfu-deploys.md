@@ -3,31 +3,40 @@
 `scripts/deploy-sfu.sh` deploys the SFU instances on one host without cutting
 a call. It pulls, restarts itself if the pull changed the script (bash would
 otherwise keep running the old file), builds one image for the commit or
-reuses the one already built for it, then takes the instances one at a time,
+reuses the one already built for it, then takes the instances one at a time.
+The order puts first the instances that take no new meetings anyway (one
+whose container is down, then one already draining), then the serving ones,
 emptiest first. An instance whose `/status` cannot be read goes last, so an
 idle instance is always rebuilt before one that may carry calls. No instance
 is recreated while it has rooms unless you pass `--force-drain`:
 
-1. Mark the instance draining. New meetings go to the other instance; meetings
+1. Check that every other instance is serving: healthy and not draining. If
+   one is not, the deploy stops (exit 1) before this drain, because new
+   meetings would have nowhere to go. An instance that is down is deployed
+   first for that reason, and if its new container never gets healthy the
+   deploy stops with exit 4 before anything is drained.
+2. Mark the instance draining. New meetings go to the other instance; meetings
    already on this one continue.
-2. Wait until its rooms reach 0, up to `DRAIN_TIMEOUT_SECONDS` (3600), and
+3. Wait until its rooms reach 0, up to `DRAIN_TIMEOUT_SECONDS` (3600), and
    for at least `PLACEMENT_SETTLE_SECONDS` (25) after the drain. A placement
    reserved just before the drain can still open a room for up to 20 s, so 0
    rooms only counts once those have expired. An unreadable `/status` counts
    as unknown, not as empty. There is no force drain unless you pass
    `--force-drain`.
-3. Recreate it from the new image with `SFU_START_DRAINING=true`, so it boots
+4. Recreate it from the new image with `SFU_START_DRAINING=true`, so it boots
    out of rotation and no meeting can land on an unverified build.
-4. Run the canary: a real two-person call against that instance
+5. Run the canary: a real two-person call against that instance
    (`packages/sfu/scripts/canary-call.ts`, run from the new image). It takes
    its room through the secret-protected placement endpoint with
    `allowDraining`, the one placement a draining instance grants. Two clients
    join, publish Opus audio and must receive each other's RTP through the SFU,
    and the room must close when they leave.
-5. Canary passed: check that no other call reached the instance while it was
+6. Canary passed: check that no other call reached the instance while it was
    out of rotation, then recreate it once more from the same image with the
-   normal config, so it serves undrained and stays that way across restarts,
-   and move to the next one. If a call did reach it, the deploy waits for that
+   normal config, so it serves undrained and stays that way across restarts.
+   Its public URL must then reach it within `HEALTH_TIMEOUT_SECONDS` (120);
+   if not, the deploy stops (exit 1) before the next drain. If a call did
+   reach it, the deploy waits for that
    call like a drain, and at the deadline exits 3 with the instance still
    drained on the new image. Canary failed: recreate the instance from the
    image it ran before, stop, and exit 4. The instances not yet touched were
@@ -47,7 +56,7 @@ the container if it is hung, and rerun.
 | 0 | Every instance is on the new commit and passed its canary. | Nothing. |
 | 3 | A meeting outlasted the drain deadline. That instance was put back into service untouched, or, if the call reached it after its canary, left drained on the new image. | Rerun later. Instances already deployed are skipped. |
 | 4 | The canary failed. The instance is back on its previous image. | Read the canary lines in the log, fix forward, deploy again. |
-| 1 | Anything else (preflight, build, Docker). | Read the log. |
+| 1 | Another instance is not serving, a public URL does not reach its instance, or anything else (preflight, build, Docker). Nothing after the failing step was drained. | Read the log. |
 
 During an exit 3 or 4 the two instances can run different commits. That is the
 same mixed state every blue-green deploy passes through, and the SFU tolerates
@@ -73,6 +82,10 @@ deploy, because a normal deploy builds whatever `main` holds.
 Before that, revert and deploy.
 
 ## Running it on the VM
+
+Before the first deploy with this script, run `./scripts/deploy-sfu.sh
+--preflight-only`. It checks the same public routes the deploy now requires,
+without changing anything.
 
 Run it as before: as `azureuser` in the repo, under `nohup` with a log file.
 The log ends with `SFU deploy complete`, `Deploy paused` (exit 3) or

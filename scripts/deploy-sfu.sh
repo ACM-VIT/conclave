@@ -214,26 +214,35 @@ status_json() {
   curl -fsS --connect-timeout 3 --max-time 5 -H "x-sfu-secret: ${SFU_SECRET}" "${url}/status" 2>/dev/null || true
 }
 
+# Returns 0 once the instance's public URL reaches it, after up to
+# HEALTH_TIMEOUT_SECONDS. A route that never does is a failed deploy, not a
+# warning: the next drain would send new meetings to an unreachable instance.
 validate_public_route() {
   local id="$1"
   local url="$2"
   if [[ -z "$url" ]]; then
-    echo "No public URL configured for ${id}; cross-SFU join redirects will omit redirectUrl." >&2
-    return 0
+    echo "No public URL configured for ${id}, so clients cannot be shown to reach it." >&2
+    return 1
   fi
-
-  local status=""
-  status="$(status_json "$url")"
-  if [[ -z "$status" ]]; then
-    echo "Public URL for ${id} is not reachable yet: ${url}" >&2
-    return 0
-  fi
-
-  local instance_id=""
-  instance_id="$(printf "%s" "$status" | json_field instanceId || true)"
-  if [[ "$instance_id" != "$id" ]]; then
-    echo "Public URL for ${id} returned instance '${instance_id:-unknown}': ${url}" >&2
-  fi
+  local start_ts status instance_id
+  start_ts="$(date +%s)"
+  while true; do
+    status="$(status_json "$url")"
+    instance_id=""
+    if [[ -n "$status" ]]; then
+      instance_id="$(printf "%s" "$status" | json_field instanceId || true)"
+    fi
+    [[ "$instance_id" == "$id" ]] && return 0
+    if (( $(date +%s) - start_ts >= HEALTH_TIMEOUT_SECONDS )); then
+      if [[ -z "$status" ]]; then
+        echo "Public URL for ${id} does not answer: ${url}" >&2
+      else
+        echo "Public URL for ${id} reaches instance '${instance_id:-unknown}' instead: ${url}" >&2
+      fi
+      return 1
+    fi
+    sleep 1
+  done
 }
 
 SFU_A_PUBLIC_URL="$(get_public_url "sfu-a" "$(get_deploy_url "sfu-a")")"
@@ -307,10 +316,11 @@ fi
 
 # The pulled compose file decides the services, ports and image names.
 COMPOSE_JSON="$("${COMPOSE[@]}" config --format json)"
+read -ra ALL_SFU_SERVICES <<< "$(printf "%s" "$COMPOSE_JSON" | node -e "const c=JSON.parse(require('fs').readFileSync(0,'utf8'));const env=(s)=>Array.isArray(s.environment)?Object.fromEntries(s.environment.map((e)=>e.split('='))):(s.environment??{});console.log(Object.entries(c.services).filter(([,s])=>env(s).SFU_INSTANCE_ID).map(([n])=>n).join(' '));")"
 if [[ -n "${SFU_DEPLOY_SERVICES:-}" ]]; then
   IFS=',' read -ra SERVICES <<< "${SFU_DEPLOY_SERVICES// /}"
 else
-  read -ra SERVICES <<< "$(printf "%s" "$COMPOSE_JSON" | node -e "const c=JSON.parse(require('fs').readFileSync(0,'utf8'));const env=(s)=>Array.isArray(s.environment)?Object.fromEntries(s.environment.map((e)=>e.split('='))):(s.environment??{});console.log(Object.entries(c.services).filter(([,s])=>env(s).SFU_INSTANCE_ID).map(([n])=>n).join(' '));")"
+  SERVICES=("${ALL_SFU_SERVICES[@]}")
 fi
 
 DRAIN_TIMEOUT_SECONDS="${DRAIN_TIMEOUT_SECONDS:-3600}"
@@ -381,19 +391,34 @@ service_container() {
   "${COMPOSE[@]}" ps -aq "$1" 2>/dev/null | head -n 1
 }
 
-# An instance's room count for the deploy order. An unreadable /status sorts
-# after every readable one: its rooms are unknown, so it is never taken for
+# An instance's place in the deploy order, as "<class> <rooms>". Instances
+# that take no new meetings go first, since rebuilding them costs no
+# capacity: 0 when its container is down, 1 when it is draining. Serving
+# instances follow as class 2, emptiest first. Class 3, last, is one whose
+# /status cannot be read: its rooms are unknown, so it is never taken for
 # the idle instance.
-service_rooms() {
-  local status rooms=""
-  status="$(status_json "$(service_url "$1")")"
+deploy_rank() {
+  local svc="$1" url status rooms draining container
+  url="$(service_url "$svc")"
+  status="$(status_json "$url")"
   if [[ -n "$status" ]]; then
     rooms="$(printf "%s" "$status" | json_field rooms || true)"
+    draining="$(printf "%s" "$status" | json_field draining || true)"
+    if [[ ! "$rooms" =~ ^[0-9]+$ ]]; then
+      echo "3 0"
+    elif [[ "$draining" == "true" ]]; then
+      echo "1 ${rooms}"
+    else
+      echo "2 ${rooms}"
+    fi
+    return
   fi
-  if [[ "$rooms" =~ ^[0-9]+$ ]]; then
-    echo "$rooms"
+  container="$(service_container "$svc")"
+  if ! answers_http "$url" &&
+     { [[ -z "$container" ]] || [[ "$(docker inspect -f '{{.State.Status}}' "$container")" != "running" ]]; }; then
+    echo "0 0"
   else
-    echo "999999999"
+    echo "3 0"
   fi
 }
 
@@ -434,17 +459,40 @@ wait_for_empty() {
   done
 }
 
+is_healthy() {
+  local health
+  health="$(curl -fsS --connect-timeout 2 --max-time 3 "${1}/health" 2>/dev/null)" &&
+    [[ "$(printf "%s" "$health" | json_field status)" == "healthy" ]]
+}
+
 wait_for_healthy() {
   local url="$1"
   local start_ts
   start_ts="$(date +%s)"
-  local health
-  until health="$(curl -fsS --connect-timeout 2 --max-time 3 "${url}/health" 2>/dev/null)" &&
-        [[ "$(printf "%s" "$health" | json_field status)" == "healthy" ]]; do
+  until is_healthy "$url"; do
     if (( $(date +%s) - start_ts >= HEALTH_TIMEOUT_SECONDS )); then
       return 1
     fi
     sleep 1
+  done
+}
+
+# A drain sends an instance's new meetings to the others, so each of them must
+# be serving first: healthy, and not draining itself.
+peers_serving() {
+  local svc="$1" peer url status
+  for peer in "${ALL_SFU_SERVICES[@]}"; do
+    [[ "$peer" == "$svc" ]] && continue
+    url="$(service_url "$peer")"
+    if ! is_healthy "$url"; then
+      echo "Not draining ${svc}: ${peer} does not report healthy at ${url}, so new meetings would have nowhere to go." >&2
+      return 1
+    fi
+    status="$(status_json "$url")"
+    if [[ -n "$status" && "$(printf "%s" "$status" | json_field draining || true)" == "true" ]]; then
+      echo "Not draining ${svc}: ${peer} is draining too, so new meetings would have nowhere to go." >&2
+      return 1
+    fi
   done
 }
 
@@ -521,6 +569,10 @@ deploy_service() {
   if [[ -n "$status" ]]; then
     local was_draining
     was_draining="$(printf "%s" "$status" | json_field draining || echo "false")"
+    if ! peers_serving "$svc"; then
+      echo "${svc} was not drained or rebuilt. Bring the other instance back, then rerun this script." >&2
+      return 1
+    fi
     echo "Draining ${svc}..."
     local drain_response=""
     if ! drain_response="$(set_draining "$url" true)"; then
@@ -590,15 +642,18 @@ deploy_service() {
   VERIFIED_IMAGE="$TARGET_IMAGE"
   save_deploy_state
   echo "${svc} passed its canary on ${TARGET_COMMIT} and is serving."
-  validate_public_route "$svc" "$(service_public_url "$svc")"
+  if ! validate_public_route "$svc" "$(service_public_url "$svc")"; then
+    echo "" >&2
+    echo "Deploy stopped: ${svc} serves ${TARGET_COMMIT}, but clients cannot reach it at its public URL." >&2
+    echo "The instances after it were not drained. Fix the route, then rerun this script." >&2
+    return 1
+  fi
 }
 
-# Emptiest instance first, so the first drain usually has nothing to wait for
-# and an idle instance is rebuilt before one carrying calls.
 ORDERED_SERVICES=()
-while read -r _rooms svc; do
+while read -r _class _rooms svc; do
   ORDERED_SERVICES+=("$svc")
-done < <(for svc in "${SERVICES[@]}"; do echo "$(service_rooms "$svc") $svc"; done | sort -n -k1,1 -k2,2)
+done < <(for svc in "${SERVICES[@]}"; do echo "$(deploy_rank "$svc") $svc"; done | sort -n -k1,1 -k2,2 -k3,3)
 echo "Deploy order: ${ORDERED_SERVICES[*]}"
 
 if [[ "$ROLLBACK" == "true" ]]; then
