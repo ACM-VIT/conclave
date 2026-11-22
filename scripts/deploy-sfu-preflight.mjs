@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { isIP } from "node:net";
+import { posix } from "node:path";
 import { readFile } from "node:fs/promises";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
@@ -208,6 +209,44 @@ const checkProductionMode = (env, service, errors) => {
   }
 };
 
+// Mirrors how the stores resolve their files (packages/sfu/server/scheduling*.ts)
+// and the image defaults in packages/sfu/Dockerfile. The SFU's root filesystem
+// is read-only, so a store off a writable mount stops it at startup.
+const SFU_WORKDIR = "/app/packages/sfu";
+const IMAGE_SQLITE_PATH = "/var/lib/conclave/conclave.sqlite";
+const STORES = [
+  { sqlite: "SCHEDULING_SQLITE_PATH", mode: "SCHEDULING_PERSISTENCE", json: "SCHEDULING_PATH", jsonDefault: "/var/lib/conclave/recordings/scheduling.json" },
+  { sqlite: "SCHEDULED_MEETINGS_SQLITE_PATH", mode: "SCHEDULED_MEETINGS_PERSISTENCE", json: "SCHEDULED_MEETINGS_PATH", jsonDefault: "/var/lib/conclave/recordings/scheduled-meetings.json" },
+  { sqlite: "SCHEDULED_WEBINARS_SQLITE_PATH", mode: "SCHEDULED_WEBINARS_PERSISTENCE", json: "SCHEDULED_WEBINARS_PATH", jsonDefault: "/var/lib/conclave/recordings/scheduled-webinars.json" },
+];
+
+const storeFile = (env, store) => {
+  const mode = String(env[store.mode] || "").trim().toLowerCase();
+  if (mode === "json" || mode === "file") {
+    return [store.json, String(env[store.json] || "").trim() || store.jsonDefault];
+  }
+  const own = String(env[store.sqlite] || "").trim();
+  if (own) return [store.sqlite, own];
+  return ["CONCLAVE_SQLITE_PATH", String(env.CONCLAVE_SQLITE_PATH || "").trim() || IMAGE_SQLITE_PATH];
+};
+
+const checkStorePaths = (definition, env, service, errors) => {
+  const mounts = (Array.isArray(definition.volumes) ? definition.volumes : [])
+    .filter((volume) => volume && (volume.type === "bind" || volume.type === "volume") && !volume.read_only)
+    .map((volume) => posix.normalize(String(volume.target)));
+  const problems = new Set();
+  for (const store of STORES) {
+    const [variable, file] = storeFile(env, store);
+    const path = posix.resolve(SFU_WORKDIR, file);
+    if (!mounts.some((target) => path === target || path.startsWith(`${target}/`))) {
+      problems.add(
+        `${service}: ${variable} resolves to ${path}, which is not on a writable volume mount (${mounts.join(", ") || "none"}). The SFU's root filesystem is read-only, so it would refuse to start.`,
+      );
+    }
+  }
+  errors.push(...problems);
+};
+
 const isRequiredRedisMode = (value) =>
   value === true || value === 1 || String(value).trim().toLowerCase() === "true" || String(value).trim() === "1";
 
@@ -283,6 +322,7 @@ export const resolveSfuTargets = ({ allowPublicRedis = false, compose, serviceNa
       );
     }
     checkProductionMode(env, service, errors);
+    checkStorePaths(definition, env, service, errors);
 
     targets.push({
       announcedIp,

@@ -32,7 +32,10 @@ const makeService = ({
     SFU_REGION: region,
     SFU_REQUIRE_REDIS_ADAPTER: "1",
     SFU_SECRET: "test-secret-not-for-production",
+    CONCLAVE_SQLITE_PATH: "/var/lib/conclave/recordings/conclave.sqlite",
+    RECORDING_STORAGE_PATH: "/var/lib/conclave/recordings",
   },
+  volumes: [{ type: "bind", source: "/var/lib/conclave/recordings", target: "/var/lib/conclave/recordings" }],
 });
 
 const makeCompose = () => ({
@@ -482,6 +485,39 @@ test("compose forwards SCHEDULING_TOKEN_SECRET to both SFUs, padding included", 
   for (const name of ["sfu-a", "sfu-b"]) {
     assert.equal(services[name].environment.SCHEDULING_TOKEN_SECRET, "  padded-secret-value ", name);
   }
+});
+
+const storePathErrors = (environment, volumes) => {
+  const compose = makeCompose();
+  for (const service of Object.values(compose.services)) {
+    Object.assign(service.environment, environment);
+    for (const [key, value] of Object.entries(environment)) {
+      if (value === undefined) delete service.environment[key];
+    }
+    if (volumes) service.volumes = volumes;
+  }
+  try {
+    resolveSfuTargets({ compose });
+    return [];
+  } catch (error) {
+    return error.errors.filter((message) => /writable volume mount/.test(message));
+  }
+};
+
+test("every store path must be on a writable volume mount", () => {
+  assert.deepEqual(storePathErrors({}), []);
+  // The image's read-only root: Sol's run exited 1 with this path.
+  assert.match(storePathErrors({ CONCLAVE_SQLITE_PATH: "/var/lib/conclave/conclave.sqlite" }).join("\n"), /CONCLAVE_SQLITE_PATH resolves to \/var\/lib\/conclave\/conclave\.sqlite/);
+  // Without CONCLAVE_SQLITE_PATH the image default applies, which is off the volume.
+  assert.match(storePathErrors({ CONCLAVE_SQLITE_PATH: undefined }).join("\n"), /not on a writable volume mount/);
+  assert.match(storePathErrors({ SCHEDULED_WEBINARS_SQLITE_PATH: "/tmp/webinars.sqlite" }).join("\n"), /SCHEDULED_WEBINARS_SQLITE_PATH resolves to \/tmp\/webinars\.sqlite/);
+  assert.match(storePathErrors({ SCHEDULING_PERSISTENCE: "json", SCHEDULING_PATH: "/app/data/scheduling.json" }).join("\n"), /SCHEDULING_PATH resolves to/);
+  assert.deepEqual(storePathErrors({ SCHEDULING_PERSISTENCE: "json" }), []);
+  assert.match(
+    storePathErrors({}, [{ type: "bind", source: "/srv/recordings", target: "/var/lib/conclave/recordings", read_only: true }]).join("\n"),
+    /not on a writable volume mount/,
+  );
+  assert.equal(storePathErrors({ CONCLAVE_SQLITE_PATH: "/var/lib/conclave/conclave.sqlite" }).filter((message) => message.startsWith("edge-dxb")).length, 1);
 });
 
 test("SFU services must run in production mode", () => {
