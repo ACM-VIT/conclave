@@ -1,4 +1,7 @@
 import java.io.DataInputStream
+import java.io.DataOutputStream
+import java.nio.ByteBuffer
+import java.security.MessageDigest
 import java.util.Properties
 import java.util.zip.ZipFile
 
@@ -194,9 +197,10 @@ android {
 }
 
 /**
- * Writes `crash-code-frames.tsv` into the APK's assets: every class the app compiles under `conclave/` and `skip/`, with
- * the source file its class file names (`class<TAB>file`). Crash reports keep one of our Java or Kotlin frames only
- * when its class and file are listed, so a parsed frame can never carry an arbitrary name.
+ * Writes `crash-code-frames.bin` into the APK's assets: for every class the app compiles under `conclave/` and
+ * `skip/`, the first 8 bytes of SHA-256 of `class<TAB>source file` (the file its class file names), as sorted
+ * big-endian longs. Crash reports keep one of our Java or Kotlin frames only when its pair's hash is listed, so a
+ * parsed frame can never carry an arbitrary name. CrashCodeManifest.kt hashes the same way.
  */
 abstract class CrashCodeManifestTask : DefaultTask() {
     @get:InputFiles
@@ -212,11 +216,13 @@ abstract class CrashCodeManifestTask : DefaultTask() {
 
     @TaskAction
     fun write() {
-        val entries = sortedSetOf<String>()
+        val hashes = sortedSetOf<Long>()
         fun add(path: String, bytes: () -> ByteArray) {
             if (!path.endsWith(".class") || OWN_PREFIXES.none { path.startsWith(it) }) return
             val source = sourceFile(bytes()) ?: return
-            entries.add(path.removeSuffix(".class").replace('/', '.') + "\t" + source)
+            val entry = path.removeSuffix(".class").replace('/', '.') + "\t" + source
+            val digest = MessageDigest.getInstance("SHA-256").digest(entry.toByteArray(Charsets.UTF_8))
+            hashes.add(ByteBuffer.wrap(digest, 0, 8).long)
         }
         for (jar in classJars.get()) {
             ZipFile(jar.asFile).use { zip ->
@@ -233,7 +239,9 @@ abstract class CrashCodeManifestTask : DefaultTask() {
         }
         val output = outputDirectory.get().asFile
         output.mkdirs()
-        output.resolve("crash-code-frames.tsv").writeText(entries.joinToString("\n", postfix = "\n"))
+        DataOutputStream(output.resolve("crash-code-frames.bin").outputStream().buffered()).use { out ->
+            for (hash in hashes) out.writeLong(hash)
+        }
     }
 
     /** The class file's `SourceFile` attribute, or null when it has none or is not a class file. */

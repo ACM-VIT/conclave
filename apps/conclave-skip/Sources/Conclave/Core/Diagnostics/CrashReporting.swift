@@ -204,8 +204,8 @@ enum CrashReportPrivacy {
         return pathPlaceholder
     }
 
-    /// Whether `class<TAB>source file` names a class compiled into the app, from the manifest the Android build writes
-    /// into the APK (`crash-code-frames.tsv`). Tests replace it; iOS has no Java or Kotlin frames.
+    /// Whether `class<TAB>source file` names a class compiled into the app, from the hashed manifest the Android build
+    /// writes into the APK (`crash-code-frames.bin`). Tests replace it; iOS has no Java or Kotlin frames.
     static var isCompiledAppClass: (String) -> Bool = { entry in
         #if SKIP
         return CrashCodeManifest.contains(entry)
