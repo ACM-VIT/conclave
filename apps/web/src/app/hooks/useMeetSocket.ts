@@ -2,7 +2,12 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createCoalescedRunner } from "../lib/coalesced-run";
-import { planJoinInfo, type HeldJoinInfo } from "../lib/held-join-info";
+import {
+  holdJoinInfo,
+  planJoinInfo,
+  type HeldJoinInfo,
+  type JoinGrant,
+} from "../lib/held-join-info";
 import { createProducerSlotOrder } from "../lib/producer-slot-order";
 import { toError } from "../lib/utils";
 import type { Socket } from "socket.io-client";
@@ -236,6 +241,7 @@ type JoinInfo = {
   token: string;
   sfuUrl: string;
   iceServers?: RTCIceServer[];
+  iceServersTtlSeconds?: number;
 };
 
 const MAX_JOIN_ROOM_REDIRECTS = 1;
@@ -7232,7 +7238,11 @@ export function useMeetSocket({
             const cachedToken = options?.reconnectJoinInfo
               ? null
               : prewarm?.getCachedToken?.(roomIdForJoin);
-            const joinInfoGrant = `${joinMode}:${isAdmin ? "host" : "participant"}:${user?.id ?? ""}`;
+            const joinInfoGrant: JoinGrant = {
+              joinMode,
+              userId: user?.id ?? "",
+              isHost: isAdmin,
+            };
             const joinInfoPlan = planJoinInfo({
               held: options?.reconnectJoinInfo ? heldJoinInfoRef.current : null,
               roomId: roomIdForJoin,
@@ -7271,11 +7281,15 @@ export function useMeetSocket({
               socketIoPromise,
             ]);
             const { token, sfuUrl, iceServers } = joinInfo;
-            heldJoinInfoRef.current = {
-              joinInfo,
-              roomId: roomIdForJoin,
-              grant: joinInfoGrant,
-            };
+            // Only a fresh answer is held, so reusing one never extends its
+            // lifetime or relabels what it was issued for.
+            if (lastJoinInfoSourceRef.current === "fresh") {
+              heldJoinInfoRef.current = holdJoinInfo(joinInfo, {
+                roomId: roomIdForJoin,
+                grant: joinInfoGrant,
+                receivedAt: Date.now(),
+              });
+            }
             if (
               connectionGeneration !== reconnectGenerationRef.current ||
               intentionalDisconnectRef.current

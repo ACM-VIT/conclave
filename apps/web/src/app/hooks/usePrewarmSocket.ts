@@ -12,6 +12,7 @@ type JoinInfo = {
   token: string;
   sfuUrl: string;
   iceServers?: RTCIceServer[];
+  iceServersTtlSeconds?: number;
 };
 
 type TokenCache = {

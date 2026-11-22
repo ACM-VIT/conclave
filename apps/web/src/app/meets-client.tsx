@@ -387,6 +387,7 @@ export type MeetsClientProps = {
     token: string;
     sfuUrl: string;
     iceServers?: RTCIceServer[];
+    iceServersTtlSeconds?: number;
   }>;
   joinMode?: JoinMode;
   autoJoinOnMount?: boolean;

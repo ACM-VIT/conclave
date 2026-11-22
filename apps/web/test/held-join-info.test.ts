@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   getReusableJoinInfo,
+  holdJoinInfo,
   planJoinInfo,
-  type HeldJoinInfo,
+  type JoinGrant,
 } from "../src/app/lib/held-join-info";
 
 const NOW = Date.UTC(2030, 0, 1, 12, 0, 0);
@@ -20,16 +21,18 @@ const tokenExpiringIn = (ms: number): string => {
   ].join(".");
 };
 
-const held = (
-  overrides: Partial<HeldJoinInfo<{ token: string; sfuUrl: string }>> = {},
-): HeldJoinInfo<{ token: string; sfuUrl: string }> => ({
-  joinInfo: { token: tokenExpiringIn(6 * 60 * 60_000), sfuUrl: "https://sfu" },
-  roomId: "room",
-  grant: "meeting:guest",
-  ...overrides,
-});
+const guest: JoinGrant = { joinMode: "meeting", userId: "guest", isHost: false };
 
-const wanted = { roomId: "room", grant: "meeting:guest", now: NOW };
+type Answer = { token: string; sfuUrl: string; iceServersTtlSeconds?: number };
+
+const held = ({
+  joinInfo = { token: tokenExpiringIn(6 * 60 * 60_000), sfuUrl: "https://sfu" },
+  grant = guest,
+  receivedAt = NOW,
+}: { joinInfo?: Answer; grant?: JoinGrant; receivedAt?: number } = {}) =>
+  holdJoinInfo(joinInfo, { roomId: "room", grant, receivedAt });
+
+const wanted = { roomId: "room", grant: guest, now: NOW };
 
 describe("reusing the SFU token on reconnect", () => {
   it("reuses a token that is still valid for the same room and grant", () => {
@@ -53,10 +56,60 @@ describe("reusing the SFU token on reconnect", () => {
     ).toBeNull();
   });
 
-  it("asks for a new token for another room or a changed role", () => {
+  it("asks for a new answer once its TURN credentials are about to expire", () => {
+    const joinInfo = {
+      token: tokenExpiringIn(12 * 60 * 60_000),
+      sfuUrl: "s",
+      iceServersTtlSeconds: 60 * 60,
+    };
+    const answer = held({ joinInfo, receivedAt: NOW - 57 * 60_000 });
+
+    expect(getReusableJoinInfo(answer, wanted)).toBeNull();
+    expect(
+      getReusableJoinInfo(answer, { ...wanted, now: NOW - 20 * 60_000 }),
+    ).toBe(joinInfo);
+  });
+
+  it("goes by the token when the TURN credentials outlast it", () => {
+    const joinInfo = {
+      token: tokenExpiringIn(4 * 60_000),
+      sfuUrl: "s",
+      iceServersTtlSeconds: 24 * 60 * 60,
+    };
+
+    expect(getReusableJoinInfo(held({ joinInfo }), wanted)).toBeNull();
+  });
+
+  it("asks for a new token for another room, user or join mode", () => {
     expect(getReusableJoinInfo(held(), { ...wanted, roomId: "other" })).toBeNull();
     expect(
-      getReusableJoinInfo(held(), { ...wanted, grant: "meeting:host" }),
+      getReusableJoinInfo(held(), {
+        ...wanted,
+        grant: { ...guest, userId: "someone-else" },
+      }),
+    ).toBeNull();
+    expect(
+      getReusableJoinInfo(held(), {
+        ...wanted,
+        grant: { ...guest, joinMode: "webinar_attendee" },
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps a participant token for a participant who was made host", () => {
+    const answer = held();
+
+    expect(
+      getReusableJoinInfo(answer, {
+        ...wanted,
+        grant: { ...guest, isHost: true },
+      }),
+    ).toBe(answer.joinInfo);
+  });
+
+  it("never reuses a host token for a participant", () => {
+    expect(
+      getReusableJoinInfo(held({ grant: { ...guest, isHost: true } }), wanted),
     ).toBeNull();
   });
 

@@ -124,6 +124,7 @@ export default function MeetsClientPage({
         token: string;
         sfuUrl: string;
         iceServers?: RTCIceServer[];
+        iceServersTtlSeconds?: number;
       };
     },
     [forceJoinOnly, joinMode, defaultUser, resolvedClientId]

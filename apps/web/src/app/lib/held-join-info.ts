@@ -1,15 +1,29 @@
+/** Who a join answer was issued to, and as what. */
+export type JoinGrant = {
+  joinMode: string;
+  userId: string;
+  isHost: boolean;
+};
+
+type HoldableJoinInfo = {
+  token: string;
+  /** How long the answer's TURN credentials last, when it has any. */
+  iceServersTtlSeconds?: number;
+};
+
 /**
  * The join route's last answer for the meeting, kept so a reconnect can go
  * straight back to the SFU when the web app is slow or down.
  */
-export type HeldJoinInfo<T extends { token: string }> = {
+export type HeldJoinInfo<T extends HoldableJoinInfo> = {
   joinInfo: T;
   roomId: string;
-  /** What the token was issued for. A different grant needs a new token. */
-  grant: string;
+  grant: JoinGrant;
+  /** When the token or the TURN credentials run out, whichever is first. */
+  expiresAt: number | null;
 };
 
-const TOKEN_EXPIRY_MARGIN_MS = 5 * 60_000;
+const EXPIRY_MARGIN_MS = 5 * 60_000;
 
 const readTokenExpiryMs = (token: string): number | null => {
   const payload = token.split(".")[1];
@@ -30,16 +44,52 @@ const readTokenExpiryMs = (token: string): number | null => {
   }
 };
 
-/** The held answer, when it is for this join and its token is not near expiry. */
-export const getReusableJoinInfo = <T extends { token: string }>(
+export const holdJoinInfo = <T extends HoldableJoinInfo>(
+  joinInfo: T,
+  {
+    roomId,
+    grant,
+    receivedAt,
+  }: { roomId: string; grant: JoinGrant; receivedAt: number },
+): HeldJoinInfo<T> => {
+  const tokenExpiresAt = readTokenExpiryMs(joinInfo.token);
+  const turnTtlSeconds = joinInfo.iceServersTtlSeconds;
+  const turnExpiresAt =
+    typeof turnTtlSeconds === "number" && Number.isFinite(turnTtlSeconds)
+      ? receivedAt + turnTtlSeconds * 1000
+      : null;
+  return {
+    joinInfo,
+    roomId,
+    grant,
+    expiresAt:
+      tokenExpiresAt === null || turnExpiresAt === null
+        ? tokenExpiresAt
+        : Math.min(tokenExpiresAt, turnExpiresAt),
+  };
+};
+
+// A participant token still works after a promotion, because the SFU makes a
+// promoted user host again from the room. A host token is never reused for less.
+const grantCovers = (held: JoinGrant, wanted: JoinGrant): boolean =>
+  held.joinMode === wanted.joinMode &&
+  held.userId === wanted.userId &&
+  (!held.isHost || wanted.isHost);
+
+/** The held answer, when it is for this join and is not near expiry. */
+export const getReusableJoinInfo = <T extends HoldableJoinInfo>(
   held: HeldJoinInfo<T> | null,
-  wanted: { roomId: string; grant: string; now: number },
+  wanted: { roomId: string; grant: JoinGrant; now: number },
 ): T | null => {
-  if (!held || held.roomId !== wanted.roomId || held.grant !== wanted.grant) {
+  if (
+    !held ||
+    held.roomId !== wanted.roomId ||
+    !grantCovers(held.grant, wanted.grant)
+  ) {
     return null;
   }
-  const expiresAt = readTokenExpiryMs(held.joinInfo.token);
-  return expiresAt !== null && expiresAt - wanted.now > TOKEN_EXPIRY_MARGIN_MS
+  return held.expiresAt !== null &&
+    held.expiresAt - wanted.now > EXPIRY_MARGIN_MS
     ? held.joinInfo
     : null;
 };
@@ -56,7 +106,7 @@ export type JoinInfoPlan<T> =
  * a moved room or a rejected token is picked up, and fall back to the held
  * answer only while the route is unreachable.
  */
-export const planJoinInfo = <T extends { token: string }>({
+export const planJoinInfo = <T extends HoldableJoinInfo>({
   held,
   roomId,
   grant,
@@ -65,7 +115,7 @@ export const planJoinInfo = <T extends { token: string }>({
 }: {
   held: HeldJoinInfo<T> | null;
   roomId: string;
-  grant: string;
+  grant: JoinGrant;
   now: number;
   isFirstReconnectAttempt: boolean;
 }): JoinInfoPlan<T> => {
