@@ -993,6 +993,28 @@ export const forceRemoveClientNow = (options: {
   return true;
 };
 
+/**
+ * A recreated room that nobody from its lost call came back for is no one's.
+ * If people are in it, one of them becomes host, as when a last host leaves.
+ * If people are only waiting, they are asked to try again: the first who may
+ * open a room then hosts it, and the rest are waiting on that host.
+ */
+export const offerLapsedRoom = (
+  io: SocketIOServer,
+  state: SfuState,
+  room: Room,
+): void => {
+  if (state.rooms.get(room.channelId) !== room || room.hasActiveAdmin()) return;
+  if (room.getMeetingParticipantCount() > 0) {
+    room.markRestored();
+    handleAdminRemoved(io, state, room);
+    return;
+  }
+  for (const pending of room.pendingClients.values()) {
+    pending.socket.emit("joinApproved", { roomId: room.id });
+  }
+};
+
 export const kickClient = (
   room: Room,
   userId: string,

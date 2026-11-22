@@ -869,6 +869,96 @@ describe("who hosts a call the server lost", () => {
     });
   });
 
+  describe("once the lost call's time is up", () => {
+    const useFullTestClock = () => {
+      vi.useFakeTimers({
+        toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+      });
+      vi.setSystemTime(new Date("2026-11-22T08:00:00Z"));
+    };
+    const toldToTryAgain = (peer: ReturnType<typeof makeSocket>) =>
+      peer.emit.mock.calls.some(([event]) => event === "joinApproved");
+
+    it("asks the people still waiting to try joining again", async () => {
+      useFullTestClock();
+      const { before } = await lostCall();
+      const after = await restart(before);
+      const waiting = await join(after, knockerAsking);
+      expect(waiting.status).toBe("waiting");
+
+      vi.advanceTimersByTime(6 * MINUTE_MS);
+      expect(toldToTryAgain(waiting.peer)).toBe(false);
+      vi.advanceTimersByTime(2 * MINUTE_MS);
+      expect(toldToTryAgain(waiting.peer)).toBe(true);
+
+      const again = await join(after, knockerAsking);
+      expect(again.status).toBe("joined");
+      expect(again.context.currentClient).toBeInstanceOf(Admin);
+    });
+
+    it("does not make the lost call's host a host of the meeting opened after it", async () => {
+      useFullTestClock();
+      const { before } = await lostCall();
+      const after = await restart(before);
+      await join(after, knockerAsking);
+      vi.advanceTimersByTime(8 * MINUTE_MS);
+      const newHost = await join(after, knockerAsking);
+      expect(newHost.context.currentClient).toBeInstanceOf(Admin);
+
+      const oldHost = await join(after, host);
+      expect(oldHost.status).toBe("waiting");
+      expect(roomOf(after).isAdminUserKey(host.userId)).toBe(false);
+      expect(roomOf(after).hostUserKey).toBe(knocker.userId);
+    });
+  });
+
+  describe("on an SFU that has no record of the lost call", () => {
+    // Another host: its ledger is its own, and empty.
+    const elsewhere = () => makeState();
+
+    it("lets pass holders back into the call but gives none of them the host's seat", async () => {
+      const { hostPass, guestPass } = await lostCall();
+      const other = elsewhere();
+
+      const member = await join(
+        other,
+        { ...guest, allowRoomCreation: true },
+        { roomRecoveryPass: guestPass },
+      );
+      expect(member.status).toBe("joined");
+      const formerHost = await join(other, host, { roomRecoveryPass: hostPass });
+      expect(formerHost.status).toBe("joined");
+      expect(roomOf(other).getAdmins()).toHaveLength(0);
+      expect((await join(other, knockerAsking)).status).toBe("waiting");
+    });
+
+    it("gives the call a host once no pass from it can still be good", async () => {
+      vi.useFakeTimers({
+        toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+      });
+      vi.setSystemTime(new Date("2026-11-22T08:00:00Z"));
+      const { guestPass } = await lostCall();
+      const other = elsewhere();
+      const member = await join(
+        other,
+        { ...guest, allowRoomCreation: true },
+        { roomRecoveryPass: guestPass },
+      );
+      await join(other, knockerAsking);
+
+      vi.advanceTimersByTime(7 * MINUTE_MS);
+      expect(member.context.currentClient).toBeInstanceOf(Admin);
+      expect(knocksShownTo(member)).toContain(knocker.userId);
+    });
+
+    it("still lets the first visitor without a pass open the meeting", async () => {
+      const other = elsewhere();
+      const visitor = await join(other, knockerAsking);
+      expect(visitor.status).toBe("joined");
+      expect(visitor.context.currentClient).toBeInstanceOf(Admin);
+    });
+  });
+
   it("opens a meeting that emptied on purpose for its next visitor", async () => {
     vi.useFakeTimers({
       toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],

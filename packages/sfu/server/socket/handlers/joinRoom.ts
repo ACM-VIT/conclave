@@ -52,7 +52,9 @@ import { isScheduledMeetingInvitee } from "../../scheduledMeetings.js";
 import {
   issueRoomRecoveryPass,
   provesEarlierRoomMembership,
+  ROOM_RECOVERY_PASS_TTL_MS,
 } from "../../roomRecoveryPass.js";
+import { offerLapsedRoom } from "../../admin/controlPlane.js";
 import type { LostRoom } from "../../roomRecoveryLedger.js";
 import { getSocketAuthUser } from "../auth.js";
 import type { ConnectionContext } from "../context.js";
@@ -410,6 +412,12 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           }
         }
 
+        // Past its deadline, a room that stood in for a lost call is a new
+        // meeting to whoever opens it. That call's hosts are not its hosts.
+        if (room.restorerState(Date.now()) === "lapsed") {
+          room.forgetLostHosts();
+        }
+
         const webinarConfig = getOrCreateWebinarRoomConfig(
           state.webinarConfigs,
           roomChannelId,
@@ -567,21 +575,37 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         // or a member who holds its pass. Anyone else who recreates it, such
         // as a tab that was only knocking, waits as before, and the room
         // waits for its people. A room with no gate has nothing to wait at.
-        const isFromLostCall =
-          provesMembership || hostRequested || isAdminForExistingRoom;
+        const hostsLostCall = hostRequested || isAdminForExistingRoom;
         if (
           createdRoom &&
-          lostRoom &&
           !isWebinarAttendeeJoin &&
-          !isFromLostCall &&
+          !hostsLostCall &&
           (clientPolicy.knockByDefault || clientPolicy.useWaitingRoom)
         ) {
-          room.awaitRestorer(lostRoom.claimableUntil);
+          const onLapse = () => offerLapsedRoom(io, state, room);
+          if (lostRoom && !provesMembership) {
+            room.awaitRestorer({
+              until: lostRoom.claimableUntil,
+              rosterKnown: true,
+              onLapse,
+            });
+          }
+          // A pass, but no record of its call: the call was lost by another
+          // SFU whose ledger this one cannot read. Its people come back in
+          // on their passes. Who hosted it, and whether it was ended, is
+          // unknown here, so no pass gets the host's seat.
+          if (!lostRoom && provesMembership) {
+            room.awaitRestorer({
+              until: Date.now() + ROOM_RECOVERY_PASS_TTL_MS,
+              rosterKnown: false,
+              onLapse,
+            });
+          }
         }
         const restorerState = room.restorerState(Date.now());
         const takesOverRecreatedRoom =
           restorerState === "awaited"
-            ? isFromLostCall
+            ? hostsLostCall || (provesMembership && room.knowsLostRoster)
             : restorerState === "lapsed" && (allowRoomCreation || hostRequested);
         const isAdminJoin = isWebinarAttendeeJoin
           ? false

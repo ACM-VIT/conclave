@@ -346,7 +346,8 @@ export class Room {
   // that call has come back yet. Until one does, or until no pass from the
   // lost call can still be good, the room has no host and whoever recreated
   // it waits like anyone else.
-  private restorerDeadline: number | null = null;
+  private restorer: { until: number; rosterKnown: boolean } | null = null;
+  private restorerLapseTimer: NodeJS.Timeout | null = null;
   private meetingParticipantCount = 0;
   private currentWebcamCodecPolicy: WebcamCodecPolicy =
     buildWebcamCodecPolicy("vp8", 0);
@@ -2449,6 +2450,10 @@ export class Room {
     // Closing empties the room. That is not a change to the call.
     this.onRecoverableChange = null;
     this.onReadmissionChange = null;
+    if (this.restorerLapseTimer) {
+      clearTimeout(this.restorerLapseTimer);
+      this.restorerLapseTimer = null;
+    }
     this.aiCredentials.clear();
     this.stopCleanupTimer();
     this.cancelWebcamCodecPolicyUpgrade();
@@ -2648,22 +2653,55 @@ export class Room {
   // Whether this room is a call of its own that the ledger should describe:
   // not one standing in for a lost call, and not one a host has ended.
   get recordsItsCall(): boolean {
-    return this.restorerDeadline === null && !this.endedForEveryone;
+    return this.restorer === null && !this.endedForEveryone;
   }
 
-  awaitRestorer(until: number) {
-    this.restorerDeadline = until;
+  // `rosterKnown` is false when this SFU has no record of the lost call and
+  // only knows of it from a pass. It then cannot tell that call's hosts, or
+  // whether it was ended, so a pass lets its holder in but never hosts.
+  // `onLapse` runs once if the deadline passes with the room still unclaimed.
+  awaitRestorer(options: {
+    until: number;
+    rosterKnown: boolean;
+    onLapse: () => void;
+  }) {
+    this.restorer = { until: options.until, rosterKnown: options.rosterKnown };
+    this.restorerLapseTimer = setTimeout(() => {
+      this.restorerLapseTimer = null;
+      if (this.restorer === null) return;
+      this.forgetLostHosts();
+      options.onLapse();
+    }, Math.max(0, options.until - Date.now()) + 1);
+    this.restorerLapseTimer.unref();
   }
 
   // "awaited": only someone from the lost call may take the host's seat.
   // "lapsed": that call is not coming back, so the room is open to claim.
   restorerState(now: number): "none" | "awaited" | "lapsed" {
-    if (this.restorerDeadline === null) return "none";
-    return now <= this.restorerDeadline ? "awaited" : "lapsed";
+    if (this.restorer === null) return "none";
+    return now <= this.restorer.until ? "awaited" : "lapsed";
+  }
+
+  get knowsLostRoster(): boolean {
+    return this.restorer?.rosterKnown !== false;
+  }
+
+  // A meeting opened here after the lost call's time is up is a new one.
+  // That call's hosts are not its hosts.
+  forgetLostHosts() {
+    const report = this.onRecoverableChange;
+    this.onRecoverableChange = null;
+    this.hostUserKey = null;
+    this.adminUserKeys.clear();
+    this.onRecoverableChange = report;
   }
 
   markRestored() {
-    this.restorerDeadline = null;
+    this.restorer = null;
+    if (this.restorerLapseTimer) {
+      clearTimeout(this.restorerLapseTimer);
+      this.restorerLapseTimer = null;
+    }
   }
 
   // Puts back what the ledger held of the call this room recreates: who has
