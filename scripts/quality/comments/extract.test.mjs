@@ -791,6 +791,29 @@ toolTest("text outside a matched license notice is an ordinary comment", [], () 
   assert.ok(afterVerdicts.slice(0, -1).every((verdict) => verdict === "license-header"));
 });
 
+toolTest("concurrent cold-cache Kotlin runs share one install", ["jdk"], async (t) => {
+  const cache = mkdtempSync(path.join(tmpdir(), "comment-cold-cache-"));
+  t.after(() => rmSync(cache, { recursive: true, force: true }));
+  const script = `import(${JSON.stringify(new URL("./extract.mjs", import.meta.url).href)}).then(({ extractComments }) => console.log(JSON.stringify(extractComments("val a = 1 // one\\n", "A.kt").map((c) => c.text))))`;
+  const run = () =>
+    new Promise((resolve) => {
+      const child = spawn(process.execPath, ["--input-type=module", "-e", script], { env: { ...process.env, CONCLAVE_CACHE_DIR: cache } });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (chunk) => (stdout += chunk));
+      child.stderr.on("data", (chunk) => (stderr += chunk));
+      child.on("close", (code) => resolve({ pid: child.pid, code, stdout, stderr }));
+    });
+  const results = await Promise.all([run(), run(), run(), run()]);
+  for (const result of results) {
+    assert.equal(result.code, 0, `${result.pid}: ${result.stderr}`);
+    assert.equal(result.stdout.trim(), '["// one"]');
+  }
+  const kotlinDir = path.join(cache, "conclave", "kotlin-lexer", "kotlin-2.4.21");
+  assert.deepEqual(readdirSync(path.join(kotlinDir, "jars")).sort(), ["kotlin-compiler-embeddable-2.4.21.jar", "kotlin-stdlib-2.4.21.jar"]);
+  assert.equal(readdirSync(kotlinDir).filter((entry) => entry.startsWith("helper-")).length, 1);
+});
+
 toolTest("a fixture whose language needs an undeclared tool fails in every environment", [], () => {
   assert.throws(() => extract("x = 1\n", "a.py"), /a\.py needs python312, which this test does not declare/);
   assert.throws(() => extract("let a = 1\n", "A.swift"), /A\.swift needs swift, which this test does not declare/);

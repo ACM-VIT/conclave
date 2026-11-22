@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import { copyFileSync, existsSync, linkSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
@@ -188,27 +188,41 @@ const gradleCopyOf = (artifact) => {
   return undefined;
 };
 
+const uniqueSuffix = () => `${process.pid}.${randomBytes(6).toString("hex")}`;
+
+const publishFile = (temp, target) => {
+  try {
+    linkSync(temp, target);
+  } catch (error) {
+    if (error.code !== "EEXIST") throw error;
+  } finally {
+    rmSync(temp, { force: true });
+  }
+};
+
 const kotlinJar = (file, { artifact, sha256 }) => {
   const dir = toolCache("kotlin-lexer", `kotlin-${KOTLIN_VERSION}`, "jars");
   const target = path.join(dir, `${artifact}-${KOTLIN_VERSION}.jar`);
   if (existsSync(target) && sha256Of(target) === sha256) return target;
+  if (existsSync(target)) fail(file, `${target} does not match the pinned SHA-256 for ${artifact} ${KOTLIN_VERSION}; delete it and retry`);
   mkdirSync(dir, { recursive: true });
-  const partial = `${target}.partial`;
+  const temp = `${target}.${uniqueSuffix()}.partial`;
   const gradle = gradleCopyOf(artifact);
-  if (gradle) copyFileSync(gradle, partial);
+  if (gradle) copyFileSync(gradle, temp);
   else {
     const url = `https://repo1.maven.org/maven2/org/jetbrains/kotlin/${artifact}/${KOTLIN_VERSION}/${artifact}-${KOTLIN_VERSION}.jar`;
-    const download = spawnSync("curl", ["-sSfL", "-o", partial, url], { encoding: "utf8" });
+    const download = spawnSync("curl", ["-sSfL", "-o", temp, url], { encoding: "utf8" });
     if (download.error || download.status !== 0) {
-      rmSync(partial, { force: true });
+      rmSync(temp, { force: true });
       fail(file, `the Kotlin lexer needs ${artifact} ${KOTLIN_VERSION}, which is not in the Gradle cache and could not be downloaded from ${url} (${(download.stderr ?? download.error?.message ?? "").trim()})`);
     }
   }
-  if (sha256Of(partial) !== sha256) {
-    rmSync(partial, { force: true });
+  if (sha256Of(temp) !== sha256) {
+    rmSync(temp, { force: true });
     fail(file, `${artifact} ${KOTLIN_VERSION} does not match its pinned SHA-256`);
   }
-  renameSync(partial, target);
+  publishFile(temp, target);
+  if (sha256Of(target) !== sha256) fail(file, `${target} does not match the pinned SHA-256 after publishing`);
   return target;
 };
 
@@ -223,11 +237,22 @@ const kotlinLexer = (file) => {
   const classpath = KOTLIN_JARS.map((jar) => kotlinJar(file, jar)).join(path.delimiter);
   const helperHash = sha256Of(KOTLIN_HELPER).slice(0, 16);
   const classes = toolCache("kotlin-lexer", `kotlin-${KOTLIN_VERSION}`, `helper-${helperHash}`);
-  if (!existsSync(path.join(classes, "KotlinComments.class"))) {
-    const compile = spawnSync("javac", ["-d", `${classes}.partial`, "-cp", classpath, KOTLIN_HELPER], { encoding: "utf8" });
-    if (compile.status !== 0) fail(file, `could not compile the Kotlin lexer helper:\n${compile.stderr}`);
-    rmSync(classes, { recursive: true, force: true });
-    renameSync(`${classes}.partial`, classes);
+  const installed = path.join(classes, "KotlinComments.class");
+  if (!existsSync(installed)) {
+    const temp = `${classes}.${uniqueSuffix()}.partial`;
+    const compile = spawnSync("javac", ["-d", temp, "-cp", classpath, KOTLIN_HELPER], { encoding: "utf8" });
+    if (compile.status !== 0) {
+      rmSync(temp, { recursive: true, force: true });
+      fail(file, `could not compile the Kotlin lexer helper:\n${compile.stderr}`);
+    }
+    try {
+      renameSync(temp, classes);
+    } catch (error) {
+      if (!["EEXIST", "ENOTEMPTY", "EPERM"].includes(error.code)) throw error;
+    } finally {
+      rmSync(temp, { recursive: true, force: true });
+    }
+    if (!existsSync(installed)) fail(file, `the Kotlin lexer helper was not installed at ${classes}`);
   }
   kotlinCommand = ["java", ["-cp", [classes, classpath].join(path.delimiter), "KotlinComments"]];
   return kotlinCommand;
