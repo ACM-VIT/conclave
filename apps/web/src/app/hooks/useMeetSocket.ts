@@ -152,6 +152,13 @@ import {
   type MediaPathWatch,
 } from "../lib/media-path-recovery";
 import {
+  NO_RUNTIME_ICE_SERVERS,
+  applyJoinAnswerToIceServers,
+  getUsableTurnIceServers,
+  normalizeIceServerUrls,
+  type RuntimeIceServers,
+} from "../lib/relay-credentials";
+import {
   advanceVideoFreezeRecovery,
   isProducerGoneConsumeError,
   shouldRecreateProducerTransport,
@@ -417,7 +424,6 @@ const readConsumerVideoFlowSnapshotWithin = (
   });
 
 const CLOSE_CONSUMER_RETRY_WINDOW_MS = 30000;
-const TURN_URL_PATTERN = /^turns?:/i;
 const TRANSPORT_CC_FEEDBACK_TYPE = "transport-cc";
 
 const getConnectionStatsNetworkProfile = (
@@ -716,49 +722,6 @@ const getJoinRoomRedirectError = (
 ): JoinRoomRedirectError | null => {
   const redirectUrl = normalizeJoinRedirectUrl(response.redirectUrl);
   return redirectUrl ? new JoinRoomRedirectError(response, redirectUrl) : null;
-};
-
-const buildIceServerWithUrls = (
-  iceServer: RTCIceServer,
-  urls: string[],
-): RTCIceServer => ({
-  ...iceServer,
-  urls: urls.length === 1 ? urls[0] : urls,
-});
-
-const splitIceServersByType = (
-  iceServers: RTCIceServer[] | null | undefined,
-): { stunIceServers: RTCIceServer[]; turnIceServers: RTCIceServer[] } => {
-  const stunIceServers: RTCIceServer[] = [];
-  const turnIceServers: RTCIceServer[] = [];
-
-  for (const iceServer of iceServers ?? []) {
-    const urls = normalizeIceServerUrls(iceServer.urls);
-    if (urls.length === 0) continue;
-
-    const turnUrls = urls.filter((url) => TURN_URL_PATTERN.test(url));
-    const stunUrls = urls.filter((url) => !TURN_URL_PATTERN.test(url));
-
-    if (stunUrls.length > 0) {
-      stunIceServers.push(buildIceServerWithUrls(iceServer, stunUrls));
-    }
-    if (turnUrls.length > 0) {
-      turnIceServers.push(buildIceServerWithUrls(iceServer, turnUrls));
-    }
-  }
-
-  return { stunIceServers, turnIceServers };
-};
-
-const normalizeIceServerUrls = (
-  urls: RTCIceServer["urls"] | undefined,
-): string[] => {
-  if (!urls) return [];
-  const normalizedUrls = (Array.isArray(urls) ? urls : [urls])
-    .map((value) => value.trim())
-    .filter(Boolean);
-
-  return Array.from(new Set(normalizedUrls));
 };
 
 const mergeIceServers = (
@@ -1113,8 +1076,7 @@ export function useMeetSocket({
   const heldJoinInfoRef = useRef<HeldJoinInfo<JoinInfo> | null>(null);
   const joinInfoRequestRef = useRef<AbortController | null>(null);
   const lastJoinInfoSourceRef = useRef<"held" | "fresh">("fresh");
-  const runtimeStunIceServersRef = useRef<RTCIceServer[] | null>(null);
-  const runtimeTurnIceServersRef = useRef<RTCIceServer[] | null>(null);
+  const runtimeIceServersRef = useRef<RuntimeIceServers>(NO_RUNTIME_ICE_SERVERS);
   const relayOnlyIceRef = useRef(false);
   const mediaPathReconnectTriedRef = useRef({ producer: false, consumer: false });
   const escalatedTransportsRef = useRef(new WeakSet<Transport>());
@@ -1508,7 +1470,9 @@ export function useMeetSocket({
       const step = planMediaPathEscalation({
         hasReconnected: mediaPathReconnectTriedRef.current[transportKind],
         relayOnly: relayOnlyIceRef.current,
-        hasTurnServers: (runtimeTurnIceServersRef.current?.length ?? 0) > 0,
+        hasTurnServers:
+          getUsableTurnIceServers(runtimeIceServersRef.current, Date.now()) !==
+          null,
       });
       if (step === "report-blocked") {
         const blockedPaths = blockedMediaPathsRef.current;
@@ -1576,12 +1540,11 @@ export function useMeetSocket({
   // TURN servers are offered from the first attempt, so a network that blocks
   // the direct path connects through the relay without a failed attempt first.
   const resolveIceServers = useCallback((): RTCIceServer[] | undefined => {
-    const stunIceServers =
-      runtimeStunIceServersRef.current && runtimeStunIceServersRef.current.length > 0
-        ? runtimeStunIceServersRef.current
-        : MEETS_ICE_SERVERS;
-
-    return mergeIceServers(stunIceServers, runtimeTurnIceServersRef.current);
+    const runtime = runtimeIceServersRef.current;
+    return mergeIceServers(
+      runtime.stun ?? MEETS_ICE_SERVERS,
+      getUsableTurnIceServers(runtime, Date.now()),
+    );
   }, []);
 
   const resolveIceTransportPolicy = useCallback(
@@ -2086,8 +2049,7 @@ export function useMeetSocket({
       }
       if (resetRoomId) {
         currentRoomIdRef.current = null;
-        runtimeStunIceServersRef.current = null;
-        runtimeTurnIceServersRef.current = null;
+        runtimeIceServersRef.current = NO_RUNTIME_ICE_SERVERS;
         relayOnlyIceRef.current = false;
         mediaPathReconnectTriedRef.current = { producer: false, consumer: false };
         blockedMediaPathsRef.current.clear();
@@ -2135,8 +2097,6 @@ export function useMeetSocket({
       clearReactions,
       videoProducerRef,
       userId,
-      runtimeStunIceServersRef,
-      runtimeTurnIceServersRef,
       relayOnlyIceRef,
       producerTransportDisconnectTimeoutRef,
       consumerTransportDisconnectTimeoutRef,
@@ -7252,17 +7212,20 @@ export function useMeetSocket({
   );
 
   const applyJoinAnswerIceServers = useCallback(
-    (iceServers: RTCIceServer[] | undefined) => {
+    (
+      iceServers: RTCIceServer[] | undefined,
+      relayExpiresAt: number | null,
+    ) => {
       if (!Array.isArray(iceServers)) return;
-      const { stunIceServers, turnIceServers } =
-        splitIceServersByType(iceServers);
-      runtimeStunIceServersRef.current =
-        stunIceServers.length > 0 ? stunIceServers : null;
-      runtimeTurnIceServersRef.current =
-        turnIceServers.length > 0 ? turnIceServers : null;
-      // Relay-only needs a relay. Without TURN in this answer, go back to the
-      // direct path rather than offer no candidates.
-      if (turnIceServers.length === 0) relayOnlyIceRef.current = false;
+      const next = applyJoinAnswerToIceServers(
+        runtimeIceServersRef.current,
+        { iceServers, relayExpiresAt },
+        Date.now(),
+      );
+      runtimeIceServersRef.current = next;
+      // Relay-only needs a relay. Without one, go back to the direct path
+      // rather than offer no candidates.
+      if (!next.turn) relayOnlyIceRef.current = false;
     },
     [],
   );
@@ -7288,12 +7251,13 @@ export function useMeetSocket({
         ) {
           return;
         }
-        applyJoinAnswerIceServers(joinInfo.iceServers);
-        heldJoinInfoRef.current = holdJoinInfo(joinInfo, {
+        const held = holdJoinInfo(joinInfo, {
           roomId,
           grant: { joinMode, userId: user?.id ?? "", isHost: isAdmin },
           receivedAt: Date.now(),
         });
+        heldJoinInfoRef.current = held;
+        applyJoinAnswerIceServers(joinInfo.iceServers, held.relayExpiresAt);
       } catch (error) {
         console.warn(
           "[Meets] Could not refresh ICE servers; keeping the current ones:",
@@ -7423,7 +7387,13 @@ export function useMeetSocket({
             }
             const socketUrl = sfuUrlOverride ?? sfuUrl;
 
-            applyJoinAnswerIceServers(iceServers);
+            const answerHold = heldJoinInfoRef.current;
+            applyJoinAnswerIceServers(
+              iceServers,
+              answerHold?.joinInfo === joinInfo
+                ? answerHold.relayExpiresAt
+                : null,
+            );
 
             const socket = io(socketUrl, {
               transports: ["websocket", "polling"],
@@ -9722,8 +9692,7 @@ export function useMeetSocket({
       }
       refs.intentionalDisconnectRef.current = false;
       serverRoomIdRef.current = null;
-      runtimeStunIceServersRef.current = null;
-      runtimeTurnIceServersRef.current = null;
+      runtimeIceServersRef.current = NO_RUNTIME_ICE_SERVERS;
       relayOnlyIceRef.current = false;
       mediaPathReconnectTriedRef.current = { producer: false, consumer: false };
       blockedMediaPathsRef.current.clear();

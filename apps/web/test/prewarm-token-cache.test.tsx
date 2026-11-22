@@ -7,8 +7,8 @@ import {
   type PrewarmModules,
 } from "../src/app/hooks/usePrewarmSocket";
 import {
-  getReusableJoinInfo,
   holdJoinInfo,
+  planJoinInfo,
   type JoinGrant,
 } from "../src/app/lib/held-join-info";
 
@@ -66,10 +66,10 @@ it("keeps a prefetched answer's TURN lifetime, so it is not reused after it", as
   const receivedAt = Date.now();
   const held = holdJoinInfo(cached!, { roomId: "room", grant, receivedAt });
 
-  expect(
-    getReusableJoinInfo(held, { roomId: "room", grant, now: receivedAt + 10 * 60_000 }),
-  ).not.toBeNull();
-  expect(
-    getReusableJoinInfo(held, { roomId: "room", grant, now: receivedAt + 2 * HOUR_MS }),
-  ).toBeNull();
+  const plan = (now: number) =>
+    planJoinInfo({ held, roomId: "room", grant, now, isFirstReconnectAttempt: true });
+
+  expect(held.relayExpiresAt).toBe(receivedAt + HOUR_MS);
+  expect(plan(receivedAt + 10 * 60_000).source).toBe("held");
+  expect(plan(receivedAt + 2 * HOUR_MS).source).toBe("fresh");
 });

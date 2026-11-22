@@ -5,8 +5,11 @@ export type JoinGrant = {
   isHost: boolean;
 };
 
+import { isRelayFresh, splitIceServersByType } from "./relay-credentials";
+
 type HoldableJoinInfo = {
   token: string;
+  iceServers?: RTCIceServer[];
   /** How long the answer's TURN credentials last, when it has any. */
   iceServersTtlSeconds?: number;
 };
@@ -19,8 +22,10 @@ export type HeldJoinInfo<T extends HoldableJoinInfo> = {
   joinInfo: T;
   roomId: string;
   grant: JoinGrant;
-  /** When the token or the TURN credentials run out, whichever is first. */
-  expiresAt: number | null;
+  /** When the SFU token runs out. */
+  tokenExpiresAt: number | null;
+  /** When the answer's TURN credentials run out; null without TURN. */
+  relayExpiresAt: number | null;
 };
 
 const EXPIRY_MARGIN_MS = 5 * 60_000;
@@ -52,20 +57,20 @@ export const holdJoinInfo = <T extends HoldableJoinInfo>(
     receivedAt,
   }: { roomId: string; grant: JoinGrant; receivedAt: number },
 ): HeldJoinInfo<T> => {
-  const tokenExpiresAt = readTokenExpiryMs(joinInfo.token);
   const turnTtlSeconds = joinInfo.iceServersTtlSeconds;
-  const turnExpiresAt =
-    typeof turnTtlSeconds === "number" && Number.isFinite(turnTtlSeconds)
-      ? receivedAt + turnTtlSeconds * 1000
-      : null;
+  const hasRelay =
+    splitIceServersByType(joinInfo.iceServers).turnIceServers.length > 0;
   return {
     joinInfo,
     roomId,
     grant,
-    expiresAt:
-      tokenExpiresAt === null || turnExpiresAt === null
-        ? tokenExpiresAt
-        : Math.min(tokenExpiresAt, turnExpiresAt),
+    tokenExpiresAt: readTokenExpiryMs(joinInfo.token),
+    relayExpiresAt:
+      hasRelay &&
+      typeof turnTtlSeconds === "number" &&
+      Number.isFinite(turnTtlSeconds)
+        ? receivedAt + turnTtlSeconds * 1000
+        : null,
   };
 };
 
@@ -76,7 +81,11 @@ const grantCovers = (held: JoinGrant, wanted: JoinGrant): boolean =>
   held.userId === wanted.userId &&
   (!held.isHost || wanted.isHost);
 
-/** The held answer, when it is for this join and is not near expiry. */
+/**
+ * The held answer, when it is for this join and its token is not near
+ * expiry. Its TURN credentials can run out sooner; they are checked where
+ * the answer's ICE servers are applied.
+ */
 export const getReusableJoinInfo = <T extends HoldableJoinInfo>(
   held: HeldJoinInfo<T> | null,
   wanted: { roomId: string; grant: JoinGrant; now: number },
@@ -88,8 +97,8 @@ export const getReusableJoinInfo = <T extends HoldableJoinInfo>(
   ) {
     return null;
   }
-  return held.expiresAt !== null &&
-    held.expiresAt - wanted.now > EXPIRY_MARGIN_MS
+  return held.tokenExpiresAt !== null &&
+    held.tokenExpiresAt - wanted.now > EXPIRY_MARGIN_MS
     ? held.joinInfo
     : null;
 };
@@ -102,9 +111,10 @@ export type JoinInfoPlan<T> =
 
 /**
  * A reconnect tries the held answer first, because it needs nothing from the
- * web app. If that attempt fails, later attempts ask the join route again so
- * a moved room or a rejected token is picked up, and fall back to the held
- * answer only while the route is unreachable.
+ * web app. If that attempt fails, or the held TURN credentials have run out,
+ * the join route is asked instead so a moved room, a rejected token or a new
+ * relay is picked up, and the held answer is used only while the route is
+ * unreachable.
  */
 export const planJoinInfo = <T extends HoldableJoinInfo>({
   held,
@@ -120,7 +130,9 @@ export const planJoinInfo = <T extends HoldableJoinInfo>({
   isFirstReconnectAttempt: boolean;
 }): JoinInfoPlan<T> => {
   const reusable = getReusableJoinInfo(held, { roomId, grant, now });
-  return reusable && isFirstReconnectAttempt
+  return reusable &&
+    isFirstReconnectAttempt &&
+    isRelayFresh(held?.relayExpiresAt ?? null, now)
     ? { source: "held", joinInfo: reusable }
     : { source: "fresh", fallback: reusable };
 };

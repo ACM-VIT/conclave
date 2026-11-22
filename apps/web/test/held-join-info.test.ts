@@ -23,7 +23,14 @@ const tokenExpiringIn = (ms: number): string => {
 
 const guest: JoinGrant = { joinMode: "meeting", userId: "guest", isHost: false };
 
-type Answer = { token: string; sfuUrl: string; iceServersTtlSeconds?: number };
+type Answer = {
+  token: string;
+  sfuUrl: string;
+  iceServers?: RTCIceServer[];
+  iceServersTtlSeconds?: number;
+};
+
+const turn = { urls: "turn:turn.example:3478", username: "u", credential: "c" };
 
 const held = ({
   joinInfo = { token: tokenExpiringIn(6 * 60 * 60_000), sfuUrl: "https://sfu" },
@@ -56,18 +63,31 @@ describe("reusing the SFU token on reconnect", () => {
     ).toBeNull();
   });
 
-  it("asks for a new answer once its TURN credentials are about to expire", () => {
+  it("keeps a valid token usable after its TURN credentials expire", () => {
     const joinInfo = {
       token: tokenExpiringIn(12 * 60 * 60_000),
       sfuUrl: "s",
-      iceServersTtlSeconds: 60 * 60,
+      iceServers: [turn],
+      iceServersTtlSeconds: 120,
     };
-    const answer = held({ joinInfo, receivedAt: NOW - 57 * 60_000 });
+    const answer = held({ joinInfo, receivedAt: NOW - 10 * 60_000 });
 
-    expect(getReusableJoinInfo(answer, wanted)).toBeNull();
-    expect(
-      getReusableJoinInfo(answer, { ...wanted, now: NOW - 20 * 60_000 }),
-    ).toBe(joinInfo);
+    expect(getReusableJoinInfo(answer, wanted)).toBe(joinInfo);
+    expect(answer.tokenExpiresAt).toBe(NOW + 12 * 60 * 60_000);
+    expect(answer.relayExpiresAt).toBe(NOW - 10 * 60_000 + 120_000);
+  });
+
+  it("gives an answer without TURN servers no relay lifetime", () => {
+    const answer = held({
+      joinInfo: {
+        token: tokenExpiringIn(12 * 60 * 60_000),
+        sfuUrl: "s",
+        iceServers: [{ urls: "stun:stun.example" }],
+        iceServersTtlSeconds: 120,
+      },
+    });
+
+    expect(answer.relayExpiresAt).toBeNull();
   });
 
   it("goes by the token when the TURN credentials outlast it", () => {
@@ -141,6 +161,34 @@ describe("where a reconnect gets its join info", () => {
     expect(
       planJoinInfo({ held: current, ...wanted, isFirstReconnectAttempt: false }),
     ).toEqual({ source: "fresh", fallback: current.joinInfo });
+  });
+
+  it("asks the join route for a fresh relay first once the held one has expired", () => {
+    const joinInfo = {
+      token: tokenExpiringIn(12 * 60 * 60_000),
+      sfuUrl: "s",
+      iceServers: [turn],
+      iceServersTtlSeconds: 120,
+    };
+    const current = held({ joinInfo, receivedAt: NOW - 10 * 60_000 });
+
+    expect(
+      planJoinInfo({ held: current, ...wanted, isFirstReconnectAttempt: true }),
+    ).toEqual({ source: "fresh", fallback: joinInfo });
+  });
+
+  it("goes straight to the SFU while the held relay still has time left", () => {
+    const joinInfo = {
+      token: tokenExpiringIn(12 * 60 * 60_000),
+      sfuUrl: "s",
+      iceServers: [turn],
+      iceServersTtlSeconds: 60 * 60,
+    };
+    const current = held({ joinInfo, receivedAt: NOW - 10 * 60_000 });
+
+    expect(
+      planJoinInfo({ held: current, ...wanted, isFirstReconnectAttempt: true }),
+    ).toEqual({ source: "held", joinInfo });
   });
 
   it("asks the join route with no fallback when nothing reusable is held", () => {
