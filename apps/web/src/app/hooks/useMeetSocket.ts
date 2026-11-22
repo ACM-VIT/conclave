@@ -6107,7 +6107,11 @@ export function useMeetSocket({
           producerInfo.producerId,
           Boolean(producerInfo.paused),
         );
-        if (producerInfo.type !== "webcam") continue;
+        // Only the producer that owns the slot speaks for the participant: a
+        // stale list can still carry the paused producer it replaced.
+        if (producerInfo.type !== "webcam" || isSupersededProducer(producerInfo)) {
+          continue;
+        }
         if (producerInfo.kind === "audio") {
           dispatchParticipants({
             type: "UPDATE_MUTED",
