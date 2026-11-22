@@ -40,6 +40,11 @@ docker compose -f docker-compose.sfu.yml run --rm --no-deps --user root \
   --cap-add CHOWN --cap-add DAC_READ_SEARCH --entrypoint chown sfu-a -R node:node /var/lib/conclave/recordings
 ```
 
+To upgrade an existing host, run `git pull` to the reviewed revision first,
+then run the new `scripts/deploy-sfu.sh`. Do not start the upgrade with the
+deploy script already on the host: it pulls the new revision and then keeps
+running its own old commands, which skip the ownership step.
+
 Both SFUs keep scheduled meetings, webinars and scheduling records in one
 SQLite file on the recordings volume. At startup each store proves it can
 write that file and its directory with a rolled-back test transaction. If it
