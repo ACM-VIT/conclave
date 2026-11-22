@@ -9,7 +9,7 @@ import { captionLanguageLabel } from "../src/app/lib/caption-languages";
 import { createEmptyTranscriptMinutes } from "../src/app/lib/transcript-reducer";
 import type { TranscriptSessionState } from "../src/app/lib/types";
 import { TranscriptRoom } from "../transcript-worker/src/room";
-import type { Env, Viewer } from "../transcript-worker/src/types";
+import type { Env, PersistedSnapshot, Viewer } from "../transcript-worker/src/types";
 
 const { lookup } = vi.hoisted(() => ({ lookup: vi.fn() }));
 vi.mock("@conclave/ai/room-server", async (original) => ({
@@ -71,17 +71,23 @@ function providerConnections() {
   return Object.assign(used, { codes });
 }
 
-async function notesWorker(env: Partial<Env>) {
-  const runtimeEnv = { ...env } as Env;
+async function notesWorker(env: Partial<Env>, snapshot?: PersistedSnapshot) {
+  const runtimeEnv = { SARVAM_API_KEY: "sarvam-global", OPENAI_API_KEY: "sk-global", ...env } as Env;
+  const snapshots: PersistedSnapshot[] = [];
+  const pending: Promise<unknown>[] = [];
   const room = new TranscriptRoom(
     {
       storage: {
-        get: async () => undefined,
-        put: async () => {},
+        get: async (key: string) => (key === "snapshot" ? structuredClone(snapshot) : undefined),
+        put: async (_key: string, value: PersistedSnapshot) => {
+          snapshots.push(structuredClone(value));
+        },
         delete: async () => true,
         setAlarm: async () => {},
       },
-      waitUntil: () => undefined,
+      waitUntil: (promise: Promise<unknown>) => {
+        pending.push(promise);
+      },
     } as unknown as DurableObjectState,
     runtimeEnv,
   ) as unknown as {
@@ -92,6 +98,7 @@ async function notesWorker(env: Partial<Env>) {
     startSession: (viewer: Viewer, message: object) => Promise<void>;
   };
   await room.loaded;
+  await Promise.all(pending);
   const viewer = {
     id: "host",
     userId: "host",
@@ -126,7 +133,8 @@ async function notesWorker(env: Partial<Env>) {
     for (const key of Object.keys(runtimeEnv) as (keyof Env)[]) delete runtimeEnv[key];
     Object.assign(runtimeEnv, next);
   };
-  return { room, send, changeEnv };
+  const saved = () => structuredClone(snapshots.at(-1)) as PersistedSnapshot;
+  return { room, send, changeEnv, saved };
 }
 
 const controllerFor = (
@@ -332,5 +340,68 @@ describe("whatever the environment did since, resuming sends exactly what the se
     await worker.send("sarvam", "session.takeover", (transcript.takeover as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]);
 
     expect(used.codes).toEqual(["ta-IN", "ta-IN"]);
+  });
+});
+
+describe("a snapshot from any earlier build resumes with the code it was sent", () => {
+  type Layout = "current" | "ebfacc3d" | "staging";
+  // How each build stored the code: on the session and at the root (now), at
+  // the root only (ebfacc3d), or not at all (staging, which saved its config).
+  const inLayout = (snapshot: PersistedSnapshot, layout: Layout): PersistedSnapshot => {
+    const copy = structuredClone(snapshot) as PersistedSnapshot & {
+      session: TranscriptSessionState & { providerLanguage?: string; language?: string; languageChosen?: boolean };
+    };
+    if (layout === "current") return copy;
+    delete copy.session.providerLanguage;
+    if (layout === "ebfacc3d") return copy;
+    delete copy.providerLanguage;
+    delete copy.session.language;
+    delete copy.session.languageChosen;
+    copy.transcriptionConfig = { language: "en", delay: "medium", locale: "en-IN" };
+    return copy;
+  };
+  const before = { TRANSCRIPT_SARVAM_LANGUAGE_CODE: "od-IN" };
+  const after = { TRANSCRIPT_SARVAM_LANGUAGE_CODE: "unknown" };
+  // Staging saved no code, so its sessions resume as staging resumes them:
+  // from the saved connection, with the environment of the restart.
+  const expectedCode = (layout: Layout) => (layout === "staging" ? "unknown" : "od-IN");
+
+  it.each(["current", "ebfacc3d", "staging"] as const)("a %s snapshot restores the same code after the environment changed", async (layout) => {
+    const used = providerConnections();
+    const first = await notesWorker(before);
+    await first.send("sarvam", "session.start", undefined);
+    const snapshot = inLayout({ ...first.saved(), session: { ...first.saved().session, keySource: "global" } }, layout);
+    used.codes.length = 0;
+
+    const restarted = await notesWorker(after, snapshot);
+
+    expect(used.codes).toEqual([expectedCode(layout)]);
+    expect(restarted.room.session?.providerLanguage).toBe(expectedCode(layout));
+    expect(captionLanguageLabel(restarted.room.session?.language) ?? "Auto-detect").toBe(
+      captionLanguageLabel(expectedCode(layout)) ?? "Auto-detect",
+    );
+  });
+
+  it.each(["current", "ebfacc3d", "staging"] as const)("a %s snapshot resumed with the picker untouched sends the code it shows", async (layout) => {
+    const used = providerConnections();
+    const first = await notesWorker(before);
+    await first.send("sarvam", "session.start", undefined);
+    const snapshot = inLayout(first.saved(), layout);
+    used.codes.length = 0;
+
+    const restarted = await notesWorker(after, snapshot);
+    expect(restarted.room.session?.status).toBe("takeover_needed");
+    const transcript = controllerFor(restarted.room.session!, restarted.room.captionLanguageDefaults());
+    await act(async () =>
+      root.render(<TranscriptPanel transcript={transcript} roomAi={roomUsing("sarvam")} onClose={() => {}} />),
+    );
+    const shown = shownLanguage();
+    await act(async () => {
+      container.querySelector("form")?.requestSubmit();
+    });
+    await restarted.send("sarvam", "session.takeover", (transcript.takeover as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]);
+
+    expect(shown).toBe(captionLanguageLabel(expectedCode(layout)) ?? "Auto-detect");
+    expect(used.codes).toEqual([expectedCode(layout)]);
   });
 });

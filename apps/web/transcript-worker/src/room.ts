@@ -379,9 +379,52 @@ export class TranscriptRoom {
       this.minutes.updatedAt ??
       Date.now();
     this.sequence = snapshot.sequence ?? this.segments.length;
+    const { providerLanguage } = this.savedTranscription(snapshot);
+    this.sessionProviderLanguage = providerLanguage;
+    this.session = {
+      ...this.session,
+      language: shownTranscriptionLanguage(providerLanguage),
+      providerLanguage,
+    };
     if (shouldRecoverAutomatically) {
       this.state.waitUntil(this.restorePersistedGlobalSession(snapshot));
     }
+  }
+
+  /**
+   * What a saved session was connected with, from any snapshot layout: the
+   * exact provider code on the session (current), at the snapshot root
+   * (earlier builds of this change), or, for staging's snapshots that saved
+   * none, the code staging itself resolves from the saved connection.
+   */
+  private savedTranscription(snapshot: PersistedSnapshot) {
+    const provider = getTranscriptTranscriptionProvider(
+      normalizeRealtimeTranscriptModel(snapshot.session.transcriptModel, DEFAULT_TRANSCRIPT_MODEL),
+    );
+    const savedConfig = snapshot.transcriptionConfig;
+    // A pick resumes as picked, the session's newest one first. Without one,
+    // resume exactly as before picks existed: the saved connection's
+    // language, else the deployment's, never the language the session reports.
+    const languageChosen = snapshot.session.language
+      ? snapshot.session.languageChosen === true
+      : savedConfig?.languageChosen === true;
+    const config = {
+      language: normalizeLanguage(
+        (languageChosen
+          ? snapshot.session.language ?? savedConfig?.language
+          : savedConfig?.language) ?? this.env.TRANSCRIPT_TRANSCRIPTION_LANGUAGE,
+      ),
+      languageChosen,
+      delay: savedConfig?.delay ?? normalizeDelay(undefined),
+      locale:
+        savedConfig?.locale ??
+        normalizeLocale(this.env.TRANSCRIPT_TRANSCRIPTION_LOCALE),
+    };
+    const providerLanguage =
+      snapshot.session.providerLanguage ??
+      snapshot.providerLanguage ??
+      transcriptionProviderLanguage(provider, { ...config, env: this.env });
+    return { config, providerLanguage };
   }
 
   private ensureSession(roomId: string): TranscriptSessionState {
@@ -410,30 +453,9 @@ export class TranscriptRoom {
     if (!transcriptionKey.ok || !responseKey.ok) return;
 
     const wasPaused = snapshot.session.status === "paused";
-    const savedConfig = snapshot.transcriptionConfig;
-    // A pick resumes as picked, the session's newest one first. Without one,
-    // resume exactly as before picks existed: the saved connection's
-    // language, else the deployment's, never the language the session reports.
-    const languageChosen = snapshot.session.language
-      ? snapshot.session.languageChosen === true
-      : savedConfig?.languageChosen === true;
-    const config = {
-      language: normalizeLanguage(
-        (languageChosen
-          ? snapshot.session.language ?? savedConfig?.language
-          : savedConfig?.language) ?? this.env.TRANSCRIPT_TRANSCRIPTION_LANGUAGE,
-      ),
-      languageChosen,
-      delay: savedConfig?.delay ?? normalizeDelay(undefined),
-      locale:
-        savedConfig?.locale ??
-        normalizeLocale(this.env.TRANSCRIPT_TRANSCRIPTION_LOCALE),
-    };
     // A saved session resends the code it was sent, whatever the environment
     // is now; only a snapshot without one resolves it from its saved config.
-    const providerLanguage =
-      snapshot.providerLanguage ??
-      transcriptionProviderLanguage(provider, { ...config, env: this.env });
+    const { config, providerLanguage } = this.savedTranscription(snapshot);
     this.sessionProviderLanguage = providerLanguage;
     this.responseApiKey = responseKey.apiKey;
     this.session = {
