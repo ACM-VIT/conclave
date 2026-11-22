@@ -15,10 +15,13 @@ IST to Azure Blob Storage in another region.
 SQLite and Redis are copied at one point in time. Before either copy, the
 backup asks every SFU in `CONCLAVE_SFU_HEALTH_URLS` to hold its durable
 writes (`POST /admin/persistence-fence`, `BACKUP_FENCE_HOLD_MS` 20 s by
-default). Every persistence call on the SFU passes one gate in the order it
-was made, so calls made during the hold wait their turn and then run in that
-order, and each caller gets its own result or error; the SFUs keep serving
-from memory, and media and signalling never wait on it. The hold belongs to
+default). Every persistence call on the SFU passes one gate. While it is
+open, calls run side by side as they always did, so a slow Redis never holds
+up a SQLite save. A hold closes it and answers once every call already under
+way has finished; calls made during the hold queue and start in the order
+they were made when it lifts, and each caller gets its own result or error.
+The SFUs keep serving from memory, and media and signalling never wait on
+it. The hold belongs to
 the backup's random owner token: only that token renews or releases it, and
 the SFU lifts it at its deadline, never later than 30 s after it was taken,
 if the backup dies. The backup renews between the SQLite and Redis copies and
