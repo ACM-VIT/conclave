@@ -197,6 +197,7 @@ function BrowserLayout({
                                 style={{ objectFit: "fill", pointerEvents: "none" }}
                             />
                             <iframe
+                                key={resolvedNoVncUrl}
                                 src={`${resolvedNoVncUrl}${resolvedNoVncUrl.includes("?") ? "&" : "?"}autoconnect=true&resize=scale&quality=0&compression=9`}
                                 onLoad={() => setIsReady(true)}
                                 className="absolute inset-0 w-full h-full border-0"
@@ -211,6 +212,7 @@ function BrowserLayout({
                     ) : (
                         <div className="relative h-full w-full">
                             <iframe
+                                key={resolvedNoVncUrl}
                                 src={resolvedNoVncUrl}
                                 onLoad={() => setIsReady(true)}
                                 className="h-full w-full border-0 transition-opacity duration-200"
