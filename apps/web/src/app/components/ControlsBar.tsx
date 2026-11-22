@@ -784,7 +784,10 @@ function ControlsBar(props: ControlsBarProps) {
   const appsEntry: DockEntry | null = appsItem
     ? {
         d: { ...appsItem, variant: props.isAppsOpen ? "active" : "default" },
-        dot: props.hasActiveApp ? { color: color.accent } : null,
+        dot:
+          props.hasActiveApp || props.hasAppWaiting
+            ? { color: color.accent }
+            : null,
       }
     : null;
   const transcriptEntry: DockEntry | null = transcriptItem
@@ -814,7 +817,7 @@ function ControlsBar(props: ControlsBarProps) {
 
   const promotedEntry =
     (transcriptEntry?.dot?.pulse ? transcriptEntry : null) ??
-    (props.hasActiveApp ? appsEntry : null) ??
+    (props.hasActiveApp || props.hasAppWaiting ? appsEntry : null) ??
     (props.hasActiveGame ? gamesEntry : null) ??
     (transcriptEntry?.dot ? transcriptEntry : null) ??
     (props.isGamesOpen ? gamesEntry : null) ??
@@ -945,6 +948,7 @@ function ControlsBar(props: ControlsBarProps) {
           />
           {filtersTip.visible &&
           !watchTip.visible &&
+          !props.isToastShowing &&
           !moreOpen &&
           !reactionsOpen &&
           !browserOpen ? (

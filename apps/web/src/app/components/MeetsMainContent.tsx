@@ -2017,12 +2017,9 @@ export default function MeetsMainContent({
     onOpenWatch: isAdmin ? openWatch : undefined,
     onCloseWatch: isAdmin ? closeWatch : undefined,
     isAppsOpen,
-    // The Apps button also lights up when a panel app is waiting on this
-    // viewer: a poll to vote in, or a question they have not seen.
-    hasActiveApp:
-      Boolean(appsState.activeAppId) ||
-      hasPollAwaitingVote ||
-      hasUnseenMeetingQuestion,
+    hasActiveApp: Boolean(appsState.activeAppId),
+    hasAppWaiting: hasPollAwaitingVote || hasUnseenMeetingQuestion,
+    isToastShowing: isJoined && toasts.some(Boolean),
     onToggleApps: handleToggleApps,
     isDevPlaygroundEnabled,
     isDevPlaygroundActive,
