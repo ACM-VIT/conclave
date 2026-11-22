@@ -13513,7 +13513,10 @@ final class MeetingViewModel {
     }
 
     private func makeChatInputs(roster: [ChatRosterEntry]) -> ChatInputs {
-        let context = ChatInputMemoContext(roster: roster, chatLocalUserId: chatLocalUserId, userId: state.userId,
+        var participantNames: [String: String] = [:]
+        for (id, participant) in state.participants { participantNames[id] = participant.displayName ?? "" }
+        let context = ChatInputMemoContext(roster: roster, displayNames: state.displayNames, participantNames: participantNames,
+                                           chatLocalUserId: chatLocalUserId, userId: state.userId,
                                            sfuUserId: state.sfuUserId ?? "", displayName: state.displayName)
         if context != chatInputMemoContext {
             chatInputMemoContext = context
@@ -14096,6 +14099,7 @@ final class MeetingViewModel {
         if isCurrent {
             state.unreadChatCount = 0
             clearChatOverlayMessages()
+            chat.willShow()
         }
     }
 
@@ -15981,8 +15985,12 @@ struct ChatInputMemo {
     let input: ChatMessageInput
 }
 
+/// Everything a converted message's names and "you" flags are resolved from. Names come from the snapshot
+/// names, participant names and their session aliases, not just the roster.
 struct ChatInputMemoContext: Equatable {
     let roster: [ChatRosterEntry]
+    let displayNames: [String: String]
+    let participantNames: [String: String]
     let chatLocalUserId: String
     let userId: String
     let sfuUserId: String

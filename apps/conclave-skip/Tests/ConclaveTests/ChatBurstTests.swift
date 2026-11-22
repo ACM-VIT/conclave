@@ -54,6 +54,19 @@ struct ClosedChatWorkTests {
         #expect(chat.emojiParseCount == parsed + 30)
     }
 
+    @Test func theUnreadDividerGoesBeforeTheEarliestNewMessageEvenWhenTheyArriveOutOfOrder() {
+        var messages = history(3)
+        let chat = Chat.presenter(Chat.inputs(messages))
+        messages.append(Chat.peer("late", "sent second", at: 200, history: false))
+        chat.apply(Chat.inputs(messages), change: .messages)
+        messages.append(Chat.peer("early", "sent first", at: 150, history: false))
+        chat.apply(Chat.inputs(messages), change: .messages)
+        chat.willShow()
+        let rowIds = chat.timeline.rowIds
+        let divider = rowIds.firstIndex(of: "unread")
+        #expect(divider.map { rowIds[$0 + 1] } == "early")
+    }
+
     @Test func readingTheClosedTimelineCatchesUpWithoutCountingAnythingTwice() {
         var messages = history(3)
         let chat = Chat.presenter(Chat.inputs(messages))

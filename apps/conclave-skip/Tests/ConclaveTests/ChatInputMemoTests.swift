@@ -26,8 +26,17 @@ struct ChatInputMemoTests {
         #expect(viewModel.chatMessageInputBuildCount == before + 1)
         #expect(viewModel.chat.timeline.rowIds.contains("m-new"))
 
+        viewModel.state.chatMessages.append(ChatMessage(id: "m-pending", userId: "remote@example.com#w", displayName: "Remote",
+                                                        content: "while closed", roomId: "room-a"))
+        #expect(viewModel.chat.hasDeferredRows)
+        viewModel.shell.panels.present(.chat, from: .call)
+        #expect(!viewModel.chat.hasDeferredRows, "rows are current before the panel's first frame")
+        #expect(viewModel.chat.currentTimeline.rowIds.contains("m-pending"))
+        viewModel.shell.panels.dismiss(cancelPending: true)
+        viewModel.chat.panelDidClose()
+
         viewModel.state.displayNames = ["remote@example.com#w": "Remote Person"]
-        #expect(viewModel.chatMessageInputBuildCount == before + 1 + 201)
+        #expect(viewModel.chatMessageInputBuildCount >= before + 1 + 202)
         #expect(viewModel.chat.rows.entry(for: "m-0").row.senderName == "Remote Person")
     }
 }

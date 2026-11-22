@@ -134,14 +134,21 @@ enum ChatLinkifyPolicy {
         return first.isWhitespace || first.isNewline
     }
 
-    // Range checks on one-character strings, not a substring search per character: the scanner runs
-    // these for every character of every message.
+    // Set lookups instead of a substring search per character: the scanner runs these for every character
+    // of every message. Non-ASCII characters keep the original case-folded check.
+    private static let asciiLetters: Set<String> = Set(characters("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"))
+    private static let asciiDigits: Set<String> = Set(characters("0123456789"))
+    private static let asciiCharacters: Set<String> = Set(characters(
+        " !\"#%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\t\n\r"))
+
     private static func isAsciiLetter(_ character: String) -> Bool {
-        character.count == 1 && ((character >= "a" && character <= "z") || (character >= "A" && character <= "Z"))
+        if asciiLetters.contains(character) { return true }
+        if asciiCharacters.contains(character) { return false }
+        return "abcdefghijklmnopqrstuvwxyz".contains(character.lowercased()) && character.count == 1
     }
 
     private static func isAlphanumeric(_ character: String) -> Bool {
-        isAsciiLetter(character) || (character.count == 1 && character >= "0" && character <= "9")
+        isAsciiLetter(character) || asciiDigits.contains(character)
     }
 
     private static func isLabelCharacter(_ character: String) -> Bool {
