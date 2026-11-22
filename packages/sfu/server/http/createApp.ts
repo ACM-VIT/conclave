@@ -1306,11 +1306,17 @@ export const createSfuApp = ({
 
     const allowWhenLocked = body.allowWhenLocked !== false;
     const admitted: string[] = [];
+    const allowed: string[] = [];
+    const refused: string[] = [];
 
     for (const userKey of userKeys) {
       const pending = lookup.room.pendingClients.get(userKey);
       lookup.room.unblockUser(userKey);
-      lookup.room.allowUser(userKey);
+      if (!lookup.room.allowUser(userKey)) {
+        refused.push(userKey);
+        continue;
+      }
+      allowed.push(userKey);
       if (allowWhenLocked || lookup.room.isLocked) {
         lookup.room.allowLockedUser(userKey);
       }
@@ -1332,7 +1338,8 @@ export const createSfuApp = ({
     res.json({
       success: true,
       roomId: lookup.room.id,
-      allowed: userKeys,
+      allowed,
+      refused,
       admitted,
       access: toRoomSnapshot(lookup.room).access,
     });

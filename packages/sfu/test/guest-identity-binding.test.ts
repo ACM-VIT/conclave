@@ -533,6 +533,111 @@ describe("guests on clients that predate guest passes", () => {
   });
 });
 
+describe("a host action that names a guest the room does not know", () => {
+  const older = {
+    userId: "guest-1700000000002-ghi789",
+    clientId: "conclave",
+    sessionId: "1700000000002-ghi789",
+    guestProof: "proof-of-the-older-pass",
+  } satisfies SfuAuthPayload;
+  const olderSeat = `${older.userId}#${older.sessionId}`;
+  const waiting: unknown = expect.objectContaining({ status: "waiting" });
+
+  const allowUsers = async (
+    host: Awaited<ReturnType<typeof join>>,
+    userKeys: string[],
+  ) => {
+    const ack = vi.fn();
+    await host.peer.handlers.get("admin:allowUsers")!(...[
+      { userKeys },
+      ack,
+    ] as never[]);
+    return ack;
+  };
+
+  // A locked meeting that a guest on an older client joined and left. The
+  // room has dropped its proof by the time the host acts.
+  const lockedRoomTheGuestLeft = async () => {
+    const state = makeState();
+    const host = await join(state, guestHost);
+    const room = state.rooms.get("conclave:room")!;
+    await join(state, older);
+    room.removeClient(olderSeat);
+    await endOfTurn();
+    room.setLocked(true);
+    return { state, host, room };
+  };
+
+  it.each([
+    ["no pass", {}],
+    ["another pass", { guestProof: "proof-of-another-pass" }],
+  ])(
+    "does not admit the guest's public key for a browser with %s to use",
+    async (_label, intruderPass) => {
+      const { state, host, room } = await lockedRoomTheGuestLeft();
+
+      const allowed = await allowUsers(host, [older.userId]);
+
+      expect(allowed).toHaveBeenCalledWith(
+        expect.objectContaining({ allowed: [], refused: [older.userId] }),
+      );
+      expect(room.isAllowed(older.userId)).toBe(false);
+      expect(room.isLockedAllowed(older.userId)).toBe(false);
+      const attempt = await join(state, {
+        ...publicIdentity(older),
+        ...intruderPass,
+      });
+      expect(attempt.ack).toHaveBeenCalledWith(waiting);
+    },
+  );
+
+  it("admits that guest from its waiting entry, bound to the pass it knocked with", async () => {
+    const { state, host } = await lockedRoomTheGuestLeft();
+    await allowUsers(host, [older.userId]);
+    expect((await join(state, older)).ack).toHaveBeenCalledWith(waiting);
+
+    const allowed = await allowUsers(host, [older.userId]);
+
+    expect(allowed).toHaveBeenCalledWith(
+      expect.objectContaining({ allowed: [older.userId], refused: [] }),
+    );
+    const intruder = await join(state, publicIdentity(older));
+    expect(intruder.ack).toHaveBeenCalledWith(refused);
+    expect((await join(state, older)).ack).toHaveBeenCalledWith(joined);
+  });
+
+  it("still admits a signed-in account ahead of time", async () => {
+    const { state, host } = await lockedRoomTheGuestLeft();
+
+    const allowed = await allowUsers(host, ["alex@example.com"]);
+
+    expect(allowed).toHaveBeenCalledWith(
+      expect.objectContaining({ allowed: ["alex@example.com"], refused: [] }),
+    );
+    const account = await join(state, {
+      email: "alex@example.com",
+      userId: "alex@example.com",
+      clientId: "conclave",
+      sessionId: "s2",
+    });
+    expect(account.ack).toHaveBeenCalledWith(joined);
+  });
+
+  it("still admits a guest that is in the room without a pass", async () => {
+    const state = makeState();
+    const host = await join(state, guestHost);
+    const room = state.rooms.get("conclave:room")!;
+    await join(state, publicIdentity(older));
+
+    const allowed = await allowUsers(host, [older.userId]);
+
+    expect(allowed).toHaveBeenCalledWith(
+      expect.objectContaining({ allowed: [older.userId], refused: [] }),
+    );
+    expect(room.isAllowed(older.userId)).toBe(true);
+  });
+});
+
 describe("a guest identity that holds nothing in the room", () => {
   const signedInHost = {
     email: "host@example.com",

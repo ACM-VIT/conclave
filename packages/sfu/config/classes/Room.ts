@@ -1,3 +1,4 @@
+import { isGuestUserKey } from "../../server/identity.js";
 import { RoomAiCredentials } from "../../server/roomAiCredentials.js";
 import { newInviteCodeVersion } from "../../server/inviteCodeVersion.js";
 import type {
@@ -761,6 +762,22 @@ export class Room {
       queueMicrotask(() => this.releaseUnheldGuestIdentities());
     }
     this.guestIdentitiesToRelease.add(userKey);
+  }
+
+  /**
+   * Whether a host action may give `userKey` a right that lets a later join
+   * in. A guest key is public, so on its own it says nothing about who will
+   * use the right. The room has to know the guest: the key holds something
+   * here, or its proof is still on record from earlier in this turn. A guest
+   * the room no longer knows has to knock, and is admitted from its waiting
+   * entry, which carries its proof.
+   */
+  private canGrantTo(userKey: string): boolean {
+    return (
+      !isGuestUserKey(userKey) ||
+      this.holdsUserKey(userKey) ||
+      this.guestProofsByUserKey.has(userKey)
+    );
   }
 
   private releaseUnheldGuestIdentities(): void {
@@ -2603,10 +2620,13 @@ export class Room {
     this.releaseGuestIdentity(userKey);
   }
 
-  allowUser(userKey: string) {
+  /** Returns false when the room cannot admit `userKey` (see `canGrantTo`). */
+  allowUser(userKey: string): boolean {
+    if (!this.canGrantTo(userKey)) return false;
     this.blockedUsers.delete(userKey);
     this.allowedUsers.add(userKey);
     this.pendingClients.delete(userKey);
+    return true;
   }
 
   isAllowed(userKey: string): boolean {
@@ -2618,10 +2638,13 @@ export class Room {
     this.releaseGuestIdentity(userKey);
   }
 
-  allowLockedUser(userKey: string) {
+  /** Returns false when the room cannot admit `userKey` (see `canGrantTo`). */
+  allowLockedUser(userKey: string): boolean {
+    if (!this.canGrantTo(userKey)) return false;
     this.blockedUsers.delete(userKey);
     this.lockedAllowedUsers.add(userKey);
     this.pendingClients.delete(userKey);
+    return true;
   }
 
   isLockedAllowed(userKey: string): boolean {

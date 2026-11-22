@@ -925,10 +925,16 @@ export const registerAdminHandlers = (
 
       const allowWhenLocked = data?.allowWhenLocked !== false;
       const admitted: string[] = [];
+      const allowed: string[] = [];
+      const refused: string[] = [];
       for (const userKey of userKeys) {
         const pending = guard.room.pendingClients.get(userKey);
         guard.room.unblockUser(userKey);
-        guard.room.allowUser(userKey);
+        if (!guard.room.allowUser(userKey)) {
+          refused.push(userKey);
+          continue;
+        }
+        allowed.push(userKey);
         if (allowWhenLocked || guard.room.isLocked) {
           guard.room.allowLockedUser(userKey);
         }
@@ -951,7 +957,8 @@ export const registerAdminHandlers = (
 
       respond(cb, {
         success: true,
-        allowed: userKeys,
+        allowed,
+        refused,
         admitted,
         access: toRoomSnapshot(guard.room).access,
       });
