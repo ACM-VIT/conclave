@@ -78,10 +78,5 @@
     "conclave/no-comments": {
       "count": 2
     }
-  },
-  "src/lib/avatar-faces.ts": {
-    "conclave/no-comments": {
-      "count": 1
-    }
   }
 }

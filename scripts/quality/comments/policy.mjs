@@ -52,20 +52,68 @@ export const vendoredIgnores = (packageDir) =>
 
 const SPDX_LINE = /^SPDX-License-Identifier: [A-Za-z0-9.+()-]+(?: (?:AND|OR|WITH) [A-Za-z0-9.+()-]+)*$/;
 const COPYRIGHT_LINE = /^Copyright (?:\(c\) |\(C\) |© )?\d{4}(?:\s*[-,]\s*\d{4})*,? \S.*$/;
+const LICENSE_TITLE = /^(?:The )?(?:MIT|ISC|BSD [23]-Clause|Apache) License(?: \(MIT\))?\.?$|^Version 2\.0, January 2004$/;
+
+const KNOWN_LICENSE_TEXTS = {
+  MIT: [
+    'Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:',
+    "The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.",
+    'THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.',
+  ],
+  ISC: [
+    "Permission to use, copy, modify, and/or distribute this software for any purpose with or without fee is hereby granted, provided that the above copyright notice and this permission notice appear in all copies.",
+    'THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.',
+  ],
+  BSD: [
+    "Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:",
+    "Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.",
+    "Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.",
+    'THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.',
+  ],
+  "Apache-2.0": [
+    'Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at',
+    "http://www.apache.org/licenses/LICENSE-2.0",
+    'Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the specific language governing permissions and limitations under the License.',
+  ],
+};
+
+const canonical = (text) =>
+  text
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+
+const CANONICAL_LICENSES = Object.values(KNOWN_LICENSE_TEXTS).map((sentences) => sentences.map(canonical));
+const CANONICAL_LICENSE_BODIES = CANONICAL_LICENSES.map((sentences) => sentences.join(" "));
+const BSD_THIRD_CLAUSE = /^(?:\d\.\s*)?neither the name of .+ nor the names of (?:its|their) contributors may be used to endorse or promote products derived from this software without specific prior written permission\.$/;
 
 const commentContentLines = (text) =>
   text
     .replace(/^\/\/+|^\/\*+|^#+|\*+\/$/g, "")
     .split("\n")
-    .map((line) => line.replace(/^\s*\*?\s?/, "").trim())
+    .map((line) => line.replace(/^\s*(?:\*|\/\/+|#+)?\s?/, "").trim())
     .filter((line) => line !== "");
+
+const isNoticeLine = (line) => SPDX_LINE.test(line) || COPYRIGHT_LINE.test(line);
+
+const containsKnownLicense = (lines) => {
+  const body = canonical(lines.join(" ").replace(/(^|\s)\d\.\s+/g, "$1"));
+  return CANONICAL_LICENSES.some((sentences) => sentences.every((sentence) => body.includes(sentence)));
+};
+
+const isLicenseFragment = (line) => {
+  if (isNoticeLine(line) || LICENSE_TITLE.test(line)) return true;
+  const text = canonical(line.replace(/^\d\.\s+/, ""));
+  return CANONICAL_LICENSE_BODIES.some((body) => body.includes(text)) || BSD_THIRD_CLAUSE.test(text);
+};
 
 export const isLicenseNotice = (text) => {
   const lines = commentContentLines(text);
-  return lines.length > 0 && lines.every((line) => SPDX_LINE.test(line) || COPYRIGHT_LINE.test(line));
+  return lines.length > 0 && (lines.every(isNoticeLine) || containsKnownLicense(lines));
 };
 
-const DIRECTIVE_PROLOGUE = /^\s*(?:(["'])use [a-z ]+\1;?\s*)*$/;
 
 const ESLINT_DIRECTIVE = /^(?:\/\/|\/\*)\s*eslint-(disable|enable)(?:-next-line|-line)?(?=\s|\*\/|$)/;
 const ESLINT_INLINE_CONFIG = /^\/\*\s*eslint(?:-env)?\s/;
@@ -142,7 +190,7 @@ const tsExpectErrorKind = (text) => {
   return description.length >= 3 ? { kind: "ts-expect-error" } : { problem: "directiveReason" };
 };
 
-const directiveKind = (language, text, start) => {
+const directiveKind = (language, text, start, lineOfStart) => {
   if (start === 0 && text.startsWith("#!")) return { kind: "shebang" };
   if (language === "script") {
     const found = eslintDirectiveKind(text) ?? tsExpectErrorKind(text);
@@ -154,6 +202,7 @@ const directiveKind = (language, text, start) => {
     return { kind: "swift-tools-version" };
   }
   if (language === "css" && SOURCE_MAP_URL.test(text)) return { kind: "source-map-url" };
+  if (language === "python" && /^#.*?coding[:=][ \t]*[-\w.]+/.test(text) && lineOfStart <= 2) return { kind: "encoding-declaration" };
   return undefined;
 };
 
@@ -196,17 +245,36 @@ const iconProvenanceIndexes = (comments) => {
   return indexes;
 };
 
+const LEADING_GAP = /^(?:#![^\n]*\n)?\s*(?:(["'])use [a-z ]+\1;?\s*)*$/;
+
 const licenseHeaderIndexes = (source, comments, isDirective) => {
-  const indexes = new Set();
+  const run = [];
   let previousEnd = 0;
   for (let index = 0; index < comments.length; index += 1) {
     const gap = source.slice(previousEnd, comments[index].start);
-    const afterShebang = index === 1 && comments[0].start === 0 && comments[0].text.startsWith("#!");
-    if (index === 0 ? !DIRECTIVE_PROLOGUE.test(gap) : afterShebang ? gap.trim() !== "" : !/^[ \t]*\n[ \t]*$/.test(gap)) break;
+    if (index === 0 ? !LEADING_GAP.test(gap) : gap.trim() !== "") break;
     previousEnd = comments[index].end;
-    if (isDirective(index)) continue;
-    if (!isLicenseNotice(comments[index].text)) break;
-    indexes.add(index);
+    if (!isDirective(index)) run.push(index);
+  }
+  const indexes = new Set();
+  for (let position = 0; position < run.length; ) {
+    const lines = commentContentLines(comments[run[position]].text);
+    if (lines.length > 0 && (lines.every(isNoticeLine) || containsKnownLicense(lines))) {
+      indexes.add(run[position]);
+      position += 1;
+      continue;
+    }
+    let end = position;
+    const fragmentLines = [];
+    while (end < run.length) {
+      const fragment = commentContentLines(comments[run[end]].text);
+      if (!fragment.every(isLicenseFragment)) break;
+      fragmentLines.push(...fragment);
+      end += 1;
+    }
+    if (end === position || !containsKnownLicense(fragmentLines)) break;
+    for (let index = position; index < end; index += 1) indexes.add(run[index]);
+    position = end;
   }
   return indexes;
 };
@@ -217,7 +285,7 @@ export const classifyComments = (source, comments, language, { generatedIconOutp
   const directives = comments.map((comment, index) => {
     if (skip.has(index)) return { kind: "skip-directive" };
     if (provenance.has(index)) return { kind: "provenance-hash" };
-    return directiveKind(language, comment.text, comment.start);
+    return directiveKind(language, comment.text, comment.start, source.slice(0, comment.start).split("\n").length);
   });
   const license = licenseHeaderIndexes(source, comments, (index) => directives[index] !== undefined);
   return comments.map((_, index) => {

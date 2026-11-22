@@ -636,6 +636,70 @@ test("CSS comments come from the CSS tokenizer, so url() bodies stay data", () =
   assert.deepEqual(texts("a { --image: αurl(/* note */ 1px) }\n", "d.css"), ["/* note */"]);
 });
 
+const FACEHASH_NOTICE = readFileSync(new URL("../../../apps/web/src/lib/avatar-faces.ts", import.meta.url), "utf8")
+  .split("\n")
+  .slice(0, 21)
+  .join("\n");
+
+test("the repo's facehash MIT notice is a license header in a new file", () => {
+  assert.match(FACEHASH_NOTICE, /^\/\*\*[\s\S]*Permission is hereby granted[\s\S]*\*\/$/);
+  assert.deepEqual(extract(`${FACEHASH_NOTICE}\nexport const a = 1;\n// prose\n`, "new.ts").map((c) => c.allowed), ["license-header", null]);
+});
+
+test("an SPDX and Copyright header passes in every language and line ending", { skip: swiftMissing }, () => {
+  for (const [file, marker] of [["a.ts", "//"], ["a.sh", "#"], ["a.py", "#"], ["A.swift", "//"]]) {
+    const source = `${marker} SPDX-License-Identifier: MIT\n${marker} Copyright 2026 Example Inc.\n${file.endsWith(".swift") ? "let a = 1" : file.endsWith(".py") ? "a = 1" : file.endsWith(".sh") ? "echo a" : "export {};"}\n`;
+    assert.deepEqual(extract(source, file).map((c) => c.allowed), ["license-header", "license-header"], file);
+  }
+});
+
+test("a license header may follow a Swift shebang or a Python encoding line", { skip: swiftMissing }, () => {
+  assert.deepEqual(extract("#!/usr/bin/env swift\n// SPDX-License-Identifier: MIT\nprint(1)\n", "tool.swift").map((c) => c.allowed), ["license-header"]);
+  assert.deepEqual(
+    extract("#!/usr/bin/env python3\n# -*- coding: utf-8 -*-\n# SPDX-License-Identifier: MIT\nx = 1\n", "tool.py").map((c) => c.allowed),
+    ["shebang", "encoding-declaration", "license-header"],
+  );
+});
+
+test("standard license texts in line comments are one notice, prose is not", () => {
+  const isc = [
+    "// Copyright 2026 Example Inc.",
+    "//",
+    "// Permission to use, copy, modify, and/or distribute this software for any",
+    "// purpose with or without fee is hereby granted, provided that the above",
+    "// copyright notice and this permission notice appear in all copies.",
+    "//",
+    '// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES',
+    "// WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF",
+    "// MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR",
+    "// ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES",
+    "// WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN",
+    "// ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF",
+    "// OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.",
+    "// TODO tidy this module",
+    "export {};",
+  ].join("\n");
+  const verdicts = extract(isc, "isc.ts").map((c) => c.allowed);
+  assert.deepEqual(verdicts.slice(0, -1), Array(verdicts.length - 1).fill("license-header"));
+  assert.equal(verdicts.at(-1), null);
+  assert.deepEqual(extract("// TODO change the MIT License dialog\n// Permission is hereby granted\nexport {};\n", "todo.ts").map((c) => c.allowed), [null, null]);
+  const apache = [
+    "# Licensed under the Apache License, Version 2.0 (the \"License\");",
+    "# you may not use this file except in compliance with the License.",
+    "# You may obtain a copy of the License at",
+    "#",
+    "#     http://www.apache.org/licenses/LICENSE-2.0",
+    "#",
+    "# Unless required by applicable law or agreed to in writing, software",
+    "# distributed under the License is distributed on an \"AS IS\" BASIS,",
+    "# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.",
+    "# See the License for the specific language governing permissions and",
+    "# limitations under the License.",
+    "echo hi",
+  ].join("\n");
+  assert.ok(extract(apache, "apache.sh").every((c) => c.allowed === "license-header"));
+});
+
 test("files with bare CR line endings are read line by line", { skip: kotlinMissing || python312Missing }, () => {
   assert.deepEqual(extractComments('fun main() {\r    println("x")\r}\r// actual\r', "Main.kt").map((c) => [c.line, c.text]), [[4, "// actual"]]);
   assert.deepEqual(extractComments("x = 1\r# actual\r", "a.py").map((c) => [c.line, c.text]), [[2, "# actual"]]);
