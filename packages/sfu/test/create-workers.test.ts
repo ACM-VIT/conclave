@@ -1,3 +1,4 @@
+import { execFileSync, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
 import { readFileSync } from "node:fs";
@@ -6,6 +7,7 @@ import { createWorker } from "mediasoup";
 import type { WebRtcServer, Worker } from "mediasoup/types";
 import { expect, it, vi } from "vitest";
 import { config } from "../config/config.js";
+import { readWorkerSizing } from "../config/workerSettings.mjs";
 import createWorkers, { getWorkerWebRtcServer } from "../utilities/createWorkers.js";
 
 vi.mock("mediasoup", () => ({ createWorker: vi.fn() }));
@@ -42,7 +44,7 @@ it.each([
   const previous = { ...settings };
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   Object.assign(settings, {
-    workerCount: 0,
+    workerCount: undefined,
     hostInstanceCount: instances,
     webRtcPortBudget: 4,
     rtcMaxPort: settings.rtcMinPort + ports - 1,
@@ -92,19 +94,19 @@ it.each([
 });
 
 it.each([
-  { name: "affinity shared by two instances", affinity: 8, files: {}, instances: 2, override: 0, expected: 4 },
-  { name: "2-vCPU host shared by three instances", affinity: 2, files: {}, instances: 3, override: 0, expected: 1 },
+  { name: "affinity shared by two instances", affinity: 8, files: {}, instances: 2, override: undefined, expected: 4 },
+  { name: "2-vCPU host shared by three instances", affinity: 2, files: {}, instances: 3, override: undefined, expected: 1 },
   {
     name: "nested cgroup quota shared by two instances",
     affinity: 8,
     files: { "/proc/self/cgroup": "0::/sfu/current", "/sys/fs/cgroup/sfu/cpu.max": "350000 100000" },
-    instances: 2, override: 0, expected: 1,
+    instances: 2, override: undefined, expected: 1,
   },
   {
     name: "legacy CPU quota",
     affinity: 8,
     files: { "/sys/fs/cgroup/cpu/cpu.cfs_quota_us": "250000", "/sys/fs/cgroup/cpu/cpu.cfs_period_us": "100000" },
-    instances: 1, override: 0, expected: 2,
+    instances: 1, override: undefined, expected: 2,
   },
   {
     name: "explicit worker count",
@@ -140,21 +142,62 @@ it.each([
   }
 });
 
-it("reserves the first port in the staging range and leaves the rest for plain RTP", async () => {
+it("uses the inherited Compose budget for staging WebRTC and plain RTP", async ({ skip }) => {
+  if (spawnSync("docker", ["compose", "version"], { stdio: "ignore" }).status !== 0) {
+    skip("Docker Compose is not installed");
+    return;
+  }
+  const stagingCompose = `services:
+  sfu-staging:
+    extends:
+      file: docker-compose.sfu.yml
+      service: sfu-a
+    environment:
+      RTC_MIN_PORT: "42001"
+      RTC_MAX_PORT: "42200"
+      SFU_WORKER_COUNT: "1"
+`;
+  const rendered = execFileSync("docker", [
+    "compose", "--env-file", "/dev/null", "-f", "-", "config", "--format", "json",
+  ], {
+    cwd: new URL("../../../", import.meta.url),
+    env: {
+      HOME: process.env.HOME,
+      PATH: process.env.PATH,
+      ANNOUNCED_IP: "127.0.0.1",
+      SFU_SECRET: "staging-fixture",
+    },
+    input: stagingCompose,
+    encoding: "utf8",
+  });
+  const compose = JSON.parse(rendered) as {
+    services: { "sfu-staging": { environment: Record<string, string | null> } };
+  };
+  const { environment } = compose.services["sfu-staging"];
+  const settings = config.workerSettings;
+  const previous = { ...settings };
+  Object.assign(settings, readWorkerSizing(environment), {
+    rtcMinPort: Number(environment.RTC_MIN_PORT),
+    rtcMaxPort: Number(environment.RTC_MAX_PORT),
+  });
   const worker = makeWorker();
   worker.createWebRtcServer.mockResolvedValue({} as WebRtcServer);
   vi.mocked(createWorker).mockClear().mockResolvedValueOnce(worker as unknown as Worker);
-  await createWorkers();
-  expect(worker.createWebRtcServer).toHaveBeenCalledWith({
-    listenInfos: [
-      expect.objectContaining({ protocol: "udp", port: 42001 }),
-      expect.objectContaining({ protocol: "tcp", port: 42001 }),
-    ],
-  });
-  expect(createWorker).toHaveBeenCalledWith(expect.objectContaining({
-    rtcMinPort: 42002,
-    rtcMaxPort: 42200,
-  }));
+  try {
+    expect(await createWorkers()).toHaveLength(1);
+    expect(worker.createWebRtcServer).toHaveBeenCalledWith({
+      listenInfos: [
+        expect.objectContaining({ protocol: "udp", port: 42001 }),
+        expect.objectContaining({ protocol: "tcp", port: 42001 }),
+      ],
+    });
+    expect(createWorker).toHaveBeenCalledWith(expect.objectContaining({
+      rtcMinPort: 42005,
+      rtcMaxPort: 42200,
+    }));
+  } finally {
+    Object.assign(settings, previous);
+  }
 });
 
 it("rejects a range that leaves no port for plain RTP", async () => {

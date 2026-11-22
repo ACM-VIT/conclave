@@ -7,6 +7,7 @@ import { createHash } from "crypto";
 import { fileURLToPath } from "url";
 import type { RouterRtpCodecCapability } from "mediasoup/types";
 import { resolveConfiguredSfuRegion } from "../server/regions.js";
+import { readWorkerSizing } from "./workerSettings.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const sfuPackageRoot = path.resolve(__dirname, "..");
@@ -301,7 +302,6 @@ const parsedRtcMaxPort = toNumber(process.env.RTC_MAX_PORT, 49999, {
   max: 65535,
 });
 const rtcMaxPort = parsedRtcMaxPort >= rtcMinPort ? parsedRtcMaxPort : rtcMinPort;
-const configuredWebRtcPortBudget = process.env.SFU_WEBRTC_PORT_BUDGET?.trim();
 if (parsedRtcMaxPort < rtcMinPort) {
   console.warn("[SFU] RTC_MAX_PORT is lower than RTC_MIN_PORT; using a single-port range.");
 }
@@ -439,15 +439,7 @@ export const config = {
     enabled: !transcriptRelayDisabled,
   },
   workerSettings: {
-    workerCount: toNumber(process.env.SFU_WORKER_COUNT, 0, {
-      integer: true,
-      min: 0,
-    }),
-    hostInstanceCount: toNumber(process.env.SFU_WORKER_HOST_INSTANCES, 1, {
-      integer: true,
-      min: 1,
-    }),
-    webRtcPortBudget: configuredWebRtcPortBudget ? Number(configuredWebRtcPortBudget) : undefined,
+    ...readWorkerSizing(process.env),
     rtcMinPort,
     rtcMaxPort,
     logLevel: "warn" as WorkerLogLevel,

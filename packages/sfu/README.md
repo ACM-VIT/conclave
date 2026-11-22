@@ -13,7 +13,8 @@ services, the server-authoritative game runtime, and transcript relays.
 
 ## To apply in production
 
-Keep `SFU_WORKER_COUNT=0` on the 2-vCPU production VM to use the derived count.
+Leave `SFU_WORKER_COUNT` unset on the 2-vCPU production VM to use the derived
+count. Remove any existing `SFU_WORKER_COUNT=0` assignment before deploying.
 Resize the VM before configuring a higher worker count, leaving headroom for
 signaling and colocated services. Compose assumes two SFU instances share the
 host. Set `SFU_WORKER_HOST_INSTANCES=3` on production when staging shares that VM.
@@ -26,6 +27,8 @@ budget `B` is the smaller of that setting and the size of the RTC range minus
 four. The final four ports support separate RTP and RTCP for shared-browser
 audio and video. Startup logs the selected count, warns when the budget caps
 automatic sizing, and rejects an explicit worker count above the budget.
+Startup and deploy preflight both require positive integers for any worker
+count, host instance count, or WebRTC budget you set.
 
 Before deploying, reserve the RTC ranges on the Linux host so outbound sockets
 do not take WebRTC ports as ephemeral ports. Read existing reservations with

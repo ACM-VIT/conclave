@@ -110,6 +110,53 @@ test("config-only validates without performing a network request", async () => {
   assert.equal(fetched, false);
 });
 
+for (const name of ["SFU_WEBRTC_PORT_BUDGET", "SFU_WORKER_COUNT", "SFU_WORKER_HOST_INSTANCES"]) {
+  for (const invalid of ["", " ", "0", "-1", "1.5", "1e0", "bad"]) {
+    test(`config-only rejects ${name}=${JSON.stringify(invalid)}`, async () => {
+      const compose = makeCompose();
+      compose.services["edge-dxb"].environment[name] = invalid;
+
+      await assert.rejects(
+        runSfuDeployPreflight({ compose, configOnly: true }),
+        new RegExp(`edge-dxb: ${name} must be a positive integer`),
+      );
+    });
+  }
+}
+
+test("config-only rejects more workers than the public WebRTC budget", async () => {
+  const compose = makeCompose();
+  const env = compose.services["edge-dxb"].environment;
+  env.SFU_WORKER_COUNT = "5";
+  env.SFU_WEBRTC_PORT_BUDGET = "4";
+  await assert.rejects(
+    runSfuDeployPreflight({ compose, configOnly: true }),
+    /edge-dxb: SFU_WORKER_COUNT=5 exceeds the WebRTC port budget of 4/,
+  );
+});
+
+test("config-only preserves four ports for shared-browser RTP and RTCP", async () => {
+  const compose = makeCompose();
+  const env = compose.services["edge-dxb"].environment;
+  env.RTC_MAX_PORT = "40004";
+  env.SFU_WORKER_COUNT = "1";
+  env.SFU_WEBRTC_PORT_BUDGET = "4";
+  await runSfuDeployPreflight({ compose, configOnly: true });
+
+  env.SFU_WORKER_COUNT = "2";
+  await assert.rejects(
+    runSfuDeployPreflight({ compose, configOnly: true }),
+    /edge-dxb: SFU_WORKER_COUNT=2 exceeds the WebRTC port budget of 1/,
+  );
+
+  env.RTC_MAX_PORT = "40003";
+  env.SFU_WORKER_COUNT = null;
+  await assert.rejects(
+    runSfuDeployPreflight({ compose, configOnly: true }),
+    /edge-dxb: RTC_MIN_PORT.*4 plain RTP ports/,
+  );
+});
+
 test("static validation rejects every regional deployment invariant before probing", () => {
   const compose = makeCompose();
   const dxb = compose.services["edge-dxb"].environment;

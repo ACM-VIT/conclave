@@ -3,6 +3,7 @@ import * as mediasoup from "mediasoup";
 import type { TransportListenInfo, WebRtcServer, Worker } from "mediasoup/types";
 import { availableParallelism } from "node:os";
 import { config } from "../config/config.js";
+import { resolveWebRtcPortBudget } from "../config/workerSettings.mjs";
 import { Logger } from "./loggers.js";
 import { getWorkerCpuQuota } from "./workerCpuQuota.js";
 
@@ -13,8 +14,6 @@ type CreateWorkersOptions = {
 
 const INITIAL_RESPAWN_DELAY_MS = 100;
 const MAX_RESPAWN_DELAY_MS = 2000;
-// Shared-browser audio and video each use separate RTP and RTCP ports.
-const SHARED_BROWSER_PLAIN_PORT_RESERVE = 4;
 
 const webRtcServers = new WeakMap<Worker, WebRtcServer>();
 
@@ -83,26 +82,15 @@ const createWorkers = async (
     : startupFailure.signal;
   const {
     rtcMinPort,
-    rtcMaxPort,
     workerCount: override,
     hostInstanceCount,
     webRtcPortBudget,
   } = config.workerSettings;
-  if (webRtcPortBudget !== undefined && (!Number.isInteger(webRtcPortBudget) || webRtcPortBudget < 1)) {
-    throw new Error("SFU_WEBRTC_PORT_BUDGET must be a positive integer");
-  }
-  const rangeBudget = rtcMaxPort - rtcMinPort + 1 - SHARED_BROWSER_PLAIN_PORT_RESERVE;
-  if (rangeBudget < 1) {
-    throw new Error(`RTC_MIN_PORT through RTC_MAX_PORT must fit at least one worker port and ${SHARED_BROWSER_PLAIN_PORT_RESERVE} plain RTP ports`);
-  }
-  const effectiveBudget = Math.min(webRtcPortBudget ?? rangeBudget, rangeBudget);
-  if (override > effectiveBudget) {
-    throw new Error(`SFU_WORKER_COUNT=${override} exceeds the WebRTC port budget of ${effectiveBudget} with ${SHARED_BROWSER_PLAIN_PORT_RESERVE} ports reserved for plain RTP`);
-  }
-  const cpuWorkerCount = override || Math.max(1, Math.floor(
+  const effectiveBudget = resolveWebRtcPortBudget(config.workerSettings);
+  const cpuWorkerCount = override ?? Math.max(1, Math.floor(
     Math.min(availableParallelism(), getWorkerCpuQuota()) / hostInstanceCount,
   ));
-  if (!override && cpuWorkerCount > effectiveBudget) {
+  if (override === undefined && cpuWorkerCount > effectiveBudget) {
     Logger.warn(`CPU capacity allows ${cpuWorkerCount} workers. Capping the derived count at the WebRTC port budget of ${effectiveBudget}.`);
   }
   const workerCount = Math.min(cpuWorkerCount, effectiveBudget);
@@ -141,7 +129,7 @@ const createWorkers = async (
     });
   };
 
-  const sizing = override ? "configured" : `derived for ${hostInstanceCount} host instance(s)`;
+  const sizing = override === undefined ? `derived for ${hostInstanceCount} host instance(s)` : "configured";
   console.log(`[SFU] Creating ${workerCount} mediasoup worker(s) (${sizing})`);
   try {
     for (let i = 0; i < workerCount; i++) {
