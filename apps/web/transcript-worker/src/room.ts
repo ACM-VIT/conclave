@@ -954,14 +954,15 @@ export class TranscriptRoom {
     const deploymentLanguage = normalizeLanguage(
       this.env.TRANSCRIPT_TRANSCRIPTION_LANGUAGE,
     );
+    const keepsLanguage = message.language === undefined && takeover;
     const requestedLanguage = normalizeLanguage(
       message.language ??
-        (takeover ? this.session?.language : undefined) ??
+        (keepsLanguage ? this.session?.language : undefined) ??
         deploymentLanguage,
     );
     const requestedLanguageChosen =
       Boolean(message.language) ||
-      (takeover && this.session?.languageChosen === true);
+      (keepsLanguage && this.session?.languageChosen === true);
     const canCaption = canTranscribeLanguage(
       transcriptionProvider,
       requestedLanguage,

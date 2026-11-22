@@ -91,7 +91,8 @@ export type ClientEnvelope =
       transcriptModel?: string;
       qaModel?: string;
       transportMode?: TranscriptTransportMode;
-      language?: string;
+      /** A language code; null asks for the deployment default, and none keeps a resumed session's. */
+      language?: string | null;
       delay?: string;
       requestId?: string;
     }

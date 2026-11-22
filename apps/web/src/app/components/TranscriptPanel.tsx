@@ -285,7 +285,8 @@ function StartStage({
   const isSarvam = provider === "sarvam";
   // What the form shows is what will be used: a language someone picked
   // (now, or earlier and saved, for a new session), the resumed session's
-  // own language, or "" for the worker's default. Only a pick is sent.
+  // own language, or "" for the worker's default. Only a pick is sent, and
+  // picking the default names it (null when the worker auto-detects).
   const offered = (code: string | null | undefined): code is string =>
     Boolean(code) && captionLanguagesFor(provider).some((language) => language.code === code);
   const resumedLanguage = needsTakeover ? transcript.session.language : undefined;
@@ -296,10 +297,15 @@ function StartStage({
     chosenLanguage === null
       ? untouchedLanguage
       : (offered(chosenLanguage) ? chosenLanguage : "");
+  const defaultLanguage = transcript.supportsCaptionLanguage
+    ? transcript.captionLanguageDefaults[provider]
+    : undefined;
   const sentLanguage =
-    (chosenLanguage === null && needsTakeover) || !language ? undefined : language;
+    chosenLanguage === null
+      ? (needsTakeover ? undefined : language || undefined)
+      : language || (defaultLanguage ?? null);
   const defaultLanguageLabel = transcript.supportsCaptionLanguage
-    ? defaultCaptionLanguageLabel(transcript.captionLanguageDefaults[provider])
+    ? defaultCaptionLanguageLabel(defaultLanguage)
     : "";
   const assistantProvider = getResponseProvider(qaModel);
   const available = (name: typeof provider | typeof assistantProvider) =>

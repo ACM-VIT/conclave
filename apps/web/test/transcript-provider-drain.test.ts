@@ -99,7 +99,7 @@ async function fixture(transcriptModel: string, env: Partial<Env> = {}) {
   const session = { transcriptModel, qaModel: "gpt-6.1-sol", transportMode: "sfu" };
   const start = (language?: string) =>
     room.startSession(viewer, { ...session, type: "session.start", language });
-  const switchTo = (language?: string) =>
+  const switchTo = (language?: string | null) =>
     room.startSession(viewer, { ...session, type: "session.takeover", language });
   const send = (message: object) => room.handleMessage(viewer, JSON.stringify(message));
   const stop = () => send({ type: "session.stop" });
@@ -632,6 +632,33 @@ describe("the language a session reports", () => {
     );
     expect(urls).toEqual(["hi-IN", "hi-IN"]);
     void sockets;
+  });
+
+  it("resumes in the deployment default, not chosen, when the client asks for the default", async () => {
+    vi.useFakeTimers();
+    const { room, start, switchTo } = await fixture(OPENAI);
+    await start("hi");
+    expect(room.session).toMatchObject({ language: "hi", languageChosen: true });
+
+    await switchTo(null);
+    expect(room.session).toMatchObject({ language: "en", languageChosen: false });
+    await switchTo();
+    expect(room.session).toMatchObject({ language: "en", languageChosen: false });
+  });
+
+  it("Sarvam: goes back to auto-detect when the client asks for the default", async () => {
+    vi.useFakeTimers();
+    const { room, start, switchTo } = await fixture(SARVAM, { TRANSCRIPT_SARVAM_LANGUAGE_CODE: "unknown" });
+    await start("hi");
+    expect(room.session).toMatchObject({ language: "hi", languageChosen: true });
+
+    await switchTo(null);
+    expect(room.session?.language).toBeUndefined();
+    expect(room.session?.languageChosen).toBe(false);
+    const codes = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.map(([url]) =>
+      new URL(String(url)).searchParams.get("language-code"),
+    );
+    expect(codes).toEqual(["hi-IN", "unknown"]);
   });
 
   it("reports no fixed language when the operator's Sarvam code is auto-detect", async () => {

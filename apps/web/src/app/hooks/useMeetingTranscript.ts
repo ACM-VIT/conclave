@@ -81,7 +81,8 @@ interface StartTranscriptOptions {
   transcriptModel?: string;
   qaModel?: string;
   transportMode?: TranscriptTransportMode;
-  language?: string;
+  /** A language code; null asks for the worker's default, and none keeps a resumed session's. */
+  language?: string | null;
 }
 
 type ServerEnvelope =

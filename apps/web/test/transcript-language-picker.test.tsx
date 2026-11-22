@@ -164,6 +164,44 @@ describe("caption language picker", () => {
     expect(sentLanguage(transcript.start as ReturnType<typeof vi.fn>)).toBe("en");
   });
 
+  it("resumes Hindi notes in the worker's default when someone picks Default (English)", async () => {
+    const transcript = controller({ status: "takeover_needed", language: "hi", languageChosen: true });
+    await render(transcript);
+
+    expect(select("captions-language-start")?.value).toBe("hi");
+    await choose("captions-language-start", "");
+    expect(selectedText("captions-language-start")).toBe("Default (English)");
+    await submit();
+
+    expect(sentLanguage(transcript.takeover as ReturnType<typeof vi.fn>)).toBe("en");
+  });
+
+  it("starts in the worker's default when someone picks it over a remembered language", async () => {
+    window.localStorage.setItem("conclave:captions-language", "ta");
+    const transcript = controller({}, { captionLanguageDefaults: { openai: "hi", sarvam: "hi" } });
+    await render(transcript);
+
+    await choose("captions-language-start", "");
+    expect(selectedText("captions-language-start")).toBe("Default (Hindi)");
+    await submit();
+
+    expect(sentLanguage(transcript.start as ReturnType<typeof vi.fn>)).toBe("hi");
+  });
+
+  it("asks the worker to auto-detect when someone picks Auto-detect on resumed Hindi notes", async () => {
+    const transcript = controller(
+      { status: "takeover_needed", language: "hi", languageChosen: true, transcriptModel: "saaras:v3" },
+      { captionLanguageDefaults: { openai: "en", sarvam: null } },
+    );
+    await render(transcript, roomUsing("saaras:v3"));
+
+    await choose("captions-language-start", "");
+    expect(selectedText("captions-language-start")).toBe("Auto-detect");
+    await submit();
+
+    expect(transcript.takeover).toHaveBeenCalledWith(expect.objectContaining({ language: null }));
+  });
+
   it("hides the language choice until the transcript worker supports it", async () => {
     const transcript = controller({}, { supportsCaptionLanguage: false });
     await render(transcript);
