@@ -139,7 +139,10 @@ export function QaPanel({
   askNeedsIdentity?: boolean;
   onClose: () => void;
   onSubmit?: (question: string) => Promise<{ ok: boolean; error?: string }>;
-  onUpvote?: (id: string) => void;
+  /** May answer with why the upvote did not go through. */
+  onUpvote?: (
+    id: string,
+  ) => void | Promise<{ ok: boolean; error?: string }>;
   /** Hosts only: moderation right inside the list. */
   onModerate?: (
     request: WebinarQaModerateRequest,
@@ -149,7 +152,7 @@ export function QaPanel({
   const [isSending, setIsSending] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [busyEntryId, setBusyEntryId] = useState<string | null>(null);
-  const [moderationError, setModerationError] = useState<string | null>(null);
+  const [listError, setListError] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const previousCountRef = useRef(0);
@@ -197,10 +200,19 @@ export function QaPanel({
   const moderate = async (id: string, action: QaModerateAction) => {
     if (!onModerate) return;
     setBusyEntryId(id);
-    setModerationError(null);
+    setListError(null);
     const result = await onModerate({ id, action });
     setBusyEntryId(null);
-    if (!result.ok) setModerationError(result.error ?? "That did not go through.");
+    if (!result.ok) setListError(result.error ?? "That did not go through.");
+  };
+
+  const upvote = async (id: string) => {
+    if (!onUpvote) return;
+    setListError(null);
+    const result = await onUpvote(id);
+    if (result && !result.ok) {
+      setListError(result.error ?? "That did not go through.");
+    }
   };
 
   return (
@@ -293,7 +305,7 @@ export function QaPanel({
                     <button
                       type="button"
                       data-testid="qa-upvote"
-                      onClick={onUpvote ? () => onUpvote(entry.id) : undefined}
+                      onClick={onUpvote ? () => void upvote(entry.id) : undefined}
                       disabled={!onUpvote || isHidden}
                       aria-pressed={Boolean(entry.hasUpvoted)}
                       aria-label={`Upvote, ${entry.upvotes} so far`}
@@ -319,8 +331,13 @@ export function QaPanel({
             })}
           </ul>
         )}
-        {moderationError ? (
-          <p className="mt-2 text-[11.5px] text-[#F95F4A]">{moderationError}</p>
+        {listError ? (
+          <p
+            data-testid="qa-list-error"
+            className="mt-2 text-[11.5px] text-[#F95F4A]"
+          >
+            {listError}
+          </p>
         ) : null}
       </div>
 

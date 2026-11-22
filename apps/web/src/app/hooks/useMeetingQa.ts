@@ -10,7 +10,7 @@ type Result = { ok: boolean; error?: string };
 type LegacyQa = {
   entries: WebinarQaEntry[];
   submit?: (question: string) => Promise<Result>;
-  upvote?: (id: string) => void;
+  upvote?: (id: string) => void | Promise<Result>;
   moderate?: (request: WebinarQaModerateRequest) => Promise<Result>;
 };
 
@@ -82,14 +82,7 @@ export function useMeetingQa({
     [qa.questions, currentUserId],
   );
 
-  const { ask, setUpvoted, moderate, questions } = qa;
-  const appUpvote = useCallback(
-    (id: string) => {
-      const current = questions.find((question) => question.id === id);
-      void setUpvoted(id, !current?.hasUpvoted);
-    },
-    [questions, setUpvoted],
-  );
+  const { ask, toggleUpvote, moderate } = qa;
   const appModerate = useCallback(
     (request: WebinarQaModerateRequest) => moderate(request),
     [moderate],
@@ -110,7 +103,7 @@ export function useMeetingQa({
     entries: appEntries,
     askNeedsIdentity: qa.askNeedsIdentity,
     onSubmit: qa.canAsk ? ask : undefined,
-    onUpvote: qa.canUpvote ? appUpvote : undefined,
+    onUpvote: qa.canUpvote ? toggleUpvote : undefined,
     onModerate: qa.canModerate ? appModerate : undefined,
   };
 }
