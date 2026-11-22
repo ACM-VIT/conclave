@@ -635,11 +635,12 @@ answers_http() {
 }
 
 # Two clients join a room on the instance, publish audio and must hear each
-# other through it. The canary ships inside the image under test.
+# other through it. The canary ships inside the image under test, bundled into
+# one file at build time so it needs none of the SFU's dev dependencies.
 run_canary() {
   echo "Running the canary call against ${1}..."
   docker run --rm --network host -e SFU_SECRET --entrypoint node "$TARGET_IMAGE" \
-    --import tsx scripts/canary-call.ts --url "$2"
+    dist/canary-call.mjs --url "$2"
 }
 
 # Puts an instance back on the image it ran before this deploy. With no

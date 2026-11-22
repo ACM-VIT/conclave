@@ -603,3 +603,32 @@ test("deploy-sfu.ps1 hands the deploy, --rollback included, to deploy-sfu.sh", {
     }
   });
 });
+
+test("the canary runs from one bundled file, without the SFU's dev dependencies", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-canary-"));
+  try {
+    // An empty directory stands in for an image installed with production
+    // dependencies only: nothing but the bundle and Node.
+    await run(process.execPath, [path.join(scripts, "..", "packages", "sfu", "scripts", "build-canary.mjs"), path.join(root, "canary-call.mjs")]);
+    const bare = await run(process.execPath, [path.join(root, "canary-call.mjs")], { cwd: root }).then(
+      () => ({ code: 0, output: "" }),
+      (error) => ({ code: error.code, output: `${error.stdout}${error.stderr}` }),
+    );
+    assert.doesNotMatch(bare.output, /ERR_MODULE_NOT_FOUND/);
+    assert.equal(bare.code, 2, bare.output);
+    assert.match(bare.output, /Usage: SFU_SECRET=/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("the deploy runs the bundled canary from the image", async () => {
+  await withSfus({ "sfu-a": { rooms: 0 }, "sfu-b": { rooms: 0 } }, async (sfus) => {
+    const result = await deploy(sfus, { env: { SFU_DEPLOY_SERVICES: "sfu-a" } });
+    assert.equal(result.code, 0, result.output);
+    const canary = result.docker.find((args) => args[0] === "run");
+    assert.ok(canary, "the canary ran");
+    assert.ok(canary.includes("dist/canary-call.mjs"), canary.join(" "));
+    assert.ok(!canary.includes("tsx"), canary.join(" "));
+  });
+});

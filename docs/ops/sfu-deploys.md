@@ -41,7 +41,9 @@ is recreated while it has rooms unless you pass `--force-drain`:
 4. Recreate it from the new image with `SFU_START_DRAINING=true`, so it boots
    out of rotation and no meeting can land on an unverified build.
 5. Run the canary: a real two-person call against that instance
-   (`packages/sfu/scripts/canary-call.ts`, run from the new image). It takes
+   (`packages/sfu/scripts/canary-call.ts`, bundled at image build into
+   `dist/canary-call.mjs` with its dependencies inside, and run from the new
+   image). It takes
    its room through the secret-protected placement endpoint with
    `allowDraining`, the one placement a draining instance grants. Two clients
    join, publish Opus audio and must receive each other's RTP through the SFU,
@@ -125,7 +127,7 @@ production's values. To hold a call open during a deploy, run the canary with
 
 ```bash
 docker run --rm --network host -e SFU_SECRET --entrypoint node <image> \
-  --import tsx scripts/canary-call.ts --url http://127.0.0.1:3031 --hold-ms 600000
+  dist/canary-call.mjs --url http://127.0.0.1:3031 --hold-ms 600000
 ```
 
 It fails if either side goes more than 2 s without audio or is disconnected.

@@ -24,6 +24,10 @@ RUN pnpm install --filter @conclave/sfu... --frozen-lockfile --node-linker=isola
 
 COPY . .
 
+# The deploy canary, bundled into one file so the image runs it without its
+# dev dependencies (socket.io-client, mediasoup-client, werift).
+RUN pnpm --filter @conclave/sfu run build:canary
+
 # Default state dir; volume-mount this in prod for durability.
 RUN mkdir -p /var/lib/conclave && chown -R node:node /var/lib/conclave
 
