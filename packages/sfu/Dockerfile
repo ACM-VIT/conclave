@@ -41,7 +41,12 @@ COPY --from=build --chown=root:root /app /app
 # Default state dir; volume-mount this in prod for durability.
 RUN mkdir -p /var/lib/conclave/recordings && chown -R node:node /var/lib/conclave
 
-ENV CONCLAVE_SQLITE_PATH=/var/lib/conclave/conclave.sqlite
+# The app tree is root-owned, so the JSON persistence backends (used when a
+# *_PERSISTENCE variable selects json) default to the state dir too.
+ENV CONCLAVE_SQLITE_PATH=/var/lib/conclave/conclave.sqlite \
+    SCHEDULING_PATH=/var/lib/conclave/scheduling.json \
+    SCHEDULED_MEETINGS_PATH=/var/lib/conclave/scheduled-meetings.json \
+    SCHEDULED_WEBINARS_PATH=/var/lib/conclave/scheduled-webinars.json
 
 USER node
 WORKDIR /app/packages/sfu
