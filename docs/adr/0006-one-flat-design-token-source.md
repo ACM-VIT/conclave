@@ -21,6 +21,7 @@
 - On iOS, Leave uses dynamic `systemRed` at standard contrast and switches to the fixed `leaveHighContrast` fill only under Increase Contrast, where the white glyph reads at 4.555:1. The owner approved this on 2026-10-26.
 - Avatar colors are identity art in the web Facehash order, never UI accents.
 - The Android adaptive icon tile is the stage color in every appearance, so `ic_launcher_background` has no night variant.
+- In the web primitives, a whole `SwitchRow` is the one interactive element (the toggle). The pill inside it, `SwitchVisual`, is visual only: `aria-hidden`, no role, no handlers. Nesting a second interactive control inside the row is an accessibility bug, because screen readers announce two controls for one action and keyboard focus lands twice. Use `Switch` only where there is no row to wrap it.
 
 ## Consequences
 
@@ -37,3 +38,4 @@
 - `packages/ui-tokens/src/tokens.ts`: `color`, `space`, `font`, `motion`, `native`
 - `packages/ui-tokens/src/tokens.css`
 - `packages/ui-tokens/scripts/gen-native-tokens.mjs`: `renderNativeTokens`
+- `packages/ui-tokens/src/web/controls.tsx`: `SwitchVisual`, `SwitchRow`, `Switch`
