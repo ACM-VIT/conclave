@@ -17,6 +17,7 @@ import org.webrtc.EglBase14
 import org.webrtc.GlRectDrawer
 import org.webrtc.VideoFrame
 import org.webrtc.VideoFrameDrawer
+import java.util.concurrent.atomic.AtomicInteger
 
 internal interface VideoRenderBackend {
     fun post(task: Runnable): Boolean
@@ -95,13 +96,20 @@ internal class VideoRenderLoop : VideoRenderBackend {
             Log.w(TAG, "eglCreateWindowSurface failed: 0x" + Integer.toHexString(EGL14.eglGetError()))
             return null
         }
+        liveSurfaces.incrementAndGet()
+        reportLive()
         if (makeCurrent(surface)) EGL14.eglSwapInterval(display, 0)
         return surface
     }
 
     override fun destroySurface(surface: Any) {
         if (currentSurface == surface) unbind()
-        EGL14.eglDestroySurface(display, surface as EGLSurface)
+        if (EGL14.eglDestroySurface(display, surface as EGLSurface)) {
+            liveSurfaces.decrementAndGet()
+            reportLive()
+        } else {
+            Log.w(TAG, "eglDestroySurface failed: 0x" + Integer.toHexString(EGL14.eglGetError()))
+        }
     }
 
     override fun makeCurrent(surface: Any): Boolean {
@@ -139,7 +147,12 @@ internal class VideoRenderLoop : VideoRenderBackend {
             EGL14.eglMakeCurrent(display, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)
         }
         if (idleSurface != EGL14.EGL_NO_SURFACE) EGL14.eglDestroySurface(display, idleSurface)
-        synchronized(EglBase.lock) { EGL14.eglDestroyContext(display, context) }
+        if (synchronized(EglBase.lock) { EGL14.eglDestroyContext(display, context) }) {
+            liveContexts.decrementAndGet()
+            reportLive()
+        } else {
+            Log.w(TAG, "eglDestroyContext failed: 0x" + Integer.toHexString(EGL14.eglGetError()))
+        }
         EGL14.eglReleaseThread()
         EGL14.eglTerminate(display)
         context = EGL14.EGL_NO_CONTEXT
@@ -251,6 +264,8 @@ internal class VideoRenderLoop : VideoRenderBackend {
         display = eglDisplay
         config = eglConfig
         context = eglContext
+        liveContexts.incrementAndGet()
+        reportLive()
         val pbuffer = EGL14.eglCreatePbufferSurface(eglDisplay, eglConfig, intArrayOf(EGL14.EGL_WIDTH, 1, EGL14.EGL_HEIGHT, 1, EGL14.EGL_NONE), 0)
         if (pbuffer == null || pbuffer == EGL14.EGL_NO_SURFACE) {
             Log.w(TAG, "eglCreatePbufferSurface failed: 0x" + Integer.toHexString(EGL14.eglGetError()))
@@ -263,5 +278,11 @@ internal class VideoRenderLoop : VideoRenderBackend {
 
     companion object {
         const val TAG = "ConclaveVideoRender"
+        private val liveContexts = AtomicInteger(0)
+        private val liveSurfaces = AtomicInteger(0)
+
+        private fun reportLive() {
+            NativePerformanceDiagnostics.event("video.gl", "contexts=${liveContexts.get()} surfaces=${liveSurfaces.get()}")
+        }
     }
 }
