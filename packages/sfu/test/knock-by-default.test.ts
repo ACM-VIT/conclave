@@ -1317,6 +1317,20 @@ describe("the account a code belongs to", () => {
     expect((await join(state, guestOpener)).status).toBe("joined");
   });
 
+  it("takes the seat back from a guest who reopened the meeting, also after the SFU restarts", async () => {
+    useClock();
+    const before = makeState();
+    const created = await join(before, owner);
+    await emptyOut(before, created.peer);
+    await join(before, guestOpener);
+    const after = await restart(before);
+
+    const openerBack = await join(after, guestOpener);
+    expect(openerBack.context.currentClient).toBeInstanceOf(Admin);
+    await join(after, owner);
+    expect(openerBack.context.currentClient).not.toBeInstanceOf(Admin);
+  });
+
   it("is not an account a guest made the code with: the first to arrive hosts", async () => {
     useClock();
     const state = makeState();

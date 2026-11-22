@@ -41,6 +41,9 @@ export type RoomRecoveryRecord = {
   // The signed-in account the code belongs to, which hosts whenever it is
   // there. Null for a code a guest made. Kept when a meeting is over.
   ownerEmail: string | null;
+  // A host who holds the seat only because they opened the room while its
+  // owner was away (Room.temporaryHostUserKey). Null when there is none.
+  temporaryHostUserKey: string | null;
 };
 
 /**
@@ -65,6 +68,7 @@ export type LostRoom = {
   hostUserKey: string | null;
   adminUserKeys: string[];
   readmissionRequiredUserKeys: string[];
+  temporaryHostUserKey: string | null;
   // After this no pass from the lost call can still be good, so the room is
   // anyone's to open again.
   claimableUntil: number;
@@ -89,6 +93,7 @@ type LedgerRoom = Pick<
   | "adminUserKeys"
   | "usersNeedingReadmission"
   | "recoveryPassesVoidUntil"
+  | "temporaryHostUserKey"
 >;
 
 export type RoomRecoveryLedger = {
@@ -113,11 +118,15 @@ const parseRoomRecoveryRecord = (raw: unknown): RoomRecoveryRecord | null => {
     overAt,
     writer,
     ownerEmail,
+    temporaryHostUserKey = null,
   } = raw as Record<string, unknown>;
   if (liveAt !== null && typeof liveAt !== "number") return null;
   if (overAt !== null && typeof overAt !== "number") return null;
   if (typeof writer !== "string") return null;
   if (ownerEmail !== null && typeof ownerEmail !== "string") return null;
+  if (temporaryHostUserKey !== null && typeof temporaryHostUserKey !== "string") {
+    return null;
+  }
   if (hostUserKey !== null && typeof hostUserKey !== "string") return null;
   if (!isStringList(adminUserKeys)) return null;
   if (!isStringList(readmissionRequiredUserKeys)) return null;
@@ -129,6 +138,7 @@ const parseRoomRecoveryRecord = (raw: unknown): RoomRecoveryRecord | null => {
     overAt,
     writer,
     ownerEmail,
+    temporaryHostUserKey,
   };
 };
 
@@ -159,23 +169,33 @@ const stillVoids = (overAt: number | null): number | null =>
     ? overAt
     : null;
 
-// How long a room whose newest record says nothing else keeps that record
-// once it stops changing: a day, or a month when it names whose code it is.
-const CLEARED_ROOM_KEPT_MS = 24 * 60 * 60 * 1000;
-const OWNED_CODE_KEPT_MS = 30 * CLEARED_ROOM_KEPT_MS;
-
-// Whether a room whose newest record is `raw`, unchanged for `unchangedMs`,
-// may be cleared out. One that does not parse is not a record at all.
-const mayClearOut = (raw: unknown, unchangedMs: number): boolean => {
+// Whether a stored record still says anything a recall acts on. One that
+// does not parse says nothing.
+const stillMatters = (raw: unknown): boolean => {
   const record = parseRoomRecoveryRecord(raw);
-  if (!record) return unchangedMs >= CLEARED_ROOM_KEPT_MS;
-  if (wasRunningRecently(record.liveAt) || stillVoids(record.overAt) !== null) {
-    return false;
-  }
-  return (
-    unchangedMs >= (record.ownerEmail ? OWNED_CODE_KEPT_MS : CLEARED_ROOM_KEPT_MS)
+  return Boolean(
+    record && (wasRunningRecently(record.liveAt) || stillVoids(record.overAt) !== null),
   );
 };
+
+// What replaces a record that no longer says anything: the same writer, so
+// the same rooms may follow it, and whose code it is. Nothing else.
+const tombstoneOf = (raw: unknown): Record<string, unknown> => {
+  const record = parseRoomRecoveryRecord(raw);
+  const writer = writerOf(raw);
+  return {
+    liveAt: null,
+    hostUserKey: null,
+    adminUserKeys: [],
+    readmissionRequiredUserKeys: [],
+    overAt: null,
+    ...(writer === null ? {} : { writer }),
+    ownerEmail: record?.ownerEmail ?? null,
+    temporaryHostUserKey: null,
+  };
+};
+const isTombstone = (raw: unknown): boolean =>
+  JSON.stringify(raw) === JSON.stringify(tombstoneOf(raw));
 
 // Rooms this SFU has seen finish, newest last. Such a room never writes
 // again, so a room may always take over a record one of them holds.
@@ -247,6 +267,7 @@ export const createRoomRecoveryLedger = (
         overAt: stillVoids(room.recoveryPassesVoidUntil),
         writer: room.incarnationId,
         ownerEmail: room.ownerEmail,
+        temporaryHostUserKey: room.temporaryHostUserKey,
       }),
     noteOver: (room) => {
       save(room, {
@@ -257,6 +278,7 @@ export const createRoomRecoveryLedger = (
         overAt: Date.now(),
         writer: room.incarnationId,
         ownerEmail: room.ownerEmail,
+        temporaryHostUserKey: null,
       });
       noteFinished(room.incarnationId);
     },
@@ -275,6 +297,7 @@ export const createRoomRecoveryLedger = (
                 hostUserKey: record.hostUserKey,
                 adminUserKeys: record.adminUserKeys,
                 readmissionRequiredUserKeys: record.readmissionRequiredUserKeys,
+                temporaryHostUserKey: record.temporaryHostUserKey,
                 claimableUntil: liveAt + LOST_ROOM_WINDOW_MS,
               }
             : null,
@@ -303,6 +326,9 @@ export const createMemoryRoomRecoveryStore = (): RoomRecoveryStore => {
 };
 
 const PRUNE_EVERY_MS = 10 * 60 * 1000;
+// How long a room whose newest record is a tombstone stays before it goes,
+// far longer than any write could stall between reading and publishing.
+const ROOM_KEPT_IDLE_MS = 30 * 24 * 60 * 60 * 1000;
 const ABANDONED_TEMP_FILE_MS = 60 * 1000;
 const WRITE_ATTEMPTS = 8;
 
@@ -348,9 +374,11 @@ const VERSION_FILE = /^(\d+)\.json$/;
  * the writer looks again and either writes after it or, if another room
  * wrote meanwhile, does not write. No lock, no clock.
  *
- * Tidying removes versions below the newest, which no one reads any more,
- * and a whole room only once its newest record has said nothing for a day
- * (a month, if it names whose code it is).
+ * Versions are never numbered again. Tidying removes versions below the
+ * newest, which no one reads any more, and never the newest: one that no
+ * longer says anything is replaced by a tombstone published as the next
+ * version, like any write. A whole room goes only once its tombstone has
+ * stood untouched for a month.
  */
 export const createFileRoomRecoveryStore = (
   directory: string = roomRecoveryDirectory(),
@@ -377,6 +405,22 @@ export const createFileRoomRecoveryStore = (
     }
     throw new Error(`Could not read the newest recovery record in ${room}`);
   };
+  // Publishes `record` as this version, only if no one has: a temp file
+  // written in full, then linked into place. Says whether it landed.
+  const publish = (room: string, version: number, record: unknown): boolean => {
+    mkdirSync(room, { recursive: true });
+    const pending = resolve(directory, `.${randomBytes(6).toString("hex")}.tmp`);
+    writeFileSync(pending, JSON.stringify(record), "utf8");
+    try {
+      linkSync(pending, versionPath(room, version));
+      return true;
+    } catch (error) {
+      if (failedWith(error, "EEXIST", "ENOENT", "EINVAL")) return false;
+      throw error;
+    } finally {
+      rmSync(pending, { force: true });
+    }
+  };
   const pruneRoom = (room: string) => {
     const [newest, ...older] = versionsIn(room);
     if (newest === undefined) {
@@ -392,14 +436,19 @@ export const createFileRoomRecoveryStore = (
       return;
     }
     for (const version of older) rmSync(versionPath(room, version), { force: true });
-    // Until then the record still fences off writes from rooms before it.
     const path = versionPath(room, newest);
-    const written = unlessGone(() => statSync(path).mtimeMs);
-    if (written === null || Date.now() - written < CLEARED_ROOM_KEPT_MS) return;
     const text = unlessGone(() => readFileSync(path, "utf8"));
-    if (text === null || !mayClearOut(parsedOrUndefined(text), Date.now() - written)) {
+    if (text === null) return;
+    const stored = parsedOrUndefined(text);
+    if (stillMatters(stored)) return;
+    if (!isTombstone(stored)) {
+      // Once the tombstone is the newest, the record it replaces is below
+      // it. Taken by a write that came in meanwhile, it is that write's room.
+      if (publish(room, newest + 1, tombstoneOf(stored))) rmSync(path, { force: true });
       return;
     }
+    const written = unlessGone(() => statSync(path).mtimeMs);
+    if (written === null || Date.now() - written < ROOM_KEPT_IDLE_MS) return;
     rmSync(path, { force: true });
     try {
       rmdirSync(room);
@@ -436,31 +485,16 @@ export const createFileRoomRecoveryStore = (
       mkdirSync(directory, { recursive: true });
       tidy();
       const room = roomOf(channelId);
-      let pending: string | null = null;
-      try {
-        for (let attempt = 0; attempt < WRITE_ATTEMPTS; attempt += 1) {
-          const newest = newestIn(room);
-          if (newest && !mayFollow(newest.stored, record.writer, takesOver)) {
-            return false;
-          }
-          mkdirSync(room, { recursive: true });
-          if (pending === null) {
-            pending = resolve(directory, `.${randomBytes(6).toString("hex")}.tmp`);
-            writeFileSync(pending, JSON.stringify(record), "utf8");
-          }
-          try {
-            linkSync(pending, versionPath(room, (newest?.version ?? 0) + 1));
-            return true;
-          } catch (error) {
-            // Someone created that version first, or the room was just
-            // cleared out (macOS can say EINVAL while it goes): look again.
-            if (!failedWith(error, "EEXIST", "ENOENT", "EINVAL")) throw error;
-          }
+      for (let attempt = 0; attempt < WRITE_ATTEMPTS; attempt += 1) {
+        const newest = newestIn(room);
+        if (newest && !mayFollow(newest.stored, record.writer, takesOver)) {
+          return false;
         }
-        throw new Error(`Gave up writing the recovery record of ${channelId}`);
-      } finally {
-        if (pending !== null) rmSync(pending, { force: true });
+        // Someone created that version first, or the room was just cleared
+        // out (macOS can say EINVAL while it goes): look again.
+        if (publish(room, (newest?.version ?? 0) + 1, record)) return true;
       }
+      throw new Error(`Gave up writing the recovery record of ${channelId}`);
     },
   };
 };

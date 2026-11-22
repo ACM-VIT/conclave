@@ -88,6 +88,7 @@ const record = (hostUserKey: string, writer: string, liveAt = Date.now()): RoomR
   overAt: null,
   writer,
   ownerEmail: null,
+  temporaryHostUserKey: null,
 });
 const filesIn = (dir: string): string[] =>
   readdirSync(dir).flatMap((name) => {
@@ -136,11 +137,21 @@ describe("two SFUs writing recovery records into one directory", () => {
       }
     }
     expect(await reader.read("conclave:still-running")).toMatchObject({ hostUserKey: "host" });
+    // An expired room keeps its number: one tombstone that says nothing.
     for (let index = 0; index < 100; index += 1) {
-      expect(await reader.read(`conclave:stale-${index}`)).toBeNull();
+      expect(await reader.read(`conclave:stale-${index}`)).toMatchObject({
+        liveAt: null,
+        overAt: null,
+        hostUserKey: null,
+        adminUserKeys: [],
+        readmissionRequiredUserKeys: [],
+        writer: `old-${index}`,
+      });
     }
     expect(leftovers(directory)).toEqual([]);
-    expect(readdirSync(directory)).toHaveLength(2 * ROOMS_EACH + 1);
+    const rooms = readdirSync(directory);
+    expect(rooms).toHaveLength(2 * ROOMS_EACH + 1 + 100);
+    for (const room of rooms) expect(readdirSync(join(directory, room))).toHaveLength(1);
   }, 120_000);
 
   // A room's long expired record, and another SFU tidying the directory,
@@ -296,6 +307,42 @@ describe("two SFUs writing recovery records into one directory", () => {
     expect(roomsWhileWriting).toHaveLength(2);
     expect(await createFileRoomRecoveryStore(directory).read(CHANNEL)).toMatchObject({
       hostUserKey: "host-first",
+    });
+  }, 120_000);
+
+  it("does not let a write decided on an expired record land over a room opened after cleanup", async () => {
+    const directory = tempDir("room-recovery-writers-");
+    const signals = tempDir("room-recovery-signals-");
+    // A long expired record, unchanged for days.
+    await createFileRoomRecoveryStore(directory).write(
+      CHANNEL,
+      record("host-long-gone", "room-gone", Date.now() - 3 * DAY_MS),
+      null,
+    );
+    ageEverything(directory);
+    // A room that took that record over reads it, and stops right there.
+    const stalled = sfuProcess(`
+      ${holdAt(signals, "readFileSync", ["host-long-gone"])}
+      await createFileRoomRecoveryStore(${JSON.stringify(directory)}).write(
+        ${JSON.stringify(CHANNEL)},
+        { liveAt: Date.now(), hostUserKey: "host-stalled", adminUserKeys: [], readmissionRequiredUserKeys: [], overAt: null, ownerEmail: null, writer: "room-stalled" },
+        "room-gone",
+      );
+    `);
+    const signalled = signalsOf(signals);
+    await signalled.reaches("host-long-gone");
+
+    // Another SFU tidies the directory, then opens a new room at the code,
+    // taking over whatever record it finds there.
+    const other = createFileRoomRecoveryStore(directory);
+    await other.write("conclave:another-room", record("another-host", "another-room"), null);
+    const found = (await other.read(CHANNEL)) as { writer?: string } | null;
+    await other.write(CHANNEL, record("host-new", "room-new"), found?.writer ?? null);
+
+    signalled.goOnPast("host-long-gone");
+    expect(await stalled).toEqual({ code: 0, stderr: "" });
+    expect(await createFileRoomRecoveryStore(directory).read(CHANNEL)).toMatchObject({
+      hostUserKey: "host-new",
     });
   }, 120_000);
 

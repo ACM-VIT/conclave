@@ -238,8 +238,18 @@ export class Room {
   // made it), which hosts whenever it is here. Null for a code a guest made.
   public ownerEmail: string | null = null;
   // Someone who hosts only because they opened the room while its owner was
-  // away. The owner takes that seat back when it arrives, once.
-  public temporaryHostUserKey: string | null = null;
+  // away. The owner takes that seat back when it arrives, once. Written to
+  // the recovery record with the hosts, so a restart does not make it a
+  // seat of their own.
+  private temporaryHost: string | null = null;
+  get temporaryHostUserKey(): string | null {
+    return this.temporaryHost;
+  }
+  set temporaryHostUserKey(userKey: string | null) {
+    if (this.temporaryHost === userKey) return;
+    this.temporaryHost = userKey;
+    this.onRecoverableChange?.();
+  }
   // Set when this code was ended for everyone a moment ago: recovery passes
   // signed up to then are from the ended meeting, not from this one.
   public recoveryPassesVoidUntil: number | null = null;
@@ -2723,6 +2733,7 @@ export class Room {
     hostUserKey: string | null;
     adminUserKeys: string[];
     readmissionRequiredUserKeys: string[];
+    temporaryHostUserKey: string | null;
   }) {
     const report = this.onRecoverableChange;
     this.onRecoverableChange = null;
@@ -2735,6 +2746,11 @@ export class Room {
     for (const userKey of lost.adminUserKeys.filter(mayHost)) {
       this.adminUserKeys.add(userKey);
     }
+    const temporary = lost.temporaryHostUserKey;
+    this.temporaryHostUserKey =
+      temporary && (this.hostUserKey === temporary || this.adminUserKeys.has(temporary))
+        ? temporary
+        : null;
     this.onRecoverableChange = report;
   }
 
