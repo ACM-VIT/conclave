@@ -109,6 +109,8 @@ type StreamMemory = {
   concealedSamples: number;
   totalSamplesReceived: number;
   stalled: boolean;
+  /** The sample these counters were read in. */
+  readAt: number;
 };
 
 type Attempt = {
@@ -124,12 +126,18 @@ type Attempt = {
   /** Remote media can start flowing while the join is still finishing. */
   firstAudioAt: number | null;
   firstVideoAt: number | null;
-  /** When each direction was last read; a failed read leaves it in place. */
+  /**
+   * When each direction was last read; a failed read leaves it in place, and
+   * joining the call clears it, so nothing from before joined is counted.
+   */
   lastInboundAt: number | null;
   lastOutboundAt: number | null;
-  /** Last counters per stream and layer id, from the first sample on, even
-   *  during the join; kept for the whole call so one that drops out of a
-   *  report and comes back is not counted twice. */
+  /**
+   * Last counters per stream and layer id with the sample they were read in.
+   * One counts only against its reading in the previous sample, so one that
+   * drops out of a report, or was last read before joined, starts again from
+   * a new baseline.
+   */
   streams: Map<string, StreamMemory>;
   outboundLayers: Map<string, LayerReading>;
 };
@@ -367,6 +375,8 @@ export function createCallMetricsTracker({
 
   const startCall = (attempt: Attempt, at: number): Call => ({
     ...attempt,
+    lastInboundAt: null,
+    lastOutboundAt: null,
     joinedAt: at,
     waitingMs: waitedMs(attempt, at),
     reconnectingSince: null,
@@ -418,19 +428,24 @@ export function createCallMetricsTracker({
 
   /**
    * `dt` is null for an interval that is not measured, and `totals` is null
-   * before the call starts: then only the baseline moves.
+   * before the call starts: then only the baseline moves. A stream counts
+   * against its reading from the previous sample, read at `previousAt`; one
+   * first seen now started since then, so it counts from zero.
    */
   const foldInbound = (
     media: Attempt,
     totals: MediaTotals | null,
     stream: InboundStreamStats,
+    previousAt: number | null,
     dt: number | null,
+    at: number,
   ) => {
     const previous = media.streams.get(stream.id);
-    const stalled =
-      dt === null || totals === null
-        ? (previous?.stalled ?? false)
-        : addInbound(totals, stream, previous, dt);
+    const measured =
+      dt !== null && totals !== null && (previous === undefined || previous.readAt === previousAt);
+    const stalled = measured
+      ? addInbound(totals, stream, previous, dt)
+      : dt === null && (previous?.stalled ?? false);
 
     media.streams.set(stream.id, {
       packetsReceived: stream.packetsReceived,
@@ -441,6 +456,7 @@ export function createCallMetricsTracker({
       concealedSamples: stream.concealedSamples ?? 0,
       totalSamplesReceived: stream.totalSamplesReceived ?? 0,
       stalled,
+      readAt: at,
     });
   };
 
@@ -606,15 +622,17 @@ export function createCallMetricsTracker({
 
     onStats(sample, at) {
       if (phase.name === "idle") return;
-      // During the join a sample only sets baselines; a call adds deltas.
+      // During the join a sample only stamps first media and moves the
+      // baselines; the call starts its own at joined and adds deltas after.
       const media = phase.name === "joining" ? phase.attempt : phase.call;
       const call = phase.name === "in_call" ? phase.call : null;
       if (sample.inbound) {
         noteFirstMedia(media, sample.inbound, at);
-        const dt = call ? measuredInterval(media.lastInboundAt, at) : null;
+        const previousAt = media.lastInboundAt;
+        const dt = call ? measuredInterval(previousAt, at) : null;
         media.lastInboundAt = at;
         sample.inbound.forEach((stream) =>
-          foldInbound(media, call?.totals ?? null, stream, dt),
+          foldInbound(media, call?.totals ?? null, stream, previousAt, dt, at),
         );
       }
       if (sample.outboundVideo) {

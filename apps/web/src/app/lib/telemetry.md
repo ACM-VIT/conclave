@@ -46,11 +46,14 @@ click" means from the moment the join started (`connecting`). Stats are sampled
 from the receive transport and the camera producer every 250 ms from the join
 click (except in the waiting room) until first media arrives, then every 5 s, so
 first-media times are stamped at the first sample that shows them, even when
-media arrives before the join finishes. The first sample, during the join or
-after, is only a baseline: totals add deltas over measured intervals. A gap of
-more than 15 s between readable samples is left out of every total. A camera
-layer counts only against its reading in the previous sample, so one that drops
-out of a report and comes back starts again from a new baseline.
+media arrives before the join finishes. Totals start at `joined`: the first
+sample after it is only a baseline, and totals add deltas over measured
+intervals from there, so nothing from before `joined` is charged to the call. A
+gap of more than 15 s between readable samples is left out of every total. A
+stream or camera layer counts only against its reading in the previous sample,
+so one that drops out of a report and comes back starts again from a new
+baseline; a remote stream first seen mid-call started since then and counts
+from zero.
 
 ### `call_join`
 

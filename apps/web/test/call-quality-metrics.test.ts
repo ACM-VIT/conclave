@@ -767,6 +767,32 @@ describe("call_summary", () => {
     });
   });
 
+  it("charges nothing from before joined to a call", () => {
+    const { tracker, state, named } = setup();
+    state("connecting", 0);
+    tracker.onStats(
+      sample([video({ bytesReceived: 1000, framesDecoded: 10 })], { outboundVideo: [layer()] }),
+      0,
+    );
+    state("joined", 4800);
+    tracker.onStats(
+      sample([video({ bytesReceived: 500_000, framesDecoded: 300, freezeCount: 2, totalFreezesDurationSec: 4 })], {
+        outboundVideo: [layer({ bytesSent: 400_000, cpuLimitedSec: 4.8 })],
+      }),
+      4850,
+    );
+    state("disconnected", 5000);
+
+    expect(named("call_summary")[0].props).toMatchObject({
+      duration_ms: 200,
+      remote_video_ms: 0,
+      video_freeze_count: 0,
+      video_freeze_ms: 0,
+      outbound_video_ms: 0,
+      outbound_cpu_limited_pct: null,
+    });
+  });
+
   it("takes the first sample of a call as the baseline, not as a delta from zero", () => {
     const { tracker, state, named } = setup();
     state("connecting", 0);
