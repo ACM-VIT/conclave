@@ -288,7 +288,7 @@ describe("a participant the host admits before it joins", () => {
   it("joins a locked meeting without knocking, and nobody else does", async () => {
     const state = makeState();
     const created = await join(state, host);
-    expect((await join(state, agent)).status).toBe("waiting");
+    expect(roomOf(state).pendingClients.has(agent.userId)).toBe(false);
 
     const admitted = await send(created.peer, "admin:allowUsers", {
       userKeys: [agent.userId],
