@@ -581,6 +581,13 @@ export class RoomAuthority {
         if (shared || personal) this.sendPatch(subscription, shared, personal);
       }
     }
+    // A large clear is told to the views a batch per flush.
+    for (const instance of this.instances.values()) {
+      if (instance.hasPendingChanges) {
+        this.scheduleFlush(false);
+        break;
+      }
+    }
   }
 
   private sendPatch(

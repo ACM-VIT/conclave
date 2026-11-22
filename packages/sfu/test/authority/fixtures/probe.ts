@@ -41,8 +41,37 @@ export const probeContract = defineContract({
       receipt: s.null(),
     },
     cancel: { input: s.object({ id: s.string({ min: 1, max: 64 }) }), receipt: s.object({ cancelled: s.boolean() }) },
+    mark: {
+      input: s.object({
+        id: s.string({ min: 1, max: 64 }),
+        from: s.int({ min: 0 }),
+        count: s.int({ min: 1 }),
+        shown: s.boolean(),
+      }),
+      receipt: s.null(),
+    },
+    unmark: {
+      input: s.object({
+        id: s.string({ min: 1, max: 64 }),
+        how: s.oneOf(["clear", "one at a time", "clear then refuse"]),
+      }),
+      receipt: s.object({ removed: s.int({ min: 0 }) }),
+    },
+    remark: {
+      input: s.object({ id: s.string({ min: 1, max: 64 }) }),
+      receipt: s.object({
+        removed: s.int({ min: 0 }),
+        leftAfterClear: s.int({ min: 0 }),
+        oldRowStillThere: s.boolean(),
+        leftAfterWrite: s.int({ min: 0 }),
+      }),
+    },
   },
   queries: {
+    countMarks: {
+      input: s.object({ id: s.string({ min: 1, max: 64 }) }),
+      output: s.object({ count: s.int({ min: 0 }) }),
+    },
     dump: {
       input: s.null(),
       output: s.object({
@@ -62,11 +91,15 @@ export const probeContract = defineContract({
     /** Keyed by a note's text, so two notes with one text collide. */
     byText: s.object({ id: s.string({ max: 64 }) }),
     fired: s.object({ label: s.string({ max: 64 }), at: s.number(), order: s.int() }),
+    /** The marks that asked to be shown. */
+    marks: s.object({ n: s.int({ min: 0 }) }),
   },
 });
 
 type Note = { id: string; text: string; secret?: string; stars?: number[] };
 type Fired = { label: string; at: number; order: number };
+/** One of many rows under a note: keyed by the note, then by its number. */
+type Mark = { noteId: string; n: number; shown: boolean };
 
 const RATE = { burst: 1_000, perSecond: 1_000 };
 
@@ -88,6 +121,7 @@ export const probeAuthority = defineAuthority({
   tables: {
     notes: table<Note>({ maxRows: 5, maxRowBytes: 8 * 1024 }),
     fired: table<Fired>({ maxRows: 100 }),
+    marks: table<Mark>({ maxRows: 50_000 }),
   },
   timers: { ring: s.object({ label: s.string({ max: 64 }) }) },
   canView: ({ role }) => role === "moderator" || role === "member",
@@ -203,8 +237,63 @@ export const probeAuthority = defineAuthority({
         return { cancelled: tx.cancelTimer(key("timer", input.id)) };
       },
     },
+    mark: {
+      roles: everyone,
+      identity: "any",
+      rate: RATE,
+      run(_ctx, tx, input) {
+        for (let n = input.from; n < input.from + input.count; n += 1) {
+          tx.put("marks", key(input.id, String(n)), {
+            noteId: input.id,
+            n,
+            shown: input.shown,
+          });
+        }
+        return null;
+      },
+    },
+    unmark: {
+      roles: everyone,
+      identity: "any",
+      rate: RATE,
+      run(_ctx, tx, input) {
+        if (input.how === "one at a time") {
+          const rows = tx.scan("marks", key(input.id));
+          for (const [markKey] of rows) tx.delete("marks", markKey);
+          return { removed: rows.length };
+        }
+        const removed = tx.clear("marks", key(input.id));
+        if (input.how === "clear then refuse") return reject("changed-my-mind");
+        return { removed };
+      },
+    },
+    // Clears a note's marks and writes one back, reporting what it saw on the way.
+    remark: {
+      roles: everyone,
+      identity: "any",
+      rate: RATE,
+      run(_ctx, tx, input) {
+        const removed = tx.clear("marks", key(input.id));
+        const leftAfterClear = tx.count("marks", key(input.id));
+        const oldRowStillThere = tx.get("marks", key(input.id, "0")) !== undefined;
+        tx.put("marks", key(input.id, "kept"), { noteId: input.id, n: 0, shown: true });
+        return {
+          removed,
+          leftAfterClear,
+          oldRowStillThere,
+          leftAfterWrite: tx.scan("marks", key(input.id)).length,
+        };
+      },
+    },
   },
   queries: {
+    countMarks: {
+      roles: everyone,
+      rate: RATE,
+      read(_ctx, db, input) {
+        return { count: db.count("marks", key(input.id)) };
+      },
+    },
     dump: {
       roles: ["moderator"],
       // Off while the room's Q&A switch is off, so a test can withdraw the
@@ -255,6 +344,12 @@ export const probeAuthority = defineAuthority({
       kind: "shared",
       source: "fired",
       project: (row) => ({ key: String(row.order), value: { ...row } }),
+    },
+    marks: {
+      kind: "shared",
+      source: "marks",
+      project: (row) =>
+        row.shown ? { key: `${row.noteId}/${row.n}`, value: { n: row.n } } : null,
     },
   },
 });

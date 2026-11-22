@@ -133,6 +133,18 @@ export interface AuthorityTransaction<
   ): "inserted" | "exists";
   put<K extends TableName<T>>(table: K, key: TableKey, row: RowOf<T, K>): void;
   delete<K extends TableName<T>>(table: K, key: TableKey): boolean;
+  /**
+   * Removes every row under `prefix` and returns how many there were. This
+   * is how a parent's rows go with it: key them by the parent, as in
+   * `key(questionId, subject)`, and clear `key(questionId)`.
+   *
+   * It costs a transaction next to nothing however many rows there are,
+   * where reading and deleting them one at a time costs two operations a row
+   * and can use up the transaction's whole budget. The rows are gone for
+   * every handler once the transaction commits. Viewers are told a batch at
+   * a time over the next flushes, so one may hold such a row a moment longer.
+   */
+  clear<K extends TableName<T>>(table: K, prefix: TableKey): number;
   /** One timer per key. Scheduling the key again replaces it. */
   schedule<K extends keyof Timers & string>(
     kind: K,
@@ -292,6 +304,7 @@ export interface RuntimeTransaction extends RuntimeRead {
   insertIfAbsent(table: string, key: TableKey, row: object): "inserted" | "exists";
   put(table: string, key: TableKey, row: object): void;
   delete(table: string, key: TableKey): boolean;
+  clear(table: string, prefix: TableKey): number;
   schedule(kind: string, key: TableKey, atMs: number, payload: unknown): void;
   cancelTimer(key: TableKey): boolean;
 }
