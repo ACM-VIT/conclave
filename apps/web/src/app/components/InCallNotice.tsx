@@ -13,13 +13,9 @@ const EASE_OUT = [0.23, 1, 0.32, 1] as const;
 interface InCallNoticeProps {
   show: boolean;
   children: ReactNode;
-  className?: string;
-  passive?: boolean;
 }
 
-type NoticeFrameProps = Omit<InCallNoticeProps, "show">;
-
-function NoticeFrame({ children, className, passive }: NoticeFrameProps) {
+function NoticeFrame({ children }: { children: ReactNode }) {
   const reduceMotion = useReducedMotion();
   const isPresent = useIsPresent();
   const offset = reduceMotion ? 0 : -6;
@@ -32,26 +28,17 @@ function NoticeFrame({ children, className, passive }: NoticeFrameProps) {
       transition={{ duration: reduceMotion ? 0 : 0.16, ease: EASE_OUT }}
       inert={!isPresent}
       aria-hidden={!isPresent || undefined}
-      className={`${passive || !isPresent ? "pointer-events-none" : "pointer-events-auto"} flex justify-center ${className}`}
+      className={`${isPresent ? "pointer-events-auto" : "pointer-events-none"} flex w-full max-w-[560px] justify-center`}
     >
       {children}
     </motion.div>
   );
 }
 
-export default function InCallNotice({
-  show,
-  children,
-  className = "max-w-full",
-  passive = false,
-}: InCallNoticeProps) {
+export default function InCallNotice({ show, children }: InCallNoticeProps) {
   return (
     <AnimatePresence>
-      {show ? (
-        <NoticeFrame className={className} passive={passive}>
-          {children}
-        </NoticeFrame>
-      ) : null}
+      {show ? <NoticeFrame>{children}</NoticeFrame> : null}
     </AnimatePresence>
   );
 }

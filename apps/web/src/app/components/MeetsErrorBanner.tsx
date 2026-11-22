@@ -2,6 +2,7 @@
 
 import { AlertCircle, X } from "lucide-react";
 import type { MeetError } from "../lib/types";
+import InCallNoticeCard from "./InCallNoticeCard";
 
 interface MeetsErrorBannerProps {
   meetError: MeetError;
@@ -31,13 +32,24 @@ export default function MeetsErrorBanner({
     ? "Check that your camera and microphone aren’t in use by another app."
     : null;
 
-  const banner = (
+  if (variant === "strip") {
+    return (
+      <InCallNoticeCard
+        tone="error"
+        icon={AlertCircle}
+        title={meetError.message}
+        detail={helperText}
+        actionLabel={primaryActionLabel}
+        onAction={onPrimaryAction}
+        onDismiss={onDismiss}
+        dismissLabel="Dismiss error"
+      />
+    );
+  }
+
+  return (
     <div
-      className={
-        variant === "inline"
-          ? "w-full min-w-0 rounded-xl border border-[#F95F4A]/20 bg-[#F95F4A]/[0.07] px-3.5 py-3 flex items-start gap-3"
-          : "w-full min-w-0 rounded-xl border border-[#F95F4A]/25 bg-[#F95F4A]/[0.07] px-4 py-3.5 sm:px-6 flex items-start gap-3"
-      }
+      className="w-full min-w-0 rounded-xl border border-[#F95F4A]/20 bg-[#F95F4A]/[0.07] px-3.5 py-3 flex items-start gap-3"
       role="alert"
     >
       <AlertCircle
@@ -71,13 +83,6 @@ export default function MeetsErrorBanner({
       >
         <X className="h-4 w-4" />
       </button>
-    </div>
-  );
-
-  if (variant === "inline") return banner;
-  return (
-    <div className="w-full min-w-0 rounded-xl bg-[#18181b] shadow-[0_12px_32px_rgba(0,0,0,0.35)]">
-      {banner}
     </div>
   );
 }

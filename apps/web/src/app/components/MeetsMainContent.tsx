@@ -9,12 +9,15 @@ import type {
   SetStateAction,
 } from "react";
 import {
+  Globe,
+  Headphones,
   Home,
   Loader2,
   LogOut,
   MonitorPlay,
   Plus,
   RefreshCw,
+  VolumeX,
 } from "lucide-react";
 import type { Socket } from "socket.io-client";
 import type { RoomInfo } from "@/lib/sfu-types";
@@ -30,6 +33,7 @@ import ConnectionBanner from "./ConnectionBanner";
 import AdminNoticePill from "./AdminNoticePill";
 import CatchUpPill from "./CatchUpPill";
 import InCallNotice from "./InCallNotice";
+import InCallNoticeCard from "./InCallNoticeCard";
 import InCallNoticeSlot from "./InCallNoticeSlot";
 import ParticipantsPanel from "./ParticipantsPanel";
 import MeetSettingsPanel from "./MeetSettingsPanel";
@@ -1995,9 +1999,7 @@ export default function MeetsMainContent({
           }
           clearWebinarChrome={isWebinarAttendee}
         >
-          <InCallNotice show={Boolean(errorNotice)} className="w-full max-w-[640px]">
-            {errorNotice}
-          </InCallNotice>
+          <InCallNotice show={Boolean(errorNotice)}>{errorNotice}</InCallNotice>
           {!isRecoveringMeeting && (!isWebinarAttendee || serverRestartNotice) ? (
             <ConnectionBanner
               state={connectionState}
@@ -2006,25 +2008,22 @@ export default function MeetsMainContent({
             />
           ) : null}
           <InCallNotice show={!isWebinarAttendee && participantAudioBlocked}>
-            <div role="status" className="flex max-w-full">
-              <button
-                type="button"
-                onClick={handlePlayParticipantAudio}
-                className="inline-flex max-w-full items-center gap-2.5 rounded-full border border-[#F95F4A]/60 bg-[#131316] px-5 py-2.5 text-xs uppercase tracking-[0.14em] text-[#fafafa] transition hover:bg-[#F95F4A]/15"
-                style={{ fontFamily: "'PolySans Trial', sans-serif" }}
-              >
-                <span className="h-2 w-2 shrink-0 rounded-full bg-[#F95F4A] animate-pulse" />
-                Audio is paused by your browser — click to listen
-              </button>
-            </div>
+            <InCallNoticeCard
+              tone="error"
+              icon={VolumeX}
+              title="Your browser paused audio"
+              actionLabel="Turn on audio"
+              onAction={handlePlayParticipantAudio}
+              actionOnCardClick
+            />
           </InCallNotice>
           <InCallNotice show={!isWebinarAttendee && browserAudioNeedsGesture}>
-            <div
-              role="status"
-              className="max-w-full rounded-full border border-[#fafafa]/10 bg-[#18181b] px-3.5 py-2 text-center text-[11px] uppercase tracking-[0.3em] text-[#F95F4A]"
-            >
-              Click “Shared browser audio” to unlock the system sound.
-            </div>
+            <InCallNoticeCard
+              icon={Globe}
+              title="Shared browser sound is paused"
+              actionLabel="Turn on sound"
+              onAction={onToggleBrowserAudio}
+            />
           </InCallNotice>
           {!isWebinarAttendee && !isTranscriptOpen && transcript.isLive ? (
             <CatchUpPill
@@ -2034,13 +2033,18 @@ export default function MeetsMainContent({
               onOpen={handleOpenCatchUp}
             />
           ) : null}
-          <InCallNotice show={viewSettings.audioOnlyMode} passive>
-            <div
-              role="status"
-              className="rounded-full border border-[#F95F4A]/40 bg-[#18181b] px-3 py-1.5 text-[12px] font-medium text-[#fafafa] shadow-lg"
-            >
-              Audio-only mode active
-            </div>
+          <InCallNotice show={viewSettings.audioOnlyMode}>
+            <InCallNoticeCard
+              icon={Headphones}
+              title="Audio-only mode is on"
+              actionLabel="Turn off"
+              onAction={() =>
+                onViewSettingsChange((current) => ({
+                  ...current,
+                  audioOnlyMode: false,
+                }))
+              }
+            />
           </InCallNotice>
         </InCallNoticeSlot>
       ) : null}

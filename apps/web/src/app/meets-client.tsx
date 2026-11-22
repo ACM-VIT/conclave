@@ -3224,11 +3224,10 @@ export default function MeetsClient({
               meetError={meetError}
               onDismiss={() => setMeetError(null)}
               primaryActionLabel={
-                meetError.code === "PERMISSION_DENIED"
-                  ? "Retry Permissions"
-                  : meetError.code === "MEDIA_ERROR"
-                    ? "Retry Devices"
-                    : undefined
+                meetError.code === "PERMISSION_DENIED" ||
+                meetError.code === "MEDIA_ERROR"
+                  ? "Try again"
+                  : undefined
               }
               onPrimaryAction={
                 meetError.code === "PERMISSION_DENIED" ||

@@ -153,7 +153,7 @@ export function createMeetError(
   ) {
     return {
       code: "PERMISSION_DENIED",
-      message: "Camera/microphone permission denied",
+      message: "Camera and microphone are blocked",
       recoverable: true,
     };
   }

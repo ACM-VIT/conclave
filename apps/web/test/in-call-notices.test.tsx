@@ -5,7 +5,9 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import ConnectionBanner from "../src/app/components/ConnectionBanner";
 import MeetsErrorBanner from "../src/app/components/MeetsErrorBanner";
 import InCallNotice from "../src/app/components/InCallNotice";
+import InCallNoticeCard from "../src/app/components/InCallNoticeCard";
 import InCallNoticeSlot from "../src/app/components/InCallNoticeSlot";
+import { Headphones, VolumeX } from "lucide-react";
 
 let root: Root;
 let container: HTMLDivElement;
@@ -49,23 +51,23 @@ describe("in-call notices", () => {
       <MeetsErrorBanner
         meetError={{
           code: "PERMISSION_DENIED",
-          message: "Camera/microphone permission denied",
+          message: "Camera and microphone are blocked",
           recoverable: true,
         }}
         onDismiss={onDismiss}
-        primaryActionLabel="Retry Permissions"
+        primaryActionLabel="Try again"
         onPrimaryAction={onRetry}
       />
     );
     await render(<InCallNotice show>{banner}</InCallNotice>);
 
     const alert = slot()?.querySelector('[role="alert"]');
-    expect(alert?.textContent).toContain("Camera/microphone permission denied");
+    expect(alert?.textContent).toContain("Camera and microphone are blocked");
     expect(alert?.textContent).toContain(
       "Allow camera and microphone access in your browser, then try again.",
     );
     const buttons = [...(alert?.querySelectorAll("button") ?? [])];
-    buttons.find((b) => b.textContent === "Retry Permissions")?.click();
+    buttons.find((b) => b.textContent === "Try again")?.click();
     buttons.find((b) => b.getAttribute("aria-label") === "Dismiss error")?.click();
     expect(onRetry).toHaveBeenCalledTimes(1);
     expect(onDismiss).toHaveBeenCalledTimes(1);
@@ -79,7 +81,8 @@ describe("in-call notices", () => {
     await render(<ConnectionBanner state="joined" isOffline />);
     const status = slot()?.querySelector('[role="status"]');
     expect(status?.getAttribute("aria-live")).toBe("polite");
-    expect(status?.textContent).toContain("You’re offline. Check your internet connection.");
+    expect(status?.textContent).toContain("You’re offline");
+    expect(status?.textContent).toContain("Check your internet connection.");
 
     await render(<ConnectionBanner state="joined" />);
     await waitOutExit();
@@ -90,8 +93,8 @@ describe("in-call notices", () => {
     await render(
       <>
         <ConnectionBanner state="reconnecting" />
-        <InCallNotice show passive>
-          <div role="status">Audio-only mode active</div>
+        <InCallNotice show>
+          <InCallNoticeCard icon={Headphones} title="Audio-only mode is on" />
         </InCallNotice>
       </>,
     );
@@ -99,8 +102,8 @@ describe("in-call notices", () => {
       (node) => node.textContent,
     );
     expect(messages).toEqual([
-      "Connection interrupted. Reconnecting to the meeting…",
-      "Audio-only mode active",
+      "Trying to reconnect",
+      "Audio-only mode is on",
     ]);
   });
 
@@ -159,5 +162,28 @@ describe("in-call notices", () => {
     await render(stack(2));
     await waitOutExit();
     expect(toggle()).toBeUndefined();
+  });
+
+  it("resumes paused audio from a click anywhere on the notice, once per click", async () => {
+    const onResume = vi.fn();
+    await render(
+      <InCallNotice show>
+        <InCallNoticeCard
+          tone="error"
+          icon={VolumeX}
+          title="Your browser paused audio"
+          actionLabel="Turn on audio"
+          onAction={onResume}
+          actionOnCardClick
+        />
+      </InCallNotice>,
+    );
+    const alert = slot()?.querySelector<HTMLElement>('[role="alert"]');
+    alert?.querySelector("span")?.click();
+    expect(onResume).toHaveBeenCalledTimes(1);
+    [...(alert?.querySelectorAll("button") ?? [])]
+      .find((b) => b.textContent === "Turn on audio")
+      ?.click();
+    expect(onResume).toHaveBeenCalledTimes(2);
   });
 });
