@@ -17,14 +17,23 @@ const getWorkerCount = (): number =>
 
 type CreateWorkersOptions = {
   onWorkerDied?: (worker: Worker, label: string) => void | Promise<void>;
+  signal?: AbortSignal;
 };
+
+const INITIAL_RESPAWN_DELAY_MS = 100;
+const MAX_RESPAWN_DELAY_MS = 2000;
 
 const webRtcServers = new WeakMap<Worker, WebRtcServer>();
 
 export const getWorkerWebRtcServer = (worker: Worker): WebRtcServer | undefined =>
   webRtcServers.get(worker);
 
-const spawnWorker = async (port: number, plainMinPort: number): Promise<Worker> => {
+const spawnWorker = async (
+  port: number,
+  plainMinPort: number,
+  signal?: AbortSignal,
+): Promise<Worker> => {
+  signal?.throwIfAborted();
   const worker = await mediasoup.createWorker({
     rtcMinPort: plainMinPort,
     rtcMaxPort: config.workerSettings.rtcMaxPort,
@@ -36,7 +45,9 @@ const spawnWorker = async (port: number, plainMinPort: number): Promise<Worker> 
   if (enableUdp) listenInfos.push({ protocol: "udp", ip, announcedAddress: announcedIp, port });
   if (enableTcp) listenInfos.push({ protocol: "tcp", ip, announcedAddress: announcedIp, port });
   try {
+    signal?.throwIfAborted();
     const server = await worker.createWebRtcServer({ listenInfos });
+    signal?.throwIfAborted();
     webRtcServers.set(worker, server);
     return worker;
   } catch (error) {
@@ -45,22 +56,32 @@ const spawnWorker = async (port: number, plainMinPort: number): Promise<Worker> 
   }
 };
 
-const respawnWorker = async (port: number, plainMinPort: number): Promise<Worker> => {
-  for (const delayMs of [100, 200, 400]) {
+const respawnWorker = async (
+  port: number,
+  plainMinPort: number,
+  signal?: AbortSignal,
+): Promise<Worker> => {
+  let delayMs = INITIAL_RESPAWN_DELAY_MS;
+  for (;;) {
     try {
-      return await spawnWorker(port, plainMinPort);
+      return await spawnWorker(port, plainMinPort, signal);
     } catch (error) {
+      signal?.throwIfAborted();
       Logger.warn(`Worker on WebRTC port ${port} failed to respawn; retrying in ${delayMs} ms`, error);
-      await delay(delayMs);
     }
+    await delay(delayMs, undefined, { signal, ref: false });
+    delayMs = Math.min(delayMs * 2, MAX_RESPAWN_DELAY_MS);
   }
-  return spawnWorker(port, plainMinPort);
 };
 
 const createWorkers = async (
   options: CreateWorkersOptions = {},
 ): Promise<Worker[]> => {
   const workers: Worker[] = [];
+  const startupFailure = new AbortController();
+  const signal = options.signal
+    ? AbortSignal.any([options.signal, startupFailure.signal])
+    : startupFailure.signal;
   const workerCount = getWorkerCount();
   const { rtcMinPort, rtcMaxPort, webRtcPortBase } = config.workerSettings;
   if (!Number.isInteger(webRtcPortBase) || webRtcPortBase < rtcMinPort || webRtcPortBase > rtcMaxPort) {
@@ -76,37 +97,32 @@ const createWorkers = async (
     throw new Error("Worker WebRTC ports must fit in 1-65535 without overlapping the plain RTP range");
   }
 
-  // A dead mediasoup worker takes its routers - and the rooms running on them -
-  // with it. Previously the handler did `process.exit(1)`, which killed the
-  // WHOLE instance and every healthy room on the other workers too. Instead we
-  // recreate a replacement worker IN PLACE so the pool stays full and new rooms
-  // get allocated to a healthy worker. `workers` is the exact array stored on
-  // `state.workers`, so mutating it here updates the live pool. Rooms that were
-  // on the dead worker degrade (their producers/consumers error) and their
-  // clients rejoin via the normal reconnect path, landing on a healthy worker.
+  // Placement skips closed workers. Keep their slots so recovery keeps the
+  // same port and worker index while other slots continue serving rooms.
   const attachDiedHandler = (worker: Worker, index: number): void => {
     const label = String(index);
-    worker.on("died", () => {
+    worker.once("died", () => {
+      if (signal?.aborted) return;
       Logger.error(`Worker ${label} has died; recreating a replacement`);
-      void Promise.resolve(options.onWorkerDied?.(worker, label)).catch(
+      void Promise.resolve().then(() => options.onWorkerDied?.(worker, label)).catch(
         (error) => {
           Logger.error(
             `Failed to clean up rooms for dead worker ${label}: ${String(error)}`,
           );
         },
       );
-      const deadIndex = workers.indexOf(worker);
-      respawnWorker(webRtcPortBase + index, plainMinPort)
+      respawnWorker(webRtcPortBase + index, plainMinPort, signal)
         .then((replacement) => {
-          if (deadIndex >= 0) {
-            workers[deadIndex] = replacement;
-          } else {
-            workers.push(replacement);
+          if (signal?.aborted) {
+            replacement.close();
+            return;
           }
+          workers[index] = replacement;
           attachDiedHandler(replacement, index);
           Logger.info(`Worker ${label} replacement created`);
         })
         .catch((err) => {
+          if (signal?.aborted) return;
           Logger.error(
             `Failed to recreate dead worker ${label}: ${String(err)}`,
           );
@@ -115,11 +131,17 @@ const createWorkers = async (
   };
 
   Logger.info(`Creating ${workerCount} mediasoup worker(s)`);
-  for (let i = 0; i < workerCount; i++) {
-    const worker = await spawnWorker(webRtcPortBase + i, plainMinPort);
-    attachDiedHandler(worker, i);
-    workers.push(worker);
-    Logger.info(`Worker ${i} created`);
+  try {
+    for (let i = 0; i < workerCount; i++) {
+      const worker = await spawnWorker(webRtcPortBase + i, plainMinPort, signal);
+      workers.push(worker);
+      attachDiedHandler(worker, i);
+      Logger.info(`Worker ${i} created`);
+    }
+  } catch (error) {
+    startupFailure.abort();
+    for (const worker of workers) worker.close();
+    throw error;
   }
 
   return workers;

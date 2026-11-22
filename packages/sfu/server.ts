@@ -4,8 +4,10 @@ import { installRedisCrashGuards } from "./server/redisErrors.js";
 installRedisCrashGuards();
 
 const server = createSfuServer();
+let shuttingDown = false;
 
 server.start().catch((error) => {
+  if (shuttingDown) return;
   console.error("[SFU] Failed to start", error);
   process.exit(1);
 });
@@ -13,7 +15,6 @@ server.start().catch((error) => {
 // Graceful shutdown: on a termination signal, run the server's teardown
 // (which closes sockets/workers AND flushes buffered product analytics) before
 // the process exits, so no game events are lost on container stop / Ctrl-C.
-let shuttingDown = false;
 const shutdown = (signal: NodeJS.Signals): void => {
   if (shuttingDown) return;
   shuttingDown = true;
