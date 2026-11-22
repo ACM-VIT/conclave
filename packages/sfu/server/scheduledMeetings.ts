@@ -518,7 +518,7 @@ export type ScheduledMeetingPersistence = {
   claimEmailReminder?: (
     claim: EmailReminderClaim,
   ) => MaybePromise<ScheduledMeeting | null>;
-  load: () => MaybePromise<ScheduledMeeting[]>;
+  load: (options?: { strict?: boolean }) => MaybePromise<ScheduledMeeting[]>;
   close?: () => MaybePromise<void>;
   flush?: () => Promise<void>;
 };
@@ -813,7 +813,7 @@ const createSqliteScheduledMeetingPersistence = (
         Logger.error("Failed to delete scheduled meetings", error);
       }
     },
-    load: () => {
+    load: (options) => {
       try {
         const meetings = loadRows
           .all()
@@ -829,6 +829,7 @@ const createSqliteScheduledMeetingPersistence = (
         knownIds = new Set(meetings.map((meeting) => meeting.id));
         return meetings;
       } catch (error) {
+        if (options?.strict) throw error;
         Logger.error("Failed to load scheduled meetings", error);
         return [];
       }
@@ -853,7 +854,7 @@ const createFileScheduledMeetingPersistence = (
     writeJsonAtomic(path, JSON.stringify(entries, null, 2));
     return true;
   },
-  load: () => {
+  load: (options) => {
     try {
       if (!existsSync(path)) return [];
       const raw = readFileSync(path, "utf8");
@@ -863,6 +864,7 @@ const createFileScheduledMeetingPersistence = (
         .map((entry) => normalizeStoredMeeting(entry))
         .filter((entry): entry is ScheduledMeeting => Boolean(entry));
     } catch (error) {
+      if (options?.strict) throw error;
       Logger.error("Failed to load scheduled meetings from JSON", error);
       return [];
     }
@@ -1121,7 +1123,7 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
     return meeting;
   }
 
-  async load(): Promise<ScheduledMeeting[]> {
+  async load(options?: { strict?: boolean }): Promise<ScheduledMeeting[]> {
     try {
       await this.start();
       const values = await this.client.hVals(this.key);
@@ -1135,7 +1137,7 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
         return meetings;
       }
 
-      const fallbackMeetings = await this.fallback.load();
+      const fallbackMeetings = await this.fallback.load(options);
       this.knownMeetings = new Map(
         fallbackMeetings.map((meeting) => [meeting.id, meeting]),
       );
@@ -1148,6 +1150,7 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
       }
       return fallbackMeetings;
     } catch (error) {
+      if (options?.strict) throw error;
       Logger.error(
         "Failed to load scheduled meetings from Redis; falling back to local persistence",
         error,
@@ -1262,6 +1265,25 @@ export const loadPersistedMeetings = (
   }
   return meetings.length;
 });
+
+/** Takes stored meetings this SFU lacks or holds an older copy of; never drops one it holds. */
+export const mergePersistedMeetings = async (
+  store: ScheduledMeetingStore,
+  persistence: ScheduledMeetingPersistence,
+): Promise<number> => {
+  let merged = 0;
+  for (const meeting of await persistence.load({ strict: true })) {
+    const held = store.byId.get(meeting.id);
+    if (held && held.updatedAt >= meeting.updatedAt) continue;
+    if (held) {
+      unregisterStore(store, held);
+      Object.assign(held, meeting);
+    }
+    registerStore(store, held ?? meeting);
+    merged += 1;
+  }
+  return merged;
+};
 
 const persistScheduledMeetings = (
   store: ScheduledMeetingStore,

@@ -268,7 +268,7 @@ export type ScheduledWebinarPersistence = {
   saveChanged?: (webinars: ScheduledWebinar[]) => void;
   importIfNewer: (webinar: ScheduledWebinar) => boolean;
   deleteIds?: (ids: string[]) => void;
-  load: () => ScheduledWebinar[];
+  load: (options?: { strict?: boolean }) => ScheduledWebinar[];
   close?: () => void;
 };
 
@@ -318,7 +318,7 @@ const createFileScheduledWebinarPersistence = (
     writeJsonAtomic(path, JSON.stringify(entries, null, 2));
     return true;
   },
-  load: () => {
+  load: (options) => {
     try {
       if (!existsSync(path)) return [];
       const raw = readFileSync(path, "utf8");
@@ -328,6 +328,7 @@ const createFileScheduledWebinarPersistence = (
         .map((entry) => normalizeStoredWebinar(entry))
         .filter((entry): entry is ScheduledWebinar => Boolean(entry));
     } catch (error) {
+      if (options?.strict) throw error;
       Logger.error("Failed to load scheduled webinars", error);
       return [];
     }
@@ -492,7 +493,7 @@ const createSqliteScheduledWebinarPersistence = (
         Logger.error("Failed to delete scheduled webinars", error);
       }
     },
-    load: () => {
+    load: (options) => {
       try {
         const webinars = loadRows
           .all()
@@ -508,6 +509,7 @@ const createSqliteScheduledWebinarPersistence = (
         knownIds = new Set(webinars.map((webinar) => webinar.id));
         return webinars;
       } catch (error) {
+        if (options?.strict) throw error;
         Logger.error("Failed to load scheduled webinars from SQLite", error);
         return [];
       }
@@ -627,6 +629,25 @@ export const loadPersistedSchedules = (
     indexScheduledWebinar(store, webinar);
   }
   return snapshot.length;
+};
+
+/** Takes stored webinars this SFU lacks or holds an older copy of; never drops one it holds. */
+export const mergePersistedSchedules = (
+  store: ScheduledWebinarStore,
+  persistence: ScheduledWebinarPersistence,
+): number => {
+  let merged = 0;
+  for (const webinar of persistence.load({ strict: true })) {
+    const held = store.byId.get(webinar.id);
+    if (held && held.updatedAt >= webinar.updatedAt) continue;
+    if (held) {
+      removeFromIndexes(store, held);
+      Object.assign(held, webinar);
+    }
+    indexScheduledWebinar(store, held ?? webinar);
+    merged += 1;
+  }
+  return merged;
 };
 
 const persistScheduledWebinars = (

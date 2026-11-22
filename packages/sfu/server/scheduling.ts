@@ -81,7 +81,7 @@ export type SchedulingRecordWrite = {
 export type SchedulingPersistence = {
   save: (snapshot: SchedulingSnapshot) => MaybePromise<void>;
   importIfNewer: (record: SchedulingRecordWrite) => MaybePromise<boolean>;
-  load: () => MaybePromise<SchedulingSnapshot>;
+  load: (options?: { strict?: boolean }) => MaybePromise<SchedulingSnapshot>;
   close?: () => MaybePromise<void>;
   flush?: () => Promise<void>;
 };
@@ -1234,7 +1234,7 @@ const createSqliteSchedulingPersistence = (
       if (applied) known.set(keyOf(record.kind, record.id), { kind: record.kind, id: record.id });
       return applied;
     },
-    load: () => {
+    load: (options) => {
       const snapshot: SchedulingSnapshot = {
         profiles: [],
         availability: [],
@@ -1279,6 +1279,7 @@ const createSqliteSchedulingPersistence = (
         }
         known = loaded;
       } catch (error) {
+        if (options?.strict) throw error;
         Logger.error("Failed to load scheduling records", error);
       }
       return normalizeSnapshot(snapshot);
@@ -1358,7 +1359,7 @@ const createFileSchedulingPersistence = (
         Logger.error("Failed to persist scheduling records to JSON", error);
       }
     },
-    load: () => {
+    load: (options) => {
       try {
         if (!existsSync(path)) return normalizeSnapshot({});
         // Own serialized writes; normalizeSnapshot re-checks the array shape.
@@ -1366,6 +1367,7 @@ const createFileSchedulingPersistence = (
           JSON.parse(readFileSync(path, "utf8")) as Partial<SchedulingSnapshot>,
         );
       } catch (error) {
+        if (options?.strict) throw error;
         Logger.error("Failed to load scheduling records from JSON", error);
         return normalizeSnapshot({});
       }
@@ -1559,7 +1561,7 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
     };
   }
 
-  async load(): Promise<SchedulingSnapshot> {
+  async load(options?: { strict?: boolean }): Promise<SchedulingSnapshot> {
     try {
       await this.start();
       const redisSnapshot = await this.loadHashes();
@@ -1589,7 +1591,7 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
         return legacySnapshot;
       }
 
-      const fallbackSnapshot = await this.fallback.load();
+      const fallbackSnapshot = await this.fallback.load(options);
       const total =
         fallbackSnapshot.profiles.length +
         fallbackSnapshot.availability.length +
@@ -1603,6 +1605,7 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
       }
       return fallbackSnapshot;
     } catch (error) {
+      if (options?.strict) throw error;
       Logger.error(
         "Failed to load scheduling records from Redis; falling back to local persistence",
         error,
@@ -1866,6 +1869,68 @@ export const importFallbackScheduling = (
     },
     importIfNewer: (entry) => persistence.importIfNewer(schedulingRecordFromFallback(entry)),
   });
+};
+
+const unindexProfile = (store: SchedulingStore, profile: SchedulingProfile): void => {
+  const byUser = userKey(profile.clientId, profile.userId);
+  if (store.profileIdByUserKey.get(byUser) === profile.id) store.profileIdByUserKey.delete(byUser);
+  const byUsername = `${profile.clientId}:${profile.username.toLowerCase()}`;
+  if (store.profileIdByUsername.get(byUsername) === profile.id) store.profileIdByUsername.delete(byUsername);
+};
+
+const unindexEventType = (store: SchedulingStore, eventType: SchedulingEventType): void => {
+  const bySlug = profileSlugKey(eventType.profileId, eventType.slug);
+  if (store.eventTypeIdByProfileSlug.get(bySlug) === eventType.id) store.eventTypeIdByProfileSlug.delete(bySlug);
+};
+
+/** Takes stored records this SFU lacks or holds an older copy of; never drops one it holds. */
+export const mergePersistedScheduling = async (
+  store: SchedulingStore,
+  persistence: SchedulingPersistence,
+  options?: { strict?: boolean },
+): Promise<number> => {
+  const snapshot = await persistence.load(options);
+  let merged = 0;
+  for (const profile of snapshot.profiles) {
+    const held = store.profilesById.get(profile.id);
+    if (held && held.updatedAt >= profile.updatedAt) continue;
+    if (held) {
+      unindexProfile(store, held);
+      Object.assign(held, profile);
+    }
+    registerProfile(store, held ?? profile);
+    merged += 1;
+  }
+  const storedProfiles = new Map(snapshot.profiles.map((profile) => [profile.id, profile]));
+  for (const entry of snapshot.availability) {
+    const profile = store.profilesById.get(entry.profileId);
+    if (!profile) continue;
+    const storedAt = hoursUpdatedAt(entry.availability, storedProfiles.get(entry.profileId));
+    const held = store.availabilityByProfileId.get(entry.profileId);
+    if (held && (held.updatedAt ?? 0) >= storedAt) continue;
+    const hours = normalizeWeeklyAvailability(entry.availability, profile.timeZone);
+    hours.updatedAt = storedAt;
+    store.availabilityByProfileId.set(entry.profileId, hours);
+    merged += 1;
+  }
+  for (const eventType of snapshot.eventTypes) {
+    const held = store.eventTypesById.get(eventType.id);
+    if (held && held.updatedAt >= eventType.updatedAt) continue;
+    if (held) {
+      unindexEventType(store, held);
+      Object.assign(held, eventType);
+    }
+    registerEventType(store, held ?? eventType);
+    merged += 1;
+  }
+  for (const calendar of snapshot.calendars) {
+    const held = store.calendarByProfileId.get(calendar.profileId);
+    if (held && (held.updatedAt ?? 0) >= (calendar.updatedAt ?? 0)) continue;
+    if (held) Object.assign(held, calendar);
+    else store.calendarByProfileId.set(calendar.profileId, calendar);
+    merged += 1;
+  }
+  return merged;
 };
 
 export const loadPersistedScheduling = (

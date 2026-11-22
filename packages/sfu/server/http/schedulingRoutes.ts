@@ -29,6 +29,7 @@ import {
   updateEventType,
   updateSchedulingProfile,
   type BusyInterval,
+  mergePersistedScheduling,
 } from "../scheduling.js";
 import {
   createScheduledMeeting,
@@ -247,11 +248,15 @@ const requireHostProfile = async (
     return null;
   }
   const clientId = resolveClientId(req);
-  const existingProfile = getProfileByUser(
+  let existingProfile = getProfileByUser(
     state.scheduling,
     clientId,
     user.userId,
   );
+  if (!existingProfile && state.schedulingPersistence) {
+    await mergePersistedScheduling(state.scheduling, state.schedulingPersistence);
+    existingProfile = getProfileByUser(state.scheduling, clientId, user.userId);
+  }
   if (!existingProfile) {
     for (const legacyClientId of clientIdCandidates(clientId).slice(1)) {
       const legacyProfile = getProfileByUser(
