@@ -173,6 +173,11 @@ export type PatchFrame = FrameBase & {
   seq: number;
   put: ProjectedRow[];
   remove: RowRef[];
+  /**
+   * What the viewer may now do, when that changed without their view being
+   * replaced: the room's policy changed and they still see what they saw.
+   */
+  grants?: AuthorityGrants;
 };
 
 /** The view is withdrawn. The client forgets everything it held. */

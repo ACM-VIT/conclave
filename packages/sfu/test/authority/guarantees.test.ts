@@ -542,6 +542,101 @@ describe("room policy", () => {
   });
 });
 
+describe("a change of room policy", () => {
+  const canAsk = (tab: Tab): boolean => tab.state.kind === "ready" && tab.state.actions.has("ask");
+  /** Each frame as its kind and how many rows it carries. */
+  const shapes = (frames: AuthorityFrame[]) =>
+    frames.map((frame) => [
+      frame.kind,
+      frame.kind === "patch"
+        ? frame.put.length + frame.remove.length
+        : frame.kind === "replace"
+          ? frame.rows.length
+          : 0,
+    ]);
+
+  it("tells a viewer what they may now do, and sends no view again, when that is all that changed", async () => {
+    const room = new Harness([qaAuthority]);
+    room.setWebinar(true, true);
+    const hostTab = await room.open(host, qaContract);
+    const viewer = await room.open(person("guest-viewer", "Viewer", "attendee"), qaContract);
+    const asked = await viewer.act("ask", { text: "Asked while Q&A was on" });
+    const id = field(asked.ok ? asked.value : null, "id") as string;
+    await hostTab.act("moderate", { id, action: "answered" });
+    await room.deliver();
+    const couldAsk = canAsk(viewer);
+    const viewBefore = viewer.held();
+    const replacesBefore = room.authority.stats.replaces;
+    const framesBefore = [viewer.frames.length, hostTab.frames.length];
+
+    // The host turns Q&A off. Who may see which question is as it was.
+    room.setWebinar(true, false);
+    await vi.advanceTimersByTimeAsync(10);
+    await room.deliver();
+    const whileOff = {
+      canAsk: canAsk(viewer),
+      view: viewer.held(),
+      replaces: room.authority.stats.replaces - replacesBefore,
+    };
+    const refused = await viewer.act("ask", { text: "Asked while it is off" });
+    room.setWebinar(true, true);
+    await vi.advanceTimersByTimeAsync(10);
+    await room.deliver();
+
+    expect(couldAsk).toBe(true);
+    expect(whileOff).toEqual({ canAsk: false, view: viewBefore, replaces: 0 });
+    expect(refused).toMatchObject({ ok: false, code: "forbidden" });
+    expect(canAsk(viewer)).toBe(true);
+    expect(room.authority.stats.replaces - replacesBefore).toBe(0);
+    // Two small frames for the attendee, one for each switch, with no rows.
+    expect(shapes(viewer.frames.slice(framesBefore[0]))).toEqual([
+      ["patch", 0],
+      ["patch", 0],
+    ]);
+    // Nothing changed for the host, who is sent nothing at all.
+    expect(hostTab.frames.slice(framesBefore[1])).toEqual([]);
+    expect(await room.converged()).toBe(true);
+  });
+
+  it("sends each viewer what changed for them, and no view again, when the room's mode changes", async () => {
+    const room = new Harness([qaAuthority]);
+    const hostTab = await room.open(host, qaContract);
+    const asker = await room.open(priya, qaContract);
+    const other = await room.open(ravi, qaContract);
+    const asked = await asker.act("ask", { text: "Public in a meeting, private in a webinar" });
+    const id = field(asked.ok ? asked.value : null, "id") as string;
+    await room.deliver();
+    const seenBefore = [other.row("questions", id) !== null, asker.row("myQuestions", id)];
+    const replacesBefore = room.authority.stats.replaces;
+    const framesBefore = other.frames.length;
+
+    // In a webinar a waiting question is between its asker and the hosts.
+    room.setWebinar(true, true);
+    await vi.advanceTimersByTimeAsync(10);
+    await room.deliver();
+
+    expect(seenBefore).toEqual([true, { hidden: null }]);
+    expect(room.authority.stats.replaces - replacesBefore).toBe(0);
+    expect(other.row("questions", id)).toBeNull();
+    // The asker now holds it as their own, out of the shared list.
+    expect(asker.row("questions", id)).toBeNull();
+    expect(field(asker.row("myQuestions", id), "hidden")).not.toBeNull();
+    expect(JSON.stringify(asker.row("myQuestions", id))).toContain(
+      "Public in a meeting, private in a webinar",
+    );
+    expect(field(hostTab.row("questions", id), "status")).toBe("pending");
+    // The other member is told to drop that one question, in one frame that
+    // also says what they may now do.
+    const told = patches(other.frames.slice(framesBefore));
+    expect(told.length).toBe(1);
+    expect(new Set(told[0].remove.map((row) => row.key))).toEqual(new Set([id]));
+    expect(told[0].put).toEqual([]);
+    expect(told[0].grants?.actions).not.toContain("ask");
+    expect(replaces(other.frames.slice(framesBefore))).toEqual([]);
+    expect(await room.converged()).toBe(true);
+  });
+});
+
 describe("delivery", () => {
   it("coalesces a burst into one frame per recipient per interval", async () => {
     const room = new Harness([pollsAuthority]);

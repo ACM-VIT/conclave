@@ -222,14 +222,71 @@ export class ViewTracker {
   }
 
   /**
-   * The room's mode or flags changed, so every projection may differ. Held
-   * views are dropped; the host sends each subscriber a fresh replacement.
+   * The room's mode or flags changed, so any projection may differ. Every
+   * row is projected again for every audience that holds a view, and only
+   * what comes out different is noted, to be told like any other change. A
+   * switch that changes nothing anyone sees, such as one that only decides
+   * who may take part, notes nothing and sends no rows at all.
    */
   setPolicy(policy: RoomPolicy): void {
     this.policy = policy;
-    this.roles.clear();
-    this.subjects.clear();
-    this.changed.clear();
+    // First what was committed and not yet taken in, now under the new policy.
+    this.absorb();
+    this.version += 1;
+    this.reconcile((change) => {
+      for (const [name, view] of Object.entries(this.definition.views)) {
+        if (view.kind === "shared") {
+          for (const [key, row] of this.store.rows(view.source)) {
+            for (const [role, audience] of this.roles) {
+              change(
+                audience,
+                name,
+                key,
+                this.project(name, () => view.project(row, role, this.policy)),
+              );
+            }
+          }
+          continue;
+        }
+        for (const [subject, audience] of this.subjects) {
+          for (const key of this.owned.get(name)!.get(subject) ?? []) {
+            const row = this.store.get(view.source, key);
+            if (!row) continue;
+            change(
+              audience,
+              name,
+              key,
+              this.project(name, () => view.project(row, this.policy)),
+            );
+          }
+        }
+      }
+    });
+  }
+
+  /**
+   * Applies a set of row changes to the audiences. Every key a changed row
+   * gives up is released before any changed row takes a key, so one row can
+   * take over a key another just left.
+   */
+  private reconcile(
+    visit: (
+      change: (
+        audience: Audience,
+        name: string,
+        source: TableKey,
+        projected: { key: string; value: Json } | null,
+      ) => void,
+    ) => void,
+  ): void {
+    const placements: (() => void)[] = [];
+    visit((audience, name, source, projected) => {
+      this.release(audience, name, source, projected);
+      if (projected) {
+        placements.push(() => this.place(audience, name, source, projected));
+      }
+    });
+    for (const place of placements) place();
   }
 
   /** Whether some viewer has yet to be told of a change. */
@@ -290,61 +347,47 @@ export class ViewTracker {
     if (!this.store.hasCleared && !this.store.hasDirty) return;
     this.version += 1;
     this.absorbCleared();
-
-    // Every key a changed row gives up is released before any changed row
-    // takes a key, so one row can take over a key another just left.
-    const placements: (() => void)[] = [];
-    const change = (
-      audience: Audience,
-      name: string,
-      source: TableKey,
-      projected: { key: string; value: Json } | null,
-    ): void => {
-      this.release(audience, name, source, projected);
-      if (projected) {
-        placements.push(() => this.place(audience, name, source, projected));
-      }
-    };
-
-    for (const [tableName, keys] of this.store.takeDirty()) {
-      const views = this.viewsByTable.get(tableName);
-      if (!views) continue;
-      for (const key of keys) {
-        const row = this.store.get(tableName, key);
-        for (const [name, view] of views) {
-          if (view.kind === "shared") {
-            for (const [role, audience] of this.roles) {
+    const dirty = this.store.takeDirty();
+    this.reconcile((change) => {
+      for (const [tableName, keys] of dirty) {
+        const views = this.viewsByTable.get(tableName);
+        if (!views) continue;
+        for (const key of keys) {
+          const row = this.store.get(tableName, key);
+          for (const [name, view] of views) {
+            if (view.kind === "shared") {
+              for (const [role, audience] of this.roles) {
+                change(
+                  audience,
+                  name,
+                  key,
+                  row ? this.project(name, () => view.project(row, role, this.policy)) : null,
+                );
+              }
+              continue;
+            }
+            const previousOwner = this.ownerOf.get(name)!.get(key);
+            const nextOwner = row ? view.owner(row) : undefined;
+            if (previousOwner !== undefined && previousOwner !== nextOwner) {
+              this.disown(name, previousOwner, key);
+              const audience = this.subjects.get(previousOwner);
+              if (audience) change(audience, name, key, null);
+            }
+            if (nextOwner === undefined || !row) continue;
+            this.own(name, nextOwner, key);
+            const audience = this.subjects.get(nextOwner);
+            if (audience) {
               change(
                 audience,
                 name,
                 key,
-                row ? this.project(name, () => view.project(row, role, this.policy)) : null,
+                this.project(name, () => view.project(row, this.policy)),
               );
             }
-            continue;
-          }
-          const previousOwner = this.ownerOf.get(name)!.get(key);
-          const nextOwner = row ? view.owner(row) : undefined;
-          if (previousOwner !== undefined && previousOwner !== nextOwner) {
-            this.disown(name, previousOwner, key);
-            const audience = this.subjects.get(previousOwner);
-            if (audience) change(audience, name, key, null);
-          }
-          if (nextOwner === undefined || !row) continue;
-          this.own(name, nextOwner, key);
-          const audience = this.subjects.get(nextOwner);
-          if (audience) {
-            change(
-              audience,
-              name,
-              key,
-              this.project(name, () => view.project(row, this.policy)),
-            );
           }
         }
       }
-    }
-    for (const place of placements) place();
+    });
   }
 
   /**

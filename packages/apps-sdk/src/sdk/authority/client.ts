@@ -20,6 +20,7 @@ import {
   type AuthorityFailure,
   type AuthorityFailureCode,
   type AuthorityFrame,
+  type AuthorityGrants,
   type AuthorityResult,
   type AuthorityRevokeReason,
   type CapabilitiesRequest,
@@ -583,7 +584,11 @@ export class AuthoritySession<C extends AuthorityContract> {
     for (const row of frame.put) bucketOf(row.bucket).set(row.key, row.value);
     this.rows = next;
     if (this.state.kind === "ready") {
-      this.setState({ ...this.state, view: this.viewOf(next) });
+      this.setState({
+        ...this.state,
+        view: this.viewOf(next),
+        ...(frame.grants ? grantSets(frame.grants) : {}),
+      });
     }
   }
 
@@ -654,7 +659,6 @@ export class AuthoritySession<C extends AuthorityContract> {
     };
     for (const frame of frames) for (const row of frame.rows) put(row);
 
-    const grants = frames[0].grants;
     this.generation = frames[0].generation;
     this.seq = 0;
     this.incoming = null;
@@ -663,9 +667,7 @@ export class AuthoritySession<C extends AuthorityContract> {
     this.setState({
       kind: "ready",
       view: this.viewOf(rows),
-      actions: new Set(grants?.actions ?? []),
-      needsIdentity: new Set(grants?.needsIdentity ?? []),
-      queries: new Set(grants?.queries ?? []),
+      ...grantSets(frames[0].grants),
       serverNowMs: () => this.serverNow(),
     });
     for (const waiter of [...this.readyWaiters]) waiter();
@@ -758,6 +760,13 @@ export class AuthoritySession<C extends AuthorityContract> {
 }
 
 const EMPTY_BUCKET: ReadonlyMap<string, Json> = new Map();
+
+/** What a viewer may do, as the sets a renderer reads. */
+const grantSets = (grants: AuthorityGrants | undefined) => ({
+  actions: new Set(grants?.actions ?? []),
+  needsIdentity: new Set(grants?.needsIdentity ?? []),
+  queries: new Set(grants?.queries ?? []),
+});
 
 const FRAME_KINDS: ReadonlySet<unknown> = new Set([
   "replace",

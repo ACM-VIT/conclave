@@ -8,6 +8,7 @@ import {
   type AuthorityCapability,
   type AuthorityFailure,
   type AuthorityFrame,
+  type AuthorityGrants,
   type AuthorityResult,
   type AuthorityRevokeReason,
   type CapabilitiesRequest,
@@ -71,6 +72,10 @@ type Subscription = {
    * tells it only what changed after that.
    */
   viewVersion: number;
+  /** What it was last told it may do, to send that again only when it changes. */
+  grantsSent: string;
+  /** The room's policy changed, so what it may do is worked out again. */
+  grantsDue: boolean;
   dropped: boolean;
 };
 
@@ -171,6 +176,8 @@ export class RoomAuthority {
   private pruneTimer: NodeJS.Timeout | null = null;
   /** Apps a viewer has left since their unheld views were last forgotten. */
   private readonly left = new Set<AuthorityInstance>();
+  /** Apps whose viewers are due a word on what they may now do. */
+  private readonly grantsDue = new Set<AuthorityInstance>();
   /** Streamed results waiting for their socket to catch up. */
   private readonly stalled = new Set<NodeJS.Timeout>();
   private wakeAt: number | null = null;
@@ -260,6 +267,8 @@ export class RoomAuthority {
       backlog: [],
       lagging: false,
       viewVersion: 0,
+      grantsSent: "",
+      grantsDue: false,
       dropped: false,
     };
     subscriptions.set(subscription.id, subscription);
@@ -479,7 +488,13 @@ export class RoomAuthority {
 
   /* ---- Policy and capabilities ------------------------------------------ */
 
-  /** Applies a changed room policy: every view is rebuilt and resent. */
+  /**
+   * Applies a changed room policy. Each app projects its rows again, and a
+   * viewer who may still see the app is sent only what came out different
+   * for them, with what they may now do. A switch that changes nobody's
+   * view, such as one that only decides who may take part, sends no rows:
+   * in a room of 5,000 it is 5,000 small frames and not 5,000 whole views.
+   */
   private syncPolicy(): void {
     const policy = this.options.policy();
     for (const instance of this.instances.values()) {
@@ -493,11 +508,30 @@ export class RoomAuthority {
           !instance.canView(bound.actor)
         ) {
           this.revoke(subscription, "forbidden");
-        } else {
+        } else if (
+          // A snapshot still on its way was built under the old policy, and
+          // may hold rows this viewer may no longer see: it starts over.
+          subscription.transfer ||
+          !sameActor(subscription.actor, bound.actor)
+        ) {
           this.regenerate(subscription, bound.actor);
+        } else {
+          subscription.grantsDue = true;
         }
       }
+      this.grantsDue.add(instance);
+      this.scheduleFlush(true);
     }
+  }
+
+  /** What a viewer may now do, if that is not what they were last told. */
+  private changedGrants(subscription: Subscription): AuthorityGrants | undefined {
+    subscription.grantsDue = false;
+    const grants = subscription.instance.grants(subscription.actor, this.now());
+    const sent = JSON.stringify(grants);
+    if (sent === subscription.grantsSent) return undefined;
+    subscription.grantsSent = sent;
+    return grants;
   }
 
   private appsFor(actor: Actor): AuthorityAppEntry[] {
@@ -597,7 +631,10 @@ export class RoomAuthority {
 
       const changes = instance.flushViews(this.audiencesOf(instance));
       this.left.delete(instance);
-      if (changes.shared.size === 0 && changes.personal.size === 0) continue;
+      const grantsDue = this.grantsDue.delete(instance);
+      if (changes.shared.size === 0 && changes.personal.size === 0 && !grantsDue) {
+        continue;
+      }
       for (const subscription of [...subscriptions]) {
         // Each is told from its own snapshot on: a change that snapshot
         // already had, or a row gone before it was read, is not sent.
@@ -607,7 +644,12 @@ export class RoomAuthority {
         const personal = changes.personal
           .get(subscription.actor.subject)
           ?.for(subscription.viewVersion);
-        if (shared || personal) this.sendPatch(subscription, shared, personal);
+        const grants = subscription.grantsDue
+          ? this.changedGrants(subscription)
+          : undefined;
+        if (shared || personal || grants) {
+          this.sendPatch(subscription, shared, personal, grants);
+        }
       }
     }
     // A large clear is told to its viewers a batch per flush.
@@ -652,6 +694,7 @@ export class RoomAuthority {
     subscription: Subscription,
     shared: ViewOps | undefined,
     personal: ViewOps | undefined,
+    grants?: AuthorityGrants,
   ): void {
     // A lagging subscription is caught up by a whole replacement later.
     if (subscription.lagging || subscription.dropped) return;
@@ -671,6 +714,7 @@ export class RoomAuthority {
       seq: subscription.seq,
       put: [...(shared?.put ?? []), ...(personal?.put ?? [])],
       remove: [...(shared?.remove ?? []), ...(personal?.remove ?? [])],
+      ...(grants ? { grants } : {}),
     };
     if (!subscription.transfer) {
       this.emit(subscription, frame);
@@ -712,6 +756,9 @@ export class RoomAuthority {
       return;
     }
     const now = this.now();
+    const grants = subscription.instance.grants(subscription.actor, now);
+    subscription.grantsSent = JSON.stringify(grants);
+    subscription.grantsDue = false;
     const parts = partsOf(rows, this.limits.chunkBytes);
     const frames = parts.map(
       (part, index): ReplaceFrame => ({
@@ -722,9 +769,7 @@ export class RoomAuthority {
         part: index,
         last: index === parts.length - 1,
         rows: part.map((sized) => sized.row),
-        ...(index === 0
-          ? { grants: subscription.instance.grants(subscription.actor, now) }
-          : {}),
+        ...(index === 0 ? { grants } : {}),
       }),
     );
     this.stats.replaces += 1;
