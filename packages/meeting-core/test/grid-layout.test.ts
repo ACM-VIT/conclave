@@ -493,6 +493,45 @@ describe("computeGridLayout — mixed rows line up", () => {
     r.positions.forEach((position, index) => expectWithinStretch(position, aspects[index]));
   });
 
+  it("moves a lone row's edges no further than base does", () => {
+    // Sol: a phone then eleven laptops in one row, 1 px wider.
+    const aspects = [PORTRAIT, ...Array<number>(11).fill(LANDSCAPE)];
+    const [from, to] = [2528, 2529].map((width) =>
+      computeGridLayout(12, width, 222, { maxCols: 13, tileAspects: aspects }),
+    );
+    const right = (r: ReturnType<typeof computeGridLayout>) =>
+      r.positions[11].x + r.positions[11].width;
+
+    expect(rowsOf(to)).toEqual(rowsOf(from));
+    // Base moves this edge by half the row's 13 px of whole-pixel growth.
+    expect(Math.abs(right(to) - right(from))).toBeLessThanOrEqual(6.5);
+  });
+
+  it("lays a lone row out at its tiles' whole-pixel widths", () => {
+    const lone = seededRandom(13);
+    const pick = (min: number, max: number) => min + Math.floor(lone() * (max - min + 1));
+    const shapes = [9 / 16, 3 / 5, 2 / 3, PORTRAIT, 4 / 5, LANDSCAPE];
+    const off: string[] = [];
+    let lones = 0;
+    for (let run = 0; run < 2000; run += 1) {
+      const count = pick(2, 16);
+      const aspects = Array.from({ length: count }, () => shapes[pick(0, shapes.length - 1)]);
+      const width = pick(800, 4000);
+      const height = pick(120, 600);
+      const r = computeGridLayout(count, width, height, { maxCols: count, tileAspects: aspects });
+      // An all-16:9 page takes the uniform grid, which sizes tiles another way.
+      if (r.rows !== 1 || aspects.every((aspect) => aspect === LANDSCAPE)) continue;
+      lones += 1;
+      r.positions.forEach((position, index) => {
+        if (position.width !== Math.floor(r.tileHeight * aspects[index])) {
+          off.push(JSON.stringify({ count, width, height, aspects, index }));
+        }
+      });
+    }
+    expect(off).toEqual([]);
+    expect(lones).toBeGreaterThan(500);
+  });
+
   it("keeps a tile a few px wide inside its caps", () => {
     const aspects = [0.5, 1.25, 0.3, 2 / 3, 4 / 3, 0.3, 0.2, 0.8, 1];
     const r = computeGridLayout(9, 211, 50, { maxCols: 7, tileAspects: aspects });

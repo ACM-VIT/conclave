@@ -297,6 +297,11 @@ const ROW_EASE_RATE = 3;
  * centres at its own width.
  */
 const alignRows = (rowAspects: number[][], height: number, gap: number, cols: number) => {
+  // A lone row has nothing to line up with, so its tiles keep their own
+  // whole-pixel widths, exactly as base lays them out.
+  if (rowAspects.length === 1) {
+    return [rowAspects[0].map((aspect) => Math.floor(height * aspect))];
+  }
   const rows = rowAspects.map((aspects) => {
     const exact = aspects.map((aspect) => height * aspect);
     const tiles = exact.map(Math.floor);
