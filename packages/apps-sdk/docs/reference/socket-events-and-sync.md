@@ -53,9 +53,10 @@ local copy of an app that leaves the stage and resync from the server when it
 returns.
 
 A cleared document stays cleared. The SFU remembers the Yjs clients that wrote
-to it and drops any later `apps:yjs:update` that holds, builds on or deletes
-its content, as a client that missed the clear would send on resync. The
-writers in such an update are dropped from then on too.
+to it and drops any later `apps:yjs:update` from those clients or that holds,
+builds on or deletes their content, as a client that missed the clear would
+send on resync. Only a clear adds to that list, so no update can get another
+writer's edits dropped.
 
 A refused stage command acks `{ success: false, error, code }`. `code` is
 `"stale_revision"` when the stage changed first, and `"room_full"` when the

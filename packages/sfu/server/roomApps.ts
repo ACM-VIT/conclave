@@ -84,12 +84,10 @@ const appDocBytes = (entry: AppDoc): number =>
   entry.measuredBytes + entry.unmeasuredBytes;
 
 // Every Yjs client an update writes as, builds on or deletes from.
-const clientsIn = (update: Uint8Array): { writers: number[]; touched: number[] } => {
+const clientsTouchedBy = (update: Uint8Array): Set<number> => {
   const { structs, ds } = Y.decodeUpdate(update);
-  const writers = new Set<number>();
   const touched = new Set<number>(ds.clients.keys());
   for (const struct of structs) {
-    writers.add(struct.id.client);
     touched.add(struct.id.client);
     if (struct instanceof Y.Item) {
       if (struct.origin) touched.add(struct.origin.client);
@@ -97,7 +95,7 @@ const clientsIn = (update: Uint8Array): { writers: number[]; touched: number[] }
       if (struct.parent instanceof Y.ID) touched.add(struct.parent.client);
     }
   }
-  return { writers: Array.from(writers), touched: Array.from(touched) };
+  return touched;
 };
 
 // Presence lives for one stay on the stage, on a document of its own: an
@@ -231,22 +229,22 @@ export class RoomApps {
 
   /**
    * False when `update` holds, builds on or deletes content of a cleared
-   * document, as a client that missed the clear sends when it resyncs. Its
-   * writers then count as cleared too, so their later edits stay out.
+   * document, or comes from a client that wrote to one, as a client that
+   * missed the clear sends when it resyncs. Only a clear names cleared
+   * writers, so no update can get another writer's edits dropped.
    */
   acceptsContent(update: Uint8Array): boolean {
     if (this.clearedWriters.size === 0) return true;
-    let clients: { writers: number[]; touched: number[] };
+    let touched: Set<number>;
     try {
-      clients = clientsIn(update);
+      touched = clientsTouchedBy(update);
     } catch {
       return false;
     }
-    if (!clients.touched.some((client) => this.clearedWriters.has(client))) {
-      return true;
+    for (const client of touched) {
+      if (this.clearedWriters.has(client)) return false;
     }
-    this.markCleared(clients.writers);
-    return false;
+    return true;
   }
 
   /**

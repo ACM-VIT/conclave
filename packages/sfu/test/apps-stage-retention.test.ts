@@ -86,6 +86,9 @@ const makeRoom = () => {
         doc.getMap("shapes").set(key, value);
         listeners.get("apps:yjs:update")!({ appId, update: Y.encodeStateAsUpdate(doc, before) });
       },
+      // Sends everything this client's copy holds, whoever wrote it.
+      sendWholeCopy: (appId: string) =>
+        listeners.get("apps:yjs:update")!({ appId, update: Y.encodeStateAsUpdate(doc) }),
       // What a native client does when it reconnects: sync its local copy,
       // then send the server whatever that copy has and the server lacks.
       resync: (appId: string) => {
@@ -238,6 +241,27 @@ describe("clearing an app", () => {
 
     expect(away.relayed).toEqual([]);
     expect(join("late#1", "participant").coldSync("whiteboard")).toEqual({ shapes: ["square"] });
+  });
+
+  it("lets the host keep editing when someone mixes cleared content into an update", () => {
+    const { join } = makeRoom();
+    const host = join("host#1", "host");
+    const away = join("native#1", "participant");
+    host.present("whiteboard");
+    away.draw("whiteboard", "circle");
+    host.discard("whiteboard");
+    host.present("whiteboard");
+    // A client presenting the app again starts from a fresh local copy.
+    const presenter = join("host#2", "host");
+    presenter.draw("whiteboard", "square");
+
+    away.resync("whiteboard");
+    away.sendWholeCopy("whiteboard");
+    presenter.draw("whiteboard", "triangle");
+
+    expect(join("late#1", "participant").coldSync("whiteboard")).toEqual({
+      shapes: ["square", "triangle"],
+    });
   });
 
   it("starts a cleared app on a new document generation", () => {
