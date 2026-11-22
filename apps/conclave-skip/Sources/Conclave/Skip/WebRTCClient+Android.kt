@@ -3626,6 +3626,30 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         }
     }
 
+    /**
+     * The SFU closes [oldProducer] before it acknowledges the replacement, and the view model drops that close
+     * while the mark is set. If the replacement then fails after the close arrived, nothing else will recover
+     * the microphone, so discard the dead producer and ask for a restart, as the close would have.
+     */
+    internal fun settleFailedMicrophoneReplacement(oldProducer: Producer, generation: Long): Boolean {
+        val closeAlreadyArrived = !intentionalLocalAudioProducerCloseIds.remove(oldProducer.id)
+        if (!closeAlreadyArrived || generation != configurationGeneration || audioProducer !== oldProducer) return false
+        closeSendProducer(oldProducer)
+        audioProducer = null
+        audioProducerBandwidthQuality = ConnectionQuality.unknown
+        audioCaptureReassertionGeneration += 1
+        clearLocalAudioCapture()
+        audioDeviceModule?.setMicrophoneMute(true)
+        localAudioEnabled = false
+        localAudioTargetEnabled = false
+        onLocalAudioProducerLost?.invoke()
+        return true
+    }
+
+    /** One microphone change at a time: a start, an enable, a bandwidth refresh or a route recovery. */
+    private val isMicrophoneChangeInFlight: Boolean
+        get() = audioStartOrEnableInFlight || audioBandwidthRefreshInFlight || audioProducerRouteRecoveryInFlight
+
     private fun markIntentionalLocalAudioProducerClose(producerId: String) {
         if (intentionalLocalAudioProducerCloseIds.size >= 32) {
             intentionalLocalAudioProducerCloseIds.clear()
@@ -3859,7 +3883,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     internal suspend fun refreshLocalAudioProducerForBandwidthProfile(
         connectionQuality: ConnectionQuality,
     ) {
-        if (audioBandwidthRefreshInFlight) return
+        if (isMicrophoneChangeInFlight) return
         if (!shouldRefreshAudioProducerForBandwidthProfile(connectionQuality)) return
 
         val socket = socketManager ?: return
@@ -3867,6 +3891,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         val oldProducer = audioProducer ?: return
         val track = localAudioTrack ?: return
         val generation = configurationGeneration
+        var handedToRecovery = false
         audioBandwidthRefreshInFlight = true
         val callback = onLocalAudioEnabledChanged
         onLocalAudioEnabledChanged = null
@@ -3879,7 +3904,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             val nextProducer = try {
                 produceMicrophoneAudio(transport, track)
             } catch (error: Throwable) {
-                intentionalLocalAudioProducerCloseIds.remove(oldProducer.id)
+                handedToRecovery = settleFailedMicrophoneReplacement(oldProducer, generation)
                 throw error
             }
             if (generation != configurationGeneration) {
@@ -3915,7 +3940,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             onLocalAudioEnabledChanged = callback
             if (generation == configurationGeneration) {
                 audioBandwidthRefreshInFlight = false
-                if (!localAudioEnabled) {
+                if (!localAudioEnabled && !handedToRecovery) {
                     callback?.invoke(false)
                 }
             }
@@ -5413,8 +5438,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     }
 
     private fun recreateLocalAudioProducerAfterRouteRecovery(reason: String) {
-        if (audioProducerRouteRecoveryInFlight) return
-        if (audioStartOrEnableInFlight || audioBandwidthRefreshInFlight) return
+        if (isMicrophoneChangeInFlight) return
         if (!isCallAudioModeActive || !shouldLocalAudioCaptureStayActive()) return
         val generation = configurationGeneration
         val socket = socketManager ?: return
@@ -5452,7 +5476,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 val replacement = try {
                     produceMicrophoneAudio(transport, track)
                 } catch (error: Throwable) {
-                    intentionalLocalAudioProducerCloseIds.remove(producerAtSchedule.id)
+                    settleFailedMicrophoneReplacement(producerAtSchedule, generation)
                     throw error
                 }
                 nextProducer = replacement

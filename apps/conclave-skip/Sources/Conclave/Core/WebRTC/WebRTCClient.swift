@@ -4289,6 +4289,28 @@ final class WebRTCClient: NSObject, ObservableObject {
         intentionalLocalAudioProducerCloseIds.remove(producerId) != nil
     }
 
+    /// The SFU closes `oldProducer` before it acknowledges the replacement, and the view model drops that close while
+    /// the mark is set. If the replacement then fails after the close arrived, nothing else recovers the microphone,
+    /// so discard the dead producer and ask for a restart, as the close would have.
+    private func settleFailedMicrophoneReplacement(_ oldProducer: Producer, generation: Int) -> Bool {
+        let closeAlreadyArrived = intentionalLocalAudioProducerCloseIds.remove(oldProducer.id) == nil
+        guard closeAlreadyArrived, generation == configurationGeneration, audioProducer === oldProducer else { return false }
+        closeSendProducer(oldProducer)
+        audioProducer = nil
+        audioProducerBandwidthQuality = .unknown
+        audioCaptureReassertionTask?.cancel()
+        audioCaptureReassertionTask = nil
+        rtcLocalAudioTrack?.isEnabled = false
+        rtcLocalAudioTrack = nil
+        audioSource = nil
+        let previousSuppressLocalStateCallbacks = suppressLocalStateCallbacks
+        suppressLocalStateCallbacks = true
+        localAudioEnabled = false
+        suppressLocalStateCallbacks = previousSuppressLocalStateCallbacks
+        onLocalAudioProducerLost?()
+        return true
+    }
+
     private func markIntentionalLocalAudioProducerClose(_ producerId: String) {
         if intentionalLocalAudioProducerCloseIds.count >= 32 {
             intentionalLocalAudioProducerCloseIds.removeAll()
@@ -4859,12 +4881,13 @@ final class WebRTCClient: NSObject, ObservableObject {
         var pendingProducer: Producer?
         var pendingTrack: RTCAudioTrack?
         let generation = configurationGeneration
+        var handedToRecovery = false
         defer {
 
             if generation == configurationGeneration {
                 suppressLocalStateCallbacks = previousSuppressLocalStateCallbacks
                 audioBandwidthRefreshInFlight = false
-                if !localAudioEnabled {
+                if !localAudioEnabled && !handedToRecovery {
                     onLocalAudioEnabledChanged?(false)
                 }
             }
@@ -4882,8 +4905,7 @@ final class WebRTCClient: NSObject, ObservableObject {
             do {
                 nextProducer = try await createMicrophoneProducer(on: sendTransport, track: microphone.track)
             } catch {
-
-                intentionalLocalAudioProducerCloseIds.remove(oldProducer.id)
+                handedToRecovery = settleFailedMicrophoneReplacement(oldProducer, generation: generation)
                 throw error
             }
             pendingProducer = nextProducer
@@ -6118,8 +6140,7 @@ extension WebRTCClient {
             do {
                 nextProducer = try await createMicrophoneProducer(on: sendTransport, track: microphone.track)
             } catch {
-
-                intentionalLocalAudioProducerCloseIds.remove(oldProducer.id)
+                _ = settleFailedMicrophoneReplacement(oldProducer, generation: generation)
                 throw error
             }
             pendingProducer = nextProducer
