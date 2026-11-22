@@ -299,9 +299,7 @@ internal class VideoTileRenderer(
         if (windowSize == NO_SIZE || bufferWaitGivenUp) return true
         val width = backend.surfaceWidth(target)
         val height = backend.surfaceHeight(target)
-        if (width <= 0 || height <= 0) return true
-        val size = sizeOf(width, height)
-        return size == windowSize || size == shownSize
+        return width <= 0 || height <= 0 || sizeOf(width, height) == windowSize
     }
 
     private fun bufferWaitIsOver(): Boolean {

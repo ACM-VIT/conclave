@@ -369,12 +369,14 @@ has the numbers.
     changes size on every frame. The sizes in between are ones the tile never
     settles on.
   - The renderer queues a buffer only if its size is the window's
-    (`surfaceChanged`) or the one last shown. Any other buffer was taken from
-    the queue before a resize: the EGL surface is destroyed and created again,
-    which hands that buffer back and takes one of the current size. The check
-    runs again after the draw, because the window can be resized while a frame
-    is drawn. A window that gives no buffer of its size for a second gets a
-    warning in the log, and frames are then drawn into what there is.
+    (`surfaceChanged`). A buffer of any other size was taken from the queue
+    before a resize: the EGL surface is destroyed and created again, which
+    hands that buffer back and takes one of the current size. So the first
+    frame after a resize is already in a buffer of the new size, and a picture
+    is never shown at the scale of the size before. The check runs again after
+    the draw, because the window can be resized while a frame is drawn. A
+    window that gives no buffer of its size for a second gets a warning in the
+    log, and frames are then drawn into what there is.
 - Every loop counts its live EGL context and window surfaces. With
   `adb shell setprop log.tag.ConclavePerf DEBUG` each change is logged as
   `event video.gl contexts=N surfaces=M`, summed over all loops. Both are 0

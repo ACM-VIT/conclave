@@ -337,19 +337,18 @@ class VideoRenderingTests {
         assertEveryFrameGivenBack()
     }
 
-    @Test fun whileAWindowIsResizedFramesKeepGoingIntoBuffersOfTheSizeItShows() {
+    @Test fun afterAResizeTheNextFrameGoesIntoABufferOfTheNewSizeNotTheOneTakenBefore() {
         val renderer = rendererWithA160By62Window()
         renderer.attachSurface("window", 1)
         renderer.onFrame(frame())
         backend.settle()
         renderer.windowSized(320, 124)
+        backend.sizeOfTheNextSurface = 320 to 124
         renderer.onFrame(frame())
         backend.settle()
-        backend.width = 320
-        backend.height = 124
-        renderer.onFrame(frame())
-        backend.settle()
-        assertEquals(listOf("create", "draw", "swap surface-1", "draw", "swap surface-1", "draw", "swap surface-1"), backend.calls.toList())
+        assertEquals(listOf("create", "draw", "swap surface-1", "destroy surface-1", "create", "draw", "swap surface-2"), backend.calls.toList())
+        assertEquals(listOf("1: 160 x 62", "1: 320 x 124"), shownSizes.toList())
+        assertEquals(listOf(1), firstFrames.toList())
         assertEveryFrameGivenBack()
     }
 
@@ -369,21 +368,6 @@ class VideoRenderingTests {
         renderer.onFrame(frame())
         backend.settle()
         assertEquals(listOf("1: 160 x 62", "1: 320 x 124", "2: 320 x 124"), shownSizes.toList())
-        assertEveryFrameGivenBack()
-    }
-
-    @Test fun aBufferLeftOverFromASizeTheWindowHasMovedOnFromIsNotQueued() {
-        val renderer = rendererWithA160By62Window()
-        renderer.attachSurface("window", 1)
-        renderer.onFrame(frame())
-        backend.settle()
-        backend.width = 320
-        backend.height = 124
-        backend.sizeOfTheNextSurface = 160 to 62
-        renderer.onFrame(frame())
-        backend.settle()
-        assertEquals(listOf("create", "draw", "swap surface-1", "destroy surface-1", "create", "draw", "swap surface-2"), backend.calls.toList())
-        assertEquals(listOf(1), firstFrames.toList())
         assertEveryFrameGivenBack()
     }
 
