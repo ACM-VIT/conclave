@@ -1512,6 +1512,146 @@ describe("large views and slow sockets", () => {
     expect(kinds.filter((kind) => kind === "patch").length).toBe(1);
   });
 
+  /**
+   * A room with a view that goes in parts, and Ravi's socket with one subscription to
+   * it whose first part has just gone out. `changeDuringTransfer` has the host
+   * change a note and flushes it, so one more patch waits behind the snapshot.
+   */
+  const snapshotInFlight = async (
+    limits: Partial<typeof DEFAULT_AUTHORITY_LIMITS>,
+    pressure: (tab: Tab, name: string) => { packets: number; bytes: number },
+  ) => {
+    const name = "behind-a-snapshot";
+    let slow: Tab | null = null;
+    const room = new Harness([probeAuthority], {
+      runtime: {
+        limits: { ...small, ...limits },
+        pressure: (socket) =>
+          slow && socket.id === slow.seat.socket.id
+            ? pressure(slow, name)
+            : { packets: 0, bytes: 0 },
+      },
+    });
+    const hostTab = await room.open(host, probeContract);
+    for (let index = 0; index < 4; index += 1) {
+      await hostTab.act("put", { id: `n${index}`, text: `${index}`.repeat(200) });
+    }
+    await room.deliver();
+    const raviTab = await room.open(ravi, probeContract);
+    // The tab's own view is closed, so the socket carries one view only.
+    raviTab.socket.emit(AUTHORITY_EVENTS.unsubscribe, {
+      subscription: raviTab.frames[0].subscription,
+    });
+    const entry = hostTab.client.entryFor(probeContract)!;
+    const from = raviTab.frames.length;
+    slow = raviTab;
+    void raviTab.raw(AUTHORITY_EVENTS.subscribe, {
+      roomEpoch: room.authority.roomEpoch,
+      instance: entry.instance,
+      app: entry.app,
+      major: entry.major,
+      subscription: name,
+    });
+    let changes = 0;
+    const changeDuringTransfer = async (): Promise<string> => {
+      changes += 1;
+      const text = `change ${changes} `.repeat(20);
+      await hostTab.raw(AUTHORITY_EVENTS.act, {
+        roomEpoch: room.authority.roomEpoch,
+        subscription: hostTab.frames[0].subscription,
+        generation: 1,
+        operation: { issuedAtMs: Date.now(), nonce: `during-transfer-${changes}` },
+        action: "put",
+        input: { id: `n${changes % 4}`, text },
+      });
+      room.authority.flushNow();
+      return text;
+    };
+    return {
+      room,
+      hostTab,
+      raviTab,
+      changeDuringTransfer,
+      sent: () => raviTab.frames.slice(from).filter((frame) => frame.subscription === name),
+    };
+  };
+
+  const bytesOf = (frames: AuthorityFrame[]): number =>
+    frames.reduce((total, frame) => total + JSON.stringify(frame).length, 0);
+
+  it("stops the changes queued behind a snapshot once the socket is behind, and catches an idle view up when it drains", async () => {
+    const softBytes = 2_200;
+    // A socket that takes nothing off its queue: all it was sent is unsent.
+    let stuck = true;
+    const { room, hostTab, changeDuringTransfer, sent } = await snapshotInFlight(
+      { socketSoftBytes: softBytes },
+      (tab, name) => {
+        const queued = stuck ? tab.frames.filter((frame) => frame.subscription === name) : [];
+        return { packets: queued.length, bytes: bytesOf(queued) };
+      },
+    );
+    const texts: string[] = [];
+    for (let index = 0; index < 8; index += 1) texts.push(await changeDuringTransfer());
+    await room.drain();
+
+    const whileStuck = sent();
+    const queuedBefore = whileStuck.map((_, index) => bytesOf(whileStuck.slice(0, index)));
+    // The app does nothing more, and the socket stays stuck a while longer.
+    await vi.advanceTimersByTimeAsync(1_000);
+    await room.drain();
+    const afterWaiting = sent().length;
+
+    stuck = false;
+    await vi.advanceTimersByTimeAsync(300);
+    await room.drain();
+    const caughtUp = sent().slice(whileStuck.length);
+    const held = new Map<string, Json>();
+    for (const frame of caughtUp) {
+      if (frame.kind === "replace") for (const row of frame.rows) held.set(row.key, row.value);
+    }
+
+    expect(replaces(whileStuck).length).toBeGreaterThan(2);
+    expect(replaces(whileStuck).at(-1)?.last).toBe(true);
+    // Some of the eight queued changes went, until the queue was over its
+    // limit. Nothing was added to a queue already over it.
+    expect(patches(whileStuck).length).toBeGreaterThan(0);
+    expect(patches(whileStuck).length).toBeLessThan(8);
+    expect(Math.max(...queuedBefore)).toBeLessThanOrEqual(softBytes);
+    expect(afterWaiting).toBe(whileStuck.length);
+    // With no further change in the app, the drained socket gets a whole
+    // fresh view carrying every change.
+    expect(replaces(caughtUp).length).toBe(caughtUp.length);
+    expect(replaces(caughtUp).at(-1)?.last).toBe(true);
+    expect(new Set(caughtUp.map((frame) => frame.generation)).size).toBe(1);
+    expect(caughtUp[0]?.generation).toBeGreaterThan(1);
+    expect([0, 1, 2, 3].map((index) => field(held.get(`n${index}`) ?? null, "text"))).toEqual([
+      texts[7],
+      texts[4],
+      texts[5],
+      texts[6],
+    ]);
+    expect(hostTab.rows("notes").length).toBe(4);
+    expect(room.authority.stats.resnapshots).toBe(1);
+    expect(room.authority.stats.disconnects).toBe(0);
+  });
+
+  it("disconnects a socket whose queue is full when the changes queued behind its snapshot come due", async () => {
+    // The snapshot's last part fills the queue.
+    const { room, raviTab, changeDuringTransfer, sent } = await snapshotInFlight({}, (tab, name) => {
+      const lastPartOut = tab.frames.some(
+        (frame) => frame.subscription === name && frame.kind === "replace" && frame.last,
+      );
+      return { packets: 0, bytes: lastPartOut ? DEFAULT_AUTHORITY_LIMITS.socketHardBytes + 1 : 0 };
+    });
+    for (let index = 0; index < 8; index += 1) await changeDuringTransfer();
+    await room.drain();
+
+    expect(replaces(sent()).at(-1)?.last).toBe(true);
+    expect(patches(sent())).toEqual([]);
+    expect(raviTab.seat.socket.connected).toBe(false);
+    expect(room.authority.stats.disconnects).toBe(1);
+  });
+
   it("sends no part of a snapshot a question the host hid after the snapshot began", async () => {
     const room = new Harness([qaAuthority], { runtime: { limits: small } });
     const hostTab = await room.open(host, qaContract);

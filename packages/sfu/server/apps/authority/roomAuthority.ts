@@ -827,7 +827,13 @@ export class RoomAuthority {
       subscription.transfer = null;
       const backlog = subscription.backlog;
       subscription.backlog = [];
-      for (const frame of backlog) this.emit(subscription, frame);
+      // Each queued change is a frame like any other, so the socket is asked
+      // again before each one. If it has fallen behind, the rest are dropped
+      // and the view is caught up whole once the socket drains.
+      for (const frame of backlog) {
+        if (!this.hasRoom(subscription)) return;
+        this.emit(subscription, frame);
+      }
     });
   }
 
