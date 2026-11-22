@@ -65,11 +65,11 @@ enum CrashReportPrivacy {
 
     static func symbol(_ text: String) -> String {
         var kept = ""
-        for character in text where symbolCharacters.contains(character) {
+        for character in withoutPaths(text) where symbolCharacters.contains(character) {
             kept += String(character)
         }
         var tokens: [String] = []
-        for token in kept.components(separatedBy: " ") {
+        for token in kept.components(separatedBy: " ") where !token.isEmpty {
             if !token.contains("/") {
                 tokens.append(token)
                 continue
@@ -81,6 +81,44 @@ enum CrashReportPrivacy {
         }
         let joined = tokens.joined(separator: " ")
         return joined.count > maxSymbolLength ? String(joined.prefix(maxSymbolLength)) : joined
+    }
+
+    /// A path can hold spaces and dots (`/Users/Jane.Doe Smith/lib.so`), so everything from a path's first `/` to the
+    /// last `/` after it goes before the text is split on spaces. Only a file name with an extension survives.
+    static func withoutPaths(_ text: String) -> String {
+        var characters: [String] = []
+        for character in text {
+            characters.append(String(character))
+        }
+        let pathOpeners = [" ", "(", "[", "=", ":", "\"", "'"]
+        let nameEnders = [" ", "(", ")", "[", "]", ","]
+        var result = ""
+        var index = 0
+        while index < characters.count {
+            let startsPath = characters[index] == "/" && (index == 0 || pathOpeners.contains(characters[index - 1]))
+            if !startsPath {
+                result += characters[index]
+                index += 1
+                continue
+            }
+            var lastSlash = index
+            var probe = index + 1
+            while probe < characters.count {
+                if characters[probe] == "/" { lastSlash = probe }
+                probe += 1
+            }
+            var nameEnd = lastSlash + 1
+            var name = ""
+            while nameEnd < characters.count && !nameEnders.contains(characters[nameEnd]) {
+                name += characters[nameEnd]
+                nameEnd += 1
+            }
+            if name.contains(".") {
+                result += name
+            }
+            index = nameEnd
+        }
+        return result
     }
 
     static func frame(_ frame: CrashReportFrame) -> CrashReportFrame {

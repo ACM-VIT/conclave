@@ -284,9 +284,21 @@ struct CrashReportingTests {
 
     @Test func pathsKeepOnlyFileNamesAndDropDirectories() {
         #expect(CrashReportPrivacy.symbol("#00 pc 000000 /system/lib64/libc.so (syscall+28)") == "#00 pc 000000 libc.so (syscall+28)")
-        #expect(CrashReportPrivacy.symbol("at (/Users/Jane Doe/private/notes") == "at")
+        #expect(CrashReportPrivacy.symbol("at (/Users/Jane Doe/private/notes") == "at (")
         #expect(!CrashReportPrivacy.symbol("load /Users/Jane").contains("Jane"))
         #expect(CrashReportPrivacy.symbol("conclave.module.WebRTCClient$onProduce$1") == "conclave.module.WebRTCClient$onProduce$1")
+    }
+
+    @Test func aPathWithSpacesAndDotsNeverLeaksItsDirectories() {
+        let cleaned = CrashReportPrivacy.symbol("native: /Users/Jane.Doe Smith/private/libExample.so")
+        #expect(cleaned == "native: libExample.so")
+        let frame = CrashReportPrivacy.symbol(
+            "#00 pc 0001 /data/app/~~a==/com.acmvit.conclave-b==/lib/arm64/libmediasoupclient_so.so (Produce+8)")
+        #expect(frame == "#00 pc 0001 libmediasoupclient_so.so (Produce+8)")
+        for leaked in ["Jane", "Doe", "Smith", "private", "/data/app"] {
+            #expect(!cleaned.contains(leaked) && !frame.contains(leaked), "\(leaked)")
+        }
+        #expect(CrashReportPrivacy.symbol("kotlin.collections.ArrayList.get") == "kotlin.collections.ArrayList.get")
     }
 
     @Test func theLedgerForgetsReportsRetentionDeleted() {
