@@ -1622,6 +1622,13 @@ export class TranscriptRoom {
             const drain = this.providerDrains.get(epoch);
             if (drain) return this.applyDrainedFinal(drain, itemId, transcript);
           },
+          onItemFailed: (itemId, message) => {
+            if (epoch === this.transcriptionConnectionEpoch) {
+              return this.handleTranscriptionFailure(message);
+            }
+            const drain = this.providerDrains.get(epoch);
+            if (drain) return this.applyDrainedItemFailure(drain, itemId);
+          },
           onFailure: (message) => {
             if (epoch === this.transcriptionConnectionEpoch) {
               return this.handleTranscriptionFailure(message);
@@ -1887,6 +1894,26 @@ export class TranscriptRoom {
     drain.unfinalizedItems.delete(itemId);
     this.settleProviderDrain(drain);
     await this.saveFinalSegment(segment, transcript);
+  }
+
+  /**
+   * One acknowledged item a replaced provider could not transcribe: only
+   * that item becomes a gap, words already on screen are kept, and the drain
+   * goes on until every other acknowledged item is final, failed or late.
+   */
+  private async applyDrainedItemFailure(drain: ProviderDrain, itemId: string): Promise<void> {
+    if (this.providerDrains.get(drain.epoch) !== drain) return;
+    const segment = this.drainedSegment(drain, itemId);
+    const onScreen = drain.partials.get(itemId)?.text.trim();
+    drain.partials.delete(itemId);
+    drain.reserved.delete(itemId);
+    drain.unfinalizedItems.delete(itemId);
+    console.warn(
+      "[Transcript] A replaced provider failed one acknowledged line; it was not captioned.",
+      JSON.stringify({ epoch: drain.epoch, provider: drain.session.provider }),
+    );
+    this.settleProviderDrain(drain);
+    await this.saveFinalSegment(segment, onScreen ? "" : TRANSCRIPTION_GAP_MARKER);
   }
 
   private settleProviderDrain(drain: ProviderDrain): void {

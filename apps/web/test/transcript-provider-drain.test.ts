@@ -894,6 +894,36 @@ describe("one place per line, fixed at commit", () => {
 });
 
 describe("a switch never drops audio the old provider acknowledged", () => {
+  it("gap-marks only the item that failed and keeps draining the rest", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { sockets, start, switchTo, speak, commit, savedTexts } = await fixture(OPENAI);
+    await start("fr");
+    const before = sockets[0];
+    await speak();
+    await commit();
+    before.emit(openAiCommitted("failed"));
+    await speak();
+    await commit();
+    before.emit(openAiCommitted("healthy"));
+    await settle();
+
+    await switchTo("de");
+    before.emit({
+      type: "conversation.item.input_audio_transcription.failed",
+      item_id: "failed",
+      error: { message: "This item could not be transcribed" },
+    });
+    await settle();
+    expect(before.closed).toBe(false);
+    await vi.advanceTimersByTimeAsync(15_000);
+    before.emit(openAiFinal("healthy", "Healthy line."));
+    await settle();
+
+    expect(savedTexts()).toEqual([TRANSCRIPTION_GAP_MARKER, "Healthy line."]);
+    expect(before.closed).toBe(true);
+  });
+
   it("keeps an acknowledged line whose final arrives 15 s after the switch, in speaking order", async () => {
     vi.useFakeTimers();
     const { sockets, start, switchTo, speak, commit, savedTexts } = await fixture(OPENAI);
