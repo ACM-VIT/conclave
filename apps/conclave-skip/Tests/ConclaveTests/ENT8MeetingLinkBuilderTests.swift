@@ -79,6 +79,15 @@ struct ENT8MeetingLinkBuilderTests {
         #expect(presenter.lobbyLink?.meetingLink == "https://conclave.acmvit.in/sora-luffy-rose?clientId=beta")
     }
 
+    @MainActor
+    @Test func aBareLinkLobbyWithNoHooksNamesTheTenantThisBuildResolves() {
+        let presenter = PremeetingPresenter()
+        presenter.handleIncomingURL("https://conclave.acmvit.in/rose-sora-luffy")
+        let joined = MeetingLinkBuilder.canonicalClientId(SfuJoinService.resolveClientId()) ?? "conclave"
+        #expect(presenter.lobbyLink?.meetingLink
+                == "https://conclave.acmvit.in/rose-sora-luffy?clientId=" + MeetingLinkBuilder.encodeURIComponent(joined))
+    }
+
     @Test func aLinkWithNoTenantNamesTheOneThisBuildJoinsWith() {
         let joined = MeetingLinkBuilder.canonicalClientId(SfuJoinService.resolveClientId()) ?? "conclave"
         let expected = "https://conclave.acmvit.in/r?clientId=" + MeetingLinkBuilder.encodeURIComponent(joined)
