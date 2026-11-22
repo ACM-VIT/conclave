@@ -64,6 +64,7 @@ const fakeCameraProducer = () => ({
 type HarnessProps = {
   state: ConnectionState;
   reconnect?: ReconnectRecoveryStatus | null;
+  admittedAt?: number | null;
 };
 
 let root: Root | null = null;
@@ -73,11 +74,12 @@ const mount = (consumer: ReturnType<typeof fakeConsumerTransport> = fakeConsumer
   const consumerTransportRef = { current: consumer } as unknown as MutableRefObject<Transport | null>;
   const cameraProducerRef = { current: camera } as unknown as MutableRefObject<Producer | null>;
   const videoQualityRef: MutableRefObject<VideoQuality> = { current: "standard" };
-  function Harness({ state, reconnect = null }: HarnessProps) {
+  function Harness({ state, reconnect = null, admittedAt = null }: HarnessProps) {
     useCallQualityMetrics({
       connectionState: state,
       meetError: null,
       reconnectRecoveryStatus: reconnect,
+      admittedAt,
       participantCount: 2,
       joinMode: "meeting",
       consumerTransportRef,
@@ -151,6 +153,22 @@ describe("useCallQualityMetrics", () => {
     expect(firstMedia?.join_ms).toBeGreaterThanOrEqual(12_500);
     expect(firstMedia?.first_remote_audio_ms).toBeGreaterThan(3000);
     expect(firstMedia?.first_remote_audio_ms).toBeLessThanOrEqual(3500);
+  });
+
+  it("stops the waiting clock when the host lets the user in", async () => {
+    const { render } = mount();
+    await render({ state: "connecting" });
+    await render({ state: "waiting" });
+    await vi.advanceTimersByTimeAsync(1200);
+    const admittedAt = performance.now();
+    await render({ state: "waiting", admittedAt });
+    await vi.advanceTimersByTimeAsync(3700);
+    await render({ state: "joining", admittedAt });
+    await vi.advanceTimersByTimeAsync(500);
+    await render({ state: "joined", admittedAt });
+
+    const join = telemetryMock.capture.mock.calls.find(([name]) => name === "call_join")?.[1];
+    expect(join).toMatchObject({ outcome: "joined", waited: true, waiting_ms: 1200 });
   });
 
   it("reads no stats while telemetry is off", async () => {

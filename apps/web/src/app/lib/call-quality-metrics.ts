@@ -120,14 +120,16 @@ type Attempt = {
   startedAt: number;
   joinMode: JoinMode;
   waitingSince: number | null;
-  /**
-   * When the user last left the waiting room. A reconnect that lands back in
-   * it clears this, so it ends up as the moment the host let them in.
-   */
+  /** When the host let the user in (`joinApproved`), before media is reacquired. */
   waitingEndedAt: number | null;
   /** Remote media can start flowing while the join is still finishing. */
   firstAudioAt: number | null;
   firstVideoAt: number | null;
+  /**
+   * When the connection dropped and has not come back. An error while this
+   * is set is a failed retry, not the outcome; only giving up ends it.
+   */
+  reconnectingSince: number | null;
 };
 
 type MediaTotals = {
@@ -150,9 +152,6 @@ type MediaTotals = {
 type Call = Attempt & {
   joinedAt: number;
   waitingMs: number | null;
-  reconnectingSince: number | null;
-  /** When the call settled into an error it has not left; the call ends there. */
-  stuckSince: number | null;
   reconnectCount: number;
   reconnectTotalMs: number;
   reconnectLongestMs: number;
@@ -180,6 +179,8 @@ export type CallMetricsTracker = {
   onParticipants(count: number, at: number): void;
   onStats(sample: CallStatsSample, at: number): void;
   onPageHidden(at: number): void;
+  /** The host let the user in from the waiting room. */
+  onAdmitted(at: number): void;
   /** How long to wait before the next stats sample, or null when no call is up. */
   nextSampleDelayMs(at: number): number | null;
 };
@@ -260,6 +261,7 @@ export function createCallMetricsTracker({
   newCallId: () => string;
 }): CallMetricsTracker {
   let phase: Phase = { name: "idle" };
+  let lastState: ConnectionState | null = null;
   let failedAttempts = 0;
   let participants = 1;
 
@@ -309,12 +311,10 @@ export function createCallMetricsTracker({
 
   const endCall = (
     call: Call,
-    reason: "left" | "error" | "reconnect_failed" | "page_closed",
-    endedAt: number,
+    reason: "left" | "error" | "reconnect_failed" | "reconnect_abandoned" | "page_closed",
+    at: number,
     immediate: boolean,
   ) => {
-    const at = call.stuckSince ?? endedAt;
-    const endReason = call.stuckSince === null ? reason : "reconnect_failed";
     const unrecoveredMs =
       call.reconnectingSince === null ? 0 : at - call.reconnectingSince;
     const { totals } = call;
@@ -324,7 +324,7 @@ export function createCallMetricsTracker({
       props: {
         call_id: call.callId,
         join_mode: call.joinMode,
-        end_reason: endReason,
+        end_reason: reason,
         duration_ms: roundMs(at - call.joinedAt),
         peak_participants: call.peakParticipants,
         waited: call.waitingMs !== null,
@@ -367,7 +367,6 @@ export function createCallMetricsTracker({
     joinedAt: at,
     waitingMs: waitedMs(attempt, at),
     reconnectingSince: null,
-    stuckSince: null,
     reconnectCount: 0,
     reconnectTotalMs: 0,
     reconnectLongestMs: 0,
@@ -488,13 +487,11 @@ export function createCallMetricsTracker({
   };
 
   /**
-   * The time since a direction's last read, or null when that interval cannot
-   * be measured: a call stuck in error ended where it got stuck unless it
-   * recovers, and a gap this long (a throttled tab, failed reads) cannot say
-   * when its bytes and freezes happened.
+   * The time since a direction's last read, or null when a gap this long (a
+   * throttled tab, failed reads) cannot say when its bytes and freezes
+   * happened.
    */
-  const measuredInterval = (call: Call, since: number | null, at: number) => {
-    if (call.stuckSince !== null) return null;
+  const measuredInterval = (since: number | null, at: number) => {
     if (since === null) return 0;
     const dt = at - since;
     return dt > MAX_SAMPLE_GAP_MS ? null : dt;
@@ -502,6 +499,8 @@ export function createCallMetricsTracker({
 
   return {
     onConnectionState({ state, error, joinMode, reconnectGaveUp }, at) {
+      const previousState = lastState;
+      lastState = state;
       if (phase.name === "idle") {
         if (!JOINING_STATES.has(state)) return;
         phase = {
@@ -514,6 +513,7 @@ export function createCallMetricsTracker({
             waitingEndedAt: null,
             firstAudioAt: null,
             firstVideoAt: null,
+            reconnectingSince: null,
           },
         };
         return;
@@ -523,15 +523,22 @@ export function createCallMetricsTracker({
         const { attempt } = phase;
         if (state === "waiting") {
           attempt.waitingSince ??= at;
-          attempt.waitingEndedAt = null;
-        } else if (attempt.waitingSince !== null) {
-          attempt.waitingEndedAt ??= at;
+          attempt.reconnectingSince = null;
+          // Put back in the lobby after an earlier admission: waiting again.
+          if (previousState !== "waiting") attempt.waitingEndedAt = null;
+        } else if (
+          (state === "reconnecting" || state === "connecting") &&
+          state !== previousState
+        ) {
+          // The attempt already began, so this is the socket coming back.
+          attempt.reconnectingSince ??= at;
         }
+        const retrying = attempt.reconnectingSince !== null && !reconnectGaveUp;
         if (state === "joined") {
           emitJoin(attempt, "joined", at);
           failedAttempts = 0;
           phase = { name: "in_call", call: startCall(attempt, at) };
-        } else if (state === "error" || state === "disconnected") {
+        } else if (state === "disconnected" || (state === "error" && !retrying)) {
           const failed = state === "error" || error !== null;
           emitJoin(attempt, failed ? "failed" : "abandoned", at, {
             failureReason: failed ? joinFailureReason(error) : undefined,
@@ -551,12 +558,11 @@ export function createCallMetricsTracker({
           call.reconnectLongestMs = Math.max(call.reconnectLongestMs, lasted);
           call.reconnectingSince = null;
         }
-        call.stuckSince = null;
       } else if (state === "disconnected") {
         endCall(
           call,
           call.reconnectingSince !== null
-            ? "reconnect_failed"
+            ? "reconnect_abandoned"
             : error
               ? "error"
               : "left",
@@ -566,10 +572,9 @@ export function createCallMetricsTracker({
       } else if (state === "error" && reconnectGaveUp) {
         endCall(call, "reconnect_failed", at, false);
       } else {
+        // Errors between retries are part of the reconnect; only giving up
+        // or leaving ends the call.
         call.reconnectingSince ??= at;
-        // An error between reconnect attempts clears on the next attempt; one
-        // that stays (the give-up screen) ends the call at that moment.
-        call.stuckSince = state === "error" ? (call.stuckSince ?? at) : null;
       }
     },
 
@@ -590,12 +595,12 @@ export function createCallMetricsTracker({
       const { call } = phase;
       if (sample.inbound) {
         noteFirstMedia(call, sample.inbound, at);
-        const dt = measuredInterval(call, call.lastInboundAt, at);
+        const dt = measuredInterval(call.lastInboundAt, at);
         call.lastInboundAt = at;
         sample.inbound.forEach((stream) => foldInbound(call, stream, dt));
       }
       if (sample.outboundVideo) {
-        const dt = measuredInterval(call, call.lastOutboundAt, at);
+        const dt = measuredInterval(call.lastOutboundAt, at);
         call.lastOutboundAt = at;
         foldOutbound(call, sample.outboundVideo, sample.outboundProfile, dt);
       }
@@ -607,8 +612,19 @@ export function createCallMetricsTracker({
         emitJoin(phase.attempt, "abandoned", at, { immediate: true });
         phase = { name: "idle" };
       } else if (phase.name === "in_call") {
-        endCall(phase.call, "page_closed", at, true);
+        const { call } = phase;
+        endCall(
+          call,
+          call.reconnectingSince !== null ? "reconnect_abandoned" : "page_closed",
+          at,
+          true,
+        );
       }
+    },
+
+    onAdmitted(at) {
+      if (phase.name !== "joining" || phase.attempt.waitingSince === null) return;
+      phase.attempt.waitingEndedAt = at;
     },
 
     nextSampleDelayMs(at) {

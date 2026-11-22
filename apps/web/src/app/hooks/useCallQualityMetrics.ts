@@ -50,6 +50,7 @@ export function useCallQualityMetrics({
   connectionState,
   meetError,
   reconnectRecoveryStatus,
+  admittedAt,
   participantCount,
   joinMode,
   consumerTransportRef,
@@ -59,6 +60,8 @@ export function useCallQualityMetrics({
   connectionState: ConnectionState;
   meetError: MeetError | null;
   reconnectRecoveryStatus: ReconnectRecoveryStatus | null;
+  /** performance.now() when the host let the user in from the waiting room. */
+  admittedAt: number | null;
   participantCount: number;
   joinMode: JoinMode;
   consumerTransportRef: MutableRefObject<Transport | null>;
@@ -80,6 +83,10 @@ export function useCallQualityMetrics({
       performance.now(),
     );
   }, [tracker, connectionState, meetError, joinMode, reconnectGaveUp]);
+
+  useEffect(() => {
+    if (admittedAt !== null) tracker.onAdmitted(admittedAt);
+  }, [tracker, admittedAt]);
 
   useEffect(() => {
     tracker.onParticipants(participantCount, performance.now());

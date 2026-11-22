@@ -1268,6 +1268,9 @@ export function useMeetSocket({
 
   const [reconnectRecoveryStatus, setReconnectRecoveryStatus] =
     useState<ReconnectRecoveryStatus | null>(null);
+  // performance.now() when the host let this user in; call metrics stop the
+  // waiting clock here, before media is reacquired.
+  const [joinApprovedAt, setJoinApprovedAt] = useState<number | null>(null);
   const updateReconnectRecoveryStatus = useCallback(
     (
       next:
@@ -8243,6 +8246,7 @@ export function useMeetSocket({
 
             socket.on("joinApproved", async () => {
               if (intentionalDisconnectRef.current || socketRef.current !== socket) return;
+              setJoinApprovedAt(performance.now());
               const approvalGeneration = reconnectGenerationRef.current;
               console.info("[Meets] Join approved! Re-attempting join...");
               const joinOptions = joinOptionsRef.current;
@@ -10136,6 +10140,7 @@ export function useMeetSocket({
     joinRoomById,
     retryReconnect,
     reconnectRecoveryStatus,
+    joinApprovedAt,
     toggleRoomLock,
     toggleNoGuests,
     toggleChatLock,

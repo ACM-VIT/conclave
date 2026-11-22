@@ -80,11 +80,12 @@ const sample = (
 
 describe("call_join", () => {
   it("reports a join through the waiting room with its timings", () => {
-    const { state, named } = setup();
+    const { tracker, state, named } = setup();
 
     state("connecting", 1000);
     state("joining", 1400);
     state("waiting", 1500);
+    tracker.onAdmitted(9000);
     state("joining", 9500);
     state("joined", 10_000);
 
@@ -98,7 +99,7 @@ describe("call_join", () => {
           failure_reason: null,
           join_ms: 9000,
           waited: true,
-          waiting_ms: 8000,
+          waiting_ms: 7500,
           join_mode: "meeting",
           prior_failed_attempts: 0,
         },
@@ -106,39 +107,92 @@ describe("call_join", () => {
     ]);
   });
 
-  it("stops the waiting clock when the host lets the user in", () => {
-    const { state, named } = setup();
+  it("stops the waiting clock when the host lets the user in, not after media", () => {
+    const { tracker, state, named } = setup();
 
     state("connecting", 0);
     state("waiting", 500);
-    state("joining", 1500);
+    tracker.onAdmitted(1700);
+    // Camera and microphone are reacquired while the state still says waiting.
+    state("joining", 5400);
     state("joined", 11_500);
 
     expect(named("call_join")[0].props).toMatchObject({
       waited: true,
-      waiting_ms: 1000,
+      waiting_ms: 1200,
       join_ms: 11_500,
     });
   });
 
-  it("keeps the waiting clock running through a reconnect in the waiting room", () => {
+  it("keeps the waiting clock running through a drop in the waiting room", () => {
     const { tracker, state, named } = setup();
 
     state("connecting", 0);
     state("waiting", 500);
     state("reconnecting", 2000);
+    expect(tracker.nextSampleDelayMs(2500)).toBeNull();
     state("connecting", 2200);
     state("joining", 3000);
     state("waiting", 3500);
     expect(tracker.nextSampleDelayMs(4000)).toBeNull();
+    tracker.onAdmitted(5300);
     state("joining", 5500);
     state("joined", 15_500);
 
     expect(named("call_join")[0].props).toMatchObject({
       waited: true,
-      waiting_ms: 5000,
+      waiting_ms: 4800,
       join_ms: 15_500,
     });
+  });
+
+  it("keeps one attempt through a reconnect error in the waiting room", () => {
+    const { tracker, state, named } = setup();
+
+    state("connecting", 0);
+    state("waiting", 500);
+    state("reconnecting", 2000);
+    state("connecting", 2100);
+    state("error", 2600, {
+      code: "CONNECTION_FAILED",
+      message: "The meeting server did not respond before the timeout.",
+      recoverable: true,
+    });
+    state("reconnecting", 3000);
+    state("connecting", 3100);
+    state("joining", 3300);
+    state("waiting", 3500);
+    tracker.onAdmitted(6000);
+    state("joining", 6500);
+    state("joined", 9000);
+
+    expect(named("call_join").map(({ props }) => props)).toEqual([
+      expect.objectContaining({
+        call_id: "call-1",
+        outcome: "joined",
+        waiting_ms: 5500,
+        prior_failed_attempts: 0,
+      }),
+    ]);
+  });
+
+  it("fails a waiting-room attempt only when reconnecting gives up", () => {
+    const { state, named } = setup();
+
+    state("connecting", 0);
+    state("waiting", 500);
+    state("reconnecting", 2000);
+    state("error", 2600);
+    state("reconnecting", 3000);
+    state("error", 40_000, {
+      code: "CONNECTION_FAILED",
+      message: "The meeting server did not respond before the timeout.",
+      recoverable: true,
+    }, true);
+
+    expect(named("call_join").map(({ props }) => [props.outcome, props.failure_reason])).toEqual([
+      ["failed", "timeout"],
+    ]);
   });
 
   it("classifies failures and counts the retries before a success", () => {
@@ -177,6 +231,22 @@ describe("call_join", () => {
       ["failed", "permission_denied", 2],
       ["joined", null, 3],
     ]);
+  });
+
+  it("still fails a first join whose error arrives with a repeated connecting state", () => {
+    const { state, named } = setup();
+    const timeout = {
+      code: "CONNECTION_FAILED" as const,
+      message: "The meeting server did not respond before the timeout.",
+      recoverable: true,
+    };
+
+    state("connecting", 0);
+    // The hook re-reports the same state when only the error changes.
+    state("connecting", 400, timeout);
+    state("error", 500, timeout);
+
+    expect(named("call_join").map(({ props }) => props.outcome)).toEqual(["failed"]);
   });
 
   it("marks a join the user walked away from as abandoned", () => {
@@ -419,29 +489,33 @@ describe("call_summary", () => {
     const [summary] = named("call_summary");
     expect(summary.immediate).toBe(true);
     expect(summary.props).toMatchObject({
-      end_reason: "page_closed",
+      end_reason: "reconnect_abandoned",
       reconnect_count: 1,
       reconnect_total_ms: 6000,
       reconnect_unrecovered: true,
     });
   });
 
-  it("ends a call that gave up reconnecting when it gave up, not when the tab closed", () => {
+  it("reports the real reconnect time when the tab closes during retry backoff", () => {
     const { state, tracker, named } = setup();
     state("connecting", 0);
     state("joined", 1000);
     state("reconnecting", 5000);
-    state("error", 12_000);
-    state("reconnecting", 13_000);
-    state("error", 40_000);
-    tracker.onPageHidden(300_000);
+    state("error", 7000);
+    state("reconnecting", 9000);
+    tracker.onPageHidden(25_000);
 
-    expect(named("call_summary")[0].props).toMatchObject({
-      end_reason: "reconnect_failed",
-      duration_ms: 39_000,
-      reconnect_count: 1,
-      reconnect_total_ms: 35_000,
-      reconnect_unrecovered: true,
+    expect(named("call_summary")).toHaveLength(1);
+    expect(named("call_summary")[0]).toMatchObject({
+      immediate: true,
+      props: {
+        end_reason: "reconnect_abandoned",
+        duration_ms: 24_000,
+        reconnect_count: 1,
+        reconnect_total_ms: 20_000,
+        reconnect_longest_ms: 20_000,
+        reconnect_unrecovered: true,
+      },
     });
   });
 
@@ -490,50 +564,43 @@ describe("call_summary", () => {
     ]);
   });
 
-  it("stops media totals where a call stuck in error ended", () => {
+  it("keeps one call and measures from the drop through a reconnect error that recovers", () => {
     const { tracker, state, named } = setup();
     state("connecting", 0);
     state("joined", 1000);
-    tracker.onStats(sample([video()], { outboundVideo: [layer()] }), 2000);
-    tracker.onStats(
-      sample([video({ bytesReceived: 100_000, framesDecoded: 150 })], {
-        outboundVideo: [layer({ bytesSent: 500_000 })],
-      }),
-      7000,
-    );
-    state("error", 8000);
-    tracker.onStats(
-      sample([video({ bytesReceived: 200_000, framesDecoded: 300 })], {
-        outboundVideo: [layer({ bytesSent: 1_000_000 })],
-      }),
-      12_000,
-    );
-    tracker.onPageHidden(20_000);
+    tracker.onStats(sample([video({ id: "recv:v1" })]), 2000);
+    tracker.onStats(sample([video({ id: "recv:v1", bytesReceived: 100_000, framesDecoded: 150 })]), 7000);
+    state("reconnecting", 8000);
+    state("error", 9000);
+    tracker.onStats(sample([]), 12_000);
+    state("reconnecting", 12_500);
+    state("joined", 14_000);
+    tracker.onStats(sample([video({ id: "recv2:v1", bytesReceived: 90_000, framesDecoded: 120 })]), 17_000);
+    state("disconnected", 18_000);
 
+    expect(named("call_join")).toHaveLength(1);
+    expect(named("call_summary")).toHaveLength(1);
     expect(named("call_summary")[0].props).toMatchObject({
-      end_reason: "reconnect_failed",
-      duration_ms: 7000,
-      remote_video_ms: 5000,
-      outbound_video_ms: 5000,
+      end_reason: "left",
+      duration_ms: 17_000,
+      reconnect_count: 1,
+      reconnect_total_ms: 6000,
+      reconnect_unrecovered: false,
+      remote_video_ms: 10_000,
     });
   });
 
-  it("measures again once a call stuck in error recovers", () => {
-    const { tracker, state, named } = setup();
+  it("calls leaving during a reconnect an abandoned reconnect", () => {
+    const { state, named } = setup();
     state("connecting", 0);
     state("joined", 1000);
-    tracker.onStats(sample([video()]), 2000);
-    tracker.onStats(sample([video({ bytesReceived: 100_000, framesDecoded: 150 })]), 7000);
-    state("error", 8000);
-    tracker.onStats(sample([video({ bytesReceived: 200_000, framesDecoded: 300 })]), 12_000);
-    state("reconnecting", 13_000);
-    state("joined", 14_000);
-    tracker.onStats(sample([video({ bytesReceived: 300_000, framesDecoded: 450 })]), 17_000);
-    state("disconnected", 18_000);
+    state("reconnecting", 5000);
+    state("disconnected", 9000);
 
     expect(named("call_summary")[0].props).toMatchObject({
-      end_reason: "left",
-      remote_video_ms: 10_000,
+      end_reason: "reconnect_abandoned",
+      reconnect_total_ms: 4000,
+      reconnect_unrecovered: true,
     });
   });
 

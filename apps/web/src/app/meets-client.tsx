@@ -2819,6 +2819,7 @@ export default function MeetsClient({
     connectionState,
     meetError,
     reconnectRecoveryStatus,
+    admittedAt: socket.joinApprovedAt,
     participantCount,
     joinMode: isWebinarAttendee ? "webinar_attendee" : "meeting",
     consumerTransportRef: refs.consumerTransportRef,

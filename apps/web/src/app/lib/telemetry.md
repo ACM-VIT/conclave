@@ -46,16 +46,16 @@ from the receive transport and the camera producer every 250 ms from the join
 click (except in the waiting room) until first media arrives, then every 5 s, so
 first-media times are stamped at the first sample that shows them, even when
 media arrives before the join finishes. A gap of more than 15 s between readable
-samples, and any time the call sits in an error, is left out of every total.
+samples is left out of every total.
 
 ### `call_join`
 
 | Property | Meaning |
 | --- | --- |
-| `outcome` | `joined`, `failed`, or `abandoned` (left or closed the tab before getting in) |
+| `outcome` | `joined`, `failed`, or `abandoned` (left or closed the tab before getting in). An error while reconnecting is a failed retry, not the outcome: the attempt fails only when reconnecting gives up |
 | `failure_reason` | `rejected`, `invite_code`, `room_not_found`, `room_unavailable`, `auth`, `timeout`, `permission_denied`, `media_error`, `transport_error`, `connection_failed`, `unknown`; null unless failed |
 | `join_ms` | Click to outcome |
-| `waited`, `waiting_ms` | Whether the waiting room held the user, and for how long, up to the moment the host let them in |
+| `waited`, `waiting_ms` | Whether the waiting room held the user, and for how long, up to `joinApproved` (the host letting them in), before media is reacquired. A drop while waiting keeps the clock running |
 | `join_mode` | `meeting` or `webinar_attendee` |
 | `prior_failed_attempts` | Failed attempts in this tab since the last successful join |
 
@@ -75,11 +75,11 @@ Skipped when nobody else is in the room.
 ### `call_summary`
 
 Sent on leave, as soon as reconnecting gives up, or with sendBeacon when the tab
-closes. A call left in any other error ends where the error began.
+closes. Errors between reconnect attempts never end a call; one call id spans every reconnect.
 
 | Property | Meaning |
 | --- | --- |
-| `end_reason` | `left`, `error`, `reconnect_failed`, `page_closed` |
+| `end_reason` | `left`, `error`, `reconnect_failed` (retries ran out), `reconnect_abandoned` (left or closed the tab while still reconnecting), `page_closed` |
 | `duration_ms` | Joined to end |
 | `peak_participants` | Largest roster, including the local user |
 | `first_remote_audio_ms`, `first_remote_video_ms` | As above |
