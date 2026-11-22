@@ -2,6 +2,7 @@ import { readAiEnvironment } from "@conclave/ai/models";
 import { parseGuestJoinClaims } from "@conclave/meeting-core/guest-join-claims";
 import { Admin } from "../../../config/classes/Admin.js";
 import { Client } from "../../../config/classes/Client.js";
+import type { Room } from "../../../config/classes/Room.js";
 import { config } from "../../../config/config.js";
 import type {
   AppsAwarenessData,
@@ -51,8 +52,9 @@ import {
 } from "../../scheduledWebinars.js";
 import { ensureWebinarRoomConfig } from "../../scheduledWebinarScheduler.js";
 import {
-  applyGuestLink,
+  answerSettledRequests,
   publishLobby,
+  removeBlockedGuest,
   withdrawWaitingRequest,
 } from "../../admin/controlPlane.js";
 import { getSocketAuthUser } from "../auth.js";
@@ -73,6 +75,15 @@ const MAX_INVITE_CODE_LENGTH = 256;
 const MAX_ADMISSION_CODE_LENGTH = 128;
 const GUEST_NOT_VERIFIED_ERROR =
   "This guest session could not be verified. Reload the page to join again.";
+const WAITING_ROOM_FULL_ERROR =
+  "The waiting room is full. Try again in a moment.";
+const MEETING_FULL_ERROR = "This meeting is full.";
+
+// A new request to be let in past the room's limit is refused. A tab that
+// already waits keeps its place.
+const isWaitingRoomFull = (room: Room, userKey: string): boolean =>
+  !room.pendingClients.has(userKey) &&
+  room.pendingClients.size >= config.waitingRequestLimit;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
 
 const normalizeIdentifier = (
@@ -270,17 +281,21 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           guestClaims?.scope === "room" ? guestClaims : null;
         const roomGuestProof = roomScopedClaims?.guestProof;
         const otherGuestSeats = roomScopedClaims?.guestWas ?? [];
+        // What the token shows of the guest's other passes is decided on,
+        // not recorded: only a join that is let in or waits records it
+        // (`commitLink` below). A refused join leaves the room as it was,
+        // except that a guest a block turns out to cover leaves at once.
+        const planLink = (forRoom: Room | undefined) =>
+          forRoom && roomGuestProof !== undefined && otherGuestSeats.length > 0
+            ? forRoom.planGuestLink(otherGuestSeats, roomGuestProof)
+            : undefined;
         const knownRoom = state.rooms.get(resolvedChannelId);
-        if (
-          knownRoom &&
-          roomGuestProof !== undefined &&
-          otherGuestSeats.length > 0
-        ) {
-          applyGuestLink(
-            knownRoom,
-            knownRoom.linkGuestPasses(otherGuestSeats, roomGuestProof),
-            { io, state },
-          );
+        const earlyLink = planLink(knownRoom);
+        if (knownRoom && earlyLink?.blocked) {
+          removeBlockedGuest(knownRoom, knownRoom.refuseBlockedLink(earlyLink), {
+            io,
+            state,
+          });
         }
         // A host invite ("bring on stage") lets an attendee identity rejoin as
         // a full participant; the promotion registry lives on the live room.
@@ -292,7 +307,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           Boolean(
             state.rooms
               .get(resolvedChannelId)
-              ?.hasStageInvite(userKey, roomGuestProof),
+              ?.hasStageInvite(userKey, roomGuestProof, earlyLink),
           );
         if (
           isActiveScheduledWebinarRoom &&
@@ -316,7 +331,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           Boolean(
             state.rooms
               .get(resolvedChannelId)
-              ?.isWebinarDemotedUserKey(userKey, guestProof),
+              ?.isWebinarDemotedUserKey(userKey, guestProof, earlyLink),
           )
         ) {
           respond(callback, {
@@ -482,6 +497,19 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           }
         }
 
+        const guestLink = planLink(room);
+        if (guestLink?.blocked && !(room === knownRoom && earlyLink?.blocked)) {
+          removeBlockedGuest(room, room.refuseBlockedLink(guestLink), {
+            io,
+            state,
+          });
+        }
+        const joinedRoom = room;
+        const commitLink = () => {
+          if (!guestLink) return;
+          answerSettledRequests(joinedRoom, joinedRoom.commitGuestLink(guestLink));
+        };
+
         const guestClaim = room.claimGuestIdentity(userKey, guestProof);
         if (!guestClaim.ok) {
           Logger.warn(
@@ -619,7 +647,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         if (
           !forcedHostJoin &&
           user?.isSuperAdmin !== true &&
-          room.isBlocked(userKey, guestProof)
+          room.isBlocked(userKey, guestProof, guestLink)
         ) {
           Logger.info(`Blocked identity ${userKey} denied access to room ${roomId}`);
           respond(callback, { error: "You are not allowed to join this meeting." });
@@ -628,10 +656,10 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
 
         const isReturningPrimaryHost =
           !isWebinarAttendeeJoin &&
-          room.isHostUserKey(userKey, roomGuestProof);
+          room.isHostUserKey(userKey, roomGuestProof, guestLink);
         const isPersistedAdminForExistingRoom =
           !isWebinarAttendeeJoin &&
-          room.isAdminUserKey(userKey, roomGuestProof);
+          room.isAdminUserKey(userKey, roomGuestProof, guestLink);
         const isAdminForExistingRoom =
           !isWebinarAttendeeJoin &&
           (isReturningPrimaryHost ||
@@ -692,7 +720,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         if (isAdminJoin && !room.hostUserKey) {
           room.hostUserKey = userKey;
         }
-        const isPrimaryHost = room.isHostUserKey(userKey, roomGuestProof);
+        const isPrimaryHost = room.isHostUserKey(userKey, roomGuestProof, guestLink);
 
         if (
           !isWebinarAttendeeJoin &&
@@ -745,8 +773,13 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           room.isLocked &&
           !hasPrivilegedJoinAccess &&
           !isWebinarPromotedJoin &&
-          !room.isLockedAllowed(userKey, roomGuestProof)
+          !room.isLockedAllowed(userKey, roomGuestProof, guestLink)
         ) {
+          if (isWaitingRoomFull(room, userKey)) {
+            respond(callback, { error: WAITING_ROOM_FULL_ERROR });
+            return;
+          }
+          commitLink();
           Logger.info(
             `User ${userKey} trying to join locked room ${roomId}, adding to waiting room`,
           );
@@ -797,9 +830,17 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           clientPolicy.useWaitingRoom &&
           !hasPrivilegedJoinAccess &&
           !isWebinarPromotedJoin &&
-          !room.isAllowed(userKey, roomGuestProof) &&
-          !(room.isLocked && room.isLockedAllowed(userKey, roomGuestProof))
+          !room.isAllowed(userKey, roomGuestProof, guestLink) &&
+          !(
+            room.isLocked &&
+            room.isLockedAllowed(userKey, roomGuestProof, guestLink)
+          )
         ) {
+          if (isWaitingRoomFull(room, userKey)) {
+            respond(callback, { error: WAITING_ROOM_FULL_ERROR });
+            return;
+          }
+          commitLink();
           Logger.info(`User ${userKey} added to waiting room ${roomId}`);
           room.addPendingClient(
             userKey,
@@ -841,6 +882,18 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           });
           return;
         }
+
+        if (
+          !isWebinarAttendeeJoin &&
+          !hasPrivilegedJoinAccess &&
+          !isReplacingExistingSeat &&
+          room.clients.size - room.getWebinarAttendeeCount() >=
+            config.meetingSeatLimit
+        ) {
+          respond(callback, { error: MEETING_FULL_ERROR });
+          return;
+        }
+        commitLink();
 
         room.clearPendingDisconnect(userId);
         // This tab is let in, so a request it left in the lobby is over.

@@ -1054,22 +1054,26 @@ describe("a block and a guest whose pass changed", () => {
     error: "You are not allowed to join this meeting.",
   });
 
-  it("stays on the old identity and reaches the new one", async () => {
+  it("stays on the old identity, refuses every join that shows it, and records nothing for a refused one", async () => {
     const state = makeState();
     await join(state, guestHost);
     const room = state.rooms.get("conclave:room")!;
     await join(state, guest);
     room.blockUser(guest.userId);
     room.removeClient(guestSeat);
+    await endOfTurn();
+    const before = { links: room.linkedGuestPassCount, bound: room.boundGuestIdentityCount };
 
     const moved = await join(state, { ...underNewPass, guestWas: formerSeats(guest) });
     await endOfTurn();
     const replayed = await join(state, guest);
-    const again = await join(state, underNewPass);
+    const movedAgain = await join(state, { ...underNewPass, sessionId: "tab-9", guestWas: formerSeats(guest) });
+    await endOfTurn();
 
     expect(moved.ack).toHaveBeenCalledWith(notAllowed);
     expect(replayed.ack).toHaveBeenCalledWith(notAllowed);
-    expect(again.ack).toHaveBeenCalledWith(notAllowed);
+    expect(movedAgain.ack).toHaveBeenCalledWith(notAllowed);
+    expect({ links: room.linkedGuestPassCount, bound: room.boundGuestIdentityCount }).toEqual(before);
   });
 
   it("still keeps out the guest's other tab on the old pass", async () => {
@@ -1122,11 +1126,16 @@ describe("a block and a guest whose pass changed", () => {
 
     const moved = await join(state, { ...underNewPass, guestWas: formerSeats(guest) });
     await endOfTurn();
-    const replayed = await join(state, guest);
+    const shownAgain = await join(state, { ...underNewPass, sessionId: "tab-9", guestWas: formerSeats(guest) });
+    // Shown alone, the old pass is no guest the room links to the block,
+    // but the block ended its admission: it has to knock again.
+    const alone = await join(state, guest);
 
     expect(moved.ack).toHaveBeenCalledWith(notAllowed);
-    expect(replayed.ack).toHaveBeenCalledWith(notAllowed);
+    expect(shownAgain.ack).toHaveBeenCalledWith(notAllowed);
+    expect(alone.ack).toHaveBeenCalledWith(expect.objectContaining({ status: "waiting" }));
     expect(room.isLockedAllowed(underNewPass.userId)).toBe(false);
+    expect(room.linkedGuestPassCount).toBe(0);
   });
 });
 
@@ -2595,6 +2604,125 @@ describe("the room's last co-host, blocked through a pass link", () => {
   });
 });
 
+describe("what a refused join leaves behind", () => {
+  const guestOf = (name: string, extra: Partial<SfuAuthPayload> = {}) =>
+    ({
+      userId: `guest-gp_${name}`,
+      clientId: "conclave",
+      sessionId: name,
+      guestProof: `proof-of-${name}`,
+      ...extra,
+    }) satisfies SfuAuthPayload;
+  const shows = (...seats: SfuAuthPayload[]) =>
+    seats.map((seat) => ({ userKey: seat.userId!, guestProof: seat.guestProof! }));
+
+  it("keeps a blocked guest's pass links as they are when it comes back under 200 fresh passes (Daybreak)", async () => {
+    const state = makeState();
+    await join(state, guestHost);
+    const room = state.rooms.get("conclave:room")!;
+    const blocked = guestOf("daybreak-blocked");
+    await join(state, blocked);
+    blockUserKey(room, blocked.userId, { reason: "Blocked by host", kickPresent: true, io, state });
+    await endOfTurn();
+    const sizes = () => ({
+      links: room.linkedGuestPassCount,
+      decisions: room.decisionRecordCount,
+      bindings: room.boundGuestIdentityCount,
+      waiting: room.pendingClients.size,
+      seats: room.clients.size,
+    });
+    const before = sizes();
+
+    for (let index = 0; index < 200; index += 1) {
+      const attempt = await join(state, guestOf(`daybreak-fresh-${index}`, { guestWas: shows(blocked) }));
+      expect(attempt.ack).toHaveBeenCalledWith(refused);
+    }
+    await endOfTurn();
+
+    expect(sizes()).toEqual(before);
+  });
+
+  it("records no link that would make one guest of more than 16 passes, and drops none it has", async () => {
+    const state = makeState();
+    await join(state, guestHost);
+    const room = state.rooms.get("conclave:room")!;
+    const guests = Array.from({ length: 17 }, (_, index) => guestOf(`cap-${index}`));
+    for (const guest of guests) await join(state, guest);
+    const [first, ...rest] = guests;
+    const last = rest.pop()!;
+
+    const full = await join(state, { ...first, userId: `${first.userId}-tab-2`, sessionId: "cap-0-tab-2", guestWas: shows(...rest) });
+    expect(full.ack).toHaveBeenCalledWith(joined);
+    expect(room.linkedGuestPassCount).toBe(16);
+
+    const over = await join(state, { ...last, userId: `${last.userId}-tab-2`, sessionId: "cap-16-tab-2", guestWas: shows(first) });
+    expect(over.ack).toHaveBeenCalledWith(joined);
+    expect(room.linkedGuestPassCount).toBe(16);
+    expect(room.identitiesOfSameGuest(first.userId)).not.toContain(last.userId);
+    expect(room.identitiesOfSameGuest(first.userId)).toContain(rest[0].userId);
+
+    // A block on the full guest still reaches a join that shows its pass.
+    blockUserKey(room, rest[0].userId, { reason: "Blocked by host", kickPresent: true, io, state });
+    const shownAgain = await join(state, { ...last, userId: `${last.userId}-tab-3`, sessionId: "cap-16-tab-3", guestWas: shows(first) });
+    expect(shownAgain.ack).toHaveBeenCalledWith(refused);
+    expect(room.linkedGuestPassCount).toBe(16);
+  });
+
+  const withLimits = async (limits: { waiting?: number; seats?: number }, body: () => Promise<void>) => {
+    const before = { waiting: sfuConfig.waitingRequestLimit, seats: sfuConfig.meetingSeatLimit };
+    sfuConfig.waitingRequestLimit = limits.waiting ?? before.waiting;
+    sfuConfig.meetingSeatLimit = limits.seats ?? before.seats;
+    try {
+      await body();
+    } finally {
+      sfuConfig.waitingRequestLimit = before.waiting;
+      sfuConfig.meetingSeatLimit = before.seats;
+    }
+  };
+
+  it("refuses a new request past the waiting room's limit and records nothing for it", async () => {
+    await withLimits({ waiting: 2 }, async () => {
+      const state = makeState();
+      await join(state, guestHost);
+      const room = state.rooms.get("conclave:room")!;
+      room.setLocked(true);
+      const waiting = expect.objectContaining({ status: "waiting" }) as unknown;
+      expect((await join(state, guestOf("wait-a"))).ack).toHaveBeenCalledWith(waiting);
+      expect((await join(state, guestOf("wait-b"))).ack).toHaveBeenCalledWith(waiting);
+      await endOfTurn();
+      const before = { bindings: room.boundGuestIdentityCount, waitingCount: room.pendingClients.size };
+
+      const third = await join(state, guestOf("wait-c"));
+      await endOfTurn();
+
+      expect(third.ack).toHaveBeenCalledWith({ error: "The waiting room is full. Try again in a moment." });
+      expect({ bindings: room.boundGuestIdentityCount, waitingCount: room.pendingClients.size }).toEqual(before);
+      expect((await join(state, guestOf("wait-a"))).ack).toHaveBeenCalledWith(waiting);
+    });
+  });
+
+  it("refuses a new seat past the meeting's limit, but not a tab coming back to its seat or a host", async () => {
+    await withLimits({ seats: 2 }, async () => {
+      const state = makeState();
+      const host = await join(state, guestHost);
+      const room = state.rooms.get("conclave:room")!;
+      const seated = guestOf("seat-a");
+      expect((await join(state, seated)).ack).toHaveBeenCalledWith(joined);
+      await endOfTurn();
+      const before = { bindings: room.boundGuestIdentityCount, seats: room.clients.size };
+
+      const third = await join(state, guestOf("seat-b"));
+      await endOfTurn();
+
+      expect(third.ack).toHaveBeenCalledWith({ error: "This meeting is full." });
+      expect({ bindings: room.boundGuestIdentityCount, seats: room.clients.size }).toEqual(before);
+      expect((await join(state, seated)).ack).toHaveBeenCalledWith(joined);
+      dropConnection(host.peer);
+      expect((await join(state, guestHost)).ack).toHaveBeenCalledWith(joined);
+    });
+  });
+});
+
 describe("a guest join token whose claims are malformed", () => {
   const roomScoped = {
     userId: "guest-gp_TTTTTTTTTTTTTTTTTTTTTT",
@@ -3149,18 +3277,19 @@ describe("who may come in, against a slow reading of every decision", () => {
     }
     // The keys the room has bound to the guest's passes.
     boundKeys(pass: string): string[] {
-      const group = this.group(pass);
+      return this.boundKeysOf(this.group(pass));
+    }
+    boundKeysOf(passes: Set<string>): string[] {
       return tabs
-        .filter((tab) => group.has(tab.pass))
+        .filter((tab) => passes.has(tab.pass))
         .filter((tab) => this.status.get(tab.key) === "pending" || this.status.get(tab.key) === "seated" || this.blocked.has(tab.key) || this.named(tab.key) || this.coHosts.has(tab.key))
         .map((tab) => tab.key);
     }
     known(pass: string): boolean {
       return this.records.has(pass) || this.boundKeys(pass).some((key) => tabByKey.get(key)!.pass === pass);
     }
-    tabsOfGuest(pass: string, state: "pending" | "seated"): Tab[] {
-      const group = this.group(pass);
-      return tabs.filter((tab) => group.has(tab.pass) && this.status.get(tab.key) === state);
+    tabsOfGuest(pass: string, state: "pending" | "seated", passes = this.group(pass)): Tab[] {
+      return tabs.filter((tab) => passes.has(tab.pass) && this.status.get(tab.key) === state);
     }
     latestMark(pass: string, scope: Scope, source = this.records): Mark | undefined {
       let latest: Mark | undefined;
@@ -3297,12 +3426,12 @@ describe("who may come in, against a slow reading of every decision", () => {
       }
       return rows.sort();
     }
-    removeGuestOf(pass: string, events: Map<string, string>, removedKeys: string[]) {
-      for (const waiting of this.tabsOfGuest(pass, "pending")) {
+    removeGuestOf(pass: string, events: Map<string, string>, removedKeys: string[], passes = this.group(pass)) {
+      for (const waiting of this.tabsOfGuest(pass, "pending", passes)) {
         this.status.set(waiting.key, "idle");
         events.set(waiting.key, "joinRejected");
       }
-      for (const seated of this.tabsOfGuest(pass, "seated")) {
+      for (const seated of this.tabsOfGuest(pass, "seated", passes)) {
         if (!removedKeys.includes(seated.key)) continue;
         this.status.set(seated.key, "idle");
         this.adminSeats.delete(seated.key);
@@ -3312,36 +3441,38 @@ describe("who may come in, against a slow reading of every decision", () => {
 
     knock(tab: Tab, names: string[]) {
       const events = new Map<string, string>();
-      let linked = false;
-      for (const other of names) {
-        if (this.known(other) && this.find(other) !== this.find(tab.pass)) {
-          this.root.set(this.find(other), this.find(tab.pass));
-          linked = true;
-        }
+      // A join decides on the passes it shows; only one that waits or is
+      // let in records the link.
+      const others = names.filter((other) => this.known(other) && this.find(other) !== this.find(tab.pass));
+      const union = new Set([...this.group(tab.pass), ...others.flatMap((other) => [...this.group(other)])]);
+      const unionBlocked = [...this.blocked].some((key) => union.has(tabByKey.get(key)!.pass));
+      if (others.length > 0 && unionBlocked) {
+        const keys = this.boundKeysOf(union);
+        this.revokeKeys(keys, { recordedOnly: true });
+        this.removeGuestOf(tab.pass, events, keys, union);
+        this.prune();
+        return { outcome: "refused" as const, events };
       }
-      if (linked) {
-        if (this.guestBlocked(tab.pass)) {
-          const keys = this.boundKeys(tab.pass);
-          this.revokeKeys(keys, { recordedOnly: true });
-          this.removeGuestOf(tab.pass, events, keys);
-        } else {
-          for (const waiting of this.tabsOfGuest(tab.pass, "pending")) {
-            const answer = this.latestAnswer(waiting.pass);
-            if (!answer || answer.at < this.arrival.get(waiting.key)!) continue;
-            if (!answer.admitted) {
-              this.status.set(waiting.key, "idle");
-              events.set(waiting.key, "joinRejected");
-            } else if (this.admits(waiting.pass)) {
-              this.status.set(waiting.key, "idle");
-              events.set(waiting.key, "joinApproved");
-            }
+      if (this.blocked.has(tab.key) || this.guestBlocked(tab.pass)) {
+        this.prune();
+        return { outcome: "refused" as const, events };
+      }
+      for (const other of others) this.root.set(this.find(other), this.find(tab.pass));
+      if (others.length > 0) {
+        for (const waiting of this.tabsOfGuest(tab.pass, "pending")) {
+          const answer = this.latestAnswer(waiting.pass);
+          if (!answer || answer.at < this.arrival.get(waiting.key)!) continue;
+          if (!answer.admitted) {
+            this.status.set(waiting.key, "idle");
+            events.set(waiting.key, "joinRejected");
+          } else if (this.admits(waiting.pass)) {
+            this.status.set(waiting.key, "idle");
+            events.set(waiting.key, "joinApproved");
           }
         }
       }
-      let outcome: "joined" | "waiting" | "refused";
-      if (this.blocked.has(tab.key) || this.guestBlocked(tab.pass)) {
-        outcome = "refused";
-      } else if (this.isCoHost(tab.pass)) {
+      let outcome: "joined" | "waiting";
+      if (this.isCoHost(tab.pass)) {
         outcome = "joined";
         this.status.set(tab.key, "seated");
         this.coHosts.add(tab.key);
@@ -3501,6 +3632,14 @@ describe("who may come in, against a slow reading of every decision", () => {
       expect(answer?.error, `${event} ${JSON.stringify(payload)}, seed ${seed}`).toBeUndefined();
     };
     const seatOf = (key: string) => `${key}#${tabByKey.get(key)!.session}`;
+    // What a room keeps per guest, which a refused join must not add to.
+    const sizes = () => ({
+      links: room.linkedGuestPassCount,
+      bindings: room.boundGuestIdentityCount,
+      decisions: room.decisionRecordCount,
+      waiting: room.pendingClients.size,
+      seats: room.clients.size,
+    });
     const hostSeats = () => tabs.filter((tab) => room.getClient(seatOf(tab.key)) instanceof Admin).map((tab) => tab.key);
     // A tab that knocks again on a new socket leaves its old request on the
     // old one, and an answer to that request goes there.
@@ -3579,14 +3718,17 @@ describe("who may come in, against a slow reading of every decision", () => {
       const hostsBefore = hosts.length;
       // The guests a step takes out of the room, which a handoff must skip.
       let removedGuests: string[] = [];
+      let refusedFrom: ReturnType<typeof sizes> | undefined;
       let events = new Map<string, string>();
       if (next.kind === "knock") {
         const tab = tabByKey.get(next.key)!;
         const names = next.names;
         history.push(`knock ${tab.key} naming [${names.join(",")}]`);
         const seatedBefore = tabs.filter((other) => oracle.status.get(other.key) === "seated").map((other) => other.key);
+        const sizesBefore = sizes();
         const expected = oracle.knock(tab, names);
         events = expected.events;
+        if (expected.outcome === "refused") refusedFrom = sizesBefore;
         removedGuests = seatedBefore.filter((key) => oracle.status.get(key) !== "seated");
         const joinedTab = await join(state, {
           userId: tab.key,
@@ -3649,6 +3791,12 @@ describe("who may come in, against a slow reading of every decision", () => {
         hosts.push(await join(state, hostTab(`host-${hostSessions++}`)));
       }
       await endOfTurn();
+      if (refusedFrom) {
+        const after = sizes();
+        for (const [name, before] of Object.entries(refusedFrom)) {
+          expect(after[name as keyof typeof after], `a refused join grew ${name}, seed ${seed}, after: ${history.slice(-6).join(" | ")}`).toBeLessThanOrEqual(before);
+        }
+      }
 
       // With no host left, the room hands itself to one seat, never to a
       // guest that is blocked or that this step took out.

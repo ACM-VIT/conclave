@@ -902,19 +902,14 @@ export const rejectWaitingGuest = (room: Room, userKey: string): string[] => {
 };
 
 /**
- * Acts on what a join that linked passes changed (see
- * `Room.linkGuestPasses`): a guest a block now covers is removed, and the
- * waiting tabs an earlier decision now answers are told.
+ * Tells the requests a pass link settled how they were answered (see
+ * `Room.commitGuestLink`), and the hosts what their lobby now shows.
  */
-export const applyGuestLink = (
+export const answerSettledRequests = (
   room: Room,
-  linked: ReturnType<Room["linkGuestPasses"]>,
-  options: { io: SocketIOServer; state: SfuState },
+  settled: ReturnType<Room["commitGuestLink"]>,
 ): void => {
-  if (linked.blocked.length > 0) {
-    removeBlockedGuest(room, linked.blocked, options);
-  }
-  for (const { request, admitted } of linked.settled) {
+  for (const { request, admitted } of settled) {
     request.socket.emit(admitted ? "joinApproved" : "joinRejected", {
       roomId: room.id,
     });
@@ -1100,7 +1095,7 @@ export const blockUserKey = (
  * for a guest that a block has come to cover without a host action: the
  * room learned that a blocked key and these keys are one guest. The join
  * that taught the room this is the guest's, so nothing here is recorded:
- * the block is the answer, and `linkGuestPasses` already ended the rights.
+ * the block is the answer, and `refuseBlockedLink` already ended the rights.
  */
 export const removeBlockedGuest = (
   room: Room,

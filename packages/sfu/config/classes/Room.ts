@@ -116,6 +116,30 @@ export type RoomChatImageAsset = {
 const WEBINAR_AUDIO_LEVEL_THRESHOLD = -70;
 const WEBINAR_AUDIO_LEVEL_INTERVAL_MS = 350;
 const MAX_WEBINAR_QA_ENTRIES = 300;
+// The most passes a room records as one guest: a join token names the pass
+// a tab joins under and up to 15 others.
+export const GUEST_PASS_GROUP_LIMIT = 16;
+
+/**
+ * What a join shows the room of its guest through the browser's other
+ * passes, before anything is recorded (see `Room.planGuestLink`).
+ */
+export type GuestLinkPlan = {
+  readonly guestProof: string;
+  // The guest's passes as this join shows them: the ones the room already
+  // links to `guestProof`, and the known ones among the browser's others.
+  readonly passes: ReadonlySet<string>;
+  // A block on any of them refuses the join. Nothing is recorded.
+  readonly blocked: boolean;
+  // Whether the room may record the passes as one guest. It does not
+  // record a guest of more than `GUEST_PASS_GROUP_LIMIT` passes.
+  readonly recordable: boolean;
+};
+
+// The passes a join may lean on for a right: the plan's, when the room
+// would record them, else what the room already links.
+const rightsPassesOf = (link: GuestLinkPlan | undefined) =>
+  link?.recordable ? link.passes : undefined;
 const MAX_WEBINAR_OPEN_QUESTIONS_PER_USER = 3;
 export const MAX_WEBINAR_QA_QUESTION_LENGTH = 500;
 export const MAX_WEBINAR_QA_ANSWER_LENGTH = 1000;
@@ -851,14 +875,19 @@ export class Room {
     );
   }
 
-  /** Whether `userKey` is a key of the guest who presents `guestProof`. */
+  /**
+   * Whether `userKey` is a key of the guest who presents `guestProof`, or
+   * of one of `passes` when a join shows the guest's passes itself.
+   */
   private isKeyOfGuest(
     userKey: string,
     guestProof: string | undefined,
+    passes?: ReadonlySet<string>,
   ): boolean {
     if (guestProof === undefined) return false;
     const bound = this.guestProofsByUserKey.get(userKey);
-    return bound !== undefined && this.isSameGuestPass(bound, guestProof);
+    if (bound === undefined) return false;
+    return passes ? passes.has(bound) : this.isSameGuestPass(bound, guestProof);
   }
 
   /**
@@ -874,9 +903,12 @@ export class Room {
     userKeys: Iterable<string>,
     userKey: string,
     guestProof: string | undefined,
+    passes?: ReadonlySet<string>,
   ): boolean {
     for (const key of userKeys) {
-      if (key === userKey || this.isKeyOfGuest(key, guestProof)) return true;
+      if (key === userKey || this.isKeyOfGuest(key, guestProof, passes)) {
+        return true;
+      }
     }
     return false;
   }
@@ -943,10 +975,11 @@ export class Room {
   private principalsOfJoin(
     userKey: string,
     roomGuestProof: string | undefined,
+    passes?: ReadonlySet<string>,
   ): string[] {
     if (roomGuestProof === undefined) return [this.principalOf(userKey)];
     const principals = new Set([`key:${userKey}`]);
-    for (const guestProof of this.passesOfGuest(roomGuestProof)) {
+    for (const guestProof of passes ?? this.passesOfGuest(roomGuestProof)) {
       principals.add(`pass:${guestProof}`);
       for (const boundKey of this.userKeysByGuestProof.get(guestProof) ?? []) {
         if (!boundKey.startsWith(GUEST_SEAT_KEY_PREFIX)) {
@@ -980,67 +1013,83 @@ export class Room {
   }
 
   /**
-   * Records that the guest who joins with `guestProof` holds other passes
-   * too: the join route found their cookies in the same browser and named
-   * the seats in `guestWas`. From then on the room treats those passes as
-   * one guest, so decisions and blocks under any of them hold under all.
+   * What a join learns from the seats its token names under the browser's
+   * other passes (`guestWas`): the join route found their cookies in the
+   * same browser. The room records nothing yet. A join decides with the
+   * plan (a block or a demotion under any of the passes refuses it, and a
+   * right under any of them counts when the room would record the link),
+   * and only a join that is let in or waits records it (`commitGuestLink`).
+   * A refused join records nothing: no pass, no link, no binding.
    *
-   * A pass the room has never seen is not recorded.
-   *
-   * A block on any key of the guest wins over every right the guest holds
+   * A pass the room has never seen is left out. Returns undefined when the
+   * join shows no pass the room does not already link to `guestProof`.
+   */
+  planGuestLink(
+    otherSeats: ReadonlyArray<{ guestProof: string }>,
+    guestProof: string,
+  ): GuestLinkPlan | undefined {
+    const passes = new Set(this.passesOfGuest(guestProof));
+    let grows = false;
+    for (const seat of otherSeats) {
+      if (!this.isKnownGuestPass(seat.guestProof) || passes.has(seat.guestProof)) {
+        continue;
+      }
+      for (const proof of this.passesOfGuest(seat.guestProof)) passes.add(proof);
+      grows = true;
+    }
+    if (!grows) return undefined;
+    return {
+      guestProof,
+      passes,
+      blocked: this.guestHolds(this.blockedUsers, "", guestProof, passes),
+      recordable: passes.size <= GUEST_PASS_GROUP_LIMIT,
+    };
+  }
+
+  /**
+   * A block on any of a plan's passes wins over every right the guest holds
    * under any other: the guest loses what a rejoin would honour, host rights
-   * included, and this returns all of its keys so that the caller removes
-   * its seats and requests.
+   * included. Only what the room already records is changed. Returns all of
+   * the guest's keys, so that the caller removes its seats and requests.
+   */
+  refuseBlockedLink(link: GuestLinkPlan): string[] {
+    const blocked = [...link.passes].flatMap((proof) => [
+      ...(this.userKeysByGuestProof.get(proof) ?? []),
+    ]);
+    this.dropRejoinGrantsOf(blocked, { recordedOnly: true });
+    return blocked;
+  }
+
+  /**
+   * Records a plan's passes as one guest, for a join that is let in or
+   * waits: from then on decisions and blocks under any of them hold under
+   * all. A plan of more than `GUEST_PASS_GROUP_LIMIT` passes is not
+   * recorded: the room never drops a pass it links to make room.
    *
-   * Otherwise the guest's waiting requests are judged again, now that the
-   * room knows more of the guest (`settled`). A request is answered only by
-   * a decision made after it arrived: a denial turns it away, and an
+   * The guest's waiting requests are then judged again, now that the room
+   * knows more of the guest (returned). A request is answered only by a
+   * decision made after it arrived: a denial turns it away, and an
    * admission lets it in while the guest still holds it. Any other request
    * stays in the lobby. Nothing is recorded: an earlier decision keeps the
    * time it was made.
    */
-  linkGuestPasses(
-    otherSeats: ReadonlyArray<{ guestProof: string }>,
-    guestProof: string,
-  ): {
-    blocked: string[];
-    settled: Array<{ request: WaitingRequest; admitted: boolean }>;
-  } {
-    const nothing = { blocked: [], settled: [] };
-    if (otherSeats.length === 0) return nothing;
-    let linked = false;
-    for (const seat of otherSeats) {
-      if (
-        !this.isKnownGuestPass(seat.guestProof) ||
-        this.isSameGuestPass(seat.guestProof, guestProof)
-      ) {
-        continue;
-      }
-      linked = true;
-      const guestsBefore = [
-        this.guestOfPass(guestProof),
-        this.guestOfPass(seat.guestProof),
-      ];
-      const group = this.guestPassGroups.get(guestProof) ?? new Set([guestProof]);
-      for (const proof of this.guestPassGroups.get(seat.guestProof) ?? [
-        seat.guestProof,
-      ]) {
-        group.add(proof);
-      }
-      for (const proof of group) this.guestPassGroups.set(proof, group);
-      this.mergeWaitingGuests(guestsBefore, this.guestOfPass(guestProof));
+  commitGuestLink(
+    link: GuestLinkPlan,
+  ): Array<{ request: WaitingRequest; admitted: boolean }> {
+    if (link.blocked) return [];
+    if (!link.recordable) {
+      Logger.warn(
+        `Room ${this.id}: a guest showed ${link.passes.size} passes; the room links at most ${GUEST_PASS_GROUP_LIMIT}, so this link is not recorded.`,
+      );
+      return [];
     }
-    if (!linked) return nothing;
-    if (this.guestHolds(this.blockedUsers, "", guestProof)) {
-      const blocked = [...this.passesOfGuest(guestProof)].flatMap((proof) => [
-        ...(this.userKeysByGuestProof.get(proof) ?? []),
-      ]);
-      this.dropRejoinGrantsOf(blocked, { recordedOnly: true });
-      return { ...nothing, blocked };
-    }
+    const guestsBefore = [...new Set([...link.passes].map((proof) => this.guestOfPass(proof)))];
+    const group = new Set(link.passes);
+    for (const proof of group) this.guestPassGroups.set(proof, group);
+    this.mergeWaitingGuests(guestsBefore, this.guestOfPass(link.guestProof));
     const settled: Array<{ request: WaitingRequest; admitted: boolean }> = [];
     for (const userKey of [
-      ...(this.waitingKeysByGuest.get(this.guestOfPass(guestProof)) ?? []),
+      ...(this.waitingKeysByGuest.get(this.guestOfPass(link.guestProof)) ?? []),
     ]) {
       const request = this.pendingClients.get(userKey);
       const arrival = this.waitingGuestByKey.get(userKey)?.arrival;
@@ -1058,7 +1107,29 @@ export class Room {
         settled.push({ request, admitted: true });
       }
     }
-    return { ...nothing, settled };
+    return settled;
+  }
+
+  /**
+   * A join's link in one step, as `planGuestLink` and then either
+   * `refuseBlockedLink` or `commitGuestLink`.
+   */
+  linkGuestPasses(
+    otherSeats: ReadonlyArray<{ guestProof: string }>,
+    guestProof: string,
+  ): {
+    blocked: string[];
+    settled: Array<{ request: WaitingRequest; admitted: boolean }>;
+  } {
+    const link = this.planGuestLink(otherSeats, guestProof);
+    if (!link) return { blocked: [], settled: [] };
+    if (link.blocked) return { blocked: this.refuseBlockedLink(link), settled: [] };
+    return { blocked: [], settled: this.commitGuestLink(link) };
+  }
+
+  /** How many passes the room links to another, for its memory bound. */
+  get linkedGuestPassCount(): number {
+    return this.guestPassGroups.size;
   }
 
   /** A host turned away the request `userKey` made to be let in. */
@@ -1627,9 +1698,13 @@ export class Room {
    * Whether a join as `userKey` may go on stage: the latest stage decision
    * across what the join speaks for is an invite that has not expired.
    */
-  hasStageInvite(userKey: string, roomGuestProof: string | undefined): boolean {
+  hasStageInvite(
+    userKey: string,
+    roomGuestProof: string | undefined,
+    link?: GuestLinkPlan,
+  ): boolean {
     return this.admissions.admits(
-      this.principalsOfJoin(userKey, roomGuestProof),
+      this.principalsOfJoin(userKey, roomGuestProof, rightsPassesOf(link)),
       "stage",
     );
   }
@@ -1662,9 +1737,13 @@ export class Room {
    * Whether the guest behind `userKey` was moved back to the audience and
    * not invited since. A refusal follows any proof the join carries.
    */
-  isWebinarDemotedUserKey(userKey: string, guestProof?: string): boolean {
+  isWebinarDemotedUserKey(
+    userKey: string,
+    guestProof?: string,
+    link?: GuestLinkPlan,
+  ): boolean {
     return this.admissions.refuses(
-      this.principalsOfJoin(userKey, guestProof),
+      this.principalsOfJoin(userKey, guestProof, link?.passes),
       "stageDemotion",
     );
   }
@@ -2537,19 +2616,37 @@ export class Room {
   }
 
   /** Whether the guest behind `userKey` is a co-host. A blocked guest never is. */
-  isAdminUserKey(userKey: string, guestProof?: string): boolean {
+  isAdminUserKey(
+    userKey: string,
+    guestProof?: string,
+    link?: GuestLinkPlan,
+  ): boolean {
     return (
-      !this.isBlocked(userKey, guestProof) &&
-      this.guestHolds(this.adminUserKeys, userKey, guestProof)
+      !this.isBlocked(userKey, guestProof, link) &&
+      this.guestHolds(
+        this.adminUserKeys,
+        userKey,
+        guestProof,
+        rightsPassesOf(link),
+      )
     );
   }
 
   /** Whether the guest behind `userKey` is the host. A blocked guest never is. */
-  isHostUserKey(userKey: string, guestProof?: string): boolean {
+  isHostUserKey(
+    userKey: string,
+    guestProof?: string,
+    link?: GuestLinkPlan,
+  ): boolean {
     return (
       this.hostUserKey !== null &&
-      !this.isBlocked(userKey, guestProof) &&
-      this.guestHolds([this.hostUserKey], userKey, guestProof)
+      !this.isBlocked(userKey, guestProof, link) &&
+      this.guestHolds(
+        [this.hostUserKey],
+        userKey,
+        guestProof,
+        rightsPassesOf(link),
+      )
     );
   }
 
@@ -3275,9 +3372,13 @@ export class Room {
    * decision across what the join speaks for admits it (see
    * `principalsOfJoin`).
    */
-  isAllowed(userKey: string, roomGuestProof?: string): boolean {
+  isAllowed(
+    userKey: string,
+    roomGuestProof?: string,
+    link?: GuestLinkPlan,
+  ): boolean {
     return this.admissions.admits(
-      this.principalsOfJoin(userKey, roomGuestProof),
+      this.principalsOfJoin(userKey, roomGuestProof, rightsPassesOf(link)),
       "waitingRoom",
     );
   }
@@ -3295,9 +3396,13 @@ export class Room {
   }
 
   /** Whether a join as `userKey` may pass the lock (see `isAllowed`). */
-  isLockedAllowed(userKey: string, roomGuestProof?: string): boolean {
+  isLockedAllowed(
+    userKey: string,
+    roomGuestProof?: string,
+    link?: GuestLinkPlan,
+  ): boolean {
     return this.admissions.admits(
-      this.principalsOfJoin(userKey, roomGuestProof),
+      this.principalsOfJoin(userKey, roomGuestProof, rightsPassesOf(link)),
       "lock",
     );
   }
@@ -3412,7 +3517,11 @@ export class Room {
    * A block on one key keeps out every key of the same guest, for as long
    * as the blocked key is on the list.
    */
-  isBlocked(userKey: string, guestProof?: string): boolean {
-    return this.guestHolds(this.blockedUsers, userKey, guestProof);
+  isBlocked(
+    userKey: string,
+    guestProof?: string,
+    link?: GuestLinkPlan,
+  ): boolean {
+    return this.guestHolds(this.blockedUsers, userKey, guestProof, link?.passes);
   }
 }
