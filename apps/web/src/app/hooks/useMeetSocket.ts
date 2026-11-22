@@ -6739,11 +6739,29 @@ export function useMeetSocket({
         console.info(`[Meets] ${reason} recovery restarting ICE.`, {
           transports: disconnectedTransportKinds,
         });
+        const currentTransport = (kind: "producer" | "consumer") =>
+          kind === "producer"
+            ? producerTransportRef.current
+            : consumerTransportRef.current;
+        const restartedTransports = disconnectedTransportKinds.map(currentTransport);
         void Promise.all(
           disconnectedTransportKinds.map((kind) => attemptIceRestart(kind)),
         ).then((results) => {
           if (intentionalDisconnectRef.current) return;
-          if (results.every(Boolean)) {
+          // A transport replaced on purpose while its restart was checked
+          // says nothing about the path in use now.
+          const failedPathStillInUse = disconnectedTransportKinds.some(
+            (kind, index) => {
+              const transport = restartedTransports[index];
+              return (
+                !results[index] &&
+                Boolean(transport) &&
+                transport === currentTransport(kind) &&
+                !transport?.closed
+              );
+            },
+          );
+          if (!failedPathStillInUse) {
             void syncProducers()
               .then(() => flushPendingProducers())
               .catch((error) => {
@@ -6754,7 +6772,7 @@ export function useMeetSocket({
               });
             return;
           }
-          void handleReconnectRef.current?.();
+          void handleReconnectRef.current?.({ refreshIceServers: true });
         });
         return;
       }
