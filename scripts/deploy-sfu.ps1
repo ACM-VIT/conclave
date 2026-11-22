@@ -227,6 +227,9 @@ function Copy-FallbackJson {
   }
   $staging = Join-Path ([System.IO.Path]::GetTempPath()) ("conclave-fallback-" + [guid]::NewGuid())
   New-Item -ItemType Directory -Path $staging | Out-Null
+  if (-not $IsWindows) {
+    & chmod 0700 $staging
+  }
   try {
     $copied = @()
     foreach ($name in @("scheduling.json", "scheduled-meetings.json", "scheduled-webinars.json")) {
@@ -238,12 +241,15 @@ function Copy-FallbackJson {
       if ($LASTEXITCODE -ne 0) {
         throw "Could not copy $name out of the old $Service container."
       }
+      if (-not $IsWindows) {
+        & chmod 0600 (Join-Path $staging $name)
+      }
       $copied += $name
     }
     if ($copied.Count -gt 0) {
-      & docker @($composeBaseArgs + @(
-        "run", "--rm", "--no-deps", "--user", "node", "-v", "${staging}:/fallback-json:ro", "--entrypoint", "sh", $Service, "-c",
-        'dest=${CONCLAVE_FALLBACK_IMPORT_DIR:?}/$1 && mkdir -p $dest && cp /fallback-json/*.json $dest/', "sh", $Service
+      & tar -C $staging -cf - @copied | & docker @($composeBaseArgs + @(
+        "run", "-T", "--rm", "--no-deps", "--user", "node", "--entrypoint", "sh", $Service, "-c",
+        'umask 077 && dest=${CONCLAVE_FALLBACK_IMPORT_DIR:?}/$1 && mkdir -p $dest && chmod 0700 $CONCLAVE_FALLBACK_IMPORT_DIR $dest && tar -xf - -C $dest && chmod 0600 $dest/*.json', "sh", $Service
       ))
       if ($LASTEXITCODE -ne 0) {
         throw "Could not copy the old $Service container's JSON fallback files onto the volume."
@@ -253,6 +259,78 @@ function Copy-FallbackJson {
   } finally {
     Remove-Item -Recurse -Force -Path $staging -ErrorAction SilentlyContinue
   }
+}
+
+function Get-SfuDeployUrl {
+  param([string]$Service)
+
+  if ($Service -eq "sfu-a") {
+    return $sfuAUrl
+  }
+  return $sfuBUrl
+}
+
+function Wait-SfuHealthy {
+  param([string]$Service)
+
+  $url = Get-SfuDeployUrl -Service $Service
+  $timeout = if ([string]::IsNullOrWhiteSpace($env:SFU_HEALTH_TIMEOUT_SECONDS)) { 180 } else { [int]$env:SFU_HEALTH_TIMEOUT_SECONDS }
+  $deadline = (Get-Date).AddSeconds($timeout)
+  while ($true) {
+    try {
+      $response = Invoke-WebRequest -Uri "$url/health" -Method Get -TimeoutSec 5 -SkipHttpErrorCheck
+      if ($response.StatusCode -eq 200) {
+        return
+      }
+    } catch {
+    }
+    if ((Get-Date) -ge $deadline) {
+      Exit-WithError "$Service did not become healthy at $url; stopping before reloading the other SFU."
+    }
+    Start-Sleep -Seconds 2
+  }
+}
+
+# Each SFU loads its stores at startup. Reload the ones already running so they
+# also hold what the new SFU just recovered; the reload merges newest-wins.
+function Invoke-SfuStoreReload {
+  param([string]$Service, [bool]$Required)
+
+  $url = Get-SfuDeployUrl -Service $Service
+  try {
+    $response = Invoke-WebRequest -Uri "$url/admin/reload-stores" -Method Post -Headers @{ "x-sfu-secret" = $env:SFU_SECRET } -TimeoutSec 60 -SkipHttpErrorCheck
+  } catch {
+    $cause = $_.Exception
+    while ($cause -and -not ($cause -is [System.Net.Sockets.SocketException])) {
+      $cause = $cause.InnerException
+    }
+    if (-not $Required -and $cause -and $cause.SocketErrorCode -eq [System.Net.Sockets.SocketError]::ConnectionRefused) {
+      Write-Host "$Service is not running; it loads the stores when it starts."
+      return
+    }
+    Exit-WithError "Could not reload $Service's stores at $url ($($_.Exception.Message)); stopping."
+  }
+  if ($response.StatusCode -eq 200) {
+    Write-Host "Reloaded $Service's scheduling, meeting and webinar stores."
+    return
+  }
+  if (-not $Required -and $response.StatusCode -eq 404) {
+    Write-Host "$Service runs an image without store reload; it loads the stores when it is replaced."
+    return
+  }
+  Exit-WithError "Could not reload $Service's stores at $url (HTTP $($response.StatusCode)); stopping."
+}
+
+function Invoke-StoreReloadAfterStart {
+  param([string]$Service)
+
+  Wait-SfuHealthy -Service $Service
+  foreach ($other in @("sfu-a", "sfu-b")) {
+    if ($other -ne $Service) {
+      Invoke-SfuStoreReload -Service $other -Required $false
+    }
+  }
+  Invoke-SfuStoreReload -Service $Service -Required $true
 }
 
 function Start-SfuService {
@@ -271,6 +349,7 @@ function Start-SfuService {
     Exit-WithError "$($_.Exception.Message) Stopped before replacing $Service. Its old container is stopped, not removed; start it again with: docker $($composeBaseArgs -join ' ') start $Service"
   }
   Invoke-Checked -Command "docker" -Arguments ($composeBaseArgs + @("up", "-d", $Service))
+  Invoke-StoreReloadAfterStart -Service $Service
 }
 
 function Get-StatusJson {
