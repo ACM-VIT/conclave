@@ -97,6 +97,7 @@ export class AuthorityInstance {
   readonly store: AuthorityStore;
   private readonly views: ViewTracker;
   private readonly receipts: ReceiptBook;
+  private actionsThatWrote = 0;
   private readonly rates: RateBuckets;
 
   constructor(
@@ -240,6 +241,7 @@ export class AuthorityInstance {
 
     let result: AuthorityResult<Json>;
     if (outcome.ok) {
+      if (outcome.changed) this.actionsThatWrote += 1;
       result = { ok: true, value: outcome.value as Json };
     } else if (outcome.kind === "rejected") {
       result = failure("rejected", { reason: outcome.reason });
@@ -354,9 +356,17 @@ export class AuthorityInstance {
     return changed;
   }
 
-  /** The app's commit revision: what a view read now reflects. */
-  get revision(): number {
-    return this.store.revision;
+  /**
+   * How many accepted actions changed something. It is for comparing
+   * before and after one action, here on the server, and never leaves it.
+   */
+  get writes(): number {
+    return this.actionsThatWrote;
+  }
+
+  /** Whether removals from a large clear are still owed to the actor's view. */
+  owes(actor: Actor): boolean {
+    return this.views.owes(actor.role, actor.subject);
   }
 
   /** Rows the views have yet to take in, or viewers have yet to be told of. */

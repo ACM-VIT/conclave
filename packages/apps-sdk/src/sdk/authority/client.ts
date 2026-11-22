@@ -360,6 +360,13 @@ export class AuthoritySession<C extends AuthorityContract> {
   private incoming: { generation: number; frames: ReplaceFrame[] } | null = null;
   private rows: Rows = new Map();
   private revision = 0;
+  /**
+   * The server counts a view's versions per subscription, from one. What the
+   * subscriptions before this one reached is added on, so the version shown
+   * here only ever goes up, and an answer is read the same way.
+   */
+  private revisionBase = 0;
+  private revisionOf: string | null = null;
   private clockOffsetMs = 0;
 
   constructor(
@@ -443,6 +450,7 @@ export class AuthoritySession<C extends AuthorityContract> {
         action,
         input,
       };
+      const base = this.revisionBase;
       const reply = await this.client.request<AuthorityResult<Json>>(
         AUTHORITY_EVENTS.act,
         request,
@@ -462,7 +470,11 @@ export class AuthoritySession<C extends AuthorityContract> {
         if (!replaced) await pause(RETRY_PAUSE_MS);
         continue;
       }
-      return reply as AuthorityResult<ActionReceipt<C, K>>;
+      const answer =
+        reply.ok && reply.revision !== undefined
+          ? { ...reply, revision: base + reply.revision }
+          : reply;
+      return answer as AuthorityResult<ActionReceipt<C, K>>;
     }
   }
 
@@ -590,7 +602,7 @@ export class AuthoritySession<C extends AuthorityContract> {
     for (const ref of frame.remove) bucketOf(ref.bucket).delete(ref.key);
     for (const row of frame.put) bucketOf(row.bucket).set(row.key, row.value);
     this.rows = next;
-    if (frame.revision !== undefined) this.revision = frame.revision;
+    if (frame.revision !== undefined) this.revision = this.revisionBase + frame.revision;
     if (this.state.kind === "ready") {
       this.setState({
         ...this.state,
@@ -672,7 +684,11 @@ export class AuthoritySession<C extends AuthorityContract> {
     this.seq = 0;
     this.incoming = null;
     this.rows = rows;
-    this.revision = frames[0].revision ?? 0;
+    if (frames[0].subscription !== this.revisionOf) {
+      this.revisionBase = this.revision;
+      this.revisionOf = frames[0].subscription;
+    }
+    this.revision = this.revisionBase + (frames[0].revision ?? 0);
     this.failStreams();
     this.setState({
       kind: "ready",

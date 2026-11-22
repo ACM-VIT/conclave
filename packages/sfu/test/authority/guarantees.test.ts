@@ -2209,13 +2209,14 @@ describe("revisions", () => {
     expect([first.ok, takenBack.ok, retried.ok]).toEqual([true, true, true]);
     // The first answer is ahead of the view until the flush.
     expect(revisionOfAnswer(first)).toBeGreaterThan(viewBeforeTheFlush);
-    expect(revisionOfAnswer(retried)).toBeGreaterThanOrEqual(revisionOfAnswer(takenBack));
+    // Each subscription counts its own view's versions.
+    expect(revisionOfAnswer(retried)).toBe(revisionOf(tabA));
     // Nothing in tab A's view changed, and it was told how far it has come.
     expect(toldA.map((frame) => frame.kind)).toEqual(["patch"]);
     expect(patches(toldA).map((frame) => [frame.put, frame.remove])).toEqual([[[], []]]);
     expect(patches(toldA)[0].revision).toBeGreaterThanOrEqual(revisionOfAnswer(retried));
     expect(revisionOf(tabA)).toBeGreaterThanOrEqual(revisionOfAnswer(retried));
-    expect(revisionOf(tabB)).toBeGreaterThanOrEqual(revisionOfAnswer(retried));
+    expect(revisionOf(tabB)).toBe(revisionOfAnswer(takenBack));
     expect(tabA.row("myUpvotes", id)).toBeNull();
     // A viewer who did not act is sent no frame with nothing in it.
     expect(hostTab.frames.slice(fromHost)).toEqual([]);
@@ -2235,6 +2236,108 @@ describe("revisions", () => {
     expect(typeof replace.revision).toBe("number");
     expect(patch.revision).toBeGreaterThan(replace.revision ?? Infinity);
     expect(raviTab.state.kind === "ready" ? raviTab.state.revision : -1).toBe(patch.revision);
+  });
+
+  it("moves a viewer's view version only when their own view changes, so others' private votes cannot be counted from it", async () => {
+    const room = new Harness([pollsAuthority]);
+    const hostTab = await room.open(host, pollsContract);
+    const first = await createPoll(room, hostTab);
+    const second = await createPoll(room, hostTab);
+    const raviTab = await room.open(ravi, pollsContract);
+    const versionOf = (tab: Tab): number => (tab.state.kind === "ready" ? tab.state.revision : -1);
+    const named = (result: AuthorityResult<Json>): number =>
+      result.ok ? (result.revision ?? -1) : -1;
+
+    const ownVote = await raviTab.act("vote", { pollId: first, optionIds: ["o1"] });
+    await room.deliver();
+    const afterOwnVote = versionOf(raviTab);
+    const framesBefore = raviTab.frames.length;
+    // Three other people vote while the results are private.
+    for (const who of [
+      priya,
+      person("meera@example.com", "Meera"),
+      person("arjun@example.com", "Arjun"),
+    ]) {
+      const tab = await room.open(who, pollsContract);
+      const voted = await tab.act("vote", { pollId: first, optionIds: ["o2"] });
+      if (!voted.ok) throw new Error(`vote failed: ${voted.code}`);
+    }
+    await room.deliver();
+    const framesWhileOthersVoted = raviTab.frames.slice(framesBefore);
+    const versionWhileOthersVoted = versionOf(raviTab);
+    const secondVote = await raviTab.act("vote", { pollId: second, optionIds: ["o1"] });
+    await room.deliver();
+
+    // The answer named the version the view reached once it showed the vote.
+    expect(named(ownVote)).toBe(afterOwnVote);
+    expect(framesWhileOthersVoted).toEqual([]);
+    expect(versionWhileOthersVoted).toBe(afterOwnVote);
+    // One more: the vote itself. Nothing of the three votes shows in it.
+    expect(named(secondVote)).toBe(afterOwnVote + 1);
+    expect(versionOf(raviTab)).toBe(afterOwnVote + 1);
+  });
+
+  it("keeps a client's view version going up when it subscribes again, and reads answers the same way", async () => {
+    const room = new Harness([probeAuthority]);
+    const hostTab = await room.open(host, probeContract);
+    const raviTab = await room.open(ravi, probeContract);
+    const versionOf = (tab: Tab): number => (tab.state.kind === "ready" ? tab.state.revision : -1);
+    await hostTab.act("mark", { id: "a", from: 0, count: 1, shown: true });
+    await hostTab.act("mark", { id: "b", from: 0, count: 1, shown: true });
+    await room.deliver();
+    const before = versionOf(raviTab);
+    const first = raviTab.frames[raviTab.frames.length - 1].subscription;
+
+    // A frame out of sequence: the client drops its view and subscribes
+    // again, under a new subscription that counts its versions from one.
+    raviTab.seat.socket.emit(AUTHORITY_EVENTS.frame, {
+      kind: "patch",
+      subscription: first,
+      generation: 1,
+      serverNowMs: Date.now(),
+      seq: 99,
+      put: [],
+      remove: [],
+    } satisfies AuthorityFrame);
+    await room.drain();
+    const again = raviTab.frames[raviTab.frames.length - 1].subscription;
+    const afterSubscribingAgain = versionOf(raviTab);
+    const answered = await raviTab.act("mark", { id: "c", from: 0, count: 1, shown: true });
+    await room.deliver();
+
+    expect(again).not.toBe(first);
+    expect(before).toBeGreaterThan(1);
+    expect(afterSubscribingAgain).toBeGreaterThan(before);
+    expect(answered.ok ? answered.revision : -1).toBe(afterSubscribingAgain + 1);
+    expect(versionOf(raviTab)).toBe(afterSubscribingAgain + 1);
+  });
+
+  it("advances a view version only with the flush that completes a large clear", async () => {
+    const room = new Harness([probeAuthority], {
+      runtime: { limits: { ...DEFAULT_AUTHORITY_LIMITS, clearedRowsPerFlush: 2 } },
+    });
+    const hostTab = await room.open(host, probeContract);
+    await hostTab.act("mark", { id: "a", from: 0, count: 6, shown: true });
+    await room.deliver();
+    const raviTab = await room.open(ravi, probeContract);
+    const versionOf = (tab: Tab): number => (tab.state.kind === "ready" ? tab.state.revision : -1);
+    const raviFrom = raviTab.frames.length;
+    const hostFrom = hostTab.frames.length;
+    const raviBefore = versionOf(raviTab);
+    const hostBefore = versionOf(hostTab);
+
+    const cleared = await hostTab.act("unmark", { id: "a", how: "clear" });
+    for (let flush = 0; flush < 4; flush += 1) await room.deliver();
+
+    const toRavi = patches(raviTab.frames.slice(raviFrom));
+    const toHost = patches(hostTab.frames.slice(hostFrom));
+    expect(toRavi.map((frame) => frame.remove.length)).toEqual([2, 2, 2]);
+    // The removals still owed keep the version where it was.
+    expect(toRavi.map((frame) => frame.revision)).toEqual([raviBefore, raviBefore, raviBefore + 1]);
+    expect(toHost.map((frame) => frame.revision)).toEqual([hostBefore, hostBefore, hostBefore + 1]);
+    // The host's answer is reached only once the clear has fully arrived.
+    expect(cleared.ok ? cleared.revision : -1).toBe(hostBefore + 1);
+    expect(raviTab.rows("marks")).toEqual([]);
   });
 });
 
