@@ -9,7 +9,7 @@ import { LocalRoomRegistry } from "../../server/roomRegistry.js";
 import { createConnectionContext } from "../../server/socket/context.js";
 import { registerAppsHandlers } from "../../server/socket/handlers/appsHandlers.js";
 import { createSfuState } from "../../server/state.js";
-import type { AppsSyncError, AppsSyncResponse } from "../../types.js";
+import type { AppsRefusedData, AppsSyncError, AppsSyncResponse } from "../../types.js";
 
 type Listener = (...args: unknown[]) => unknown;
 
@@ -24,6 +24,7 @@ export const inAppRoom = (pool: AppDocumentPool, id: string) => {
   vi.spyOn(console, "error").mockImplementation(() => {});
   const listeners = new Map<string, Listener>();
   const relayed: Uint8Array[] = [];
+  const refused: AppsRefusedData[] = [];
   const socket = {
     id: `s-${id}`,
     data: { user: {} },
@@ -36,7 +37,9 @@ export const inAppRoom = (pool: AppDocumentPool, id: string) => {
         if (event === "apps:yjs:update") relayed.push(payload.update);
       },
     }),
-    emit: vi.fn(),
+    emit: (event: string, payload: AppsRefusedData) => {
+      if (event === "apps:yjs:refused") refused.push(payload);
+    },
   } as unknown as Socket;
   const state = createSfuState({
     roomRegistry: new LocalRoomRegistry({ instanceId: id, instanceUrl: "http://localhost", ttlMs: 45000 }),
@@ -53,10 +56,11 @@ export const inAppRoom = (pool: AppDocumentPool, id: string) => {
   registerAppsHandlers(context);
   const call = <T>(event: string, ...args: unknown[]) =>
     new Promise<T>((resolve) => listeners.get(event)!(...args, resolve));
-  const requestSync = (holder: Y.Doc) =>
+  const requestSync = (holder: Y.Doc, canRetry = true) =>
     call<AppsSyncResponse | AppsSyncError>("apps:yjs:sync", {
       appId: "board",
       syncMessage: Y.encodeStateVector(holder),
+      canRetry,
     });
   const syncFrom = async (holder: Y.Doc) => {
     const response = await requestSync(holder);
@@ -71,9 +75,11 @@ export const inAppRoom = (pool: AppDocumentPool, id: string) => {
   };
   return {
     relayed,
+    refused,
     open: () => call("apps:open", { appId: "board" }),
     close: () => call("apps:close"),
-    send: (update: Uint8Array) => listeners.get("apps:yjs:update")!({ appId: "board", update }),
+    send: (update: Uint8Array, docGuid?: string) =>
+      listeners.get("apps:yjs:update")!({ appId: "board", update, docGuid }),
     requestSync,
     syncFrom,
     joinDocument,

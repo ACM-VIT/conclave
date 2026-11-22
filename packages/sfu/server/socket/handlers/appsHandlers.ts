@@ -8,6 +8,7 @@ import type {
   AppsState,
   AppsSyncData,
   AppsSyncError,
+  AppsRefusedData,
   AppsSyncResponse,
   AppsUpdateData,
 } from "../../../types.js";
@@ -21,6 +22,10 @@ import { respond } from "./ack.js";
 const MAX_APPS_SYNC_BYTES = 64 * 1024;
 const MAX_APPS_UPDATE_BYTES = 256 * 1024;
 const MAX_APPS_AWARENESS_BYTES = 64 * 1024;
+const MAX_DOC_GUID_LENGTH = 64;
+const REMEMBERED_REFUSED_DOCS = 16;
+const LEGACY_SYNC_HOLD_MS = 30_000;
+const MAX_HELD_SYNCS = 4;
 
 const retryLater = (error: string, retryAfterMs: number): AppsSyncError => ({
   error,
@@ -34,6 +39,7 @@ const SYNC_REFUSALS: Record<Refusal, AppsSyncError> = {
   "timed-out": retryLater("App document sync timed out", 250),
   crashed: retryLater("App document sync failed", 250),
   "queue-full": retryLater("App document is busy", 250),
+  "missing-dependency": { error: "Invalid sync payload" },
   closed: { error: "App not active" },
   unavailable: { error: "App document unavailable" },
 };
@@ -44,8 +50,12 @@ const UPDATE_REFUSALS: Partial<Record<Refusal, string>> = {
   "timed-out": "update took longer than the deadline",
   crashed: "the document worker failed on it",
   "queue-full": "too many updates are waiting",
+  "missing-dependency": "it builds on a change the document does not have",
   unavailable: "the document could not be rebuilt",
 };
+
+const normalizeDocGuid = (value: unknown): string | undefined =>
+  typeof value === "string" && value.length > 0 && value.length <= MAX_DOC_GUID_LENGTH ? value : undefined;
 
 const MAX_APP_ID_LENGTH = 128;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
@@ -226,78 +236,101 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     }
   );
 
+  const heldSyncs = new Set<NodeJS.Timeout>();
+  socket.on("disconnect", () => {
+    for (const timer of heldSyncs) clearTimeout(timer);
+    heldSyncs.clear();
+  });
+
+  const syncOnce = async (data: AppsSyncData, rateLimited: boolean): Promise<AppsSyncResponse | AppsSyncError> => {
+    const room = context.currentRoom;
+    if (!room) return retryLater("Not in a room", 500);
+    if (rateLimited && !takeToken(socket, "apps:yjs:sync", RATE_LIMITS.appsYjsSync)) {
+      return retryLater("Too many app sync requests", 500);
+    }
+    const appId = normalizeAppId(data?.appId);
+    if (!appId) return { error: "Invalid app id" };
+    if (room.appsState.activeAppId !== appId) return { error: "App not active" };
+    const stateVector = toUint8Array(data.syncMessage);
+    if (!stateVector) return { error: "Invalid sync payload" };
+    if (stateVector.length > MAX_APPS_SYNC_BYTES) return { error: "Sync payload too large" };
+
+    const result = await room.getOrCreateAppDoc(appId, documents).sync(stateVector);
+    if (!result.ok) return SYNC_REFUSALS[result.reason];
+    const awarenessSnapshot = room.encodeAppAwarenessSnapshot(appId) ?? undefined;
+    return {
+      syncMessage: result.update,
+      stateVector: result.stateVector,
+      awarenessUpdate:
+        awarenessSnapshot && awarenessSnapshot.length <= MAX_APPS_AWARENESS_BYTES ? awarenessSnapshot : undefined,
+    };
+  };
+
   socket.on(
     "apps:yjs:sync",
     (data: AppsSyncData, callback: (response: AppsSyncResponse | AppsSyncError) => void) => {
-      if (!context.currentRoom) {
-        respond(callback, retryLater("Not in a room", 500));
-        return;
-      }
-      if (!takeToken(socket, "apps:yjs:sync", RATE_LIMITS.appsYjsSync)) {
-        respond(callback, retryLater("Too many app sync requests", 500));
-        return;
-      }
-
-      const appId = normalizeAppId(data?.appId);
-      if (!appId) {
-        respond(callback, { error: "Invalid app id" });
-        return;
-      }
-
-      if (context.currentRoom.appsState.activeAppId !== appId) {
-        respond(callback, { error: "App not active" });
-        return;
-      }
-
-      const stateVector = toUint8Array(data.syncMessage);
-      if (!stateVector) {
-        respond(callback, { error: "Invalid sync payload" });
-        return;
-      }
-      if (stateVector.length > MAX_APPS_SYNC_BYTES) {
-        respond(callback, { error: "Sync payload too large" });
-        return;
-      }
-
-      const room = context.currentRoom;
-      void room.getOrCreateAppDoc(appId, documents).sync(stateVector).then((result) => {
-        if (!result.ok) {
-          respond(callback, SYNC_REFUSALS[result.reason]);
-          return;
-        }
-        const awarenessSnapshot = room.encodeAppAwarenessSnapshot(appId) ?? undefined;
-        const awarenessUpdate =
-          awarenessSnapshot && awarenessSnapshot.length <= MAX_APPS_AWARENESS_BYTES
-            ? awarenessSnapshot
-            : undefined;
-        respond(callback, {
-          syncMessage: result.update,
-          stateVector: result.stateVector,
-          awarenessUpdate,
+      const canRetry = data?.canRetry === true;
+      const startedAt = Date.now();
+      const attempt = (rateLimited: boolean) => {
+        void syncOnce(data, rateLimited).then((outcome) => {
+          if (!("error" in outcome) || !outcome.retryable || canRetry) {
+            respond(callback, outcome);
+            return;
+          }
+          const delay = outcome.retryAfterMs ?? 250;
+          if (Date.now() - startedAt + delay > LEGACY_SYNC_HOLD_MS || heldSyncs.size >= MAX_HELD_SYNCS) {
+            respond(callback, { error: outcome.error });
+            return;
+          }
+          const timer = setTimeout(() => {
+            heldSyncs.delete(timer);
+            attempt(false);
+          }, delay);
+          heldSyncs.add(timer);
         });
-      });
+      };
+      attempt(true);
     }
   );
+
+  const refusedDocs: string[] = [];
+  const signalRefused = (appId: string, docGuid: string | undefined, reason: string): void => {
+    if (!docGuid || refusedDocs.includes(docGuid)) return;
+    refusedDocs.push(docGuid);
+    if (refusedDocs.length > REMEMBERED_REFUSED_DOCS) refusedDocs.shift();
+    socket.emit("apps:yjs:refused", { appId, docGuid, reason } satisfies AppsRefusedData);
+  };
 
   socket.on("apps:yjs:update", (data: AppsUpdateData) => {
     if (!context.currentRoom || !context.currentClient) return;
     if (context.currentClient.isObserver) return;
-    if (!takeToken(socket, "apps:yjs:update", RATE_LIMITS.appsYjsUpdate)) return;
 
     const appId = normalizeAppId(data?.appId);
     if (!appId) return;
     if (context.currentRoom.appsState.activeAppId !== appId) return;
+    const docGuid = normalizeDocGuid(data?.docGuid);
 
+    if (!takeToken(socket, "apps:yjs:update", RATE_LIMITS.appsYjsUpdate)) {
+      signalRefused(appId, docGuid, "rate-limited");
+      return;
+    }
     if (
       context.currentRoom.appsState.locked &&
       (!(context.currentClient instanceof Admin) || context.currentClient.isObserver)
     ) {
+      signalRefused(appId, docGuid, "locked");
       return;
     }
 
     const update = toUint8Array(data.update);
-    if (!update || update.length === 0) return;
-    if (update.length > MAX_APPS_UPDATE_BYTES) return;
+    if (!update || update.length === 0) {
+      signalRefused(appId, docGuid, "invalid");
+      return;
+    }
+    if (update.length > MAX_APPS_UPDATE_BYTES) {
+      signalRefused(appId, docGuid, "too-large");
+      return;
+    }
 
     const { channelId } = context.currentRoom;
     void context.currentRoom
@@ -307,6 +340,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
         if (!result.ok) {
           const why = UPDATE_REFUSALS[result.reason];
           if (why) Logger.warn(`[Apps] Dropping update for ${appId}: ${why}`);
+          if (result.reason !== "closed") signalRefused(appId, docGuid, result.reason);
           return;
         }
         socket.to(channelId).emit("apps:yjs:update", {

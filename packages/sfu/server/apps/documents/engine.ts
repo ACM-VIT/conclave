@@ -14,7 +14,7 @@ export type ToWorker =
 type Answer =
   | { type: "applied"; compacted: Uint8Array | null }
   | { type: "synced"; update: Uint8Array; stateVector: Uint8Array }
-  | { type: "refused"; reason: "too-large" | "invalid"; evicted: boolean };
+  | { type: "refused"; reason: "too-large" | "invalid" | "missing-dependency"; evicted: boolean };
 
 export type FromWorker =
   | { type: "ready" }
@@ -22,7 +22,7 @@ export type FromWorker =
   | { type: "loaded"; elapsedMs: number }
   | (Answer & { elapsedMs: number });
 
-export type EngineOptions = { maxDocumentBytes: number };
+export type EngineOptions = { maxDocumentBytes: number; maxUpdateBytes: number };
 
 type Post = (reply: FromWorker, transfer: ArrayBuffer[]) => void;
 
@@ -44,7 +44,7 @@ const transferable = (bytes: Uint8Array): ArrayBuffer => bytes.buffer as ArrayBu
 const hasPending = (doc: Y.Doc): boolean =>
   doc.store.pendingStructs !== null || doc.store.pendingDs !== null;
 
-export const createAppDocumentEngine = ({ maxDocumentBytes }: EngineOptions) => {
+export const createAppDocumentEngine = ({ maxDocumentBytes, maxUpdateBytes }: EngineOptions) => {
   const documents = new Map<number, Loaded>();
 
   const evict = (id: number): void => {
@@ -74,7 +74,9 @@ export const createAppDocumentEngine = ({ maxDocumentBytes }: EngineOptions) => 
   };
 
   const apply = (id: number, loaded: Loaded, update: Uint8Array): [Answer, ArrayBuffer[]] => {
-    const unlocksPending = hasPending(loaded.doc);
+    if (update.length > maxUpdateBytes) {
+      return [{ type: "refused", reason: "too-large", evicted: false }, []];
+    }
     const started = performance.now();
     try {
       Y.applyUpdate(loaded.doc, update);
@@ -82,11 +84,14 @@ export const createAppDocumentEngine = ({ maxDocumentBytes }: EngineOptions) => 
       evict(id);
       return [{ type: "refused", reason: "invalid", evicted: true }, []];
     }
+    if (hasPending(loaded.doc)) {
+      evict(id);
+      return [{ type: "refused", reason: "missing-dependency", evicted: true }, []];
+    }
     loaded.uncompactedMs += performance.now() - started;
     loaded.uncompactedBytes += update.length;
     const growth = update.length * GROWTH_MARGIN;
     if (
-      !unlocksPending &&
       loaded.measuredBytes + loaded.estimatedGrowth + growth <= maxDocumentBytes &&
       loaded.uncompactedBytes < COMPACT_AFTER_BYTES &&
       loaded.uncompactedMs < COMPACT_AFTER_MS

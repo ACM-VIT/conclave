@@ -1,5 +1,10 @@
 import { resolveWebRtcPortBudget } from "../config/workerSettings.mjs";
-import { instanceCpuCount } from "./workerCpuQuota.js";
+import { getMemoryLimitBytes, instanceCpuCount } from "./workerCpuQuota.js";
+
+const MIB = 1024 * 1024;
+const APP_DOCUMENT_MEMORY_SHARE = 0.25;
+const MIN_APP_DOCUMENT_HEAP_MB = 128;
+const MAX_APP_DOCUMENT_HEAP_MB = 1024;
 
 export type WorkerPlanSettings = {
   workerCount: number | undefined;
@@ -15,6 +20,7 @@ export type WorkerPlan = {
   mediasoupWorkers: number;
   cpuMediasoupWorkers: number;
   appDocumentWorkers: number;
+  appDocumentHeapMb: number;
   webRtcPortBudget: number;
   rtcMinPort: number;
   rtcMaxPort: number;
@@ -26,6 +32,7 @@ export type WorkerPlan = {
 export const planWorkers = (
   settings: WorkerPlanSettings,
   cpus: number = instanceCpuCount(settings.hostInstanceCount),
+  memoryBytes: number = getMemoryLimitBytes(),
 ): WorkerPlan => {
   const webRtcPortBudget = resolveWebRtcPortBudget(settings);
   const share = Math.max(cpus, 2);
@@ -44,6 +51,13 @@ export const planWorkers = (
     mediasoupWorkers,
     cpuMediasoupWorkers,
     appDocumentWorkers,
+    appDocumentHeapMb: Math.min(
+      MAX_APP_DOCUMENT_HEAP_MB,
+      Math.max(
+        MIN_APP_DOCUMENT_HEAP_MB,
+        Math.floor((memoryBytes * APP_DOCUMENT_MEMORY_SHARE) / settings.hostInstanceCount / appDocumentWorkers / MIB),
+      ),
+    ),
     webRtcPortBudget,
     rtcMinPort: settings.rtcMinPort,
     rtcMaxPort: settings.rtcMaxPort,

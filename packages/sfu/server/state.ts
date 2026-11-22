@@ -89,6 +89,7 @@ export const createSfuState = (options?: {
       options?.appDocuments ??
       createAppDocumentPool({
         workers: workerPlan.appDocumentWorkers,
+        heapMb: workerPlan.appDocumentHeapMb,
         deadlineMs: config.appDocuments.deadlineMs,
         maxDocumentBytes: MAX_APP_DOCUMENT_BYTES,
       }),

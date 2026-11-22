@@ -1157,6 +1157,7 @@ export interface AppsLockResponse {
 export interface AppsSyncData {
   appId: string;
   syncMessage: Uint8Array;
+  canRetry?: boolean;
 }
 
 export interface AppsSyncResponse {
@@ -1174,6 +1175,13 @@ export interface AppsSyncError {
 export interface AppsUpdateData {
   appId: string;
   update: Uint8Array;
+  docGuid?: string;
+}
+
+export interface AppsRefusedData {
+  appId: string;
+  docGuid: string;
+  reason: string;
 }
 
 export interface AppsAwarenessData {

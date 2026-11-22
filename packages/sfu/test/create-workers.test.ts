@@ -15,7 +15,8 @@ vi.mock("mediasoup", () => ({ createWorker: vi.fn() }));
 vi.mock("node:fs", () => ({ readFileSync: vi.fn() }));
 vi.mock("node:os", () => {
   const availableParallelism = vi.fn(() => 8);
-  return { availableParallelism, default: { availableParallelism } };
+  const totalmem = vi.fn(() => 8 * 1024 ** 3);
+  return { availableParallelism, totalmem, default: { availableParallelism, totalmem } };
 });
 vi.mock("../config/config.js", () => ({
   config: {

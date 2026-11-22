@@ -1,7 +1,4 @@
-import { existsSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { parentPort, workerData } from "node:worker_threads";
+import { BroadcastChannel, parentPort, workerData } from "node:worker_threads";
 import {
   createAppDocumentEngine,
   type EngineOptions,
@@ -10,11 +7,41 @@ import {
   type ToWorker,
 } from "#app-documents/engine";
 
-const crashedOnceFlag = join(tmpdir(), `conclave-app-document-crash-${process.pid}`);
+type FixtureData = EngineOptions & { gate?: Int32Array; channel?: string };
+
+const RELEASED = 0;
+const TICKETS = 1;
+const LOAD_CRASHES = 2;
 
 const port = parentPort!;
-const engine = createAppDocumentEngine(workerData as EngineOptions);
+const { gate, channel: channelName, ...options } = workerData as FixtureData;
+const engine = createAppDocumentEngine(options);
 const forever = new Int32Array(new SharedArrayBuffer(4));
+const channel = channelName ? new BroadcastChannel(channelName) : null;
+channel?.unref();
+
+const tell = (event: string, detail: Record<string, unknown> = {}): void => {
+  channel?.postMessage({ event, ...detail });
+};
+
+const holdUntilReleased = (marker: string): void => {
+  if (!gate) throw new Error(`${marker} needs a gate`);
+  const ticket = Atomics.add(gate, TICKETS, 1);
+  tell("held", { ticket });
+  for (let released = Atomics.load(gate, RELEASED); released <= ticket; released = Atomics.load(gate, RELEASED)) {
+    Atomics.wait(gate, RELEASED, released);
+  }
+};
+
+const stallForever = (event: string): void => {
+  tell(event);
+  Atomics.wait(forever, 0, 0);
+};
+
+const exhaustHeap = (): void => {
+  const hoard: number[][] = [];
+  for (;;) hoard.push(new Array<number>(1_000_000).fill(hoard.length));
+};
 
 const holds = (bytes: Uint8Array | null, marker: string): boolean =>
   bytes !== null && Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).includes(marker);
@@ -31,24 +58,25 @@ port.on("message", (message: ToWorker) => {
     engine.handle(message, post);
     return;
   }
-  if (loads(message.load, "SLOW-LOAD")) Atomics.wait(forever, 0, 0);
-  if (loads(message.load, "CRASH-LOAD") && !existsSync(crashedOnceFlag)) {
-    writeFileSync(crashedOnceFlag, "");
-    process.exit(1);
+  if (message.load) {
+    if (loads(message.load, "SLOW-LOAD")) stallForever("stalled-load");
+    if (loads(message.load, "CRASH-LOAD") && gate && Atomics.add(gate, LOAD_CRASHES, 1) === 0) process.exit(1);
+    tell("loaded", { document: message.document });
+    engine.handle({ ...message, operations: [] }, post);
   }
-  let load = message.load;
   for (const [index, operation] of message.operations.entries()) {
     const update = operation.kind === "apply" ? operation.update : null;
-    if (holds(update, "STALL")) Atomics.wait(forever, 0, 0);
+    if (holds(update, "STALL")) stallForever("stalled");
+    if (holds(update, "HOLD")) holdUntilReleased("HOLD");
+    if (holds(update, "OOM")) exhaustHeap();
     if (holds(update, "CRASH") && !holds(update, "CRASH-LOAD")) process.exit(1);
-    if (holds(update, "PAUSE")) Atomics.wait(forever, 0, 0, 300);
     let stopped = false;
-    engine.handle({ ...message, load, operations: [operation] }, (reply, transfer) => {
+    engine.handle({ ...message, load: null, operations: [operation] }, (reply, transfer) => {
       if ((reply.type === "refused" && reply.evicted) || reply.type === "yielded") stopped = true;
       const late = holds(update, "LATE") && reply.type !== "loaded" && "elapsedMs" in reply;
       post(late ? { ...reply, elapsedMs: Number.MAX_SAFE_INTEGER } : reply, transfer);
     });
-    load = null;
+    tell("done", { document: message.document });
     if (stopped) return;
     if (holds(update, "YIELD") && index < message.operations.length - 1) {
       post({ type: "yielded" }, []);

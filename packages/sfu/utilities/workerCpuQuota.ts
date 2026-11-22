@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { availableParallelism } from "node:os";
+import { availableParallelism, totalmem } from "node:os";
 import { posix } from "node:path";
 
 const read = (file: string): string => {
@@ -30,17 +30,37 @@ const cgroupDirectories = (root: string, group: string): string[] => {
   return directories;
 };
 
-export const getWorkerCpuQuota = (): number => {
-  const groups = read("/proc/self/cgroup").split("\n");
+const cgroupsOf = (legacyController: string): { unifiedGroup: string; legacyGroup: string } => {
   let unifiedGroup = "/";
-  let legacyCpuGroup = "/";
-  for (const line of groups) {
+  let legacyGroup = "/";
+  for (const line of read("/proc/self/cgroup").split("\n")) {
     const match = line.match(/^\d+:([^:]*):(\/.*)$/);
     if (!match) continue;
     const [, controllers, group] = match;
     if (controllers === "") unifiedGroup = group;
-    if (controllers.split(",").includes("cpu")) legacyCpuGroup = group;
+    if (controllers.split(",").includes(legacyController)) legacyGroup = group;
   }
+  return { unifiedGroup, legacyGroup };
+};
+
+const byteLimit = (value: string): number => {
+  const bytes = Number(value.trim());
+  return Number.isFinite(bytes) && bytes > 0 ? bytes : Infinity;
+};
+
+export const getMemoryLimitBytes = (): number => {
+  const { unifiedGroup, legacyGroup } = cgroupsOf("memory");
+  const unified = cgroupDirectories("/sys/fs/cgroup", unifiedGroup).map((directory) =>
+    byteLimit(read(`${directory}/memory.max`)),
+  );
+  const legacy = cgroupDirectories("/sys/fs/cgroup/memory", legacyGroup).map((directory) =>
+    byteLimit(read(`${directory}/memory.limit_in_bytes`)),
+  );
+  return Math.min(totalmem(), ...unified, ...legacy);
+};
+
+export const getWorkerCpuQuota = (): number => {
+  const { unifiedGroup, legacyGroup: legacyCpuGroup } = cgroupsOf("cpu");
 
   // A cgroup can be throttled by its parent even when its own quota is unlimited.
   const unified = cgroupDirectories("/sys/fs/cgroup", unifiedGroup).map((directory) => {

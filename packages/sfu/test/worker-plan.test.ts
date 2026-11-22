@@ -66,6 +66,17 @@ describe("worker plan", () => {
     expect(planWorkers(settings({ workerCount: 1 }), 2)).toMatchObject({ mediasoupWorkers: 1, oversubscribed: false });
   });
 
+  it.each([
+    { memoryMiB: 1024, instances: 1, app: 1, heapMb: 256 },
+    { memoryMiB: 1024, instances: 1, app: 2, heapMb: 128 },
+    { memoryMiB: 8192, instances: 3, app: 1, heapMb: 682 },
+    { memoryMiB: 256, instances: 1, app: 1, heapMb: 128 },
+    { memoryMiB: 65536, instances: 1, app: 1, heapMb: 1024 },
+  ])("gives each app document worker a quarter of $memoryMiB MiB split across $instances instance(s) and $app worker(s), within 128 MiB to 1 GiB", ({ memoryMiB, instances, app, heapMb }) => {
+    const plan = planWorkers(settings({ hostInstanceCount: instances, appDocumentWorkerCount: app }), 8, memoryMiB * 1024 * 1024);
+    expect(plan.appDocumentHeapMb).toBe(heapMb);
+  });
+
   it("caps the derived mediasoup count at the WebRTC port budget", () => {
     expect(planWorkers(settings({ webRtcPortBudget: 2 }), 8)).toMatchObject({
       mediasoupWorkers: 2,
