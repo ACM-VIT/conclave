@@ -252,6 +252,8 @@ export interface ProducerInfo {
   type: "webcam" | "screen";
   paused?: boolean;
   roomId?: string;
+  /** Creation order: a later producer has a higher value. */
+  producerSeq?: number;
 }
 
 export interface DisplayNameSnapshotEntry {

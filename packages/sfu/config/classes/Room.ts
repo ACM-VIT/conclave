@@ -7,6 +7,7 @@ import type {
   Producer,
   Router,
   RtpCapabilities,
+  WebRtcServer,
   WebRtcTransport,
 } from "mediasoup/types";
 import type { Socket } from "socket.io";
@@ -55,6 +56,7 @@ import {
 export interface RoomOptions {
   id: string;
   router: Router;
+  webRtcServer?: WebRtcServer;
   clientId: string;
   workerPid: number | null;
   webcamVp9Enabled?: boolean;
@@ -70,6 +72,17 @@ type ProducerIndexEntry = {
   userId: string;
   type: ProducerType;
   system: boolean;
+  seq: number;
+};
+
+let lastProducerSeq = 0;
+
+// Clients order producer announcements by this. It only ever increases, and
+// it follows the clock so a producer created after a restart still sorts
+// after one created before it.
+const nextProducerSeq = (): number => {
+  lastProducerSeq = Math.max(lastProducerSeq + 1, Date.now());
+  return lastProducerSeq;
 };
 
 export type TranscriptAudioProducerEntry = {
@@ -196,6 +209,7 @@ export type WaitingRequest = {
 export class Room {
   public readonly id: string;
   public readonly router: Router;
+  private readonly webRtcServer: RoomOptions["webRtcServer"];
   public readonly clientId: string;
   public readonly workerPid: number | null;
   public readonly channelId: string;
@@ -320,6 +334,7 @@ export class Room {
   constructor(options: RoomOptions) {
     this.id = options.id;
     this.router = options.router;
+    this.webRtcServer = options.webRtcServer;
     this.clientId = options.clientId;
     this.workerPid = options.workerPid;
     this.webcamVp9Enabled = options.webcamVp9Enabled ?? config.webcamVp9Enabled;
@@ -1513,8 +1528,9 @@ export class Room {
   async createWebRtcTransport(
     role: WebRtcTransportRole,
   ): Promise<WebRtcTransport> {
+    if (!this.webRtcServer) throw new Error("Room has no WebRTC server");
     const transport = await this.router.createWebRtcTransport({
-      listenIps: config.webRtcTransport.listenIps,
+      webRtcServer: this.webRtcServer,
       enableUdp: config.webRtcTransport.enableUdp,
       enableTcp: config.webRtcTransport.enableTcp,
       preferUdp: config.webRtcTransport.preferUdp,
@@ -1548,10 +1564,16 @@ export class Room {
       userId,
     };
 
+    const recipients: string[] = [];
+    let namespace: Socket["nsp"] | undefined;
     for (const client of this.clients.values()) {
       if (client.isWebinarAttendee) continue;
-      client.socket.emit("activeSpeakerChanged", notification);
+      recipients.push(client.socket.id);
+      namespace ??= client.socket.nsp;
     }
+    // Encode once for the local meeting sockets. Webinar attendees have a
+    // separate active-speaker signal and must stay out of this audience.
+    namespace?.local.to(recipients).emit("activeSpeakerChanged", notification);
   }
 
   private setMeetingActiveSpeakerUserId(
@@ -1848,6 +1870,7 @@ export class Room {
       kind: entry.producer.kind,
       type: entry.type,
       paused: entry.producer.paused,
+      producerSeq: entry.seq,
     };
   }
 
@@ -1866,10 +1889,13 @@ export class Room {
   }
 
   private indexProducer(
-    entry: ProducerIndexEntry,
+    entry: Omit<ProducerIndexEntry, "seq">,
     options?: { skipWebcamReceiverCapacityRefresh?: boolean },
   ): void {
-    this.producerIndex.set(entry.producer.id, entry);
+    this.producerIndex.set(entry.producer.id, {
+      ...entry,
+      seq: nextProducerSeq(),
+    });
 
     const cleanup = () => {
       this.removeProducerIndexById(entry.producer.id, entry.producer);
@@ -2382,6 +2408,7 @@ export class Room {
       kind: info.kind,
       type: info.type,
       paused: info.paused,
+      producerSeq: this.producerIndex.get(info.producerId)?.seq,
     }));
 
     producers.sort((a, b) => {

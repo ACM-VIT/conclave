@@ -685,6 +685,14 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           return;
         }
 
+        const mayChangeRoster = isAdminJoin ||
+          existingClient instanceof Admin ||
+          staleSameIdentitySeats.some(({ userId: staleUserId }) =>
+            room.getClient(staleUserId) instanceof Admin,
+          );
+        const previousHostUserId = mayChangeRoster ? room.getHostUserId() : null;
+        const previousAdminUserIds = mayChangeRoster ? room.getAdminUserIds() : [];
+
         if (isAdminJoin) {
           room.registerAdminUserKey(userKey);
         }
@@ -897,7 +905,11 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         ) {
           const previousRoom = context.currentRoom;
           const previousChannelId = previousRoom.channelId;
-          const previousClientId = context.currentClient.id;
+          const previousClient = context.currentClient;
+          const previousClientId = previousClient.id;
+          const wasAdmin = previousClient instanceof Admin;
+          const previousHost = wasAdmin ? previousRoom.getHostUserId() : null;
+          const previousPeers = socket.to(previousChannelId);
           Logger.info(
             `User ${userId} switching from ${previousRoom.id} to ${roomId}`,
           );
@@ -905,7 +917,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           const awarenessRemovals =
             previousRoom.clearUserAwareness(previousClientId);
           for (const removal of awarenessRemovals) {
-            socket.to(previousChannelId).emit("apps:awareness", {
+            previousPeers.emit("apps:awareness", {
               appId: removal.appId,
               awarenessUpdate: removal.awarenessUpdate,
             } satisfies AppsAwarenessData);
@@ -913,13 +925,21 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
 
           previousRoom.removeClient(previousClientId);
 
-          if (!context.currentClient.isWebinarAttendee) {
-            socket
-              .to(previousChannelId)
-              .emit("userLeft", {
-                userId: previousClientId,
-                roomId: previousRoom.id,
-              });
+          if (!previousClient.isWebinarAttendee) {
+            previousPeers.emit("userLeft", {
+              userId: previousClientId,
+              roomId: previousRoom.id,
+            });
+          }
+          if (wasAdmin && previousRoom.clients.size > 0) {
+            const hostUserId = previousRoom.getHostUserId();
+            if (hostUserId !== previousHost) {
+              previousPeers.emit("hostChanged", { roomId: previousRoom.id, hostUserId });
+            }
+            previousPeers.emit("adminUsersChanged", {
+              roomId: previousRoom.id,
+              hostUserIds: previousRoom.getAdminUserIds(),
+            });
           }
 
           emitWebinarAttendeeCountChanged(io, state, previousRoom);
@@ -974,13 +994,21 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         }
         await socket.join(roomChannelId);
 
-        io.to(roomChannelId).emit("hostChanged", {
-          roomId: context.currentRoom.id,
-          hostUserId: context.currentRoom.getHostUserId(),
+        const hostUserId = room.getHostUserId();
+        const hostUserIds = room.getAdminUserIds();
+        const hasPeers = room.clients.size > 1;
+        const hostChanged = mayChangeRoster && hostUserId !== previousHostUserId;
+        const adminsChanged = mayChangeRoster && (
+          hostUserIds.length !== previousAdminUserIds.length ||
+          previousAdminUserIds.some((id) => !hostUserIds.includes(id))
+        );
+        (hasPeers && hostChanged ? io.to(roomChannelId) : socket).emit("hostChanged", {
+          roomId,
+          hostUserId,
         });
-        io.to(roomChannelId).emit("adminUsersChanged", {
-          roomId: context.currentRoom.id,
-          hostUserIds: context.currentRoom.getAdminUserIds(),
+        (hasPeers && adminsChanged ? io.to(roomChannelId) : socket).emit("adminUsersChanged", {
+          roomId,
+          hostUserIds,
         });
 
         if (context.currentClient instanceof Admin && !context.currentClient.isObserver) {
@@ -1199,8 +1227,8 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             : {}),
           displayNameSnapshot,
           status: "joined",
-          hostUserId: context.currentRoom.getHostUserId(),
-          hostUserIds: context.currentRoom.getAdminUserIds(),
+          hostUserId,
+          hostUserIds,
           isLocked: context.currentRoom.isLocked,
           isTtsDisabled: context.currentRoom.isTtsDisabled,
           isChatLocked: context.currentRoom.isChatLocked,

@@ -41,7 +41,7 @@ SwiftPM graph fail on the default engine, shipped about 100 MB per ABI of
 Swift runtime/ICU/Foundation `.so` files, and made `assembleRelease`
 cross-compile Swift with a separate Swift-for-Android toolchain.
 
-Android uses the checked-in Gradle wrapper (`Android/gradlew`, Gradle 9.7.1,
+Android uses the checked-in Gradle wrapper (`Android/gradlew`, Gradle 9.9.2,
 distribution SHA-256 pinned). The gates are verified with JDK 21 (AGP 9.2
 needs JDK 17 or newer); pin `JAVA_HOME` so Gradle does not pick up whatever
 the machine default JDK happens to be:
@@ -75,8 +75,8 @@ The local release APK is written to:
 apps/conclave-skip/.build/Android/app/outputs/apk/release/app-release.apk
 ```
 
-It is about 120 MB (mostly un-minified DEX) with 7 small native libs per ABI
-(mediasoup, libc++, dotLottie, CameraX, androidx graphics); the arm64 and
+It is about 120 MB (mostly un-minified DEX) with 6 small native libs per ABI
+(mediasoup, dotLottie, CameraX, androidx graphics); the arm64 and
 x86_64 ones are all 16 KB aligned. If `libswiftCore.so`, `libFoundation*.so`, `lib_FoundationICU.so` or
 `libSkipAndroidBridge.so` ever reappear in `unzip -l`, something pulled
 SkipFuse or a native-mode Skip module back in.
