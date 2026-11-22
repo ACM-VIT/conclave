@@ -574,10 +574,18 @@ if [[ "$ROLLBACK" == "true" ]]; then
   echo "Rolling every instance back to ${TARGET_COMMIT}."
 else
   TARGET_COMMIT="$(git -C "$ROOT_DIR" rev-parse --short=12 HEAD)"
-  echo "Building the SFU image for ${TARGET_COMMIT}..."
-  "${COMPOSE[@]}" build "${ORDERED_SERVICES[0]}"
-  TARGET_IMAGE="$(docker image inspect -f '{{.Id}}' "$(service_image_name "${ORDERED_SERVICES[0]}")")"
-  docker tag "$TARGET_IMAGE" "${IMAGE_REPO}:${TARGET_COMMIT}"
+  # A rebuild of the same commit gets a new image ID even when every layer is
+  # cached, which would defeat the skip check on a rerun. Reuse the image
+  # this commit already has, unless tracked files differ from it.
+  if git -C "$ROOT_DIR" diff --quiet HEAD &&
+     TARGET_IMAGE="$(docker image inspect -f '{{.Id}}' "${IMAGE_REPO}:${TARGET_COMMIT}" 2>/dev/null)"; then
+    echo "Reusing the image already built for ${TARGET_COMMIT}."
+  else
+    echo "Building the SFU image for ${TARGET_COMMIT}..."
+    "${COMPOSE[@]}" build "${ORDERED_SERVICES[0]}"
+    TARGET_IMAGE="$(docker image inspect -f '{{.Id}}' "$(service_image_name "${ORDERED_SERVICES[0]}")")"
+    docker tag "$TARGET_IMAGE" "${IMAGE_REPO}:${TARGET_COMMIT}"
+  fi
 fi
 
 for svc in "${ORDERED_SERVICES[@]}"; do
