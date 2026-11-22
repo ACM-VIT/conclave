@@ -41,7 +41,7 @@ import WebinarViewerChrome, {
 import ToastQueue from "./ToastQueue";
 import RoomAiPanel from "./RoomAiPanel";
 import AndroidUpsellSheet from "./AndroidUpsellSheet";
-import type { BrowserState } from "../hooks/useSharedBrowser";
+import type { BrowserCommand, BrowserState } from "../hooks/useSharedBrowser";
 import type {
   ConclaveAssistantApiKeyPromptState,
 } from "../hooks/useMeetChat";
@@ -268,6 +268,7 @@ interface MeetsMainContentProps {
   browserState?: BrowserState;
   isBrowserLaunching?: boolean;
   browserLaunchError?: string | null;
+  browserFailedCommand?: BrowserCommand | null;
   showBrowserControls?: boolean;
   onLaunchBrowser?: (url: string) => Promise<boolean>;
   onNavigateBrowser?: (url: string) => Promise<boolean>;
@@ -390,6 +391,11 @@ const clamp = (value: number, min: number, max: number) =>
 const WEBINAR_SPEAKER_PROMOTE_DELAY_MS = 450;
 const WEBINAR_SPEAKER_MIN_SWITCH_INTERVAL_MS = 1800;
 const DOCKED_PANEL_WIDTH = 360;
+const BROWSER_ERROR_TITLES: Record<BrowserCommand, string> = {
+  launch: "Couldn’t open the shared browser",
+  navigate: "Couldn’t open that page",
+  close: "Couldn’t close the shared browser",
+};
 const GAME_DOCK_MIN_STAGE_WIDTH = 420;
 
 const getGameDockMaxWidth = (
@@ -532,6 +538,7 @@ export default function MeetsMainContent({
   browserState,
   isBrowserLaunching,
   browserLaunchError,
+  browserFailedCommand,
   showBrowserControls = true,
   onLaunchBrowser,
   onNavigateBrowser,
@@ -2448,7 +2455,9 @@ export default function MeetsMainContent({
             browserLaunchError
               ? {
                   id: "browser",
-                  label: "Couldn’t open the shared browser",
+                  label: browserFailedCommand
+                    ? BROWSER_ERROR_TITLES[browserFailedCommand]
+                    : "Shared browser",
                   message: browserLaunchError,
                   tone: "danger" as const,
                   onDismiss: onClearBrowserError,

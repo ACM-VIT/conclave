@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Socket } from "socket.io-client";
 
+export type BrowserCommand = "launch" | "navigate" | "close";
+
 export interface BrowserState {
     active: boolean;
     url?: string;
@@ -29,6 +31,7 @@ interface UseSharedBrowserReturn {
     isAvailable: boolean;
     isLaunching: boolean;
     launchError: string | null;
+    failedCommand: BrowserCommand | null;
     launchBrowser: (url: string) => Promise<boolean>;
     navigateTo: (url: string) => Promise<boolean>;
     closeBrowser: () => Promise<boolean>;
@@ -111,11 +114,13 @@ export function useSharedBrowser({
     const [isAvailable, setIsAvailable] = useState(false);
     const [isLaunching, setIsLaunching] = useState(false);
     const [launchError, setLaunchError] = useState<string | null>(null);
+    const [failedCommand, setFailedCommand] = useState<BrowserCommand | null>(null);
     const activityIntervalRef = useRef<NodeJS.Timeout | null>(null);
     const browserStateEpochRef = useRef(0);
 
     const clearError = useCallback(() => {
         setLaunchError(null);
+        setFailedCommand(null);
     }, []);
 
     useEffect(() => {
@@ -232,6 +237,7 @@ export function useSharedBrowser({
             setIsLaunching(false);
             if (response.error) {
                 setLaunchError(response.error);
+                setFailedCommand("launch");
                 return false;
             }
 
@@ -260,6 +266,7 @@ export function useSharedBrowser({
             setIsLaunching(false);
             if (response.error) {
                 setLaunchError(response.error);
+                setFailedCommand("navigate");
                 return false;
             }
 
@@ -282,6 +289,7 @@ export function useSharedBrowser({
         const response = await emitBrowserCommand(socket, "browser:close");
         if (response.error) {
             setLaunchError(response.error);
+            setFailedCommand("close");
             return false;
         }
 
@@ -295,6 +303,7 @@ export function useSharedBrowser({
         isAvailable,
         isLaunching,
         launchError,
+        failedCommand,
         launchBrowser,
         navigateTo,
         closeBrowser,
