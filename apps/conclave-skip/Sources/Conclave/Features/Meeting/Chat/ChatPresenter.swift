@@ -253,6 +253,8 @@ final class ChatPresenter {
         serverToClientRowId = [:]
         spansCache = [:]
         spansSignature = [:]
+        emojiBodySource = [:]
+        emojiBodyCache = [:]
         markdownStates = [:]
         lastTailGrowthMillis = -1_000_000.0
         hasTimeline = false
