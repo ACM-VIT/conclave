@@ -21,6 +21,19 @@ export type SfuAuthPayload = JwtPayload & {
    * predate guest passes.
    */
   guestProof?: string;
+  /**
+   * The room id a guest's seat key was issued for. A token that carries it
+   * joins that room and no other. Absent on signed-in tokens and on guests
+   * from clients that predate guest passes.
+   */
+  guestRoom?: string;
+  /**
+   * The seat this guest held before the browser's pass changed, with that
+   * seat's proof. The join route adds it when a tab comes back under another
+   * pass and still has the token of its previous join. What the old key
+   * holds in the room moves to the new key.
+   */
+  guestWas?: { userKey?: string; guestProof?: string };
   isHost?: boolean;
   isAdmin?: boolean;
   isForcedHost?: boolean;

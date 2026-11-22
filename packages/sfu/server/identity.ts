@@ -10,9 +10,11 @@ export const normalizeDisplayName = (value?: string): string => {
   return value.trim().replace(/\s+/g, " ").slice(0, MAX_DISPLAY_NAME_LENGTH);
 };
 
+// An account is keyed by its email. The join route never issues a guest key
+// with an `@` in it, so an email that starts with `guest-` is still an account.
 export const isGuestUserKey = (userKey?: string | null): boolean => {
   if (!userKey) return false;
-  return userKey.startsWith("guest-");
+  return userKey.startsWith("guest-") && !userKey.includes("@");
 };
 
 export const buildUserIdentity = (

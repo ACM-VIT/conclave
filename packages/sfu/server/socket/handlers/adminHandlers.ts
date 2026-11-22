@@ -21,6 +21,7 @@ import {
 import {
   includesSuperAdminUserKey,
   isSuperAdminClient,
+  NO_ONE_ADMITTED_ERROR,
   SUPER_ADMIN_REMOVAL_ERROR,
 } from "../../admin/moderation.js";
 import { forceCloseRoom, isCurrentRoom, markRoomEnded } from "../../rooms.js";
@@ -929,7 +930,6 @@ export const registerAdminHandlers = (
       const refused: string[] = [];
       for (const userKey of userKeys) {
         const pending = guard.room.pendingClients.get(userKey);
-        guard.room.unblockUser(userKey);
         if (!guard.room.allowUser(userKey)) {
           refused.push(userKey);
           continue;
@@ -956,7 +956,9 @@ export const registerAdminHandlers = (
       });
 
       respond(cb, {
-        success: true,
+        ...(allowed.length === 0
+          ? { success: false, error: NO_ONE_ADMITTED_ERROR }
+          : { success: true }),
         allowed,
         refused,
         admitted,
@@ -964,6 +966,15 @@ export const registerAdminHandlers = (
       });
     },
   );
+
+  socket.on("admin:createAdmission", (_data: unknown, cb) => {
+    const guard = ensureAdminRoom(context);
+    if ("error" in guard) {
+      respond(cb, guard);
+      return;
+    }
+    respond(cb, { success: true, ...guard.room.createAdmission() });
+  });
 
   socket.on(
     "admin:blockUsers",

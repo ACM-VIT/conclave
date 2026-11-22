@@ -55,13 +55,18 @@ const makeState = (): SfuState => {
 const io = { to: () => ({ emit: vi.fn() }) } as unknown as SocketIOServer;
 
 let socketCount = 0;
-const join = async (state: SfuState, user: SfuAuthPayload, roomId = "room") => {
+const join = async (
+  state: SfuState,
+  user: SfuAuthPayload,
+  roomId = "room",
+  payload: Record<string, unknown> = {},
+) => {
   const peer = makeSocket(`socket-${++socketCount}`, user);
   const context = createConnectionContext(io, peer.socket, state);
   registerJoinRoomHandler(context);
   const ack = vi.fn();
   await peer.handlers.get("joinRoom")!(...[
-    { roomId, sessionId: user.sessionId },
+    { roomId, sessionId: user.sessionId, ...payload },
     ack,
   ] as never[]);
   return { context, peer, ack };
@@ -700,21 +705,72 @@ describe("a host action that names a guest the room does not know", () => {
     expect((await join(state, older)).ack).toHaveBeenCalledWith(joined);
   });
 
-  it("still admits a signed-in account ahead of time", async () => {
-    const { state, host } = await lockedRoomTheGuestLeft();
+  it.each(["alex@example.com", "guest-relations@example.com"])(
+    "still admits the account %s ahead of time",
+    async (email) => {
+      const { state, host } = await lockedRoomTheGuestLeft();
 
-    const allowed = await allowUsers(host, ["alex@example.com"]);
+      const allowed = await allowUsers(host, [email]);
+
+      expect(allowed).toHaveBeenCalledWith(
+        expect.objectContaining({ success: true, allowed: [email], refused: [] }),
+      );
+      const account = await join(state, {
+        email,
+        userId: email,
+        clientId: "conclave",
+        sessionId: "s2",
+      });
+      expect(account.ack).toHaveBeenCalledWith(joined);
+    },
+  );
+
+  it("answers with a failure when it could admit none of the keys", async () => {
+    const { host } = await lockedRoomTheGuestLeft();
+
+    const allowed = await allowUsers(host, [older.userId]);
 
     expect(allowed).toHaveBeenCalledWith(
-      expect.objectContaining({ allowed: ["alex@example.com"], refused: [] }),
+      expect.objectContaining({
+        success: false,
+        error: expect.any(String) as unknown,
+        allowed: [],
+        refused: [older.userId],
+      }),
     );
-    const account = await join(state, {
-      email: "alex@example.com",
-      userId: "alex@example.com",
-      clientId: "conclave",
-      sessionId: "s2",
-    });
-    expect(account.ack).toHaveBeenCalledWith(joined);
+  });
+
+  it("answers with a success that names what it refused when it admitted some", async () => {
+    const { host } = await lockedRoomTheGuestLeft();
+
+    const allowed = await allowUsers(host, [older.userId, "alex@example.com"]);
+
+    expect(allowed).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: true,
+        allowed: ["alex@example.com"],
+        refused: [older.userId],
+      }),
+    );
+  });
+
+  it("leaves a block in place when it cannot admit the blocked guest", async () => {
+    const state = makeState();
+    const host = await join(state, guestHost);
+    const room = state.rooms.get("conclave:room")!;
+    const withoutPass = publicIdentity(older);
+    await join(state, withoutPass);
+    room.blockUser(older.userId);
+    room.removeClient(olderSeat);
+    await endOfTurn();
+
+    const allowed = await allowUsers(host, [older.userId]);
+
+    expect(allowed).toHaveBeenCalledWith(
+      expect.objectContaining({ success: false, refused: [older.userId] }),
+    );
+    expect(room.isBlocked(older.userId)).toBe(true);
+    expect(room.isAllowed(older.userId)).toBe(false);
   });
 
   it("still admits a guest that is in the room without a pass", async () => {
@@ -729,6 +785,234 @@ describe("a host action that names a guest the room does not know", () => {
       expect.objectContaining({ allowed: [older.userId], refused: [] }),
     );
     expect(room.isAllowed(older.userId)).toBe(true);
+  });
+});
+
+describe("a guest join token issued for one room", () => {
+  const scoped = {
+    userId: "guest-gp_RRRRRRRRRRRRRRRRRRRRRR",
+    clientId: "conclave",
+    sessionId: "tab-1",
+    guestProof: "proof-of-pass-r",
+    guestRoom: "room",
+    allowRoomCreation: true,
+  } satisfies SfuAuthPayload;
+
+  it("joins that room", async () => {
+    const state = makeState();
+    expect((await join(state, scoped)).ack).toHaveBeenCalledWith(joined);
+  });
+
+  it("is refused in any other room, and creates none", async () => {
+    const state = makeState();
+    await join(state, scoped);
+
+    const elsewhere = await join(state, scoped, "other-room");
+
+    expect(elsewhere.ack).toHaveBeenCalledWith(refused);
+    expect(elsewhere.context.currentClient).toBeNull();
+    expect(state.rooms.has("conclave:other-room")).toBe(false);
+  });
+
+  it("cannot be moved to another room on the socket it joined with", async () => {
+    const state = makeState();
+    const seated = await join(state, scoped);
+
+    const moved = await switchRoom(seated, scoped, "other-room");
+
+    expect(moved).toHaveBeenCalledWith(refused);
+    expect(state.rooms.has("conclave:other-room")).toBe(false);
+  });
+
+  it("is not needed from a client that predates guest passes", async () => {
+    const state = makeState();
+    const { guestRoom: _room, ...older } = { ...scoped, userId: "guest-tab-1" };
+
+    expect((await join(state, older, "any-room")).ack).toHaveBeenCalledWith(joined);
+  });
+});
+
+describe("a guest whose pass changed between two joins from one tab", () => {
+  // The join route issues this when a tab that held `guestHost`'s seat comes
+  // back under the browser's other pass and still has its previous token.
+  const successor = {
+    userId: "guest-gp_SSSSSSSSSSSSSSSSSSSSSS",
+    clientId: "conclave",
+    sessionId: guestHost.sessionId,
+    guestProof: "proof-of-the-cookie-pass",
+    guestWas: { userKey: guestHost.userId, guestProof: guestHost.guestProof },
+  } satisfies SfuAuthPayload;
+  const successorSeat = `${successor.userId}#${successor.sessionId}`;
+
+  it("keeps host under its new key", async () => {
+    const state = makeState();
+    const before = await join(state, guestHost);
+    const room = state.rooms.get("conclave:room")!;
+    dropConnection(before.peer);
+
+    const after = await join(state, successor);
+
+    expect(after.ack).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "joined", hostUserId: successorSeat }),
+    );
+    expect(after.context.currentClient).toBeInstanceOf(Admin);
+    expect(room.getClient(guestHostSeat)).toBeUndefined();
+  });
+
+  it("keeps an admission past the lock under its new key", async () => {
+    const state = makeState();
+    await join(state, guestHost);
+    const room = state.rooms.get("conclave:room")!;
+    const guest = {
+      userId: "guest-gp_TTTTTTTTTTTTTTTTTTTTTT",
+      clientId: "conclave",
+      sessionId: "tab-7",
+      guestProof: "proof-of-pass-t",
+    } satisfies SfuAuthPayload;
+    await join(state, guest);
+    room.setLocked(true);
+    room.allowLockedUser(guest.userId);
+    room.removeClient(`${guest.userId}#tab-7`);
+
+    const back = await join(state, {
+      ...guest,
+      userId: "guest-gp_UUUUUUUUUUUUUUUUUUUUUU",
+      guestProof: "proof-of-the-cookie-pass",
+      guestWas: { userKey: guest.userId, guestProof: guest.guestProof },
+    });
+
+    expect(back.ack).toHaveBeenCalledWith(joined);
+  });
+
+  it.each([
+    ["names a key whose proof it does not have", { userKey: guestHost.userId, guestProof: "a-guess" }],
+    ["names no proof", { userKey: guestHost.userId }],
+  ])("gets nothing when it %s", async (_label, guestWas) => {
+    const state = makeState();
+    await join(state, guestHost);
+    const room = state.rooms.get("conclave:room")!;
+
+    const attempt = await join(state, { ...successor, guestWas });
+
+    expect(attempt.context.currentClient).not.toBeInstanceOf(Admin);
+    expect(room.getHostUserId()).toBe(guestHostSeat);
+  });
+
+  it("is still blocked when the key it comes from is blocked", async () => {
+    const state = makeState();
+    await join(state, guestHost);
+    const room = state.rooms.get("conclave:room")!;
+    const guest = {
+      userId: "guest-gp_TTTTTTTTTTTTTTTTTTTTTT",
+      clientId: "conclave",
+      sessionId: "tab-7",
+      guestProof: "proof-of-pass-t",
+    } satisfies SfuAuthPayload;
+    await join(state, guest);
+    room.blockUser(guest.userId);
+    room.removeClient(`${guest.userId}#tab-7`);
+
+    const back = await join(state, {
+      ...guest,
+      userId: "guest-gp_UUUUUUUUUUUUUUUUUUUUUU",
+      guestProof: "proof-of-the-cookie-pass",
+      guestWas: { userKey: guest.userId, guestProof: guest.guestProof },
+    });
+
+    expect(back.ack).toHaveBeenCalledWith({
+      error: "You are not allowed to join this meeting.",
+    });
+  });
+});
+
+describe("what the lobby work needs from the room", () => {
+  const agent = {
+    userId: "guest-agent-session-1",
+    clientId: "conclave",
+    sessionId: "agent-session-1",
+  } satisfies SfuAuthPayload;
+  const waiting: unknown = expect.objectContaining({ status: "waiting" });
+
+  const lockedRoom = async () => {
+    const state = makeState();
+    const host = await join(state, guestHost);
+    const room = state.rooms.get("conclave:room")!;
+    room.setLocked(true);
+    return { state, host, room };
+  };
+  const createAdmission = async (host: Awaited<ReturnType<typeof join>>) => {
+    const ack = vi.fn();
+    await host.peer.handlers.get("admin:createAdmission")!(...[{}, ack] as never[]);
+    return (ack.mock.calls[0]?.[0] ?? {}) as { success?: boolean; admissionCode?: string };
+  };
+
+  it("admits a join that presents an admission the host created, and keeps it admitted", async () => {
+    const { state, host, room } = await lockedRoom();
+    const { success, admissionCode } = await createAdmission(host);
+    expect(success).toBe(true);
+
+    const first = await join(state, agent, "room", { admissionCode });
+    expect(first.ack).toHaveBeenCalledWith(joined);
+
+    room.removeClient(`${agent.userId}#${agent.sessionId}`);
+    expect((await join(state, agent)).ack).toHaveBeenCalledWith(joined);
+  });
+
+  it("admits one join per admission", async () => {
+    const { state, host } = await lockedRoom();
+    const { admissionCode } = await createAdmission(host);
+    await join(state, agent, "room", { admissionCode });
+
+    const second = await join(
+      state,
+      { ...agent, userId: "guest-someone-else", sessionId: "someone-else" },
+      "room",
+      { admissionCode },
+    );
+
+    expect(second.ack).toHaveBeenCalledWith(waiting);
+  });
+
+  it("makes a join without an admission wait, or with one that was never issued", async () => {
+    const { state } = await lockedRoom();
+
+    expect((await join(state, agent)).ack).toHaveBeenCalledWith(waiting);
+    expect(
+      (await join(state, agent, "room", { admissionCode: "not-issued" })).ack,
+    ).toHaveBeenCalledWith(waiting);
+  });
+
+  it("restores a persisted admission for the guest that proves the pass it was given to", async () => {
+    // A room recreated after a restart has no record of the guest.
+    const { state, room } = await lockedRoom();
+    const guest = {
+      userId: "guest-gp_VVVVVVVVVVVVVVVVVVVVVV",
+      clientId: "conclave",
+      sessionId: "tab-9",
+      guestProof: "proof-of-pass-v",
+    } satisfies SfuAuthPayload;
+
+    expect(room.restoreAdmission(guest.userId, guest.guestProof, { pastLock: true })).toBe(true);
+
+    const intruder = await join(state, { ...guest, guestProof: "proof-of-another-pass" });
+    expect(intruder.ack).toHaveBeenCalledWith(refused);
+    expect((await join(state, guest)).ack).toHaveBeenCalledWith(joined);
+  });
+
+  it("does not restore an admission for a guest that is blocked", async () => {
+    const { state, room } = await lockedRoom();
+    const guest = {
+      userId: "guest-gp_VVVVVVVVVVVVVVVVVVVVVV",
+      clientId: "conclave",
+      sessionId: "tab-9",
+      guestProof: "proof-of-pass-v",
+    } satisfies SfuAuthPayload;
+    room.setLocked(false);
+    await join(state, guest);
+    room.blockUser(guest.userId);
+    room.removeClient(`${guest.userId}#tab-9`);
+
+    expect(room.restoreAdmission(guest.userId, guest.guestProof)).toBe(false);
   });
 });
 

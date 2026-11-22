@@ -33,6 +33,7 @@ import {
 import {
   includesSuperAdminUserKey,
   isSuperAdminClient,
+  NO_ONE_ADMITTED_ERROR,
   SUPER_ADMIN_REMOVAL_ERROR,
 } from "../admin/moderation.js";
 import { recordAdminAudit } from "../admin/adminAudit.js";
@@ -1311,7 +1312,6 @@ export const createSfuApp = ({
 
     for (const userKey of userKeys) {
       const pending = lookup.room.pendingClients.get(userKey);
-      lookup.room.unblockUser(userKey);
       if (!lookup.room.allowUser(userKey)) {
         refused.push(userKey);
         continue;
@@ -1335,8 +1335,10 @@ export const createSfuApp = ({
 
     emitPendingUsersSnapshot(io, lookup.room);
 
-    res.json({
-      success: true,
+    res.status(allowed.length === 0 ? 409 : 200).json({
+      ...(allowed.length === 0
+        ? { success: false, error: NO_ONE_ADMITTED_ERROR }
+        : { success: true }),
       roomId: lookup.room.id,
       allowed,
       refused,

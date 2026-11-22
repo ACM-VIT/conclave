@@ -64,6 +64,8 @@ const MAX_ROOM_ID_LENGTH = 256;
 const MAX_SESSION_ID_LENGTH = 128;
 const MAX_INVITE_CODE_LENGTH = 256;
 const MAX_GUEST_PROOF_LENGTH = 128;
+const MAX_GUEST_KEY_LENGTH = 320;
+const MAX_ADMISSION_CODE_LENGTH = 128;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
 
 const normalizeIdentifier = (
@@ -144,6 +146,19 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           return;
         }
         const { userKey, userId } = identity;
+        // A guest's seat key is issued for one room. Its token joins that
+        // room and no other, whatever room this call names.
+        if (
+          user?.guestRoom !== undefined &&
+          normalizeIdentifier(user.guestRoom, MAX_ROOM_ID_LENGTH) !==
+            requestedRoomId
+        ) {
+          respond(callback, {
+            error:
+              "This join token is for another meeting. Reload the page to join again.",
+          });
+          return;
+        }
 
         let roomId = requestedRoomId;
         let scheduledWebinarForAttendee: ReturnType<
@@ -238,6 +253,24 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           ? (normalizeIdentifier(user?.guestProof, MAX_GUEST_PROOF_LENGTH) ??
             undefined)
           : undefined;
+        if (guestProof !== undefined && user?.guestWas) {
+          state.rooms.get(resolvedChannelId)?.succeedGuestIdentity(
+            {
+              userKey:
+                normalizeIdentifier(
+                  user.guestWas.userKey,
+                  MAX_GUEST_KEY_LENGTH,
+                ) ?? undefined,
+              guestProof:
+                normalizeIdentifier(
+                  user.guestWas.guestProof,
+                  MAX_GUEST_PROOF_LENGTH,
+                ) ?? undefined,
+            },
+            userKey,
+            guestProof,
+          );
+        }
         // A host invite ("bring on stage") lets an attendee identity rejoin as
         // a full participant; the promotion registry lives on the live room.
         // Honored only while webinar mode is on, so a stale invite can never
@@ -628,6 +661,16 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         if (isAdminForExistingRoom && room.cleanupTimer) {
           Logger.info(`Host returning to room ${roomId}, cleanup cancelled.`);
           room.stopCleanupTimer();
+        }
+
+        // An admission the host created lets this join past the waiting
+        // room and the lock below, and stays with its key.
+        const admissionCode = normalizeIdentifier(
+          data?.admissionCode,
+          MAX_ADMISSION_CODE_LENGTH,
+        );
+        if (admissionCode && !isWebinarAttendeeJoin && !hasPrivilegedJoinAccess) {
+          room.redeemAdmission(admissionCode, userKey, guestProof);
         }
 
         const canSetDisplayName = Boolean(

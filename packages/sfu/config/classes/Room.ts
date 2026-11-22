@@ -10,7 +10,7 @@ import type {
   WebRtcTransport,
 } from "mediasoup/types";
 import type { Socket } from "socket.io";
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import {
   Awareness,
   applyAwarenessUpdate,
@@ -105,6 +105,8 @@ const MAX_WEBINAR_OPEN_QUESTIONS_PER_USER = 3;
 export const MAX_WEBINAR_QA_QUESTION_LENGTH = 500;
 export const MAX_WEBINAR_QA_ANSWER_LENGTH = 1000;
 const MAX_WEBINAR_PROMOTED_USER_KEYS = 200;
+const MAX_OPEN_ADMISSIONS = 50;
+const ADMISSION_TTL_MS = 2 * 60 * 1000;
 // A stage invite should cover one webinar (plus reconnects), not become a
 // permanent skeleton key for this identity.
 const WEBINAR_PROMOTION_TTL_MS = 4 * 60 * 60 * 1000;
@@ -226,6 +228,8 @@ export class Room {
    */
   private guestProofsByUserKey: Map<string, string> = new Map();
   private guestIdentitiesToRelease: Set<string> = new Set();
+  /** Admissions a host created and no join has used yet (code → expiry). */
+  private openAdmissions: Map<string, number> = new Map();
   public cleanupTimer: NodeJS.Timeout | null = null;
   public hostUserKey: string | null = null;
   private _isLocked: boolean = false;
@@ -767,17 +771,135 @@ export class Room {
   /**
    * Whether a host action may give `userKey` a right that lets a later join
    * in. A guest key is public, so on its own it says nothing about who will
-   * use the right. The room has to know the guest: the key holds something
-   * here, or its proof is still on record from earlier in this turn. A guest
-   * the room no longer knows has to knock, and is admitted from its waiting
-   * entry, which carries its proof.
+   * use the right. The room has to know who the guest is: its proof is on
+   * record, it is seated or waiting right now, or it is already admitted. A
+   * key that only stands in a list, such as a block set while the guest was
+   * away, is not enough. A guest the room does not know has to knock, and is
+   * admitted from its waiting entry.
    */
   private canGrantTo(userKey: string): boolean {
-    return (
-      !isGuestUserKey(userKey) ||
-      this.holdsUserKey(userKey) ||
-      this.guestProofsByUserKey.has(userKey)
-    );
+    if (!isGuestUserKey(userKey)) return true;
+    if (
+      this.guestProofsByUserKey.has(userKey) ||
+      this.pendingClients.has(userKey) ||
+      this.allowedUsers.has(userKey) ||
+      this.lockedAllowedUsers.has(userKey)
+    ) {
+      return true;
+    }
+    for (const seatedKey of this.userKeysById.values()) {
+      if (seatedKey === userKey) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Moves what `from` holds in this room to `toUserKey`, when the join token
+   * proves that both keys are one guest (see `guestWas` in `SfuAuthPayload`).
+   * Nothing moves unless `from` is bound here to the proof the token names.
+   * A block moves too, so a pass change never lifts one.
+   */
+  succeedGuestIdentity(
+    from: { userKey?: string; guestProof?: string },
+    toUserKey: string,
+    toGuestProof: string,
+  ): boolean {
+    const fromUserKey = from.userKey;
+    if (!fromUserKey || !from.guestProof || fromUserKey === toUserKey) {
+      return false;
+    }
+    if (this.guestProofsByUserKey.get(fromUserKey) !== from.guestProof) {
+      return false;
+    }
+    const bound = this.guestProofsByUserKey.get(toUserKey);
+    if (bound !== undefined && bound !== toGuestProof) return false;
+
+    if (this.hostUserKey === fromUserKey) this.hostUserKey = toUserKey;
+    for (const userKeys of [
+      this.adminUserKeys,
+      this.allowedUsers,
+      this.lockedAllowedUsers,
+      this.blockedUsers,
+      this.webinarDemotedUserKeys,
+    ]) {
+      if (userKeys.delete(fromUserKey)) userKeys.add(toUserKey);
+    }
+    const inviteExpiresAt = this.webinarPromotedUserKeys.get(fromUserKey);
+    if (inviteExpiresAt !== undefined) {
+      this.webinarPromotedUserKeys.delete(fromUserKey);
+      this.webinarPromotedUserKeys.set(toUserKey, inviteExpiresAt);
+    }
+    const displayName = this.displayNamesByKey.get(fromUserKey);
+    if (displayName !== undefined && !this.displayNamesByKey.has(toUserKey)) {
+      this.displayNamesByKey.set(toUserKey, displayName);
+    }
+    this.pendingClients.delete(fromUserKey);
+    // The tab's earlier seats stay until the join reclaims them, now under
+    // the key it joins with.
+    for (const [userId, userKey] of this.userKeysById) {
+      if (userKey === fromUserKey) this.userKeysById.set(userId, toUserKey);
+    }
+    this.guestProofsByUserKey.set(toUserKey, toGuestProof);
+    this.releaseGuestIdentity(fromUserKey);
+    return true;
+  }
+
+  /**
+   * Admits `userKey` on behalf of a join that is being decided right now and
+   * that the caller vouches for: one that redeems a host's admission, or one
+   * that presents a recovery pass after a restart. The admission is bound to
+   * the proof the join carries. Returns false for a blocked guest and for a
+   * key that is bound to another proof.
+   */
+  restoreAdmission(
+    userKey: string,
+    guestProof: string | undefined,
+    options: { pastLock?: boolean } = {},
+  ): boolean {
+    const bound = this.guestProofsByUserKey.get(userKey);
+    if (bound !== undefined && bound !== guestProof) return false;
+    if (this.isBlocked(userKey, guestProof)) return false;
+    if (guestProof !== undefined && isGuestUserKey(userKey)) {
+      this.guestProofsByUserKey.set(userKey, guestProof);
+    }
+    this.allowedUsers.add(userKey);
+    if (options.pastLock) this.lockedAllowedUsers.add(userKey);
+    return true;
+  }
+
+  /**
+   * An admission for one join that the host cannot name by key yet, such as
+   * a voice agent that has not joined. The join presents the code and is let
+   * in past the waiting room and the lock. A code admits one join and
+   * expires after two minutes.
+   */
+  createAdmission(): { admissionCode: string; expiresAt: number } {
+    const now = Date.now();
+    for (const [code, expiresAt] of this.openAdmissions) {
+      if (expiresAt <= now) this.openAdmissions.delete(code);
+    }
+    if (this.openAdmissions.size >= MAX_OPEN_ADMISSIONS) {
+      const oldest = this.openAdmissions.keys().next().value;
+      if (oldest !== undefined) this.openAdmissions.delete(oldest);
+    }
+    const admissionCode = randomBytes(24).toString("base64url");
+    const expiresAt = now + ADMISSION_TTL_MS;
+    this.openAdmissions.set(admissionCode, expiresAt);
+    return { admissionCode, expiresAt };
+  }
+
+  redeemAdmission(
+    admissionCode: string,
+    userKey: string,
+    guestProof: string | undefined,
+  ): boolean {
+    const expiresAt = this.openAdmissions.get(admissionCode);
+    if (expiresAt === undefined || expiresAt <= Date.now()) return false;
+    if (!this.restoreAdmission(userKey, guestProof, { pastLock: true })) {
+      return false;
+    }
+    this.openAdmissions.delete(admissionCode);
+    return true;
   }
 
   private releaseUnheldGuestIdentities(): void {
@@ -2542,6 +2664,7 @@ export class Room {
     this.blockedUsers.clear();
     this.guestProofsByUserKey.clear();
     this.guestIdentitiesToRelease.clear();
+    this.openAdmissions.clear();
     this.webinarActiveSpeakerUserId = null;
     this.webinarDominantSpeakerUserId = null;
     this.webinarFeedProducerIds = [];

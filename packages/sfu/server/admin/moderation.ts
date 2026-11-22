@@ -3,6 +3,8 @@ import type { Room } from "../../config/classes/Room.js";
 import { getSocketAuthUser } from "../socket/auth.js";
 
 export const SUPER_ADMIN_REMOVAL_ERROR = "Super admins cannot be removed";
+export const NO_ONE_ADMITTED_ERROR =
+  "No one was let in. A guest who is not in the meeting has to ask to join first.";
 
 export const isSuperAdminClient = (client: Client | undefined): boolean => {
   if (!client) return false;
