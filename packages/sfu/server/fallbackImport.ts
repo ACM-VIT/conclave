@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, renameSync } from "node:fs";
+import { chmodSync, existsSync, readdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { Logger } from "../utilities/loggers.js";
 import { isSqliteLockedError } from "./sqliteWriteCheck.js";
@@ -12,22 +12,52 @@ import { isSqliteLockedError } from "./sqliteWriteCheck.js";
 export const fallbackImportDir = (): string =>
   resolve(process.env.CONCLAVE_FALLBACK_IMPORT_DIR?.trim() || join(process.cwd(), "data", "json-fallback-import"));
 
-const pendingFallbackFiles = (fileName: string): string[] => {
-  const root = fallbackImportDir();
-  if (!existsSync(root)) return [];
-  return readdirSync(root, { withFileTypes: true })
+const IMPORTED_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+
+const containerDirs = (root: string): string[] =>
+  readdirSync(root, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
     .sort()
-    .map((name) => join(root, name, fileName))
-    .filter((file) => existsSync(file));
-};
+    .map((name) => join(root, name));
 
 const reasonOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
+/** Recovered records name hosts and attendees: only the SFU user may read them, and archives go after a week. */
+const secureImportDir = (root: string): void => {
+  try {
+    chmodSync(root, 0o700);
+    for (const dir of containerDirs(root)) {
+      chmodSync(dir, 0o700);
+      for (const name of readdirSync(dir)) {
+        const file = join(dir, name);
+        if (name.endsWith(".imported") && Date.now() - statSync(file).mtimeMs > IMPORTED_RETENTION_MS) {
+          rmSync(file, { force: true });
+        } else {
+          chmodSync(file, 0o600);
+        }
+      }
+    }
+  } catch (error) {
+    Logger.warn(`Could not restrict or prune ${root} (${reasonOf(error)})`);
+  }
+};
+
+const pendingFallbackFiles = (fileName: string): string[] => {
+  const root = fallbackImportDir();
+  if (!existsSync(root)) return [];
+  secureImportDir(root);
+  return containerDirs(root)
+    .map((dir) => join(dir, fileName))
+    .filter((file) => existsSync(file));
+};
+
 const markFallbackImported = (file: string): void => {
   try {
-    renameSync(file, `${file}.imported`);
+    const archived = `${file}.imported`;
+    renameSync(file, archived);
+    const now = new Date();
+    utimesSync(archived, now, now);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
     Logger.warn(`Imported ${file} but could not rename it (${reasonOf(error)}); the next start checks it again`);

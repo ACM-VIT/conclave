@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -87,6 +87,24 @@ describe("importing JSON fallback files copied from old containers", () => {
 
     expect(await importFallbackWebinars(persistence)).toBe(1);
     expect(readdirSync(importDir("sfu-a"))).toEqual(["scheduled-webinars.json.imported"]);
+  });
+
+  it("keeps recovery files private and drops imported archives after seven days", async () => {
+    const persistence = createScheduledWebinarPersistence();
+    writeFallback("sfu-a", "scheduled-webinars.json", [webinar("prior-webinar", 1)]);
+    writeFallback("sfu-b", "scheduled-meetings.json.imported", []);
+    const eightDaysAgo = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+    utimesSync(join(importDir("sfu-b"), "scheduled-meetings.json.imported"), eightDaysAgo, eightDaysAgo);
+    writeFallback("sfu-b", "scheduling.json.imported", {});
+    for (const dir of [join(stateDir, "json-fallback-import"), importDir("sfu-a"), importDir("sfu-b")]) chmodSync(dir, 0o755);
+    const mode = (path: string) => statSync(path).mode & 0o777;
+
+    expect(await importFallbackWebinars(persistence)).toBe(1);
+    expect(mode(join(stateDir, "json-fallback-import"))).toBe(0o700);
+    expect([mode(importDir("sfu-a")), mode(importDir("sfu-b"))]).toEqual([0o700, 0o700]);
+    expect(mode(join(importDir("sfu-a"), "scheduled-webinars.json.imported"))).toBe(0o600);
+    expect(mode(join(importDir("sfu-b"), "scheduling.json.imported"))).toBe(0o600);
+    expect(readdirSync(importDir("sfu-b"))).toEqual(["scheduling.json.imported"]);
   });
 
   it("keeps a file that does not parse and imports it on a later start", async () => {
