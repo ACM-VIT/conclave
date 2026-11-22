@@ -40,6 +40,7 @@ import { forceCloseRoom, getRoomChannelId, isCurrentRoom, markRoomEnded } from "
 import { resolveCorsOrigins } from "../cors.js";
 import { secretsMatch } from "../secret.js";
 import { readBoolean, requestBody } from "../../utilities/untrusted.js";
+import { MAX_PERSISTENCE_FENCE_MS } from "../persistenceFence.js";
 import { registerScheduledWebinarRoutes } from "./scheduledWebinarRoutes.js";
 import { registerScheduledMeetingRoutes } from "./scheduledMeetingRoutes.js";
 import { registerSchedulingRoutes } from "./schedulingRoutes.js";
@@ -1005,6 +1006,29 @@ export const createSfuApp = ({
     }
 
     await handleDrain(req, res);
+  });
+
+  // The nightly backup holds this so SQLite and Redis are copied at one point
+  // in time: durable writes wait until it is released or its hard timeout.
+  app.post("/admin/persistence-fence", async (req, res) => {
+    if (!requireSecret(req, res)) {
+      return;
+    }
+    const holdMs = Number(requestBody(req).holdMs);
+    if (!Number.isInteger(holdMs) || holdMs < 1_000 || holdMs > MAX_PERSISTENCE_FENCE_MS) {
+      res.status(400).json({ error: `holdMs must be an integer from 1000 through ${MAX_PERSISTENCE_FENCE_MS}` });
+      return;
+    }
+    const { until } = await state.persistenceFence.hold(holdMs);
+    res.json({ held: true, until, instanceId: config.instanceId });
+  });
+
+  app.delete("/admin/persistence-fence", (req, res) => {
+    if (!requireSecret(req, res)) {
+      return;
+    }
+    state.persistenceFence.release();
+    res.json({ held: false, instanceId: config.instanceId });
   });
 
   // Every successful admin mutation lands in the audit trail with the
