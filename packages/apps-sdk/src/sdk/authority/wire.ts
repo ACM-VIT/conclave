@@ -64,7 +64,18 @@ export type AuthorityFailure = {
   retryAfterMs?: number;
 };
 
-export type AuthorityResult<T> = { ok: true; value: T } | AuthorityFailure;
+export type AuthorityResult<T> =
+  | {
+      ok: true;
+      value: T;
+      /**
+       * On an action's answer, a replayed one included: the app's commit
+       * revision when the answer was sent. A view whose frames have reached
+       * it reflects the action and everything committed before the answer.
+       */
+      revision?: number;
+    }
+  | AuthorityFailure;
 
 export type AuthorityAppEntry = {
   /** Opaque, one per app per room. Pinned to `app` and `major`. */
@@ -164,6 +175,12 @@ export type ReplaceFrame = FrameBase & {
   rows: ProjectedRow[];
   /** Sent with part 0. */
   grants?: AuthorityGrants;
+  /**
+   * Sent with part 0: the app's commit revision the view was read at. The
+   * later parts can be newer, and the catch-up after the last part says how
+   * far the whole view has come.
+   */
+  revision?: number;
 };
 
 /** Whole-row changes since the previous frame of this generation. */
@@ -178,6 +195,12 @@ export type PatchFrame = FrameBase & {
    * replaced: the room's policy changed and they still see what they saw.
    */
   grants?: AuthorityGrants;
+  /**
+   * The app's commit revision the view reflects once this patch is applied.
+   * A viewer who acted is sent a patch for it even when nothing in their
+   * view changed, so an answer's revision is always reached.
+   */
+  revision?: number;
 };
 
 /** The view is withdrawn. The client forgets everything it held. */

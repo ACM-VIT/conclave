@@ -74,7 +74,13 @@ type Subscription = {
    * the parts sent so far carried. Nothing else is sent until the last part
    * has gone, and then one catch-up from what was carried to the view now.
    */
-  transfer: { frames: ReplaceFrame[]; next: number; held: HeldRows } | null;
+  transfer: {
+    frames: ReplaceFrame[];
+    next: number;
+    /** Parts sent so far, which numbers the next one. */
+    sent: number;
+    held: HeldRows;
+  } | null;
   /** The socket fell behind. Patches are skipped until it is replaced. */
   lagging: boolean;
   /**
@@ -86,6 +92,8 @@ type Subscription = {
   grantsSent: string;
   /** The room's policy changed, so what it may do is worked out again. */
   grantsDue: boolean;
+  /** The commit revision it was last told its view reflects. */
+  revisionSent: number;
   dropped: boolean;
   /**
    * Where frames go when not to the socket: an in-process observer, such as
@@ -245,6 +253,8 @@ export class RoomAuthority {
   private readonly left = new Set<AuthorityInstance>();
   /** Apps whose viewers are due a word on what they may now do. */
   private readonly grantsDue = new Set<AuthorityInstance>();
+  /** Who has acted on each app since its last flush. */
+  private readonly acted = new Map<AuthorityInstance, Set<Subject>>();
   /** Streamed results waiting for their socket to catch up. */
   private readonly stalled = new Set<NodeJS.Timeout>();
   private wakeAt: number | null = null;
@@ -348,6 +358,7 @@ export class RoomAuthority {
       viewVersion: 0,
       grantsSent: "",
       grantsDue: false,
+      revisionSent: 0,
       dropped: false,
       sink: null,
       ended: null,
@@ -412,6 +423,7 @@ export class RoomAuthority {
       viewVersion: 0,
       grantsSent: "",
       grantsDue: false,
+      revisionSent: 0,
       dropped: false,
       sink,
       ended,
@@ -473,21 +485,30 @@ export class RoomAuthority {
     const target = this.target(context, request);
     if (!target.ok) return target;
     const { subscription } = target;
-    const result = subscription.instance.act(
-      subscription.actor,
+    const { instance, actor } = subscription;
+    const result = instance.act(
+      actor,
       request.action,
       request.input,
       request.operation,
       this.now(),
     );
     this.afterAction(
-      subscription.instance,
+      instance,
       request.action,
       subscription.client.id,
-      subscription.actor.subject,
+      actor.subject,
       result,
     );
-    return result;
+    if (!result.ok) return result;
+    // The answer says how far a view must come to reflect it. Whoever acted
+    // is told at the next flush how far theirs has come, even if nothing in
+    // it changed, so that revision is always reached.
+    const acted = this.acted.get(instance);
+    if (acted) acted.add(actor.subject);
+    else this.acted.set(instance, new Set([actor.subject]));
+    this.scheduleFlush(false);
+    return { ...result, revision: instance.revision };
   }
 
   query(context: ConnectionContext, request: QueryRequest): QueryReply {
@@ -926,9 +947,17 @@ export class RoomAuthority {
       const changes = instance.flushViews(this.audiencesOf(instance));
       this.left.delete(instance);
       const grantsDue = this.grantsDue.delete(instance);
-      if (changes.shared.size === 0 && changes.personal.size === 0 && !grantsDue) {
+      const acted = this.acted.get(instance);
+      this.acted.delete(instance);
+      if (
+        changes.shared.size === 0 &&
+        changes.personal.size === 0 &&
+        !grantsDue &&
+        !acted
+      ) {
         continue;
       }
+      const revision = instance.revision;
       for (const subscription of [...subscriptions]) {
         // One whose snapshot is still in parts is caught up after its last
         // part, from what the parts carried. Nothing is held for it here.
@@ -944,7 +973,12 @@ export class RoomAuthority {
         const grants = subscription.grantsDue
           ? this.changedGrants(subscription)
           : undefined;
-        if (shared || personal || grants) {
+        // Someone who acted is told how far their view has come, even when
+        // what they did cancelled out and there is no row to send.
+        const owed =
+          acted?.has(subscription.actor.subject) === true &&
+          subscription.revisionSent < revision;
+        if (shared || personal || grants || owed) {
           this.sendPatch(subscription, shared, personal, grants);
         }
       }
@@ -1004,6 +1038,7 @@ export class RoomAuthority {
       return;
     }
     subscription.seq += 1;
+    subscription.revisionSent = subscription.instance.revision;
     this.emit(subscription, {
       kind: "patch",
       subscription: subscription.id,
@@ -1012,6 +1047,7 @@ export class RoomAuthority {
       seq: subscription.seq,
       put: [...(shared?.put ?? []), ...(personal?.put ?? [])],
       remove: [...(shared?.remove ?? []), ...(personal?.remove ?? [])],
+      revision: subscription.revisionSent,
       ...(grants ? { grants } : {}),
     });
   }
@@ -1055,6 +1091,7 @@ export class RoomAuthority {
 
     const { rows, version } = subscription.instance.snapshot(subscription.actor);
     subscription.viewVersion = version;
+    subscription.revisionSent = subscription.instance.revision;
     const bytes = rows.reduce((total, sized) => total + sized.bytes, 0);
     if (bytes > this.limits.snapshotBytes) {
       this.revoke(subscription, "too-large");
@@ -1074,7 +1111,7 @@ export class RoomAuthority {
         part: index,
         last: index === parts.length - 1,
         rows: part.map((sized) => sized.row),
-        ...(index === 0 ? { grants } : {}),
+        ...(index === 0 ? { grants, revision: subscription.revisionSent } : {}),
       }),
     );
     this.stats.replaces += 1;
@@ -1082,26 +1119,40 @@ export class RoomAuthority {
     if (frames.length === 1) return;
     const held: HeldRows = new Map();
     carried(held, frames[0]);
-    subscription.transfer = { frames, next: 1, held };
+    subscription.transfer = { frames, next: 1, sent: 1, held };
     this.continueTransfer(subscription, subscription.generation);
   }
 
   /**
-   * A later part of a snapshot, as it may be sent now. The parts were all
-   * cut from one view when the snapshot began, and a part waits a turn or
-   * more for its place. A row that has been hidden in the meantime is left
-   * out, and one that has changed goes as it is now, so no part carries what
-   * was withdrawn before it left. The catch-up after the last part brings
-   * the viewer the rest of what changed.
+   * The rows of a later part of a snapshot, as they may be sent now. The
+   * parts were all cut from one view when the snapshot began, and a part
+   * waits a turn or more for its place. A row that has been hidden in the
+   * meantime is left out, and one that has changed goes as it is now, so no
+   * part carries what was withdrawn before it left. A row can have grown, so
+   * the part is cut to the part size again: what does not fit is returned,
+   * to go in the part after. The catch-up after the last part brings the
+   * viewer the rest of what changed.
    */
-  private asCommitted(subscription: Subscription, part: ReplaceFrame): ReplaceFrame {
+  private asCommitted(
+    subscription: Subscription,
+    planned: ProjectedRow[],
+  ): { rows: ProjectedRow[]; rest: ProjectedRow[] } {
     const view = subscription.instance.committedView(subscription.actor);
     const rows: ProjectedRow[] = [];
-    for (const row of part.rows) {
+    let bytes = 0;
+    for (let index = 0; index < planned.length; index += 1) {
+      const row = planned[index];
       const value = view.get(row.bucket, row.key);
-      if (value !== undefined) rows.push(value === row.value ? row : { ...row, value });
+      if (value === undefined) continue;
+      const size = view.bytes(row.bucket, row.key);
+      // At least one row a part, as when the parts were first cut.
+      if (rows.length > 0 && bytes + size > this.limits.chunkBytes) {
+        return { rows, rest: planned.slice(index) };
+      }
+      rows.push(value === row.value ? row : { ...row, value });
+      bytes += size;
     }
-    return { ...part, rows, serverNowMs: this.now() };
+    return { rows, rest: [] };
   }
 
   /**
@@ -1121,10 +1172,20 @@ export class RoomAuthority {
       }
       if (this.refresh(subscription) !== "live") return;
       if (!this.hasRoom(subscription)) return;
-      const part = this.asCommitted(subscription, transfer.frames[transfer.next]);
+      const planned = transfer.frames[transfer.next];
+      const { rows, rest } = this.asCommitted(subscription, planned.rows);
+      if (rest.length > 0) transfer.frames[transfer.next] = { ...planned, rows: rest };
+      else transfer.next += 1;
+      const part: ReplaceFrame = {
+        ...planned,
+        serverNowMs: this.now(),
+        part: transfer.sent,
+        last: transfer.next === transfer.frames.length,
+        rows,
+      };
+      transfer.sent += 1;
       this.emit(subscription, part);
       carried(transfer.held, part);
-      transfer.next += 1;
       if (transfer.next < transfer.frames.length) {
         this.continueTransfer(subscription, generation);
         return;
@@ -1146,7 +1207,8 @@ export class RoomAuthority {
     const { ops, version } = subscription.instance.catchUp(subscription.actor, held);
     subscription.viewVersion = version;
     const grants = subscription.grantsDue ? this.changedGrants(subscription) : undefined;
-    if (ops.put.length === 0 && ops.remove.length === 0 && !grants) return;
+    const behind = subscription.revisionSent < subscription.instance.revision;
+    if (ops.put.length === 0 && ops.remove.length === 0 && !grants && !behind) return;
     this.sendPatch(subscription, ops, undefined, grants);
   }
 

@@ -16,6 +16,7 @@ import { qaAuthority } from "@conclave/apps-sdk/qa/server";
 import type { Subject } from "@conclave/apps-sdk/authority/server";
 import { AuthorityInstance, type Actor } from "../../server/apps/authority/instance.js";
 import { DEFAULT_AUTHORITY_LIMITS } from "../../server/apps/authority/limits.js";
+import { answer } from "./answer.js";
 import { Harness, person, type Tab } from "./harness.js";
 
 const host = person("asha@example.com", "Asha", "host");
@@ -230,7 +231,7 @@ describe("voting rules", () => {
     const second = await priyaTab.act("vote", { pollId, optionIds: ["o2"] });
     await room.deliver();
 
-    expect(first).toEqual({ ok: true, value: null });
+    expect(answer(first)).toEqual({ ok: true, value: null });
     expect(second).toEqual(rejected("already-voted"));
     expect(hostTab.row("results", pollId)).toEqual({ voterCount: 1, votes: { o1: 1 } });
   });

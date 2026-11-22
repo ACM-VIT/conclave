@@ -354,6 +354,11 @@ export class AuthorityInstance {
     return changed;
   }
 
+  /** The app's commit revision: what a view read now reflects. */
+  get revision(): number {
+    return this.store.revision;
+  }
+
   /** Rows the views have yet to take in, or viewers have yet to be told of. */
   get hasPendingChanges(): boolean {
     return this.store.hasDirty || this.views.hasUntold;

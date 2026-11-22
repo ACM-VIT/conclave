@@ -14,6 +14,7 @@ import {
 import { pollsContract } from "@conclave/apps-sdk/polls/core";
 import { pollsAuthority } from "@conclave/apps-sdk/polls/server";
 import { qaAuthority } from "@conclave/apps-sdk/qa/server";
+import { answer } from "./answer.js";
 import {
   getRoomAuthority,
   socketPressure,
@@ -83,7 +84,7 @@ describe("authority transport on real sockets", () => {
     );
     await wait(120);
 
-    expect(voted).toEqual({ ok: true, value: null });
+    expect(answer(voted)).toEqual({ ok: true, value: null });
     expect(field(row(voter, "myVotes", pollId), "optionIds")).toEqual(["o1"]);
     expect(tallies(voter.frames)).toEqual([]);
     expect(tallies(other.frames)).toEqual([]);
@@ -269,7 +270,7 @@ describe("authority transport on real sockets", () => {
     );
 
     expect(lost).toBe(1);
-    expect(result).toEqual({ ok: true, value: null });
+    expect(answer(result)).toEqual({ ok: true, value: null });
   });
 
   it("does not carry an unanswered action into another room", async () => {
