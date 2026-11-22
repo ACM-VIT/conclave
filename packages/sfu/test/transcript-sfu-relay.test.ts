@@ -8,6 +8,7 @@ import type {
 } from "../config/classes/Room.js";
 import type { TranscriptSpeaker } from "../types.js";
 import { SfuTranscriptRelay } from "../server/transcript/sfuTranscriptRelay.js";
+import { createTranscriptRelayRegistry } from "../server/transcript/relayRegistry.js";
 import type { TranscriptWorkerRelayConnection } from "../server/transcript/workerClient.js";
 
 const SAMPLE_RATE = 48000;
@@ -427,5 +428,64 @@ describe("SfuTranscriptRelay realistic audio flow", () => {
     expect(directTransport.closed).toBe(true);
     expect(consumer.closed).toBe(true);
     expect(workerEvents.at(-1)).toEqual({ type: "close" });
+  });
+});
+
+describe("a relay closed while it is still starting", () => {
+  it("leaves no transport, consumer or timer behind when a newer relay finishes first", async () => {
+    vi.useFakeTimers();
+    const entries = [producerEntry("p1", "u2", "Bea")];
+    const transports: FakeDirectTransport[] = [];
+    let releaseOlder!: () => void;
+    const olderTransportReady = new Promise<void>((resolve) => {
+      releaseOlder = resolve;
+    });
+    const room = {
+      id: "room-a",
+      channelId: "client-a:room-a",
+      router: {
+        closed: false,
+        rtpCapabilities: { codecs: [] },
+        createDirectTransport: async () => {
+          const transport = new FakeDirectTransport();
+          transports.push(transport);
+          if (transports.length === 1) await olderTransportReady;
+          return transport as unknown as DirectTransport;
+        },
+      },
+      getTranscriptAudioProducerEntries: () => entries,
+    } as unknown as Room;
+    const registry = createTranscriptRelayRegistry({
+      enabled: true,
+      createRelay: (options) =>
+        new SfuTranscriptRelay({
+          ...options,
+          createWorkerClient: (clientOptions) => new FakeWorkerClient([], clientOptions),
+        }),
+    });
+    const start = (workerToken: string) =>
+      registry.start({
+        room,
+        workerUrl: "http://transcript-worker.test",
+        workerToken,
+        controllerUserId: "u1",
+        controllerDisplayName: "Ada",
+        canReplaceExistingRelay: true,
+      });
+
+    const older = start("older");
+    await vi.waitFor(() => expect(transports).toHaveLength(1));
+    expect((await start("newer")).success).toBe(true);
+    const timersWithOneRelay = vi.getTimerCount();
+    releaseOlder();
+    expect((await older).success).toBe(true);
+
+    const [olderTransport, newerTransport] = transports;
+    expect(olderTransport.closed).toBe(true);
+    expect([...olderTransport.consumers.values()].every((consumer) => consumer.closed)).toBe(true);
+    expect(newerTransport.closed).toBe(false);
+    expect(vi.getTimerCount()).toBe(timersWithOneRelay);
+    registry.closeAll();
+    vi.useRealTimers();
   });
 });
