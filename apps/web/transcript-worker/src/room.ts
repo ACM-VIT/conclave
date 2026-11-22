@@ -160,6 +160,10 @@ export class TranscriptRoom {
   private readonly loaded: Promise<void>;
   private readonly viewers = new Map<WebSocket, Viewer>();
   private readonly partialSegments = new Map<string, TranscriptSegment>();
+  // A line's place is fixed when its audio is committed, before any of its
+  // text: finals and partials then keep commit order whatever order they
+  // arrive in, across a provider switch too.
+  private readonly committedPlaces = new Map<string, { sequence: number; startMs: number }>();
   private speakerAttribution = new TranscriptSpeakerAttribution();
   private latestSpeaker: TranscriptSpeaker | null = null;
   // Work the current provider owes us: committed items without a final, and
@@ -1665,20 +1669,10 @@ export class TranscriptRoom {
       endSequence: this.sequence,
       deadline: setTimeout(() => void this.finishProviderDrain(drain), drainMs),
     };
-    // Every commit still owed takes its place in commit order, including
-    // lines already on screen, which move to their new place.
     for (const itemId of drain.unfinalizedItems) {
-      const partial = drain.partials.get(itemId);
-      if (!partial) {
-        this.reserveDrainedSegment(drain, itemId);
-        continue;
+      if (!drain.partials.has(itemId)) {
+        this.reserveDrainedSegment(drain, itemId, this.committedPlaces.get(itemId));
       }
-      const placed = { ...partial, sequence: this.nextDrainedSequence(drain) };
-      drain.partials.set(itemId, placed);
-      this.broadcast({
-        type: "segment.delta",
-        delta: this.toSegmentDelta(placed, "", placed.updatedAt),
-      });
     }
     this.providerDrains.set(epoch, drain);
     this.transcriptionSession = null;
@@ -1754,24 +1748,30 @@ export class TranscriptRoom {
    * text yet, in commit order, so speech from before the switch stays ahead
    * of the new provider's and in the order it was spoken.
    */
-  private nextDrainedSequence(drain: ProviderDrain): number {
-    return drain.nextSequence < drain.endSequence
-      ? drain.nextSequence++
-      : this.sequence++;
-  }
-
+  /**
+   * Holds a drained line's place: the one its commit took, or for audio the
+   * old provider acknowledges only after the switch, the next place in the
+   * drain's block, which sits ahead of the new provider's lines.
+   */
   private reserveDrainedSegment(
     drain: ProviderDrain,
     itemId: string,
+    committedPlace?: { sequence: number; startMs: number },
   ): TranscriptSegment {
-    const sequence = this.nextDrainedSequence(drain);
+    const place = committedPlace ?? {
+      sequence:
+        drain.nextSequence < drain.endSequence
+          ? drain.nextSequence++
+          : this.sequence++,
+      startMs: drain.startedAt,
+    };
     const segment = this.createSegment(
       itemId,
       drain.speakers.getItemSpeaker(itemId) ??
         drain.speakers.peekPendingSpeaker() ??
         drain.latestSpeaker ??
         this.controllerSpeaker(),
-      { sequence, startMs: drain.startedAt },
+      place,
     );
     drain.reserved.set(itemId, segment);
     return segment;
@@ -1843,6 +1843,7 @@ export class TranscriptRoom {
   private resetTranscriptionAudioState(): void {
     const hadPartials = this.partialSegments.size > 0;
     this.partialSegments.clear();
+    this.committedPlaces.clear();
     this.unfinalizedItems.clear();
     this.audioSinceLastFinal = false;
     this.lastAudioAt = 0;
@@ -1864,6 +1865,13 @@ export class TranscriptRoom {
   private handleTranscriptItemCommitted(itemId: string): void {
     this.acknowledgeTranscriptionCommit();
     this.unfinalizedItems.add(itemId);
+    if (
+      !this.committedPlaces.has(itemId) &&
+      !this.partialSegments.has(itemId) &&
+      !this.hasFinalSegment(itemId)
+    ) {
+      this.committedPlaces.set(itemId, { sequence: this.sequence++, startMs: Date.now() });
+    }
     this.transcriptionReplayJournal.bindCommittedItem(itemId);
     const speaker = this.speakerAttribution.bindCommittedItem(itemId);
     if (speaker) {
@@ -2180,7 +2188,9 @@ export class TranscriptRoom {
         this.speakerAttribution.peekPendingSpeaker() ??
         this.latestSpeaker ??
         this.controllerSpeaker(),
+      this.committedPlaces.get(itemId),
     );
+    this.committedPlaces.delete(itemId);
     this.partialSegments.set(itemId, segment);
     return segment;
   }

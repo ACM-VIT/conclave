@@ -112,6 +112,16 @@ async function fixture(transcriptModel: string, env: Partial<Env> = {}) {
       .filter((message) => message.type === "segment.final")
       .map((message) => message.segment.text);
   const lastSnapshotTexts = () => snapshots.at(-1)?.segments.map(({ text }) => text) ?? [];
+  const broadcastPlaces = () => {
+    const places = new Map<string, Set<number>>();
+    for (const [raw] of (viewer.socket.send as ReturnType<typeof vi.fn>).mock.calls) {
+      const message = JSON.parse(raw);
+      const line = message.type === "segment.delta" ? message.delta : message.type === "segment.final" ? message.segment : null;
+      if (!line) continue;
+      places.set(line.itemId, (places.get(line.itemId) ?? new Set()).add(line.sequence));
+    }
+    return places;
+  };
   const lastSnapshotSegment = (text: string) =>
     snapshots.at(-1)?.segments.find((segment) => segment.text === text);
   const snapshotCount = () => snapshots.length;
@@ -153,6 +163,7 @@ async function fixture(transcriptModel: string, env: Partial<Env> = {}) {
     lastSnapshotSegment,
     restartedTexts,
     snapshotCount,
+    broadcastPlaces,
     viewerSnapshot,
   };
 }
@@ -732,3 +743,148 @@ describe("the language a session reports", () => {
   });
 });
 
+
+const seeded = (seed: number) => () => {
+  seed = (seed + 0x6d2b79f5) | 0;
+  let value = Math.imul(seed ^ (seed >>> 15), seed | 1);
+  value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+  return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+};
+const shuffled = <T,>(items: T[], random: () => number) => {
+  const copy = [...items];
+  for (let index = copy.length - 1; index > 0; index -= 1) {
+    const other = Math.floor(random() * (index + 1));
+    [copy[index], copy[other]] = [copy[other], copy[index]];
+  }
+  return copy;
+};
+
+describe("caption lines across a switch keep commit order", () => {
+  it.each(Array.from({ length: 300 }, (_, index) => index + 1))("seed %i", async (seed) => {
+    vi.useFakeTimers();
+    const random = seeded(seed);
+    const { sockets, start, switchTo, speak, commit, savedTexts, broadcastPlaces } = await fixture(OPENAI);
+    await start("en");
+    const before = sockets[0];
+    const oldIds = Array.from({ length: 1 + Math.floor(random() * 5) }, (_, index) => `old_${index}`);
+    const ackedBeforeSwitch = Math.floor(random() * (oldIds.length + 1));
+    for (const _ of oldIds) {
+      await speak();
+      await commit();
+    }
+    const acked = new Set<string>();
+    const finished = new Set<string>();
+    for (const id of oldIds.slice(0, ackedBeforeSwitch)) {
+      before.emit(openAiCommitted(id));
+      acked.add(id);
+    }
+    for (const id of shuffled([...acked], random)) {
+      const state = random();
+      if (state < 0.75) before.emit(openAiDelta(id, `${id} so far`));
+      if (state > 0.4) {
+        before.emit(openAiFinal(id, `${id}.`));
+        finished.add(id);
+      }
+    }
+    await settle();
+
+    await switchTo("hi");
+    const after = sockets[1];
+    const newIds = Array.from({ length: Math.floor(random() * 4) }, (_, index) => `new_${index}`);
+    const oldAcks = oldIds.slice(ackedBeforeSwitch);
+    const newCommits = [...newIds];
+    const socketOf = (id: string) => (id.startsWith("old") ? before : after);
+    for (;;) {
+      const owed = [...acked].filter((id) => !finished.has(id));
+      const moves = [
+        ...(oldAcks.length ? ["oldAck"] : []),
+        ...(newCommits.length ? ["newCommit"] : []),
+        ...(owed.length ? ["final"] : []),
+      ];
+      if (!moves.length) break;
+      const move = moves[Math.floor(random() * moves.length)];
+      if (move === "oldAck") {
+        const id = oldAcks.shift()!;
+        before.emit(openAiCommitted(id));
+        acked.add(id);
+      } else if (move === "newCommit") {
+        const id = newCommits.shift()!;
+        await speak();
+        await commit();
+        after.emit(openAiCommitted(id));
+        acked.add(id);
+      } else {
+        const id = owed[Math.floor(random() * owed.length)];
+        if (random() < 0.5) socketOf(id).emit(openAiDelta(id, `${id} so far`));
+        socketOf(id).emit(openAiFinal(id, `${id}.`));
+        finished.add(id);
+      }
+      await settle();
+    }
+
+    const commitOrder = [...oldIds, ...newIds];
+    expect(savedTexts()).toEqual(commitOrder.map((id) => `${id}.`));
+    const places = broadcastPlaces();
+    for (const id of commitOrder) expect([...(places.get(id) ?? [])], `${id} keeps one place`).toHaveLength(1);
+    const placeOf = (id: string) => [...places.get(id)!][0];
+    expect([...commitOrder].sort((left, right) => placeOf(left) - placeOf(right))).toEqual(commitOrder);
+  });
+});
+
+describe("one place per line, fixed at commit", () => {
+  it("keeps an earlier line with partial text ahead of a later line that finished before the switch", async () => {
+    vi.useFakeTimers();
+    const { sockets, start, switchTo, speak, commit, savedTexts, broadcastPlaces } = await fixture(OPENAI);
+    await start("en");
+    const before = sockets[0];
+    await speak();
+    await commit();
+    before.emit(openAiCommitted("earlier"));
+    before.emit(openAiDelta("earlier", "Earlier"));
+    await speak();
+    await commit();
+    before.emit(openAiCommitted("later"));
+    before.emit(openAiFinal("later", "Later."));
+    await settle();
+
+    await switchTo("hi");
+    before.emit(openAiFinal("earlier", "Earlier."));
+    await settle();
+
+    expect(savedTexts()).toEqual(["Earlier.", "Later."]);
+    expect([...broadcastPlaces().get("earlier")!]).toHaveLength(1);
+  });
+
+  it.each(Array.from({ length: 100 }, (_, index) => index + 1))("Sarvam keeps commit order, seed %i", async (seed) => {
+    vi.useFakeTimers();
+    const random = seeded(seed);
+    const { sockets, start, switchTo, speak, savedTexts } = await fixture(SARVAM);
+    await start("hi");
+    const before = sockets[0];
+    const oldIds = Array.from({ length: 1 + Math.floor(random() * 4) }, (_, index) => `old_${index}`);
+    const finishedBeforeSwitch = Math.floor(random() * (oldIds.length + 1));
+    await speak();
+    for (const id of oldIds.slice(0, finishedBeforeSwitch)) before.emit(sarvamFinal(id, `${id}.`));
+    await settle();
+
+    await switchTo("ta");
+    const after = sockets[1];
+    const oldLeft = oldIds.slice(finishedBeforeSwitch);
+    const newLeft = Array.from({ length: Math.floor(random() * 3) }, (_, index) => `new_${index}`);
+    const newIds = [...newLeft];
+    while (oldLeft.length || newLeft.length) {
+      const fromOld = oldLeft.length && (!newLeft.length || random() < 0.5);
+      if (fromOld) {
+        const id = oldLeft.shift()!;
+        before.emit(sarvamFinal(id, `${id}.`));
+      } else {
+        const id = newLeft.shift()!;
+        await speak();
+        after.emit(sarvamFinal(id, `${id}.`));
+      }
+      await settle();
+    }
+
+    expect(savedTexts()).toEqual([...oldIds, ...newIds].map((id) => `${id}.`));
+  });
+});
