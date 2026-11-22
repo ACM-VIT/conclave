@@ -120,9 +120,9 @@ const evictOverflow = (tx: AuthorityTransaction<QaTables, Record<never, never>>)
     for (const [rowKey, row] of tx.scan("questions")) {
       if (tx.count("questions") <= QA_MAX_ENTRIES) return;
       if (wanted !== null && row.status !== wanted) continue;
-      for (const [voteKey] of tx.scan("upvotes", key(row.id))) {
-        tx.delete("upvotes", voteKey);
-      }
+      // One step, whatever the number of upvotes: a question a whole
+      // webinar upvoted must not use up the asker's transaction.
+      tx.clear("upvotes", key(row.id));
       tx.delete("questions", rowKey);
     }
   }
