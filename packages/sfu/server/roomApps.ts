@@ -4,6 +4,8 @@ import {
   encodeAwarenessUpdate,
   removeAwarenessStates,
 } from "y-protocols/awareness";
+import * as decoding from "lib0/decoding";
+import * as encoding from "lib0/encoding";
 import * as Y from "yjs";
 
 // A document larger than one sync response can no longer reach new joiners,
@@ -113,30 +115,41 @@ const clientsIn = (update: Uint8Array): { writers: Set<number>; touched: Set<num
   return { writers, touched };
 };
 
-// The client ids in a y-protocols awareness update: a count, then for each
-// client its id, its clock and a length-prefixed JSON state.
-const awarenessClientIds = (update: Uint8Array): number[] => {
-  let offset = 0;
-  const readVarUint = (): number => {
-    let value = 0;
-    for (let shift = 0; shift < 53; shift += 7) {
-      if (offset >= update.length) throw new Error("Truncated awareness update");
-      const byte = update[offset];
-      offset += 1;
-      value += (byte & 0x7f) * 2 ** shift;
-      if (byte < 0x80) return value;
-    }
-    throw new Error("Malformed awareness update");
-  };
-  const count = readVarUint();
-  const ids: number[] = [];
+type AwarenessEntry = { clientID: number; clock: number; state: string };
+
+const strictUtf8 = new TextDecoder("utf-8", { fatal: true });
+
+// Decodes an awareness update the way y-protocols does: a count, then for
+// each client its id, its clock and its JSON state, "null" for a removal.
+// Truncated, trailing or malformed input throws.
+const decodeAwarenessEntries = (update: Uint8Array): AwarenessEntry[] => {
+  const decoder = decoding.createDecoder(update);
+  const count = decoding.readVarUint(decoder);
+  const entries: AwarenessEntry[] = [];
   for (let index = 0; index < count; index += 1) {
-    ids.push(readVarUint());
-    readVarUint();
-    offset += readVarUint();
-    if (offset > update.length) throw new Error("Truncated awareness update");
+    const clientID = decoding.readVarUint(decoder);
+    const clock = decoding.readVarUint(decoder);
+    const length = decoding.readVarUint(decoder);
+    if (length > decoder.arr.length - decoder.pos) {
+      throw new Error("Truncated awareness update");
+    }
+    const state = strictUtf8.decode(decoding.readUint8Array(decoder, length));
+    JSON.parse(state);
+    entries.push({ clientID, clock, state });
   }
-  return ids;
+  if (decoding.hasContent(decoder)) throw new Error("Trailing bytes in awareness update");
+  return entries;
+};
+
+const encodeAwarenessEntries = (entries: AwarenessEntry[]): Uint8Array => {
+  const encoder = encoding.createEncoder();
+  encoding.writeVarUint(encoder, entries.length);
+  for (const entry of entries) {
+    encoding.writeVarUint(encoder, entry.clientID);
+    encoding.writeVarUint(encoder, entry.clock);
+    encoding.writeVarString(encoder, entry.state);
+  }
+  return encoding.toUint8Array(encoder);
 };
 
 // Presence lives for one stay on the stage, on a document of its own: an
@@ -483,32 +496,52 @@ export class RoomApps {
     }
   }
 
-  /** Applies presence for the presented app. Returns false for any other app. */
+  /**
+   * Applies presence for the presented app and returns what peers should get,
+   * or null when there is nothing to forward. Only the sender's own entries
+   * are kept: other people's removals, which a client sends as their cursors
+   * time out, are dropped, and an update carrying state under someone else's
+   * id is refused.
+   */
   applyAwarenessUpdate(
     appId: string,
     awarenessUpdate: Uint8Array,
     userId?: string,
-    clientId?: number,
-  ): boolean {
+  ): Uint8Array | null {
     const doc = this.liveDoc(appId);
-    if (!doc) return false;
+    if (!doc) return null;
     const participant = this.participantOf(userId ?? "socket");
-    if (!this.claimClientIds(participant, awarenessClientIds(awarenessUpdate))) return false;
+    const own: AwarenessEntry[] = [];
+    const claimed: number[] = [];
+    for (const entry of decodeAwarenessEntries(awarenessUpdate)) {
+      const owner = this.clientIdOwners.get(entry.clientID);
+      const removal = JSON.parse(entry.state) === null;
+      if (owner === participant || (owner === undefined && !removal)) {
+        own.push(entry);
+        if (owner === undefined) claimed.push(entry.clientID);
+      } else if (!removal) {
+        return null;
+      }
+    }
+    if (own.length === 0 || !this.claimClientIds(participant, claimed)) return null;
+
+    const forwarded = encodeAwarenessEntries(own);
     let awareness = this.awareness.get(appId);
     if (!awareness) {
       awareness = createPresence();
       this.awareness.set(appId, awareness);
     }
-    applyAwarenessUpdate(awareness, awarenessUpdate, userId ?? "socket");
-    if (!userId || typeof clientId !== "number" || !Number.isFinite(clientId)) {
-      return true;
+    applyAwarenessUpdate(awareness, forwarded, userId ?? "socket");
+    if (userId) {
+      for (const { clientID } of own) {
+        if (awareness.getStates().has(clientID)) {
+          this.trackAwarenessClientForUser(appId, userId, clientID);
+        } else {
+          this.untrackAwarenessClientForUser(appId, userId, clientID);
+        }
+      }
     }
-    if (awareness.getStates().has(clientId)) {
-      this.trackAwarenessClientForUser(appId, userId, clientId);
-    } else {
-      this.untrackAwarenessClientForUser(appId, userId, clientId);
-    }
-    return true;
+    return forwarded;
   }
 
   encodeAwarenessSnapshot(appId: string): Uint8Array | null {

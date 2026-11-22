@@ -387,30 +387,22 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     const awarenessUpdate = toUint8Array(data.awarenessUpdate);
     if (!awarenessUpdate || awarenessUpdate.length === 0) return;
     if (awarenessUpdate.length > MAX_APPS_AWARENESS_BYTES) return;
-    const clientId =
-      typeof data.clientId === "number" && Number.isFinite(data.clientId)
-        ? data.clientId
-        : undefined;
-
+    let forwarded: Uint8Array | null;
     try {
-      if (
-        !context.currentRoom.apps.applyAwarenessUpdate(
-          appId,
-          awarenessUpdate,
-          context.currentClient.id,
-          clientId,
-        )
-      ) {
-        return;
-      }
+      forwarded = context.currentRoom.apps.applyAwarenessUpdate(
+        appId,
+        awarenessUpdate,
+        context.currentClient.id,
+      );
     } catch (error) {
       Logger.warn("[Apps] Dropping invalid awareness update", error);
       return;
     }
+    if (!forwarded) return;
 
     socket.to(context.currentRoom.channelId).emit("apps:awareness", {
       appId,
-      awarenessUpdate,
+      awarenessUpdate: forwarded,
       clientId: data.clientId,
     } satisfies AppsAwarenessData);
   });

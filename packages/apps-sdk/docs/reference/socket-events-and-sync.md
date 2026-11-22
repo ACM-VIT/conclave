@@ -196,9 +196,18 @@ Client -> server (`apps:awareness`):
 - includes optional `clientId`
 - not blocked by lock mode
 
+Clients send only their own awareness entry. A client that sees a peer's
+entry time out does not forward that removal; the peer's own client, or the
+server when the peer leaves, removes it.
+
 Server -> peers (`apps:awareness`):
 
 - relayed to everyone else in room for active app
+- the server decodes every entry and relays only the sender's own: entries
+  under ids bound to the sender, or under new ids it can bind to them
+- removals of other participants' entries are dropped silently; an update
+  that carries state under another participant's id, or that does not decode,
+  is dropped whole
 - receiver applies awareness update with origin `"remote"`
 
 ## Game Events

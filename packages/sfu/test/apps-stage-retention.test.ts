@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
-import { Awareness, encodeAwarenessUpdate } from "y-protocols/awareness";
+import {
+  Awareness,
+  applyAwarenessUpdate,
+  encodeAwarenessUpdate,
+  removeAwarenessStates,
+} from "y-protocols/awareness";
 import type { Router } from "mediasoup/types";
 import type { Server as SocketIOServer, Socket } from "socket.io";
 import { Admin } from "../config/classes/Admin.js";
@@ -107,6 +112,14 @@ const makeRoom = () => {
         listeners.get("apps:awareness")!({
           appId,
           awarenessUpdate: encodeAwarenessUpdate(awareness, [awareness.clientID]),
+          clientId: awareness.clientID,
+        }),
+      sendRawAwareness: (appId: string, awarenessUpdate: Uint8Array, clientId: number) =>
+        listeners.get("apps:awareness")!({ appId, awarenessUpdate, clientId }),
+      sendAwarenessBatch: (appId: string, awareness: Awareness, clientIds: number[]) =>
+        listeners.get("apps:awareness")!({
+          appId,
+          awarenessUpdate: encodeAwarenessUpdate(awareness, clientIds),
           clientId: awareness.clientID,
         }),
       syncReply: (appId: string) =>
@@ -427,6 +440,136 @@ describe("Yjs client ids", () => {
 
     expect(join("late#1", "participant").coldSync("whiteboard")).toEqual({ shapes: ["circle"] });
     presence.destroy();
+  });
+
+  it("reads every entry of a presence batch, whatever the length of each state", () => {
+    const { join } = makeRoom();
+    const host = join("host#1", "host");
+    const viewer = join("viewer#1", "participant");
+    const spoofer = join("spoofer#1", "participant");
+    host.present("whiteboard");
+    const first = new Awareness(new Y.Doc());
+    first.setLocalState({ user: { id: "viewer#1" } });
+    const second = new Awareness(new Y.Doc());
+    second.setLocalState({ user: { id: "viewer#1", name: "v".repeat(200) } });
+    applyAwarenessUpdate(first, encodeAwarenessUpdate(second, [second.clientID]), "tab");
+
+    viewer.sendAwarenessBatch("whiteboard", first, [first.clientID, second.clientID]);
+    spoofer.sendUpdate("whiteboard", forgedUpdate(second.clientID, 0, "squatted"));
+
+    expect(viewer.relayed.map((sent) => sent.event)).toEqual(["apps:awareness"]);
+    expect(spoofer.relayed).toEqual([]);
+    first.destroy();
+    second.destroy();
+  });
+
+  it("forwards a sender's own cursor from a batch that also removes someone else's", () => {
+    const { join } = makeRoom();
+    const host = join("host#1", "host");
+    const viewer = join("viewer#1", "participant");
+    const peer = join("peer#1", "participant");
+    host.present("whiteboard");
+    const peerPresence = new Awareness(new Y.Doc());
+    peerPresence.setLocalState({ user: { id: "peer#1" } });
+    peer.sendAwareness("whiteboard", peerPresence);
+    const viewerPresence = new Awareness(new Y.Doc());
+    applyAwarenessUpdate(
+      viewerPresence,
+      encodeAwarenessUpdate(peerPresence, [peerPresence.clientID]),
+      "remote",
+    );
+    removeAwarenessStates(viewerPresence, [peerPresence.clientID], "timeout");
+    viewerPresence.setLocalState({ user: { id: "viewer#1" }, cursor: { x: 1, y: 2 } });
+
+    viewer.sendAwarenessBatch("whiteboard", viewerPresence, [
+      viewerPresence.clientID,
+      peerPresence.clientID,
+    ]);
+
+    const relayed = viewer.relayed.find((sent) => sent.event === "apps:awareness");
+    expect(relayed).toBeDefined();
+    const forwarded = new Awareness(new Y.Doc());
+    applyAwarenessUpdate(
+      forwarded,
+      (relayed!.payload as { awarenessUpdate: Uint8Array }).awarenessUpdate,
+      "remote",
+    );
+    expect(Array.from(forwarded.meta.keys()).filter((id) => id !== forwarded.clientID)).toEqual([
+      viewerPresence.clientID,
+    ]);
+    for (const presence of [peerPresence, viewerPresence, forwarded]) presence.destroy();
+  });
+
+  it("drops a presence update that ends partway through an entry", () => {
+    const { join } = makeRoom();
+    const host = join("host#1", "host");
+    const viewer = join("viewer#1", "participant");
+    host.present("whiteboard");
+    const presence = new Awareness(new Y.Doc());
+    presence.setLocalState({ user: { id: "viewer#1" } });
+    const whole = encodeAwarenessUpdate(presence, [presence.clientID]);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    viewer.sendAwarenessBatch("whiteboard", presence, []);
+    const truncated = whole.slice(0, whole.length - 3);
+    expect(() =>
+      viewer.sendRawAwareness("whiteboard", truncated, presence.clientID),
+    ).not.toThrow();
+
+    expect(viewer.relayed).toEqual([]);
+    presence.destroy();
+  });
+
+  it("refuses a presence batch that carries someone else's state", () => {
+    const { join } = makeRoom();
+    const host = join("host#1", "host");
+    const viewer = join("viewer#1", "participant");
+    const peer = join("peer#1", "participant");
+    host.present("whiteboard");
+    const peerPresence = new Awareness(new Y.Doc());
+    peerPresence.setLocalState({ user: { id: "peer#1" } });
+    peer.sendAwareness("whiteboard", peerPresence);
+    const viewerPresence = new Awareness(new Y.Doc());
+    applyAwarenessUpdate(
+      viewerPresence,
+      encodeAwarenessUpdate(peerPresence, [peerPresence.clientID]),
+      "remote",
+    );
+
+    viewer.sendAwarenessBatch("whiteboard", viewerPresence, [
+      viewerPresence.clientID,
+      peerPresence.clientID,
+    ]);
+
+    expect(viewer.relayed).toEqual([]);
+    peerPresence.destroy();
+    viewerPresence.destroy();
+  });
+
+  it("removes only a leaving participant's own cursors, whatever id they name", () => {
+    const { room, join } = makeRoom();
+    const host = join("host#1", "host");
+    const viewer = join("viewer#1", "participant");
+    const peer = join("peer#1", "participant");
+    host.present("whiteboard");
+    const peerPresence = new Awareness(new Y.Doc());
+    peerPresence.setLocalState({ user: { id: "peer#1" } });
+    peer.sendAwareness("whiteboard", peerPresence);
+    const viewerPresence = new Awareness(new Y.Doc());
+    viewerPresence.setLocalState({ user: { id: "viewer#1" } });
+
+    viewer.sendRawAwareness(
+      "whiteboard",
+      encodeAwarenessUpdate(viewerPresence, [viewerPresence.clientID]),
+      peerPresence.clientID,
+    );
+    room.apps.clearUserAwareness("viewer#1");
+
+    const left = new Awareness(new Y.Doc());
+    applyAwarenessUpdate(left, room.apps.encodeAwarenessSnapshot("whiteboard")!, "remote");
+    expect(left.getStates().has(peerPresence.clientID)).toBe(true);
+    expect(left.getStates().has(viewerPresence.clientID)).toBe(false);
+    for (const presence of [peerPresence, viewerPresence, left]) presence.destroy();
   });
 
   it("keeps a participant's own client id when they rejoin", () => {
