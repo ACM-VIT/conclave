@@ -7,6 +7,7 @@ import MeetsErrorBanner from "../src/app/components/MeetsErrorBanner";
 import InCallNotice from "../src/app/components/InCallNotice";
 import InCallNoticeCard from "../src/app/components/InCallNoticeCard";
 import InCallNoticeSlot from "../src/app/components/InCallNoticeSlot";
+import { clearMediaDeviceError, createMeetError, mergeMediaDeviceError } from "../src/app/lib/utils";
 import { Headphones, VolumeX } from "lucide-react";
 
 let root: Root;
@@ -292,4 +293,34 @@ describe("in-call notices", () => {
     await act(async () => root.render(<InCallNoticeSlot>{null}</InCallNoticeSlot>));
     panel.remove();
   });
+
+  it("gives the microphone's permission advice once a missing camera is fixed", async () => {
+    const micBlocked = createMeetError(new DOMException("Permission denied", "NotAllowedError"), "PERMISSION_DENIED", "microphone");
+    const cameraMissing = createMeetError(new DOMException("Requested device not found", "NotFoundError"), "MEDIA_ERROR", "camera");
+    const remaining = clearMediaDeviceError(mergeMediaDeviceError(micBlocked, cameraMissing), "camera");
+    await render(
+      <InCallNotice show>
+        <MeetsErrorBanner meetError={remaining!} onDismiss={() => {}} />
+      </InCallNotice>,
+    );
+    expect(errorCard()?.textContent).toContain("Microphone is blocked");
+    expect(errorCard()?.textContent).toContain("Allow microphone access in your browser, then try again.");
+  });
+
+  it("gives each device its own advice when their causes differ", async () => {
+    const merged = mergeMediaDeviceError(
+      createMeetError(new DOMException("Permission denied", "NotAllowedError"), "PERMISSION_DENIED", "microphone"),
+      createMeetError(new DOMException("Requested device not found", "NotFoundError"), "MEDIA_ERROR", "camera"),
+    );
+    await render(
+      <InCallNotice show>
+        <MeetsErrorBanner meetError={merged} onDismiss={() => {}} />
+      </InCallNotice>,
+    );
+    expect(errorCard()?.textContent).toContain("Microphone is blocked and no camera found");
+    expect(errorCard()?.textContent).toContain(
+      "Allow microphone access in your browser, and check that your camera isn’t in use by another app, then try again.",
+    );
+  });
 });
+

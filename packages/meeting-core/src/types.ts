@@ -629,6 +629,13 @@ export interface MeetError {
   message: string;
   recoverable: boolean;
   device?: MeetMediaDevice;
+  causes?: Partial<Record<"camera" | "microphone", MeetMediaDeviceCause>>;
+}
+
+export interface MeetMediaDeviceCause {
+  code: MeetError["code"];
+  kind: "blocked" | "missing" | "unresponsive" | "other";
+  message: string;
 }
 
 export type {

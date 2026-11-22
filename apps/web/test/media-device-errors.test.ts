@@ -163,3 +163,26 @@ describe("tracking every device that is still failing", () => {
   });
 });
 
+describe("keeping each device's own cause", () => {
+  it("restores the microphone's permission cause after a missing camera is fixed", () => {
+    const micBlocked = createMeetError(denied, "PERMISSION_DENIED", "microphone");
+    const cameraMissing = createMeetError(missing, "MEDIA_ERROR", "camera");
+    const merged = mergeMediaDeviceError(micBlocked, cameraMissing);
+    expect(merged).toMatchObject({
+      device: "both",
+      code: "PERMISSION_DENIED",
+      message: "Microphone is blocked and no camera found",
+    });
+    expect(clearMediaDeviceError(merged, "camera")).toMatchObject({
+      device: "microphone",
+      code: "PERMISSION_DENIED",
+      message: "Microphone is blocked",
+    });
+    expect(clearMediaDeviceError(merged, "microphone")).toMatchObject({
+      device: "camera",
+      code: "MEDIA_ERROR",
+      message: "No camera found",
+    });
+  });
+});
+
