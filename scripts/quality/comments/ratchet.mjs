@@ -226,4 +226,11 @@ const main = () => {
   return check(repo, baseline, process.env.COMMENT_RATCHET_BASE || DEFAULT_BASE, process.env.COMMENT_RATCHET_MODE || "merge-base");
 };
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) process.exitCode = main();
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  try {
+    process.exitCode = main();
+  } catch (error) {
+    console.error(`comment ratchet: ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 2;
+  }
+}

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -263,4 +263,18 @@ test("with the previous tip gone, a refill under a stale baseline still fails ag
   assert.equal(result.status, 1);
   assert.match(result.stdout, /comparing with HEAD\^1 \([0-9a-f]{8}\) and the merge base with origin\/staging \([0-9a-f]{8}\)/);
   assert.match(result.stderr, /App\.swift: comments rose from 1 to 2 since/);
+});
+
+test("without python3 the ratchet fails instead of guessing at Python comments", (t) => {
+  const repo = repoWith(t, { "tool.py": 'print(f"{1:=#6x}")\n', [BASELINE]: {} });
+  const gitBinary = (process.env.PATH ?? "").split(path.delimiter).map((dir) => path.join(dir, "git")).find((candidate) => existsSync(candidate));
+  const bin = mkdtempSync(path.join(tmpdir(), "no-python-"));
+  t.after(() => rmSync(bin, { recursive: true, force: true }));
+  symlinkSync(gitBinary, path.join(bin, "git"));
+  const result = spawnSync(process.execPath, [RATCHET, "--repo", repo], {
+    encoding: "utf8",
+    env: { ...cleanEnv(), PATH: bin, COMMENT_RATCHET_BASE: "base", COMMENT_RATCHET_MODE: "merge-base" },
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /python3 is required to read Python comments/);
 });

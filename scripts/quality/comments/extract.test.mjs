@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { extractComments, iconGeneratorOutputs, pythonScannerFallback, scanPythonByHand } from "./extract.mjs";
-import { configuresNoComments } from "./policy.mjs";
+import { extractComments, iconGeneratorOutputs, listSourceFiles } from "./extract.mjs";
+import { configuresNoComments, languageOf } from "./policy.mjs";
 
-const pythonHasPep701 =
-  spawnSync("python3", ["-I", "-c", "import sys; print(sys.version_info >= (3, 12))"], { encoding: "utf8" }).stdout?.trim() === "True";
 
 const texts = (source, file) => extractComments(source, file).map((comment) => comment.text);
 const disallowed = (source, file) =>
@@ -304,7 +306,7 @@ test("CSS unquoted url() is not a comment", () => {
   assert.deepEqual(texts(source, "a.css"), ["/* real */"]);
 });
 
-test("Python f-string replacement fields can hold comments, format specs cannot", { skip: !pythonHasPep701 && "comments in f-string fields need Python 3.12 (PEP 701)" }, () => {
+test("Python f-string replacement fields can hold comments, format specs cannot", () => {
   const source = [
     'value = f"""{',
     "    total  # inside a replacement field",
@@ -423,11 +425,10 @@ test("escapes in CSS, shell and Kotlin never open a comment", () => {
 });
 
 test("Python comments come from tokenize, so format specs stay code", () => {
-  assert.equal(pythonScannerFallback(), undefined);
   assert.deepEqual(texts('print(f"{1:=#6x}")  # real\n', "a.py"), ["# real"]);
 });
 
-test("Python 3.12 comments inside a multiline f-string field", { skip: !pythonHasPep701 && "comments in f-string fields need Python 3.12 (PEP 701)" }, () => {
+test("Python 3.12 comments inside a multiline f-string field", () => {
   assert.deepEqual(texts('value = f"""{\n    total  # inside\n}"""\n', "a.py"), ["# inside"]);
 });
 
@@ -480,12 +481,6 @@ test("a # inside ${...} and a comment after a line continuation, run by bash", (
   assert.deepEqual(texts(source, "fixture.sh"), ["# it's a comment", "# last"]);
 });
 
-test("the no-python fallback keeps format specs as code", () => {
-  assert.deepEqual(scanPythonByHand('x = f"{42:=#8x}"  # real\n').length, 1);
-  const [[start]] = scanPythonByHand('x = f"{42:=#8x}"  # real\n');
-  assert.equal('x = f"{42:=#8x}"  # real\n'.slice(start, start + 6), "# real");
-});
-
 test("a license notice must start its comment", () => {
   const source = [
     "// SPDX-License-Identifier: MIT",
@@ -495,4 +490,78 @@ test("a license notice must start its comment", () => {
   assert.deepEqual(extractComments(source, "a.ts").map((c) => c.allowed), ["license-header", null]);
   const later = ["// Copyright 2026 Example Inc.", "// Notes on the Copyright (c) dialog", "export {};"].join("\n");
   assert.deepEqual(extractComments(later, "b.ts").map((c) => c.allowed), ["license-header", null]);
+});
+test("a Swift raw string #\"\"\"# holds one quote and does not open a multiline string", () => {
+  assert.deepEqual(texts('let a = #"""#\n// real\nlet b = ##"""##\n// two\n', "A.swift"), ["// real", "// two"]);
+  assert.deepEqual(texts('let c = #"""\n  // inside\n  """#\n// three\n', "B.swift"), ["// three"]);
+});
+
+test("an unquoted CSS url() is scanned to its closing paren however much whitespace it has", () => {
+  assert.deepEqual(texts(`a { b: url(${" ".repeat(60)}img/*large*/x.png); }\n/* real */\n`, "a.css"), ["/* real */"]);
+});
+
+test("every tracked file's last comment is an end marker appended to it", () => {
+  const repo = fileURLToPath(new URL("../../..", import.meta.url));
+  const markers = { script: "// END-OF-FILE-MARKER", swift: "// END-OF-FILE-MARKER", kotlin: "// END-OF-FILE-MARKER", css: "/* END-OF-FILE-MARKER */", shell: "# END-OF-FILE-MARKER", python: "# END-OF-FILE-MARKER" };
+  const misses = [];
+  for (const file of listSourceFiles(repo)) {
+    const marker = markers[languageOf(file)];
+    const text = `${readFileSync(path.join(repo, file), "utf8")}\n${marker}\n`;
+    if (extractComments(text, file).at(-1)?.text !== marker) misses.push(file);
+  }
+  assert.deepEqual(misses, []);
+});
+
+test("bash continuations, arithmetic and command substitution in parameter defaults, run by bash", (t) => {
+  if (spawnSync("bash", ["--version"]).error) {
+    t.skip("bash is not installed");
+    return;
+  }
+  const source = [
+    "echo word\\",
+    "\\",
+    "#literal",
+    'echo "${GREETING:-$((1 << 4))}"',
+    'echo "${GREETING:-`echo backtick`}"',
+    "echo tag ${tag:-Issue #123}",
+    "echo \\",
+    "# Don't restart yet",
+    "echo after",
+    "# last",
+  ].join("\n");
+  const run = spawnSync("bash", ["-c", source], { encoding: "utf8", env: { PATH: process.env.PATH } });
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(run.stdout.split("\n").filter(Boolean), ["word#literal", "16", "backtick", "tag Issue #123", "after"]);
+  assert.deepEqual(texts(source, "fixture.sh"), ["# Don't restart yet", "# last"]);
+});
+
+test("an f-string with reused quotes reads the same as Python 3.12 does", () => {
+  assert.deepEqual(texts('label = f"{labels["#primary"]}"\n# real\n', "a.py"), ["# real"]);
+});
+
+const olderPython = () => {
+  for (const candidate of ["python3.11", "python3.10", "/usr/bin/python3"]) {
+    const probe = spawnSync(candidate, ["-c", "import sys; print(sys.version_info < (3, 12), sys.executable)"], { encoding: "utf8" });
+    const [older, executable] = (probe.stdout ?? "").trim().split(" ");
+    if (!probe.error && older === "True") return executable;
+  }
+  return undefined;
+};
+
+test("with only a Python older than 3.12 the extractor fails instead of guessing", (t) => {
+  const older = olderPython();
+  if (!older) {
+    t.skip("no Python older than 3.12 is installed");
+    return;
+  }
+  const bin = mkdtempSync(path.join(tmpdir(), "old-python-"));
+  t.after(() => rmSync(bin, { recursive: true, force: true }));
+  symlinkSync(older, path.join(bin, "python3"));
+  const script = `import(${JSON.stringify(new URL("./extract.mjs", import.meta.url).href)}).then(({ extractComments }) => extractComments('label = f"{labels["#primary"]}"\\n', "a.py"))`;
+  const run = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+    encoding: "utf8",
+    env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}` },
+  });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /Python 3\.12 or newer is required to read Python comments/);
 });
