@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useMeetingTranscript } from "../src/app/hooks/useMeetingTranscript";
 
-type Sent = { type: string; language?: string };
+type Sent = { type: string; language?: string; requestId?: string };
 
 class FakeSocket {
   static OPEN = 1;
@@ -146,6 +146,110 @@ describe("a live caption language switch", () => {
     expect(await result).toBe(true);
     expect(startRelay).toHaveBeenCalledWith({ relayStartToken: "relay" });
     expect(controller.session.language).toBe("hi");
+  });
+});
+
+describe("overlapping notes requests", () => {
+  const requestIdFor = (socket: FakeSocket, language: string) =>
+    socket.sent.find((message) => message.language === language)?.requestId;
+
+  it("starts one relay, for the switch the worker accepted", async () => {
+    const socket = await mount();
+    await act(async () => socket.frame({ type: "session.state", session: liveSession }));
+
+    let hindi!: Promise<boolean>;
+    let tamil!: Promise<boolean>;
+    await act(async () => {
+      hindi = controller.takeover({ language: "hi" });
+      tamil = controller.takeover({ language: "ta" });
+    });
+    const hindiId = requestIdFor(socket, "hi");
+    const tamilId = requestIdFor(socket, "ta");
+    expect(hindiId).toBeTruthy();
+    expect(tamilId).not.toBe(hindiId);
+    await act(async () =>
+      socket.frame({
+        type: "session.state",
+        session: { ...liveSession, status: "starting", language: "hi", requestId: hindiId },
+      }),
+    );
+    await act(async () =>
+      socket.frame({ type: "error", message: "Notes changed while connecting.", requestId: tamilId }),
+    );
+    await act(async () =>
+      socket.frame({
+        type: "session.state",
+        session: { ...liveSession, language: "hi", requestId: hindiId, updatedAt: 2 },
+      }),
+    );
+    await act(async () =>
+      socket.frame({ type: "sfu.relayStartToken", token: "relay", expiresAt: Date.now() + 60_000 }),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6_000);
+    });
+
+    expect([await hindi, await tamil]).toEqual([true, false]);
+    expect(startRelay).toHaveBeenCalledTimes(1);
+  });
+
+  it("finishes a start whose acceptance was lost when the socket reconnected", async () => {
+    const socket = await mount();
+    await act(async () =>
+      socket.frame({ type: "snapshot", session: { ...liveSession, status: "idle" } }),
+    );
+
+    let result!: Promise<boolean>;
+    await act(async () => {
+      result = controller.start({ language: "hi", transportMode: "sfu" });
+    });
+    const requestId = socket.sent.find((message) => message.type === "session.start")?.requestId;
+    expect(requestId).toBeTruthy();
+    await act(async () => socket.close());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    const reconnected = FakeSocket.instances.at(-1)!;
+    expect(reconnected).not.toBe(socket);
+    await act(async () =>
+      reconnected.frame({
+        type: "snapshot",
+        session: { ...liveSession, language: "hi", requestId },
+      }),
+    );
+    await act(async () =>
+      reconnected.frame({ type: "sfu.relayStartToken", token: "relay", expiresAt: Date.now() + 60_000 }),
+    );
+
+    expect(await result).toBe(true);
+    expect(controller.error).toBeNull();
+  });
+
+  it("does not let an older worker's single acceptance settle two overlapping requests", async () => {
+    const socket = await mount();
+    await act(async () => socket.frame({ type: "session.state", session: liveSession }));
+
+    let hindi!: Promise<boolean>;
+    let tamil!: Promise<boolean>;
+    await act(async () => {
+      hindi = controller.takeover({ language: "hi" });
+      tamil = controller.takeover({ language: "ta" });
+    });
+    await act(async () =>
+      socket.frame({ type: "session.state", session: { ...liveSession, status: "starting", language: "hi" } }),
+    );
+    await act(async () =>
+      socket.frame({ type: "session.state", session: { ...liveSession, language: "hi", updatedAt: 2 } }),
+    );
+    await act(async () =>
+      socket.frame({ type: "sfu.relayStartToken", token: "relay", expiresAt: Date.now() + 60_000 }),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(31_000);
+    });
+
+    expect([await hindi, await tamil]).toEqual([false, false]);
+    expect(startRelay.mock.calls.length).toBeLessThanOrEqual(1);
   });
 });
 

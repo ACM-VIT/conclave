@@ -73,7 +73,12 @@ async function fixture(env: Partial<Env> = {}) {
     } as Env,
   ) as unknown as TestRoom;
   await room.loaded;
-  const sent: { type: string; message?: string }[] = [];
+  const sent: {
+    type: string;
+    message?: string;
+    requestId?: string;
+    session?: TranscriptSessionState;
+  }[] = [];
   const viewer = {
     id: "host",
     userId: "host",
@@ -228,3 +233,32 @@ describe("the language code Sarvam is asked for", () => {
     expect(await requestedCode(providers[1])).toBe("ta-IN");
   });
 });
+
+describe("telling a client which request the worker answered", () => {
+  it("echoes the request id on the session it starts and on a refusal", async () => {
+    const { room, viewer, sent } = await fixture();
+
+    await room.startSession(viewer, {
+      ...roomSession,
+      type: "session.start",
+      language: "en",
+      requestId: "request-1",
+    });
+    moveRoomToSarvam();
+    await room.startSession(viewer, {
+      ...roomSession,
+      type: "session.takeover",
+      language: "fr",
+      requestId: "request-2",
+    });
+
+    const states = sent.filter(({ type }) => type === "session.state");
+    expect(states.map(({ session }) => [session?.status, session?.requestId])).toContainEqual([
+      "starting",
+      "request-1",
+    ]);
+    expect(room.session?.requestId).toBe("request-1");
+    expect(sent.find(({ type }) => type === "error")?.requestId).toBe("request-2");
+  });
+});
+

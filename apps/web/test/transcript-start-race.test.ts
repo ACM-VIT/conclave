@@ -129,6 +129,7 @@ it("does not restart stopped notes when an older key lookup completes after a st
   expect(room.sendError).toHaveBeenCalledWith(
     viewer,
     expect.stringContaining("Notes changed"),
+    undefined,
   );
 });
 

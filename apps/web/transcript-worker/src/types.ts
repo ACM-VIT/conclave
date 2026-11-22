@@ -93,6 +93,7 @@ export type ClientEnvelope =
       transportMode?: TranscriptTransportMode;
       language?: string;
       delay?: string;
+      requestId?: string;
     }
   | { type: "session.stop" }
   | { type: "session.relayFailed"; message?: string }

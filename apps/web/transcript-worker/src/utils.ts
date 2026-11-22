@@ -57,6 +57,11 @@ export const normalizeDelay = (value: unknown): string => {
     : DEFAULT_TRANSCRIPTION_DELAY;
 };
 
+export const normalizeRequestId = (value: unknown): string | undefined =>
+  typeof value === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(value)
+    ? value
+    : undefined;
+
 export const normalizeLanguage = (value: unknown): string => {
   const candidate = toStringValue(value, DEFAULT_LANGUAGE).trim();
   return /^[a-zA-Z-]{2,12}$/.test(candidate) ? candidate : DEFAULT_LANGUAGE;

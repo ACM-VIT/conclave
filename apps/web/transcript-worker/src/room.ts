@@ -106,6 +106,7 @@ import {
   json,
   normalizeDelay,
   normalizeLanguage,
+  normalizeRequestId,
   normalizeLocale,
   normalizeModel,
   normalizeRoomIdFromPath,
@@ -542,10 +543,11 @@ export class TranscriptRoom {
     return getTranscriptServiceVersion(this.env);
   }
 
-  private sendError(viewer: Viewer, message: string): void {
+  private sendError(viewer: Viewer, message: string, requestId?: string): void {
     this.send(viewer.socket, {
       type: "error",
       message: redactSensitiveText(message),
+      ...(requestId ? { requestId } : {}),
     });
   }
 
@@ -807,6 +809,8 @@ export class TranscriptRoom {
   ): Promise<void> {
     const existingStatus = this.session?.status ?? "idle";
     const takeover = message.type === "session.takeover";
+    const requestId = normalizeRequestId(message.requestId);
+    const refuse = (text: string) => this.sendError(viewer, text, requestId);
     const permission = resolveTranscriptStartPermission({
       canStart: viewer.capabilities.start,
       canTakeover: viewer.capabilities.takeover,
@@ -816,7 +820,7 @@ export class TranscriptRoom {
       viewerUserId: viewer.userId,
     });
     if (!permission.ok) {
-      this.sendError(viewer, permission.message);
+      refuse(permission.message);
       return;
     }
 
@@ -858,7 +862,7 @@ export class TranscriptRoom {
         usesRoomKey = providers.some((provider) => Boolean(getProviderApiKey(roomEnv, provider)));
       } catch (error) {
         console.warn("[Transcript] room AI lookup failed:", JSON.stringify(describeRoomAiLookupFailure(error)));
-        this.sendError(viewer, "Room AI settings could not be loaded. Please reconnect and try again.");
+        refuse("Room AI settings could not be loaded. Please reconnect and try again.");
         return;
       }
       if (
@@ -866,10 +870,7 @@ export class TranscriptRoom {
         !this.viewers.has(viewer.socket) ||
         (this.session?.status ?? "idle") !== existingStatus
       ) {
-        this.sendError(
-          viewer,
-          "Notes changed while connecting. Please try again.",
-        );
+        refuse("Notes changed while connecting. Please try again.");
         return;
       }
     }
@@ -878,7 +879,7 @@ export class TranscriptRoom {
     transcriptionProvider = getTranscriptTranscriptionProvider(transcriptModel);
     qaModel = featureSettings.questions?.model ?? qaModel;
     if (!resolveAiFeatureSettings(effectiveEnv, "transcription").enabled) {
-      this.sendError(viewer, "Transcription is disabled in Room AI settings.");
+      refuse("Transcription is disabled in Room AI settings.");
       return;
     }
     const transcriptionKey = this.resolveTranscriptionKey(
@@ -887,7 +888,7 @@ export class TranscriptRoom {
       effectiveEnv,
     );
     if (!transcriptionKey.ok) {
-      this.sendError(viewer, transcriptionKey.message);
+      refuse(transcriptionKey.message);
       return;
     }
     const personalResponseKeys: typeof this.personalResponseKeys = {};
@@ -909,7 +910,7 @@ export class TranscriptRoom {
       const settings = resolveAiFeatureSettings(feature === "minutes" && separateTextProfiles ? effectiveEnv : {...effectiveEnv, CONCLAVE_ASSISTANT_MODEL: qaModel}, feature);
       if (!settings.enabled) continue;
       const key = this.resolveResponseKey(settings.model, transcriptionProvider, message.apiKey, personalResponseKeys[getResponseProvider(settings.model)], effectiveEnv);
-      if (!key.ok) { this.sendError(viewer, key.message); return; }
+      if (!key.ok) { refuse(key.message); return; }
     }
 
     const providerEnv = { ...this.env, ...effectiveEnv };
@@ -931,10 +932,7 @@ export class TranscriptRoom {
       providerEnv,
     );
     if (!canCaption && message.language) {
-      this.sendError(
-        viewer,
-        "This room's transcription model can't caption in that language.",
-      );
+      refuse("This room's transcription model can't caption in that language.");
       return;
     }
     const language = canCaption ? requestedLanguage : deploymentLanguage;
@@ -964,6 +962,7 @@ export class TranscriptRoom {
       transportMode,
       language,
       languageChosen,
+      requestId,
       keySource:
         !usesRoomKey && transcriptionKey.source === "global" && (!responseKey.ok || responseKey.source === "global")
           ? "global"
