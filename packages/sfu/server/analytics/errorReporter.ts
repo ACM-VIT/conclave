@@ -180,9 +180,14 @@ const URL_PATTERN = /\bhttps?:\/\/[^\s"'<>)]+/gi;
 // Any scheme with user info: redis://:pass@host, postgres://user:pass@host,
 // https://token@host. The whole URI goes, host included.
 const CREDENTIAL_URI_PATTERN = /\b[a-z][a-z0-9+.-]*:\/\/[^\s/?#@"'<>]*@[^\s"'<>)]*/gi;
+// Headers whose whole value is a credential: everything to the end of the line.
+const CREDENTIAL_HEADER_PATTERN =
+  /\b(cookie|set-cookie|authorization|proxy-authorization)(\s*:)[^\r\n]*/gi;
+const AUTH_SCHEME_PATTERN = /\b(bearer|basic)\s+[^\s,;"']+/gi;
 const SECRET_ASSIGNMENT_PATTERN =
-  /\b(password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|authorization|cookie)(\s*[:=]\s*)(?:(?:bearer|basic)\s+)?("[^"]*"|'[^']*'|[^\s,;]+)/gi;
-const AUTH_HEADER_PATTERN = /\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{6,}/gi;
+  /\b(password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|session)(\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;&"']+)/gi;
+// The account name in a home folder: /Users/<name>, /home/<name>, C:\Users\<name>.
+const HOME_FOLDER_PATTERN = /(?:\/Users|\/home)\/[^/\s"'`]+|[A-Za-z]:\\Users\\[^\\\s"'`]+/g;
 
 /** Replaces the meeting code or ids in a path, like the web scrubber does. */
 const templatePath = (pathname: string): string => {
@@ -201,16 +206,23 @@ const scrubUrl = (value: string): string => {
   }
 };
 
+const scrubHomeFolders = (value: string): string =>
+  value.replace(HOME_FOLDER_PATTERN, "~");
+
 /**
- * Removes credentials (URIs with user info, secret assignments, auth headers),
- * URL paths and queries, emails and tokens from an error message.
+ * Removes credentials (URIs with user info, credential headers, auth tokens,
+ * secret assignments), URL paths and queries, home folder names, emails and
+ * tokens from an error message.
  */
 export const scrubErrorText = (value: string): string =>
-  value
-    .replace(CREDENTIAL_URI_PATTERN, "[credentials]")
-    .replace(URL_PATTERN, scrubUrl)
-    .replace(SECRET_ASSIGNMENT_PATTERN, "$1$2[redacted]")
-    .replace(AUTH_HEADER_PATTERN, "$1 [redacted]")
+  scrubHomeFolders(
+    value
+      .replace(CREDENTIAL_URI_PATTERN, "[credentials]")
+      .replace(URL_PATTERN, scrubUrl)
+      .replace(CREDENTIAL_HEADER_PATTERN, "$1$2 [redacted]")
+      .replace(AUTH_SCHEME_PATTERN, "$1 [redacted]")
+      .replace(SECRET_ASSIGNMENT_PATTERN, "$1$2[redacted]"),
+  )
     .replace(JWT_PATTERN, "[token]")
     .replace(EMAIL_PATTERN, "[email]")
     .replace(LONG_TOKEN_PATTERN, "[token]");
@@ -223,13 +235,18 @@ type ExceptionListEntry = {
 
 // posthog-node reads the lines around each frame from disk. They are source,
 // not data, but a literal in that source still leaves the box, so they go.
-const withoutSourceContext = (frame: ExceptionFrame): ExceptionFrame => {
+// Frame paths keep their shape minus any home folder's account name.
+const scrubFrame = (frame: ExceptionFrame): ExceptionFrame => {
   const {
     pre_context: _before,
     context_line: _line,
     post_context: _after,
     ...rest
   } = frame;
+  for (const key of ["filename", "abs_path"]) {
+    const path = rest[key];
+    if (typeof path === "string") rest[key] = scrubHomeFolders(path);
+  }
   return rest;
 };
 
@@ -240,7 +257,7 @@ const scrubEntry = (entry: ExceptionListEntry): ExceptionListEntry => ({
     ? {
         stacktrace: {
           ...entry.stacktrace,
-          frames: (entry.stacktrace.frames as ExceptionFrame[]).map(withoutSourceContext),
+          frames: (entry.stacktrace.frames as ExceptionFrame[]).map(scrubFrame),
         },
       }
     : {}),

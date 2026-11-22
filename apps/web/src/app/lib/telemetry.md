@@ -120,8 +120,10 @@ transcript and effects worklets and so on) on the page's own origin keep their p
 properties never do.
 Session replay, surveys, DOM autocapture, feature flags and pageviews are off,
 and no user is ever identified. The SFU scrubs emails, tokens and credentials
-(any URI with user info, `password=` style assignments, auth headers) from
-exception messages, cuts every URL to its origin and route (`/[code]`,
+(any URI with user info, the whole value of `Cookie`, `Set-Cookie`,
+`Authorization` and `Proxy-Authorization` lines, Bearer and Basic tokens,
+`password=` style values) and home folder names (`/Users/<name>` becomes `~`)
+from exception messages and frame paths, cuts every URL to its origin and route (`/[code]`,
 `/w/[code]`, `/[path]`), and drops the source lines posthog-node attaches to
 stack frames before sending. Config errors name the variable, never its value.
 Game events group by a keyed hash of the room (`room_<hmac>`), never its code.

@@ -186,6 +186,54 @@ describe("SFU error reporter", () => {
     expect(request).not.toMatch(/pre_context|context_line|post_context/);
   });
 
+  it("redacts whole credential headers and home folders in the request", async () => {
+    const fake = await startFakePostHog();
+    servers.push(fake.server);
+    const reporter = reporterFor(posthogClient(fake.host));
+
+    reporter.report(
+      new Error(
+        "Upstream rejected the request\nCookie: theme=dark; session=second_private\n" +
+          "Set-Cookie: sid=set_private; Path=/\nAuthorization: Bearer short_private\n" +
+          "Proxy-Authorization: Basic cHJveHk\n" +
+          "ENOENT: no such file or directory, open '/Users/operator_private/config/tls.crt' " +
+          "and /home/deploy_private/conclave/.env",
+      ),
+      { source: "startup_failed" },
+    );
+
+    await waitFor(() => fake.events.some((event) => event.event === "$exception"));
+    const request = fake.bodies.join("\n");
+    expect(request).not.toMatch(
+      /theme=dark|second_private|set_private|short_private|cHJveHk|operator_private|deploy_private/,
+    );
+    expect(request).toContain("~/config/tls.crt");
+    expect(request).toContain("~/conclave/.env");
+  });
+
+  it("strips home folders from stack frame paths", () => {
+    const scrubbed = scrubExceptionEvent({
+      event: "$exception",
+      properties: {
+        $exception_list: [
+          {
+            value: "boom",
+            stacktrace: {
+              frames: [
+                { filename: "/Users/operator_private/conclave/packages/sfu/server.ts", lineno: 1 },
+                { filename: "C:\\Users\\operator_private\\sfu\\server.js", lineno: 2 },
+                { filename: "server/socket/joinRoom.ts", lineno: 3 },
+              ],
+            },
+          },
+        ],
+      },
+    });
+
+    expect(JSON.stringify(scrubbed)).not.toContain("operator_private");
+    expect(JSON.stringify(scrubbed)).toContain("server/socket/joinRoom.ts");
+  });
+
   it.each([
     ["webinar https://conclave.test/w/spring-demo?x=1", "webinar https://conclave.test/w/[code]"],
     ["api https://sfu.conclave.test/rooms/lime-pear-plum/state", "api https://sfu.conclave.test/[path]"],
