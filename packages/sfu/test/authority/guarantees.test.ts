@@ -1719,9 +1719,6 @@ describe("large views and slow sockets", () => {
     const raviTab = await room.open(ravi, probeContract);
     const entry = hostTab.client.entryFor(probeContract)!;
     const name = "rows-grow-in-flight";
-    // Bytes a row takes on the wire, counted as the server counts them.
-    const rowBytes = (row: ProjectedRow): number =>
-      Buffer.byteLength(JSON.stringify(row.value)) + row.bucket.length + row.key.length + 32;
 
     void raviTab.raw(AUTHORITY_EVENTS.subscribe, {
       roomEpoch: room.authority.roomEpoch,
@@ -1757,13 +1754,41 @@ describe("large views and slow sockets", () => {
 
     expect(parts.length).toBeGreaterThan(2);
     for (const part of parts) {
-      const bytes = part.rows.reduce((total, row) => total + rowBytes(row), 0);
-      // A part holds at most the part size, or a single row larger than it.
+      const bytes = Buffer.byteLength(JSON.stringify(part.rows));
+      // A part holds at most the part size on the wire, or a single row.
       expect(part.rows.length === 1 || bytes <= small.chunkBytes, `part ${part.part}: ${bytes} bytes`).toBe(true);
     }
     expect(parts.map((part) => part.part)).toEqual(parts.map((_, index) => index));
     expect(parts.map((part) => part.last)).toEqual(parts.map((_, index) => index === parts.length - 1));
     expect([2, 3, 4].map((index) => field(held.get(`n${index}`) ?? null, "text"))).toEqual(grown);
+    expect(raviTab.rows("notes").length).toBe(5);
+  });
+
+  it("keeps every part of a snapshot within the part size in real bytes, with keys and text that are not ASCII", async () => {
+    const limits = { ...DEFAULT_AUTHORITY_LIMITS, chunkBytes: 500 };
+    const room = new Harness([probeAuthority], { runtime: { limits } });
+    const hostTab = await room.open(host, probeContract);
+    // The probe keys a view by its text, so these keys are Japanese too, and
+    // some characters need escaping in JSON.
+    const texts = ["日本語のテキスト", "引用\"符と\\逆斜線", "改行\nとタブ\t", "絵文字😀を含む", "普通の文"];
+    for (let index = 0; index < texts.length; index += 1) {
+      const put = await hostTab.act("put", { id: `n${index}`, text: texts[index].repeat(12) });
+      expect(put.ok).toBe(true);
+    }
+    await room.deliver();
+    const raviTab = await room.open(ravi, probeContract);
+    await room.drain();
+
+    const parts = replaces(raviTab.frames);
+    const sizes = parts.map((part) => ({
+      rows: part.rows.length,
+      bytes: Buffer.byteLength(JSON.stringify(part.rows)),
+    }));
+    expect(parts.length).toBeGreaterThan(2);
+    // A part holds at most the part size in bytes on the wire, or one row.
+    for (const size of sizes) {
+      expect(size.rows === 1 || size.bytes <= limits.chunkBytes, JSON.stringify(size)).toBe(true);
+    }
     expect(raviTab.rows("notes").length).toBe(5);
   });
 
@@ -2330,6 +2355,63 @@ describe("revisions", () => {
     expect(named(second)).toBeGreaterThan(before);
     expect(versionOf(coHost)).toBe(named(second));
     expect(field(coHost.row("polls", pollId), "status")).toBe("ended");
+  });
+
+  it("answers a viewer whose delivery was skipped with the version of the view that recovers it", async () => {
+    let behind = "";
+    const room = new Harness([pollsAuthority], {
+      runtime: {
+        pressure: (socket) => ({ packets: socket.id === behind ? 300 : 0, bytes: 0 }),
+      },
+    });
+    const hostTab = await room.open(host, pollsContract);
+    const coHost = await room.open(person("dev@example.com", "Dev", "host"), pollsContract);
+    const pollId = await createPoll(room, hostTab);
+    const versionOf = (tab: Tab): number => (tab.state.kind === "ready" ? tab.state.revision : -1);
+    const named = (result: AuthorityResult<Json>): number =>
+      result.ok ? (result.revision ?? -1) : -1;
+
+    // The co-host's socket falls behind, so the first end is not delivered.
+    behind = coHost.seat.socket.id;
+    const first = await hostTab.act("end", { pollId });
+    await room.deliver();
+    // The co-host ends it too: a write of nothing, answered while behind.
+    const second = await coHost.act("end", { pollId });
+    const whenAnswered = {
+      version: versionOf(coHost),
+      status: field(coHost.row("polls", pollId), "status"),
+    };
+    behind = "";
+    await room.advance(300);
+
+    expect([first.ok, second.ok]).toEqual([true, true]);
+    expect(whenAnswered.status).toBe("open");
+    // The answer is reached only by the view that shows the poll ended.
+    expect(named(second)).toBeGreaterThan(whenAnswered.version);
+    expect(versionOf(coHost)).toBe(named(second));
+    expect(field(coHost.row("polls", pollId), "status")).toBe("ended");
+  });
+
+  it("answers a fresh viewer's write that changes nothing with the version it holds, whatever happened before its snapshot", async () => {
+    const room = new Harness([probeAuthority]);
+    const firstTab = await room.open(priya, probeContract);
+    await room.deliver();
+    const note = { id: "hello", text: "public note" };
+    // A change not yet flushed to anyone when the fresh viewer opens the app.
+    const put = await firstTab.act("put", note);
+    const fresh = await room.open(ravi, probeContract);
+    const versionOf = (tab: Tab): number => (tab.state.kind === "ready" ? tab.state.revision : -1);
+    const before = versionOf(fresh);
+    const fromBefore = fresh.frames.length;
+    // The fresh viewer writes the same note again: nothing changes for them.
+    const same = await fresh.act("put", note);
+    await room.deliver();
+
+    expect([put.ok, same.ok]).toEqual([true, true]);
+    expect(fresh.row("notes", "hello")).toEqual(note);
+    expect(same.ok ? same.revision : -1).toBe(before);
+    expect(versionOf(fresh)).toBe(before);
+    expect(fresh.frames.slice(fromBefore)).toEqual([]);
   });
 
   it("keeps a client's view version going up when it subscribes again, and reads answers the same way", async () => {

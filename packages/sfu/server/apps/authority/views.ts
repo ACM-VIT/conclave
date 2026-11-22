@@ -87,11 +87,48 @@ export type CommittedView = {
 /** A whole view, and the version of the views it was read at. */
 export type ViewSnapshot = { rows: SizedRow[]; version: number };
 
+/**
+ * What a viewer whose snapshot was read at `version` holds of a changed key:
+ * the last thing it became by then, or what was held before the change.
+ */
+const heldAt = (change: Untold, version: number): string | undefined => {
+  let held = change.before;
+  for (const step of change.steps) {
+    if (step.at > version) break;
+    held = step.encoded;
+  }
+  return held;
+};
+
 /** What a viewer was sent of its view, bucket by bucket: each row as sent. */
 export type HeldRows = Map<string, Map<string, Json>>;
 
-/** Framing around one row on the wire: its field names and punctuation. */
-const ROW_OVERHEAD_BYTES = 32;
+/**
+ * Bytes a row takes in a frame, counted as JSON on the wire: the row object
+ * `{"bucket":..,"key":..,"value":..}` and the comma that follows it in an
+ * array. A whole array of rows is one byte more than its rows, for the
+ * brackets less the last comma. Bucket and key are measured as encoded,
+ * escapes and all, never by their length in UTF-16 units.
+ */
+export const rowBytes = (bucket: string, key: string, encodedValue: string): number =>
+  ROW_FRAMING_BYTES +
+  Buffer.byteLength(JSON.stringify(bucket)) +
+  Buffer.byteLength(JSON.stringify(key)) +
+  Buffer.byteLength(encodedValue);
+
+/** Bytes a removal takes in a patch: `{"bucket":..,"key":..}` and its comma. */
+export const refBytes = (bucket: string, key: string): number =>
+  REF_FRAMING_BYTES +
+  Buffer.byteLength(JSON.stringify(bucket)) +
+  Buffer.byteLength(JSON.stringify(key));
+
+/** The bytes an array of rows adds to the rows in it. */
+export const ARRAY_BYTES = 1;
+
+/** `{"bucket":` `,"key":` `,"value":` `}` and a comma. */
+const ROW_FRAMING_BYTES = 28;
+/** `{"bucket":` `,"key":` `}` and a comma. */
+const REF_FRAMING_BYTES = 19;
 
 const rowsOf = (audience: Audience, into: SizedRow[]): void => {
   for (const [bucket, state] of audience.buckets) {
@@ -149,11 +186,7 @@ export class ViewChanges {
     const ops = emptyOps();
     for (const change of this.told) {
       // The row as their snapshot had it: the last thing it became by then.
-      let held = change.before;
-      for (const step of change.steps) {
-        if (step.at > version) break;
-        held = step.encoded;
-      }
+      const held = heldAt(change, version);
       if (change.now) {
         if (held === change.now.encoded) continue;
         ops.put.push({
@@ -166,7 +199,7 @@ export class ViewChanges {
         // Never in their view, so there is nothing for them to drop.
         if (held === undefined) continue;
         ops.remove.push({ bucket: change.bucket, key: change.key });
-        ops.bytes += change.bucket.length + change.key.length + ROW_OVERHEAD_BYTES;
+        ops.bytes += refBytes(change.bucket, change.key);
       }
     }
     return ops;
@@ -383,27 +416,38 @@ export class ViewTracker {
       for (const key of rows.keys()) {
         if (now?.has(key)) continue;
         ops.remove.push({ bucket, key });
-        ops.bytes += bucket.length + key.length + ROW_OVERHEAD_BYTES;
+        ops.bytes += refBytes(bucket, key);
       }
     }
     return { ops, version: this.version };
   }
 
   /**
-   * Whether this viewer's view is behind what has been committed: a change
-   * to it taken in and not yet told, a removal still owed, or a committed
-   * write not yet taken in that projects differently for them than what
-   * they hold. Only their own projections are read, so the answer says
-   * nothing of writes they cannot see. Nothing is taken in here: taking in
-   * one action's writes at a time could split a handoff of a key between
-   * two rows that the flush takes in together.
+   * Whether a viewer whose snapshot was read at `version` is behind what has
+   * been committed. Only their own audiences are read, their role's rows and
+   * their own, and only what changed after their snapshot counts:
+   *
+   * - a change taken in and not yet told that differs from what they hold;
+   * - a removal still owed of a row they held;
+   * - a row cleared, or a write committed, since the views last took writes
+   *   in, that projects for them otherwise than their view has it.
+   *
+   * So nothing they cannot see, and nothing their snapshot already showed,
+   * makes them behind. Nothing is taken in here: taking in one action's
+   * writes at a time could split a handoff of a key between two rows that
+   * the flush takes in together.
    */
-  pendingFor(role: Role, subject: Subject): boolean {
+  pendingSince(role: Role, subject: Subject, version: number): boolean {
     const shared = this.roles.get(role);
     const own = this.subjects.get(subject);
     for (const audience of [shared, own]) {
       for (const bucket of audience?.buckets.values() ?? []) {
-        if (bucket.untold.size > 0 || bucket.owed.size > 0) return true;
+        for (const [key, change] of bucket.untold) {
+          if (bucket.rows.get(key)?.encoded !== heldAt(change, version)) return true;
+        }
+        for (const [key, change] of bucket.owed) {
+          if (bucket.rows.get(key)?.encoded !== heldAt(change, version)) return true;
+        }
       }
     }
     for (const [tableName, keys] of this.store.clearedRows) {
@@ -455,11 +499,18 @@ export class ViewTracker {
     return bucket?.rows.get(heldKey)?.encoded !== JSON.stringify(projected.value);
   }
 
-  /** Whether removals from a large clear are still owed to this viewer's audiences. */
-  owes(role: Role, subject: Subject): boolean {
+  /**
+   * Whether removals from a large clear are still owed to a viewer whose
+   * snapshot was read at `version`: rows they held that are gone and they
+   * have yet to be told so.
+   */
+  owesSince(role: Role, subject: Subject, version: number): boolean {
     for (const audience of [this.roles.get(role), this.subjects.get(subject)]) {
       for (const bucket of audience?.buckets.values() ?? []) {
-        if (bucket.owed.size > 0) return true;
+        for (const [key, change] of bucket.owed) {
+          const held = heldAt(change, version);
+          if (held !== undefined && bucket.rows.get(key)?.encoded !== held) return true;
+        }
       }
     }
     return false;
@@ -794,11 +845,7 @@ export class ViewTracker {
     bucket.owner.set(projected.key, source);
     if (bucket.rows.get(projected.key)?.encoded === encoded) return;
     if (tell) this.note(audience, bucket, projected.key, false, encoded);
-    const bytes =
-      Buffer.byteLength(encoded) +
-      name.length +
-      projected.key.length +
-      ROW_OVERHEAD_BYTES;
+    const bytes = rowBytes(name, projected.key, encoded);
     bucket.rows.set(projected.key, { encoded, value: projected.value, bytes });
   }
 
