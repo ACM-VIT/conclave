@@ -1047,7 +1047,11 @@ export default function TranscriptPanel({
   const switchProvider = getTranscriptTranscriptionProvider(
     roomAi?.state.features?.transcription?.model ?? session.transcriptModel,
   );
+  const shownLanguage = transcript.supportsCaptionLanguage
+    ? session.language
+    : undefined;
   const canSwitchLanguage =
+    transcript.supportsCaptionLanguage &&
     session.status === "live" &&
     transcript.isController &&
     transcript.canTakeover &&
@@ -1228,21 +1232,21 @@ export default function TranscriptPanel({
                         : "Connecting audio"
                       : "Following live"}
               </span>
-              {session.language && !canSwitchLanguage ? (
+              {shownLanguage && !canSwitchLanguage ? (
                 <span className="shrink-0 text-[#d4d4d8]">
-                  {captionLanguageLabel(session.language)}
+                  {captionLanguageLabel(shownLanguage)}
                 </span>
               ) : null}
             </div>
             <div className="flex shrink-0 items-center gap-1">
-              {canSwitchLanguage && session.language ? (
+              {canSwitchLanguage && shownLanguage ? (
                 <>
                   <label htmlFor="captions-language-live" className="sr-only">
                     Meeting language
                   </label>
                   <CaptionLanguageSelect
                     id="captions-language-live"
-                    value={session.language}
+                    value={shownLanguage}
                     provider={sessionProvider}
                     onChange={(code) => {
                       void transcript.takeover({

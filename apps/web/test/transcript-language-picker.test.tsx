@@ -210,6 +210,18 @@ describe("caption language picker", () => {
     expect(select("captions-language-live")?.value).toBe("fr");
   });
 
+  it("shows no live switch or language on a worker without caption language support", async () => {
+    await render(
+      controller(
+        { status: "live", language: "hi", keySource: "global" },
+        { isController: true, supportsCaptionLanguage: false },
+      ),
+    );
+
+    expect(select("captions-language-live")).toBeNull();
+    expect(container.textContent).not.toContain("Hindi");
+  });
+
   it("hides the live switch when the worker does not report a language", async () => {
     await render(
       controller({ status: "live", keySource: "global" }, { isController: true }),
