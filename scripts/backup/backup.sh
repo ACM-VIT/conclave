@@ -47,21 +47,33 @@ manifest="${payload}/MANIFEST"
 
 sources=0
 
+# The compose file mounts the state dir at this path and hands the SFU its
+# database as CONCLAVE_SQLITE_PATH. A database outside the mount lives in the
+# container, is lost on every deploy, and cannot be backed up from the host.
+container_state_dir=/var/lib/conclave/recordings
+if [[ -n "${CONCLAVE_SQLITE_PATH:-}" && "$CONCLAVE_SQLITE_PATH" != "${container_state_dir}/"* &&
+  "$CONCLAVE_SQLITE_PATH" != "${STATE_DIR%/}/"* ]]; then
+  die "CONCLAVE_SQLITE_PATH=${CONCLAVE_SQLITE_PATH} is outside the state dir, so it is not on the volume; move it under ${container_state_dir}"
+fi
+
 # SQLite: the online backup API copies a consistent snapshot while the SFUs
-# keep writing; copying the file (or its WAL) directly would not.
-shopt -s nullglob
-for db in "${STATE_DIR}"/*.sqlite; do
-  copy="${payload}/sqlite/$(basename "$db")"
+# keep writing; copying the file (or its WAL) directly would not. Each
+# database keeps its path below the state dir, so restore.sh puts it back
+# where the SFU opens it.
+mapfile -t databases < <(sqlite_files "$STATE_DIR")
+for rel in "${databases[@]}"; do
+  db="${STATE_DIR}/${rel}"
+  copy="${payload}/sqlite/${rel}"
+  mkdir -p "$(dirname "$copy")"
   log "SQLite online backup of ${db}"
   sqlite3 -bail "$db" ".timeout 15000" ".backup '${copy}'"
   integrity="$(sqlite3 "$copy" "PRAGMA integrity_check;")"
   [[ "$integrity" == "ok" ]] || die "integrity check of the ${db} copy failed: ${integrity}"
   while read -r table; do
-    echo "sqlite.$(basename "$db").${table}=$(sqlite3 "$copy" "SELECT count(*) FROM \"${table}\";")" >> "$manifest"
+    echo "sqlite.${rel}.${table}=$(sqlite3 "$copy" "SELECT count(*) FROM \"${table}\";")" >> "$manifest"
   done < <(sqlite3 "$copy" "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name;")
   sources=$((sources + 1))
 done
-shopt -u nullglob
 
 # Redis: redis-cli --rdb asks the server for a fresh point-in-time snapshot
 # (the same fork as BGSAVE) and streams it here, so it works whether Redis

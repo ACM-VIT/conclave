@@ -74,6 +74,23 @@ redis_cli() (
   exec redis-cli "${args[@]}" --no-auth-warning "$@"
 )
 
+# Prints every SQLite database under a directory, at any depth, as a path
+# relative to it.
+sqlite_files() {
+  [[ -d "$1" ]] || return 0
+  (cd "$1" && find . -type f -name '*.sqlite' | sed 's#^\./##' | LC_ALL=C sort)
+}
+
+# redis-cli's own quoting for commands sent on stdin: double quotes with \\
+# and \" escapes.
+quote_args() {
+  local arg
+  for arg in "$@"; do
+    arg="${arg//\\/\\\\}"
+    printf '"%s" ' "${arg//\"/\\\"}"
+  done
+}
+
 # --- Azure Blob Storage over REST, authenticated by the VM's managed identity.
 
 blob_base_url() {

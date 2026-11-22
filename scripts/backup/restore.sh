@@ -8,7 +8,7 @@
 #   restore.sh --identity key.txt --file /var/backups/conclave/conclave-...tar.gz.age [--yes]
 #
 # --only sqlite,redis,files   restore a subset (default: all three)
-# --redis-pattern 'glob'      Redis keys to restore (default: the SFU persistence prefix)
+# --redis-pattern 'glob'      Redis keys to make match the backup (default: the SFU persistence prefix)
 #
 # Stop the SFU containers first: the SFUs hold the databases open and keep
 # their state in memory, so they must start fresh on the restored data.
@@ -73,11 +73,10 @@ payload="${work}/payload"
 mkdir -p "$payload"
 age --decrypt -i "$identity" "$archive" | tar -C "$payload" -xzf -
 (cd "$payload" && sha256sum -c --quiet SHA256SUMS) || die "checksums do not match; the archive is damaged"
-shopt -s nullglob
-for db in "${payload}"/sqlite/*.sqlite; do
-  [[ "$(sqlite3 "$db" "PRAGMA integrity_check;")" == "ok" ]] || die "$(basename "$db") failed its integrity check"
+mapfile -t databases < <(sqlite_files "${payload}/sqlite")
+for rel in "${databases[@]}"; do
+  [[ "$(sqlite3 "${payload}/sqlite/${rel}" "PRAGMA integrity_check;")" == "ok" ]] || die "${rel} failed its integrity check"
 done
-shopt -u nullglob
 log "Archive verified. Manifest:"
 sed 's/^/  /' "${payload}/MANIFEST"
 
@@ -93,24 +92,22 @@ for url in ${CONCLAVE_SFU_HEALTH_URLS:-http://127.0.0.1:3031/health http://127.0
     die "an SFU still answers at ${url}; stop the SFU containers before restoring"
   fi
 done
-
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "$STATE_DIR"
 
 if wants sqlite; then
-  shopt -s nullglob
-  for db in "${payload}"/sqlite/*.sqlite; do
-    dest="${STATE_DIR}/$(basename "$db")"
+  for rel in "${databases[@]}"; do
+    dest="${STATE_DIR}/${rel}"
+    mkdir -p "$(dirname "$dest")"
     # The live database and its WAL move aside together, so they stay a
     # consistent pair if this restore has to be undone.
     for suffix in "" "-wal" "-shm"; do
       [[ -e "${dest}${suffix}" ]] && mv "${dest}${suffix}" "${dest}${suffix}.pre-restore-${stamp}"
     done
-    cp "$db" "${dest}.restore-tmp"
+    cp "${payload}/sqlite/${rel}" "${dest}.restore-tmp"
     mv "${dest}.restore-tmp" "$dest"
     log "Restored ${dest} (previous copy kept as ${dest}.pre-restore-${stamp})"
   done
-  shopt -u nullglob
 fi
 
 if wants files && [[ -f "${payload}/state-files.tar" ]]; then
@@ -118,9 +115,12 @@ if wants files && [[ -f "${payload}/state-files.tar" ]]; then
   log "Restored the other files in ${STATE_DIR}"
 fi
 
-# Redis: load the snapshot into a throwaway server, then copy the matching
-# keys into the live one with MIGRATE COPY REPLACE. Only the durable keys come
-# back; room leases and presence from the night before stay gone.
+# Redis: load the snapshot into a throwaway server, copy the matching keys
+# into the live one with MIGRATE COPY REPLACE, then delete the live keys in
+# that pattern the snapshot does not have. The SFUs prefer a Redis key over
+# the restored SQLite copy, so a key written after the backup would otherwise
+# outlive the restore. Keys outside the pattern, such as room leases and
+# presence, are left alone.
 if wants redis && [[ -f "${payload}/redis/dump.rdb" ]]; then
   [[ -n "$REDIS_SOURCE_URL" ]] || die "no Redis URL configured to restore into"
   parse_redis_url "$REDIS_SOURCE_URL"
@@ -154,14 +154,6 @@ if wants redis && [[ -f "${payload}/redis/dump.rdb" ]]; then
   elif [[ -n "$REDIS_PASS" ]]; then
     auth=(AUTH "$REDIS_PASS")
   fi
-  # redis-cli's own quoting: double quotes with \\ and \" escapes.
-  quote_args() {
-    local arg
-    for arg in "$@"; do
-      arg="${arg//\\/\\\\}"
-      printf '"%s" ' "${arg//\"/\\\"}"
-    done
-  }
   # The scratch server dials the live one itself; "localhost" can resolve to
   # ::1 first while Redis listens on 127.0.0.1 only.
   target_host="$REDIS_HOST"
@@ -175,6 +167,17 @@ if wants redis && [[ -f "${payload}/redis/dump.rdb" ]]; then
     total=$((total + ${#batch[@]}))
   done < <(redis-cli -s "$socket" -n "$REDIS_DB" --scan --pattern "$REDIS_KEY_PATTERN")
   log "Restored ${total} Redis keys matching ${REDIS_KEY_PATTERN}"
+
+  redis-cli -s "$socket" -n "$REDIS_DB" --scan --pattern "$REDIS_KEY_PATTERN" | LC_ALL=C sort -u > "${scratch}/backup-keys"
+  redis_cli --scan --pattern "$REDIS_KEY_PATTERN" | LC_ALL=C sort -u > "${scratch}/live-keys"
+  LC_ALL=C comm -13 "${scratch}/backup-keys" "${scratch}/live-keys" > "${scratch}/stale-keys"
+  removed=0
+  while mapfile -t -n 200 batch && (( ${#batch[@]} > 0 )); do
+    reply="$({ quote_args DEL "${batch[@]}"; echo; } | redis_cli)"
+    [[ "$reply" =~ ^[0-9]+$ ]] || die "deleting keys the backup does not have failed: ${reply}"
+    removed=$((removed + ${#batch[@]}))
+  done < "${scratch}/stale-keys"
+  log "Deleted ${removed} Redis keys matching ${REDIS_KEY_PATTERN} that the backup does not have"
   redis-cli -s "$socket" SHUTDOWN NOSAVE >/dev/null 2>&1 || true
 fi
 
