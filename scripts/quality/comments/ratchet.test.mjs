@@ -64,11 +64,11 @@ test("a new file with comments fails", (t) => {
 test("a falling count passes, and --update lowers the baseline", (t) => {
   const repo = repoWith(t, {
     "Main.kt": "// one\n// two\nval a = 1\n",
-    "gone.py": "# old\n",
-    [BASELINE]: { "Main.kt": 2, "gone.py": 1 },
+    "gone.css": "/* old */\n",
+    [BASELINE]: { "Main.kt": 2, "gone.css": 1 },
   });
   write(repo, { "Main.kt": "// one\nval a = 1\n" });
-  git(repo, "rm", "-q", "gone.py");
+  git(repo, "rm", "-q", "gone.css");
   const check = ratchet(repo);
   assert.equal(check.status, 0, check.stderr);
   assert.match(check.stdout, /2 file\(s\) have fewer comments than the baseline/);
