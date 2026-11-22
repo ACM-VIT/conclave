@@ -1027,6 +1027,24 @@ describe("a meeting a host ended for everyone", () => {
     expect(visitor.context.currentClient).toBeInstanceOf(Admin);
   });
 
+  it("takes back someone let into the reopened meeting 650 ms after the end", async () => {
+    const { state } = await endedMeeting();
+    // endedMeeting leaves the clock 2 s past the end. Step back inside the
+    // second the meeting ended in.
+    vi.setSystemTime(new Date("2026-11-22T08:00:00.650Z"));
+    await join(state, host);
+    roomOf(state).allowLockedUser(guest.userId);
+    const member = await join(state, guest);
+
+    const after = await restart(state);
+    const back = await join(
+      after,
+      { ...guest, allowRoomCreation: true },
+      { roomRecoveryPass: member.response.roomRecoveryPass },
+    );
+    expect(back.status).toBe("joined");
+  });
+
   it("still brings back the people in the reopened meeting if the server loses it", async () => {
     const { state } = await endedMeeting();
     vi.advanceTimersByTime(5_000);

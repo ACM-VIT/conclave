@@ -62,6 +62,9 @@ export const issueRoomRecoveryPass = (
       channelId: room.channelId,
       userKey,
       incarnationId: room.incarnationId,
+      // `iat` is in whole seconds. The end of a meeting is known to the
+      // millisecond, and the two are compared.
+      issuedAtMs: Date.now(),
     },
     secret,
     { algorithm: "HS256", expiresIn: TTL_SECONDS },
@@ -127,8 +130,8 @@ export const provesEarlierRoomMembership = (
     claims.userKey === userKey &&
     typeof claims.incarnationId === "string" &&
     claims.incarnationId !== room.incarnationId &&
-    typeof claims.iat === "number" &&
+    typeof claims.issuedAtMs === "number" &&
     (room.recoveryPassesVoidUntil === null ||
-      claims.iat * 1000 > room.recoveryPassesVoidUntil)
+      claims.issuedAtMs > room.recoveryPassesVoidUntil)
   );
 };
