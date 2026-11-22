@@ -253,7 +253,11 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           ? (normalizeIdentifier(user?.guestProof, MAX_GUEST_PROOF_LENGTH) ??
             undefined)
           : undefined;
-        if (guestProof !== undefined && user?.guestWas) {
+        // Only a token issued for this room may take over what another key
+        // of the same pass holds here: a seat it held, or a stage invite.
+        const roomGuestProof =
+          user?.guestRoom !== undefined ? guestProof : undefined;
+        if (roomGuestProof !== undefined && user?.guestWas) {
           state.rooms.get(resolvedChannelId)?.succeedGuestIdentity(
             {
               userKey:
@@ -268,7 +272,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
                 ) ?? undefined,
             },
             userKey,
-            guestProof,
+            roomGuestProof,
           );
         }
         // A host invite ("bring on stage") lets an attendee identity rejoin as
@@ -281,7 +285,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           Boolean(
             state.rooms
               .get(resolvedChannelId)
-              ?.takeWebinarPromotion(userKey, guestProof),
+              ?.takeWebinarPromotion(userKey, roomGuestProof),
           );
         if (
           isActiveScheduledWebinarRoom &&

@@ -294,6 +294,7 @@ describe("a stage invite for a guest whose key differs between the audience and 
     ...audience,
     userId: "guest-gp_LLLLLLLLLLLLLLLLLLLLLL",
     joinMode: "meeting",
+    guestRoom: "room",
   } satisfies SfuAuthPayload;
 
   // A locked webinar: only the host's invite gets anyone past the lock.
@@ -361,6 +362,18 @@ describe("a stage invite for a guest whose key differs between the audience and 
     expect(back.ack).toHaveBeenCalledWith(
       expect.objectContaining({ status: "joined", webinarRole: "participant" }),
     );
+  });
+
+  it("does not hand the invite to a token that was not issued for this room", async () => {
+    const { state, room } = await invited();
+    const { guestRoom: _room, ...anyRoomToken } = onStage;
+
+    const attempt = await join(state, anyRoomToken);
+
+    expect(attempt.ack).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "waiting" }),
+    );
+    expect(room.isWebinarPromotedUserKey(audience.userId)).toBe(true);
   });
 
   it("keeps the invited guest bound to its pass once it is on the stage", async () => {
@@ -840,6 +853,7 @@ describe("a guest whose pass changed between two joins from one tab", () => {
     clientId: "conclave",
     sessionId: guestHost.sessionId,
     guestProof: "proof-of-the-cookie-pass",
+    guestRoom: "room",
     guestWas: { userKey: guestHost.userId, guestProof: guestHost.guestProof },
   } satisfies SfuAuthPayload;
   const successorSeat = `${successor.userId}#${successor.sessionId}`;
@@ -878,6 +892,7 @@ describe("a guest whose pass changed between two joins from one tab", () => {
       ...guest,
       userId: "guest-gp_UUUUUUUUUUUUUUUUUUUUUU",
       guestProof: "proof-of-the-cookie-pass",
+      guestRoom: "room",
       guestWas: { userKey: guest.userId, guestProof: guest.guestProof },
     });
 
@@ -893,6 +908,18 @@ describe("a guest whose pass changed between two joins from one tab", () => {
     const room = state.rooms.get("conclave:room")!;
 
     const attempt = await join(state, { ...successor, guestWas });
+
+    expect(attempt.context.currentClient).not.toBeInstanceOf(Admin);
+    expect(room.getHostUserId()).toBe(guestHostSeat);
+  });
+
+  it("gets nothing from a token that was not issued for this room", async () => {
+    const state = makeState();
+    await join(state, guestHost);
+    const room = state.rooms.get("conclave:room")!;
+    const { guestRoom: _room, ...anyRoomToken } = successor;
+
+    const attempt = await join(state, anyRoomToken);
 
     expect(attempt.context.currentClient).not.toBeInstanceOf(Admin);
     expect(room.getHostUserId()).toBe(guestHostSeat);
@@ -916,6 +943,7 @@ describe("a guest whose pass changed between two joins from one tab", () => {
       ...guest,
       userId: "guest-gp_UUUUUUUUUUUUUUUUUUUUUU",
       guestProof: "proof-of-the-cookie-pass",
+      guestRoom: "room",
       guestWas: { userKey: guest.userId, guestProof: guest.guestProof },
     });
 
