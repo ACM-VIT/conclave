@@ -2,7 +2,11 @@ import type { NextConfig } from "next";
 import { execSync } from "node:child_process";
 import path from "path";
 import { fileURLToPath } from "url";
-import { buildSecurityHeaders } from "./src/lib/security-headers";
+import {
+  buildSecurityHeaders,
+  SANDBOXED_ROUTE_HEADERS,
+  SANDBOXED_ROUTE_SOURCES,
+} from "./src/lib/security-headers";
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 const workspaceRoot = path.resolve(currentDir, "../..");
@@ -109,6 +113,10 @@ const nextConfig: NextConfig = {
           isDevelopment: process.env.NODE_ENV === "development",
         }),
       },
+      ...SANDBOXED_ROUTE_SOURCES.map((source) => ({
+        source,
+        headers: SANDBOXED_ROUTE_HEADERS,
+      })),
       {
         source: "/transcript-pcm-processor.js",
         headers: [

@@ -2,6 +2,14 @@ export type HeaderEntry = { key: string; value: string };
 
 export const CSP_REPORT_PATH = "/api/csp-report";
 
+// These routes serve a generated SVG and proxied images under their own
+// sandbox policy. Next.js drops a route's header when config already set the
+// same key, so config has to send the sandbox policy for them.
+export const SANDBOXED_ROUTE_SOURCES = ["/api/avatar", "/api/unfurl/asset"];
+export const SANDBOXED_ROUTE_HEADERS: HeaderEntry[] = [
+  { key: "Content-Security-Policy", value: "default-src 'none'; sandbox; frame-ancestors 'none'" },
+];
+
 // The production SFU pool (sfu, sfu-a, sfu-b) and the transcription worker
 // live under this domain. Their URLs reach the browser at runtime from the
 // join API and the SFU, so they cannot be listed at build time.
