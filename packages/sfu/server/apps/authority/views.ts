@@ -16,12 +16,19 @@ import type { AuthorityStore } from "./store.js";
 
 export type ViewOps = { put: ProjectedRow[]; remove: RowRef[]; bytes: number };
 
-export type ViewFlush = {
-  shared: Map<Role, ViewOps>;
-  personal: Map<Subject, ViewOps>;
-};
-
 type Delivered = { encoded: string; value: Json; bytes: number };
+
+/**
+ * One projected key that changed since its audience was last told: when it
+ * first changed, when it last did, and what the audience held before.
+ */
+type Untold = {
+  /** The version of the views at the first change, and at the last. */
+  since: number;
+  at: number;
+  /** The row as it was before the first change, or undefined for none. */
+  before: string | undefined;
+};
 
 /** What one audience (a role, or one subject) holds of one bucket. */
 type Bucket = {
@@ -30,34 +37,34 @@ type Bucket = {
   bySource: Map<TableKey, string>;
   /** Projected key to the source row that owns it. */
   owner: Map<string, TableKey>;
+  /** Changes the next flush tells in full. */
+  untold: Map<string, Untold>;
   /**
-   * Keys of rows a `clear` took that this audience's viewers still hold.
-   * The rows are out of `rows` already, so a snapshot never carries them and
-   * a new row is free to take such a key. Viewers are owed their removal,
-   * unless a new row lands on the key first.
+   * Rows a `clear` took. They are out of `rows` already, so no snapshot
+   * carries them and a new row is free to take such a key. Only telling
+   * those who held them is left, a bounded number each flush.
    */
-  owed: Set<string>;
+  owed: Map<string, Untold>;
 };
-
-type Audience = Map<string, Bucket>;
 
 /** Whose audience it is, to address what it is told. */
 type AudienceOf = { role: Role } | { subject: Subject };
 
+type Audience = { of: AudienceOf; buckets: Map<string, Bucket> };
+
 const emptyOps = (): ViewOps => ({ put: [], remove: [], bytes: 0 });
-const isEmpty = (ops: ViewOps): boolean =>
-  ops.put.length === 0 && ops.remove.length === 0;
 
 const bucketOf = (audience: Audience, name: string): Bucket => {
-  let bucket = audience.get(name);
+  let bucket = audience.buckets.get(name);
   if (!bucket) {
     bucket = {
       rows: new Map(),
       bySource: new Map(),
       owner: new Map(),
-      owed: new Set(),
+      untold: new Map(),
+      owed: new Map(),
     };
-    audience.set(name, bucket);
+    audience.buckets.set(name, bucket);
   }
   return bucket;
 };
@@ -65,29 +72,95 @@ const bucketOf = (audience: Audience, name: string): Bucket => {
 /** A projected row and its size on the wire, for splitting a snapshot. */
 export type SizedRow = { row: ProjectedRow; bytes: number };
 
+/** A whole view, and the version of the views it was read at. */
+export type ViewSnapshot = { rows: SizedRow[]; version: number };
+
 /** Framing around one row on the wire: its field names and punctuation. */
 const ROW_OVERHEAD_BYTES = 32;
 
-const rowsOf = (audience: Audience): SizedRow[] => {
-  const rows: SizedRow[] = [];
-  for (const [bucket, state] of audience) {
+const rowsOf = (audience: Audience, into: SizedRow[]): void => {
+  for (const [bucket, state] of audience.buckets) {
     for (const [key, delivered] of state.rows) {
-      rows.push({
+      into.push({
         row: { bucket, key, value: delivered.value },
         bytes: delivered.bytes,
       });
     }
   }
-  return rows;
 };
 
-const opsFor = <K>(map: Map<K, ViewOps>, id: K): ViewOps => {
-  let ops = map.get(id);
-  if (!ops) {
-    ops = emptyOps();
-    map.set(id, ops);
+type Told = Untold & {
+  bucket: string;
+  key: string;
+  /** The row as it is now, or undefined when it is gone. */
+  now: Delivered | undefined;
+};
+
+/**
+ * What one audience is told in one flush. Its viewers did not all take
+ * their view at the same moment, so each is told from their own: a change
+ * their snapshot already had is left out, and so is a row that came and
+ * went before they looked. Nobody is told of a row that was gone before
+ * their snapshot, not even its key.
+ */
+export class ViewChanges {
+  /** The first version any of these changes was made at. */
+  private readonly since: number;
+  private whole: ViewOps | null = null;
+
+  constructor(private readonly told: readonly Told[]) {
+    this.since = told.reduce(
+      (first, change) => Math.min(first, change.since),
+      Number.POSITIVE_INFINITY,
+    );
   }
-  return ops;
+
+  /**
+   * The changes for a viewer whose snapshot was read at `version`, or
+   * undefined when there is nothing to tell them.
+   */
+  for(version: number): ViewOps | undefined {
+    // Nearly every viewer took their view before any of it: one answer.
+    const ops =
+      version < this.since
+        ? (this.whole ??= this.opsSince(version))
+        : this.opsSince(version);
+    return ops.put.length === 0 && ops.remove.length === 0 ? undefined : ops;
+  }
+
+  private opsSince(version: number): ViewOps {
+    const ops = emptyOps();
+    for (const change of this.told) {
+      // Their snapshot was read after the last change, so it has it.
+      if (version >= change.at) continue;
+      // What they hold is known only if they looked before the first change.
+      const knownBefore = version < change.since;
+      if (change.now) {
+        if (knownBefore && change.before === change.now.encoded) continue;
+        ops.put.push({
+          bucket: change.bucket,
+          key: change.key,
+          value: change.now.value,
+        });
+        ops.bytes += change.now.bytes;
+      } else {
+        if (knownBefore && change.before === undefined) continue;
+        ops.remove.push({ bucket: change.bucket, key: change.key });
+        ops.bytes += change.bucket.length + change.key.length + ROW_OVERHEAD_BYTES;
+      }
+    }
+    return ops;
+  }
+}
+
+export type ViewFlush = {
+  shared: Map<Role, ViewChanges>;
+  personal: Map<Subject, ViewChanges>;
+};
+
+export type LiveAudiences = {
+  roles: ReadonlySet<Role>;
+  subjects: ReadonlySet<Subject>;
 };
 
 /**
@@ -98,17 +171,25 @@ const opsFor = <K>(map: Map<K, ViewOps>, id: K): ViewOps => {
  *
  * Shared buckets are kept once per role and reused by everyone in it. A
  * personal bucket is kept per subject and only while that subject is here.
+ *
+ * What is kept always equals the committed rows before anything is read
+ * from it. Every committed write is taken in first, whether the reader is a
+ * flush or a snapshot for someone who has just opened the app, so a snapshot
+ * never carries a row that was hidden, changed or removed a moment before.
+ * Only telling the viewers who already hold a view waits for the flush.
  */
 export class ViewTracker {
   private policy: RoomPolicy;
   private readonly roles = new Map<Role, Audience>();
   private readonly subjects = new Map<Subject, Audience>();
-  /** Per personal view: who owns which source rows, as of the last flush. */
+  /** Per personal view: who owns which source rows. */
   private readonly owned = new Map<string, Map<Subject, Set<TableKey>>>();
   private readonly ownerOf = new Map<string, Map<TableKey, Subject>>();
   private readonly viewsByTable = new Map<string, [string, RuntimeView][]>();
-  /** Audiences whose viewers are owed removals, the longest waiting first. */
-  private readonly owing = new Map<Audience, AudienceOf>();
+  /** Audiences with changes their viewers have yet to be told, oldest first. */
+  private readonly changed = new Set<Audience>();
+  /** Counts each time committed writes are taken in. */
+  private version = 0;
 
   constructor(
     private readonly definition: RuntimeDefinition,
@@ -140,91 +221,80 @@ export class ViewTracker {
     this.policy = policy;
     this.roles.clear();
     this.subjects.clear();
-    this.owing.clear();
+    this.changed.clear();
   }
 
-  /** Whether some viewer still holds a row that a `clear` took. */
-  get owesRemovals(): boolean {
-    return this.owing.size > 0;
+  /** Whether some viewer has yet to be told of a change. */
+  get hasUntold(): boolean {
+    return this.changed.size > 0;
   }
 
-  /**
-   * What a role holds. Rows written since the last flush may be missing; the
-   * next flush sends them as a patch on top of this.
-   */
-  sharedRows(role: Role): SizedRow[] {
-    this.absorbCleared();
-    return rowsOf(this.roleAudience(role));
-  }
-
-  personalRows(subject: Subject): SizedRow[] {
-    this.absorbCleared();
-    return rowsOf(this.subjectAudience(subject));
+  /** How many audiences' views are kept. */
+  get held(): { roles: number; subjects: number } {
+    return { roles: this.roles.size, subjects: this.subjects.size };
   }
 
   /**
-   * Takes every row a `clear` removed out of every audience's rows. It runs
-   * before anything is read from them, a snapshot as much as a flush, so a
-   * committed clear is never seen half done: no snapshot carries a cleared
-   * row, and a cleared row's key is free for a new row. What is left for
-   * later flushes is only telling the viewers who already held such a row.
-   *
-   * A cleared row that was written again since is taken out all the same.
-   * The flush then places it as the new row it is and sends it to everyone,
-   * those who subscribed in between included.
+   * A whole view for one viewer: their role's rows and their own, as
+   * committed. The version says which changes it already has, so the next
+   * flush tells this viewer only what came after.
    */
-  private absorbCleared(): void {
-    if (!this.store.hasCleared) return;
-    for (const [tableName, keys] of this.store.takeCleared()) {
-      const views = this.viewsByTable.get(tableName);
-      if (!views) continue;
-      for (const key of keys) {
-        for (const [name, view] of views) {
-          if (view.kind === "shared") {
-            for (const [role, audience] of this.roles) {
-              this.owe(audience, { role }, name, key);
-            }
-            continue;
-          }
-          const owner = this.ownerOf.get(name)!.get(key);
-          if (owner === undefined) continue;
-          this.disown(name, owner, key);
-          const audience = this.subjects.get(owner);
-          if (audience) this.owe(audience, { subject: owner }, name, key);
-        }
-      }
+  snapshot(role: Role, subject: Subject): ViewSnapshot {
+    this.absorb();
+    const rows: SizedRow[] = [];
+    rowsOf(this.roleAudience(role), rows);
+    rowsOf(this.subjectAudience(subject), rows);
+    return { rows, version: this.version };
+  }
+
+  /** Forgets the views of audiences nobody holds any more. */
+  keep(live: LiveAudiences): void {
+    for (const [role, audience] of this.roles) {
+      if (live.roles.has(role)) continue;
+      this.roles.delete(role);
+      this.changed.delete(audience);
+    }
+    for (const [subject, audience] of this.subjects) {
+      if (live.subjects.has(subject)) continue;
+      this.subjects.delete(subject);
+      this.changed.delete(audience);
     }
   }
 
   /**
-   * Projects every row written since the last flush and returns what each
-   * live audience must be told. Audiences that left are forgotten.
+   * Takes in every committed write and returns what each live audience must
+   * be told. Audiences that left are forgotten.
    */
-  flush(live: { roles: ReadonlySet<Role>; subjects: ReadonlySet<Subject> }): ViewFlush {
-    for (const role of [...this.roles.keys()]) {
-      if (!live.roles.has(role)) this.roles.delete(role);
-    }
-    for (const subject of [...this.subjects.keys()]) {
-      if (!live.subjects.has(subject)) this.subjects.delete(subject);
-    }
+  flush(live: LiveAudiences): ViewFlush {
+    this.keep(live);
+    this.absorb();
+    const flushed = this.tell();
+    if (this.options.verify) this.verify();
+    return flushed;
+  }
 
-    const shared = new Map<Role, ViewOps>();
-    const personal = new Map<Subject, ViewOps>();
+  /**
+   * Brings what every audience holds in line with the committed rows, and
+   * notes each change for the viewers who have yet to hear of it. It runs
+   * before anything is read from the views.
+   */
+  private absorb(): void {
+    if (!this.store.hasCleared && !this.store.hasDirty) return;
+    this.version += 1;
     this.absorbCleared();
 
     // Every key a changed row gives up is released before any changed row
     // takes a key, so one row can take over a key another just left.
     const placements: (() => void)[] = [];
     const change = (
-      bucket: Bucket,
+      audience: Audience,
       name: string,
       source: TableKey,
       projected: { key: string; value: Json } | null,
-      ops: ViewOps,
     ): void => {
-      this.release(bucket, name, source, projected, ops);
+      this.release(audience, name, source, projected);
       if (projected) {
-        placements.push(() => this.place(bucket, name, source, projected, ops));
+        placements.push(() => this.place(audience, name, source, projected));
       }
     };
 
@@ -237,11 +307,10 @@ export class ViewTracker {
           if (view.kind === "shared") {
             for (const [role, audience] of this.roles) {
               change(
-                bucketOf(audience, name),
+                audience,
                 name,
                 key,
                 row ? this.project(name, () => view.project(row, role, this.policy)) : null,
-                opsFor(shared, role),
               );
             }
             continue;
@@ -251,33 +320,97 @@ export class ViewTracker {
           if (previousOwner !== undefined && previousOwner !== nextOwner) {
             this.disown(name, previousOwner, key);
             const audience = this.subjects.get(previousOwner);
-            if (audience) {
-              change(bucketOf(audience, name), name, key, null, opsFor(personal, previousOwner));
-            }
+            if (audience) change(audience, name, key, null);
           }
           if (nextOwner === undefined || !row) continue;
           this.own(name, nextOwner, key);
           const audience = this.subjects.get(nextOwner);
           if (audience) {
             change(
-              bucketOf(audience, name),
+              audience,
               name,
               key,
               this.project(name, () => view.project(row, this.policy)),
-              opsFor(personal, nextOwner),
             );
           }
         }
       }
     }
     for (const place of placements) place();
-    this.tellOwed(shared, personal);
+  }
 
-    for (const [role, ops] of shared) if (isEmpty(ops)) shared.delete(role);
-    for (const [subject, ops] of personal) {
-      if (isEmpty(ops)) personal.delete(subject);
+  /**
+   * Takes every row a `clear` removed out of every audience's rows. A
+   * cleared row that was written again since is taken out all the same, and
+   * placed again as the new row it is.
+   */
+  private absorbCleared(): void {
+    if (!this.store.hasCleared) return;
+    for (const [tableName, keys] of this.store.takeCleared()) {
+      const views = this.viewsByTable.get(tableName);
+      if (!views) continue;
+      for (const key of keys) {
+        for (const [name, view] of views) {
+          if (view.kind === "shared") {
+            for (const audience of this.roles.values()) {
+              this.owe(audience, name, key);
+            }
+            continue;
+          }
+          const owner = this.ownerOf.get(name)!.get(key);
+          if (owner === undefined) continue;
+          this.disown(name, owner, key);
+          const audience = this.subjects.get(owner);
+          if (audience) this.owe(audience, name, key);
+        }
+      }
     }
-    if (this.options.verify) this.verify();
+  }
+
+  /**
+   * Gathers what each audience is told now. Ordinary changes are told in
+   * full. Rows a `clear` took are told a bounded number in one flush: each
+   * role's audience up to `clearedRowsPerFlush` of them, which bounds the
+   * patch. People's own rows share one such allowance between them, because
+   * each person told is a frame of their own. A person is told all they are
+   * owed in one frame where the allowance lasts, so 5,000 people who each
+   * held five such rows get one frame each and not five.
+   */
+  private tell(): ViewFlush {
+    const shared = new Map<Role, ViewChanges>();
+    const personal = new Map<Subject, ViewChanges>();
+    // At least one, or the telling would never finish.
+    const allowance = Math.max(1, this.options.clearedRowsPerFlush);
+    let leftForPeople = allowance;
+    for (const audience of this.changed) {
+      const forRole = "role" in audience.of;
+      let room = forRole ? allowance : leftForPeople;
+      const told: Told[] = [];
+      let settled = true;
+      for (const [name, bucket] of audience.buckets) {
+        for (const [key, change] of bucket.untold) {
+          told.push({ ...change, bucket: name, key, now: bucket.rows.get(key) });
+        }
+        bucket.untold.clear();
+        for (const [key, change] of bucket.owed) {
+          if (room === 0) {
+            settled = false;
+            break;
+          }
+          room -= 1;
+          bucket.owed.delete(key);
+          told.push({ ...change, bucket: name, key, now: bucket.rows.get(key) });
+        }
+      }
+      if (!forRole) leftForPeople = room;
+      if (settled) this.changed.delete(audience);
+      if (told.length === 0) continue;
+      if ("role" in audience.of) {
+        shared.set(audience.of.role, new ViewChanges(told));
+      } else {
+        personal.set(audience.of.subject, new ViewChanges(told));
+      }
+    }
     return { shared, personal };
   }
 
@@ -297,43 +430,33 @@ export class ViewTracker {
     return audience;
   }
 
+  /**
+   * A role's view built from the committed rows. Nobody holds it yet, so
+   * nothing in it is noted as a change to tell.
+   */
   private buildRole(role: Role): Audience {
-    const audience: Audience = new Map();
-    const ignored = emptyOps();
+    const audience: Audience = { of: { role }, buckets: new Map() };
     for (const [name, view] of Object.entries(this.definition.views)) {
       if (view.kind !== "shared") continue;
-      const bucket = bucketOf(audience, name);
+      bucketOf(audience, name);
       for (const [key, row] of this.store.rows(view.source)) {
-        this.apply(
-          bucket,
-          name,
-          key,
-          this.project(name, () => view.project(row, role, this.policy)),
-          ignored,
-        );
+        const projected = this.project(name, () => view.project(row, role, this.policy));
+        if (projected) this.place(audience, name, key, projected, false);
       }
     }
     return audience;
   }
 
   private buildSubject(subject: Subject): Audience {
-    const audience: Audience = new Map();
-    const ignored = emptyOps();
+    const audience: Audience = { of: { subject }, buckets: new Map() };
     for (const [name, view] of Object.entries(this.definition.views)) {
       if (view.kind !== "personal") continue;
-      const bucket = bucketOf(audience, name);
+      bucketOf(audience, name);
       for (const key of this.owned.get(name)!.get(subject) ?? []) {
         const row = this.store.get(view.source, key);
-        // The index is as of the last flush. A row written since may have
-        // changed hands, and must not be shown to its previous owner.
         if (!row || view.owner(row) !== subject) continue;
-        this.apply(
-          bucket,
-          name,
-          key,
-          this.project(name, () => view.project(row, this.policy)),
-          ignored,
-        );
+        const projected = this.project(name, () => view.project(row, this.policy));
+        if (projected) this.place(audience, name, key, projected, false);
       }
     }
     return audience;
@@ -386,98 +509,44 @@ export class ViewTracker {
     }
   }
 
-  /** One row's change to one audience's bucket, all at once. */
-  private apply(
-    bucket: Bucket,
-    name: string,
-    source: TableKey,
-    projected: { key: string; value: Json } | null,
-    ops: ViewOps,
-  ): void {
-    this.release(bucket, name, source, projected, ops);
-    if (projected) this.place(bucket, name, source, projected, ops);
+  /**
+   * Notes that a key is about to change for an audience whose viewers hold
+   * it as it is now. `later` marks a row a `clear` took, which is told in
+   * batches.
+   */
+  private note(audience: Audience, bucket: Bucket, key: string, later: boolean): void {
+    const noted = bucket.untold.get(key) ?? bucket.owed.get(key);
+    const change = noted ?? {
+      since: this.version,
+      at: this.version,
+      before: bucket.rows.get(key)?.encoded,
+    };
+    change.at = this.version;
+    (later ? bucket.untold : bucket.owed).delete(key);
+    (later ? bucket.owed : bucket.untold).set(key, change);
+    this.changed.add(audience);
   }
 
-  /**
-   * Takes a cleared row out of an audience's bucket and notes that the
-   * audience's viewers still hold it.
-   */
-  private owe(
-    audience: Audience,
-    who: AudienceOf,
-    name: string,
-    source: TableKey,
-  ): void {
-    const bucket = audience.get(name);
+  /** Takes a cleared row out of an audience's bucket. */
+  private owe(audience: Audience, name: string, source: TableKey): void {
+    const bucket = audience.buckets.get(name);
     const key = bucket?.bySource.get(source);
     if (!bucket || key === undefined) return;
     bucket.bySource.delete(source);
     if (bucket.owner.get(key) !== source) return;
+    this.note(audience, bucket, key, true);
     bucket.owner.delete(key);
     bucket.rows.delete(key);
-    bucket.owed.add(key);
-    this.owing.set(audience, who);
-  }
-
-  /**
-   * Tells viewers of rows a `clear` took, a bounded number in one flush.
-   * Each role's audience is told up to `clearedRowsPerFlush` of its rows,
-   * which bounds the patch. People's own rows share one such allowance
-   * between them, because each person told is a frame of their own. A
-   * person is told all they are owed in one frame where the allowance
-   * lasts, so 5,000 people who each held five such rows get one frame each
-   * and not five.
-   */
-  private tellOwed(
-    shared: Map<Role, ViewOps>,
-    personal: Map<Subject, ViewOps>,
-  ): void {
-    // At least one, or the telling would never finish.
-    const allowance = Math.max(1, this.options.clearedRowsPerFlush);
-    let leftForPeople = allowance;
-    for (const [audience, who] of this.owing) {
-      const forRole = "role" in who;
-      const held = forRole
-        ? this.roles.get(who.role)
-        : this.subjects.get(who.subject);
-      // The audience left, and its viewers with it.
-      if (held !== audience) {
-        this.owing.delete(audience);
-        continue;
-      }
-      const room = forRole ? allowance : leftForPeople;
-      if (room === 0) continue;
-      const ops = forRole
-        ? opsFor(shared, who.role)
-        : opsFor(personal, who.subject);
-      let told = 0;
-      let settled = true;
-      for (const [name, bucket] of audience) {
-        for (const key of bucket.owed) {
-          if (told === room) {
-            settled = false;
-            break;
-          }
-          bucket.owed.delete(key);
-          ops.remove.push({ bucket: name, key });
-          ops.bytes += name.length + key.length + ROW_OVERHEAD_BYTES;
-          told += 1;
-        }
-        if (!settled) break;
-      }
-      if (!forRole) leftForPeople -= told;
-      if (settled) this.owing.delete(audience);
-    }
   }
 
   /** Gives up the key a source row held when it no longer projects to it. */
   private release(
-    bucket: Bucket,
+    audience: Audience,
     name: string,
     source: TableKey,
     projected: { key: string; value: Json } | null,
-    ops: ViewOps,
   ): void {
+    const bucket = bucketOf(audience, name);
     const previousKey = bucket.bySource.get(source);
     if (
       previousKey === undefined ||
@@ -487,19 +556,19 @@ export class ViewTracker {
     }
     bucket.bySource.delete(source);
     if (bucket.owner.get(previousKey) !== source) return;
+    this.note(audience, bucket, previousKey, false);
     bucket.owner.delete(previousKey);
     bucket.rows.delete(previousKey);
-    ops.remove.push({ bucket: name, key: previousKey });
-    ops.bytes += name.length + previousKey.length + ROW_OVERHEAD_BYTES;
   }
 
   private place(
-    bucket: Bucket,
+    audience: Audience,
     name: string,
     source: TableKey,
     projected: { key: string; value: Json },
-    ops: ViewOps,
+    tell = true,
   ): void {
+    const bucket = bucketOf(audience, name);
     // Each projected row needs its own key. When two source rows claim one,
     // the first keeps it and the second is withheld, so removing either can
     // never take the other's row away from a viewer.
@@ -514,18 +583,14 @@ export class ViewTracker {
     const encoded = JSON.stringify(projected.value);
     bucket.bySource.set(source, projected.key);
     bucket.owner.set(projected.key, source);
-    // A viewer who still held a cleared row under this key gets this row in
-    // its place, so the removal it was owed is off.
-    bucket.owed.delete(projected.key);
     if (bucket.rows.get(projected.key)?.encoded === encoded) return;
+    if (tell) this.note(audience, bucket, projected.key, false);
     const bytes =
       Buffer.byteLength(encoded) +
       name.length +
       projected.key.length +
       ROW_OVERHEAD_BYTES;
     bucket.rows.set(projected.key, { encoded, value: projected.value, bytes });
-    ops.put.push({ bucket: name, key: projected.key, value: projected.value });
-    ops.bytes += bytes;
   }
 
   /**
@@ -537,7 +602,7 @@ export class ViewTracker {
     const same = (held: Audience, fresh: Audience, label: string): void => {
       const encode = (audience: Audience): string =>
         JSON.stringify(
-          [...audience]
+          [...audience.buckets]
             .flatMap(([name, bucket]) =>
               [...bucket.rows].map(([key, row]) => [name, key, row.encoded]),
             )
@@ -559,20 +624,14 @@ export class ViewTracker {
 
   /** A subject's personal view from a full scan, ignoring the owner index. */
   private scanSubject(subject: Subject): Audience {
-    const audience: Audience = new Map();
-    const ignored = emptyOps();
+    const audience: Audience = { of: { subject }, buckets: new Map() };
     for (const [name, view] of Object.entries(this.definition.views)) {
       if (view.kind !== "personal") continue;
-      const bucket = bucketOf(audience, name);
+      bucketOf(audience, name);
       for (const [key, row] of this.store.rows(view.source)) {
         if (view.owner(row) !== subject) continue;
-        this.apply(
-          bucket,
-          name,
-          key,
-          this.project(name, () => view.project(row, this.policy)),
-          ignored,
-        );
+        const projected = this.project(name, () => view.project(row, this.policy));
+        if (projected) this.place(audience, name, key, projected, false);
       }
     }
     return audience;

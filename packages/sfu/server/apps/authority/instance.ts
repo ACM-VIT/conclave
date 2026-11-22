@@ -25,7 +25,12 @@ import type { AuthorityLimits } from "./limits.js";
 import { RateBuckets } from "./rate.js";
 import { ReceiptBook, requestDigest } from "./receipts.js";
 import { AuthorityStore } from "./store.js";
-import { ViewTracker, type SizedRow, type ViewFlush } from "./views.js";
+import {
+  ViewTracker,
+  type LiveAudiences,
+  type ViewFlush,
+  type ViewSnapshot,
+} from "./views.js";
 
 /** One person on one connection, as the host resolved them just now. */
 export type Actor = {
@@ -343,22 +348,26 @@ export class AuthorityInstance {
 
   /** Rows the views have yet to take in, or viewers have yet to be told of. */
   get hasPendingChanges(): boolean {
-    return this.store.hasDirty || this.views.owesRemovals;
+    return this.store.hasDirty || this.views.hasUntold;
   }
 
-  flushViews(live: {
-    roles: ReadonlySet<Role>;
-    subjects: ReadonlySet<Subject>;
-  }): ViewFlush {
+  flushViews(live: LiveAudiences): ViewFlush {
     return this.views.flush(live);
   }
 
+  /** Forgets the views of everyone but these audiences. */
+  keepViews(live: LiveAudiences): void {
+    this.views.keep(live);
+  }
+
+  /** How many audiences' views are kept. */
+  get viewsHeld(): { roles: number; subjects: number } {
+    return this.views.held;
+  }
+
   /** A whole view for one audience: its role's rows and its own. */
-  snapshot(actor: Actor): SizedRow[] {
-    return [
-      ...this.views.sharedRows(actor.role),
-      ...this.views.personalRows(actor.subject),
-    ];
+  snapshot(actor: Actor): ViewSnapshot {
+    return this.views.snapshot(actor.role, actor.subject);
   }
 
   /** Whether the actor could run this query right now. Spends no budget. */
