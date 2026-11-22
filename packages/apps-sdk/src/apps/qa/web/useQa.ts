@@ -259,10 +259,10 @@ export function useQa() {
   return {
     isReady: ready !== null,
     /**
-     * A view is on its way: the first one, or a replacement that dropped the
-     * one before it because it may hold rows this viewer can no longer see.
+     * This subscription showed a view, and a replacement in parts dropped
+     * it because the new one may hold rows this viewer can no longer see.
      */
-    isConnecting: state.kind === "connecting",
+    isReplacing: state.kind === "connecting" && state.replacing === true,
     questions,
     canAsk: ready?.actions.has("ask") ?? false,
     /** Asking is closed to this viewer only for want of a verified identity. */

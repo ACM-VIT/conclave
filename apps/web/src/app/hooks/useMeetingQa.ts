@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo } from "react";
 import { useAuthorityAvailable } from "@conclave/apps-sdk";
 import { qaContract, useQa } from "@conclave/apps-sdk/qa/web";
 import type { WebinarQaEntry, WebinarQaModerateRequest } from "../lib/types";
@@ -59,12 +59,14 @@ export const hasUnseenMeetingQuestion = ({
  * Nothing is inferred from the old events about a regular meeting, which
  * they do not carry: there Q&A is offered when the server offers the app.
  *
- * Once the app's view has arrived, the server stops sending the old events
- * to this connection, so the list they left is stale from then on. A later
- * view on its way, such as a replacement in parts, shows nothing until it is
- * in: never that stale list, and never the view before it, which the client
- * dropped because the new one may hold less. The old events are used again
- * only when the app's view ends, which is when the server resumes them.
+ * Once a subscription's view has arrived, the server stops sending the old
+ * events to this connection, so the list they left is stale while that
+ * subscription lasts. A replacement of its view in parts shows nothing until
+ * it is in: never that stale list, and never the view before it, which the
+ * client dropped because the new one may hold less. A new subscription, on a
+ * new connection or the same one, starts on the old events again: the
+ * server feeds them until the connection holds its own view, so they are
+ * current for as long as that view does not come.
  */
 export function useMeetingQa({
   legacy,
@@ -78,9 +80,7 @@ export function useMeetingQa({
   const offered = useAuthorityAvailable(qaContract);
   const qa = useQa();
   const fromApp = offered && qa.isReady;
-  const [sawAppView, setSawAppView] = useState(false);
-  if (fromApp && !sawAppView) setSawAppView(true);
-  const awaitingNewView = offered && sawAppView && qa.isConnecting;
+  const awaitingNewView = offered && qa.isReplacing;
 
   const appEntries = useMemo<WebinarQaEntry[]>(
     () =>

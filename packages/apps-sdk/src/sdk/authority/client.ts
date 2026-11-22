@@ -63,7 +63,12 @@ export type AuthorityView<C extends AuthorityContract> = {
 export type AuthoritySessionState<C extends AuthorityContract> =
   /** This server does not offer the app to this connection. */
   | { kind: "unsupported" }
-  | { kind: "connecting" }
+  /**
+   * A view is on its way. `replacing` says this subscription already showed
+   * one, and a replacement in parts dropped it: the view before it may hold
+   * rows this viewer can no longer see.
+   */
+  | { kind: "connecting"; replacing?: true }
   /** The server withdrew the view. Everything held was forgotten. */
   | { kind: "revoked"; reason: AuthorityRevokeReason }
   | {
@@ -357,6 +362,8 @@ export class AuthoritySession<C extends AuthorityContract> {
   private generation = 0;
   private seq = 0;
   private incoming: { generation: number; frames: ReplaceFrame[] } | null = null;
+  /** Whether the current subscription has shown a view yet. */
+  private viewed = false;
   private rows: Rows = new Map();
   private revision = 0;
   /**
@@ -569,7 +576,9 @@ export class AuthoritySession<C extends AuthorityContract> {
           this.seq = 0;
           this.rows = new Map();
           this.failStreams();
-          this.setState({ kind: "connecting" });
+          this.setState(
+            this.viewed ? { kind: "connecting", replacing: true } : { kind: "connecting" },
+          );
         }
       }
       if (frame.part !== this.incoming.frames.length) {
@@ -619,6 +628,7 @@ export class AuthoritySession<C extends AuthorityContract> {
     this.failStreams();
     this.subscription = randomId();
     this.subscribedEpoch = epoch;
+    this.viewed = false;
     this.generation = 0;
     this.seq = 0;
     this.incoming = null;
@@ -682,6 +692,7 @@ export class AuthoritySession<C extends AuthorityContract> {
     this.generation = frames[0].generation;
     this.seq = 0;
     this.incoming = null;
+    this.viewed = true;
     this.rows = rows;
     if (frames[0].subscription !== this.revisionOf) {
       this.revisionBase = this.revision;

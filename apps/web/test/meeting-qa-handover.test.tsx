@@ -259,3 +259,37 @@ it("never falls back to the old events once the app's view has arrived, even whi
   expect(qa.entries.map((entry) => entry.id)).toEqual(["q1"]);
 });
 
+it("goes back to the old events on a new connection, and stays on them while its view does not come", async () => {
+  const offTopic: WebinarQaEntry = {
+    ...fromOldEvents,
+    id: "q2",
+    question: "Off-topic: who is getting lunch?",
+    status: "pending",
+  };
+  await mount(true, { ...legacy, entries: [fromOldEvents, offTopic] });
+  await offerQa();
+  await sendView();
+  const handedOver = qa.fromApp;
+  const fire = async (event: string) =>
+    act(async () => {
+      for (const listener of [...(listeners.get(event) ?? [])]) listener();
+    });
+
+  // The connection drops and comes back. On the new connection the server
+  // feeds the old events again, from a list as it is now.
+  await fire("disconnect");
+  await mount(true, { ...legacy, entries: [fromOldEvents] });
+  await fire("connect");
+  await offerQa();
+  const subscribedAgain = sent.filter((entry) => entry.event === AUTHORITY_EVENTS.subscribe).length;
+  // The new subscription is never answered and no view comes.
+  await act(async () => vi.advanceTimersByTimeAsync(8_000));
+
+  expect(handedOver).toBe(true);
+  expect(subscribedAgain).toBe(2);
+  expect(qa).toMatchObject({ offered: true, fromApp: false });
+  expect(qa.entries.map((entry) => entry.id)).toEqual(["q1"]);
+  expect(qa.onSubmit).toBe(legacy.submit);
+  expect(qa.onUpvote).toBe(legacy.upvote);
+});
+
