@@ -371,6 +371,31 @@ class MicrophoneReplacementRecoveryTests {
     }
 
     @Test
+    fun aNoiseSuppressionChangeAfterABandwidthRefreshStartedAppliesToTheReplacement() {
+        val call = liveCall()
+        val media = call.media
+        val produces = producingCall(call)
+        val scope = CoroutineScope(Dispatchers.Main.immediate + SupervisorJob())
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            media.refreshLocalAudioProducerForBandwidthProfile(ConnectionQuality.emergency)
+        }
+        pumpMainLooperUntil { produces.codecOptions.size == 1 }
+        val noise = scope.async(start = CoroutineStart.UNDISPATCHED) { media.applyNoiseSuppression(true) }
+        assertTrue(media.consumeIntentionalLocalAudioProducerClose(call.old.id))
+        produces.firstAck.countDown()
+        pumpMainLooperUntil {
+            noise.isCompleted && (field("audioProducer").get(media) as Producer).id == "mic-2" &&
+                field("localAudioTrack").get(media) !== call.track
+        }
+
+        assertTrue(runBlocking { noise.await() })
+        assertEquals("mic-2", (field("audioProducer").get(media) as Producer).id)
+        assertTrue(media.isLocalAudioPublishingHealthy)
+        assertNotSame(call.track, field("localAudioTrack").get(media))
+        assertEquals(0, call.lost)
+    }
+
+    @Test
     fun aFailureFromAReplacedSessionLeavesTheNewSessionAlone() {
         val call = liveCall()
         beginReplacement(call)
