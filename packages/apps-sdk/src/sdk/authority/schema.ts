@@ -69,28 +69,37 @@ type StringOptions = {
   truncate?: boolean;
   /**
    * What the whole string must match, tried after the length is settled so
-   * it only ever runs on a string of at most `max` characters.
+   * it only ever runs on a string of at most `max` characters. It may not be
+   * global or sticky: `test()` on such an expression moves its `lastIndex`,
+   * so one schema would take a value on one call and refuse it on the next.
    */
   pattern?: RegExp;
 };
 
-const string = (options: StringOptions): Schema<string> => ({
-  parse(input, _mode, path = "") {
-    if (typeof input !== "string") return fail(path, "expected a string");
-    let value = options.collapse ? input.replace(/\s+/g, " ").trim() : input;
-    if (value.length > options.max) {
-      if (!options.truncate) return fail(path, `longer than ${options.max}`);
-      value = value.slice(0, options.max);
-    }
-    if (value.length < (options.min ?? 0)) {
-      return fail(path, `shorter than ${options.min}`);
-    }
-    if (options.pattern && !options.pattern.test(value)) {
-      return fail(path, `does not match ${options.pattern.source}`);
-    }
-    return value;
-  },
-});
+const string = (options: StringOptions): Schema<string> => {
+  if (options.pattern?.global || options.pattern?.sticky) {
+    throw new Error(
+      `A string schema's pattern may not have the g or y flag: /${options.pattern.source}/${options.pattern.flags}`,
+    );
+  }
+  return {
+    parse(input, _mode, path = "") {
+      if (typeof input !== "string") return fail(path, "expected a string");
+      let value = options.collapse ? input.replace(/\s+/g, " ").trim() : input;
+      if (value.length > options.max) {
+        if (!options.truncate) return fail(path, `longer than ${options.max}`);
+        value = value.slice(0, options.max);
+      }
+      if (value.length < (options.min ?? 0)) {
+        return fail(path, `shorter than ${options.min}`);
+      }
+      if (options.pattern && !options.pattern.test(value)) {
+        return fail(path, `does not match ${options.pattern.source}`);
+      }
+      return value;
+    },
+  };
+};
 
 type NumberOptions = { min?: number; max?: number };
 
