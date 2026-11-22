@@ -80,6 +80,19 @@ type Subscription = {
   sink: ((frame: AuthorityFrame) => void) | null;
 };
 
+/** What `observe` hands back to the in-process code that follows a view. */
+export type Observer = {
+  close: () => void;
+  /**
+   * Whether a frame could go to the connection at this moment, checked
+   * against the room as it is now. Code that says later what a frame told
+   * it must ask first, as the runtime does before every frame of its own. A
+   * seat that changed role is sent its new view from inside this call, and
+   * the answer is then no: what was waiting is out of date.
+   */
+  isLive: () => boolean;
+};
+
 /** A successful action, for in-process code that keeps its own index. */
 export type ActionNotice = {
   app: string;
@@ -318,7 +331,7 @@ export class RoomAuthority {
     context: ConnectionContext,
     app: string,
     sink: (frame: AuthorityFrame) => void,
-  ): { close(): void } | null {
+  ): Observer | null {
     const bound = this.bind(context);
     const instance = this.instanceOf(app);
     if (!bound || !instance) return null;
@@ -348,7 +361,10 @@ export class RoomAuthority {
     subscriptions.set(subscription.id, subscription);
     this.dormant.add(subscription);
     this.resume(subscription);
-    return { close: () => this.drop(subscription) };
+    return {
+      close: () => this.drop(subscription),
+      isLive: () => this.refresh(subscription) === "live",
+    };
   }
 
   /**

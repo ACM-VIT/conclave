@@ -195,6 +195,35 @@ describe("telling a webinar of old clients about a change", () => {
     expect(last.heard.changes - heardBefore).toBe(waiting);
   }, 60_000);
 
+  it("sends a removed attendee nothing that was still waiting to be said", async () => {
+    const perListener = 20;
+    const count = Math.ceil((LEGACY_QA_SENDS_PER_TURN * 1.5) / perListener);
+    const { room, hostTab, listeners, ids } = await webinar(count, perListener);
+    const last = listeners[listeners.length - 1];
+
+    for (const id of ids) await hostTab.act("moderate", { id, action: "answered" });
+    await vi.advanceTimersByTimeAsync(0);
+    const heardBefore = { ...last.heard };
+    room.authority.flushNow();
+    await Promise.resolve();
+    await Promise.resolve();
+    const heardInFirstTurn = last.heard.changes - heardBefore.changes;
+    // The host removes them before their turn comes. Nothing announces it.
+    room.room.removeClient(last.tab.seat.id);
+    await room.drain();
+
+    expect(heardInFirstTurn).toBe(0);
+    expect(last.heard.changes).toBe(heardBefore.changes);
+    // All a removed seat is sent is an empty list, which carries nothing and
+    // takes the room's questions off its screen.
+    expect(last.heard.snapshots).toBe(heardBefore.snapshots + 1);
+    expect(last.entries.size).toBe(0);
+    // Everyone still in the room heard all of it.
+    expect(
+      listeners.slice(0, -1).every((listener) => ids.every((id) => listener.entries.get(id)?.status === "answered")),
+    ).toBe(true);
+  }, 60_000);
+
   it("sends a listener whose socket is behind nothing, then a whole list once it has caught up", async () => {
     const pressure = new Map<string, { packets: number; bytes: number }>();
     const room = new Harness([pollsAuthority, qaAuthority], {

@@ -62,8 +62,13 @@ type Feed = {
    * list makes it forget one.
    */
   saved: Set<string>;
-  closed: boolean;
-  close(): void;
+  /**
+   * Whether the connection may be sent anything right now: its seat is
+   * still in the room and may still see Q&A. Asked before every send that
+   * happens later than the frame that caused it.
+   */
+  isLive: () => boolean;
+  close: () => void;
 };
 
 /** A room's feeds with something yet to say, the longest waiting first. */
@@ -207,11 +212,13 @@ const say = (authority: RoomAuthority, outbox: Outbox): void => {
     outbox.waiting.delete(feed);
     const { context } = feed;
     const room = context.currentRoom;
+    // The seat is checked against the room as it is now, not as it was when
+    // the change was noted. One that has been removed since is sent nothing.
+    const mayHear =
+      feed.isLive() && room && isWebinar(context.state, room.channelId);
     const ids = [...feed.pending];
     feed.pending.clear();
-    if (feed.closed || !room || !isWebinar(context.state, room.channelId)) {
-      continue;
-    }
+    if (!mayHear) continue;
     for (const id of ids) {
       sends += 1;
       if (feed.rows.get("myQuestions")?.has(id)) {
@@ -283,7 +290,7 @@ export const attachLegacyQaFeed = (context: ConnectionContext): boolean => {
     incoming: [],
     pending: new Set(),
     saved: new Set(),
-    closed: false,
+    isLive: () => false,
     close: () => {},
   };
 
@@ -361,8 +368,9 @@ export const attachLegacyQaFeed = (context: ConnectionContext): boolean => {
 
   const observer = authority.observe(context, QA_APP, sink);
   if (!observer) return true;
+  feed.isLive = observer.isLive;
   feed.close = () => {
-    feed.closed = true;
+    feed.isLive = () => false;
     observer.close();
   };
   feeds.set(socket, feed);
