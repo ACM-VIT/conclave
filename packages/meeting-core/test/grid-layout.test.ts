@@ -378,6 +378,31 @@ describe("computeGridLayout — mixed rows line up", () => {
     });
   });
 
+  it("keeps a row inside the container when the gap is far below a pixel", () => {
+    const r = computeGridLayout(3, 100, 201, {
+      maxCols: 2,
+      gap: 0.0000005,
+      tileAspects: [0.4, 0.59, 1],
+    });
+
+    r.positions.forEach((position) => {
+      expect(position.x + position.width).toBeLessThanOrEqual(100);
+    });
+  });
+
+  it("meets shorter rows at the full rows' own width when only that fits them", () => {
+    const aspects = [0.5, 0.5, 0.8, 1.1];
+    const r = computeGridLayout(4, 110.4, 300.8, { maxCols: 2, gap: 0.4, tileAspects: aspects });
+    const edges = rowEdges(r);
+
+    expect(rowsOf(r)).toEqual([[0, 1], [2], [3]]);
+    edges.forEach((edge) => {
+      expect(Math.abs(edge.left - edges[0].left)).toBeLessThan(1);
+      expect(Math.abs(edge.right - edges[0].right)).toBeLessThan(1);
+    });
+    r.positions.forEach((position, index) => expectWithinStretch(position, aspects[index]));
+  });
+
   it.each([
     ["a lone last tile", [PORTRAIT, LANDSCAPE, LANDSCAPE], [[0, 1], [2]]],
     [

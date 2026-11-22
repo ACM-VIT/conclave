@@ -216,13 +216,24 @@ const fillToward = (widths: number[], sizes: number[], limits: number[], amount:
 };
 
 /**
+ * The whole pixels `count` tiles can share in a row no wider than `rowWidth`.
+ * Float error can leave `rowWidth - gaps` a hair under the integer it came
+ * from, so that integer is accepted when it still fits.
+ */
+const tileBudget = (count: number, gap: number, rowWidth: number) => {
+  const gaps = (count - 1) * gap;
+  const budget = Math.floor(rowWidth - gaps);
+  return budget + 1 + gaps <= rowWidth ? budget + 1 : budget;
+};
+
+/**
  * Resize a row's tiles so the row spans `rowWidth` at most, to the whole pixel
  * below when the gap is fractional. Tiles grow to their soft caps before their
  * hard caps, and shrink no further than their floors. Returns null when the
  * caps cannot reach `rowWidth`.
  */
 const resizeRow = (widths: number[], height: number, gap: number, rowWidth: number) => {
-  const total = Math.floor(rowWidth - (widths.length - 1) * gap + ASPECT_EPSILON);
+  const total = tileBudget(widths.length, gap, rowWidth);
   const { floor, soft, hard } = resizeLimits(widths, height);
   if (total < sum(floor) || total > sum(hard)) return null;
   const sizes = [...widths];
@@ -248,6 +259,10 @@ const alignRows = (rowTiles: number[][], height: number, gap: number, cols: numb
   const rows = rowTiles.map((tiles) => {
     const limits = resizeLimits(tiles, height);
     return {
+      fits: (width: number) => {
+        const budget = tileBudget(tiles.length, gap, width);
+        return budget >= sum(limits.floor) && budget <= sum(limits.hard);
+      },
       full: tiles.length === cols,
       natural: rowWidthOf(tiles, gap),
       low: rowWidthOf(limits.floor, gap),
@@ -260,27 +275,22 @@ const alignRows = (rowTiles: number[][], height: number, gap: number, cols: numb
   const shortRows = rows.filter((row) => !row.full);
   const low = Math.max(...fullRows.map((row) => row.low));
   const high = Math.min(...fullRows.map((row) => row.high));
-  let target = widest;
-  if (low <= high + ASPECT_EPSILON) {
-    const preferred = Math.min(
-      Math.max(Math.min(widest, ...fullRows.map((row) => row.soft)), low),
-      high,
-    );
-    const floor = Math.min(preferred, Math.max(...fullRows.map((row) => row.natural)));
-    const fits = (width: number) =>
-      shortRows.filter(
-        (row) => row.low <= width + ASPECT_EPSILON && row.high >= width - ASPECT_EPSILON,
-      ).length;
-    target = [preferred, ...shortRows.flatMap((row) => [row.low, row.high])]
-      .filter((width) => width >= floor - ASPECT_EPSILON && width <= high + ASPECT_EPSILON)
-      .reduce((best, width) => {
-        const gain = fits(width) - fits(best);
-        return gain > 0 ||
-          (gain === 0 && Math.abs(width - preferred) < Math.abs(best - preferred))
-          ? width
-          : best;
-      }, preferred);
-  }
+  const preferred = Math.min(
+    Math.max(Math.min(widest, ...fullRows.map((row) => row.soft)), low),
+    high,
+  );
+  const floor = Math.min(preferred, Math.max(...fullRows.map((row) => row.natural)));
+  const fits = (width: number) => shortRows.filter((row) => row.fits(width)).length;
+  const candidates = [preferred, floor, ...shortRows.flatMap((row) => [row.low, row.high])].filter(
+    (width) => width >= floor && width <= high && fullRows.every((row) => row.fits(width)),
+  );
+  // With no width every full row reaches, rows stretch toward the widest.
+  const target = candidates.reduce((best, width) => {
+    const gain = fits(width) - fits(best);
+    return gain > 0 || (gain === 0 && Math.abs(width - preferred) < Math.abs(best - preferred))
+      ? width
+      : best;
+  }, candidates[0] ?? widest);
   return rowTiles.map((tiles) => resizeRow(tiles, height, gap, target) ?? tiles);
 };
 
