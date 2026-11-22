@@ -2,7 +2,11 @@ import { readdirSync } from "node:fs";
 import path from "node:path";
 import type { CaptureResult } from "posthog-js";
 import { describe, expect, it } from "vitest";
-import { createCallMetricsTracker } from "../src/app/lib/call-quality-metrics";
+import {
+  type CallMetricEvent,
+  type CallStatsSample,
+  createCallMetricsTracker,
+} from "../src/app/lib/call-quality-metrics";
 import type { ConnectionState } from "../src/app/lib/types";
 import {
   type EventOrigin,
@@ -342,10 +346,10 @@ describe("only trusted properties and paths", () => {
     expect(scrubbed.properties.$exception_list[0].stacktrace.frames[1].filename).toBe(expected);
   });
 
-  it("sends every property the call-quality tracker emits", () => {
-    const emitted: Array<Record<string, unknown>> = [];
+  it("sends every property of each call-quality event, unchanged", () => {
+    const emitted: CallMetricEvent[] = [];
     const tracker = createCallMetricsTracker({
-      emit: (metric) => emitted.push(metric.props),
+      emit: (metric) => emitted.push(metric),
       newCallId: () => "call-1",
     });
     const snapshot = (state: ConnectionState) => ({
@@ -355,19 +359,46 @@ describe("only trusted properties and paths", () => {
       reconnectGaveUp: false,
       reconnecting: false,
     });
+    const stream = (kind: "audio" | "video", step: number) => ({
+      id: `recv:${kind}`,
+      kind,
+      packetsReceived: 50 * step,
+      bytesReceived: 40_000 * step,
+      framesDecoded: kind === "video" ? 30 * step : 0,
+      freezeCount: kind === "video" ? 0 : null,
+      totalFreezesDurationSec: kind === "video" ? 0 : null,
+      concealedSamples: kind === "audio" ? 0 : null,
+      totalSamplesReceived: kind === "audio" ? 48_000 * step : null,
+    });
+    const media = (step: number): CallStatsSample => ({
+      inbound: [stream("audio", step), stream("video", step)],
+      outboundVideo: [
+        { id: "send:L1", bytesSent: 60_000 * step, frameHeight: 360, cpuLimitedSec: 0, bandwidthLimitedSec: 0 },
+      ],
+      outboundProfile: "standard",
+    });
     tracker.onParticipants(2, 0);
     tracker.onConnectionState(snapshot("connecting"), 0);
     tracker.onConnectionState(snapshot("joined"), 1000);
+    tracker.onStats(media(1), 1250);
+    tracker.onStats(media(2), 6250);
     tracker.onConnectionState(snapshot("disconnected"), 30_000);
     tracker.onConnectionState(snapshot("connecting"), 31_000);
     tracker.onPageHidden(32_000);
-    const keys = [...new Set(emitted.flatMap((props) => Object.keys(props)))];
-    expect(keys.length).toBeGreaterThan(30);
 
-    const event = exceptionEvent();
-    Object.assign(event.properties, Object.fromEntries(keys.map((key) => [key, 1])));
-    const sent = scrub(event).properties;
-    expect(keys.filter((key) => !(key in sent))).toEqual([]);
+    expect([...new Set(emitted.map(({ name }) => name))].sort()).toEqual([
+      "call_first_media",
+      "call_join",
+      "call_summary",
+    ]);
+    for (const { name, props } of emitted) {
+      const event: CaptureResult = { uuid: "u", event: name, properties: { ...props } };
+      const sent = scrubTelemetryEvent(event, { payload: props, storedKeys: new Set() }).properties;
+      expect(
+        Object.fromEntries(Object.keys(props).map((key) => [key, sent[key]])),
+        name,
+      ).toEqual(props);
+    }
   });
 
   it("lists exactly the scripts under public/ as first-party, and keeps their paths", () => {
