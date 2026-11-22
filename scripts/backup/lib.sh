@@ -81,6 +81,43 @@ sqlite_files() {
   (cd "$1" && find . -type f -name '*.sqlite' | sed 's#^\./##' | LC_ALL=C sort)
 }
 
+# Prints the database copies in an archive's sqlite/ dir, relative to it:
+# every file but SQLite's side files, since a database reached through a
+# link need not end in .sqlite.
+sqlite_copies() {
+  [[ -d "$1" ]] || return 0
+  (cd "$1" && find . -type f ! -name '*-wal' ! -name '*-shm' ! -name '*-journal' | sed 's#^\./##' | LC_ALL=C sort)
+}
+
+# Prints each *.sqlite symlink under a directory as "<path relative to
+# it><TAB><target as written>".
+sqlite_links() {
+  [[ -d "$1" ]] || return 0
+  (cd "$1" && find . -type l -name '*.sqlite' | sed 's#^\./##' | LC_ALL=C sort | while IFS= read -r link; do
+    printf '%s\t%s\n' "$link" "$(readlink "$link")"
+  done)
+}
+
+# Prints the file a symlink below the state dir reaches, relative to the state
+# dir. An absolute target may name the container's mount of the state dir.
+# Fails when the target is missing or outside the state dir.
+sqlite_link_target() {
+  STATE_IN="$1" LINK_IN="$2" CONTAINER_IN="$3" python3 -c '
+import os, sys
+state = os.path.realpath(os.environ["STATE_IN"])
+link = os.path.join(state, os.environ["LINK_IN"])
+target = os.readlink(link)
+container = os.environ["CONTAINER_IN"].rstrip("/")
+if target == container or target.startswith(container + "/"):
+    target = state + target[len(container):]
+path = os.path.realpath(os.path.join(os.path.dirname(link), target))
+rel = os.path.relpath(path, state)
+if rel == ".." or rel.startswith("../") or not os.path.isfile(path):
+    sys.exit(1)
+print(rel)
+'
+}
+
 # redis-cli's own quoting for commands sent on stdin: double quotes with \\
 # and \" escapes.
 quote_args() {

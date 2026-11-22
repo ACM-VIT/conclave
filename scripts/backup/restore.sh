@@ -73,7 +73,7 @@ payload="${work}/payload"
 mkdir -p "$payload"
 age --decrypt -i "$identity" "$archive" | tar -C "$payload" -xzf -
 (cd "$payload" && sha256sum -c --quiet SHA256SUMS) || die "checksums do not match; the archive is damaged"
-mapfile -t databases < <(sqlite_files "${payload}/sqlite")
+mapfile -t databases < <(sqlite_copies "${payload}/sqlite")
 for rel in "${databases[@]}"; do
   [[ "$(sqlite3 "${payload}/sqlite/${rel}" "PRAGMA integrity_check;")" == "ok" ]] || die "${rel} failed its integrity check"
 done
@@ -106,7 +106,8 @@ done
 # Silence is not proof: a wrong health URL misses a running SFU. An SFU holds
 # its databases open for as long as it runs, in a container or not.
 command -v fuser >/dev/null || die "fuser is not installed (apt-get install psmisc)"
-mapfile -t live_databases < <(sqlite_files "$STATE_DIR")
+# A link's path reaches the file it points to, whatever that file is named.
+mapfile -t live_databases < <(sqlite_files "$STATE_DIR"; sqlite_links "$STATE_DIR" | cut -f1)
 for rel in "${live_databases[@]}"; do
   holders="$(fuser "${STATE_DIR}/${rel}" 2>/dev/null | xargs || true)"
   [[ -z "$holders" ]] || die "PID ${holders} still holds ${STATE_DIR}/${rel} open; stop the SFU containers before restoring"
@@ -128,6 +129,19 @@ if wants sqlite; then
     mv "${dest}.restore-tmp" "$dest"
     log "Restored ${dest} (previous copy kept as ${dest}.pre-restore-${stamp})"
   done
+  # The links the SFU opens its databases through, as they were.
+  if [[ -f "${payload}/sqlite-links" ]]; then
+    while IFS=$'\t' read -r link target; do
+      dest="${STATE_DIR}/${link}"
+      [[ -L "$dest" && "$(readlink "$dest")" == "$target" ]] && continue
+      mkdir -p "$(dirname "$dest")"
+      if [[ -e "$dest" || -L "$dest" ]]; then
+        mv "$dest" "${dest}.pre-restore-${stamp}"
+      fi
+      ln -s "$target" "$dest"
+      log "Restored the link ${dest} -> ${target}"
+    done < "${payload}/sqlite-links"
+  fi
 fi
 
 if wants files && [[ -f "${payload}/state-files.tar" ]]; then

@@ -59,8 +59,19 @@ fi
 # SQLite: the online backup API copies a consistent snapshot while the SFUs
 # keep writing; copying the file (or its WAL) directly would not. Each
 # database keeps its path below the state dir, so restore.sh puts it back
-# where the SFU opens it.
+# where the SFU opens it. A database the SFU opens through a symlink is
+# copied once, at the path the link reaches, and the link is recorded so
+# restore.sh can recreate it.
 mapfile -t databases < <(sqlite_files "$STATE_DIR")
+: > "${payload}/sqlite-links"
+while IFS=$'\t' read -r link target; do
+  resolved="$(sqlite_link_target "$STATE_DIR" "$link" "$container_state_dir")" ||
+    die "${STATE_DIR}/${link} links to ${target}, which is not a file inside the state dir"
+  printf '%s\t%s\n' "$link" "$target" >> "${payload}/sqlite-links"
+  echo "sqlite.link.${link}=${target}" >> "$manifest"
+  databases+=("$resolved")
+done < <(sqlite_links "$STATE_DIR")
+mapfile -t databases < <(printf '%s\n' "${databases[@]}" | grep -v '^$' | LC_ALL=C sort -u)
 for rel in "${databases[@]}"; do
   db="${STATE_DIR}/${rel}"
   copy="${payload}/sqlite/${rel}"
@@ -97,9 +108,14 @@ fi
 (( sources > 0 )) || die "found no SQLite database in ${STATE_DIR} and no Redis URL; check the config"
 
 # Everything else in the state directory (JSON stores and the like).
+# A database reached through a link need not end in .sqlite, so each one is
+# excluded by its path as well.
 if [[ -d "$STATE_DIR" ]]; then
-  tar -C "$STATE_DIR" --exclude='*.sqlite' --exclude='*.sqlite-wal' --exclude='*.sqlite-shm' \
-    --exclude='*.pre-restore-*' -cf "${payload}/state-files.tar" .
+  excludes=(--exclude='*.sqlite' --exclude='*.sqlite-wal' --exclude='*.sqlite-shm' --exclude='*.pre-restore-*')
+  for rel in "${databases[@]}"; do
+    excludes+=(--exclude="./${rel}" --exclude="./${rel}-wal" --exclude="./${rel}-shm" --exclude="./${rel}-journal")
+  done
+  tar -C "$STATE_DIR" "${excludes[@]}" -cf "${payload}/state-files.tar" .
 fi
 
 sums="$(cd "$payload" && find . -type f | sort | xargs sha256sum)"

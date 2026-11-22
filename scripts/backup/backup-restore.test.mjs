@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile, execFileSync, spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -257,6 +257,51 @@ test(
       assert.ok(!earlier.includes(kept[2]), "tonight's archive is kept");
     } finally {
       azure.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "a database the SFU opens through a symlink comes back with its link",
+  { skip: missing.length > 0 && `needs ${missing.join(", ")} on PATH` },
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+    try {
+      const { state, repo, backup, latestArchive, restore } = await setUp(root);
+      await writeFile(path.join(repo, ".env"), "CONCLAVE_SQLITE_PATH=/var/lib/conclave/recordings/conclave.sqlite\n");
+      await mkdir(path.join(state, "data"));
+      for (const [file, row] of [["live.sqlite", "w1"], ["sched.db", "s1"]]) {
+        const db = new DatabaseSync(path.join(state, "data", file));
+        db.exec("CREATE TABLE rows (id TEXT PRIMARY KEY)");
+        db.prepare("INSERT INTO rows VALUES (?)").run(row);
+        db.close();
+      }
+      // The path the SFU opens, linked relatively; and one linked through the
+      // container's mount path to a file that does not end in .sqlite.
+      await symlink("data/live.sqlite", path.join(state, "conclave.sqlite"));
+      await symlink("/var/lib/conclave/recordings/data/sched.db", path.join(state, "scheduling.sqlite"));
+
+      await backup("--local-only");
+      const archive = await latestArchive();
+      const listing = (await run("sh", ["-c", `age --decrypt -i "$1" "$2" | tar -xzOf - ./state-files.tar | tar -tf -`, "sh", path.join(root, "key.txt"), archive])).stdout;
+      assert.ok(!listing.includes("sched.db"), "the database reached through a link is not also copied raw");
+
+      await rm(state, { recursive: true });
+      await restore("--file", archive, "--yes");
+      assert.equal(await readlink(path.join(state, "conclave.sqlite")), "data/live.sqlite");
+      assert.equal(await readlink(path.join(state, "scheduling.sqlite")), "/var/lib/conclave/recordings/data/sched.db");
+      const throughLink = new DatabaseSync(path.join(state, "conclave.sqlite"), { readOnly: true });
+      assert.deepEqual(throughLink.prepare("SELECT id FROM rows").all().map((row) => row.id), ["w1"]);
+      throughLink.close();
+      const sched = new DatabaseSync(path.join(state, "data", "sched.db"), { readOnly: true });
+      assert.deepEqual(sched.prepare("SELECT id FROM rows").all().map((row) => row.id), ["s1"]);
+      sched.close();
+
+      // A link whose file is not on the volume cannot be backed up.
+      await symlink("/opt/elsewhere/conclave.sqlite", path.join(state, "other.sqlite"));
+      await assert.rejects(backup("--local-only"), /other\.sqlite links to \/opt\/elsewhere\/conclave\.sqlite, which is not a file inside the state dir/);
+    } finally {
       await rm(root, { recursive: true, force: true });
     }
   },
