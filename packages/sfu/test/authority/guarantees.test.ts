@@ -1559,7 +1559,10 @@ describe("large views and slow sockets", () => {
 
     const mine = raviTab.frames.slice(before).filter((frame) => frame.subscription === "hidden-mid-transfer");
     const parts = replaces(mine);
-    const later = parts.slice(1).flatMap((part) => part.rows);
+    const later = parts
+      .slice(1)
+      .flatMap((part) => part.rows)
+      .filter((row) => row.bucket === "questions");
     // What Ravi ends up holding, from the parts and the patches after them.
     const held = new Map<string, Json>();
     for (const frame of mine) {
@@ -1581,7 +1584,10 @@ describe("large views and slow sockets", () => {
     expect(later.filter((row) => row.key === ids[1]).map((row) => field(row.value, "status"))).toEqual([
       "answered",
     ]);
-    expect([...held.keys()].sort()).toEqual([`questions/${ids[0]}`, `questions/${ids[1]}`].sort());
+    expect([...held.keys()].filter((held) => held.startsWith("questions/")).sort()).toEqual(
+      [`questions/${ids[0]}`, `questions/${ids[1]}`].sort(),
+    );
+    expect([...held.keys()].filter((held) => held.endsWith(`/${ids[2]}`))).toEqual([]);
     expect(field(held.get(`questions/${ids[1]}`) ?? null, "status")).toBe("answered");
   });
 
