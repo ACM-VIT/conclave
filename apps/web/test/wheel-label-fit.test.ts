@@ -160,6 +160,16 @@ describe("wheel label orientation", () => {
     }
   });
 
+  it("turns a lone name upright at every rotation of an idle wheel", () => {
+    for (let rotation = 0; rotation < 720; rotation += 5) {
+      const flipped = isLabelFlipped(0, 1, rotation);
+      const reading = ((rotation + (flipped ? 180 : 0)) * Math.PI) / 180;
+      expect(Math.cos(reading)).toBeGreaterThanOrEqual(-1e-9);
+    }
+    expect(isLabelFlipped(0, 1, 0)).toBe(false);
+    expect(isLabelFlipped(0, 1, 180)).toBe(true);
+  });
+
   it("leaves the winner at the pointer unflipped, so it reads level", () => {
     for (const count of [2, 5, 12, 40, 64]) {
       for (const jitter of [0.15, 0.5, 0.85]) {

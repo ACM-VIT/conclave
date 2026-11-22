@@ -344,11 +344,12 @@ export function WheelStage({
       const segments = segmentCountRef.current;
       const moved = unwrappedDeg - previousDeg;
 
-      if (segments > 1) {
-        const flipKey = labelFlipSignature(flipReference, segments);
+      if (segments > 0) {
+        const reference = segments === 1 ? rotationRef.current : flipReference;
+        const flipKey = labelFlipSignature(reference, segments);
         if (flipKey !== flipKeyRef.current) {
           flipKeyRef.current = flipKey;
-          setFlipRotation(flipReference);
+          setFlipRotation(reference);
         }
       }
 
@@ -449,6 +450,9 @@ export function WheelStage({
         <text
           x={0}
           y={SINGLE_LABEL_Y}
+          transform={
+            isLabelFlipped(0, 1, flipRotation) ? `rotate(180 0 ${SINGLE_LABEL_Y})` : undefined
+          }
           textAnchor="middle"
           dominantBaseline="central"
           fontSize={SINGLE_LABEL_SIZE}

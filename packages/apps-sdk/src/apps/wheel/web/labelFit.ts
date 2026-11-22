@@ -127,13 +127,16 @@ export const fitWheelLabels = (
   return { fontSize, labels: fitted };
 };
 
+const SINGLE_LABEL_DIRECTION = 90;
+
 export const isLabelFlipped = (
   index: number,
   count: number,
   rotation: number
 ): boolean => {
-  const screenAngle = mod360((360 / count) * (index + 0.5) + rotation);
-  return screenAngle >= 180;
+  const direction =
+    count === 1 ? SINGLE_LABEL_DIRECTION : (360 / count) * (index + 0.5);
+  return mod360(direction + rotation) >= 180;
 };
 
 export const labelFlipSignature = (rotation: number, count: number): string => {
