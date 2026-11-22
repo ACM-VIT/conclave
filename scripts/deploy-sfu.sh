@@ -609,7 +609,7 @@ else
   # image is reused, and only a build from a clean build context (no edited
   # or untracked files) is ever tagged as the commit's image.
   build_inputs_clean="false"
-  if [[ -z "$(git -C "$ROOT_DIR" status --porcelain -- package.json pnpm-lock.yaml pnpm-workspace.yaml patches packages)" ]]; then
+  if [[ -z "$(git -C "$ROOT_DIR" status --porcelain -- .dockerignore package.json pnpm-lock.yaml pnpm-workspace.yaml patches packages)" ]]; then
     build_inputs_clean="true"
   fi
   if [[ "$build_inputs_clean" == "true" ]] &&
