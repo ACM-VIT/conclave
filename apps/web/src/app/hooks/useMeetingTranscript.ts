@@ -144,10 +144,16 @@ type ServerEnvelope =
   | { type: "error"; message?: string };
 
 type TranscriptSessionWaiter = {
-  predicate: (session: TranscriptSessionState) => boolean;
-  resolve: (session: TranscriptSessionState | null) => void;
+  accepted: boolean;
+  resolve: (outcome: TranscriptSessionState | "rejected" | null) => void;
   timeoutId: number;
 };
+
+const isSettledSfuSession = (session: TranscriptSessionState) =>
+  session.transportMode === "sfu" &&
+  (session.status === "live" ||
+    session.status === "error" ||
+    session.status === "takeover_needed");
 
 type SfuRelayStartTokenWaiter = {
   resolve: (token: TranscriptSfuRelayStartToken | null) => void;
@@ -628,7 +634,11 @@ export function useMeetingTranscript({
         clearBufferedAudioMessages();
       }
       for (const waiter of Array.from(sessionWaitersRef.current)) {
-        if (!waiter.predicate(nextSession)) continue;
+        if (nextSession.status === "starting") {
+          waiter.accepted = true;
+          continue;
+        }
+        if (!waiter.accepted || !isSettledSfuSession(nextSession)) continue;
         window.clearTimeout(waiter.timeoutId);
         sessionWaitersRef.current.delete(waiter);
         waiter.resolve(nextSession);
@@ -645,20 +655,20 @@ export function useMeetingTranscript({
     sessionWaitersRef.current.clear();
   }, []);
 
-  const waitForSessionState = useCallback(
-    (
-      predicate: (session: TranscriptSessionState) => boolean,
-      timeoutMs: number,
-    ): Promise<TranscriptSessionState | null> =>
-      new Promise((resolve) => {
-        const current = sessionRef.current;
-        if (predicate(current)) {
-          resolve(current);
-          return;
-        }
+  const rejectUnacceptedSessionRequests = useCallback(() => {
+    for (const waiter of Array.from(sessionWaitersRef.current)) {
+      if (waiter.accepted) continue;
+      window.clearTimeout(waiter.timeoutId);
+      sessionWaitersRef.current.delete(waiter);
+      waiter.resolve("rejected");
+    }
+  }, []);
 
+  const waitForAcceptedSession = useCallback(
+    (timeoutMs: number): Promise<TranscriptSessionState | "rejected" | null> =>
+      new Promise((resolve) => {
         const waiter: TranscriptSessionWaiter = {
-          predicate,
+          accepted: false,
           resolve,
           timeoutId: window.setTimeout(() => {
             sessionWaitersRef.current.delete(waiter);
@@ -803,6 +813,7 @@ export function useMeetingTranscript({
           return;
         case "error":
           setError(message.message || "Transcript service error.");
+          rejectUnacceptedSessionRequests();
           return;
         default: {
           const _exhaustive: never = message;
@@ -816,6 +827,7 @@ export function useMeetingTranscript({
       applyServiceVersion,
       applySessionState,
       applySfuRelayStartToken,
+      rejectUnacceptedSessionRequests,
       upsertAssistantMessage,
     ],
   );
@@ -1124,6 +1136,33 @@ export function useMeetingTranscript({
     };
   }, [connectionStatus, isJoined, tokenInfo?.workerUrl]);
 
+  const finishSfuSessionRequest = useCallback(
+    async (stopSerialAtRequest: number): Promise<boolean> => {
+      const readySession = await waitForAcceptedSession(
+        SFU_SESSION_READY_TIMEOUT_MS,
+      );
+      if (explicitStopSerialRef.current !== stopSerialAtRequest) return false;
+      if (readySession === "rejected") return false;
+      if (readySession?.status !== "live") {
+        setError(
+          readySession?.error ||
+            "Transcript is still reconnecting automatically.",
+        );
+        return false;
+      }
+      if (!(await startSfuRelay())) {
+        suppressAutoTakeoverUntilRef.current = Date.now() + 30_000;
+        send({
+          type: "session.relayFailed",
+          message: "SFU transcript audio relay could not reconnect.",
+        });
+        return false;
+      }
+      return true;
+    },
+    [send, startSfuRelay, waitForAcceptedSession],
+  );
+
   const start = useCallback(
     async (options: StartTranscriptOptions): Promise<boolean> => {
       if (!canStart) {
@@ -1152,35 +1191,8 @@ export function useMeetingTranscript({
         language: options.language,
       });
       if (!sent) return false;
-      if (transportMode === "sfu") {
-        const readySession = await waitForSessionState(
-          (nextSession) =>
-            nextSession.transportMode === "sfu" &&
-            (nextSession.status === "live" ||
-              nextSession.status === "error" ||
-              nextSession.status === "takeover_needed"),
-          SFU_SESSION_READY_TIMEOUT_MS,
-        );
-        if (explicitStopSerialRef.current !== stopSerialAtRequest) {
-          return false;
-        }
-        if (readySession?.status !== "live") {
-          setError(
-            readySession?.error ||
-              "Transcript is still reconnecting automatically.",
-          );
-          return false;
-        }
-        if (!(await startSfuRelay())) {
-          suppressAutoTakeoverUntilRef.current = Date.now() + 30_000;
-          send({
-            type: "session.relayFailed",
-            message: "SFU transcript audio relay could not reconnect.",
-          });
-          return false;
-        }
-      }
-      return true;
+      if (transportMode !== "sfu") return true;
+      return finishSfuSessionRequest(stopSerialAtRequest);
     },
     [
       canStart,
@@ -1188,9 +1200,8 @@ export function useMeetingTranscript({
       connect,
       ensureSfuRelayAvailable,
       send,
+      finishSfuSessionRequest,
       setPermissionError,
-      startSfuRelay,
-      waitForSessionState,
     ],
   );
 
@@ -1222,35 +1233,8 @@ export function useMeetingTranscript({
         language: options.language,
       });
       if (!sent) return false;
-      if (transportMode === "sfu") {
-        const readySession = await waitForSessionState(
-          (nextSession) =>
-            nextSession.transportMode === "sfu" &&
-            (nextSession.status === "live" ||
-              nextSession.status === "error" ||
-              nextSession.status === "takeover_needed"),
-          SFU_SESSION_READY_TIMEOUT_MS,
-        );
-        if (explicitStopSerialRef.current !== stopSerialAtRequest) {
-          return false;
-        }
-        if (readySession?.status !== "live") {
-          setError(
-            readySession?.error ||
-              "Transcript is still reconnecting automatically.",
-          );
-          return false;
-        }
-        if (!(await startSfuRelay())) {
-          suppressAutoTakeoverUntilRef.current = Date.now() + 30_000;
-          send({
-            type: "session.relayFailed",
-            message: "SFU transcript audio relay could not reconnect.",
-          });
-          return false;
-        }
-      }
-      return true;
+      if (transportMode !== "sfu") return true;
+      return finishSfuSessionRequest(stopSerialAtRequest);
     },
     [
       canTakeover,
@@ -1261,9 +1245,8 @@ export function useMeetingTranscript({
       session.qaModel,
       session.transcriptModel,
       session.transportMode,
+      finishSfuSessionRequest,
       setPermissionError,
-      startSfuRelay,
-      waitForSessionState,
     ],
   );
 
