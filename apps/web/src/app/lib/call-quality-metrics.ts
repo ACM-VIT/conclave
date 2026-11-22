@@ -110,11 +110,12 @@ type StreamMemory = {
   totalSamplesReceived: number;
   stalled: boolean;
   /**
-   * Video time measured and freeze time counted for this stream since its
-   * baseline (joined, the end of a dropped gap, or a missed sample): the
-   * freeze time it may still add is the difference.
+   * When this stream's counters started counting toward the call: its
+   * baseline reading (the first after joined, after a dropped gap or after a
+   * missed sample), or, for a stream first seen in a measured interval, the
+   * start of that interval. Freeze time counted since then is `freezeMs`.
    */
-  videoMs: number;
+  countingSince: number;
   freezeMs: number;
   /** The sample these counters were read in. */
   readAt: number;
@@ -397,15 +398,20 @@ export function createCallMetricsTracker({
     totals: emptyTotals(),
   });
 
-  type StreamProgress = Pick<StreamMemory, "stalled" | "videoMs" | "freezeMs">;
-  const BASELINE: StreamProgress = { stalled: false, videoMs: 0, freezeMs: 0 };
+  type StreamProgress = Pick<StreamMemory, "stalled" | "freezeMs">;
+  const BASELINE: StreamProgress = { stalled: false, freezeMs: 0 };
 
-  /** Adds one stream's progress over `dt` to the totals. */
+  /**
+   * Adds one stream's progress over `dt`, up to `at`, to the totals; its
+   * counters count from `countingSince`.
+   */
   const addInbound = (
     totals: MediaTotals,
     stream: InboundStreamStats,
     previous: StreamMemory | undefined,
     dt: number,
+    countingSince: number,
+    at: number,
   ): StreamProgress => {
     const delta = (current: number | null, prior: number | undefined) =>
       current === null ? 0 : counterDelta(current, prior ?? 0);
@@ -424,17 +430,17 @@ export function createCallMetricsTracker({
     const frames = delta(stream.framesDecoded, previous?.framesDecoded);
     // Credits whole sample intervals: a consumer swapped out between two
     // samples leaves no stats, so its replacement covers the interval.
-    const videoMs = (previous?.videoMs ?? 0) + (bytes > 0 || frames > 0 ? dt : 0);
     if (bytes > 0 || frames > 0) totals.remoteVideoMs += dt;
     totals.freezeCount += delta(stream.freezeCount, previous?.freezeCount);
     // Chrome adds a freeze's whole duration when video resumes, so one that
     // began before the stream's baseline (before joined, or across a dropped
-    // gap) lands at once. A stream adds at most the video time it has
-    // measured since that baseline, less the freeze time already counted.
+    // gap) lands at once. A stream adds at most the time since it started
+    // counting, less the freeze time already counted; a freeze during a
+    // packet outage fits, as the outage is still time on the clock.
     const counted = previous?.freezeMs ?? 0;
     const freezeMs = Math.min(
       delta(stream.totalFreezesDurationSec, previous?.freezesSec) * 1000,
-      videoMs - counted,
+      at - countingSince - counted,
     );
     totals.freezeMs += freezeMs;
     const stalled = dt > 0 && frames === 0 && bytes >= STALL_MIN_BYTE_DELTA;
@@ -442,7 +448,7 @@ export function createCallMetricsTracker({
       totals.stallMs += dt;
       if (!previous?.stalled) totals.stallCount += 1;
     }
-    return { stalled, videoMs, freezeMs: counted + freezeMs };
+    return { stalled, freezeMs: counted + freezeMs };
   };
 
   /**
@@ -461,9 +467,13 @@ export function createCallMetricsTracker({
   ) => {
     const previous = media.streams.get(stream.id);
     const measured =
-      dt !== null && totals !== null && (previous === undefined || previous.readAt === previousAt);
+      dt !== null &&
+      totals !== null &&
+      previousAt !== null &&
+      (previous === undefined || previous.readAt === previousAt);
+    const countingSince = measured ? (previous?.countingSince ?? previousAt) : at;
     const progress = measured
-      ? addInbound(totals, stream, previous, dt)
+      ? addInbound(totals, stream, previous, dt, countingSince, at)
       : { ...BASELINE, stalled: dt === null && (previous?.stalled ?? false) };
 
     media.streams.set(stream.id, {
@@ -475,6 +485,7 @@ export function createCallMetricsTracker({
       concealedSamples: stream.concealedSamples ?? 0,
       totalSamplesReceived: stream.totalSamplesReceived ?? 0,
       ...progress,
+      countingSince,
       readAt: at,
     });
   };

@@ -841,6 +841,26 @@ describe("call_summary", () => {
     expect(props.video_freeze_ms as number).toBeLessThanOrEqual(props.remote_video_ms as number);
   });
 
+  it("counts a freeze through a packet outage on a stream that arrived late (Sol's replay)", () => {
+    const { tracker, state, named } = setup();
+    tracker.onParticipants(2, 0);
+    state("connecting", 0);
+    state("joined", 1000);
+    const at = (frames: number, bytes: number, freezes = 0, freezeSec = 0) =>
+      sample([video({ framesDecoded: frames, bytesReceived: bytes, freezeCount: freezes, totalFreezesDurationSec: freezeSec })]);
+    tracker.onStats(sample([]), 25_000);
+    tracker.onStats(at(20, 10_000), 30_000);
+    // No packets and no frames from 30 s to 42 s; Chrome adds the 12 s freeze when video resumes.
+    tracker.onStats(at(20, 10_000), 35_000);
+    tracker.onStats(at(20, 10_000), 40_000);
+    tracker.onStats(at(110, 60_000, 1, 12), 45_000);
+    state("disconnected", 45_100);
+
+    const { props } = named("call_summary")[0];
+    expect(props.video_freeze_count).toBe(1);
+    expect(props.video_freeze_ms).toBe(12_000);
+  });
+
   it("charges nothing from before joined to a call", () => {
     const { tracker, state, named } = setup();
     state("connecting", 0);
