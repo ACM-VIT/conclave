@@ -107,8 +107,8 @@ replaces emails, tokens and credentials in free text: the whole value of a
 `Cookie`, `Set-Cookie`, `Authorization` or `Proxy-Authorization` line, Bearer
 and Basic tokens, and `password=` / `token:` style values, at any length. An
 exception built from something that was not an Error (a rejected string or
-object, a thrown value) sends only its kind, such as `[primitive rejection]`,
-never the value. It also drops campaign and click-id
+object, a thrown value) sends only its kind, `[primitive rejection]` or
+`[non-error value]`, never the value. It also drops campaign and click-id
 properties (`utm_*`, `fbclid`, `gclid` and friends) and the search keywords the
 SDK takes from a search-engine referrer (`ph_keyword`), with their `$initial_`
 and `$session_entry_` copies, and `save_campaign_params` is off. `$search_engine`

@@ -202,14 +202,15 @@ describe("credentials, non-error rejections and first-party scripts", () => {
     );
   });
 
+  // Shaped like what posthog-js sent for each case in a real browser run.
   it.each([
-    ["onunhandledrejection", "UnhandledRejection", "Non-Error promise rejection captured with value: Meet Mira in sample-room at seven", "[primitive rejection]"],
-    ["onunhandledrejection", "Object", "Object captured as exception with keys: note, room", "[object rejection]"],
-    ["onerror", "Error", "Error captured as exception: Meet Mira in sample-room at seven", "[non-error exception]"],
-  ])("sends only the kind of a %s value that is not an Error (%s)", (mechanism, type, value, expected) => {
+    ["a rejected string", "UnhandledRejection", "Non-Error promise rejection captured with value: Meet Mira in sample-room at seven", "[primitive rejection]"],
+    ["a rejected object", "Error", "Object captured as exception with keys: note, room", "[non-error value]"],
+    ["a thrown string", "Error", "Error captured as exception: Meet Mira in sample-room at seven", "[non-error value]"],
+  ])("sends only the kind of %s", (_case, type, value, expected) => {
     const event = exceptionEvent();
     event.properties.$exception_list = [
-      { type, value, mechanism: { type: mechanism, handled: false, synthetic: true } },
+      { type, value, mechanism: { type: "generic", handled: false, synthetic: true } },
     ];
     const scrubbed = scrubTelemetryEvent(event);
 

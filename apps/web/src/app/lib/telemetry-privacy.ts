@@ -134,18 +134,15 @@ const scrubFrame = (frame: ExceptionFrame, pageOrigin: string | null): Exception
 // Thrown as ServerError (lib/server-error.ts): text the server wrote.
 const SERVER_ERROR_TYPE = "ServerError";
 
-type Mechanism = { type?: unknown; synthetic?: unknown };
+type Mechanism = { synthetic?: unknown };
 
 // posthog-js marks an exception built from something that was not an Error
 // (a rejected string or object, a thrown value) as synthetic and puts that
-// value in the message. Only its kind leaves the browser.
+// value in the message. Only its kind leaves the browser: a rejected
+// primitive is typed UnhandledRejection, anything else cannot be told apart.
 const syntheticKind = (entry: ExceptionEntry): string | null => {
-  const mechanism = entry.mechanism as Mechanism | undefined;
-  if (mechanism?.synthetic !== true) return null;
-  if (mechanism.type === "onunhandledrejection") {
-    return entry.type === "UnhandledRejection" ? "[primitive rejection]" : "[object rejection]";
-  }
-  return "[non-error exception]";
+  if ((entry.mechanism as Mechanism | undefined)?.synthetic !== true) return null;
+  return entry.type === "UnhandledRejection" ? "[primitive rejection]" : "[non-error value]";
 };
 
 const scrubExceptionValue = (entry: ExceptionEntry): unknown => {
