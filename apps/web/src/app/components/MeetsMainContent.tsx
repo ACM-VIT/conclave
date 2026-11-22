@@ -330,7 +330,7 @@ interface MeetsMainContentProps {
   onSetWebinarHandRaised?: (raised: boolean) => void;
   onPromoteWebinarAttendee?: (
     userId: string,
-  ) => Promise<{ ok: boolean; error?: string }>;
+  ) => Promise<{ ok: boolean; error?: string; code?: string }>;
   onDemoteWebinarParticipant?: (
     userId: string,
   ) => Promise<{ ok: boolean; error?: string }>;

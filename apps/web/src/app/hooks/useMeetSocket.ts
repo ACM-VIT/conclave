@@ -10217,7 +10217,7 @@ export function useMeetSocket({
   }, [socketRef]);
 
   const promoteWebinarAttendee = useCallback(
-    (userId: string): Promise<{ ok: boolean; error?: string }> => {
+    (userId: string): Promise<{ ok: boolean; error?: string; code?: string }> => {
       const socket = socketRef.current;
       if (!socket) return Promise.resolve({ ok: false, error: "Not connected" });
 
@@ -10228,9 +10228,13 @@ export function useMeetSocket({
           () => resolve({ ok: false, error: "The server did not respond. Try again." }),
           "webinar:promoteAttendee",
           { userId },
-          (response: { success: boolean } | { error: string }) => {
+          (
+            response:
+              | { success: boolean }
+              | { error: string; code?: string },
+          ) => {
             if ("error" in response) {
-              resolve({ ok: false, error: response.error });
+              resolve({ ok: false, error: response.error, code: response.code });
               return;
             }
             resolve({ ok: true });
