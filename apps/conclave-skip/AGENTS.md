@@ -208,6 +208,139 @@ adb logcat -d | grep setRequestedFrameRate
 The expected idle state in a meeting is not constant 60 fps redraws. Lottie
 will animate during entry, but it must be removed after reveal.
 
+## Android Video Tile Rendering
+
+The code carries no comments, so this section is the record of why it is
+shaped this way. Files are under `Sources/Conclave/Skip/`:
+
+- `VideoRenderer.kt`: `VideoTrackView`, the composable every video goes through.
+- `VideoHosts.kt`: `SurfaceVideoHost` and `TextureVideoHost`, the two kinds of
+  Android view behind it, and `VideoBufferSizePolicy`.
+- `VideoTileRenderer.kt`: frames in, draws out, for one view.
+- `VideoRenderLoop.kt`: the GL thread and EGL context of one view, behind the
+  `VideoRenderBackend` interface the tests fake.
+- `VideoCornerCutter.kt`: the pass that rounds a buffer's corners.
+- `ui/call/stage/StageVideoBacking.kt`: which stage tile gets which view.
+
+### Which view a tile gets
+
+A stage tile is drawn into one of three things, chosen by
+`StageVideoBackingPolicy`:
+
+- `Surface`: a SurfaceView behind the window at the default level. Grid tiles,
+  the spotlight main tile, the program feed.
+- `OverlaySurface`: a SurfaceView one level up, translucent, with its corners
+  cut in GL. Rail tiles, and the floating self view or speaker inset when the
+  layout has no rail.
+- `Texture`: a TextureView in the window. Everything else.
+
+Surface tiles never redraw the window: their frames go straight to the system
+compositor. The window shows them through the hole the SurfaceView punches
+where it is drawn, so anything Compose draws later (name pill, speaking ring,
+menus, panels) stays on top, and the tile's rounded clip rounds the hole. A
+TextureView costs a window redraw per video frame, but it can be clipped,
+faded, scaled and stacked like any other view.
+
+Rules that follow from how a surface behind the window works:
+
+- There are only two surface levels, and the stage stacks three deep (main,
+  rail, floating self view). The policy gives each level one place. Two
+  overlapping tiles must never share a surface level;
+  `noTwoOverlappingTilesShareASurfaceLevelInAnyLayout` checks this on the real
+  layouts. Change the policy and that test together.
+- In compact portrait the rail is a bottom row and a self view in a bottom
+  corner lies over it. That is why a floating tile is a `Texture` whenever the
+  layout has a rail.
+- A layer alpha cannot fade a surface, and a layer scale is not cropped by its
+  parent clip before API 34. A tile that fades (the landscape share rail, the
+  minimized self view) or zooms (the remote share) stays a `Texture`. Keep it
+  that way, or move the fade or zoom into the renderer first.
+- A rail that stops fading with the chrome (the share ended, the phone turned)
+  snaps to full alpha in `ParticipantTile`, and stays a `Texture` until it gets
+  there. A surface must never sit under a fading layer.
+- A surface's level is fixed when it is created, so a tile that changes
+  backing gets a new view and shows its cover until the next frame.
+- A surface shows a black backstop until its first frame. `VideoTrackView`
+  keeps an in-call-background cover over it until `VideoHost.hasFrame`. A
+  TextureView draws nothing until its first frame and needs no cover.
+- A surface tile without a track has no view at all. An empty SurfaceView still
+  costs the compositor a layer.
+- A tile that floats over other video cannot be rounded by the window, which is
+  transparent there too. Its buffer carries the shape: the overlay surface is
+  `PixelFormat.TRANSLUCENT` and `VideoCornerCutter` multiplies the four corner
+  squares by the rounded-rectangle coverage (blend `GL_ZERO, GL_SRC_ALPHA`, so
+  the buffer stays premultiplied). The shader works in corner-local pixels so
+  medium precision is enough on every GPU.
+- Video previews inside panels (mini tile, effects, settings) and the shared
+  browser stay `Texture`: they sit above the stage and would need a fourth
+  level.
+
+### How a view draws
+
+Each view has its own `VideoRenderLoop`: one GL thread and one EGL context, in
+the share group of `VideoRendererShared.eglBase` so decoder and camera textures
+can be drawn directly. The view creates it and stops it in `release()`. It
+replaces WebRTC's `EglRenderer`, which cannot draw a letterbox into the buffer
+or cut corners.
+
+One loop for every view was built and measured, and is not what ships: with a
+single context each draw first switches the current surface, and on the
+emulators that cost 6 to 11 points of a core more than a loop per view. Measure
+on a phone before sharing the loop. The pull request that added this section
+has the numbers.
+
+- Threads: attach, detach, clear, mirror and fit come from the main thread.
+  Frames arrive on WebRTC's threads. Everything GL runs on the loop's thread.
+- A draw happens only when a frame arrives. Only the newest undrawn frame is
+  kept. A frame is given back as soon as it is drawn: a hardware-decoded frame
+  is a texture its decoder waits to get back, so nothing can be redrawn
+  without a new frame.
+- Attaches and clears carry a token that rises with each one
+  (`presentationToken` in the hosts). A frame is stamped with the newest token
+  when it arrives and is drawn only once that attach or clear has run on the
+  render thread. So a frame that arrives after a clear is never painted over
+  by it, and the first-frame notice a host acts on is for the picture it is
+  showing now.
+- A detach goes to the front of the render thread's queue and
+  `surfaceDestroyed` waits for it, at most the draw in progress. An attach it
+  overtakes is skipped: its window is gone, and Android throws on a released
+  window. The wait gives up after 3 seconds so a stuck render thread cannot
+  freeze the app. After `release()` the callback still waits, for the release
+  that is already queued.
+- A TextureView's SurfaceTexture may only be released after the EGL surface on
+  it is gone, so `TextureVideoHost` keeps its listener after `release()` and
+  hands a texture destroyed in between to the render thread's acknowledgement.
+- An EGL surface the system refuses is asked for again on later frames, after
+  1, 3, 7, 15 and then every 31 frames, for as long as the window is attached.
+  A surface that cannot be made current, or whose swap fails, is destroyed and
+  rebuilt the same way. The count resets once a frame is presented.
+- A post to the loop and its shutdown take the same lock, so a task is queued
+  ahead of the teardown or refused, never behind it. A frame offered to a
+  stopped loop is given back at once.
+- A GL failure (out of memory, a rejected shader) is caught on the render
+  thread and costs the tile a frame. The drawers are released and rebuilt.
+- The swap interval is 0: a swap never waits for the compositor to take the
+  buffer before it.
+- The EGL config has alpha, so an overlay surface can have transparent
+  corners. Opaque surfaces ignore it. A 1x1 pbuffer keeps the context current
+  while the view has no surface, so GL objects can still be released.
+- The context must keep `GL_UNPACK_ALIGNMENT` at 1, as WebRTC's own renderer
+  does. With the default of 4 a simulcast layer whose width is not a multiple
+  of 4 comes out sheared.
+- WebRTC's `GlRectDrawer` recompiles its shader when the frame kind changes
+  (YUV, OES, RGB). The loop keeps one drawer per kind.
+- A surface has no view transform, so aspect-fit bars are drawn into its
+  buffer. A TextureView fills its buffer and fits with `setTransform`.
+- A surface's buffer is never larger than the visible part of the frame
+  (`VideoBufferSizePolicy`, through `SurfaceHolder.setFixedSize`). The display
+  scales the small buffer. The buffer follows a resize one frame late, so the
+  renderer asks EGL for its size on every frame.
+
+The pieces without GL are unit tested in
+`Tests/ConclaveTests/Skip/VideoRenderingTests.kt` through a fake
+`VideoRenderBackend`. GPU load, overlay use and battery need a phone: the
+emulator cannot show them.
+
 ## Connection Recovery Watchdog
 
 The reconnect state machine (onDisconnected → reconnecting → rejoin) is driven
