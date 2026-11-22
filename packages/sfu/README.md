@@ -13,6 +13,10 @@ services, the server-authoritative game runtime, and transcript relays.
 
 ## To apply in production
 
+Provision at least 8 vCPUs for the VM that runs both SFU instances. Compose pins
+four media workers per instance to keep the UDP and TCP firewall ranges
+predictable. Leave CPU headroom for signaling and other services on the VM.
+
 Before deploying shared WebRTC sockets, allow inbound UDP and TCP to the SFU VM
 on ports 40000 through 40003 for `sfu-a` and 41001 through 41004 for `sfu-b`.
 Each of the four workers binds one port for both protocols. Keep the existing
