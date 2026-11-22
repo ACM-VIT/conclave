@@ -237,8 +237,9 @@ export class Room {
   // The signed-in account this room's code belongs to (who booked it, or who
   // made it), which hosts whenever it is here. Null for a code a guest made.
   public ownerEmail: string | null = null;
-  // Who opened this room, the user key of the join that created it.
-  public openedBy: string | null = null;
+  // Someone who hosts only because they opened the room while its owner was
+  // away. The owner takes that seat back when it arrives, once.
+  public temporaryHostUserKey: string | null = null;
   // Set when this code was ended for everyone a moment ago: recovery passes
   // signed up to then are from the ended meeting, not from this one.
   public recoveryPassesVoidUntil: number | null = null;
@@ -1995,6 +1996,8 @@ export class Room {
     const userKey = this.userKeysById.get(userId);
     if (userKey) {
       this.adminUserKeys.add(userKey);
+      // A host who promotes them makes them a host in their own right.
+      if (this.temporaryHostUserKey === userKey) this.temporaryHostUserKey = null;
     }
     return client as Admin;
   }
@@ -2780,9 +2783,10 @@ export class Room {
     this.blockedUsers.delete(userKey);
   }
 
-  // Takes host rights away from everyone in the room with this user key.
-  // Returns those who had them.
+  // Takes host rights away from everyone in the room with this user key, who
+  // stay in it as admitted participants. Returns those who had them.
   demoteToParticipant(userKey: string): Client[] {
+    this.allowLockedUser(userKey);
     this.adminUserKeys.delete(userKey);
     if (this.hostUserKey === userKey) this.hostUserKey = null;
     const demoted: Client[] = [];

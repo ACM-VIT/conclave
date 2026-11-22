@@ -391,7 +391,6 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             const recalled = result.recalled;
             if (createdRoom && recalled) {
               lostRoom = recalled.lost;
-              room.openedBy = userKey;
               // Whose code it is: who booked it, else whoever made it, which
               // the record keeps. A code with no record is made by this join,
               // and belongs to its account if it is signed in, unless the join
@@ -708,13 +707,28 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         if (isAdminJoin && !room.hostUserKey) {
           room.hostUserKey = userKey;
         }
-        // The owner is back: it hosts, and whoever opened the room in its
-        // absence is a participant now. A block or removal by them does not
-        // hold against the owner.
+        // Someone who hosts only because they opened the room (or took it
+        // once a lost call's time ran out) while the code's owner was away
+        // holds a temporary seat. A recorded host or co-host does not.
+        if (
+          isAdminJoin &&
+          !isCodeOwner &&
+          room.ownerEmail &&
+          !isReturningPrimaryHost &&
+          !isPersistedAdminForExistingRoom &&
+          (createdRoom || restorerState === "lapsed")
+        ) {
+          room.temporaryHostUserKey = userKey;
+        }
+        // The owner is back: it hosts, and the temporary seat, if any, goes
+        // back to being a participant's, once. A block or removal of the
+        // owner does not hold against it.
         let demotedForOwner: Client[] = [];
         if (isAdminJoin && isCodeOwner) {
-          if (room.openedBy && room.openedBy !== userKey) {
-            demotedForOwner = room.demoteToParticipant(room.openedBy);
+          const temporary = room.temporaryHostUserKey;
+          room.temporaryHostUserKey = null;
+          if (temporary && temporary !== userKey) {
+            demotedForOwner = room.demoteToParticipant(temporary);
           }
           room.hostUserKey = userKey;
           if (room.isBlocked(userKey) || room.needsReadmission(userKey)) {

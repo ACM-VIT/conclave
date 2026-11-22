@@ -1275,6 +1275,48 @@ describe("the account a code belongs to", () => {
     expect(roomOf(elsewhere).ownerEmail).toBeNull();
   });
 
+  it("keeps a real co-host who brought the call back first", async () => {
+    useClock();
+    const before = makeState();
+    const created = await join(before, owner);
+    roomOf(before).allowLockedUser(guest.userId);
+    await join(before, guest);
+    await send(created.peer, "promoteHost", { userId: "guest-visitor#v" });
+    const after = await restart(before);
+
+    const coHost = await join(after, guestOpener);
+    expect(coHost.context.currentClient).toBeInstanceOf(Admin);
+    await join(after, owner);
+    expect(coHost.context.currentClient).toBeInstanceOf(Admin);
+    expect(toldTheyNoLongerHost(coHost)).toBe(false);
+  });
+
+  it("does not undo a promotion of their own when they reconnect", async () => {
+    useClock();
+    const state = makeState();
+    const created = await join(state, owner);
+    await emptyOut(state, created.peer);
+    const opener = await join(state, guestOpener);
+    const back = await join(state, owner);
+    expect(opener.context.currentClient).not.toBeInstanceOf(Admin);
+    await send(back.peer, "promoteHost", { userId: "guest-visitor#v" });
+    expect(opener.context.currentClient).toBeInstanceOf(Admin);
+
+    await join(state, owner);
+    expect(opener.context.currentClient).toBeInstanceOf(Admin);
+  });
+
+  it("leaves the guest they took the host's seat from in the meeting, without knocking again", async () => {
+    useClock();
+    const state = makeState();
+    const created = await join(state, owner);
+    await emptyOut(state, created.peer);
+    await join(state, guestOpener);
+    await join(state, owner);
+
+    expect((await join(state, guestOpener)).status).toBe("joined");
+  });
+
   it("is not an account a guest made the code with: the first to arrive hosts", async () => {
     useClock();
     const state = makeState();
