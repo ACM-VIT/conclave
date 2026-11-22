@@ -37,6 +37,18 @@ each. The app document worker is idle unless someone edits an app.
 run. An update that runs longer is refused and its worker is replaced. The
 document is rebuilt from what it had accepted, so no accepted update is lost.
 
+Each app document worker gets a V8 heap limit from a quarter of the instance's
+memory (the cgroup limit when one is set), divided by the host instance count
+and the app document worker count. An eighth of that share, between 8 and 32 MiB,
+is the young generation and the rest is the old generation, capped at 1 GiB.
+The old generation never goes below 128 MiB, so a share under 146 MiB is
+exceeded, and startup warns when that happens. A worker that reaches its limit
+exits and is replaced, and its documents are rebuilt from what they had
+accepted. Updates over 256 KiB are refused before they are applied, and a
+worker keeps only as many documents loaded as its heap budget allows, charging
+each one its committed size plus 64 KiB. It rebuilds the others when they are
+next used.
+
 Compose defaults `SFU_WEBRTC_PORT_BUDGET` to 4 per instance. The effective
 budget `B` is the smaller of that setting and the size of the RTC range minus
 four. The final four ports support separate RTP and RTCP for shared-browser

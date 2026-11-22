@@ -53,7 +53,7 @@ export type AppDocumentPoolOptions = {
   deadlineMs: number;
   maxDocumentBytes: number;
   maxUpdateBytes?: number;
-  heapMb?: number;
+  heap?: { oldMb: number; youngMb: number };
   residentBytes?: number;
   limits?: QueueLimits;
   workerUrl?: URL;
@@ -105,9 +105,10 @@ const LOAD_ATTEMPTS = 3;
 const BOOT_DEADLINE_MS = 10_000;
 const HEAP_OVERHEAD_MB = 64;
 const HEAP_PER_RESIDENT_BYTE = 16;
+export const RESIDENT_OVERHEAD_BYTES = 64 * 1024;
 const MIB = 1024 * 1024;
 
-
+const residentCost = (entry: Entry): number => entry.committedBytes + RESIDENT_OVERHEAD_BYTES;
 
 const operationOf = (job: Job): Operation =>
   job.kind === "apply"
@@ -119,10 +120,10 @@ export const createAppDocumentPool = ({
   deadlineMs,
   maxDocumentBytes,
   maxUpdateBytes = MAX_APP_UPDATE_BYTES,
-  heapMb,
-  residentBytes = heapMb === undefined
+  heap,
+  residentBytes = heap === undefined
     ? Number.POSITIVE_INFINITY
-    : Math.max(2 * maxDocumentBytes, ((heapMb - HEAP_OVERHEAD_MB) * MIB) / HEAP_PER_RESIDENT_BYTE),
+    : Math.max(2 * maxDocumentBytes, ((heap.oldMb - HEAP_OVERHEAD_MB) * MIB) / HEAP_PER_RESIDENT_BYTE),
   limits = DEFAULT_QUEUE_LIMITS,
   workerUrl = new URL("./worker.ts", import.meta.url),
   workerData = {},
@@ -187,9 +188,23 @@ export const createAppDocumentPool = ({
   const startClock = (slot: Slot, run: Run): void =>
     arm(slot, run, run.loading ? loadDeadlineMs : deadlineMs);
 
+  const fit = (slot: Slot, keep: Entry): void => {
+    let used = 0;
+    for (const entry of slot.resident) used += residentCost(entry);
+    for (const other of slot.resident) {
+      if (used <= residentBytes) return;
+      if (other === keep) continue;
+      slot.resident.delete(other);
+      other.loadedIn = -1;
+      used -= residentCost(other);
+      slot.worker?.postMessage({ type: "drop", document: other.id } satisfies ToWorker);
+    }
+  };
+
   const finish = (slot: Slot, run: Run): void => {
     clock.clearTimeout(run.timer);
     slot.run = null;
+    fit(slot, run.entry);
     markReady(run.entry);
     pump(slot);
   };
@@ -325,9 +340,9 @@ export const createAppDocumentPool = ({
       worker = new Worker(workerUrl, {
         workerData: { ...workerData, maxDocumentBytes, maxUpdateBytes },
         resourceLimits:
-          heapMb === undefined
+          heap === undefined
             ? undefined
-            : { maxOldGenerationSizeMb: heapMb, maxYoungGenerationSizeMb: Math.max(8, Math.min(32, Math.floor(heapMb / 8))) },
+            : { maxOldGenerationSizeMb: heap.oldMb, maxYoungGenerationSizeMb: heap.youngMb },
       });
     } catch (error) {
       Logger.error("[Apps] Could not start an app document worker", error);
@@ -352,20 +367,6 @@ export const createAppDocumentPool = ({
     return worker;
   };
 
-  const makeRoom = (slot: Slot, entry: Entry): void => {
-    slot.resident.delete(entry);
-    let total = entry.committedBytes;
-    for (const other of slot.resident) total += other.committedBytes;
-    for (const other of slot.resident) {
-      if (total <= residentBytes) break;
-      slot.resident.delete(other);
-      other.loadedIn = -1;
-      total -= other.committedBytes;
-      slot.worker?.postMessage({ type: "drop", document: other.id } satisfies ToWorker);
-    }
-    slot.resident.add(entry);
-  };
-
   const pump = (slot: Slot): void => {
     if (closed || slot.run) return;
     const entry = slot.ready.shift();
@@ -387,7 +388,9 @@ export const createAppDocumentPool = ({
       return;
     }
     entry.loadedIn = slot.generation;
-    makeRoom(slot, entry);
+    slot.resident.delete(entry);
+    slot.resident.add(entry);
+    fit(slot, entry);
     if (slot.booted) startClock(slot, run);
     try {
       worker.postMessage(message);

@@ -2,7 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
 import { readFileSync } from "node:fs";
-import { availableParallelism } from "node:os";
+import { availableParallelism, totalmem } from "node:os";
 import { createWorker } from "mediasoup";
 import type { WebRtcServer, Worker } from "mediasoup/types";
 import { beforeEach, expect, it, vi } from "vitest";
@@ -184,6 +184,30 @@ it.each([
   } finally {
     Object.assign(settings, previous);
     warn.mockRestore();
+    vi.mocked(createWorker).mockReset();
+    vi.mocked(readFileSync).mockReset();
+  }
+});
+
+it.each([
+  { memoryMiB: 256, warns: true },
+  { memoryMiB: 8192, warns: false },
+])("says when the app document heap floor is above the worker's share of $memoryMiB MiB: $warns", async ({ memoryMiB, warns }) => {
+  vi.mocked(totalmem).mockReturnValue(memoryMiB * 1024 * 1024);
+  vi.mocked(readFileSync).mockImplementation(() => { throw new Error("no cgroup limit"); });
+  vi.mocked(createWorker).mockReset().mockImplementation(async () => {
+    const worker = makeWorker();
+    worker.createWebRtcServer.mockResolvedValue({} as WebRtcServer);
+    return worker as unknown as Worker;
+  });
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    await start();
+    if (warns) expect(warn).toHaveBeenCalledWith(expect.stringContaining("below the minimum heap"));
+    else expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("below the minimum heap"));
+  } finally {
+    warn.mockRestore();
+    vi.mocked(totalmem).mockReturnValue(8 * 1024 ** 3);
     vi.mocked(createWorker).mockReset();
     vi.mocked(readFileSync).mockReset();
   }

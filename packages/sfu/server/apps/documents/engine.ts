@@ -138,10 +138,6 @@ export const createAppDocumentEngine = ({ maxDocumentBytes, maxUpdateBytes }: En
     }
     if (!loaded) throw new Error(`App document ${message.document} is not loaded`);
     const { operations } = message;
-    if (message.load && operations.length > 0 && performance.now() - runStarted >= RUN_SLICE_MS) {
-      post({ type: "yielded" }, []);
-      return;
-    }
     for (let index = 0; index < operations.length; index += 1) {
       const operation = operations[index];
       const started = performance.now();

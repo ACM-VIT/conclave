@@ -89,6 +89,12 @@ const createWorkers = async (
   if (plan.cpuMediasoupWorkers > workerCount) {
     Logger.warn(`CPU capacity allows ${plan.cpuMediasoupWorkers} workers. Capping the derived count at the WebRTC port budget of ${plan.webRtcPortBudget}.`);
   }
+  const heap = plan.appDocumentHeap;
+  if (heap.oldMb + heap.youngMb > heap.shareMb) {
+    Logger.warn(
+      `Each app document worker's ${heap.shareMb} MiB share of memory is below the minimum heap; it gets ${heap.oldMb} MiB old and ${heap.youngMb} MiB young generation`,
+    );
+  }
   if (plan.oversubscribed) {
     Logger.warn(
       `SFU_WORKER_COUNT=${workerCount} and ${plan.appDocumentWorkers} app document worker(s) need more than the ${plan.cpus} CPU(s) in this instance's share`,

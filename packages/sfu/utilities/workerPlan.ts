@@ -3,8 +3,12 @@ import { getMemoryLimitBytes, instanceCpuCount } from "./workerCpuQuota.js";
 
 const MIB = 1024 * 1024;
 const APP_DOCUMENT_MEMORY_SHARE = 0.25;
-const MIN_APP_DOCUMENT_HEAP_MB = 128;
-const MAX_APP_DOCUMENT_HEAP_MB = 1024;
+const MIN_OLD_GENERATION_MB = 128;
+const MAX_OLD_GENERATION_MB = 1024;
+const MIN_YOUNG_GENERATION_MB = 8;
+const MAX_YOUNG_GENERATION_MB = 32;
+
+const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
 
 export type WorkerPlanSettings = {
   workerCount: number | undefined;
@@ -15,12 +19,20 @@ export type WorkerPlanSettings = {
   rtcMaxPort: number;
 };
 
+export type AppDocumentHeap = { shareMb: number; oldMb: number; youngMb: number };
+
+const appDocumentHeap = (memoryBytes: number, instances: number, workers: number): AppDocumentHeap => {
+  const shareMb = Math.floor((memoryBytes * APP_DOCUMENT_MEMORY_SHARE) / instances / workers / MIB);
+  const youngMb = clamp(Math.floor(shareMb / 8), MIN_YOUNG_GENERATION_MB, MAX_YOUNG_GENERATION_MB);
+  return { shareMb, youngMb, oldMb: clamp(shareMb - youngMb, MIN_OLD_GENERATION_MB, MAX_OLD_GENERATION_MB) };
+};
+
 export type WorkerPlan = {
   cpus: number;
   mediasoupWorkers: number;
   cpuMediasoupWorkers: number;
   appDocumentWorkers: number;
-  appDocumentHeapMb: number;
+  appDocumentHeap: AppDocumentHeap;
   webRtcPortBudget: number;
   rtcMinPort: number;
   rtcMaxPort: number;
@@ -51,13 +63,7 @@ export const planWorkers = (
     mediasoupWorkers,
     cpuMediasoupWorkers,
     appDocumentWorkers,
-    appDocumentHeapMb: Math.min(
-      MAX_APP_DOCUMENT_HEAP_MB,
-      Math.max(
-        MIN_APP_DOCUMENT_HEAP_MB,
-        Math.floor((memoryBytes * APP_DOCUMENT_MEMORY_SHARE) / settings.hostInstanceCount / appDocumentWorkers / MIB),
-      ),
-    ),
+    appDocumentHeap: appDocumentHeap(memoryBytes, settings.hostInstanceCount, appDocumentWorkers),
     webRtcPortBudget,
     rtcMinPort: settings.rtcMinPort,
     rtcMaxPort: settings.rtcMaxPort,

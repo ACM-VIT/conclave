@@ -4,6 +4,7 @@ import * as Y from "yjs";
 import { createAppDocumentEngine, type FromWorker } from "../server/apps/documents/engine.js";
 import {
   createAppDocumentPool,
+  RESIDENT_OVERHEAD_BYTES,
   type AppDocumentPool,
   type AppDocumentPoolOptions,
 } from "../server/apps/documents/pool.js";
@@ -180,16 +181,16 @@ describe("app document engine", () => {
     expect(outcomes(replies)).toEqual(["applied", "yielded"]);
   });
 
-  it("yields before any operation when rebuilding used the time slice", () => {
+  it("runs one operation after a rebuild that used the time slice before it yields", () => {
     steppingClock();
     const engine = engineFor();
     const replies: FromWorker[] = [];
 
-    engine.handle({ type: "run", document: 1, load: { base: null, tail: [] }, operations: applies(["a"]) }, (reply) => {
+    engine.handle({ type: "run", document: 1, load: { base: null, tail: [] }, operations: applies(["a", "b"]) }, (reply) => {
       replies.push(reply);
     });
 
-    expect(outcomes(replies)).toEqual(["loaded", "yielded"]);
+    expect(outcomes(replies)).toEqual(["loaded", "applied", "yielded"]);
   });
 
   it("refuses an update that builds on a change the document does not have", () => {
@@ -546,7 +547,7 @@ describe("app documents", { timeout: 30_000 }, () => {
   });
 
   it("replaces a worker that runs out of memory and keeps every committed document", async () => {
-    const pool = createPool({ heapMb: 48, workerUrl: STALLING_WORKER });
+    const pool = createPool({ heap: { oldMb: 48, youngMb: 8 }, workerUrl: STALLING_WORKER });
     const kept = pool.open();
     const hungry = pool.open();
     expect(await kept.apply(writer()("hello"))).toEqual({ ok: true });
@@ -559,7 +560,7 @@ describe("app documents", { timeout: 30_000 }, () => {
 
   it("keeps resident documents within the worker's budget and rebuilds the ones it puts aside", async () => {
     const fixture = createFixture();
-    const pool = createPool({ residentBytes: 1_000, workerUrl: STALLING_WORKER, workerData: fixture.workerData });
+    const pool = createPool({ residentBytes: 2 * RESIDENT_OVERHEAD_BYTES + 1_000, workerUrl: STALLING_WORKER, workerData: fixture.workerData });
     const first = pool.open();
     const second = pool.open();
     const firstAuthor = new Y.Doc();
@@ -571,7 +572,32 @@ describe("app documents", { timeout: 30_000 }, () => {
 
     expect(await joinedText(second)).toBe("b".repeat(600));
     expect(await joinedText(first)).toBe(`${"a".repeat(600)}!`);
-    expect(fixture.count("loaded")).toBe(4);
+    expect(fixture.count("loaded")).toBe(5);
+  });
+
+  it("puts a document aside as soon as another one grows past the worker's budget", async () => {
+    const fixture = createFixture();
+    const pool = createPool({ residentBytes: 2 * RESIDENT_OVERHEAD_BYTES + 1_000, workerUrl: STALLING_WORKER, workerData: fixture.workerData });
+    const first = pool.open();
+    const second = pool.open();
+    expect(await first.apply(writer()("a".repeat(600)))).toEqual({ ok: true });
+    const { document: firstId } = await fixture.next("loaded");
+    expect(await second.apply(writer()("b".repeat(600)))).toEqual({ ok: true });
+
+    expect(await fixture.next("dropped")).toMatchObject({ document: firstId });
+  });
+
+  it("charges every resident document, even an empty one, against the worker's budget", async () => {
+    const fixture = createFixture();
+    const pool = createPool({ residentBytes: RESIDENT_OVERHEAD_BYTES, workerUrl: STALLING_WORKER, workerData: fixture.workerData });
+    const first = pool.open();
+    const second = pool.open();
+    await joinedText(first);
+    const { document: firstId } = await fixture.next("loaded");
+
+    await joinedText(second);
+
+    expect(await fixture.next("dropped")).toMatchObject({ document: firstId });
   });
 
   it("keeps every room's accepted updates when a stuck worker is replaced", async () => {
