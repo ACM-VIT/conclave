@@ -366,8 +366,11 @@ service_public_url() {
   esac
 }
 
+# The image tag compose runs for one service: its own image key, or the
+# <project>-<service> name compose gives a build. (config --images also lists
+# a service's dependencies, in no fixed order.)
 service_image_name() {
-  "${COMPOSE[@]}" config --images "$1" | head -n 1
+  printf "%s" "$COMPOSE_JSON" | node -e "const c=JSON.parse(require('fs').readFileSync(0,'utf8'));const name=process.argv[1];console.log(c.services[name].image||c.name+'-'+name);" "$1"
 }
 
 service_container() {
