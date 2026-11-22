@@ -403,6 +403,7 @@ const clamp = (value: number, min: number, max: number) =>
 const WEBINAR_SPEAKER_PROMOTE_DELAY_MS = 450;
 const WEBINAR_SPEAKER_MIN_SWITCH_INTERVAL_MS = 1800;
 const DOCKED_PANEL_WIDTH = 360;
+const WEBINAR_QA_PANEL_WIDTH = 380;
 // The meeting area's bottom padding (p-4) plus a gap above the controls bar.
 const NOTICE_CONTROLS_CLEARANCE_PX = 24;
 const GAME_DOCK_MIN_STAGE_WIDTH = 420;
@@ -1683,6 +1684,14 @@ export default function MeetsMainContent({
       ? (isSecondaryPanelOpen ? DOCKED_PANEL_WIDTH : 0) +
         (isGameDockPresent ? gameDockWidth : 0)
       : 0;
+  const webinarQaReserve =
+    isWebinarAttendee && isWebinarQaOpen && canReserveDockedPanel
+      ? WEBINAR_QA_PANEL_WIDTH
+      : 0;
+  const isFullScreenPanelOpen =
+    isJoined &&
+    !canReserveDockedPanel &&
+    (isWebinarAttendee ? isWebinarQaOpen : isSecondaryPanelOpen);
   const controlsDockRef = useRef<HTMLDivElement>(null);
   const controlsDockSize = useElementSize(
     controlsDockRef,
@@ -2003,13 +2012,14 @@ export default function MeetsMainContent({
       )}
       {isJoined ? (
         <InCallNoticeSlot
-          rightInset={isWebinarAttendee ? 0 : dockedPanelReserve}
+          rightInset={isWebinarAttendee ? webinarQaReserve : dockedPanelReserve}
           bottomInset={
             controlsDockSize
               ? controlsDockSize.height + NOTICE_CONTROLS_CLEARANCE_PX
               : 0
           }
           clearWebinarChrome={isWebinarAttendee}
+          overPanel={isFullScreenPanelOpen}
         >
           <InCallNotice show={Boolean(errorNotice)}>{errorNotice}</InCallNotice>
           {!isRecoveringMeeting && (!isWebinarAttendee || serverRestartNotice) ? (
@@ -2277,7 +2287,8 @@ export default function MeetsMainContent({
       ) : isWebinarAttendee ? (
         <div
           ref={webinarStageRef}
-          className={`relative flex min-h-0 flex-1 flex-col overflow-hidden bg-[#0a0a0b] ${isWebinarQaOpen ? "sm:mr-[380px]" : ""}`}
+          className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-[#0a0a0b]"
+          style={{ marginRight: webinarQaReserve }}
         >
           <div
             className="pointer-events-none h-0 w-0 overflow-hidden"
@@ -2522,6 +2533,7 @@ export default function MeetsMainContent({
         (isWebinarAttendee ? null : (
           <div
             ref={controlsDockRef}
+            data-in-call-controls
             className="safe-area-pb flex w-full flex-col items-center gap-2"
           >
             <ControlsBar {...controlsBarProps} />

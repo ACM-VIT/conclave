@@ -554,7 +554,7 @@ function LeaveControl({
       onMouseLeave={() => setMenuOpen(false)}
     >
       {menuOpen && (
-        <div className="absolute bottom-full left-1/2 z-20 -translate-x-1/2 pb-2">
+        <div className="absolute bottom-full left-1/2 z-50 -translate-x-1/2 pb-2">
           <button
             type="button"
             onClick={() => {

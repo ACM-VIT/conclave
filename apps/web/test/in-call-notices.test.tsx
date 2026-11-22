@@ -79,10 +79,10 @@ describe("in-call notices", () => {
 
   it("announces the offline notice politely and clears it once back online", async () => {
     await render(<ConnectionBanner state="joined" isOffline />);
-    const status = slot()?.querySelector('[role="status"]');
-    expect(status?.getAttribute("aria-live")).toBe("polite");
-    expect(status?.textContent).toContain("You’re offline");
-    expect(status?.textContent).toContain("Check your internet connection.");
+    const live = slot()?.querySelector('[aria-live="polite"]');
+    expect(live?.textContent).toContain("You’re offline");
+    expect(live?.textContent).toContain("Check your internet connection.");
+    expect(slot()?.querySelector("[data-in-call-notice]")?.textContent).toContain("You’re offline");
 
     await render(<ConnectionBanner state="joined" />);
     await waitOutExit();
@@ -98,7 +98,7 @@ describe("in-call notices", () => {
         </InCallNotice>
       </>,
     );
-    const messages = [...(slot()?.querySelectorAll('[role="status"]') ?? [])].map(
+    const messages = [...(slot()?.querySelectorAll("[data-in-call-notice]") ?? [])].map(
       (node) => node.textContent,
     );
     expect(messages).toEqual([
@@ -149,9 +149,11 @@ describe("in-call notices", () => {
       );
 
     await render(stack(2));
+    await waitOutExit();
     expect(toggle()).toBeUndefined();
 
     await render(stack(3));
+    await waitOutExit();
     expect(toggle()?.textContent).toBe("+2 more");
     expect(toggle()?.getAttribute("aria-expanded")).toBe("false");
 
@@ -185,5 +187,51 @@ describe("in-call notices", () => {
       .find((b) => b.textContent === "Turn on audio")
       ?.click();
     expect(onResume).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps one polite live region mounted and inserts each notice into it", async () => {
+    await render(null);
+    const live = slot()?.querySelector('[aria-live="polite"]');
+    expect(live).not.toBeNull();
+    expect(live?.textContent).toBe("");
+
+    await render(
+      <InCallNotice show>
+        <InCallNoticeCard icon={Headphones} title="Audio-only mode is on" />
+      </InCallNotice>,
+    );
+    expect(slot()?.querySelector('[aria-live="polite"]')).toBe(live);
+    expect(live?.textContent).toBe("Audio-only mode is on");
+    expect(slot()?.querySelector('[data-in-call-notice][role="status"]')).toBeNull();
+  });
+
+  it("shrinks a notice that collapses on dismiss and keeps its action", async () => {
+    const onRetry = vi.fn();
+    const onDismiss = vi.fn();
+    await render(
+      <InCallNotice show>
+        <MeetsErrorBanner
+          meetError={{ code: "PERMISSION_DENIED", message: "Camera is blocked", recoverable: true, device: "camera" }}
+          onDismiss={onDismiss}
+          primaryActionLabel="Try again"
+          onPrimaryAction={onRetry}
+          collapseOnDismiss
+        />
+      </InCallNotice>,
+    );
+    const alert = () => slot()?.querySelector('[role="alert"]');
+    const button = (name: string) =>
+      [...(alert()?.querySelectorAll("button") ?? [])].find(
+        (b) => b.textContent === name || b.getAttribute("aria-label") === name,
+      );
+    expect(alert()?.textContent).toContain("Allow camera access in your browser");
+
+    await act(async () => button("Dismiss error")?.click());
+    expect(onDismiss).not.toHaveBeenCalled();
+    expect(alert()?.textContent).toContain("Camera is blocked");
+    expect(alert()?.textContent).not.toContain("Allow camera access");
+    expect(button("Dismiss error")).toBeUndefined();
+    button("Try again")?.click();
+    expect(onRetry).toHaveBeenCalledTimes(1);
   });
 });

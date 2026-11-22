@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { AlertCircle, X } from "lucide-react";
 import type { MeetError } from "../lib/types";
 import InCallNoticeCard from "./InCallNoticeCard";
@@ -10,7 +11,14 @@ interface MeetsErrorBannerProps {
   primaryActionLabel?: string;
   onPrimaryAction?: () => void;
   variant?: "strip" | "inline";
+  collapseOnDismiss?: boolean;
 }
+
+const DEVICE_ACCESS = {
+  camera: "camera",
+  microphone: "microphone",
+  both: "camera and microphone",
+} as const;
 
 export default function MeetsErrorBanner({
   meetError,
@@ -18,7 +26,13 @@ export default function MeetsErrorBanner({
   primaryActionLabel,
   onPrimaryAction,
   variant = "strip",
+  collapseOnDismiss = false,
 }: MeetsErrorBannerProps) {
+  const [collapsedError, setCollapsedError] = useState<MeetError | null>(null);
+  const isCollapsed = collapsedError === meetError;
+  const collapsesOnDismiss =
+    collapseOnDismiss && Boolean(primaryActionLabel && onPrimaryAction);
+  const devices = DEVICE_ACCESS[meetError.device ?? "both"];
   const isGuestBlockedError =
     meetError.message === "Guests are not allowed in this meeting.";
   const isRoomNotFoundError = meetError.message === "No room found.";
@@ -27,9 +41,11 @@ export default function MeetsErrorBanner({
     : isRoomNotFoundError
     ? "Double-check the code and try again."
     : meetError.code === "PERMISSION_DENIED"
-    ? "Allow camera and microphone access in your browser, then try again."
+    ? `Allow ${devices} access in your browser, then try again.`
     : meetError.code === "MEDIA_ERROR"
-    ? "Check that your camera and microphone aren’t in use by another app."
+    ? meetError.device === "both" || !meetError.device
+      ? "Check that your camera and microphone aren’t in use by another app."
+      : `Check that your ${devices} isn’t in use by another app.`
     : null;
 
   if (variant === "strip") {
@@ -41,7 +57,14 @@ export default function MeetsErrorBanner({
         detail={helperText}
         actionLabel={primaryActionLabel}
         onAction={onPrimaryAction}
-        onDismiss={onDismiss}
+        compact={isCollapsed}
+        onDismiss={
+          isCollapsed
+            ? undefined
+            : collapsesOnDismiss
+              ? () => setCollapsedError(meetError)
+              : onDismiss
+        }
         dismissLabel="Dismiss error"
       />
     );
