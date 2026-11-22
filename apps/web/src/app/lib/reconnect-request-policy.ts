@@ -53,6 +53,11 @@ export type ReconnectFailureKind =
   | "room-unavailable"
   /** The server answered, but it is draining and will not take the room. */
   | "server-draining"
+  /**
+   * The room now needs an invite code, or turned down the one given. Only
+   * the user can supply it, so stop and ask instead of retrying.
+   */
+  | "invite-code-required"
   | "final";
 
 export const ROOM_UNAVAILABLE_RETRY_WINDOW_MS = 60_000;
@@ -72,6 +77,13 @@ export const classifyReconnectFailure = ({
   const text = message.trim();
   if (!text) return "transient";
   if (/server is draining/i.test(text)) return "server-draining";
+  if (
+    /(meeting|webinar) invite code required|invalid (meeting|webinar) invite code/i.test(
+      text,
+    )
+  ) {
+    return "invite-code-required";
+  }
   if (/no room found|shared room registry unavailable/i.test(text)) {
     return "room-unavailable";
   }

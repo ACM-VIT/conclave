@@ -15,6 +15,8 @@ export interface ReconnectRecoveryStatus {
   lastError: string | null;
   retryAt: number | null;
   updatedAt: number;
+  /** The rejoin was refused for an invite code, so Try again needs one. */
+  needsInviteCode?: boolean;
 }
 
 export interface PrejoinMediaHandoff {

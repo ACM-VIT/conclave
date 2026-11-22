@@ -111,6 +111,7 @@ import type {
 } from "../hooks/useMeetTts";
 import { getRenderableParticipantVideoStream } from "../lib/participant-media";
 import { prewarmVideoEffectsAssetsDeferred } from "../lib/video-effects-lazy";
+import ReconnectInviteCodeForm from "./ReconnectInviteCodeForm";
 
 const JoinScreen = dynamic(() => import("./JoinScreen"), {
   ssr: false,
@@ -136,7 +137,7 @@ interface MeetsMainContentProps {
   roomId: string;
   setRoomId: Dispatch<SetStateAction<string>>;
   joinRoomById: (roomId: string) => void;
-  retryReconnect?: () => Promise<void> | void;
+  retryReconnect?: (options?: { inviteCode?: string }) => Promise<void> | void;
   reconnectRecoveryStatus?: ReconnectRecoveryStatus | null;
   hideJoinUI?: boolean;
   isWebinarAttendee?: boolean;
@@ -1671,6 +1672,10 @@ export default function MeetsMainContent({
   const isReconnectRetryBusy =
     reconnectRecoveryStatus?.phase === "connecting" ||
     reconnectRecoveryStatus?.phase === "joining";
+  const needsInviteCodeToRejoin =
+    reconnectRecoveryStatus?.needsInviteCode === true &&
+    !isTerminalMeetingError &&
+    !isNetworkOffline;
   const reconnectRetryAt = reconnectRecoveryStatus?.retryAt ?? null;
   const [reconnectCountdownSeconds, setReconnectCountdownSeconds] =
     useState<number | null>(null);
@@ -1695,7 +1700,9 @@ export default function MeetsMainContent({
   }, [reconnectRetryAt]);
 
   const reconnectAttemptLabel =
-    reconnectRecoveryStatus && reconnectRecoveryStatus.attempt > 0
+    reconnectRecoveryStatus &&
+    reconnectRecoveryStatus.attempt > 0 &&
+    !needsInviteCodeToRejoin
       ? `Attempt ${Math.min(
           reconnectRecoveryStatus.attempt,
           reconnectRecoveryStatus.maxAttempts,
@@ -1706,6 +1713,8 @@ export default function MeetsMainContent({
     ? "Waiting for internet"
     : isTerminalMeetingError
       ? "Meeting unavailable"
+      : needsInviteCodeToRejoin
+        ? "Invite code needed"
       : reconnectRecoveryStatus?.phase === "failed"
         ? "Reconnect failed"
         : canRetryRecovery
@@ -1726,6 +1735,20 @@ export default function MeetsMainContent({
       : canRetryRecovery
         ? (meetError?.message ?? "We could not restore the connection yet.")
         : "Keeping your meeting open while the connection is restored.";
+  const leaveRecoveryButton = (
+      <button
+        type="button"
+        onClick={isTerminalMeetingError ? (onGoHome ?? leaveRoom) : leaveRoom}
+        className="inline-flex h-9 items-center justify-center gap-2 rounded-full border border-[#fafafa]/15 px-4 text-[12.5px] font-medium text-[#fafafa]/76 transition-colors hover:border-[#fafafa]/35 hover:bg-[#fafafa]/10 hover:text-[#fafafa]"
+      >
+        {isTerminalMeetingError ? (
+          <Home size={14} strokeWidth={1.8} />
+        ) : (
+          <LogOut size={14} strokeWidth={1.8} />
+        )}
+        {isTerminalMeetingError ? "Go home" : "Leave"}
+      </button>
+  );
   const openWhiteboard = useCallback(() => {
     void handleOpenWhiteboard();
   }, [handleOpenWhiteboard]);
@@ -1925,55 +1948,55 @@ export default function MeetsMainContent({
                 </p>
               </div>
             ) : null}
-            <div className="mt-5 flex flex-wrap items-center justify-center gap-2.5">
-              {canRetryRecovery ? (
-                <button
-                  type="button"
-                  disabled={isReconnectRetryBusy}
-                  onClick={() => {
-                    if (retryReconnect) {
-                      void retryReconnect();
-                      return;
-                    }
-                    void joinRoomById(roomId);
-                  }}
-                  className="inline-flex h-9 items-center justify-center gap-2 rounded-full border border-[#F95F4A]/45 bg-[#F95F4A]/20 px-4 text-[12.5px] font-medium text-[#fafafa] transition-colors hover:border-[#F95F4A]/70 hover:bg-[#F95F4A]/35 disabled:cursor-not-allowed disabled:border-[#fafafa]/12 disabled:bg-[#fafafa]/8 disabled:text-[#fafafa]/42"
-                >
-                  <RefreshCw
-                    size={14}
-                    strokeWidth={1.8}
-                    className={isReconnectRetryBusy ? "animate-spin" : undefined}
-                  />
-                  {isReconnectRetryBusy
-                    ? "Retrying"
-                    : reconnectRecoveryStatus?.phase === "failed"
-                      ? "Try again"
-                      : "Retry now"}
-                </button>
-              ) : null}
-              {isTerminalMeetingError && onStartNewMeeting ? (
-                <button
-                  type="button"
-                  onClick={onStartNewMeeting}
-                  className="inline-flex h-9 items-center justify-center gap-2 rounded-full border border-[#F95F4A]/45 bg-[#F95F4A]/20 px-4 text-[12.5px] font-medium text-[#fafafa] transition-colors hover:border-[#F95F4A]/70 hover:bg-[#F95F4A]/35"
-                >
-                  <Plus size={14} strokeWidth={1.8} />
-                  New Meeting
-                </button>
-              ) : null}
-              <button
-                type="button"
-                onClick={isTerminalMeetingError ? (onGoHome ?? leaveRoom) : leaveRoom}
-                className="inline-flex h-9 items-center justify-center gap-2 rounded-full border border-[#fafafa]/15 px-4 text-[12.5px] font-medium text-[#fafafa]/76 transition-colors hover:border-[#fafafa]/35 hover:bg-[#fafafa]/10 hover:text-[#fafafa]"
+            {needsInviteCodeToRejoin ? (
+              <ReconnectInviteCodeForm
+                isBusy={isReconnectRetryBusy}
+                onSubmit={(inviteCode) => {
+                  void retryReconnect?.({ inviteCode });
+                }}
               >
-                {isTerminalMeetingError ? (
-                  <Home size={14} strokeWidth={1.8} />
-                ) : (
-                  <LogOut size={14} strokeWidth={1.8} />
-                )}
-                {isTerminalMeetingError ? "Go home" : "Leave"}
-              </button>
-            </div>
+                {leaveRecoveryButton}
+              </ReconnectInviteCodeForm>
+            ) : (
+              <div className="mt-5 flex flex-wrap items-center justify-center gap-2.5">
+                {canRetryRecovery ? (
+                  <button
+                    type="button"
+                    disabled={isReconnectRetryBusy}
+                    onClick={() => {
+                      if (retryReconnect) {
+                        void retryReconnect();
+                        return;
+                      }
+                      void joinRoomById(roomId);
+                    }}
+                    className="inline-flex h-9 items-center justify-center gap-2 rounded-full border border-[#F95F4A]/45 bg-[#F95F4A]/20 px-4 text-[12.5px] font-medium text-[#fafafa] transition-colors hover:border-[#F95F4A]/70 hover:bg-[#F95F4A]/35 disabled:cursor-not-allowed disabled:border-[#fafafa]/12 disabled:bg-[#fafafa]/8 disabled:text-[#fafafa]/42"
+                  >
+                    <RefreshCw
+                      size={14}
+                      strokeWidth={1.8}
+                      className={isReconnectRetryBusy ? "animate-spin" : undefined}
+                    />
+                    {isReconnectRetryBusy
+                      ? "Retrying"
+                      : reconnectRecoveryStatus?.phase === "failed"
+                        ? "Try again"
+                        : "Retry now"}
+                  </button>
+                ) : null}
+                {isTerminalMeetingError && onStartNewMeeting ? (
+                  <button
+                    type="button"
+                    onClick={onStartNewMeeting}
+                    className="inline-flex h-9 items-center justify-center gap-2 rounded-full border border-[#F95F4A]/45 bg-[#F95F4A]/20 px-4 text-[12.5px] font-medium text-[#fafafa] transition-colors hover:border-[#F95F4A]/70 hover:bg-[#F95F4A]/35"
+                  >
+                    <Plus size={14} strokeWidth={1.8} />
+                    New Meeting
+                  </button>
+                ) : null}
+                {leaveRecoveryButton}
+              </div>
+            )}
           </section>
         </div>
       )}

@@ -70,6 +70,15 @@ describe("reconnect failures", () => {
     },
   );
 
+  it.each([
+    "Meeting invite code required.",
+    "Invalid meeting invite code.",
+    "Webinar invite code required.",
+    "Invalid webinar invite code.",
+  ])("asks the user for the code when the server says %s", (message) => {
+    expect(classify(message)).toBe("invite-code-required");
+  });
+
   it("tells a draining server apart from a missing room", () => {
     expect(classify("Meeting server is draining. Try again shortly.")).toBe(
       "server-draining",

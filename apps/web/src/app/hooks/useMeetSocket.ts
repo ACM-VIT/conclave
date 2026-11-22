@@ -9480,6 +9480,27 @@ export function useMeetSocket({
             error: reconnectFailure,
             usingTurnFallback: relayOnlyIceRef.current,
           });
+          if (failureKind === "invite-code-required") {
+            // The user has to supply the code, so stop here and let the
+            // recovery card ask for it; Try again rejoins with it.
+            manualReconnectRetryRequestedRef.current = false;
+            updateReconnectRecoveryStatus({
+              ...buildReconnectRecoveryStatus(
+                "failed",
+                attempt,
+                "This meeting now needs an invite code. Enter it to rejoin.",
+                reconnectFailure,
+              ),
+              needsInviteCode: true,
+            });
+            setMeetError({
+              code: "CONNECTION_FAILED",
+              message: reconnectFailure,
+              recoverable: true,
+            });
+            setConnectionState("error");
+            return;
+          }
           if (!isRecoverable) {
             manualReconnectRetryRequestedRef.current = false;
             updateReconnectRecoveryStatus(
@@ -9937,7 +9958,15 @@ export function useMeetSocket({
     [startJoin],
   );
 
-  const retryReconnect = useCallback(async () => {
+  const retryReconnect = useCallback(async (options?: { inviteCode?: string }) => {
+    const inviteCode = options?.inviteCode?.trim();
+    if (inviteCode) {
+      const current = joinOptionsRef.current;
+      joinOptionsRef.current =
+        current.joinMode === "webinar_attendee"
+          ? { ...current, webinarInviteCode: inviteCode }
+          : { ...current, meetingInviteCode: inviteCode };
+    }
     const targetRoomId = currentRoomIdRef.current || roomId;
     if (!targetRoomId) {
       const reconnectFailure = "No meeting room is available to reconnect.";
@@ -9995,6 +10024,7 @@ export function useMeetSocket({
   }, [
     currentRoomIdRef,
     handleReconnect,
+    joinOptionsRef,
     reconnectAttemptsRef,
     reconnectInFlightRef,
     roomId,
