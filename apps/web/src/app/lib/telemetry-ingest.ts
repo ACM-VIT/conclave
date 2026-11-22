@@ -35,11 +35,39 @@ export type IngestDeps = {
   chunkFiles: (version: string | null) => Promise<ReadonlyMap<string, string>>;
 };
 
+// The parts of an exception posthog-js sends that the scrubber reads, typed
+// as posthog-js writes them; anything else in an entry or frame is dropped.
+const CapturedFrame = z.object({
+  filename: z.string().max(4096).optional(),
+  lineno: z.number().optional(),
+  colno: z.number().optional(),
+  in_app: z.boolean().optional(),
+  chunk_id: z.string().max(64).optional(),
+});
+const CapturedException = z.object({
+  type: z.string().max(256).optional(),
+  value: z.string().max(16_384).optional(),
+  mechanism: z
+    .object({
+      type: z.string().max(64).optional(),
+      handled: z.boolean().optional(),
+      synthetic: z.boolean().optional(),
+      exception_id: z.number().optional(),
+      parent_id: z.number().optional(),
+    })
+    .optional(),
+  stacktrace: z
+    .object({ type: z.string().max(64).optional(), frames: z.array(CapturedFrame).max(500) })
+    .optional(),
+});
+
 const CapturedEvent = z.object({
   uuid: z.uuid().optional(),
   event: z.string().min(1).max(200),
   timestamp: z.string().max(64).optional(),
-  properties: z.record(z.string(), z.unknown()),
+  properties: z
+    .object({ $exception_list: z.array(CapturedException).max(50).optional() })
+    .catchall(z.unknown()),
 });
 type CapturedEvent = z.infer<typeof CapturedEvent>;
 
@@ -176,37 +204,49 @@ export async function forwardCapture(
   if (path.length !== 1 || !ENDPOINTS.has(path[0])) return reply(404);
   if (request.method !== "POST") return reply(405);
   if (!deps.projectKey) return reply(404);
+  let forwarded: string;
   try {
-    const parsed = CaptureBody.safeParse(await decodeBody(request, new URL(request.url)));
-    if (!parsed.success) return reply(400);
-    const body = parsed.data;
-    const events = Array.isArray(body) ? body : "batch" in body ? body.batch : [body];
-    const ours = events.filter((event) => event.properties.token === deps.projectKey);
-    if (ours.length === 0) return reply(400);
-    // A tab sends only its own build's events, so a request carries one build:
-    // the first event's. Events from any other build are dropped, which holds
-    // a request to at most one manifest lookup. A tab can still run an older
-    // build than the one deployed, so that build's own manifest is used.
-    const build = buildOf(ours[0]);
-    const sameBuild = ours.filter((event) => buildOf(event) === build);
-    const chunkFiles = build ? await deps.chunkFiles(build) : new Map<string, string>();
-    const forwarded = {
-      api_key: deps.projectKey,
-      batch: sameBuild.map((event) => scrubForwarded(event, chunkFiles)),
-      ...(!Array.isArray(body) && "sent_at" in body && body.sent_at ? { sent_at: body.sent_at } : {}),
-    };
+    forwarded = JSON.stringify(await prepareForward(request, deps));
+  } catch (error) {
+    // Nothing in a refused body would pass on a retry, and the reply does
+    // not say what was wrong with it.
+    return reply(error instanceof Refused ? error.status : 400);
+  }
+  try {
     const upstream = await deps.fetch(`${deps.ingestHost.replace(/\/$/, "")}/e/`, {
       method: "POST",
       headers: { "content-type": "application/json", "user-agent": INGEST_USER_AGENT },
-      body: JSON.stringify(forwarded),
+      body: forwarded,
       redirect: "manual",
     });
     if (upstream.ok) return reply(200);
     return reply(upstream.status >= 500 ? 503 : 400);
-  } catch (error) {
-    return reply(error instanceof Refused ? error.status : 503);
+  } catch {
+    return reply(503);
   }
 }
+
+/** The batch to send PostHog for one request, or a Refused error. */
+const prepareForward = async (request: Request, deps: IngestDeps) => {
+  const parsed = CaptureBody.safeParse(await decodeBody(request, new URL(request.url)));
+  if (!parsed.success) throw new Refused(400);
+  const body = parsed.data;
+  const events = Array.isArray(body) ? body : "batch" in body ? body.batch : [body];
+  const ours = events.filter((event) => event.properties.token === deps.projectKey);
+  if (ours.length === 0) throw new Refused(400);
+  // A tab sends only its own build's events, so a request carries one build:
+  // the first event's. Events from any other build are dropped, which holds
+  // a request to at most one manifest lookup. A tab can still run an older
+  // build than the one deployed, so that build's own manifest is used.
+  const build = buildOf(ours[0]);
+  const sameBuild = ours.filter((event) => buildOf(event) === build);
+  const chunkFiles = build ? await deps.chunkFiles(build) : new Map<string, string>();
+  return {
+    api_key: deps.projectKey,
+    batch: sameBuild.map((event) => scrubForwarded(event, chunkFiles)),
+    ...(!Array.isArray(body) && "sent_at" in body && body.sent_at ? { sent_at: body.sent_at } : {}),
+  };
+};
 
 const MANIFEST_TTL_MS = 10 * 60_000;
 const MISSING_MANIFEST_TTL_MS = 60_000;

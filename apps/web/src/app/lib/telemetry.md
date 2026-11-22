@@ -129,7 +129,9 @@ still running an older build is not judged by the newest one, and a build whose
 manifest cannot be found keeps no chunk path or id. It forwards the batch to PostHog as plain JSON with
 the fixed User-Agent `conclave-web-ingest/1` and no header of the browser's: no
 cookie, no IP address and no forwarded or referrer header reaches PostHog. If
-PostHog fails, the browser is told to retry (503).
+PostHog fails or cannot be reached, the browser is told to retry (503). A body
+that fails validation, an exception list of the wrong shape included, gets 400
+with an empty body, so the browser drops it and learns nothing of what failed.
 
 `telemetry-privacy.ts` runs as posthog-js `before_send` and sends only what we
 trust, instead of scrubbing what looks bad:

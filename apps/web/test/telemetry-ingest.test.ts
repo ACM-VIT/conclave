@@ -140,6 +140,22 @@ describe("forwardCapture", () => {
     expect(upstream).toEqual([]);
   });
 
+  it("refuses a malformed exception for good, and says nothing of what failed", async () => {
+    const malformed = [
+      [null],
+      [{ type: "TypeError", stacktrace: { frames: [null] } }],
+      [{ type: "TypeError", mechanism: "generic", stacktrace: { frames: [{ filename: 7, lineno: "3" }] } }],
+      "not a list",
+    ];
+    for (const list of malformed) {
+      const json = JSON.stringify(captureBody([event({ $exception_list: list })]));
+      const { response } = await forward(post(json, "application/json"));
+      expect(response.status).toBe(400);
+      expect(await response.text()).toBe("");
+      expect([...response.headers.keys()]).toEqual([]);
+    }
+  });
+
   it("asks the browser to retry when PostHog fails, and drops what it rejects", async () => {
     const json = JSON.stringify(captureBody([event()]));
     const failing = (status: number) => async () => new Response("", { status });
