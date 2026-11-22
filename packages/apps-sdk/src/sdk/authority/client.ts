@@ -364,6 +364,12 @@ export class AuthoritySession<C extends AuthorityContract> {
   private incoming: { generation: number; frames: ReplaceFrame[] } | null = null;
   /** Whether the current subscription has shown a view yet. */
   private viewed = false;
+  /**
+   * The subscription whose view a replacement in parts dropped. `replacing`
+   * is said only while that is still the current subscription, so a new
+   * connection or a new subscription never inherits it.
+   */
+  private replacingFor: string | null = null;
   private rows: Rows = new Map();
   private revision = 0;
   /**
@@ -576,9 +582,8 @@ export class AuthoritySession<C extends AuthorityContract> {
           this.seq = 0;
           this.rows = new Map();
           this.failStreams();
-          this.setState(
-            this.viewed ? { kind: "connecting", replacing: true } : { kind: "connecting" },
-          );
+          this.replacingFor = this.viewed ? this.subscription : null;
+          this.setState(this.connecting());
         }
       }
       if (frame.part !== this.incoming.frames.length) {
@@ -629,6 +634,7 @@ export class AuthoritySession<C extends AuthorityContract> {
     this.subscription = randomId();
     this.subscribedEpoch = epoch;
     this.viewed = false;
+    this.replacingFor = null;
     this.generation = 0;
     this.seq = 0;
     this.incoming = null;
@@ -693,6 +699,7 @@ export class AuthoritySession<C extends AuthorityContract> {
     this.seq = 0;
     this.incoming = null;
     this.viewed = true;
+    this.replacingFor = null;
     this.rows = rows;
     if (frames[0].subscription !== this.revisionOf) {
       this.revisionBase = this.revision;
@@ -760,6 +767,8 @@ export class AuthoritySession<C extends AuthorityContract> {
   ): void {
     if (!options?.keepSubscription) this.unsubscribe();
     this.subscribedEpoch = null;
+    this.viewed = false;
+    this.replacingFor = null;
     this.generation = 0;
     this.seq = 0;
     this.incoming = null;
@@ -768,10 +777,20 @@ export class AuthoritySession<C extends AuthorityContract> {
     this.setState(state);
   }
 
+  /** Connecting, saying whether it replaces a view this same subscription showed. */
+  private connecting(): AuthoritySessionState<C> {
+    return this.replacingFor !== null && this.replacingFor === this.subscription
+      ? { kind: "connecting", replacing: true }
+      : { kind: "connecting" };
+  }
+
   private setState(next: AuthoritySessionState<C>): void {
+    const replacing = (state: AuthoritySessionState<C>): boolean =>
+      state.kind === "connecting" && state.replacing === true;
     const unchanged =
       this.state.kind === next.kind &&
-      (next.kind === "connecting" || next.kind === "unsupported");
+      (next.kind === "unsupported" ||
+        (next.kind === "connecting" && replacing(this.state) === replacing(next)));
     if (unchanged) return;
     this.state = next;
     for (const listener of [...this.listeners]) listener();

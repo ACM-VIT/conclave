@@ -293,3 +293,48 @@ it("goes back to the old events on a new connection, and stays on them while its
   expect(qa.onUpvote).toBe(legacy.upvote);
 });
 
+it("goes back to the old events when the connection drops while a new view is coming in parts", async () => {
+  await mount(true, { ...legacy, entries: [fromOldEvents] });
+  await offerQa();
+  await sendView();
+  const fire = async (event: string) =>
+    act(async () => {
+      for (const listener of [...(listeners.get(event) ?? [])]) listener();
+    });
+  // A new view starts to come in parts.
+  const subscription = last(AUTHORITY_EVENTS.subscribe)!.payload.subscription as string;
+  await act(async () =>
+    push({
+      kind: "replace",
+      subscription,
+      generation: 2,
+      serverNowMs: Date.now(),
+      part: 0,
+      last: false,
+      rows: [],
+      grants: { actions: ["ask", "upvote"], needsIdentity: [], queries: [] },
+    }),
+  );
+  const whileReplacing = qa;
+  // The connection drops before the last part, and comes back.
+  await fire("disconnect");
+  await fire("connect");
+  await offerQa();
+  await act(async () => vi.advanceTimersByTimeAsync(8_000));
+  const afterOneReconnect = qa;
+  // It drops and comes back again before any view arrives.
+  await fire("disconnect");
+  await fire("connect");
+  await offerQa();
+  await act(async () => vi.advanceTimersByTimeAsync(8_000));
+
+  expect(whileReplacing).toMatchObject({ fromApp: false, entries: [] });
+  // A new connection is a new subscription: the old events again.
+  expect(afterOneReconnect).toMatchObject({ offered: true, fromApp: false });
+  expect(afterOneReconnect.entries.map((entry) => entry.id)).toEqual(["q1"]);
+  expect(afterOneReconnect.onSubmit).toBe(legacy.submit);
+  expect(qa).toMatchObject({ offered: true, fromApp: false });
+  expect(qa.entries.map((entry) => entry.id)).toEqual(["q1"]);
+  expect(qa.onUpvote).toBe(legacy.upvote);
+});
+
