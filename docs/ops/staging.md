@@ -91,7 +91,9 @@ on its first deploy.
 ```bash
 S=/home/azureuser/repos/conclave-staging
 sudo -u azureuser -H git clone --branch staging https://github.com/ACM-VIT/conclave.git "$S"
-install -d -m 0755 /var/lib/conclave-staging /var/lib/conclave-staging/redis
+# Redis's data sits beside the SFU's state dir, never inside it, so nothing
+# that walks the state dir (a restore's ownership fix, a backup) touches it.
+install -d -m 0755 /var/lib/conclave-staging /var/lib/conclave-staging-redis
 STAGING_SFU_SECRET=$(openssl rand -hex 32)
 STAGING_REDIS_PASSWORD=$(openssl rand -hex 24)
 cat > "$S/.env" <<EOF
@@ -103,6 +105,7 @@ SFU_REQUIRE_REDIS_ADAPTER=1
 SFU_REGION=staging
 SFU_STAGING_PUBLIC_URL=https://sfu-staging.acmvit.in
 STAGING_STATE_DIR=/var/lib/conclave-staging
+STAGING_REDIS_DIR=/var/lib/conclave-staging-redis
 EOF
 chown azureuser:azureuser "$S/.env" && chmod 0600 "$S/.env"
 echo "staging SFU secret: ${STAGING_SFU_SECRET}"   # needed for the Worker secret below

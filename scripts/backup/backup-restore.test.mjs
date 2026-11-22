@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile, execFileSync, spawn } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, readdir, readlink, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, readlink, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -914,3 +914,58 @@ test(
   },
 );
 
+test(
+  "staging's Redis data sits beside the staging SFU's state dir, so a backup and restore there never touch it",
+  { skip: missing.length > 0 && `needs ${missing.join(", ")} on PATH` },
+  async () => {
+    // The host paths staging's compose file mounts, at their defaults.
+    const compose = await readFile(path.join(scripts, "..", "..", "docker-compose.sfu-staging.yml"), "utf8");
+    const hostPath = (target) => {
+      const entry = compose.split("\n").map((line) => line.trim()).find((line) => line.startsWith("- ") && line.endsWith(`:${target}`));
+      return entry.slice(2, -(target.length + 1)).replace(/\$\{[A-Z_]+:-([^}]*)\}/g, "$1");
+    };
+    const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+    try {
+      const state = path.join(root, hostPath("/var/lib/conclave/recordings"));
+      const redisData = path.join(root, hostPath("/data"));
+      const { env, setDocker } = await setUp(root, [`CONCLAVE_STATE_DIR=${state}`]);
+      await setDocker([{ id: "sfu-staging", mounts: [state], status: "exited", env: ["SFU_PORT=9", "SFU_INSTANCE_ID=sfu-staging"] }]);
+      await mkdir(path.join(redisData, "appendonlydir"), { recursive: true });
+      await mkdir(state, { recursive: true });
+      const redisFiles = ["dump.rdb", "appendonlydir/appendonly.aof.1.incr.aof"];
+      for (const file of redisFiles) await writeFile(path.join(redisData, file), `redis ${file}`);
+      const db = new DatabaseSync(path.join(state, "conclave.sqlite"));
+      db.exec("CREATE TABLE meetings (id TEXT PRIMARY KEY)");
+      db.close();
+      const before = await Promise.all(redisFiles.map((file) => stat(path.join(redisData, file))));
+
+      // Every directory a backup or restore walks, as find sees it.
+      const findBin = path.join(root, "find-bin");
+      const findLog = path.join(root, "find.log");
+      await mkdir(findBin);
+      const realFind = execFileSync("sh", ["-c", "command -v find"], { encoding: "utf8" }).trim();
+      await writeFile(
+        path.join(findBin, "find"),
+        `#!/bin/sh\ncase "$1" in /*) printf '%s\\n' "$1" ;; *) printf '%s\\n' "$PWD/$1" ;; esac >> "${findLog}"\nexec ${realFind} "$@"\n`,
+        { mode: 0o755 },
+      );
+      const walked = { ...env, PATH: `${findBin}:${env.PATH}` };
+      await run("bash", [path.join(scripts, "backup.sh"), "--local-only"], { env: walked });
+      const archive = (await readdir(path.join(root, "local"))).find((name) => name.endsWith(".tar.gz.age"));
+      await rm(state, { recursive: true });
+      await run("bash", [path.join(scripts, "restore.sh"), "--identity", path.join(root, "key.txt"), "--file", path.join(root, "local", archive), "--yes"], { env: walked });
+
+      const roots = (await readFile(findLog, "utf8")).split("\n").filter(Boolean).map((dir) => path.resolve(dir));
+      assert.ok(roots.some((dir) => dir === path.resolve(state)), "the restore's ownership fix walked the state dir");
+      for (const dir of roots) {
+        const relative = path.relative(dir, path.resolve(redisData));
+        assert.ok(relative.startsWith("..") || path.isAbsolute(relative), `${dir} contains Redis's data`);
+      }
+      const after = await Promise.all(redisFiles.map((file) => stat(path.join(redisData, file))));
+      assert.deepEqual(after.map((s) => [s.ino, s.ctimeMs, s.uid, s.gid]), before.map((s) => [s.ino, s.ctimeMs, s.uid, s.gid]));
+      for (const file of redisFiles) assert.equal(await readFile(path.join(redisData, file), "utf8"), `redis ${file}`);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);

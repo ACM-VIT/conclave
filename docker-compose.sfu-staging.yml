@@ -51,7 +51,10 @@ services:
       - >-
         printf 'requirepass "%s"\n' "$$(printf '%s' "$$REDIS_PASSWORD" | sed 's/[\\"]/\\&/g')" |
         exec docker-entrypoint.sh redis-server - --port "$$REDIS_PORT" --bind 127.0.0.1 --appendonly yes
+    # A sibling of the SFU's state dir, never inside it: whatever walks that
+    # dir (a restore's ownership fix, a backup's file archive) never reaches
+    # Redis's own files.
     volumes:
-      - ${STAGING_STATE_DIR:-/var/lib/conclave-staging}/redis:/data
+      - ${STAGING_REDIS_DIR:-/var/lib/conclave-staging-redis}:/data
     mem_limit: 128m
     restart: unless-stopped
