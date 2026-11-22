@@ -1,6 +1,5 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
-  existsSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -106,6 +105,24 @@ const NOT_RUNNING = {
   readmissionRequiredUserKeys: [],
 };
 
+const wasRunningRecently = (liveAt: number | null): liveAt is number =>
+  liveAt !== null && Date.now() - liveAt <= LOST_ROOM_WINDOW_MS;
+
+const stillVoids = (endedAt: number | null): number | null =>
+  endedAt !== null && Date.now() - endedAt <= ROOM_RECOVERY_PASS_TTL_MS
+    ? endedAt
+    : null;
+
+// Whether a stored record still says anything. One that does not parse is
+// not a record at all.
+const hasExpired = (raw: unknown): boolean => {
+  const record = parseRoomRecoveryRecord(raw);
+  return (
+    !record ||
+    (!wasRunningRecently(record.liveAt) && stillVoids(record.endedAt) === null)
+  );
+};
+
 export const createRoomRecoveryLedger = (
   store: RoomRecoveryStore,
 ): RoomRecoveryLedger => {
@@ -117,10 +134,6 @@ export const createRoomRecoveryLedger = (
       Logger.warn(`Failed to update the recovery record of ${channelId}`, error);
     });
   };
-  const stillVoids = (endedAt: number | null): number | null =>
-    endedAt !== null && Date.now() - endedAt <= ROOM_RECOVERY_PASS_TTL_MS
-      ? endedAt
-      : null;
 
   return {
     noteRunning: (room) =>
@@ -152,7 +165,7 @@ export const createRoomRecoveryLedger = (
       const liveAt = record?.liveAt ?? null;
       return {
         lost:
-          record && liveAt !== null && Date.now() - liveAt <= LOST_ROOM_WINDOW_MS
+          record && wasRunningRecently(liveAt)
             ? {
                 hostUserKey: record.hostUserKey,
                 adminUserKeys: record.adminUserKeys,
@@ -183,7 +196,8 @@ export const createMemoryRoomRecoveryStore = (): RoomRecoveryStore => {
   };
 };
 
-const STALE_FILE_MS = 24 * 60 * 60 * 1000;
+const PRUNE_EVERY_MS = 10 * 60 * 1000;
+const ABANDONED_TEMP_FILE_MS = 60 * 1000;
 
 const roomRecoveryDirectory = (): string => {
   const configured = process.env.SFU_ROOM_RECOVERY_PATH?.trim();
@@ -194,10 +208,27 @@ const roomRecoveryDirectory = (): string => {
     : resolve(process.cwd(), "data", "room-recovery");
 };
 
+const isMissingFile = (error: unknown): boolean =>
+  (error as NodeJS.ErrnoException | null)?.code === "ENOENT";
+
+// Runs a file operation another SFU may race: the file being gone already is
+// an answer, not a failure.
+const unlessGone = <T>(operation: () => T): T | null => {
+  try {
+    return operation();
+  } catch (error) {
+    if (isMissingFile(error)) return null;
+    throw error;
+  }
+};
+
 /**
  * One small file per room, in a directory every SFU container on the host
  * shares. A room runs on one instance at a time, so instances never write the
- * same file, and whichever instance recreates a lost room can read its record.
+ * same record, and whichever instance recreates a lost room can read it.
+ *
+ * Instances do share the tidying up. Each removes only what it has just read
+ * and found expired, and takes a file another instance removed first as done.
  */
 export const createFileRoomRecoveryStore = (
   directory: string = roomRecoveryDirectory(),
@@ -207,29 +238,48 @@ export const createFileRoomRecoveryStore = (
       directory,
       `${createHash("sha256").update(channelId).digest("hex")}.json`,
     );
-  // Nothing touches the disk until the first room does.
-  let prepared = false;
-  const prepare = () => {
-    if (prepared) return;
-    if (!existsSync(directory)) mkdirSync(directory, { recursive: true });
-    for (const name of readdirSync(directory)) {
-      const path = resolve(directory, name);
-      if (Date.now() - statSync(path).mtimeMs > STALE_FILE_MS) rmSync(path);
+  const read = (path: string): unknown => {
+    const stored = unlessGone(() => readFileSync(path, "utf8"));
+    return stored === null ? null : JSON.parse(stored);
+  };
+  const pruneOne = (name: string) => {
+    const path = resolve(directory, name);
+    if (!name.endsWith(".json")) {
+      // What is left of a write that never finished.
+      const written = unlessGone(() => statSync(path).mtimeMs);
+      if (written !== null && Date.now() - written > ABANDONED_TEMP_FILE_MS) {
+        rmSync(path, { force: true });
+      }
+      return;
     }
-    prepared = true;
+    let expired: boolean;
+    try {
+      const stored = read(path);
+      if (stored === null) return;
+      expired = hasExpired(stored);
+    } catch {
+      expired = true;
+    }
+    if (expired) rmSync(path, { force: true });
+  };
+  // Nothing touches the disk until the first room does.
+  let prunedAt = 0;
+  const tidy = () => {
+    if (Date.now() - prunedAt < PRUNE_EVERY_MS) return;
+    prunedAt = Date.now();
+    try {
+      for (const name of readdirSync(directory)) pruneOne(name);
+    } catch (error) {
+      Logger.warn(`Failed to clear out old recovery records in ${directory}`, error);
+    }
   };
   return {
-    read: async (channelId) => {
-      const path = pathOf(channelId);
-      const record: unknown = existsSync(path)
-        ? JSON.parse(readFileSync(path, "utf8"))
-        : null;
-      return record;
-    },
+    read: async (channelId) => read(pathOf(channelId)),
     write: async (channelId, record) => {
-      prepare();
+      mkdirSync(directory, { recursive: true });
+      tidy();
       const path = pathOf(channelId);
-      const pending = `${path}.${process.pid}.tmp`;
+      const pending = `${path}.${randomBytes(6).toString("hex")}.tmp`;
       writeFileSync(pending, JSON.stringify(record), "utf8");
       renameSync(pending, path);
     },
