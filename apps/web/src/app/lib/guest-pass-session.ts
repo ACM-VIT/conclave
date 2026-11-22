@@ -1,71 +1,79 @@
-const LOCK_NAME = "conclave:guest-pass";
-const LOCK_WAIT_MS = 5000;
+const SEAT_TOKENS_STORAGE_KEY = "conclave:guest-seat-tokens";
+const MAX_STORED_SEAT_TOKENS = 20;
 
-let pageQueue: Promise<unknown> = Promise.resolve();
+type SeatTokens = Record<string, string>;
 
-const runAfterPageQueue = <T>(task: () => Promise<T>): Promise<T> => {
-  const result = pageQueue.then(task, task);
-  pageQueue = result.catch(() => undefined);
-  return result;
-};
-
-/**
- * Runs `task` while no other tab of this browser, and no other call in this
- * page, runs one. A tab never waits for long on another tab: after a few
- * seconds it runs `task` anyway.
- */
-const oneAtATime = async <T>(task: () => Promise<T>): Promise<T> => {
-  const locks = typeof navigator === "undefined" ? undefined : navigator.locks;
-  if (!locks) return runAfterPageQueue(task);
-
-  let started = false;
-  const waiting = new AbortController();
-  const giveUp = setTimeout(() => waiting.abort(), LOCK_WAIT_MS);
+const readSeatTokens = (): SeatTokens => {
   try {
-    return await locks.request(LOCK_NAME, { signal: waiting.signal }, () => {
-      started = true;
-      clearTimeout(giveUp);
-      return task();
-    });
-  } catch (error) {
-    if (started) throw error;
-    return task();
-  } finally {
-    clearTimeout(giveUp);
+    const raw = window.sessionStorage.getItem(SEAT_TOKENS_STORAGE_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as SeatTokens)
+      : {};
+  } catch {
+    return {};
   }
 };
 
-export type GuestPassFields = { guestId: string; guestGrant?: string };
+const storeSeatToken = (seat: string, token: string): void => {
+  try {
+    const { [seat]: _replaced, ...others } = readSeatTokens();
+    const kept = Object.entries(others).slice(1 - MAX_STORED_SEAT_TOKENS);
+    window.sessionStorage.setItem(
+      SEAT_TOKENS_STORAGE_KEY,
+      JSON.stringify({ ...Object.fromEntries(kept), [seat]: token }),
+    );
+  } catch {
+    // Without session storage a reload starts the tab over as a new guest.
+  }
+};
+
+export type GuestPassFields = {
+  guestId: "";
+  guestGrant?: string;
+  guestSeatToken?: string;
+};
+
+type JoinAnswer = { token: string; guestId?: string; guestGrant?: string };
 
 /**
- * The guest pass side of one page's join calls.
+ * The guest side of one page's join calls.
  *
- * Until a join call has answered, the page names no pass and the join route
- * picks one: the pass in the browser's cookie, or a new one. So every tab of
- * a browser ends up on the cookie's pass. After that the page names the pass
- * it was issued, with the grant that stands in for the cookie until the
- * cookie comes back on a request.
+ * The page never names a pass. The join route picks it: the pass in the
+ * browser's cookie, or a new one. Two things travel with each call:
  *
- * A browser's first join call plants its pass cookie. Two such calls in
- * flight at once would each plant a different pass, and the tab that lost
- * would come back as someone else after a reload. So the calls that can
- * plant a pass go one at a time, across tabs.
+ * - the grant from the last answer, which stands in for the cookie in a
+ *   browser that has not sent it back yet, or never will;
+ * - the token of this tab's last join for the same room. Tabs keep it across
+ *   a reload. It is how a tab that joined before the browser's pass settled
+ *   keeps its seat, and what the seat held, once it moves to that pass.
+ *
+ * Calls go one at a time within the page, so a second call always carries
+ * what the first one was answered with.
  */
 export const createGuestPassSession = () => {
-  let pass: GuestPassFields = { guestId: "" };
-  let hasAnswer = false;
+  let grant: string | undefined;
+  let queue: Promise<unknown> = Promise.resolve();
 
-  return <Answer extends { guestId?: string; guestGrant?: string }>(
+  return <Answer extends JoinAnswer>(
+    seat: string,
     send: (fields: GuestPassFields) => Promise<Answer>,
   ): Promise<Answer> => {
     const call = async () => {
-      const answer = await send(pass);
+      const guestSeatToken = readSeatTokens()[seat];
+      const answer = await send({
+        guestId: "",
+        ...(grant ? { guestGrant: grant } : {}),
+        ...(guestSeatToken ? { guestSeatToken } : {}),
+      });
       if (answer.guestId) {
-        pass = { guestId: answer.guestId, guestGrant: answer.guestGrant };
+        grant = answer.guestGrant;
+        storeSeatToken(seat, answer.token);
       }
-      hasAnswer = true;
       return answer;
     };
-    return hasAnswer ? call() : oneAtATime(call);
+    const result = queue.then(call, call);
+    queue = result.catch(() => undefined);
+    return result;
   };
 };

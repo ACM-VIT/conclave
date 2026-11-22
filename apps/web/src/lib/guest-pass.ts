@@ -21,9 +21,6 @@ const isGuestId = (value: unknown): value is string =>
 const isReservedGuestSessionId = (sessionId: string): boolean =>
   sessionId.startsWith(GUEST_ID_PREFIX) || sessionId.includes("@");
 
-const GUEST_SESSION_EXPIRED =
-  "Your guest session has expired. Reload the page to join again.";
-
 // Same switch better-auth uses for its session cookie (see lib/auth.ts).
 const usesSecureCookie = (): boolean => process.env.NODE_ENV === "production";
 
@@ -131,6 +128,61 @@ const passCookie = (sfuSecret: string, guestId: string): string =>
     ...(usesSecureCookie() ? ["Secure"] : []),
   ].join("; ");
 
+/**
+ * The `Set-Cookie` value that gives a browser a guest pass, when the request
+ * shows it has none. The page proxy calls this for every page load, so a tab
+ * carries its pass before it makes any join call and all tabs of a browser
+ * share one.
+ */
+export const guestPassCookieForNewBrowser = (
+  sfuSecret: string,
+  cookieHeader: string | null,
+): string | undefined => {
+  const current = readCookie(cookieHeader, guestPassCookieName(sfuSecret));
+  if (verify(sfuSecret, current, PASS_AUDIENCE)) return undefined;
+  return passCookie(sfuSecret, mintGuestId());
+};
+
+/**
+ * The seat a tab held before, read from the join token of its previous join
+ * for this room. It matters when the browser's pass has changed since: two
+ * tabs can each be given a pass before either has a cookie, and the browser
+ * keeps only one. The tab then joins under the pass in the cookie, and this
+ * tells the SFU which seat it was, with that seat's proof, so what the seat
+ * held moves to the new key.
+ */
+const formerSeatOf = (
+  sfuSecret: string,
+  previousToken: unknown,
+  seat: GuestSeat,
+  userKey: string,
+): { userKey: string; guestProof: string } | undefined => {
+  if (typeof previousToken !== "string" || !previousToken) return undefined;
+  let claims: Record<string, unknown>;
+  try {
+    const payload = jwt.verify(previousToken, sfuSecret, {
+      algorithms: ["HS256"],
+    });
+    if (typeof payload !== "object") return undefined;
+    claims = payload;
+  } catch {
+    return undefined;
+  }
+  const { userId, guestProof } = claims;
+  if (
+    typeof userId !== "string" ||
+    typeof guestProof !== "string" ||
+    !userId.startsWith(`guest-${GUEST_ID_PREFIX}`) ||
+    userId === userKey ||
+    claims.guestRoom !== seat.roomId ||
+    claims.clientId !== seat.clientId ||
+    claims.sessionId !== seat.sessionId
+  ) {
+    return undefined;
+  }
+  return { userKey: userId, guestProof };
+};
+
 // The pass cookie is SameSite=Lax, so a form post from another site arrives
 // without it. Answering that post with a new pass would replace the
 // visitor's own, so such a request gets no cookie handling at all.
@@ -154,6 +206,10 @@ export type GuestJoinIdentity =
       userKey: string;
       /** Signed into the join token; the SFU binds the identity to it. */
       guestProof?: string;
+      /** Signed into the join token; the SFU lets it join no other room. */
+      guestRoom?: string;
+      /** Signed into the join token; the seat this tab held under another pass. */
+      guestWas?: { userKey: string; guestProof: string };
       setCookie?: string;
       /**
        * Set for a client that takes its guest identity from the server: the
@@ -161,23 +217,23 @@ export type GuestJoinIdentity =
        */
       issued?: { guestId: string; guestGrant?: string };
     }
-  | { ok: false; status: 400 | 409; error: string };
+  | { ok: false; status: 400; error: string };
 
 /**
  * Decides who an unauthenticated join is.
  *
  * A client that sends `guestId` gets a seat key built from a pass this
- * server issued. An empty `guestId` asks the server to pick the pass: the one
- * in the browser's cookie, else the one a grant proves, else a new one. A
- * page sends that on its first join, so every tab of a browser ends up on
- * the cookie's pass. A `guestId` names the pass a page already joined with,
- * and has to be proven by the cookie or a grant.
+ * server issued: the pass in the browser's cookie, else the one a grant
+ * proves, else a new one. The cookie always wins, so every tab of a browser
+ * converges on one pass. A tab that joined under another pass before the
+ * cookie settled sends the token of that join (`guestSeatToken`), and keeps
+ * what its seat held (see `formerSeatOf`).
  *
- * A client that does not is one that still derives `guest-<sessionId>`
- * itself: a tab opened before guest passes shipped, or an older native build.
- * It keeps that identity. Once it holds a pass cookie it proves the pass on
- * every call, so the SFU can bind that identity too. A client with no cookie
- * jar never does, and joins exactly as before.
+ * A client that does not send `guestId` is one that still derives
+ * `guest-<sessionId>` itself: a tab opened before guest passes shipped, or an
+ * older native build. It keeps that identity. Once it holds a pass cookie it
+ * proves the pass on every call, so the SFU can bind that identity too. A
+ * client with no cookie jar never does, and joins exactly as before.
  */
 export const resolveGuestJoinIdentity = (input: {
   sfuSecret: string;
@@ -185,6 +241,7 @@ export const resolveGuestJoinIdentity = (input: {
   request: Request;
   guestId: unknown;
   guestGrant: unknown;
+  guestSeatToken?: unknown;
 }): GuestJoinIdentity => {
   const { sfuSecret, seat } = input;
   const { sessionId } = seat;
@@ -217,32 +274,26 @@ export const resolveGuestJoinIdentity = (input: {
     return { ok: false, status: 400, error: "Invalid session ID" };
   }
 
-  const expected = typeof input.guestId === "string" ? input.guestId.trim() : "";
-  const fromGrant = verify(sfuSecret, input.guestGrant, GRANT_AUDIENCE);
-
-  let guestId: string;
-  if (!expected) {
-    guestId = fromCookie ?? fromGrant ?? mintGuestId();
-  } else if (expected === fromCookie || expected === fromGrant) {
-    guestId = expected;
-  } else {
-    return { ok: false, status: 409, error: GUEST_SESSION_EXPIRED };
-  }
-
+  const guestId =
+    fromCookie ??
+    verify(sfuSecret, input.guestGrant, GRANT_AUDIENCE) ??
+    mintGuestId();
   const provenByCookie = guestId === fromCookie;
+  const userKey = seatKeyOf(sfuSecret, guestId, seat);
+  const guestWas = formerSeatOf(sfuSecret, input.guestSeatToken, seat, userKey);
   return {
     ok: true,
-    userKey: seatKeyOf(sfuSecret, guestId, seat),
+    userKey,
     guestProof: proofOf(sfuSecret, guestId),
-    // Refresh this pass, or plant it when the browser has none. A valid pass
-    // for another identity belongs to another tab and stays.
-    ...(usesCookie && (provenByCookie || !fromCookie)
-      ? { setCookie: passCookie(sfuSecret, guestId) }
-      : {}),
+    guestRoom: seat.roomId,
+    ...(guestWas ? { guestWas } : {}),
+    // Refresh the pass in the cookie, or plant this one when the browser
+    // has none.
+    ...(usesCookie ? { setCookie: passCookie(sfuSecret, guestId) } : {}),
     issued: {
       guestId,
       // Until the cookie comes back on a request, the caller keeps its
-      // identity by sending the grant.
+      // pass by sending the grant.
       ...(provenByCookie
         ? {}
         : {

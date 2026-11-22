@@ -45,13 +45,14 @@ type JoinRequestBody = {
   roomId?: string;
   sessionId?: string;
   /**
-   * The guest pass the client already joined with, or empty to let the
-   * server pick one. Sending the field at all marks a client that takes its
+   * Sending this field at all, with any value, marks a client that takes its
    * guest identity from the join token instead of deriving
-   * `guest-<sessionId>` itself.
+   * `guest-<sessionId>` itself. The server picks the pass.
    */
   guestId?: string | null;
   guestGrant?: string | null;
+  /** The token of this tab's previous join for this room, if it has one. */
+  guestSeatToken?: string | null;
   joinMode?: "meeting" | "webinar_attendee";
   user?: {
     id?: string | null;
@@ -666,6 +667,7 @@ export async function POST(request: Request) {
           request,
           guestId: body.guestId,
           guestGrant: body.guestGrant,
+          guestSeatToken: body.guestSeatToken,
         });
   if (guest && !guest.ok) {
     return NextResponse.json({ error: guest.error }, { status: guest.status });
@@ -739,6 +741,8 @@ export async function POST(request: Request) {
       sessionId,
       joinMode,
       ...(guest?.guestProof ? { guestProof: guest.guestProof } : {}),
+      ...(guest?.guestRoom ? { guestRoom: guest.guestRoom } : {}),
+      ...(guest?.guestWas ? { guestWas: guest.guestWas } : {}),
     },
     secret,
     { expiresIn: "12h" },
