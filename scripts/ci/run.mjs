@@ -77,7 +77,7 @@ const skipped = job.tasks.length + (job.before?.length ?? 0) - results.length;
 
 const verdict = failures.length ? `${failures.length} failed` : skipped ? `${skipped} did not start` : "all passed";
 const lines = [
-  `### ${jobName}: ${verdict}, ${elapsed.toFixed(1)}s since the job's first step, budget ${job.budgetSeconds}s`,
+  `### ${jobName}: ${verdict}, ${elapsed.toFixed(1)}s since ${process.env.CI_BUDGET_FROM ?? "the job's first step"}, budget ${job.budgetSeconds}s`,
   "",
   "| task | result | seconds |",
   "| --- | --- | ---: |",

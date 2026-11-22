@@ -36,6 +36,11 @@ jobs:
       - id: setup
         uses: ./.github/actions/setup
 
+      - if: steps.setup.outputs.modules-hit != 'true'
+        run: |
+          echo "CI_JOB_STARTED_AT=$(date +%s%3N)" >> "$GITHUB_ENV"
+          echo "CI_BUDGET_FROM=setup ended, as node_modules missed the cache" >> "$GITHUB_ENV"
+
       - id: next-cache
         if: matrix.job == 'build'
         uses: actions/cache/restore@v6.1.0
