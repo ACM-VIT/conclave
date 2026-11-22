@@ -216,12 +216,13 @@ const fillToward = (widths: number[], sizes: number[], limits: number[], amount:
 };
 
 /**
- * Resize a row's tiles so the row spans `rowWidth`. Tiles grow to their soft
- * caps before their hard caps, and shrink no further than their floors.
- * Returns null when the caps cannot reach `rowWidth`.
+ * Resize a row's tiles so the row spans `rowWidth` at most, to the whole pixel
+ * below when the gap is fractional. Tiles grow to their soft caps before their
+ * hard caps, and shrink no further than their floors. Returns null when the
+ * caps cannot reach `rowWidth`.
  */
 const resizeRow = (widths: number[], height: number, gap: number, rowWidth: number) => {
-  const total = rowWidth - (widths.length - 1) * gap;
+  const total = Math.floor(rowWidth - (widths.length - 1) * gap + ASPECT_EPSILON);
   const { floor, soft, hard } = resizeLimits(widths, height);
   if (total < sum(floor) || total > sum(hard)) return null;
   const sizes = [...widths];
@@ -234,26 +235,52 @@ const resizeRow = (widths: number[], height: number, gap: number, rowWidth: numb
 };
 
 /**
- * Resize each row's tiles so the full rows, those holding `cols` tiles, share
- * one width and the grid's edges line up. They meet at the widest row when
- * they can reach it, preferably with portrait tiles held at 4:5, and otherwise
- * at the widest width every full row reaches. Other rows join that width when
- * the caps allow, and a row they don't, such as a lone last tile, keeps its
+ * Resize each row's tiles so the rows share one width and the grid's edges
+ * line up. The full rows, those holding `cols` tiles, always meet. Alone they
+ * would meet at the width nearest the widest row with portrait tiles held at
+ * 4:5. The shared width is the one, from there or wider than the full rows
+ * already are, that also fits the most shorter rows, nearest that preference.
+ * So a shorter row can take portrait tiles past 4:5, but never narrows the
+ * full rows. A row the caps can't fit, such as a lone last tile, keeps its
  * width and centres.
  */
 const alignRows = (rowTiles: number[][], height: number, gap: number, cols: number) => {
-  const widest = Math.max(...rowTiles.map((tiles) => rowWidthOf(tiles, gap)));
-  const fullRows = rowTiles
-    .filter((tiles) => tiles.length === cols)
-    .map((tiles) => resizeLimits(tiles, height));
-  const span = (limit: "floor" | "soft" | "hard") =>
-    fullRows.map((limits) => rowWidthOf(limits[limit], gap));
-  const narrowest = Math.max(...span("floor"));
-  const reach = Math.min(...span("hard"));
-  const target =
-    narrowest <= reach
-      ? Math.min(Math.max(Math.min(widest, ...span("soft")), narrowest), reach)
-      : widest;
+  const rows = rowTiles.map((tiles) => {
+    const limits = resizeLimits(tiles, height);
+    return {
+      full: tiles.length === cols,
+      natural: rowWidthOf(tiles, gap),
+      low: rowWidthOf(limits.floor, gap),
+      soft: rowWidthOf(limits.soft, gap),
+      high: rowWidthOf(limits.hard, gap),
+    };
+  });
+  const widest = Math.max(...rows.map((row) => row.natural));
+  const fullRows = rows.filter((row) => row.full);
+  const shortRows = rows.filter((row) => !row.full);
+  const low = Math.max(...fullRows.map((row) => row.low));
+  const high = Math.min(...fullRows.map((row) => row.high));
+  let target = widest;
+  if (low <= high + ASPECT_EPSILON) {
+    const preferred = Math.min(
+      Math.max(Math.min(widest, ...fullRows.map((row) => row.soft)), low),
+      high,
+    );
+    const floor = Math.min(preferred, Math.max(...fullRows.map((row) => row.natural)));
+    const fits = (width: number) =>
+      shortRows.filter(
+        (row) => row.low <= width + ASPECT_EPSILON && row.high >= width - ASPECT_EPSILON,
+      ).length;
+    target = [preferred, ...shortRows.flatMap((row) => [row.low, row.high])]
+      .filter((width) => width >= floor - ASPECT_EPSILON && width <= high + ASPECT_EPSILON)
+      .reduce((best, width) => {
+        const gain = fits(width) - fits(best);
+        return gain > 0 ||
+          (gain === 0 && Math.abs(width - preferred) < Math.abs(best - preferred))
+          ? width
+          : best;
+      }, preferred);
+  }
   return rowTiles.map((tiles) => resizeRow(tiles, height, gap, target) ?? tiles);
 };
 
