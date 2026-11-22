@@ -198,12 +198,26 @@ const main = async () => {
     if (format.includes(".Image")) return out((await state(name)).image);
     return out(args.at(-1));
   }
+  // DEPLOY_TEST_NO_COMMIT_IMAGES: no image was ever tagged for a commit.
+  if (args[0] === "image" && args[1] === "inspect" && process.env.DEPLOY_TEST_NO_COMMIT_IMAGES && /:[0-9a-f]{12}$/.test(args.at(-1))) {
+    process.exitCode = 1;
+    return;
+  }
   if (args[0] === "image" && args[1] === "inspect") return args[2] === "-f" ? out(tags[args.at(-1)] || "sha256:target") : undefined;
   if (args[0] === "tag") {
     tags[args[2]] = tags[args[1]] || args[1];
     return fs.writeFileSync(tagsFile, JSON.stringify(tags));
   }
-  // rmi and the canary's docker run succeed.
+  // DEPLOY_TEST_NO_BUNDLE: images built before the canary bundle existed.
+  if (args[0] === "run") {
+    const image = args[args.indexOf("--entrypoint") + 2];
+    if ((process.env.DEPLOY_TEST_NO_BUNDLE || "").split(",").includes(image)) {
+      process.stderr.write("Error: Cannot find module '/app/packages/sfu/dist/canary-call.mjs'\\n");
+      process.exitCode = 1;
+    }
+    return;
+  }
+  // rmi succeeds.
 };
 main();
 `;
@@ -741,6 +755,47 @@ test("the canary runs from one bundled file, without the SFU's dev dependencies"
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("a rollback to a release built before the canary bundle runs the checkout's canary against it", async () => {
+  await withSfus({ "sfu-a": { onTarget: true }, "sfu-b": { onTarget: true } }, async (sfus) => {
+    const stateDir = await mkdtemp(path.join(tmpdir(), "conclave-deploy-state-"));
+    try {
+      await writeFile(path.join(stateDir, "vm.env"), "LAST_GOOD_COMMIT=bad\nLAST_GOOD_IMAGE=sha256:target\nPREVIOUS_GOOD_COMMIT=good\nPREVIOUS_GOOD_IMAGE=sha256:previous\n");
+      const result = await deploy(sfus, {
+        args: ["--rollback"],
+        env: { SFU_DEPLOY_STATE_DIR: stateDir, DEPLOY_TEST_NO_BUNDLE: "sha256:previous" },
+      });
+      assert.equal(result.code, 0, result.output);
+      assert.deepEqual(Object.values(sfus).map((sfu) => sfu.image), ["sha256:previous", "sha256:previous"]);
+      const canaries = result.docker.filter((args) => args[0] === "run");
+      assert.equal(canaries.length, 2, "one canary per instance");
+      for (const canary of canaries) {
+        assert.equal(canary[canary.indexOf("--entrypoint") + 2], "sha256:target", "the checkout's image runs the canary");
+      }
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+});
+
+test("a rollback whose checkout was never built builds it for the canary and still goes back", async () => {
+  await withSfus({ "sfu-a": { onTarget: true }, "sfu-b": { onTarget: true } }, async (sfus) => {
+    const stateDir = await mkdtemp(path.join(tmpdir(), "conclave-deploy-state-"));
+    try {
+      await writeFile(path.join(stateDir, "vm.env"), "LAST_GOOD_COMMIT=bad\nLAST_GOOD_IMAGE=sha256:target\nPREVIOUS_GOOD_COMMIT=good\nPREVIOUS_GOOD_IMAGE=sha256:previous\n");
+      const result = await deploy(sfus, {
+        args: ["--rollback"],
+        env: { SFU_DEPLOY_STATE_DIR: stateDir, DEPLOY_TEST_NO_BUNDLE: "sha256:previous", DEPLOY_TEST_NO_COMMIT_IMAGES: "1" },
+      });
+      assert.equal(result.code, 0, result.output);
+      assert.match(result.output, /Building [0-9a-f]{12} for its canary; the instances still go back to good/);
+      assert.ok(result.docker.some((args) => args[0] === "compose" && args.includes("build")), "the checkout was built");
+      assert.deepEqual(Object.values(sfus).map((sfu) => sfu.image), ["sha256:previous", "sha256:previous"]);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
 });
 
 test("the deploy runs the bundled canary from the image", async () => {

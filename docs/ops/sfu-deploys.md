@@ -44,8 +44,10 @@ is recreated while it has rooms unless you pass `--force-drain`:
    out of rotation and no meeting can land on an unverified build.
 5. Run the canary: a real two-person call against that instance
    (`packages/sfu/scripts/canary-call.ts`, bundled at image build into
-   `dist/canary-call.mjs` with its dependencies inside, and run from the new
-   image). It takes
+   `dist/canary-call.mjs` with its dependencies inside). It always runs from
+   the image of the checked-out revision, never from the image under test,
+   so `--rollback` to a release built before the bundle existed still gets a
+   canary; a rollback whose checkout was never built builds it first. It takes
    its room through the secret-protected placement endpoint with
    `allowDraining`, the one placement a draining instance grants. Two clients
    join, publish Opus audio and must receive each other's RTP through the SFU,

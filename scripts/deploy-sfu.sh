@@ -635,11 +635,11 @@ answers_http() {
 }
 
 # Two clients join a room on the instance, publish audio and must hear each
-# other through it. The canary ships inside the image under test, bundled into
+# other through it. The canary is the checkout's (CANARY_IMAGE), bundled into
 # one file at build time so it needs none of the SFU's dev dependencies.
 run_canary() {
   echo "Running the canary call against ${1}..."
-  docker run --rm --network host -e SFU_SECRET --entrypoint node "$TARGET_IMAGE" \
+  docker run --rm --network host -e SFU_SECRET --entrypoint node "$CANARY_IMAGE" \
     dist/canary-call.mjs --url "$2"
 }
 
@@ -873,6 +873,22 @@ else
       echo "The checkout has local changes; this build is not recorded as ${TARGET_COMMIT}'s image."
     fi
   fi
+fi
+
+# The canary comes from this checkout, never from the image under test: a
+# release built before the bundle existed has none to run, and the check
+# should not change with the build it checks. A deploy has just built the
+# checkout; a rollback uses the checkout's image, built here only if no
+# deploy built it.
+if [[ "$ROLLBACK" == "true" ]]; then
+  checkout_commit="$(git -C "$ROOT_DIR" rev-parse --short=12 HEAD)"
+  if ! CANARY_IMAGE="$(docker image inspect -f '{{.Id}}' "${IMAGE_REPO}:${checkout_commit}" 2>/dev/null)"; then
+    echo "Building ${checkout_commit} for its canary; the instances still go back to ${TARGET_COMMIT}."
+    "${COMPOSE[@]}" build "${ORDERED_SERVICES[0]}"
+    CANARY_IMAGE="$(docker image inspect -f '{{.Id}}' "$(service_image_name "${ORDERED_SERVICES[0]}")")"
+  fi
+else
+  CANARY_IMAGE="$TARGET_IMAGE"
 fi
 
 for svc in "${ORDERED_SERVICES[@]}"; do
