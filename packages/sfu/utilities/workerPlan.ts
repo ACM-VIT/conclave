@@ -16,6 +16,8 @@ export type WorkerPlan = {
   cpuMediasoupWorkers: number;
   appDocumentWorkers: number;
   webRtcPortBudget: number;
+  rtcMinPort: number;
+  rtcMaxPort: number;
   plainMinPort: number;
   sizing: "derived" | "configured";
   oversubscribed: boolean;
@@ -43,6 +45,8 @@ export const planWorkers = (
     cpuMediasoupWorkers,
     appDocumentWorkers,
     webRtcPortBudget,
+    rtcMinPort: settings.rtcMinPort,
+    rtcMaxPort: settings.rtcMaxPort,
     plainMinPort:
       settings.rtcMinPort + (settings.webRtcPortBudget === undefined ? mediasoupWorkers : webRtcPortBudget),
     sizing: configured === undefined ? "derived" : "configured",

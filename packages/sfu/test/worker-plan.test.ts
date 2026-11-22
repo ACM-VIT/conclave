@@ -94,6 +94,30 @@ describe("worker plan", () => {
     expect(createWorker).toHaveBeenCalledWith(expect.objectContaining({ rtcMinPort: 47_002, rtcMaxPort: 47_100 }));
   });
 
+  it("takes every port from the plan, even when the settings change before start", async () => {
+    const created: { createWebRtcServer: ReturnType<typeof vi.fn> }[] = [];
+    vi.mocked(createWorker).mockReset().mockImplementation(async () => {
+      const worker = Object.assign(new EventEmitter(), { createWebRtcServer: vi.fn(async () => ({})), close: vi.fn() });
+      created.push(worker);
+      return worker as unknown as Worker;
+    });
+    const injected = {
+      ...config,
+      workerSettings: { ...config.workerSettings, workerCount: 1, webRtcPortBudget: undefined, rtcMinPort: 47_000, rtcMaxPort: 47_100 },
+    };
+    const state = createSfuState({ config: injected });
+    pools.push(state.appDocuments);
+    injected.workerSettings.rtcMinPort = 47_001;
+    const shutdown = new AbortController();
+
+    await initMediaSoup(state, injected, () => null, shutdown.signal);
+    shutdown.abort();
+
+    const [{ listenInfos }] = created[0].createWebRtcServer.mock.calls[0] as [{ listenInfos: { port: number }[] }];
+    expect(new Set(listenInfos.map((info) => info.port))).toEqual(new Set([47_000]));
+    expect(createWorker).toHaveBeenCalledWith(expect.objectContaining({ rtcMinPort: 47_001, rtcMaxPort: 47_100 }));
+  });
+
   it("builds the plan the server uses from the config passed to createSfuServer", () => {
     const server = createSfuServer({
       config: { ...config, workerSettings: { ...config.workerSettings, workerCount: 1, appDocumentWorkerCount: 1 } },
