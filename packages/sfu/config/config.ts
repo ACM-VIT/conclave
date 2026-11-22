@@ -442,6 +442,10 @@ export const config = {
       integer: true,
       min: 0,
     }),
+    hostInstanceCount: toNumber(process.env.SFU_WORKER_HOST_INSTANCES, 1, {
+      integer: true,
+      min: 1,
+    }),
     rtcMinPort,
     rtcMaxPort,
     logLevel: "warn" as WorkerLogLevel,

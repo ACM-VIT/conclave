@@ -13,21 +13,24 @@ services, the server-authoritative game runtime, and transcript relays.
 
 ## To apply in production
 
-Provision at least 8 vCPUs for the VM that runs both SFU instances. Compose pins
-four media workers per instance to keep the UDP and TCP firewall ranges
-predictable. Leave CPU headroom for signaling and other services on the VM.
+Keep `SFU_WORKER_COUNT=0` on the 2-vCPU production VM to use the derived count.
+Resize the VM before configuring a higher worker count, leaving headroom for
+signaling and colocated services. Compose assumes two SFU instances share the
+host. Set `SFU_WORKER_HOST_INSTANCES=3` on production when staging shares that VM.
+The default divides the effective CPU affinity and quota limit by the instance
+count, rounds down, and reserves one worker at minimum. Outside Compose, it
+assumes one instance unless you supply the count. Startup logs the worker count.
 
-Before deploying shared WebRTC sockets, allow inbound UDP and TCP to the SFU VM
-on ports 40000 through 40003 for `sfu-a` and 41001 through 41004 for `sfu-b`.
-Each of the four workers binds one port for both protocols, starting at the
-instance's `RTC_MIN_PORT`. Plain RTP starts after the last worker port. Keep
-the legacy UDP and TCP ranges open until calls
-on both old instances have drained and both instances have restarted.
+For an instance with `N` workers, allow inbound UDP and TCP from `RTC_MIN_PORT`
+through `RTC_MIN_PORT + N - 1`. With one worker per instance, the production
+defaults are 40000 for `sfu-a` and 41001 for `sfu-b`. Keep the legacy UDP and TCP
+ranges open until calls on both old instances have drained and both instances
+have restarted. Check the logged count before narrowing firewall rules.
 
-After the rollout, the public WebRTC rules need only those ports. Shared browser
-relays still need plain RTP over UDP on 40004 through 41000 and 41005 through
-42000. Preserve access from the relay sources for those ranges. Update the
-firewall when changing `SFU_WORKER_COUNT` or the instance's RTC port range.
+Shared browser relays need plain RTP over UDP from `RTC_MIN_PORT + N` through
+`RTC_MAX_PORT`. With one worker per instance, the production defaults are
+40001 through 41000 and 41002 through 42000. Preserve access from the relay
+sources. Update the firewall when changing worker counts or RTC ranges.
 
 ## Development
 

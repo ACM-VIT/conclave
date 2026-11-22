@@ -1,5 +1,7 @@
 import { EventEmitter } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
+import { readFileSync } from "node:fs";
+import { availableParallelism } from "node:os";
 import { createWorker } from "mediasoup";
 import type { WebRtcServer, Worker } from "mediasoup/types";
 import { expect, it, vi } from "vitest";
@@ -7,9 +9,14 @@ import { config } from "../config/config.js";
 import createWorkers, { getWorkerWebRtcServer } from "../utilities/createWorkers.js";
 
 vi.mock("mediasoup", () => ({ createWorker: vi.fn() }));
+vi.mock("node:fs", () => ({ readFileSync: vi.fn() }));
+vi.mock("node:os", () => {
+  const availableParallelism = vi.fn(() => 8);
+  return { availableParallelism, default: { availableParallelism } };
+});
 vi.mock("../config/config.js", () => ({
   config: {
-    workerSettings: { workerCount: 1, rtcMinPort: 42001, rtcMaxPort: 42200 },
+    workerSettings: { workerCount: 1, hostInstanceCount: 1, rtcMinPort: 42001, rtcMaxPort: 42200 },
     webRtcTransport: { enableUdp: true, enableTcp: true, listenIps: [{ ip: "127.0.0.1" }] },
   },
 }));
@@ -17,6 +24,55 @@ vi.mock("../config/config.js", () => ({
 const makeWorker = () => Object.assign(new EventEmitter(), {
   createWebRtcServer: vi.fn<Worker["createWebRtcServer"]>(),
   close: vi.fn(),
+});
+
+it.each([
+  { name: "affinity shared by two instances", affinity: 8, files: {}, instances: 2, override: 0, expected: 4 },
+  { name: "2-vCPU host shared by three instances", affinity: 2, files: {}, instances: 3, override: 0, expected: 1 },
+  {
+    name: "nested cgroup quota shared by two instances",
+    affinity: 8,
+    files: { "/proc/self/cgroup": "0::/sfu/current", "/sys/fs/cgroup/sfu/cpu.max": "350000 100000" },
+    instances: 2, override: 0, expected: 1,
+  },
+  {
+    name: "legacy CPU quota",
+    affinity: 8,
+    files: { "/sys/fs/cgroup/cpu/cpu.cfs_quota_us": "250000", "/sys/fs/cgroup/cpu/cpu.cfs_period_us": "100000" },
+    instances: 1, override: 0, expected: 2,
+  },
+  {
+    name: "explicit worker count",
+    affinity: 8,
+    files: { "/sys/fs/cgroup/cpu.max": "75000 100000" },
+    instances: 3, override: 3, expected: 3,
+  },
+])("chooses the worker count for $name", async ({ affinity, files, instances, override, expected }) => {
+  const settings = config.workerSettings;
+  const oldCount = settings.workerCount;
+  const oldInstances = settings.hostInstanceCount;
+  settings.workerCount = override;
+  settings.hostInstanceCount = instances;
+  vi.mocked(availableParallelism).mockReturnValue(affinity);
+  const contents: Readonly<Record<string, string | undefined>> = files;
+  vi.mocked(readFileSync).mockImplementation((path) => {
+    const file = contents[String(path)];
+    if (file === undefined) throw new Error("missing test fixture");
+    return file;
+  });
+  vi.mocked(createWorker).mockImplementation(async () => {
+    const worker = makeWorker();
+    worker.createWebRtcServer.mockResolvedValue({} as WebRtcServer);
+    return worker as unknown as Worker;
+  });
+  try {
+    expect(await createWorkers()).toHaveLength(expected);
+  } finally {
+    settings.workerCount = oldCount;
+    settings.hostInstanceCount = oldInstances;
+    vi.mocked(createWorker).mockReset();
+    vi.mocked(readFileSync).mockReset();
+  }
 });
 
 it("reserves the first port in the staging range and leaves the rest for plain RTP", async () => {

@@ -1,19 +1,10 @@
 import { setTimeout as delay } from "node:timers/promises";
 import * as mediasoup from "mediasoup";
 import type { TransportListenInfo, WebRtcServer, Worker } from "mediasoup/types";
-import os from "os";
+import { availableParallelism } from "node:os";
 import { config } from "../config/config.js";
 import { Logger } from "./loggers.js";
-
-const getAutoWorkerCount = (): number => {
-  if (typeof os.availableParallelism === "function") {
-    return os.availableParallelism();
-  }
-  return os.cpus().length;
-};
-
-const getWorkerCount = (): number =>
-  Math.max(1, config.workerSettings.workerCount || getAutoWorkerCount());
+import { getWorkerCpuQuota } from "./workerCpuQuota.js";
 
 type CreateWorkersOptions = {
   onWorkerDied?: (worker: Worker, label: string) => void | Promise<void>;
@@ -82,8 +73,11 @@ const createWorkers = async (
   const signal = options.signal
     ? AbortSignal.any([options.signal, startupFailure.signal])
     : startupFailure.signal;
-  const workerCount = getWorkerCount();
-  const { rtcMinPort, rtcMaxPort } = config.workerSettings;
+  const { rtcMinPort, rtcMaxPort, workerCount: override, hostInstanceCount } = config.workerSettings;
+  const workerCount = override || Math.max(1, Math.min(
+    Math.floor(Math.min(availableParallelism(), getWorkerCpuQuota()) / hostInstanceCount),
+    rtcMaxPort - rtcMinPort,
+  ));
   const plainMinPort = rtcMinPort + workerCount;
   if (plainMinPort > rtcMaxPort) {
     throw new Error("RTC_MIN_PORT through RTC_MAX_PORT must fit the worker ports and leave space for plain RTP");
@@ -122,7 +116,8 @@ const createWorkers = async (
     });
   };
 
-  Logger.info(`Creating ${workerCount} mediasoup worker(s)`);
+  const sizing = override ? "configured" : `derived for ${hostInstanceCount} host instance(s)`;
+  console.log(`[SFU] Creating ${workerCount} mediasoup worker(s) (${sizing})`);
   try {
     for (let i = 0; i < workerCount; i++) {
       const worker = await spawnWorker(rtcMinPort + i, plainMinPort, signal);
