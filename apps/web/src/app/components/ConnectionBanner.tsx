@@ -2,7 +2,7 @@
 
 import { Loader2, WifiOff } from "lucide-react";
 import type { ConnectionState } from "../lib/types";
-import { InCallNotice } from "./InCallNotices";
+import InCallNotice from "./InCallNotice";
 
 interface ConnectionBannerProps {
   state: ConnectionState;

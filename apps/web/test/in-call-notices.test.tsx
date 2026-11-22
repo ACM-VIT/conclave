@@ -1,13 +1,11 @@
 // @vitest-environment happy-dom
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import ConnectionBanner from "../src/app/components/ConnectionBanner";
 import MeetsErrorBanner from "../src/app/components/MeetsErrorBanner";
-import {
-  InCallNotice,
-  InCallNoticeSlot,
-} from "../src/app/components/InCallNotices";
+import InCallNotice from "../src/app/components/InCallNotice";
+import InCallNoticeSlot from "../src/app/components/InCallNoticeSlot";
 
 let root: Root;
 let container: HTMLDivElement;
@@ -15,22 +13,22 @@ let container: HTMLDivElement;
 const render = async (node: ReactNode) => {
   await act(async () => root.render(<InCallNoticeSlot>{node}</InCallNoticeSlot>));
 };
-const settle = () =>
-  act(async () => new Promise((resolve) => setTimeout(resolve, 50)));
+const waitOutExit = () =>
+  act(async () => new Promise((resolve) => setTimeout(resolve, 400)));
 const slot = () => container.querySelector("[data-in-call-notices]");
+
+// happy-dom's Web Animations shim cancels motion's animations mid-flight, so run
+// motion on its requestAnimationFrame fallback like a browser without WAAPI.
+const nativeAnimate = Element.prototype.animate;
+beforeAll(() => {
+  Reflect.deleteProperty(Element.prototype, "animate");
+});
+afterAll(() => {
+  Element.prototype.animate = nativeAnimate;
+});
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  vi.stubGlobal(
-    "matchMedia",
-    (query: string) =>
-      Object.assign(new EventTarget(), {
-        matches: query.includes("reduce"),
-        media: query,
-        addListener() {},
-        removeListener() {},
-      }),
-  );
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -72,7 +70,7 @@ describe("in-call notices", () => {
     expect(onDismiss).toHaveBeenCalledTimes(1);
 
     await render(<InCallNotice show={false}>{banner}</InCallNotice>);
-    await settle();
+    await waitOutExit();
     expect(slot()?.querySelector('[role="alert"]')).toBeNull();
   });
 
@@ -83,7 +81,7 @@ describe("in-call notices", () => {
     expect(status?.textContent).toContain("You’re offline. Check your internet connection.");
 
     await render(<ConnectionBanner state="joined" />);
-    await settle();
+    await waitOutExit();
     expect(slot()?.textContent).toBe("");
   });
 
@@ -103,5 +101,29 @@ describe("in-call notices", () => {
       "Connection interrupted. Reconnecting to the meeting…",
       "Audio-only mode active",
     ]);
+  });
+
+  it("takes no clicks and leaves the accessibility tree while it fades out", async () => {
+    const onRetry = vi.fn();
+    const notice = (show: boolean) => (
+      <InCallNotice show={show}>
+        <div role="alert">
+          Camera or microphone not found
+          <button type="button" onClick={onRetry}>
+            Retry Devices
+          </button>
+        </div>
+      </InCallNotice>
+    );
+    await render(notice(true));
+    const live = slot()?.querySelector('[role="alert"]');
+    expect(live?.closest("[inert]")).toBeNull();
+    expect(live?.closest('[aria-hidden="true"]')).toBeNull();
+
+    await render(notice(false));
+    const fading = slot()?.querySelector('[role="alert"]');
+    expect(fading).not.toBeNull();
+    expect(fading?.closest("[inert]")).not.toBeNull();
+    expect(fading?.closest('[aria-hidden="true"]')).not.toBeNull();
   });
 });

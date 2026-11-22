@@ -2,7 +2,7 @@
 
 import { X } from "lucide-react";
 import { useCallback, useState } from "react";
-import { InCallNotice } from "./InCallNotices";
+import InCallNotice from "./InCallNotice";
 
 const MIN_MISSED_MS = 2 * 60 * 1000;
 
