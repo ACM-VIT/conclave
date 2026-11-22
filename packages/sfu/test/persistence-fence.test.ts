@@ -19,21 +19,21 @@ const meeting = (id: string) => ({ id }) as unknown as ScheduledMeeting;
 const store = { byId: new Map() } as never;
 
 // Like the Redis persistence: a write is queued and lands a moment later,
-// flush() waits for the queue and rethrows the last write's error, and a
-// reminder claim reads what has landed.
+// each write's promise carries its own result or error, flush() waits for the
+// queue without failing, and a reminder claim reads what has landed.
 const queuedStore = ({ failWrites = false } = {}) => {
   const stored = new Map<string, ScheduledMeeting>([["m1", meeting("m1")]]);
   const log: string[] = [];
   let pending: Promise<void> = Promise.resolve();
-  const queue = (label: string, write: () => void) => {
-    pending = pending
-      .catch(() => undefined)
-      .then(async () => {
-        await delay(5);
-        if (failWrites) throw new Error(`OOM command not allowed (${label})`);
-        write();
-        log.push(label);
-      });
+  const queue = (label: string, write: () => void): Promise<void> => {
+    const landed = pending.then(async () => {
+      await delay(5);
+      if (failWrites) throw new Error(`OOM command not allowed (${label})`);
+      write();
+      log.push(label);
+    });
+    pending = landed.catch(() => undefined);
+    return landed;
   };
   const persistence: ScheduledMeetingPersistence = {
     save: () => undefined,

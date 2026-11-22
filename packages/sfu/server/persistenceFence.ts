@@ -113,17 +113,12 @@ export const fenceScheduledMeetingPersistence = (
   persistence: ScheduledMeetingPersistence,
   fence: PersistenceFence,
 ): ScheduledMeetingPersistence => {
-  // Redis queues its writes, so a write is done once flush() says it landed;
-  // its error is the caller's.
-  const write = (call: () => MaybePromise<void>) =>
-    fence.run(async () => {
-      await call();
-      await persistence.flush?.();
-    });
+  // Each write's promise is that write's own: Redis resolves it once the
+  // write landed, so the caller gets its result or error, never another's.
   return {
-    save: (snapshot) => write(() => persistence.save(snapshot)),
-    saveChanged: persistence.saveChanged && ((meetings) => write(() => persistence.saveChanged!(meetings))),
-    deleteIds: persistence.deleteIds && ((ids) => write(() => persistence.deleteIds!(ids))),
+    save: (snapshot) => fence.run(() => persistence.save(snapshot)),
+    saveChanged: persistence.saveChanged && ((meetings) => fence.run(() => persistence.saveChanged!(meetings))),
+    deleteIds: persistence.deleteIds && ((ids) => fence.run(() => persistence.deleteIds!(ids))),
     reserveBookingSlot:
       persistence.reserveBookingSlot && ((reservation) => fence.run(() => persistence.reserveBookingSlot!(reservation))),
     // A claim reads what the meeting writes made before it left, so it waits
@@ -151,11 +146,7 @@ export const fenceSchedulingPersistence = (
   persistence: SchedulingPersistence,
   fence: PersistenceFence,
 ): SchedulingPersistence => ({
-  save: (snapshot) =>
-    fence.run(async () => {
-      await persistence.save(snapshot);
-      await persistence.flush?.();
-    }),
+  save: (snapshot) => fence.run(() => persistence.save(snapshot)),
   load: () => fence.run(() => persistence.load()),
   flush: persistence.flush && (() => fence.run(() => persistence.flush!())),
   close:
