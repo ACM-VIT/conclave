@@ -193,13 +193,14 @@ const checkProductionMode = (env, service, errors) => {
     errors.push(`${service}: NODE_ENV must be production.`);
     return;
   }
-  if (String(env.SFU_ALLOW_OPEN_CORS || "").trim() === "1") return;
   const origins = String(env.SFU_CORS_ORIGINS || "")
     .split(",")
     .map((origin) => origin.trim())
     .filter(Boolean);
   if (origins.length === 0 || origins.includes("*")) {
-    errors.push(`${service}: SFU_CORS_ORIGINS must list the web app origins; the SFU will not start in production without it.`);
+    if (env.SFU_ALLOW_OPEN_CORS !== "1") {
+      errors.push(`${service}: SFU_CORS_ORIGINS must list the web app origins; the SFU will not start in production without it.`);
+    }
     return;
   }
   for (const origin of origins) {

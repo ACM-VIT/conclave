@@ -320,4 +320,10 @@ test("production mode needs the CORS allow-list the SFU checks at startup", () =
   assert.match(productionErrors({ SFU_CORS_ORIGINS: "conclave.example" }).join("\n"), /not an http\(s\) origin/);
   assert.deepEqual(productionErrors({ SFU_CORS_ORIGINS: "https://conclave.example, https://admin.example" }), []);
   assert.deepEqual(productionErrors({ SFU_CORS_ORIGINS: "*", SFU_ALLOW_OPEN_CORS: "1" }), []);
+  assert.deepEqual(productionErrors({ SFU_CORS_ORIGINS: undefined, SFU_ALLOW_OPEN_CORS: "1" }), []);
+  // The override allows a wildcard; the SFU still parses explicit entries and refuses bad ones.
+  assert.match(
+    productionErrors({ SFU_CORS_ORIGINS: "conclave.example", SFU_ALLOW_OPEN_CORS: "1" }).join("\n"),
+    /not an http\(s\) origin/,
+  );
 });
