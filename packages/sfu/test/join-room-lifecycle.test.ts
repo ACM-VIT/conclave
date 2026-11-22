@@ -25,6 +25,8 @@ afterEach(() => {
 const makeSocket = (id: string, user: SfuAuthPayload = {}) => {
   const handlers = new Map<string, Handler>();
   const emit = vi.fn();
+  const emitToRoom = vi.fn();
+  const to = vi.fn((_roomChannel: string) => ({ emit: emitToRoom }));
   const socket = {
     id,
     data: { user },
@@ -34,9 +36,9 @@ const makeSocket = (id: string, user: SfuAuthPayload = {}) => {
     connected: true,
     join: vi.fn(),
     leave: vi.fn(),
-    to: () => ({ emit: vi.fn() }),
+    to,
   } as unknown as Socket;
-  return { socket, handlers, emit };
+  return { socket, handlers, emit, to, emitToRoom };
 };
 
 const makeState = (workers: Worker[] = []): SfuState => {
@@ -72,6 +74,34 @@ const join = async (
 };
 
 describe("host roster on join", () => {
+  it("updates the old room's roster when its host switches rooms on the same socket", async () => {
+    const state = makeState();
+    const [oldRoom, nextRoom] = ["old", "next"].map((id) => {
+      const room = new Room({ id, clientId: "conclave", workerPid: null, router: {} as Router });
+      state.rooms.set(room.channelId, room);
+      return room;
+    });
+    const { peer } = await join(state, "alice-socket", {
+      userId: "alice", clientId: "conclave", sessionId: "a", isForcedHost: true,
+    }, oldRoom.id);
+    await join(state, "bob-socket", {
+      userId: "bob", clientId: "conclave", sessionId: "b", isForcedHost: true,
+    }, oldRoom.id);
+    expect(oldRoom.getHostUserId()).toBe("alice#a");
+    peer.to.mockClear();
+    peer.emitToRoom.mockClear();
+    const ack = vi.fn();
+    await peer.handlers.get("joinRoom")!(
+      ...[{ roomId: nextRoom.id, sessionId: "a" }, ack] as never[]
+    );
+
+    expect(ack).toHaveBeenCalledWith(expect.objectContaining({ roomId: nextRoom.id, status: "joined" }));
+    expect(peer.to).toHaveBeenCalledWith(oldRoom.channelId);
+    expect(peer.emitToRoom).toHaveBeenCalledWith("userLeft", { roomId: oldRoom.id, userId: "alice#a" });
+    expect(peer.emitToRoom).toHaveBeenCalledWith("hostChanged", { roomId: oldRoom.id, hostUserId: "bob#b" });
+    expect(peer.emitToRoom).toHaveBeenCalledWith("adminUsersChanged", { roomId: oldRoom.id, hostUserIds: ["bob#b"] });
+  });
+
   it("sends an unchanged roster to the guest and broadcasts a new co-host", async () => {
     const state = makeState();
     const room = new Room({

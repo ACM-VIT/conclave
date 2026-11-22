@@ -767,7 +767,11 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         ) {
           const previousRoom = context.currentRoom;
           const previousChannelId = previousRoom.channelId;
-          const previousClientId = context.currentClient.id;
+          const previousClient = context.currentClient;
+          const previousClientId = previousClient.id;
+          const wasAdmin = previousClient instanceof Admin;
+          const previousHost = wasAdmin ? previousRoom.getHostUserId() : null;
+          const previousPeers = socket.to(previousChannelId);
           Logger.info(
             `User ${userId} switching from ${previousRoom.id} to ${roomId}`,
           );
@@ -775,7 +779,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           const awarenessRemovals =
             previousRoom.clearUserAwareness(previousClientId);
           for (const removal of awarenessRemovals) {
-            socket.to(previousChannelId).emit("apps:awareness", {
+            previousPeers.emit("apps:awareness", {
               appId: removal.appId,
               awarenessUpdate: removal.awarenessUpdate,
             } satisfies AppsAwarenessData);
@@ -783,13 +787,21 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
 
           previousRoom.removeClient(previousClientId);
 
-          if (!context.currentClient.isWebinarAttendee) {
-            socket
-              .to(previousChannelId)
-              .emit("userLeft", {
-                userId: previousClientId,
-                roomId: previousRoom.id,
-              });
+          if (!previousClient.isWebinarAttendee) {
+            previousPeers.emit("userLeft", {
+              userId: previousClientId,
+              roomId: previousRoom.id,
+            });
+          }
+          if (wasAdmin && previousRoom.clients.size > 0) {
+            const hostUserId = previousRoom.getHostUserId();
+            if (hostUserId !== previousHost) {
+              previousPeers.emit("hostChanged", { roomId: previousRoom.id, hostUserId });
+            }
+            previousPeers.emit("adminUsersChanged", {
+              roomId: previousRoom.id,
+              hostUserIds: previousRoom.getAdminUserIds(),
+            });
           }
 
           emitWebinarAttendeeCountChanged(io, state, previousRoom);
