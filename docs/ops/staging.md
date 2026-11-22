@@ -123,9 +123,11 @@ pnpm exec wrangler secret list --config wrangler.jsonc                          
 Copy over only the production secrets staging needs (for example the Google
 sign-in client). For sign-in, add
 `https://staging.conclave.acmvit.in/api/auth/callback/google` to the OAuth
-client's redirect URIs. Then deploy from a clean `staging` checkout:
+client's redirect URIs. Then deploy from the root of a clean `staging`
+checkout:
 
 ```bash
+cd ../..
 ./scripts/deploy-web-staging.sh
 ```
 
@@ -135,7 +137,7 @@ After pushing to `staging`:
 
 - SFU, on the VM: `cd /home/azureuser/repos/conclave-staging && SFU_COMPOSE_FILE=docker-compose.sfu-staging.yml ./scripts/deploy-sfu.sh`
   (it pulls `staging`).
-- Web, from a workstation: `./scripts/deploy-web-staging.sh`.
+- Web, from the repo root on a workstation: `./scripts/deploy-web-staging.sh`.
 
 When staging looks right, merge `staging` into `main` and deploy production as
 usual. Staging data is disposable and is not backed up.
