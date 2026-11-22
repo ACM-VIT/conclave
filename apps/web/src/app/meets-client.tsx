@@ -5,7 +5,7 @@ import { useSharedVoiceStart } from "./hooks/useSharedVoiceStart";
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useHotkey } from "@tanstack/react-hotkeys";
-import { retryFailedMediaDevices } from "./lib/media-retry";
+import { isDevicePublishing, retryFailedMediaDevices } from "./lib/media-retry";
 import { HOTKEYS } from "./lib/hotkeys";
 import type { Socket } from "socket.io-client";
 import { SFU_EVENTS } from "@conclave/meeting-core/sfu-events";
@@ -1347,16 +1347,19 @@ export default function MeetsClient({
     const device = meetError?.device;
     if (!device) return;
     if (mediaRetryRef.current) return;
-    const hasLiveTrack = (tracks: MediaStreamTrack[] | undefined) =>
-      Boolean(tracks?.some((track) => track.readyState === "live"));
     mediaRetryRef.current = retryFailedMediaDevices({
       device,
       isOn: (target) => {
         const intent = mediaIntentRef.current;
-        const stream = refs.localStreamRef.current;
         return target === "camera"
-          ? !intent.isCameraOff && hasLiveTrack(stream?.getVideoTracks())
-          : !intent.isMuted && hasLiveTrack(stream?.getAudioTracks());
+          ? isDevicePublishing({
+              intendedOn: !intent.isCameraOff,
+              producer: refs.videoProducerRef.current,
+            })
+          : isDevicePublishing({
+              intendedOn: !intent.isMuted,
+              producer: refs.audioProducerRef.current,
+            });
       },
       turnOn: async (target) => {
         const intent = mediaIntentRef.current;
@@ -1395,7 +1398,9 @@ export default function MeetsClient({
     });
   }, [
     meetError,
+    refs.audioProducerRef,
     refs.localStreamRef,
+    refs.videoProducerRef,
     requestMediaPermissions,
     setLocalStream,
     setMeetError,

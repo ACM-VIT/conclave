@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { clearMediaDeviceError, createMeetError } from "../src/app/lib/utils";
-import { retryFailedMediaDevices } from "../src/app/lib/media-retry";
+import { isDevicePublishing, retryFailedMediaDevices } from "../src/app/lib/media-retry";
 
 const denied = new DOMException("Permission denied", "NotAllowedError");
 const missing = new DOMException("Requested device not found", "NotFoundError");
@@ -112,3 +112,33 @@ describe("retrying failed media devices", () => {
     expect(calls).toEqual(["recovered microphone", "recovered camera"]);
   });
 });
+
+describe("deciding whether a retried device is publishing", () => {
+  const liveTrack = { readyState: "live", enabled: true } as MediaStreamTrack;
+  const producer = (overrides: Partial<{ closed: boolean; paused: boolean; track: MediaStreamTrack | null }> = {}) => ({
+    closed: false,
+    paused: false,
+    track: liveTrack,
+    ...overrides,
+  });
+
+  it("counts a device as publishing only through a live, open, unpaused producer", () => {
+    expect(isDevicePublishing({ intendedOn: true, producer: producer() })).toBe(true);
+  });
+
+  it("is not publishing when recovery threw and left the live local track without a producer", () => {
+    expect(isDevicePublishing({ intendedOn: true, producer: null })).toBe(false);
+    expect(isDevicePublishing({ intendedOn: true, producer: producer({ closed: true }) })).toBe(false);
+  });
+
+  it("is not publishing when the producer track ended, was disabled, or is paused", () => {
+    expect(isDevicePublishing({ intendedOn: true, producer: producer({ track: { readyState: "ended", enabled: true } as MediaStreamTrack }) })).toBe(false);
+    expect(isDevicePublishing({ intendedOn: true, producer: producer({ track: { readyState: "live", enabled: false } as MediaStreamTrack }) })).toBe(false);
+    expect(isDevicePublishing({ intendedOn: true, producer: producer({ paused: true }) })).toBe(false);
+  });
+
+  it("is not publishing when the user has the device turned off", () => {
+    expect(isDevicePublishing({ intendedOn: false, producer: producer() })).toBe(false);
+  });
+});
+

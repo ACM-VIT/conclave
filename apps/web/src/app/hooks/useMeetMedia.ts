@@ -3467,7 +3467,6 @@ export function useMeetMedia({
       }
 
       setMutedIntent(false);
-      setMeetError((current) => clearMediaDeviceError(current, "microphone"));
       requestAudioProducerRecovery();
       return;
     } catch (err) {
@@ -3491,7 +3490,6 @@ export function useMeetMedia({
           closeLocalAudioProducerForReplacement(producer);
         }
         setMutedIntent(false);
-        setMeetError((current) => clearMediaDeviceError(current, "microphone"));
         requestAudioProducerRecovery();
         return;
       }
