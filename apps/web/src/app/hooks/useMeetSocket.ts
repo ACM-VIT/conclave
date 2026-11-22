@@ -21,6 +21,7 @@ import {
   forgetJoinedRoom,
   getJoinedRoom,
   rememberJoinedRoom,
+  renewRoomRecoveryPass,
 } from "../lib/joined-room";
 import {
   resolveInFlightReconnectRequest,
@@ -8161,6 +8162,21 @@ export function useMeetSocket({
                   userId: raisedUserId,
                   raised,
                 });
+              },
+            );
+
+            socket.on(
+              "roomRecoveryPass",
+              (renewal: { roomId?: string; roomRecoveryPass?: string }) => {
+                const joinedRoomId = currentRoomIdRef.current;
+                if (
+                  !joinedRoomId ||
+                  !isRoomEvent(renewal.roomId) ||
+                  typeof renewal.roomRecoveryPass !== "string"
+                ) {
+                  return;
+                }
+                renewRoomRecoveryPass(joinedRoomId, renewal.roomRecoveryPass);
               },
             );
 

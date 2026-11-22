@@ -73,6 +73,27 @@ describe("which joins may open a room", () => {
     expect(await reloaded.askedToOpenRoom("abc-mnop-xyz")).toBe(false);
   });
 
+  it("keeps the newest pass the SFU sends during the call, also after a reload", async () => {
+    const page = await loadPage();
+    page.rememberJoinedRoom("abc-mnop-xyz", "pass-1");
+    page.renewRoomRecoveryPass("abc-mnop-xyz", "pass-2");
+    expect(page.getJoinedRoom("abc-mnop-xyz")?.recoveryPass).toBe("pass-2");
+
+    const reloaded = await loadPage();
+    expect(reloaded.getJoinedRoom("abc-mnop-xyz")?.recoveryPass).toBe("pass-2");
+  });
+
+  it("does not let a renewal stand in for being let into a meeting", async () => {
+    const page = await loadPage();
+    page.renewRoomRecoveryPass("abc-mnop-xyz", "pass-2");
+    expect(await page.askedToOpenRoom("abc-mnop-xyz")).toBe(false);
+
+    page.rememberJoinedRoom("abc-mnop-xyz", "pass-1");
+    page.forgetJoinedRoom();
+    page.renewRoomRecoveryPass("abc-mnop-xyz", "pass-3");
+    expect(page.getJoinedRoom("abc-mnop-xyz")).toBeNull();
+  });
+
   it("still opens a known meeting for its first visitor", async () => {
     const page = await loadPage();
     expect(await page.askedToOpenRoom("abc-mnop-xyz", true)).toBe(true);

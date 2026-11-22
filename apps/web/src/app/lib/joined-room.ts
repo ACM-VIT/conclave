@@ -38,6 +38,15 @@ export const rememberJoinedRoom = (
   } catch {}
 };
 
+// The SFU renews the pass during the call, because a pass runs out in
+// minutes. Only a tab that was let into the room has one to renew.
+export const renewRoomRecoveryPass = (
+  roomId: string,
+  recoveryPass: string,
+): void => {
+  if (getJoinedRoom(roomId)) rememberJoinedRoom(roomId, recoveryPass);
+};
+
 // The tab was put out for good: removed, or the meeting ended.
 export const forgetJoinedRoom = (): void => {
   cached = null;
