@@ -69,6 +69,15 @@ az network nsg rule create -g "$RG" --nsg-name "$NSG" -n allow-sfu-staging-relay
   --priority 156 --direction Inbound --access Allow --protocol Udp \
   --source-address-prefixes "${RELAY_SOURCES:?set RELAY_SOURCES to the relay hosts}" \
   --destination-port-ranges 42005-42200
+# Then deny the rest, before Azure's defaults: AllowVNetInBound (65000) would
+# otherwise let any VNet host reach the relay range and the SFU's HTTP port,
+# which only Caddy on this VM needs.
+az network nsg rule create -g "$RG" --nsg-name "$NSG" -n deny-sfu-staging-relay-others \
+  --priority 157 --direction Inbound --access Deny --protocol '*' \
+  --source-address-prefixes '*' --destination-port-ranges 42005-42200
+az network nsg rule create -g "$RG" --nsg-name "$NSG" -n deny-sfu-staging-http \
+  --priority 158 --direction Inbound --access Deny --protocol Tcp \
+  --source-address-prefixes '*' --destination-port-ranges 3033
 ```
 
 ### 2. DNS (Cloudflare, zone acmvit.in)
