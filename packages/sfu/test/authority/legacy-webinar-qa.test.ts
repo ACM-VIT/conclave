@@ -113,6 +113,74 @@ const oldClient = async (
   };
 };
 
+/**
+ * The native app at build 63, as its receiver is written in
+ * `MeetingViewModel.swift`: `applyWebinarQaSnapshot`, `applyWebinarQaChanged`,
+ * `upvoteWebinarQuestion` and `makeQaInputs`. It saves the questions it
+ * upvoted apart from the list. A whole list replaces what it saved, its own
+ * upvote's answer updates it, a change event leaves it alone, and what it
+ * saved is shown over what an entry says.
+ */
+const build63 = async (
+  stack: Stack,
+  who: { email: string; name: string; session: string },
+) => {
+  const entries = new Map<string, WebinarQaEntry>();
+  const savedVotes = new Map<string, true>();
+  let snapshots = 0;
+  const connection = await connect(stack, who, {
+    ...asAttendee,
+    prepare: (socket) => {
+      socket.on("webinar:qaSnapshot", (snapshot: WebinarQaSnapshot) => {
+        snapshots += 1;
+        entries.clear();
+        savedVotes.clear();
+        for (const entry of snapshot.entries) {
+          if (!entry.id) continue;
+          entries.set(entry.id, entry);
+          if (entry.hasUpvoted === true) savedVotes.set(entry.id, true);
+        }
+      });
+      socket.on("webinar:qaChanged", (notification: WebinarQaChangedNotification) => {
+        if (notification.removedId) {
+          entries.delete(notification.removedId);
+          return;
+        }
+        if (notification.entry?.id) entries.set(notification.entry.id, notification.entry);
+      });
+    },
+  });
+  return {
+    ...connection,
+    snapshots: () => snapshots,
+    /** What the upvote button shows: the saved vote, else the entry's. */
+    showsUpvoted: (id: string): boolean =>
+      savedVotes.get(id) ?? entries.get(id)?.hasUpvoted ?? false,
+    shownCount: (id: string): number | undefined => entries.get(id)?.upvotes,
+    tapUpvote: async (id: string) => {
+      const response = await ask<{ success?: boolean; upvotes?: number; hasUpvoted?: boolean; error?: string }>(
+        connection.socket,
+        "webinar:qa:upvote",
+        { id },
+      );
+      if (response.error) return response;
+      if (typeof response.hasUpvoted === "boolean") {
+        if (response.hasUpvoted) savedVotes.set(id, true);
+        else savedVotes.delete(id);
+      }
+      const entry = entries.get(id);
+      if (typeof response.upvotes === "number" && entry) {
+        entries.set(id, {
+          ...entry,
+          upvotes: response.upvotes,
+          hasUpvoted: response.hasUpvoted ?? entry.hasUpvoted,
+        });
+      }
+      return response;
+    },
+  };
+};
+
 describe("webinar Q&A with old and new clients in one room", () => {
   it("an old attendee asks into the book, and only the hosts and the asker see it", async () => {
     const stack = await startWebinar();
@@ -238,6 +306,58 @@ describe("webinar Q&A with old and new clients in one room", () => {
     expect(replies.filter((reply) => !reply.success).map((reply) => reply.error)).toEqual(
       Array(replies.length - accepted.length).fill("You are voting too quickly"),
     );
+  });
+
+  it("takes an upvote off a native build 63 screen when the same person removes it elsewhere", async () => {
+    const stack = await startWebinar();
+    const host = await open(stack, asha, qaContract);
+    const asker = await open(stack, omar, qaContract, asAttendee);
+    const native = await build63(stack, vik);
+    // The same person, in a browser tab on the new transport.
+    const browser = await open(stack, { ...vik, session: "v2" }, qaContract, asAttendee);
+    const asked = await asker.session.act("ask", { text: "Upvoted on a phone, taken back in a tab" });
+    const id = asked.ok ? asked.value.id : "";
+    await host.session.act("moderate", { id, action: "answering" });
+    await until(() => native.shownCount(id) === 0, "the phone lists the question");
+
+    const tapped = await native.tapUpvote(id);
+    const shownAfterTap = native.showsUpvoted(id);
+    await until(() => row(browser, "myUpvotes", id) !== null, "the tab sees the phone's upvote");
+
+    await browser.session.act("upvote", { id, value: false });
+    await until(() => !native.showsUpvoted(id), "the phone shows the upvote gone");
+    const countAfterRemoval = native.shownCount(id);
+    // The button is off, so the next tap puts the upvote back.
+    const tappedAgain = await native.tapUpvote(id);
+    await until(() => field(row(host, "votes", id), "upvotes") === 1, "the upvote counts again");
+
+    expect(tapped).toEqual({ success: true, upvotes: 1, hasUpvoted: true });
+    expect(shownAfterTap).toBe(true);
+    expect(countAfterRemoval).toBe(0);
+    expect(tappedAgain).toEqual({ success: true, upvotes: 1, hasUpvoted: true });
+    expect(native.showsUpvoted(id)).toBe(true);
+  });
+
+  it("leaves a native build 63 screen alone when its own tap takes the upvote back", async () => {
+    const stack = await startWebinar();
+    const host = await open(stack, asha, qaContract);
+    const asker = await open(stack, omar, qaContract, asAttendee);
+    const native = await build63(stack, vik);
+    const asked = await asker.session.act("ask", { text: "On, then off, on the phone" });
+    const id = asked.ok ? asked.value.id : "";
+    await host.session.act("moderate", { id, action: "answering" });
+    await until(() => native.shownCount(id) === 0, "the phone lists the question");
+    const snapshotsBefore = native.snapshots();
+
+    await native.tapUpvote(id);
+    const off = await native.tapUpvote(id);
+    await until(() => field(row(host, "votes", id), "upvotes") === 0, "the upvote is gone");
+    await wait(120);
+
+    expect(off).toEqual({ success: true, upvotes: 0, hasUpvoted: false });
+    expect(native.showsUpvoted(id)).toBe(false);
+    // Its own answer told it. No whole list was needed.
+    expect(native.snapshots()).toBe(snapshotsBefore);
   });
 
   it("an old host moderates the same book, and a hidden question leaves old and new lists", async () => {

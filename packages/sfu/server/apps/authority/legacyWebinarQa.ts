@@ -55,6 +55,13 @@ type Feed = {
   incoming: AuthorityFrame[];
   /** Questions that changed for this connection and are yet to be said. */
   pending: Set<string>;
+  /**
+   * Questions the client keeps as upvoted by itself. The native app up to
+   * build 63 saves an upvote from a list or from its own upvote's answer,
+   * and from then on shows that over what a change event says. Only a whole
+   * list makes it forget one.
+   */
+  saved: Set<string>;
   closed: boolean;
   close(): void;
 };
@@ -275,6 +282,7 @@ export const attachLegacyQaFeed = (context: ConnectionContext): boolean => {
     rows: new Map(),
     incoming: [],
     pending: new Set(),
+    saved: new Set(),
     closed: false,
     close: () => {},
   };
@@ -287,6 +295,9 @@ export const attachLegacyQaFeed = (context: ConnectionContext): boolean => {
       .map((id) => entryOf(context, authority, feed.rows, id))
       .filter((entry): entry is WebinarQaEntry => entry !== null)
       .sort((a, b) => a.askedAt - b.askedAt);
+    feed.saved = new Set(
+      entries.filter((entry) => entry.hasUpvoted).map((entry) => entry.id),
+    );
     socket.emit("webinar:qaSnapshot", {
       roomId: room.id,
       entries,
@@ -301,6 +312,7 @@ export const attachLegacyQaFeed = (context: ConnectionContext): boolean => {
       feed.pending.clear();
       if (feed.rows.size === 0) return;
       feed.rows = new Map();
+      feed.saved = new Set();
       socket.emit("webinar:qaSnapshot", {
         roomId: room.id,
         entries: [],
@@ -328,9 +340,12 @@ export const attachLegacyQaFeed = (context: ConnectionContext): boolean => {
     if (frame.kind !== "patch") return;
 
     const touched = new Set<string>();
+    let unsaved = false;
     for (const ref of frame.remove) {
       feed.rows.get(ref.bucket)?.delete(ref.key);
       touched.add(ref.key);
+      // An upvote the client saved was taken back somewhere else.
+      if (ref.bucket === "myUpvotes" && feed.saved.has(ref.key)) unsaved = true;
     }
     for (const row of frame.put) {
       const bucket = feed.rows.get(row.bucket) ?? new Map<string, Json>();
@@ -338,7 +353,10 @@ export const attachLegacyQaFeed = (context: ConnectionContext): boolean => {
       feed.rows.set(row.bucket, bucket);
       touched.add(row.key);
     }
-    queue(authority, feed, touched);
+    // A change event cannot make such a client forget a saved upvote. A
+    // whole list can, and carries everything else this patch changed.
+    if (unsaved) sendSnapshot();
+    else queue(authority, feed, touched);
   };
 
   const observer = authority.observe(context, QA_APP, sink);
@@ -427,6 +445,10 @@ export const legacyQaUpvote = (
     upvotes: number;
     hasUpvoted: boolean;
   };
+  // The client saves its vote from this answer.
+  const saved = feeds.get(context.socket)?.saved;
+  if (hasUpvoted) saved?.add(id);
+  else saved?.delete(id);
   return { success: true, upvotes, hasUpvoted };
 };
 
