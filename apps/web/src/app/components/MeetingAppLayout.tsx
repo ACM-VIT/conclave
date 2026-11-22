@@ -1,10 +1,11 @@
 "use client";
 
-import { memo, type ComponentType } from "react";
+import { memo, useEffect, useState, type ComponentType } from "react";
 import { LogOut, RotateCw } from "lucide-react";
 import { useSmartParticipantOrder } from "../hooks/useSmartParticipantOrder";
 import type { Participant } from "../lib/types";
 import { isSystemUserId } from "../lib/utils";
+import AdminNoticePill from "./AdminNoticePill";
 import ParticipantVideo from "./ParticipantVideo";
 import RailLocalTile from "./RailLocalTile";
 
@@ -29,7 +30,11 @@ interface MeetingAppLayoutProps {
   leaveAction?: { label: string; hint?: string; onLeave: () => void };
   syncFailed?: boolean;
   onRetrySync?: () => void;
+  rejectedChanges?: number;
 }
+
+const REJECTED_CHANGE_NOTICE_MS = 4_000;
+const REJECTED_CHANGE_NOTICE = { message: "Your last change couldn't be saved", level: "info" as const };
 
 function MeetingAppLayout({
   app: App,
@@ -51,7 +56,17 @@ function MeetingAppLayout({
   leaveAction,
   syncFailed = false,
   onRetrySync,
+  rejectedChanges = 0,
 }: MeetingAppLayoutProps) {
+  const [noticeShownFor, setNoticeShownFor] = useState(0);
+
+  useEffect(() => {
+    if (rejectedChanges === 0) return;
+    setNoticeShownFor(rejectedChanges);
+    const timer = window.setTimeout(() => setNoticeShownFor(0), REJECTED_CHANGE_NOTICE_MS);
+    return () => window.clearTimeout(timer);
+  }, [rejectedChanges]);
+
   const isLocalActiveSpeaker = activeSpeakerId === currentUserId;
 
   const participantsList = useSmartParticipantOrder(
@@ -104,11 +119,12 @@ function MeetingAppLayout({
         <div
           className={
             frameContent
-              ? "min-h-0 min-w-0 flex-1 overflow-hidden rounded-2xl border border-white/10 bg-[#0b0b0b] shadow-[0_20px_60px_rgba(0,0,0,0.4)]"
-              : "min-h-0 min-w-0 flex-1 overflow-hidden"
+              ? "relative min-h-0 min-w-0 flex-1 overflow-hidden rounded-2xl border border-white/10 bg-[#0b0b0b] shadow-[0_20px_60px_rgba(0,0,0,0.4)]"
+              : "relative min-h-0 min-w-0 flex-1 overflow-hidden"
           }
         >
           <App />
+          {noticeShownFor > 0 ? <AdminNoticePill notice={REJECTED_CHANGE_NOTICE} compact /> : null}
         </div>
       </div>
       <aside className="hidden lg:flex w-64 shrink-0 flex-col gap-3 overflow-y-auto overflow-x-visible px-1">

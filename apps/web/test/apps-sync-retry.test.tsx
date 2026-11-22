@@ -8,6 +8,7 @@ import {
   AppsContext,
   AppsProvider,
 } from "../../../packages/apps-sdk/src/sdk/runtime/AppsProvider";
+import { useAppDoc } from "../../../packages/apps-sdk/src/sdk/hooks/useAppDoc";
 import type { AppsContextValue } from "../../../packages/apps-sdk/src/sdk/types";
 
 type Listener = (...args: unknown[]) => void;
@@ -24,6 +25,8 @@ const makeSocket = (activeAppId: string | null = null) => {
   const syncTimes: number[] = [];
   const unanswered: Ack[] = [];
   const uploads: Uint8Array[] = [];
+  const updatePayloads: Array<{ update: Uint8Array; docGuid?: string }> = [];
+  const syncPayloads: Array<Record<string, unknown>> = [];
   const control = { answerSync: (_attempt: number): SyncReply => undefined, getState: true };
   const pendingState: Ack[] = [];
   const socket = {
@@ -36,7 +39,11 @@ const makeSocket = (activeAppId: string | null = null) => {
         else pendingState.push(payload as Ack);
         return;
       }
-      if (event === "apps:yjs:update") uploads.push((payload as { update: Uint8Array }).update);
+      if (event === "apps:yjs:update") {
+        uploads.push((payload as { update: Uint8Array }).update);
+        updatePayloads.push(payload as { update: Uint8Array; docGuid?: string });
+      }
+      if (event === "apps:yjs:sync") syncPayloads.push(payload as Record<string, unknown>);
       if (event !== "apps:yjs:sync" || typeof ack !== "function") return;
       syncTimes.push(Date.now());
       const reply = control.answerSync(syncTimes.length);
@@ -45,15 +52,22 @@ const makeSocket = (activeAppId: string | null = null) => {
     },
   } as unknown as Socket;
   const fire = (event: string, ...args: unknown[]) => listeners.get(event)?.forEach((listener) => listener(...args));
-  return { socket, syncTimes, unanswered, uploads, pendingState, control, fire };
+  return { socket, syncTimes, unanswered, uploads, updatePayloads, syncPayloads, pendingState, control, fire };
 };
 
 let root: Root;
 let ctx: AppsContextValue;
 let first: ReturnType<typeof makeSocket>;
 
+let mountedDoc: Y.Doc | null = null;
+
 function Probe() {
   ctx = useContext(AppsContext)!;
+  return ctx.state.activeAppId === "board" ? <BoardConsumer /> : null;
+}
+
+function BoardConsumer() {
+  mountedDoc = useAppDoc("board").doc;
   return null;
 }
 
@@ -295,4 +309,44 @@ it("drops the old sync when a reconnect lands in a room with no app open", async
 
   expect(second.syncTimes).toHaveLength(0);
   expect(ctx.syncStatus).toBe("idle");
+});
+
+it("tells the server it can retry a sync and names the document each change comes from", async () => {
+  first.control.answerSync = () => boardContent();
+  await openBoard();
+
+  await act(async () => ctx.getDoc("board").getText("t").insert(0, "mine "));
+
+  expect(first.syncPayloads[0]).toMatchObject({ appId: "board", canRetry: true });
+  expect(first.updatePayloads.at(-1)?.docGuid).toBe(ctx.getDoc("board").guid);
+});
+
+it("rebuilds the board from the server when the server refuses a change", async () => {
+  first.control.answerSync = () => boardContent();
+  await openBoard();
+  const refusedDoc = ctx.getDoc("board");
+  await act(async () => refusedDoc.getText("t").insert(0, "mine "));
+  expect(boardText()).toBe("mine drawn before you joined");
+
+  await act(async () => first.fire("apps:yjs:refused", { appId: "board", docGuid: refusedDoc.guid, reason: "timed-out" }));
+
+  expect(ctx.getDoc("board")).not.toBe(refusedDoc);
+  expect(boardText()).toBe("drawn before you joined");
+  expect(mountedDoc).toBe(ctx.getDoc("board"));
+  expect(first.syncTimes).toHaveLength(2);
+  expect(ctx.rejectedChanges).toBe(1);
+  expect(ctx.syncStatus).toBe("synced");
+});
+
+it("ignores a refusal for a document it has already replaced", async () => {
+  first.control.answerSync = () => boardContent();
+  await openBoard();
+  const refusedDoc = ctx.getDoc("board");
+  const refusal = { appId: "board", docGuid: refusedDoc.guid, reason: "missing-dependency" };
+  await act(async () => first.fire("apps:yjs:refused", refusal));
+
+  await act(async () => first.fire("apps:yjs:refused", refusal));
+
+  expect(first.syncTimes).toHaveLength(2);
+  expect(ctx.rejectedChanges).toBe(1);
 });

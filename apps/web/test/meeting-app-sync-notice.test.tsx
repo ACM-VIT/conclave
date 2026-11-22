@@ -8,7 +8,7 @@ import MeetingAppLayout from "../src/app/components/MeetingAppLayout";
 let root: Root;
 let container: HTMLDivElement;
 
-const renderLayout = async (props: { syncFailed?: boolean; onRetrySync?: () => void }) => {
+const renderLayout = async (props: { syncFailed?: boolean; onRetrySync?: () => void; rejectedChanges?: number }) => {
   await act(async () =>
     root.render(
       <GameProvider socket={null}>
@@ -60,4 +60,22 @@ it("shows no notice while the app loads normally", async () => {
 
   expect(container.textContent).toContain("board");
   expect(container.textContent).not.toContain("Couldn't load this app");
+});
+
+it("says the last change couldn't be saved for a few seconds", async () => {
+  vi.useFakeTimers();
+  try {
+    await renderLayout({ rejectedChanges: 0 });
+    expect(container.textContent).not.toContain("Your last change couldn't be saved");
+
+    await renderLayout({ rejectedChanges: 1 });
+    expect(container.querySelector('[role="status"]')?.textContent).toContain("Your last change couldn't be saved");
+
+    await act(async () => {
+      vi.advanceTimersByTime(4_000);
+    });
+    expect(container.textContent).not.toContain("Your last change couldn't be saved");
+  } finally {
+    vi.useRealTimers();
+  }
 });

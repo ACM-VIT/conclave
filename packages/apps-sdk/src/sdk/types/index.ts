@@ -16,6 +16,7 @@ export type AppsState = {
 export type AppsSyncPayload = {
   appId: string;
   syncMessage: Uint8Array;
+  canRetry?: boolean;
 };
 
 export type AppsSyncResponse = {
@@ -35,6 +36,13 @@ export type AppSyncStatus = "idle" | "syncing" | "synced" | "failed";
 export type AppsUpdatePayload = {
   appId: string;
   update: Uint8Array;
+  docGuid?: string;
+};
+
+export type AppsRefusedPayload = {
+  appId: string;
+  docGuid: string;
+  reason: string;
 };
 
 export type AppsAwarenessPayload = {
@@ -80,6 +88,8 @@ export type AppsContextValue = {
   getAwareness: (appId: string) => Awareness;
   syncStatus: AppSyncStatus;
   retrySync: () => void;
+  docsVersion: number;
+  rejectedChanges: number;
   user?: AppUser;
   participants?: AppUser[];
   isAdmin?: boolean;
