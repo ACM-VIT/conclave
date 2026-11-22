@@ -281,3 +281,62 @@ it("sends a click made against the newer view again, when a lost answer's retry 
   expect(qa.questions[0].hasUpvoted).toBe(true);
 });
 
+it("shows what the view says when the person's changes cancelled out and a lost answer's retry comes back", async () => {
+  const { outcome } = await click();
+  // The first answer is lost. The same person takes the upvote back in
+  // another tab before the flush, so their view never changes. The server
+  // still tells this tab how far its view has come.
+  await act(async () =>
+    push({
+      kind: "patch",
+      subscription,
+      generation: 1,
+      serverNowMs: Date.now(),
+      seq: 1,
+      put: [],
+      remove: [],
+      revision: 2,
+    }),
+  );
+  // The retry is answered with the outcome kept for that operation, and
+  // the room's revision as it is now.
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(6_000);
+  });
+  const requests = sent.filter((entry) => entry.event === AUTHORITY_EVENTS.act);
+  await act(async () => {
+    requests[1]?.ack?.({ ok: true, value: null, revision: 2 });
+    await vi.advanceTimersByTimeAsync(0);
+  });
+
+  expect(requests.length).toBe(2);
+  expect(await outcome).toEqual({ ok: true });
+  // The view is at the answer's revision and says there is no upvote.
+  expect(qa.questions[0].hasUpvoted).toBe(false);
+});
+
+it("keeps showing an upvote until the view reaches the revision its answer named", async () => {
+  await click();
+  const request = sent.find((entry) => entry.event === AUTHORITY_EVENTS.act)!;
+  await act(async () => {
+    request.ack!({ ok: true, value: null, revision: 1 });
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  const shownBeforeTheRow = qa.questions[0].hasUpvoted;
+  await act(async () =>
+    push({
+      kind: "patch",
+      subscription,
+      generation: 1,
+      serverNowMs: Date.now(),
+      seq: 1,
+      put: [{ bucket: "myUpvotes", key: "q1", value: {} }],
+      remove: [],
+      revision: 1,
+    }),
+  );
+
+  expect(shownBeforeTheRow).toBe(true);
+  expect(qa.questions[0].hasUpvoted).toBe(true);
+});
+
