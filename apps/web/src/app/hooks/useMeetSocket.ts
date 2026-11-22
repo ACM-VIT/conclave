@@ -7317,6 +7317,9 @@ export function useMeetSocket({
                 stunIceServers.length > 0 ? stunIceServers : null;
               runtimeTurnIceServersRef.current =
                 turnIceServers.length > 0 ? turnIceServers : null;
+              // Relay-only needs a relay. Without TURN in this answer, go
+              // back to the direct path rather than offer no candidates.
+              if (turnIceServers.length === 0) relayOnlyIceRef.current = false;
             }
 
             const socket = io(socketUrl, {
