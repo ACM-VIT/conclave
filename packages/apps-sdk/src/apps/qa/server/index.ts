@@ -1,4 +1,6 @@
+import { boundedJsonBytes } from "@conclave/apps-sdk/authority";
 import {
+  QA_MAX_BOOK_BYTES,
   QA_MAX_ENTRIES,
   QA_MAX_OPEN_PER_PERSON,
   QA_MIN_QUESTION_LENGTH,
@@ -17,6 +19,7 @@ import {
   type IdentityRequirement,
   type RoomPolicy,
   type Subject,
+  type TableKey,
   type TableSpec,
 } from "@conclave/apps-sdk/authority/server";
 
@@ -77,22 +80,42 @@ const contributorIdentity = (ctx: GateContext): IdentityRequirement =>
   ctx.room.mode === "webinar" ? "any" : "verified";
 
 /**
- * Trims the book to its cap: hidden questions first, then answered, then
- * waiting, then whatever is oldest. A dropped question takes its upvotes
- * with it, and leaves every list on the next flush.
+ * Trims the book to its caps on count and on size: hidden questions first,
+ * then answered, then waiting, then whatever is oldest. `keep` is the
+ * question being written, which is the last to go. A dropped question takes
+ * its upvotes with it, and leaves every list on the next flush.
+ *
+ * The size cap is what keeps the book openable. Without it 300 long
+ * questions with long answers outgrow the largest view the runtime sends,
+ * and a host who joins late is refused the whole book.
  */
-const evictOverflow = (
+const trimBook = (
   tx: AuthorityTransaction<QaTables, Record<never, never>>,
+  keep: string,
 ): void => {
+  const rows = tx.scan("questions");
+  const sizes = new Map<TableKey, number>();
+  let bytes = 0;
+  for (const [rowKey, row] of rows) {
+    const size = boundedJsonBytes(card(row), QA_MAX_BOOK_BYTES);
+    sizes.set(rowKey, size);
+    bytes += size;
+  }
+  const fits = (): boolean =>
+    sizes.size <= QA_MAX_ENTRIES && bytes <= QA_MAX_BOOK_BYTES;
+
   const order: (QaStatus | null)[] = ["dismissed", "answered", "pending", null];
   for (const wanted of order) {
-    for (const [rowKey, row] of tx.scan("questions")) {
-      if (tx.count("questions") <= QA_MAX_ENTRIES) return;
+    for (const [rowKey, row] of rows) {
+      if (fits()) return;
+      if (row.id === keep || !sizes.has(rowKey)) continue;
       if (wanted !== null && row.status !== wanted) continue;
       for (const [voteKey] of tx.scan("upvotes", key(row.id))) {
         tx.delete("upvotes", voteKey);
       }
       tx.delete("questions", rowKey);
+      bytes -= sizes.get(rowKey) ?? 0;
+      sizes.delete(rowKey);
     }
   }
 };
@@ -139,7 +162,7 @@ export const qaAuthority = defineAuthority({
           answerText: null,
           answeredByName: null,
         });
-        evictOverflow(tx);
+        trimBook(tx, id);
         return { id };
       },
     },
@@ -205,6 +228,8 @@ export const qaAuthority = defineAuthority({
             break;
         }
         tx.put("questions", key(question.id), next);
+        // An answer can be twice the length of its question.
+        trimBook(tx, question.id);
         return null;
       },
     },

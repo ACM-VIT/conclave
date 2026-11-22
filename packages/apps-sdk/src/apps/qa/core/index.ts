@@ -4,6 +4,13 @@ export const QA_MIN_QUESTION_LENGTH = 2;
 export const QA_MAX_QUESTION_LENGTH = 500;
 export const QA_MAX_ANSWER_LENGTH = 1000;
 export const QA_MAX_ENTRIES = 300;
+/**
+ * The most the book's questions may weigh together, as JSON. The runtime
+ * sends a view of at most 1 MiB, and a viewer can be sent each question
+ * twice: once in the shared list and once more as their own hidden one. So
+ * the book stays under half of that, with room for the small rows beside it.
+ */
+export const QA_MAX_BOOK_BYTES = 400 * 1024;
 export const QA_MAX_OPEN_PER_PERSON = 3;
 
 const questionId = s.string({ min: 1, max: 64 });

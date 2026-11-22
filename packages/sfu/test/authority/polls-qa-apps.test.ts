@@ -452,6 +452,106 @@ describe("Q&A in a regular meeting", () => {
   }, 60_000);
 });
 
+describe("a Q&A book of the longest questions", () => {
+  // Three bytes a character on the wire, at the most the contract allows.
+  const longQuestion = "問".repeat(500);
+  const longAnswer = "答".repeat(1_000);
+
+  // Asks 225 real questions through the wire, so it is given more time.
+  it("stays small enough for a host who joins late to open", async () => {
+    const room = new Harness([qaAuthority]);
+    const hostTab = await room.open(host, qaContract);
+    const askers: Tab[] = [];
+    for (let index = 0; index < 25; index += 1) {
+      askers.push(
+        await room.open(
+          person(`asker${index}@example.com`, `${"名".repeat(190)} ${index}`),
+          qaContract,
+        ),
+      );
+    }
+    // Three rounds of 75: each asker asks three, then the host answers them.
+    let newest = "";
+    for (let round = 0; round < 3; round += 1) {
+      const asked: string[] = [];
+      for (const asker of askers) {
+        for (let n = 0; n < 3; n += 1) {
+          await vi.advanceTimersByTimeAsync(31_000);
+          const result = await asker.act("ask", { text: longQuestion });
+          if (result.ok) asked.push(field(result.value, "id") as string);
+        }
+      }
+      for (const id of asked) {
+        await vi.advanceTimersByTimeAsync(500);
+        await hostTab.act("moderate", { id, action: "answered", answerText: longAnswer });
+        newest = id;
+      }
+    }
+    await room.deliver();
+
+    const lateHost = await room.open(person("omar@example.com", "Omar", "host"), qaContract);
+    // A view this size arrives in parts, on later turns of the event loop.
+    await room.drain();
+    const sent = lateHost.frames
+      .filter((frame) => frame.kind === "replace")
+      .reduce((bytes, frame) => bytes + Buffer.byteLength(JSON.stringify(frame)), 0);
+
+    expect(lateHost.state.kind).toBe("ready");
+    expect(sent).toBeLessThan(1024 * 1024);
+    // The book gave up its oldest answered questions, not the latest ones.
+    expect(field(lateHost.row("questions", newest), "answerText")).toBe(longAnswer);
+    expect(lateHost.rows("questions").length).toBeLessThan(225);
+  }, 60_000);
+
+  it("keeps the question a host is answering when the answer is what fills the book", async () => {
+    const room = new Harness([qaAuthority]);
+    const hostTab = await room.open(host, qaContract);
+    const askers: Tab[] = [];
+    for (let index = 0; index < 25; index += 1) {
+      askers.push(
+        await room.open(person(`asker${index}@example.com`, `Asker ${index}`), qaContract),
+      );
+    }
+    // Four rounds of 75 long questions fill the book to its size cap.
+    for (let round = 0; round < 4; round += 1) {
+      const asked: string[] = [];
+      for (const asker of askers) {
+        for (let n = 0; n < 3; n += 1) {
+          await vi.advanceTimersByTimeAsync(31_000);
+          const result = await asker.act("ask", { text: longQuestion });
+          if (result.ok) asked.push(field(result.value, "id") as string);
+        }
+      }
+      // Answered without text, so the askers may go on asking.
+      for (const id of asked) {
+        await vi.advanceTimersByTimeAsync(500);
+        await hostTab.act("moderate", { id, action: "answered" });
+      }
+    }
+    await room.deliver();
+    const before = hostTab.rows("questions");
+    const oldest = [...before].sort(
+      (a, b) => (field(a, "askedAt") as number) - (field(b, "askedAt") as number),
+    )[0];
+    const oldestId = field(oldest, "id") as string;
+
+    // The oldest answered question is the first the book would give up, and
+    // its long answer is what takes the book over its cap.
+    await vi.advanceTimersByTimeAsync(500);
+    const answered = await hostTab.act("moderate", {
+      id: oldestId,
+      action: "answered",
+      answerText: longAnswer,
+    });
+    await room.deliver();
+
+    expect(before.length).toBeLessThan(300);
+    expect(answered).toEqual({ ok: true, value: null });
+    expect(field(hostTab.row("questions", oldestId), "answerText")).toBe(longAnswer);
+    expect(hostTab.rows("questions").length).toBeLessThan(before.length);
+  }, 60_000);
+});
+
 describe("switching webinar mode", () => {
   it("rebuilds every list under the new rule, and keeps the same book", async () => {
     const room = new Harness([qaAuthority]);
