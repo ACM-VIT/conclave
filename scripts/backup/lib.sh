@@ -286,8 +286,8 @@ now_ms() {
 # dir named through a link still finds the containers that mount its target.
 # An SFU container (one with SFU_INSTANCE_ID) with a mount that does not
 # resolve is listed with the state "unknown": nobody can say whether it
-# writes here. Fails when Docker cannot list or inspect the containers, or
-# the state dir itself does not resolve.
+# writes here. When the state dir itself does not exist, paths are compared
+# as written instead. Fails when Docker cannot list or inspect the containers.
 sfu_containers() {
   local state_dir="$1" ids
   command -v docker >/dev/null 2>&1 || return 1
@@ -301,16 +301,16 @@ def real(path):
         return os.path.realpath(path, strict=True)
     except OSError:
         return None
-state = real(os.environ["STATE_IN"])
-if state is None:
-    sys.exit("cannot resolve the state dir " + os.environ["STATE_IN"])
+given = os.path.normpath(os.path.abspath(os.environ["STATE_IN"]))
+state = real(given)
 for container in json.load(sys.stdin):
     config = container.get("Config") or {}
     env = dict(entry.split("=", 1) for entry in config.get("Env") or [] if "=" in entry)
-    sources = [real(mount["Source"]) for mount in container.get("Mounts") or [] if mount.get("Source")]
-    if state in sources:
+    raw = [mount["Source"] for mount in container.get("Mounts") or [] if mount.get("Source")]
+    sources = [real(source) for source in raw] if state else [os.path.normpath(source) for source in raw]
+    if (state or given) in sources:
         status = (container.get("State") or {}).get("Status") or "unknown"
-    elif "SFU_INSTANCE_ID" in env and None in sources:
+    elif state and "SFU_INSTANCE_ID" in env and None in sources:
         status = "unknown"
     else:
         continue

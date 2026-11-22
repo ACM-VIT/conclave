@@ -1046,3 +1046,36 @@ test(
     }
   },
 );
+
+test(
+  "a restore into a lost state dir still asks the stopped SFU container which user to give the files to",
+  { skip: missing.length > 0 && `needs ${missing.join(", ")} on PATH` },
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+    try {
+      const { state, config, setDocker, backup, latestArchive, restore } = await setUp(root);
+      const db = new DatabaseSync(path.join(state, "conclave.sqlite"));
+      db.exec("CREATE TABLE meetings (id TEXT PRIMARY KEY); INSERT INTO meetings VALUES ('kept')");
+      db.close();
+      await backup("--local-only");
+      const archive = await latestArchive();
+
+      // The disaster: the state dir is gone, the SFU container still listed
+      // and stopped, and no owner configured. Its user is an id this runner
+      // can hand files to and never 0: its own as a normal user, any as root.
+      await rm(state, { recursive: true });
+      await writeFile(config, `${await readFile(config, "utf8")}\nBACKUP_RESTORE_OWNER=\n`);
+      const uid = process.getuid() === 0 ? 4242 : process.getuid();
+      const gid = process.getuid() === 0 ? 4242 : process.getgid();
+      await setDocker([{ id: "sfu-a", mounts: [state], status: "exited", env: ["SFU_PORT=9", "SFU_INSTANCE_ID=sfu-a"], user: `${uid}:${gid}` }]);
+
+      const result = await restore("--file", archive, "--yes");
+      assert.match(result.stdout, new RegExp(`Gave the files in .* to ${uid}:${gid}, the user the SFU runs as`));
+      const restored = new DatabaseSync(path.join(state, "conclave.sqlite"), { readOnly: true });
+      assert.deepEqual(restored.prepare("SELECT id FROM meetings").all().map((row) => row.id), ["kept"]);
+      restored.close();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);

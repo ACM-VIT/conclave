@@ -122,6 +122,10 @@ for rel in "${live_databases[@]}"; do
   [[ -z "$holders" ]] || die "PID ${holders} still holds ${STATE_DIR}/${rel} open; stop the SFU containers before restoring"
 done
 
+# A lost state dir is the case a restore is for. It is created first, so the
+# SFU containers that mount it are found again by its path.
+mkdir -p "$STATE_DIR"
+
 # Restored files go to the user the SFU runs as, or an image that drops root
 # could not read them. Settled before the first file changes.
 restore_owner="$(sfu_file_owner "${owner:-${BACKUP_RESTORE_OWNER:-}}" "$STATE_DIR")" ||
@@ -131,7 +135,6 @@ if [[ -n "$restore_owner" && "$EUID" != 0 && "$restore_owner" != "$(id -u):$(id 
 fi
 
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-mkdir -p "$STATE_DIR"
 
 if wants sqlite; then
   for rel in "${databases[@]}"; do
