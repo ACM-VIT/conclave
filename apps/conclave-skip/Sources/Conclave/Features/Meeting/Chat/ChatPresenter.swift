@@ -78,7 +78,6 @@ final class ChatPresenter {
     @ObservationIgnored private var suppressesNewRowTracking = false
     @ObservationIgnored private(set) var hasDeferredRows = false
     @ObservationIgnored private var closedSeenRowIds: Set<String> = []
-    @ObservationIgnored private var pendingFirstUnreadAtMillis = 0.0
 
     @ObservationIgnored private var serverToClientRowId: [String: String] = [:]
 
@@ -183,7 +182,6 @@ final class ChatPresenter {
         isOpen = true
         firstUnreadId = pendingFirstUnreadId
         pendingFirstUnreadId = ""
-        pendingFirstUnreadAtMillis = 0.0
         pendingUnreadCount = 0
         rebuildRows(previousRowIds: currentTimeline.rowIds)
     }
@@ -247,7 +245,6 @@ final class ChatPresenter {
         inlineNotice = ChatFailure.none
         firstUnreadId = ""
         pendingFirstUnreadId = ""
-        pendingFirstUnreadAtMillis = 0.0
         pendingUnreadCount = 0
         focusId = ""
         serverToClientRowId = [:]
@@ -584,6 +581,8 @@ final class ChatPresenter {
     private func trackUnreadWhileClosed() {
         var known: Set<String> = []
         for id in currentTimeline.rowIds { known.insert(id) }
+        var firstArrivedId = ""
+        var firstArrivedAtMillis = 0.0
         for message in inputs.messages {
             let rowId = rowIdFor(message)
             if message.isOwn && !message.isAssistant { continue }
@@ -595,12 +594,13 @@ final class ChatPresenter {
                 let state = AssistantRowPolicy.state(input: message.assistant, content: message.content)
                 if message.content.isEmpty || state == AssistantRowState.error || state == AssistantRowState.needsKey { continue }
             }
-            if pendingFirstUnreadId.isEmpty || message.timestampMillis < pendingFirstUnreadAtMillis {
-                pendingFirstUnreadId = rowId
-                pendingFirstUnreadAtMillis = message.timestampMillis
+            if firstArrivedId.isEmpty || message.timestampMillis < firstArrivedAtMillis {
+                firstArrivedId = rowId
+                firstArrivedAtMillis = message.timestampMillis
             }
             pendingUnreadCount += 1
         }
+        if pendingFirstUnreadId.isEmpty { pendingFirstUnreadId = firstArrivedId }
     }
 
     private func rebuildRows(previousRowIds: [String]) {
