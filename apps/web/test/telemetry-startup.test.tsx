@@ -141,6 +141,43 @@ describe("what each event carries", () => {
     });
   };
 
+  it("reports a meeting panel that fails to render, through before_send", async () => {
+    const sent: SentEvent[] = [];
+    posthog.captureException.mockImplementation((error: unknown, props?: Record<string, unknown>) => {
+      const failure = error as Error;
+      sent.push(
+        sendThroughSdk("$exception", {
+          $exception_list: [{ type: failure.name, value: failure.message, stacktrace: { type: "raw", frames: [] } }],
+          ...props,
+        }),
+      );
+    });
+    function FailedPanel(): never {
+      throw new Error("Meet Mira in sample-room");
+    }
+    try {
+      const { default: MeetingPanelBoundary } = await import("../src/app/components/MeetingPanelBoundary");
+      root = createRoot(document.createElement("div"), { onCaughtError: () => {} });
+      await act(async () => {
+        root?.render(
+          <MeetingPanelBoundary name="Chat">
+            <FailedPanel />
+          </MeetingPanelBoundary>,
+        );
+      });
+
+      await vi.waitFor(() => expect(sent).toHaveLength(1));
+      expect(sent[0].properties).toMatchObject({ source: "react_error_boundary", boundary: "panel" });
+      expect((sent[0].properties.$exception_list as Array<unknown>)[0]).toMatchObject({
+        type: "Error",
+        value: "[message withheld]",
+      });
+      expect(JSON.stringify(sent)).not.toMatch(/Mira|sample-room/);
+    } finally {
+      posthog.captureException.mockReset();
+    }
+  });
+
   it("sends application fields only from the capture that set them", async () => {
     posthog.persistence.properties.mockReturnValue({
       distinct_id: sdkUuid,

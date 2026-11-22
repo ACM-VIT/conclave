@@ -1,6 +1,7 @@
 "use client";
 
 import { Component, Suspense, type ReactNode } from "react";
+import { telemetry } from "../lib/telemetry";
 
 export function meetingPanelKey(
   panel: "chat" | "transcript",
@@ -28,6 +29,12 @@ export default class MeetingPanelBoundary extends Component<
 
   static getDerivedStateFromError(): MeetingPanelBoundaryState {
     return { status: "failed" };
+  }
+
+  // The call goes on, so the failure would otherwise never be reported. Its
+  // type and frames are sent; its message is withheld like any other.
+  componentDidCatch(error: unknown) {
+    telemetry.captureException(error, { source: "react_error_boundary", boundary: "panel" });
   }
 
   render() {

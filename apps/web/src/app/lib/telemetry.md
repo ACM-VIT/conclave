@@ -19,7 +19,7 @@ Web, from `lib/telemetry.ts`. It loads PostHog when the first page mounts or
 the first report arrives, and holds up to 50 reports until it has loaded:
 
 - Unhandled errors and promise rejections (posthog-js autocapture, rate limited per error type by the SDK).
-- Errors caught by `app/error.tsx` and `app/global-error.tsx`: `source: "react_error_boundary"`, `boundary: "route" | "root"`, `digest`.
+- Errors caught by `app/error.tsx` and `app/global-error.tsx`: `source: "react_error_boundary"`, `boundary: "route" | "root"`, `digest`. A meeting panel that fails to render or load (`MeetingPanelBoundary`) reports `boundary: "panel"` while the call goes on; the panel's name is not sent.
 - `console.error("[Meets] ...")` lines from the call code whose label is registered in `lib/call-log-labels.ts`, exactly: `source: "call_log"`, `call_log` (the label). The exception's message is the label. A label is written out in full where it is logged, never built at runtime, and a test keeps the registry equal to the source; any other `[Meets]` line is not reported. A logged Error keeps its type and stack frames, never its message. Other logged values are dropped. At most 3 per label and 30 in total per minute.
 - Errors built from server text (socket ack `error` fields and the like) are thrown as `ServerError`, so the type says where the text came from. Like every message that is not a call-log label, theirs is withheld. A lint rule flags `new Error(x.error)`.
 
