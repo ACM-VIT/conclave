@@ -334,5 +334,51 @@ describe("TranscriptRelayRegistry", () => {
     registry.stopRoom(room.channelId);
     expect(opened.every(({ closed }) => closed)).toBe(true);
   });
+
+  it("keeps a replacement that started while an older relay's stop was waiting", async () => {
+    const opened: Array<{ closed: boolean; finishHandoff: () => void }> = [];
+    const registry = createTranscriptRelayRegistry({
+      enabled: true,
+      createRelay: () => {
+        let finishHandoff!: () => void;
+        const handoff = new Promise<boolean>((resolve) => {
+          finishHandoff = () => resolve(true);
+        });
+        const relay = { closed: false, finishHandoff: () => finishHandoff() };
+        const first = opened.length === 0;
+        opened.push(relay);
+        return {
+          controllerUserId: "u1",
+          start: async () => {},
+          prepareHandoff: () => (first ? handoff : Promise.resolve(true)),
+          syncProducers: async () => {},
+          close: () => {
+            relay.closed = true;
+          },
+        };
+      },
+    });
+    const start = () =>
+      registry.start({
+        room,
+        workerUrl: "http://worker.test",
+        workerToken: "token",
+        controllerUserId: "u1",
+        controllerDisplayName: "Ada",
+        canReplaceExistingRelay: true,
+      });
+    await start();
+
+    const stopping = registry.stopRoomForUser({
+      roomKey: room.channelId,
+      userId: "u1",
+      canStopAnyRelay: true,
+    });
+    await start();
+    opened[0].finishHandoff();
+    await stopping;
+
+    expect(opened.map(({ closed }) => closed)).toEqual([true, false]);
+  });
 });
 

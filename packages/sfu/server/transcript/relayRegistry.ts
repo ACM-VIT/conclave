@@ -43,9 +43,11 @@ export const createTranscriptRelayRegistry = (options: {
   ) => TranscriptRelayInstance;
 }): TranscriptRelayRegistry => {
   const relays = new Map<string, TranscriptRelayInstance>();
-  // Every relay opened for a room and not yet closed, oldest first. A start
-  // that loses a race or a stop must not leave an older relay running.
-  const opened = new Map<string, Set<TranscriptRelayInstance>>();
+  // Every relay opened for a room and not yet closed, by creation order. A
+  // start that loses a race or a stop must not leave an older relay running,
+  // and must never close one created after it.
+  const opened = new Map<string, Map<TranscriptRelayInstance, number>>();
+  let nextGeneration = 0;
   const roomKey = (room: Pick<Room, "channelId" | "id">): string =>
     room.channelId || room.id;
   const forget = (key: string, relay: TranscriptRelayInstance): void => {
@@ -61,14 +63,13 @@ export const createTranscriptRelayRegistry = (options: {
     forget(key, relay);
     relay.close(closeOptions);
   };
-  const closeOlderThan = (key: string, relay: TranscriptRelayInstance): void => {
-    for (const older of Array.from(opened.get(key) ?? [])) {
-      if (older === relay) return;
-      closeRelay(key, older);
+  const closeOlderThan = (key: string, generation: number): void => {
+    for (const [relay, relayGeneration] of Array.from(opened.get(key) ?? [])) {
+      if (relayGeneration < generation) closeRelay(key, relay);
     }
   };
   const closeRoom = (key: string): void => {
-    for (const relay of Array.from(opened.get(key) ?? [])) {
+    for (const relay of Array.from(opened.get(key)?.keys() ?? [])) {
       closeRelay(key, relay);
     }
     relays.delete(key);
@@ -136,7 +137,8 @@ export const createTranscriptRelayRegistry = (options: {
           }
         },
       });
-      opened.set(key, (opened.get(key) ?? new Set()).add(relay));
+      const generation = nextGeneration++;
+      opened.set(key, (opened.get(key) ?? new Map()).set(relay, generation));
       relays.set(key, relay);
       try {
         await relay.start();
@@ -166,7 +168,7 @@ export const createTranscriptRelayRegistry = (options: {
             };
           }
         }
-        closeOlderThan(key, relay);
+        closeOlderThan(key, generation);
         return {
           mode: "sfu",
           success: true,
@@ -201,6 +203,7 @@ export const createTranscriptRelayRegistry = (options: {
     async stopRoomForUser({ roomKey, userId, canStopAnyRelay }) {
       const relay = relays.get(roomKey);
       if (!relay) return { success: true };
+      const stoppedGeneration = opened.get(roomKey)?.get(relay) ?? -1;
       if (!canStopAnyRelay && relay.controllerUserId !== userId) {
         return {
           error: "Only the transcript relay controller, host, or admin can stop the SFU relay.",
@@ -212,8 +215,10 @@ export const createTranscriptRelayRegistry = (options: {
           `Transcript SFU relay stop for room ${roomKey} could not prepare worker disconnect suppression.`,
         );
       }
-      closeOlderThan(roomKey, relay);
-      closeRelay(roomKey, relay, { flushBufferedAudio: true });
+      closeOlderThan(roomKey, stoppedGeneration);
+      if (opened.get(roomKey)?.has(relay)) {
+        closeRelay(roomKey, relay, { flushBufferedAudio: true });
+      }
       // A host can start a replacement relay while prepareHandoff() awaits;
       // only remove the entry if it is still the relay this call stopped, or
       // the newer relay would keep running with no way to stop it.
