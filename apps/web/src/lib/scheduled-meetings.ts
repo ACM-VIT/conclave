@@ -150,20 +150,49 @@ export const lookupScheduledMeetingHostEmail = async ({
   }
 };
 
+// A person is waiting on these, so no SFU may hold one up.
+const REQUEST_DEADLINE_MS = 4000;
+
+// One SFU's whole answer, headers and body, or a throw if it did not finish
+// in time. Reading the body here keeps a reply that stalls halfway from
+// passing as an answer.
+const fetchWholeReply = async (
+  url: string,
+  init: RequestInit,
+  deadlineMs: number,
+): Promise<Response> => {
+  const response = await fetch(url, {
+    ...init,
+    signal: AbortSignal.timeout(deadlineMs),
+  });
+  const body = await response.text();
+  const contentType = response.headers.get("content-type");
+  return new Response(body || null, {
+    status: response.status,
+    headers: contentType ? { "content-type": contentType } : undefined,
+  });
+};
+
 // Sends a request about one scheduled meeting to the SFU that has it: each
-// in turn until one knows the meeting. Only that SFU acts on it.
+// in turn until one knows the meeting. Only that SFU acts on it. An SFU that
+// stalls, errors or answers 5xx is passed over for the next.
 export const fetchFromScheduledMeetingSfu = async (
   path: string,
   init: RequestInit,
+  deadlineMs: number = REQUEST_DEADLINE_MS,
 ): Promise<Response> => {
   let notFound: Response | null = null;
   let unreachable: Error | null = null;
   for (const sfuUrl of resolveSfuUrls()) {
     try {
-      const response = await fetch(
+      const response = await fetchWholeReply(
         `${scheduledMeetingsBase(sfuUrl)}${path}`,
         init,
+        deadlineMs,
       );
+      if (response.status >= 500) {
+        throw new Error(`Answered ${response.status}`);
+      }
       if (response.status !== 404) return response;
       notFound = response;
     } catch (error) {
