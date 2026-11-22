@@ -83,6 +83,8 @@ interface StartTranscriptOptions {
   transportMode?: TranscriptTransportMode;
   /** A language code; null asks for the worker's default, and none keeps a resumed session's. */
   language?: string | null;
+  /** The exact code the provider is to be sent, as the picker shows it. */
+  providerLanguage?: string;
 }
 
 type ServerEnvelope =
@@ -152,7 +154,7 @@ type SessionRequestOutcome =
   | { kind: "replaced" }
   | { kind: "timeout" };
 
-/** Per provider, the language a session uses when nobody picks one; null is auto-detect. */
+/** Per provider, the exact code its provider is sent when nobody picks a language. */
 export type CaptionLanguageDefaults = Partial<
   Record<"openai" | "sarvam", string | null>
 >;
@@ -1287,6 +1289,7 @@ export function useMeetingTranscript({
         qaModel: options.qaModel ?? DEFAULT_TRANSCRIPT_QA_MODEL,
         transportMode,
         language: options.language,
+        providerLanguage: options.providerLanguage,
       });
       if (!sent) return false;
       if (transportMode !== "sfu") return true;
@@ -1331,6 +1334,7 @@ export function useMeetingTranscript({
         qaModel: options.qaModel ?? session.qaModel,
         transportMode,
         language: options.language,
+        providerLanguage: options.providerLanguage,
       });
       if (!sent) return false;
       if (transportMode !== "sfu") return true;

@@ -38,7 +38,7 @@ const controller = (
     isStreamingAudio: true,
     isServiceUpdateAvailable: false,
     supportsCaptionLanguage: true,
-    captionLanguageDefaults: { openai: "en", sarvam: "en" },
+    captionLanguageDefaults: { openai: "en", sarvam: "en-IN" },
     error: null,
     allSegments: [],
     qaMessages: [],
@@ -129,6 +129,8 @@ describe("caption language picker", () => {
     });
   const sentLanguage = (call: ReturnType<typeof vi.fn>) =>
     (call.mock.calls[0]?.[0] as { language?: string } | undefined)?.language;
+  const sentCode = (call: ReturnType<typeof vi.fn>) =>
+    (call.mock.calls[0]?.[0] as { providerLanguage?: string } | undefined)?.providerLanguage;
 
   it("resumes notes in their own language without naming one, so the worker keeps it", async () => {
     window.localStorage.setItem("conclave:captions-language", "en");
@@ -150,7 +152,8 @@ describe("caption language picker", () => {
     await submit();
 
     expect(transcript.start).toHaveBeenCalled();
-    expect(sentLanguage(transcript.start as ReturnType<typeof vi.fn>)).toBeUndefined();
+    expect(sentLanguage(transcript.start as ReturnType<typeof vi.fn>)).toBeNull();
+    expect(sentCode(transcript.start as ReturnType<typeof vi.fn>)).toBe("en");
   });
 
   it("names English when someone picks it", async () => {
@@ -173,25 +176,27 @@ describe("caption language picker", () => {
     expect(selectedText("captions-language-start")).toBe("Default (English)");
     await submit();
 
-    expect(sentLanguage(transcript.takeover as ReturnType<typeof vi.fn>)).toBe("en");
+    expect(sentLanguage(transcript.takeover as ReturnType<typeof vi.fn>)).toBeNull();
+    expect(sentCode(transcript.takeover as ReturnType<typeof vi.fn>)).toBe("en");
   });
 
   it("starts in the worker's default when someone picks it over a remembered language", async () => {
     window.localStorage.setItem("conclave:captions-language", "ta");
-    const transcript = controller({}, { captionLanguageDefaults: { openai: "hi", sarvam: "hi" } });
+    const transcript = controller({}, { captionLanguageDefaults: { openai: "hi", sarvam: "hi-IN" } });
     await render(transcript);
 
     await choose("captions-language-start", "");
     expect(selectedText("captions-language-start")).toBe("Default (Hindi)");
     await submit();
 
-    expect(sentLanguage(transcript.start as ReturnType<typeof vi.fn>)).toBe("hi");
+    expect(sentLanguage(transcript.start as ReturnType<typeof vi.fn>)).toBeNull();
+    expect(sentCode(transcript.start as ReturnType<typeof vi.fn>)).toBe("hi");
   });
 
   it("asks the worker to auto-detect when someone picks Auto-detect on resumed Hindi notes", async () => {
     const transcript = controller(
       { status: "takeover_needed", language: "hi", languageChosen: true, transcriptModel: "saaras:v3" },
-      { captionLanguageDefaults: { openai: "en", sarvam: null } },
+      { captionLanguageDefaults: { openai: "en", sarvam: "unknown" } },
     );
     await render(transcript, roomUsing("saaras:v3"));
 
@@ -199,7 +204,9 @@ describe("caption language picker", () => {
     expect(selectedText("captions-language-start")).toBe("Auto-detect");
     await submit();
 
-    expect(transcript.takeover).toHaveBeenCalledWith(expect.objectContaining({ language: null }));
+    expect(transcript.takeover).toHaveBeenCalledWith(
+      expect.objectContaining({ language: null, providerLanguage: "unknown" }),
+    );
   });
 
   it("hides the language choice until the transcript worker supports it", async () => {
@@ -212,7 +219,7 @@ describe("caption language picker", () => {
     });
 
     expect(transcript.start).toHaveBeenCalledWith(
-      expect.objectContaining({ language: undefined }),
+      expect.not.objectContaining({ language: expect.anything(), providerLanguage: expect.anything() }),
     );
   });
 
@@ -292,16 +299,16 @@ describe("caption language picker", () => {
   });
 
   it("shows what will be used when nobody picked a language: the worker's default", async () => {
-    const transcript = controller({}, { captionLanguageDefaults: { openai: "hi", sarvam: "hi" } });
+    const transcript = controller({}, { captionLanguageDefaults: { openai: "hi", sarvam: "hi-IN" } });
     await render(transcript);
 
     expect(selectedText("captions-language-start")).toBe("Default (Hindi)");
     await submit();
-    expect(sentLanguage(transcript.start as ReturnType<typeof vi.fn>)).toBeUndefined();
+    expect(sentCode(transcript.start as ReturnType<typeof vi.fn>)).toBe("hi");
   });
 
   it("shows Auto-detect when the worker's Sarvam default detects the language", async () => {
-    await render(controller({}, { captionLanguageDefaults: { openai: "en", sarvam: null } }));
+    await render(controller({}, { captionLanguageDefaults: { openai: "en", sarvam: "unknown" } }));
 
     await clickText("Sarvam");
 
@@ -357,7 +364,7 @@ describe("caption language picker", () => {
   });
 
   it("starts a Sarvam session with an Odia default and says so", async () => {
-    await render(controller({}, { captionLanguageDefaults: { openai: "en", sarvam: "od" } }));
+    await render(controller({}, { captionLanguageDefaults: { openai: "en", sarvam: "od-IN" } }));
 
     await clickText("Sarvam");
 

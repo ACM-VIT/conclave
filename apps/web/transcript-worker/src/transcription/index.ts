@@ -5,9 +5,11 @@ import {
   normalizeRealtimeTranscriptModel,
 } from "@conclave/meeting-core/transcript-models";
 import { DEFAULT_TRANSCRIPT_MODEL } from "../constants";
+import { normalizeLanguage } from "../utils";
 import { connectOpenAiRealtimeTranscription } from "./openai-realtime";
 import {
   connectSarvamTranscription,
+  SARVAM_SUPPORTED_LANGUAGE_CODES,
   sarvamCanTranscribe,
   sarvamProviderLanguage,
 } from "./sarvam";
@@ -36,6 +38,15 @@ export const transcriptionProviderLanguage = (
     env: LiveTranscriptionConnectOptions["env"];
   },
 ): string => (provider === "sarvam" ? sarvamProviderLanguage(options) : options.language);
+
+/** Whether a code a client sent can be given to the provider as it is. */
+export const isTranscriptionProviderLanguage = (
+  provider: TranscriptTranscriptionProvider,
+  code: string,
+): boolean =>
+  provider === "sarvam"
+    ? SARVAM_SUPPORTED_LANGUAGE_CODES.has(code)
+    : normalizeLanguage(code) === code;
 
 /**
  * The language a session shows, derived only from the code its provider is

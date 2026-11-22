@@ -72,6 +72,15 @@ export const captionLanguageCode = (
   return CAPTION_LANGUAGES.find((language) => language.code === base)?.code ?? trimmed;
 };
 
+/**
+ * The exact code a provider is sent for a language picked from the table:
+ * Sarvam takes the regional code ("hi-IN"), OpenAI the language code.
+ */
+export const captionProviderCode = (
+  provider: TranscriptTranscriptionProvider,
+  code: string,
+): string => (provider === "sarvam" ? `${code}-IN` : code);
+
 /** What to call a reported code: its language, or the code itself; undefined is auto-detect. */
 export const captionLanguageLabel = (
   code: string | null | undefined,

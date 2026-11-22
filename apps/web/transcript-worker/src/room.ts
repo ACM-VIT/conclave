@@ -93,6 +93,7 @@ import type {
 } from "./types";
 import {
   canTranscribeLanguage,
+  isTranscriptionProviderLanguage,
   shownTranscriptionLanguage,
   transcriptionProviderLanguage,
   connectLiveTranscriptionProvider,
@@ -437,6 +438,7 @@ export class TranscriptRoom {
       ...snapshot.session,
       status: "starting",
       language: shownTranscriptionLanguage(providerLanguage),
+      providerLanguage,
       languageChosen: config.languageChosen,
       updatedAt: Date.now(),
       error: null,
@@ -584,17 +586,18 @@ export class TranscriptRoom {
     return getTranscriptServiceVersion(this.env);
   }
 
-  /** Per provider, what a session uses when nobody picks a language; null is auto-detect. */
-  private captionLanguageDefaults(): Record<"openai" | "sarvam", string | null> {
+  /** Per provider, the exact code its provider is sent when nobody picks a language. */
+  private captionLanguageDefaults(): Record<"openai" | "sarvam", string> {
     const unpicked = {
       language: normalizeLanguage(this.env.TRANSCRIPT_TRANSCRIPTION_LANGUAGE),
       languageChosen: false,
       locale: normalizeLocale(this.env.TRANSCRIPT_TRANSCRIPTION_LOCALE),
       env: this.env,
     };
-    const shown = (provider: "openai" | "sarvam") =>
-      shownTranscriptionLanguage(transcriptionProviderLanguage(provider, unpicked)) ?? null;
-    return { openai: shown("openai"), sarvam: shown("sarvam") };
+    return {
+      openai: transcriptionProviderLanguage("openai", unpicked),
+      sarvam: transcriptionProviderLanguage("sarvam", unpicked),
+    };
   }
 
   private sendError(viewer: Viewer, message: string, requestId?: string): void {
@@ -990,15 +993,34 @@ export class TranscriptRoom {
       refuse("This room's transcription model can't caption in that language.");
       return;
     }
-    const language = canCaption ? requestedLanguage : deploymentLanguage;
-    const languageChosen = canCaption && requestedLanguageChosen;
     const locale = normalizeLocale(this.env.TRANSCRIPT_TRANSCRIPTION_LOCALE);
-    const providerLanguage = transcriptionProviderLanguage(transcriptionProvider, {
-      language,
-      languageChosen,
-      locale,
-      env: providerEnv,
-    });
+    // A client that shows a language sends the exact code it shows, and that
+    // code is used as it is; only a request with none resolves one here.
+    const sentProviderLanguage = message.providerLanguage?.trim();
+    if (
+      sentProviderLanguage &&
+      !isTranscriptionProviderLanguage(transcriptionProvider, sentProviderLanguage)
+    ) {
+      refuse("This room's transcription model can't caption in that language.");
+      return;
+    }
+    const keepsSessionCode =
+      takeover && Boolean(sentProviderLanguage) && sentProviderLanguage === this.session?.providerLanguage;
+    const language = sentProviderLanguage
+      ? normalizeLanguage(sentProviderLanguage)
+      : canCaption ? requestedLanguage : deploymentLanguage;
+    const languageChosen = sentProviderLanguage
+      ? message.language !== null &&
+        (Boolean(message.language) || (keepsSessionCode && this.session?.languageChosen === true))
+      : canCaption && requestedLanguageChosen;
+    const providerLanguage =
+      sentProviderLanguage ??
+      transcriptionProviderLanguage(transcriptionProvider, {
+        language,
+        languageChosen,
+        locale,
+        env: providerEnv,
+      });
 
     this.responseAbort.abort();
     this.responseAbort = new AbortController();
@@ -1023,6 +1045,7 @@ export class TranscriptRoom {
       qaModel,
       transportMode,
       language: shownTranscriptionLanguage(providerLanguage),
+      providerLanguage,
       languageChosen,
       requestId,
       keySource:

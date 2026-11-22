@@ -39,6 +39,7 @@ import {
   captionLanguageCode,
   captionLanguageLabel,
   captionLanguagesFor,
+  captionProviderCode,
   defaultCaptionLanguageLabel,
   readCaptionLanguage,
   saveCaptionLanguage,
@@ -297,10 +298,11 @@ function StartStage({
   // A resumed language carries over only when this provider keeps it: a pick
   // it offers, or the same provider's own default. Otherwise the form shows
   // this provider's default and sends that, so what it shows is what is used.
+  const resumesOnSameProvider =
+    provider === getTranscriptTranscriptionProvider(transcript.session.transcriptModel);
   const keepsResumedLanguage =
     offered(resumedLanguage) &&
-    (transcript.session.languageChosen === true ||
-      provider === getTranscriptTranscriptionProvider(transcript.session.transcriptModel));
+    (transcript.session.languageChosen === true || resumesOnSameProvider);
   const untouchedLanguage = needsTakeover
     ? (keepsResumedLanguage ? resumedLanguage : "")
     : (offered(savedLanguage) ? savedLanguage : "");
@@ -308,17 +310,21 @@ function StartStage({
     chosenLanguage === null
       ? untouchedLanguage
       : (offered(chosenLanguage) ? chosenLanguage : "");
-  const defaultLanguage = transcript.supportsCaptionLanguage
-    ? transcript.captionLanguageDefaults[provider]
+  const defaultCode = transcript.supportsCaptionLanguage
+    ? transcript.captionLanguageDefaults[provider] ?? undefined
     : undefined;
-  const sentLanguage =
-    chosenLanguage === null
-      ? needsTakeover
-        ? (keepsResumedLanguage ? undefined : null)
-        : language || undefined
-      : language || (defaultLanguage ?? null);
+  // The request names exactly what the form shows: the resumed session's own
+  // provider code, a listed language with its provider code, or the default
+  // with the provider code the worker reported for it.
+  const resumedCode = transcript.session.providerLanguage;
+  const sentLanguage: { language?: string | null; providerLanguage?: string } =
+    needsTakeover && chosenLanguage === null && keepsResumedLanguage && resumesOnSameProvider
+      ? (resumedCode ? { providerLanguage: resumedCode } : {})
+      : language
+        ? { language, providerLanguage: captionProviderCode(provider, language) }
+        : { language: null, providerLanguage: defaultCode };
   const defaultLanguageLabel = transcript.supportsCaptionLanguage
-    ? defaultCaptionLanguageLabel(defaultLanguage)
+    ? defaultCaptionLanguageLabel(defaultCode)
     : "";
   const assistantProvider = getResponseProvider(qaModel);
   const available = (name: typeof provider | typeof assistantProvider) =>
@@ -394,7 +400,7 @@ function StartStage({
         transcriptModel,
         qaModel,
         transportMode: "sfu" as const,
-        language: transcript.supportsCaptionLanguage ? sentLanguage : undefined,
+        ...(transcript.supportsCaptionLanguage ? sentLanguage : {}),
       };
       const ok = needsTakeover
         ? await transcript.takeover(options)
@@ -1289,6 +1295,7 @@ export default function TranscriptPanel({
                     onChange={(code) => {
                       void transcript.takeover({
                         language: code,
+                        providerLanguage: captionProviderCode(sessionProvider, code),
                         transcriptModel: session.transcriptModel,
                         qaModel: session.qaModel,
                       });

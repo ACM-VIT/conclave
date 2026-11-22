@@ -663,17 +663,17 @@ describe("drain lifetime", () => {
 });
 
 describe("the language a session reports", () => {
-  it("tells clients each provider's default language, null for auto-detect", async () => {
+  it("tells clients the exact code each provider is sent by default, unknown for auto-detect", async () => {
     const hindi = await fixture(OPENAI, { TRANSCRIPT_SARVAM_LANGUAGE_CODE: "hi-IN" });
     expect((await hindi.viewerSnapshot())?.captionLanguageDefaults).toEqual({
       openai: "en",
-      sarvam: "hi",
+      sarvam: "hi-IN",
     });
 
     const auto = await fixture(OPENAI, { TRANSCRIPT_SARVAM_LANGUAGE_CODE: "unknown" });
     expect((await auto.viewerSnapshot())?.captionLanguageDefaults).toEqual({
       openai: "en",
-      sarvam: null,
+      sarvam: "unknown",
     });
   });
 

@@ -10,6 +10,7 @@ export {
   captionLanguageCode,
   captionLanguageLabel,
   captionLanguagesFor,
+  captionProviderCode,
 } from "@conclave/meeting-core/caption-languages";
 
 export const DEFAULT_CAPTION_LANGUAGE = "en";

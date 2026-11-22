@@ -42,11 +42,15 @@ afterEach(async () => {
 // picker names languages.
 function providerConnections() {
   const used: string[] = [];
+  const codes: (string | null)[] = [];
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string) => {
       const sarvamCode = new URL(String(url)).searchParams.get("language-code");
-      if (sarvamCode !== null) used.push(captionLanguageLabel(sarvamCode) ?? "Auto-detect");
+      if (sarvamCode !== null) {
+        used.push(captionLanguageLabel(sarvamCode) ?? "Auto-detect");
+        codes.push(sarvamCode);
+      }
       return {
         status: 101,
         webSocket: {
@@ -58,15 +62,17 @@ function providerConnections() {
             if (message.type !== "session.update" || sarvamCode !== null) return;
             const language = message.session?.audio?.input?.transcription?.language;
             used.push(captionLanguageLabel(language) ?? "Auto-detect");
+            codes.push(language ?? null);
           },
         },
       };
     }),
   );
-  return used;
+  return Object.assign(used, { codes });
 }
 
 async function notesWorker(env: Partial<Env>) {
+  const runtimeEnv = { ...env } as Env;
   const room = new TranscriptRoom(
     {
       storage: {
@@ -77,7 +83,7 @@ async function notesWorker(env: Partial<Env>) {
       },
       waitUntil: () => undefined,
     } as unknown as DurableObjectState,
-    { ...env } as Env,
+    runtimeEnv,
   ) as unknown as {
     loaded: Promise<void>;
     viewers: Map<WebSocket, Viewer>;
@@ -104,14 +110,23 @@ async function notesWorker(env: Partial<Env>) {
       OPENAI_API_KEY: "sk-room",
       CONCLAVE_AI_SETTINGS: JSON.stringify({ transcription: { model: MODELS[provider] } }),
     });
-  const send = (provider: Provider, type: string, language: string | null | undefined) => {
+  const send = (
+    provider: Provider,
+    type: string,
+    request: { language?: string | null; providerLanguage?: string } | string | undefined,
+  ) => {
     using(provider);
+    const fields = typeof request === "object" ? request : { language: request };
     const message = JSON.parse(
-      JSON.stringify({ type, transcriptModel: MODELS[provider], qaModel: "gpt-6.1-sol", transportMode: "sfu", language }),
+      JSON.stringify({ type, transcriptModel: MODELS[provider], qaModel: "gpt-6.1-sol", transportMode: "sfu", ...fields }),
     );
     return room.startSession(viewer, message);
   };
-  return { room, send };
+  const changeEnv = (next: Partial<Env>) => {
+    for (const key of Object.keys(runtimeEnv) as (keyof Env)[]) delete runtimeEnv[key];
+    Object.assign(runtimeEnv, next);
+  };
+  return { room, send, changeEnv };
 }
 
 const controllerFor = (
@@ -186,9 +201,136 @@ describe("resuming notes, the language the setup shows is the language used", ()
     await act(async () => {
       container.querySelector("form")?.requestSubmit();
     });
-    const sent = (transcript.takeover as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]?.language;
+    const sent = (transcript.takeover as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
     await worker.send(to, "session.takeover", sent);
 
     expect(used.at(-1), `shown ${shown}, sent ${JSON.stringify(sent)}`).toBe(shown);
+  });
+});
+
+const seeded = (seed: number) => () => {
+  seed = (seed + 0x6d2b79f5) | 0;
+  let value = Math.imul(seed ^ (seed >>> 15), seed | 1);
+  value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+  return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+};
+const anyOf = <T,>(items: readonly T[], random: () => number) =>
+  items[Math.floor(random() * items.length)];
+const randomEnv = (random: () => number): Partial<Env> => ({
+  TRANSCRIPT_TRANSCRIPTION_LANGUAGE: anyOf([undefined, "en", "ta-IN", "zh-hk", "pt-BR", "es-MX", "od-IN"], random),
+  TRANSCRIPT_TRANSCRIPTION_LOCALE: anyOf([undefined, "en-IN", "ta-IN", "hi-IN"], random),
+  TRANSCRIPT_SARVAM_LANGUAGE_CODE: anyOf([undefined, "unknown", "ta-IN", "en-IN", "od-IN"], random),
+});
+const choose = async (value: string) => {
+  const select = container.querySelector<HTMLSelectElement>("#captions-language-start")!;
+  await act(async () => {
+    select.value = value;
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+};
+
+describe("whatever the environment did since, resuming sends exactly what the setup shows", () => {
+  it.each(Array.from({ length: 200 }, (_, index) => index + 1))("seed %i", async (seed) => {
+    const random = seeded(seed);
+    const from = anyOf(["sarvam", "openai"] as const, random);
+    const to = anyOf(["sarvam", "openai"] as const, random);
+    const pick = anyOf(PICKS[from], random);
+    const before = randomEnv(random);
+    const after = randomEnv(random);
+    const action = anyOf(["untouched", "default", "listed"] as const, random);
+    const used = providerConnections();
+    const worker = await notesWorker(before);
+    await worker.send(from, "session.start", pick);
+    const resumed = worker.room.session!;
+    worker.changeEnv(after);
+    const defaults = worker.room.captionLanguageDefaults();
+    const transcript = controllerFor({ ...resumed, status: "takeover_needed" } as TranscriptSessionState, defaults);
+
+    await act(async () =>
+      root.render(<TranscriptPanel transcript={transcript} roomAi={roomUsing(to)} onClose={() => {}} />),
+    );
+    if (action === "default") await choose("");
+    if (action === "listed") await choose(anyOf(PICKS[to].filter(Boolean) as string[], random));
+    const select = container.querySelector<HTMLSelectElement>("#captions-language-start")!;
+    const shownValue = select.value;
+    const shown = shownLanguage();
+    await act(async () => {
+      container.querySelector("form")?.requestSubmit();
+    });
+    const sent = (transcript.takeover as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
+    await worker.send(to, "session.takeover", sent);
+
+    const context = JSON.stringify({ from, to, pick, before, after, action, shownValue, sent });
+    expect(sent?.providerLanguage, `an exact code is always sent ${context}`).toBeTruthy();
+    expect(used.at(-1), `the language used is the one shown ${context}`).toBe(shown);
+    if (shownValue === "") {
+      expect(used.codes.at(-1), `the default is sent as its exact code ${context}`).toBe(defaults[to]);
+    } else if (action === "untouched" && from === to) {
+      expect(used.codes.at(-1), `a resume keeps its exact code ${context}`).toBe(resumed.providerLanguage);
+    }
+  });
+
+  it("resends the exact OpenAI regional default when someone picks Default (Chinese)", async () => {
+    const used = providerConnections();
+    const worker = await notesWorker({ TRANSCRIPT_TRANSCRIPTION_LANGUAGE: "zh-hk" });
+    await worker.send("openai", "session.start", undefined);
+    await worker.send("openai", "session.takeover", "hi");
+    const transcript = controllerFor(
+      { ...worker.room.session!, status: "takeover_needed" } as TranscriptSessionState,
+      worker.room.captionLanguageDefaults(),
+    );
+    await act(async () =>
+      root.render(<TranscriptPanel transcript={transcript} roomAi={roomUsing("openai")} onClose={() => {}} />),
+    );
+    await choose("");
+    expect(shownLanguage()).toBe("Chinese");
+    await act(async () => {
+      container.querySelector("form")?.requestSubmit();
+    });
+    await worker.send("openai", "session.takeover", (transcript.takeover as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]);
+
+    expect(used.codes).toEqual(["zh-hk", "hi", "zh-hk"]);
+  });
+
+  it("keeps Odia on a same-provider takeover after the Sarvam default moved to auto-detect", async () => {
+    const used = providerConnections();
+    const worker = await notesWorker({ TRANSCRIPT_SARVAM_LANGUAGE_CODE: "od-IN" });
+    await worker.send("sarvam", "session.start", undefined);
+    worker.changeEnv({ TRANSCRIPT_SARVAM_LANGUAGE_CODE: "unknown" });
+    const transcript = controllerFor(
+      { ...worker.room.session!, status: "takeover_needed" } as TranscriptSessionState,
+      worker.room.captionLanguageDefaults(),
+    );
+    await act(async () =>
+      root.render(<TranscriptPanel transcript={transcript} roomAi={roomUsing("sarvam")} onClose={() => {}} />),
+    );
+    expect(shownLanguage()).toBe("Odia");
+    await act(async () => {
+      container.querySelector("form")?.requestSubmit();
+    });
+    await worker.send("sarvam", "session.takeover", (transcript.takeover as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]);
+
+    expect(used.codes).toEqual(["od-IN", "od-IN"]);
+  });
+
+  it("keeps Tamil on a same-provider takeover after the Sarvam default moved to English", async () => {
+    const used = providerConnections();
+    const worker = await notesWorker({ TRANSCRIPT_SARVAM_LANGUAGE_CODE: "ta-IN" });
+    await worker.send("sarvam", "session.start", undefined);
+    worker.changeEnv({ TRANSCRIPT_SARVAM_LANGUAGE_CODE: "en-IN" });
+    const transcript = controllerFor(
+      { ...worker.room.session!, status: "takeover_needed" } as TranscriptSessionState,
+      worker.room.captionLanguageDefaults(),
+    );
+    await act(async () =>
+      root.render(<TranscriptPanel transcript={transcript} roomAi={roomUsing("sarvam")} onClose={() => {}} />),
+    );
+    expect(shownLanguage()).toBe("Tamil");
+    await act(async () => {
+      container.querySelector("form")?.requestSubmit();
+    });
+    await worker.send("sarvam", "session.takeover", (transcript.takeover as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]);
+
+    expect(used.codes).toEqual(["ta-IN", "ta-IN"]);
   });
 });
