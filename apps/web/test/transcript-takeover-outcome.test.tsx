@@ -386,6 +386,41 @@ describe("requests that are replaced or recovered", () => {
   });
 });
 
+describe("restarting notes", () => {
+  it("starts a fresh relay when notes restart within a second with the same token", async () => {
+    const socket = await mount();
+    await act(async () => socket.frame({ type: "snapshot", session: { ...liveSession, status: "idle" } }));
+    const runNotes = async () => {
+      let result!: Promise<boolean>;
+      await act(async () => {
+        result = controller.start({ language: "hi", transportMode: "sfu" });
+      });
+      const requestId = socket.sent.filter((message) => message.type === "session.start").at(-1)?.requestId;
+      await act(async () =>
+        socket.frame({ type: "session.state", session: { ...liveSession, status: "starting", requestId } }),
+      );
+      await act(async () =>
+        socket.frame({ type: "session.state", session: { ...liveSession, requestId, updatedAt: 5 } }),
+      );
+      await act(async () =>
+        socket.frame({ type: "sfu.relayStartToken", token: "same-second-token", expiresAt: Date.now() + 60_000 }),
+      );
+      return result;
+    };
+
+    expect(await runNotes()).toBe(true);
+    await act(async () => {
+      await controller.stop();
+    });
+    await act(async () =>
+      socket.frame({ type: "session.state", session: { ...liveSession, status: "idle", requestId: undefined } }),
+    );
+    expect(await runNotes()).toBe(true);
+
+    expect(startRelay).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("caption language support", () => {
   it("follows what the worker says it supports", async () => {
     const socket = await mount();

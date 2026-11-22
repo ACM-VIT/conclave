@@ -637,6 +637,11 @@ export function useMeetingTranscript({
       ) {
         cancelPendingQuestions();
       }
+      // A relay token is tied to one session: once that session ends or a
+      // new one starts, an identical token is a new relay, not a repeat.
+      if (["starting", "idle", "error", "takeover_needed"].includes(nextSession.status)) {
+        startedRelayTokensRef.current.clear();
+      }
       sessionRef.current = nextSession;
       setSession(nextSession);
       if (
@@ -1353,6 +1358,7 @@ export function useMeetingTranscript({
     }
     const transportMode = session.transportMode;
     explicitStopSerialRef.current += 1;
+    startedRelayTokensRef.current.clear();
     clearSessionWaiters();
     suppressAutoTakeoverUntilRef.current =
       Date.now() + SFU_EXPLICIT_STOP_SUPPRESS_TAKEOVER_MS;
