@@ -25,7 +25,7 @@ const makeSocket = (activeAppId: string | null = null) => {
   const syncTimes: number[] = [];
   const unanswered: Ack[] = [];
   const uploads: Uint8Array[] = [];
-  const updatePayloads: Array<{ update: Uint8Array; docGuid?: string }> = [];
+  const updatePayloads: Array<{ update: Uint8Array; replicaId?: string }> = [];
   const syncPayloads: Array<Record<string, unknown>> = [];
   const control = { answerSync: (_attempt: number): SyncReply => undefined, getState: true };
   const pendingState: Ack[] = [];
@@ -41,7 +41,7 @@ const makeSocket = (activeAppId: string | null = null) => {
       }
       if (event === "apps:yjs:update") {
         uploads.push((payload as { update: Uint8Array }).update);
-        updatePayloads.push(payload as { update: Uint8Array; docGuid?: string });
+        updatePayloads.push(payload as { update: Uint8Array; replicaId?: string });
       }
       if (event === "apps:yjs:sync") syncPayloads.push(payload as Record<string, unknown>);
       if (event !== "apps:yjs:sync" || typeof ack !== "function") return;
@@ -71,17 +71,18 @@ function BoardConsumer() {
   return null;
 }
 
-const mount = async (socket: Socket) => {
+const boardApp = { id: "board", name: "Board" } as never;
+const mount = async (socket: Socket, { isAdmin = true, apps = [boardApp] }: { isAdmin?: boolean; apps?: never[] } = {}) => {
   await act(async () =>
     root.render(
-      <AppsProvider socket={socket} apps={[{ id: "board", name: "Board" } as never]} isAdmin>
+      <AppsProvider socket={socket} apps={apps} isAdmin={isAdmin}>
         <Probe />
       </AppsProvider>,
     ),
   );
 };
-const appState = async (activeAppId: string | null) => {
-  await act(async () => first.fire("apps:state", { activeAppId, locked: false }));
+const appState = async (activeAppId: string | null, locked = false) => {
+  await act(async () => first.fire("apps:state", { activeAppId, locked }));
 };
 const openBoard = () => appState("board");
 const wait = async (ms: number) => {
@@ -90,6 +91,14 @@ const wait = async (ms: number) => {
   });
 };
 const boardText = () => ctx.getDoc("board").getText("t").toString();
+const draw = async (text: string) => {
+  await act(async () => ctx.getDoc("board").getText("t").insert(0, text));
+};
+const lastReplica = () => first.updatePayloads.at(-1)!.replicaId!;
+const refuse = async (replicaId: string) => {
+  await act(async () => first.fire("apps:yjs:refused", { appId: "board", replicaId, reason: "timed-out" }));
+};
+const contentOf = (doc: Y.Doc) => ({ syncMessage: Y.encodeStateAsUpdate(doc), stateVector: Y.encodeStateVector(doc) });
 const gaps = () => first.syncTimes.slice(1).map((time, index) => time - first.syncTimes[index]);
 
 beforeEach(async () => {
@@ -311,42 +320,148 @@ it("drops the old sync when a reconnect lands in a room with no app open", async
   expect(ctx.syncStatus).toBe("idle");
 });
 
-it("tells the server it can retry a sync and names the document each change comes from", async () => {
+it("tells the server it can retry a sync and names its copy of the board with an id it picks", async () => {
   first.control.answerSync = () => boardContent();
   await openBoard();
 
-  await act(async () => ctx.getDoc("board").getText("t").insert(0, "mine "));
+  await draw("mine ");
+  await draw("more ");
 
   expect(first.syncPayloads[0]).toMatchObject({ appId: "board", canRetry: true });
-  expect(first.updatePayloads.at(-1)?.docGuid).toBe(ctx.getDoc("board").guid);
+  const [one, two] = first.updatePayloads.slice(-2).map((payload) => payload.replicaId);
+  expect(one).toEqual(expect.any(String));
+  expect(two).toBe(one);
+  expect(one).not.toBe(ctx.getDoc("board").guid);
 });
 
-it("rebuilds the board from the server when the server refuses a change", async () => {
+it("sends nothing back after a sync that left it with nothing the server lacks", async () => {
+  const erased = new Y.Doc();
+  erased.getText("t").insert(0, "drawn and erased");
+  erased.getText("t").delete(0, 10);
+  first.control.answerSync = () => contentOf(erased);
+
+  await openBoard();
+
+  expect(boardText()).toBe("erased");
+  expect(ctx.syncStatus).toBe("synced");
+  expect(first.uploads).toEqual([]);
+});
+
+it("sends no change while the app is locked for a participant who is not a host, then sends again once unlocked", async () => {
+  await mount(first.socket, { isAdmin: false });
   first.control.answerSync = () => boardContent();
+  await appState("board", true);
+
+  await draw("mine ");
+  expect(ctx.syncStatus).toBe("synced");
+  expect(first.uploads).toEqual([]);
+
+  await appState("board", false);
+  await draw("now ");
+  expect(first.uploads).toHaveLength(1);
+});
+
+it("keeps the refused board on screen until the server's copy arrives, then shows only what the server kept", async () => {
+  first.control.answerSync = (attempt) => (attempt === 1 ? boardContent() : undefined);
   await openBoard();
   const refusedDoc = ctx.getDoc("board");
-  await act(async () => refusedDoc.getText("t").insert(0, "mine "));
-  expect(boardText()).toBe("mine drawn before you joined");
+  await draw("mine ");
+  const uploads = first.uploads.length;
 
-  await act(async () => first.fire("apps:yjs:refused", { appId: "board", docGuid: refusedDoc.guid, reason: "timed-out" }));
+  await refuse(lastReplica());
+  expect(mountedDoc).toBe(refusedDoc);
+  expect(ctx.getDoc("board")).toBe(refusedDoc);
+  expect(ctx.syncStatus).toBe("syncing");
+  await draw("lost ");
+  await act(async () => first.unanswered.shift()!(boardContent()));
 
   expect(ctx.getDoc("board")).not.toBe(refusedDoc);
-  expect(boardText()).toBe("drawn before you joined");
   expect(mountedDoc).toBe(ctx.getDoc("board"));
+  expect(boardText()).toBe("drawn before you joined");
+  expect(first.uploads).toHaveLength(uploads);
   expect(first.syncTimes).toHaveLength(2);
-  expect(ctx.rejectedChanges).toBe(1);
+  expect(ctx.rejectedChangeAt).toEqual(expect.any(Number));
   expect(ctx.syncStatus).toBe("synced");
 });
 
-it("ignores a refusal for a document it has already replaced", async () => {
-  first.control.answerSync = () => boardContent();
+it("keeps a peer's change that lands while it rebuilds the board", async () => {
+  first.control.answerSync = (attempt) => (attempt === 1 ? boardContent() : undefined);
+  await openBoard();
+  await draw("mine ");
+  const peer = new Y.Doc();
+  Y.applyUpdate(peer, Y.encodeStateAsUpdate(board));
+  const before = Y.encodeStateVector(peer);
+  peer.getText("t").insert(0, "peer ");
+  const peerChange = Y.encodeStateAsUpdate(peer, before);
+
+  await refuse(lastReplica());
+  await act(async () => first.fire("apps:yjs:update", { appId: "board", update: peerChange }));
+  await act(async () => first.unanswered.shift()!(boardContent()));
+
+  expect(boardText()).toBe("peer drawn before you joined");
+});
+
+it("starts the rebuild again when asked to retry after it gave up", async () => {
+  first.control.answerSync = (attempt) => (attempt === 1 ? boardContent() : busy);
   await openBoard();
   const refusedDoc = ctx.getDoc("board");
-  const refusal = { appId: "board", docGuid: refusedDoc.guid, reason: "missing-dependency" };
-  await act(async () => first.fire("apps:yjs:refused", refusal));
+  await draw("mine ");
+  const uploads = first.uploads.length;
+  await refuse(lastReplica());
+  await wait(30_000);
+  expect(ctx.syncStatus).toBe("failed");
+  expect(mountedDoc).toBe(refusedDoc);
 
-  await act(async () => first.fire("apps:yjs:refused", refusal));
+  first.control.answerSync = () => boardContent();
+  await act(async () => ctx.retrySync());
+
+  expect(mountedDoc).not.toBe(refusedDoc);
+  expect(boardText()).toBe("drawn before you joined");
+  expect(first.uploads).toHaveLength(uploads);
+  expect(ctx.syncStatus).toBe("synced");
+});
+
+it("tells a refusal of the old copy from one of the new copy even when the app reuses a doc guid", async () => {
+  await mount(first.socket, { apps: [{ id: "board", name: "Board", createDoc: () => new Y.Doc({ guid: "board" }) } as never] });
+  first.control.answerSync = () => boardContent();
+  await openBoard();
+  await draw("one ");
+  const oldReplica = lastReplica();
+  await refuse(oldReplica);
+  await draw("two ");
+  const newReplica = lastReplica();
+  expect(newReplica).not.toBe(oldReplica);
+
+  await refuse(oldReplica);
+  expect(first.syncTimes).toHaveLength(2);
+  await refuse(newReplica);
+  expect(first.syncTimes).toHaveLength(3);
+});
+
+it("ignores a refusal for a copy it has already replaced", async () => {
+  first.control.answerSync = () => boardContent();
+  await openBoard();
+  await draw("mine ");
+  const replicaId = lastReplica();
+  await refuse(replicaId);
+  const rejectedAt = ctx.rejectedChangeAt;
+
+  await wait(1_000);
+  await refuse(replicaId);
 
   expect(first.syncTimes).toHaveLength(2);
-  expect(ctx.rejectedChanges).toBe(1);
+  expect(ctx.rejectedChangeAt).toBe(rejectedAt);
+});
+
+it("forgets a refused change once the app closes", async () => {
+  first.control.answerSync = () => boardContent();
+  await openBoard();
+  await draw("mine ");
+  await refuse(lastReplica());
+  expect(ctx.rejectedChangeAt).toEqual(expect.any(Number));
+
+  await appState(null);
+  expect(ctx.rejectedChangeAt).toBeNull();
+  await openBoard();
+  expect(ctx.rejectedChangeAt).toBeNull();
 });

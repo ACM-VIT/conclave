@@ -30,7 +30,7 @@ interface MeetingAppLayoutProps {
   leaveAction?: { label: string; hint?: string; onLeave: () => void };
   syncFailed?: boolean;
   onRetrySync?: () => void;
-  rejectedChanges?: number;
+  rejectedChangeAt?: number | null;
 }
 
 const REJECTED_CHANGE_NOTICE_MS = 4_000;
@@ -56,16 +56,17 @@ function MeetingAppLayout({
   leaveAction,
   syncFailed = false,
   onRetrySync,
-  rejectedChanges = 0,
+  rejectedChangeAt = null,
 }: MeetingAppLayoutProps) {
-  const [noticeShownFor, setNoticeShownFor] = useState(0);
+  const [noticeFor, setNoticeFor] = useState<number | null>(null);
 
   useEffect(() => {
-    if (rejectedChanges === 0) return;
-    setNoticeShownFor(rejectedChanges);
-    const timer = window.setTimeout(() => setNoticeShownFor(0), REJECTED_CHANGE_NOTICE_MS);
+    const remaining = rejectedChangeAt === null ? 0 : rejectedChangeAt + REJECTED_CHANGE_NOTICE_MS - Date.now();
+    if (remaining <= 0) return;
+    setNoticeFor(rejectedChangeAt);
+    const timer = window.setTimeout(() => setNoticeFor(null), remaining);
     return () => window.clearTimeout(timer);
-  }, [rejectedChanges]);
+  }, [rejectedChangeAt]);
 
   const isLocalActiveSpeaker = activeSpeakerId === currentUserId;
 
@@ -124,7 +125,7 @@ function MeetingAppLayout({
           }
         >
           <App />
-          {noticeShownFor > 0 ? <AdminNoticePill notice={REJECTED_CHANGE_NOTICE} compact /> : null}
+          {noticeFor !== null && noticeFor === rejectedChangeAt ? <AdminNoticePill notice={REJECTED_CHANGE_NOTICE} compact /> : null}
         </div>
       </div>
       <aside className="hidden lg:flex w-64 shrink-0 flex-col gap-3 overflow-y-auto overflow-x-visible px-1">

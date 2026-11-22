@@ -42,12 +42,12 @@ export type AppDocuments = {
 export type AppsUpdatePayload = {
   appId: string;
   update: Uint8Array;
-  docGuid?: string;
+  replicaId?: string;
 };
 
 export type AppsRefusedPayload = {
   appId: string;
-  docGuid: string;
+  replicaId: string;
   reason: string;
 };
 
@@ -95,7 +95,7 @@ export type AppsContextValue = {
   syncStatus: AppSyncStatus;
   retrySync: () => void;
   documents: AppDocuments;
-  rejectedChanges: number;
+  rejectedChangeAt: number | null;
   user?: AppUser;
   participants?: AppUser[];
   isAdmin?: boolean;
