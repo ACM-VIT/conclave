@@ -177,16 +177,19 @@ const roundToTotal = (sizes: number[], total: number) => {
 };
 
 /**
- * How far each tile may resize, in whole pixels: `floor` and `hard` are the
- * 1.25x caps either way, and `soft` holds portrait tiles at 4:5, since a
- * portrait tile crops a face sooner.
+ * How far each tile may resize, in whole pixels, from its unrounded width
+ * `exact`: `floor` and `hard` are the 1.25x caps either way, and `soft` holds
+ * portrait tiles at 4:5, since a portrait tile crops a face sooner.
  */
-const resizeLimits = (widths: number[], height: number) => {
-  const floor = widths.map((width) => Math.ceil(width / MAX_ROW_STRETCH));
-  const hard = widths.map((width) => Math.floor(width * MAX_ROW_STRETCH));
-  const soft = widths.map((width, index) =>
+const resizeLimits = (exact: number[], height: number) => {
+  const floor = exact.map((width) => Math.ceil(width / MAX_ROW_STRETCH));
+  const hard = exact.map((width) => Math.floor(width * MAX_ROW_STRETCH));
+  const soft = exact.map((width, index) =>
     width < height
-      ? Math.min(hard[index], Math.max(width, Math.floor(height * PORTRAIT_STRETCH_ASPECT)))
+      ? Math.min(
+          hard[index],
+          Math.max(Math.floor(width), Math.floor(height * PORTRAIT_STRETCH_ASPECT)),
+        )
       : hard[index],
   );
   return { floor, soft, hard };
@@ -232,9 +235,13 @@ const tileBudget = (count: number, gap: number, rowWidth: number) => {
  * hard caps, and shrink no further than their floors. Returns null when the
  * caps cannot reach `rowWidth`.
  */
-const resizeRow = (widths: number[], height: number, gap: number, rowWidth: number) => {
+const resizeRow = (
+  widths: number[],
+  { floor, soft, hard }: ReturnType<typeof resizeLimits>,
+  gap: number,
+  rowWidth: number,
+) => {
   const total = tileBudget(widths.length, gap, rowWidth);
-  const { floor, soft, hard } = resizeLimits(widths, height);
   if (total < sum(floor) || total > sum(hard)) return null;
   const sizes = [...widths];
   if (total < sum(widths)) {
@@ -245,14 +252,23 @@ const resizeRow = (widths: number[], height: number, gap: number, rowWidth: numb
   return roundToTotal(sizes, total);
 };
 
-// A row past its tolerance eases back to its own width this many px for every
-// px it misses by, so a near miss stays nearly aligned and a far one sits at
-// its own width.
+// A row that misses the shared width by this much or less stays at its
+// nearest legal width: 4 px at each edge, a third of the 12 px gap.
+const ROW_MISS_TOLERANCE = 8;
+// Past that, a row eases back to its own width this many px for every px it
+// misses by, so a near miss stays nearly aligned and a far one sits at its own
+// width.
 const ROW_EASE_RATE = 3;
 
 /**
  * Resize each row's tiles so the rows share one width and the grid's edges
  * line up, moving smoothly as the container resizes.
+ *
+ * Every width here is unrounded, `height * aspect` and its 1.25x caps, so it
+ * moves in proportion to the tile height and the ease never multiplies a
+ * pixel that rounding added or took away. Only the final widths go to whole
+ * pixels: rows that met share one pixel width inside all their caps, and any
+ * other row keeps its offset from its own whole-pixel width.
  *
  * The shared width minimises a convex cost: 1 per px from the full rows'
  * preferred width (nearest the widest row, portrait tiles held at 4:5), 4 per
@@ -264,21 +280,32 @@ const ROW_EASE_RATE = 3;
  * them.
  *
  * A row that can't reach the shared width takes its nearest legal width.
- * Whole-pixel caps lose under 1 px per tile, so a row and the full rows it
- * meets can miss by up to one px per tile in both just from rounding. Within
- * that tolerance the row stays at its nearest legal width. Past it, the row
- * eases back to its own width, so a lone last tile centres at its own width.
+ * Past the tolerance, it eases back to its own width, so a lone last tile
+ * centres at its own width.
  */
-const alignRows = (rowTiles: number[][], height: number, gap: number, cols: number) => {
-  const rows = rowTiles.map((tiles) => {
-    const limits = resizeLimits(tiles, height);
+const alignRows = (rowAspects: number[][], height: number, gap: number, cols: number) => {
+  const rows = rowAspects.map((aspects) => {
+    const exact = aspects.map((aspect) => height * aspect);
+    const tiles = exact.map(Math.floor);
+    const limits = resizeLimits(exact, height);
     return {
-      tolerance: cols + tiles.length,
-      full: tiles.length === cols,
-      natural: rowWidthOf(tiles, gap),
-      low: rowWidthOf(limits.floor, gap),
-      soft: rowWidthOf(limits.soft, gap),
-      high: rowWidthOf(limits.hard, gap),
+      tiles,
+      limits,
+      full: aspects.length === cols,
+      natural: rowWidthOf(exact, gap),
+      rounding: sum(exact) - sum(tiles),
+      low: rowWidthOf(exact.map((width) => width / MAX_ROW_STRETCH), gap),
+      soft: rowWidthOf(
+        exact.map((width) =>
+          width < height
+            ? Math.min(width * MAX_ROW_STRETCH, Math.max(width, height * PORTRAIT_STRETCH_ASPECT))
+            : width * MAX_ROW_STRETCH,
+        ),
+        gap,
+      ),
+      high: rowWidthOf(exact.map((width) => width * MAX_ROW_STRETCH), gap),
+      pixelLow: rowWidthOf(limits.floor, gap),
+      pixelHigh: rowWidthOf(limits.hard, gap),
     };
   });
   const fullRows = rows.filter((row) => row.full);
@@ -307,15 +334,26 @@ const alignRows = (rowTiles: number[][], height: number, gap: number, cols: numb
     .map((width) => Math.max(width, floor))
     .reduce((best, width) => (cost(width) < cost(best) ? width : best), preferred);
 
-  return rowTiles.map((tiles, index) => {
-    const row = rows[index];
+  const widths = rows.map((row) => {
     const nearest = Math.min(Math.max(target, row.low), row.high);
-    const ease = Math.max(0, miss(row, target) - row.tolerance) * ROW_EASE_RATE;
-    const rowWidth =
-      nearest > row.natural
-        ? Math.max(row.natural, nearest - ease)
-        : Math.min(row.natural, nearest + ease);
-    return resizeRow(tiles, height, gap, rowWidth) ?? tiles;
+    const ease = Math.max(0, miss(row, target) - ROW_MISS_TOLERANCE) * ROW_EASE_RATE;
+    return nearest > row.natural
+      ? Math.max(row.natural, nearest - ease)
+      : Math.min(row.natural, nearest + ease);
+  });
+  const met = rows.filter((_, index) => Math.abs(widths[index] - target) <= ASPECT_EPSILON);
+  const metLow = Math.max(...met.map((row) => row.pixelLow));
+  const metHigh = Math.min(...met.map((row) => row.pixelHigh));
+  const metWidth = Math.min(
+    Math.max(target - Math.max(...met.map((row) => row.rounding)), metLow),
+    metHigh,
+  );
+  return rows.map((row, index) => {
+    const pixelWidth =
+      met.includes(row) && metLow <= metHigh
+        ? metWidth
+        : Math.min(Math.max(widths[index] - row.rounding, row.pixelLow), row.pixelHigh);
+    return resizeRow(row.tiles, row.limits, gap, pixelWidth) ?? row.tiles;
   });
 };
 
@@ -416,15 +454,14 @@ const computeJustifiedRows = ({
   if (!best) return null;
 
   const tileHeight = Math.floor(best.tileHeight);
-  const naturalWidths = aspects.map((aspect) => Math.floor(tileHeight * aspect));
   let start = 0;
-  const rowTiles = best.rowCounts.map((rowCount) => {
+  const rowAspects = best.rowCounts.map((rowCount) => {
     start += rowCount;
-    return naturalWidths.slice(start - rowCount, start);
+    return aspects.slice(start - rowCount, start);
   });
   const rows = best.rowCounts.length;
   const cols = Math.max(...best.rowCounts);
-  const alignedRows = alignRows(rowTiles, tileHeight, gap, cols);
+  const alignedRows = alignRows(rowAspects, tileHeight, gap, cols);
   const widths = alignedRows.flat();
   const rowWidths = alignedRows.map((tiles) => rowWidthOf(tiles, gap));
   const contentWidth = Math.max(...rowWidths);

@@ -127,11 +127,12 @@ describe("computeGridLayout — degenerate inputs", () => {
   });
 });
 
-// The most a tile may change width when its container grows 1 px and keeps
-// its row split and tile height. A row easing back from the shared width moves
-// 3 px per px of miss on top of its own growth, and its landscape tiles can
-// take all of it, so a step can move a tile more than base's 2 px.
-const MAX_RESIZE_STEP = 16;
+// How far a 1 px resize that keeps the row split and tile height may move a
+// tile. Base moves widths 2 px and edges up to 5.5 px, since a row re-centres
+// as it grows. A tile that meets another row can take a few px more where its
+// neighbours sit at their caps.
+const MAX_WIDTH_STEP = 5;
+const MAX_EDGE_STEP = 6;
 
 const PORTRAIT = 3 / 4;
 const LANDSCAPE = 16 / 9;
@@ -160,9 +161,26 @@ const expectAlignedEdges = (
   expect(edges[rows[0]].right - edges[rows[0]].left).toBe(r.contentWidth);
 };
 
-// Rows may widen or narrow a tile by up to 1.25x to line up their edges.
+// A 1 px resize that keeps the rows and tile height moves every tile's width
+// and both its edges by no more than the step bounds.
+const expectSteadyStep = (
+  from: ReturnType<typeof computeGridLayout>,
+  to: ReturnType<typeof computeGridLayout>,
+) => {
+  from.positions.forEach((position, index) => {
+    const next = to.positions[index];
+    expect(Math.abs(next.width - position.width)).toBeLessThanOrEqual(MAX_WIDTH_STEP);
+    expect(Math.abs(next.x - position.x)).toBeLessThanOrEqual(MAX_EDGE_STEP);
+    expect(Math.abs(next.x + next.width - position.x - position.width)).toBeLessThanOrEqual(
+      MAX_EDGE_STEP,
+    );
+  });
+};
+
+// Rows may widen or narrow a tile by up to 1.25x of its unrounded width to
+// line up their edges.
 const expectWithinStretch = (position: { width: number; height: number }, aspect: number) => {
-  const natural = Math.floor(position.height * aspect);
+  const natural = position.height * aspect;
   expect(position.width).toBeGreaterThanOrEqual(Math.ceil(natural / 1.25));
   expect(position.width).toBeLessThanOrEqual(Math.floor(natural * 1.25));
 };
@@ -428,9 +446,27 @@ describe("computeGridLayout — mixed rows line up", () => {
       expect(Math.abs(top.right - bottom.right)).toBeLessThanOrEqual(2);
       r.positions.forEach((position, index) => expectWithinStretch(position, aspects[index]));
     });
-    narrow.positions.forEach((position, index) => {
-      expect(Math.abs(wide.positions[index].width - position.width)).toBeLessThanOrEqual(4);
-    });
+    expectSteadyStep(narrow, wide);
+  });
+
+  const SIX = [0.6, 0.8, 0.8, 0.8, LANDSCAPE, 2 / 3];
+  const NINE = [2 / 3, PORTRAIT, 2 / 3, 2 / 3, LANDSCAPE, PORTRAIT, LANDSCAPE, 2 / 3, LANDSCAPE];
+  it.each([
+    // Sol: six people, the laptop grew 20 px when the grid gained 1 px of width.
+    ["six people, 1 px wider", SIX, { width: 683, height: 510 }, { width: 684, height: 510 }],
+    // Sol: the same six people, 1 px taller.
+    ["six people, 1 px taller", SIX, { width: 724, height: 443 }, { width: 724, height: 444 }],
+    // Nine people, 1 px taller: the worst height step 4def912a showed on nine tiles.
+    ["nine people, 1 px taller", NINE, { width: 1988, height: 716, maxCols: 4 }, { width: 1988, height: 717, maxCols: 4 }],
+    // Astra: three phones over a laptop, the meeting at 1003 to 1004 by 974.
+    ["three phones over a laptop", [PORTRAIT, PORTRAIT, PORTRAIT, LANDSCAPE], { width: 971, height: 942 }, { width: 972, height: 942 }],
+  ])("moves %s by about what base does", (_, aspects, before, after) => {
+    const [from, to] = [before, after].map(({ width, height, ...options }) =>
+      computeGridLayout(aspects.length, width, height, { ...options, tileAspects: aspects }),
+    );
+
+    expect(rowsOf(to)).toEqual(rowsOf(from));
+    expectSteadyStep(from, to);
   });
 
   it("brings a near miss within a pixel with a fractional gap", () => {
@@ -517,7 +553,7 @@ describe("computeGridLayout — mixed rows, random layouts", () => {
         });
       });
       r.positions.forEach((position, index) => {
-        const natural = Math.floor(position.height * c.aspects[index]);
+        const natural = position.height * c.aspects[index];
         if (!Number.isInteger(position.width)) fail("fractional width");
         if (position.height !== r.tileHeight) fail("height");
         if (position.width < Math.ceil(natural / 1.25)) fail("past the shrink cap");
@@ -533,7 +569,7 @@ describe("computeGridLayout — mixed rows, random layouts", () => {
   const rowRange = (r: ReturnType<typeof computeGridLayout>, row: number[], c: (typeof cases)[number]) => {
     const span = (scale: (natural: number) => number) =>
       row.reduce(
-        (total, index) => total + scale(Math.floor(r.tileHeight * c.aspects[index])),
+        (total, index) => total + scale(r.tileHeight * c.aspects[index]),
         (row.length - 1) * c.gap,
       );
     return {
@@ -599,39 +635,52 @@ describe("computeGridLayout — mixed rows, random layouts", () => {
     expect(checked).toBeGreaterThan(200);
   });
 
-  it("changes no tile by more than a few px when the container grows 1 px", () => {
+  it("moves no tile or edge by more than a few px when the container grows 1 px", () => {
     // A new row split or tile height reshapes the grid at base too, so this
-    // compares neighbouring widths that keep both, at the web grid's 12 px gap.
+    // compares neighbouring sizes that keep both, at the web grid's 12 px gap,
+    // growing the width and the height in turn.
     const sweep = seededRandom(1211);
     const pick = (min: number, max: number) => min + Math.floor(sweep() * (max - min + 1));
     let compared = 0;
     const jumps: string[] = [];
     for (let run = 0; run < 1500; run += 1) {
       const count = pick(2, 12);
-      const start = pick(400, 2400);
+      const width = pick(400, 2400);
       const height = pick(300, 1400);
       const maxCols = pick(2, 7);
       const aspects = Array.from({ length: count }, () => SHAPES[pick(0, SHAPES.length - 1)]);
-      const at = (width: number) =>
-        computeGridLayout(count, width, height, { maxCols, tileAspects: aspects });
-      let previous = at(start);
-      for (let width = start + 1; width <= start + 40; width += 1) {
-        const next = at(width);
-        const sameShape =
-          next.positions.every((position, index) => position.row === previous.positions[index].row) &&
-          Math.abs(next.tileHeight - previous.tileHeight) <= 1;
-        if (sameShape) {
-          compared += 1;
-          const step = Math.max(
-            ...next.positions.map((position, index) =>
-              Math.abs(position.width - previous.positions[index].width),
-            ),
+      for (const axis of ["width", "height"] as const) {
+        const at = (step: number) =>
+          computeGridLayout(
+            count,
+            axis === "width" ? width + step : width,
+            axis === "height" ? height + step : height,
+            { maxCols, tileAspects: aspects },
           );
-          if (step > MAX_RESIZE_STEP) {
-            jumps.push(`${step} px at ${JSON.stringify({ width, height, maxCols, aspects })}`);
+        let previous = at(0);
+        for (let step = 1; step <= 20; step += 1) {
+          const next = at(step);
+          const sameShape =
+            next.positions.every((position, index) => position.row === previous.positions[index].row) &&
+            Math.abs(next.tileHeight - previous.tileHeight) <= 1;
+          if (sameShape) {
+            compared += 1;
+            next.positions.forEach((position, index) => {
+              const before = previous.positions[index];
+              const grew = Math.abs(position.width - before.width);
+              const shifted = Math.max(
+                Math.abs(position.x - before.x),
+                Math.abs(position.x + position.width - before.x - before.width),
+              );
+              if (grew > MAX_WIDTH_STEP || shifted > MAX_EDGE_STEP) {
+                jumps.push(
+                  `width ${grew} px, edge ${shifted} px, ${axis} +1 at ${JSON.stringify({ step, width, height, maxCols, aspects })}`,
+                );
+              }
+            });
           }
+          previous = next;
         }
-        previous = next;
       }
     }
     expect(jumps).toEqual([]);
