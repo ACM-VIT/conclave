@@ -332,6 +332,26 @@ describe("exceptions", () => {
     });
   });
 
+  it("withholds a value that does not fit its form and keeps the rest of the exception", () => {
+    const event = exceptionEvent();
+    event.properties.$exception_list[0].stacktrace.frames = Array.from({ length: 600 }, (_, index) => ({
+      filename: `${SITE}/_next/static/chunks/3u-6_1om1fv26.js`,
+      lineno: index === 0 ? 200_000_000 : index,
+      colno: 3,
+      chunk_id: CHUNK_ID,
+    }));
+    const frames = build(event).properties.$exception_list[0].stacktrace.frames;
+
+    expect(frames).toHaveLength(500);
+    expect(frames[0]).toEqual({
+      platform: "web:javascript",
+      function: "?",
+      filename: "/_next/static/chunks/3u-6_1om1fv26.js",
+      colno: 3,
+      chunk_id: CHUNK_ID,
+    });
+  });
+
   it("keeps a chunk's path only when the frame carries the chunk id injected at build, on our own origin", () => {
     const event = exceptionEvent();
     event.properties.$exception_list[0].stacktrace.frames = [

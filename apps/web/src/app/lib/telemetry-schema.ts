@@ -23,7 +23,10 @@ const ms = z.number().int().min(0).max(7 * 24 * 3_600_000);
 const percent = z.number().min(0).max(100);
 const flag = z.boolean();
 const spatialLayer = z.number().int().min(0).max(8);
-const position = z.number().int().min(0).max(100_000_000);
+export const MAX_POSITION = 100_000_000;
+export const MAX_EXCEPTIONS = 50;
+export const MAX_FRAMES = 500;
+const position = z.number().int().min(0).max(MAX_POSITION);
 const pixels = z.number().int().min(0).max(100_000);
 const uuid = z.uuid();
 
@@ -303,10 +306,10 @@ const exceptionListForm = (chunkFiles: ReadonlyMap<string, string>) =>
             parent_id: position.optional(),
           })
           .optional(),
-        stacktrace: z.object({ type: z.literal("raw"), frames: z.array(frameForm(chunkFiles)).max(500) }).optional(),
+        stacktrace: z.object({ type: z.literal("raw"), frames: z.array(frameForm(chunkFiles)).max(MAX_FRAMES) }).optional(),
       }),
     )
-    .max(50);
+    .max(MAX_EXCEPTIONS);
 
 /** The properties posthog-js gives every event that we send, and the ones we add. */
 const SDK_PROPERTIES = {

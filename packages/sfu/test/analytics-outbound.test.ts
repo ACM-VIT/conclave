@@ -252,6 +252,44 @@ describe("the SFU's outbound schema", () => {
     expect(JSON.stringify(beforeSend(outOfRange as unknown as Message))).not.toMatch(/Mira|99|config_questions|game_id/);
   });
 
+  it("withholds one value that does not fit its form, and keeps the rest of the exception", () => {
+    const message = {
+      distinctId: SFU_ID,
+      event: "$exception",
+      properties: {
+        $exception_list: [
+          {
+            type: "TypeError",
+            value: "x",
+            mechanism: { type: "onerror", handled: false },
+            stacktrace: {
+              type: "raw",
+              frames: [
+                { platform: "node:javascript", filename: OWN_FILE, function: "async Promise.all (index 0)", lineno: 4, colno: 200_000_000, in_app: true },
+                { platform: "node:javascript", filename: OWN_FILE, function: "createErrorReporter", lineno: 5, in_app: true },
+              ],
+            },
+          },
+        ],
+      },
+    };
+
+    expect(beforeSend(message as unknown as Message)?.properties?.$exception_list).toEqual([
+      {
+        type: "TypeError",
+        value: "[message withheld]",
+        mechanism: { type: "generic", handled: false },
+        stacktrace: {
+          type: "raw",
+          frames: [
+            { platform: "node:javascript", filename: "server/analytics/errorReporter.ts", function: "?", lineno: 4, in_app: true },
+            { platform: "node:javascript", filename: "server/analytics/errorReporter.ts", function: "createErrorReporter", lineno: 5, in_app: true },
+          ],
+        },
+      },
+    ]);
+  });
+
   it("sends only the events on the list", () => {
     for (const event of ["$identify", "$pageview", "$set", "game_secret", "Meet Mira joined"]) {
       expect(beforeSend({ distinctId: SFU_ID, event, properties: { $lib: "posthog-node" } })).toBeNull();

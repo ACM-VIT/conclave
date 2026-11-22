@@ -9,6 +9,9 @@ import {
   isOutboundEventName,
   KNOWN_ERROR_TYPES,
   LANGUAGES,
+  MAX_EXCEPTIONS,
+  MAX_FRAMES,
+  MAX_POSITION,
   MECHANISM_TYPES,
   MESSAGE_WITHHELD,
   type OutboundContext,
@@ -89,7 +92,7 @@ const primaryLanguage = (value: unknown): string | undefined => {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
 const isPosition = (value: unknown): value is number =>
-  typeof value === "number" && Number.isInteger(value) && value >= 0;
+  typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= MAX_POSITION;
 const placeholders = new Set<string>(FRAME_PLACEHOLDERS);
 const knownTypes = new Set<string>(KNOWN_ERROR_TYPES);
 const mechanisms = new Set<string>(MECHANISM_TYPES);
@@ -169,7 +172,7 @@ const shapeMechanism = (mechanism: unknown) => {
  */
 const shapeExceptionList = (value: unknown, trustedMessage: string | null, source: EventSource) => {
   if (!Array.isArray(value)) return undefined;
-  return value.filter(isRecord).map((entry) => {
+  return value.filter(isRecord).slice(0, MAX_EXCEPTIONS).map((entry) => {
     const mechanism = shapeMechanism(entry.mechanism);
     const frames = isRecord(entry.stacktrace) ? entry.stacktrace.frames : undefined;
     return {
@@ -177,7 +180,12 @@ const shapeExceptionList = (value: unknown, trustedMessage: string | null, sourc
       value: trustedMessage ?? MESSAGE_WITHHELD,
       ...(mechanism ? { mechanism } : {}),
       ...(Array.isArray(frames)
-        ? { stacktrace: { type: "raw", frames: frames.filter(isRecord).map((frame) => shapeFrame(frame, source)) } }
+        ? {
+            stacktrace: {
+              type: "raw",
+              frames: frames.filter(isRecord).slice(0, MAX_FRAMES).map((frame) => shapeFrame(frame, source)),
+            },
+          }
         : {}),
     };
   });

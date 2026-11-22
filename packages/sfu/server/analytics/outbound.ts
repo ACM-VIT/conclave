@@ -29,6 +29,9 @@ import {
 const PATH_WITHHELD = "[path]";
 const FUNCTION_WITHHELD = "?";
 const MAX_KNOWN_PATHS = 1000;
+const MAX_POSITION = 100_000_000;
+const MAX_EXCEPTIONS = 10;
+const MAX_FRAMES = 500;
 
 export type FramePathOptions = {
   /** The folder whose files may be named. */
@@ -68,10 +71,20 @@ export const createFramePath = ({ root, cwd }: FramePathOptions) => {
   };
 };
 
+// The forms of a frame's file and function, which the shaper checks one by
+// one, so a value that does not fit is withheld alone.
+const FRAME_FILE = z
+  .string()
+  .regex(/^(?!\.\.?\/)(?!.*\/\.\.?\/)[\w.@+-]+(?:\/[\w.@+-]+)*$/)
+  .max(300);
+const FUNCTION_NAME = z.string().regex(/^[\w$.<>[\] ]{1,200}$/);
+const MECHANISM_TYPES = ["generic", "chained", "onuncaughtexception", "onunhandledrejection"] as const;
+const mechanismTypes = new Set<string>(MECHANISM_TYPES);
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
 const isPosition = (value: unknown): value is number =>
-  typeof value === "number" && Number.isInteger(value) && value >= 0;
+  typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= MAX_POSITION;
 
 /**
  * A frame keeps its position and in-app flag, and its path and function name
@@ -82,11 +95,11 @@ const isPosition = (value: unknown): value is number =>
 const shapeFrame = (frame: Record<string, unknown>, framePath: (filename: string) => string) => {
   const ownPath =
     frame.in_app === true && typeof frame.filename === "string" ? framePath(frame.filename) : PATH_WITHHELD;
-  const own = ownPath !== PATH_WITHHELD;
+  const own = ownPath !== PATH_WITHHELD && FRAME_FILE.safeParse(ownPath).success;
   return {
     platform: "node:javascript",
-    ...(typeof frame.filename === "string" ? { filename: ownPath } : {}),
-    function: own && typeof frame.function === "string" ? frame.function : FUNCTION_WITHHELD,
+    ...(typeof frame.filename === "string" ? { filename: own ? ownPath : PATH_WITHHELD } : {}),
+    function: own && FUNCTION_NAME.safeParse(frame.function).success ? frame.function : FUNCTION_WITHHELD,
     ...(isPosition(frame.lineno) ? { lineno: frame.lineno } : {}),
     ...(isPosition(frame.colno) ? { colno: frame.colno } : {}),
     ...(typeof frame.in_app === "boolean" ? { in_app: frame.in_app } : {}),
@@ -97,7 +110,7 @@ const sentTypes = new Set(SENT_ERROR_TYPES);
 
 const shapeExceptionList = (value: unknown, framePath: (filename: string) => string) => {
   if (!Array.isArray(value)) return undefined;
-  return value.filter(isRecord).map((entry) => {
+  return value.filter(isRecord).slice(0, MAX_EXCEPTIONS).map((entry) => {
     const { mechanism, stacktrace } = entry;
     const frames = isRecord(stacktrace) ? stacktrace.frames : undefined;
     return {
@@ -106,7 +119,7 @@ const shapeExceptionList = (value: unknown, framePath: (filename: string) => str
       ...(isRecord(mechanism)
         ? {
             mechanism: {
-              type: typeof mechanism.type === "string" ? mechanism.type : "generic",
+              type: typeof mechanism.type === "string" && mechanismTypes.has(mechanism.type) ? mechanism.type : "generic",
               ...(typeof mechanism.handled === "boolean" ? { handled: mechanism.handled } : {}),
               ...(typeof mechanism.synthetic === "boolean" ? { synthetic: mechanism.synthetic } : {}),
               ...(isPosition(mechanism.exception_id) ? { exception_id: mechanism.exception_id } : {}),
@@ -115,7 +128,12 @@ const shapeExceptionList = (value: unknown, framePath: (filename: string) => str
           }
         : {}),
       ...(Array.isArray(frames)
-        ? { stacktrace: { type: "raw", frames: frames.filter(isRecord).map((frame) => shapeFrame(frame, framePath)) } }
+        ? {
+            stacktrace: {
+              type: "raw",
+              frames: frames.filter(isRecord).slice(0, MAX_FRAMES).map((frame) => shapeFrame(frame, framePath)),
+            },
+          }
         : {}),
     };
   });
@@ -123,7 +141,7 @@ const shapeExceptionList = (value: unknown, framePath: (filename: string) => str
 
 const count = z.number().int().min(0).max(1_000_000);
 const ms = z.number().int().min(0).max(7 * 24 * 3_600_000);
-const position = z.number().int().min(0).max(100_000_000);
+const position = z.number().int().min(0).max(MAX_POSITION);
 const flag = z.boolean();
 const SFU_ID = z.string().regex(/^sfu_[0-9a-f]{16}$/);
 const USER_ID = z.string().regex(/^user_[0-9a-f]{32}$/);
@@ -144,7 +162,7 @@ const exceptionListForm = z
       value: z.string().refine(isSentMessage),
       mechanism: z
         .object({
-          type: z.enum(["generic", "chained", "onuncaughtexception", "onunhandledrejection"]),
+          type: z.enum(MECHANISM_TYPES),
           handled: flag.optional(),
           synthetic: flag.optional(),
           exception_id: position.optional(),
@@ -159,24 +177,20 @@ const exceptionListForm = z
               z.object({
                 platform: z.literal("node:javascript"),
                 // A path in the SFU's folder, which shapeFrame checked exists there.
-                filename: z
-                  .string()
-                  .regex(/^(?:\[path\]|(?!\.\.?\/)(?!.*\/\.\.?\/)[\w.@+-]+(?:\/[\w.@+-]+)*)$/)
-                  .max(300)
-                  .optional(),
+                filename: z.union([z.literal(PATH_WITHHELD), FRAME_FILE]).optional(),
                 // A function of our own source, or none.
-                function: z.string().regex(/^(?:\?|[\w$.<>[\] ]{1,200})$/),
+                function: z.union([z.literal(FUNCTION_WITHHELD), FUNCTION_NAME]),
                 lineno: position.optional(),
                 colno: position.optional(),
                 in_app: flag.optional(),
               }),
             )
-            .max(500),
+            .max(MAX_FRAMES),
         })
         .optional(),
     }),
   )
-  .max(10);
+  .max(MAX_EXCEPTIONS);
 
 export type GameCatalog = ReadonlyArray<{ id: string; options: readonly GameOptionSpec[] }>;
 

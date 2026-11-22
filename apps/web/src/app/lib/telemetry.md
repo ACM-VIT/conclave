@@ -147,8 +147,10 @@ through the outbound schema in `lib/telemetry-schema.ts` (`buildOutboundEvent`
 in `lib/telemetry-privacy.ts`). The schema lists every event, every property
 each may carry, and the form of each value: an enum, a constant, a bounded
 number or an id we generated, never free text. Nothing else in an event is read,
-at any depth, and a value that does not fit its form is dropped. The scrubber
-only shapes the values of listed properties:
+at any depth, and a value that does not fit its form is dropped, that value
+alone: an exception keeps its other fields when one frame position is out of
+range, and its first 50 entries and 500 frames per entry. The scrubber only
+shapes the values of listed properties:
 
 - **Events.** Only the listed events are sent. posthog-js's own (`$pageview`,
   `$identify` and the like) and any other name are dropped.
