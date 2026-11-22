@@ -1,7 +1,8 @@
 import {
   createChunkManifestLoader,
-  DEFAULT_INGEST_HOST,
+  createEventTimes,
   forwardCapture,
+  ingestHostFrom,
 } from "@/app/lib/telemetry-ingest";
 import { getPublicSiteUrl } from "@/lib/site-url";
 
@@ -13,19 +14,33 @@ const manifest = createChunkManifestLoader({
   fetch: (url, init) => fetch(url, init),
 });
 
+const eventTimes = createEventTimes();
+let warnedUnconfigured = false;
+
 const handle = async (
   request: Request,
   context: RouteContext<"/ingest/[...path]">,
 ): Promise<Response> => {
   const { path } = await context.params;
+  const ingestHost = ingestHostFrom({
+    POSTHOG_INGEST_HOST: process.env.POSTHOG_INGEST_HOST,
+    NEXT_PUBLIC_POSTHOG_HOST: process.env.NEXT_PUBLIC_POSTHOG_HOST,
+  });
+  if (!ingestHost && !warnedUnconfigured) {
+    warnedUnconfigured = true;
+    console.error(
+      "[ingest] No PostHog ingestion host: set POSTHOG_INGEST_HOST (or the older NEXT_PUBLIC_POSTHOG_HOST) to an http(s) URL. Telemetry is not forwarded.",
+    );
+  }
   return forwardCapture(request, path, {
     fetch: (url, init) => fetch(url, init),
-    ingestHost: process.env.POSTHOG_INGEST_HOST?.trim() || DEFAULT_INGEST_HOST,
+    ingestHost,
     projectKey: process.env.NEXT_PUBLIC_POSTHOG_KEY ?? "",
     currentBuild: process.env.NEXT_PUBLIC_CONCLAVE_CLIENT_VERSION,
     manifest,
     siteOrigin,
     now: Date.now,
+    eventTimes,
   });
 };
 

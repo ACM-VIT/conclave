@@ -22,12 +22,38 @@ const MAX_EVENTS = 200;
 
 /** The only User-Agent PostHog sees from the browser's traffic. */
 export const INGEST_USER_AGENT = "conclave-web-ingest/1";
-export const DEFAULT_INGEST_HOST = "https://eu.i.posthog.com";
+
+/**
+ * Where /ingest forwards to: POSTHOG_INGEST_HOST, else the
+ * NEXT_PUBLIC_POSTHOG_HOST a deployment set before /ingest existed, as an
+ * http(s) origin. Null when neither is set, or neither is a URL: then nothing
+ * is forwarded, rather than to a collector the deployment never chose.
+ */
+export const ingestHostFrom = (env: {
+  POSTHOG_INGEST_HOST?: string;
+  NEXT_PUBLIC_POSTHOG_HOST?: string;
+}): string | null => {
+  const configured = env.POSTHOG_INGEST_HOST?.trim() || env.NEXT_PUBLIC_POSTHOG_HOST?.trim();
+  if (!configured) return null;
+  try {
+    const url = new URL(configured);
+    return url.protocol === "https:" || url.protocol === "http:" ? configured.replace(/\/+$/, "") : null;
+  } catch {
+    return null;
+  }
+};
+
+// The content types posthog-js sends: plain JSON, a gzip body as text/plain,
+// and a base64 `data=` form.
+const CONTENT_TYPES = new Set(["application/json", "text/plain", "application/x-www-form-urlencoded"]);
+
+const mediaType = (request: Request): string =>
+  (request.headers.get("content-type") ?? "").split(";", 1)[0].trim().toLowerCase();
 
 export type IngestDeps = {
   fetch: (url: string, init: RequestInit) => Promise<Response>;
-  /** PostHog's ingestion host. */
-  ingestHost: string;
+  /** PostHog's ingestion host (ingestHostFrom), or null: forward nothing. */
+  ingestHost: string | null;
   /** Our project key: events for any other project are not relayed. */
   projectKey: string;
   /** The build this deployment serves. */
@@ -41,11 +67,21 @@ export type IngestDeps = {
   /** Our site's origin: a frame of a script served from any other names no file. */
   siteOrigin: string;
   now: () => number;
+  /** The times given to events this process forwarded, by uuid (createEventTimes). */
+  eventTimes: EventTimes;
 };
 
 // How far an event's time may be from when we received it: posthog-js sends
-// within seconds, and retries for a few minutes at most.
+// within seconds, and retries for a few minutes at most. A browser clock a
+// little ahead is fine.
 const MAX_EVENT_AGE_MS = 5 * 60_000;
+const MAX_EVENT_LEAD_MS = 60_000;
+const MAX_EVENT_TIMES = 10_000;
+
+export type EventTimes = Map<string, string>;
+
+/** The times given to recent events, by uuid, so a retry is sent the same. */
+export const createEventTimes = (): EventTimes => new Map();
 
 // The parts of an exception posthog-js sends that the scrubber reads, typed
 // as posthog-js writes them; anything else in an entry or frame is dropped.
@@ -141,6 +177,8 @@ const fromBase64 = (text: string): Uint8Array => {
  * body or a `data=` form field, or plain JSON.
  */
 const decodeBody = async (request: Request, url: URL): Promise<unknown> => {
+  const type = mediaType(request);
+  if (!CONTENT_TYPES.has(type)) throw new Refused(400);
   const declared = Number(request.headers.get("content-length"));
   if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) throw new Refused(413);
   let bytes = await readLimited(request.body, MAX_BODY_BYTES);
@@ -151,7 +189,7 @@ const decodeBody = async (request: Request, url: URL): Promise<unknown> => {
     });
   }
   let text = new TextDecoder().decode(bytes);
-  const form = (request.headers.get("content-type") ?? "").includes("x-www-form-urlencoded");
+  const form = type === "application/x-www-form-urlencoded";
   if (form) text = new URLSearchParams(text).get("data") ?? "";
   if (form || url.searchParams.get("compression") === "base64") {
     const decoded = fromBase64(text);
@@ -182,20 +220,37 @@ const clientSentAt = (url: URL, body: unknown): number | null => {
 };
 
 /**
- * An event's time, from when we received it: how long before sending the
- * browser says it captured the event, at most MAX_EVENT_AGE_MS, so a skewed
- * or made-up clock moves nothing. With no send time, its own time within
- * that window of when we received it.
+ * An event's time. The browser's own time when it lies within
+ * MAX_EVENT_AGE_MS before we received it (or a minute after), so a retry of
+ * the same event gets the same time. Otherwise, a skewed or made-up clock
+ * moves nothing: the event is as old as the browser says it was when sent,
+ * at most MAX_EVENT_AGE_MS, or with no send time, held to that window. Such a
+ * time depends on when the request arrived, so it is kept by uuid and a retry
+ * gets the time the first delivery got.
  */
-const eventTime = (timestamp: unknown, sentAt: number | null, receivedAt: number): string => {
+const eventTime = (
+  uuid: string,
+  timestamp: unknown,
+  sentAt: number | null,
+  receivedAt: number,
+  eventTimes: EventTimes,
+): string => {
   const time = timeOf(timestamp);
+  if (time !== null && time >= receivedAt - MAX_EVENT_AGE_MS && time <= receivedAt + MAX_EVENT_LEAD_MS) {
+    return new Date(time).toISOString();
+  }
+  const known = eventTimes.get(uuid);
+  if (known) return known;
   const at =
     time === null
       ? receivedAt
       : sentAt === null
         ? Math.min(Math.max(time, receivedAt - MAX_EVENT_AGE_MS), receivedAt)
         : receivedAt - Math.min(Math.max(sentAt - time, 0), MAX_EVENT_AGE_MS);
-  return new Date(at).toISOString();
+  const stamp = new Date(at).toISOString();
+  if (eventTimes.size >= MAX_EVENT_TIMES) eventTimes.delete(eventTimes.keys().next().value as string);
+  eventTimes.set(uuid, stamp);
+  return stamp;
 };
 
 const reply = (status: number) =>
@@ -217,6 +272,8 @@ export async function forwardCapture(
   if (path.length !== 1 || !ENDPOINTS.has(path[0])) return reply(404);
   if (request.method !== "POST") return reply(405);
   if (!deps.projectKey) return reply(404);
+  const { ingestHost } = deps;
+  if (!ingestHost) return reply(503);
   let forwarded: string;
   try {
     forwarded = JSON.stringify(await prepareForward(request, deps));
@@ -226,7 +283,7 @@ export async function forwardCapture(
     return reply(error instanceof Refused ? error.status : 400);
   }
   try {
-    const upstream = await deps.fetch(`${deps.ingestHost.replace(/\/$/, "")}/e/`, {
+    const upstream = await deps.fetch(`${ingestHost}/e/`, {
       method: "POST",
       headers: { "content-type": "application/json", "user-agent": INGEST_USER_AGENT },
       body: forwarded,
@@ -275,7 +332,9 @@ const prepareForward = async (request: Request, deps: IngestDeps) => {
       { ...context, payload: event.properties, storedKeys: new Set(), siteOrigin: deps.siteOrigin },
       schemas,
     );
-    return built ? [{ ...built, timestamp: eventTime(event.timestamp, sentAt, receivedAt) }] : [];
+    return built
+      ? [{ ...built, timestamp: eventTime(built.uuid, event.timestamp, sentAt, receivedAt, deps.eventTimes) }]
+      : [];
   });
   if (batch.length === 0) throw new Refused(400);
   return { api_key: deps.projectKey, batch };

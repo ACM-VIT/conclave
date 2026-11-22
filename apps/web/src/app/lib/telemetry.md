@@ -8,7 +8,8 @@ names, emails, chat text or room codes.
 | Where | Variable | Effect |
 | --- | --- | --- |
 | Web build | `NEXT_PUBLIC_POSTHOG_KEY` | Project key. Without it the browser loads nothing, reads no call stats and sends nothing. |
-| Web server | `POSTHOG_INGEST_HOST` | Where `/ingest` forwards the browser's events. Defaults to `https://eu.i.posthog.com`. The browser never talks to PostHog itself. |
+| Web server | `POSTHOG_INGEST_HOST` | Where `/ingest` forwards the browser's events, such as `https://eu.i.posthog.com`. The browser never talks to PostHog itself. |
+| Web server | `NEXT_PUBLIC_POSTHOG_HOST` | Read only when `POSTHOG_INGEST_HOST` is unset, so a deployment that set it before `/ingest` existed keeps its collector. With neither set, or neither an http(s) URL, `/ingest` forwards nothing: it answers 503 and logs once. There is no built-in collector. |
 | Web dev | `NEXT_PUBLIC_POSTHOG_DEV=1` | `next dev` only sends events with this set. |
 | Web deploy | `POSTHOG_CLI_API_KEY`, `POSTHOG_CLI_PROJECT_ID`, `POSTHOG_CLI_HOST` | `cf:build` builds, uploads and deletes browser source maps (needs `posthog-cli` on PATH). Read from the shell or the `.env` files `next build` reads. Other builds, `cf:preview` included, make no maps. A failed upload, or one still running after 90 s (`POSTHOG_SOURCEMAPS_TIMEOUT_MS`), warns and the deploy goes on without readable stacks. The CLI runs in its own process group, so a stalled upload is stopped with its native uploader child before the maps are removed, which they always are. Ctrl-C or SIGTERM is passed on to that group, the maps are removed, and the script exits 130 or 143. Exited (zombie) processes count as gone, for containers with no init to reap them. |
 | SFU | `SFU_POSTHOG_KEY`, `SFU_POSTHOG_HOST` | Server exceptions and game events. `SFU_POSTHOG_ENABLED=0` turns both off. Always off under vitest. |
@@ -128,8 +129,10 @@ resume failed (`ack_timeout`, or the SFU's `displaced` or `rate_limited`, else
 The browser sends its events to `/ingest` on our own site (`app/ingest/[...path]/route.ts`,
 `lib/telemetry-ingest.ts`), never to PostHog. The route takes only the event
 endpoint (`/ingest/e/`) as a POST of at most 256 KB, 1 MB once decoded, and 200
-events. It decodes the body (gzip, base64 or JSON), drops events for any project
-but ours, and builds every event again from the outbound schema, so the
+events, labelled with a content type posthog-js sends (`application/json`,
+`text/plain` or `application/x-www-form-urlencoded`). It decodes the body
+(gzip, base64 or JSON), drops events for any project but ours, and builds
+every event again from the outbound schema, so the
 browser's before_send is not the only guard. A request carries one build, the
 first event's `client_version`; events naming any other build are dropped, so
 a request costs at most one manifest lookup. That build's chunk manifest is
@@ -198,11 +201,16 @@ shapes the values of listed properties:
   An id the build never produced, or a real id on another file, proves nothing,
   so until the manifest loads, and in a build without one, chunk frames are
   `[path]`.
-- **Times.** `/ingest` dates each event from when it received it: the event is
-  as old as the browser says it was when sent (posthog-js's send time against
-  the event's own), at most 5 minutes, so a skewed or made-up clock moves
-  nothing. With no send time, the event's own time is held within 5 minutes
-  before receipt. The browser's send time is not forwarded.
+- **Times.** `/ingest` keeps an event's own time when it lies within 5 minutes
+  before receipt (or a minute after), so a retried event is sent exactly as
+  the first time. A time outside that window moves nothing: the event is as
+  old as the browser says it was when sent (posthog-js's send time against the
+  event's own), at most 5 minutes, or with no send time it is held to the
+  window. That time depends on when the request arrived, so it is kept by uuid
+  (the last 10,000), and a retry gets the time its first delivery got. The
+  browser's send time is not forwarded.
+- **Required fields.** An `$exception` with no exception list, or an empty
+  one, is not sent.
 
 Session replay, surveys, DOM autocapture, feature flags and pageviews are off,
 and no user is ever identified.

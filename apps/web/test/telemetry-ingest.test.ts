@@ -2,6 +2,7 @@ import { gzipSync } from "node:zlib";
 import { describe, expect, it, vi } from "vitest";
 import {
   createChunkManifestLoader,
+  createEventTimes,
   forwardCapture,
   INGEST_USER_AGENT,
   type IngestDeps,
@@ -66,6 +67,7 @@ const forward = async (request: Request, path = ["e"], deps: Partial<IngestDeps>
       version === BUILD ? new Map([[CHUNK_ID, "/_next/static/chunks/3u-6_1om1fv26.js"]]) : null,
     siteOrigin: "https://conclave.acmvit.in",
     now: () => NOW,
+    eventTimes: createEventTimes(),
     ...deps,
   });
   return { response, upstream };
@@ -93,7 +95,7 @@ describe("forwardCapture", () => {
       {
         uuid: "0196f0a1-0000-7000-8000-0000000000aa",
         event: "meet_join_attempt",
-        timestamp: "2026-11-22T00:00:04.000Z",
+        timestamp: "2026-11-22T00:00:00.000Z",
         properties: {
           token: KEY,
           distinct_id: UUID,
@@ -398,15 +400,21 @@ describe("the outbound schema at /ingest", () => {
     expect(batch.map((sent) => sent.event)).toEqual(["meet_join_attempt"]);
   });
 
-  it("dates each event by when we received it, within a small window", async () => {
-    const at = (timestamp: string) => ({ ...event(), timestamp });
+  it("keeps the browser's time near when we received the event, and holds any other to that window", async () => {
+    let n = 0;
+    const at = (timestamp: string) => ({
+      ...event(),
+      uuid: `0196f0a1-0000-7000-8000-0000000001${String(++n).padStart(2, "0")}`,
+      timestamp,
+    });
     const { batch: skewed, upstream } = await send(
       [at("2031-01-01T00:00:00.000Z"), at("2031-01-01T00:00:00.000Z"), at("2030-12-31T23:59:58.500Z"), at("2030-12-31T22:00:00.000Z")],
       { sent_at: "2031-01-01T00:00:00.000Z" },
     );
-    const { batch: unsent } = await send([at("1999-01-01T00:00:00.000Z"), at("2099-01-01T00:00:00.000Z"), at("not a time")], {
-      sent_at: undefined,
-    });
+    const { batch: unsent } = await send(
+      [at("1999-01-01T00:00:00.000Z"), at("2099-01-01T00:00:00.000Z"), at("not a time"), at("2026-11-22T11:59:30.000Z")],
+      { sent_at: undefined },
+    );
 
     expect(skewed.map((sent) => sent.timestamp)).toEqual([
       "2026-11-22T12:00:00.000Z",
@@ -419,6 +427,7 @@ describe("the outbound schema at /ingest", () => {
       "2026-11-22T11:55:00.000Z",
       "2026-11-22T12:00:00.000Z",
       "2026-11-22T12:00:00.000Z",
+      "2026-11-22T11:59:30.000Z",
     ]);
   });
 
@@ -518,6 +527,55 @@ describe("the outbound schema at /ingest", () => {
       },
     ]);
     expect(String(upstream[0].init.body)).not.toMatch(/Canary|mira@|FleetAsset|ReviewBrowser|Calcutta/);
+  });
+});
+
+describe("round 9 at /ingest", () => {
+  const RECEIVED = Date.parse("2026-11-22T12:00:00.000Z");
+  const at = (now: number, extra: Partial<IngestDeps> = {}) => ({ now: () => now, ...extra }) as Partial<IngestDeps>;
+  const timesOf = (upstream: Array<{ init: RequestInit }>) => sentBody(upstream).batch.map((sent) => sent.timestamp);
+
+  it("takes only the content types posthog-js sends", async () => {
+    const json = JSON.stringify(captureBody([event()]));
+    for (const type of ["text/html", "image/png", "multipart/form-data; boundary=x", ""]) {
+      const { response, upstream } = await forward(post(json, type));
+      expect(response.status, type).toBe(400);
+      expect(await response.text()).toBe("");
+      expect(upstream).toEqual([]);
+    }
+    for (const type of ["application/json", "application/json; charset=utf-8", "text/plain;charset=UTF-8"]) {
+      expect((await forward(post(json, type))).response.status, type).toBe(200);
+    }
+  });
+
+  it("sends a retried event as it sent it the first time, timestamp included", async () => {
+    const eventTimes = createEventTimes();
+    const events = [
+      { ...event(), uuid: "0196f0a1-0000-7000-8000-0000000000b1", timestamp: "2026-11-22T11:59:58.000Z" },
+      { ...event(), uuid: "0196f0a1-0000-7000-8000-0000000000b2", timestamp: "2026-11-22T09:00:00.000Z" },
+      { ...event(), uuid: "0196f0a1-0000-7000-8000-0000000000b3", timestamp: "2031-01-01T00:00:00.000Z" },
+    ];
+    const json = JSON.stringify({ ...captureBody(events), sent_at: undefined });
+    const first = await forward(post(json, "application/json"), ["e"], at(RECEIVED, { eventTimes }));
+    const retry = await forward(post(json, "application/json"), ["e"], at(RECEIVED + 20_000, { eventTimes }));
+
+    expect(sentBody(retry.upstream).batch).toEqual(sentBody(first.upstream).batch);
+    expect(timesOf(first.upstream)).toEqual([
+      "2026-11-22T11:59:58.000Z",
+      "2026-11-22T11:55:00.000Z",
+      "2026-11-22T12:00:00.000Z",
+    ]);
+  });
+
+  it("forwards no exception without an exception list", async () => {
+    const exception = (properties: Record<string, unknown>) => ({ ...event(), event: "$exception", properties: { ...event().properties, ...properties } });
+    for (const list of [undefined, []]) {
+      const { response, upstream } = await forward(post(JSON.stringify(captureBody([exception({ $exception_list: list })])), "application/json"));
+      expect(response.status).toBe(400);
+      expect(upstream).toEqual([]);
+    }
+    const mixed = await forward(post(JSON.stringify(captureBody([exception({ $exception_list: [] }), event()])), "application/json"));
+    expect(sentBody(mixed.upstream).batch.map((sent) => sent.event)).toEqual(["meet_join_attempt"]);
   });
 });
 

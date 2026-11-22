@@ -309,7 +309,13 @@ const exceptionListForm = (chunkFiles: ReadonlyMap<string, string>) =>
         stacktrace: z.object({ type: z.literal("raw"), frames: z.array(frameForm(chunkFiles)).max(MAX_FRAMES) }).optional(),
       }),
     )
+    .min(1)
     .max(MAX_EXCEPTIONS);
+
+/** Properties an event is not sent without: an exception is its list. */
+export const REQUIRED_PROPERTIES: Partial<Record<OutboundEventName, readonly string[]>> = {
+  $exception: ["$exception_list"],
+};
 
 /** The properties posthog-js gives every event that we send, and the ones we add. */
 const SDK_PROPERTIES = {

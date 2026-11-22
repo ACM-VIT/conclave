@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { forwardCapture } from "../src/app/lib/telemetry-ingest";
+import { createEventTimes, forwardCapture } from "../src/app/lib/telemetry-ingest";
 
 const BUILD = "0b2d3b480f4621392a4151d750c90965b7c8b76c";
 const KEY = "phc_test_project";
@@ -67,6 +67,7 @@ const beaconedEvents = async (sent: Beacon[]): Promise<string[]> => {
         manifest: async () => null,
         siteOrigin: "https://conclave.example",
         now: () => Date.now(),
+        eventTimes: createEventTimes(),
       },
     );
     for (const body of forwarded) {

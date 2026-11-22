@@ -17,6 +17,7 @@ import {
   type OutboundContext,
   type OutboundEventName,
   PATH_WITHHELD,
+  REQUIRED_PROPERTIES,
   STATIC_PAGES,
   TELEMETRY_EVENTS,
   TELEMETRY_HOST,
@@ -239,8 +240,8 @@ export type OutboundEvent = {
 /**
  * Builds the event we send from scratch: only an event on the list, only the
  * properties its schema lists, each shaped for its form and kept only when it
- * fits. Anything else in the event is never read. Person properties are
- * never sent.
+ * fits, and only when it has every property it needs. Anything else in the
+ * event is never read. Person properties are never sent.
  */
 export function buildOutboundEvent(
   event: { uuid: string; event: string; properties: Properties },
@@ -254,6 +255,7 @@ export function buildOutboundEvent(
     const parsed = form.safeParse(shapeValue(key, name, event.properties, source));
     if (parsed.success && parsed.data !== undefined) properties[key] = parsed.data;
   }
+  if ((REQUIRED_PROPERTIES[name] ?? []).some((key) => !Object.hasOwn(properties, key))) return null;
   return { uuid: event.uuid, event: name, properties };
 }
 
