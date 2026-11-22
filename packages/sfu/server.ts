@@ -2,7 +2,6 @@ import {
   captureFatalServerException,
   captureServerException,
 } from "./server/analytics/posthog.js";
-import { createSfuServer } from "./server/createSfuServer.js";
 import { installRedisCrashGuards } from "./server/redisErrors.js";
 
 const FATAL_REPORT_TIMEOUT_MS = 2000;
@@ -23,6 +22,20 @@ installRedisCrashGuards({
       FATAL_REPORT_TIMEOUT_MS,
     ),
 });
+
+// Everything that reads the SFU's configuration loads only now, after the
+// crash guards, so a configuration that fails as it loads is reported too.
+const { createSfuServer } = await import("./server/createSfuServer.js").catch(
+  async (error: unknown) => {
+    console.error("[SFU] Failed to start", error);
+    await captureFatalServerException(
+      error,
+      { source: "startup_failed" },
+      FATAL_REPORT_TIMEOUT_MS,
+    );
+    process.exit(1);
+  },
+);
 
 const server = createSfuServer();
 let shuttingDown = false;

@@ -198,7 +198,7 @@ export type OutboundOptions = {
   /** The SFU's release, SFU_RELEASE. */
   release: string;
   framePath: (filename: string) => string;
-  /** The games the SFU runs, whose ids and options game events may name. */
+  /** The games the SFU runs, whose ids and options game events may name; the same array until they change. */
   games: () => GameCatalog;
   /** Whether the server registered a handler for this socket event. */
   isSocketEvent: (name: string) => boolean;
@@ -222,9 +222,9 @@ const gameConfigForms = (games: GameCatalog) => {
 };
 
 /** Each event the SFU sends: the form of its distinct id and of each property. */
-const outboundEvents = ({ release, games, isSocketEvent }: OutboundOptions) => {
-  const catalog = games();
-  const gameId = z.enum(catalog.map((game) => game.id) as [string, ...string[]]);
+const outboundEvents = ({ release, isSocketEvent }: OutboundOptions, catalog: GameCatalog) => {
+  const ids = catalog.map((game) => game.id);
+  const gameId = ids.length > 0 ? z.enum(ids as [string, ...string[]]) : z.never();
   // A game's phase is a label its own state machine names, such as "lobby".
   const phase = z.string().regex(/^[a-z][a-z0-9-]{0,31}$/);
   const groups = { $groups: z.object({ room: ROOM_KEY }) };
@@ -290,9 +290,12 @@ const outboundEvents = ({ release, games, isSocketEvent }: OutboundOptions) => {
  * schema, or null to drop one that is not on the list.
  */
 export const createOutboundEvent = (options: OutboundOptions) => {
-  let events: ReturnType<typeof outboundEvents> | null = null;
+  // Built again only when the games' catalog changes, as when they register.
+  let built: { catalog: GameCatalog; events: ReturnType<typeof outboundEvents> } | null = null;
   return (message: EventMessage): EventMessage | null => {
-    events ??= outboundEvents(options);
+    const catalog = options.games();
+    if (built?.catalog !== catalog) built = { catalog, events: outboundEvents(options, catalog) };
+    const { events } = built;
     if (!Object.hasOwn(events, message.event)) return null;
     const schema = events[message.event as keyof typeof events];
     const distinctId = schema.distinctId.safeParse(message.distinctId);

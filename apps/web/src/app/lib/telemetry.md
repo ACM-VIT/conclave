@@ -62,6 +62,14 @@ SFU, from `server/analytics/errorReporter.ts`, every event tagged `sfu_instance_
 At most 5 reports per distinct error and 60 in total per minute per instance.
 The fatal report before an exit is outside that limit.
 
+The crash guards and the reporter start before the SFU's configuration loads:
+they read their settings straight from the environment
+(`server/analytics/settings.ts`, after the `.env` files in `config/env.ts`),
+and `server.ts` imports everything that reads the configuration only once the
+guards are in place. A configuration that fails as it loads, such as one with
+both WebRTC transports turned off, is reported as `startup_failed` before the
+process exits.
+
 ## Call-quality events
 
 Each tab sends at most one `call_join` per join attempt, one `call_first_media`

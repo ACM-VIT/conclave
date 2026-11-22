@@ -1,47 +1,11 @@
 import { AI_GENERATION_LIMITS } from "@conclave/ai/limits";
 import { AI_DEFAULT_MODELS, getProviderApiKey, getResponseProvider, readAiEnvironment, resolveConfiguredResponseModel } from "@conclave/ai/models";
-import dotenv from "dotenv";
-import path from "path";
-import { existsSync } from "fs";
 import { createHash } from "crypto";
-import { fileURLToPath } from "url";
 import type { RouterRtpCodecCapability } from "mediasoup/types";
+import { analyticsSettings } from "../server/analytics/settings.js";
 import { resolveConfiguredSfuRegion } from "../server/regions.js";
+import { loadedEnvFiles, secretSource } from "./env.js";
 import { readRtcPortRange, readWorkerSizing } from "./workerSettings.mjs";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const sfuPackageRoot = path.resolve(__dirname, "..");
-const repoRoot = path.resolve(sfuPackageRoot, "..", "..");
-const webAppRoot = path.resolve(repoRoot, "apps", "web");
-
-// First match wins (dotenv default does not override existing process.env vars).
-// Order: most-specific (sfu package) -> shared web app (matches Next.js) -> repo root.
-// This keeps local dev in sync without forcing the user to maintain duplicate secrets.
-const envCandidates = [
-  path.join(sfuPackageRoot, ".env.local"),
-  path.join(sfuPackageRoot, ".env"),
-  path.join(webAppRoot, ".env.local"),
-  path.join(webAppRoot, ".env"),
-  path.join(repoRoot, ".env.local"),
-  path.join(repoRoot, ".env"),
-];
-
-const initialSecretFromProcess = process.env.SFU_SECRET;
-const loadedEnvFiles: string[] = [];
-let secretSource: string = initialSecretFromProcess
-  ? "process.env (set before SFU bootstrap)"
-  : "fallback literal";
-
-for (const envPath of envCandidates) {
-  if (existsSync(envPath)) {
-    const beforeSecret = process.env.SFU_SECRET;
-    dotenv.config({ path: envPath });
-    loadedEnvFiles.push(envPath);
-    if (!beforeSecret && process.env.SFU_SECRET) {
-      secretSource = envPath;
-    }
-  }
-}
 
 const sfuSecret = resolveSfuSecret();
 // False when running on the public development fallback.
@@ -274,23 +238,6 @@ const gameAiWebSearchContextSize = ((): "low" | "medium" | "high" => {
 const transcriptRelayDisabled =
   process.env.SFU_TRANSCRIPT_RELAY_ENABLED === "0" ||
   process.env.SFU_TRANSCRIPT_RELAY_ENABLED?.toLowerCase() === "false";
-// Product analytics (PostHog). Strictly opt-in: with no project key set, the
-// block is `enabled: false`, no client is ever constructed, and nothing is
-// sent (zero overhead). Never hardcode a key — it comes from the environment.
-const posthogProjectApiKey =
-  process.env.SFU_POSTHOG_KEY?.trim() ||
-  process.env.SFU_POSTHOG_PROJECT_API_KEY?.trim() ||
-  "";
-// Test runs load the same .env files as dev, so a developer's real key would
-// otherwise send test crashes to the production project.
-const posthogDisabled =
-  process.env.SFU_POSTHOG_ENABLED === "0" ||
-  process.env.SFU_POSTHOG_ENABLED?.toLowerCase() === "false" ||
-  Boolean(process.env.VITEST);
-// Default to the PostHog EU cloud ingestion host (region-correct for this
-// deployment). Override with SFU_POSTHOG_HOST for self-hosted / US cloud.
-const posthogHost =
-  process.env.SFU_POSTHOG_HOST?.trim() || "https://eu.i.posthog.com";
 const instancePublicUrl =
   process.env.SFU_PUBLIC_URL?.trim() ||
   process.env.SFU_INSTANCE_URL?.trim() ||
@@ -406,38 +353,7 @@ export const config = {
     webSearchEnabled: !gameAiWebSearchDisabled,
     webSearchContextSize: gameAiWebSearchContextSize,
   },
-  analytics: {
-    // Enabled ONLY when a project key is present (and not explicitly disabled).
-    // When false, the analytics module constructs nothing and sends nothing.
-    enabled: !posthogDisabled && Boolean(posthogProjectApiKey),
-    projectApiKey: posthogProjectApiKey,
-    host: posthogHost,
-    // Batch tuning. A game meeting is long-lived and low-volume, so flush on a
-    // small batch or a short interval to keep events fresh without chattiness.
-    flushAt: toNumber(process.env.SFU_POSTHOG_FLUSH_AT, 20, {
-      integer: true,
-      min: 1,
-      max: 1000,
-    }),
-    flushIntervalMs: toNumber(process.env.SFU_POSTHOG_FLUSH_INTERVAL_MS, 10000, {
-      integer: true,
-      min: 0,
-      max: 300000,
-    }),
-    // Per-request cap, so an unreachable PostHog only ever holds a socket
-    // open this long.
-    requestTimeoutMs: toNumber(process.env.SFU_POSTHOG_REQUEST_TIMEOUT_MS, 5000, {
-      integer: true,
-      min: 500,
-      max: 60000,
-    }),
-    // Bounded time to flush buffered events on graceful shutdown.
-    shutdownTimeoutMs: toNumber(
-      process.env.SFU_POSTHOG_SHUTDOWN_TIMEOUT_MS,
-      5000,
-      { integer: true, min: 0, max: 60000 },
-    ),
-  },
+  analytics: analyticsSettings,
   transcriptRelay: {
     enabled: !transcriptRelayDisabled,
   },

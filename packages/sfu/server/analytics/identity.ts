@@ -1,12 +1,10 @@
 import { createHmac, randomBytes } from "crypto";
-import { config as sfuConfig } from "../../config/config.js";
+import { analyticsSettings } from "./settings.js";
 
 // Without a real SFU_SECRET the fallback key is public, and anyone could hash a
 // guessed email or room code and compare. Distinct ids then use a key that
 // lives only in this process, and rooms are not grouped at all.
-export const analyticsKey: string | Uint8Array = sfuConfig.sfuSecretConfigured
-  ? sfuConfig.sfuSecret
-  : randomBytes(32);
+export const analyticsKey: string | Uint8Array = analyticsSettings.secret ?? randomBytes(32);
 
 const keyedHash = (value: string): string =>
   createHmac("sha256", analyticsKey).update(value).digest("hex").slice(0, 32);
@@ -20,4 +18,4 @@ export const analyticsDistinctId = (stableIdentity: string): string =>
  * room, but the code cannot be read back or guessed without the secret.
  */
 export const analyticsRoomKey = (roomChannelId: string): string | null =>
-  sfuConfig.sfuSecretConfigured ? `room_${keyedHash(`room:${roomChannelId}`)}` : null;
+  analyticsSettings.secret ? `room_${keyedHash(`room:${roomChannelId}`)}` : null;
