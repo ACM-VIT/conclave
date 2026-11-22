@@ -1911,6 +1911,56 @@ describe("a host's answer to a guest whose tabs the room has not linked yet", ()
     expect(screenOf(host)).toEqual([]);
   });
 
+  // A third pass of the same browser, and the tabs it knocks with.
+  const tabUnderC = (sessionId: string, others: SfuAuthPayload[] = []) =>
+    ({
+      userId: `guest-gp_${sessionId}-under-pass-C`,
+      clientId: "conclave",
+      sessionId,
+      guestProof: "proof-of-pass-C",
+      guestRoom: "room",
+      ...(others.length > 0
+        ? { guestWas: others.map((other) => ({ userKey: `guest-gp_${sessionId}-under-${other.guestProof}`, guestProof: other.guestProof })) }
+        : {}),
+    }) satisfies SfuAuthPayload;
+
+  it("a denial that reaches a tab later keeps its time: a request made after it still waits", async () => {
+    const { state, room, host, second } = await bothKnock();
+    await hostAsks(host, "rejectUser", { userId: tabA.userId });
+    // A fresh request under pass B, made after the denial.
+    const freshUnderB = { ...tabB, userId: "guest-gp_tab-3-under-pass-B", sessionId: "tab-3" } satisfies SfuAuthPayload;
+    const fresh = await join(state, freshUnderB);
+    expect(fresh.ack).toHaveBeenCalledWith(waiting);
+
+    // A reload shows the room passes A and B: B's old request gets the denial.
+    await join(state, tabAShowingBothPasses);
+    expect(second.peer.emit).toHaveBeenCalledWith(...turnedAway);
+    expect(fresh.peer.emit).not.toHaveBeenCalledWith(...turnedAway);
+    // Another tab then shows the room pass C as well.
+    await join(state, tabUnderC("tab-4", [tabA]));
+
+    expect(fresh.peer.emit).not.toHaveBeenCalledWith(...turnedAway);
+    expect(room.pendingClients.has(freshUnderB.userId)).toBe(true);
+  });
+
+  it("an admission that reaches a tab later keeps its time: a later denial still wins", async () => {
+    const { state, room, host } = await bothKnock();
+    await hostAsks(host, "admitUser", { userId: tabA.userId });
+    const firstUnderC = await join(state, tabUnderC("tab-3"));
+    await hostAsks(host, "rejectUser", { userId: tabUnderC("tab-3").userId });
+    expect(firstUnderC.peer.emit).toHaveBeenCalledWith(...turnedAway);
+    const fresh = await join(state, tabUnderC("tab-5"));
+
+    // A reload shows the room passes A and B: B's old request gets the admission.
+    await join(state, tabAShowingBothPasses);
+    // Another tab then shows the room pass C as well. The host's latest
+    // answer to this guest is the denial, which this request came after.
+    await join(state, tabUnderC("tab-4", [tabA]));
+
+    expect(fresh.peer.emit).not.toHaveBeenCalledWith(...approved);
+    expect(room.pendingClients.has(tabUnderC("tab-5").userId)).toBe(true);
+  });
+
   it("a denial does not turn away a tab that knocks after it", async () => {
     const { state, room, host } = await bothKnock();
     await hostAsks(host, "rejectUser", { userId: tabA.userId });

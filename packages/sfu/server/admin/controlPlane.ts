@@ -906,10 +906,20 @@ export const settleWaitingTabs = (
   room: Room,
   answer: { admit: string[]; deny: string[] },
 ): void => {
-  const requestsOf = (userKeys: string[]) =>
-    userKeys.flatMap((userKey) => room.pendingClients.get(userKey) ?? []);
-  admitRequests(room, requestsOf(answer.admit));
-  rejectRequests(room, requestsOf(answer.deny));
+  for (const [userKeys, admitted] of [
+    [answer.admit, true],
+    [answer.deny, false],
+  ] as const) {
+    for (const userKey of userKeys) {
+      const request = room.pendingClients.get(userKey);
+      if (!request) continue;
+      room.settleWaitingRequest(userKey, admitted);
+      request.socket.emit(admitted ? "joinApproved" : "joinRejected", {
+        roomId: room.id,
+      });
+      tellHosts(room, admitted ? "userAdmitted" : "userRejected", request);
+    }
+  }
 };
 
 /**

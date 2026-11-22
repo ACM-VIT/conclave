@@ -997,6 +997,22 @@ export class Room {
     this.removePendingClient(userKey);
   }
 
+  /**
+   * Applies to the waiting tab `userKey` an answer hosts already gave its
+   * guest (see `standingLobbyAnswer`). It is not a new answer, so nothing is
+   * recorded: the answer keeps the time it was given, and with it what it
+   * reaches.
+   */
+  settleWaitingRequest(userKey: string, admitted: boolean): void {
+    if (!admitted) {
+      this.removePendingClient(userKey);
+      return;
+    }
+    this.allowedUsers.add(userKey);
+    if (this.isLocked) this.lockedAllowedUsers.add(userKey);
+    this.stopWaiting(userKey);
+  }
+
   // What a guest's waiting requests are filed under: its passes, by the
   // lowest proof of those the room has linked, or its key when it showed
   // no pass.
