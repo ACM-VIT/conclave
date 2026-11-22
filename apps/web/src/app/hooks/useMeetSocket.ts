@@ -1110,7 +1110,7 @@ export function useMeetSocket({
   const relayOnlyIceRef = useRef(false);
   const mediaPathReconnectTriedRef = useRef({ producer: false, consumer: false });
   const escalatedTransportsRef = useRef(new WeakSet<Transport>());
-  const networkBlockedReportedRef = useRef(false);
+  const blockedMediaPathsRef = useRef(new Set<"producer" | "consumer">());
   const reconnectGenerationRef = useRef(0);
   const reconnectBackoffCancelRef = useRef<(() => void) | null>(null);
   const manualReconnectRetryRequestedRef = useRef(false);
@@ -1502,15 +1502,18 @@ export function useMeetSocket({
         hasTurnServers: (runtimeTurnIceServersRef.current?.length ?? 0) > 0,
       });
       if (step === "report-blocked") {
-        if (networkBlockedReportedRef.current) return;
+        const blockedPaths = blockedMediaPathsRef.current;
+        if (blockedPaths.has(transportKind)) return;
         console.warn(`[Meets] ${reason}. Media cannot get through this network.`);
+        const isFirstBlockedPath = blockedPaths.size === 0;
+        blockedPaths.add(transportKind);
+        if (!isFirstBlockedPath) return;
         telemetry.capture("meet_media_path_blocked", {
           reason,
           transport: transportKind,
           relayOnly: relayOnlyIceRef.current,
           roomId: currentRoomIdRef.current ?? undefined,
         });
-        networkBlockedReportedRef.current = true;
         setMeetError({
           code: "NETWORK_BLOCKED",
           message: NETWORK_BLOCKED_MESSAGE,
@@ -1536,15 +1539,21 @@ export function useMeetSocket({
       }
       void handleReconnectRef.current?.();
     },
-    [currentRoomIdRef, handleReconnectRef, setMeetError],
+    [
+      consumerTransportRef,
+      currentRoomIdRef,
+      handleReconnectRef,
+      producerTransportRef,
+      setMeetError,
+    ],
   );
 
   const noteMediaPathConnected = useCallback(
     (transportKind: "producer" | "consumer", transport: Transport) => {
       escalatedTransportsRef.current.delete(transport);
       mediaPathReconnectTriedRef.current[transportKind] = false;
-      if (networkBlockedReportedRef.current) {
-        networkBlockedReportedRef.current = false;
+      const blockedPaths = blockedMediaPathsRef.current;
+      if (blockedPaths.delete(transportKind) && blockedPaths.size === 0) {
         setMeetError(null);
       }
     },
@@ -2068,7 +2077,7 @@ export function useMeetSocket({
         runtimeTurnIceServersRef.current = null;
         relayOnlyIceRef.current = false;
         mediaPathReconnectTriedRef.current = { producer: false, consumer: false };
-        networkBlockedReportedRef.current = false;
+        blockedMediaPathsRef.current.clear();
       }
     },
     [
@@ -9132,7 +9141,7 @@ export function useMeetSocket({
     );
     // The rebuilt transports get a fresh verdict, and a fresh banner if media
     // is still blocked.
-    networkBlockedReportedRef.current = false;
+    blockedMediaPathsRef.current.clear();
     setMeetError(null);
 
     try {
@@ -9607,7 +9616,7 @@ export function useMeetSocket({
       runtimeTurnIceServersRef.current = null;
       relayOnlyIceRef.current = false;
       mediaPathReconnectTriedRef.current = { producer: false, consumer: false };
-      networkBlockedReportedRef.current = false;
+      blockedMediaPathsRef.current.clear();
       setRoomId(targetRoomId);
       if (joinMode === "webinar_attendee") {
         setIsAdmin(false);
@@ -9847,7 +9856,7 @@ export function useMeetSocket({
     reconnectAttemptsRef.current = 0;
     relayOnlyIceRef.current = false;
     mediaPathReconnectTriedRef.current = { producer: false, consumer: false };
-    networkBlockedReportedRef.current = false;
+    blockedMediaPathsRef.current.clear();
     setMeetError(null);
     updateReconnectRecoveryStatus(
       buildReconnectRecoveryStatus(
