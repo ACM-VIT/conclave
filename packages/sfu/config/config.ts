@@ -121,7 +121,15 @@ export const resolveWebRtcTransportProtocolPolicy = (
 };
 
 function resolveSfuSecret(): string {
-  const configured = process.env.SFU_SECRET?.trim();
+  const raw = process.env.SFU_SECRET;
+  const configured = raw?.trim();
+  // Calendar token encryption hashes the raw value, so padding would give
+  // instances that look identical different keys.
+  if (raw && raw !== configured) {
+    throw new Error(
+      "SFU_SECRET has leading or trailing whitespace. Remove it so every SFU signs and encrypts with the same value.",
+    );
+  }
   if (configured && configured !== "development-secret") {
     return configured;
   }

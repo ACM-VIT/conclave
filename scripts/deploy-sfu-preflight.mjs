@@ -270,10 +270,12 @@ export const resolveSfuTargets = ({ allowPublicRedis = false, compose, serviceNa
     } else if (publicUrl && !isLocalUrl(publicUrl) && !isPublicIp(announcedIpInput)) {
       errors.push(`${service}: ANNOUNCED_IP must be a publicly routable IP for a non-local public URL.`);
     }
-    // Startup trims SFU_SECRET before it checks or uses it (config/config.ts).
-    const secret = String(env.SFU_SECRET || "").trim();
-    if (!secret || secret === "development-secret") {
+    // Mirrors config/config.ts: startup refuses padding and the default secret.
+    const secret = String(env.SFU_SECRET || "");
+    if (!secret.trim() || secret.trim() === "development-secret") {
       errors.push(`${service}: SFU_SECRET must be a non-default value.`);
+    } else if (secret !== secret.trim()) {
+      errors.push(`${service}: SFU_SECRET has leading or trailing whitespace. Remove it; the SFU refuses to start with it.`);
     }
     checkProductionMode(env, service, errors);
 

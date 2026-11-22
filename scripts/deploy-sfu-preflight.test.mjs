@@ -449,14 +449,17 @@ const productionErrors = (environment) => {
   }
 };
 
-test("SFU_SECRET is checked the way startup reads it, trimmed", () => {
+test("SFU_SECRET must be a non-default value with no surrounding whitespace", () => {
   for (const secret of [" development-secret ", "development-secret\n", "   "]) {
     assert.match(productionErrors({ SFU_SECRET: secret }).join("\n"), /SFU_SECRET must be a non-default value/, JSON.stringify(secret));
   }
+  // Startup refuses padding, and calendar token encryption hashes the raw value,
+  // so two SFUs that differ only by padding would encrypt with different keys.
+  assert.match(productionErrors({ SFU_SECRET: " shared-secret-value " }).join("\n"), /SFU_SECRET has leading or trailing whitespace/);
   const compose = makeCompose();
-  compose.services["edge-dxb"].environment.SFU_SECRET = " shared-secret-value ";
+  compose.services["edge-dxb"].environment.SFU_SECRET = "shared-secret-value ";
   compose.services["edge-fra"].environment.SFU_SECRET = "shared-secret-value";
-  assert.doesNotThrow(() => resolveSfuTargets({ compose }));
+  assert.throws(() => resolveSfuTargets({ compose }), /edge-dxb: SFU_SECRET has leading or trailing whitespace/);
 });
 
 test("SFU services must run in production mode", () => {
