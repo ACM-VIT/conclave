@@ -8,6 +8,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import { promisify } from "node:util";
+import { provideFlock } from "../test-support/host-tools.mjs";
 
 const run = promisify(execFile);
 const scripts = import.meta.dirname;
@@ -22,7 +23,30 @@ const hasTool = (tool) => {
 const missing = ["age", "age-keygen", "sqlite3", "sha256sum", "fuser"].filter((tool) => !hasTool(tool));
 const missingWithRedis = [...missing, ...["redis-server", "redis-cli"].filter((tool) => !hasTool(tool))];
 
-// A state dir, an age key pair and a backup.env, as on the VM.
+// A stand-in docker CLI that answers from a JSON list of containers, so a
+// backup sees the SFU containers a test describes and never this host's.
+// Each entry: { id, mounts, status, env, user, image }; { "fail": true }
+// makes every command fail.
+const dockerStandIn = `#!/usr/bin/env node
+const fs = require("node:fs");
+const listed = JSON.parse(fs.readFileSync(process.env.BACKUP_TEST_DOCKER, "utf8"));
+const args = process.argv.slice(2);
+const out = (lines) => process.stdout.write(lines.map((line) => line + "\\n").join(""));
+if (listed.fail) process.exit(1);
+if (args[0] === "ps") return void out(listed.map((c) => c.id));
+const c = listed.find((entry) => entry.id === args.at(-1));
+if (args[0] !== "inspect" || !c) process.exit(1);
+const format = args[2];
+if (format.includes(".Mounts")) out(c.mounts ?? []);
+else if (format.includes(".State.Status")) out([c.status]);
+else if (format.includes(".Config.Env")) out(c.env ?? []);
+else if (format.includes(".Config.User")) out([c.user ?? ""]);
+else if (format.includes(".Image")) out([c.image ?? "sha256:sfu-image"]);
+else process.exit(1);
+`;
+
+// A state dir, an age key pair and a backup.env, as on the VM. The SFU
+// container is stopped and its health URL silent, unless a test says else.
 const setUp = async (root, extraConfig = []) => {
   const state = path.join(root, "state");
   const local = path.join(root, "local");
@@ -55,7 +79,21 @@ const setUp = async (root, extraConfig = []) => {
       ...extraConfig,
     ].join("\n"),
   );
-  const env = { ...process.env, BACKUP_CONFIG: config, REDIS_URL: "", SFU_REDIS_URL: "" };
+  const bin = path.join(root, "bin");
+  await mkdir(bin);
+  await writeFile(path.join(bin, "docker"), dockerStandIn, { mode: 0o755 });
+  await provideFlock(bin);
+  const dockerList = path.join(root, "docker.json");
+  const setDocker = (containers) => writeFile(dockerList, JSON.stringify(containers));
+  await setDocker([{ id: "sfu-a", mounts: [state], status: "exited", env: ["SFU_PORT=9", "SFU_INSTANCE_ID=sfu-a"] }]);
+  const env = {
+    ...process.env,
+    PATH: `${bin}:${process.env.PATH}`,
+    BACKUP_TEST_DOCKER: dockerList,
+    BACKUP_CONFIG: config,
+    REDIS_URL: "",
+    SFU_REDIS_URL: "",
+  };
   const backup = (...args) => run("bash", [path.join(scripts, "backup.sh"), ...args], { env });
   const latestArchive = async () => {
     const archives = (await readdir(local)).filter((name) => name.endsWith(".tar.gz.age")).sort();
@@ -63,7 +101,50 @@ const setUp = async (root, extraConfig = []) => {
   };
   const restore = (...args) =>
     run("bash", [path.join(scripts, "restore.sh"), "--identity", key, ...args], { env });
-  return { state, local, repo, config, backup, latestArchive, restore };
+  return { state, local, repo, config, bin, env, setDocker, backup, latestArchive, restore };
+};
+
+// A stand-in SFU with the real fence's rules: a hold belongs to its owner
+// token, a renewal succeeds only while that owner holds it, and only that
+// owner releases it. forgetHold drops the hold right after granting it, as a
+// restart would.
+const fencedSfu = async ({ instanceId = "sfu-a", forgetHold = false, onHold, onRelease } = {}) => {
+  const requests = [];
+  let holder = null;
+  const server = createHttpServer(async (req, res) => {
+    let raw = "";
+    for await (const chunk of req) raw += chunk;
+    if (req.url === "/health") return res.end('{"status":"healthy"}');
+    if (req.url !== "/admin/persistence-fence") return res.writeHead(404).end();
+    const body = raw ? JSON.parse(raw) : {};
+    requests.push({ method: req.method, ...body });
+    const reply = (code, value) =>
+      res.writeHead(code, { "content-type": "application/json" }).end(JSON.stringify({ ...value, instanceId }));
+    if (req.method === "POST" && body.renew) {
+      return holder === body.owner ? reply(200, { held: true, until: Date.now() + body.holdMs }) : reply(409, { held: false });
+    }
+    if (req.method === "POST") {
+      if (holder && holder !== body.owner) return reply(409, { held: false });
+      holder = body.owner;
+      await onHold?.();
+      if (forgetHold) holder = null;
+      return reply(200, { held: true, until: Date.now() + body.holdMs });
+    }
+    if (holder && holder !== body.owner) return reply(409, { released: false });
+    const released = holder !== null;
+    holder = null;
+    await onRelease?.();
+    return reply(200, { released });
+  });
+  await new Promise((done) => server.listen(0, "127.0.0.1", done));
+  const port = server.address().port;
+  return {
+    port,
+    requests,
+    health: `http://127.0.0.1:${port}/health`,
+    container: (state) => ({ id: instanceId, mounts: [state], status: "running", env: [`SFU_PORT=${port}`, `SFU_INSTANCE_ID=${instanceId}`] }),
+    close: () => new Promise((done) => server.close(done)),
+  };
 };
 
 test(
@@ -387,7 +468,7 @@ test(
   async () => {
     const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
     try {
-      const { state, config, backup, latestArchive, restore } = await setUp(root);
+      const { state, config, env, backup, latestArchive, restore } = await setUp(root);
       // No owner configured, so restore.sh asks the SFU container.
       await writeFile(config, `${await readFile(config, "utf8")}\nBACKUP_RESTORE_OWNER=\n`);
       const db = new DatabaseSync(path.join(state, "conclave.sqlite"));
@@ -400,7 +481,7 @@ test(
       // running as node:node, an account this host does not have. Inside its
       // image node resolves to this test's own ids, the one owner a non-root
       // restore can hand files to.
-      const bin = path.join(root, "bin");
+      const bin = path.join(root, "owner-bin");
       await mkdir(bin);
       // Inside the image node is an id this runner can hand files to and
       // never 0: its own as a normal user, any as root.
@@ -424,7 +505,7 @@ test(
       await chmod(path.join(bin, "docker"), 0o755);
 
       const result = await run("bash", [path.join(scripts, "restore.sh"), "--identity", path.join(root, "key.txt"), "--file", archive, "--yes"], {
-        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, BACKUP_CONFIG: config, REDIS_URL: "", SFU_REDIS_URL: "" },
+        env: { ...env, PATH: `${bin}:${env.PATH}` },
       });
       assert.match(result.stdout, new RegExp(`Gave the files in .* to ${uid}:${gid}, the user the SFU runs as`));
 
@@ -565,7 +646,7 @@ test(
       }
       // A stand-in SFU that, like the real one, writes each record to both
       // stores and holds its writes while a backup holds the fence.
-      const { state, config, backup, latestArchive, restore } = await setUp(root, [`SFU_PERSISTENCE_REDIS_URL=redis://127.0.0.1:${port}/0`]);
+      const { state, config, setDocker, backup, latestArchive, restore } = await setUp(root, [`SFU_PERSISTENCE_REDIS_URL=redis://127.0.0.1:${port}/0`]);
       db = new DatabaseSync(path.join(state, "conclave.sqlite"));
       db.exec("PRAGMA journal_mode = WAL");
       db.exec("CREATE TABLE records (id INTEGER PRIMARY KEY)");
@@ -582,28 +663,24 @@ test(
         redisWriter.stdin.write(`SET conclave:sfu:persistence:record:${next} 1\n`);
         sent += 1;
       }, 50);
-      sfu = createHttpServer(async (req, res) => {
-        if (req.url === "/health") return res.end('{"status":"healthy"}');
-        if (req.url === "/admin/persistence-fence" && req.method === "POST") {
+      sfu = await fencedSfu({
+        onHold: async () => {
           fenced = true;
           while (acked < sent) await new Promise((done) => setTimeout(done, 5));
-          return res.end(JSON.stringify({ held: true, until: Date.now() + 20_000, instanceId: "sfu-a" }));
-        }
-        if (req.url === "/admin/persistence-fence" && req.method === "DELETE") {
+        },
+        onRelease: () => {
           fenced = false;
-          return res.end('{"held":false}');
-        }
-        res.writeHead(404).end();
+        },
       });
-      await new Promise((done) => sfu.listen(0, "127.0.0.1", done));
-      await writeFile(config, `${await readFile(config, "utf8")}\nCONCLAVE_SFU_HEALTH_URLS="http://127.0.0.1:${sfu.address().port}/health"\n`);
+      await setDocker([sfu.container(state)]);
+      await writeFile(config, `${await readFile(config, "utf8")}\nCONCLAVE_SFU_HEALTH_URLS="${sfu.health}"\n`);
       await new Promise((done) => setTimeout(done, 300));
 
       await backup("--local-only");
       clearInterval(writer);
       redisWriter.stdin.end();
       db.close();
-      await new Promise((done) => sfu.close(done));
+      await sfu.close();
       sfu = null;
       await writeFile(config, `${await readFile(config, "utf8")}\nCONCLAVE_SFU_HEALTH_URLS="http://127.0.0.1:9/health"\n`);
 
@@ -622,7 +699,7 @@ test(
     } finally {
       clearInterval(writer);
       if (db?.isOpen) db.close();
-      if (sfu) await new Promise((done) => sfu.close(done));
+      if (sfu) await sfu.close();
       redis.kill();
       await rm(root, { recursive: true, force: true });
     }
@@ -646,6 +723,125 @@ test(
       assert.deepEqual((await readdir(local)).filter((name) => name.endsWith(".tar.gz.age")), []);
     } finally {
       await new Promise((done) => older.close(done));
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+// An SFU that answers /health but whose fence request gets no answer, on a
+// port no stopped container has.
+const silentFence = async () => {
+  const server = createHttpServer((req, res) => (req.url === "/health" ? res.end('{"status":"healthy"}') : req.socket.destroy()));
+  await new Promise((done) => server.listen(0, "127.0.0.1", done));
+  return { health: `http://127.0.0.1:${server.address().port}/health`, close: () => new Promise((done) => server.close(done)) };
+};
+
+const archives = async (local) => (await readdir(local)).filter((name) => name.endsWith(".tar.gz.age"));
+
+const withDatabase = (state) => {
+  const db = new DatabaseSync(path.join(state, "conclave.sqlite"));
+  db.exec("CREATE TABLE meetings (id TEXT PRIMARY KEY)");
+  db.close();
+};
+
+test(
+  "a live SFU whose fence request gets no answer stops the backup",
+  { skip: missing.length > 0 && `needs ${missing.join(", ")} on PATH` },
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+    const sfu = await silentFence();
+    try {
+      const { state, local, backup } = await setUp(root, [`CONCLAVE_SFU_HEALTH_URLS="${sfu.health}"`]);
+      withDatabase(state);
+      await assert.rejects(backup("--local-only"), /gave no fence answer, and Docker lists no stopped SFU container on port \d+/);
+      assert.deepEqual(await archives(local), []);
+    } finally {
+      await sfu.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "a silent health URL is no proof: an SFU container Docker reports running stops the backup",
+  { skip: missing.length > 0 && `needs ${missing.join(", ")} on PATH` },
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+    try {
+      const { state, local, setDocker, backup } = await setUp(root);
+      withDatabase(state);
+      await setDocker([{ id: "sfu-a", mounts: [state], status: "running", env: ["SFU_PORT=9", "SFU_INSTANCE_ID=sfu-a"] }]);
+      await assert.rejects(backup("--local-only"), /sfu-a \(sfu-a\) is running but does not hold the write fence/);
+      await setDocker({ fail: true });
+      await assert.rejects(backup("--local-only"), /Docker cannot list the SFU containers/);
+      assert.deepEqual(await archives(local), []);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "a second backup on the host refuses to start while one runs",
+  { skip: missing.length > 0 && `needs ${missing.join(", ")} on PATH` },
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+    let holder;
+    try {
+      const { state, local, env, backup } = await setUp(root);
+      withDatabase(state);
+      await mkdir(local, { recursive: true });
+      holder = spawn("bash", ["-c", 'exec 8>>"$1"; flock -n 8 && echo locked && sleep 30', "_", path.join(local, ".backup.lock")], { env });
+      await new Promise((done) => holder.stdout.once("data", done));
+      await assert.rejects(backup("--local-only"), /another backup or restore is running on this host/);
+      assert.deepEqual(await archives(local), []);
+    } finally {
+      holder?.kill();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "a backup whose SFU lost the hold before both copies were taken archives nothing",
+  { skip: missing.length > 0 && `needs ${missing.join(", ")} on PATH` },
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+    const sfu = await fencedSfu({ forgetHold: true });
+    try {
+      const { state, local, setDocker, backup } = await setUp(root, [`CONCLAVE_SFU_HEALTH_URLS="${sfu.health}"`]);
+      withDatabase(state);
+      await setDocker([sfu.container(state)]);
+      await assert.rejects(backup("--local-only"), /no longer holds this backup's write fence/);
+      assert.deepEqual(await archives(local), []);
+    } finally {
+      await sfu.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "a backup holds, renews and releases the fence with its own owner token only",
+  { skip: missing.length > 0 && `needs ${missing.join(", ")} on PATH` },
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+    const sfu = await fencedSfu();
+    try {
+      const { state, local, setDocker, backup } = await setUp(root, [`CONCLAVE_SFU_HEALTH_URLS="${sfu.health}"`]);
+      withDatabase(state);
+      await setDocker([sfu.container(state)]);
+      await backup("--local-only");
+      assert.equal((await archives(local)).length, 1);
+      const owners = new Set(sfu.requests.map((request) => request.owner));
+      assert.equal(owners.size, 1, "one owner token for the whole run");
+      assert.match([...owners][0], /^backup-[0-9a-f]{24}$/);
+      assert.deepEqual(
+        sfu.requests.map((request) => `${request.method}${request.renew ? " renew" : ""}`),
+        ["POST", "POST renew", "POST renew", "DELETE"],
+      );
+    } finally {
+      await sfu.close();
       await rm(root, { recursive: true, force: true });
     }
   },

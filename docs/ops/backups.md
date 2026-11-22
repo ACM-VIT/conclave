@@ -14,12 +14,26 @@ IST to Azure Blob Storage in another region.
 
 SQLite and Redis are copied at one point in time. Before either copy, the
 backup asks every SFU in `CONCLAVE_SFU_HEALTH_URLS` to hold its durable
-writes (`POST /admin/persistence-fence`, at most 30 s, `BACKUP_FENCE_HOLD_MS`
-20 s by default); the SFUs keep serving from memory, and the held writes land
-when the backup releases the fence or at its timeout. An SFU that does not
-answer is not running and writes nothing. One that answers but will not hold
-the fence, such as an SFU from before the fence existed, stops the backup, so
-deploy the SFU before turning backups on.
+writes (`POST /admin/persistence-fence`, `BACKUP_FENCE_HOLD_MS` 20 s by
+default). Every persistence call on the SFU passes one gate in the order it
+was made, so calls made during the hold wait their turn and then run in that
+order, and each caller gets its own result or error; the SFUs keep serving
+from memory, and media and signalling never wait on it. The hold belongs to
+the backup's random owner token: only that token renews or releases it, and
+the SFU lifts it at its deadline, never later than 30 s after it was taken,
+if the backup dies. The backup renews between the SQLite and Redis copies and
+again after both, which fails once an SFU restarted or its hold lapsed, so
+such a night archives nothing.
+
+Silence is not proof that an SFU writes nothing. Every SFU in the list must
+hold the fence, or Docker must report the container on that URL's port
+exited, dead or created; and every running container that mounts the state
+dir must hold it. When Docker cannot answer, or an SFU answers but will not
+hold the fence (one from before the fence existed), the backup stops, so
+deploy the SFU before turning backups on, and keep the health URLs on the
+SFUs' local ports (`http://127.0.0.1:3031/health`). One backup or restore
+runs at a time on the host (`flock` on `BACKUP_LOCAL_DIR/.backup.lock`); a
+second one exits at once.
 
 Each archive also holds a `MANIFEST` (row counts per table, Redis key count,
 repo commit) and `SHA256SUMS`. The archive is encrypted with
@@ -89,7 +103,7 @@ Install on the VM (through `az vm run-command invoke ... --scripts @file.sh`,
 as root):
 
 ```bash
-apt-get update && apt-get install -y age sqlite3 redis-tools psmisc
+apt-get update && apt-get install -y age sqlite3 redis-tools psmisc util-linux python3
 install -d -m 0700 /etc/conclave /var/backups/conclave
 echo "age1...your public key..." > /etc/conclave/backup-recipients.txt
 R=/home/azureuser/repos/conclave

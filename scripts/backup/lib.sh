@@ -234,6 +234,92 @@ sfu_file_owner() {
   done
 }
 
+# One backup or restore at a time on this host. The lock lives in the local
+# backup dir, which the systemd unit (whose /tmp is private) and a manual run
+# share, and the kernel drops it however the run exits.
+take_backup_lock() {
+  command -v flock >/dev/null 2>&1 || die "flock is not installed (apt-get install util-linux)"
+  mkdir -p "$BACKUP_LOCAL_DIR" || die "cannot create ${BACKUP_LOCAL_DIR} for the backup lock; set BACKUP_LOCAL_DIR"
+  exec 8>>"${BACKUP_LOCAL_DIR}/.backup.lock"
+  flock -n 8 || die "another backup or restore is running on this host (${BACKUP_LOCAL_DIR}/.backup.lock)"
+}
+
+# Prints one field of a JSON object read from stdin, or nothing.
+json_field() {
+  python3 -c 'import json, sys
+try:
+    value = json.load(sys.stdin).get(sys.argv[1], "")
+except Exception:
+    value = ""
+print(value if isinstance(value, str) else "")' "$1"
+}
+
+# Prints "<container><TAB><state><TAB><SFU_PORT><TAB><SFU_INSTANCE_ID>" for
+# every container that mounts the state dir. Fails when Docker cannot list or
+# inspect them, since then nobody can say which SFUs run.
+sfu_containers() {
+  local state_dir="${1%/}" id ids mounts status env
+  command -v docker >/dev/null 2>&1 || return 1
+  ids="$(docker ps -aq)" || return 1
+  for id in $ids; do
+    mounts="$(docker inspect -f '{{range .Mounts}}{{println .Source}}{{end}}' "$id")" || return 1
+    grep -qxF "$state_dir" <<< "$mounts" || continue
+    status="$(docker inspect -f '{{.State.Status}}' "$id")" || return 1
+    env="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$id")" || return 1
+    printf '%s\t%s\t%s\t%s\n' "$id" "$status" \
+      "$(sed -n 's/^SFU_PORT=//p' <<< "$env" | head -n 1)" \
+      "$(sed -n 's/^SFU_INSTANCE_ID=//p' <<< "$env" | head -n 1)"
+  done
+}
+
+# Succeeds only when no SFU can write unseen: every SFU container that mounts
+# the state dir and is not exited, dead or created holds this backup's fence,
+# and each health URL that gave no fence answer belongs to a container Docker
+# reports stopped. Silence proves nothing (a wrong URL, a proxy, a hung
+# process), and what Docker cannot report counts as running. Says why on
+# stderr when it fails.
+#   writers_fenced STATE_DIR "HELD_INSTANCE_IDS" UNANSWERED_HEALTH_URL...
+writers_fenced() {
+  local state_dir="$1" held=" $2 " containers id status port instance url url_port stopped
+  shift 2
+  if ! containers="$(sfu_containers "$state_dir")"; then
+    echo "Docker cannot list the SFU containers, so a running SFU could go unseen" >&2
+    return 1
+  fi
+  while IFS=$'\t' read -r id status port instance; do
+    [[ -n "$id" ]] || continue
+    case "$status" in
+      exited|dead|created) ;;
+      *)
+        if [[ "$held" != *" ${instance} "* ]]; then
+          echo "the SFU container ${id} (${instance:-no SFU_INSTANCE_ID}) is ${status} but does not hold the write fence" >&2
+          return 1
+        fi
+        ;;
+    esac
+  done <<< "$containers"
+  for url in "$@"; do
+    url_port="${url#*://}"
+    url_port="${url_port%%/*}"
+    url_port="${url_port##*:}"
+    stopped=""
+    while IFS=$'\t' read -r id status port instance; do
+      [[ -n "$id" && "$port" == "$url_port" ]] || continue
+      case "$status" in
+        exited|dead|created) stopped="$id" ;;
+        *)
+          echo "${url} gave no fence answer, but Docker reports its container ${id} ${status}" >&2
+          return 1
+          ;;
+      esac
+    done <<< "$containers"
+    if [[ -z "$stopped" ]]; then
+      echo "${url} gave no fence answer, and Docker lists no stopped SFU container on port ${url_port}, so that SFU may still write" >&2
+      return 1
+    fi
+  done
+}
+
 # --- Azure Blob Storage over REST, authenticated by the VM's managed identity.
 
 blob_base_url() {

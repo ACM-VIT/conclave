@@ -102,6 +102,10 @@ if [[ "$apply" != "true" ]]; then
   exit 0
 fi
 
+# A backup taken while files are being replaced would archive a half-restored
+# state dir.
+take_backup_lock
+
 # Any HTTP answer, a 503 included, means an SFU process still holds the files.
 for url in ${CONCLAVE_SFU_HEALTH_URLS:-http://127.0.0.1:3031/health http://127.0.0.1:3032/health}; do
   if [[ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "$url" || true)" != "000" ]]; then

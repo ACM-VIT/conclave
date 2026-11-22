@@ -26,9 +26,11 @@ done
 load_backup_config
 recipients="${BACKUP_AGE_RECIPIENTS_FILE:-/etc/conclave/backup-recipients.txt}"
 [[ -s "$recipients" ]] || die "no age recipients in ${recipients}"
-for tool in age sqlite3 sha256sum openssl tar; do
+for tool in age sqlite3 sha256sum openssl tar python3; do
   command -v "$tool" >/dev/null || die "${tool} is not installed"
 done
+# A second backup could release this one's fence or copy around it.
+take_backup_lock
 
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 name="conclave-${BACKUP_NAME:-$(hostname -s)}-${stamp}"
@@ -56,30 +58,52 @@ configured="$(configured_database "$STATE_DIR")" ||
 
 # One point in time for SQLite and Redis: every SFU holds its durable writes
 # behind a short fence while both are copied, and the release lets them
-# through. An SFU that does not answer is not running and writes nothing; one
-# that answers but will not hold the fence stops the backup.
+# through. The hold belongs to this run's owner token: only it renews or
+# releases the hold, and the SFU lifts it at its deadline if this run dies.
+# Every configured SFU must hold the fence or be one Docker reports stopped;
+# an SFU that answers but will not hold it stops the backup.
 FENCE_HOLD_MS="${BACKUP_FENCE_HOLD_MS:-20000}"
-fence_until=0
+owner="backup-$(od -An -tx1 -N12 /dev/urandom | tr -d ' \n')"
+fence_request() {
+  curl -s --max-time 30 -w $'\n%{http_code}' -X "$1" -H "x-sfu-secret: ${SFU_SECRET:-}" \
+    -H "content-type: application/json" -d "$3" "${2}/admin/persistence-fence" || true
+}
 release_fences() {
   local base
   for base in "${fenced[@]}"; do
-    curl -s -o /dev/null --max-time 5 -X DELETE -H "x-sfu-secret: ${SFU_SECRET:-}" "${base}/admin/persistence-fence" || true
+    fence_request DELETE "$base" "{\"owner\": \"${owner}\"}" >/dev/null
   done
   fenced=()
 }
+# A renewal succeeds only while this run's hold has never lapsed: an SFU that
+# restarted, or whose hold ran out, has no hold for this owner. The Docker
+# check runs again too, for an SFU that started meanwhile.
+renew_fences() {
+  local base
+  for base in "${fenced[@]}"; do
+    [[ "$(fence_request POST "$base" "{\"owner\": \"${owner}\", \"holdMs\": ${FENCE_HOLD_MS}, \"renew\": true}" | tail -n 1)" == 200 ]] ||
+      die "the SFU at ${base} no longer holds this backup's write fence (it lapsed or the SFU restarted), so the copies may not be from one point in time; rerun the backup"
+  done
+  writers_fenced "$STATE_DIR" "${held_ids[*]}" "${unanswered[@]}" || die "an SFU could write while the backup copies; nothing was archived"
+}
+held_ids=()
+unanswered=()
 for health in ${CONCLAVE_SFU_HEALTH_URLS:-http://127.0.0.1:3031/health http://127.0.0.1:3032/health}; do
   base="${health%/health}"
-  reply="$(curl -s --max-time 30 -w $'\n%{http_code}' -X POST -H "x-sfu-secret: ${SFU_SECRET:-}" \
-    -H "content-type: application/json" -d "{\"holdMs\": ${FENCE_HOLD_MS}}" "${base}/admin/persistence-fence" || true)"
+  reply="$(fence_request POST "$base" "{\"owner\": \"${owner}\", \"holdMs\": ${FENCE_HOLD_MS}}")"
   code="${reply##*$'\n'}"
-  [[ "$code" == 000 ]] && continue
-  until_ms="$(sed -nE 's/.*"until":([0-9]+).*/\1/p' <<< "${reply%$'\n'*}")"
-  if [[ "$code" != 200 || -z "$until_ms" ]]; then
+  if [[ "$code" == 000 ]]; then
+    unanswered+=("$health")
+    continue
+  fi
+  instance="$(json_field instanceId <<< "${reply%$'\n'*}")"
+  if [[ "$code" != 200 || -z "$instance" ]]; then
     die "the SFU at ${base} did not hold the write fence (HTTP ${code}); deploy an SFU with /admin/persistence-fence before backing up"
   fi
   fenced+=("$base")
-  (( fence_until == 0 || until_ms < fence_until )) && fence_until="$until_ms"
+  held_ids+=("$instance")
 done
+writers_fenced "$STATE_DIR" "${held_ids[*]}" "${unanswered[@]}" || die "an SFU could write while the backup copies; nothing was archived"
 (( ${#fenced[@]} > 0 )) && log "Holding the write fence on ${#fenced[@]} SFU(s)"
 
 # SQLite: the online backup API copies a consistent snapshot while the SFUs
@@ -127,6 +151,8 @@ for rel in "${databases[@]}"; do
   sources=$((sources + 1))
 done
 
+renew_fences
+
 # Redis: redis-cli --rdb asks the server for a fresh point-in-time snapshot
 # (the same fork as BGSAVE) and streams it here, so it works whether Redis
 # runs from a package or a container, and never reads a dump file mid-write.
@@ -148,8 +174,8 @@ fi
 
 (( sources > 0 )) || die "found no SQLite database in ${STATE_DIR} and no Redis URL; check the config"
 
+renew_fences
 if (( ${#fenced[@]} > 0 )); then
-  (( $(date +%s) * 1000 < fence_until )) || die "the write fence lifted before SQLite and Redis were both copied; raise BACKUP_FENCE_HOLD_MS"
   release_fences
   log "Released the write fence"
 fi
