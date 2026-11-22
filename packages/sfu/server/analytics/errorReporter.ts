@@ -8,6 +8,9 @@
  * fatal report sits outside that budget: the process sends it once, then exits.
  */
 
+import { realpathSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { getSystemErrorMap } from "node:util";
 import { ConfigError } from "../configError.js";
 
@@ -335,24 +338,71 @@ const trustedMessage = (value: unknown): string => {
 // Our own classes, by the names reportedError gives only to real instances.
 const SENT_TYPES = new Set([...KNOWN_ERROR_TYPES, "ConfigError", "NonErrorValue"]);
 
-// posthog-node reads the lines around each frame from disk. They are source,
-// not data, but a literal in that source still leaves the box, so they go.
-// Frame paths keep their shape minus any home folder's account name.
-const scrubFrame = (frame: ExceptionFrame): ExceptionFrame => {
-  const {
-    pre_context: _before,
-    context_line: _line,
-    post_context: _after,
-    ...rest
-  } = frame;
-  for (const key of ["filename", "abs_path"]) {
-    const path = rest[key];
-    if (typeof path === "string") rest[key] = scrubHomeFolders(path);
-  }
-  return rest;
+// The SFU's own folder (packages/sfu, /app/packages/sfu in the image), whose
+// source the server runs.
+const SFU_ROOT = fileURLToPath(new URL("../../", import.meta.url));
+const PATH_WITHHELD = "[path]";
+const MAX_KNOWN_PATHS = 1000;
+
+export type FramePathOptions = {
+  /** The folder whose files may be named. */
+  root: string;
+  /** The folder posthog-node made frame paths relative to. */
+  cwd: () => string;
 };
 
-const scrubEntry = (entry: ExceptionListEntry): ExceptionListEntry => {
+/**
+ * A frame's path relative to the SFU's folder, or [path]. A path is kept only
+ * when it names a file that exists inside that folder once links are
+ * followed, so a name alone, a home folder, a library's file or a Node
+ * internal is never sent.
+ */
+const createFramePath = ({ root, cwd }: FramePathOptions) => {
+  let realRoot: string | null = null;
+  try {
+    realRoot = realpathSync(root);
+  } catch {}
+  const known = new Map<string, string>();
+  return (filename: string): string => {
+    const key = `${cwd()}\0${filename}`;
+    const cached = known.get(key);
+    if (cached !== undefined) return cached;
+    let sent = PATH_WITHHELD;
+    try {
+      if (realRoot) {
+        const inRoot = path.relative(realRoot, realpathSync(path.resolve(cwd(), filename)));
+        if (inRoot && !path.isAbsolute(inRoot) && inRoot.split(path.sep)[0] !== "..") {
+          sent = inRoot.split(path.sep).join("/");
+        }
+      }
+    } catch {}
+    if (known.size < MAX_KNOWN_PATHS) known.set(key, sent);
+    return sent;
+  };
+};
+
+const isPosition = (value: unknown): value is number =>
+  typeof value === "number" && Number.isInteger(value) && value >= 0;
+
+// A frame keeps its function, position, in-app flag and a path inside the
+// SFU's folder. The module name posthog-node derives from the full path, the
+// source lines it reads from disk and anything else are left out.
+const scrubFrame = (
+  frame: ExceptionFrame,
+  framePath: (filename: string) => string,
+): ExceptionFrame => ({
+  platform: "node:javascript",
+  ...(typeof frame.filename === "string" ? { filename: framePath(frame.filename) } : {}),
+  ...(typeof frame.function === "string" ? { function: frame.function } : {}),
+  ...(isPosition(frame.lineno) ? { lineno: frame.lineno } : {}),
+  ...(isPosition(frame.colno) ? { colno: frame.colno } : {}),
+  ...(typeof frame.in_app === "boolean" ? { in_app: frame.in_app } : {}),
+});
+
+const scrubEntry = (
+  entry: ExceptionListEntry,
+  framePath: (filename: string) => string,
+): ExceptionListEntry => {
   const type =
     typeof entry?.type === "string" && SENT_TYPES.has(entry.type) ? entry.type : TYPE_WITHHELD;
   return {
@@ -363,7 +413,9 @@ const scrubEntry = (entry: ExceptionListEntry): ExceptionListEntry => {
       ? {
           stacktrace: {
             ...entry.stacktrace,
-            frames: (entry.stacktrace.frames as ExceptionFrame[]).map(scrubFrame),
+            frames: (entry.stacktrace.frames as ExceptionFrame[]).map((frame) =>
+              scrubFrame(frame, framePath),
+            ),
           },
         }
       : {}),
@@ -371,23 +423,27 @@ const scrubEntry = (entry: ExceptionListEntry): ExceptionListEntry => {
 };
 
 /**
- * posthog-node `beforeSend` hook: an exception keeps only a known type, a
- * message we wrote, and frames without source lines or account names; other
- * events pass through.
+ * Builds the posthog-node `beforeSend` hook: an exception keeps only a known
+ * type, a message we wrote, and frames with paths inside the SFU's folder;
+ * other events pass through.
  */
-export const scrubExceptionEvent = <
-  T extends { event: string; properties?: Record<string, unknown> },
->(
-  message: T,
-): T => {
-  if (message.event !== "$exception" || !message.properties) return message;
-  const list = message.properties.$exception_list;
-  if (!Array.isArray(list)) return message;
-  return {
-    ...message,
-    properties: {
-      ...message.properties,
-      $exception_list: list.map(scrubEntry),
-    },
+export const createExceptionScrubber = (options: FramePathOptions) => {
+  const framePath = createFramePath(options);
+  return <T extends { event: string; properties?: Record<string, unknown> }>(message: T): T => {
+    if (message.event !== "$exception" || !message.properties) return message;
+    const list = message.properties.$exception_list;
+    if (!Array.isArray(list)) return message;
+    return {
+      ...message,
+      properties: {
+        ...message.properties,
+        $exception_list: list.map((entry: ExceptionListEntry) => scrubEntry(entry, framePath)),
+      },
+    };
   };
 };
+
+export const scrubExceptionEvent = createExceptionScrubber({
+  root: SFU_ROOT,
+  cwd: () => process.cwd(),
+});

@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import path from "node:path";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { connect, type AddressInfo } from "node:net";
 import { gunzipSync } from "node:zlib";
@@ -6,6 +7,7 @@ import { PostHog } from "posthog-node";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createErrorReporter,
+  createExceptionScrubber,
   scrubErrorText,
   scrubExceptionEvent,
   type ExceptionClient,
@@ -350,29 +352,52 @@ describe("SFU error reporter", () => {
     ]);
   });
 
-  it("strips home folders from stack frame paths", () => {
-    const scrubbed = scrubExceptionEvent({
-      event: "$exception",
-      properties: {
-        $exception_list: [
-          {
-            value: "boom",
-            stacktrace: {
-              frames: [
-                { filename: "/Users/operator_private/conclave/packages/sfu/server.ts", lineno: 1 },
-                { filename: "/home/Review GivenName/conclave/packages/sfu/server.ts", lineno: 4 },
-                { filename: "C:\\Users\\operator_private\\sfu\\server.js", lineno: 2 },
-                { filename: "server/socket/joinRoom.ts", lineno: 3 },
-              ],
+  describe("frame paths", () => {
+    const root = path.resolve(import.meta.dirname, "..");
+    const own = "server/analytics/errorReporter.ts";
+    const sentFrame = (cwd: string, filename: string) => {
+      const scrub = createExceptionScrubber({ root, cwd: () => cwd });
+      const scrubbed = scrub({
+        event: "$exception",
+        properties: {
+          $exception_list: [
+            {
+              type: "Error",
+              value: "x",
+              stacktrace: {
+                frames: [
+                  { platform: "node:javascript", filename, abs_path: filename, module: "Review Operator.service:main", function: "main", lineno: 3, colno: 9, in_app: true },
+                ],
+              },
             },
-          },
-        ],
-      },
-    });
+          ],
+        },
+      });
+      return (scrubbed.properties?.$exception_list as Array<{ stacktrace: { frames: unknown[] } }>)[0]
+        .stacktrace.frames[0];
+    };
 
-    expect(JSON.stringify(scrubbed)).not.toMatch(/operator_private|Review|GivenName/);
-    expect(JSON.stringify(scrubbed)).toContain("~/conclave/packages/sfu/server.ts");
-    expect(JSON.stringify(scrubbed)).toContain("server/socket/joinRoom.ts");
+    it.each([
+      ["an absolute path inside the SFU", "/", path.join(root, own), own],
+      ["a path relative to the SFU's folder", root, own, own],
+      ["a path relative to a folder above the SFU", path.dirname(root), `${path.basename(root)}/${own}`, own],
+      ["a home folder the SDK made relative to /", "/", "home/Review Operator/service/main.ts", "[path]"],
+      ["the same name under the SFU's folder", root, "home/Review Operator/service/main.ts", "[path]"],
+      ["an absolute home folder", root, "/home/Review Operator/service/main.ts", "[path]"],
+      ["a Windows path", root, "C:\\Users\\Review Operator\\sfu\\server.js", "[path]"],
+      ["a ~ path", root, "~/conclave/packages/sfu/server.ts", "[path]"],
+      ["a library file", root, path.resolve(root, "../../node_modules/posthog-node/package.json"), "[path]"],
+      ["a Node internal", root, "node:internal/process/task_queues", "[path]"],
+    ])("sends %s as its path in the SFU, or [path]", (_case, cwd, filename, sent) => {
+      expect(sentFrame(cwd, filename)).toEqual({
+        platform: "node:javascript",
+        filename: sent,
+        function: "main",
+        lineno: 3,
+        colno: 9,
+        in_app: true,
+      });
+    });
   });
 
   it.each([

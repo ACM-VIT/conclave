@@ -149,8 +149,11 @@ our constant-message classes (`ConfigError`, which names the variable and never
 its value, and `NonErrorValue`), checked with `instanceof` when the error is
 reported and never by its name. Otherwise it is `[message withheld]`, keeping
 just a Node errno code read from the error's own `code` (`ECONNREFUSED` and the
-like), whatever its message says. Frames lose the source lines posthog-node attaches
-and any home folder's account name (`/home/<name>` becomes `~`, spaces included).
+like), whatever its message says. Frames lose the source lines and module names
+posthog-node attaches, and keep a path only for a file that exists inside the
+SFU's own folder (`packages/sfu`), sent relative to it. Any other path, a
+library's, a Node internal, a home folder or a name that only looks like ours,
+is `[path]`.
 Game events group by a keyed hash of the room (`room_<hmac>`), never its code.
 Without a real `SFU_SECRET` they are not grouped at all, and distinct ids use a
 key that lives only in that process.
