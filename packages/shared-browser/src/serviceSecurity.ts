@@ -31,7 +31,8 @@ const isLoopbackOrPrivateIpv4 = (host: string): boolean => {
 
 const isLoopbackOrPrivateIpv6 = (host: string): boolean => {
     const normalized = new URL(`http://[${host}]`).hostname.slice(1, -1);
-    return normalized === "::1" || /^f[cd]/.test(normalized);
+    // Unique-local fc00::/7: the first hextet is fcXX or fdXX in full.
+    return normalized === "::1" || /^f[cd][0-9a-f]{2}:/.test(normalized);
 };
 
 const isLoopbackOrPrivateHost = (host: string): boolean => {

@@ -110,6 +110,9 @@ test("startup configuration fails closed", () => {
     refuses({ BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_HOST: "0.0.0.0" });
     refuses({ BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_HOST: "::" });
     refuses({ BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_HOST: "57.159.28.54" });
+    // fd0::12 is 0fd0::12, outside the fc00::/7 unique-local range.
+    refuses({ BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_HOST: "fd0::12" });
+    refuses({ BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_HOST: "fc::1" });
     refuses({ BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_CORS_ORIGINS: "*" });
 
     assert.deepEqual(resolveServiceSecurity({ BROWSER_SERVICE_TOKEN: STRONG_TOKEN }), {
