@@ -60,6 +60,7 @@ type SarvamResponse = {
 
 type ParsedSarvamEvent =
   | { type: "final"; itemId: string; transcript: string }
+  | { type: "speech_start" }
   | { type: "error"; message: string }
   | { type: "ignore" };
 
@@ -283,6 +284,12 @@ export const parseSarvamEvent = (raw: string): ParsedSarvamEvent => {
 
   const responseType = response.type ?? "";
   if (
+    responseType === "speech_start" ||
+    (responseType === "events" && data.signal_type === "START_SPEECH")
+  ) {
+    return { type: "speech_start" };
+  }
+  if (
     responseType !== "data" &&
     responseType !== "transcript" &&
     responseType !== "translation"
@@ -299,7 +306,6 @@ export const parseSarvamEvent = (raw: string): ParsedSarvamEvent => {
           : typeof response.text === "string"
             ? response.text.trim()
             : "";
-  if (!transcript) return { type: "ignore" };
   const requestId =
     typeof data.request_id === "string" && data.request_id.trim()
       ? data.request_id.trim()
@@ -313,12 +319,23 @@ export const parseSarvamEvent = (raw: string): ParsedSarvamEvent => {
   };
 };
 
+/**
+ * Sarvam names no utterance until its final, so this connection names them:
+ * an utterance is accepted when Sarvam signals speech started, or, before
+ * Sarvam has sent any speech signal, with the first audio after each flush.
+ * Finals answer accepted utterances oldest first.
+ */
 class SarvamTranscriptionSession implements LiveTranscriptionSession {
   readonly provider = "sarvam" as const;
 
   private closed = false;
   private readonly downsampler = new Pcm24To16Downsampler();
-  private finalSequence = 0;
+  private readonly connectionId = crypto.randomUUID();
+  private utteranceCount = 0;
+  private readonly awaitingFinal: string[] = [];
+  private openedFromAudio: string[] = [];
+  private signalsSpeech = false;
+  private flushed = true;
 
   constructor(
     private readonly socket: WebSocket,
@@ -329,6 +346,10 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
     const downsampled = this.downsampler.downsample(audioBase64);
     if (!downsampled) return;
     this.socket.send(buildSarvamAudioMessage(downsampled));
+    if (this.flushed && !this.signalsSpeech) {
+      this.openedFromAudio.push(this.acceptUtterance());
+    }
+    this.flushed = false;
   }
 
   commitAudio(): void {
@@ -337,10 +358,44 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
   clearAudio(): void {
     this.socket.send(buildSarvamFlushMessage());
     this.downsampler.reset();
+    this.flushed = true;
   }
 
   finishAudio(): void {
     this.socket.send(buildSarvamFlushMessage());
+    this.flushed = true;
+  }
+
+  private nextUtteranceId(): string {
+    this.utteranceCount += 1;
+    return createSarvamSegmentItemId(`sarvam-${this.connectionId}`, this.utteranceCount);
+  }
+
+  private acceptUtterance(): string {
+    const itemId = this.nextUtteranceId();
+    this.awaitingFinal.push(itemId);
+    this.callbacks.onAccepted?.(itemId);
+    return itemId;
+  }
+
+  /**
+   * Sarvam's first speech signal takes the oldest place its audio opened;
+   * the other audio places held no speech it heard, and from now on each
+   * speech signal opens its own place.
+   */
+  private handleSpeechStart(): void {
+    if (this.signalsSpeech) {
+      this.acceptUtterance();
+      return;
+    }
+    this.signalsSpeech = true;
+    const [taken, ...unheard] = this.openedFromAudio;
+    this.openedFromAudio = [];
+    for (const itemId of unheard) {
+      this.awaitingFinal.splice(this.awaitingFinal.indexOf(itemId), 1);
+      this.callbacks.onReleased?.(itemId);
+    }
+    if (!taken) this.acceptUtterance();
   }
 
   close(): void {
@@ -377,11 +432,14 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
       await this.callbacks.onFailure(event.message);
       return;
     }
-    this.finalSequence += 1;
-    const itemId = createSarvamSegmentItemId(
-      event.itemId,
-      this.finalSequence,
-    );
+    if (event.type === "speech_start") {
+      this.handleSpeechStart();
+      return;
+    }
+    const itemId =
+      this.awaitingFinal.shift() ?? (event.transcript ? this.nextUtteranceId() : null);
+    if (!itemId) return;
+    this.openedFromAudio = this.openedFromAudio.filter((opened) => opened !== itemId);
     this.callbacks.onCommitted(itemId);
     await this.callbacks.onFinal(itemId, event.transcript);
   }

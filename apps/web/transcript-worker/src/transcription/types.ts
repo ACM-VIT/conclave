@@ -2,6 +2,10 @@ import type { TranscriptTranscriptionProvider } from "@conclave/meeting-core/tra
 import type { Env } from "../types";
 
 export type LiveTranscriptionCallbacks = {
+  /** The provider took an utterance it owes a final for; its place is fixed now. */
+  onAccepted?: (itemId: string) => void;
+  /** An accepted place turned out to hold no utterance, so it ends with nothing to show. */
+  onReleased?: (itemId: string) => void;
   onCommitted: (itemId: string) => void;
   onDelta: (itemId: string, delta: string) => void;
   onFinal: (itemId: string, transcript: string) => void | Promise<void>;
