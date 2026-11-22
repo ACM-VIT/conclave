@@ -1636,7 +1636,7 @@ export const importFallbackScheduling = async (
   const snapshot = await persistence.load();
   let imported = 0;
   for (const file of files) {
-    const incoming = (await createFileSchedulingPersistence(file).load()) as SchedulingSnapshot;
+    const incoming = (await createFileSchedulingPersistence(file).load());
     const profiles = mergeNewerRecords(snapshot.profiles, incoming.profiles, (profile) => profile.id);
     const eventTypes = mergeNewerRecords(snapshot.eventTypes, incoming.eventTypes, (eventType) => eventType.id);
     const calendars = mergeNewerRecords(snapshot.calendars, incoming.calendars, (calendar) => calendar.profileId);

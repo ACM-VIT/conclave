@@ -60,7 +60,7 @@ describe("importing JSON fallback files copied from old containers", () => {
     writeFallback("sfu-b", "scheduled-meetings.json", [meeting("other-instance", 1)]);
 
     expect(await importFallbackMeetings(persistence)).toBe(2);
-    const saved = (await createScheduledMeetingPersistence().load()) as ScheduledMeeting[];
+    const saved = (await createScheduledMeetingPersistence().load());
     expect(saved.map((entry) => entry.id).sort()).toEqual(["other-instance", "prior-meeting", "stored-newer"]);
     expect(saved.find((entry) => entry.id === "stored-newer")?.title).toBe("kept from SQLite");
     expect(readdirSync(importDir("sfu-a"))).toEqual(["scheduled-meetings.json.imported"]);

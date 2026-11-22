@@ -7,9 +7,25 @@ import { createScheduledWebinarPersistence } from "../server/scheduledWebinars.j
 import { createSchedulingPersistence } from "../server/scheduling.js";
 
 const stores = [
-  { name: "scheduling", modeVariable: "SCHEDULING_PERSISTENCE", jsonVariable: "SCHEDULING_PATH", open: () => createSchedulingPersistence() },
-  { name: "scheduled meetings", modeVariable: "SCHEDULED_MEETINGS_PERSISTENCE", jsonVariable: "SCHEDULED_MEETINGS_PATH", open: () => createScheduledMeetingPersistence() },
-  { name: "scheduled webinars", modeVariable: "SCHEDULED_WEBINARS_PERSISTENCE", jsonVariable: "SCHEDULED_WEBINARS_PATH", open: () => createScheduledWebinarPersistence() },
+  {
+    name: "scheduling", modeVariable: "SCHEDULING_PERSISTENCE", jsonVariable: "SCHEDULING_PATH",
+    open: async () => {
+      const persistence = createSchedulingPersistence();
+      await persistence.save(await persistence.load());
+    },
+  },
+  {
+    name: "scheduled meetings", modeVariable: "SCHEDULED_MEETINGS_PERSISTENCE", jsonVariable: "SCHEDULED_MEETINGS_PATH",
+    open: async () => {
+      await createScheduledMeetingPersistence().save([]);
+    },
+  },
+  {
+    name: "scheduled webinars", modeVariable: "SCHEDULED_WEBINARS_PERSISTENCE", jsonVariable: "SCHEDULED_WEBINARS_PATH",
+    open: async () => {
+      createScheduledWebinarPersistence().save([]);
+    },
+  },
 ];
 
 let dir = "";
@@ -34,11 +50,11 @@ afterEach(() => {
 describe("a SQLite store that will not open", () => {
   for (const store of stores) {
     for (const nodeEnv of ["production", "development"]) {
-      it(`stops ${store.name} startup in ${nodeEnv} instead of writing JSON anywhere`, () => {
+      it(`stops ${store.name} startup in ${nodeEnv} instead of writing JSON anywhere`, async () => {
         vi.stubEnv("NODE_ENV", nodeEnv);
         vi.stubEnv(store.modeVariable, "");
         vi.stubEnv(store.jsonVariable, jsonPath);
-        expect(() => store.open()).toThrow();
+        await expect(store.open()).rejects.toThrow();
         expect(existsSync(jsonPath)).toBe(false);
       });
     }
@@ -46,8 +62,7 @@ describe("a SQLite store that will not open", () => {
     it(`still uses JSON for ${store.name} when the operator selects it`, async () => {
       vi.stubEnv(store.modeVariable, "json");
       vi.stubEnv(store.jsonVariable, jsonPath);
-      const persistence = store.open();
-      await persistence.save(await persistence.load());
+      await store.open();
       expect(existsSync(jsonPath)).toBe(true);
     });
   }
