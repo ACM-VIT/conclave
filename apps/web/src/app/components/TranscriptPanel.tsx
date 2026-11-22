@@ -294,8 +294,15 @@ function StartStage({
   const offered = (code: string | null | undefined): code is string =>
     Boolean(code) && captionLanguagesFor(provider).some((language) => language.code === code);
   const resumedLanguage = needsTakeover ? captionLanguageCode(transcript.session.language) : undefined;
+  // A resumed language carries over only when this provider keeps it: a pick
+  // it offers, or the same provider's own default. Otherwise the form shows
+  // this provider's default and sends that, so what it shows is what is used.
+  const keepsResumedLanguage =
+    offered(resumedLanguage) &&
+    (transcript.session.languageChosen === true ||
+      provider === getTranscriptTranscriptionProvider(transcript.session.transcriptModel));
   const untouchedLanguage = needsTakeover
-    ? (offered(resumedLanguage) ? resumedLanguage : "")
+    ? (keepsResumedLanguage ? resumedLanguage : "")
     : (offered(savedLanguage) ? savedLanguage : "");
   const language =
     chosenLanguage === null
@@ -306,7 +313,9 @@ function StartStage({
     : undefined;
   const sentLanguage =
     chosenLanguage === null
-      ? (needsTakeover ? undefined : language || undefined)
+      ? needsTakeover
+        ? (keepsResumedLanguage ? undefined : null)
+        : language || undefined
       : language || (defaultLanguage ?? null);
   const defaultLanguageLabel = transcript.supportsCaptionLanguage
     ? defaultCaptionLanguageLabel(defaultLanguage)
