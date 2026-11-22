@@ -21,6 +21,7 @@ import type { RoomInfo } from "@/lib/sfu-types";
 import ChatOverlay from "./ChatOverlay";
 import ChatPanel from "./ChatPanel";
 import type { RoomAiController } from "../hooks/useRoomAi";
+import { useElementSize } from "../hooks/useElementSize";
 import ControlsBar, { type ControlsBarProps } from "./ControlsBar";
 import CommandPalette from "./CommandPalette";
 import ShortcutsHelpDialog from "./ShortcutsHelpDialog";
@@ -404,6 +405,8 @@ const clamp = (value: number, min: number, max: number) =>
 const WEBINAR_SPEAKER_PROMOTE_DELAY_MS = 450;
 const WEBINAR_SPEAKER_MIN_SWITCH_INTERVAL_MS = 1800;
 const DOCKED_PANEL_WIDTH = 360;
+// The meeting area's bottom padding (p-4) plus a gap above the controls bar.
+const NOTICE_CONTROLS_CLEARANCE_PX = 24;
 const GAME_DOCK_MIN_STAGE_WIDTH = 420;
 
 const getGameDockMaxWidth = (
@@ -1664,6 +1667,11 @@ export default function MeetsMainContent({
       ? (isSecondaryPanelOpen ? DOCKED_PANEL_WIDTH : 0) +
         (isGameDockPresent ? gameDockWidth : 0)
       : 0;
+  const controlsDockRef = useRef<HTMLDivElement>(null);
+  const controlsDockSize = useElementSize(
+    controlsDockRef,
+    isJoined && !isWebinarAttendee,
+  );
   const mainContentStyle =
     isJoined && !isWebinarAttendee
       ? { paddingRight: `calc(1rem + ${dockedPanelReserve}px)` }
@@ -1980,7 +1988,12 @@ export default function MeetsMainContent({
       {isJoined ? (
         <InCallNoticeSlot
           rightInset={isWebinarAttendee ? 0 : dockedPanelReserve}
-          belowWebinarHeader={isWebinarAttendee}
+          bottomInset={
+            controlsDockSize
+              ? controlsDockSize.height + NOTICE_CONTROLS_CLEARANCE_PX
+              : 0
+          }
+          clearWebinarChrome={isWebinarAttendee}
         >
           <InCallNotice show={Boolean(errorNotice)} className="w-full max-w-[640px]">
             {errorNotice}
@@ -2489,7 +2502,10 @@ export default function MeetsMainContent({
 
       {isJoined &&
         (isWebinarAttendee ? null : (
-          <div className="safe-area-pb flex w-full flex-col items-center gap-2">
+          <div
+            ref={controlsDockRef}
+            className="safe-area-pb flex w-full flex-col items-center gap-2"
+          >
             <ControlsBar {...controlsBarProps} />
             <CommandPalette
               controls={controlsBarProps}

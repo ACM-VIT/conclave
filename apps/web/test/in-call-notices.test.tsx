@@ -37,6 +37,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount());
   container.remove();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -125,5 +126,38 @@ describe("in-call notices", () => {
     expect(fading).not.toBeNull();
     expect(fading?.closest("[inert]")).not.toBeNull();
     expect(fading?.closest('[aria-hidden="true"]')).not.toBeNull();
+  });
+
+  it("collapses to the first notice with a more toggle when the stack does not fit", async () => {
+    // happy-dom has no layout: every notice is 60px tall and the slot has 150px of room.
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(60);
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(150);
+    const stack = (count: number) =>
+      ["Camera or microphone not found", "Reconnecting", "Audio-only mode active"]
+        .slice(0, count)
+        .map((text) => (
+          <InCallNotice key={text} show>
+            <div role="status">{text}</div>
+          </InCallNotice>
+        ));
+    const toggle = () =>
+      [...(slot()?.querySelectorAll("button") ?? [])].find((b) =>
+        /more|less/.test(b.textContent ?? ""),
+      );
+
+    await render(stack(2));
+    expect(toggle()).toBeUndefined();
+
+    await render(stack(3));
+    expect(toggle()?.textContent).toBe("+2 more");
+    expect(toggle()?.getAttribute("aria-expanded")).toBe("false");
+
+    await act(async () => toggle()?.click());
+    expect(toggle()?.textContent).toBe("Show less");
+    expect(toggle()?.getAttribute("aria-expanded")).toBe("true");
+
+    await render(stack(2));
+    await waitOutExit();
+    expect(toggle()).toBeUndefined();
   });
 });
