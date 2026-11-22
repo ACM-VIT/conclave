@@ -14,9 +14,11 @@ emptiest first. An instance whose `/status` cannot be read goes last, so an
 idle instance is always rebuilt before one that may carry calls. No instance
 is recreated while it has rooms unless you pass `--force-drain`:
 
-1. Check that every other instance is serving: healthy and not draining. If
-   one is not, the deploy stops (exit 1) before this drain, because new
-   meetings would have nowhere to go. An instance that is down is deployed
+1. Check that every other instance is serving: healthy, and a readable
+   `/status` that says it is not draining (`/health` stays healthy while an
+   instance drains, so a status that cannot be read counts as unsafe). If one
+   is not, the deploy stops (exit 1) before this drain, because new meetings
+   would have nowhere to go. An instance that is down is deployed
    first for that reason, and if its new container never gets healthy the
    deploy stops with exit 4 before anything is drained.
 2. Mark the instance draining. New meetings go to the other instance; meetings

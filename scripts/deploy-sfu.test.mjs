@@ -22,9 +22,24 @@ const events = [];
 // container: "running" for an hour, "exited", "crash-looping" (restarted
 // seconds ago) or "hung" (running for an hour). Only "running" answers HTTP
 // until a recreate. replacementHealthy: false for a build whose containers
-// never report healthy.
-const startSfu = async (instanceId, { rooms = 0, statusAnswers = true, container = "running", replacementHealthy = true } = {}) => {
-  const sfu = { instanceId, rooms, draining: false, statusAnswers, container, healthy: true, drains: [], recreates: [] };
+// never report healthy. onTarget: already runs the target image with the
+// current compose config.
+const startSfu = async (
+  instanceId,
+  { rooms = 0, statusAnswers = true, container = "running", replacementHealthy = true, draining = false, onTarget = false } = {},
+) => {
+  const sfu = {
+    instanceId,
+    rooms,
+    draining,
+    statusAnswers,
+    container,
+    healthy: true,
+    image: onTarget ? "sha256:target" : "sha256:running",
+    configHash: onTarget ? "current-hash" : "older-hash",
+    drains: [],
+    recreates: [],
+  };
   const server = createServer(async (req, res) => {
     let body = "";
     for await (const chunk of req) body += chunk;
@@ -32,7 +47,7 @@ const startSfu = async (instanceId, { rooms = 0, statusAnswers = true, container
     const json = (value, status = 200) => res.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(value));
     if (url.pathname === "/stand-in/state") {
       const startedAt = new Date(Date.now() - (sfu.container === "crash-looping" ? 3_000 : 3_600_000)).toISOString();
-      return json({ status: sfu.container === "exited" ? "exited" : "running", startedAt });
+      return json({ status: sfu.container === "exited" ? "exited" : "running", startedAt, image: sfu.image, configHash: sfu.configHash });
     }
     if (sfu.container !== "running" && !url.pathname.startsWith("/stand-in/")) return req.socket.destroy();
     if (url.pathname === "/health") return sfu.healthy ? json({ status: "healthy" }) : json({ status: "starting" }, 503);
@@ -56,6 +71,8 @@ const startSfu = async (instanceId, { rooms = 0, statusAnswers = true, container
       sfu.container = "running";
       sfu.healthy = replacementHealthy;
       sfu.draining = url.searchParams.get("draining") === "true";
+      sfu.image = url.searchParams.get("image");
+      sfu.configHash = "current-hash";
       return json({ ok: true });
     }
     return json({ error: "not found" }, 404);
@@ -72,6 +89,10 @@ const args = process.argv.slice(2);
 const sfus = JSON.parse(process.env.DEPLOY_TEST_SFUS);
 fs.appendFileSync(process.env.DEPLOY_TEST_DOCKER_LOG, JSON.stringify(args) + "\\n");
 const out = (text) => process.stdout.write(text + "\\n");
+// docker tag, kept per run: a recreated container gets the image tagged for it.
+const tagsFile = process.env.DEPLOY_TEST_DOCKER_LOG + ".tags";
+const tags = fs.existsSync(tagsFile) ? JSON.parse(fs.readFileSync(tagsFile, "utf8")) : {};
+const state = async (name) => (await fetch("http://127.0.0.1:" + sfus[name].port + "/stand-in/state")).json();
 const service = (name, sfu, index) => ({
   environment: {
     ANNOUNCED_IP: "127.0.0.1",
@@ -104,24 +125,29 @@ const main = async () => {
     if (rest[0] === "up") {
       const name = rest.at(-1);
       const draining = process.env.SFU_START_DRAINING === "true";
-      await fetch("http://127.0.0.1:" + sfus[name].port + "/stand-in/recreate?draining=" + draining);
+      const image = tags["vm-" + name] || "sha256:target";
+      await fetch("http://127.0.0.1:" + sfus[name].port + "/stand-in/recreate?draining=" + draining + "&image=" + image);
       return;
     }
     return;
   }
   if (args[0] === "inspect") {
     const format = args[2];
+    const name = args.at(-1).replace(/^ctr-/, "");
     if (format.includes(".State.Status")) {
-      const name = args.at(-1).replace(/^ctr-/, "");
-      const state = await (await fetch("http://127.0.0.1:" + sfus[name].port + "/stand-in/state")).json();
-      return out(format.includes(".State.StartedAt") ? state.status + " " + state.startedAt : state.status);
+      const current = await state(name);
+      return out(format.includes(".State.StartedAt") ? current.status + " " + current.startedAt : current.status);
     }
-    if (format.includes("config-hash")) return out("older-hash");
-    if (format.includes(".Image")) return out("sha256:running");
+    if (format.includes("config-hash")) return out((await state(name)).configHash);
+    if (format.includes(".Image")) return out((await state(name)).image);
     return out(args.at(-1));
   }
-  if (args[0] === "image" && args[1] === "inspect") return args[2] === "-f" ? out("sha256:target") : undefined;
-  // tag, rmi and the canary's docker run all succeed.
+  if (args[0] === "image" && args[1] === "inspect") return args[2] === "-f" ? out(tags[args.at(-1)] || "sha256:target") : undefined;
+  if (args[0] === "tag") {
+    tags[args[2]] = tags[args[1]] || args[1];
+    return fs.writeFileSync(tagsFile, JSON.stringify(tags));
+  }
+  // rmi and the canary's docker run succeed.
 };
 main();
 `;
@@ -236,14 +262,13 @@ test("an idle instance is rebuilt first, and the one carrying calls is not touch
   });
 });
 
-test("an instance whose rooms cannot be read is never taken for the idle one", async () => {
+test("an instance whose status cannot be read is neither taken for the idle one nor drained against", async () => {
   await withSfus({ "sfu-a": { rooms: 2, statusAnswers: false }, "sfu-b": { rooms: 0 } }, async (sfus) => {
     const result = await deploy(sfus);
     assert.equal(result.code, 1, result.output);
     assert.equal(result.order, "sfu-b sfu-a");
-    assert.equal(sfus["sfu-b"].recreates.length, 2, "the idle instance is still deployed");
-    assert.equal(sfus["sfu-a"].recreates.length, 0);
-    assert.match(result.output, /sfu-a answers but its \/status cannot be read/);
+    assert.match(result.output, /Not draining sfu-b: sfu-a's \/status cannot be read/);
+    assert.deepEqual(events, [], "unknown is unsafe: nothing is drained or rebuilt");
   });
 });
 
@@ -361,5 +386,13 @@ test("a preflight that reports nothing stops the deploy before anything is built
     assert.match(result.output, /SFU deployment preflight reported no result/);
     const changes = result.docker.filter((args) => ["build", "up", "run", "tag", "stop"].some((verb) => args.includes(verb)));
     assert.deepEqual(changes, []);
+  });
+});
+
+test("a peer left draining whose status cannot be read is not drained against", async () => {
+  await withSfus({ "sfu-a": { draining: true, statusAnswers: false }, "sfu-b": { rooms: 0 } }, async (sfus) => {
+    const result = await deploy(sfus);
+    assert.equal(result.code, 1, result.output);
+    assert.equal(sfus["sfu-b"].drains.length, 0, "sfu-b is the only instance still taking meetings");
   });
 });

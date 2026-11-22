@@ -508,9 +508,12 @@ wait_for_healthy() {
 }
 
 # A drain sends an instance's new meetings to the others, so each of them must
-# be serving first: healthy, and not draining itself.
+# be serving first: healthy, and a readable /status that says it is not
+# draining. /health stays healthy while an instance drains, so a status that
+# cannot be read within HEALTH_TIMEOUT_SECONDS is unknown, and unknown is
+# unsafe.
 peers_serving() {
-  local svc="$1" peer url status
+  local svc="$1" peer url status start_ts
   for peer in "${ALL_SFU_SERVICES[@]}"; do
     [[ "$peer" == "$svc" ]] && continue
     url="$(service_url "$peer")"
@@ -518,13 +521,21 @@ peers_serving() {
       echo "Not draining ${svc}: ${peer} does not report healthy at ${url}, so new meetings would have nowhere to go." >&2
       return 1
     fi
-    status="$(status_json "$url")"
-    if [[ -n "$status" && "$(printf "%s" "$status" | json_field draining || true)" == "true" ]]; then
+    start_ts="$(date +%s)"
+    until status="$(status_json "$url")" && [[ -n "$status" ]]; do
+      if (( $(date +%s) - start_ts >= HEALTH_TIMEOUT_SECONDS )); then
+        echo "Not draining ${svc}: ${peer}'s /status cannot be read at ${url}, so whether it takes new meetings is unknown." >&2
+        return 1
+      fi
+      sleep 1
+    done
+    if [[ "$(printf "%s" "$status" | json_field draining || true)" != "false" ]]; then
       echo "Not draining ${svc}: ${peer} is draining too, so new meetings would have nowhere to go." >&2
       return 1
     fi
   done
 }
+
 
 # Any HTTP answer, even an error, means the process is up.
 answers_http() {
