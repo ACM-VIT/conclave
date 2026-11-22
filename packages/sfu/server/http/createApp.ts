@@ -815,6 +815,7 @@ export const createSfuApp = ({
     res.json(result);
   });
 
+
   app.get("/rooms", (req, res) => {
     if (!hasValidSecret(req, config.sfuSecret)) {
       return res.status(401).json({ error: "Unauthorized" });
