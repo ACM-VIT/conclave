@@ -128,6 +128,34 @@ quote_args() {
   done
 }
 
+# Prints "uid:gid" for the user the SFU runs as, or nothing to leave files
+# owned by root. An explicit user:group (from --owner or
+# BACKUP_RESTORE_OWNER) wins. Otherwise the SFU containers that mount the
+# state dir are asked for the user their image runs as, resolved to numeric
+# ids inside that image, since the host may have no such user.
+sfu_file_owner() {
+  local explicit="$1" state_dir="${2%/}" id user image uid gid
+  if [[ -n "$explicit" ]]; then
+    [[ "$explicit" == ?*:?* ]] || return 1
+    printf '%s\n' "$explicit"
+    return 0
+  fi
+  command -v docker >/dev/null 2>&1 || return 0
+  for id in $(docker ps -aq 2>/dev/null); do
+    docker inspect -f '{{range .Mounts}}{{println .Source}}{{end}}' "$id" 2>/dev/null | grep -qxF "$state_dir" || continue
+    user="$(docker inspect -f '{{.Config.User}}' "$id")"
+    case "$user" in
+      "" | root | 0 | 0:0) return 0 ;;
+      *:*) printf '%s\n' "$user"; return 0 ;;
+    esac
+    image="$(docker inspect -f '{{.Image}}' "$id")"
+    uid="$(docker run --rm --entrypoint id "$image" -u "$user" 2>/dev/null)" || return 1
+    gid="$(docker run --rm --entrypoint id "$image" -g "$user" 2>/dev/null)" || return 1
+    printf '%s:%s\n' "$uid" "$gid"
+    return 0
+  done
+}
+
 # --- Azure Blob Storage over REST, authenticated by the VM's managed identity.
 
 blob_base_url() {

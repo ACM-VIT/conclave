@@ -132,6 +132,14 @@ To apply it:
    leases, are left alone. `--redis-pattern '*'` makes the whole database match
    the backup. A TLS (`rediss://`) Redis is refused before anything changes;
    use `--only sqlite,files` there.
+   The restored files go to the user the SFU runs as. Without a setting,
+   `restore.sh` reads it from the stopped SFU containers that mount the state
+   dir and resolves its uid and gid inside their image. Today's image runs as
+   root, so the files stay root's. Once the SFU image runs as `node` (#272),
+   they go to `node`. If the containers are gone, pass `--owner 1000:1000`
+   (`node` in the Node image) or set `BACKUP_RESTORE_OWNER` in
+   `/etc/conclave/backup.env`; a restore that cannot hand the files over fails
+   instead of leaving them unreadable.
 4. `docker compose -f docker-compose.sfu.yml up -d sfu-a sfu-b`
 5. Check the scheduled meetings and webinars, then `shred -u /root/conclave-backup.key`.
 

@@ -9,6 +9,9 @@
 #
 # --only sqlite,redis,files   restore a subset (default: all three)
 # --redis-pattern 'glob'      Redis keys to make match the backup (default: the SFU persistence prefix)
+# --owner user:group          who owns the restored files (default: the user the
+#                             SFU image runs as, found from its containers; root
+#                             when it runs as root or none is found)
 #
 # Stop the SFU containers first: the SFUs hold the databases open and keep
 # their state in memory, so they must start fresh on the restored data.
@@ -27,6 +30,7 @@ list="false"
 apply="false"
 only="sqlite,redis,files"
 pattern=""
+owner=""
 while (( $# > 0 )); do
   case "$1" in
     --identity) identity="$2"; shift ;;
@@ -36,6 +40,7 @@ while (( $# > 0 )); do
     --list) list="true" ;;
     --only) only="$2"; shift ;;
     --redis-pattern) pattern="$2"; shift ;;
+    --owner) owner="$2"; shift ;;
     --yes) apply="true" ;;
     *) die "unknown argument: $1" ;;
   esac
@@ -113,6 +118,11 @@ for rel in "${live_databases[@]}"; do
   [[ -z "$holders" ]] || die "PID ${holders} still holds ${STATE_DIR}/${rel} open; stop the SFU containers before restoring"
 done
 
+# Restored files go to the user the SFU runs as, or an image that drops root
+# could not read them. Settled before the first file changes.
+restore_owner="$(sfu_file_owner "${owner:-${BACKUP_RESTORE_OWNER:-}}" "$STATE_DIR")" ||
+  die "cannot tell which user the SFU runs as; rerun with --owner user:group"
+
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "$STATE_DIR"
 
@@ -147,6 +157,12 @@ fi
 if wants files && [[ -f "${payload}/state-files.tar" ]]; then
   tar -C "$STATE_DIR" -xf "${payload}/state-files.tar"
   log "Restored the other files in ${STATE_DIR}"
+fi
+
+if [[ -n "$restore_owner" ]] && { wants sqlite || wants files; }; then
+  find "$STATE_DIR" \( ! -user "${restore_owner%%:*}" -o ! -group "${restore_owner##*:}" \) -exec chown -h "$restore_owner" {} + ||
+    die "could not give ${STATE_DIR} to ${restore_owner}; the SFU cannot read files it does not own"
+  log "Gave the files in ${STATE_DIR} to ${restore_owner}, the user the SFU runs as"
 fi
 
 # Redis: load the snapshot into a throwaway server, copy the matching keys

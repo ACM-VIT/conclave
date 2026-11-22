@@ -43,6 +43,9 @@ const setUp = async (root, extraConfig = []) => {
       "BACKUP_NAME=test",
       // Nothing listens here, so restore.sh sees the SFUs as stopped.
       'CONCLAVE_SFU_HEALTH_URLS="http://127.0.0.1:9/health"',
+      // The SFU's user, as the VM would set it after #272; here the test's
+      // own, the one owner a non-root restore can hand files to.
+      `BACKUP_RESTORE_OWNER=${process.getuid()}:${process.getgid()}`,
       ...extraConfig,
     ].join("\n"),
   );
@@ -301,6 +304,32 @@ test(
       // A link whose file is not on the volume cannot be backed up.
       await symlink("/opt/elsewhere/conclave.sqlite", path.join(state, "other.sqlite"));
       await assert.rejects(backup("--local-only"), /other\.sqlite links to \/opt\/elsewhere\/conclave\.sqlite, which is not a file inside the state dir/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "a restore that cannot hand the files to the SFU's user says so",
+  { skip: missing.length > 0 && `needs ${missing.join(", ")} on PATH` },
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+    try {
+      const { state, backup, latestArchive, restore } = await setUp(root);
+      const db = new DatabaseSync(path.join(state, "conclave.sqlite"));
+      db.exec("CREATE TABLE scheduled_webinars (id TEXT PRIMARY KEY)");
+      db.close();
+      await backup("--local-only");
+      const archive = await latestArchive();
+
+      // Settled before anything changes: a user without a group.
+      await assert.rejects(restore("--file", archive, "--yes", "--owner", "node"), /cannot tell which user the SFU runs as/);
+      assert.deepEqual((await readdir(state)).filter((name) => name.includes("pre-restore")), []);
+
+      if (process.getuid() !== 0) {
+        await assert.rejects(restore("--file", archive, "--yes", "--owner", "0:0"), /could not give .* to 0:0/);
+      }
     } finally {
       await rm(root, { recursive: true, force: true });
     }
