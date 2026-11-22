@@ -26,24 +26,30 @@ const JOIN_INFO_REQUEST_TIMEOUT_MS = 15000;
 
 const fetchJoinInfoWithTimeout = async (
   init: RequestInit,
+  cancel?: AbortSignal,
 ): Promise<Response> => {
   const controller = new AbortController();
   const timeoutId = window.setTimeout(
     () => controller.abort(),
     JOIN_INFO_REQUEST_TIMEOUT_MS,
   );
+  const abort = () => controller.abort();
+  if (cancel?.aborted) abort();
+  cancel?.addEventListener("abort", abort, { once: true });
   try {
     return await fetch("/api/sfu/join", {
       ...init,
       signal: controller.signal,
     });
   } catch (error) {
+    if (cancel?.aborted) throw new Error("Join info request was cancelled");
     if (controller.signal.aborted) {
       throw new Error("Join info request timeout");
     }
     throw error;
   } finally {
     window.clearTimeout(timeoutId);
+    cancel?.removeEventListener("abort", abort);
   }
 };
 
@@ -90,6 +96,7 @@ export default function MeetsClientPage({
         user?: { id?: string; email?: string | null; name?: string | null };
         isHost?: boolean;
         joinMode?: JoinMode;
+        signal?: AbortSignal;
       }
     ) => {
       const resolvedUser = options?.user ?? defaultUser;
@@ -110,7 +117,7 @@ export default function MeetsClientPage({
           clientId: resolvedClientId,
           joinMode: resolvedJoinMode,
         }),
-      });
+      }, options?.signal);
 
       if (!response.ok) {
         const error = new Error(await readError(response)) as Error & {

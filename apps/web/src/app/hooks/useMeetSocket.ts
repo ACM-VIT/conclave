@@ -898,6 +898,7 @@ interface UseMeetSocketOptions {
       user?: { id?: string; email?: string | null; name?: string | null };
       isHost?: boolean;
       joinMode?: JoinMode;
+      signal?: AbortSignal;
     },
   ) => Promise<JoinInfo>;
   joinMode?: JoinMode;
@@ -1105,6 +1106,7 @@ export function useMeetSocket({
   const serverRoomIdRef = useRef<string | null>(null);
   const foregroundRecoveryTimeoutRef = useRef<number | null>(null);
   const heldJoinInfoRef = useRef<HeldJoinInfo<JoinInfo> | null>(null);
+  const joinInfoRequestRef = useRef<AbortController | null>(null);
   const lastJoinInfoSourceRef = useRef<"held" | "fresh">("fresh");
   const runtimeStunIceServersRef = useRef<RTCIceServer[] | null>(null);
   const runtimeTurnIceServersRef = useRef<RTCIceServer[] | null>(null);
@@ -2166,6 +2168,8 @@ export function useMeetSocket({
     socketRef.current?.disconnect();
     socketRef.current = null;
     onSocketReady?.(null);
+    joinInfoRequestRef.current?.abort();
+    joinInfoRequestRef.current = null;
     heldJoinInfoRef.current = null;
     deviceRef.current = null;
     webcamCodecPolicyRef.current = { ...BASELINE_WEBCAM_CODEC_POLICY };
@@ -7298,6 +7302,9 @@ export function useMeetSocket({
             });
             lastJoinInfoSourceRef.current =
               !cachedToken && joinInfoPlan.source === "held" ? "held" : "fresh";
+            // A leave aborts this request; see cleanup().
+            const joinInfoRequest = new AbortController();
+            joinInfoRequestRef.current = joinInfoRequest;
             const tokenPromise = cachedToken
               ? Promise.resolve(cachedToken)
               : joinInfoPlan.source === "held"
@@ -7306,6 +7313,7 @@ export function useMeetSocket({
                     user,
                     isHost: isAdmin,
                     joinMode,
+                    signal: joinInfoRequest.signal,
                   }).catch((error: unknown) => {
                     if (
                       !joinInfoPlan.fallback ||
@@ -7326,6 +7334,14 @@ export function useMeetSocket({
               socketIoPromise,
             ]);
             const { token, sfuUrl, iceServers } = joinInfo;
+            // An answer that arrives after a leave or a newer join belongs to
+            // a connection nobody wants now, so it must not touch any state.
+            if (
+              connectionGeneration !== reconnectGenerationRef.current ||
+              intentionalDisconnectRef.current
+            ) {
+              throw new Error("Meeting connection was cancelled");
+            }
             // Only a fresh answer is held, so reusing one never extends its
             // lifetime or relabels what it was issued for.
             if (lastJoinInfoSourceRef.current === "fresh") {
@@ -7334,12 +7350,6 @@ export function useMeetSocket({
                 grant: joinInfoGrant,
                 receivedAt: Date.now(),
               });
-            }
-            if (
-              connectionGeneration !== reconnectGenerationRef.current ||
-              intentionalDisconnectRef.current
-            ) {
-              throw new Error("Meeting connection was cancelled");
             }
             const socketUrl = sfuUrlOverride ?? sfuUrl;
 
