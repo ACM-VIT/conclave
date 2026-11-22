@@ -2,8 +2,10 @@
 
 `scripts/deploy-sfu.sh` deploys the SFU instances on one host without cutting
 a call. It pulls, restarts itself if the pull changed the script (bash would
-otherwise keep running the old file), builds one image for the commit or
-reuses the one already built for it, then takes the instances one at a time.
+otherwise keep running the old file), and runs the pulled revision's own
+config-only preflight against the rendered compose env, stopping (exit 1)
+before anything is built if it fails. Then it builds one image for the commit
+or reuses the one already built for it, and takes the instances one at a time.
 The order puts first the instances that take no new meetings anyway (one
 whose container is down, then one already draining), then the serving ones,
 emptiest first. An instance whose `/status` cannot be read goes last, so an

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { chmod, copyFile, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -79,6 +79,7 @@ const service = (name, sfu, index) => ({
     SFU_REGION: "local",
     SFU_REQUIRE_REDIS_ADAPTER: "1",
     SFU_SECRET: process.env.SFU_SECRET,
+    SFU_WORKER_COUNT: process.env.SFU_WORKER_COUNT || "0",
   },
 });
 const main = async () => {
@@ -116,7 +117,9 @@ const main = async () => {
 main();
 `;
 
-const deploy = async (sfus, { args: extraArgs = [], env: extraEnv = {}, envLines = [] } = {}) => {
+// upstream: files the next commit on origin changes, so the checkout is one
+// pull behind the revision it will deploy.
+const deploy = async (sfus, { args: extraArgs = [], env: extraEnv = {}, envLines = [], upstream } = {}) => {
   // The real path: the preflight only runs when its own path has no symlink
   // in it, and macOS temp dirs sit behind one.
   const root = await realpath(await mkdtemp(path.join(tmpdir(), "conclave-deploy-")));
@@ -133,6 +136,11 @@ const deploy = async (sfus, { args: extraArgs = [], env: extraEnv = {}, envLines
     await git("clone", "-q", "--bare", src, path.join(root, "origin.git"));
     const vm = path.join(root, "vm");
     await git("clone", "-q", path.join(root, "origin.git"), vm);
+    if (upstream) {
+      for (const [file, content] of Object.entries(upstream)) await writeFile(path.join(src, file), content);
+      await git("-C", src, "commit", "-qam", "the revision to deploy");
+      await git("-C", src, "push", "-q", path.join(root, "origin.git"), "HEAD");
+    }
     await writeFile(
       path.join(vm, ".env"),
       [
@@ -167,8 +175,8 @@ const deploy = async (sfus, { args: extraArgs = [], env: extraEnv = {}, envLines
       ({ stdout, stderr }) => ({ code: 0, output: stdout + stderr }),
       (error) => ({ code: error.code, output: `${error.stdout}${error.stderr}` }),
     );
-    assert.match(result.output, /SFU deployment preflight passed/, result.output);
-    return { ...result, order: result.output.match(/^Deploy order: (.*)$/m)?.[1] };
+    const docker = (await readFile(dockerLog, "utf8")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    return { ...result, docker, order: result.output.match(/^Deploy order: (.*)$/m)?.[1] };
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -185,11 +193,14 @@ const withSfus = async (specs, body) => {
   }
 };
 
+const passedPreflight = (result) => assert.match(result.output, /SFU deployment preflight passed/, result.output);
+
 const cutRooms = (sfus) => Object.values(sfus).flatMap((sfu) => sfu.recreates.map((r) => r.roomsCut));
 
 test("with calls on both instances, the deploy rebuilds neither while those calls run", async () => {
   await withSfus({ "sfu-a": { rooms: 2 }, "sfu-b": { rooms: 1 } }, async (sfus) => {
     const result = await deploy(sfus);
+    passedPreflight(result);
     assert.equal(result.code, 3, result.output);
     assert.equal(result.order, "sfu-b sfu-a", "the instance with fewer calls goes first");
     assert.deepEqual(cutRooms(sfus), [], "no instance may be recreated while it has calls");
@@ -201,6 +212,7 @@ test("with calls on both instances, the deploy rebuilds neither while those call
 test("an idle instance is rebuilt first, and the one carrying calls is not touched", async () => {
   await withSfus({ "sfu-a": { rooms: 2 }, "sfu-b": { rooms: 0 } }, async (sfus) => {
     const result = await deploy(sfus);
+    passedPreflight(result);
     assert.equal(result.code, 3, result.output);
     assert.equal(result.order, "sfu-b sfu-a");
     assert.equal(sfus["sfu-b"].recreates.length, 2, "canary build, then the serving container");
@@ -244,6 +256,7 @@ test("a replacement that never reports healthy stops the deploy before the other
 test("an instance that is down is brought up before a healthy one is drained", async () => {
   await withSfus({ "sfu-a": { rooms: 1 }, "sfu-b": { down: true } }, async (sfus) => {
     const result = await deploy(sfus);
+    passedPreflight(result);
     assert.equal(result.code, 3, result.output);
     assert.equal(result.order, "sfu-b sfu-a");
     assert.deepEqual(events, ["recreate sfu-b", "recreate sfu-b", "drain sfu-a", "drain sfu-a"]);
@@ -276,5 +289,32 @@ test("a public URL that does not reach the new instance stops the deploy before 
     assert.match(result.output, /Public URL for sfu-b reaches instance 'sfu-a' instead/);
     assert.equal(sfus["sfu-b"].recreates.length, 2);
     assert.equal(sfus["sfu-a"].drains.length, 0, "no drain may follow an unreachable replacement");
+  });
+});
+
+test("the revision being deployed checks its own config before anything is built", async () => {
+  await withSfus({ "sfu-a": { rooms: 0 }, "sfu-b": { rooms: 0 } }, async (sfus) => {
+    // The next revision's preflight knows a limit the checkout's does not,
+    // the way #268's port budget caps SFU_WORKER_COUNT.
+    const newerPreflight = `
+let raw = "";
+for await (const chunk of process.stdin) raw += chunk;
+for (const [name, service] of Object.entries(JSON.parse(raw).services)) {
+  if (Number(service.environment.SFU_WORKER_COUNT) > 4) {
+    console.error(name + ": SFU_WORKER_COUNT " + service.environment.SFU_WORKER_COUNT + " is above the WebRTC port budget 4.");
+    process.exit(1);
+  }
+}
+console.log("SFU deployment preflight passed (newer rules).");
+`;
+    const result = await deploy(sfus, {
+      envLines: ["SFU_WORKER_COUNT=5"],
+      upstream: { "scripts/deploy-sfu-preflight.mjs": newerPreflight },
+    });
+    assert.equal(result.code, 1, result.output);
+    assert.match(result.output, /SFU_WORKER_COUNT 5 is above the WebRTC port budget 4/);
+    const changes = result.docker.filter((args) => ["build", "up", "run", "tag", "stop"].some((verb) => args.includes(verb)));
+    assert.deepEqual(changes, [], "nothing may be built or changed after the preflight fails");
+    assert.deepEqual(events, []);
   });
 });

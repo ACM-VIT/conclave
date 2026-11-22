@@ -255,10 +255,6 @@ if [[ -f "$SFU_ENV_FILE" ]]; then
   COMPOSE_ENV_FILES+=(--env-file "$SFU_ENV_FILE")
 fi
 COMPOSE=(docker compose "${COMPOSE_ENV_FILES[@]}" -f "$COMPOSE_FILE")
-HAS_REDIS_SERVICE="false"
-if "${COMPOSE[@]}" config --services 2>/dev/null | grep -x "redis" >/dev/null; then
-  HAS_REDIS_SERVICE="true"
-fi
 
 run_deploy_preflight() {
   local preflight=(node "${ROOT_DIR}/scripts/deploy-sfu-preflight.mjs" --compose-json -)
@@ -277,9 +273,9 @@ run_deploy_preflight() {
   "${COMPOSE[@]}" config --format json | "${preflight[@]}"
 }
 
-echo "Running fail-closed SFU deployment preflight..."
-run_deploy_preflight
 if [[ "$PREFLIGHT_ONLY" == "true" ]]; then
+  echo "Running fail-closed SFU deployment preflight..."
+  run_deploy_preflight
   echo "Preflight-only run complete; no code, container, drain, or DNS changes were made."
   exit 0
 fi
@@ -297,6 +293,17 @@ else
     echo "This pull changed deploy-sfu.sh; restarting with the new version."
     SFU_DEPLOY_REEXEC=1 exec "${BASH_SOURCE[0]}" "$@"
   fi
+fi
+
+# The revision about to be built checks its own compose file against the env,
+# before anything is built or changed, so an older preflight cannot approve a
+# config the new SFU rejects.
+echo "Running fail-closed SFU deployment preflight on $(git -C "$ROOT_DIR" rev-parse --short=12 HEAD)..."
+run_deploy_preflight
+
+HAS_REDIS_SERVICE="false"
+if "${COMPOSE[@]}" config --services 2>/dev/null | grep -x "redis" >/dev/null; then
+  HAS_REDIS_SERVICE="true"
 fi
 
 # SFU dependencies are installed inside the Docker image; the host does not need them.

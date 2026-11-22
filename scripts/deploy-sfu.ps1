@@ -292,19 +292,6 @@ if (Test-Path -Path $sfuEnvFile -PathType Leaf) {
   $composeBaseArgs += @("--env-file", $sfuEnvFile)
 }
 $composeBaseArgs += @("-f", $composeFile)
-$servicesOutput = & docker @($composeBaseArgs + @("config", "--services")) 2>$null
-if ($LASTEXITCODE -ne 0) {
-  Exit-WithError "Failed to read services from $composeFile"
-}
-
-$hasRedisService = $false
-foreach ($service in $servicesOutput) {
-  if ($service -eq "redis") {
-    $hasRedisService = $true
-    break
-  }
-}
-
 $sfuAUrl = Get-DeployUrl -Id "sfu-a"
 $sfuBUrl = Get-DeployUrl -Id "sfu-b"
 $sfuAPublicUrl = Get-PublicUrl -Id "sfu-a" -DeployUrl $sfuAUrl -ListIndex 1
@@ -317,37 +304,59 @@ Write-Host "Using SFU B deploy URL: $sfuBUrl"
 Write-Host "Using SFU A public URL: $(if ($sfuAPublicUrl) { $sfuAPublicUrl } else { '<unset>' })"
 Write-Host "Using SFU B public URL: $(if ($sfuBPublicUrl) { $sfuBPublicUrl } else { '<unset>' })"
 
-$composeJsonLines = & docker @($composeBaseArgs + @("config", "--format", "json"))
-if ($LASTEXITCODE -ne 0) {
-  Exit-WithError "Failed to render $composeFile for deployment preflight"
-}
-$preflightArguments = @(
-  (Join-Path $rootDir "scripts/deploy-sfu-preflight.mjs"),
-  "--compose-json",
-  "-"
-)
-if (-not [string]::IsNullOrWhiteSpace($env:SFU_DEPLOY_SERVICES)) {
-  $preflightArguments += @("--services", $env:SFU_DEPLOY_SERVICES)
-}
-# A normal deployment must be able to revive a stopped inactive SFU, so its
-# pre-mutation gate validates rendered configuration only. Explicit
-# --preflight-only remains the operator-facing live route check.
-if ($preflightConfigOnly -or -not $preflightOnly) {
-  $preflightArguments += "--config-only"
+function Invoke-DeployPreflight {
+  $composeJsonLines = & docker @($composeBaseArgs + @("config", "--format", "json"))
+  if ($LASTEXITCODE -ne 0) {
+    Exit-WithError "Failed to render $composeFile for deployment preflight"
+  }
+  $preflightArguments = @(
+    (Join-Path $rootDir "scripts/deploy-sfu-preflight.mjs"),
+    "--compose-json",
+    "-"
+  )
+  if (-not [string]::IsNullOrWhiteSpace($env:SFU_DEPLOY_SERVICES)) {
+    $preflightArguments += @("--services", $env:SFU_DEPLOY_SERVICES)
+  }
+  # A normal deployment must be able to revive a stopped inactive SFU, so its
+  # pre-mutation gate validates rendered configuration only. Explicit
+  # --preflight-only remains the operator-facing live route check.
+  if ($preflightConfigOnly -or -not $preflightOnly) {
+    $preflightArguments += "--config-only"
+  }
+  ($composeJsonLines -join [Environment]::NewLine) | & node @preflightArguments
+  if ($LASTEXITCODE -ne 0) {
+    Exit-WithError "SFU deployment preflight failed"
+  }
 }
 
-Write-Host "Running fail-closed SFU deployment preflight..."
-($composeJsonLines -join [Environment]::NewLine) | & node @preflightArguments
-if ($LASTEXITCODE -ne 0) {
-  Exit-WithError "SFU deployment preflight failed"
-}
 if ($preflightOnly) {
+  Write-Host "Running fail-closed SFU deployment preflight..."
+  Invoke-DeployPreflight
   Write-Host "Preflight-only run complete; no code, container, drain, or DNS changes were made."
   exit 0
 }
 
 Write-Host "Pulling latest code..."
 Invoke-Checked -Command "git" -Arguments @("-C", $rootDir, "pull")
+
+# The revision about to be built checks its own compose file against the env,
+# before anything is built or changed, so an older preflight cannot approve a
+# config the new SFU rejects.
+Write-Host "Running fail-closed SFU deployment preflight on the pulled revision..."
+Invoke-DeployPreflight
+
+$servicesOutput = & docker @($composeBaseArgs + @("config", "--services")) 2>$null
+if ($LASTEXITCODE -ne 0) {
+  Exit-WithError "Failed to read services from $composeFile"
+}
+
+$hasRedisService = $false
+foreach ($service in $servicesOutput) {
+  if ($service -eq "redis") {
+    $hasRedisService = $true
+    break
+  }
+}
 
 Write-Host "Installing SFU dependencies..."
 Invoke-Checked -Command "npm" -Arguments @("--prefix", (Join-Path $rootDir "packages/sfu"), "install")
