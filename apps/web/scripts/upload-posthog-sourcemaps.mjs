@@ -13,6 +13,11 @@ nextEnv.loadEnvConfig(process.cwd());
 const uploadRequested = Boolean(
   process.env.POSTHOG_CLI_API_KEY && process.env.POSTHOG_CLI_PROJECT_ID,
 );
+// Inject and upload together get 90 s. A release's ~70 maps upload in a few
+// seconds even on a slow link, so past that the uploader has stalled, and
+// wrangler deploy is waiting on cf:build behind it.
+const uploadTimeoutMs = Number(process.env.POSTHOG_SOURCEMAPS_TIMEOUT_MS) || 90_000;
+const uploadDeadline = Date.now() + uploadTimeoutMs;
 
 const listSourceMaps = async (dir) => {
   const entries = await readdir(dir, { recursive: true, withFileTypes: true });
@@ -24,6 +29,8 @@ const listSourceMaps = async (dir) => {
 const posthogCli = (args) => {
   const result = spawnSync("posthog-cli", args, {
     stdio: "inherit",
+    timeout: Math.max(1, uploadDeadline - Date.now()),
+    killSignal: "SIGKILL",
     env: {
       ...process.env,
       POSTHOG_CLI_HOST: process.env.POSTHOG_CLI_HOST ?? "https://eu.posthog.com",
@@ -32,6 +39,11 @@ const posthogCli = (args) => {
   if (result.error?.code === "ENOENT") {
     throw new Error(
       "posthog-cli is not installed. Install it with `npm install -g @posthog/cli` or unset POSTHOG_CLI_API_KEY.",
+    );
+  }
+  if (result.error?.code === "ETIMEDOUT") {
+    throw new Error(
+      `posthog-cli ${args.slice(0, 2).join(" ")} did not finish within ${uploadTimeoutMs / 1000} s and was stopped`,
     );
   }
   if (result.status !== 0) {
