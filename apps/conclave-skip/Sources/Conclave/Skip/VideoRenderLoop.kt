@@ -25,8 +25,7 @@ internal interface VideoRenderBackend {
     fun release()
     fun createSurface(target: Any): Any?
     fun destroySurface(surface: Any)
-    fun abandonSurface(surface: Any)
-    fun forgetSurface(surface: Any)
+    fun unbindSurface(surface: Any)
     fun makeCurrent(surface: Any): Boolean
     fun surfaceWidth(surface: Any): Int
     fun surfaceHeight(surface: Any): Int
@@ -48,6 +47,7 @@ internal class VideoRenderLoop : VideoRenderBackend {
     private var config: EGLConfig? = null
     private var idleSurface: EGLSurface = EGL14.EGL_NO_SURFACE
     private var currentSurface: EGLSurface = EGL14.EGL_NO_SURFACE
+    private var swapIntervalSurface: EGLSurface = EGL14.EGL_NO_SURFACE
     private var unpackAlignmentSet = false
 
     private val drawersByFrameKind = arrayOfNulls<GlRectDrawer>(3)
@@ -100,16 +100,10 @@ internal class VideoRenderLoop : VideoRenderBackend {
         }
         liveSurfaces.incrementAndGet()
         reportLive()
-        if (makeCurrent(surface)) EGL14.eglSwapInterval(display, 0)
         return surface
     }
 
     override fun destroySurface(surface: Any) {
-        forgetSurface(surface)
-        abandonSurface(surface)
-    }
-
-    override fun abandonSurface(surface: Any) {
         if (EGL14.eglDestroySurface(EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY), surface as EGLSurface)) {
             liveSurfaces.decrementAndGet()
             reportLive()
@@ -118,8 +112,9 @@ internal class VideoRenderLoop : VideoRenderBackend {
         }
     }
 
-    override fun forgetSurface(surface: Any) {
+    override fun unbindSurface(surface: Any) {
         if (currentSurface == surface) unbind()
+        if (swapIntervalSurface == surface) swapIntervalSurface = EGL14.EGL_NO_SURFACE
     }
 
     override fun makeCurrent(surface: Any): Boolean {
@@ -132,6 +127,10 @@ internal class VideoRenderLoop : VideoRenderBackend {
             return false
         }
         currentSurface = target
+        if (target != idleSurface && target != swapIntervalSurface) {
+            EGL14.eglSwapInterval(display, 0)
+            swapIntervalSurface = target
+        }
         if (!unpackAlignmentSet) {
             unpackAlignmentSet = true
             GLES20.glPixelStorei(GLES20.GL_UNPACK_ALIGNMENT, 1)
@@ -168,6 +167,7 @@ internal class VideoRenderLoop : VideoRenderBackend {
         context = EGL14.EGL_NO_CONTEXT
         idleSurface = EGL14.EGL_NO_SURFACE
         currentSurface = EGL14.EGL_NO_SURFACE
+        swapIntervalSurface = EGL14.EGL_NO_SURFACE
         unpackAlignmentSet = false
     }
 

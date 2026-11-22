@@ -48,7 +48,10 @@ private class RecordingBackend : VideoRenderBackend {
     @Volatile var sizeOfTheNextSurface: Pair<Int, Int>? = null
     @Volatile var duringDraw: (() -> Unit)? = null
     @Volatile private var stalledSwap: CountDownLatch? = null
-    private val swapStalled = CountDownLatch(1)
+    @Volatile private var stalledBind: CountDownLatch? = null
+    @Volatile private var stalledUnbind: CountDownLatch? = null
+    private val stalled = CountDownLatch(1)
+    val unbound: MutableList<Any> = Collections.synchronizedList(mutableListOf())
     @Volatile var stopped = false
         private set
     private val surfaces = AtomicInteger(0)
@@ -81,19 +84,27 @@ private class RecordingBackend : VideoRenderBackend {
         return "surface-" + surfaces.incrementAndGet()
     }
     override fun destroySurface(surface: Any) { calls.add("destroy $surface") }
-    override fun abandonSurface(surface: Any) { calls.add("abandon $surface") }
-    override fun forgetSurface(surface: Any) { calls.add("forget $surface") }
-    override fun makeCurrent(surface: Any): Boolean = bindSucceeds
+    override fun unbindSurface(surface: Any) {
+        stallOn(stalledUnbind) { stalledUnbind = null }
+        unbound.add(surface)
+    }
+    override fun makeCurrent(surface: Any): Boolean {
+        stallOn(stalledBind) { stalledBind = null }
+        return bindSucceeds
+    }
     override fun surfaceWidth(surface: Any): Int = width
     override fun surfaceHeight(surface: Any): Int = height
     override fun swap(surface: Any): Boolean {
         calls.add("swap $surface")
-        stalledSwap?.let { stall ->
-            stalledSwap = null
-            swapStalled.countDown()
-            stall.await()
-        }
+        stallOn(stalledSwap) { stalledSwap = null }
         return swapSucceeds
+    }
+
+    private fun stallOn(stall: CountDownLatch?, taken: () -> Unit) {
+        if (stall == null) return
+        taken()
+        stalled.countDown()
+        stall.await()
     }
     override fun clear(red: Float, green: Float, blue: Float) { calls.add("clear") }
     override fun draw(frame: VideoFrame, layout: VideoDrawLayout): Boolean {
@@ -126,9 +137,11 @@ private class RecordingBackend : VideoRenderBackend {
     }
 
     fun stallNextSwap(): CountDownLatch = CountDownLatch(1).also { stalledSwap = it }
+    fun stallNextBind(): CountDownLatch = CountDownLatch(1).also { stalledBind = it }
+    fun stallNextUnbind(): CountDownLatch = CountDownLatch(1).also { stalledUnbind = it }
 
-    fun awaitStalledSwap() {
-        assertTrue("no swap was started", swapStalled.await(5, TimeUnit.SECONDS))
+    fun awaitStall() {
+        assertTrue("the render thread never reached the stall", stalled.await(5, TimeUnit.SECONDS))
     }
 
     fun count(prefix: String): Int = calls.count { it.startsWith(prefix) }
@@ -1049,13 +1062,14 @@ class VideoRenderingTests {
         backend.settle()
         val gate = backend.park()
         host.surfaceDestroyed(host.holder)
-        assertEquals(listOf("create", "abandon surface-1"), backend.calls.toList())
+        assertEquals(listOf("create", "destroy surface-1"), backend.calls.toList())
         host.surfaceAvailable("window")
         host.sink.onFrame(frame())
         gate.countDown()
         backend.settle()
         shadowOf(Looper.getMainLooper()).idle()
-        assertEquals(listOf("create", "abandon surface-1", "forget surface-1", "create", "draw", "swap surface-2"), backend.calls.toList())
+        assertEquals(listOf("create", "destroy surface-1", "create", "draw", "swap surface-2"), backend.calls.toList())
+        assertEquals(listOf<Any>("surface-1"), backend.unbound.toList())
         assertTrue(host.hasFrame)
         assertEveryFrameGivenBack()
     }
@@ -1071,22 +1085,50 @@ class VideoRenderingTests {
             neighbours.forEach { it.surfaceAvailable("window") }
             val stall = stalled.stallNextSwap()
             host.sink.onFrame(frame())
-            stalled.awaitStalledSwap()
+            stalled.awaitStall()
             val started = System.nanoTime()
             host.surfaceDestroyed(host.holder)
             val heldMillis = (System.nanoTime() - started) / 1_000_000
             assertTrue("a stalled swap held the main thread for $heldMillis ms", heldMillis < 1_000)
-            assertEquals(listOf("create", "draw", "swap surface-1", "abandon surface-1"), stalled.calls.toList())
+            assertEquals(listOf("create", "draw", "swap surface-1", "destroy surface-1"), stalled.calls.toList())
             neighbours.forEach { it.sink.onFrame(frame()) }
             others.forEach { it.settle() }
             others.forEach { assertEquals(listOf("create", "draw", "swap surface-1"), it.calls.toList()) }
             stall.countDown()
             stalled.settle()
-            assertEquals(listOf("create", "draw", "swap surface-1", "abandon surface-1", "forget surface-1"), stalled.calls.toList())
+            assertEquals(listOf("create", "draw", "swap surface-1", "destroy surface-1"), stalled.calls.toList())
+            assertEquals(listOf<Any>("surface-1"), stalled.unbound.toList())
             assertEveryFrameGivenBack()
         } finally {
             (others + stalled).forEach { it.shutdown() }
         }
+    }
+
+    @Test fun aSurfaceIsDestroyedBeforeItIsTakenOffItsContextSoABlockedUnbindCannotKeepIt() {
+        val host = surfaceHost(detachWait = VideoDetachWait(limitMillis = 100, windowMillis = 60_000))
+        host.surfaceAvailable("window")
+        backend.settle()
+        val stall = backend.stallNextUnbind()
+        host.surfaceDestroyed(host.holder)
+        assertEquals(listOf("create", "destroy surface-1"), backend.calls.toList())
+        stall.countDown()
+        backend.settle()
+        assertEquals(listOf("create", "destroy surface-1"), backend.calls.toList())
+        assertEquals(listOf<Any>("surface-1"), backend.unbound.toList())
+    }
+
+    @Test fun aSurfaceStillBeingBoundForTheFirstTimeIsDestroyedByItsCallbackToo() {
+        val host = surfaceHost(detachWait = VideoDetachWait(limitMillis = 100, windowMillis = 60_000))
+        val stall = backend.stallNextBind()
+        host.surfaceAvailable("window")
+        host.sink.onFrame(frame())
+        backend.awaitStall()
+        host.surfaceDestroyed(host.holder)
+        assertEquals(listOf("create", "destroy surface-1"), backend.calls.toList())
+        stall.countDown()
+        backend.settle()
+        assertEquals("a frame was drawn into a surface that had been destroyed", listOf("create", "destroy surface-1"), backend.calls.toList())
+        assertEveryFrameGivenBack()
     }
 
     @Test fun twoStalledSwapsInARowCostTheMainThreadOneShortWaitAndBothSurfacesAreDestroyed() {
@@ -1097,15 +1139,15 @@ class VideoRenderingTests {
             hosts.forEach { it.surfaceAvailable("window") }
             val stalls = stalled.map { it.stallNextSwap() }
             hosts.forEach { it.sink.onFrame(frame()) }
-            stalled.forEach { it.awaitStalledSwap() }
+            stalled.forEach { it.awaitStall() }
             val started = System.nanoTime()
             hosts.forEach { it.surfaceDestroyed(it.holder) }
             val heldMillis = (System.nanoTime() - started) / 1_000_000
             assertTrue("two stalled swaps held the main thread for $heldMillis ms", heldMillis < 1_000)
-            stalled.forEach { assertEquals(1, it.count("abandon")) }
+            stalled.forEach { assertEquals(1, it.count("destroy")) }
             stalls.forEach { it.countDown() }
             stalled.forEach { it.settle() }
-            stalled.forEach { assertEquals(0, it.count("destroy")) }
+            stalled.forEach { assertEquals("a surface was destroyed twice", 1, it.count("destroy")) }
             assertEveryFrameGivenBack()
         } finally {
             stalled.forEach { it.shutdown() }
@@ -1155,10 +1197,10 @@ class VideoRenderingTests {
             hosts.forEach { it.surfaceDestroyed(it.holder) }
             val heldMillis = (System.nanoTime() - started) / 1_000_000
             assertTrue("destroying 4 busy tiles held the main thread for $heldMillis ms", heldMillis < 1_000)
-            busy.forEach { assertEquals(listOf("create", "abandon surface-1"), it.calls.toList()) }
+            busy.forEach { assertEquals(listOf("create", "destroy surface-1"), it.calls.toList()) }
             gates.forEach { it.countDown() }
             busy.forEach { it.settle() }
-            busy.forEach { assertEquals(listOf("create", "abandon surface-1", "forget surface-1"), it.calls.toList()) }
+            busy.forEach { assertEquals(listOf("create", "destroy surface-1"), it.calls.toList()) }
         } finally {
             busy.forEach { it.shutdown() }
         }

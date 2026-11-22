@@ -336,6 +336,11 @@ has the numbers.
   task queued ahead of the detach takes the surface off its context. After
   `release()` the callback waits for the release that is already queued, from
   the same allowance and with the same fallback.
+- The render thread keeps its surface reachable for that fallback. It destroys
+  a surface before taking it off the context, and it creates one without
+  making it current, because both the unbind and the bind take the shared EGL
+  lock and can wait behind another tile's stalled swap. The swap interval is
+  set the first time a surface is bound.
 - The loop takes WebRTC's `EglBase.lock` around make-current, swap and context
   creation, as WebRTC's own renderers, encoders and camera helper do. Some
   drivers deadlock between one thread's swap and another thread's context

@@ -160,8 +160,8 @@ internal class VideoTileRenderer(
 
     fun abandonSurface() {
         val abandoned = surface.getAndSet(null) ?: return
-        backend.abandonSurface(abandoned)
-        backend.postFirst { backend.forgetSurface(abandoned) }
+        backend.destroySurface(abandoned)
+        backend.postFirst { backend.unbindSurface(abandoned) }
     }
 
     fun windowSized(width: Int, height: Int) {
@@ -211,7 +211,9 @@ internal class VideoTileRenderer(
     }
 
     private fun destroySurface() {
-        surface.getAndSet(null)?.let { backend.destroySurface(it) }
+        val destroyed = surface.getAndSet(null) ?: return
+        backend.destroySurface(destroyed)
+        backend.unbindSurface(destroyed)
     }
 
     private fun ensureSurface(): Any? {
@@ -313,7 +315,7 @@ internal class VideoTileRenderer(
 
     private fun boundSurface(): Any? {
         val target = ensureSurface() ?: return null
-        if (backend.makeCurrent(target)) return target
+        if (backend.makeCurrent(target)) return target.takeIf { surface.get() === it }
         surfaceStoppedWorking()
         return null
     }
