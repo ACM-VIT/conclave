@@ -91,6 +91,53 @@ describe("persistence fence", () => {
     }
   });
 
+  it("reports a hold only after a reminder claim already writing Redis and then SQLite has finished", async () => {
+    const fence = createPersistenceFence();
+    const writes: string[] = [];
+    const meetings = fenceScheduledMeetingPersistence(
+      {
+        save: () => undefined,
+        claimEmailReminder: async () => {
+          await delay(10);
+          writes.push("claim wrote Redis");
+          await delay(10);
+          writes.push("claim wrote SQLite");
+          return null;
+        },
+        load: () => [],
+      },
+      fence,
+    );
+    const claim = meetings.claimEmailReminder!({ meetingId: "m1" } as never);
+    await delay(2);
+    expect(writes).toEqual([]);
+    await fence.hold("backup-one", 5_000);
+    expect(writes).toEqual(["claim wrote Redis", "claim wrote SQLite"]);
+    fence.release("backup-one");
+    await claim;
+  });
+
+  it("reports a hold only after a load already under way has finished, since a load can migrate records", async () => {
+    const fence = createPersistenceFence();
+    let migrated = false;
+    const meetings = fenceScheduledMeetingPersistence(
+      {
+        save: () => undefined,
+        load: async () => {
+          await delay(10);
+          migrated = true;
+          return [];
+        },
+      },
+      fence,
+    );
+    const loading = meetings.load();
+    await fence.hold("backup-one", 5_000);
+    expect(migrated).toBe(true);
+    fence.release("backup-one");
+    await loading;
+  });
+
   it("runs calls one at a time in the order they were made, during a hold and after it", async () => {
     const fence = createPersistenceFence();
     const events: string[] = [];

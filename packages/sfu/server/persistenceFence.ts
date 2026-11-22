@@ -127,7 +127,8 @@ export const fenceScheduledMeetingPersistence = (
     reserveBookingSlot:
       persistence.reserveBookingSlot && ((reservation) => fence.run(() => persistence.reserveBookingSlot!(reservation))),
     claimEmailReminder: persistence.claimEmailReminder && ((claim) => fence.run(() => persistence.claimEmailReminder!(claim))),
-    load: () => persistence.load(),
+    // A load can write too: Redis migrates the fallback's meetings into itself.
+    load: () => fence.run(() => persistence.load()),
     flush: persistence.flush && (() => fence.run(() => persistence.flush!())),
     close:
       persistence.close &&
@@ -147,7 +148,7 @@ export const fenceSchedulingPersistence = (
       await persistence.save(snapshot);
       await persistence.flush?.();
     }),
-  load: () => persistence.load(),
+  load: () => fence.run(() => persistence.load()),
   flush: persistence.flush && (() => fence.run(() => persistence.flush!())),
   close:
     persistence.close &&

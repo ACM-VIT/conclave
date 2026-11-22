@@ -124,7 +124,7 @@ export const initScheduledMeetings = (
   persistence: ScheduledMeetingPersistence = createScheduledMeetingPersistence(),
 ): Promise<void> => {
   state.scheduledMeetingPersistence = fenceScheduledMeetingPersistence(persistence, state.persistenceFence);
-  return loadPersistedMeetings(state.scheduledMeetings, persistence).then((loaded) => {
+  return loadPersistedMeetings(state.scheduledMeetings, state.scheduledMeetingPersistence).then((loaded) => {
     if (loaded > 0) {
       Logger.info(`Restored ${loaded} scheduled meeting(s) from persistence`);
     }
@@ -136,7 +136,7 @@ export const initScheduling = (
   persistence: SchedulingPersistence = createSchedulingPersistence(),
 ): Promise<void> => {
   state.schedulingPersistence = fenceSchedulingPersistence(persistence, state.persistenceFence);
-  return loadPersistedScheduling(state.scheduling, persistence).then((loaded) => {
+  return loadPersistedScheduling(state.scheduling, state.schedulingPersistence).then((loaded) => {
     if (loaded > 0) {
       Logger.info(`Restored ${loaded} scheduling record(s) from persistence`);
     }
