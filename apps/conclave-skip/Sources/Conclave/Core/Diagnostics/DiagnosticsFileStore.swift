@@ -59,6 +59,11 @@ final class DiagnosticsFileStore {
         return true
     }
 
+    func removePayload(_ name: String) {
+        guard name.hasPrefix(DiagnosticsFileStore.payloadPrefix) && name.hasSuffix(".json") else { return }
+        try? FileManager.default.removeItem(at: fileURL(name))
+    }
+
     func loadPayloads() -> [DiagnosticsLoadedPayload] {
         guard let names = try? FileManager.default.contentsOfDirectory(atPath: directoryPath) else { return [] }
         var result: [DiagnosticsLoadedPayload] = []

@@ -158,12 +158,15 @@ final class CrashReportUploader {
         let ledger = CrashReportLedger(store: store)
         let prepared = await Task.detached(priority: TaskPriority.utility) {
             let loaded = store.loadPayloads()
-            var present: [String] = []
-            for item in loaded {
-                present.append(item.name)
-            }
             let plan = CrashReportPlanner.plan(loaded, reported: ledger.reportedNames(), projectKey: projectKey,
                                                context: context)
+            for name in plan.duplicates {
+                store.removePayload(name)
+            }
+            var present: [String] = []
+            for item in loaded where !plan.duplicates.contains(item.name) {
+                present.append(item.name)
+            }
             return CrashReportPreparedUpload(plan: plan, present: present)
         }.value
 

@@ -337,11 +337,11 @@ struct CrashReportingTests {
         ]
         let plan = CrashReportPlanner.plan(loaded, reported: [], projectKey: "phc_test", context: Self.context)
         #expect(try exceptionTypes(plan) == ["NSInvalidArgumentException"])
-        #expect(plan.skipped.isEmpty)
+        #expect(plan.skipped.isEmpty && plan.duplicates == ["payload-metrickit.json"])
 
         let alreadySent = CrashReportPlanner.plan(loaded, reported: ["payload-uncaught.json"], projectKey: "phc_test",
                                                   context: Self.context)
-        #expect(alreadySent.batches.isEmpty && alreadySent.skipped.isEmpty)
+        #expect(alreadySent.batches.isEmpty && alreadySent.skipped.isEmpty && alreadySent.duplicates == ["payload-metrickit.json"])
     }
 
     /// A MetricKit crash from another build with the same exception inside the window is a different crash, and a
@@ -364,10 +364,9 @@ struct CrashReportingTests {
         let transport = RecordingTransport()
         #expect(await CrashReportUploader().upload(store: store, config: config(), context: Self.context,
                                                    transport: transport) == 1)
-        let reported = CrashReportLedger(store: store).reportedNames()
-        #expect(reported.count == 1)
-        let repeatName = store.loadPayloads().first { CrashReportEventBuilder.numberField($0.payload, "uncaught") == 0.0 }?.name
-        #expect(repeatName != nil && !reported.contains(repeatName ?? ""))
+        let remaining = store.loadPayloads()
+        #expect(remaining.count == 1 && CrashReportEventBuilder.numberField(remaining[0].payload, "uncaught") == 1.0)
+        #expect(CrashReportLedger(store: store).reportedNames() == [remaining[0].name])
     }
 
     @Test func aDifferentOrLaterMetricKitCrashStillUploads() throws {
@@ -384,6 +383,33 @@ struct CrashReportingTests {
         let plan = CrashReportPlanner.plan(loaded, reported: [], projectKey: "phc_test", context: Self.context)
         #expect(try exceptionTypes(plan).count == 3)
         #expect(plan.skipped.isEmpty)
+    }
+
+    final class TestClock: @unchecked Sendable {
+        var now: Double
+        init(now: Double) { self.now = now }
+    }
+
+    /// Dedupe has to outlive the original: once the uncaught record expires and is pruned, its MetricKit repeat must
+    /// still not upload as a second crash.
+    @Test func aDeduplicatedRepeatNeverUploadsAfterItsOriginalExpires() async throws {
+        let crashAt = 1_795_000_000_000.0
+        let clock = TestClock(now: crashAt + 3 * 3_600_000)
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("crash-" + UUID().uuidString, isDirectory: true)
+        let store = DiagnosticsFileStore(directoryPath: base.appendingPathComponent("store").path,
+                                         exportDirectoryPath: base.appendingPathComponent("exports").path,
+                                         wallClock: { clock.now })
+        #expect(store.writePayload(uncaughtObjectiveCCrash(atMillis: crashAt)))
+        #expect(store.writePayload(try metricKitCrash(name: "NSInvalidArgumentException", windowStart: crashAt - 3_600_000,
+                                                      delivered: crashAt + 7_200_000)))
+        let uploader = CrashReportUploader()
+        let transport = RecordingTransport()
+        #expect(await uploader.upload(store: store, config: config(), context: Self.context, transport: transport) == 1)
+
+        clock.now = crashAt + 7.0 * 24.0 * 3_600_000 + 3_600_000
+        store.prune(nowMillis: clock.now)
+        #expect(await uploader.upload(store: store, config: config(), context: Self.context, transport: transport) == 0)
+        #expect(transport.bodies.count == 1)
     }
 
     @Test func aReportNamesTheReleaseThatCrashedNotTheOneUploading() throws {

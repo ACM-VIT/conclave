@@ -776,11 +776,13 @@ struct CrashReportBatch: Equatable {
 
 enum CrashReportPlanner {
     /// `skipped` lists payloads with nothing worth reporting, so the ledger stops reconsidering them. A MetricKit repeat
-    /// of a stored uncaught crash is left out of both: it is not sent, and not recorded as sent.
+    /// of a stored uncaught crash goes in `duplicates` instead: the uploader deletes it, so it cannot upload once the
+    /// original expires, and it is never recorded as sent.
     static func plan(_ loaded: [DiagnosticsLoadedPayload], reported: [String], projectKey: String,
                      context: CrashReportContext) -> CrashReportPlan {
         var batches: [CrashReportBatch] = []
         var skipped: [String] = []
+        var duplicates: [String] = []
         var events: [String] = []
         var names: [String] = []
         var uncaught: [DiagnosticsStoredPayload] = []
@@ -788,7 +790,10 @@ enum CrashReportPlanner {
             uncaught.append(item.payload)
         }
         for item in loaded where !reported.contains(item.name) {
-            if CrashReportEventBuilder.repeatsUncaughtCrash(item.payload, uncaught: uncaught) { continue }
+            if CrashReportEventBuilder.repeatsUncaughtCrash(item.payload, uncaught: uncaught) {
+                duplicates.append(item.name)
+                continue
+            }
             guard let event = CrashReportEventBuilder.event(
                 for: item.payload,
                 eventId: CrashReportEventBuilder.eventId(forPayloadName: item.name),
@@ -810,11 +815,12 @@ enum CrashReportPlanner {
             batches.append(CrashReportBatch(body: CrashReportEventBuilder.batch(projectKey: projectKey, events: events),
                                             names: names))
         }
-        return CrashReportPlan(batches: batches, skipped: skipped)
+        return CrashReportPlan(batches: batches, skipped: skipped, duplicates: duplicates)
     }
 }
 
 struct CrashReportPlan: Equatable {
     let batches: [CrashReportBatch]
     let skipped: [String]
+    let duplicates: [String]
 }
