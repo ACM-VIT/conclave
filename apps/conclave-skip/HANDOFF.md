@@ -32,7 +32,7 @@
 
 ## 2. Environment · build · install · test
 
-Primary dir: `apps/conclave-skip`. Android Gradle project: `apps/conclave-skip/Android` (uses the checked-in `./gradlew` wrapper, Gradle 9.7.1; export `JAVA_HOME` to JDK 21 first, see AGENTS.md).
+Primary dir: `apps/conclave-skip`. Android Gradle project: `apps/conclave-skip/Android` (uses the checked-in `./gradlew` wrapper, Gradle 9.9.2; export `JAVA_HOME` to JDK 21 first, see AGENTS.md).
 
 ```bash
 # ---- iOS / macOS host build (fast Swift-level gate; also runs as the Android prebuild) ----

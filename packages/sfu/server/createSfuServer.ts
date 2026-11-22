@@ -86,11 +86,12 @@ export const createSfuServer = (
   let roomOwnershipRenewTimer: NodeJS.Timeout | null = null;
   let audioConsumerHealTimer: NodeJS.Timeout | null = null;
   let stopRoomRecoveryPassRefresh: (() => void) | null = null;
+  const workerShutdown = new AbortController();
 
   const start = async (): Promise<void> => {
     await state.roomRegistry.start();
     socketAdapterLifecycle = await connectSocketAdapter(io, { config });
-    await initMediaSoup(state, () => io);
+    await initMediaSoup(state, () => io, workerShutdown.signal);
     initScheduledWebinars(state);
     await initScheduledMeetings(state);
     await initScheduling(state);
@@ -145,6 +146,7 @@ export const createSfuServer = (
   };
 
   const stop = async (): Promise<void> => {
+    workerShutdown.abort();
     adminGateway.dispose();
     stopScheduledWebinarTimer(state);
     if (scheduledMeetingTickTimer) {
