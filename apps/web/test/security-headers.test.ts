@@ -20,6 +20,18 @@ describe("web security headers", () => {
     expect(headers.get("Referrer-Policy")).toBe("strict-origin-when-cross-origin");
   });
 
+  it("lets chat images load from the SFU that stored them", () => {
+    const production = directives(headerMap(false).get("Content-Security-Policy-Report-Only") ?? "");
+    expect(production.get("img-src")).toContain("https://*.acmvit.in");
+    expect(production.get("img-src")).not.toContain("wss://*.acmvit.in");
+
+    const local = directives(
+      headerMap(true, { NEXT_PUBLIC_SFU_URL: "http://localhost:3031" }).get("Content-Security-Policy-Report-Only") ?? "",
+    );
+    expect(local.get("img-src")).toContain("http://localhost:3031");
+    expect(local.get("img-src")).not.toContain("ws://localhost:3031");
+  });
+
   it("lets only this origin use the camera, microphone and screen capture", () => {
     const policy = headerMap(false).get("Permissions-Policy") ?? "";
     for (const feature of ["camera", "microphone", "display-capture"]) {

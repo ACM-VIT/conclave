@@ -7,13 +7,16 @@ export const CSP_REPORT_PATH = "/api/csp-report";
 // join API and the SFU, so they cannot be listed at build time.
 const PRODUCTION_REALTIME_HOSTS = ["*.acmvit.in"];
 
-const ENV_ORIGIN_KEYS = [
+const SFU_ENV_KEYS = [
   "SFU_URL",
   "SFU_URLS",
   "SFU_POOL",
   "SFU_POOL_URLS",
   "NEXT_PUBLIC_SFU_URL",
   "NEXT_PUBLIC_SFU_URLS",
+] as const;
+const REALTIME_ENV_KEYS = [
+  ...SFU_ENV_KEYS,
   "TRANSCRIPT_WORKER_URL",
   "NEXT_PUBLIC_TRANSCRIPT_WORKER_URL",
   "NEXT_PUBLIC_POSTHOG_HOST",
@@ -42,9 +45,9 @@ const SHARED_BROWSER_FRAME_ORIGIN = "https://live.browser.run";
 type EnvSource = Partial<Record<string, string | undefined>>;
 
 /** http(s) origins from comma lists that may use `id=url` pool entries. */
-const originsFromEnv = (env: EnvSource): string[] => {
+const originsFromEnv = (env: EnvSource, keys: readonly string[]): string[] => {
   const origins = new Set<string>();
-  for (const key of ENV_ORIGIN_KEYS) {
+  for (const key of keys) {
     for (const rawEntry of (env[key] ?? "").split(",")) {
       const entry = rawEntry.slice(rawEntry.indexOf("=") + 1).trim();
       if (!entry) continue;
@@ -76,10 +79,13 @@ export const buildContentSecurityPolicy = ({
   env: EnvSource;
   isDevelopment: boolean;
 }): string => {
+  const productionOrigins = PRODUCTION_REALTIME_HOSTS.map((host) => `https://${host}`);
+  // Chat images are served by the SFU that stored them.
+  const sfuOrigins = [...productionOrigins, ...originsFromEnv(env, SFU_ENV_KEYS)];
   const realtimeOrigins = [
-    ...PRODUCTION_REALTIME_HOSTS.flatMap((host) => [`https://${host}`, `wss://${host}`]),
-    ...originsFromEnv(env).flatMap(withSocketScheme),
-  ];
+    ...productionOrigins,
+    ...originsFromEnv(env, REALTIME_ENV_KEYS),
+  ].flatMap(withSocketScheme);
   return serializePolicy({
     "default-src": ["'self'"],
     // Next.js streams the RSC payload in inline scripts. Dropping
@@ -95,7 +101,7 @@ export const buildContentSecurityPolicy = ({
       POSTHOG_SCRIPT_ORIGIN,
     ],
     "style-src": ["'self'", "'unsafe-inline'"],
-    "img-src": ["'self'", "data:", "blob:", YOUTUBE_IMAGE_ORIGIN, KLIPY_MEDIA_ORIGIN],
+    "img-src": ["'self'", "data:", "blob:", ...sfuOrigins, YOUTUBE_IMAGE_ORIGIN, KLIPY_MEDIA_ORIGIN],
     "media-src": ["'self'", "data:", "blob:", KLIPY_MEDIA_ORIGIN],
     "font-src": ["'self'", "data:"],
     "connect-src": [
