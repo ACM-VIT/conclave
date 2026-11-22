@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { resolveViewerUrl } from "../src/lib/novnc-viewer";
 import { buildSecurityHeaders } from "../src/lib/security-headers";
 
 const headerMap = (isDevelopment: boolean, env: Record<string, string> = {}) =>
@@ -49,6 +50,22 @@ describe("web security headers", () => {
     // Without a public base URL, the service links each noVNC port on the host directly.
     expect(policyFor({ BROWSER_HOST_ADDRESS: "browser.internal" }).get("frame-src")).toContain("http://browser.internal:*");
     expect(policyFor({}).get("frame-src")).not.toEqual(expect.arrayContaining([expect.stringMatching(/:\*$/)]));
+  });
+
+  it("allows the viewer URL the client frames when the address is loopback", () => {
+    const policyFor = (env: Record<string, string>) =>
+      directives(headerMap(false, env).get("Content-Security-Policy-Report-Only") ?? "");
+    // resolveNoVncUrl swaps a loopback viewer host for the page's own host.
+    const allows = (sources: string[] | undefined, framedUrl: string) => {
+      const { protocol, hostname, origin } = new URL(framedUrl);
+      return (sources ?? []).some((source) => source === origin || source === `${protocol}//${hostname}:*`);
+    };
+    const direct = policyFor({ BROWSER_HOST_ADDRESS: "127.0.0.1" }).get("frame-src");
+    for (const pageHost of ["localhost", "127.0.0.1", "[::1]"]) {
+      expect(allows(direct, resolveViewerUrl("http://127.0.0.1:6080/vnc_lite.html", pageHost)), pageHost).toBe(true);
+    }
+    const proxied = policyFor({ BROWSER_PUBLIC_BASE_URL: "http://127.0.0.1:6411/" }).get("frame-src");
+    expect(allows(proxied, resolveViewerUrl("http://127.0.0.1:6411/novnc/6080/vnc_lite.html", "localhost"))).toBe(true);
   });
 
   it("lets only this origin use the camera, microphone and screen capture", () => {

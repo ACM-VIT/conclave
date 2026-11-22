@@ -1,3 +1,5 @@
+import { isLoopbackViewerHost, LOOPBACK_PAGE_HOSTS, resolveViewerUrl } from "./novnc-viewer";
+
 export type HeaderEntry = { key: string; value: string };
 
 export const CSP_REPORT_PATH = "/api/csp-report";
@@ -73,18 +75,29 @@ const originsFromEnv = (env: EnvSource, keys: readonly string[]): string[] => {
 /**
  * A self-hosted Chromium viewer is framed from the URL the browser service
  * builds: BROWSER_PUBLIC_BASE_URL when set, otherwise each noVNC port on
- * BROWSER_HOST_ADDRESS.
+ * BROWSER_HOST_ADDRESS. A loopback address is framed on the page's own host
+ * (resolveViewerUrl), so it is allowed on each loopback page host.
  */
 const chromiumViewerSources = (env: EnvSource): string[] => {
-  const proxied = originsFromEnv(env, ["BROWSER_PUBLIC_BASE_URL"]);
-  if (proxied.length > 0) return proxied;
   const host = env.BROWSER_HOST_ADDRESS?.trim();
-  if (!host) return [];
-  try {
-    return [`http://${new URL(`http://${host.includes(":") ? `[${host}]` : host}`).hostname}:*`];
-  } catch {
-    return [];
+  const configured = originsFromEnv(env, ["BROWSER_PUBLIC_BASE_URL"]);
+  const viewers = configured.length > 0 ? configured : host ? [`http://${host.includes(":") ? `[${host}]` : host}:6080`] : [];
+  const anyPort = configured.length === 0;
+  const sources = new Set<string>();
+  for (const viewer of viewers) {
+    let parsed: URL;
+    try {
+      parsed = new URL(viewer);
+    } catch {
+      continue;
+    }
+    const pageHosts = isLoopbackViewerHost(parsed.hostname) ? LOOPBACK_PAGE_HOSTS : [parsed.hostname];
+    for (const pageHost of pageHosts) {
+      const framed = new URL(resolveViewerUrl(parsed.toString(), pageHost));
+      sources.add(anyPort ? `${framed.protocol}//${framed.hostname}:*` : framed.origin);
+    }
   }
+  return [...sources];
 };
 
 const withSocketScheme = (origin: string): string[] => [
