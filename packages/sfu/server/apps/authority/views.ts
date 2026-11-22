@@ -389,6 +389,16 @@ export class ViewTracker {
     return { ops, version: this.version };
   }
 
+  /** Whether removals from a large clear are still owed to this viewer's audiences. */
+  owes(role: Role, subject: Subject): boolean {
+    for (const audience of [this.roles.get(role), this.subjects.get(subject)]) {
+      for (const bucket of audience?.buckets.values() ?? []) {
+        if (bucket.owed.size > 0) return true;
+      }
+    }
+    return false;
+  }
+
   /** Forgets the views of audiences nobody holds any more. */
   keep(live: LiveAudiences): void {
     for (const [role, audience] of this.roles) {
