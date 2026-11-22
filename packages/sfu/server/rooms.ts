@@ -51,7 +51,15 @@ const getRoomWorkerLoads = (state: SfuState): Map<number, WorkerLoad> => {
 
 export const markRoomEnded = (
   state: SfuState,
-  room: Pick<Room, "id" | "clientId" | "channelId" | "markEnded">,
+  room: Pick<
+    Room,
+    | "id"
+    | "clientId"
+    | "channelId"
+    | "markEnded"
+    | "incarnationId"
+    | "takesOverRecordOf"
+  >,
   options: {
     message: string;
     endedBy: string;

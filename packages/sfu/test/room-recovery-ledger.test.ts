@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,9 +9,11 @@ import {
 
 const CHANNEL = "conclave:abc-mnop-xyz";
 const MINUTE_MS = 60_000;
-const NOTHING_KNOWN = { lost: null, passesVoidUntil: null };
+const NOTHING_KNOWN = { lost: null, passesVoidUntil: null, lastWriter: null };
 const room = {
   channelId: CHANNEL,
+  incarnationId: "room-1",
+  takesOverRecordOf: null,
   hostUserKey: "host@example.com",
   adminUserKeys: new Set(["host@example.com", "guest-cohost"]),
   usersNeedingReadmission: ["guest-removed"],
@@ -44,6 +46,7 @@ describe("what the SFU remembers about a room across a restart", () => {
         claimableUntil: Date.now() + 7 * MINUTE_MS,
       },
       passesVoidUntil: null,
+      lastWriter: "room-1",
     });
   });
 
@@ -57,9 +60,13 @@ describe("what the SFU remembers about a room across a restart", () => {
     before.noteRunning(room);
     before.noteOver(room);
 
-    expect(await sfu().recall(CHANNEL)).toEqual({ lost: null, passesVoidUntil: emptiedAt });
+    expect(await sfu().recall(CHANNEL)).toEqual({
+      lost: null,
+      passesVoidUntil: emptiedAt,
+      lastWriter: "room-1",
+    });
     vi.advanceTimersByTime(6 * MINUTE_MS + 1);
-    expect(await sfu().recall(CHANNEL)).toEqual(NOTHING_KNOWN);
+    expect(await sfu().recall(CHANNEL)).toEqual({ ...NOTHING_KNOWN, lastWriter: "room-1" });
   });
 
   it("stops calling a room lost once no pass from it can still be good", async () => {
@@ -77,16 +84,25 @@ describe("what the SFU remembers about a room across a restart", () => {
     before.noteRunning(room);
     before.noteOver(room);
 
-    expect(await sfu().recall(CHANNEL)).toEqual({ lost: null, passesVoidUntil: endedAt });
+    expect(await sfu().recall(CHANNEL)).toEqual({
+      lost: null,
+      passesVoidUntil: endedAt,
+      lastWriter: "room-1",
+    });
     vi.advanceTimersByTime(6 * MINUTE_MS + 1);
-    expect(await sfu().recall(CHANNEL)).toEqual(NOTHING_KNOWN);
+    expect(await sfu().recall(CHANNEL)).toEqual({ ...NOTHING_KNOWN, lastWriter: "room-1" });
   });
 
   it("keeps the end on record while the reopened meeting runs, and moves it on when that one empties", async () => {
     const endedAt = Date.now();
     const ledger = sfu();
     ledger.noteOver(room);
-    const reopened = { ...room, recoveryPassesVoidUntil: endedAt };
+    const reopened = {
+      ...room,
+      incarnationId: "room-2",
+      takesOverRecordOf: "room-1",
+      recoveryPassesVoidUntil: endedAt,
+    };
     ledger.noteRunning(reopened);
     expect((await sfu().recall(CHANNEL)).passesVoidUntil).toBe(endedAt);
 
@@ -95,16 +111,54 @@ describe("what the SFU remembers about a room across a restart", () => {
     expect(await sfu().recall(CHANNEL)).toEqual({
       lost: null,
       passesVoidUntil: endedAt + MINUTE_MS,
+      lastWriter: "room-2",
     });
   });
 
   it("reads a damaged record as no record", async () => {
     sfu().noteRunning(room);
-    const [file] = readdirSync(directory);
-    writeFileSync(join(directory, file), "{not json");
+    const [file] = filesIn(directory);
+    writeFileSync(file, "{not json");
     expect(await sfu().recall(CHANNEL)).toEqual(NOTHING_KNOWN);
 
-    writeFileSync(join(directory, file), JSON.stringify({ liveAt: "soon" }));
+    writeFileSync(file, JSON.stringify({ liveAt: "soon" }));
     expect(await sfu().recall(CHANNEL)).toEqual(NOTHING_KNOWN);
   });
 });
+
+describe("a code whose room moved to another SFU", () => {
+  const taken = {
+    ...room,
+    incarnationId: "room-2",
+    takesOverRecordOf: "room-1",
+    hostUserKey: "host-2@example.com",
+  };
+
+  it("keeps the new room's record when the room it took over writes again", async () => {
+    const first = sfu();
+    const second = sfu();
+    first.noteRunning(room);
+    second.noteRunning(taken);
+    first.noteRunning(room);
+    first.noteOver(room);
+
+    expect((await sfu().recall(CHANNEL)).lost?.hostUserKey).toBe("host-2@example.com");
+  });
+
+  it("lets the new room write over what the room it took over wrote after it", async () => {
+    const first = sfu();
+    const second = sfu();
+    first.noteRunning(room);
+    // The new room read the record before the old one wrote once more.
+    first.noteRunning({ ...room, hostUserKey: "host-1-later@example.com" });
+    second.noteRunning(taken);
+
+    expect((await sfu().recall(CHANNEL)).lost?.hostUserKey).toBe("host-2@example.com");
+  });
+});
+
+const filesIn = (dir: string): string[] =>
+  readdirSync(dir).flatMap((name) => {
+    const path = join(dir, name);
+    return statSync(path).isDirectory() ? filesIn(path) : [path];
+  });

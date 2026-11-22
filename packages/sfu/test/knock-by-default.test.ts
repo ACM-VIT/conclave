@@ -975,6 +975,30 @@ describe("who hosts a call the server lost", () => {
     });
   });
 
+  it("keeps what the SFU that took a call over wrote when the SFU it took it from writes again", async () => {
+    const first = makeState();
+    await join(first, host);
+    // Another SFU on the same ledger takes the call over, and its host makes
+    // Bob a co-host there.
+    const second = makeState(durableOf.get(first));
+    const hostOnSecond = await join(second, host);
+    expect(hostOnSecond.context.currentClient).toBeInstanceOf(Admin);
+    roomOf(second).allowLockedUser(guest.userId);
+    await join(second, guest);
+    await send(hostOnSecond.peer, "promoteHost", { userId: "guest-visitor#v" });
+
+    // The first SFU never learned of that, and writes what it knows.
+    first.roomRecovery.noteRunning(roomOf(first));
+    first.roomRecovery.noteOver(roomOf(first));
+
+    // The call is still the one the second SFU was running: someone who was
+    // only knocking waits, and Bob is a host of it.
+    const after = await restart(second);
+    expect((await join(after, knockerAsking)).status).toBe("waiting");
+    const bobBack = await join(after, { ...guest, allowRoomCreation: true });
+    expect(bobBack.context.currentClient).toBeInstanceOf(Admin);
+  });
+
   it("gives a host their own meeting back when they reopen it after it emptied, pass in hand", async () => {
     vi.useFakeTimers({
       toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],

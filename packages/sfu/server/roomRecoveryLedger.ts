@@ -4,12 +4,12 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
-  renameSync,
   rmSync,
+  rmdirSync,
   statSync,
   writeFileSync,
 } from "node:fs";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import type { Room } from "../config/classes/Room.js";
 import { Logger } from "../utilities/loggers.js";
 import {
@@ -36,11 +36,26 @@ export type RoomRecoveryRecord = {
   // brings people back to a call the SFU lost, and a meeting that is over is
   // not one to recover: whoever opens the code next opens a new meeting.
   overAt: number | null;
+  // The room (Room.incarnationId) that wrote it.
+  writer: string;
 };
 
+/**
+ * Where records are kept. A room writes only on top of a record it wrote
+ * itself, or of the one it took over when it was created, so a room an SFU
+ * has lost track of (a stalled process, another SFU that took the call over)
+ * never writes over what the room that took over wrote since.
+ */
 export type RoomRecoveryStore = {
+  // The code's newest record, as stored.
   read: (channelId: string) => Promise<unknown>;
-  write: (channelId: string, record: RoomRecoveryRecord) => Promise<void>;
+  // Lands `record` only if the newest one was written by `record.writer` or
+  // by `takesOver`, or there is none. Says whether it landed.
+  write: (
+    channelId: string,
+    record: RoomRecoveryRecord,
+    takesOver: string | null,
+  ) => Promise<boolean>;
 };
 
 export type LostRoom = {
@@ -55,11 +70,15 @@ export type LostRoom = {
 export type RecalledRoom = {
   lost: LostRoom | null;
   passesVoidUntil: number | null;
+  // Who wrote the newest record. A room created now takes that record over.
+  lastWriter: string | null;
 };
 
 type LedgerRoom = Pick<
   Room,
   | "channelId"
+  | "incarnationId"
+  | "takesOverRecordOf"
   | "hostUserKey"
   | "adminUserKeys"
   | "usersNeedingReadmission"
@@ -68,7 +87,9 @@ type LedgerRoom = Pick<
 
 export type RoomRecoveryLedger = {
   noteRunning: (room: LedgerRoom) => void;
-  noteOver: (room: Pick<Room, "channelId">) => void;
+  noteOver: (
+    room: Pick<Room, "channelId" | "incarnationId" | "takesOverRecordOf">,
+  ) => void;
   recall: (channelId: string) => Promise<RecalledRoom>;
 };
 
@@ -84,9 +105,11 @@ const parseRoomRecoveryRecord = (raw: unknown): RoomRecoveryRecord | null => {
     adminUserKeys,
     readmissionRequiredUserKeys,
     overAt,
+    writer,
   } = raw as Record<string, unknown>;
   if (liveAt !== null && typeof liveAt !== "number") return null;
   if (overAt !== null && typeof overAt !== "number") return null;
+  if (typeof writer !== "string") return null;
   if (hostUserKey !== null && typeof hostUserKey !== "string") return null;
   if (!isStringList(adminUserKeys)) return null;
   if (!isStringList(readmissionRequiredUserKeys)) return null;
@@ -96,7 +119,26 @@ const parseRoomRecoveryRecord = (raw: unknown): RoomRecoveryRecord | null => {
     adminUserKeys,
     readmissionRequiredUserKeys,
     overAt,
+    writer,
   };
+};
+
+const writerOf = (raw: unknown): string | null => {
+  const writer =
+    raw && typeof raw === "object" ? (raw as { writer?: unknown }).writer : null;
+  return typeof writer === "string" ? writer : null;
+};
+
+// Whether a record written by `writer`, a room that took over the record of
+// `takesOver`, may go on top of `newest`. One that names no writer, or does
+// not parse, holds nobody back.
+const mayFollow = (
+  newest: unknown,
+  writer: string,
+  takesOver: string | null,
+): boolean => {
+  const last = writerOf(newest);
+  return last === null || last === writer || last === takesOver;
 };
 
 const wasRunningRecently = (liveAt: number | null): liveAt is number =>
@@ -121,36 +163,49 @@ const hasExpired = (raw: unknown): boolean => {
 export const createRoomRecoveryLedger = (
   store: RoomRecoveryStore,
 ): RoomRecoveryLedger => {
-  const save = (channelId: string, record: RoomRecoveryRecord) => {
-    store.write(channelId, record).catch((error) => {
-      Logger.warn(`Failed to update the recovery record of ${channelId}`, error);
-    });
+  const save = (
+    room: Pick<Room, "channelId" | "takesOverRecordOf">,
+    record: RoomRecoveryRecord,
+  ) => {
+    store
+      .write(room.channelId, record, room.takesOverRecordOf)
+      .then((landed) => {
+        if (!landed) {
+          Logger.warn(
+            `Did not update the recovery record of ${room.channelId}: another room has written it since`,
+          );
+        }
+      })
+      .catch((error) => {
+        Logger.warn(`Failed to update the recovery record of ${room.channelId}`, error);
+      });
   };
 
   return {
     noteRunning: (room) =>
-      save(room.channelId, {
+      save(room, {
         liveAt: Date.now(),
         hostUserKey: room.hostUserKey,
         adminUserKeys: [...room.adminUserKeys],
         readmissionRequiredUserKeys: room.usersNeedingReadmission,
         overAt: stillVoids(room.recoveryPassesVoidUntil),
+        writer: room.incarnationId,
       }),
     noteOver: (room) =>
-      save(room.channelId, {
+      save(room, {
         liveAt: null,
         hostUserKey: null,
         adminUserKeys: [],
         readmissionRequiredUserKeys: [],
         overAt: Date.now(),
+        writer: room.incarnationId,
       }),
     recall: async (channelId) => {
-      const record = parseRoomRecoveryRecord(
-        await store.read(channelId).catch((error) => {
-          Logger.warn(`Failed to read the recovery record of ${channelId}`, error);
-          return null;
-        }),
-      );
+      const stored = await store.read(channelId).catch((error) => {
+        Logger.warn(`Failed to read the recovery record of ${channelId}`, error);
+        return null;
+      });
+      const record = parseRoomRecoveryRecord(stored);
       const liveAt = record?.liveAt ?? null;
       return {
         lost:
@@ -163,6 +218,7 @@ export const createRoomRecoveryLedger = (
               }
             : null,
         passesVoidUntil: stillVoids(record?.overAt ?? null),
+        lastWriter: writerOf(stored),
       };
     },
   };
@@ -170,24 +226,27 @@ export const createRoomRecoveryLedger = (
 
 export const createMemoryRoomRecoveryStore = (): RoomRecoveryStore => {
   const records = new Map<string, string>();
+  const read = (channelId: string): unknown => {
+    const stored = records.get(channelId);
+    return stored === undefined ? null : JSON.parse(stored);
+  };
   return {
-    read: async (channelId) => {
-      const stored = records.get(channelId);
-      const record: unknown = stored === undefined ? null : JSON.parse(stored);
-      return record;
-    },
-    write: async (channelId, record) => {
+    read: async (channelId) => read(channelId),
+    write: async (channelId, record, takesOver) => {
+      if (!mayFollow(read(channelId), record.writer, takesOver)) return false;
       records.set(channelId, JSON.stringify(record));
+      return true;
     },
   };
 };
 
 const PRUNE_EVERY_MS = 10 * 60 * 1000;
 const ABANDONED_TEMP_FILE_MS = 60 * 1000;
-// A record's lock is held for one small write or one read and delete. One
-// held this long belongs to an SFU that died holding it.
-const ABANDONED_LOCK_MS = 5_000;
-const LOCK_RETRY_MS = 5;
+// How long a room whose newest record says nothing keeps that record before
+// the room is cleared out. Until then the record still fences off writes
+// from rooms that came before it.
+const CLEARED_ROOM_KEPT_MS = 24 * 60 * 60 * 1000;
+const WRITE_ATTEMPTS = 8;
 
 const roomRecoveryDirectory = (): string => {
   const configured = process.env.SFU_ROOM_RECOVERY_PATH?.trim();
@@ -198,8 +257,8 @@ const roomRecoveryDirectory = (): string => {
     : resolve(process.cwd(), "data", "room-recovery");
 };
 
-const failedWith = (error: unknown, code: string): boolean =>
-  (error as NodeJS.ErrnoException | null)?.code === code;
+const failedWith = (error: unknown, ...codes: string[]): boolean =>
+  codes.includes((error as NodeJS.ErrnoException | null)?.code ?? "");
 
 // Runs a file operation another SFU may race: the file being gone already is
 // an answer, not a failure.
@@ -212,122 +271,75 @@ const unlessGone = <T>(operation: () => T): T | null => {
   }
 };
 
-// Back where it was, unless something newer is there already.
-const putBack = (aside: string, path: string) => {
+const parsedOrUndefined = (text: string): unknown => {
   try {
-    linkSync(aside, path);
-  } catch (error) {
-    if (!failedWith(error, "EEXIST")) throw error;
+    return JSON.parse(text) as unknown;
+  } catch {
+    return undefined;
   }
 };
 
-type HeldLock = { path: string; token: string };
-
-const holds = (lock: HeldLock): boolean =>
-  unlessGone(() => readFileSync(lock.path, "utf8")) === lock.token;
-
-// Takes away a lock held for far longer than anything holds one: its holder
-// is gone. The lock is moved aside first, and goes back if what was moved is
-// not the lock found abandoned but one taken since.
-const clearIfAbandoned = (lockPath: string): void => {
-  const takenAt = unlessGone(() => statSync(lockPath).mtimeMs);
-  if (takenAt === null || Date.now() - takenAt <= ABANDONED_LOCK_MS) return;
-  const holder = unlessGone(() => readFileSync(lockPath, "utf8"));
-  if (holder === null) return;
-  const aside = `${lockPath}.${randomBytes(6).toString("hex")}.abandoned`;
-  if (unlessGone(() => renameSync(lockPath, aside)) === null) return;
-  if (unlessGone(() => readFileSync(aside, "utf8")) !== holder) {
-    putBack(aside, lockPath);
-  }
-  rmSync(aside, { force: true });
-};
-
-const tryLock = (lockPath: string): HeldLock | null => {
-  const token = `${process.pid} ${randomBytes(8).toString("hex")}`;
-  try {
-    writeFileSync(lockPath, token, { encoding: "utf8", flag: "wx" });
-    return { path: lockPath, token };
-  } catch (error) {
-    if (!failedWith(error, "EEXIST")) throw error;
-    clearIfAbandoned(lockPath);
-    return null;
-  }
-};
-
-const lock = async (lockPath: string): Promise<HeldLock> => {
-  for (;;) {
-    const held = tryLock(lockPath);
-    if (held) return held;
-    await new Promise((resolve) => setTimeout(resolve, LOCK_RETRY_MS));
-  }
-};
-
-// Never one taken over as abandoned: that is someone else's now.
-const unlock = (lock: HeldLock): void => {
-  if (holds(lock)) rmSync(lock.path, { force: true });
-};
+const VERSION_FILE = /^(\d+)\.json$/;
 
 /**
- * One small file per room, in a directory every SFU container on the host
- * shares. A room runs on one instance at a time, and whichever instance
- * recreates a lost room can read its record.
+ * A directory per room in a directory every SFU container on the host
+ * shares, holding the room's records as numbered versions. A record is never
+ * changed or replaced: a write adds the next version, created only if no one
+ * has created that version first, and readers take the highest. So a write
+ * that lost a race, or was decided on what has changed since, never lands;
+ * the writer looks again and either writes after it or, if another room
+ * wrote meanwhile, does not write. No lock, no clock.
  *
- * Writing a record and clearing out an expired one each take that record's
- * lock, a file beside it created only if it is not there. So a record is
- * deleted only while it is still the expired one that was read, and never
- * moved: another SFU reading without the lock finds the room's record, or
- * finds it gone because it had expired. This SFU's own reads of a room wait
- * for its writes to that room, which wait for the lock when another SFU
- * holds it.
+ * Tidying removes versions below the newest, which no one reads any more,
+ * and a whole room only once its newest record has said nothing for a day.
  */
 export const createFileRoomRecoveryStore = (
   directory: string = roomRecoveryDirectory(),
 ): RoomRecoveryStore => {
-  const pathOf = (channelId: string): string =>
-    resolve(
-      directory,
-      `${createHash("sha256").update(channelId).digest("hex")}.json`,
-    );
-  const read = (path: string): unknown => {
-    const stored = unlessGone(() => readFileSync(path, "utf8"));
-    return stored === null ? null : JSON.parse(stored);
-  };
-  const lockOf = (path: string): string => `${path}.lock`;
-  const isExpired = (path: string): boolean => {
-    try {
-      const stored = read(path);
-      return stored !== null && hasExpired(stored);
-    } catch {
-      return true;
+  const roomOf = (channelId: string): string =>
+    resolve(directory, createHash("sha256").update(channelId).digest("hex"));
+  const versionsIn = (room: string): number[] =>
+    (unlessGone(() => readdirSync(room)) ?? [])
+      .flatMap((name) => {
+        const match = VERSION_FILE.exec(name);
+        return match ? [Number(match[1])] : [];
+      })
+      .sort((a, b) => b - a);
+  const versionPath = (room: string, version: number): string =>
+    join(room, `${version}.json`);
+  // The newest version and what it holds. One removed as it is read has a
+  // newer one above it, so look again.
+  const newestIn = (room: string): { version: number; stored: unknown } | null => {
+    for (let attempt = 0; attempt < WRITE_ATTEMPTS; attempt += 1) {
+      const [version] = versionsIn(room);
+      if (version === undefined) return null;
+      const text = unlessGone(() => readFileSync(versionPath(room, version), "utf8"));
+      if (text !== null) return { version, stored: parsedOrUndefined(text) };
     }
+    throw new Error(`Could not read the newest recovery record in ${room}`);
   };
-  const writeNow = (path: string, record: RoomRecoveryRecord) => {
-    const pending = `${path}.${randomBytes(6).toString("hex")}.tmp`;
-    writeFileSync(pending, JSON.stringify(record), "utf8");
-    renameSync(pending, path);
-  };
-  const pruneOne = (name: string) => {
-    const path = resolve(directory, name);
-    if (name.endsWith(".lock")) {
-      clearIfAbandoned(path);
-      return;
-    }
-    if (!name.endsWith(".json")) {
-      // What is left of a write that never finished.
-      const written = unlessGone(() => statSync(path).mtimeMs);
-      if (written !== null && Date.now() - written > ABANDONED_TEMP_FILE_MS) {
-        rmSync(path, { force: true });
+  const pruneRoom = (room: string) => {
+    const [newest, ...older] = versionsIn(room);
+    if (newest === undefined) {
+      try {
+        rmdirSync(room);
+      } catch (error) {
+        if (!failedWith(error, "ENOENT", "ENOTEMPTY", "EEXIST")) throw error;
       }
       return;
     }
-    // A record whose lock someone holds is being written or cleared out
-    // already: it waits for the next round.
-    const held = tryLock(lockOf(path));
-    if (!held) return;
+    for (const version of older) rmSync(versionPath(room, version), { force: true });
+    const path = versionPath(room, newest);
+    const written = unlessGone(() => statSync(path).mtimeMs);
+    if (written === null || Date.now() - written < CLEARED_ROOM_KEPT_MS) return;
+    const text = unlessGone(() => readFileSync(path, "utf8"));
+    if (text === null || !hasExpired(parsedOrUndefined(text))) return;
+    rmSync(path, { force: true });
     try {
-      if (isExpired(path) && holds(held)) rmSync(path, { force: true });
-    } finally {
-      unlock(held);
+      rmdirSync(room);
+    } catch (error) {
+      // A write has come in since: the room stays.
+      if (!failedWith(error, "ENOENT", "ENOTEMPTY", "EEXIST")) throw error;
     }
   };
   // Nothing touches the disk until the first room does.
@@ -336,49 +348,53 @@ export const createFileRoomRecoveryStore = (
     if (Date.now() - prunedAt < PRUNE_EVERY_MS) return;
     prunedAt = Date.now();
     try {
-      for (const name of readdirSync(directory)) pruneOne(name);
+      for (const entry of readdirSync(directory, { withFileTypes: true })) {
+        const path = resolve(directory, entry.name);
+        if (entry.isDirectory()) {
+          pruneRoom(path);
+          continue;
+        }
+        // What is left of a write that never finished.
+        const written = unlessGone(() => statSync(path).mtimeMs);
+        if (written !== null && Date.now() - written > ABANDONED_TEMP_FILE_MS) {
+          rmSync(path, { force: true });
+        }
+      }
     } catch (error) {
       Logger.warn(`Failed to clear out old recovery records in ${directory}`, error);
     }
   };
-  // This SFU's writes to a room that had to wait for its lock, in order.
-  const waitingWrites = new Map<string, Promise<void>>();
   return {
-    read: async (channelId) => {
-      const waiting = waitingWrites.get(channelId);
-      if (waiting) await waiting.catch(() => undefined);
-      return read(pathOf(channelId));
-    },
-    write: async (channelId, record) => {
+    read: async (channelId) => newestIn(roomOf(channelId))?.stored ?? null,
+    write: async (channelId, record, takesOver) => {
       mkdirSync(directory, { recursive: true });
       tidy();
-      const path = pathOf(channelId);
-      const waiting = waitingWrites.get(channelId);
-      const held = waiting ? null : tryLock(lockOf(path));
-      if (held) {
-        try {
-          writeNow(path, record);
-        } finally {
-          unlock(held);
-        }
-        return;
-      }
-      const written = (waiting ?? Promise.resolve())
-        .catch(() => undefined)
-        .then(async () => {
-          const taken = await lock(lockOf(path));
-          try {
-            writeNow(path, record);
-          } finally {
-            unlock(taken);
+      const room = roomOf(channelId);
+      let pending: string | null = null;
+      try {
+        for (let attempt = 0; attempt < WRITE_ATTEMPTS; attempt += 1) {
+          const newest = newestIn(room);
+          if (newest && !mayFollow(newest.stored, record.writer, takesOver)) {
+            return false;
           }
-        });
-      waitingWrites.set(channelId, written);
-      const settle = () => {
-        if (waitingWrites.get(channelId) === written) waitingWrites.delete(channelId);
-      };
-      written.then(settle, settle);
-      return written;
+          mkdirSync(room, { recursive: true });
+          if (pending === null) {
+            pending = resolve(directory, `.${randomBytes(6).toString("hex")}.tmp`);
+            writeFileSync(pending, JSON.stringify(record), "utf8");
+          }
+          try {
+            linkSync(pending, versionPath(room, (newest?.version ?? 0) + 1));
+            return true;
+          } catch (error) {
+            // Someone created that version first, or the room was just
+            // cleared out: look again.
+            if (!failedWith(error, "EEXIST", "ENOENT")) throw error;
+          }
+        }
+        throw new Error(`Gave up writing the recovery record of ${channelId}`);
+      } finally {
+        if (pending !== null) rmSync(pending, { force: true });
+      }
     },
   };
 };

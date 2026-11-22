@@ -386,6 +386,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             createdRoom = result.created;
             if (createdRoom) {
               room.recoveryPassesVoidUntil = recalled.passesVoidUntil;
+              room.takesOverRecordOf = recalled.lastWriter;
               lostRoom = recalled.lost;
             }
           } catch (error) {

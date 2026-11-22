@@ -230,6 +230,10 @@ export class Room {
   public readonly channelId: string;
   // Tells this room apart from an earlier or later one at the same code.
   public readonly incarnationId: string = randomUUID();
+  // The room whose recovery record this one took over when it was created,
+  // the writer of the newest record then. It may write over that room's
+  // records, and over no one else's but its own.
+  public takesOverRecordOf: string | null = null;
   // Set when this code was ended for everyone a moment ago: recovery passes
   // signed up to then are from the ended meeting, not from this one.
   public recoveryPassesVoidUntil: number | null = null;
