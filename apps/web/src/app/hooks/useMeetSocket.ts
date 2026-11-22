@@ -6103,7 +6103,7 @@ export function useMeetSocket({
       producer: { transport: null, watch: INITIAL_MEDIA_PATH_WATCH },
       consumer: { transport: null, watch: INITIAL_MEDIA_PATH_WATCH },
     };
-    const restartedWhileConnected = new WeakSet<Transport>();
+    const reportedSilentWhileConnected = new WeakSet<Transport>();
     const connectedOnce = new WeakSet<Transport>();
     let sampling = false;
 
@@ -6190,10 +6190,11 @@ export function useMeetSocket({
       if (result.stalledForMs < MEDIA_PATH_STALL_MS) return;
 
       entry.watch = INITIAL_MEDIA_PATH_WATCH;
-      if (result.condition === "connected-without-media") {
-        // The network path is up, so an ICE restart is only worth one try.
-        if (restartedWhileConnected.has(transport)) return;
-        restartedWhileConnected.add(transport);
+      const isSilentWhileConnected =
+        result.condition === "connected-without-media";
+      if (isSilentWhileConnected) {
+        if (reportedSilentWhileConnected.has(transport)) return;
+        reportedSilentWhileConnected.add(transport);
       }
       console.warn(
         `[Meets] ${kind} transport has carried no media for ${Math.round(
@@ -6205,6 +6206,13 @@ export function useMeetSocket({
         condition: result.condition,
         roomId: currentRoomIdRef.current ?? undefined,
       });
+      if (isSilentWhileConnected) {
+        // ICE and DTLS are up, so the network is not blocking this path and
+        // rebuilding it would only interrupt the call. Record it, and let
+        // the per-stream recovery re-check what should be arriving.
+        if (kind === "consumer") void syncProducersRef.current();
+        return;
+      }
       // An ICE restart can revive a path that worked before. One that never
       // connected needs different candidates, so go straight to a rebuild.
       const restarted =
@@ -7206,7 +7214,11 @@ export function useMeetSocket({
               ? Promise.resolve({ io: prewarm.io })
               : import("socket.io-client");
 
-            const cachedToken = prewarm?.getCachedToken?.(roomIdForJoin);
+            // The prewarmed token is for the first join. A reconnect goes by
+            // the held join info, which a refusal can invalidate.
+            const cachedToken = options?.reconnectJoinInfo
+              ? null
+              : prewarm?.getCachedToken?.(roomIdForJoin);
             const joinInfoGrant = `${joinMode}:${isAdmin ? "host" : "participant"}:${user?.id ?? ""}`;
             const joinInfoPlan = planJoinInfo({
               held: options?.reconnectJoinInfo ? heldJoinInfoRef.current : null,
@@ -9348,9 +9360,7 @@ export function useMeetSocket({
                 attempt,
                 attempt >= MAX_RECONNECT_ATTEMPTS
                   ? "Could not reconnect to the meeting."
-                  : failureKind === "room-unavailable"
-                    ? "Waiting for the meeting to come back."
-                    : "Reconnect attempt failed. Retrying automatically.",
+                  : "Reconnect attempt failed. Retrying automatically.",
                 reconnectFailure,
               ),
             );
