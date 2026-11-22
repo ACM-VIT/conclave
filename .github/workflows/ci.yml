@@ -36,6 +36,17 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Cache the Swift comment parser
+        uses: actions/cache@v4
+        with:
+          path: scripts/quality/comments/swift-trivia/.build
+          key: swift-trivia-${{ runner.os }}-${{ hashFiles('scripts/quality/comments/swift-trivia/Package.swift', 'scripts/quality/comments/swift-trivia/Package.resolved', 'scripts/quality/comments/swift-trivia/Sources/**') }}
+
+      - name: Check toolchains for the comment ratchet
+        run: |
+          swift --version
+          python3 -c 'import sys; assert sys.version_info >= (3, 12), sys.version'
+
       - name: Check
         run: pnpm check
         env:
