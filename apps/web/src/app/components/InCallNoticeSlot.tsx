@@ -275,14 +275,17 @@ export default function InCallNoticeSlot({
 
       const obstacles = collectObstacles(slot, slotRect, slot.parentElement);
       if (isExpanded) {
-        const listKey = `${Math.round(laneWidth)}:${items
+        const listContent = items
           .map((item) => item.querySelector("[data-notice-content]")?.getAttribute("data-notice-content") ?? "")
-          .join("|")}`;
+          .join("|");
         const crampedNow = Boolean(laneRef.current.cramped);
         if (!crampedNow) {
-          fullListHeightRef.current = { key: listKey, height: listHeight };
-        } else if (fullListHeightRef.current?.key !== listKey) {
-          commit({ ...laneRef.current, cramped: false, count });
+          fullListHeightRef.current = {
+            key: `${Math.round(row.clientWidth)}:${listContent}`,
+            height: listHeight,
+          };
+        } else if (fullListHeightRef.current?.key !== `${Math.round(laneWidth)}:${listContent}`) {
+          commit({ ...laneRef.current, cramped: false, narrow: undefined, count });
           return;
         }
         const desired = (fullListHeightRef.current?.height ?? listHeight) + TOGGLE_HEIGHT_PX;
@@ -315,19 +318,21 @@ export default function InCallNoticeSlot({
       }
 
       const compactNow = laneRef.current.compact;
-      const key = `${Math.round(laneWidth)}:${
-        items[0].querySelector("[data-notice-content]")?.getAttribute("data-notice-content") ?? ""
-      }`;
+      const topContent =
+        items[0].querySelector("[data-notice-content]")?.getAttribute("data-notice-content") ?? "";
       let topFullHeight = heights[0];
       if (compactNow) {
         const cached = fullHeightsRef.current.get(items[0]);
-        if (!cached || cached.key !== key) {
-          commit({ ...laneRef.current, compact: false, count });
+        if (!cached || cached.key !== `${Math.round(laneWidth)}:${topContent}`) {
+          commit({ ...laneRef.current, compact: false, narrow: undefined, bare: false, count });
           return;
         }
         topFullHeight = cached.height;
       } else {
-        fullHeightsRef.current.set(items[0], { key, height: heights[0] });
+        fullHeightsRef.current.set(items[0], {
+          key: `${Math.round(row.clientWidth)}:${topContent}`,
+          height: heights[0],
+        });
       }
       const placement = placeNoticeLane(obstacles, {
         ...bounds,
