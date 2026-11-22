@@ -40,6 +40,8 @@ import {
   TRANSCRIPTION_COMMIT_ACK_TIMEOUT_MS,
   TRANSCRIPTION_CONNECT_TIMEOUT_MS,
   TRANSCRIPTION_DRAIN_SEQUENCE_BLOCK,
+  TRANSCRIPTION_ACKNOWLEDGED_DRAIN_MS,
+  TRANSCRIPTION_GAP_MARKER,
   TRANSCRIPTION_PROVIDER_DRAIN_MS,
 } from "./constants";
 import {
@@ -1625,7 +1627,7 @@ export class TranscriptRoom {
               return this.handleTranscriptionFailure(message);
             }
             const drain = this.providerDrains.get(epoch);
-            if (drain) return this.finishProviderDrain(drain);
+            if (drain) return this.finishProviderDrain(drain, "failed");
           },
         },
       });
@@ -1689,8 +1691,9 @@ export class TranscriptRoom {
     const epoch = this.transcriptionConnectionEpoch;
     const firstSequence = this.sequence;
     this.sequence += TRANSCRIPTION_DRAIN_SEQUENCE_BLOCK;
+    // OpenAI says what it owes, so it gets longer to finish acknowledged audio.
     const drainMs = settlesOnAcks
-      ? TRANSCRIPTION_PROVIDER_DRAIN_MS
+      ? TRANSCRIPTION_ACKNOWLEDGED_DRAIN_MS
       : Math.max(0, this.lastAudioAt + TRANSCRIPTION_PROVIDER_DRAIN_MS - now);
     const drain: ProviderDrain = {
       session,
@@ -1738,12 +1741,29 @@ export class TranscriptRoom {
    * Saves the drained lines still on screen, unless a final already landed,
    * in one snapshot write, and only then lets the drain go.
    */
-  private async finishProviderDrain(drain: ProviderDrain): Promise<void> {
+  private async finishProviderDrain(
+    drain: ProviderDrain,
+    reason: "timed out" | "failed" = "timed out",
+  ): Promise<void> {
     if (this.providerDrains.get(drain.epoch) !== drain) return;
     let saved = false;
     for (const segment of drain.partials.values()) {
       if (this.hasFinalSegment(segment.itemId)) continue;
       saved = this.recordFinalSegment(segment, "") || saved;
+    }
+    // Acknowledged audio with no text yet is never dropped silently: its
+    // place keeps a marker that speech there was not captioned.
+    let gaps = 0;
+    for (const segment of drain.reserved.values()) {
+      if (this.hasFinalSegment(segment.itemId) || drain.partials.has(segment.itemId)) continue;
+      if (this.recordFinalSegment(segment, TRANSCRIPTION_GAP_MARKER)) gaps += 1;
+    }
+    if (gaps > 0) {
+      console.warn(
+        `[Transcript] A replaced provider ${reason} with ${gaps} acknowledged line(s) not captioned; recorded a gap.`,
+        JSON.stringify({ epoch: drain.epoch, provider: drain.session.provider }),
+      );
+      saved = true;
     }
     if (saved) {
       await this.persist();

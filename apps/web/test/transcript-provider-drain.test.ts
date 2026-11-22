@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TranscriptRoom } from "../transcript-worker/src/room";
+import {
+  TRANSCRIPTION_ACKNOWLEDGED_DRAIN_MS,
+  TRANSCRIPTION_GAP_MARKER,
+} from "../transcript-worker/src/constants";
 import type { Env, Viewer } from "../transcript-worker/src/types";
 
 const { lookup } = vi.hoisted(() => ({ lookup: vi.fn() }));
@@ -271,7 +275,7 @@ describe("switching the caption language keeps speech the old provider already h
     await settle();
 
     await switchTo("hi");
-    await vi.advanceTimersByTimeAsync(15_000);
+    await vi.advanceTimersByTimeAsync(TRANSCRIPTION_ACKNOWLEDGED_DRAIN_MS + 100);
 
     expect(savedTexts()).toEqual(["Friday"]);
     expect(before.closed).toBe(true);
@@ -450,7 +454,7 @@ describe("drain cases reproduced across review rounds", () => {
 
     await switchTo("hi");
     const finishing = snapshotCount();
-    await vi.advanceTimersByTimeAsync(15_000);
+    await vi.advanceTimersByTimeAsync(TRANSCRIPTION_ACKNOWLEDGED_DRAIN_MS + 100);
 
     expect(snapshotCount()).toBeGreaterThan(finishing);
     expect(await restartedTexts(finishing)).toEqual(["First line", "Second line"]);
@@ -886,5 +890,51 @@ describe("one place per line, fixed at commit", () => {
     }
 
     expect(savedTexts()).toEqual([...oldIds, ...newIds].map((id) => `${id}.`));
+  });
+});
+
+describe("a switch never drops audio the old provider acknowledged", () => {
+  it("keeps an acknowledged line whose final arrives 15 s after the switch, in speaking order", async () => {
+    vi.useFakeTimers();
+    const { sockets, start, switchTo, speak, commit, savedTexts } = await fixture(OPENAI);
+    await start("fr");
+    const french = sockets[0];
+    await speak();
+    await commit();
+    french.emit(openAiCommitted("fr_1"));
+    await settle();
+
+    await switchTo("de");
+    const german = sockets[1];
+    await speak();
+    await commit();
+    german.emit(openAiCommitted("de_1"));
+    german.emit(openAiFinal("de_1", "German line."));
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(french.closed).toBe(false);
+    french.emit(openAiFinal("fr_1", "French line."));
+    await settle();
+
+    expect(savedTexts()).toEqual(["French line.", "German line."]);
+    expect(french.closed).toBe(true);
+  });
+
+  it("records a gap, and logs it, when an acknowledged line never arrives before the bound", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { sockets, start, switchTo, speak, commit, savedTexts } = await fixture(OPENAI);
+    await start("fr");
+    const french = sockets[0];
+    await speak();
+    await commit();
+    french.emit(openAiCommitted("fr_1"));
+    await settle();
+
+    await switchTo("de");
+    await vi.advanceTimersByTimeAsync(TRANSCRIPTION_ACKNOWLEDGED_DRAIN_MS + 100);
+
+    expect(savedTexts()).toEqual([TRANSCRIPTION_GAP_MARKER]);
+    expect(french.closed).toBe(true);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("not captioned"), expect.anything());
   });
 });

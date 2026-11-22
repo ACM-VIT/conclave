@@ -7,6 +7,8 @@ import type {
 } from "../transcript-worker/src/transcription/types";
 import type { Env, Viewer } from "../transcript-worker/src/types";
 import type { TranscriptSessionState } from "@conclave/meeting-core/transcript-types";
+import { TRANSCRIPTION_ACKNOWLEDGED_DRAIN_MS } from "../transcript-worker/src/constants";
+
 
 const { connectProvider, lookup } = vi.hoisted(() => ({
   connectProvider: vi.fn(),
@@ -132,7 +134,7 @@ describe("switching the caption language mid-sentence", () => {
 
     await room.startSession(viewer, { ...roomSession, type: "session.takeover", language: "hi" });
     expect(savedTexts(room)).toEqual([]);
-    await vi.advanceTimersByTimeAsync(15_000);
+    await vi.advanceTimersByTimeAsync(TRANSCRIPTION_ACKNOWLEDGED_DRAIN_MS + 100);
 
     expect(savedTexts(room)).toEqual(["The release date is"]);
     expect(before.close).toHaveBeenCalled();
