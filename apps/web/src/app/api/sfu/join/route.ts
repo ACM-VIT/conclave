@@ -51,8 +51,6 @@ type JoinRequestBody = {
    */
   guestId?: string | null;
   guestGrant?: string | null;
-  /** The token of this tab's previous join for this room, if it has one. */
-  guestSeatToken?: string | null;
   joinMode?: "meeting" | "webinar_attendee";
   user?: {
     id?: string | null;
@@ -665,9 +663,7 @@ export async function POST(request: Request) {
           sfuSecret: secret,
           seat: { clientId, roomId, sessionId },
           request,
-          guestId: body.guestId,
-          guestGrant: body.guestGrant,
-          guestSeatToken: body.guestSeatToken,
+          body,
         });
   if (guest && !guest.ok) {
     return NextResponse.json({ error: guest.error }, { status: guest.status });
@@ -740,9 +736,7 @@ export async function POST(request: Request) {
       clientId,
       sessionId,
       joinMode,
-      ...(guest?.guestProof ? { guestProof: guest.guestProof } : {}),
-      ...(guest?.guestRoom ? { guestRoom: guest.guestRoom } : {}),
-      ...(guest?.guestWas ? { guestWas: guest.guestWas } : {}),
+      ...guest?.claims,
     },
     secret,
     { expiresIn: "12h" },

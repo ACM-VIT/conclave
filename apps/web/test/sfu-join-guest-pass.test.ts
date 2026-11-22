@@ -2,7 +2,7 @@ import jwt from "jsonwebtoken";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { POST as askForPass } from "../src/app/api/guest-pass/route";
 import { POST } from "../src/app/api/sfu/join/route";
-import { guestPassCookieName } from "../src/lib/guest-pass";
+import { guestPassCookiePrefix } from "../src/lib/guest-pass";
 
 const { getSession } = vi.hoisted(() => ({ getSession: vi.fn() }));
 vi.mock("@/lib/auth", () => ({ auth: { api: { getSession } } }));
@@ -40,7 +40,7 @@ type JoinClaims = {
   email?: string;
   guestProof?: string;
   guestRoom?: string;
-  guestWas?: { userKey: string; guestProof: string };
+  guestWas?: Array<{ userKey: string; guestProof: string }>;
 };
 type JoinResult = {
   status: number;
@@ -81,7 +81,10 @@ const browser = () => {
       setCookies,
     };
   };
-  return { join, jar };
+  // The pass cookies in the jar, as `name=value` pairs.
+  const passes = () =>
+    [...jar].filter(([name]) => name.startsWith(guestPassCookiePrefix(SECRET)));
+  return { join, jar, passes };
 };
 
 describe("guest identity", () => {
@@ -199,7 +202,7 @@ describe("guest pass cookie", () => {
     const [cookie] = (await browser().join({ sessionId: "tab-1", guestId: "" })).setCookies;
     const attributes = cookie.split("; ").slice(1);
 
-    expect(cookie.startsWith(`${guestPassCookieName(SECRET)}=`)).toBe(true);
+    expect(cookie.startsWith(guestPassCookiePrefix(SECRET))).toBe(true);
     expect(attributes).toEqual(expect.arrayContaining(["HttpOnly", "SameSite=Lax", "Path=/"]));
     expect(attributes.some((attribute) => /^Max-Age=\d+$/.test(attribute))).toBe(true);
   });
@@ -229,13 +232,13 @@ describe("guest pass cookie", () => {
   ])("is neither read nor replaced by %s", async (_label, headers) => {
     const tab = browser();
     const mine = await tab.join({ sessionId: "tab-1", guestId: "" });
-    const passBefore = tab.jar.get(guestPassCookieName(SECRET));
+    const jarBefore = [...tab.jar];
 
     const forged = await tab.join({ sessionId: "tab-1", guestId: "" }, headers);
     expect(forged.status).toBe(200);
     expect(forged.setCookies).toHaveLength(0);
     expect(forged.claims!.userId).not.toBe(mine.claims!.userId);
-    expect(tab.jar.get(guestPassCookieName(SECRET))).toBe(passBefore);
+    expect([...tab.jar]).toEqual(jarBefore);
 
     const after = await tab.join({ sessionId: "tab-1", guestId: mine.body.guestId });
     expect(after.claims!.userId).toBe(mine.claims!.userId);
@@ -255,18 +258,20 @@ describe("guest pass cookie", () => {
 
   it("leaves the pass of a deployment with another secret alone", async () => {
     const tab = browser();
-    tab.jar.set(guestPassCookieName("another-stack-secret"), "another-stack-pass");
+    const theirs = `${guestPassCookiePrefix("another-stack-secret")}0a1b2c3d`;
+    tab.jar.set(theirs, "another-stack-pass");
 
     const joined = await tab.join({ sessionId: "tab-1", guestId: "" });
-    expect(joined.setCookies[0].startsWith(`${guestPassCookieName(SECRET)}=`)).toBe(true);
-    expect(tab.jar.get(guestPassCookieName("another-stack-secret"))).toBe("another-stack-pass");
+    expect(joined.setCookies[0].startsWith(guestPassCookiePrefix(SECRET))).toBe(true);
+    expect(joined.body.guestGrant).toEqual(expect.any(String));
+    expect(tab.jar.get(theirs)).toBe("another-stack-pass");
   });
 
   it("is accepted when a cookie jar sends it back in quotes", async () => {
     const app = browser();
     const first = await app.join({ sessionId: "native-session", guestId: "" });
-    const name = guestPassCookieName(SECRET);
-    app.jar.set(name, `"${app.jar.get(name)}"`);
+    const [[name, pass]] = app.passes();
+    app.jar.set(name, `"${pass}"`);
     app.jar.set("$Version", '"1"');
 
     const again = await app.join({ sessionId: "native-session", guestId: "" });
@@ -281,7 +286,7 @@ describe("guest pass cookie", () => {
       audience: "conclave-guest-pass",
     });
     const intruder = browser();
-    intruder.jar.set(guestPassCookieName(SECRET), forged);
+    intruder.jar.set(`${guestPassCookiePrefix(SECRET)}0a1b2c3d`, forged);
 
     const attempt = await intruder.join({ sessionId: "tab-1", guestId: first.body.guestId });
     expect(attempt.claims!.userId).not.toBe(first.claims!.userId);
@@ -291,7 +296,7 @@ describe("guest pass cookie", () => {
   it("does not accept an SFU join token as a pass", async () => {
     const first = await browser().join({ sessionId: "tab-1", guestId: "" });
     const intruder = browser();
-    intruder.jar.set(guestPassCookieName(SECRET), first.body.token!);
+    intruder.jar.set(`${guestPassCookiePrefix(SECRET)}0a1b2c3d`, first.body.token!);
 
     const attempt = await intruder.join({ sessionId: "tab-1", guestId: "" });
     expect(attempt.claims!.userId).not.toBe(first.claims!.userId);
@@ -391,8 +396,9 @@ describe("the pass a browser joins with", () => {
 });
 
 describe("two tabs of a new browser whose first joins cross", () => {
-  // Both calls leave before either answer sets the cookie, so each tab is
-  // given its own pass and the browser keeps the one that was set last.
+  // Both calls leave before either answer sets a cookie, so each tab is
+  // given its own pass. Each pass has its own cookie, and the browser keeps
+  // both. It goes by the lower one.
   const crossedJoins = async () => {
     const tabs = browser();
     const [one, two] = await Promise.all([
@@ -400,71 +406,130 @@ describe("two tabs of a new browser whose first joins cross", () => {
       tabs.join({ roomId: "second-room", sessionId: "tab-2", guestId: "", isHost: true }),
     ]);
     expect(two.body.guestId).not.toBe(one.body.guestId);
-    const kept = (await tabs.join({ roomId: "probe", sessionId: "probe", guestId: "" })).body.guestId;
-    const [winner, loser] = kept === one.body.guestId ? [one, two] : [two, one];
+    const [stays, moves] = one.body.guestId! < two.body.guestId! ? [one, two] : [two, one];
     const seat = (tab: JoinResult) =>
       tab === one
         ? { roomId: "first-room", sessionId: "tab-1" }
         : { roomId: "second-room", sessionId: "tab-2" };
-    return { tabs, winner, loser, seat };
+    return { tabs, stays, moves, seat };
   };
-
-  it("move the tab that lost to the browser's pass, with proof of the seat it held", async () => {
-    const { tabs, loser, seat } = await crossedJoins();
-
-    const reloaded = await tabs.join({
-      ...seat(loser),
-      guestId: "",
-      guestSeatToken: loser.body.token,
-    });
-
-    expect(reloaded.claims!.userId).not.toBe(loser.claims!.userId);
-    expect(reloaded.claims!.guestWas).toEqual({
-      userKey: loser.claims!.userId,
-      guestProof: loser.claims!.guestProof,
-    });
+  const seatOf = (tab: JoinResult) => ({
+    userKey: tab.claims!.userId,
+    guestProof: tab.claims!.guestProof,
   });
 
-  it("leave the tab whose pass the browser kept as it is", async () => {
-    const { tabs, winner, seat } = await crossedJoins();
+  it("leave the browser holding both passes, and going by one of them in every tab", async () => {
+    const { tabs, stays } = await crossedJoins();
 
-    const reloaded = await tabs.join({
-      ...seat(winner),
-      guestId: "",
-      guestSeatToken: winner.body.token,
-    });
+    const third = await tabs.join({ roomId: "third-room", sessionId: "tab-3", guestId: "" });
+    const fourth = await tabs.join({ roomId: "third-room", sessionId: "tab-4", guestId: "" });
 
-    expect(reloaded.claims!.userId).toBe(winner.claims!.userId);
-    expect(reloaded.claims!.guestWas).toBeUndefined();
+    expect(tabs.passes()).toHaveLength(2);
+    expect(third.body.guestId).toBe(stays.body.guestId);
+    expect(fourth.claims!.guestProof).toBe(stays.claims!.guestProof);
+    expect(third.body.guestGrant).toBeUndefined();
+  });
+
+  it("move the tab on the other pass to the browser's pass, and name the seat it held", async () => {
+    const { tabs, stays, moves, seat } = await crossedJoins();
+
+    const reloaded = await tabs.join({ ...seat(moves), guestId: "" });
+
+    expect(reloaded.claims!.userId).not.toBe(moves.claims!.userId);
+    expect(reloaded.claims!.guestProof).toBe(stays.claims!.guestProof);
+    expect(reloaded.claims!.guestWas).toEqual([seatOf(moves)]);
+  });
+
+  it("name that seat on every call, whatever became of the call before", async () => {
+    const { tabs, moves, seat } = await crossedJoins();
+
+    const neverReachedTheSfu = await tabs.join({ ...seat(moves), guestId: "" });
+    const retried = await tabs.join({ ...seat(moves), guestId: "" });
+
+    expect(neverReachedTheSfu.claims!.guestWas).toEqual([seatOf(moves)]);
+    expect(retried.claims!.guestWas).toEqual([seatOf(moves)]);
+  });
+
+  it("leave the tab already on the browser's pass on its key", async () => {
+    const { tabs, stays, moves, seat } = await crossedJoins();
+
+    const reloaded = await tabs.join({ ...seat(stays), guestId: "" });
+
+    expect(reloaded.claims!.userId).toBe(stays.claims!.userId);
+    expect(reloaded.claims!.guestWas).toEqual([
+      { userKey: expect.stringMatching(/^guest-gp_/) as unknown, guestProof: moves.claims!.guestProof },
+    ]);
+    expect(reloaded.claims!.guestWas![0].userKey).not.toBe(stays.claims!.userId);
   });
 
   it.each([
     ["another room", { roomId: "third-room" }],
     ["another tab", { sessionId: "tab-9" }],
     ["another deployment", { clientId: "internal" }],
-  ])("do not let a token carry a seat over to %s", async (_label, elsewhere) => {
-    const { tabs, loser, seat } = await crossedJoins();
+  ])("name no seat the tab held when the call is for %s", async (_label, elsewhere) => {
+    const { tabs, moves, seat } = await crossedJoins();
 
-    const attempt = await tabs.join({
-      ...seat(loser),
-      ...elsewhere,
+    const attempt = await tabs.join({ ...seat(moves), ...elsewhere, guestId: "" });
+
+    expect(attempt.claims!.guestWas!.map((was) => was.userKey)).not.toContain(moves.claims!.userId);
+  });
+
+  it("name nothing once the other pass is gone from the browser", async () => {
+    const { tabs, stays, moves, seat } = await crossedJoins();
+    const kept = tabs.passes().filter(([, pass]) =>
+      (jwt.decode(pass) as { gid: string }).gid === stays.body.guestId);
+    for (const [name] of tabs.passes()) tabs.jar.delete(name);
+    for (const [name, pass] of kept) tabs.jar.set(name, pass);
+
+    const reloaded = await tabs.join({ ...seat(moves), guestId: "" });
+
+    expect(reloaded.claims!.guestWas).toBeUndefined();
+  });
+});
+
+describe("a copy of a guest's join token in another browser", () => {
+  it("is not taken for the guest's seat under that browser's pass", async () => {
+    const guest = await browser().join({ sessionId: "tab-1", guestId: "", isHost: true });
+    const copier = browser();
+
+    const attempt = await copier.join({
+      sessionId: "tab-1",
       guestId: "",
-      guestSeatToken: loser.body.token,
+      guestSeatToken: guest.body.token,
+      guestGrant: guest.body.token,
     });
 
+    expect(attempt.claims!.userId).not.toBe(guest.claims!.userId);
+    expect(attempt.claims!.guestProof).not.toBe(guest.claims!.guestProof);
     expect(attempt.claims!.guestWas).toBeUndefined();
   });
 
-  it("do not accept a token the SFU would not accept as proof of an earlier seat", async () => {
-    const { tabs, loser, seat } = await crossedJoins();
-    const forged = jwt.sign(
-      { ...loser.claims, userId: "guest-gp_AAAAAAAAAAAAAAAAAAAAAA" },
-      "not-the-sfu-secret",
-    );
+  it("is not a pass when it is planted as a cookie", async () => {
+    const guest = await browser().join({ sessionId: "tab-1", guestId: "" });
+    const copier = browser();
+    await copier.join({ sessionId: "tab-1", guestId: "" });
+    copier.jar.set(`${guestPassCookiePrefix(SECRET)}0a1b2c3d`, guest.body.token!);
 
-    const attempt = await tabs.join({ ...seat(loser), guestId: "", guestSeatToken: forged });
+    const attempt = await copier.join({ sessionId: "tab-1", guestId: "" });
 
     expect(attempt.claims!.guestWas).toBeUndefined();
+  });
+});
+
+describe("a browser that holds more passes than it could have been given", () => {
+  it("names at most three other seats in a token", async () => {
+    const tab = browser();
+    for (let extra = 0; extra < 6; extra += 1) {
+      const answer = await askForPass(new Request("http://localhost/api/guest-pass", { method: "POST" }));
+      const [pair] = answer.headers.getSetCookie()[0].split(";");
+      tab.jar.set(pair.slice(0, pair.indexOf("=")), pair.slice(pair.indexOf("=") + 1));
+    }
+
+    const joined = await tab.join({ sessionId: "tab-1", guestId: "" });
+
+    expect(tab.passes()).toHaveLength(6);
+    expect(joined.claims!.guestWas).toHaveLength(3);
+    expect(joined.body.guestGrant).toBeUndefined();
   });
 });
 
@@ -472,7 +537,7 @@ describe("a page that asks for the browser's pass as it loads", () => {
   const ask = (headers: Record<string, string> = {}) =>
     askForPass(new Request("http://localhost/api/guest-pass", { method: "POST", headers }));
   const passFrom = (response: Response) =>
-    response.headers.getSetCookie().find((cookie) => cookie.startsWith(guestPassCookieName(SECRET)));
+    response.headers.getSetCookie().find((cookie) => cookie.startsWith(guestPassCookiePrefix(SECRET)));
   const keep = (tab: ReturnType<typeof browser>, cookie: string) => {
     const [pair] = cookie.split(";");
     tab.jar.set(pair.slice(0, pair.indexOf("=")), pair.slice(pair.indexOf("=") + 1));
@@ -490,7 +555,7 @@ describe("a page that asks for the browser's pass as it loads", () => {
     const otherTab = await tab.join({ roomId: "second-room", sessionId: "tab-2", guestId: "" });
 
     expect(first.body.guestGrant).toBeUndefined();
-    expect(first.setCookies.map((cookie) => cookie.split(";")[0])).toEqual([pass!.split(";")[0]]);
+    expect(first.setCookies.map((cookie) => cookie.split("=")[0])).toEqual([pass!.split("=")[0]]);
     expect(otherTab.body.guestId).toBe(first.body.guestId);
   });
 
@@ -506,7 +571,7 @@ describe("a page that asks for the browser's pass as it loads", () => {
   });
 
   it("is given a new pass in place of one that does not verify", async () => {
-    const cookie = `${guestPassCookieName(SECRET)}=not-a-pass`;
+    const cookie = `${guestPassCookiePrefix(SECRET)}0a1b2c3d=not-a-pass`;
 
     expect(passFrom(await ask({ "sec-fetch-site": "same-origin", cookie }))).toMatch(/HttpOnly/);
   });
@@ -518,7 +583,7 @@ describe("a page that asks for the browser's pass as it loads", () => {
     },
   );
 
-  it("leaves two tabs that asked at once on the pass the browser kept", async () => {
+  it("leaves two tabs that asked at once on one pass, with both in the browser", async () => {
     const [first, second] = await Promise.all([ask(), ask()]);
     const tabs = browser();
     keep(tabs, passFrom(first)!);
@@ -528,6 +593,7 @@ describe("a page that asks for the browser's pass as it loads", () => {
     const two = await tabs.join({ roomId: "second-room", sessionId: "tab-2", guestId: "", isHost: true });
 
     expect(passFrom(first)).not.toBe(passFrom(second));
+    expect(tabs.passes()).toHaveLength(2);
     expect(two.body.guestId).toBe(one.body.guestId);
     expect(two.claims!.guestProof).toBe(one.claims!.guestProof);
   });

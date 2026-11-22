@@ -1,67 +1,70 @@
-const SEAT_TOKENS_STORAGE_KEY = "conclave:guest-seat-tokens";
-const MAX_STORED_SEAT_TOKENS = 20;
+import { z } from "zod";
+
 const GUEST_PASS_REQUEST_TIMEOUT_MS = 5000;
+const GUEST_PASS_LOCK_NAME = "conclave:guest-pass";
+const GUEST_PASS_LOCK_TIMEOUT_MS = 10000;
 
-type SeatTokens = Record<string, string>;
-
-const readSeatTokens = (): SeatTokens => {
-  try {
-    const raw = window.sessionStorage.getItem(SEAT_TOKENS_STORAGE_KEY);
-    const parsed: unknown = raw ? JSON.parse(raw) : null;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as SeatTokens)
-      : {};
-  } catch {
-    return {};
-  }
-};
-
-const storeSeatToken = (seat: string, token: string): void => {
-  try {
-    const { [seat]: _replaced, ...others } = readSeatTokens();
-    const kept = Object.entries(others).slice(1 - MAX_STORED_SEAT_TOKENS);
-    window.sessionStorage.setItem(
-      SEAT_TOKENS_STORAGE_KEY,
-      JSON.stringify({ ...Object.fromEntries(kept), [seat]: token }),
-    );
-  } catch {
-    // Without session storage a reload starts the tab over as a new guest.
-  }
-};
-
+/**
+ * What a client adds to a join request so the server picks its guest
+ * identity: an empty `guestId`, and the grant from the last answer.
+ */
 export type GuestPassFields = {
   guestId: "";
   guestGrant?: string;
-  guestSeatToken?: string;
 };
 
-type JoinAnswer = { token: string; guestId?: string; guestGrant?: string };
+/** The guest side of the join route's answer. An account's answer has none. */
+const guestJoinAnswerSchema = z.object({
+  guestId: z.string().min(1),
+  guestGrant: z.string().min(1).optional(),
+});
+
+const requestGuestPass = async (): Promise<void> => {
+  await fetch("/api/guest-pass", {
+    method: "POST",
+    signal: AbortSignal.timeout(GUEST_PASS_REQUEST_TIMEOUT_MS),
+  });
+};
 
 /**
  * How a page asks the server to give its browser a guest pass. A page that
  * was rendered for a signed-in account has no use for one and asks nothing.
+ *
+ * Tabs of one browser take turns. Two tabs that load at once would otherwise
+ * both ask before either has a cookie, and each be given a pass. With the
+ * lock, the second request carries the cookie the first answer set. A tab
+ * that cannot get the lock in time, or a browser without Web Locks, asks
+ * anyway: the join route then settles which pass the browser goes by.
  */
 export const guestPassRequestFor =
   (user?: { id?: string; email?: string | null }) =>
   async (): Promise<void> => {
     if (user?.id || user?.email) return;
-    await fetch("/api/guest-pass", {
-      method: "POST",
-      signal: AbortSignal.timeout(GUEST_PASS_REQUEST_TIMEOUT_MS),
-    });
+    const locks = typeof navigator === "undefined" ? undefined : navigator.locks;
+    if (!locks) return requestGuestPass();
+    let asked = false;
+    try {
+      await locks.request(
+        GUEST_PASS_LOCK_NAME,
+        { signal: AbortSignal.timeout(GUEST_PASS_LOCK_TIMEOUT_MS) },
+        () => {
+          asked = true;
+          return requestGuestPass();
+        },
+      );
+    } catch (error) {
+      if (asked) throw error;
+      await requestGuestPass();
+    }
   };
 
 /**
  * The guest side of one page's join calls.
  *
- * The page never names a pass. The join route picks it: the pass in the
- * browser's cookie, or a new one. Two things travel with each call:
- *
- * - the grant from the last answer, which stands in for the cookie in a
- *   browser that has not sent it back yet, or never will;
- * - the token of this tab's last join for the same room. Tabs keep it across
- *   a reload. It is how a tab that joined before the browser's pass settled
- *   keeps its seat, and what the seat held, once it moves to that pass.
+ * The page never names a pass. The join route picks it from the browser's
+ * cookies. One thing travels with each call: the grant from the last answer,
+ * which stands in for the cookie in a browser that has not sent it back yet,
+ * or never will.
  *
  * Calls go one at a time within the page, so a second call always carries
  * what the first one was answered with. `askForPass` goes ahead of them all:
@@ -80,22 +83,17 @@ export const createGuestPassSession = (askForPass: () => Promise<unknown>) => {
     queue = queue.then(askForPass).catch(() => undefined);
   };
 
-  const join = <Answer extends JoinAnswer>(
-    seat: string,
+  const join = <Answer>(
     send: (fields: GuestPassFields) => Promise<Answer>,
   ): Promise<Answer> => {
     askForPassOnce();
     const call = async () => {
-      const guestSeatToken = readSeatTokens()[seat];
       const answer = await send({
         guestId: "",
         ...(grant ? { guestGrant: grant } : {}),
-        ...(guestSeatToken ? { guestSeatToken } : {}),
       });
-      if (answer.guestId) {
-        grant = answer.guestGrant;
-        storeSeatToken(seat, answer.token);
-      }
+      const issued = guestJoinAnswerSchema.safeParse(answer).data;
+      if (issued) grant = issued.guestGrant;
       return answer;
     };
     const result = queue.then(call, call);

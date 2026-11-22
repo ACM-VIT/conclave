@@ -1,17 +1,47 @@
 import { createHmac, randomBytes } from "node:crypto";
 import jwt from "jsonwebtoken";
+import { z } from "zod";
+import {
+  issueRoomScopedClaims,
+  issueSelfNamedGuestClaims,
+  MAX_OTHER_GUEST_SEATS,
+  type RoomScopedClaims,
+  type SelfNamedGuestClaims,
+} from "@conclave/meeting-core/guest-join-claims";
 
 const PASS_AUDIENCE = "conclave-guest-pass";
 const GRANT_AUDIENCE = "conclave-guest-grant";
 const PASS_TTL_SECONDS = 30 * 24 * 60 * 60;
 const GRANT_TTL_SECONDS = 24 * 60 * 60;
+// More pass cookies than a browser can come to hold by honest means.
+const MAX_PASSES_READ = 8;
 
 const GUEST_ID_PREFIX = "gp_";
-const GUEST_ID_PATTERN = /^gp_[A-Za-z0-9_-]{22}$/;
 const GUEST_SESSION_ID_PATTERN = /^[^\u0000-\u001f\u007f#@]{1,128}$/;
 
-const isGuestId = (value: unknown): value is string =>
-  typeof value === "string" && GUEST_ID_PATTERN.test(value);
+const guestPassIdSchema = z
+  .string()
+  .regex(/^gp_[A-Za-z0-9_-]{22}$/)
+  .brand<"GuestPassId">();
+type GuestPassId = z.infer<typeof guestPassIdSchema>;
+
+/** What a pass cookie and a grant carry once their signature checks out. */
+const passClaimsSchema = z.object({ gid: guestPassIdSchema });
+
+/**
+ * The guest side of a join request. A client that sends `guestId` takes its
+ * identity from this server. `guestGrant` stands in for a pass cookie the
+ * client could not send, and a malformed one counts as none.
+ */
+const guestJoinRequestSchema = z
+  .object({
+    guestId: z.unknown(),
+    guestGrant: z.string().optional().catch(undefined),
+  })
+  .transform(({ guestId, guestGrant }) => ({
+    takesIdentityFromServer: guestId !== undefined,
+    guestGrant,
+  }));
 
 /**
  * Clients that predate guest passes are `guest-<sessionId>`. That key must
@@ -28,22 +58,33 @@ const usesSecureCookie = (): boolean => process.env.NODE_ENV === "production";
 const signingKey = (sfuSecret: string): Buffer =>
   createHmac("sha256", sfuSecret).update("conclave-guest-pass-v1").digest();
 
+const keyedHash = (sfuSecret: string, input: string): Buffer =>
+  createHmac("sha256", signingKey(sfuSecret)).update(input).digest();
+
 /**
- * The __Host- prefix stops a sibling subdomain from planting its own pass.
- * The suffix is per secret: stacks on localhost share one cookie jar across
- * ports, and a shared name would let each replace the other's pass.
+ * Every pass has a cookie of its own, and all of them start with this.
+ *
+ * The __Host- prefix stops a sibling subdomain from planting a pass. The
+ * scope is per secret: stacks on localhost share one cookie jar across
+ * ports, and a shared name would let each read the other's cookies as its
+ * own.
  */
-export const guestPassCookieName = (sfuSecret: string): string => {
-  const scope = createHmac("sha256", signingKey(sfuSecret))
-    .update("cookie-name")
-    .digest("hex")
-    .slice(0, 8);
-  return `${usesSecureCookie() ? "__Host-" : ""}conclave-guest-${scope}`;
+export const guestPassCookiePrefix = (sfuSecret: string): string => {
+  const scope = keyedHash(sfuSecret, "cookie-name").toString("hex").slice(0, 8);
+  return `${usesSecureCookie() ? "__Host-" : ""}conclave-guest-${scope}-`;
 };
+
+// One cookie per pass. Two responses that each give a new browser a pass
+// then leave it holding both, where one shared name would let the later
+// response erase the earlier pass, and with it the only thing that ties the
+// browser to the seats it took under that pass.
+const passCookieName = (sfuSecret: string, guestId: GuestPassId): string =>
+  guestPassCookiePrefix(sfuSecret) +
+  keyedHash(sfuSecret, `cookie-slot:${guestId}`).toString("hex").slice(0, 8);
 
 const sign = (
   sfuSecret: string,
-  guestId: string,
+  guestId: GuestPassId,
   audience: string,
   ttlSeconds: number,
 ): string =>
@@ -53,34 +94,32 @@ const sign = (
     expiresIn: ttlSeconds,
   });
 
-const verify = (
+const readPass = (
   sfuSecret: string,
-  token: unknown,
+  token: string | undefined,
   audience: string,
-): string | null => {
-  if (typeof token !== "string" || !token) return null;
+): GuestPassId | null => {
+  if (!token) return null;
   try {
-    const payload = jwt.verify(token, signingKey(sfuSecret), {
-      algorithms: ["HS256"],
-      audience,
-    });
-    const guestId: unknown = typeof payload === "object" ? payload.gid : null;
-    return isGuestId(guestId) ? guestId : null;
+    return passClaimsSchema.parse(
+      jwt.verify(token, signingKey(sfuSecret), {
+        algorithms: ["HS256"],
+        audience,
+      }),
+    ).gid;
   } catch {
     return null;
   }
 };
 
-const mintGuestId = (): string =>
-  `gp_${randomBytes(16).toString("base64url")}`;
+const mintGuestId = (): GuestPassId =>
+  guestPassIdSchema.parse(`gp_${randomBytes(16).toString("base64url")}`);
 
-// What the SFU binds a guest identity to. Derived from the pass, never shown
-// to other participants. It is the same in every room and tab, which is how
-// the SFU tells that two seats belong to one guest.
-const proofOf = (sfuSecret: string, guestId: string): string =>
-  createHmac("sha256", signingKey(sfuSecret))
-    .update(`proof:${guestId}`)
-    .digest("base64url");
+// What the SFU knows a guest by. Derived from the pass, never shown to other
+// participants. It is the same in every room and tab, which is how the SFU
+// tells that two seats belong to one guest.
+const proofOf = (sfuSecret: string, guestId: GuestPassId): string =>
+  keyedHash(sfuSecret, `proof:${guestId}`).toString("base64url");
 
 export type GuestSeat = {
   clientId: string;
@@ -94,79 +133,60 @@ export type GuestSeat = {
  * it. As a keyed hash, the keys one browser gets in two rooms or two tabs
  * cannot be linked, and nobody can produce a key without the pass.
  */
-const seatKeyOf = (sfuSecret: string, guestId: string, seat: GuestSeat): string => {
-  const digest = createHmac("sha256", signingKey(sfuSecret))
-    .update(
-      JSON.stringify(["seat", guestId, seat.clientId, seat.roomId, seat.sessionId]),
-    )
-    .digest("base64url");
+const seatKeyOf = (
+  sfuSecret: string,
+  guestId: GuestPassId,
+  seat: GuestSeat,
+): string => {
+  const digest = keyedHash(
+    sfuSecret,
+    JSON.stringify(["seat", guestId, seat.clientId, seat.roomId, seat.sessionId]),
+  ).toString("base64url");
   return `guest-${GUEST_ID_PREFIX}${digest.slice(0, 22)}`;
 };
 
-// A cookie value may arrive in double quotes (RFC 6265). The Android app's
-// cookie jar sends a cookie that was set with Max-Age back that way.
-const readCookie = (header: string | null, name: string): string | undefined => {
-  for (const part of header?.split(";") ?? []) {
+/**
+ * Every pass the browser holds, lowest id first. The first is the pass the
+ * browser goes by: the order depends on nothing but the passes themselves,
+ * so every tab and every request picks the same one.
+ *
+ * A cookie value may arrive in double quotes (RFC 6265). The Android app's
+ * cookie jar sends a cookie that was set with Max-Age back that way.
+ */
+const readBrowserPasses = (
+  sfuSecret: string,
+  cookieHeader: string | null,
+): GuestPassId[] => {
+  const prefix = guestPassCookiePrefix(sfuSecret);
+  const passes = new Set<GuestPassId>();
+  for (const part of cookieHeader?.split(";") ?? []) {
     const separator = part.indexOf("=");
-    if (separator > 0 && part.slice(0, separator).trim() === name) {
-      return part
+    if (separator <= 0 || !part.slice(0, separator).trim().startsWith(prefix)) {
+      continue;
+    }
+    const pass = readPass(
+      sfuSecret,
+      part
         .slice(separator + 1)
         .trim()
-        .replace(/^"(.*)"$/, "$1");
-    }
+        .replace(/^"(.*)"$/, "$1"),
+      PASS_AUDIENCE,
+    );
+    if (pass) passes.add(pass);
+    if (passes.size === MAX_PASSES_READ) break;
   }
-  return undefined;
+  return [...passes].sort();
 };
 
-const passCookie = (sfuSecret: string, guestId: string): string =>
+const passCookie = (sfuSecret: string, guestId: GuestPassId): string =>
   [
-    `${guestPassCookieName(sfuSecret)}=${sign(sfuSecret, guestId, PASS_AUDIENCE, PASS_TTL_SECONDS)}`,
+    `${passCookieName(sfuSecret, guestId)}=${sign(sfuSecret, guestId, PASS_AUDIENCE, PASS_TTL_SECONDS)}`,
     "Path=/",
     `Max-Age=${PASS_TTL_SECONDS}`,
     "HttpOnly",
     "SameSite=Lax",
     ...(usesSecureCookie() ? ["Secure"] : []),
   ].join("; ");
-
-/**
- * The seat a tab held before, read from the join token of its previous join
- * for this room. It matters when the browser's pass has changed since: two
- * tabs can each be given a pass before either has a cookie, and the browser
- * keeps only one. The tab then joins under the pass in the cookie, and this
- * tells the SFU which seat it was, with that seat's proof, so what the seat
- * held moves to the new key.
- */
-const formerSeatOf = (
-  sfuSecret: string,
-  previousToken: unknown,
-  seat: GuestSeat,
-  userKey: string,
-): { userKey: string; guestProof: string } | undefined => {
-  if (typeof previousToken !== "string" || !previousToken) return undefined;
-  let claims: Record<string, unknown>;
-  try {
-    const payload = jwt.verify(previousToken, sfuSecret, {
-      algorithms: ["HS256"],
-    });
-    if (typeof payload !== "object") return undefined;
-    claims = payload;
-  } catch {
-    return undefined;
-  }
-  const { userId, guestProof } = claims;
-  if (
-    typeof userId !== "string" ||
-    typeof guestProof !== "string" ||
-    !userId.startsWith(`guest-${GUEST_ID_PREFIX}`) ||
-    userId === userKey ||
-    claims.guestRoom !== seat.roomId ||
-    claims.clientId !== seat.clientId ||
-    claims.sessionId !== seat.sessionId
-  ) {
-    return undefined;
-  }
-  return { userKey: userId, guestProof };
-};
 
 // The pass cookie is SameSite=Lax, so a form post from another site arrives
 // without it. Answering that post with a new pass would replace the
@@ -196,24 +216,16 @@ export const guestPassCookieForNewBrowser = (
   request: Request,
 ): string | undefined => {
   if (isCrossSiteRequest(request)) return undefined;
-  const current = readCookie(
-    request.headers.get("cookie"),
-    guestPassCookieName(sfuSecret),
-  );
-  if (verify(sfuSecret, current, PASS_AUDIENCE)) return undefined;
-  return passCookie(sfuSecret, mintGuestId());
+  const held = readBrowserPasses(sfuSecret, request.headers.get("cookie"));
+  return held.length > 0 ? undefined : passCookie(sfuSecret, mintGuestId());
 };
 
 export type GuestJoinIdentity =
   | {
       ok: true;
       userKey: string;
-      /** Signed into the join token; the SFU binds the identity to it. */
-      guestProof?: string;
-      /** Signed into the join token; the SFU lets it join no other room. */
-      guestRoom?: string;
-      /** Signed into the join token; the seat this tab held under another pass. */
-      guestWas?: { userKey: string; guestProof: string };
+      /** The guest claims to sign into the join token, as the SFU parses them. */
+      claims: RoomScopedClaims | SelfNamedGuestClaims;
       setCookie?: string;
       /**
        * Set for a client that takes its guest identity from the server: the
@@ -227,11 +239,17 @@ export type GuestJoinIdentity =
  * Decides who an unauthenticated join is.
  *
  * A client that sends `guestId` gets a seat key built from a pass this
- * server issued: the pass in the browser's cookie, else the one a grant
- * proves, else a new one. The cookie always wins, so every tab of a browser
- * converges on one pass. A tab that joined under another pass before the
- * cookie settled sends the token of that join (`guestSeatToken`), and keeps
- * what its seat held (see `formerSeatOf`).
+ * server issued: the lowest pass among the browser's cookies, else the one a
+ * grant proves, else a new one.
+ *
+ * A browser can hold more than one pass, when two of its first requests
+ * were each answered before either cookie had arrived. A tab may then have
+ * joined under a pass that is not the one the browser goes by. The token
+ * therefore also names the seat this tab would hold under each other pass
+ * in the browser's cookies (`guestWas`), and the SFU treats all of them as
+ * one guest. Only the pass cookies vouch for that. They are HttpOnly, so
+ * holding a copy of a join token is not enough to be taken for its guest
+ * under another pass.
  *
  * A client that does not send `guestId` is one that still derives
  * `guest-<sessionId>` itself: a tab opened before guest passes shipped, or an
@@ -243,32 +261,33 @@ export const resolveGuestJoinIdentity = (input: {
   sfuSecret: string;
   seat: GuestSeat;
   request: Request;
-  guestId: unknown;
-  guestGrant: unknown;
-  guestSeatToken?: unknown;
+  /** The body of the join request. */
+  body: unknown;
 }): GuestJoinIdentity => {
   const { sfuSecret, seat } = input;
   const { sessionId } = seat;
+  const caller = guestJoinRequestSchema.safeParse(input.body).data ?? {
+    takesIdentityFromServer: false,
+    guestGrant: undefined,
+  };
   const usesCookie = !isCrossSiteRequest(input.request);
-  const fromCookie = usesCookie
-    ? verify(
-        sfuSecret,
-        readCookie(
-          input.request.headers.get("cookie"),
-          guestPassCookieName(sfuSecret),
-        ),
-        PASS_AUDIENCE,
-      )
-    : null;
+  const held = usesCookie
+    ? readBrowserPasses(sfuSecret, input.request.headers.get("cookie"))
+    : [];
+  const fromCookie = held.at(0);
 
-  if (input.guestId === undefined) {
+  if (!caller.takesIdentityFromServer) {
     if (isReservedGuestSessionId(sessionId)) {
       return { ok: false, status: 400, error: "Invalid session ID" };
     }
+    const claims = issueSelfNamedGuestClaims({
+      userId: `guest-${sessionId}`,
+      ...(fromCookie ? { guestProof: proofOf(sfuSecret, fromCookie) } : {}),
+    });
     return {
       ok: true,
-      userKey: `guest-${sessionId}`,
-      ...(fromCookie ? { guestProof: proofOf(sfuSecret, fromCookie) } : {}),
+      userKey: claims.userId,
+      claims,
       ...(usesCookie
         ? { setCookie: passCookie(sfuSecret, fromCookie ?? mintGuestId()) }
         : {}),
@@ -280,25 +299,35 @@ export const resolveGuestJoinIdentity = (input: {
 
   const guestId =
     fromCookie ??
-    verify(sfuSecret, input.guestGrant, GRANT_AUDIENCE) ??
+    readPass(sfuSecret, caller.guestGrant, GRANT_AUDIENCE) ??
     mintGuestId();
-  const provenByCookie = guestId === fromCookie;
-  const userKey = seatKeyOf(sfuSecret, guestId, seat);
-  const guestWas = formerSeatOf(sfuSecret, input.guestSeatToken, seat, userKey);
-  return {
-    ok: true,
-    userKey,
+  const otherSeats = held
+    .filter((pass) => pass !== guestId)
+    .slice(0, MAX_OTHER_GUEST_SEATS)
+    .map((pass) => ({
+      userKey: seatKeyOf(sfuSecret, pass, seat),
+      guestProof: proofOf(sfuSecret, pass),
+    }));
+  const claims = issueRoomScopedClaims({
+    userId: seatKeyOf(sfuSecret, guestId, seat),
     guestProof: proofOf(sfuSecret, guestId),
     guestRoom: seat.roomId,
-    ...(guestWas ? { guestWas } : {}),
-    // Refresh the pass in the cookie, or plant this one when the browser
-    // has none.
+    clientId: seat.clientId,
+    sessionId,
+    ...(otherSeats.length > 0 ? { guestWas: otherSeats } : {}),
+  });
+  return {
+    ok: true,
+    userKey: claims.userId,
+    claims,
+    // Refresh the pass the browser goes by, or plant this one when the
+    // browser has none.
     ...(usesCookie ? { setCookie: passCookie(sfuSecret, guestId) } : {}),
     issued: {
       guestId,
       // Until the cookie comes back on a request, the caller keeps its
       // pass by sending the grant.
-      ...(provenByCookie
+      ...(guestId === fromCookie
         ? {}
         : {
             guestGrant: sign(

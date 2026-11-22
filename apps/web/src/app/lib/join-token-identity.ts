@@ -1,3 +1,5 @@
+import { readJoinTokenSubject } from "@conclave/meeting-core/guest-join-claims";
+
 /**
  * The user key a join token names, read the way the SFU reads it.
  *
@@ -12,14 +14,7 @@ export const readJoinTokenUserKey = (token: string): string | null => {
   try {
     const base64 = payload.replace(/-/g, "+").replace(/_/g, "/");
     const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
-    const claims = JSON.parse(new TextDecoder().decode(bytes)) as {
-      email?: unknown;
-      userId?: unknown;
-    };
-    const email =
-      typeof claims.email === "string" ? claims.email.trim().toLowerCase() : "";
-    const userId = typeof claims.userId === "string" ? claims.userId.trim() : "";
-    return email || userId || null;
+    return readJoinTokenSubject(JSON.parse(new TextDecoder().decode(bytes)));
   } catch {
     return null;
   }

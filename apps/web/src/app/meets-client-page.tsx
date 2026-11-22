@@ -103,8 +103,7 @@ export default function MeetsClientPage({
       const resolvedUser = options?.user ?? defaultUser;
       const isHost = Boolean(options?.isHost);
       const resolvedJoinMode = options?.joinMode ?? joinMode;
-      const seat = `${resolvedClientId}:${roomId}`;
-      return guestPass.join(seat, async (guestFields) => {
+      return guestPass.join(async (guestFields) => {
         const response = await fetchJoinInfoWithTimeout({
           method: "POST",
           headers: {
