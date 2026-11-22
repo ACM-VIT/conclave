@@ -39,27 +39,35 @@ const posthogCli = (args) => {
   }
 };
 
-try {
-  if (uploadRequested) {
-    if ((await listSourceMaps(staticDir)).length === 0) {
-      throw new Error("No source maps were built; check productionBrowserSourceMaps in next.config.ts.");
-    }
-    const release = ["--release-name", "conclave-web"];
-    posthogCli(["sourcemap", "inject", "--directory", staticDir, ...release]);
-    posthogCli([
-      "sourcemap",
-      "upload",
-      "--directory",
-      staticDir,
-      ...release,
-      "--delete-after",
-    ]);
-    console.log("[sourcemaps] uploaded to PostHog");
-  } else {
+const upload = async () => {
+  if (!uploadRequested) {
     console.log("[sourcemaps] upload skipped (POSTHOG_CLI_API_KEY and POSTHOG_CLI_PROJECT_ID not set)");
+    return;
   }
+  if ((await listSourceMaps(staticDir)).length === 0) {
+    throw new Error("No source maps were built; check productionBrowserSourceMaps in next.config.ts.");
+  }
+  const release = ["--release-name", "conclave-web"];
+  posthogCli(["sourcemap", "inject", "--directory", staticDir, ...release]);
+  posthogCli([
+    "sourcemap",
+    "upload",
+    "--directory",
+    staticDir,
+    ...release,
+    "--delete-after",
+  ]);
+  console.log("[sourcemaps] uploaded to PostHog");
+};
+
+try {
+  await upload();
+} catch (error) {
+  // A failed upload only costs this release its readable stack traces, so it
+  // warns instead of blocking the deploy.
+  console.warn(`[sourcemaps] upload failed; deploying without readable stacks: ${error.message}`);
 } finally {
-  // Maps never ship, even when the upload failed.
+  // Maps never ship: if one cannot be removed, this throws and stops the deploy.
   const leftover = await listSourceMaps(assetsDir);
   await Promise.all(leftover.map((file) => rm(file)));
   if (leftover.length > 0) console.log(`[sourcemaps] removed ${leftover.length} map files from the deploy`);
