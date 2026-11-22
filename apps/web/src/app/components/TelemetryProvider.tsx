@@ -2,6 +2,7 @@
 
 import { useEffect, type ReactNode } from "react";
 import { setTelemetrySink } from "../lib/telemetry";
+import { scrubTelemetryEvent } from "../lib/telemetry-privacy";
 
 function TelemetryProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
@@ -19,6 +20,7 @@ function TelemetryProvider({ children }: { children: ReactNode }) {
         capture_pageview: false,
         autocapture: false,
         person_profiles: "identified_only",
+        before_send: scrubTelemetryEvent,
       });
       setTelemetrySink((event, props) => {
         posthog.capture(event, props);

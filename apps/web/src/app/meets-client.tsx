@@ -3289,7 +3289,6 @@ export default function MeetsClient({
           telemetry.capture("meet_call_rated", {
             rating,
             outcome: outcome.kind,
-            roomId: outcome.roomId,
             durationSeconds: Math.round(outcome.durationMs / 1000),
           })
         }
