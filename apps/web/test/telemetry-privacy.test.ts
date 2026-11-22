@@ -24,6 +24,12 @@ const sampleJwt = [
   "bm90LWEtcmVhbC1zaWduYXR1cmU",
 ].join(".");
 
+// The chunk ids this test's "build" injected, by file.
+const buildChunks = new Map([
+  ["11079975-c075-50b3-ad5f-87be8f4248d0", "/_next/static/chunks/0yo6oel71v_bh.js"],
+  ["147fc2df-e663-5d76-aa13-f67e1e894071", "/_next/static/chunks/3u-6_1om1fv26.js"],
+]);
+
 // As before_send sees an event our own code captured: the event's own
 // application fields are the emitter's payload, and nothing came from storage.
 const scrub = (event: CaptureResult, origin: Partial<EventOrigin> = {}) =>
@@ -34,6 +40,7 @@ const scrub = (event: CaptureResult, origin: Partial<EventOrigin> = {}) =>
       ),
     ),
     storedKeys: new Set(),
+    chunkFiles: buildChunks,
     ...origin,
   });
 
@@ -419,7 +426,7 @@ describe("only trusted properties and paths", () => {
 });
 
 describe("stack frames", () => {
-  const chunkId = "11079975-c075-50b3-ad5f-87be8f4248d0";
+  const chunkId = "147fc2df-e663-5d76-aa13-f67e1e894071";
 
   it("sends only a frame's file, line, column, in-app flag and chunk id", () => {
     const event = exceptionEvent();
@@ -463,6 +470,9 @@ describe("stack frames", () => {
       { filename: "https://conclave.acmvit.in/_next/static/chunks/1team-meeting.js", lineno: 2 },
       { filename: "https://conclave.acmvit.in/_next/static/chunks/0yo6oel71v_bh.js", lineno: 3, chunk_id: "1team-meeting" },
       { filename: "https://cdn.example.net/_next/static/chunks/3u-6_1om1fv26.js", lineno: 4, chunk_id: chunkId },
+      // A uuid the build never produced, and a real id on another file.
+      { filename: "https://conclave.acmvit.in/_next/static/chunks/1team-meeting.js", lineno: 5, chunk_id: "0f8c2a1e-5b7d-4c3e-9a10-000000000001" },
+      { filename: "https://conclave.acmvit.in/_next/static/chunks/0yo6oel71v_bh.js", lineno: 6, chunk_id: chunkId },
     ];
     const frames = scrub(event).properties.$exception_list[0].stacktrace.frames;
 
@@ -471,7 +481,11 @@ describe("stack frames", () => {
       "https://conclave.acmvit.in/[path]",
       "https://conclave.acmvit.in/[path]",
       "https://cdn.example.net/[path]",
+      "https://conclave.acmvit.in/[path]",
+      "https://conclave.acmvit.in/[path]",
     ]);
+    const unproven = scrub(event, { chunkFiles: new Map() }).properties.$exception_list[0].stacktrace.frames;
+    expect(unproven[0].filename).toBe("https://conclave.acmvit.in/[path]");
   });
 
   it("rebuilds an exception entry from the fields the SDK sets", () => {

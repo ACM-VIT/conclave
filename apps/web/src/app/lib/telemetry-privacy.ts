@@ -1,4 +1,5 @@
 import type { CaptureResult, Properties } from "posthog-js";
+import { z } from "zod";
 import { isCallLogLabel } from "./call-log-labels";
 
 const STATIC_PAGES = new Set([
@@ -81,6 +82,22 @@ export type EventOrigin = {
   storedKeys: ReadonlySet<string>;
   /** The build's git sha. */
   clientVersion?: string;
+  /** The build's chunk ids and the file each was injected into. */
+  chunkFiles?: ReadonlyMap<string, string>;
+};
+
+/** Where the build serves its chunk manifest (scripts/posthog-chunk-manifest.mjs). */
+export const CHUNK_MANIFEST_URL = "/_next/static/posthog-chunk-ids.json";
+
+const ChunkManifest = z.record(
+  z.uuid(),
+  z.string().regex(/^\/_next\/static\/[A-Za-z0-9_./-]+\.js$/),
+);
+
+/** The chunk manifest as a map, or an empty one when it is not one. */
+export const parseChunkManifest = (value: unknown): ReadonlyMap<string, string> => {
+  const parsed = ChunkManifest.safeParse(value);
+  return new Map(parsed.success ? Object.entries(parsed.data) : []);
 };
 
 const URL_PROPERTY = /url|referrer|pathname|href/i;
@@ -179,13 +196,14 @@ const originOf = (value: unknown): string | null => {
 /**
  * A path is kept only for a script the page's own origin served that we can
  * prove is ours: one of the exact files under public/, or a build chunk whose
- * frame carries the chunk id posthog-cli injected into it. A name alone proves
- * nothing, so any other path is templated.
+ * frame carries a chunk id the build's manifest maps to that very file. A
+ * name or an id alone proves nothing, so any other path is templated.
  */
 const scrubFrameUrl = (
   value: string,
   pageOrigin: string | null,
   chunkId: string | null,
+  chunkFiles: ReadonlyMap<string, string>,
 ): string => {
   if (PLACEHOLDER_FRAME.test(value)) return value;
   try {
@@ -193,7 +211,7 @@ const scrubFrameUrl = (
     if (url.protocol !== "http:" && url.protocol !== "https:") return `${url.protocol}//[path]`;
     const ours =
       FIRST_PARTY_SCRIPTS.has(url.pathname) ||
-      (chunkId !== null && url.pathname.startsWith("/_next/static/"));
+      (chunkId !== null && chunkFiles.get(chunkId) === url.pathname);
     if (url.origin === pageOrigin && ours) {
       return `${url.origin}${url.pathname}`;
     }
@@ -213,7 +231,11 @@ const isPosition = (value: unknown): value is number =>
  * A frame keeps only its file, line, column, in-app flag and the chunk id
  * posthog-cli injected (a uuid), in the shape posthog-js sends.
  */
-const scrubFrame = (frame: ExceptionFrame, pageOrigin: string | null): ExceptionFrame => {
+const scrubFrame = (
+  frame: ExceptionFrame,
+  pageOrigin: string | null,
+  chunkFiles: ReadonlyMap<string, string>,
+): ExceptionFrame => {
   const chunkId =
     typeof frame.chunk_id === "string" && SDK_ID_PATTERN.test(frame.chunk_id)
       ? frame.chunk_id
@@ -222,7 +244,7 @@ const scrubFrame = (frame: ExceptionFrame, pageOrigin: string | null): Exception
     platform: "web:javascript",
     function: UNKNOWN_FUNCTION,
     ...(typeof frame.filename === "string"
-      ? { filename: scrubFrameUrl(frame.filename, pageOrigin, chunkId) }
+      ? { filename: scrubFrameUrl(frame.filename, pageOrigin, chunkId, chunkFiles) }
       : {}),
     ...(isPosition(frame.lineno) ? { lineno: frame.lineno } : {}),
     ...(isPosition(frame.colno) ? { colno: frame.colno } : {}),
@@ -280,6 +302,7 @@ const scrubExceptionEntry = (
   entry: ExceptionEntry,
   trustedMessage: string | null,
   pageOrigin: string | null,
+  chunkFiles: ReadonlyMap<string, string>,
 ): ExceptionEntry => {
   const mechanism = scrubMechanism(entry.mechanism);
   const frames = entry.stacktrace?.frames;
@@ -291,7 +314,9 @@ const scrubExceptionEntry = (
       ? {
           stacktrace: {
             type: "raw",
-            frames: (frames as ExceptionFrame[]).map((frame) => scrubFrame(frame, pageOrigin)),
+            frames: (frames as ExceptionFrame[]).map((frame) =>
+              scrubFrame(frame, pageOrigin, chunkFiles),
+            ),
           },
         }
       : {}),
@@ -307,7 +332,7 @@ const scrubAppValue = (key: string, value: unknown): unknown => {
 
 function scrubProperties(
   properties: Properties,
-  { payload, storedKeys, clientVersion }: EventOrigin,
+  { payload, storedKeys, clientVersion, chunkFiles = new Map() }: EventOrigin,
   pageOrigin: string | null,
 ): Properties {
   const trustedMessage =
@@ -325,7 +350,7 @@ function scrubProperties(
       if (language) scrubbed[key] = language;
     } else if (key === "$exception_list" && Array.isArray(value)) {
       scrubbed[key] = (value as ExceptionEntry[]).map((entry) =>
-        scrubExceptionEntry(entry, trustedMessage, pageOrigin),
+        scrubExceptionEntry(entry, trustedMessage, pageOrigin, chunkFiles),
       );
     } else if (typeof value === "string" && URL_PROPERTY.test(key)) {
       scrubbed[key] = scrubUrl(value);

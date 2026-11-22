@@ -32,6 +32,7 @@ beforeEach(() => {
   console.error = () => {};
   vi.stubEnv("NEXT_PUBLIC_POSTHOG_KEY", "phc_test_project");
   vi.stubEnv("NEXT_PUBLIC_POSTHOG_DEV", "1");
+  vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 404 })));
 });
 
 afterEach(() => {
@@ -39,6 +40,7 @@ afterEach(() => {
   root = null;
   console.error = originalConsoleError;
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
 });
 
 const renderOnFirstLoad = async (boundary: ComponentType<BoundaryProps>) => {
@@ -222,6 +224,43 @@ describe("what each event carries", () => {
       play.mockRestore();
       posthog.captureException.mockReset();
     }
+  });
+
+  it("keeps a chunk's path only when the build's manifest pairs its id with that file", async () => {
+    const manifest = { "147fc2df-e663-5d76-aa13-f67e1e894071": "/_next/static/chunks/3u-6_1om1fv26.js" };
+    const fetchManifest = vi.fn(async (url: string) =>
+      url === "/_next/static/posthog-chunk-ids.json"
+        ? new Response(JSON.stringify(manifest), { status: 200 })
+        : new Response("{}", { status: 404 }),
+    );
+    vi.stubGlobal("fetch", fetchManifest);
+    const { startTelemetry } = await import("../src/app/lib/telemetry");
+    startTelemetry();
+    await vi.waitFor(() => expect(posthog.init).toHaveBeenCalled());
+    await vi.waitFor(() => expect(fetchManifest).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const chunk = "http://localhost:3000/_next/static/chunks/3u-6_1om1fv26.js";
+    const sent = sendThroughSdk("$exception", {
+      $current_url: "http://localhost:3000/",
+      $exception_list: [
+        {
+          type: "Error",
+          value: "x",
+          stacktrace: {
+            type: "raw",
+            frames: [
+              { filename: chunk, lineno: 1, chunk_id: "147fc2df-e663-5d76-aa13-f67e1e894071" },
+              { filename: chunk, lineno: 2, chunk_id: "0f8c2a1e-5b7d-4c3e-9a10-000000000001" },
+            ],
+          },
+        },
+      ],
+    });
+
+    const frames = (sent.properties.$exception_list as Array<{ stacktrace: { frames: Array<{ filename: string }> } }>)[0]
+      .stacktrace.frames;
+    expect(frames.map((frame) => frame.filename)).toEqual([chunk, "http://localhost:3000/[path]"]);
   });
 
   it("sends application fields only from the capture that set them", async () => {

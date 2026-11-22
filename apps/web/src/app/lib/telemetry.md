@@ -136,10 +136,12 @@ trust, instead of scrubbing what looks bad:
   (`/[code]`, `/w/[code]`), without query or hash. A frame keeps its path only
   for a script on the page's own origin that is one of the exact files under
   `public/` (a test keeps that list equal to the folder), or a build chunk
-  under `/_next/static` whose frame carries the chunk id `posthog-cli` injected
-  into it. A name alone proves nothing, so a build that skipped
-  `posthog-cli sourcemap inject` sends its chunk frames as `[path]`. A frame from another
-  scheme keeps only the scheme.
+  whose frame carries a chunk id the build's manifest maps to that very file.
+  `cf:build` writes the manifest (`/_next/static/posthog-chunk-ids.json`) right
+  after `posthog-cli sourcemap inject`, and the page loads it at startup. An id
+  the build never produced, or a real id on another file, proves nothing, so
+  until the manifest loads, and in a build without one, chunk frames are
+  `[path]`. A frame from another scheme keeps only the scheme.
 - Our own string fields still go through the credential, email and token
   scrubber, and `save_campaign_params` is off.
 
