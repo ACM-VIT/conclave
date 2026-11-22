@@ -32,7 +32,7 @@ import {
   useEnumeratedDevices,
   type MediaControlClusterProps,
 } from "./DeviceCaretMenu";
-import type { ReactionOption } from "../lib/types";
+import type { ReactionOption, TranscriptSessionStatus } from "../lib/types";
 import { normalizeBrowserUrl } from "../lib/utils";
 import HotkeyTooltip from "./HotkeyTooltip";
 import Coachmark from "./Coachmark";
@@ -120,34 +120,23 @@ function MediaClusterButton({
   return cluster;
 }
 
-type PanelStatus = "live" | "attention" | null;
-
-interface DockDot {
-  color: string;
-  pulse?: boolean;
-}
+const TRANSCRIPT_DOCK_STATE: Partial<
+  Record<TranscriptSessionStatus, { label: string; attention: boolean }>
+> = {
+  live: { label: "Transcript on", attention: false },
+  starting: { label: "Transcript on", attention: false },
+  paused: { label: "Transcript paused", attention: false },
+  takeover_needed: { label: "Transcript needs attention", attention: true },
+  error: { label: "Transcript needs attention", attention: true },
+};
 
 interface DockEntry {
   d: ControlDescriptor;
-  dot?: DockDot | null;
   live?: boolean;
 }
 
-function DockStatusDot({ dot }: { dot: DockDot }) {
-  return (
-    <span
-      aria-hidden
-      className={
-        "absolute right-1 top-1 h-2 w-2 rounded-full " +
-        (dot.pulse ? "animate-pulse" : "")
-      }
-      style={{ backgroundColor: dot.color, boxShadow: "0 0 0 2px #131316" }}
-    />
-  );
-}
-
 function DockItem({ entry }: { entry: DockEntry }) {
-  const { d, dot } = entry;
+  const { d } = entry;
   const Icon = d.icon;
   const active = d.variant === "active";
   return (
@@ -177,7 +166,6 @@ function DockItem({ entry }: { entry: DockEntry }) {
             {d.badge > 9 ? "9+" : d.badge}
           </span>
         ) : null}
-        {dot ? <DockStatusDot dot={dot} /> : null}
       </button>
     </HotkeyTooltip>
   );
@@ -199,7 +187,7 @@ function DockFlyoutRow({
   entry: DockEntry;
   onActivate: () => void;
 }) {
-  const { d, dot } = entry;
+  const { d } = entry;
   const Icon = d.icon;
   const active = d.variant === "active";
   return (
@@ -212,15 +200,6 @@ function DockFlyoutRow({
     >
       <Icon size={MENU_ICON} strokeWidth={STROKE} className="shrink-0" />
       <span className="flex-1">{d.label}</span>
-      {dot ? (
-        <span
-          aria-hidden
-          className={
-            "h-2 w-2 shrink-0 rounded-full " + (dot.pulse ? "animate-pulse" : "")
-          }
-          style={{ backgroundColor: dot.color }}
-        />
-      ) : null}
     </button>
   );
 }
@@ -357,7 +336,6 @@ function ActivityDock({
                 >
                   <FaceIcon size={ICON} strokeWidth={STROKE} />
                 </span>
-                {face?.dot ? <DockStatusDot dot={face.dot} /> : null}
               </button>
               {open && (
                 <div className="absolute bottom-full right-0 z-50 pb-2">
@@ -745,15 +723,9 @@ function ControlsBar(props: ControlsBarProps) {
   const showHost = Boolean(isAdmin);
   const VolumeIcon = meetVolumePercent === 0 ? VolumeX : Volume2;
 
-  const transcriptClusterStatus: PanelStatus =
-    props.transcriptStatus === "live" ||
-    props.transcriptStatus === "starting" ||
-    props.transcriptStatus === "paused"
-      ? "live"
-      : props.transcriptStatus === "takeover_needed" ||
-          props.transcriptStatus === "error"
-        ? "attention"
-        : null;
+  const transcriptState = props.transcriptStatus
+    ? TRANSCRIPT_DOCK_STATE[props.transcriptStatus]
+    : undefined;
   const [dockFlyoutOpen, setDockFlyoutOpen] = useState(false);
   const panelCoachmarkVisible =
     !moreOpen &&
@@ -799,14 +771,10 @@ function ControlsBar(props: ControlsBarProps) {
     ? {
         d: {
           ...transcriptItem,
+          label: transcriptState?.label ?? transcriptItem.label,
           variant: props.isTranscriptOpen ? "active" : "default",
         },
-        dot:
-          transcriptClusterStatus === "live"
-            ? { color: color.accent }
-            : transcriptClusterStatus === "attention"
-              ? { color: color.accent, pulse: true }
-              : null,
+        live: Boolean(transcriptState),
       }
     : null;
 
@@ -821,10 +789,10 @@ function ControlsBar(props: ControlsBarProps) {
   ].filter((entry): entry is DockEntry => entry !== null);
 
   const promotedEntry =
-    (transcriptEntry?.dot?.pulse ? transcriptEntry : null) ??
+    (transcriptState?.attention ? transcriptEntry : null) ??
     (props.hasActiveApp ? appsEntry : null) ??
     (props.hasActiveGame ? gamesEntry : null) ??
-    (transcriptEntry?.dot ? transcriptEntry : null) ??
+    (transcriptState ? transcriptEntry : null) ??
     (props.isGamesOpen ? gamesEntry : null) ??
     (props.isAppsOpen ? appsEntry : null) ??
     (props.isTranscriptOpen ? transcriptEntry : null) ??
