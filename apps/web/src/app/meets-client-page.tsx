@@ -8,6 +8,7 @@ import {
   canonicalizeSfuClientId,
   resolveBrowserSfuClientId,
 } from "@/lib/sfu-client-id";
+import { requestJoinInfo } from "./lib/join-info-request";
 import { readResponseError } from "./lib/utils";
 
 const reactionAssets = [
@@ -19,39 +20,7 @@ const reactionAssets = [
   "yawn.gif",
 ];
 
-const readError = readResponseError;
-
 const defaultClientId = resolveBrowserSfuClientId();
-const JOIN_INFO_REQUEST_TIMEOUT_MS = 15000;
-
-const fetchJoinInfoWithTimeout = async (
-  init: RequestInit,
-  cancel?: AbortSignal,
-): Promise<Response> => {
-  const controller = new AbortController();
-  const timeoutId = window.setTimeout(
-    () => controller.abort(),
-    JOIN_INFO_REQUEST_TIMEOUT_MS,
-  );
-  const abort = () => controller.abort();
-  if (cancel?.aborted) abort();
-  cancel?.addEventListener("abort", abort, { once: true });
-  try {
-    return await fetch("/api/sfu/join", {
-      ...init,
-      signal: controller.signal,
-    });
-  } catch (error) {
-    if (cancel?.aborted) throw new Error("Join info request was cancelled");
-    if (controller.signal.aborted) {
-      throw new Error("Join info request timeout");
-    }
-    throw error;
-  } finally {
-    window.clearTimeout(timeoutId);
-    cancel?.removeEventListener("abort", abort);
-  }
-};
 
 type MeetsClientPageProps = {
   initialRoomId?: string;
@@ -102,37 +71,26 @@ export default function MeetsClientPage({
       const resolvedUser = options?.user ?? defaultUser;
       const isHost = Boolean(options?.isHost);
       const resolvedJoinMode = options?.joinMode ?? joinMode;
-      const response = await fetchJoinInfoWithTimeout({
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-sfu-client": resolvedClientId,
+      return requestJoinInfo(
+        "/api/sfu/join",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-sfu-client": resolvedClientId,
+          },
+          body: JSON.stringify({
+            roomId,
+            sessionId,
+            user: resolvedUser,
+            isHost,
+            allowRoomCreation: forceJoinOnly,
+            clientId: resolvedClientId,
+            joinMode: resolvedJoinMode,
+          }),
         },
-        body: JSON.stringify({
-          roomId,
-          sessionId,
-          user: resolvedUser,
-          isHost,
-          allowRoomCreation: forceJoinOnly,
-          clientId: resolvedClientId,
-          joinMode: resolvedJoinMode,
-        }),
-      }, options?.signal);
-
-      if (!response.ok) {
-        const error = new Error(await readError(response)) as Error & {
-          responseStatus?: number;
-        };
-        error.responseStatus = response.status;
-        throw error;
-      }
-
-      return (await response.json()) as {
-        token: string;
-        sfuUrl: string;
-        iceServers?: RTCIceServer[];
-        iceServersTtlSeconds?: number;
-      };
+        { signal: options?.signal },
+      );
     },
     [forceJoinOnly, joinMode, defaultUser, resolvedClientId]
   );
@@ -143,7 +101,7 @@ export default function MeetsClientPage({
       headers: { "x-sfu-client": resolvedClientId },
     });
     if (!response.ok) {
-      throw new Error(await readError(response));
+      throw new Error(await readResponseError(response));
     }
     const data = (await response.json()) as { rooms?: unknown };
     return (Array.isArray(data.rooms) ? data.rooms : []) as RoomInfo[];
@@ -161,7 +119,7 @@ export default function MeetsClientPage({
       },
     );
     if (!response.ok) {
-      throw new Error(await readError(response));
+      throw new Error(await readResponseError(response));
     }
 
     const data = (await response.json()) as { room?: unknown };
