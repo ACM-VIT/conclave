@@ -1534,6 +1534,85 @@ describe("large views and slow sockets", () => {
     expect(kinds.filter((kind) => kind === "patch").length).toBe(1);
   });
 
+  it("sends no part of a snapshot a question the host hid after the snapshot began", async () => {
+    const room = new Harness([qaAuthority], { runtime: { limits: small } });
+    const hostTab = await room.open(host, qaContract);
+    const priyaTab = await room.open(priya, qaContract);
+    const ids: string[] = [];
+    for (let index = 0; index < 3; index += 1) {
+      const asked = await priyaTab.act("ask", { text: `Question ${index}? `.repeat(20) });
+      ids.push(field(asked.ok ? asked.value : null, "id") as string);
+    }
+    await room.deliver();
+    const raviTab = await room.open(ravi, qaContract);
+    const entry = hostTab.client.entryFor(qaContract)!;
+    const before = raviTab.frames.length;
+
+    // A view that comes in parts. Its first part has gone out.
+    void raviTab.raw(AUTHORITY_EVENTS.subscribe, {
+      roomEpoch: room.authority.roomEpoch,
+      instance: entry.instance,
+      app: entry.app,
+      major: entry.major,
+      subscription: "hidden-mid-transfer",
+    });
+    const sentAtOnce = raviTab.frames.slice(before).length;
+    // Before the next part, the host hides the last question, and changes
+    // the one before it.
+    const hidden = await hostTab.raw<AuthorityResult<Json>>(AUTHORITY_EVENTS.act, {
+      roomEpoch: room.authority.roomEpoch,
+      subscription: hostTab.frames[0].subscription,
+      generation: 1,
+      operation: { issuedAtMs: Date.now(), nonce: "hide-mid-transfer" },
+      action: "moderate",
+      input: { id: ids[2], action: "dismissed" },
+    });
+    const answered = await hostTab.raw<AuthorityResult<Json>>(AUTHORITY_EVENTS.act, {
+      roomEpoch: room.authority.roomEpoch,
+      subscription: hostTab.frames[0].subscription,
+      generation: 1,
+      operation: { issuedAtMs: Date.now(), nonce: "answer-mid-transfer" },
+      action: "moderate",
+      input: { id: ids[1], action: "answered" },
+    });
+    await room.drain();
+    await room.deliver();
+    await room.drain();
+
+    const mine = raviTab.frames.slice(before).filter((frame) => frame.subscription === "hidden-mid-transfer");
+    const parts = replaces(mine);
+    const later = parts
+      .slice(1)
+      .flatMap((part) => part.rows)
+      .filter((row) => row.bucket === "questions");
+    // What Ravi ends up holding, from the parts and the patches after them.
+    const held = new Map<string, Json>();
+    for (const frame of mine) {
+      if (frame.kind === "replace") for (const row of frame.rows) held.set(`${row.bucket}/${row.key}`, row.value);
+      if (frame.kind === "patch") {
+        for (const row of frame.remove) held.delete(`${row.bucket}/${row.key}`);
+        for (const row of frame.put) held.set(`${row.bucket}/${row.key}`, row.value);
+      }
+    }
+
+    expect(sentAtOnce).toBe(1);
+    expect([hidden.ok, answered.ok]).toEqual([true, true]);
+    expect(parts.length).toBeGreaterThan(2);
+    expect(parts[parts.length - 1].last).toBe(true);
+    // No part sent after the hide carries the hidden question.
+    expect(later.filter((row) => row.key === ids[2])).toEqual([]);
+    expect(JSON.stringify(parts.slice(1))).not.toContain("Question 2?");
+    // A row that changed is sent as it is when its part goes, not as it was.
+    expect(later.filter((row) => row.key === ids[1]).map((row) => field(row.value, "status"))).toEqual([
+      "answered",
+    ]);
+    expect([...held.keys()].filter((held) => held.startsWith("questions/")).sort()).toEqual(
+      [`questions/${ids[0]}`, `questions/${ids[1]}`].sort(),
+    );
+    expect([...held.keys()].filter((held) => held.endsWith(`/${ids[2]}`))).toEqual([]);
+    expect(field(held.get(`questions/${ids[1]}`) ?? null, "status")).toBe("answered");
+  });
+
   it("stops a snapshot between parts when the seat is removed", async () => {
     const room = new Harness([probeAuthority], { runtime: { limits: small } });
     const hostTab = await room.open(host, probeContract);
