@@ -1175,12 +1175,12 @@ export interface AppsSyncError {
 export interface AppsUpdateData {
   appId: string;
   update: Uint8Array;
-  docGuid?: string;
+  replicaId?: string;
 }
 
 export interface AppsRefusedData {
   appId: string;
-  docGuid: string;
+  replicaId: string;
   reason: string;
 }
 

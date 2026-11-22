@@ -78,8 +78,9 @@ export const inAppRoom = (pool: AppDocumentPool, id: string) => {
     refused,
     open: () => call("apps:open", { appId: "board" }),
     close: () => call("apps:close"),
-    send: (update: Uint8Array, docGuid?: string) =>
-      listeners.get("apps:yjs:update")!({ appId: "board", update, docGuid }),
+    send: (update: Uint8Array, replicaId?: string) =>
+      listeners.get("apps:yjs:update")!({ appId: "board", update, replicaId }),
+    disconnect: () => listeners.get("disconnect")!(),
     requestSync,
     syncFrom,
     joinDocument,

@@ -98,8 +98,24 @@ const manualClock = () => {
 
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) await cleanup();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
+
+const settledNow = async <T>(promise: Promise<T>): Promise<T | undefined> => {
+  let value: T | undefined;
+  void promise.then((settled) => {
+    value = settled;
+  });
+  for (let turn = 0; turn < 8; turn += 1) await new Promise((resolve) => setImmediate(resolve));
+  return value;
+};
+
+const eventually = async (check: () => boolean): Promise<void> => {
+  while (!check()) await new Promise((resolve) => setImmediate(resolve));
+};
+
+const fakeHandlerTimers = () => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 
 const textOf = (doc: Y.Doc) => doc.getText("t").toString();
 
@@ -203,6 +219,7 @@ describe("app document engine", () => {
   });
 
   it("refuses an update over the size cap without applying it", () => {
+    vi.spyOn(performance, "now").mockReturnValue(0);
     const engine = engineFor({ maxUpdateBytes: 100 });
     const author = new Y.Doc();
     const small = edit(author, (text) => text.insert(0, "kept"));
@@ -273,13 +290,13 @@ describe("app documents", { timeout: 30_000 }, () => {
     Y.applyUpdate(second, missing);
     const dependent = edit(second, (text) => text.insert(51, "z"));
 
-    room.send(base, first.guid);
-    room.send(dependent, second.guid);
-    room.send(missing, first.guid);
+    room.send(base, "first");
+    room.send(dependent, "second");
+    room.send(missing, "first");
 
     expect(await room.join()).toBe(merged(base, missing));
     expect(room.relayed).toEqual([base, missing]);
-    expect(room.refused).toEqual([{ appId: "board", docGuid: second.guid, reason: "missing-dependency" }]);
+    expect(room.refused).toEqual([{ appId: "board", replicaId: "second", reason: "missing-dependency" }]);
   });
 
   it("refuses an author's later edits after one is refused and tells the author once", async () => {
@@ -289,16 +306,16 @@ describe("app documents", { timeout: 30_000 }, () => {
     await room.open();
     const author = new Y.Doc();
     const hello = edit(author, (text) => text.insert(0, "hello"));
-    room.send(hello, author.guid);
-    room.send(edit(author, (text) => text.insert(5, " STALL")), author.guid);
+    room.send(hello, "author");
+    room.send(edit(author, (text) => text.insert(5, " STALL")), "author");
     await fixture.next("stalled");
     await clock.expire(DEADLINE_MS);
-    room.send(edit(author, (text) => text.insert(11, " more")), author.guid);
-    room.send(edit(author, (text) => text.insert(16, " and more")), author.guid);
+    room.send(edit(author, (text) => text.insert(11, " more")), "author");
+    room.send(edit(author, (text) => text.insert(16, " and more")), "author");
 
     expect(await room.join()).toBe("hello");
     expect(room.relayed).toEqual([hello]);
-    expect(room.refused).toEqual([{ appId: "board", docGuid: author.guid, reason: "timed-out" }]);
+    expect(room.refused).toEqual([{ appId: "board", replicaId: "author", reason: "timed-out" }]);
   });
 
   it("brings the author, a peer and a late joiner to the same document after a refusal", async () => {
@@ -307,9 +324,11 @@ describe("app documents", { timeout: 30_000 }, () => {
     const room = inRoom(createPool({ deadlineMs: DEADLINE_MS, clock, workerUrl: STALLING_WORKER, workerData: fixture.workerData }), "converge");
     await room.open();
     let authorDoc = new Y.Doc();
-    const write = (change: (text: Y.Text) => void) => room.send(edit(authorDoc, change), authorDoc.guid);
+    let replica = "author-1";
+    const write = (change: (text: Y.Text) => void) => room.send(edit(authorDoc, change), replica);
     const rebuildAuthor = async () => {
       authorDoc = new Y.Doc();
+      replica = "author-2";
       Y.applyUpdate(authorDoc, (await room.syncFrom(authorDoc)).syncMessage);
     };
 
@@ -332,18 +351,20 @@ describe("app documents", { timeout: 30_000 }, () => {
   });
 
   it("tells an author when an update arrives too fast, but not a client that cannot hear it", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
     const room = inRoom(createPool(), "rate-update");
     await room.open();
     const legacy = new Y.Doc();
     const current = new Y.Doc();
 
     for (let index = 0; index < 61; index += 1) room.send(edit(legacy, (text) => text.insert(0, "l")));
-    for (let index = 0; index < 5; index += 1) room.send(edit(current, (text) => text.insert(0, "c")), current.guid);
+    for (let index = 0; index < 5; index += 1) room.send(edit(current, (text) => text.insert(0, "c")), "current");
 
-    expect(room.refused).toEqual([{ appId: "board", docGuid: current.guid, reason: "rate-limited" }]);
+    expect(room.refused).toEqual([{ appId: "board", replicaId: "current", reason: "rate-limited" }]);
   });
 
   it("tells a client that can retry to try again while the queue is full, and holds an older client's sync until it can answer", async () => {
+    fakeHandlerTimers();
     const fixture = createFixture();
     const room = inRoom(
       createPool({
@@ -365,14 +386,94 @@ describe("app documents", { timeout: 30_000 }, () => {
 
     const retryAware = await room.requestSync(new Y.Doc(), true);
     const older = room.requestSync(new Y.Doc(), false);
+    expect(await settledNow(older)).toBeUndefined();
     fixture.forget();
     fixture.release();
+    await eventually(() => room.relayed.length === 3);
+    await vi.advanceTimersByTimeAsync(250);
 
     expect(retryAware).toMatchObject({ retryable: true, retryAfterMs: 250 });
     expect(retryAware).not.toHaveProperty("syncMessage");
     const answer = await older;
     if (!("syncMessage" in answer)) throw new Error(answer.error);
     expect(merged(answer.syncMessage)).toBe(merged(hello, held, next));
+  });
+
+  const stuckBehindAnotherRoom = async (name: string, totalJobs: number) => {
+    const fixture = createFixture();
+    const pool = createPool({
+      clock: manualClock(),
+      workerUrl: STALLING_WORKER,
+      workerData: fixture.workerData,
+      limits: { document: { jobs: 64, bytes: 1024 * 1024 }, total: { jobs: totalJobs, bytes: 8 * 1024 * 1024 } },
+    });
+    const stuck = inRoom(pool, `${name}-stuck`);
+    const room = inRoom(pool, name);
+    await stuck.open();
+    await room.open();
+    const write = writer();
+    stuck.send(write("STALL"));
+    await fixture.next("stalled");
+    return { stuck, room, write };
+  };
+
+  it("answers an older client's held sync with App not active once its app was reopened", async () => {
+    fakeHandlerTimers();
+    const { stuck, room, write } = await stuckBehindAnotherRoom("reopened", 3);
+    stuck.send(write("a"));
+    stuck.send(write("b"));
+    const older = room.requestSync(new Y.Doc(), false);
+    expect(await settledNow(older)).toBeUndefined();
+
+    await room.close();
+    await room.open();
+    await stuck.close();
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(await settledNow(older)).toEqual({ error: "App not active" });
+  });
+
+  it("drops an older client's held sync when its socket disconnects", async () => {
+    fakeHandlerTimers();
+    const { stuck, room, write } = await stuckBehindAnotherRoom("gone", 3);
+    stuck.send(write("a"));
+    stuck.send(write("b"));
+    const older = room.requestSync(new Y.Doc(), false);
+    expect(await settledNow(older)).toBeUndefined();
+
+    room.disconnect();
+    await stuck.close();
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(await settledNow(older)).toBeUndefined();
+  });
+
+  it("answers an older client within 25 seconds even while its sync is still queued", async () => {
+    fakeHandlerTimers();
+    const { room } = await stuckBehindAnotherRoom("deadline-hold", 64);
+    const older = room.requestSync(new Y.Doc(), false);
+
+    await vi.advanceTimersByTimeAsync(24_999);
+    expect(await settledNow(older)).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(await settledNow(older)).toEqual({ error: "App document is busy" });
+  });
+
+  it("holds at most four older-client syncs, counting each one until it is answered", async () => {
+    fakeHandlerTimers();
+    const { stuck, room, write } = await stuckBehindAnotherRoom("held-cap", 3);
+    stuck.send(write("a"));
+    stuck.send(write("b"));
+    const held = Array.from({ length: 4 }, () => room.requestSync(new Y.Doc(), false));
+    expect(await settledNow(Promise.race(held))).toBeUndefined();
+    expect(await settledNow(room.requestSync(new Y.Doc(), false))).toEqual({ error: "App document is busy" });
+
+    await stuck.close();
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(await settledNow(Promise.race(held))).toBeUndefined();
+    expect(await settledNow(room.requestSync(new Y.Doc(), false))).toEqual({ error: "App document is busy" });
   });
 
   it("uses the app document deadline from the config passed to createSfuServer", async () => {
@@ -388,6 +489,7 @@ describe("app documents", { timeout: 30_000 }, () => {
   });
 
   it("tells a client that syncs too often to retry shortly", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
     const room = inRoom(createPool(), "rate");
     await room.open();
 
@@ -524,13 +626,14 @@ describe("app documents", { timeout: 30_000 }, () => {
   it("does not count a slow worker start against a document's deadline", async () => {
     const clock = manualClock();
     const gate = new Int32Array(new SharedArrayBuffer(4));
-    const pool = createPool({ deadlineMs: DEADLINE_MS, clock, workerUrl: SLOW_START_WORKER, workerData: { gate } });
+    const deadlineMs = 60_000;
+    const pool = createPool({ deadlineMs, clock, workerUrl: SLOW_START_WORKER, workerData: { gate } });
     const document = pool.open();
     const { hello } = authors();
     const applied = document.apply(hello);
 
-    expect(clock.isArmed(DEADLINE_MS * 4)).toBe(false);
-    expect(clock.isArmed(DEADLINE_MS)).toBe(false);
+    expect(clock.isArmed(deadlineMs * 4)).toBe(false);
+    expect(clock.isArmed(deadlineMs)).toBe(false);
     Atomics.store(gate, 0, 1);
     Atomics.notify(gate, 0);
 
