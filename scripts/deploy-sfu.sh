@@ -415,7 +415,9 @@ wait_for_healthy() {
   local url="$1"
   local start_ts
   start_ts="$(date +%s)"
-  until curl -fsS --connect-timeout 2 --max-time 3 "${url}/health" 2>/dev/null | json_field status | grep -qx healthy; do
+  local health
+  until health="$(curl -fsS --connect-timeout 2 --max-time 3 "${url}/health" 2>/dev/null)" &&
+        [[ "$(printf "%s" "$health" | json_field status)" == "healthy" ]]; do
     if (( $(date +%s) - start_ts >= HEALTH_TIMEOUT_SECONDS )); then
       return 1
     fi
