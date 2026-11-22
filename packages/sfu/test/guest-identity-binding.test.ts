@@ -5,6 +5,8 @@ import { Admin } from "../config/classes/Admin.js";
 import {
   admitWaitingGuest,
   blockUserKey,
+  forceRemoveClientNow,
+  kickClient,
   toClusterSnapshot,
   toPendingUserSnapshots,
   toRoomSnapshot,
@@ -2506,6 +2508,93 @@ describe("a guest that is a co-host under one pass and blocked under another", (
   });
 });
 
+describe("the room's last co-host, blocked through a pass link", () => {
+  const coHostTab = {
+    userId: "guest-gp_last-co-host-tab-1",
+    clientId: "conclave",
+    sessionId: "co-1",
+    guestProof: "proof-of-the-last-co-host-pass",
+  } satisfies SfuAuthPayload;
+  const otherTab = { ...coHostTab, userId: "guest-gp_last-co-host-tab-2", sessionId: "co-2" } satisfies SfuAuthPayload;
+  const blockedTab = {
+    userId: "guest-gp_last-co-host-blocked-tab",
+    clientId: "conclave",
+    sessionId: "co-3",
+    guestProof: "proof-of-its-blocked-pass",
+  } satisfies SfuAuthPayload;
+  const bystander = {
+    userId: "guest-gp_bystander",
+    clientId: "conclave",
+    sessionId: "by-1",
+    guestProof: "proof-of-a-bystander-pass",
+  } satisfies SfuAuthPayload;
+  const seatOf = (user: SfuAuthPayload) => `${user.userId}#${user.sessionId}`;
+  const ask = async (peer: { handlers: Map<string, Handler> }, event: string, payload: unknown) => {
+    const ack = vi.fn();
+    await peer.handlers.get(event)!(...([payload, ack] as never[]));
+    return ack;
+  };
+
+  it("hands the room to someone else, and the guest holds no host right once the block is lifted (Greptile)", async () => {
+    const state = makeState();
+    const host = await join(state, guestHost);
+    const room = state.rooms.get("conclave:room")!;
+    await join(state, coHostTab);
+    await join(state, otherTab);
+    expect(await ask(host.peer, "promoteHost", { userId: seatOf(coHostTab) })).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+    await join(state, blockedTab);
+    blockUserKey(room, blockedTab.userId, { reason: "Blocked by host", kickPresent: true, io, state });
+    await join(state, bystander);
+    // The host leaves, so the co-host is the room's last host.
+    forceRemoveClientNow({ io, state, room, userId: guestHostSeat });
+    expect(room.getClient(seatOf(coHostTab))).toBeInstanceOf(Admin);
+    expect(room.getClient(seatOf(otherTab))).not.toBeInstanceOf(Admin);
+
+    // A third tab of the guest's browser shows the blocked pass.
+    const linking = await join(state, {
+      ...coHostTab,
+      userId: "guest-gp_last-co-host-tab-3",
+      sessionId: "co-4",
+      guestWas: [{ userKey: "guest-gp_last-co-host-tab-4", guestProof: blockedTab.guestProof }],
+    });
+
+    expect(linking.ack).toHaveBeenCalledWith(refused);
+    expect(room.getClient(seatOf(coHostTab))).toBeUndefined();
+    expect(room.getClient(seatOf(otherTab))).toBeUndefined();
+    expect(room.getClient(seatOf(bystander))).toBeInstanceOf(Admin);
+    expect(room.isAdminUserKey(otherTab.userId, otherTab.guestProof)).toBe(false);
+
+    // Another host comes back and lifts the block.
+    const hostAgain = await join(state, guestHost);
+    expect(await ask(hostAgain.peer, "admin:unblockUsers", { userKeys: [blockedTab.userId] })).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+    await endOfTurn();
+
+    expect(room.isAdminUserKey(otherTab.userId, otherTab.guestProof)).toBe(false);
+    expect(room.isAdminUserKey(coHostTab.userId, coHostTab.guestProof)).toBe(false);
+    const back = await join(state, otherTab);
+    expect(back.ack).toHaveBeenCalledWith(joined);
+    expect(back.context.currentClient).not.toBeInstanceOf(Admin);
+  });
+
+  it("does not hand the room to another tab of a co-host removed as its last host", async () => {
+    const state = makeState();
+    const host = await join(state, guestHost);
+    const room = state.rooms.get("conclave:room")!;
+    await join(state, coHostTab);
+    await join(state, otherTab);
+    await join(state, bystander);
+    expect(await ask(host.peer, "promoteHost", { userId: seatOf(coHostTab) })).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+    forceRemoveClientNow({ io, state, room, userId: guestHostSeat });
+
+    // An operator removes the co-host while no other host is in.
+    expect(kickClient(room, seatOf(coHostTab), "Removed by host", { io, state })).toBe(true);
+
+    expect(room.getClient(seatOf(otherTab))).not.toBeInstanceOf(Admin);
+    expect(room.isAdminUserKey(otherTab.userId, otherTab.guestProof)).toBe(false);
+    expect(room.getClient(seatOf(bystander))).toBeInstanceOf(Admin);
+  });
+});
+
 describe("a guest join token whose claims are malformed", () => {
   const roomScoped = {
     userId: "guest-gp_TTTTTTTTTTTTTTTTTTTTTT",
@@ -3031,6 +3120,10 @@ describe("who may come in, against a slow reading of every decision", () => {
     root = new Map<string, string>();
     records = new Map<string, PassRecord>();
     blocked = new Set<string>();
+    // Keys the room gave host rights to (a host's promotion, a handoff, or
+    // a join as a co-host), and the seated tabs that are hosts.
+    coHosts = new Set<string>();
+    adminSeats = new Set<string>();
     status = new Map<string, "idle" | "pending" | "seated">();
     arrival = new Map<string, number>();
     tick() {
@@ -3059,7 +3152,7 @@ describe("who may come in, against a slow reading of every decision", () => {
       const group = this.group(pass);
       return tabs
         .filter((tab) => group.has(tab.pass))
-        .filter((tab) => this.status.get(tab.key) === "pending" || this.status.get(tab.key) === "seated" || this.blocked.has(tab.key) || this.named(tab.key))
+        .filter((tab) => this.status.get(tab.key) === "pending" || this.status.get(tab.key) === "seated" || this.blocked.has(tab.key) || this.named(tab.key) || this.coHosts.has(tab.key))
         .map((tab) => tab.key);
     }
     known(pass: string): boolean {
@@ -3097,6 +3190,12 @@ describe("who may come in, against a slow reading of every decision", () => {
     guestBlocked(pass: string): boolean {
       const group = this.group(pass);
       return [...this.blocked].some((key) => group.has(tabByKey.get(key)!.pass));
+    }
+    // A co-host's right holds for the whole guest, and never while it is blocked.
+    isCoHost(pass: string): boolean {
+      if (this.guestBlocked(pass)) return false;
+      const top = this.find(pass);
+      return [...this.coHosts].some((key) => this.find(tabByKey.get(key)!.pass) === top);
     }
     refuses(record: PassRecord): boolean {
       return record.wr?.admitted === false || record.lock?.admitted === false || record.answer?.admitted === false;
@@ -3147,6 +3246,7 @@ describe("who may come in, against a slow reading of every decision", () => {
     // guest's own join sets off (`recordedOnly`) reaches only passes that
     // have a record, and is no decision of the hosts.
     revokeKeys(keys: string[], options: { recordedOnly?: boolean } = {}) {
+      for (const key of keys) this.coHosts.delete(key);
       const passes = [...new Set(keys.map((key) => tabByKey.get(key)!.pass))].filter(
         (pass) => !options.recordedOnly || this.records.has(pass),
       );
@@ -3205,6 +3305,7 @@ describe("who may come in, against a slow reading of every decision", () => {
       for (const seated of this.tabsOfGuest(pass, "seated")) {
         if (!removedKeys.includes(seated.key)) continue;
         this.status.set(seated.key, "idle");
+        this.adminSeats.delete(seated.key);
         events.set(seated.key, "kicked");
       }
     }
@@ -3240,6 +3341,11 @@ describe("who may come in, against a slow reading of every decision", () => {
       let outcome: "joined" | "waiting" | "refused";
       if (this.blocked.has(tab.key) || this.guestBlocked(tab.pass)) {
         outcome = "refused";
+      } else if (this.isCoHost(tab.pass)) {
+        outcome = "joined";
+        this.status.set(tab.key, "seated");
+        this.coHosts.add(tab.key);
+        this.adminSeats.add(tab.key);
       } else if (!this.locked || this.admits(tab.pass)) {
         if (this.locked) {
           expect(this.admitsWithWholeHistory(tab.pass), `${tab.key} let in although the whole history refuses it`).toBe(true);
@@ -3283,6 +3389,7 @@ describe("who may come in, against a slow reading of every decision", () => {
       for (const other of seated) {
         this.revokeKeys(this.identities(other));
         this.status.set(other, "idle");
+        this.adminSeats.delete(other);
         events.set(other, "kicked");
       }
       void pass;
@@ -3293,6 +3400,7 @@ describe("who may come in, against a slow reading of every decision", () => {
       const events = new Map<string, string>();
       this.revokeKeys(this.identities(key));
       this.status.set(key, "idle");
+      this.adminSeats.delete(key);
       events.set(key, "kicked");
       this.prune();
       return events;
@@ -3309,6 +3417,11 @@ describe("who may come in, against a slow reading of every decision", () => {
     }
     unblock(key: string) {
       this.blocked.delete(key);
+      this.prune();
+    }
+    promote(key: string) {
+      this.coHosts.add(key);
+      this.adminSeats.add(key);
       this.prune();
     }
     withdraw(key: string) {
@@ -3328,7 +3441,35 @@ describe("who may come in, against a slow reading of every decision", () => {
     return rows.sort();
   };
 
-  const run = async (seed: number, steps: number, limit?: number) => {
+  type Step =
+    | { kind: "knock"; key: string; names: string[] }
+    | { kind: "admit" | "deny"; row: string }
+    | { kind: "block" | "unblock" | "kick" | "withdraw" | "promote"; key: string }
+    | { kind: "lock"; locked: boolean }
+    | { kind: "hostReconnects" | "hostsLeave" };
+
+  // The room's last co-host, a guest with several tabs, is blocked through
+  // a pass link while no other host is in, and the block is lifted later.
+  const tabOf = (browser: number, pass: string, index: number) => `guest-gp_b${browser}-${pass}-s${index}`;
+  const lastCoHostBlockedByALink: Step[] = [
+    { kind: "knock", key: tabOf(0, "X1", 0), names: [] },
+    { kind: "admit", row: tabOf(0, "X1", 0) },
+    { kind: "knock", key: tabOf(0, "X1", 0), names: [] },
+    { kind: "knock", key: tabOf(0, "X1", 1), names: [] },
+    { kind: "promote", key: tabOf(0, "X1", 0) },
+    { kind: "knock", key: tabOf(0, "X2", 0), names: [] },
+    { kind: "block", key: tabOf(0, "X2", 0) },
+    { kind: "knock", key: tabOf(1, "Y1", 0), names: [] },
+    { kind: "admit", row: tabOf(1, "Y1", 0) },
+    { kind: "knock", key: tabOf(1, "Y1", 0), names: [] },
+    { kind: "hostsLeave" },
+    { kind: "knock", key: tabOf(0, "X3", 0), names: ["proof-X1", "proof-X2"] },
+    { kind: "hostReconnects" },
+    { kind: "unblock", key: tabOf(0, "X2", 0) },
+    { kind: "knock", key: tabOf(0, "X1", 1), names: [] },
+  ];
+
+  const run = async (seed: number, steps: number, limit?: number, script: Step[] = []) => {
     // A lock admits the tabs already in, in the order they sat down, which
     // the oracle does not track; runs with a small record keep the room locked.
     const toggleLock = limit === undefined;
@@ -3349,6 +3490,7 @@ describe("who may come in, against a slow reading of every decision", () => {
     const room = state.rooms.get("conclave:room")!;
     room.setLocked(true);
     const hosts = [firstHost];
+    let hostSessions = 1;
     const oracle = new Oracle(limit);
     const peerOf = new Map<string, Awaited<ReturnType<typeof join>>["peer"]>();
     const history: string[] = [];
@@ -3358,6 +3500,8 @@ describe("who may come in, against a slow reading of every decision", () => {
       const answer = ack.mock.calls[0]?.[0] as { error?: string } | undefined;
       expect(answer?.error, `${event} ${JSON.stringify(payload)}, seed ${seed}`).toBeUndefined();
     };
+    const seatOf = (key: string) => `${key}#${tabByKey.get(key)!.session}`;
+    const hostSeats = () => tabs.filter((tab) => room.getClient(seatOf(tab.key)) instanceof Admin).map((tab) => tab.key);
     // A tab that knocks again on a new socket leaves its old request on the
     // old one, and an answer to that request goes there.
     const earlierPeerOf = new Map<string, Awaited<ReturnType<typeof join>>["peer"]>();
@@ -3388,23 +3532,62 @@ describe("who may come in, against a slow reading of every decision", () => {
         expect(screenOf(host.peer.emit), `host screen, ${where}`).toEqual(rows);
       }
       expect(room.waitingGuestCount, `count, ${where}`).toBe(rows.length);
+      // A blocked guest never holds host rights, and once the block is
+      // lifted it holds none until it is made a host again.
+      for (const tab of tabs) {
+        expect(room.isAdminUserKey(tab.key, tab.pass), `co-host ${tab.key}, ${where}`).toBe(oracle.isCoHost(tab.pass));
+        expect(room.isHostUserKey(tab.key, tab.pass), `host ${tab.key}, ${where}`).toBe(false);
+      }
+      expect(hostSeats().sort(), `host seats, ${where}`).toEqual([...oracle.adminSeats].sort());
     };
 
-    for (let step = 0; step < steps; step += 1) {
-      now += 1000;
-      const callsBefore = new Map([...peerOf].map(([key, peer]) => [key, peer.emit.mock.calls.length]));
+    const randomStep = (): Step => {
       const pendingKeys = tabs.filter((tab) => oracle.status.get(tab.key) === "pending").map((tab) => tab.key);
       const seatedKeys = tabs.filter((tab) => oracle.status.get(tab.key) === "seated").map((tab) => tab.key);
+      const plainSeats = seatedKeys.filter((key) => !oracle.adminSeats.has(key));
       const rows = oracle.rows();
-      const action = pick(22);
-      let events = new Map<string, string>();
-      if (action < 9) {
-        const free = tabs.filter((tab) => oracle.status.get(tab.key) !== "seated");
+      const hostIn = hosts.length > 0;
+      const action = pick(24);
+      const free = tabs.filter((tab) => oracle.status.get(tab.key) !== "seated");
+      if (action < 9 && free.length > 0) {
         const tab = free[pick(free.length)];
-        const names = BROWSERS[tab.browser].filter((other) => other !== tab.pass && pick(3) === 0);
+        return { kind: "knock", key: tab.key, names: BROWSERS[tab.browser].filter((other) => other !== tab.pass && pick(3) === 0) };
+      }
+      if (action < 12 && hostIn && rows.length > 0) return { kind: "admit", row: rows[pick(rows.length)] };
+      if (action < 15 && hostIn && rows.length > 0) return { kind: "deny", row: rows[pick(rows.length)] };
+      if (action < 16 && hostIn && pendingKeys.length + seatedKeys.length > 0) {
+        const candidates = [...pendingKeys, ...seatedKeys];
+        return { kind: "block", key: candidates[pick(candidates.length)] };
+      }
+      if (action < 17 && hostIn && oracle.blocked.size > 0) {
+        const blockedKeys = [...oracle.blocked];
+        return { kind: "unblock", key: blockedKeys[pick(blockedKeys.length)] };
+      }
+      if (action < 18 && hostIn && seatedKeys.length > 0) return { kind: "kick", key: seatedKeys[pick(seatedKeys.length)] };
+      if (action < 19 && hostIn && toggleLock) return { kind: "lock", locked: !oracle.locked };
+      if (action < 21 && pendingKeys.length > 0) return { kind: "withdraw", key: pendingKeys[pick(pendingKeys.length)] };
+      if (action < 22 && hostIn && plainSeats.length > 0) return { kind: "promote", key: plainSeats[pick(plainSeats.length)] };
+      if (action < 23 && hostIn && seatedKeys.length > 0) return { kind: "hostsLeave" };
+      return { kind: "hostReconnects" };
+    };
+
+    for (let step = 0; step < script.length + steps; step += 1) {
+      now += 1000;
+      const callsBefore = new Map([...peerOf].map(([key, peer]) => [key, peer.emit.mock.calls.length]));
+      const next = step < script.length ? script[step] : randomStep();
+      const hostSeatsBefore = new Set(oracle.adminSeats);
+      const hostsBefore = hosts.length;
+      // The guests a step takes out of the room, which a handoff must skip.
+      let removedGuests: string[] = [];
+      let events = new Map<string, string>();
+      if (next.kind === "knock") {
+        const tab = tabByKey.get(next.key)!;
+        const names = next.names;
         history.push(`knock ${tab.key} naming [${names.join(",")}]`);
+        const seatedBefore = tabs.filter((other) => oracle.status.get(other.key) === "seated").map((other) => other.key);
         const expected = oracle.knock(tab, names);
         events = expected.events;
+        removedGuests = seatedBefore.filter((key) => oracle.status.get(key) !== "seated");
         const joinedTab = await join(state, {
           userId: tab.key,
           clientId: "conclave",
@@ -3426,49 +3609,66 @@ describe("who may come in, against a slow reading of every decision", () => {
         const ack = joinedTab.ack.mock.calls[0]?.[0] as { status?: string; error?: string };
         const outcome = ack?.status === "joined" ? "joined" : ack?.status === "waiting" ? "waiting" : /not allowed/i.test(ack?.error ?? "") ? "refused" : `other: ${JSON.stringify(ack)}`;
         expect(outcome, `join of ${tab.key}, seed ${seed}, after: ${history.slice(-6).join(" | ")}`).toBe(expected.outcome);
-      } else if (action < 12 && rows.length > 0) {
-        const row = rows[pick(rows.length)];
-        history.push(`admit ${row}`);
-        events = oracle.answer(row, true);
-        await hostAsks("admitUser", { userId: row });
-      } else if (action < 15 && rows.length > 0) {
-        const row = rows[pick(rows.length)];
-        history.push(`deny ${row}`);
-        events = oracle.answer(row, false);
-        await hostAsks("rejectUser", { userId: row });
-      } else if (action < 16 && pendingKeys.length + seatedKeys.length > 0) {
-        const candidates = [...pendingKeys, ...seatedKeys];
-        const key = candidates[pick(candidates.length)];
-        history.push(`block ${key}`);
-        events = oracle.block(key);
-        await hostAsks("admin:blockUsers", { userKeys: [key] });
-      } else if (action < 17 && oracle.blocked.size > 0) {
-        const blockedKeys = [...oracle.blocked];
-        const key = blockedKeys[pick(blockedKeys.length)];
-        history.push(`unblock ${key}`);
-        oracle.unblock(key);
-        await hostAsks("admin:unblockUsers", { userKeys: [key] });
-      } else if (action < 18 && seatedKeys.length > 0) {
-        const key = seatedKeys[pick(seatedKeys.length)];
-        history.push(`kick ${key}`);
-        events = oracle.kick(key);
-        await hostAsks("kickUser", { userId: `${key}#${tabByKey.get(key)!.session}` });
-      } else if (action < 19 && toggleLock) {
-        const locked = !oracle.locked;
-        history.push(locked ? "lock" : "unlock");
-        oracle.setLocked(locked);
-        await hostAsks("lockRoom", { locked });
-      } else if (action < 21 && pendingKeys.length > 0) {
-        const key = pendingKeys[pick(pendingKeys.length)];
-        history.push(`withdraw ${key}`);
-        oracle.withdraw(key);
-        withdrawWaitingRequest(room, key);
+      } else if (next.kind === "admit" || next.kind === "deny") {
+        history.push(`${next.kind} ${next.row}`);
+        events = oracle.answer(next.row, next.kind === "admit");
+        await hostAsks(next.kind === "admit" ? "admitUser" : "rejectUser", { userId: next.row });
+      } else if (next.kind === "block") {
+        history.push(`block ${next.key}`);
+        removedGuests = oracle.identities(next.key);
+        events = oracle.block(next.key);
+        await hostAsks("admin:blockUsers", { userKeys: [next.key] });
+      } else if (next.kind === "unblock") {
+        history.push(`unblock ${next.key}`);
+        oracle.unblock(next.key);
+        await hostAsks("admin:unblockUsers", { userKeys: [next.key] });
+      } else if (next.kind === "kick") {
+        history.push(`kick ${next.key}`);
+        removedGuests = oracle.identities(next.key);
+        events = oracle.kick(next.key);
+        await hostAsks("kickUser", { userId: seatOf(next.key) });
+      } else if (next.kind === "lock") {
+        history.push(next.locked ? "lock" : "unlock");
+        oracle.setLocked(next.locked);
+        await hostAsks("lockRoom", { locked: next.locked });
+      } else if (next.kind === "withdraw") {
+        history.push(`withdraw ${next.key}`);
+        oracle.withdraw(next.key);
+        withdrawWaitingRequest(room, next.key);
+      } else if (next.kind === "promote") {
+        history.push(`promote ${next.key}`);
+        oracle.promote(next.key);
+        await hostAsks("promoteHost", { userId: seatOf(next.key) });
+      } else if (next.kind === "hostsLeave") {
+        history.push("hosts leave");
+        for (const host of hosts.splice(0)) {
+          forceRemoveClientNow({ io, state, room, userId: host.context.currentClient!.id });
+        }
       } else {
         history.push("host reconnects");
-        hosts.push(await join(state, hostTab(`host-${hosts.length}`)));
+        hosts.push(await join(state, hostTab(`host-${hostSessions++}`)));
       }
       await endOfTurn();
+
+      // With no host left, the room hands itself to one seat, never to a
+      // guest that is blocked or that this step took out.
+      const where = `seed ${seed}, after: ${history.slice(-6).join(" | ")}`;
+      const promoted = hostSeats().filter((key) => !oracle.adminSeats.has(key));
+      const lostAHost = hosts.length < hostsBefore || [...hostSeatsBefore].some((key) => !oracle.adminSeats.has(key));
+      const hostless = hosts.length === 0 && oracle.adminSeats.size === 0;
+      const removed = new Set(removedGuests.flatMap((key) => tabs.filter((tab) => oracle.find(tab.pass) === oracle.find(tabByKey.get(key)!.pass)).map((tab) => tab.key)));
+      const eligible = tabs.filter((tab) => oracle.status.get(tab.key) === "seated" && !oracle.guestBlocked(tab.pass) && !removed.has(tab.key));
+      expect(promoted.length, `seats made hosts, ${where}`).toBeLessThanOrEqual(lostAHost && hostless ? 1 : 0);
+      if (lostAHost && hostless && eligible.length > 0) {
+        expect(promoted.length, `the room was left without a host, ${where}`).toBe(1);
+      }
+      for (const key of promoted) {
+        expect(eligible.map((tab) => tab.key), `handed to ${key}, ${where}`).toContain(key);
+        oracle.promote(key);
+      }
       expectAgreement(events, callsBefore);
+      // A room left empty with no host closes, and the run ends with it.
+      if (state.rooms.get("conclave:room") !== room) break;
     }
   };
 
@@ -3476,6 +3676,10 @@ describe("who may come in, against a slow reading of every decision", () => {
 
   it.each([1, 7, 42, 2026, 31337, 99991])("agrees with the oracle over 300 random steps (seed %i)", { timeout: 60_000 }, async (seed) => {
     await run(seed, 300);
+  });
+
+  it.each([1, 7, 42, 2026])("agrees with the oracle when the room's last co-host is blocked through a pass link, then 300 random steps (seed %i)", { timeout: 60_000 }, async (seed) => {
+    await run(seed, 300, undefined, lastCoHostBlockedByALink);
   });
 
   it.each([

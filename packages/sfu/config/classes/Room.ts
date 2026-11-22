@@ -2536,13 +2536,19 @@ export class Room {
     this.adminUserKeys.add(userKey);
   }
 
+  /** Whether the guest behind `userKey` is a co-host. A blocked guest never is. */
   isAdminUserKey(userKey: string, guestProof?: string): boolean {
-    return this.guestHolds(this.adminUserKeys, userKey, guestProof);
+    return (
+      !this.isBlocked(userKey, guestProof) &&
+      this.guestHolds(this.adminUserKeys, userKey, guestProof)
+    );
   }
 
+  /** Whether the guest behind `userKey` is the host. A blocked guest never is. */
   isHostUserKey(userKey: string, guestProof?: string): boolean {
     return (
       this.hostUserKey !== null &&
+      !this.isBlocked(userKey, guestProof) &&
       this.guestHolds([this.hostUserKey], userKey, guestProof)
     );
   }
@@ -2574,19 +2580,49 @@ export class Room {
     }
   }
 
+  /**
+   * Makes the seat `userId` a host's. Every way a seat gains host rights
+   * comes through here, and a seat whose guest is blocked never does: a
+   * block ends the guest's rights, and nothing gives them back but a host
+   * who promotes the guest after the block is lifted.
+   */
   promoteClientToAdmin(userId: string): Admin | null {
     const client = this.clients.get(userId);
     if (!client || client.isWebinarAttendee) {
       return null;
     }
+    const userKey = this.userKeysById.get(userId);
+    if (
+      userKey !== undefined &&
+      this.isBlocked(userKey, this.guestProofsByUserKey.get(userKey))
+    ) {
+      return null;
+    }
     if (!(client instanceof Admin)) {
       Object.setPrototypeOf(client, Admin.prototype);
     }
-    const userKey = this.userKeysById.get(userId);
     if (userKey) {
       this.adminUserKeys.add(userKey);
     }
     return client as Admin;
+  }
+
+  /**
+   * Hands the room on when no host is left in it: to the first seat that is
+   * not a host or an observer, and whose guest is neither blocked nor among
+   * `excludedUserKeys`, the guests that a removal is taking out.
+   */
+  promoteNextAdmin(
+    excludedUserKeys: ReadonlySet<string> = new Set(),
+  ): Admin | null {
+    for (const client of this.clients.values()) {
+      if (client instanceof Admin || client.isObserver) continue;
+      const userKey = this.userKeysById.get(client.id);
+      if (userKey !== undefined && excludedUserKeys.has(userKey)) continue;
+      const promoted = this.promoteClientToAdmin(client.id);
+      if (promoted) return promoted;
+    }
+    return null;
   }
 
   getHostUserId(): string | null {

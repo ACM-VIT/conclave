@@ -155,29 +155,19 @@ export type RoomPolicyUpdate = {
 
 type ProducerInfo = ReturnType<Client["getProducerInfos"]>[number];
 
-const promoteNextAdmin = (room: Room): Admin | null => {
-  for (const client of room.clients.values()) {
-    if (client instanceof Admin || client.isObserver) {
-      continue;
-    }
-    const promoted = room.promoteClientToAdmin(client.id);
-    if (promoted) {
-      return promoted;
-    }
-  }
-  return null;
-};
-
+// A host's seat went. When no host is left, the room is handed to the next
+// seat, never to one of `excludedUserKeys`: the guests a removal took out.
 const handleAdminRemoved = (
   io: SocketIOServer,
   state: SfuState,
   room: Room,
+  excludedUserKeys: ReadonlySet<string> = new Set(),
 ): void => {
   const roomId = room.id;
   const roomChannelId = room.channelId;
 
   if (!room.hasActiveAdmin()) {
-    const promoted = promoteNextAdmin(room);
+    const promoted = room.promoteNextAdmin(excludedUserKeys);
     if (promoted) {
       const promotedContext = getSocketContext(promoted.socket);
       if (promotedContext) {
@@ -1021,8 +1011,11 @@ export const forceRemoveClientNow = (options: {
   state: SfuState;
   room: Room;
   userId: string;
+  // Off when the caller removes several seats and hands the room on once,
+  // after the last of them (see `removeSeats`).
+  handOff?: boolean;
 }): boolean => {
-  const { io, state, room, userId } = options;
+  const { io, state, room, userId, handOff = true } = options;
   const target = room.getClient(userId);
   if (!target) {
     // Already gone (grace may have already expired); nothing to stop.
@@ -1056,7 +1049,7 @@ export const forceRemoveClientNow = (options: {
   emitWebinarAttendeeCountChanged(io, state, room);
   emitWebinarFeedChanged(io, state, room);
 
-  if (wasAdmin) {
+  if (wasAdmin && handOff) {
     handleAdminRemoved(io, state, room);
   }
 
@@ -1096,15 +1089,9 @@ export const blockUserKey = (
   }
   publishLobby(room);
 
-  const kickedUserIds: string[] = [];
-  if (options.kickPresent) {
-    for (const [userId, key] of Array.from(room.userKeysById.entries())) {
-      if (!userKeys.includes(key)) continue;
-      if (kickClient(room, userId, options.reason, options)) {
-        kickedUserIds.push(userId);
-      }
-    }
-  }
+  const kickedUserIds = options.kickPresent
+    ? removeSeats(room, seatsUnder(room, userKeys), options.reason, options)
+    : [];
   return { rejectedPendingUserKeys, kickedUserIds };
 };
 
@@ -1127,11 +1114,7 @@ export const removeBlockedGuest = (
     request.socket.emit("joinRejected", { roomId: room.id });
   }
   publishLobby(room);
-  for (const [userId, userKey] of Array.from(room.userKeysById.entries())) {
-    if (userKeys.includes(userKey)) {
-      removeSeat(room, userId, "Blocked by host", options);
-    }
-  }
+  removeSeats(room, seatsUnder(room, userKeys), "Blocked by host", options);
 };
 
 export const kickClient = (
@@ -1150,34 +1133,67 @@ export const kickClient = (
   if (userKey) {
     room.dropRejoinGrants(userKey);
   }
-  return removeSeat(room, userId, reason, options);
+  return removeSeats(room, [userId], reason, options).length > 0;
 };
 
-const removeSeat = (
+const seatsUnder = (room: Room, userKeys: readonly string[]): string[] =>
+  Array.from(room.userKeysById.entries())
+    .filter(([, userKey]) => userKeys.includes(userKey))
+    .map(([userId]) => userId);
+
+/**
+ * Removes the seats `userIds` as one operation. The caller has already
+ * ended what their guests may do: it dropped their rights or blocked them.
+ * Every seat goes first, and only then is the room handed on, once, to a
+ * seat whose guest is neither blocked nor one of the guests removed here.
+ * Handing it on between two removals could make the guest's next tab a
+ * host, and that right would outlive the removal. Returns the seats it
+ * removed.
+ */
+const removeSeats = (
   room: Room,
-  userId: string,
+  userIds: readonly string[],
   reason: string,
   options?: { io?: SocketIOServer; state?: SfuState },
-): boolean => {
-  const target = room.getClient(userId);
-  if (!target || isSuperAdminClient(target)) {
-    return false;
+): string[] => {
+  const targets = userIds.filter((userId) => {
+    const target = room.getClient(userId);
+    return target !== undefined && !isSuperAdminClient(target);
+  });
+  const removedGuests = new Set<string>();
+  for (const userId of targets) {
+    const userKey = room.userKeysById.get(userId);
+    if (!userKey) continue;
+    for (const key of room.identitiesOfSameGuest(userKey)) removedGuests.add(key);
   }
-  target.socket.emit("kicked", { reason, roomId: room.id });
-  target.socket.disconnect(true);
-
-  // When io/state are available, also deterministically stop media now so a
-  // concurrent network drop's disconnect grace cannot keep producers flowing.
-  if (options?.io && options.state) {
-    forceRemoveClientNow({
-      io: options.io,
-      state: options.state,
-      room,
-      userId,
-    });
+  let removedAdmin = false;
+  for (const userId of targets) {
+    const target = room.getClient(userId);
+    if (!target) continue;
+    removedAdmin ||= target instanceof Admin && !target.isObserver;
+    target.socket.emit("kicked", { reason, roomId: room.id });
+    target.socket.disconnect(true);
+    // When io/state are available, also deterministically stop media now so a
+    // concurrent network drop's disconnect grace cannot keep producers flowing.
+    if (options?.io && options.state) {
+      forceRemoveClientNow({
+        io: options.io,
+        state: options.state,
+        room,
+        userId,
+        handOff: false,
+      });
+    }
   }
-
-  return true;
+  if (
+    removedAdmin &&
+    options?.io &&
+    options.state &&
+    options.state.rooms.get(room.channelId) === room
+  ) {
+    handleAdminRemoved(options.io, options.state, room, removedGuests);
+  }
+  return targets;
 };
 
 export const closeProducerForMediaKey = (options: {

@@ -1,5 +1,4 @@
 import { Admin } from "../../../config/classes/Admin.js";
-import type { Room } from "../../../config/classes/Room.js";
 import { config } from "../../../config/config.js";
 import type { AppsAwarenessData } from "../../../types.js";
 import { Logger } from "../../../utilities/loggers.js";
@@ -13,19 +12,6 @@ import { getSocketContext, type ConnectionContext } from "../context.js";
 import { interruptActiveConclaveAnswers } from "../conclaveRelayLifecycle.js";
 import { emitChatHistorySnapshot } from "./chatHistory.js";
 import { registerAdminHandlers } from "./adminHandlers.js";
-
-const promoteNextAdmin = (room: Room): Admin | null => {
-  for (const client of room.clients.values()) {
-    if (client instanceof Admin || client.isObserver) {
-      continue;
-    }
-    const promoted = room.promoteClientToAdmin(client.id);
-    if (promoted) {
-      return promoted;
-    }
-  }
-  return null;
-};
 
 export const registerDisconnectHandlers = (
   context: ConnectionContext,
@@ -103,7 +89,7 @@ export const registerDisconnectHandlers = (
 
         if (wasAdmin) {
           if (!activeRoom.hasActiveAdmin()) {
-            const promoted = promoteNextAdmin(activeRoom);
+            const promoted = activeRoom.promoteNextAdmin();
             if (promoted) {
               Logger.info(
                 `Promoted ${promoted.id} to admin in room ${roomId} after host disconnect.`,
