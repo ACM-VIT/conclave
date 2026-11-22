@@ -42,7 +42,7 @@ Pass paths to narrow the pass. Each line is one comment with these fields:
 - `allowed`: the allowlist kind, such as `shebang`, `eslint-directive` or `license-header`, or `null`;
 - `text`.
 
-Drop every record whose `file` is in `/tmp/open-pr-files.txt`, and every record with a non-null `allowed`.
+Drop every record whose `file` is in `/tmp/open-pr-files.txt`. Keep the allowlisted records in the list and classify them too: `allowed` only says the lint lets a comment through, not that it should stay. An annotated `eslint-disable` or `@ts-expect-error` that silences a bug-catching rule is still an Excuse. Drop an allowlisted record only after step 3 calls it Keep tooling or Keep license.
 
 ## 3. Classify each comment
 
@@ -84,9 +84,9 @@ Run `next typegen` first: without the generated route types, the typed web lint 
 
 This runs `eslint --prune-suppressions` at the root and in `apps/web`, then `ratchet.mjs --update`. Both only lower counts.
 
-ESLint fails when a file has fewer comments than its suppression, so every TS/JS deletion needs the prune in the same change. The ratchet passes on a lower count and prints a reminder to update.
+`pnpm lint` runs ESLint with `--pass-on-unpruned-suppressions`, so a change that deletes comments passes without a prune, and so does the ratchet. A count left high cannot be refilled: the ratchet compares each changed file's comment count with the base commit and fails on any rise. Prune anyway in a comment pass, so the baselines show what is left.
 
-Never run `eslint --suppress-rule` or `--suppress-all`, and never raise a count by hand. The ratchet compares all three baselines with the merge base of `origin/staging` (or `$COMMENT_RATCHET_BASE`) and fails on any rise. A moved file counts as a new file, so delete its comments when you move it.
+Never run `eslint --suppress-rule` or `--suppress-all`, and never raise a count by hand. The ratchet compares all three baselines, and every changed file's comment count, with a base commit and fails on any rise. The base is the merge base with `$COMMENT_RATCHET_BASE` (default `origin/staging`). CI sets it to the PR's base branch on pull requests and to the previous tip on pushes, and a clean checkout that sits on the base branch compares with `HEAD^1`. Inline config that switches the rule off (`/* eslint conclave/no-comments: "off" */`, a blanket `eslint-disable`, or a disable that names the rule) fails the ratchet wherever it sits, license header included. A moved file counts as a new file, so delete its comments when you move it.
 
 ## 6. Run the gate
 
