@@ -536,6 +536,14 @@ peers_serving() {
   done
 }
 
+# True when every SFU instance, deployed in this run or not, runs the image.
+all_on_image() {
+  local svc container
+  for svc in "${ALL_SFU_SERVICES[@]}"; do
+    container="$(service_container "$svc")"
+    [[ -n "$container" && "$(docker inspect -f '{{.Image}}' "$container")" == "$1" ]] || return 1
+  done
+}
 
 # Any HTTP answer, even an error, means the process is up.
 answers_http() {
@@ -742,14 +750,19 @@ for svc in "${ORDERED_SERVICES[@]}"; do
   deploy_service "$svc"
 done
 
-if [[ "$ROLLBACK" == "true" ]]; then
+# The release record moves only once every instance runs the target, so a
+# deploy or rollback of some instances (SFU_DEPLOY_SERVICES) keeps what the
+# others still need: a partial rollback keeps its target for the rest.
+if [[ "$ROLLBACK" == "true" ]] && ! all_on_image "$TARGET_IMAGE"; then
+  echo "The other instances still run ${LAST_GOOD_COMMIT}; --rollback keeps ${TARGET_COMMIT} as its target until they are back on it too."
+elif [[ "$ROLLBACK" == "true" ]]; then
   # One step back only: a second --rollback has nothing older to go to.
   LAST_GOOD_COMMIT="$TARGET_COMMIT"
   LAST_GOOD_IMAGE="$TARGET_IMAGE"
   PREVIOUS_GOOD_COMMIT=""
   PREVIOUS_GOOD_IMAGE=""
   save_deploy_state
-elif [[ "$TARGET_IMAGE" != "$LAST_GOOD_IMAGE" && "$VERIFIED_IMAGE" == "$TARGET_IMAGE" ]]; then
+elif [[ "$TARGET_IMAGE" != "$LAST_GOOD_IMAGE" && "$VERIFIED_IMAGE" == "$TARGET_IMAGE" ]] && all_on_image "$TARGET_IMAGE"; then
   PREVIOUS_GOOD_COMMIT="$LAST_GOOD_COMMIT"
   PREVIOUS_GOOD_IMAGE="$LAST_GOOD_IMAGE"
   LAST_GOOD_COMMIT="$TARGET_COMMIT"

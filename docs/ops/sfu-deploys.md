@@ -83,7 +83,10 @@ Each fully deployed release is recorded in
 This runs the same drain and canary steps with the previous good image instead
 of a build, so it needs no `git` change and takes minutes. It goes back one
 release only. Afterwards, revert the bad commit on `main` before the next
-deploy, because a normal deploy builds whatever `main` holds.
+deploy, because a normal deploy builds whatever `main` holds. A rollback of
+some instances (`SFU_DEPLOY_SERVICES`) keeps its target until every instance
+is back on it, so the rest can follow with another `--rollback`; likewise a
+deploy is recorded as a release only once every instance runs it.
 
 `--rollback` is available after two releases have gone out with this script.
 Before that, revert and deploy.

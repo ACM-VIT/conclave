@@ -406,3 +406,32 @@ test("a rerun checks the public route of an instance already on the target", asy
     assert.equal(sfus["sfu-a"].drains.length, 0);
   });
 });
+
+test("a partial rollback keeps the rollback target until every instance is back", async () => {
+  await withSfus({ "sfu-a": { onTarget: true }, "sfu-b": { onTarget: true } }, async (sfus) => {
+    const stateDir = await mkdtemp(path.join(tmpdir(), "conclave-deploy-state-"));
+    try {
+      await writeFile(
+        path.join(stateDir, "vm.env"),
+        "LAST_GOOD_COMMIT=bad\nLAST_GOOD_IMAGE=sha256:target\nPREVIOUS_GOOD_COMMIT=good\nPREVIOUS_GOOD_IMAGE=sha256:previous\nVERIFIED_IMAGE=sha256:target\n",
+      );
+      const rollback = (svc) =>
+        deploy(sfus, { args: ["--rollback"], env: { SFU_DEPLOY_SERVICES: svc, SFU_DEPLOY_STATE_DIR: stateDir } });
+
+      const first = await rollback("sfu-a");
+      assert.equal(first.code, 0, first.output);
+      assert.equal(sfus["sfu-a"].image, "sha256:previous");
+      assert.equal(sfus["sfu-b"].image, "sha256:target");
+      assert.match(await readFile(path.join(stateDir, "vm.env"), "utf8"), /PREVIOUS_GOOD_IMAGE=sha256:previous/);
+
+      const second = await rollback("sfu-b");
+      assert.equal(second.code, 0, second.output);
+      assert.equal(sfus["sfu-b"].image, "sha256:previous");
+      const recorded = await readFile(path.join(stateDir, "vm.env"), "utf8");
+      assert.match(recorded, /LAST_GOOD_IMAGE=sha256:previous/);
+      assert.match(recorded, /PREVIOUS_GOOD_IMAGE=''\n/);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+});
