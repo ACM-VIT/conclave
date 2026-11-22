@@ -1,6 +1,12 @@
 export type ReconnectRequest = {
   immediate?: boolean;
   userInitiated?: boolean;
+  /**
+   * Ask the join route for a fresh answer on a new socket, even while the
+   * socket is still connected, so rebuilt transports get current TURN
+   * credentials instead of the ones that just failed.
+   */
+  refreshIceServers?: boolean;
 };
 
 export type InFlightReconnectDecision = {

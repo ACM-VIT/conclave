@@ -1539,7 +1539,7 @@ export function useMeetSocket({
           recoverable: true,
         });
       }
-      void handleReconnectRef.current?.();
+      void handleReconnectRef.current?.({ refreshIceServers: true });
     },
     [
       consumerTransportRef,
@@ -9139,8 +9139,11 @@ export function useMeetSocket({
     let roomUnavailableSince: number | null = null;
     let roomUnavailableRetries = 0;
     let nextDelayOverrideMs: number | null = null;
-    let hasTriedHeldJoinInfo = false;
-    let mayReuseSocket = true;
+    // A refresh skips both the held answer and the open socket, so the first
+    // attempt asks the join route.
+    const refreshIceServers = options?.refreshIceServers === true;
+    let hasTriedHeldJoinInfo = refreshIceServers;
+    let mayReuseSocket = !refreshIceServers;
     let roomWaitExpired = false;
     reconnectInFlightRef.current = true;
     reconnectAttemptsRef.current = resolveReconnectStartAttempts(
@@ -9859,7 +9862,11 @@ export function useMeetSocket({
     }
 
     if (reconnectInFlightRef.current) {
-      await handleReconnect({ immediate: true, userInitiated: true });
+      await handleReconnect({
+        immediate: true,
+        userInitiated: true,
+        refreshIceServers: true,
+      });
       return;
     }
 
@@ -9879,7 +9886,11 @@ export function useMeetSocket({
     setConnectionState("reconnecting");
 
     if (currentRoomIdRef.current) {
-      await handleReconnect({ immediate: true, userInitiated: true });
+      await handleReconnect({
+        immediate: true,
+        userInitiated: true,
+        refreshIceServers: true,
+      });
       return;
     }
 
