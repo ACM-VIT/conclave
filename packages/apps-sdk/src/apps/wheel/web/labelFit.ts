@@ -1,0 +1,126 @@
+export type MeasureText = (text: string) => number;
+
+export type LabelGeometry = {
+  count: number;
+  outerRadius: number;
+  innerRadius: number;
+  maxFontSize: number;
+  minFontSize: number;
+};
+
+export type FittedLabel = {
+  text: string;
+  truncated: boolean;
+};
+
+export type FittedLabels = {
+  fontSize: number;
+  labels: (FittedLabel | null)[];
+};
+
+const ELLIPSIS = "…";
+const THICKNESS = 1.05;
+const EDGE_GAP = 0.6;
+const OUTLIER_RATIO = 0.7;
+const MIN_FULL_RATIO = 0.75;
+
+const mod360 = (value: number): number => ((value % 360) + 360) % 360;
+
+const halfTan = (count: number): number =>
+  count <= 2 ? Number.POSITIVE_INFINITY : Math.tan(Math.PI / count);
+
+const innerLimit = (fontSize: number, geometry: LabelGeometry): number => {
+  const tan = halfTan(geometry.count);
+  const wedge = Number.isFinite(tan)
+    ? ((fontSize * THICKNESS) / 2 + EDGE_GAP) / tan
+    : 0;
+  return Math.max(geometry.innerRadius, wedge);
+};
+
+const maxLabelWidth = (fontSize: number, geometry: LabelGeometry): number =>
+  Math.max(0, geometry.outerRadius - innerLimit(fontSize, geometry));
+
+const largestFittingSize = (
+  unitWidth: number,
+  geometry: LabelGeometry
+): number => {
+  const tan = halfTan(geometry.count);
+  const span = geometry.outerRadius - geometry.innerRadius;
+  const byLength = unitWidth > 0 ? span / unitWidth : geometry.maxFontSize;
+  const byWedge = Number.isFinite(tan)
+    ? (geometry.outerRadius * tan - EDGE_GAP) / (THICKNESS / 2 + unitWidth * tan)
+    : geometry.maxFontSize;
+  return Math.min(geometry.maxFontSize, byLength, byWedge);
+};
+
+const truncateToWidth = (
+  label: string,
+  widthAtSize: (text: string) => number,
+  limit: number
+): FittedLabel | null => {
+  if (widthAtSize(label) <= limit) return { text: label, truncated: false };
+  const characters = Array.from(label);
+  let low = 0;
+  let high = characters.length - 1;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    const candidate = `${characters.slice(0, mid).join("").trimEnd()}${ELLIPSIS}`;
+    if (widthAtSize(candidate) <= limit) low = mid;
+    else high = mid - 1;
+  }
+  if (low < 1) return null;
+  return {
+    text: `${characters.slice(0, low).join("").trimEnd()}${ELLIPSIS}`,
+    truncated: true,
+  };
+};
+
+export const fitWheelLabels = (
+  labels: string[],
+  geometry: LabelGeometry,
+  measure: MeasureText
+): FittedLabels => {
+  if (labels.length === 0) return { fontSize: geometry.maxFontSize, labels: [] };
+  const sizes = labels
+    .map((label) => largestFittingSize(measure(label), geometry))
+    .sort((a, b) => a - b);
+  const typical = sizes[Math.floor((sizes.length - 1) / 2)];
+  const chosen = sizes[0] >= typical * OUTLIER_RATIO ? sizes[0] : typical;
+  const fontSize = Math.max(
+    geometry.minFontSize,
+    Math.floor(Math.min(geometry.maxFontSize, chosen) * 20) / 20
+  );
+  const limit = maxLabelWidth(fontSize, geometry);
+  const widthAtSize = (text: string) => measure(text) * fontSize;
+  const fitted = labels.map((label) => truncateToWidth(label, widthAtSize, limit));
+  const fullCount = fitted.filter((label) => label && !label.truncated).length;
+  if (fullCount < labels.length * MIN_FULL_RATIO) {
+    return { fontSize, labels: labels.map(() => null) };
+  }
+  return { fontSize, labels: fitted };
+};
+
+export const isLabelFlipped = (
+  index: number,
+  count: number,
+  rotation: number
+): boolean => {
+  const screenAngle = mod360((360 / count) * (index + 0.5) + rotation);
+  return screenAngle >= 180;
+};
+
+export const labelFlipSignature = (rotation: number, count: number): string => {
+  let signature = "";
+  for (let index = 0; index < count; index += 1) {
+    signature += isLabelFlipped(index, count, rotation) ? "1" : "0";
+  }
+  return signature;
+};
+
+export const fitLineLabel = (
+  label: string,
+  width: number,
+  fontSize: number,
+  measure: MeasureText
+): string | null =>
+  truncateToWidth(label, (text) => measure(text) * fontSize, width)?.text ?? null;
