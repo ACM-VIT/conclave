@@ -335,3 +335,40 @@ test(
     }
   },
 );
+
+test(
+  "the configured database gets the online backup whatever its name",
+  { skip: missing.length > 0 && `needs ${missing.join(", ")} on PATH` },
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+    let db;
+    try {
+      const { state, repo, backup, latestArchive, restore } = await setUp(root);
+      await writeFile(path.join(repo, ".env"), "CONCLAVE_SQLITE_PATH=/var/lib/conclave/recordings/live.db\n");
+      // Open in WAL mode, as the SFU holds it, so committed rows sit in the WAL.
+      db = new DatabaseSync(path.join(state, "live.db"));
+      db.exec("PRAGMA journal_mode = WAL");
+      db.exec("CREATE TABLE scheduled_webinars (id TEXT PRIMARY KEY)");
+      for (const id of ["w1", "w2", "w3"]) db.prepare("INSERT INTO scheduled_webinars VALUES (?)").run(id);
+
+      await backup("--local-only");
+      db.close();
+      const archive = await latestArchive();
+      const members = (await run("sh", ["-c", `age --decrypt -i "$1" "$2" | tar -tzf -`, "sh", path.join(root, "key.txt"), archive])).stdout;
+      assert.match(members, /\.\/sqlite\/live\.db\n/, "the configured database is in the SQLite copies");
+      const files = (await run("sh", ["-c", `age --decrypt -i "$1" "$2" | tar -xzOf - ./state-files.tar | tar -tf -`, "sh", path.join(root, "key.txt"), archive])).stdout;
+      assert.ok(!files.includes("live.db"), "and not copied raw with its WAL");
+      const dryRun = await restore("--file", archive);
+      assert.match(dryRun.stdout, /sqlite\.live\.db\.scheduled_webinars=3/);
+
+      await rm(state, { recursive: true });
+      await restore("--file", archive, "--yes", "--only", "sqlite");
+      const restored = new DatabaseSync(path.join(state, "live.db"), { readOnly: true });
+      assert.deepEqual(restored.prepare("SELECT id FROM scheduled_webinars ORDER BY id").all().map((row) => row.id), ["w1", "w2", "w3"]);
+      restored.close();
+    } finally {
+      if (db?.isOpen) db.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);

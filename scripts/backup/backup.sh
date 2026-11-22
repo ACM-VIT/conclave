@@ -47,30 +47,35 @@ manifest="${payload}/MANIFEST"
 
 sources=0
 
-# The compose file mounts the state dir at this path and hands the SFU its
-# database as CONCLAVE_SQLITE_PATH. A database outside the mount lives in the
-# container, is lost on every deploy, and cannot be backed up from the host.
-container_state_dir=/var/lib/conclave/recordings
-if [[ -n "${CONCLAVE_SQLITE_PATH:-}" && "$CONCLAVE_SQLITE_PATH" != "${container_state_dir}/"* &&
-  "$CONCLAVE_SQLITE_PATH" != "${STATE_DIR%/}/"* ]]; then
-  die "CONCLAVE_SQLITE_PATH=${CONCLAVE_SQLITE_PATH} is outside the state dir, so it is not on the volume; move it under ${container_state_dir}"
-fi
+# The compose file hands the SFU its database as CONCLAVE_SQLITE_PATH. A
+# database outside the mounted state dir lives in the container, is lost on
+# every deploy, and cannot be backed up from the host.
+configured="$(configured_database "$STATE_DIR")" ||
+  die "CONCLAVE_SQLITE_PATH=${CONCLAVE_SQLITE_PATH} is outside the state dir, so it is not on the volume; move it under ${CONTAINER_STATE_DIR}"
 
 # SQLite: the online backup API copies a consistent snapshot while the SFUs
 # keep writing; copying the file (or its WAL) directly would not. Each
 # database keeps its path below the state dir, so restore.sh puts it back
 # where the SFU opens it. A database the SFU opens through a symlink is
 # copied once, at the path the link reaches, and the link is recorded so
-# restore.sh can recreate it.
+# restore.sh can recreate it. The configured database gets the same, whatever
+# it is named.
 mapfile -t databases < <(sqlite_files "$STATE_DIR")
+links="$(sqlite_links "$STATE_DIR")"
+if [[ -n "$configured" && -L "${STATE_DIR}/${configured}" && "$configured" != *.sqlite ]]; then
+  links+=$'\n'"${configured}"$'\t'"$(readlink "${STATE_DIR}/${configured}")"
+elif [[ -n "$configured" && -f "${STATE_DIR}/${configured}" && ! -L "${STATE_DIR}/${configured}" ]]; then
+  databases+=("$configured")
+fi
 : > "${payload}/sqlite-links"
 while IFS=$'\t' read -r link target; do
-  resolved="$(sqlite_link_target "$STATE_DIR" "$link" "$container_state_dir")" ||
+  [[ -n "$link" ]] || continue
+  resolved="$(sqlite_link_target "$STATE_DIR" "$link" "$CONTAINER_STATE_DIR")" ||
     die "${STATE_DIR}/${link} links to ${target}, which is not a file inside the state dir"
   printf '%s\t%s\n' "$link" "$target" >> "${payload}/sqlite-links"
   echo "sqlite.link.${link}=${target}" >> "$manifest"
   databases+=("$resolved")
-done < <(sqlite_links "$STATE_DIR")
+done <<< "$links"
 mapfile -t databases < <(printf '%s\n' "${databases[@]}" | grep -v '^$' | LC_ALL=C sort -u)
 for rel in "${databases[@]}"; do
   db="${STATE_DIR}/${rel}"

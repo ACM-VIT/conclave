@@ -74,6 +74,23 @@ redis_cli() (
   exec redis-cli "${args[@]}" --no-auth-warning "$@"
 )
 
+# Where the compose file mounts the state dir inside the SFU containers.
+CONTAINER_STATE_DIR=/var/lib/conclave/recordings
+
+# Prints the database the SFU is configured to open (CONCLAVE_SQLITE_PATH, the
+# one the compose file passes to its containers) relative to the state dir,
+# whatever its name, or nothing when it is unset. Fails when it is outside the
+# state dir.
+configured_database() {
+  local state_dir="${1%/}" configured="${CONCLAVE_SQLITE_PATH:-}"
+  [[ -n "$configured" ]] || return 0
+  case "$configured" in
+    "${CONTAINER_STATE_DIR}/"*) printf '%s\n' "${configured#"${CONTAINER_STATE_DIR}/"}" ;;
+    "${state_dir}/"*) printf '%s\n' "${configured#"${state_dir}/"}" ;;
+    *) return 1 ;;
+  esac
+}
+
 # Prints every SQLite database under a directory, at any depth, as a path
 # relative to it.
 sqlite_files() {

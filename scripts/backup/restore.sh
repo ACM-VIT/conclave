@@ -112,7 +112,7 @@ done
 # its databases open for as long as it runs, in a container or not.
 command -v fuser >/dev/null || die "fuser is not installed (apt-get install psmisc)"
 # A link's path reaches the file it points to, whatever that file is named.
-mapfile -t live_databases < <(sqlite_files "$STATE_DIR"; sqlite_links "$STATE_DIR" | cut -f1)
+mapfile -t live_databases < <(sqlite_files "$STATE_DIR"; sqlite_links "$STATE_DIR" | cut -f1; configured_database "$STATE_DIR" || true)
 for rel in "${live_databases[@]}"; do
   holders="$(fuser "${STATE_DIR}/${rel}" 2>/dev/null | xargs || true)"
   [[ -z "$holders" ]] || die "PID ${holders} still holds ${STATE_DIR}/${rel} open; stop the SFU containers before restoring"

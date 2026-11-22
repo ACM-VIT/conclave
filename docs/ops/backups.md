@@ -95,7 +95,9 @@ systemctl list-timers conclave-backup.timer
 
 `CONCLAVE_SQLITE_PATH` in the repo `.env` (if set) must point inside the
 state dir. A path outside the volume lives inside the container and is lost on
-every deploy, so the backup fails until it is moved. If it is a symlink, the
+every deploy, so the backup fails until it is moved. The configured database
+gets the online backup whatever it is named (`live.db` as much as
+`conclave.sqlite`). If it is a symlink, the
 file it reaches is backed up once and the link is recreated on restore; a link
 to a file outside the state dir fails the backup the same way.
 
