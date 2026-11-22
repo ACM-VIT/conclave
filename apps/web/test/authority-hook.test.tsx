@@ -81,10 +81,10 @@ const rendered = () => ({
   notes: [...container.querySelectorAll("p")].map((node) => node.textContent),
 });
 
-const mount = async (children = <Notes />) => {
+const mount = async (children = <Notes />, joined = true) => {
   await act(async () =>
     root.render(
-      <AuthorityProvider socket={server.socket} joined>
+      <AuthorityProvider socket={server.socket} joined={joined}>
         {children}
       </AuthorityProvider>,
     ),
@@ -242,4 +242,41 @@ it("shares one subscription between components that use the same app", async () 
 
   expect(server.count(AUTHORITY_EVENTS.subscribe)).toBe(1);
   expect(container.querySelectorAll("p").length).toBe(2);
+});
+
+it("forgets the room's apps when the room is left on a socket that stays open", async () => {
+  await mount();
+  const subscription = await offerAndSubscribe([{ key: "a", text: "from the old room" }]);
+  const offer = {
+    protocol: 1,
+    roomEpoch: "epoch-1",
+    serverNowMs: Date.now(),
+    apps: [{ instance: "notes.1", app: "notes", major: 1, surface: "panel" }],
+  };
+
+  await mount(<Notes />, false);
+  const askedBefore = server.count(AUTHORITY_EVENTS.capabilities);
+  // The room left behind may still be talking to this socket.
+  await act(async () => {
+    server.push(AUTHORITY_EVENTS.capabilitiesChanged, offer);
+    server.push("connect", undefined);
+    await vi.advanceTimersByTimeAsync(20_000);
+  });
+  const whileAway = rendered();
+  const askedWhileAway = server.count(AUTHORITY_EVENTS.capabilities) - askedBefore;
+
+  await mount(<Notes />, true);
+
+  expect(whileAway).toEqual({ kind: "connecting", offered: "false", notes: [] });
+  expect(server.last(AUTHORITY_EVENTS.unsubscribe)!.payload).toEqual({ subscription });
+  expect(askedWhileAway).toBe(0);
+  expect(server.count(AUTHORITY_EVENTS.capabilities)).toBe(askedBefore + 1);
+});
+
+it("asks for nothing before the room is joined", async () => {
+  await mount(<Notes />, false);
+  await act(async () => vi.advanceTimersByTimeAsync(20_000));
+
+  expect(rendered()).toMatchObject({ kind: "connecting", offered: "false" });
+  expect(server.count(AUTHORITY_EVENTS.subscribe)).toBe(0);
 });

@@ -29,7 +29,10 @@ const AuthorityContext = createContext<AuthorityClient | null>(null);
 
 export type AuthorityProviderProps = {
   socket: AuthoritySocket | null;
-  /** Whether this socket has joined its room. Capabilities are asked then. */
+  /**
+   * Whether this socket is in its room. Capabilities are asked while it is,
+   * and every view is forgotten when it no longer is.
+   */
   joined: boolean;
   children: React.ReactNode;
 };
@@ -53,6 +56,7 @@ export function AuthorityProvider({ socket, joined, children }: AuthorityProvide
 
   useEffect(() => {
     if (joined) client?.joined();
+    else client?.left();
   }, [client, joined]);
 
   return (
