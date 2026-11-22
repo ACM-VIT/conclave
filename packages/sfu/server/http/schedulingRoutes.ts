@@ -21,23 +21,24 @@ import {
   getProfileAvailability,
   getPublicEventType,
   getPublicProfile,
+  changeSchedulingHost,
   listEventTypes,
   moveSchedulingProfileToClient,
-  persistScheduling,
   setGoogleCalendarConnection,
   setProfileAvailability,
   updateEventType,
   updateSchedulingProfile,
   type BusyInterval,
+  type SchedulingStore,
   mergePersistedScheduling,
 } from "../scheduling.js";
 import {
+  changeMeetings,
   createScheduledMeeting,
-  forgetMeeting,
   moveScheduledMeetingToClient,
-  persistScheduledMeetingChanges,
   updateScheduledMeeting,
   type BookingSlotLease,
+  type ScheduledMeetingStore,
 } from "../scheduledMeetings.js";
 import {
   isSchedulingEmailConfigured,
@@ -45,9 +46,9 @@ import {
   type SchedulingEmailDeliveryResult,
 } from "../schedulingEmails.js";
 import { buildSchedulingMeetingLink } from "../schedulingLinks.js";
+import { retryInBackground } from "../persistThenApply.js";
 import {
   PersistenceUnavailableError,
-  persistOrFail,
   sendPersistenceUnavailable,
 } from "./persistenceUnavailable.js";
 import type { SfuState } from "../state.js";
@@ -62,6 +63,7 @@ import type {
   CalendarConnectionSummary,
   CreateBookingRequest,
   ScheduledMeeting,
+  UpdateScheduledMeetingRequest,
   SchedulingCalendarConnection,
   SchedulingEventType,
   SchedulingProfile,
@@ -194,52 +196,70 @@ const profilePayload = (
   calendar: getCalendarSummary(state.scheduling, profile.id),
 });
 
-const migrateProfileNamespace = async (
+const changeHost = <R>(
+  state: SfuState,
+  host: string | ((store: SchedulingStore) => string | null),
+  mutate: (draft: SchedulingStore) => R,
+): Promise<R> => changeSchedulingHost(state.scheduling, state.schedulingPersistence, host, mutate);
+
+/** The draft's copy of a host profile, which a change may edit. */
+const hostIn = (draft: SchedulingStore, profileId: string): SchedulingProfile => {
+  const profile = draft.profilesById.get(profileId);
+  if (!profile) throw new Error("Scheduling profile not found.");
+  return profile;
+};
+
+const committedProfile = (state: SfuState, profile: SchedulingProfile): SchedulingProfile =>
+  state.scheduling.profilesById.get(profile.id) ?? profile;
+
+const legacyProfileToMigrate = (
+  state: SfuState,
+  clientId: string,
+  userId: string,
+): SchedulingProfile | null => {
+  for (const legacyClientId of clientIdCandidates(clientId).slice(1)) {
+    const legacyProfile = getProfileByUser(state.scheduling, legacyClientId, userId);
+    if (!legacyProfile) continue;
+    // Only into the deployment's default client: the requested id comes
+    // from the request and must not move a profile's booking meetings out.
+    return canMigrateClientNamespace(legacyProfile.clientId, clientId) ? legacyProfile : null;
+  }
+  return null;
+};
+
+/**
+ * Moves a legacy profile's booking meetings into `clientId`. It runs before
+ * the profile moves, so a failure leaves the profile behind to try again.
+ */
+const moveProfileMeetings = async (
   state: SfuState,
   profile: SchedulingProfile,
   clientId: string,
 ): Promise<void> => {
   const previousClientId = profile.clientId;
-  if (previousClientId === clientId) return;
   const eventTypeIds = new Set(
-    Array.from(state.scheduling.eventTypesById.values())
-      .filter((eventType) => eventType.profileId === profile.id)
-      .map((eventType) => eventType.id),
+    listEventTypes(state.scheduling, profile.id).map((eventType) => eventType.id),
   );
-
-  moveSchedulingProfileToClient(state.scheduling, profile, clientId);
-
-  const changedMeetings: ScheduledMeeting[] = [];
-  for (const meeting of state.scheduledMeetings.byId.values()) {
-    if (meeting.clientId !== previousClientId) continue;
-    if (meeting.source !== "booking_link") continue;
-    const belongsToProfile =
+  const belongsToProfile = (meeting: ScheduledMeeting): boolean =>
+    meeting.clientId === previousClientId &&
+    meeting.source === "booking_link" &&
+    Boolean(
       (meeting.eventTypeId && eventTypeIds.has(meeting.eventTypeId)) ||
-      (meeting.hostUserId && meeting.hostUserId === profile.userId) ||
-      meeting.hostEmail.trim().toLowerCase() === profile.email;
-    if (!belongsToProfile) continue;
-    try {
-      const moved = moveScheduledMeetingToClient(
-        state.scheduledMeetings,
-        meeting.id,
-        clientId,
-      );
-      if (moved) changedMeetings.push(moved);
-    } catch (error) {
-      Logger.warn(
-        `Skipped scheduled meeting namespace migration for ${meeting.id}`,
-        error,
-      );
-    }
-  }
-
-  if (changedMeetings.length > 0 && state.scheduledMeetingPersistence) {
-    await persistScheduledMeetingChanges(
-      state.scheduledMeetings,
-      state.scheduledMeetingPersistence,
-      changedMeetings,
+        (meeting.hostUserId && meeting.hostUserId === profile.userId) ||
+        meeting.hostEmail.trim().toLowerCase() === profile.email,
     );
-  }
+  const profileMeetings = (store: ScheduledMeetingStore): string[] =>
+    [...store.byId.values()].filter(belongsToProfile).map((meeting) => meeting.id);
+  if (profileMeetings(state.scheduledMeetings).length === 0) return;
+  await changeMeetings(state.scheduledMeetings, state.scheduledMeetingPersistence, profileMeetings, (draft) => {
+    for (const id of profileMeetings(draft)) {
+      try {
+        moveScheduledMeetingToClient(draft, id, clientId);
+      } catch (error) {
+        Logger.warn(`Skipped scheduled meeting namespace migration for ${id}`, error);
+      }
+    }
+  });
 };
 
 const requireHostProfile = async (
@@ -247,45 +267,31 @@ const requireHostProfile = async (
   res: Response,
   state: SfuState,
 ): Promise<SchedulingProfile | null> => {
-  const user = resolveUserContext(req);
-  if (!user.email || !user.userId) {
+  const { email, name, userId } = resolveUserContext(req);
+  if (!email || !userId) {
     res.status(400).json({ error: "User context required" });
     return null;
   }
   const clientId = resolveClientId(req);
-  let existingProfile = getProfileByUser(
-    state.scheduling,
-    clientId,
-    user.userId,
-  );
-  if (!existingProfile && state.schedulingPersistence) {
+  if (!getProfileByUser(state.scheduling, clientId, userId) && state.schedulingPersistence) {
     await mergePersistedScheduling(state.scheduling, state.schedulingPersistence);
-    existingProfile = getProfileByUser(state.scheduling, clientId, user.userId);
   }
-  if (!existingProfile) {
-    for (const legacyClientId of clientIdCandidates(clientId).slice(1)) {
-      const legacyProfile = getProfileByUser(
-        state.scheduling,
-        legacyClientId,
-        user.userId,
-      );
-      if (!legacyProfile) continue;
-      // Only into the deployment's default client: the requested id comes
-      // from the request and must not move a profile's booking meetings out.
-      if (!canMigrateClientNamespace(legacyProfile.clientId, clientId)) break;
-      await migrateProfileNamespace(state, legacyProfile, clientId);
-      break;
-    }
-  }
-  const profile = ensureSchedulingProfile(state.scheduling, {
-    clientId,
-    userId: user.userId,
-    email: user.email,
-    name: user.name,
-    timeZone: readString(requestBody(req), "timeZone"),
-  });
-  await persistSchedulingOrFail(state);
-  return profile;
+  const legacy = getProfileByUser(state.scheduling, clientId, userId)
+    ? null
+    : legacyProfileToMigrate(state, clientId, userId);
+  if (legacy) await moveProfileMeetings(state, legacy, clientId);
+  const timeZone = readString(requestBody(req), "timeZone");
+  const profile = await changeHost(
+    state,
+    (store) => getProfileByUser(store, clientId, userId)?.id ?? legacy?.id ?? null,
+    (draft) => {
+      if (legacy && draft.profilesById.has(legacy.id) && !getProfileByUser(draft, clientId, userId)) {
+        moveSchedulingProfileToClient(draft, hostIn(draft, legacy.id), clientId);
+      }
+      return ensureSchedulingProfile(draft, { clientId, userId, email, name, timeZone });
+    },
+  );
+  return committedProfile(state, profile);
 };
 
 const requireConnectedCalendar = (
@@ -359,15 +365,6 @@ const acquireBookingSlotLease = async (
     throw error;
   }
 };
-
-const persistMeetingChange = async (state: SfuState, meeting: ScheduledMeeting): Promise<void> =>
-  persistOrFail("scheduled meeting", () =>
-    state.scheduledMeetingPersistence &&
-    persistScheduledMeetingChanges(state.scheduledMeetings, state.scheduledMeetingPersistence, [meeting]),
-  );
-
-const persistSchedulingOrFail = async (state: SfuState): Promise<void> =>
-  persistOrFail("scheduling records", () => persistScheduling(state.scheduling, state.schedulingPersistence));
 
 const answerFailure = (res: Response, error: unknown, status: number): void => {
   if (error instanceof PersistenceUnavailableError) {
@@ -468,26 +465,46 @@ const refreshGoogleAccessToken = async (
   if (!token.access_token) {
     throw new Error("Google did not return an access token.");
   }
-  connection.accessToken = token.access_token;
-  connection.accessTokenExpiresAt =
-    Date.now() + Math.max(token.expires_in ?? 3600, 60) * 1000;
-  connection.status = "connected";
-  connection.error = null;
-  connection.updatedAt = Date.now();
-  await persistSchedulingOrFail(state);
-  return connection.accessToken;
+  await saveConnectionState(state, connection, "the refreshed Google access token", {
+    accessToken: token.access_token,
+    accessTokenExpiresAt: Date.now() + Math.max(token.expires_in ?? 3600, 60) * 1000,
+    status: "connected",
+    error: null,
+  });
+  return token.access_token;
 };
 
-const markCalendarError = async (
+/**
+ * Saves a change to a host's calendar connection, then applies it. These are
+ * caches and status marks, so a failed save is logged and the request goes
+ * on with what Google returned.
+ */
+const saveConnectionState = async (
+  state: SfuState,
+  connection: SchedulingCalendarConnection,
+  what: string,
+  patch: Partial<SchedulingCalendarConnection>,
+): Promise<void> => {
+  try {
+    await changeHost(state, connection.profileId, (draft) => {
+      const held = draft.calendarByProfileId.get(connection.profileId);
+      if (held?.id !== connection.id) return;
+      Object.assign(held, patch, { updatedAt: Date.now() });
+    });
+  } catch (error) {
+    Logger.warn(`Failed to save ${what}`, error);
+  }
+};
+
+const markCalendarError = (
   state: SfuState,
   connection: SchedulingCalendarConnection,
   error: unknown,
-): Promise<void> => {
-  connection.status = "needs_reconnect";
-  connection.error = (error as Error).message || "Google Calendar sync failed.";
-  connection.updatedAt = Date.now();
-  await persistSchedulingOrFail(state);
-};
+): Promise<void> =>
+  saveConnectionState(state, connection, "the calendar reconnect mark", {
+    status: "needs_reconnect",
+    error: (error as Error).message || "Google Calendar sync failed.",
+  });
 
 const shouldMarkCalendarReconnectRequired = (error: unknown): boolean =>
   error instanceof GoogleCalendarApiError &&
@@ -716,31 +733,39 @@ const buildConfirmation = (
   emailNotificationStatus: meeting.emailNotificationStatus ?? "not_configured",
 });
 
-const sendBookingEmailNotifications = async (
+/**
+ * Records a step that ran after a booking was saved. The booking already
+ * exists, so a failed save is logged and retried in the background, never
+ * turned into an error for the guest. Each step writes its own fields, so a
+ * retry is safe to repeat.
+ */
+const recordBookingFollowUp = async (
   state: SfuState,
-  input: {
-    profile: SchedulingProfile;
-    eventType: SchedulingEventType;
-    meeting: ScheduledMeeting;
-    appOrigin: string;
-    calendarError?: string | null;
-  },
-): Promise<{
-  meeting: ScheduledMeeting;
-  emailResult: SchedulingEmailDeliveryResult;
-}> => {
-  const emailResult = await sendSchedulingBookingEmails(input);
-  const next = updateScheduledMeeting(state.scheduledMeetings, input.meeting.id, {
-    emailNotificationStatus: emailResult.status,
-    emailNotificationError: emailResult.error,
-    emailNotificationSentAt: emailResult.sentAt,
-  });
+  meetingId: string,
+  what: string,
+  fields: UpdateScheduledMeetingRequest,
+): Promise<void> => {
+  const save = () =>
+    changeMeetings(state.scheduledMeetings, state.scheduledMeetingPersistence, [meetingId], (draft) =>
+      draft.byId.has(meetingId) ? updateScheduledMeeting(draft, meetingId, fields) : null,
+    );
   try {
-    await persistMeetingChange(state, next);
+    await save();
   } catch (error) {
-    Logger.warn("Failed to persist scheduling email status", error);
+    Logger.warn(`Failed to save the ${what} of booking ${meetingId}; retrying in the background`, error);
+    retryInBackground(`saving the ${what} of booking ${meetingId}`, save);
   }
-  return { meeting: next, emailResult };
+};
+
+const sendBookingEmails = async (
+  input: Parameters<typeof sendSchedulingBookingEmails>[0],
+): Promise<SchedulingEmailDeliveryResult> => {
+  try {
+    return await sendSchedulingBookingEmails(input);
+  } catch (error) {
+    Logger.warn("Failed to send booking emails", error);
+    return { status: "failed", error: (error as Error).message || "Booking email failed.", sentAt: null };
+  }
 };
 
 export const registerSchedulingRoutes = (
@@ -768,19 +793,21 @@ export const registerSchedulingRoutes = (
     if (!profile) return;
     const body = requestBody(req);
     try {
-      const updated = updateSchedulingProfile(state.scheduling, profile.id, {
-        name: readString(body, "name"),
-        username: readString(body, "username"),
-        timeZone: readString(body, "timeZone"),
-      });
-      if (typeof body.timeZone === "string") {
-        setProfileAvailability(state.scheduling, updated, {
-          ...getProfileAvailability(state.scheduling, updated),
-          timeZone: updated.timeZone,
+      const updated = await changeHost(state, profile.id, (draft) => {
+        const next = updateSchedulingProfile(draft, profile.id, {
+          name: readString(body, "name"),
+          username: readString(body, "username"),
+          timeZone: readString(body, "timeZone"),
         });
-      }
-      await persistSchedulingOrFail(state);
-      res.json(profilePayload(state, updated));
+        if (typeof body.timeZone === "string") {
+          setProfileAvailability(draft, next, {
+            ...getProfileAvailability(draft, next),
+            timeZone: next.timeZone,
+          });
+        }
+        return next;
+      });
+      res.json(profilePayload(state, committedProfile(state, updated)));
     } catch (error) {
       answerFailure(res, error, 400);
     }
@@ -797,13 +824,10 @@ export const registerSchedulingRoutes = (
     if (!requireSecret(req, res)) return;
     const profile = await requireHostProfile(req, res, state);
     if (!profile) return;
-    const availability = setProfileAvailability(
-      state.scheduling,
-      profile,
-      requestBody(req),
+    const availability = await changeHost(state, profile.id, (draft) =>
+      setProfileAvailability(draft, hostIn(draft, profile.id), requestBody(req)),
     );
-    await persistSchedulingOrFail(state);
-    res.json({ availability, profile });
+    res.json({ availability, profile: committedProfile(state, profile) });
   });
 
   app.get("/scheduling/event-types", async (req, res) => {
@@ -818,12 +842,9 @@ export const registerSchedulingRoutes = (
     const profile = await requireHostProfile(req, res, state);
     if (!profile) return;
     try {
-      const eventType = createEventType(
-        state.scheduling,
-        profile,
-        eventTypeInput(requestBody(req)),
+      const eventType = await changeHost(state, profile.id, (draft) =>
+        createEventType(draft, hostIn(draft, profile.id), eventTypeInput(requestBody(req))),
       );
-      await persistSchedulingOrFail(state);
       res.status(201).json({ eventType });
     } catch (error) {
       answerFailure(res, error, 400);
@@ -835,13 +856,9 @@ export const registerSchedulingRoutes = (
     const profile = await requireHostProfile(req, res, state);
     if (!profile) return;
     try {
-      const eventType = updateEventType(
-        state.scheduling,
-        profile,
-        req.params.id,
-        eventTypeInput(requestBody(req)),
+      const eventType = await changeHost(state, profile.id, (draft) =>
+        updateEventType(draft, hostIn(draft, profile.id), req.params.id, eventTypeInput(requestBody(req))),
       );
-      await persistSchedulingOrFail(state);
       res.json({ eventType });
     } catch (error) {
       answerFailure(res, error, 400);
@@ -852,12 +869,13 @@ export const registerSchedulingRoutes = (
     if (!requireSecret(req, res)) return;
     const profile = await requireHostProfile(req, res, state);
     if (!profile) return;
-    const eventType = deleteEventType(state.scheduling, profile, req.params.id);
+    const eventType = await changeHost(state, profile.id, (draft) =>
+      deleteEventType(draft, hostIn(draft, profile.id), req.params.id),
+    );
     if (!eventType) {
       res.status(404).json({ error: "Event type not found." });
       return;
     }
-    await persistSchedulingOrFail(state);
     res.json({ success: true, id: eventType.id });
   });
 
@@ -882,7 +900,7 @@ export const registerSchedulingRoutes = (
       });
       return;
     }
-    const connection = setGoogleCalendarConnection(state.scheduling, profile, {
+    const connectionInput = {
       email: normalizeEmail(body.email) || profile.email,
       accessToken: normalizeIdentifier(body.accessToken, 4096),
       refreshToken,
@@ -890,10 +908,12 @@ export const registerSchedulingRoutes = (
       scopes: (asArray(body.scopes) ?? [])
         .map((scope) => normalizeText(scope, 200))
         .filter(Boolean),
-      status: "connected",
+      status: "connected" as const,
       error: null,
-    });
-    await persistSchedulingOrFail(state);
+    };
+    const connection = await changeHost(state, profile.id, (draft) =>
+      setGoogleCalendarConnection(draft, hostIn(draft, profile.id), connectionInput),
+    );
     res.json({ calendar: getCalendarSummary(state.scheduling, connection.profileId) });
   });
 
@@ -901,8 +921,9 @@ export const registerSchedulingRoutes = (
     if (!requireSecret(req, res)) return;
     const profile = await requireHostProfile(req, res, state);
     if (!profile) return;
-    clearGoogleCalendarConnection(state.scheduling, profile);
-    await persistSchedulingOrFail(state);
+    await changeHost(state, profile.id, (draft) =>
+      clearGoogleCalendarConnection(draft, hostIn(draft, profile.id)),
+    );
     res.json({
       calendar: getCalendarSummary(state.scheduling, profile.id),
       eventTypes: listEventTypes(state.scheduling, profile.id),
@@ -1124,43 +1145,38 @@ export const registerSchedulingRoutes = (
       const appOrigin = resolveAppOrigin(req);
       let meeting: ScheduledMeeting;
       try {
-        meeting = createScheduledMeeting(
-          state.scheduledMeetings,
-          {
-            title: target.eventType.title,
-            scheduledStartAt: startAt,
-            scheduledEndAt: endAt,
-            hostEmail: target.profile.email,
-            hostName: target.profile.name,
-            source: "booking_link",
-            eventTypeId: target.eventType.id,
-            attendeeName,
-            attendeeEmail,
-            attendeeNote,
-            attendeeTimeZone,
-            calendarSyncStatus: target.calendar ? "pending" : "not_required",
-            emailNotificationStatus: isSchedulingEmailConfigured()
-              ? "pending"
-              : "not_configured",
-          },
-          {
-            clientId: target.profile.clientId,
-            createdBy: attendeeEmail,
-            defaultHostEmail: target.profile.email,
-            defaultHostName: target.profile.name,
-            defaultHostUserId: target.profile.userId,
-          },
+        meeting = await changeMeetings(state.scheduledMeetings, state.scheduledMeetingPersistence, [], (draft) =>
+          createScheduledMeeting(
+            draft,
+            {
+              title: target.eventType.title,
+              scheduledStartAt: startAt,
+              scheduledEndAt: endAt,
+              hostEmail: target.profile.email,
+              hostName: target.profile.name,
+              source: "booking_link",
+              eventTypeId: target.eventType.id,
+              attendeeName,
+              attendeeEmail,
+              attendeeNote,
+              attendeeTimeZone,
+              calendarSyncStatus: target.calendar ? "pending" : "not_required",
+              emailNotificationStatus: isSchedulingEmailConfigured()
+                ? "pending"
+                : "not_configured",
+            },
+            {
+              clientId: target.profile.clientId,
+              createdBy: attendeeEmail,
+              defaultHostEmail: target.profile.email,
+              defaultHostName: target.profile.name,
+              defaultHostUserId: target.profile.userId,
+            },
+          ),
         );
       } catch (createError) {
         await releaseSlotLease();
         throw createError;
-      }
-      try {
-        await persistMeetingChange(state, meeting);
-      } catch (persistError) {
-        forgetMeeting(state.scheduledMeetings, meeting);
-        await releaseSlotLease();
-        throw persistError;
       }
       try {
         await releaseSlotLease();
@@ -1168,78 +1184,57 @@ export const registerSchedulingRoutes = (
         Logger.warn("Failed to release booking slot lock", releaseError);
       }
 
+      // The booking is saved, so from here on the guest gets a confirmation.
+      // Every later step records its outcome on its own and never fails it.
+      let booked: ScheduledMeeting = { ...meeting };
+      let calendarError: string | null = null;
       const calendar = target.calendar;
-      if (!calendar) {
-        const { meeting: notified, emailResult } =
-          await sendBookingEmailNotifications(state, {
-            profile: target.profile,
-            eventType: target.eventType,
-            meeting,
-            appOrigin,
-          });
-        res.status(201).json({
-          booking: buildConfirmation(notified, appOrigin),
-          ...(emailResult.error ? { emailError: emailResult.error } : {}),
-        });
-        return;
-      }
-
-      try {
-        const meetingLink = buildSchedulingMeetingLink(appOrigin, meeting);
-        const calendarEventId = await createGoogleCalendarEvent(
-          state,
-          calendar,
-          {
+      if (calendar) {
+        let calendarFields: UpdateScheduledMeetingRequest;
+        try {
+          const calendarEventId = await createGoogleCalendarEvent(state, calendar, {
             title: target.eventType.title,
             description: attendeeNote,
-            meetingLink,
+            meetingLink: buildSchedulingMeetingLink(appOrigin, meeting),
             startAt,
             endAt,
             timeZone: target.profile.timeZone,
             attendeeName,
             attendeeEmail,
-          },
-        );
-        const synced = updateScheduledMeeting(state.scheduledMeetings, meeting.id, {
-          googleCalendarEventId: calendarEventId,
-          calendarSyncStatus: "synced",
-          calendarSyncError: null,
-        });
-        await persistMeetingChange(state, synced);
-        const { meeting: notified, emailResult } =
-          await sendBookingEmailNotifications(state, {
-            profile: target.profile,
-            eventType: target.eventType,
-            meeting: synced,
-            appOrigin,
           });
-        res.status(201).json({
-          booking: buildConfirmation(notified, appOrigin),
-          ...(emailResult.error ? { emailError: emailResult.error } : {}),
-        });
-      } catch (calendarError) {
-        if (calendarError instanceof PersistenceUnavailableError) throw calendarError;
-        const message =
-          (calendarError as Error).message || "Could not create the calendar event.";
-        const failed = updateScheduledMeeting(state.scheduledMeetings, meeting.id, {
-          calendarSyncStatus: "failed",
-          calendarSyncError: message,
-        });
-        await persistMeetingChange(state, failed);
-        const { meeting: notified, emailResult } =
-          await sendBookingEmailNotifications(state, {
-            profile: target.profile,
-            eventType: target.eventType,
-            meeting: failed,
-            appOrigin,
-            calendarError: message,
-          });
-        res.status(201).json({
-          booking: buildConfirmation(notified, appOrigin),
-          calendarError: message,
-          ...(emailResult.error ? { emailError: emailResult.error } : {}),
-        });
+          calendarFields = {
+            googleCalendarEventId: calendarEventId,
+            calendarSyncStatus: "synced",
+            calendarSyncError: null,
+          };
+        } catch (error) {
+          calendarError = (error as Error).message || "Could not create the calendar event.";
+          calendarFields = { calendarSyncStatus: "failed", calendarSyncError: calendarError };
+        }
+        booked = { ...booked, ...calendarFields };
+        await recordBookingFollowUp(state, meeting.id, "calendar event", calendarFields);
       }
+
+      const emailResult = await sendBookingEmails({
+        profile: target.profile,
+        eventType: target.eventType,
+        meeting: booked,
+        appOrigin,
+        calendarError,
+      });
+      const emailFields: UpdateScheduledMeetingRequest = {
+        emailNotificationStatus: emailResult.status,
+        emailNotificationError: emailResult.error,
+        emailNotificationSentAt: emailResult.sentAt,
+      };
+      booked = { ...booked, ...emailFields };
+      await recordBookingFollowUp(state, meeting.id, "email status", emailFields);
+
+      res.status(201).json({
+        booking: buildConfirmation(booked, appOrigin),
+        ...(calendarError ? { calendarError } : {}),
+        ...(emailResult.error ? { emailError: emailResult.error } : {}),
+      });
     } catch (error) {
       Logger.warn("Booking request failed", error);
       answerFailure(res, error, 502);

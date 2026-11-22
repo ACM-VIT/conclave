@@ -7,6 +7,8 @@ import { config } from "../config/config.js";
 import { createSfuApp } from "../server/http/createApp.js";
 import { initScheduledMeetings, initScheduledWebinars, initScheduling } from "../server/init.js";
 import { LocalRoomRegistry } from "../server/roomRegistry.js";
+import { createScheduledMeetingPersistence } from "../server/scheduledMeetings.js";
+import { createSchedulingPersistence } from "../server/scheduling.js";
 import { createSfuState, type SfuState } from "../server/state.js";
 
 let stateDir = "";
@@ -77,6 +79,14 @@ afterEach(async () => {
   rmSync(stateDir, { recursive: true, force: true });
 });
 
+const deferred = () => {
+  let resolve = (): void => {};
+  const promise = new Promise<void>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+};
+
 const later = Date.now() + 3_600_000;
 const unavailable = { error: "persistence_unavailable" };
 
@@ -98,6 +108,82 @@ describe("a route whose save fails", () => {
       expect([response.status, response.body.error]).toEqual([503, unavailable.error]);
     }
     expect(snapshot(state)).toEqual(before);
+  });
+
+  it("keeps exactly one active meeting on a code when its delete fails while a create races for the code", async () => {
+    const { state, call } = await startSfu();
+    const created = await call("POST", "/scheduled-meetings", { title: "Planning", scheduledStartAt: later, roomCode: "race-room" });
+    expect(created.status).toBe(201);
+    const id = (created.body.scheduledMeeting as { id: string }).id;
+    const deleteStarted = deferred();
+    const failDelete = deferred();
+    vi.spyOn(state.scheduledMeetingPersistence!, "deleteRecords").mockImplementationOnce(async () => {
+      deleteStarted.resolve();
+      await failDelete.promise;
+      throw new Error("database is locked");
+    });
+
+    const deleting = call("DELETE", `/scheduled-meetings/${id}`);
+    await deleteStarted.promise;
+    const racing = call("POST", "/scheduled-meetings", { title: "Racer", scheduledStartAt: later, roomCode: "race-room" });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    failDelete.resolve();
+    const [deleted, raced] = await Promise.all([deleting, racing]);
+
+    expect([deleted.status, deleted.body.error]).toEqual([503, unavailable.error]);
+    expect(raced.status).toBe(400);
+    const active = (meetings: Array<{ roomCode: string; status: string; title: string }>) =>
+      meetings.filter((meeting) => meeting.roomCode === "race-room" && ["scheduled", "live"].includes(meeting.status));
+    expect(active([...state.scheduledMeetings.byId.values()]).map((meeting) => meeting.title)).toEqual(["Planning"]);
+    expect(active(await createScheduledMeetingPersistence().load()).map((meeting) => meeting.title)).toEqual(["Planning"]);
+  });
+
+  it("lets only one of two creates racing for a code have it while the first save is still running", async () => {
+    const { state, call } = await startSfu();
+    const persistence = state.scheduledMeetingPersistence!;
+    const saveChanged = persistence.saveChanged!.bind(persistence);
+    const saveStarted = deferred();
+    const finishSave = deferred();
+    vi.spyOn(persistence, "saveChanged").mockImplementationOnce(async (meetings) => {
+      saveStarted.resolve();
+      await finishSave.promise;
+      await saveChanged(meetings);
+    });
+
+    const first = call("POST", "/scheduled-meetings", { title: "First", scheduledStartAt: later, roomCode: "one-room" });
+    await saveStarted.promise;
+    const second = call("POST", "/scheduled-meetings", { title: "Second", scheduledStartAt: later, roomCode: "one-room" });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    finishSave.resolve();
+
+    expect([(await first).status, (await second).status]).toEqual([201, 400]);
+    const titles = (await createScheduledMeetingPersistence().load()).filter((meeting) => meeting.roomCode === "one-room").map((meeting) => meeting.title);
+    expect(titles).toEqual(["First"]);
+  });
+
+  it("frees a code for the create queued behind its delete once the delete is saved", async () => {
+    const { state, call } = await startSfu();
+    const created = await call("POST", "/scheduled-meetings", { title: "Planning", scheduledStartAt: later, roomCode: "free-room" });
+    const id = (created.body.scheduledMeeting as { id: string }).id;
+    const persistence = state.scheduledMeetingPersistence!;
+    const deleteRecords = persistence.deleteRecords!.bind(persistence);
+    const deleteStarted = deferred();
+    const finishDelete = deferred();
+    vi.spyOn(persistence, "deleteRecords").mockImplementationOnce(async (deletions) => {
+      deleteStarted.resolve();
+      await finishDelete.promise;
+      await deleteRecords(deletions);
+    });
+
+    const deleting = call("DELETE", `/scheduled-meetings/${id}`);
+    await deleteStarted.promise;
+    const racing = call("POST", "/scheduled-meetings", { title: "Next", scheduledStartAt: later, roomCode: "free-room" });
+    finishDelete.resolve();
+    const [deleted, raced] = await Promise.all([deleting, racing]);
+
+    expect([deleted.status, raced.status]).toEqual([200, 201]);
+    const titles = (await createScheduledMeetingPersistence().load()).filter((meeting) => meeting.roomCode === "free-room").map((meeting) => meeting.title);
+    expect(titles).toEqual(["Next"]);
   });
 
   it("answers 503 for a scheduled webinar and leaves the webinar as it was", async () => {
@@ -123,6 +209,32 @@ describe("a route whose save fails", () => {
     expect(roomState()).toEqual(roomStateBefore);
   });
 
+  it("rolls a failed scheduling edit back, so a later unrelated save does not persist it", async () => {
+    const { state, call } = await startSfu();
+    const first = await call("GET", "/scheduling/profile");
+    expect(first.status).toBe(200);
+    const original = first.body.profile as { id: string; name: string; username: string };
+    const persistence = state.schedulingPersistence!;
+    const save = persistence.save.bind(persistence);
+    vi.spyOn(persistence, "save")
+      .mockImplementationOnce(save)
+      .mockImplementationOnce(() => {
+        throw new Error("database is locked");
+      });
+
+    const failed = await call("PUT", "/scheduling/profile", { name: "Failed Name", username: "failed-username" });
+    expect([failed.status, failed.body.error]).toEqual([503, unavailable.error]);
+    const held = state.scheduling.profilesById.get(original.id)!;
+    expect([held.name, held.username]).toEqual([original.name, original.username]);
+    expect(state.scheduling.profileIdByUsername.get(`conclave:${original.username}`)).toBe(original.id);
+    expect(state.scheduling.profileIdByUsername.has("conclave:failed-username")).toBe(false);
+
+    const unrelated = await call("POST", "/scheduling/event-types", { title: "Intro call" });
+    expect(unrelated.status).toBe(201);
+    const stored = (await createSchedulingPersistence().load()).profiles.find((entry) => entry.id === original.id)!;
+    expect([stored.name, stored.username]).toEqual([original.name, original.username]);
+  });
+
   it("answers 503 with the same code for a scheduling route", async () => {
     const { state, call } = await startSfu();
     expect((await call("GET", "/scheduling/profile")).status).toBe(200);
@@ -130,5 +242,105 @@ describe("a route whose save fails", () => {
 
     const response = await call("PUT", "/scheduling/profile", { name: "Renamed Host" });
     expect([response.status, response.body.error]).toEqual([503, unavailable.error]);
+  });
+});
+
+const EMAIL_WORKER = "https://email-worker.example.test";
+
+/** Answers Google and the email worker in-process; every other request goes out as usual. */
+const fakeOutsideServices = () => {
+  const passThrough = globalThis.fetch;
+  return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const url = input instanceof Request ? input.url : String(input);
+    if (url.startsWith("https://www.googleapis.com/calendar/v3/freeBusy")) {
+      return Response.json({ calendars: { primary: { busy: [] } } });
+    }
+    if (url.startsWith("https://www.googleapis.com/calendar/v3/calendars/")) {
+      return Response.json({ id: "google-event-1" });
+    }
+    if (url.startsWith(EMAIL_WORKER)) return Response.json({ ok: true });
+    return passThrough(input, init);
+  });
+};
+
+const requestsTo = (outside: ReturnType<typeof fakeOutsideServices>, prefix: string) =>
+  outside.mock.calls.filter(([input]) => (input instanceof Request ? input.url : String(input)).startsWith(prefix));
+
+const GOOGLE_EVENTS = "https://www.googleapis.com/calendar/v3/calendars/";
+
+const bookableHost = async (call: Awaited<ReturnType<typeof startSfu>>["call"]) => {
+  const { username } = (await call("GET", "/scheduling/profile")).body.profile as { username: string };
+  const { slug } = (await call("POST", "/scheduling/event-types", { title: "Intro call", isActive: true })).body.eventType as { slug: string };
+  const connected = await call("POST", "/scheduling/calendar/google", {
+    refreshToken: "refresh-token",
+    accessToken: "access-token",
+    accessTokenExpiresAt: Date.now() + 3_600_000,
+  });
+  expect(connected.status).toBe(200);
+  const slots = (await call("GET", `/scheduling/public/${username}/${slug}/slots`)).body.slots as Array<{ startAt: number }>;
+  expect(slots.length).toBeGreaterThan(0);
+  const book = () =>
+    call("POST", `/scheduling/public/${username}/${slug}/book`, {
+      startAt: slots[0].startAt,
+      attendeeName: "Guest",
+      attendeeEmail: "guest@example.test",
+    });
+  return { book };
+};
+
+describe("a booking", () => {
+  beforeEach(() => {
+    vi.stubEnv("SCHEDULING_EMAIL_WORKER_URL", EMAIL_WORKER);
+    vi.stubEnv("SCHEDULING_EMAIL_WORKER_SECRET", "email-secret");
+    vi.stubEnv("SFU_FOLLOW_UP_RETRY_DELAYS_MS", "20,40,80");
+  });
+
+  it("whose event id save fails still succeeds, sends the confirmation, and records the id later", async () => {
+    const { state, call } = await startSfu();
+    const outside = fakeOutsideServices();
+    const { book } = await bookableHost(call);
+    const persistence = state.scheduledMeetingPersistence!;
+    const saveChanged = persistence.saveChanged!.bind(persistence);
+    vi.spyOn(persistence, "saveChanged")
+      .mockImplementationOnce(saveChanged)
+      .mockImplementationOnce(() => {
+        throw new Error("database is locked");
+      });
+
+    const booked = await book();
+
+    expect(booked.status).toBe(201);
+    const booking = booked.body.booking as { id: string; calendarEventId: string | null; syncStatus: string; emailNotificationStatus: string };
+    expect([booking.calendarEventId, booking.syncStatus, booking.emailNotificationStatus]).toEqual(["google-event-1", "synced", "sent"]);
+    expect(requestsTo(outside, GOOGLE_EVENTS)).toHaveLength(1);
+    expect(requestsTo(outside, EMAIL_WORKER)).toHaveLength(1);
+    await vi.waitFor(async () => {
+      const stored = (await createScheduledMeetingPersistence().load()).find((meeting) => meeting.id === booking.id);
+      expect([stored?.googleCalendarEventId, stored?.calendarSyncStatus, stored?.emailNotificationStatus]).toEqual(["google-event-1", "synced", "sent"]);
+    }, { timeout: 5_000, interval: 20 });
+    const held = state.scheduledMeetings.byId.get(booking.id);
+    expect([held?.googleCalendarEventId, held?.calendarSyncStatus]).toEqual(["google-event-1", "synced"]);
+    expect(requestsTo(outside, GOOGLE_EVENTS)).toHaveLength(1);
+  });
+
+  it("whose own save fails answers 503 and creates no Google event", async () => {
+    const { state, call } = await startSfu();
+    const outside = fakeOutsideServices();
+    const { book } = await bookableHost(call);
+    vi.spyOn(state.scheduledMeetingPersistence!, "saveChanged").mockImplementationOnce(() => {
+      throw new Error("database is locked");
+    });
+
+    const failed = await book();
+
+    expect([failed.status, failed.body.error]).toEqual([503, unavailable.error]);
+    expect(requestsTo(outside, GOOGLE_EVENTS)).toHaveLength(0);
+    expect(requestsTo(outside, EMAIL_WORKER)).toHaveLength(0);
+    expect([...state.scheduledMeetings.byId.values()].filter((meeting) => meeting.source === "booking_link")).toEqual([]);
+    expect((await createScheduledMeetingPersistence().load()).filter((meeting) => meeting.source === "booking_link")).toEqual([]);
+
+    const retried = await book();
+    expect(retried.status).toBe(201);
+    expect(requestsTo(outside, GOOGLE_EVENTS)).toHaveLength(1);
   });
 });

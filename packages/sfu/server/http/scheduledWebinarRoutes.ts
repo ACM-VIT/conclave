@@ -13,24 +13,22 @@ import {
   buildCoHostInviteLink,
   createScheduledWebinarCoHostInvite,
   createScheduledWebinar,
+  changeWebinars,
   coHostInviteWebinarId,
   deleteScheduledWebinar,
-  forgetWebinar,
-  rememberWebinar,
   getScheduledWebinarById,
   getScheduledWebinarBySlug,
   getScheduledWebinarForRoom,
   listScheduledWebinars,
   moveScheduledWebinarToClient,
-  persistScheduledWebinarChanges,
-  persistScheduledWebinarDeletes,
   updateScheduledWebinar,
+  type ScheduledWebinarStore,
 } from "../scheduledWebinars.js";
 import { clearWebinarLinkSlug } from "../webinar.js";
+import type { ChangeTargets } from "../persistThenApply.js";
 import type { SfuState } from "../state.js";
 import {
   PersistenceUnavailableError,
-  persistOrFailSync,
   sendPersistenceUnavailable,
 } from "./persistenceUnavailable.js";
 import {
@@ -161,21 +159,11 @@ export const registerScheduledWebinarRoutes = (
     return false;
   };
 
-  const persistChanged = (webinar: ScheduledWebinar): void => {
-    persistOrFailSync("scheduled webinar", () => {
-      if (state.scheduledWebinarPersistence) {
-        persistScheduledWebinarChanges(state.scheduledWebinars, state.scheduledWebinarPersistence, [webinar]);
-      }
-    });
-  };
-
-  const persistDeleted = (id: string): void => {
-    persistOrFailSync("scheduled webinar deletion", () => {
-      if (state.scheduledWebinarPersistence) {
-        persistScheduledWebinarDeletes(state.scheduledWebinars, state.scheduledWebinarPersistence, [id]);
-      }
-    });
-  };
+  const change = <R>(
+    ids: ChangeTargets<ScheduledWebinarStore>,
+    mutate: (draft: ScheduledWebinarStore) => R,
+  ): Promise<R> =>
+    changeWebinars(state.scheduledWebinars, state.scheduledWebinarPersistence, ids, mutate);
 
   const answerFailure = (res: Response, error: unknown): void => {
     if (error instanceof PersistenceUnavailableError) {
@@ -185,25 +173,17 @@ export const registerScheduledWebinarRoutes = (
     res.status(400).json({ error: (error as Error).message });
   };
 
-  const migrateWebinarNamespace = (
+  const migrateWebinarNamespace = async (
     webinar: ScheduledWebinar,
     clientId: string,
-  ): ScheduledWebinar | null => {
+  ): Promise<ScheduledWebinar | null> => {
     if (webinar.clientId === clientId) return webinar;
     if (!canMigrateClientNamespace(webinar.clientId, clientId)) return null;
-    const undo = rememberWebinar(state.scheduledWebinars, webinar.id);
     try {
-      const migrated = moveScheduledWebinarToClient(
-        state.scheduledWebinars,
-        webinar.id,
-        clientId,
+      return await change([webinar.id], (draft) =>
+        moveScheduledWebinarToClient(draft, webinar.id, clientId),
       );
-      if (migrated) {
-        persistChanged(migrated);
-      }
-      return migrated;
     } catch (error) {
-      undo();
       Logger.warn(
         `Failed to migrate scheduled webinar ${webinar.id} from ${webinar.clientId} to ${clientId}`,
         error,
@@ -212,10 +192,10 @@ export const registerScheduledWebinarRoutes = (
     }
   };
 
-  const findWebinarForRoom = (
+  const findWebinarForRoom = async (
     clientId: string,
     roomId: string,
-  ): ScheduledWebinar | null => {
+  ): Promise<ScheduledWebinar | null> => {
     for (const candidateClientId of clientIdCandidates(clientId)) {
       const webinar = getScheduledWebinarForRoom(
         state.scheduledWebinars,
@@ -224,17 +204,17 @@ export const registerScheduledWebinarRoutes = (
       );
       if (!webinar) continue;
       if (webinar.clientId === clientId) return webinar;
-      return migrateWebinarNamespace(webinar, clientId) ?? webinar;
+      return (await migrateWebinarNamespace(webinar, clientId)) ?? webinar;
     }
     return null;
   };
 
-  const listWebinarsForClient = (options: {
+  const listWebinarsForClient = async (options: {
     clientId: string;
     ownerEmail?: string;
     includeAll: boolean;
     status?: ScheduledWebinarStatus[];
-  }): ScheduledWebinar[] => {
+  }): Promise<ScheduledWebinar[]> => {
     const byId = new Map<string, ScheduledWebinar>();
     const seenRoomIds = new Set<string>();
     for (const candidateClientId of clientIdCandidates(options.clientId)) {
@@ -249,7 +229,7 @@ export const registerScheduledWebinarRoutes = (
         const normalized =
           webinar.clientId === options.clientId
             ? webinar
-            : migrateWebinarNamespace(webinar, options.clientId);
+            : await migrateWebinarNamespace(webinar, options.clientId);
         if (!normalized) continue;
         seenRoomIds.add(normalized.roomId);
         byId.set(normalized.id, normalized);
@@ -260,14 +240,14 @@ export const registerScheduledWebinarRoutes = (
     );
   };
 
-  app.get("/scheduled-webinars", (req, res) => {
+  app.get("/scheduled-webinars", async (req, res) => {
     if (!requireSecret(req, res)) return;
     const user = resolveUserContext(req);
     const clientId = resolveClientId(req);
     const includeAll = req.query.scope === "all" && user.isAdmin;
     const statusFilter = parseStatusFilter(req.query.status);
 
-    const list = listWebinarsForClient({
+    const list = await listWebinarsForClient({
       clientId,
       ownerEmail: user.email || undefined,
       includeAll,
@@ -277,7 +257,7 @@ export const registerScheduledWebinarRoutes = (
     res.json({ scheduledWebinars: list.map(serializeScheduledWebinar) });
   });
 
-  app.post("/scheduled-webinars", (req, res) => {
+  app.post("/scheduled-webinars", async (req, res) => {
     if (!requireSecret(req, res)) return;
     const user = resolveUserContext(req);
     if (!user.email) {
@@ -288,24 +268,16 @@ export const registerScheduledWebinarRoutes = (
 
     try {
       const body = (req.body ?? {}) as CreateScheduledWebinarRequest;
-      const { webinar, inviteCodeHash } = createScheduledWebinar(
-        state.scheduledWebinars,
-        body,
-        {
+      const email = user.email;
+      const { webinar, inviteCodeHash } = await change([], (draft) =>
+        createScheduledWebinar(draft, body, {
           clientId,
-          createdBy: user.userId || user.email,
-          defaultHostEmail: user.email,
+          createdBy: user.userId || email,
+          defaultHostEmail: email,
           defaultHostName: user.name || undefined,
           defaultHostUserId: user.userId,
-        },
+        }),
       );
-
-      try {
-        persistChanged(webinar);
-      } catch (error) {
-        forgetWebinar(state.scheduledWebinars, webinar);
-        throw error;
-      }
       ensureWebinarRoomConfig(state, webinar, inviteCodeHash);
       Logger.info(
         `Scheduled webinar created ${webinar.id} (${webinar.linkSlug}) by ${user.email}`,
@@ -316,7 +288,7 @@ export const registerScheduledWebinarRoutes = (
     }
   });
 
-  app.get("/scheduled-webinars/by-slug/:slug", (req, res) => {
+  app.get("/scheduled-webinars/by-slug/:slug", async (req, res) => {
     if (!requireSecret(req, res)) return;
     const clientId = resolveClientId(req);
     const slug = normalizeIdentifier(req.params.slug);
@@ -332,14 +304,14 @@ export const registerScheduledWebinarRoutes = (
     const normalizedWebinar =
       webinar.clientId === clientId ||
       clientIdCandidates(clientId).includes(webinar.clientId)
-        ? migrateWebinarNamespace(webinar, clientId) ?? webinar
+        ? (await migrateWebinarNamespace(webinar, clientId)) ?? webinar
         : webinar;
     res.json({
       scheduledWebinar: serializeScheduledWebinar(normalizedWebinar),
     });
   });
 
-  app.get("/scheduled-webinars/by-room/:clientId/:roomId", (req, res) => {
+  app.get("/scheduled-webinars/by-room/:clientId/:roomId", async (req, res) => {
     if (!requireSecret(req, res)) return;
     const clientId = normalizeIdentifier(req.params.clientId);
     const roomId = normalizeIdentifier(req.params.roomId);
@@ -347,7 +319,7 @@ export const registerScheduledWebinarRoutes = (
       res.status(400).json({ error: "Missing clientId or roomId" });
       return;
     }
-    const webinar = findWebinarForRoom(canonicalizeClientId(clientId), roomId);
+    const webinar = await findWebinarForRoom(canonicalizeClientId(clientId), roomId);
     if (!webinar) {
       res.status(404).json({ error: "Scheduled webinar not found" });
       return;
@@ -390,20 +362,16 @@ export const registerScheduledWebinarRoutes = (
     res.json({ scheduledWebinar: serializeScheduledWebinar(webinar) });
   });
 
-  app.patch("/scheduled-webinars/:id", (req, res) => {
+  app.patch("/scheduled-webinars/:id", async (req, res) => {
     if (!requireSecret(req, res)) return;
     const target = requireWebinarAccess(req, res);
     if (!target) return;
 
-    const undo = rememberWebinar(state.scheduledWebinars, target.id);
     try {
       const body = (req.body ?? {}) as UpdateScheduledWebinarRequest;
-      const { webinar, inviteCodeHashChange } = updateScheduledWebinar(
-        state.scheduledWebinars,
-        target.id,
-        body,
+      const { webinar, inviteCodeHashChange } = await change([target.id], (draft) =>
+        updateScheduledWebinar(draft, target.id, body),
       );
-      persistChanged(webinar);
 
       ensureWebinarRoomConfig(state, webinar, inviteCodeHashChange?.value ?? null);
 
@@ -417,27 +385,24 @@ export const registerScheduledWebinarRoutes = (
 
       res.json({ scheduledWebinar: serializeScheduledWebinar(webinar) });
     } catch (error) {
-      undo();
       answerFailure(res, error);
     }
   });
 
-  app.delete("/scheduled-webinars/:id", (req, res) => {
+  app.delete("/scheduled-webinars/:id", async (req, res) => {
     if (!requireSecret(req, res)) return;
     const target = requireWebinarAccess(req, res);
     if (!target) return;
 
-    const undo = rememberWebinar(state.scheduledWebinars, target.id);
-    const webinar = deleteScheduledWebinar(state.scheduledWebinars, target.id);
-    if (!webinar) {
-      res.status(404).json({ error: "Scheduled webinar not found" });
+    let webinar: ScheduledWebinar | null;
+    try {
+      webinar = await change([target.id], (draft) => deleteScheduledWebinar(draft, target.id));
+    } catch (error) {
+      answerFailure(res, error);
       return;
     }
-    try {
-      persistDeleted(webinar.id);
-    } catch (error) {
-      undo();
-      answerFailure(res, error);
+    if (!webinar) {
+      res.status(404).json({ error: "Scheduled webinar not found" });
       return;
     }
 
@@ -460,40 +425,31 @@ export const registerScheduledWebinarRoutes = (
     res.json({ success: true, id: webinar.id });
   });
 
-  app.post("/scheduled-webinars/:id/start", (req, res) => {
+  app.post("/scheduled-webinars/:id/start", async (req, res) => {
     if (!requireSecret(req, res)) return;
     const target = requireWebinarAccess(req, res);
     if (!target) return;
 
-    const undo = rememberWebinar(state.scheduledWebinars, target.id);
     try {
-      const { webinar } = updateScheduledWebinar(
-        state.scheduledWebinars,
-        target.id,
-        { status: "live" },
+      const { webinar } = await change([target.id], (draft) =>
+        updateScheduledWebinar(draft, target.id, { status: "live" }),
       );
-      persistChanged(webinar);
       ensureWebinarRoomConfig(state, webinar, null);
       res.json({ scheduledWebinar: serializeScheduledWebinar(webinar) });
     } catch (error) {
-      undo();
       answerFailure(res, error);
     }
   });
 
-  app.post("/scheduled-webinars/:id/end", (req, res) => {
+  app.post("/scheduled-webinars/:id/end", async (req, res) => {
     if (!requireSecret(req, res)) return;
     const target = requireWebinarAccess(req, res);
     if (!target) return;
 
-    const undo = rememberWebinar(state.scheduledWebinars, target.id);
     try {
-      const { webinar } = updateScheduledWebinar(
-        state.scheduledWebinars,
-        target.id,
-        { status: "ended" },
+      const { webinar } = await change([target.id], (draft) =>
+        updateScheduledWebinar(draft, target.id, { status: "ended" }),
       );
-      persistChanged(webinar);
       const channelId = getRoomChannelId(webinar.clientId, webinar.roomId);
       // Locks the room through the same path that records the schedule's
       // status, so a later reopen of the schedule reopens the room.
@@ -502,24 +458,19 @@ export const registerScheduledWebinarRoutes = (
       }
       res.json({ scheduledWebinar: serializeScheduledWebinar(webinar) });
     } catch (error) {
-      undo();
       answerFailure(res, error);
     }
   });
 
-  app.post("/scheduled-webinars/:id/cancel", (req, res) => {
+  app.post("/scheduled-webinars/:id/cancel", async (req, res) => {
     if (!requireSecret(req, res)) return;
     const target = requireWebinarAccess(req, res);
     if (!target) return;
 
-    const undo = rememberWebinar(state.scheduledWebinars, target.id);
     try {
-      const { webinar } = updateScheduledWebinar(
-        state.scheduledWebinars,
-        target.id,
-        { status: "cancelled" },
+      const { webinar } = await change([target.id], (draft) =>
+        updateScheduledWebinar(draft, target.id, { status: "cancelled" }),
       );
-      persistChanged(webinar);
       const channelId = getRoomChannelId(webinar.clientId, webinar.roomId);
       // Disables and locks the room (see the /end route).
       if (state.webinarConfigs.has(channelId)) {
@@ -527,34 +478,29 @@ export const registerScheduledWebinarRoutes = (
       }
       res.json({ scheduledWebinar: serializeScheduledWebinar(webinar) });
     } catch (error) {
-      undo();
       answerFailure(res, error);
     }
   });
 
-  app.post("/scheduled-webinars/:id/cohost-invite", (req, res) => {
+  app.post("/scheduled-webinars/:id/cohost-invite", async (req, res) => {
     if (!requireSecret(req, res)) return;
     const target = requireWebinarAccess(req, res);
     if (!target) return;
 
-    const undo = rememberWebinar(state.scheduledWebinars, target.id);
     try {
-      const { webinar, token } = createScheduledWebinarCoHostInvite(
-        state.scheduledWebinars,
-        target.id,
+      const { webinar, token } = await change([target.id], (draft) =>
+        createScheduledWebinarCoHostInvite(draft, target.id),
       );
-      persistChanged(webinar);
       res.json({
         coHostInviteLink: buildCoHostInviteLink(token),
         scheduledWebinar: serializeScheduledWebinar(webinar),
       });
     } catch (error) {
-      undo();
       answerFailure(res, error);
     }
   });
 
-  app.post("/scheduled-webinars/cohost-invites/:token/accept", (req, res) => {
+  app.post("/scheduled-webinars/cohost-invites/:token/accept", async (req, res) => {
     if (!requireSecret(req, res)) return;
     const user = resolveUserContext(req);
     if (!user.email) {
@@ -562,7 +508,6 @@ export const registerScheduledWebinarRoutes = (
       return;
     }
 
-    let undo = (): void => {};
     try {
       const token = normalizeIdentifier(
         req.params.token,
@@ -572,17 +517,11 @@ export const registerScheduledWebinarRoutes = (
         res.status(400).json({ error: "Co-host invite token is required" });
         return;
       }
-      const invitedId = coHostInviteWebinarId(state.scheduledWebinars, token);
-      if (invitedId) undo = rememberWebinar(state.scheduledWebinars, invitedId);
-      const webinar = acceptScheduledWebinarCoHostInvite(
-        state.scheduledWebinars,
-        token,
-        {
-          email: user.email,
-          name: user.name,
-        },
+      const invitee = { email: user.email, name: user.name };
+      const webinar = await change(
+        (store) => [coHostInviteWebinarId(store, token)].filter((id) => id !== null),
+        (draft) => acceptScheduledWebinarCoHostInvite(draft, token, invitee),
       );
-      persistChanged(webinar);
       ensureWebinarRoomConfig(state, webinar, null);
       const io = getIo?.() ?? null;
       const channelId = getRoomChannelId(webinar.clientId, webinar.roomId);
@@ -593,7 +532,6 @@ export const registerScheduledWebinarRoutes = (
       }
       res.json({ scheduledWebinar: serializeScheduledWebinar(webinar) });
     } catch (error) {
-      undo();
       answerFailure(res, error);
     }
   });

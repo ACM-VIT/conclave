@@ -13,9 +13,9 @@ import type { ScheduledMeeting } from "../types.js";
 import { initScheduledMeetings, initScheduledWebinars, initScheduling } from "../server/init.js";
 import { LocalRoomRegistry } from "../server/roomRegistry.js";
 import {
+  changeMeetings,
   createScheduledMeetingPersistence,
   deleteScheduledMeeting,
-  persistScheduledMeetingDeletes,
   type ScheduledMeetingPersistence,
 } from "../server/scheduledMeetings.js";
 import { createSchedulingPersistence, type SchedulingPersistence } from "../server/scheduling.js";
@@ -258,8 +258,7 @@ describe.skipIf(!hasRedis)("SFUs sharing one Redis", () => {
 
     const reload = reloadPersistedStores(state);
     await read;
-    deleteScheduledMeeting(state.scheduledMeetings, doomed.id);
-    await persistScheduledMeetingDeletes(state.scheduledMeetings, persistence, [doomed.id]);
+    await changeMeetings(state.scheduledMeetings, persistence, [doomed.id], (draft) => deleteScheduledMeeting(draft, doomed.id));
     release();
     await reload;
 

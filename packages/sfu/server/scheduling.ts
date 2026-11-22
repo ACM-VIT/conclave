@@ -35,6 +35,7 @@ import {
 import { assertSqliteWritable } from "./sqliteWriteCheck.js";
 import { finiteNumber, importFallbackFiles, readJsonStore, replaceIfNewer, requireArray } from "./fallbackImport.js";
 import { mergeNewestStamp } from "./stampedMerge.js";
+import { assignInPlace, persistThenApply } from "./persistThenApply.js";
 
 type MaybePromise<T> = T | Promise<T>;
 
@@ -1867,6 +1868,101 @@ const unindexProfile = (store: SchedulingStore, profile: SchedulingProfile): voi
 const unindexEventType = (store: SchedulingStore, eventType: SchedulingEventType): void => {
   const bySlug = profileSlugKey(eventType.profileId, eventType.slug);
   if (store.eventTypeIdByProfileSlug.get(bySlug) === eventType.id) store.eventTypeIdByProfileSlug.delete(bySlug);
+};
+
+const setOrDelete = <K, V>(map: Map<K, V>, key: K, value: V | undefined): void => {
+  if (value === undefined) map.delete(key);
+  else map.set(key, value);
+};
+
+const hostRecordsOf = (store: SchedulingStore, profileId: string) => ({
+  profile: store.profilesById.get(profileId),
+  hours: store.availabilityByProfileId.get(profileId),
+  eventTypes: [...store.eventTypesById.values()].filter((eventType) => eventType.profileId === profileId),
+  calendar: store.calendarByProfileId.get(profileId),
+});
+
+const draftSchedulingStore = (store: SchedulingStore, profileId: string | null): SchedulingStore => {
+  const draft: SchedulingStore = {
+    profilesById: new Map(store.profilesById),
+    profileIdByUserKey: new Map(store.profileIdByUserKey),
+    profileIdByUsername: new Map(store.profileIdByUsername),
+    availabilityByProfileId: new Map(store.availabilityByProfileId),
+    eventTypesById: new Map(store.eventTypesById),
+    eventTypeIdByProfileSlug: new Map(store.eventTypeIdByProfileSlug),
+    calendarByProfileId: new Map(store.calendarByProfileId),
+    tombstones: {
+      profile: new Map(store.tombstones.profile),
+      availability: new Map(store.tombstones.availability),
+      event_type: new Map(store.tombstones.event_type),
+      calendar: new Map(store.tombstones.calendar),
+    },
+  };
+  if (!profileId) return draft;
+  const held = hostRecordsOf(store, profileId);
+  if (held.profile) draft.profilesById.set(profileId, structuredClone(held.profile));
+  if (held.hours) draft.availabilityByProfileId.set(profileId, structuredClone(held.hours));
+  for (const eventType of held.eventTypes) draft.eventTypesById.set(eventType.id, structuredClone(eventType));
+  if (held.calendar) draft.calendarByProfileId.set(profileId, structuredClone(held.calendar));
+  return draft;
+};
+
+const commitSchedulingHost = (store: SchedulingStore, draft: SchedulingStore, profileId: string): void => {
+  const held = hostRecordsOf(store, profileId);
+  const next = hostRecordsOf(draft, profileId);
+  if (held.profile) unindexProfile(store, held.profile);
+  if (next.profile) registerProfile(store, held.profile ? assignInPlace(held.profile, next.profile) : next.profile);
+  else store.profilesById.delete(profileId);
+  setOrDelete(store.availabilityByProfileId, profileId, next.hours);
+  const nextIds = new Set(next.eventTypes.map((eventType) => eventType.id));
+  for (const eventType of held.eventTypes) {
+    unindexEventType(store, eventType);
+    if (!nextIds.has(eventType.id)) store.eventTypesById.delete(eventType.id);
+  }
+  for (const eventType of next.eventTypes) {
+    const target = held.eventTypes.find((entry) => entry.id === eventType.id);
+    registerEventType(store, target ? assignInPlace(target, eventType) : eventType);
+  }
+  if (next.calendar) {
+    store.calendarByProfileId.set(profileId, held.calendar ? assignInPlace(held.calendar, next.calendar) : next.calendar);
+  } else {
+    store.calendarByProfileId.delete(profileId);
+  }
+  for (const kind of ["profile", "availability", "calendar"] as const) {
+    setOrDelete(store.tombstones[kind], profileId, draft.tombstones[kind].get(profileId));
+  }
+  for (const id of new Set([...held.eventTypes.map((eventType) => eventType.id), ...nextIds])) {
+    setOrDelete(store.tombstones.event_type, id, draft.tombstones.event_type.get(id));
+  }
+};
+
+/**
+ * Runs a change to one host's scheduling records on a draft, saves the draft,
+ * and only then copies that host's records, indexes and tombstones into
+ * memory. `host` names the profile, or picks it from the store once earlier
+ * changes are in; a profile the change creates is committed with it.
+ */
+export const changeSchedulingHost = async <R>(
+  store: SchedulingStore,
+  persistence: SchedulingPersistence | null,
+  host: string | ((store: SchedulingStore) => string | null),
+  mutate: (draft: SchedulingStore) => R,
+): Promise<R> => {
+  const plan = await persistThenApply(store, "scheduling records", {
+    plan: () => {
+      const profileId = typeof host === "function" ? host(store) : host;
+      const draft = draftSchedulingStore(store, profileId);
+      const result = mutate(draft);
+      const created = [...draft.profilesById.keys()].filter((id) => !store.profilesById.has(id));
+      const hosts = new Set(profileId ? [profileId, ...created] : created);
+      return { draft, result, hosts };
+    },
+    save: ({ draft }) => persistScheduling(draft, persistence),
+    apply: ({ draft, hosts }) => {
+      for (const profileId of hosts) commitSchedulingHost(store, draft, profileId);
+    },
+  });
+  return plan.result;
 };
 
 const deletionsOf = (snapshot: SchedulingSnapshot, kind: SchedulingRecordKind): Map<string, number> =>

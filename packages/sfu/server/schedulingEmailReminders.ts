@@ -4,8 +4,10 @@ import type {
   SchedulingProfile,
 } from "../types.js";
 import { Logger } from "../utilities/loggers.js";
+import { serialized } from "./persistThenApply.js";
 import {
-  persistScheduledMeetingChanges,
+  adoptStoredMeeting,
+  changeMeetings,
   updateScheduledMeeting,
 } from "./scheduledMeetings.js";
 import {
@@ -136,17 +138,14 @@ const fallbackEventType = (
   updatedAt: meeting.updatedAt,
 });
 
-const persistMeetingChange = async (
+const changeReminder = (
   state: SfuState,
-  meeting: ScheduledMeeting,
-): Promise<void> => {
-  if (!state.scheduledMeetingPersistence) return;
-  await persistScheduledMeetingChanges(
-    state.scheduledMeetings,
-    state.scheduledMeetingPersistence,
-    [meeting],
+  meetingId: string,
+  request: Parameters<typeof updateScheduledMeeting>[2],
+): Promise<ScheduledMeeting> =>
+  changeMeetings(state.scheduledMeetings, state.scheduledMeetingPersistence, [meetingId], (draft) =>
+    updateScheduledMeeting(draft, meetingId, request),
   );
-};
 
 const claimReminderForMeeting = async (
   state: SfuState,
@@ -154,33 +153,19 @@ const claimReminderForMeeting = async (
   now: number,
   leadMs: number,
 ): Promise<ScheduledMeeting | null> => {
-  if (state.scheduledMeetingPersistence?.claimEmailReminder) {
-    const claimed = await state.scheduledMeetingPersistence.claimEmailReminder({
-      meetingId: meeting.id,
-      now,
-      leadMs,
+  const persistence = state.scheduledMeetingPersistence;
+  if (persistence?.claimEmailReminder) {
+    const claimEmailReminder = persistence.claimEmailReminder.bind(persistence);
+    return serialized(state.scheduledMeetings, async () => {
+      const claimed = await claimEmailReminder({ meetingId: meeting.id, now, leadMs });
+      return claimed ? adoptStoredMeeting(state.scheduledMeetings, claimed) : null;
     });
-    if (!claimed) return null;
-    const local = state.scheduledMeetings.byId.get(claimed.id);
-    if (local) {
-      Object.assign(local, claimed);
-      return local;
-    }
-    state.scheduledMeetings.byId.set(claimed.id, claimed);
-    state.scheduledMeetings.byRoomCode.set(
-      `${claimed.clientId}:${claimed.roomCode}`,
-      claimed.id,
-    );
-    return claimed;
   }
-
-  const pending = updateScheduledMeeting(state.scheduledMeetings, meeting.id, {
+  return changeReminder(state, meeting.id, {
     emailReminderStatus: "pending",
     emailReminderError: null,
     emailReminderSentAt: null,
   });
-  await persistMeetingChange(state, pending);
-  return pending;
 };
 
 const sendReminderForMeeting = async (
@@ -200,13 +185,11 @@ const sendReminderForMeeting = async (
     meeting: pending,
     appOrigin: resolveAppOrigin(),
   });
-  const updated = updateScheduledMeeting(state.scheduledMeetings, pending.id, {
+  return changeReminder(state, pending.id, {
     emailReminderStatus: result.status,
     emailReminderError: result.error,
     emailReminderSentAt: result.sentAt,
   });
-  await persistMeetingChange(state, updated);
-  return updated;
 };
 
 export const sendDueSchedulingEmailReminders = async (
@@ -234,13 +217,12 @@ export const sendDueSchedulingEmailReminders = async (
       } catch (error) {
         Logger.warn("Failed to send scheduling reminder", error);
         try {
-          const failed = updateScheduledMeeting(state.scheduledMeetings, meeting.id, {
+          const failed = await changeReminder(state, meeting.id, {
             emailReminderStatus: "failed",
             emailReminderError:
               (error as Error).message || "Scheduling reminder email failed.",
             emailReminderSentAt: null,
           });
-          await persistMeetingChange(state, failed);
           changed.push(failed);
         } catch (persistError) {
           Logger.warn("Failed to persist scheduling reminder failure", persistError);

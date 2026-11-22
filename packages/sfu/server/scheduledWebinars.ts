@@ -23,6 +23,7 @@ import { canonicalizeClientId } from "./clientIds.js";
 import { assertSqliteWritable } from "./sqliteWriteCheck.js";
 import { describeEntry, importFallbackFiles, readJsonStore, replaceIfNewer, requireArray, requireRecord } from "./fallbackImport.js";
 import { mergeNewestStamp } from "./stampedMerge.js";
+import { assignInPlace, committedRecords, persistThenApply, targetIds, type ChangeTargets } from "./persistThenApply.js";
 
 const DEFAULT_EARLY_ENTRY_MINUTES = 10;
 const MAX_EARLY_ENTRY_MINUTES = 240;
@@ -666,39 +667,6 @@ export const mergePersistedSchedules = (
   );
 };
 
-const persistScheduledWebinars = (
-  store: ScheduledWebinarStore,
-  persistence: ScheduledWebinarPersistence,
-): void => {
-  persistence.save(Array.from(store.byId.values()));
-};
-
-export const persistScheduledWebinarChanges = (
-  store: ScheduledWebinarStore,
-  persistence: ScheduledWebinarPersistence,
-  webinars: ScheduledWebinar[],
-): void => {
-  if (webinars.length === 0) return;
-  if (persistence.saveChanged) {
-    persistence.saveChanged(webinars);
-    return;
-  }
-  persistScheduledWebinars(store, persistence);
-};
-
-export const persistScheduledWebinarDeletes = (
-  store: ScheduledWebinarStore,
-  persistence: ScheduledWebinarPersistence,
-  ids: string[],
-): void => {
-  if (ids.length === 0) return;
-  if (persistence.deleteRecords) {
-    persistence.deleteRecords(ids.map((id) => ({ id, deletedAt: store.deletedAt.get(id) ?? Date.now() })));
-    return;
-  }
-  persistScheduledWebinars(store, persistence);
-};
-
 export type CreateScheduledWebinarOptions = {
   clientId: string;
   createdBy: string;
@@ -951,30 +919,78 @@ export const updateScheduledWebinar = (
   return { webinar: existing, inviteCodeHashChange };
 };
 
-const restoreInPlace = <T extends object>(target: T, before: T): T => {
-  for (const key of Object.keys(target)) {
-    if (!(key in before)) delete (target as Record<string, unknown>)[key];
-  }
-  return Object.assign(target, before);
+type WebinarPlan<R> = {
+  draft: ScheduledWebinarStore;
+  result: R;
+  upserts: ScheduledWebinar[];
+  deletions: Array<{ id: string; deletedAt: number }>;
 };
 
-/** Captures one webinar so a request whose save fails can put it back as it was. */
-export const rememberWebinar = (store: ScheduledWebinarStore, id: string): (() => void) => {
-  const held = store.byId.get(id);
-  const before = held ? structuredClone(held) : null;
-  const deletedAt = store.deletedAt.get(id);
-  return () => {
-    const current = store.byId.get(id);
-    if (current) removeFromIndexes(store, current);
-    if (deletedAt === undefined) store.deletedAt.delete(id);
-    else store.deletedAt.set(id, deletedAt);
-    if (before) indexScheduledWebinar(store, restoreInPlace(current ?? held ?? before, before));
+const planWebinarChange = <R>(
+  store: ScheduledWebinarStore,
+  targets: ChangeTargets<ScheduledWebinarStore>,
+  mutate: (draft: ScheduledWebinarStore) => R,
+): WebinarPlan<R> => {
+  const ids = targetIds(targets, store);
+  const draft: ScheduledWebinarStore = {
+    byId: new Map(store.byId),
+    bySlug: new Map(store.bySlug),
+    byRoomChannel: new Map(store.byRoomChannel),
+    deletedAt: new Map(store.deletedAt),
   };
+  for (const id of ids) {
+    const held = store.byId.get(id);
+    if (held) draft.byId.set(id, structuredClone(held));
+  }
+  const result = mutate(draft);
+  const upserts = [...draft.byId].flatMap(([id, webinar]) => {
+    const held = store.byId.get(id);
+    if (held === webinar) return [];
+    return !held || JSON.stringify(held) !== JSON.stringify(webinar) ? [webinar] : [];
+  });
+  const deletions = ids
+    .filter((id) => store.byId.has(id) && !draft.byId.has(id))
+    .map((id) => ({ id, deletedAt: draft.deletedAt.get(id) ?? Date.now() }));
+  return { draft, result, upserts, deletions };
 };
 
-/** Drops a webinar a request created but could not save. */
-export const forgetWebinar = (store: ScheduledWebinarStore, webinar: ScheduledWebinar): void => {
-  removeFromIndexes(store, webinar);
+/**
+ * Runs a webinar mutation on a draft, saves what it changed, and only then
+ * applies it to memory and the slug and room indexes. `ids` names the
+ * webinars the mutation may change, or picks them from the store once earlier
+ * changes are in; new webinars are picked up on their own.
+ */
+export const changeWebinars = async <R>(
+  store: ScheduledWebinarStore,
+  persistence: ScheduledWebinarPersistence | null,
+  ids: ChangeTargets<ScheduledWebinarStore>,
+  mutate: (draft: ScheduledWebinarStore) => R,
+): Promise<R> => {
+  const plan = await persistThenApply(store, "scheduled webinars", {
+    plan: () => planWebinarChange(store, ids, mutate),
+    save: (planned) => {
+      if (!persistence || (planned.upserts.length === 0 && planned.deletions.length === 0)) return;
+      if (!persistence.saveChanged || !persistence.deleteRecords) {
+        persistence.save([...planned.draft.byId.values()]);
+        return;
+      }
+      if (planned.upserts.length > 0) persistence.saveChanged(planned.upserts);
+      if (planned.deletions.length > 0) persistence.deleteRecords(planned.deletions);
+    },
+    apply: (planned) => {
+      for (const webinar of planned.upserts) {
+        const held = store.byId.get(webinar.id);
+        if (held) removeFromIndexes(store, held);
+        indexScheduledWebinar(store, held ? assignInPlace(held, webinar) : webinar);
+      }
+      for (const { id, deletedAt } of planned.deletions) {
+        const held = store.byId.get(id);
+        if (held) removeFromIndexes(store, held);
+        store.deletedAt.set(id, deletedAt);
+      }
+    },
+  });
+  return committedRecords(store.byId, plan.result);
 };
 
 export const coHostInviteWebinarId = (store: ScheduledWebinarStore, token: string): string | null => {

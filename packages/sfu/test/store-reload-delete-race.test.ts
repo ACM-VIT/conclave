@@ -6,21 +6,20 @@ import type { ScheduledMeeting, ScheduledWebinar } from "../types.js";
 import { initScheduledMeetings, initScheduledWebinars, initScheduling } from "../server/init.js";
 import { LocalRoomRegistry } from "../server/roomRegistry.js";
 import {
+  changeMeetings,
   createScheduledMeetingPersistence,
   deleteScheduledMeeting,
-  persistScheduledMeetingDeletes,
 } from "../server/scheduledMeetings.js";
 import {
+  changeWebinars,
   createScheduledWebinarPersistence,
   deleteScheduledWebinar,
-  persistScheduledWebinarChanges,
-  persistScheduledWebinarDeletes,
 } from "../server/scheduledWebinars.js";
 import {
+  changeSchedulingHost,
   clearGoogleCalendarConnection,
   createSchedulingPersistence,
   deleteEventType,
-  persistScheduling,
 } from "../server/scheduling.js";
 import { createSfuState, type SfuState } from "../server/state.js";
 import { reloadPersistedStores } from "../server/storeReload.js";
@@ -108,8 +107,9 @@ describe("a reload racing a delete", () => {
 
     const reload = reloadPersistedStores(state);
     await hold.read;
-    deleteScheduledMeeting(state.scheduledMeetings, meeting.id);
-    await persistScheduledMeetingDeletes(state.scheduledMeetings, state.scheduledMeetingPersistence!, [meeting.id]);
+    await changeMeetings(state.scheduledMeetings, state.scheduledMeetingPersistence, [meeting.id], (draft) =>
+      deleteScheduledMeeting(draft, meeting.id),
+    );
     hold.release();
     await reload;
 
@@ -124,10 +124,11 @@ describe("a reload racing a delete", () => {
 
     const reload = reloadPersistedStores(state);
     await hold.read;
-    const host = state.scheduling.profilesById.get("host")!;
-    if (kind === "event type") deleteEventType(state.scheduling, host, eventType.id);
-    else clearGoogleCalendarConnection(state.scheduling, host);
-    await persistScheduling(state.scheduling, state.schedulingPersistence);
+    await changeSchedulingHost(state.scheduling, state.schedulingPersistence, "host", (draft) => {
+      const host = draft.profilesById.get("host")!;
+      if (kind === "event type") deleteEventType(draft, host, eventType.id);
+      else clearGoogleCalendarConnection(draft, host);
+    });
     hold.release();
     await reload;
 
@@ -144,10 +145,12 @@ describe("a reload racing a delete", () => {
     const sfuA = await startState();
     const sfuB = await startState();
 
-    deleteScheduledWebinar(sfuA.scheduledWebinars, webinar.id);
-    persistScheduledWebinarDeletes(sfuA.scheduledWebinars, sfuA.scheduledWebinarPersistence!, [webinar.id]);
-    const stale = sfuB.scheduledWebinars.byId.get(webinar.id)!;
-    persistScheduledWebinarChanges(sfuB.scheduledWebinars, sfuB.scheduledWebinarPersistence!, [{ ...stale, updatedAt: 2 }]);
+    await changeWebinars(sfuA.scheduledWebinars, sfuA.scheduledWebinarPersistence, [webinar.id], (draft) =>
+      deleteScheduledWebinar(draft, webinar.id),
+    );
+    await changeWebinars(sfuB.scheduledWebinars, sfuB.scheduledWebinarPersistence, [webinar.id], (draft) => {
+      draft.byId.get(webinar.id)!.updatedAt = 2;
+    });
     await reloadPersistedStores(sfuB);
 
     expect(createScheduledWebinarPersistence().load().map((entry) => entry.id)).toEqual([]);

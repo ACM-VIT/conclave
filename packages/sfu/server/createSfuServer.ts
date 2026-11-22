@@ -91,7 +91,7 @@ export const createSfuServer = (
     await retryWhileSqliteLocked(() => initScheduledWebinars(state));
     await retryWhileSqliteLocked(() => initScheduledMeetings(state));
     await retryWhileSqliteLocked(() => initScheduling(state));
-    startScheduledWebinarTimer(state, () => io, undefined);
+    startScheduledWebinarTimer(state);
     roomOwnershipRenewTimer = startBackgroundTimer(
       "Room ownership renewal",
       config.roomRegistry.renewIntervalMs,

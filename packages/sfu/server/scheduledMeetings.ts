@@ -28,6 +28,7 @@ import { canonicalizeClientId } from "./clientIds.js";
 import { assertSqliteWritable } from "./sqliteWriteCheck.js";
 import { describeEntry, importFallbackFiles, readJsonStore, replaceIfNewer, requireArray, requireRecord } from "./fallbackImport.js";
 import { mergeNewestStamp } from "./stampedMerge.js";
+import { assignInPlace, committedRecords, persistThenApply, targetIds, type ChangeTargets } from "./persistThenApply.js";
 
 type MaybePromise<T> = T | Promise<T>;
 
@@ -441,35 +442,6 @@ export const updateScheduledMeeting = (
 
   meeting.updatedAt = now;
   return meeting;
-};
-
-const restoreInPlace = <T extends object>(target: T, before: T): T => {
-  for (const key of Object.keys(target)) {
-    if (!(key in before)) delete (target as Record<string, unknown>)[key];
-  }
-  return Object.assign(target, before);
-};
-
-/** Captures one meeting so a request whose save fails can put it back as it was. */
-export const rememberMeeting = (store: ScheduledMeetingStore, id: string): (() => void) => {
-  const held = store.byId.get(id);
-  const before = held ? structuredClone(held) : null;
-  const deletedAt = store.deletedAt.get(id);
-  return () => {
-    const current = store.byId.get(id);
-    if (current) unregisterStore(store, current);
-    if (deletedAt === undefined) store.deletedAt.delete(id);
-    else store.deletedAt.set(id, deletedAt);
-    if (before) registerStore(store, restoreInPlace(current ?? held ?? before, before));
-  };
-};
-
-/** Drops a meeting a request created but could not save, and hands its room code back. */
-export const forgetMeeting = (store: ScheduledMeetingStore, meeting: ScheduledMeeting): void => {
-  unregisterStore(store, meeting);
-  for (const other of store.byId.values()) {
-    if (other.clientId === meeting.clientId && other.roomCode === meeting.roomCode) claimRoomCode(store, other);
-  }
 };
 
 export const deleteScheduledMeeting = (
@@ -1404,41 +1376,101 @@ export const mergePersistedMeetings = async (
   );
 };
 
-const persistScheduledMeetings = async (
+type MeetingPlan<R> = {
+  draft: ScheduledMeetingStore;
+  result: R;
+  upserts: ScheduledMeeting[];
+  deletions: MeetingDeletion[];
+};
+
+const planMeetingChange = <R>(
   store: ScheduledMeetingStore,
+  targets: ChangeTargets<ScheduledMeetingStore>,
+  mutate: (draft: ScheduledMeetingStore) => R,
+): MeetingPlan<R> => {
+  const ids = targetIds(targets, store);
+  const draft: ScheduledMeetingStore = {
+    byId: new Map(store.byId),
+    byRoomCode: new Map(store.byRoomCode),
+    deletedAt: new Map(store.deletedAt),
+  };
+  for (const id of ids) {
+    const held = store.byId.get(id);
+    if (held) draft.byId.set(id, structuredClone(held));
+  }
+  const result = mutate(draft);
+  const upserts = [...draft.byId].flatMap(([id, meeting]) => {
+    const held = store.byId.get(id);
+    if (held === meeting) return [];
+    return !held || JSON.stringify(held) !== JSON.stringify(meeting) ? [meeting] : [];
+  });
+  const deletions = ids
+    .filter((id) => store.byId.has(id) && !draft.byId.has(id))
+    .map((id) => ({ id, deletedAt: draft.deletedAt.get(id) ?? Date.now() }));
+  return { draft, result, upserts, deletions };
+};
+
+const saveMeetingPlan = async (
   persistence: ScheduledMeetingPersistence,
+  plan: MeetingPlan<unknown>,
 ): Promise<void> => {
-  await persistence.save(Array.from(store.byId.values()));
+  if (plan.upserts.length === 0 && plan.deletions.length === 0) return;
+  if (!persistence.saveChanged || !persistence.deleteRecords) {
+    await persistence.save([...plan.draft.byId.values()]);
+  } else {
+    if (plan.upserts.length > 0) await persistence.saveChanged(plan.upserts);
+    if (plan.deletions.length > 0) await persistence.deleteRecords(plan.deletions);
+  }
   await persistence.flush?.();
 };
 
-export const persistScheduledMeetingChanges = async (
-  store: ScheduledMeetingStore,
-  persistence: ScheduledMeetingPersistence,
-  meetings: ScheduledMeeting[],
-): Promise<void> => {
-  if (meetings.length === 0) return;
-  if (!persistence.saveChanged) {
-    await persistScheduledMeetings(store, persistence);
-    return;
-  }
-  await persistence.saveChanged(meetings);
-  await persistence.flush?.();
+/** Puts a meeting that storage already holds into memory, in place, with its room code. */
+export const adoptStoredMeeting = (store: ScheduledMeetingStore, meeting: ScheduledMeeting): ScheduledMeeting => {
+  const held = store.byId.get(meeting.id);
+  if (held) unregisterStore(store, held);
+  const adopted = held ? assignInPlace(held, meeting) : meeting;
+  registerStore(store, adopted);
+  return adopted;
 };
 
-export const persistScheduledMeetingDeletes = async (
-  store: ScheduledMeetingStore,
-  persistence: ScheduledMeetingPersistence,
-  ids: string[],
-): Promise<void> => {
-  if (ids.length === 0) return;
-  if (!persistence.deleteRecords) {
-    await persistScheduledMeetings(store, persistence);
-    return;
+const applyMeetingPlan = (store: ScheduledMeetingStore, plan: MeetingPlan<unknown>): void => {
+  for (const meeting of plan.upserts) adoptStoredMeeting(store, meeting);
+  for (const { id, deletedAt } of plan.deletions) {
+    const held = store.byId.get(id);
+    if (held) unregisterStore(store, held);
+    store.deletedAt.set(id, deletedAt);
   }
-  await persistence.deleteRecords(ids.map((id) => ({ id, deletedAt: store.deletedAt.get(id) ?? Date.now() })));
-  await persistence.flush?.();
 };
+
+/**
+ * Runs a meeting mutation on a draft, saves what it changed, and only then
+ * applies it to memory and the room-code index. `ids` names the meetings the
+ * mutation may change, or picks them from the store once earlier changes are
+ * in; new meetings it creates are picked up on their own.
+ */
+export const changeMeetings = async <R>(
+  store: ScheduledMeetingStore,
+  persistence: ScheduledMeetingPersistence | null,
+  ids: ChangeTargets<ScheduledMeetingStore>,
+  mutate: (draft: ScheduledMeetingStore) => R,
+): Promise<R> => {
+  const plan = await persistThenApply(store, "scheduled meetings", {
+    plan: () => planMeetingChange(store, ids, mutate),
+    save: (planned) => persistence && saveMeetingPlan(persistence, planned),
+    apply: (planned) => applyMeetingPlan(store, planned),
+  });
+  return committedRecords(store.byId, plan.result);
+};
+
+/** Ids of the meetings that advanceScheduledMeetings would move on at `now`. */
+export const dueScheduledMeetingIds = (store: ScheduledMeetingStore, now = Date.now()): string[] =>
+  [...store.byId.values()]
+    .filter(
+      (meeting) =>
+        (meeting.status === "scheduled" && now >= meeting.scheduledStartAt) ||
+        (meeting.status === "live" && now >= meeting.scheduledEndAt),
+    )
+    .map((meeting) => meeting.id);
 
 export const advanceScheduledMeetings = (
   store: ScheduledMeetingStore,

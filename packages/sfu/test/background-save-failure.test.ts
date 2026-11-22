@@ -6,7 +6,7 @@ import type { ScheduledMeeting } from "../types.js";
 import { startBackgroundTimer } from "../server/backgroundTimer.js";
 import { initScheduledMeetings } from "../server/init.js";
 import { LocalRoomRegistry } from "../server/roomRegistry.js";
-import { createScheduledMeetingPersistence, persistScheduledMeetingChanges } from "../server/scheduledMeetings.js";
+import { changeMeetings, createScheduledMeetingPersistence, createScheduledMeeting } from "../server/scheduledMeetings.js";
 import { runScheduledMeetingTick } from "../server/scheduledMeetingTick.js";
 import { createSfuState } from "../server/state.js";
 
@@ -44,27 +44,35 @@ afterEach(() => {
 });
 
 describe("a store save that throws synchronously in the background", () => {
-  it("reaches persistScheduledMeetingChanges' caller as a rejection, never a throw", () => {
+  it("reaches changeMeetings' caller as a rejection, never a throw", () => {
     const persistence = { ...createScheduledMeetingPersistence(), saveChanged: throwSynchronously };
     const state = createSfuState({ roomRegistry: new LocalRoomRegistry({ instanceId: "sync-throw", instanceUrl: "http://localhost", ttlMs: 45000 }) });
+    const host = { clientId: "conclave", createdBy: "host@example.test", defaultHostEmail: "host@example.test", defaultHostUserId: null };
 
-    let result: Promise<void> | undefined;
+    let result: Promise<unknown> | undefined;
     expect(() => {
-      result = persistScheduledMeetingChanges(state.scheduledMeetings, persistence, [dueMeeting]);
+      result = changeMeetings(state.scheduledMeetings, persistence, [], (draft) =>
+        createScheduledMeeting(draft, { title: "Planning", scheduledStartAt: Date.now() + 60_000 }, host),
+      );
     }).not.toThrow();
-    return expect(result).rejects.toThrow(/database is locked/);
+    return expect(result).rejects.toThrow(/Could not save scheduled meetings/);
   });
 
-  it("is logged by the meeting tick, and the tick still advances the meeting", async () => {
+  it("is logged by the meeting tick, which leaves the meeting for the next tick to advance", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const state = createSfuState({ roomRegistry: new LocalRoomRegistry({ instanceId: "tick", instanceUrl: "http://localhost", ttlMs: 45000 }) });
     await initScheduledMeetings(state);
     state.scheduledMeetings.byId.set(dueMeeting.id, { ...dueMeeting });
-    vi.spyOn(state.scheduledMeetingPersistence!, "saveChanged").mockImplementation(throwSynchronously);
+    vi.spyOn(state.scheduledMeetingPersistence!, "saveChanged").mockImplementationOnce(throwSynchronously);
 
     await expect(runScheduledMeetingTick(state)).resolves.toBeUndefined();
     expect(warn.mock.calls.flat().join(" ")).toMatch(/Failed to persist scheduled-meeting tick/);
+    expect(state.scheduledMeetings.byId.get(dueMeeting.id)?.status).toBe("scheduled");
+
+    await runScheduledMeetingTick(state);
     expect(state.scheduledMeetings.byId.get(dueMeeting.id)?.status).toBe("live");
+    const stored = await state.scheduledMeetingPersistence!.load();
+    expect(stored.find((meeting) => meeting.id === dueMeeting.id)?.status).toBe("live");
   });
 
   it("never escapes a background timer, which keeps ticking", async () => {
@@ -79,13 +87,16 @@ describe("a store save that throws synchronously in the background", () => {
         throwSynchronously();
       }),
     ];
-    await new Promise((resolve) => setTimeout(resolve, 60));
-    timers.forEach(clearInterval);
-
-    expect(ticks).toBeGreaterThan(2);
+    try {
+      await vi.waitFor(() => {
+        expect(ticks).toBeGreaterThan(2);
+        const logged = warn.mock.calls.flat().join(" ");
+        expect(logged).toMatch(/Throwing tick failed/);
+        expect(logged).toMatch(/Rejecting tick failed/);
+      }, { timeout: 5_000, interval: 10 });
+    } finally {
+      timers.forEach(clearInterval);
+    }
     expect(uncaught).toEqual([]);
-    const logged = warn.mock.calls.flat().join(" ");
-    expect(logged).toMatch(/Throwing tick failed/);
-    expect(logged).toMatch(/Rejecting tick failed/);
   });
 });

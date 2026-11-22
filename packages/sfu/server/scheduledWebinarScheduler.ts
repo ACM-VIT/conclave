@@ -1,12 +1,12 @@
-import type { Server as SocketIOServer } from "socket.io";
 import { Logger } from "../utilities/loggers.js";
 import { startBackgroundTimer } from "./backgroundTimer.js";
 import { getRoomChannelId } from "./rooms.js";
 import type { ScheduledWebinar } from "../types.js";
 import {
+  changeWebinars,
   hasWebinarEnded,
   isWithinEarlyEntryWindow,
-  persistScheduledWebinarChanges,
+  type ScheduledWebinarStore,
 } from "./scheduledWebinars.js";
 import type { SfuState } from "./state.js";
 import {
@@ -162,67 +162,71 @@ export const ensureWebinarRoomConfig = (
 ): WebinarRoomConfig =>
   applyScheduledWebinarToConfig(state, webinar, inviteCodeHash);
 
-const advanceScheduledWebinars = (
-  state: SfuState,
-  io: SocketIOServer | null,
-  now = Date.now(),
-): number => {
-  let changed = 0;
-  const changedWebinars: ScheduledWebinar[] = [];
-  for (const webinar of state.scheduledWebinars.byId.values()) {
-    if (webinar.status === "cancelled") continue;
+const dueWebinarIds = (store: ScheduledWebinarStore, now: number): string[] =>
+  [...store.byId.values()]
+    .filter(
+      (webinar) =>
+        (webinar.status === "scheduled" && isWithinEarlyEntryWindow(webinar, now) && now >= webinar.scheduledStartAt) ||
+        (webinar.status === "live" && hasWebinarEnded(webinar, now)),
+    )
+    .map((webinar) => webinar.id);
 
-    if (webinar.status === "scheduled" && isWithinEarlyEntryWindow(webinar, now)) {
-      applyScheduledWebinarToConfig(state, webinar, null);
-      if (now >= webinar.scheduledStartAt) {
-        webinar.status = "live";
-        if (!webinar.liveStartedAt) {
-          webinar.liveStartedAt = now;
-        }
-        webinar.updatedAt = now;
-        changedWebinars.push(webinar);
-        changed += 1;
-      }
-    } else if (webinar.status === "live" && hasWebinarEnded(webinar, now)) {
+const advanceDueWebinars = (draft: ScheduledWebinarStore, now: number): ScheduledWebinar[] =>
+  dueWebinarIds(draft, now).map((id) => {
+    const webinar = draft.byId.get(id)!;
+    if (webinar.status === "scheduled") {
+      webinar.status = "live";
+      if (!webinar.liveStartedAt) webinar.liveStartedAt = now;
+    } else {
       webinar.status = "ended";
       webinar.endedAt = now;
-      webinar.updatedAt = now;
-      changedWebinars.push(webinar);
-      const channelId = getRoomChannelId(webinar.clientId, webinar.roomId);
-      const cfg = state.webinarConfigs.get(channelId);
-      if (cfg) {
-        recordScheduledWebinarEnded(cfg, webinar);
-      }
-      void io;
-      changed += 1;
+    }
+    webinar.updatedAt = now;
+    return webinar;
+  });
+
+/**
+ * Opens rooms whose early entry has begun, then moves due webinars to live or
+ * ended. The status change is saved before memory and the room move on, so a
+ * failed save is tried again on the next tick.
+ */
+const advanceScheduledWebinars = async (state: SfuState, now = Date.now()): Promise<number> => {
+  for (const webinar of state.scheduledWebinars.byId.values()) {
+    if (webinar.status === "scheduled" && isWithinEarlyEntryWindow(webinar, now)) {
+      applyScheduledWebinarToConfig(state, webinar, null);
     }
   }
+  if (dueWebinarIds(state.scheduledWebinars, now).length === 0) return 0;
 
-  if (changed > 0 && state.scheduledWebinarPersistence) {
-    try {
-      persistScheduledWebinarChanges(
-        state.scheduledWebinars,
-        state.scheduledWebinarPersistence,
-        changedWebinars,
-      );
-    } catch (error) {
-      Logger.warn("Failed to persist scheduled webinar status changes", error);
-    }
+  let changed: ScheduledWebinar[];
+  try {
+    changed = await changeWebinars(
+      state.scheduledWebinars,
+      state.scheduledWebinarPersistence,
+      (store) => dueWebinarIds(store, now),
+      (draft) => advanceDueWebinars(draft, now),
+    );
+  } catch (error) {
+    Logger.warn("Failed to persist scheduled webinar status changes", error);
+    return 0;
   }
-
-  return changed;
+  for (const webinar of changed) {
+    if (webinar.status !== "ended") continue;
+    const cfg = state.webinarConfigs.get(getRoomChannelId(webinar.clientId, webinar.roomId));
+    if (cfg) recordScheduledWebinarEnded(cfg, webinar);
+  }
+  return changed.length;
 };
 
 export const startScheduledWebinarTimer = (
   state: SfuState,
-  getIo: () => SocketIOServer | null,
   intervalMs = DEFAULT_TICK_MS,
 ): void => {
   if (state.scheduledWebinarTimer) return;
   state.scheduledWebinarTimer = startBackgroundTimer(
     "Scheduled webinar tick",
     intervalMs,
-    () => advanceScheduledWebinars(state, getIo(), Date.now()),
+    () => advanceScheduledWebinars(state, Date.now()),
     Logger.error,
   );
 };

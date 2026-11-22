@@ -2,22 +2,19 @@ import type { Express, Request, Response } from "express";
 import { Logger } from "../../utilities/loggers.js";
 import { secretsMatch } from "../secret.js";
 import {
+  changeMeetings,
   createScheduledMeeting,
   deleteScheduledMeeting,
   getScheduledMeetingById,
   getScheduledMeetingByRoomCode,
   listScheduledMeetings,
   moveScheduledMeetingToClient,
-  persistScheduledMeetingChanges,
-  forgetMeeting,
-  persistScheduledMeetingDeletes,
-  rememberMeeting,
   updateScheduledMeeting,
+  type ScheduledMeetingStore,
 } from "../scheduledMeetings.js";
 import type { SfuState } from "../state.js";
 import {
   PersistenceUnavailableError,
-  persistOrFail,
   sendPersistenceUnavailable,
 } from "./persistenceUnavailable.js";
 import {
@@ -145,17 +142,8 @@ export const registerScheduledMeetingRoutes = (
     return false;
   };
 
-  const persistChanged = async (meeting: ScheduledMeeting): Promise<void> =>
-    persistOrFail("scheduled meeting", () =>
-      state.scheduledMeetingPersistence &&
-      persistScheduledMeetingChanges(state.scheduledMeetings, state.scheduledMeetingPersistence, [meeting]),
-    );
-
-  const persistDeleted = async (id: string): Promise<void> =>
-    persistOrFail("scheduled meeting deletion", () =>
-      state.scheduledMeetingPersistence &&
-      persistScheduledMeetingDeletes(state.scheduledMeetings, state.scheduledMeetingPersistence, [id]),
-    );
+  const change = <R>(ids: string[], mutate: (draft: ScheduledMeetingStore) => R): Promise<R> =>
+    changeMeetings(state.scheduledMeetings, state.scheduledMeetingPersistence, ids, mutate);
 
   const answerFailure = (res: Response, error: unknown): void => {
     if (error instanceof PersistenceUnavailableError) {
@@ -171,19 +159,11 @@ export const registerScheduledMeetingRoutes = (
   ): Promise<ScheduledMeeting | null> => {
     if (meeting.clientId === clientId) return meeting;
     if (!canMigrateClientNamespace(meeting.clientId, clientId)) return null;
-    const undo = rememberMeeting(state.scheduledMeetings, meeting.id);
     try {
-      const migrated = moveScheduledMeetingToClient(
-        state.scheduledMeetings,
-        meeting.id,
-        clientId,
+      return await change([meeting.id], (draft) =>
+        moveScheduledMeetingToClient(draft, meeting.id, clientId),
       );
-      if (migrated) {
-        await persistChanged(migrated);
-      }
-      return migrated;
     } catch (error) {
-      undo();
       Logger.warn(
         `Failed to migrate scheduled meeting ${meeting.id} from ${meeting.clientId} to ${clientId}`,
         error,
@@ -269,20 +249,16 @@ export const registerScheduledMeetingRoutes = (
 
     try {
       const body = (req.body ?? {}) as CreateScheduledMeetingRequest;
-      const meeting = createScheduledMeeting(state.scheduledMeetings, body, {
-        clientId,
-        createdBy: user.userId || user.email,
-        defaultHostEmail: user.email,
-        defaultHostName: user.name || undefined,
-        defaultHostUserId: user.userId,
-      });
-
-      try {
-        await persistChanged(meeting);
-      } catch (error) {
-        forgetMeeting(state.scheduledMeetings, meeting);
-        throw error;
-      }
+      const email = user.email;
+      const meeting = await change([], (draft) =>
+        createScheduledMeeting(draft, body, {
+          clientId,
+          createdBy: user.userId || email,
+          defaultHostEmail: email,
+          defaultHostName: user.name || undefined,
+          defaultHostUserId: user.userId,
+        }),
+      );
       Logger.info(
         `Scheduled meeting created ${meeting.id} (${meeting.roomCode}) by ${user.email}`,
       );
@@ -365,18 +341,13 @@ export const registerScheduledMeetingRoutes = (
     if (!requireSecret(req, res)) return;
     const target = requireMeetingAccess(req, res);
     if (!target) return;
-    const undo = rememberMeeting(state.scheduledMeetings, target.id);
     try {
       const body = (req.body ?? {}) as UpdateScheduledMeetingRequest;
-      const meeting = updateScheduledMeeting(
-        state.scheduledMeetings,
-        target.id,
-        body,
+      const meeting = await change([target.id], (draft) =>
+        updateScheduledMeeting(draft, target.id, body),
       );
-      await persistChanged(meeting);
       res.json({ scheduledMeeting: serializeMeeting(meeting) });
     } catch (error) {
-      undo();
       answerFailure(res, error);
     }
   });
@@ -385,17 +356,17 @@ export const registerScheduledMeetingRoutes = (
     if (!requireSecret(req, res)) return;
     const target = requireMeetingAccess(req, res);
     if (!target) return;
-    const undo = rememberMeeting(state.scheduledMeetings, target.id);
-    const meeting = deleteScheduledMeeting(state.scheduledMeetings, target.id);
-    if (!meeting) {
-      res.status(404).json({ error: "Scheduled meeting not found" });
+    let meeting: ScheduledMeeting | null;
+    try {
+      meeting = await change([target.id], (draft) =>
+        deleteScheduledMeeting(draft, target.id),
+      );
+    } catch (error) {
+      answerFailure(res, error);
       return;
     }
-    try {
-      await persistDeleted(meeting.id);
-    } catch (error) {
-      undo();
-      answerFailure(res, error);
+    if (!meeting) {
+      res.status(404).json({ error: "Scheduled meeting not found" });
       return;
     }
     res.json({ success: true, id: meeting.id });
@@ -405,17 +376,12 @@ export const registerScheduledMeetingRoutes = (
     if (!requireSecret(req, res)) return;
     const target = requireMeetingAccess(req, res);
     if (!target) return;
-    const undo = rememberMeeting(state.scheduledMeetings, target.id);
     try {
-      const meeting = updateScheduledMeeting(
-        state.scheduledMeetings,
-        target.id,
-        { status: "live" },
+      const meeting = await change([target.id], (draft) =>
+        updateScheduledMeeting(draft, target.id, { status: "live" }),
       );
-      await persistChanged(meeting);
       res.json({ scheduledMeeting: serializeMeeting(meeting) });
     } catch (error) {
-      undo();
       answerFailure(res, error);
     }
   });
@@ -424,17 +390,12 @@ export const registerScheduledMeetingRoutes = (
     if (!requireSecret(req, res)) return;
     const target = requireMeetingAccess(req, res);
     if (!target) return;
-    const undo = rememberMeeting(state.scheduledMeetings, target.id);
     try {
-      const meeting = updateScheduledMeeting(
-        state.scheduledMeetings,
-        target.id,
-        { status: "cancelled" },
+      const meeting = await change([target.id], (draft) =>
+        updateScheduledMeeting(draft, target.id, { status: "cancelled" }),
       );
-      await persistChanged(meeting);
       res.json({ scheduledMeeting: serializeMeeting(meeting) });
     } catch (error) {
-      undo();
       answerFailure(res, error);
     }
   });
