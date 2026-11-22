@@ -1,6 +1,7 @@
 import React, {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -37,6 +38,8 @@ const SPIN_MIN_TURNS = 7;
 const SPIN_TURNS_SPREAD = 3;
 const REVEAL_DELAY_MS = 800;
 const RESULT_FAILOVER_MS = 2600;
+const STAGE_PADDING_PX = 16;
+const MIN_REVEAL_WHEEL_PX = 96;
 
 const useReducedMotion = (): boolean => {
   const [reduced, setReduced] = useState(false);
@@ -265,6 +268,33 @@ export function WheelWebApp() {
   );
   const canSpin = canEdit && !isSpinning && entries.length >= 2;
 
+  const sectionRef = useRef<HTMLElement | null>(null);
+  const readoutRef = useRef<HTMLDivElement | null>(null);
+  const footerRef = useRef<HTMLDivElement | null>(null);
+  const [wheelHidden, setWheelHidden] = useState(false);
+
+  useLayoutEffect(() => {
+    if (!showReveal) {
+      setWheelHidden(false);
+      return;
+    }
+    const section = sectionRef.current;
+    const readout = readoutRef.current;
+    const footer = footerRef.current;
+    if (!section || !readout || !footer) return;
+    const update = () => {
+      const height = section.clientHeight - readout.offsetHeight - footer.offsetHeight;
+      const wheel = Math.min(section.clientWidth, height) - 2 * STAGE_PADDING_PX;
+      setWheelHidden(wheel < MIN_REVEAL_WHEEL_PX);
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(section);
+    observer.observe(readout);
+    observer.observe(footer);
+    return () => observer.disconnect();
+  }, [showReveal]);
+
   const handlePointerLabel = useCallback((label: string | null) => {
     const element = liveLabelRef.current;
     if (element && label) element.textContent = label;
@@ -273,8 +303,14 @@ export function WheelWebApp() {
   return (
     <div className="@container h-full min-h-0 w-full">
       <div className="flex h-full min-h-0 w-full flex-col bg-[#0a0a0b] text-[#fafafa] @min-[720px]:flex-row">
-        <section className="relative flex min-h-[260px] min-w-0 flex-1 flex-col">
-          <div className="flex min-h-[62px] shrink-0 flex-col items-center justify-end px-4 pt-2 text-center @min-[720px]:min-h-[76px]">
+        <section
+          ref={sectionRef}
+          className={`relative flex min-h-[260px] min-w-0 flex-1 flex-col ${wheelHidden ? "justify-center" : ""}`}
+        >
+          <div
+            ref={readoutRef}
+            className="flex min-h-[62px] shrink-0 flex-col items-center justify-end px-4 pt-2 text-center @min-[720px]:min-h-[76px]"
+          >
             <p
               className="h-[38px] max-w-full truncate text-[30px] font-semibold leading-[38px]"
               hidden={!isSpinning}
@@ -297,7 +333,14 @@ export function WheelWebApp() {
             </p>
           </div>
 
-          <div className="relative min-h-0 flex-1">
+          <div
+            aria-hidden={wheelHidden || undefined}
+            className={
+              wheelHidden
+                ? "pointer-events-none relative h-0 min-h-0 flex-none overflow-hidden opacity-0"
+                : "relative min-h-0 flex-1 opacity-100 transition-opacity duration-100 ease-out motion-reduce:transition-none"
+            }
+          >
             <WheelStage
               entries={held ? held.entries : entries}
               spin={spin}
@@ -312,7 +355,10 @@ export function WheelWebApp() {
             />
           </div>
 
-          <div className="flex shrink-0 flex-wrap items-center justify-center gap-2 px-3 pb-3 pt-1 @min-[720px]:px-4 @min-[720px]:pb-4">
+          <div
+            ref={footerRef}
+            className="flex shrink-0 flex-wrap items-center justify-center gap-2 px-3 pb-3 pt-1 @min-[720px]:px-4 @min-[720px]:pb-4"
+          >
             {showReveal ? (
               <>
                 {canEdit && (
