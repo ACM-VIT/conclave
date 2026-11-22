@@ -846,3 +846,71 @@ test(
     }
   },
 );
+
+test(
+  "a database reached through a directory link comes back where it lives, with every link on the way",
+  { skip: missing.length > 0 && `needs ${missing.join(", ")} on PATH` },
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+    try {
+      const { state, backup, latestArchive, restore } = await setUp(root);
+      // conclave.sqlite -> current/live.db, and current -> data.
+      await mkdir(path.join(state, "data"));
+      const db = new DatabaseSync(path.join(state, "data", "live.db"));
+      db.exec("CREATE TABLE meetings (id TEXT PRIMARY KEY); INSERT INTO meetings VALUES ('kept')");
+      db.close();
+      await writeFile(path.join(state, "data", "notes.json"), "{}");
+      await symlink("data", path.join(state, "current"));
+      await symlink("current/live.db", path.join(state, "conclave.sqlite"));
+      await backup("--local-only");
+      const archive = await latestArchive();
+      const check = async () => {
+        assert.equal(await readlink(path.join(state, "current")), "data");
+        assert.equal(await readlink(path.join(state, "conclave.sqlite")), "current/live.db");
+        const restored = new DatabaseSync(path.join(state, "conclave.sqlite"), { readOnly: true });
+        assert.deepEqual(restored.prepare("SELECT id FROM meetings").all().map((row) => row.id), ["kept"]);
+        restored.close();
+      };
+
+      for (const only of [[], ["--only", "sqlite"]]) {
+        await rm(state, { recursive: true });
+        await restore("--file", archive, ...only, "--yes");
+        await check();
+      }
+      assert.equal(await readFile(path.join(state, "data", "notes.json"), "utf8").catch(() => "missing"), "missing", "sqlite-only leaves the other files out");
+      await rm(state, { recursive: true });
+      await restore("--file", archive, "--yes");
+      assert.equal(await readFile(path.join(state, "data", "notes.json"), "utf8"), "{}");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "the configured database behind a directory link is copied where it really lives",
+  { skip: missing.length > 0 && `needs ${missing.join(", ")} on PATH` },
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+    try {
+      const { state, backup, latestArchive, restore } = await setUp(root, [
+        "CONCLAVE_SQLITE_PATH=/var/lib/conclave/recordings/current/conclave.sqlite",
+      ]);
+      await mkdir(path.join(state, "data"));
+      const db = new DatabaseSync(path.join(state, "data", "conclave.sqlite"));
+      db.exec("CREATE TABLE meetings (id TEXT PRIMARY KEY); INSERT INTO meetings VALUES ('kept')");
+      db.close();
+      await symlink("data", path.join(state, "current"));
+      await backup("--local-only");
+      await rm(state, { recursive: true });
+      await restore("--file", await latestArchive(), "--yes");
+      assert.equal(await readlink(path.join(state, "current")), "data");
+      const restored = new DatabaseSync(path.join(state, "current", "conclave.sqlite"), { readOnly: true });
+      assert.deepEqual(restored.prepare("SELECT id FROM meetings").all().map((row) => row.id), ["kept"]);
+      restored.close();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+

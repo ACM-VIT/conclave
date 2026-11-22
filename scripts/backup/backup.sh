@@ -116,10 +116,10 @@ writers_fenced "$STATE_DIR" "${held_ids[*]}" "${unanswered[@]}" || die "an SFU c
 # configured database gets the same, whatever it is named.
 mapfile -t databases < <(sqlite_files "$STATE_DIR")
 mapfile -t starts < <(sqlite_links "$STATE_DIR" | cut -f1)
-if [[ -n "$configured" && -L "${STATE_DIR}/${configured}" ]]; then
+# The configured database goes through the same walk: a directory link on
+# its way counts as much as a link to the file.
+if [[ -n "$configured" ]] && [[ -e "${STATE_DIR}/${configured}" || -L "${STATE_DIR}/${configured}" ]]; then
   starts+=("$configured")
-elif [[ -n "$configured" && -f "${STATE_DIR}/${configured}" ]]; then
-  databases+=("$configured")
 fi
 links=()
 : > "${payload}/sqlite-links"

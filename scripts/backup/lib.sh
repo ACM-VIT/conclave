@@ -115,37 +115,56 @@ sqlite_links() {
   done)
 }
 
-# Walks a symlink below the state dir hop by hop to the database it reaches.
-# Prints "link<TAB><path><TAB><target as written>" for every link on the way
-# and "file<TAB><path>" for the database, all relative to the state dir, so a
-# restore can bring back the whole chain. An absolute target may name the
-# container's mount of the state dir. Fails when a hop leaves the state dir,
-# the chain loops, or it ends anywhere but a regular file.
+# Resolves a path below the state dir one component at a time, following
+# every symlink on the way, a directory link as much as a file link, to the
+# database it reaches. Prints "link<TAB><path><TAB><target as written>" for
+# each link, at the real place it sits, and "file<TAB><path>" for the
+# database, all relative to the state dir, so a restore can bring back the
+# whole chain and write the database where it really lives. An absolute
+# target may name the container's mount of the state dir. Fails when the path
+# leaves the state dir, loops, or ends anywhere but a regular file.
 sqlite_link_chain() {
   STATE_IN="$1" LINK_IN="$2" CONTAINER_IN="$3" python3 -c '
 import os, sys
 state = os.path.realpath(os.environ["STATE_IN"])
-container = os.environ["CONTAINER_IN"].rstrip("/")
-rel = os.path.normpath(os.environ["LINK_IN"])
-seen = set()
-while True:
+mounts = [os.environ["CONTAINER_IN"].rstrip("/"), os.environ["STATE_IN"].rstrip("/"), state]
+pending = os.environ["LINK_IN"].split("/")
+real = []
+links = []
+hops = 0
+while pending:
+    part = pending.pop(0)
+    if part in ("", "."):
+        continue
+    if part == "..":
+        if not real:
+            sys.exit(1)
+        real.pop()
+        continue
+    rel = "/".join(real + [part])
     path = os.path.join(state, rel)
     if not os.path.islink(path):
-        if not os.path.isfile(path):
-            sys.exit(1)
-        print(f"file\t{rel}")
-        break
-    if rel in seen:
+        real.append(part)
+        continue
+    hops += 1
+    if hops > 40:
         sys.exit(1)
-    seen.add(rel)
     target = os.readlink(path)
-    print(f"link\t{rel}\t{target}")
-    if target == container or target.startswith(container + "/"):
-        target = state + target[len(container):]
-    nxt = os.path.normpath(os.path.join(os.path.dirname(path), target))
-    rel = os.path.relpath(nxt, state)
-    if rel == ".." or rel.startswith("../") or os.path.isabs(rel):
-        sys.exit(1)
+    if (rel, target) not in links:
+        links.append((rel, target))
+    if os.path.isabs(target):
+        mount = next((m for m in mounts if target == m or target.startswith(m + "/")), None)
+        if mount is None:
+            sys.exit(1)
+        real = []
+        target = target[len(mount):]
+    pending = target.split("/") + pending
+rel = "/".join(real)
+if not rel or not os.path.isfile(os.path.join(state, rel)):
+    sys.exit(1)
+for link, target in links:
+    print(f"link\t{link}\t{target}")
+print(f"file\t{rel}")
 '
 }
 
