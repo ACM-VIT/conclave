@@ -184,7 +184,8 @@ const licenseHeaderIndexes = (source, comments, isDirective) => {
   let previousEnd = 0;
   for (let index = 0; index < comments.length; index += 1) {
     const gap = source.slice(previousEnd, comments[index].start);
-    if (index === 0 ? !DIRECTIVE_PROLOGUE.test(gap) : !/^[ \t]*\n[ \t]*$/.test(gap)) break;
+    const afterShebang = index === 1 && comments[0].start === 0 && comments[0].text.startsWith("#!");
+    if (index === 0 ? !DIRECTIVE_PROLOGUE.test(gap) : afterShebang ? gap.trim() !== "" : !/^[ \t]*\n[ \t]*$/.test(gap)) break;
     previousEnd = comments[index].end;
     if (isDirective(index)) continue;
     if (!isLicenseNotice(comments[index].text)) break;

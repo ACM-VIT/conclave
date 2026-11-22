@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { extractComments, iconGeneratorOutputs } from "./extract.mjs";
+import { extractComments, iconGeneratorOutputs, listSourceFiles } from "./extract.mjs";
 import { configuresNoComments } from "./policy.mjs";
 
 
@@ -581,4 +581,30 @@ test("the sweep finds a file whose scanner stops before the end", async (t) => {
   writeFileSync(path.join(repo, "ok.ts"), "export const a = 1; // fine\n");
   writeFileSync(path.join(repo, "unterminated.css"), "a { content: '/* x */ }\n/* no end");
   assert.deepEqual(filesMissingEndMarker(repo, ["ok.ts", "unterminated.css"]), ["unterminated.css"]);
+});
+
+test("a license notice after a shebang and a blank line is still the leading block", () => {
+  assert.deepEqual(
+    extractComments("#!/bin/sh\n\n# Copyright 2026 Example Inc.\necho hi\n", "run.sh").map((comment) => comment.allowed),
+    ["shebang", "license-header"],
+  );
+  assert.deepEqual(
+    extractComments("#!/usr/bin/env node\n\n// SPDX-License-Identifier: MIT\n\n// prose\nrun();\n", "run.mjs").map((comment) => comment.allowed),
+    ["shebang", "license-header", null],
+  );
+});
+
+test("a tracked file deleted from the working tree does not break listing or the sweep", async (t) => {
+  const { filesMissingEndMarker } = await import("./sweep.mjs");
+  const repo = mkdtempSync(path.join(tmpdir(), "comment-deleted-"));
+  t.after(() => rmSync(repo, { recursive: true, force: true }));
+  const git = (...args) => spawnSync("git", ["-C", repo, "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" });
+  git("init", "-q");
+  writeFileSync(path.join(repo, "kept.ts"), "export const a = 1;\n");
+  writeFileSync(path.join(repo, "gone.ts"), "export const b = 2;\n");
+  git("add", "-A");
+  git("commit", "-q", "-m", "base");
+  rmSync(path.join(repo, "gone.ts"));
+  assert.deepEqual(listSourceFiles(repo), ["kept.ts"]);
+  assert.deepEqual(filesMissingEndMarker(repo), []);
 });

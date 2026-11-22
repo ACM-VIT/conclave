@@ -348,7 +348,7 @@ export const extractComments = (rawText, file) => {
 export const listSourceFiles = (repo, paths = []) =>
   execFileSync("git", ["-C", repo, "ls-files", "-z", "--", ...paths], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 })
     .split("\0")
-    .filter((file) => file !== "" && isFirstPartySource(file));
+    .filter((file) => file !== "" && isFirstPartySource(file) && existsSync(path.join(repo, file)));
 
 export const extractFile = (repo, file) =>
   extractComments(readFileSync(path.join(repo, file), "utf8"), file).map((comment) => ({ file, ...comment }));
