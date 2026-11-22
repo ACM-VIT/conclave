@@ -52,9 +52,9 @@ describe("persistence fence", () => {
 
     await fence.hold(10_000);
     webinars.save([]);
-    meetings.saveChanged?.([meeting("m1")]);
-    scheduling.save({} as never);
-    meetings.deleteIds?.(["m0"]);
+    void meetings.saveChanged?.([meeting("m1")]);
+    void scheduling.save({} as never);
+    void meetings.deleteIds?.(["m0"]);
     const claim = meetings.claimEmailReminder?.({} as never);
     expect(store.writes).toEqual([]);
 
@@ -69,10 +69,10 @@ describe("persistence fence", () => {
     ]);
   });
 
-  it("writes straight through while no backup holds it", () => {
+  it("writes straight through while no backup holds it", async () => {
     const fence = createPersistenceFence();
     const store = recordingStore();
-    fenceScheduledMeetingPersistence(store.meetings, fence).save([meeting("m1")]);
+    await fenceScheduledMeetingPersistence(store.meetings, fence).save([meeting("m1")]);
     expect(store.writes).toEqual(["meetings.save m1"]);
   });
 
