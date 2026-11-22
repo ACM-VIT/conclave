@@ -88,7 +88,7 @@ export default function VoiceAgentDialog({
         }}
       >
         <div className="flex items-center gap-2">
-          <AudioLines size={17} strokeWidth={2} style={{ color: color.accent }} />
+          <AudioLines size={17} strokeWidth={1.75} style={{ color: color.accent }} />
           <h2
             id="voice-agent-dialog-title"
             className="text-[14.5px] font-semibold"
