@@ -24,18 +24,19 @@ class ENT3LobbyBridgeTests {
     }
 
     @Test fun linkBuilderMatchesTheWebVectors() {
-        assertEquals("/rose-sora-luffy", MeetingLinkBuilder.path(roomCode = "rose-sora-luffy", clientId = null))
-        assertEquals("https://conclave.acmvit.in/rose-sora-luffy", MeetingLinkBuilder.url(roomCode = "rose-sora-luffy", clientId = "conclave"))
-        assertEquals("/rose-sora-luffy", MeetingLinkBuilder.path(roomCode = "rose-sora-luffy", clientId = "DEFAULT"))
-        assertEquals("/rose-sora-luffy", MeetingLinkBuilder.path(roomCode = "rose-sora-luffy", clientId = "public"))
+        val tenant = "?clientId=conclave"
+        assertEquals("/rose-sora-luffy$tenant", MeetingLinkBuilder.path(roomCode = "rose-sora-luffy", clientId = null))
+        assertEquals("https://conclave.acmvit.in/rose-sora-luffy$tenant", MeetingLinkBuilder.url(roomCode = "rose-sora-luffy", clientId = "conclave"))
+        assertEquals("/rose-sora-luffy$tenant", MeetingLinkBuilder.path(roomCode = "rose-sora-luffy", clientId = "DEFAULT"))
+        assertEquals("/rose-sora-luffy$tenant", MeetingLinkBuilder.path(roomCode = "rose-sora-luffy", clientId = "public"))
         assertEquals("https://conclave.acmvit.in/rose-sora-luffy?clientId=acme",
             MeetingLinkBuilder.url(roomCode = "rose-sora-luffy", clientId = " acme "))
         assertEquals("/r?clientId=a.b%3Ac-d_e", MeetingLinkBuilder.path(roomCode = "r", clientId = "a.b:c-d_e"))
-        assertEquals("/r", MeetingLinkBuilder.path(roomCode = "r", clientId = "bad id"))
-        assertEquals("/room%2Fwith%3Freserved%23chars", MeetingLinkBuilder.path(roomCode = " room/with?reserved#chars ", clientId = null))
-        assertEquals("/a%20b", MeetingLinkBuilder.path(roomCode = "a b", clientId = null))
-        assertEquals("/caf%C3%A9", MeetingLinkBuilder.path(roomCode = "café", clientId = null))
-        assertEquals("/it's(1)!~*", MeetingLinkBuilder.path(roomCode = "it's(1)!~*", clientId = null))
+        assertEquals("/r$tenant", MeetingLinkBuilder.path(roomCode = "r", clientId = "bad id"))
+        assertEquals("/room%2Fwith%3Freserved%23chars$tenant", MeetingLinkBuilder.path(roomCode = " room/with?reserved#chars ", clientId = null))
+        assertEquals("/a%20b$tenant", MeetingLinkBuilder.path(roomCode = "a b", clientId = null))
+        assertEquals("/caf%C3%A9$tenant", MeetingLinkBuilder.path(roomCode = "café", clientId = null))
+        assertEquals("/it's(1)!~*$tenant", MeetingLinkBuilder.path(roomCode = "it's(1)!~*", clientId = null))
         assertEquals("", MeetingLinkBuilder.url(roomCode = " ", clientId = "acme"))
         assertEquals("conclave.acmvit.in/r", MeetingLinkBuilder.displayText("https://conclave.acmvit.in/r"))
     }
