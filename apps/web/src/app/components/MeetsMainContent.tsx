@@ -89,7 +89,7 @@ import {
   isBrowserVideoUserId,
   isSystemUserId,
 } from "../lib/utils";
-import { useApps, useGame } from "@conclave/apps-sdk";
+import { presentedAppKey, useApps, useGame } from "@conclave/apps-sdk";
 import { GamePanel } from "./games/GamePanel";
 import { GamesPanel } from "./games/GamesPanel";
 import { AppsPanel } from "./apps/AppsPanel";
@@ -2335,6 +2335,7 @@ export default function MeetsMainContent({
         (!isDevPlaygroundActive || isDevPlaygroundEnabled) ? (
         <MeetingAppLayout
           app={ActiveMeetingApp}
+          appKey={presentedAppKey(appsState)}
           frameContent={!isDevPlaygroundActive}
           leaveAction={isWatchActive ? watchLeaveAction : undefined}
           localStream={localStream}

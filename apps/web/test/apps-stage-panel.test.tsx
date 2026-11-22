@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, useContext, useState } from "react";
+import { act, useContext, useRef, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
@@ -7,6 +7,7 @@ import type { Socket } from "socket.io-client";
 import {
   AppsContext,
   AppsProvider,
+  presentedAppKey,
 } from "../../../packages/apps-sdk/src/sdk/runtime/AppsProvider";
 import type { AppsContextValue } from "../../../packages/apps-sdk/src/sdk/types";
 import { useAppDoc } from "../../../packages/apps-sdk/src/sdk/hooks/useAppDoc";
@@ -59,15 +60,19 @@ function Probe() {
   return null;
 }
 
+// Binds its document once, as the whiteboard's tool engine does.
 function MountedWhiteboard() {
-  mountedBoard = useAppDoc("whiteboard").doc;
+  const { doc } = useAppDoc("whiteboard");
+  mountedBoard = useRef(doc).current;
   return null;
 }
 
-// Mounts the whiteboard while it is presented, as the meeting stage does.
+// Mounts the whiteboard while it is presented, keyed as the meeting stage keys it.
 function Stage() {
   const { state } = useContext(AppsContext)!;
-  return state.activeAppId === "whiteboard" ? <MountedWhiteboard /> : null;
+  return state.activeAppId === "whiteboard" ? (
+    <MountedWhiteboard key={presentedAppKey(state)} />
+  ) : null;
 }
 
 function Harness() {

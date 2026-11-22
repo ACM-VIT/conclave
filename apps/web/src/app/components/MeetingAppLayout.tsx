@@ -10,6 +10,8 @@ import RailLocalTile from "./RailLocalTile";
 
 interface MeetingAppLayoutProps {
   app: ComponentType;
+  /** Mounts the app again when it changes, as on a new document. */
+  appKey: string;
   frameContent?: boolean;
   localStream: MediaStream | null;
   isCameraOff: boolean;
@@ -31,6 +33,7 @@ interface MeetingAppLayoutProps {
 
 function MeetingAppLayout({
   app: App,
+  appKey,
   frameContent = true,
   localStream,
   isCameraOff,
@@ -86,7 +89,7 @@ function MeetingAppLayout({
               : "min-h-0 min-w-0 flex-1 overflow-hidden"
           }
         >
-          <App />
+          <App key={appKey} />
         </div>
       </div>
       <aside className="hidden lg:flex w-64 shrink-0 flex-col gap-3 overflow-y-auto overflow-x-visible px-1">

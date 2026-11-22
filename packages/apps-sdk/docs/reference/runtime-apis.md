@@ -63,6 +63,13 @@ Returns the full runtime context:
 - `getAwareness(appId) => Awareness`
 - `user`, `isAdmin`, `isReadOnly`
 
+### `presentedAppKey(state)`
+
+A React key for the presented app's component. Render the app with
+`key={presentedAppKey(state)}`: when the room starts the presented app over on
+a new `docGeneration`, the provider drops its local document, and the key makes
+the app mount again on the new one instead of keeping the dropped one.
+
 Ack behavior:
 
 - control methods resolve `{ ok: true }`, or `{ ok: false, reason }` with `reason` one of:

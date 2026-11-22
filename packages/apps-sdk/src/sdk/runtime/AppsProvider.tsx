@@ -24,6 +24,14 @@ import type {
 
 export const AppsContext = createContext<AppsContextValue | null>(null);
 
+/**
+ * A React key for the presented app's component. It changes when the room
+ * presents another app or starts the presented one over, so the app mounts
+ * again on its new document instead of keeping the one the provider dropped.
+ */
+export const presentedAppKey = (state: AppsState): string =>
+  `${state.activeAppId ?? ""}:${state.docGeneration ?? ""}`;
+
 export type AppsProviderProps = {
   socket: Socket | null;
   apps: ConclaveApp[];
