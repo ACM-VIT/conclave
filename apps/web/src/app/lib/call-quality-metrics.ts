@@ -1,3 +1,4 @@
+import { randomUuid } from "./random-uuid";
 import type { TelemetryEventProps } from "./telemetry-schema";
 import type { ConnectionState, MeetError, MeetFailureReason, VideoQuality } from "./types";
 
@@ -68,18 +69,8 @@ export type ConnectionSnapshot = {
 
 export type JoinFailureReason = MeetFailureReason;
 
-/**
- * A random v4 uuid for one join attempt. A page on plain http has no
- * crypto.randomUUID, so it is built from getRandomValues there.
- */
-export const newCallId = (): string => {
-  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
-  const bytes = crypto.getRandomValues(new Uint8Array(16));
-  bytes[6] = (bytes[6] & 0x0f) | 0x40;
-  bytes[8] = (bytes[8] & 0x3f) | 0x80;
-  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-};
+/** A random id for one join attempt: a uuid, the form call_id is sent in. */
+export const newCallId = randomUuid;
 
 const FIRST_MEDIA_DEADLINE_MS = 20_000;
 const REMOTE_AT_JOIN_GRACE_MS = 3_000;

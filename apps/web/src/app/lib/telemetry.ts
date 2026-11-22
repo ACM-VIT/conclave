@@ -2,8 +2,10 @@
 
 import type { PostHog } from "posthog-js";
 import { installCallErrorCapture } from "./call-error-capture";
+import { randomUuid } from "./random-uuid";
 import {
   beforeSend,
+  buildOutboundEvent,
   chunkManifestUrl,
   isBuildVersion,
   isStoredProperty,
@@ -24,7 +26,7 @@ export type TelemetryCaptureOptions = {
 };
 
 const posthogKey = process.env.NEXT_PUBLIC_POSTHOG_KEY;
-// Events go to /ingest on our own site (app/ingest), which scrubs them again
+// Events go to /ingest on our own site (app/ingest), which builds them again
 // and forwards them to PostHog without the browser's headers.
 const INGEST_PATH = "/ingest";
 const buildVersion = process.env.NEXT_PUBLIC_CONCLAVE_CLIENT_VERSION;
@@ -36,15 +38,35 @@ export const telemetryEnabled =
   (process.env.NODE_ENV === "production" ||
     process.env.NEXT_PUBLIC_POSTHOG_DEV === "1");
 
-// Reports made while posthog-js loads, such as an error boundary that fires
-// on the first render. Capped so a failing load cannot grow it.
-const MAX_QUEUED = 50;
+/** One report our code made, kept as data until it can be sent. */
+type Report =
+  | { kind: "event"; name: TelemetryEventName; props: TelemetryProps; immediate: boolean }
+  | { kind: "exception"; error: unknown; props: ExceptionProps };
 
-/** Sends one report; `closing` when the page is going away. */
-type Delivery = (posthog: PostHog, closing: boolean) => void;
+/**
+ * Where telemetry is in the page's life. Reports wait in `pending` while the
+ * SDK downloads and, once it has loaded, until the chunk manifest has too;
+ * then each goes straight to the SDK, which sends it at once (no batching),
+ * so nothing is ever left queued in posthog-js.
+ */
+type Phase =
+  | { name: "idle" }
+  | { name: "loading"; pending: Report[] }
+  | { name: "holding"; client: PostHog; pending: Report[] }
+  | { name: "open"; client: PostHog }
+  | { name: "failed" };
 
-// How a report captured while the page goes away is sent: by beacon, now.
+let phase: Phase = { name: "idle" };
+
+// Capped so a load that never finishes cannot grow the queue.
+const MAX_PENDING = 50;
+
+// How a report is sent while the page goes away: by beacon, now.
 const UNLOADING = { transport: "sendBeacon", send_instantly: true } as const;
+
+// pagehide until a pageshow brings the page back.
+let unloading = false;
+const leaving = (): boolean => unloading || document.visibilityState === "hidden";
 
 // posthog-js merges local storage, then session storage, into every event.
 // Storage keeps only the SDK's own ids; anything else, such as a value a
@@ -105,9 +127,9 @@ const manifestOrTimeout = (): Promise<void> =>
     );
   });
 
-const emit = (payload: TelemetryProps | undefined, capture: () => void): void => {
+const emit = (payload: TelemetryProps, capture: () => void): void => {
   const outer = emitting;
-  emitting = payload ?? {};
+  emitting = payload;
   try {
     capture();
   } finally {
@@ -115,42 +137,136 @@ const emit = (payload: TelemetryProps | undefined, capture: () => void): void =>
   }
 };
 
-let posthog: PostHog | null = null;
-let queue: Delivery[] | null = null;
-
-const deliver = (client: PostHog, delivery: Delivery, closing = false): void => {
+/** Sends one report through the SDK; by beacon when the page is going away. */
+const sendWithSdk = (client: PostHog, report: Report, closing: boolean): void => {
   try {
-    delivery(client, closing);
+    emit(report.props, () => {
+      if (report.kind === "event") {
+        client.capture(report.name, report.props, report.immediate || closing ? UNLOADING : undefined);
+        return;
+      }
+      if (!closing) {
+        client.captureException(report.error, report.props);
+        return;
+      }
+      // captureException takes no transport, so a closing page builds the
+      // same event and sends it by beacon.
+      const exception = client.exceptions?.buildProperties(report.error, {
+        handled: true,
+        syntheticException: new Error("PostHog syntheticException"),
+      });
+      if (exception) client.capture("$exception", { ...exception, ...report.props }, UNLOADING);
+    });
+  } catch {}
+};
+
+const storedDistinctId = (key: string): string | null => {
+  try {
+    const stored: unknown = JSON.parse(localStorage.getItem(`ph_${key}_posthog`) ?? "null");
+    const id = stored !== null && typeof stored === "object" && "distinct_id" in stored ? stored.distinct_id : null;
+    return typeof id === "string" ? id : null;
   } catch {
+    return null;
   }
 };
 
-// Reports held once PostHog has loaded, until the chunk manifest is in.
-let held: { client: PostHog; pending: Delivery[] } | null = null;
-
-/** Sends the held reports now; `closing` when the page is going away. */
-const releaseHeld = (closing: boolean): void => {
-  const current = held;
-  if (!current) return;
-  held = null;
-  queue = null;
-  posthog = current.client;
-  current.pending.forEach((delivery) => deliver(current.client, delivery, closing));
+/**
+ * Sends reports by beacon without the SDK, for a page going away before it
+ * has loaded (or one whose SDK failed to load): each event is built from the
+ * outbound schema with the fields we can vouch for ourselves. An exception
+ * keeps its type and, for a call-log label, its message, but no frames, which
+ * only the SDK can read.
+ */
+const beaconWithoutSdk = (reports: Report[]): void => {
+  if (!posthogKey || reports.length === 0) return;
+  const distinctId = storedDistinctId(posthogKey) ?? randomUuid();
+  const source = {
+    storedKeys: new Set<string>(),
+    token: posthogKey,
+    clientVersion,
+    chunkFiles,
+    siteOrigin: window.location.origin,
+  };
+  const batch = reports.flatMap((report) => {
+    const exception =
+      report.kind === "exception"
+        ? {
+            $exception_level: "error",
+            $exception_list: [
+              {
+                type: report.error instanceof Error ? report.error.name : undefined,
+                mechanism: { type: "generic", handled: true },
+              },
+            ],
+          }
+        : {};
+    const built = buildOutboundEvent(
+      {
+        uuid: randomUuid(),
+        event: report.kind === "event" ? report.name : "$exception",
+        properties: { distinct_id: distinctId, ...exception },
+      },
+      { ...source, payload: report.props },
+    );
+    return built ? [{ ...built, timestamp: new Date().toISOString() }] : [];
+  });
+  if (batch.length === 0) return;
+  try {
+    navigator.sendBeacon(
+      `${INGEST_PATH}/e/`,
+      new Blob([JSON.stringify({ api_key: posthogKey, batch })], { type: "application/json" }),
+    );
+  } catch {}
 };
 
-// The page can close, or be hidden and then dropped, while reports are held:
-// they go out at once, with whatever manifest has loaded (none leaves chunk
-// frames as [path]). These listen in the capture phase so they run before
-// posthog-js's own pagehide handler, which sends its queue by beacon.
-const onPageHide = (): void => releaseHeld(true);
-const onVisibilityChange = (): void => {
-  if (document.visibilityState === "hidden") releaseHeld(true);
+/** Sends every pending report through the SDK, from now on straight away. */
+const open = (client: PostHog, closing: boolean): void => {
+  const pending = phase.name === "holding" ? phase.pending : [];
+  phase = { name: "open", client };
+  pending.forEach((report) => sendWithSdk(client, report, closing));
+};
+
+// The page is going away, or may be dropped while hidden or frozen: every
+// pending report goes now, by beacon. With the SDK loaded that is through it,
+// with whatever manifest has loaded (none leaves chunk frames as [path]);
+// before it has, without it. A report is sent once: this empties the queue.
+const flushForLifecycle = (): void => {
+  if (phase.name === "holding") {
+    open(phase.client, true);
+  } else if (phase.name === "loading") {
+    beaconWithoutSdk(phase.pending.splice(0));
+  }
+};
+
+// For the page's whole life, from before the SDK downloads, never removed.
+// They listen in the capture phase so they run before posthog-js's own.
+const installLifecycleFlush = (): void => {
+  window.addEventListener(
+    "pagehide",
+    () => {
+      unloading = true;
+      flushForLifecycle();
+    },
+    { capture: true },
+  );
+  window.addEventListener("pageshow", () => (unloading = false), { capture: true });
+  document.addEventListener(
+    "visibilitychange",
+    () => {
+      if (document.visibilityState === "hidden") flushForLifecycle();
+    },
+    { capture: true },
+  );
+  document.addEventListener("freeze", flushForLifecycle, { capture: true });
 };
 
 const initPostHog = (client: PostHog, key: string): void => {
   client.init(key, {
     api_host: INGEST_PATH,
     ui_host: "https://eu.posthog.com",
+    // Each event is sent as it is captured, so a tab that is hidden and then
+    // frozen or dropped has nothing left in the SDK's queue.
+    request_batching: false,
     capture_pageview: false,
     capture_pageleave: false,
     autocapture: false,
@@ -177,70 +293,60 @@ const initPostHog = (client: PostHog, key: string): void => {
       }),
   });
   dropStoredProperties(client);
-  // Through send, so a call failure logged while reports are held waits too.
-  installCallErrorCapture(sendException);
 };
 
 /**
- * Loads PostHog once for the page's lifetime. Every report starts it too, so
- * an error boundary that replaced the root layout can still send. PostHog's
- * own error capture starts as soon as it loads; our reports are held until
- * the chunk manifest has loaded too, or MANIFEST_WAIT_MS has passed, and each
- * is scrubbed once, when it is sent.
+ * Starts telemetry once for the page's lifetime: the lifecycle flush at once,
+ * then the SDK and the chunk manifest. Every report starts it too, so an
+ * error boundary that replaced the root layout can still send. PostHog's own
+ * error capture starts as soon as it loads; our reports wait until the
+ * manifest has loaded too, or MANIFEST_WAIT_MS has passed, and each is built
+ * once, when it is sent.
  */
 export function startTelemetry(): void {
-  if (posthog || queue || !posthogKey || !telemetryEnabled) return;
+  if (phase.name !== "idle" || !posthogKey || !telemetryEnabled) return;
   if (typeof window === "undefined") return;
-  const pending: Delivery[] = [];
-  queue = pending;
+  phase = { name: "loading", pending: [] };
+  installLifecycleFlush();
   const manifestReady = manifestOrTimeout();
   void Promise.all([
     import("posthog-js"),
     import("posthog-js/dist/exception-autocapture"),
-  ])
-    .then(async ([{ default: client }]) => {
+  ]).then(
+    async ([{ default: client }]) => {
       initPostHog(client, posthogKey);
-      held = { client, pending };
-      window.addEventListener("pagehide", onPageHide, { capture: true });
-      document.addEventListener("visibilitychange", onVisibilityChange, { capture: true });
+      phase = { name: "holding", client, pending: phase.name === "loading" ? phase.pending : [] };
       await manifestReady;
-      releaseHeld(false);
-    })
-    .catch(() => {})
-    .finally(() => {
-      window.removeEventListener("pagehide", onPageHide, { capture: true });
-      document.removeEventListener("visibilitychange", onVisibilityChange, { capture: true });
-      queue = null;
-    });
+      if (phase.name === "holding") open(client, leaving());
+    },
+    () => {
+      const pending = phase.name === "loading" ? phase.pending : [];
+      phase = { name: "failed" };
+      beaconWithoutSdk(pending);
+    },
+  );
 }
 
-const send = (delivery: Delivery): void => {
-  if (posthog) {
-    deliver(posthog, delivery);
+const report = (next: Report): void => {
+  if (!telemetryEnabled || typeof window === "undefined") return;
+  if (phase.name === "open") {
+    sendWithSdk(phase.client, next, leaving());
     return;
   }
   startTelemetry();
-  if (queue && queue.length < MAX_QUEUED) queue.push(delivery);
+  if (phase.name === "failed") {
+    beaconWithoutSdk([next]);
+  } else if ((phase.name === "loading" || phase.name === "holding") && phase.pending.length < MAX_PENDING) {
+    phase.pending.push(next);
+  }
 };
 
-// posthog-js's captureException queues the event for its next batch, which
-// a closing page may never send, so a closing page builds the same event and
-// sends it by beacon like any other.
-const sendException = (error: unknown, props: ExceptionProps): void => {
-  send((client, closing) => {
-    emit(props, () => {
-      if (!closing) {
-        client.captureException(error, props);
-        return;
-      }
-      const exception = client.exceptions?.buildProperties(error, {
-        handled: true,
-        syntheticException: new Error("PostHog syntheticException"),
-      });
-      if (exception) client.capture("$exception", { ...exception, ...props }, UNLOADING);
-    });
-  });
-};
+const captureException = (error: unknown, props: ExceptionProps): void =>
+  report({ kind: "exception", error, props });
+
+// Installed as this module loads, before the SDK downloads, so a call failure
+// logged at any point is queued like any other report.
+installCallErrorCapture(captureException);
 
 export const telemetry = {
   capture<N extends TelemetryEventName>(
@@ -248,11 +354,7 @@ export const telemetry = {
     props: TelemetryEventProps<N>,
     options?: TelemetryCaptureOptions,
   ): void {
-    send((client, closing) => {
-      emit(props, () =>
-        client.capture(event, props, options?.immediate || closing ? UNLOADING : undefined),
-      );
-    });
+    report({ kind: "event", name: event, props, immediate: options?.immediate ?? false });
   },
-  captureException: sendException,
+  captureException,
 };
