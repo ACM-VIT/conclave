@@ -4,6 +4,7 @@ import android.os.Looper
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -56,6 +57,17 @@ class MicrophoneReplacementRecoveryTests {
 
     class FakeSendTransport : SendTransport(0L) {
         override fun isClosed(): Boolean = false
+        override fun getId(): String = "send-1"
+        override fun close() {}
+    }
+
+    /** A connected socket whose acknowledgements never arrive. */
+    class SilentSocket : io.socket.client.Socket(null, "/", null) {
+        var emitted: MutableList<String>? = null
+        override fun emit(event: String?, vararg args: Any?): io.socket.emitter.Emitter {
+            emitted?.add(event ?: "")
+            return this
+        }
     }
 
     /** Records each microphone produce's codec options and holds the first acknowledgement until [firstAck] opens. */
@@ -306,6 +318,56 @@ class MicrophoneReplacementRecoveryTests {
         assertFalse(media.isLocalAudioPublishingHealthy)
         awaitLane(call.lane)
         assertTrue(call.old.closed)
+    }
+
+    /** Fills the state `cleanup()` walks, which an instance made without its constructor lacks. */
+    private fun prepareForCleanup(call: Call) {
+        val media = call.media
+        for (f in WebRTCClient::class.java.declaredFields) {
+            if (java.lang.reflect.Modifier.isStatic(f.modifiers)) continue
+            f.isAccessible = true
+            if (f.get(media) != null) continue
+            when (f.type) {
+                java.util.Map::class.java -> f.set(media, mutableMapOf<Any, Any>())
+                java.util.Set::class.java -> f.set(media, mutableSetOf<Any>())
+            }
+        }
+        field("webcamReceiverCapacityProofCache").set(media, WebcamReceiverCapacityProofCache())
+        field("audioStartGate").set(media, SingleFlightGate())
+        field("videoStartGate").set(media, SingleFlightGate())
+        field("remoteVideoTracks").set(media, skip.lib.dictionaryOf<String, VideoTrackWrapper>())
+        field("sendTransportLane").set(media, call.lane)
+    }
+
+    @Test
+    fun leavingWhileTheLaneWaitsOnACameraAckStopsTheMicWithoutWaitingForTheAck() {
+        val call = liveCall()
+        val media = call.media
+        prepareForCleanup(call)
+        val emitted = CopyOnWriteArrayList<String>()
+        val silent = unsafe.allocateInstance(SilentSocket::class.java) as SilentSocket
+        silent.emitted = emitted
+        val socket = unsafe.allocateInstance(SocketIOManager::class.java) as SocketIOManager
+        SocketIOManager::class.java.getDeclaredField("socket").apply { isAccessible = true }.set(socket, silent)
+        field("socketManager").set(media, socket)
+        runCatching { field("sendSignalingAbort").set(media, CompletableDeferred<Unit>()) }
+        val transport = field("sendTransport").get(media) as SendTransport
+        val produceReturned = CountDownLatch(1)
+        call.lane.post {
+            media.onProduce(transport, "video", "{}", "{\"type\":\"webcam\",\"paused\":false}")
+            produceReturned.countDown()
+        }
+        val deadline = System.currentTimeMillis() + 5_000
+        while (emitted.isEmpty() && System.currentTimeMillis() < deadline) Thread.sleep(5)
+        assertEquals(1, emitted.size)
+
+        runBlocking { media.cleanup(notifyLocalState = false, preserveCallAudioRouting = true) }
+
+        assertTrue("the lane still waits for the camera acknowledgement", produceReturned.await(2, TimeUnit.SECONDS))
+        awaitLane(call.lane)
+        assertTrue(call.old.closed)
+        assertTrue(call.track.disposed)
+        assertEquals(1, emitted.size)
     }
 
     @Test

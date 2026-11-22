@@ -59,6 +59,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.delay
@@ -1972,6 +1974,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
 
         retireSendTransport()
         sendTransportLaneSequence += 1
+        sendSignalingAbort = CompletableDeferred()
         sendTransportLane = SendTransportLane("ConclaveSendTransport-$sendTransportLaneSequence")
         sendTransportId = producerTransportParams.id
         sendTransport = nextSendTransport
@@ -4905,6 +4908,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         preserveCallAudioRouting: Boolean = false,
     ) {
         configurationGeneration += 1
+        abandonPendingSendSignaling()
         plannedConsumerResetCandidates.clear()
         val consumerResetJob = plannedConsumerResetCoordinatorJob
         consumerResetJob?.cancel()
@@ -7603,8 +7607,37 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         }
     }
 
+    /**
+     * Completed when the session ends, and replaced only by the next send transport. A produce blocks its send lane
+     * until the SFU acknowledges, for up to the ack timeout, and the microphone, camera and transport closes queue
+     * behind it; ending the wait at once (and failing any produce still queued) lets a leave stop the microphone, the
+     * recorder and not only its samples, without waiting for an ack that no longer matters.
+     */
+    @Volatile private var sendSignalingAbort: CompletableDeferred<Unit>? = CompletableDeferred()
+
+    private fun abandonPendingSendSignaling() {
+        sendSignalingAbort?.complete(Unit)
+    }
+
+    private suspend fun <T> unlessSessionEnds(abort: CompletableDeferred<Unit>?, operation: suspend () -> T): T {
+        if (abort == null) return operation()
+        return coroutineScope {
+            val work = async { operation() }
+            val watcher = launch {
+                abort.await()
+                work.cancel(CancellationException("Session ended before the SFU acknowledged"))
+            }
+            try {
+                work.await()
+            } finally {
+                watcher.cancel()
+            }
+        }
+    }
+
     override fun onProduce(transport: Transport, kind: String, rtpParameters: String, appData: String): String {
         val socket = socketManager ?: return ""
+        val abort = sendSignalingAbort
         return runBlocking {
             try {
 
@@ -7613,14 +7646,16 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 if (kind == "video" && type == ProducerType.screen) {
                     screenProduceSignalCount += 1
                 }
-                socket.produceRaw(
-                    transportId = transport.id,
-                    kind = kind,
-                    rtpParametersJson = rtpParameters,
-                    type = type,
-                    paused = appDataPayload?.paused ?: false,
-                    webcamReceiverCapacityTransition = appDataPayload?.webcamReceiverCapacityTransition,
-                )
+                unlessSessionEnds(abort) {
+                    socket.produceRaw(
+                        transportId = transport.id,
+                        kind = kind,
+                        rtpParametersJson = rtpParameters,
+                        type = type,
+                        paused = appDataPayload?.paused ?: false,
+                        webcamReceiverCapacityTransition = appDataPayload?.webcamReceiverCapacityTransition,
+                    )
+                }
             } catch (t: Throwable) {
                 val appDataPayload = decodeJSONString<ProducerAppData>(appData, allowFailure = true)
                 if (kind == "video" && appDataPayload?.type == ProducerType.webcam.rawValue) {
