@@ -245,24 +245,35 @@ const resizeRow = (widths: number[], height: number, gap: number, rowWidth: numb
   return roundToTotal(sizes, total);
 };
 
+// A row past its tolerance eases back to its own width this many px for every
+// px it misses by, so a near miss stays nearly aligned and a far one sits at
+// its own width.
+const ROW_EASE_RATE = 3;
+
 /**
  * Resize each row's tiles so the rows share one width and the grid's edges
- * line up. The full rows, those holding `cols` tiles, always meet. Alone they
- * would meet at the width nearest the widest row with portrait tiles held at
- * 4:5. The shared width is the one, from there or wider than the full rows
- * already are, that also fits the most shorter rows, nearest that preference.
- * So a shorter row can take portrait tiles past 4:5, but never narrows the
- * full rows. A row the caps can't fit, such as a lone last tile, keeps its
- * width and centres.
+ * line up, moving smoothly as the container resizes.
+ *
+ * The shared width minimises a convex cost: 1 per px from the full rows'
+ * preferred width (nearest the widest row, portrait tiles held at 4:5), 4 per
+ * px outside each shorter row's legal range, and, outweighing all of those,
+ * the largest miss among the full rows, so full rows that can't quite meet
+ * share the miss. Every slope is odd, so the minimum is one point that moves
+ * continuously with the rows. It never falls below the full rows' own width,
+ * so a shorter row can widen them, and take phones past 4:5, but never narrow
+ * them.
+ *
+ * A row that can't reach the shared width takes its nearest legal width.
+ * Whole-pixel caps lose under 1 px per tile, so a row and the full rows it
+ * meets can miss by up to one px per tile in both just from rounding. Within
+ * that tolerance the row stays at its nearest legal width. Past it, the row
+ * eases back to its own width, so a lone last tile centres at its own width.
  */
 const alignRows = (rowTiles: number[][], height: number, gap: number, cols: number) => {
   const rows = rowTiles.map((tiles) => {
     const limits = resizeLimits(tiles, height);
     return {
-      fits: (width: number) => {
-        const budget = tileBudget(tiles.length, gap, width);
-        return budget >= sum(limits.floor) && budget <= sum(limits.hard);
-      },
+      tolerance: cols + tiles.length,
       full: tiles.length === cols,
       natural: rowWidthOf(tiles, gap),
       low: rowWidthOf(limits.floor, gap),
@@ -270,28 +281,42 @@ const alignRows = (rowTiles: number[][], height: number, gap: number, cols: numb
       high: rowWidthOf(limits.hard, gap),
     };
   });
-  const widest = Math.max(...rows.map((row) => row.natural));
   const fullRows = rows.filter((row) => row.full);
-  const shortRows = rows.filter((row) => !row.full);
-  const low = Math.max(...fullRows.map((row) => row.low));
-  const high = Math.min(...fullRows.map((row) => row.high));
+  const widest = Math.max(...rows.map((row) => row.natural));
   const preferred = Math.min(
-    Math.max(Math.min(widest, ...fullRows.map((row) => row.soft)), low),
-    high,
+    Math.max(
+      Math.min(widest, ...fullRows.map((row) => row.soft)),
+      Math.max(...fullRows.map((row) => row.low)),
+    ),
+    Math.min(...fullRows.map((row) => row.high)),
   );
   const floor = Math.min(preferred, Math.max(...fullRows.map((row) => row.natural)));
-  const fits = (width: number) => shortRows.filter((row) => row.fits(width)).length;
-  const candidates = [preferred, floor, ...shortRows.flatMap((row) => [row.low, row.high])].filter(
-    (width) => width >= floor && width <= high && fullRows.every((row) => row.fits(width)),
-  );
-  // With no width every full row reaches, rows stretch toward the widest.
-  const target = candidates.reduce((best, width) => {
-    const gain = fits(width) - fits(best);
-    return gain > 0 || (gain === 0 && Math.abs(width - preferred) < Math.abs(best - preferred))
-      ? width
-      : best;
-  }, candidates[0] ?? widest);
-  return rowTiles.map((tiles) => resizeRow(tiles, height, gap, target) ?? tiles);
+  const fullWeight = 4 * (rows.length - fullRows.length) + 2;
+  const miss = (row: (typeof rows)[number], width: number) =>
+    Math.max(row.low - width, 0, width - row.high);
+  const cost = (width: number) =>
+    rows.reduce(
+      (total, row) => (row.full ? total : total + 4 * miss(row, width)),
+      Math.abs(width - preferred) +
+        fullWeight * Math.max(...fullRows.map((row) => miss(row, width))),
+    );
+  const target = [
+    ...rows.flatMap((row) => [row.low, row.high]),
+    ...fullRows.flatMap((wide) => fullRows.map((narrow) => (wide.low + narrow.high) / 2)),
+  ]
+    .map((width) => Math.max(width, floor))
+    .reduce((best, width) => (cost(width) < cost(best) ? width : best), preferred);
+
+  return rowTiles.map((tiles, index) => {
+    const row = rows[index];
+    const nearest = Math.min(Math.max(target, row.low), row.high);
+    const ease = Math.max(0, miss(row, target) - row.tolerance) * ROW_EASE_RATE;
+    const rowWidth =
+      nearest > row.natural
+        ? Math.max(row.natural, nearest - ease)
+        : Math.min(row.natural, nearest + ease);
+    return resizeRow(tiles, height, gap, rowWidth) ?? tiles;
+  });
 };
 
 /**
