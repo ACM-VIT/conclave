@@ -39,6 +39,16 @@ struct ChatInputMemoTests {
         #expect(viewModel.chat.rows.entry(for: "m-0").row.senderName == "Remote Person")
     }
 
+    @Test func theStageFixtureSessionOpensAndClosesChatWithThePanel() {
+        let session = StageFixtureSession(state: .chatPreviewsMixed3)
+        let chat = session.shell.chat
+        #expect(!chat.isOpen)
+        session.shell.panels.present(.chat, from: .call)
+        #expect(chat.isOpen)
+        session.shell.panels.dismiss(cancelPending: true)
+        #expect(!chat.isOpen)
+    }
+
     @Test func cancellingChatBeforeItMountsLeavesThePresenterClosed() {
         let viewModel = MeetingViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
