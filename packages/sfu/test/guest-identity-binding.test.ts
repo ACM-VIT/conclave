@@ -80,6 +80,10 @@ const switchRoom = async (
   return ack;
 };
 
+// The room drops a proof at the end of the turn in which its user key lost
+// its last right, so a check for that waits one tick.
+const endOfTurn = () => Promise.resolve();
+
 const dropConnection = (peer: { socket: Socket }) => {
   (peer.socket as { connected: boolean }).connected = false;
 };
@@ -411,6 +415,47 @@ describe("guests on clients that predate guest passes", () => {
     },
   );
 
+  it.each([
+    ["no pass", {}],
+    ["another pass", { guestProof: "proof-of-another-pass" }],
+  ])(
+    "keep the admission the host gives back with an unblock, from a browser with %s",
+    async (_label, intruderPass) => {
+      const state = makeState();
+      const host = await join(state, guestHost);
+      const room = state.rooms.get("conclave:room")!;
+      const older = {
+        userId: "guest-1700000000001-def456",
+        clientId: "conclave",
+        sessionId: "1700000000001-def456",
+        guestProof: "proof-of-the-older-pass",
+      } satisfies SfuAuthPayload;
+      await join(state, older);
+      room.blockUser(older.userId);
+      room.removeClient(`${older.userId}#${older.sessionId}`);
+      room.setLocked(true);
+
+      const allowed = vi.fn();
+      await host.peer.handlers.get("admin:allowUsers")!(...[
+        { userKeys: [older.userId] },
+        allowed,
+      ] as never[]);
+      expect(allowed).toHaveBeenCalledWith(
+        expect.objectContaining({ success: true }),
+      );
+
+      const attempt = await join(state, {
+        ...publicIdentity(older),
+        ...intruderPass,
+      });
+      expect(attempt.ack).toHaveBeenCalledWith(refused);
+      expect(attempt.context.currentClient).toBeNull();
+
+      const back = await join(state, older);
+      expect(back.ack).toHaveBeenCalledWith(joined);
+    },
+  );
+
   it("that entered without a pass can still come back, even after someone joined with one", async () => {
     const state = makeState();
     await join(state, olderHost);
@@ -451,8 +496,9 @@ describe("a guest identity that holds nothing in the room", () => {
     expect((await join(state, guest)).ack).toHaveBeenCalledWith(joined);
     retain(room);
     room.removeClient(guestSeat);
+    await endOfTurn();
     expect(room.boundGuestIdentityCount).toBe(1);
-    return room;
+    return { state, room };
   };
 
   it.each<[string, (room: Room) => void, (room: Room) => void]>([
@@ -491,23 +537,54 @@ describe("a guest identity that holds nothing in the room", () => {
       },
     ],
   ])("is not kept once %s", async (_label, retain, lose) => {
-    const room = await departedGuestWith(retain);
+    const { room } = await departedGuestWith(retain);
 
     lose(room);
+    await endOfTurn();
 
     expect(room.boundGuestIdentityCount).toBe(0);
+  });
+
+  it("stays bound while one host action swaps its last right for another", async () => {
+    const { state, room } = await departedGuestWith((live) =>
+      live.blockUser(guest.userId),
+    );
+
+    room.unblockUser(guest.userId);
+    room.allowUser(guest.userId);
+    await endOfTurn();
+
+    expect(room.boundGuestIdentityCount).toBe(1);
+    const attempt = await join(state, publicIdentity(guest));
+    expect(attempt.ack).toHaveBeenCalledWith(refused);
+  });
+
+  it("stays bound when its stage invite is renewed as the oldest of a full list", async () => {
+    const { room } = await departedGuestWith((live) =>
+      live.promoteWebinarUserKey(guest.userId),
+    );
+    for (let invited = 0; invited < 199; invited += 1) {
+      room.promoteWebinarUserKey(`invited-${invited}@example.com`);
+    }
+
+    room.promoteWebinarUserKey(guest.userId);
+    await endOfTurn();
+
+    expect(room.isWebinarPromotedUserKey(guest.userId)).toBe(true);
+    expect(room.boundGuestIdentityCount).toBe(1);
   });
 
   it("is not kept once its stage invite has expired", async () => {
     vi.useFakeTimers();
     try {
-      const room = await departedGuestWith((live) =>
+      const { room } = await departedGuestWith((live) =>
         live.promoteWebinarUserKey(guest.userId),
       );
 
       vi.advanceTimersByTime(5 * 60 * 60 * 1000);
 
       expect(room.isWebinarPromotedUserKey(guest.userId)).toBe(false);
+      await endOfTurn();
       expect(room.boundGuestIdentityCount).toBe(0);
     } finally {
       vi.useRealTimers();

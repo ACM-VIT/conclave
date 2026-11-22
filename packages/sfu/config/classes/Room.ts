@@ -224,6 +224,7 @@ export class Room {
    * the identity holds something here (see `claimGuestIdentity`).
    */
   private guestProofsByUserKey: Map<string, string> = new Map();
+  private guestIdentitiesToRelease: Set<string> = new Set();
   public cleanupTimer: NodeJS.Timeout | null = null;
   public hostUserKey: string | null = null;
   private _isLocked: boolean = false;
@@ -744,14 +745,31 @@ export class Room {
     return this.guestProofsByUserKey.size;
   }
 
-  // Keeps the map from growing with every guest that ever passed through a
-  // long-lived room. Every method that removes something `holdsUserKey`
-  // counts calls this, so the map keeps no proof for a key that holds nothing.
+  /**
+   * Keeps the map from growing with every guest that ever passed through a
+   * long-lived room. Every method that removes something `holdsUserKey`
+   * counts calls this.
+   *
+   * The proof is dropped at the end of the current turn, and only if the key
+   * holds nothing by then. One host action often swaps a right for another,
+   * such as an unblock followed by an admission. Dropping the proof between
+   * the two would leave the new right open to anyone who names the key.
+   */
   private releaseGuestIdentity(userKey: string): void {
     if (!this.guestProofsByUserKey.has(userKey)) return;
-    if (!this.holdsUserKey(userKey)) {
-      this.guestProofsByUserKey.delete(userKey);
+    if (this.guestIdentitiesToRelease.size === 0) {
+      queueMicrotask(() => this.releaseUnheldGuestIdentities());
     }
+    this.guestIdentitiesToRelease.add(userKey);
+  }
+
+  private releaseUnheldGuestIdentities(): void {
+    for (const userKey of this.guestIdentitiesToRelease) {
+      if (!this.holdsUserKey(userKey)) {
+        this.guestProofsByUserKey.delete(userKey);
+      }
+    }
+    this.guestIdentitiesToRelease.clear();
   }
 
   setUserIdentity(
@@ -2468,6 +2486,7 @@ export class Room {
     this.displayNamesByKey.clear();
     this.blockedUsers.clear();
     this.guestProofsByUserKey.clear();
+    this.guestIdentitiesToRelease.clear();
     this.webinarActiveSpeakerUserId = null;
     this.webinarDominantSpeakerUserId = null;
     this.webinarFeedProducerIds = [];
