@@ -152,6 +152,7 @@ type SessionRequestOutcome =
 
 type TranscriptSessionWaiter = {
   requestId: string;
+  order: number;
   accepted: boolean;
   resolve: (outcome: SessionRequestOutcome) => void;
   timeoutId: number;
@@ -342,6 +343,7 @@ export function useMeetingTranscript({
   const sessionRef = useRef<TranscriptSessionState>(buildIdleSession(roomId));
   const sessionWaitersRef = useRef<Set<TranscriptSessionWaiter>>(new Set());
   const startedRelayTokensRef = useRef<Set<string>>(new Set());
+  const nextWaiterOrderRef = useRef(0);
   const sfuRelayStartTokenRef = useRef<TranscriptSfuRelayStartToken | null>(
     null,
   );
@@ -664,8 +666,9 @@ export function useMeetingTranscript({
         const echoed = nextSession.requestId;
         if (echoed !== undefined && echoed !== waiter.requestId) {
           // A newer request of ours took over the session: this one was
-          // replaced, not refused.
-          if (waiters.some((other) => other.requestId === echoed)) {
+          // replaced, not refused. An older one's echo settles nothing here.
+          const echoedWaiter = waiters.find((other) => other.requestId === echoed);
+          if (echoedWaiter && echoedWaiter.order > waiter.order) {
             finish(waiter, { kind: "replaced" });
           }
           continue;
@@ -715,6 +718,7 @@ export function useMeetingTranscript({
       new Promise((resolve) => {
         const waiter: TranscriptSessionWaiter = {
           requestId,
+          order: nextWaiterOrderRef.current++,
           accepted: false,
           resolve,
           timeoutId: window.setTimeout(() => {
