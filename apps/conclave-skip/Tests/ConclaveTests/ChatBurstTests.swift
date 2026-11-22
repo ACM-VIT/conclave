@@ -80,6 +80,64 @@ struct ClosedChatWorkTests {
         #expect(chat.pendingUnreadCount == 2)
     }
 
+    @Test func hidingAndShowingTheReplyAuthorWhileClosedDropsTheReplyFromTheChipAndTheSend() {
+        var messages = history(2)
+        let chat = Chat.presenter(Chat.inputs(messages))
+        var log: [ChatCommandRequest] = []
+        chat.onCommand = { log.append($0) }
+        chat.willShow()
+        chat.beginReply(rowId: "h-1")
+        #expect(chat.composer.reply?.messageId == "h-1")
+        chat.panelDidClose()
+        messages.append(Chat.peer("n-0", "new", at: 100, from: Chat.sam, name: "Sam Rivera", history: false))
+        chat.apply(Chat.inputs(messages), change: .messages)
+        chat.hideSender(userId: Chat.avery)
+        chat.showSender(userId: Chat.avery)
+        chat.willShow()
+        #expect(chat.composer.reply == nil)
+        chat.send(text: "hello")
+        #expect(log.last?.kind == .send)
+        #expect(log.last?.rowId == "")
+        #expect(log.last?.messageId == "")
+    }
+
+    @Test func aCompleteAssistantAnswerWithoutProcessStateCountsAsUnreadWhileClosed() {
+        var messages = history(1)
+        let chat = Chat.presenter(Chat.inputs(messages))
+        messages.append(ChatMessageInput.make(id: "answer", senderId: ConclaveAssistantChatIdentity.userId, senderName: "Conclave",
+                                              isAssistant: true, content: "Here is the answer.", timestampMillis: Chat.base + 100))
+        chat.apply(Chat.inputs(messages), change: .messages)
+        #expect(chat.pendingUnreadCount == 1)
+        chat.willShow()
+        let rowIds = chat.timeline.rowIds
+        let divider = rowIds.firstIndex(of: "unread")
+        #expect(divider.map { rowIds[$0 + 1] } == "answer")
+    }
+
+    @Test func openingAfterAClosedBurstRebuildsOnce() {
+        var messages = history(3)
+        let chat = Chat.presenter(Chat.inputs(messages))
+        for index in 0..<10 {
+            messages.append(Chat.peer("n-" + String(index), "new " + String(index), at: 100.0 + Double(index), history: false))
+            chat.apply(Chat.inputs(messages), change: .messages)
+        }
+        let built = chat.rebuildCount
+        chat.willShow()
+        chat.panelDidOpen(destination: .none, targetId: "")
+        #expect(chat.rebuildCount == built + 1)
+        #expect(chat.timeline.rowIds.contains("unread"))
+    }
+
+    @Test func resetForgetsTheLastCallsEmojiText() {
+        let messages = [Chat.peer("h-0", "hi :wave:", at: 0), Chat.peer("h-1", "bye :wave:", at: 1)]
+        let chat = Chat.presenter(Chat.inputs(messages))
+        let parsed = chat.emojiParseCount
+        #expect(parsed == 2)
+        chat.reset()
+        chat.apply(Chat.inputs(messages), change: .messages)
+        #expect(chat.emojiParseCount == parsed + 2)
+    }
+
     @Test func anOpenChatStillRebuildsAndAnnouncesEachMessage() {
         var messages = history(3)
         let chat = Chat.presenter(Chat.inputs(messages))
