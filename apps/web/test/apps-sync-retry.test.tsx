@@ -198,6 +198,30 @@ it("stops at once on an error the server does not mark as retryable", async () =
   expect(ctx.syncStatus).toBe("failed");
 });
 
+it("retries a refusal from an older SFU and opens the board once a sync is answered", async () => {
+  first.control.answerSync = (attempt) => (attempt < 3 ? { error: "Too many app sync requests" } : boardContent());
+
+  await openBoard();
+  await wait(250);
+  expect(first.syncTimes).toHaveLength(2);
+  expect(ctx.syncStatus).toBe("syncing");
+  await wait(500);
+
+  expect(first.syncTimes).toHaveLength(3);
+  expect(ctx.syncStatus).toBe("synced");
+  expect(boardText()).toBe("drawn before you joined");
+});
+
+it("fails at once on a refusal that is not worth retrying", async () => {
+  first.control.answerSync = () => ({ error: "App not active" });
+
+  await openBoard();
+  expect(ctx.syncStatus).toBe("failed");
+  await wait(40_000);
+
+  expect(first.syncTimes).toHaveLength(1);
+});
+
 it("reports a sync answer it cannot apply as failed", async () => {
   first.control.answerSync = () => ({ stateVector: Y.encodeStateVector(board) });
 
