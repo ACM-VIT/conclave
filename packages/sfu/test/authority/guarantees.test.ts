@@ -773,6 +773,69 @@ describe("a view taken between a write and its flush", () => {
     expect(await room.converged()).toBe(true);
   });
 
+  it("names no question to a viewer who was never handed it, however it came and went since", async () => {
+    const room = new Harness([qaAuthority]);
+    const hostTab = await room.open(host, qaContract);
+    const early = await room.open(priya, qaContract);
+    const asked = await early.act("ask", { text: "Now you see me" });
+    const id = field(asked.ok ? asked.value : null, "id") as string;
+    await room.deliver();
+    const earlyHeld = early.row("questions", id) !== null;
+
+    // Shown. Hidden when Ravi opens the app. Shown again when Tara opens
+    // it. Hidden again. All of it before the flush.
+    const flushesBefore = room.authority.stats.flushes;
+    await hostTab.act("moderate", { id, action: "dismissed" });
+    const late = await room.open(ravi, qaContract);
+    const handedToLate = handed(late, "questions").map((row) => row.key);
+    await hostTab.act("moderate", { id, action: "reopen" });
+    const later = await room.open(person("tara@example.com", "Tara"), qaContract);
+    const handedToLater = handed(later, "questions").map((row) => row.key);
+    await hostTab.act("moderate", { id, action: "dismissed" });
+    const flushedMeanwhile = room.authority.stats.flushes - flushesBefore;
+    await room.deliver();
+
+    expect(earlyHeld).toBe(true);
+    expect(flushedMeanwhile).toBe(0);
+    expect(handedToLate).toEqual([]);
+    expect(handedToLater).toEqual([id]);
+    // Ravi never held it, so he is told nothing: not even its id, to drop.
+    expect(patches(late.frames)).toEqual([]);
+    expect(JSON.stringify(late.frames)).not.toContain(id);
+    // Priya and Tara did hold it, and are told to drop it.
+    expect(toldToDrop(early)).toContain(id);
+    expect(toldToDrop(later)).toContain(id);
+    expect([early.row("questions", id), later.row("questions", id)]).toEqual([null, null]);
+    expect(await room.converged()).toBe(true);
+  });
+
+  it("sends a viewer a question that was hidden when they looked and is shown since", async () => {
+    const room = new Harness([qaAuthority]);
+    const hostTab = await room.open(host, qaContract);
+    const early = await room.open(priya, qaContract);
+    const asked = await early.act("ask", { text: "Back again" });
+    const id = field(asked.ok ? asked.value : null, "id") as string;
+    await room.deliver();
+    const earlyFrames = early.frames.length;
+
+    await hostTab.act("moderate", { id, action: "dismissed" });
+    const late = await room.open(ravi, qaContract);
+    const handedToLate = handed(late, "questions").map((row) => row.key);
+    await hostTab.act("moderate", { id, action: "reopen" });
+    await room.deliver();
+
+    expect(handedToLate).toEqual([]);
+    expect(field(late.row("questions", id), "text")).toBe("Back again");
+    // Priya holds it exactly as it is again, so she is sent nothing of it.
+    expect(
+      patches(early.frames.slice(earlyFrames)).flatMap((frame) => [
+        ...frame.put.filter((row) => row.bucket === "questions"),
+        ...frame.remove.filter((row) => row.bucket === "questions"),
+      ]),
+    ).toEqual([]);
+    expect(await room.converged()).toBe(true);
+  });
+
   it("sends a change made after a view was taken to that viewer too", async () => {
     const room = new Harness([probeAuthority]);
     const hostTab = await room.open(host, probeContract);
