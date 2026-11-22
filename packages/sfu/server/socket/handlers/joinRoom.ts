@@ -54,6 +54,7 @@ import { ensureWebinarRoomConfig } from "../../scheduledWebinarScheduler.js";
 import {
   hideLobbyRows,
   removeBlockedGuest,
+  settleWaitingTabs,
   withdrawWaitingRequest,
 } from "../../admin/controlPlane.js";
 import { getSocketAuthUser } from "../auth.js";
@@ -287,6 +288,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           if (linked.blocked.length > 0) {
             removeBlockedGuest(knownRoom, linked.blocked, { io, state });
           }
+          settleWaitingTabs(knownRoom, linked);
           hideLobbyRows(knownRoom, linked.noLongerShown);
         }
         // A host invite ("bring on stage") lets an attendee identity rejoin as

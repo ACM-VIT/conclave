@@ -120,6 +120,7 @@ export const MAX_WEBINAR_QA_ANSWER_LENGTH = 1000;
 const MAX_WEBINAR_PROMOTED_USER_KEYS = 200;
 const MAX_OPEN_ADMISSIONS = 50;
 const ADMISSION_TTL_MS = 2 * 60 * 1000;
+const MAX_LOBBY_ANSWERS = 1000;
 // A stage invite should cover one webinar (plus reconnects), not become a
 // permanent skeleton key for this identity.
 const WEBINAR_PROMOTION_TTL_MS = 4 * 60 * 60 * 1000;
@@ -257,7 +258,14 @@ export class Room {
   private waitingKeysByGuest: Map<string, string[]> = new Map();
   private waitingGuestByKey: Map<string, { guest: string; arrival: number }> =
     new Map();
-  private waitingArrivals = 0;
+  // One clock for requests and for the hosts' answers to them, so an answer
+  // can be told apart from a request that came after it.
+  private lobbyClock = 0;
+  // The hosts' last answer to the requests of each pass. An answer is given
+  // to the tabs the room took for one guest at the time. When a later join
+  // shows that more waiting tabs are that guest's, the answer reaches them.
+  private lobbyAnswerByPass: Map<string, { admitted: boolean; at: number }> =
+    new Map();
   /** Admissions a host created and no join has used yet (code → expiry). */
   private openAdmissions: Map<string, number> = new Map();
   public cleanupTimer: NodeJS.Timeout | null = null;
@@ -873,19 +881,32 @@ export class Room {
    * under any other. When the passes that were linked here bring a block
    * and rights together, the guest loses what a rejoin would honour, host
    * rights included, and this returns all of its keys so that the caller
-   * removes its seats. Otherwise it returns none.
+   * removes its seats.
+   *
+   * It also returns the waiting tabs that the hosts' standing answer to
+   * this guest now reaches (`admit`, `deny`), and the keys that are no
+   * longer the request hosts are shown for a guest.
    */
   linkGuestPasses(
     otherSeats: ReadonlyArray<{ guestProof: string }>,
     guestProof: string,
-  ): { blocked: string[]; noLongerShown: string[] } {
+  ): {
+    blocked: string[];
+    noLongerShown: string[];
+    admit: string[];
+    deny: string[];
+  } {
     const noLongerShown: string[] = [];
-    if (otherSeats.length === 0) return { blocked: [], noLongerShown };
+    const nothing = { blocked: [], noLongerShown, admit: [], deny: [] };
+    if (otherSeats.length === 0) return nothing;
     const known = new Set(this.guestProofsByUserKey.values());
     let linked = false;
     for (const seat of otherSeats) {
       if (
-        !known.has(seat.guestProof) ||
+        !(
+          known.has(seat.guestProof) ||
+          this.lobbyAnswerByPass.has(seat.guestProof)
+        ) ||
         this.isSameGuestPass(seat.guestProof, guestProof)
       ) {
         continue;
@@ -906,14 +927,74 @@ export class Room {
         ...this.mergeWaitingGuests(guestsBefore, this.guestOfPass(guestProof)),
       );
     }
-    if (!linked || !this.guestHolds(this.blockedUsers, "", guestProof)) {
-      return { blocked: [], noLongerShown };
+    if (!linked) return nothing;
+    if (this.guestHolds(this.blockedUsers, "", guestProof)) {
+      const blocked = [...this.guestProofsByUserKey]
+        .filter(([, bound]) => this.isSameGuestPass(bound, guestProof))
+        .map(([userKey]) => userKey);
+      this.dropRejoinGrantsOf(blocked);
+      return { ...nothing, blocked };
     }
-    const blocked = [...this.guestProofsByUserKey]
-      .filter(([, bound]) => this.isSameGuestPass(bound, guestProof))
-      .map(([userKey]) => userKey);
-    this.dropRejoinGrantsOf(blocked);
-    return { blocked, noLongerShown };
+    return { ...nothing, ...this.standingLobbyAnswer(guestProof) };
+  }
+
+  /**
+   * Which waiting tabs of the guest behind `guestProof` the hosts have
+   * already answered, without knowing these tabs were that guest's.
+   *
+   * The hosts' latest answer counts. A denial reaches the tabs that were
+   * waiting when it was given: a tab that knocks after it is a new request.
+   * An admission reaches every waiting tab, for as long as the guest still
+   * holds it.
+   */
+  private standingLobbyAnswer(guestProof: string): {
+    admit: string[];
+    deny: string[];
+  } {
+    const waiting =
+      this.waitingKeysByGuest.get(this.guestOfPass(guestProof)) ?? [];
+    if (waiting.length === 0) return { admit: [], deny: [] };
+    let latest: { admitted: boolean; at: number } | undefined;
+    for (const proof of this.guestPassGroups.get(guestProof) ?? [guestProof]) {
+      const answer = this.lobbyAnswerByPass.get(proof);
+      if (answer && (!latest || answer.at > latest.at)) latest = answer;
+    }
+    if (latest && !latest.admitted) {
+      const deniedAt = latest.at;
+      return {
+        admit: [],
+        deny: waiting.filter(
+          (userKey) => this.waitingGuestByKey.get(userKey)!.arrival < deniedAt,
+        ),
+      };
+    }
+    const admissions = this.isLocked
+      ? this.lockedAllowedUsers
+      : this.allowedUsers;
+    return {
+      admit: this.guestHolds(admissions, "", guestProof) ? [...waiting] : [],
+      deny: [],
+    };
+  }
+
+  private noteLobbyAnswer(userKey: string, admitted: boolean): void {
+    const guestProof = this.guestProofsByUserKey.get(userKey);
+    if (guestProof === undefined) return;
+    this.lobbyAnswerByPass.delete(guestProof);
+    this.lobbyAnswerByPass.set(guestProof, {
+      admitted,
+      at: (this.lobbyClock += 1),
+    });
+    if (this.lobbyAnswerByPass.size > MAX_LOBBY_ANSWERS) {
+      const oldest = this.lobbyAnswerByPass.keys().next().value;
+      if (oldest !== undefined) this.lobbyAnswerByPass.delete(oldest);
+    }
+  }
+
+  /** A host turned away the request `userKey` made to be let in. */
+  denyWaitingRequest(userKey: string): void {
+    this.noteLobbyAnswer(userKey, false);
+    this.removePendingClient(userKey);
   }
 
   // What a guest's waiting requests are filed under: its passes, by the
@@ -964,7 +1045,7 @@ export class Room {
     const guest = this.guestOfKey(request.userKey);
     this.waitingGuestByKey.set(request.userKey, {
       guest,
-      arrival: (this.waitingArrivals += 1),
+      arrival: (this.lobbyClock += 1),
     });
     const userKeys = this.waitingKeysByGuest.get(guest);
     if (userKeys) userKeys.push(request.userKey);
@@ -1008,6 +1089,7 @@ export class Room {
     }
     this.allowedUsers.add(userKey);
     if (options.pastLock) this.lockedAllowedUsers.add(userKey);
+    this.noteLobbyAnswer(userKey, true);
     return true;
   }
 
@@ -2978,6 +3060,7 @@ export class Room {
     if (!this.canGrantTo(userKey)) return false;
     this.blockedUsers.delete(userKey);
     this.allowedUsers.add(userKey);
+    this.noteLobbyAnswer(userKey, true);
     this.stopWaiting(userKey);
     return true;
   }
@@ -2998,6 +3081,7 @@ export class Room {
     if (!this.canGrantTo(userKey)) return false;
     this.blockedUsers.delete(userKey);
     this.lockedAllowedUsers.add(userKey);
+    this.noteLobbyAnswer(userKey, true);
     this.stopWaiting(userKey);
     return true;
   }

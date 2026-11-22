@@ -7,7 +7,7 @@ import type {
   ProducerKey,
   ProducerType,
 } from "../../config/classes/Client.js";
-import type { Room } from "../../config/classes/Room.js";
+import type { Room, WaitingRequest } from "../../config/classes/Room.js";
 import type { AppsAwarenessData } from "../../types.js";
 import { isGuestUserKey } from "../identity.js";
 import { cleanupRoom, getRoomChannelId } from "../rooms.js";
@@ -869,8 +869,14 @@ const tellHosts = (
  * their list shows now: a host's screen can still hold a row from before
  * the room knew two keys were one guest. Returns the keys that were let in.
  */
-export const admitWaitingGuest = (room: Room, userKey: string): string[] => {
-  const requests = room.waitingRequestsOfGuest(userKey);
+export const admitWaitingGuest = (room: Room, userKey: string): string[] =>
+  admitRequests(room, room.waitingRequestsOfGuest(userKey));
+
+/** Turns away the guest behind `userKey`: every tab of that guest that waits. */
+export const rejectWaitingGuest = (room: Room, userKey: string): string[] =>
+  rejectRequests(room, room.waitingRequestsOfGuest(userKey));
+
+const admitRequests = (room: Room, requests: WaitingRequest[]): string[] => {
   for (const request of requests) {
     if (room.isLocked) {
       room.allowLockedUser(request.userKey);
@@ -882,15 +888,28 @@ export const admitWaitingGuest = (room: Room, userKey: string): string[] => {
   return requests.map((request) => request.userKey);
 };
 
-/** Turns away the guest behind `userKey`: every tab of that guest that waits. */
-export const rejectWaitingGuest = (room: Room, userKey: string): string[] => {
-  const requests = room.waitingRequestsOfGuest(userKey);
+const rejectRequests = (room: Room, requests: WaitingRequest[]): string[] => {
   for (const request of requests) {
-    room.removePendingClient(request.userKey);
+    room.denyWaitingRequest(request.userKey);
     request.socket.emit("joinRejected", { roomId: room.id });
     tellHosts(room, "userRejected", request);
   }
   return requests.map((request) => request.userKey);
+};
+
+/**
+ * Gives waiting tabs the answer hosts already gave their guest. The room
+ * learned only now that these tabs are that guest's (see
+ * `Room.linkGuestPasses`): `admit` are let in, `deny` are turned away.
+ */
+export const settleWaitingTabs = (
+  room: Room,
+  answer: { admit: string[]; deny: string[] },
+): void => {
+  const requestsOf = (userKeys: string[]) =>
+    userKeys.flatMap((userKey) => room.pendingClients.get(userKey) ?? []);
+  admitRequests(room, requestsOf(answer.admit));
+  rejectRequests(room, requestsOf(answer.deny));
 };
 
 /**
@@ -958,7 +977,7 @@ export const rejectAllPendingUsers = (
   const pendingUsers = Array.from(room.pendingClients.values());
 
   for (const pending of pendingUsers) {
-    room.removePendingClient(pending.userKey);
+    room.denyWaitingRequest(pending.userKey);
     pending.socket.emit("joinRejected", { roomId: room.id });
     rejected.push({ userId: pending.userId, userKey: pending.userKey });
   }

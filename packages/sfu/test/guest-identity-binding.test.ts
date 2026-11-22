@@ -1761,6 +1761,163 @@ describe("a guest who asks to be let in from more than one tab", () => {
   });
 });
 
+describe("a host's answer to a guest whose tabs the room has not linked yet", () => {
+  const hostTab = { ...guestHost, guestRoom: "room" } satisfies SfuAuthPayload;
+  // Two tabs of one browser were each given a pass before either cookie
+  // had arrived, so they knock under passes A and B that the room cannot
+  // tell are one guest.
+  const tabA = {
+    userId: "guest-gp_tab-1-under-pass-A",
+    clientId: "conclave",
+    sessionId: "tab-1",
+    guestProof: "proof-of-pass-A",
+    guestRoom: "room",
+  } satisfies SfuAuthPayload;
+  const tabB = {
+    userId: "guest-gp_tab-2-under-pass-B",
+    clientId: "conclave",
+    sessionId: "tab-2",
+    guestProof: "proof-of-pass-B",
+    guestRoom: "room",
+  } satisfies SfuAuthPayload;
+  // The first tab reloads. By now the browser sends both passes.
+  const tabAShowingBothPasses = {
+    ...tabA,
+    guestWas: [{ userKey: "guest-gp_tab-1-under-pass-B", guestProof: tabB.guestProof }],
+  } satisfies SfuAuthPayload;
+  const tabBShowingBothPasses = {
+    ...tabB,
+    guestWas: [{ userKey: "guest-gp_tab-2-under-pass-A", guestProof: tabA.guestProof }],
+  } satisfies SfuAuthPayload;
+
+  type Joined = Awaited<ReturnType<typeof join>>;
+  const waiting: unknown = expect.objectContaining({ status: "waiting" });
+  const approved = ["joinApproved", { roomId: "room" }] as const;
+  const turnedAway = ["joinRejected", { roomId: "room" }] as const;
+  const hostAsks = async (host: Joined, event: string, payload: unknown) => {
+    const ack = vi.fn();
+    await host.peer.handlers.get(event)!(...([payload, ack] as never[]));
+    return ack;
+  };
+  const screenOf = (host: Joined): string[] => {
+    let rows: string[] = [];
+    for (const [event, payload] of host.peer.emit.mock.calls as Array<[string, { userId?: string; users?: Array<{ userId: string }> }]>) {
+      if (event === "userRequestedJoin") rows = [...rows.filter((row) => row !== payload.userId), payload.userId!];
+      if (["pendingUserLeft", "userAdmitted", "userRejected"].includes(event)) rows = rows.filter((row) => row !== payload.userId);
+      if (event === "pendingUsersSnapshot") rows = payload.users!.map((user) => user.userId);
+    }
+    return rows;
+  };
+  const bothKnock = async () => {
+    const state = makeState();
+    const host = await join(state, hostTab);
+    const room = state.rooms.get("conclave:room")!;
+    room.setLocked(true);
+    const first = await join(state, tabA);
+    const second = await join(state, tabB);
+    expect(screenOf(host)).toEqual([tabA.userId, tabB.userId]);
+    return { state, room, host, first, second };
+  };
+
+  it("admitted, then linked: the tab that still waited is let in, and the lobby is empty", async () => {
+    const { state, room, host, second } = await bothKnock();
+    await hostAsks(host, "admitUser", { userId: tabA.userId });
+    expect(second.peer.emit).not.toHaveBeenCalledWith(...approved);
+
+    const reloaded = await join(state, tabAShowingBothPasses);
+
+    expect(reloaded.ack).toHaveBeenCalledWith(joined);
+    expect(second.peer.emit).toHaveBeenCalledWith(...approved);
+    expect([...room.pendingClients.keys()]).toEqual([]);
+    expect(screenOf(host)).toEqual([]);
+    expect((await join(state, tabB)).ack).toHaveBeenCalledWith(joined);
+  });
+
+  it("denied, then linked: the tab that still waited is turned away, and only the new knock is shown", async () => {
+    const { state, room, host, second } = await bothKnock();
+    await hostAsks(host, "rejectUser", { userId: tabA.userId });
+    expect(second.peer.emit).not.toHaveBeenCalledWith(...turnedAway);
+
+    const reloaded = await join(state, tabAShowingBothPasses);
+
+    expect(second.peer.emit).toHaveBeenCalledWith(...turnedAway);
+    expect(reloaded.ack).toHaveBeenCalledWith(waiting);
+    expect([...room.pendingClients.keys()]).toEqual([tabA.userId]);
+    expect(screenOf(host)).toEqual([tabA.userId]);
+  });
+
+  it("denied, then linked, then admitted: the later answer stands for every tab", async () => {
+    const { state, room, host } = await bothKnock();
+    await hostAsks(host, "rejectUser", { userId: tabA.userId });
+    const reloaded = await join(state, tabAShowingBothPasses);
+
+    await hostAsks(host, "admitUser", { userId: tabA.userId });
+    const otherTabAgain = await join(state, tabBShowingBothPasses);
+
+    expect(reloaded.peer.emit).toHaveBeenCalledWith(...approved);
+    expect(otherTabAgain.ack).toHaveBeenCalledWith(joined);
+    expect(room.pendingClients.size).toBe(0);
+    expect(screenOf(host)).toEqual([]);
+  });
+
+  it("denied under one pass and admitted under the other, then linked: the later answer wins", async () => {
+    const { state, room, host, second } = await bothKnock();
+    await hostAsks(host, "rejectUser", { userId: tabA.userId });
+    await hostAsks(host, "admitUser", { userId: tabB.userId });
+    expect(second.peer.emit).toHaveBeenCalledWith(...approved);
+
+    const reloaded = await join(state, tabAShowingBothPasses);
+
+    expect(reloaded.ack).toHaveBeenCalledWith(joined);
+    expect(room.pendingClients.size).toBe(0);
+  });
+
+  it.each([
+    ["admitted", "admitUser", approved],
+    ["denied", "rejectUser", turnedAway],
+  ] as const)("linked, then %s: every tab gets the answer", async (_label, action, answer) => {
+    const state = makeState();
+    const host = await join(state, hostTab);
+    const room = state.rooms.get("conclave:room")!;
+    room.setLocked(true);
+    const first = await join(state, tabA);
+    const second = await join(state, tabBShowingBothPasses);
+    expect(screenOf(host)).toEqual([tabA.userId]);
+
+    await hostAsks(host, action, { userId: tabA.userId });
+
+    expect(first.peer.emit).toHaveBeenCalledWith(...answer);
+    expect(second.peer.emit).toHaveBeenCalledWith(...answer);
+    expect(room.pendingClients.size).toBe(0);
+    expect(screenOf(host)).toEqual([]);
+  });
+
+  it("a denial does not turn away a tab that knocks after it", async () => {
+    const { state, room, host } = await bothKnock();
+    await hostAsks(host, "rejectUser", { userId: tabA.userId });
+    await hostAsks(host, "rejectUser", { userId: tabB.userId });
+
+    const knocksAgain = await join(state, tabBShowingBothPasses);
+
+    expect(knocksAgain.ack).toHaveBeenCalledWith(waiting);
+    expect(knocksAgain.peer.emit).not.toHaveBeenCalledWith(...turnedAway);
+    expect([...room.pendingClients.keys()]).toEqual([tabB.userId]);
+    expect(screenOf(host)).toEqual([tabB.userId]);
+  });
+
+  it("an admission that a host took back does not let the waiting tab in", async () => {
+    const { state, room, host, second } = await bothKnock();
+    await hostAsks(host, "admitUser", { userId: tabA.userId });
+    room.revokeLockedAllowedUser(tabA.userId);
+    room.revokeAllowedUser(tabA.userId);
+
+    await join(state, tabAShowingBothPasses);
+
+    expect(second.peer.emit).not.toHaveBeenCalledWith(...approved);
+    expect(room.pendingClients.has(tabB.userId)).toBe(true);
+  });
+});
+
 describe("what a join costs a room with a large lobby", () => {
   const hostTab = { ...guestHost, guestRoom: "room" } satisfies SfuAuthPayload;
   const waiter = (order: number, pass = order) =>
