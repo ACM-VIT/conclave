@@ -1,4 +1,5 @@
 import type { TranscriptTranscriptionProvider } from "@conclave/ai/models";
+import { captionLanguageCode } from "@conclave/meeting-core/caption-languages";
 import {
   getTranscriptTranscriptionModelConfig,
   normalizeRealtimeTranscriptModel,
@@ -25,16 +26,21 @@ export const canTranscribeLanguage = (
 ): boolean =>
   provider !== "sarvam" || sarvamCanTranscribe(language, languageChosen, env);
 
-/** The language a session reports: what the provider really transcribes. */
+/**
+ * The language a session reports: what the provider really transcribes, as
+ * the caption language table's code, so clients show the same language.
+ */
 export const reportedTranscriptionLanguage = (
   provider: TranscriptTranscriptionProvider,
   language: string,
   languageChosen: boolean,
   env: LiveTranscriptionConnectOptions["env"],
 ): string | undefined =>
-  provider === "sarvam"
-    ? sarvamReportedLanguage(language, languageChosen, env)
-    : language;
+  captionLanguageCode(
+    provider === "sarvam"
+      ? sarvamReportedLanguage(language, languageChosen, env)
+      : language,
+  );
 
 export const connectLiveTranscriptionProvider = async (
   options: LiveTranscriptionConnectOptions,

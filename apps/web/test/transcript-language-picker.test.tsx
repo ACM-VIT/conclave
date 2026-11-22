@@ -331,6 +331,39 @@ describe("caption language picker", () => {
     expect(transcript.takeover).toHaveBeenCalledWith(expect.objectContaining({ language: "hi" }));
   });
 
+  it.each([
+    ["saaras:v3", "od", "Odia"],
+    ["saaras:v3", "as", "Assamese"],
+    ["saaras:v3", "ne", "Nepali"],
+    ["gpt-live-transcribe", "ta-IN", "Tamil"],
+    ["gpt-live-transcribe", "sw", "sw"],
+  ])("shows the %s session's %s captions as %s in the live switch, never as another language", async (model, language, shown) => {
+    await render(
+      controller({ status: "live", language, keySource: "global", transcriptModel: model }, { isController: true }),
+      roomUsing(model),
+    );
+
+    expect(selectedText("captions-language-live")).toBe(shown);
+  });
+
+  it.each([
+    ["od", "Odia"],
+    ["ta-IN", "Tamil"],
+    ["sw", "sw"],
+  ])("tells other people %s captions are in %s", async (language, shown) => {
+    await render(controller({ status: "live", language }));
+
+    expect(container.textContent).toContain(shown);
+  });
+
+  it("starts a Sarvam session with an Odia default and says so", async () => {
+    await render(controller({}, { captionLanguageDefaults: { openai: "en", sarvam: "od" } }));
+
+    await clickText("Sarvam");
+
+    expect(selectedText("captions-language-start")).toBe("Default (Odia)");
+  });
+
   it("shows other people the language captions are in", async () => {
     await render(controller({ status: "live", language: "hi" }));
 

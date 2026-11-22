@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TranscriptRoom } from "../transcript-worker/src/room";
 import type { Env, PersistedSnapshot, Viewer } from "../transcript-worker/src/types";
+import { captionLanguageLabel } from "../src/app/lib/caption-languages";
 
 const { lookup } = vi.hoisted(() => ({ lookup: vi.fn() }));
 vi.mock("@conclave/ai/room-server", async (original) => ({
@@ -65,6 +66,8 @@ async function worker(env: Partial<Env>, saved?: Snapshot) {
   ) as unknown as {
     loaded: Promise<void>;
     viewers: Map<WebSocket, Viewer>;
+    session: { language?: string } | null;
+    captionLanguageDefaults: () => { sarvam?: string | null };
     startSession: (viewer: Viewer, message: object) => Promise<void>;
   };
   await room.loaded;
@@ -87,8 +90,13 @@ async function worker(env: Partial<Env>, saved?: Snapshot) {
     start: (language?: string) => request("session.start", language),
     takeover: (language?: string) => request("session.takeover", language),
     lastSnapshot: () => structuredClone(snapshots.at(-1)) as Snapshot,
+    shown: () => captionLanguageLabel(room.session?.language) ?? "Auto-detect",
+    shownDefault: () => captionLanguageLabel(room.captionLanguageDefaults().sarvam) ?? "Auto-detect",
   };
 }
+
+// What a code sent to Sarvam means, named the way the picker names it.
+const spoken = (code: string | null | undefined) => captionLanguageLabel(code) ?? "Auto-detect";
 
 function providerCodes() {
   const codes: (string | null)[] = [];
@@ -107,9 +115,9 @@ function providerCodes() {
   return codes;
 }
 
-const LANGUAGES = [undefined, "en", "ta", "ta-IN", "hi-IN", "es", "not a code"];
+const LANGUAGES = [undefined, "en", "ta", "ta-IN", "hi-IN", "od-IN", "es", "not a code"];
 const LOCALES = [undefined, "en-IN", "ta-IN", "hi"];
-const SARVAM_CODES = [undefined, "", "unknown", "hi-IN", "ta-IN", "xx"];
+const SARVAM_CODES = [undefined, "", "unknown", "hi-IN", "ta-IN", "od-IN", "xx"];
 const SAVED_SESSION_LANGUAGES = [undefined, "en", "ta", "hi"];
 const combinations = LANGUAGES.flatMap((language) =>
   LOCALES.flatMap((locale) =>
@@ -128,29 +136,36 @@ describe("Sarvam with no language picked resolves exactly as staging did", () =>
     const live = await worker(env);
 
     await live.start();
+    expect(live.shown(), "shown on start").toBe(spoken(expected));
+    expect(live.shownDefault(), "shown as the default").toBe(spoken(expected));
     await live.takeover();
     expect(codes).toEqual([expected, expected]);
+    expect(live.shown(), "shown on takeover").toBe(spoken(expected));
 
     const saved = live.lastSnapshot();
     saved.session.keySource = "global";
     const restoreFrom = async (snapshot: Snapshot) => {
       codes.length = 0;
-      await worker(env, snapshot);
-      return codes[0];
+      const restored = await worker(env, snapshot);
+      return { code: codes[0], shown: restored.shown() };
     };
     for (const savedLanguage of SAVED_SESSION_LANGUAGES) {
       const fromThisWorker = structuredClone(saved);
       fromThisWorker.session.language = savedLanguage;
       fromThisWorker.session.languageChosen = false;
-      expect(await restoreFrom(fromThisWorker), `saved session language ${savedLanguage}`).toBe(expected);
+      expect(await restoreFrom(fromThisWorker), `saved session language ${savedLanguage}`).toEqual({
+        code: expected,
+        shown: spoken(expected),
+      });
     }
     const fromStaging = structuredClone(saved);
     delete fromStaging.session.language;
     delete fromStaging.session.languageChosen;
     fromStaging.transcriptionConfig = baseStartConfig(env);
-    expect(await restoreFrom(fromStaging), "a staging snapshot").toBe(
-      baseSarvamCode(env, baseStartConfig(env)),
-    );
+    expect(await restoreFrom(fromStaging), "a staging snapshot").toEqual({
+      code: expected,
+      shown: spoken(expected),
+    });
   });
 
   it.each(combinations)("only a pick differs: language %j", async (env) => {

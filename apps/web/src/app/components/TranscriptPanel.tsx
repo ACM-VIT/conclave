@@ -36,6 +36,7 @@ import {
 } from "../lib/transcript-models";
 import type { TranscriptMinutesEntry, TranscriptSegment } from "../lib/types";
 import {
+  captionLanguageCode,
   captionLanguageLabel,
   captionLanguagesFor,
   defaultCaptionLanguageLabel,
@@ -233,13 +234,15 @@ function CaptionLanguageSelect({
   className,
 }: {
   id: string;
-  /** A language code, or "" for the default option. */
+  /** A language code, or "" for the default option. A code outside the list still shows as itself. */
   value: string;
   provider: ReturnType<typeof getTranscriptTranscriptionProvider>;
   defaultLabel?: string;
   onChange: (code: string) => void;
   className: string;
 }) {
+  const languages = captionLanguagesFor(provider);
+  const unlisted = value && !languages.some(({ code }) => code === value) ? value : null;
   return (
     <select
       id={id}
@@ -251,7 +254,8 @@ function CaptionLanguageSelect({
       className={className}
     >
       {defaultLabel ? <option value="">{defaultLabel}</option> : null}
-      {captionLanguagesFor(provider).map(({ code, label }) => (
+      {unlisted ? <option value={unlisted}>{captionLanguageLabel(unlisted) ?? unlisted}</option> : null}
+      {languages.map(({ code, label }) => (
         <option key={code} value={code}>
           {label}
         </option>
@@ -289,7 +293,7 @@ function StartStage({
   // picking the default names it (null when the worker auto-detects).
   const offered = (code: string | null | undefined): code is string =>
     Boolean(code) && captionLanguagesFor(provider).some((language) => language.code === code);
-  const resumedLanguage = needsTakeover ? transcript.session.language : undefined;
+  const resumedLanguage = needsTakeover ? captionLanguageCode(transcript.session.language) : undefined;
   const untouchedLanguage = needsTakeover
     ? (offered(resumedLanguage) ? resumedLanguage : "")
     : (offered(savedLanguage) ? savedLanguage : "");
@@ -1072,7 +1076,7 @@ export default function TranscriptPanel({
     roomAi?.state.features?.transcription?.model ?? session.transcriptModel,
   );
   const shownLanguage = transcript.supportsCaptionLanguage
-    ? session.language
+    ? captionLanguageCode(session.language)
     : undefined;
   const canSwitchLanguage =
     transcript.supportsCaptionLanguage &&
@@ -1258,7 +1262,7 @@ export default function TranscriptPanel({
               </span>
               {transcript.supportsCaptionLanguage && isRunning && !canSwitchLanguage ? (
                 <span className="shrink-0 text-[#d4d4d8]">
-                  {shownLanguage ? captionLanguageLabel(shownLanguage) : "Auto-detect"}
+                  {captionLanguageLabel(shownLanguage) ?? "Auto-detect"}
                 </span>
               ) : null}
             </div>
