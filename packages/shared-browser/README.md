@@ -97,6 +97,13 @@ refuses to start a display without a password, so rebuild
 `conclave-browser:latest` (the default in `deploy-browser-service.sh`) whenever
 you update the service.
 
+The fragment keeps the password out of requests, not out of reach of whoever
+can rewrite the noVNC page in transit. For access from the internet, serve noVNC
+through an HTTPS reverse proxy and set `BROWSER_PUBLIC_BASE_URL` to it. Without
+it the service hands out plain `http://` links. When the proxy runs on the same
+host, set `NOVNC_BIND_ADDRESS=127.0.0.1` so the noVNC ports are reachable only
+through it.
+
 ## Network / Firewall Checklist
 
 In Chromium mode, open between Browser VM and SFU VM:
@@ -107,7 +114,9 @@ Open to clients for browser access in Chromium mode:
 
 - Browser service API: `BROWSER_SERVICE_PORT` (default `3040`) from SFU host(s)
   only, over a private network
-- noVNC TCP range: `NOVNC_PORT_START`-`NOVNC_PORT_END` (default `6080`-`6100`)
+- noVNC TCP range: `NOVNC_PORT_START`-`NOVNC_PORT_END` (default `6080`-`6100`),
+  only when no HTTPS proxy fronts noVNC. Public deployments should open the
+  proxy's HTTPS port instead.
 
 Kitesurf Live View is hosted by Cloudflare over HTTPS, so clients do not need
 access to a noVNC port range.
