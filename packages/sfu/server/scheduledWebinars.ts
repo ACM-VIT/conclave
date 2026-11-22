@@ -20,8 +20,8 @@ import {
   normalizeHostEmail,
 } from "./webinar.js";
 import { canonicalizeClientId } from "./clientIds.js";
-import { ensureJsonFallbackAllowed } from "./jsonFallback.js";
 import { assertSqliteWritable } from "./sqliteWriteCheck.js";
+import { markFallbackImported, mergeNewerRecords, pendingFallbackFiles } from "./fallbackImport.js";
 
 const DEFAULT_EARLY_ENTRY_MINUTES = 10;
 const MAX_EARLY_ENTRY_MINUTES = 240;
@@ -523,25 +523,17 @@ export const createScheduledWebinarPersistence = (): ScheduledWebinarPersistence
 
   const jsonPersistence = createFileScheduledWebinarPersistence();
 
-  try {
-    const sqlitePersistence = createSqliteScheduledWebinarPersistence();
-    const migrated = migrateJsonScheduledWebinarsToSqlite(
-      sqlitePersistence,
-      jsonPersistence,
+  const sqlitePersistence = createSqliteScheduledWebinarPersistence();
+  const migrated = migrateJsonScheduledWebinarsToSqlite(
+    sqlitePersistence,
+    jsonPersistence,
+  );
+  if (migrated > 0) {
+    Logger.info(
+      `Migrated ${migrated} scheduled webinar(s) from JSON into SQLite`,
     );
-    if (migrated > 0) {
-      Logger.info(
-        `Migrated ${migrated} scheduled webinar(s) from JSON into SQLite`,
-      );
-    }
-    return sqlitePersistence;
-  } catch (error) {
-    ensureJsonFallbackAllowed("SCHEDULED_WEBINARS_PERSISTENCE", mode, error);
-    Logger.warn(
-      `SQLite scheduled-webinar persistence unavailable; falling back to JSON: ${(error as Error).message}`,
-    );
-    return jsonPersistence;
   }
+  return sqlitePersistence;
 };
 
 const normalizeStoredWebinar = (raw: unknown): ScheduledWebinar | null => {
@@ -599,6 +591,20 @@ const normalizeStoredWebinar = (raw: unknown): ScheduledWebinar | null => {
       ? Number(record.coHostInviteTokenCreatedAt)
       : null,
   };
+};
+
+export const importFallbackWebinars = (persistence: ScheduledWebinarPersistence): number => {
+  const files = pendingFallbackFiles("scheduled-webinars.json");
+  if (files.length === 0) return 0;
+  const incoming = files.flatMap((file) => createFileScheduledWebinarPersistence(file).load());
+  const { merged, changed } = mergeNewerRecords(persistence.load(), incoming, (webinar) => webinar.id);
+  if (changed.length > 0) {
+    if (persistence.saveChanged) persistence.saveChanged(changed);
+    else persistence.save(merged);
+  }
+  files.forEach(markFallbackImported);
+  Logger.info(`Imported ${changed.length} scheduled webinar(s) from ${files.length} JSON fallback file(s)`);
+  return changed.length;
 };
 
 export const loadPersistedSchedules = (

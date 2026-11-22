@@ -31,8 +31,8 @@ import {
   canonicalizeClientId,
   CONCLAVE_CLIENT_ID,
 } from "./clientIds.js";
-import { ensureJsonFallbackAllowed } from "./jsonFallback.js";
 import { assertSqliteWritable } from "./sqliteWriteCheck.js";
+import { markFallbackImported, mergeNewerRecords, pendingFallbackFiles } from "./fallbackImport.js";
 
 type MaybePromise<T> = T | Promise<T>;
 
@@ -1591,41 +1591,20 @@ export const createSchedulingPersistence = (): SchedulingPersistence => {
   const mode = process.env.SCHEDULING_PERSISTENCE?.trim().toLowerCase();
   if (mode === "json" || mode === "file") return createFileSchedulingPersistence();
   const redisUrl = resolveRedisPersistenceUrl();
-  try {
-    const sqlitePersistence = createSqliteSchedulingPersistence();
-    if (shouldUseRedisPersistence(mode, redisUrl)) {
-      if (!redisUrl) {
-        throw new Error(
-          "SCHEDULING_PERSISTENCE=redis requires SFU_PERSISTENCE_REDIS_URL, SFU_REDIS_URL, or REDIS_URL.",
-        );
-      }
-      return createRedisSchedulingPersistence(
-        redisUrl,
-        resolveRedisPersistenceKeyPrefix(),
-        sqlitePersistence,
+  const sqlitePersistence = createSqliteSchedulingPersistence();
+  if (shouldUseRedisPersistence(mode, redisUrl)) {
+    if (!redisUrl) {
+      throw new Error(
+        "SCHEDULING_PERSISTENCE=redis requires SFU_PERSISTENCE_REDIS_URL, SFU_REDIS_URL, or REDIS_URL.",
       );
     }
-    return sqlitePersistence;
-  } catch (error) {
-    ensureJsonFallbackAllowed("SCHEDULING_PERSISTENCE", mode, error);
-    Logger.warn(
-      `SQLite scheduling persistence unavailable; falling back to JSON: ${(error as Error).message}`,
+    return createRedisSchedulingPersistence(
+      redisUrl,
+      resolveRedisPersistenceKeyPrefix(),
+      sqlitePersistence,
     );
-    const filePersistence = createFileSchedulingPersistence();
-    if (shouldUseRedisPersistence(mode, redisUrl)) {
-      if (!redisUrl) {
-        throw new Error(
-          "SCHEDULING_PERSISTENCE=redis requires SFU_PERSISTENCE_REDIS_URL, SFU_REDIS_URL, or REDIS_URL.",
-        );
-      }
-      return createRedisSchedulingPersistence(
-        redisUrl,
-        resolveRedisPersistenceKeyPrefix(),
-        filePersistence,
-      );
-    }
-    return filePersistence;
   }
+  return sqlitePersistence;
 };
 
 const snapshotSchedulingStore = (
@@ -1647,6 +1626,36 @@ export const persistScheduling = (
   return Promise.resolve(persistence.save(snapshotSchedulingStore(store))).then(() =>
     persistence.flush?.(),
   );
+};
+
+export const importFallbackScheduling = async (
+  persistence: SchedulingPersistence,
+): Promise<number> => {
+  const files = pendingFallbackFiles("scheduling.json");
+  if (files.length === 0) return 0;
+  const snapshot = await persistence.load();
+  let imported = 0;
+  for (const file of files) {
+    const incoming = (await createFileSchedulingPersistence(file).load()) as SchedulingSnapshot;
+    const profiles = mergeNewerRecords(snapshot.profiles, incoming.profiles, (profile) => profile.id);
+    const eventTypes = mergeNewerRecords(snapshot.eventTypes, incoming.eventTypes, (eventType) => eventType.id);
+    const calendars = mergeNewerRecords(snapshot.calendars, incoming.calendars, (calendar) => calendar.profileId);
+    const availability = incoming.availability.filter(
+      (entry) => !snapshot.availability.some((current) => current.profileId === entry.profileId),
+    );
+    snapshot.profiles = profiles.merged;
+    snapshot.eventTypes = eventTypes.merged;
+    snapshot.calendars = calendars.merged;
+    snapshot.availability = [...snapshot.availability, ...availability];
+    imported += profiles.changed.length + eventTypes.changed.length + calendars.changed.length + availability.length;
+  }
+  if (imported > 0) {
+    await persistence.save(snapshot);
+    await persistence.flush?.();
+  }
+  files.forEach(markFallbackImported);
+  Logger.info(`Imported ${imported} scheduling record(s) from ${files.length} JSON fallback file(s)`);
+  return imported;
 };
 
 export const loadPersistedScheduling = (

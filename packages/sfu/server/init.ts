@@ -6,16 +6,19 @@ import { forceCloseRoom } from "./rooms.js";
 import type { SfuState } from "./state.js";
 import {
   createScheduledWebinarPersistence,
+  importFallbackWebinars,
   loadPersistedSchedules,
   type ScheduledWebinarPersistence,
 } from "./scheduledWebinars.js";
 import {
   createScheduledMeetingPersistence,
+  importFallbackMeetings,
   loadPersistedMeetings,
   type ScheduledMeetingPersistence,
 } from "./scheduledMeetings.js";
 import {
   createSchedulingPersistence,
+  importFallbackScheduling,
   loadPersistedScheduling,
   type SchedulingPersistence,
 } from "./scheduling.js";
@@ -108,6 +111,7 @@ export const initScheduledWebinars = (
   persistence: ScheduledWebinarPersistence = createScheduledWebinarPersistence(),
 ): void => {
   state.scheduledWebinarPersistence = persistence;
+  importFallbackWebinars(persistence);
   const loaded = loadPersistedSchedules(state.scheduledWebinars, persistence);
   if (loaded > 0) {
     Logger.info(`Restored ${loaded} scheduled webinar(s) from persistence`);
@@ -119,7 +123,7 @@ export const initScheduledMeetings = (
   persistence: ScheduledMeetingPersistence = createScheduledMeetingPersistence(),
 ): Promise<void> => {
   state.scheduledMeetingPersistence = persistence;
-  return loadPersistedMeetings(state.scheduledMeetings, persistence).then((loaded) => {
+  return importFallbackMeetings(persistence).then(() => loadPersistedMeetings(state.scheduledMeetings, persistence)).then((loaded) => {
     if (loaded > 0) {
       Logger.info(`Restored ${loaded} scheduled meeting(s) from persistence`);
     }
@@ -131,7 +135,7 @@ export const initScheduling = (
   persistence: SchedulingPersistence = createSchedulingPersistence(),
 ): Promise<void> => {
   state.schedulingPersistence = persistence;
-  return loadPersistedScheduling(state.scheduling, persistence).then((loaded) => {
+  return importFallbackScheduling(persistence).then(() => loadPersistedScheduling(state.scheduling, persistence)).then((loaded) => {
     if (loaded > 0) {
       Logger.info(`Restored ${loaded} scheduling record(s) from persistence`);
     }

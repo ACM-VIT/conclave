@@ -24,8 +24,8 @@ import {
   type RedisPersistenceClient,
 } from "./redisPersistence.js";
 import { canonicalizeClientId } from "./clientIds.js";
-import { ensureJsonFallbackAllowed } from "./jsonFallback.js";
 import { assertSqliteWritable } from "./sqliteWriteCheck.js";
+import { markFallbackImported, mergeNewerRecords, pendingFallbackFiles } from "./fallbackImport.js";
 
 type MaybePromise<T> = T | Promise<T>;
 
@@ -1168,49 +1168,45 @@ export const createScheduledMeetingPersistence = (): ScheduledMeetingPersistence
   const jsonPersistence = createFileScheduledMeetingPersistence();
   const redisUrl = resolveRedisPersistenceUrl();
 
-  try {
-    const sqlitePersistence = createSqliteScheduledMeetingPersistence();
-    const migrated = migrateJsonScheduledMeetingsToSqlite(
-      sqlitePersistence,
-      jsonPersistence,
+  const sqlitePersistence = createSqliteScheduledMeetingPersistence();
+  const migrated = migrateJsonScheduledMeetingsToSqlite(
+    sqlitePersistence,
+    jsonPersistence,
+  );
+  if (migrated > 0) {
+    Logger.info(
+      `Migrated ${migrated} scheduled meeting(s) from JSON into SQLite`,
     );
-    if (migrated > 0) {
-      Logger.info(
-        `Migrated ${migrated} scheduled meeting(s) from JSON into SQLite`,
-      );
-    }
-    if (shouldUseRedisPersistence(mode, redisUrl)) {
-      if (!redisUrl) {
-        throw new Error(
-          "SCHEDULED_MEETINGS_PERSISTENCE=redis requires SFU_PERSISTENCE_REDIS_URL, SFU_REDIS_URL, or REDIS_URL.",
-        );
-      }
-      return createRedisScheduledMeetingPersistence(
-        redisUrl,
-        resolveRedisPersistenceKeyPrefix(),
-        sqlitePersistence,
-      );
-    }
-    return sqlitePersistence;
-  } catch (error) {
-    ensureJsonFallbackAllowed("SCHEDULED_MEETINGS_PERSISTENCE", mode, error);
-    Logger.warn(
-      `SQLite scheduled-meeting persistence unavailable; falling back to JSON: ${(error as Error).message}`,
-    );
-    if (shouldUseRedisPersistence(mode, redisUrl)) {
-      if (!redisUrl) {
-        throw new Error(
-          "SCHEDULED_MEETINGS_PERSISTENCE=redis requires SFU_PERSISTENCE_REDIS_URL, SFU_REDIS_URL, or REDIS_URL.",
-        );
-      }
-      return createRedisScheduledMeetingPersistence(
-        redisUrl,
-        resolveRedisPersistenceKeyPrefix(),
-        jsonPersistence,
-      );
-    }
-    return jsonPersistence;
   }
+  if (shouldUseRedisPersistence(mode, redisUrl)) {
+    if (!redisUrl) {
+      throw new Error(
+        "SCHEDULED_MEETINGS_PERSISTENCE=redis requires SFU_PERSISTENCE_REDIS_URL, SFU_REDIS_URL, or REDIS_URL.",
+      );
+    }
+    return createRedisScheduledMeetingPersistence(
+      redisUrl,
+      resolveRedisPersistenceKeyPrefix(),
+      sqlitePersistence,
+    );
+  }
+  return sqlitePersistence;
+};
+
+export const importFallbackMeetings = async (
+  persistence: ScheduledMeetingPersistence,
+): Promise<number> => {
+  const files = pendingFallbackFiles("scheduled-meetings.json");
+  if (files.length === 0) return 0;
+  const incoming = files.flatMap((file) => createFileScheduledMeetingPersistence(file).load() as ScheduledMeeting[]);
+  const { merged, changed } = mergeNewerRecords(await persistence.load(), incoming, (meeting) => meeting.id);
+  if (changed.length > 0) {
+    await (persistence.saveChanged ? persistence.saveChanged(changed) : persistence.save(merged));
+    await persistence.flush?.();
+  }
+  files.forEach(markFallbackImported);
+  Logger.info(`Imported ${changed.length} scheduled meeting(s) from ${files.length} JSON fallback file(s)`);
+  return changed.length;
 };
 
 export const loadPersistedMeetings = (
