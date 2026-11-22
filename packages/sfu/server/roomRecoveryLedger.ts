@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import {
+  linkSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -193,8 +194,8 @@ const roomRecoveryDirectory = (): string => {
     : resolve(process.cwd(), "data", "room-recovery");
 };
 
-const isMissingFile = (error: unknown): boolean =>
-  (error as NodeJS.ErrnoException | null)?.code === "ENOENT";
+const failedWith = (error: unknown, code: string): boolean =>
+  (error as NodeJS.ErrnoException | null)?.code === code;
 
 // Runs a file operation another SFU may race: the file being gone already is
 // an answer, not a failure.
@@ -202,7 +203,7 @@ const unlessGone = <T>(operation: () => T): T | null => {
   try {
     return operation();
   } catch (error) {
-    if (isMissingFile(error)) return null;
+    if (failedWith(error, "ENOENT")) return null;
     throw error;
   }
 };
@@ -212,8 +213,10 @@ const unlessGone = <T>(operation: () => T): T | null => {
  * shares. A room runs on one instance at a time, so instances never write the
  * same record, and whichever instance recreates a lost room can read it.
  *
- * Instances do share the tidying up. Each removes only what it has just read
- * and found expired, and takes a file another instance removed first as done.
+ * Instances do share the tidying up, so one may be clearing out a room's
+ * expired record just as another writes that room a new one. A record is
+ * therefore never deleted where it lies: it is moved aside, which takes
+ * whatever is there in one step, and looked at again before it goes.
  */
 export const createFileRoomRecoveryStore = (
   directory: string = roomRecoveryDirectory(),
@@ -227,25 +230,39 @@ export const createFileRoomRecoveryStore = (
     const stored = unlessGone(() => readFileSync(path, "utf8"));
     return stored === null ? null : JSON.parse(stored);
   };
+  // What a file holds now. Another instance may have taken it meanwhile.
+  const stateOf = (path: string): "gone" | "expired" | "current" => {
+    try {
+      const stored = read(path);
+      if (stored === null) return "gone";
+      return hasExpired(stored) ? "expired" : "current";
+    } catch {
+      return "expired";
+    }
+  };
+  // Back where it was, unless the room has a newer record there already.
+  const putBack = (aside: string, path: string) => {
+    try {
+      linkSync(aside, path);
+    } catch (error) {
+      if (!failedWith(error, "EEXIST")) throw error;
+    }
+  };
   const pruneOne = (name: string) => {
     const path = resolve(directory, name);
     if (!name.endsWith(".json")) {
-      // What is left of a write that never finished.
+      // What is left of a write or a clear-out that never finished.
       const written = unlessGone(() => statSync(path).mtimeMs);
       if (written !== null && Date.now() - written > ABANDONED_TEMP_FILE_MS) {
         rmSync(path, { force: true });
       }
       return;
     }
-    let expired: boolean;
-    try {
-      const stored = read(path);
-      if (stored === null) return;
-      expired = hasExpired(stored);
-    } catch {
-      expired = true;
-    }
-    if (expired) rmSync(path, { force: true });
+    if (stateOf(path) !== "expired") return;
+    const aside = `${path}.${randomBytes(6).toString("hex")}.expired`;
+    if (unlessGone(() => renameSync(path, aside)) === null) return;
+    if (stateOf(aside) === "current") putBack(aside, path);
+    rmSync(aside, { force: true });
   };
   // Nothing touches the disk until the first room does.
   let prunedAt = 0;
