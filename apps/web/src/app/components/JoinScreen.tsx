@@ -1125,6 +1125,7 @@ function JoinScreen({
     const next = enforceShortCode
       ? sanitizeRoomCodeInput(raw).slice(0, ROOM_CODE_MAX_LENGTH)
       : extractRoomCode(raw);
+    setLinkCopied(false);
     onRoomIdChange(next);
   };
 
@@ -1547,18 +1548,38 @@ function JoinScreen({
                     />
                   ) : null}
                 </div>
-                <input
-                  type="text"
-                  value={normalizedRoomId}
-                  onChange={(e) => onCodeChange(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && canJoin) joinMeeting();
-                  }}
-                  placeholder="Enter a code or link"
-                  readOnly={isRoutedRoom}
-                  autoFocus={isRoutedRoom}
-                  className={FIELD}
-                />
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={normalizedRoomId}
+                    onChange={(e) => onCodeChange(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && canJoin) joinMeeting();
+                    }}
+                    placeholder="Enter a code or link"
+                    readOnly={isRoutedRoom}
+                    autoFocus={isRoutedRoom}
+                    className={`${FIELD} pr-12`}
+                  />
+                  {inviteLink ? (
+                    <button
+                      type="button"
+                      onClick={handleCopyLink}
+                      aria-label="Copy joining link"
+                      title="Copy joining link"
+                      className="absolute right-1.5 top-1/2 inline-flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-lg text-[#fafafa]/45 transition-colors duration-150 hover:bg-white/[0.06] hover:text-[#fafafa]/80"
+                    >
+                      {linkCopied ? (
+                        <Check size={16} aria-hidden="true" className="text-[#fafafa]/80" />
+                      ) : (
+                        <Link2 size={16} aria-hidden="true" />
+                      )}
+                    </button>
+                  ) : null}
+                  <span aria-live="polite" className="sr-only">
+                    {linkCopied ? "Link copied" : ""}
+                  </span>
+                </div>
                 <button
                   onClick={joinMeeting}
                   disabled={isLoading || !canJoin || !nameReady}
@@ -1567,23 +1588,6 @@ function JoinScreen({
                   Join
                 </button>
               </div>
-
-              {inviteLink && (
-                <button
-                  type="button"
-                  onClick={handleCopyLink}
-                  className="flex h-11 w-full items-center gap-2.5 rounded-xl border border-white/10 bg-white/[0.03] px-4 text-[13.5px] text-[#fafafa]/70 transition-colors duration-150 hover:bg-white/[0.06]"
-                >
-                  {linkCopied ? (
-                    <Check size={16} className="shrink-0 text-[#22c55e]" />
-                  ) : (
-                    <Link2 size={16} className="shrink-0 text-[#fafafa]/45" />
-                  )}
-                  <span className="truncate">
-                    {linkCopied ? "Link copied" : "Copy joining link"}
-                  </span>
-                </button>
-              )}
 
               {!isSignedInUser && (
                 <>
