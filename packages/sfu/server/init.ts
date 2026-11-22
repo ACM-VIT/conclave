@@ -109,13 +109,14 @@ export const initMediaSoup = async (
 export const initScheduledWebinars = (
   state: SfuState,
   persistence: ScheduledWebinarPersistence = createScheduledWebinarPersistence(),
-): void => {
+): Promise<void> => {
   state.scheduledWebinarPersistence = persistence;
-  importFallbackWebinars(persistence);
-  const loaded = loadPersistedSchedules(state.scheduledWebinars, persistence);
-  if (loaded > 0) {
-    Logger.info(`Restored ${loaded} scheduled webinar(s) from persistence`);
-  }
+  return importFallbackWebinars(persistence).then(() => {
+    const loaded = loadPersistedSchedules(state.scheduledWebinars, persistence);
+    if (loaded > 0) {
+      Logger.info(`Restored ${loaded} scheduled webinar(s) from persistence`);
+    }
+  });
 };
 
 export const initScheduledMeetings = (

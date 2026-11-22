@@ -48,6 +48,9 @@ export const assertSqliteWritable = (db: SqliteDatabase, path: string): void => 
 
 const LOCKED = /database is locked|SQLITE_BUSY/i;
 
+export const isSqliteLockedError = (error: unknown): boolean =>
+  LOCKED.test(error instanceof Error ? error.message : String(error));
+
 /**
  * Two SFUs open the shared SQLite file together at boot, and one can hold its
  * write lock past the other's busy timeout. Retries a locked store with
@@ -62,9 +65,8 @@ export const retryWhileSqliteLocked = async <T>(
     try {
       return await step();
     } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      if (!LOCKED.test(reason) || Date.now() + delay > deadline) throw error;
-      Logger.warn(`SQLite is locked by another process (${reason}); retrying in ${delay} ms`);
+      if (!isSqliteLockedError(error) || Date.now() + delay > deadline) throw error;
+      Logger.warn(`SQLite is locked by another process (${error instanceof Error ? error.message : String(error)}); retrying in ${delay} ms`);
       await sleep(delay);
     }
   }

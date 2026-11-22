@@ -25,7 +25,7 @@ import {
 } from "./redisPersistence.js";
 import { canonicalizeClientId } from "./clientIds.js";
 import { assertSqliteWritable } from "./sqliteWriteCheck.js";
-import { markFallbackImported, mergeNewerRecords, pendingFallbackFiles } from "./fallbackImport.js";
+import { describeEntry, importFallbackFiles, requireArray, requireRecord } from "./fallbackImport.js";
 
 type MaybePromise<T> = T | Promise<T>;
 
@@ -510,6 +510,7 @@ export const listScheduledMeetings = (
 export type ScheduledMeetingPersistence = {
   save: (snapshot: ScheduledMeeting[]) => MaybePromise<void>;
   saveChanged?: (meetings: ScheduledMeeting[]) => MaybePromise<void>;
+  importIfNewer?: (meeting: ScheduledMeeting) => MaybePromise<boolean>;
   deleteIds?: (ids: string[]) => MaybePromise<void>;
   reserveBookingSlot?: (
     reservation: BookingSlotReservation,
@@ -714,7 +715,7 @@ const createSqliteScheduledMeetingPersistence = (
       ON scheduled_meetings(status, scheduled_start_at);
   `);
 
-  const insert = db.prepare(`
+  const upsertSql = (guard: ">=" | ">") => `
     INSERT INTO scheduled_meetings (
       id, client_id, room_code, status, scheduled_start_at,
       scheduled_end_at, updated_at, payload_json
@@ -727,8 +728,10 @@ const createSqliteScheduledMeetingPersistence = (
       scheduled_end_at = excluded.scheduled_end_at,
       updated_at = excluded.updated_at,
       payload_json = excluded.payload_json
-    WHERE excluded.updated_at >= scheduled_meetings.updated_at
-  `);
+    WHERE excluded.updated_at ${guard} scheduled_meetings.updated_at
+  `;
+  const insert = db.prepare(upsertSql(">="));
+  const insertIfNewer = db.prepare(upsertSql(">"));
   const loadRows = db.prepare(`
     SELECT payload_json
     FROM scheduled_meetings
@@ -737,8 +740,8 @@ const createSqliteScheduledMeetingPersistence = (
   const deleteById = db.prepare("DELETE FROM scheduled_meetings WHERE id = ?");
   let knownIds = new Set<string>();
 
-  const upsertMeeting = (meeting: ScheduledMeeting): void => {
-    insert.run(
+  const upsertMeeting = (meeting: ScheduledMeeting, statement = insert): boolean => {
+    const result = statement.run(
       meeting.id,
       meeting.clientId,
       meeting.roomCode,
@@ -747,7 +750,8 @@ const createSqliteScheduledMeetingPersistence = (
       meeting.scheduledEndAt,
       meeting.updatedAt,
       JSON.stringify(meeting),
-    );
+    ) as { changes: number | bigint };
+    return Number(result.changes) > 0;
   };
 
   return {
@@ -787,6 +791,11 @@ const createSqliteScheduledMeetingPersistence = (
         } catch {}
         Logger.error("Failed to persist changed scheduled meetings", error);
       }
+    },
+    importIfNewer: (meeting) => {
+      const applied = upsertMeeting(meeting, insertIfNewer);
+      if (applied) knownIds.add(meeting.id);
+      return applied;
     },
     deleteIds: (ids) => {
       if (ids.length === 0) return;
@@ -918,6 +927,18 @@ redis.call("HSET", key, meetingId, nextPayload)
 return nextPayload
 `;
 
+const IMPORT_MEETING_IF_NEWER_SCRIPT = `
+local current = redis.call("HGET", KEYS[1], ARGV[1])
+if current then
+  local ok, stored = pcall(cjson.decode, current)
+  if ok and type(stored) == "table" and (tonumber(stored["updatedAt"]) or 0) >= (tonumber(ARGV[2]) or 0) then
+    return 0
+  end
+end
+redis.call("HSET", KEYS[1], ARGV[1], ARGV[3])
+return 1
+`;
+
 const bookingSlotLockTtlMs = (): number => {
   const parsed = Number(process.env.SFU_BOOKING_SLOT_LOCK_TTL_MS);
   return Number.isFinite(parsed) && parsed >= 1000 ? parsed : 30000;
@@ -940,6 +961,7 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
   private started = false;
   private pendingWrite: Promise<void> = Promise.resolve();
   private knownMeetings = new Map<string, ScheduledMeeting>();
+  private firstLoad: Promise<unknown> | null = null;
 
   constructor(options: {
     redisUrl: string;
@@ -1016,6 +1038,23 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
     this.queueWrite("delete meetings", async () => {
       await this.client.hDel(this.key, ids);
     });
+  }
+
+  /** load() copies SQLite into Redis only while the hash is empty, so it must run before the first import. */
+  async importIfNewer(meeting: ScheduledMeeting): Promise<boolean> {
+    await (this.firstLoad ??= this.load());
+    await this.start();
+    const applied = await this.client.sendCommand([
+      "EVAL",
+      IMPORT_MEETING_IF_NEWER_SCRIPT,
+      "1",
+      this.key,
+      meeting.id,
+      String(meeting.updatedAt),
+      JSON.stringify(meeting),
+    ]);
+    await this.fallback.importIfNewer?.(meeting);
+    return Number(applied) === 1;
   }
 
   async reserveBookingSlot(
@@ -1193,20 +1232,17 @@ export const createScheduledMeetingPersistence = (): ScheduledMeetingPersistence
   return sqlitePersistence;
 };
 
-export const importFallbackMeetings = async (
+export const importFallbackMeetings = (
   persistence: ScheduledMeetingPersistence,
 ): Promise<number> => {
-  const files = pendingFallbackFiles("scheduled-meetings.json");
-  if (files.length === 0) return 0;
-  const incoming = files.flatMap((file) => createFileScheduledMeetingPersistence(file).load() as ScheduledMeeting[]);
-  const { merged, changed } = mergeNewerRecords(await persistence.load(), incoming, (meeting) => meeting.id);
-  if (changed.length > 0) {
-    await (persistence.saveChanged ? persistence.saveChanged(changed) : persistence.save(merged));
-    await persistence.flush?.();
-  }
-  files.forEach(markFallbackImported);
-  Logger.warn(`Imported ${changed.length} scheduled meeting(s) from ${files.length} JSON fallback file(s)`);
-  return changed.length;
+  const importIfNewer = persistence.importIfNewer?.bind(persistence);
+  return importFallbackFiles({
+    fileName: "scheduled-meetings.json",
+    noun: "scheduled meeting",
+    records: (data) => requireArray(data, "scheduled meetings"),
+    describe: describeEntry("meeting"),
+    importIfNewer: importIfNewer && ((entry) => importIfNewer(requireRecord(normalizeStoredMeeting(entry), "meeting"))),
+  });
 };
 
 export const loadPersistedMeetings = (

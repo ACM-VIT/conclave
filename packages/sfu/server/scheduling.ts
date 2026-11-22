@@ -32,7 +32,7 @@ import {
   CONCLAVE_CLIENT_ID,
 } from "./clientIds.js";
 import { assertSqliteWritable } from "./sqliteWriteCheck.js";
-import { markFallbackImported, mergeNewerRecords, pendingFallbackFiles } from "./fallbackImport.js";
+import { importFallbackFiles, requireArray } from "./fallbackImport.js";
 
 type MaybePromise<T> = T | Promise<T>;
 
@@ -68,8 +68,19 @@ type SchedulingSnapshot = {
   calendars: SchedulingCalendarConnection[];
 };
 
+type SchedulingRecordKind = "profile" | "availability" | "event_type" | "calendar";
+
+export type SchedulingRecordWrite = {
+  kind: SchedulingRecordKind;
+  id: string;
+  clientId: string;
+  updatedAt: number;
+  payload: unknown;
+};
+
 export type SchedulingPersistence = {
   save: (snapshot: SchedulingSnapshot) => MaybePromise<void>;
+  importIfNewer?: (record: SchedulingRecordWrite) => MaybePromise<boolean>;
   load: () => MaybePromise<SchedulingSnapshot>;
   close?: () => MaybePromise<void>;
   flush?: () => Promise<void>;
@@ -1103,6 +1114,21 @@ const createSqliteSchedulingPersistence = (
       payload_json = excluded.payload_json
     WHERE excluded.updated_at >= scheduling_records.updated_at
   `);
+  const upsertIfNewer = db.prepare(`
+    INSERT INTO scheduling_records (kind, id, client_id, updated_at, payload_json)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(kind, id) DO UPDATE SET
+      client_id = excluded.client_id,
+      updated_at = excluded.updated_at,
+      payload_json = excluded.payload_json
+    WHERE excluded.updated_at > CASE scheduling_records.kind
+      WHEN 'availability' THEN COALESCE(
+        json_extract(scheduling_records.payload_json, '$.availability.updatedAt'),
+        scheduling_records.updated_at
+      )
+      ELSE scheduling_records.updated_at
+    END
+  `);
   const deleteAll = db.prepare("DELETE FROM scheduling_records");
   const loadRows = db.prepare(`
     SELECT kind, payload_json
@@ -1160,6 +1186,16 @@ const createSqliteSchedulingPersistence = (
         } catch {}
         Logger.error("Failed to persist scheduling records", error);
       }
+    },
+    importIfNewer: (record) => {
+      const result = upsertIfNewer.run(
+        record.kind,
+        record.id,
+        record.clientId,
+        record.updatedAt,
+        JSON.stringify(record.payload),
+      ) as { changes: number | bigint };
+      return Number(result.changes) > 0;
     },
     load: () => {
       const snapshot: SchedulingSnapshot = {
@@ -1250,9 +1286,14 @@ local id = ARGV[1]
 local tombstoneId = ARGV[2]
 local incomingUpdatedAt = tonumber(ARGV[3]) or 0
 local payload = ARGV[4]
+local onlyIfNewer = ARGV[5] == "newer"
 
-local deletedAt = tonumber(redis.call("HGET", tombstonesKey, tombstoneId) or "0") or 0
-if deletedAt > incomingUpdatedAt then
+local function keepsStored(storedAt)
+  return storedAt > incomingUpdatedAt or (onlyIfNewer and storedAt == incomingUpdatedAt)
+end
+
+local deletedAt = redis.call("HGET", tombstonesKey, tombstoneId)
+if deletedAt and keepsStored(tonumber(deletedAt) or 0) then
   return 0
 end
 
@@ -1261,7 +1302,7 @@ if current then
   local ok, decoded = pcall(cjson.decode, current)
   if ok and decoded then
     local currentUpdatedAt = tonumber(decoded.updatedAt or 0) or 0
-    if currentUpdatedAt > incomingUpdatedAt then
+    if keepsStored(currentUpdatedAt) then
       return 0
     end
   end
@@ -1308,6 +1349,7 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
   private knownAvailabilityIds = new Set<string>();
   private knownEventTypeIds = new Set<string>();
   private knownCalendarIds = new Set<string>();
+  private firstLoad: Promise<unknown> | null = null;
 
   constructor(options: {
     redisUrl: string;
@@ -1413,6 +1455,34 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
         this.deleteRecords(this.calendarsKey, "calendar", deletedCalendarIds),
       ]);
     });
+  }
+
+  async importIfNewer(record: SchedulingRecordWrite): Promise<boolean> {
+    await (this.firstLoad ??= this.load());
+    await this.start();
+    const applied = await this.client.sendCommand([
+      "EVAL",
+      UPSERT_SCHEDULING_RECORD_SCRIPT,
+      "2",
+      this.recordKeys[record.kind],
+      this.tombstonesKey,
+      record.id,
+      `${record.kind}:${record.id}`,
+      String(record.updatedAt),
+      JSON.stringify({ updatedAt: record.updatedAt, payload: record.payload }),
+      "newer",
+    ]);
+    await this.fallback.importIfNewer?.(record);
+    return Number(applied) === 1;
+  }
+
+  private get recordKeys(): Record<SchedulingRecordKind, string> {
+    return {
+      profile: this.profilesKey,
+      availability: this.availabilityKey,
+      event_type: this.eventTypesKey,
+      calendar: this.calendarsKey,
+    };
   }
 
   async load(): Promise<SchedulingSnapshot> {
@@ -1628,34 +1698,107 @@ export const persistScheduling = (
   );
 };
 
-export const importFallbackScheduling = async (
+type SchedulingFallbackEntry = {
+  kind: SchedulingRecordKind;
+  entry: unknown;
+  profilesById: Map<unknown, Record<string, unknown>>;
+};
+
+const finiteNumber = (value: unknown): number | null =>
+  typeof value === "number" && Number.isFinite(value) ? value : null;
+
+const requireString = (record: Record<string, unknown>, field: string): string => {
+  const value = record[field];
+  if (typeof value !== "string" || !value) throw new Error(`${field} is missing`);
+  return value;
+};
+
+const requireUpdatedAt = (record: Record<string, unknown>): number => {
+  const updatedAt = finiteNumber(record.updatedAt);
+  if (updatedAt === null) throw new Error("updatedAt is missing");
+  return updatedAt;
+};
+
+const schedulingFallbackEntries = (data: unknown): SchedulingFallbackEntry[] => {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    throw new Error("expected a scheduling snapshot object");
+  }
+  const file = data as Record<string, unknown>;
+  const listOf = (field: string): unknown[] =>
+    file[field] === undefined ? [] : requireArray(file[field], field);
+  const profiles = listOf("profiles");
+  const profilesById = new Map(
+    profiles.map((profile) => {
+      const record = (profile ?? {}) as Record<string, unknown>;
+      return [record.id, record];
+    }),
+  );
+  const tag = (kind: SchedulingRecordKind, entries: unknown[]) =>
+    entries.map((entry) => ({ kind, entry, profilesById }));
+  return [
+    ...tag("profile", profiles),
+    ...tag("availability", listOf("availability")),
+    ...tag("event_type", listOf("eventTypes")),
+    ...tag("calendar", listOf("calendars")),
+  ];
+};
+
+/** Hours without their own updatedAt take their profile's, which every hours edit bumps, else 0 so they only fill a gap. */
+const schedulingRecordFromFallback = ({
+  kind,
+  entry,
+  profilesById,
+}: SchedulingFallbackEntry): SchedulingRecordWrite => {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    throw new Error("not an object");
+  }
+  const record = entry as Record<string, unknown>;
+  if (kind === "availability") {
+    const profileId = requireString(record, "profileId");
+    const hours = record.availability;
+    if (!hours || typeof hours !== "object") throw new Error("availability is missing");
+    const profile = profilesById.get(profileId);
+    return {
+      kind,
+      id: profileId,
+      clientId: normalizeSnapshotClientId(profile?.clientId),
+      updatedAt:
+        finiteNumber((hours as Record<string, unknown>).updatedAt) ??
+        finiteNumber(profile?.updatedAt) ??
+        0,
+      payload: { profileId, availability: hours },
+    };
+  }
+  const clientId = normalizeSnapshotClientId(record.clientId);
+  const updatedAt = requireUpdatedAt(record);
+  if (kind === "calendar") {
+    return { kind, id: requireString(record, "profileId"), clientId, updatedAt, payload: { ...record, clientId } };
+  }
+  if (kind === "event_type") {
+    requireString(record, "profileId");
+    requireString(record, "slug");
+  } else {
+    requireString(record, "userId");
+    requireString(record, "username");
+  }
+  return { kind, id: requireString(record, "id"), clientId, updatedAt, payload: { ...record, clientId } };
+};
+
+export const importFallbackScheduling = (
   persistence: SchedulingPersistence,
 ): Promise<number> => {
-  const files = pendingFallbackFiles("scheduling.json");
-  if (files.length === 0) return 0;
-  const snapshot = await persistence.load();
-  let imported = 0;
-  for (const file of files) {
-    const incoming = (await createFileSchedulingPersistence(file).load());
-    const profiles = mergeNewerRecords(snapshot.profiles, incoming.profiles, (profile) => profile.id);
-    const eventTypes = mergeNewerRecords(snapshot.eventTypes, incoming.eventTypes, (eventType) => eventType.id);
-    const calendars = mergeNewerRecords(snapshot.calendars, incoming.calendars, (calendar) => calendar.profileId);
-    const availability = incoming.availability.filter(
-      (entry) => !snapshot.availability.some((current) => current.profileId === entry.profileId),
-    );
-    snapshot.profiles = profiles.merged;
-    snapshot.eventTypes = eventTypes.merged;
-    snapshot.calendars = calendars.merged;
-    snapshot.availability = [...snapshot.availability, ...availability];
-    imported += profiles.changed.length + eventTypes.changed.length + calendars.changed.length + availability.length;
-  }
-  if (imported > 0) {
-    await persistence.save(snapshot);
-    await persistence.flush?.();
-  }
-  files.forEach(markFallbackImported);
-  Logger.warn(`Imported ${imported} scheduling record(s) from ${files.length} JSON fallback file(s)`);
-  return imported;
+  const importIfNewer = persistence.importIfNewer?.bind(persistence);
+  return importFallbackFiles({
+    fileName: "scheduling.json",
+    noun: "scheduling record",
+    records: schedulingFallbackEntries,
+    describe: ({ kind, entry }, index) => {
+      const record = (entry ?? {}) as Record<string, unknown>;
+      const id = record.id ?? record.profileId;
+      return typeof id === "string" ? `${kind} ${id}` : `${kind} #${index + 1}`;
+    },
+    importIfNewer: importIfNewer && ((entry) => importIfNewer(schedulingRecordFromFallback(entry))),
+  });
 };
 
 export const loadPersistedScheduling = (

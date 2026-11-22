@@ -21,7 +21,7 @@ import {
 } from "./webinar.js";
 import { canonicalizeClientId } from "./clientIds.js";
 import { assertSqliteWritable } from "./sqliteWriteCheck.js";
-import { markFallbackImported, mergeNewerRecords, pendingFallbackFiles } from "./fallbackImport.js";
+import { describeEntry, importFallbackFiles, requireArray, requireRecord } from "./fallbackImport.js";
 
 const DEFAULT_EARLY_ENTRY_MINUTES = 10;
 const MAX_EARLY_ENTRY_MINUTES = 240;
@@ -266,6 +266,7 @@ export const listScheduledWebinars = (
 export type ScheduledWebinarPersistence = {
   save: (snapshot: ScheduledWebinar[]) => void;
   saveChanged?: (webinars: ScheduledWebinar[]) => void;
+  importIfNewer?: (webinar: ScheduledWebinar) => boolean;
   deleteIds?: (ids: string[]) => void;
   load: () => ScheduledWebinar[];
   close?: () => void;
@@ -378,7 +379,7 @@ const createSqliteScheduledWebinarPersistence = (
       ON scheduled_webinars(status, scheduled_start_at);
   `);
 
-  const insert = db.prepare(`
+  const upsertSql = (guard: ">=" | ">") => `
     INSERT INTO scheduled_webinars (
       id,
       client_id,
@@ -399,8 +400,10 @@ const createSqliteScheduledWebinarPersistence = (
       scheduled_end_at = excluded.scheduled_end_at,
       updated_at = excluded.updated_at,
       payload_json = excluded.payload_json
-    WHERE excluded.updated_at >= scheduled_webinars.updated_at
-  `);
+    WHERE excluded.updated_at ${guard} scheduled_webinars.updated_at
+  `;
+  const insert = db.prepare(upsertSql(">="));
+  const insertIfNewer = db.prepare(upsertSql(">"));
   const loadRows = db.prepare(`
     SELECT payload_json
     FROM scheduled_webinars
@@ -409,8 +412,8 @@ const createSqliteScheduledWebinarPersistence = (
   const deleteById = db.prepare("DELETE FROM scheduled_webinars WHERE id = ?");
   let knownIds = new Set<string>();
 
-  const upsertWebinar = (webinar: ScheduledWebinar): void => {
-    insert.run(
+  const upsertWebinar = (webinar: ScheduledWebinar, statement = insert): boolean => {
+    const result = statement.run(
       webinar.id,
       webinar.clientId,
       webinar.roomId,
@@ -420,7 +423,8 @@ const createSqliteScheduledWebinarPersistence = (
       webinar.scheduledEndAt,
       webinar.updatedAt,
       JSON.stringify(webinar),
-    );
+    ) as { changes: number | bigint };
+    return Number(result.changes) > 0;
   };
 
   return {
@@ -460,6 +464,11 @@ const createSqliteScheduledWebinarPersistence = (
         } catch {}
         Logger.error("Failed to persist changed scheduled webinars", error);
       }
+    },
+    importIfNewer: (webinar) => {
+      const applied = upsertWebinar(webinar, insertIfNewer);
+      if (applied) knownIds.add(webinar.id);
+      return applied;
     },
     deleteIds: (ids) => {
       if (ids.length === 0) return;
@@ -593,18 +602,15 @@ const normalizeStoredWebinar = (raw: unknown): ScheduledWebinar | null => {
   };
 };
 
-export const importFallbackWebinars = (persistence: ScheduledWebinarPersistence): number => {
-  const files = pendingFallbackFiles("scheduled-webinars.json");
-  if (files.length === 0) return 0;
-  const incoming = files.flatMap((file) => createFileScheduledWebinarPersistence(file).load());
-  const { merged, changed } = mergeNewerRecords(persistence.load(), incoming, (webinar) => webinar.id);
-  if (changed.length > 0) {
-    if (persistence.saveChanged) persistence.saveChanged(changed);
-    else persistence.save(merged);
-  }
-  files.forEach(markFallbackImported);
-  Logger.warn(`Imported ${changed.length} scheduled webinar(s) from ${files.length} JSON fallback file(s)`);
-  return changed.length;
+export const importFallbackWebinars = (persistence: ScheduledWebinarPersistence): Promise<number> => {
+  const importIfNewer = persistence.importIfNewer?.bind(persistence);
+  return importFallbackFiles({
+    fileName: "scheduled-webinars.json",
+    noun: "scheduled webinar",
+    records: (data) => requireArray(data, "scheduled webinars"),
+    describe: describeEntry("webinar"),
+    importIfNewer: importIfNewer && ((entry) => importIfNewer(requireRecord(normalizeStoredWebinar(entry), "webinar"))),
+  });
 };
 
 export const loadPersistedSchedules = (
