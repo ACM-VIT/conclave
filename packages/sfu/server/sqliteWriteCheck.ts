@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -22,7 +23,8 @@ const rollbackIfOpen = (db: SqliteDatabase): void => {
  */
 export const assertSqliteWritable = (db: SqliteDatabase, path: string): void => {
   try {
-    const probe = join(dirname(path), `.write-check-${process.pid}`);
+    // Both SFU containers run as PID 1 on one volume, so the name must be unique.
+    const probe = join(dirname(path), `.write-check-${randomUUID()}`);
     writeFileSync(probe, "");
     unlinkSync(probe);
     db.exec("BEGIN IMMEDIATE");
