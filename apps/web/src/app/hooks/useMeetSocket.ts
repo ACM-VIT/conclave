@@ -246,6 +246,11 @@ type JoinInfo = {
 };
 
 const MAX_JOIN_ROOM_REDIRECTS = 1;
+const NETWORK_BLOCKED_ERROR: MeetError = {
+  code: "NETWORK_BLOCKED",
+  message: NETWORK_BLOCKED_MESSAGE,
+  recoverable: true,
+};
 const DEFAULT_SERVER_RESTART_NOTICE =
   "Meeting server is restarting. You will be reconnected automatically.";
 const ADMIN_NOTICE_DURATION_MS = 60000;
@@ -1518,11 +1523,7 @@ export function useMeetSocket({
           relayOnly: relayOnlyIceRef.current,
           roomId: currentRoomIdRef.current ?? undefined,
         });
-        setMeetError({
-          code: "NETWORK_BLOCKED",
-          message: NETWORK_BLOCKED_MESSAGE,
-          recoverable: true,
-        });
+        setMeetError(NETWORK_BLOCKED_ERROR);
         return;
       }
 
@@ -1551,6 +1552,14 @@ export function useMeetSocket({
       setMeetError,
     ],
   );
+
+  // A rejoin can finish while a direction is still blocked, and the warning
+  // holds the only Try again, so it stays until that direction connects.
+  const clearMeetErrorUnlessMediaBlocked = useCallback(() => {
+    setMeetError(
+      blockedMediaPathsRef.current.size > 0 ? NETWORK_BLOCKED_ERROR : null,
+    );
+  }, [setMeetError]);
 
   const noteMediaPathConnected = useCallback(
     (transportKind: "producer" | "consumer", transport: Transport) => {
@@ -7443,7 +7452,7 @@ export function useMeetSocket({
                 `[Meets] Connected to SFU in ${(performance.now() - joinStartTime).toFixed(0)}ms`,
               );
               setConnectionState("connected");
-              setMeetError(null);
+              clearMeetErrorUnlessMediaBlocked();
               serverRestartNoticeRef.current = null;
               setServerRestartNotice(null);
               intentionalDisconnectRef.current = false;
@@ -9169,6 +9178,7 @@ export function useMeetSocket({
       onTtsMessage,
       onSocketReady,
       applyJoinAnswerIceServers,
+      clearMeetErrorUnlessMediaBlocked,
     ],
   );
 
@@ -9345,7 +9355,7 @@ export function useMeetSocket({
               pendingIceServersRefresh = false;
               await refreshIceServersOnOpenSocket(reconnectRoomId);
             }
-            setMeetError(null);
+            clearMeetErrorUnlessMediaBlocked();
           }
           if (reconnectGeneration !== reconnectGenerationRef.current) return;
           if (intentionalDisconnectRef.current) return;
@@ -9420,7 +9430,7 @@ export function useMeetSocket({
           reconnectAttemptsRef.current = 0;
           manualReconnectRetryRequestedRef.current = false;
           updateReconnectRecoveryStatus(null);
-          setMeetError(null);
+          clearMeetErrorUnlessMediaBlocked();
           return;
         } catch (err) {
           if (reconnectGeneration !== reconnectGenerationRef.current) return;
@@ -9566,6 +9576,7 @@ export function useMeetSocket({
     currentRoomIdRef,
     ensureLiveLocalMediaForJoin,
     refreshIceServersOnOpenSocket,
+    clearMeetErrorUnlessMediaBlocked,
     getJoinMediaNeeds,
     intentionalDisconnectRef,
     joinOptionsRef,
