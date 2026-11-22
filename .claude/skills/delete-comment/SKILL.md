@@ -23,7 +23,9 @@ for n in $(gh pr list --state open --limit 200 --json number --jq '.[].number');
 done | sort -u > /tmp/open-pr-files.txt
 ```
 
-`gh pr diff --name-only` lists every file. `gh pr list --json files` stops at 100 files per PR.
+`gh pr diff --name-only` lists every file. `gh pr list --json files` stops at 100 files per PR. Compare whole paths (`grep -x`), since a bare substring match treats `eslint.config.mjs` as `apps/web/eslint.config.mjs`.
+
+A file that changed since a classification was made shifts its line numbers. Re-extract and re-check those files instead of trusting old line numbers.
 
 ## 2. List the comments
 
@@ -50,16 +52,16 @@ Read the code around every comment, and the symbols it names, before you judge i
 - **Excuse:** it justifies or apologises for a hacky, temporary or "for now" implementation. Workarounds, TODOs, FIXMEs, "too risky to change", "hack", "temporary", "we should" and "until X" belong here, as do suppressions that silence a real bug-catching lint or type rule. The hack needs a real fix.
 - **Stale:** it describes code, behavior, files or decisions that no longer match the code. Check it against the current code.
 - **Decision record:** it documents an important, non-obvious decision. That means why the code is this way, what was rejected, or an outside constraint (protocol, browser, vendor or platform) the code can't express. Ask whether a careful new maintainer would get the code wrong without it. A long explanation of our own code's behavior that a rename or a type could carry is a Tautology or an Excuse.
-- **Keep tooling:** a directive a tool reads. This means `eslint-disable` with a ` -- reason` for a style-only rule, `@ts-expect-error` with a description for a third-party type bug, `prettier-ignore`, `/// <reference>`, `@vitest-environment`, `#!` shebangs, `sourceMappingURL`, and `// swift-tools-version`. Swift `MARK:` is a Tautology unless a tool depends on it.
+- **Keep tooling:** a directive a tool reads. This means `eslint-disable` with a ` -- reason` for a style-only rule, `@ts-expect-error` with a description for a third-party type bug, `prettier-ignore`, `/// <reference>`, `@vitest-environment`, `#!` shebangs, `sourceMappingURL`, `// swift-tools-version`, Skip transpiler directives in Swift (`// SKIP SYMBOLFILE`, `// SKIP INSERT:`, `// SKIP DECLARE:`, `// SKIP REPLACE:`, `// SKIP NOWARN`, `// SKIP @...`), and the provenance hash lines the native icon generator writes. Never delete a Skip directive: the Android build depends on it. Swift `MARK:` is a Tautology unless a tool depends on it. A `swiftlint:` directive is Stale, because SwiftLint is not configured or run in this repo.
 - **Keep license:** a legal, license or attribution notice at the top of a file.
 
 Be honest: most comments are tautologies. When in doubt between a decision record and a tautology, ask the maintainer question again.
 
-Some files say GENERATED or "do not edit". Fix their comments in the generator, regenerate, and run that generator's `--check` script. Hashes the build depends on are Keep tooling.
+Some files say GENERATED or "do not edit". Fix their comments in the generator, regenerate, and run that generator's `--check` script. Hashes the build depends on are Keep tooling. Keep a GENERATED header only where a check reads it: `gen-native-icons.py` finds its Android drawable outputs by the header in the XML, but nothing reads the header in its Swift or Kotlin outputs. Editing `gen-native-icons.py` changes the generator SHA-256 inside every output, so regenerate and commit all of them together. Skip a generator whose output is in an open PR.
 
 ## 4. Act on each category
 
-- **Tautology, Stale:** delete it, with the blank lines it leaves behind. When a name was the reason for the comment, rename the symbol instead.
+- **Tautology, Stale:** delete it, with the blank lines it leaves behind. When a name was the reason for the comment, rename the symbol instead. A block left empty becomes `catch {}` (the lint config allows empty catches); check Swift `case` bodies, which must keep a statement. A trailing comment that ends a line after an operator (`? // note`) leaves the operator dangling, so join it to the next line.
 - **Excuse:** delete it and file one issue per hack. Group every comment about the same hack into one issue:
 
   ```sh
@@ -74,8 +76,11 @@ Some files say GENERATED or "do not edit". Fix their comments in the generator, 
 ## 5. Shrink the baselines
 
 ```sh
+pnpm -C apps/web exec next typegen
 pnpm comments:prune
 ```
+
+Run `next typegen` first: without the generated route types, the typed web lint fails and the prune stops before it writes anything.
 
 This runs `eslint --prune-suppressions` at the root and in `apps/web`, then `ratchet.mjs --update`. Both only lower counts.
 
