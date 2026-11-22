@@ -1,5 +1,6 @@
 package conclave.module
 
+import android.graphics.SurfaceTexture
 import android.os.Looper
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -117,6 +118,11 @@ private class CountingBuffer(private val bufferWidth: Int, private val bufferHei
     override fun release() { references.decrementAndGet() }
     override fun cropAndScale(cropX: Int, cropY: Int, cropWidth: Int, cropHeight: Int, scaleWidth: Int, scaleHeight: Int): VideoFrame.Buffer =
         throw UnsupportedOperationException()
+}
+
+private class CountingTexture : SurfaceTexture(0) {
+    val releases = AtomicInteger(0)
+    override fun release() { releases.incrementAndGet() }
 }
 
 @RunWith(RobolectricTestRunner::class)
@@ -838,5 +844,74 @@ class VideoRenderingTests {
         shadowOf(Looper.getMainLooper()).idle()
         assertEquals(RendererFrameSize(width = 360, height = 640), store.size(slotId = "p:r1"))
         assertNotEquals(0, store.revision)
+    }
+
+    private fun textureHost(): TextureVideoHost = TextureVideoHost(RuntimeEnvironment.getApplication(), backend)
+
+    @Test fun aTextureDestroyedUnderTheRendererIsReleasedOnlyOnceItsSurfaceIsGone() {
+        val host = textureHost()
+        val texture = CountingTexture()
+        host.onSurfaceTextureAvailable(texture, 320, 180)
+        backend.settle()
+        val gate = backend.park()
+        assertFalse("the view must not release a texture the render thread still draws into", host.onSurfaceTextureDestroyed(texture))
+        assertEquals(0, texture.releases.get())
+        assertEquals(0, backend.count("destroy"))
+        gate.countDown()
+        backend.settle()
+        assertEquals(listOf("create", "destroy surface-1"), backend.calls.toList())
+        assertEquals(1, texture.releases.get())
+    }
+
+    @Test fun aTextureThatArrivesWhileTheOldOneIsLettingGoIsAttachedOnceItHas() {
+        val host = textureHost()
+        val first = CountingTexture()
+        val second = CountingTexture()
+        host.onSurfaceTextureAvailable(first, 320, 180)
+        backend.settle()
+        val gate = backend.park()
+        host.onSurfaceTextureDestroyed(first)
+        host.onSurfaceTextureAvailable(second, 320, 180)
+        assertEquals(1, backend.count("create"))
+        gate.countDown()
+        backend.settle()
+        shadowOf(Looper.getMainLooper()).idle()
+        host.sink.onFrame(frame())
+        backend.settle()
+        assertEquals(listOf("create", "destroy surface-1", "create", "draw", "swap surface-2"), backend.calls.toList())
+        assertEquals(1, first.releases.get())
+        assertEquals(0, second.releases.get())
+        assertEveryFrameGivenBack()
+    }
+
+    @Test fun aTextureDestroyedAfterReleaseButBeforeEglLetsGoIsKeptUntilItHas() {
+        val host = textureHost()
+        val texture = CountingTexture()
+        val other = CountingTexture()
+        host.onSurfaceTextureAvailable(texture, 320, 180)
+        backend.settle()
+        val gate = backend.park()
+        host.release()
+        assertFalse(host.onSurfaceTextureDestroyed(texture))
+        assertTrue("a texture the renderer never had is the view's to release", host.onSurfaceTextureDestroyed(other))
+        assertEquals(0, texture.releases.get())
+        gate.countDown()
+        backend.settle()
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(1, backend.count("destroy"))
+        assertEquals(1, texture.releases.get())
+        assertEquals(0, other.releases.get())
+    }
+
+    @Test fun aTextureDestroyedAfterReleaseHasFinishedGoesBackToTheView() {
+        val host = textureHost()
+        val texture = CountingTexture()
+        host.onSurfaceTextureAvailable(texture, 320, 180)
+        host.release()
+        backend.settle()
+        shadowOf(Looper.getMainLooper()).idle()
+        assertTrue(host.onSurfaceTextureDestroyed(texture))
+        assertEquals(0, texture.releases.get())
+        assertEquals(1, backend.count("destroy"))
     }
 }
