@@ -709,6 +709,31 @@ describe("bounds", () => {
     expect(await hostTab.query("countMarks", { id: "b" })).toEqual({ ok: true, value: { count: 3 } });
   });
 
+  it("keeps nothing from a handler that ran out of budget, even one that carries on", async () => {
+    const room = new Harness([probeAuthority], {
+      runtime: { limits: { ...DEFAULT_AUTHORITY_LIMITS, transactionOps: 1_000 } },
+    });
+    const hostTab = await room.open(host, probeContract);
+    for (const from of [0, 200, 400]) {
+      await hostTab.act("mark", { id: "a", from, count: 200, shown: false });
+    }
+    const marks = async () => {
+      const counted = await hostTab.query("countMarks", { id: "a" });
+      return counted.ok ? field(counted.value, "count") : null;
+    };
+
+    // It deletes a few rows, runs out on the scan of all 600, catches the
+    // error and returns as if all were well.
+    const carriedOn = await hostTab.act("unmark", {
+      id: "a",
+      how: "one at a time, whatever goes wrong",
+    });
+    const afterLoop = await marks();
+
+    expect(carriedOn).toEqual({ ok: false, code: "app-fault" });
+    expect(afterLoop).toBe(600);
+  });
+
   it("shows a handler its own clear at once, and keeps what it writes afterwards", async () => {
     const room = new Harness([probeAuthority]);
     const hostTab = await room.open(host, probeContract);

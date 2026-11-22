@@ -43,10 +43,19 @@ export const key = (...parts: readonly string[]): TableKey => {
   return joined as TableKey;
 };
 
-/** The first part of a key: the group prefix scans are indexed by. */
-export const keyGroup = (tableKey: TableKey): string => {
-  const end = tableKey.indexOf(KEY_SEPARATOR);
-  return end === -1 ? tableKey : tableKey.slice(0, end);
+/**
+ * Every prefix a key sits under, shortest first, without the key itself:
+ * `key(a, b, c)` gives `key(a)` and `key(a, b)`. These are what a store
+ * indexes a row by, so reading under any prefix costs the rows it holds.
+ */
+export const keyPrefixes = (tableKey: TableKey): TableKey[] => {
+  const prefixes: TableKey[] = [];
+  let end = tableKey.indexOf(KEY_SEPARATOR);
+  while (end !== -1) {
+    prefixes.push(tableKey.slice(0, end) as TableKey);
+    end = tableKey.indexOf(KEY_SEPARATOR, end + 1);
+  }
+  return prefixes;
 };
 
 export const keyHasPrefix = (tableKey: TableKey, prefix: TableKey): boolean =>

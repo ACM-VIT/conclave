@@ -1,8 +1,8 @@
 import { boundedJsonBytes } from "@conclave/apps-sdk/authority";
 import {
   AuthorityRejection,
-  keyGroup,
   keyHasPrefix,
+  keyPrefixes,
   type RuntimeDefinition,
   type RuntimeRead,
   type RuntimeTransaction,
@@ -42,12 +42,6 @@ const BULK_ROWS_PER_OP = 64;
 const DELETED = Symbol("deleted");
 type Staged = Row | typeof DELETED;
 
-/**
- * What a transaction cleared in one table: whole groups, and prefixes longer
- * than a group. None is inside another. Groups are the common case, a
- * parent's rows, and are looked up in one step.
- */
-type Cleared = { groups: Set<string>; longer: TableKey[] };
 
 const deepFreeze = (value: unknown): void => {
   if (value === null || typeof value !== "object") return;
@@ -69,57 +63,60 @@ const sealed = (row: Row): Row => {
 class TableStore {
   /** Insertion order is scan order. */
   readonly rows = new Map<TableKey, Row>();
-  /** First key part to the keys under it, so a prefix scan skips the rest. */
-  private readonly groups = new Map<string, Set<TableKey>>();
+  /**
+   * Every prefix with rows under it, to those rows' keys in the order they
+   * were written. A row whose own key is such a prefix is in its set too.
+   * Reading, counting or clearing under any prefix therefore costs the rows
+   * it holds and nothing more, whatever else shares the first part of the
+   * key. A prefix with no set holds at most the row of its own key.
+   */
+  private readonly under = new Map<TableKey, Set<TableKey>>();
 
   keysUnder(prefix: TableKey | undefined): Iterable<TableKey> {
     if (prefix === undefined) return this.rows.keys();
-    const group = this.groups.get(keyGroup(prefix));
-    if (!group) return [];
-    if (keyGroup(prefix) === prefix) return group;
-    return [...group].filter((key) => keyHasPrefix(key, prefix));
+    return this.under.get(prefix) ?? (this.rows.has(prefix) ? [prefix] : []);
+  }
+
+  countUnder(prefix: TableKey | undefined): number {
+    if (prefix === undefined) return this.rows.size;
+    return this.under.get(prefix)?.size ?? (this.rows.has(prefix) ? 1 : 0);
   }
 
   set(key: TableKey, row: Row): void {
     if (!this.rows.has(key)) {
-      const groupId = keyGroup(key);
-      const group = this.groups.get(groupId);
-      if (group) group.add(key);
-      else this.groups.set(groupId, new Set([key]));
+      for (const prefix of keyPrefixes(key)) {
+        let keys = this.under.get(prefix);
+        if (!keys) {
+          // A row already written under the prefix's own key came first.
+          keys = new Set(this.rows.has(prefix) ? [prefix] : []);
+          this.under.set(prefix, keys);
+        }
+        keys.add(key);
+      }
+      // The key is itself the prefix of rows written before it.
+      this.under.get(key)?.add(key);
     }
     this.rows.set(key, row);
   }
 
   delete(key: TableKey): void {
     if (!this.rows.delete(key)) return;
-    const groupId = keyGroup(key);
-    const group = this.groups.get(groupId);
-    group?.delete(key);
-    if (group?.size === 0) this.groups.delete(groupId);
-  }
-
-  countUnder(prefix: TableKey | undefined): number {
-    if (prefix === undefined) return this.rows.size;
-    const group = this.groups.get(keyGroup(prefix));
-    if (!group) return 0;
-    if (keyGroup(prefix) === prefix) return group.size;
-    let count = 0;
-    for (const key of group) if (keyHasPrefix(key, prefix)) count += 1;
-    return count;
+    this.under.get(key)?.delete(key);
+    for (const prefix of keyPrefixes(key)) {
+      const keys = this.under.get(prefix);
+      if (!keys) continue;
+      keys.delete(key);
+      // Nothing is left under it but, at most, the row of its own key.
+      if (keys.size === 0 || (keys.size === 1 && keys.has(prefix))) {
+        this.under.delete(prefix);
+      }
+    }
   }
 
   /** Removes every row under `prefix` and returns the keys it removed. */
   deleteUnder(prefix: TableKey): TableKey[] {
-    const groupId = keyGroup(prefix);
-    const group = this.groups.get(groupId);
-    if (!group) return [];
-    const keys =
-      groupId === prefix
-        ? [...group]
-        : [...group].filter((key) => keyHasPrefix(key, prefix));
-    for (const key of keys) this.rows.delete(key);
-    if (keys.length === group.size) this.groups.delete(groupId);
-    else for (const key of keys) group.delete(key);
+    const keys = [...this.keysUnder(prefix)];
+    for (const key of keys) this.delete(key);
     return keys;
   }
 }
@@ -231,6 +228,8 @@ export class AuthorityStore {
     try {
       value = run(draft);
     } catch (error) {
+      // Out of budget is a fault whatever the handler threw on its way out.
+      if (draft.overBudget) return { ok: false, kind: "fault", error: draft.overBudget };
       if (error instanceof AuthorityRejection) {
         return { ok: false, kind: "rejected", reason: error.reason };
       }
@@ -239,15 +238,18 @@ export class AuthorityStore {
       }
       return { ok: false, kind: "fault", error };
     }
+    // A handler that caught the budget error and returned all the same did
+    // not get the work it asked for. Nothing it staged is kept.
+    if (draft.overBudget) return { ok: false, kind: "fault", error: draft.overBudget };
     return { ok: true, value, changed: commit ? this.commit(draft) : false };
   }
 
   private commit(draft: Draft): boolean {
     let changed = false;
     // Clears first: what a handler wrote under a prefix after clearing it stays.
-    for (const [tableName, cleared] of draft.clears) {
+    for (const [tableName, prefixes] of draft.clears) {
       const table = this.table(tableName);
-      for (const prefix of [...cleared.groups, ...cleared.longer] as TableKey[]) {
+      for (const prefix of prefixes) {
         const keys = table.deleteUnder(prefix);
         if (keys.length === 0) continue;
         changed = true;
@@ -287,16 +289,24 @@ export class AuthorityStore {
   }
 }
 
-/** Staged writes with read-your-writes. Dropped whole on any throw. */
+/**
+ * Staged writes with read-your-writes. Dropped whole on any throw, and
+ * dropped whole once the budget is spent, whatever the handler does next.
+ */
 class Draft implements RuntimeTransaction {
   readonly writes = new Map<string, Map<TableKey, Staged>>();
   /**
-   * What was cleared so far, by table. A staged write is always newer than
-   * the clear that covers its key: clearing drops the staged writes under it.
+   * Prefixes cleared so far, by table, none of them inside another. A staged
+   * write is always newer than the clear that covers its key: clearing drops
+   * the staged writes under it.
    */
-  readonly clears = new Map<string, Cleared>();
+  readonly clears = new Map<string, Set<TableKey>>();
   readonly timerWrites = new Map<TableKey, TimerEntry | typeof DELETED>();
+  /** Set once the budget is spent. The transaction can no longer commit. */
+  overBudget: Error | null = null;
   private ops = 0;
+  /** Rows each touched table holds as this transaction sees it. */
+  private readonly rowCounts = new Map<string, number>();
 
   constructor(
     private readonly store: AuthorityStore,
@@ -304,59 +314,88 @@ class Draft implements RuntimeTransaction {
     private readonly limits: AuthorityLimits,
   ) {}
 
+  /**
+   * Charges work to the transaction. Every call is made before the work it
+   * pays for takes effect, so a transaction that runs out has staged nothing
+   * it could not afford.
+   */
   private spend(cost = 1): void {
     this.ops += cost;
-    if (this.ops > this.limits.transactionOps) {
-      throw new Error("Transaction exceeded its operation budget");
+    if (this.overBudget || this.ops > this.limits.transactionOps) {
+      this.overBudget ??= new Error("Transaction exceeded its operation budget");
+      throw this.overBudget;
     }
+  }
+
+  /** The cost of passing over rows without handing them to the handler. */
+  private spendOnWalk(rows: number): void {
+    const cost = Math.floor(rows / BULK_ROWS_PER_OP);
+    if (cost > 0) this.spend(cost);
   }
 
   private staged(table: string, key: TableKey): Staged | undefined {
     return this.writes.get(table)?.get(key);
   }
 
+  /** The row a read sees, at no charge. */
+  private peek(table: string, key: TableKey): Row | undefined {
+    const staged = this.staged(table, key);
+    if (staged !== undefined) return staged === DELETED ? undefined : staged;
+    return this.isCleared(table, key) ? undefined : this.store.get(table, key);
+  }
+
+  private rowCount(table: string): number {
+    return this.rowCounts.get(table) ?? this.store.table(table).rows.size;
+  }
+
   private stage(table: string, key: TableKey, value: Staged): void {
+    const existed = this.peek(table, key) !== undefined;
     const writes = this.writes.get(table);
     if (writes) writes.set(key, value);
     else this.writes.set(table, new Map([[key, value]]));
+    const exists = value !== DELETED;
+    if (existed !== exists) {
+      this.rowCounts.set(table, this.rowCount(table) + (exists ? 1 : -1));
+    }
   }
 
   /** Whether a committed row with this key was cleared in this transaction. */
   private isCleared(table: string, key: TableKey): boolean {
     const cleared = this.clears.get(table);
     if (!cleared) return false;
-    return (
-      cleared.groups.has(keyGroup(key)) ||
-      cleared.longer.some((prefix) => keyHasPrefix(key, prefix))
-    );
+    return cleared.has(key) || keyPrefixes(key).some((prefix) => cleared.has(prefix));
   }
 
   get(table: string, key: TableKey): Row | undefined {
     this.spend();
-    const staged = this.staged(table, key);
-    if (staged !== undefined) return staged === DELETED ? undefined : staged;
-    return this.isCleared(table, key) ? undefined : this.store.get(table, key);
+    return this.peek(table, key);
   }
 
   count(table: string, prefix?: TableKey): number {
     this.spend();
-    return this.liveCount(table, prefix);
+    return prefix === undefined ? this.rowCount(table) : this.countUnder(table, prefix);
   }
 
-  /** Rows a read sees under `prefix`: committed and not cleared, or staged. */
-  private liveCount(table: string, prefix?: TableKey): number {
+  /**
+   * Rows a read sees under `prefix`: committed and not cleared, or staged.
+   * The committed part comes off the index. The staged writes and the
+   * clears have to be walked, and that walk is charged.
+   */
+  private countUnder(table: string, prefix: TableKey): number {
     const committed = this.store.table(table);
-    let total = committed.countUnder(prefix);
     const cleared = this.clears.get(table);
-    for (const gone of [...(cleared?.groups ?? []), ...(cleared?.longer ?? [])] as TableKey[]) {
-      if (prefix === undefined || keyHasPrefix(gone, prefix)) {
-        total -= committed.countUnder(gone);
-      } else if (keyHasPrefix(prefix, gone)) {
-        total = 0;
+    const writes = this.writes.get(table);
+    this.spendOnWalk((cleared?.size ?? 0) + (writes?.size ?? 0));
+
+    let total = 0;
+    if (!this.isCleared(table, prefix)) {
+      total = committed.countUnder(prefix);
+      for (const gone of cleared ?? []) {
+        if (keyHasPrefix(gone, prefix)) total -= committed.countUnder(gone);
       }
     }
-    for (const [key, staged] of this.writes.get(table) ?? []) {
-      if (prefix !== undefined && !keyHasPrefix(key, prefix)) continue;
+    for (const [key, staged] of writes ?? []) {
+      if (!keyHasPrefix(key, prefix)) continue;
       const exists = committed.rows.has(key) && !this.isCleared(table, key);
       if (staged === DELETED && exists) total -= 1;
       if (staged !== DELETED && !exists) total += 1;
@@ -367,11 +406,16 @@ class Draft implements RuntimeTransaction {
   scan(table: string, prefix?: TableKey): readonly (readonly [TableKey, Row])[] {
     const committed = this.store.table(table);
     const writes = this.writes.get(table);
+    const cleared = this.clears.get(table);
+    // Paid before the rows are read: the staged writes are all walked, and
+    // the committed rows under the prefix are each read or passed over.
+    this.spend(1);
+    this.spendOnWalk(writes?.size ?? 0);
     const result: (readonly [TableKey, Row])[] = [];
     let passedOver = 0;
     for (const key of committed.keysUnder(prefix)) {
       // A cleared row written again is a new row, and comes last.
-      if (this.isCleared(table, key)) {
+      if (cleared && this.isCleared(table, key)) {
         passedOver += 1;
         continue;
       }
@@ -386,7 +430,8 @@ class Draft implements RuntimeTransaction {
       if (prefix !== undefined && !keyHasPrefix(key, prefix)) continue;
       result.push([key, staged]);
     }
-    this.spend(result.length + 1 + Math.floor(passedOver / BULK_ROWS_PER_OP));
+    this.spend(result.length);
+    this.spendOnWalk(passedOver);
     return result;
   }
 
@@ -420,20 +465,31 @@ class Draft implements RuntimeTransaction {
   }
 
   clear(table: string, prefix: TableKey): number {
-    const removed = this.liveCount(table, prefix);
+    // Counted and paid for first. Nothing is staged until it is afforded.
+    this.spend();
+    const removed = this.countUnder(table, prefix);
+    this.spendOnWalk(removed);
+
+    const total = this.rowCount(table);
     const writes = this.writes.get(table);
     for (const key of [...(writes?.keys() ?? [])]) {
       if (keyHasPrefix(key, prefix)) writes?.delete(key);
     }
-    const cleared = this.clears.get(table) ?? { groups: new Set(), longer: [] };
-    this.clears.set(table, cleared);
-    if (!this.isCleared(table, prefix)) {
+    // Only a prefix with committed rows left under it has anything to
+    // remove at commit. Clearing an empty one is done already.
+    if (
+      !this.isCleared(table, prefix) &&
+      this.store.table(table).countUnder(prefix) > 0
+    ) {
+      const cleared = this.clears.get(table) ?? new Set<TableKey>();
+      this.clears.set(table, cleared);
       // The new prefix takes the place of any cleared before that lie inside it.
-      cleared.longer = cleared.longer.filter((held) => !keyHasPrefix(held, prefix));
-      if (keyGroup(prefix) === prefix) cleared.groups.add(prefix);
-      else cleared.longer.push(prefix);
+      for (const held of [...cleared]) {
+        if (keyHasPrefix(held, prefix)) cleared.delete(held);
+      }
+      cleared.add(prefix);
     }
-    this.spend(1 + Math.floor(removed / BULK_ROWS_PER_OP));
+    this.rowCounts.set(table, total - removed);
     return removed;
   }
 
