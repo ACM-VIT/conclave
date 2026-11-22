@@ -46,6 +46,7 @@ interface InCallNoticeSlotProps {
 }
 
 type NoticeView = "stack" | "list" | "sheet";
+type NoticeTone = "error" | "warning" | "neutral";
 
 interface Announcement {
   text: string;
@@ -169,13 +170,14 @@ function heightKeptBelow(target: Element) {
     const shrinksToContent =
       style.minHeight === "auto" && style.overflowX === "visible" && style.overflowY === "visible";
     const frame = ["paddingTop", "paddingBottom", "borderTopWidth", "borderBottomWidth"] as const;
+    const floor = frame.reduce((sum, side) => sum + (parseFloat(style[side]) || 0), 0);
+    const minHeight = parseFloat(style.minHeight) || 0;
     const minimum =
       style.flexShrink === "0" || shrinksToContent
         ? (sibling as HTMLElement).offsetHeight
-        : Math.max(
-            parseFloat(style.minHeight) || 0,
-            frame.reduce((sum, side) => sum + (parseFloat(style[side]) || 0), 0),
-          );
+        : style.boxSizing === "content-box"
+          ? minHeight + floor
+          : Math.max(minHeight, floor);
     kept += minimum + (parseFloat(style.marginTop) || 0) + (parseFloat(style.marginBottom) || 0);
   }
   return kept;
@@ -188,11 +190,14 @@ function panelRoom(target: HTMLElement) {
     ? target.getBoundingClientRect().top
     : (target.previousElementSibling?.getBoundingClientRect().bottom ?? panelRect.top);
   const padTop = parseFloat(getComputedStyle(target).paddingTop) || 0;
+  const contentBottom = panelRect.bottom - (parseFloat(getComputedStyle(panel).paddingBottom) || 0);
+  const viewport = window.visualViewport;
+  const visibleBottom = viewport ? viewport.offsetTop + viewport.height : window.innerHeight;
   return {
     panel,
     top,
     height: panelRect.height,
-    room: Math.floor(Math.min(panelRect.bottom, window.innerHeight) - top - padTop - heightKeptBelow(target)),
+    room: Math.floor(Math.min(contentBottom, visibleBottom) - top - padTop - heightKeptBelow(target)),
   };
 }
 
@@ -209,7 +214,14 @@ export default function InCallNoticeSlot({
   const listRef = useRef<HTMLDivElement>(null);
   const sheetRef = useRef<HTMLDialogElement>(null);
   const fullHeightsRef = useRef(new WeakMap<Element, { key: string; height: number }>());
-  const fullListHeightRef = useRef<{ key: string; height: number } | null>(null);
+  const listHeightsRef = useRef(new Map<string, number>());
+  const refocusRef = useRef(false);
+  const [host] = useState(() => {
+    if (typeof document === "undefined") return null;
+    const element = document.createElement("div");
+    element.className = "flex w-full flex-col items-center";
+    return element;
+  });
   const [lane, setLane] = useState<LaneState>(EMPTY_LANE);
   const [view, setView] = useState<NoticeView>("stack");
   const [announcements, setAnnouncements] = useState<ReadonlyMap<string, Announcement>>(
@@ -228,6 +240,15 @@ export default function InCallNoticeSlot({
   const scheduleRef = useRef<() => void>(() => {});
   const surface =
     view === "sheet" && sheetBody ? sheetBody : panelTarget && !lane.chip ? panelTarget : null;
+
+  useLayoutEffect(() => {
+    const parent = surface ?? columnRef.current;
+    if (!host || !parent) return;
+    if (host.parentElement !== parent) parent.append(host);
+    scheduleRef.current();
+  }, [host, surface]);
+
+  useEffect(() => () => host?.remove(), [host]);
 
   useLayoutEffect(() => {
     if (!overPanel) {
@@ -289,17 +310,14 @@ export default function InCallNoticeSlot({
       const urgent = items.some((item) => item.querySelector('[data-tone="error"]'));
       const slotRect = slot.getBoundingClientRect();
       const listContent = items.map(noticeContent).join("|");
-      const fullListHeight = (naturalWidth: number) => {
-        if (!laneRef.current.cramped) {
-          fullListHeightRef.current = {
-            key: `${Math.round(row.clientWidth)}:${listContent}`,
-            height: listHeight,
-          };
-          return listHeight;
+      const listHeights = listHeightsRef.current;
+      if (showsList && !laneRef.current.cramped) {
+        for (const key of listHeights.keys()) {
+          if (!key.endsWith(`:${listContent}`)) listHeights.delete(key);
         }
-        const cached = fullListHeightRef.current;
-        return cached?.key === `${Math.round(naturalWidth)}:${listContent}` ? cached.height : null;
-      };
+        listHeights.set(`${Math.round(row.clientWidth)}:${listContent}`, listHeight);
+      }
+      const fullListHeight = (width: number) => listHeights.get(`${Math.round(width)}:${listContent}`);
       const probeFullList = () =>
         commit({ ...laneRef.current, cramped: false, narrow: undefined, probing: true, count });
 
@@ -308,7 +326,7 @@ export default function InCallNoticeSlot({
         const inPanel = panelRoom(target);
         if (showsList) {
           const full = fullListHeight(row.clientWidth);
-          if (full === null) {
+          if (full === undefined) {
             probeFullList();
             return;
           }
@@ -361,31 +379,34 @@ export default function InCallNoticeSlot({
       const obstacles = collectObstacles(slot, slotRect, coversPanel ? panel : slot.parentElement);
 
       if (showsList) {
-        const full = fullListHeight(laneWidth);
-        if (full === null) {
+        const natural = fullListHeight(laneWidth);
+        if (natural === undefined) {
           probeFullList();
           return;
         }
-        const desired = full + TOGGLE_HEIGHT_PX;
         const spot = placeNoticeList(
           obstacles,
           bounds,
-          desired,
-          Math.min(desired, LIST_MIN_HEIGHT_PX + TOGGLE_HEIGHT_PX),
+          natural + TOGGLE_HEIGHT_PX,
+          Math.min(natural + TOGGLE_HEIGHT_PX, LIST_MIN_HEIGHT_PX + TOGGLE_HEIGHT_PX),
         );
         if (!spot) {
           openSheet();
           return;
         }
-        const height = Math.min(spot.height, desired);
-        commit({
+        const placed = {
           compact: false,
           offset: Math.max(0, spot.top - cssMinTop),
           count,
-          room: height - TOGGLE_HEIGHT_PX,
           narrow: narrowLane(spot, padLeft),
-          cramped: height < desired,
-        });
+        };
+        const full = placed.narrow ? fullListHeight(placed.narrow.width) : natural;
+        if (full === undefined) {
+          commit({ ...placed, room: spot.height - TOGGLE_HEIGHT_PX, cramped: false, probing: true });
+          return;
+        }
+        const height = Math.min(spot.height, full + TOGGLE_HEIGHT_PX);
+        commit({ ...placed, room: height - TOGGLE_HEIGHT_PX, cramped: height < full + TOGGLE_HEIGHT_PX });
         return;
       }
 
@@ -467,6 +488,7 @@ export default function InCallNoticeSlot({
         stage.addEventListener(type, schedule, { passive: true });
       }
     }
+    window.visualViewport?.addEventListener("resize", schedule);
     const interval = window.setInterval(() => {
       if (list.children.length > 0) schedule();
     }, REMEASURE_INTERVAL_MS);
@@ -475,6 +497,7 @@ export default function InCallNoticeSlot({
     return () => {
       cancelAnimationFrame(frame);
       window.clearInterval(interval);
+      window.visualViewport?.removeEventListener("resize", schedule);
       listMutations.disconnect();
       stageMutations.disconnect();
       stage?.removeEventListener("pointermove", scheduleFromPointer);
@@ -482,15 +505,16 @@ export default function InCallNoticeSlot({
       for (const type of revealEvents) stage?.removeEventListener(type, schedule);
       resizes.disconnect();
     };
-  }, [surface]);
+  }, [host]);
 
   const chipShown = Boolean(lane.chip);
   useLayoutEffect(() => {
     scheduleRef.current();
   }, [view, lane.compact, lane.cramped, lane.probing, chipShown, panelTarget]);
 
-  const announce = useCallback((text: string, urgent: boolean) => {
-    const key = `${urgent ? "alert" : "status"}:${text}`;
+  const announce = useCallback((text: string, tone: NoticeTone) => {
+    const key = `${tone}:${text}`;
+    const urgent = tone !== "neutral";
     const holders = (delta: number) =>
       setAnnouncements((prev) =>
         new Map(prev).set(key, { text, urgent, holders: (prev.get(key)?.holders ?? 0) + delta }),
@@ -506,6 +530,24 @@ export default function InCallNoticeSlot({
   const spoken = [...announcements].filter(([, entry]) => entry.holders > 0);
 
   const inSheet = view === "sheet";
+  const [sheetBaseline, setSheetBaseline] = useState<ReadonlySet<string> | null>(null);
+  if (inSheet && !sheetBaseline) setSheetBaseline(new Set(announcements.keys()));
+  if (!inSheet && sheetBaseline) setSheetBaseline(null);
+  const spokenInSheet = sheetBaseline ? spoken.filter(([key]) => !sheetBaseline.has(key)) : [];
+
+  useEffect(() => {
+    if (!refocusRef.current || view !== "stack") return;
+    refocusRef.current = false;
+    let frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => {
+        const target =
+          slotRef.current?.querySelector<HTMLElement>("[data-notice-toggle]") ??
+          host?.querySelector<HTMLElement>("button");
+        target?.focus();
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [view, host]);
   const isExpanded = inSheet || (view === "list" && lane.count > 1);
   const compact = inSheet ? false : isExpanded ? Boolean(lane.cramped) : lane.compact;
   const laneContext = useMemo(
@@ -526,6 +568,7 @@ export default function InCallNoticeSlot({
     more > 0 && !inlineCount && !inSheet && !chip ? (
       <button
         type="button"
+        data-notice-toggle
         onClick={toggleExpanded}
         aria-expanded={isExpanded}
         aria-label={isExpanded ? "Collapse notices" : `Show ${more} more notices`}
@@ -567,6 +610,7 @@ export default function InCallNoticeSlot({
         {inlineCount ? (
           <button
             type="button"
+            data-notice-toggle
             onClick={toggleExpanded}
             aria-expanded={false}
             aria-label={`Show ${more} more notices`}
@@ -584,12 +628,7 @@ export default function InCallNoticeSlot({
 
   return (
     <InCallNoticeLaneContext.Provider value={laneContext}>
-      {surface
-        ? createPortal(
-            <div className="flex w-full flex-col items-center">{laneContent}</div>,
-            surface,
-          )
-        : null}
+      {host ? createPortal(laneContent, host) : null}
       <div
         ref={slotRef}
         data-in-call-notices
@@ -626,30 +665,32 @@ export default function InCallNoticeSlot({
               ? "calc(env(safe-area-inset-top, 0px) + 92px)"
               : undefined,
           }}
-        >
-          {surface ? null : laneContent}
-        </div>
+        />
         {chip ? (
           <button
             type="button"
+            data-notice-toggle
             onClick={() => setView("sheet")}
             aria-label={lane.count === 1 ? "Show notice" : `Show ${lane.count} notices`}
-            className="pointer-events-auto absolute inline-flex h-10 items-center justify-center gap-1.5 rounded-full border border-[#fafafa]/10 bg-[#232327] px-3 text-[12px] font-medium tabular-nums text-[#fafafa] transition-colors duration-100 hover:bg-[#2a2a2f]"
-            style={{ left: chip.left, top: chip.top, minWidth: CHIP_HEIGHT_PX }}
+            className="pointer-events-auto absolute inline-flex items-center justify-center gap-1 rounded-full border border-[#fafafa]/10 bg-[#232327] text-[12px] font-medium tabular-nums text-[#fafafa] transition-colors duration-100 hover:bg-[#2a2a2f]"
+            style={{ left: chip.left, top: chip.top, width: CHIP_WIDTH_PX, height: CHIP_HEIGHT_PX }}
           >
             <ChipIcon
               size={18}
               strokeWidth={1.75}
               className={chip.urgent ? "text-[#F95F4A]" : "text-[#fafafa]"}
             />
-            {lane.count > 1 ? lane.count : null}
+            {lane.count > 9 ? "9+" : lane.count > 1 ? lane.count : null}
           </button>
         ) : null}
         {inSheet ? (
           <dialog
             ref={sheetRef}
             aria-label="Notices"
-            onClose={() => setView((current) => (current === "sheet" ? "stack" : current))}
+            onClose={() => {
+              refocusRef.current = true;
+              setView((current) => (current === "sheet" ? "stack" : current));
+            }}
             onClick={(event) => {
               if (event.target === event.currentTarget) event.currentTarget.close();
             }}
@@ -667,6 +708,12 @@ export default function InCallNoticeSlot({
               </button>
             </div>
             <div ref={setSheetBody} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-3" />
+            <div aria-live="polite" className="sr-only">
+              {spokenInSheet.map(([key, { text, urgent }]) => (urgent ? null : <p key={key}>{text}</p>))}
+            </div>
+            <div role="alert" className="sr-only">
+              {spokenInSheet.map(([key, { text, urgent }]) => (urgent ? <p key={key}>{text}</p> : null))}
+            </div>
           </dialog>
         ) : null}
         <div aria-live="polite" className="sr-only">

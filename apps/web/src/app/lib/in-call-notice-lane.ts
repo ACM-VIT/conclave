@@ -160,7 +160,7 @@ export function findClearSpot(
 export interface InCallNoticeLane {
   compact: boolean;
   expanded: boolean;
-  announce: (text: string, urgent: boolean) => () => void;
+  announce: (text: string, tone: "error" | "warning" | "neutral") => () => void;
 }
 
 export const InCallNoticeLaneContext = createContext<InCallNoticeLane | null>(null);

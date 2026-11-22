@@ -48,7 +48,7 @@ export default function InCallNoticeCard({
   const cardAction = actionOnCardClick ? onAction : undefined;
   const action = actionLabel && onAction ? actionLabel : null;
 
-  useEffect(() => announce?.(content, tone !== "neutral"), [announce, content, tone]);
+  useEffect(() => announce?.(content, tone), [announce, content, tone]);
 
   return (
     <div

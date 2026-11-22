@@ -218,6 +218,7 @@ describe("in-call notices", () => {
     await waitOutExit();
     expect(sheet()).toBeNull();
     expect(mode()).toBe("compact");
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("Show 2 more notices");
 
     clientHeight.mockReturnValue(20);
     await act(async () => window.dispatchEvent(new Event("resize")));
@@ -225,7 +226,7 @@ describe("in-call notices", () => {
     expect(mode()).toBe("chip");
     const chip = button("Show 3 notices");
     expect(chip).toBeTruthy();
-    expect(slot()?.querySelector("[data-in-call-notices] > div > div[inert]")).toBeTruthy();
+    expect(slot()?.querySelector("div[inert] [data-in-call-notice]")).toBeTruthy();
 
     await act(async () => chip?.click());
     await waitOutExit();
@@ -233,6 +234,48 @@ describe("in-call notices", () => {
     expect(sheet()?.querySelectorAll("[data-in-call-notice]")).toHaveLength(3);
     observer.disconnect();
     expect(inserted).toEqual([]);
+
+    await render([
+      ...notices,
+      <InCallNotice key="new" show>
+        <InCallNoticeCard tone="warning" icon={VolumeX} title="Your browser paused audio" />
+      </InCallNotice>,
+    ]);
+    await waitOutExit();
+    expect(sheet()?.querySelector('[role="alert"]')?.textContent).toBe("Your browser paused audio");
+    expect(sheet()?.querySelector('[aria-live="polite"]')?.textContent).toBe("");
+  });
+
+  it("keeps a collapsed error collapsed when it moves into an opened phone panel", async () => {
+    const meetError = { code: "PERMISSION_DENIED" as const, message: "Camera is blocked", recoverable: true, device: "camera" as const };
+    const banner = (overPanel: boolean) => (
+      <InCallNoticeSlot overPanel={overPanel}>
+        <InCallNotice show>
+          <MeetsErrorBanner
+            meetError={meetError}
+            onDismiss={() => {}}
+            primaryActionLabel="Try again"
+            onPrimaryAction={() => {}}
+            collapseOnDismiss
+          />
+        </InCallNotice>
+      </InCallNoticeSlot>
+    );
+    await act(async () => root.render(banner(false)));
+    const dismiss = () => document.querySelector<HTMLButtonElement>('button[aria-label="Dismiss error"]');
+    await act(async () => dismiss()?.click());
+    expect(dismiss()).toBeNull();
+    const panel = document.createElement("div");
+    panel.className = "fixed";
+    panel.innerHTML = "<header>Chat</header><div data-panel-notices></div><form>Composer</form>";
+    panel.getBoundingClientRect = () => new DOMRect(0, 0, 390, 844);
+    document.body.append(panel);
+    await act(async () => root.render(banner(true)));
+    await waitOutExit();
+    expect(panel.querySelector("[data-in-call-notice]")?.textContent).toContain("Camera is blocked");
+    expect(dismiss()).toBeNull();
+    await act(async () => root.render(banner(false)));
+    panel.remove();
   });
 
   it("resumes paused audio from a click anywhere on the notice, once per click", async () => {
