@@ -41,18 +41,19 @@ type Handler = (...args: never[]) => void | Promise<void>;
 const makeSocket = (id: string, user: SfuAuthPayload) => {
   const handlers = new Map<string, Handler>();
   const emit = vi.fn();
+  const disconnect = vi.fn();
   const socket = {
     id,
     data: { user },
     on: (event: string, handler: Handler) => handlers.set(event, handler),
     emit,
-    disconnect: vi.fn(),
+    disconnect,
     connected: true,
     join: vi.fn(),
     leave: vi.fn(),
     to: () => ({ emit: vi.fn() }),
   } as unknown as Socket;
-  return { socket, handlers, emit };
+  return { socket, handlers, emit, disconnect, user };
 };
 
 const io = {
@@ -184,7 +185,7 @@ const send = async (
 const askAgain = async (member: Awaited<ReturnType<typeof join>>, roomId = "abc-mnop-xyz") => {
   const ack = vi.fn();
   await member.peer.handlers.get("joinRoom")!(
-    ...([{ roomId, sessionId: member.peer.socket.data.user.sessionId }, ack] as never[]),
+    ...([{ roomId, sessionId: member.peer.user.sessionId }, ack] as never[]),
   );
   return (ack.mock.calls[0]?.[0] ?? {}) as JoinAck;
 };
@@ -1707,7 +1708,7 @@ describe.skipIf(!redisServerPath)("knockers waiting on an SFU when the next meet
     member.peer.emit.mock.calls.some(
       ([event, sent]) =>
         event === "serverRestarting" && (sent as { reconnecting?: boolean }).reconnecting === true,
-    ) && vi.mocked(member.peer.socket.disconnect).mock.calls.length > 0;
+    ) && member.peer.disconnect.mock.calls.length > 0;
 
   it("sends them there through the usual route when A drains, and the host on B lets them in", async () => {
     const { a, b } = await twoSfus();
