@@ -9,7 +9,7 @@ import createWorkers, { getWorkerWebRtcServer } from "../utilities/createWorkers
 vi.mock("mediasoup", () => ({ createWorker: vi.fn() }));
 vi.mock("../config/config.js", () => ({
   config: {
-    workerSettings: { workerCount: 1, rtcMinPort: 40000, rtcMaxPort: 41000, webRtcPortBase: 40000 },
+    workerSettings: { workerCount: 1, rtcMinPort: 42001, rtcMaxPort: 42200 },
     webRtcTransport: { enableUdp: true, enableTcp: true, listenIps: [{ ip: "127.0.0.1" }] },
   },
 }));
@@ -19,19 +19,33 @@ const makeWorker = () => Object.assign(new EventEmitter(), {
   close: vi.fn(),
 });
 
-it.each([0, 39999, 40001.5, 41001, 65536, NaN])("rejects invalid WebRTC port %s", async (port) => {
-  const settings = config.workerSettings;
-  const originalBase = settings.webRtcPortBase;
+it("reserves the first port in the staging range and leaves the rest for plain RTP", async () => {
   const worker = makeWorker();
   worker.createWebRtcServer.mockResolvedValue({} as WebRtcServer);
   vi.mocked(createWorker).mockClear().mockResolvedValueOnce(worker as unknown as Worker);
-  settings.webRtcPortBase = port;
+  await createWorkers();
+  expect(worker.createWebRtcServer).toHaveBeenCalledWith({
+    listenInfos: [
+      expect.objectContaining({ protocol: "udp", port: 42001 }),
+      expect.objectContaining({ protocol: "tcp", port: 42001 }),
+    ],
+  });
+  expect(createWorker).toHaveBeenCalledWith(expect.objectContaining({
+    rtcMinPort: 42002,
+    rtcMaxPort: 42200,
+  }));
+});
+
+it("rejects a range that leaves no port for plain RTP", async () => {
+  const settings = config.workerSettings;
+  const originalMax = settings.rtcMaxPort;
+  vi.mocked(createWorker).mockClear();
+  settings.rtcMaxPort = settings.rtcMinPort;
   try {
-    await expect(createWorkers()).rejects.toThrow("RTC_MIN_PORT");
+    await expect(createWorkers()).rejects.toThrow("plain RTP");
     expect(createWorker).not.toHaveBeenCalled();
   } finally {
-    settings.webRtcPortBase = originalBase;
-    vi.mocked(createWorker).mockReset();
+    settings.rtcMaxPort = originalMax;
   }
 });
 

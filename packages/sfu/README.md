@@ -20,7 +20,8 @@ predictable. Leave CPU headroom for signaling and other services on the VM.
 Before deploying shared WebRTC sockets, allow inbound UDP and TCP to the SFU VM
 on ports 40000 through 40003 for `sfu-a` and 41001 through 41004 for `sfu-b`.
 Each of the four workers binds one port for both protocols, starting at the
-instance's `RTC_MIN_PORT`. Keep the legacy UDP and TCP ranges open until calls
+instance's `RTC_MIN_PORT`. Plain RTP starts after the last worker port. Keep
+the legacy UDP and TCP ranges open until calls
 on both old instances have drained and both instances have restarted.
 
 After the rollout, the public WebRTC rules need only those ports. Shared browser

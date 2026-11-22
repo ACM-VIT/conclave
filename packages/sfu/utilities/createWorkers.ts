@@ -83,18 +83,10 @@ const createWorkers = async (
     ? AbortSignal.any([options.signal, startupFailure.signal])
     : startupFailure.signal;
   const workerCount = getWorkerCount();
-  const { rtcMinPort, rtcMaxPort, webRtcPortBase } = config.workerSettings;
-  if (!Number.isInteger(webRtcPortBase) || webRtcPortBase < rtcMinPort || webRtcPortBase > rtcMaxPort) {
-    throw new Error("SFU_WEBRTC_PORT_BASE must be an integer between RTC_MIN_PORT and RTC_MAX_PORT");
-  }
-  const lastWebRtcPort = webRtcPortBase + workerCount - 1;
-  const plainMinPort = webRtcPortBase === rtcMinPort ? lastWebRtcPort + 1 : rtcMinPort;
-  if (
-    lastWebRtcPort > 65535 ||
-    plainMinPort > rtcMaxPort ||
-    (webRtcPortBase <= rtcMaxPort && lastWebRtcPort >= plainMinPort)
-  ) {
-    throw new Error("Worker WebRTC ports must fit in 1-65535 without overlapping the plain RTP range");
+  const { rtcMinPort, rtcMaxPort } = config.workerSettings;
+  const plainMinPort = rtcMinPort + workerCount;
+  if (plainMinPort > rtcMaxPort) {
+    throw new Error("RTC_MIN_PORT through RTC_MAX_PORT must fit the worker ports and leave space for plain RTP");
   }
 
   // Placement skips closed workers. Keep their slots so recovery keeps the
@@ -111,7 +103,7 @@ const createWorkers = async (
           );
         },
       );
-      respawnWorker(webRtcPortBase + index, plainMinPort, signal)
+      respawnWorker(rtcMinPort + index, plainMinPort, signal)
         .then((replacement) => {
           if (signal?.aborted) {
             replacement.close();
@@ -133,7 +125,7 @@ const createWorkers = async (
   Logger.info(`Creating ${workerCount} mediasoup worker(s)`);
   try {
     for (let i = 0; i < workerCount; i++) {
-      const worker = await spawnWorker(webRtcPortBase + i, plainMinPort, signal);
+      const worker = await spawnWorker(rtcMinPort + i, plainMinPort, signal);
       workers.push(worker);
       attachDiedHandler(worker, i);
       Logger.info(`Worker ${i} created`);
