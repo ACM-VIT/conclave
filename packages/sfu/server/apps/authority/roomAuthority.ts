@@ -100,6 +100,9 @@ const cryptoRandom: AuthorityRandom = {
   },
 };
 
+/** The longest delay a Node timer counts. It runs a longer one after 1 ms. */
+const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
+
 const samePolicy = (a: RoomPolicy, b: RoomPolicy): boolean =>
   a.mode === b.mode && a.qaEnabled === b.qaEnabled;
 
@@ -875,7 +878,9 @@ export class RoomAuthority {
         this.wakeAt = null;
         this.wake();
       },
-      Math.max(0, earliest - this.now()),
+      // A deadline further off wakes the room early, finds nothing due and
+      // arms the rest of the wait.
+      Math.min(MAX_TIMER_DELAY_MS, Math.max(0, earliest - this.now())),
     );
     this.wakeTimer.unref?.();
   }

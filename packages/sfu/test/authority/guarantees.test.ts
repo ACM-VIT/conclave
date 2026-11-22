@@ -1018,6 +1018,26 @@ describe("timers", () => {
 
     expect(hostTab.rows("fired").map((row) => field(row, "label"))).toEqual(["fine"]);
   });
+
+  it("waits out a deadline further off than a Node timer can count", async () => {
+    const room = new Harness([probeAuthority]);
+    const hostTab = await room.open(host, probeContract);
+    const thirtyDays = 30 * 24 * 60 * 60 * 1000;
+    const armed = vi.spyOn(globalThis, "setTimeout");
+
+    await hostTab.act("schedule", { id: "far", afterMs: thirtyDays, label: "far" });
+    // Node turns a delay past 2^31 - 1 ms into 1 ms, which would wake the
+    // room a thousand times a second until the deadline came into range.
+    const longest = Math.max(...armed.mock.calls.map(([, delay]) => Number(delay ?? 0)));
+    armed.mockRestore();
+    await room.advance(thirtyDays - 1);
+    const early = hostTab.rows("fired").length;
+    await room.advance(1);
+
+    expect(longest).toBeLessThanOrEqual(2 ** 31 - 1);
+    expect(early).toBe(0);
+    expect(hostTab.rows("fired").map((row) => field(row, "label"))).toEqual(["far"]);
+  });
 });
 
 describe("teardown", () => {
