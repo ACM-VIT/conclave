@@ -17,9 +17,7 @@ type JoinInfo = {
 
 type TokenCache = {
   roomId: string;
-  token: string;
-  sfuUrl: string;
-  iceServers?: RTCIceServer[];
+  joinInfo: JoinInfo;
   timestamp: number;
 };
 
@@ -108,17 +106,11 @@ export function usePrewarmSocket(): PrewarmModules {
       const startTime = performance.now();
 
       getJoinInfo(roomId, sessionId, options)
-        .then(({ token, sfuUrl, iceServers }) => {
+        .then((joinInfo) => {
           const duration = performance.now() - startTime;
           console.info(`[Meets] Pre-fetched token in ${duration.toFixed(0)}ms`);
 
-          tokenCacheRef.current = {
-            roomId,
-            token,
-            sfuUrl,
-            iceServers,
-            timestamp: Date.now(),
-          };
+          tokenCacheRef.current = { roomId, joinInfo, timestamp: Date.now() };
         })
         .catch((err) => {
           console.warn("[Meets] Failed to prefetch token:", err);
@@ -142,11 +134,7 @@ export function usePrewarmSocket(): PrewarmModules {
         return null;
       }
       console.info("[Meets] Using cached token");
-      return {
-        token: cached.token,
-        sfuUrl: cached.sfuUrl,
-        iceServers: cached.iceServers,
-      };
+      return cached.joinInfo;
     },
     []
   );
