@@ -2,7 +2,9 @@
 import { act, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
-import MeetingPanelBoundary from "../src/app/components/MeetingPanelBoundary";
+import MeetingPanelBoundary, {
+  meetingPanelKey,
+} from "../src/app/components/MeetingPanelBoundary";
 
 function FailedPanel(): never {
   throw new Error("Panel chunk failed to load");
@@ -48,6 +50,46 @@ it.each([
     expect(container.querySelector("aside")).toBeNull();
     expect(container.querySelector("button")?.textContent).toBe("Leave call");
     expect(close).toHaveBeenCalledTimes(hasCloseHandler ? 1 : 0);
+  } finally {
+    await act(async () => root.unmount());
+    vi.unstubAllGlobals();
+  }
+});
+
+it("renders Transcript when switching directly from a failed Chat panel", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const container = document.createElement("div");
+  const root = createRoot(container, { onCaughtError: () => {} });
+
+  function Panels({ active }: { active: "chat" | "transcript" }) {
+    return (
+      <>
+        {active === "chat" && (
+          <MeetingPanelBoundary
+            name="Chat"
+            key={meetingPanelKey("chat", "user", "room")}
+          >
+            <FailedPanel />
+          </MeetingPanelBoundary>
+        )}
+        {active === "transcript" && (
+          <MeetingPanelBoundary
+            name="Transcript"
+            key={meetingPanelKey("transcript", "user", "room")}
+          >
+            <h2>Live transcript</h2>
+          </MeetingPanelBoundary>
+        )}
+      </>
+    );
+  }
+
+  try {
+    await act(async () => root.render(<Panels active="chat" />));
+    expect(container.querySelector('aside[aria-label="Chat"] [role="alert"]')).not.toBeNull();
+    await act(async () => root.render(<Panels active="transcript" />));
+    expect(container.querySelector("h2")?.textContent).toBe("Live transcript");
+    expect(container.querySelector('[role="alert"]')).toBeNull();
   } finally {
     await act(async () => root.unmount());
     vi.unstubAllGlobals();

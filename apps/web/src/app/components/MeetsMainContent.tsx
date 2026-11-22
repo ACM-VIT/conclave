@@ -13,7 +13,7 @@ import {
 import type { Socket } from "socket.io-client";
 import type { RoomInfo } from "@/lib/sfu-types";
 import ChatOverlay from "./ChatOverlay";
-import MeetingPanelBoundary from "./MeetingPanelBoundary";
+import MeetingPanelBoundary, { meetingPanelKey } from "./MeetingPanelBoundary";
 import JoinScreen from "./JoinScreen";
 import type { RoomAiController } from "../hooks/useRoomAi";
 import ControlsBar, { type ControlsBarProps } from "./ControlsBar";
@@ -2098,7 +2098,7 @@ export default function MeetsMainContent({
         />
       )}
       {isDevToolsEnabled && isJoined && !isWebinarAttendee && (
-        <MeetingPanelBoundary name="Developer tools">
+        <MeetingPanelBoundary key="developer-tools" name="Developer tools">
           <DevMeetToolsPanel
             roomId={roomId}
             onPresentationStreamChange={setDevPresentationStream}
@@ -2527,7 +2527,7 @@ export default function MeetsMainContent({
       {isJoined && !isWebinarAttendee && isChatOpen && (
         <MeetingPanelBoundary
           name="Chat"
-          key={`${currentUserId}:${roomId}`}
+          key={meetingPanelKey("chat", currentUserId, roomId)}
           onClose={handleToggleChat}
         >
           <ChatPanel
@@ -2568,7 +2568,7 @@ export default function MeetsMainContent({
       {isJoined && !isWebinarAttendee && isTranscriptOpen && (
         <MeetingPanelBoundary
           name="Transcript"
-          key={`${currentUserId}:${roomId}`}
+          key={meetingPanelKey("transcript", currentUserId, roomId)}
           onClose={handleCloseTranscript}
         >
           <TranscriptPanel
@@ -2656,7 +2656,11 @@ export default function MeetsMainContent({
         )}
 
       {isJoined && !isWebinarAttendee && isVideoEffectsOpen && (
-        <MeetingPanelBoundary name="Backgrounds and effects" onClose={handleCloseVideoEffects}>
+        <MeetingPanelBoundary
+          key="video-effects"
+          name="Backgrounds and effects"
+          onClose={handleCloseVideoEffects}
+        >
           <VideoEffectsPanel
             effects={videoEffects}
             onEffectsChange={onVideoEffectsChange}
@@ -2682,7 +2686,11 @@ export default function MeetsMainContent({
       )}
 
       {isJoined && !isWebinarAttendee && isDeviceSettingsOpen && (
-        <MeetingPanelBoundary name="Settings" onClose={handleCloseDeviceSettings}>
+        <MeetingPanelBoundary
+          key="device-settings"
+          name="Settings"
+          onClose={handleCloseDeviceSettings}
+        >
           <DeviceSettingsPanel
             roomAi={roomAi}
             localStream={panelPreviewStream}

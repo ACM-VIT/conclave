@@ -2,6 +2,14 @@
 
 import { Component, Suspense, type ReactNode } from "react";
 
+export function meetingPanelKey(
+  panel: "chat" | "transcript",
+  userId: string,
+  roomId: string,
+) {
+  return `${panel}:${userId}:${roomId}`;
+}
+
 type MeetingPanelBoundaryProps = {
   name: string;
   onClose?: () => void;
