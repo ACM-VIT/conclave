@@ -51,13 +51,34 @@ const failure = (
   extra?: { reason?: string; retryAfterMs?: number },
 ): AuthorityFailure => ({ ok: false, code, ...extra });
 
+/** Anything but a plain `any` asks for a verified identity. */
 const identityOf = (
   action: RuntimeAction,
   ctx: GateContext,
-): IdentityRequirement =>
-  typeof action.identity === "function"
-    ? action.identity(ctx)
-    : (action.identity ?? "verified");
+): IdentityRequirement => {
+  const wanted =
+    typeof action.identity === "function"
+      ? action.identity(ctx)
+      : action.identity;
+  return wanted === "any" ? "any" : "verified";
+};
+
+/**
+ * What a handler returned, once it is known to have finished. A handler runs
+ * inside one transaction and must be done when it returns. One that hands
+ * back a promise is still working: its writes so far would commit without
+ * the rest, and a later failure would reach nobody. That is a fault, so
+ * nothing it staged is kept.
+ */
+const finished = <Value>(value: Value, handler: string): Value => {
+  const pending = value as { then?: unknown } | null | undefined;
+  if (typeof pending?.then !== "function") return value;
+  // Nobody waits for the promise, so its rejection must not go unhandled.
+  void Promise.resolve(value).catch(() => {});
+  throw new Error(
+    `${handler} returned a promise. A handler must finish before it returns.`,
+  );
+};
 
 /**
  * One app running in one room: its rows, its views, its receipts and its
@@ -97,9 +118,13 @@ export class AuthorityInstance {
   }
 
   canView(actor: Actor): boolean {
-    return this.module.runtime.canView(
-      { role: actor.role, verified: actor.verified },
-      this.policy,
+    // Only a plain `true` admits. A rule that answers with anything else,
+    // such as the promise an `async` rule returns, admits nobody.
+    return (
+      this.module.runtime.canView(
+        { role: actor.role, verified: actor.verified },
+        this.policy,
+      ) === true
     );
   }
 
@@ -193,7 +218,7 @@ export class AuthorityInstance {
     };
     const outcome = this.store.transact((tx) =>
       spec.receipt.parse(
-        action.run(writeContext, tx, parsed.value),
+        finished(action.run(writeContext, tx, parsed.value), `Action ${name}`),
         "strict",
         `${name} receipt`,
       ),
@@ -251,7 +276,7 @@ export class AuthorityInstance {
 
     const outcome = this.store.read((db) =>
       spec.output.parse(
-        query.read(ctx, db, parsed.value),
+        finished(query.read(ctx, db, parsed.value), `Query ${name}`),
         "strict",
         `${name} output`,
       ),
@@ -297,7 +322,7 @@ export class AuthorityInstance {
       };
       const outcome = this.store.transact((tx) => {
         tx.cancelTimer(timer.key);
-        handler(ctx, tx, timer.payload);
+        finished(handler(ctx, tx, timer.payload), `Timer ${timer.kind}`);
       });
       if (outcome.ok) {
         changed = changed || outcome.changed;
@@ -360,7 +385,7 @@ export class AuthorityInstance {
   private passesGate(gate: RuntimeAction | RuntimeQuery, ctx: GateContext): boolean {
     if (!gate.roles.includes(ctx.role)) return false;
     try {
-      return gate.when ? gate.when(ctx) : true;
+      return gate.when ? gate.when(ctx) === true : true;
     } catch (error) {
       Logger.error(`[Authority] ${this.appId}: a gate failed`, error);
       return false;

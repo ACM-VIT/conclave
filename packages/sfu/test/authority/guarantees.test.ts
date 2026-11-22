@@ -5,12 +5,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AUTHORITY_EVENTS,
+  defineContract,
+  s,
   type AuthorityFrame,
   type AuthorityResult,
   type Json,
   type PatchFrame,
   type ReplaceFrame,
 } from "@conclave/apps-sdk/authority";
+import { defineAuthority } from "@conclave/apps-sdk/authority/server";
 import { Admin } from "../../config/classes/Admin.js";
 import { Client } from "../../config/classes/Client.js";
 import { Room } from "../../config/classes/Room.js";
@@ -1037,6 +1040,124 @@ describe("timers", () => {
     expect(longest).toBeLessThanOrEqual(2 ** 31 - 1);
     expect(early).toBe(0);
     expect(hostTab.rows("fired").map((row) => field(row, "label"))).toEqual(["far"]);
+  });
+});
+
+describe("handlers that return a promise", () => {
+  const rejections: unknown[] = [];
+  const note = (reason: unknown): void => {
+    rejections.push(reason);
+  };
+
+  beforeEach(() => {
+    rejections.length = 0;
+    process.on("unhandledRejection", note);
+  });
+
+  afterEach(() => {
+    process.off("unhandledRejection", note);
+  });
+
+  it("keeps nothing from a timer handler that is still working when it returns", async () => {
+    const room = new Harness([probeAuthority]);
+    const hostTab = await room.open(host, probeContract);
+
+    await hostTab.act("schedule", { id: "unfinished", afterMs: 1_000, label: "async" });
+    await hostTab.act("schedule", { id: "good", afterMs: 2_000, label: "fine" });
+    await room.advance(10_000);
+    vi.useRealTimers();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(hostTab.rows("fired").map((row) => field(row, "label"))).toEqual(["fine"]);
+    expect(rejections).toEqual([]);
+  });
+
+  it("keeps nothing from an action that is still working when it returns", async () => {
+    const room = new Harness([probeAuthority]);
+    const hostTab = await room.open(host, probeContract);
+
+    const result = await hostTab.act("putLater");
+    await room.deliver();
+    vi.useRealTimers();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(result).toEqual({ ok: false, code: "app-fault" });
+    expect(hostTab.rows("notes")).toEqual([]);
+    expect(rejections).toEqual([]);
+  });
+
+  it("admits nobody through a rule that answers with a promise", async () => {
+    // An `async` rule answers with a promise, which is truthy whatever it
+    // resolves to. The types refuse one, so the casts stand in for an author
+    // who got past them.
+    const rate = { burst: 10, perSecond: 10 };
+    const gated = defineContract({
+      id: "gated",
+      major: 1,
+      surface: "panel",
+      actions: {
+        whenAsync: { input: s.null(), receipt: s.null() },
+        identityAsync: { input: s.null(), receipt: s.null() },
+      },
+      queries: {},
+      views: {},
+    });
+    const sealed = defineContract({
+      id: "sealed",
+      major: 1,
+      surface: "panel",
+      actions: {},
+      queries: {},
+      views: {},
+    });
+    const room = new Harness([
+      defineAuthority({
+        contract: gated,
+        tables: {},
+        timers: {},
+        canView: () => true,
+        actions: {
+          whenAsync: {
+            roles: ["moderator", "member"],
+            when: (async () => false) as unknown as () => boolean,
+            identity: "any",
+            rate,
+            run: () => null,
+          },
+          identityAsync: {
+            roles: ["moderator", "member"],
+            identity: (async () => "any") as unknown as () => "any",
+            rate,
+            run: () => null,
+          },
+        },
+        queries: {},
+        onTimer: {},
+        views: {},
+      }),
+      defineAuthority({
+        contract: sealed,
+        tables: {},
+        timers: { tick: s.null() },
+        canView: (async () => false) as unknown as () => boolean,
+        actions: {},
+        queries: {},
+        onTimer: {
+          // @ts-expect-error A timer handler may not be `async`.
+          async tick() {},
+        },
+        views: {},
+      }),
+    ]);
+    const hostTab = await room.open(host, gated);
+    const guestTab = await room.open(person("guest-7f3a", "Guest"), gated);
+
+    const gatedOut = await hostTab.act("whenAsync");
+    const unsigned = await guestTab.act("identityAsync");
+
+    expect(gatedOut).toEqual({ ok: false, code: "forbidden" });
+    expect(unsigned).toEqual({ ok: false, code: "identity-required" });
+    expect(hostTab.client.entryFor(sealed)).toBeNull();
   });
 });
 
