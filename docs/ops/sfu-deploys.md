@@ -4,7 +4,9 @@
 a call. It pulls, restarts itself if the pull changed the script (bash would
 otherwise keep running the old file), builds one image for the commit or
 reuses the one already built for it, then takes the instances one at a time,
-emptiest first:
+emptiest first. An instance whose `/status` cannot be read goes last, so an
+idle instance is always rebuilt before one that may carry calls. No instance
+is recreated while it has rooms unless you pass `--force-drain`:
 
 1. Mark the instance draining. New meetings go to the other instance; meetings
    already on this one continue.

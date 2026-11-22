@@ -381,13 +381,19 @@ service_container() {
   "${COMPOSE[@]}" ps -aq "$1" 2>/dev/null | head -n 1
 }
 
+# An instance's room count for the deploy order. An unreadable /status sorts
+# after every readable one: its rooms are unknown, so it is never taken for
+# the idle instance.
 service_rooms() {
-  local status
+  local status rooms=""
   status="$(status_json "$(service_url "$1")")"
-  if [[ -z "$status" ]]; then
-    echo "0"
+  if [[ -n "$status" ]]; then
+    rooms="$(printf "%s" "$status" | json_field rooms || true)"
+  fi
+  if [[ "$rooms" =~ ^[0-9]+$ ]]; then
+    echo "$rooms"
   else
-    printf "%s" "$status" | json_field rooms
+    echo "999999999"
   fi
 }
 
@@ -587,7 +593,8 @@ deploy_service() {
   validate_public_route "$svc" "$(service_public_url "$svc")"
 }
 
-# Emptiest instance first, so the first drain usually has nothing to wait for.
+# Emptiest instance first, so the first drain usually has nothing to wait for
+# and an idle instance is rebuilt before one carrying calls.
 ORDERED_SERVICES=()
 while read -r _rooms svc; do
   ORDERED_SERVICES+=("$svc")

@@ -26,7 +26,7 @@
     "quality:video:compat:repeat": "node scripts/quality/run-headless-video-quality.mjs --profile pristine --codec-scenario native-compat --duration-ms 12000 --repetitions 3",
     "quality:video:transition": "node scripts/quality/run-headless-video-quality.mjs --dynamic-network-transition",
     "test:quality-harness": "node --test scripts/quality/*.test.mjs",
-    "test:deploy-preflight": "node --test scripts/deploy-sfu-preflight.test.mjs",
+    "test:deploy-preflight": "node --test scripts/deploy-sfu-preflight.test.mjs scripts/deploy-sfu.test.mjs",
     "test:cloudflare-manifests": "node --test scripts/cloudflare-manifests.test.mjs",
     "test:backup": "node --test scripts/backup/backup-restore.test.mjs",
     "build:conclave-skip:android": "bash scripts/build-conclave-skip-android-debug.sh",
