@@ -1,4 +1,4 @@
-import { ESLINT_LANGUAGE, classifyComments } from "./policy.mjs";
+import { ESLINT_LANGUAGE, classifyComments, normalizeNewlines } from "./policy.mjs";
 
 export { vendoredIgnores } from "./policy.mjs";
 
@@ -20,12 +20,13 @@ const noComments = {
     return {
       Program() {
         const comments = sourceCode.getAllComments();
+        const { text, toNormalized } = normalizeNewlines(sourceCode.text);
         const verdicts = classifyComments(
-          sourceCode.text,
+          text,
           comments.map((comment) => ({
-            start: comment.range[0],
-            end: comment.range[1],
-            text: sourceCode.getText(comment),
+            start: toNormalized(comment.range[0]),
+            end: toNormalized(comment.range[1]),
+            text: sourceCode.getText(comment).replace(/\r\n?/g, "\n"),
           })),
           ESLINT_LANGUAGE,
         );

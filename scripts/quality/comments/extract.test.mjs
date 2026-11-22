@@ -5,19 +5,39 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { extractComments, iconGeneratorOutputs, listSourceFiles } from "./extract.mjs";
+import { extractComments, iconGeneratorOutputs, listSourceFiles, toolWorks } from "./extract.mjs";
 import { configuresNoComments } from "./policy.mjs";
 
 
-const swiftMissing = spawnSync("swift", ["--version"]).error ? "swift is not on PATH" : false;
+const missing = (command, args) => {
+  const probe = toolWorks(command, args);
+  return probe.ok ? false : probe.reason;
+};
+const swiftMissing = missing("swift", ["--version"]);
+const kotlinMissing = missing("java", ["-version"]) || missing("javac", ["-version"]);
 const python312Missing =
   spawnSync("python3", ["-c", "import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)"]).status === 0
     ? false
     : "python3 3.12 or newer is not on PATH";
 
-const texts = (source, file) => extractComments(source, file).map((comment) => comment.text);
+const ENDINGS = [
+  ["CRLF", (source) => source.replace(/\n/g, "\r\n")],
+  ["CR", (source) => source.replace(/\n/g, "\r")],
+];
+
+const comparable = (comments) => comments.map(({ line, endLine, ownLines, linesShed, allowed, text }) => ({ line, endLine, ownLines, linesShed, allowed, text }));
+
+const extract = (source, file) => {
+  const lf = extractComments(source, file);
+  for (const [name, convert] of ENDINGS) {
+    assert.deepEqual(comparable(extractComments(convert(source), file)), comparable(lf), `${file} differs with ${name} line endings`);
+  }
+  return lf;
+};
+
+const texts = (source, file) => extract(source, file).map((comment) => comment.text);
 const disallowed = (source, file) =>
-  extractComments(source, file)
+  extract(source, file)
     .filter((comment) => !comment.allowed)
     .map((comment) => comment.text);
 
@@ -49,7 +69,7 @@ test("JSX text is not a comment but a JSX comment expression is", () => {
 
 test("positions report lines, ownership and the lines a deletion sheds", () => {
   const source = ["const a = 1;", "/**", " * block", " */", "const b = 2; // tail", "  // own"].join("\n");
-  const comments = extractComments(source, "a.ts").map(({ line, endLine, ownLines, linesShed }) => ({
+  const comments = extract(source, "a.ts").map(({ line, endLine, ownLines, linesShed }) => ({
     line,
     endLine,
     ownLines,
@@ -68,7 +88,7 @@ test("shebangs are reported as allowed directives in every language", { skip: py
     ["run.sh", "#!/bin/sh\n# note\nrun\n"],
     ["run.py", "#!/usr/bin/env python3\n# note\nrun()\n"],
   ]) {
-    const [shebang, note] = extractComments(source, file);
+    const [shebang, note] = extract(source, file);
     assert.equal(shebang.allowed, "shebang", file);
     assert.equal(shebang.line, 1, file);
     assert.equal(note.allowed, null, file);
@@ -91,7 +111,7 @@ test("only the allowlisted script directives are allowed", () => {
     "const a = 1;",
   ].join("\n");
   assert.deepEqual(
-    extractComments(source, "a.test.ts").map((comment) => comment.allowed),
+    extract(source, "a.test.ts").map((comment) => comment.allowed),
     [
       "triple-slash-reference",
       "vitest-environment",
@@ -112,7 +132,7 @@ test("a license header is allowed only at the very top of the file", () => {
   const header = ["// Copyright 2024 Example Inc.", "// Licensed under the MIT License.", "// See LICENSE."].join("\n");
   const source = `${header}\n\n// Narrative about the module.\nconst a = 1;\n// Copyright notice in the middle.\n`;
   assert.deepEqual(
-    extractComments(source, "a.ts").map((comment) => [comment.line, comment.allowed]),
+    extract(source, "a.ts").map((comment) => [comment.line, comment.allowed]),
     [
       [1, "license-header"],
       [2, null],
@@ -145,7 +165,7 @@ test("Swift raw, multiline and interpolated strings hide comment markers", { ski
   assert.deepEqual(disallowed(source, "Package.swift").length, 2);
 });
 
-test("Kotlin raw strings, templates and char literals hide comment markers", () => {
+test("Kotlin raw strings, templates and char literals hide comment markers", { skip: kotlinMissing }, () => {
   const source = [
     'val raw = """// not a comment /* nor this */"""',
     'val quoteRun = """ends with quotes"""" // real one',
@@ -185,7 +205,7 @@ test("Python strings hide hash marks", { skip: python312Missing }, () => {
 test("CSS strings hide comment markers and sourceMappingURL is allowed", () => {
   const source = ['a::after { content: "/* not */"; }', "/* real */", "/*# sourceMappingURL=app.css.map */"].join("\n");
   assert.deepEqual(
-    extractComments(source, "app.css").map((comment) => [comment.text, comment.allowed]),
+    extract(source, "app.css").map((comment) => [comment.text, comment.allowed]),
     [
       ["/* real */", null],
       ["/*# sourceMappingURL=app.css.map */", "source-map-url"],
@@ -193,7 +213,7 @@ test("CSS strings hide comment markers and sourceMappingURL is allowed", () => {
   );
 });
 
-test("Skip transpiler directives are allowed in Swift and nowhere else", { skip: swiftMissing }, () => {
+test("Skip transpiler directives are allowed in Swift and nowhere else", { skip: swiftMissing || kotlinMissing }, () => {
   const source = [
     "// SKIP SYMBOLFILE",
     "// SKIP INSERT: @Suppress(\"UNCHECKED_CAST\")",
@@ -206,20 +226,20 @@ test("Skip transpiler directives are allowed in Swift and nowhere else", { skip:
     "let a = 1",
   ].join("\n");
   assert.deepEqual(
-    extractComments(source, "Bridge+Android.swift").map((comment) => comment.allowed),
+    extract(source, "Bridge+Android.swift").map((comment) => comment.allowed),
     ["skip-directive", "skip-directive", "skip-directive", "skip-directive", "skip-directive", "skip-directive", null, null],
   );
   assert.deepEqual(
-    extractComments("// SKIP SYMBOLFILE\nval a = 1\n", "a.kt").map((comment) => comment.allowed),
+    extract("// SKIP SYMBOLFILE\nval a = 1\n", "a.kt").map((comment) => comment.allowed),
     [null],
   );
   assert.deepEqual(
-    extractComments("// SKIP SYMBOLFILE\nconst a = 1;\n", "a.ts").map((comment) => comment.allowed),
+    extract("// SKIP SYMBOLFILE\nconst a = 1;\n", "a.ts").map((comment) => comment.allowed),
     [null],
   );
 });
 
-test("a license notice may follow a directive prologue, an attribution is a comment", () => {
+test("a license notice may follow a directive prologue, an attribution is a comment", { skip: kotlinMissing }, () => {
   const source = [
     '"use client";',
     "",
@@ -228,11 +248,11 @@ test("a license notice may follow a directive prologue, an attribution is a comm
     "",
     "import { a } from \"a\";",
   ].join("\n");
-  assert.deepEqual(extractComments(source, "prompt-input.tsx").map((comment) => comment.allowed), ["license-header", null]);
+  assert.deepEqual(extract(source, "prompt-input.tsx").map((comment) => comment.allowed), ["license-header", null]);
   const apache = ["/* Licensed under the Apache License, Version 2.0: Material Symbols by Google. */", "package a"].join("\n");
-  assert.deepEqual(extractComments(apache, "Icons.kt").map((comment) => comment.allowed), [null]);
+  assert.deepEqual(extract(apache, "Icons.kt").map((comment) => comment.allowed), [null]);
   assert.deepEqual(
-    extractComments('const a = "use client";\n// Copyright 2024 Example\n', "a.ts").map((comment) => comment.allowed),
+    extract('const a = "use client";\n// Copyright 2024 Example\n', "a.ts").map((comment) => comment.allowed),
     [null],
   );
 });
@@ -245,7 +265,7 @@ test("Swift regex literals hide comment markers", { skip: swiftMissing }, () => 
     "  // inside an extended literal",
     "  /#",
     "let bare = /a\\/*b/",
-    "let slashes = try Regex(/[/]+x/)",
+    "let slashes = try Regex(/[\\/]+x/)",
     "let half = total / 2 // real one",
     "let ratio = a / b / c",
     "// real two",
@@ -262,12 +282,12 @@ test("a directive is never part of a license header", () => {
     "export {};",
   ].join("\n");
   assert.deepEqual(
-    extractComments(source, "a.ts").map((comment) => comment.allowed),
+    extract(source, "a.ts").map((comment) => comment.allowed),
     ["license-header", null, "license-header", null],
   );
   const onlyDirectives = ["/* eslint-disable no-console -- SPDX-License-Identifier: MIT */", "// hidden", "export {};"].join("\n");
   assert.deepEqual(
-    extractComments(onlyDirectives, "b.ts").map((comment) => comment.allowed),
+    extract(onlyDirectives, "b.ts").map((comment) => comment.allowed),
     ["eslint-directive", null],
   );
 });
@@ -291,7 +311,7 @@ test("shell here-strings, arithmetic shifts and escaped heredoc delimiters", () 
   assert.deepEqual(texts(source, "run.sh").slice(1), ["# after here-string", "# after arithmetic", "# trailing"]);
 });
 
-test("Kotlin multi-dollar strings interpolate only with the full dollar run", () => {
+test("Kotlin multi-dollar strings interpolate only with the full dollar run", { skip: kotlinMissing }, () => {
   const source = [
     'val a = $$"""value ${ /* literal */ } and $${ x /* real one */ }"""',
     'val b = "plain ${ y /* real two */ }"',
@@ -339,21 +359,21 @@ test("Skip directives follow the pinned skipstone grammar in line and block form
     "let a = 1 // SKIP NOWARN",
   ].join("\n");
   assert.deepEqual(
-    extractComments(source, "Bridge.swift").map((comment) => comment.allowed),
+    extract(source, "Bridge.swift").map((comment) => comment.allowed),
     ["skip-directive", "skip-directive", null, null, "skip-directive", "skip-directive", "skip-directive", null, "skip-directive", null],
   );
 });
 
 test("a license header needs a real marker and covers only the top block", () => {
   const todo = ["// TODO revisit the copyright dialog", "// and the licensed under review copy", "export {};"].join("\n");
-  assert.deepEqual(extractComments(todo, "a.ts").map((c) => c.allowed), [null, null]);
+  assert.deepEqual(extract(todo, "a.ts").map((c) => c.allowed), [null, null]);
   const split = ["// Copyright (c) 2024 Example Inc.", "", "// Narrative about the module.", "export {};"].join("\n");
-  assert.deepEqual(extractComments(split, "b.ts").map((c) => c.allowed), ["license-header", null]);
+  assert.deepEqual(extract(split, "b.ts").map((c) => c.allowed), ["license-header", null]);
   for (const notice of ["// SPDX-License-Identifier: MIT", "// SPDX-License-Identifier: Apache-2.0 OR MIT", "// Copyright 2024-2026 Example Inc.", "// Copyright (c) 2026 ACM-VIT"]) {
-    assert.deepEqual(extractComments(`${notice}\nexport {};\n`, "c.ts").map((c) => c.allowed), ["license-header"], notice);
+    assert.deepEqual(extract(`${notice}\nexport {};\n`, "c.ts").map((c) => c.allowed), ["license-header"], notice);
   }
   for (const prose of ["// © 2024 Example", "// Licensed under the Apache License, Version 2.0", "// MIT License", "// SPDX-License-Identifier: MIT, see LICENSE"]) {
-    assert.deepEqual(extractComments(`${prose}\nexport {};\n`, "d.ts").map((c) => c.allowed), [null], prose);
+    assert.deepEqual(extract(`${prose}\nexport {};\n`, "d.ts").map((c) => c.allowed), [null], prose);
   }
 });
 
@@ -366,20 +386,20 @@ test("NOWARN takes only skipstone's diagnostic ids, and trailing spaces are trim
     "let a = 1",
   ].join("\n");
   assert.deepEqual(
-    extractComments(source, "Bridge.swift").map((comment) => comment.allowed),
+    extract(source, "Bridge.swift").map((comment) => comment.allowed),
     ["skip-directive", null, "skip-directive", null],
   );
 });
 
-test("provenance hashes are allowed only in files the icon generator writes", () => {
+test("provenance hashes are allowed only in files the icon generator writes", { skip: kotlinMissing }, () => {
   const hash = "a8f815b7cd4ceb7bf9c5d04f6fed8528a3cf77981e3994e91cace24d6e25b541";
   const header = `// Profile material-rounded-24-absolute-v1; manifest SHA256 ${hash}; generator SHA256 ${hash}.`;
   const vector = `    // mic.fill1; input SHA256 ${hash}.`;
   const generated = "apps/conclave-skip/Sources/Conclave/Skip/ui/icons/ConclaveIcons.kt";
   const source = `${header}\npackage a\n${vector}\n// a sentence ending in SHA256 ${hash}.\n`;
-  assert.deepEqual(extractComments(source, generated).map((c) => c.allowed), ["provenance-hash", "provenance-hash", null]);
+  assert.deepEqual(extract(source, generated).map((c) => c.allowed), ["provenance-hash", "provenance-hash", null]);
   assert.deepEqual(
-    extractComments(source, "apps/conclave-skip/Sources/Conclave/Skip/Other.kt").map((c) => c.allowed),
+    extract(source, "apps/conclave-skip/Sources/Conclave/Skip/Other.kt").map((c) => c.allowed),
     [null, null, null],
   );
 });
@@ -396,13 +416,13 @@ test("the icon generator's output list is read from the generator", () => {
 
 test("a license block counts only comments that are notices themselves", () => {
   const todo = ["// TODO change the MIT License dialog", "// and the copy next to it", "export {};"].join("\n");
-  assert.deepEqual(extractComments(todo, "a.ts").map((c) => c.allowed), [null, null]);
+  assert.deepEqual(extract(todo, "a.ts").map((c) => c.allowed), [null, null]);
   const spdx = ["// SPDX-License-Identifier: MIT", "/* TODO clean this module up */", "export {};"].join("\n");
-  assert.deepEqual(extractComments(spdx, "b.ts").map((c) => c.allowed), ["license-header", null]);
+  assert.deepEqual(extract(spdx, "b.ts").map((c) => c.allowed), ["license-header", null]);
   const facehash = ["/**", " * Copyright (c) Cossistant team: face geometry from facehash 0.1.0.", " * MIT License", " */", "export {};"].join("\n");
-  assert.deepEqual(extractComments(facehash, "c.ts").map((c) => c.allowed), [null]);
+  assert.deepEqual(extract(facehash, "c.ts").map((c) => c.allowed), [null]);
   const block = ["/*", " * SPDX-License-Identifier: MIT", " * Copyright 2026 Example Inc.", " */", "export {};"].join("\n");
-  assert.deepEqual(extractComments(block, "e.ts").map((c) => c.allowed), ["license-header"]);
+  assert.deepEqual(extract(block, "e.ts").map((c) => c.allowed), ["license-header"]);
 });
 
 test("inline config that enables the rule is not a bypass, escaped names are decoded", () => {
@@ -412,14 +432,14 @@ test("inline config that enables the rule is not a bypass, escaped names are dec
     "/* eslint conclave/no-comments: [0] */",
     "export {};",
   ].join("\n");
-  assert.deepEqual(extractComments(source, "a.ts").map((c) => c.allowed), [null, null, null]);
+  assert.deepEqual(extract(source, "a.ts").map((c) => c.allowed), [null, null, null]);
   assert.deepEqual(
     [configuresNoComments('/* eslint conclave/no-comments: "error" */'), configuresNoComments('/* eslint "conclave\\u002fno-comments": "off" */'), configuresNoComments("/* eslint conclave/no-comments: [0] */")],
     [false, true, true],
   );
 });
 
-test("escapes in CSS, shell and Kotlin never open a comment", () => {
+test("escapes in CSS, shell and Kotlin never open a comment", { skip: kotlinMissing }, () => {
   assert.deepEqual(texts("a { background: url(a\\)b/*literal*/x); }\n/* real */\n", "a.css"), ["/* real */"]);
   assert.deepEqual(texts('.a\\"b { color: red; }\n/* real */\n.c { content: "x"; }\n', "b.css"), ["/* real */"]);
   assert.deepEqual(texts("echo word\\ #suffix\necho one\\ #literal # real\n", "a.sh"), ["# real"]);
@@ -493,11 +513,11 @@ test("a license notice must start its comment", () => {
     "// TODO: Update the Copyright 2026 label in Settings.",
     "export {};",
   ].join("\n");
-  assert.deepEqual(extractComments(source, "a.ts").map((c) => c.allowed), ["license-header", null]);
+  assert.deepEqual(extract(source, "a.ts").map((c) => c.allowed), ["license-header", null]);
   const later = ["// Copyright 2026 Example Inc.", "// Notes on the Copyright (c) dialog", "export {};"].join("\n");
-  assert.deepEqual(extractComments(later, "b.ts").map((c) => c.allowed), ["license-header", null]);
+  assert.deepEqual(extract(later, "b.ts").map((c) => c.allowed), ["license-header", null]);
   const dialog = ["// SPDX-License-Identifier: MIT", "// Copyright Dialog uses the same layout as Settings.", "export {};"].join("\n");
-  assert.deepEqual(extractComments(dialog, "c.ts").map((c) => c.allowed), ["license-header", null]);
+  assert.deepEqual(extract(dialog, "c.ts").map((c) => c.allowed), ["license-header", null]);
 });
 
 test("a Swift raw string #\"\"\"# holds one quote and does not open a multiline string", { skip: swiftMissing }, () => {
@@ -516,7 +536,7 @@ test("a # license notice in shell or Python is recognised", { skip: python312Mis
     ["b.sh", "#!/bin/sh\n# SPDX-License-Identifier: MIT\necho\n"],
     ["a.py", "# SPDX-License-Identifier: MIT\nx = 1\n"],
   ]) {
-    assert.equal(extractComments(source, file).at(-1).allowed, "license-header", file);
+    assert.equal(extract(source, file).at(-1).allowed, "license-header", file);
   }
 });
 
@@ -585,11 +605,11 @@ test("the sweep finds a file whose scanner stops before the end", async (t) => {
 
 test("a license notice after a shebang and a blank line is still the leading block", () => {
   assert.deepEqual(
-    extractComments("#!/bin/sh\n\n# Copyright 2026 Example Inc.\necho hi\n", "run.sh").map((comment) => comment.allowed),
+    extract("#!/bin/sh\n\n# Copyright 2026 Example Inc.\necho hi\n", "run.sh").map((comment) => comment.allowed),
     ["shebang", "license-header"],
   );
   assert.deepEqual(
-    extractComments("#!/usr/bin/env node\n\n// SPDX-License-Identifier: MIT\n\n// prose\nrun();\n", "run.mjs").map((comment) => comment.allowed),
+    extract("#!/usr/bin/env node\n\n// SPDX-License-Identifier: MIT\n\n// prose\nrun();\n", "run.mjs").map((comment) => comment.allowed),
     ["shebang", "license-header", null],
   );
 });
@@ -607,4 +627,20 @@ test("a tracked file deleted from the working tree does not break listing or the
   rmSync(path.join(repo, "gone.ts"));
   assert.deepEqual(listSourceFiles(repo), ["kept.ts"]);
   assert.deepEqual(filesMissingEndMarker(repo), []);
+});
+
+test("CSS comments come from the CSS tokenizer, so url() bodies stay data", () => {
+  assert.deepEqual(texts("a { b: u\\72l(icon/*crop*/x.svg) }\n/* real */\n", "a.css"), ["/* real */"]);
+  assert.deepEqual(texts("a { b: u\\72l(img/*2x*/x.png) }\n", "b.css"), []);
+  assert.deepEqual(texts("a { --x: #url(/* real */ red) }\n", "c.css"), ["/* real */"]);
+  assert.deepEqual(texts("a { --image: αurl(/* note */ 1px) }\n", "d.css"), ["/* note */"]);
+});
+
+test("files with bare CR line endings are read line by line", { skip: kotlinMissing || python312Missing }, () => {
+  assert.deepEqual(extractComments('fun main() {\r    println("x")\r}\r// actual\r', "Main.kt").map((c) => [c.line, c.text]), [[4, "// actual"]]);
+  assert.deepEqual(extractComments("x = 1\r# actual\r", "a.py").map((c) => [c.line, c.text]), [[2, "# actual"]]);
+});
+
+test("the Swift helper refuses a file swift-syntax cannot parse", { skip: swiftMissing }, () => {
+  assert.throws(() => extractComments('let s = """\n  unterminated\n// after\n', "Broken.swift"), /cannot read the comments in Broken\.swift: swift-syntax reported syntax errors/);
 });

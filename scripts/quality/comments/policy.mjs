@@ -25,6 +25,23 @@ export const VENDORED_PREFIXES = [
   "apps/web/public/noise-suppressor/",
 ];
 
+export const normalizeNewlines = (raw) => {
+  const removed = [];
+  for (let index = raw.indexOf("\r\n"); index !== -1; index = raw.indexOf("\r\n", index + 2)) removed.push(index);
+  const text = raw.replace(/\r\n?/g, "\n");
+  const toNormalized = (offset) => {
+    let low = 0;
+    let high = removed.length;
+    while (low < high) {
+      const middle = (low + high) >> 1;
+      if (removed[middle] < offset) low = middle + 1;
+      else high = middle;
+    }
+    return offset - low;
+  };
+  return { text, toNormalized };
+};
+
 export const languageOf = (file) => LANGUAGE_BY_EXTENSION[/\.[^./]+$/.exec(file)?.[0] ?? ""];
 
 export const isFirstPartySource = (file) =>

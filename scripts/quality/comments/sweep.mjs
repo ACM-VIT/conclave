@@ -2,7 +2,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { extractComments, listSourceFiles } from "./extract.mjs";
+import { extractComments, listSourceFiles, prepareFiles } from "./extract.mjs";
 import { languageOf } from "./policy.mjs";
 
 const END_MARKERS = {
@@ -14,12 +14,14 @@ const END_MARKERS = {
   python: "# END-OF-FILE-MARKER",
 };
 
-export const filesMissingEndMarker = (repo, files = listSourceFiles(repo)) =>
-  files.filter((file) => {
-    const marker = END_MARKERS[languageOf(file)];
-    const text = `${readFileSync(path.join(repo, file), "utf8")}\n${marker}\n`;
-    return extractComments(text, file).at(-1)?.text !== marker;
-  });
+export const filesMissingEndMarker = (repo, files = listSourceFiles(repo)) => {
+  const entries = files.map((file) => ({
+    file,
+    text: `${readFileSync(path.join(repo, file), "utf8")}\n${END_MARKERS[languageOf(file)]}\n`,
+  }));
+  prepareFiles(entries);
+  return entries.filter(({ file, text }) => extractComments(text, file).at(-1)?.text !== END_MARKERS[languageOf(file)]).map(({ file }) => file);
+};
 
 const main = () => {
   const repo = path.resolve(fileURLToPath(new URL("../../..", import.meta.url)));

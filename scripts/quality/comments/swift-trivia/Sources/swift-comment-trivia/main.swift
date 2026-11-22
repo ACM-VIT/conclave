@@ -1,5 +1,7 @@
 import Foundation
+import SwiftDiagnostics
 import SwiftParser
+import SwiftParserDiagnostics
 import SwiftSyntax
 
 let input = FileHandle.standardInput.readDataToEndOfFile()
@@ -17,6 +19,17 @@ func isComment(_ piece: TriviaPiece) -> Bool {
     }
 }
 
+let tree = Parser.parse(source: source)
+if tree.hasError {
+    let converter = SourceLocationConverter(fileName: "input.swift", tree: tree)
+    let messages = ParseDiagnosticsGenerator.diagnostics(for: tree).prefix(5).map { diagnostic -> String in
+        let location = diagnostic.location(converter: converter)
+        return "line \(location.line), column \(location.column): \(diagnostic.message)"
+    }
+    FileHandle.standardError.write(Data("swift-syntax reported syntax errors: \(messages.joined(separator: "; "))\n".utf8))
+    exit(2)
+}
+
 var ranges: [[Int]] = []
 func collect(_ trivia: Trivia, from start: AbsolutePosition) {
     var offset = start.utf8Offset
@@ -27,7 +40,6 @@ func collect(_ trivia: Trivia, from start: AbsolutePosition) {
     }
 }
 
-let tree = Parser.parse(source: source)
 for token in tree.tokens(viewMode: .sourceAccurate) {
     collect(token.leadingTrivia, from: token.position)
     collect(token.trailingTrivia, from: token.endPositionBeforeTrailingTrivia)
