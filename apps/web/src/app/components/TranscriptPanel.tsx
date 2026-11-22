@@ -298,9 +298,9 @@ function StartStage({
       : (offered(chosenLanguage) ? chosenLanguage : "");
   const sentLanguage =
     (chosenLanguage === null && needsTakeover) || !language ? undefined : language;
-  const defaultLanguageLabel = defaultCaptionLanguageLabel(
-    transcript.captionLanguageDefaults[provider],
-  );
+  const defaultLanguageLabel = transcript.supportsCaptionLanguage
+    ? defaultCaptionLanguageLabel(transcript.captionLanguageDefaults[provider])
+    : "";
   const assistantProvider = getResponseProvider(qaModel);
   const available = (name: typeof provider | typeof assistantProvider) =>
     transcript.globalProviderKeysAvailable[name] === true ||
