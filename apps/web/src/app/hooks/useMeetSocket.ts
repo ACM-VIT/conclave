@@ -665,6 +665,18 @@ class JoinRoomRedirectError extends Error {
   }
 }
 
+/**
+ * The join token names another identity than the one this join was started
+ * as. The caller has been told (`adoptJoinIdentity`) and joins again from the
+ * render that knows the new identity, so this attempt stops without an error.
+ */
+class JoinIdentityChangedError extends Error {
+  constructor() {
+    super("The join token names another identity.");
+    this.name = "JoinIdentityChangedError";
+  }
+}
+
 const normalizeJoinRedirectUrl = (value: unknown): string | null => {
   if (typeof value !== "string" || !value.trim()) return null;
   try {
@@ -862,9 +874,11 @@ interface UseMeetSocketOptions {
   user?: { id?: string; email?: string | null; name?: string | null };
   userId: string;
   /**
-   * Takes this client's identity from a join token. Returns true when that
-   * changes `userId`, in which case the caller joins again from the render
-   * that knows the new one.
+   * Takes this client's identity from the join token it is about to connect
+   * with. Returns true when that changes `userId`. The connection is then
+   * not made, and the caller joins `roomId` again from the render that knows
+   * the new identity. A socket is only ever opened as the identity its token
+   * names.
    */
   adoptJoinIdentity?: (token: string, roomId: string) => boolean;
   getJoinInfo: (
@@ -1080,6 +1094,8 @@ export function useMeetSocket({
   const isMutedRef = useRef(isMuted);
   const isCameraOffRef = useRef(isCameraOff);
   const serverRoomIdRef = useRef<string | null>(null);
+  const socketRoomIdRef = useRef<string | null>(null);
+  const identityRestartRoomIdRef = useRef<string | null>(null);
   const foregroundRecoveryTimeoutRef = useRef<number | null>(null);
   const runtimeStunIceServersRef = useRef<RTCIceServer[] | null>(null);
   const runtimeTurnIceServersRef = useRef<RTCIceServer[] | null>(null);
@@ -6966,32 +6982,6 @@ export function useMeetSocket({
     joinInfo: JoinInfo;
     fetchedAt: number;
   } | null>(null);
-  const holdJoinInfo = useCallback(
-    async (targetRoomId: string): Promise<JoinInfo> => {
-      const held = heldJoinInfoRef.current;
-      if (
-        held?.roomId === targetRoomId &&
-        Date.now() - held.fetchedAt < HELD_JOIN_INFO_TTL_MS
-      ) {
-        return held.joinInfo;
-      }
-      const joinInfo =
-        prewarm?.getCachedToken?.(targetRoomId) ??
-        (await getJoinInfo(targetRoomId, sessionIdRef.current, {
-          user,
-          isHost: isAdmin,
-          joinMode,
-        }));
-      heldJoinInfoRef.current = {
-        roomId: targetRoomId,
-        joinInfo,
-        fetchedAt: Date.now(),
-      };
-      return joinInfo;
-    },
-    [getJoinInfo, isAdmin, joinMode, prewarm, sessionIdRef, user],
-  );
-
   const connectSocket = useCallback(
     (
       targetRoomId: string,
@@ -7004,7 +6994,16 @@ export function useMeetSocket({
             const sfuUrlOverride = normalizeJoinRedirectUrl(
               options?.sfuUrlOverride,
             );
-            if (socketRef.current?.connected && !sfuUrlOverride) {
+            const roomIdForJoin =
+              targetRoomId || currentRoomIdRef.current || "";
+            // A live socket is reused only for the room its token was issued
+            // for. Another room needs another token, and with it the identity
+            // that token names.
+            if (
+              socketRef.current?.connected &&
+              !sfuUrlOverride &&
+              (!roomIdForJoin || socketRoomIdRef.current === roomIdForJoin)
+            ) {
               resolve(socketRef.current);
               return;
             }
@@ -7016,8 +7015,6 @@ export function useMeetSocket({
 
             setConnectionState("connecting");
 
-            const roomIdForJoin =
-              targetRoomId || currentRoomIdRef.current || "";
             if (!roomIdForJoin) {
               throw new Error("Missing room ID");
             }
@@ -7064,6 +7061,17 @@ export function useMeetSocket({
                 turnIceServers.length > 0 ? turnIceServers : null;
             }
 
+            if (adoptJoinIdentity?.(token, roomIdForJoin)) {
+              heldJoinInfoRef.current = {
+                roomId: roomIdForJoin,
+                joinInfo: { token, sfuUrl, iceServers },
+                fetchedAt: Date.now(),
+              };
+              identityRestartRoomIdRef.current = roomIdForJoin;
+              throw new JoinIdentityChangedError();
+            }
+
+            socketRoomIdRef.current = roomIdForJoin;
             const socket = io(socketUrl, {
               transports: ["websocket", "polling"],
               tryAllTransports: true,
@@ -9046,6 +9054,14 @@ export function useMeetSocket({
           return;
         } catch (err) {
           if (reconnectGeneration !== reconnectGenerationRef.current) return;
+          if (err instanceof JoinIdentityChangedError) {
+            cleanupRoomResources({
+              resetRoomId: false,
+              preserveMeetingState: true,
+            });
+            updateReconnectRecoveryStatus(null);
+            return;
+          }
           lastReconnectError = err;
           const reconnectFailure = describeReconnectFailure(err);
           const isRecoverable = isRecoverableReconnectFailure(err);
@@ -9273,22 +9289,17 @@ export function useMeetSocket({
       if (refs.abortControllerRef.current?.signal.aborted) return;
       const joinGeneration = reconnectGenerationRef.current;
 
-      if (adoptJoinIdentity) {
-        // A guest learns who it is in this room from its join token, and the
-        // rest of the join closes over that identity. So the token comes
-        // first, and when it names another identity this join starts over
-        // from the render that knows it. The token is kept for that join.
-        setConnectionState("connecting");
-        const joinInfo = await holdJoinInfo(targetRoomId).catch(() => null);
-        if (joinGeneration !== reconnectGenerationRef.current) return;
-        if (joinInfo && adoptJoinIdentity(joinInfo.token, targetRoomId)) return;
+      // A join that starts over under the identity its token named is still
+      // the attempt that was already counted.
+      const continuesAttempt = identityRestartRoomIdRef.current === targetRoomId;
+      identityRestartRoomIdRef.current = null;
+      if (!continuesAttempt) {
+        telemetry.capture("meet_join_attempt", {
+          roomId: targetRoomId,
+          joinMode,
+          isAdmin,
+        });
       }
-
-      telemetry.capture("meet_join_attempt", {
-        roomId: targetRoomId,
-        joinMode,
-        isAdmin,
-      });
 
       localRoomEndedHandledRef.current = false;
       setMeetError(null);
@@ -9450,6 +9461,7 @@ export function useMeetSocket({
           joinGeneration !== reconnectGenerationRef.current ||
           intentionalDisconnectRef.current
         ) return;
+        if (err instanceof JoinIdentityChangedError) return;
         console.error("[Meets] Error joining room:", err);
         telemetry.capture("meet_join_failure", {
           roomId: targetRoomId,
@@ -9498,8 +9510,6 @@ export function useMeetSocket({
       stopLocalTrack,
       updateReconnectRecoveryStatus,
       onSocketReady,
-      adoptJoinIdentity,
-      holdJoinInfo,
     ],
   );
 
