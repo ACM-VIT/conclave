@@ -92,12 +92,6 @@ export const FIRST_PARTY_SCRIPTS: ReadonlySet<string> = new Set([
     (file) => `/_/rtcvidproc/release/929503300/${file}`,
   ),
 ]);
-// Build chunks are matched by the name Turbopack gives them: 13 characters of
-// [0-9a-z_-] holding a hash, the first always 0 to 4 (true of every chunk in
-// our builds), in chunks/ itself, never a folder or a word below it.
-const NEXT_CHUNK = /^\/_next\/static\/chunks\/(?:turbopack-(?:worker-)?)?[0-4][0-9a-z_-]{12}\.js$/;
-const isFirstPartyScript = (pathname: string): boolean =>
-  FIRST_PARTY_SCRIPTS.has(pathname) || NEXT_CHUNK.test(pathname);
 // Frame names the browser gives code with no file, such as <anonymous>.
 const PLACEHOLDER_FRAME = /^(?:<[a-z ]+>|native|)$/;
 
@@ -161,12 +155,25 @@ const originOf = (value: unknown): string | null => {
   }
 };
 
-const scrubFrameUrl = (value: string, pageOrigin: string | null): string => {
+/**
+ * A path is kept only for a script the page's own origin served that we can
+ * prove is ours: one of the exact files under public/, or a build chunk whose
+ * frame carries the chunk id posthog-cli injected into it. A name alone proves
+ * nothing, so any other path is templated.
+ */
+const scrubFrameUrl = (
+  value: string,
+  pageOrigin: string | null,
+  chunkId: string | null,
+): string => {
   if (PLACEHOLDER_FRAME.test(value)) return value;
   try {
     const url = new URL(value);
     if (url.protocol !== "http:" && url.protocol !== "https:") return `${url.protocol}//[path]`;
-    if (url.origin === pageOrigin && isFirstPartyScript(url.pathname)) {
+    const ours =
+      FIRST_PARTY_SCRIPTS.has(url.pathname) ||
+      (chunkId !== null && url.pathname.startsWith("/_next/static/"));
+    if (url.origin === pageOrigin && ours) {
       return `${url.origin}${url.pathname}`;
     }
     return `${url.origin}${templatePath(url.pathname)}`;
@@ -185,19 +192,23 @@ const isPosition = (value: unknown): value is number =>
  * A frame keeps only its file, line, column, in-app flag and the chunk id
  * posthog-cli injected (a uuid), in the shape posthog-js sends.
  */
-const scrubFrame = (frame: ExceptionFrame, pageOrigin: string | null): ExceptionFrame => ({
-  platform: "web:javascript",
-  function: UNKNOWN_FUNCTION,
-  ...(typeof frame.filename === "string"
-    ? { filename: scrubFrameUrl(frame.filename, pageOrigin) }
-    : {}),
-  ...(isPosition(frame.lineno) ? { lineno: frame.lineno } : {}),
-  ...(isPosition(frame.colno) ? { colno: frame.colno } : {}),
-  ...(typeof frame.in_app === "boolean" ? { in_app: frame.in_app } : {}),
-  ...(typeof frame.chunk_id === "string" && SDK_ID_PATTERN.test(frame.chunk_id)
-    ? { chunk_id: frame.chunk_id }
-    : {}),
-});
+const scrubFrame = (frame: ExceptionFrame, pageOrigin: string | null): ExceptionFrame => {
+  const chunkId =
+    typeof frame.chunk_id === "string" && SDK_ID_PATTERN.test(frame.chunk_id)
+      ? frame.chunk_id
+      : null;
+  return {
+    platform: "web:javascript",
+    function: UNKNOWN_FUNCTION,
+    ...(typeof frame.filename === "string"
+      ? { filename: scrubFrameUrl(frame.filename, pageOrigin, chunkId) }
+      : {}),
+    ...(isPosition(frame.lineno) ? { lineno: frame.lineno } : {}),
+    ...(isPosition(frame.colno) ? { colno: frame.colno } : {}),
+    ...(typeof frame.in_app === "boolean" ? { in_app: frame.in_app } : {}),
+    ...(chunkId === null ? {} : { chunk_id: chunkId }),
+  };
+};
 
 // The mechanisms posthog-js reports: a caught or captured error, a cause in a
 // chain, and console capture.

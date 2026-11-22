@@ -66,6 +66,7 @@ const exceptionEvent = (): CaptureResult => ({
                 "https://conclave.acmvit.in/_next/static/chunks/0yo6oel71v_bh.js",
               lineno: 1,
               colno: 2048,
+              chunk_id: "11079975-c075-50b3-ad5f-87be8f4248d0",
             },
             {
               filename: "https://conclave.acmvit.in/yato-sokka-akane?x=1",
@@ -117,6 +118,7 @@ describe("scrubTelemetryEvent", () => {
       filename: "https://conclave.acmvit.in/_next/static/chunks/0yo6oel71v_bh.js",
       lineno: 1,
       colno: 2048,
+      chunk_id: "11079975-c075-50b3-ad5f-87be8f4248d0",
     });
   });
 });
@@ -335,9 +337,8 @@ describe("only trusted properties and paths", () => {
     ["https://conclave.acmvit.in/_next/static/chunks/quarterly-review-room.js", "https://conclave.acmvit.in/[path]"],
     ["https://conclave.acmvit.in/_next/static/chunks/standup-notes.js", "https://conclave.acmvit.in/[path]"],
     ["https://conclave.acmvit.in/_next/static/media/3u-6_1om1fv26.js", "https://conclave.acmvit.in/[path]"],
-    ["https://conclave.acmvit.in/_next/static/chunks/3u-6_1om1fv26.js", "https://conclave.acmvit.in/_next/static/chunks/3u-6_1om1fv26.js"],
-    ["https://conclave.acmvit.in/_next/static/chunks/turbopack-3-ry682tkyiqk.js", "https://conclave.acmvit.in/_next/static/chunks/turbopack-3-ry682tkyiqk.js"],
-    ["https://conclave.acmvit.in/_next/static/chunks/turbopack-worker-1hrsqshz0gfey.js", "https://conclave.acmvit.in/_next/static/chunks/turbopack-worker-1hrsqshz0gfey.js"],
+    ["https://conclave.acmvit.in/_next/static/chunks/3u-6_1om1fv26.js", "https://conclave.acmvit.in/[path]"],
+    ["https://conclave.acmvit.in/_next/static/chunks/1team-meeting.js", "https://conclave.acmvit.in/[path]"],
   ])("sends the frame path %s as %s", (filename, expected) => {
     const event = exceptionEvent();
     event.properties.$exception_list[0].stacktrace.frames[1].filename = filename;
@@ -453,6 +454,24 @@ describe("stack frames", () => {
       { platform: "web:javascript", function: "?", filename: "https://conclave.acmvit.in/[code]" },
     ]);
     expect(JSON.stringify(entry)).not.toMatch(/Quarterly|Mira|quarterly/);
+  });
+
+  it("keeps a chunk's path only when the frame carries the chunk id injected at build", () => {
+    const event = exceptionEvent();
+    event.properties.$exception_list[0].stacktrace.frames = [
+      { filename: "https://conclave.acmvit.in/_next/static/chunks/3u-6_1om1fv26.js", lineno: 1, chunk_id: chunkId },
+      { filename: "https://conclave.acmvit.in/_next/static/chunks/1team-meeting.js", lineno: 2 },
+      { filename: "https://conclave.acmvit.in/_next/static/chunks/0yo6oel71v_bh.js", lineno: 3, chunk_id: "1team-meeting" },
+      { filename: "https://cdn.example.net/_next/static/chunks/3u-6_1om1fv26.js", lineno: 4, chunk_id: chunkId },
+    ];
+    const frames = scrub(event).properties.$exception_list[0].stacktrace.frames;
+
+    expect(frames.map((frame: { filename: string }) => frame.filename)).toEqual([
+      "https://conclave.acmvit.in/_next/static/chunks/3u-6_1om1fv26.js",
+      "https://conclave.acmvit.in/[path]",
+      "https://conclave.acmvit.in/[path]",
+      "https://cdn.example.net/[path]",
+    ]);
   });
 
   it("rebuilds an exception entry from the fields the SDK sets", () => {

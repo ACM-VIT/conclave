@@ -130,9 +130,11 @@ trust, instead of scrubbing what looks bad:
 - **URLs.** Every URL property and stack frame URL becomes its origin and route
   (`/[code]`, `/w/[code]`), without query or hash. A frame keeps its path only
   for a script on the page's own origin that is one of the exact files under
-  `public/` (a test keeps that list equal to the folder), or a chunk directly
-  in `/_next/static/chunks` with a Turbopack name: 13 hashed characters, the
-  first 0 to 4. A frame from another scheme keeps only the scheme.
+  `public/` (a test keeps that list equal to the folder), or a build chunk
+  under `/_next/static` whose frame carries the chunk id `posthog-cli` injected
+  into it. A name alone proves nothing, so a build that skipped
+  `posthog-cli sourcemap inject` sends its chunk frames as `[path]`. A frame from another
+  scheme keeps only the scheme.
 - Our own string fields still go through the credential, email and token
   scrubber, and `save_campaign_params` is off.
 
