@@ -5,8 +5,10 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -174,15 +176,16 @@ class MicrophoneReplacementRecoveryTests {
         }
     }
 
-    @Test
-    fun aBandwidthChangeDuringRouteRecoveryLeavesTheMicAtTheNewestBitrate() {
-        val call = liveCall()
+    /** Codec options of every microphone produce, in order, and the latch that releases the first one's ack. */
+    private class Produces(val codecOptions: CopyOnWriteArrayList<String>, val firstAck: CountDownLatch)
+
+    /** Gives [call] a send transport that really produces (first ack held), a fake audio factory and a good mic. */
+    private fun producingCall(call: Call): Produces {
         val media = call.media
         val transport = unsafe.allocateInstance(ProducingSendTransport::class.java) as ProducingSendTransport
-        val produced = CopyOnWriteArrayList<String>()
-        val firstAck = CountDownLatch(1)
-        transport.codecOptions = produced
-        transport.firstAck = firstAck
+        val produces = Produces(CopyOnWriteArrayList(), CountDownLatch(1))
+        transport.codecOptions = produces.codecOptions
+        transport.firstAck = produces.firstAck
         transport.makeProducer = { index ->
             (unsafe.allocateInstance(FakeProducer::class.java) as FakeProducer).also { it.fakeId = "mic-${index + 1}" }
         }
@@ -196,6 +199,16 @@ class MicrophoneReplacementRecoveryTests {
         field("audioRouteRecoveryScope").set(media, CoroutineScope(Dispatchers.Main.immediate + SupervisorJob()))
         field("currentLocalBandwidthQuality").set(media, ConnectionQuality.good)
         field("audioProducerBandwidthQuality").set(media, ConnectionQuality.good)
+        return produces
+    }
+
+    @Test
+    fun aBandwidthChangeDuringRouteRecoveryLeavesTheMicAtTheNewestBitrate() {
+        val call = liveCall()
+        val media = call.media
+        val produces = producingCall(call)
+        val produced = produces.codecOptions
+        val firstAck = produces.firstAck
 
         WebRTCClient::class.java.getDeclaredMethod("recreateLocalAudioProducerAfterRouteRecovery", String::class.java)
             .apply { isAccessible = true }
@@ -216,6 +229,33 @@ class MicrophoneReplacementRecoveryTests {
         assertEquals(emergency, bitrate(produced.last()))
         assertEquals(ConnectionQuality.emergency, field("audioProducerBandwidthQuality").get(media))
         assertEquals("mic-3", (field("audioProducer").get(media) as Producer).id)
+    }
+
+    @Test
+    fun anOlderSkippedRefreshNeverReplaysOverANewerOne() {
+        val call = liveCall()
+        val media = call.media
+        val produces = producingCall(call)
+        field("audioBandwidthRefreshInFlight").setBoolean(media, true)
+        runBlocking { media.refreshLocalAudioProducerForBandwidthProfile(ConnectionQuality.emergency) }
+        field("audioBandwidthRefreshInFlight").setBoolean(media, false)
+        WebRTCClient::class.java.getDeclaredMethod("runPendingMicrophoneBandwidthRefresh")
+            .apply { isAccessible = true }
+            .invoke(media)
+
+        CoroutineScope(Dispatchers.Main.immediate + SupervisorJob()).launch(start = CoroutineStart.UNDISPATCHED) {
+            media.refreshLocalAudioProducerForBandwidthProfile(ConnectionQuality.poor)
+        }
+        pumpMainLooperUntil { produces.codecOptions.size == 1 }
+        repeat(5) { shadowOf(Looper.getMainLooper()).idle() }
+        produces.firstAck.countDown()
+        pumpMainLooperUntil { !field("audioBandwidthRefreshInFlight").getBoolean(media) }
+        val settleUntil = System.currentTimeMillis() + 300
+        pumpMainLooperUntil { System.currentTimeMillis() > settleUntil }
+
+        assertEquals(ConnectionQuality.poor, field("audioProducerBandwidthQuality").get(media))
+        assertEquals(LocalSenderPolicy.microphoneMaxAverageBitrateBps(ConnectionQuality.poor), bitrate(produces.codecOptions.last()))
+        assertEquals(1, produces.codecOptions.size)
     }
 
     @Test

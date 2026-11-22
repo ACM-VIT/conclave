@@ -1803,7 +1803,8 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     }
     private var audioBandwidthRefreshInFlight = false
     private var audioProducerRouteRecoveryInFlight = false
-    private var pendingMicrophoneBandwidthQuality: ConnectionQuality? = null
+    private var requestedMicrophoneBandwidthQuality: ConnectionQuality = ConnectionQuality.unknown
+    private var microphoneBandwidthRefreshPending = false
     private var videoBandwidthRefreshInFlight = false
     private var screenBandwidthRefreshInFlight = false
     private var lastAppliedLocalBandwidthSignature: String? = null
@@ -3660,16 +3661,16 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         get() = audioStartOrEnableInFlight || audioBandwidthRefreshInFlight || audioProducerRouteRecoveryInFlight
 
     /**
-     * A bandwidth refresh that arrived during another microphone change, which had already encoded for the older
-     * quality. The newest one runs once that change is done.
+     * A bandwidth refresh skipped while another microphone change was in flight, which had already encoded for an
+     * older quality. The replay reads the newest requested quality when it runs, so a refresh that ran in between is
+     * never undone by an older one.
      */
     private fun runPendingMicrophoneBandwidthRefresh() {
-        val quality = pendingMicrophoneBandwidthQuality ?: return
-        if (isMicrophoneChangeInFlight) return
-        pendingMicrophoneBandwidthQuality = null
+        if (!microphoneBandwidthRefreshPending || isMicrophoneChangeInFlight) return
+        microphoneBandwidthRefreshPending = false
         val generation = configurationGeneration
         audioRouteRecoveryScope.launch(Dispatchers.Main) {
-            if (generation == configurationGeneration) refreshLocalAudioProducerForBandwidthProfile(quality)
+            if (generation == configurationGeneration) refreshMicrophoneForRequestedBandwidth()
         }
     }
 
@@ -3906,8 +3907,14 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     internal suspend fun refreshLocalAudioProducerForBandwidthProfile(
         connectionQuality: ConnectionQuality,
     ) {
+        requestedMicrophoneBandwidthQuality = connectionQuality
+        refreshMicrophoneForRequestedBandwidth()
+    }
+
+    private suspend fun refreshMicrophoneForRequestedBandwidth() {
+        val connectionQuality = requestedMicrophoneBandwidthQuality
         if (isMicrophoneChangeInFlight) {
-            pendingMicrophoneBandwidthQuality = connectionQuality
+            microphoneBandwidthRefreshPending = true
             return
         }
         if (!shouldRefreshAudioProducerForBandwidthProfile(connectionQuality)) return
@@ -4936,7 +4943,8 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         screenProducerBandwidthSignature = null
         audioBandwidthRefreshInFlight = false
         audioProducerRouteRecoveryInFlight = false
-        pendingMicrophoneBandwidthQuality = null
+        requestedMicrophoneBandwidthQuality = ConnectionQuality.unknown
+        microphoneBandwidthRefreshPending = false
         videoBandwidthRefreshInFlight = false
         screenBandwidthRefreshInFlight = false
         lastAppliedLocalBandwidthSignature = null
