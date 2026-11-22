@@ -43,18 +43,29 @@ export const splitIceServersByType = (
   return { stunIceServers, turnIceServers };
 };
 
+/** One join answer's TURN servers and when their credentials run out. */
+export type RelaySet = {
+  servers: RTCIceServer[];
+  /** Null when the answer gave no lifetime. */
+  expiresAt: number | null;
+};
+
 /** The ICE servers new transports are offered, from the join answers so far. */
 export type RuntimeIceServers = {
   stun: RTCIceServer[] | null;
-  turn: RTCIceServer[] | null;
-  /** When `turn`'s credentials run out; null when the answer gave no lifetime. */
-  turnExpiresAt: number | null;
+  /** The relay from the newest answer that had a usable one. */
+  latestRelay: RelaySet | null;
+  /**
+   * The relay a transport was last seen carrying media through. It stays on
+   * offer next to a newer relay until that one has carried media too.
+   */
+  provenRelay: RelaySet | null;
 };
 
 export const NO_RUNTIME_ICE_SERVERS: RuntimeIceServers = {
   stun: null,
-  turn: null,
-  turnExpiresAt: null,
+  latestRelay: null,
+  provenRelay: null,
 };
 
 /** TURN credentials this close to expiry are no longer handed out. */
@@ -70,17 +81,35 @@ export const isRelayDueForRefresh = (
   now: number,
 ): boolean => expiresAt !== null && expiresAt - now <= RELAY_REFRESH_MARGIN_MS;
 
-/** TURN servers whose credentials still have time left, or null. */
+const usableRelay = (relay: RelaySet | null, now: number): RelaySet | null =>
+  relay && isRelayUsable(relay.expiresAt, now) ? relay : null;
+
+const relayHasUrl = (relay: RelaySet, url: string): boolean =>
+  relay.servers.some((server) => normalizeIceServerUrls(server.urls).includes(url));
+
+/**
+ * The TURN servers to offer new transports: the newest relay, and the one
+ * last seen carrying media when that is a different set, both only while
+ * their credentials have time left. Null when neither is usable.
+ */
 export const getUsableTurnIceServers = (
   servers: RuntimeIceServers,
   now: number,
-): RTCIceServer[] | null =>
-  servers.turn && isRelayUsable(servers.turnExpiresAt, now) ? servers.turn : null;
+): RTCIceServer[] | null => {
+  const latest = usableRelay(servers.latestRelay, now);
+  const proven = usableRelay(servers.provenRelay, now);
+  const offered = [
+    ...(latest?.servers ?? []),
+    ...(proven && proven !== latest ? proven.servers : []),
+  ];
+  return offered.length > 0 ? offered : null;
+};
 
 /**
  * The ICE servers to offer after a join answer. A route whose TURN provider
  * is down answers with STUN only, so an answer without a usable relay keeps
- * the TURN credentials already held for as long as they last.
+ * the newest relay already held for as long as it lasts. The relay last seen
+ * carrying media is never replaced here; see noteRelayCarryingMedia.
  */
 export const applyJoinAnswerToIceServers = (
   current: RuntimeIceServers,
@@ -90,11 +119,62 @@ export const applyJoinAnswerToIceServers = (
   const { stunIceServers, turnIceServers } = splitIceServersByType(
     answer.iceServers,
   );
-  const stun = stunIceServers.length > 0 ? stunIceServers : null;
-  if (turnIceServers.length > 0 && isRelayUsable(answer.relayExpiresAt, now)) {
-    return { stun, turn: turnIceServers, turnExpiresAt: answer.relayExpiresAt };
-  }
-  return getUsableTurnIceServers(current, now)
-    ? { stun, turn: current.turn, turnExpiresAt: current.turnExpiresAt }
-    : { stun, turn: null, turnExpiresAt: null };
+  const answerRelay =
+    turnIceServers.length > 0 && isRelayUsable(answer.relayExpiresAt, now)
+      ? { servers: turnIceServers, expiresAt: answer.relayExpiresAt }
+      : null;
+  return {
+    stun: stunIceServers.length > 0 ? stunIceServers : null,
+    latestRelay: answerRelay ?? usableRelay(current.latestRelay, now),
+    provenRelay: usableRelay(current.provenRelay, now),
+  };
+};
+
+/**
+ * A transport connected through the relay at `url`. When that is the newest
+ * relay it becomes the proven one and the older relay stops being offered.
+ * A connection through the older relay, or one that both sets list, changes
+ * nothing, so a working relay is never dropped for one that has not worked.
+ */
+export const noteRelayCarryingMedia = (
+  current: RuntimeIceServers,
+  url: string,
+): RuntimeIceServers => {
+  const { latestRelay, provenRelay } = current;
+  if (!latestRelay || latestRelay === provenRelay) return current;
+  if (!relayHasUrl(latestRelay, url)) return current;
+  if (provenRelay && relayHasUrl(provenRelay, url)) return current;
+  return { ...current, provenRelay: latestRelay };
+};
+
+type StatsEntry = {
+  type?: string;
+  id?: string;
+  selectedCandidatePairId?: string;
+  localCandidateId?: string;
+  nominated?: boolean;
+  selected?: boolean;
+  state?: string;
+  candidateType?: string;
+  url?: string;
+};
+
+/** The TURN URL of a transport's selected relay candidate, or null. */
+export const readSelectedRelayUrl = (stats: Iterable<StatsEntry>): string | null => {
+  const entries = [...stats];
+  const byId = new Map(entries.map((entry) => [entry.id, entry]));
+  const pairId = entries.find((entry) => entry.type === "transport")
+    ?.selectedCandidatePairId;
+  const pair =
+    (pairId ? byId.get(pairId) : undefined) ??
+    entries.find(
+      (entry) =>
+        entry.type === "candidate-pair" &&
+        (entry.selected === true ||
+          (entry.nominated === true && entry.state === "succeeded")),
+    );
+  const local = pair?.localCandidateId ? byId.get(pair.localCandidateId) : undefined;
+  return local?.candidateType === "relay" && typeof local.url === "string" && local.url
+    ? local.url.trim()
+    : null;
 };

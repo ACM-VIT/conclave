@@ -161,6 +161,8 @@ import {
   applyJoinAnswerToIceServers,
   getUsableTurnIceServers,
   normalizeIceServerUrls,
+  noteRelayCarryingMedia,
+  readSelectedRelayUrl,
   type RuntimeIceServers,
 } from "../lib/relay-credentials";
 import {
@@ -1541,6 +1543,21 @@ export function useMeetSocket({
       if (blockedPaths.delete(transportKind) && blockedPaths.size === 0) {
         setMeetError(null);
       }
+      // Remember which relay actually carries media, so a newer relay that
+      // has not worked yet never replaces it.
+      void transport
+        .getStats()
+        .then((stats) => {
+          if (transport.closed) return;
+          const relayUrl = readSelectedRelayUrl(stats.values());
+          if (relayUrl) {
+            runtimeIceServersRef.current = noteRelayCarryingMedia(
+              runtimeIceServersRef.current,
+              relayUrl,
+            );
+          }
+        })
+        .catch(() => {});
     },
     [setMeetError],
   );
@@ -7233,7 +7250,9 @@ export function useMeetSocket({
       runtimeIceServersRef.current = next;
       // Relay-only needs a relay. Without one, go back to the direct path
       // rather than offer no candidates.
-      if (!next.turn) relayOnlyIceRef.current = false;
+      if (!getUsableTurnIceServers(next, Date.now())) {
+        relayOnlyIceRef.current = false;
+      }
     },
     [],
   );
