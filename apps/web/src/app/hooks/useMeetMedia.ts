@@ -41,7 +41,6 @@ import {
   mergeMediaDeviceError,
   type MediaDeviceFailures,
 } from "../lib/utils";
-import type { MeetMediaDevice } from "../lib/types";
 import { acquireLocalTracks } from "../lib/media-acquisition";
 import {
   createCapturedSurfaceControlState,
@@ -2020,7 +2019,6 @@ export function useMeetMedia({
       setShowPermissionHint(true);
     }, 450);
 
-    let requestedDevice: MeetMediaDevice = "both";
     try {
       const wantsAudio = options.audio ?? true;
       const wantsVideo = options.video ?? !isCameraOff;
@@ -2035,12 +2033,6 @@ export function useMeetMedia({
         : null;
       const shouldRequestAudio = wantsAudio && !reusableAudioTrack;
       const shouldRequestVideo = wantsVideo && !reusableVideoTrack;
-      requestedDevice =
-        shouldRequestAudio && shouldRequestVideo
-          ? "both"
-          : shouldRequestVideo
-            ? "camera"
-            : "microphone";
 
       if (!wantsAudio && !wantsVideo) {
         setMediaState({
@@ -2153,12 +2145,10 @@ export function useMeetMedia({
 
       return liveTracks.length > 0 ? new MediaStream(liveTracks) : null;
     } catch (err) {
-      const meetErr = createMeetError(err, "PERMISSION_DENIED", requestedDevice);
-      setMeetError((current) => mergeMediaDeviceError(current, meetErr));
+      console.error("[Meets] Local media setup failed:", err);
+      setMeetError((current) => current ?? createMeetError(err, "MEDIA_ERROR"));
       setIsCameraOff(true);
-      if (meetErr.code === "PERMISSION_DENIED") {
-        setIsMuted(true);
-      }
+      setIsMuted(true);
       return null;
     } finally {
       if (permissionHintTimeoutRef.current) {

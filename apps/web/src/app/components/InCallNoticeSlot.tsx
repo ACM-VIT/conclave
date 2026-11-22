@@ -216,12 +216,7 @@ export default function InCallNoticeSlot({
   const fullHeightsRef = useRef(new WeakMap<Element, { key: string; height: number }>());
   const listHeightsRef = useRef(new Map<string, number>());
   const refocusRef = useRef(false);
-  const [host] = useState(() => {
-    if (typeof document === "undefined") return null;
-    const element = document.createElement("div");
-    element.className = "flex w-full flex-col items-center";
-    return element;
-  });
+  const [host, setHost] = useState<HTMLDivElement | null>(null);
   const [lane, setLane] = useState<LaneState>(EMPTY_LANE);
   const [view, setView] = useState<NoticeView>("stack");
   const [announcements, setAnnouncements] = useState<ReadonlyMap<string, Announcement>>(
@@ -242,13 +237,19 @@ export default function InCallNoticeSlot({
     view === "sheet" && sheetBody ? sheetBody : panelTarget && !lane.chip ? panelTarget : null;
 
   useLayoutEffect(() => {
+    const element = document.createElement("div");
+    element.className = "flex w-full flex-col items-center";
+    setHost(element);
+    return () => element.remove();
+  }, []);
+
+  useLayoutEffect(() => {
     const parent = surface ?? columnRef.current;
     if (!host || !parent) return;
     if (host.parentElement !== parent) parent.append(host);
     scheduleRef.current();
   }, [host, surface]);
 
-  useEffect(() => () => host?.remove(), [host]);
 
   useLayoutEffect(() => {
     if (!overPanel) {
@@ -489,6 +490,7 @@ export default function InCallNoticeSlot({
       }
     }
     window.visualViewport?.addEventListener("resize", schedule);
+    window.visualViewport?.addEventListener("scroll", schedule);
     const interval = window.setInterval(() => {
       if (list.children.length > 0) schedule();
     }, REMEASURE_INTERVAL_MS);
@@ -498,6 +500,7 @@ export default function InCallNoticeSlot({
       cancelAnimationFrame(frame);
       window.clearInterval(interval);
       window.visualViewport?.removeEventListener("resize", schedule);
+      window.visualViewport?.removeEventListener("scroll", schedule);
       listMutations.disconnect();
       stageMutations.disconnect();
       stage?.removeEventListener("pointermove", scheduleFromPointer);
@@ -533,6 +536,9 @@ export default function InCallNoticeSlot({
   const [sheetBaseline, setSheetBaseline] = useState<ReadonlySet<string> | null>(null);
   if (inSheet && !sheetBaseline) setSheetBaseline(new Set(announcements.keys()));
   if (!inSheet && sheetBaseline) setSheetBaseline(null);
+  if (sheetBaseline && [...sheetBaseline].some((key) => !announcements.get(key)?.holders)) {
+    setSheetBaseline(new Set([...sheetBaseline].filter((key) => announcements.get(key)?.holders)));
+  }
   const spokenInSheet = sheetBaseline ? spoken.filter(([key]) => !sheetBaseline.has(key)) : [];
 
   useEffect(() => {
@@ -542,6 +548,7 @@ export default function InCallNoticeSlot({
       frame = requestAnimationFrame(() => {
         const target =
           slotRef.current?.querySelector<HTMLElement>("[data-notice-toggle]") ??
+          host?.querySelector<HTMLElement>("[data-notice-toggle]") ??
           host?.querySelector<HTMLElement>("button");
         target?.focus();
       });
