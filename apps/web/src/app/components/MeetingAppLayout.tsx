@@ -31,6 +31,7 @@ interface MeetingAppLayoutProps {
   syncFailed?: boolean;
   onRetrySync?: () => void;
   rejectedChangeAt?: number | null;
+  frozen?: boolean;
 }
 
 const REJECTED_CHANGE_NOTICE_MS = 4_000;
@@ -57,6 +58,7 @@ function MeetingAppLayout({
   syncFailed = false,
   onRetrySync,
   rejectedChangeAt = null,
+  frozen = false,
 }: MeetingAppLayoutProps) {
   const [noticeFor, setNoticeFor] = useState<number | null>(null);
 
@@ -118,6 +120,7 @@ function MeetingAppLayout({
           </div>
         ) : null}
         <div
+          inert={frozen}
           className={
             frameContent
               ? "relative min-h-0 min-w-0 flex-1 overflow-hidden rounded-2xl border border-white/10 bg-[#0b0b0b] shadow-[0_20px_60px_rgba(0,0,0,0.4)]"

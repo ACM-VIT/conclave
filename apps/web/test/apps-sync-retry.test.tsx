@@ -3,6 +3,7 @@ import { act, useContext } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as Y from "yjs";
+import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from "y-protocols/awareness";
 import type { Socket } from "socket.io-client";
 import {
   AppsContext,
@@ -27,6 +28,7 @@ const makeSocket = (activeAppId: string | null = null) => {
   const uploads: Uint8Array[] = [];
   const updatePayloads: Array<{ update: Uint8Array; replicaId?: string }> = [];
   const syncPayloads: Array<Record<string, unknown>> = [];
+  const awarenessPayloads: Array<{ awarenessUpdate: Uint8Array; clientId: number }> = [];
   const control = { answerSync: (_attempt: number): SyncReply => undefined, getState: true };
   const pendingState: Ack[] = [];
   const socket = {
@@ -44,6 +46,7 @@ const makeSocket = (activeAppId: string | null = null) => {
         updatePayloads.push(payload as { update: Uint8Array; replicaId?: string });
       }
       if (event === "apps:yjs:sync") syncPayloads.push(payload as Record<string, unknown>);
+      if (event === "apps:awareness") awarenessPayloads.push(payload as { awarenessUpdate: Uint8Array; clientId: number });
       if (event !== "apps:yjs:sync" || typeof ack !== "function") return;
       syncTimes.push(Date.now());
       const reply = control.answerSync(syncTimes.length);
@@ -52,7 +55,7 @@ const makeSocket = (activeAppId: string | null = null) => {
     },
   } as unknown as Socket;
   const fire = (event: string, ...args: unknown[]) => listeners.get(event)?.forEach((listener) => listener(...args));
-  return { socket, syncTimes, unanswered, uploads, updatePayloads, syncPayloads, pendingState, control, fire };
+  return { socket, syncTimes, unanswered, uploads, updatePayloads, syncPayloads, awarenessPayloads, pendingState, control, fire };
 };
 
 let root: Root;
@@ -71,8 +74,8 @@ function BoardConsumer() {
   return null;
 }
 
-const boardApp = { id: "board", name: "Board" } as never;
-const mount = async (socket: Socket, { isAdmin = true, apps = [boardApp] }: { isAdmin?: boolean; apps?: never[] } = {}) => {
+const boardApps = [{ id: "board", name: "Board" } as never];
+const mount = async (socket: Socket, { isAdmin = true, apps = boardApps }: { isAdmin?: boolean; apps?: never[] } = {}) => {
   await act(async () =>
     root.render(
       <AppsProvider socket={socket} apps={apps} isAdmin={isAdmin}>
@@ -371,18 +374,46 @@ it("sends nothing back after a sync that left it with nothing the server lacks",
   expect(first.uploads).toEqual([]);
 });
 
-it("sends no change while the app is locked for a participant who is not a host, then sends again once unlocked", async () => {
+it("sends no change while the app is locked for a participant who is not a host", async () => {
   await mount(first.socket, { isAdmin: false });
   first.control.answerSync = () => boardContent();
   await appState("board", true);
 
   await draw("mine ");
+
   expect(ctx.syncStatus).toBe("synced");
   expect(first.uploads).toEqual([]);
+});
+
+it("rebuilds a copy that changed while locked before it sends again, so later changes integrate", async () => {
+  await mount(first.socket, { isAdmin: false });
+  first.control.answerSync = () => boardContent();
+  await appState("board", true);
+  await draw("racing ");
 
   await appState("board", false);
-  await draw("now ");
-  expect(first.uploads).toHaveLength(1);
+  expect(first.syncTimes).toHaveLength(2);
+  expect(boardText()).toBe("drawn before you joined");
+  expect(ctx.rejectedChangeAt).toBeNull();
+  await draw("after ");
+
+  const server = new Y.Doc();
+  Y.applyUpdate(server, Y.encodeStateAsUpdate(board));
+  for (const upload of first.uploads) Y.applyUpdate(server, upload);
+  expect(server.store.pendingStructs).toBeNull();
+  expect(server.getText("t").toString()).toBe("after drawn before you joined");
+});
+
+it("rebuilds a copy that changed before the participant became a host", async () => {
+  await mount(first.socket, { isAdmin: false });
+  first.control.answerSync = () => boardContent();
+  await appState("board", true);
+  await draw("racing ");
+
+  await mount(first.socket, { isAdmin: true });
+
+  expect(first.syncTimes).toHaveLength(2);
+  expect(boardText()).toBe("drawn before you joined");
 });
 
 it("keeps the refused board on screen until the server's copy arrives, then shows only what the server kept", async () => {
@@ -396,9 +427,11 @@ it("keeps the refused board on screen until the server's copy arrives, then show
   expect(mountedDoc).toBe(refusedDoc);
   expect(ctx.getDoc("board")).toBe(refusedDoc);
   expect(ctx.syncStatus).toBe("syncing");
+  expect(ctx.isRebuilding).toBe(true);
   await draw("lost ");
   await act(async () => first.unanswered.shift()!(boardContent()));
 
+  expect(ctx.isRebuilding).toBe(false);
   expect(ctx.getDoc("board")).not.toBe(refusedDoc);
   expect(mountedDoc).toBe(ctx.getDoc("board"));
   expect(boardText()).toBe("drawn before you joined");
@@ -423,6 +456,61 @@ it("keeps a peer's change that lands while it rebuilds the board", async () => {
   await act(async () => first.unanswered.shift()!(boardContent()));
 
   expect(boardText()).toBe("peer drawn before you joined");
+});
+
+it("rebuilds from the server alone, not from what the app's factory seeds", async () => {
+  const seeded = () => {
+    const doc = new Y.Doc();
+    doc.getText("t").insert(0, "seed ");
+    return doc;
+  };
+  await mount(first.socket, { apps: [{ id: "board", name: "Board", createDoc: seeded } as never] });
+  first.control.answerSync = () => boardContent();
+  await openBoard();
+  await draw("mine ");
+  const server = new Y.Doc();
+  Y.applyUpdate(server, Y.encodeStateAsUpdate(board));
+
+  first.control.answerSync = () => contentOf(server);
+  await refuse(lastReplica());
+
+  expect(boardText()).toBe("drawn before you joined");
+});
+
+it("takes the replaced copy's cursor away from peers and from the new copy", async () => {
+  first.control.answerSync = (attempt) => (attempt === 1 ? boardContent() : undefined);
+  await openBoard();
+  const before = ctx.getAwareness("board");
+  await act(async () => before.setLocalState({ cursor: [1, 2] }));
+  const oldClient = before.clientID;
+  const snapshot = encodeAwarenessUpdate(before, [oldClient]);
+  await draw("mine ");
+
+  await refuse(lastReplica());
+  await act(async () => first.unanswered.shift()!({ ...boardContent(), awarenessUpdate: snapshot }));
+
+  const after = ctx.getAwareness("board");
+  expect(after.clientID).not.toBe(oldClient);
+  expect(after.getStates().has(oldClient)).toBe(false);
+  const peer = new Awareness(new Y.Doc());
+  applyAwarenessUpdate(peer, snapshot, "remote");
+  for (const { awarenessUpdate } of first.awarenessPayloads) applyAwarenessUpdate(peer, awarenessUpdate, "remote");
+  expect(peer.getStates().has(oldClient)).toBe(false);
+  peer.destroy();
+});
+
+it("destroys its documents and presence when it unmounts", async () => {
+  first.control.answerSync = () => boardContent();
+  await openBoard();
+  const doc = ctx.getDoc("board");
+  const awareness = ctx.getAwareness("board");
+  await act(async () => awareness.setLocalState({ cursor: [1, 2] }));
+
+  await act(async () => root.unmount());
+  root = createRoot(document.createElement("div"));
+
+  expect(doc.isDestroyed).toBe(true);
+  expect(awareness.getLocalState()).toBeNull();
 });
 
 it("starts the rebuild again when asked to retry after it gave up", async () => {

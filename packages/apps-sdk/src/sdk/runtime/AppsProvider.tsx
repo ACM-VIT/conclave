@@ -1,7 +1,12 @@
 import React, { createContext, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Socket } from "socket.io-client";
 import * as Y from "yjs";
-import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from "y-protocols/awareness";
+import {
+  Awareness,
+  applyAwarenessUpdate,
+  encodeAwarenessUpdate,
+  removeAwarenessStates,
+} from "y-protocols/awareness";
 import type {
   AppDocuments,
   ConclaveApp,
@@ -149,6 +154,7 @@ export function AppsProvider({
   const [syncStatus, setSyncStatus] = useState<AppSyncStatus>("idle");
   const [docsVersion, setDocsVersion] = useState(0);
   const [rejectedChangeAt, setRejectedChangeAt] = useState<number | null>(null);
+  const [isRebuilding, setIsRebuilding] = useState(false);
   const syncRunRef = useRef<SyncRun | null>(null);
   const disposedRef = useRef(false);
 
@@ -171,6 +177,7 @@ export function AppsProvider({
   >(new Map());
   const replicaIdsRef = useRef<Map<string, string>>(new Map());
   const staleAppsRef = useRef<Set<string>>(new Set());
+  const unsentAppsRef = useRef<Set<string>>(new Set());
   const socketRef = useRef<Socket | null>(null);
   const isReadOnlyRef = useRef(isReadOnly);
   const isAdminRef = useRef(Boolean(isAdmin));
@@ -230,10 +237,12 @@ export function AppsProvider({
     initialUpdateSentRef.current.clear();
     replicaIdsRef.current.clear();
     staleAppsRef.current.clear();
+    unsentAppsRef.current.clear();
     serverActiveAppIdRef.current = null;
     lockedRef.current = false;
     setState({ activeAppId: null, locked: false });
     setRejectedChangeAt(null);
+    setIsRebuilding(false);
     setDocsVersion((version) => version + 1);
   }, [stopSync]);
 
@@ -269,6 +278,7 @@ export function AppsProvider({
     initialUpdateSentRef.current.delete(appId);
     replicaIdsRef.current.delete(appId);
     staleAppsRef.current.delete(appId);
+    unsentAppsRef.current.delete(appId);
     setDocsVersion((version) => version + 1);
   }, []);
 
@@ -278,7 +288,10 @@ export function AppsProvider({
     const replicaId = newReplicaId();
     const handler = (update: Uint8Array, origin: unknown) => {
       if (origin === "remote") return;
-      if (!canWrite()) return;
+      if (!canWrite()) {
+        unsentAppsRef.current.add(appId);
+        return;
+      }
       const currentSocket = socketRef.current;
       if (!currentSocket) return;
       const payload: AppsUpdatePayload = { appId, update, replicaId };
@@ -343,34 +356,30 @@ export function AppsProvider({
     awarenessHandlersRef.current.set(appId, handler);
   }, []);
 
-  const createAppDoc = useCallback(
-    (appId: string): Y.Doc => {
-      const app = apps.find((candidate) => candidate.id === appId);
-      return app?.createDoc ? app.createDoc() : new Y.Doc();
-    },
-    [apps]
-  );
-
   const getDoc = useCallback(
     (appId: string): Y.Doc => {
       const existing = docsRef.current.get(appId);
       if (existing) return existing;
 
-      const doc = createAppDoc(appId);
+      const app = apps.find((candidate) => candidate.id === appId);
+      const doc = app?.createDoc ? app.createDoc() : new Y.Doc();
       docsRef.current.set(appId, doc);
       registerDocHandlers(appId, doc);
       queueInitialUpdate(appId, doc);
       return doc;
     },
-    [createAppDoc, registerDocHandlers, queueInitialUpdate]
+    [apps, registerDocHandlers, queueInitialUpdate]
   );
 
   const adoptReplacement = useCallback(
-    (appId: string, doc: Y.Doc) => {
+    (appId: string, doc: Y.Doc): number | null => {
+      const replacedClient = docsRef.current.get(appId)?.clientID ?? null;
       discardLocalApp(appId);
       docsRef.current.set(appId, doc);
       initialUpdateSentRef.current.add(appId);
       registerDocHandlers(appId, doc);
+      setIsRebuilding(false);
+      return replacedClient;
     },
     [discardLocalApp, registerDocHandlers]
   );
@@ -399,13 +408,17 @@ export function AppsProvider({
         console.warn("[Apps] Failed to apply sync update", err);
         return false;
       }
-      if (run.replaces) adoptReplacement(run.appId, run.doc);
+      const replacedClient = run.replaces ? adoptReplacement(run.appId, run.doc) : null;
 
       if (response.awarenessUpdate) {
         const awarenessUpdate = toUint8Array(response.awarenessUpdate);
         if (awarenessUpdate && awarenessUpdate.length > 0) {
           try {
-            applyAwarenessUpdate(getAwareness(run.appId), awarenessUpdate, "remote");
+            const awareness = getAwareness(run.appId);
+            applyAwarenessUpdate(awareness, awarenessUpdate, "remote");
+            if (replacedClient !== null && replacedClient !== awareness.clientID) {
+              removeAwarenessStates(awareness, [replacedClient], "remote");
+            }
           } catch (err) {
             console.warn("[Apps] Failed to apply awareness update", err);
           }
@@ -493,25 +506,35 @@ export function AppsProvider({
       if (disposedRef.current) return;
       stopSync();
       const replaces = staleAppsRef.current.has(appId);
-      const doc = replaces ? createAppDoc(appId) : getDoc(appId);
+      const doc = replaces ? new Y.Doc() : getDoc(appId);
       if (!replaces) getAwareness(appId);
       const run: SyncRun = { appId, doc, replaces, startedAt: Date.now(), attempt: 0 };
       syncRunRef.current = run;
       setSyncStatus("syncing");
       attemptSync(run);
     },
-    [stopSync, createAppDoc, getDoc, getAwareness, attemptSync]
+    [stopSync, getDoc, getAwareness, attemptSync]
   );
 
   const rebuildApp = useCallback(
-    (appId: string) => {
+    (appId: string, { quietly = false }: { quietly?: boolean } = {}) => {
       detachDoc(appId);
       staleAppsRef.current.add(appId);
-      setRejectedChangeAt(Date.now());
+      unsentAppsRef.current.delete(appId);
+      setIsRebuilding(true);
+      if (!quietly) setRejectedChangeAt(Date.now());
       startSync(appId);
     },
     [detachDoc, startSync]
   );
+
+  const resumeWrites = useCallback(() => {
+    if (!canWrite()) return;
+    const appId = serverActiveAppIdRef.current;
+    const changedWhileBlocked = appId !== null && unsentAppsRef.current.has(appId);
+    unsentAppsRef.current.clear();
+    if (changedWhileBlocked) rebuildApp(appId, { quietly: true });
+  }, [canWrite, rebuildApp]);
 
   const retrySync = useCallback(() => {
     const appId = serverActiveAppIdRef.current;
@@ -526,13 +549,16 @@ export function AppsProvider({
       if (previous !== next.activeAppId) {
         stopSync();
         setRejectedChangeAt(null);
+        setIsRebuilding(false);
         if (previous) discardLocalApp(previous);
         if (next.activeAppId) startSync(next.activeAppId);
         else setSyncStatus("idle");
+      } else {
+        resumeWrites();
       }
       setState(next);
     },
-    [discardLocalApp, startSync, stopSync],
+    [discardLocalApp, startSync, stopSync, resumeWrites],
   );
 
   const refreshState = useCallback(() => {
@@ -630,12 +656,16 @@ export function AppsProvider({
   }, [socket, canWrite]);
 
   useEffect(() => {
+    resumeWrites();
+  }, [isAdmin, isReadOnly, resumeWrites]);
+
+  useEffect(() => {
     disposedRef.current = false;
     return () => {
       disposedRef.current = true;
-      stopSync();
+      resetLocalData();
     };
-  }, [stopSync]);
+  }, [resetLocalData]);
 
   const openApp = useCallback(async (appId: string, options?: Record<string, unknown>) => {
     const currentSocket = socketRef.current;
@@ -728,6 +758,7 @@ export function AppsProvider({
       retrySync,
       documents,
       rejectedChangeAt,
+      isRebuilding,
       user,
       participants: roster,
       isAdmin,
@@ -746,6 +777,7 @@ export function AppsProvider({
       retrySync,
       documents,
       rejectedChangeAt,
+      isRebuilding,
       user,
       roster,
       isAdmin,

@@ -96,6 +96,7 @@ export type AppsContextValue = {
   retrySync: () => void;
   documents: AppDocuments;
   rejectedChangeAt: number | null;
+  isRebuilding: boolean;
   user?: AppUser;
   participants?: AppUser[];
   isAdmin?: boolean;

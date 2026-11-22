@@ -8,7 +8,7 @@ import MeetingAppLayout from "../src/app/components/MeetingAppLayout";
 let root: Root;
 let container: HTMLDivElement;
 
-const renderLayout = async (props: { syncFailed?: boolean; onRetrySync?: () => void; rejectedChangeAt?: number | null }) => {
+const renderLayout = async (props: { syncFailed?: boolean; onRetrySync?: () => void; rejectedChangeAt?: number | null; frozen?: boolean }) => {
   await act(async () =>
     root.render(
       <GameProvider socket={null}>
@@ -124,4 +124,13 @@ it("shows only the rest of a recent notice when the app is shown again", async (
   } finally {
     vi.useRealTimers();
   }
+});
+
+it("keeps the app from taking input while it is rebuilt from the server", async () => {
+  await renderLayout({ frozen: true });
+  const frame = [...container.querySelectorAll("div")].find((element) => element.textContent === "board" && element.hasAttribute("inert"));
+  expect(frame).toBeDefined();
+
+  await renderLayout({ frozen: false });
+  expect(container.querySelector("[inert]")).toBeNull();
 });
