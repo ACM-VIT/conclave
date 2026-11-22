@@ -23,10 +23,11 @@ export interface PublicScheduledMeeting {
   endedAt: number | null;
 }
 
-export const resolveScheduledMeetingsBase = (): string => {
-  const base = resolveSfuUrl().replace(/\/$/, "");
-  return `${base}/scheduled-meetings`;
-};
+const scheduledMeetingsBase = (sfuUrl: string): string =>
+  `${sfuUrl.replace(/\/$/, "")}/scheduled-meetings`;
+
+export const resolveScheduledMeetingsBase = (): string =>
+  scheduledMeetingsBase(resolveSfuUrl());
 
 export const buildScheduledMeetingHeaders = (
   user: SfuAuthenticatedUser,
@@ -37,14 +38,23 @@ export const readScheduledMeetingError = (
   response: Response,
 ): Promise<string> => readResponseError(response);
 
+// A scheduled meeting lives on the SFU that answered for it, which is not
+// always the first one configured.
+export type FoundScheduledMeeting = {
+  kind: "scheduled";
+  sfuUrl: string;
+  clientId: string;
+  meeting: PublicScheduledMeeting;
+};
+
 export type ScheduledMeetingLookup =
-  | { kind: "scheduled"; clientId: string; meeting: PublicScheduledMeeting }
+  | FoundScheduledMeeting
   | { kind: "unscheduled" }
   // The SFU could not say. The code may well be a real meeting.
   | { kind: "unknown" };
 
-// The link page waits for this lookup before it renders, so all of it shares
-// one short deadline. An SFU that has not answered by then counts as failed.
+// The link page waits for these lookups before it renders, so each has a
+// short deadline. An SFU that has not answered by then counts as failed.
 const LOOKUP_DEADLINE_MS = 2500;
 
 // `null` is the SFU saying no meeting is scheduled at this code. A failed
@@ -55,8 +65,7 @@ const fetchPublicScheduledMeeting = async (
   roomCode: string,
   signal: AbortSignal,
 ): Promise<PublicScheduledMeeting | null> => {
-  const base = `${sfuUrl.replace(/\/$/, "")}/scheduled-meetings`;
-  const url = `${base}/public/by-room/${encodeURIComponent(roomCode)}?clientId=${encodeURIComponent(clientId)}`;
+  const url = `${scheduledMeetingsBase(sfuUrl)}/public/by-room/${encodeURIComponent(roomCode)}?clientId=${encodeURIComponent(clientId)}`;
   const response = await fetch(url, {
     method: "GET",
     headers: {
@@ -95,9 +104,14 @@ export const lookupScheduledMeetingForCode = async (
     })),
   );
   for (const { clientId, results } of answers) {
-    for (const result of results) {
+    for (const [index, result] of results.entries()) {
       if (result.status === "fulfilled" && result.value) {
-        return { kind: "scheduled", clientId, meeting: result.value };
+        return {
+          kind: "scheduled",
+          sfuUrl: sfuUrls[index],
+          clientId,
+          meeting: result.value,
+        };
       }
     }
   }
@@ -107,15 +121,15 @@ export const lookupScheduledMeetingForCode = async (
   return failed ? { kind: "unknown" } : { kind: "unscheduled" };
 };
 
-export const lookupScheduledMeetingHostEmail = async (
-  clientId: string,
-  roomCode: string,
-): Promise<string | null> => {
+export const lookupScheduledMeetingHostEmail = async ({
+  sfuUrl,
+  clientId,
+  meeting,
+}: FoundScheduledMeeting): Promise<string | null> => {
   try {
     const resolvedClientId =
       canonicalizeSfuClientId(clientId) || CONCLAVE_SFU_CLIENT_ID;
-    const base = resolveScheduledMeetingsBase();
-    const url = `${base}/by-room/${encodeURIComponent(roomCode)}?clientId=${encodeURIComponent(resolvedClientId)}`;
+    const url = `${scheduledMeetingsBase(sfuUrl)}/by-room/${encodeURIComponent(meeting.roomCode)}?clientId=${encodeURIComponent(resolvedClientId)}`;
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -123,6 +137,7 @@ export const lookupScheduledMeetingHostEmail = async (
         accept: "application/json",
       },
       cache: "no-store",
+      signal: AbortSignal.timeout(LOOKUP_DEADLINE_MS),
     });
     if (!response.ok) return null;
     const data = (await response.json()) as {
@@ -133,6 +148,32 @@ export const lookupScheduledMeetingHostEmail = async (
   } catch {
     return null;
   }
+};
+
+// Sends a request about one scheduled meeting to the SFU that has it: each
+// in turn until one knows the meeting. Only that SFU acts on it.
+export const fetchFromScheduledMeetingSfu = async (
+  path: string,
+  init: RequestInit,
+): Promise<Response> => {
+  let notFound: Response | null = null;
+  let unreachable: Error | null = null;
+  for (const sfuUrl of resolveSfuUrls()) {
+    try {
+      const response = await fetch(
+        `${scheduledMeetingsBase(sfuUrl)}${path}`,
+        init,
+      );
+      if (response.status !== 404) return response;
+      notFound = response;
+    } catch (error) {
+      unreachable = new Error(`Could not reach ${sfuUrl}`, { cause: error });
+    }
+  }
+  if (unreachable || !notFound) {
+    throw unreachable ?? new Error("No SFU is configured");
+  }
+  return notFound;
 };
 
 export const isMeetingJoinable = (

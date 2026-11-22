@@ -1,7 +1,10 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { lookupScheduledMeetingForCode } from "../src/lib/scheduled-meetings";
+import {
+  lookupScheduledMeetingForCode,
+  lookupScheduledMeetingHostEmail,
+} from "../src/lib/scheduled-meetings";
 
 let sfuUrls = ["http://sfu.test"];
 vi.mock("@/lib/sfu-user-auth", () => ({ buildScheduledWebinarHeaders: vi.fn() }));
@@ -40,12 +43,13 @@ afterEach(() => {
 });
 
 describe("looking up whether a link is a scheduled meeting", () => {
-  it("finds the meeting and the client it belongs to", async () => {
+  it("finds the meeting, and the client and SFU it belongs to", async () => {
     vi.stubGlobal("fetch", vi.fn(async (url: string) =>
       url.includes("clientId=public") ? Response.json({ scheduledMeeting: meeting }) : notFound()));
 
     expect(await lookupScheduledMeetingForCode("abc-mnop-xyz")).toEqual({
       kind: "scheduled",
+      sfuUrl: "http://sfu.test",
       clientId: "public",
       meeting,
     });
@@ -129,4 +133,36 @@ describe("looking up whether a link is a scheduled meeting", () => {
       clientId: "public",
     });
   });
+});
+
+describe("checking whether the visitor hosts a scheduled meeting", () => {
+  const hosted = { ...meeting, hostEmail: "Host@Example.com" };
+  const found = async () => {
+    const lookup = await lookupScheduledMeetingForCode("abc-mnop-xyz");
+    if (lookup.kind !== "scheduled") throw new Error(`Lookup was ${lookup.kind}`);
+    return lookup;
+  };
+
+  it("finds the host of a meeting that only the second SFU has", async () => {
+    sfuUrls = ["http://sfu-a.test", "http://sfu-b.test"];
+    vi.stubGlobal("fetch", vi.fn(async (url: string) =>
+      url.startsWith("http://sfu-b.test") && url.includes("clientId=conclave")
+        ? Response.json({ scheduledMeeting: hosted })
+        : notFound()));
+
+    expect(await lookupScheduledMeetingHostEmail(await found())).toBe(
+      "host@example.com",
+    );
+  });
+
+  it("does not hold the page when that SFU stalls after the lookup", async () => {
+    sfuUrls = [await stalledSfu("headers")];
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ scheduledMeeting: hosted })));
+    const lookup = await found();
+    vi.unstubAllGlobals();
+    const started = Date.now();
+
+    expect(await lookupScheduledMeetingHostEmail(lookup)).toBeNull();
+    expect(Date.now() - started).toBeLessThan(4000);
+  }, 8000);
 });

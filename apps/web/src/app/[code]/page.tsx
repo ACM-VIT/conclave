@@ -126,7 +126,7 @@ async function MeetRoomContent({ params, searchParams }: MeetRoomPageProps) {
     ) {
       const [sessionEmail, hostEmail] = await Promise.all([
         resolveSessionEmail(),
-        lookupScheduledMeetingHostEmail(lookup.clientId, sanitizedRoomCode),
+        lookupScheduledMeetingHostEmail(lookup),
       ]);
       const viewerIsHost = Boolean(
         sessionEmail && hostEmail && sessionEmail === hostEmail,
