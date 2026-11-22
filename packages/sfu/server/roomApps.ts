@@ -76,6 +76,16 @@ const encodedSizeAfter = (doc: Y.Doc, update: Uint8Array): number => {
 const appDocBytes = (entry: AppDoc): number =>
   entry.measuredBytes + entry.unmeasuredBytes;
 
+// Presence lives for one stay on the stage, on a document of its own: an
+// Awareness never lets go of the document it is given.
+const createPresence = (): Awareness => new Awareness(new Y.Doc());
+
+const destroyPresence = (awareness: Awareness): void => {
+  try {
+    awareness.doc.destroy();
+  } catch {}
+};
+
 /**
  * A room's apps: which one is presented on the stage, and the collaborative
  * document of every app the room has used.
@@ -273,9 +283,7 @@ export class RoomApps {
       removal = { appId, awarenessUpdate: encodeAwarenessUpdate(awareness, clientIds) };
     }
 
-    try {
-      awareness.destroy();
-    } catch {}
+    destroyPresence(awareness);
     this.awareness.delete(appId);
     return removal;
   }
@@ -331,7 +339,7 @@ export class RoomApps {
     if (!doc) return false;
     let awareness = this.awareness.get(appId);
     if (!awareness) {
-      awareness = new Awareness(doc);
+      awareness = createPresence();
       this.awareness.set(appId, awareness);
     }
     applyAwarenessUpdate(awareness, awarenessUpdate, userId ?? "socket");
@@ -406,9 +414,7 @@ export class RoomApps {
   /** Room teardown: destroys every document and all presence. */
   clear(): void {
     for (const awareness of this.awareness.values()) {
-      try {
-        awareness.destroy();
-      } catch {}
+      destroyPresence(awareness);
     }
     this.awareness.clear();
     this.awarenessClientIdsByUser.clear();
