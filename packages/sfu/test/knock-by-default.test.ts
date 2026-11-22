@@ -852,3 +852,68 @@ describe("an invited attendee the host removed, after a restart", () => {
     ).toBe(false);
   });
 });
+
+describe("a meeting a host ended for everyone", () => {
+  const endedMeeting = async () => {
+    vi.useFakeTimers({
+      toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
+    vi.setSystemTime(new Date("2026-11-22T08:00:00Z"));
+    const state = makeState();
+    const created = await join(state, host);
+    roomOf(state).allowLockedUser(guest.userId);
+    const member = await join(state, guest);
+    await send(created.peer, "admin:endRoom", {});
+    vi.advanceTimersByTime(2_000);
+    expect(state.rooms.size).toBe(0);
+    return { state, passFromBeforeTheEnd: member.response.roomRecoveryPass };
+  };
+
+  it("takes nobody back on a pass from before the end when it is opened again", async () => {
+    const { state, passFromBeforeTheEnd } = await endedMeeting();
+
+    const reopened = await join(state, host);
+    expect(reopened.status).toBe("joined");
+    expect(reopened.context.currentClient).toBeInstanceOf(Admin);
+    expect(
+      (await join(state, guest, { roomRecoveryPass: passFromBeforeTheEnd })).status,
+    ).toBe("waiting");
+  });
+
+  it("takes nobody back on such a pass after a restart either", async () => {
+    const { state, passFromBeforeTheEnd } = await endedMeeting();
+    const after = await restart(state);
+
+    const reopened = await join(after, host);
+    expect(reopened.context.currentClient).toBeInstanceOf(Admin);
+    expect(
+      (await join(after, guest, { roomRecoveryPass: passFromBeforeTheEnd })).status,
+    ).toBe("waiting");
+  });
+
+  it("opens afresh for whoever comes next, even someone who only has the link", async () => {
+    const { state } = await endedMeeting();
+    const after = await restart(state);
+
+    const visitor = await join(after, { ...knocker, allowRoomCreation: true });
+    expect(visitor.status).toBe("joined");
+    expect(visitor.context.currentClient).toBeInstanceOf(Admin);
+  });
+
+  it("still brings back the people in the reopened meeting if the server loses it", async () => {
+    const { state } = await endedMeeting();
+    vi.advanceTimersByTime(5_000);
+    await join(state, host);
+    roomOf(state).allowLockedUser(guest.userId);
+    const member = await join(state, guest);
+
+    const after = await restart(state);
+    const back = await join(
+      after,
+      { ...guest, allowRoomCreation: true },
+      { roomRecoveryPass: member.response.roomRecoveryPass },
+    );
+    expect(back.status).toBe("joined");
+    expect(back.context.currentClient).toBeInstanceOf(Admin);
+  });
+});

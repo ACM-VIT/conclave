@@ -25,7 +25,10 @@ export const ROOM_RECOVERY_PASS_TTL_MS = TTL_SECONDS * 1000 + CLOCK_SKEW_MS;
 export const LOST_ROOM_WINDOW_MS =
   REFRESH_INTERVAL_MS + ROOM_RECOVERY_PASS_TTL_MS;
 
-type RecoveryRoom = Pick<Room, "channelId" | "incarnationId">;
+type RecoveryRoom = Pick<
+  Room,
+  "channelId" | "incarnationId" | "recoveryPassesVoidUntil"
+>;
 type PassIssuingRoom = RecoveryRoom &
   Pick<Room, "userKeysById" | "needsReadmission">;
 type PassHolder = Pick<Client, "id" | "isObserver">;
@@ -98,7 +101,8 @@ export const startRoomRecoveryPassRefresh = (
 /**
  * Whether `pass` proves `userKey` was in an earlier incarnation of `room`.
  * A pass this incarnation issued proves nothing new: the live room already
- * knows who it admitted and who it removed.
+ * knows who it admitted and who it removed. A pass from before a host ended
+ * the meeting for everyone proves nothing either: that call is over.
  */
 export const provesEarlierRoomMembership = (
   pass: unknown,
@@ -121,6 +125,9 @@ export const provesEarlierRoomMembership = (
     claims.channelId === room.channelId &&
     claims.userKey === userKey &&
     typeof claims.incarnationId === "string" &&
-    claims.incarnationId !== room.incarnationId
+    claims.incarnationId !== room.incarnationId &&
+    typeof claims.iat === "number" &&
+    (room.recoveryPassesVoidUntil === null ||
+      claims.iat * 1000 > room.recoveryPassesVoidUntil)
   );
 };

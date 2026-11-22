@@ -65,6 +65,7 @@ export const markRoomEnded = (
   };
 
   state.endedRooms.set(room.channelId, endedRoom);
+  state.roomRecovery.noteEnded(room);
   return endedRoom;
 };
 

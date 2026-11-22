@@ -383,6 +383,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             room = result.room;
             createdRoom = result.created;
             if (createdRoom) {
+              room.recoveryPassesVoidUntil = recalled.passesVoidUntil;
               lostRoom = recalled.lost;
             }
           } catch (error) {
