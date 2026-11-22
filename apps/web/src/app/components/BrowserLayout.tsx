@@ -154,14 +154,15 @@ function BrowserLayout({
                     className="flex h-10 shrink-0 items-center justify-between gap-3 px-3"
                     style={{ borderBottom: `1px solid ${color.border}` }}
                 >
-                    <div className="flex min-w-0 items-center gap-2">
+                    <div className="flex shrink-0 items-center gap-2">
                         <Globe size={16} strokeWidth={1.75} className="shrink-0" style={{ color: color.textMuted }} aria-hidden="true" />
-                        <span className="truncate text-[13px] font-medium" style={{ color: color.text }}>
+                        <span className="text-[13px] font-medium" style={{ color: color.text }}>
                             {providerLabel}
                         </span>
                         <span className="hidden text-[12px] sm:inline" style={{ color: color.textFaint }}>
                             {providerDetail}
                         </span>
+                        <span className="sr-only">Live</span>
                     </div>
                     <span className="min-w-0 truncate text-[12px]" style={{ color: color.textFaint }}>
                         Shared by <span style={{ color: color.textMuted }}>{displayControllerName}</span>
