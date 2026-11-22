@@ -130,6 +130,20 @@ const ROW_FRAMING_BYTES = 28;
 /** `{"bucket":` `,"key":` `}` and a comma. */
 const REF_FRAMING_BYTES = 19;
 
+/**
+ * Every frame lists its rows by bucket, then key. The order a cache took
+ * rows in depends on who read it when, so a frame that followed it would
+ * differ for one viewer with what other viewers did.
+ */
+const inPlace = (a: { bucket: string; key: string }, b: { bucket: string; key: string }): number =>
+  a.bucket < b.bucket ? -1 : a.bucket > b.bucket ? 1 : a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
+
+const placed = (ops: ViewOps): ViewOps => {
+  ops.put.sort(inPlace);
+  ops.remove.sort(inPlace);
+  return ops;
+};
+
 const rowsOf = (audience: Audience, into: SizedRow[]): void => {
   for (const [bucket, state] of audience.buckets) {
     for (const [key, delivered] of state.rows) {
@@ -202,7 +216,7 @@ export class ViewChanges {
         ops.bytes += refBytes(change.bucket, change.key);
       }
     }
-    return ops;
+    return placed(ops);
   }
 }
 
@@ -354,6 +368,7 @@ export class ViewTracker {
     const rows: SizedRow[] = [];
     rowsOf(this.roleAudience(role), rows);
     rowsOf(this.subjectAudience(subject), rows);
+    rows.sort((a, b) => inPlace(a.row, b.row));
     return { rows, version: this.version };
   }
 
@@ -419,7 +434,7 @@ export class ViewTracker {
         ops.bytes += refBytes(bucket, key);
       }
     }
-    return { ops, version: this.version };
+    return { ops: placed(ops), version: this.version };
   }
 
   /**
