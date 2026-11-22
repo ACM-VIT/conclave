@@ -27,8 +27,18 @@ const EMAIL_PATTERN = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
 const JWT_PATTERN = /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g;
 const LONG_TOKEN_PATTERN = /\b[A-Za-z0-9_-]{40,}\b/g;
 const URL_IN_TEXT_PATTERN = /\bhttps?:\/\/[^\s"'<>)]+/gi;
-// Our own script folders. A stack frame in one keeps its path so PostHog can
-// match it to a source map.
+// Headers whose whole value is a credential: everything to the end of the line.
+const CREDENTIAL_HEADER_PATTERN =
+  /\b(cookie|set-cookie|authorization|proxy-authorization)(\s*:)[^\r\n]*/gi;
+const AUTH_SCHEME_PATTERN = /\b(bearer|basic)\s+[^\s,;"']+/gi;
+const SECRET_ASSIGNMENT_PATTERN =
+  /\b(password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|session)(\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;&"']+)/gi;
+// Our own scripts. A stack frame in one keeps its path so PostHog can match it
+// to a source map.
+const ASSET_PATHS = new Set([
+  "/transcript-pcm-processor.js",
+  "/effects/video-effects-output-writer.js",
+]);
 const ASSET_PATH_PREFIXES = [
   "/_next/static/",
   "/mediapipe/",
@@ -70,11 +80,14 @@ export function scrubUrl(value: string): string {
   return scrubHttpUrl(value) ?? scrubText(value);
 }
 
-/** Removes emails, tokens and URL details from free text. */
+/** Removes credentials, emails, tokens and URL details from free text. */
 export function scrubText(value: string): string {
   return value
     .slice(0, MAX_TEXT_LENGTH)
     .replace(URL_IN_TEXT_PATTERN, (url) => scrubHttpUrl(url) ?? "[url]")
+    .replace(CREDENTIAL_HEADER_PATTERN, "$1$2 [redacted]")
+    .replace(AUTH_SCHEME_PATTERN, "$1 [redacted]")
+    .replace(SECRET_ASSIGNMENT_PATTERN, "$1$2[redacted]")
     .replace(JWT_PATTERN, "[token]")
     .replace(EMAIL_PATTERN, "[email]")
     .replace(LONG_TOKEN_PATTERN, "[token]");
@@ -101,7 +114,8 @@ const scrubFrameUrl = (value: string, pageOrigin: string | null): string => {
     const ownScript =
       (url.protocol === "http:" || url.protocol === "https:") &&
       url.origin === pageOrigin &&
-      ASSET_PATH_PREFIXES.some((prefix) => url.pathname.startsWith(prefix));
+      (ASSET_PATHS.has(url.pathname) ||
+        ASSET_PATH_PREFIXES.some((prefix) => url.pathname.startsWith(prefix)));
     if (ownScript) return `${url.origin}${url.pathname}`;
   } catch {
   }
@@ -120,8 +134,24 @@ const scrubFrame = (frame: ExceptionFrame, pageOrigin: string | null): Exception
 // Thrown as ServerError (lib/server-error.ts): text the server wrote.
 const SERVER_ERROR_TYPE = "ServerError";
 
+type Mechanism = { type?: unknown; synthetic?: unknown };
+
+// posthog-js marks an exception built from something that was not an Error
+// (a rejected string or object, a thrown value) as synthetic and puts that
+// value in the message. Only its kind leaves the browser.
+const syntheticKind = (entry: ExceptionEntry): string | null => {
+  const mechanism = entry.mechanism as Mechanism | undefined;
+  if (mechanism?.synthetic !== true) return null;
+  if (mechanism.type === "onunhandledrejection") {
+    return entry.type === "UnhandledRejection" ? "[primitive rejection]" : "[object rejection]";
+  }
+  return "[non-error exception]";
+};
+
 const scrubExceptionValue = (entry: ExceptionEntry): unknown => {
   if (entry.type === SERVER_ERROR_TYPE) return "[server message]";
+  const synthetic = syntheticKind(entry);
+  if (synthetic) return synthetic;
   return typeof entry.value === "string" ? scrubText(entry.value) : entry.value;
 };
 

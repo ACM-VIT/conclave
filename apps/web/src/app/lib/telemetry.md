@@ -103,13 +103,18 @@ and reconnect failures carry a `failure_reason` category, never the error text.
 `telemetry-privacy.ts` runs as posthog-js `before_send`. It rewrites every URL
 property and stack frame URL to its route (`/[code]`, `/w/[code]`), drops query
 strings, hashes, the page title and any `roomId` or `userId` property, and
-replaces emails and tokens in free text. It also drops campaign and click-id
+replaces emails, tokens and credentials in free text: the whole value of a
+`Cookie`, `Set-Cookie`, `Authorization` or `Proxy-Authorization` line, Bearer
+and Basic tokens, and `password=` / `token:` style values, at any length. An
+exception built from something that was not an Error (a rejected string or
+object, a thrown value) sends only its kind, such as `[primitive rejection]`,
+never the value. It also drops campaign and click-id
 properties (`utm_*`, `fbclid`, `gclid` and friends) and the search keywords the
 SDK takes from a search-engine referrer (`ph_keyword`), with their `$initial_`
 and `$session_entry_` copies, and `save_campaign_params` is off. `$search_engine`
 stays. Any object or array property other than `$exception_list` is dropped.
-Stack frames in our script folders (`/_next/static/`, `/mediapipe/` and so on)
-on the page's own origin keep their path so they can be symbolicated. URL
+Stack frames in our own scripts (`/_next/static/`, `/mediapipe/`, the
+transcript and effects worklets and so on) on the page's own origin keep their path so they can be symbolicated. URL
 properties never do.
 Session replay, surveys, DOM autocapture, feature flags and pageviews are off,
 and no user is ever identified. The SFU scrubs emails, tokens and credentials

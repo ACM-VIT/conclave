@@ -188,6 +188,60 @@ describe("referrer keywords, nested values and other origins", () => {
   });
 });
 
+describe("credentials, non-error rejections and first-party scripts", () => {
+  it("redacts auth headers, cookies and secret assignments at any length", () => {
+    const event = exceptionEvent();
+    event.properties.$exception_list[0].value =
+      "Request failed: Authorization: Bearer short_private\nretry with Basic dXNlcjpw " +
+      "password=pw_secret1 token: tok_secret2\nCookie: theme=dark; session=second_private\n" +
+      "api_key=key_secret3 and Proxy-Authorization: Basic cHJveHk";
+    const scrubbed = scrubTelemetryEvent(event);
+
+    expect(JSON.stringify(scrubbed)).not.toMatch(
+      /short_private|dXNlcjpw|pw_secret1|tok_secret2|theme=dark|second_private|key_secret3|cHJveHk/,
+    );
+  });
+
+  it.each([
+    ["onunhandledrejection", "UnhandledRejection", "Non-Error promise rejection captured with value: Meet Mira in sample-room at seven", "[primitive rejection]"],
+    ["onunhandledrejection", "Object", "Object captured as exception with keys: note, room", "[object rejection]"],
+    ["onerror", "Error", "Error captured as exception: Meet Mira in sample-room at seven", "[non-error exception]"],
+  ])("sends only the kind of a %s value that is not an Error (%s)", (mechanism, type, value, expected) => {
+    const event = exceptionEvent();
+    event.properties.$exception_list = [
+      { type, value, mechanism: { type: mechanism, handled: false, synthetic: true } },
+    ];
+    const scrubbed = scrubTelemetryEvent(event);
+
+    expect(scrubbed.properties.$exception_list[0].value).toBe(expected);
+    expect(JSON.stringify(scrubbed)).not.toMatch(/Mira|sample-room|seven|note, room/);
+  });
+
+  it("keeps the message of a real Error", () => {
+    const event = exceptionEvent();
+    event.properties.$exception_list = [
+      { type: "TypeError", value: "Cannot read properties of undefined (reading 'track')", mechanism: { type: "onerror", synthetic: false } },
+    ];
+
+    expect(scrubTelemetryEvent(event).properties.$exception_list[0].value).toBe(
+      "Cannot read properties of undefined (reading 'track')",
+    );
+  });
+
+  it.each(["/transcript-pcm-processor.js", "/effects/video-effects-output-writer.js"])(
+    "keeps the path of our own %s worklet frame",
+    (path) => {
+      const event = exceptionEvent();
+      event.properties.$exception_list[0].stacktrace.frames[1].filename = `https://conclave.acmvit.in${path}`;
+      const scrubbed = scrubTelemetryEvent(event);
+
+      expect(scrubbed.properties.$exception_list[0].stacktrace.frames[1].filename).toBe(
+        `https://conclave.acmvit.in${path}`,
+      );
+    },
+  );
+});
+
 describe("server text", () => {
   it("drops the message of an error the server wrote", () => {
     const event = exceptionEvent();
