@@ -747,6 +747,22 @@ describe("who hosts a call the server lost", () => {
     expect(knocksShownTo(hostBack)).toContain(knocker.userId);
   });
 
+  it("shows the host the knock again after the restart, and admitting it lets the knocker in", async () => {
+    const { before } = await lostCall();
+    const after = await restart(before);
+    const knockerBack = await join(after, knockerAsking);
+    expect(knockerBack.status).toBe("waiting");
+
+    const hostBack = await join(after, host);
+    expect(knocksShownTo(hostBack)).toContain(knocker.userId);
+    const admitted = await send(hostBack.peer, "admitUser", { userId: knocker.userId });
+    expect(admitted?.success).toBe(true);
+    expect(
+      knockerBack.peer.emit.mock.calls.some(([event]) => event === "joinApproved"),
+    ).toBe(true);
+    expect((await join(after, knockerAsking)).status).toBe("joined");
+  });
+
   it("makes a member without a pass wait for a host when they are first back", async () => {
     const { before } = await lostCall();
     const after = await restart(before);
