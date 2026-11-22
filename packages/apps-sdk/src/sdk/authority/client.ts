@@ -123,6 +123,8 @@ export class AuthorityClient {
   private negotiation = 0;
   private notJoinedAttempts = 0;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The app said it left its room. Nothing is asked until it rejoins. */
+  private away = false;
   private disposed = false;
 
   constructor(options: AuthorityClientOptions) {
@@ -161,7 +163,7 @@ export class AuthorityClient {
    * the runtime, and every app stays hidden.
    */
   refresh(): void {
-    if (this.disposed || !this.socket.connected) return;
+    if (this.disposed || this.away || !this.socket.connected) return;
     this.clearRetry();
     const attempt = ++this.negotiation;
     const request: CapabilitiesRequest = { protocols: [AUTHORITY_PROTOCOL] };
@@ -194,8 +196,22 @@ export class AuthorityClient {
 
   /** Starts a new attempt budget. Call when the room is (re)joined. */
   joined(): void {
+    this.away = false;
     this.notJoinedAttempts = 0;
     this.refresh();
+  }
+
+  /**
+   * Call when the room is left on a socket that stays open. Every view is
+   * forgotten, and nothing the room left behind still sends is taken up,
+   * until `joined` is called again.
+   */
+  left(): void {
+    if (this.away) return;
+    this.away = true;
+    this.negotiation += 1;
+    this.clearRetry();
+    this.setCapabilities({ kind: "unknown" });
   }
 
   open<C extends AuthorityContract>(contract: C): AuthoritySession<C> {
@@ -277,6 +293,7 @@ export class AuthorityClient {
   private readonly onCapabilitiesChanged: SocketListener = (payload) => {
     const capability = payload as Partial<AuthorityCapability> | null;
     if (
+      this.away ||
       capability?.protocol !== AUTHORITY_PROTOCOL ||
       typeof capability.roomEpoch !== "string" ||
       !Array.isArray(capability.apps)
@@ -291,7 +308,8 @@ export class AuthorityClient {
   };
 
   private readonly onConnect: SocketListener = () => {
-    this.joined();
+    this.notJoinedAttempts = 0;
+    this.refresh();
   };
 
   private readonly onDisconnect: SocketListener = () => {
@@ -377,7 +395,9 @@ export class AuthoritySession<C extends AuthorityContract> {
    * Sends an action and resolves with the server's answer. If the answer is
    * lost, or the view is being replaced, the same operation id is sent again
    * until it is answered or the id expires, so one press is one action however
-   * many times it is sent.
+   * many times it is sent. A resend stays in the room the action was first
+   * sent to: if the socket is in another room by then, or the room was
+   * recreated, the action ends as `unknown-outcome`.
    */
   async act<K extends ActionName<C>>(
     action: K,
@@ -389,6 +409,7 @@ export class AuthoritySession<C extends AuthorityContract> {
     };
     const deadline =
       this.client.now() + AUTHORITY_LIMITS.operationMaxAgeMs - RETRY_PAUSE_MS * 4;
+    let sentToEpoch: string | null = null;
 
     for (;;) {
       if (this.closed || this.client.isDisposed) return failure("unknown-outcome");
@@ -400,6 +421,11 @@ export class AuthoritySession<C extends AuthorityContract> {
       if (!(await this.whenReady(remaining))) continue;
       const epoch = this.subscribedEpoch;
       if (this.state.kind !== "ready" || !this.subscription || !epoch) continue;
+      // A new room keeps no record of the operation and would run it afresh.
+      if (sentToEpoch !== null && epoch !== sentToEpoch) {
+        return failure("unknown-outcome");
+      }
+      sentToEpoch = epoch;
 
       const request: ActRequest = {
         roomEpoch: epoch,

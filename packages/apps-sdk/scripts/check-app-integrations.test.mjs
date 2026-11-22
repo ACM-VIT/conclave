@@ -148,6 +148,69 @@ test("the web app may not reach a server entry by relative path either", () => {
   assert.match(checked.output, /apps\/web\/src\/app\/panel\.tsx imports server-only code/);
 });
 
+test("a lazy import is read however its path is written", () => {
+  const repo = makeRepo();
+  repo.scaffold("sign-up", "--runtime", "authority");
+  repo.write(
+    "packages/apps-sdk/src/apps/sign-up/web/template.ts",
+    "export const load = () => import(`../server/index`);\n",
+  );
+  repo.write(
+    "packages/apps-sdk/src/apps/sign-up/web/commented.ts",
+    'export const load = () => import(/* webpackChunkName: "rules" */ "../server/index");\n',
+  );
+  repo.write(
+    "apps/web/src/app/required.ts",
+    'export const rules = require("@conclave/apps-sdk/sign-up/server");\n',
+  );
+
+  const checked = repo.check();
+
+  assert.equal(checked.status, 1);
+  assert.match(checked.output, /sign-up\/web\/template\.ts imports server-only code/);
+  assert.match(checked.output, /sign-up\/web\/commented\.ts imports server-only code/);
+  assert.match(checked.output, /apps\/web\/src\/app\/required\.ts imports server-only code/);
+});
+
+test("a lazy import whose path is worked out at run time is refused near server code", () => {
+  const repo = makeRepo();
+  repo.scaffold("sign-up", "--runtime", "authority");
+  // A bundler ships every file such a path could name, the server entry too.
+  repo.write(
+    "packages/apps-sdk/src/apps/sign-up/web/computed.ts",
+    "export const load = (part: string) => import(`../${part}/index`);\n",
+  );
+  repo.write(
+    "apps/web/src/app/computed.ts",
+    "export const load = (app: string) => import(`@conclave/apps-sdk/${app}/server`);\n",
+  );
+  // Elsewhere in the web app a computed path cannot reach this package.
+  repo.write(
+    "apps/web/src/app/locale.ts",
+    "export const load = (lang: string) => import(`./locales/${lang}`);\n",
+  );
+
+  const checked = repo.check();
+
+  assert.equal(checked.status, 1);
+  assert.match(checked.output, /sign-up\/web\/computed\.ts builds an import path at run time/);
+  assert.match(checked.output, /apps\/web\/src\/app\/computed\.ts builds an import path at run time/);
+  assert.doesNotMatch(checked.output, /locale\.ts/);
+});
+
+test("words that only look like an import are left alone", () => {
+  const repo = makeRepo();
+  repo.scaffold("sign-up", "--runtime", "authority");
+  repo.write(
+    "packages/apps-sdk/src/apps/sign-up/web/notes.ts",
+    '// import { signUpAuthority } from "../server/index";\nexport const hint = \'import("../server/index")\';\n',
+  );
+
+  const checked = repo.check();
+
+  assert.equal(checked.status, 0, checked.output);
+});
+
 test("an authority app needs a contract with its own id and a server definition", () => {
   const repo = makeRepo();
   repo.scaffold("sign-up", "--runtime", "authority");

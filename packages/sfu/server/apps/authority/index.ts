@@ -70,6 +70,17 @@ export const peekRoomAuthority = (room: Room): RoomAuthority | null => {
 };
 
 /**
+ * Says that a room's mode or one of its flags may have changed. Called from
+ * wherever a room's webinar config is written, so a view that depends on it
+ * is corrected at once and not at the next request. It costs nothing when
+ * the room has no runtime or nothing changed.
+ */
+export const notifyAuthorityPolicy = (state: SfuState, channelId: string): void => {
+  const room = state.rooms.get(channelId);
+  if (room) peekRoomAuthority(room)?.policyChanged();
+};
+
+/**
  * The room's authority runtime, created on first use. Null when this SFU
  * does not run authority apps or the room is no longer registered.
  */

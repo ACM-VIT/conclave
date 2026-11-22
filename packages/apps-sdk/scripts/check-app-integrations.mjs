@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -144,8 +145,6 @@ for (const app of apps) {
 /* ---- Server code never reaches a browser or native bundle ---------------- */
 
 const SOURCE_EXTENSIONS = [".ts", ".tsx"];
-const IMPORT_PATTERN =
-  /(?:\bimport\b|\bexport\b)\s*(?:type\s+)?(?:[^'";]*?\bfrom\s*)?["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']\s*\)/g;
 
 const listSources = (dir) => {
   if (!fs.existsSync(dir)) return [];
@@ -159,13 +158,69 @@ const listSources = (dir) => {
   return found;
 };
 
-const specifiersOf = (filePath) => {
-  const source = fs.readFileSync(filePath, "utf8");
-  const specifiers = [];
-  for (const match of source.matchAll(IMPORT_PATTERN)) {
-    specifiers.push(match[1] ?? match[2]);
+/** The text a path starts with before its first run-time part, if any. */
+const fixedHead = (expression) => {
+  if (ts.isTemplateExpression(expression)) return expression.head.text;
+  let leftmost = expression;
+  while (
+    ts.isBinaryExpression(leftmost) &&
+    leftmost.operatorToken.kind === ts.SyntaxKind.PlusToken
+  ) {
+    leftmost = leftmost.left;
   }
-  return specifiers;
+  return ts.isStringLiteralLike(leftmost) ? leftmost.text : "";
+};
+
+/**
+ * Every module a file loads, read from its syntax tree. Text matching would
+ * miss a path written as a template string or after a comment, and would
+ * trip over a comment that only mentions an import.
+ *
+ * `fixed` holds the paths written out in full. `computed` holds the fixed
+ * head of each path that is put together at run time.
+ */
+const importsOf = (filePath) => {
+  const tree = ts.createSourceFile(
+    filePath,
+    fs.readFileSync(filePath, "utf8"),
+    ts.ScriptTarget.Latest,
+    false,
+    filePath.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+  );
+  const fixed = [];
+  const computed = [];
+  const visit = (node) => {
+    if (
+      (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+      node.moduleSpecifier &&
+      ts.isStringLiteralLike(node.moduleSpecifier)
+    ) {
+      fixed.push(node.moduleSpecifier.text);
+    } else if (
+      ts.isImportEqualsDeclaration(node) &&
+      ts.isExternalModuleReference(node.moduleReference) &&
+      ts.isStringLiteralLike(node.moduleReference.expression)
+    ) {
+      fixed.push(node.moduleReference.expression.text);
+    } else if (
+      ts.isImportTypeNode(node) &&
+      ts.isLiteralTypeNode(node.argument) &&
+      ts.isStringLiteralLike(node.argument.literal)
+    ) {
+      fixed.push(node.argument.literal.text);
+    } else if (
+      ts.isCallExpression(node) &&
+      (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+        (ts.isIdentifier(node.expression) && node.expression.text === "require"))
+    ) {
+      const [target] = node.arguments;
+      if (target && ts.isStringLiteralLike(target)) fixed.push(target.text);
+      else if (target) computed.push(fixedHead(target));
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(tree);
+  return { fixed, computed };
 };
 
 const resolveFile = (candidate) => {
@@ -219,9 +274,15 @@ const isServerOnly = (filePath) => {
   );
 };
 
+// A bundler cannot tell which file a run-time path will name, so it ships
+// every file the path could name. Near server-only code that is a leak.
+const COMPUTED_IMPORT =
+  "builds an import path at run time. Write the path out in full: a bundler ships every file such a path could name, an app's server entry included.";
+
 for (const filePath of listSources(SRC_DIR)) {
   if (isServerOnly(filePath)) continue;
-  for (const specifier of specifiersOf(filePath)) {
+  const imports = importsOf(filePath);
+  for (const specifier of imports.fixed) {
     const target = resolveSpecifier(filePath, specifier);
     if (target && isServerOnly(target)) {
       errors.push(
@@ -229,13 +290,28 @@ for (const filePath of listSources(SRC_DIR)) {
       );
     }
   }
+  if (imports.computed.length > 0) {
+    errors.push(`${relative(filePath)} ${COMPUTED_IMPORT}`);
+  }
 }
 
 const SERVER_SUBPATH = new RegExp(
   `^${PACKAGE_NAME.replace("/", "\\/")}\\/(?:authority\\/server|[^/]+\\/server)$`,
 );
+/** Whether a run-time path that starts with `head` could name a file here. */
+const couldReachPackage = (fromFile, head) => {
+  if (head.startsWith(PACKAGE_NAME)) return true;
+  if (!head.startsWith(".")) return false;
+  const start = path.resolve(path.dirname(fromFile), head);
+  const within = (parent, child) =>
+    child === parent || child.startsWith(`${parent}${path.sep}`);
+  return within(packageDir, start) || within(start, packageDir);
+};
+
 for (const filePath of listSources(WEB_SRC_DIR)) {
-  for (const specifier of specifiersOf(filePath)) {
+  const webFile = path.relative(path.resolve(packageDir, "..", ".."), filePath);
+  const imports = importsOf(filePath);
+  for (const specifier of imports.fixed) {
     // By package name, or by a relative path that reaches into this package.
     const reached = specifier.startsWith(".")
       ? resolveFile(path.resolve(path.dirname(filePath), specifier))
@@ -246,9 +322,12 @@ for (const filePath of listSources(WEB_SRC_DIR)) {
       isServerOnly(reached);
     if (SERVER_SUBPATH.test(specifier) || reachesServer) {
       errors.push(
-        `${path.relative(path.resolve(packageDir, "..", ".."), filePath)} imports server-only code (${specifier}). Only the SFU may load an app's server entry.`,
+        `${webFile} imports server-only code (${specifier}). Only the SFU may load an app's server entry.`,
       );
     }
+  }
+  if (imports.computed.some((head) => couldReachPackage(filePath, head))) {
+    errors.push(`${webFile} ${COMPUTED_IMPORT}`);
   }
 }
 

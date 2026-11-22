@@ -25,6 +25,7 @@ import { probeAuthority, probeContract } from "./fixtures/probe.js";
 import {
   HOST,
   ROOM_ID,
+  addRoom,
   ask,
   closeAll,
   connect,
@@ -266,6 +267,35 @@ describe("authority transport on real sockets", () => {
 
     expect(lost).toBe(1);
     expect(result).toEqual({ ok: true, value: null });
+  });
+
+  it("does not carry an unanswered action into another room", async () => {
+    const stack = await start([probeAuthority]);
+    addRoom(stack.state, "elsewhere").allowUser(asha.email);
+    const host = await open(stack, asha, probeContract, { ackTimeoutMs: 150 });
+
+    // The first room runs the action. Its answer never arrives.
+    const emit = host.socket.emit.bind(host.socket);
+    let lost = 0;
+    host.socket.emit = ((event: string, ...args: unknown[]) => {
+      if (event === AUTHORITY_EVENTS.act && lost === 0) {
+        lost += 1;
+        return emit(event, args[0], () => {});
+      }
+      return emit(event, ...args);
+    }) as ClientSocket["emit"];
+    const pending = host.session.act("put", { id: "note", text: "for the first room" });
+    await until(() => lost === 1, "the action left");
+
+    // The same socket moves to another room before the retry goes out.
+    await ask(host.socket, "joinRoom", { roomId: "elsewhere", sessionId: asha.session });
+    host.client.joined();
+    const result = await pending;
+    await until(() => host.session.getState().kind === "ready", "the other room's view");
+    await wait(150);
+
+    expect(result).toEqual({ ok: false, code: "unknown-outcome" });
+    expect(rows(host, "notes")).toEqual([]);
   });
 
   it("fires a timer on the server with no client asking", async () => {

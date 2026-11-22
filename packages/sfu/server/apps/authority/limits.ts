@@ -36,6 +36,8 @@ export type AuthorityLimits = {
   socketHardBytes: number;
   /** How often a socket that fell behind is checked for having caught up. */
   lagRecheckMs: number;
+  /** How long a streamed result waits for such a socket before it is cut off. */
+  queryStallMs: number;
   /** Idle rate-limit buckets are dropped once this many exist. */
   rateBuckets: number;
 };
@@ -57,5 +59,6 @@ export const DEFAULT_AUTHORITY_LIMITS: AuthorityLimits = {
   socketHardPackets: 4_096,
   socketHardBytes: 8 * 1024 * 1024,
   lagRecheckMs: 250,
+  queryStallMs: 5_000,
   rateBuckets: 10_000,
 };

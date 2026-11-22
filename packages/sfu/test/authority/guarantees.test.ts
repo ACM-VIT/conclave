@@ -5,17 +5,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AUTHORITY_EVENTS,
+  defineContract,
+  s,
   type AuthorityFrame,
   type AuthorityResult,
   type Json,
   type PatchFrame,
   type ReplaceFrame,
 } from "@conclave/apps-sdk/authority";
+import { defineAuthority } from "@conclave/apps-sdk/authority/server";
 import { Admin } from "../../config/classes/Admin.js";
 import { Client } from "../../config/classes/Client.js";
 import { Room } from "../../config/classes/Room.js";
 import { getRoomAuthority } from "../../server/apps/authority/index.js";
 import { DEFAULT_AUTHORITY_LIMITS } from "../../server/apps/authority/limits.js";
+import { ensureWebinarRoomConfig } from "../../server/scheduledWebinarScheduler.js";
+import { getOrCreateWebinarRoomConfig } from "../../server/webinar.js";
+import type { ScheduledWebinar } from "../../types.js";
 import type { Router } from "mediasoup/types";
 import { Harness, person, type Tab } from "./harness.js";
 import { pollsContract } from "@conclave/apps-sdk/polls/core";
@@ -53,6 +59,43 @@ const createPoll = async (room: Harness, tab: Tab): Promise<string> => {
   await room.deliver();
   return field(created.value, "pollId") as string;
 };
+
+/** A webinar schedule for the room `roomId`, as the scheduling routes hold it. */
+const schedule = (
+  roomId: string,
+  status: ScheduledWebinar["status"],
+): ScheduledWebinar => ({
+  id: "webinar-1",
+  clientId: "conclave",
+  roomId,
+  linkSlug: "launch",
+  title: "Launch",
+  description: "",
+  hostEmail: host.userKey,
+  hostName: host.name,
+  hostUserId: null,
+  coHosts: [],
+  scheduledStartAt: 1_000_000,
+  scheduledEndAt: 4_600_000,
+  status,
+  publicAccess: true,
+  maxAttendees: 500,
+  requiresInviteCode: false,
+  waitingRoomEnabled: false,
+  earlyEntryMinutes: 10,
+  qaEnabled: true,
+  notes: "",
+  createdAt: 900_000,
+  createdBy: host.userKey,
+  updatedAt: 900_000,
+  liveStartedAt: 1_000_000,
+  endedAt: null,
+  totalJoinCount: 0,
+  peakAttendeeCount: 0,
+  webinarLink: "http://localhost:3000/w/launch",
+  coHostInviteTokenHash: null,
+  coHostInviteTokenCreatedAt: null,
+});
 
 beforeEach(() => {
   vi.useFakeTimers({ now: 1_000_000 });
@@ -476,6 +519,30 @@ describe("membership", () => {
   });
 });
 
+describe("room policy", () => {
+  it("ends an idle attendee's view when the webinar's schedule is cancelled", async () => {
+    const room = new Harness([qaAuthority], { roomId: "scheduled" });
+    const live = schedule("scheduled", "live");
+    ensureWebinarRoomConfig(room.state, live);
+    const viewer = await room.open(person("guest-viewer", "Viewer", "attendee"), qaContract);
+    const readyBefore = viewer.state.kind;
+
+    // What the cancel route does: record the status, apply it to the room.
+    // Nobody acts afterwards, so nothing else would bring the change in.
+    ensureWebinarRoomConfig(room.state, { ...live, status: "cancelled" });
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(readyBefore).toBe("ready");
+    expect(viewer.frames[viewer.frames.length - 1]).toMatchObject({
+      kind: "revoke",
+      reason: "forbidden",
+    });
+    // The room is a meeting again, which offers an attendee no Q&A.
+    expect(viewer.state).toEqual({ kind: "unsupported" });
+    expect(viewer.client.entryFor(qaContract)).toBeNull();
+  });
+});
+
 describe("delivery", () => {
   it("coalesces a burst into one frame per recipient per interval", async () => {
     const room = new Harness([pollsAuthority]);
@@ -788,6 +855,142 @@ describe("large views and slow sockets", () => {
     expect(raviTab.frames.some((frame) => frame.kind === "query" && frame.last)).toBe(false);
   });
 
+  it("stops a snapshot between parts when the room's mode changes unannounced", async () => {
+    const room = new Harness([qaAuthority], { runtime: { limits: small } });
+    const hostTab = await room.open(host, qaContract);
+    const priyaTab = await room.open(priya, qaContract);
+    for (let index = 0; index < 3; index += 1) {
+      await priyaTab.act("ask", { text: `Question ${index}? `.repeat(20) });
+    }
+    await room.deliver();
+    const raviTab = await room.open(ravi, qaContract);
+    const entry = hostTab.client.entryFor(qaContract)!;
+    const before = raviTab.frames.length;
+
+    void raviTab.raw(AUTHORITY_EVENTS.subscribe, {
+      roomEpoch: room.authority.roomEpoch,
+      instance: entry.instance,
+      app: entry.app,
+      major: entry.major,
+      subscription: "mode-change",
+    });
+    // The room becomes a webinar, where a waiting question is not public.
+    // Nothing tells the runtime: it has to notice before the next part.
+    getOrCreateWebinarRoomConfig(room.state.webinarConfigs, room.room.channelId).enabled = true;
+    await room.drain();
+
+    const [first, ...rest] = replaces(
+      raviTab.frames.slice(before).filter((frame) => frame.subscription === "mode-change"),
+    );
+    expect(first).toMatchObject({ generation: 1, part: 0, last: false });
+    expect(rest.map((frame) => frame.generation)).toEqual([2]);
+    expect(rest.flatMap((frame) => frame.rows)).toEqual([]);
+  });
+
+  it("cuts a streamed result off when the room's policy withdraws the query unannounced", async () => {
+    const room = new Harness([probeAuthority], { runtime: { limits: small } });
+    const hostTab = await room.open(host, probeContract);
+    for (let index = 0; index < 5; index += 1) {
+      await hostTab.act("put", { id: `n${index}`, text: `${index}`.repeat(300) });
+    }
+    await room.deliver();
+    const parts = () => hostTab.frames.filter((frame) => frame.kind === "query").length;
+
+    const cut = hostTab.session.query("dump", null);
+    await Promise.resolve();
+    vi.advanceTimersToNextTimer();
+    const sentBefore = parts();
+    getOrCreateWebinarRoomConfig(room.state.webinarConfigs, room.room.channelId).qaEnabled = false;
+    const cutResult = await room.settle(cut);
+
+    expect(sentBefore).toBe(1);
+    expect(parts()).toBe(sentBefore);
+    expect(cutResult.ok).toBe(false);
+  });
+
+  it("holds a streamed result back while the socket is behind, then finishes it", async () => {
+    const pressure = new Map<string, { packets: number; bytes: number }>();
+    const room = new Harness([probeAuthority], {
+      runtime: {
+        limits: small,
+        pressure: (socket) => pressure.get(socket.id) ?? { packets: 0, bytes: 0 },
+      },
+    });
+    const hostTab = await room.open(host, probeContract);
+    for (let index = 0; index < 5; index += 1) {
+      await hostTab.act("put", { id: `n${index}`, text: `${index}`.repeat(300) });
+    }
+    await room.deliver();
+    const parts = () => hostTab.frames.filter((frame) => frame.kind === "query").length;
+
+    const slow = hostTab.session.query("dump", null);
+    await Promise.resolve();
+    vi.advanceTimersToNextTimer();
+    const sentBefore = parts();
+    pressure.set(hostTab.seat.socket.id, { packets: 300, bytes: 0 });
+    await vi.advanceTimersByTimeAsync(1_000);
+    const sentWhileBehind = parts();
+    pressure.delete(hostTab.seat.socket.id);
+    const result = await room.settle(slow);
+
+    expect(sentBefore).toBe(1);
+    expect(sentWhileBehind).toBe(sentBefore);
+    expect(result.ok && (field(result.value, "notes") as Json[]).length).toBe(5);
+  });
+
+  it("gives up on a streamed result when the socket stays behind", async () => {
+    const pressure = new Map<string, { packets: number; bytes: number }>();
+    const room = new Harness([probeAuthority], {
+      runtime: {
+        limits: small,
+        pressure: (socket) => pressure.get(socket.id) ?? { packets: 0, bytes: 0 },
+      },
+    });
+    const hostTab = await room.open(host, probeContract);
+    for (let index = 0; index < 5; index += 1) {
+      await hostTab.act("put", { id: `n${index}`, text: `${index}`.repeat(300) });
+    }
+    await room.deliver();
+
+    const stuck = hostTab.session.query("dump", null);
+    await Promise.resolve();
+    vi.advanceTimersToNextTimer();
+    pressure.set(hostTab.seat.socket.id, { packets: 300, bytes: 0 });
+    const result = await room.settle(stuck);
+
+    expect(result.ok).toBe(false);
+    expect(hostTab.frames.filter((frame) => frame.kind === "query").length).toBe(1);
+    expect(hostTab.seat.socket.connected).toBe(true);
+  });
+
+  it("answers no query on a socket that is behind, and drops one whose queue is full", async () => {
+    const pressure = new Map<string, { packets: number; bytes: number }>();
+    const room = new Harness([probeAuthority], {
+      runtime: { pressure: (socket) => pressure.get(socket.id) ?? { packets: 0, bytes: 0 } },
+    });
+    const hostTab = await room.open(host, probeContract);
+    await hostTab.act("put", { id: "a", text: "one" });
+    await room.deliver();
+    const request = (name: string) =>
+      hostTab.raw<AuthorityResult<Json>>(AUTHORITY_EVENTS.query, {
+        roomEpoch: room.authority.roomEpoch,
+        subscription: hostTab.frames[0].subscription,
+        generation: 1,
+        request: name,
+        query: "dump",
+        input: null,
+      });
+
+    pressure.set(hostTab.seat.socket.id, { packets: 300, bytes: 0 });
+    const behind = await request("while-behind");
+    pressure.set(hostTab.seat.socket.id, { packets: 5_000, bytes: 0 });
+    void request("while-full");
+
+    expect(behind).toMatchObject({ ok: false, code: "busy" });
+    expect(hostTab.seat.socket.connected).toBe(false);
+    expect(room.authority.stats.disconnects).toBe(1);
+  });
+
   it("refuses a view too large to send", async () => {
     const room = new Harness([probeAuthority], {
       runtime: { limits: { ...DEFAULT_AUTHORITY_LIMITS, snapshotBytes: 500 } },
@@ -882,6 +1085,144 @@ describe("timers", () => {
     await room.advance(10_000);
 
     expect(hostTab.rows("fired").map((row) => field(row, "label"))).toEqual(["fine"]);
+  });
+
+  it("waits out a deadline further off than a Node timer can count", async () => {
+    const room = new Harness([probeAuthority]);
+    const hostTab = await room.open(host, probeContract);
+    const thirtyDays = 30 * 24 * 60 * 60 * 1000;
+    const armed = vi.spyOn(globalThis, "setTimeout");
+
+    await hostTab.act("schedule", { id: "far", afterMs: thirtyDays, label: "far" });
+    // Node turns a delay past 2^31 - 1 ms into 1 ms, which would wake the
+    // room a thousand times a second until the deadline came into range.
+    const longest = Math.max(...armed.mock.calls.map(([, delay]) => Number(delay ?? 0)));
+    armed.mockRestore();
+    await room.advance(thirtyDays - 1);
+    const early = hostTab.rows("fired").length;
+    await room.advance(1);
+
+    expect(longest).toBeLessThanOrEqual(2 ** 31 - 1);
+    expect(early).toBe(0);
+    expect(hostTab.rows("fired").map((row) => field(row, "label"))).toEqual(["far"]);
+  });
+});
+
+describe("handlers that return a promise", () => {
+  const rejections: unknown[] = [];
+  const note = (reason: unknown): void => {
+    rejections.push(reason);
+  };
+
+  beforeEach(() => {
+    rejections.length = 0;
+    process.on("unhandledRejection", note);
+  });
+
+  afterEach(() => {
+    process.off("unhandledRejection", note);
+  });
+
+  it("keeps nothing from a timer handler that is still working when it returns", async () => {
+    const room = new Harness([probeAuthority]);
+    const hostTab = await room.open(host, probeContract);
+
+    await hostTab.act("schedule", { id: "unfinished", afterMs: 1_000, label: "async" });
+    await hostTab.act("schedule", { id: "good", afterMs: 2_000, label: "fine" });
+    await room.advance(10_000);
+    vi.useRealTimers();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(hostTab.rows("fired").map((row) => field(row, "label"))).toEqual(["fine"]);
+    expect(rejections).toEqual([]);
+  });
+
+  it("keeps nothing from an action that is still working when it returns", async () => {
+    const room = new Harness([probeAuthority]);
+    const hostTab = await room.open(host, probeContract);
+
+    const result = await hostTab.act("putLater");
+    await room.deliver();
+    vi.useRealTimers();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(result).toEqual({ ok: false, code: "app-fault" });
+    expect(hostTab.rows("notes")).toEqual([]);
+    expect(rejections).toEqual([]);
+  });
+
+  it("admits nobody through a rule that answers with a promise", async () => {
+    // An `async` rule answers with a promise, which is truthy whatever it
+    // resolves to. The types refuse one, so the casts stand in for an author
+    // who got past them.
+    const rate = { burst: 10, perSecond: 10 };
+    const gated = defineContract({
+      id: "gated",
+      major: 1,
+      surface: "panel",
+      actions: {
+        whenAsync: { input: s.null(), receipt: s.null() },
+        identityAsync: { input: s.null(), receipt: s.null() },
+      },
+      queries: {},
+      views: {},
+    });
+    const sealed = defineContract({
+      id: "sealed",
+      major: 1,
+      surface: "panel",
+      actions: {},
+      queries: {},
+      views: {},
+    });
+    const room = new Harness([
+      defineAuthority({
+        contract: gated,
+        tables: {},
+        timers: {},
+        canView: () => true,
+        actions: {
+          whenAsync: {
+            roles: ["moderator", "member"],
+            when: (async () => false) as unknown as () => boolean,
+            identity: "any",
+            rate,
+            run: () => null,
+          },
+          identityAsync: {
+            roles: ["moderator", "member"],
+            identity: (async () => "any") as unknown as () => "any",
+            rate,
+            run: () => null,
+          },
+        },
+        queries: {},
+        onTimer: {},
+        views: {},
+      }),
+      defineAuthority({
+        contract: sealed,
+        tables: {},
+        timers: { tick: s.null() },
+        canView: (async () => false) as unknown as () => boolean,
+        actions: {},
+        queries: {},
+        onTimer: {
+          // @ts-expect-error A timer handler may not be `async`.
+          async tick() {},
+        },
+        views: {},
+      }),
+    ]);
+    const hostTab = await room.open(host, gated);
+    const guestTab = await room.open(person("guest-7f3a", "Guest"), gated);
+
+    const gatedOut = await hostTab.act("whenAsync");
+    const unsigned = await guestTab.act("identityAsync");
+
+    expect(gatedOut).toEqual({ ok: false, code: "forbidden" });
+    expect(unsigned).toEqual({ ok: false, code: "identity-required" });
+    expect(hostTab.client.entryFor(sealed)).toBeNull();
   });
 });
 

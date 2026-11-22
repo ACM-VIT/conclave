@@ -264,12 +264,18 @@ export type AuthorityDefinition<
       T
     >;
   };
+  /**
+   * Runs inside one transaction, like an action, and must be done when it
+   * returns. The `undefined` return type is what refuses an `async` handler:
+   * `void` would accept one, and its writes after the first `await` would
+   * be lost.
+   */
   onTimer: {
     [K in keyof Timers & string]: (
       ctx: TimerContext,
       tx: AuthorityTransaction<T, Timers>,
       payload: Infer<Timers[K]>,
-    ) => void;
+    ) => undefined;
   };
   views: { [K in ViewName<C>]: ViewDefinition<T, ViewRow<C, K>> };
 };
@@ -321,7 +327,7 @@ export type RuntimeDefinition = {
   queries: Record<string, RuntimeQuery>;
   onTimer: Record<
     string,
-    (ctx: TimerContext, tx: RuntimeTransaction, payload: unknown) => void
+    (ctx: TimerContext, tx: RuntimeTransaction, payload: unknown) => unknown
   >;
   views: Record<string, RuntimeView>;
 };

@@ -67,6 +67,26 @@ export const until = async (check: () => boolean, label: string, timeoutMs = 4_0
 
 export const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** A room with a stand-in router, registered as the SFU would register it. */
+export const addRoom = (state: SfuState, id: string): Room => {
+  const router = {
+    closed: false,
+    rtpCapabilities: { codecs: [], headerExtensions: [] },
+    close: () => {
+      router.closed = true;
+    },
+  };
+  const room = new Room({
+    id,
+    clientId: CLIENT_ID,
+    workerPid: null,
+    router: router as unknown as Router,
+  });
+  room.hostUserKey = HOST;
+  state.rooms.set(room.channelId, room);
+  return room;
+};
+
 export const start = async (modules: readonly AuthorityModule[] | null): Promise<Stack> => {
   const state = createSfuState({
     roomRegistry: new LocalRoomRegistry({
@@ -81,21 +101,7 @@ export const start = async (modules: readonly AuthorityModule[] | null): Promise
   const http = createServer();
   const io = createSfuSocketServer(http, { state });
   await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve));
-  const router = {
-    closed: false,
-    rtpCapabilities: { codecs: [], headerExtensions: [] },
-    close: () => {
-      router.closed = true;
-    },
-  };
-  const room = new Room({
-    id: ROOM_ID,
-    clientId: CLIENT_ID,
-    workerPid: null,
-    router: router as unknown as Router,
-  });
-  room.hostUserKey = HOST;
-  state.rooms.set(room.channelId, room);
+  const room = addRoom(state, ROOM_ID);
   const stack = {
     state,
     io,

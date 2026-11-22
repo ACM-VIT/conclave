@@ -28,6 +28,7 @@ export const probeContract = defineContract({
     },
     star: { input: s.object({ id: s.string({ max: 64 }) }), receipt: s.null() },
     throwAfterWrite: { input: s.null(), receipt: s.null() },
+    putLater: { input: s.null(), receipt: s.null() },
     rejectAfterWrite: { input: s.null(), receipt: s.null() },
     mutateCommitted: { input: s.object({ id: s.string({ max: 64 }) }), receipt: s.null() },
     leak: { input: s.null(), receipt: s.null() },
@@ -68,6 +69,18 @@ type Note = { id: string; text: string; secret?: string; stars?: number[] };
 type Fired = { label: string; at: number; order: number };
 
 const RATE = { burst: 1_000, perSecond: 1_000 };
+
+/**
+ * What an `async` handler does: it hands back a promise, writes again once
+ * the caller has moved on, and then fails. The types refuse such a handler,
+ * so the cast stands in for an author who got past them.
+ */
+const finishLater = <Result>(write: () => void): Result =>
+  (async () => {
+    await Promise.resolve();
+    write();
+    throw new Error("failed after the handler returned");
+  })() as unknown as Result;
 const everyone = ["moderator", "member"] as const;
 
 export const probeAuthority = defineAuthority({
@@ -140,6 +153,17 @@ export const probeAuthority = defineAuthority({
         return reject("changed-my-mind");
       },
     },
+    putLater: {
+      roles: everyone,
+      identity: "any",
+      rate: RATE,
+      run(_ctx, tx) {
+        tx.put("notes", key("early"), { id: "early", text: "must not persist" });
+        return finishLater<null>(() =>
+          tx.put("notes", key("late"), { id: "late", text: "must not persist" }),
+        );
+      },
+    },
     mutateCommitted: {
       roles: everyone,
       identity: "any",
@@ -183,6 +207,9 @@ export const probeAuthority = defineAuthority({
   queries: {
     dump: {
       roles: ["moderator"],
+      // Off while the room's Q&A switch is off, so a test can withdraw the
+      // query without changing anyone's role.
+      when: ({ room }) => room.qaEnabled,
       rate: RATE,
       read(_ctx, db) {
         return {
@@ -200,6 +227,11 @@ export const probeAuthority = defineAuthority({
       const order = tx.count("fired");
       tx.put("fired", key(String(order)), { label: payload.label, at: ctx.now, order });
       if (payload.label === "faulty") throw new Error("timer bug");
+      if (payload.label === "async") {
+        return finishLater<undefined>(() =>
+          tx.put("fired", key("late"), { label: "late", at: ctx.now, order: -1 }),
+        );
+      }
     },
   },
   views: {
