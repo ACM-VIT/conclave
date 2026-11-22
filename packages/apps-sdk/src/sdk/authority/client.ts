@@ -377,7 +377,9 @@ export class AuthoritySession<C extends AuthorityContract> {
    * Sends an action and resolves with the server's answer. If the answer is
    * lost, or the view is being replaced, the same operation id is sent again
    * until it is answered or the id expires, so one press is one action however
-   * many times it is sent.
+   * many times it is sent. A resend stays in the room the action was first
+   * sent to: if the socket is in another room by then, or the room was
+   * recreated, the action ends as `unknown-outcome`.
    */
   async act<K extends ActionName<C>>(
     action: K,
@@ -389,6 +391,7 @@ export class AuthoritySession<C extends AuthorityContract> {
     };
     const deadline =
       this.client.now() + AUTHORITY_LIMITS.operationMaxAgeMs - RETRY_PAUSE_MS * 4;
+    let sentToEpoch: string | null = null;
 
     for (;;) {
       if (this.closed || this.client.isDisposed) return failure("unknown-outcome");
@@ -400,6 +403,11 @@ export class AuthoritySession<C extends AuthorityContract> {
       if (!(await this.whenReady(remaining))) continue;
       const epoch = this.subscribedEpoch;
       if (this.state.kind !== "ready" || !this.subscription || !epoch) continue;
+      // A new room keeps no record of the operation and would run it afresh.
+      if (sentToEpoch !== null && epoch !== sentToEpoch) {
+        return failure("unknown-outcome");
+      }
+      sentToEpoch = epoch;
 
       const request: ActRequest = {
         roomEpoch: epoch,
