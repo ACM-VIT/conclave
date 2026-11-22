@@ -27,8 +27,8 @@ import ParticipantsPanel from "./ParticipantsPanel";
 import MeetSettingsPanel from "./MeetSettingsPanel";
 import MeetViewPanel from "./MeetViewPanel";
 import ReactionOverlay from "./ReactionOverlay";
-import BrowserLayout from "./BrowserLayout";
 import MeetingAppLayout from "./MeetingAppLayout";
+import SharedBrowserStage from "./SharedBrowserStage";
 import ScreenShareAudioPlayers from "./ScreenShareAudioPlayers";
 import SystemAudioPlayers from "./SystemAudioPlayers";
 import ParticipantVideo from "./ParticipantVideo";
@@ -2369,11 +2369,8 @@ export default function MeetsMainContent({
           <ActiveMeetingApp />
         </MeetingAppLayout>
       ) : browserState?.active && browserState.noVncUrl ? (
-        <BrowserLayout
-          noVncUrl={browserState.noVncUrl}
-          controllerName={resolveDisplayName(
-            browserState.controllerUserId || "",
-          )}
+        <MeetingAppLayout
+          stageId="shared-browser"
           localStream={localStream}
           isCameraOff={isCameraOff}
           isMuted={isMuted}
@@ -2388,9 +2385,22 @@ export default function MeetsMainContent({
           onAudioPlaybackStarted={handleParticipantAudioPlaybackStarted}
           audioPlaybackAttemptToken={participantAudioPlaybackAttempt}
           getDisplayName={resolveDisplayName}
-          provider={browserState.provider}
-          browserVideoStream={browserVideoStream}
-        />
+        >
+          <SharedBrowserStage
+            noVncUrl={browserState.noVncUrl}
+            controllerName={
+              browserState.controllerUserId
+                ? resolveDisplayName(browserState.controllerUserId)
+                : ""
+            }
+            isLocalController={
+              Boolean(browserState.controllerUserId) &&
+              browserState.controllerUserId === currentUserId
+            }
+            provider={browserState.provider}
+            browserVideoStream={browserVideoStream}
+          />
+        </MeetingAppLayout>
       ) : (
         <GridLayout
           localStream={effectiveLocalStream}
@@ -2438,7 +2448,7 @@ export default function MeetsMainContent({
             browserLaunchError
               ? {
                   id: "browser",
-                  label: "Shared browser",
+                  label: "Couldn’t open the shared browser",
                   message: browserLaunchError,
                   tone: "danger" as const,
                   onDismiss: onClearBrowserError,
