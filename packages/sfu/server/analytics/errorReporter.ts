@@ -8,7 +8,7 @@
  * fatal report sits outside that budget: the process sends it once, then exits.
  */
 
-import { constants as osConstants } from "node:os";
+import { getSystemErrorMap } from "node:util";
 
 export type ServerErrorSource =
   | "uncaught_exception"
@@ -269,7 +269,7 @@ const KNOWN_ERROR_TYPES = new Set([
 ]);
 // Our classes whose messages are text we wrote with no values in them.
 const CONSTANT_MESSAGE_TYPES = new Set(["ConfigError", "NonErrorValue"]);
-const ERRNO_CODES = new Set(Object.keys(osConstants.errno));
+const ERRNO_CODES = new Set([...getSystemErrorMap().values()].map(([name]) => name));
 const MESSAGE_WITHHELD = "[message withheld]";
 
 /**
