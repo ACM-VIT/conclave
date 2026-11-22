@@ -17,7 +17,7 @@ import { defineAuthority, type Subject } from "@conclave/apps-sdk/authority/serv
 import { Admin } from "../../config/classes/Admin.js";
 import { Client } from "../../config/classes/Client.js";
 import { Room } from "../../config/classes/Room.js";
-import { getRoomAuthority } from "../../server/apps/authority/index.js";
+import { getRoomAuthority, socketPressure } from "../../server/apps/authority/index.js";
 import { AuthorityInstance, type Actor } from "../../server/apps/authority/instance.js";
 import { DEFAULT_AUTHORITY_LIMITS } from "../../server/apps/authority/limits.js";
 import { ensureWebinarRoomConfig } from "../../server/scheduledWebinarScheduler.js";
@@ -1619,6 +1619,39 @@ describe("large views and slow sockets", () => {
 
     expect(raviTab.state).toEqual({ kind: "revoked", reason: "too-large" });
     expect(replaces(raviTab.frames)).toEqual([]);
+  });
+
+  it("counts what is queued for a socket in bytes as well as packets, on any transport", () => {
+    type Queued = { type: string; data?: unknown };
+    const socketWith = (writeBuffer: Queued[], bufferedAmount?: number) =>
+      ({
+        conn: {
+          writeBuffer,
+          transport: bufferedAmount === undefined ? {} : { socket: { bufferedAmount } },
+        },
+      }) as unknown as Parameters<typeof socketPressure>[0];
+    const part = "x".repeat(64 * 1024);
+
+    // Long polling has no socket to ask: all there is to count is the queue.
+    const polling = socketPressure(
+      socketWith(Array.from({ length: 20 }, () => ({ type: "message", data: part }))),
+    );
+    // A WebSocket holds bytes below the queue as well, and both count.
+    const webSocket = socketPressure(
+      socketWith(
+        [
+          { type: "message", data: "\u00e9".repeat(10) },
+          { type: "message", data: Buffer.alloc(100) },
+          { type: "ping" },
+        ],
+        5_000,
+      ),
+    );
+
+    expect(polling).toEqual({ packets: 20, bytes: 20 * 64 * 1024 });
+    expect(polling.bytes).toBeGreaterThan(DEFAULT_AUTHORITY_LIMITS.socketSoftBytes);
+    expect(webSocket).toEqual({ packets: 3, bytes: 20 + 100 + 5_000 });
+    expect(socketPressure({} as Parameters<typeof socketPressure>[0])).toEqual({ packets: 0, bytes: 0 });
   });
 
   it("skips patches for a socket that fell behind, then sends it a fresh view", async () => {

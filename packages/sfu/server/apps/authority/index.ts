@@ -23,22 +23,38 @@ export type AppsAuthorityRuntime = {
   guestProofOf: GuestPassProofSource;
 };
 
+/** The size on the wire of what one queued packet carries. */
+const queuedBytes = (data: unknown): number => {
+  if (typeof data === "string") return Buffer.byteLength(data);
+  if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) return data.byteLength;
+  return 0;
+};
+
 /**
- * What a socket has accepted but not yet put on the wire. engine.io holds
- * packets in `writeBuffer` until the transport can take them, and a
- * WebSocket reports the bytes still buffered below that.
+ * What a socket has accepted but not yet put on the wire: the packets
+ * engine.io holds in `writeBuffer` until the transport can take them, and
+ * their size, plus the bytes a WebSocket still holds below that.
+ *
+ * The queue is counted in bytes on every transport. A long-polling client
+ * has no socket to ask, and its packets wait in the queue from one poll to
+ * the next, so for a client that polls slowly, or has stopped, the queue's
+ * size is the only sign that it is behind. Twenty parts of a large view are
+ * few packets and more than a megabyte.
  */
 export const socketPressure = (socket: Socket): SocketPressure => {
   const connection = socket.conn as unknown as
     | {
-        writeBuffer?: unknown[];
+        writeBuffer?: readonly { data?: unknown }[];
         transport?: { socket?: { bufferedAmount?: unknown } };
       }
     | undefined;
+  const queue = connection?.writeBuffer ?? [];
+  let bytes = 0;
+  for (const packet of queue) bytes += queuedBytes(packet.data);
   const buffered = connection?.transport?.socket?.bufferedAmount;
   return {
-    packets: connection?.writeBuffer?.length ?? 0,
-    bytes: typeof buffered === "number" ? buffered : 0,
+    packets: queue.length,
+    bytes: bytes + (typeof buffered === "number" ? buffered : 0),
   };
 };
 
