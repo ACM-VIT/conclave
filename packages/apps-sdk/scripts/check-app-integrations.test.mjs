@@ -198,6 +198,85 @@ test("a lazy import whose path is worked out at run time is refused near server 
   assert.doesNotMatch(checked.output, /locale\.ts/);
 });
 
+test("a JavaScript file is checked like a TypeScript one", () => {
+  const repo = makeRepo();
+  repo.scaffold("sign-up", "--runtime", "authority");
+  // The web project compiles JavaScript too, so each of these would ship.
+  repo.write(
+    "apps/web/src/app/panel.js",
+    'import { signUpAuthority } from "@conclave/apps-sdk/sign-up/server";\nexport const rules = signUpAuthority;\n',
+  );
+  repo.write(
+    "apps/web/src/app/panel-view.jsx",
+    'import { signUpAuthority } from "@conclave/apps-sdk/sign-up/server";\nexport const Panel = () => <p>{signUpAuthority.contract.id}</p>;\n',
+  );
+  repo.write(
+    "apps/web/src/app/worker.mjs",
+    'export const load = () => import("@conclave/apps-sdk/sign-up/server");\n',
+  );
+  repo.write(
+    "apps/web/src/app/legacy.cjs",
+    'module.exports = require("@conclave/apps-sdk/sign-up/server");\n',
+  );
+  repo.write(
+    "packages/apps-sdk/src/apps/sign-up/web/leak.jsx",
+    'import { signUpAuthority } from "../server/index";\nexport const Leak = () => <p>{signUpAuthority.contract.id}</p>;\n',
+  );
+  repo.write(
+    "packages/apps-sdk/src/apps/sign-up/web/computed.js",
+    "export const load = (part) => import(`../${part}/index`);\n",
+  );
+
+  const checked = repo.check();
+
+  assert.equal(checked.status, 1);
+  assert.match(checked.output, /apps\/web\/src\/app\/panel\.js imports server-only code/);
+  assert.match(checked.output, /apps\/web\/src\/app\/panel-view\.jsx imports server-only code/);
+  assert.match(checked.output, /apps\/web\/src\/app\/worker\.mjs imports server-only code/);
+  assert.match(checked.output, /apps\/web\/src\/app\/legacy\.cjs imports server-only code/);
+  assert.match(checked.output, /sign-up\/web\/leak\.jsx imports server-only code/);
+  assert.match(checked.output, /sign-up\/web\/computed\.js builds an import path at run time/);
+});
+
+test("a server entry reached through a JavaScript file's own extension is still found", () => {
+  const repo = makeRepo();
+  repo.scaffold("sign-up", "--runtime", "authority");
+  repo.write(
+    "packages/apps-sdk/src/apps/sign-up/server/secrets.mjs",
+    'export const answerKey = "42";\n',
+  );
+  repo.write(
+    "packages/apps-sdk/src/apps/sign-up/web/peek.ts",
+    'export { answerKey } from "../server/secrets.mjs";\n',
+  );
+
+  const checked = repo.check();
+
+  assert.equal(checked.status, 1);
+  assert.match(checked.output, /sign-up\/web\/peek\.ts imports server-only code/);
+});
+
+test("a Node script that loads files by path is not taken for bundled code", () => {
+  const repo = makeRepo();
+  repo.scaffold("sign-up", "--runtime", "authority");
+  // It imports a Node builtin, so no browser or native bundle can hold it.
+  repo.write(
+    "packages/apps-sdk/src/native-embed/tests/contract-test.mjs",
+    'import path from "node:path";\nimport { pathToFileURL } from "node:url";\nexport const load = (file) => import(pathToFileURL(path.join("..", file)).href);\n',
+  );
+  // Its fixed imports are held to the rule all the same.
+  repo.write(
+    "packages/apps-sdk/src/native-embed/tests/peek-test.mjs",
+    'import path from "node:path";\nimport { signUpAuthority } from "../../apps/sign-up/server/index.ts";\nexport const where = path.sep + signUpAuthority.contract.id;\n',
+  );
+
+  const checked = repo.check();
+
+  assert.equal(checked.status, 1);
+  assert.doesNotMatch(checked.output, /contract-test\.mjs/);
+  assert.match(checked.output, /tests\/peek-test\.mjs imports server-only code/);
+});
+
 test("words that only look like an import are left alone", () => {
   const repo = makeRepo();
   repo.scaffold("sign-up", "--runtime", "authority");

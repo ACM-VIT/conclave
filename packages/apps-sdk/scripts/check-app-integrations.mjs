@@ -144,7 +144,20 @@ for (const app of apps) {
 
 /* ---- Server code never reaches a browser or native bundle ---------------- */
 
-const SOURCE_EXTENSIONS = [".ts", ".tsx"];
+// Every kind of source file a bundle can be built from. The web project
+// compiles JavaScript as well as TypeScript, so a `.js` file that imports an
+// app's server entry ships it just the same.
+const SCRIPT_KINDS = {
+  ".ts": ts.ScriptKind.TS,
+  ".mts": ts.ScriptKind.TS,
+  ".cts": ts.ScriptKind.TS,
+  ".tsx": ts.ScriptKind.TSX,
+  ".js": ts.ScriptKind.JS,
+  ".mjs": ts.ScriptKind.JS,
+  ".cjs": ts.ScriptKind.JS,
+  ".jsx": ts.ScriptKind.JSX,
+};
+const SOURCE_EXTENSIONS = Object.keys(SCRIPT_KINDS);
 
 const listSources = (dir) => {
   if (!fs.existsSync(dir)) return [];
@@ -185,7 +198,7 @@ const importsOf = (filePath) => {
     fs.readFileSync(filePath, "utf8"),
     ts.ScriptTarget.Latest,
     false,
-    filePath.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+    SCRIPT_KINDS[path.extname(filePath)],
   );
   const fixed = [];
   const computed = [];
@@ -224,7 +237,8 @@ const importsOf = (filePath) => {
 };
 
 const resolveFile = (candidate) => {
-  const withoutJs = candidate.replace(/\.js$/, "");
+  // An import may name the JavaScript a TypeScript file compiles to.
+  const withoutJs = candidate.replace(/\.(?:js|mjs|cjs|jsx)$/, "");
   const attempts = [
     candidate,
     ...SOURCE_EXTENSIONS.map((extension) => `${withoutJs}${extension}`),
@@ -290,7 +304,11 @@ for (const filePath of listSources(SRC_DIR)) {
       );
     }
   }
-  if (imports.computed.length > 0) {
+  // A file that imports a Node builtin is a script Node runs, such as a
+  // build step or a test. No browser or native bundle can hold it, so a
+  // path it works out at run time ships nothing.
+  const runsInNode = imports.fixed.some((specifier) => specifier.startsWith("node:"));
+  if (imports.computed.length > 0 && !runsInNode) {
     errors.push(`${relative(filePath)} ${COMPUTED_IMPORT}`);
   }
 }
