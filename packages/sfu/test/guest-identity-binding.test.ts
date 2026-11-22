@@ -4,7 +4,9 @@ import type { Server as SocketIOServer, Socket } from "socket.io";
 import { Admin } from "../config/classes/Admin.js";
 import {
   blockUserKey,
+  toClusterSnapshot,
   toPendingUserSnapshots,
+  toRoomSnapshot,
   withdrawWaitingRequest,
 } from "../server/admin/controlPlane.js";
 import type { Room } from "../config/classes/Room.js";
@@ -1713,6 +1715,23 @@ describe("a guest who asks to be let in from more than one tab", () => {
     await hostAsks(host, action, { userId: guest.userId });
 
     expect(lobbyOnHostScreen(host)).toEqual([]);
+  });
+
+  it.each(otherTabs)("counts one waiting person for %s, wherever the admin views count", async (_label, otherTab) => {
+    const { state, room } = await lockedRoom();
+    await join(state, guest);
+    await join(state, otherTab);
+    await join(state, stranger);
+
+    const snapshot = toRoomSnapshot(room);
+    const cluster = toClusterSnapshot(state);
+
+    expect(room.pendingClients.size).toBe(3);
+    expect(snapshot.pendingUsers).toHaveLength(2);
+    expect(snapshot.counts.pendingUsers).toBe(2);
+    expect(room.waitingGuestCount).toBe(2);
+    expect(cluster.counts.pendingUsers).toBe(2);
+    expect(cluster.topRooms.find((entry) => entry.roomId === "room")?.pendingUserCount).toBe(2);
   });
 
   it("lets every tab in through the call that admits a list of keys", async () => {

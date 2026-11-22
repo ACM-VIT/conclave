@@ -363,7 +363,7 @@ export const toRoomSnapshot = (room: Room): RoomSnapshot => {
       admins: adminCount,
       guests,
       webinarAttendees: attendees,
-      pendingUsers: room.pendingClients.size,
+      pendingUsers: pendingUsers.length,
       blockedUsers: room.blockedUsers.size,
       producers,
       consumers,
@@ -385,7 +385,7 @@ export const toClusterSnapshot = (state: SfuState): ClusterSnapshot => {
         clientId: room.clientId,
         participantCount:
           room.getMeetingParticipantCount() + room.getWebinarAttendeeCount(),
-        pendingUserCount: room.pendingClients.size,
+        pendingUserCount: room.waitingGuestCount,
         adminCount: room.getAdmins().length,
       };
     })
@@ -398,7 +398,7 @@ export const toClusterSnapshot = (state: SfuState): ClusterSnapshot => {
     0,
   );
   const pendingUsers = rooms.reduce(
-    (sum, room) => sum + room.pendingClients.size,
+    (sum, room) => sum + room.waitingGuestCount,
     0,
   );
   const admins = rooms.reduce((sum, room) => sum + room.getAdmins().length, 0);

@@ -3134,6 +3134,11 @@ export class Room {
    * each. A guest who waits in two tabs is one person to let in or turn
    * away, the way an account in two tabs is.
    */
+  /** How many people wait to be let in: one per guest, as the lobby shows. */
+  get waitingGuestCount(): number {
+    return this.waitingGuests().length;
+  }
+
   waitingGuests(): WaitingRequest[] {
     const shown: WaitingRequest[] = [];
     for (const request of this.pendingClients.values()) {
