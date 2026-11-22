@@ -36,21 +36,23 @@ export default function InCallNoticeCard({
   const id = useId();
   const isError = tone === "error";
   const compact = compactProp || Boolean(lane?.compact);
-  const announcement = isError ? null : detail ? `${title}. ${detail}` : title;
+  const content = detail ? `${title}. ${detail}` : title;
   const cardAction = actionOnCardClick ? onAction : undefined;
 
   useEffect(() => {
-    if (!announce || !announcement) return;
-    announce(id, announcement);
-    return () => announce(id, null);
-  }, [announce, announcement, id]);
+    if (!announce) return;
+    announce(id, content, isError);
+    return () => announce(id, null, isError);
+  }, [announce, content, id, isError]);
 
   return (
     <div className="w-full min-w-0 rounded-xl bg-[#18181b] shadow-[0_12px_32px_rgba(0,0,0,0.35)]">
       <div
         data-in-call-notice
-        role={isError ? "alert" : announce ? undefined : "status"}
-        aria-live={isError || announce ? undefined : "polite"}
+        data-notice-content={content}
+        data-tone={tone}
+        role={announce ? undefined : isError ? "alert" : "status"}
+        aria-live={announce || isError ? undefined : "polite"}
         onClick={cardAction}
         className={`flex min-w-0 items-center rounded-xl border ${
           compact ? "gap-2.5 px-3 py-1.5" : "gap-3 px-3.5 py-2.5"

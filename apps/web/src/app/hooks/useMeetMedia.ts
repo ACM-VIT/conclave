@@ -484,6 +484,7 @@ const shouldDisableMediaIntentAfterRecoveryFailure = (
   if (meetError.code === "PERMISSION_DENIED") return true;
   const message = error instanceof Error ? error.message : String(error);
   return (
+    (error instanceof Error && error.name === "NotFoundError") ||
     message.includes("NotFoundError") ||
     message.includes("DevicesNotFoundError")
   );
@@ -3402,6 +3403,7 @@ export function useMeetMedia({
               code: "TRANSPORT_ERROR",
               message: toggleResult.error || "Failed to mute microphone",
               recoverable: true,
+              device: "microphone",
             });
             return;
           }

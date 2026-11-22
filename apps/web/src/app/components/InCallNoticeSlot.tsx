@@ -19,6 +19,7 @@ const NOTICE_GAP_PX = 8;
 const TOGGLE_HEIGHT_PX = 30;
 const COMPACT_HEIGHT_PX = 40;
 const REMEASURE_INTERVAL_MS = 600;
+const POINTER_REMEASURE_MS = 150;
 const CONTROL_SELECTOR =
   'button, a[href], [role="button"], input, select, textarea';
 
@@ -39,9 +40,12 @@ interface LaneState {
 const sameLane = (a: LaneState, b: LaneState) =>
   a.mode === b.mode && a.offset === b.offset && a.count === b.count;
 
-function collectObstacles(slot: HTMLElement, slotRect: DOMRect) {
+function collectObstacles(
+  slot: HTMLElement,
+  slotRect: DOMRect,
+  root: Element | null,
+) {
   const obstacles: LaneObstacle[] = [];
-  const root = slot.parentElement;
   if (!root) return obstacles;
   for (const el of root.querySelectorAll<HTMLElement>(CONTROL_SELECTOR)) {
     if (slot.contains(el) || el.closest("[data-in-call-controls]")) continue;
@@ -68,11 +72,11 @@ function collectObstacles(slot: HTMLElement, slotRect: DOMRect) {
   return obstacles;
 }
 
-function panelHeaderBottom(slotRect: DOMRect) {
+function fullScreenPanel() {
   const probe = document.elementFromPoint(window.innerWidth / 2, 1);
-  const header = probe?.closest(".fixed")?.firstElementChild;
-  const bottom = header ? header.getBoundingClientRect().bottom : 60;
-  return bottom - slotRect.top + NOTICE_GAP_PX;
+  const panel = probe?.closest(".fixed") ?? null;
+  const header = panel?.firstElementChild ?? null;
+  return { panel, headerBottom: header ? header.getBoundingClientRect().bottom : 60 };
 }
 
 export default function InCallNoticeSlot({
@@ -86,12 +90,12 @@ export default function InCallNoticeSlot({
   const columnRef = useRef<HTMLDivElement>(null);
   const rowRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const fullHeightsRef = useRef(new WeakMap<Element, { width: number; height: number }>());
+  const fullHeightsRef = useRef(new WeakMap<Element, { key: string; height: number }>());
   const [lane, setLane] = useState<LaneState>({ mode: "full", offset: 0, count: 0 });
   const [expanded, setExpanded] = useState(false);
-  const [announcements, setAnnouncements] = useState<ReadonlyMap<string, string>>(
-    () => new Map(),
-  );
+  const [announcements, setAnnouncements] = useState<
+    ReadonlyMap<string, { text: string; urgent: boolean }>
+  >(() => new Map());
   const laneRef = useRef(lane);
   laneRef.current = lane;
   const expandedRef = useRef(expanded);
@@ -120,9 +124,22 @@ export default function InCallNoticeSlot({
       }
       const slotRect = slot.getBoundingClientRect();
       const cssMinTop = parseFloat(getComputedStyle(column).paddingTop) || 0;
+      const rowRect = row.getBoundingClientRect();
+      const laneLeft = rowRect.left - slotRect.left;
+      const laneRight = rowRect.right - slotRect.left;
       if (overPanelRef.current) {
-        const top = panelHeaderBottom(slotRect);
-        commit({ mode: "compact", offset: Math.max(0, top - cssMinTop), count });
+        const { panel, headerBottom } = fullScreenPanel();
+        const placement = placeNoticeLane(collectObstacles(slot, slotRect, panel), {
+          left: laneLeft,
+          right: laneRight,
+          minTop: Math.max(cssMinTop, headerBottom - slotRect.top + NOTICE_GAP_PX),
+          maxBottom: column.clientHeight,
+          count,
+          fullHeight: Number.POSITIVE_INFINITY,
+          collapsedHeight: Number.POSITIVE_INFINITY,
+          compactHeight: COMPACT_HEIGHT_PX,
+        });
+        commit({ mode: "compact", offset: Math.max(0, placement.top - cssMinTop), count });
         return;
       }
 
@@ -130,24 +147,26 @@ export default function InCallNoticeSlot({
       const width = row.clientWidth;
       const heights: number[] = [];
       for (const notice of notices) {
+        const content =
+          notice.querySelector("[data-notice-content]")?.getAttribute("data-notice-content") ?? "";
+        const key = `${width}:${content}`;
         if (!compactNow) {
           const height = notice.offsetHeight;
-          fullHeightsRef.current.set(notice, { width, height });
+          fullHeightsRef.current.set(notice, { key, height });
           heights.push(height);
           continue;
         }
         const cached = fullHeightsRef.current.get(notice);
-        if (!cached || cached.width !== width) {
+        if (!cached || cached.key !== key) {
           commit({ ...laneRef.current, mode: "full", count });
           return;
         }
         heights.push(cached.height);
       }
 
-      const rowRect = row.getBoundingClientRect();
-      const placement = placeNoticeLane(collectObstacles(slot, slotRect), {
-        left: rowRect.left - slotRect.left,
-        right: rowRect.right - slotRect.left,
+      const placement = placeNoticeLane(collectObstacles(slot, slotRect, slot.parentElement), {
+        left: laneLeft,
+        right: laneRight,
         minTop: cssMinTop,
         maxBottom: column.clientHeight,
         count,
@@ -165,12 +184,19 @@ export default function InCallNoticeSlot({
     };
 
     let frame = 0;
+    let lastPointerMeasure = 0;
     const schedule = () => {
       if (frame) return;
       frame = requestAnimationFrame(() => {
         frame = 0;
         measure();
       });
+    };
+    const scheduleFromPointer = () => {
+      const now = performance.now();
+      if (list.children.length === 0 || now - lastPointerMeasure < POINTER_REMEASURE_MS) return;
+      lastPointerMeasure = now;
+      schedule();
     };
     const resizes = new ResizeObserver(schedule);
     const observeNotices = () => {
@@ -183,9 +209,11 @@ export default function InCallNoticeSlot({
     listMutations.observe(list, { childList: true, subtree: true, characterData: true });
     const stage = slot.parentElement;
     const stageMutations = new MutationObserver(schedule);
-    const revealEvents = ["pointermove", "transitionend", "animationend"] as const;
+    const revealEvents = ["transitionend", "animationend"] as const;
     if (stage) {
       stageMutations.observe(stage, { childList: true, subtree: true });
+      stage.addEventListener("pointermove", scheduleFromPointer, { passive: true });
+      stage.addEventListener("scroll", schedule, { passive: true, capture: true });
       for (const type of revealEvents) {
         stage.addEventListener(type, schedule, { passive: true });
       }
@@ -199,17 +227,22 @@ export default function InCallNoticeSlot({
       window.clearInterval(interval);
       listMutations.disconnect();
       stageMutations.disconnect();
+      stage?.removeEventListener("pointermove", scheduleFromPointer);
+      stage?.removeEventListener("scroll", schedule, { capture: true });
       for (const type of revealEvents) stage?.removeEventListener(type, schedule);
       resizes.disconnect();
     };
   }, []);
 
-  const announce = useCallback((id: string, text: string | null) => {
+  const announce = useCallback((id: string, text: string | null, urgent: boolean) => {
     setAnnouncements((prev) => {
-      if (text === null ? !prev.has(id) : prev.get(id) === text) return prev;
+      const current = prev.get(id);
+      if (text === null ? !current : current?.text === text && current.urgent === urgent) {
+        return prev;
+      }
       const next = new Map(prev);
       if (text === null) next.delete(id);
-      else next.set(id, text);
+      else next.set(id, { text, urgent });
       return next;
     });
   }, []);
@@ -283,9 +316,14 @@ export default function InCallNoticeSlot({
           ) : null}
         </div>
         <div aria-live="polite" className="sr-only">
-          {[...announcements].map(([id, text]) => (
-            <p key={id}>{text}</p>
-          ))}
+          {[...announcements].map(([id, { text, urgent }]) =>
+            urgent ? null : <p key={id}>{text}</p>,
+          )}
+        </div>
+        <div role="alert" className="sr-only">
+          {[...announcements].map(([id, { text, urgent }]) =>
+            urgent ? <p key={id}>{text}</p> : null,
+          )}
         </div>
       </div>
     </InCallNoticeLaneContext.Provider>

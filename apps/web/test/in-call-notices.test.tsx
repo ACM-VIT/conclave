@@ -18,6 +18,10 @@ const render = async (node: ReactNode) => {
 const waitOutExit = () =>
   act(async () => new Promise((resolve) => setTimeout(resolve, 400)));
 const slot = () => container.querySelector("[data-in-call-notices]");
+const errorCard = () =>
+  slot()?.querySelector<HTMLElement>('[data-in-call-notice][data-tone="error"]');
+const alertRegion = () =>
+  [...(slot()?.children ?? [])].find((el) => el.getAttribute("role") === "alert");
 
 // happy-dom's Web Animations shim cancels motion's animations mid-flight, so run
 // motion on its requestAnimationFrame fallback like a browser without WAAPI.
@@ -61,12 +65,12 @@ describe("in-call notices", () => {
     );
     await render(<InCallNotice show>{banner}</InCallNotice>);
 
-    const alert = slot()?.querySelector('[role="alert"]');
-    expect(alert?.textContent).toContain("Camera and microphone are blocked");
-    expect(alert?.textContent).toContain(
+    expect(alertRegion()?.textContent).toContain("Camera and microphone are blocked");
+    expect(alertRegion()?.textContent).toContain(
       "Allow camera and microphone access in your browser, then try again.",
     );
-    const buttons = [...(alert?.querySelectorAll("button") ?? [])];
+    expect(errorCard()?.getAttribute("role")).toBeNull();
+    const buttons = [...(errorCard()?.querySelectorAll("button") ?? [])];
     buttons.find((b) => b.textContent === "Try again")?.click();
     buttons.find((b) => b.getAttribute("aria-label") === "Dismiss error")?.click();
     expect(onRetry).toHaveBeenCalledTimes(1);
@@ -74,7 +78,8 @@ describe("in-call notices", () => {
 
     await render(<InCallNotice show={false}>{banner}</InCallNotice>);
     await waitOutExit();
-    expect(slot()?.querySelector('[role="alert"]')).toBeNull();
+    expect(errorCard()).toBeFalsy();
+    expect(alertRegion()?.textContent).toBe("");
   });
 
   it("announces the offline notice politely and clears it once back online", async () => {
@@ -180,10 +185,10 @@ describe("in-call notices", () => {
         />
       </InCallNotice>,
     );
-    const alert = slot()?.querySelector<HTMLElement>('[role="alert"]');
-    alert?.querySelector("span")?.click();
+    const card = errorCard();
+    card?.querySelector("span")?.click();
     expect(onResume).toHaveBeenCalledTimes(1);
-    [...(alert?.querySelectorAll("button") ?? [])]
+    [...(card?.querySelectorAll("button") ?? [])]
       .find((b) => b.textContent === "Turn on audio")
       ?.click();
     expect(onResume).toHaveBeenCalledTimes(2);
@@ -219,7 +224,7 @@ describe("in-call notices", () => {
         />
       </InCallNotice>,
     );
-    const alert = () => slot()?.querySelector('[role="alert"]');
+    const alert = errorCard;
     const button = (name: string) =>
       [...(alert()?.querySelectorAll("button") ?? [])].find(
         (b) => b.textContent === name || b.getAttribute("aria-label") === name,
@@ -233,5 +238,26 @@ describe("in-call notices", () => {
     expect(button("Dismiss error")).toBeUndefined();
     button("Try again")?.click();
     expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it("still announces an error that lands behind a collapsed stack", async () => {
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(60);
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(150);
+    await render(
+      <>
+        <InCallNotice show>
+          <InCallNoticeCard icon={Headphones} title="Audio-only mode is on" />
+        </InCallNotice>
+        <InCallNotice show>
+          <InCallNoticeCard icon={Headphones} title="Shared browser sound is paused" />
+        </InCallNotice>
+        <InCallNotice show>
+          <InCallNoticeCard tone="error" icon={VolumeX} title="Your browser paused audio" />
+        </InCallNotice>
+      </>,
+    );
+    await waitOutExit();
+    expect(slot()?.getAttribute("data-lane-mode")).not.toBe("full");
+    expect(alertRegion()?.textContent).toBe("Your browser paused audio");
   });
 });

@@ -31,49 +31,84 @@ describe("media device errors", () => {
   it("clears an error only when the device it names recovers", () => {
     const camera = createMeetError(denied, "MEDIA_ERROR", "camera");
     const microphone = createMeetError(denied, "MEDIA_ERROR", "microphone");
-    const both = createMeetError(denied, "PERMISSION_DENIED", "both");
-    const transport = { code: "TRANSPORT_ERROR" as const, message: "Failed to mute microphone", recoverable: true };
+    const screenShare = { code: "MEDIA_ERROR" as const, message: "Screen share stopped", recoverable: true };
 
     expect(clearMediaDeviceError(camera, "camera")).toBeNull();
     expect(clearMediaDeviceError(camera, "microphone")).toBe(camera);
     expect(clearMediaDeviceError(microphone, "microphone")).toBeNull();
     expect(clearMediaDeviceError(microphone, "camera")).toBe(microphone);
-    expect(clearMediaDeviceError(both, "camera")).toBe(both);
-    expect(clearMediaDeviceError(transport, "microphone")).toBeNull();
-    expect(clearMediaDeviceError(transport, "camera")).toBe(transport);
+    expect(clearMediaDeviceError(screenShare, "microphone")).toBe(screenShare);
     expect(clearMediaDeviceError(null, "camera")).toBeNull();
+  });
+
+  it("narrows a two-device error to the device that is still failing", () => {
+    const blocked = createMeetError(denied, "PERMISSION_DENIED", "both");
+    expect(clearMediaDeviceError(blocked, "camera")).toMatchObject({
+      code: "PERMISSION_DENIED",
+      device: "microphone",
+      message: "Microphone is blocked",
+    });
+    const absent = createMeetError(missing, "MEDIA_ERROR", "both");
+    expect(clearMediaDeviceError(absent, "microphone")).toMatchObject({
+      device: "camera",
+      message: "No camera found",
+    });
   });
 });
 
 describe("retrying failed media devices", () => {
-  const setup = (state: { isMuted: boolean; isCameraOff: boolean }) => {
+  const setup = (initial: { microphone: boolean; camera: boolean }) => {
+    const on = { ...initial };
     const calls: string[] = [];
-    const unmute = vi.fn(async () => void calls.push("unmute"));
-    const turnOnCamera = vi.fn(async () => void calls.push("camera"));
-    return { calls, run: (device: "camera" | "microphone" | "both") => retryFailedMediaDevices({ device, ...state, unmute, turnOnCamera }) };
+    const run = (device: "camera" | "microphone" | "both") =>
+      retryFailedMediaDevices({
+        device,
+        isOn: (d) => on[d],
+        turnOn: async (d) => {
+          calls.push(`turn on ${d}`);
+          on[d] = true;
+        },
+        markRecovered: (d) => void calls.push(`recovered ${d}`),
+      });
+    return { calls, run, on };
   };
 
   it("turns the camera back on after a camera failure and leaves the mic alone", async () => {
-    const { calls, run } = setup({ isMuted: true, isCameraOff: true });
+    const { calls, run } = setup({ microphone: false, camera: false });
     await run("camera");
-    expect(calls).toEqual(["camera"]);
+    expect(calls).toEqual(["turn on camera"]);
   });
 
   it("unmutes after a microphone failure and leaves the camera alone", async () => {
-    const { calls, run } = setup({ isMuted: true, isCameraOff: true });
+    const { calls, run } = setup({ microphone: false, camera: false });
     await run("microphone");
-    expect(calls).toEqual(["unmute"]);
+    expect(calls).toEqual(["turn on microphone"]);
   });
 
   it("restores both devices after both failed, microphone first", async () => {
-    const { calls, run } = setup({ isMuted: true, isCameraOff: true });
+    const { calls, run } = setup({ microphone: false, camera: false });
     await run("both");
-    expect(calls).toEqual(["unmute", "camera"]);
+    expect(calls).toEqual(["turn on microphone", "turn on camera"]);
   });
 
-  it("requests nothing for a device that is already on", async () => {
-    const { calls, run } = setup({ isMuted: false, isCameraOff: false });
+  it("re-reads device state between steps instead of using a stale snapshot", async () => {
+    const { calls, on } = setup({ microphone: false, camera: false });
+    await retryFailedMediaDevices({
+      device: "both",
+      isOn: (d) => on[d],
+      turnOn: async (d) => {
+        calls.push(`turn on ${d}`);
+        on.microphone = true;
+        on.camera = true;
+      },
+      markRecovered: (d) => void calls.push(`recovered ${d}`),
+    });
+    expect(calls).toEqual(["turn on microphone", "recovered camera"]);
+  });
+
+  it("only marks a device recovered when it is already live, without requesting it", async () => {
+    const { calls, run } = setup({ microphone: true, camera: true });
     await run("both");
-    expect(calls).toEqual([]);
+    expect(calls).toEqual(["recovered microphone", "recovered camera"]);
   });
 });

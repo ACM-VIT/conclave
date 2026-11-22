@@ -1,20 +1,24 @@
 import type { MeetMediaDevice } from "./types";
 
+type RetryDevice = Exclude<MeetMediaDevice, "both">;
+
 interface RetryFailedMediaDevicesOptions {
   device: MeetMediaDevice;
-  isMuted: boolean;
-  isCameraOff: boolean;
-  unmute: () => Promise<void>;
-  turnOnCamera: () => Promise<void>;
+  isOn: (device: RetryDevice) => boolean;
+  turnOn: (device: RetryDevice) => Promise<void>;
+  markRecovered: (device: RetryDevice) => void;
 }
 
 export async function retryFailedMediaDevices({
   device,
-  isMuted,
-  isCameraOff,
-  unmute,
-  turnOnCamera,
+  isOn,
+  turnOn,
+  markRecovered,
 }: RetryFailedMediaDevicesOptions): Promise<void> {
-  if (device !== "camera" && isMuted) await unmute();
-  if (device !== "microphone" && isCameraOff) await turnOnCamera();
+  const devices: RetryDevice[] =
+    device === "both" ? ["microphone", "camera"] : [device];
+  for (const next of devices) {
+    if (isOn(next)) markRecovered(next);
+    else await turnOn(next);
+  }
 }

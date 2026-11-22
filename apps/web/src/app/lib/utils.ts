@@ -201,6 +201,7 @@ export function createMeetError(
       code: "CONNECTION_FAILED",
       message: "Failed to connect to server",
       recoverable: true,
+      ...(device ? { device } : {}),
     };
   }
 
@@ -216,9 +217,18 @@ export function clearMediaDeviceError(
   current: MeetError | null,
   recovered: "camera" | "microphone",
 ): MeetError | null {
-  if (!current) return current;
-  if (current.device) return current.device === recovered ? null : current;
-  return recovered === "microphone" ? null : current;
+  if (!current?.device) return current;
+  if (current.device === recovered) return null;
+  if (current.device !== "both") return current;
+  const remaining = recovered === "camera" ? "microphone" : "camera";
+  const kind = (
+    Object.keys(MEDIA_ERROR_MESSAGES) as (keyof typeof MEDIA_ERROR_MESSAGES)[]
+  ).find((key) => MEDIA_ERROR_MESSAGES[key].both === current.message);
+  return {
+    ...current,
+    device: remaining,
+    message: kind ? MEDIA_ERROR_MESSAGES[kind][remaining] : current.message,
+  };
 }
 
 export function generateSessionId(): string {

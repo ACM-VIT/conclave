@@ -68,7 +68,7 @@ export function placeNoticeLane(
 
 export interface InCallNoticeLane {
   compact: boolean;
-  announce: (id: string, text: string | null) => void;
+  announce: (id: string, text: string | null, urgent: boolean) => void;
 }
 
 export const InCallNoticeLaneContext = createContext<InCallNoticeLane | null>(null);

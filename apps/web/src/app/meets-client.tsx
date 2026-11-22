@@ -115,6 +115,7 @@ import {
 } from "./lib/network-information";
 import { resolveEffectiveCameraPublishSettings } from "./lib/media-quality-settings";
 import {
+  clearMediaDeviceError,
   generateRoomCode,
   isSystemUserId,
   sanitizeInstitutionDisplayName,
@@ -1333,18 +1334,41 @@ export default function MeetsClient({
     toggleCameraCommandRef.current = toggleCamera;
   }, [toggleCamera]);
 
-  const handleRetryMedia = useCallback(async () => {
-    const failed = meetError;
-    if (!failed?.device) return;
-    await retryFailedMediaDevices({
-      device: failed.device,
-      isMuted,
-      isCameraOff,
-      unmute: toggleMute,
-      turnOnCamera: toggleCamera,
+  const mediaIntentRef = useRef({ isMuted, isCameraOff });
+  useEffect(() => {
+    mediaIntentRef.current = { isMuted, isCameraOff };
+  }, [isMuted, isCameraOff]);
+  const mediaRetryRef = useRef<Promise<void> | null>(null);
+
+  const canRetryMedia =
+    Boolean(meetError?.device) && meetError?.code !== "TRANSPORT_ERROR";
+
+  const handleRetryMedia = useCallback(() => {
+    const device = meetError?.device;
+    if (!device) return;
+    if (mediaRetryRef.current) return;
+    const hasLiveTrack = (tracks: MediaStreamTrack[] | undefined) =>
+      Boolean(tracks?.some((track) => track.readyState === "live"));
+    mediaRetryRef.current = retryFailedMediaDevices({
+      device,
+      isOn: (target) => {
+        const intent = mediaIntentRef.current;
+        const stream = refs.localStreamRef.current;
+        return target === "camera"
+          ? !intent.isCameraOff && hasLiveTrack(stream?.getVideoTracks())
+          : !intent.isMuted && hasLiveTrack(stream?.getAudioTracks());
+      },
+      turnOn: async (target) => {
+        await (target === "camera"
+          ? toggleCameraCommandRef.current?.()
+          : toggleMuteCommandRef.current?.());
+      },
+      markRecovered: (target) =>
+        setMeetError((current) => clearMediaDeviceError(current, target)),
+    }).finally(() => {
+      mediaRetryRef.current = null;
     });
-    setMeetError((current) => (current === failed ? null : current));
-  }, [isCameraOff, isMuted, meetError, setMeetError, toggleCamera, toggleMute]);
+  }, [meetError, refs.localStreamRef, setMeetError]);
 
   const handlePrejoinMediaCommit = useCallback(
     (handoff: PrejoinMediaHandoff) => {
@@ -3171,8 +3195,8 @@ export default function MeetsClient({
             <MeetsErrorBanner
               meetError={meetError}
               onDismiss={() => setMeetError(null)}
-              primaryActionLabel={meetError.device ? "Try again" : undefined}
-              onPrimaryAction={meetError.device ? handleRetryMedia : undefined}
+              primaryActionLabel={canRetryMedia ? "Try again" : undefined}
+              onPrimaryAction={canRetryMedia ? handleRetryMedia : undefined}
             />
           ) : null
         }
