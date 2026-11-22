@@ -5,6 +5,7 @@ import { config } from "../config/config.js";
 import { createSfuApp } from "../server/http/createApp.js";
 import {
   createPersistenceFence,
+  MAX_PERSISTENCE_FENCE_MS,
   fenceScheduledMeetingPersistence,
   fenceScheduledWebinarPersistence,
   fenceSchedulingPersistence,
@@ -157,6 +158,19 @@ describe("persistence fence", () => {
     expect(written).toHaveBeenCalledOnce();
     expect(fence.holder()).toBeNull();
     expect(fence.renew("backup-one", 1_000)).toBeNull();
+  });
+
+  it("never lets renewals keep writers waiting past the hard limit from when the hold was taken", async () => {
+    vi.useFakeTimers();
+    const fence = createPersistenceFence();
+    const taken = Date.now();
+    await fence.hold("backup-one", 20_000);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(fence.renew("backup-one", 20_000)).toEqual({ until: taken + MAX_PERSISTENCE_FENCE_MS });
+    const write = fence.run(() => "written");
+    await vi.advanceTimersByTimeAsync(15_000);
+    await expect(write).resolves.toBe("written");
+    expect(fence.holder()).toBeNull();
   });
 
   it("leaves the event loop to everything else while calls wait on a hold", async () => {

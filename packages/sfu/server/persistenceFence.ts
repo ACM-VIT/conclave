@@ -12,8 +12,9 @@ import type { SchedulingPersistence } from "./scheduling.js";
 // gets its own call's result or error. Only persistence waits on the gate:
 // media and signalling never await it, and the services serve from memory.
 // A hold belongs to the owner token that took it. Only that token renews or
-// releases it, and it lifts itself at its deadline if the backup never comes
-// back.
+// releases it, it lifts itself at its deadline if the backup never comes
+// back, and no renewal keeps it past MAX_PERSISTENCE_FENCE_MS from when it
+// was taken, so writers never wait longer than that.
 
 export const MAX_PERSISTENCE_FENCE_MS = 30_000;
 
@@ -42,6 +43,7 @@ const settle = (): void => undefined;
 
 export const createPersistenceFence = (): PersistenceFence => {
   let owner: string | null = null;
+  let heldSince = 0;
   let until = 0;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let waiters: Array<() => void> = [];
@@ -54,6 +56,7 @@ export const createPersistenceFence = (): PersistenceFence => {
 
   const open = (): void => {
     owner = null;
+    heldSince = 0;
     until = 0;
     heldFrom = Infinity;
     if (timer) clearTimeout(timer);
@@ -64,9 +67,10 @@ export const createPersistenceFence = (): PersistenceFence => {
   };
 
   const arm = (holdMs: number): { until: number } => {
-    until = Date.now() + holdMs;
+    const now = Date.now();
+    until = Math.min(now + holdMs, heldSince + MAX_PERSISTENCE_FENCE_MS);
     if (timer) clearTimeout(timer);
-    timer = setTimeout(open, holdMs);
+    timer = setTimeout(open, until - now);
     timer.unref?.();
     return { until };
   };
@@ -74,7 +78,10 @@ export const createPersistenceFence = (): PersistenceFence => {
   return {
     async hold(who, holdMs) {
       if (owner !== null && owner !== who) return null;
-      if (owner === null) heldFrom = made;
+      if (owner === null) {
+        heldFrom = made;
+        heldSince = Date.now();
+      }
       owner = who;
       arm(holdMs);
       await tail;
