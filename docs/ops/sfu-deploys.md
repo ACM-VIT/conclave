@@ -1,8 +1,10 @@
 # SFU deploys: drain, canary, rollback
 
 `scripts/deploy-sfu.sh` deploys the SFU instances on one host without cutting
-a call. It builds one image for the pulled commit, then takes the instances one
-at a time, emptiest first:
+a call. It pulls, restarts itself if the pull changed the script (bash would
+otherwise keep running the old file), builds one image for the commit or
+reuses the one already built for it, then takes the instances one at a time,
+emptiest first:
 
 1. Mark the instance draining. New meetings go to the other instance; meetings
    already on this one continue.
