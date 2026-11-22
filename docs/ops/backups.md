@@ -140,8 +140,9 @@ To apply it:
    root, so the files stay root's. Once the SFU image runs as `node` (#272),
    they go to `node`. If the containers are gone, pass `--owner 1000:1000`
    (`node` in the Node image) or set `BACKUP_RESTORE_OWNER` in
-   `/etc/conclave/backup.env`; a restore that cannot hand the files over fails
-   instead of leaving them unreadable.
+   `/etc/conclave/backup.env`. The owner is resolved to numeric ids and
+   checked before anything is replaced: only root can give files to another
+   user, and a name that does not resolve fails the restore up front.
 4. `docker compose -f docker-compose.sfu.yml up -d sfu-a sfu-b`
 5. Check the scheduled meetings and webinars, then `shred -u /root/conclave-backup.key`.
 

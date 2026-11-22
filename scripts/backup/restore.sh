@@ -122,6 +122,9 @@ done
 # could not read them. Settled before the first file changes.
 restore_owner="$(sfu_file_owner "${owner:-${BACKUP_RESTORE_OWNER:-}}" "$STATE_DIR")" ||
   die "cannot tell which user the SFU runs as; rerun with --owner user:group"
+if [[ -n "$restore_owner" && "$EUID" != 0 && "$restore_owner" != "$(id -u):$(id -g)" ]]; then
+  die "only root can give the restored files to ${restore_owner}; rerun restore.sh as root"
+fi
 
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "$STATE_DIR"

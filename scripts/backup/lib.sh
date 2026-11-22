@@ -145,16 +145,29 @@ quote_args() {
   done
 }
 
+# Prints the id of a "user" or "group" name on this host. BACKUP_ID_LOOKUP,
+# when set, is asked instead (`$BACKUP_ID_LOOKUP user|group NAME`), so the
+# tests do not depend on the accounts of the host they run on.
+host_id() {
+  if [[ -n "${BACKUP_ID_LOOKUP:-}" ]]; then
+    "$BACKUP_ID_LOOKUP" "$1" "$2"
+    return
+  fi
+  KIND_IN="$1" NAME_IN="$2" python3 -c '
+import grp, os, pwd
+kind, name = os.environ["KIND_IN"], os.environ["NAME_IN"]
+print(pwd.getpwnam(name).pw_uid if kind == "user" else grp.getgrnam(name).gr_gid)
+' 2>/dev/null
+}
+
 # Resolves an explicit user:group to numeric uid:gid on this host, which is
 # where the files are chowned.
 host_ids() {
-  OWNER_IN="$1" python3 -c '
-import grp, os, pwd
-user, _, group = os.environ["OWNER_IN"].partition(":")
-uid = int(user) if user.isdigit() else pwd.getpwnam(user).pw_uid
-gid = int(group) if group.isdigit() else grp.getgrnam(group).gr_gid
-print(f"{uid}:{gid}")
-' 2>/dev/null
+  local user="${1%%:*}" group="${1#*:}" uid gid
+  if [[ "$user" =~ ^[0-9]+$ ]]; then uid="$user"; else uid="$(host_id user "$user")" || return 1; fi
+  if [[ "$group" =~ ^[0-9]+$ ]]; then gid="$group"; else gid="$(host_id group "$group")" || return 1; fi
+  [[ "$uid" =~ ^[0-9]+$ && "$gid" =~ ^[0-9]+$ ]] || return 1
+  printf '%s:%s\n' "$uid" "$gid"
 }
 
 # Resolves a container's user ("name", "name:group", "uid" or "uid:gid") to

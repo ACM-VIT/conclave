@@ -33,9 +33,15 @@ const setUp = async (root, extraConfig = []) => {
   const { stdout: recipient } = await run("age-keygen", ["-y", key]);
   await writeFile(path.join(root, "recipients.txt"), recipient);
   const config = path.join(root, "backup.env");
+  // Name lookups on this host go through a hook that knows no accounts, so a
+  // test means the same as root, as a normal user, with or without a node
+  // account.
+  const lookup = path.join(root, "id-lookup");
+  await writeFile(lookup, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
   await writeFile(
     config,
     [
+      `BACKUP_ID_LOOKUP=${lookup}`,
       `CONCLAVE_REPO=${repo}`,
       `CONCLAVE_STATE_DIR=${state}`,
       `BACKUP_AGE_RECIPIENTS_FILE=${path.join(root, "recipients.txt")}`,
@@ -328,7 +334,9 @@ test(
       assert.deepEqual((await readdir(state)).filter((name) => name.includes("pre-restore")), []);
 
       if (process.getuid() !== 0) {
-        await assert.rejects(restore("--file", archive, "--yes", "--owner", "0:0"), /could not give .* to 0:0/);
+        // Only root can hand files to another user; refused up front.
+        await assert.rejects(restore("--file", archive, "--yes", "--owner", "0:0"), /only root can give the restored files to 0:0/);
+        assert.deepEqual((await readdir(state)).filter((name) => name.includes("pre-restore")), []);
       }
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -394,8 +402,10 @@ test(
       // restore can hand files to.
       const bin = path.join(root, "bin");
       await mkdir(bin);
-      const uid = process.getuid();
-      const gid = process.getgid();
+      // Inside the image node is an id this runner can hand files to and
+      // never 0: its own as a normal user, any as root.
+      const uid = process.getuid() === 0 ? 4242 : process.getuid();
+      const gid = process.getuid() === 0 ? 4242 : process.getgid();
       await writeFile(
         path.join(bin, "docker"),
         [
