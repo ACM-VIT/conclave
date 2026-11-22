@@ -2618,10 +2618,8 @@ export default function MeetsClient({
     socket.cleanup,
   ]);
 
-  const startNewMeeting = useCallback((
-    keepAudioOnly: boolean,
-    targetRoomId: string = generateRoomCode(),
-  ) => {
+  const startNewMeeting = useCallback((keepAudioOnly: boolean) => {
+    const targetRoomId = generateRoomCode();
     // A join that never landed still owes the visitor the camera and mic
     // they picked on setup; cleanup would otherwise forget that choice. The
     // mute and camera state must agree with it, as on the first handoff.
@@ -3041,14 +3039,14 @@ export default function MeetsClient({
     setMeetError,
   ]);
 
-  // "Check your meeting code": the visitor chose to open the room at the code
-  // they followed, and becomes its host.
-  const handleStartMeetingAtCode = useCallback(() => {
-    if (!roomId) return;
+  // "Check your meeting code": the visitor chose to start a meeting of their
+  // own. It gets a code of its own too, so it is never mistaken for the
+  // meeting the code they followed belongs, or belonged, to.
+  const handleStartMeetingInstead = useCallback(() => {
     setEnterErrored(false);
     setEnterAction("new");
-    startNewMeeting(true, roomId);
-  }, [roomId, startNewMeeting]);
+    startNewMeeting(true);
+  }, [startNewMeeting]);
 
   const handleEnterDismiss = useCallback(() => {
     setEnterAction(null);
@@ -3155,7 +3153,7 @@ export default function MeetsClient({
         onDismiss={
           isRoomNotFound && forceJoinOnly ? handleGoHome : handleEnterDismiss
         }
-        onStartNewMeeting={isRoomNotFound ? handleStartMeetingAtCode : undefined}
+        onStartNewMeeting={isRoomNotFound ? handleStartMeetingInstead : undefined}
       />
     </>
   );
