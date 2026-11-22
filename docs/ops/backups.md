@@ -41,6 +41,15 @@ SFUs' local ports (`http://127.0.0.1:3031/health`). One backup or restore
 runs at a time on the host (`flock` on `BACKUP_LOCAL_DIR/.backup.lock`); a
 second one exits at once.
 
+A backup is complete or it fails, with no archive and no heartbeat: a
+missing state dir fails it, and so does a missing database the SFU opens
+(`CONCLAVE_SQLITE_PATH`, or the compose default `conclave.sqlite` in the
+state dir), even when Redis alone could be copied. Each expected source (that
+database, and Redis when configured) must be in the payload before it is
+encrypted, and the encrypted file is checked before the job keeps it. Only
+then are older local archives rotated, and the newest is always kept, so a
+bad night never pushes out the last complete backup.
+
 Each archive also holds a `MANIFEST` (row counts per table, Redis key count,
 repo commit) and `SHA256SUMS`. The archive is encrypted with
 [age](https://age-encryption.org) to a public key. The VM can write backups

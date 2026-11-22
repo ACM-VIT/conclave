@@ -31,6 +31,8 @@ for tool in age sqlite3 sha256sum openssl tar python3; do
 done
 # A second backup could release this one's fence or copy around it.
 take_backup_lock
+# Nothing to back up is a failure, never an empty success.
+[[ -d "$STATE_DIR" ]] || die "the state dir ${STATE_DIR} does not exist, so there is nothing to back up; check CONCLAVE_STATE_DIR"
 
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 name="conclave-${BACKUP_NAME:-$(hostname -s)}-${stamp}"
@@ -55,6 +57,13 @@ sources=0
 # every deploy, and cannot be backed up from the host.
 configured="$(configured_database "$STATE_DIR")" ||
   die "CONCLAVE_SQLITE_PATH=${CONCLAVE_SQLITE_PATH} is outside the state dir, so it is not on the volume; move it under ${CONTAINER_STATE_DIR}"
+# The SFU always opens that database, so a backup without it would leave out
+# its SQLite data (webinars among it). Settled before the fence.
+[[ -e "${STATE_DIR}/${configured}" || -L "${STATE_DIR}/${configured}" ]] ||
+  die "the configured database ${STATE_DIR}/${configured} is missing (CONCLAVE_SQLITE_PATH, or the compose default conclave.sqlite); nothing was archived"
+expected_chain="$(sqlite_link_chain "$STATE_DIR" "$configured" "$CONTAINER_STATE_DIR")" ||
+  die "${STATE_DIR}/${configured} does not lead to a file inside the state dir"
+expected_db="$(awk -F'\t' '$1 == "file" { print $2 }' <<< "$expected_chain")"
 
 # One point in time for SQLite and Redis: every SFU holds its durable writes
 # behind a short fence while both are copied, and the release lets them
@@ -140,9 +149,7 @@ mapfile -t databases < <(sqlite_files "$STATE_DIR")
 mapfile -t starts < <(sqlite_links "$STATE_DIR" | cut -f1)
 # The configured database goes through the same walk: a directory link on
 # its way counts as much as a link to the file.
-if [[ -n "$configured" ]] && [[ -e "${STATE_DIR}/${configured}" || -L "${STATE_DIR}/${configured}" ]]; then
-  starts+=("$configured")
-fi
+starts+=("$configured")
 links=()
 : > "${payload}/sqlite-links"
 for start in "${starts[@]}"; do
@@ -195,6 +202,11 @@ if [[ -n "$REDIS_SOURCE_URL" ]]; then
 fi
 
 (( sources > 0 )) || die "found no SQLite database in ${STATE_DIR} and no Redis URL; check the config"
+# Every expected source is in the payload before anything is archived.
+[[ -s "${payload}/sqlite/${expected_db}" ]] || die "the copy of ${STATE_DIR}/${expected_db} is missing from the backup; nothing was archived"
+if [[ -n "$REDIS_SOURCE_URL" ]]; then
+  [[ -s "${payload}/redis/dump.rdb" ]] || die "the Redis snapshot is missing from the backup; nothing was archived"
+fi
 
 renew_fences
 if (( ${#fenced[@]} > 0 )); then
@@ -225,9 +237,15 @@ tar -C "$payload" -czf - . | age --encrypt -R "$recipients" -o "${work}/${name}.
 # the heartbeat is not sent.
 mv "${work}/${name}.tar.gz.age" "${BACKUP_LOCAL_DIR}/"
 archive="${BACKUP_LOCAL_DIR}/${name}.tar.gz.age"
-# From here every exit keeps only the newest BACKUP_LOCAL_KEEP archives, so
-# nights whose upload failed cannot fill the disk.
+if [[ ! -s "$archive" || "$(head -c 21 "$archive")" != "age-encryption.org/v1" ]]; then
+  rm -f "$archive"
+  die "the encrypted archive was not written whole; nothing was rotated"
+fi
+# Only now, with tonight's archive complete and checked, does every exit keep
+# just the newest BACKUP_LOCAL_KEEP archives, so nights whose upload failed
+# cannot fill the disk and no run ever rotates away the last complete one.
 keep="${BACKUP_LOCAL_KEEP:-3}"
+(( keep >= 1 )) || keep=1
 prune_local_archives() {
   local archives i
   mapfile -t archives < <(find "$BACKUP_LOCAL_DIR" -maxdepth 1 -name 'conclave-*.tar.gz.age' | by_stamp)

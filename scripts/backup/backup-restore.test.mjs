@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile, execFileSync, spawn } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, readdir, readlink, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, readlink, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -1075,6 +1075,95 @@ test(
       assert.deepEqual(restored.prepare("SELECT id FROM meetings").all().map((row) => row.id), ["kept"]);
       restored.close();
     } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+// A Redis on a free port and a counter for heartbeat pings, for the cases
+// where Redis alone must not make a backup look complete.
+const redisAndHeartbeat = async () => {
+  const port = await freePort();
+  const server = spawn("redis-server", ["--port", String(port), "--bind", "127.0.0.1", "--save", "", "--appendonly no"], { stdio: "ignore" });
+  const cli = (...args) => run("redis-cli", ["-h", "127.0.0.1", "-p", String(port), ...args]);
+  for (let i = 0; i < 50 && (await cli("PING").then((r) => r.stdout.trim(), () => "")) !== "PONG"; i += 1) {
+    await new Promise((done) => setTimeout(done, 100));
+  }
+  await cli("SET", "conclave:sfu:persistence:scheduled-meetings", "x");
+  let pings = 0;
+  const heartbeat = createHttpServer((_req, res) => {
+    pings += 1;
+    res.end("ok");
+  });
+  await new Promise((done) => heartbeat.listen(0, "127.0.0.1", done));
+  return {
+    config: [`SFU_PERSISTENCE_REDIS_URL=redis://127.0.0.1:${port}/0`, `BACKUP_HEARTBEAT_URL=http://127.0.0.1:${heartbeat.address().port}/ping`],
+    pings: () => pings,
+    close: async () => {
+      server.kill();
+      await new Promise((done) => heartbeat.close(done));
+    },
+  };
+};
+
+test(
+  "a backup of a state dir that does not exist fails, even with Redis configured and the SFUs fenced",
+  { skip: missingWithRedis.length > 0 && `needs ${missingWithRedis.join(", ")} on PATH` },
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+    const extras = await redisAndHeartbeat();
+    const sfu = await fencedSfu();
+    try {
+      const gone = path.join(root, "gone");
+      const { local, setDocker, backup } = await setUp(root, [
+        `CONCLAVE_STATE_DIR=${gone}`,
+        `CONCLAVE_SFU_HEALTH_URLS="${sfu.health}"`,
+        ...extras.config,
+      ]);
+      await setDocker([sfu.container(gone)]);
+      await assert.rejects(backup("--local-only"), /the state dir .*gone does not exist/);
+      assert.deepEqual(await archives(local).catch(() => []), []);
+      assert.equal(extras.pings(), 0, "no heartbeat");
+    } finally {
+      await sfu.close();
+      await extras.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "a backup whose configured database is missing fails with no heartbeat and rotates nothing away",
+  { skip: missingWithRedis.length > 0 && `needs ${missingWithRedis.join(", ")} on PATH` },
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+    const extras = await redisAndHeartbeat();
+    const sfu = await fencedSfu();
+    try {
+      const { state, local, setDocker, backup, latestArchive } = await setUp(root, [
+        `CONCLAVE_SFU_HEALTH_URLS="${sfu.health}"`,
+        "BACKUP_LOCAL_KEEP=2",
+        ...extras.config,
+      ]);
+      await setDocker([sfu.container(state)]);
+      // Two complete nights already on disk.
+      withDatabase(state);
+      await backup("--local-only");
+      const complete = await latestArchive();
+      const kept = ["conclave-test-20260101T000000Z.tar.gz.age", "conclave-test-20260102T000000Z.tar.gz.age"];
+      await copyFile(complete, path.join(local, kept[0]));
+      await copyFile(complete, path.join(local, kept[1]));
+      await rm(complete);
+      const before = extras.pings();
+
+      // Tonight the SFU's database (the compose default, conclave.sqlite) is gone.
+      await rm(path.join(state, "conclave.sqlite"));
+      await assert.rejects(backup("--local-only"), /the configured database .*conclave\.sqlite is missing/);
+      assert.deepEqual((await archives(local)).sort(), kept, "both complete archives stay");
+      assert.equal(extras.pings(), before, "no heartbeat");
+    } finally {
+      await sfu.close();
+      await extras.close();
       await rm(root, { recursive: true, force: true });
     }
   },
