@@ -120,10 +120,10 @@ describe("transcription provider recovery", () => {
   it("replays only committed audio that has not produced a final item", () => {
     const journal = new TranscriptAudioReplayJournal();
     journal.append("audio-a", ada, 2_400, 1_000);
-    const first = journal.commit(ada, 1_100, "line-a");
+    journal.commit(ada, 1_100, "line-a");
     journal.append("audio-b", ada, 2_400, 1_200);
     journal.commit(ada, 1_300);
-    journal.release([first!]);
+    journal.release("line-a");
 
     expect(journal.takeRecoveryEvents(1_400)).toEqual([
       {
@@ -216,6 +216,37 @@ describe("transcription provider recovery", () => {
       }),
       expect.objectContaining({ type: "commit", speaker: ada }),
       expect.objectContaining({ type: "clear", speaker: ada }),
+    ]);
+  });
+
+  it("drops a finished line's audio that was never committed, and keeps newer audio", () => {
+    const journal = new TranscriptAudioReplayJournal();
+    journal.append("audio-a1", ada, 2_400, 1_000, "line-a");
+    journal.commit(ada, 1_100);
+    journal.append("audio-a2", ada, 2_400, 1_200, "line-a");
+    journal.append("audio-b", ada, 2_400, 1_300, "line-b");
+    journal.append("audio-loose", ada, 2_400, 1_400);
+    journal.release("line-a");
+
+    expect(journal.takeRecoveryEvents(1_500).flatMap((event) => (event.type === "chunk" ? [event.audio] : []))).toEqual([
+      "audio-b",
+      "audio-loose",
+    ]);
+  });
+
+  it("gives a line accepted late the audio no line owns from where its utterance began", () => {
+    const journal = new TranscriptAudioReplayJournal();
+    journal.append("before", ada, 2_400, 1_000);
+    journal.append("pre-roll", ada, 2_400, 1_200);
+    journal.commit(ada, 1_250);
+    journal.append("onset", ada, 2_400, 1_300);
+    journal.append("other", ada, 2_400, 1_350, "line-b");
+    journal.claim("line-a", 1_200);
+    journal.release("line-a");
+
+    expect(journal.takeRecoveryEvents(1_500).flatMap((event) => (event.type === "chunk" ? [event.audio] : []))).toEqual([
+      "before",
+      "other",
     ]);
   });
 

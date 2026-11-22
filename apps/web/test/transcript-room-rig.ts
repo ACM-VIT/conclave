@@ -2,6 +2,8 @@ import { vi, type Mock } from "vitest";
 import { TranscriptRoom } from "../transcript-worker/src/room";
 import type { Env, Viewer } from "../transcript-worker/src/types";
 import { clicksPcm, noisePcm, pcmBase64, silencePcm, voicedPcm } from "./transcript-audio-fixtures";
+import { mergeTranscriptDelta, mergeTranscriptFinal } from "../src/app/lib/transcript-reducer";
+import type { TranscriptSegment } from "@conclave/meeting-core/transcript-types";
 
 type Listener = (event: { data?: unknown }) => void;
 
@@ -158,6 +160,48 @@ export async function transcriptRoomRig(
     }
     return places;
   };
+  /** Places by the words a line shows, for lines whose itemId is not the provider's. */
+  const broadcastPlacesByWords = () => {
+    const places = new Map<string, Set<number>>();
+    for (const message of sentMessages()) {
+      const line = message.type === "segment.delta" ? message.delta : message.type === "segment.final" ? message.segment : null;
+      const words = line?.text.split(" ")[0]?.replace(/\.$/, "");
+      if (!words) continue;
+      places.set(words, (places.get(words) ?? new Set()).add(line.sequence));
+    }
+    return places;
+  };
+  /** What a viewer shows, built from the room's broadcasts with the client's own merge. */
+  const viewerTranscript = () => {
+    let segments: TranscriptSegment[] = [];
+    let partials = new Map<string, TranscriptSegment>();
+    for (const message of sentMessages()) {
+      if (message.type === "segment.delta") partials = mergeTranscriptDelta(partials, message.delta);
+      if (message.type === "partials.reset") partials = new Map();
+      if (message.type === "segment.final") {
+        partials.delete(message.segment.itemId);
+        segments = mergeTranscriptFinal(segments, message.segment);
+      }
+    }
+    return { segments, partials };
+  };
+  /** Everything the room still holds for lines, providers and replay audio. */
+  const retainedLineState = () => {
+    const internals = room as unknown as {
+      liveLines: { retained: number };
+      providerDrains: Map<number, unknown>;
+      pendingCommits: unknown[];
+      transcriptionReplayJournal: { isEmpty: boolean };
+      liveLineTimer: unknown;
+    };
+    return {
+      liveLines: internals.liveLines.retained,
+      drains: internals.providerDrains.size,
+      pendingCommits: internals.pendingCommits.length,
+      replayAudio: internals.transcriptionReplayJournal.isEmpty ? 0 : 1,
+      timers: internals.liveLineTimer === null ? 0 : 1,
+    };
+  };
   const lastSnapshotSegment = (text: string) =>
     snapshots.at(-1)?.segments.find((segment) => segment.text === text);
   const snapshotCount = () => snapshots.length;
@@ -207,6 +251,9 @@ export async function transcriptRoomRig(
     restartedTexts,
     snapshotCount,
     broadcastPlaces,
+    broadcastPlacesByWords,
+    viewerTranscript,
+    retainedLineState,
     viewerSnapshot,
   };
 }

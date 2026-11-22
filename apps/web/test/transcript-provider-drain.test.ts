@@ -609,7 +609,7 @@ describe("caption lines across a switch keep commit order", () => {
   it.each(Array.from({ length: 300 }, (_, index) => index + 1))("seed %i", async (seed) => {
     vi.useFakeTimers();
     const random = seeded(seed);
-    const { sockets, start, switchTo, speak, commit, savedTexts, broadcastPlaces } = await fixture(OPENAI);
+    const { sockets, start, switchTo, speak, commit, savedTexts, broadcastPlacesByWords } = await fixture(OPENAI);
     await start("en");
     const before = sockets[0];
     const oldIds = Array.from({ length: 1 + Math.floor(random() * 5) }, (_, index) => `old_${index}`);
@@ -670,7 +670,7 @@ describe("caption lines across a switch keep commit order", () => {
 
     const commitOrder = [...oldIds, ...newIds];
     expect(savedTexts()).toEqual(commitOrder.map((id) => `${id}.`));
-    const places = broadcastPlaces();
+    const places = broadcastPlacesByWords();
     for (const id of commitOrder) expect([...(places.get(id) ?? [])], `${id} keeps one place`).toHaveLength(1);
     const placeOf = (id: string) => [...places.get(id)!][0];
     expect([...commitOrder].sort((left, right) => placeOf(left) - placeOf(right))).toEqual(commitOrder);

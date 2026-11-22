@@ -65,6 +65,7 @@ type SarvamResponse = {
 type ParsedSarvamEvent =
   | { type: "final"; itemId: string; transcript: string }
   | { type: "speech_start" }
+  | { type: "speech_end" }
   | { type: "error"; message: string }
   | { type: "ignore" };
 
@@ -297,6 +298,12 @@ export const parseSarvamEvent = (raw: string): ParsedSarvamEvent => {
     return { type: "speech_start" };
   }
   if (
+    responseType === "speech_end" ||
+    (responseType === "events" && data.signal_type === "END_SPEECH")
+  ) {
+    return { type: "speech_end" };
+  }
+  if (
     responseType !== "data" &&
     responseType !== "transcript" &&
     responseType !== "translation"
@@ -343,12 +350,15 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
   private utteranceCount = 0;
   private readonly awaitingFinal: string[] = [];
   private openedByVoice: string[] = [];
-  private onsets: Array<{ at: number; speaker: TranscriptSpeaker | null }> = [];
+  /** Voiced chunks no speech signal has taken yet, newest last. */
+  private evidence: Array<{ at: number; speaker: TranscriptSpeaker | null; turnStartedAt: number }> = [];
   private unheardSignals: Array<{ itemId: string; at: number }> = [];
   private resolveTimer: ReturnType<typeof setTimeout> | null = null;
   private lastSpeaker: TranscriptSpeaker | null = null;
   private signalsSpeech = false;
   private turnAccepted = false;
+  private turnStartedAt = 0;
+  private turnEnded = true;
 
   constructor(
     private readonly socket: WebSocket,
@@ -361,18 +371,21 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
     if (downsampled) this.socket.send(buildSarvamAudioMessage(downsampled));
     this.lastSpeaker = speaker ?? this.lastSpeaker;
     const now = Date.now();
+    if (this.turnEnded) {
+      this.turnEnded = false;
+      this.turnStartedAt = now;
+    }
     const voice = this.voice.push(samples, now);
     if (voice === "quiet") return;
     if (!this.signalsSpeech) {
       if (!this.turnAccepted) {
         this.turnAccepted = true;
-        this.openedByVoice.push(this.acceptUtterance(speaker ?? null, true));
+        this.openedByVoice.push(this.acceptUtterance(speaker ?? null, true, this.turnStartedAt, true));
       }
       return;
     }
-    if (voice !== "onset") return;
-    this.onsets = this.onsets.filter(({ at }) => now - at <= 2 * SARVAM_SIGNAL_LOOKBACK_MS);
-    this.onsets.push({ at: now, speaker: speaker ?? null });
+    this.evidence = this.evidence.filter(({ at }) => now - at <= 2 * SARVAM_SIGNAL_LOOKBACK_MS);
+    this.evidence.push({ at: now, speaker: speaker ?? null, turnStartedAt: this.turnStartedAt });
     this.scheduleResolve();
   }
 
@@ -392,6 +405,7 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
 
   private endTurn(): void {
     this.turnAccepted = false;
+    this.turnEnded = true;
     this.voice.restart();
   }
 
@@ -400,47 +414,74 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
     return createSarvamSegmentItemId(`sarvam-${this.connectionId}`, this.utteranceCount);
   }
 
-  private acceptUtterance(speaker: TranscriptSpeaker | null, heard: boolean): string {
+  private acceptUtterance(
+    speaker: TranscriptSpeaker | null,
+    heard: boolean,
+    since: number,
+    ownsNewAudio: boolean,
+  ): string {
     const itemId = this.nextUtteranceId();
     this.awaitingFinal.push(itemId);
-    this.callbacks.onAccepted?.(itemId, { heard, speaker });
+    this.callbacks.onAccepted?.(itemId, { heard, speaker, since, ownsNewAudio });
     return itemId;
   }
 
   /**
    * A speech signal takes the oldest utterance our voice check opened before
-   * Sarvam signalled anything. Otherwise it opens one, heard when our check
-   * found a speech onset just before it or speech is still going; a signal
-   * with neither is a false start, which ends with nothing shown, unless our
-   * check hears an onset soon after that no newer signal takes.
+   * Sarvam signalled anything. Otherwise it opens one, and takes the speech
+   * our check heard since the last signal: heard when any of it is within
+   * the lookback, with the speaker of its first chunk and its audio from
+   * where that chunk's turn began. A signal with none is a false start that
+   * ends with nothing shown, unless speech our check hears just after it is
+   * shown to be its own.
    */
   private handleSpeechStart(): void {
     this.signalsSpeech = true;
     const now = Date.now();
     this.resolveUnheardSignals(now);
+    const taken = this.takeEvidence(now).filter(({ at }) => now - at <= SARVAM_SIGNAL_LOOKBACK_MS);
     if (this.openedByVoice.shift()) return;
-    this.onsets = this.onsets.filter(({ at }) => now - at <= SARVAM_SIGNAL_LOOKBACK_MS);
-    const onset = this.onsets.shift();
-    const heard = Boolean(onset) || this.voice.speakingAt(now);
-    const itemId = this.acceptUtterance(onset?.speaker ?? this.lastSpeaker, heard);
-    if (!heard) this.unheardSignals.push({ itemId, at: now });
+    const first = taken[0];
+    const itemId = this.acceptUtterance(
+      first?.speaker ?? this.lastSpeaker,
+      Boolean(first),
+      first ? Math.max(first.turnStartedAt, first.at - SARVAM_SIGNAL_LOOKBACK_MS) : Number.POSITIVE_INFINITY,
+      Boolean(first) && !this.turnEnded && taken.at(-1)?.turnStartedAt === this.turnStartedAt,
+    );
+    if (!first) this.unheardSignals.push({ itemId, at: now });
+  }
+
+  /** Speech our check heard before Sarvam says an utterance ended belongs to that utterance. */
+  private handleSpeechEnd(): void {
+    const now = Date.now();
+    const taken = this.takeEvidence(now);
+    const latest = this.unheardSignals.at(-1);
+    if (latest && taken.some(({ at }) => at > latest.at)) {
+      this.unheardSignals.pop();
+      this.callbacks.onHeard?.(latest.itemId);
+    }
+  }
+
+  private takeEvidence(now: number): typeof this.evidence {
+    const taken = this.evidence.filter(({ at }) => at <= now);
+    this.evidence = this.evidence.filter(({ at }) => at > now);
+    return taken;
   }
 
   /**
-   * An onset belongs to the newest signal near it, so it is held until no
-   * newer signal can take it; then it shows an earlier unheard signal was
-   * speech our check heard late.
+   * Speech heard just after an unheard signal is that signal's once no
+   * newer signal has taken it within the lookback.
    */
   private resolveUnheardSignals(now: number): void {
     for (const signal of [...this.unheardSignals]) {
-      const onset = this.onsets.find(
+      const heard = this.evidence.find(
         ({ at }) =>
           at > signal.at &&
           at - signal.at <= SARVAM_SIGNAL_LOOKBACK_MS &&
           now - at > SARVAM_SIGNAL_LOOKBACK_MS,
       );
-      if (onset) {
-        this.onsets.splice(this.onsets.indexOf(onset), 1);
+      if (heard) {
+        this.evidence = this.evidence.filter(({ at }) => at > heard.at || at <= signal.at);
         this.unheardSignals.splice(this.unheardSignals.indexOf(signal), 1);
         this.callbacks.onHeard?.(signal.itemId);
       } else if (now - signal.at > 2 * SARVAM_SIGNAL_LOOKBACK_MS) {
@@ -455,7 +496,7 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
       this.resolveTimer = null;
       if (this.closed) return;
       this.resolveUnheardSignals(Date.now());
-      if (this.onsets.length > 0) this.scheduleResolve();
+      if (this.evidence.length > 0) this.scheduleResolve();
     }, SARVAM_SIGNAL_LOOKBACK_MS + 1);
   }
 
@@ -498,10 +539,21 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
       this.handleSpeechStart();
       return;
     }
+    if (event.type === "speech_end") {
+      this.handleSpeechEnd();
+      return;
+    }
     const answered = this.awaitingFinal.shift();
     if (!answered && !event.transcript) return;
     const itemId = answered ?? this.nextUtteranceId();
-    if (!answered) this.callbacks.onAccepted?.(itemId, { heard: true, speaker: this.lastSpeaker });
+    if (!answered) {
+      this.callbacks.onAccepted?.(itemId, {
+        heard: true,
+        speaker: this.lastSpeaker,
+        since: this.turnStartedAt,
+        ownsNewAudio: false,
+      });
+    }
     this.openedByVoice = this.openedByVoice.filter((opened) => opened !== itemId);
     this.unheardSignals = this.unheardSignals.filter((signal) => signal.itemId !== itemId);
     this.callbacks.onCommitted(itemId);

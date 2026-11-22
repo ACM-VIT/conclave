@@ -470,7 +470,7 @@ describe("a line's state lives on its record", () => {
   it("OpenAI: a restart while a replacement has not acknowledged the replayed audio keeps every accepted line", async () => {
     vi.useFakeTimers();
     quiet();
-    const { providerSockets, start, speak, commit, savedTexts, restartedTexts, broadcastPlaces } = await rig(OPENAI);
+    const { room, providerSockets, start, speak, commit, savedTexts, restartedTexts, broadcastPlaces } = await rig(OPENAI);
     await start("en");
     const [socket] = providerSockets();
     for (const itemId of ["a", "b"]) {
@@ -495,9 +495,10 @@ describe("a line's state lives on its record", () => {
     await settle();
 
     expect(savedTexts()).toEqual(["Line a.", "Line b."]);
+    expect(room.segments.map(({ itemId }) => itemId), "each line keeps the itemId viewers already know").toEqual(["a", "b"]);
     const places = broadcastPlaces();
-    expect(places.get("a2")).toBeDefined();
-    expect([...places.get("b2")!][0]).toBeGreaterThan([...places.get("a2")!][0]);
+    expect([...places.get("a")!]).toHaveLength(1);
+    expect([...places.get("b2") ?? []]).toHaveLength(0);
   });
 
   it("Sarvam: a gap saved for a guest's first chunk names the guest, not the speaker before", async () => {
@@ -538,6 +539,141 @@ describe("a line's state lives on its record", () => {
 
     expect(savedTexts()).toEqual(["Ada line.", "Guest line."]);
     expect(room.segments.map(({ speakerUserId }) => speakerUserId)).toEqual(["ada", "guest"]);
+  });
+});
+
+describe("one owner and one release point per line", () => {
+  const ada = { userId: "ada", displayName: "Ada" };
+  const grace = { userId: "grace", displayName: "Grace" };
+
+  it("Sarvam: words finished before the relay's next commit are never replayed into a second caption", async () => {
+    vi.useFakeTimers();
+    quiet();
+    const { providerSockets, start, speak, endTurn, savedTexts, viewerTranscript } = await rig(SARVAM);
+    await start("hi");
+    const [socket] = providerSockets();
+    await speak(ada);
+    socket.emit(sarvamFinal("done", "Already captioned."));
+    await settle();
+
+    socket.disconnect();
+    await settle();
+    const replacement = providerSockets()[1];
+    expect(replacement.sent.filter((message) => (message as { audio?: unknown }).audio)).toHaveLength(0);
+    await endTurn(ada);
+    await vi.advanceTimersByTimeAsync(DEADLINE + 100);
+
+    expect(savedTexts()).toEqual(["Already captioned."]);
+    expect(viewerTranscript().segments.map(({ text }) => text)).toEqual(["Already captioned."]);
+  });
+
+  it("OpenAI: a line that became a gap before the replacement acked is corrected under the same itemId", async () => {
+    vi.useFakeTimers();
+    quiet();
+    const { room, providerSockets, start, speak, commit, savedTexts, viewerTranscript } = await rig(OPENAI);
+    await start("en");
+    const [socket] = providerSockets();
+    await speak(ada);
+    await commit(ada);
+    socket.emit(openAiCommitted("a"));
+    await settle();
+
+    socket.disconnect();
+    await settle();
+    const replacement = providerSockets()[1];
+    await vi.advanceTimersByTimeAsync(DEADLINE + 100);
+    expect(savedTexts()).toEqual([GAP]);
+    replacement.emit(openAiCommitted("a2"));
+    replacement.emit(openAiFinal("a2", "Late but right."));
+    await settle();
+
+    expect(room.segments.map(({ itemId, text }) => [itemId, text])).toEqual([["a", "Late but right."]]);
+    expect(viewerTranscript().segments.map(({ itemId, text }) => [itemId, text])).toEqual([["a", "Late but right."]]);
+  });
+
+  it.each([OPENAI, SARVAM])("%s: nothing a session held for its lines outlives stopping notes", async (model) => {
+    vi.useFakeTimers();
+    quiet();
+    const { providerSockets, start, switchTo, speak, commit, endTurn, stop, retainedLineState } = await rig(model);
+    await start(model === OPENAI ? "en" : "hi");
+    for (const _ of [1, 2, 3]) {
+      await speak(ada);
+      await commit(ada);
+    }
+    providerSockets()[0].emit(openAiCommitted("a"));
+    await endTurn(ada);
+    providerSockets()[0].disconnect();
+    await settle();
+    await switchTo(model === OPENAI ? "fr" : "ta");
+    await speak(grace);
+    await endTurn(grace);
+    await vi.advanceTimersByTimeAsync(DEADLINE + 100);
+    await speak(grace);
+
+    await stop();
+    expect(retainedLineState()).toEqual({ liveLines: 0, drains: 0, pendingCommits: 0, replayAudio: 0, timers: 0 });
+  });
+
+  it("Sarvam: a speech signal that comes after the audio was committed takes that audio and its speaker into a replay", async () => {
+    vi.useFakeTimers();
+    quiet();
+    const { providerSockets, start, speak, endTurn, room, viewerTranscript } = await rig(SARVAM);
+    await start("hi");
+    const [socket] = providerSockets();
+    await speak(ada);
+    socket.emit(sarvamSpeechStart());
+    socket.emit(sarvamFinal("first", "First."));
+    await endTurn(ada);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await speak(ada);
+    await endTurn(ada);
+    await speak(grace);
+    await endTurn(grace);
+    await vi.advanceTimersByTimeAsync(700);
+    socket.emit(sarvamSpeechStart());
+    socket.emit(sarvamSpeechStart());
+    await settle();
+
+    socket.disconnect();
+    await settle();
+    const replacement = providerSockets()[1];
+    replacement.emit(sarvamSpeechStart());
+    replacement.emit(sarvamSpeechStart());
+    replacement.emit(sarvamFinal("a", "Ada again."));
+    replacement.emit(sarvamFinal("g", "Grace now."));
+    await settle();
+
+    expect(room.segments.map(({ text, speakerUserId }) => [text, speakerUserId])).toEqual([
+      ["First.", "ada"],
+      ["Ada again.", "ada"],
+      ["Grace now.", "grace"],
+    ]);
+    expect(viewerTranscript().segments.map(({ text }) => text)).toEqual(["First.", "Ada again.", "Grace now."]);
+  });
+
+  it("Sarvam: the second of two close utterances whose final never comes ends as a gap", async () => {
+    vi.useFakeTimers();
+    quiet();
+    const { providerSockets, start, speak, endTurn, savedTexts } = await rig(SARVAM);
+    await start("hi");
+    const [socket] = providerSockets();
+    await speak(ada);
+    socket.emit(sarvamSpeechStart());
+    socket.emit(sarvamFinal("first", "First."));
+    await endTurn(ada);
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    await speak(ada);
+    socket.emit(sarvamSpeechStart());
+    await vi.advanceTimersByTimeAsync(300);
+    await speak(grace);
+    await endTurn(grace);
+    await vi.advanceTimersByTimeAsync(700);
+    socket.emit(sarvamSpeechStart());
+    socket.emit(sarvamFinal("second", "Second."));
+    await vi.advanceTimersByTimeAsync(DEADLINE + 100);
+
+    expect(savedTexts()).toEqual(["First.", "Second.", GAP]);
   });
 });
 
@@ -589,7 +725,7 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
     let provider: Provider = random() < 0.5 ? "openai" : "sarvam";
     const model = (of: Provider) => (of === "openai" ? OPENAI : SARVAM);
     const harness = await rig(model(provider));
-    const { providerSockets, start, switchTo, useModel, speak, sendAudio, commit, endTurn } = harness;
+    const { providerSockets, start, switchTo, useModel, speak, sendAudio, commit, endTurn, stop } = harness;
     await start(pick(LANGUAGES[provider]));
 
     const connections: Connection[] = [];
@@ -665,7 +801,23 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
         if (sarvamSignalsSpeech) live.socket.emit(sarvamSpeechStart());
         place(utterance);
         live.awaiting.push(utterance);
+        if (live.awaiting.length === 1 && !live.stalled && random() < 0.25) {
+          live.awaiting.shift();
+          utterance.final = "shown";
+          live.socket.emit(sarvamFinal(utterance.itemId, utterance.text));
+          await settle();
+        }
         await endTurn(utterance.speaker);
+      },
+      async utterLate() {
+        if (live.provider !== "sarvam" || !sarvamSignalsSpeech) return moves.utter();
+        const utterance = newUtterance(false);
+        await speak(utterance.speaker);
+        place(utterance);
+        await endTurn(utterance.speaker);
+        await vi.advanceTimersByTimeAsync(600 + random() * 800);
+        live.socket.emit(sarvamSpeechStart());
+        live.awaiting.push(utterance);
       },
       async noise() {
         acknowledgeLive();
@@ -800,7 +952,8 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
       },
     };
     const weights: [string, number][] = [
-      ["utter", 28],
+      ["utter", 24],
+      ["utterLate", 6],
       ["noise", 10],
       ["final", 22],
       ["delta", 7],
@@ -830,5 +983,18 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
     );
     expect(await harness.restartedTexts()).toEqual(real().map(expectedText));
     expect(connections.slice(0, -1).every(({ socket }) => socket.closed), "every replaced socket closes").toBe(true);
+    const viewer = harness.viewerTranscript();
+    expect(viewer.segments.map(({ text }) => text), "a viewer shows each line once, in place").toEqual(real().map(expectedText));
+    const words = viewer.segments.map(({ text }) => text).filter((text) => text !== GAP);
+    expect(new Set(words).size, "no words appear in two captions").toBe(words.length);
+    expect(viewer.partials.size, "no partial outlives its line").toBe(0);
+    await stop();
+    expect(harness.retainedLineState(), "nothing a line held outlives the session").toEqual({
+      liveLines: 0,
+      drains: 0,
+      pendingCommits: 0,
+      replayAudio: 0,
+      timers: 0,
+    });
   });
 });

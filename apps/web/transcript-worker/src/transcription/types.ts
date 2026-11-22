@@ -8,7 +8,17 @@ export type LiveTranscriptionCallbacks = {
    * now, with the speaker of the audio that started it and whether our own
    * voice check heard speech there.
    */
-  onAccepted?: (itemId: string, utterance: { heard: boolean; speaker: TranscriptSpeaker | null }) => void;
+  onAccepted?: (
+    itemId: string,
+    utterance: {
+      heard: boolean;
+      speaker: TranscriptSpeaker | null;
+      /** When its audio began, so the line owns its audio from there on. */
+      since: number;
+      /** Its turn is still going, so audio sent from now on is its too. */
+      ownsNewAudio: boolean;
+    },
+  ) => void;
   /** Our voice check heard speech for an accepted utterance after it was accepted. */
   onHeard?: (itemId: string) => void;
   onCommitted: (itemId: string) => void;
