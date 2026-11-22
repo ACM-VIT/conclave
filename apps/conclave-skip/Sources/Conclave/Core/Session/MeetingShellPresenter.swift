@@ -87,7 +87,9 @@ final class MeetingShellPresenter {
     @ObservationIgnored private(set) var callSurfaceIsVisible = true
 
     func setCallSurfaceVisible(_ visible: Bool) {
+        guard visible != callSurfaceIsVisible else { return }
         callSurfaceIsVisible = visible
+        syncChatWithPanels()
     }
 
     init() {
@@ -97,7 +99,7 @@ final class MeetingShellPresenter {
     }
 
     private func syncChatWithPanels() {
-        guard chatPanelIsCurrent else {
+        guard chatPanelIsCurrent && callSurfaceIsVisible else {
             chat.closePanel()
             return
         }
@@ -476,5 +478,11 @@ final class MeetingShellPresenter {
             showsEntryOverlayIntent: inputs.isEnteringMeeting,
             entryAction: inputs.meetingEntryAction
         )
+    }
+}
+
+enum CallSurfaceVisibilityPolicy {
+    static func isVisible(isForeground: Bool, isInPictureInPicture: Bool, pictureInPictureReplacesCallUI: Bool) -> Bool {
+        isForeground && !(pictureInPictureReplacesCallUI && isInPictureInPicture)
     }
 }

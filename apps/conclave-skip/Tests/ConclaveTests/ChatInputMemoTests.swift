@@ -44,6 +44,17 @@ struct ChatInputMemoTests {
         #expect(rowIds.firstIndex(of: "unread").map { rowIds[$0 + 1] } == "n-0")
     }
 
+    @Test func pictureInPictureHidesTheCallUIOnlyWhereItReplacesIt() {
+        #expect(!CallSurfaceVisibilityPolicy.isVisible(isForeground: true, isInPictureInPicture: true,
+                                                       pictureInPictureReplacesCallUI: true))
+        #expect(CallSurfaceVisibilityPolicy.isVisible(isForeground: true, isInPictureInPicture: true,
+                                                      pictureInPictureReplacesCallUI: false))
+        #expect(!CallSurfaceVisibilityPolicy.isVisible(isForeground: false, isInPictureInPicture: false,
+                                                       pictureInPictureReplacesCallUI: false))
+        #expect(CallSurfaceVisibilityPolicy.isVisible(isForeground: true, isInPictureInPicture: false,
+                                                      pictureInPictureReplacesCallUI: true))
+    }
+
     @Test func backgroundingTheAppClosesChatUntilItComesBack() {
         let viewModel = joinedViewModel()
         viewModel.shell.panels.present(.chat, from: .call)

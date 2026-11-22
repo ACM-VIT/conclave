@@ -8095,6 +8095,14 @@ final class MeetingViewModel {
         let isInPictureInPicture = presence.isInPictureInPicture
         #endif
         let isForeground = appForegroundAllowsRemoteVideoReceive
+        #if SKIP
+        let pictureInPictureReplacesCallUI = true
+        #else
+        let pictureInPictureReplacesCallUI = false
+        #endif
+        shell.setCallSurfaceVisible(CallSurfaceVisibilityPolicy.isVisible(
+            isForeground: isForeground, isInPictureInPicture: isInPictureInPicture,
+            pictureInPictureReplacesCallUI: pictureInPictureReplacesCallUI))
         let usesNativeStage = NativeRouteFlags.shared.isEnabled(NativeRouteKey.call)
         SystemNotifications.shared.apply(SystemNotificationInputs.make(
             callSession: session.identity.callSession,
