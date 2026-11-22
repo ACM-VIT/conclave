@@ -45,6 +45,7 @@ import {
   parseConclaveMention,
   streamConclaveAssistant,
 } from "../lib/conclave-assistant";
+import { logCallError } from "../lib/call-error-capture";
 
 export interface ConclaveAssistantContext {
   transcript: string;
@@ -592,8 +593,8 @@ export function useMeetChat({
             "error" in response ? previous : (response.reactions ?? []);
 
           if ("error" in response) {
-            console.error(
-              "[Meets] Failed to toggle message reaction:",
+            logCallError(
+              "[Meets] Failed to toggle message reaction",
               response.error,
             );
           }
@@ -672,7 +673,7 @@ export function useMeetChat({
               | { error: string },
           ) => {
             if ("error" in response) {
-              console.error("[Meets] Chat error:", response.error);
+              logCallError("[Meets] Chat error", response.error);
               setChatMessages((prev) =>
                 prev.filter((message) => message.id !== optimisticMessage.id),
               );

@@ -178,6 +178,52 @@ describe("what each event carries", () => {
     }
   });
 
+  it("reports an AudioStreamPlayer playback failure as one event with only its label", async () => {
+    const sent: SentEvent[] = [];
+    posthog.captureException.mockImplementation((error: unknown, props?: Record<string, unknown>) => {
+      const failure = error as Error;
+      sent.push(
+        sendThroughSdk("$exception", {
+          $exception_list: [{ type: failure.name, value: failure.message, stacktrace: { type: "raw", frames: [] } }],
+          ...props,
+        }),
+      );
+    });
+    // The player tries again on its own; one attempt fails, the next ones play.
+    const play = vi
+      .spyOn(HTMLMediaElement.prototype, "play")
+      .mockRejectedValueOnce(new DOMException("Meet Mira decode failed", "NotSupportedError"))
+      .mockResolvedValue(undefined);
+    try {
+      const { startTelemetry } = await import("../src/app/lib/telemetry");
+      startTelemetry();
+      await vi.waitFor(() => expect(posthog.init).toHaveBeenCalled());
+      const { default: AudioStreamPlayer } = await import("../src/app/components/AudioStreamPlayer");
+      const stream = new MediaStream();
+      root = createRoot(document.createElement("div"));
+      await act(async () => {
+        root?.render(
+          <AudioStreamPlayer kind="participant" stream={stream} playbackErrorContext="mira@example.com" />,
+        );
+      });
+
+      await vi.waitFor(() => expect(sent).toHaveLength(1));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(play.mock.calls.length).toBeGreaterThan(1);
+      expect(sent).toHaveLength(1);
+      const { properties } = sent[0];
+      expect(properties).toMatchObject({ source: "call_log", call_log: "[Meets] Audio play error" });
+      expect((properties.$exception_list as Array<unknown>)[0]).toMatchObject({
+        type: "NotSupportedError",
+        value: "[Meets] Audio play error",
+      });
+      expect(JSON.stringify(sent)).not.toMatch(/Mira|mira@/);
+    } finally {
+      play.mockRestore();
+      posthog.captureException.mockReset();
+    }
+  });
+
   it("sends application fields only from the capture that set them", async () => {
     posthog.persistence.properties.mockReturnValue({
       distinct_id: sdkUuid,

@@ -1,19 +1,28 @@
-import { describe, expect, it } from "vitest";
-import { installCallErrorCapture } from "../src/app/lib/call-error-capture";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { installCallErrorCapture, logCallError } from "../src/app/lib/call-error-capture";
 
 type Reported = { error: Error; props: Record<string, unknown> };
 
+const uninstalls: Array<() => void> = [];
+
+afterEach(() => {
+  uninstalls.splice(0).forEach((uninstall) => uninstall());
+  vi.restoreAllMocks();
+});
+
 const setup = () => {
   const logged: unknown[][] = [];
+  vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+    logged.push(args);
+  });
   const reported: Reported[] = [];
-  const target = { error: (...args: unknown[]) => logged.push(args) };
   let now = 0;
   const uninstall = installCallErrorCapture(
-    (error, props) => reported.push({ error: error as Error, props }),
-    { target, now: () => now },
+    (error, props) => reported.push({ error, props }),
+    { now: () => now },
   );
+  uninstalls.push(uninstall);
   return {
-    target,
     logged,
     reported,
     uninstall,
@@ -23,13 +32,13 @@ const setup = () => {
   };
 };
 
-describe("installCallErrorCapture", () => {
-  it("reports a logged call failure under its label, never the error's own text", () => {
-    const { target, logged, reported } = setup();
+describe("logCallError", () => {
+  it("logs and reports a call failure under its label, never the error's own text", () => {
+    const { logged, reported } = setup();
     // A host's custom end-room message comes back from the SFU as the join error.
     const failure = new Error("Riya, continue in room lime-pear-plum");
 
-    target.error("[Meets] Error joining room:", failure);
+    logCallError("[Meets] Error joining room", failure);
 
     expect(logged).toEqual([["[Meets] Error joining room:", failure]]);
     expect(reported).toHaveLength(1);
@@ -42,20 +51,22 @@ describe("installCallErrorCapture", () => {
   });
 
   it("keeps the type of a browser error so failures stay grouped", () => {
-    const { target, reported } = setup();
-    const denied = new DOMException("Permission denied by system", "NotAllowedError");
+    const { reported } = setup();
 
-    target.error("[Meets] Failed to produce video:", denied);
+    logCallError(
+      "[Meets] Failed to produce video",
+      new DOMException("Permission denied by system", "NotAllowedError"),
+    );
 
     expect(reported[0].error.name).toBe("NotAllowedError");
     expect(reported[0].error.message).toBe("[Meets] Failed to produce video");
   });
 
   it("drops server error strings and logged objects", () => {
-    const { target, reported } = setup();
+    const { reported } = setup();
 
-    target.error(
-      "[Meets] Consume error:",
+    logCallError(
+      "[Meets] Consume error",
       "Producer not found",
       { error: "Riya, continue in room lime-pear-plum" },
       { displayName: "Alice", chat: "secret plans" },
@@ -63,50 +74,38 @@ describe("installCallErrorCapture", () => {
 
     expect(reported).toHaveLength(1);
     expect(reported[0].error.name).toBe("CallError");
-    expect(reported[0].error.message).toBe("[Meets] Consume error");
+    expect(JSON.stringify(reported)).not.toMatch(/Riya|Alice|secret|Producer not found/);
   });
 
-  it("ignores logs outside the call code", () => {
-    const { target, reported } = setup();
+  it("logs a label with nothing after it as it is", () => {
+    const { logged } = setup();
 
-    target.error("Sign out error:", new Error("network"));
-    target.error(new Error("unlabelled"));
+    logCallError("[Meets] Raise hand got no acknowledgement");
 
-    expect(reported).toEqual([]);
+    expect(logged).toEqual([["[Meets] Raise hand got no acknowledgement"]]);
   });
 
-  it("caps repeats of one log line per minute", () => {
-    const { target, reported, advance } = setup();
+  it("caps repeats of one label per minute", () => {
+    const { reported, advance } = setup();
 
     for (let attempt = 0; attempt < 10; attempt += 1) {
-      target.error("[Meets] Consume error:", "Producer not found");
+      logCallError("[Meets] Consume error", "Producer not found");
     }
-    target.error("[Meets] Connection error:", new Error("xhr poll error"));
+    logCallError("[Meets] Connection error", new Error("xhr poll error"));
     expect(reported).toHaveLength(4);
 
     advance(60_000);
-    target.error("[Meets] Consume error:", "Producer not found");
+    logCallError("[Meets] Consume error", "Producer not found");
     expect(reported).toHaveLength(5);
   });
 
-  it("reports nothing for a label that is not registered", () => {
-    const { target, logged, reported } = setup();
-    const producerId = "0f8c2a1e-5b7d-4c3e-9a10-000000000001";
-
-    target.error("[Meets] Fixture meeting note", new Error("Meet Mira in sample-room"));
-    target.error(`[Meets] Failed to recover stale consumer ${producerId}:`, new Error("gone"));
-    target.error("[Meets] Failed to produce video for mira@example.com:", new Error("gone"));
-
-    expect(logged).toHaveLength(3);
-    expect(reported).toEqual([]);
-  });
-
-  it("restores console.error when uninstalled", () => {
-    const { target, reported, uninstall } = setup();
+  it("only logs once capture is removed", () => {
+    const { logged, reported, uninstall } = setup();
 
     uninstall();
-    target.error("[Meets] Failed to sync producers:", new Error("late"));
+    logCallError("[Meets] Failed to sync producers", new Error("late"));
 
+    expect(logged).toHaveLength(1);
     expect(reported).toEqual([]);
   });
 });

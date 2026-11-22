@@ -122,6 +122,7 @@ import {
   sanitizeRoomCode,
 } from "./lib/utils";
 import type { VideoEffectsBridgeState } from "./components/VideoEffectsBridge";
+import { logCallError } from "./lib/call-error-capture";
 
 type MeetUser = {
   id?: string;
@@ -2059,7 +2060,7 @@ export default function MeetsClient({
           from: getMeetTrackDebugSnapshot(producer.track ?? null),
           to: getMeetTrackDebugSnapshot(nextTrack),
         });
-        console.error("[Meets] Failed to publish processed camera track:", err);
+        logCallError("[Meets] Failed to publish processed camera track", err);
         if (!isProcessedCandidate || producer.closed) return;
         if (refs.processedVideoTrackRef.current?.id === nextTrack.id) {
           refs.processedVideoTrackRef.current = null;

@@ -12,6 +12,7 @@ import {
 import ParticipantVideo from "./ParticipantVideo";
 import { Avatar, NamePlate } from "@conclave/ui-tokens/web";
 import { color } from "@conclave/ui-tokens";
+import { logCallError } from "../lib/call-error-capture";
 
 interface BrowserLayoutProps {
     noVncUrl: string;
@@ -83,7 +84,7 @@ function BrowserLayout({
         video.srcObject = localStream;
         video.play().catch((err) => {
             if (errorName(err) !== "AbortError") {
-                console.error("[Meets] Browser layout local video play error:", err);
+                logCallError("[Meets] Browser layout local video play error", err);
             }
         });
 
@@ -108,7 +109,7 @@ function BrowserLayout({
         video.srcObject = browserVideoStream;
         video.play().catch((err) => {
             if (errorName(err) !== "AbortError") {
-                console.error("[Meets] Browser video play error:", err);
+                logCallError("[Meets] Browser video play error", err);
             }
         });
 

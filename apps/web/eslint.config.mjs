@@ -52,6 +52,12 @@ export default tseslint.config(
           message:
             "Wrap server error text in ServerError (lib/server-error.ts) so telemetry drops it.",
         },
+        {
+          selector:
+            "CallExpression[callee.object.name='console'][callee.property.name='error']:matches([arguments.0.value=/^\\[Meets\\]/], [arguments.0.quasis.0.value.raw=/^\\[Meets\\]/])",
+          message:
+            "Log call failures with logCallError (lib/call-error-capture.ts) and a label from lib/call-log-labels.ts, so they reach telemetry.",
+        },
       ],
       "prefer-const": ["error", { destructuring: "all" }],
       "@typescript-eslint/no-unused-vars": [

@@ -188,6 +188,7 @@ import type {
   RequestMediaPermissionsOptions,
   ScreenShareRepublishOptions,
 } from "./useMeetMedia";
+import { logCallError } from "../lib/call-error-capture";
 
 type ConsumerTelemetryPayload = Omit<
   ConsumerTelemetrySnapshot,
@@ -3567,11 +3568,12 @@ export function useMeetSocket({
           );
           return true;
         } catch (err) {
-          if (transportKind === "producer") {
-            console.error("[Meets] Producer transport ICE restart failed:", err);
-          } else {
-            console.error("[Meets] Consumer transport ICE restart failed:", err);
-          }
+          logCallError(
+            transportKind === "producer"
+              ? "[Meets] Producer transport ICE restart failed"
+              : "[Meets] Consumer transport ICE restart failed",
+            err,
+          );
           return false;
         } finally {
           inFlight[transportKind] = false;
@@ -3858,7 +3860,7 @@ export function useMeetSocket({
           }
           return ready;
         } catch (err) {
-          console.error("[Meets] Failed to create producer transport:", err);
+          logCallError("[Meets] Failed to create producer transport", err);
           return false;
         } finally {
           producerTransportCreatePromiseRef.current = null;
@@ -4094,7 +4096,7 @@ export function useMeetSocket({
             }
           });
         } catch (err) {
-          console.error("[Meets] Failed to produce audio:", err);
+          logCallError("[Meets] Failed to produce audio", err);
           if (mediaIntent.isMicOn && !shouldPauseAudio) {
             if (audioTrack.readyState === "live") {
               publicationWarnings.push("microphone publish retry scheduled");
@@ -4261,14 +4263,14 @@ export function useMeetSocket({
               });
               return;
             } catch (fallbackErr) {
-              console.error(
-                "[Meets] Failed to produce raw fallback video:",
+              logCallError(
+                "[Meets] Failed to produce raw fallback video",
                 fallbackErr,
               );
               reportCurrentWebcamCodecFailure(fallbackErr);
             }
           } else {
-            console.error("[Meets] Failed to produce video:", err);
+            logCallError("[Meets] Failed to produce video", err);
             reportCurrentWebcamCodecFailure(err);
           }
 
@@ -4478,7 +4480,7 @@ export function useMeetSocket({
             }
 
             if ("error" in response) {
-              console.error("[Meets] Consume error:", response.error);
+              logCallError("[Meets] Consume error", response.error);
               if (isProducerGoneConsumeError(response)) {
                 producerSlotOrder.noteClosed(producerInfo.producerId);
                 handleProducerClosed(producerInfo.producerId);
@@ -5185,7 +5187,7 @@ export function useMeetSocket({
               } else {
                 void closeServerConsumer(response.id);
               }
-              console.error("[Meets] Failed to create consumer:", err);
+              logCallError("[Meets] Failed to create consumer", err);
               queueFailureRetry(350);
               resolve();
             }
@@ -5716,8 +5718,8 @@ export function useMeetSocket({
           state.epoch === webcamStartupLatencyResetEpochRef.current &&
           webcamStartupLatencyResetStateRef.current.get(producerId) === state
         ) {
-          console.error(
-            "[Meets] Planned webcam consumer generation reset failed:",
+          logCallError(
+            "[Meets] Planned webcam consumer generation reset failed",
             producerId,
             error,
           );
@@ -5877,8 +5879,8 @@ export function useMeetSocket({
           });
         }
       } catch (error) {
-        console.error(
-          "[Meets] Failed to recover stale consumer:",
+        logCallError(
+          "[Meets] Failed to recover stale consumer",
           producerInfo.producerId,
           error,
         );
@@ -6210,7 +6212,7 @@ export function useMeetSocket({
               producerInfo.producerId,
             ),
           }).catch((err) => {
-            console.error("[Meets] Failed to sync producers:", err);
+            logCallError("[Meets] Failed to sync producers", err);
           });
         }
       }
@@ -6224,7 +6226,7 @@ export function useMeetSocket({
         });
         return;
       }
-      console.error("[Meets] Failed to sync producers:", err);
+      logCallError("[Meets] Failed to sync producers", err);
     }
   }, [
     socketRef,
@@ -7135,7 +7137,7 @@ export function useMeetSocket({
                 reject(err);
                 return;
               }
-              console.error("[Meets] Connection error:", err);
+              logCallError("[Meets] Connection error", err);
               const reconnectFailure = describeReconnectFailure(err);
               setMeetError({
                 code: "CONNECTION_FAILED",
@@ -8326,12 +8328,12 @@ export function useMeetSocket({
                       intentionalDisconnectRef.current ||
                       socketRef.current !== socket
                     ) return;
-                    console.error("[Meets] Join after approval failed:", joinError);
+                    logCallError("[Meets] Join after approval failed", joinError);
                     setMeetError(createMeetError(joinError));
                     setConnectionState("error");
                   });
               } else {
-                console.error(
+                logCallError(
                   "[Meets] Cannot re-join: missing room ID or local stream",
                   {
                     roomId: currentRoomIdRef.current,
@@ -9408,7 +9410,7 @@ export function useMeetSocket({
           joinGeneration !== reconnectGenerationRef.current ||
           intentionalDisconnectRef.current
         ) return;
-        console.error("[Meets] Error joining room:", err);
+        logCallError("[Meets] Error joining room", err);
         telemetry.capture("meet_join_failure", {
           roomId: targetRoomId,
           joinMode,
@@ -9552,8 +9554,8 @@ export function useMeetSocket({
               | { error: string },
           ) => {
             if ("error" in response) {
-              console.error(
-                "[Meets] Failed to toggle room lock:",
+              logCallError(
+                "[Meets] Failed to toggle room lock",
                 response.error,
               );
               resolve(false);
@@ -9585,7 +9587,7 @@ export function useMeetSocket({
               | { error: string }
           ) => {
             if ("error" in response) {
-              console.error("[Meets] Failed to toggle no-guests:", response.error);
+              logCallError("[Meets] Failed to toggle no-guests", response.error);
               resolve(false);
             } else {
               resolve(response.success);
@@ -9611,7 +9613,7 @@ export function useMeetSocket({
           { locked },
           (response: { success: boolean; locked?: boolean } | { error: string }) => {
             if ("error" in response) {
-              console.error("[Meets] Failed to toggle chat lock:", response.error);
+              logCallError("[Meets] Failed to toggle chat lock", response.error);
               resolve(false);
             } else {
               resolve(response.success);
@@ -9640,8 +9642,8 @@ export function useMeetSocket({
           permissions,
           (response: { success: boolean } | { error: string }) => {
             if ("error" in response) {
-              console.error(
-                "[Meets] Failed to update participant media permissions:",
+              logCallError(
+                "[Meets] Failed to update participant media permissions",
                 response.error,
               );
               resolve(false);
@@ -9679,7 +9681,7 @@ export function useMeetSocket({
               | { error: string },
           ) => {
             if ("error" in response) {
-              console.error("[Meets] Failed to end room:", response.error);
+              logCallError("[Meets] Failed to end room", response.error);
               resolve(false);
               return;
             }
@@ -9707,8 +9709,8 @@ export function useMeetSocket({
           "transcript:getToken",
           (response: TranscriptTokenResponse | { error: string }) => {
             if ("error" in response) {
-              console.error(
-                "[Meets] Failed to fetch transcript token:",
+              logCallError(
+                "[Meets] Failed to fetch transcript token",
                 response.error,
               );
               resolve(null);
@@ -9733,8 +9735,8 @@ export function useMeetSocket({
           "transcript:sfuRelayStatus",
           (response: TranscriptSfuRelayStatusResponse | { error: string }) => {
             if ("error" in response) {
-              console.error(
-                "[Meets] Failed to fetch transcript SFU relay status:",
+              logCallError(
+                "[Meets] Failed to fetch transcript SFU relay status",
                 response.error,
               );
               resolve(null);
@@ -9768,8 +9770,8 @@ export function useMeetSocket({
           request,
           (response: TranscriptSfuRelayStartResponse | { error: string }) => {
             if ("error" in response) {
-              console.error(
-                "[Meets] Failed to start transcript SFU relay:",
+              logCallError(
+                "[Meets] Failed to start transcript SFU relay",
                 response.error,
               );
               resolve({
@@ -9800,8 +9802,8 @@ export function useMeetSocket({
           "transcript:sfuRelayStop",
           (response: TranscriptSfuRelayStopResponse | { error: string }) => {
             if ("error" in response) {
-              console.error(
-                "[Meets] Failed to stop transcript SFU relay:",
+              logCallError(
+                "[Meets] Failed to stop transcript SFU relay",
                 response.error,
               );
               resolve(null);
@@ -9826,8 +9828,8 @@ export function useMeetSocket({
           "meeting:getConfig",
           (response: MeetingConfigSnapshot | { error: string }) => {
             if ("error" in response) {
-              console.error(
-                "[Meets] Failed to fetch meeting config:",
+              logCallError(
+                "[Meets] Failed to fetch meeting config",
                 response.error,
               );
               resolve(null);
@@ -9860,8 +9862,8 @@ export function useMeetSocket({
               | { error: string },
           ) => {
             if ("error" in response) {
-              console.error(
-                "[Meets] Failed to update meeting config:",
+              logCallError(
+                "[Meets] Failed to update meeting config",
                 response.error,
               );
               resolve(null);
@@ -9890,7 +9892,7 @@ export function useMeetSocket({
         "webinar:getConfig",
         (response: WebinarConfigSnapshot | { error: string }) => {
           if ("error" in response) {
-            console.error("[Meets] Failed to fetch webinar config:", response.error);
+            logCallError("[Meets] Failed to fetch webinar config", response.error);
             resolve(null);
             return;
           }
@@ -9919,7 +9921,7 @@ export function useMeetSocket({
               | { error: string },
           ) => {
             if ("error" in response) {
-              console.error("[Meets] Failed to update webinar config:", response.error);
+              logCallError("[Meets] Failed to update webinar config", response.error);
               resolve(null);
               return;
             }
@@ -9944,7 +9946,7 @@ export function useMeetSocket({
         "webinar:rotateLink",
         (response: WebinarLinkResponse | { error: string }) => {
           if ("error" in response) {
-            console.error("[Meets] Failed to rotate webinar link:", response.error);
+            logCallError("[Meets] Failed to rotate webinar link", response.error);
             resolve(null);
             return;
           }
@@ -9967,7 +9969,7 @@ export function useMeetSocket({
           "webinar:generateLink",
           (response: WebinarLinkResponse | { error: string }) => {
             if ("error" in response) {
-              console.error("[Meets] Failed to generate webinar link:", response.error);
+              logCallError("[Meets] Failed to generate webinar link", response.error);
               resolve(null);
               return;
             }
