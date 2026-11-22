@@ -19,6 +19,12 @@ export type AppsState = {
   revision: number | null;
   /** Apps off the stage whose document the room keeps. */
   savedAppIds: string[];
+  /**
+   * The presented app's document. A new number means the room started it
+   * over, so a local copy of the earlier one is stale. Null when nothing is
+   * presented, or on an older SFU.
+   */
+  docGeneration: number | null;
 };
 
 export type AppsSyncPayload = {

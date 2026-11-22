@@ -151,6 +151,30 @@ describe("the presented board", () => {
     }
   });
 
+  it("starts over from the room when the room starts the board over", async () => {
+    const cleared = new Y.Doc();
+    cleared.getMap("shapes").set("circle", 1);
+    serverDocs.set("whiteboard", cleared);
+    await serverState({ activeAppId: "whiteboard", revision: 1, savedAppIds: [], docGeneration: 1 });
+    expect(ctx.getDoc("whiteboard").getMap("shapes").get("circle")).toBe(1);
+
+    // The host cleared it and presented it again while this tab missed both.
+    const fresh = new Y.Doc();
+    fresh.getMap("shapes").set("square", 1);
+    serverDocs.set("whiteboard", fresh);
+    emitted.length = 0;
+    await serverState({ activeAppId: "whiteboard", revision: 4, savedAppIds: [], docGeneration: 2 });
+
+    const shapes = ctx.getDoc("whiteboard").getMap("shapes");
+    expect(shapes.get("square")).toBe(1);
+    expect(shapes.get("circle")).toBeUndefined();
+    for (const upload of sent("apps:yjs:update")) {
+      const received = new Y.Doc();
+      Y.applyUpdate(received, (upload.args[0] as { update: Uint8Array }).update);
+      expect(received.getMap("shapes").get("circle")).toBeUndefined();
+    }
+  });
+
   it("keeps drawing while anyone opens and closes the apps panel", async () => {
     await serverState({ activeAppId: "whiteboard", revision: 1, savedAppIds: [] });
     const board = ctx.getDoc("whiteboard");

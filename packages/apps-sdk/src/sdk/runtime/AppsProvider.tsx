@@ -59,7 +59,11 @@ const EMPTY_APPS_STATE: AppsState = {
   locked: false,
   revision: null,
   savedAppIds: [],
+  docGeneration: null,
 };
+
+const safeIntegerOrNull = (value: unknown): number | null =>
+  typeof value === "number" && Number.isSafeInteger(value) ? value : null;
 
 const parseAppsState = (value: unknown): AppsState | null => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -68,6 +72,7 @@ const parseAppsState = (value: unknown): AppsState | null => {
     locked?: unknown;
     revision?: unknown;
     savedAppIds?: unknown;
+    docGeneration?: unknown;
   };
   const activeAppIdValid =
     typeof record.activeAppId === "string" || record.activeAppId === null;
@@ -75,13 +80,11 @@ const parseAppsState = (value: unknown): AppsState | null => {
   return {
     activeAppId: record.activeAppId as string | null,
     locked: record.locked,
-    revision:
-      typeof record.revision === "number" && Number.isSafeInteger(record.revision)
-        ? record.revision
-        : null,
+    revision: safeIntegerOrNull(record.revision),
     savedAppIds: Array.isArray(record.savedAppIds)
       ? record.savedAppIds.filter((appId): appId is string => typeof appId === "string")
       : [],
+    docGeneration: safeIntegerOrNull(record.docGeneration),
   };
 };
 
@@ -250,11 +253,14 @@ export function AppsProvider({
 
   // Only the presented app is live, and only from the moment it was
   // presented. Every other local copy is dropped, and an app entering the
-  // stage starts from the room's copy, so a document a host cleared never
-  // comes back from a client's memory.
+  // stage, or starting over on a new document, starts from the room's copy,
+  // so a document a host cleared never comes back from a client's memory.
   const applyServerAppsState = useCallback(
     (next: AppsState) => {
-      const stageChanged = serverStateRef.current.activeAppId !== next.activeAppId;
+      const previous = serverStateRef.current;
+      const stageChanged =
+        previous.activeAppId !== next.activeAppId ||
+        previous.docGeneration !== next.docGeneration;
       serverStateRef.current = next;
       for (const appId of Array.from(docsRef.current.keys())) {
         if (stageChanged || appId !== next.activeAppId) discardLocalApp(appId);
@@ -481,7 +487,7 @@ export function AppsProvider({
   useEffect(() => {
     if (!socket || !state.activeAppId) return;
     syncApp(state.activeAppId);
-  }, [socket, state.activeAppId, syncApp]);
+  }, [socket, state.activeAppId, state.docGeneration, syncApp]);
 
   const sendStageCommand = useCallback(
     (event: string, payload: object | null): Promise<boolean> => {
