@@ -3,6 +3,7 @@
 import { lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, PointerEvent, SetStateAction } from "react";
 import {
+  CircleAlert,
   Home,
   KeyRound,
   Loader2,
@@ -10,6 +11,8 @@ import {
   MonitorPlay,
   Plus,
   RefreshCw,
+  Unplug,
+  WifiOff,
 } from "lucide-react";
 import type { Socket } from "socket.io-client";
 import type { RoomInfo } from "@/lib/sfu-types";
@@ -1722,6 +1725,22 @@ export default function MeetsMainContent({
         )} of ${reconnectRecoveryStatus.maxAttempts}`
       : null;
   const reconnectLastError = reconnectRecoveryStatus?.lastError ?? null;
+  const isRestoringAfterReconnect =
+    connectionState === "connected" || connectionState === "joining";
+  // The ring spins only while a reconnect is running. A card that waits on
+  // the user or on the network shows a still icon instead.
+  const RecoveryWaitingIcon = isNetworkOffline
+    ? WifiOff
+    : isTerminalMeetingError
+      ? CircleAlert
+      : needsInviteCodeToRejoin
+        ? KeyRound
+        : isRestoringAfterReconnect
+          ? null
+          : connectionState === "error" ||
+              reconnectRecoveryStatus?.phase === "failed"
+            ? Unplug
+            : null;
   const recoveryTitle = isNetworkOffline
     ? "Waiting for internet"
     : isTerminalMeetingError
@@ -1735,7 +1754,7 @@ export default function MeetsMainContent({
           : "Reconnecting";
   const recoveryDetail = isNetworkOffline
     ? "We are keeping the room open and will restore media when your connection returns."
-    : connectionState === "connected" || connectionState === "joining"
+    : isRestoringAfterReconnect
       ? "Connection is back. Restoring media, participants, and room state."
       : isTerminalMeetingError
         ? meetError?.message
@@ -1932,9 +1951,9 @@ export default function MeetsMainContent({
             role="dialog"
             aria-modal="true"
           >
-            {needsInviteCodeToRejoin ? (
+            {RecoveryWaitingIcon ? (
               <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-full border-2 border-[#fafafa]/10 bg-[#F95F4A]/10">
-                <KeyRound
+                <RecoveryWaitingIcon
                   size={18}
                   strokeWidth={1.8}
                   className="text-[#F95F4A]"
