@@ -279,7 +279,15 @@ if [[ "$ROLLBACK" == "true" ]]; then
   echo "Rollback: the checkout stays at $(git -C "$ROOT_DIR" rev-parse --short=12 HEAD); no pull, no build."
 else
   echo "Pulling latest code..."
+  before_pull="$(git -C "$ROOT_DIR" rev-parse HEAD)"
   git -C "$ROOT_DIR" pull
+  # bash keeps running the file it opened, so a pull that changed this script
+  # would deploy with the old logic. Start over with the new one.
+  if [[ -z "${SFU_DEPLOY_REEXEC:-}" ]] &&
+     ! git -C "$ROOT_DIR" diff --quiet "$before_pull" HEAD -- scripts/deploy-sfu.sh; then
+    echo "This pull changed deploy-sfu.sh; restarting with the new version."
+    SFU_DEPLOY_REEXEC=1 exec "${BASH_SOURCE[0]}" "$@"
+  fi
 fi
 
 # SFU dependencies are installed inside the Docker image; the host does not need them.
