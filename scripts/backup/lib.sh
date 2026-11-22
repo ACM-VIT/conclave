@@ -115,24 +115,45 @@ sqlite_links() {
   done)
 }
 
-# Prints the file a symlink below the state dir reaches, relative to the state
-# dir. An absolute target may name the container's mount of the state dir.
-# Fails when the target is missing or outside the state dir.
-sqlite_link_target() {
+# Walks a symlink below the state dir hop by hop to the database it reaches.
+# Prints "link<TAB><path><TAB><target as written>" for every link on the way
+# and "file<TAB><path>" for the database, all relative to the state dir, so a
+# restore can bring back the whole chain. An absolute target may name the
+# container's mount of the state dir. Fails when a hop leaves the state dir,
+# the chain loops, or it ends anywhere but a regular file.
+sqlite_link_chain() {
   STATE_IN="$1" LINK_IN="$2" CONTAINER_IN="$3" python3 -c '
 import os, sys
 state = os.path.realpath(os.environ["STATE_IN"])
-link = os.path.join(state, os.environ["LINK_IN"])
-target = os.readlink(link)
 container = os.environ["CONTAINER_IN"].rstrip("/")
-if target == container or target.startswith(container + "/"):
-    target = state + target[len(container):]
-path = os.path.realpath(os.path.join(os.path.dirname(link), target))
-rel = os.path.relpath(path, state)
-if rel == ".." or rel.startswith("../") or not os.path.isfile(path):
-    sys.exit(1)
-print(rel)
+rel = os.path.normpath(os.environ["LINK_IN"])
+seen = set()
+while True:
+    path = os.path.join(state, rel)
+    if not os.path.islink(path):
+        if not os.path.isfile(path):
+            sys.exit(1)
+        print(f"file\t{rel}")
+        break
+    if rel in seen:
+        sys.exit(1)
+    seen.add(rel)
+    target = os.readlink(path)
+    print(f"link\t{rel}\t{target}")
+    if target == container or target.startswith(container + "/"):
+        target = state + target[len(container):]
+    nxt = os.path.normpath(os.path.join(os.path.dirname(path), target))
+    rel = os.path.relpath(nxt, state)
+    if rel == ".." or rel.startswith("../") or os.path.isabs(rel):
+        sys.exit(1)
 '
+}
+
+# Orders archive names oldest first by the stamp in them
+# (conclave-<host>-<YYYYMMDDTHHMMSSZ>.tar.gz.age), never by the whole name: a
+# renamed host must not make an older archive look newer.
+by_stamp() {
+  sed -nE 's/^(.*-([0-9]{8}T[0-9]{6}Z)\.tar\.gz\.age)$/\2 \1/p' | LC_ALL=C sort | cut -d' ' -f2-
 }
 
 # redis-cli's own quoting for commands sent on stdin: double quotes with \\

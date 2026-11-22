@@ -147,7 +147,12 @@ To apply it:
 5. Check the scheduled meetings and webinars, then `shred -u /root/conclave-backup.key`.
 
 Use `--blob daily/2026/11/<name>` or `--file <path>` for an older backup and
-`--only sqlite`, `--only redis` or `--only files` for part of one.
+`--only sqlite`, `--only redis` or `--only files` for part of one. The links on
+the way to a database (`conclave.sqlite -> current -> live.db`) belong to the
+SQLite part: `--only sqlite` brings back the whole chain, and `--only files`
+installs none of it. `--latest` and the local retention order archives by the
+timestamp in their names, so a renamed host never makes an older one look
+newer.
 
 ## Restore drill
 

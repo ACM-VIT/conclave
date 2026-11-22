@@ -65,7 +65,7 @@ if [[ -n "$source_file" ]]; then
   cp "$source_file" "$archive"
 elif [[ -n "$source_blob" || "$latest" == "true" ]]; then
   if [[ "$latest" == "true" ]]; then
-    source_blob="$(blob_list "daily/" | tail -n 1)"
+    source_blob="$(blob_list "daily/" | by_stamp | tail -n 1)"
     [[ -n "$source_blob" ]] || die "no daily backups found"
   fi
   log "Downloading ${source_blob}"

@@ -58,24 +58,31 @@ configured="$(configured_database "$STATE_DIR")" ||
 # database keeps its path below the state dir, so restore.sh puts it back
 # where the SFU opens it. A database the SFU opens through a symlink is
 # copied once, at the path the link reaches, and the link is recorded so
-# restore.sh can recreate it. The configured database gets the same, whatever
-# it is named.
+# restore.sh can recreate it. Every link on the way to the database belongs to
+# the database, so the chain comes back with it and never on its own. The
+# configured database gets the same, whatever it is named.
 mapfile -t databases < <(sqlite_files "$STATE_DIR")
-links="$(sqlite_links "$STATE_DIR")"
-if [[ -n "$configured" && -L "${STATE_DIR}/${configured}" && "$configured" != *.sqlite ]]; then
-  links+=$'\n'"${configured}"$'\t'"$(readlink "${STATE_DIR}/${configured}")"
-elif [[ -n "$configured" && -f "${STATE_DIR}/${configured}" && ! -L "${STATE_DIR}/${configured}" ]]; then
+mapfile -t starts < <(sqlite_links "$STATE_DIR" | cut -f1)
+if [[ -n "$configured" && -L "${STATE_DIR}/${configured}" ]]; then
+  starts+=("$configured")
+elif [[ -n "$configured" && -f "${STATE_DIR}/${configured}" ]]; then
   databases+=("$configured")
 fi
+links=()
 : > "${payload}/sqlite-links"
-while IFS=$'\t' read -r link target; do
-  [[ -n "$link" ]] || continue
-  resolved="$(sqlite_link_target "$STATE_DIR" "$link" "$CONTAINER_STATE_DIR")" ||
-    die "${STATE_DIR}/${link} links to ${target}, which is not a file inside the state dir"
-  printf '%s\t%s\n' "$link" "$target" >> "${payload}/sqlite-links"
-  echo "sqlite.link.${link}=${target}" >> "$manifest"
-  databases+=("$resolved")
-done <<< "$links"
+for start in "${starts[@]}"; do
+  chain="$(sqlite_link_chain "$STATE_DIR" "$start" "$CONTAINER_STATE_DIR")" ||
+    die "${STATE_DIR}/${start} does not lead to a file inside the state dir"
+  while IFS=$'\t' read -r kind rel target; do
+    if [[ "$kind" == file ]]; then
+      databases+=("$rel")
+    elif ! printf '%s\n' "${links[@]}" | grep -qxF "$rel"; then
+      links+=("$rel")
+      printf '%s\t%s\n' "$rel" "$target" >> "${payload}/sqlite-links"
+      echo "sqlite.link.${rel}=${target}" >> "$manifest"
+    fi
+  done <<< "$chain"
+done
 mapfile -t databases < <(printf '%s\n' "${databases[@]}" | grep -v '^$' | LC_ALL=C sort -u)
 for rel in "${databases[@]}"; do
   db="${STATE_DIR}/${rel}"
@@ -120,6 +127,9 @@ if [[ -d "$STATE_DIR" ]]; then
   for rel in "${databases[@]}"; do
     excludes+=(--exclude="./${rel}" --exclude="./${rel}-wal" --exclude="./${rel}-shm" --exclude="./${rel}-journal")
   done
+  for rel in "${links[@]}"; do
+    excludes+=(--exclude="./${rel}")
+  done
   tar -C "$STATE_DIR" "${excludes[@]}" -cf "${payload}/state-files.tar" .
 fi
 
@@ -136,8 +146,10 @@ archive="${BACKUP_LOCAL_DIR}/${name}.tar.gz.age"
 # nights whose upload failed cannot fill the disk.
 keep="${BACKUP_LOCAL_KEEP:-3}"
 prune_local_archives() {
-  find "$BACKUP_LOCAL_DIR" -maxdepth 1 -name 'conclave-*.tar.gz.age' | sort -r | tail -n "+$((keep + 1))" | while read -r old; do
-    rm -f "$old"
+  local archives i
+  mapfile -t archives < <(find "$BACKUP_LOCAL_DIR" -maxdepth 1 -name 'conclave-*.tar.gz.age' | by_stamp)
+  for ((i = 0; i < ${#archives[@]} - keep; i++)); do
+    rm -f "${archives[i]}"
   done
 }
 trap 'rm -rf "$work"; prune_local_archives' EXIT

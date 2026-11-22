@@ -309,7 +309,7 @@ test(
 
       // A link whose file is not on the volume cannot be backed up.
       await symlink("/opt/elsewhere/conclave.sqlite", path.join(state, "other.sqlite"));
-      await assert.rejects(backup("--local-only"), /other\.sqlite links to \/opt\/elsewhere\/conclave\.sqlite, which is not a file inside the state dir/);
+      await assert.rejects(backup("--local-only"), /other\.sqlite does not lead to a file inside the state dir/);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -431,6 +431,117 @@ test(
       // An owner given by name that this host does not know is refused
       // before any file changes.
       await assert.rejects(restore("--file", archive, "--yes", "--owner", "node:node"), /cannot tell which user the SFU runs as/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "an sqlite-only restore brings back the whole chain of links to the database",
+  { skip: missing.length > 0 && `needs ${missing.join(", ")} on PATH` },
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+    try {
+      const { state, backup, latestArchive, restore } = await setUp(root);
+      const db = new DatabaseSync(path.join(state, "target.db"));
+      db.exec("CREATE TABLE meetings (id TEXT PRIMARY KEY); INSERT INTO meetings VALUES ('m1');");
+      db.close();
+      // conclave.sqlite -> current -> target.db, as in Sol's probe.
+      await symlink("target.db", path.join(state, "current"));
+      await symlink("current", path.join(state, "conclave.sqlite"));
+      await backup("--local-only");
+      await rm(state, { recursive: true });
+      await restore("--file", await latestArchive(), "--only", "sqlite", "--yes");
+      assert.equal(await readlink(path.join(state, "current")), "target.db");
+      const restored = new DatabaseSync(path.join(state, "conclave.sqlite"), { readOnly: true });
+      assert.deepEqual(restored.prepare("SELECT id FROM meetings").all().map((row) => row.id), ["m1"]);
+      restored.close();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "a files-only restore installs no link to a database it does not restore",
+  { skip: missing.length > 0 && `needs ${missing.join(", ")} on PATH` },
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+    try {
+      const { state, repo, backup, latestArchive, restore } = await setUp(root);
+      await writeFile(path.join(repo, ".env"), "CONCLAVE_SQLITE_PATH=/var/lib/conclave/recordings/live.db\n");
+      const db = new DatabaseSync(path.join(state, "target.db"));
+      db.exec("CREATE TABLE meetings (id TEXT PRIMARY KEY); INSERT INTO meetings VALUES ('m1');");
+      db.close();
+      await symlink("target.db", path.join(state, "live.db"));
+      await writeFile(path.join(state, "booking-links.json"), "{}");
+      await backup("--local-only");
+      await rm(state, { recursive: true });
+      await restore("--file", await latestArchive(), "--only", "files", "--yes");
+      assert.equal(await readFile(path.join(state, "booking-links.json"), "utf8"), "{}");
+      assert.deepEqual((await readdir(state)).filter((name) => name === "live.db" || name === "target.db"), []);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "--latest takes the newest archive by its timestamp, whatever the host is called",
+  { skip: missing.length > 0 && `needs ${missing.join(", ")} on PATH` },
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+    // Sol's case: the host was renamed between the two archives.
+    const older = "daily/2026/11/conclave-zeta-20261101T030000Z.tar.gz.age";
+    const newer = "daily/2026/11/conclave-alpha-20261122T030000Z.tar.gz.age";
+    const fetched = [];
+    let payload = Buffer.alloc(0);
+    const blob = createHttpServer((req, res) => {
+      if (req.url.startsWith("/metadata/")) return res.end('{"access_token":"token"}');
+      if (req.url.includes("comp=list")) return res.end(`<Blobs><Blob><Name>${newer}</Name></Blob><Blob><Name>${older}</Name></Blob></Blobs>`);
+      fetched.push(req.url);
+      res.end(payload);
+    });
+    await new Promise((done) => blob.listen(0, "127.0.0.1", done));
+    try {
+      const origin = `http://127.0.0.1:${blob.address().port}`;
+      const { state, backup, latestArchive, restore } = await setUp(root, [
+        "AZURE_STORAGE_CONTAINER=sfu-backups",
+        `AZURE_BLOB_ENDPOINT=${origin}`,
+        `AZURE_IMDS_ENDPOINT=${origin}`,
+      ]);
+      const db = new DatabaseSync(path.join(state, "conclave.sqlite"));
+      db.exec("CREATE TABLE meetings (id TEXT PRIMARY KEY)");
+      db.close();
+      await backup("--local-only");
+      payload = await readFile(await latestArchive());
+      await restore("--latest");
+      assert.deepEqual(fetched, [`/sfu-backups/${newer}`]);
+    } finally {
+      await new Promise((done) => blob.close(done));
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "local retention keeps the newest archives by timestamp, whatever the host is called",
+  { skip: missing.length > 0 && `needs ${missing.join(", ")} on PATH` },
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+    try {
+      const { state, local, backup } = await setUp(root, ["BACKUP_LOCAL_KEEP=2"]);
+      const db = new DatabaseSync(path.join(state, "conclave.sqlite"));
+      db.exec("CREATE TABLE meetings (id TEXT PRIMARY KEY)");
+      db.close();
+      // Older archives from a host whose name sorts after this one's.
+      for (const day of ["20261101", "20261102"]) await writeFile(path.join(local, `conclave-zeta-${day}T030000Z.tar.gz.age`), "older");
+      await backup("--local-only");
+      const kept = (await readdir(local)).filter((name) => name.endsWith(".tar.gz.age"));
+      assert.equal(kept.length, 2);
+      assert.ok(kept.includes("conclave-zeta-20261102T030000Z.tar.gz.age"), kept.join(" "));
+      assert.ok(kept.some((name) => name.startsWith("conclave-test-")), "tonight's archive is kept");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
