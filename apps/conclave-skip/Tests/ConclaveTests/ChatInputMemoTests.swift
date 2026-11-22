@@ -5,6 +5,63 @@ import Testing
 
 @MainActor
 struct ChatInputMemoTests {
+    typealias Chat = ChatPoliciesTests
+
+    private func joinedViewModel() -> MeetingViewModel {
+        let viewModel = MeetingViewModel()
+        viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
+        viewModel.state.sfuUserId = "local@example.com"
+        viewModel.state.displayName = "Local"
+        viewModel.state.roomId = "room-a"
+        viewModel.state.connectionState = ConnectionState.joined
+        viewModel.state.participants = ["remote@example.com#w": Participant(id: "remote@example.com#w", displayName: "Remote")]
+        viewModel.state.chatMessages = [ChatMessage(id: "m-0", userId: "remote@example.com#w", displayName: "Remote",
+                                                    content: "earlier", roomId: "room-a")]
+        _ = viewModel.chat.timeline
+        return viewModel
+    }
+
+    @Test func chatClosesWhileTheCallSurfaceIsHiddenAndShowsTheDividerWhenItReturns() {
+        let shell = MeetingShellPresenter()
+        let chat = shell.chat
+        chat.now = { Chat.base + 600_000 }
+        var messages = [Chat.peer("h-0", "earlier", at: 0)]
+        chat.apply(Chat.inputs(messages), change: .messages)
+        shell.panels.present(.chat, from: .call)
+        #expect(chat.isOpen)
+
+        shell.setCallSurfaceVisible(false)
+        #expect(!chat.isOpen)
+        let built = chat.rebuildCount
+        messages.append(Chat.peer("n-0", "while hidden", at: 100, history: false))
+        chat.apply(Chat.inputs(messages), change: .messages)
+        #expect(chat.rebuildCount == built)
+        #expect(chat.pendingUnreadCount == 1)
+
+        shell.setCallSurfaceVisible(true)
+        #expect(chat.isOpen)
+        let rowIds = chat.timeline.rowIds
+        #expect(rowIds.firstIndex(of: "unread").map { rowIds[$0 + 1] } == "n-0")
+    }
+
+    @Test func backgroundingTheAppClosesChatUntilItComesBack() {
+        let viewModel = joinedViewModel()
+        viewModel.shell.panels.present(.chat, from: .call)
+        #expect(viewModel.chat.isOpen)
+
+        viewModel.handleAppEnteredBackground()
+        #expect(!viewModel.chat.isOpen)
+        let built = viewModel.chat.rebuildCount
+        viewModel.state.chatMessages.append(ChatMessage(id: "m-1", userId: "remote@example.com#w", displayName: "Remote",
+                                                        content: "while backgrounded", roomId: "room-a"))
+        #expect(viewModel.chat.rebuildCount == built)
+        #expect(viewModel.chat.pendingUnreadCount == 1)
+
+        viewModel.handleAppBecameActive()
+        #expect(viewModel.chat.isOpen)
+        let rowIds = viewModel.chat.timeline.rowIds
+        #expect(rowIds.firstIndex(of: "unread").map { rowIds[$0 + 1] } == "m-1")
+    }
 
     @Test func theViewModelConvertsOnlyTheNewMessage() {
         let viewModel = MeetingViewModel()

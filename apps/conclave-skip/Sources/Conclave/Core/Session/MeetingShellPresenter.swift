@@ -84,6 +84,12 @@ final class MeetingShellPresenter {
         panels.snapshot.current?.panel == MeetingPanel.chat && !panels.snapshot.isDismissing
     }
 
+    @ObservationIgnored private(set) var callSurfaceIsVisible = true
+
+    func setCallSurfaceVisible(_ visible: Bool) {
+        callSurfaceIsVisible = visible
+    }
+
     init() {
         panels.afterSnapshotChanged = { [weak self] in
             self?.syncChatWithPanels()
