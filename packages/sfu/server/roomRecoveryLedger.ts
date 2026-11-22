@@ -33,12 +33,14 @@ export type RoomRecoveryRecord = {
   // When a host ended it for everyone. Recovery passes signed up to then are
   // void: an ended meeting is not one to recover.
   endedAt: number | null;
+  // When its last person left. Kept while a pass from it can still be good,
+  // so that pass is not taken for one from a call some other SFU lost.
+  closedAt: number | null;
 };
 
 export type RoomRecoveryStore = {
   read: (channelId: string) => Promise<unknown>;
   write: (channelId: string, record: RoomRecoveryRecord) => Promise<void>;
-  remove: (channelId: string) => Promise<void>;
 };
 
 export type LostRoom = {
@@ -53,6 +55,9 @@ export type LostRoom = {
 export type RecalledRoom = {
   lost: LostRoom | null;
   passesVoidUntil: number | null;
+  // Whether this SFU has any record of the code's last room. Without one, a
+  // pass from that room is the only sign there was a call.
+  known: boolean;
 };
 
 type LedgerRoom = Pick<
@@ -83,9 +88,11 @@ const parseRoomRecoveryRecord = (raw: unknown): RoomRecoveryRecord | null => {
     adminUserKeys,
     readmissionRequiredUserKeys,
     endedAt,
+    closedAt,
   } = raw as Record<string, unknown>;
   if (liveAt !== null && typeof liveAt !== "number") return null;
   if (endedAt !== null && typeof endedAt !== "number") return null;
+  if (closedAt !== null && typeof closedAt !== "number") return null;
   if (hostUserKey !== null && typeof hostUserKey !== "string") return null;
   if (!isStringList(adminUserKeys)) return null;
   if (!isStringList(readmissionRequiredUserKeys)) return null;
@@ -95,6 +102,7 @@ const parseRoomRecoveryRecord = (raw: unknown): RoomRecoveryRecord | null => {
     adminUserKeys,
     readmissionRequiredUserKeys,
     endedAt,
+    closedAt,
   };
 };
 
@@ -113,24 +121,26 @@ const stillVoids = (endedAt: number | null): number | null =>
     ? endedAt
     : null;
 
-// Whether a stored record still says anything. One that does not parse is
-// not a record at all.
+const closedRecently = (closedAt: number | null): boolean =>
+  closedAt !== null && Date.now() - closedAt <= ROOM_RECOVERY_PASS_TTL_MS;
+
+// Whether a record still says anything about a pass someone may hold.
+const stillMatters = (record: RoomRecoveryRecord): boolean =>
+  wasRunningRecently(record.liveAt) ||
+  stillVoids(record.endedAt) !== null ||
+  closedRecently(record.closedAt);
+
+// One that does not parse is not a record at all.
 const hasExpired = (raw: unknown): boolean => {
   const record = parseRoomRecoveryRecord(raw);
-  return (
-    !record ||
-    (!wasRunningRecently(record.liveAt) && stillVoids(record.endedAt) === null)
-  );
+  return !record || !stillMatters(record);
 };
 
 export const createRoomRecoveryLedger = (
   store: RoomRecoveryStore,
 ): RoomRecoveryLedger => {
-  const save = (channelId: string, record: RoomRecoveryRecord | null) => {
-    const saved = record
-      ? store.write(channelId, record)
-      : store.remove(channelId);
-    saved.catch((error) => {
+  const save = (channelId: string, record: RoomRecoveryRecord) => {
+    store.write(channelId, record).catch((error) => {
       Logger.warn(`Failed to update the recovery record of ${channelId}`, error);
     });
   };
@@ -143,18 +153,20 @@ export const createRoomRecoveryLedger = (
         adminUserKeys: [...room.adminUserKeys],
         readmissionRequiredUserKeys: room.usersNeedingReadmission,
         endedAt: stillVoids(room.recoveryPassesVoidUntil),
+        closedAt: null,
       }),
-    noteClosed: (room) => {
-      const endedAt = stillVoids(room.recoveryPassesVoidUntil);
-      save(
-        room.channelId,
-        endedAt === null
-          ? null
-          : { ...NOT_RUNNING, endedAt },
-      );
-    },
+    noteClosed: (room) =>
+      save(room.channelId, {
+        ...NOT_RUNNING,
+        endedAt: stillVoids(room.recoveryPassesVoidUntil),
+        closedAt: Date.now(),
+      }),
     noteEnded: (room) =>
-      save(room.channelId, { ...NOT_RUNNING, endedAt: Date.now() }),
+      save(room.channelId, {
+        ...NOT_RUNNING,
+        endedAt: Date.now(),
+        closedAt: null,
+      }),
     recall: async (channelId) => {
       const record = parseRoomRecoveryRecord(
         await store.read(channelId).catch((error) => {
@@ -174,6 +186,7 @@ export const createRoomRecoveryLedger = (
               }
             : null,
         passesVoidUntil: stillVoids(record?.endedAt ?? null),
+        known: record !== null && stillMatters(record),
       };
     },
   };
@@ -189,9 +202,6 @@ export const createMemoryRoomRecoveryStore = (): RoomRecoveryStore => {
     },
     write: async (channelId, record) => {
       records.set(channelId, JSON.stringify(record));
-    },
-    remove: async (channelId) => {
-      records.delete(channelId);
     },
   };
 };
@@ -282,9 +292,6 @@ export const createFileRoomRecoveryStore = (
       const pending = `${path}.${randomBytes(6).toString("hex")}.tmp`;
       writeFileSync(pending, JSON.stringify(record), "utf8");
       renameSync(pending, path);
-    },
-    remove: async (channelId) => {
-      rmSync(pathOf(channelId), { force: true });
     },
   };
 };

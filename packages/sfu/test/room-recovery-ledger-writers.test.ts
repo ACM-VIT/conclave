@@ -24,7 +24,7 @@ const writer = (directory: string, name: string) =>
     const code = `
       import { createFileRoomRecoveryStore } from "./server/roomRecoveryLedger.ts";
       const store = createFileRoomRecoveryStore(${JSON.stringify(directory)});
-      const record = { liveAt: Date.now(), hostUserKey: ${JSON.stringify(name)}, adminUserKeys: [${JSON.stringify(name)}], readmissionRequiredUserKeys: [], endedAt: null };
+      const record = { liveAt: Date.now(), hostUserKey: ${JSON.stringify(name)}, adminUserKeys: [${JSON.stringify(name)}], readmissionRequiredUserKeys: [], endedAt: null, closedAt: null };
       await Promise.all(Array.from({ length: ${ROOMS_EACH} }, (_, i) => store.write(${JSON.stringify(name)} + ":room-" + i, record)));
     `;
     const child = spawn(
@@ -48,6 +48,7 @@ describe("two SFUs writing recovery records into one directory", () => {
       adminUserKeys: [],
       readmissionRequiredUserKeys: [],
       endedAt: null,
+      closedAt: null,
     });
     for (let index = 0; index < 400; index += 1) {
       const path = join(directory, `stale-${index}.json`);
@@ -64,6 +65,7 @@ describe("two SFUs writing recovery records into one directory", () => {
         adminUserKeys: ["host"],
         readmissionRequiredUserKeys: [],
         endedAt: null,
+        closedAt: null,
       }),
     );
     utimesSync(stillRunning, longAgo, longAgo);

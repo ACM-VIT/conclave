@@ -298,6 +298,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         let room = state.rooms.get(roomChannelId);
         let createdRoom = false;
         let lostRoom: LostRoom | null = null;
+        let lastRoomUnknown = false;
         const respondWithRoomOwner = (owner: RoomAssignmentRecord): void => {
           Logger.info(
             `Join for ${roomId} (${clientId}) routed to SFU instance ${owner.instanceId}`,
@@ -387,6 +388,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             if (createdRoom) {
               room.recoveryPassesVoidUntil = recalled.passesVoidUntil;
               lostRoom = recalled.lost;
+              lastRoomUnknown = !recalled.known;
             }
           } catch (error) {
             if (error instanceof RoomOwnershipError) {
@@ -593,8 +595,9 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           // A pass, but no record of its call: the call was lost by another
           // SFU whose ledger this one cannot read. Its people come back in
           // on their passes. Who hosted it, and whether it was ended, is
-          // unknown here, so no pass gets the host's seat.
-          if (!lostRoom && provesMembership) {
+          // unknown here, so no pass gets the host's seat. A room this SFU
+          // saw empty out is known, and is its next visitor's to open.
+          if (lastRoomUnknown && provesMembership) {
             room.awaitRestorer({
               until: Date.now() + ROOM_RECOVERY_PASS_TTL_MS,
               rosterKnown: false,

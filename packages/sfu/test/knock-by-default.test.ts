@@ -959,6 +959,32 @@ describe("who hosts a call the server lost", () => {
     });
   });
 
+  it("gives a host their own meeting back when they reopen it after it emptied, pass in hand", async () => {
+    vi.useFakeTimers({
+      toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
+    vi.setSystemTime(new Date("2026-11-22T08:00:00Z"));
+    const before = makeState();
+    const created = await join(before, host);
+    await hangUp(created.peer);
+    vi.advanceTimersByTime(3 * MINUTE_MS);
+    expect(before.rooms.size).toBe(0);
+
+    // A reload: the tab still holds the pass it was handed three minutes ago.
+    const sameSfu = await join(before, host, {
+      roomRecoveryPass: created.response.roomRecoveryPass,
+    });
+    expect(sameSfu.context.currentClient).toBeInstanceOf(Admin);
+    await hangUp(sameSfu.peer);
+    vi.advanceTimersByTime(3 * MINUTE_MS);
+
+    const afterRestart = await join(await restart(before), host, {
+      roomRecoveryPass: sameSfu.response.roomRecoveryPass,
+    });
+    expect(afterRestart.status).toBe("joined");
+    expect(afterRestart.context.currentClient).toBeInstanceOf(Admin);
+  });
+
   it("opens a meeting that emptied on purpose for its next visitor", async () => {
     vi.useFakeTimers({
       toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
