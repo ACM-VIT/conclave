@@ -129,6 +129,30 @@ describe("question rows", () => {
 
     expect(audit.finish().violations).toEqual(["Priya: someone else's question q2"]);
   });
+
+  it("flags a question a host hid that is sent to its own asker", () => {
+    const { audit, receive } = setup();
+    audit.asked(priya, "q3");
+
+    // Still waiting in a webinar: theirs to see.
+    receive(
+      patch(1_000, {
+        bucket: "myQuestions",
+        key: "q3",
+        value: { hidden: { question: { status: "pending" }, upvotes: 0 } },
+      }),
+    );
+    // Hidden by a host: nobody's to see but a host's, the asker's included.
+    receive(
+      patch(1_010, {
+        bucket: "myQuestions",
+        key: "q3",
+        value: { hidden: { question: { status: "dismissed" }, upvotes: 0 } },
+      }),
+    );
+
+    expect(audit.finish().violations).toEqual(["Priya: their own hidden question q3"]);
+  });
 });
 
 describe("other people's rows", () => {

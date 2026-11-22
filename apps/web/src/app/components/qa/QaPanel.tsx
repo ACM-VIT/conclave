@@ -165,15 +165,12 @@ export function QaPanel({
   const orderedEntries = useMemo(() => {
     const rank = (entry: WebinarQaEntry): number =>
       entry.status === "answering" ? 0 : entry.status === "dismissed" ? 2 : 1;
-    // A hidden question stays in two lists: a host's, and its asker's own.
-    const isOwn = (entry: WebinarQaEntry): boolean =>
-      Boolean(currentUserId && entry.userId === currentUserId);
+    // A hidden question is a host's alone to see, its asker's no more than
+    // anyone's. The server sends it to nobody else.
     return [...entries]
-      .filter(
-        (entry) => onModerate || entry.status !== "dismissed" || isOwn(entry),
-      )
+      .filter((entry) => onModerate || entry.status !== "dismissed")
       .sort((a, b) => rank(a) - rank(b) || a.askedAt - b.askedAt);
-  }, [entries, onModerate, currentUserId]);
+  }, [entries, onModerate]);
 
   useEffect(() => {
     if (orderedEntries.length > previousCountRef.current) {

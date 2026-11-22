@@ -6,8 +6,8 @@ export const QA_MAX_ANSWER_LENGTH = 1000;
 export const QA_MAX_ENTRIES = 300;
 /**
  * The most the book's questions may weigh together, as JSON. The runtime
- * sends a view of at most 1 MiB, and a viewer can be sent each question
- * twice: once in the shared list and once more as their own hidden one. So
+ * sends a view of at most 1 MiB, and a viewer can be sent a question twice:
+ * in the shared list, and as their own while it waits in a webinar. So
  * the book stays under half of that, with room for the small rows beside it.
  */
 export const QA_MAX_BOOK_BYTES = 400 * 1024;
@@ -83,7 +83,8 @@ export const qaContract = defineContract({
     votes: questionVotes,
     /**
      * The viewer's own questions. `hidden` carries one the shared list leaves
-     * out for them: still waiting in a webinar, or hidden by a host.
+     * out for them, which is one still waiting for a host in a webinar. A
+     * question a host has hidden is not here at all.
      */
     myQuestions: s.object({
       hidden: s.nullable(

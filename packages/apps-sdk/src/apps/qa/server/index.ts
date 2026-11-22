@@ -57,11 +57,15 @@ const card = (row: QuestionRow): QuestionCard => ({
 const isPublic = (row: QuestionRow, room: RoomPolicy): boolean =>
   isQaStatusPublic(row.status, room.mode);
 
-/** Hosts see every question, askers their own, everyone the public ones. */
+/**
+ * Hosts see every question, askers their own, everyone the public ones. A
+ * question a host has hidden is the exception: only hosts see it, and its
+ * asker loses it like everyone else.
+ */
 const isVisibleTo = (row: QuestionRow, ctx: GateContext): boolean =>
   ctx.role === "moderator" ||
-  row.author === ctx.subject ||
-  isPublic(row, ctx.room);
+  (row.status !== "dismissed" &&
+    (row.author === ctx.subject || isPublic(row, ctx.room)));
 
 /**
  * Who may ask and upvote: attendees of a webinar while the host has Q&A on,
@@ -293,14 +297,20 @@ export const qaAuthority = defineAuthority({
       kind: "personal",
       source: "questions",
       owner: (row) => row.author,
-      project: (row, room) => ({
-        key: row.id,
-        value: {
-          hidden: isPublic(row, room)
-            ? null
-            : { question: card(row), upvotes: row.upvotes },
-        },
-      }),
+      // A question a host has hidden is in no participant's view, its
+      // asker's included: it is gone for them, with nothing to say why.
+      // Hosts keep it in the shared list, where they can bring it back.
+      project: (row, room) =>
+        row.status === "dismissed"
+          ? null
+          : {
+              key: row.id,
+              value: {
+                hidden: isPublic(row, room)
+                  ? null
+                  : { question: card(row), upvotes: row.upvotes },
+              },
+            },
     },
     myUpvotes: {
       kind: "personal",

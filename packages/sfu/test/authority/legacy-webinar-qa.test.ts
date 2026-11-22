@@ -338,6 +338,29 @@ describe("webinar Q&A with old and new clients in one room", () => {
     expect(native.showsUpvoted(id)).toBe(true);
   });
 
+  it("takes a hidden question off its asker's native build 63 screen, and puts it back when the host unhides it", async () => {
+    const stack = await startWebinar();
+    const host = await open(stack, asha, qaContract);
+    const native = await build63(stack, vik);
+    await until(() => native.snapshots() > 0, "the phone gets its first list");
+    const asked = await ask<{ success?: boolean; id?: string }>(native.socket, "webinar:qa:submit", {
+      question: "Asked from a phone",
+    });
+    const id = asked.id ?? "";
+    await until(() => native.shownCount(id) === 0, "the phone lists its own question");
+    const snapshotsBefore = native.snapshots();
+
+    await host.session.act("moderate", { id, action: "dismissed" });
+    await until(() => native.shownCount(id) === undefined, "the question leaves the phone");
+    const goneWithoutAList = native.snapshots() === snapshotsBefore;
+    await host.session.act("moderate", { id, action: "reopen" });
+    await until(() => native.shownCount(id) === 0, "the question is back on the phone");
+
+    expect(asked.success).toBe(true);
+    expect(goneWithoutAList).toBe(true);
+    expect(field(row(host, "questions", id), "status")).toBe("pending");
+  });
+
   it("leaves a native build 63 screen alone when its own tap takes the upvote back", async () => {
     const stack = await startWebinar();
     const host = await open(stack, asha, qaContract);
@@ -379,8 +402,10 @@ describe("webinar Q&A with old and new clients in one room", () => {
 
     expect([answering, hidden]).toEqual([{ success: true }, { success: true }]);
     expect(field(row(host, "questions", id), "status")).toBe("dismissed");
-    // The asker keeps their own hidden question; nobody else does.
-    expect(oldAttendee.entries.get(id)?.status).toBe("dismissed");
+    // The hosts keep it, to bring it back. Its asker loses it like everyone else.
+    expect(oldHost.entries.get(id)?.status).toBe("dismissed");
+    expect(oldAttendee.entries.has(id)).toBe(false);
+    expect(oldAttendee.events.filter((event) => event === `removed:${id}`)).toEqual([`removed:${id}`]);
     expect(upvoteHidden).toEqual({ error: "Question not found" });
     expect(fromAttendee).toEqual({ error: "Only hosts can do this" });
   });

@@ -496,9 +496,77 @@ describe("Q&A in a regular meeting", () => {
     expect(raviTab.row("questions", id)).toBeNull();
     expect(raviTab.row("votes", id)).toBeNull();
     expect(field(hostTab.row("questions", id), "status")).toBe("dismissed");
-    expect(field(priyaTab.row("myQuestions", id), "hidden", "question", "status")).toBe("dismissed");
     expect(await raviTab.act("upvote", { id, value: true })).toEqual(rejected("not-found"));
     expect(await raviTab.act("upvote", { id: "missing", value: true })).toEqual(rejected("not-found"));
+  });
+
+  it("takes a question a host hides out of everyone's list, its asker's included, until the host brings it back", async () => {
+    const room = new Harness([qaAuthority]);
+    const hostTab = await room.open(host, qaContract);
+    const asker = await room.open(priya, qaContract);
+    const other = await room.open(ravi, qaContract);
+    const id = await ask(room, asker, "Please do not hide me");
+    await other.act("upvote", { id, value: true });
+    await room.deliver();
+    const askerHeldBefore = [asker.row("questions", id) !== null, asker.row("myQuestions", id) !== null];
+    const framesBefore = asker.frames.length;
+
+    await hostTab.act("moderate", { id, action: "dismissed" });
+    await room.deliver();
+    const whileHidden = {
+      asker: [asker.row("questions", id), asker.row("votes", id), asker.row("myQuestions", id)],
+      other: [other.row("questions", id), other.row("votes", id)],
+      host: field(hostTab.row("questions", id), "status"),
+    };
+    // The asker is told to drop it and nothing else: no card, no status.
+    const toldAsker = asker.frames.slice(framesBefore);
+    // It answers them exactly like a question that does not exist.
+    const askerUpvote = await asker.act("upvote", { id, value: true });
+    // Someone who opens Q&A now, the asker in another tab included, is not handed it.
+    const askerSecondTab = await room.open(priya, qaContract);
+    const lateHeld = [askerSecondTab.row("questions", id), askerSecondTab.row("myQuestions", id)];
+    const toldSecondTab = JSON.stringify(askerSecondTab.frames);
+
+    await hostTab.act("moderate", { id, action: "reopen" });
+    await room.deliver();
+
+    expect(askerHeldBefore).toEqual([true, true]);
+    expect(whileHidden).toEqual({
+      asker: [null, null, null],
+      other: [null, null],
+      host: "dismissed",
+    });
+    expect(JSON.stringify(toldAsker)).not.toContain("Please do not hide me");
+    expect(JSON.stringify(toldAsker)).not.toContain("dismissed");
+    expect(askerUpvote).toEqual(rejected("not-found"));
+    expect(lateHeld).toEqual([null, null]);
+    expect(toldSecondTab).not.toContain("Please do not hide me");
+    // The host unhides it, and it is back for everyone, as the asker's own again.
+    expect(field(asker.row("questions", id), "status")).toBe("pending");
+    expect(asker.row("myQuestions", id)).toEqual({ hidden: null });
+    expect(field(other.row("votes", id), "upvotes")).toBe(1);
+    expect(await room.converged()).toBe(true);
+  });
+
+  it("takes a webinar attendee's own waiting question off their screen when a host hides it", async () => {
+    const room = new Harness([qaAuthority]);
+    const hostTab = await room.open(host, qaContract);
+    room.setWebinar(true, true);
+    const asker = await room.open(viewer, qaContract);
+    await room.deliver();
+    const id = await ask(room, asker, "Asked in a webinar");
+    const waiting = field(asker.row("myQuestions", id), "hidden", "question", "status");
+
+    await hostTab.act("moderate", { id, action: "dismissed" });
+    await room.deliver();
+    const whileHidden = asker.row("myQuestions", id);
+    await hostTab.act("moderate", { id, action: "reopen" });
+    await room.deliver();
+
+    expect(waiting).toBe("pending");
+    expect(whileHidden).toBeNull();
+    expect(field(hostTab.row("questions", id), "status")).toBe("pending");
+    expect(field(asker.row("myQuestions", id), "hidden", "question", "status")).toBe("pending");
   });
 
   it("asks for at least two characters and keeps at most 500", async () => {

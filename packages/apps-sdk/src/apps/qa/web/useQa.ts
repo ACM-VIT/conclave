@@ -97,8 +97,8 @@ export function useQa() {
         hasUpvoted: hasUpvoted(question.id),
       });
     }
-    // The viewer's own questions that their list leaves out: still waiting
-    // in a webinar, or hidden by a host.
+    // The viewer's own questions that their list leaves out: the ones still
+    // waiting for a host in a webinar.
     for (const [id, own] of view.myQuestions) {
       if (!own.hidden || items.has(id)) continue;
       items.set(id, {

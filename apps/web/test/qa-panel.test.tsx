@@ -93,19 +93,32 @@ it("shows participants public questions without moderation controls", async () =
   expect(container.textContent).toContain("Everyone in the meeting can see questions.");
 });
 
-it("keeps the asker's own question in their list after a host hides it", async () => {
+it("shows a hidden question to nobody but a host, its asker included", async () => {
+  // The server sends a participant no hidden question. If one were ever on
+  // hand, the panel would still not draw it, nor any word that it was hidden.
   await render({
     entries: [
       entry({ id: "q1", question: "Mine, hidden by a host", status: "dismissed", userId: "ben#1" }),
       entry({ id: "q2", question: "Someone else's, hidden", status: "dismissed" }),
+      entry({ id: "q3", question: "Still here", userId: "ben#1" }),
     ],
     onUpvote: () => {},
   });
 
-  const own = entryCard("Mine, hidden by a host");
-  expect(own?.textContent).toContain("Hidden");
-  expect(own?.querySelector<HTMLButtonElement>('[data-testid="qa-upvote"]')?.disabled).toBe(true);
+  expect(entryCard("Mine, hidden by a host")).toBeUndefined();
   expect(entryCard("Someone else's, hidden")).toBeUndefined();
+  expect(entryCard("Still here")).toBeDefined();
+  expect(container.textContent).not.toContain("Hidden");
+});
+
+it("keeps a hidden question in a host's list, marked, with a way to bring it back", async () => {
+  await render({
+    onModerate: vi.fn(async () => ({ ok: true })),
+    entries: [entry({ id: "q1", question: "Off topic", status: "dismissed" })],
+  });
+
+  expect(entryCard("Off topic")?.textContent).toContain("Hidden");
+  expect(actionsOf("Off topic")).toEqual(["Unhide"]);
 });
 
 it("tells a viewer without a verified identity to sign in, in place of the composer", async () => {

@@ -255,12 +255,13 @@ describe("Q&A", () => {
       "a dismissed question leaves everyone else's list",
     ).toBeNull();
     expect(
-      [
-        at(priyaTab.row("myQuestions", id), "hidden", "question", "status"),
-        at(hostTab.row("questions", id), "status"),
-      ],
-      "the asker and the host still see it",
-    ).toEqual(["dismissed", "dismissed"]);
+      [priyaTab.row("questions", id), priyaTab.row("myQuestions", id)],
+      "it leaves its asker's list too, with nothing left of it",
+    ).toEqual([null, null]);
+    expect(
+      at(hostTab.row("questions", id), "status"),
+      "the host still sees it, to bring it back",
+    ).toBe("dismissed");
     expect(
       rejectedWith(await raviTab.act("upvote", { id, value: true }), "not-found"),
       "a hidden question cannot be upvoted",

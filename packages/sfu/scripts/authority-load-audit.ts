@@ -156,6 +156,12 @@ export class LoadAudit {
           this.violations.push(`${person.name}: someone else's upvote ${row.key}`);
         }
       } else if (row.bucket === "myQuestions") {
+        // A question a host hid is nobody's to see but a host's, and a host
+        // sees it in the shared list, never as a row of their own.
+        const own = field(field(row.value, "hidden"), "question");
+        if (field(own, "status") === "dismissed") {
+          this.violations.push(`${person.name}: their own hidden question ${row.key}`);
+        }
         if (!ledger.asked.has(row.key)) {
           this.unsettledQuestions.push({ person, key: row.key });
         }
