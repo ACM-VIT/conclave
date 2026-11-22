@@ -769,17 +769,20 @@ const meetingRecord = (meeting: object): string =>
   JSON.stringify({ ...meeting, readmissionRequiredEmails: undefined });
 
 // Hands a store the meetings read from another one. Their removed invitees
-// go with them: a save alone leaves those behind.
+// go with them: a save alone leaves those behind. They are written first and
+// the meetings last, because a store that holds meetings is taken as moved
+// already: one cut off half way holds no meetings yet, and is moved again
+// the next time the SFU starts.
 const handOver = (
   store: ScheduledMeetingPersistence,
   meetings: ScheduledMeeting[],
 ): void => {
-  void store.save(meetings);
   for (const meeting of meetings) {
     for (const email of meeting.readmissionRequiredEmails ?? []) {
       void store.setInviteeReadmission?.(meeting.id, email, true);
     }
   }
+  void store.save(meetings);
 };
 
 // Removed invitees as a store lists them, one (meeting, email) pair at a

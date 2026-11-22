@@ -275,6 +275,79 @@ describe("removed invitees kept inside the meeting, as stores used to keep them"
   const withRemovalInside = (record: string): string =>
     JSON.stringify({ ...(JSON.parse(record) as object), readmissionRequiredEmails: [INVITEE] });
 
+  // An SFU process that moves the JSON file's meetings into its store and is
+  // killed the moment it turns from one kind of write to the other: from
+  // meetings to removed invitees, or the other way round.
+  const importKilledHalfway = (kind: "sqlite" | "redis") =>
+    new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+      const child = spawn(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          "--input-type=module",
+          "-e",
+          kind === "sqlite"
+            ? `
+              import { StatementSync } from "node:sqlite";
+              const run = StatementSync.prototype.run;
+              let first = null;
+              StatementSync.prototype.run = function (...args) {
+                const sql = this.sourceSQL;
+                const write = sql.includes("scheduled_meeting_remov")
+                  ? "removal"
+                  : sql.includes("INSERT INTO scheduled_meetings")
+                    ? "meeting"
+                    : null;
+                if (write) {
+                  first ??= write;
+                  if (write !== first) process.kill(process.pid, "SIGKILL");
+                }
+                return run.apply(this, args);
+              };
+              const { createScheduledMeetingPersistence } = await import("./server/scheduledMeetings.ts");
+              createScheduledMeetingPersistence();
+            `
+            : `
+              const { createScheduledMeetingPersistence } = await import("./server/scheduledMeetings.ts");
+              const store = createScheduledMeetingPersistence();
+              let first = null;
+              const turned = (write) => {
+                first ??= write;
+                if (write === first) return false;
+                void Promise.resolve(store.flush()).finally(() => process.kill(process.pid, "SIGKILL"));
+                return true;
+              };
+              const save = store.save.bind(store);
+              const setInviteeReadmission = store.setInviteeReadmission.bind(store);
+              store.save = (...args) => (turned("meeting") ? undefined : save(...args));
+              store.setInviteeReadmission = (...args) =>
+                turned("removal") ? undefined : setInviteeReadmission(...args);
+              await store.load();
+              await new Promise((done) => setTimeout(done, 60_000));
+            `,
+        ],
+        { cwd: join(import.meta.dirname, ".."), stdio: "ignore" },
+      );
+      child.on("close", (code, signal) => resolve({ code, signal }));
+    });
+
+  it("come along when moving a JSON file into SQLite is cut off between its writes", async () => {
+    const dir = await jsonFileWithRemoval();
+    useStore("sqlite", dir);
+    expect(await importKilledHalfway("sqlite")).toEqual({ code: null, signal: "SIGKILL" });
+
+    expect(isInvited(await startSfu("sqlite"))).toBe(false);
+  });
+
+  redisTest("come along when moving into Redis is cut off between its writes", async () => {
+    const dir = await jsonFileWithRemoval();
+    useStore("redis", dir);
+    expect(await importKilledHalfway("redis")).toEqual({ code: null, signal: "SIGKILL" });
+
+    expect(isInvited(await startSfu("redis", dir))).toBe(false);
+  });
+
   it("come along when a JSON file's meetings move into SQLite", async () => {
     const dir = await jsonFileWithRemoval();
     useStore("sqlite", dir);
