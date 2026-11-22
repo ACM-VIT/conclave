@@ -595,20 +595,34 @@ enum CrashReportEventBuilder {
     /// MetricKit re-reports, a launch or more later, an Objective-C exception the uncaught handler already stored.
     /// It is the same crash only with the same release (version and build), the same exception name, the stored crash
     /// inside MetricKit's reporting window, and the same stack signature. Anything less certain uploads both.
-    static func repeatsUncaughtCrash(_ payload: DiagnosticsStoredPayload, uncaught: [DiagnosticsStoredPayload]) -> Bool {
+    static func repeatsUncaughtCrash(_ payload: DiagnosticsStoredPayload, uncaught: [DiagnosticsStoredPayload],
+                                     sent: [CrashSignatureEntry] = []) -> Bool {
         if payload.kind != DiagnosticsPayloadKind.crash.rawValue || numberField(payload, "uncaught") > 0.0 { return false }
         let name = textField(payload, "exceptionName")
         let windowStart = numberField(payload, "windowStartMillis")
         let release = recordedAppVersion(payload)
-        let signature = stackSignature(metricKitFrames(parseDetail(payload.detailJSON) ?? [:]))
-        if name.isEmpty || windowStart <= 0.0 || release.isEmpty || signature.isEmpty { return false }
-        for crash in uncaught where crash.createdAtMillis >= windowStart && crash.createdAtMillis <= payload.createdAtMillis {
-            guard recordedAppVersion(crash) == release,
-                  let exception = capturedExceptions(parseDetail(crash.detailJSON))?.first,
-                  exception.type == name else { continue }
-            if stackSignature(exception.frames) == signature { return true }
+        let stack = stackSignature(metricKitFrames(parseDetail(payload.detailJSON) ?? [:])).joined(separator: ",")
+        if name.isEmpty || windowStart <= 0.0 || release.isEmpty || stack.isEmpty { return false }
+        var originals = sent
+        for crash in uncaught {
+            if let signature = sentSignature(crash) { originals.append(signature) }
+        }
+        for original in originals where original.crashedAtMillis >= windowStart
+            && original.crashedAtMillis <= payload.createdAtMillis {
+            if original.name == name && original.release == release && original.stack == stack { return true }
         }
         return false
+    }
+
+    /// What an uploaded uncaught crash leaves in the sent-signature ledger, or nil without a release or app frames.
+    static func sentSignature(_ payload: DiagnosticsStoredPayload) -> CrashSignatureEntry? {
+        if payload.kind != DiagnosticsPayloadKind.crash.rawValue || numberField(payload, "uncaught") <= 0.0 { return nil }
+        let release = recordedAppVersion(payload)
+        guard !release.isEmpty, let exception = capturedExceptions(parseDetail(payload.detailJSON))?.first else { return nil }
+        let stack = stackSignature(exception.frames)
+        if stack.isEmpty { return nil }
+        return CrashSignatureEntry(name: exception.type, release: release, stack: stack.joined(separator: ","),
+                                   crashedAtMillis: payload.createdAtMillis)
     }
 
     /// Conclave's own binaries, where an uncaught exception's stack and MetricKit's report of the same crash agree;
@@ -818,15 +832,70 @@ final class CrashReportLedger {
 struct CrashReportBatch: Equatable {
     let body: String
     let names: [String]
+    /// Signatures of the uncaught crashes in this batch, recorded once it is delivered.
+    let signatures: [CrashSignatureEntry]
+}
+
+/// A crash already sent: exception name, release, app-frame stack signature, and when it happened.
+struct CrashSignatureEntry: Codable, Equatable {
+    let name: String
+    let release: String
+    let stack: String
+    let crashedAtMillis: Double
+}
+
+struct CrashSignatureLedgerFile: Codable, Equatable {
+    let signatures: [CrashSignatureEntry]
+}
+
+/// Signatures of sent uncaught crashes, kept 30 days (longer than MetricKit takes to deliver a report) whatever
+/// happens to the payloads, so a MetricKit copy that arrives after its original was pruned is still recognized.
+final class CrashSignatureLedger {
+    static let fileName = "sent-crash-signatures.json"
+    static let retentionMillis: Double = 30.0 * 24.0 * 60.0 * 60.0 * 1000.0
+
+    let store: DiagnosticsFileStore
+
+    init(store: DiagnosticsFileStore) {
+        self.store = store
+    }
+
+    func entries() -> [CrashSignatureEntry] {
+        guard let data = try? Data(contentsOf: store.fileURL(CrashSignatureLedger.fileName)),
+              let file = try? JSONDecoder().decode(CrashSignatureLedgerFile.self, from: data) else { return [] }
+        let now = store.wallClock()
+        var kept: [CrashSignatureEntry] = []
+        for entry in file.signatures where now - entry.crashedAtMillis <= CrashSignatureLedger.retentionMillis {
+            kept.append(entry)
+        }
+        return kept
+    }
+
+    @discardableResult
+    func record(_ signatures: [CrashSignatureEntry]) -> Bool {
+        var kept = entries()
+        for signature in signatures where !kept.contains(signature) {
+            kept.append(signature)
+        }
+        guard store.ensureDirectory(store.directoryPath),
+              let data = try? JSONEncoder().encode(CrashSignatureLedgerFile(signatures: kept)) else { return false }
+        do {
+            try data.write(to: store.fileURL(CrashSignatureLedger.fileName), options: Data.WritingOptions.atomic)
+            return true
+        } catch {
+            return false
+        }
+    }
 }
 
 enum CrashReportPlanner {
     /// `skipped` lists payloads with nothing worth reporting, so the ledger stops reconsidering them. A MetricKit repeat
     /// of a stored uncaught crash goes in `duplicates` instead: the uploader deletes it, so it cannot upload once the
     /// original expires, and it is never recorded as sent.
-    static func plan(_ loaded: [DiagnosticsLoadedPayload], reported: [String], projectKey: String,
-                     context: CrashReportContext) -> CrashReportPlan {
+    static func plan(_ loaded: [DiagnosticsLoadedPayload], reported: [String], sent: [CrashSignatureEntry] = [],
+                     projectKey: String, context: CrashReportContext) -> CrashReportPlan {
         var batches: [CrashReportBatch] = []
+        var signatures: [CrashSignatureEntry] = []
         var skipped: [String] = []
         var duplicates: [String] = []
         var events: [String] = []
@@ -836,7 +905,7 @@ enum CrashReportPlanner {
             uncaught.append(item.payload)
         }
         for item in loaded where !reported.contains(item.name) {
-            if CrashReportEventBuilder.repeatsUncaughtCrash(item.payload, uncaught: uncaught) {
+            if CrashReportEventBuilder.repeatsUncaughtCrash(item.payload, uncaught: uncaught, sent: sent) {
                 duplicates.append(item.name)
                 continue
             }
@@ -850,16 +919,18 @@ enum CrashReportPlanner {
             }
             events.append(event)
             names.append(item.name)
+            if let signature = CrashReportEventBuilder.sentSignature(item.payload) { signatures.append(signature) }
             if events.count >= CrashReportingPolicy.batchLimit {
                 batches.append(CrashReportBatch(body: CrashReportEventBuilder.batch(projectKey: projectKey, events: events),
-                                                names: names))
+                                                names: names, signatures: signatures))
                 events = []
                 names = []
+                signatures = []
             }
         }
         if !events.isEmpty {
             batches.append(CrashReportBatch(body: CrashReportEventBuilder.batch(projectKey: projectKey, events: events),
-                                            names: names))
+                                            names: names, signatures: signatures))
         }
         return CrashReportPlan(batches: batches, skipped: skipped, duplicates: duplicates)
     }

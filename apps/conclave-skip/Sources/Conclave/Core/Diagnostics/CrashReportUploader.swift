@@ -158,7 +158,8 @@ final class CrashReportUploader {
         let ledger = CrashReportLedger(store: store)
         let prepared = await Task.detached(priority: TaskPriority.utility) {
             let loaded = store.loadPayloads()
-            let plan = CrashReportPlanner.plan(loaded, reported: ledger.reportedNames(), projectKey: projectKey,
+            let plan = CrashReportPlanner.plan(loaded, reported: ledger.reportedNames(),
+                                               sent: CrashSignatureLedger(store: store).entries(), projectKey: projectKey,
                                                context: context)
             for name in plan.duplicates {
                 store.removePayload(name)
@@ -172,18 +173,22 @@ final class CrashReportUploader {
 
         var sent = 0
         var recorded = prepared.plan.skipped
+        var deliveredSignatures: [CrashSignatureEntry] = []
         for batch in prepared.plan.batches {
             if !allowsSending() { break }
             let delivered = await transport.send(endpoint: endpoint, body: batch.body)
             if !delivered { break }
             sent += batch.names.count
             recorded.append(contentsOf: batch.names)
+            deliveredSignatures.append(contentsOf: batch.signatures)
         }
-        if !recorded.isEmpty {
+        if !recorded.isEmpty || !deliveredSignatures.isEmpty {
             let names = recorded
             let present = prepared.present
+            let signatures = deliveredSignatures
             _ = await Task.detached(priority: TaskPriority.utility) {
-                ledger.record(names, present: present)
+                if !names.isEmpty { ledger.record(names, present: present) }
+                if !signatures.isEmpty { CrashSignatureLedger(store: store).record(signatures) }
             }.value
         }
         sentCount += sent

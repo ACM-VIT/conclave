@@ -491,6 +491,33 @@ struct CrashReportingTests {
         #expect(transport.bodies.count == 1)
     }
 
+    /// MetricKit can deliver a week or more later. Once the original was sent and pruned, a matching copy that arrives
+    /// afterwards is still recognized from the sent-signature ledger, deleted, and never sent.
+    @Test func aMetricKitCopyArrivingAfterItsOriginalWasPrunedNeverUploads() async throws {
+        let crashAt = 1_795_000_000_000.0
+        let clock = TestClock(now: crashAt + 3_600_000)
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("crash-" + UUID().uuidString, isDirectory: true)
+        let store = DiagnosticsFileStore(directoryPath: base.appendingPathComponent("store").path,
+                                         exportDirectoryPath: base.appendingPathComponent("exports").path,
+                                         wallClock: { clock.now })
+        #expect(store.writePayload(uncaughtObjectiveCCrash(atMillis: crashAt)))
+        let uploader = CrashReportUploader()
+        let transport = RecordingTransport()
+        #expect(await uploader.upload(store: store, config: config(), context: Self.context, transport: transport) == 1)
+
+        clock.now = crashAt + 7.0 * 24.0 * 3_600_000 + 3_600_000
+        store.prune(nowMillis: clock.now)
+        #expect(store.loadPayloads().isEmpty)
+        #expect(store.writePayload(try metricKitCrash(name: "NSInvalidArgumentException", windowStart: crashAt - 3_600_000,
+                                                      delivered: clock.now)))
+        #expect(await uploader.upload(store: store, config: config(), context: Self.context, transport: transport) == 0)
+        #expect(transport.bodies.count == 1)
+        #expect(store.loadPayloads().isEmpty)
+
+        clock.now = crashAt + 31.0 * 24.0 * 3_600_000
+        #expect(CrashSignatureLedger(store: store).entries().isEmpty)
+    }
+
     @Test func aReportNamesTheReleaseThatCrashedNotTheOneUploading() throws {
         let uploader = CrashReportContext(installId: "install-1", platform: "ios", appVersion: "2.0.1 (64)",
                                           osVersion: "iOS 26.1", deviceClass: "phone")
