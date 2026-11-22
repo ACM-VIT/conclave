@@ -91,6 +91,7 @@ type ServerEnvelope =
       globalOpenAiKeyAvailable?: boolean;
       globalProviderKeysAvailable?: TranscriptProviderKeyAvailability;
       serviceVersion?: TranscriptServiceVersion;
+      supportsCaptionLanguage?: boolean;
       session: TranscriptSessionState;
       segments?: TranscriptSegment[];
       partials?: TranscriptSegment[];
@@ -305,6 +306,7 @@ export function useMeetingTranscript({
   const [hasGlobalOpenAiKey, setHasGlobalOpenAiKey] = useState(false);
   const [globalProviderKeysAvailable, setGlobalProviderKeysAvailable] =
     useState<TranscriptProviderKeyAvailability>({});
+  const [supportsCaptionLanguage, setSupportsCaptionLanguage] = useState(false);
   const [serviceVersion, setServiceVersion] =
     useState<TranscriptServiceVersion | null>(null);
   const [availableServiceVersion, setAvailableServiceVersion] =
@@ -737,6 +739,7 @@ export function useMeetingTranscript({
           );
           applyProviderKeyAvailability(message);
           applyServiceVersion(message.serviceVersion);
+          setSupportsCaptionLanguage(message.supportsCaptionLanguage === true);
           applySessionState(message.session);
           setSegments(message.segments ?? []);
           setPartials(
@@ -1429,6 +1432,7 @@ export function useMeetingTranscript({
       setHasGlobalOpenAiKey(false);
       setGlobalProviderKeysAvailable({});
       setServiceVersion(null);
+      setSupportsCaptionLanguage(false);
       serviceVersionRef.current = null;
       setAvailableServiceVersion(null);
       setViewerConnectionId(null);
@@ -1575,6 +1579,7 @@ export function useMeetingTranscript({
     sfuRelayStatus,
     hasGlobalOpenAiKey,
     globalProviderKeysAvailable,
+    supportsCaptionLanguage,
     hasGlobalKeysForTranscriptModel,
     serviceVersion,
     availableServiceVersion,

@@ -37,6 +37,7 @@ const controller = (
     isPaused: false,
     isStreamingAudio: true,
     isServiceUpdateAvailable: false,
+    supportsCaptionLanguage: true,
     error: null,
     allSegments: [],
     qaMessages: [],
@@ -129,6 +130,20 @@ describe("caption language picker", () => {
 
     expect(transcript.takeover).toHaveBeenCalledWith(
       expect.objectContaining({ language: "ta" }),
+    );
+  });
+
+  it("hides the language choice until the transcript worker supports it", async () => {
+    const transcript = controller({}, { supportsCaptionLanguage: false });
+    await render(transcript);
+
+    expect(select("captions-language-start")).toBeNull();
+    await act(async () => {
+      container.querySelector("form")?.requestSubmit();
+    });
+
+    expect(transcript.start).toHaveBeenCalledWith(
+      expect.objectContaining({ language: undefined }),
     );
   });
 

@@ -31,6 +31,7 @@ type TestRoom = {
   segments: { itemId: string; text: string }[];
   viewers: Map<WebSocket, Viewer>;
   startSession: (viewer: Viewer, message: object) => Promise<void>;
+  handleMessage: (viewer: Viewer, raw: string) => Promise<void>;
 };
 
 const roomSession = {
@@ -80,6 +81,7 @@ async function fixture() {
     clientId: "conclave",
     channelId: "room",
     capabilities: { start: true, stop: true, takeover: true },
+    rateLimits: {},
   } as unknown as Viewer;
   room.viewers.set(viewer.socket, viewer);
   return { room, viewer, providers, sent };
@@ -171,5 +173,17 @@ describe("caption languages the running provider can transcribe", () => {
       "sarvam:en",
     ]);
     expect(room.session?.language).toBe("en");
+  });
+});
+
+describe("caption language support", () => {
+  it("tells clients the worker can caption in a chosen language", async () => {
+    const { room, viewer, sent } = await fixture();
+
+    await room.handleMessage(viewer, JSON.stringify({ type: "export.snapshot" }));
+
+    expect(sent.find(({ type }) => type === "snapshot")).toMatchObject({
+      supportsCaptionLanguage: true,
+    });
   });
 });

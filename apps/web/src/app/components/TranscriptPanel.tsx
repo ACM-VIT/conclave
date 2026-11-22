@@ -358,7 +358,7 @@ function StartStage({
         transcriptModel,
         qaModel,
         transportMode: "sfu" as const,
-        language,
+        language: transcript.supportsCaptionLanguage ? language : undefined,
       };
       const ok = needsTakeover
         ? await transcript.takeover(options)
@@ -470,24 +470,26 @@ function StartStage({
                 ? <div key={name}>{keyInput(name, textKeys[name] ?? "", value => setTextKey(name, value))}</div>
                 : available(name) ? <div key={name}>{covered(name)}</div> : null)}
             </fieldset>
-            <fieldset
-              disabled={isSubmitting}
-              className="space-y-2 border-t border-white/10 pt-4"
-            >
-              <label
-                htmlFor="captions-language-start"
-                className="block text-[12px] font-semibold text-[#fafafa]"
+            {transcript.supportsCaptionLanguage ? (
+              <fieldset
+                disabled={isSubmitting}
+                className="space-y-2 border-t border-white/10 pt-4"
               >
-                Meeting language
-              </label>
-              <CaptionLanguageSelect
-                id="captions-language-start"
-                value={language}
-                provider={provider}
-                onChange={setChosenLanguage}
-                className="h-10 w-full rounded-lg border border-white/10 bg-[#18181b] px-3 text-[12px] text-[#fafafa] outline-none focus:border-[#4F9CF9]/60"
-              />
-            </fieldset>
+                <label
+                  htmlFor="captions-language-start"
+                  className="block text-[12px] font-semibold text-[#fafafa]"
+                >
+                  Meeting language
+                </label>
+                <CaptionLanguageSelect
+                  id="captions-language-start"
+                  value={language}
+                  provider={provider}
+                  onChange={setChosenLanguage}
+                  className="h-10 w-full rounded-lg border border-white/10 bg-[#18181b] px-3 text-[12px] text-[#fafafa] outline-none focus:border-[#4F9CF9]/60"
+                />
+              </fieldset>
+            ) : null}
             <div className="space-y-2.5">
               <button
                 type="submit"

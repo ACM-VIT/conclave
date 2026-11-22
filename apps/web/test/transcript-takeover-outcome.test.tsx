@@ -148,3 +148,22 @@ describe("a live caption language switch", () => {
     expect(controller.session.language).toBe("hi");
   });
 });
+
+describe("caption language support", () => {
+  it("follows what the worker says it supports", async () => {
+    const socket = await mount();
+    await act(async () =>
+      socket.frame({ type: "snapshot", session: { ...liveSession, status: "idle" } }),
+    );
+    expect(controller.supportsCaptionLanguage).toBe(false);
+
+    await act(async () =>
+      socket.frame({
+        type: "snapshot",
+        session: { ...liveSession, status: "idle" },
+        supportsCaptionLanguage: true,
+      }),
+    );
+    expect(controller.supportsCaptionLanguage).toBe(true);
+  });
+});
