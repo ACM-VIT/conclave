@@ -1,9 +1,25 @@
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// Fails writes under one folder on demand, so a store write error needs no file permissions.
+const fsFailure = vi.hoisted(() => ({ under: "" }));
+
+vi.mock("node:fs", async (importOriginal) => {
+  const fs = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...fs,
+    writeFileSync: (...args: Parameters<typeof fs.writeFileSync>) => {
+      if (fsFailure.under && String(args[0]).startsWith(fsFailure.under)) {
+        throw Object.assign(new Error(`EIO: i/o error, write '${String(args[0])}'`), { code: "EIO" });
+      }
+      fs.writeFileSync(...args);
+    },
+  };
+});
 import { config } from "../config/config.js";
 import { getAdminAuditEntries } from "../server/admin/adminAudit.js";
 import { createSfuApp } from "../server/http/createApp.js";
@@ -147,11 +163,11 @@ describe("a rolling restart where the second SFU recovers records", () => {
     mkdirSync(join(stateDir, "json-store"));
     writeFileSync(join(stateDir, "json-store", "scheduling.json"), JSON.stringify({ profiles: [profile], availability: [], eventTypes: [], calendars: [] }));
     const sfu = await startSfu();
-    chmodSync(join(stateDir, "json-store"), 0o500);
+    fsFailure.under = join(stateDir, "json-store");
     try {
       expect((await sfu.call("POST", "/admin/reload-stores")).status).toBe(500);
     } finally {
-      chmodSync(join(stateDir, "json-store"), 0o700);
+      fsFailure.under = "";
     }
   });
 
