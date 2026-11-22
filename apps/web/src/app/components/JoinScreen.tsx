@@ -242,44 +242,57 @@ const warnJoinMedia = (event: string, payload?: unknown) => {
 
 type DeviceOption = { deviceId: string; label: string };
 
+const deviceLabel = (options: DeviceOption[], selectedId: string) =>
+  (options.find((option) => option.deviceId === selectedId) ?? options[0])?.label;
+
 function DeviceSelect({
   icon: Icon,
   value,
   options,
   onChange,
   ariaLabel,
+  placeholder,
 }: {
   icon: LucideIcon;
   value: string;
   options: DeviceOption[];
   onChange: (deviceId: string) => void;
   ariaLabel: string;
+  placeholder: string;
 }) {
+  const disabled = options.length === 0;
   return (
-    <div className="relative">
+    <div className="relative min-w-0">
       <Icon
         size={15}
         className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#fafafa]/45"
       />
       <select
         aria-label={ariaLabel}
-        value={value || options[0]?.deviceId || ""}
+        disabled={disabled}
+        value={disabled ? "" : value || options[0]?.deviceId || ""}
         onChange={(event) => onChange(event.target.value)}
-        className="h-10 w-full cursor-pointer appearance-none rounded-xl border border-white/10 bg-white/[0.03] pl-9 pr-9 text-[13px] text-[#fafafa] transition-colors duration-150 hover:bg-white/[0.05] focus:border-[#F95F4A]/60 focus:outline-none"
+        className="h-10 w-full cursor-pointer appearance-none truncate rounded-xl border border-white/10 bg-white/[0.03] pl-9 pr-8 text-[13px] text-[#fafafa] transition-colors duration-150 hover:bg-white/[0.05] focus:border-[#F95F4A]/60 focus:outline-none disabled:cursor-default disabled:text-[#fafafa]/40 disabled:hover:bg-white/[0.03]"
       >
-        {options.map((option) => (
-          <option
-            key={option.deviceId}
-            value={option.deviceId}
-            className="bg-[#18181b] text-[#fafafa]"
-          >
-            {option.label}
+        {disabled ? (
+          <option value="" className="bg-[#18181b] text-[#fafafa]">
+            {placeholder}
           </option>
-        ))}
+        ) : (
+          options.map((option) => (
+            <option
+              key={option.deviceId}
+              value={option.deviceId}
+              className="bg-[#18181b] text-[#fafafa]"
+            >
+              {option.label}
+            </option>
+          ))
+        )}
       </select>
       <ChevronDown
         size={15}
-        className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[#fafafa]/45"
+        className={`pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 ${disabled ? "text-[#fafafa]/20" : "text-[#fafafa]/45"}`}
       />
     </div>
   );
@@ -1282,10 +1295,6 @@ function JoinScreen({
           ? `${window.location.origin}/${presenceTarget}`
           : "";
   const linkCopy = useClipboardCopy(inviteLink);
-
-  const showVideoPicker = isCameraOn && videoInputs.length > 0;
-  const showAudioPicker = isMicOn && audioInputs.length > 0;
-  const showDevicePickers = showVideoPicker || showAudioPicker;
   const handleNameInputChange = (nextName: string) => {
     setGuestName(nextName);
     onDisplayNameInputChange(nextName);
@@ -1304,7 +1313,9 @@ function JoinScreen({
                   className={`absolute inset-0 h-full w-full -scale-x-100 object-cover ${isCameraOn ? "" : "hidden"}`}
                 />
                 {!isCameraOn && (
-                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-2.5 pb-14">
+                  <div
+                    className="absolute inset-0 flex flex-col items-center justify-center gap-2.5 pb-14 pt-12 sm:pt-0"
+                  >
                     <Avatar id={user?.id || previewName} name={previewName} size={76} />
                     <span className="text-[13.5px] text-[#fafafa]/45">Camera is off</span>
                   </div>
@@ -1486,28 +1497,32 @@ function JoinScreen({
                 </div>
               )}
 
-              {showDevicePickers && (
-                <div className="space-y-2">
-                  {showVideoPicker && (
-                    <DeviceSelect
-                      icon={Video}
-                      ariaLabel="Camera"
-                      value={selectedVideoId}
-                      options={videoInputs}
-                      onChange={handleSelectVideoDevice}
-                    />
-                  )}
-                  {showAudioPicker && (
-                    <DeviceSelect
-                      icon={Mic}
-                      ariaLabel="Microphone"
-                      value={selectedAudioId}
-                      options={audioInputs}
-                      onChange={handleSelectAudioDevice}
-                    />
-                  )}
-                </div>
-              )}
+              <div className="grid grid-cols-2 gap-2">
+                <DeviceSelect
+                  icon={isCameraOn ? Video : VideoOff}
+                  ariaLabel="Camera"
+                  value={selectedVideoId}
+                  options={isCameraOn ? videoInputs : []}
+                  placeholder={
+                    isCameraOn
+                      ? "Camera"
+                      : deviceLabel(videoInputs, selectedVideoId) ?? "Camera off"
+                  }
+                  onChange={handleSelectVideoDevice}
+                />
+                <DeviceSelect
+                  icon={isMicOn ? Mic : MicOff}
+                  ariaLabel="Microphone"
+                  value={selectedAudioId}
+                  options={isMicOn ? audioInputs : []}
+                  placeholder={
+                    isMicOn
+                      ? "Microphone"
+                      : deviceLabel(audioInputs, selectedAudioId) ?? "Mic off"
+                  }
+                  onChange={handleSelectAudioDevice}
+                />
+              </div>
 
               {!isRoutedRoom && (
                   <button
