@@ -1,16 +1,7 @@
 {
   "apps/conclave-skip/Sources/Conclave/Core/Networking/SfuEvents.swift": 1,
-  "apps/conclave-skip/Sources/Conclave/Core/Networking/TranscriptService.swift": 4,
-  "apps/conclave-skip/Sources/Conclave/DesignSystem/DesignTokens.swift": 1,
-  "apps/conclave-skip/Sources/Conclave/DesignSystem/iOS/Icons/ConclaveSymbols.swift": 1,
-  "apps/conclave-skip/Sources/Conclave/DesignSystem/iOS/Icons/NativeSymbolCatalog.swift": 1,
   "apps/conclave-skip/Sources/Conclave/Features/Meeting/MeetingViewModel.swift": 12,
-  "apps/conclave-skip/Sources/Conclave/Features/Meeting/Stage/StageFixtures.swift": 1,
-  "apps/conclave-skip/Sources/Conclave/Skip/ui/icons/NativeConvertedIconFixtures.kt": 1,
-  "apps/conclave-skip/Sources/Conclave/Skip/ui/icons/NativeIconCatalog.kt": 1,
   "packages/shared-browser/docker/start-video.sh": 1,
-  "packages/ui-tokens/scripts/gen-native-icons.py": 33,
-  "packages/ui-tokens/scripts/gen-native-icons.test.py": 27,
   "packages/ui-tokens/src/tokens.css": 8,
   "scripts/deploy-browser-service.sh": 1,
   "scripts/deploy-sfu.sh": 10

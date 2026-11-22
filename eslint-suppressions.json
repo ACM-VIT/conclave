@@ -684,16 +684,6 @@
       "count": 4
     }
   },
-  "packages/ui-tokens/scripts/gen-native-tokens.mjs": {
-    "conclave/no-comments": {
-      "count": 10
-    }
-  },
-  "packages/ui-tokens/scripts/gen-native-tokens.test.mjs": {
-    "conclave/no-comments": {
-      "count": 4
-    }
-  },
   "packages/ui-tokens/src/core/index.ts": {
     "conclave/no-comments": {
       "count": 10
