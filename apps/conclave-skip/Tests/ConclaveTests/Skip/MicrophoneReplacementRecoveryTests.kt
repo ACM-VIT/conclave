@@ -1,6 +1,14 @@
 package conclave.module
 
+import android.os.Looper
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.runBlocking
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
@@ -10,9 +18,12 @@ import org.junit.runner.RunWith
 import org.mediasoup.droid.Producer
 import org.mediasoup.droid.SendTransport
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.webrtc.AudioTrack
+import org.webrtc.FakeAudioPeerConnectionFactory
 import org.webrtc.MediaStreamTrack
+import org.webrtc.RtpParameters
 import sun.misc.Unsafe
 
 /**
@@ -40,6 +51,27 @@ class MicrophoneReplacementRecoveryTests {
 
     class FakeSendTransport : SendTransport(0L) {
         override fun isClosed(): Boolean = false
+    }
+
+    /** Records each microphone produce's codec options and holds the first acknowledgement until [firstAck] opens. */
+    class ProducingSendTransport : SendTransport(0L) {
+        var codecOptions: MutableList<String>? = null
+        var firstAck: CountDownLatch? = null
+        var makeProducer: ((Int) -> Producer)? = null
+        override fun isClosed(): Boolean = false
+        override fun produce(
+            listener: Producer.Listener?,
+            track: MediaStreamTrack?,
+            encodings: MutableList<RtpParameters.Encoding>?,
+            codecOptions: String?,
+            codec: String?,
+            appData: String?,
+        ): Producer {
+            val produced = this.codecOptions!!
+            produced.add(codecOptions ?: "")
+            if (produced.size == 1) firstAck!!.await(5, TimeUnit.SECONDS)
+            return makeProducer!!.invoke(produced.size)
+        }
     }
 
     class FakeTrack : AudioTrack(0L) {
@@ -130,6 +162,60 @@ class MicrophoneReplacementRecoveryTests {
         assertFalse(field("isCallAudioModeActive").getBoolean(call.media))
         assertFalse(call.media.consumeIntentionalLocalAudioProducerClose(call.old.id))
         assertSame(call.old, field("audioProducer").get(call.media))
+    }
+
+    private fun bitrate(codecOptions: String): Int = JSONObject(codecOptions).getInt("opusMaxAverageBitrate")
+
+    private fun pumpMainLooperUntil(condition: () -> Boolean) {
+        val deadline = System.currentTimeMillis() + 5_000
+        while (!condition() && System.currentTimeMillis() < deadline) {
+            shadowOf(Looper.getMainLooper()).idle()
+            Thread.sleep(5)
+        }
+    }
+
+    @Test
+    fun aBandwidthChangeDuringRouteRecoveryLeavesTheMicAtTheNewestBitrate() {
+        val call = liveCall()
+        val media = call.media
+        val transport = unsafe.allocateInstance(ProducingSendTransport::class.java) as ProducingSendTransport
+        val produced = CopyOnWriteArrayList<String>()
+        val firstAck = CountDownLatch(1)
+        transport.codecOptions = produced
+        transport.firstAck = firstAck
+        transport.makeProducer = { index ->
+            (unsafe.allocateInstance(FakeProducer::class.java) as FakeProducer).also { it.fakeId = "mic-${index + 1}" }
+        }
+        val factory = unsafe.allocateInstance(FakeAudioPeerConnectionFactory::class.java) as FakeAudioPeerConnectionFactory
+        factory.makeTrack = { unsafe.allocateInstance(FakeTrack::class.java) as FakeTrack }
+        field("sendTransport").set(media, transport)
+        field("sendTransportLane").set(media, call.lane)
+        field("socketManager").set(media, unsafe.allocateInstance(SocketIOManager::class.java))
+        field("peerConnectionFactory").set(media, factory)
+        field("isCallAudioModeActive").setBoolean(media, true)
+        field("audioRouteRecoveryScope").set(media, CoroutineScope(Dispatchers.Main.immediate + SupervisorJob()))
+        field("currentLocalBandwidthQuality").set(media, ConnectionQuality.good)
+        field("audioProducerBandwidthQuality").set(media, ConnectionQuality.good)
+
+        WebRTCClient::class.java.getDeclaredMethod("recreateLocalAudioProducerAfterRouteRecovery", String::class.java)
+            .apply { isAccessible = true }
+            .invoke(media, "route change")
+        pumpMainLooperUntil { produced.size == 1 }
+        assertEquals(1, produced.size)
+
+        field("currentLocalBandwidthQuality").set(media, ConnectionQuality.emergency)
+        runBlocking { media.refreshLocalAudioProducerForBandwidthProfile(ConnectionQuality.emergency) }
+        firstAck.countDown()
+        pumpMainLooperUntil {
+            produced.size == 2 && field("audioProducerBandwidthQuality").get(media) == ConnectionQuality.emergency
+        }
+
+        val emergency = LocalSenderPolicy.microphoneMaxAverageBitrateBps(ConnectionQuality.emergency)
+        assertTrue(emergency < LocalSenderPolicy.microphoneMaxAverageBitrateBps(ConnectionQuality.good))
+        assertEquals(LocalSenderPolicy.microphoneMaxAverageBitrateBps(ConnectionQuality.good), bitrate(produced.first()))
+        assertEquals(emergency, bitrate(produced.last()))
+        assertEquals(ConnectionQuality.emergency, field("audioProducerBandwidthQuality").get(media))
+        assertEquals("mic-3", (field("audioProducer").get(media) as Producer).id)
     }
 
     @Test

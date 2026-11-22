@@ -1803,6 +1803,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     }
     private var audioBandwidthRefreshInFlight = false
     private var audioProducerRouteRecoveryInFlight = false
+    private var pendingMicrophoneBandwidthQuality: ConnectionQuality? = null
     private var videoBandwidthRefreshInFlight = false
     private var screenBandwidthRefreshInFlight = false
     private var lastAppliedLocalBandwidthSignature: String? = null
@@ -2210,7 +2211,8 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             forceUnmuteMicrophoneCapture()
             audioTrack.setEnabled(true)
 
-            val producer = produceMicrophoneAudio(sendTransport, audioTrack)
+            val producedQuality = currentLocalBandwidthQuality
+            val producer = produceMicrophoneAudio(sendTransport, audioTrack, producedQuality)
             pendingProducer = producer
             ensureCurrentConfiguration(generation)
             if (
@@ -2235,7 +2237,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             producer.resume()
 
             audioProducer = producer
-            audioProducerBandwidthQuality = currentLocalBandwidthQuality
+            audioProducerBandwidthQuality = producedQuality
             localAudioEnabled = true
             localAudioTargetEnabled = true
             forceUnmuteMicrophoneCapture()
@@ -2264,6 +2266,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         } finally {
             if (generation == configurationGeneration) {
                 audioStartOrEnableInFlight = false
+                runPendingMicrophoneBandwidthRefresh()
             }
         }
     }
@@ -3151,6 +3154,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         } finally {
             if (enabled && generation == configurationGeneration) {
                 audioStartOrEnableInFlight = false
+                runPendingMicrophoneBandwidthRefresh()
             }
         }
     }
@@ -3601,12 +3605,14 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         return requireRegisteredProducer(producer, "webcam")
     }
 
+    /** Encodes for [bandwidthQuality]; the caller records that same quality on the producer it commits. */
     private suspend fun produceMicrophoneAudio(
         transport: SendTransport,
         track: AudioTrack,
+        bandwidthQuality: ConnectionQuality,
     ): Producer {
         val appData = encodeJSONString(ProducerAppData(type = ProducerType.webcam.rawValue, paused = false))
-        val codecOptions = microphoneOpusCodecOptionsJson()
+        val codecOptions = microphoneOpusCodecOptionsJson(bandwidthQuality)
 
         val producer = produceOnSendTransportLane(transport) {
             transport.produce(
@@ -3652,6 +3658,20 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     /** One microphone change at a time: a start, an enable, a bandwidth refresh or a route recovery. */
     private val isMicrophoneChangeInFlight: Boolean
         get() = audioStartOrEnableInFlight || audioBandwidthRefreshInFlight || audioProducerRouteRecoveryInFlight
+
+    /**
+     * A bandwidth refresh that arrived during another microphone change, which had already encoded for the older
+     * quality. The newest one runs once that change is done.
+     */
+    private fun runPendingMicrophoneBandwidthRefresh() {
+        val quality = pendingMicrophoneBandwidthQuality ?: return
+        if (isMicrophoneChangeInFlight) return
+        pendingMicrophoneBandwidthQuality = null
+        val generation = configurationGeneration
+        audioRouteRecoveryScope.launch(Dispatchers.Main) {
+            if (generation == configurationGeneration) refreshLocalAudioProducerForBandwidthProfile(quality)
+        }
+    }
 
     private fun markIntentionalLocalAudioProducerClose(producerId: String) {
         if (intentionalLocalAudioProducerCloseIds.size >= 32) {
@@ -3886,7 +3906,10 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     internal suspend fun refreshLocalAudioProducerForBandwidthProfile(
         connectionQuality: ConnectionQuality,
     ) {
-        if (isMicrophoneChangeInFlight) return
+        if (isMicrophoneChangeInFlight) {
+            pendingMicrophoneBandwidthQuality = connectionQuality
+            return
+        }
         if (!shouldRefreshAudioProducerForBandwidthProfile(connectionQuality)) return
 
         val socket = socketManager ?: return
@@ -3905,7 +3928,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             track.setEnabled(true)
             markIntentionalLocalAudioProducerClose(oldProducer.id)
             val nextProducer = try {
-                produceMicrophoneAudio(transport, track)
+                produceMicrophoneAudio(transport, track, connectionQuality)
             } catch (error: Throwable) {
                 handedToRecovery = settleFailedMicrophoneReplacement(oldProducer, generation)
                 throw error
@@ -3946,6 +3969,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 if (!localAudioEnabled && !handedToRecovery) {
                     callback?.invoke(false)
                 }
+                runPendingMicrophoneBandwidthRefresh()
             }
         }
     }
@@ -4410,12 +4434,12 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         )
     }
 
-    private fun microphoneOpusCodecOptionsJson(): String {
+    private fun microphoneOpusCodecOptionsJson(bandwidthQuality: ConnectionQuality): String {
         return JSONObject()
             .put("opusStereo", false)
             .put("opusFec", true)
             .put("opusDtx", true)
-            .put("opusMaxAverageBitrate", opusMaxAverageBitrate(currentLocalBandwidthQuality))
+            .put("opusMaxAverageBitrate", opusMaxAverageBitrate(bandwidthQuality))
             .put("opusPtime", 20)
             .toString()
     }
@@ -4912,6 +4936,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         screenProducerBandwidthSignature = null
         audioBandwidthRefreshInFlight = false
         audioProducerRouteRecoveryInFlight = false
+        pendingMicrophoneBandwidthQuality = null
         videoBandwidthRefreshInFlight = false
         screenBandwidthRefreshInFlight = false
         lastAppliedLocalBandwidthSignature = null
@@ -5477,8 +5502,9 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 track.setEnabled(true)
 
                 markIntentionalLocalAudioProducerClose(producerAtSchedule.id)
+                val producedQuality = currentLocalBandwidthQuality
                 val replacement = try {
-                    produceMicrophoneAudio(transport, track)
+                    produceMicrophoneAudio(transport, track, producedQuality)
                 } catch (error: Throwable) {
                     settleFailedMicrophoneReplacement(producerAtSchedule, generation)
                     throw error
@@ -5502,7 +5528,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 nextSource = null
                 nextTrack = null
                 nextProducer = null
-                commitMicrophoneReplacement(replacement, producerAtSchedule, currentLocalBandwidthQuality, muted)
+                commitMicrophoneReplacement(replacement, producerAtSchedule, producedQuality, muted)
 
                 if (muted) {
                     markMicrophoneProducerMuted(replacement.id, "route recovery")
@@ -5550,6 +5576,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 disposeAudioTrack(nextTrack)
                 disposeAudioSource(nextSource)
                 audioProducerRouteRecoveryInFlight = false
+                if (generation == configurationGeneration) runPendingMicrophoneBandwidthRefresh()
             }
         }
     }
