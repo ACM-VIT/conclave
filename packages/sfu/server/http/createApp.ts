@@ -22,7 +22,9 @@ import {
   clearAllRaisedHands,
   closeClientProducers,
   closeProducerById,
+  admitWaitingGuest,
   blockUserKey,
+  rejectWaitingGuest,
   kickClient,
   rejectAllPendingUsers,
   resolveRoom,
@@ -346,7 +348,7 @@ export const createSfuApp = ({
     room: Room,
   ): void => {
     io.to(room.channelId).emit("pendingUsersSnapshot", {
-      users: Array.from(room.pendingClients.values()).map((pending) => ({
+      users: room.waitingGuests().map((pending) => ({
         userId: pending.userKey,
         displayName: pending.displayName || pending.userKey,
       })),
@@ -1311,7 +1313,7 @@ export const createSfuApp = ({
     const refused: string[] = [];
 
     for (const userKey of userKeys) {
-      const pending = lookup.room.pendingClients.get(userKey);
+      const wasWaiting = admitWaitingGuest(lookup.room, userKey).length > 0;
       if (!lookup.room.allowUser(userKey)) {
         refused.push(userKey);
         continue;
@@ -1321,16 +1323,7 @@ export const createSfuApp = ({
         lookup.room.allowLockedUser(userKey);
       }
 
-      if (pending) {
-        pending.socket.emit("joinApproved", { roomId: lookup.room.id });
-        admitted.push(userKey);
-        for (const admin of lookup.room.getAdmins()) {
-          admin.socket.emit("userAdmitted", {
-            userId: userKey,
-            roomId: lookup.room.id,
-          });
-        }
-      }
+      if (wasWaiting) admitted.push(userKey);
     }
 
     emitPendingUsersSnapshot(io, lookup.room);
@@ -1627,23 +1620,9 @@ export const createSfuApp = ({
       return;
     }
 
-    const pending = lookup.room.pendingClients.get(userKey);
-    if (!pending) {
+    if (admitWaitingGuest(lookup.room, userKey).length === 0) {
       res.status(404).json({ error: "Pending user not found" });
       return;
-    }
-
-    if (lookup.room.isLocked) {
-      lookup.room.allowLockedUser(userKey);
-    }
-    lookup.room.allowUser(userKey);
-    pending.socket.emit("joinApproved", { roomId: lookup.room.id });
-
-    for (const admin of lookup.room.getAdmins()) {
-      admin.socket.emit("userAdmitted", {
-        userId: userKey,
-        roomId: lookup.room.id,
-      });
     }
 
     emitPendingUsersSnapshot(io, lookup.room);
@@ -1671,20 +1650,9 @@ export const createSfuApp = ({
       return;
     }
 
-    const pending = lookup.room.pendingClients.get(userKey);
-    if (!pending) {
+    if (rejectWaitingGuest(lookup.room, userKey).length === 0) {
       res.status(404).json({ error: "Pending user not found" });
       return;
-    }
-
-    lookup.room.removePendingClient(userKey);
-    pending.socket.emit("joinRejected", { roomId: lookup.room.id });
-
-    for (const admin of lookup.room.getAdmins()) {
-      admin.socket.emit("userRejected", {
-        userId: userKey,
-        roomId: lookup.room.id,
-      });
     }
 
     emitPendingUsersSnapshot(io, lookup.room);

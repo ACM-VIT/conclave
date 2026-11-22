@@ -4,6 +4,7 @@ import { config } from "../../../config/config.js";
 import type { AppsAwarenessData } from "../../../types.js";
 import { Logger } from "../../../utilities/loggers.js";
 import { cleanupRoom } from "../../rooms.js";
+import { withdrawWaitingRequest } from "../../admin/controlPlane.js";
 import {
   emitWebinarAttendeeCountChanged,
   emitWebinarFeedChanged,
@@ -116,9 +117,7 @@ export const registerDisconnectHandlers = (
               if (activeRoom.cleanupTimer) {
                 activeRoom.stopCleanupTimer();
               }
-              const pendingUsers = Array.from(
-                activeRoom.pendingClients.values(),
-              ).map((pending) => ({
+              const pendingUsers = activeRoom.waitingGuests().map((pending) => ({
                 userId: pending.userKey,
                 displayName: pending.displayName || pending.userKey,
               }));
@@ -257,13 +256,7 @@ export const registerDisconnectHandlers = (
       if (pendingRoom) {
         const pending = pendingRoom.pendingClients.get(context.pendingUserKey);
         if (pending?.socket?.id === socket.id) {
-          pendingRoom.removePendingClient(context.pendingUserKey);
-          for (const admin of pendingRoom.getAdmins()) {
-            admin.socket.emit("pendingUserLeft", {
-              userId: context.pendingUserKey,
-              roomId: context.pendingRoomId,
-            });
-          }
+          withdrawWaitingRequest(pendingRoom, context.pendingUserKey);
           if (pendingRoom.isEmpty()) {
             cleanupRoom(state, context.pendingRoomChannelId);
           }

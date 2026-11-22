@@ -185,6 +185,14 @@ const verifyInviteCodeHash = (
   return timingSafeEqual(expected, candidate);
 };
 
+/** One tab's request to be let into a room. */
+export type WaitingRequest = {
+  userKey: string;
+  userId: string;
+  socket: Socket;
+  displayName?: string;
+};
+
 export class Room {
   public readonly id: string;
   public readonly router: Router;
@@ -192,10 +200,7 @@ export class Room {
   public readonly workerPid: number | null;
   public readonly channelId: string;
   public clients: Map<string, Client> = new Map();
-  public pendingClients: Map<
-    string,
-    { userKey: string; userId: string; socket: Socket; displayName?: string }
-  > = new Map();
+  public pendingClients: Map<string, WaitingRequest> = new Map();
   public pendingDisconnects: Map<
     string,
     {
@@ -2915,6 +2920,35 @@ export class Room {
   unblockUser(userKey: string) {
     this.blockedUsers.delete(userKey);
     this.releaseGuestIdentity(userKey);
+  }
+
+  /**
+   * The requests to be let in of one guest, oldest first: that of `userKey`
+   * and those of the guest's other tabs.
+   */
+  waitingRequestsOfGuest(userKey: string): WaitingRequest[] {
+    const userKeys = new Set(this.identitiesOfSameGuest(userKey));
+    return [...this.pendingClients.values()].filter((request) =>
+      userKeys.has(request.userKey),
+    );
+  }
+
+  /**
+   * What hosts see in the lobby: one request per guest, the oldest one of
+   * each. A guest who waits in two tabs is one person to let in or turn
+   * away, the way an account in two tabs is.
+   */
+  waitingGuests(): WaitingRequest[] {
+    const shown: WaitingRequest[] = [];
+    const covered = new Set<string>();
+    for (const request of this.pendingClients.values()) {
+      if (covered.has(request.userKey)) continue;
+      shown.push(request);
+      for (const userKey of this.identitiesOfSameGuest(request.userKey)) {
+        covered.add(userKey);
+      }
+    }
+    return shown;
   }
 
   /**

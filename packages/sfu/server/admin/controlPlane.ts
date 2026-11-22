@@ -188,12 +188,10 @@ const handleAdminRemoved = (
       if (room.cleanupTimer) {
         room.stopCleanupTimer();
       }
-      const pendingUsers = Array.from(room.pendingClients.values()).map(
-        (pending) => ({
-          userId: pending.userKey,
-          displayName: pending.displayName || pending.userKey,
-        }),
-      );
+      const pendingUsers = room.waitingGuests().map((pending) => ({
+        userId: pending.userKey,
+        displayName: pending.displayName || pending.userKey,
+      }));
       promoted.socket.emit("pendingUsersSnapshot", {
         users: pendingUsers,
         roomId,
@@ -299,7 +297,7 @@ const toParticipantSnapshot = (
 };
 
 export const toPendingUserSnapshots = (room: Room): PendingUserSnapshot[] => {
-  return Array.from(room.pendingClients.values()).map((pending) => ({
+  return room.waitingGuests().map((pending) => ({
     userId: pending.userKey,
     participantUserId: pending.userId,
     userKey: pending.userKey,
@@ -849,6 +847,67 @@ export const applyRoomPolicyUpdate = (
   return { changed };
 };
 
+const tellHosts = (
+  room: Room,
+  event: "userAdmitted" | "userRejected" | "pendingUserLeft" | "userRequestedJoin",
+  request: { userKey: string; displayName?: string },
+): void => {
+  for (const admin of room.getAdmins()) {
+    admin.socket.emit(event, {
+      userId: request.userKey,
+      roomId: room.id,
+      ...(event === "userRequestedJoin"
+        ? { displayName: request.displayName || request.userKey }
+        : {}),
+    });
+  }
+};
+
+/**
+ * Lets in the guest behind `userKey`: every tab of that guest that waits.
+ * Hosts see one request per guest, so they are told once, under the key
+ * that request was shown with. Returns the keys that were let in.
+ */
+export const admitWaitingGuest = (room: Room, userKey: string): string[] => {
+  const requests = room.waitingRequestsOfGuest(userKey);
+  for (const request of requests) {
+    if (room.isLocked) {
+      room.allowLockedUser(request.userKey);
+    }
+    room.allowUser(request.userKey);
+    request.socket.emit("joinApproved", { roomId: room.id });
+  }
+  if (requests.length > 0) tellHosts(room, "userAdmitted", requests[0]);
+  return requests.map((request) => request.userKey);
+};
+
+/** Turns away the guest behind `userKey`: every tab of that guest that waits. */
+export const rejectWaitingGuest = (room: Room, userKey: string): string[] => {
+  const requests = room.waitingRequestsOfGuest(userKey);
+  for (const request of requests) {
+    room.removePendingClient(request.userKey);
+    request.socket.emit("joinRejected", { roomId: room.id });
+  }
+  if (requests.length > 0) tellHosts(room, "userRejected", requests[0]);
+  return requests.map((request) => request.userKey);
+};
+
+/**
+ * Takes back one tab's request, because the tab left or came back another
+ * way. When that request was the one hosts were shown and the guest still
+ * waits in another tab, hosts are shown that tab's request in its place.
+ */
+export const withdrawWaitingRequest = (room: Room, userKey: string): void => {
+  const requests = room.waitingRequestsOfGuest(userKey);
+  const wasShown = requests[0]?.userKey === userKey;
+  const withdrawn = room.pendingClients.get(userKey);
+  if (!withdrawn) return;
+  room.removePendingClient(userKey);
+  if (!wasShown) return;
+  tellHosts(room, "pendingUserLeft", withdrawn);
+  if (requests[1]) tellHosts(room, "userRequestedJoin", requests[1]);
+};
+
 export const admitAllPendingUsers = (
   room: Room,
 ): Array<{ userId: string; userKey: string }> => {
@@ -1044,13 +1103,7 @@ export const removeBlockedGuest = (
   options: { io: SocketIOServer; state: SfuState },
 ): void => {
   for (const userKey of userKeys) {
-    const waiting = room.pendingClients.get(userKey);
-    if (!waiting) continue;
-    waiting.socket.emit("joinRejected", { roomId: room.id });
-    room.removePendingClient(userKey);
-    for (const admin of room.getAdmins()) {
-      admin.socket.emit("userRejected", { userId: userKey, roomId: room.id });
-    }
+    rejectWaitingGuest(room, userKey);
   }
   for (const [userId, userKey] of Array.from(room.userKeysById.entries())) {
     if (userKeys.includes(userKey)) {

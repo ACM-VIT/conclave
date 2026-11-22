@@ -2,6 +2,7 @@ import { readAiEnvironment } from "@conclave/ai/models";
 import { parseGuestJoinClaims } from "@conclave/meeting-core/guest-join-claims";
 import { Admin } from "../../../config/classes/Admin.js";
 import { Client } from "../../../config/classes/Client.js";
+import type { Room } from "../../../config/classes/Room.js";
 import { config } from "../../../config/config.js";
 import type {
   AppsAwarenessData,
@@ -50,7 +51,10 @@ import {
   resolveScheduledWebinarAttendeeEntry,
 } from "../../scheduledWebinars.js";
 import { ensureWebinarRoomConfig } from "../../scheduledWebinarScheduler.js";
-import { removeBlockedGuest } from "../../admin/controlPlane.js";
+import {
+  removeBlockedGuest,
+  withdrawWaitingRequest,
+} from "../../admin/controlPlane.js";
 import { getSocketAuthUser } from "../auth.js";
 import type { ConnectionContext } from "../context.js";
 import { registerAdminHandlers } from "./adminHandlers.js";
@@ -86,6 +90,9 @@ const normalizeIdentifier = (
   }
   return normalized;
 };
+
+const isFirstRequestOfGuest = (room: Room, userKey: string): boolean =>
+  room.waitingRequestsOfGuest(userKey)[0]?.userKey === userKey;
 
 export const registerJoinRoomHandler = (context: ConnectionContext): void => {
   const { socket, io, state } = context;
@@ -506,13 +513,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           ) {
             continue;
           }
-          room.removePendingClient(seat.userKey);
-          for (const admin of room.getAdmins()) {
-            admin.socket.emit("pendingUserLeft", {
-              userId: seat.userKey,
-              roomId,
-            });
-          }
+          withdrawWaitingRequest(room, seat.userKey);
           waiting.socket.disconnect(true);
         }
         const existingClient = room.getClient(userId);
@@ -759,7 +760,11 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             roomId,
           });
 
-          const admins = room.getAdmins();
+          // Hosts are shown one request per guest. A second tab of a guest
+          // who already waits joins that request without a new knock.
+          const admins = isFirstRequestOfGuest(room, userKey)
+            ? room.getAdmins()
+            : [];
           for (const admin of admins) {
             admin.socket.emit("userRequestedJoin", {
               userId: userKey,
@@ -817,7 +822,9 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             });
           }
 
-          const admins = room.getAdmins();
+          const admins = isFirstRequestOfGuest(room, userKey)
+            ? room.getAdmins()
+            : [];
           for (const admin of admins) {
             admin.socket.emit("userRequestedJoin", {
               userId: userKey,
@@ -971,9 +978,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         });
 
         if (context.currentClient instanceof Admin && !context.currentClient.isObserver) {
-          const pendingUsers = Array.from(
-            context.currentRoom.pendingClients.values(),
-          ).map((pending) => ({
+          const pendingUsers = context.currentRoom.waitingGuests().map((pending) => ({
             userId: pending.userKey,
             displayName: pending.displayName || pending.userKey,
           }));

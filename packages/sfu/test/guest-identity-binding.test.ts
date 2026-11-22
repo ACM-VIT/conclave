@@ -2,7 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Router, Worker } from "mediasoup/types";
 import type { Server as SocketIOServer, Socket } from "socket.io";
 import { Admin } from "../config/classes/Admin.js";
-import { blockUserKey } from "../server/admin/controlPlane.js";
+import {
+  blockUserKey,
+  toPendingUserSnapshots,
+  withdrawWaitingRequest,
+} from "../server/admin/controlPlane.js";
 import type { Room } from "../config/classes/Room.js";
 import { LocalRoomRegistry } from "../server/roomRegistry.js";
 import type { SfuAuthPayload } from "../server/socket/auth.js";
@@ -1506,6 +1510,192 @@ describe("a guest who waits to be let in and comes back under another pass", () 
     await join(state, { ...underOtherPass, guestWas: [{ userKey: guest.userId, guestProof: "a-guess" }] });
 
     expect([...room.pendingClients.keys()].sort()).toEqual([guest.userId, underOtherPass.userId].sort());
+  });
+});
+
+describe("a guest who asks to be let in from more than one tab", () => {
+  const hostTab = { ...guestHost, guestRoom: "room" } satisfies SfuAuthPayload;
+  const guest = {
+    userId: "guest-gp_TTTTTTTTTTTTTTTTTTTTTT",
+    clientId: "conclave",
+    sessionId: "tab-7",
+    guestProof: "proof-of-pass-t",
+    guestRoom: "room",
+  } satisfies SfuAuthPayload;
+  const onTheSamePass = {
+    ...guest,
+    userId: "guest-gp_VVVVVVVVVVVVVVVVVVVVVV",
+    sessionId: "tab-8",
+  } satisfies SfuAuthPayload;
+  // The browser holds two passes. This tab goes by the other one, and its
+  // token names the seat it would hold under the first tab's pass.
+  const onALinkedPass = {
+    ...guest,
+    userId: "guest-gp_UUUUUUUUUUUUUUUUUUUUUU",
+    sessionId: "tab-9",
+    guestProof: "proof-of-the-other-pass",
+    guestWas: [{ userKey: "guest-gp_WWWWWWWWWWWWWWWWWWWWWW", guestProof: guest.guestProof }],
+  } satisfies SfuAuthPayload;
+  const stranger = {
+    ...guest,
+    userId: "guest-gp_XXXXXXXXXXXXXXXXXXXXXX",
+    sessionId: "tab-1",
+    guestProof: "proof-of-a-stranger",
+  } satisfies SfuAuthPayload;
+  const otherTabs: Array<[string, SfuAuthPayload & { userId: string }]> = [
+    ["two tabs on one pass", onTheSamePass],
+    ["two tabs on linked passes", onALinkedPass],
+  ];
+
+  type Joined = Awaited<ReturnType<typeof join>>;
+  const lockedRoom = async () => {
+    const state = makeState();
+    const host = await join(state, hostTab);
+    const room = state.rooms.get("conclave:room")!;
+    room.setLocked(true);
+    return { state, room, host };
+  };
+  const heard = (host: Joined, event: string) =>
+    host.peer.emit.mock.calls
+      .filter(([name]) => name === event)
+      .map(([, payload]) => (payload as { userId: string }).userId);
+  const hostAsks = async (host: Joined, event: string, payload: unknown) => {
+    const ack = vi.fn();
+    await host.peer.handlers.get(event)!(...([payload, ack] as never[]));
+    return ack;
+  };
+  const approved = ["joinApproved", { roomId: "room" }] as const;
+  const turnedAway = ["joinRejected", { roomId: "room" }] as const;
+
+  it.each(otherTabs)("shows the hosts one request for %s", async (_label, otherTab) => {
+    const { state, room, host } = await lockedRoom();
+
+    await join(state, guest);
+    await join(state, otherTab);
+    await join(state, stranger);
+
+    expect(heard(host, "userRequestedJoin")).toEqual([guest.userId, stranger.userId]);
+    expect(toPendingUserSnapshots(room).map((row) => row.userId)).toEqual([guest.userId, stranger.userId]);
+    expect(room.pendingClients.size).toBe(3);
+  });
+
+  it.each(otherTabs)("lets every tab in when a host admits the request, for %s", async (_label, otherTab) => {
+    const { state, room, host } = await lockedRoom();
+    const first = await join(state, guest);
+    const second = await join(state, otherTab);
+    const other = await join(state, stranger);
+
+    const answer = await hostAsks(host, "admitUser", { userId: guest.userId });
+
+    expect(answer).toHaveBeenCalledWith({ success: true });
+    expect(first.peer.emit).toHaveBeenCalledWith(...approved);
+    expect(second.peer.emit).toHaveBeenCalledWith(...approved);
+    expect(other.peer.emit).not.toHaveBeenCalledWith(...approved);
+    expect([...room.pendingClients.keys()]).toEqual([stranger.userId]);
+    expect(heard(host, "userAdmitted")).toEqual([guest.userId]);
+    expect((await join(state, guest)).ack).toHaveBeenCalledWith(joined);
+    expect((await join(state, otherTab)).ack).toHaveBeenCalledWith(joined);
+  });
+
+  it.each(otherTabs)("turns every tab away when a host denies the request, for %s", async (_label, otherTab) => {
+    const { state, room, host } = await lockedRoom();
+    const first = await join(state, guest);
+    const second = await join(state, otherTab);
+    const other = await join(state, stranger);
+
+    const answer = await hostAsks(host, "rejectUser", { userId: guest.userId });
+
+    expect(answer).toHaveBeenCalledWith({ success: true });
+    expect(first.peer.emit).toHaveBeenCalledWith(...turnedAway);
+    expect(second.peer.emit).toHaveBeenCalledWith(...turnedAway);
+    expect(other.peer.emit).not.toHaveBeenCalledWith(...turnedAway);
+    expect([...room.pendingClients.keys()]).toEqual([stranger.userId]);
+    expect(heard(host, "userRejected")).toEqual([guest.userId]);
+  });
+
+  it.each(otherTabs)("shows the hosts the other tab's request when the first tab gives up, for %s", async (_label, otherTab) => {
+    const { state, room, host } = await lockedRoom();
+    await join(state, guest);
+    await join(state, otherTab);
+
+    withdrawWaitingRequest(room, guest.userId);
+
+    expect(heard(host, "pendingUserLeft")).toEqual([guest.userId]);
+    expect(heard(host, "userRequestedJoin")).toEqual([guest.userId, otherTab.userId]);
+    expect(toPendingUserSnapshots(room).map((row) => row.userId)).toEqual([otherTab.userId]);
+  });
+
+  it("tells the hosts nothing when a tab whose request was not shown gives up", async () => {
+    const { state, room, host } = await lockedRoom();
+    await join(state, guest);
+    await join(state, onTheSamePass);
+
+    withdrawWaitingRequest(room, onTheSamePass.userId);
+
+    expect(heard(host, "pendingUserLeft")).toEqual([]);
+    expect(toPendingUserSnapshots(room).map((row) => row.userId)).toEqual([guest.userId]);
+  });
+
+  it("removes every waiting tab when a host blocks the request", async () => {
+    const { state, room, host } = await lockedRoom();
+    const first = await join(state, guest);
+    const second = await join(state, onALinkedPass);
+
+    blockUserKey(room, guest.userId, { reason: "Blocked by host", kickPresent: true, io, state });
+    const again = await join(state, onALinkedPass);
+
+    expect(first.peer.emit).toHaveBeenCalledWith(...turnedAway);
+    expect(second.peer.emit).toHaveBeenCalledWith(...turnedAway);
+    expect(room.pendingClients.size).toBe(0);
+    expect(again.ack).toHaveBeenCalledWith(
+      expect.objectContaining({ error: "You are not allowed to join this meeting." }),
+    );
+    expect(heard(host, "userRequestedJoin")).toEqual([guest.userId]);
+  });
+
+  it("lets every tab in through the call that admits a list of keys", async () => {
+    const { state, room, host } = await lockedRoom();
+    const first = await join(state, guest);
+    const second = await join(state, onTheSamePass);
+
+    const answer = await hostAsks(host, "admin:allowUsers", { userKeys: [guest.userId] });
+
+    expect(answer).toHaveBeenCalledWith(
+      expect.objectContaining({ success: true, admitted: [guest.userId] }),
+    );
+    expect(first.peer.emit).toHaveBeenCalledWith(...approved);
+    expect(second.peer.emit).toHaveBeenCalledWith(...approved);
+    expect(room.pendingClients.size).toBe(0);
+  });
+
+  it("treats two tabs of a client that names itself as one guest when they show one pass", async () => {
+    const { state, room, host } = await lockedRoom();
+    const older = (sessionId: string) =>
+      ({ userId: `guest-${sessionId}`, clientId: "conclave", sessionId, guestProof: "proof-of-the-older-pass" }) satisfies SfuAuthPayload;
+    const first = await join(state, older("older-tab-1"));
+    const second = await join(state, older("older-tab-2"));
+
+    await hostAsks(host, "admitUser", { userId: "guest-older-tab-1" });
+
+    expect(heard(host, "userRequestedJoin")).toEqual(["guest-older-tab-1"]);
+    expect(first.peer.emit).toHaveBeenCalledWith(...approved);
+    expect(second.peer.emit).toHaveBeenCalledWith(...approved);
+    expect(room.pendingClients.size).toBe(0);
+    expect((await join(state, older("older-tab-2"))).ack).toHaveBeenCalledWith(joined);
+  });
+
+  it("keeps a guest with no pass to one request per tab", async () => {
+    const { state, host } = await lockedRoom();
+    const noPass = (sessionId: string) =>
+      ({ userId: `guest-${sessionId}`, clientId: "conclave", sessionId }) satisfies SfuAuthPayload;
+    const first = await join(state, noPass("older-tab-1"));
+    const second = await join(state, noPass("older-tab-2"));
+
+    await hostAsks(host, "admitUser", { userId: "guest-older-tab-1" });
+
+    expect(heard(host, "userRequestedJoin")).toEqual(["guest-older-tab-1", "guest-older-tab-2"]);
+    expect(first.peer.emit).toHaveBeenCalledWith(...approved);
+    expect(second.peer.emit).not.toHaveBeenCalledWith(...approved);
   });
 });
 

@@ -12,7 +12,9 @@ import {
   closeClientProducers,
   closeProducerById,
   closeProducerForMediaKey,
+  admitWaitingGuest,
   blockUserKey,
+  rejectWaitingGuest,
   kickClient,
   rejectAllPendingUsers,
   toPendingUserSnapshots,
@@ -929,7 +931,10 @@ export const registerAdminHandlers = (
       const allowed: string[] = [];
       const refused: string[] = [];
       for (const userKey of userKeys) {
-        const pending = guard.room.pendingClients.get(userKey);
+        // Every waiting tab of the guest goes in first. A key that has
+        // anything waiting is one the room knows, so the admission below
+        // cannot then be refused.
+        const wasWaiting = admitWaitingGuest(guard.room, userKey).length > 0;
         if (!guard.room.allowUser(userKey)) {
           refused.push(userKey);
           continue;
@@ -938,16 +943,7 @@ export const registerAdminHandlers = (
         if (allowWhenLocked || guard.room.isLocked) {
           guard.room.allowLockedUser(userKey);
         }
-        if (pending) {
-          pending.socket.emit("joinApproved", { roomId: guard.room.id });
-          admitted.push(userKey);
-          for (const admin of guard.room.getAdmins()) {
-            admin.socket.emit("userAdmitted", {
-              userId: userKey,
-              roomId: guard.room.id,
-            });
-          }
-        }
+        if (wasWaiting) admitted.push(userKey);
       }
 
       io.to(guard.room.channelId).emit("pendingUsersSnapshot", {
@@ -1180,22 +1176,9 @@ export const registerAdminHandlers = (
       return;
     }
 
-    const pending = guard.room.pendingClients.get(normalizedTargetId);
-    if (pending) {
-      Logger.info(`Admin admitted user ${pending.userKey} to room ${options.roomId}`);
-      if (guard.room.isLocked) {
-        guard.room.allowLockedUser(pending.userKey);
-      }
-      guard.room.allowUser(pending.userKey);
-      pending.socket.emit("joinApproved", { roomId: guard.room.id });
-
-      for (const admin of guard.room.getAdmins()) {
-        admin.socket.emit("userAdmitted", {
-          userId: pending.userKey,
-          roomId: guard.room.id,
-        });
-      }
-
+    const admitted = admitWaitingGuest(guard.room, normalizedTargetId);
+    if (admitted.length > 0) {
+      Logger.info(`Admin admitted ${admitted.join(", ")} to room ${options.roomId}`);
       respond(cb, { success: true });
     } else {
       respond(cb, { error: "User not found in waiting room" });
@@ -1215,21 +1198,11 @@ export const registerAdminHandlers = (
       return;
     }
 
-    const pending = guard.room.pendingClients.get(normalizedTargetId);
-    if (pending) {
+    const rejected = rejectWaitingGuest(guard.room, normalizedTargetId);
+    if (rejected.length > 0) {
       Logger.info(
-        `Admin rejected user ${pending.userKey} from room ${options.roomId}`,
+        `Admin rejected ${rejected.join(", ")} from room ${options.roomId}`,
       );
-      guard.room.removePendingClient(pending.userKey);
-      pending.socket.emit("joinRejected", { roomId: guard.room.id });
-
-      for (const admin of guard.room.getAdmins()) {
-        admin.socket.emit("userRejected", {
-          userId: pending.userKey,
-          roomId: guard.room.id,
-        });
-      }
-
       respond(cb, { success: true });
     } else {
       respond(cb, { error: "User not found in waiting room" });
