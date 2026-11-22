@@ -344,8 +344,13 @@ has the numbers.
 - The loop takes WebRTC's `EglBase.lock` around make-current, swap and context
   creation, as WebRTC's own renderers, encoders and camera helper do. Some
   drivers deadlock between one thread's swap and another thread's context
-  creation, so the lock stays, and a stalled swap holds up every tile's swap
-  until it ends. Destroying its surface is what ends it.
+  creation, so the lock stays, and a stalled swap holds up every tile until
+  it ends. A swap waiting on its window ends when its surface is destroyed,
+  which `surfaceDestroyed` does within the shared wait. A swap stalled inside
+  the driver ends only when the driver returns, and every stage tile stays
+  frozen until then. Only a phone can show whether a driver does that. The
+  tests model the shared lock and a stall that ends on destroy
+  (`RecordingBackend(eglLock)`, `stallNextSwapUntilItsSurfaceIsDestroyed`).
 - A TextureView's SurfaceTexture may only be released after the EGL surface on
   it is gone, so `TextureVideoHost` keeps its listener after `release()` and
   hands a texture destroyed in between to the render thread's acknowledgement.
@@ -399,7 +404,12 @@ has the numbers.
     is never shown at the scale of the size before. The check runs again after
     the draw, because the window can be resized while a frame is drawn. A
     window that gives no buffer of its size for a second gets a warning in the
-    log, and frames are then drawn into what there is.
+    log, and frames are then drawn into what there is. That give-up belongs to
+    the size asked for (`BufferWait`), not to the surface: the next size the
+    window asks for is checked from the start again.
+  - A window's size belongs to that window. The renderer forgets it when the
+    window detaches, so a new window's first frame is not held to the size of
+    the one before.
 - Every loop counts its live EGL context and window surfaces. With
   `adb shell setprop log.tag.ConclavePerf DEBUG` each change is logged as
   `event video.gl contexts=N surfaces=M`, summed over all loops. Both are 0
