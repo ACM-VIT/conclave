@@ -42,7 +42,17 @@ A lifecycle flush is installed when telemetry starts, before the SDK
 downloads, and stays for the page's life. On `visibilitychange` to hidden, on
 `pagehide` and on `freeze`, everything still queued, and any batch waiting to
 retry, goes out at once by beacon, once, split to stay within the beacon
-limit; a batch in flight is left to finish. Held reports are built first:
+limit; a batch in flight is left to finish. The browser allows 64 KB across
+all of a page's outstanding beacons and keepalive requests, so the outbox
+counts them against one 56 KB budget: a batch goes by keepalive only while it
+fits, and at unload only what fits goes by beacon. A batch the budget cannot
+take, or the browser refuses, stays in local storage (at most 256 KB, already
+built by the outbound schema), and the next page load sends it before
+anything else; a batch leaves the outbox only once a send of it was accepted.
+Once the page has started to go away (hidden, `pagehide` or `freeze` seen),
+every later report, such as the call summary the call tracker sends as the
+page closes, goes out at once the same way, whatever state the SDK is in; so
+does a report marked immediate. Held reports are built first:
 through the SDK if it has loaded, with whatever manifest has loaded (none
 leaves chunk frames as `[path]`); before it has, as events we build ourselves
 from the outbound schema. Those carry the fields we can vouch

@@ -204,6 +204,63 @@ describe("batches", () => {
   });
 });
 
+describe("reports after the page started to go away", () => {
+  it("sends a call summary emitted after the pagehide flush at once, even when the SDK failed to load", async () => {
+    vi.doMock(EXTENSION, () => {
+      throw new Error("chunk failed to load");
+    });
+    const { telemetry, startTelemetry } = await import("../src/app/lib/telemetry");
+    startTelemetry();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // Telemetry's own listener runs first, then the call tracker reports.
+    window.dispatchEvent(new Event("pagehide"));
+    telemetry.capture(
+      "call_summary",
+      { call_id: "8d0f6a0e-3c1b-4b7e-9a51-2f6d1c0b9e11", join_mode: "meeting", end_reason: "page_closed", duration_ms: 26522 } as never,
+      { immediate: true },
+    );
+    telemetry.capture("meet_reconnect_give_up", { attempts: 8, failure_reason: "network", usingTurnFallback: false });
+
+    expect(await names(beacons())).toEqual(["call_summary", "meet_reconnect_give_up"]);
+  });
+
+  it("sends an immediate report at once while the page stays, whatever the SDK's state", async () => {
+    holdSdk();
+    const { telemetry } = await import("../src/app/lib/telemetry");
+    telemetry.capture(
+      "call_join",
+      { call_id: "8d0f6a0e-3c1b-4b7e-9a51-2f6d1c0b9e11", outcome: "abandoned", join_mode: "meeting", waited: false } as never,
+      { immediate: true },
+    );
+
+    expect(await names(beacons())).toEqual(["call_join"]);
+  });
+});
+
+describe("batches the browser will not take as the page goes away", () => {
+  it("keeps them for the next page load, which sends each of them once", async () => {
+    manifest = "missing";
+    const { telemetry, startTelemetry } = await import("../src/app/lib/telemetry");
+    startTelemetry();
+    await loaded();
+    telemetry.capture("meet_join_attempt", { joinMode: "meeting", isAdmin: false });
+    telemetry.capture("meet_join_success", { joinMode: "meeting", status: "joined" });
+    Object.defineProperty(navigator, "sendBeacon", { configurable: true, value: () => false });
+    window.dispatchEvent(new Event("pagehide"));
+    window.dispatchEvent(new Event("pageshow"));
+    expect(sent).toEqual([]);
+
+    vi.resetModules();
+    const nextLoad = await import("../src/app/lib/telemetry");
+    nextLoad.startTelemetry();
+    await vi.waitFor(() => expect(sent.filter((item) => item.via === "fetch")).toHaveLength(1));
+
+    expect(await names()).toEqual(["meet_join_attempt", "meet_join_success"]);
+    expect(localStorage.getItem("conclave:telemetry:spill")).toBeNull();
+  });
+});
+
 describe("reports for the whole life of the page", () => {
   it("sends an exception at once after startup, so a tab hidden and frozen right after loses nothing", async () => {
     manifest = "missing";

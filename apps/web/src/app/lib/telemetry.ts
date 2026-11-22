@@ -1,6 +1,7 @@
 "use client";
 
 import type { CaptureResult, PostHog } from "posthog-js";
+import { z } from "zod";
 import { installCallErrorCapture } from "./call-error-capture";
 import { randomUuid } from "./random-uuid";
 import { createOutbox, type Outbox, type OutboxEvent } from "./telemetry-outbox";
@@ -80,9 +81,45 @@ const sendForUnload = (build: () => void): void => {
 // Capped so a load that never finishes cannot grow the queue.
 const MAX_PENDING = 50;
 
-// pagehide until a pageshow brings the page back.
+// Batches a page going away could not send, kept for the next page load:
+// built events only, which the outbound schema already shaped. Capped, oldest
+// first out.
+const SPILL_KEY = "conclave:telemetry:spill";
+const MAX_SPILL_CHARS = 256 * 1024;
+const SpilledBodies = z.array(z.string().max(MAX_SPILL_CHARS));
+
+const readSpill = (): string[] => {
+  try {
+    const parsed = SpilledBodies.safeParse(JSON.parse(localStorage.getItem(SPILL_KEY) ?? "[]"));
+    return parsed.success ? parsed.data : [];
+  } catch {
+    return [];
+  }
+};
+
+const storageSpill = {
+  save(bodies: string[]): void {
+    const kept = [...readSpill(), ...bodies];
+    let chars = kept.reduce((total, body) => total + body.length, 0);
+    while (kept.length > 0 && chars > MAX_SPILL_CHARS) chars -= (kept.shift() as string).length;
+    try {
+      localStorage.setItem(SPILL_KEY, JSON.stringify(kept));
+    } catch {}
+  },
+  take(): string[] {
+    const bodies = readSpill();
+    try {
+      localStorage.removeItem(SPILL_KEY);
+    } catch {}
+    return bodies;
+  },
+};
+
+// The page has started to go away: pagehide until a pageshow brings it back,
+// freeze until it resumes, or hidden.
 let unloading = false;
-const leaving = (): boolean => unloading || document.visibilityState === "hidden";
+let frozen = false;
+const leaving = (): boolean => unloading || frozen || document.visibilityState === "hidden";
 
 // posthog-js merges local storage, then session storage, into every event.
 // Storage keeps only the SDK's own ids; anything else, such as a value a
@@ -175,7 +212,7 @@ const queueBuilt = (built: CaptureResult): void => {
     properties: built.properties,
     ...(timestamp instanceof Date ? { timestamp: timestamp.toISOString() } : typeof timestamp === "string" ? { timestamp } : {}),
   };
-  outbox?.add(event, { urgent: built.event === "$exception" && !buildingForUnload });
+  outbox?.add(event, { urgent: built.event === "$exception", deferred: buildingForUnload });
 };
 
 const storedDistinctId = (key: string): string | null => {
@@ -228,7 +265,7 @@ const queueWithoutSdk = (reports: Report[]): void => {
     );
     return built ? [{ ...built, timestamp: new Date().toISOString() }] : [];
   });
-  for (const event of batch) outbox?.add(event, { urgent: event.event === "$exception" && !buildingForUnload });
+  for (const event of batch) outbox?.add(event, { urgent: event.event === "$exception", deferred: buildingForUnload });
 };
 
 /**
@@ -267,6 +304,7 @@ const installLifecycleFlush = (): void => {
     { capture: true },
   );
   window.addEventListener("pageshow", () => (unloading = false), { capture: true });
+  document.addEventListener("resume", () => (frozen = false), { capture: true });
   document.addEventListener(
     "visibilitychange",
     () => {
@@ -274,7 +312,14 @@ const installLifecycleFlush = (): void => {
     },
     { capture: true },
   );
-  document.addEventListener("freeze", flushForLifecycle, { capture: true });
+  document.addEventListener(
+    "freeze",
+    () => {
+      frozen = true;
+      flushForLifecycle();
+    },
+    { capture: true },
+  );
 };
 
 const initPostHog = (client: PostHog, key: string): void => {
@@ -347,7 +392,9 @@ export function startTelemetry(): void {
         return false;
       }
     },
+    spill: storageSpill,
   });
+  outbox.sendSpilled();
   installLifecycleFlush();
   const manifestReady = manifestOrTimeout();
   void Promise.all([
@@ -372,17 +419,32 @@ export function startTelemetry(): void {
 
 const report = (next: Report): void => {
   if (!telemetryEnabled || typeof window === "undefined") return;
-  if (phase.name === "open") {
-    const { client } = phase;
-    if (leaving() || isImmediate(next)) sendForUnload(() => buildWithSdk(client, next));
-    else buildWithSdk(client, next);
-    return;
-  }
   startTelemetry();
-  if (phase.name === "failed") {
-    queueWithoutSdk([next]);
-  } else if ((phase.name === "loading" || phase.name === "holding") && phase.pending.length < MAX_PENDING) {
-    phase.pending.push(next);
+  // Once the page has started to go away, and for a report that must go now,
+  // nothing waits for a timer, the SDK or the manifest: it goes out at once
+  // by unload transport, whatever state telemetry is in.
+  const now = leaving() || isImmediate(next);
+  switch (phase.name) {
+    case "open": {
+      const { client } = phase;
+      if (now) sendForUnload(() => buildWithSdk(client, next));
+      else buildWithSdk(client, next);
+      return;
+    }
+    case "holding":
+      if (now || phase.pending.length < MAX_PENDING) phase.pending.push(next);
+      if (now) flushForLifecycle();
+      return;
+    case "loading":
+      if (now) sendForUnload(() => queueWithoutSdk([next]));
+      else if (phase.pending.length < MAX_PENDING) phase.pending.push(next);
+      return;
+    case "failed":
+      if (now) sendForUnload(() => queueWithoutSdk([next]));
+      else queueWithoutSdk([next]);
+      return;
+    case "idle":
+      return;
   }
 };
 

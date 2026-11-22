@@ -5,13 +5,29 @@ import {
   MAX_BATCH_BYTES,
   MAX_BATCH_EVENTS,
   type OutboxEvent,
+  UNLOAD_BUDGET_BYTES,
   URGENT_FLUSH_GAP_MS,
 } from "../src/app/lib/telemetry-outbox";
 
 const KEY = "phc_test_project";
 
 /** A clock, timers and transports the test drives by hand. */
-const harness = (answers: Array<number | "offline" | "pending"> = []) => {
+/** Storage the next page load reads, shared by the outboxes a test makes. */
+const spillStore = () => {
+  let saved: string[] = [];
+  return {
+    save: (bodies: string[]) => {
+      saved = [...saved, ...bodies];
+    },
+    take: () => saved.splice(0),
+    peek: () => [...saved],
+  };
+};
+
+const harness = (
+  answers: Array<number | "offline" | "pending"> = [],
+  spill: ReturnType<typeof spillStore> = spillStore(),
+) => {
   let now = 0;
   const timers: Array<{ at: number; fn: () => void; id: number }> = [];
   let ids = 0;
@@ -41,6 +57,7 @@ const harness = (answers: Array<number | "offline" | "pending"> = []) => {
       beacons.push(body);
       return true;
     },
+    spill,
   });
   const advance = async (ms: number) => {
     const until = now + ms;
@@ -142,19 +159,19 @@ describe("the telemetry outbox", () => {
     expect(h.uuidsIn(h.beacons)).toHaveLength(7);
   });
 
-  it("splits what goes by beacon to stay within the beacon limit", async () => {
-    const h = harness(Array.from({ length: 10 }, () => "pending" as const));
+  it("sends each event once, by post, beacon or the next page load, when posts are still in flight", async () => {
+    const spill = spillStore();
+    const h = harness(Array.from({ length: 10 }, () => "pending" as const), spill);
     const big = Math.floor(MAX_BATCH_BYTES / 2.5);
     // Queued faster than the cap sends them: each add past the cap starts a post that never answers.
     for (let i = 0; i < 6; i++) h.outbox.add(event("meet_join_attempt", big));
-    const posted = new Set(h.uuidsIn(h.posts.map((post) => post.body)));
+    const posted = h.uuidsIn(h.posts.map((post) => post.body));
     h.outbox.flushForUnload();
 
-    expect(h.beacons.length).toBeGreaterThanOrEqual(1);
     for (const body of h.beacons) expect(new TextEncoder().encode(body).byteLength).toBeLessThanOrEqual(MAX_BATCH_BYTES);
-    const beaconed = h.uuidsIn(h.beacons);
-    expect(beaconed.filter((uuid) => posted.has(uuid))).toEqual([]);
-    expect(new Set([...posted, ...beaconed]).size).toBe(6);
+    const all = [...posted, ...h.uuidsIn(h.beacons), ...h.uuidsIn(spill.peek())];
+    expect(all).toHaveLength(6);
+    expect(new Set(all).size).toBe(6);
   });
 
   it("retries a failed batch with the very same body, and never a delivered one", async () => {
@@ -207,12 +224,55 @@ describe("the telemetry outbox", () => {
     expect(h.uuidsIn(h.beacons)).toEqual([once.uuid]);
   });
 
-  it("sends by keepalive fetch what the browser will not take by beacon", async () => {
-    const h = harness();
+  it("keeps what the browser will not take by beacon for the next page load, and clears nothing it did not accept", async () => {
+    const spill = spillStore();
+    const h = harness([], spill);
     h.refuseBeacons();
-    h.outbox.add(event());
+    const kept = event();
+    h.outbox.add(kept);
     h.outbox.flushForUnload();
 
+    expect(h.posts).toEqual([]);
+    expect(h.uuidsIn(spill.peek())).toEqual([kept.uuid]);
+  });
+
+  it("sends only what fits one shared unload budget, keeps the rest, and the next load sends it once", async () => {
+    const spill = spillStore();
+    const h = harness([], spill);
+    // A page going away builds every held report at once: more than the
+    // browser's 64 KB allowance for beacons and keepalive requests together.
+    const big = 30 * 1024;
+    const queued = Array.from({ length: 4 }, () => event("meet_join_attempt", big));
+    for (const item of queued) h.outbox.add(item, { deferred: true });
+    expect(h.posts).toHaveLength(0);
+    h.outbox.flushForUnload();
+
+    const beaconBytes = h.beacons.reduce((total, body) => total + new TextEncoder().encode(body).byteLength, 0);
+    expect(beaconBytes).toBeLessThanOrEqual(UNLOAD_BUDGET_BYTES);
+    const beaconed = h.uuidsIn(h.beacons);
+    const spilled = h.uuidsIn(spill.peek());
+    expect(beaconed.length).toBeGreaterThan(0);
+    expect(spilled.length).toBeGreaterThan(0);
+    expect([...beaconed, ...spilled].sort()).toEqual(queued.map((item) => item.uuid).sort());
+
+    const nextLoad = harness([], spill);
+    nextLoad.outbox.sendSpilled();
+    await nextLoad.advance(0);
+    expect(nextLoad.uuidsIn(nextLoad.posts.map((post) => post.body)).sort()).toEqual(spilled.sort());
+    expect(spill.peek()).toEqual([]);
+  });
+
+  it("counts keepalive requests still in flight against the unload budget", async () => {
+    const spill = spillStore();
+    const h = harness(["pending"], spill);
+    for (let i = 0; i < 2; i++) h.outbox.add(event("meet_join_attempt", 20 * 1024));
+    await h.advance(FLUSH_INTERVAL_MS);
     expect(h.posts).toEqual([expect.objectContaining({ keepalive: true })]);
+    const late = event("meet_join_attempt", 20 * 1024);
+    h.outbox.add(late);
+    h.outbox.flushForUnload();
+
+    expect(h.beacons).toEqual([]);
+    expect(h.uuidsIn(spill.peek())).toEqual([late.uuid]);
   });
 });

@@ -144,13 +144,15 @@ describe("what each event carries", () => {
   // Merges the stores under the payload the way posthog-js does, then runs the
   // configured before_send, which the SDK calls inside capture.
   // What /ingest is sent for an event the SDK builds: before_send puts it in
-  // the outbox, and a frozen page sends the outbox at once. With no beacon,
-  // that is a keepalive fetch, whose body this reads back.
+  // the outbox, which posts an exception at once; a frozen page sends the
+  // rest at once, and with the beacon refused keeps it for the next page
+  // load. This finds the event by its uuid in whichever it went.
   const sendThroughSdk = (event: string, payload: Record<string, unknown>): SentEvent => {
     const [, config] = posthog.init.mock.calls[0] as [string, { before_send: (event: SentEvent) => SentEvent | null }];
+    const uuid = `0196f0a1-0000-7000-8000-${String(++built).padStart(12, "0")}`;
     expect(
       config.before_send({
-        uuid: `0196f0a1-0000-7000-8000-${String(++built).padStart(12, "0")}`,
+        uuid,
         event,
         properties: {
           $os: "Mac OS X",
@@ -162,12 +164,16 @@ describe("what each event carries", () => {
       } as SentEvent),
     ).toBeNull();
     document.dispatchEvent(new Event("freeze"));
-    const posts = (fetch as unknown as { mock: { calls: Array<[unknown, RequestInit?]> } }).mock.calls.filter(([url]) =>
-      String(url).includes("/ingest/e/"),
+    document.dispatchEvent(new Event("resume"));
+    const kept = JSON.parse(localStorage.getItem("conclave:telemetry:spill") ?? "[]") as string[];
+    localStorage.removeItem("conclave:telemetry:spill");
+    const posted = (fetch as unknown as { mock: { calls: Array<[unknown, RequestInit?]> } }).mock.calls
+      .filter(([url]) => String(url).includes("/ingest/e/"))
+      .map(([, init]) => String(init?.body));
+    const events = [...posted, ...kept].flatMap(
+      (body) => (JSON.parse(body) as { batch: Array<SentEvent & { uuid: string }> }).batch,
     );
-    const last = posts.at(-1)?.[1]?.body;
-    const batch = (JSON.parse(String(last)) as { batch: SentEvent[] }).batch;
-    return batch.at(-1) as SentEvent;
+    return events.find((sent) => sent.uuid === uuid) as SentEvent;
   };
 
   it("reports a meeting panel that fails to render, through before_send", async () => {
