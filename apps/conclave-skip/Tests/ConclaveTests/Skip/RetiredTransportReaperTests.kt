@@ -136,6 +136,35 @@ class RetiredTransportReaperTests {
     }
 
     @Test
+    fun aLeaveThatAbortsThePendingAckStillDisposesOnlyAfterTheLaneClosedTheTransport() = runBlocking {
+        val lane = SendTransportLane("ReaperLeaveAbortsAck")
+        val ack = CountDownLatch(1)
+        val sessionEnded = CountDownLatch(1)
+        val produce = async(start = CoroutineStart.UNDISPATCHED) {
+            lane.run {
+                while (ack.count > 0 && sessionEnded.count > 0) Thread.sleep(2)
+                events.add(if (sessionEnded.count == 0L) "produce aborted" else "produce acknowledged")
+            }
+        }
+        lane.post { events.add("close microphone") }
+
+        sessionEnded.countDown()
+        reaper.retireAfter(lane, "send transport and device") { events.add("close send transport") }
+        produce.await()
+        val deadline = System.currentTimeMillis() + 5_000
+        while (!lane.isIdle && System.currentTimeMillis() < deadline) Thread.sleep(5)
+        assertTrue("the send lane never drained", lane.isIdle)
+        assertEquals(listOf("produce aborted", "close microphone", "close send transport"), events.toList())
+
+        reaper.disposeIfIdle()
+        assertEquals(emptyList<String>(), disposed())
+
+        shadowOf(Looper.getMainLooper()).idle()
+        reaper.disposeIfIdle()
+        assertEquals(listOf("dispose send transport and device"), disposed())
+    }
+
+    @Test
     fun aLaneThatIsAlreadyRetiredStillClosesAndDisposesItsTransport() {
         val lane = SendTransportLane("ReaperRetiredLane")
         lane.retire {}
