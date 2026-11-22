@@ -307,8 +307,6 @@ const readingOf = (
   ].join("|");
 
 type SharedList = { entries: WebinarQaEntry[]; roomId: string; sockets: string[] };
-/** A connection's own questions, said after the list it shares with others. */
-type OwnEntries = { feed: Feed; entries: WebinarQaEntry[] };
 type SharedChange = { payload: WebinarQaChangedNotification; sockets: string[] };
 
 /**
@@ -323,8 +321,13 @@ type SharedChange = { payload: WebinarQaChangedNotification; sockets: string[] }
  * A changed question reads the same for nearly everyone, so its event is
  * built and encoded once for each distinct reading and written to all the
  * sockets that share it. A whole list is shared the same way: it holds the
- * questions as anyone of that role reads them, and a connection's own
- * questions, which name it as the asker, follow as changes of its own.
+ * questions as anyone of that role reads them. A connection's own
+ * questions name it as the asker, so they follow as changes of its own,
+ * from the next turn on, after the list has gone.
+ *
+ * Every change said counts against one budget for the turn, own questions
+ * included. A connection whose changes run past it keeps its place and is
+ * told the rest first on the next turn.
  *
  * A question is said to a connection only when its reading differs from the
  * one that connection was last sent, so one that changes again while it
@@ -338,8 +341,11 @@ const say = (authority: RoomAuthority, room: RoomFeeds): void => {
   let lists = 0;
   const changes = new Map<string, SharedChange>();
   const sharedLists = new Map<string, SharedList>();
-  const ownAfterList: OwnEntries[] = [];
   const emptied = new Map<string, string[]>();
+  /** Feeds sent a list this turn whose own questions follow next turn. */
+  const followUps: Feed[] = [];
+  /** A feed whose changes ran past the budget, to go first next turn. */
+  let carried: Feed | null = null;
 
   for (const feed of room.waiting) {
     if (events >= LEGACY_QA_SENDS_PER_TURN || lists >= LEGACY_QA_LISTS_PER_TURN) {
@@ -421,21 +427,14 @@ const say = (authority: RoomAuthority, room: RoomFeeds): void => {
       // The list is the questions as anyone of this role reads them, so it
       // is one list for nearly everyone.
       const shared = [...view.keys("questions")];
-      const asks = view.size("myQuestions") > 0;
       const said = new Map<string, string>();
       const saved = new Set<string>();
       const readings: string[] = [];
       for (const id of shared) {
         const alike = readingOf(feed, view, id, false);
         readings.push(alike);
-        said.set(id, asks ? readingOf(feed, view, id) : alike);
+        said.set(id, alike);
         if (view.get("myUpvotes", id) !== undefined) saved.add(id);
-      }
-      if (asks) {
-        // One of their own that is still waiting for a host is in no list.
-        for (const id of view.keys("myQuestions")) {
-          if (!said.has(id) && sees(view, id)) said.set(id, readingOf(feed, view, id));
-        }
       }
       feed.said = said;
       feed.saved = saved;
@@ -453,19 +452,25 @@ const say = (authority: RoomAuthority, room: RoomFeeds): void => {
         });
       }
       // Their own questions name them as the asker, and one still waiting
-      // for a host is in no shared list. Those follow, each as a change.
-      if (asks) {
-        ownAfterList.push({
-          feed,
-          entries: [...view.keys("myQuestions")]
-            .map((id) => entryOf(feed, room, view, id))
-            .filter((entry): entry is WebinarQaEntry => entry !== null),
-        });
+      // for a host is in no shared list. Each the list did not say as they
+      // read it follows as a change, once the list has gone, under the same
+      // budget as every other change. Only their questions the book still
+      // holds and shows them are in their view, so this is bounded too.
+      for (const id of view.keys("myQuestions")) {
+        if (sees(view, id) && said.get(id) !== readingOf(feed, view, id)) {
+          feed.pending.add(id);
+        }
       }
+      if (feed.pending.size > 0) followUps.push(feed);
       continue;
     }
 
     for (const id of feed.pending) {
+      if (events >= LEGACY_QA_SENDS_PER_TURN) {
+        carried = feed;
+        break;
+      }
+      feed.pending.delete(id);
       if (!sees(view, id)) {
         if (!feed.said.delete(id)) continue;
         events += 1;
@@ -501,7 +506,6 @@ const say = (authority: RoomAuthority, room: RoomFeeds): void => {
         });
       }
     }
-    feed.pending.clear();
   }
 
   // Local: the sockets are all on this server, where the room is.
@@ -518,18 +522,12 @@ const say = (authority: RoomAuthority, room: RoomFeeds): void => {
       entries,
     } satisfies WebinarQaSnapshot);
   }
-  for (const { feed, entries } of ownAfterList) {
-    for (const entry of entries) {
-      feed.context.socket.emit("webinar:qaChanged", {
-        roomId: feed.roomId,
-        entry,
-      } satisfies WebinarQaChangedNotification);
-    }
-  }
   for (const { payload, sockets } of changes.values()) {
     local.to(sockets).emit("webinar:qaChanged", payload);
   }
 
+  if (carried) room.waiting = new Set([carried, ...room.waiting]);
+  for (const feed of followUps) room.waiting.add(feed);
   if (room.waiting.size === 0) return;
   room.scheduled = true;
   setImmediate(() => say(authority, room));

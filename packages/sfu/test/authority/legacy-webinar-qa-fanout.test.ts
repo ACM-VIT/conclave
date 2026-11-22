@@ -549,4 +549,71 @@ describe("telling a webinar of old clients about a change", () => {
     expect(voter.entries.size).toBe(QA_MAX_ENTRIES);
     expect([...voter.entries.values()].every((entry) => entry.hasUpvoted === true)).toBe(true);
   }, 60_000);
+
+  it("sends a person's own questions after a whole list within the turn's budget, each once to each connection", async () => {
+    const room = new Harness([pollsAuthority, qaAuthority]);
+    room.setWebinar(true);
+    const hostTab = await room.open(host, qaContract);
+    // One person on many old connections, who has asked many questions.
+    const vik = person("vik@example.com", "Vik", "attendee");
+    const connections: ReturnType<typeof listen>[] = [];
+    for (let index = 0; index < 30; index += 1) {
+      connections.push(listen(await room.open(vik, pollsContract, { session: `v${index}` })));
+    }
+    const asked = 100;
+    const ids: string[] = [];
+    for (let index = 0; index < asked; index += 1) {
+      const reply = legacyQaSubmit(room.authority, connections[0].tab.context, `Question ${index}?`);
+      if (!("id" in reply)) throw new Error(`ask failed: ${JSON.stringify(reply)}`);
+      ids.push(reply.id);
+      const answered = legacyQaModerate(room.authority, hostTab.context, { id: reply.id, action: "answered" });
+      if (!("success" in answered)) throw new Error(`answer failed: ${JSON.stringify(answered)}`);
+      // One person may ask a question every ten seconds.
+      vi.setSystemTime(Date.now() + 10_000);
+    }
+    await room.deliver();
+    await room.drain();
+    // The host turns webinar mode off and on: every connection is owed a
+    // whole list.
+    room.setWebinar(false);
+    await room.advance(50);
+    await room.drain();
+    const changedBefore = sent(room, "webinar:qaChanged").writes;
+    const listedBefore = sent(room, "webinar:qaSnapshot").writes;
+
+    room.setWebinar(true, true);
+    room.authority.flushNow();
+    // The flush's own turn, with its microtasks, then one turn at a time.
+    await Promise.resolve();
+    await Promise.resolve();
+    const changedPerTurn: number[] = [];
+    const listedPerTurn: number[] = [];
+    let changed = changedBefore;
+    let listed = listedBefore;
+    for (let turn = 0; turn < 60; turn += 1) {
+      const nowChanged = sent(room, "webinar:qaChanged").writes;
+      const nowListed = sent(room, "webinar:qaSnapshot").writes;
+      changedPerTurn.push(nowChanged - changed);
+      listedPerTurn.push(nowListed - listed);
+      changed = nowChanged;
+      listed = nowListed;
+      await vi.advanceTimersToNextTimerAsync();
+    }
+    await room.drain();
+
+    // Every connection got one list, then its own questions naming it as
+    // the asker, each once.
+    expect(sent(room, "webinar:qaSnapshot").writes - listedBefore).toBe(connections.length);
+    expect(sent(room, "webinar:qaChanged").writes - changedBefore).toBe(connections.length * asked);
+    expect(Math.max(...changedPerTurn)).toBeLessThanOrEqual(LEGACY_QA_SENDS_PER_TURN);
+    expect(Math.max(...listedPerTurn)).toBeLessThanOrEqual(LEGACY_QA_LISTS_PER_TURN);
+    expect(
+      connections.every(
+        (connection) =>
+          connection.entries.size === asked &&
+          ids.every((id) => connection.entries.get(id)?.userId === connection.tab.seat.id),
+      ),
+    ).toBe(true);
+  }, 60_000);
 });
+
