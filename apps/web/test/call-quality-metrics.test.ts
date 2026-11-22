@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createCallMetricsTracker,
+  FAST_SAMPLE_MS,
   parseCallStats,
   STEADY_SAMPLE_MS,
   type CallMetricEvent,
@@ -97,12 +98,27 @@ describe("call_join", () => {
           failure_reason: null,
           join_ms: 9000,
           waited: true,
-          waiting_ms: 8500,
+          waiting_ms: 8000,
           join_mode: "meeting",
           prior_failed_attempts: 0,
         },
       },
     ]);
+  });
+
+  it("stops the waiting clock when the host lets the user in", () => {
+    const { state, named } = setup();
+
+    state("connecting", 0);
+    state("waiting", 500);
+    state("joining", 1500);
+    state("joined", 11_500);
+
+    expect(named("call_join")[0].props).toMatchObject({
+      waited: true,
+      waiting_ms: 1000,
+      join_ms: 11_500,
+    });
   });
 
   it("classifies failures and counts the retries before a success", () => {
@@ -190,6 +206,38 @@ describe("call_first_media", () => {
         },
       },
     ]);
+  });
+
+  it("times remote media that arrives before the join finishes", () => {
+    const { tracker, state, named } = setup();
+    tracker.onParticipants(2, 0);
+
+    state("connecting", 0);
+    state("joining", 400);
+    expect(tracker.nextSampleDelayMs(500)).toBe(FAST_SAMPLE_MS);
+    tracker.onStats(sample([audio(), video()]), 2750);
+    tracker.onStats(
+      sample([
+        audio({ packetsReceived: 40 }),
+        video({ bytesReceived: 30_000, framesDecoded: 20 }),
+      ]),
+      3000,
+    );
+    state("joined", 12_500);
+    tracker.onStats(
+      sample([
+        audio({ packetsReceived: 500 }),
+        video({ bytesReceived: 900_000, framesDecoded: 300 }),
+      ]),
+      12_750,
+    );
+
+    expect(named("call_first_media")[0].props).toMatchObject({
+      first_remote_audio_ms: 3000,
+      first_remote_video_ms: 3000,
+      join_ms: 12_500,
+      timed_out: false,
+    });
   });
 
   it("reports missing video after the deadline instead of waiting forever", () => {

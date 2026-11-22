@@ -120,6 +120,11 @@ type Attempt = {
   startedAt: number;
   joinMode: JoinMode;
   waitingSince: number | null;
+  /** When the host let the user in; setup after that is not waiting. */
+  waitingEndedAt: number | null;
+  /** Remote media can start flowing while the join is still finishing. */
+  firstAudioAt: number | null;
+  firstVideoAt: number | null;
 };
 
 type MediaTotals = {
@@ -150,8 +155,6 @@ type Call = Attempt & {
   reconnectLongestMs: number;
   peakParticipants: number;
   remotePresentAt: number | null;
-  firstAudioAt: number | null;
-  firstVideoAt: number | null;
   firstMediaReported: boolean;
   /** When each direction was last read; a failed read leaves it in place. */
   lastInboundAt: number | null;
@@ -211,6 +214,29 @@ const percent = (part: number, whole: number): number | null =>
 const sinceStart = (call: Call, at: number | null): number | null =>
   at === null ? null : roundMs(at - call.startedAt);
 
+const waitedMs = (attempt: Attempt, at: number): number | null =>
+  attempt.waitingSince === null
+    ? null
+    : roundMs((attempt.waitingEndedAt ?? at) - attempt.waitingSince);
+
+const isWaiting = (attempt: Attempt): boolean =>
+  attempt.waitingSince !== null && attempt.waitingEndedAt === null;
+
+const noteFirstMedia = (
+  media: Pick<Attempt, "firstAudioAt" | "firstVideoAt">,
+  inbound: InboundStreamStats[],
+  at: number,
+) => {
+  for (const stream of inbound) {
+    if (stream.kind === "audio" && media.firstAudioAt === null && stream.packetsReceived > 0) {
+      media.firstAudioAt = at;
+    }
+    if (stream.kind === "video" && media.firstVideoAt === null && stream.framesDecoded > 0) {
+      media.firstVideoAt = at;
+    }
+  }
+};
+
 const mostCommonHeight = (heightMs: Map<number, number>): number | null => {
   let best: number | null = null;
   let bestMs = 0;
@@ -249,8 +275,7 @@ export function createCallMetricsTracker({
         failure_reason: extra.failureReason ?? null,
         join_ms: roundMs(at - attempt.startedAt),
         waited: attempt.waitingSince !== null,
-        waiting_ms:
-          attempt.waitingSince === null ? null : roundMs(at - attempt.waitingSince),
+        waiting_ms: waitedMs(attempt, at),
         join_mode: attempt.joinMode,
         prior_failed_attempts: failedAttempts,
       },
@@ -337,7 +362,7 @@ export function createCallMetricsTracker({
   const startCall = (attempt: Attempt, at: number): Call => ({
     ...attempt,
     joinedAt: at,
-    waitingMs: attempt.waitingSince === null ? null : at - attempt.waitingSince,
+    waitingMs: waitedMs(attempt, at),
     reconnectingSince: null,
     stuckSince: null,
     reconnectCount: 0,
@@ -345,8 +370,6 @@ export function createCallMetricsTracker({
     reconnectLongestMs: 0,
     peakParticipants: participants,
     remotePresentAt: participants > 1 ? at : null,
-    firstAudioAt: null,
-    firstVideoAt: null,
     firstMediaReported: false,
     lastInboundAt: null,
     lastOutboundAt: null,
@@ -397,14 +420,7 @@ export function createCallMetricsTracker({
     call: Call,
     stream: InboundStreamStats,
     dt: number | null,
-    at: number,
   ) => {
-    if (stream.kind === "audio" && call.firstAudioAt === null && stream.packetsReceived > 0) {
-      call.firstAudioAt = at;
-    }
-    if (stream.kind === "video" && call.firstVideoAt === null && stream.framesDecoded > 0) {
-      call.firstVideoAt = at;
-    }
     const previous = call.streams.get(stream.id);
     const stalled =
       dt === null
@@ -492,6 +508,9 @@ export function createCallMetricsTracker({
             startedAt: at,
             joinMode,
             waitingSince: state === "waiting" ? at : null,
+            waitingEndedAt: null,
+            firstAudioAt: null,
+            firstVideoAt: null,
           },
         };
         return;
@@ -499,9 +518,12 @@ export function createCallMetricsTracker({
 
       if (phase.name === "joining") {
         const { attempt } = phase;
-        if (state === "waiting" && attempt.waitingSince === null) {
-          attempt.waitingSince = at;
-        } else if (state === "joined") {
+        if (state === "waiting") {
+          attempt.waitingSince ??= at;
+        } else if (attempt.waitingSince !== null) {
+          attempt.waitingEndedAt ??= at;
+        }
+        if (state === "joined") {
           emitJoin(attempt, "joined", at);
           failedAttempts = 0;
           phase = { name: "in_call", call: startCall(attempt, at) };
@@ -556,12 +578,17 @@ export function createCallMetricsTracker({
     },
 
     onStats(sample, at) {
+      if (phase.name === "joining") {
+        if (sample.inbound) noteFirstMedia(phase.attempt, sample.inbound, at);
+        return;
+      }
       if (phase.name !== "in_call") return;
       const { call } = phase;
       if (sample.inbound) {
+        noteFirstMedia(call, sample.inbound, at);
         const dt = measuredInterval(call, call.lastInboundAt, at);
         call.lastInboundAt = at;
-        sample.inbound.forEach((stream) => foldInbound(call, stream, dt, at));
+        sample.inbound.forEach((stream) => foldInbound(call, stream, dt));
       }
       if (sample.outboundVideo) {
         const dt = measuredInterval(call, call.lastOutboundAt, at);
@@ -581,6 +608,9 @@ export function createCallMetricsTracker({
     },
 
     nextSampleDelayMs(at) {
+      if (phase.name === "joining") {
+        return isWaiting(phase.attempt) ? null : FAST_SAMPLE_MS;
+      }
       if (phase.name !== "in_call") return null;
       const { call } = phase;
       const waitingForFirstMedia =

@@ -42,9 +42,10 @@ Each tab sends at most one `call_join` per join attempt, one `call_first_media`
 and one `call_summary` per call, whatever the room size. `call_id` is a random
 id per attempt that ties the three together. Times are milliseconds; "from the
 click" means from the moment the join started (`connecting`). Stats are sampled
-from the receive transport and the camera producer every 250 ms from joining
-until first media arrives, then every 5 s, so first-media times are stamped at
-the first sample that shows them. A gap of more than 15 s between readable
+from the receive transport and the camera producer every 250 ms from the join
+click (except in the waiting room) until first media arrives, then every 5 s, so
+first-media times are stamped at the first sample that shows them, even when
+media arrives before the join finishes. A gap of more than 15 s between readable
 samples, and any time the call sits in an error, is left out of every total.
 
 ### `call_join`
@@ -54,7 +55,7 @@ samples, and any time the call sits in an error, is left out of every total.
 | `outcome` | `joined`, `failed`, or `abandoned` (left or closed the tab before getting in) |
 | `failure_reason` | `rejected`, `invite_code`, `room_not_found`, `room_unavailable`, `auth`, `timeout`, `permission_denied`, `media_error`, `transport_error`, `connection_failed`, `unknown`; null unless failed |
 | `join_ms` | Click to outcome |
-| `waited`, `waiting_ms` | Whether the waiting room held the user, and for how long |
+| `waited`, `waiting_ms` | Whether the waiting room held the user, and for how long, up to the moment the host let them in |
 | `join_mode` | `meeting` or `webinar_attendee` |
 | `prior_failed_attempts` | Failed attempts in this tab since the last successful join |
 

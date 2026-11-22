@@ -38,6 +38,19 @@ const fakeConsumerTransport = () => ({
   }),
 });
 
+// Remote media that starts flowing at `startsAt` ms on the fake clock.
+const fakeLateConsumerTransport = (startsAt: number) => ({
+  id: "recv",
+  closed: false,
+  getStats: vi.fn(async () => {
+    const flowing = Math.max(0, performance.now() - startsAt);
+    return report([
+      { type: "inbound-rtp", id: "IA", kind: "audio", packetsReceived: Math.round(flowing / 20), totalSamplesReceived: Math.round(flowing * 48), concealedSamples: 0 },
+      { type: "inbound-rtp", id: "IV", kind: "video", packetsReceived: Math.round(flowing / 10), bytesReceived: Math.round(flowing * 100), framesDecoded: Math.round(flowing / 33), freezeCount: 0, totalFreezesDuration: 0 },
+    ]);
+  }),
+});
+
 const fakeCameraProducer = () => ({
   id: "camera-1",
   closed: false,
@@ -55,8 +68,7 @@ type HarnessProps = {
 
 let root: Root | null = null;
 
-const mount = () => {
-  const consumer = fakeConsumerTransport();
+const mount = (consumer: ReturnType<typeof fakeConsumerTransport> = fakeConsumerTransport()) => {
   const camera = fakeCameraProducer();
   const consumerTransportRef = { current: consumer } as unknown as MutableRefObject<Transport | null>;
   const cameraProducerRef = { current: camera } as unknown as MutableRefObject<Producer | null>;
@@ -121,6 +133,24 @@ describe("useCallQualityMetrics", () => {
       outbound_video_height: 720,
       outbound_video_kbps: 800,
     });
+  });
+
+  it("times remote media that arrives while the join is still finishing", async () => {
+    const startedAt = performance.now();
+    const { render } = mount(fakeLateConsumerTransport(startedAt + 3000));
+    await render({ state: "connecting" });
+    await vi.advanceTimersByTimeAsync(400);
+    await render({ state: "joining" });
+    await vi.advanceTimersByTimeAsync(12_100);
+    await render({ state: "joined" });
+    await vi.advanceTimersByTimeAsync(1000);
+
+    const firstMedia = telemetryMock.capture.mock.calls.find(
+      ([name]) => name === "call_first_media",
+    )?.[1] as { first_remote_audio_ms: number; join_ms: number } | undefined;
+    expect(firstMedia?.join_ms).toBeGreaterThanOrEqual(12_500);
+    expect(firstMedia?.first_remote_audio_ms).toBeGreaterThan(3000);
+    expect(firstMedia?.first_remote_audio_ms).toBeLessThanOrEqual(3500);
   });
 
   it("reads no stats while telemetry is off", async () => {
