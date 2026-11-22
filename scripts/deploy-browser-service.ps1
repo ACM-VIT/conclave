@@ -48,14 +48,19 @@ function Import-DotEnv {
 }
 
 $buildRuntimeImage = $true
+$checkConfigOnly = $false
 foreach ($arg in $args) {
   switch ($arg) {
     "--skip-runtime-image" {
       $buildRuntimeImage = $false
       continue
     }
+    "--check-config" {
+      $checkConfigOnly = $true
+      continue
+    }
     default {
-      Exit-WithError "Unknown argument: $arg`nUsage: .\deploy-browser-service.ps1 [--skip-runtime-image]"
+      Exit-WithError "Unknown argument: $arg`nUsage: .\deploy-browser-service.ps1 [--skip-runtime-image] [--check-config]"
     }
   }
 }
@@ -75,8 +80,17 @@ if (Test-Path -Path $envFile -PathType Leaf) {
 }
 $composeArgs += @("-f", $composeFile)
 
-if ([string]::IsNullOrWhiteSpace($env:BROWSER_SERVICE_TOKEN) -or $env:BROWSER_SERVICE_TOKEN.Length -lt 32) {
-  Exit-WithError "BROWSER_SERVICE_TOKEN must be set to a random value of at least 32 characters (openssl rand -hex 32).`nSet the same value on every SFU that uses this service."
+# The rules the service applies at startup (packages/shared-browser/src/serviceSecurity.ts),
+# checked before anything is built or replaced.
+$browserServiceToken = if ($null -ne $env:BROWSER_SERVICE_TOKEN) { $env:BROWSER_SERVICE_TOKEN } else { "" }
+$distinctTokenCharacters = [System.Collections.Generic.HashSet[char]]::new([char[]]$browserServiceToken).Count
+if ($browserServiceToken.Length -lt 32 -or $distinctTokenCharacters -lt 8 -or $browserServiceToken -cnotmatch '^[\x21-\x7E]+$') {
+  Exit-WithError "BROWSER_SERVICE_TOKEN must be a random value of at least 32 visible ASCII characters, with no spaces (openssl rand -hex 32).`nSet the same value on every SFU that uses this service."
+}
+
+if ($checkConfigOnly) {
+  Write-Host "Shared browser service configuration is valid."
+  exit 0
 }
 
 $runtimeImageName = if (-not [string]::IsNullOrWhiteSpace($env:BROWSER_IMAGE_NAME)) {
@@ -124,9 +138,32 @@ $browserHostAddress = if (-not [string]::IsNullOrWhiteSpace($env:BROWSER_HOST_AD
   "localhost"
 }
 
+$healthHost = if ($browserServiceHost.Contains(":")) { "[$browserServiceHost]" } else { $browserServiceHost }
+$healthUrl = "http://${healthHost}:$browserServicePort/health"
+
+# `up -d` returns once the container starts, before the service has checked
+# its configuration, so wait for the API to answer.
+Write-Host "Waiting for $healthUrl..."
+$healthy = $false
+for ($attempt = 0; $attempt -lt 60; $attempt++) {
+  try {
+    $response = Invoke-WebRequest -Uri $healthUrl -UseBasicParsing -TimeoutSec 3
+    if ($response.StatusCode -eq 200) {
+      $healthy = $true
+      break
+    }
+  } catch {
+    # Not listening yet.
+  }
+  Start-Sleep -Seconds 2
+}
+if (-not $healthy) {
+  Exit-WithError "The shared browser service did not become healthy at $healthUrl.`nSee: docker compose -f $composeFile logs browser-service"
+}
+
 Write-Host ""
 Write-Host "Shared browser service deployed."
-Write-Host "Control API: http://${browserServiceHost}:$browserServicePort/health"
+Write-Host "Control API: $healthUrl"
 Write-Host "noVNC ports: $novncPortStart-$novncPortEnd"
 
 if ([string]::IsNullOrWhiteSpace($env:BROWSER_PUBLIC_BASE_URL) -and ($browserHostAddress -eq "localhost")) {

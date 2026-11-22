@@ -5,15 +5,19 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${ROOT_DIR}/.env"
 COMPOSE_FILE="${ROOT_DIR}/docker-compose.browser.yml"
 BUILD_RUNTIME_IMAGE="true"
+CHECK_CONFIG_ONLY="false"
 
 for arg in "$@"; do
   case "$arg" in
     --skip-runtime-image)
       BUILD_RUNTIME_IMAGE="false"
       ;;
+    --check-config)
+      CHECK_CONFIG_ONLY="true"
+      ;;
     *)
       echo "Unknown argument: ${arg}" >&2
-      echo "Usage: $0 [--skip-runtime-image]" >&2
+      echo "Usage: $0 [--skip-runtime-image] [--check-config]" >&2
       exit 1
       ;;
   esac
@@ -34,11 +38,20 @@ else
   COMPOSE=(docker compose -f "$COMPOSE_FILE")
 fi
 
+# The rules the service applies at startup (packages/shared-browser/src/serviceSecurity.ts),
+# checked before anything is built or replaced.
 BROWSER_SERVICE_TOKEN="${BROWSER_SERVICE_TOKEN:-}"
-if (( ${#BROWSER_SERVICE_TOKEN} < 32 )); then
-  echo "BROWSER_SERVICE_TOKEN must be set to a random value of at least 32 characters (openssl rand -hex 32)." >&2
+token_distinct_characters="$(printf '%s\n' "$BROWSER_SERVICE_TOKEN" | LC_ALL=C fold -w1 | LC_ALL=C sort -u | wc -l)"
+if (( $(printf '%s' "$BROWSER_SERVICE_TOKEN" | LC_ALL=C wc -c) < 32 || token_distinct_characters < 8 )) ||
+  (LC_ALL=C; [[ "$BROWSER_SERVICE_TOKEN" == *[^!-~]* ]]); then
+  echo "BROWSER_SERVICE_TOKEN must be a random value of at least 32 visible ASCII characters, with no spaces (openssl rand -hex 32)." >&2
   echo "Set the same value on every SFU that uses this service." >&2
   exit 1
+fi
+
+if [[ "$CHECK_CONFIG_ONLY" == "true" ]]; then
+  echo "Shared browser service configuration is valid."
+  exit 0
 fi
 
 BROWSER_PROVIDER="${BROWSER_PROVIDER:-chromium}"
@@ -63,9 +76,30 @@ fi
 echo "Deploying shared browser service..."
 "${COMPOSE[@]}" up -d --build browser-service
 
+SERVICE_HOST="${BROWSER_SERVICE_HOST:-127.0.0.1}"
+[[ "$SERVICE_HOST" == *:* ]] && SERVICE_HOST="[${SERVICE_HOST}]"
+HEALTH_URL="http://${SERVICE_HOST}:${BROWSER_SERVICE_PORT:-3040}/health"
+
+# `up -d` returns once the container starts, before the service has checked
+# its configuration, so wait for the API to answer.
+echo "Waiting for ${HEALTH_URL}..."
+healthy="false"
+for _ in $(seq 1 60); do
+  if curl -fsS --max-time 3 -o /dev/null "$HEALTH_URL" 2>/dev/null; then
+    healthy="true"
+    break
+  fi
+  sleep 2
+done
+if [[ "$healthy" != "true" ]]; then
+  echo "The shared browser service did not become healthy at ${HEALTH_URL}." >&2
+  echo "See: docker compose -f ${COMPOSE_FILE} logs browser-service" >&2
+  exit 1
+fi
+
 echo ""
 echo "Shared browser service deployed."
-echo "Control API: http://${BROWSER_SERVICE_HOST:-127.0.0.1}:${BROWSER_SERVICE_PORT:-3040}/health"
+echo "Control API: ${HEALTH_URL}"
 echo "Provider: ${BROWSER_PROVIDER}"
 if [[ "$BROWSER_PROVIDER" == "chromium" ]]; then
   echo "noVNC ports: ${NOVNC_PORT_START:-6080}-${NOVNC_PORT_END:-6100}"
