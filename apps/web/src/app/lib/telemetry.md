@@ -83,7 +83,7 @@ closes. Errors between reconnect attempts never end a call; one call id spans ev
 | `duration_ms` | Joined to end |
 | `peak_participants` | Largest roster, including the local user |
 | `first_remote_audio_ms`, `first_remote_video_ms` | As above |
-| `reconnect_count`, `reconnect_total_ms`, `reconnect_longest_ms` | Times the call left `joined` mid-call, and how long it took to get back |
+| `reconnect_count`, `reconnect_total_ms`, `reconnect_longest_ms` | Times the connection dropped mid-call, timed from the drop (the start of the reconnect loop, even in a hidden tab whose UI stays `joined`) until it was back |
 | `reconnect_unrecovered` | The call ended while still reconnecting |
 | `remote_video_ms` | Time remote video was arriving, summed over streams, in 5 s sample steps. Divide freeze and stall time by it for a rate |
 | `video_freeze_count`, `video_freeze_ms` | The browser's `freezeCount` and `totalFreezesDuration` over all remote video |

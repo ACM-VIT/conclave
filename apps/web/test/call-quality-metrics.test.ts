@@ -581,6 +581,44 @@ describe("call_summary", () => {
     });
   });
 
+  it("counts a background reconnect while the UI stays joined", () => {
+    const { state, named } = setup();
+    state("connecting", 0);
+    state("joined", 1000);
+    // A hidden tab reconnects without leaving joined; only the socket says so.
+    state("joined", 5000, null, false, true);
+    state("joined", 9000);
+    state("disconnected", 20_000);
+
+    expect(named("call_summary")[0].props).toMatchObject({
+      end_reason: "left",
+      reconnect_count: 1,
+      reconnect_total_ms: 4000,
+      reconnect_unrecovered: false,
+    });
+  });
+
+  it.each([
+    ["in the background", "joined"],
+    ["in the foreground", "reconnecting"],
+  ] as const)("reports a pagehide during the first backoff %s as an abandoned reconnect", (_where, uiState) => {
+    const { state, tracker, named } = setup();
+    state("connecting", 0);
+    state("joined", 1000);
+    state(uiState, 5000, null, false, true);
+    tracker.onPageHidden(8000);
+
+    expect(named("call_summary")[0]).toMatchObject({
+      immediate: true,
+      props: {
+        end_reason: "reconnect_abandoned",
+        reconnect_count: 1,
+        reconnect_total_ms: 3000,
+        reconnect_unrecovered: true,
+      },
+    });
+  });
+
   it("sends the summary the moment reconnecting gives up", () => {
     const { state, named, events } = setup();
     state("connecting", 0);

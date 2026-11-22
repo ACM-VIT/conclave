@@ -547,7 +547,10 @@ export function createCallMetricsTracker({
       }
 
       const { call } = phase;
-      if (state === "joined") {
+      // A hidden tab reconnects without leaving joined, so the socket's own
+      // signal starts the clock too, at the drop and before the first backoff.
+      const backInCall = state === "joined" && !reconnecting;
+      if (backInCall) {
         if (call.reconnectingSince !== null) {
           const lasted = at - call.reconnectingSince;
           call.reconnectCount += 1;
