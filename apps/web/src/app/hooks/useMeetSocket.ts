@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createCoalescedRunner } from "../lib/coalesced-run";
 import { createProducerSlotOrder } from "../lib/producer-slot-order";
 import { toError } from "../lib/utils";
 import type { Socket } from "socket.io-client";
@@ -1156,6 +1157,7 @@ export function useMeetSocket({
   const pendingScreenProducerCloseIdsRef = useRef<Set<string>>(new Set());
   const screenShareRepublishPromiseRef = useRef<Promise<boolean> | null>(null);
   const [producerSlotOrder] = useState(createProducerSlotOrder);
+  const [coalesceProducerSync] = useState(createCoalescedRunner);
   const consumeProducerRef = useRef<
     (producerInfo: ProducerInfo, options?: ConsumeProducerOptions) => Promise<void>
   >(async () => {});
@@ -6024,7 +6026,7 @@ export function useMeetSocket({
     videoFreezeStatsRef,
   ]);
 
-  const syncProducers = useCallback(async () => {
+  const runProducerSync = useCallback(async () => {
     const socket = socketRef.current;
     const device = deviceRef.current;
     if (!socket || !socket.connected || !device) return;
@@ -6032,20 +6034,26 @@ export function useMeetSocket({
 
     try {
       const listRequestedAt = producerSlotOrder.markListRequested();
-      const producers = await new Promise<ProducerInfo[]>((resolve, reject) => {
-        socket.emit(
-          "getProducers",
-          (response: { producers: ProducerInfo[] } | { error: string }) => {
-            if ("error" in response) {
-              reject(new Error(response.error));
-            } else {
-              const listedProducers = response.producers || [];
-              noteRemoteProducerList(listedProducers, listRequestedAt);
-              resolve(listedProducers);
-            }
-          },
-        );
-      });
+      const producers = await new Promise<ProducerInfo[] | null>(
+        (resolve, reject) => {
+          emitWithAckTimeout(
+            socket,
+            ACK_REQUEST_TIMEOUT_MS,
+            () => resolve(null),
+            "getProducers",
+            (response: { producers: ProducerInfo[] } | { error: string }) => {
+              if ("error" in response) {
+                reject(new Error(response.error));
+              } else {
+                const listedProducers = response.producers || [];
+                noteRemoteProducerList(listedProducers, listRequestedAt);
+                resolve(listedProducers);
+              }
+            },
+          );
+        },
+      );
+      if (!producers) return;
 
       const serverProducerIds = new Set(
         producers.map((producer) => producer.producerId),
@@ -6234,6 +6242,10 @@ export function useMeetSocket({
     videoFreezeStatsRef,
     announcedRemoteProducersRef,
   ]);
+  const syncProducers = useCallback(
+    () => coalesceProducerSync(runProducerSync),
+    [coalesceProducerSync, runProducerSync],
+  );
   syncProducersRef.current = syncProducers;
 
   const applyDisplayNameSnapshot = useCallback(
