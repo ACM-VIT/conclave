@@ -1662,8 +1662,20 @@ export class TranscriptRoom {
       endSequence: this.sequence,
       deadline: setTimeout(() => void this.finishProviderDrain(drain), drainMs),
     };
+    // Every commit still owed takes its place in commit order, including
+    // lines already on screen, which move to their new place.
     for (const itemId of drain.unfinalizedItems) {
-      if (!drain.partials.has(itemId)) this.reserveDrainedSegment(drain, itemId);
+      const partial = drain.partials.get(itemId);
+      if (!partial) {
+        this.reserveDrainedSegment(drain, itemId);
+        continue;
+      }
+      const placed = { ...partial, sequence: this.nextDrainedSequence(drain) };
+      drain.partials.set(itemId, placed);
+      this.broadcast({
+        type: "segment.delta",
+        delta: this.toSegmentDelta(placed, "", placed.updatedAt),
+      });
     }
     this.providerDrains.set(epoch, drain);
     this.transcriptionSession = null;
@@ -1739,14 +1751,17 @@ export class TranscriptRoom {
    * text yet, in commit order, so speech from before the switch stays ahead
    * of the new provider's and in the order it was spoken.
    */
+  private nextDrainedSequence(drain: ProviderDrain): number {
+    return drain.nextSequence < drain.endSequence
+      ? drain.nextSequence++
+      : this.sequence++;
+  }
+
   private reserveDrainedSegment(
     drain: ProviderDrain,
     itemId: string,
   ): TranscriptSegment {
-    const sequence =
-      drain.nextSequence < drain.endSequence
-        ? drain.nextSequence++
-        : this.sequence++;
+    const sequence = this.nextDrainedSequence(drain);
     const segment = this.createSegment(
       itemId,
       drain.speakers.getItemSpeaker(itemId) ??

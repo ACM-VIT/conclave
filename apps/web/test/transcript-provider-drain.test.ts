@@ -446,6 +446,31 @@ describe("drain cases reproduced across review rounds", () => {
     expect(before.closed).toBe(true);
   });
 
+  it("keeps commit order when only the later commit had a partial before the switch", async () => {
+    vi.useFakeTimers();
+    const { sockets, start, switchTo, speak, commit, savedTexts, lastSnapshotTexts } = await fixture(OPENAI);
+    await start("en");
+    const before = sockets[0];
+    await speak();
+    await commit();
+    before.emit(openAiCommitted("first"));
+    await speak();
+    await commit();
+    before.emit(openAiCommitted("second"));
+    before.emit(openAiDelta("second", "Second"));
+    await settle();
+
+    await switchTo("hi");
+    before.emit(openAiDelta("first", "First"));
+    await settle();
+    expect(lastSnapshotTexts()).toEqual(["First", "Second"]);
+    before.emit(openAiFinal("second", "Second."));
+    before.emit(openAiFinal("first", "First."));
+    await settle();
+
+    expect(savedTexts()).toEqual(["First.", "Second."]);
+  });
+
   it("orders reverse-arriving finals across three switches and closes every old socket", async () => {
     vi.useFakeTimers();
     const { sockets, start, switchTo, speak, commit, stop, savedTexts } = await fixture(OPENAI);
