@@ -62,7 +62,7 @@ Each table declares its own row cap. Per-action rates are declared by the module
 
 ## Turning it on
 
-Set `SFU_APPS_AUTHORITY_ENABLED=1` on the SFU. With it off no authority event has a listener, so the SFU behaves like one that predates the runtime: a client's capability request goes unanswered and it hides every authority app.
+Set `SFU_APPS_AUTHORITY_ENABLED=1` on the SFU. With it off no authority event has a listener, so the SFU behaves like one that predates the runtime: a client's capability request goes unanswered and it opens no authority app. The web client then lists Polls and meeting Q&A in the Apps panel switched off, each with "Needs a server update", so their absence is explained.
 
 The switch is read once, when the SFU process starts. Changing it needs a restart of the SFU, and there is no live toggle. A process that is already running keeps the mode it started with for every room it holds, so during a rolling deploy the rooms on the old process stay as they were until they move or end.
 
@@ -97,7 +97,10 @@ A signed-in person votes, asks and upvotes once per account across tabs and rejo
 Released web and native clients send `webinar:qa:submit`, `webinar:qa:upvote` and `webinar:qa:moderate`, and are sent `webinar:qaSnapshot` and `webinar:qaChanged`. In a room that runs the Q&A app those events are an adapter over the app's book (`server/apps/authority/legacyWebinarQa.ts` in the SFU), so an old client and a new one see the same questions:
 
 - A joining connection is followed as the app would follow it and is sent the old snapshot and change events. The adapter holds no questions and no visibility rule of its own.
-- When a client asks for capabilities it speaks the new transport, and the old feed for that connection stops.
+- A connection is fed the old events for as long as it does not read Q&A itself. Once it holds its own subscription to the app the feed rests, and it starts again with a whole list when that subscription ends. Asking for capabilities changes nothing: the answer may reach a client after it has given up waiting and fallen back to the old events.
+- A changed question is one `webinar:qaChanged` for each connection, as the old wire has it. The event is built and encoded once for everyone it reads the same for, which is everyone of a role who neither asked nor upvoted the question, and the sockets are written 2,000 events a turn. A question that changes again while a connection waits is said once, as it stands.
+- The old upvote is a toggle. It runs the app's `toggleUpvote` action, and the reply carries the count that one transaction made.
+- The native app up to build 63 saves the questions it upvoted and shows that over what a change event says. When such an upvote is taken back in another tab the connection is sent a whole `webinar:qaSnapshot`, the one form that build applies to what it saved.
 - The old events carry webinar Q&A only. Nothing is sent on them in a regular meeting.
 - A seat id for the asker is given to hosts and to the asker. Everyone else gets an empty `userId`.
 

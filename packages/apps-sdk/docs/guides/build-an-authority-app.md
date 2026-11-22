@@ -150,7 +150,7 @@ export function SignUpPanel() {
 }
 ```
 
-`state.kind` is `ready` once the server has sent the view. `unsupported` means this server does not offer the app to this connection, which includes every SFU that predates the runtime. Hide the app's entry points in that case with `useAuthorityAvailable(contract)`.
+`state.kind` is `ready` once the server has sent the view. `unsupported` means this server does not offer the app to this connection, which includes every SFU that predates the runtime. Hide the app's entry points in that case with `useAuthorityAvailable(contract)`. `useAuthorityRuntime()` says why: `unsupported` when the server runs no such apps at all, which is the case to explain to people, as the Apps panel does with "Needs a server update".
 
 `act` resolves with the server's answer. If the answer is lost it resends under the same operation id, so one press is one action.
 
