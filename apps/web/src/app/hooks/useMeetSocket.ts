@@ -152,6 +152,11 @@ import {
   type MediaPathWatch,
 } from "../lib/media-path-recovery";
 import {
+  buildReconnectRecoveryStatus,
+  buildStoppedRecoveryStatus,
+  describeReconnectGiveUp,
+} from "../lib/reconnect-recovery-status";
+import {
   NO_RUNTIME_ICE_SERVERS,
   applyJoinAnswerToIceServers,
   getUsableTurnIceServers,
@@ -508,22 +513,6 @@ const getReconnectFailureKind = (error: unknown): ReconnectFailureKind =>
     message: getRawReconnectErrorMessage(error),
     responseStatus: getResponseStatusFromError(error),
   });
-
-const buildReconnectRecoveryStatus = (
-  phase: ReconnectRecoveryStatus["phase"],
-  attempt: number,
-  message: string,
-  lastError: string | null = null,
-  retryAt: number | null = null,
-): ReconnectRecoveryStatus => ({
-  phase,
-  attempt,
-  maxAttempts: MAX_RECONNECT_ATTEMPTS,
-  message,
-  lastError,
-  retryAt,
-  updatedAt: Date.now(),
-});
 
 type InitialConsumerPreferences = {
   preferredLayers?: {
@@ -9223,6 +9212,9 @@ export function useMeetSocket({
     let mayReuseSocket = true;
     let roomWaitExpired = false;
     let rejoined = false;
+    // Waiting for a missing room is bounded by time, so those retries do not
+    // count against the attempt budget and show no attempt number.
+    let retryingForRoom = false;
     reconnectInFlightRef.current = true;
     reconnectAttemptsRef.current = resolveReconnectStartAttempts(
       reconnectAttemptsRef.current,
@@ -9247,6 +9239,7 @@ export function useMeetSocket({
           );
         }
         const attempt = reconnectAttemptsRef.current + 1;
+        const countedAttempt = retryingForRoom ? null : attempt;
         const delay = skipNextDelay
           ? 0
           : (nextDelayOverrideMs ?? RECONNECT_DELAY_MS * 2 ** (attempt - 1));
@@ -9259,7 +9252,7 @@ export function useMeetSocket({
           updateReconnectRecoveryStatus(
             buildReconnectRecoveryStatus(
               delay > 0 ? "waiting" : "connecting",
-              attempt,
+              countedAttempt,
               delay > 0
                 ? "Retrying automatically."
                 : "Retrying reconnect now.",
@@ -9288,6 +9281,7 @@ export function useMeetSocket({
         if (manualReconnectRetryRequestedRef.current) {
           manualReconnectRetryRequestedRef.current = false;
           reconnectAttemptsRef.current = 0;
+          retryingForRoom = false;
           skipNextDelay = true;
           if (shouldSurfaceReconnectState) {
             updateReconnectRecoveryStatus(
@@ -9313,7 +9307,7 @@ export function useMeetSocket({
             updateReconnectRecoveryStatus(
               buildReconnectRecoveryStatus(
                 "connecting",
-                attempt,
+                countedAttempt,
                 "Connecting to the meeting server.",
                 lastReconnectError
                   ? describeReconnectFailure(lastReconnectError)
@@ -9372,7 +9366,7 @@ export function useMeetSocket({
             updateReconnectRecoveryStatus(
               buildReconnectRecoveryStatus(
                 "joining",
-                attempt,
+                countedAttempt,
                 shouldRetryLocalMediaAfterJoin
                   ? "Rejoining the room first. Your devices will be retried after the meeting is back."
                   : "Restoring media, participants, and room state.",
@@ -9427,6 +9421,7 @@ export function useMeetSocket({
           lastReconnectError = err;
           const reconnectFailure = describeReconnectFailure(err);
           const failureKind = getReconnectFailureKind(err);
+          retryingForRoom = false;
           let isRecoverable = failureKind !== "final";
           const usedHeldJoinInfo = lastJoinInfoSourceRef.current === "held";
           mayReuseSocket = canReuseSocketAfterFailure({
@@ -9463,6 +9458,7 @@ export function useMeetSocket({
               roomUnavailableRetries += 1;
               nextDelayOverrideMs = retryPlan.delayMs;
               reconnectAttemptsRef.current = attempt - 1;
+              retryingForRoom = true;
             } else {
               // Stop retrying, but leave Try again: the room can still come
               // back after the window.
@@ -9484,15 +9480,13 @@ export function useMeetSocket({
             // The user has to supply the code, so stop here and let the
             // recovery card ask for it; Try again rejoins with it.
             manualReconnectRetryRequestedRef.current = false;
-            updateReconnectRecoveryStatus({
-              ...buildReconnectRecoveryStatus(
-                "failed",
-                attempt,
+            updateReconnectRecoveryStatus(
+              buildStoppedRecoveryStatus(
                 "This meeting now needs an invite code. Enter it to rejoin.",
                 reconnectFailure,
+                { needsInviteCode: true },
               ),
-              needsInviteCode: true,
-            });
+            );
             setMeetError({
               code: "CONNECTION_FAILED",
               message: reconnectFailure,
@@ -9504,9 +9498,7 @@ export function useMeetSocket({
           if (!isRecoverable) {
             manualReconnectRetryRequestedRef.current = false;
             updateReconnectRecoveryStatus(
-              buildReconnectRecoveryStatus(
-                "failed",
-                attempt,
+              buildStoppedRecoveryStatus(
                 "Could not reconnect to the meeting.",
                 reconnectFailure,
               ),
@@ -9522,6 +9514,7 @@ export function useMeetSocket({
           if (manualReconnectRetryRequestedRef.current) {
             manualReconnectRetryRequestedRef.current = false;
             reconnectAttemptsRef.current = 0;
+            retryingForRoom = false;
             skipNextDelay = true;
             if (shouldSurfaceReconnectState) {
               updateReconnectRecoveryStatus(
@@ -9538,14 +9531,20 @@ export function useMeetSocket({
           if (roomWaitExpired) break;
           if (shouldSurfaceReconnectState) {
             updateReconnectRecoveryStatus(
-              buildReconnectRecoveryStatus(
-                attempt >= MAX_RECONNECT_ATTEMPTS ? "failed" : "waiting",
-                attempt,
-                attempt >= MAX_RECONNECT_ATTEMPTS
-                  ? "Could not reconnect to the meeting."
-                  : "Reconnect attempt failed. Retrying automatically.",
-                reconnectFailure,
-              ),
+              attempt >= MAX_RECONNECT_ATTEMPTS
+                ? buildStoppedRecoveryStatus(
+                    describeReconnectGiveUp({
+                      attempts: attempt,
+                      roomWaitExpired: false,
+                    }),
+                    reconnectFailure,
+                  )
+                : buildReconnectRecoveryStatus(
+                    "waiting",
+                    retryingForRoom ? null : attempt,
+                    "Reconnect attempt failed. Retrying automatically.",
+                    reconnectFailure,
+                  ),
             );
           }
         }
@@ -9563,10 +9562,11 @@ export function useMeetSocket({
         usingTurnFallback: relayOnlyIceRef.current,
       });
       updateReconnectRecoveryStatus(
-        buildReconnectRecoveryStatus(
-          "failed",
-          reconnectAttemptsRef.current,
-          "Could not reconnect after several attempts.",
+        buildStoppedRecoveryStatus(
+          describeReconnectGiveUp({
+            attempts: reconnectAttemptsRef.current,
+            roomWaitExpired,
+          }),
           reconnectFailure,
         ),
       );
@@ -9971,12 +9971,7 @@ export function useMeetSocket({
     if (!targetRoomId) {
       const reconnectFailure = "No meeting room is available to reconnect.";
       updateReconnectRecoveryStatus(
-        buildReconnectRecoveryStatus(
-          "failed",
-          0,
-          "Could not start reconnect.",
-          reconnectFailure,
-        ),
+        buildStoppedRecoveryStatus("Could not start reconnect.", reconnectFailure),
       );
       setMeetError({
         code: "CONNECTION_FAILED",

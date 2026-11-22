@@ -115,6 +115,7 @@ import type {
 import { getRenderableParticipantVideoStream } from "../lib/participant-media";
 import { prewarmVideoEffectsAssetsDeferred } from "../lib/video-effects-lazy";
 import ReconnectInviteCodeForm from "./ReconnectInviteCodeForm";
+import { formatReconnectAttemptLabel } from "../lib/reconnect-recovery-status";
 
 const loadChatPanel = () => import("./ChatPanel");
 const loadTranscriptPanel = () => import("./TranscriptPanel");
@@ -1715,15 +1716,11 @@ export default function MeetsMainContent({
     };
   }, [reconnectRetryAt]);
 
-  const reconnectAttemptLabel =
-    reconnectRecoveryStatus &&
-    reconnectRecoveryStatus.attempt > 0 &&
-    !needsInviteCodeToRejoin
-      ? `Attempt ${Math.min(
-          reconnectRecoveryStatus.attempt,
-          reconnectRecoveryStatus.maxAttempts,
-        )} of ${reconnectRecoveryStatus.maxAttempts}`
-      : null;
+  const reconnectAttemptLabel = isTerminalMeetingError
+    ? null
+    : formatReconnectAttemptLabel(reconnectRecoveryStatus ?? null, {
+        waitingForNetwork: isNetworkOffline,
+      });
   const reconnectLastError = reconnectRecoveryStatus?.lastError ?? null;
   const isRestoringAfterReconnect =
     connectionState === "connected" || connectionState === "joining";
