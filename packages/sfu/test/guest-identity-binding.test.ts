@@ -1564,6 +1564,16 @@ describe("a guest who asks to be let in from more than one tab", () => {
     await host.peer.handlers.get(event)!(...([payload, ack] as never[]));
     return ack;
   };
+  // What a host's screen holds, built from what the host's socket was sent.
+  const lobbyOnHostScreen = (host: Joined): string[] => {
+    let rows: string[] = [];
+    for (const [event, payload] of host.peer.emit.mock.calls as Array<[string, { userId?: string; users?: Array<{ userId: string }> }]>) {
+      if (event === "userRequestedJoin") rows = [...rows.filter((row) => row !== payload.userId), payload.userId!];
+      if (["pendingUserLeft", "userAdmitted", "userRejected"].includes(event)) rows = rows.filter((row) => row !== payload.userId);
+      if (event === "pendingUsersSnapshot") rows = payload.users!.map((user) => user.userId);
+    }
+    return rows;
+  };
   const approved = ["joinApproved", { roomId: "room" }] as const;
   const turnedAway = ["joinRejected", { roomId: "room" }] as const;
 
@@ -1592,7 +1602,8 @@ describe("a guest who asks to be let in from more than one tab", () => {
     expect(second.peer.emit).toHaveBeenCalledWith(...approved);
     expect(other.peer.emit).not.toHaveBeenCalledWith(...approved);
     expect([...room.pendingClients.keys()]).toEqual([stranger.userId]);
-    expect(heard(host, "userAdmitted")).toEqual([guest.userId]);
+    expect(heard(host, "userAdmitted")).toEqual([guest.userId, otherTab.userId]);
+    expect(lobbyOnHostScreen(host)).toEqual([stranger.userId]);
     expect((await join(state, guest)).ack).toHaveBeenCalledWith(joined);
     expect((await join(state, otherTab)).ack).toHaveBeenCalledWith(joined);
   });
@@ -1610,7 +1621,8 @@ describe("a guest who asks to be let in from more than one tab", () => {
     expect(second.peer.emit).toHaveBeenCalledWith(...turnedAway);
     expect(other.peer.emit).not.toHaveBeenCalledWith(...turnedAway);
     expect([...room.pendingClients.keys()]).toEqual([stranger.userId]);
-    expect(heard(host, "userRejected")).toEqual([guest.userId]);
+    expect(heard(host, "userRejected")).toEqual([guest.userId, otherTab.userId]);
+    expect(lobbyOnHostScreen(host)).toEqual([stranger.userId]);
   });
 
   it.each(otherTabs)("shows the hosts the other tab's request when the first tab gives up, for %s", async (_label, otherTab) => {
@@ -1625,14 +1637,15 @@ describe("a guest who asks to be let in from more than one tab", () => {
     expect(toPendingUserSnapshots(room).map((row) => row.userId)).toEqual([otherTab.userId]);
   });
 
-  it("tells the hosts nothing when a tab whose request was not shown gives up", async () => {
+  it("leaves the hosts' row as it is when a tab whose request was not shown gives up", async () => {
     const { state, room, host } = await lockedRoom();
     await join(state, guest);
     await join(state, onTheSamePass);
 
     withdrawWaitingRequest(room, onTheSamePass.userId);
 
-    expect(heard(host, "pendingUserLeft")).toEqual([]);
+    expect(lobbyOnHostScreen(host)).toEqual([guest.userId]);
+    expect(heard(host, "userRequestedJoin")).toEqual([guest.userId]);
     expect(toPendingUserSnapshots(room).map((row) => row.userId)).toEqual([guest.userId]);
   });
 
@@ -1651,6 +1664,55 @@ describe("a guest who asks to be let in from more than one tab", () => {
       expect.objectContaining({ error: "You are not allowed to join this meeting." }),
     );
     expect(heard(host, "userRequestedJoin")).toEqual([guest.userId]);
+  });
+
+  // Two tabs of one browser wait under two passes the room has not linked.
+  // A third tab of that browser then shows the room both passes.
+  const onTheOtherPass = { ...onALinkedPass, guestWas: undefined } satisfies SfuAuthPayload;
+  const thirdTabThatLinks = {
+    ...guest,
+    userId: "guest-gp_YYYYYYYYYYYYYYYYYYYYYY",
+    sessionId: "tab-3",
+    guestWas: [{ userKey: "guest-gp_ZZZZZZZZZZZZZZZZZZZZZZ", guestProof: onTheOtherPass.guestProof }],
+  } satisfies SfuAuthPayload;
+
+  it.each([
+    ["admits", "admitUser", "joinApproved"],
+    ["denies", "rejectUser", "joinRejected"],
+  ])("collapses two rows into one when a third tab links the passes, and leaves none when a host %s it", async (_label, action, answerToTabs) => {
+    const { state, room, host } = await lockedRoom();
+    const first = await join(state, guest);
+    const second = await join(state, onTheOtherPass);
+    expect(lobbyOnHostScreen(host)).toEqual([guest.userId, onTheOtherPass.userId]);
+
+    const third = await join(state, thirdTabThatLinks);
+
+    expect(lobbyOnHostScreen(host)).toEqual([guest.userId]);
+    expect(toPendingUserSnapshots(room).map((row) => row.userId)).toEqual([guest.userId]);
+
+    await hostAsks(host, action, { userId: guest.userId });
+
+    expect(lobbyOnHostScreen(host)).toEqual([]);
+    expect(room.pendingClients.size).toBe(0);
+    for (const tab of [first, second, third]) {
+      expect(tab.peer.emit).toHaveBeenCalledWith(answerToTabs, { roomId: "room" });
+    }
+  });
+
+  it.each([
+    ["admits", "admitUser"],
+    ["denies", "rejectUser"],
+  ])("leaves no row on a host's screen that still showed both, when a host %s the guest", async (_label, action) => {
+    const { state, room, host } = await lockedRoom();
+    await join(state, guest);
+    await join(state, onTheOtherPass);
+    // The passes are linked without the hosts being told, as before the fix.
+    room.linkGuestPasses([{ guestProof: onTheOtherPass.guestProof }], guest.guestProof);
+    expect(lobbyOnHostScreen(host)).toEqual([guest.userId, onTheOtherPass.userId]);
+
+    await hostAsks(host, action, { userId: guest.userId });
+
+    expect(lobbyOnHostScreen(host)).toEqual([]);
   });
 
   it("lets every tab in through the call that admits a list of keys", async () => {

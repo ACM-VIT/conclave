@@ -52,7 +52,9 @@ import {
 } from "../../scheduledWebinars.js";
 import { ensureWebinarRoomConfig } from "../../scheduledWebinarScheduler.js";
 import {
+  collapseLobbyRows,
   removeBlockedGuest,
+  shownWaitingKeys,
   withdrawWaitingRequest,
 } from "../../admin/controlPlane.js";
 import { getSocketAuthUser } from "../auth.js";
@@ -275,6 +277,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         const otherGuestSeats = roomScopedClaims?.guestWas ?? [];
         const knownRoom = state.rooms.get(resolvedChannelId);
         if (knownRoom && roomGuestProof !== undefined) {
+          const shownInLobby = shownWaitingKeys(knownRoom);
           const blockedGuestKeys = knownRoom.linkGuestPasses(
             otherGuestSeats,
             roomGuestProof,
@@ -282,6 +285,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           if (blockedGuestKeys.length > 0) {
             removeBlockedGuest(knownRoom, blockedGuestKeys, { io, state });
           }
+          collapseLobbyRows(knownRoom, shownInLobby);
         }
         // A host invite ("bring on stage") lets an attendee identity rejoin as
         // a full participant; the promotion registry lives on the live room.

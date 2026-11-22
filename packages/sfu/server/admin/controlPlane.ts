@@ -865,8 +865,9 @@ const tellHosts = (
 
 /**
  * Lets in the guest behind `userKey`: every tab of that guest that waits.
- * Hosts see one request per guest, so they are told once, under the key
- * that request was shown with. Returns the keys that were let in.
+ * Hosts are told about every key that leaves the lobby, not only the one
+ * their list shows now: a host's screen can still hold a row from before
+ * the room knew two keys were one guest. Returns the keys that were let in.
  */
 export const admitWaitingGuest = (room: Room, userKey: string): string[] => {
   const requests = room.waitingRequestsOfGuest(userKey);
@@ -876,8 +877,8 @@ export const admitWaitingGuest = (room: Room, userKey: string): string[] => {
     }
     room.allowUser(request.userKey);
     request.socket.emit("joinApproved", { roomId: room.id });
+    tellHosts(room, "userAdmitted", request);
   }
-  if (requests.length > 0) tellHosts(room, "userAdmitted", requests[0]);
   return requests.map((request) => request.userKey);
 };
 
@@ -887,15 +888,35 @@ export const rejectWaitingGuest = (room: Room, userKey: string): string[] => {
   for (const request of requests) {
     room.removePendingClient(request.userKey);
     request.socket.emit("joinRejected", { roomId: room.id });
+    tellHosts(room, "userRejected", request);
   }
-  if (requests.length > 0) tellHosts(room, "userRejected", requests[0]);
   return requests.map((request) => request.userKey);
+};
+
+/** The keys the hosts' lobby shows, one per waiting guest. */
+export const shownWaitingKeys = (room: Room): string[] =>
+  room.waitingGuests().map((request) => request.userKey);
+
+/**
+ * Brings the hosts' lobby in line after the room learned that some keys
+ * are one guest. `shownBefore` is what the lobby showed until then. Every
+ * key that is no longer a guest's shown request is taken off the hosts'
+ * screens. Its tab still waits, as part of the one request that is left.
+ */
+export const collapseLobbyRows = (room: Room, shownBefore: string[]): void => {
+  const shownNow = new Set(shownWaitingKeys(room));
+  for (const userKey of shownBefore) {
+    if (!shownNow.has(userKey) && room.pendingClients.has(userKey)) {
+      tellHosts(room, "pendingUserLeft", { userKey });
+    }
+  }
 };
 
 /**
  * Takes back one tab's request, because the tab left or came back another
- * way. When that request was the one hosts were shown and the guest still
- * waits in another tab, hosts are shown that tab's request in its place.
+ * way. Hosts are told the key is gone whether or not their list showed it.
+ * When it was the request they were shown and the guest still waits in
+ * another tab, they are shown that tab's request in its place.
  */
 export const withdrawWaitingRequest = (room: Room, userKey: string): void => {
   const requests = room.waitingRequestsOfGuest(userKey);
@@ -903,9 +924,10 @@ export const withdrawWaitingRequest = (room: Room, userKey: string): void => {
   const withdrawn = room.pendingClients.get(userKey);
   if (!withdrawn) return;
   room.removePendingClient(userKey);
-  if (!wasShown) return;
   tellHosts(room, "pendingUserLeft", withdrawn);
-  if (requests[1]) tellHosts(room, "userRequestedJoin", requests[1]);
+  if (wasShown && requests[1]) {
+    tellHosts(room, "userRequestedJoin", requests[1]);
+  }
 };
 
 export const admitAllPendingUsers = (
