@@ -353,6 +353,7 @@ export function useMeetingTranscript({
   const sessionWaitersRef = useRef<Set<TranscriptSessionWaiter>>(new Set());
   const startedRelayTokensRef = useRef<Set<string>>(new Set());
   const nextWaiterOrderRef = useRef(0);
+  const replacedRequestIdsRef = useRef<Set<string>>(new Set());
   const sfuRelayStartTokenRef = useRef<TranscriptSfuRelayStartToken | null>(
     null,
   );
@@ -678,6 +679,7 @@ export function useMeetingTranscript({
           // replaced, not refused. An older one's echo settles nothing here.
           const echoedWaiter = waiters.find((other) => other.requestId === echoed);
           if (echoedWaiter && echoedWaiter.order > waiter.order) {
+            replacedRequestIdsRef.current.add(waiter.requestId);
             finish(waiter, { kind: "replaced" });
           }
           continue;
@@ -703,6 +705,23 @@ export function useMeetingTranscript({
       waiter.resolve({ kind: "timeout" });
     }
     sessionWaitersRef.current.clear();
+  }, []);
+
+  // A refusal of a request that a newer one of ours replaced, or is about
+  // to, answers nothing anyone still waits on: it settles as replaced.
+  const settleSupersededRefusal = useCallback((requestId?: string): boolean => {
+    if (!requestId) return false;
+    if (replacedRequestIdsRef.current.has(requestId)) return true;
+    const waiters = Array.from(sessionWaitersRef.current);
+    const refused = waiters.find((waiter) => waiter.requestId === requestId);
+    if (!refused || !waiters.some((waiter) => waiter.order > refused.order)) {
+      return false;
+    }
+    window.clearTimeout(refused.timeoutId);
+    sessionWaitersRef.current.delete(refused);
+    replacedRequestIdsRef.current.add(requestId);
+    refused.resolve({ kind: "replaced" });
+    return true;
   }, []);
 
   const rejectUnacceptedSessionRequests = useCallback((requestId?: string) => {
@@ -874,6 +893,7 @@ export function useMeetingTranscript({
           lastControlPongAtRef.current = Date.now();
           return;
         case "error":
+          if (settleSupersededRefusal(message.requestId)) return;
           setError(message.message || "Transcript service error.");
           rejectUnacceptedSessionRequests(message.requestId);
           return;
@@ -890,6 +910,7 @@ export function useMeetingTranscript({
       applySessionState,
       applySfuRelayStartToken,
       rejectUnacceptedSessionRequests,
+      settleSupersededRefusal,
       upsertAssistantMessage,
     ],
   );
@@ -1497,6 +1518,7 @@ export function useMeetingTranscript({
       const idleSession = buildIdleSession(roomId);
       sessionRef.current = idleSession;
       clearSessionWaiters();
+      replacedRequestIdsRef.current.clear();
       sfuRelayStartTokenRef.current = null;
       startedRelayTokensRef.current.clear();
       clearSfuRelayStartTokenWaiters();

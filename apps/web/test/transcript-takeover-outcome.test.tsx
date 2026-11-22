@@ -479,6 +479,45 @@ describe("two quick language picks, the second sent before the first is acknowle
     expect([await hindi, await tamil]).toEqual([true, false]);
     expect(startRelay).toHaveBeenCalledTimes(1);
   });
+
+  it("drops a late refusal of the first pick once the second is live", async () => {
+    const socket = await mount();
+    await act(async () => socket.frame({ type: "session.state", session: liveSession }));
+    const { hindi, tamil, hindiId, tamilId } = await pickBoth(socket);
+
+    await act(async () => socket.frame(state("starting", "ta", tamilId)));
+    await act(async () => socket.frame(state("live", "ta", tamilId)));
+    await act(async () =>
+      socket.frame({ type: "sfu.relayStartToken", token: "relay", expiresAt: Date.now() + 60_000 }),
+    );
+    await act(async () =>
+      socket.frame({ type: "error", requestId: hindiId, message: "Notes changed while connecting. Please try again." }),
+    );
+
+    expect([await hindi, await tamil]).toEqual([false, true]);
+    expect(controller.session.language).toBe("ta");
+    expect(controller.error).toBeNull();
+    expect(startRelay).toHaveBeenCalledTimes(1);
+  });
+
+  it("settles a refused first pick as replaced while the second is still pending", async () => {
+    const socket = await mount();
+    await act(async () => socket.frame({ type: "session.state", session: liveSession }));
+    const { hindi, tamil, hindiId, tamilId } = await pickBoth(socket);
+
+    await act(async () =>
+      socket.frame({ type: "error", requestId: hindiId, message: "Notes changed while connecting. Please try again." }),
+    );
+    expect(controller.error).toBeNull();
+    await act(async () => socket.frame(state("starting", "ta", tamilId)));
+    await act(async () => socket.frame(state("live", "ta", tamilId)));
+    await act(async () =>
+      socket.frame({ type: "sfu.relayStartToken", token: "relay", expiresAt: Date.now() + 60_000 }),
+    );
+
+    expect([await hindi, await tamil]).toEqual([false, true]);
+    expect(controller.error).toBeNull();
+  });
 });
 
 describe("restarting notes", () => {
