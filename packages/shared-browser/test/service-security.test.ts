@@ -45,7 +45,7 @@ const withApp = async (
 };
 
 test("the control API rejects requests without the service token", async () => {
-    await withApp({ token: STRONG_TOKEN, listenHost: "127.0.0.1", corsOrigins: [] }, async (baseUrl) => {
+    await withApp({ token: STRONG_TOKEN, listenHost: "127.0.0.1", listenPort: 3040, corsOrigins: [] }, async (baseUrl) => {
         assert.equal((await fetch(`${baseUrl}/sessions`)).status, 401);
         assert.equal(
             (await fetch(`${baseUrl}/launch`, {
@@ -68,7 +68,7 @@ test("the control API rejects requests without the service token", async () => {
 });
 
 test("the control API authenticates before it reads a request body", async () => {
-    await withApp({ token: STRONG_TOKEN, listenHost: "127.0.0.1", corsOrigins: [] }, async (baseUrl) => {
+    await withApp({ token: STRONG_TOKEN, listenHost: "127.0.0.1", listenPort: 3040, corsOrigins: [] }, async (baseUrl) => {
         const malformed = { method: "POST", headers: { "content-type": "application/json" }, body: "{not json" };
         assert.equal((await fetch(`${baseUrl}/launch`, malformed)).status, 401);
         const authorized = await fetch(`${baseUrl}/launch`, {
@@ -81,7 +81,7 @@ test("the control API authenticates before it reads a request body", async () =>
 
 test("CORS answers only the configured web origins", async () => {
     await withApp(
-        { token: STRONG_TOKEN, listenHost: "127.0.0.1", corsOrigins: ["https://conclave.example"] },
+        { token: STRONG_TOKEN, listenHost: "127.0.0.1", listenPort: 3040, corsOrigins: ["https://conclave.example"] },
         async (baseUrl) => {
             const headers = { "x-browser-service-token": STRONG_TOKEN };
             const untrusted = await fetch(`${baseUrl}/sessions`, {
@@ -94,7 +94,7 @@ test("CORS answers only the configured web origins", async () => {
             assert.equal(trusted.headers.get("access-control-allow-origin"), "https://conclave.example");
         },
     );
-    await withApp({ token: STRONG_TOKEN, listenHost: "127.0.0.1", corsOrigins: [] }, async (baseUrl) => {
+    await withApp({ token: STRONG_TOKEN, listenHost: "127.0.0.1", listenPort: 3040, corsOrigins: [] }, async (baseUrl) => {
         const response = await fetch(`${baseUrl}/health`, { headers: { origin: "https://conclave.example" } });
         assert.equal(response.headers.get("access-control-allow-origin"), null);
     });
@@ -120,11 +120,16 @@ test("startup configuration fails closed", () => {
     refuses({ BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_HOST: "fd0::12" });
     refuses({ BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_HOST: "fc::1" });
     refuses({ BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_CORS_ORIGINS: "*" });
+    // The deploy builds its health URL from BROWSER_SERVICE_PORT as written.
+    refuses({ BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_PORT: " 3040" });
+    refuses({ BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_PORT: "70000" });
+    assert.equal(resolveServiceSecurity({ BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_PORT: "43109" }).listenPort, 43109);
 
     assert.equal(resolveServiceSecurity({ BROWSER_SERVICE_TOKEN: ` ${STRONG_TOKEN}\n` }).token, STRONG_TOKEN);
     assert.deepEqual(resolveServiceSecurity({ BROWSER_SERVICE_TOKEN: STRONG_TOKEN }), {
         token: STRONG_TOKEN,
         listenHost: "127.0.0.1",
+        listenPort: 3040,
         corsOrigins: [],
     });
     assert.deepEqual(
@@ -133,7 +138,7 @@ test("startup configuration fails closed", () => {
             BROWSER_SERVICE_HOST: "10.0.4.7",
             BROWSER_SERVICE_CORS_ORIGINS: "https://conclave.example/meet, https://conclave.example",
         }),
-        { token: STRONG_TOKEN, listenHost: "10.0.4.7", corsOrigins: ["https://conclave.example"] },
+        { token: STRONG_TOKEN, listenHost: "10.0.4.7", listenPort: 3040, corsOrigins: ["https://conclave.example"] },
     );
     assert.equal(
         resolveServiceSecurity({ BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_HOST: "fd00::12" }).listenHost,
@@ -176,10 +181,31 @@ test("--check-config applies the startup checks and exits without listening", as
         assert.equal(result.code, 1, JSON.stringify(env));
         assert.match(result.output, /refused to start/);
     }
-    const valid = await check({ BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_HOST: "10.0.4.7" });
+    const valid = await check({ BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_HOST: "127.0.0.1" });
     assert.equal(valid.code, 0, valid.output);
     assert.match(valid.output, /configuration is valid/i);
     assert.doesNotMatch(valid.output, /listening/);
+});
+
+test("--check-config runs the same provider and bind checks as startup", async () => {
+    const run = async (env: NodeJS.ProcessEnv, args: string[]) => {
+        const { child, output } = startService({ BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_PORT: "0", ...env }, args);
+        const [code] = await once(child, "close");
+        return { code, output: output() };
+    };
+    // Each of these passed the old check and then stopped the service at startup.
+    for (const env of [
+        { BROWSER_PROVIDER: "kitesurf" },
+        { BROWSER_SERVICE_HOST: "10.254.254.254" },
+        { BROWSER_SERVICE_PORT: " 43109" },
+    ]) {
+        const checked = await run(env, ["--check-config"]);
+        assert.equal(checked.code, 1, `${JSON.stringify(env)}: ${checked.output}`);
+        assert.match(checked.output, /refused to start/);
+    }
+    const started = await run({ BROWSER_PROVIDER: "kitesurf" }, []);
+    assert.equal(started.code, 1);
+    assert.match(started.output, /refused to start[\s\S]*Kitesurf requires CLOUDFLARE_ACCOUNT_ID/);
 });
 
 test("the service process listens on loopback and requires the token", async () => {

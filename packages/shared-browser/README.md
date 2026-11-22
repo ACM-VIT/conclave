@@ -47,8 +47,9 @@ cd /path/to/conclave
 The script builds `browser-service` and `conclave-browser:latest`. This
 deployment is only needed for full Chromium compatibility, media, and noVNC.
 Before it replaces the running service, it runs the new image with
-`--check-config`, which applies the same checks the service runs at startup;
-`--check-config` on the script stops there.
+`--check-config`, which runs the same startup path as the service (settings,
+provider setup and a bind check on `BROWSER_SERVICE_HOST`) short of listening
+on the real port; `--check-config` on the script stops there.
 
 and starts `browser-service` using `docker-compose.browser.yml`.
 
@@ -75,7 +76,7 @@ These are read from root `.env` (or current shell env):
 - `BROWSER_SERVICE_CORS_ORIGINS` (optional comma-separated web origins allowed
   to call the control API from a browser; none by default because the SFU calls
   it server to server)
-- `BROWSER_SERVICE_PORT` (default `3040`)
+- `BROWSER_SERVICE_PORT` (default `3040`; a bare number, the service refuses padding or other text)
 - `BROWSER_PROVIDER` (`chromium` by default; standalone Kitesurf remains
   supported for backwards compatibility)
 - `NOVNC_PORT_START` / `NOVNC_PORT_END` (defaults `6080`-`6100`)

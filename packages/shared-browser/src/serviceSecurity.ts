@@ -4,6 +4,7 @@ import { isIP } from "node:net";
 export interface ServiceSecurity {
     token: string;
     listenHost: string;
+    listenPort: number;
     corsOrigins: string[];
 }
 
@@ -19,6 +20,7 @@ const MIN_DISTINCT_TOKEN_CHARACTERS = 8;
 // The SFU sends the token in an HTTP header, so it must be visible ASCII.
 const HEADER_SAFE_TOKEN = /^[\x21-\x7e]+$/;
 const DEFAULT_LISTEN_HOST = "127.0.0.1";
+const DEFAULT_LISTEN_PORT = 3040;
 
 const isLoopbackOrPrivateIpv4 = (host: string): boolean => {
     const [a, b] = host.split(".").map(Number);
@@ -71,6 +73,17 @@ const readListenHost = (raw: string | undefined, problems: string[]): string => 
     return host;
 };
 
+// Not trimmed: the deploy scripts build their health URL from the value as written.
+const readListenPort = (raw: string | undefined, problems: string[]): number => {
+    if (raw === undefined || raw === "") return DEFAULT_LISTEN_PORT;
+    const port = Number(raw);
+    if (!/^\d+$/.test(raw) || port < 0 || port > 65535) {
+        problems.push(`BROWSER_SERVICE_PORT=${JSON.stringify(raw)} must be a port number up to 65535, with no spaces.`);
+        return DEFAULT_LISTEN_PORT;
+    }
+    return port;
+};
+
 const readCorsOrigins = (raw: string | undefined, problems: string[]): string[] => {
     const entries = (raw ?? "")
         .split(",")
@@ -98,6 +111,7 @@ export const resolveServiceSecurity = (env: NodeJS.ProcessEnv): ServiceSecurity 
     const security = {
         token: readToken(env.BROWSER_SERVICE_TOKEN, problems),
         listenHost: readListenHost(env.BROWSER_SERVICE_HOST, problems),
+        listenPort: readListenPort(env.BROWSER_SERVICE_PORT, problems),
         corsOrigins: readCorsOrigins(env.BROWSER_SERVICE_CORS_ORIGINS, problems),
     };
     if (problems.length > 0) throw new ServiceSecurityError(problems);
