@@ -30,9 +30,19 @@ type Bucket = {
   bySource: Map<TableKey, string>;
   /** Projected key to the source row that owns it. */
   owner: Map<string, TableKey>;
+  /**
+   * Keys of rows a `clear` took that this audience's viewers still hold.
+   * The rows are out of `rows` already, so a snapshot never carries them and
+   * a new row is free to take such a key. Viewers are owed their removal,
+   * unless a new row lands on the key first.
+   */
+  owed: Set<string>;
 };
 
 type Audience = Map<string, Bucket>;
+
+/** Whose audience it is, to address what it is told. */
+type AudienceOf = { role: Role } | { subject: Subject };
 
 const emptyOps = (): ViewOps => ({ put: [], remove: [], bytes: 0 });
 const isEmpty = (ops: ViewOps): boolean =>
@@ -41,7 +51,12 @@ const isEmpty = (ops: ViewOps): boolean =>
 const bucketOf = (audience: Audience, name: string): Bucket => {
   let bucket = audience.get(name);
   if (!bucket) {
-    bucket = { rows: new Map(), bySource: new Map(), owner: new Map() };
+    bucket = {
+      rows: new Map(),
+      bySource: new Map(),
+      owner: new Map(),
+      owed: new Set(),
+    };
     audience.set(name, bucket);
   }
   return bucket;
@@ -52,6 +67,28 @@ export type SizedRow = { row: ProjectedRow; bytes: number };
 
 /** Framing around one row on the wire: its field names and punctuation. */
 const ROW_OVERHEAD_BYTES = 32;
+
+const rowsOf = (audience: Audience): SizedRow[] => {
+  const rows: SizedRow[] = [];
+  for (const [bucket, state] of audience) {
+    for (const [key, delivered] of state.rows) {
+      rows.push({
+        row: { bucket, key, value: delivered.value },
+        bytes: delivered.bytes,
+      });
+    }
+  }
+  return rows;
+};
+
+const opsFor = <K>(map: Map<K, ViewOps>, id: K): ViewOps => {
+  let ops = map.get(id);
+  if (!ops) {
+    ops = emptyOps();
+    map.set(id, ops);
+  }
+  return ops;
+};
 
 /**
  * Turns private rows into what each audience may see, and remembers what
@@ -70,12 +107,14 @@ export class ViewTracker {
   private readonly owned = new Map<string, Map<Subject, Set<TableKey>>>();
   private readonly ownerOf = new Map<string, Map<TableKey, Subject>>();
   private readonly viewsByTable = new Map<string, [string, RuntimeView][]>();
+  /** Audiences whose viewers are owed removals, the longest waiting first. */
+  private readonly owing = new Map<Audience, AudienceOf>();
 
   constructor(
     private readonly definition: RuntimeDefinition,
     private readonly store: AuthorityStore,
     policy: RoomPolicy,
-    private readonly options: { verify: boolean },
+    private readonly options: { verify: boolean; clearedRowsPerFlush: number },
   ) {
     this.policy = policy;
     for (const [name, view] of Object.entries(definition.views)) {
@@ -101,6 +140,12 @@ export class ViewTracker {
     this.policy = policy;
     this.roles.clear();
     this.subjects.clear();
+    this.owing.clear();
+  }
+
+  /** Whether some viewer still holds a row that a `clear` took. */
+  get owesRemovals(): boolean {
+    return this.owing.size > 0;
   }
 
   /**
@@ -108,35 +153,11 @@ export class ViewTracker {
    * next flush sends them as a patch on top of this.
    */
   sharedRows(role: Role): SizedRow[] {
-    return this.rowsOf(this.roleAudience(role));
+    return rowsOf(this.roleAudience(role));
   }
 
   personalRows(subject: Subject): SizedRow[] {
-    return this.rowsOf(this.subjectAudience(subject));
-  }
-
-  /**
-   * An audience's rows, for a snapshot. A clear's rows leave the held views
-   * a batch at a time, and the ones still waiting to leave are left out
-   * here, so nobody is newly sent a row that is already gone.
-   */
-  private rowsOf(audience: Audience): SizedRow[] {
-    const leaving = this.store.hasUntoldClears;
-    const rows: SizedRow[] = [];
-    for (const [bucket, state] of audience) {
-      const table = this.definition.views[bucket].source;
-      for (const [key, delivered] of state.rows) {
-        if (leaving) {
-          const source = state.owner.get(key);
-          if (source !== undefined && !this.store.get(table, source)) continue;
-        }
-        rows.push({
-          row: { bucket, key, value: delivered.value },
-          bytes: delivered.bytes,
-        });
-      }
-    }
-    return rows;
+    return rowsOf(this.subjectAudience(subject));
   }
 
   /**
@@ -153,14 +174,32 @@ export class ViewTracker {
 
     const shared = new Map<Role, ViewOps>();
     const personal = new Map<Subject, ViewOps>();
-    const opsFor = <K>(map: Map<K, ViewOps>, id: K): ViewOps => {
-      let ops = map.get(id);
-      if (!ops) {
-        ops = emptyOps();
-        map.set(id, ops);
+    const { written, cleared } = this.store.takeDirty();
+
+    // Cleared rows leave every audience's rows now, all of them, so from
+    // this flush on a snapshot is without them and their keys are free.
+    // What is spread over later flushes is only telling who held them.
+    for (const [tableName, keys] of cleared) {
+      const views = this.viewsByTable.get(tableName);
+      if (!views) continue;
+      for (const key of keys) {
+        // Written again since the clear: an ordinary change, handled below.
+        if (this.store.get(tableName, key)) continue;
+        for (const [name, view] of views) {
+          if (view.kind === "shared") {
+            for (const [role, audience] of this.roles) {
+              this.owe(audience, { role }, name, key);
+            }
+            continue;
+          }
+          const owner = this.ownerOf.get(name)!.get(key);
+          if (owner === undefined) continue;
+          this.disown(name, owner, key);
+          const audience = this.subjects.get(owner);
+          if (audience) this.owe(audience, { subject: owner }, name, key);
+        }
       }
-      return ops;
-    };
+    }
 
     // Every key a changed row gives up is released before any changed row
     // takes a key, so one row can take over a key another just left.
@@ -178,7 +217,7 @@ export class ViewTracker {
       }
     };
 
-    for (const [tableName, keys] of this.store.takeDirty()) {
+    for (const [tableName, keys] of written) {
       const views = this.viewsByTable.get(tableName);
       if (!views) continue;
       for (const key of keys) {
@@ -221,14 +260,13 @@ export class ViewTracker {
       }
     }
     for (const place of placements) place();
+    this.tellOwed(shared, personal);
 
     for (const [role, ops] of shared) if (isEmpty(ops)) shared.delete(role);
     for (const [subject, ops] of personal) {
       if (isEmpty(ops)) personal.delete(subject);
     }
-    // While a clear is still being told, the views hold rows the tables no
-    // longer have, by design. The check resumes on the flush that ends it.
-    if (this.options.verify && !this.store.hasUntoldClears) this.verify();
+    if (this.options.verify) this.verify();
     return { shared, personal };
   }
 
@@ -349,6 +387,78 @@ export class ViewTracker {
     if (projected) this.place(bucket, name, source, projected, ops);
   }
 
+  /**
+   * Takes a cleared row out of an audience's bucket and notes that the
+   * audience's viewers still hold it.
+   */
+  private owe(
+    audience: Audience,
+    who: AudienceOf,
+    name: string,
+    source: TableKey,
+  ): void {
+    const bucket = audience.get(name);
+    const key = bucket?.bySource.get(source);
+    if (!bucket || key === undefined) return;
+    bucket.bySource.delete(source);
+    if (bucket.owner.get(key) !== source) return;
+    bucket.owner.delete(key);
+    bucket.rows.delete(key);
+    bucket.owed.add(key);
+    this.owing.set(audience, who);
+  }
+
+  /**
+   * Tells viewers of rows a `clear` took, a bounded number in one flush.
+   * Each role's audience is told up to `clearedRowsPerFlush` of its rows,
+   * which bounds the patch. People's own rows share one such allowance
+   * between them, because each person told is a frame of their own. A
+   * person is told all they are owed in one frame where the allowance
+   * lasts, so 5,000 people who each held five such rows get one frame each
+   * and not five.
+   */
+  private tellOwed(
+    shared: Map<Role, ViewOps>,
+    personal: Map<Subject, ViewOps>,
+  ): void {
+    // At least one, or the telling would never finish.
+    const allowance = Math.max(1, this.options.clearedRowsPerFlush);
+    let leftForPeople = allowance;
+    for (const [audience, who] of this.owing) {
+      const forRole = "role" in who;
+      const held = forRole
+        ? this.roles.get(who.role)
+        : this.subjects.get(who.subject);
+      // The audience left, and its viewers with it.
+      if (held !== audience) {
+        this.owing.delete(audience);
+        continue;
+      }
+      const room = forRole ? allowance : leftForPeople;
+      if (room === 0) continue;
+      const ops = forRole
+        ? opsFor(shared, who.role)
+        : opsFor(personal, who.subject);
+      let told = 0;
+      let settled = true;
+      for (const [name, bucket] of audience) {
+        for (const key of bucket.owed) {
+          if (told === room) {
+            settled = false;
+            break;
+          }
+          bucket.owed.delete(key);
+          ops.remove.push({ bucket: name, key });
+          ops.bytes += name.length + key.length + ROW_OVERHEAD_BYTES;
+          told += 1;
+        }
+        if (!settled) break;
+      }
+      if (!forRole) leftForPeople -= told;
+      if (settled) this.owing.delete(audience);
+    }
+  }
+
   /** Gives up the key a source row held when it no longer projects to it. */
   private release(
     bucket: Bucket,
@@ -393,6 +503,9 @@ export class ViewTracker {
     const encoded = JSON.stringify(projected.value);
     bucket.bySource.set(source, projected.key);
     bucket.owner.set(projected.key, source);
+    // A viewer who still held a cleared row under this key gets this row in
+    // its place, so the removal it was owed is off.
+    bucket.owed.delete(projected.key);
     if (bucket.rows.get(projected.key)?.encoded === encoded) return;
     const bytes =
       Buffer.byteLength(encoded) +

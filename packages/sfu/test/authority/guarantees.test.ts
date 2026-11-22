@@ -13,11 +13,12 @@ import {
   type PatchFrame,
   type ReplaceFrame,
 } from "@conclave/apps-sdk/authority";
-import { defineAuthority } from "@conclave/apps-sdk/authority/server";
+import { defineAuthority, type Subject } from "@conclave/apps-sdk/authority/server";
 import { Admin } from "../../config/classes/Admin.js";
 import { Client } from "../../config/classes/Client.js";
 import { Room } from "../../config/classes/Room.js";
 import { getRoomAuthority } from "../../server/apps/authority/index.js";
+import { AuthorityInstance, type Actor } from "../../server/apps/authority/instance.js";
 import { DEFAULT_AUTHORITY_LIMITS } from "../../server/apps/authority/limits.js";
 import { ensureWebinarRoomConfig } from "../../server/scheduledWebinarScheduler.js";
 import { getOrCreateWebinarRoomConfig } from "../../server/webinar.js";
@@ -791,6 +792,131 @@ describe("bounds", () => {
     expect(raviTab.rows("marks").length).toBe(2);
     expect(hostTab.rows("marks").length).toBe(2);
     expect(await room.converged()).toBe(true);
+  });
+
+  it("lets a new row take a view key from a cleared row that viewers have yet to lose", async () => {
+    const room = new Harness([probeAuthority], {
+      runtime: { limits: { ...DEFAULT_AUTHORITY_LIMITS, clearedRowsPerFlush: 100 } },
+    });
+    const hostTab = await room.open(host, probeContract);
+    const raviTab = await room.open(ravi, probeContract);
+    await hostTab.act("mark", { id: "a", from: 0, count: 250, shown: false, slot: true });
+    await room.deliver();
+    const slot = (tab: Tab, n: number) => field(tab.row("slots", String(n)), "of");
+
+    // The clear is told over three flushes. After the first, the viewers
+    // still hold slots 100 to 249 of the cleared note.
+    await hostTab.act("unmark", { id: "a", how: "clear" });
+    await room.deliver();
+    const heldAfterOneFlush = raviTab.rows("slots").length;
+    // Another note's marks now claim ten of those slots, ones whose batch
+    // is not the next to run.
+    const replaced = await hostTab.act("mark", { id: "b", from: 220, count: 10, shown: false, slot: true });
+    await room.deliver();
+    const takenAtOnce = [slot(raviTab, 220), slot(raviTab, 229)];
+    await vi.advanceTimersByTimeAsync(200);
+    await room.deliver();
+
+    expect(heldAfterOneFlush).toBe(150);
+    expect(replaced).toEqual({ ok: true, value: null });
+    expect(takenAtOnce).toEqual(["b", "b"]);
+    // The late batches take the cleared note's slots, not the ones that replaced them.
+    expect(raviTab.rows("slots").map((row) => field(row, "of"))).toEqual(Array(10).fill("b"));
+    expect(hostTab.rows("slots").length).toBe(10);
+    expect(await room.converged()).toBe(true);
+  });
+
+  it("sends a restored row to someone who subscribed while its clear was being told", async () => {
+    const room = new Harness([probeAuthority], {
+      runtime: { limits: { ...DEFAULT_AUTHORITY_LIMITS, clearedRowsPerFlush: 100 } },
+    });
+    const hostTab = await room.open(host, probeContract);
+    const raviTab = await room.open(ravi, probeContract);
+    await hostTab.act("mark", { id: "a", from: 0, count: 250, shown: true });
+    await room.deliver();
+
+    await hostTab.act("unmark", { id: "a", how: "clear" });
+    await room.deliver();
+    // Priya opens the app while 150 of the rows are still being told.
+    const late = await room.open(priya, probeContract);
+    const lateAtFirst = late.rows("marks").length;
+    // Mark 200 comes back exactly as it was, before its batch has run.
+    await hostTab.act("mark", { id: "a", from: 200, count: 1, shown: true });
+    await room.deliver();
+    await vi.advanceTimersByTimeAsync(200);
+    await room.deliver();
+
+    expect(lateAtFirst).toBe(0);
+    expect(late.rows("marks")).toEqual([{ n: 200 }]);
+    expect(raviTab.rows("marks")).toEqual([{ n: 200 }]);
+    expect(hostTab.rows("marks")).toEqual([{ n: 200 }]);
+    expect(await room.converged()).toBe(true);
+  });
+
+  it("tells people of their own cleared rows out of one allowance a flush", () => {
+    // The Q&A fixture without sockets: 300 people upvote one question, and
+    // each of them holds their upvote as a row of their own.
+    const qa = new AuthorityInstance(
+      "qa.test",
+      qaAuthority,
+      { mode: "meeting", qaEnabled: true },
+      {
+        limits: { ...DEFAULT_AUTHORITY_LIMITS, clearedRowsPerFlush: 100 },
+        random: { next: Math.random, int: (max) => Math.floor(Math.random() * max), shuffle: (list) => [...list] },
+        verifyViews: true,
+      },
+    );
+    const actor = (id: string, role: Actor["role"]): Actor => ({
+      subject: id as Subject,
+      role,
+      verified: true,
+      displayName: id,
+    });
+    let now = 1_000_000;
+    const act = (who: Actor, action: string, input: unknown): AuthorityResult<Json> => {
+      now += 10;
+      return qa.act(who, action, input, null, now);
+    };
+    const voters = Array.from({ length: 300 }, (_, index) => actor(`voter-${index}`, "member"));
+    const live = {
+      roles: new Set<Actor["role"]>(["member"]),
+      subjects: new Set(voters.map((voter) => voter.subject)),
+    };
+    const ownUpvotes = (who: Actor): number =>
+      qa.snapshot(who).filter((sized) => sized.row.bucket === "myUpvotes").length;
+
+    const first = act(actor("asker-0", "member"), "ask", { text: "The popular one" });
+    const popular = first.ok ? (field(first.value, "id") as string) : "";
+    act(actor("host", "moderator"), "moderate", { id: popular, action: "answered" });
+    for (const voter of voters) {
+      qa.snapshot(voter);
+      act(voter, "upvote", { id: popular, value: true });
+    }
+    qa.flushViews(live);
+    const heldBefore = ownUpvotes(voters[299]);
+    // The book fills. The answered question is the first it gives up, and
+    // its 300 upvotes go with it.
+    for (let index = 1; index <= 300; index += 1) {
+      act(actor(`asker-${Math.ceil(index / 3)}`, "member"), "ask", { text: `Question ${index}` });
+    }
+
+    const toldPerFlush: number[] = [];
+    const heldAfterFirstFlush: number[] = [];
+    while (qa.hasPendingChanges) {
+      const flushed = qa.flushViews(live);
+      toldPerFlush.push(
+        [...flushed.personal.values()]
+          .flatMap((ops) => ops.remove)
+          .filter((row) => row.bucket === "myUpvotes").length,
+      );
+      if (toldPerFlush.length === 1) heldAfterFirstFlush.push(...voters.map(ownUpvotes));
+    }
+
+    expect(heldBefore).toBe(1);
+    expect(qa.store.rows("upvotes").size).toBe(0);
+    // A snapshot is without the rows from the first flush on.
+    expect(heldAfterFirstFlush.filter((held) => held > 0)).toEqual([]);
+    expect(toldPerFlush).toEqual([100, 100, 100]);
   });
 
   it("limits a person across their tabs, and the room as a whole", async () => {

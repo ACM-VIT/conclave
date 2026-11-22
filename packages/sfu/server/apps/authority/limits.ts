@@ -26,9 +26,11 @@ export type AuthorityLimits = {
   /** Reads and writes one transaction may make before it is cut off. */
   transactionOps: number;
   /**
-   * Rows removed by a `clear` that the views are told of in one flush. A
-   * larger clear is spread over the flushes that follow, so removing a
-   * hundred thousand rows never holds the event loop for all of them at once.
+   * Rows removed by a `clear` that one audience is told of in one flush.
+   * The views drop a cleared row at once. Telling everyone who held it is
+   * the costly part, so a larger clear is told over the flushes that
+   * follow. People's own rows share one such allowance between them, as
+   * each person told is a frame of their own.
    */
   clearedRowsPerFlush: number;
   subscriptionsPerSocket: number;
