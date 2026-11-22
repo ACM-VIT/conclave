@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
-import { pathWithout, provideFlock } from "./test-support/host-tools.mjs";
+import { hasHostTool, pathWithout, provideFlock } from "./test-support/host-tools.mjs";
 
 // Runs the real deploy-sfu.sh against two fake SFUs (HTTP servers that report
 // rooms and take drains) and a stand-in docker CLI. A recreate replaces the
@@ -245,8 +245,12 @@ main();
 
 // upstream: files the next commit on origin changes, so the checkout is one
 // pull behind the revision it will deploy.
-// withoutFlock: run on a host whose PATH has no flock.
-const deploy = async (sfus, { args: extraArgs = [], env: extraEnv = {}, envLines = [], upstream, powershell = false, withoutFlock = false } = {}) => {
+// withoutFlock: run on a host whose PATH has no flock. script: the
+// deploy-sfu.sh the checkout starts with, in place of the current one.
+const deploy = async (
+  sfus,
+  { args: extraArgs = [], env: extraEnv = {}, envLines = [], upstream, powershell = false, withoutFlock = false, script } = {},
+) => {
   // On macOS this path sits behind the /var symlink, so the preflight also
   // runs through one.
   const root = await mkdtemp(path.join(tmpdir(), "conclave-deploy-"));
@@ -254,6 +258,7 @@ const deploy = async (sfus, { args: extraArgs = [], env: extraEnv = {}, envLines
     const src = path.join(root, "src");
     await mkdir(path.join(src, "scripts"), { recursive: true });
     await copyFile(path.join(scripts, "deploy-sfu.sh"), path.join(src, "scripts", "deploy-sfu.sh"));
+    if (script) await writeFile(path.join(src, "scripts", "deploy-sfu.sh"), script);
     await copyFile(path.join(scripts, "deploy-sfu.ps1"), path.join(src, "scripts", "deploy-sfu.ps1"));
     await copyFile(path.join(scripts, "deploy-sfu-preflight.mjs"), path.join(src, "scripts", "deploy-sfu-preflight.mjs"));
     // The preflight shares the SFU's own worker and port rules.
@@ -731,6 +736,94 @@ test("a silent instance whose container state Docker cannot report is not rebuil
     assert.equal(result.code, 1, result.output);
     assert.match(result.output, /Docker could not report the state of sfu-b's container/);
     assert.deepEqual(sfus["sfu-b"].recreates, []);
+  });
+});
+
+test("a deploy that restarts into this script from one that locked another file takes this lock too", async () => {
+  await withSfus({ "sfu-a": { rooms: 1 }, "sfu-b": { rooms: 1 } }, async (sfus) => {
+    const dir = await mkdtemp(path.join(tmpdir(), "conclave-deploy-lock-"));
+    const lock = path.join(dir, "deploy.lock");
+    const current = await readFile(path.join(scripts, "deploy-sfu.sh"), "utf8");
+    // The release before: it locked another file and marked the lock held
+    // with a bare flag, then the pull brought this script and it restarted.
+    const older = current.replace(
+      /^if \[\[ -d \/run\/lock \]\]; then\n[\s\S]*?^export SFU_DEPLOY_LOCK_HELD=.*\n/m,
+      'DEPLOY_LOCK="$OLD_DEPLOY_LOCK_FILE"\n[[ -n "${SFU_DEPLOY_LOCK_HELD:-}" ]] || exec 9>>"$DEPLOY_LOCK"\nflock -n 9 || exit 1\nexport SFU_DEPLOY_LOCK_HELD=1\n',
+    );
+    assert.notEqual(older, current);
+    let releaseDrains;
+    const drainsReleased = new Promise((resolve) => (releaseDrains = resolve));
+    let firstAtDrain;
+    const firstReached = new Promise((resolve) => (firstAtDrain = resolve));
+    let reached = 0;
+    beforeDrain = async () => {
+      reached += 1;
+      if (reached === 1) firstAtDrain();
+      else releaseDrains();
+      await drainsReleased;
+    };
+    const guard = setTimeout(() => releaseDrains(), 30_000);
+    try {
+      const restarted = deploy(sfus, {
+        script: older,
+        upstream: { "scripts/deploy-sfu.sh": current },
+        env: { SFU_DEPLOY_SERVICES: "sfu-a", OLD_DEPLOY_LOCK_FILE: path.join(dir, "old.lock"), SFU_DEPLOY_LOCK_FILE: lock, DRAIN_TIMEOUT_SECONDS: "3" },
+      });
+      await firstReached;
+      const second = await deploy(sfus, {
+        env: { SFU_DEPLOY_SERVICES: "sfu-b", SFU_DEPLOY_LOCK_FILE: lock, SFU_DEPLOY_LOCK_WAIT_SECONDS: "1", DRAIN_TIMEOUT_SECONDS: "3" },
+      });
+      releaseDrains();
+      const first = await restarted;
+      assert.match(first.output, /This pull changed deploy-sfu.sh; restarting with the new version/, first.output);
+      assert.equal(second.code, 1, second.output);
+      assert.match(second.output, /still holds .* not starting a second one/);
+      assert.equal(sfus["sfu-b"].drains.filter((drain) => drain.draining).length, 0, "the second deploy drained nothing");
+    } finally {
+      beforeDrain = null;
+      clearTimeout(guard);
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// Resolves once at least count processes hold path open: the holder, and
+// the run that now waits on it.
+const openedBy = async (path_, count) => {
+  for (let i = 0; i < 400; i += 1) {
+    const pids = await run("lsof", ["-t", path_]).then((r) => r.stdout.split("\n").filter(Boolean), () => []);
+    if (pids.length >= count) return;
+    await new Promise((done) => setTimeout(done, 50));
+  }
+  throw new Error(`${path_} was never opened by ${count} processes`);
+};
+
+test("a deploy that waited on a lock file replaced meanwhile does not run on the old one", { skip: !hasHostTool("lsof") && "needs lsof on PATH" }, async () => {
+  await withSfus({ "sfu-a": {}, "sfu-b": {} }, async (sfus) => {
+    const dir = await mkdtemp(path.join(tmpdir(), "conclave-deploy-lock-"));
+    const lock = path.join(dir, "deploy.lock");
+    const bin = path.join(dir, "bin");
+    await mkdir(bin);
+    await provideFlock(bin);
+    const holder = spawn("bash", ["-c", 'exec 7>>"$1"; flock -n 7 && echo locked && exec sleep 30', "_", lock], {
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+    });
+    try {
+      await new Promise((done) => holder.stdout.once("data", done));
+      const running = deploy(sfus, { env: { SFU_DEPLOY_LOCK_FILE: lock, SFU_DEPLOY_LOCK_WAIT_SECONDS: "30" } });
+      // While the deploy waits, the lock file is replaced, then the holder ends.
+      await openedBy(lock, 2);
+      await rm(lock);
+      await writeFile(lock, "");
+      holder.kill();
+      const result = await running;
+      assert.equal(result.code, 1, result.output);
+      assert.match(result.output, /deploy\.lock was replaced while this deploy waited for it/);
+      assert.deepEqual(events, []);
+    } finally {
+      holder.kill();
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 

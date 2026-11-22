@@ -297,9 +297,7 @@ fi
 # a deploy waits for it a while (SFU_DEPLOY_LOCK_WAIT_SECONDS). The lock lives
 # in /run/lock, which the backup's systemd unit (with its private /tmp) sees
 # too. The kernel holds the flock on fd 9 until this process, and the re-exec
-# below that inherits the fd, exit, however they exit. The re-exec takes the
-# lock again on that same fd, which succeeds only while it is still this
-# run's.
+# below that inherits the fd, exit, however they exit.
 if [[ -d /run/lock ]]; then
   DEPLOY_LOCK="${SFU_DEPLOY_LOCK_FILE:-/run/lock/conclave-sfu-deploy.lock}"
 else
@@ -309,9 +307,23 @@ if ! command -v flock >/dev/null 2>&1; then
   echo "deploy-sfu.sh needs flock (util-linux) so two deploys cannot run at once; install it and rerun." >&2
   exit 1
 fi
-if [[ -z "${SFU_DEPLOY_LOCK_HELD:-}" ]]; then
-  # Readable by every user that deploys or backs up, whoever made it.
-  [[ -e "$DEPLOY_LOCK" ]] || (umask 0111 && : >> "$DEPLOY_LOCK")
+# The device and inode of a path, or of an open fd given by number.
+file_id() {
+  node -e 'const fs=require("fs");const a=process.argv[1];const s=/^[0-9]+$/.test(a)?fs.fstatSync(Number(a)):fs.statSync(a);console.log(s.dev+":"+s.ino)' "$1"
+}
+# Readable by every user that deploys or backs up, whoever made it.
+[[ -e "$DEPLOY_LOCK" ]] || (umask 0111 && : >> "$DEPLOY_LOCK")
+lock_id="$(file_id "$DEPLOY_LOCK")"
+# A restarted run inherits fd 9 and SFU_DEPLOY_LOCK_HELD, the device and inode
+# of the lock it holds. It is trusted only when both name this very file. An
+# older release locked another file (and marked it with a bare flag), so its
+# lock is kept on fd 10 until this run ends, and this one is taken too.
+inherited=""
+if [[ -n "${SFU_DEPLOY_LOCK_HELD:-}" ]] && { : <&9; } 2>/dev/null; then
+  inherited="$(file_id 9 2>/dev/null || true)"
+fi
+if [[ -z "$inherited" || "$inherited" != "$lock_id" || "${SFU_DEPLOY_LOCK_HELD}" != "$lock_id" ]]; then
+  [[ -n "$inherited" ]] && exec 10<&9
   exec 9<"$DEPLOY_LOCK"
 fi
 if ! flock -n 9 2>/dev/null; then
@@ -322,7 +334,13 @@ if ! flock -n 9 2>/dev/null; then
     exit 1
   fi
 fi
-export SFU_DEPLOY_LOCK_HELD=1
+# The file can be replaced while a run waits; the lock counts only on the
+# file the path names now.
+[[ "$(file_id 9)" == "$(file_id "$DEPLOY_LOCK")" ]] || {
+  echo "${DEPLOY_LOCK} was replaced while this deploy waited for it; rerun it." >&2
+  exit 1
+}
+export SFU_DEPLOY_LOCK_HELD="$lock_id"
 
 if [[ "$ROLLBACK" == "true" ]]; then
   echo "Rollback: the checkout stays at $(git -C "$ROOT_DIR" rev-parse --short=12 HEAD); no pull, no build."
