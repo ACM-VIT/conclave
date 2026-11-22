@@ -427,6 +427,11 @@ service_image_name() {
   printf "%s" "$COMPOSE_JSON" | node -e "const c=JSON.parse(require('fs').readFileSync(0,'utf8'));const name=process.argv[1];console.log(c.services[name].image||c.name+'-'+name);" "$1"
 }
 
+# The build context and the Dockerfile compose uses for a service, one per line.
+service_build() {
+  printf "%s" "$COMPOSE_JSON" | node -e "const c=JSON.parse(require('fs').readFileSync(0,'utf8'));const b=c.services[process.argv[1]].build||{};const p=require('path');const ctx=p.resolve(process.argv[2],b.context||'.');console.log(ctx);console.log(p.resolve(ctx,b.dockerfile||'Dockerfile'));" "$1" "$ROOT_DIR"
+}
+
 service_container() {
   local ids
   ids="$("${COMPOSE[@]}" ps -aq "$1" 2>/dev/null)" || return 1
@@ -878,14 +883,18 @@ fi
 # The canary comes from this checkout, never from the image under test: a
 # release built before the bundle existed has none to run, and the check
 # should not change with the build it checks. A deploy has just built the
-# checkout; a rollback uses the checkout's image, built here only if no
-# deploy built it.
+# checkout. A rollback uses the checkout's image; when no deploy built it, it
+# is built under its own canary tag, so no service image is ever rebuilt or
+# retagged for it, and a rerun reuses it.
 if [[ "$ROLLBACK" == "true" ]]; then
   checkout_commit="$(git -C "$ROOT_DIR" rev-parse --short=12 HEAD)"
-  if ! CANARY_IMAGE="$(docker image inspect -f '{{.Id}}' "${IMAGE_REPO}:${checkout_commit}" 2>/dev/null)"; then
-    echo "Building ${checkout_commit} for its canary; the instances still go back to ${TARGET_COMMIT}."
-    "${COMPOSE[@]}" build "${ORDERED_SERVICES[0]}"
-    CANARY_IMAGE="$(docker image inspect -f '{{.Id}}' "$(service_image_name "${ORDERED_SERVICES[0]}")")"
+  canary_tag="${IMAGE_REPO}-canary:${checkout_commit}"
+  if ! CANARY_IMAGE="$(docker image inspect -f '{{.Id}}' "${IMAGE_REPO}:${checkout_commit}" 2>/dev/null)" &&
+     ! CANARY_IMAGE="$(docker image inspect -f '{{.Id}}' "$canary_tag" 2>/dev/null)"; then
+    mapfile -t canary_build < <(service_build "${ORDERED_SERVICES[0]}")
+    echo "Building ${checkout_commit} as ${canary_tag} for its canary; the instances still go back to ${TARGET_COMMIT}."
+    docker build -t "$canary_tag" -f "${canary_build[1]}" "${canary_build[0]}"
+    CANARY_IMAGE="$(docker image inspect -f '{{.Id}}' "$canary_tag")"
   fi
 else
   CANARY_IMAGE="$TARGET_IMAGE"

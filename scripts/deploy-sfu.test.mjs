@@ -127,8 +127,9 @@ const args = process.argv.slice(2);
 const sfus = JSON.parse(process.env.DEPLOY_TEST_SFUS);
 fs.appendFileSync(process.env.DEPLOY_TEST_DOCKER_LOG, JSON.stringify(args) + "\\n");
 const out = (text) => process.stdout.write(text + "\\n");
-// docker tag, kept per run: a recreated container gets the image tagged for it.
-const tagsFile = process.env.DEPLOY_TEST_DOCKER_LOG + ".tags";
+// docker tag, kept per run unless DEPLOY_TEST_DOCKER_TAGS shares them across
+// runs as one host would: a recreated container gets the image tagged for it.
+const tagsFile = process.env.DEPLOY_TEST_DOCKER_TAGS || process.env.DEPLOY_TEST_DOCKER_LOG + ".tags";
 const tags = fs.existsSync(tagsFile) ? JSON.parse(fs.readFileSync(tagsFile, "utf8")) : {};
 const state = async (name) => (await fetch("http://127.0.0.1:" + sfus[name].port + "/stand-in/state")).json();
 const service = (name, sfu, index) => ({
@@ -162,6 +163,11 @@ const main = async () => {
     }
     if (rest[0] === "config" && rest[1] === "--hash") return out(rest[2] + " current-hash");
     if (rest[0] === "ps") return out("ctr-" + rest.at(-1));
+    // A build retags the service's own image, as compose does.
+    if (rest[0] === "build") {
+      tags["vm-" + rest.at(-1)] = "sha256:checkout-build";
+      return fs.writeFileSync(tagsFile, JSON.stringify(tags));
+    }
     if (rest[0] === "up") {
       const name = rest.at(-1);
       const draining = process.env.SFU_START_DRAINING === "true";
@@ -198,8 +204,18 @@ const main = async () => {
     if (format.includes(".Image")) return out((await state(name)).image);
     return out(args.at(-1));
   }
+  if (args[0] === "build") {
+    tags[args[args.indexOf("-t") + 1]] = "sha256:canary-build";
+    return fs.writeFileSync(tagsFile, JSON.stringify(tags));
+  }
   // DEPLOY_TEST_NO_COMMIT_IMAGES: no image was ever tagged for a commit.
-  if (args[0] === "image" && args[1] === "inspect" && process.env.DEPLOY_TEST_NO_COMMIT_IMAGES && /:[0-9a-f]{12}$/.test(args.at(-1))) {
+  if (
+    args[0] === "image" &&
+    args[1] === "inspect" &&
+    process.env.DEPLOY_TEST_NO_COMMIT_IMAGES &&
+    /:[0-9a-f]{12}$/.test(args.at(-1)) &&
+    !(args.at(-1) in tags)
+  ) {
     process.exitCode = 1;
     return;
   }
@@ -242,7 +258,12 @@ const deploy = async (sfus, { args: extraArgs = [], env: extraEnv = {}, envLines
       path.join(src, "packages", "sfu", "config", "workerSettings.mjs"),
     );
     await copyFile(path.join(scripts, "..", "docker-compose.sfu.yml"), path.join(src, "docker-compose.sfu.yml"));
-    const git = (...args) => run("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", ...args]);
+    // Fixed dates, so the same files make the same commit in every run, as a
+    // rerun on the VM sees the same checkout.
+    const git = (...args) =>
+      run("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", ...args], {
+        env: { ...process.env, GIT_AUTHOR_DATE: "2026-01-01T00:00:00Z", GIT_COMMITTER_DATE: "2026-01-01T00:00:00Z" },
+      });
     await git("-C", src, "init", "-q");
     await git("-C", src, "add", ".");
     await git("-C", src, "commit", "-qm", "deploy test");
@@ -295,7 +316,8 @@ const deploy = async (sfus, { args: extraArgs = [], env: extraEnv = {}, envLines
       (error) => ({ code: error.code, output: `${error.stdout}${error.stderr}` }),
     );
     const docker = (await readFile(dockerLog, "utf8")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
-    return { ...result, docker, order: result.output.match(/^Deploy order: (.*)$/m)?.[1] };
+    const tags = JSON.parse(await readFile(env.DEPLOY_TEST_DOCKER_TAGS || `${dockerLog}.tags`, "utf8").catch(() => "{}"));
+    return { ...result, docker, tags, order: result.output.match(/^Deploy order: (.*)$/m)?.[1] };
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -779,19 +801,34 @@ test("a rollback to a release built before the canary bundle runs the checkout's
   });
 });
 
-test("a rollback whose checkout was never built builds it for the canary and still goes back", async () => {
-  await withSfus({ "sfu-a": { onTarget: true }, "sfu-b": { onTarget: true } }, async (sfus) => {
+test("a rollback whose checkout was never built builds its canary under its own tag, and a retry after a partial rollback keeps every service image", async () => {
+  await withSfus({ "sfu-a": { onTarget: true }, "sfu-b": { onTarget: true, rooms: 1 } }, async (sfus) => {
     const stateDir = await mkdtemp(path.join(tmpdir(), "conclave-deploy-state-"));
     try {
       await writeFile(path.join(stateDir, "vm.env"), "LAST_GOOD_COMMIT=bad\nLAST_GOOD_IMAGE=sha256:target\nPREVIOUS_GOOD_COMMIT=good\nPREVIOUS_GOOD_IMAGE=sha256:previous\n");
-      const result = await deploy(sfus, {
-        args: ["--rollback"],
-        env: { SFU_DEPLOY_STATE_DIR: stateDir, DEPLOY_TEST_NO_BUNDLE: "sha256:previous", DEPLOY_TEST_NO_COMMIT_IMAGES: "1" },
-      });
-      assert.equal(result.code, 0, result.output);
-      assert.match(result.output, /Building [0-9a-f]{12} for its canary; the instances still go back to good/);
-      assert.ok(result.docker.some((args) => args[0] === "compose" && args.includes("build")), "the checkout was built");
+      const env = {
+        SFU_DEPLOY_STATE_DIR: stateDir,
+        DEPLOY_TEST_DOCKER_TAGS: path.join(stateDir, "docker-tags.json"),
+        DEPLOY_TEST_NO_BUNDLE: "sha256:previous",
+        DEPLOY_TEST_NO_COMMIT_IMAGES: "1",
+      };
+      // sfu-b still has a call, so the first run rolls back sfu-a only.
+      const partial = await deploy(sfus, { args: ["--rollback"], env });
+      assert.equal(partial.code, 3, partial.output);
+      sfus["sfu-b"].rooms = 0;
+      const retry = await deploy(sfus, { args: ["--rollback"], env });
+      assert.equal(retry.code, 0, retry.output);
+
       assert.deepEqual(Object.values(sfus).map((sfu) => sfu.image), ["sha256:previous", "sha256:previous"]);
+      assert.equal(retry.tags["vm-sfu-a"], "sha256:previous", "sfu-a's compose image still names the rollback release");
+      assert.equal(retry.tags["vm-sfu-b"], "sha256:previous");
+      for (const run of [partial, retry]) {
+        assert.ok(!run.docker.some((args) => args[0] === "compose" && args.includes("build")), "no service image is rebuilt");
+      }
+      assert.match(partial.output, /Building [0-9a-f]{12} as vm-sfu-canary:[0-9a-f]{12} for its canary; the instances still go back to good/);
+      assert.doesNotMatch(retry.output, /Building/, "the retry reuses the canary image");
+      const canaryImages = retry.docker.filter((args) => args[0] === "run").map((args) => args[args.indexOf("--entrypoint") + 2]);
+      assert.deepEqual(canaryImages, ["sha256:canary-build"]);
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }

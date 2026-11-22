@@ -47,7 +47,9 @@ is recreated while it has rooms unless you pass `--force-drain`:
    `dist/canary-call.mjs` with its dependencies inside). It always runs from
    the image of the checked-out revision, never from the image under test,
    so `--rollback` to a release built before the bundle existed still gets a
-   canary; a rollback whose checkout was never built builds it first. It takes
+   canary. A rollback whose checkout was never built builds it under its own
+   tag (`<project>-sfu-canary:<commit>`), never as a service image, so no
+   SFU's compose image changes and a rerun reuses it. It takes
    its room through the secret-protected placement endpoint with
    `allowDraining`, the one placement a draining instance grants. Two clients
    join, publish Opus audio and must receive each other's RTP through the SFU,
