@@ -323,6 +323,9 @@ LAST_GOOD_COMMIT=""
 LAST_GOOD_IMAGE=""
 PREVIOUS_GOOD_COMMIT=""
 PREVIOUS_GOOD_IMAGE=""
+# The image whose canary passed most recently, saved at the moment it passed,
+# so a rerun after an interruption can still record the release.
+VERIFIED_IMAGE=""
 if [[ -f "$DEPLOY_STATE_FILE" ]]; then
   # shellcheck disable=SC1090
   source "$DEPLOY_STATE_FILE"
@@ -331,8 +334,8 @@ fi
 save_deploy_state() {
   mkdir -p "$DEPLOY_STATE_DIR"
   local tmp="${DEPLOY_STATE_FILE}.tmp"
-  printf 'LAST_GOOD_COMMIT=%q\nLAST_GOOD_IMAGE=%q\nPREVIOUS_GOOD_COMMIT=%q\nPREVIOUS_GOOD_IMAGE=%q\n' \
-    "$LAST_GOOD_COMMIT" "$LAST_GOOD_IMAGE" "$PREVIOUS_GOOD_COMMIT" "$PREVIOUS_GOOD_IMAGE" > "$tmp"
+  printf 'LAST_GOOD_COMMIT=%q\nLAST_GOOD_IMAGE=%q\nPREVIOUS_GOOD_COMMIT=%q\nPREVIOUS_GOOD_IMAGE=%q\nVERIFIED_IMAGE=%q\n' \
+    "$LAST_GOOD_COMMIT" "$LAST_GOOD_IMAGE" "$PREVIOUS_GOOD_COMMIT" "$PREVIOUS_GOOD_IMAGE" "$VERIFIED_IMAGE" > "$tmp"
   mv "$tmp" "$DEPLOY_STATE_FILE"
   # The tags keep both images safe from docker image prune.
   [[ -n "$LAST_GOOD_IMAGE" ]] && docker tag "$LAST_GOOD_IMAGE" "${IMAGE_REPO}:last-good"
@@ -471,6 +474,12 @@ deploy_service() {
   if [[ -n "$container" ]]; then
     previous_image="$(docker inspect -f '{{.Image}}' "$container")"
   fi
+  # A container already on the target image that is not serving normally was
+  # left by an interrupted run, so it is not a known-good fallback; use what
+  # ran before that run.
+  if [[ "$previous_image" == "$TARGET_IMAGE" ]]; then
+    previous_image="$(docker image inspect -f '{{.Id}}' "${IMAGE_REPO}:rollback-${svc}" 2>/dev/null || true)"
+  fi
 
   if [[ -n "$container" && -n "$status" ]] &&
      [[ "$(printf "%s" "$status" | json_field draining)" == "false" ]] &&
@@ -532,7 +541,8 @@ deploy_service() {
     echo "Instances not yet deployed were left untouched and keep serving." >&2
     return "$EXIT_CANARY_FAILED"
   fi
-  CANARIES_PASSED=$((CANARIES_PASSED + 1))
+  VERIFIED_IMAGE="$TARGET_IMAGE"
+  save_deploy_state
   echo "${svc} passed its canary on ${TARGET_COMMIT} and is serving."
   validate_public_route "$svc" "$(service_public_url "$svc")"
 }
@@ -560,7 +570,6 @@ else
   docker tag "$TARGET_IMAGE" "${IMAGE_REPO}:${TARGET_COMMIT}"
 fi
 
-CANARIES_PASSED=0
 for svc in "${ORDERED_SERVICES[@]}"; do
   deploy_service "$svc"
 done
@@ -572,7 +581,7 @@ if [[ "$ROLLBACK" == "true" ]]; then
   PREVIOUS_GOOD_COMMIT=""
   PREVIOUS_GOOD_IMAGE=""
   save_deploy_state
-elif [[ "$TARGET_IMAGE" != "$LAST_GOOD_IMAGE" ]] && (( CANARIES_PASSED > 0 )); then
+elif [[ "$TARGET_IMAGE" != "$LAST_GOOD_IMAGE" && "$VERIFIED_IMAGE" == "$TARGET_IMAGE" ]]; then
   PREVIOUS_GOOD_COMMIT="$LAST_GOOD_COMMIT"
   PREVIOUS_GOOD_IMAGE="$LAST_GOOD_IMAGE"
   LAST_GOOD_COMMIT="$TARGET_COMMIT"
