@@ -5,6 +5,7 @@ import { PostHog } from "posthog-node";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createErrorReporter,
+  scrubErrorText,
   scrubExceptionEvent,
   type ExceptionClient,
 } from "../server/analytics/errorReporter.js";
@@ -135,13 +136,47 @@ describe("SFU error reporter", () => {
     });
     expect(entry.type).toBe("TypeError");
     expect(entry.value).toBe(
-      "Cannot read joinRoom for [email] at https://conclave.test/x",
+      "Cannot read joinRoom for [email] at https://conclave.test/[code]",
     );
     expect(
       entry.stacktrace.frames.some((frame) =>
         frame.filename?.endsWith("error-reporter.test.ts"),
       ),
     ).toBe(true);
+  });
+
+  it("sends a fatal exception without the room code in its URL", async () => {
+    const fake = await startFakePostHog();
+    servers.push(fake.server);
+    const reporter = reporterFor(posthogClient(fake.host));
+
+    await reporter.reportFatal(
+      new Error("Join failed at https://conclave.test/lime-pear-plum?invite=private"),
+      { source: "uncaught_exception" },
+      2000,
+    );
+
+    const exception = fake.events.find((event) => event.event === "$exception");
+    const list = exception?.properties.$exception_list as Array<{
+      value: string;
+      stacktrace?: unknown;
+    }>;
+    expect(list[0].value).toBe("Join failed at https://conclave.test/[code]");
+    // Frames carry source lines of this test file, which hold the literal.
+    const withoutFrames = {
+      ...exception?.properties,
+      $exception_list: list.map(({ stacktrace: _frames, ...entry }) => entry),
+    };
+    expect(JSON.stringify(withoutFrames)).not.toMatch(/lime-pear-plum|private/);
+  });
+
+  it.each([
+    ["webinar https://conclave.test/w/spring-demo?x=1", "webinar https://conclave.test/w/[code]"],
+    ["api https://sfu.conclave.test/rooms/lime-pear-plum/state", "api https://sfu.conclave.test/[path]"],
+    ["home https://conclave.test/", "home https://conclave.test/"],
+    ["bad https://[ url", "bad [url] url"],
+  ])("scrubs %s to %s", (input, expected) => {
+    expect(scrubErrorText(input)).toBe(expected);
   });
 
   it("delivers a fatal exception before resolving", async () => {

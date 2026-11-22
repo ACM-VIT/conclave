@@ -175,14 +175,31 @@ export const createErrorReporter = ({
 
 const EMAIL_PATTERN = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
 const JWT_PATTERN = /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g;
-const URL_QUERY_PATTERN = /(\bhttps?:\/\/[^\s?#"']+)[?#][^\s"']*/gi;
+const URL_PATTERN = /\bhttps?:\/\/[^\s"'<>)]+/gi;
 
-/** Removes emails, tokens and URL query strings from an error message. */
+/** Replaces the meeting code or ids in a path, like the web scrubber does. */
+const templatePath = (pathname: string): string => {
+  const segments = pathname.split("/").filter(Boolean);
+  if (segments.length === 0) return "/";
+  if (segments[0] === "w") return "/w/[code]";
+  return segments.length === 1 ? "/[code]" : "/[path]";
+};
+
+const scrubUrl = (value: string): string => {
+  try {
+    const url = new URL(value);
+    return `${url.origin}${templatePath(url.pathname)}`;
+  } catch {
+    return "[url]";
+  }
+};
+
+/** Removes URL paths and queries, emails and tokens from an error message. */
 export const scrubErrorText = (value: string): string =>
   value
+    .replace(URL_PATTERN, scrubUrl)
     .replace(JWT_PATTERN, "[token]")
-    .replace(EMAIL_PATTERN, "[email]")
-    .replace(URL_QUERY_PATTERN, "$1");
+    .replace(EMAIL_PATTERN, "[email]");
 
 type ExceptionListEntry = { value?: unknown };
 

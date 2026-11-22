@@ -108,5 +108,6 @@ and `$session_entry_` copies, and `save_campaign_params` is off.
 Stack frames in our script folders (`/_next/static/`, `/mediapipe/` and so on)
 keep their path so they can be symbolicated. URL properties never do.
 Session replay, surveys, DOM autocapture, feature flags and pageviews are off,
-and no user is ever identified. The SFU scrubs emails, tokens and URL queries
-from exception messages before sending.
+and no user is ever identified. The SFU scrubs emails and tokens from exception
+messages and cuts every URL to its origin and route (`/[code]`, `/w/[code]`,
+`/[path]`) before sending.
