@@ -1,8 +1,8 @@
 import jwt from "jsonwebtoken";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { POST } from "../src/app/api/sfu/join/route";
-import { buildGuestUserKey } from "../src/lib/guest-identity";
-import { guestPassCookieName, resolveGuestSession } from "../src/lib/guest-pass";
+import { createGuestPassSession } from "../src/app/lib/guest-pass-session";
+import { guestPassCookieName } from "../src/lib/guest-pass";
 
 const { getSession } = vi.hoisted(() => ({ getSession: vi.fn() }));
 vi.mock("@/lib/auth", () => ({ auth: { api: { getSession } } }));
@@ -118,13 +118,34 @@ describe("guest identity", () => {
     expect(two.claims!.guestProof).toBe(one.claims!.guestProof);
   });
 
-  it("builds the identity the client computes from the id it was handed", async () => {
+  it("issues a seat key that shows neither the pass nor the tab behind it", async () => {
     const joined = await browser().join({ sessionId: "tab-1", guestId: "" });
 
     expect(joined.body.guestId).toMatch(/^gp_[A-Za-z0-9_-]{22}$/);
-    expect(joined.claims!.userId).toBe(`guest-${joined.body.guestId}.tab-1`);
-    expect(buildGuestUserKey(joined.body.guestId!, "tab-1")).toBe(joined.claims!.userId);
+    expect(joined.claims!.userId).toMatch(/^guest-gp_[A-Za-z0-9_-]{22}$/);
+    expect(joined.claims!.userId).not.toContain(joined.body.guestId!.slice(3));
+    expect(joined.claims!.userId).not.toContain("tab-1");
     expect(joined.claims!.sessionId).toBe("tab-1");
+  });
+
+  it("gives one browser tab a different seat key in every room, under one pass", async () => {
+    const tab = browser();
+    const here = await tab.join({ roomId: "room-a", sessionId: "tab-1", guestId: "" });
+    const there = await tab.join({ roomId: "room-b", sessionId: "tab-1", guestId: here.body.guestId });
+    const hereAgain = await tab.join({ roomId: "room-a", sessionId: "tab-1", guestId: here.body.guestId });
+
+    expect(there.body.guestId).toBe(here.body.guestId);
+    expect(there.claims!.userId).not.toBe(here.claims!.userId);
+    expect(there.claims!.guestProof).toBe(here.claims!.guestProof);
+    expect(hereAgain.claims!.userId).toBe(here.claims!.userId);
+  });
+
+  it("scopes the seat key to the client's deployment as well as the room", async () => {
+    const tab = browser();
+    const one = await tab.join({ sessionId: "tab-1", guestId: "", clientId: "public" });
+    const other = await tab.join({ sessionId: "tab-1", guestId: one.body.guestId, clientId: "internal" });
+
+    expect(other.claims!.userId).not.toBe(one.claims!.userId);
   });
 
   it("signs a proof of the pass that the public ids do not reveal", async () => {
@@ -259,78 +280,172 @@ describe("guest pass cookie", () => {
   });
 });
 
-describe("guest identity handed to a page render", () => {
-  it("is the identity of the pass cookie, with no grant", async () => {
-    const tab = browser();
-    const joined = await tab.join({ sessionId: "tab-1", guestId: "" });
+describe("the pass a browser joins with", () => {
+  const DAY = 24 * 60 * 60 * 1000;
 
-    const session = resolveGuestSession(SECRET, tab.jar.get(guestPassCookieName(SECRET)));
-    expect(session).toEqual({ id: joined.body.guestId });
-  });
-
-  it("lets a first visit join as the identity it was rendered with, then relies on the cookie", async () => {
-    const session = resolveGuestSession(SECRET, undefined);
+  it("is issued on a first visit with a grant, and then proven by the cookie alone", async () => {
     const tab = browser();
 
-    const first = await tab.join({ sessionId: "tab-1", guestId: session.id, guestGrant: session.grant });
+    const first = await tab.join({ sessionId: "tab-1", guestId: "" });
     expect(first.status).toBe(200);
-    expect(first.claims!.userId).toBe(buildGuestUserKey(session.id, "tab-1"));
     expect(first.setCookies).toHaveLength(1);
     expect(first.body.guestGrant).toEqual(expect.any(String));
 
-    const second = await tab.join({ sessionId: "tab-1", guestId: session.id });
+    const second = await tab.join({ sessionId: "tab-1", guestId: first.body.guestId });
     expect(second.claims!.userId).toBe(first.claims!.userId);
     expect(second.body.guestGrant).toBeUndefined();
   });
 
+  it("is the first tab's pass for a second tab that joins after it", async () => {
+    const tabs = browser();
+    const one = await tabs.join({ sessionId: "tab-1", guestId: "" });
+
+    const two = await tabs.join({ roomId: "second-room", sessionId: "tab-2", guestId: "" });
+
+    expect(two.body.guestId).toBe(one.body.guestId);
+    expect(two.claims!.guestProof).toBe(one.claims!.guestProof);
+    expect(two.setCookies).toHaveLength(1);
+    expect(two.body.guestGrant).toBeUndefined();
+  });
+
+  it("is the cookie's pass even when the tab still carries a grant for another", async () => {
+    const tabs = browser();
+    const one = await tabs.join({ sessionId: "tab-1", guestId: "" });
+    const strayGrant = (await browser().join({ sessionId: "tab-2", guestId: "" })).body.guestGrant;
+
+    const two = await tabs.join({
+      roomId: "second-room",
+      sessionId: "tab-2",
+      guestId: "",
+      guestGrant: strayGrant,
+      isHost: true,
+    });
+    const afterReload = await tabs.join({ roomId: "second-room", sessionId: "tab-2", guestId: "" });
+
+    expect(two.body.guestId).toBe(one.body.guestId);
+    expect(two.body.guestGrant).toBeUndefined();
+    expect(afterReload.claims!.userId).toBe(two.claims!.userId);
+    expect(afterReload.claims!.guestProof).toBe(two.claims!.guestProof);
+  });
+
   it("keeps a browser that drops cookies on its identity through rolling grants", async () => {
-    const session = resolveGuestSession(SECRET, undefined);
-    const first = await browser().join({ sessionId: "tab-1", guestId: session.id, guestGrant: session.grant });
-    const second = await browser().join({ sessionId: "tab-1", guestId: session.id, guestGrant: first.body.guestGrant });
+    const first = await browser().join({ sessionId: "tab-1", guestId: "" });
+    const second = await browser().join({
+      sessionId: "tab-1",
+      guestId: first.body.guestId,
+      guestGrant: first.body.guestGrant,
+    });
 
     expect(second.claims!.userId).toBe(first.claims!.userId);
     expect(second.body.guestGrant).toEqual(expect.any(String));
   });
 
-  it("does not replace another tab's pass with a second first-visit identity", async () => {
-    const tabs = browser();
-    const one = resolveGuestSession(SECRET, undefined);
-    const two = resolveGuestSession(SECRET, undefined);
-    await tabs.join({ sessionId: "tab-1", guestId: one.id, guestGrant: one.grant });
+  it("is replaced, not refused, when it expired before a page's first join", async () => {
+    vi.useFakeTimers({ now: Date.UTC(2026, 10, 22) });
+    try {
+      const tab = browser();
+      const before = await tab.join({ sessionId: "tab-1", guestId: "" });
 
-    const second = await tabs.join({ sessionId: "tab-2", guestId: two.id, guestGrant: two.grant });
-    expect(second.claims!.userId).toBe(buildGuestUserKey(two.id, "tab-2"));
-    expect(second.setCookies).toHaveLength(0);
-    expect(second.body.guestGrant).toEqual(expect.any(String));
+      vi.setSystemTime(Date.now() + 31 * DAY);
+      const after = await tab.join({
+        sessionId: "tab-1",
+        guestId: "",
+        guestGrant: before.body.guestGrant,
+      });
 
-    const firstAgain = await tabs.join({ sessionId: "tab-1", guestId: one.id });
-    expect(firstAgain.status).toBe(200);
+      expect(after.status).toBe(200);
+      expect(after.body.guestId).not.toBe(before.body.guestId);
+      expect(after.setCookies).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
-  it("refuses a rendered identity once neither its cookie nor a grant backs it", async () => {
-    const session = resolveGuestSession(SECRET, undefined);
+  it("cannot be continued by a page once neither its cookie nor a grant backs it", async () => {
+    const first = await browser().join({ sessionId: "tab-1", guestId: "" });
 
-    const attempt = await browser().join({ sessionId: "tab-1", guestId: session.id });
+    const attempt = await browser().join({ sessionId: "tab-1", guestId: first.body.guestId });
     expect(attempt.status).toBe(409);
     expect(attempt.body.token).toBeUndefined();
     expect(attempt.setCookies).toHaveLength(0);
   });
 
-  it("does not accept a grant for another identity", async () => {
-    const mine = resolveGuestSession(SECRET, undefined);
-    const theirs = resolveGuestSession(SECRET, undefined);
+  it("is not proven by a grant for another pass", async () => {
+    const mine = await browser().join({ sessionId: "tab-1", guestId: "" });
+    const theirs = await browser().join({ sessionId: "tab-1", guestId: "" });
 
-    const attempt = await browser().join({ sessionId: "tab-1", guestId: theirs.id, guestGrant: mine.grant });
+    const attempt = await browser().join({
+      sessionId: "tab-1",
+      guestId: theirs.body.guestId,
+      guestGrant: mine.body.guestGrant,
+    });
     expect(attempt.status).toBe(409);
+  });
+});
+
+describe("two tabs of a new browser that join at the same moment", () => {
+  // One tab per session, both sending through the same cookie jar. Each
+  // tab's call resolves to the join result.
+  const joinFromTwoTabs = async () => {
+    const tabs = browser();
+    const tab = (roomId: string, sessionId: string) => {
+      const withGuestPass = createGuestPassSession();
+      return async () =>
+        (
+          await withGuestPass(async (guestPass) => {
+            const result = await tabs.join({ roomId, sessionId, isHost: true, ...guestPass });
+            return { ...result.body, result };
+          })
+        ).result;
+    };
+    const first = tab("first-room", "tab-1");
+    const second = tab("second-room", "tab-2");
+    const [one, two] = await Promise.all([first(), second()]);
+    return { one, two, reloadSecond: tab("second-room", "tab-2") };
+  };
+
+  // Web Locks, as far as these calls need it: one holder at a time.
+  const webLocks = () => {
+    let last: Promise<unknown> = Promise.resolve();
+    return {
+      request: (_name: string, _options: unknown, task: () => Promise<unknown>) => {
+        const turn = last.then(task, task);
+        last = turn.catch(() => undefined);
+        return turn;
+      },
+    };
+  };
+
+  it("end up on one pass, so the tab that hosts a room is still its host after a reload", async () => {
+    vi.stubGlobal("navigator", { locks: webLocks() });
+
+    const { one, two, reloadSecond } = await joinFromTwoTabs();
+    const reloaded = await reloadSecond();
+
+    expect(two.body.guestId).toBe(one.body.guestId);
+    expect(reloaded.claims!.userId).toBe(two.claims!.userId);
+    expect(reloaded.claims!.guestProof).toBe(two.claims!.guestProof);
+  });
+
+  it("would each plant their own pass if their calls overlapped", async () => {
+    vi.stubGlobal("navigator", {
+      locks: {
+        request: (_name: string, _options: unknown, task: () => Promise<unknown>) =>
+          task(),
+      },
+    });
+
+    const { one, two } = await joinFromTwoTabs();
+
+    expect(two.body.guestId).not.toBe(one.body.guestId);
   });
 });
 
 describe("signed-in identity", () => {
   it("is the account, with no guest pass involved", async () => {
     getSession.mockResolvedValue({ user: { id: "u1", email: "me@example.com", name: "Me" } });
-    const session = resolveGuestSession(SECRET, undefined);
 
-    const joined = await browser().join({ sessionId: "tab-1", guestId: session.id, guestGrant: session.grant });
+    const joined = await browser().join({ sessionId: "tab-1", guestId: "" });
     expect(joined.claims).toMatchObject({ userId: "me@example.com", email: "me@example.com", sessionId: "tab-1" });
     expect(joined.claims!.guestProof).toBeUndefined();
     expect(joined.body.guestId).toBeUndefined();

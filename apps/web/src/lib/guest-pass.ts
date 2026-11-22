@@ -1,17 +1,25 @@
 import { createHmac, randomBytes } from "node:crypto";
 import jwt from "jsonwebtoken";
-import {
-  GUEST_GRANT_TTL_SECONDS,
-  buildGuestUserKey,
-  isGuestId,
-  isGuestSessionId,
-  isReservedGuestSessionId,
-  type GuestSession,
-} from "./guest-identity";
 
 const PASS_AUDIENCE = "conclave-guest-pass";
 const GRANT_AUDIENCE = "conclave-guest-grant";
 const PASS_TTL_SECONDS = 30 * 24 * 60 * 60;
+const GRANT_TTL_SECONDS = 24 * 60 * 60;
+
+const GUEST_ID_PREFIX = "gp_";
+const GUEST_ID_PATTERN = /^gp_[A-Za-z0-9_-]{22}$/;
+const GUEST_SESSION_ID_PATTERN = /^[^\u0000-\u001f\u007f#@]{1,128}$/;
+
+const isGuestId = (value: unknown): value is string =>
+  typeof value === "string" && GUEST_ID_PATTERN.test(value);
+
+/**
+ * Clients that predate guest passes are `guest-<sessionId>`. That key must
+ * stay out of the namespace of issued seat keys, and it must never equal the
+ * email that keys a signed-in account.
+ */
+const isReservedGuestSessionId = (sessionId: string): boolean =>
+  sessionId.startsWith(GUEST_ID_PREFIX) || sessionId.includes("@");
 
 const GUEST_SESSION_EXPIRED =
   "Your guest session has expired. Reload the page to join again.";
@@ -70,11 +78,33 @@ const mintGuestId = (): string =>
   `gp_${randomBytes(16).toString("base64url")}`;
 
 // What the SFU binds a guest identity to. Derived from the pass, never shown
-// to other participants.
+// to other participants. It is the same in every room and tab, which is how
+// the SFU tells that two seats belong to one guest.
 const proofOf = (sfuSecret: string, guestId: string): string =>
   createHmac("sha256", signingKey(sfuSecret))
     .update(`proof:${guestId}`)
     .digest("base64url");
+
+export type GuestSeat = {
+  clientId: string;
+  roomId: string;
+  sessionId: string;
+};
+
+/**
+ * The public user key of one guest seat: this pass, in this room, in this
+ * tab. Every participant sees it, so it must not say which pass is behind
+ * it. As a keyed hash, the keys one browser gets in two rooms or two tabs
+ * cannot be linked, and nobody can produce a key without the pass.
+ */
+const seatKeyOf = (sfuSecret: string, guestId: string, seat: GuestSeat): string => {
+  const digest = createHmac("sha256", signingKey(sfuSecret))
+    .update(
+      JSON.stringify(["seat", guestId, seat.clientId, seat.roomId, seat.sessionId]),
+    )
+    .digest("base64url");
+  return `guest-${GUEST_ID_PREFIX}${digest.slice(0, 22)}`;
+};
 
 // A cookie value may arrive in double quotes (RFC 6265). The Android app's
 // cookie jar sends a cookie that was set with Max-Age back that way.
@@ -118,23 +148,6 @@ const isCrossSiteRequest = (request: Request): boolean => {
   return origin !== `${protocol}://${host}`;
 };
 
-/**
- * The guest identity for a page render: the one in the pass cookie, or a new
- * one with a grant the first join call turns into that cookie.
- */
-export const resolveGuestSession = (
-  sfuSecret: string,
-  passCookieValue: string | undefined,
-): GuestSession => {
-  const guestId = verify(sfuSecret, passCookieValue, PASS_AUDIENCE);
-  if (guestId) return { id: guestId };
-  const fresh = mintGuestId();
-  return {
-    id: fresh,
-    grant: sign(sfuSecret, fresh, GRANT_AUDIENCE, GUEST_GRANT_TTL_SECONDS),
-  };
-};
-
 export type GuestJoinIdentity =
   | {
       ok: true;
@@ -142,7 +155,10 @@ export type GuestJoinIdentity =
       /** Signed into the join token; the SFU binds the identity to it. */
       guestProof?: string;
       setCookie?: string;
-      /** Set for a client that takes its guest identity from the server. */
+      /**
+       * Set for a client that takes its guest identity from the server: the
+       * pass it now goes by, and a grant for it until the cookie comes back.
+       */
       issued?: { guestId: string; guestGrant?: string };
     }
   | { ok: false; status: 400 | 409; error: string };
@@ -150,8 +166,12 @@ export type GuestJoinIdentity =
 /**
  * Decides who an unauthenticated join is.
  *
- * A client that sends `guestId` (even empty) gets an identity built from a
- * pass this server issued, proven by the pass cookie or a grant.
+ * A client that sends `guestId` gets a seat key built from a pass this
+ * server issued. An empty `guestId` asks the server to pick the pass: the one
+ * in the browser's cookie, else the one a grant proves, else a new one. A
+ * page sends that on its first join, so every tab of a browser ends up on
+ * the cookie's pass. A `guestId` names the pass a page already joined with,
+ * and has to be proven by the cookie or a grant.
  *
  * A client that does not is one that still derives `guest-<sessionId>`
  * itself: a tab opened before guest passes shipped, or an older native build.
@@ -161,12 +181,13 @@ export type GuestJoinIdentity =
  */
 export const resolveGuestJoinIdentity = (input: {
   sfuSecret: string;
-  sessionId: string;
+  seat: GuestSeat;
   request: Request;
   guestId: unknown;
   guestGrant: unknown;
 }): GuestJoinIdentity => {
-  const { sfuSecret, sessionId } = input;
+  const { sfuSecret, seat } = input;
+  const { sessionId } = seat;
   const usesCookie = !isCrossSiteRequest(input.request);
   const fromCookie = usesCookie
     ? verify(
@@ -192,7 +213,7 @@ export const resolveGuestJoinIdentity = (input: {
         : {}),
     };
   }
-  if (!isGuestSessionId(sessionId)) {
+  if (!GUEST_SESSION_ID_PATTERN.test(sessionId)) {
     return { ok: false, status: 400, error: "Invalid session ID" };
   }
 
@@ -211,7 +232,7 @@ export const resolveGuestJoinIdentity = (input: {
   const provenByCookie = guestId === fromCookie;
   return {
     ok: true,
-    userKey: buildGuestUserKey(guestId, sessionId),
+    userKey: seatKeyOf(sfuSecret, guestId, seat),
     guestProof: proofOf(sfuSecret, guestId),
     // Refresh this pass, or plant it when the browser has none. A valid pass
     // for another identity belongs to another tab and stays.
@@ -229,7 +250,7 @@ export const resolveGuestJoinIdentity = (input: {
               sfuSecret,
               guestId,
               GRANT_AUDIENCE,
-              GUEST_GRANT_TTL_SECONDS,
+              GRANT_TTL_SECONDS,
             ),
           }),
     },

@@ -235,6 +235,7 @@ const RESUME_CONSUMER_MAX_ATTEMPTS = 6;
 const getResumeConsumerRetryDelayMs = (attempt: number): number =>
   Math.min(8000, 400 * 2 ** attempt) + Math.floor(Math.random() * 250);
 const JOIN_ROOM_ACK_TIMEOUT_MS = 15000;
+const HELD_JOIN_INFO_TTL_MS = 30000;
 const RESTART_ICE_ACK_TIMEOUT_MS = 5000;
 const PARTICIPANT_RECONNECTING_STATUS_FALLBACK_MS = 30000;
 const PARTICIPANT_RECONNECTING_STATUS_BUFFER_MS = 5000;
@@ -860,6 +861,12 @@ interface UseMeetSocketOptions {
   setIsAdmin: (value: boolean) => void;
   user?: { id?: string; email?: string | null; name?: string | null };
   userId: string;
+  /**
+   * Takes this client's identity from a join token. Returns true when that
+   * changes `userId`, in which case the caller joins again from the render
+   * that knows the new one.
+   */
+  adoptJoinIdentity?: (token: string, roomId: string) => boolean;
   getJoinInfo: (
     roomId: string,
     sessionId: string,
@@ -991,6 +998,7 @@ export function useMeetSocket({
   setIsAdmin,
   user,
   userId,
+  adoptJoinIdentity,
   getJoinInfo,
   joinMode = "meeting",
   requestWebinarInviteCode,
@@ -6953,6 +6961,37 @@ export function useMeetSocket({
     ],
   );
 
+  const heldJoinInfoRef = useRef<{
+    roomId: string;
+    joinInfo: JoinInfo;
+    fetchedAt: number;
+  } | null>(null);
+  const holdJoinInfo = useCallback(
+    async (targetRoomId: string): Promise<JoinInfo> => {
+      const held = heldJoinInfoRef.current;
+      if (
+        held?.roomId === targetRoomId &&
+        Date.now() - held.fetchedAt < HELD_JOIN_INFO_TTL_MS
+      ) {
+        return held.joinInfo;
+      }
+      const joinInfo =
+        prewarm?.getCachedToken?.(targetRoomId) ??
+        (await getJoinInfo(targetRoomId, sessionIdRef.current, {
+          user,
+          isHost: isAdmin,
+          joinMode,
+        }));
+      heldJoinInfoRef.current = {
+        roomId: targetRoomId,
+        joinInfo,
+        fetchedAt: Date.now(),
+      };
+      return joinInfo;
+    },
+    [getJoinInfo, isAdmin, joinMode, prewarm, sessionIdRef, user],
+  );
+
   const connectSocket = useCallback(
     (
       targetRoomId: string,
@@ -6989,7 +7028,13 @@ export function useMeetSocket({
               ? Promise.resolve({ io: prewarm.io })
               : import("socket.io-client");
 
-            const cachedToken = prewarm?.getCachedToken?.(roomIdForJoin);
+            const heldJoinInfo = heldJoinInfoRef.current;
+            heldJoinInfoRef.current = null;
+            const cachedToken =
+              heldJoinInfo?.roomId === roomIdForJoin &&
+              Date.now() - heldJoinInfo.fetchedAt < HELD_JOIN_INFO_TTL_MS
+                ? heldJoinInfo.joinInfo
+                : prewarm?.getCachedToken?.(roomIdForJoin);
             const tokenPromise = cachedToken
               ? Promise.resolve(cachedToken)
                 : getJoinInfo(roomIdForJoin, sessionIdRef.current, {
@@ -9228,6 +9273,17 @@ export function useMeetSocket({
       if (refs.abortControllerRef.current?.signal.aborted) return;
       const joinGeneration = reconnectGenerationRef.current;
 
+      if (adoptJoinIdentity) {
+        // A guest learns who it is in this room from its join token, and the
+        // rest of the join closes over that identity. So the token comes
+        // first, and when it names another identity this join starts over
+        // from the render that knows it. The token is kept for that join.
+        setConnectionState("connecting");
+        const joinInfo = await holdJoinInfo(targetRoomId).catch(() => null);
+        if (joinGeneration !== reconnectGenerationRef.current) return;
+        if (joinInfo && adoptJoinIdentity(joinInfo.token, targetRoomId)) return;
+      }
+
       telemetry.capture("meet_join_attempt", {
         roomId: targetRoomId,
         joinMode,
@@ -9442,6 +9498,8 @@ export function useMeetSocket({
       stopLocalTrack,
       updateReconnectRecoveryStatus,
       onSocketReady,
+      adoptJoinIdentity,
+      holdJoinInfo,
     ],
   );
 

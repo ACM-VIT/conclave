@@ -1,6 +1,5 @@
 import { headers as nextHeaders } from "next/headers";
 import { auth } from "@/lib/auth";
-import { readGuestSession } from "@/lib/guest-session";
 import MeetsClientPage from "./meets-client-page";
 import type { JoinMode } from "./lib/types";
 
@@ -49,10 +48,7 @@ export default async function MeetsClientShell({
   user,
   isAdmin,
 }: MeetsClientShellProps) {
-  const [resolvedUser, guest] = await Promise.all([
-    user ?? resolveSessionUser(),
-    readGuestSession(),
-  ]);
+  const resolvedUser = user ?? (await resolveSessionUser());
 
   return (
     <MeetsClientPage
@@ -64,7 +60,6 @@ export default async function MeetsClientShell({
       autoJoinOnMount={autoJoinOnMount}
       hideJoinUI={hideJoinUI}
       user={resolvedUser}
-      guest={guest}
       isAdmin={isAdmin}
     />
   );

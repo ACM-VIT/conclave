@@ -45,9 +45,10 @@ type JoinRequestBody = {
   roomId?: string;
   sessionId?: string;
   /**
-   * The guest id the client was issued, or empty when it holds none. Sending
-   * the field at all marks a client that takes its guest identity from the
-   * server instead of deriving `guest-<sessionId>` itself.
+   * The guest pass the client already joined with, or empty to let the
+   * server pick one. Sending the field at all marks a client that takes its
+   * guest identity from the join token instead of deriving
+   * `guest-<sessionId>` itself.
    */
   guestId?: string | null;
   guestGrant?: string | null;
@@ -661,7 +662,7 @@ export async function POST(request: Request) {
       ? null
       : resolveGuestJoinIdentity({
           sfuSecret: secret,
-          sessionId,
+          seat: { clientId, roomId, sessionId },
           request,
           guestId: body.guestId,
           guestGrant: body.guestGrant,

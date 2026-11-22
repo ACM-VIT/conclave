@@ -2,7 +2,6 @@ import { Suspense } from "react";
 import { headers as nextHeaders } from "next/headers";
 import RouteLoadingState from "../../components/RouteLoadingState";
 import { sanitizeWebinarLinkCode } from "../../lib/utils";
-import { readGuestSession } from "@/lib/guest-session";
 import {
   resolveSfuClientId,
   resolveSfuSecret,
@@ -92,16 +91,14 @@ async function WebinarRoomContent({ params }: WebinarRoomPageProps) {
     decodedCode === "undefined" || decodedCode === "null" ? "" : decodedCode;
   const webinarLinkCode = sanitizeWebinarLinkCode(resolvedCode);
 
-  const [webinar, guest] = await Promise.all([
-    webinarLinkCode ? lookupScheduledWebinar(webinarLinkCode) : null,
-    readGuestSession(),
-  ]);
+  const webinar = webinarLinkCode
+    ? await lookupScheduledWebinar(webinarLinkCode)
+    : null;
 
   return (
     <WebinarLandingClient
       webinarLinkCode={webinarLinkCode}
       initialWebinar={webinar}
-      guest={guest}
     />
   );
 }

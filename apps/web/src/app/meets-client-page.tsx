@@ -1,9 +1,9 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import MeetsClient from "./meets-client";
+import { createGuestPassSession } from "./lib/guest-pass-session";
 import type { JoinMode } from "./lib/types";
-import type { GuestSession } from "@/lib/guest-identity";
 import type { RoomInfo } from "@/lib/sfu-types";
 import {
   canonicalizeSfuClientId,
@@ -62,7 +62,6 @@ type MeetsClientPageProps = {
     email?: string | null;
     name?: string | null;
   };
-  guest?: GuestSession;
   isAdmin?: boolean;
 };
 
@@ -76,13 +75,9 @@ export default function MeetsClientPage({
   hideJoinUI = false,
   webinarTitle,
   user,
-  guest,
   isAdmin = false,
 }: MeetsClientPageProps) {
-  // Pinned for the life of the page: a later server render (router.refresh)
-  // can mint a different guest, and a call in progress must keep its seat.
-  const [guestSession] = useState(guest);
-  const guestGrantRef = useRef(guestSession?.grant);
+  const [withGuestPass] = useState(createGuestPassSession);
   const defaultUser = user;
   const resolvedIsAdmin = isAdmin;
   const resolvedClientId =
@@ -102,49 +97,43 @@ export default function MeetsClientPage({
       const resolvedUser = options?.user ?? defaultUser;
       const isHost = Boolean(options?.isHost);
       const resolvedJoinMode = options?.joinMode ?? joinMode;
-      const response = await fetchJoinInfoWithTimeout({
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-sfu-client": resolvedClientId,
-        },
-        body: JSON.stringify({
-          roomId,
-          sessionId,
-          user: resolvedUser,
-          isHost,
-          allowRoomCreation: forceJoinOnly,
-          clientId: resolvedClientId,
-          joinMode: resolvedJoinMode,
-          ...(guestSession
-            ? { guestId: guestSession.id, guestGrant: guestGrantRef.current }
-            : {}),
-        }),
-      });
+      return withGuestPass(async (guestPass) => {
+        const response = await fetchJoinInfoWithTimeout({
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-sfu-client": resolvedClientId,
+          },
+          body: JSON.stringify({
+            roomId,
+            sessionId,
+            user: resolvedUser,
+            isHost,
+            allowRoomCreation: forceJoinOnly,
+            clientId: resolvedClientId,
+            joinMode: resolvedJoinMode,
+            ...guestPass,
+          }),
+        });
 
-      if (!response.ok) {
-        const error = new Error(await readError(response)) as Error & {
-          responseStatus?: number;
+        if (!response.ok) {
+          const error = new Error(await readError(response)) as Error & {
+            responseStatus?: number;
+          };
+          error.responseStatus = response.status;
+          throw error;
+        }
+
+        return (await response.json()) as {
+          token: string;
+          sfuUrl: string;
+          iceServers?: RTCIceServer[];
+          guestId?: string;
+          guestGrant?: string;
         };
-        error.responseStatus = response.status;
-        throw error;
-      }
-
-      const joinInfo = (await response.json()) as {
-        token: string;
-        sfuUrl: string;
-        iceServers?: RTCIceServer[];
-        guestId?: string;
-        guestGrant?: string;
-      };
-      // A guest answer without a grant means the pass cookie now proves this
-      // identity; until then the latest grant does.
-      if (joinInfo.guestId) {
-        guestGrantRef.current = joinInfo.guestGrant;
-      }
-      return joinInfo;
+      });
     },
-    [forceJoinOnly, joinMode, defaultUser, resolvedClientId, guestSession]
+    [forceJoinOnly, joinMode, defaultUser, resolvedClientId, withGuestPass]
   );
 
   const getRooms = useCallback(async () => {
@@ -204,7 +193,6 @@ export default function MeetsClientPage({
         getRoom={getRoom}
         reactionAssets={reactionAssets}
         user={defaultUser}
-        guestId={guestSession?.id}
         isAdmin={resolvedIsAdmin}
       />
     </div>
