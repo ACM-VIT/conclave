@@ -138,7 +138,9 @@ export const createTranscriptRelayRegistry = (options: {
         },
       });
       const generation = nextGeneration++;
-      opened.set(key, (opened.get(key) ?? new Map()).set(relay, generation));
+      const roomRelays =
+        opened.get(key) ?? new Map<TranscriptRelayInstance, number>();
+      opened.set(key, roomRelays.set(relay, generation));
       relays.set(key, relay);
       try {
         await relay.start();
