@@ -285,6 +285,11 @@ export interface ProducerInfo {
   type: ProducerType;
   paused?: boolean;
   roomId?: string;
+  /**
+   * The server's creation order for producers: a later producer has a higher
+   * value. Servers that predate it send none.
+   */
+  producerSeq?: number;
 }
 
 export interface DisplayNameSnapshotEntry {

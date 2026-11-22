@@ -3,6 +3,7 @@ import {
   advanceScreenShareTrackRefreshAttempts,
   advanceVideoFreezeRecovery,
   getScreenShareStallRecoveryAction,
+  isProducerGoneConsumeError,
   shouldReopenCameraAfterConstraintFailure,
   shouldRecreateProducerTransport,
   type VideoFreezeRecoveryState,
@@ -189,5 +190,39 @@ describe("adaptive camera constraint fallback", () => {
         targetConstraints,
       }),
     ).toBe(true);
+  });
+});
+
+describe("consume errors for a producer the server no longer has", () => {
+  it("recognises the server's error code", () => {
+    expect(
+      isProducerGoneConsumeError({
+        error: "Producer not found",
+        code: "producer_not_found",
+      }),
+    ).toBe(true);
+  });
+
+  it("recognises the message from a server that sends no code", () => {
+    expect(isProducerGoneConsumeError({ error: "Producer not found" })).toBe(
+      true,
+    );
+  });
+
+  it("keeps retrying errors that can clear up", () => {
+    for (const error of [
+      "Not ready to consume",
+      "Stale consumer transport",
+      "Webcam producer is being replaced for room codec policy",
+      "Cannot consume this producer",
+    ]) {
+      expect(isProducerGoneConsumeError({ error })).toBe(false);
+    }
+    expect(
+      isProducerGoneConsumeError({
+        error: "Consumer was replaced by a newer request",
+        code: "displaced",
+      }),
+    ).toBe(false);
   });
 });
