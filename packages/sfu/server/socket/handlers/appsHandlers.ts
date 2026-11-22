@@ -1,4 +1,3 @@
-import * as Y from "yjs";
 import type {
   AppsAwarenessData,
   AppsCloseResponse,
@@ -13,67 +12,32 @@ import type {
 } from "../../../types.js";
 import { Admin } from "../../../config/classes/Admin.js";
 import { Logger } from "../../../utilities/loggers.js";
+import type { Refusal } from "../../apps/documents/pool.js";
 import type { ConnectionContext } from "../context.js";
 import { RATE_LIMITS, takeToken } from "../rateLimit.js";
 import { respond } from "./ack.js";
 
 const MAX_APPS_SYNC_BYTES = 64 * 1024;
-const MAX_APPS_SYNC_RESPONSE_BYTES = 1024 * 1024;
 const MAX_APPS_UPDATE_BYTES = 256 * 1024;
 const MAX_APPS_AWARENESS_BYTES = 64 * 1024;
-// A document larger than one sync response can no longer reach new joiners,
-// so it is also the most a document may grow to.
-const MAX_APPS_DOC_BYTES = MAX_APPS_SYNC_RESPONSE_BYTES;
 
-// Encoded size of each document after the last accepted update. Without a
-// bound, a participant could stream 256 KB updates into a room's app until the
-// SFU ran out of memory.
-const appDocSizes = new WeakMap<Y.Doc, { measured: number; sinceMeasured: number }>();
-
-// An update can grow the encoded document by more than its own size: a
-// deletion splits existing items, and alternating single-character deletions
-// grew a document by about six times the update's bytes in testing. Far from
-// the limit the cheap estimate is safe with this margin; near it, measure the
-// actual result exactly.
-const UPDATE_GROWTH_MARGIN = 16;
-
-const encodedSizeAfter = (doc: Y.Doc, update: Uint8Array): number => {
-  const trial = new Y.Doc({ gc: doc.gc });
-  try {
-    Y.applyUpdate(trial, Y.encodeStateAsUpdate(doc));
-    Y.applyUpdate(trial, update);
-    return Y.encodeStateAsUpdate(trial).length;
-  } finally {
-    trial.destroy();
-  }
+const SYNC_ERRORS: Record<Refusal, string> = {
+  "too-large": "App document too large to sync",
+  invalid: "Invalid sync payload",
+  "timed-out": "App document sync timed out",
+  crashed: "App document sync failed",
+  "queue-full": "App document is busy",
+  closed: "App not active",
+  unavailable: "App document unavailable",
 };
 
-/**
- * Whether `doc` stays within MAX_APPS_DOC_BYTES once `update` is applied.
- * Records the expected size when it does; the caller then applies it.
- */
-const reserveAppDocBytes = (doc: Y.Doc, update: Uint8Array): boolean => {
-  let size = appDocSizes.get(doc);
-  if (!size) {
-    size = { measured: Y.encodeStateAsUpdate(doc).length, sinceMeasured: 0 };
-    appDocSizes.set(doc, size);
-  }
-  const estimate =
-    size.measured + size.sinceMeasured + update.length * UPDATE_GROWTH_MARGIN;
-  if (estimate <= MAX_APPS_DOC_BYTES) {
-    size.sinceMeasured += update.length * UPDATE_GROWTH_MARGIN;
-    return true;
-  }
-  let resulting: number;
-  try {
-    resulting = encodedSizeAfter(doc, update);
-  } catch {
-    return false;
-  }
-  if (resulting > MAX_APPS_DOC_BYTES) return false;
-  size.measured = resulting;
-  size.sinceMeasured = 0;
-  return true;
+const UPDATE_REFUSALS: Partial<Record<Refusal, string>> = {
+  "too-large": "document size limit reached",
+  invalid: "invalid Yjs update",
+  "timed-out": "update took longer than the deadline",
+  crashed: "the document worker failed on it",
+  "queue-full": "too many updates are waiting",
+  unavailable: "the document could not be rebuilt",
 };
 
 const MAX_APP_ID_LENGTH = 128;
@@ -159,6 +123,7 @@ const getRoomAppsState = (context: ConnectionContext): AppsState => {
 
 export const registerAppsHandlers = (context: ConnectionContext): void => {
   const { socket, io } = context;
+  const documents = context.state.appDocuments;
 
   socket.on("apps:getState", (callback: (state: AppsState) => void) => {
     respond(callback, getRoomAppsState(context));
@@ -193,7 +158,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       }
 
       context.currentRoom.appsState.activeAppId = appId;
-      context.currentRoom.getOrCreateAppDoc(appId);
+      context.currentRoom.getOrCreateAppDoc(appId, documents);
       context.currentRoom.getOrCreateAppAwareness(appId);
 
       const state = getRoomAppsState(context);
@@ -277,7 +242,6 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
         return;
       }
 
-      const doc = context.currentRoom.getOrCreateAppDoc(appId);
       const stateVector = toUint8Array(data.syncMessage);
       if (!stateVector) {
         respond(callback, { error: "Invalid sync payload" });
@@ -288,21 +252,22 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
         return;
       }
 
-      const update = Y.encodeStateAsUpdate(doc, stateVector);
-      if (update.length > MAX_APPS_SYNC_RESPONSE_BYTES) {
-        respond(callback, { error: "App document too large to sync" });
-        return;
-      }
-      const awarenessSnapshot =
-        context.currentRoom.encodeAppAwarenessSnapshot(appId) ?? undefined;
-      const awarenessUpdate =
-        awarenessSnapshot && awarenessSnapshot.length <= MAX_APPS_AWARENESS_BYTES
-          ? awarenessSnapshot
-          : undefined;
-      respond(callback, {
-        syncMessage: update,
-        stateVector: Y.encodeStateVector(doc),
-        awarenessUpdate,
+      const room = context.currentRoom;
+      void room.getOrCreateAppDoc(appId, documents).sync(stateVector).then((result) => {
+        if (!result.ok) {
+          respond(callback, { error: SYNC_ERRORS[result.reason] });
+          return;
+        }
+        const awarenessSnapshot = room.encodeAppAwarenessSnapshot(appId) ?? undefined;
+        const awarenessUpdate =
+          awarenessSnapshot && awarenessSnapshot.length <= MAX_APPS_AWARENESS_BYTES
+            ? awarenessSnapshot
+            : undefined;
+        respond(callback, {
+          syncMessage: result.update,
+          stateVector: result.stateVector,
+          awarenessUpdate,
+        });
       });
     }
   );
@@ -323,26 +288,25 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       return;
     }
 
-    const doc = context.currentRoom.getOrCreateAppDoc(appId);
     const update = toUint8Array(data.update);
     if (!update || update.length === 0) return;
     if (update.length > MAX_APPS_UPDATE_BYTES) return;
-    if (!reserveAppDocBytes(doc, update)) {
-      Logger.warn(`[Apps] Dropping update for ${appId}: document size limit reached`);
-      return;
-    }
 
-    try {
-      Y.applyUpdate(doc, update, socket.id);
-    } catch (error) {
-      Logger.warn("[Apps] Dropping invalid Yjs update", error);
-      return;
-    }
-
-    socket.to(context.currentRoom.channelId).emit("apps:yjs:update", {
-      appId,
-      update,
-    } satisfies AppsUpdateData);
+    const { channelId } = context.currentRoom;
+    void context.currentRoom
+      .getOrCreateAppDoc(appId, documents)
+      .apply(update)
+      .then((result) => {
+        if (!result.ok) {
+          const why = UPDATE_REFUSALS[result.reason];
+          if (why) Logger.warn(`[Apps] Dropping update for ${appId}: ${why}`);
+          return;
+        }
+        socket.to(channelId).emit("apps:yjs:update", {
+          appId,
+          update,
+        } satisfies AppsUpdateData);
+      });
   });
 
   socket.on("apps:awareness", (data: AppsAwarenessData) => {

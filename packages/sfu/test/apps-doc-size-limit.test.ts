@@ -1,45 +1,23 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
-import type { Router } from "mediasoup/types";
-import type { Server as SocketIOServer, Socket } from "socket.io";
-import { Admin } from "../config/classes/Admin.js";
-import { Room } from "../config/classes/Room.js";
-import { createConnectionContext } from "../server/socket/context.js";
-import { registerAppsHandlers } from "../server/socket/handlers/appsHandlers.js";
-import { createSfuState } from "../server/state.js";
-import { LocalRoomRegistry } from "../server/roomRegistry.js";
-
-type Listener = (...args: unknown[]) => unknown;
+import { createAppDocumentPool, type AppDocumentPool } from "../server/apps/documents/pool.js";
+import { inAppRoom } from "./fixtures/app-room.js";
 
 const MAX_DOC_BYTES = 1024 * 1024;
 
-const joinBoardApp = (id: string) => {
-  vi.spyOn(console, "warn").mockImplementation(() => {});
-  const listeners = new Map<string, Listener>();
-  const socket = {
-    id: `s-${id}`,
-    data: { user: {} },
-    on: (event: string, listener: Listener) => { listeners.set(event, listener); return socket; },
-    to: () => ({ emit: vi.fn() }),
-    emit: vi.fn(),
-  } as unknown as Socket;
-  const state = createSfuState({
-    roomRegistry: new LocalRoomRegistry({ instanceId: id, instanceUrl: "http://localhost", ttlMs: 45000 }),
-  });
-  const room = new Room({ id, clientId: "conclave", workerPid: null, router: {} as Router });
-  state.rooms.set(room.channelId, room);
-  const admin = new Admin({ id: `a#${id}`, socket });
-  room.addClient(admin);
-  room.appsState.activeAppId = "board";
-  const context = createConnectionContext({ to: () => ({ emit: vi.fn() }) } as unknown as SocketIOServer, socket, state);
-  context.currentRoom = room;
-  context.currentClient = admin;
-  registerAppsHandlers(context);
-  return {
-    send: (update: Uint8Array) => listeners.get("apps:yjs:update")!({ appId: "board", update }),
-    serverDoc: () => room.getOrCreateAppDoc("board"),
-  };
+const pools: AppDocumentPool[] = [];
+const joinBoardApp = async (id: string) => {
+  const pool = createAppDocumentPool({ workers: 1, deadlineMs: 20_000, maxDocumentBytes: MAX_DOC_BYTES });
+  pools.push(pool);
+  const room = inAppRoom(pool, id);
+  await room.open();
+  return room;
 };
+
+afterEach(async () => {
+  await Promise.all(pools.splice(0).map((pool) => pool.close()));
+  vi.restoreAllMocks();
+});
 
 const writeVarUint = (bytes: number[], value: number) => {
   let rest = value;
@@ -70,8 +48,8 @@ const everyOtherClock = (from: number, to: number) => {
 };
 
 describe("app document size", () => {
-  it("stops growing a document at the size a sync can still deliver", () => {
-    const { send, serverDoc } = joinBoardApp("inserts");
+  it("stops growing a document at the size a sync can still deliver", async () => {
+    const room = await joinBoardApp("inserts");
 
     const attacker = new Y.Doc();
     const text = attacker.getText("t");
@@ -79,11 +57,12 @@ describe("app document size", () => {
     for (let index = 0; index < 20; index += 1) {
       const before = Y.encodeStateVector(attacker);
       text.insert(text.length, chunk);
-      send(Y.encodeStateAsUpdate(attacker, before));
+      room.send(Y.encodeStateAsUpdate(attacker, before));
     }
 
-    expect(Y.encodeStateAsUpdate(serverDoc()).length).toBeLessThanOrEqual(MAX_DOC_BYTES);
-    expect(serverDoc().getText("t").length).toBeGreaterThan(0);
+    const { doc, encodedBytes } = await room.joinDocument();
+    expect(encodedBytes).toBeLessThanOrEqual(MAX_DOC_BYTES);
+    expect(doc.getText("t").length).toBeGreaterThan(0);
   });
 });
 
@@ -102,31 +81,35 @@ describe("app document size with deletions", () => {
     );
   });
 
-  it("refuses deletions whose item splits would push the document past the limit", () => {
-    const { send, serverDoc } = joinBoardApp("deletions");
-    const serverText = () => serverDoc().getText("t").length;
+  it("refuses deletions whose item splits would push the document past the limit", async () => {
+    const room = await joinBoardApp("deletions");
+    const joined = async () => {
+      const { doc, encodedBytes } = await room.joinDocument();
+      return { doc, length: doc.getText("t").length, encodedBytes };
+    };
     const attacker = new Y.Doc();
     attacker.clientID = 0xffffffff;
     const deletionsUpTo = (end: number) => singleCharacterDeletions(attacker.clientID, everyOtherClock(0, end));
 
     attacker.getText("t").insert(0, "x".repeat(120_001));
-    send(Y.encodeStateAsUpdate(attacker));
-    expect(serverText()).toBe(120_001);
+    room.send(Y.encodeStateAsUpdate(attacker));
+    expect((await joined()).length).toBe(120_001);
 
-    send(deletionsUpTo(40_000));
-    expect(serverText()).toBe(100_001);
-    send(deletionsUpTo(82_898));
-    expect(serverText()).toBe(78_552);
-    expect(Y.encodeStateAsUpdate(serverDoc()).length).toBe(MAX_DOC_BYTES);
+    room.send(deletionsUpTo(40_000));
+    expect((await joined()).length).toBe(100_001);
+    room.send(deletionsUpTo(82_898));
+    const atLimit = await joined();
+    expect(atLimit.length).toBe(78_552);
+    expect(atLimit.encodedBytes).toBe(MAX_DOC_BYTES);
 
     const oneMoreDeletion = deletionsUpTo(82_900);
-    const trial = new Y.Doc();
-    Y.applyUpdate(trial, Y.encodeStateAsUpdate(serverDoc()));
-    Y.applyUpdate(trial, oneMoreDeletion);
-    expect(Y.encodeStateAsUpdate(trial).length).toBeGreaterThan(MAX_DOC_BYTES);
+    Y.applyUpdate(atLimit.doc, oneMoreDeletion);
+    expect(Y.encodeStateAsUpdate(atLimit.doc).length).toBeGreaterThan(MAX_DOC_BYTES);
 
-    send(oneMoreDeletion);
-    expect(serverText()).toBe(78_552);
-    expect(Y.encodeStateAsUpdate(serverDoc()).length).toBe(MAX_DOC_BYTES);
+    room.send(oneMoreDeletion);
+    const afterRefusal = await joined();
+    expect(afterRefusal.length).toBe(78_552);
+    expect(afterRefusal.encodedBytes).toBe(MAX_DOC_BYTES);
+    expect(room.relayed).toHaveLength(3);
   }, 30_000);
 });

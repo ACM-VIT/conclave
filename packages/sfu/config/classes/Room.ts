@@ -36,6 +36,7 @@ import { Admin } from "./Admin.js";
 import type { Client } from "./Client.js";
 import type { ProducerType } from "./Client.js";
 import type { GameSession } from "../../server/games/engine.js";
+import type { AppDocument, AppDocumentPool } from "../../server/apps/documents/pool.js";
 import {
   buildWebcamCodecPolicy,
   participantsSupportWebcamCodec,
@@ -248,7 +249,7 @@ export class Room {
     activeAppId: null,
     locked: false,
   };
-  private appsDocs: Map<string, Y.Doc> = new Map();
+  private appsDocs: Map<string, AppDocument> = new Map();
   private appsAwareness: Map<string, Awareness> = new Map();
   private appAwarenessClientIdsByUser: Map<string, Map<string, Set<number>>> =
     new Map();
@@ -2217,18 +2218,18 @@ export class Room {
     }
   }
 
-  getOrCreateAppDoc(appId: string): Y.Doc {
+  getOrCreateAppDoc(appId: string, documents: AppDocumentPool): AppDocument {
     const existing = this.appsDocs.get(appId);
     if (existing) return existing;
-    const doc = new Y.Doc();
-    this.appsDocs.set(appId, doc);
-    return doc;
+    const document = documents.open();
+    this.appsDocs.set(appId, document);
+    return document;
   }
 
   getOrCreateAppAwareness(appId: string): Awareness {
     const existing = this.appsAwareness.get(appId);
     if (existing) return existing;
-    const awareness = new Awareness(this.getOrCreateAppDoc(appId));
+    const awareness = new Awareness(new Y.Doc());
     this.appsAwareness.set(appId, awareness);
     return awareness;
   }
@@ -2280,13 +2281,8 @@ export class Room {
 
   clearAppState(appId: string): Uint8Array | null {
     const awarenessUpdate = this.clearAppAwareness(appId);
-    const doc = this.appsDocs.get(appId);
-    if (doc) {
-      try {
-        doc.destroy();
-      } catch {}
-      this.appsDocs.delete(appId);
-    }
+    this.appsDocs.get(appId)?.close();
+    this.appsDocs.delete(appId);
     if (this.appsState.activeAppId === appId) {
       this.appsState.activeAppId = null;
       this.appsState.locked = false;
@@ -2352,11 +2348,7 @@ export class Room {
     this.appsAwareness.clear();
     this.appAwarenessClientIdsByUser.clear();
 
-    for (const doc of this.appsDocs.values()) {
-      try {
-        doc.destroy();
-      } catch {}
-    }
+    for (const document of this.appsDocs.values()) document.close();
     this.appsDocs.clear();
     this.appsState.activeAppId = null;
     this.appsState.locked = false;

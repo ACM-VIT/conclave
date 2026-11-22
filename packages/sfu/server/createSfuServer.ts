@@ -185,6 +185,7 @@ export const createSfuServer = (
     }
     state.rooms.clear();
     state.roomCreations.clear();
+    await state.appDocuments.close();
 
     for (const worker of state.workers) {
       try {

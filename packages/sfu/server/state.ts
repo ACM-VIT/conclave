@@ -22,6 +22,12 @@ import {
   createTranscriptRelayRegistry,
   type TranscriptRelayRegistry,
 } from "./transcript/relayRegistry.js";
+import {
+  createAppDocumentPool,
+  MAX_APP_DOCUMENT_BYTES,
+  type AppDocumentPool,
+} from "./apps/documents/pool.js";
+import { resolveAppDocumentWorkerCount } from "../utilities/workerCpuQuota.js";
 
 export type EndedRoom = {
   roomId: string;
@@ -48,12 +54,14 @@ export type SfuState = {
   schedulingPersistence: SchedulingPersistence | null;
   roomRegistry: RoomRegistry;
   transcriptRelays: TranscriptRelayRegistry;
+  appDocuments: AppDocumentPool;
   isDraining: boolean;
 };
 
 export const createSfuState = (options?: {
   isDraining?: boolean;
   roomRegistry?: RoomRegistry;
+  appDocuments?: AppDocumentPool;
 }): SfuState => {
   return {
     workers: [],
@@ -72,6 +80,13 @@ export const createSfuState = (options?: {
     schedulingPersistence: null,
     roomRegistry: options?.roomRegistry ?? createRoomRegistry(config),
     transcriptRelays: createTranscriptRelayRegistry(config.transcriptRelay),
+    appDocuments:
+      options?.appDocuments ??
+      createAppDocumentPool({
+        workers: resolveAppDocumentWorkerCount(config.workerSettings),
+        deadlineMs: config.appDocuments.deadlineMs,
+        maxDocumentBytes: MAX_APP_DOCUMENT_BYTES,
+      }),
     isDraining: options?.isDraining ?? config.draining,
   };
 };

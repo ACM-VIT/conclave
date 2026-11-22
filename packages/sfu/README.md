@@ -24,6 +24,16 @@ The default divides the effective CPU affinity and quota limit by the instance
 count, rounds down, and starts at least one worker. Outside Compose it assumes
 one instance unless you supply the count.
 
+In-call app documents (Yjs) are applied in worker threads, never on the
+signaling thread. `SFU_APP_DOC_WORKERS` sets how many, default 1, and startup
+rejects more than the instance's CPU share. The derived mediasoup count leaves
+one CPU of that share for each app document worker, and both start at least
+one. On the 2-vCPU VM shared by three instances, each instance runs one of
+each. The app document worker is idle unless someone edits an app.
+`SFU_APP_DOC_DEADLINE_MS`, default 500, is how long one update or sync may
+run. An update that runs longer is refused and its worker is replaced. The
+document is rebuilt from what it had accepted, so no accepted update is lost.
+
 Compose defaults `SFU_WEBRTC_PORT_BUDGET` to 4 per instance. The effective
 budget `B` is the smaller of that setting and the size of the RTC range minus
 four. The final four ports support separate RTP and RTCP for shared-browser

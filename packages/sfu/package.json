@@ -6,6 +6,9 @@
   "exports": {
     ".": "./index.ts"
   },
+  "imports": {
+    "#app-documents/engine": "./server/apps/documents/engine.ts"
+  },
   "scripts": {
     "predev": "node scripts/ensure-mediasoup-worker.mjs",
     "dev": "npx tsx server.ts",

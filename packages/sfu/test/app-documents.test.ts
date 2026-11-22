@@ -1,0 +1,242 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as Y from "yjs";
+import {
+  createAppDocumentPool,
+  type AppDocumentPool,
+  type AppDocumentPoolOptions,
+} from "../server/apps/documents/pool.js";
+import { edit, inAppRoom as inRoom } from "./fixtures/app-room.js";
+
+const STALLING_WORKER = new URL("./fixtures/stalling-app-document-worker.ts", import.meta.url);
+const SLOW_START_WORKER = new URL("./fixtures/slow-start-app-document-worker.ts", import.meta.url);
+
+const pools: AppDocumentPool[] = [];
+const createPool = (options: Partial<AppDocumentPoolOptions> = {}): AppDocumentPool => {
+  const pool = createAppDocumentPool({
+    workers: 1,
+    deadlineMs: 5_000,
+    maxDocumentBytes: 1024 * 1024,
+    ...options,
+  });
+  pools.push(pool);
+  return pool;
+};
+
+afterEach(async () => {
+  await Promise.all(pools.splice(0).map((pool) => pool.close()));
+  vi.restoreAllMocks();
+});
+
+const authors = () => {
+  const author = new Y.Doc();
+  const other = new Y.Doc();
+  const hello = edit(author, (text) => text.insert(0, "hello"));
+  Y.applyUpdate(other, hello);
+  return {
+    hello,
+    fromOther: (word: string) => edit(other, (text) => text.insert(5, word)),
+    world: () => edit(author, (text) => text.insert(5, " world")),
+  };
+};
+
+describe("app documents", () => {
+  it("gives a late joiner every accepted update and relays each one in order", async () => {
+    const room = inRoom(createPool(), "order");
+    await room.open();
+    const author = new Y.Doc();
+    const updates = ["one ", "two ", "three"].map((word) =>
+      edit(author, (text) => text.insert(text.length, word)),
+    );
+
+    updates.forEach(room.send);
+
+    expect(await room.join()).toBe("one two three");
+    expect(room.relayed).toEqual(updates);
+  });
+
+  it("sends a joiner only the part of the document it is missing", async () => {
+    const room = inRoom(createPool(), "diff");
+    await room.open();
+    const author = new Y.Doc();
+    const hello = edit(author, (text) => text.insert(0, "hello"));
+    const holder = new Y.Doc();
+    Y.applyUpdate(holder, hello);
+    room.send(hello);
+    room.send(edit(author, (text) => text.insert(5, " world")));
+
+    const response = await room.syncFrom(holder);
+    Y.applyUpdate(holder, response.syncMessage);
+
+    expect(holder.getText("t").toString()).toBe("hello world");
+    expect((response.syncMessage).length).toBeLessThan(Y.encodeStateAsUpdate(author).length);
+    expect(response.stateVector).toEqual(Y.encodeStateVector(author));
+  });
+
+  it("refuses an update that outlasts the deadline, never relays it, and applies the next one", async () => {
+    const room = inRoom(createPool({ deadlineMs: 300, workerUrl: STALLING_WORKER }), "deadline");
+    await room.open();
+    const { hello, fromOther, world } = authors();
+    const stalled = fromOther("STALL");
+    const next = world();
+
+    room.send(hello);
+    room.send(stalled);
+    room.send(next);
+
+    expect(await room.join()).toBe("hello world");
+    expect(room.relayed).toEqual([hello, next]);
+  });
+
+  it("refuses the update a worker dies on and applies the next one", async () => {
+    const room = inRoom(createPool({ workerUrl: STALLING_WORKER }), "crash");
+    await room.open();
+    const { hello, fromOther, world } = authors();
+    const next = world();
+
+    room.send(hello);
+    room.send(fromOther("CRASH"));
+    room.send(next);
+
+    expect(await room.join()).toBe("hello world");
+    expect(room.relayed).toEqual([hello, next]);
+  });
+
+  it("keeps every room's accepted updates when a stuck worker is replaced", async () => {
+    const pool = createPool({ deadlineMs: 300, workerUrl: STALLING_WORKER });
+    const stuck = inRoom(pool, "stuck");
+    const bystander = inRoom(pool, "bystander");
+    await stuck.open();
+    await bystander.open();
+    const { hello, fromOther } = authors();
+    const notes = new Y.Doc();
+    bystander.send(edit(notes, (text) => text.insert(0, "kept")));
+    stuck.send(hello);
+    expect(await bystander.join()).toBe("kept");
+
+    stuck.send(fromOther("STALL"));
+    const more = edit(notes, (text) => text.insert(4, " and more"));
+    bystander.send(more);
+
+    expect(await bystander.join()).toBe("kept and more");
+    expect(bystander.relayed.at(-1)).toEqual(more);
+    expect(await stuck.join()).toBe("hello");
+  });
+
+  it("keeps other rooms moving on another worker while one room's update is stuck", async () => {
+    const pool = createPool({ workers: 2, workerUrl: STALLING_WORKER });
+    const stuckDocument = pool.open();
+    const bystander = inRoom(pool, "moving");
+    await bystander.open();
+    const { hello, fromOther } = authors();
+    expect(await stuckDocument.apply(hello)).toEqual({ ok: true });
+    let settled = false;
+    const stuck = stuckDocument.apply(fromOther("STALL")).finally(() => {
+      settled = true;
+    });
+
+    const update = edit(new Y.Doc(), (text) => text.insert(0, "still moving"));
+    bystander.send(update);
+
+    expect(await bystander.join()).toBe("still moving");
+    expect(bystander.relayed).toEqual([update]);
+    expect(settled).toBe(false);
+    await pool.close();
+    expect(await stuck).toEqual({ ok: false, reason: "closed" });
+  });
+
+  it("does not count a slow worker start against a document's deadline", async () => {
+    const pool = createPool({ deadlineMs: 50, workerUrl: SLOW_START_WORKER });
+    const document = pool.open();
+    const { hello } = authors();
+
+    expect(await document.apply(hello)).toEqual({ ok: true });
+    const synced = await document.sync(Y.encodeStateVector(new Y.Doc()));
+    if (!synced.ok) throw new Error(synced.reason);
+    const joined = new Y.Doc();
+    Y.applyUpdate(joined, synced.update);
+    expect(joined.getText("t").toString()).toBe("hello");
+  });
+
+  it("refuses a flood instead of queueing it", async () => {
+    const pool = createPool({
+      workerUrl: STALLING_WORKER,
+      limits: { document: { jobs: 3, bytes: 64 * 1024 }, total: { jobs: 5, bytes: 1024 * 1024 } },
+    });
+    const first = pool.open();
+    const second = pool.open();
+    const { hello, fromOther } = authors();
+    expect(await first.apply(hello)).toEqual({ ok: true });
+    const stuck = first.apply(fromOther("STALL"));
+    const queued = [first.apply(fromOther("a")), first.apply(fromOther("b"))];
+
+    expect(await first.apply(fromOther("c"))).toEqual({ ok: false, reason: "queue-full" });
+    queued.push(second.apply(fromOther("d")), second.apply(fromOther("e")));
+    expect(await second.apply(fromOther("f"))).toEqual({ ok: false, reason: "queue-full" });
+    expect(await pool.open().apply(new Uint8Array(65 * 1024))).toEqual({ ok: false, reason: "queue-full" });
+
+    await pool.close();
+    expect(await stuck).toEqual({ ok: false, reason: "closed" });
+    expect(await Promise.all(queued)).toEqual(queued.map(() => ({ ok: false, reason: "closed" })));
+  });
+
+  it("settles and frees the updates of a document closed while the worker rejects one", async () => {
+    const pool = createPool({
+      workerUrl: STALLING_WORKER,
+      limits: { document: { jobs: 4, bytes: 1024 * 1024 }, total: { jobs: 4, bytes: 1024 * 1024 } },
+    });
+    const busy = pool.open();
+    const closing = pool.open();
+    const { fromOther } = authors();
+    const busyPause = busy.apply(fromOther("PAUSE"));
+    const queued = [
+      closing.apply(fromOther("PAUSE")),
+      closing.apply(Uint8Array.of(9, 9, 9)),
+      closing.apply(fromOther("x")),
+    ];
+
+    expect(await busyPause).toEqual({ ok: true });
+    closing.close();
+
+    expect(await Promise.all(queued)).toEqual(queued.map(() => ({ ok: false, reason: "closed" })));
+    const fresh = pool.open();
+    const author = new Y.Doc();
+    const accepted = await Promise.all(
+      ["a", "b", "c", "d"].map((word) => fresh.apply(edit(author, (text) => text.insert(text.length, word)))),
+    );
+    expect(accepted).toEqual([{ ok: true }, { ok: true }, { ok: true }, { ok: true }]);
+  });
+
+  it("stops serving a document that cannot be rebuilt in time and keeps serving the rest", async () => {
+    const pool = createPool({ deadlineMs: 150, workerUrl: STALLING_WORKER });
+    const slow = pool.open();
+    const other = pool.open();
+    const { hello, fromOther } = authors();
+    expect(await slow.apply(edit(new Y.Doc(), (text) => text.insert(0, "SLOW-LOAD")))).toEqual({ ok: true });
+    expect(await other.apply(hello)).toEqual({ ok: true });
+    expect(await other.apply(fromOther("STALL"))).toEqual({ ok: false, reason: "timed-out" });
+
+    expect(await slow.apply(edit(new Y.Doc(), (text) => text.insert(0, "x")))).toEqual({ ok: false, reason: "unavailable" });
+    expect(await slow.sync(Y.encodeStateVector(new Y.Doc()))).toEqual({ ok: false, reason: "unavailable" });
+    const synced = await other.sync(Y.encodeStateVector(new Y.Doc()));
+    if (!synced.ok) throw new Error(synced.reason);
+    const joined = new Y.Doc();
+    Y.applyUpdate(joined, synced.update);
+    expect(joined.getText("t").toString()).toBe("hello");
+  });
+
+  it("drops a closed app's queued updates and starts the reopened app empty", async () => {
+    const room = inRoom(createPool({ workerUrl: STALLING_WORKER, deadlineMs: 300 }), "close");
+    await room.open();
+    const { hello, fromOther, world } = authors();
+    room.send(hello);
+    expect(await room.join()).toBe("hello");
+    room.send(fromOther("STALL"));
+    room.send(world());
+
+    await room.close();
+    await room.open();
+
+    expect(await room.join()).toBe("");
+    expect(room.relayed).toEqual([hello]);
+  });
+});
