@@ -37,7 +37,7 @@ container, and repeats it before the second instance restarts. A manual
 
 ```sh
 docker compose -f docker-compose.sfu.yml run --rm --no-deps --user root \
-  --cap-add CHOWN --entrypoint chown sfu-a -R node:node /var/lib/conclave/recordings
+  --cap-add CHOWN --cap-add DAC_READ_SEARCH --entrypoint chown sfu-a -R node:node /var/lib/conclave/recordings
 ```
 
 ## Development

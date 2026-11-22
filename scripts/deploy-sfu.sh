@@ -232,9 +232,11 @@ COMPOSE=(docker compose "${COMPOSE_ENV_FILES[@]}" -f "$COMPOSE_FILE")
 # images ran as root and left root-owned files (the SQLite database among them)
 # in the recordings volume. Hand anything node does not own over before a new
 # container starts. Safe to repeat; it only touches mismatched files.
+# Compose drops every capability, so root also needs DAC_READ_SEARCH to walk
+# directories it does not own.
 ensure_state_ownership() {
   local service="$1"
-  "${COMPOSE[@]}" run --rm --no-deps --user root --cap-add CHOWN --entrypoint find "$service" \
+  "${COMPOSE[@]}" run --rm --no-deps --user root --cap-add CHOWN --cap-add DAC_READ_SEARCH --entrypoint find "$service" \
     /var/lib/conclave/recordings \( ! -user node -o ! -group node \) -exec chown node:node {} +
 }
 

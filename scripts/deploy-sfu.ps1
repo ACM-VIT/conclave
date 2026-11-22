@@ -210,7 +210,7 @@ function Start-SfuService {
 
   Invoke-Checked -Command "docker" -Arguments ($composeBaseArgs + @("build", $Service))
   Invoke-Checked -Command "docker" -Arguments ($composeBaseArgs + @(
-    "run", "--rm", "--no-deps", "--user", "root", "--cap-add", "CHOWN", "--entrypoint", "find", $Service,
+    "run", "--rm", "--no-deps", "--user", "root", "--cap-add", "CHOWN", "--cap-add", "DAC_READ_SEARCH", "--entrypoint", "find", $Service,
     "/var/lib/conclave/recordings", "(", "!", "-user", "node", "-o", "!", "-group", "node", ")",
     "-exec", "chown", "node:node", "{}", "+"
   ))
