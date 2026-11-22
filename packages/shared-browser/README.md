@@ -46,6 +46,9 @@ cd /path/to/conclave
 
 The script builds `browser-service` and `conclave-browser:latest`. This
 deployment is only needed for full Chromium compatibility, media, and noVNC.
+Before it replaces the running service, it runs the new image with
+`--check-config`, which applies the same checks the service runs at startup;
+`--check-config` on the script stops there.
 
 and starts `browser-service` using `docker-compose.browser.yml`.
 

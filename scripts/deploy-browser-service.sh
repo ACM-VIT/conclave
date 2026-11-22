@@ -38,26 +38,19 @@ else
   COMPOSE=(docker compose -f "$COMPOSE_FILE")
 fi
 
-# The rules the service applies at startup (packages/shared-browser/src/serviceSecurity.ts),
-# checked before anything is built or replaced.
-BROWSER_SERVICE_TOKEN="${BROWSER_SERVICE_TOKEN:-}"
-token_distinct_characters="$(printf '%s\n' "$BROWSER_SERVICE_TOKEN" | LC_ALL=C fold -w1 | LC_ALL=C sort -u | wc -l)"
-if (( $(printf '%s' "$BROWSER_SERVICE_TOKEN" | LC_ALL=C wc -c) < 32 || token_distinct_characters < 8 )) ||
-  (LC_ALL=C; [[ "$BROWSER_SERVICE_TOKEN" == *[^!-~]* ]]); then
-  echo "BROWSER_SERVICE_TOKEN must be a random value of at least 32 visible ASCII characters, with no spaces (openssl rand -hex 32)." >&2
-  echo "Set the same value on every SFU that uses this service." >&2
-  exit 1
-fi
-
-if [[ "$CHECK_CONFIG_ONLY" == "true" ]]; then
-  echo "Shared browser service configuration is valid."
-  exit 0
-fi
-
 BROWSER_PROVIDER="${BROWSER_PROVIDER:-chromium}"
 if [[ "$BROWSER_PROVIDER" == "kitesurf" ]]; then
   BUILD_RUNTIME_IMAGE="false"
   export BROWSER_DOCKER_SOCKET="${BROWSER_DOCKER_SOCKET:-/dev/null}"
+fi
+
+# Run the service's own startup checks in the new image, with the environment
+# compose will give it, before anything is replaced.
+echo "Checking the shared browser service configuration..."
+"${COMPOSE[@]}" build browser-service
+"${COMPOSE[@]}" run --rm --no-deps browser-service node packages/shared-browser/dist/server.js --check-config
+if [[ "$CHECK_CONFIG_ONLY" == "true" ]]; then
+  exit 0
 fi
 
 RUNTIME_IMAGE_NAME="${BROWSER_IMAGE_NAME:-conclave-browser:latest}"

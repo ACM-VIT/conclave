@@ -14,6 +14,11 @@ const resolveSecurityOrExit = () => {
 };
 
 const security = resolveSecurityOrExit();
+// The deploy scripts run this in the new image before replacing the service.
+if (process.argv.includes("--check-config")) {
+    console.log(`[Server] Shared browser service configuration is valid (control API on ${security.listenHost}).`);
+    process.exit(0);
+}
 const browserManager = createBrowserManager();
 const app = createApp(browserManager, security);
 

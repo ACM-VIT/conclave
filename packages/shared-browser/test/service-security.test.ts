@@ -141,8 +141,8 @@ test("startup configuration fails closed", () => {
     );
 });
 
-const startService = (env: NodeJS.ProcessEnv) => {
-    const child = spawn(process.execPath, ["--import", "tsx", "src/server.ts"], {
+const startService = (env: NodeJS.ProcessEnv, args: string[] = []) => {
+    const child = spawn(process.execPath, ["--import", "tsx", "src/server.ts", ...args], {
         cwd: packageDir,
         env: { PATH: process.env.PATH, ...env },
         stdio: ["ignore", "pipe", "pipe"],
@@ -158,6 +158,28 @@ test("the service process exits instead of starting without a strong token", asy
     const [code] = await once(child, "close");
     assert.equal(code, 1);
     assert.match(output(), /BROWSER_SERVICE_TOKEN is required/);
+});
+
+test("--check-config applies the startup checks and exits without listening", async () => {
+    const check = async (env: NodeJS.ProcessEnv) => {
+        const { child, output } = startService(env, ["--check-config"]);
+        const [code] = await once(child, "close");
+        return { code, output: output() };
+    };
+    const refused = [
+        { BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_HOST: "0.0.0.0" },
+        { BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_CORS_ORIGINS: "*" },
+        { BROWSER_SERVICE_TOKEN: "short-token" },
+    ];
+    for (const env of refused) {
+        const result = await check(env);
+        assert.equal(result.code, 1, JSON.stringify(env));
+        assert.match(result.output, /refused to start/);
+    }
+    const valid = await check({ BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_HOST: "10.0.4.7" });
+    assert.equal(valid.code, 0, valid.output);
+    assert.match(valid.output, /configuration is valid/i);
+    assert.doesNotMatch(valid.output, /listening/);
 });
 
 test("the service process listens on loopback and requires the token", async () => {

@@ -80,16 +80,12 @@ if (Test-Path -Path $envFile -PathType Leaf) {
 }
 $composeArgs += @("-f", $composeFile)
 
-# The rules the service applies at startup (packages/shared-browser/src/serviceSecurity.ts),
-# checked before anything is built or replaced.
-$browserServiceToken = if ($null -ne $env:BROWSER_SERVICE_TOKEN) { $env:BROWSER_SERVICE_TOKEN } else { "" }
-$distinctTokenCharacters = [System.Collections.Generic.HashSet[char]]::new([char[]]$browserServiceToken).Count
-if ($browserServiceToken.Length -lt 32 -or $distinctTokenCharacters -lt 8 -or $browserServiceToken -cnotmatch '^[\x21-\x7E]+$') {
-  Exit-WithError "BROWSER_SERVICE_TOKEN must be a random value of at least 32 visible ASCII characters, with no spaces (openssl rand -hex 32).`nSet the same value on every SFU that uses this service."
-}
-
+# Run the service's own startup checks in the new image, with the environment
+# compose will give it, before anything is replaced.
+Write-Host "Checking the shared browser service configuration..."
+Invoke-Checked -Command "docker" -Arguments ($composeArgs + @("build", "browser-service"))
+Invoke-Checked -Command "docker" -Arguments ($composeArgs + @("run", "--rm", "--no-deps", "browser-service", "node", "packages/shared-browser/dist/server.js", "--check-config"))
 if ($checkConfigOnly) {
-  Write-Host "Shared browser service configuration is valid."
   exit 0
 }
 
