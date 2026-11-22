@@ -9,6 +9,7 @@ import {
   AppsProvider,
 } from "../../../packages/apps-sdk/src/sdk/runtime/AppsProvider";
 import type { AppsContextValue } from "../../../packages/apps-sdk/src/sdk/types";
+import { useAppDoc } from "../../../packages/apps-sdk/src/sdk/hooks/useAppDoc";
 import { AppsPanel } from "../src/app/components/apps/AppsPanel";
 
 type Listener = (...args: unknown[]) => void;
@@ -18,6 +19,8 @@ let root: Root;
 let host: HTMLDivElement;
 let ctx: AppsContextValue;
 let setPanelOpen: (open: boolean) => void;
+// The document the mounted whiteboard renders and edits.
+let mountedBoard: Y.Doc | null = null;
 const listeners = new Map<string, Listener>();
 const emitted: Emitted[] = [];
 // What the SFU keeps for each app, and answers a sync with.
@@ -56,12 +59,24 @@ function Probe() {
   return null;
 }
 
+function MountedWhiteboard() {
+  mountedBoard = useAppDoc("whiteboard").doc;
+  return null;
+}
+
+// Mounts the whiteboard while it is presented, as the meeting stage does.
+function Stage() {
+  const { state } = useContext(AppsContext)!;
+  return state.activeAppId === "whiteboard" ? <MountedWhiteboard /> : null;
+}
+
 function Harness() {
   const [panelOpen, setOpen] = useState(false);
   setPanelOpen = setOpen;
   return (
     <AppsProvider socket={socket} apps={apps as never} isAdmin>
       <Probe />
+      <Stage />
       {panelOpen && <AppsPanel onClose={() => setOpen(false)} />}
     </AppsProvider>
   );
@@ -91,6 +106,7 @@ beforeEach(async () => {
   emitted.length = 0;
   serverDocs.clear();
   stageReply = { success: true };
+  mountedBoard = null;
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -176,6 +192,29 @@ describe("the presented board", () => {
       Y.applyUpdate(received, (upload.args[0] as { update: Uint8Array }).update);
       expect(received.getMap("shapes").get("circle")).toBeUndefined();
     }
+  });
+
+  it("keeps the mounted board live when the room starts it over", async () => {
+    const cleared = new Y.Doc();
+    cleared.getMap("shapes").set("circle", 1);
+    serverDocs.set("whiteboard", cleared);
+    await serverState({ activeAppId: "whiteboard", revision: 1, savedAppIds: [], docGeneration: 1 });
+
+    const fresh = new Y.Doc();
+    fresh.getMap("shapes").set("square", 1);
+    serverDocs.set("whiteboard", fresh);
+    await serverState({ activeAppId: "whiteboard", revision: 4, savedAppIds: [], docGeneration: 2 });
+    emitted.length = 0;
+    mountedBoard!.getMap("shapes").set("arrow", 1);
+
+    expect(mountedBoard!.getMap("shapes").get("square")).toBe(1);
+    expect(mountedBoard!.getMap("shapes").get("circle")).toBeUndefined();
+    const uploads = sent("apps:yjs:update").map((entry) => {
+      const received = new Y.Doc();
+      Y.applyUpdate(received, (entry.args[0] as { update: Uint8Array }).update);
+      return received.getMap("shapes").get("arrow");
+    });
+    expect(uploads).toContain(1);
   });
 
   it("keeps drawing while anyone opens and closes the apps panel", async () => {
