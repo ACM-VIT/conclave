@@ -202,3 +202,15 @@ test("a deletion that was never pruned cannot be refilled later", (t) => {
   assert.equal(result.status, 1);
   assert.match(result.stderr, /src\/a\.ts: comments rose from 0 to 1 since/);
 });
+
+test("a native comment removed without --update cannot be added back later", (t) => {
+  const repo = repoWith(t, { "App.swift": "// one\n// two\nlet a = 1\n", [BASELINE]: { "App.swift": 2 } });
+  git(repo, "checkout", "-q", "base");
+  write(repo, { "App.swift": "// one\nlet a = 1\n" });
+  git(repo, "commit", "-q", "-m", "delete a comment, keep the baseline at 2");
+  git(repo, "checkout", "-q", "-B", "feature");
+  write(repo, { "App.swift": "// one\nlet a = 1 // back\n" });
+  const result = ratchet(repo);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /App\.swift: comments rose from 1 to 2 since/);
+});
