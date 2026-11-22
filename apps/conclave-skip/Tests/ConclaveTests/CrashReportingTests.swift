@@ -22,6 +22,15 @@ struct CrashReportingTests {
     /// The store's clock, an hour after the fixed capture times below, so retention never depends on today's date.
     static let storeNow = 1_795_000_000_000.0 + 3_600_000.0
 
+    /// The compiled-class manifest the Android build would write for the classes these tests name.
+    static let compiledClasses: Set<String> = [
+        "conclave.module.WebRTCClient\tWebRTCClient+Android.kt", "conclave.module.MeetingViewModel\tMeetingViewModel.kt",
+    ]
+
+    init() {
+        CrashReportPrivacy.isCompiledAppClass = { Self.compiledClasses.contains($0) }
+    }
+
     static let context = CrashReportContext(installId: "install-1", platform: "android", appVersion: "2.0.0 (64)",
                                             osVersion: "Android 16 (API 36)", deviceClass: "phone")
 
@@ -400,11 +409,40 @@ struct CrashReportingTests {
         #expect(store.loadPayloads().count == 2)
     }
 
+    /// Java and Kotlin frames keep our own class and file only when the compiled app lists that exact pair; a system
+    /// class drops to its exact package, and anything else becomes `[path]` with function `?`.
+    @Test func classFramesKeepOnlyCompiledClassesAndExactSystemPackages() throws {
+        func scrub(_ module: String, _ filename: String, function: String = "start") -> CrashReportFrame {
+            CrashReportPrivacy.frame(CrashReportFrame(function: function, module: module, filename: filename, line: 7,
+                                                      inApp: module.hasPrefix("conclave."), classFrame: true))
+        }
+        let own = scrub("conclave.module.WebRTCClient", "WebRTCClient+Android.kt", function: "onProduce")
+        #expect(own.module == "conclave.module.WebRTCClient" && own.filename == "WebRTCClient+Android.kt" && own.function == "onProduce")
+        for (module, filename) in [("conclave.PrivateRoomCedar", "DeviceCedar.kt"), ("conclave.module.WebRTCClient", "DeviceCedar.kt"),
+                                   ("conclave.PrivateRoomCedar", "WebRTCClient+Android.kt"), ("skip.ui.Jane", "Jane.kt"),
+                                   ("conclave.module.WebRTCClient", ""), ("android.Jane.Smith", "Smith.java"),
+                                   ("com.google.DeviceCedar", "DeviceCedar.java"), ("Jane", "Jane.kt")] {
+            let frame = scrub(module, filename)
+            #expect(frame.module == "[path]" && frame.filename.isEmpty && frame.function == "?", "\(module) \(filename)")
+        }
+        let system = scrub("android.os.Handler$Callback", "Handler.java", function: "dispatchMessage")
+        #expect(system.module == "android.os" && system.filename.isEmpty && system.function == "dispatchMessage")
+
+        let trace = try JSONSerialization.data(withJSONObject: ["traceLines": [
+            "\"main\" prio=5 tid=1 Blocked", "at conclave.PrivateRoomCedar.start(DeviceCedar.kt:1)",
+            "at java.lang.Thread.run(Thread.java:1012)",
+        ]])
+        let text = try #require(CrashReportEventBuilder.event(for: exitRecord("anr", trace: String(decoding: trace, as: UTF8.self)),
+                                                               eventId: "id-1", context: Self.context))
+        #expect(!text.contains("Cedar") && !text.contains("PrivateRoom") && !text.contains("Thread.java"))
+        #expect(text.contains("java.lang"))
+    }
+
     /// MetricKit names a binary by its image name; one that is not a known module never reaches the endpoint, even
     /// when it looks like a Java package.
     @Test func unknownMetricKitBinariesNeverUpload() throws {
-        let names = ["com.google.UserPrivate.dylib", "conclave.Jane.dylib", "android.Jane Smith", "java.private.Notes",
-                     "Jane.framework", "libsystem_Jane.dylib"]
+        let names = ["com.google.UserPrivate.dylib", "com.google.DeviceCedar.dylib", "conclave.Jane.dylib", "android.Jane Smith",
+                     "java.private.Notes", "Jane.framework", "libsystem_Jane.dylib"]
         var frame: [String: Any] = ["binaryName": "Conclave", "offsetIntoBinaryTextSegment": 0x1000]
         for name in names.reversed() {
             frame = ["binaryName": name, "offsetIntoBinaryTextSegment": 0x10, "subFrames": [frame]]
@@ -414,7 +452,7 @@ struct CrashReportingTests {
                                                      fields: [], detailJSON: String(decoding: try JSONSerialization.data(withJSONObject: tree),
                                                                                     as: UTF8.self))
         let text = try #require(CrashReportEventBuilder.event(for: hang, eventId: "id", context: Self.context))
-        for leaked in ["UserPrivate", "Jane", "Smith", "private", "Notes", "com.google", "conclave.Jane"] {
+        for leaked in ["UserPrivate", "DeviceCedar", "Cedar", "Jane", "Smith", "private", "Notes", "com.google", "conclave.Jane"] {
             #expect(!text.contains(leaked), "\(leaked)")
         }
         let frames = CrashReportEventBuilder.metricKitFrames(try #require(
@@ -588,15 +626,7 @@ struct CrashReportingTests {
                      "libswift_Concurrency.dylib"] {
             #expect(CrashReportPrivacy.binaryName(name) == name, "\(name)")
         }
-        for name in ["conclave.module.WebRTCClient", "kotlinx.coroutines.BlockingCoroutine"] {
-            #expect(CrashReportPrivacy.className(name) == name, "\(name)")
-        }
-        for name in ["Jane.Doe", "libc.so", "jane.private.Notes"] {
-            #expect(CrashReportPrivacy.className(name) == "[path]", "\(name)")
-        }
-        #expect(CrashReportPrivacy.fileName("Builders.common.kt") == "Builders.common.kt")
-        #expect(CrashReportPrivacy.fileName("Native Method") == "Native Method")
-        #expect(CrashReportPrivacy.fileName("Jane Doe") == "[path]")
+        #expect(CrashReportPrivacy.binaryName("Jane Doe") == "[path]")
 
         let folder = try #require(CrashReportEventBuilder.traceFrame("native: #01 pc 0002 /Users/Jane.so Smith (Jane+4)"))
         #expect(folder.function == "?" && folder.module == "[path]")
@@ -631,8 +661,8 @@ struct CrashReportingTests {
         let exception = try #require((properties["$exception_list"] as? [[String: Any]])?.first)
         let frames = try #require((exception["stacktrace"] as? [String: Any])?["frames"] as? [[String: Any]])
         #expect(frames.map { $0["function"] as? String } == ["?", "?", "?"])
-        #expect(frames.map { $0["module"] as? String } == ["[path]", "conclave.Camera", "conclave.Camera"])
-        #expect(frames[1]["filename"] as? String == "[path]" && frames[2]["filename"] as? String == "[path]")
+        #expect(frames.map { $0["module"] as? String } == ["[path]", "[path]", "[path]"])
+        #expect(frames.allSatisfy { $0["filename"] == nil })
     }
 
     /// A mapping can end in a parenthesized name, so a trailing group is never uploaded as the frame's function.

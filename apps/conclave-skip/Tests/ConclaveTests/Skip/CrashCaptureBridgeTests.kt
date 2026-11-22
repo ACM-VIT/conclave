@@ -15,6 +15,17 @@ import org.robolectric.annotation.Config
 class CrashCaptureBridgeTests {
     @Test
     fun anUncaughtAndroidCrashBecomesAPostHogExceptionWithItsCauses() {
+        val compiledClass = CrashCaptureBridgeTests::class.java.name + "\tCrashCaptureBridgeTests.kt"
+        val previous = CrashReportPrivacy.isCompiledAppClass
+        CrashReportPrivacy.isCompiledAppClass = { entry -> entry == compiledClass }
+        try {
+            assertUncaughtCrashUploads()
+        } finally {
+            CrashReportPrivacy.isCompiledAppClass = previous
+        }
+    }
+
+    private fun assertUncaughtCrashUploads() {
         val crash = IllegalStateException("user text that must not leave", RuntimeException("cause text"))
         val payload = AndroidCrashCapture.payload(crash, listOf("join.socketConnected", "bad code"), "live", 1_795_000_000_000.0)
         assertEquals(DiagnosticsPayloadKind.crash.rawValue, payload.kind)
@@ -34,7 +45,7 @@ class CrashCaptureBridgeTests {
         assertEquals("java.lang.RuntimeException", exceptions.getJSONObject(1).getString("type"))
         val frames = exceptions.getJSONObject(0).getJSONObject("stacktrace").getJSONArray("frames")
         val innermost = frames.getJSONObject(frames.length() - 1)
-        assertEquals("anUncaughtAndroidCrashBecomesAPostHogExceptionWithItsCauses", innermost.getString("function"))
+        assertEquals("assertUncaughtCrashUploads", innermost.getString("function"))
         assertEquals(CrashCaptureBridgeTests::class.java.name, innermost.getString("module"))
         assertTrue(innermost.getInt("lineno") > 0)
     }

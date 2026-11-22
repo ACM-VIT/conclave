@@ -133,17 +133,25 @@ enum CrashReportPrivacy {
         "libswift_time.dylib", "libswiftos.dylib", "libswiftsimd.dylib", "libswiftsys_time.dylib",
         "libswiftunistd.dylib",
     ]
-    /// Package roots of the code a Java or Kotlin frame names as its module (`conclave.module.WebRTCClient`).
-    static let knownCodePackages: [String] = [
-        "java.", "javax.", "jdk.", "sun.", "kotlin.", "kotlinx.", "android.", "androidx.", "com.android.", "dalvik.",
-        "libcore.", "org.json.", "org.webrtc.", "org.mediasoup.", "com.mediasfu.", "io.socket.", "okhttp3.", "okio.",
-        "com.google.", "com.lottiefiles.", "com.skydoves.", "coil.", "coil3.", "skip.", "conclave.",
+    /// Class-name prefixes of Conclave's own Java and Kotlin code (the transpiled app and the Skip runtime). Their frames
+    /// are checked against the manifest of compiled classes.
+    static let ownCodePrefixes: [String] = ["conclave.", "skip."]
+    /// Exact platform and library packages a Java or Kotlin frame may name; such a frame keeps only its package.
+    static let systemCodePackages: Set<String> = [
+        "java.lang", "java.lang.reflect", "java.lang.invoke", "java.lang.ref", "java.util", "java.util.concurrent",
+        "java.util.concurrent.locks", "java.util.concurrent.atomic", "java.io", "java.net", "java.nio", "java.nio.channels",
+        "javax.net.ssl", "sun.misc", "jdk.internal.misc", "dalvik.system", "libcore.io", "libcore.util",
+        "android.os", "android.app", "android.view", "android.view.inputmethod", "android.widget", "android.content",
+        "android.content.res", "android.graphics", "android.graphics.drawable", "android.media", "android.hardware.camera2",
+        "android.hardware.camera2.impl", "android.util", "android.net", "android.text", "android.animation",
+        "android.webkit", "android.database.sqlite", "com.android.internal.os", "com.android.internal.policy",
+        "kotlin", "kotlin.jvm.internal", "kotlin.coroutines", "kotlin.coroutines.jvm.internal", "kotlin.collections",
+        "kotlin.text", "kotlinx.coroutines", "kotlinx.coroutines.internal", "kotlinx.coroutines.scheduling",
+        "kotlinx.coroutines.android", "androidx.compose.runtime", "androidx.compose.ui.platform",
+        "androidx.compose.foundation", "androidx.core.app", "androidx.activity", "androidx.lifecycle",
+        "androidx.fragment.app", "org.webrtc", "org.mediasoup.droid", "io.socket.client", "io.socket.engineio.client",
+        "okhttp3", "okhttp3.internal.connection", "okio", "org.json",
     ]
-    static let sourceFileSuffixes: [String] = [".kt", ".java", ".swift", ".m", ".mm", ".c", ".cc", ".cpp", ".h"]
-    static let knownSourceLocations: [String] = ["Native Method", "Unknown Source", "SourceFile"]
-    static let codeNameCharacters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_$."
-    static let sourceFileCharacters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_$+-."
-    /// A `/` right after one of these belongs to a relative path, whose start cannot be told from the text around it.
     static let pathWordCharacters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.+-~$"
     static let nameEnders = [" ", "(", ")", "[", "]", ",", "\"", "'", ":", ";", "\t", "\n"]
 
@@ -190,38 +198,47 @@ enum CrashReportPrivacy {
         return "0x" + digits
     }
 
-    static func isKnownCodeName(_ name: String) -> Bool {
-        if name.contains("..") || name.hasSuffix(".") { return false }
-        for character in name where !codeNameCharacters.contains(character) {
-            return false
-        }
-        for root in knownCodePackages where name.hasPrefix(root) {
-            return true
-        }
-        return false
-    }
-
-    static func isSourceFileName(_ name: String) -> Bool {
-        if knownSourceLocations.contains(name) { return true }
-        for character in name where !sourceFileCharacters.contains(character) {
-            return false
-        }
-        for suffix in sourceFileSuffixes where name.count > suffix.count && name.hasSuffix(suffix) {
-            return true
-        }
-        return false
-    }
-
     /// A binary's name (a native, MetricKit or dynamic-linker frame's module): only an exact known module survives.
     static func binaryName(_ name: String) -> String {
         if name.isEmpty || isKnownModule(name) { return name }
         return pathPlaceholder
     }
 
-    /// A Java or Kotlin class frame's module: only a class in a known package survives.
-    static func className(_ name: String) -> String {
-        if name.isEmpty || isKnownCodeName(name) { return name }
-        return pathPlaceholder
+    /// Whether `class<TAB>source file` names a class compiled into the app, from the manifest the Android build writes
+    /// into the APK (`crash-code-frames.tsv`). Tests replace it; iOS has no Java or Kotlin frames.
+    static var isCompiledAppClass: (String) -> Bool = { entry in
+        #if SKIP
+        return CrashCodeManifest.contains(entry)
+        #else
+        return false
+        #endif
+    }
+
+    /// A Java or Kotlin frame. Our own class and its source file survive only when the compiled app's manifest lists
+    /// that exact pair; a class of an exact known platform or library package drops to that package; anything else
+    /// uploads `[path]` with no file and function `?`.
+    static func classFrame(_ frame: CrashReportFrame) -> CrashReportFrame {
+        var own = false
+        for prefix in ownCodePrefixes where frame.module.hasPrefix(prefix) {
+            own = true
+        }
+        if own && !frame.filename.isEmpty && isCompiledAppClass(frame.module + "\t" + frame.filename) {
+            return CrashReportFrame(function: symbol(frame.function), module: frame.module, filename: frame.filename,
+                                    line: frame.line, inApp: frame.inApp, address: address(frame.address), classFrame: true)
+        }
+        let package = packageName(frame.module)
+        if !own && systemCodePackages.contains(package) {
+            return CrashReportFrame(function: symbol(frame.function), module: package, filename: "", line: frame.line,
+                                    inApp: false, address: address(frame.address), classFrame: true)
+        }
+        return CrashReportFrame(function: CrashReportEventBuilder.unknownFunction, module: pathPlaceholder, filename: "",
+                                line: frame.line, inApp: frame.inApp, address: address(frame.address), classFrame: true)
+    }
+
+    static func packageName(_ className: String) -> String {
+        let parts = className.components(separatedBy: ".")
+        if parts.count < 2 { return "" }
+        return Array(parts.dropLast()).joined(separator: ".")
     }
 
     /// A frame's module from the full path of its mapping, never a pre-stripped name: the path must be absolute and
@@ -247,11 +264,6 @@ enum CrashReportPrivacy {
             index += 1
         }
         return isKnownModule(name) ? name : pathPlaceholder
-    }
-
-    static func fileName(_ name: String) -> String {
-        if name.isEmpty || isKnownModule(name) || isSourceFileName(name) { return name }
-        return pathPlaceholder
     }
 
     /// Fails closed, counting `\` as a separator like `/`. A relative path's start is unknowable, so its text becomes
@@ -292,10 +304,10 @@ enum CrashReportPrivacy {
     }
 
     static func frame(_ frame: CrashReportFrame) -> CrashReportFrame {
-        CrashReportFrame(function: symbol(frame.function),
-                         module: frame.classFrame ? className(frame.module) : binaryName(frame.module),
-                         filename: fileName(frame.filename), line: frame.line, inApp: frame.inApp,
-                         address: address(frame.address), classFrame: frame.classFrame)
+        if frame.classFrame { return classFrame(frame) }
+        return CrashReportFrame(function: symbol(frame.function), module: binaryName(frame.module),
+                                filename: binaryName(frame.filename), line: frame.line, inApp: frame.inApp,
+                                address: address(frame.address))
     }
 }
 
