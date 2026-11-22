@@ -9,6 +9,7 @@
  */
 
 import { getSystemErrorMap } from "node:util";
+import { ConfigError } from "../configError.js";
 
 export type ServerErrorSource =
   | "uncaught_exception"
@@ -76,6 +77,69 @@ class NonErrorValue extends Error {
 // or with its own `name` as the type.
 const asError = (error: unknown): Error =>
   error instanceof Error ? error : new NonErrorValue(error);
+
+// Type names that name a kind of failure, never data: built-in errors and the
+// libraries the SFU calls (redis, mediasoup, jsonwebtoken). Our own classes
+// are told apart with instanceof, never by name.
+const KNOWN_ERROR_TYPES = new Set([
+  "Error", "EvalError", "RangeError", "ReferenceError", "SyntaxError", "TypeError",
+  "URIError", "AggregateError", "AbortError", "ClientClosedError", "ClientOfflineError",
+  "ConnectionTimeoutError", "DisconnectsClientError", "ReconnectStrategyError",
+  "SocketClosedUnexpectedlyError", "SocketTimeoutError", "TimeoutError", "ErrorReply",
+  "WatchError", "UnsupportedError", "InvalidStateError", "JsonWebTokenError",
+  "TokenExpiredError", "NotBeforeError",
+]);
+const ERRNO_CODES = new Set([...getSystemErrorMap().values()].map(([name]) => name));
+const ERRNO_MESSAGE = /^([A-Z][A-Z0-9_]*): \[message withheld\]$/;
+const MESSAGE_WITHHELD = "[message withheld]";
+const TYPE_WITHHELD = "[type withheld]";
+const MAX_CAUSE_DEPTH = 3;
+
+// The messages of real ConfigError and NonErrorValue instances that were
+// reported, which name a variable or a typeof and nothing else. beforeSend
+// keeps a message only when it is one of these or an errno code.
+const chosenMessages = new Set<string>();
+const MAX_CHOSEN_MESSAGES = 200;
+
+const chooseMessage = (error: Error, trusted: boolean): string => {
+  if (trusted) {
+    const message = scrubErrorText(error.message);
+    if (chosenMessages.size < MAX_CHOSEN_MESSAGES) chosenMessages.add(message);
+    if (chosenMessages.has(message)) return message;
+  }
+  const { code } = error as NodeJS.ErrnoException;
+  return typeof code === "string" && ERRNO_CODES.has(code)
+    ? `${code}: ${MESSAGE_WITHHELD}`
+    : MESSAGE_WITHHELD;
+};
+
+// V8 writes "Name: message" above the frames.
+const framesOf = (stack: string | undefined): string => {
+  const firstFrame = stack?.indexOf("\n    at ") ?? -1;
+  return stack && firstFrame >= 0 ? stack.slice(firstFrame) : "";
+};
+
+/**
+ * The error that is sent, built while the original is at hand: a known type,
+ * a message only from our constant-message classes (checked with instanceof)
+ * or the errno code in `error.code`, the original frames, and its causes.
+ */
+const reportedError = (thrown: unknown, depth = 0): Error => {
+  const error = asError(thrown);
+  const trusted = error instanceof ConfigError || error instanceof NonErrorValue;
+  const name = trusted
+    ? error instanceof ConfigError ? "ConfigError" : "NonErrorValue"
+    : KNOWN_ERROR_TYPES.has(error.name) ? error.name : TYPE_WITHHELD;
+  const message = chooseMessage(error, trusted);
+  const cause =
+    error.cause !== undefined && depth < MAX_CAUSE_DEPTH
+      ? { cause: reportedError(error.cause, depth + 1) }
+      : undefined;
+  const reported = new Error(message, cause);
+  reported.name = name;
+  reported.stack = `${name}: ${message}${framesOf(error.stack)}`;
+  return reported;
+};
 
 const RATE_WINDOW_MS = 60_000;
 const MAX_REPORTS_PER_KEY_PER_WINDOW = 5;
@@ -157,7 +221,7 @@ export const createErrorReporter = ({
       try {
         const error = asError(thrown);
         const prepared = prepare(error, context, { budgeted: true });
-        prepared?.client.captureException(error, prepared.options);
+        prepared?.client.captureException(reportedError(error), prepared.options);
       } catch (failure) {
         failed(failure);
       }
@@ -174,7 +238,7 @@ export const createErrorReporter = ({
         );
         if (!prepared) return;
         const delivery = Promise.allSettled([
-          prepared.client.captureExceptionImmediate(error, prepared.options),
+          prepared.client.captureExceptionImmediate(reportedError(error), prepared.options),
           prepared.client.flush(),
         ]);
         const deadline = new Promise<void>((resolve) => {
@@ -257,31 +321,19 @@ type ExceptionListEntry = {
   stacktrace?: { frames?: unknown } & Record<string, unknown>;
 };
 
-// Type names that name a kind of failure, never data: built-in errors, the
-// libraries the SFU calls (redis, mediasoup, jsonwebtoken) and ours.
-const KNOWN_ERROR_TYPES = new Set([
-  "Error", "EvalError", "RangeError", "ReferenceError", "SyntaxError", "TypeError",
-  "URIError", "AggregateError", "AbortError", "ClientClosedError", "ClientOfflineError",
-  "ConnectionTimeoutError", "DisconnectsClientError", "ReconnectStrategyError",
-  "SocketClosedUnexpectedlyError", "SocketTimeoutError", "TimeoutError", "ErrorReply",
-  "WatchError", "UnsupportedError", "InvalidStateError", "JsonWebTokenError",
-  "TokenExpiredError", "NotBeforeError", "ConfigError", "NonErrorValue",
-]);
-// Our classes whose messages are text we wrote with no values in them.
-const CONSTANT_MESSAGE_TYPES = new Set(["ConfigError", "NonErrorValue"]);
-const ERRNO_CODES = new Set([...getSystemErrorMap().values()].map(([name]) => name));
-const MESSAGE_WITHHELD = "[message withheld]";
-
 /**
- * A message is sent only when we wrote it. Otherwise only a Node errno code
- * (ENOENT and the like) survives, never the rest of the text.
+ * A message is sent only when the capture chose it (see reportedError), or it
+ * is an errno code; any other text is withheld.
  */
-const trustedMessage = (type: string, value: unknown): string => {
+const trustedMessage = (value: unknown): string => {
   if (typeof value !== "string") return MESSAGE_WITHHELD;
-  if (CONSTANT_MESSAGE_TYPES.has(type)) return scrubErrorText(value);
-  const code = /^([A-Z][A-Z0-9_]*):/.exec(value)?.[1];
-  return code && ERRNO_CODES.has(code) ? `${code}: ${MESSAGE_WITHHELD}` : MESSAGE_WITHHELD;
+  if (chosenMessages.has(value)) return value;
+  const code = ERRNO_MESSAGE.exec(value)?.[1];
+  return code && ERRNO_CODES.has(code) ? value : MESSAGE_WITHHELD;
 };
+
+// Our own classes, by the names reportedError gives only to real instances.
+const SENT_TYPES = new Set([...KNOWN_ERROR_TYPES, "ConfigError", "NonErrorValue"]);
 
 // posthog-node reads the lines around each frame from disk. They are source,
 // not data, but a literal in that source still leaves the box, so they go.
@@ -302,13 +354,11 @@ const scrubFrame = (frame: ExceptionFrame): ExceptionFrame => {
 
 const scrubEntry = (entry: ExceptionListEntry): ExceptionListEntry => {
   const type =
-    typeof entry?.type === "string" && KNOWN_ERROR_TYPES.has(entry.type)
-      ? entry.type
-      : "[type withheld]";
+    typeof entry?.type === "string" && SENT_TYPES.has(entry.type) ? entry.type : TYPE_WITHHELD;
   return {
     ...entry,
     type,
-    value: trustedMessage(type, entry?.value),
+    value: trustedMessage(entry?.value),
     ...(entry?.stacktrace && Array.isArray(entry.stacktrace.frames)
       ? {
           stacktrace: {

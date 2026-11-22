@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
+import { connect, type AddressInfo } from "node:net";
 import { gunzipSync } from "node:zlib";
 import { PostHog } from "posthog-node";
 import { afterEach, describe, expect, it } from "vitest";
@@ -266,6 +266,73 @@ describe("SFU error reporter", () => {
     });
   });
 
+  it.each(["ConfigError", "NonErrorValue"])(
+    "withholds the message of a plain Error that only calls itself %s",
+    async (name) => {
+      const fake = await startFakePostHog();
+      servers.push(fake.server);
+      const reporter = reporterFor(posthogClient(fake.host));
+
+      reporter.report(Object.assign(new Error("Meet Mira in sample-room"), { name }), {
+        source: "socket_handler",
+      });
+
+      await waitFor(() => fake.events.some((event) => event.event === "$exception"));
+      const [entry] = fake.events.find((event) => event.event === "$exception")!.properties
+        .$exception_list as Array<{ type: string; value: string }>;
+      expect(entry).toMatchObject({ type: "[type withheld]", value: "[message withheld]" });
+      expect(fake.bodies.join("\n")).not.toMatch(/Mira|sample-room/);
+    },
+  );
+
+  it("keeps the errno code of a refused connection, read from the error itself", async () => {
+    const fake = await startFakePostHog();
+    servers.push(fake.server);
+    const reporter = reporterFor(posthogClient(fake.host));
+    const closed = createServer();
+    await new Promise<void>((resolve) => closed.listen(0, "127.0.0.1", resolve));
+    const { port } = closed.address() as AddressInfo;
+    await new Promise((resolve) => closed.close(resolve));
+    const refused = await new Promise<Error>((resolve) => {
+      connect(port, "127.0.0.1").on("error", resolve);
+    });
+
+    reporter.report(refused, { source: "redis_transient" });
+    reporter.report(Object.assign(new Error("Meet Mira refused us"), { code: "EPIPE" }), {
+      source: "socket_handler",
+    });
+    reporter.report(Object.assign(new Error("ENOENT: Meet Mira"), { code: "Meet_Mira" }), {
+      source: "startup_failed",
+    });
+
+    await waitFor(() => fake.events.filter((event) => event.event === "$exception").length === 3);
+    const values = fake.events
+      .filter((event) => event.event === "$exception")
+      .map((event) => (event.properties.$exception_list as Array<{ value: string }>)[0].value);
+    expect(refused.message).not.toMatch(/^ECONNREFUSED/);
+    expect(values).toEqual([
+      "ECONNREFUSED: [message withheld]",
+      "EPIPE: [message withheld]",
+      "[message withheld]",
+    ]);
+    expect(fake.bodies.join("\n")).not.toMatch(/Mira|127\.0\.0\.1:\d/);
+  });
+
+  it("trusts no message by its type name alone", () => {
+    const scrubbed = scrubExceptionEvent({
+      event: "$exception",
+      properties: {
+        $exception_list: [
+          { type: "ConfigError", value: "Meet Mira in sample-room" },
+          { type: "NonErrorValue", value: "Meet Mira in sample-room" },
+          { type: "Error", value: "ENOENT: Meet Mira" },
+        ],
+      },
+    });
+
+    expect(JSON.stringify(scrubbed)).not.toMatch(/Mira/);
+  });
+
   it("withholds unknown types and keeps a stackless TypeError's type", () => {
     const scrubbed = scrubExceptionEvent({
       event: "$exception",
@@ -416,7 +483,9 @@ describe("SFU error reporter", () => {
     await reporter.reportFatal(crash, { source: "uncaught_exception" }, 200);
 
     expect(sent.filter((entry) => entry.level === "error")).toHaveLength(60);
-    expect(sent.at(-1)).toEqual({ error: crash, level: "fatal" });
+    const fatal = sent.at(-1)!;
+    expect(fatal).toMatchObject({ level: "fatal", error: { message: "[message withheld]" } });
+    expect((fatal.error as Error).stack).toContain(crash.stack!.split("\n")[1]);
     expect(flushes).toBe(1);
   });
 

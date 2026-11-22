@@ -135,10 +135,12 @@ trust, instead of scrubbing what looks bad:
 Session replay, surveys, DOM autocapture, feature flags and pageviews are off,
 and no user is ever identified. The SFU follows the same rule: a thrown or
 rejected value that is not an Error is reported as `NonErrorValue`; type names
-are kept only from a known list; a message is sent only for our constant-message
-classes (`ConfigError`, which names the variable and never its value, and
-`NonErrorValue`), otherwise it is `[message withheld]`, keeping just a Node
-errno code such as `ENOENT`. Frames lose the source lines posthog-node attaches
+are kept only from a known list; a message is sent only for a real instance of
+our constant-message classes (`ConfigError`, which names the variable and never
+its value, and `NonErrorValue`), checked with `instanceof` when the error is
+reported and never by its name. Otherwise it is `[message withheld]`, keeping
+just a Node errno code read from the error's own `code` (`ECONNREFUSED` and the
+like), whatever its message says. Frames lose the source lines posthog-node attaches
 and any home folder's account name (`/home/<name>` becomes `~`, spaces included).
 Game events group by a keyed hash of the room (`room_<hmac>`), never its code.
 Without a real `SFU_SECRET` they are not grouped at all, and distinct ids use a
