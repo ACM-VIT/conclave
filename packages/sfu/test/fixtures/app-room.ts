@@ -9,7 +9,7 @@ import { LocalRoomRegistry } from "../../server/roomRegistry.js";
 import { createConnectionContext } from "../../server/socket/context.js";
 import { registerAppsHandlers } from "../../server/socket/handlers/appsHandlers.js";
 import { createSfuState } from "../../server/state.js";
-import type { AppsSyncResponse } from "../../types.js";
+import type { AppsSyncError, AppsSyncResponse } from "../../types.js";
 
 type Listener = (...args: unknown[]) => unknown;
 
@@ -53,11 +53,13 @@ export const inAppRoom = (pool: AppDocumentPool, id: string) => {
   registerAppsHandlers(context);
   const call = <T>(event: string, ...args: unknown[]) =>
     new Promise<T>((resolve) => listeners.get(event)!(...args, resolve));
-  const syncFrom = async (holder: Y.Doc) => {
-    const response = await call<AppsSyncResponse | { error: string }>("apps:yjs:sync", {
+  const requestSync = (holder: Y.Doc) =>
+    call<AppsSyncResponse | AppsSyncError>("apps:yjs:sync", {
       appId: "board",
       syncMessage: Y.encodeStateVector(holder),
     });
+  const syncFrom = async (holder: Y.Doc) => {
+    const response = await requestSync(holder);
     if (!("syncMessage" in response)) throw new Error(response.error);
     return response;
   };
@@ -72,6 +74,7 @@ export const inAppRoom = (pool: AppDocumentPool, id: string) => {
     open: () => call("apps:open", { appId: "board" }),
     close: () => call("apps:close"),
     send: (update: Uint8Array) => listeners.get("apps:yjs:update")!({ appId: "board", update }),
+    requestSync,
     syncFrom,
     joinDocument,
     join: async () => (await joinDocument()).doc.getText("t").toString(),

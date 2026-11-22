@@ -1165,6 +1165,12 @@ export interface AppsSyncResponse {
   awarenessUpdate?: Uint8Array;
 }
 
+export interface AppsSyncError {
+  error: string;
+  retryable?: true;
+  retryAfterMs?: number;
+}
+
 export interface AppsUpdateData {
   appId: string;
   update: Uint8Array;

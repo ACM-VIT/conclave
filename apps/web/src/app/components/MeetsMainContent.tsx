@@ -604,6 +604,8 @@ export default function MeetsMainContent({
     closeApp,
     setLocked,
     refreshState,
+    syncStatus: appSyncStatus,
+    retrySync: retryAppSync,
   } = useApps();
   const { isActive: isGameActive, refresh: refreshGameState } = useGame();
   const [isGamesOpen, setIsGamesOpen] = useState(false);
@@ -2350,6 +2352,8 @@ export default function MeetsMainContent({
         <MeetingAppLayout
           app={ActiveMeetingApp}
           frameContent={!isDevPlaygroundActive}
+          syncFailed={appSyncStatus === "failed"}
+          onRetrySync={retryAppSync}
           leaveAction={isWatchActive ? watchLeaveAction : undefined}
           localStream={localStream}
           isCameraOff={isCameraOff}

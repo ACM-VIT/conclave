@@ -9,6 +9,8 @@ import {
   type AppDocumentPool,
   type AppDocumentPoolOptions,
 } from "../server/apps/documents/pool.js";
+import { config } from "../config/config.js";
+import { createSfuServer } from "../server/createSfuServer.js";
 import { edit, inAppRoom as inRoom } from "./fixtures/app-room.js";
 
 const STALLING_WORKER = new URL("./fixtures/stalling-app-document-worker.ts", import.meta.url);
@@ -154,6 +156,56 @@ describe("app documents", () => {
     expect(room.relayed).toEqual([base, inserts]);
   });
 
+
+  it("tells a late joiner to retry while the queue is full and serves the board once it drains", async () => {
+    const pool = createPool({
+      deadlineMs: 300,
+      workerUrl: STALLING_WORKER,
+      limits: { document: { jobs: 2, bytes: 1024 * 1024 }, total: { jobs: 64, bytes: 8 * 1024 * 1024 } },
+    });
+    const room = inRoom(pool, "busy");
+    await room.open();
+    const { hello, fromOther, world } = authors();
+    room.send(hello);
+    expect(await room.join()).toBe("hello");
+    room.send(fromOther("STALL"));
+    room.send(world());
+
+    let response = await room.requestSync(new Y.Doc());
+    expect(response).toMatchObject({ retryable: true, retryAfterMs: 250 });
+    expect(response).not.toHaveProperty("syncMessage");
+    for (let attempt = 0; attempt < 40 && !("syncMessage" in response); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, "retryAfterMs" in response ? response.retryAfterMs : 0));
+      response = await room.requestSync(new Y.Doc());
+    }
+
+    if (!("syncMessage" in response)) throw new Error(response.error);
+    const joined = new Y.Doc();
+    Y.applyUpdate(joined, response.syncMessage);
+    expect(joined.getText("t").toString()).toBe("hello world");
+  });
+
+  it("uses the app document deadline from the config passed to createSfuServer", async () => {
+    const serverWith = (deadlineMs: number) => {
+      const server = createSfuServer({ config: { ...config, appDocuments: { deadlineMs } } });
+      pools.push(server.state.appDocuments);
+      return server;
+    };
+    const { hello } = authors();
+
+    expect((await serverWith(0.001).state.appDocuments.open().apply(hello)).ok).toBe(false);
+    expect(await serverWith(60_000).state.appDocuments.open().apply(hello)).toEqual({ ok: true });
+  });
+
+  it("tells a client that syncs too often to retry shortly", async () => {
+    const room = inRoom(createPool(), "rate");
+    await room.open();
+
+    const responses = await Promise.all(Array.from({ length: 11 }, () => room.requestSync(new Y.Doc())));
+
+    expect(responses.slice(0, 10).every((response) => "syncMessage" in response)).toBe(true);
+    expect(responses[10]).toMatchObject({ retryable: true, retryAfterMs: 500 });
+  });
 
   it("gives a late joiner every accepted update and relays each one in order", async () => {
     const room = inRoom(createPool(), "order");

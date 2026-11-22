@@ -7,6 +7,7 @@ import type {
   AppsOpenResponse,
   AppsState,
   AppsSyncData,
+  AppsSyncError,
   AppsSyncResponse,
   AppsUpdateData,
 } from "../../../types.js";
@@ -21,14 +22,20 @@ const MAX_APPS_SYNC_BYTES = 64 * 1024;
 const MAX_APPS_UPDATE_BYTES = 256 * 1024;
 const MAX_APPS_AWARENESS_BYTES = 64 * 1024;
 
-const SYNC_ERRORS: Record<Refusal, string> = {
-  "too-large": "App document too large to sync",
-  invalid: "Invalid sync payload",
-  "timed-out": "App document sync timed out",
-  crashed: "App document sync failed",
-  "queue-full": "App document is busy",
-  closed: "App not active",
-  unavailable: "App document unavailable",
+const retryLater = (error: string, retryAfterMs: number): AppsSyncError => ({
+  error,
+  retryable: true,
+  retryAfterMs,
+});
+
+const SYNC_REFUSALS: Record<Refusal, AppsSyncError> = {
+  "too-large": { error: "App document too large to sync" },
+  invalid: { error: "Invalid sync payload" },
+  "timed-out": retryLater("App document sync timed out", 250),
+  crashed: retryLater("App document sync failed", 250),
+  "queue-full": retryLater("App document is busy", 250),
+  closed: { error: "App not active" },
+  unavailable: { error: "App document unavailable" },
 };
 
 const UPDATE_REFUSALS: Partial<Record<Refusal, string>> = {
@@ -221,13 +228,13 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
 
   socket.on(
     "apps:yjs:sync",
-    (data: AppsSyncData, callback: (response: AppsSyncResponse | { error: string }) => void) => {
+    (data: AppsSyncData, callback: (response: AppsSyncResponse | AppsSyncError) => void) => {
       if (!context.currentRoom) {
-        respond(callback, { error: "Not in a room" });
+        respond(callback, retryLater("Not in a room", 500));
         return;
       }
       if (!takeToken(socket, "apps:yjs:sync", RATE_LIMITS.appsYjsSync)) {
-        respond(callback, { error: "Too many app sync requests" });
+        respond(callback, retryLater("Too many app sync requests", 500));
         return;
       }
 
@@ -255,7 +262,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       const room = context.currentRoom;
       void room.getOrCreateAppDoc(appId, documents).sync(stateVector).then((result) => {
         if (!result.ok) {
-          respond(callback, { error: SYNC_ERRORS[result.reason] });
+          respond(callback, SYNC_REFUSALS[result.reason]);
           return;
         }
         const awarenessSnapshot = room.encodeAppAwarenessSnapshot(appId) ?? undefined;

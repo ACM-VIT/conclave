@@ -12,9 +12,11 @@ import type {
   AppsOpenPayload,
   AppsOpenResponse,
   AppsState,
+  AppsSyncError,
   AppsSyncPayload,
   AppsSyncResponse,
   AppsUpdatePayload,
+  AppSyncStatus,
   AppUser,
 } from "../types/index";
 
@@ -31,6 +33,15 @@ export type AppsProviderProps = {
 };
 
 const ACK_TIMEOUT_MS = 8_000;
+const SYNC_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 4_000];
+const SYNC_GIVE_UP_MS = 30_000;
+
+type SyncRun = {
+  appId: string;
+  startedAt: number;
+  attempt: number;
+  timer?: ReturnType<typeof setTimeout>;
+};
 
 const createAwareness = (doc: Y.Doc) => new Awareness(doc);
 
@@ -126,6 +137,8 @@ export function AppsProvider({
 }: AppsProviderProps) {
   const [state, setState] = useState<AppsState>({ activeAppId: null, locked: false });
   const [roster, setRoster] = useState<AppUser[]>(() => participants ?? []);
+  const [syncStatus, setSyncStatus] = useState<AppSyncStatus>("idle");
+  const syncRunRef = useRef<SyncRun | null>(null);
 
   useEffect(() => {
     const next = participants ?? [];
@@ -328,51 +341,106 @@ export function AppsProvider({
     });
   }, [applyServerAppsState]);
 
-  const syncApp = useCallback(
-    (appId: string) => {
-      const currentSocket = socketRef.current;
-      if (!currentSocket || !currentSocket.connected) return;
-
+  const applySync = useCallback(
+    (appId: string, response: AppsSyncResponse, currentSocket: Socket) => {
+      if (!response.syncMessage) return;
       const doc = getDoc(appId);
       const awareness = getAwareness(appId);
-      const syncMessage = Y.encodeStateVector(doc);
-      const payload: AppsSyncPayload = { appId, syncMessage };
 
-      currentSocket.emit("apps:yjs:sync", payload, (response?: AppsSyncResponse) => {
-        if (!response?.syncMessage) return;
+      const update = toUint8Array(response.syncMessage);
+      if (!update || update.length === 0) return;
 
-        const update = toUint8Array(response.syncMessage);
-        if (!update || update.length === 0) return;
+      try {
+        Y.applyUpdate(doc, update, "remote");
+      } catch (err) {
+        console.warn("[Apps] Failed to apply sync update", err);
+      }
 
-        try {
-          Y.applyUpdate(doc, update, "remote");
-        } catch (err) {
-          console.warn("[Apps] Failed to apply sync update", err);
-        }
-
-        if (response.awarenessUpdate) {
-          const awarenessUpdate = toUint8Array(response.awarenessUpdate);
-          if (awarenessUpdate && awarenessUpdate.length > 0) {
-            try {
-              applyAwarenessUpdate(awareness, awarenessUpdate, "remote");
-            } catch (err) {
-              console.warn("[Apps] Failed to apply awareness update", err);
-            }
+      if (response.awarenessUpdate) {
+        const awarenessUpdate = toUint8Array(response.awarenessUpdate);
+        if (awarenessUpdate && awarenessUpdate.length > 0) {
+          try {
+            applyAwarenessUpdate(awareness, awarenessUpdate, "remote");
+          } catch (err) {
+            console.warn("[Apps] Failed to apply awareness update", err);
           }
         }
+      }
 
-        if (response.stateVector) {
-          const serverVector = toUint8Array(response.stateVector);
-          if (!serverVector) return;
-          const updateForServer = Y.encodeStateAsUpdate(doc, serverVector);
-          if (updateForServer.length > 0 && !isReadOnlyRef.current) {
-            currentSocket.emit("apps:yjs:update", { appId, update: updateForServer });
-          }
+      if (response.stateVector) {
+        const serverVector = toUint8Array(response.stateVector);
+        if (!serverVector) return;
+        const updateForServer = Y.encodeStateAsUpdate(doc, serverVector);
+        if (updateForServer.length > 0 && !isReadOnlyRef.current) {
+          currentSocket.emit("apps:yjs:update", { appId, update: updateForServer });
         }
-      });
+      }
     },
     [getDoc, getAwareness]
   );
+
+  const stopSync = useCallback(() => {
+    clearTimeout(syncRunRef.current?.timer);
+    syncRunRef.current = null;
+  }, []);
+
+  const attemptSync = useCallback(
+    (run: SyncRun) => {
+      const currentSocket = socketRef.current;
+      if (syncRunRef.current !== run || !currentSocket?.connected) return;
+
+      getAwareness(run.appId);
+      const payload: AppsSyncPayload = {
+        appId: run.appId,
+        syncMessage: Y.encodeStateVector(getDoc(run.appId)),
+      };
+      let answered = false;
+      const answer = (response?: AppsSyncResponse | AppsSyncError) => {
+        if (answered) return;
+        answered = true;
+        clearTimeout(run.timer);
+        if (syncRunRef.current !== run) return;
+
+        if (response && !("error" in response)) {
+          syncRunRef.current = null;
+          setSyncStatus("synced");
+          applySync(run.appId, response, currentSocket);
+          return;
+        }
+
+        const backoff = SYNC_RETRY_DELAYS_MS[Math.min(run.attempt, SYNC_RETRY_DELAYS_MS.length - 1)];
+        const delay = Math.max(backoff, response?.retryAfterMs ?? 0);
+        const retryable = !response || response.retryable === true;
+        if (!retryable || Date.now() - run.startedAt + delay > SYNC_GIVE_UP_MS) {
+          syncRunRef.current = null;
+          setSyncStatus("failed");
+          return;
+        }
+        run.attempt += 1;
+        run.timer = setTimeout(() => attemptSync(run), delay);
+      };
+
+      run.timer = setTimeout(() => answer(), ACK_TIMEOUT_MS);
+      currentSocket.emit("apps:yjs:sync", payload, answer);
+    },
+    [getDoc, getAwareness, applySync]
+  );
+
+  const startSync = useCallback(
+    (appId: string) => {
+      stopSync();
+      const run: SyncRun = { appId, startedAt: Date.now(), attempt: 0 };
+      syncRunRef.current = run;
+      setSyncStatus("syncing");
+      attemptSync(run);
+    },
+    [stopSync, attemptSync]
+  );
+
+  const retrySync = useCallback(() => {
+    const appId = serverActiveAppIdRef.current;
+    if (appId) startSync(appId);
+  }, [startSync]);
 
   useEffect(() => {
     if (!socket) return;
@@ -442,9 +510,22 @@ export function AppsProvider({
   }, [socket]);
 
   useEffect(() => {
-    if (!socket || !state.activeAppId) return;
-    syncApp(state.activeAppId);
-  }, [socket, state.activeAppId, syncApp]);
+    if (!socket || !state.activeAppId) {
+      stopSync();
+      setSyncStatus("idle");
+      return;
+    }
+    startSync(state.activeAppId);
+    return stopSync;
+  }, [socket, state.activeAppId, startSync, stopSync]);
+
+  useEffect(() => {
+    if (!socket) return;
+    socket.on("connect", retrySync);
+    return () => {
+      socket.off("connect", retrySync);
+    };
+  }, [socket, retrySync]);
 
   const openApp = useCallback(async (appId: string, options?: Record<string, unknown>) => {
     const currentSocket = socketRef.current;
@@ -528,6 +609,8 @@ export function AppsProvider({
       refreshState,
       getDoc,
       getAwareness,
+      syncStatus,
+      retrySync,
       user,
       participants: roster,
       isAdmin,
@@ -542,6 +625,8 @@ export function AppsProvider({
       refreshState,
       getDoc,
       getAwareness,
+      syncStatus,
+      retrySync,
       user,
       roster,
       isAdmin,

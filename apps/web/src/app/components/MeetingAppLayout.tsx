@@ -1,7 +1,7 @@
 "use client";
 
 import { memo, type ComponentType } from "react";
-import { LogOut } from "lucide-react";
+import { LogOut, RotateCw } from "lucide-react";
 import { useSmartParticipantOrder } from "../hooks/useSmartParticipantOrder";
 import type { Participant } from "../lib/types";
 import { isSystemUserId } from "../lib/utils";
@@ -27,6 +27,8 @@ interface MeetingAppLayoutProps {
   getDisplayName: (userId: string) => string;
   /** Lets this participant step out of a shared app without affecting others. */
   leaveAction?: { label: string; hint?: string; onLeave: () => void };
+  syncFailed?: boolean;
+  onRetrySync?: () => void;
 }
 
 function MeetingAppLayout({
@@ -47,6 +49,8 @@ function MeetingAppLayout({
   audioPlaybackAttemptToken,
   getDisplayName,
   leaveAction,
+  syncFailed = false,
+  onRetrySync,
 }: MeetingAppLayoutProps) {
   const isLocalActiveSpeaker = activeSpeakerId === currentUserId;
 
@@ -76,6 +80,24 @@ function MeetingAppLayout({
             >
               <LogOut size={14} strokeWidth={1.75} aria-hidden="true" />
               {leaveAction.label}
+            </button>
+          </div>
+        ) : null}
+        {syncFailed ? (
+          <div
+            role="status"
+            className="flex shrink-0 items-center justify-between gap-3 rounded-xl border border-white/10 bg-[#141414] px-3 py-2"
+          >
+            <span className="text-[12.5px] text-[#fafafa]/80">
+              {"Couldn't load this app"}
+            </span>
+            <button
+              type="button"
+              onClick={onRetrySync}
+              className="inline-flex h-7 items-center gap-1.5 rounded-full border border-white/10 px-3 text-[12px] font-medium text-[#fafafa]/85 transition-colors hover:border-white/25 hover:bg-white/[0.06] hover:text-[#fafafa] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/30"
+            >
+              <RotateCw size={13} strokeWidth={1.75} aria-hidden="true" />
+              Retry
             </button>
           </div>
         ) : null}
