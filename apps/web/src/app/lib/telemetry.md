@@ -52,10 +52,10 @@ samples is left out of every total.
 
 | Property | Meaning |
 | --- | --- |
-| `outcome` | `joined`, `failed`, or `abandoned` (left or closed the tab before getting in). An error while reconnecting is a failed retry, not the outcome: the attempt fails only when reconnecting gives up |
+| `outcome` | `joined`, `failed`, or `abandoned` (left or closed the tab before getting in). An error while the reconnect loop runs is a failed retry, not the outcome: the attempt fails only when reconnecting gives up. A redirect to another SFU is not a reconnect |
 | `failure_reason` | `rejected`, `invite_code`, `room_not_found`, `room_unavailable`, `auth`, `timeout`, `permission_denied`, `media_error`, `transport_error`, `connection_failed`, `unknown`; null unless failed |
 | `join_ms` | Click to outcome |
-| `waited`, `waiting_ms` | Whether the waiting room held the user, and for how long, up to `joinApproved` (the host letting them in), before media is reacquired. A drop while waiting keeps the clock running |
+| `waited`, `waiting_ms` | Whether the waiting room held the user, and for how long, up to the moment the server let them in (`joinApproved`, or a join accepted after the room unlocked during a drop), before media is set up. A drop while waiting keeps the clock running |
 | `join_mode` | `meeting` or `webinar_attendee` |
 | `prior_failed_attempts` | Failed attempts in this tab since the last successful join |
 

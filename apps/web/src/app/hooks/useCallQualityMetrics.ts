@@ -50,6 +50,7 @@ export function useCallQualityMetrics({
   connectionState,
   meetError,
   reconnectRecoveryStatus,
+  reconnectInFlight,
   admittedAt,
   participantCount,
   joinMode,
@@ -60,7 +61,9 @@ export function useCallQualityMetrics({
   connectionState: ConnectionState;
   meetError: MeetError | null;
   reconnectRecoveryStatus: ReconnectRecoveryStatus | null;
-  /** performance.now() when the host let the user in from the waiting room. */
+  /** The reconnect loop is running (not a redirect between SFUs). */
+  reconnectInFlight: boolean;
+  /** performance.now() when the server let the user in: joinApproved or an accepted join. */
   admittedAt: number | null;
   participantCount: number;
   joinMode: JoinMode;
@@ -79,10 +82,16 @@ export function useCallQualityMetrics({
   const reconnectGaveUp = reconnectRecoveryStatus?.phase === "failed";
   useEffect(() => {
     tracker.onConnectionState(
-      { state: connectionState, error: meetError, joinMode, reconnectGaveUp },
+      {
+        state: connectionState,
+        error: meetError,
+        joinMode,
+        reconnectGaveUp,
+        reconnecting: reconnectInFlight,
+      },
       performance.now(),
     );
-  }, [tracker, connectionState, meetError, joinMode, reconnectGaveUp]);
+  }, [tracker, connectionState, meetError, joinMode, reconnectGaveUp, reconnectInFlight]);
 
   useEffect(() => {
     if (admittedAt !== null) tracker.onAdmitted(admittedAt);

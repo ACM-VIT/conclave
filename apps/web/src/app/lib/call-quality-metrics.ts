@@ -56,6 +56,11 @@ export type ConnectionSnapshot = {
   joinMode: JoinMode;
   /** Reconnecting stopped for good: retries ran out or the failure cannot be retried. */
   reconnectGaveUp: boolean;
+  /**
+   * The reconnect loop is running. An error while it runs is a failed retry,
+   * not the outcome; a redirect between SFUs is not a reconnect.
+   */
+  reconnecting: boolean;
 };
 
 export type JoinFailureReason =
@@ -120,16 +125,14 @@ type Attempt = {
   startedAt: number;
   joinMode: JoinMode;
   waitingSince: number | null;
-  /** When the host let the user in (`joinApproved`), before media is reacquired. */
+  /**
+   * When the server let the user in: `joinApproved`, or a joinRoom accepted
+   * without it (the room unlocked during a drop), whichever came first.
+   */
   waitingEndedAt: number | null;
   /** Remote media can start flowing while the join is still finishing. */
   firstAudioAt: number | null;
   firstVideoAt: number | null;
-  /**
-   * When the connection dropped and has not come back. An error while this
-   * is set is a failed retry, not the outcome; only giving up ends it.
-   */
-  reconnectingSince: number | null;
 };
 
 type MediaTotals = {
@@ -152,6 +155,8 @@ type MediaTotals = {
 type Call = Attempt & {
   joinedAt: number;
   waitingMs: number | null;
+  /** When the call left joined and has not come back. */
+  reconnectingSince: number | null;
   reconnectCount: number;
   reconnectTotalMs: number;
   reconnectLongestMs: number;
@@ -498,7 +503,7 @@ export function createCallMetricsTracker({
   };
 
   return {
-    onConnectionState({ state, error, joinMode, reconnectGaveUp }, at) {
+    onConnectionState({ state, error, joinMode, reconnectGaveUp, reconnecting }, at) {
       const previousState = lastState;
       lastState = state;
       if (phase.name === "idle") {
@@ -513,7 +518,6 @@ export function createCallMetricsTracker({
             waitingEndedAt: null,
             firstAudioAt: null,
             firstVideoAt: null,
-            reconnectingSince: null,
           },
         };
         return;
@@ -523,17 +527,10 @@ export function createCallMetricsTracker({
         const { attempt } = phase;
         if (state === "waiting") {
           attempt.waitingSince ??= at;
-          attempt.reconnectingSince = null;
           // Put back in the lobby after an earlier admission: waiting again.
           if (previousState !== "waiting") attempt.waitingEndedAt = null;
-        } else if (
-          (state === "reconnecting" || state === "connecting") &&
-          state !== previousState
-        ) {
-          // The attempt already began, so this is the socket coming back.
-          attempt.reconnectingSince ??= at;
         }
-        const retrying = attempt.reconnectingSince !== null && !reconnectGaveUp;
+        const retrying = reconnecting && !reconnectGaveUp;
         if (state === "joined") {
           emitJoin(attempt, "joined", at);
           failedAttempts = 0;
@@ -624,7 +621,7 @@ export function createCallMetricsTracker({
 
     onAdmitted(at) {
       if (phase.name !== "joining" || phase.attempt.waitingSince === null) return;
-      phase.attempt.waitingEndedAt = at;
+      phase.attempt.waitingEndedAt ??= at;
     },
 
     nextSampleDelayMs(at) {

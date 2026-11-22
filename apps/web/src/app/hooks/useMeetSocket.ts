@@ -1268,9 +1268,13 @@ export function useMeetSocket({
 
   const [reconnectRecoveryStatus, setReconnectRecoveryStatus] =
     useState<ReconnectRecoveryStatus | null>(null);
-  // performance.now() when the host let this user in; call metrics stop the
-  // waiting clock here, before media is reacquired.
-  const [joinApprovedAt, setJoinApprovedAt] = useState<number | null>(null);
+  // performance.now() when the server let this user in: joinApproved, or a
+  // joinRoom reply that did not say waiting. Call metrics end the wait at the
+  // first of these, before media is set up.
+  const [admittedAt, setAdmittedAt] = useState<number | null>(null);
+  // Mirrors reconnectInFlightRef for call metrics: an error while it is true
+  // is a failed retry, and a redirect between SFUs never sets it.
+  const [reconnectInFlight, setReconnectInFlight] = useState(false);
   const updateReconnectRecoveryStatus = useCallback(
     (
       next:
@@ -2061,6 +2065,7 @@ export function useMeetSocket({
     intentionalDisconnectRef.current = true;
     reconnectGenerationRef.current += 1;
     reconnectInFlightRef.current = false;
+    setReconnectInFlight(false);
     cleanupRoomResources();
     if (producerSyncIntervalRef.current) {
       window.clearInterval(producerSyncIntervalRef.current);
@@ -6684,6 +6689,7 @@ export function useMeetSocket({
 
             try {
               const joinedTime = performance.now();
+              setAdmittedAt(joinedTime);
               console.info(
                 "[Meets] Joined room, existing producers:",
                 response.existingProducers,
@@ -8248,7 +8254,7 @@ export function useMeetSocket({
 
             socket.on("joinApproved", async () => {
               if (intentionalDisconnectRef.current || socketRef.current !== socket) return;
-              setJoinApprovedAt(performance.now());
+              setAdmittedAt(performance.now());
               const approvalGeneration = reconnectGenerationRef.current;
               console.info("[Meets] Join approved! Re-attempting join...");
               const joinOptions = joinOptionsRef.current;
@@ -8802,6 +8808,7 @@ export function useMeetSocket({
     let skipNextDelay = options?.immediate === true;
     let lastReconnectError: unknown = null;
     reconnectInFlightRef.current = true;
+    setReconnectInFlight(true);
     reconnectAttemptsRef.current = resolveReconnectStartAttempts(
       reconnectAttemptsRef.current,
       MAX_RECONNECT_ATTEMPTS,
@@ -9075,6 +9082,7 @@ export function useMeetSocket({
     } finally {
       if (reconnectGeneration === reconnectGenerationRef.current) {
         reconnectInFlightRef.current = false;
+        setReconnectInFlight(false);
       }
     }
   }, [
@@ -10142,7 +10150,8 @@ export function useMeetSocket({
     joinRoomById,
     retryReconnect,
     reconnectRecoveryStatus,
-    joinApprovedAt,
+    admittedAt,
+    reconnectInFlight,
     toggleRoomLock,
     toggleNoGuests,
     toggleChatLock,

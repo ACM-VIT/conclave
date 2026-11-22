@@ -65,6 +65,7 @@ type HarnessProps = {
   state: ConnectionState;
   reconnect?: ReconnectRecoveryStatus | null;
   admittedAt?: number | null;
+  reconnectInFlight?: boolean;
 };
 
 let root: Root | null = null;
@@ -74,11 +75,17 @@ const mount = (consumer: ReturnType<typeof fakeConsumerTransport> = fakeConsumer
   const consumerTransportRef = { current: consumer } as unknown as MutableRefObject<Transport | null>;
   const cameraProducerRef = { current: camera } as unknown as MutableRefObject<Producer | null>;
   const videoQualityRef: MutableRefObject<VideoQuality> = { current: "standard" };
-  function Harness({ state, reconnect = null, admittedAt = null }: HarnessProps) {
+  function Harness({
+    state,
+    reconnect = null,
+    admittedAt = null,
+    reconnectInFlight = false,
+  }: HarnessProps) {
     useCallQualityMetrics({
       connectionState: state,
       meetError: null,
       reconnectRecoveryStatus: reconnect,
+      reconnectInFlight,
       admittedAt,
       participantCount: 2,
       joinMode: "meeting",

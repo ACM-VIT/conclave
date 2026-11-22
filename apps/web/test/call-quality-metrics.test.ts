@@ -23,9 +23,10 @@ const setup = () => {
     at: number,
     error: MeetError | null = null,
     reconnectGaveUp = false,
+    reconnecting = false,
   ) =>
     tracker.onConnectionState(
-      { state: next, error, joinMode: "meeting", reconnectGaveUp },
+      { state: next, error, joinMode: "meeting", reconnectGaveUp, reconnecting },
       at,
     );
   const named = (name: CallMetricEvent["name"]) =>
@@ -129,10 +130,10 @@ describe("call_join", () => {
 
     state("connecting", 0);
     state("waiting", 500);
-    state("reconnecting", 2000);
+    state("reconnecting", 2000, null, false, true);
     expect(tracker.nextSampleDelayMs(2500)).toBeNull();
-    state("connecting", 2200);
-    state("joining", 3000);
+    state("connecting", 2200, null, false, true);
+    state("joining", 3000, null, false, true);
     state("waiting", 3500);
     expect(tracker.nextSampleDelayMs(4000)).toBeNull();
     tracker.onAdmitted(5300);
@@ -151,16 +152,16 @@ describe("call_join", () => {
 
     state("connecting", 0);
     state("waiting", 500);
-    state("reconnecting", 2000);
-    state("connecting", 2100);
+    state("reconnecting", 2000, null, false, true);
+    state("connecting", 2100, null, false, true);
     state("error", 2600, {
       code: "CONNECTION_FAILED",
       message: "The meeting server did not respond before the timeout.",
       recoverable: true,
-    });
-    state("reconnecting", 3000);
-    state("connecting", 3100);
-    state("joining", 3300);
+    }, false, true);
+    state("reconnecting", 3000, null, false, true);
+    state("connecting", 3100, null, false, true);
+    state("joining", 3300, null, false, true);
     state("waiting", 3500);
     tracker.onAdmitted(6000);
     state("joining", 6500);
@@ -181,9 +182,9 @@ describe("call_join", () => {
 
     state("connecting", 0);
     state("waiting", 500);
-    state("reconnecting", 2000);
-    state("error", 2600);
-    state("reconnecting", 3000);
+    state("reconnecting", 2000, null, false, true);
+    state("error", 2600, null, false, true);
+    state("reconnecting", 3000, null, false, true);
     state("error", 40_000, {
       code: "CONNECTION_FAILED",
       message: "The meeting server did not respond before the timeout.",
@@ -231,6 +232,67 @@ describe("call_join", () => {
       ["failed", "permission_denied", 2],
       ["joined", null, 3],
     ]);
+  });
+
+  it("reports a join that fails after following an SFU redirect", () => {
+    const { tracker, state, named } = setup();
+    const noRoom = {
+      code: "UNKNOWN" as const,
+      message: "No room found for this code.",
+      recoverable: false,
+    };
+
+    state("connecting", 0);
+    state("joining", 400);
+    // startJoin follows the redirect to the room's SFU: not a reconnect.
+    state("connecting", 600);
+    state("connected", 700);
+    state("joining", 800);
+    state("error", 1200, noRoom);
+    tracker.onPageHidden(5000);
+
+    expect(named("call_join").map(({ props }) => [props.outcome, props.failure_reason])).toEqual([
+      ["failed", "room_not_found"],
+    ]);
+  });
+
+  it("ends the wait when a rejoin is accepted after the room unlocks mid-drop", () => {
+    const { tracker, state, named } = setup();
+    tracker.onParticipants(2, 0);
+
+    state("connecting", 0);
+    state("waiting", 500);
+    state("reconnecting", 2000, null, false, true);
+    state("connecting", 2100, null, false, true);
+    state("joining", 2600, null, false, true);
+    // The host unlocked meanwhile: joinRoom succeeds with no joinApproved.
+    tracker.onAdmitted(2900);
+    expect(tracker.nextSampleDelayMs(3000)).not.toBeNull();
+    tracker.onStats(
+      sample([audio({ packetsReceived: 40 }), video({ bytesReceived: 30_000, framesDecoded: 20 })]),
+      3200,
+    );
+    state("joined", 8000);
+    tracker.onStats(sample([audio({ packetsReceived: 400 }), video({ bytesReceived: 300_000, framesDecoded: 200 })]), 8250);
+
+    expect(named("call_join")[0].props).toMatchObject({ waited: true, waiting_ms: 2400, join_ms: 8000 });
+    expect(named("call_first_media")[0].props).toMatchObject({
+      first_remote_audio_ms: 3200,
+      first_remote_video_ms: 3200,
+    });
+  });
+
+  it("keeps the first admission when the accepted join follows joinApproved", () => {
+    const { tracker, state, named } = setup();
+
+    state("connecting", 0);
+    state("waiting", 500);
+    tracker.onAdmitted(1700);
+    state("joining", 5000);
+    tracker.onAdmitted(5400);
+    state("joined", 9000);
+
+    expect(named("call_join")[0].props).toMatchObject({ waiting_ms: 1200 });
   });
 
   it("still fails a first join whose error arrives with a repeated connecting state", () => {
