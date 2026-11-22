@@ -28,7 +28,7 @@ This means:
 ### Guest identities
 
 A participant can read every `userKey` and `userId` in the room, so a guest key is not a credential.
-The web join route (`apps/web/src/app/api/sfu/join/route.ts`) issues each browser a guest pass in an HttpOnly cookie.
+The web app issues each browser a guest pass in an HttpOnly cookie. A page asks for it as it loads (`POST /api/guest-pass`), and the join route (`apps/web/src/app/api/sfu/join/route.ts`) issues one to a caller that has none.
 The guest `userKey` is a keyed hash of the pass, the room id the join asked for, and the tab's session id: `guest-gp_<hash>`.
 The same browser gets a different key in every room and tab, and the key does not reveal the pass.
 A client learns its own `userKey` from the join token.

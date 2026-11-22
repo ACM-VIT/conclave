@@ -129,21 +129,6 @@ const passCookie = (sfuSecret: string, guestId: string): string =>
   ].join("; ");
 
 /**
- * The `Set-Cookie` value that gives a browser a guest pass, when the request
- * shows it has none. The page proxy calls this for every page load, so a tab
- * carries its pass before it makes any join call and all tabs of a browser
- * share one.
- */
-export const guestPassCookieForNewBrowser = (
-  sfuSecret: string,
-  cookieHeader: string | null,
-): string | undefined => {
-  const current = readCookie(cookieHeader, guestPassCookieName(sfuSecret));
-  if (verify(sfuSecret, current, PASS_AUDIENCE)) return undefined;
-  return passCookie(sfuSecret, mintGuestId());
-};
-
-/**
  * The seat a tab held before, read from the join token of its previous join
  * for this room. It matters when the browser's pass has changed since: two
  * tabs can each be given a pass before either has a cookie, and the browser
@@ -198,6 +183,25 @@ const isCrossSiteRequest = (request: Request): boolean => {
     url.protocol.slice(0, -1);
   const host = request.headers.get("host") ?? url.host;
   return origin !== `${protocol}://${host}`;
+};
+
+/**
+ * The `Set-Cookie` value that gives a browser a guest pass, when the request
+ * shows it has none. A page asks for this as soon as it loads
+ * (`/api/guest-pass`), so a tab carries its pass before it makes any join
+ * call and the tabs of a browser share one.
+ */
+export const guestPassCookieForNewBrowser = (
+  sfuSecret: string,
+  request: Request,
+): string | undefined => {
+  if (isCrossSiteRequest(request)) return undefined;
+  const current = readCookie(
+    request.headers.get("cookie"),
+    guestPassCookieName(sfuSecret),
+  );
+  if (verify(sfuSecret, current, PASS_AUDIENCE)) return undefined;
+  return passCookie(sfuSecret, mintGuestId());
 };
 
 export type GuestJoinIdentity =

@@ -1,5 +1,6 @@
 const SEAT_TOKENS_STORAGE_KEY = "conclave:guest-seat-tokens";
 const MAX_STORED_SEAT_TOKENS = 20;
+const GUEST_PASS_REQUEST_TIMEOUT_MS = 5000;
 
 type SeatTokens = Record<string, string>;
 
@@ -37,6 +38,20 @@ export type GuestPassFields = {
 type JoinAnswer = { token: string; guestId?: string; guestGrant?: string };
 
 /**
+ * How a page asks the server to give its browser a guest pass. A page that
+ * was rendered for a signed-in account has no use for one and asks nothing.
+ */
+export const guestPassRequestFor =
+  (user?: { id?: string; email?: string | null }) =>
+  async (): Promise<void> => {
+    if (user?.id || user?.email) return;
+    await fetch("/api/guest-pass", {
+      method: "POST",
+      signal: AbortSignal.timeout(GUEST_PASS_REQUEST_TIMEOUT_MS),
+    });
+  };
+
+/**
  * The guest side of one page's join calls.
  *
  * The page never names a pass. The join route picks it: the pass in the
@@ -49,16 +64,27 @@ type JoinAnswer = { token: string; guestId?: string; guestGrant?: string };
  *   keeps its seat, and what the seat held, once it moves to that pass.
  *
  * Calls go one at a time within the page, so a second call always carries
- * what the first one was answered with.
+ * what the first one was answered with. `askForPass` goes ahead of them all:
+ * it has the server give the browser its pass, so the tabs of a browser are
+ * on one pass before any of them joins. A join call does not need it to
+ * have worked. The join route gives a pass to a caller that has none.
  */
-export const createGuestPassSession = () => {
+export const createGuestPassSession = (askForPass: () => Promise<unknown>) => {
   let grant: string | undefined;
   let queue: Promise<unknown> = Promise.resolve();
+  let askedForPass = false;
 
-  return <Answer extends JoinAnswer>(
+  const askForPassOnce = (): void => {
+    if (askedForPass) return;
+    askedForPass = true;
+    queue = queue.then(askForPass).catch(() => undefined);
+  };
+
+  const join = <Answer extends JoinAnswer>(
     seat: string,
     send: (fields: GuestPassFields) => Promise<Answer>,
   ): Promise<Answer> => {
+    askForPassOnce();
     const call = async () => {
       const guestSeatToken = readSeatTokens()[seat];
       const answer = await send({
@@ -76,4 +102,7 @@ export const createGuestPassSession = () => {
     queue = result.catch(() => undefined);
     return result;
   };
+
+  /** `pageLoaded` asks for the pass early, well before a join is likely. */
+  return { join, pageLoaded: askForPassOnce };
 };

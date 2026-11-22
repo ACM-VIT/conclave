@@ -1,9 +1,8 @@
 import jwt from "jsonwebtoken";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { POST as askForPass } from "../src/app/api/guest-pass/route";
 import { POST } from "../src/app/api/sfu/join/route";
-import { NextRequest } from "next/server";
 import { guestPassCookieName } from "../src/lib/guest-pass";
-import { proxy } from "../src/proxy";
 
 const { getSession } = vi.hoisted(() => ({ getSession: vi.fn() }));
 vi.mock("@/lib/auth", () => ({ auth: { api: { getSession } } }));
@@ -469,40 +468,69 @@ describe("two tabs of a new browser whose first joins cross", () => {
   });
 });
 
-describe("a page load in a browser with no pass", () => {
-  const load = (headers: Record<string, string>) =>
-    proxy(new NextRequest("http://localhost/some-room", { headers }));
+describe("a page that asks for the browser's pass as it loads", () => {
+  const ask = (headers: Record<string, string> = {}) =>
+    askForPass(new Request("http://localhost/api/guest-pass", { method: "POST", headers }));
   const passFrom = (response: Response) =>
     response.headers.getSetCookie().find((cookie) => cookie.startsWith(guestPassCookieName(SECRET)));
+  const keep = (tab: ReturnType<typeof browser>, cookie: string) => {
+    const [pair] = cookie.split(";");
+    tab.jar.set(pair.slice(0, pair.indexOf("=")), pair.slice(pair.indexOf("=") + 1));
+  };
 
-  it("is answered with a pass that the first join then uses, with no grant", async () => {
-    const pass = passFrom(load({ "sec-fetch-dest": "document" }));
+  it("is given a pass that the first join then uses, with no grant", async () => {
+    const answer = await ask({ "sec-fetch-site": "same-origin" });
+    const pass = passFrom(answer);
+    expect(answer.status).toBe(204);
     expect(pass).toMatch(/HttpOnly/);
     const tab = browser();
-    const [pair] = pass!.split(";");
-    tab.jar.set(pair.slice(0, pair.indexOf("=")), pair.slice(pair.indexOf("=") + 1));
+    keep(tab, pass!);
 
     const first = await tab.join({ sessionId: "tab-1", guestId: "" });
     const otherTab = await tab.join({ roomId: "second-room", sessionId: "tab-2", guestId: "" });
 
     expect(first.body.guestGrant).toBeUndefined();
+    expect(first.setCookies.map((cookie) => cookie.split(";")[0])).toEqual([pass!.split(";")[0]]);
     expect(otherTab.body.guestId).toBe(first.body.guestId);
   });
 
-  it("is not answered with another pass once the browser has one", async () => {
+  it("is not given another pass once the browser has one", async () => {
     const tab = browser();
     await tab.join({ sessionId: "tab-1", guestId: "" });
     const cookie = [...tab.jar].map(([name, value]) => `${name}=${value}`).join("; ");
 
-    expect(passFrom(load({ "sec-fetch-dest": "document", cookie }))).toBeUndefined();
+    const answer = await ask({ "sec-fetch-site": "same-origin", cookie });
+
+    expect(answer.status).toBe(204);
+    expect(passFrom(answer)).toBeUndefined();
   });
 
-  it.each(["iframe", "empty", "image"])(
-    "gets no pass for a request that is not the page itself (%s)",
-    (destination) => {
-      expect(passFrom(load({ "sec-fetch-dest": destination }))).toBeUndefined();
+  it("is given a new pass in place of one that does not verify", async () => {
+    const cookie = `${guestPassCookieName(SECRET)}=not-a-pass`;
+
+    expect(passFrom(await ask({ "sec-fetch-site": "same-origin", cookie }))).toMatch(/HttpOnly/);
+  });
+
+  it.each(["cross-site", "same-site"])(
+    "gets no pass when another site makes the call (%s)",
+    async (fetchSite) => {
+      expect(passFrom(await ask({ "sec-fetch-site": fetchSite }))).toBeUndefined();
     },
   );
+
+  it("leaves two tabs that asked at once on the pass the browser kept", async () => {
+    const [first, second] = await Promise.all([ask(), ask()]);
+    const tabs = browser();
+    keep(tabs, passFrom(first)!);
+    keep(tabs, passFrom(second)!);
+
+    const one = await tabs.join({ sessionId: "tab-1", guestId: "", isHost: true });
+    const two = await tabs.join({ roomId: "second-room", sessionId: "tab-2", guestId: "", isHost: true });
+
+    expect(passFrom(first)).not.toBe(passFrom(second));
+    expect(two.body.guestId).toBe(one.body.guestId);
+    expect(two.claims!.guestProof).toBe(one.claims!.guestProof);
+  });
 });
 
 describe("signed-in identity", () => {

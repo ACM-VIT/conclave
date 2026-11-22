@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createGuestPassSession,
+  guestPassRequestFor,
   type GuestPassFields,
 } from "../src/app/lib/guest-pass-session";
 
@@ -27,6 +28,9 @@ const joinRoute = (answers: Array<{ token: string; guestId?: string; guestGrant?
   return { sent, send };
 };
 
+// A page whose request for the browser's pass has already been answered.
+const openPage = () => createGuestPassSession(async () => undefined).join;
+
 beforeEach(() => {
   openTab();
 });
@@ -36,7 +40,7 @@ afterEach(() => {
 
 describe("a page's guest join calls", () => {
   it("never name a pass, and carry the last grant and the room's last token", async () => {
-    const withGuestPass = createGuestPassSession();
+    const withGuestPass = openPage();
     const route = joinRoute([
       { token: "token-1", guestId: "gp_issued", guestGrant: "grant-1" },
       { token: "token-2", guestId: "gp_issued" },
@@ -56,23 +60,23 @@ describe("a page's guest join calls", () => {
 
   it("carry the room's last token again after a reload, and no other tab's", async () => {
     const storage = openTab();
-    await createGuestPassSession()("conclave:room", joinRoute([
+    await openPage()("conclave:room", joinRoute([
       { token: "token-before-reload", guestId: "gp_issued" },
     ]).send);
 
     openTab(storage);
     const reloaded = joinRoute([{ token: "token-after-reload", guestId: "gp_issued" }]);
-    await createGuestPassSession()("conclave:room", reloaded.send);
+    await openPage()("conclave:room", reloaded.send);
     openTab();
     const otherTab = joinRoute([{ token: "other-tab-token", guestId: "gp_issued" }]);
-    await createGuestPassSession()("conclave:room", otherTab.send);
+    await openPage()("conclave:room", otherTab.send);
 
     expect(reloaded.sent).toEqual([{ guestId: "", guestSeatToken: "token-before-reload" }]);
     expect(otherTab.sent).toEqual([{ guestId: "" }]);
   });
 
   it("keep each room's token to that room", async () => {
-    const withGuestPass = createGuestPassSession();
+    const withGuestPass = openPage();
     const route = joinRoute([
       { token: "token-a", guestId: "gp_issued" },
       { token: "token-b", guestId: "gp_issued" },
@@ -91,7 +95,7 @@ describe("a page's guest join calls", () => {
   });
 
   it("keep nothing from an account's answer", async () => {
-    const withGuestPass = createGuestPassSession();
+    const withGuestPass = openPage();
     const route = joinRoute([{ token: "account-token" }, { token: "account-token-2" }]);
 
     await withGuestPass("conclave:room", route.send);
@@ -101,7 +105,7 @@ describe("a page's guest join calls", () => {
   });
 
   it("go one at a time, so the second carries what the first was answered", async () => {
-    const withGuestPass = createGuestPassSession();
+    const withGuestPass = openPage();
     const sent: GuestPassFields[] = [];
     let answerFirst = (_answer: { token: string; guestId: string; guestGrant: string }) => {};
     const first = withGuestPass("conclave:room", (fields) => {
@@ -115,7 +119,8 @@ describe("a page's guest join calls", () => {
       return { token: "token-2", guestId: "gp_issued" };
     });
 
-    await Promise.resolve();
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(sent).toHaveLength(1);
     answerFirst({ token: "token-1", guestId: "gp_issued", guestGrant: "grant-1" });
     await Promise.all([first, second]);
@@ -124,7 +129,7 @@ describe("a page's guest join calls", () => {
   });
 
   it("go on after a call that failed", async () => {
-    const withGuestPass = createGuestPassSession();
+    const withGuestPass = openPage();
 
     await expect(
       withGuestPass("conclave:room", async () => {
@@ -133,6 +138,84 @@ describe("a page's guest join calls", () => {
     ).rejects.toThrow("offline");
     const route = joinRoute([{ token: "token-1", guestId: "gp_issued" }]);
     await withGuestPass("conclave:room", route.send);
+
+    expect(route.sent).toEqual([{ guestId: "" }]);
+  });
+});
+
+describe("a page's request for the browser's pass", () => {
+  it("is answered before the first join call goes out", async () => {
+    const order: string[] = [];
+    let answerPass = () => {};
+    const page = createGuestPassSession(() => {
+      order.push("pass asked");
+      return new Promise<void>((resolve) => {
+        answerPass = () => {
+          order.push("pass answered");
+          resolve();
+        };
+      });
+    });
+
+    page.pageLoaded();
+    const joined = page.join("conclave:room", async () => {
+      order.push("join sent");
+      return { token: "token-1", guestId: "gp_issued" };
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(order).toEqual(["pass asked"]);
+    answerPass();
+    await joined;
+
+    expect(order).toEqual(["pass asked", "pass answered", "join sent"]);
+  });
+
+  it("is made once, however often the page reports it loaded", async () => {
+    const askForPass = vi.fn(async () => undefined);
+    const page = createGuestPassSession(askForPass);
+
+    page.pageLoaded();
+    page.pageLoaded();
+    await page.join("conclave:room", joinRoute([{ token: "token-1", guestId: "gp_issued" }]).send);
+
+    expect(askForPass).toHaveBeenCalledTimes(1);
+  });
+
+  it("is made by the first join call when the page has not reported yet", async () => {
+    const order: string[] = [];
+    const page = createGuestPassSession(async () => void order.push("pass asked"));
+
+    await page.join("conclave:room", async () => {
+      order.push("join sent");
+      return { token: "token-1", guestId: "gp_issued" };
+    });
+
+    expect(order).toEqual(["pass asked", "join sent"]);
+  });
+
+  it("is a POST to the pass route for a guest's page, and nothing for an account's", async () => {
+    const fetched = vi.fn(async (_url: string, _init: RequestInit) => new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetched);
+
+    await guestPassRequestFor({ id: "u1", email: "me@example.com" })();
+    expect(fetched).not.toHaveBeenCalled();
+    await guestPassRequestFor(undefined)();
+    await guestPassRequestFor({ name: "Asha" } as { id?: string })();
+
+    expect(fetched.mock.calls.map(([url, init]) => [url, init.method])).toEqual([
+      ["/api/guest-pass", "POST"],
+      ["/api/guest-pass", "POST"],
+    ]);
+  });
+
+  it("does not stop a join when it fails", async () => {
+    const page = createGuestPassSession(async () => {
+      throw new Error("offline");
+    });
+    const route = joinRoute([{ token: "token-1", guestId: "gp_issued" }]);
+
+    page.pageLoaded();
+    await page.join("conclave:room", route.send);
 
     expect(route.sent).toEqual([{ guestId: "" }]);
   });
