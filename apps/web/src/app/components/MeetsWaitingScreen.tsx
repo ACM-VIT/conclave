@@ -16,6 +16,12 @@ export const describeWaitingRoom = (
   message: string | null,
 ): { title: string; detail: string } => {
   const lowered = message?.toLowerCase() ?? "";
+  if (lowered.includes("meeting ended when everyone left")) {
+    return {
+      title: "This meeting has ended",
+      detail: "Everyone left. Stay on this page and a host can let you in when it starts again.",
+    };
+  }
   if (lowered.includes("no one to let you in")) {
     return {
       title: "No one can let you in yet",

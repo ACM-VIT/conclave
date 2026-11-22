@@ -23,6 +23,17 @@ describe("what a knocking guest reads", () => {
     );
   });
 
+  it("says the meeting ended under them, and that they can still be let in", () => {
+    expect(
+      describeWaitingRoom(
+        "The meeting ended when everyone left. No one to let you in until it starts again.",
+      ),
+    ).toEqual({
+      title: "This meeting has ended",
+      detail: "Everyone left. Stay on this page and a host can let you in when it starts again.",
+    });
+  });
+
   it("asks to join before the server has said anything", () => {
     expect(describeWaitingRoom(null).title).toBe("Asking to join…");
   });
