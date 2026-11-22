@@ -51,7 +51,7 @@ The room epoch changes when the room is recreated. A request under an old epoch 
 | Operation id validity | 120 s, issue time at most 5 s ahead |
 | Accepted mutations per app per room | 120 a second, burst 240 |
 | Reads and writes in one transaction | 50,000. `clear` removes any number of rows for about one per 64 |
-| Rows of a `clear` told to viewers per flush | 1,000 |
+| Rows of a `clear` that viewers who held them are told of per flush | 1,000 for each role, and 1,000 between everyone's own rows |
 | Subscriptions per socket | 16 |
 | Socket behind (resnapshot later) | more than 256 queued packets or 1 MiB |
 | Query on a socket that is behind | refused with `busy` |

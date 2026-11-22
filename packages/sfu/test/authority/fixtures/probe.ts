@@ -47,6 +47,7 @@ export const probeContract = defineContract({
         from: s.int({ min: 0 }),
         count: s.int({ min: 1 }),
         shown: s.boolean(),
+        slot: s.optional(s.boolean()),
       }),
       receipt: s.null(),
     },
@@ -93,13 +94,18 @@ export const probeContract = defineContract({
     fired: s.object({ label: s.string({ max: 64 }), at: s.number(), order: s.int() }),
     /** The marks that asked to be shown. */
     marks: s.object({ n: s.int({ min: 0 }) }),
+    /**
+     * One row per number, whichever note's mark holds it: marks of
+     * different notes with one number claim the same key here.
+     */
+    slots: s.object({ n: s.int({ min: 0 }), of: s.string({ max: 64 }) }),
   },
 });
 
 type Note = { id: string; text: string; secret?: string; stars?: number[] };
 type Fired = { label: string; at: number; order: number };
 /** One of many rows under a note: keyed by the note, then by its number. */
-type Mark = { noteId: string; n: number; shown: boolean };
+type Mark = { noteId: string; n: number; shown: boolean; slot?: boolean };
 
 const RATE = { burst: 1_000, perSecond: 1_000 };
 
@@ -247,6 +253,7 @@ export const probeAuthority = defineAuthority({
             noteId: input.id,
             n,
             shown: input.shown,
+            ...(input.slot ? { slot: true } : {}),
           });
         }
         return null;
@@ -350,6 +357,12 @@ export const probeAuthority = defineAuthority({
       source: "marks",
       project: (row) =>
         row.shown ? { key: `${row.noteId}/${row.n}`, value: { n: row.n } } : null,
+    },
+    slots: {
+      kind: "shared",
+      source: "marks",
+      project: (row) =>
+        row.slot ? { key: String(row.n), value: { n: row.n, of: row.noteId } } : null,
     },
   },
 });

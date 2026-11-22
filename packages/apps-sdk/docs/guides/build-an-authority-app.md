@@ -107,7 +107,7 @@ The four things a module has:
 
 ### A parent and its rows
 
-Key a parent's rows by the parent, as in `key(questionId, ctx.subject)`, and drop them with `tx.clear("upvotes", key(questionId))`. A transaction may make 50,000 reads and writes, and deleting rows one at a time costs two each, so a loop over a parent's rows fails the whole action once there are enough of them. `clear` costs about one operation per 64 rows. The rows are gone for every handler when the transaction commits, and viewers are told a batch at a time.
+Key a parent's rows by the parent, as in `key(questionId, ctx.subject)`, and drop them with `tx.clear("upvotes", key(questionId))`. A transaction may make 50,000 reads and writes, and deleting rows one at a time costs two each, so a loop over a parent's rows fails the whole action once there are enough of them. `clear` costs about one operation per 64 rows. The rows are gone for every handler when the transaction commits and from every view at the next flush, so a new viewer is never sent one and a new row may take a view key one of them had. People who already held such a row are told a batch at a time.
 
 ### Once per person
 

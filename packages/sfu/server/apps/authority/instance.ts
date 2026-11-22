@@ -100,6 +100,7 @@ export class AuthorityInstance {
     this.store = new AuthorityStore(module.runtime, options.limits);
     this.views = new ViewTracker(module.runtime, this.store, policy, {
       verify: options.verifyViews,
+      clearedRowsPerFlush: options.limits.clearedRowsPerFlush,
     });
     this.receipts = new ReceiptBook(options.limits);
     this.rates = new RateBuckets(options.limits.rateBuckets);
@@ -340,8 +341,9 @@ export class AuthorityInstance {
     return changed;
   }
 
+  /** Rows the views have yet to take in, or viewers have yet to be told of. */
   get hasPendingChanges(): boolean {
-    return this.store.hasDirty;
+    return this.store.hasDirty || this.views.owesRemovals;
   }
 
   flushViews(live: {

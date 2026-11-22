@@ -136,11 +136,11 @@ export class AuthorityStore {
   /** Rows written since the views last caught up, by table. */
   private readonly dirty = new Map<string, Set<TableKey>>();
   /**
-   * Rows a `clear` removed that the views have not been told of yet, oldest
-   * clear first. They are gone from the tables already. `next` is how far
-   * into `keys` the views have been told.
+   * Rows a `clear` removed since the views last caught up, by table. They
+   * are kept apart from `dirty` because the views treat them differently: a
+   * cleared row leaves the views at once, and its viewers are told later.
    */
-  private readonly cleared: { table: string; keys: TableKey[]; next: number }[] = [];
+  private readonly cleared = new Map<string, TableKey[]>();
 
   constructor(
     private readonly definition: RuntimeDefinition,
@@ -166,32 +166,24 @@ export class AuthorityStore {
   }
 
   /**
-   * Hands over the rows written since the last call and forgets them, along
-   * with the next batch of rows a `clear` removed.
+   * Hands over the rows written and the rows cleared since the last call,
+   * and forgets them.
    */
-  takeDirty(): Map<string, Set<TableKey>> {
-    // At least one row, or a clear would never finish being told.
-    let room = Math.max(1, this.limits.clearedRowsPerFlush);
-    while (room > 0 && this.cleared.length > 0) {
-      const batch = this.cleared[0];
-      const keys = batch.keys.slice(batch.next, batch.next + room);
-      for (const key of keys) this.markDirty(batch.table, key);
-      batch.next += keys.length;
-      room -= keys.length;
-      if (batch.next >= batch.keys.length) this.cleared.shift();
-    }
-    const taken = new Map(this.dirty);
+  takeDirty(): {
+    written: Map<string, Set<TableKey>>;
+    cleared: Map<string, TableKey[]>;
+  } {
+    const taken = {
+      written: new Map(this.dirty),
+      cleared: new Map(this.cleared),
+    };
     this.dirty.clear();
+    this.cleared.clear();
     return taken;
   }
 
   get hasDirty(): boolean {
-    return this.dirty.size > 0 || this.cleared.length > 0;
-  }
-
-  /** Whether a `clear` removed rows the views still hold. */
-  get hasUntoldClears(): boolean {
-    return this.cleared.length > 0;
+    return this.dirty.size > 0 || this.cleared.size > 0;
   }
 
   private markDirty(table: string, key: TableKey): void {
@@ -257,7 +249,10 @@ export class AuthorityStore {
         const keys = table.deleteUnder(prefix);
         if (keys.length === 0) continue;
         changed = true;
-        this.cleared.push({ table: tableName, keys, next: 0 });
+        const cleared = this.cleared.get(tableName);
+        // One at a time: a clear can be too large to spread into one call.
+        if (cleared) for (const key of keys) cleared.push(key);
+        else this.cleared.set(tableName, keys);
       }
     }
     for (const [tableName, writes] of draft.writes) {
