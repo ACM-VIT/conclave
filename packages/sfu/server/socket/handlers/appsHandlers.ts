@@ -9,6 +9,7 @@ import type {
   AppsLockResponse,
   AppsOpenData,
   AppsOpenResponse,
+  AppsStageErrorCode,
   AppsState,
   AppsSyncData,
   AppsSyncResponse,
@@ -125,9 +126,9 @@ const parseExpectedRevision = (
 };
 
 const STAGE_COMMAND_ERRORS = {
-  stale: "The stage changed. Try again.",
-  full: "Clear an app to present another.",
-} as const;
+  stale: { error: "The stage changed. Try again.", code: "stale_revision" },
+  full: { error: "Clear an app to present another.", code: "room_full" },
+} as const satisfies Record<string, { error: string; code: AppsStageErrorCode }>;
 
 const canControlStage = (context: ConnectionContext): boolean =>
   context.currentClient instanceof Admin && !context.currentClient.isObserver;
@@ -148,7 +149,9 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     expectedRevision: unknown,
     deniedError: string,
     command: (expectedRevision: number | undefined) => StageCommandResult,
-  ): { success: true; state: AppsState } | { success: false; error: string } => {
+  ):
+    | { success: true; state: AppsState }
+    | { success: false; error: string; code?: AppsStageErrorCode } => {
     if (!context.currentRoom || !context.currentClient) {
       return { success: false, error: "Not in a room" };
     }
@@ -164,7 +167,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     }
     const result = command(revision);
     if (!result.ok) {
-      return { success: false, error: STAGE_COMMAND_ERRORS[result.reason] };
+      return { success: false, ...STAGE_COMMAND_ERRORS[result.reason] };
     }
     emitAppAwarenessRemoval(context, result.awarenessRemoval);
     return {

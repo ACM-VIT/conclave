@@ -49,6 +49,9 @@ export type AppsAwarenessPayload = {
   clientId?: number;
 };
 
+/** Why the SFU refused a stage command. */
+export type AppsStageErrorCode = "stale_revision" | "room_full";
+
 export type AppsOpenPayload = {
   appId: string;
   expectedRevision?: number;
@@ -58,6 +61,7 @@ export type AppsOpenResponse = {
   success: boolean;
   activeAppId?: string;
   error?: string;
+  code?: AppsStageErrorCode;
 };
 
 export type AppsClosePayload = {
@@ -67,6 +71,7 @@ export type AppsClosePayload = {
 export type AppsCloseResponse = {
   success: boolean;
   error?: string;
+  code?: AppsStageErrorCode;
 };
 
 export type AppsDiscardPayload = {
@@ -77,6 +82,7 @@ export type AppsDiscardPayload = {
 export type AppsDiscardResponse = {
   success: boolean;
   error?: string;
+  code?: AppsStageErrorCode;
 };
 
 export type AppsLockPayload = {
@@ -88,18 +94,29 @@ export type AppsLockResponse = {
   success: boolean;
   locked?: boolean;
   error?: string;
+  code?: AppsStageErrorCode;
 };
+
+/**
+ * How a stage command went. `roomFull`: the room keeps as many app documents
+ * as it can, so a host clears one before presenting another. `staleStage`:
+ * the stage changed first. `failed`: anything else, such as no permission,
+ * a rate limit, a timeout or an older SFU.
+ */
+export type AppsCommandResult =
+  | { ok: true }
+  | { ok: false; reason: "roomFull" | "staleStage" | "failed" };
 
 export type AppsContextValue = {
   state: AppsState;
   apps: ConclaveApp[];
   /** Presents an app on the room's stage. Hosts only. */
-  presentApp: (appId: string) => Promise<boolean>;
+  presentApp: (appId: string) => Promise<AppsCommandResult>;
   /** Takes the presented app off the stage. The room keeps its document unless `revision` is null. */
-  closeApp: () => Promise<boolean>;
-  /** Erases an app's document for everyone. False on an older SFU. */
-  clearApp: (appId: string) => Promise<boolean>;
-  setLocked: (locked: boolean) => Promise<boolean>;
+  closeApp: () => Promise<AppsCommandResult>;
+  /** Erases an app's document for everyone. Fails on an older SFU. */
+  clearApp: (appId: string) => Promise<AppsCommandResult>;
+  setLocked: (locked: boolean) => Promise<AppsCommandResult>;
   refreshState: () => void;
   getDoc: (appId: string) => Y.Doc;
   getAwareness: (appId: string) => Awareness;

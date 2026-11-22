@@ -1137,6 +1137,9 @@ export interface AppsState {
   roomId?: string;
 }
 
+/** Why a stage command was refused, for clients to explain it. */
+export type AppsStageErrorCode = "stale_revision" | "room_full";
+
 export interface AppsOpenData {
   appId: string;
   expectedRevision?: number;
@@ -1148,6 +1151,7 @@ export interface AppsOpenResponse {
   activeAppId?: string;
   revision?: number;
   error?: string;
+  code?: AppsStageErrorCode;
 }
 
 export interface AppsCloseData {
@@ -1158,6 +1162,7 @@ export interface AppsCloseResponse {
   success: boolean;
   revision?: number;
   error?: string;
+  code?: AppsStageErrorCode;
 }
 
 export interface AppsDiscardData {
@@ -1169,6 +1174,7 @@ export interface AppsDiscardResponse {
   success: boolean;
   revision?: number;
   error?: string;
+  code?: AppsStageErrorCode;
 }
 
 export interface AppsLockData {
@@ -1180,6 +1186,7 @@ export interface AppsLockResponse {
   success: boolean;
   locked?: boolean;
   error?: string;
+  code?: AppsStageErrorCode;
 }
 
 export interface AppsSyncData {

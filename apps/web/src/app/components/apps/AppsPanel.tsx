@@ -2,7 +2,11 @@
 
 import React, { useState } from "react";
 import { Blocks, ExternalLink, LoaderCircle } from "lucide-react";
-import { useApps, type AppsState } from "@conclave/apps-sdk";
+import {
+  useApps,
+  type AppsCommandResult,
+  type AppsState,
+} from "@conclave/apps-sdk";
 import { color } from "@conclave/ui-tokens";
 import {
   GAME_DOCK_HEADER_CLASS,
@@ -12,6 +16,13 @@ import {
   GameDockResizeHandle,
   HEAD_FONT,
 } from "../games/gameUi";
+
+const commandFailureCopy = (result: AppsCommandResult): string | null => {
+  if (result.ok) return null;
+  return result.reason === "roomFull"
+    ? "Too many saved apps. Clear one to present another."
+    : "That did not go through. Try again.";
+};
 
 const APPS_SDK_DOCS_URL =
   "https://github.com/ACM-VIT/conclave/blob/main/packages/apps-sdk/docs/guides/add-a-new-app-integration.md";
@@ -50,13 +61,15 @@ export function AppsPanel({
 
   const canManage = Boolean(isAdmin) && !isReadOnly;
 
-  const run = async (appId: string, action: () => Promise<boolean>) => {
+  const run = async (
+    appId: string,
+    action: () => Promise<AppsCommandResult>,
+  ) => {
     setBusyAppId(appId);
     setError(null);
-    const ok = await action();
+    const result = await action();
     setBusyAppId(null);
-    if (!ok) setError("That did not go through. Try again.");
-    return ok;
+    setError(commandFailureCopy(result));
   };
 
   const handlePick = (appId: string) => {

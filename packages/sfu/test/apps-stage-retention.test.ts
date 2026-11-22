@@ -285,6 +285,7 @@ describe("stage revision", () => {
     expect(first.present("whiteboard", seen)).toEqual({
       success: false,
       error: "The stage changed. Try again.",
+      code: "stale_revision",
     });
     expect(first.discard("watch", seen)).toMatchObject({ success: false });
     expect(first.state().activeAppId).toBe("watch");
@@ -352,6 +353,21 @@ describe("stage revision", () => {
 });
 
 describe("room document budget", () => {
+  it("tells the host the room is full so they can clear an app", () => {
+    const { join } = makeRoom();
+    const host = join("host#1", "host");
+    for (let index = 0; index < MAX_ROOM_APP_DOCS; index += 1) {
+      host.present(`app-${index}`);
+      host.draw(`app-${index}`, "mark");
+    }
+
+    expect(host.present("one-more")).toEqual({
+      success: false,
+      error: "Clear an app to present another.",
+      code: "room_full",
+    });
+  });
+
   const fill = (apps: RoomApps, appId: string, bytes: number) => {
     const source = new Y.Doc();
     const update = (() => {

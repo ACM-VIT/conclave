@@ -6,6 +6,7 @@ import type {
   ConclaveApp,
   AppsAwarenessPayload,
   AppsClosePayload,
+  AppsCommandResult,
   AppsCloseResponse,
   AppsContextValue,
   AppsDiscardPayload,
@@ -64,6 +65,15 @@ const EMPTY_APPS_STATE: AppsState = {
 
 const safeIntegerOrNull = (value: unknown): number | null =>
   typeof value === "number" && Number.isSafeInteger(value) ? value : null;
+
+const commandResult = (response?: StageCommandResponse): AppsCommandResult => {
+  if (response?.success) return { ok: true };
+  if (response?.code === "room_full") return { ok: false, reason: "roomFull" };
+  if (response?.code === "stale_revision") return { ok: false, reason: "staleStage" };
+  return { ok: false, reason: "failed" };
+};
+
+const COMMAND_FAILED: AppsCommandResult = { ok: false, reason: "failed" };
 
 const parseAppsState = (value: unknown): AppsState | null => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -490,22 +500,22 @@ export function AppsProvider({
   }, [socket, state.activeAppId, state.docGeneration, syncApp]);
 
   const sendStageCommand = useCallback(
-    (event: string, payload: object | null): Promise<boolean> => {
+    (event: string, payload: object | null): Promise<AppsCommandResult> => {
       const currentSocket = socketRef.current;
-      if (!currentSocket || isReadOnlyRef.current) return Promise.resolve(false);
+      if (!currentSocket || isReadOnlyRef.current) return Promise.resolve(COMMAND_FAILED);
 
-      return new Promise<boolean>((resolve) => {
+      return new Promise<AppsCommandResult>((resolve) => {
         let completed = false;
         const timer = setTimeout(() => {
           if (completed) return;
           completed = true;
-          resolve(false);
+          resolve(COMMAND_FAILED);
         }, ACK_TIMEOUT_MS);
         const ack = (response?: StageCommandResponse) => {
           if (completed) return;
           completed = true;
           clearTimeout(timer);
-          resolve(Boolean(response?.success));
+          resolve(commandResult(response));
         };
         if (payload) {
           currentSocket.emit(event, payload, ack);
@@ -521,7 +531,7 @@ export function AppsProvider({
     (appId: string) => {
       if (!apps.some((app) => app.id === appId)) {
         console.warn(`[Apps] Attempted to present unregistered app: ${appId}`);
-        return Promise.resolve(false);
+        return Promise.resolve(COMMAND_FAILED);
       }
       const { revision } = serverStateRef.current;
       const payload: AppsOpenPayload =
@@ -542,7 +552,7 @@ export function AppsProvider({
   const clearApp = useCallback(
     (appId: string) => {
       const { revision } = serverStateRef.current;
-      if (revision === null) return Promise.resolve(false);
+      if (revision === null) return Promise.resolve(COMMAND_FAILED);
       const payload: AppsDiscardPayload = { appId, expectedRevision: revision };
       return sendStageCommand("apps:discard", payload);
     },

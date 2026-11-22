@@ -22,6 +22,8 @@ const listeners = new Map<string, Listener>();
 const emitted: Emitted[] = [];
 // What the SFU keeps for each app, and answers a sync with.
 const serverDocs = new Map<string, Y.Doc>();
+// What the SFU answers a stage command with.
+let stageReply: Record<string, unknown> = { success: true };
 
 const socket = {
   connected: true,
@@ -40,7 +42,7 @@ const socket = {
       });
       return;
     }
-    if (event.startsWith("apps:") && event !== "apps:getState") ack({ success: true });
+    if (event.startsWith("apps:") && event !== "apps:getState") ack(stageReply);
   },
 } as unknown as Socket;
 
@@ -88,6 +90,7 @@ beforeEach(async () => {
   listeners.clear();
   emitted.length = 0;
   serverDocs.clear();
+  stageReply = { success: true };
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -245,6 +248,27 @@ describe("the apps panel", () => {
     expect(sent("apps:discard")).toEqual([]);
   });
 
+  it("tells the host to clear a saved app when the room keeps too many", async () => {
+    await serverState({ activeAppId: "whiteboard", revision: 4, savedAppIds: [] });
+    await act(async () => setPanelOpen(true));
+    stageReply = { success: false, error: "Clear an app to present another.", code: "room_full" };
+
+    await click("Present Spin the wheel");
+
+    expect(host.textContent).toContain("Too many saved apps. Clear one to present another.");
+    expect(host.textContent).not.toContain("Try again");
+  });
+
+  it("asks the host to try again when the stage changed first", async () => {
+    await serverState({ activeAppId: "whiteboard", revision: 4, savedAppIds: [] });
+    await act(async () => setPanelOpen(true));
+    stageReply = { success: false, error: "The stage changed. Try again.", code: "stale_revision" };
+
+    await click("Close Whiteboard");
+
+    expect(host.textContent).toContain("That did not go through. Try again.");
+  });
+
   it("sends a lock against the stage the host saw", async () => {
     await serverState({ activeAppId: "whiteboard", revision: 5, savedAppIds: [] });
 
@@ -262,7 +286,7 @@ describe("the apps panel", () => {
     await act(async () => setPanelOpen(true));
 
     expect(host.querySelector('button[aria-label^="Clear"]')).toBeNull();
-    expect(await ctx.clearApp("whiteboard")).toBe(false);
+    expect(await ctx.clearApp("whiteboard")).toEqual({ ok: false, reason: "failed" });
     expect(sent("apps:discard")).toEqual([]);
   });
 });
