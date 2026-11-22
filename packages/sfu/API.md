@@ -31,6 +31,8 @@ This means:
 
 The runtime runs only the modules imported in `server/apps/authority/registry.ts`. It resolves each connection against the live room on every request and before every frame, so a removed or replaced seat receives nothing more. The wire, the guarantees and the limits are in `packages/apps-sdk/docs/reference/authority-runtime.md`.
 
+The registry runs Polls and Q&A. In a room that runs Q&A, `webinar:qaSubmit`, `webinar:qaUpvote` and `webinar:qaModerate` act on the app's book, and `webinar:qaSnapshot` and `webinar:qaChanged` are sent from it, so clients on the old events and clients on the new transport share one list of questions. With the flag off those events are served by the webinar Q&A code as before.
+
 ## HTTP Admin Endpoints
 
 Base routes live in `packages/sfu/server/http/createApp.ts`.

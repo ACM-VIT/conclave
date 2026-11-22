@@ -75,6 +75,28 @@ The first prints the runtime's own CPU and frame counts in process. The second s
 
 State lives in the SFU process for the lifetime of the room. It is lost if the process dies, as game state is. A recreated room has a new epoch and starts empty.
 
+## Apps that run on it
+
+| App | Folder | What the server holds |
+| --- | --- | --- |
+| Polls | `src/apps/polls` | polls, one ballot per person per poll, results private to hosts until shared |
+| Q&A | `src/apps/qa` | questions, one upvote per person per question, hidden questions for hosts and the asker only |
+
+Both are panel apps. They open from the Apps panel, beside whatever is on the stage, and never take the stage or the whiteboard. Each has its hook in `web` (`usePolls`, `useQa`) and the web client draws the panel.
+
+A signed-in person votes, asks and upvotes once per account across tabs and rejoins. A guest in a meeting can read both apps and is told to sign in to take part, until the verified guest pass gives guests an identity that survives a rejoin. In a webinar an attendee may ask and upvote as before.
+
+### The old Q&A events
+
+Released web and native clients know `webinar:qaSubmit`, `webinar:qaUpvote`, `webinar:qaModerate`, `webinar:qaSnapshot` and `webinar:qaChanged`. In a room that runs the Q&A app those events are an adapter over the app's book (`server/apps/authority/legacyWebinarQa.ts` in the SFU), so an old client and a new one see the same questions:
+
+- A joining connection is followed as the app would follow it and is sent the old snapshot and change events. The adapter holds no questions and no visibility rule of its own.
+- When a client asks for capabilities it speaks the new transport, and the old feed for that connection stops.
+- The old events carry webinar Q&A only. Nothing is sent on them in a regular meeting.
+- A seat id for the asker is given to hosts and to the asker. Everyone else gets an empty `userId`.
+
+With the flag off the old events are served by the SFU's own webinar Q&A code, unchanged.
+
 ## What native needs
 
 The native app does not speak this transport yet. To host an authority app it needs:
@@ -86,3 +108,10 @@ The native app does not speak this transport yet. To host an authority app it ne
 5. A local panel selection in the Activities sheet, separate from the stage.
 
 Until then native keeps its existing activities and ignores the new events. Legacy `webinar:qa:*` keeps working against a new SFU.
+
+For polls and Q&A in particular:
+
+1. Two panels in the Activities sheet, built on the session above: a poll list with create, vote, end, share and CSV export for hosts, and a question list with ask, upvote and the host's answer, dismiss and reopen.
+2. The same gating as web: show an app only when the SFU lists it in capabilities, and show the sign-in prompt when `needsIdentity` names the action.
+3. Webinar Q&A on native keeps working through the old events with no change. Moving it to the app's session is what brings Q&A to native meetings.
+4. A poll started while the panel is closed should raise the same "Vote" prompt the web toast does.
