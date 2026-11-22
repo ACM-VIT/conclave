@@ -42,14 +42,14 @@ port.on("message", (message: ToWorker) => {
     if (holds(update, "STALL")) Atomics.wait(forever, 0, 0);
     if (holds(update, "CRASH") && !holds(update, "CRASH-LOAD")) process.exit(1);
     if (holds(update, "PAUSE")) Atomics.wait(forever, 0, 0, 300);
-    let evicted = false;
+    let stopped = false;
     engine.handle({ ...message, load, operations: [operation] }, (reply, transfer) => {
-      if (reply.type === "refused" && reply.evicted) evicted = true;
+      if ((reply.type === "refused" && reply.evicted) || reply.type === "yielded") stopped = true;
       const late = holds(update, "LATE") && reply.type !== "loaded" && "elapsedMs" in reply;
       post(late ? { ...reply, elapsedMs: Number.MAX_SAFE_INTEGER } : reply, transfer);
     });
     load = null;
-    if (evicted) return;
+    if (stopped) return;
     if (holds(update, "YIELD") && index < message.operations.length - 1) {
       post({ type: "yielded" }, []);
       return;

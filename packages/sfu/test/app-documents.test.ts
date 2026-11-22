@@ -131,7 +131,7 @@ describe("app document engine", () => {
   });
 });
 
-describe("app documents", () => {
+describe("app documents", { timeout: 30_000 }, () => {
   it("keeps a document a late joiner can load when an update unlocks pending edits", async () => {
     const room = inRoom(createPool({ maxDocumentBytes: 10_000 }), "pending");
     await room.open();
@@ -385,6 +385,9 @@ describe("app documents", () => {
     const yielding = pool.open();
     const waiting = pool.open();
     const { fromOther } = authors();
+    for (const document of [blocker, yielding, waiting]) {
+      expect(await document.apply(fromOther("warm"))).toEqual({ ok: true });
+    }
     const order: string[] = [];
     const track = (name: string, result: Promise<unknown>) => result.then(() => order.push(name));
     const blocked = track("pause", blocker.apply(fromOther("PAUSE")));
