@@ -1104,8 +1104,12 @@ export function useAdaptiveConsumerPreferences({
   const unsupportedLayerPreferencesRef = useRef<
     Map<string, UnsupportedLayerPreference>
   >(new Map());
-  const inFlightProducerIdsRef = useRef<Set<string>>(new Set());
+  const inFlightPreferencesRef = useRef(new Map<string, {
+    update: PendingConsumerPreferenceUpdate;
+    reapply: boolean;
+  }>());
   const scheduledPreferenceTimeoutsRef = useRef<Set<number>>(new Set());
+  const queuedPreferenceTimeoutRef = useRef<number | null>(null);
   const rateLimitRetryTimeoutRef = useRef<number | null>(null);
   const preferenceDebugRef = useRef<
     Map<string, AdaptiveConsumerPreferenceDebugEntry>
@@ -1250,13 +1254,17 @@ export function useAdaptiveConsumerPreferences({
       });
       scheduledPreferenceTimeoutsRef.current.clear();
 
+      if (queuedPreferenceTimeoutRef.current !== null) {
+        window.clearTimeout(queuedPreferenceTimeoutRef.current);
+        queuedPreferenceTimeoutRef.current = null;
+      }
       if (rateLimitRetryTimeoutRef.current !== null) {
         window.clearTimeout(rateLimitRetryTimeoutRef.current);
         rateLimitRetryTimeoutRef.current = null;
       }
     }
 
-    inFlightProducerIdsRef.current.clear();
+    inFlightPreferencesRef.current.clear();
   }, []);
 
   const publishAdaptiveVideoPauseChanges = useCallback(() => {
@@ -1514,6 +1522,7 @@ export function useAdaptiveConsumerPreferences({
 
     const trackedProducerIds = new Set([
       ...lastAppliedRef.current.keys(),
+      ...inFlightPreferencesRef.current.keys(),
       ...preferenceDebugRef.current.keys(),
       ...videoJitterBufferTargetsRef.current.keys(),
       ...consumerScoreAdaptationRef.current.keys(),
@@ -1526,7 +1535,7 @@ export function useAdaptiveConsumerPreferences({
       layerConvergenceKeyFrameAttemptsRef.current.delete(producerId);
       lastPausedRef.current.delete(producerId);
       unsupportedLayerPreferencesRef.current.delete(producerId);
-      inFlightProducerIdsRef.current.delete(producerId);
+      inFlightPreferencesRef.current.delete(producerId);
       preferenceDebugRef.current.delete(producerId);
       videoJitterBufferTargetsRef.current.delete(producerId);
       consumerScoreAdaptationRef.current.delete(producerId);
@@ -1749,18 +1758,23 @@ export function useAdaptiveConsumerPreferences({
         unsupportedLayers: shouldSuppressPreferredLayers,
       };
       const signature = getPreferenceSignature(consumer.id, preferences);
+      const inFlight = inFlightPreferencesRef.current.get(producerId);
+      if (inFlight) inFlight.reapply = inFlight.update.signature !== signature;
       if (
-        lastAppliedRef.current.get(producerId) === signature &&
-        !retryWebcamLayerConvergence
+        inFlight ||
+        (lastAppliedRef.current.get(producerId) === signature &&
+          !retryWebcamLayerConvergence)
       ) {
         const existingDebugEntry = preferenceDebugRef.current.get(producerId);
         if (
+          !inFlight?.reapply &&
           telemetryConfirmsPreferences(
             consumerTelemetry ?? undefined,
             consumer.id,
             preferences,
           )
         ) {
+          lastAppliedRef.current.set(producerId, signature);
           if (preferredLayers) {
             lastLayersRef.current.set(producerId, preferredLayers);
           }
@@ -1787,7 +1801,16 @@ export function useAdaptiveConsumerPreferences({
           });
           return;
         }
-        if (existingDebugEntry) {
+        if (inFlight) {
+          preferenceDebugRef.current.set(producerId, {
+            ...debugEntryBase,
+            status: "deferred",
+            paused: lastPausedRef.current.get(producerId) ?? null,
+            producerPaused: null,
+            error: null,
+            appliedAt: now,
+          });
+        } else if (existingDebugEntry) {
           preferenceDebugRef.current.set(producerId, {
             ...existingDebugEntry,
             consumerScore,
@@ -1798,50 +1821,6 @@ export function useAdaptiveConsumerPreferences({
             jitterBufferTargetStatus: jitterBufferTarget.status,
           });
         }
-        return;
-      }
-
-      if (inFlightProducerIdsRef.current.has(producerId)) {
-        if (
-          telemetryConfirmsPreferences(
-            consumerTelemetry ?? undefined,
-            consumer.id,
-            preferences,
-          )
-        ) {
-          lastAppliedRef.current.set(producerId, signature);
-          if (preferredLayers) {
-            lastLayersRef.current.set(producerId, preferredLayers);
-          }
-          lastPausedRef.current.set(producerId, consumerTelemetry!.paused);
-          if (consumerTelemetry!.paused) {
-            refs.adaptivelyPausedConsumerProducerIdsRef.current.add(producerId);
-          } else {
-            refs.adaptivelyPausedConsumerProducerIdsRef.current.delete(
-              producerId,
-            );
-          }
-          inFlightProducerIdsRef.current.delete(producerId);
-          preferenceDebugRef.current.set(producerId, {
-            ...debugEntryBase,
-            status: "applied",
-            paused: consumerTelemetry!.paused,
-            producerPaused: consumerTelemetry!.producerPaused,
-            preferredLayers: consumerTelemetry!.preferredLayers,
-            currentLayers: consumerTelemetry!.currentLayers,
-            error: null,
-            appliedAt: consumerTelemetry!.receivedAt,
-          });
-          return;
-        }
-        preferenceDebugRef.current.set(producerId, {
-          ...debugEntryBase,
-          status: "deferred",
-          paused: lastPausedRef.current.get(producerId) ?? null,
-          producerPaused: null,
-          error: null,
-          appliedAt: now,
-        });
         return;
       }
 
@@ -1892,8 +1871,24 @@ export function useAdaptiveConsumerPreferences({
     }
 
     for (const update of updatesToSend) {
-      inFlightProducerIdsRef.current.add(update.producerId);
+      inFlightPreferencesRef.current.set(update.producerId, { update, reapply: false });
     }
+
+    const settlePreferenceUpdate = (update: PendingConsumerPreferenceUpdate) => {
+      const inFlight = inFlightPreferencesRef.current.get(update.producerId);
+      if (inFlight?.update !== update) return;
+      inFlightPreferencesRef.current.delete(update.producerId);
+      if (
+        !inFlight.reapply ||
+        queuedPreferenceTimeoutRef.current !== null ||
+        rateLimitRetryTimeoutRef.current !== null
+      ) return;
+
+      queuedPreferenceTimeoutRef.current = window.setTimeout(() => {
+        queuedPreferenceTimeoutRef.current = null;
+        if (rateLimitRetryTimeoutRef.current === null) applyPreferences();
+      }, 0);
+    };
 
     const scheduleRateLimitRetry = () => {
       if (
@@ -1925,13 +1920,17 @@ export function useAdaptiveConsumerPreferences({
       update: PendingConsumerPreferenceUpdate,
     ): boolean => {
       const liveConsumer = refs.consumersRef.current.get(update.producerId);
-      return isConsumerPreferenceGenerationCurrent({
-        enabled,
-        socketConnected: socket.connected,
-        updateConsumerClosed: update.consumer.closed,
-        updateConsumerId: update.consumer.id,
-        currentConsumerId: liveConsumer?.id ?? null,
-      });
+      return (
+        inFlightPreferencesRef.current.get(update.producerId)?.update === update &&
+        refs.socketRef.current === socket &&
+        isConsumerPreferenceGenerationCurrent({
+          enabled,
+          socketConnected: socket.connected,
+          updateConsumerClosed: update.consumer.closed,
+          updateConsumerId: update.consumer.id,
+          currentConsumerId: liveConsumer?.id ?? null,
+        })
+      );
     };
 
     const markDeferredForRetry = (
@@ -1939,7 +1938,7 @@ export function useAdaptiveConsumerPreferences({
       error: string,
     ) => {
       if (!isUpdateStillLive(update)) {
-        inFlightProducerIdsRef.current.delete(update.producerId);
+        settlePreferenceUpdate(update);
         return;
       }
       preferenceDebugRef.current.set(update.producerId, {
@@ -1952,13 +1951,17 @@ export function useAdaptiveConsumerPreferences({
       });
       writeDebugSnapshot(debugContext);
       scheduleRateLimitRetry();
+      settlePreferenceUpdate(update);
     };
 
     const markDisplacedGenerationForRetry = (
       update: PendingConsumerPreferenceUpdate,
       error: string,
     ) => {
-      inFlightProducerIdsRef.current.delete(update.producerId);
+      if (!isUpdateStillLive(update)) {
+        settlePreferenceUpdate(update);
+        return;
+      }
       if (update.preferences.paused === true) {
         refs.adaptivelyPausedConsumerProducerIdsRef.current.add(
           update.producerId,
@@ -1974,6 +1977,7 @@ export function useAdaptiveConsumerPreferences({
       });
       writeDebugSnapshot(debugContext);
       scheduleRateLimitRetry();
+      settlePreferenceUpdate(update);
     };
 
     const markError = (
@@ -1981,10 +1985,6 @@ export function useAdaptiveConsumerPreferences({
       error: string,
       unsupportedLayers = false,
     ) => {
-      if (!isUpdateStillLive(update)) {
-        inFlightProducerIdsRef.current.delete(update.producerId);
-        return;
-      }
       preferenceDebugRef.current.set(update.producerId, {
         ...update.debugEntryBase,
         status: "error",
@@ -2024,8 +2024,6 @@ export function useAdaptiveConsumerPreferences({
         if (fallbackSettled) return;
         fallbackSettled = true;
         scheduledPreferenceTimeoutsRef.current.delete(fallbackAckTimeoutId);
-        inFlightProducerIdsRef.current.delete(update.producerId);
-        if (!isUpdateStillLive(update)) return;
         markDeferredForRetry(
           update,
           "setConsumerPreferences priority-only ack timeout",
@@ -2047,11 +2045,10 @@ export function useAdaptiveConsumerPreferences({
           scheduledPreferenceTimeoutsRef.current.delete(fallbackAckTimeoutId);
           window.clearTimeout(fallbackAckTimeoutId);
           if (!isUpdateStillLive(update)) {
-            inFlightProducerIdsRef.current.delete(update.producerId);
+            settlePreferenceUpdate(update);
             return;
           }
           if ("error" in priorityOnlyResponse) {
-            inFlightProducerIdsRef.current.delete(update.producerId);
             if (
               isConsumerGenerationDisplacedError(
                 priorityOnlyResponse.error,
@@ -2069,10 +2066,10 @@ export function useAdaptiveConsumerPreferences({
             }
 
             markError(update, priorityOnlyResponse.error, true);
+            settlePreferenceUpdate(update);
             return;
           }
 
-          inFlightProducerIdsRef.current.delete(update.producerId);
           lastAppliedRef.current.set(
             update.producerId,
             getPreferenceSignature(update.consumer.id, {
@@ -2107,6 +2104,7 @@ export function useAdaptiveConsumerPreferences({
             unsupportedLayers: true,
           });
           writeDebugSnapshot(debugContext);
+          settlePreferenceUpdate(update);
         },
       );
     };
@@ -2116,7 +2114,7 @@ export function useAdaptiveConsumerPreferences({
       response: SetConsumerPreferencesBatchItemResponse,
     ) => {
       if (!isUpdateStillLive(update)) {
-        inFlightProducerIdsRef.current.delete(update.producerId);
+        settlePreferenceUpdate(update);
         return;
       }
 
@@ -2126,7 +2124,6 @@ export function useAdaptiveConsumerPreferences({
           return;
         }
         if (isConsumerControlRateLimitError(response.error)) {
-          inFlightProducerIdsRef.current.delete(update.producerId);
           markDeferredForRetry(update, response.error);
           return;
         }
@@ -2149,11 +2146,10 @@ export function useAdaptiveConsumerPreferences({
           sendPriorityOnlyFallback(update);
           return;
         }
-        inFlightProducerIdsRef.current.delete(update.producerId);
+        settlePreferenceUpdate(update);
         return;
       }
 
-      inFlightProducerIdsRef.current.delete(update.producerId);
       lastAppliedRef.current.set(update.producerId, update.signature);
       if (update.preferredLayers) {
         lastLayersRef.current.set(update.producerId, update.preferredLayers);
@@ -2179,13 +2175,14 @@ export function useAdaptiveConsumerPreferences({
         appliedAt: Date.now(),
       });
       writeDebugSnapshot(debugContext);
+      settlePreferenceUpdate(update);
     };
 
     const emitSinglePreferenceUpdate = (
       update: PendingConsumerPreferenceUpdate,
     ) => {
       if (!isUpdateStillLive(update)) {
-        inFlightProducerIdsRef.current.delete(update.producerId);
+        settlePreferenceUpdate(update);
         return;
       }
 
@@ -2194,8 +2191,6 @@ export function useAdaptiveConsumerPreferences({
         if (settled) return;
         settled = true;
         scheduledPreferenceTimeoutsRef.current.delete(ackTimeoutId);
-        inFlightProducerIdsRef.current.delete(update.producerId);
-        if (!isUpdateStillLive(update)) return;
         markDeferredForRetry(update, "setConsumerPreferences ack timeout");
       }, CONSUMER_PREFERENCE_ACK_TIMEOUT_MS);
       scheduledPreferenceTimeoutsRef.current.add(ackTimeoutId);
@@ -2218,7 +2213,7 @@ export function useAdaptiveConsumerPreferences({
     ) => {
       const liveUpdates = batchUpdates.filter((update) => {
         if (isUpdateStillLive(update)) return true;
-        inFlightProducerIdsRef.current.delete(update.producerId);
+        settlePreferenceUpdate(update);
         return false;
       });
       if (liveUpdates.length === 0) return;
@@ -2253,7 +2248,6 @@ export function useAdaptiveConsumerPreferences({
             }
             if (isConsumerControlRateLimitError(response.error)) {
               for (const update of liveUpdates) {
-                inFlightProducerIdsRef.current.delete(update.producerId);
                 markDeferredForRetry(update, response.error);
               }
               return;
