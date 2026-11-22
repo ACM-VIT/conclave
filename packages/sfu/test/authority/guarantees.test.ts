@@ -861,7 +861,7 @@ describe("a view taken between a write and its flush", () => {
     await hostTab.act("remove", { id: "brief" });
     await room.deliver();
 
-    expect(handedToLate).toEqual(["kept", "brief"]);
+    expect(handedToLate).toEqual(["brief", "kept"]);
     // Ravi holds the note, so he is told to drop it. Priya never held it and
     // gets no frame at all.
     expect(toldToDrop(late)).toEqual(expect.arrayContaining(["brief"]));
@@ -1783,18 +1783,18 @@ describe("large views and slow sockets", () => {
     const raviTab = await room.open(ravi, qaContract);
     const entry = hostTab.client.entryFor(qaContract)!;
     const name = "hidden-after-a-change";
-    const moderate = (nonce: string, action: string) =>
+    const moderate = (id: string, nonce: string, action: string) =>
       hostTab.raw<AuthorityResult<Json>>(AUTHORITY_EVENTS.act, {
         roomEpoch: room.authority.roomEpoch,
         subscription: hostTab.frames[0].subscription,
         generation: 1,
         operation: { issuedAtMs: Date.now(), nonce },
         action: "moderate",
-        input: { id: ids[0], action },
+        input: { id, action },
       });
 
-    // A view that comes in parts. Its first part, with the first question,
-    // has gone out.
+    // A view that comes in parts. Its first part, with one question, has
+    // gone out.
     void raviTab.raw(AUTHORITY_EVENTS.subscribe, {
       roomEpoch: room.authority.roomEpoch,
       instance: entry.instance,
@@ -1803,12 +1803,13 @@ describe("large views and slow sockets", () => {
       subscription: name,
     });
     const mine = () => raviTab.frames.filter((frame) => frame.subscription === name);
-    const inFirstPart = rowsFor(mine(), ids[0]).length > 0;
+    const asked = ids.findIndex((id) => rowsFor(mine(), id).length > 0);
+    const target = ids[asked];
     // Before the next part, the host answers the question, and that is
     // flushed. Then the host hides it, and that is flushed too.
-    const answered = await moderate("answer-mid-transfer", "answered");
+    const answered = await moderate(target, "answer-mid-transfer", "answered");
     room.authority.flushNow();
-    const hidden = await moderate("hide-mid-transfer", "dismissed");
+    const hidden = await moderate(target, "hide-mid-transfer", "dismissed");
     room.authority.flushNow();
     const sentBeforeTheHide = mine().length;
     await room.drain();
@@ -1817,12 +1818,13 @@ describe("large views and slow sockets", () => {
     const afterTheHide = mine().slice(sentBeforeTheHide);
 
     expect([answered.ok, hidden.ok]).toEqual([true, true]);
-    expect(inFirstPart).toBe(true);
+    expect(asked).not.toBe(-1);
+    expect(replaces(mine())[0].rows.filter((row) => row.bucket === "questions")).toHaveLength(1);
     expect(replaces(mine()).at(-1)?.last).toBe(true);
     // Nothing sent once the question was hidden carries any copy of it.
-    expect(rowsFor(afterTheHide, ids[0])).toEqual([]);
-    expect(JSON.stringify(afterTheHide)).not.toContain("Question 0?");
-    expect([...heldAfter(mine()).keys()].filter((key) => key.endsWith(`/${ids[0]}`))).toEqual([]);
+    expect(rowsFor(afterTheHide, target)).toEqual([]);
+    expect(JSON.stringify(afterTheHide)).not.toContain(`Question ${asked}?`);
+    expect([...heldAfter(mine()).keys()].filter((key) => key.endsWith(`/${target}`))).toEqual([]);
   });
 
   it("disconnects a socket whose queue is full when the changes queued behind its snapshot come due", async () => {
@@ -1865,15 +1867,18 @@ describe("large views and slow sockets", () => {
       subscription: "hidden-mid-transfer",
     });
     const sentAtOnce = raviTab.frames.slice(before).length;
-    // Before the next part, the host hides the last question, and changes
-    // the one before it.
+    const first = raviTab.frames.slice(before)[0];
+    const notYetSent = ids.filter((id) => !(first?.kind === "replace" && first.rows.some((row) => row.key === id)));
+    const [toAnswer, toHide] = notYetSent;
+    // Before the next part, the host hides one question not yet sent, and
+    // changes the other.
     const hidden = await hostTab.raw<AuthorityResult<Json>>(AUTHORITY_EVENTS.act, {
       roomEpoch: room.authority.roomEpoch,
       subscription: hostTab.frames[0].subscription,
       generation: 1,
       operation: { issuedAtMs: Date.now(), nonce: "hide-mid-transfer" },
       action: "moderate",
-      input: { id: ids[2], action: "dismissed" },
+      input: { id: toHide, action: "dismissed" },
     });
     const answered = await hostTab.raw<AuthorityResult<Json>>(AUTHORITY_EVENTS.act, {
       roomEpoch: room.authority.roomEpoch,
@@ -1881,7 +1886,7 @@ describe("large views and slow sockets", () => {
       generation: 1,
       operation: { issuedAtMs: Date.now(), nonce: "answer-mid-transfer" },
       action: "moderate",
-      input: { id: ids[1], action: "answered" },
+      input: { id: toAnswer, action: "answered" },
     });
     await room.drain();
     await room.deliver();
@@ -1904,21 +1909,22 @@ describe("large views and slow sockets", () => {
     }
 
     expect(sentAtOnce).toBe(1);
+    expect(notYetSent).toHaveLength(2);
     expect([hidden.ok, answered.ok]).toEqual([true, true]);
     expect(parts.length).toBeGreaterThan(2);
     expect(parts[parts.length - 1].last).toBe(true);
     // No part sent after the hide carries the hidden question.
-    expect(later.filter((row) => row.key === ids[2])).toEqual([]);
-    expect(JSON.stringify(parts.slice(1))).not.toContain("Question 2?");
+    expect(later.filter((row) => row.key === toHide)).toEqual([]);
+    expect(JSON.stringify(parts.slice(1))).not.toContain(`Question ${ids.indexOf(toHide)}?`);
     // A row that changed is sent as it is when its part goes, not as it was.
-    expect(later.filter((row) => row.key === ids[1]).map((row) => field(row.value, "status"))).toEqual([
+    expect(later.filter((row) => row.key === toAnswer).map((row) => field(row.value, "status"))).toEqual([
       "answered",
     ]);
     expect([...held.keys()].filter((held) => held.startsWith("questions/")).sort()).toEqual(
-      [`questions/${ids[0]}`, `questions/${ids[1]}`].sort(),
+      ids.filter((id) => id !== toHide).map((id) => `questions/${id}`).sort(),
     );
-    expect([...held.keys()].filter((held) => held.endsWith(`/${ids[2]}`))).toEqual([]);
-    expect(field(held.get(`questions/${ids[1]}`) ?? null, "status")).toBe("answered");
+    expect([...held.keys()].filter((held) => held.endsWith(`/${toHide}`))).toEqual([]);
+    expect(field(held.get(`questions/${toAnswer}`) ?? null, "status")).toBe("answered");
   });
 
   it("stops a snapshot between parts when the seat is removed", async () => {
@@ -2432,6 +2438,35 @@ describe("revisions", () => {
     expect(none).toEqual({ before: none.before, answer: none.before, after: none.before, frames: [] });
     expect(one).toEqual(none);
     expect(many).toEqual(none);
+  });
+
+  it("lists every frame's rows in one order, whatever order the shared cache took them in", async () => {
+    const room = new Harness([probeAuthority]);
+    const hostTab = await room.open(host, probeContract);
+    const raviTab = await room.open(ravi, probeContract);
+    // Rows enter the cache out of order, and one leaves and comes back.
+    for (const id of ["n3", "n1", "n4", "n2"]) await hostTab.act("put", { id, text: `text ${id}` });
+    await hostTab.act("remove", { id: "n3" });
+    await hostTab.act("put", { id: "n3", text: "text n3 again" });
+    await room.deliver();
+    const fresh = await room.open(priya, probeContract);
+    for (const id of ["n4", "n2", "n1"]) await hostTab.act("put", { id, text: `changed ${id}` });
+    await hostTab.act("remove", { id: "n3" });
+    await room.deliver();
+
+    const placeOf = (row: { bucket: string; key: string }) => `${row.bucket}\u0000${row.key}`;
+    const sorted = (rows: { bucket: string; key: string }[]) =>
+      rows.map(placeOf).join("|") === rows.map(placeOf).sort().join("|");
+    const frames = [...raviTab.frames, ...fresh.frames];
+    for (const frame of frames) {
+      if (frame.kind === "replace") expect(sorted(frame.rows), JSON.stringify(frame.rows.map(placeOf))).toBe(true);
+      if (frame.kind === "patch") {
+        expect(sorted(frame.put), JSON.stringify(frame.put.map(placeOf))).toBe(true);
+        expect(sorted(frame.remove), JSON.stringify(frame.remove.map(placeOf))).toBe(true);
+      }
+    }
+    expect(replaces(fresh.frames)[0].rows.length).toBeGreaterThan(3);
+    expect(patches(raviTab.frames).some((frame) => frame.put.length > 1)).toBe(true);
   });
 
   it("keeps a client's view version going up when it subscribes again, and reads answers the same way", async () => {

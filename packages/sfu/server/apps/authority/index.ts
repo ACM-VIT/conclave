@@ -1,6 +1,7 @@
 import type { Socket } from "socket.io";
 import type {
   AuthorityModule,
+  AuthorityRandom,
   RoomPolicy,
 } from "@conclave/apps-sdk/authority/server";
 import type { Room } from "../../../config/classes/Room.js";
@@ -21,6 +22,8 @@ export type AppsAuthorityRuntime = {
   verifyViews: boolean;
   pressure: (socket: Socket) => SocketPressure;
   guestProofOf: GuestPassProofSource;
+  /** Where apps draw ids and chance from. Cryptographic unless a test seeds it. */
+  random?: AuthorityRandom;
 };
 
 /** The size on the wire of what one queued packet carries. */
@@ -119,6 +122,7 @@ export const getRoomAuthority = (
     limits: runtime.limits,
     pressure: runtime.pressure,
     verifyViews: runtime.verifyViews,
+    random: runtime.random,
   });
   authorities.set(room, authority);
   room.onLifecycle((event) => {

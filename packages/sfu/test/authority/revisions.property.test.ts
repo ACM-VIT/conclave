@@ -19,6 +19,7 @@ import {
   type AuthorityResult,
   type Json,
 } from "@conclave/apps-sdk/authority";
+import type { AuthorityRandom } from "@conclave/apps-sdk/authority/server";
 import type { CommittedView } from "../../server/apps/authority/views.js";
 import { Harness, person, type Tab } from "./harness.js";
 import { pollsAuthority, pollsContract } from "./fixtures/polls.js";
@@ -39,6 +40,24 @@ const random = (seed: number) => {
     t = Math.imul(t ^ (t >>> 15), t | 1);
     t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
     return ((t ^ (t >>> 14)) >>> 0) / 4_294_967_296;
+  };
+};
+
+/** The room's own chance, seeded, so every run mints the same poll ids. */
+const roomRandom = (seed: number): AuthorityRandom => {
+  const next = random(seed);
+  const int = (maxExclusive: number) => Math.floor(next() * maxExclusive);
+  return {
+    next,
+    int,
+    shuffle: (list) => {
+      const copy = [...list];
+      for (let index = copy.length - 1; index > 0; index -= 1) {
+        const swap = int(index + 1);
+        [copy[index], copy[swap]] = [copy[swap], copy[index]];
+      }
+      return copy;
+    },
   };
 };
 
@@ -125,13 +144,18 @@ const seen = (frame: AuthorityFrame): string => {
   return JSON.stringify(rest);
 };
 
-const run = async (ops: Op[], { withHidden, withWatchers }: { withHidden: boolean; withWatchers: boolean }) => {
+const run = async (
+  seed: number,
+  ops: Op[],
+  { withHidden, withWatchers }: { withHidden: boolean; withWatchers: boolean },
+) => {
   // Both runs start at the same moment, so timestamps in rows agree.
   vi.setSystemTime(1_000_000);
   const behind = new Set<string>();
   const room = new Harness([pollsAuthority], {
     runtime: {
       pressure: (socket) => (behind.has(socket.id) ? { packets: 300, bytes: 0 } : { packets: 0, bytes: 0 }),
+      random: roomRandom(seed),
     },
   });
   const h1 = await room.open(person("asha@example.com", "Asha", "host"), pollsContract);
@@ -311,12 +335,10 @@ const run = async (ops: Op[], { withHidden, withWatchers }: { withHidden: boolea
   for (const waiting of outstanding) {
     violations.push(`version ${waiting.revision} for ${waiting.what} was never reached`);
   }
-  // Poll ids are random. Both runs create the polls in the same order, so
-  // each id is named by the order it was made in.
-  const named = (text: string): string =>
-    [...hidden, ...polls].reduce((out, id, index) => out.replaceAll(id, `poll-${index}`), text);
-  const framesOf = (tab: Tab) => tab.frames.map((frame) => named(seen(frame)));
-  const answersOf = (tab: Tab) => (answers.get(tab) ?? []).map(named);
+  // The room's chance is seeded, so every run mints the same poll ids and
+  // frames are compared exactly as they were sent.
+  const framesOf = (tab: Tab) => tab.frames.map(seen);
+  const answersOf = (tab: Tab) => answers.get(tab) ?? [];
   const everyone = [h1, h2, ...voters, ...m1Tabs];
   return {
     violations,
@@ -329,9 +351,9 @@ it("reaches an answer's version only once the view shows the action, and shows n
   const failures: string[] = [];
   for (let seed = 1; seed <= 24; seed += 1) {
     const ops = opsFor(seed, 60);
-    const full = await run(ops, { withHidden: true, withWatchers: true });
-    const noHidden = await run(ops, { withHidden: false, withWatchers: true });
-    const noWatchers = await run(ops, { withHidden: true, withWatchers: false });
+    const full = await run(seed, ops, { withHidden: true, withWatchers: true });
+    const noHidden = await run(seed, ops, { withHidden: false, withWatchers: true });
+    const noWatchers = await run(seed, ops, { withHidden: true, withWatchers: false });
     for (const violation of [...full.violations, ...noHidden.violations, ...noWatchers.violations]) {
       failures.push(`seed ${seed}: ${violation}`);
     }
