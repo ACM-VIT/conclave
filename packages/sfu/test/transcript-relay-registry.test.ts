@@ -808,3 +808,35 @@ describe("a stop clears the room whatever handoffs are pending", () => {
     registry.closeAll();
   });
 });
+
+describe("the registry keeps no state for rooms that are done", () => {
+  it("holds nothing for many rooms once each has started and stopped", async () => {
+    const registry = createTranscriptRelayRegistry({
+      enabled: true,
+      createRelay: ({ controllerUserId }) => ({
+        controllerUserId,
+        start: async () => {},
+        prepareHandoff: async () => true,
+        syncProducers: async () => {},
+        close: () => {},
+      }),
+    });
+    for (let index = 0; index < 200; index += 1) {
+      const meeting = { id: `room-${index}`, clientId: "client-a", channelId: `client-a:room-${index}` } as Room;
+      const start = () =>
+        registry.start({
+          room: meeting,
+          workerUrl: "http://worker.test",
+          workerToken: `token-${index}`,
+          controllerUserId: "host",
+          controllerDisplayName: "Host",
+          canReplaceExistingRelay: true,
+        });
+      expect((await start()).success).toBe(true);
+      expect((await start()).success).toBe(true);
+      expect(await registry.stopRoomForUser({ roomKey: meeting.channelId, userId: "host", canStopAnyRelay: true })).toEqual({ success: true });
+    }
+
+    expect(registry.trackedRoomCount()).toBe(0);
+  });
+});

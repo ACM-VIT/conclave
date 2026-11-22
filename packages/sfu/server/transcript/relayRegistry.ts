@@ -32,6 +32,8 @@ export type TranscriptRelayRegistry = {
   }) => Promise<TranscriptSfuRelayStopResponse | { error: string }>;
   syncRoom: (room: Room) => Promise<void>;
   closeAll: () => void;
+  /** How many rooms the registry holds any state for; a done room holds none. */
+  trackedRoomCount: () => number;
 };
 
 export const createTranscriptRelayRegistry = (options: {
@@ -62,12 +64,23 @@ export const createTranscriptRelayRegistry = (options: {
     const generation = opened.get(key)?.get(relay);
     return generation === undefined || generation <= (stoppedThrough.get(key) ?? -1);
   };
+  // A closed relay already counts as retired, so a room's watermark is only
+  // needed while a relay it retired is still open; drop it after that.
+  const pruneStopWatermark = (key: string): void => {
+    const watermark = stoppedThrough.get(key);
+    if (watermark === undefined) return;
+    const stillRetiring = Array.from(opened.get(key)?.values() ?? []).some(
+      (generation) => generation <= watermark,
+    );
+    if (!stillRetiring) stoppedThrough.delete(key);
+  };
   const roomKey = (room: Pick<Room, "channelId" | "id">): string =>
     room.channelId || room.id;
   const forget = (key: string, relay: TranscriptRelayInstance): void => {
     const roomRelays = opened.get(key);
     roomRelays?.delete(relay);
     if (roomRelays?.size === 0) opened.delete(key);
+    pruneStopWatermark(key);
   };
   const closeRelay = (
     key: string,
@@ -281,6 +294,7 @@ export const createTranscriptRelayRegistry = (options: {
         if (current && isRetired(roomKey, current)) {
           relays.delete(roomKey);
         }
+        pruneStopWatermark(roomKey);
       }
       return { success: true };
     },
@@ -300,6 +314,9 @@ export const createTranscriptRelayRegistry = (options: {
       }
       relays.clear();
       stoppedThrough.clear();
+    },
+    trackedRoomCount() {
+      return new Set([...relays.keys(), ...opened.keys(), ...stoppedThrough.keys()]).size;
     },
   };
 };
