@@ -127,6 +127,21 @@ export function useAuthority<C extends AuthorityContract>(contract: C): Authorit
 }
 
 /**
+ * Whether the server runs authority apps at all. "unknown" until it has
+ * answered or the wait for an answer ran out, and "unsupported" for an older
+ * server or one with the runtime turned off. A host uses it to say why an
+ * app is missing, where `useAuthorityAvailable` only says that it is.
+ */
+export function useAuthorityRuntime(): CapabilityState["kind"] {
+  const client = useContext(AuthorityContext);
+  return useSyncExternalStore(
+    client ? client.subscribe : noSubscription,
+    client ? () => client.capabilities.kind : () => UNKNOWN.kind,
+    () => UNKNOWN.kind,
+  );
+}
+
+/**
  * Whether the server offers this app to this connection. False on a server
  * without the runtime, so hosts hide the app's entry points instead of
  * showing something that cannot work.

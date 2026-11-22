@@ -25,8 +25,20 @@ export type PanelAppEntry = {
   isOpen: boolean;
   /** Something in the app is waiting for this viewer. */
   needsAttention?: boolean;
+  /**
+   * The server cannot run this app: it is an older one, or has such apps
+   * turned off. The app is listed all the same, switched off, with the
+   * reason, so its absence is explained.
+   */
+  needsServerUpdate?: boolean;
   onToggle: () => void;
 };
+
+const NEEDS_SERVER_UPDATE = "Needs a server update";
+
+/** "Polls and Q&A need a server update.", for the apps named. */
+const needsServerUpdateNote = (names: string[]): string =>
+  `${names.join(" and ")} ${names.length > 1 ? "need" : "needs"} a server update.`;
 
 const APPS_SDK_DOCS_URL =
   "https://github.com/ACM-VIT/conclave/blob/main/packages/apps-sdk/docs/guides/add-a-new-app-integration.md";
@@ -52,6 +64,8 @@ export function AppsPanel({
   const [error, setError] = useState<string | null>(null);
 
   const canManage = Boolean(isAdmin) && !isReadOnly;
+  const noneAvailable =
+    panelApps.length > 0 && panelApps.every((app) => app.needsServerUpdate);
 
   const run = async (appId: string, action: () => Promise<boolean>) => {
     setBusyAppId(appId);
@@ -88,21 +102,36 @@ export function AppsPanel({
         <div className="flex flex-col gap-2">
           {panelApps.length > 0 && (
             <>
-              <p className="mb-1 text-[13px] leading-relaxed text-[#a1a1aa]">
-                Open beside the call. Only you see the panel.
+              <p
+                className="mb-1 text-[13px] leading-relaxed text-[#a1a1aa]"
+                data-testid={noneAvailable ? "panel-apps-unavailable" : undefined}
+              >
+                {noneAvailable
+                  ? needsServerUpdateNote(panelApps.map((app) => app.name))
+                  : "Open beside the call. Only you see the panel."}
               </p>
               {panelApps.map((app) => (
                 <button
                   key={app.id}
                   type="button"
                   data-testid={`panel-app-${app.id}`}
+                  disabled={app.needsServerUpdate}
+                  title={app.needsServerUpdate ? NEEDS_SERVER_UPDATE : undefined}
                   onClick={app.onToggle}
-                  aria-pressed={app.isOpen}
-                  aria-label={app.isOpen ? `Close ${app.name}` : `Open ${app.name}`}
-                  className="group relative flex w-full cursor-pointer items-center gap-3 overflow-hidden rounded-xl border p-3 text-left transition-colors"
+                  aria-pressed={app.needsServerUpdate ? undefined : app.isOpen}
+                  aria-label={
+                    app.needsServerUpdate
+                      ? `${app.name}: ${NEEDS_SERVER_UPDATE.toLowerCase()}`
+                      : app.isOpen
+                        ? `Close ${app.name}`
+                        : `Open ${app.name}`
+                  }
+                  className="group relative flex w-full cursor-pointer items-center gap-3 overflow-hidden rounded-xl border p-3 text-left transition-colors disabled:cursor-default"
                   style={{
                     borderColor: app.isOpen ? color.accent : "rgba(255,255,255,0.1)",
-                    background: color.surfaceRaised,
+                    background: app.needsServerUpdate
+                      ? "transparent"
+                      : color.surfaceRaised,
                   }}
                 >
                   <span
@@ -110,20 +139,33 @@ export function AppsPanel({
                     style={{
                       borderColor: "rgba(255,255,255,0.08)",
                       background: "rgba(255,255,255,0.04)",
-                      color: app.isOpen ? color.accent : "#d4d4d8",
+                      color: app.needsServerUpdate
+                        ? "#71717a"
+                        : app.isOpen
+                          ? color.accent
+                          : "#d4d4d8",
                     }}
                     aria-hidden="true"
                   >
                     {app.icon}
                   </span>
                   <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                    <span className="text-[14.5px] font-medium text-[#fafafa]">
+                    <span
+                      className="text-[14.5px] font-medium"
+                      style={{ color: app.needsServerUpdate ? "#a1a1aa" : "#fafafa" }}
+                    >
                       {app.name}
                     </span>
-                    {app.description && (
+                    {app.needsServerUpdate ? (
                       <span className="truncate text-[12px] text-[#a1a1aa]">
-                        {app.description}
+                        {NEEDS_SERVER_UPDATE}
                       </span>
+                    ) : (
+                      app.description && (
+                        <span className="truncate text-[12px] text-[#a1a1aa]">
+                          {app.description}
+                        </span>
+                      )
                     )}
                   </span>
                   {app.needsAttention && !app.isOpen && (

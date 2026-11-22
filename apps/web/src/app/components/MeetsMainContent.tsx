@@ -92,7 +92,12 @@ import {
   isBrowserVideoUserId,
   isSystemUserId,
 } from "../lib/utils";
-import { useApps, useAuthorityAvailable, useGame } from "@conclave/apps-sdk";
+import {
+  useApps,
+  useAuthorityAvailable,
+  useAuthorityRuntime,
+  useGame,
+} from "@conclave/apps-sdk";
 import { GamePanel } from "./games/GamePanel";
 import { GamesPanel } from "./games/GamesPanel";
 import { AppsPanel, type PanelAppEntry } from "./apps/AppsPanel";
@@ -1473,6 +1478,7 @@ export default function MeetsMainContent({
     [],
   );
   const polls = usePolls({ onPollStarted: handlePollStarted });
+  const authorityRuntime = useAuthorityRuntime();
   // Offered by the server to this connection, or not shown at all.
   const isPollsAvailable =
     useAuthorityAvailable(pollsContract) && isJoined && !isWebinarAttendee;
@@ -1515,7 +1521,11 @@ export default function MeetsMainContent({
   });
 
   // Polls and Q&A open beside the call for this viewer alone. They are
-  // listed in the Apps panel only when the server offers them.
+  // opened from the Apps panel when the server offers them. On a server that
+  // does not run them at all, an older one or one with them turned off, they
+  // are listed switched off with the reason, so their absence is explained.
+  const needsServerUpdate =
+    authorityRuntime === "unsupported" && isJoined && !isWebinarAttendee;
   const panelApps: PanelAppEntry[] = [
     ...(isPollsAvailable
       ? [
@@ -1532,7 +1542,18 @@ export default function MeetsMainContent({
             },
           },
         ]
-      : []),
+      : needsServerUpdate
+        ? [
+            {
+              id: pollsApp.id,
+              name: pollsApp.name,
+              icon: <ChartBar size={19} strokeWidth={1.75} />,
+              isOpen: false,
+              needsServerUpdate: true,
+              onToggle: () => {},
+            },
+          ]
+        : []),
     ...(isMeetingQaAvailable
       ? [
           {
@@ -1548,7 +1569,20 @@ export default function MeetsMainContent({
             },
           },
         ]
-      : []),
+      : // A webinar's questions live in its own Questions section, which an
+        // older server still feeds, so nothing is missing there.
+        needsServerUpdate && !webinarConfig?.enabled
+        ? [
+            {
+              id: qaApp.id,
+              name: qaApp.name,
+              icon: <MessageCircleQuestion size={19} strokeWidth={1.75} />,
+              isOpen: false,
+              needsServerUpdate: true,
+              onToggle: () => {},
+            },
+          ]
+        : []),
   ];
 
   const handleCloseTranscript = useCallback(() => {
