@@ -31,8 +31,9 @@ Files served straight from the Cloudflare assets binding skip the worker, so
   Browsers post violations to `/api/csp-report` (`report-uri`). The route logs
   one `[csp-report] {...}` line per report with query strings removed, and the
   `CSP_REPORT_RATE_LIMITER` binding caps it at 30 reports per minute per client.
-  A production server without that binding answers 503, because off Cloudflare
-  it cannot tell clients apart.
+  Only Cloudflare's edge vouches for `cf-connecting-ip`, so under `next start`
+  or `next dev` every caller shares one bucket, and a production server with no
+  limiter at all answers 503.
 
 The allowlist comes from local runs, in development and production builds, of
 a two-client call, a YouTube link embed and playback, the GIF picker, background

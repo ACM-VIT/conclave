@@ -1,15 +1,12 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@opennextjs/cloudflare", () => ({
-  getCloudflareContext: vi.fn(async () => {
-    throw new Error("not running on Cloudflare");
-  }),
-}));
+vi.mock("@opennextjs/cloudflare", () => ({ getCloudflareContext: vi.fn() }));
 
 vi.mock("@/lib/bounded-request-body", () => import("../src/lib/bounded-request-body"));
 vi.mock("@/lib/csp-report", () => import("../src/lib/csp-report"));
 
 const { POST } = await import("../src/app/api/csp-report/route");
+const { getCloudflareContext } = await import("@opennextjs/cloudflare");
 
 const report = {
   "csp-report": {
@@ -44,10 +41,41 @@ const streamOf = (totalBytes: number) => {
   });
 };
 
+// Each test starts in a fresh rate-limit window.
+let clock = Date.now();
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  clock += 120_000;
+  vi.setSystemTime(clock);
+  vi.mocked(getCloudflareContext).mockImplementation(async () => {
+    throw new Error("not running on Cloudflare");
+  });
+});
+
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
 });
+
+/** A Cloudflare rate-limit binding that allows 30 calls per key. */
+const workersLimiter = () => {
+  const counts = new Map<string, number>();
+  return {
+    limit: vi.fn(async ({ key }: { key: string }) => {
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+      return { success: (counts.get(key) ?? 0) <= 30 };
+    }),
+  };
+};
+
+const runOnWorkers = (limiter: ReturnType<typeof workersLimiter> | null) => {
+  vi.stubGlobal("navigator", { userAgent: "Cloudflare-Workers" });
+  vi.mocked(getCloudflareContext).mockResolvedValue({
+    env: limiter ? { CSP_REPORT_RATE_LIMITER: limiter } : {},
+  } as unknown as Awaited<ReturnType<typeof getCloudflareContext>>);
+};
 
 describe("CSP report endpoint", () => {
   it("logs one compact line per report without query strings", async () => {
@@ -103,15 +131,47 @@ describe("CSP report endpoint", () => {
     expect((await post(streamOf(1024 * 1024))).status).toBe(413);
   });
 
-  it("limits how many reports one client can log per minute", async () => {
+  it("limits each client on Cloudflare by the address Cloudflare reports", async () => {
+    runOnWorkers(workersLimiter());
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const statuses = [];
     for (let index = 0; index < 31; index += 1) {
-      statuses.push((await post(JSON.stringify(report), {}, "10.9.9.9")).status);
+      statuses.push((await post(JSON.stringify(report), {}, "198.51.100.9")).status);
     }
     expect(statuses.slice(0, 30).every((status) => status === 204)).toBe(true);
     expect(statuses[30]).toBe(429);
-    expect((await post(JSON.stringify(report), {}, "10.9.9.10")).status).toBe(204);
+    expect((await post(JSON.stringify(report), {}, "198.51.100.10")).status).toBe(204);
+  });
+
+  it("refuses reports on Cloudflare when the limiter binding is missing", async () => {
+    runOnWorkers(null);
+    vi.stubEnv("NODE_ENV", "production");
+    expect((await post(JSON.stringify(report))).status).toBe(503);
+  });
+
+  it("off Cloudflare, shares one limit however the caller spells its address", async () => {
+    // next start and next dev get a simulated limiter from OpenNext, and the
+    // caller chooses cf-connecting-ip there.
+    vi.mocked(getCloudflareContext).mockResolvedValue({
+      env: { CSP_REPORT_RATE_LIMITER: workersLimiter() },
+    } as unknown as Awaited<ReturnType<typeof getCloudflareContext>>);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const statuses = [];
+    for (let index = 0; index < 31; index += 1) {
+      statuses.push((await post(JSON.stringify(report), {}, `203.0.113.${index}`)).status);
+    }
+    expect(statuses.slice(0, 30).every((status) => status === 204)).toBe(true);
+    expect(statuses[30]).toBe(429);
+  });
+
+  it("limits reports in development even without any limiter", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const statuses = [];
+    for (let index = 0; index < 31; index += 1) {
+      statuses.push((await post(JSON.stringify(report), {}, `192.0.2.${index}`)).status);
+    }
+    expect(statuses[29]).toBe(204);
+    expect(statuses[30]).toBe(429);
   });
 
   it("refuses reports on a production server without the Cloudflare limiter", async () => {

@@ -11,10 +11,16 @@ type CloudflareRateLimitBinding = {
 type LocalRateLimitBucket = { windowStartedAt: number; count: number };
 const localBuckets = new Map<string, LocalRateLimitBucket>();
 
-// Cloudflare sets cf-connecting-ip on every request it forwards. Other client
-// IP headers are whatever the caller sent, so they never pick the bucket.
+// Only Cloudflare's edge sets cf-connecting-ip. Under next start or next dev a
+// caller can send any value (and OpenNext still hands over a simulated limiter),
+// so off Workers every caller shares one bucket.
+const runsOnCloudflareWorkers = (): boolean =>
+  globalThis.navigator?.userAgent === "Cloudflare-Workers";
+
 const clientKey = (request: Request): string =>
-  (request.headers.get("cf-connecting-ip")?.trim() || "anonymous").slice(0, 128);
+  runsOnCloudflareWorkers()
+    ? (request.headers.get("cf-connecting-ip")?.trim() || "anonymous").slice(0, 128)
+    : "shared";
 
 const takeLocalRateLimit = (key: string): boolean => {
   const now = Date.now();
@@ -59,8 +65,6 @@ export async function takeCspReportRateLimit(
       return "unavailable";
     }
   }
-  // Off Cloudflare the server cannot tell clients apart, so production refuses
-  // reports rather than letting each request claim a fresh bucket.
   if (process.env.NODE_ENV === "production") return "unavailable";
   return takeLocalRateLimit(key) ? "allowed" : "limited";
 }
