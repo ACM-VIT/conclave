@@ -14,6 +14,7 @@ import {
   type CapabilitiesRequest,
   type Json,
   type PatchFrame,
+  type ProjectedRow,
   type QueryReply,
   type QueryRequest,
   type ReplaceFrame,
@@ -780,6 +781,24 @@ export class RoomAuthority {
   }
 
   /**
+   * A later part of a snapshot, as it may be sent now. The parts were all
+   * cut from one view when the snapshot began, and a part waits a turn or
+   * more for its place. A row that has been hidden in the meantime is left
+   * out, and one that has changed goes as it is now, so no part carries what
+   * was withdrawn before it left. The patch that follows the last part
+   * brings the viewer the rest of what changed.
+   */
+  private asCommitted(subscription: Subscription, part: ReplaceFrame): ReplaceFrame {
+    const view = subscription.instance.committedView(subscription.actor);
+    const rows: ProjectedRow[] = [];
+    for (const row of part.rows) {
+      const value = view.get(row.bucket, row.key);
+      if (value !== undefined) rows.push(value === row.value ? row : { ...row, value });
+    }
+    return { ...part, rows, serverNowMs: this.now() };
+  }
+
+  /**
    * Sends the next part of a large snapshot on a later turn of the event
    * loop, after checking the recipient again. A seat removed between two
    * parts gets no more of them.
@@ -796,7 +815,10 @@ export class RoomAuthority {
       }
       if (this.refresh(subscription) !== "live") return;
       if (!this.hasRoom(subscription)) return;
-      this.emit(subscription, transfer.frames[transfer.next]);
+      this.emit(
+        subscription,
+        this.asCommitted(subscription, transfer.frames[transfer.next]),
+      );
       transfer.next += 1;
       if (transfer.next < transfer.frames.length) {
         this.continueTransfer(subscription, generation);
