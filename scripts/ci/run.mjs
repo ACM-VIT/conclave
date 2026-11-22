@@ -97,4 +97,4 @@ if (overBudget) {
   const message = `${jobName} took ${elapsed.toFixed(1)}s, over its ${job.budgetSeconds}s budget in scripts/ci/jobs.mjs`;
   console.log(github ? `::error title=${jobName} budget::${message}` : `OVER BUDGET ${message}`);
 }
-process.exit(failures.length || overBudget || skipped ? 1 : 0);
+process.exitCode = failures.length || overBudget || skipped ? 1 : 0;
