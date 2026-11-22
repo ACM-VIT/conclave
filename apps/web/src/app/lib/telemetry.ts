@@ -73,27 +73,36 @@ let emitting: TelemetryProps | null = null;
 // injected chunks, chunk frames keep no path.
 let chunkFiles: ReadonlyMap<string, string> = new Map();
 
+// Rejects when the request gets no answer: a network failure, or the page
+// navigating away.
 const loadChunkManifest = async (): Promise<void> => {
   const url = chunkManifestUrl(clientVersion);
   if (!url) return;
+  const response = await fetch(url, { cache: "no-store" });
+  if (!response.ok) return;
   try {
-    const response = await fetch(url, { cache: "no-store" });
-    if (response.ok) chunkFiles = parseChunkManifest(await response.json()) ?? chunkFiles;
+    chunkFiles = parseChunkManifest(await response.json()) ?? chunkFiles;
   } catch {}
 };
 
 // Reports made before the manifest has loaded wait for it this long, so a
 // first-render error keeps its chunk paths; past it they go without, and the
-// manifest still applies to later reports once it arrives.
+// manifest still applies to later reports once it arrives. Only an answer
+// ends the wait early. A page that navigates away aborts the fetch before
+// the pagehide listener runs, and that rejection must not send the held
+// reports as if the page stayed: the listener sends them, by beacon.
 const MANIFEST_WAIT_MS = 3000;
 
 const manifestOrTimeout = (): Promise<void> =>
   new Promise((resolve) => {
     const timer = setTimeout(resolve, MANIFEST_WAIT_MS);
-    void loadChunkManifest().finally(() => {
-      clearTimeout(timer);
-      resolve();
-    });
+    loadChunkManifest().then(
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      () => {},
+    );
   });
 
 const emit = (payload: TelemetryProps | undefined, capture: () => void): void => {

@@ -9,6 +9,9 @@ type Beacon = { url: string; body: Blob };
 
 let beacons: Beacon[] = [];
 
+// The page's fetch of its chunk manifest, still pending.
+let abortManifest: () => void = () => {};
+
 beforeEach(() => {
   vi.resetModules();
   beacons = [];
@@ -19,7 +22,9 @@ beforeEach(() => {
     "fetch",
     vi.fn((resource: unknown) =>
       String(resource).includes("posthog-chunk-ids")
-        ? new Promise<Response>(() => {})
+        ? new Promise<Response>((_resolve, reject) => {
+            abortManifest = () => reject(new TypeError("Failed to fetch"));
+          })
         : Promise.resolve(new Response('{"status":1}', { status: 200 })),
     ),
   );
@@ -100,6 +105,20 @@ describe("reports held for the chunk manifest when the page goes away", () => {
     // Registered after telemetry's own listener, so it runs right after it.
     window.addEventListener("pagehide", () => (beforeSdkUnload = [...beacons]), { capture: true });
 
+    window.dispatchEvent(new Event("pagehide"));
+
+    expect((await beaconedEvents(beforeSdkUnload)).sort()).toEqual(["$exception", "meet_join_attempt"]);
+  });
+
+  it("sends held reports by beacon when navigating away aborts the manifest fetch first", async () => {
+    await loadHeld();
+    let beforeSdkUnload: Beacon[] = [];
+    window.addEventListener("pagehide", () => (beforeSdkUnload = [...beacons]), { capture: true });
+
+    // A browser aborts the page's fetches as it navigates, and runs the
+    // rejection before telemetry's pagehide listener.
+    abortManifest();
+    await new Promise((resolve) => setTimeout(resolve, 0));
     window.dispatchEvent(new Event("pagehide"));
 
     expect((await beaconedEvents(beforeSdkUnload)).sort()).toEqual(["$exception", "meet_join_attempt"]);
