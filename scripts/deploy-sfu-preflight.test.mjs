@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 
 import {
@@ -129,7 +129,7 @@ test("deploy preflight and SFU startup agree on configured RTC ports", () => {
     ["42000", "41000"],
   ];
   const cases = [...valid, ...invalid];
-  const startup = execFileSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
+  const startup = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
     const results = [];
     for (const [index, [min, max]] of JSON.parse(process.argv[1]).entries()) {
       process.env.RTC_MIN_PORT = min;
@@ -147,7 +147,8 @@ test("deploy preflight and SFU startup agree on configured RTC ports", () => {
     env: { PATH: process.env.PATH, HOME: process.env.HOME, NODE_ENV: "test", SFU_SECRET: "rtc-validation-fixture" },
     encoding: "utf8",
   });
-  const startupResults = JSON.parse(startup.trim().split("\n").at(-1));
+  assert.equal(startup.status, 0, startup.error?.message ?? startup.stderr);
+  const startupResults = JSON.parse(startup.stdout.trim().split("\n").at(-1));
   assert.deepEqual(startupResults.slice(0, valid.length), valid.map(([min, max]) => [Number(min), Number(max)]));
   for (const [index, [min, max]] of cases.entries()) {
     const compose = makeCompose();

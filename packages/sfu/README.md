@@ -14,7 +14,9 @@ services, the server-authoritative game runtime, and transcript relays.
 ## To apply in production
 
 Leave `SFU_WORKER_COUNT` unset on the 2-vCPU production VM to use the derived
-count. Remove any existing `SFU_WORKER_COUNT=0` assignment before deploying.
+count. Unset it in the deploy shell and remove it from `.env` and
+`packages/sfu/.env`. Both `SFU_WORKER_COUNT=0` and blank assignments such as
+`SFU_WORKER_COUNT=` fail preflight and startup.
 Resize the VM before configuring a higher worker count, leaving headroom for
 signaling and colocated services. Compose assumes two SFU instances share the
 host. Set `SFU_WORKER_HOST_INSTANCES=3` on production when staging shares that VM.
@@ -47,11 +49,17 @@ the RTC ranges. [Linux IP sysctl reference](https://docs.kernel.org/networking/i
 
 Allow public UDP and TCP from `RTC_MIN_PORT` through `RTC_MIN_PORT + B - 1`.
 Allow plain RTP over UDP from `RTC_MIN_PORT + B` through `RTC_MAX_PORT` from
-authorized relay sources. With the default budget, public WebRTC uses 40000
-through 40003 for `sfu-a` and 41001 through 41004 for `sfu-b`. The relay ranges
-are 40004 through 41000 and 41005 through 42000. Resizing the VM can fill more
-slots within a budget. The maximum reachable worker count and the firewall
-split stay fixed unless the budget or RTC range changes.
+authorized relay sources. With the default budget, use these ranges:
+
+| Instance | Public UDP and TCP | Relay-source UDP |
+| --- | --- | --- |
+| `sfu-a` | 40000-40003 | 40004-41000 |
+| `sfu-b` | 41001-41004 | 41005-42000 |
+| Staging | 42001-42004 | 42005-42200 |
+
+Resizing the VM can fill more slots within a budget. The maximum reachable
+worker count and firewall split stay fixed unless the budget or RTC range
+changes.
 
 Keep the legacy UDP and TCP ranges open until calls on both old instances have
 drained and both instances have restarted. Update the firewall before changing
