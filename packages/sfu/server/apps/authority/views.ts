@@ -377,6 +377,72 @@ export class ViewTracker {
     return { ops, version: this.version };
   }
 
+  /**
+   * Whether this viewer's view is behind what has been committed: a change
+   * to it taken in and not yet told, a removal still owed, or a committed
+   * write not yet taken in that projects differently for them than what
+   * they hold. Only their own projections are read, so the answer says
+   * nothing of writes they cannot see. Nothing is taken in here: taking in
+   * one action's writes at a time could split a handoff of a key between
+   * two rows that the flush takes in together.
+   */
+  pendingFor(role: Role, subject: Subject): boolean {
+    const shared = this.roles.get(role);
+    const own = this.subjects.get(subject);
+    for (const audience of [shared, own]) {
+      for (const bucket of audience?.buckets.values() ?? []) {
+        if (bucket.untold.size > 0 || bucket.owed.size > 0) return true;
+      }
+    }
+    for (const [tableName, keys] of this.store.clearedRows) {
+      for (const [name] of this.viewsByTable.get(tableName) ?? []) {
+        for (const audience of [shared, own]) {
+          const bucket = audience?.buckets.get(name);
+          if (bucket && keys.some((key) => bucket.bySource.has(key))) return true;
+        }
+      }
+    }
+    for (const [tableName, keys] of this.store.dirtyRows) {
+      const views = this.viewsByTable.get(tableName);
+      if (!views) continue;
+      for (const key of keys) {
+        const row = this.store.get(tableName, key);
+        for (const [name, view] of views) {
+          if (view.kind === "shared") {
+            if (!shared) continue;
+            const projected = row
+              ? this.project(name, () => view.project(row, role, this.policy))
+              : null;
+            if (this.differs(shared, name, key, projected)) return true;
+            continue;
+          }
+          if (!own) continue;
+          const mine = row !== undefined && view.owner(row) === subject;
+          if (!mine && !own.buckets.get(name)?.bySource.has(key)) continue;
+          const projected = mine
+            ? this.project(name, () => view.project(row, this.policy))
+            : null;
+          if (this.differs(own, name, key, projected)) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /** Whether a source row projects for an audience otherwise than it holds. */
+  private differs(
+    audience: Audience,
+    name: string,
+    source: TableKey,
+    projected: { key: string; value: Json } | null,
+  ): boolean {
+    const bucket = audience.buckets.get(name);
+    const heldKey = bucket?.bySource.get(source);
+    if (!projected) return heldKey !== undefined;
+    if (heldKey !== projected.key) return true;
+    return bucket?.rows.get(heldKey)?.encoded !== JSON.stringify(projected.value);
+  }
+
   /** Whether removals from a large clear are still owed to this viewer's audiences. */
   owes(role: Role, subject: Subject): boolean {
     for (const audience of [this.roles.get(role), this.subjects.get(subject)]) {

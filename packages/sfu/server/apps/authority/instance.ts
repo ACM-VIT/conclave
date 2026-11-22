@@ -97,7 +97,6 @@ export class AuthorityInstance {
   readonly store: AuthorityStore;
   private readonly views: ViewTracker;
   private readonly receipts: ReceiptBook;
-  private actionsThatWrote = 0;
   private readonly rates: RateBuckets;
 
   constructor(
@@ -241,7 +240,6 @@ export class AuthorityInstance {
 
     let result: AuthorityResult<Json>;
     if (outcome.ok) {
-      if (outcome.changed) this.actionsThatWrote += 1;
       result = { ok: true, value: outcome.value as Json };
     } else if (outcome.kind === "rejected") {
       result = failure("rejected", { reason: outcome.reason });
@@ -356,12 +354,9 @@ export class AuthorityInstance {
     return changed;
   }
 
-  /**
-   * How many accepted actions changed something. It is for comparing
-   * before and after one action, here on the server, and never leaves it.
-   */
-  get writes(): number {
-    return this.actionsThatWrote;
+  /** Whether anything committed has yet to reach the actor's view. */
+  pendingFor(actor: Actor): boolean {
+    return this.views.pendingFor(actor.role, actor.subject);
   }
 
   /** Whether removals from a large clear are still owed to the actor's view. */

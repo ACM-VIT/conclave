@@ -69,9 +69,10 @@ export type AuthorityResult<T> =
       ok: true;
       value: T;
       /**
-       * On an action's answer, a replayed one included: the version of the
-       * actor's own view that shows the action. Once their frames reach it,
-       * the view reflects what they did.
+       * On an action's answer, a replayed one included: a version of the
+       * actor's own view that shows everything committed so far that changes
+       * it, the action included. Once their frames reach it, the view
+       * reflects what they did.
        */
       revision?: number;
     }
