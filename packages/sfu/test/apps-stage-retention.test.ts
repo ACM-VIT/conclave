@@ -109,6 +109,8 @@ const makeRoom = () => {
           awarenessUpdate: encodeAwarenessUpdate(awareness, [awareness.clientID]),
           clientId: awareness.clientID,
         }),
+      syncReply: (appId: string) =>
+        ask<unknown>("apps:yjs:sync", { appId, syncMessage: Y.encodeStateVector(new Y.Doc()) }),
       // What a client that joins (or returns to) the app now receives.
       coldSync: (appId: string) => {
         const response = ask<{ syncMessage?: Uint8Array; error?: string }>("apps:yjs:sync", {
@@ -528,14 +530,18 @@ describe("stage revision", () => {
     expect(answers.filter((answer) => answer.error)).toEqual([]);
   });
 
-  it("still limits repeated syncs of one stage", () => {
+  it("still limits repeated syncs of one stage, and says when to try again", () => {
     const { join } = makeRoom();
     const host = join("host#1", "host");
     const viewer = join("viewer#1", "participant");
     host.present("whiteboard");
-    const answers = Array.from({ length: 14 }, () => viewer.coldSync("whiteboard"));
+    const answers = Array.from({ length: 14 }, () => viewer.syncReply("whiteboard"));
 
-    expect(answers.at(-1)).toEqual({ error: "Too many app sync requests" });
+    expect(answers.at(-1)).toEqual({
+      error: "Too many app sync requests",
+      retryable: true,
+      retryAfterMs: 500,
+    });
   });
 
   it("starts a newly presented app unlocked", () => {

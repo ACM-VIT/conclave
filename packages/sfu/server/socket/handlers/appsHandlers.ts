@@ -12,6 +12,7 @@ import type {
   AppsStageErrorCode,
   AppsState,
   AppsSyncData,
+  AppsSyncError,
   AppsSyncResponse,
   AppsUpdateData,
 } from "../../../types.js";
@@ -111,6 +112,12 @@ const getRoomAppsState = (context: ConnectionContext): AppsState => {
   }
   return { ...context.currentRoom.apps.snapshot(), roomId: context.currentRoom.id };
 };
+
+const retryLater = (error: string, retryAfterMs: number): AppsSyncError => ({
+  error,
+  retryable: true,
+  retryAfterMs,
+});
 
 const INVALID_REVISION = Symbol("invalid revision");
 
@@ -273,7 +280,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
 
   socket.on(
     "apps:yjs:sync",
-    (data: AppsSyncData, callback: (response: AppsSyncResponse | { error: string }) => void) => {
+    (data: AppsSyncData, callback: (response: AppsSyncResponse | AppsSyncError) => void) => {
       if (!context.currentRoom) {
         respond(callback, { error: "Not in a room" });
         return;
@@ -287,7 +294,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       const stage = `${context.currentRoom.id}:${context.currentRoom.apps.stageRevision}`;
       const freeSync = doc !== null && stage !== lastFreeSyncStage;
       if (!freeSync && !takeToken(socket, "apps:yjs:sync", RATE_LIMITS.appsYjsSync)) {
-        respond(callback, { error: "Too many app sync requests" });
+        respond(callback, retryLater("Too many app sync requests", 500));
         return;
       }
       if (freeSync) lastFreeSyncStage = stage;
