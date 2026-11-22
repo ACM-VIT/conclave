@@ -22,6 +22,15 @@ struct CrashReportingTests {
     /// The store's clock, an hour after the fixed capture times below, so retention never depends on today's date.
     static let storeNow = 1_795_000_000_000.0 + 3_600_000.0
 
+    /// The compiled-class manifest the Android build would write for the classes these tests name.
+    static let compiledClasses: Set<String> = [
+        "conclave.module.WebRTCClient\tWebRTCClient+Android.kt", "conclave.module.MeetingViewModel\tMeetingViewModel.kt",
+    ]
+
+    init() {
+        CrashReportPrivacy.isCompiledAppClass = { Self.compiledClasses.contains($0) }
+    }
+
     static let context = CrashReportContext(installId: "install-1", platform: "android", appVersion: "2.0.0 (64)",
                                             osVersion: "Android 16 (API 36)", deviceClass: "phone")
 
@@ -46,9 +55,9 @@ struct CrashReportingTests {
             exceptions: [
                 CrashReportException(type: "java.lang.IllegalStateException", frames: [
                     CrashReportFrame(function: "startProducingAudio", module: "conclave.module.WebRTCClient",
-                                     filename: "WebRTCClient+Android.kt", line: 2140, inApp: true),
+                                     filename: "WebRTCClient+Android.kt", line: 2140, inApp: true, classFrame: true),
                     CrashReportFrame(function: "invokeSuspend", module: "conclave.module.MeetingViewModel",
-                                     filename: "MeetingViewModel.kt", line: 361, inApp: true),
+                                     filename: "MeetingViewModel.kt", line: 361, inApp: true, classFrame: true),
                 ]),
                 CrashReportException(type: "java.io.IOException", frames: []),
             ],
@@ -290,17 +299,43 @@ struct CrashReportingTests {
         #expect(CrashReportPrivacy.symbol("conclave.module.WebRTCClient$onProduce$1") == "conclave.module.WebRTCClient$onProduce$1")
     }
 
-    private func uncaughtObjectiveCCrash(atMillis: Double) -> DiagnosticsStoredPayload {
-        CrashCaptureRecord.payload(
-            exceptions: [CrashReportException(type: "NSInvalidArgumentException", frames: [
-                CrashReportFrame(function: "-[ConclaveRoom join]", module: "Conclave", filename: "", line: 0, inApp: true),
-            ])],
+    /// The raise site and its callers, as the dynamic linker names them: Conclave frames at these image offsets.
+    static let raiseStack = [0x1000, 0x2000]
+
+    private func uncaughtObjectiveCCrash(atMillis: Double, stack: [Int] = raiseStack) -> DiagnosticsStoredPayload {
+        var frames: [CrashReportFrame] = [
+            CrashReportFrame(function: "__exceptionPreprocess", module: "CoreFoundation", filename: "", line: 0, inApp: false,
+                             address: "0x51a8"),
+        ]
+        for offset in stack {
+            frames.append(CrashReportFrame(function: "-[ConclaveRoom join]", module: "Conclave", filename: "", line: 0,
+                                           inApp: true, address: "0x" + String(offset, radix: 16)))
+        }
+        return CrashCaptureRecord.payload(
+            exceptions: [CrashReportException(type: "NSInvalidArgumentException", frames: frames)],
             breadcrumbs: [], phase: "live", createdAtMillis: atMillis, appVersion: "2.0.0 (63)"
         )
     }
 
-    private func metricKitCrash(name: String, windowStart: Double, delivered: Double,
-                                build: String = "63") throws -> DiagnosticsStoredPayload {
+    /// MetricKit's crash stack: the terminate path in system frames, then the same app frames.
+    private func metricKitTree(_ stack: [Int]) throws -> String {
+        var frame: [String: Any]? = nil
+        for offset in stack.reversed() {
+            var next: [String: Any] = ["binaryName": "Conclave", "offsetIntoBinaryTextSegment": offset]
+            if let frame { next["subFrames"] = [frame] }
+            frame = next
+        }
+        for (binary, offset) in [("libc++abi.dylib", 0x9f10), ("libsystem_kernel.dylib", 0x1234)] {
+            var next: [String: Any] = ["binaryName": binary, "offsetIntoBinaryTextSegment": offset]
+            if let frame { next["subFrames"] = [frame] }
+            frame = next
+        }
+        let tree: [String: Any] = ["callStacks": [["threadAttributed": true, "callStackRootFrames": [frame ?? [:]]]]]
+        return String(decoding: try JSONSerialization.data(withJSONObject: tree), as: UTF8.self)
+    }
+
+    private func metricKitCrash(name: String, windowStart: Double, delivered: Double, build: String = "63",
+                                stack: [Int] = raiseStack) throws -> DiagnosticsStoredPayload {
         DiagnosticsPayloadFactory.payload(
             kind: .crash, createdAtMillis: delivered,
             fields: [
@@ -310,7 +345,7 @@ struct CrashReportingTests {
                 try #require(DiagnosticsPayloadFactory.text("appVersion", "2.0.0")),
                 try #require(DiagnosticsPayloadFactory.text("appBuild", build)),
             ],
-            detailJSON: "{}"
+            detailJSON: try metricKitTree(stack)
         )
     }
 
@@ -337,11 +372,93 @@ struct CrashReportingTests {
         ]
         let plan = CrashReportPlanner.plan(loaded, reported: [], projectKey: "phc_test", context: Self.context)
         #expect(try exceptionTypes(plan) == ["NSInvalidArgumentException"])
-        #expect(plan.skipped.isEmpty)
+        #expect(plan.skipped.isEmpty && plan.duplicates == ["payload-metrickit.json"])
 
         let alreadySent = CrashReportPlanner.plan(loaded, reported: ["payload-uncaught.json"], projectKey: "phc_test",
                                                   context: Self.context)
-        #expect(alreadySent.batches.isEmpty && alreadySent.skipped.isEmpty)
+        #expect(alreadySent.batches.isEmpty && alreadySent.skipped.isEmpty && alreadySent.duplicates == ["payload-metrickit.json"])
+    }
+
+    /// Two crashes can share the exception name, build and window; only the same app frames make one a repeat, and a
+    /// stack that cannot be compared never deletes anything.
+    @Test func aMetricKitCrashWithADifferentStackIsNotARepeat() async throws {
+        let crashAt = 1_795_000_000_000.0
+        let otherStack = CrashReportPlanner.plan([
+            DiagnosticsLoadedPayload(name: "payload-uncaught.json", byteCount: 10, payload: uncaughtObjectiveCCrash(atMillis: crashAt)),
+            DiagnosticsLoadedPayload(name: "payload-other.json", byteCount: 10,
+                                     payload: try metricKitCrash(name: "NSInvalidArgumentException", windowStart: crashAt - 3_600_000,
+                                                                 delivered: crashAt + 7_200_000, stack: [0x3000, 0x2000])),
+        ], reported: [], projectKey: "phc_test", context: Self.context)
+        #expect(try exceptionTypes(otherStack).count == 2 && otherStack.duplicates.isEmpty)
+
+        let noAppFrames = CrashReportPlanner.plan([
+            DiagnosticsLoadedPayload(name: "payload-uncaught.json", byteCount: 10, payload: uncaughtObjectiveCCrash(atMillis: crashAt,
+                                                                                                                    stack: [])),
+            DiagnosticsLoadedPayload(name: "payload-bare.json", byteCount: 10,
+                                     payload: try metricKitCrash(name: "NSInvalidArgumentException", windowStart: crashAt - 3_600_000,
+                                                                 delivered: crashAt + 7_200_000, stack: [])),
+        ], reported: [], projectKey: "phc_test", context: Self.context)
+        #expect(try exceptionTypes(noAppFrames).count == 2 && noAppFrames.duplicates.isEmpty)
+
+        let store = temporaryStore()
+        #expect(store.writePayload(uncaughtObjectiveCCrash(atMillis: crashAt)))
+        #expect(store.writePayload(try metricKitCrash(name: "NSInvalidArgumentException", windowStart: crashAt - 3_600_000,
+                                                      delivered: crashAt + 7_200_000, stack: [0x3000, 0x2000])))
+        #expect(await CrashReportUploader().upload(store: store, config: config(), context: Self.context,
+                                                   transport: RecordingTransport()) == 2)
+        #expect(store.loadPayloads().count == 2)
+    }
+
+    /// Java and Kotlin frames keep our own class and file only when the compiled app lists that exact pair; a system
+    /// class drops to its exact package, and anything else becomes `[path]` with function `?`.
+    @Test func classFramesKeepOnlyCompiledClassesAndExactSystemPackages() throws {
+        func scrub(_ module: String, _ filename: String, function: String = "start") -> CrashReportFrame {
+            CrashReportPrivacy.frame(CrashReportFrame(function: function, module: module, filename: filename, line: 7,
+                                                      inApp: module.hasPrefix("conclave."), classFrame: true))
+        }
+        let own = scrub("conclave.module.WebRTCClient", "WebRTCClient+Android.kt", function: "onProduce")
+        #expect(own.module == "conclave.module.WebRTCClient" && own.filename == "WebRTCClient+Android.kt" && own.function == "onProduce")
+        for (module, filename) in [("conclave.PrivateRoomCedar", "DeviceCedar.kt"), ("conclave.module.WebRTCClient", "DeviceCedar.kt"),
+                                   ("conclave.PrivateRoomCedar", "WebRTCClient+Android.kt"), ("skip.ui.Jane", "Jane.kt"),
+                                   ("conclave.module.WebRTCClient", ""), ("android.Jane.Smith", "Smith.java"),
+                                   ("com.google.DeviceCedar", "DeviceCedar.java"), ("Jane", "Jane.kt")] {
+            let frame = scrub(module, filename)
+            #expect(frame.module == "[path]" && frame.filename.isEmpty && frame.function == "?", "\(module) \(filename)")
+        }
+        let system = scrub("android.os.Handler$Callback", "Handler.java", function: "dispatchMessage")
+        #expect(system.module == "android.os" && system.filename.isEmpty && system.function == "dispatchMessage")
+
+        let trace = try JSONSerialization.data(withJSONObject: ["traceLines": [
+            "\"main\" prio=5 tid=1 Blocked", "at conclave.PrivateRoomCedar.start(DeviceCedar.kt:1)",
+            "at java.lang.Thread.run(Thread.java:1012)",
+        ]])
+        let text = try #require(CrashReportEventBuilder.event(for: exitRecord("anr", trace: String(decoding: trace, as: UTF8.self)),
+                                                               eventId: "id-1", context: Self.context))
+        #expect(!text.contains("Cedar") && !text.contains("PrivateRoom") && !text.contains("Thread.java"))
+        #expect(text.contains("java.lang"))
+    }
+
+    /// MetricKit names a binary by its image name; one that is not a known module never reaches the endpoint, even
+    /// when it looks like a Java package.
+    @Test func unknownMetricKitBinariesNeverUpload() throws {
+        let names = ["com.google.UserPrivate.dylib", "com.google.DeviceCedar.dylib", "conclave.Jane.dylib", "android.Jane Smith",
+                     "java.private.Notes", "Jane.framework", "libsystem_Jane.dylib"]
+        var frame: [String: Any] = ["binaryName": "Conclave", "offsetIntoBinaryTextSegment": 0x1000]
+        for name in names.reversed() {
+            frame = ["binaryName": name, "offsetIntoBinaryTextSegment": 0x10, "subFrames": [frame]]
+        }
+        let tree: [String: Any] = ["callStacks": [["threadAttributed": true, "callStackRootFrames": [frame]]]]
+        let hang = DiagnosticsPayloadFactory.payload(kind: .hang, createdAtMillis: 1_795_000_000_000,
+                                                     fields: [], detailJSON: String(decoding: try JSONSerialization.data(withJSONObject: tree),
+                                                                                    as: UTF8.self))
+        let text = try #require(CrashReportEventBuilder.event(for: hang, eventId: "id", context: Self.context))
+        for leaked in ["UserPrivate", "DeviceCedar", "Cedar", "Jane", "Smith", "private", "Notes", "com.google", "conclave.Jane"] {
+            #expect(!text.contains(leaked), "\(leaked)")
+        }
+        let frames = CrashReportEventBuilder.metricKitFrames(try #require(
+            try JSONSerialization.jsonObject(with: try JSONSerialization.data(withJSONObject: tree)) as? [String: Any]))
+        #expect(frames.prefix(names.count).allSatisfy { $0.module == "[path]" && $0.function == "[path] + 16" })
+        #expect(frames.last?.module == "Conclave")
     }
 
     /// A MetricKit crash from another build with the same exception inside the window is a different crash, and a
@@ -364,10 +481,9 @@ struct CrashReportingTests {
         let transport = RecordingTransport()
         #expect(await CrashReportUploader().upload(store: store, config: config(), context: Self.context,
                                                    transport: transport) == 1)
-        let reported = CrashReportLedger(store: store).reportedNames()
-        #expect(reported.count == 1)
-        let repeatName = store.loadPayloads().first { CrashReportEventBuilder.numberField($0.payload, "uncaught") == 0.0 }?.name
-        #expect(repeatName != nil && !reported.contains(repeatName ?? ""))
+        let remaining = store.loadPayloads()
+        #expect(remaining.count == 1 && CrashReportEventBuilder.numberField(remaining[0].payload, "uncaught") == 1.0)
+        #expect(CrashReportLedger(store: store).reportedNames() == [remaining[0].name])
     }
 
     @Test func aDifferentOrLaterMetricKitCrashStillUploads() throws {
@@ -384,6 +500,60 @@ struct CrashReportingTests {
         let plan = CrashReportPlanner.plan(loaded, reported: [], projectKey: "phc_test", context: Self.context)
         #expect(try exceptionTypes(plan).count == 3)
         #expect(plan.skipped.isEmpty)
+    }
+
+    final class TestClock: @unchecked Sendable {
+        var now: Double
+        init(now: Double) { self.now = now }
+    }
+
+    /// Dedupe has to outlive the original: once the uncaught record expires and is pruned, its MetricKit repeat must
+    /// still not upload as a second crash.
+    @Test func aDeduplicatedRepeatNeverUploadsAfterItsOriginalExpires() async throws {
+        let crashAt = 1_795_000_000_000.0
+        let clock = TestClock(now: crashAt + 3 * 3_600_000)
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("crash-" + UUID().uuidString, isDirectory: true)
+        let store = DiagnosticsFileStore(directoryPath: base.appendingPathComponent("store").path,
+                                         exportDirectoryPath: base.appendingPathComponent("exports").path,
+                                         wallClock: { clock.now })
+        #expect(store.writePayload(uncaughtObjectiveCCrash(atMillis: crashAt)))
+        #expect(store.writePayload(try metricKitCrash(name: "NSInvalidArgumentException", windowStart: crashAt - 3_600_000,
+                                                      delivered: crashAt + 7_200_000)))
+        let uploader = CrashReportUploader()
+        let transport = RecordingTransport()
+        #expect(await uploader.upload(store: store, config: config(), context: Self.context, transport: transport) == 1)
+
+        clock.now = crashAt + 7.0 * 24.0 * 3_600_000 + 3_600_000
+        store.prune(nowMillis: clock.now)
+        #expect(await uploader.upload(store: store, config: config(), context: Self.context, transport: transport) == 0)
+        #expect(transport.bodies.count == 1)
+    }
+
+    /// MetricKit can deliver a week or more later. Once the original was sent and pruned, a matching copy that arrives
+    /// afterwards is still recognized from the sent-signature ledger, deleted, and never sent.
+    @Test func aMetricKitCopyArrivingAfterItsOriginalWasPrunedNeverUploads() async throws {
+        let crashAt = 1_795_000_000_000.0
+        let clock = TestClock(now: crashAt + 3_600_000)
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("crash-" + UUID().uuidString, isDirectory: true)
+        let store = DiagnosticsFileStore(directoryPath: base.appendingPathComponent("store").path,
+                                         exportDirectoryPath: base.appendingPathComponent("exports").path,
+                                         wallClock: { clock.now })
+        #expect(store.writePayload(uncaughtObjectiveCCrash(atMillis: crashAt)))
+        let uploader = CrashReportUploader()
+        let transport = RecordingTransport()
+        #expect(await uploader.upload(store: store, config: config(), context: Self.context, transport: transport) == 1)
+
+        clock.now = crashAt + 7.0 * 24.0 * 3_600_000 + 3_600_000
+        store.prune(nowMillis: clock.now)
+        #expect(store.loadPayloads().isEmpty)
+        #expect(store.writePayload(try metricKitCrash(name: "NSInvalidArgumentException", windowStart: crashAt - 3_600_000,
+                                                      delivered: clock.now)))
+        #expect(await uploader.upload(store: store, config: config(), context: Self.context, transport: transport) == 0)
+        #expect(transport.bodies.count == 1)
+        #expect(store.loadPayloads().isEmpty)
+
+        clock.now = crashAt + 31.0 * 24.0 * 3_600_000
+        #expect(CrashSignatureLedger(store: store).entries().isEmpty)
     }
 
     @Test func aReportNamesTheReleaseThatCrashedNotTheOneUploading() throws {
@@ -448,16 +618,15 @@ struct CrashReportingTests {
         #expect(CrashReportPrivacy.symbol("native: Users/Jane.Doe Smith") == "[path]")
         #expect(CrashReportPrivacy.symbol("native: /Users/Jane.so Smith") == "native: [path]")
         #expect(CrashReportPrivacy.symbol("native: /data/x/libc.so Smith") == "native: libc.so")
-        for name in ["Jane.so", "Jane.Doe", "Jane.so Smith", "/data/user/0/com.acmvit.conclave/libc.so", "libsystem_../x.dylib"] {
-            #expect(CrashReportPrivacy.moduleName(name) == "[path]", "\(name)")
+        for name in ["Jane.so", "Jane.Doe", "Jane.so Smith", "/data/user/0/com.acmvit.conclave/libc.so", "libsystem_../x.dylib",
+                     "com.google.UserPrivate.dylib", "conclave.module.WebRTCClient"] {
+            #expect(CrashReportPrivacy.binaryName(name) == "[path]", "\(name)")
         }
         for name in ["libc.so", "libmediasoupclient_so.so", "Conclave", "UIKitCore", "libsystem_pthread.dylib",
-                     "libswift_Concurrency.dylib", "conclave.module.WebRTCClient", "kotlinx.coroutines.BlockingCoroutine"] {
-            #expect(CrashReportPrivacy.moduleName(name) == name, "\(name)")
+                     "libswift_Concurrency.dylib"] {
+            #expect(CrashReportPrivacy.binaryName(name) == name, "\(name)")
         }
-        #expect(CrashReportPrivacy.fileName("Builders.common.kt") == "Builders.common.kt")
-        #expect(CrashReportPrivacy.fileName("Native Method") == "Native Method")
-        #expect(CrashReportPrivacy.fileName("Jane Doe") == "[path]")
+        #expect(CrashReportPrivacy.binaryName("Jane Doe") == "[path]")
 
         let folder = try #require(CrashReportEventBuilder.traceFrame("native: #01 pc 0002 /Users/Jane.so Smith (Jane+4)"))
         #expect(folder.function == "?" && folder.module == "[path]")
@@ -492,8 +661,8 @@ struct CrashReportingTests {
         let exception = try #require((properties["$exception_list"] as? [[String: Any]])?.first)
         let frames = try #require((exception["stacktrace"] as? [String: Any])?["frames"] as? [[String: Any]])
         #expect(frames.map { $0["function"] as? String } == ["?", "?", "?"])
-        #expect(frames.map { $0["module"] as? String } == ["[path]", "conclave.Camera", "conclave.Camera"])
-        #expect(frames[1]["filename"] as? String == "[path]" && frames[2]["filename"] as? String == "[path]")
+        #expect(frames.map { $0["module"] as? String } == ["[path]", "[path]", "[path]"])
+        #expect(frames.allSatisfy { $0["filename"] == nil })
     }
 
     /// A mapping can end in a parenthesized name, so a trailing group is never uploaded as the frame's function.
@@ -515,11 +684,11 @@ struct CrashReportingTests {
 
     @Test func onlyExactSdkNamesPassForSwiftAndSystemLibraries() {
         for name in ["libswiftReviewFixture.dylib", "libsystem_Jane.dylib", "libswift.dylib", "libsystem_.dylib"] {
-            #expect(CrashReportPrivacy.moduleName(name) == "[path]", "\(name)")
+            #expect(CrashReportPrivacy.binaryName(name) == "[path]", "\(name)")
             #expect(CrashReportPrivacy.moduleNameFromPath("/usr/lib/swift/" + name) == "[path]", "\(name)")
         }
         for name in ["libswiftCore.dylib", "libswift_Concurrency.dylib", "libsystem_kernel.dylib", "libsystem_pthread.dylib"] {
-            #expect(CrashReportPrivacy.moduleName(name) == name, "\(name)")
+            #expect(CrashReportPrivacy.binaryName(name) == name, "\(name)")
         }
     }
 

@@ -1,4 +1,6 @@
+import java.io.DataInputStream
 import java.util.Properties
+import java.util.zip.ZipFile
 
 val skipEnvValues: Map<String, String> = rootDir.parentFile
     .resolve("Skip.env")
@@ -188,6 +190,108 @@ android {
             manifestPlaceholders["SFU_JOIN_URL"] = productionSfuJoinUrl
             manifestPlaceholders["USES_CLEARTEXT_TRAFFIC"] = "false"
         }
+    }
+}
+
+/**
+ * Writes `crash-code-frames.tsv` into the APK's assets: every class the app compiles under `conclave/` and `skip/`, with
+ * the source file its class file names (`class<TAB>file`). Crash reports keep one of our Java or Kotlin frames only
+ * when its class and file are listed, so a parsed frame can never carry an arbitrary name.
+ */
+abstract class CrashCodeManifestTask : DefaultTask() {
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val classJars: ListProperty<RegularFile>
+
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val classDirectories: ListProperty<Directory>
+
+    @get:OutputDirectory
+    abstract val outputDirectory: DirectoryProperty
+
+    @TaskAction
+    fun write() {
+        val entries = sortedSetOf<String>()
+        fun add(path: String, bytes: () -> ByteArray) {
+            if (!path.endsWith(".class") || OWN_PREFIXES.none { path.startsWith(it) }) return
+            val source = sourceFile(bytes()) ?: return
+            entries.add(path.removeSuffix(".class").replace('/', '.') + "\t" + source)
+        }
+        for (jar in classJars.get()) {
+            ZipFile(jar.asFile).use { zip ->
+                for (entry in zip.entries()) {
+                    if (!entry.isDirectory) add(entry.name) { zip.getInputStream(entry).use { it.readBytes() } }
+                }
+            }
+        }
+        for (directory in classDirectories.get()) {
+            val root = directory.asFile
+            root.walkTopDown().filter { it.isFile }.forEach { file ->
+                add(file.relativeTo(root).invariantSeparatorsPath) { file.readBytes() }
+            }
+        }
+        val output = outputDirectory.get().asFile
+        output.mkdirs()
+        output.resolve("crash-code-frames.tsv").writeText(entries.joinToString("\n", postfix = "\n"))
+    }
+
+    /** The class file's `SourceFile` attribute, or null when it has none or is not a class file. */
+    private fun sourceFile(bytes: ByteArray): String? {
+        val input = DataInputStream(bytes.inputStream())
+        if (input.readInt() != 0xCAFEBABE.toInt()) return null
+        input.skipBytes(4)
+        val constantCount = input.readUnsignedShort()
+        val utf8 = arrayOfNulls<String>(constantCount)
+        var index = 1
+        while (index < constantCount) {
+            when (input.readUnsignedByte()) {
+                1 -> utf8[index] = input.readUTF()
+                3, 4, 9, 10, 11, 12, 17, 18 -> input.skipBytes(4)
+                5, 6 -> { input.skipBytes(8); index += 1 }
+                7, 8, 16, 19, 20 -> input.skipBytes(2)
+                15 -> input.skipBytes(3)
+                else -> return null
+            }
+            index += 1
+        }
+        input.skipBytes(6)
+        input.skipBytes(2 * input.readUnsignedShort())
+        repeat(2) {
+            repeat(input.readUnsignedShort()) {
+                input.skipBytes(6)
+                repeat(input.readUnsignedShort()) {
+                    input.skipBytes(2)
+                    input.skipBytes(input.readInt())
+                }
+            }
+        }
+        repeat(input.readUnsignedShort()) {
+            val name = utf8.getOrNull(input.readUnsignedShort())
+            val length = input.readInt()
+            if (name == "SourceFile" && length == 2) return utf8.getOrNull(input.readUnsignedShort())
+            input.skipBytes(length)
+        }
+        return null
+    }
+
+    companion object {
+        val OWN_PREFIXES = listOf("conclave/", "skip/")
+    }
+}
+
+androidComponents {
+    onVariants { variant ->
+        val name = variant.name.replaceFirstChar { it.uppercase() }
+        val manifest = tasks.register<CrashCodeManifestTask>("generate${name}CrashCodeManifest")
+        variant.artifacts.forScope(com.android.build.api.variant.ScopedArtifacts.Scope.ALL)
+            .use(manifest)
+            .toGet(
+                com.android.build.api.artifact.ScopedArtifact.CLASSES,
+                CrashCodeManifestTask::classJars,
+                CrashCodeManifestTask::classDirectories,
+            )
+        variant.sources.assets?.addGeneratedSourceDirectory(manifest, CrashCodeManifestTask::outputDirectory)
     }
 }
 
