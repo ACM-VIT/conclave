@@ -1394,6 +1394,82 @@ describe("an invited attendee a host removed, once that meeting is over", () => 
   });
 });
 
+describe("a meeting whose last participant leaves while someone is still knocking", () => {
+  const statusesShownTo = (member: Awaited<ReturnType<typeof join>>): string[] =>
+    member.peer.emit.mock.calls
+      .filter(([event]) => event === "waitingRoomStatus")
+      .map(([, sent]) => (sent as { message: string }).message);
+  // A host removes an invitee and a guest knocks. Then everyone in the
+  // meeting leaves; the guest is still waiting.
+  const everyoneLeftButTheKnocker = async () => {
+    vi.useFakeTimers({
+      toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
+    const state = makeState();
+    schedule(state);
+    const created = await join(state, host);
+    const invited = await join(state, invitee);
+    expect(invited.status).toBe("joined");
+    await send(created.peer, "kickUser", { userId: "invitee@example.com#i" });
+    const knocking = await join(state, knocker);
+    expect(knocking.status).toBe("waiting");
+    await hangUp(invited.peer);
+    await hangUp(created.peer);
+    vi.advanceTimersByTime(10 * MINUTE_MS);
+    return { state, knocking, pass: created.response.roomRecoveryPass };
+  };
+
+  it("is over: the invitee the host removed joins the next meeting directly", async () => {
+    const { state } = await everyoneLeftButTheKnocker();
+    await join(state, host);
+    expect((await join(state, invitee)).status).toBe("joined");
+  });
+
+  it("is over after a restart too", async () => {
+    const { state } = await everyoneLeftButTheKnocker();
+    const after = await restart(state);
+    await join(after, host);
+    expect((await join(after, invitee)).status).toBe("joined");
+  });
+
+  it("takes nobody back on a pass from it", async () => {
+    const { state, pass } = await everyoneLeftButTheKnocker();
+    await join(state, { ...knocker, userId: "guest-opener", sessionId: "op", allowRoomCreation: true });
+    expect((await join(state, host, { roomRecoveryPass: pass })).status).toBe("waiting");
+  });
+
+  it("tells the knocker it ended, keeps them waiting, and shows them to the next meeting's host", async () => {
+    const { state, knocking } = await everyoneLeftButTheKnocker();
+    expect(statusesShownTo(knocking).at(-1)).toMatch(/ended/i);
+    expect(statusesShownTo(knocking).at(-1)).toMatch(/no one to let you in/i);
+
+    const reopened = await join(state, host);
+    expect(knocksShownTo(reopened)).toEqual(["guest-knocker"]);
+    expect(statusesShownTo(knocking).at(-1)).toMatch(/host is available/i);
+    expect(await send(reopened.peer, "admitUser", { userId: "guest-knocker" })).toEqual({
+      success: true,
+    });
+    expect(knocking.peer.emit).toHaveBeenCalledWith("joinApproved", expect.anything());
+    expect((await join(state, knocker)).status).toBe("joined");
+  });
+
+  it("does not show the next meeting's host a knocker who gave up in between", async () => {
+    const { state, knocking } = await everyoneLeftButTheKnocker();
+    await hangUp(knocking.peer);
+    const reopened = await join(state, host);
+    expect(knocksShownTo(reopened)).toEqual([]);
+  });
+
+  it("does not show the next meeting's host a knocker who asked again and was turned away", async () => {
+    const { state, knocking } = await everyoneLeftButTheKnocker();
+    await knocking.peer.handlers.get("joinRoom")!(
+      ...([{ roomId: "abc-mnop-xyz", sessionId: knocker.sessionId }, vi.fn()] as never[]),
+    );
+    const reopened = await join(state, host);
+    expect(knocksShownTo(reopened)).toEqual([]);
+  });
+});
+
 describe("an invited attendee removed on one SFU", () => {
   it("still has to be let in again on the SFU the meeting fails over to", async () => {
     // Both SFUs use one schedule store. B loaded the meeting when it started,

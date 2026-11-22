@@ -23,6 +23,7 @@ import {
   clearEndedRoom,
   getEndedRoom,
   getOrCreateRoomWithOrigin,
+  leaveNextMeetingLobby,
   renewLocalRoom,
   getRoomChannelId,
 } from "../../rooms.js";
@@ -103,6 +104,16 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
       callback: (response: JoinRoomResponse | JoinRoomErrorResponse) => void,
     ) => {
       try {
+        // Asking again, whatever comes of it, ends waiting for the next
+        // meeting where this socket was knocking.
+        if (context.pendingRoomChannelId && context.pendingUserKey) {
+          leaveNextMeetingLobby(
+            state,
+            context.pendingRoomChannelId,
+            context.pendingUserKey,
+            socket.id,
+          );
+        }
         const requestedRoomId = normalizeIdentifier(
           data?.roomId,
           MAX_ROOM_ID_LENGTH,
@@ -1055,6 +1066,15 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             users: pendingUsers,
             roomId: context.currentRoom.id,
           });
+          // Those waiting in a room this join opened were waiting for it.
+          if (createdRoom) {
+            for (const pending of context.currentRoom.pendingClients.values()) {
+              pending.socket.emit("waitingRoomStatus", {
+                message: "A host is available to let you in.",
+                roomId: context.currentRoom.id,
+              });
+            }
+          }
         }
 
         const resolvedDisplayName =

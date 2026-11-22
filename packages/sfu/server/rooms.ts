@@ -1,4 +1,4 @@
-import { Room } from "../config/classes/Room.js";
+import { Room, type WaitingGuest } from "../config/classes/Room.js";
 import { config } from "../config/config.js";
 import getWorker, { type WorkerLoad } from "../utilities/getWorker.js";
 import { getWorkerWebRtcServer } from "../utilities/createWorkers.js";
@@ -107,6 +107,43 @@ const noteMeetingOver = (
   ).catch((error) => {
     Logger.warn(`Failed to persist the end of the removals from ${room.id}`, error);
   });
+};
+
+// What someone still knocking is told when the meeting they knock on ends.
+// Older apps match "no one to let you in".
+const MEETING_ENDED_WHILE_WAITING =
+  "The meeting ended when everyone left. No one to let you in until it starts again.";
+
+// The people knocking on a meeting that ended wait for the next one at the
+// code, out of the room that has gone.
+const waitForNextMeeting = (
+  state: SfuState,
+  room: Pick<Room, "channelId" | "id">,
+  waiting: WaitingGuest[],
+): void => {
+  if (waiting.length === 0) return;
+  const lobby = state.nextMeetingLobbies.get(room.channelId) ?? new Map<string, WaitingGuest>();
+  for (const guest of waiting) {
+    lobby.set(guest.userKey, guest);
+    guest.socket.emit("waitingRoomStatus", {
+      message: MEETING_ENDED_WHILE_WAITING,
+      roomId: room.id,
+    });
+  }
+  state.nextMeetingLobbies.set(room.channelId, lobby);
+};
+
+// Someone waiting for the next meeting stops: they left, or asked again.
+export const leaveNextMeetingLobby = (
+  state: SfuState,
+  channelId: string,
+  userKey: string,
+  socketId: string,
+): void => {
+  const lobby = state.nextMeetingLobbies.get(channelId);
+  if (lobby?.get(userKey)?.socket.id !== socketId) return;
+  lobby.delete(userKey);
+  if (lobby.size === 0) state.nextMeetingLobbies.delete(channelId);
 };
 
 // A change to who hosts, or to who has to be let in again, goes to the
@@ -285,6 +322,10 @@ export const getOrCreateRoomWithOrigin = async (
       });
       createdRoom.recoveryPassesVoidUntil = record.passesVoidUntil;
       createdRoom.takesOverRecordOf = record.lastWriter;
+      for (const guest of state.nextMeetingLobbies.get(channelId)?.values() ?? []) {
+        createdRoom.pendingClients.set(guest.userKey, guest);
+      }
+      state.nextMeetingLobbies.delete(channelId);
       bindScheduledInvitations(state, createdRoom);
       recordRecoverableChanges(state, createdRoom);
       state.rooms.set(channelId, createdRoom);
@@ -384,6 +425,7 @@ export const cleanupRoom = (state: SfuState, channelId: string): boolean => {
     return false;
   }
 
+  const waiting = [...room.pendingClients.values()];
   const closedRoom = cleanupRoomState(state, channelId);
   if (!closedRoom) {
     return false;
@@ -392,6 +434,10 @@ export const cleanupRoom = (state: SfuState, channelId: string): boolean => {
   // for a lost call, or one a host ended, which was over already.
   if (closedRoom.recordsItsCall) {
     noteMeetingOver(state, closedRoom);
+  }
+  // Those knocking on a meeting a host ended were told so, and are let go.
+  if (!closedRoom.hasEnded) {
+    waitForNextMeeting(state, closedRoom, waiting);
   }
 
   Logger.info(`Closed empty room: ${closedRoom.id} (${closedRoom.clientId})`);

@@ -52,6 +52,14 @@ import {
   type WebcamReceiverCapacityTransitionReservation,
 } from "../../server/webcamReceiverCapacityProof.js";
 
+// Someone asking to be let in.
+export type WaitingGuest = {
+  userKey: string;
+  userId: string;
+  socket: Socket;
+  displayName?: string;
+};
+
 export interface RoomOptions {
   id: string;
   router: Router;
@@ -254,10 +262,7 @@ export class Room {
   // signed up to then are from the ended meeting, not from this one.
   public recoveryPassesVoidUntil: number | null = null;
   public clients: Map<string, Client> = new Map();
-  public pendingClients: Map<
-    string,
-    { userKey: string; userId: string; socket: Socket; displayName?: string }
-  > = new Map();
+  public pendingClients: Map<string, WaitingGuest> = new Map();
   public pendingDisconnects: Map<
     string,
     {
@@ -1751,8 +1756,10 @@ export class Room {
     return this.router.canConsume({ producerId, rtpCapabilities });
   }
 
+  // No one is in the meeting. Those waiting to be let in are not in it, so
+  // they keep no meeting going; they wait for the next one at the code.
   isEmpty(): boolean {
-    return this.clients.size === 0 && this.pendingClients.size === 0;
+    return this.clients.size === 0;
   }
 
   get isLocked(): boolean {

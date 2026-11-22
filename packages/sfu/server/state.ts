@@ -1,6 +1,6 @@
 import type { Worker } from "mediasoup/types";
 import { config } from "../config/config.js";
-import { Room } from "../config/classes/Room.js";
+import { Room, type WaitingGuest } from "../config/classes/Room.js";
 import type { WebinarLinkTarget, WebinarRoomConfig } from "./webinar.js";
 import {
   createScheduledWebinarStore,
@@ -41,6 +41,9 @@ export type SfuState = {
   workers: Worker[];
   rooms: Map<string, Room>;
   roomCreations: Map<string, Promise<Room>>;
+  // By channel: who was still knocking when the meeting there ended. The
+  // next meeting at the code shows them to its hosts.
+  nextMeetingLobbies: Map<string, Map<string, WaitingGuest>>;
   workerRoomReservations: Map<number, number>;
   endedRooms: Map<string, EndedRoom>;
   webinarConfigs: Map<string, WebinarRoomConfig>;
@@ -69,6 +72,7 @@ export const createSfuState = (options?: {
     workers: [],
     rooms: new Map(),
     roomCreations: new Map(),
+    nextMeetingLobbies: new Map(),
     workerRoomReservations: new Map(),
     endedRooms: new Map(),
     webinarConfigs: new Map(),

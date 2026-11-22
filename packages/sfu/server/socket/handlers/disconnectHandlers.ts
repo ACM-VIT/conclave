@@ -3,7 +3,7 @@ import type { Room } from "../../../config/classes/Room.js";
 import { config } from "../../../config/config.js";
 import type { AppsAwarenessData } from "../../../types.js";
 import { Logger } from "../../../utilities/loggers.js";
-import { cleanupRoom } from "../../rooms.js";
+import { cleanupRoom, leaveNextMeetingLobby } from "../../rooms.js";
 import {
   emitWebinarAttendeeCountChanged,
   emitWebinarFeedChanged,
@@ -251,8 +251,14 @@ export const registerDisconnectHandlers = (
 
     // A socket can wait for one room while still seated in another (an
     // in-place room switch), so drop its waiting-room entry either way;
-    // otherwise the dead entry keeps that room from ever counting as empty.
+    // otherwise hosts are shown a knock no one is behind.
     if (context.pendingRoomChannelId && context.pendingUserKey) {
+      leaveNextMeetingLobby(
+        state,
+        context.pendingRoomChannelId,
+        context.pendingUserKey,
+        socket.id,
+      );
       const pendingRoom = state.rooms.get(context.pendingRoomChannelId);
       if (pendingRoom) {
         const pending = pendingRoom.pendingClients.get(context.pendingUserKey);
