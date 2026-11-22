@@ -5,6 +5,7 @@ import type {
   WebinarQaModerateRequest,
 } from "../../../types.js";
 import { forceRemoveClientNow } from "../../admin/controlPlane.js";
+import { decisionRecordFull } from "../../admin/moderation.js";
 import { getOrCreateWebinarRoomConfig } from "../../webinar.js";
 import {
   emitWebinarHandQueueChanged,
@@ -372,7 +373,10 @@ export const registerWebinarInteractionHandlers = (
           return;
         }
 
-        guard.room.promoteWebinarUserKey(targetUserKey);
+        if (!guard.room.promoteWebinarUserKey(targetUserKey)) {
+          respond(callback, decisionRecordFull("invite"));
+          return;
+        }
         if (guard.room.setWebinarHandRaised(targetUserId, false)) {
           emitWebinarHandQueueChanged(guard.room);
         }

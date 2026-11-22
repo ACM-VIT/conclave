@@ -66,7 +66,7 @@ export class AdmissionLedger {
 
   /**
    * Records an admission. Returns false when it could not be kept: the
-   * ledger is full of refusals, and the guest has to knock again.
+   * ledger is full of refusals, and nothing changed.
    */
   admit(
     principal: string,
@@ -75,25 +75,68 @@ export class AdmissionLedger {
     at: number,
     options: { answersRequest?: boolean; expiresAt?: number } = {},
   ): boolean {
-    const record = this.touch(principal, { refusal: false });
-    if (!record) {
+    return this.admitAll(
+      [{ principal, userKey, scopes, expiresAt: options.expiresAt }],
+      at,
+      { answersRequest: options.answersRequest },
+    );
+  }
+
+  /**
+   * Records the admissions of one host action, all of them or none. When
+   * the ledger has no room for the records they need (it would have to
+   * drop a refusal, or one of these records), nothing changes and this
+   * returns false.
+   */
+  admitAll(
+    grants: ReadonlyArray<{
+      principal: string;
+      userKey: string;
+      scopes: readonly AdmissionScope[];
+      expiresAt?: number;
+    }>,
+    at: number,
+    options: { answersRequest?: boolean } = {},
+  ): boolean {
+    const principals = new Set(grants.map((grant) => grant.principal));
+    if (!this.hasRoomFor(principals)) {
       this.hooks.onFull?.();
       return false;
     }
-    for (const scope of scopes) {
-      const current = record.marks[scope];
-      const stillAdmitted = current?.admitted && this.counts(scope, current);
-      record.marks[scope] = {
-        admitted: true,
-        at,
-        userKeys: stillAdmitted
-          ? [...new Set([...current.userKeys, userKey])]
-          : [userKey],
-        ...(options.expiresAt !== undefined ? { expiresAt: options.expiresAt } : {}),
-      };
+    for (const grant of grants) {
+      const record = this.touch(grant.principal, { refusal: false, keep: principals })!;
+      for (const scope of grant.scopes) {
+        const current = record.marks[scope];
+        const stillAdmitted = current?.admitted && this.counts(scope, current);
+        record.marks[scope] = {
+          admitted: true,
+          at,
+          userKeys: stillAdmitted
+            ? [...new Set([...current.userKeys, grant.userKey])]
+            : [grant.userKey],
+          ...(grant.expiresAt !== undefined ? { expiresAt: grant.expiresAt } : {}),
+        };
+      }
+      if (options.answersRequest !== false) record.answer = { admitted: true, at };
     }
-    if (options.answersRequest !== false) record.answer = { admitted: true, at };
     return true;
+  }
+
+  // Whether records for all of `principals` fit, counting the records that
+  // could be dropped for them: never a refusal, and never one of theirs.
+  private hasRoomFor(principals: ReadonlySet<string>): boolean {
+    let missing = 0;
+    for (const principal of principals) {
+      if (!this.records.has(principal)) missing += 1;
+    }
+    let free = this.maxPrincipals - this.records.size;
+    if (missing <= free) return true;
+    for (const [principal, record] of this.records) {
+      if (principals.has(principal) || holdsRefusal(record)) continue;
+      free += 1;
+      if (missing <= free) return true;
+    }
+    return false;
   }
 
   /** A host turned a request away. It also ends any admission. */
@@ -278,7 +321,7 @@ export class AdmissionLedger {
    */
   private touch(
     principal: string,
-    options: { refusal: boolean },
+    options: { refusal: boolean; keep?: ReadonlySet<string> },
   ): PrincipalRecord | undefined {
     const existing = this.records.get(principal);
     if (existing) {
@@ -286,7 +329,7 @@ export class AdmissionLedger {
       this.records.set(principal, existing);
       return existing;
     }
-    if (this.records.size >= this.maxPrincipals && !this.evictOne()) {
+    if (this.records.size >= this.maxPrincipals && !this.evictOne(options.keep)) {
       if (!options.refusal) return undefined;
     }
     const record: PrincipalRecord = { marks: {} };
@@ -294,9 +337,9 @@ export class AdmissionLedger {
     return record;
   }
 
-  private evictOne(): boolean {
+  private evictOne(keep?: ReadonlySet<string>): boolean {
     for (const [principal, record] of this.records) {
-      if (holdsRefusal(record)) continue;
+      if (holdsRefusal(record) || keep?.has(principal)) continue;
       this.records.delete(principal);
       const named = SCOPES.flatMap((scope) => record.marks[scope]?.userKeys ?? []);
       if (named.length > 0) this.hooks.onEvicted?.([...new Set(named)]);

@@ -1,3 +1,5 @@
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Router, Worker } from "mediasoup/types";
 import type { Server as SocketIOServer, Socket } from "socket.io";
@@ -15,6 +17,7 @@ import {
 import type { Room } from "../config/classes/Room.js";
 import { config as sfuConfig } from "../config/config.js";
 import { Logger } from "../utilities/loggers.js";
+import { createSfuApp } from "../server/http/createApp.js";
 import { LocalRoomRegistry } from "../server/roomRegistry.js";
 import type { SfuAuthPayload } from "../server/socket/auth.js";
 import { createConnectionContext } from "../server/socket/context.js";
@@ -2118,7 +2121,7 @@ describe("a host's answer to a guest whose tabs the room has not linked yet", ()
     });
   });
 
-  it("fails closed when the record holds only refusals: an admission is not kept, and it is logged", async () => {
+  it("fails closed when the record holds only refusals: the host is told, nothing changes, and the request still waits (Astra)", async () => {
     await withDecisionRecordLimit(2, async () => {
       const warn = vi.spyOn(Logger, "warn");
       const { state, room, host, first } = await bothKnock();
@@ -2126,11 +2129,18 @@ describe("a host's answer to a guest whose tabs the room has not linked yet", ()
       await hostAsks(host, "rejectUser", { userId: tabB.userId });
       const third = await join(state, otherGuest(0));
 
-      await hostAsks(host, "admitUser", { userId: otherGuest(0).userId });
+      const answer = await hostAsks(host, "admitUser", { userId: otherGuest(0).userId });
       const back = await join(state, otherGuest(0));
 
-      expect(third.peer.emit).toHaveBeenCalledWith(...approved);
+      expect(answer).toHaveBeenCalledWith({
+        success: false,
+        code: "DECISION_RECORD_FULL",
+        error: "Couldn't admit: this meeting has reached its limit of host decisions.",
+      });
+      expect(third.peer.emit).not.toHaveBeenCalledWith(...approved);
       expect(back.ack).toHaveBeenCalledWith(waiting);
+      expect([...room.pendingClients.keys()]).toContain(otherGuest(0).userId);
+      expect(screenOf(host)).toContain(otherGuest(0).userId);
       expect(warn).toHaveBeenCalledWith(expect.stringContaining("full of refusals"));
       expect(first.peer.emit).toHaveBeenCalledWith(...turnedAway);
       expect(room.isLockedAllowed(tabA.userId, tabA.guestProof)).toBe(false);
@@ -2605,7 +2615,7 @@ describe("the room's last co-host, blocked through a pass link", () => {
 });
 
 describe("what a refused join leaves behind", () => {
-  const guestOf = (name: string, extra: Partial<SfuAuthPayload> = {}) =>
+  const guestOf = (name: string, extra: Omit<Partial<SfuAuthPayload>, "userId" | "guestProof"> = {}) =>
     ({
       userId: `guest-gp_${name}`,
       clientId: "conclave",
@@ -2719,6 +2729,130 @@ describe("what a refused join leaves behind", () => {
       expect((await join(state, seated)).ack).toHaveBeenCalledWith(joined);
       dropConnection(host.peer);
       expect((await join(state, guestHost)).ack).toHaveBeenCalledWith(joined);
+    });
+  });
+});
+
+describe("a host action when the decision record is full of refusals (Astra)", () => {
+  const full = {
+    success: false,
+    code: "DECISION_RECORD_FULL",
+    error: "Couldn't admit: this meeting has reached its limit of host decisions.",
+  };
+  const guestOf = (name: string, extra: Omit<Partial<SfuAuthPayload>, "userId" | "guestProof"> = {}) =>
+    ({
+      userId: `guest-gp_${name}`,
+      clientId: "conclave",
+      sessionId: name,
+      guestProof: `proof-of-${name}`,
+      guestRoom: "room",
+      ...extra,
+    }) satisfies SfuAuthPayload;
+  const ask = async (peer: { handlers: Map<string, Handler> }, event: string, ...payload: unknown[]) => {
+    const ack = vi.fn();
+    await peer.handlers.get(event)!(...([...payload, ack] as never[]));
+    return ack;
+  };
+  const approved = ["joinApproved", { roomId: "room" }] as const;
+  const waiting: unknown = expect.objectContaining({ status: "waiting" });
+
+  // A locked room whose record holds two refusals and so has no room left,
+  // and a guest who waits to be let in.
+  const fullRoom = async (body: (room: Room, state: SfuState, host: Awaited<ReturnType<typeof join>>, waitingGuest: Awaited<ReturnType<typeof join>>) => Promise<void>) => {
+    const limitBefore = sfuConfig.lobbyDecisionRecordLimit;
+    sfuConfig.lobbyDecisionRecordLimit = 2;
+    try {
+      const state = makeState();
+      const host = await join(state, guestHost);
+      const room = state.rooms.get("conclave:room")!;
+      room.setLocked(true);
+      for (const name of ["turned-away-1", "turned-away-2"]) {
+        await join(state, guestOf(name));
+        expect(await ask(host.peer, "rejectUser", { userId: guestOf(name).userId })).toHaveBeenCalledWith({ success: true });
+      }
+      const waitingGuest = await join(state, guestOf("knocks"));
+      expect(waitingGuest.ack).toHaveBeenCalledWith(waiting);
+      await body(room, state, host, waitingGuest);
+    } finally {
+      sfuConfig.lobbyDecisionRecordLimit = limitBefore;
+    }
+  };
+  const stillWaits = (room: Room, waitingGuest: Awaited<ReturnType<typeof join>>) => {
+    expect([...room.pendingClients.keys()]).toContain(guestOf("knocks").userId);
+    expect(waitingGuest.peer.emit).not.toHaveBeenCalledWith(...approved);
+    expect(room.isLockedAllowed(guestOf("knocks").userId, guestOf("knocks").guestProof)).toBe(false);
+  };
+
+  it("fails admitting everyone who waits, and lets no one in", async () => {
+    await fullRoom(async (room, _state, host, waitingGuest) => {
+      expect(await ask(host.peer, "admin:admitAllPending")).toHaveBeenCalledWith(full);
+      stillWaits(room, waitingGuest);
+    });
+  });
+
+  it("fails admitting by key, lets no one in, and lifts no block", async () => {
+    await fullRoom(async (room, state, host, waitingGuest) => {
+      const blocked = guestOf("blocked-before");
+      await join(state, { ...blocked, guestRoom: "room" });
+      blockUserKey(room, blocked.userId, { reason: "Blocked by host", kickPresent: false, io, state });
+
+      const answer = await ask(host.peer, "admin:allowUsers", { userKeys: [guestOf("knocks").userId, blocked.userId] });
+
+      expect(answer).toHaveBeenCalledWith(expect.objectContaining({ ...full, allowed: [], admitted: [] }));
+      stillWaits(room, waitingGuest);
+      expect(room.isBlocked(blocked.userId, blocked.guestProof)).toBe(true);
+    });
+  });
+
+  it("fails a stage invite, and the attendee is not invited", async () => {
+    await fullRoom(async (room, state, host, _waitingGuest) => {
+      const config = getOrCreateWebinarRoomConfig(state.webinarConfigs, room.channelId);
+      config.enabled = true;
+      config.publicAccess = true;
+      setCustomWebinarLinkSlug({
+        webinarConfig: config,
+        webinarLinks: state.webinarLinks,
+        room: { channelId: room.channelId, id: room.id, clientId: room.clientId },
+        slug: "launch",
+      });
+      const { guestRoom: _room, ...attendeeOfTheRoom } = guestOf("in-the-audience");
+      const attendee = { ...attendeeOfTheRoom, joinMode: "webinar_attendee" } satisfies SfuAuthPayload;
+      const viewer = await join(state, attendee, "launch");
+      expect(viewer.ack).toHaveBeenCalledWith(expect.objectContaining({ status: "joined", webinarRole: "attendee" }));
+      registerWebinarInteractionHandlers(host.context);
+
+      const answer = await ask(host.peer, "webinar:promoteAttendee", { userId: `${attendee.userId}#${attendee.sessionId}` });
+
+      expect(answer).toHaveBeenCalledWith({ ...full, error: "Couldn't invite: this meeting has reached its limit of host decisions." });
+      expect(viewer.peer.emit).not.toHaveBeenCalledWith("webinar:promoted", expect.anything());
+      expect(room.isWebinarPromotedUserKey(attendee.userId)).toBe(false);
+    });
+  });
+
+  it("fails each HTTP admission with a 409 and the same code, and lets no one in", async () => {
+    await fullRoom(async (room, state, _host, waitingGuest) => {
+      const server = createServer(createSfuApp({ state, getIo: () => io }));
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      try {
+        const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/admin/rooms/room`;
+        const post = (path: string, body: unknown = {}) =>
+          fetch(`${base}${path}?clientId=conclave`, {
+            method: "POST",
+            headers: { "content-type": "application/json", "x-sfu-secret": sfuConfig.sfuSecret },
+            body: JSON.stringify(body),
+          });
+        for (const response of [
+          await post(`/pending/${encodeURIComponent(guestOf("knocks").userId)}/admit`),
+          await post("/pending/admit-all"),
+          await post("/access/allow", { userKeys: [guestOf("knocks").userId] }),
+        ]) {
+          expect(response.status).toBe(409);
+          expect(await response.json()).toEqual(expect.objectContaining(full));
+        }
+        stillWaits(room, waitingGuest);
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
     });
   });
 });
@@ -3198,7 +3332,7 @@ describe("what a participant's own action adds to the decision record", () => {
     await inTheAudience(state, { ...meetingTab, sessionId: "alice-2", joinMode: "webinar_attendee" });
 
     expect(room.pendingClients.get(meetingTab.userId)?.userId).toBe(seatOf(meetingTab));
-    expect(admitWaitingGuest(room, meetingTab.userId)).toEqual([meetingTab.userId]);
+    expect(admitWaitingGuest(room, meetingTab.userId)).toEqual({ ok: true, admitted: [meetingTab.userId] });
     expect(waiting.peer.emit).toHaveBeenCalledWith("joinApproved", { roomId: "room" });
   });
 });

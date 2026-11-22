@@ -136,3 +136,24 @@ describe("what a participant's own action may change", () => {
     expect(ledger.size).toBe(0);
   });
 });
+
+describe("one host action's admissions", () => {
+  it("are all recorded or none, and never drop one another to make room", () => {
+    let clock = 0;
+    const ledger = new AdmissionLedger(3);
+    ledger.deny("pass:refused-1", (clock += 1));
+    ledger.deny("pass:refused-2", (clock += 1));
+    ledger.admit("pass:older", "guest-gp_older", BOTH, (clock += 1));
+    const both = [
+      { principal: "pass:A", userKey: "guest-gp_a", scopes: BOTH },
+      { principal: "pass:B", userKey: "guest-gp_b", scopes: BOTH },
+    ];
+
+    expect(ledger.admitAll(both, (clock += 1))).toBe(false);
+    expect([ledger.has("pass:A"), ledger.has("pass:B"), ledger.has("pass:older")]).toEqual([false, false, true]);
+
+    expect(ledger.admitAll(both.slice(0, 1), (clock += 1))).toBe(true);
+    expect([ledger.has("pass:A"), ledger.has("pass:older")]).toEqual([true, false]);
+    expect(ledger.admits(["pass:A"], "lock")).toBe(true);
+  });
+});

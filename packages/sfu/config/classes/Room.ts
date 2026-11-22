@@ -120,6 +120,11 @@ const MAX_WEBINAR_QA_ENTRIES = 300;
 // a tab joins under and up to 15 others.
 export const GUEST_PASS_GROUP_LIMIT = 16;
 
+/** What a host's admission did (see `Room.admitUserKeys`). */
+export type AdmitResult =
+  | { status: "admitted"; admitted: string[]; refused: string[] }
+  | { status: "full"; refused: string[] };
+
 /**
  * What a join shows the room of its guest through the browser's other
  * passes, before anything is recorded (see `Room.planGuestLink`).
@@ -1144,19 +1149,53 @@ export class Room {
     this.removePendingClient(userKey);
   }
 
-  // Returns false when the ledger could not keep the admission.
-  private recordAdmission(userKey: string, scopes: AdmissionScope[]): boolean {
-    const kept = this.admissions.admit(
-      this.principalOf(userKey),
-      userKey,
-      scopes,
+  /**
+   * A host lets in the guests behind `grants`, past the waiting room or the
+   * lock as each grant says. A key the room cannot grant to (see
+   * `canGrantTo`) is left out and returned as refused. The rest are recorded
+   * together or not at all: when the decision record has no room left (it
+   * holds only refusals), nothing changes, every request stays in the
+   * lobby and every block stays, and this says "full".
+   */
+  admitUserKeys(
+    grants: ReadonlyArray<{ userKey: string; scopes: readonly AdmissionScope[] }>,
+  ): AdmitResult {
+    const grantable = grants.filter((grant) => this.canGrantTo(grant.userKey));
+    const refused = [
+      ...new Set(
+        grants
+          .filter((grant) => !grantable.includes(grant))
+          .map((grant) => grant.userKey),
+      ),
+    ];
+    const result = this.recordAdmissions(grantable);
+    return result.status === "admitted" ? { ...result, refused } : { status: "full", refused };
+  }
+
+  // Records the admissions of one host action, together or not at all, and
+  // lets the requests they answer out of the lobby.
+  private recordAdmissions(
+    grants: ReadonlyArray<{ userKey: string; scopes: readonly AdmissionScope[] }>,
+  ): AdmitResult {
+    if (grants.length === 0) return { status: "admitted", admitted: [], refused: [] };
+    const kept = this.admissions.admitAll(
+      grants.map((grant) => ({
+        principal: this.principalOf(grant.userKey),
+        userKey: grant.userKey,
+        scopes: grant.scopes,
+      })),
       this.tick(),
     );
-    if (this.pendingClients.has(userKey)) {
-      this.lobbyOutcomes.set(userKey, "admitted");
+    if (!kept) return { status: "full", refused: [] };
+    const admitted = [...new Set(grants.map((grant) => grant.userKey))];
+    for (const userKey of admitted) {
+      this.blockedUsers.delete(userKey);
+      if (this.pendingClients.has(userKey)) {
+        this.lobbyOutcomes.set(userKey, "admitted");
+      }
+      this.removePendingClient(userKey);
     }
-    this.removePendingClient(userKey);
-    return kept;
+    return { status: "admitted", admitted, refused: [] };
   }
 
   private recordRevocation(userKeys: string[], scopes: AdmissionScope[]): void {
@@ -1287,13 +1326,20 @@ export class Room {
     const bound = this.guestProofsByUserKey.get(userKey);
     if (bound !== undefined && bound !== guestProof) return false;
     if (this.isBlocked(userKey, guestProof)) return false;
+    const newlyBound =
+      guestProof !== undefined && isGuestUserKey(userKey) && bound === undefined;
     if (guestProof !== undefined && isGuestUserKey(userKey)) {
       this.bindGuestProof(userKey, guestProof);
     }
-    return this.recordAdmission(
-      userKey,
-      options.pastLock ? ["waitingRoom", "lock"] : ["waitingRoom"],
-    );
+    const kept =
+      this.recordAdmissions([
+        {
+          userKey,
+          scopes: options.pastLock ? ["waitingRoom", "lock"] : ["waitingRoom"],
+        },
+      ]).status === "admitted";
+    if (!kept && newlyBound) this.unbindGuestProof(userKey);
+    return kept;
   }
 
   /**
@@ -1651,18 +1697,24 @@ export class Room {
    * A host invites the guest behind `userKey` onto the stage. The invite is
    * the guest's, under every linked pass, so the guest's stage tab is let in
    * whatever key it comes back under. It also ends an earlier move back to
-   * the audience; nothing else does.
+   * the audience; nothing else does. Returns false when the decision record
+   * could not keep the invite, and nothing changed.
    */
-  promoteWebinarUserKey(userKey: string): void {
+  promoteWebinarUserKey(userKey: string): boolean {
     const principal = this.principalOf(userKey);
-    const at = this.tick();
-    this.admissions.admit(principal, userKey, ["stage"], at, {
-      answersRequest: false,
-      expiresAt: Date.now() + WEBINAR_PROMOTION_TTL_MS,
-    });
-    this.admissions.admit(principal, userKey, ["stageDemotion"], at, {
-      answersRequest: false,
-    });
+    return this.admissions.admitAll(
+      [
+        {
+          principal,
+          userKey,
+          scopes: ["stage"],
+          expiresAt: Date.now() + WEBINAR_PROMOTION_TTL_MS,
+        },
+        { principal, userKey, scopes: ["stageDemotion"] },
+      ],
+      this.tick(),
+      { answersRequest: false },
+    );
   }
 
   /** A host takes back the stage invite of the guest behind `userKey`. */
@@ -3359,12 +3411,13 @@ export class Room {
     this.removePendingClient(userKey);
   }
 
-  /** Returns false when the room cannot admit `userKey` (see `canGrantTo`). */
+  /**
+   * Returns false when the room cannot admit `userKey` (see `canGrantTo`)
+   * or could not keep the admission (see `admitUserKeys`).
+   */
   allowUser(userKey: string): boolean {
-    if (!this.canGrantTo(userKey)) return false;
-    this.blockedUsers.delete(userKey);
-    this.recordAdmission(userKey, ["waitingRoom"]);
-    return true;
+    const result = this.admitUserKeys([{ userKey, scopes: ["waitingRoom"] }]);
+    return result.status === "admitted" && result.admitted.length > 0;
   }
 
   /**
@@ -3387,12 +3440,13 @@ export class Room {
     this.recordRevocation(this.identitiesOfSameGuest(userKey), ["waitingRoom"]);
   }
 
-  /** Returns false when the room cannot admit `userKey` (see `canGrantTo`). */
+  /**
+   * Returns false when the room cannot admit `userKey` (see `canGrantTo`)
+   * or could not keep the admission (see `admitUserKeys`).
+   */
   allowLockedUser(userKey: string): boolean {
-    if (!this.canGrantTo(userKey)) return false;
-    this.blockedUsers.delete(userKey);
-    this.recordAdmission(userKey, ["lock"]);
-    return true;
+    const result = this.admitUserKeys([{ userKey, scopes: ["lock"] }]);
+    return result.status === "admitted" && result.admitted.length > 0;
   }
 
   /** Whether a join as `userKey` may pass the lock (see `isAllowed`). */

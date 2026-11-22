@@ -7,7 +7,8 @@ import type {
   ProducerKey,
   ProducerType,
 } from "../../config/classes/Client.js";
-import type { Room } from "../../config/classes/Room.js";
+import type { AdmissionScope } from "../../config/classes/AdmissionLedger.js";
+import type { Room, WaitingRequest } from "../../config/classes/Room.js";
 import type { AppsAwarenessData } from "../../types.js";
 import { isGuestUserKey } from "../identity.js";
 import { cleanupRoom, getRoomChannelId } from "../rooms.js";
@@ -18,7 +19,8 @@ import {
 } from "../webinarNotifications.js";
 import { getSocketContext } from "../socket/context.js";
 import { registerAdminHandlers } from "../socket/handlers/adminHandlers.js";
-import { isSuperAdminClient } from "./moderation.js";
+import { DECISION_RECORD_FULL, isSuperAdminClient } from "./moderation.js";
+import { Logger } from "../../utilities/loggers.js";
 
 type ParticipantRole = "host" | "admin" | "participant" | "attendee";
 
@@ -694,8 +696,19 @@ export const applyRoomPolicyUpdate = (
   if (typeof update.locked === "boolean" && update.locked !== room.isLocked) {
     room.setLocked(update.locked);
     if (update.locked) {
-      for (const userKey of room.userKeysById.values()) {
-        room.allowLockedUser(userKey);
+      // The people already in may come back past the lock. A lock never
+      // waits on the decision record: when it is full of refusals they knock
+      // again instead.
+      const present = room.admitUserKeys(
+        [...new Set(room.userKeysById.values())].map((userKey) => ({
+          userKey,
+          scopes: ["lock"],
+        })),
+      );
+      if (present.status === "full") {
+        Logger.warn(
+          `Room ${room.id} locked, but its decision record could not keep admissions for the people in it.`,
+        );
       }
     }
     changed.locked = update.locked;
@@ -874,20 +887,77 @@ export const publishLobby = (
 };
 
 /**
- * Lets in the guest behind `userKey`: every tab of that guest that waits.
- * Returns the keys that were let in.
+ * What a host's admission did. When the room's decision record could not
+ * keep it, nothing changed: every request is still waiting, and no one was
+ * told they were let in.
  */
-export const admitWaitingGuest = (room: Room, userKey: string): string[] => {
-  const requests = room.waitingRequestsOfGuest(userKey);
+export type AdmitOutcome =
+  | { ok: true; admitted: string[] }
+  | { ok: false; code: typeof DECISION_RECORD_FULL };
+
+// The scopes an admission from the lobby passes: the waiting room, and the
+// lock too while the room is locked.
+const lobbyScopes = (room: Room): AdmissionScope[] =>
+  room.isLocked ? ["waitingRoom", "lock"] : ["waitingRoom"];
+
+const admitRequests = (room: Room, requests: WaitingRequest[]): AdmitOutcome => {
+  if (requests.length === 0) return { ok: true, admitted: [] };
+  const result = room.admitUserKeys(
+    requests.map((request) => ({ userKey: request.userKey, scopes: lobbyScopes(room) })),
+  );
+  if (result.status === "full") return { ok: false, code: DECISION_RECORD_FULL };
   for (const request of requests) {
-    if (room.isLocked) {
-      room.allowLockedUser(request.userKey);
-    }
-    room.allowUser(request.userKey);
     request.socket.emit("joinApproved", { roomId: room.id });
   }
   publishLobby(room);
-  return requests.map((request) => request.userKey);
+  return { ok: true, admitted: requests.map((request) => request.userKey) };
+};
+
+/** Lets in the guest behind `userKey`: every tab of that guest that waits. */
+export const admitWaitingGuest = (room: Room, userKey: string): AdmitOutcome =>
+  admitRequests(room, room.waitingRequestsOfGuest(userKey));
+
+/**
+ * A host lets in `userKeys` by key (`admin:allowUsers`): every waiting tab
+ * of each guest, and each key past the waiting room, and past the lock when
+ * `allowWhenLocked` or the room is locked. One action, recorded together or
+ * not at all.
+ */
+export const allowUserKeys = (
+  room: Room,
+  userKeys: string[],
+  options: { allowWhenLocked: boolean },
+):
+  | { ok: true; allowed: string[]; refused: string[]; admitted: string[] }
+  | { ok: false; code: typeof DECISION_RECORD_FULL; refused: string[] } => {
+  const waiting = new Map(
+    userKeys.map((userKey) => [userKey, room.waitingRequestsOfGuest(userKey)]),
+  );
+  const keyScopes: AdmissionScope[] =
+    options.allowWhenLocked || room.isLocked
+      ? ["waitingRoom", "lock"]
+      : ["waitingRoom"];
+  const result = room.admitUserKeys([
+    ...[...waiting.values()]
+      .flat()
+      .map((request) => ({ userKey: request.userKey, scopes: lobbyScopes(room) })),
+    ...userKeys.map((userKey) => ({ userKey, scopes: keyScopes })),
+  ]);
+  if (result.status === "full") {
+    return { ok: false, code: DECISION_RECORD_FULL, refused: result.refused };
+  }
+  for (const requests of waiting.values()) {
+    for (const request of requests) {
+      request.socket.emit("joinApproved", { roomId: room.id });
+    }
+  }
+  publishLobby(room);
+  return {
+    ok: true,
+    allowed: userKeys.filter((userKey) => result.admitted.includes(userKey)),
+    refused: userKeys.filter((userKey) => !result.admitted.includes(userKey)),
+    admitted: userKeys.filter((userKey) => (waiting.get(userKey) ?? []).length > 0),
+  };
 };
 
 /** Turns away the guest behind `userKey`: every tab of that guest that waits. */
@@ -926,21 +996,19 @@ export const withdrawWaitingRequest = (room: Room, userKey: string): void => {
 
 export const admitAllPendingUsers = (
   room: Room,
-): Array<{ userId: string; userKey: string }> => {
-  const admitted: Array<{ userId: string; userKey: string }> = [];
-  const pendingUsers = Array.from(room.pendingClients.values());
-
-  for (const pending of pendingUsers) {
-    if (room.isLocked) {
-      room.allowLockedUser(pending.userKey);
-    }
-    room.allowUser(pending.userKey);
-    pending.socket.emit("joinApproved", { roomId: room.id });
-    admitted.push({ userId: pending.userId, userKey: pending.userKey });
-  }
-  publishLobby(room);
-
-  return admitted;
+):
+  | { ok: true; users: Array<{ userId: string; userKey: string }> }
+  | { ok: false; code: typeof DECISION_RECORD_FULL } => {
+  const requests = Array.from(room.pendingClients.values());
+  const outcome = admitRequests(room, requests);
+  if (!outcome.ok) return outcome;
+  return {
+    ok: true,
+    users: requests.map((request) => ({
+      userId: request.userId,
+      userKey: request.userKey,
+    })),
+  };
 };
 
 export const rejectAllPendingUsers = (

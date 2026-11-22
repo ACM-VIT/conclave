@@ -13,6 +13,7 @@ import {
   closeProducerById,
   closeProducerForMediaKey,
   admitWaitingGuest,
+  allowUserKeys,
   blockUserKey,
   rejectWaitingGuest,
   kickClient,
@@ -21,6 +22,7 @@ import {
   toRoomSnapshot,
 } from "../../admin/controlPlane.js";
 import {
+  decisionRecordFull,
   includesSuperAdminUserKey,
   isSuperAdminClient,
   NO_ONE_ADMITTED_ERROR,
@@ -926,25 +928,20 @@ export const registerAdminHandlers = (
         return;
       }
 
-      const allowWhenLocked = data?.allowWhenLocked !== false;
-      const admitted: string[] = [];
-      const allowed: string[] = [];
-      const refused: string[] = [];
-      for (const userKey of userKeys) {
-        // Every waiting tab of the guest goes in first. A key that has
-        // anything waiting is one the room knows, so the admission below
-        // cannot then be refused.
-        const wasWaiting = admitWaitingGuest(guard.room, userKey).length > 0;
-        if (!guard.room.allowUser(userKey)) {
-          refused.push(userKey);
-          continue;
-        }
-        allowed.push(userKey);
-        if (allowWhenLocked || guard.room.isLocked) {
-          guard.room.allowLockedUser(userKey);
-        }
-        if (wasWaiting) admitted.push(userKey);
+      const outcome = allowUserKeys(guard.room, userKeys, {
+        allowWhenLocked: data?.allowWhenLocked !== false,
+      });
+      if (!outcome.ok) {
+        respond(cb, {
+          ...decisionRecordFull("admit"),
+          allowed: [],
+          refused: outcome.refused,
+          admitted: [],
+          access: toRoomSnapshot(guard.room).access,
+        });
+        return;
       }
+      const { allowed, refused, admitted } = outcome;
 
       io.to(guard.room.channelId).emit("pendingUsersSnapshot", {
         users: toPendingUserSnapshots(guard.room),
@@ -1168,9 +1165,11 @@ export const registerAdminHandlers = (
       return;
     }
 
-    const admitted = admitWaitingGuest(guard.room, normalizedTargetId);
-    if (admitted.length > 0) {
-      Logger.info(`Admin admitted ${admitted.join(", ")} to room ${options.roomId}`);
+    const outcome = admitWaitingGuest(guard.room, normalizedTargetId);
+    if (!outcome.ok) {
+      respond(cb, decisionRecordFull("admit"));
+    } else if (outcome.admitted.length > 0) {
+      Logger.info(`Admin admitted ${outcome.admitted.join(", ")} to room ${options.roomId}`);
       respond(cb, { success: true });
     } else {
       respond(cb, { error: "User not found in waiting room" });
@@ -1208,7 +1207,11 @@ export const registerAdminHandlers = (
       return;
     }
 
-    const admitted = admitAllPendingUsers(guard.room);
+    const outcome = admitAllPendingUsers(guard.room);
+    if (!outcome.ok) {
+      respond(cb, decisionRecordFull("admit"));
+      return;
+    }
     io.to(guard.room.channelId).emit("pendingUsersSnapshot", {
       users: toPendingUserSnapshots(guard.room),
       roomId: guard.room.id,
@@ -1216,8 +1219,8 @@ export const registerAdminHandlers = (
 
     respond(cb, {
       success: true,
-      admittedCount: admitted.length,
-      users: admitted,
+      admittedCount: outcome.users.length,
+      users: outcome.users,
     });
   });
 

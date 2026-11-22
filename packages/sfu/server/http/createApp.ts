@@ -23,6 +23,7 @@ import {
   closeClientProducers,
   closeProducerById,
   admitWaitingGuest,
+  allowUserKeys,
   blockUserKey,
   rejectWaitingGuest,
   kickClient,
@@ -33,6 +34,7 @@ import {
   toWorkerSnapshots,
 } from "../admin/controlPlane.js";
 import {
+  decisionRecordFull,
   includesSuperAdminUserKey,
   isSuperAdminClient,
   NO_ONE_ADMITTED_ERROR,
@@ -1307,24 +1309,21 @@ export const createSfuApp = ({
       return;
     }
 
-    const allowWhenLocked = body.allowWhenLocked !== false;
-    const admitted: string[] = [];
-    const allowed: string[] = [];
-    const refused: string[] = [];
-
-    for (const userKey of userKeys) {
-      const wasWaiting = admitWaitingGuest(lookup.room, userKey).length > 0;
-      if (!lookup.room.allowUser(userKey)) {
-        refused.push(userKey);
-        continue;
-      }
-      allowed.push(userKey);
-      if (allowWhenLocked || lookup.room.isLocked) {
-        lookup.room.allowLockedUser(userKey);
-      }
-
-      if (wasWaiting) admitted.push(userKey);
+    const outcome = allowUserKeys(lookup.room, userKeys, {
+      allowWhenLocked: body.allowWhenLocked !== false,
+    });
+    if (!outcome.ok) {
+      res.status(409).json({
+        ...decisionRecordFull("admit"),
+        roomId: lookup.room.id,
+        allowed: [],
+        refused: outcome.refused,
+        admitted: [],
+        access: toRoomSnapshot(lookup.room).access,
+      });
+      return;
     }
+    const { allowed, refused, admitted } = outcome;
 
     emitPendingUsersSnapshot(io, lookup.room);
 
@@ -1620,7 +1619,12 @@ export const createSfuApp = ({
       return;
     }
 
-    if (admitWaitingGuest(lookup.room, userKey).length === 0) {
+    const outcome = admitWaitingGuest(lookup.room, userKey);
+    if (!outcome.ok) {
+      res.status(409).json(decisionRecordFull("admit"));
+      return;
+    }
+    if (outcome.admitted.length === 0) {
       res.status(404).json({ error: "Pending user not found" });
       return;
     }
@@ -1674,13 +1678,17 @@ export const createSfuApp = ({
       return;
     }
 
-    const admitted = admitAllPendingUsers(lookup.room);
+    const outcome = admitAllPendingUsers(lookup.room);
+    if (!outcome.ok) {
+      res.status(409).json(decisionRecordFull("admit"));
+      return;
+    }
     emitPendingUsersSnapshot(io, lookup.room);
 
     res.json({
       success: true,
-      admittedCount: admitted.length,
-      users: admitted,
+      admittedCount: outcome.users.length,
+      users: outcome.users,
     });
   });
 
