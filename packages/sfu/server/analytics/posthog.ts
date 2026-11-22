@@ -22,7 +22,7 @@
 import { PostHog } from "posthog-node";
 import { config as sfuConfig } from "../../config/config.js";
 import { Logger } from "../../utilities/loggers.js";
-import { analyticsRoomKey } from "./identity.js";
+import { analyticsKey, analyticsRoomKey } from "./identity.js";
 import {
   createErrorReporter,
   scrubExceptionEvent,
@@ -90,6 +90,7 @@ const getClient = (): PostHog | null => {
 const errorReporter = createErrorReporter({
   getClient,
   instanceId: sfuConfig.instanceId,
+  hashKey: analyticsKey,
   region: sfuConfig.region,
   version: sfuConfig.version,
   onReportFailure: (error) =>

@@ -26,6 +26,7 @@ vi.mock("../server/analytics/posthog.js", async () => {
       flush: async () => {},
     }),
     instanceId: "sfu-test",
+    hashKey: "test-instance-key",
     region: null,
     version: "test",
     now: () => Date.now() + collector.clockOffsetMs,
@@ -346,7 +347,8 @@ it("reports a slot's failed respawns while its port stays taken", async () => {
       [1, 2, 4, 8, 16].filter((attempt) => attempt <= failedBinds),
     );
     for (const { properties, error } of respawnReports) {
-      expect(properties).toMatchObject({ worker_label: "0", sfu_instance_id: "sfu-test" });
+      expect(properties).toMatchObject({ worker_label: "0" });
+      expect(properties.sfu_instance_id).toMatch(/^sfu_[0-9a-f]{16}$/);
       expect(error.message).toBe("[message withheld]");
     }
   } finally {

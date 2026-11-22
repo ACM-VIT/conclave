@@ -4,7 +4,7 @@ import { config as sfuConfig } from "../../config/config.js";
 // Without a real SFU_SECRET the fallback key is public, and anyone could hash a
 // guessed email or room code and compare. Distinct ids then use a key that
 // lives only in this process, and rooms are not grouped at all.
-const analyticsKey = sfuConfig.sfuSecretConfigured
+export const analyticsKey: string | Uint8Array = sfuConfig.sfuSecretConfigured
   ? sfuConfig.sfuSecret
   : randomBytes(32);
 

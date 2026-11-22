@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createServer, type IncomingMessage, type Server } from "node:http";
+import { createHmac } from "node:crypto";
 import { connect, type AddressInfo } from "node:net";
 import { gunzipSync } from "node:zlib";
 import { PostHog } from "posthog-node";
@@ -104,12 +105,16 @@ const waitFor = async (check: () => boolean, timeoutMs = 3000) => {
   }
 };
 
+const hashedInstance = (instanceId: string) =>
+  `sfu_${createHmac("sha256", "test-instance-key").update(`instance:${instanceId}`).digest("hex").slice(0, 16)}`;
+
 const reporterFor = (client: ExceptionClient | null, now = Date.now) =>
   createErrorReporter({
     getClient: () => client,
     instanceId: "sfu-a",
-    region: "in-south",
-    version: "v2",
+    hashKey: "test-instance-key",
+    region: "eu-west-1",
+    version: "0b2d3b48",
     now,
   });
 
@@ -135,13 +140,13 @@ describe("SFU error reporter", () => {
       stacktrace: { frames: Array<{ filename?: string }> };
     }>;
 
-    expect(exception.distinct_id).toBe("sfu_sfu-a");
+    expect(exception.distinct_id).toBe(hashedInstance("sfu-a"));
     expect(exception.properties).toMatchObject({
       source: "socket_handler",
       socket_event: "joinRoom",
-      sfu_instance_id: "sfu-a",
-      sfu_region: "in-south",
-      sfu_version: "v2",
+      sfu_instance_id: hashedInstance("sfu-a"),
+      sfu_region: "eu-west-1",
+      sfu_version: "0b2d3b48",
       $exception_level: "error",
     });
     expect(entry.type).toBe("TypeError");
@@ -152,6 +157,39 @@ describe("SFU error reporter", () => {
       ),
     ).toBe(true);
   });
+
+  it.each([
+    ["Review Operator laptop", "operator-desk-7", "Review-build-7", "other", "unknown"],
+    ["sfu-b", "me-central-1", "1.4.2", "me-central-1", "1.4.2"],
+    ["sfu-b", "local", "v2", "local", "unknown"],
+  ])(
+    "sends instance %s hashed, region %s only from the list, release %s only as a sha or semver",
+    async (instanceId, region, version, sentRegion, sentVersion) => {
+      const sent: Array<{ options: { distinctId: string; properties: Record<string, unknown> } }> = [];
+      const reporter = createErrorReporter({
+        getClient: () => ({
+          captureException: (_error, options) => sent.push({ options }),
+          captureExceptionImmediate: async () => {},
+          flush: async () => {},
+        }),
+        instanceId,
+        hashKey: "test-instance-key",
+        region,
+        version,
+      });
+
+      reporter.report(new Error("x"), { source: "socket_handler" });
+
+      const [{ options }] = sent;
+      expect(options.distinctId).toBe(hashedInstance(instanceId));
+      expect(options.properties).toMatchObject({
+        sfu_instance_id: hashedInstance(instanceId),
+        sfu_region: sentRegion,
+        sfu_version: sentVersion,
+      });
+      expect(JSON.stringify(sent)).not.toMatch(/Review|operator-desk/);
+    },
+  );
 
   it("sends a fatal exception without the room code in its URL", async () => {
     const fake = await startFakePostHog();
@@ -560,6 +598,7 @@ describe("SFU error reporter", () => {
     const reporter = createErrorReporter({
       getClient: () => brokenClient,
       instanceId: "sfu-a",
+      hashKey: "test-instance-key",
       region: null,
       version: "v2",
       onReportFailure: () => {

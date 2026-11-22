@@ -23,7 +23,7 @@ the first report arrives, and holds up to 50 reports until it has loaded:
 - Call failures logged with `logCallError(label, ...details)` (`lib/call-error-capture.ts`): `source: "call_log"`, `call_log` (the label). The exception's message is the label. `label` is a `CallLogLabel`, the type of `CALL_LOG_LABELS` in `lib/call-log-labels.ts`, so an unregistered label does not compile, and a lint rule rejects `console.error("[Meets] ...")`, which would bypass it. A logged Error keeps its type and stack frames, never its message. Other logged values are dropped. At most 3 per label and 30 in total per minute.
 - Errors built from server text (socket ack `error` fields and the like) are thrown as `ServerError`, so the type says where the text came from. Like every message that is not a call-log label, theirs is withheld. A lint rule flags `new Error(x.error)`.
 
-SFU, from `server/analytics/errorReporter.ts`, every event tagged `sfu_instance_id`, `sfu_region`, `sfu_version`:
+SFU, from `server/analytics/errorReporter.ts`, every event tagged `sfu_instance_id`, `sfu_region`, `sfu_version`. The configured values are operator text, so `sfu_instance_id` is `sfu_` and a keyed hash of the instance name (also the event's distinct id), keyed with `SFU_SECRET` or, without a real one, a key that lives only in that process; `sfu_region` comes from a fixed list of cloud regions plus `local`, else `other`; and `sfu_version` is sent only as a git sha or a plain `x.y.z`, else `unknown`:
 
 | `source` | When | Extra properties |
 | --- | --- | --- |

@@ -1,13 +1,14 @@
 /**
  * Server error tracking for the SFU (PostHog error tracking).
  *
- * Every exception carries the instance id, region and version so a spike can
+ * Every exception carries the instance, region and version so a spike can
  * be tied to one box. Reporting never throws, never waits on the network
  * (except `reportFatal`, which is bounded), and is rate limited per error so a
  * client that keeps sending a malformed packet cannot flood the project. The
  * fatal report sits outside that budget: the process sends it once, then exits.
  */
 
+import { createHmac } from "node:crypto";
 import { realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -45,7 +46,10 @@ export type ExceptionClient = {
 
 export type ErrorReporterOptions = {
   getClient: () => ExceptionClient | null;
+  /** The configured instance name; only its keyed hash is sent. */
   instanceId: string;
+  /** The key for that hash: the real SFU_SECRET, or one that lives only in this process. */
+  hashKey: string | Uint8Array;
   region: string | null;
   version: string;
   now?: () => number;
@@ -178,16 +182,48 @@ const createRateLimiter = (now: () => number) => {
   };
 };
 
+// The configured instance, region and release are operator text, so each goes
+// out only in a form we can vouch for: the instance as a keyed hash (also the
+// distinct id), the region from this list, the release as a git sha or a
+// plain semver.
+const hashedInstance = (instanceId: string, key: string | Uint8Array): string =>
+  `sfu_${createHmac("sha256", key).update(`instance:${instanceId}`).digest("hex").slice(0, 16)}`;
+
+const REGIONS = new Set([
+  "local",
+  // AWS.
+  "us-east-1", "us-east-2", "us-west-1", "us-west-2", "ca-central-1", "sa-east-1",
+  "eu-west-1", "eu-west-2", "eu-west-3", "eu-central-1", "eu-central-2", "eu-north-1",
+  "eu-south-1", "eu-south-2", "me-central-1", "me-south-1", "af-south-1", "il-central-1",
+  "ap-south-1", "ap-south-2", "ap-southeast-1", "ap-southeast-2", "ap-southeast-3",
+  "ap-southeast-4", "ap-northeast-1", "ap-northeast-2", "ap-northeast-3", "ap-east-1",
+  // Azure.
+  "centralindia", "southindia", "westindia", "eastus", "eastus2", "centralus", "westus",
+  "westus2", "westus3", "canadacentral", "brazilsouth", "northeurope", "westeurope",
+  "uksouth", "ukwest", "francecentral", "germanywestcentral", "swedencentral",
+  "uaenorth", "southafricanorth", "southeastasia", "eastasia", "japaneast", "japanwest",
+  "koreacentral", "australiaeast", "australiasoutheast",
+]);
+const listedRegion = (region: string | null): string =>
+  region === null ? "unset" : REGIONS.has(region) ? region : "other";
+
+const BUILD_VERSION = /^(?:[0-9a-f]{7,40}|\d{1,4}\.\d{1,4}\.\d{1,6})$/;
+const buildVersion = (version: string): string =>
+  BUILD_VERSION.test(version) ? version : "unknown";
+
 export const createErrorReporter = ({
   getClient,
   instanceId,
+  hashKey,
   region,
   version,
   now = Date.now,
   onReportFailure = () => {},
 }: ErrorReporterOptions): ErrorReporter => {
   const allow = createRateLimiter(now);
-  const distinctId = `sfu_${instanceId}`;
+  const distinctId = hashedInstance(instanceId, hashKey);
+  const sentRegion = listedRegion(region);
+  const sentVersion = buildVersion(version);
   const failed = (failure: unknown) => {
     try {
       onReportFailure(failure);
@@ -210,9 +246,9 @@ export const createErrorReporter = ({
         properties: {
           ...properties,
           source,
-          sfu_instance_id: instanceId,
-          sfu_region: region ?? "unset",
-          sfu_version: version,
+          sfu_instance_id: distinctId,
+          sfu_region: sentRegion,
+          sfu_version: sentVersion,
           $process_person_profile: false,
         },
       },
