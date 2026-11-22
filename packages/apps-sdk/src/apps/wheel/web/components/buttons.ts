@@ -1,5 +1,5 @@
 const BASE =
-  "inline-flex shrink-0 cursor-pointer items-center justify-center gap-2 rounded-lg text-[13px] transition-[background-color,color,transform] duration-100 ease-out active:scale-[0.97] disabled:cursor-not-allowed disabled:active:scale-100";
+  "inline-flex shrink-0 cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-lg text-[13px] transition-[background-color,color,transform] duration-100 ease-out active:scale-[0.97] disabled:cursor-not-allowed disabled:active:scale-100";
 
 export const PRIMARY_BUTTON = `${BASE} h-10 bg-[#F95F4A] px-6 font-semibold text-white hover:bg-[#ff7059] disabled:bg-[#232327] disabled:text-[#fafafa]/40`;
 

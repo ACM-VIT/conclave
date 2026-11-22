@@ -288,19 +288,9 @@ export function WheelWebApp() {
             />
           </div>
 
-          <div className="flex h-16 shrink-0 items-start justify-center gap-2 px-4">
+          <div className="flex shrink-0 flex-wrap items-center justify-center gap-2 px-3 pb-3 pt-1 @min-[720px]:px-4 @min-[720px]:pb-4">
             {showReveal ? (
               <>
-                {canEdit && winnerOnWheel && winner && (
-                  <button
-                    type="button"
-                    data-wheel-action="remove-winner"
-                    onClick={() => removeEntryById(doc, winner.id)}
-                    className={SECONDARY_BUTTON}
-                  >
-                    Remove from wheel
-                  </button>
-                )}
                 {canEdit && (
                   <button
                     type="button"
@@ -310,16 +300,26 @@ export function WheelWebApp() {
                       handleRequestSpin();
                     }}
                     disabled={entries.length < 2}
-                    className={PRIMARY_BUTTON}
+                    className={`${PRIMARY_BUTTON} w-full @min-[720px]:w-auto`}
                   >
                     Spin again
+                  </button>
+                )}
+                {canEdit && winnerOnWheel && winner && (
+                  <button
+                    type="button"
+                    data-wheel-action="remove-winner"
+                    onClick={() => removeEntryById(doc, winner.id)}
+                    className={`${SECONDARY_BUTTON} h-9 flex-1 @min-[720px]:h-10 @min-[720px]:flex-none`}
+                  >
+                    Remove from wheel
                   </button>
                 )}
                 <button
                   type="button"
                   data-wheel-action="done"
                   onClick={closeReveal}
-                  className={GHOST_BUTTON}
+                  className={`${GHOST_BUTTON} h-9 @min-[720px]:h-10`}
                 >
                   Done
                 </button>
@@ -330,7 +330,7 @@ export function WheelWebApp() {
                 data-wheel-action="spin"
                 onClick={handleRequestSpin}
                 disabled={!canSpin || Boolean(held)}
-                className={`${PRIMARY_BUTTON} min-w-40`}
+                className={`${PRIMARY_BUTTON} w-full @min-[720px]:w-auto @min-[720px]:min-w-40`}
               >
                 {isSpinning ? "Spinning" : "Spin"}
               </button>
@@ -338,7 +338,7 @@ export function WheelWebApp() {
           </div>
         </section>
 
-        <aside className="flex h-[46%] min-h-[240px] w-full shrink-0 flex-col border-t border-white/[0.08] bg-[#111113] @min-[720px]:h-auto @min-[720px]:w-[320px] @min-[720px]:border-l @min-[720px]:border-t-0">
+        <aside className="flex h-[44%] min-h-[200px] w-full shrink-0 flex-col border-t border-white/[0.08] bg-[#111113] @min-[720px]:h-auto @min-[720px]:w-[320px] @min-[720px]:border-l @min-[720px]:border-t-0">
           <WheelPanel
             entries={entries}
             history={history}
