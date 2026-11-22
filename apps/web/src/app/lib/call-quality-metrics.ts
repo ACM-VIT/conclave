@@ -181,11 +181,14 @@ export type CallMetricsTracker = {
   nextSampleDelayMs(at: number): number | null;
 };
 
+// Any of these starts an attempt. reconnecting is a retry after a give-up:
+// with the socket still up it can go straight to joining after a media wait.
 const JOINING_STATES = new Set<ConnectionState>([
   "connecting",
   "connected",
   "joining",
   "waiting",
+  "reconnecting",
 ]);
 
 const emptyTotals = (): MediaTotals => ({

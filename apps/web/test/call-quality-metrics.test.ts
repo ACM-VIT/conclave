@@ -643,6 +643,44 @@ describe("call_summary", () => {
     expect(events.map((event) => event.name)).toEqual(["call_join", "call_summary"]);
   });
 
+  it("times a retry after a give-up from the tap, even before it reaches joining", () => {
+    const { state, named } = setup();
+    state("connecting", 0);
+    state("joined", 1000);
+    state("reconnecting", 5000, null, false, true);
+    state("error", 40_000, null, true);
+    // Try again: the socket is still up, so the retry waits for media and
+    // goes straight from reconnecting to joining.
+    state("reconnecting", 50_000, null, false, true);
+    state("joining", 53_000, null, false, true);
+    state("joined", 54_000);
+
+    expect(named("call_join").map(({ props }) => [props.call_id, props.outcome, props.join_ms])).toEqual([
+      ["call-1", "joined", 1000],
+      ["call-2", "joined", 4000],
+    ]);
+  });
+
+  it("reports a retry that fails before it reaches joining", () => {
+    const { state, named } = setup();
+    state("connecting", 0);
+    state("joined", 1000);
+    state("reconnecting", 5000, null, false, true);
+    state("error", 40_000, null, true);
+    state("reconnecting", 50_000, null, false, true);
+    state("error", 52_000, {
+      code: "CONNECTION_FAILED",
+      message: "Failed to connect to server",
+      recoverable: true,
+      reason: "timeout",
+    }, true);
+
+    expect(named("call_join").map(({ props }) => [props.outcome, props.failure_reason, props.join_ms])).toEqual([
+      ["joined", null, 1000],
+      ["failed", "timeout", 2000],
+    ]);
+  });
+
   it("counts a manual retry after giving up as a new call", () => {
     const { state, named } = setup();
     state("connecting", 0);
