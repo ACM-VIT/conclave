@@ -44,6 +44,7 @@ import {
 } from "../lib/utils";
 import RoomPresenceBadge from "./RoomPresenceBadge";
 import { useCameraPermissionState } from "../hooks/useCameraPermissionState";
+import { useClipboardCopy } from "../hooks/useClipboardCopy";
 import {
   useBandwidthHeavyPreloadDeferred,
 } from "../hooks/useBandwidthHeavyPreloadDeferred";
@@ -351,8 +352,6 @@ function JoinScreen({
   const [videoInputs, setVideoInputs] = useState<DeviceOption[]>([]);
   const [selectedAudioId, setSelectedAudioId] = useState("");
   const [selectedVideoId, setSelectedVideoId] = useState("");
-  const [linkCopied, setLinkCopied] = useState(false);
-  const copyResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [pending, setPending] = useState<{ mode: "new" | "join"; roomId: string } | null>(null);
 
   const { data: session } = useSession();
@@ -1125,7 +1124,6 @@ function JoinScreen({
     const next = enforceShortCode
       ? sanitizeRoomCodeInput(raw).slice(0, ROOM_CODE_MAX_LENGTH)
       : extractRoomCode(raw);
-    setLinkCopied(false);
     onRoomIdChange(next);
   };
 
@@ -1184,10 +1182,6 @@ function JoinScreen({
     const audioId = localStream?.getAudioTracks()[0]?.getSettings().deviceId;
     if (audioId) setSelectedAudioId(audioId);
   }, [localStream, refreshDevices]);
-
-  useEffect(() => () => {
-    if (copyResetRef.current) clearTimeout(copyResetRef.current);
-  }, []);
 
   const handleSelectVideoDevice = async (deviceId: string) => {
     setSelectedVideoId(deviceId);
@@ -1287,16 +1281,7 @@ function JoinScreen({
         : presenceTarget
           ? `${window.location.origin}/${presenceTarget}`
           : "";
-  const handleCopyLink = async () => {
-    if (!inviteLink || !navigator.clipboard?.writeText) return;
-    try {
-      await navigator.clipboard.writeText(inviteLink);
-      setLinkCopied(true);
-      if (copyResetRef.current) clearTimeout(copyResetRef.current);
-      copyResetRef.current = setTimeout(() => setLinkCopied(false), 1800);
-    } catch {
-    }
-  };
+  const linkCopy = useClipboardCopy(inviteLink);
 
   const showVideoPicker = isCameraOn && videoInputs.length > 0;
   const showAudioPicker = isMicOn && audioInputs.length > 0;
@@ -1568,15 +1553,23 @@ function JoinScreen({
                     autoFocus={isRoutedRoom}
                     className={`${FIELD} pr-12`}
                   />
+                  {inviteLink && linkCopy.status === "failed" ? (
+                    <span
+                      aria-hidden="true"
+                      className="pointer-events-none absolute right-12 top-1/2 -translate-y-1/2 rounded-md bg-[#141416] px-1.5 text-[12px] text-[#fafafa]/55"
+                    >
+                      Couldn&apos;t copy
+                    </span>
+                  ) : null}
                   {inviteLink ? (
                     <button
                       type="button"
-                      onClick={handleCopyLink}
+                      onClick={() => void linkCopy.copy()}
                       aria-label="Copy joining link"
                       title="Copy joining link"
                       className="absolute right-1.5 top-1/2 inline-flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-lg text-[#fafafa]/45 transition-colors duration-150 hover:bg-white/[0.06] hover:text-[#fafafa]/80"
                     >
-                      {linkCopied ? (
+                      {linkCopy.status === "copied" ? (
                         <Check size={16} aria-hidden="true" className="text-[#fafafa]/80" />
                       ) : (
                         <Link2 size={16} aria-hidden="true" />
@@ -1584,7 +1577,11 @@ function JoinScreen({
                     </button>
                   ) : null}
                   <span aria-live="polite" className="sr-only">
-                    {linkCopied ? "Link copied" : ""}
+                    {linkCopy.status === "copied"
+                      ? "Link copied"
+                      : linkCopy.status === "failed"
+                        ? "Couldn't copy link"
+                        : ""}
                   </span>
                 </div>
                 <button
