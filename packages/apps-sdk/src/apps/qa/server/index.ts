@@ -110,9 +110,10 @@ const trimBook = (
       if (fits()) return;
       if (row.id === keep || !sizes.has(rowKey)) continue;
       if (wanted !== null && row.status !== wanted) continue;
-      for (const [voteKey] of tx.scan("upvotes", key(row.id))) {
-        tx.delete("upvotes", voteKey);
-      }
+      // One step, whatever the number of upvotes. Read and deleted one at
+      // a time, the upvotes of a few questions a large webinar upvoted
+      // would use up the transaction and fail the write that needed room.
+      tx.clear("upvotes", key(row.id));
       tx.delete("questions", rowKey);
       bytes -= sizes.get(rowKey) ?? 0;
       sizes.delete(rowKey);

@@ -11,7 +11,7 @@ import {
 } from "@conclave/apps-sdk/authority";
 import { pollsContract } from "@conclave/apps-sdk/polls/core";
 import { pollsAuthority } from "@conclave/apps-sdk/polls/server";
-import { qaContract } from "@conclave/apps-sdk/qa/core";
+import { QA_MAX_BOOK_BYTES, qaContract } from "@conclave/apps-sdk/qa/core";
 import { qaAuthority } from "@conclave/apps-sdk/qa/server";
 import type { Subject } from "@conclave/apps-sdk/authority/server";
 import { AuthorityInstance, type Actor } from "../../server/apps/authority/instance.js";
@@ -56,6 +56,65 @@ const ask = async (room: Harness, tab: Tab, text: string): Promise<string> => {
   if (!asked.ok) throw new Error(`ask failed: ${JSON.stringify(asked)}`);
   await room.deliver();
   return field(asked.value, "id") as string;
+};
+
+/**
+ * The Q&A app itself, without sockets, for rooms too large to open a tab for
+ * every person. It is the same module on the same store, on a clock that
+ * moves 10 ms with each action.
+ */
+const qaWithoutSockets = (mode: "meeting" | "webinar") => {
+  const qa = new AuthorityInstance(
+    "qa.test",
+    qaAuthority,
+    { mode, qaEnabled: true },
+    {
+      limits: DEFAULT_AUTHORITY_LIMITS,
+      random: {
+        next: Math.random,
+        int: (max) => Math.floor(Math.random() * max),
+        shuffle: (list) => [...list],
+      },
+      verifyViews: false,
+    },
+  );
+  const actor = (id: string, role: Actor["role"], displayName: string): Actor => ({
+    subject: id as Subject,
+    role,
+    verified: true,
+    displayName,
+  });
+  let now = 1_000_000;
+  const act = (who: Actor, action: string, input: unknown): AuthorityResult<Json> => {
+    now += 10;
+    return qa.act(who, action, input, null, now);
+  };
+  const askAs = (who: Actor, text: string): string => {
+    const asked = act(who, "ask", { text });
+    if (!asked.ok) throw new Error(`ask failed: ${JSON.stringify(asked)}`);
+    return field(asked.value, "id") as string;
+  };
+  const questions = () => [...qa.store.rows("questions").values()] as Record<string, Json>[];
+  /** What the book weighs, counted as the app counts it. */
+  const bookBytes = (): number =>
+    questions().reduce(
+      (total, row) =>
+        total +
+        Buffer.byteLength(
+          JSON.stringify({
+            id: row.id,
+            askerName: row.askerName,
+            text: row.text,
+            status: row.status,
+            askedAt: row.askedAt,
+            updatedAt: row.updatedAt,
+            answerText: row.answerText,
+            answeredByName: row.answeredByName,
+          }),
+        ),
+      0,
+    );
+  return { qa, actor, act, askAs, questions, bookBytes, hostActor: actor("host", "moderator", "Asha") };
 };
 
 beforeEach(() => {
@@ -552,52 +611,97 @@ describe("a Q&A book of the longest questions", () => {
     expect(lateHost.rows("questions").length).toBeLessThan(225);
   }, 60_000);
 
-  it("keeps the question a host is answering when the answer is what fills the book", async () => {
-    const room = new Harness([qaAuthority]);
-    const hostTab = await room.open(host, qaContract);
-    const askers: Tab[] = [];
-    for (let index = 0; index < 25; index += 1) {
-      askers.push(
-        await room.open(person(`asker${index}@example.com`, `Asker ${index}`), qaContract),
-      );
+  it("keeps the question a host is answering when the answer is what fills the book", () => {
+    const { actor, act, askAs, questions, bookBytes, hostActor } = qaWithoutSockets("meeting");
+    // Long questions fill the book to just under its size cap.
+    const ids: string[] = [];
+    for (let index = 0; bookBytes() + 2_000 <= QA_MAX_BOOK_BYTES; index += 1) {
+      const asker = actor(`asker-${Math.floor(index / 3)}`, "member", `Asker ${index}`);
+      ids.push(askAs(asker, longQuestion));
     }
-    // Four rounds of 75 long questions fill the book to its size cap.
-    for (let round = 0; round < 4; round += 1) {
-      const asked: string[] = [];
-      for (const asker of askers) {
-        for (let n = 0; n < 3; n += 1) {
-          await vi.advanceTimersByTimeAsync(31_000);
-          const result = await asker.act("ask", { text: longQuestion });
-          if (result.ok) asked.push(field(result.value, "id") as string);
-        }
-      }
-      // Answered without text, so the askers may go on asking.
-      for (const id of asked) {
-        await vi.advanceTimersByTimeAsync(500);
-        await hostTab.act("moderate", { id, action: "answered" });
-      }
-    }
-    await room.deliver();
-    const before = hostTab.rows("questions");
-    const oldest = [...before].sort(
-      (a, b) => (field(a, "askedAt") as number) - (field(b, "askedAt") as number),
-    )[0];
-    const oldestId = field(oldest, "id") as string;
+    // The oldest is answered, which makes it the first the book would give up.
+    const oldest = ids[0];
+    act(hostActor, "moderate", { id: oldest, action: "answered" });
+    const before = questions().length;
 
-    // The oldest answered question is the first the book would give up, and
-    // its long answer is what takes the book over its cap.
-    await vi.advanceTimersByTimeAsync(500);
-    const answered = await hostTab.act("moderate", {
-      id: oldestId,
+    // Its long answer is what takes the book over its cap.
+    const answered = act(hostActor, "moderate", {
+      id: oldest,
       action: "answered",
       answerText: longAnswer,
     });
-    await room.deliver();
 
-    expect(before.length).toBeLessThan(300);
     expect(answered).toEqual({ ok: true, value: null });
-    expect(field(hostTab.row("questions", oldestId), "answerText")).toBe(longAnswer);
-    expect(hostTab.rows("questions").length).toBeLessThan(before.length);
+    expect(questions().find((row) => row.id === oldest)?.answerText).toBe(longAnswer);
+    expect(questions().length).toBeLessThan(before);
+    expect(bookBytes()).toBeLessThanOrEqual(QA_MAX_BOOK_BYTES);
+  });
+});
+
+describe("making room in a Q&A book that a large webinar upvoted", () => {
+  it("lets the host answer when room is made by dropping questions 5,000 people upvoted", () => {
+    const { qa, actor, act, askAs, questions, bookBytes, hostActor } = qaWithoutSockets("webinar");
+    const attendees = Array.from({ length: 5_000 }, (_, index) =>
+      actor(`attendee-${index}`, "attendee", `Attendee ${index}`),
+    );
+
+    // Five short questions, answered early, that the whole audience upvoted.
+    const popular = attendees.slice(0, 5).map((attendee, index) => {
+      const id = askAs(attendee, `Short question ${index}`);
+      act(hostActor, "moderate", { id, action: "answered" });
+      return id;
+    });
+    for (const attendee of attendees) {
+      for (const id of popular) act(attendee, "upvote", { id, value: true });
+    }
+    // Longer questions then fill the book to just under its size cap.
+    const longQuestion = "問".repeat(500);
+    let waiting = "";
+    for (const attendee of attendees.slice(5)) {
+      if (bookBytes() + 2_000 > QA_MAX_BOOK_BYTES) break;
+      waiting = askAs(attendee, longQuestion);
+    }
+    const upvotesBefore = qa.store.rows("upvotes").size;
+    const popularBefore = questions().filter((row) => popular.includes(row.id as string)).length;
+    // Every attendee has the app open, so each holds their five upvotes.
+    const live = {
+      roles: new Set<Actor["role"]>(["moderator", "attendee"]),
+      subjects: new Set(attendees.map((attendee) => attendee.subject)),
+    };
+    const heldUpvotes = (who: Actor): number =>
+      qa.snapshot(who).filter((sized) => sized.row.bucket === "myUpvotes").length;
+    for (const attendee of attendees) qa.snapshot(attendee);
+    qa.flushViews(live);
+    const heldBefore = heldUpvotes(attendees[4_999]);
+
+    // The long answer takes the book over its cap. Making room for it means
+    // dropping all five answered questions and the 25,000 upvotes on them.
+    const longAnswer = "答".repeat(1_000);
+    const answered = act(hostActor, "moderate", { id: waiting, action: "answered", answerText: longAnswer });
+
+    expect([popularBefore, upvotesBefore]).toEqual([5, 25_000]);
+    expect(answered).toEqual({ ok: true, value: null });
+    expect(questions().find((row) => row.id === waiting)?.answerText).toBe(longAnswer);
+    expect(questions().filter((row) => popular.includes(row.id as string))).toEqual([]);
+    expect(qa.store.rows("upvotes").size).toBe(0);
+    expect(bookBytes()).toBeLessThanOrEqual(QA_MAX_BOOK_BYTES);
+
+    // The host then takes the 25,000 upvote rows out of the attendees' views
+    // a thousand per flush, and nobody is left holding one.
+    const removedPerFlush: number[] = [];
+    while (qa.hasPendingChanges) {
+      const flushed = qa.flushViews(live);
+      removedPerFlush.push(
+        [...flushed.personal.values()]
+          .flatMap((ops) => ops.remove)
+          .filter((row) => row.bucket === "myUpvotes").length,
+      );
+    }
+    expect(heldBefore).toBe(5);
+    expect(Math.max(...removedPerFlush)).toBeLessThanOrEqual(1_000);
+    expect(removedPerFlush.reduce((total, removed) => total + removed, 0)).toBe(25_000);
+    const sampled = attendees.filter((_, index) => index % 50 === 0);
+    expect(sampled.map(heldUpvotes).filter((held) => held > 0)).toEqual([]);
   }, 60_000);
 });
 
