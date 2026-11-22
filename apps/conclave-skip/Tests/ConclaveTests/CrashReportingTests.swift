@@ -124,9 +124,8 @@ struct CrashReportingTests {
         #expect(exception["type"] as? String == "ApplicationNotResponding")
         #expect((exception["mechanism"] as? [String: Any])?["type"] as? String == "freeze")
         let frames = try #require((exception["stacktrace"] as? [String: Any])?["frames"] as? [[String: Any]])
-        #expect(frames.map { $0["function"] as? String } == [
-            "#00 pc 000000 libc.so (syscall+28)", "onProduce", "joinBlocking",
-        ])
+        #expect(frames.map { $0["function"] as? String } == ["syscall", "onProduce", "joinBlocking"])
+        #expect(frames[0]["module"] as? String == "libc.so")
         #expect(frames[1]["filename"] as? String == "WebRTCClient+Android.kt" && frames[1]["lineno"] as? Int == 7216)
         #expect(frames[1]["in_app"] as? Bool == true && frames[2]["in_app"] as? Bool == false)
     }
@@ -279,12 +278,12 @@ struct CrashReportingTests {
         let exception = try #require((properties["$exception_list"] as? [[String: Any]])?.first)
         #expect(exception["type"] as? String == "java.lang.IllegalStateExceptionquoted")
         let frame = try #require(((exception["stacktrace"] as? [String: Any])?["frames"] as? [[String: Any]])?.first)
-        #expect(frame["module"] as? String == "x.so")
+        #expect(frame["module"] as? String == "[path]")
     }
 
     @Test func pathsKeepOnlyFileNamesAndDropDirectories() {
         #expect(CrashReportPrivacy.symbol("#00 pc 000000 /system/lib64/libc.so (syscall+28)") == "#00 pc 000000 libc.so (syscall+28)")
-        #expect(CrashReportPrivacy.symbol("at (/Users/Jane Doe/private/notes") == "at (")
+        #expect(CrashReportPrivacy.symbol("at (/Users/Jane Doe/private/notes") == "at ([path]")
         #expect(!CrashReportPrivacy.symbol("load /Users/Jane").contains("Jane"))
         #expect(CrashReportPrivacy.symbol("conclave.module.WebRTCClient$onProduce$1") == "conclave.module.WebRTCClient$onProduce$1")
     }
@@ -377,8 +376,9 @@ struct CrashReportingTests {
     }
 
     @Test func aPathWithSpacesAndDotsNeverLeaksItsDirectories() {
-        let cleaned = CrashReportPrivacy.symbol("native: /Users/Jane.Doe Smith/private/libExample.so")
-        #expect(cleaned == "native: libExample.so")
+        let cleaned = CrashReportPrivacy.symbol("native: /Users/Jane.Doe Smith/private/libc.so")
+        #expect(cleaned == "native: libc.so")
+        #expect(CrashReportPrivacy.symbol("native: /Users/Jane.Doe Smith/private/libExample.so") == "native: [path]")
         let frame = CrashReportPrivacy.symbol(
             "#00 pc 0001 /data/app/~~a==/com.acmvit.conclave-b==/lib/arm64/libmediasoupclient_so.so (Produce+8)")
         #expect(frame == "#00 pc 0001 libmediasoupclient_so.so (Produce+8)")
@@ -390,21 +390,55 @@ struct CrashReportingTests {
 
     @Test func aPathKeepsOnlyALibraryOrBinaryNameAndOtherwiseDropsEverythingAfterIt() {
         let dottedFolder = CrashReportPrivacy.symbol("native: /Users/Jane.Doe Smith")
-        #expect(dottedFolder == "native:")
+        #expect(dottedFolder == "native: [path]")
         let spacedLibrary = CrashReportPrivacy.symbol(
+            "#03 pc 0004 /data/user/0/com.acmvit.conclave/files/Jane Doe Plugins/libmediasoupclient_so.so (run+4)")
+        #expect(spacedLibrary == "#03 pc 0004 libmediasoupclient_so.so (run+4)")
+        let unknownLibrary = CrashReportPrivacy.symbol(
             "#03 pc 0004 /data/user/0/com.acmvit.conclave/files/Jane Doe Plugins/libplugin.so (run+4)")
-        #expect(spacedLibrary == "#03 pc 0004 libplugin.so (run+4)")
+        #expect(unknownLibrary == "#03 pc 0004 [path]")
         let dottedFile = CrashReportPrivacy.symbol("open /data/user/0/com.acmvit.conclave/files/Jane.Doe Smith.json")
-        #expect(dottedFile == "open")
+        #expect(dottedFile == "open [path]")
         let relative = CrashReportPrivacy.symbol("load Users/Jane.Doe/notes.txt")
-        #expect(relative == "load")
+        #expect(relative == "[path]")
         for (text, leaked) in [(dottedFolder, "Jane"), (dottedFolder, "Smith"), (spacedLibrary, "Doe"), (spacedLibrary, "user"),
-                               (dottedFile, "Jane"), (dottedFile, "Smith"), (relative, "Jane")] {
+                               (unknownLibrary, "plugin"), (dottedFile, "Jane"), (dottedFile, "Smith"), (relative, "Jane")] {
             #expect(!text.contains(leaked), "\(leaked) in \(text)")
         }
-        #expect(CrashReportPrivacy.symbol("at /System/Library/Frameworks/UIKit.framework/UIKit (run)") == "at UIKit.framework (run)")
+        #expect(CrashReportPrivacy.symbol("at /System/Library/Frameworks/UIKit.framework/UIKit (run)") == "at UIKit (run)")
         #expect(CrashReportPrivacy.symbol("/private/var/containers/Bundle/Application/A1/Conclave.app/Conclave") == "Conclave")
         #expect(CrashReportPrivacy.symbol("/usr/lib/system/libsystem_kernel.dylib") == "libsystem_kernel.dylib")
+    }
+
+    @Test func onlyExactKnownModulesSurviveAndEverythingElseBecomesAPathPlaceholder() throws {
+        #expect(CrashReportPrivacy.symbol("native: Users/Jane.Doe Smith") == "[path]")
+        #expect(CrashReportPrivacy.symbol("native: /Users/Jane.so Smith") == "native: [path]")
+        #expect(CrashReportPrivacy.symbol("native: /data/x/libc.so Smith") == "native: libc.so")
+        for name in ["Jane.so", "Jane.Doe", "Jane.so Smith", "/data/user/0/com.acmvit.conclave/libc.so", "libsystem_../x.dylib"] {
+            #expect(CrashReportPrivacy.moduleName(name) == "[path]", "\(name)")
+        }
+        for name in ["libc.so", "libmediasoupclient_so.so", "Conclave", "UIKitCore", "libsystem_pthread.dylib",
+                     "libswift_Concurrency.dylib", "conclave.module.WebRTCClient", "kotlinx.coroutines.BlockingCoroutine"] {
+            #expect(CrashReportPrivacy.moduleName(name) == name, "\(name)")
+        }
+        #expect(CrashReportPrivacy.fileName("Builders.common.kt") == "Builders.common.kt")
+        #expect(CrashReportPrivacy.fileName("Native Method") == "Native Method")
+        #expect(CrashReportPrivacy.fileName("Jane Doe") == "[path]")
+
+        let folder = try #require(CrashReportEventBuilder.traceFrame("native: #01 pc 0002 /Users/Jane.so Smith (Jane+4)"))
+        #expect(folder.function == "[path]" && folder.module == "[path]")
+        let known = try #require(CrashReportEventBuilder.traceFrame(
+            "native: #00 pc 000000000004e8b8  /apex/com.android.runtime/lib64/bionic/libc.so (syscall+28) (BuildId: ab12)"))
+        #expect(known.function == "syscall" && known.module == "libc.so")
+
+        let trace = """
+        {"traceLines":["\\"main\\" prio=5 tid=1 Blocked","native: #00 pc 0001 /Users/Jane.so Smith/notes (Jane+1)",\
+        "native: #01 pc 0002 Users/Jane.Doe Smith","at conclave.module.WebRTCClient.onProduce(WebRTCClient+Android.kt:7216)"]}
+        """
+        let text = try #require(CrashReportEventBuilder.event(for: exitRecord("anr", trace: trace), eventId: "id-1",
+                                                               context: Self.context))
+        #expect(!text.contains("Jane") && !text.contains("Smith") && !text.contains("notes") && !text.contains("/Users"))
+        #expect(text.contains("onProduce"))
     }
 
     @Test func theLedgerForgetsReportsRetentionDeleted() {

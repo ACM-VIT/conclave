@@ -79,6 +79,7 @@ class ExitReasonCollectionBridgeTests {
         thread(42, "ConclaveSendTra", listOf(
             Triple("mediasoupclient::SendTransport::Produce", "/data/app/~~abc==/com.acmvit.conclave-def==/lib/arm64/libmediasoupclient_so.so", 0x1234),
             Triple("__start_thread", "/apex/com.android.runtime/lib64/bionic/libc.so", 0x99),
+            Triple("", "/storage/emulated/0/Jane.so Smith/libnotes.so", 0x77),
         ))
     }.out.toByteArray()
 
@@ -124,12 +125,17 @@ class ExitReasonCollectionBridgeTests {
         val exception = properties.getJSONArray("\$exception_list").getJSONObject(0)
         assertEquals("SIGSEGV", exception.getString("type"))
         val frames = exception.getJSONObject("stacktrace").getJSONArray("frames")
-        assertEquals(2, frames.length())
+        assertEquals(3, frames.length())
         val crashSite = frames.getJSONObject(frames.length() - 1)
         assertEquals("mediasoupclient::SendTransport::Produce", crashSite.getString("function"))
         assertEquals("libmediasoupclient_so.so", crashSite.getString("filename"))
         assertTrue(crashSite.getBoolean("in_app"))
-        assertFalse(frames.getJSONObject(0).getBoolean("in_app"))
+        val unknownLibrary = frames.getJSONObject(0)
+        assertFalse(unknownLibrary.getBoolean("in_app"))
+        assertEquals("[path]+0x77", unknownLibrary.getString("function"))
+        assertEquals("[path]", unknownLibrary.getString("module"))
+        assertEquals("libc.so", frames.getJSONObject(1).getString("module"))
+        assertFalse(text.contains("Smith") || text.contains("libnotes") || text.contains("/storage"))
         assertFalse(text.contains("RenderThread") || text.contains("threadLoop"))
         assertFalse(text.contains("Jane") || text.contains("/data/app") || text.contains("com.acmvit.conclave-def"))
     }

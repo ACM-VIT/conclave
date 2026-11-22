@@ -53,20 +53,53 @@ struct CrashReportException: Equatable {
     let frames: [CrashReportFrame]
 }
 
-/// Character checks alone do not make text safe to upload, so uploads take text fields from a fixed key list
-/// and reduce exception names and stack frames to code-symbol characters. A path keeps only a library or binary
-/// name (`libc.so`, `UIKit.framework`, `Conclave`); anything else in it, such as a user folder, never leaves the device.
+/// Character checks alone do not make text safe to upload, so uploads take text fields from a fixed key list and
+/// reduce exception names and stack frames to code-symbol characters. Paths fail closed: a frame keeps a module or
+/// file name only when it exactly matches a known name, and anything else, such as a user folder, becomes `[path]`.
 enum CrashReportPrivacy {
     static let uploadedTextKeys: [String] = [
         "reason", "summaryPhase", "appVersion", "osVersion", "appBuild", "architecture", "exceptionName", "exceptionKind",
     ]
     static let symbolCharacters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.$:<>()[]+-#/ ,"
     static let maxSymbolLength = 160
-    /// Native libraries and binaries a frame can name on iOS (`.dylib`, `.framework`) and Android (`.so`, plus the
-    /// runtime's `.apk`, `.oat`, `.odex`, `.vdex`, `.jar` and `.dex` files).
-    static let binarySuffixes = [".so", ".dylib", ".framework", ".apk", ".oat", ".odex", ".vdex", ".jar", ".dex"]
-    static let appBinaryNames = ["Conclave"]
-    static let binaryNameCharacters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.+-"
+    static let pathPlaceholder = "[path]"
+
+    /// Binaries a frame may name: Conclave's own on both platforms, then the system ones crashes pass through.
+    static let knownModules: Set<String> = [
+        "Conclave", "Mediasoup", "WebRTC",
+        "libmediasoupclient_so.so", "libjingle_peerconnection_so.so", "libdotlottie_player.so", "libdlplayer.so",
+        "libandroidx.graphics.path.so", "libimage_processing_util_jni.so", "libsurface_util_jni.so",
+        "base.apk", "base.odex", "base.vdex", "base.art",
+        "libc.so", "libm.so", "libdl.so", "liblog.so", "libc++.so", "libz.so", "libart.so", "libartbase.so", "libbase.so",
+        "libutils.so", "libcutils.so", "libbinder.so", "libbinder_ndk.so", "libandroid_runtime.so", "libandroid.so",
+        "libhwui.so", "libgui.so", "libui.so", "libEGL.so", "libGLESv2.so", "libGLESv3.so", "libvulkan.so",
+        "libmedia.so", "libmediandk.so", "libaudioclient.so", "libaaudio.so", "libOpenSLES.so", "libcamera2ndk.so",
+        "libnativebridge.so", "libnativeloader.so", "libjavacore.so", "libopenjdk.so", "libopenjdkjvm.so",
+        "libssl.so", "libcrypto.so", "libsqlite.so", "libicuuc.so", "libicui18n.so", "libunwindstack.so",
+        "linker", "linker64", "app_process32", "app_process64",
+        "boot.oat", "boot-framework.oat", "boot-core-libart.oat", "framework.jar", "core-oj.jar", "core-libart.jar",
+        "UIKit", "UIKitCore", "Foundation", "CoreFoundation", "SwiftUI", "SwiftUICore", "Combine", "QuartzCore",
+        "CoreGraphics", "CoreText", "CoreImage", "ImageIO", "Metal", "MetalKit", "CoreVideo", "CoreMedia",
+        "AVFoundation", "AVFAudio", "AVKit", "AudioToolbox", "CoreAudio", "MediaToolbox", "VideoToolbox",
+        "CoreHaptics", "CallKit", "PushKit", "Network", "CFNetwork", "Security", "MetricKit", "GraphicsServices",
+        "FrontBoardServices", "BackBoardServices", "RunningBoardServices", "BaseBoard", "UIFoundation", "Accelerate",
+        "dyld", "libobjc.A.dylib", "libdyld.dylib", "libdispatch.dylib", "libc++.1.dylib", "libc++abi.dylib",
+        "libxpc.dylib",
+    ]
+    /// Package roots of the code a Java or Kotlin frame names as its module (`conclave.module.WebRTCClient`).
+    static let knownCodePackages: [String] = [
+        "java.", "javax.", "jdk.", "sun.", "kotlin.", "kotlinx.", "android.", "androidx.", "com.android.", "dalvik.",
+        "libcore.", "org.json.", "org.webrtc.", "org.mediasoup.", "com.mediasfu.", "io.socket.", "okhttp3.", "okio.",
+        "com.google.", "com.lottiefiles.", "com.skydoves.", "coil.", "coil3.", "skip.", "conclave.",
+    ]
+    static let sourceFileSuffixes: [String] = [".kt", ".java", ".swift", ".m", ".mm", ".c", ".cc", ".cpp", ".h"]
+    static let knownSourceLocations: [String] = ["Native Method", "Unknown Source", "SourceFile"]
+    static let familyCharacters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
+    static let codeNameCharacters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_$."
+    static let sourceFileCharacters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_$+-."
+    /// A `/` right after one of these belongs to a relative path, whose start cannot be told from the text around it.
+    static let pathWordCharacters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.+-~$"
+    static let nameEnders = [" ", "(", ")", "[", "]", ",", "\"", "'", ":", ";", "\t", "\n"]
 
     static func symbol(_ text: String) -> String {
         var kept = ""
@@ -75,94 +108,107 @@ enum CrashReportPrivacy {
         }
         var tokens: [String] = []
         for token in kept.components(separatedBy: " ") where !token.isEmpty {
-            if !token.contains("/") {
-                tokens.append(token)
-                continue
-            }
-            let fileName = token.components(separatedBy: "/").last ?? ""
-            if isBinaryName(fileName) {
-                tokens.append(fileName)
-            }
+            tokens.append(token)
         }
         let joined = tokens.joined(separator: " ")
+        if joined.contains("/") { return pathPlaceholder }
         return joined.count > maxSymbolLength ? String(joined.prefix(maxSymbolLength)) : joined
     }
 
-    static func isBinaryName(_ name: String) -> Bool {
-        if name.isEmpty { return false }
-        for character in name where !binaryNameCharacters.contains(character) {
+    static func isKnownModule(_ name: String) -> Bool {
+        if knownModules.contains(name) { return true }
+        return isFamily(name, prefix: "libsystem_", suffix: ".dylib") || isFamily(name, prefix: "libswift", suffix: ".dylib")
+    }
+
+    private static func isFamily(_ name: String, prefix: String, suffix: String) -> Bool {
+        if !name.hasPrefix(prefix) || !name.hasSuffix(suffix) || name.count <= prefix.count + suffix.count { return false }
+        let middle = String(String(name.dropFirst(prefix.count)).dropLast(suffix.count))
+        for character in middle where !familyCharacters.contains(character) {
             return false
         }
-        if appBinaryNames.contains(name) { return true }
-        for suffix in binarySuffixes where name.count > suffix.count && name.hasSuffix(suffix) {
+        return true
+    }
+
+    static func isKnownCodeName(_ name: String) -> Bool {
+        if name.contains("..") || name.hasSuffix(".") { return false }
+        for character in name where !codeNameCharacters.contains(character) {
+            return false
+        }
+        for root in knownCodePackages where name.hasPrefix(root) {
             return true
         }
         return false
     }
 
-    /// Fails closed. A path can hold spaces and dots (`/Users/Jane.Doe Smith/lib.so`), so no text between its first
-    /// `/` and the last `/` after it survives, and the name after that last `/` survives only when it is a library or
-    /// binary (or the binary inside its `.framework`). Otherwise everything from the path on goes, because a name with
-    /// a dot or a word after a space could still be a folder.
+    static func isSourceFileName(_ name: String) -> Bool {
+        if knownSourceLocations.contains(name) { return true }
+        for character in name where !sourceFileCharacters.contains(character) {
+            return false
+        }
+        for suffix in sourceFileSuffixes where name.count > suffix.count && name.hasSuffix(suffix) {
+            return true
+        }
+        return false
+    }
+
+    /// A frame's module: a known binary, or the class of a known package for Java and Kotlin frames.
+    static func moduleName(_ name: String) -> String {
+        if name.isEmpty || isKnownModule(name) || isKnownCodeName(name) { return name }
+        return pathPlaceholder
+    }
+
+    static func fileName(_ name: String) -> String {
+        if name.isEmpty || isKnownModule(name) || isSourceFileName(name) { return name }
+        return pathPlaceholder
+    }
+
+    /// Fails closed. A relative path's start is unknowable, so its text becomes `[path]` whole. An absolute path keeps
+    /// only the name after its last `/`, and only when that name is a known module (a dotted or spaced folder such as
+    /// `/Users/Jane.so Smith` never is); otherwise it and everything after it become `[path]`. Text after a known
+    /// module survives only as the parenthesized symbol native frames carry, `libc.so (syscall+28)`.
     static func withoutPaths(_ text: String) -> String {
         var characters: [String] = []
         for character in text {
             characters.append(String(character))
         }
-        let nameEnders = [" ", "(", ")", "[", "]", ",", "\"", "'", ":", ";", "\t", "\n"]
-        var result = ""
+        var firstSlash = -1
+        var lastSlash = -1
         var index = 0
         while index < characters.count {
-            let startsPath = characters[index] == "/" && (index == 0 || !isPathWordCharacter(characters[index - 1]))
-            if !startsPath {
-                result += characters[index]
-                index += 1
-                continue
+            if characters[index] == "/" {
+                if firstSlash < 0 { firstSlash = index }
+                lastSlash = index
             }
-            var lastSlash = index
-            var previousSlash = -1
-            var probe = index + 1
-            while probe < characters.count {
-                if characters[probe] == "/" {
-                    previousSlash = lastSlash
-                    lastSlash = probe
-                }
-                probe += 1
-            }
-            var nameEnd = lastSlash + 1
-            var name = ""
-            while nameEnd < characters.count && !nameEnders.contains(characters[nameEnd]) {
-                name += characters[nameEnd]
-                nameEnd += 1
-            }
-            var folder = ""
-            if previousSlash >= 0 {
-                var folderIndex = previousSlash + 1
-                while folderIndex < lastSlash {
-                    folder += characters[folderIndex]
-                    folderIndex += 1
-                }
-            }
-            if isBinaryName(name) {
-                result += name
-            } else if !name.isEmpty && folder == name + ".framework" {
-                result += folder
-            } else {
-                break
-            }
-            index = nameEnd
+            index += 1
         }
+        if firstSlash < 0 { return text }
+        if firstSlash > 0 && pathWordCharacters.contains(characters[firstSlash - 1]) { return pathPlaceholder }
+        var result = ""
+        index = 0
+        while index < firstSlash {
+            result += characters[index]
+            index += 1
+        }
+        var name = ""
+        index = lastSlash + 1
+        while index < characters.count && !nameEnders.contains(characters[index]) {
+            name += characters[index]
+            index += 1
+        }
+        if !isKnownModule(name) { return result + pathPlaceholder }
+        result += name
+        var rest = ""
+        while index < characters.count {
+            rest += characters[index]
+            index += 1
+        }
+        if rest.hasPrefix("(") || rest.hasPrefix(" (") { result += rest }
         return result
     }
 
-    /// A `/` right after one of these continues a relative name (`lib/arm64`) rather than starting an absolute path.
-    private static func isPathWordCharacter(_ character: String) -> Bool {
-        binaryNameCharacters.contains(character)
-    }
-
     static func frame(_ frame: CrashReportFrame) -> CrashReportFrame {
-        CrashReportFrame(function: symbol(frame.function), module: symbol(frame.module), filename: symbol(frame.filename),
-                         line: frame.line, inApp: frame.inApp)
+        CrashReportFrame(function: symbol(frame.function), module: moduleName(frame.module),
+                         filename: fileName(frame.filename), line: frame.line, inApp: frame.inApp)
     }
 }
 
@@ -322,7 +368,7 @@ enum CrashReportEventBuilder {
         var next = (chosen?["callStackRootFrames"] as? [Any])?.first as? [String: Any]
         while next != nil && frames.count < maxFrames {
             let frame = next ?? [:]
-            let binary = frame["binaryName"] as? String ?? ""
+            let binary = CrashReportPrivacy.moduleName(frame["binaryName"] as? String ?? "")
             let offset = intValue(frame["offsetIntoBinaryTextSegment"])
             frames.append(CrashReportFrame(function: binary + " + " + String(offset), module: binary, filename: "",
                                            line: 0, inApp: binary == "Conclave"))
@@ -354,7 +400,7 @@ enum CrashReportEventBuilder {
     /// Parses `at a.b.Class.method(File.kt:12)` and `native: #00 pc ... (symbol+8)` trace lines.
     static func traceFrame(_ line: String) -> CrashReportFrame? {
         if line.hasPrefix("native: ") {
-            return CrashReportFrame(function: String(line.dropFirst(8)), module: "", filename: "", line: 0, inApp: false)
+            return nativeTraceFrame(String(line.dropFirst(8)))
         }
         guard line.hasPrefix("at ") else { return nil }
         let body = String(line.dropFirst(3))
@@ -377,6 +423,40 @@ enum CrashReportEventBuilder {
         }
         return CrashReportFrame(function: function, module: module, filename: filename, line: lineNumber,
                                 inApp: module.hasPrefix("conclave."))
+    }
+
+    /// Splits `#00 pc 000000000004e8b8  /apex/.../libc.so (syscall+28) (BuildId: ab12)` into its symbol and the
+    /// mapping's file name. A mapping that is not a known module could be any folder, so its symbol is not trusted
+    /// either and the whole frame becomes `[path]`.
+    static func nativeTraceFrame(_ body: String) -> CrashReportFrame {
+        let unknown = CrashReportFrame(function: CrashReportPrivacy.pathPlaceholder, module: CrashReportPrivacy.pathPlaceholder,
+                                       filename: "", line: 0, inApp: false)
+        var parts: [String] = []
+        for part in body.components(separatedBy: " ") where !part.isEmpty {
+            parts.append(part)
+        }
+        if parts.count < 4 || !parts[0].hasPrefix("#") || parts[1] != "pc" { return unknown }
+        let pc = parts[2]
+        var rest = Array(parts.dropFirst(3)).joined(separator: " ")
+        let withoutBuildId = rest.components(separatedBy: " (BuildId: ")
+        if withoutBuildId.count >= 2 { rest = withoutBuildId[0] }
+        var mapping = rest
+        var symbolText = ""
+        let groups = rest.components(separatedBy: " (")
+        if rest.hasSuffix(")") && groups.count >= 2 {
+            let last = String(groups[groups.count - 1].dropLast())
+            mapping = Array(groups.dropLast()).joined(separator: " (")
+            if !last.hasPrefix("offset ") { symbolText = last }
+        }
+        let library = mapping.components(separatedBy: "/").last ?? mapping
+        if !CrashReportPrivacy.isKnownModule(library) { return unknown }
+        var symbolName = symbolText
+        let offsetParts = symbolText.components(separatedBy: "+")
+        if offsetParts.count >= 2 && Int(offsetParts[offsetParts.count - 1]) != nil {
+            symbolName = Array(offsetParts.dropLast()).joined(separator: "+")
+        }
+        return CrashReportFrame(function: symbolName.isEmpty ? "pc " + pc : symbolName, module: library, filename: "",
+                                line: 0, inApp: mapping.contains("com.acmvit.conclave"))
     }
 
     static func exceptionList(_ exceptions: [CrashReportException], kind: CrashReportKind, lang: String) -> String {
