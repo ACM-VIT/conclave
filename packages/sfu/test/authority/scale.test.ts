@@ -13,6 +13,12 @@ const advance = (ms: number): void => {
   vi.advanceTimersByTime(ms);
 };
 
+/**
+ * Each test plays whole simulated minutes. Nothing here measures wall time,
+ * and on a machine busy with other work a run outlasts the default limit.
+ */
+const ROOM_TO_FINISH_MS = 60_000;
+
 describe("scale at 50 people and 100 actions a second", () => {
   it("does shared work per audience class, never per viewer", () => {
     const fifty = measureAuthorityScale(50, advance);
@@ -22,7 +28,7 @@ describe("scale at 50 people and 100 actions a second", () => {
     expect(fifty.acceptedPerSecond).toBeGreaterThan(80);
     // Four times the viewers, the same number of projections.
     expect(twoHundred.sharedProjections).toBe(fifty.sharedProjections);
-  });
+  }, ROOM_TO_FINISH_MS);
 
   it("coalesces to at most one frame per recipient per flush", () => {
     const report = measureAuthorityScale(50, advance);
@@ -34,7 +40,7 @@ describe("scale at 50 people and 100 actions a second", () => {
       report.flushesPerSecond,
     );
     expect(report.misdeliveredPersonalRows).toBe(0);
-  });
+  }, ROOM_TO_FINISH_MS);
 
   it("leaves most of a core free", () => {
     const report = measureAuthorityScale(50, advance);
@@ -42,5 +48,5 @@ describe("scale at 50 people and 100 actions a second", () => {
     // Measured at about 1 to 3 percent of a core. The bound is loose so a
     // busy machine does not fail it; it catches an order-of-magnitude slip.
     expect(report.actCpuMsPerSecond + report.flushCpuMsPerSecond).toBeLessThan(250);
-  });
+  }, ROOM_TO_FINISH_MS);
 });
