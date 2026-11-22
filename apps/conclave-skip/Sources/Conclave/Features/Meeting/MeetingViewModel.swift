@@ -630,6 +630,11 @@ final class MeetingViewModel {
     private var lastChatRoster: [ChatRosterEntry] = []
 
     private(set) var chatRefreshCount = 0
+    /// Messages converted for the chat presenter. A new message converts only itself; a roster or local
+    /// identity change converts everything again, since names and "you" come from them.
+    @ObservationIgnored private(set) var chatMessageInputBuildCount = 0
+    @ObservationIgnored private var chatInputMemo: [String: ChatInputMemo] = [:]
+    @ObservationIgnored private var chatInputMemoContext: ChatInputMemoContext? = nil
 
     private var nativeChatPanelIsCurrent = false
 
@@ -13508,9 +13513,29 @@ final class MeetingViewModel {
     }
 
     private func makeChatInputs(roster: [ChatRosterEntry]) -> ChatInputs {
+        let context = ChatInputMemoContext(roster: roster, chatLocalUserId: chatLocalUserId, userId: state.userId,
+                                           sfuUserId: state.sfuUserId ?? "", displayName: state.displayName)
+        if context != chatInputMemoContext {
+            chatInputMemoContext = context
+            chatInputMemo = [:]
+        }
         var messages: [ChatMessageInput] = []
+        var keep = Set<String>()
         for message in state.chatMessages {
-            messages.append(makeChatMessageInput(message))
+            let isHistory = chatHistoryMessageIds.contains(message.id)
+            keep.insert(message.id)
+            if message.userId != ConclaveAssistantChatIdentity.userId, let memo = chatInputMemo[message.id],
+               memo.message == message, memo.isHistory == isHistory {
+                messages.append(memo.input)
+                continue
+            }
+            let input = makeChatMessageInput(message)
+            chatMessageInputBuildCount += 1
+            chatInputMemo[message.id] = ChatInputMemo(message: message, isHistory: isHistory, input: input)
+            messages.append(input)
+        }
+        if chatInputMemo.count > keep.count {
+            for id in Array(chatInputMemo.keys) where !keep.contains(id) { chatInputMemo.removeValue(forKey: id) }
         }
         var localRows: [ChatLocalRow] = []
         for system in state.systemMessages {
@@ -15949,3 +15974,17 @@ final class MeetingViewModel {
 #if !SKIP
 extension MeetingViewModel: ObservableObject {}
 #endif
+
+struct ChatInputMemo {
+    let message: ChatMessage
+    let isHistory: Bool
+    let input: ChatMessageInput
+}
+
+struct ChatInputMemoContext: Equatable {
+    let roster: [ChatRosterEntry]
+    let chatLocalUserId: String
+    let userId: String
+    let sfuUserId: String
+    let displayName: String
+}
