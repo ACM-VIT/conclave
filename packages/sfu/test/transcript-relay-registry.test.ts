@@ -676,7 +676,7 @@ describe("a start reports success only while a relay runs", () => {
     const running = await roomRelay();
     if (results.some(({ success }) => success)) {
       expect(running).toBeDefined();
-      expect(closed.has(running!)).toBe(false);
+      expect(closed.has(running)).toBe(false);
     }
     expect(results.map(({ success }) => success)).toEqual([true, false]);
     registry.closeAll();
