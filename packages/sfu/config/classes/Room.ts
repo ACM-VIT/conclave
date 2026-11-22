@@ -281,9 +281,10 @@ export class Room {
    * the demote signal cannot simply rejoin the panel.
    */
   private webinarDemotedUserKeys: Set<string> = new Set();
-  // People a host removed. Nothing but a host letting them in again gets
-  // them past the lock: not an invite, not proof they were here before.
-  private removedUserKeys: Set<string> = new Set();
+  // People a host removed, or whose admission a host took back. Nothing but
+  // a host letting them in again gets them past the lock: not an invite, not
+  // proof they were here before.
+  private readmissionRequiredUserKeys: Set<string> = new Set();
   private meetingParticipantCount = 0;
   private currentWebcamCodecPolicy: WebcamCodecPolicy =
     buildWebcamCodecPolicy("vp8", 0);
@@ -2525,16 +2526,12 @@ export class Room {
     this.pendingClients.delete(userKey);
   }
 
-  markRemoved(userKey: string) {
-    this.removedUserKeys.add(userKey);
-  }
-
-  wasRemoved(userKey: string): boolean {
-    return this.removedUserKeys.has(userKey);
+  needsReadmission(userKey: string): boolean {
+    return this.readmissionRequiredUserKeys.has(userKey);
   }
 
   allowUser(userKey: string) {
-    this.removedUserKeys.delete(userKey);
+    this.readmissionRequiredUserKeys.delete(userKey);
     this.blockedUsers.delete(userKey);
     this.allowedUsers.add(userKey);
     this.pendingClients.delete(userKey);
@@ -2549,7 +2546,7 @@ export class Room {
   }
 
   allowLockedUser(userKey: string) {
-    this.removedUserKeys.delete(userKey);
+    this.readmissionRequiredUserKeys.delete(userKey);
     this.blockedUsers.delete(userKey);
     this.lockedAllowedUsers.add(userKey);
     this.pendingClients.delete(userKey);
@@ -2560,6 +2557,7 @@ export class Room {
   }
 
   revokeLockedAllowedUser(userKey: string) {
+    this.readmissionRequiredUserKeys.add(userKey);
     this.lockedAllowedUsers.delete(userKey);
   }
 

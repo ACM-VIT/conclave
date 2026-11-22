@@ -232,6 +232,38 @@ describe("new meetings make people knock", () => {
     await send(created.peer, "admitUser", { userId: "invitee@example.com" });
     expect((await join(state, invitee)).status).toBe("joined");
   });
+
+  it("makes an invited attendee knock once a host revokes their access", async () => {
+    const state = makeState();
+    createScheduledMeeting(
+      state.scheduledMeetings,
+      {
+        title: "Intro call",
+        scheduledStartAt: Date.now(),
+        roomCode: "abc-mnop-xyz",
+        hostEmail: "host@example.com",
+        attendeeEmail: "invitee@example.com",
+      },
+      {
+        clientId: "conclave",
+        createdBy: "host@example.com",
+        defaultHostEmail: "host@example.com",
+        defaultHostUserId: null,
+      },
+    );
+    const created = await join(state, host);
+    const invitee = {
+      userId: "user-2",
+      email: "invitee@example.com",
+      clientId: "conclave",
+      sessionId: "i",
+    };
+
+    await send(created.peer, "admin:revokeAllowedUsers", {
+      userKeys: ["invitee@example.com"],
+    });
+    expect((await join(state, invitee)).status).toBe("waiting");
+  });
 });
 
 describe("a participant the host admits before it joins", () => {
@@ -368,6 +400,44 @@ describe("a call whose server lost the room", () => {
     await join(after, rejoining(second), { roomRecoveryPass: passes.second });
 
     await send(first.peer, "kickUser", { userId: "guest-second#s2" });
+    expect(
+      (await join(after, second, { roomRecoveryPass: passes.second })).status,
+    ).toBe("waiting");
+  });
+
+  it("does not take back someone whose admission a host revoked in the recovered meeting", async () => {
+    const { passes } = await callBeforeRestart();
+    const after = makeState();
+    const first = await join(after, rejoining(guest), {
+      roomRecoveryPass: passes.guest,
+    });
+    const back = await join(after, rejoining(second), {
+      roomRecoveryPass: passes.second,
+    });
+    expect(back.status).toBe("joined");
+
+    const revoked = await send(first.peer, "admin:revokeAllowedUsers", {
+      userKeys: [second.userId],
+    });
+    expect(revoked?.success).toBe(true);
+    expect(
+      (await join(after, second, { roomRecoveryPass: passes.second })).status,
+    ).toBe("waiting");
+
+    await send(first.peer, "admitUser", { userId: second.userId });
+    expect((await join(after, second)).status).toBe("joined");
+  });
+
+  it("does not take back someone a host revoked before they came back", async () => {
+    const { passes } = await callBeforeRestart();
+    const after = makeState();
+    const first = await join(after, rejoining(guest), {
+      roomRecoveryPass: passes.guest,
+    });
+
+    await send(first.peer, "admin:revokeAllowedUsers", {
+      userKeys: [second.userId],
+    });
     expect(
       (await join(after, second, { roomRecoveryPass: passes.second })).status,
     ).toBe("waiting");

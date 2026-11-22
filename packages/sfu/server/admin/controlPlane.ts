@@ -1006,11 +1006,10 @@ export const kickClient = (
   // A removed user has to be let in again: drop every grant a rejoin would
   // honour (waiting-room and lock admissions, retained host rights, primary
   // host, a webinar stage invite), or they could rejoin at once, still
-  // admitted and still a host. The mark covers what is not a grant on the
-  // room, such as a scheduled invite.
+  // admitted and still a host. Taking back the lock admission also covers
+  // what is not a grant on the room: a scheduled invite, a recovery pass.
   const userKey = room.userKeysById.get(userId);
   if (userKey) {
-    room.markRemoved(userKey);
     room.revokeAllowedUser(userKey);
     room.revokeLockedAllowedUser(userKey);
     room.adminUserKeys.delete(userKey);

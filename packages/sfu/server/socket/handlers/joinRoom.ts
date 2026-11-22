@@ -631,10 +631,10 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         const hasDisplayNameOverride = Boolean(requestedDisplayName);
         context.currentUserKey = userKey;
 
-        const wasRemoved = room.wasRemoved(userKey);
+        const needsReadmission = room.needsReadmission(userKey);
         const isInvitedJoin =
           !isWebinarAttendeeJoin &&
-          !wasRemoved &&
+          !needsReadmission &&
           isScheduledMeetingInvitee(
             state.scheduledMeetings,
             clientId,
@@ -647,7 +647,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         if (
           !isWebinarAttendeeJoin &&
           !hasPrivilegedJoinAccess &&
-          !wasRemoved &&
+          !needsReadmission &&
           room.isLocked &&
           !room.isLockedAllowed(userKey) &&
           provesEarlierRoomMembership(
