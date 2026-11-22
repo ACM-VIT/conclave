@@ -1209,6 +1209,32 @@ describe("bounds", () => {
     expect(budget.filter((result) => !result.ok && result.code === "busy").length).toBe(2);
   });
 
+  it("keeps a budget for hosts that a crowd cannot spend", async () => {
+    const room = new Harness([probeAuthority], {
+      runtime: { limits: { ...DEFAULT_AUTHORITY_LIMITS, mutationBurst: 3, mutationsPerSecond: 1 } },
+    });
+    const hostTab = await room.open(host, probeContract);
+    const crowd = [await room.open(priya, probeContract), await room.open(ravi, probeContract)];
+
+    // Everyone acts in the same instant. The crowd asks for twice what the
+    // room takes from it.
+    const fromCrowd: AuthorityResult<Json>[] = [];
+    for (let index = 0; index < 6; index += 1) {
+      fromCrowd.push(await crowd[index % 2].act("put", { id: `n${index % 3}`, text: "crowd" }));
+    }
+    const fromHost: AuthorityResult<Json>[] = [];
+    for (let index = 0; index < 5; index += 1) {
+      fromHost.push(await hostTab.act("put", { id: "host", text: `host ${index}` }));
+    }
+    const busy = (results: AuthorityResult<Json>[]): number =>
+      results.filter((result) => !result.ok && result.code === "busy").length;
+
+    expect(busy(fromCrowd)).toBe(3);
+    // The host's actions were never in that queue. Theirs is bounded too.
+    expect(fromHost.slice(0, 3).map((result) => result.ok)).toEqual([true, true, true]);
+    expect(busy(fromHost)).toBe(2);
+  });
+
   it("caps subscriptions per socket", async () => {
     const room = new Harness([probeAuthority], {
       runtime: { limits: { ...DEFAULT_AUTHORITY_LIMITS, subscriptionsPerSocket: 2 } },

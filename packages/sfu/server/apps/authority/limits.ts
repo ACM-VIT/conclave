@@ -17,7 +17,10 @@ export type AuthorityLimits = {
   /** Unexpired receipts kept per app instance, and per subject within it. */
   receiptsPerInstance: number;
   receiptsPerSubject: number;
-  /** Accepted mutations per app instance: sustained rate and burst. */
+  /**
+   * Accepted mutations per app instance: sustained rate and burst. Moderators
+   * have this much to themselves, and everyone else has it between them.
+   */
   mutationsPerSecond: number;
   mutationBurst: number;
   timersPerInstance: number;

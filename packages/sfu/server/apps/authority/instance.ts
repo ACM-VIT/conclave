@@ -205,8 +205,13 @@ export class AuthorityInstance {
       return failure("capacity");
     }
 
+    // The app's budget of accepted mutations is held twice: once for
+    // moderators and once for everyone else. However much a crowd asks for,
+    // it spends only its own, and a host can still run the session.
     const budget = this.rates.take(
-      "\u0000mutations",
+      actor.role === "moderator"
+        ? "\u0000mutations\u0000moderators"
+        : "\u0000mutations",
       {
         burst: this.options.limits.mutationBurst,
         perSecond: this.options.limits.mutationsPerSecond,
