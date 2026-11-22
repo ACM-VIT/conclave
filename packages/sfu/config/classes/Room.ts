@@ -217,7 +217,9 @@ export class Room {
   private _participantVideoAllowed: boolean = true;
   private _meetingInviteCodeHash: string | null = null;
   private _meetingInviteCodeVersion = "";
-  public readonly apps = new RoomApps();
+  public readonly apps = new RoomApps(
+    (userId) => this.userKeysById.get(userId) ?? userId,
+  );
   // Server-authoritative game runtime (parallel to the collaborative apps
   // relay above). At most one game runs per room. The tick timer is owned here
   // so it is torn down with the room; the handler layer drives broadcasts.

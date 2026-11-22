@@ -88,7 +88,7 @@ async function withSavedBoard(run: (room: Room) => Promise<void>, policy: SyncPo
       if (
         event === "apps:yjs:update" &&
         roomDoc &&
-        room.acceptsContent(APP_ID, data.update) &&
+        room.acceptsContent(APP_ID, "viewer#1", data.update) &&
         room.reserveUpdate(APP_ID, data.update)
       ) {
         Y.applyUpdate(roomDoc, data.update);

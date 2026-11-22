@@ -16,6 +16,11 @@ export const MAX_ROOM_APP_DOC_BYTES = 4 * 1024 * 1024;
 // Yjs client IDs that wrote to a cleared document, per app, kept so a client
 // that missed the clear cannot write that content back. Oldest go first.
 export const MAX_CLEARED_WRITERS = 4096;
+// Yjs client ids are chosen by clients, so the room binds each to the
+// participant who first writes or shows presence under it. These bound how
+// many ids one participant, and the whole room, may hold.
+export const MAX_CLIENT_IDS_PER_PARTICIPANT = 1024;
+export const MAX_ROOM_CLIENT_IDS = 16384;
 
 // An update can grow the encoded document by more than its own size: a
 // deletion splits existing items, and alternating single-character deletions
@@ -90,11 +95,14 @@ const writersOf = (doc: Y.Doc): Iterable<number> =>
 const clearedWriterKey = (appId: string, client: number): string =>
   `${appId}\u0000${client}`;
 
-// Every Yjs client an update writes as, builds on or deletes from.
-const clientsTouchedBy = (update: Uint8Array): Set<number> => {
+// The Yjs clients an update writes as, and every client it writes as, builds
+// on or deletes from.
+const clientsIn = (update: Uint8Array): { writers: Set<number>; touched: Set<number> } => {
   const { structs, ds } = Y.decodeUpdate(update);
+  const writers = new Set<number>();
   const touched = new Set<number>(ds.clients.keys());
   for (const struct of structs) {
+    writers.add(struct.id.client);
     touched.add(struct.id.client);
     if (struct instanceof Y.Item) {
       if (struct.origin) touched.add(struct.origin.client);
@@ -102,7 +110,33 @@ const clientsTouchedBy = (update: Uint8Array): Set<number> => {
       if (struct.parent instanceof Y.ID) touched.add(struct.parent.client);
     }
   }
-  return touched;
+  return { writers, touched };
+};
+
+// The client ids in a y-protocols awareness update: a count, then for each
+// client its id, its clock and a length-prefixed JSON state.
+const awarenessClientIds = (update: Uint8Array): number[] => {
+  let offset = 0;
+  const readVarUint = (): number => {
+    let value = 0;
+    for (let shift = 0; shift < 53; shift += 7) {
+      if (offset >= update.length) throw new Error("Truncated awareness update");
+      const byte = update[offset];
+      offset += 1;
+      value += (byte & 0x7f) * 2 ** shift;
+      if (byte < 0x80) return value;
+    }
+    throw new Error("Malformed awareness update");
+  };
+  const count = readVarUint();
+  const ids: number[] = [];
+  for (let index = 0; index < count; index += 1) {
+    ids.push(readVarUint());
+    readVarUint();
+    offset += readVarUint();
+    if (offset > update.length) throw new Error("Truncated awareness update");
+  }
+  return ids;
 };
 
 // Presence lives for one stay on the stage, on a document of its own: an
@@ -132,12 +166,18 @@ export class RoomApps {
   private generations = 0;
   private docs: Map<string, AppDoc> = new Map();
   private clearedWriters: Set<string> = new Set();
+  private clientIdOwners: Map<number, string> = new Map();
+  private clientIdCounts: Map<string, number> = new Map();
   // Writers of every kept document other than the presented one. Documents
   // off the stage take no updates, so this changes only with the stage.
   private otherAppWriters: Set<number> = new Set();
   private awareness: Map<string, Awareness> = new Map();
   private awarenessClientIdsByUser: Map<string, Map<string, Set<number>>> =
     new Map();
+
+  // `participantOf` maps a connection's user id to the participant behind it,
+  // which stays the same when that participant rejoins.
+  constructor(private readonly participantOf: (userId: string) => string = (userId) => userId) {}
 
   get activeAppId(): string | null {
     return this.stage.activeAppId;
@@ -246,27 +286,28 @@ export class RoomApps {
   }
 
   /**
-   * False when an update for `appId` holds, builds on or deletes content of
-   * one of that app's cleared documents, as a client that missed the clear
-   * sends when it resyncs, or of another app's document. Only a clear names
-   * an app's cleared writers, and bytes copied from one app never land in
-   * another, so no update can get another writer's edits dropped.
+   * False when an update from `userId` for `appId` writes under a client id
+   * bound to another participant, writes under an id already in another
+   * app's document, or holds, builds on or deletes content of one of the
+   * app's cleared documents, as a client that missed the clear sends when it
+   * resyncs. Accepting it binds its new client ids to the participant, so a
+   * participant is only ever blocked by their own writes, or by a host
+   * clearing a document they wrote.
    */
-  acceptsContent(appId: string, update: Uint8Array): boolean {
-    if (this.clearedWriters.size === 0 && this.otherAppWriters.size === 0) {
-      return true;
-    }
-    let touched: Set<number>;
+  acceptsContent(appId: string, userId: string, update: Uint8Array): boolean {
+    let clients: { writers: Set<number>; touched: Set<number> };
     try {
-      touched = clientsTouchedBy(update);
+      clients = clientsIn(update);
     } catch {
       return false;
     }
-    for (const client of touched) {
+    for (const client of clients.writers) {
       if (this.otherAppWriters.has(client)) return false;
+    }
+    for (const client of clients.touched) {
       if (this.clearedWriters.has(clearedWriterKey(appId, client))) return false;
     }
-    return true;
+    return this.claimClientIds(this.participantOf(userId), clients.writers);
   }
 
   /**
@@ -346,6 +387,28 @@ export class RoomApps {
       if (this.clearedWriters.size <= MAX_CLEARED_WRITERS) break;
       this.clearedWriters.delete(key);
     }
+  }
+
+  // Binds each new client id to `participant`. False when an id belongs to
+  // someone else, or when the participant or the room holds as many as allowed.
+  private claimClientIds(participant: string, clients: Iterable<number>): boolean {
+    const unclaimed: number[] = [];
+    for (const client of clients) {
+      const owner = this.clientIdOwners.get(client);
+      if (owner === undefined) unclaimed.push(client);
+      else if (owner !== participant) return false;
+    }
+    if (unclaimed.length === 0) return true;
+    const held = this.clientIdCounts.get(participant) ?? 0;
+    if (
+      held + unclaimed.length > MAX_CLIENT_IDS_PER_PARTICIPANT ||
+      this.clientIdOwners.size + unclaimed.length > MAX_ROOM_CLIENT_IDS
+    ) {
+      return false;
+    }
+    for (const client of unclaimed) this.clientIdOwners.set(client, participant);
+    this.clientIdCounts.set(participant, held + unclaimed.length);
+    return true;
   }
 
   private refreshOtherAppWriters(): void {
@@ -429,6 +492,8 @@ export class RoomApps {
   ): boolean {
     const doc = this.liveDoc(appId);
     if (!doc) return false;
+    const participant = this.participantOf(userId ?? "socket");
+    if (!this.claimClientIds(participant, awarenessClientIds(awarenessUpdate))) return false;
     let awareness = this.awareness.get(appId);
     if (!awareness) {
       awareness = createPresence();
@@ -516,6 +581,8 @@ export class RoomApps {
     }
     this.clearedWriters.clear();
     this.otherAppWriters.clear();
+    this.clientIdOwners.clear();
+    this.clientIdCounts.clear();
     this.stage = { activeAppId: null, locked: false };
     this.revision += 1;
   }

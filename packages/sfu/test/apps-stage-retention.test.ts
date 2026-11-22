@@ -38,7 +38,7 @@ const makeRoom = () => {
   const room = new Room({ id: "room", clientId: "conclave", workerPid: null, router });
   state.rooms.set(room.channelId, room);
 
-  const join = (id: string, role: "host" | "participant") => {
+  const join = (id: string, role: "host" | "participant", doc: Y.Doc = new Y.Doc()) => {
     const listeners = new Map<string, Listener>();
     const relayed: Sent[] = [];
     const socket = {
@@ -67,10 +67,11 @@ const makeRoom = () => {
       });
       return response as T;
     };
-    const doc = new Y.Doc();
     return {
       relayed,
       doc,
+      sendUpdate: (appId: string, update: Uint8Array) =>
+        listeners.get("apps:yjs:update")!({ appId, update }),
       present: (appId: string, expectedRevision?: number) =>
         ask<{ success: boolean; error?: string }>("apps:open", { appId, expectedRevision }),
       closeLegacy: () => ask<{ success: boolean; error?: string }>("apps:close"),
@@ -124,6 +125,20 @@ const makeRoom = () => {
 
   return { room, broadcasts, join };
 };
+
+// An update that writes under `clientID`, starting at `clock`, as a client
+// claiming that id would send it.
+const forgedUpdate = (clientID: number, clock: number, key: string): Uint8Array => {
+  const forger = new Y.Doc();
+  forger.clientID = clientID;
+  for (let index = 0; index < clock; index += 1) forger.getMap("pad").set(`p${index}`, index);
+  const before = Y.encodeStateVector(forger);
+  forger.getMap("shapes").set(key, true);
+  return Y.encodeStateAsUpdate(forger, before);
+};
+
+const clockOf = (doc: Y.Doc): number =>
+  Y.decodeStateVector(Y.encodeStateVector(doc)).get(doc.clientID) ?? 0;
 
 const lastState = (broadcasts: Sent[]): AppsState =>
   broadcasts.filter((sent) => sent.event === "apps:state").at(-1)!.payload as AppsState;
@@ -289,8 +304,8 @@ describe("clearing an app", () => {
   it("stops only the cleared app's writers", () => {
     const { join } = makeRoom();
     const host = join("host#1", "host");
-    const wheelWriter = join("wheel#1", "participant");
-    const boardWriter = join("board#1", "participant");
+    const wheelWriter = join("writer#1", "participant");
+    const boardWriter = join("writer#1", "participant");
     wheelWriter.doc.clientID = 7;
     boardWriter.doc.clientID = 7;
     host.present("wheel");
@@ -334,6 +349,100 @@ describe("clearing an app", () => {
     expect(guest.present("whiteboard")).toMatchObject({ success: false });
     expect(guest.closeLegacy()).toMatchObject({ success: false });
     expect(host.state()).toMatchObject({ activeAppId: "watch", savedAppIds: ["whiteboard"] });
+  });
+});
+
+describe("Yjs client ids", () => {
+  it("refuses an update written under another participant's client id", () => {
+    const { join } = makeRoom();
+    const host = join("host#1", "host");
+    const editor = join("editor#1", "participant");
+    const spoofer = join("spoofer#1", "participant");
+    host.present("whiteboard");
+    editor.draw("whiteboard", "circle");
+
+    spoofer.sendUpdate("whiteboard", forgedUpdate(editor.doc.clientID, clockOf(editor.doc), "forged"));
+
+    expect(spoofer.relayed).toEqual([]);
+    expect(join("late#1", "participant").coldSync("whiteboard")).toEqual({ shapes: ["circle"] });
+  });
+
+  it("keeps an editor's client id, shown in presence, out of another app", () => {
+    const { join } = makeRoom();
+    const host = join("host#1", "host");
+    const editor = join("editor#1", "participant");
+    const attacker = join("attacker#1", "participant");
+    host.present("whiteboard");
+    host.draw("whiteboard", "circle");
+    const presence = new Awareness(editor.doc);
+    presence.setLocalState({ user: { id: "editor#1" } });
+    editor.sendAwareness("whiteboard", presence);
+    host.present("wheel");
+    attacker.sendUpdate("wheel", forgedUpdate(editor.doc.clientID, 0, "claimed"));
+    host.present("whiteboard");
+
+    editor.relayed.length = 0;
+    editor.draw("whiteboard", "square");
+
+    expect(editor.relayed.map((sent) => sent.event)).toEqual(["apps:yjs:update"]);
+    presence.destroy();
+  });
+
+  it("lets a host draw after locking, whatever another participant wrote under their id", () => {
+    const { join } = makeRoom();
+    const host = join("host#1", "host");
+    const artist = join("artist#1", "participant");
+    const attacker = join("attacker#1", "participant");
+    host.present("whiteboard");
+    artist.draw("whiteboard", "circle");
+    const presence = new Awareness(host.doc);
+    presence.setLocalState({ user: { id: "host#1" } });
+    host.sendAwareness("whiteboard", presence);
+    host.present("wheel");
+    attacker.sendUpdate("wheel", forgedUpdate(host.doc.clientID, 0, "claimed"));
+    host.present("whiteboard");
+    host.lock(true);
+
+    host.relayed.length = 0;
+    host.draw("whiteboard", "square");
+
+    expect(host.relayed.map((sent) => sent.event)).toEqual(["apps:yjs:update"]);
+    presence.destroy();
+  });
+
+  it("binds a client id shown in presence before its owner draws", () => {
+    const { join } = makeRoom();
+    const host = join("host#1", "host");
+    const editor = join("editor#1", "participant");
+    const squatter = join("squatter#1", "participant");
+    host.present("whiteboard");
+    const presence = new Awareness(editor.doc);
+    presence.setLocalState({ user: { id: "editor#1" } });
+    editor.sendAwareness("whiteboard", presence);
+
+    squatter.sendUpdate("whiteboard", forgedUpdate(editor.doc.clientID, 0, "squatted"));
+    editor.draw("whiteboard", "circle");
+
+    expect(join("late#1", "participant").coldSync("whiteboard")).toEqual({ shapes: ["circle"] });
+    presence.destroy();
+  });
+
+  it("keeps a participant's own client id when they rejoin", () => {
+    const { join } = makeRoom();
+    const host = join("host#1", "host");
+    const native = join("native#1", "participant");
+    host.present("whiteboard");
+    native.draw("whiteboard", "circle");
+
+    const rejoined = join("native#1", "participant", native.doc);
+    rejoined.resync("whiteboard");
+    rejoined.relayed.length = 0;
+    rejoined.draw("whiteboard", "square");
+
+    expect(rejoined.relayed.map((sent) => sent.event)).toEqual(["apps:yjs:update"]);
+    expect(join("late#1", "participant").coldSync("whiteboard")).toEqual({
+      shapes: ["circle", "square"],
+    });
   });
 });
 
