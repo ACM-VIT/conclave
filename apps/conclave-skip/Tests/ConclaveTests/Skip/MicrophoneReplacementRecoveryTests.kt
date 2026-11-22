@@ -337,6 +337,7 @@ class MicrophoneReplacementRecoveryTests {
         field("videoStartGate").set(media, SingleFlightGate())
         field("remoteVideoTracks").set(media, skip.lib.dictionaryOf<String, VideoTrackWrapper>())
         field("sendTransportLane").set(media, call.lane)
+        field("retiredTransports").set(media, RetiredTransportReaper<Any>(idleDelayMs = 45_000L, isIdle = { false }, dispose = {}))
     }
 
     @Test
