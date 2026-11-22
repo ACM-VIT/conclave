@@ -45,6 +45,12 @@ const spawnWorker = async (
     return worker;
   } catch (error) {
     worker.close();
+    if (error instanceof Error && /EADDRINUSE|address already in use/i.test(error.message)) {
+      throw new Error(
+        `WebRTC port ${port} is already in use. On Linux, an outbound socket may have claimed an ephemeral port. Check net.ipv4.ip_local_reserved_ports on the SFU host.`,
+        { cause: error },
+      );
+    }
     throw error;
   }
 };

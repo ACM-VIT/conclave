@@ -27,12 +27,28 @@ four. The final four ports support separate RTP and RTCP for shared-browser
 audio and video. Startup logs the selected count, warns when the budget caps
 automatic sizing, and rejects an explicit worker count above the budget.
 
+Before deploying, reserve the RTC ranges on the Linux host so outbound sockets
+do not take WebRTC ports as ephemeral ports. Read existing reservations with
+`sysctl net.ipv4.ip_local_reserved_ports`. Persist the production and staging
+range in `/etc/sysctl.d/90-conclave-rtc-ports.conf`, or add it to the existing
+persistent assignment. Keep any existing ranges in the same comma-separated
+value. For a host without existing reservations, use:
+
+```ini
+net.ipv4.ip_local_reserved_ports=40000-42200
+```
+
+Apply with `sudo sysctl --system` and verify the effective list with
+`sysctl net.ipv4.ip_local_reserved_ports`. Update the reservation if you change
+the RTC ranges. [Linux IP sysctl reference](https://docs.kernel.org/networking/ip-sysctl.html)
+
 Allow public UDP and TCP from `RTC_MIN_PORT` through `RTC_MIN_PORT + B - 1`.
 Allow plain RTP over UDP from `RTC_MIN_PORT + B` through `RTC_MAX_PORT` from
 authorized relay sources. With the default budget, public WebRTC uses 40000
 through 40003 for `sfu-a` and 41001 through 41004 for `sfu-b`. The relay ranges
-are 40004 through 41000 and 41005 through 42000. The split stays fixed when
-the CPU-derived worker count changes.
+are 40004 through 41000 and 41005 through 42000. Resizing the VM can fill more
+slots within a budget. The maximum reachable worker count and the firewall
+split stay fixed unless the budget or RTC range changes.
 
 Keep the legacy UDP and TCP ranges open until calls on both old instances have
 drained and both instances have restarted. Update the firewall before changing

@@ -170,6 +170,19 @@ it("rejects a range that leaves no port for plain RTP", async () => {
   }
 });
 
+it("points occupied WebRTC ports to the Linux ephemeral port reservation", async () => {
+  const worker = makeWorker();
+  const bindError = new Error("uv_udp_bind() failed: address already in use");
+  worker.createWebRtcServer.mockRejectedValue(bindError);
+  vi.mocked(createWorker).mockReset().mockResolvedValueOnce(worker as unknown as Worker);
+  try {
+    await expect(createWorkers()).rejects.toThrow(/42001.*net\.ipv4\.ip_local_reserved_ports/);
+    expect(worker.close).toHaveBeenCalledOnce();
+  } finally {
+    vi.mocked(createWorker).mockReset();
+  }
+});
+
 it("restores the worker slot on the same WebRTC port after a transient bind failure", async () => {
   const original = makeWorker();
   const failed = makeWorker();
