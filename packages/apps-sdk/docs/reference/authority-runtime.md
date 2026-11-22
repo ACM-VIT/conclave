@@ -37,7 +37,7 @@ Old servers and old clients do not know these events. Support is learned from th
 | `apps:authority:query` | client, acked | a one-shot read for the caller alone |
 | `apps:authority:frame` | server | `replace`, `patch`, `revoke`, `query`, `queryAbort` |
 
-A `replace` frame is a whole view under a new generation. It is read from the committed rows, so it never carries a row that was hidden, changed or removed a moment earlier, even when the flush that tells the other viewers has yet to run. A large one arrives in parts and is installed only when the last part is in. A `patch` puts and removes whole rows and carries a per-subscription sequence that counts only frames sent. Each connection is patched from its own snapshot on: it is not sent a change that snapshot already had, nor the key of a row that was gone before it. A `revoke` withdraws the view, and the client forgets what it held. A client that sees a gap subscribes again.
+A `replace` frame is a whole view under a new generation. It is read from the committed rows, so it never carries a row that was hidden, changed or removed a moment earlier, even when the flush that tells the other viewers has yet to run. A large one arrives in parts and is installed only when the last part is in. A `patch` puts and removes whole rows and carries a per-subscription sequence that counts only frames sent. It carries `grants` when what the viewer may do has changed and their view has not been replaced. That is what a change of room policy sends: each viewer gets the rows that came out different for them, often none, and what they may now do. No view is sent again unless a snapshot was still on its way. Each connection is patched from its own snapshot on: it is not sent a change that snapshot already had, nor the key of a row that was gone before it. A `revoke` withdraws the view, and the client forgets what it held. A client that sees a gap subscribes again.
 
 The room epoch changes when the room is recreated. A request under an old epoch fails with `stale-epoch`.
 
@@ -112,7 +112,7 @@ With the flag off the old events are served by the SFU's own webinar Q&A code, u
 The native app does not speak this transport yet. To host an authority app it needs:
 
 1. The seven events above in `SfuEvents.swift`, generated from one source with the web names.
-2. A Swift/Skip session per app: the capabilities exchange, subscribe, frame application (`replace` in parts, `patch` with the sequence check, `revoke`), and `act` with a retained operation id and retry inside one room epoch. `client.ts` is the reference, about 500 lines with no framework in it.
+2. A Swift/Skip session per app: the capabilities exchange, subscribe, frame application (`replace` in parts, `patch` with the sequence check and its optional `grants`, `revoke`), and `act` with a retained operation id and retry inside one room epoch. `client.ts` is the reference, about 500 lines with no framework in it.
 3. Fixtures shared with TypeScript: recorded frame sequences that both decoders must turn into the same view.
 4. Clearing held rows on leave, reconnect and revoke, and on any reuse of a web view. On web, `AuthorityProvider` does this when `joined` goes false, through the client's `left()`.
 5. A local panel selection in the Activities sheet, separate from the stage.

@@ -182,6 +182,31 @@ it("renders the view the server sends and follows its patches", async () => {
   expect(rendered().notes).toEqual(["second"]);
 });
 
+it("takes what it may now do from a patch, and keeps the view it holds", async () => {
+  await mount();
+  const subscription = await offerAndSubscribe([{ key: "n1", text: "first" }]);
+  const couldAdd = app.state.kind === "ready" && app.state.actions.has("add");
+
+  // The room's policy changed: the notes are as they were, adding is closed.
+  await act(async () =>
+    server.push(AUTHORITY_EVENTS.frame, {
+      kind: "patch",
+      subscription,
+      generation: 1,
+      serverNowMs: Date.now(),
+      seq: 1,
+      put: [],
+      remove: [],
+      grants: { actions: [], needsIdentity: ["add"], queries: [] },
+    }),
+  );
+
+  expect(couldAdd).toBe(true);
+  expect(app.state.kind === "ready" && app.state.actions.has("add")).toBe(false);
+  expect(app.state.kind === "ready" && app.state.needsIdentity.has("add")).toBe(true);
+  expect(rendered()).toMatchObject({ kind: "ready", notes: ["first"] });
+});
+
 it("forgets everything it held when the server revokes the view", async () => {
   await mount();
   const subscription = await offerAndSubscribe([{ key: "a", text: "private" }]);

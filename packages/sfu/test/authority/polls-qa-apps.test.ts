@@ -850,7 +850,7 @@ describe("making room in a Q&A book that a large webinar upvoted", () => {
 });
 
 describe("switching webinar mode", () => {
-  it("rebuilds every list under the new rule, and keeps the same book", async () => {
+  it("brings every list in line with the new rule, and keeps the same book", async () => {
     const room = new Harness([qaAuthority]);
     const hostTab = await room.open(host, qaContract);
     const priyaTab = await room.open(priya, qaContract);
@@ -872,10 +872,20 @@ describe("switching webinar mode", () => {
     expect(field(priyaTab.row("myQuestions", pending), "hidden")).toBeNull();
     expect(raviTab.row("questions", pending)).not.toBeNull();
     expect(field(hostTab.row("questions", pending), "status")).toBe("pending");
-    // Two mode changes, two fresh views, and nothing in between.
-    expect(raviTab.frames.slice(framesBefore).map((frame) => frame.kind)).toEqual([
-      "replace",
-      "replace",
+    // Two mode changes, and for each one frame with what changed for Ravi:
+    // the waiting question and its count go, then come back. No view is
+    // sent again.
+    const told = raviTab.frames.slice(framesBefore);
+    expect(told.map((frame) => frame.kind)).toEqual(["patch", "patch"]);
+    expect(
+      told.map((frame) =>
+        frame.kind === "patch"
+          ? [frame.put.map((row) => row.key), frame.remove.map((row) => row.key)]
+          : null,
+      ),
+    ).toEqual([
+      [[], [pending, pending]],
+      [[pending, pending], []],
     ]);
   });
 });
