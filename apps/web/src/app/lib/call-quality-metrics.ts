@@ -120,7 +120,10 @@ type Attempt = {
   startedAt: number;
   joinMode: JoinMode;
   waitingSince: number | null;
-  /** When the host let the user in; setup after that is not waiting. */
+  /**
+   * When the user last left the waiting room. A reconnect that lands back in
+   * it clears this, so it ends up as the moment the host let them in.
+   */
   waitingEndedAt: number | null;
   /** Remote media can start flowing while the join is still finishing. */
   firstAudioAt: number | null;
@@ -520,6 +523,7 @@ export function createCallMetricsTracker({
         const { attempt } = phase;
         if (state === "waiting") {
           attempt.waitingSince ??= at;
+          attempt.waitingEndedAt = null;
         } else if (attempt.waitingSince !== null) {
           attempt.waitingEndedAt ??= at;
         }

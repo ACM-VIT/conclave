@@ -121,6 +121,26 @@ describe("call_join", () => {
     });
   });
 
+  it("keeps the waiting clock running through a reconnect in the waiting room", () => {
+    const { tracker, state, named } = setup();
+
+    state("connecting", 0);
+    state("waiting", 500);
+    state("reconnecting", 2000);
+    state("connecting", 2200);
+    state("joining", 3000);
+    state("waiting", 3500);
+    expect(tracker.nextSampleDelayMs(4000)).toBeNull();
+    state("joining", 5500);
+    state("joined", 15_500);
+
+    expect(named("call_join")[0].props).toMatchObject({
+      waited: true,
+      waiting_ms: 5000,
+      join_ms: 15_500,
+    });
+  });
+
   it("classifies failures and counts the retries before a success", () => {
     const { state, named } = setup();
 
