@@ -893,20 +893,14 @@ export const rejectWaitingGuest = (room: Room, userKey: string): string[] => {
   return requests.map((request) => request.userKey);
 };
 
-/** The keys the hosts' lobby shows, one per waiting guest. */
-export const shownWaitingKeys = (room: Room): string[] =>
-  room.waitingGuests().map((request) => request.userKey);
-
 /**
- * Brings the hosts' lobby in line after the room learned that some keys
- * are one guest. `shownBefore` is what the lobby showed until then. Every
- * key that is no longer a guest's shown request is taken off the hosts'
- * screens. Its tab still waits, as part of the one request that is left.
+ * Takes rows off the hosts' lobby after the room learned that some keys
+ * are one guest: `userKeys` were a guest's shown request and no longer
+ * are. Their tabs still wait, as part of the one request that is left.
  */
-export const collapseLobbyRows = (room: Room, shownBefore: string[]): void => {
-  const shownNow = new Set(shownWaitingKeys(room));
-  for (const userKey of shownBefore) {
-    if (!shownNow.has(userKey) && room.pendingClients.has(userKey)) {
+export const hideLobbyRows = (room: Room, userKeys: string[]): void => {
+  for (const userKey of userKeys) {
+    if (room.pendingClients.has(userKey)) {
       tellHosts(room, "pendingUserLeft", { userKey });
     }
   }

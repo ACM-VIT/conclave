@@ -236,6 +236,14 @@ export class Room {
   // Passes that a join token showed to be in one browser. Every proof of a
   // group maps to the same set.
   private guestPassGroups: Map<string, Set<string>> = new Map();
+  // Who waits, by guest: the keys of each guest's waiting tabs, oldest
+  // first, and for each waiting key the guest it was filed under. With it
+  // the lobby shows one row per guest, and a join finds its guest's
+  // requests, without going through every pass the room knows.
+  private waitingKeysByGuest: Map<string, string[]> = new Map();
+  private waitingGuestByKey: Map<string, { guest: string; arrival: number }> =
+    new Map();
+  private waitingArrivals = 0;
   /** Admissions a host created and no join has used yet (code → expiry). */
   private openAdmissions: Map<string, number> = new Map();
   public cleanupTimer: NodeJS.Timeout | null = null;
@@ -855,7 +863,9 @@ export class Room {
   linkGuestPasses(
     otherSeats: ReadonlyArray<{ guestProof: string }>,
     guestProof: string,
-  ): string[] {
+  ): { blocked: string[]; noLongerShown: string[] } {
+    const noLongerShown: string[] = [];
+    if (otherSeats.length === 0) return { blocked: [], noLongerShown };
     const known = new Set(this.guestProofsByUserKey.values());
     let linked = false;
     for (const seat of otherSeats) {
@@ -865,6 +875,11 @@ export class Room {
       ) {
         continue;
       }
+      linked = true;
+      const guestsBefore = [
+        this.guestOfPass(guestProof),
+        this.guestOfPass(seat.guestProof),
+      ];
       const group = this.guestPassGroups.get(guestProof) ?? new Set([guestProof]);
       for (const proof of this.guestPassGroups.get(seat.guestProof) ?? [
         seat.guestProof,
@@ -872,16 +887,85 @@ export class Room {
         group.add(proof);
       }
       for (const proof of group) this.guestPassGroups.set(proof, group);
-      linked = true;
+      noLongerShown.push(
+        ...this.mergeWaitingGuests(guestsBefore, this.guestOfPass(guestProof)),
+      );
     }
     if (!linked || !this.guestHolds(this.blockedUsers, "", guestProof)) {
-      return [];
+      return { blocked: [], noLongerShown };
     }
-    const userKeys = [...this.guestProofsByUserKey]
+    const blocked = [...this.guestProofsByUserKey]
       .filter(([, bound]) => this.isSameGuestPass(bound, guestProof))
       .map(([userKey]) => userKey);
-    this.dropRejoinGrantsOf(userKeys);
-    return userKeys;
+    this.dropRejoinGrantsOf(blocked);
+    return { blocked, noLongerShown };
+  }
+
+  // What a guest's waiting requests are filed under: its passes, by the
+  // lowest proof of those the room has linked, or its key when it showed
+  // no pass.
+  private guestOfPass(guestProof: string): string {
+    const group = this.guestPassGroups.get(guestProof);
+    return `pass:${group ? [...group].sort()[0] : guestProof}`;
+  }
+
+  private guestOfKey(userKey: string): string {
+    const guestProof = this.guestProofsByUserKey.get(userKey);
+    return guestProof === undefined
+      ? `key:${userKey}`
+      : this.guestOfPass(guestProof);
+  }
+
+  /**
+   * Files the waiting requests of guests the room just linked under the one
+   * guest they are now. Returns the keys that were a guest's shown request
+   * and no longer are.
+   */
+  private mergeWaitingGuests(guestsBefore: string[], guestNow: string): string[] {
+    const lists = [...new Set(guestsBefore)].map(
+      (guest) => this.waitingKeysByGuest.get(guest) ?? [],
+    );
+    const merged = lists
+      .flat()
+      .sort(
+        (a, b) =>
+          this.waitingGuestByKey.get(a)!.arrival -
+          this.waitingGuestByKey.get(b)!.arrival,
+      );
+    for (const guest of guestsBefore) this.waitingKeysByGuest.delete(guest);
+    if (merged.length === 0) return [];
+    this.waitingKeysByGuest.set(guestNow, merged);
+    for (const userKey of merged) {
+      this.waitingGuestByKey.get(userKey)!.guest = guestNow;
+    }
+    return lists.flatMap(([shown]) =>
+      shown !== undefined && shown !== merged[0] ? [shown] : [],
+    );
+  }
+
+  private startWaiting(request: WaitingRequest): void {
+    this.pendingClients.set(request.userKey, request);
+    if (this.waitingGuestByKey.has(request.userKey)) return;
+    const guest = this.guestOfKey(request.userKey);
+    this.waitingGuestByKey.set(request.userKey, {
+      guest,
+      arrival: (this.waitingArrivals += 1),
+    });
+    const userKeys = this.waitingKeysByGuest.get(guest);
+    if (userKeys) userKeys.push(request.userKey);
+    else this.waitingKeysByGuest.set(guest, [request.userKey]);
+  }
+
+  private stopWaiting(userKey: string): void {
+    this.pendingClients.delete(userKey);
+    const filed = this.waitingGuestByKey.get(userKey);
+    if (!filed) return;
+    this.waitingGuestByKey.delete(userKey);
+    const others = (this.waitingKeysByGuest.get(filed.guest) ?? []).filter(
+      (key) => key !== userKey,
+    );
+    if (others.length > 0) this.waitingKeysByGuest.set(filed.guest, others);
+    else this.waitingKeysByGuest.delete(filed.guest);
   }
 
   /** Whether the room knows `userKey` as a key of the pass behind `guestProof`. */
@@ -2851,14 +2935,14 @@ export class Room {
     displayName?: string,
     guestProof?: string,
   ) {
-    this.pendingClients.set(userKey, { userKey, userId, socket, displayName });
     if (guestProof) {
       this.guestProofsByUserKey.set(userKey, guestProof);
     }
+    this.startWaiting({ userKey, userId, socket, displayName });
   }
 
   removePendingClient(userKey: string) {
-    this.pendingClients.delete(userKey);
+    this.stopWaiting(userKey);
     this.releaseGuestIdentity(userKey);
   }
 
@@ -2867,7 +2951,7 @@ export class Room {
     if (!this.canGrantTo(userKey)) return false;
     this.blockedUsers.delete(userKey);
     this.allowedUsers.add(userKey);
-    this.pendingClients.delete(userKey);
+    this.stopWaiting(userKey);
     return true;
   }
 
@@ -2887,7 +2971,7 @@ export class Room {
     if (!this.canGrantTo(userKey)) return false;
     this.blockedUsers.delete(userKey);
     this.lockedAllowedUsers.add(userKey);
-    this.pendingClients.delete(userKey);
+    this.stopWaiting(userKey);
     return true;
   }
 
@@ -2910,7 +2994,7 @@ export class Room {
   blockUser(userKey: string) {
     this.dropRejoinGrants(userKey);
     this.blockedUsers.add(userKey);
-    this.pendingClients.delete(userKey);
+    this.stopWaiting(userKey);
   }
 
   /**
@@ -2927,9 +3011,10 @@ export class Room {
    * and those of the guest's other tabs.
    */
   waitingRequestsOfGuest(userKey: string): WaitingRequest[] {
-    const userKeys = new Set(this.identitiesOfSameGuest(userKey));
-    return [...this.pendingClients.values()].filter((request) =>
-      userKeys.has(request.userKey),
+    const guest =
+      this.waitingGuestByKey.get(userKey)?.guest ?? this.guestOfKey(userKey);
+    return (this.waitingKeysByGuest.get(guest) ?? []).flatMap(
+      (key) => this.pendingClients.get(key) ?? [],
     );
   }
 
@@ -2940,12 +3025,13 @@ export class Room {
    */
   waitingGuests(): WaitingRequest[] {
     const shown: WaitingRequest[] = [];
-    const covered = new Set<string>();
     for (const request of this.pendingClients.values()) {
-      if (covered.has(request.userKey)) continue;
-      shown.push(request);
-      for (const userKey of this.identitiesOfSameGuest(request.userKey)) {
-        covered.add(userKey);
+      const guest = this.waitingGuestByKey.get(request.userKey)?.guest;
+      if (
+        guest === undefined ||
+        this.waitingKeysByGuest.get(guest)?.[0] === request.userKey
+      ) {
+        shown.push(request);
       }
     }
     return shown;

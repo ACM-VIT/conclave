@@ -1761,6 +1761,116 @@ describe("a guest who asks to be let in from more than one tab", () => {
   });
 });
 
+describe("what a join costs a room with a large lobby", () => {
+  const hostTab = { ...guestHost, guestRoom: "room" } satisfies SfuAuthPayload;
+  const waiter = (order: number, pass = order) =>
+    ({
+      userId: `guest-gp_waiting-tab-${order}`,
+      clientId: "conclave",
+      sessionId: `tab-${order}`,
+      guestProof: `proof-of-pass-${pass}`,
+      guestRoom: "room",
+    }) satisfies SfuAuthPayload;
+  const lockedRoomWith = async (waiting: number) => {
+    const state = makeState();
+    const host = await join(state, hostTab);
+    const room = state.rooms.get("conclave:room")!;
+    room.setLocked(true);
+    for (let order = 0; order < waiting; order += 1) await join(state, waiter(order));
+    return { state, room, host };
+  };
+  // The lobby as a slow reading of the room gives it: one row per guest,
+  // found by going through every pass the room knows.
+  const rowsTheSlowWay = (room: Room): string[] => {
+    const rows: string[] = [];
+    const covered = new Set<string>();
+    for (const request of room.pendingClients.values()) {
+      if (covered.has(request.userKey)) continue;
+      rows.push(request.userKey);
+      for (const userKey of room.identitiesOfSameGuest(request.userKey)) covered.add(userKey);
+    }
+    return rows;
+  };
+
+  it("does not go through the lobby, or the passes on record, for a join that links nothing", async () => {
+    const { state, room } = await lockedRoomWith(6);
+    const lobby = vi.spyOn(room, "waitingGuests");
+    const passes = vi.spyOn(room, "identitiesOfSameGuest");
+
+    const knock = await join(state, waiter(100));
+
+    expect(knock.ack).toHaveBeenCalledWith(expect.objectContaining({ status: "waiting" }));
+    expect(lobby).not.toHaveBeenCalled();
+    expect(passes).not.toHaveBeenCalled();
+  });
+
+  it("builds the hosts' lobby without going through the passes on record", async () => {
+    const { state, room } = await lockedRoomWith(6);
+    await join(state, { ...waiter(101, 2), guestWas: undefined });
+    const passes = vi.spyOn(room, "identitiesOfSameGuest");
+
+    const rows = toPendingUserSnapshots(room).map((row) => row.userId);
+
+    expect(rows).toHaveLength(6);
+    expect(passes).not.toHaveBeenCalled();
+  });
+
+  it("tells the hosts which rows go when a join links passes, without reading the whole lobby", async () => {
+    const { state, room, host } = await lockedRoomWith(6);
+    const lobby = vi.spyOn(room, "waitingGuests");
+
+    await join(state, {
+      ...waiter(102, 1),
+      guestWas: [{ userKey: "guest-gp_tab-102-under-pass-4", guestProof: "proof-of-pass-4" }],
+    });
+
+    expect(lobby).not.toHaveBeenCalled();
+    expect(host.peer.emit).toHaveBeenCalledWith("pendingUserLeft", { userId: waiter(4).userId, roomId: "room" });
+    expect(rowsTheSlowWay(room)).toEqual([0, 1, 2, 3, 5].map((order) => waiter(order).userId));
+  });
+
+  it("shows the same lobby as a slow reading of the room, through knocks, links, admits, denials and tabs that leave", async () => {
+    const { state, room, host } = await lockedRoomWith(0);
+    let seed = 20261122;
+    const pick = (below: number) => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return seed % below;
+    };
+    const hostAsks = async (event: string, payload: unknown) =>
+      host.peer.handlers.get(event)!(...([payload, vi.fn()] as never[]));
+
+    for (let step = 0; step < 240; step += 1) {
+      const waitingKeys = [...room.pendingClients.keys()];
+      const action = pick(10);
+      if (action < 5 || waitingKeys.length === 0) {
+        const pass = pick(12);
+        const linkTo = pick(12);
+        await join(state, {
+          ...waiter(1000 + step, pass),
+          ...(pick(3) === 0 && linkTo !== pass
+            ? { guestWas: [{ userKey: `guest-gp_tab-${1000 + step}-under-${linkTo}`, guestProof: `proof-of-pass-${linkTo}` }] }
+            : {}),
+        });
+      } else if (action < 7) {
+        withdrawWaitingRequest(room, waitingKeys[pick(waitingKeys.length)]);
+      } else if (action < 9) {
+        await hostAsks("admitUser", { userId: waitingKeys[pick(waitingKeys.length)] });
+      } else {
+        await hostAsks("rejectUser", { userId: waitingKeys[pick(waitingKeys.length)] });
+      }
+      await endOfTurn();
+
+      expect(toPendingUserSnapshots(room).map((row) => row.userId)).toEqual(rowsTheSlowWay(room));
+      for (const userKey of room.pendingClients.keys()) {
+        const sameGuest = new Set(room.identitiesOfSameGuest(userKey));
+        expect(room.waitingRequestsOfGuest(userKey).map((request) => request.userKey)).toEqual(
+          [...room.pendingClients.keys()].filter((key) => sameGuest.has(key)),
+        );
+      }
+    }
+  });
+});
+
 describe("a guest that is a co-host under one pass and blocked under another", () => {
   const hostTab = { ...guestHost, guestRoom: "room" } satisfies SfuAuthPayload;
   const coHostTab = {
