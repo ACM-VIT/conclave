@@ -1082,6 +1082,53 @@ const normalizeSnapshot = (
     : [],
 });
 
+/**
+ * Hours saved before they carried their own updatedAt take their profile's,
+ * which every hours edit bumps, else 0 so they only fill a gap. Imported hours
+ * are stamped with that time, so they never need the fallback again.
+ */
+const hoursUpdatedAt = (hours: unknown, profile: unknown): number =>
+  finiteNumber((hours as { updatedAt?: unknown } | null)?.updatedAt) ??
+  finiteNumber((profile as { updatedAt?: unknown } | null)?.updatedAt) ??
+  0;
+
+const schedulingRecordsOf = (snapshot: SchedulingSnapshot): SchedulingRecordWrite[] => {
+  const profilesById = new Map(snapshot.profiles.map((profile) => [profile.id, profile]));
+  return [
+    ...snapshot.profiles.map((profile): SchedulingRecordWrite => ({
+      kind: "profile",
+      id: profile.id,
+      clientId: profile.clientId,
+      updatedAt: profile.updatedAt,
+      payload: profile,
+    })),
+    ...snapshot.availability.map((entry): SchedulingRecordWrite => {
+      const profile = profilesById.get(entry.profileId);
+      return {
+        kind: "availability",
+        id: entry.profileId,
+        clientId: profile?.clientId ?? CONCLAVE_CLIENT_ID,
+        updatedAt: hoursUpdatedAt(entry.availability, profile),
+        payload: entry,
+      };
+    }),
+    ...snapshot.eventTypes.map((eventType): SchedulingRecordWrite => ({
+      kind: "event_type",
+      id: eventType.id,
+      clientId: eventType.clientId,
+      updatedAt: eventType.updatedAt,
+      payload: eventType,
+    })),
+    ...snapshot.calendars.map((calendar): SchedulingRecordWrite => ({
+      kind: "calendar",
+      id: calendar.profileId,
+      clientId: calendar.clientId,
+      updatedAt: calendar.updatedAt,
+      payload: serializeCalendar(calendar),
+    })),
+  ];
+};
+
 const createSqliteSchedulingPersistence = (
   path: string = getSchedulingSqlitePath(),
 ): SchedulingPersistence => {
@@ -1105,81 +1152,76 @@ const createSqliteSchedulingPersistence = (
       ON scheduling_records(kind, client_id);
   `);
 
-  const upsert = db.prepare(`
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS scheduling_tombstones (
+      kind TEXT NOT NULL,
+      id TEXT NOT NULL,
+      deleted_at INTEGER NOT NULL,
+      PRIMARY KEY (kind, id)
+    );
+  `);
+
+  const storedAt = `CASE scheduling_records.kind
+    WHEN 'availability' THEN COALESCE(
+      json_extract(scheduling_records.payload_json, '$.availability.updatedAt'),
+      scheduling_records.updated_at
+    )
+    ELSE scheduling_records.updated_at
+  END`;
+  const upsertSql = (guard: ">=" | ">") => `
     INSERT INTO scheduling_records (kind, id, client_id, updated_at, payload_json)
-    VALUES (?, ?, ?, ?, ?)
+    SELECT ?1, ?2, ?3, ?4, ?5
+    WHERE NOT EXISTS (
+      SELECT 1 FROM scheduling_tombstones
+      WHERE kind = ?1 AND id = ?2 AND NOT (?4 ${guard} deleted_at)
+    )
     ON CONFLICT(kind, id) DO UPDATE SET
       client_id = excluded.client_id,
       updated_at = excluded.updated_at,
       payload_json = excluded.payload_json
-    WHERE excluded.updated_at >= scheduling_records.updated_at
-  `);
-  const upsertIfNewer = db.prepare(`
-    INSERT INTO scheduling_records (kind, id, client_id, updated_at, payload_json)
-    VALUES (?, ?, ?, ?, ?)
+    WHERE excluded.updated_at ${guard} ${storedAt}
+  `;
+  const upsert = db.prepare(upsertSql(">="));
+  const upsertIfNewer = db.prepare(upsertSql(">"));
+  const deleteRecord = db.prepare("DELETE FROM scheduling_records WHERE kind = ? AND id = ?");
+  const markDeleted = db.prepare(`
+    INSERT INTO scheduling_tombstones (kind, id, deleted_at) VALUES (?, ?, ?)
     ON CONFLICT(kind, id) DO UPDATE SET
-      client_id = excluded.client_id,
-      updated_at = excluded.updated_at,
-      payload_json = excluded.payload_json
-    WHERE excluded.updated_at > CASE scheduling_records.kind
-      WHEN 'availability' THEN COALESCE(
-        json_extract(scheduling_records.payload_json, '$.availability.updatedAt'),
-        scheduling_records.updated_at
-      )
-      ELSE scheduling_records.updated_at
-    END
+      deleted_at = MAX(scheduling_tombstones.deleted_at, excluded.deleted_at)
   `);
-  const deleteAll = db.prepare("DELETE FROM scheduling_records");
   const loadRows = db.prepare(`
-    SELECT kind, payload_json
+    SELECT kind, id, payload_json
     FROM scheduling_records
     ORDER BY kind ASC, updated_at ASC
   `);
+  const write = (statement: SqliteStatement, record: SchedulingRecordWrite): boolean => {
+    const result = statement.run(
+      record.kind,
+      record.id,
+      record.clientId,
+      record.updatedAt,
+      JSON.stringify(record.payload),
+    ) as { changes: number | bigint };
+    return Number(result.changes) > 0;
+  };
+  const keyOf = (kind: string, id: string) => JSON.stringify([kind, id]);
+  let known = new Map<string, { kind: string; id: string }>();
 
   return {
     save: (snapshot) => {
       try {
+        const records = schedulingRecordsOf(snapshot);
+        const saved = new Map(records.map(({ kind, id }) => [keyOf(kind, id), { kind, id }]));
+        const removed = [...known].filter(([key]) => !saved.has(key)).map(([, record]) => record);
         db.exec("BEGIN IMMEDIATE");
-        deleteAll.run();
-        for (const profile of snapshot.profiles) {
-          upsert.run(
-            "profile",
-            profile.id,
-            profile.clientId,
-            profile.updatedAt,
-            JSON.stringify(profile),
-          );
-        }
-        for (const entry of snapshot.availability) {
-          const profile = snapshot.profiles.find((p) => p.id === entry.profileId);
-          upsert.run(
-            "availability",
-            entry.profileId,
-            profile?.clientId ?? "conclave",
-            Date.now(),
-            JSON.stringify(entry),
-          );
-        }
-        for (const eventType of snapshot.eventTypes) {
-          upsert.run(
-            "event_type",
-            eventType.id,
-            eventType.clientId,
-            eventType.updatedAt,
-            JSON.stringify(eventType),
-          );
-        }
-        for (const calendar of snapshot.calendars) {
-          const serialized = serializeCalendar(calendar);
-          upsert.run(
-            "calendar",
-            calendar.profileId,
-            calendar.clientId,
-            calendar.updatedAt,
-            JSON.stringify(serialized),
-          );
+        for (const record of records) write(upsert, record);
+        const deletedAt = Date.now();
+        for (const { kind, id } of removed) {
+          deleteRecord.run(kind, id);
+          markDeleted.run(kind, id, deletedAt);
         }
         db.exec("COMMIT");
+        known = saved;
       } catch (error) {
         try {
           db.exec("ROLLBACK");
@@ -1188,14 +1230,9 @@ const createSqliteSchedulingPersistence = (
       }
     },
     importIfNewer: (record) => {
-      const result = upsertIfNewer.run(
-        record.kind,
-        record.id,
-        record.clientId,
-        record.updatedAt,
-        JSON.stringify(record.payload),
-      ) as { changes: number | bigint };
-      return Number(result.changes) > 0;
+      const applied = write(upsertIfNewer, record);
+      if (applied) known.set(keyOf(record.kind, record.id), { kind: record.kind, id: record.id });
+      return applied;
     },
     load: () => {
       const snapshot: SchedulingSnapshot = {
@@ -1205,11 +1242,15 @@ const createSqliteSchedulingPersistence = (
         calendars: [],
       };
       try {
+        const loaded = new Map<string, { kind: string; id: string }>();
         for (const row of loadRows.all()) {
           const kind =
             row && typeof row === "object" && "kind" in row
               ? String((row).kind)
               : "";
+          const id =
+            row && typeof row === "object" && "id" in row ? String(row.id) : "";
+          loaded.set(keyOf(kind, id), { kind, id });
           const payload =
             row && typeof row === "object" && "payload_json" in row
               ? String((row).payload_json)
@@ -1236,6 +1277,7 @@ const createSqliteSchedulingPersistence = (
             );
           }
         }
+        known = loaded;
       } catch (error) {
         Logger.error("Failed to load scheduling records", error);
       }
@@ -1244,16 +1286,6 @@ const createSqliteSchedulingPersistence = (
     close: () => db.close(),
   };
 };
-
-/**
- * Hours saved before they carried their own updatedAt take their profile's,
- * which every hours edit bumps, else 0 so they only fill a gap. Imported hours
- * are stamped with that time, so they never need the fallback again.
- */
-const hoursUpdatedAt = (hours: unknown, profile: unknown): number =>
-  finiteNumber((hours as { updatedAt?: unknown } | null)?.updatedAt) ??
-  finiteNumber((profile as { updatedAt?: unknown } | null)?.updatedAt) ??
-  0;
 
 const SNAPSHOT_FIELD: Record<SchedulingRecordKind, keyof SchedulingSnapshot> = {
   profile: "profiles",
@@ -1451,32 +1483,12 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
 
   save(snapshot: SchedulingSnapshot): void {
     void this.fallback.save(snapshot);
-    const profileRecords = snapshot.profiles.map((profile) => ({
-      id: profile.id,
-      updatedAt: profile.updatedAt,
-      payload: profile,
-    }));
-    const profileUpdatedAt = new Map(
-      snapshot.profiles.map((profile) => [profile.id, profile.updatedAt]),
-    );
-    const availabilityRecords = snapshot.availability.map((entry) => ({
-      id: entry.profileId,
-      updatedAt:
-        entry.availability.updatedAt ??
-        profileUpdatedAt.get(entry.profileId) ??
-        Date.now(),
-      payload: entry,
-    }));
-    const eventTypeRecords = snapshot.eventTypes.map((eventType) => ({
-      id: eventType.id,
-      updatedAt: eventType.updatedAt,
-      payload: eventType,
-    }));
-    const calendarRecords = snapshot.calendars.map((calendar) => ({
-      id: calendar.profileId,
-      updatedAt: calendar.updatedAt,
-      payload: serializeCalendar(calendar),
-    }));
+    const records = schedulingRecordsOf(snapshot);
+    const ofKind = (kind: SchedulingRecordKind) => records.filter((record) => record.kind === kind);
+    const profileRecords = ofKind("profile");
+    const availabilityRecords = ofKind("availability");
+    const eventTypeRecords = ofKind("event_type");
+    const calendarRecords = ofKind("calendar");
     const deletedProfileIds = missingIds(this.knownProfileIds, profileRecords);
     const deletedAvailabilityIds = missingIds(
       this.knownAvailabilityIds,

@@ -113,6 +113,25 @@ describe.skipIf(!hasRedis)("importing JSON fallback files into Redis", () => {
     expect(stored).toEqual(new Map([["edited", "saved by the other SFU"], ["only-in-fallback", "fallback meeting"]]));
   });
 
+  it("a snapshot save keeps meetings the other SFU added and removes only its own", async () => {
+    const sfuA = track(createScheduledMeetingPersistence());
+    await sfuA.save([meeting("first", 100, "saved by SFU A")]);
+    await sfuA.flush?.();
+    const sfuB = track(createScheduledMeetingPersistence());
+    await sfuB.load();
+    await sfuB.saveChanged?.([meeting("added-on-b", 1, "saved by SFU B")]);
+    await sfuB.flush?.();
+    const titles = async () => new Map((await track(createScheduledMeetingPersistence()).load()).map((entry) => [entry.id, entry.title]));
+
+    await sfuA.save([meeting("first", 50, "older copy on SFU A")]);
+    await sfuA.flush?.();
+    expect(await titles()).toEqual(new Map([["first", "saved by SFU A"], ["added-on-b", "saved by SFU B"]]));
+
+    await sfuA.save([]);
+    await sfuA.flush?.();
+    expect(await titles()).toEqual(new Map([["added-on-b", "saved by SFU B"]]));
+  });
+
   it("still copies SQLite into an empty Redis when the import runs first", async () => {
     vi.stubEnv("SCHEDULED_MEETINGS_PERSISTENCE", "sqlite");
     const sqlite = track(createScheduledMeetingPersistence());

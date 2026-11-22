@@ -933,12 +933,16 @@ redis.call("HSET", key, meetingId, nextPayload)
 return nextPayload
 `;
 
-const IMPORT_MEETING_IF_NEWER_SCRIPT = `
+const SET_MEETING_IF_NEWER_SCRIPT = `
 local current = redis.call("HGET", KEYS[1], ARGV[1])
+local incomingUpdatedAt = tonumber(ARGV[2]) or 0
 if current then
   local ok, stored = pcall(cjson.decode, current)
-  if ok and type(stored) == "table" and (tonumber(stored["updatedAt"]) or 0) >= (tonumber(ARGV[2]) or 0) then
-    return 0
+  if ok and type(stored) == "table" then
+    local storedAt = tonumber(stored["updatedAt"]) or 0
+    if storedAt > incomingUpdatedAt or (ARGV[4] == "newer" and storedAt == incomingUpdatedAt) then
+      return 0
+    end
   end
 end
 redis.call("HSET", KEYS[1], ARGV[1], ARGV[3])
@@ -1005,20 +1009,27 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
   }
 
   save(snapshot: ScheduledMeeting[]): void {
+    const ids = new Set(snapshot.map((meeting) => meeting.id));
+    const removed = [...this.knownMeetings.keys()].filter((id) => !ids.has(id));
     this.knownMeetings = new Map(snapshot.map((meeting) => [meeting.id, meeting]));
     void this.fallback.save(snapshot);
-    const payload = snapshot.map((meeting) => [
-      meeting.id,
-      JSON.stringify(meeting),
-    ] as const);
     this.queueWrite("save snapshot", async () => {
-      const transaction = this.client.multi();
-      transaction.del(this.key);
-      if (payload.length > 0) {
-        transaction.hSet(this.key, Object.fromEntries(payload));
-      }
-      await transaction.exec();
+      for (const meeting of snapshot) await this.setIfNewer(meeting, "save");
+      if (removed.length > 0) await this.client.hDel(this.key, removed);
     });
+  }
+
+  private setIfNewer(meeting: ScheduledMeeting, mode: "save" | "newer"): Promise<unknown> {
+    return this.client.sendCommand([
+      "EVAL",
+      SET_MEETING_IF_NEWER_SCRIPT,
+      "1",
+      this.key,
+      meeting.id,
+      String(meeting.updatedAt),
+      JSON.stringify(meeting),
+      mode,
+    ]);
   }
 
   saveChanged(meetings: ScheduledMeeting[]): void {
@@ -1050,15 +1061,7 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
   async importIfNewer(meeting: ScheduledMeeting): Promise<boolean> {
     await (this.firstLoad ??= this.load());
     await this.start();
-    const applied = await this.client.sendCommand([
-      "EVAL",
-      IMPORT_MEETING_IF_NEWER_SCRIPT,
-      "1",
-      this.key,
-      meeting.id,
-      String(meeting.updatedAt),
-      JSON.stringify(meeting),
-    ]);
+    const applied = await this.setIfNewer(meeting, "newer");
     await this.fallback.importIfNewer(meeting);
     return Number(applied) === 1;
   }
