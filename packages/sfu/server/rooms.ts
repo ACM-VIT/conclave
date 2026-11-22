@@ -69,7 +69,7 @@ export const markRoomEnded = (
   // Ended from this moment, not from when the room closes: it may stay open
   // up to half a minute to say goodbye, and must not renew passes meanwhile.
   room.markEnded();
-  state.roomRecovery.noteEnded(room);
+  state.roomRecovery.noteOver(room);
   return endedRoom;
 };
 
@@ -339,11 +339,12 @@ export const cleanupRoom = (state: SfuState, channelId: string): boolean => {
   if (!closedRoom) {
     return false;
   }
-  // Emptying is a close on purpose, so the next visitor opens a new meeting.
-  // Not so for a room that only stood in for a lost call, or one a host
-  // ended: what the ledger says about those still holds.
+  // An emptied room's meeting is over: the next visitor opens a new one, and
+  // passes from this one count for nothing there. Not so for a room that only
+  // stood in for a lost call, or one a host ended: what the ledger says about
+  // those still holds.
   if (closedRoom.recordsItsCall) {
-    state.roomRecovery.noteClosed(closedRoom);
+    state.roomRecovery.noteOver(closedRoom);
   }
 
   Logger.info(`Closed empty room: ${closedRoom.id} (${closedRoom.clientId})`);

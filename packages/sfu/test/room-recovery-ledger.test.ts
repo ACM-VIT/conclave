@@ -9,7 +9,7 @@ import {
 
 const CHANNEL = "conclave:abc-mnop-xyz";
 const MINUTE_MS = 60_000;
-const NOTHING_KNOWN = { lost: null, passesVoidUntil: null, known: false };
+const NOTHING_KNOWN = { lost: null, passesVoidUntil: null };
 const room = {
   channelId: CHANNEL,
   hostUserKey: "host@example.com",
@@ -44,7 +44,6 @@ describe("what the SFU remembers about a room across a restart", () => {
         claimableUntil: Date.now() + 7 * MINUTE_MS,
       },
       passesVoidUntil: null,
-      known: true,
     });
   });
 
@@ -52,18 +51,15 @@ describe("what the SFU remembers about a room across a restart", () => {
     expect(await sfu().recall(CHANNEL)).toEqual(NOTHING_KNOWN);
   });
 
-  it("does not call a room lost when it closed on purpose, and remembers that it closed", async () => {
+  it("does not call a room lost when its last person left, and voids the passes from it", async () => {
+    const emptiedAt = Date.now();
     const before = sfu();
     before.noteRunning(room);
-    before.noteClosed(room);
+    before.noteOver(room);
 
-    expect(await sfu().recall(CHANNEL)).toEqual({
-      lost: null,
-      passesVoidUntil: null,
-      known: true,
-    });
+    expect(await sfu().recall(CHANNEL)).toEqual({ lost: null, passesVoidUntil: emptiedAt });
     vi.advanceTimersByTime(6 * MINUTE_MS + 1);
-    expect((await sfu().recall(CHANNEL)).known).toBe(false);
+    expect(await sfu().recall(CHANNEL)).toEqual(NOTHING_KNOWN);
   });
 
   it("stops calling a room lost once no pass from it can still be good", async () => {
@@ -79,30 +75,26 @@ describe("what the SFU remembers about a room across a restart", () => {
     const endedAt = Date.now();
     const before = sfu();
     before.noteRunning(room);
-    before.noteEnded(room);
+    before.noteOver(room);
 
-    expect(await sfu().recall(CHANNEL)).toEqual({
-      lost: null,
-      passesVoidUntil: endedAt,
-      known: true,
-    });
+    expect(await sfu().recall(CHANNEL)).toEqual({ lost: null, passesVoidUntil: endedAt });
     vi.advanceTimersByTime(6 * MINUTE_MS + 1);
     expect(await sfu().recall(CHANNEL)).toEqual(NOTHING_KNOWN);
   });
 
-  it("keeps the end on record while the reopened meeting runs and after it empties", async () => {
+  it("keeps the end on record while the reopened meeting runs, and moves it on when that one empties", async () => {
     const endedAt = Date.now();
     const ledger = sfu();
-    ledger.noteEnded(room);
+    ledger.noteOver(room);
     const reopened = { ...room, recoveryPassesVoidUntil: endedAt };
     ledger.noteRunning(reopened);
     expect((await sfu().recall(CHANNEL)).passesVoidUntil).toBe(endedAt);
 
-    ledger.noteClosed(reopened);
+    vi.advanceTimersByTime(MINUTE_MS);
+    ledger.noteOver(reopened);
     expect(await sfu().recall(CHANNEL)).toEqual({
       lost: null,
-      passesVoidUntil: endedAt,
-      known: true,
+      passesVoidUntil: endedAt + MINUTE_MS,
     });
   });
 

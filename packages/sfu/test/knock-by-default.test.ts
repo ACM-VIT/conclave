@@ -1188,6 +1188,76 @@ describe("a meeting a host ended for everyone", () => {
   });
 });
 
+describe("a meeting everyone left, opened again at the same code", () => {
+  // A host, someone they removed and someone who stayed to the end.
+  const emptiedMeeting = async () => {
+    vi.useFakeTimers({
+      toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
+    vi.setSystemTime(new Date("2026-11-22T08:00:00Z"));
+    const state = makeState();
+    const created = await join(state, host);
+    roomOf(state).allowLockedUser(guest.userId);
+    roomOf(state).allowLockedUser(second.userId);
+    const removed = await join(state, guest);
+    const stayed = await join(state, second);
+    await send(created.peer, "kickUser", { userId: `${guest.userId}#${guest.sessionId}` });
+    await hangUp(stayed.peer);
+    await hangUp(created.peer);
+    vi.advanceTimersByTime(MINUTE_MS);
+    expect(state.rooms.size).toBe(0);
+    return {
+      state,
+      removedPass: removed.response.roomRecoveryPass,
+      stayedPass: stayed.response.roomRecoveryPass,
+    };
+  };
+
+  it("refuses the kept pass of someone a host had removed", async () => {
+    const { state, removedPass } = await emptiedMeeting();
+    const reopened = await join(state, host);
+    expect(reopened.context.currentClient).toBeInstanceOf(Admin);
+
+    expect((await join(state, guest, { roomRecoveryPass: removedPass })).status).toBe(
+      "waiting",
+    );
+  });
+
+  it("refuses that pass after a restart as well", async () => {
+    const { state, removedPass } = await emptiedMeeting();
+    const after = await restart(state);
+    expect((await join(after, host)).context.currentClient).toBeInstanceOf(Admin);
+
+    expect((await join(after, guest, { roomRecoveryPass: removedPass })).status).toBe(
+      "waiting",
+    );
+  });
+
+  it("is a new meeting to the people of the earlier one, who knock like anyone else", async () => {
+    const { state, stayedPass } = await emptiedMeeting();
+    await join(state, host);
+
+    expect((await join(state, second, { roomRecoveryPass: stayedPass })).status).toBe(
+      "waiting",
+    );
+  });
+
+  it("still brings its own people back if the server then loses it", async () => {
+    const { state } = await emptiedMeeting();
+    await join(state, host);
+    roomOf(state).allowLockedUser(second.userId);
+    const member = await join(state, second);
+
+    const after = await restart(state);
+    const back = await join(
+      after,
+      { ...second, allowRoomCreation: true },
+      { roomRecoveryPass: member.response.roomRecoveryPass },
+    );
+    expect(back.status).toBe("joined");
+  });
+});
+
 describe("someone a host blocked without removing them", () => {
   it("gets no more passes until a host lets them in again", async () => {
     useTestClock();
