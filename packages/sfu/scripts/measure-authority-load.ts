@@ -234,12 +234,13 @@ const main = async (): Promise<void> => {
     // Seed: a few polls and a board of questions, before measuring.
     const pollIds: string[] = [];
     const questionIds: string[] = [];
-    const createPoll = async (): Promise<void> => {
+    const createPoll = async () => {
       const created = await host.polls.act("create", {
         question: `Poll ${pollIds.length + 1}?`,
         options: ["Tea", "Coffee", "Water"],
       });
       if (created.ok) pollIds.push(created.value.pollId);
+      return created;
     };
     await createPoll();
     for (const tab of members.slice(0, 40)) {
@@ -336,7 +337,7 @@ const main = async (): Promise<void> => {
                 .then((result) => record("moderate", result)),
             );
           } else if (roll < 0.98) {
-            pending.push(createPoll().then(() => count("create:ok")));
+            pending.push(createPoll().then((result) => record("create", result)));
           } else if (guestTabs.length > 0 && pollIds.length > 0) {
             pending.push(
               pick(guestTabs)
