@@ -32,7 +32,7 @@ import type { ConnectionContext } from "../../socket/context.js";
 import type { IdentityAdapter } from "./identity.js";
 import { AuthorityInstance, type Actor } from "./instance.js";
 import type { AuthorityLimits } from "./limits.js";
-import type { HeldRows, LiveAudiences, SizedRow, ViewOps } from "./views.js";
+import { ARRAY_BYTES, type HeldRows, type LiveAudiences, type SizedRow, type ViewOps } from "./views.js";
 
 export type SocketPressure = { packets: number; bytes: number };
 
@@ -86,13 +86,17 @@ type Subscription = {
   /** The room's policy changed, so what it may do is worked out again. */
   grantsDue: boolean;
   /**
-   * Its view version: how many times its view, and nothing else, has fully
-   * caught up with a change. Frames carry it, and an action's answer names
-   * the one that shows the action.
+   * Its view version as sent: how many times its view, and nothing else,
+   * has fully caught up with a change, or been replaced. Frames carry it.
    */
   viewRevision: number;
-  /** A version an answer named that has yet to be sent. */
-  promised: number;
+  /**
+   * The version at which its view will show everything it is owed. It is
+   * ahead of `viewRevision` while an answer named a version not yet sent,
+   * and the next frame that completes what is owed, or the snapshot that
+   * recovers a view whose delivery was skipped, brings it there.
+   */
+  target: number;
   dropped: boolean;
 };
 
@@ -145,15 +149,18 @@ const carried = (held: HeldRows, part: ReplaceFrame): void => {
   }
 };
 
-/** Splits a snapshot into parts of at most `chunkBytes`, one row at least. */
+/**
+ * Splits a snapshot into parts whose rows take at most `chunkBytes` as JSON,
+ * one row at least.
+ */
 const partsOf = (rows: SizedRow[], chunkBytes: number): SizedRow[][] => {
   const parts: SizedRow[][] = [[]];
-  let size = 0;
+  let size = ARRAY_BYTES;
   for (const sized of rows) {
     const current = parts[parts.length - 1];
     if (current.length > 0 && size + sized.bytes > chunkBytes) {
       parts.push([sized]);
-      size = sized.bytes;
+      size = ARRAY_BYTES + sized.bytes;
     } else {
       current.push(sized);
       size += sized.bytes;
@@ -297,7 +304,7 @@ export class RoomAuthority {
       grantsSent: "",
       grantsDue: false,
       viewRevision: 0,
-      promised: 0,
+      target: 0,
       dropped: false,
     };
     subscriptions.set(subscription.id, subscription);
@@ -331,33 +338,40 @@ export class RoomAuthority {
   }
 
   /**
-   * The view version an answer names: one at which the actor's view shows
-   * everything committed so far that changes it, their action and anyone
-   * else's alike. If anything committed has yet to reach their view, that is
-   * the next version, and it is sent at the next flush even if a later write
-   * undoes the change, so it is always reached. If nothing has, it is the
-   * version they hold, or one already promised. It reads only their own
-   * view, so it says nothing of what others did out of their sight.
+   * The view version an answer names: the first one at which this
+   * subscription's view shows everything committed so far that changes it,
+   * the action and anyone else's writes alike. Everything it reads is this
+   * subscription's own: whether its delivery was skipped and a recovering
+   * snapshot is due, whether a snapshot of its own is still in parts, and
+   * what changed in its own view since its snapshot. So it says nothing of
+   * what others did out of its sight, nor of what happened before it began.
+   * A version named this way is always sent, even if a later write undoes
+   * the change.
    */
   private answerRevision(subscription: Subscription): number {
-    if (subscription.instance.pendingFor(subscription.actor)) {
-      subscription.promised = subscription.viewRevision + 1;
-      this.promising.add(subscription.instance);
+    const { instance, actor } = subscription;
+    const behind =
+      subscription.lagging ||
+      subscription.transfer !== null ||
+      instance.pendingSince(actor, subscription.viewVersion);
+    if (behind && subscription.target <= subscription.viewRevision) {
+      subscription.target = subscription.viewRevision + 1;
+      this.promising.add(instance);
       this.scheduleFlush(false);
     }
-    return Math.max(subscription.viewRevision, subscription.promised);
+    return Math.max(subscription.viewRevision, subscription.target);
   }
 
   /**
    * The view version a frame brings a subscription to. It moves on only when
-   * the frame completes what is owed to the view: rows changed, or a version
-   * an answer promised. Removals from a large clear still to come hold it
+   * the frame completes what is owed to its view: rows changed, or a version
+   * an answer named. Removals from a large clear still owed to it hold it
    * back, so a client that reached an answer's version holds all of it.
    */
   private nextRevision(subscription: Subscription, changed: boolean): number {
-    const { viewRevision, promised, instance, actor } = subscription;
-    if (!changed && promised <= viewRevision) return viewRevision;
-    return instance.owes(actor) ? viewRevision : viewRevision + 1;
+    const { viewRevision, target, instance, actor, viewVersion } = subscription;
+    if (!changed && target <= viewRevision) return viewRevision;
+    return instance.owesSince(actor, viewVersion) ? viewRevision : viewRevision + 1;
   }
 
   query(context: ConnectionContext, request: QueryRequest): QueryReply {
@@ -721,8 +735,9 @@ export class RoomAuthority {
         if (shared || personal || grants || revision !== subscription.viewRevision) {
           this.sendPatch(subscription, shared, personal, grants, revision);
         }
-        // Held back by removals still owed: sent with the flush that ends them.
-        if (subscription.promised > subscription.viewRevision) this.promising.add(instance);
+        // Held back by removals still owed, or by a socket that is behind:
+        // sent with the flush that ends them, or the recovering snapshot.
+        if (subscription.target > subscription.viewRevision) this.promising.add(instance);
       }
     }
     // A large clear is told to its viewers a batch per flush.
@@ -782,6 +797,7 @@ export class RoomAuthority {
     }
     subscription.seq += 1;
     subscription.viewRevision = revision;
+    subscription.target = Math.max(subscription.target, revision);
     this.emit(subscription, {
       kind: "patch",
       subscription: subscription.id,
@@ -821,8 +837,10 @@ export class RoomAuthority {
       this.revoke(subscription, "too-large");
       return;
     }
-    // A whole view as committed now: it shows whatever was owed.
-    subscription.viewRevision += 1;
+    // A whole view as committed now: it shows whatever was owed, and reaches
+    // any version an answer named.
+    subscription.viewRevision = Math.max(subscription.viewRevision + 1, subscription.target);
+    subscription.target = subscription.viewRevision;
     const now = this.now();
     const grants = subscription.instance.grants(subscription.actor, now);
     subscription.grantsSent = JSON.stringify(grants);
@@ -865,7 +883,7 @@ export class RoomAuthority {
   ): { rows: ProjectedRow[]; rest: ProjectedRow[] } {
     const view = subscription.instance.committedView(subscription.actor);
     const rows: ProjectedRow[] = [];
-    let bytes = 0;
+    let bytes = ARRAY_BYTES;
     for (let index = 0; index < planned.length; index += 1) {
       const row = planned[index];
       const value = view.get(row.bucket, row.key);

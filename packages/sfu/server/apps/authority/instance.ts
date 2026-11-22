@@ -354,14 +354,14 @@ export class AuthorityInstance {
     return changed;
   }
 
-  /** Whether anything committed has yet to reach the actor's view. */
-  pendingFor(actor: Actor): boolean {
-    return this.views.pendingFor(actor.role, actor.subject);
+  /** Whether a viewer whose snapshot was read at `version` is behind what was committed. */
+  pendingSince(actor: Actor, version: number): boolean {
+    return this.views.pendingSince(actor.role, actor.subject, version);
   }
 
-  /** Whether removals from a large clear are still owed to the actor's view. */
-  owes(actor: Actor): boolean {
-    return this.views.owes(actor.role, actor.subject);
+  /** Whether removals from a large clear are still owed to such a viewer. */
+  owesSince(actor: Actor, version: number): boolean {
+    return this.views.owesSince(actor.role, actor.subject, version);
   }
 
   /** Rows the views have yet to take in, or viewers have yet to be told of. */
