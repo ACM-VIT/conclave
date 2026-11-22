@@ -19,6 +19,10 @@ before anything is built if it fails or reports no result. The preflight runs
 the same through a symlinked checkout, and a run it cannot recognize as its
 own fails rather than passing. Then it builds one image for the commit
 or reuses the one already built for it, and takes the instances one at a time.
+The build goes under its own tag (`<project>-sfu:<commit>-candidate`), never
+a service's compose image: each instance's image moves to it only after that
+instance drained, right before its canary, so a deploy paused by a call
+leaves nothing untested for a later `compose up` to start.
 The order puts first the instances that take no new meetings anyway (one
 whose container is down, then one already draining), then the serving ones,
 emptiest first. An instance whose `/status` cannot be read goes last, so an

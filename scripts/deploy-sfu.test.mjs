@@ -205,7 +205,8 @@ const main = async () => {
     return out(args.at(-1));
   }
   if (args[0] === "build") {
-    tags[args[args.indexOf("-t") + 1]] = "sha256:canary-build";
+    const tag = args[args.indexOf("-t") + 1];
+    tags[tag] = tag.includes("-canary:") ? "sha256:canary-build" : "sha256:candidate-build";
     return fs.writeFileSync(tagsFile, JSON.stringify(tags));
   }
   // DEPLOY_TEST_NO_COMMIT_IMAGES: no image was ever tagged for a commit.
@@ -749,6 +750,19 @@ test("a deploy waits for a backup holding the host lock, then runs", async () =>
       backup.kill();
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+test("a deploy paused by a call leaves that instance's compose image on the release it runs", async () => {
+  await withSfus({ "sfu-a": { rooms: 1 }, "sfu-b": { rooms: 2 } }, async (sfus) => {
+    const result = await deploy(sfus, { env: { DEPLOY_TEST_NO_COMMIT_IMAGES: "1" } });
+    assert.equal(result.code, 3, result.output);
+    assert.equal(result.order, "sfu-a sfu-b");
+    assert.equal(result.tags["vm-sfu-a"], undefined, "sfu-a's compose image was never moved to the untested build");
+    assert.ok(!result.docker.some((args) => args[0] === "compose" && args.includes("build")), "no service image is built");
+    const built = result.docker.find((args) => args[0] === "build");
+    assert.match(built[built.indexOf("-t") + 1], /^vm-sfu:[0-9a-f]{12}-candidate$/);
+    assert.deepEqual(cutRooms(sfus), []);
   });
 });
 

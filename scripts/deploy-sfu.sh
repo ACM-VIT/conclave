@@ -885,9 +885,14 @@ else
      TARGET_IMAGE="$(docker image inspect -f '{{.Id}}' "${IMAGE_REPO}:${TARGET_COMMIT}" 2>/dev/null)"; then
     echo "Reusing the image already built for ${TARGET_COMMIT}."
   else
+    # Built under its own candidate tag, never as a service's compose image: an
+    # instance's image moves to the build only once that instance has
+    # drained, right before its canary, so a deploy paused by a call leaves
+    # nothing untested for a later compose up to start.
     echo "Building the SFU image for ${TARGET_COMMIT}..."
-    "${COMPOSE[@]}" build "${ORDERED_SERVICES[0]}"
-    TARGET_IMAGE="$(docker image inspect -f '{{.Id}}' "$(service_image_name "${ORDERED_SERVICES[0]}")")"
+    mapfile -t target_build < <(service_build "${ORDERED_SERVICES[0]}")
+    docker build -t "${IMAGE_REPO}:${TARGET_COMMIT}-candidate" -f "${target_build[1]}" "${target_build[0]}"
+    TARGET_IMAGE="$(docker image inspect -f '{{.Id}}' "${IMAGE_REPO}:${TARGET_COMMIT}-candidate")"
     if [[ "$build_inputs_clean" == "true" ]]; then
       docker tag "$TARGET_IMAGE" "${IMAGE_REPO}:${TARGET_COMMIT}"
     else
