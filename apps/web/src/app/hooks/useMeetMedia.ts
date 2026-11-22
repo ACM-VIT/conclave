@@ -34,7 +34,8 @@ import {
   MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS,
   MEDIA_CAPTURE_RECOVERY_TIMEOUT_MS,
 } from "../lib/media-capture-timeout";
-import { createMeetError } from "../lib/utils";
+import { clearMediaDeviceError, createMeetError } from "../lib/utils";
+import type { MeetMediaDevice } from "../lib/types";
 import {
   createCapturedSurfaceControlState,
   createCaptureController,
@@ -2011,6 +2012,7 @@ export function useMeetMedia({
       setShowPermissionHint(true);
     }, 450);
 
+    let requestedDevice: MeetMediaDevice = "both";
     try {
       const wantsAudio = options.audio ?? true;
       const wantsVideo = options.video ?? !isCameraOff;
@@ -2025,6 +2027,12 @@ export function useMeetMedia({
         : null;
       const shouldRequestAudio = wantsAudio && !reusableAudioTrack;
       const shouldRequestVideo = wantsVideo && !reusableVideoTrack;
+      requestedDevice =
+        shouldRequestAudio && shouldRequestVideo
+          ? "both"
+          : shouldRequestVideo
+            ? "camera"
+            : "microphone";
 
       if (!wantsAudio && !wantsVideo) {
         setMediaState({
@@ -2140,16 +2148,28 @@ export function useMeetMedia({
         hasVideoPermission: hasVideo,
       });
 
-      if (audioRequired && !hasAudio) {
+      const audioUnavailable = audioRequired && !hasAudio;
+      const videoUnavailable = videoRequired && !hasVideo;
+      if (audioUnavailable) {
         firstRequiredError ??= new Error("Microphone access was unavailable");
         setIsMuted(true);
       }
-      if (videoRequired && !hasVideo) {
+      if (videoUnavailable) {
         firstRequiredError ??= new Error("Camera access was unavailable");
         setIsCameraOff(true);
       }
       if (firstRequiredError) {
-        setMeetError(createMeetError(firstRequiredError, "PERMISSION_DENIED"));
+        setMeetError(
+          createMeetError(
+            firstRequiredError,
+            "PERMISSION_DENIED",
+            audioUnavailable && videoUnavailable
+              ? "both"
+              : videoUnavailable
+                ? "camera"
+                : "microphone",
+          ),
+        );
       }
 
       if (nextAudioTrack) {
@@ -2170,7 +2190,7 @@ export function useMeetMedia({
 
       return liveTracks.length > 0 ? new MediaStream(liveTracks) : null;
     } catch (err) {
-      const meetErr = createMeetError(err, "PERMISSION_DENIED");
+      const meetErr = createMeetError(err, "PERMISSION_DENIED", requestedDevice);
       setMeetError(meetErr);
       setIsCameraOff(true);
       if (meetErr.code === "PERMISSION_DENIED") {
@@ -3439,18 +3459,18 @@ export function useMeetMedia({
           producer.resume();
         } catch {}
         setMutedIntent(false);
-        setMeetError(null);
+        setMeetError((current) => clearMediaDeviceError(current, "microphone"));
         confirmAudioProducerUnmuted(producer.id);
         return;
       }
 
       setMutedIntent(false);
-      setMeetError(null);
+      setMeetError((current) => clearMediaDeviceError(current, "microphone"));
       requestAudioProducerRecovery();
       return;
     } catch (err) {
       console.error("[Meets] Failed to restart audio:", err);
-      const meetErr = createMeetError(err, "MEDIA_ERROR");
+      const meetErr = createMeetError(err, "MEDIA_ERROR", "microphone");
       const liveAudioTrackAfterFailure = getFirstLiveTrack(
         localStreamRef.current?.getAudioTracks() ?? [],
       );
@@ -3469,7 +3489,7 @@ export function useMeetMedia({
           closeLocalAudioProducerForReplacement(producer);
         }
         setMutedIntent(false);
-        setMeetError(null);
+        setMeetError((current) => clearMediaDeviceError(current, "microphone"));
         requestAudioProducerRecovery();
         return;
       }
@@ -3746,7 +3766,7 @@ export function useMeetMedia({
             setMutedIntent(true);
             return;
           }
-          const meetErr = createMeetError(err, "MEDIA_ERROR");
+          const meetErr = createMeetError(err, "MEDIA_ERROR", "microphone");
           const failedMutedWarmup = isMutedRef.current;
           if (
             !hadLiveAudioTrackBeforeRecovery &&
@@ -3979,6 +3999,7 @@ export function useMeetMedia({
           }
           isCameraOffRef.current = false;
           setIsCameraOff(false);
+          setMeetError((current) => clearMediaDeviceError(current, "camera"));
           return;
         }
 
@@ -4128,6 +4149,7 @@ export function useMeetMedia({
             }
           });
           setIsCameraOff(false);
+          setMeetError((current) => clearMediaDeviceError(current, "camera"));
         } catch (err) {
           console.error("[Meets] Failed to restart video:", err);
           if (createdTrack) {
@@ -4143,7 +4165,7 @@ export function useMeetMedia({
             }
           }
           setIsCameraOff(true);
-          setMeetError(createMeetError(err, "MEDIA_ERROR"));
+          setMeetError(createMeetError(err, "MEDIA_ERROR", "camera"));
         }
       }
     } finally {
@@ -5349,6 +5371,7 @@ export function useMeetMedia({
           }
         });
         setIsCameraOff(false);
+        setMeetError((current) => clearMediaDeviceError(current, "camera"));
       } catch (err) {
         console.error("[Meets] Camera producer recovery failed:", err);
         if (cameraPublishingDisabledRef.current) {
@@ -5357,7 +5380,7 @@ export function useMeetMedia({
         }
         removeCreatedTrackFromLocalStream();
         if (!cancelled) {
-          const meetErr = createMeetError(err, "MEDIA_ERROR");
+          const meetErr = createMeetError(err, "MEDIA_ERROR", "camera");
           if (
             !hadLiveCameraTrackBeforeRecovery &&
             shouldDisableMediaIntentAfterRecoveryFailure(err, meetErr)

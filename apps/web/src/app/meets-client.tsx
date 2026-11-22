@@ -5,6 +5,7 @@ import { useSharedVoiceStart } from "./hooks/useSharedVoiceStart";
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useHotkey } from "@tanstack/react-hotkeys";
+import { retryFailedMediaDevices } from "./lib/media-retry";
 import { HOTKEYS } from "./lib/hotkeys";
 import type { Socket } from "socket.io-client";
 import { SFU_EVENTS } from "@conclave/meeting-core/sfu-events";
@@ -1333,25 +1334,17 @@ export default function MeetsClient({
   }, [toggleCamera]);
 
   const handleRetryMedia = useCallback(async () => {
-    const stream = await requestMediaPermissions();
-    if (!stream) return;
-    const refreshedTrackIds = new Set(
-      stream.getTracks().map((track) => track.id),
-    );
-    localStream?.getTracks().forEach((track) => {
-      if (!refreshedTrackIds.has(track.id)) {
-        stopLocalTrack(track);
-      }
+    const failed = meetError;
+    if (!failed?.device) return;
+    await retryFailedMediaDevices({
+      device: failed.device,
+      isMuted,
+      isCameraOff,
+      unmute: toggleMute,
+      turnOnCamera: toggleCamera,
     });
-    setLocalStream(stream);
-    setMeetError(null);
-  }, [
-    localStream,
-    requestMediaPermissions,
-    setLocalStream,
-    setMeetError,
-    stopLocalTrack,
-  ]);
+    setMeetError((current) => (current === failed ? null : current));
+  }, [isCameraOff, isMuted, meetError, setMeetError, toggleCamera, toggleMute]);
 
   const handlePrejoinMediaCommit = useCallback(
     (handoff: PrejoinMediaHandoff) => {
@@ -3178,18 +3171,8 @@ export default function MeetsClient({
             <MeetsErrorBanner
               meetError={meetError}
               onDismiss={() => setMeetError(null)}
-              primaryActionLabel={
-                meetError.code === "PERMISSION_DENIED" ||
-                meetError.code === "MEDIA_ERROR"
-                  ? "Try again"
-                  : undefined
-              }
-              onPrimaryAction={
-                meetError.code === "PERMISSION_DENIED" ||
-                meetError.code === "MEDIA_ERROR"
-                  ? handleRetryMedia
-                  : undefined
-              }
+              primaryActionLabel={meetError.device ? "Try again" : undefined}
+              onPrimaryAction={meetError.device ? handleRetryMedia : undefined}
             />
           ) : null
         }

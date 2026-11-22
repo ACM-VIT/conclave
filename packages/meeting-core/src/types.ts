@@ -617,6 +617,8 @@ export interface MediaState {
   videoDeviceId?: string;
 }
 
+export type MeetMediaDevice = "camera" | "microphone" | "both";
+
 export interface MeetError {
   code:
     | "PERMISSION_DENIED"
@@ -626,6 +628,7 @@ export interface MeetError {
     | "UNKNOWN";
   message: string;
   recoverable: boolean;
+  device?: MeetMediaDevice;
 }
 
 export type {

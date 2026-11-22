@@ -1,6 +1,6 @@
 import { EMOJI_REACTIONS, type ReactionEmoji } from "./constants";
 import { isMediaCaptureTimeoutError } from "./media-capture-timeout";
-import type { MeetError, ReactionOption } from "./types";
+import type { MeetError, MeetMediaDevice, ReactionOption } from "./types";
 
 export const toError = (value: unknown): Error =>
   value instanceof Error ? value : new Error(String(value));
@@ -141,38 +141,60 @@ export function extractRoomCode(input: string): string {
   return sanitizeRoomCode(trimmed);
 }
 
+const MEDIA_ERROR_MESSAGES: Record<
+  "blocked" | "missing" | "unresponsive",
+  Record<MeetMediaDevice, string>
+> = {
+  blocked: {
+    camera: "Camera is blocked",
+    microphone: "Microphone is blocked",
+    both: "Camera and microphone are blocked",
+  },
+  missing: {
+    camera: "No camera found",
+    microphone: "No microphone found",
+    both: "Camera or microphone not found",
+  },
+  unresponsive: {
+    camera: "Camera didn’t respond",
+    microphone: "Microphone didn’t respond",
+    both: "Camera or microphone did not respond",
+  },
+};
+
 export function createMeetError(
   error: unknown,
-  defaultCode: MeetError["code"] = "UNKNOWN"
+  defaultCode: MeetError["code"] = "UNKNOWN",
+  device?: MeetMediaDevice,
 ): MeetError {
   const message = error instanceof Error ? error.message : String(error);
+  const name = error instanceof Error ? error.name : "";
+  const mediaError = (
+    code: MeetError["code"],
+    kind: keyof typeof MEDIA_ERROR_MESSAGES,
+  ): MeetError => ({
+    code,
+    message: MEDIA_ERROR_MESSAGES[kind][device ?? "both"],
+    recoverable: true,
+    ...(device ? { device } : {}),
+  });
 
   if (
+    name === "NotAllowedError" ||
     message.includes("Permission denied") ||
     message.includes("NotAllowedError")
   ) {
-    return {
-      code: "PERMISSION_DENIED",
-      message: "Camera and microphone are blocked",
-      recoverable: true,
-    };
+    return mediaError("PERMISSION_DENIED", "blocked");
   }
   if (
+    name === "NotFoundError" ||
     message.includes("NotFoundError") ||
     message.includes("DevicesNotFoundError")
   ) {
-    return {
-      code: "MEDIA_ERROR",
-      message: "Camera or microphone not found",
-      recoverable: true,
-    };
+    return mediaError("MEDIA_ERROR", "missing");
   }
   if (isMediaCaptureTimeoutError(error)) {
-    return {
-      code: "MEDIA_ERROR",
-      message: "Camera or microphone did not respond",
-      recoverable: true,
-    };
+    return mediaError("MEDIA_ERROR", "unresponsive");
   }
   if (message.includes("Connection") || message.includes("socket")) {
     return {
@@ -182,7 +204,21 @@ export function createMeetError(
     };
   }
 
-  return { code: defaultCode, message, recoverable: false };
+  return {
+    code: defaultCode,
+    message,
+    recoverable: false,
+    ...(device ? { device } : {}),
+  };
+}
+
+export function clearMediaDeviceError(
+  current: MeetError | null,
+  recovered: "camera" | "microphone",
+): MeetError | null {
+  if (!current) return current;
+  if (current.device) return current.device === recovered ? null : current;
+  return recovered === "microphone" ? null : current;
 }
 
 export function generateSessionId(): string {
