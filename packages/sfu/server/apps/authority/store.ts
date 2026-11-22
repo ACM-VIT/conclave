@@ -136,9 +136,10 @@ export class AuthorityStore {
   /** Rows written since the views last caught up, by table. */
   private readonly dirty = new Map<string, Set<TableKey>>();
   /**
-   * Rows a `clear` removed since the views last caught up, by table. They
-   * are kept apart from `dirty` because the views treat them differently: a
-   * cleared row leaves the views at once, and its viewers are told later.
+   * Rows a `clear` removed that the views have not taken in yet, by table.
+   * They are kept apart from `dirty` because the views treat them
+   * differently: a cleared row leaves the views before anything is read
+   * from them again, and its viewers are told later.
    */
   private readonly cleared = new Map<string, TableKey[]>();
 
@@ -165,21 +166,22 @@ export class AuthorityStore {
     return this.table(table).rows;
   }
 
-  /**
-   * Hands over the rows written and the rows cleared since the last call,
-   * and forgets them.
-   */
-  takeDirty(): {
-    written: Map<string, Set<TableKey>>;
-    cleared: Map<string, TableKey[]>;
-  } {
-    const taken = {
-      written: new Map(this.dirty),
-      cleared: new Map(this.cleared),
-    };
+  /** Hands over the rows written since the last call and forgets them. */
+  takeDirty(): Map<string, Set<TableKey>> {
+    const taken = new Map(this.dirty);
     this.dirty.clear();
+    return taken;
+  }
+
+  /** Hands over the rows cleared since the last call and forgets them. */
+  takeCleared(): Map<string, TableKey[]> {
+    const taken = new Map(this.cleared);
     this.cleared.clear();
     return taken;
+  }
+
+  get hasCleared(): boolean {
+    return this.cleared.size > 0;
   }
 
   get hasDirty(): boolean {
