@@ -27,9 +27,9 @@ export type AuthorityLimits = {
   transactionOps: number;
   /**
    * Rows removed by a `clear` that one audience is told of in one flush.
-   * The views drop a cleared row at once. Telling everyone who held it is
-   * the costly part, so a larger clear is told over the flushes that
-   * follow. People's own rows share one such allowance between them, as
+   * The views drop a cleared row before anything is read from them again.
+   * Telling everyone who held it is the costly part, so a larger clear is
+   * told over the flushes that follow. People's own rows share one such allowance between them, as
    * each person told is a frame of their own.
    */
   clearedRowsPerFlush: number;

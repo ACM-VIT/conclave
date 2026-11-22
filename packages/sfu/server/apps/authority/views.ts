@@ -153,11 +153,47 @@ export class ViewTracker {
    * next flush sends them as a patch on top of this.
    */
   sharedRows(role: Role): SizedRow[] {
+    this.absorbCleared();
     return rowsOf(this.roleAudience(role));
   }
 
   personalRows(subject: Subject): SizedRow[] {
+    this.absorbCleared();
     return rowsOf(this.subjectAudience(subject));
+  }
+
+  /**
+   * Takes every row a `clear` removed out of every audience's rows. It runs
+   * before anything is read from them, a snapshot as much as a flush, so a
+   * committed clear is never seen half done: no snapshot carries a cleared
+   * row, and a cleared row's key is free for a new row. What is left for
+   * later flushes is only telling the viewers who already held such a row.
+   *
+   * A cleared row that was written again since is taken out all the same.
+   * The flush then places it as the new row it is and sends it to everyone,
+   * those who subscribed in between included.
+   */
+  private absorbCleared(): void {
+    if (!this.store.hasCleared) return;
+    for (const [tableName, keys] of this.store.takeCleared()) {
+      const views = this.viewsByTable.get(tableName);
+      if (!views) continue;
+      for (const key of keys) {
+        for (const [name, view] of views) {
+          if (view.kind === "shared") {
+            for (const [role, audience] of this.roles) {
+              this.owe(audience, { role }, name, key);
+            }
+            continue;
+          }
+          const owner = this.ownerOf.get(name)!.get(key);
+          if (owner === undefined) continue;
+          this.disown(name, owner, key);
+          const audience = this.subjects.get(owner);
+          if (audience) this.owe(audience, { subject: owner }, name, key);
+        }
+      }
+    }
   }
 
   /**
@@ -174,32 +210,7 @@ export class ViewTracker {
 
     const shared = new Map<Role, ViewOps>();
     const personal = new Map<Subject, ViewOps>();
-    const { written, cleared } = this.store.takeDirty();
-
-    // Cleared rows leave every audience's rows now, all of them, so from
-    // this flush on a snapshot is without them and their keys are free.
-    // What is spread over later flushes is only telling who held them.
-    for (const [tableName, keys] of cleared) {
-      const views = this.viewsByTable.get(tableName);
-      if (!views) continue;
-      for (const key of keys) {
-        // Written again since the clear: an ordinary change, handled below.
-        if (this.store.get(tableName, key)) continue;
-        for (const [name, view] of views) {
-          if (view.kind === "shared") {
-            for (const [role, audience] of this.roles) {
-              this.owe(audience, { role }, name, key);
-            }
-            continue;
-          }
-          const owner = this.ownerOf.get(name)!.get(key);
-          if (owner === undefined) continue;
-          this.disown(name, owner, key);
-          const audience = this.subjects.get(owner);
-          if (audience) this.owe(audience, { subject: owner }, name, key);
-        }
-      }
-    }
+    this.absorbCleared();
 
     // Every key a changed row gives up is released before any changed row
     // takes a key, so one row can take over a key another just left.
@@ -217,7 +228,7 @@ export class ViewTracker {
       }
     };
 
-    for (const [tableName, keys] of written) {
+    for (const [tableName, keys] of this.store.takeDirty()) {
       const views = this.viewsByTable.get(tableName);
       if (!views) continue;
       for (const key of keys) {

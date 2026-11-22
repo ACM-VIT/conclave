@@ -853,6 +853,39 @@ describe("bounds", () => {
     expect(await room.converged()).toBe(true);
   });
 
+  it("sends no cleared row to someone who subscribes before the flush that follows the clear", async () => {
+    const room = new Harness([probeAuthority], {
+      runtime: { limits: { ...DEFAULT_AUTHORITY_LIMITS, clearedRowsPerFlush: 100 } },
+    });
+    const hostTab = await room.open(host, probeContract);
+    const raviTab = await room.open(ravi, probeContract);
+    await hostTab.act("mark", { id: "a", from: 0, count: 250, shown: true });
+    await hostTab.act("mark", { id: "b", from: 0, count: 2, shown: true });
+    await room.deliver();
+
+    // The clear has committed. The flush that follows it is 50 ms away.
+    const flushesBefore = room.authority.stats.flushes;
+    await hostTab.act("unmark", { id: "a", how: "clear" });
+    const late = await room.open(priya, probeContract);
+    const flushedMeanwhile = room.authority.stats.flushes - flushesBefore;
+    const sentToLate = late.frames
+      .flatMap((frame) => (frame.kind === "replace" ? frame.rows : []))
+      .filter((row) => row.bucket === "marks")
+      .map((row) => row.key);
+    const raviStillHolds = raviTab.rows("marks").length;
+    // One of the rows comes back unchanged, still before that flush.
+    await hostTab.act("mark", { id: "a", from: 200, count: 1, shown: true });
+    await vi.advanceTimersByTimeAsync(300);
+    await room.deliver();
+
+    expect(flushedMeanwhile).toBe(0);
+    expect(sentToLate).toEqual(["b/0", "b/1"]);
+    expect(raviStillHolds).toBe(252);
+    expect(late.rows("marks")).toEqual([{ n: 0 }, { n: 1 }, { n: 200 }]);
+    expect(raviTab.rows("marks").length).toBe(3);
+    expect(await room.converged()).toBe(true);
+  });
+
   it("tells people of their own cleared rows out of one allowance a flush", () => {
     // The Q&A fixture without sockets: 300 people upvote one question, and
     // each of them holds their upvote as a row of their own.

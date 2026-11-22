@@ -150,11 +150,11 @@ export interface AuthorityTransaction<
    *
    * It costs a transaction next to nothing however many rows there are,
    * where reading and deleting them one at a time costs two operations a row
-   * and can use up the transaction's whole budget. The rows are gone for
-   * every handler once the transaction commits, and from every view at the
-   * next flush: a new viewer is never sent one, and a new row may take a
-   * view key one of them had. Someone who already held such a row is told a
-   * batch at a time, so they may hold it a moment longer.
+   * and can use up the transaction's whole budget. Once the transaction
+   * commits the rows are gone for every handler and from every view: a new
+   * viewer is never sent one, and a new row may take a view key one of them
+   * had. Someone who already held such a row is told a batch at a time, so
+   * they may hold it a moment longer.
    */
   clear<K extends TableName<T>>(table: K, prefix: TableKey): number;
   /** One timer per key. Scheduling the key again replaces it. */
