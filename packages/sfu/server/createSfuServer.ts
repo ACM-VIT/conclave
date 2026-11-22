@@ -90,7 +90,7 @@ export const createSfuServer = (
   const start = async (): Promise<void> => {
     await state.roomRegistry.start();
     socketAdapterLifecycle = await connectSocketAdapter(io, { config });
-    await initMediaSoup(state, () => io, workerShutdown.signal);
+    await initMediaSoup(state, config, () => io, workerShutdown.signal);
     initScheduledWebinars(state);
     await initScheduledMeetings(state);
     await initScheduling(state);

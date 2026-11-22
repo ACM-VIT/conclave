@@ -1,7 +1,6 @@
 import { readFileSync } from "node:fs";
 import { availableParallelism } from "node:os";
 import { posix } from "node:path";
-import { Logger } from "./loggers.js";
 
 const read = (file: string): string => {
   try {
@@ -58,28 +57,3 @@ export const getWorkerCpuQuota = (): number => {
 
 export const instanceCpuCount = (hostInstanceCount: number): number =>
   Math.max(1, Math.floor(Math.min(availableParallelism(), getWorkerCpuQuota()) / hostInstanceCount));
-
-export const resolveAppDocumentWorkerCount = ({
-  appDocumentWorkerCount,
-  hostInstanceCount,
-  workerCount,
-}: {
-  appDocumentWorkerCount: number;
-  hostInstanceCount: number;
-  workerCount: number | undefined;
-}): number => {
-  const cpus = instanceCpuCount(hostInstanceCount);
-  const mediasoupWorkers = workerCount ?? 1;
-  const allowed = Math.max(1, cpus - mediasoupWorkers);
-  if (appDocumentWorkerCount > allowed) {
-    throw new Error(
-      `SFU_APP_DOC_WORKERS=${appDocumentWorkerCount} leaves no CPU for ${mediasoupWorkers} mediasoup worker(s) in this instance's share of ${cpus} CPU(s); use at most ${allowed}`,
-    );
-  }
-  if (workerCount !== undefined && workerCount + appDocumentWorkerCount > cpus) {
-    Logger.warn(
-      `SFU_WORKER_COUNT=${workerCount} and ${appDocumentWorkerCount} app document worker(s) need more than the ${cpus} CPU(s) in this instance's share`,
-    );
-  }
-  return appDocumentWorkerCount;
-};

@@ -27,7 +27,7 @@ import {
   MAX_APP_DOCUMENT_BYTES,
   type AppDocumentPool,
 } from "./apps/documents/pool.js";
-import { resolveAppDocumentWorkerCount } from "../utilities/workerCpuQuota.js";
+import { planWorkers, type WorkerPlan } from "../utilities/workerPlan.js";
 
 export type EndedRoom = {
   roomId: string;
@@ -54,6 +54,7 @@ export type SfuState = {
   schedulingPersistence: SchedulingPersistence | null;
   roomRegistry: RoomRegistry;
   transcriptRelays: TranscriptRelayRegistry;
+  workerPlan: WorkerPlan;
   appDocuments: AppDocumentPool;
   isDraining: boolean;
 };
@@ -65,6 +66,7 @@ export const createSfuState = (options?: {
   config?: typeof defaultConfig;
 }): SfuState => {
   const config = options?.config ?? defaultConfig;
+  const workerPlan = planWorkers(config.workerSettings);
   return {
     workers: [],
     rooms: new Map(),
@@ -82,10 +84,11 @@ export const createSfuState = (options?: {
     schedulingPersistence: null,
     roomRegistry: options?.roomRegistry ?? createRoomRegistry(config),
     transcriptRelays: createTranscriptRelayRegistry(config.transcriptRelay),
+    workerPlan,
     appDocuments:
       options?.appDocuments ??
       createAppDocumentPool({
-        workers: resolveAppDocumentWorkerCount(config.workerSettings),
+        workers: workerPlan.appDocumentWorkers,
         deadlineMs: config.appDocuments.deadlineMs,
         maxDocumentBytes: MAX_APP_DOCUMENT_BYTES,
       }),

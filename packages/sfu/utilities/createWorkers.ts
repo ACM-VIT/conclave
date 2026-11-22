@@ -1,12 +1,17 @@
 import { setTimeout as delay } from "node:timers/promises";
 import * as mediasoup from "mediasoup";
 import type { TransportListenInfo, WebRtcServer, Worker } from "mediasoup/types";
-import { config } from "../config/config.js";
-import { resolveWebRtcPortBudget } from "../config/workerSettings.mjs";
+import type { config } from "../config/config.js";
 import { Logger } from "./loggers.js";
-import { instanceCpuCount } from "./workerCpuQuota.js";
+import type { WorkerPlan } from "./workerPlan.js";
 
-type CreateWorkersOptions = {
+type WorkerMedia = {
+  settings: Pick<typeof config.workerSettings, "rtcMinPort" | "rtcMaxPort" | "logLevel" | "logTags">;
+  transport: Pick<typeof config.webRtcTransport, "enableUdp" | "enableTcp" | "listenIps">;
+};
+
+type CreateWorkersOptions = WorkerMedia & {
+  plan: WorkerPlan;
   onWorkerDied?: (worker: Worker, label: string) => void | Promise<void>;
   signal?: AbortSignal;
 };
@@ -20,6 +25,7 @@ export const getWorkerWebRtcServer = (worker: Worker): WebRtcServer | undefined 
   webRtcServers.get(worker);
 
 const spawnWorker = async (
+  media: WorkerMedia,
   port: number,
   plainMinPort: number,
   signal?: AbortSignal,
@@ -27,11 +33,11 @@ const spawnWorker = async (
   signal?.throwIfAborted();
   const worker = await mediasoup.createWorker({
     rtcMinPort: plainMinPort,
-    rtcMaxPort: config.workerSettings.rtcMaxPort,
-    logLevel: config.workerSettings.logLevel,
-    logTags: config.workerSettings.logTags,
+    rtcMaxPort: media.settings.rtcMaxPort,
+    logLevel: media.settings.logLevel,
+    logTags: media.settings.logTags,
   });
-  const { enableUdp, enableTcp, listenIps: [{ ip, announcedIp }] } = config.webRtcTransport;
+  const { enableUdp, enableTcp, listenIps: [{ ip, announcedIp }] } = media.transport;
   const listenInfos: TransportListenInfo[] = [];
   if (enableUdp) listenInfos.push({ protocol: "udp", ip, announcedAddress: announcedIp, port });
   if (enableTcp) listenInfos.push({ protocol: "tcp", ip, announcedAddress: announcedIp, port });
@@ -54,6 +60,7 @@ const spawnWorker = async (
 };
 
 const respawnWorker = async (
+  media: WorkerMedia,
   port: number,
   plainMinPort: number,
   signal?: AbortSignal,
@@ -61,7 +68,7 @@ const respawnWorker = async (
   let delayMs = INITIAL_RESPAWN_DELAY_MS;
   for (;;) {
     try {
-      return await spawnWorker(port, plainMinPort, signal);
+      return await spawnWorker(media, port, plainMinPort, signal);
     } catch (error) {
       signal?.throwIfAborted();
       Logger.warn(`Worker on WebRTC port ${port} failed to respawn; retrying in ${delayMs} ms`, error);
@@ -72,27 +79,24 @@ const respawnWorker = async (
 };
 
 const createWorkers = async (
-  options: CreateWorkersOptions = {},
+  options: CreateWorkersOptions,
 ): Promise<Worker[]> => {
   const workers: Worker[] = [];
   const startupFailure = new AbortController();
   const signal = options.signal
     ? AbortSignal.any([options.signal, startupFailure.signal])
     : startupFailure.signal;
-  const {
-    rtcMinPort,
-    workerCount: override,
-    hostInstanceCount,
-    webRtcPortBudget,
-    appDocumentWorkerCount,
-  } = config.workerSettings;
-  const effectiveBudget = resolveWebRtcPortBudget(config.workerSettings);
-  const cpuWorkerCount = override ?? Math.max(1, instanceCpuCount(hostInstanceCount) - appDocumentWorkerCount);
-  if (override === undefined && cpuWorkerCount > effectiveBudget) {
-    Logger.warn(`CPU capacity allows ${cpuWorkerCount} workers. Capping the derived count at the WebRTC port budget of ${effectiveBudget}.`);
+  const { plan } = options;
+  const { rtcMinPort } = options.settings;
+  const { plainMinPort, mediasoupWorkers: workerCount } = plan;
+  if (plan.cpuMediasoupWorkers > workerCount) {
+    Logger.warn(`CPU capacity allows ${plan.cpuMediasoupWorkers} workers. Capping the derived count at the WebRTC port budget of ${plan.webRtcPortBudget}.`);
   }
-  const workerCount = Math.min(cpuWorkerCount, effectiveBudget);
-  const plainMinPort = rtcMinPort + (webRtcPortBudget === undefined ? workerCount : effectiveBudget);
+  if (plan.oversubscribed) {
+    Logger.warn(
+      `SFU_WORKER_COUNT=${workerCount} and ${plan.appDocumentWorkers} app document worker(s) need more than the ${plan.cpus} CPU(s) in this instance's share`,
+    );
+  }
 
   // Placement skips closed workers. Keep their slots so recovery keeps the
   // same port and worker index while other slots continue serving rooms.
@@ -108,7 +112,7 @@ const createWorkers = async (
           );
         },
       );
-      respawnWorker(rtcMinPort + index, plainMinPort, signal)
+      respawnWorker(options, rtcMinPort + index, plainMinPort, signal)
         .then((replacement) => {
           if (signal?.aborted) {
             replacement.close();
@@ -127,13 +131,13 @@ const createWorkers = async (
     });
   };
 
-  const sizing = override === undefined
-    ? `derived for ${hostInstanceCount} host instance(s) and ${appDocumentWorkerCount} app document worker(s)`
+  const sizing = plan.sizing === "derived"
+    ? `derived from a ${plan.cpus}-CPU share beside ${plan.appDocumentWorkers} app document worker(s)`
     : "configured";
   console.log(`[SFU] Creating ${workerCount} mediasoup worker(s) (${sizing})`);
   try {
     for (let i = 0; i < workerCount; i++) {
-      const worker = await spawnWorker(rtcMinPort + i, plainMinPort, signal);
+      const worker = await spawnWorker(options, rtcMinPort + i, plainMinPort, signal);
       workers.push(worker);
       attachDiedHandler(worker, i);
       Logger.info(`Worker ${i} created`);

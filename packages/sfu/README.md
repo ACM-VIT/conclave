@@ -28,7 +28,10 @@ In-call app documents (Yjs) are applied in worker threads, never on the
 signaling thread. `SFU_APP_DOC_WORKERS` sets how many, default 1. Each takes one
 CPU of the instance's share: the derived mediasoup count leaves room for them,
 and startup rejects a count that leaves no CPU for the mediasoup workers. Both
-kinds start at least one. On the 2-vCPU VM shared by three instances, each instance runs one of
+kinds start at least one, so a one-CPU share runs one of each. An explicit
+`SFU_WORKER_COUNT` is kept as configured, and startup warns when it and the app
+document workers need more CPUs than the share. Both counts come from one plan
+built from the server's config. On the 2-vCPU VM shared by three instances, each instance runs one of
 each. The app document worker is idle unless someone edits an app.
 `SFU_APP_DOC_DEADLINE_MS`, default 500, is how long one update or sync may
 run. An update that runs longer is refused and its worker is replaced. The
