@@ -22,6 +22,7 @@
 import { PostHog } from "posthog-node";
 import { config as sfuConfig } from "../../config/config.js";
 import { Logger } from "../../utilities/loggers.js";
+import { analyticsRoomKey } from "./identity.js";
 import {
   createErrorReporter,
   scrubExceptionEvent,
@@ -126,11 +127,12 @@ export const captureGameEvent = ({
     // creates the group + group type if they don't exist. We intentionally do
     // NOT attach group properties here (no room name / no PII); the group key
     // alone is enough to roll events up.
-    const groupCacheKey = `${roomKey}::${distinctId}`;
+    const groupKey = analyticsRoomKey(roomKey);
+    const groupCacheKey = `${groupKey}::${distinctId}`;
     if (!identifiedRoomGroups.has(groupCacheKey)) {
       posthog.groupIdentify({
         groupType: ROOM_GROUP_TYPE,
-        groupKey: roomKey,
+        groupKey,
         distinctId,
       });
       identifiedRoomGroups.add(groupCacheKey);
@@ -140,7 +142,7 @@ export const captureGameEvent = ({
       distinctId,
       event,
       properties,
-      groups: { [ROOM_GROUP_TYPE]: roomKey },
+      groups: { [ROOM_GROUP_TYPE]: groupKey },
     });
   } catch (error) {
     // Telemetry must never surface to the user or break the calling flow.

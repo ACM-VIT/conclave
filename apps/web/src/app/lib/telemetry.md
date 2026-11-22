@@ -117,3 +117,4 @@ and no user is ever identified. The SFU scrubs emails, tokens and credentials
 exception messages, cuts every URL to its origin and route (`/[code]`,
 `/w/[code]`, `/[path]`), and drops the source lines posthog-node attaches to
 stack frames before sending. Config errors name the variable, never its value.
+Game events group by a keyed hash of the room (`room_<hmac>`), never its code.
