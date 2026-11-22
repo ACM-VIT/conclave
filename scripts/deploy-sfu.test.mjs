@@ -26,11 +26,13 @@ let beforeDrain = null;
 // seconds). Only "running" answers HTTP until a recreate. failRecreate: the
 // recreate (1st, 2nd...) at which compose fails after stopping the old
 // container. replacementHealthy: false for a build whose containers
-// never report healthy. onTarget: already runs the target image with the
+// never report healthy. bootExit: "exited" or "crash-looping", the state a
+// container of the target image ends in right after it starts; the previous
+// image still boots. onTarget: already runs the target image with the
 // current compose config.
 const startSfu = async (
   instanceId,
-  { rooms = 0, statusAnswers = true, container = "running", replacementHealthy = true, draining = false, onTarget = false, failRecreate = 0 } = {},
+  { rooms = 0, statusAnswers = true, container = "running", replacementHealthy = true, bootExit = null, draining = false, onTarget = false, failRecreate = 0 } = {},
 ) => {
   const sfu = {
     instanceId,
@@ -88,6 +90,7 @@ const startSfu = async (
       sfu.draining = url.searchParams.get("draining") === "true";
       sfu.image = url.searchParams.get("image");
       sfu.configHash = "current-hash";
+      if (bootExit && sfu.image === "sha256:target") sfu.container = bootExit;
       return json({ ok: true });
     }
     return json({ error: "not found" }, 404);
@@ -317,6 +320,19 @@ test("a replacement that never reports healthy stops the deploy before the other
     assert.equal(sfus["sfu-a"].drains.length, 0, "the healthy instance keeps serving");
   });
 });
+
+for (const bootExit of ["exited", "crash-looping"]) {
+  test(`a replacement that exits at boot (${bootExit}) is rolled back and the healthy peer is never drained`, async () => {
+    await withSfus({ "sfu-a": { rooms: 1 }, "sfu-b": { bootExit } }, async (sfus) => {
+      const result = await deploy(sfus);
+      assert.equal(result.code, 4, result.output);
+      assert.match(result.output, /sfu-b did not report healthy/);
+      assert.equal(sfus["sfu-a"].drains.length, 0, "the healthy peer keeps serving");
+      assert.equal(sfus["sfu-b"].image, "sha256:running", "sfu-b is back on its previous image");
+      assert.equal(sfus["sfu-b"].container, "running");
+    });
+  });
+}
 
 test("an instance that is down is brought up before a healthy one is drained", async () => {
   await withSfus({ "sfu-a": { rooms: 1 }, "sfu-b": { container: "exited" } }, async (sfus) => {
