@@ -26,5 +26,7 @@ export interface LiveTranscriptionSession {
   appendAudio(audioBase64: string): void;
   commitAudio(): void;
   clearAudio(): void;
+  /** Asks a streaming provider to finalize the audio it has already received. */
+  finishAudio(): void;
   close(): void;
 }

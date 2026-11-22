@@ -133,14 +133,29 @@ const createIdleSession = (roomId: string): TranscriptSessionState => ({
   error: null,
 });
   
+type ProviderDrain = {
+  session: LiveTranscriptionSession;
+  epoch: number;
+  partials: Map<string, TranscriptSegment>;
+  unfinalizedItems: Set<string>;
+  pendingCommits: number;
+  speakers: TranscriptSpeakerAttribution;
+  latestSpeaker: TranscriptSpeaker | null;
+  timer: ReturnType<typeof setTimeout>;
+};
+
 export class TranscriptRoom {
   private readonly state: DurableObjectState;
   private readonly env: Env;
   private readonly loaded: Promise<void>;
   private readonly viewers = new Map<WebSocket, Viewer>();
   private readonly partialSegments = new Map<string, TranscriptSegment>();
-  private readonly speakerAttribution = new TranscriptSpeakerAttribution();
+  private speakerAttribution = new TranscriptSpeakerAttribution();
   private latestSpeaker: TranscriptSpeaker | null = null;
+  // Work the current provider owes us: committed items without a final, and
+  // whether it has heard audio since its last final.
+  private readonly unfinalizedItems = new Set<string>();
+  private audioSinceLastFinal = false;
   private hasPendingAudio = false;
   private pendingAudioSamples = 0;
   private session: TranscriptSessionState | null = null;
@@ -154,12 +169,7 @@ export class TranscriptRoom {
   private responseRoute: {sfuUrl: string; identity: {userId: string; roomId: string; clientId: string; channelId: string}} | null = null;
   private personalResponseKeys: Partial<Record<"openai" | "anthropic", string>> = {};
   private transcriptionSession: LiveTranscriptionSession | null = null;
-  private providerDrain: {
-    session: LiveTranscriptionSession;
-    epoch: number;
-    partials: Map<string, TranscriptSegment>;
-    timer: ReturnType<typeof setTimeout>;
-  } | null = null;
+  private providerDrain: ProviderDrain | null = null;
   private transcriptionConnectionOptions:
     | (PersistedTranscriptionConfig & {
         apiKey: string;
@@ -1222,6 +1232,7 @@ export class TranscriptRoom {
       this.transcriptionSession.appendAudio(audio);
       this.transcriptionReplayJournal.append(audio, speaker, sampleCount);
       this.latestSpeaker = speaker;
+      this.audioSinceLastFinal = true;
       this.hasPendingAudio = true;
       this.pendingAudioSamples += sampleCount;
       return true;
@@ -1509,6 +1520,8 @@ export class TranscriptRoom {
           onCommitted: (itemId) => {
             if (epoch === this.transcriptionConnectionEpoch) {
               this.handleTranscriptItemCommitted(itemId);
+            } else if (epoch === this.providerDrain?.epoch) {
+              this.applyDrainedCommit(itemId);
             }
           },
           onDelta: (itemId, delta) => {
@@ -1562,20 +1575,45 @@ export class TranscriptRoom {
     } catch {}
   }
 
+  /**
+   * Keeps a provider that is being replaced open until it finishes the speech
+   * it already has: its partials, committed items and audio not yet final.
+   */
   private drainTranscriptionProvider(): void {
     const session = this.transcriptionSession;
-    if (!session || this.partialSegments.size === 0) return;
+    if (!session) return;
+    if (this.hasPendingAudio && this.latestSpeaker) {
+      this.commitTranscriptionBuffer(
+        this.latestSpeaker,
+        "Transcript audio commit failed.",
+        false,
+      );
+    }
+    const owesWork =
+      this.partialSegments.size > 0 ||
+      this.unfinalizedItems.size > 0 ||
+      this.pendingTranscriptionCommitAcks.length > 0 ||
+      this.audioSinceLastFinal;
+    if (!owesWork) return;
+    try {
+      session.finishAudio();
+    } catch {}
     void this.finishProviderDrain();
     this.transcriptionSession = null;
     this.providerDrain = {
       session,
       epoch: this.transcriptionConnectionEpoch,
       partials: new Map(this.partialSegments),
+      unfinalizedItems: new Set(this.unfinalizedItems),
+      pendingCommits: this.pendingTranscriptionCommitAcks.length,
+      speakers: this.speakerAttribution,
+      latestSpeaker: this.latestSpeaker,
       timer: setTimeout(
         () => void this.finishProviderDrain(),
         TRANSCRIPTION_PROVIDER_DRAIN_MS,
       ),
     };
+    this.speakerAttribution = new TranscriptSpeakerAttribution();
     this.partialSegments.clear();
   }
 
@@ -1590,8 +1628,10 @@ export class TranscriptRoom {
     return Array.from(drain.partials.values());
   }
 
+  /** Saves the drained lines still on screen, unless a final already landed. */
   private async finishProviderDrain(): Promise<void> {
     for (const segment of this.discardProviderDrain()) {
+      if (this.segments.some(({ itemId }) => itemId === segment.itemId)) continue;
       await this.saveFinalSegment(segment, "");
     }
   }
@@ -1603,16 +1643,38 @@ export class TranscriptRoom {
     ];
   }
 
+  private drainedSegment(drain: ProviderDrain, itemId: string): TranscriptSegment {
+    return (
+      drain.partials.get(itemId) ??
+      this.createSegment(
+        itemId,
+        drain.speakers.getItemSpeaker(itemId) ??
+          drain.speakers.peekPendingSpeaker() ??
+          drain.latestSpeaker ??
+          this.controllerSpeaker(),
+      )
+    );
+  }
+
+  private applyDrainedCommit(itemId: string): void {
+    const drain = this.providerDrain;
+    if (!drain) return;
+    drain.pendingCommits = Math.max(0, drain.pendingCommits - 1);
+    drain.speakers.bindCommittedItem(itemId);
+    drain.unfinalizedItems.add(itemId);
+  }
+
   private applyDrainedDelta(itemId: string, delta: string): void {
-    const segment = this.providerDrain?.partials.get(itemId);
-    if (!segment) return;
+    const drain = this.providerDrain;
+    if (!drain) return;
+    const segment = this.drainedSegment(drain, itemId);
     const now = Date.now();
     const next: TranscriptSegment = {
       ...segment,
       text: `${segment.text}${delta}`,
       updatedAt: now,
     };
-    this.providerDrain?.partials.set(itemId, next);
+    drain.partials.set(itemId, next);
     this.broadcast({
       type: "segment.delta",
       delta: this.toSegmentDelta(next, delta, now),
@@ -1624,16 +1686,23 @@ export class TranscriptRoom {
     transcript: string,
   ): Promise<void> {
     const drain = this.providerDrain;
-    const segment = drain?.partials.get(itemId);
-    if (!drain || !segment) return;
+    if (!drain) return;
+    const segment = this.drainedSegment(drain, itemId);
     drain.partials.delete(itemId);
-    if (drain.partials.size === 0) this.discardProviderDrain();
+    drain.unfinalizedItems.delete(itemId);
+    const settled =
+      drain.partials.size === 0 &&
+      drain.unfinalizedItems.size === 0 &&
+      drain.pendingCommits === 0;
+    if (settled) this.discardProviderDrain();
     await this.saveFinalSegment(segment, transcript);
   }
 
   private resetTranscriptionAudioState(): void {
     const hadPartials = this.partialSegments.size > 0;
     this.partialSegments.clear();
+    this.unfinalizedItems.clear();
+    this.audioSinceLastFinal = false;
     this.speakerAttribution.reset();
     this.transcriptionReplayJournal.reset();
     this.latestSpeaker = null;
@@ -1651,6 +1720,7 @@ export class TranscriptRoom {
 
   private handleTranscriptItemCommitted(itemId: string): void {
     this.acknowledgeTranscriptionCommit();
+    this.unfinalizedItems.add(itemId);
     this.transcriptionReplayJournal.bindCommittedItem(itemId);
     const speaker = this.speakerAttribution.bindCommittedItem(itemId);
     if (speaker) {
@@ -1929,17 +1999,17 @@ export class TranscriptRoom {
     await this.persist();
   }
 
-  private allocateSegment(itemId: string): TranscriptSegment {
-    const existing = this.partialSegments.get(itemId);
-    if (existing) return existing;
-    const speaker =
-      this.speakerAttribution.getItemSpeaker(itemId) ??
-      this.speakerAttribution.peekPendingSpeaker() ??
-      this.latestSpeaker ??
-      normalizeSpeaker(undefined, {
-        userId: this.session?.controller?.userId || "unknown",
-        displayName: this.session?.controller?.displayName || "Unknown",
-      });
+  private controllerSpeaker(): TranscriptSpeaker {
+    return normalizeSpeaker(undefined, {
+      userId: this.session?.controller?.userId || "unknown",
+      displayName: this.session?.controller?.displayName || "Unknown",
+    });
+  }
+
+  private createSegment(
+    itemId: string,
+    speaker: TranscriptSpeaker,
+  ): TranscriptSegment {
     const now = Date.now();
     const segment: TranscriptSegment = {
       id: itemId,
@@ -1955,6 +2025,19 @@ export class TranscriptRoom {
       updatedAt: now,
     };
     this.sequence += 1;
+    return segment;
+  }
+
+  private allocateSegment(itemId: string): TranscriptSegment {
+    const existing = this.partialSegments.get(itemId);
+    if (existing) return existing;
+    const segment = this.createSegment(
+      itemId,
+      this.speakerAttribution.getItemSpeaker(itemId) ??
+        this.speakerAttribution.peekPendingSpeaker() ??
+        this.latestSpeaker ??
+        this.controllerSpeaker(),
+    );
     this.partialSegments.set(itemId, segment);
     return segment;
   }
@@ -2056,6 +2139,8 @@ export class TranscriptRoom {
     }
     const segment = this.allocateSegment(itemId);
     this.partialSegments.delete(itemId);
+    this.unfinalizedItems.delete(itemId);
+    this.audioSinceLastFinal = false;
     await this.saveFinalSegment(segment, transcript);
   }
 

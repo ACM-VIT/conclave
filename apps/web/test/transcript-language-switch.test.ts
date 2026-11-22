@@ -50,6 +50,7 @@ async function fixture(env: Partial<Env> = {}) {
       appendAudio: vi.fn(),
       commitAudio: vi.fn(),
       clearAudio: vi.fn(),
+      finishAudio: vi.fn(),
       close: vi.fn(),
     } as LiveTranscriptionConnectOptions & LiveTranscriptionSession;
     providers.push(provider);

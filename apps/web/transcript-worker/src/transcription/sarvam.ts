@@ -323,6 +323,10 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
     this.downsampler.reset();
   }
 
+  finishAudio(): void {
+    this.socket.send(buildSarvamFlushMessage());
+  }
+
   close(): void {
     this.closed = true;
     try {

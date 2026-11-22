@@ -44,6 +44,8 @@ class OpenAiRealtimeTranscriptionSession implements LiveTranscriptionSession {
     this.socket.send(JSON.stringify({ type: "input_audio_buffer.clear" }));
   }
 
+  finishAudio(): void {}
+
   close(): void {
     this.closed = true;
     try {
