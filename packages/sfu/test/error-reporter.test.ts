@@ -287,38 +287,46 @@ describe("SFU error reporter", () => {
     },
   );
 
-  it("keeps the errno code of a refused connection, read from the error itself", async () => {
-    const fake = await startFakePostHog();
-    servers.push(fake.server);
-    const reporter = reporterFor(posthogClient(fake.host));
-    const closed = createServer();
-    await new Promise<void>((resolve) => closed.listen(0, "127.0.0.1", resolve));
-    const { port } = closed.address() as AddressInfo;
-    await new Promise((resolve) => closed.close(resolve));
-    const refused = await new Promise<Error>((resolve) => {
-      connect(port, "127.0.0.1").on("error", resolve);
-    });
+  it.each(["in order", "reversed"])(
+    "keeps the errno code read from each error itself, reported %s",
+    async (order) => {
+      const fake = await startFakePostHog();
+      servers.push(fake.server);
+      const reporter = reporterFor(posthogClient(fake.host));
+      const closed = createServer();
+      await new Promise<void>((resolve) => closed.listen(0, "127.0.0.1", resolve));
+      const { port } = closed.address() as AddressInfo;
+      await new Promise((resolve) => closed.close(resolve));
+      const refused = await new Promise<Error>((resolve) => {
+        connect(port, "127.0.0.1").on("error", resolve);
+      });
+      const reports: Array<[Error, "redis_transient" | "socket_handler" | "startup_failed"]> = [
+        [refused, "redis_transient"],
+        [Object.assign(new Error("Meet Mira refused us"), { code: "EPIPE" }), "socket_handler"],
+        [Object.assign(new Error("ENOENT: Meet Mira"), { code: "Meet_Mira" }), "startup_failed"],
+      ];
+      if (order === "reversed") reports.reverse();
 
-    reporter.report(refused, { source: "redis_transient" });
-    reporter.report(Object.assign(new Error("Meet Mira refused us"), { code: "EPIPE" }), {
-      source: "socket_handler",
-    });
-    reporter.report(Object.assign(new Error("ENOENT: Meet Mira"), { code: "Meet_Mira" }), {
-      source: "startup_failed",
-    });
+      for (const [error, source] of reports) reporter.report(error, { source });
 
-    await waitFor(() => fake.events.filter((event) => event.event === "$exception").length === 3);
-    const values = fake.events
-      .filter((event) => event.event === "$exception")
-      .map((event) => (event.properties.$exception_list as Array<{ value: string }>)[0].value);
-    expect(refused.message).not.toMatch(/^ECONNREFUSED/);
-    expect(values).toEqual([
-      "ECONNREFUSED: [message withheld]",
-      "EPIPE: [message withheld]",
-      "[message withheld]",
-    ]);
-    expect(fake.bodies.join("\n")).not.toMatch(/Mira|127\.0\.0\.1:\d/);
-  });
+      await waitFor(() => fake.events.filter((event) => event.event === "$exception").length === 3);
+      const valueBySource = Object.fromEntries(
+        fake.events
+          .filter((event) => event.event === "$exception")
+          .map((event): [string, string] => [
+            String(event.properties.source),
+            (event.properties.$exception_list as Array<{ value: string }>)[0].value,
+          ]),
+      );
+      expect(refused.message).not.toMatch(/^ECONNREFUSED/);
+      expect(valueBySource).toEqual({
+        redis_transient: "ECONNREFUSED: [message withheld]",
+        socket_handler: "EPIPE: [message withheld]",
+        startup_failed: "[message withheld]",
+      });
+      expect(fake.bodies.join("\n")).not.toMatch(/Mira|127\.0\.0\.1:\d/);
+    },
+  );
 
   it("trusts no message by its type name alone", () => {
     const scrubbed = scrubExceptionEvent({
