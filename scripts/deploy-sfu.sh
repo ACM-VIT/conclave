@@ -292,30 +292,17 @@ if [[ "$PREFLIGHT_ONLY" == "true" ]]; then
 fi
 
 # One deploy at a time on this host: two runs against different instances can
-# each find the other serving and drain both. flock where the host has it
-# (the VM does); elsewhere an atomic mkdir, reclaimed from a holder that died.
-# The lock survives the re-exec below.
+# each find the other serving and drain both. The kernel holds the flock on
+# fd 9 until this process, and the re-exec below that inherits the fd, exit,
+# however they exit. The re-exec takes the lock again on that same fd, which
+# succeeds only while it is still this run's.
 DEPLOY_LOCK="${SFU_DEPLOY_LOCK_FILE:-/tmp/conclave-sfu-deploy.lock}"
-take_deploy_lock() {
-  if command -v flock >/dev/null 2>&1; then
-    [[ -n "${SFU_DEPLOY_LOCK_HELD:-}" ]] && return 0
-    exec 9>>"$DEPLOY_LOCK"
-    flock -n 9
-    return
-  fi
-  local dir="${DEPLOY_LOCK}.d" holder
-  if ! mkdir "$dir" 2>/dev/null; then
-    holder="$(cat "${dir}/pid" 2>/dev/null || true)"
-    if [[ "$holder" != "$$" ]]; then
-      [[ -n "$holder" ]] && kill -0 "$holder" 2>/dev/null && return 1
-      rm -rf "$dir"
-      mkdir "$dir" 2>/dev/null || return 1
-    fi
-  fi
-  echo "$$" > "${dir}/pid"
-  trap 'rm -rf "'"$dir"'"' EXIT
-}
-if ! take_deploy_lock; then
+if ! command -v flock >/dev/null 2>&1; then
+  echo "deploy-sfu.sh needs flock (util-linux) so two deploys cannot run at once; install it and rerun." >&2
+  exit 1
+fi
+[[ -n "${SFU_DEPLOY_LOCK_HELD:-}" ]] || exec 9>>"$DEPLOY_LOCK"
+if ! flock -n 9 2>/dev/null; then
   echo "Another SFU deploy is running on this host (${DEPLOY_LOCK}); not starting a second one." >&2
   exit 1
 fi

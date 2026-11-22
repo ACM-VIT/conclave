@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
+import { pathWithout, provideFlock } from "./test-support/host-tools.mjs";
 
 // Runs the real deploy-sfu.sh against two fake SFUs (HTTP servers that report
 // rooms and take drains) and a stand-in docker CLI. A recreate replaces the
@@ -200,7 +201,8 @@ main();
 
 // upstream: files the next commit on origin changes, so the checkout is one
 // pull behind the revision it will deploy.
-const deploy = async (sfus, { args: extraArgs = [], env: extraEnv = {}, envLines = [], upstream, powershell = false } = {}) => {
+// withoutFlock: run on a host whose PATH has no flock.
+const deploy = async (sfus, { args: extraArgs = [], env: extraEnv = {}, envLines = [], upstream, powershell = false, withoutFlock = false } = {}) => {
   // On macOS this path sits behind the /var symlink, so the preflight also
   // runs through one.
   const root = await mkdtemp(path.join(tmpdir(), "conclave-deploy-"));
@@ -245,11 +247,13 @@ const deploy = async (sfus, { args: extraArgs = [], env: extraEnv = {}, envLines
     await mkdir(bin);
     await writeFile(path.join(bin, "docker"), dockerStandIn);
     await chmod(path.join(bin, "docker"), 0o755);
+    if (!withoutFlock) await provideFlock(bin);
+    const hostPath = withoutFlock ? await pathWithout(path.join(root, "host-bin"), ["flock"]) : process.env.PATH;
     const dockerLog = path.join(root, "docker.log");
     await writeFile(dockerLog, "");
     const env = {
       ...process.env,
-      PATH: `${bin}:${process.env.PATH}`,
+      PATH: `${bin}:${hostPath}`,
       DEPLOY_TEST_SFUS: JSON.stringify(Object.fromEntries(Object.entries(sfus).map(([n, s]) => [n, { port: s.port }]))),
       DEPLOY_TEST_DOCKER_LOG: dockerLog,
       SFU_DEPLOY_STATE_DIR: path.join(root, "state"),
@@ -634,6 +638,15 @@ test("a silent instance whose container state Docker cannot report is not rebuil
     assert.equal(result.code, 1, result.output);
     assert.match(result.output, /Docker could not report the state of sfu-b's container/);
     assert.deepEqual(sfus["sfu-b"].recreates, []);
+  });
+});
+
+test("a host without flock refuses to deploy rather than lock some other way", async () => {
+  await withSfus({ "sfu-a": {}, "sfu-b": {} }, async (sfus) => {
+    const result = await deploy(sfus, { withoutFlock: true });
+    assert.equal(result.code, 1, result.output);
+    assert.match(result.output, /needs flock \(util-linux\)/);
+    assert.deepEqual(events, []);
   });
 });
 

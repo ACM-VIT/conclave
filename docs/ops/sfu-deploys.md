@@ -4,7 +4,9 @@
 a call or leaving fewer instances serving than it found; anything it cannot
 read counts as busy. One deploy runs at a time per host: it takes a lock
 (`flock` on `/tmp/conclave-sfu-deploy.lock`, or `SFU_DEPLOY_LOCK_FILE`) for
-the whole run, and a second one exits 1 at once. If an interrupted run left
+the whole run, and a second one exits 1 at once. The kernel drops the lock
+when the run exits, however it exits. A host without `flock` (util-linux, on
+the VM already) is refused before anything changes. If an interrupted run left
 every instance drained, it first puts the healthy ones that were drained while
 serving back into service. It pulls, restarts itself if the pull changed the script (bash would
 otherwise keep running the old file), and runs the pulled revision's own
