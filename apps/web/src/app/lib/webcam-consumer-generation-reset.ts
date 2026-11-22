@@ -92,6 +92,30 @@ export const getConsumerMaximumSpatialLayer = (
   return maximumSpatialLayer;
 };
 
+/**
+ * The highest layer the producer is sending, from the per-layer producer
+ * scores in a consumer score: a layer the publisher switched off scores 0.
+ */
+export const getHighestActiveSpatialLayer = (
+  score: unknown,
+  maximumSpatialLayer: number,
+): number | null => {
+  const producerScores =
+    score && typeof score === "object" && "producerScores" in score
+      ? score.producerScores
+      : null;
+  if (!Array.isArray(producerScores)) return null;
+  for (
+    let layer = Math.min(maximumSpatialLayer, producerScores.length - 1);
+    layer >= 0;
+    layer -= 1
+  ) {
+    const layerScore: unknown = producerScores[layer];
+    if (typeof layerScore === "number" && layerScore > 0) return layer;
+  }
+  return null;
+};
+
 export type WebcamStartupResetPollDecision =
   | { action: "queue"; highLayerSince: number }
   | { action: "wait"; highLayerSince: number | null }
@@ -119,6 +143,7 @@ export const decideWebcamStartupResetPoll = ({
   adaptivelyPaused,
   observedSpatialLayer,
   maximumSpatialLayer,
+  highestActiveSpatialLayer,
 }: {
   now: number;
   deadlineAt: number;
@@ -133,6 +158,7 @@ export const decideWebcamStartupResetPoll = ({
   adaptivelyPaused: boolean;
   observedSpatialLayer: number | null;
   maximumSpatialLayer: number;
+  highestActiveSpatialLayer: number | null;
 }): WebcamStartupResetPollDecision => {
   if (currentConsumerId !== previousConsumerId) {
     return { action: "cancel", reason: "consumer-generation-changed" };
@@ -152,11 +178,15 @@ export const decideWebcamStartupResetPoll = ({
   }
 
   const isPlayable = trackReadyState === "live" && !trackMuted;
+  const targetSpatialLayer = Math.min(
+    maximumSpatialLayer,
+    highestActiveSpatialLayer ?? maximumSpatialLayer,
+  );
   const isConverged =
-    maximumSpatialLayer > 0 &&
+    targetSpatialLayer > 0 &&
     isPlayable &&
     observedSpatialLayer !== null &&
-    observedSpatialLayer >= maximumSpatialLayer;
+    observedSpatialLayer >= targetSpatialLayer;
   if (!isConverged) {
     return { action: "wait", highLayerSince: null };
   }

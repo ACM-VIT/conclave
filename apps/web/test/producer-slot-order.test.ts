@@ -79,10 +79,11 @@ describe("producer slot order during a camera replacement", () => {
       const oldCamera = camera("old");
       const newCamera = camera("new");
 
-      replay(order, events, oldCamera, newCamera);
-
-      expect(order.isSuperseded(newCamera)).toBe(false);
-      expect(order.isSuperseded(oldCamera)).toBe(true);
+      replay(order, events, oldCamera, newCamera, (seen) => {
+        if (!seen.includes("announce")) return;
+        expect(order.isSuperseded(newCamera)).toBe(false);
+        expect(order.isSuperseded(oldCamera)).toBe(true);
+      });
     },
   );
 

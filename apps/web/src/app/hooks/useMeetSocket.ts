@@ -164,6 +164,7 @@ import {
   decideWebcamStartupResetVerification,
   enqueueWebcamStartupResetProducer,
   getConsumerMaximumSpatialLayer,
+  getHighestActiveSpatialLayer,
   getWebcamStartupResetQueueDelayMs,
   isCurrentConsumerGeneration,
   isProducerPauseSnapshotCurrent,
@@ -5418,9 +5419,9 @@ export function useMeetSocket({
       }
 
       const consumer = consumersRef.current.get(producerId);
+      const consumerTelemetry = consumerTelemetryRef.current.get(producerId);
       const observedSpatialLayer =
-        consumerTelemetryRef.current.get(producerId)?.currentLayers
-          ?.spatialLayer ?? null;
+        consumerTelemetry?.currentLayers?.spatialLayer ?? null;
       state.observedSpatialLayer = observedSpatialLayer;
       const decision = decideWebcamStartupResetPoll({
         now: Date.now(),
@@ -5438,6 +5439,10 @@ export function useMeetSocket({
           adaptivelyPausedConsumerProducerIdsRef.current.has(producerId),
         observedSpatialLayer,
         maximumSpatialLayer: state.maximumSpatialLayer,
+        highestActiveSpatialLayer: getHighestActiveSpatialLayer(
+          consumerTelemetry?.score,
+          state.maximumSpatialLayer,
+        ),
       });
 
       if (decision.action === "queue") {
@@ -5581,9 +5586,9 @@ export function useMeetSocket({
         }
 
         const preflightConsumer = consumersRef.current.get(producerId);
+        const consumerTelemetry = consumerTelemetryRef.current.get(producerId);
         const observedSpatialLayer =
-          consumerTelemetryRef.current.get(producerId)?.currentLayers
-            ?.spatialLayer ?? null;
+          consumerTelemetry?.currentLayers?.spatialLayer ?? null;
         state.observedSpatialLayer = observedSpatialLayer;
         const preflight = decideWebcamStartupResetPoll({
           now: Date.now(),
@@ -5601,6 +5606,10 @@ export function useMeetSocket({
             adaptivelyPausedConsumerProducerIdsRef.current.has(producerId),
           observedSpatialLayer,
           maximumSpatialLayer: state.maximumSpatialLayer,
+          highestActiveSpatialLayer: getHighestActiveSpatialLayer(
+            consumerTelemetry?.score,
+            state.maximumSpatialLayer,
+          ),
         });
         if (
           preflight.action === "queue" ||
@@ -6446,16 +6455,18 @@ export function useMeetSocket({
           producersToConsume,
           countWebcamVideoProducerEntries(producerMapRef.current),
         );
-        await Promise.all(
-          producersToConsume.map((producerInfo) =>
-            consumeProducer(producerInfo, {
-              knownScreenShareVideoActive: snapshotHasScreenShareVideo,
-              webcamVideoStartupRank: webcamVideoStartupRanks.get(
-                producerInfo.producerId,
-              ),
-            }),
-          ),
-        );
+        // Syncs are serialized, so they must not wait on negotiation: a
+        // consume cut off by its transport closing never settles.
+        for (const producerInfo of producersToConsume) {
+          consumeProducer(producerInfo, {
+            knownScreenShareVideoActive: snapshotHasScreenShareVideo,
+            webcamVideoStartupRank: webcamVideoStartupRanks.get(
+              producerInfo.producerId,
+            ),
+          }).catch((err) => {
+            console.error("[Meets] Failed to sync producers:", err);
+          });
+        }
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err ?? "");

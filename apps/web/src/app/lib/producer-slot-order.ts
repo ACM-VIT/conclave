@@ -32,14 +32,18 @@ export function createProducerSlotOrder() {
   const closed = new Set<string>();
   let arrivals = 0;
 
-  const noteAnnounced = (info: AnnouncedProducer): void => {
-    if (closed.has(info.producerId) || known.has(info.producerId)) return;
-    arrivals += 1;
+  const remember = (info: AnnouncedProducer, arrival: number): boolean => {
+    if (closed.has(info.producerId) || known.has(info.producerId)) return false;
     known.set(info.producerId, {
       slotKey: getProducerSlotKey(info),
       seq: readProducerSeq(info),
-      arrival: arrivals,
+      arrival,
     });
+    return true;
+  };
+
+  const noteAnnounced = (info: AnnouncedProducer): void => {
+    if (remember(info, arrivals + 1)) arrivals += 1;
   };
 
   // The server's creation sequence decides which producer is newest. A server
@@ -65,7 +69,9 @@ export function createProducerSlotOrder() {
   /**
    * The server's full list of live producers. A producer this viewer knew
    * before asking that the list leaves out is gone. One announced while the
-   * request was in flight is kept, because the list may predate it.
+   * request was in flight is kept, because the list may predate it. One first
+   * seen in the list existed when it was asked for, so it ranks below any
+   * producer announced after that.
    */
   const noteServerList = (
     producers: readonly AnnouncedProducer[],
@@ -77,7 +83,7 @@ export function createProducerSlotOrder() {
         known.delete(producerId);
       }
     }
-    for (const producer of producers) noteAnnounced(producer);
+    for (const producer of producers) remember(producer, requestedAt);
   };
 
   /** True for a producer first announced after that request was sent. */
