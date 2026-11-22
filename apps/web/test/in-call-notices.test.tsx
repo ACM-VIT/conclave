@@ -260,4 +260,26 @@ describe("in-call notices", () => {
     expect(slot()?.getAttribute("data-lane-mode")).not.toBe("full");
     expect(alertRegion()?.textContent).toBe("Your browser paused audio");
   });
+
+  it("puts notices in the open phone panel's flow instead of over its rows", async () => {
+    const panel = document.createElement("div");
+    panel.innerHTML = '<header>Participants</header><div data-panel-notices></div><section>Host controls</section>';
+    document.body.append(panel);
+    await act(async () =>
+      root.render(
+        <InCallNoticeSlot overPanel>
+          <InCallNotice show>
+            <InCallNoticeCard icon={Headphones} title="Audio-only mode is on" />
+          </InCallNotice>
+        </InCallNoticeSlot>,
+      ),
+    );
+    const target = panel.querySelector("[data-panel-notices]");
+    expect(target?.querySelector("[data-in-call-notice]")?.textContent).toContain("Audio-only mode is on");
+    expect(slot()?.querySelector("[data-in-call-notice]")).toBeNull();
+    expect(target?.nextElementSibling?.textContent).toBe("Host controls");
+    expect(alertRegion()).toBeTruthy();
+    await act(async () => root.render(<InCallNoticeSlot>{null}</InCallNoticeSlot>));
+    panel.remove();
+  });
 });

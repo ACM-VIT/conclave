@@ -8,6 +8,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import {
   InCallNoticeLaneContext,
   placeNoticeLane,
@@ -102,6 +103,24 @@ export default function InCallNoticeSlot({
   expandedRef.current = expanded;
   const overPanelRef = useRef(overPanel);
   overPanelRef.current = overPanel;
+  const [panelTarget, setPanelTarget] = useState<HTMLElement | null>(null);
+  const panelTargetRef = useRef(panelTarget);
+  panelTargetRef.current = panelTarget;
+
+  useLayoutEffect(() => {
+    if (!overPanel) {
+      setPanelTarget(null);
+      return;
+    }
+    const findTarget = () => {
+      const targets = document.querySelectorAll<HTMLElement>("[data-panel-notices]");
+      setPanelTarget(targets[targets.length - 1] ?? null);
+    };
+    findTarget();
+    const panels = new MutationObserver(findTarget);
+    panels.observe(document.body, { childList: true, subtree: true });
+    return () => panels.disconnect();
+  }, [overPanel]);
 
   useLayoutEffect(() => {
     const slot = slotRef.current;
@@ -127,6 +146,10 @@ export default function InCallNoticeSlot({
       const rowRect = row.getBoundingClientRect();
       const laneLeft = rowRect.left - slotRect.left;
       const laneRight = rowRect.right - slotRect.left;
+      if (panelTargetRef.current) {
+        commit({ mode: "compact", offset: 0, count });
+        return;
+      }
       if (overPanelRef.current) {
         const { panel, headerBottom } = fullScreenPanel();
         const placement = placeNoticeLane(collectObstacles(slot, slotRect, panel), {
@@ -232,7 +255,7 @@ export default function InCallNoticeSlot({
       for (const type of revealEvents) stage?.removeEventListener(type, schedule);
       resizes.disconnect();
     };
-  }, []);
+  }, [panelTarget]);
 
   const announce = useCallback((id: string, text: string | null, urgent: boolean) => {
     setAnnouncements((prev) => {
@@ -251,9 +274,56 @@ export default function InCallNoticeSlot({
   const hidesRest = lane.mode !== "full" && !expanded && lane.count > 1;
   const laneContext = useMemo(() => ({ compact, announce }), [compact, announce]);
   const toggleExpanded = () => setExpanded((value) => !value);
+  const laneContent = (
+    <>
+      <div
+        ref={rowRef}
+        className="flex min-h-0 w-full max-w-[560px] items-start gap-2"
+        style={{ marginTop: lane.offset }}
+      >
+        <div
+          ref={listRef}
+          className={`relative flex max-h-full min-h-0 min-w-0 flex-1 flex-col items-center overscroll-contain [&>*+*]:mt-2 ${
+            hidesRest
+              ? "overflow-hidden [&>*:nth-child(n+2)]:invisible [&>*:nth-child(n+2)]:absolute [&>*:nth-child(n+2)]:top-0 [&>*:nth-child(n+2)]:mt-0"
+              : "overflow-y-auto"
+          } ${expanded ? "pointer-events-auto" : ""}`}
+        >
+          {children}
+        </div>
+        {compact && lane.count > 1 ? (
+          <button
+            type="button"
+            onClick={toggleExpanded}
+            aria-expanded={false}
+            aria-label={`Show ${lane.count - 1} more notices`}
+            className="pointer-events-auto h-10 shrink-0 rounded-xl border border-[#fafafa]/10 bg-[#18181b] px-3 text-[12.5px] font-medium text-[#fafafa]/80 transition-colors hover:bg-[#232327] hover:text-[#fafafa]"
+          >
+            +{lane.count - 1}
+          </button>
+        ) : null}
+      </div>
+      {(lane.mode === "collapsed" || expanded) && lane.count > 1 ? (
+        <button
+          type="button"
+          onClick={toggleExpanded}
+          aria-expanded={expanded}
+          className="pointer-events-auto mt-2 shrink-0 rounded-full border border-[#fafafa]/10 bg-[#18181b] px-3 py-1 text-[12px] font-medium text-[#fafafa]/80 transition-colors hover:bg-[#232327] hover:text-[#fafafa]"
+        >
+          {expanded ? "Show less" : `+${lane.count - 1} more`}
+        </button>
+      ) : null}
+    </>
+  );
 
   return (
     <InCallNoticeLaneContext.Provider value={laneContext}>
+      {panelTarget
+        ? createPortal(
+            <div className="flex w-full flex-col items-center">{laneContent}</div>,
+            panelTarget,
+          )
+        : null}
       <div
         ref={slotRef}
         data-in-call-notices
@@ -277,43 +347,7 @@ export default function InCallNoticeSlot({
               : undefined,
           }}
         >
-          <div
-            ref={rowRef}
-            className="flex min-h-0 w-full max-w-[560px] items-start gap-2"
-            style={{ marginTop: lane.offset }}
-          >
-            <div
-              ref={listRef}
-              className={`relative flex max-h-full min-h-0 min-w-0 flex-1 flex-col items-center overscroll-contain [&>*+*]:mt-2 ${
-                hidesRest
-                  ? "overflow-hidden [&>*:nth-child(n+2)]:invisible [&>*:nth-child(n+2)]:absolute [&>*:nth-child(n+2)]:top-0 [&>*:nth-child(n+2)]:mt-0"
-                  : "overflow-y-auto"
-              } ${expanded ? "pointer-events-auto" : ""}`}
-            >
-              {children}
-            </div>
-            {compact && lane.count > 1 ? (
-              <button
-                type="button"
-                onClick={toggleExpanded}
-                aria-expanded={false}
-                aria-label={`Show ${lane.count - 1} more notices`}
-                className="pointer-events-auto h-10 shrink-0 rounded-xl border border-[#fafafa]/10 bg-[#18181b] px-3 text-[12.5px] font-medium text-[#fafafa]/80 transition-colors hover:bg-[#232327] hover:text-[#fafafa]"
-              >
-                +{lane.count - 1}
-              </button>
-            ) : null}
-          </div>
-          {(lane.mode === "collapsed" || expanded) && lane.count > 1 ? (
-            <button
-              type="button"
-              onClick={toggleExpanded}
-              aria-expanded={expanded}
-              className="pointer-events-auto mt-2 shrink-0 rounded-full border border-[#fafafa]/10 bg-[#18181b] px-3 py-1 text-[12px] font-medium text-[#fafafa]/80 transition-colors hover:bg-[#232327] hover:text-[#fafafa]"
-            >
-              {expanded ? "Show less" : `+${lane.count - 1} more`}
-            </button>
-          ) : null}
+          {panelTarget ? null : laneContent}
         </div>
         <div aria-live="polite" className="sr-only">
           {[...announcements].map(([id, { text, urgent }]) =>
