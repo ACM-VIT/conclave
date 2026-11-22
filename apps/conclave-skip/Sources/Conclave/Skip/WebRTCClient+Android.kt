@@ -28,8 +28,6 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.webrtc.AudioSource
 import org.webrtc.AudioTrack
-import org.webrtc.Camera1Enumerator
-import org.webrtc.Camera2Enumerator
 import org.webrtc.CameraVideoCapturer
 import org.webrtc.DefaultVideoDecoderFactory
 import org.webrtc.DefaultVideoEncoderFactory
@@ -181,6 +179,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     internal var onLocalVideoEnabledChanged: ((Boolean) -> Unit)? = null
     internal var onTransportConnectionStateChanged: ((String, String) -> Unit)? = null
     internal var onCallAudioRouteChanged: (() -> Unit)? = null
+    internal var onCameraFacingsChanged: (() -> Unit)? = null
     internal var onLocalAudioProducerLost: (() -> Unit)? = null
     internal var onLocalVideoProducerLost: (() -> Unit)? = null
     internal var onLocalScreenProducerLost: (() -> Unit)? = null
@@ -315,6 +314,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         private const val CONSUMER_RESET_CANDIDATE_STAGGER_MS = 350L
         private const val CONSUMER_RESET_MAX_ATTEMPTS = 2
         private const val PRE_JOIN_CAMERA_RELEASE_SETTLE_MS = 350L
+        private const val RETIRED_TRANSPORT_DISPOSE_DELAY_MS = 45_000L
         private const val WEBRTC_NETWORK_PRIORITY_VERY_LOW = 0
         private const val WEBRTC_NETWORK_PRIORITY_LOW = 1
         private const val WEBRTC_NETWORK_PRIORITY_HIGH = 3
@@ -1814,7 +1814,14 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         get() = if (configuredScreenContentHint == "motion") 3 else 2
     private val audioRouteRecoveryScope = CoroutineScope(Dispatchers.Main.immediate + SupervisorJob())
 
+    private val cameraFacings: CameraFacingCatalog by lazy {
+        CameraFacingCatalog.system(ProcessInfo.processInfo.androidContext).also { catalog ->
+            catalog.onChanged = { onCameraFacingsChanged?.invoke() }
+        }
+    }
+
     internal fun prewarmMediaStack() {
+        cameraFacings
         if (mediaStackPrewarmStarted || peerConnectionFactory != null) return
         mediaStackPrewarmStarted = true
         Thread {
@@ -1878,6 +1885,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         this.socketManager = socketManager
         this.serverRtpCapabilities = rtpCapabilities
         this.runtimeIceServersJSON = iceServersJSON?.trim()?.takeIf { it.isNotEmpty() }
+        disposeRetiredTransportsIfIdle()
 
         val context = ProcessInfo.processInfo.androidContext
         try {
@@ -1966,7 +1974,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         }
 
         if (generation != configurationGeneration) {
-            nextSendTransport.close()
+            retireTransport(nextSendTransport)
             throw ErrorException("WebRTC session was replaced")
         }
 
@@ -2025,11 +2033,11 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         }
 
         if (generation != configurationGeneration) {
-            nextReceiveTransport.close()
+            retireTransport(nextReceiveTransport)
             throw ErrorException("WebRTC session was replaced")
         }
 
-        receiveTransport?.close()
+        retireTransport(receiveTransport)
         receiveTransportId = consumerTransportParams.id
         receiveTransport = nextReceiveTransport
         NativePerformanceDiagnostics.timingAlways("webrtc_create_receive_transport_local", localCreateStartedAt)
@@ -2087,22 +2095,13 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     /** Stats read the send handler, so they skip a sample while the lane has work rather than race it. */
     private val isSendTransportQuiet: Boolean get() = sendTransportLane?.isIdle ?: true
 
-    /** The lane disposes [device] after the transport close: libmediasoupclient's send transport reads it while producing. */
     private fun retireSendTransport(device: Device? = null) {
         val transport = sendTransport
         val lane = sendTransportLane
         sendTransport = null
         sendTransportLane = null
-        if (lane == null) {
-            transport?.close()
-            device?.dispose()
-            return
-        }
-        sendProducerLanes.values.removeAll { it === lane }
-        lane.retire {
-            transport?.close()
-            device?.dispose()
-        }
+        if (lane != null) sendProducerLanes.values.removeAll { it === lane }
+        retiredTransports.retireAfter(lane, RetiredMediasoup(transport, device)) { transport?.close() }
     }
 
     /** A queued produce holds tracks and sources without a libwebrtc reference until it reaches the peer connection. */
@@ -2128,6 +2127,39 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         return producerRestarted && consumerRestarted
     }
 
+    private class RetiredMediasoup(val transport: Transport?, val device: Device?)
+
+    private val retiredTransports = RetiredTransportReaper<RetiredMediasoup>(
+        idleDelayMs = RETIRED_TRANSPORT_DISPOSE_DELAY_MS,
+        isIdle = { device == null && sendTransport == null && receiveTransport == null && sendTransportLane == null },
+        dispose = { retired ->
+            try {
+                when (val transport = retired.transport) {
+                    is SendTransport -> transport.dispose()
+                    is RecvTransport -> transport.dispose()
+                    else -> {}
+                }
+                retired.device?.dispose()
+            } catch (error: Throwable) {
+                debugLog("[WebRTC] Failed to dispose retired transport: ${error}")
+            }
+        },
+        handler = mainHandler,
+    )
+
+    private fun retireTransport(transport: Transport?) {
+        if (transport == null) return
+        try {
+            transport.close()
+        } catch (_: Throwable) {
+        }
+        retiredTransports.retire(RetiredMediasoup(transport, null))
+    }
+
+    private fun disposeRetiredTransportsIfIdle() {
+        retiredTransports.disposeIfIdle()
+    }
+
     internal suspend fun restartIce(transportKind: String): Boolean {
         val socket = socketManager ?: return false
         try {
@@ -2143,6 +2175,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                     val transport = receiveTransport ?: return false
                     val transportId = receiveTransportId ?: return false
                     val response = socket.restartIce(transport = transportKind, transportId = transportId)
+                    if (transport !== receiveTransport) return false
                     transport.restartIce(encodeJSONString(response.iceParameters))
                 }
                 else -> return false
@@ -5002,7 +5035,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         localVideoTrackWrapper = null
         remoteVideoTracks.removeAll()
 
-        receiveTransport?.close()
+        retireTransport(receiveTransport)
         receiveTransport = null
         sendTransportId = null
         receiveTransportId = null
@@ -7763,23 +7796,17 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             .createPeerConnectionFactory()
     }
 
-    internal fun canSwitchCamera(): Boolean {
-        val enumerator = createCameraEnumerator(ProcessInfo.processInfo.androidContext)
-        return cameraNameForFacing(enumerator, LocalCameraFacing.front) != null &&
-            cameraNameForFacing(enumerator, LocalCameraFacing.back) != null
-    }
+    internal fun canSwitchCamera(): Boolean = cameraFacings.current?.canSwitch ?: false
 
     internal fun setPreferredCameraFacing(facing: LocalCameraFacing) {
         if (localVideoEnabled && videoCapturer != null) return
-        val enumerator = createCameraEnumerator(ProcessInfo.processInfo.androidContext)
-        if (cameraNameForFacing(enumerator, facing) == null) return
+        if (cameraFacings.snapshotOrProbe().name(facing) == null) return
         activeCameraFacing = facing
     }
 
     internal suspend fun switchCamera() {
         val nextFacing = oppositeCameraFacing(activeCameraFacing)
-        val enumerator = createCameraEnumerator(ProcessInfo.processInfo.androidContext)
-        if (cameraNameForFacing(enumerator, nextFacing) == null) {
+        if (cameraFacings.snapshotOrProbe().name(nextFacing) == null) {
             throw ErrorException("No ${cameraFacingLabel(nextFacing).lowercase()} available")
         }
 
@@ -7822,13 +7849,8 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         }
     }
 
-    private fun createCameraEnumerator(context: Context): org.webrtc.CameraEnumerator {
-        return if (Camera2Enumerator.isSupported(context)) {
-            Camera2Enumerator(context)
-        } else {
-            Camera1Enumerator(true)
-        }
-    }
+    private fun createCameraEnumerator(context: Context): org.webrtc.CameraEnumerator =
+        CameraFacingCatalog.enumerator(context)
 
     private fun cameraNameForFacing(
         enumerator: org.webrtc.CameraEnumerator,

@@ -38,6 +38,7 @@ final class WebRTCClient {
     var onLocalVideoEnabledChanged: ((Bool) -> Void)?
     var onTransportConnectionStateChanged: ((String, String) -> Void)?
     var onCallAudioRouteChanged: (() -> Void)?
+    var onCameraFacingsChanged: (() -> Void)?
     var onLocalAudioProducerLost: (() -> Void)?
     var onLocalVideoProducerLost: (() -> Void)?
     var onLocalScreenProducerLost: (() -> Void)?

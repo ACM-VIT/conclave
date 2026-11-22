@@ -2787,6 +2787,14 @@ final class MeetingViewModel {
             }
         }
 
+        #if SKIP
+        webRTCClient.onCameraFacingsChanged = { [weak self] in
+            self?.requestStageRefresh()
+            self?.requestControlsRefresh()
+            self?.requestSettingsRefresh()
+        }
+        #endif
+
         webRTCClient.onCallAudioRouteChanged = { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
