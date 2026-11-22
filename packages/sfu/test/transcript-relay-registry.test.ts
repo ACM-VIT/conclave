@@ -747,3 +747,64 @@ describe("a start's outcome is decided when it is returned", () => {
     expect(result.success).toBe(false);
   });
 });
+
+describe("a stop clears the room whatever handoffs are pending", () => {
+  it("lets another participant start after a stop lands while a replacement awaits its handoff", async () => {
+    const closed = new Set<string>();
+    const synced: string[] = [];
+    // Each handoff request waits on its own, as each times out on its own.
+    const pendingHandoffs: { workerToken: string; settle: (ok: boolean) => void }[] = [];
+    const registry = createTranscriptRelayRegistry({
+      enabled: true,
+      createRelay: ({ workerToken, controllerUserId }) => ({
+        controllerUserId,
+        start: async () => {},
+        prepareHandoff: () =>
+          new Promise<boolean>((settle) => {
+            pendingHandoffs.push({ workerToken, settle });
+          }),
+        syncProducers: async () => {
+          synced.push(workerToken);
+        },
+        close: () => {
+          closed.add(workerToken);
+        },
+      }),
+    });
+    const start = (workerToken: string, controllerUserId: string, canReplaceExistingRelay: boolean) =>
+      registry.start({
+        room,
+        workerUrl: "http://worker.test",
+        workerToken,
+        controllerUserId,
+        controllerDisplayName: controllerUserId,
+        canReplaceExistingRelay,
+      });
+    const settleNext = async (ok: boolean) => {
+      await vi.waitFor(() => expect(pendingHandoffs.length).toBeGreaterThan(0));
+      pendingHandoffs.shift()!.settle(ok);
+      for (let tick = 0; tick < 10; tick += 1) await Promise.resolve();
+    };
+
+    expect((await start("A", "participant-1", false)).success).toBe(true);
+    const replacement = start("B", "host", true);
+    await vi.waitFor(() => expect(pendingHandoffs).toHaveLength(1));
+    const stopping = registry.stopRoomForUser({ roomKey: room.channelId, userId: "host", canStopAnyRelay: true });
+    await vi.waitFor(() => expect(pendingHandoffs).toHaveLength(2));
+    await settleNext(false);
+    await settleNext(false);
+
+    expect((await replacement).success).toBe(false);
+    expect(await stopping).toEqual({ success: true });
+    expect([...closed].sort()).toEqual(["A", "B"]);
+    synced.length = 0;
+    await registry.syncRoom(room);
+    expect(synced, "no relay is left recorded for the room").toEqual([]);
+
+    const next = start("C", "participant-2", false);
+    expect((await next).success).toBe(true);
+    await registry.syncRoom(room);
+    expect(synced).toEqual(["C"]);
+    registry.closeAll();
+  });
+});

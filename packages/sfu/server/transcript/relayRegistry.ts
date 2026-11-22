@@ -53,7 +53,15 @@ export const createTranscriptRelayRegistry = (options: {
     TranscriptRelayInstance,
     Promise<TranscriptSfuRelayStartResponse>
   >();
+  // Per room, the newest relay generation a stop has retired. A retired
+  // relay never gets the room back and never counts as running; relays
+  // started after the stop began are newer and keep it.
+  const stoppedThrough = new Map<string, number>();
   let nextGeneration = 0;
+  const isRetired = (key: string, relay: TranscriptRelayInstance): boolean => {
+    const generation = opened.get(key)?.get(relay);
+    return generation === undefined || generation <= (stoppedThrough.get(key) ?? -1);
+  };
   const roomKey = (room: Pick<Room, "channelId" | "id">): string =>
     room.channelId || room.id;
   const forget = (key: string, relay: TranscriptRelayInstance): void => {
@@ -163,7 +171,7 @@ export const createTranscriptRelayRegistry = (options: {
         updatedAt: Date.now(),
       });
       const isOpen = (candidate: TranscriptRelayInstance): boolean =>
-        opened.get(key)?.has(candidate) === true;
+        !isRetired(key, candidate);
       // The outcome is decided as it is returned: a success stands only if
       // the room's relay is open right now, since a stop can land while this
       // start is still settling.
@@ -252,21 +260,27 @@ export const createTranscriptRelayRegistry = (options: {
           error: "Only the transcript relay controller, host, or admin can stop the SFU relay.",
         };
       }
-      const handoffReady = await relay.prepareHandoff();
-      if (!handoffReady) {
-        Logger.warn(
-          `Transcript SFU relay stop for room ${roomKey} could not prepare worker disconnect suppression.`,
-        );
-      }
-      closeOlderThan(roomKey, stoppedGeneration);
-      if (opened.get(roomKey)?.has(relay)) {
-        closeRelay(roomKey, relay, { flushBufferedAudio: true });
-      }
-      // A host can start a replacement relay while prepareHandoff() awaits;
-      // only remove the entry if it is still the relay this call stopped, or
-      // the newer relay would keep running with no way to stop it.
-      if (relays.get(roomKey) === relay) {
-        relays.delete(roomKey);
+      // Retire this relay and every older one before awaiting anything, so no
+      // handoff that settles meanwhile can hand the room back to one of them.
+      stoppedThrough.set(roomKey, Math.max(stoppedThrough.get(roomKey) ?? -1, stoppedGeneration));
+      try {
+        const handoffReady = await relay.prepareHandoff();
+        if (!handoffReady) {
+          Logger.warn(
+            `Transcript SFU relay stop for room ${roomKey} could not prepare worker disconnect suppression.`,
+          );
+        }
+      } finally {
+        closeOlderThan(roomKey, stoppedGeneration);
+        if (opened.get(roomKey)?.has(relay)) {
+          closeRelay(roomKey, relay, { flushBufferedAudio: true });
+        }
+        // A replacement started while the handoff awaited is newer and keeps
+        // the room; anything this stop retired never does.
+        const current = relays.get(roomKey);
+        if (current && isRetired(roomKey, current)) {
+          relays.delete(roomKey);
+        }
       }
       return { success: true };
     },
@@ -285,6 +299,7 @@ export const createTranscriptRelayRegistry = (options: {
         closeRoom(key);
       }
       relays.clear();
+      stoppedThrough.clear();
     },
   };
 };
