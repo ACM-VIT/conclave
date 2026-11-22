@@ -603,6 +603,14 @@ deploy_service() {
      [[ "$(printf "%s" "$status" | json_field draining)" == "false" ]] &&
      [[ "$(docker inspect -f '{{.Image}}' "$container")" == "$TARGET_IMAGE" ]] &&
      [[ "$(docker inspect -f '{{index .Config.Labels "com.docker.compose.config-hash"}}' "$container")" == "$("${COMPOSE[@]}" config --hash "$svc" | awk '{print $2}')" ]]; then
+    # An earlier run may have stopped here because clients could not reach
+    # it, so the skip holds only while its public route still does.
+    if ! validate_public_route "$svc" "$(service_public_url "$svc")"; then
+      echo "" >&2
+      echo "Deploy stopped: ${svc} already runs ${TARGET_COMMIT}, but clients cannot reach it at its public URL." >&2
+      echo "The instances after it were not drained. Fix the route, then rerun this script." >&2
+      return 1
+    fi
     echo "${svc} already runs ${TARGET_COMMIT} with the current config; leaving it alone."
     return 0
   fi

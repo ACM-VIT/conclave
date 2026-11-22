@@ -396,3 +396,13 @@ test("a peer left draining whose status cannot be read is not drained against", 
     assert.equal(sfus["sfu-b"].drains.length, 0, "sfu-b is the only instance still taking meetings");
   });
 });
+
+test("a rerun checks the public route of an instance already on the target", async () => {
+  await withSfus({ "sfu-a": { rooms: 1 }, "sfu-b": { onTarget: true } }, async (sfus) => {
+    // sfu-b passed its canary on an earlier run but its public route lands on sfu-a.
+    const result = await deploy(sfus, { envLines: [`SFU_B_PUBLIC_URL=http://127.0.0.1:${sfus["sfu-a"].port}`] });
+    assert.equal(result.code, 1, result.output);
+    assert.match(result.output, /sfu-b already runs .* but clients cannot reach it/);
+    assert.equal(sfus["sfu-a"].drains.length, 0);
+  });
+});
