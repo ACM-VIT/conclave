@@ -131,8 +131,11 @@ type Attempt = {
    *  during the join; kept for the whole call so one that drops out of a
    *  report and comes back is not counted twice. */
   streams: Map<string, StreamMemory>;
-  outboundLayers: Map<string, OutboundLayerStats>;
+  outboundLayers: Map<string, LayerReading>;
 };
+
+/** A camera layer's counters and the sample they were read in. */
+type LayerReading = OutboundLayerStats & { readAt: number };
 
 type MediaTotals = {
   remoteVideoMs: number;
@@ -441,14 +444,27 @@ export function createCallMetricsTracker({
     });
   };
 
+  const rememberLayers = (media: Attempt, layers: OutboundLayerStats[], at: number) => {
+    layers.forEach((layer) => media.outboundLayers.set(layer.id, { ...layer, readAt: at }));
+  };
+
+  /**
+   * Adds the camera's progress since the previous sample, read at
+   * `previousAt`. A layer counts only when its last reading is from that
+   * sample, so one that drops out of a report and comes back starts again
+   * from a new baseline. Limited time is taken once per interval, as the most
+   * any layer shows, and never more than the interval itself.
+   */
   const foldOutbound = (
     call: Call,
     layers: OutboundLayerStats[],
     profile: VideoQuality,
-    dt: number | null,
+    previousAt: number | null,
+    at: number,
   ) => {
     const previous = new Map(call.outboundLayers);
-    layers.forEach((layer) => call.outboundLayers.set(layer.id, layer));
+    rememberLayers(call, layers, at);
+    const dt = measuredInterval(previousAt, at);
     if (dt === null) return;
 
     let sentBytes = 0;
@@ -457,11 +473,11 @@ export function createCallMetricsTracker({
     let bandwidthSec = 0;
     layers.forEach((layer) => {
       const prior = previous.get(layer.id);
-      const bytes = counterDelta(layer.bytesSent, prior?.bytesSent ?? 0);
+      if (!prior || prior.readAt !== previousAt) return;
+      const bytes = counterDelta(layer.bytesSent, prior.bytesSent);
       if (bytes === 0) return;
       sentBytes += bytes;
       height = Math.max(height, layer.frameHeight ?? 0);
-      if (!prior) return;
       // Every layer comes from one encoder, so they share one limitation clock.
       cpuSec = Math.max(cpuSec, counterDelta(layer.cpuLimitedSec, prior.cpuLimitedSec));
       bandwidthSec = Math.max(
@@ -482,8 +498,10 @@ export function createCallMetricsTracker({
     if (height > 0) {
       totals.heightMs.set(height, (totals.heightMs.get(height) ?? 0) + dt);
     }
-    totals.cpuLimitedMs += cpuSec * 1000;
-    totals.bandwidthLimitedMs += bandwidthSec * 1000;
+    // The stats clock and ours drift a little, so a fully limited interval can
+    // read a few ms over.
+    totals.cpuLimitedMs += Math.min(cpuSec * 1000, dt);
+    totals.bandwidthLimitedMs += Math.min(bandwidthSec * 1000, dt);
   };
 
   /**
@@ -601,10 +619,9 @@ export function createCallMetricsTracker({
       }
       if (sample.outboundVideo) {
         if (call) {
-          const dt = measuredInterval(call.lastOutboundAt, at);
-          foldOutbound(call, sample.outboundVideo, sample.outboundProfile, dt);
+          foldOutbound(call, sample.outboundVideo, sample.outboundProfile, call.lastOutboundAt, at);
         } else {
-          sample.outboundVideo.forEach((layer) => media.outboundLayers.set(layer.id, layer));
+          rememberLayers(media, sample.outboundVideo, at);
         }
         media.lastOutboundAt = at;
       }

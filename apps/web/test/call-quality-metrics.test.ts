@@ -805,6 +805,49 @@ describe("call_summary", () => {
     });
   });
 
+  it("takes a layer that returns after a gap as a new baseline, so no share passes 100%", () => {
+    const { tracker, state, named } = setup();
+    state("connecting", 0);
+    state("joined", 1000);
+    const limited = (id: string, sec: number, bytesSent: number) =>
+      layer({ id, bytesSent, cpuLimitedSec: sec, bandwidthLimitedSec: sec });
+    tracker.onStats(sample([], { outboundVideo: [limited("send:L1", 0, 0), limited("send:L2", 0, 0)] }), 1000);
+    tracker.onStats(sample([], { outboundVideo: [limited("send:L1", 5, 50_000)] }), 6000);
+    tracker.onStats(sample([], { outboundVideo: [limited("send:L1", 10, 100_000)] }), 11_000);
+    tracker.onStats(
+      sample([], { outboundVideo: [limited("send:L1", 15, 150_000), limited("send:L2", 15, 150_000)] }),
+      16_000,
+    );
+    tracker.onStats(
+      sample([], { outboundVideo: [limited("send:L1", 20, 200_000), limited("send:L2", 20, 200_000)] }),
+      21_000,
+    );
+    state("disconnected", 22_000);
+
+    expect(named("call_summary")[0].props).toMatchObject({
+      outbound_video_ms: 20_000,
+      outbound_video_kbps: 100,
+      outbound_cpu_limited_pct: 100,
+      outbound_bandwidth_limited_pct: 100,
+    });
+  });
+
+  it("never counts more limited time than the interval it falls in", () => {
+    const { tracker, state, named } = setup();
+    state("connecting", 0);
+    state("joined", 1000);
+    tracker.onStats(sample([], { outboundVideo: [layer()] }), 1000);
+    tracker.onStats(
+      sample([], { outboundVideo: [layer({ bytesSent: 500_000, cpuLimitedSec: 5.2, bandwidthLimitedSec: 5.1 })] }),
+      6000,
+    );
+    state("disconnected", 7000);
+
+    const { props } = named("call_summary")[0];
+    expect(props.outbound_cpu_limited_pct).toBe(100);
+    expect(props.outbound_bandwidth_limited_pct).toBe(100);
+  });
+
   it("drops a sample gap too long to measure instead of inflating rates", () => {
     const { tracker, state, named } = setup();
     state("connecting", 0);
@@ -876,9 +919,11 @@ describe("call_summary", () => {
     tracker.onStats(sample([], { outboundVideo: [low(300_000), high(600_000)] }), 17_000);
     state("disconnected", 18_000);
 
+    // The high layer's first reading back is a baseline: what it sent while
+    // missing from the report is left out, never counted from zero.
     expect(named("call_summary")[0].props).toMatchObject({
       outbound_video_ms: 15_000,
-      outbound_video_kbps: 480,
+      outbound_video_kbps: 427,
     });
   });
 

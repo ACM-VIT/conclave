@@ -48,7 +48,9 @@ click (except in the waiting room) until first media arrives, then every 5 s, so
 first-media times are stamped at the first sample that shows them, even when
 media arrives before the join finishes. The first sample, during the join or
 after, is only a baseline: totals add deltas over measured intervals. A gap of
-more than 15 s between readable samples is left out of every total.
+more than 15 s between readable samples is left out of every total. A camera
+layer counts only against its reading in the previous sample, so one that drops
+out of a report and comes back starts again from a new baseline.
 
 ### `call_join`
 
@@ -94,7 +96,7 @@ closes. Errors between reconnect attempts never end a call; one call id spans ev
 | `outbound_video_ms` | Time the camera was sending. Screen sharing is not counted |
 | `outbound_low_ms`, `outbound_standard_ms`, `outbound_profile_switches` | Time in each publish profile and how often it changed |
 | `outbound_video_kbps`, `outbound_video_height` | Average send bitrate, and the frame height sent for the longest time |
-| `outbound_cpu_limited_pct`, `outbound_bandwidth_limited_pct` | Share of send time the encoder was limited, from `qualityLimitationDurations` |
+| `outbound_cpu_limited_pct`, `outbound_bandwidth_limited_pct` | Share of send time the encoder was limited, from `qualityLimitationDurations`: once per sample interval, the most any layer shows, never more than the interval |
 
 The older `meet_*` events (reconnect attempts, consumer recovery and so on)
 still flow through `telemetry.capture`, minus their `roomId` and `userId`. Join
