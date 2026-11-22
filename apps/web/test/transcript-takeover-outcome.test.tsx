@@ -384,6 +384,34 @@ describe("requests that are replaced or recovered", () => {
     expect(await result).toBe(true);
     expect(startRelay).toHaveBeenCalledTimes(1);
   });
+
+  it("reports a failed relay start to the request even when the recovery token also arrived", async () => {
+    startRelay.mockResolvedValue({ success: false, status: "error", reason: "relay down", updatedAt: 1 });
+    const socket = await mount();
+    await act(async () => socket.frame({ type: "session.state", session: liveSession }));
+
+    let result!: Promise<boolean>;
+    await act(async () => {
+      result = controller.takeover({ language: "hi" });
+    });
+    const requestId = requestIdFor(socket, "hi");
+    const reconnected = await dropAndReconnect(socket);
+    await act(async () => reconnected.frame(token(true)));
+    await act(async () =>
+      reconnected.frame({
+        type: "snapshot",
+        viewerConnectionId: "conn-2",
+        session: { ...liveSession, language: "hi", requestId, controller: rebound },
+      }),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6_000);
+    });
+
+    expect(await result).toBe(false);
+    expect(reconnected.sent.map(({ type }) => type)).toContain("session.relayFailed");
+    expect(startRelay).toHaveBeenCalledTimes(3);
+  });
 });
 
 describe("two quick language picks, the second sent before the first is acknowledged", () => {
