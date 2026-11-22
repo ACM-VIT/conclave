@@ -8,7 +8,7 @@ names, emails, chat text or room codes.
 | Where | Variable | Effect |
 | --- | --- | --- |
 | Web build | `NEXT_PUBLIC_POSTHOG_KEY` | Project key. Without it the browser loads nothing, reads no call stats and sends nothing. |
-| Web build | `NEXT_PUBLIC_POSTHOG_HOST` | Defaults to `https://eu.posthog.com`. |
+| Web server | `POSTHOG_INGEST_HOST` | Where `/ingest` forwards the browser's events. Defaults to `https://eu.i.posthog.com`. The browser never talks to PostHog itself. |
 | Web dev | `NEXT_PUBLIC_POSTHOG_DEV=1` | `next dev` only sends events with this set. |
 | Web deploy | `POSTHOG_CLI_API_KEY`, `POSTHOG_CLI_PROJECT_ID`, `POSTHOG_CLI_HOST` | `cf:build` builds, uploads and deletes browser source maps (needs `posthog-cli` on PATH). Read from the shell or the `.env` files `next build` reads. Other builds, `cf:preview` included, make no maps. A failed upload, or one still running after 90 s (`POSTHOG_SOURCEMAPS_TIMEOUT_MS`), warns and the deploy goes on without readable stacks. The CLI runs in its own process group, so a stalled upload is stopped with its native uploader child before the maps are removed, which they always are. Ctrl-C or SIGTERM is passed on to that group, the maps are removed, and the script exits 130 or 143. Exited (zombie) processes count as gone, for containers with no init to reap them. |
 | SFU | `SFU_POSTHOG_KEY`, `SFU_POSTHOG_HOST` | Server exceptions and game events. `SFU_POSTHOG_ENABLED=0` turns both off. Always off under vitest. |
@@ -106,6 +106,16 @@ still flow through `telemetry.capture`, minus their `roomId` and `userId`. Join
 and reconnect failures carry a `failure_reason` category, never the error text.
 
 ## Privacy
+
+The browser sends its events to `/ingest` on our own site (`app/ingest/[...path]/route.ts`,
+`lib/telemetry-ingest.ts`), never to PostHog. The route takes only the event
+endpoint (`/ingest/e/`) as a POST of at most 256 KB, 1 MB once decoded, and 200
+events. It decodes the body (gzip, base64 or JSON), drops events for any project
+but ours, and scrubs every event again with the rules below, so the browser's
+scrub is not the only guard. It forwards the batch to PostHog as plain JSON with
+the fixed User-Agent `conclave-web-ingest/1` and no header of the browser's: no
+cookie, no IP address and no forwarded or referrer header reaches PostHog. If
+PostHog fails, the browser is told to retry (503).
 
 `telemetry-privacy.ts` runs as posthog-js `before_send` and sends only what we
 trust, instead of scrubbing what looks bad:

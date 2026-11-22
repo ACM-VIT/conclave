@@ -17,8 +17,9 @@ export type TelemetryCaptureOptions = {
 };
 
 const posthogKey = process.env.NEXT_PUBLIC_POSTHOG_KEY;
-const posthogHost =
-  process.env.NEXT_PUBLIC_POSTHOG_HOST ?? "https://eu.posthog.com";
+// Events go to /ingest on our own site (app/ingest), which scrubs them again
+// and forwards them to PostHog without the browser's headers.
+const INGEST_PATH = "/ingest";
 const clientVersion = process.env.NEXT_PUBLIC_CONCLAVE_CLIENT_VERSION;
 
 /** False without a project key, and in `next dev` unless someone opts in. */
@@ -89,7 +90,8 @@ const deliver = (client: PostHog, delivery: Delivery): void => {
 
 const initPostHog = (client: PostHog, key: string): void => {
   client.init(key, {
-    api_host: posthogHost,
+    api_host: INGEST_PATH,
+    ui_host: "https://eu.posthog.com",
     capture_pageview: false,
     capture_pageleave: false,
     autocapture: false,

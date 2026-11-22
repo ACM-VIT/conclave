@@ -67,6 +67,9 @@ const noStoreResponseHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  // posthog-js posts to /ingest/e/ (app/ingest), and a redirect to drop the
+  // slash would cost each batch a round trip and can lose a page-close beacon.
+  skipTrailingSlashRedirect: true,
   reactStrictMode: true,
   reactCompiler: true,
   productionBrowserSourceMaps: uploadPostHogSourceMaps,

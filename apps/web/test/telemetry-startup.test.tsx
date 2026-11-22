@@ -68,6 +68,10 @@ describe("error boundaries on the first page load", () => {
       }),
     );
     expect(posthog.init).toHaveBeenCalledTimes(1);
+    expect(posthog.init).toHaveBeenCalledWith(
+      "phc_test_project",
+      expect.objectContaining({ api_host: "/ingest", ui_host: "https://eu.posthog.com" }),
+    );
   });
 
   it("reports a root layout failure with no telemetry provider mounted", async () => {
