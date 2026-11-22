@@ -479,11 +479,15 @@ const getResponseStatusFromError = (error: unknown): number | null => {
 const isRecoverableJoinInfoStatus = (status: number): boolean =>
   status >= 500 && status < 600;
 
-const isRecoverableReconnectFailure = (error: unknown): boolean => {
+export const isRecoverableReconnectFailure = (error: unknown): boolean => {
   const responseStatus = getResponseStatusFromError(error);
   if (responseStatus !== null) {
     return isRecoverableJoinInfoStatus(responseStatus);
   }
+  // After a server restart the room is back only once someone from the call
+  // recreates it. A tab that was knocking cannot do that and has to wait for
+  // it, or its request is lost and its host never sees it again.
+  if (createMeetError(error).code === "ROOM_NOT_FOUND") return true;
   const message = getRawReconnectErrorMessage(error).trim();
   if (!message) return true;
   return /timeout|xhr poll|websocket|transport|socket|network|fetch|load failed|connection/i.test(
