@@ -253,6 +253,139 @@ describe("overlapping notes requests", () => {
   });
 });
 
+describe("requests that are replaced or recovered", () => {
+  const requestIdFor = (socket: FakeSocket, language: string) =>
+    socket.sent.find((message) => message.language === language)?.requestId;
+  const token = (automatic?: boolean) => ({
+    type: "sfu.relayStartToken",
+    token: "relay",
+    expiresAt: Date.now() + 60_000,
+    ...(automatic ? { automatic: true } : {}),
+  });
+  // The worker rebinds the controller to the new connection on reconnect.
+  const rebound = { userId: "host", connectionId: "conn-2" };
+  const dropAndReconnect = async (socket: FakeSocket) => {
+    await act(async () => socket.close());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    const reconnected = FakeSocket.instances.at(-1)!;
+    expect(reconnected).not.toBe(socket);
+    return reconnected;
+  };
+
+  it("settles a switch replaced by a newer one from the same controller without an error", async () => {
+    const socket = await mount();
+    await act(async () => socket.frame({ type: "session.state", session: liveSession }));
+
+    let hindi!: Promise<boolean>;
+    await act(async () => {
+      hindi = controller.takeover({ language: "hi" });
+    });
+    const hindiId = requestIdFor(socket, "hi");
+    await act(async () =>
+      socket.frame({ type: "session.state", session: { ...liveSession, status: "starting", language: "hi", requestId: hindiId } }),
+    );
+    let tamil!: Promise<boolean>;
+    await act(async () => {
+      tamil = controller.takeover({ language: "ta" });
+    });
+    const tamilId = requestIdFor(socket, "ta");
+    await act(async () =>
+      socket.frame({ type: "session.state", session: { ...liveSession, status: "starting", language: "ta", requestId: tamilId } }),
+    );
+    await act(async () =>
+      socket.frame({ type: "session.state", session: { ...liveSession, language: "ta", requestId: tamilId, updatedAt: 3 } }),
+    );
+    await act(async () => socket.frame(token()));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(31_000);
+    });
+
+    expect([await hindi, await tamil]).toEqual([false, true]);
+    expect(controller.error).toBeNull();
+    expect(startRelay).toHaveBeenCalledTimes(1);
+  });
+
+  it("counts an older worker's recovered start as a success after a socket drop", async () => {
+    const socket = await mount();
+    await act(async () => socket.frame({ type: "snapshot", session: { ...liveSession, status: "idle" } }));
+
+    let result!: Promise<boolean>;
+    await act(async () => {
+      result = controller.start({ language: "hi", transportMode: "sfu" });
+    });
+    const reconnected = await dropAndReconnect(socket);
+    await act(async () =>
+      reconnected.frame({
+        type: "snapshot",
+        viewerConnectionId: "conn-2",
+        session: { ...liveSession, language: "hi", controller: rebound },
+      }),
+    );
+    await act(async () => reconnected.frame(token(true)));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6_000);
+    });
+
+    expect(await result).toBe(true);
+    expect(controller.error).toBeNull();
+    expect(startRelay).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the running relay when a reconnect shows the switch live and brings no new token", async () => {
+    const socket = await mount();
+    await act(async () => socket.frame({ type: "session.state", session: liveSession }));
+
+    let result!: Promise<boolean>;
+    await act(async () => {
+      result = controller.takeover({ language: "hi" });
+    });
+    const requestId = requestIdFor(socket, "hi");
+    const reconnected = await dropAndReconnect(socket);
+    await act(async () =>
+      reconnected.frame({
+        type: "snapshot",
+        viewerConnectionId: "conn-2",
+        session: { ...liveSession, language: "hi", requestId, controller: rebound },
+      }),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6_000);
+    });
+
+    expect(await result).toBe(true);
+    expect(reconnected.sent.map(({ type }) => type)).not.toContain("session.relayFailed");
+    expect(startRelay).not.toHaveBeenCalled();
+  });
+
+  it("starts the relay once for an automatic recovery token", async () => {
+    const socket = await mount();
+    await act(async () => socket.frame({ type: "session.state", session: liveSession }));
+
+    let result!: Promise<boolean>;
+    await act(async () => {
+      result = controller.takeover({ language: "hi" });
+    });
+    const requestId = requestIdFor(socket, "hi");
+    const reconnected = await dropAndReconnect(socket);
+    await act(async () =>
+      reconnected.frame({
+        type: "snapshot",
+        viewerConnectionId: "conn-2",
+        session: { ...liveSession, language: "hi", requestId, controller: rebound },
+      }),
+    );
+    await act(async () => reconnected.frame(token(true)));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6_000);
+    });
+
+    expect(await result).toBe(true);
+    expect(startRelay).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("caption language support", () => {
   it("follows what the worker says it supports", async () => {
     const socket = await mount();
