@@ -353,9 +353,9 @@ export type FramePathOptions = {
 
 /**
  * A frame's path relative to the SFU's folder, or [path]. A path is kept only
- * when it names a file that exists inside that folder once links are
- * followed, so a name alone, a home folder, a library's file or a Node
- * internal is never sent.
+ * when it names a file of our own source: one that exists inside that folder
+ * once links are followed and is not under node_modules. A name alone, a home
+ * folder, a library's file or a Node internal is never sent.
  */
 const createFramePath = ({ root, cwd }: FramePathOptions) => {
   let realRoot: string | null = null;
@@ -371,8 +371,14 @@ const createFramePath = ({ root, cwd }: FramePathOptions) => {
     try {
       if (realRoot) {
         const inRoot = path.relative(realRoot, realpathSync(path.resolve(cwd(), filename)));
-        if (inRoot && !path.isAbsolute(inRoot) && inRoot.split(path.sep)[0] !== "..") {
-          sent = inRoot.split(path.sep).join("/");
+        const segments = inRoot.split(path.sep);
+        if (
+          inRoot &&
+          !path.isAbsolute(inRoot) &&
+          segments[0] !== ".." &&
+          !segments.includes("node_modules")
+        ) {
+          sent = segments.join("/");
         }
       }
     } catch {}
@@ -384,15 +390,18 @@ const createFramePath = ({ root, cwd }: FramePathOptions) => {
 const isPosition = (value: unknown): value is number =>
   typeof value === "number" && Number.isInteger(value) && value >= 0;
 
-// A frame keeps its function, position, in-app flag and a path inside the
-// SFU's folder. The module name posthog-node derives from the full path, the
-// source lines it reads from disk and anything else are left out.
+// A frame keeps its function, position, in-app flag and, for an in-app frame
+// of our own source, its path in the SFU's folder. The module name
+// posthog-node derives from the full path, the source lines it reads from
+// disk and anything else are left out.
 const scrubFrame = (
   frame: ExceptionFrame,
   framePath: (filename: string) => string,
 ): ExceptionFrame => ({
   platform: "node:javascript",
-  ...(typeof frame.filename === "string" ? { filename: framePath(frame.filename) } : {}),
+  ...(typeof frame.filename === "string"
+    ? { filename: frame.in_app === true ? framePath(frame.filename) : PATH_WITHHELD }
+    : {}),
   ...(typeof frame.function === "string" ? { function: frame.function } : {}),
   ...(isPosition(frame.lineno) ? { lineno: frame.lineno } : {}),
   ...(isPosition(frame.colno) ? { colno: frame.colno } : {}),

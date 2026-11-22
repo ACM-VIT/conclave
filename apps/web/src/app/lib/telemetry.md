@@ -152,8 +152,9 @@ its value, and `NonErrorValue`), checked with `instanceof` when the error is
 reported and never by its name. Otherwise it is `[message withheld]`, keeping
 just a Node errno code read from the error's own `code` (`ECONNREFUSED` and the
 like), whatever its message says. Frames lose the source lines and module names
-posthog-node attaches, and keep a path only for a file that exists inside the
-SFU's own folder (`packages/sfu`), sent relative to it. Any other path, a
+posthog-node attaches, and keep a path only for an in-app frame of our own
+source: a file that exists inside the SFU's own folder (`packages/sfu`) and is
+not under `node_modules`, sent relative to that folder. Any other path, a
 library's, a Node internal, a home folder or a name that only looks like ours,
 is `[path]`.
 Game events group by a keyed hash of the room (`room_<hmac>`), never its code.

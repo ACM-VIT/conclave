@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { connect, type AddressInfo } from "node:net";
@@ -384,6 +385,32 @@ describe("SFU error reporter", () => {
       return (scrubbed.properties?.$exception_list as Array<{ stacktrace: { frames: unknown[] } }>)[0]
         .stacktrace.frames[0];
     };
+
+    it("sends a path only for our own source: not under node_modules, and in the app", () => {
+      const fixture = mkdtempSync(path.join(tmpdir(), "sfu-root-"));
+      try {
+        mkdirSync(path.join(fixture, "server"), { recursive: true });
+        mkdirSync(path.join(fixture, "node_modules", "Fixture Operator extensions"), { recursive: true });
+        writeFileSync(path.join(fixture, "server", "main.ts"), "");
+        writeFileSync(path.join(fixture, "node_modules", "Fixture Operator extensions", "local-helper.js"), "");
+        const scrub = createExceptionScrubber({ root: fixture, cwd: () => fixture });
+        const sent = (filename: string, in_app: boolean) =>
+          (scrub({
+            event: "$exception",
+            properties: {
+              $exception_list: [{ type: "Error", value: "x", stacktrace: { frames: [{ filename, lineno: 1, in_app }] } }],
+            },
+          }).properties?.$exception_list as Array<{ stacktrace: { frames: Array<{ filename: string }> } }>)[0]
+            .stacktrace.frames[0].filename;
+
+        expect(sent("server/main.ts", true)).toBe("server/main.ts");
+        expect(sent("server/main.ts", false)).toBe("[path]");
+        expect(sent("node_modules/Fixture Operator extensions/local-helper.js", true)).toBe("[path]");
+        expect(sent(path.join(fixture, "node_modules/Fixture Operator extensions/local-helper.js"), false)).toBe("[path]");
+      } finally {
+        rmSync(fixture, { recursive: true, force: true });
+      }
+    });
 
     it.each([
       ["an absolute path inside the SFU", "/", path.join(root, own), own],
