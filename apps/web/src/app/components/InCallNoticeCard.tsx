@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId } from "react";
+import { useEffect } from "react";
 import { X, type LucideIcon } from "lucide-react";
 import { useInCallNoticeLane } from "../lib/in-call-notice-lane";
 
@@ -41,7 +41,6 @@ export default function InCallNoticeCard({
 }: InCallNoticeCardProps) {
   const lane = useInCallNoticeLane();
   const announce = lane?.announce;
-  const id = useId();
   const isError = tone === "error";
   const compact = compactProp || Boolean(lane?.compact);
   const showDetail = Boolean(detail) && !compact && (isError || lane?.expanded || !lane);
@@ -49,11 +48,7 @@ export default function InCallNoticeCard({
   const cardAction = actionOnCardClick ? onAction : undefined;
   const action = actionLabel && onAction ? actionLabel : null;
 
-  useEffect(() => {
-    if (!announce) return;
-    announce(id, content, tone !== "neutral");
-    return () => announce(id, null, tone !== "neutral");
-  }, [announce, content, id, tone]);
+  useEffect(() => announce?.(content, tone !== "neutral"), [announce, content, tone]);
 
   return (
     <div

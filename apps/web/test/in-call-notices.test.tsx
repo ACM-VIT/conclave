@@ -294,6 +294,67 @@ describe("in-call notices", () => {
     panel.remove();
   });
 
+  it("never re-announces notices that move into and out of an opened phone panel", async () => {
+    const notices = (overPanel: boolean, extra?: ReactNode) => (
+      <InCallNoticeSlot overPanel={overPanel}>
+        <InCallNotice show>
+          <MeetsErrorBanner
+            meetError={{ code: "PERMISSION_DENIED", message: "Camera is blocked", recoverable: true, device: "camera" }}
+            onDismiss={() => {}}
+          />
+        </InCallNotice>
+        <InCallNotice show>
+          <InCallNoticeCard tone="warning" icon={VolumeX} title="Your browser paused audio" />
+        </InCallNotice>
+        <InCallNotice show>
+          <InCallNoticeCard icon={Headphones} title="Audio-only mode is on" />
+        </InCallNotice>
+        {extra}
+      </InCallNoticeSlot>
+    );
+    await act(async () => root.render(notices(false)));
+    const regions = [
+      slot()?.querySelector('[aria-live="polite"]'),
+      alertRegion(),
+    ].filter((region): region is Element => Boolean(region));
+    expect(regions).toHaveLength(2);
+    expect(alertRegion()?.textContent).toContain("Camera is blocked");
+    const inserted: string[] = [];
+    const observer = new MutationObserver((records) => {
+      for (const record of records) {
+        for (const node of record.addedNodes) inserted.push(node.textContent ?? "");
+        if (record.type === "characterData") inserted.push(record.target.textContent ?? "");
+      }
+    });
+    for (const region of regions) observer.observe(region, { childList: true, subtree: true, characterData: true });
+
+    const panel = document.createElement("div");
+    panel.className = "fixed";
+    panel.innerHTML = "<header>Chat</header><div data-panel-notices></div><form>Composer</form>";
+    document.body.append(panel);
+    await act(async () => root.render(notices(true)));
+    await waitOutExit();
+    expect(panel.querySelector("[data-panel-notices] [data-in-call-notice]")).toBeTruthy();
+    await act(async () => root.render(notices(false)));
+    await waitOutExit();
+    panel.remove();
+    expect(slot()?.querySelector("[data-in-call-notice]")).toBeTruthy();
+    expect(inserted).toEqual([]);
+
+    await act(async () =>
+      root.render(
+        notices(
+          false,
+          <InCallNotice show>
+            <InCallNoticeCard icon={Headphones} title="Shared browser sound is paused" />
+          </InCallNotice>,
+        ),
+      ),
+    );
+    observer.disconnect();
+    expect(inserted).toEqual(["Shared browser sound is paused"]);
+  });
+
   it("gives the microphone's permission advice once a missing camera is fixed", async () => {
     const micBlocked = createMeetError(new DOMException("Permission denied", "NotAllowedError"), "PERMISSION_DENIED", "microphone");
     const cameraMissing = createMeetError(new DOMException("Requested device not found", "NotFoundError"), "MEDIA_ERROR", "camera");

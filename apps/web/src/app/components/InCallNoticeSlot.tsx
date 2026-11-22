@@ -2,6 +2,7 @@
 
 import {
   useCallback,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -37,6 +38,12 @@ interface InCallNoticeSlotProps {
   bottomInset?: number;
   clearWebinarChrome?: boolean;
   overPanel?: boolean;
+}
+
+interface Announcement {
+  text: string;
+  urgent: boolean;
+  holders: number;
 }
 
 interface LaneState {
@@ -163,9 +170,9 @@ export default function InCallNoticeSlot({
   const fullListHeightRef = useRef<{ key: string; height: number } | null>(null);
   const [lane, setLane] = useState<LaneState>({ compact: false, offset: 0, count: 0, room: 0 });
   const [expanded, setExpanded] = useState(false);
-  const [announcements, setAnnouncements] = useState<
-    ReadonlyMap<string, { text: string; urgent: boolean }>
-  >(() => new Map());
+  const [announcements, setAnnouncements] = useState<ReadonlyMap<string, Announcement>>(
+    () => new Map(),
+  );
   const laneRef = useRef(lane);
   laneRef.current = lane;
   const expandedRef = useRef(expanded);
@@ -407,18 +414,21 @@ export default function InCallNoticeSlot({
     scheduleRef.current();
   }, [expanded, lane.compact, lane.bare, lane.cramped]);
 
-  const announce = useCallback((id: string, text: string | null, urgent: boolean) => {
-    setAnnouncements((prev) => {
-      const current = prev.get(id);
-      if (text === null ? !current : current?.text === text && current.urgent === urgent) {
-        return prev;
-      }
-      const next = new Map(prev);
-      if (text === null) next.delete(id);
-      else next.set(id, { text, urgent });
-      return next;
-    });
+  const announce = useCallback((text: string, urgent: boolean) => {
+    const key = `${urgent ? "alert" : "status"}:${text}`;
+    const holders = (delta: number) =>
+      setAnnouncements((prev) =>
+        new Map(prev).set(key, { text, urgent, holders: (prev.get(key)?.holders ?? 0) + delta }),
+      );
+    holders(1);
+    return () => holders(-1);
   }, []);
+
+  useEffect(() => {
+    if ([...announcements.values()].every((entry) => entry.holders > 0)) return;
+    setAnnouncements((prev) => new Map([...prev].filter(([, entry]) => entry.holders > 0)));
+  }, [announcements]);
+  const spoken = [...announcements].filter(([, entry]) => entry.holders > 0);
 
   const isExpanded = expanded && lane.count > 1;
   const compact = isExpanded ? Boolean(lane.cramped) : lane.compact;
@@ -526,14 +536,10 @@ export default function InCallNoticeSlot({
           {panelTarget ? null : laneContent}
         </div>
         <div aria-live="polite" className="sr-only">
-          {[...announcements].map(([id, { text, urgent }]) =>
-            urgent ? null : <p key={id}>{text}</p>,
-          )}
+          {spoken.map(([key, { text, urgent }]) => (urgent ? null : <p key={key}>{text}</p>))}
         </div>
         <div role="alert" className="sr-only">
-          {[...announcements].map(([id, { text, urgent }]) =>
-            urgent ? <p key={id}>{text}</p> : null,
-          )}
+          {spoken.map(([key, { text, urgent }]) => (urgent ? <p key={key}>{text}</p> : null))}
         </div>
       </div>
     </InCallNoticeLaneContext.Provider>

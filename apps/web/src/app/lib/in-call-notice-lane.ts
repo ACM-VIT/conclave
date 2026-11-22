@@ -118,7 +118,7 @@ export function findLaneGap(
 export interface InCallNoticeLane {
   compact: boolean;
   expanded: boolean;
-  announce: (id: string, text: string | null, urgent: boolean) => void;
+  announce: (text: string, urgent: boolean) => () => void;
 }
 
 export const InCallNoticeLaneContext = createContext<InCallNoticeLane | null>(null);
