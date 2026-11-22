@@ -588,10 +588,13 @@ export type ScheduledMeetingPersistence = {
   // them now, or takes them off. Saves never write that list: they carry an
   // SFU's whole copy of a meeting, and a copy from before a removal would
   // undo it.
+  // `at` is when the host acted, which a removal is stamped with, however
+  // long the write then waits.
   setInviteeReadmission?: (
     meetingId: string,
     email: string,
     required: boolean,
+    at: number,
   ) => MaybePromise<void>;
   // Takes back the removals of a meeting that is over: those made at or
   // before `endedAt`. Each removal is stamped when it is written, so one made
@@ -783,7 +786,7 @@ const handOver = (
 ): void => {
   for (const meeting of meetings) {
     for (const email of meeting.readmissionRequiredEmails ?? []) {
-      void store.setInviteeReadmission?.(meeting.id, email, true);
+      void store.setInviteeReadmission?.(meeting.id, email, true, Date.now());
     }
   }
   void store.save(meetings);
@@ -1052,10 +1055,10 @@ const createSqliteScheduledMeetingPersistence = (
       }
       return meeting;
     },
-    setInviteeReadmission: (meetingId, email, required) => {
+    setInviteeReadmission: (meetingId, email, required, at) => {
       try {
         db.exec("BEGIN IMMEDIATE");
-        if (required) removeInvitee.run(meetingId, email, Date.now());
+        if (required) removeInvitee.run(meetingId, email, at);
         else restoreInvitee.run(meetingId, email);
         markRemovalsMoved.run(meetingId);
         db.exec("COMMIT");
@@ -1379,7 +1382,7 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
     ]);
     if (Number(moved) === 1) {
       for (const email of carried) {
-        void this.fallback.setInviteeReadmission?.(meeting.id, email, true);
+        void this.fallback.setInviteeReadmission?.(meeting.id, email, true, Date.now());
       }
     }
     return meeting;
@@ -1424,12 +1427,17 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
     });
   }
 
-  setInviteeReadmission(meetingId: string, email: string, required: boolean): void {
-    void this.fallback.setInviteeReadmission?.(meetingId, email, required);
+  setInviteeReadmission(
+    meetingId: string,
+    email: string,
+    required: boolean,
+    at: number,
+  ): void {
+    void this.fallback.setInviteeReadmission?.(meetingId, email, required, at);
     const member = this.removedInvitee(meetingId, email);
     this.queueWrite("set a removed invitee", async () => {
       const write = this.client.multi();
-      if (required) write.hSet(this.removedInviteesKey, member, String(Date.now()));
+      if (required) write.hSet(this.removedInviteesKey, member, String(at));
       else write.hDel(this.removedInviteesKey, member);
       write.sAdd(this.removalsMovedKey, meetingId);
       await write.exec();
@@ -1752,7 +1760,7 @@ export const persistInviteeReadmission = (
     return persistScheduledMeetingChanges(store, persistence, [meeting]);
   }
   return Promise.resolve(
-    persistence.setInviteeReadmission(meeting.id, email, required),
+    persistence.setInviteeReadmission(meeting.id, email, required, Date.now()),
   ).then(() => persistence.flush?.());
 };
 

@@ -8,6 +8,7 @@ import { createClient } from "redis";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   advanceScheduledMeetings,
+  endScheduledMeetingRemovals,
   createScheduledMeeting,
   createScheduledMeetingPersistence,
   createScheduledMeetingStore,
@@ -286,6 +287,39 @@ describe.each(["sqlite", "redis"] as const)(
     });
   },
 );
+
+describe("a removal still queued for Redis when its meeting ends", () => {
+  const test = redisServerPath ? it : it.skip;
+
+  test("is taken back with the meeting, stamped when the host made it", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const removedAt = Date.parse("2026-11-23T08:00:00Z");
+    vi.setSystemTime(removedAt);
+    useStore("redis");
+    const sfu = await startSfu("redis");
+    await scheduleIntroCall(sfu);
+    // This SFU's writes to Redis are slow from here on.
+    const persistence = sfu.persistence as unknown as { start: () => Promise<void> };
+    const start = persistence.start.bind(persistence);
+    let goOn: () => void = () => {};
+    const slow = new Promise<void>((resolve) => (goOn = resolve));
+    persistence.start = async () => {
+      await slow;
+      return start();
+    };
+
+    const changed = setScheduledInviteeReadmission(sfu.meetings, "conclave", CODE, INVITEE, true);
+    const removing = persistInviteeReadmission(sfu.meetings, sfu.persistence, changed!, INVITEE, true);
+    vi.setSystemTime(removedAt + 60_000);
+    const ending = endScheduledMeetingRemovals(sfu.meetings, sfu.persistence, "conclave", CODE, Date.now());
+    vi.setSystemTime(removedAt + 120_000);
+    goOn();
+    await removing;
+    await ending;
+
+    expect(isInvited(await startSfu("redis"))).toBe(true);
+  });
+});
 
 describe("an SFU whose Redis holds no meetings yet", () => {
   const test = redisServerPath ? it : it.skip;
