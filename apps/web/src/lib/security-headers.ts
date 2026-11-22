@@ -78,20 +78,25 @@ const originsFromEnv = (env: EnvSource, keys: readonly string[]): string[] => {
  * BROWSER_HOST_ADDRESS. A loopback address is framed on the page's own host
  * (resolveViewerUrl), so it is allowed on each loopback page host.
  */
-const chromiumViewerSources = (env: EnvSource): string[] => {
+const chromiumViewers = (env: EnvSource): { urls: URL[]; anyPort: boolean } => {
   const host = env.BROWSER_HOST_ADDRESS?.trim();
   const configured = originsFromEnv(env, ["BROWSER_PUBLIC_BASE_URL"]);
   const viewers = configured.length > 0 ? configured : host ? [`http://${host.includes(":") ? `[${host}]` : host}:6080`] : [];
-  const anyPort = configured.length === 0;
-  const sources = new Set<string>();
-  for (const viewer of viewers) {
-    let parsed: URL;
+  const urls = viewers.flatMap((viewer) => {
     try {
-      parsed = new URL(viewer);
+      return [new URL(viewer)];
     } catch {
-      continue;
+      return [];
     }
-    const pageHosts = isLoopbackViewerHost(parsed.hostname) ? LOOPBACK_PAGE_HOSTS : [parsed.hostname];
+  });
+  return { urls, anyPort: configured.length === 0 };
+};
+
+const chromiumViewerSources = (env: EnvSource, extraPageHosts: string[]): string[] => {
+  const { urls, anyPort } = chromiumViewers(env);
+  const sources = new Set<string>();
+  for (const parsed of urls) {
+    const pageHosts = isLoopbackViewerHost(parsed.hostname) ? [...LOOPBACK_PAGE_HOSTS, ...extraPageHosts] : [parsed.hostname];
     for (const pageHost of pageHosts) {
       const framed = new URL(resolveViewerUrl(parsed.toString(), pageHost));
       sources.add(anyPort ? `${framed.protocol}//${framed.hostname}:*` : framed.origin);
@@ -117,9 +122,11 @@ const serializePolicy = (directives: Record<string, string[]>): string =>
 export const buildContentSecurityPolicy = ({
   env,
   isDevelopment,
+  pageHost,
 }: {
   env: EnvSource;
   isDevelopment: boolean;
+  pageHost?: string;
 }): string => {
   const productionOrigins = PRODUCTION_REALTIME_HOSTS.map((host) => `https://${host}`);
   // Chat images are served by the SFU that stored them.
@@ -163,7 +170,7 @@ export const buildContentSecurityPolicy = ({
       "'self'",
       ...YOUTUBE_FRAME_ORIGINS,
       SHARED_BROWSER_FRAME_ORIGIN,
-      ...chromiumViewerSources(env),
+      ...chromiumViewerSources(env, pageHost ? [pageHost] : []),
     ],
     "worker-src": ["'self'", "blob:"],
     "manifest-src": ["'self'"],
@@ -176,6 +183,28 @@ export const buildContentSecurityPolicy = ({
     // batches were not delivered at all in local runs.
     "report-uri": [CSP_REPORT_PATH],
   });
+};
+
+const PAGE_HOST_PARAM = "pageHost";
+const PAGE_HOST_PLACEHOLDER = "page-host.invalid";
+
+/**
+ * The client frames a loopback viewer on whatever host the page was opened on,
+ * including a name mapped to loopback. Next fills :pageHost from the request's
+ * host; the capture admits only plain hostnames, and other hosts keep the
+ * static policy.
+ */
+export const buildViewerPageHostRules = (options: {
+  env: EnvSource;
+  isDevelopment: boolean;
+}): { has: { type: "host"; value: string }[]; headers: HeaderEntry[] }[] => {
+  if (!chromiumViewers(options.env).urls.some((url) => isLoopbackViewerHost(url.hostname))) return [];
+  const policy = buildContentSecurityPolicy({ ...options, pageHost: PAGE_HOST_PLACEHOLDER })
+    .replaceAll(PAGE_HOST_PLACEHOLDER, `:${PAGE_HOST_PARAM}`);
+  return [{
+    has: [{ type: "host", value: `(?<${PAGE_HOST_PARAM}>[a-z0-9-]+(?:\\.[a-z0-9-]+)*)` }],
+    headers: [{ key: "Content-Security-Policy-Report-Only", value: policy }],
+  }];
 };
 
 /** Headers for every response the Next.js server or the OpenNext worker renders. */

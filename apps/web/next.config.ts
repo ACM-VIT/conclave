@@ -4,6 +4,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import {
   buildSecurityHeaders,
+  buildViewerPageHostRules,
   SANDBOXED_ROUTE_HEADERS,
   SANDBOXED_ROUTE_SOURCES,
 } from "./src/lib/security-headers";
@@ -113,6 +114,10 @@ const nextConfig: NextConfig = {
           isDevelopment: process.env.NODE_ENV === "development",
         }),
       },
+      ...buildViewerPageHostRules({
+        env: process.env,
+        isDevelopment: process.env.NODE_ENV === "development",
+      }).map((rule) => ({ source: "/:path*", ...rule })),
       ...SANDBOXED_ROUTE_SOURCES.map((source) => ({
         source,
         headers: SANDBOXED_ROUTE_HEADERS,
