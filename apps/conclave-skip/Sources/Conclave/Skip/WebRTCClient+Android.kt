@@ -178,7 +178,7 @@ internal class VideoTrackWrapper(
     }
 }
 
-internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Producer.Listener, Consumer.Listener {
+internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consumer.Listener {
     internal var onLocalAudioEnabledChanged: ((Boolean) -> Unit)? = null
     internal var onLocalVideoEnabledChanged: ((Boolean) -> Unit)? = null
     internal var onTransportConnectionStateChanged: ((String, String) -> Unit)? = null
@@ -1946,9 +1946,10 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         val producerIceCandidates = encodeJSONString(producerTransportParams.iceCandidates)
         val producerDtlsParameters = encodeJSONString(producerTransportParams.dtlsParameters)
 
+        val session = SendSessionListener(socket)
         val nextSendTransport = if (peerConnectionOptions != null) {
             device.createSendTransport(
-                this,
+                session,
                 producerTransportParams.id,
                 producerIceParameters,
                 producerIceCandidates,
@@ -1959,7 +1960,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             )
         } else {
             device.createSendTransport(
-                this,
+                session,
                 producerTransportParams.id,
                 producerIceParameters,
                 producerIceCandidates,
@@ -1968,13 +1969,14 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         }
 
         if (generation != configurationGeneration) {
+            session.ended.complete(Unit)
             nextSendTransport.close()
             throw ErrorException("WebRTC session was replaced")
         }
 
         retireSendTransport()
         sendTransportLaneSequence += 1
-        sendSignalingAbort = CompletableDeferred()
+        sendSession = session
         sendTransportLane = SendTransportLane("ConclaveSendTransport-$sendTransportLaneSequence")
         sendTransportId = producerTransportParams.id
         sendTransport = nextSendTransport
@@ -2094,6 +2096,8 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     private fun retireSendTransport(device: Device? = null) {
         val transport = sendTransport
         val lane = sendTransportLane
+        endSendSession()
+        sendSession = null
         sendTransport = null
         sendTransportLane = null
         if (lane == null) {
@@ -4908,7 +4912,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         preserveCallAudioRouting: Boolean = false,
     ) {
         configurationGeneration += 1
-        abandonPendingSendSignaling()
+        endSendSession()
         plannedConsumerResetCandidates.clear()
         val consumerResetJob = plannedConsumerResetCoordinatorJob
         consumerResetJob?.cancel()
@@ -7572,15 +7576,26 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
 
     override fun onConnect(transport: Transport, dtlsParameters: String) {
         val socket = socketManager ?: return
+        connectTransport(transport, dtlsParameters, socket, ended = null)
+    }
+
+    private fun connectTransport(
+        transport: Transport,
+        dtlsParameters: String,
+        socket: SocketIOManager,
+        ended: CompletableDeferred<Unit>?,
+    ) {
         val params = decodeJSONString<DtlsParameters>(dtlsParameters, allowFailure = true) ?: return
         val transportId = transport.id
         val isSendTransport = transport is SendTransport
         val connect: suspend () -> Unit = {
             try {
-                if (isSendTransport) {
-                    socket.connectProducerTransport(transportId, params)
-                } else {
-                    socket.connectConsumerTransport(transportId, params)
+                unlessSessionEnds(ended) {
+                    if (isSendTransport) {
+                        socket.connectProducerTransport(transportId, params)
+                    } else {
+                        socket.connectConsumerTransport(transportId, params)
+                    }
                 }
             } catch (error: Throwable) {
                 debugLog("[WebRTC] Transport connect failed for ${transportId}: ${error}")
@@ -7608,23 +7623,52 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     }
 
     /**
-     * Completed when the session ends, and replaced only by the next send transport. A produce blocks its send lane
-     * until the SFU acknowledges, for up to the ack timeout, and the microphone, camera and transport closes queue
-     * behind it; ending the wait at once (and failing any produce still queued) lets a leave stop the microphone, the
-     * recorder and not only its samples, without waiting for an ack that no longer matters.
+     * One send transport's callbacks, bound to the session that created the transport: the socket it was created on,
+     * and [ended], completed when that session ends (a leave, or the transport's retirement before a rejoin). A
+     * produce or connect blocks its send lane until the SFU acknowledges, for up to the ack timeout, and the mic,
+     * camera and transport closes queue behind it. A callback of an ended session emits nothing and returns at once,
+     * and one waiting on an ack stops waiting, so the closes run and the recorder stops without any ack. A callback
+     * never reaches a later session's socket.
      */
-    @Volatile private var sendSignalingAbort: CompletableDeferred<Unit>? = CompletableDeferred()
+    internal inner class SendSessionListener(private val socket: SocketIOManager) : SendTransport.Listener {
+        val ended = CompletableDeferred<Unit>()
 
-    private fun abandonPendingSendSignaling() {
-        sendSignalingAbort?.complete(Unit)
+        override fun onConnect(transport: Transport, dtlsParameters: String) {
+            if (ended.isCompleted) return
+            connectTransport(transport, dtlsParameters, socket, ended)
+        }
+
+        override fun onConnectionStateChange(transport: Transport, connectionState: String) {
+            this@WebRTCClient.onConnectionStateChange(transport, connectionState)
+        }
+
+        override fun onProduce(transport: Transport, kind: String, rtpParameters: String, appData: String): String {
+            if (ended.isCompleted) return ""
+            return produceSignal(transport, kind, rtpParameters, appData, socket, ended)
+        }
+
+        override fun onProduceData(
+            transport: Transport,
+            sctpParameters: String,
+            label: String,
+            dataProtocol: String,
+            appData: String,
+        ): String = ""
     }
 
-    private suspend fun <T> unlessSessionEnds(abort: CompletableDeferred<Unit>?, operation: suspend () -> T): T {
-        if (abort == null) return operation()
+    private var sendSession: SendSessionListener? = null
+
+    private fun endSendSession() {
+        sendSession?.ended?.complete(Unit)
+    }
+
+    private suspend fun <T> unlessSessionEnds(ended: CompletableDeferred<Unit>?, operation: suspend () -> T): T {
+        if (ended == null) return operation()
+        if (ended.isCompleted) throw CancellationException("Session ended before signaling")
         return coroutineScope {
-            val work = async { operation() }
+            val work = async(start = CoroutineStart.UNDISPATCHED) { operation() }
             val watcher = launch {
-                abort.await()
+                ended.await()
                 work.cancel(CancellationException("Session ended before the SFU acknowledged"))
             }
             try {
@@ -7635,18 +7679,22 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         }
     }
 
-    override fun onProduce(transport: Transport, kind: String, rtpParameters: String, appData: String): String {
-        val socket = socketManager ?: return ""
-        val abort = sendSignalingAbort
+    private fun produceSignal(
+        transport: Transport,
+        kind: String,
+        rtpParameters: String,
+        appData: String,
+        socket: SocketIOManager,
+        ended: CompletableDeferred<Unit>,
+    ): String {
         return runBlocking {
             try {
-
                 val appDataPayload = decodeJSONString<ProducerAppData>(appData, allowFailure = true)
                 val type = ProducerType(rawValue = appDataPayload?.type ?: "webcam") ?: ProducerType.webcam
                 if (kind == "video" && type == ProducerType.screen) {
                     screenProduceSignalCount += 1
                 }
-                unlessSessionEnds(abort) {
+                unlessSessionEnds(ended) {
                     socket.produceRaw(
                         transportId = transport.id,
                         kind = kind,
@@ -7667,16 +7715,6 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 ""
             }
         }
-    }
-
-    override fun onProduceData(
-        transport: Transport,
-        sctpParameters: String,
-        label: String,
-        dataProtocol: String,
-        appData: String
-    ): String {
-        return ""
     }
 
     override fun onTransportClose(producer: Producer) {

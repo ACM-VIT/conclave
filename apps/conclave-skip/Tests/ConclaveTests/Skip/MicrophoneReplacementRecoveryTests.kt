@@ -339,22 +339,47 @@ class MicrophoneReplacementRecoveryTests {
         field("sendTransportLane").set(media, call.lane)
     }
 
-    @Test
-    fun leavingWhileTheLaneWaitsOnACameraAckStopsTheMicWithoutWaitingForTheAck() {
-        val call = liveCall()
-        val media = call.media
-        prepareForCleanup(call)
+    /** A socket manager on a [SilentSocket], and the events it was asked to emit. */
+    private fun silentSocketManager(): Pair<SocketIOManager, CopyOnWriteArrayList<String>> {
         val emitted = CopyOnWriteArrayList<String>()
         val silent = unsafe.allocateInstance(SilentSocket::class.java) as SilentSocket
         silent.emitted = emitted
         val socket = unsafe.allocateInstance(SocketIOManager::class.java) as SocketIOManager
         SocketIOManager::class.java.getDeclaredField("socket").apply { isAccessible = true }.set(socket, silent)
+        return Pair(socket, emitted)
+    }
+
+    /**
+     * Starts a send session on [socket] and returns the callbacks its transport would call: the session's own listener,
+     * or, where a client has none (an older build under test), the client itself with a fresh abort signal.
+     */
+    private fun startSendSession(media: WebRTCClient, socket: SocketIOManager): SendTransport.Listener {
         field("socketManager").set(media, socket)
-        runCatching { field("sendSignalingAbort").set(media, CompletableDeferred<Unit>()) }
+        val sessionClass = WebRTCClient::class.java.declaredClasses.firstOrNull { it.simpleName == "SendSessionListener" }
+        if (sessionClass == null) {
+            runCatching { field("sendSignalingAbort").set(media, CompletableDeferred<Unit>()) }
+            return (media as Any) as SendTransport.Listener
+        }
+        val session = sessionClass.getDeclaredConstructor(WebRTCClient::class.java, SocketIOManager::class.java)
+            .apply { isAccessible = true }
+            .newInstance(media, socket) as SendTransport.Listener
+        field("sendSession").set(media, session)
+        return session
+    }
+
+    private val cameraAppData = "{\"type\":\"webcam\",\"paused\":false}"
+
+    @Test
+    fun leavingWhileTheLaneWaitsOnACameraAckStopsTheMicWithoutWaitingForTheAck() {
+        val call = liveCall()
+        val media = call.media
+        prepareForCleanup(call)
+        val (socket, emitted) = silentSocketManager()
+        val callbacks = startSendSession(media, socket)
         val transport = field("sendTransport").get(media) as SendTransport
         val produceReturned = CountDownLatch(1)
         call.lane.post {
-            media.onProduce(transport, "video", "{}", "{\"type\":\"webcam\",\"paused\":false}")
+            callbacks.onProduce(transport, "video", "{}", cameraAppData)
             produceReturned.countDown()
         }
         val deadline = System.currentTimeMillis() + 5_000
@@ -368,6 +393,56 @@ class MicrophoneReplacementRecoveryTests {
         assertTrue(call.old.closed)
         assertTrue(call.track.disposed)
         assertEquals(1, emitted.size)
+    }
+
+    /** A camera produce queued behind other lane work when the call ends, optionally with the next session started. */
+    private fun assertAQueuedProduceOfAnEndedSessionEmitsNothing(rejoinBeforeTheLaneFrees: Boolean) {
+        val call = liveCall()
+        val media = call.media
+        prepareForCleanup(call)
+        val (oldSocket, oldEmitted) = silentSocketManager()
+        val callbacks = startSendSession(media, oldSocket)
+        val transport = field("sendTransport").get(media) as SendTransport
+        val laneBusy = CountDownLatch(1)
+        val laneEntered = CountDownLatch(1)
+        call.lane.post {
+            laneEntered.countDown()
+            laneBusy.await(10, TimeUnit.SECONDS)
+        }
+        assertTrue(laneEntered.await(3, TimeUnit.SECONDS))
+        val produceReturned = CountDownLatch(1)
+        call.lane.post {
+            callbacks.onProduce(transport, "video", "{}", cameraAppData)
+            produceReturned.countDown()
+        }
+
+        runBlocking { media.cleanup(notifyLocalState = false, preserveCallAudioRouting = true) }
+        var newEmitted: List<String> = emptyList()
+        if (rejoinBeforeTheLaneFrees) {
+            val (newSocket, emitted) = silentSocketManager()
+            newEmitted = emitted
+            startSendSession(media, newSocket)
+            field("sendTransportLane").set(media, SendTransportLane("Rejoined"))
+            field("sendTransport").set(media, unsafe.allocateInstance(FakeSendTransport::class.java))
+        }
+        laneBusy.countDown()
+
+        assertTrue("the ended session's produce still waits", produceReturned.await(2, TimeUnit.SECONDS))
+        awaitLane(call.lane)
+        assertEquals(emptyList<String>(), oldEmitted.toList())
+        assertEquals(emptyList<String>(), newEmitted.toList())
+        assertTrue(call.old.closed)
+        assertTrue(call.track.disposed)
+    }
+
+    @Test
+    fun aProduceQueuedWhenTheCallEndsEmitsNothing() {
+        assertAQueuedProduceOfAnEndedSessionEmitsNothing(rejoinBeforeTheLaneFrees = false)
+    }
+
+    @Test
+    fun aProduceQueuedWhenTheCallEndsNeverSignalsThroughTheRejoinedSession() {
+        assertAQueuedProduceOfAnEndedSessionEmitsNothing(rejoinBeforeTheLaneFrees = true)
     }
 
     @Test
