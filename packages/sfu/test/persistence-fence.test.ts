@@ -138,7 +138,7 @@ describe("persistence fence", () => {
     await loading;
   });
 
-  it("runs calls one at a time in the order they were made, during a hold and after it", async () => {
+  it("starts the calls made during a hold in the order they were made once it lifts, after the earlier ones landed", async () => {
     const fence = createPersistenceFence();
     const events: string[] = [];
     const call = (name: string) =>
@@ -155,13 +155,31 @@ describe("persistence fence", () => {
     expect(events).toEqual(["first start", "first end"]);
     fence.release("backup-one");
     const after = call("fourth");
+    expect(events).toEqual(["first start", "first end", "second start", "third start", "fourth start"]);
     await expect(Promise.all([first, ...during, after])).resolves.toEqual(["first", "second", "third", "fourth"]);
-    expect(events).toEqual([
-      "first start", "first end",
-      "second start", "second end",
-      "third start", "third end",
-      "fourth start", "fourth end",
-    ]);
+  });
+
+  it("never holds a SQLite webinar save behind a Redis write that has not answered", async () => {
+    const fence = createPersistenceFence();
+    let answer: () => void = () => {};
+    const redis = new Promise<void>((resolve) => (answer = resolve));
+    const meetings = fenceScheduledMeetingPersistence(
+      { save: () => undefined, saveChanged: () => undefined, flush: () => redis, load: () => [] },
+      fence,
+    );
+    const saved: string[] = [];
+    const webinars = fenceScheduledWebinarPersistence(
+      { save: () => void saved.push("webinars"), saveChanged: () => void saved.push("webinar w1"), load: () => [] },
+      fence,
+    );
+
+    const meetingWrite = meetings.saveChanged!([meeting("m1")]);
+    await persistScheduledWebinarChanges(store, webinars, [{ id: "w1" } as never]);
+    await Promise.resolve(webinars.save([]));
+    expect(saved).toEqual(["webinar w1", "webinars"]);
+
+    answer();
+    await meetingWrite;
   });
 
   it("answers a hold only once the call already under way has landed", async () => {
