@@ -1449,6 +1449,44 @@ describe("the account a code belongs to", () => {
     expect(back.context.currentClient).toBeInstanceOf(Admin);
   });
 
+  // The meeting at the owner's code is over: ended for everyone or emptied,
+  // and then perhaps the SFU restarted.
+  const overBy = async (ending: "ended" | "emptied", restarted: boolean) => {
+    useClock();
+    const state = makeState();
+    const created = await join(state, owner);
+    if (ending === "ended") await send(created.peer, "admin:endRoom", {});
+    await emptyOut(state, created.peer);
+    return restarted ? restart(state) : state;
+  };
+  const strangerInAFreshTab = inAFreshTab(
+    { ...owner, userId: "other@example.com", email: "other@example.com" },
+    "stranger",
+  );
+
+  it.each([
+    ["ended for everyone", "ended", false],
+    ["emptied", "emptied", false],
+    ["ended for everyone, and the SFU restarted", "ended", true],
+    ["emptied, and the SFU restarted", "emptied", true],
+  ] as const)(
+    "reopens their meeting from a fresh tab once it was %s, and no one else can",
+    async (_, ending, restarted) => {
+      const state = await overBy(ending, restarted);
+
+      const stranger = await join(state, strangerInAFreshTab);
+      expect(stranger.status).toBeUndefined();
+      expect(stranger.response.error).toBeTruthy();
+      const visitor = await join(state, guest);
+      expect(visitor.status).toBeUndefined();
+      expect(state.rooms.size).toBe(0);
+
+      const back = await join(state, inAFreshTab(owner, "fresh-tab"));
+      expect(back.status).toBe("joined");
+      expect(back.context.currentClient).toBeInstanceOf(Admin);
+    },
+  );
+
   it("does not let another account or a guest open the emptied code from a fresh tab", async () => {
     useClock();
     const state = makeState();

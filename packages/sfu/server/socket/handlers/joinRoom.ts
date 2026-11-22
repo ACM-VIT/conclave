@@ -31,6 +31,7 @@ import {
   leaveNextMeetingLobby,
   returnToNextMeetingLobby,
 } from "../../nextMeetingLobby.js";
+import type { EndedRoom } from "../../state.js";
 import {
   RoomOwnershipError,
   type RoomAssignmentRecord,
@@ -109,6 +110,21 @@ const recordedOwnerOf = (
     : recalled.owner
       ? recalled.owner.email
       : undefined;
+
+// The gate a join meets at a code with no live room, in order. Whoever may
+// open the code (a host, the account the code belongs to or that booked it,
+// a visitor the web lets open rooms) opens it past every refusal after it:
+// an end for everyone, or an unknown code.
+const decideOpening = async (gate: {
+  mayOpen: () => Promise<boolean>;
+  ended: EndedRoom | null;
+  opensForAnyone: boolean;
+}): Promise<{ opens: true } | { opens: false; refusal: string }> => {
+  if (await gate.mayOpen()) return { opens: true };
+  if (gate.ended) return { opens: false, refusal: gate.ended.message };
+  if (gate.opensForAnyone) return { opens: true };
+  return { opens: false, refusal: "No room found." };
+};
 
 export const registerJoinRoomHandler = (context: ConnectionContext): void => {
   const { socket, io, state } = context;
@@ -348,14 +364,9 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           room = undefined;
         }
 
-        const endedRoom = getEndedRoom(state, roomChannelId);
-        const canReopenEndedRoom =
-          Boolean(endedRoom) &&
-          !room &&
-          !isWebinarAttendeeJoin &&
-          (hostRequested || allowRoomCreation);
-
-        if (endedRoom && !canReopenEndedRoom) {
+        // A meeting being ended for everyone takes no one in.
+        const endedRoom = getEndedRoom(state, roomChannelId) ?? null;
+        if (endedRoom && room) {
           Logger.info(`Join denied for ended room ${roomId} (${clientId})`);
           respond(callback, { error: endedRoom.message });
           return;
@@ -415,22 +426,25 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           }
           // The account a code belongs to opens it from anywhere: ownership
           // is on the server, not in what a tab remembers.
-          const opensOwnCode = async (): Promise<boolean> =>
-            !isWebinarAttendeeJoin &&
-            Boolean(normalizedJoinEmail) &&
-            recordedOwnerOf(
-              getScheduledMeetingByRoomCode(state.scheduledMeetings, clientId, roomId),
-              await state.roomRecovery.recall(roomChannelId),
-            ) === normalizedJoinEmail;
-          if (
-            !scheduledWebinarForAttendee &&
-            !hostRequested &&
-            !allowRoomCreation &&
-            !clientPolicy.allowNonHostRoomCreation &&
-            !(await opensOwnCode())
-          ) {
+          const opening = await decideOpening({
+            mayOpen: async () =>
+              !isWebinarAttendeeJoin &&
+              (hostRequested ||
+                allowRoomCreation ||
+                (Boolean(normalizedJoinEmail) &&
+                  recordedOwnerOf(
+                    getScheduledMeetingByRoomCode(state.scheduledMeetings, clientId, roomId),
+                    await state.roomRecovery.recall(roomChannelId),
+                  ) === normalizedJoinEmail)),
+            ended: endedRoom,
+            opensForAnyone:
+              Boolean(scheduledWebinarForAttendee) ||
+              clientPolicy.allowNonHostRoomCreation,
+          });
+          if (!opening.opens) {
             if (keepWaiting()) return;
-            respond(callback, { error: "No room found." });
+            Logger.info(`Join refused for ${roomId} (${clientId}): ${opening.refusal}`);
+            respond(callback, { error: opening.refusal });
             return;
           }
           try {
@@ -478,7 +492,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             }
             throw error;
           }
-          if (createdRoom && canReopenEndedRoom) {
+          if (createdRoom && endedRoom) {
             clearEndedRoom(state, roomChannelId);
             Logger.info(
               `Re-opened ended room ${roomId} (${clientId}) for ${userId}`,
