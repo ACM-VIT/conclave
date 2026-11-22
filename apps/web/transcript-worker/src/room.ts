@@ -39,6 +39,7 @@ import {
   TRANSCRIPT_SFU_RELAY_RECOVERY_GRACE_MS,
   TRANSCRIPTION_COMMIT_ACK_TIMEOUT_MS,
   TRANSCRIPTION_CONNECT_TIMEOUT_MS,
+  TRANSCRIPTION_PROVIDER_DRAIN_MS,
 } from "./constants";
 import {
   signTranscriptSfuRelayStartToken,
@@ -151,6 +152,12 @@ export class TranscriptRoom {
   private responseRoute: {sfuUrl: string; identity: {userId: string; roomId: string; clientId: string; channelId: string}} | null = null;
   private personalResponseKeys: Partial<Record<"openai" | "anthropic", string>> = {};
   private transcriptionSession: LiveTranscriptionSession | null = null;
+  private providerDrain: {
+    session: LiveTranscriptionSession;
+    epoch: number;
+    partials: Map<string, TranscriptSegment>;
+    timer: ReturnType<typeof setTimeout>;
+  } | null = null;
   private transcriptionConnectionOptions:
     | (PersistedTranscriptionConfig & {
         apiKey: string;
@@ -249,7 +256,7 @@ export class TranscriptRoom {
       globalProviderKeysAvailable: this.globalProviderKeysAvailable(),
       serviceVersion: this.serviceVersion(),
       segments: this.segments,
-      partials: Array.from(this.partialSegments.values()),
+      partials: this.visiblePartials(),
       minutes: this.minutes,
       minutesStatus: this.minutesStatus,
     });
@@ -621,7 +628,7 @@ export class TranscriptRoom {
           globalProviderKeysAvailable: this.globalProviderKeysAvailable(),
           serviceVersion: this.serviceVersion(),
           segments: this.segments,
-          partials: Array.from(this.partialSegments.values()),
+          partials: this.visiblePartials(),
           minutes: this.minutes,
           minutesStatus: this.minutesStatus,
         });
@@ -934,6 +941,7 @@ export class TranscriptRoom {
       updatedAt: now,
       error: null,
     };
+    if (!wasIdle) this.drainTranscriptionProvider();
     this.resetTranscriptionAudioState();
     this.audioPaused = false;
     this.resetMinutesScheduler(!wasIdle);
@@ -1034,6 +1042,7 @@ export class TranscriptRoom {
     this.cancelControllerReconnect();
     this.cancelSfuRelayRecovery();
     this.closeTranscriptionProvider();
+    this.discardProviderDrain();
     const roomId = this.session?.roomId || "unknown";
     this.responseApiKey = null;
     this.responseAbort.abort();
@@ -1471,15 +1480,25 @@ export class TranscriptRoom {
           onDelta: (itemId, delta) => {
             if (epoch === this.transcriptionConnectionEpoch) {
               this.applyTranscriptDelta(itemId, delta);
+            } else if (epoch === this.providerDrain?.epoch) {
+              this.applyDrainedDelta(itemId, delta);
             }
           },
           onFinal: (itemId, transcript) => {
-            if (epoch !== this.transcriptionConnectionEpoch) return;
-            return this.applyTranscriptFinal(itemId, transcript);
+            if (epoch === this.transcriptionConnectionEpoch) {
+              return this.applyTranscriptFinal(itemId, transcript);
+            }
+            if (epoch === this.providerDrain?.epoch) {
+              return this.applyDrainedFinal(itemId, transcript);
+            }
           },
           onFailure: (message) => {
-            if (epoch !== this.transcriptionConnectionEpoch) return;
-            return this.handleTranscriptionFailure(message);
+            if (epoch === this.transcriptionConnectionEpoch) {
+              return this.handleTranscriptionFailure(message);
+            }
+            if (epoch === this.providerDrain?.epoch) {
+              return this.finishProviderDrain();
+            }
           },
         },
       });
@@ -1507,6 +1526,75 @@ export class TranscriptRoom {
     try {
       session?.close();
     } catch {}
+  }
+
+  private drainTranscriptionProvider(): void {
+    const session = this.transcriptionSession;
+    if (!session || this.partialSegments.size === 0) return;
+    void this.finishProviderDrain();
+    this.transcriptionSession = null;
+    this.providerDrain = {
+      session,
+      epoch: this.transcriptionConnectionEpoch,
+      partials: new Map(this.partialSegments),
+      timer: setTimeout(
+        () => void this.finishProviderDrain(),
+        TRANSCRIPTION_PROVIDER_DRAIN_MS,
+      ),
+    };
+    this.partialSegments.clear();
+  }
+
+  private discardProviderDrain(): TranscriptSegment[] {
+    const drain = this.providerDrain;
+    if (!drain) return [];
+    this.providerDrain = null;
+    clearTimeout(drain.timer);
+    try {
+      drain.session.close();
+    } catch {}
+    return Array.from(drain.partials.values());
+  }
+
+  private async finishProviderDrain(): Promise<void> {
+    for (const segment of this.discardProviderDrain()) {
+      await this.saveFinalSegment(segment, "");
+    }
+  }
+
+  private visiblePartials(): TranscriptSegment[] {
+    return [
+      ...this.partialSegments.values(),
+      ...(this.providerDrain?.partials.values() ?? []),
+    ];
+  }
+
+  private applyDrainedDelta(itemId: string, delta: string): void {
+    const segment = this.providerDrain?.partials.get(itemId);
+    if (!segment) return;
+    const now = Date.now();
+    const next: TranscriptSegment = {
+      ...segment,
+      text: `${segment.text}${delta}`,
+      updatedAt: now,
+    };
+    this.providerDrain?.partials.set(itemId, next);
+    this.broadcast({
+      type: "segment.delta",
+      delta: this.toSegmentDelta(next, delta, now),
+    });
+  }
+
+  private async applyDrainedFinal(
+    itemId: string,
+    transcript: string,
+  ): Promise<void> {
+    const drain = this.providerDrain;
+    const segment = drain?.partials.get(itemId);
+    if (!drain || !segment) return;
+    drain.partials.delete(itemId);
+    if (drain.partials.size === 0) this.discardProviderDrain();
+    await this.saveFinalSegment(segment, transcript);
   }
 
   private resetTranscriptionAudioState(): void {
@@ -1933,8 +2021,15 @@ export class TranscriptRoom {
       this.transcriptionReplayJournal.finalizeItem(itemId);
     }
     const segment = this.allocateSegment(itemId);
-    const text = transcript.trim() || segment.text.trim();
     this.partialSegments.delete(itemId);
+    await this.saveFinalSegment(segment, transcript);
+  }
+
+  private async saveFinalSegment(
+    segment: TranscriptSegment,
+    transcript: string,
+  ): Promise<void> {
+    const text = transcript.trim() || segment.text.trim();
     if (!text) return;
 
     const now = Date.now();
@@ -1946,7 +2041,7 @@ export class TranscriptRoom {
       updatedAt: now,
     };
     const existingIndex = this.segments.findIndex(
-      (candidate) => candidate.itemId === itemId,
+      (candidate) => candidate.itemId === segment.itemId,
     );
     if (existingIndex >= 0) {
       this.segments[existingIndex] = finalSegment;
@@ -2228,10 +2323,7 @@ export class TranscriptRoom {
         apiKey: profile.apiKey,
         model: profile.model,
         question,
-        segments: [
-          ...this.segments,
-          ...Array.from(this.partialSegments.values()),
-        ],
+        segments: [...this.segments, ...this.visiblePartials()],
       })) {
         if (signal.aborted || revision !== this.sessionRevision) return;
         answer += delta;
@@ -2341,6 +2433,7 @@ export class TranscriptRoom {
     this.cancelControllerReconnect();
     this.cancelSfuRelayRecovery();
     this.closeTranscriptionProvider();
+    this.discardProviderDrain();
     this.responseApiKey = null;
     this.responseAbort.abort();
     this.responseAbort = new AbortController();
