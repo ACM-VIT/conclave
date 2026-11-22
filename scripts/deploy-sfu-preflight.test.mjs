@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   SfuDeployPreflightError,
@@ -271,7 +272,7 @@ test("Redis at a public IP needs an explicit override", () => {
 });
 
 test("the CLI refuses a public Redis unless SFU_DEPLOY_ALLOW_PUBLIC_REDIS=1", () => {
-  const script = new URL("./deploy-sfu-preflight.mjs", import.meta.url).pathname;
+  const script = fileURLToPath(new URL("./deploy-sfu-preflight.mjs", import.meta.url));
   const run = (redisUrl, env = {}) =>
     spawnSync(process.execPath, [script, "--compose-json", "-", "--config-only"], {
       input: JSON.stringify(composeWithRedis(redisUrl)),
