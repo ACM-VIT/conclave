@@ -134,3 +134,26 @@ test("an inline directive that switches the rule off fails", (t) => {
   assert.match(result.stderr, /src\/blanket\.ts:1: this directive switches off conclave\/no-comments/);
   assert.doesNotMatch(result.stderr, /src\/named\.ts/);
 });
+
+test("an inline config comment that switches the rule off fails", (t) => {
+  const repo = repoWith(t, { [BASELINE]: {} });
+  write(repo, {
+    "src/config.ts": '/* eslint conclave/no-comments: "off" */\n// hidden\nexport {};\n',
+    "src/other.ts": '/* eslint no-console: "off" */\nexport {};\n',
+  });
+  const result = ratchet(repo);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /src\/config\.ts:1: this inline config switches off conclave\/no-comments/);
+  assert.doesNotMatch(result.stderr, /src\/other\.ts:1/);
+});
+
+test("a disable directive inside a license header still fails", (t) => {
+  const repo = repoWith(t, { [BASELINE]: {} });
+  write(repo, {
+    "src/licensed.ts":
+      "// SPDX-License-Identifier: MIT\n/* eslint-disable conclave/no-comments -- quiet */\n// hidden\nexport {};\n",
+  });
+  const result = ratchet(repo);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /src\/licensed\.ts:2: this directive switches off conclave\/no-comments/);
+});

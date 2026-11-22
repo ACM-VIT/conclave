@@ -248,3 +248,22 @@ test("an attribution header may follow a directive prologue", () => {
     [null],
   );
 });
+
+test("a directive is never part of a license header", () => {
+  const source = [
+    "// SPDX-License-Identifier: MIT",
+    "/* eslint-disable conclave/no-comments -- copyright notice below */",
+    "// Copyright 2024 Example Inc.",
+    "/* eslint conclave/no-comments: \"off\" */",
+    "export {};",
+  ].join("\n");
+  assert.deepEqual(
+    extractComments(source, "a.ts").map((comment) => comment.allowed),
+    ["license-header", null, "license-header", null],
+  );
+  const onlyDirectives = ["/* eslint-disable no-console -- SPDX-License-Identifier: MIT */", "// hidden", "export {};"].join("\n");
+  assert.deepEqual(
+    extractComments(onlyDirectives, "b.ts").map((comment) => comment.allowed),
+    ["eslint-directive", null],
+  );
+});

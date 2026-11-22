@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { countDisallowed, extractFile, listSourceFiles } from "./extract.mjs";
-import { ESLINT_LANGUAGE, disablesNoComments, languageOf } from "./policy.mjs";
+import { ESLINT_LANGUAGE, configuresNoComments, languageOf, switchesOffNoComments } from "./policy.mjs";
 
 export const BASELINE_FILE = "scripts/quality/comments/baseline.json";
 export const ESLINT_SUPPRESSION_FILES = ["eslint-suppressions.json", "apps/web/eslint-suppressions.json"];
@@ -77,14 +77,14 @@ export const growthSinceBase = (repo, baseRef) => {
 };
 
 export const inlineNoCommentsDisables = (repo) => {
-  const candidates = tryGit(repo, ["grep", "-l", "-z", "-E", "eslint-disable", "--", "*.ts", "*.tsx", "*.mts", "*.cts", "*.js", "*.jsx", "*.mjs", "*.cjs"]);
+  const candidates = tryGit(repo, ["grep", "-l", "-z", "-E", "eslint", "--", "*.ts", "*.tsx", "*.mts", "*.cts", "*.js", "*.jsx", "*.mjs", "*.cjs"]);
   if (!candidates) return [];
   const files = new Set(listSourceFiles(repo));
   return candidates
     .split("\0")
     .filter((file) => files.has(file))
     .flatMap((file) => extractFile(repo, file))
-    .filter((record) => !record.allowed && disablesNoComments(record.text));
+    .filter((record) => switchesOffNoComments(record.text));
 };
 
 const describe = (records, file) =>
@@ -103,7 +103,11 @@ const check = (repo, baseline, baseRef) => {
     failures.push(`${file}: ${from === 0 ? `new comments (${to})` : `comments rose from ${from} to ${to}`}\n${describe(records, file)}`);
   }
   for (const record of disables) {
-    failures.push(`${record.file}:${record.line}: this directive switches off conclave/no-comments. Name the rules it disables.`);
+    failures.push(
+      configuresNoComments(record.text)
+        ? `${record.file}:${record.line}: this inline config switches off conclave/no-comments. Delete it.`
+        : `${record.file}:${record.line}: this directive switches off conclave/no-comments. Name the rules it disables.`,
+    );
   }
   for (const { baseline: file, file: key, from, to } of growth.rises ?? []) {
     failures.push(`${file}: ${key} rose from ${from} to ${to} since ${growth.base.slice(0, 8)}. Baselines only go down.`);

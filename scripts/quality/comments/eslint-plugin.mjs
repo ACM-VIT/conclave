@@ -12,7 +12,7 @@ const noComments = {
         "Delete this comment. Say it with names, types or tests, or record the decision in an ADR under docs/adr.",
       directiveReason:
         "This directive needs a reason: `eslint-disable <rule> -- <reason>` or `@ts-expect-error <description>`.",
-      selfDisable: "Name the rules this directive disables. conclave/no-comments cannot be disabled inline.",
+      selfDisable: "conclave/no-comments cannot be switched off inline. Name the rules a disable directive covers.",
     },
   },
   create(context) {

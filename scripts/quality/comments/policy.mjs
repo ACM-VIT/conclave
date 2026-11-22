@@ -39,6 +39,7 @@ const LICENSE_MARKER =
 const DIRECTIVE_PROLOGUE = /^\s*(?:(["'])use [a-z ]+\1;?\s*)*$/;
 
 const ESLINT_DIRECTIVE = /^(?:\/\/|\/\*)\s*eslint-(disable|enable)(?:-next-line|-line)?(?=\s|\*\/|$)/;
+const ESLINT_INLINE_CONFIG = /^\/\*\s*eslint(?:-env)?\s/;
 const ESLINT_REASON = /\s-{2,}\s+\S/;
 const TS_EXPECT_ERROR = /^(?:\/\/|\/\*)\s*@ts-expect-error\b([\s\S]*?)(?:\*\/)?$/;
 
@@ -71,7 +72,13 @@ export const disablesNoComments = (text) => {
   return rules === "" || rules.split(/[\s,]+/).includes(NO_COMMENTS_RULE);
 };
 
+export const configuresNoComments = (text) =>
+  ESLINT_INLINE_CONFIG.test(text) && text.includes(NO_COMMENTS_RULE);
+
+export const switchesOffNoComments = (text) => disablesNoComments(text) || configuresNoComments(text);
+
 const eslintDirectiveKind = (text) => {
+  if (configuresNoComments(text)) return { problem: "selfDisable" };
   if (!ESLINT_DIRECTIVE.test(text)) return undefined;
   if (disablesNoComments(text)) return { problem: "selfDisable" };
   return ESLINT_REASON.test(text) ? { kind: "eslint-directive" } : { problem: "directiveReason" };
@@ -101,12 +108,12 @@ const directiveKind = (language, text, start) => {
   return undefined;
 };
 
-const licenseHeaderIndexes = (source, comments) => {
+const licenseHeaderIndexes = (source, comments, isDirective) => {
   const indexes = new Set();
   let block = [];
   let previousEnd = 0;
   const flush = () => {
-    if (block.some((index) => LICENSE_MARKER.test(comments[index].text))) {
+    if (block.some((index) => !isDirective(index) && LICENSE_MARKER.test(comments[index].text))) {
       for (const index of block) indexes.add(index);
     }
     block = [];
@@ -123,11 +130,11 @@ const licenseHeaderIndexes = (source, comments) => {
 };
 
 export const classifyComments = (source, comments, language) => {
-  const license = licenseHeaderIndexes(source, comments);
-  return comments.map((comment, index) => {
-    const directive = directiveKind(language, comment.text, comment.start);
-    if (directive?.kind) return directive;
+  const directives = comments.map((comment) => directiveKind(language, comment.text, comment.start));
+  const license = licenseHeaderIndexes(source, comments, (index) => directives[index] !== undefined);
+  return comments.map((_, index) => {
+    if (directives[index]) return directives[index];
     if (license.has(index)) return { kind: "license-header" };
-    return directive ?? { problem: "comment" };
+    return { problem: "comment" };
   });
 };
