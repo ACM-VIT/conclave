@@ -1176,3 +1176,21 @@ describe("parseCallStats", () => {
     });
   });
 });
+
+describe("newCallId", () => {
+  it("makes a uuid, the form call_id is sent in, even where crypto.randomUUID is missing", async () => {
+    const { newCallId } = await import("../src/app/lib/call-quality-metrics");
+    const { TELEMETRY_EVENTS } = await import("../src/app/lib/telemetry-schema");
+    const callId = TELEMETRY_EVENTS.call_join.shape.call_id;
+    const { randomUUID } = crypto;
+    expect(callId.safeParse(newCallId()).success).toBe(true);
+    Object.defineProperty(crypto, "randomUUID", { configurable: true, value: undefined });
+    try {
+      const ids = new Set(Array.from({ length: 50 }, () => newCallId()));
+      expect(ids.size).toBe(50);
+      for (const id of ids) expect(callId.safeParse(id).success, id).toBe(true);
+    } finally {
+      Object.defineProperty(crypto, "randomUUID", { configurable: true, value: randomUUID });
+    }
+  });
+});

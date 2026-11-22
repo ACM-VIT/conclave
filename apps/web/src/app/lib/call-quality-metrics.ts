@@ -68,6 +68,19 @@ export type ConnectionSnapshot = {
 
 export type JoinFailureReason = MeetFailureReason;
 
+/**
+ * A random v4 uuid for one join attempt. A page on plain http has no
+ * crypto.randomUUID, so it is built from getRandomValues there.
+ */
+export const newCallId = (): string => {
+  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+};
+
 const FIRST_MEDIA_DEADLINE_MS = 20_000;
 const REMOTE_AT_JOIN_GRACE_MS = 3_000;
 const MAX_SAMPLE_GAP_MS = 15_000;

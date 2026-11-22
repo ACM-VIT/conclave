@@ -3,6 +3,7 @@
 import { useEffect, useState, type MutableRefObject } from "react";
 import {
   createCallMetricsTracker,
+  newCallId,
   parseCallStats,
   type JoinMode,
   type StatsRead,
@@ -18,11 +19,6 @@ import type {
 } from "../lib/types";
 
 const IDLE_POLL_MS = 500;
-
-const newCallId = (): string =>
-  typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
-    ? crypto.randomUUID()
-    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 
 type StatsSource = Pick<Transport | Producer, "id" | "closed" | "getStats">;
 
