@@ -54,6 +54,7 @@ internal object AndroidCrashCapture {
                 filename = element.fileName ?: "",
                 line = if (element.lineNumber > 0) element.lineNumber else 0,
                 inApp = (element.className ?: "").startsWith("conclave."),
+                classFrame = true,
             )
         }
 

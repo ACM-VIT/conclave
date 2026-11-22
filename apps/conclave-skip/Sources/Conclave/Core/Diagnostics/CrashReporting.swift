@@ -48,6 +48,8 @@ struct CrashReportFrame: Equatable {
     let inApp: Bool
     /// The frame's program counter (`0x4e8b8`), when its source gives one.
     var address: String = ""
+    /// A Java or Kotlin stack trace element, whose module is a class name; every other frame's module is a binary.
+    var classFrame: Bool = false
 }
 
 struct CrashReportException: Equatable {
@@ -197,9 +199,15 @@ enum CrashReportPrivacy {
         return false
     }
 
-    /// A frame's module: a known binary, or the class of a known package for Java and Kotlin frames.
-    static func moduleName(_ name: String) -> String {
-        if name.isEmpty || isKnownModule(name) || isKnownCodeName(name) { return name }
+    /// A binary's name (a native, MetricKit or dynamic-linker frame's module): only an exact known module survives.
+    static func binaryName(_ name: String) -> String {
+        if name.isEmpty || isKnownModule(name) { return name }
+        return pathPlaceholder
+    }
+
+    /// A Java or Kotlin class frame's module: only a class in a known package survives.
+    static func className(_ name: String) -> String {
+        if name.isEmpty || isKnownCodeName(name) { return name }
         return pathPlaceholder
     }
 
@@ -271,9 +279,10 @@ enum CrashReportPrivacy {
     }
 
     static func frame(_ frame: CrashReportFrame) -> CrashReportFrame {
-        CrashReportFrame(function: symbol(frame.function), module: moduleName(frame.module),
+        CrashReportFrame(function: symbol(frame.function),
+                         module: frame.classFrame ? className(frame.module) : binaryName(frame.module),
                          filename: fileName(frame.filename), line: frame.line, inApp: frame.inApp,
-                         address: address(frame.address))
+                         address: address(frame.address), classFrame: frame.classFrame)
     }
 }
 
@@ -409,7 +418,8 @@ enum CrashReportEventBuilder {
                     module: frame["module"] as? String ?? "",
                     filename: frame["filename"] as? String ?? "",
                     line: intValue(frame["line"]),
-                    inApp: frame["inApp"] as? Bool ?? false
+                    inApp: frame["inApp"] as? Bool ?? false,
+                    classFrame: frame["classFrame"] as? Bool ?? false
                 ))
                 if frames.count >= maxFrames { break }
             }
@@ -433,7 +443,7 @@ enum CrashReportEventBuilder {
         var next = (chosen?["callStackRootFrames"] as? [Any])?.first as? [String: Any]
         while next != nil && frames.count < maxFrames {
             let frame = next ?? [:]
-            let binary = CrashReportPrivacy.moduleName(frame["binaryName"] as? String ?? "")
+            let binary = CrashReportPrivacy.binaryName(frame["binaryName"] as? String ?? "")
             let offset = intValue(frame["offsetIntoBinaryTextSegment"])
             frames.append(CrashReportFrame(function: binary + " + " + String(offset), module: binary, filename: "",
                                            line: 0, inApp: binary == "Conclave"))
@@ -488,7 +498,7 @@ enum CrashReportEventBuilder {
             lineNumber = Int(locationParts[locationParts.count - 1]) ?? 0
         }
         return CrashReportFrame(function: unknownFunction, module: module, filename: filename, line: lineNumber,
-                                inApp: module.hasPrefix("conclave."))
+                                inApp: module.hasPrefix("conclave."), classFrame: true)
     }
 
     static let unknownFunction = "?"
@@ -676,7 +686,8 @@ enum CrashCaptureRecord {
                     + ", " + DiagnosticsJSON.string("module") + ": " + DiagnosticsJSON.string(frame.module)
                     + ", " + DiagnosticsJSON.string("filename") + ": " + DiagnosticsJSON.string(frame.filename)
                     + ", " + DiagnosticsJSON.string("line") + ": " + String(frame.line)
-                    + ", " + DiagnosticsJSON.string("inApp") + ": " + (frame.inApp ? "true" : "false") + " }")
+                    + ", " + DiagnosticsJSON.string("inApp") + ": " + (frame.inApp ? "true" : "false")
+                    + ", " + DiagnosticsJSON.string("classFrame") + ": " + (frame.classFrame ? "true" : "false") + " }")
             }
             exceptionParts.append("{ " + DiagnosticsJSON.string("type") + ": " + DiagnosticsJSON.string(exception.type)
                 + ", " + DiagnosticsJSON.string("frames") + ": [" + frames.joined(separator: ", ") + "] }")

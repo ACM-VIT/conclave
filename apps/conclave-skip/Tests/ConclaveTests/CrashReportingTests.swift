@@ -46,9 +46,9 @@ struct CrashReportingTests {
             exceptions: [
                 CrashReportException(type: "java.lang.IllegalStateException", frames: [
                     CrashReportFrame(function: "startProducingAudio", module: "conclave.module.WebRTCClient",
-                                     filename: "WebRTCClient+Android.kt", line: 2140, inApp: true),
+                                     filename: "WebRTCClient+Android.kt", line: 2140, inApp: true, classFrame: true),
                     CrashReportFrame(function: "invokeSuspend", module: "conclave.module.MeetingViewModel",
-                                     filename: "MeetingViewModel.kt", line: 361, inApp: true),
+                                     filename: "MeetingViewModel.kt", line: 361, inApp: true, classFrame: true),
                 ]),
                 CrashReportException(type: "java.io.IOException", frames: []),
             ],
@@ -344,6 +344,29 @@ struct CrashReportingTests {
         #expect(alreadySent.batches.isEmpty && alreadySent.skipped.isEmpty && alreadySent.duplicates == ["payload-metrickit.json"])
     }
 
+    /// MetricKit names a binary by its image name; one that is not a known module never reaches the endpoint, even
+    /// when it looks like a Java package.
+    @Test func unknownMetricKitBinariesNeverUpload() throws {
+        let names = ["com.google.UserPrivate.dylib", "conclave.Jane.dylib", "android.Jane Smith", "java.private.Notes",
+                     "Jane.framework", "libsystem_Jane.dylib"]
+        var frame: [String: Any] = ["binaryName": "Conclave", "offsetIntoBinaryTextSegment": 0x1000]
+        for name in names.reversed() {
+            frame = ["binaryName": name, "offsetIntoBinaryTextSegment": 0x10, "subFrames": [frame]]
+        }
+        let tree: [String: Any] = ["callStacks": [["threadAttributed": true, "callStackRootFrames": [frame]]]]
+        let hang = DiagnosticsPayloadFactory.payload(kind: .hang, createdAtMillis: 1_795_000_000_000,
+                                                     fields: [], detailJSON: String(decoding: try JSONSerialization.data(withJSONObject: tree),
+                                                                                    as: UTF8.self))
+        let text = try #require(CrashReportEventBuilder.event(for: hang, eventId: "id", context: Self.context))
+        for leaked in ["UserPrivate", "Jane", "Smith", "private", "Notes", "com.google", "conclave.Jane"] {
+            #expect(!text.contains(leaked), "\(leaked)")
+        }
+        let frames = CrashReportEventBuilder.metricKitFrames(try #require(
+            try JSONSerialization.jsonObject(with: try JSONSerialization.data(withJSONObject: tree)) as? [String: Any]))
+        #expect(frames.prefix(names.count).allSatisfy { $0.module == "[path]" && $0.function == "[path] + 16" })
+        #expect(frames.last?.module == "Conclave")
+    }
+
     /// A MetricKit crash from another build with the same exception inside the window is a different crash, and a
     /// repeat that dedupe holds back is never recorded as sent.
     @Test func aMetricKitCrashFromAnotherBuildUploadsAndARepeatIsNeverRecordedAsSent() async throws {
@@ -474,12 +497,19 @@ struct CrashReportingTests {
         #expect(CrashReportPrivacy.symbol("native: Users/Jane.Doe Smith") == "[path]")
         #expect(CrashReportPrivacy.symbol("native: /Users/Jane.so Smith") == "native: [path]")
         #expect(CrashReportPrivacy.symbol("native: /data/x/libc.so Smith") == "native: libc.so")
-        for name in ["Jane.so", "Jane.Doe", "Jane.so Smith", "/data/user/0/com.acmvit.conclave/libc.so", "libsystem_../x.dylib"] {
-            #expect(CrashReportPrivacy.moduleName(name) == "[path]", "\(name)")
+        for name in ["Jane.so", "Jane.Doe", "Jane.so Smith", "/data/user/0/com.acmvit.conclave/libc.so", "libsystem_../x.dylib",
+                     "com.google.UserPrivate.dylib", "conclave.module.WebRTCClient"] {
+            #expect(CrashReportPrivacy.binaryName(name) == "[path]", "\(name)")
         }
         for name in ["libc.so", "libmediasoupclient_so.so", "Conclave", "UIKitCore", "libsystem_pthread.dylib",
-                     "libswift_Concurrency.dylib", "conclave.module.WebRTCClient", "kotlinx.coroutines.BlockingCoroutine"] {
-            #expect(CrashReportPrivacy.moduleName(name) == name, "\(name)")
+                     "libswift_Concurrency.dylib"] {
+            #expect(CrashReportPrivacy.binaryName(name) == name, "\(name)")
+        }
+        for name in ["conclave.module.WebRTCClient", "kotlinx.coroutines.BlockingCoroutine"] {
+            #expect(CrashReportPrivacy.className(name) == name, "\(name)")
+        }
+        for name in ["Jane.Doe", "libc.so", "jane.private.Notes"] {
+            #expect(CrashReportPrivacy.className(name) == "[path]", "\(name)")
         }
         #expect(CrashReportPrivacy.fileName("Builders.common.kt") == "Builders.common.kt")
         #expect(CrashReportPrivacy.fileName("Native Method") == "Native Method")
@@ -541,11 +571,11 @@ struct CrashReportingTests {
 
     @Test func onlyExactSdkNamesPassForSwiftAndSystemLibraries() {
         for name in ["libswiftReviewFixture.dylib", "libsystem_Jane.dylib", "libswift.dylib", "libsystem_.dylib"] {
-            #expect(CrashReportPrivacy.moduleName(name) == "[path]", "\(name)")
+            #expect(CrashReportPrivacy.binaryName(name) == "[path]", "\(name)")
             #expect(CrashReportPrivacy.moduleNameFromPath("/usr/lib/swift/" + name) == "[path]", "\(name)")
         }
         for name in ["libswiftCore.dylib", "libswift_Concurrency.dylib", "libsystem_kernel.dylib", "libsystem_pthread.dylib"] {
-            #expect(CrashReportPrivacy.moduleName(name) == name, "\(name)")
+            #expect(CrashReportPrivacy.binaryName(name) == name, "\(name)")
         }
     }
 
