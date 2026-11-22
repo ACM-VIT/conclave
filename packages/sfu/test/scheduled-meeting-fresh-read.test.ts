@@ -288,6 +288,19 @@ describe.each(["sqlite", "redis"] as const)(
   },
 );
 
+describe("a json schedule store at the end of a meeting", () => {
+  it("invites again the people removed from it", async () => {
+    useStore("json");
+    const sfu = await startSfu("json");
+    await scheduleIntroCall(sfu);
+    await setRemoved(sfu, true);
+
+    await endScheduledMeetingRemovals(sfu.meetings, sfu.persistence, "conclave", CODE, Date.now());
+
+    expect(isInvited(await startSfu("json"))).toBe(true);
+  });
+});
+
 describe("a removal still queued for Redis when its meeting ends", () => {
   const test = redisServerPath ? it : it.skip;
 

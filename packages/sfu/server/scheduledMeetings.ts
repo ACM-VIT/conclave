@@ -1089,71 +1089,124 @@ const readStoredMeetings = (path: string): ScheduledMeeting[] => {
     .filter((entry): entry is ScheduledMeeting => Boolean(entry));
 };
 
-// What the file says of each meeting's removed invitees. A file that cannot
-// be read says nothing, and the save about to replace it goes ahead.
-const storedRemovedInvitees = (path: string): Map<string, string[] | undefined> => {
+type StoredRemovals = { emails: string[]; removedAt: Record<string, number> };
+
+// The meetings in the file as stored, every field kept. A file that cannot
+// be read holds none, and the write about to replace it goes ahead.
+const readRawMeetings = (path: string): Record<string, unknown>[] => {
   try {
-    return new Map(
-      readStoredMeetings(path).map((meeting) => [
-        meeting.id,
-        meeting.readmissionRequiredEmails,
-      ]),
-    );
+    const data: unknown = JSON.parse(readFileSync(path, "utf8"));
+    return Array.isArray(data)
+      ? data.filter(
+          (entry): entry is Record<string, unknown> =>
+            Boolean(entry) && typeof entry === "object" && !Array.isArray(entry),
+        )
+      : [];
   } catch {
-    return new Map();
+    return [];
   }
 };
 
+// A stored meeting's removed invitees and when each was removed. One with no
+// time was removed before removals were stamped.
+const storedRemovalsOf = (raw: Record<string, unknown>): StoredRemovals => {
+  const emails = Array.isArray(raw.readmissionRequiredEmails)
+    ? raw.readmissionRequiredEmails.filter(
+        (email): email is string => typeof email === "string",
+      )
+    : [];
+  const stamps =
+    raw.readmissionRemovedAt && typeof raw.readmissionRemovedAt === "object"
+      ? (raw.readmissionRemovedAt as Record<string, unknown>)
+      : {};
+  const removedAt: Record<string, number> = {};
+  for (const email of emails) {
+    const at = stamps[email];
+    removedAt[email] = typeof at === "number" ? at : 0;
+  }
+  return { emails, removedAt };
+};
+
 // One file holding every meeting, rewritten whole. A save keeps the removed
-// invitees the file already has. Two SFUs writing it at once can still lose
-// each other's whole write, as they always could: this store is for one SFU.
+// invitees the file already has, with when each was removed. Two SFUs
+// writing it at once can still lose each other's whole write, as they always
+// could: this store is for one SFU.
 const createFileScheduledMeetingPersistence = (
   path: string = scheduledMeetingsPath(),
-): ScheduledMeetingPersistence => ({
-  save: (snapshot) => {
-    try {
-      const removed = storedRemovedInvitees(path);
-      writeJsonAtomic(
-        path,
-        JSON.stringify(
-          snapshot.map((meeting) => ({
-            ...meeting,
-            readmissionRequiredEmails:
-              removed.get(meeting.id) ?? meeting.readmissionRequiredEmails,
-          })),
-          null,
-          2,
-        ),
-      );
-    } catch (error) {
-      Logger.error("Failed to persist scheduled meetings to JSON", error);
-    }
-  },
-  setInviteeReadmission: (meetingId, email, required) => {
-    try {
-      writeJsonAtomic(
-        path,
-        JSON.stringify(
-          readStoredMeetings(path).map((meeting) =>
-            meeting.id === meetingId
-              ? {
-                  ...meeting,
-                  readmissionRequiredEmails: withInvitee(
-                    meeting.readmissionRequiredEmails,
-                    email,
-                    required,
-                  ),
-                }
-              : meeting,
+): ScheduledMeetingPersistence => {
+  const rewriteRemovals = (
+    meetingId: string,
+    change: (removals: StoredRemovals) => StoredRemovals,
+  ) => {
+    writeJsonAtomic(
+      path,
+      JSON.stringify(
+        readRawMeetings(path).map((raw) => {
+          if (raw.id !== meetingId) return raw;
+          const { emails, removedAt } = change(storedRemovalsOf(raw));
+          return {
+            ...raw,
+            readmissionRequiredEmails: emails,
+            readmissionRemovedAt: removedAt,
+          };
+        }),
+        null,
+        2,
+      ),
+    );
+  };
+  return {
+    save: (snapshot) => {
+      try {
+        const stored = new Map(
+          readRawMeetings(path).map((raw) => [raw.id, storedRemovalsOf(raw)]),
+        );
+        writeJsonAtomic(
+          path,
+          JSON.stringify(
+            snapshot.map((meeting) => {
+              const kept = stored.get(meeting.id);
+              return {
+                ...meeting,
+                readmissionRequiredEmails:
+                  kept?.emails ?? meeting.readmissionRequiredEmails,
+                readmissionRemovedAt: kept?.removedAt ?? {},
+              };
+            }),
+            null,
+            2,
           ),
-          null,
-          2,
-        ),
-      );
-    } catch (error) {
-      Logger.error("Failed to persist a removed invitee to JSON", error);
-    }
-  },
+        );
+      } catch (error) {
+        Logger.error("Failed to persist scheduled meetings to JSON", error);
+      }
+    },
+    setInviteeReadmission: (meetingId, email, required, at) => {
+      try {
+        rewriteRemovals(meetingId, ({ emails, removedAt }) => {
+          const others = emails.filter((candidate) => candidate !== email);
+          const stamps = { ...removedAt };
+          delete stamps[email];
+          if (required) stamps[email] = at;
+          return { emails: required ? [...others, email] : others, removedAt: stamps };
+        });
+      } catch (error) {
+        Logger.error("Failed to persist a removed invitee to JSON", error);
+      }
+    },
+    endRemovals: (meetingId, endedAt) => {
+      try {
+        rewriteRemovals(meetingId, ({ emails, removedAt }) => {
+          const kept = emails.filter((email) => (removedAt[email] ?? 0) > endedAt);
+          return {
+            emails: kept,
+            removedAt: Object.fromEntries(kept.map((email) => [email, removedAt[email]])),
+          };
+        });
+      } catch (error) {
+        Logger.error("Failed to take back a meeting's removals in JSON", error);
+      }
+    },
   load: () => {
     try {
       return readStoredMeetings(path);
@@ -1164,7 +1217,8 @@ const createFileScheduledMeetingPersistence = (
   },
   loadOne: (id) =>
     readStoredMeetings(path).find((meeting) => meeting.id === id) ?? null,
-});
+  };
+};
 
 const RELEASE_BOOKING_SLOT_LOCK_SCRIPT = `
 local key = KEYS[1]
