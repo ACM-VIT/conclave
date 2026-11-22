@@ -7,6 +7,8 @@ export const SUPER_ADMIN_REMOVAL_ERROR = "Super admins cannot be removed";
 export const isSuperAdminClient = (client: Client | undefined): boolean => {
   if (!client) return false;
   const user = getSocketAuthUser(client.socket);
+  // Older join tokens identify the verified email allowlist via isForcedHost.
+  // Room creation and host promotion must never confer this protection.
   return user?.isSuperAdmin === true || user?.isForcedHost === true;
 };
 

@@ -54,6 +54,11 @@
       "count": 18
     }
   },
+  "packages/sfu/server/admin/moderation.ts": {
+    "conclave/no-comments": {
+      "count": 2
+    }
+  },
   "packages/sfu/server/analytics/posthog.ts": {
     "conclave/no-comments": {
       "count": 27
