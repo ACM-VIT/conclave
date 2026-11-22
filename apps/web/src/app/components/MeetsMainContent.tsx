@@ -2348,7 +2348,7 @@ export default function MeetsMainContent({
         !isWatchHiddenLocally &&
         (!isDevPlaygroundActive || isDevPlaygroundEnabled) ? (
         <MeetingAppLayout
-          app={ActiveMeetingApp}
+          stageId="app"
           frameContent={!isDevPlaygroundActive}
           leaveAction={isWatchActive ? watchLeaveAction : undefined}
           localStream={localStream}
@@ -2365,7 +2365,9 @@ export default function MeetsMainContent({
           onAudioPlaybackStarted={handleParticipantAudioPlaybackStarted}
           audioPlaybackAttemptToken={participantAudioPlaybackAttempt}
           getDisplayName={resolveDisplayName}
-        />
+        >
+          <ActiveMeetingApp />
+        </MeetingAppLayout>
       ) : browserState?.active && browserState.noVncUrl ? (
         <BrowserLayout
           noVncUrl={browserState.noVncUrl}
