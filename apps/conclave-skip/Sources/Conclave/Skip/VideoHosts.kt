@@ -6,6 +6,7 @@ import android.graphics.PixelFormat
 import android.graphics.SurfaceTexture
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.TextureView
@@ -14,6 +15,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import org.webrtc.VideoSink
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 internal interface VideoHost {
     val view: View
@@ -99,8 +102,36 @@ internal class VideoHostRecords {
 
 private val videoHostMain = Handler(Looper.getMainLooper())
 
-internal class SurfaceVideoHost(context: Context, private val backend: VideoRenderBackend, overlay: Boolean) :
-    SurfaceView(context), SurfaceHolder.Callback, VideoHost {
+internal class VideoDetachWait(limitMillis: Long, windowMillis: Long) {
+    private val limitNanos = TimeUnit.MILLISECONDS.toNanos(limitMillis)
+    private val windowNanos = TimeUnit.MILLISECONDS.toNanos(windowMillis)
+    private var windowStart = System.nanoTime() - windowNanos
+    private var waited = 0L
+
+    fun await(gone: CountDownLatch): Boolean {
+        val entered = System.nanoTime()
+        if (entered - windowStart >= windowNanos) {
+            windowStart = entered
+            waited = 0L
+        }
+        val left = limitNanos - waited
+        val went = if (left > 0L) gone.await(left, TimeUnit.NANOSECONDS) else gone.count == 0L
+        waited += System.nanoTime() - entered
+        return went
+    }
+
+    companion object {
+        const val LIMIT_MILLIS = 150L
+        const val WINDOW_MILLIS = 1_000L
+    }
+}
+
+private val videoSurfaceDetachWait = VideoDetachWait(VideoDetachWait.LIMIT_MILLIS, VideoDetachWait.WINDOW_MILLIS)
+
+internal class SurfaceVideoHost(
+    context: Context, private val backend: VideoRenderBackend, overlay: Boolean,
+    private val detachWait: VideoDetachWait = videoSurfaceDetachWait,
+) : SurfaceView(context), SurfaceHolder.Callback, VideoHost {
     private val records = VideoHostRecords()
     private var released = false
     private var fit = false
@@ -179,7 +210,9 @@ internal class SurfaceVideoHost(context: Context, private val backend: VideoRend
         records.surfaceDestroyed()
         surfaceLive = false
         hasFrame = false
-        renderer.detachSurfaceBlocking()
+        if (!detachWait.await(renderer.surfaceGoneAfterDetach())) {
+            Log.w(VideoRenderLoop.TAG, "a surface was destroyed before the render thread let go of it")
+        }
     }
 
     override fun onSizeChanged(width: Int, height: Int, oldWidth: Int, oldHeight: Int) {

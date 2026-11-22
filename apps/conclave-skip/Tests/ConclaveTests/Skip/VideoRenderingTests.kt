@@ -260,12 +260,12 @@ class VideoRenderingTests {
         assertLayout(VideoDrawLayout(0, 110, 320, 180, 1f, 1f, mirror = false, clearsSurface = true), backend.layouts[1])
     }
 
-    @Test fun detachReturnsOnlyAfterTheSurfaceIsDestroyedAndLaterFramesAreDropped() {
+    @Test fun aDetachIsAnsweredOnlyAfterTheSurfaceIsDestroyedAndLaterFramesAreDropped() {
         val renderer = renderer()
         renderer.attachSurface("window", 1)
         renderer.onFrame(frame())
         backend.settle()
-        renderer.detachSurfaceBlocking()
+        assertTrue(renderer.surfaceGoneAfterDetach().await(5, TimeUnit.SECONDS))
         assertEquals(1, backend.count("destroy"))
         renderer.onFrame(frame())
         backend.settle()
@@ -424,29 +424,21 @@ class VideoRenderingTests {
         renderer.release { released = true }
         assertTrue(detached)
         assertTrue(released)
-        renderer.detachSurfaceBlocking()
+        assertEquals(0L, renderer.surfaceGoneAfterDetach().count)
     }
 
-    @Test fun afterReleaseTheSurfaceCallbackStillWaitsForTheSurfaceToGo() {
+    @Test fun afterReleaseADetachIsStillAnsweredOnlyOnceTheSurfaceIsGone() {
         val renderer = renderer()
         renderer.attachSurface("window", 1)
         backend.settle()
         val gate = backend.park()
         renderer.release()
         backend.release()
-        val entered = CountDownLatch(1)
-        val callback = Thread {
-            entered.countDown()
-            renderer.detachSurfaceBlocking()
-        }
-        callback.start()
-        assertTrue(entered.await(5, TimeUnit.SECONDS))
-        callback.join(300)
-        assertTrue("the callback returned while the surface still existed", callback.isAlive)
+        val gone = renderer.surfaceGoneAfterDetach()
+        assertFalse("the surface was reported gone while it still existed", gone.await(300, TimeUnit.MILLISECONDS))
         assertEquals(0, backend.count("destroy"))
         gate.countDown()
-        callback.join(5000)
-        assertFalse(callback.isAlive)
+        assertTrue(gone.await(5, TimeUnit.SECONDS))
         assertEquals(1, backend.count("destroy"))
     }
 
@@ -758,8 +750,11 @@ class VideoRenderingTests {
         assertEquals(RendererFrameSize.zero, store.size(slotId = "p:r2"))
     }
 
+    private fun surfaceHost(overlay: Boolean = false, detachWait: VideoDetachWait = VideoDetachWait(limitMillis = 5_000, windowMillis = 5_000)) =
+        SurfaceVideoHost(RuntimeEnvironment.getApplication(), backend, overlay, detachWait)
+
     @Test fun aSurfaceTileStaysCoveredUntilItsFirstFrameIsOnScreen() {
-        val host = SurfaceVideoHost(RuntimeEnvironment.getApplication(), backend, overlay = false)
+        val host = surfaceHost()
         assertFalse(host.hasFrame)
         host.surfaceAvailable("window")
         backend.settle()
@@ -774,7 +769,7 @@ class VideoRenderingTests {
 
     @Test fun losingTheSurfaceCoversTheTileAgainAndAnOldFirstFrameCannotUncoverTheNewSurface() {
         val ledger = RendererIdentityLedger()
-        val host = SurfaceVideoHost(RuntimeEnvironment.getApplication(), backend, overlay = false)
+        val host = surfaceHost()
         host.attachIdentity(ledger, "stage:p:r1")
         host.surfaceAvailable("window")
         host.sink.onFrame(frame())
@@ -793,7 +788,7 @@ class VideoRenderingTests {
     }
 
     @Test fun aFirstFrameNoticeFromBeforeAClearCannotUncoverTheTile() {
-        val host = SurfaceVideoHost(RuntimeEnvironment.getApplication(), backend, overlay = false)
+        val host = surfaceHost()
         host.surfaceAvailable("window")
         host.sink.onFrame(frame())
         backend.settle()
@@ -804,7 +799,7 @@ class VideoRenderingTests {
     }
 
     @Test fun clearingASurfaceTileCoversItWithoutDrawing() {
-        val host = SurfaceVideoHost(RuntimeEnvironment.getApplication(), backend, overlay = false)
+        val host = surfaceHost()
         host.surfaceAvailable("window")
         host.sink.onFrame(frame())
         backend.settle()
@@ -822,7 +817,7 @@ class VideoRenderingTests {
     }
 
     @Test fun aReleasedSurfaceTileIgnoresLateFrames() {
-        val host = SurfaceVideoHost(RuntimeEnvironment.getApplication(), backend, overlay = true)
+        val host = surfaceHost(overlay = true)
         host.surfaceAvailable("window")
         host.release()
         host.sink.onFrame(frame())
@@ -837,13 +832,63 @@ class VideoRenderingTests {
 
     @Test fun theFrameSizeOfASurfaceTileReachesTheStageStore() {
         val store = RendererFrameSizeStore()
-        val host = SurfaceVideoHost(RuntimeEnvironment.getApplication(), backend, overlay = false)
+        val host = surfaceHost()
         host.attachFrameSizes(store, "p:r1")
         host.sink.onFrame(frame(640, 360, rotation = 90))
         backend.settle()
         shadowOf(Looper.getMainLooper()).idle()
         assertEquals(RendererFrameSize(width = 360, height = 640), store.size(slotId = "p:r1"))
         assertNotEquals(0, store.revision)
+    }
+
+    @Test fun aSurfaceDestroyedUnderABusyRenderThreadIsLetGoOfLaterAndTheNextOneAttaches() {
+        val host = surfaceHost(detachWait = VideoDetachWait(limitMillis = 50, windowMillis = 60_000))
+        host.surfaceAvailable("window")
+        backend.settle()
+        val gate = backend.park()
+        host.surfaceDestroyed(host.holder)
+        assertEquals(0, backend.count("destroy"))
+        host.surfaceAvailable("window")
+        host.sink.onFrame(frame())
+        gate.countDown()
+        backend.settle()
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(listOf("create", "destroy surface-1", "create", "draw", "swap surface-2"), backend.calls.toList())
+        assertTrue(host.hasFrame)
+        assertEveryFrameGivenBack()
+    }
+
+    @Test fun theSharedWaitIsSpentOncePerWindowAndThenComesBack() {
+        val wait = VideoDetachWait(limitMillis = 300, windowMillis = 900)
+        val never = CountDownLatch(1)
+        val started = System.nanoTime()
+        assertFalse(wait.await(never))
+        val first = (System.nanoTime() - started) / 1_000_000
+        assertFalse(wait.await(never))
+        val both = (System.nanoTime() - started) / 1_000_000
+        assertTrue("the first wait took $first ms", first >= 290)
+        assertTrue("a second wait in the same window took ${both - first} ms", both - first < 200)
+        assertTrue("a surface that is already gone needs no wait", wait.await(CountDownLatch(0)))
+        Thread.sleep(maxOf(0L, 950 - both))
+        val again = System.nanoTime()
+        assertFalse(wait.await(never))
+        assertTrue("the wait did not come back with the next window", (System.nanoTime() - again) / 1_000_000 >= 290)
+    }
+
+    @Test fun tenSurfacesInARowLeaveNoneBehindAndReleaseStopsTheRenderLoop() {
+        val host = surfaceHost()
+        repeat(10) {
+            host.surfaceAvailable("window")
+            host.sink.onFrame(frame())
+            backend.settle()
+            host.surfaceDestroyed(host.holder)
+        }
+        host.release()
+        assertEquals(10, backend.count("create"))
+        assertEquals(10, backend.count("destroy"))
+        assertEquals(10, backend.count("swap"))
+        assertTrue(backend.stopped)
+        assertEveryFrameGivenBack()
     }
 
     @Test fun destroyingSeveralBusySurfaceTilesHoldsTheMainThreadForOneShortWaitInTotal() {

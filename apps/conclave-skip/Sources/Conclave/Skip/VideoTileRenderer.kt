@@ -1,10 +1,8 @@
 package conclave.module
 
-import android.util.Log
 import org.webrtc.VideoFrame
 import org.webrtc.VideoSink
 import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 
 internal data class VideoDrawLayout(
     val x: Int, val y: Int, val width: Int, val height: Int, val scaleX: Float, val scaleY: Float, val mirror: Boolean,
@@ -143,13 +141,9 @@ internal class VideoTileRenderer(
         if (!queued) done?.run()
     }
 
-    fun detachSurfaceBlocking() {
-        val gone = if (synchronized(frameLock) { released }) {
-            surfaceGoneAfterRelease
-        } else {
-            CountDownLatch(1).also { latch -> detachSurface { latch.countDown() } }
-        }
-        if (!gone.await(DETACH_TIMEOUT_SECONDS, TimeUnit.SECONDS)) Log.w(VideoRenderLoop.TAG, "surface detach timed out")
+    fun surfaceGoneAfterDetach(): CountDownLatch {
+        if (synchronized(frameLock) { released }) return surfaceGoneAfterRelease
+        return CountDownLatch(1).also { gone -> detachSurface { gone.countDown() } }
     }
 
     fun clearImage(token: Int) = forget(token, paint = true)
@@ -273,7 +267,6 @@ internal class VideoTileRenderer(
     }
 
     private companion object {
-        const val DETACH_TIMEOUT_SECONDS = 3L
         const val MAX_RETRY_SHIFT = 5
     }
 }
