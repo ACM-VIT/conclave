@@ -1732,7 +1732,8 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     private var webcamTopologyControlGeneration = 0
     private val intentionalLocalVideoProducerCloseIds: MutableSet<String> = mutableSetOf()
     private val intentionalLocalAudioProducerCloseIds: MutableSet<String> = mutableSetOf()
-    private var audioStartInFlight: CompletableDeferred<Unit>? = null
+    private val audioStartGate = SingleFlightGate()
+    private val videoStartGate = SingleFlightGate()
     private val transportConnectScope = CoroutineScope(Dispatchers.Main.immediate + SupervisorJob())
     @Volatile private var lastWebcamProducerSignalingError: Throwable? = null
     private val intentionalLocalScreenProducerCloseIds: MutableSet<String> = mutableSetOf()
@@ -2153,22 +2154,13 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     internal suspend fun startProducingAudio() {
         val muteIntentGeneration = localAudioMuteIntentGeneration
         val generation = configurationGeneration
-        while (true) {
-            val inFlight = audioStartInFlight ?: break
-            inFlight.await()
-        }
-        ensureCurrentConfiguration(generation)
-        if (localAudioMuteIntentGeneration != muteIntentGeneration) {
-            debugLog("[WebRTC] Microphone start cancelled by a mute while joining an in-flight start")
-            return
-        }
-        val gate = CompletableDeferred<Unit>()
-        audioStartInFlight = gate
-        try {
+        audioStartGate.run {
+            ensureCurrentConfiguration(generation)
+            if (localAudioMuteIntentGeneration != muteIntentGeneration) {
+                debugLog("[WebRTC] Microphone start cancelled by a mute while joining an in-flight start")
+                return@run
+            }
             performStartProducingAudio(muteIntentGeneration, generation)
-        } finally {
-            if (audioStartInFlight === gate) audioStartInFlight = null
-            gate.complete(Unit)
         }
     }
 
@@ -2277,8 +2269,17 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     }
 
     internal suspend fun startProducingVideo() {
-
         val offIntentGeneration = localVideoOffIntentGeneration
+        videoStartGate.run {
+            if (localVideoOffIntentGeneration != offIntentGeneration) {
+                debugLog("[WebRTC] Camera start cancelled by a camera-off while joining an in-flight start")
+                return@run
+            }
+            performStartProducingVideo(offIntentGeneration)
+        }
+    }
+
+    private suspend fun performStartProducingVideo(offIntentGeneration: Int) {
         createSendTransportIfNeeded()
         val sendTransport = sendTransport ?: throw ErrorException("Send transport not ready")
         val generation = configurationGeneration
@@ -4898,7 +4899,8 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         audioProducer = null
         videoProducer = null
         screenProducer = null
-        audioStartInFlight = null
+        audioStartGate.reset()
+        videoStartGate.reset()
         intentionalLocalAudioProducerCloseIds.clear()
         currentLocalBandwidthQuality = ConnectionQuality.unknown
         audioProducerBandwidthQuality = ConnectionQuality.unknown
