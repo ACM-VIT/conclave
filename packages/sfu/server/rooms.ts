@@ -1,6 +1,8 @@
 import { Room } from "../config/classes/Room.js";
 import { config } from "../config/config.js";
-import getWorker from "../utilities/getWorker.js";
+import getWorker, { type WorkerLoad } from "../utilities/getWorker.js";
+import { getWorkerWebRtcServer } from "../utilities/createWorkers.js";
+import type { Worker } from "mediasoup/types";
 import { Logger } from "../utilities/loggers.js";
 import {
   RoomLeaseExpiredError,
@@ -55,30 +57,26 @@ export const getEndedRoom = (
   channelId: string,
 ): EndedRoom | null => state.endedRooms.get(channelId) ?? null;
 
-const getRoomWorkerLoadScores = (state: SfuState): Map<number, number> => {
-  const scores = new Map<number, number>();
+const getRoomWorkerLoads = (state: SfuState): Map<number, WorkerLoad> => {
+  const loads = new Map<number, WorkerLoad>();
+  for (const [pid, pendingRooms] of state.workerRoomReservations) {
+    loads.set(pid, { consumers: 0, rooms: 0, pendingRooms });
+  }
 
   for (const room of state.rooms.values()) {
     if (room.router.closed || room.workerPid === null) {
       continue;
     }
 
-    let producerCount = 0;
-    let consumerCount = 0;
+    const load = loads.get(room.workerPid) ?? { consumers: 0, rooms: 0, pendingRooms: 0 };
+    load.rooms++;
     for (const client of room.clients.values()) {
-      producerCount += client.producers.size;
-      consumerCount += client.consumers.size;
+      load.consumers += client.consumers.size;
     }
-
-    const roomScore =
-      1000 +
-      (room.clients.size + room.pendingClients.size) * 10 +
-      producerCount * 5 +
-      consumerCount;
-    scores.set(room.workerPid, (scores.get(room.workerPid) ?? 0) + roomScore);
+    loads.set(room.workerPid, load);
   }
 
-  return scores;
+  return loads;
 };
 
 export const markRoomEnded = (
@@ -199,29 +197,36 @@ export const getOrCreateRoomWithOrigin = async (
       throw new RoomOwnershipError(ownership.owner);
     }
 
-    const worker = await getWorker(state.workers, {
-      loadScoresByPid: getRoomWorkerLoadScores(state),
-    });
-
-    let createdRoom: Room;
+    let worker: Worker | undefined;
     try {
+      // Reserve the slot before createRouter yields to other room creations.
+      worker = getWorker(state.workers, getRoomWorkerLoads(state));
+      const reservations = state.workerRoomReservations;
+      reservations.set(worker.pid, (reservations.get(worker.pid) ?? 0) + 1);
       const router = await worker.createRouter({
         mediaCodecs: config.routerMediaCodecs,
       });
-      createdRoom = new Room({
+      const createdRoom = new Room({
         id: roomId,
         router,
         clientId,
+        webRtcServer: getWorkerWebRtcServer(worker),
         workerPid: typeof worker.pid === "number" ? worker.pid : null,
       });
+      state.rooms.set(channelId, createdRoom);
+      Logger.success(`Created room: ${roomId} (${clientId})`);
+      return createdRoom;
     } catch (error) {
       await state.roomRegistry.releaseRoom(channelId);
       throw error;
+    } finally {
+      if (worker) {
+        const reservations = state.workerRoomReservations;
+        const remaining = (reservations.get(worker.pid) ?? 1) - 1;
+        if (remaining > 0) reservations.set(worker.pid, remaining);
+        else reservations.delete(worker.pid);
+      }
     }
-
-    state.rooms.set(channelId, createdRoom);
-    Logger.success(`Created room: ${roomId} (${clientId})`);
-    return createdRoom;
   })();
 
   state.roomCreations.set(channelId, creation);

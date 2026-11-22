@@ -42,7 +42,7 @@ export const guardRedisPublisher = <T extends RedisPublisherClient>(
   let lastWarningAt = -Infinity;
 
   const health = (): RedisPublisherHealth => ({
-    healthy: !closed && !recovering && client.isReady && pending < maxPending && pendingBytes < maxPendingBytes,
+    healthy: !closed && !recovering && client.isReady,
     pending,
     pendingBytes,
     dropped,
