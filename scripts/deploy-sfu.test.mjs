@@ -84,7 +84,11 @@ const service = (name, sfu, index) => ({
     SFU_REGION: "local",
     SFU_REQUIRE_REDIS_ADAPTER: "1",
     SFU_SECRET: process.env.SFU_SECRET,
-    SFU_WORKER_COUNT: process.env.SFU_WORKER_COUNT || "0",
+    // As the compose file passes them: a budget of 4, and a worker count
+    // only when the env sets one.
+    SFU_WEBRTC_PORT_BUDGET: "4",
+    SFU_WORKER_HOST_INSTANCES: "2",
+    ...(process.env.SFU_WORKER_COUNT ? { SFU_WORKER_COUNT: process.env.SFU_WORKER_COUNT } : {}),
   },
 });
 const main = async () => {
@@ -133,6 +137,12 @@ const deploy = async (sfus, { args: extraArgs = [], env: extraEnv = {}, envLines
     await mkdir(path.join(src, "scripts"), { recursive: true });
     await copyFile(path.join(scripts, "deploy-sfu.sh"), path.join(src, "scripts", "deploy-sfu.sh"));
     await copyFile(path.join(scripts, "deploy-sfu-preflight.mjs"), path.join(src, "scripts", "deploy-sfu-preflight.mjs"));
+    // The preflight shares the SFU's own worker and port rules.
+    await mkdir(path.join(src, "packages", "sfu", "config"), { recursive: true });
+    await copyFile(
+      path.join(scripts, "..", "packages", "sfu", "config", "workerSettings.mjs"),
+      path.join(src, "packages", "sfu", "config", "workerSettings.mjs"),
+    );
     await copyFile(path.join(scripts, "..", "docker-compose.sfu.yml"), path.join(src, "docker-compose.sfu.yml"));
     const git = (...args) => run("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", ...args]);
     await git("-C", src, "init", "-q");
@@ -299,25 +309,25 @@ test("a public URL that does not reach the new instance stops the deploy before 
 
 test("the revision being deployed checks its own config before anything is built", async () => {
   await withSfus({ "sfu-a": { rooms: 0 }, "sfu-b": { rooms: 0 } }, async (sfus) => {
-    // The next revision's preflight knows a limit the checkout's does not,
-    // the way #268's port budget caps SFU_WORKER_COUNT.
+    // The next revision's preflight knows a limit the checkout's does not:
+    // the checkout allows 3 workers within its budget of 4, the next allows 2.
     const newerPreflight = `
 let raw = "";
 for await (const chunk of process.stdin) raw += chunk;
 for (const [name, service] of Object.entries(JSON.parse(raw).services)) {
-  if (Number(service.environment.SFU_WORKER_COUNT) > 4) {
-    console.error(name + ": SFU_WORKER_COUNT " + service.environment.SFU_WORKER_COUNT + " is above the WebRTC port budget 4.");
+  if (Number(service.environment.SFU_WORKER_COUNT) > 2) {
+    console.error(name + ": SFU_WORKER_COUNT " + service.environment.SFU_WORKER_COUNT + " is above this revision's limit of 2.");
     process.exit(1);
   }
 }
 console.log("SFU deployment preflight passed (newer rules).");
 `;
     const result = await deploy(sfus, {
-      envLines: ["SFU_WORKER_COUNT=5"],
+      envLines: ["SFU_WORKER_COUNT=3"],
       upstream: { "scripts/deploy-sfu-preflight.mjs": newerPreflight },
     });
     assert.equal(result.code, 1, result.output);
-    assert.match(result.output, /SFU_WORKER_COUNT 5 is above the WebRTC port budget 4/);
+    assert.match(result.output, /SFU_WORKER_COUNT 3 is above this revision's limit of 2/);
     const changes = result.docker.filter((args) => ["build", "up", "run", "tag", "stop"].some((verb) => args.includes(verb)));
     assert.deepEqual(changes, [], "nothing may be built or changed after the preflight fails");
     assert.deepEqual(events, []);
