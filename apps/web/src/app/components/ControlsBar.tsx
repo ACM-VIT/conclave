@@ -130,6 +130,7 @@ interface DockDot {
 interface DockEntry {
   d: ControlDescriptor;
   dot?: DockDot | null;
+  live?: boolean;
 }
 
 function DockStatusDot({ dot }: { dot: DockDot }) {
@@ -288,6 +289,10 @@ function ActivityDock({
   const face = promoted ?? null;
   const FaceIcon = face?.d.icon ?? Shapes;
   const faceLabel = face ? face.d.label : "Activities";
+  const liveAnnouncement = activities
+    .filter((entry) => entry.live)
+    .map((entry) => entry.d.label)
+    .join(". ");
   const faceActive = face?.d.variant === "active";
 
   const handleFaceClick = () => {
@@ -308,6 +313,9 @@ function ActivityDock({
 
   return (
     <div className="flex items-center rounded-full bg-white/[0.05] p-1">
+      <span className="sr-only" aria-live="polite">
+        {liveAnnouncement}
+      </span>
       {core.map((entry) => (
         <DockItem key={entry.d.id} entry={entry} />
       ))}
@@ -778,13 +786,13 @@ function ControlsBar(props: ControlsBarProps) {
   const gamesEntry: DockEntry | null = gamesItem
     ? {
         d: { ...gamesItem, variant: props.isGamesOpen ? "active" : "default" },
-        dot: props.hasActiveGame ? { color: color.accent } : null,
+        live: Boolean(props.hasActiveGame),
       }
     : null;
   const appsEntry: DockEntry | null = appsItem
     ? {
         d: { ...appsItem, variant: props.isAppsOpen ? "active" : "default" },
-        dot: props.hasActiveApp ? { color: color.accent } : null,
+        live: Boolean(props.hasActiveApp),
       }
     : null;
   const transcriptEntry: DockEntry | null = transcriptItem
