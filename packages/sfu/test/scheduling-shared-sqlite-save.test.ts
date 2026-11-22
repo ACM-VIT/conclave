@@ -25,17 +25,18 @@ const eventType = (id: string, profileId: string, updatedAt: number) => ({
 // SFU A in its own process: loads the shared store, waits, then saves its edited copy.
 const SFU_A = `
 import { existsSync, writeFileSync } from "node:fs";
-const { createSchedulingPersistence } = await import("./server/scheduling.ts");
-const persistence = createSchedulingPersistence();
-const snapshot = await persistence.load();
+const scheduling = await import("./server/scheduling.ts");
+const persistence = scheduling.createSchedulingPersistence();
+const store = scheduling.createSchedulingStore();
+await scheduling.loadPersistedScheduling(store, persistence);
 writeFileSync(process.env.LOADED_MARKER, "");
 const pause = new Int32Array(new SharedArrayBuffer(4));
 while (!existsSync(process.env.GO_MARKER)) Atomics.wait(pause, 0, 0, 25);
-const host = snapshot.profiles.find((entry) => entry.id === "host");
+const host = store.profilesById.get("host");
 host.name = "renamed on SFU A";
 host.updatedAt = 300;
-snapshot.eventTypes = snapshot.eventTypes.filter((entry) => entry.id !== "intro");
-await persistence.save(snapshot);
+scheduling.deleteEventType(store, host, "intro");
+await scheduling.persistScheduling(store, persistence);
 persistence.close?.();
 `;
 

@@ -33,6 +33,7 @@ import {
 } from "./clientIds.js";
 import { assertSqliteWritable } from "./sqliteWriteCheck.js";
 import { finiteNumber, importFallbackFiles, readJsonStore, replaceIfNewer, requireArray } from "./fallbackImport.js";
+import { mergeNewestStamp } from "./stampedMerge.js";
 
 type MaybePromise<T> = T | Promise<T>;
 
@@ -59,16 +60,22 @@ export type SchedulingStore = {
   eventTypesById: Map<string, SchedulingEventType>;
   eventTypeIdByProfileSlug: Map<string, string>;
   calendarByProfileId: Map<string, SchedulingCalendarConnection>;
+  tombstones: Record<SchedulingRecordKind, Map<string, number>>;
 };
+
+type SchedulingRecordKind = "profile" | "availability" | "event_type" | "calendar";
+
+type SchedulingDeletion = { kind: SchedulingRecordKind; id: string; deletedAt: number };
 
 type SchedulingSnapshot = {
   profiles: SchedulingProfile[];
   availability: Array<{ profileId: string; availability: WeeklyAvailability }>;
   eventTypes: SchedulingEventType[];
   calendars: SchedulingCalendarConnection[];
+  deleted?: SchedulingDeletion[];
 };
 
-type SchedulingRecordKind = "profile" | "availability" | "event_type" | "calendar";
+const SCHEDULING_KINDS: SchedulingRecordKind[] = ["profile", "availability", "event_type", "calendar"];
 
 export type SchedulingRecordWrite = {
   kind: SchedulingRecordKind;
@@ -79,7 +86,7 @@ export type SchedulingRecordWrite = {
 };
 
 export type SchedulingPersistence = {
-  save: (snapshot: SchedulingSnapshot) => MaybePromise<void>;
+  save: (snapshot: SchedulingSnapshot, options?: { strict?: boolean }) => MaybePromise<void>;
   importIfNewer: (record: SchedulingRecordWrite) => MaybePromise<boolean>;
   load: (options?: { strict?: boolean }) => MaybePromise<SchedulingSnapshot>;
   close?: () => MaybePromise<void>;
@@ -120,6 +127,7 @@ export const createSchedulingStore = (): SchedulingStore => ({
   eventTypesById: new Map(),
   eventTypeIdByProfileSlug: new Map(),
   calendarByProfileId: new Map(),
+  tombstones: { profile: new Map(), availability: new Map(), event_type: new Map(), calendar: new Map() },
 });
 
 const userKey = (clientId: string, userId: string): string =>
@@ -661,6 +669,7 @@ export const deleteEventType = (
   if (!eventType || eventType.profileId !== profile.id) return null;
   store.eventTypesById.delete(id);
   store.eventTypeIdByProfileSlug.delete(profileSlugKey(profile.id, eventType.slug));
+  store.tombstones.event_type.set(id, Math.max(Date.now(), eventType.updatedAt + 1));
   return eventType;
 };
 
@@ -752,7 +761,10 @@ export const clearGoogleCalendarConnection = (
   store: SchedulingStore,
   profile: SchedulingProfile,
 ): void => {
+  const connection = store.calendarByProfileId.get(profile.id);
+  if (!connection) return;
   store.calendarByProfileId.delete(profile.id);
+  store.tombstones.calendar.set(profile.id, Math.max(Date.now(), (connection.updatedAt ?? 0) + 1));
 };
 
 const dateFormatterCache = new Map<string, Intl.DateTimeFormat>();
@@ -1055,9 +1067,18 @@ const normalizeSnapshotClientId = (clientId: unknown): string =>
     ? canonicalizeClientId(clientId)
     : CONCLAVE_CLIENT_ID;
 
+const normalizeDeletions = (deleted: unknown): SchedulingDeletion[] =>
+  (Array.isArray(deleted) ? deleted : []).flatMap((entry) => {
+    const record = (entry ?? {}) as Record<string, unknown>;
+    const kind = SCHEDULING_KINDS.find((candidate) => candidate === record.kind);
+    const deletedAt = finiteNumber(record.deletedAt);
+    return kind && typeof record.id === "string" && deletedAt !== null ? [{ kind, id: record.id, deletedAt }] : [];
+  });
+
 const normalizeSnapshot = (
   snapshot: Partial<SchedulingSnapshot>,
 ): SchedulingSnapshot => ({
+  deleted: normalizeDeletions(snapshot.deleted),
   profiles: Array.isArray(snapshot.profiles)
     ? snapshot.profiles.map((profile) => ({
         ...profile,
@@ -1183,7 +1204,8 @@ const createSqliteSchedulingPersistence = (
   `;
   const upsert = db.prepare(upsertSql(">="));
   const upsertIfNewer = db.prepare(upsertSql(">"));
-  const deleteRecord = db.prepare("DELETE FROM scheduling_records WHERE kind = ? AND id = ?");
+  const deleteOlder = db.prepare("DELETE FROM scheduling_records WHERE kind = ? AND id = ? AND updated_at < ?");
+  const loadTombstones = db.prepare("SELECT kind, id, deleted_at FROM scheduling_tombstones");
   const markDeleted = db.prepare(`
     INSERT INTO scheduling_tombstones (kind, id, deleted_at) VALUES (?, ?, ?)
     ON CONFLICT(kind, id) DO UPDATE SET
@@ -1204,36 +1226,25 @@ const createSqliteSchedulingPersistence = (
     ) as { changes: number | bigint };
     return Number(result.changes) > 0;
   };
-  const keyOf = (kind: string, id: string) => JSON.stringify([kind, id]);
-  let known = new Map<string, { kind: string; id: string }>();
-
   return {
-    save: (snapshot) => {
+    save: (snapshot, options) => {
       try {
-        const records = schedulingRecordsOf(snapshot);
-        const saved = new Map(records.map(({ kind, id }) => [keyOf(kind, id), { kind, id }]));
-        const removed = [...known].filter(([key]) => !saved.has(key)).map(([, record]) => record);
         db.exec("BEGIN IMMEDIATE");
-        for (const record of records) write(upsert, record);
-        const deletedAt = Date.now();
-        for (const { kind, id } of removed) {
-          deleteRecord.run(kind, id);
+        for (const record of schedulingRecordsOf(snapshot)) write(upsert, record);
+        for (const { kind, id, deletedAt } of snapshot.deleted ?? []) {
+          deleteOlder.run(kind, id, deletedAt);
           markDeleted.run(kind, id, deletedAt);
         }
         db.exec("COMMIT");
-        known = saved;
       } catch (error) {
         try {
           db.exec("ROLLBACK");
         } catch {}
+        if (options?.strict) throw error;
         Logger.error("Failed to persist scheduling records", error);
       }
     },
-    importIfNewer: (record) => {
-      const applied = write(upsertIfNewer, record);
-      if (applied) known.set(keyOf(record.kind, record.id), { kind: record.kind, id: record.id });
-      return applied;
-    },
+    importIfNewer: (record) => write(upsertIfNewer, record),
     load: (options) => {
       const snapshot: SchedulingSnapshot = {
         profiles: [],
@@ -1242,15 +1253,18 @@ const createSqliteSchedulingPersistence = (
         calendars: [],
       };
       try {
-        const loaded = new Map<string, { kind: string; id: string }>();
-        for (const row of loadRows.all()) {
+        db.exec("BEGIN");
+        const rows = loadRows.all();
+        const tombstones = loadTombstones.all() as Array<{ kind: unknown; id: unknown; deleted_at: unknown }>;
+        db.exec("COMMIT");
+        snapshot.deleted = normalizeDeletions(
+          tombstones.map((row) => ({ kind: row.kind, id: row.id, deletedAt: Number(row.deleted_at) })),
+        );
+        for (const row of rows) {
           const kind =
             row && typeof row === "object" && "kind" in row
               ? String((row).kind)
               : "";
-          const id =
-            row && typeof row === "object" && "id" in row ? String(row.id) : "";
-          loaded.set(keyOf(kind, id), { kind, id });
           const payload =
             row && typeof row === "object" && "payload_json" in row
               ? String((row).payload_json)
@@ -1277,8 +1291,10 @@ const createSqliteSchedulingPersistence = (
             );
           }
         }
-        known = loaded;
       } catch (error) {
+        try {
+          db.exec("ROLLBACK");
+        } catch {}
         if (options?.strict) throw error;
         Logger.error("Failed to load scheduling records", error);
       }
@@ -1375,38 +1391,63 @@ const createFileSchedulingPersistence = (
   };
 };
 
-const UPSERT_SCHEDULING_RECORD_SCRIPT = `
-local recordKey = KEYS[1]
-local tombstonesKey = KEYS[2]
-local id = ARGV[1]
-local tombstoneId = ARGV[2]
-local incomingUpdatedAt = tonumber(ARGV[3]) or 0
-local payload = ARGV[4]
-local onlyIfNewer = ARGV[5] == "newer"
-
-local function keepsStored(storedAt)
-  return storedAt > incomingUpdatedAt or (onlyIfNewer and storedAt == incomingUpdatedAt)
-end
-
-local deletedAt = redis.call("HGET", tombstonesKey, tombstoneId)
-if deletedAt and keepsStored(tonumber(deletedAt) or 0) then
+const SCHEDULING_LUA = `
+local function storedAt(hash, id)
+  local current = redis.call("HGET", hash, id)
+  if not current then return nil end
+  local ok, decoded = pcall(cjson.decode, current)
+  if ok and type(decoded) == "table" then return tonumber(decoded.updatedAt or 0) or 0 end
   return 0
 end
 
-local current = redis.call("HGET", recordKey, id)
-if current then
-  local ok, decoded = pcall(cjson.decode, current)
-  if ok and decoded then
-    local currentUpdatedAt = tonumber(decoded.updatedAt or 0) or 0
-    if keepsStored(currentUpdatedAt) then
-      return 0
-    end
-  end
+local function setIfNewer(hash, tombstones, tombstoneId, id, updatedAt, payload, strict)
+  local deletedAt = tonumber(redis.call("HGET", tombstones, tombstoneId) or "")
+  if deletedAt and (deletedAt > updatedAt or (strict and deletedAt == updatedAt)) then return 0 end
+  local currentAt = storedAt(hash, id)
+  if currentAt and (currentAt > updatedAt or (strict and currentAt == updatedAt)) then return 0 end
+  redis.call("HSET", hash, id, payload)
+  return 1
 end
 
-redis.call("HSET", recordKey, id, payload)
+local function markDeleted(hash, tombstones, tombstoneId, id, deletedAt)
+  local currentAt = storedAt(hash, id)
+  if currentAt and currentAt < deletedAt then redis.call("HDEL", hash, id) end
+  local previous = tonumber(redis.call("HGET", tombstones, tombstoneId) or "")
+  if not previous or previous < deletedAt then redis.call("HSET", tombstones, tombstoneId, deletedAt) end
+end
+`;
+
+const UPSERT_SCHEDULING_RECORD_SCRIPT = `${SCHEDULING_LUA}
+return setIfNewer(KEYS[1], KEYS[2], ARGV[2], ARGV[1], tonumber(ARGV[3]) or 0, ARGV[4], ARGV[5] == "newer")
+`;
+
+const DELETE_SCHEDULING_RECORDS_SCRIPT = `${SCHEDULING_LUA}
+for index = 1, #ARGV, 4 do
+  local kindIndex, kind, id = tonumber(ARGV[index]), ARGV[index + 1], ARGV[index + 2]
+  markDeleted(KEYS[kindIndex], KEYS[5], kind .. ":" .. id, id, tonumber(ARGV[index + 3]) or 0)
+end
 return 1
 `;
+
+/** Copies the given records and deletions in newest-wins and marks the hashes seeded, in one step. */
+const SEED_SCHEDULING_SCRIPT = `${SCHEDULING_LUA}
+local count = tonumber(ARGV[1]) or 0
+local index = 2
+for _ = 1, count do
+  local kindIndex, kind, id = tonumber(ARGV[index]), ARGV[index + 1], ARGV[index + 2]
+  setIfNewer(KEYS[kindIndex], KEYS[5], kind .. ":" .. id, id, tonumber(ARGV[index + 3]) or 0, ARGV[index + 4], false)
+  index = index + 5
+end
+while index <= #ARGV do
+  local kindIndex, kind, id = tonumber(ARGV[index]), ARGV[index + 1], ARGV[index + 2]
+  markDeleted(KEYS[kindIndex], KEYS[5], kind .. ":" .. id, id, tonumber(ARGV[index + 3]) or 0)
+  index = index + 4
+end
+redis.call("SET", KEYS[6], "1")
+return 1
+`;
+
+const kindIndex = (kind: SchedulingRecordKind): string => String(SCHEDULING_KINDS.indexOf(kind) + 1);
 
 const isPresent = <T>(value: T | null): value is T => value !== null;
 
@@ -1421,14 +1462,6 @@ const parseRedisRecord = <T>(value: string): T | null => {
   }
 };
 
-const missingIds = <T extends { id: string }>(
-  knownIds: Set<string>,
-  records: T[],
-): string[] => {
-  const currentIds = new Set(records.map((record) => record.id));
-  return Array.from(knownIds).filter((id) => !currentIds.has(id));
-};
-
 class RedisSchedulingPersistence implements SchedulingPersistence {
   private client: RedisPersistenceClient;
   private fallback: SchedulingPersistence;
@@ -1438,14 +1471,10 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
   private eventTypesKey: string;
   private calendarsKey: string;
   private tombstonesKey: string;
+  private seededKey: string;
   private startPromise: Promise<void> | null = null;
   private started = false;
   private pendingWrite: Promise<void> = Promise.resolve();
-  private knownProfileIds = new Set<string>();
-  private knownAvailabilityIds = new Set<string>();
-  private knownEventTypeIds = new Set<string>();
-  private knownCalendarIds = new Set<string>();
-  private firstLoad: Promise<unknown> | null = null;
 
   constructor(options: {
     redisUrl: string;
@@ -1460,6 +1489,7 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
     this.eventTypesKey = `${options.keyPrefix}:scheduling:event-types`;
     this.calendarsKey = `${options.keyPrefix}:scheduling:calendars`;
     this.tombstonesKey = `${options.keyPrefix}:scheduling:tombstones`;
+    this.seededKey = `${options.keyPrefix}:scheduling:seeded`;
   }
 
   async start(): Promise<void> {
@@ -1486,124 +1516,39 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
   save(snapshot: SchedulingSnapshot): void {
     void this.fallback.save(snapshot);
     const records = schedulingRecordsOf(snapshot);
-    const ofKind = (kind: SchedulingRecordKind) => records.filter((record) => record.kind === kind);
-    const profileRecords = ofKind("profile");
-    const availabilityRecords = ofKind("availability");
-    const eventTypeRecords = ofKind("event_type");
-    const calendarRecords = ofKind("calendar");
-    const deletedProfileIds = missingIds(this.knownProfileIds, profileRecords);
-    const deletedAvailabilityIds = missingIds(
-      this.knownAvailabilityIds,
-      availabilityRecords,
-    );
-    const deletedEventTypeIds = missingIds(
-      this.knownEventTypeIds,
-      eventTypeRecords,
-    );
-    const deletedCalendarIds = missingIds(this.knownCalendarIds, calendarRecords);
-
-    this.knownProfileIds = new Set(profileRecords.map((record) => record.id));
-    this.knownAvailabilityIds = new Set(
-      availabilityRecords.map((record) => record.id),
-    );
-    this.knownEventTypeIds = new Set(
-      eventTypeRecords.map((record) => record.id),
-    );
-    this.knownCalendarIds = new Set(calendarRecords.map((record) => record.id));
-
+    const deleted = snapshot.deleted ?? [];
     this.queueWrite("save snapshot", async () => {
-      await Promise.all([
-        this.upsertRecords(this.profilesKey, "profile", profileRecords),
-        this.upsertRecords(
-          this.availabilityKey,
-          "availability",
-          availabilityRecords,
-        ),
-        this.upsertRecords(this.eventTypesKey, "event_type", eventTypeRecords),
-        this.upsertRecords(this.calendarsKey, "calendar", calendarRecords),
-        this.deleteRecords(this.profilesKey, "profile", deletedProfileIds),
-        this.deleteRecords(
-          this.availabilityKey,
-          "availability",
-          deletedAvailabilityIds,
-        ),
-        this.deleteRecords(this.eventTypesKey, "event_type", deletedEventTypeIds),
-        this.deleteRecords(this.calendarsKey, "calendar", deletedCalendarIds),
-      ]);
+      for (const record of records) await this.upsertRecord(record, "save");
+      if (deleted.length > 0) {
+        await this.client.sendCommand([
+          "EVAL",
+          DELETE_SCHEDULING_RECORDS_SCRIPT,
+          "5",
+          ...this.hashKeys,
+          this.tombstonesKey,
+          ...deleted.flatMap(({ kind, id, deletedAt }) => [kindIndex(kind), kind, id, String(deletedAt)]),
+        ]);
+      }
     });
   }
 
   async importIfNewer(record: SchedulingRecordWrite): Promise<boolean> {
-    await (this.firstLoad ??= this.load());
     await this.start();
-    const applied = await this.client.sendCommand([
-      "EVAL",
-      UPSERT_SCHEDULING_RECORD_SCRIPT,
-      "2",
-      this.recordKeys[record.kind],
-      this.tombstonesKey,
-      record.id,
-      `${record.kind}:${record.id}`,
-      String(record.updatedAt),
-      JSON.stringify({ updatedAt: record.updatedAt, payload: record.payload }),
-      "newer",
-    ]);
+    const applied = await this.upsertRecord(record, "newer");
     await this.fallback.importIfNewer(record);
     return Number(applied) === 1;
   }
 
-  private get recordKeys(): Record<SchedulingRecordKind, string> {
-    return {
-      profile: this.profilesKey,
-      availability: this.availabilityKey,
-      event_type: this.eventTypesKey,
-      calendar: this.calendarsKey,
-    };
-  }
-
+  /**
+   * Another SFU trusts the hashes only once the seeded marker exists, and the
+   * seed sets it in the same script that copies the legacy snapshot and SQLite
+   * in, so nobody reads a half-copied store. Seeding twice merges newest-wins.
+   */
   async load(options?: { strict?: boolean }): Promise<SchedulingSnapshot> {
     try {
       await this.start();
-      const redisSnapshot = await this.loadHashes();
-      const redisTotal =
-        redisSnapshot.profiles.length +
-        redisSnapshot.availability.length +
-        redisSnapshot.eventTypes.length +
-        redisSnapshot.calendars.length;
-      if (redisTotal > 0) {
-        this.rememberKnownIds(redisSnapshot);
-        return redisSnapshot;
-      }
-
-      const legacySnapshot = await this.loadLegacySnapshot();
-      const legacyTotal =
-        legacySnapshot.profiles.length +
-        legacySnapshot.availability.length +
-        legacySnapshot.eventTypes.length +
-        legacySnapshot.calendars.length;
-      if (legacyTotal > 0) {
-        this.rememberKnownIds(legacySnapshot);
-        this.save(legacySnapshot);
-        await this.flush();
-        Logger.info(
-          `Migrated ${legacyTotal} legacy scheduling record(s) into Redis hashes`,
-        );
-        return legacySnapshot;
-      }
-
-      const fallbackSnapshot = await this.fallback.load(options);
-      const total =
-        fallbackSnapshot.profiles.length +
-        fallbackSnapshot.availability.length +
-        fallbackSnapshot.eventTypes.length +
-        fallbackSnapshot.calendars.length;
-      if (total > 0) {
-        this.rememberKnownIds(fallbackSnapshot);
-        this.save(fallbackSnapshot);
-        await this.flush();
-        Logger.info(`Migrated ${total} scheduling record(s) into Redis persistence`);
-      }
-      return fallbackSnapshot;
+      if (!(await this.client.exists(this.seededKey))) await this.seed(options);
+      return await this.loadHashes();
     } catch (error) {
       if (options?.strict) throw error;
       Logger.error(
@@ -1626,6 +1571,52 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
     await this.client.quit();
   }
 
+  private get hashKeys(): string[] {
+    return [this.profilesKey, this.availabilityKey, this.eventTypesKey, this.calendarsKey];
+  }
+
+  private async seed(options?: { strict?: boolean }): Promise<void> {
+    const legacy = await this.loadLegacySnapshot();
+    const local = await this.fallback.load(options);
+    const records = [...schedulingRecordsOf(legacy), ...schedulingRecordsOf(local)];
+    const deleted = [...(legacy.deleted ?? []), ...(local.deleted ?? [])];
+    await this.client.sendCommand([
+      "EVAL",
+      SEED_SCHEDULING_SCRIPT,
+      "6",
+      ...this.hashKeys,
+      this.tombstonesKey,
+      this.seededKey,
+      String(records.length),
+      ...records.flatMap((record) => [
+        kindIndex(record.kind),
+        record.kind,
+        record.id,
+        String(record.updatedAt),
+        JSON.stringify({ updatedAt: record.updatedAt, payload: record.payload }),
+      ]),
+      ...deleted.flatMap(({ kind, id, deletedAt }) => [kindIndex(kind), kind, id, String(deletedAt)]),
+    ]);
+    if (records.length > 0) {
+      Logger.info(`Seeded Redis with ${records.length} scheduling record(s) from local persistence`);
+    }
+  }
+
+  private upsertRecord(record: SchedulingRecordWrite, mode: "save" | "newer"): Promise<unknown> {
+    return this.client.sendCommand([
+      "EVAL",
+      UPSERT_SCHEDULING_RECORD_SCRIPT,
+      "2",
+      this.hashKeys[SCHEDULING_KINDS.indexOf(record.kind)],
+      this.tombstonesKey,
+      record.id,
+      `${record.kind}:${record.id}`,
+      String(record.updatedAt),
+      JSON.stringify({ updatedAt: record.updatedAt, payload: record.payload }),
+      mode,
+    ]);
+  }
+
   private queueWrite(label: string, write: () => Promise<void>): void {
     const writePromise = this.pendingWrite
       .catch(() => undefined)
@@ -1639,52 +1630,15 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
     });
   }
 
-  private async upsertRecords<T>(
-    key: string,
-    kind: string,
-    records: Array<{ id: string; updatedAt: number; payload: T }>,
-  ): Promise<void> {
-    for (const record of records) {
-      await this.client.sendCommand([
-        "EVAL",
-        UPSERT_SCHEDULING_RECORD_SCRIPT,
-        "2",
-        key,
-        this.tombstonesKey,
-        record.id,
-        `${kind}:${record.id}`,
-        String(record.updatedAt),
-        JSON.stringify({
-          updatedAt: record.updatedAt,
-          payload: record.payload,
-        }),
-      ]);
-    }
-  }
-
-  private async deleteRecords(
-    key: string,
-    kind: string,
-    ids: string[],
-  ): Promise<void> {
-    if (ids.length === 0) return;
-    const deletedAt = String(Date.now());
-    const transaction = this.client.multi();
-    transaction.hDel(key, ids);
-    transaction.hSet(
-      this.tombstonesKey,
-      Object.fromEntries(ids.map((id) => [`${kind}:${id}`, deletedAt])),
-    );
-    await transaction.exec();
-  }
-
   private async loadHashes(): Promise<SchedulingSnapshot> {
-    const [profiles, availability, eventTypes, calendars] = await Promise.all([
-      this.client.hVals(this.profilesKey),
-      this.client.hVals(this.availabilityKey),
-      this.client.hVals(this.eventTypesKey),
-      this.client.hVals(this.calendarsKey),
-    ]);
+    const [profiles, availability, eventTypes, calendars, tombstones] = (await this.client
+      .multi()
+      .hVals(this.profilesKey)
+      .hVals(this.availabilityKey)
+      .hVals(this.eventTypesKey)
+      .hVals(this.calendarsKey)
+      .hGetAll(this.tombstonesKey)
+      .exec()) as unknown as [string[], string[], string[], string[], Record<string, string>];
     return normalizeSnapshot({
       profiles: profiles
         .map((value) => parseRedisRecord<SchedulingProfile>(value))
@@ -1703,6 +1657,10 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
         .map((value) => parseRedisRecord<SchedulingCalendarConnection>(value))
         .filter(isPresent)
         .map(deserializeCalendar),
+      deleted: Object.entries(tombstones).map(([key, deletedAt]) => {
+        const split = key.indexOf(":");
+        return { kind: key.slice(0, split), id: key.slice(split + 1), deletedAt: Number(deletedAt) };
+      }) as SchedulingDeletion[],
     });
   }
 
@@ -1711,19 +1669,6 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
     if (!value) return normalizeSnapshot({});
     // Own serialized writes; normalizeSnapshot re-checks the array shape.
     return normalizeSnapshot(JSON.parse(value) as Partial<SchedulingSnapshot>);
-  }
-
-  private rememberKnownIds(snapshot: SchedulingSnapshot): void {
-    this.knownProfileIds = new Set(snapshot.profiles.map((profile) => profile.id));
-    this.knownAvailabilityIds = new Set(
-      snapshot.availability.map((entry) => entry.profileId),
-    );
-    this.knownEventTypeIds = new Set(
-      snapshot.eventTypes.map((eventType) => eventType.id),
-    );
-    this.knownCalendarIds = new Set(
-      snapshot.calendars.map((calendar) => calendar.profileId),
-    );
   }
 }
 
@@ -1763,14 +1708,18 @@ const snapshotSchedulingStore = (
   ),
   eventTypes: Array.from(store.eventTypesById.values()),
   calendars: Array.from(store.calendarByProfileId.values()),
+  deleted: SCHEDULING_KINDS.flatMap((kind) =>
+    [...store.tombstones[kind]].map(([id, deletedAt]) => ({ kind, id, deletedAt })),
+  ),
 });
 
 export const persistScheduling = (
   store: SchedulingStore,
   persistence: SchedulingPersistence | null,
+  options?: { strict?: boolean },
 ): Promise<void> => {
   if (!persistence) return Promise.resolve();
-  return Promise.resolve(persistence.save(snapshotSchedulingStore(store))).then(() =>
+  return Promise.resolve(persistence.save(snapshotSchedulingStore(store), options)).then(() =>
     persistence.flush?.(),
   );
 };
@@ -1883,53 +1832,102 @@ const unindexEventType = (store: SchedulingStore, eventType: SchedulingEventType
   if (store.eventTypeIdByProfileSlug.get(bySlug) === eventType.id) store.eventTypeIdByProfileSlug.delete(bySlug);
 };
 
-/** Takes stored records this SFU lacks or holds an older copy of; never drops one it holds. */
+const deletionsOf = (snapshot: SchedulingSnapshot, kind: SchedulingRecordKind): Map<string, number> =>
+  new Map((snapshot.deleted ?? []).filter((entry) => entry.kind === kind).map((entry) => [entry.id, entry.deletedAt]));
+
 export const mergePersistedScheduling = async (
   store: SchedulingStore,
   persistence: SchedulingPersistence,
   options?: { strict?: boolean },
 ): Promise<number> => {
   const snapshot = await persistence.load(options);
-  let merged = 0;
-  for (const profile of snapshot.profiles) {
-    const held = store.profilesById.get(profile.id);
-    if (held && held.updatedAt >= profile.updatedAt) continue;
-    if (held) {
-      unindexProfile(store, held);
-      Object.assign(held, profile);
-    }
-    registerProfile(store, held ?? profile);
-    merged += 1;
-  }
+  const drop = (kind: SchedulingRecordKind, id: string, deletedAt: number) => store.tombstones[kind].set(id, deletedAt);
+  let merged = mergeNewestStamp(
+    { values: store.profilesById, deletedAt: store.tombstones.profile },
+    { values: new Map(snapshot.profiles.map((profile) => [profile.id, profile])), deletedAt: deletionsOf(snapshot, "profile") },
+    (profile) => profile.updatedAt,
+    {
+      set: (id, profile) => {
+        const held = store.profilesById.get(id);
+        if (held) {
+          unindexProfile(store, held);
+          Object.assign(held, profile);
+        }
+        registerProfile(store, held ?? profile);
+        store.tombstones.profile.delete(id);
+      },
+      remove: (id, deletedAt) => {
+        const held = store.profilesById.get(id);
+        if (held) unindexProfile(store, held);
+        store.profilesById.delete(id);
+        drop("profile", id, deletedAt);
+      },
+    },
+  );
   const storedProfiles = new Map(snapshot.profiles.map((profile) => [profile.id, profile]));
-  for (const entry of snapshot.availability) {
-    const profile = store.profilesById.get(entry.profileId);
-    if (!profile) continue;
-    const storedAt = hoursUpdatedAt(entry.availability, storedProfiles.get(entry.profileId));
-    const held = store.availabilityByProfileId.get(entry.profileId);
-    if (held && (held.updatedAt ?? 0) >= storedAt) continue;
-    const hours = normalizeWeeklyAvailability(entry.availability, profile.timeZone);
-    hours.updatedAt = storedAt;
-    store.availabilityByProfileId.set(entry.profileId, hours);
-    merged += 1;
-  }
-  for (const eventType of snapshot.eventTypes) {
-    const held = store.eventTypesById.get(eventType.id);
-    if (held && held.updatedAt >= eventType.updatedAt) continue;
-    if (held) {
-      unindexEventType(store, held);
-      Object.assign(held, eventType);
-    }
-    registerEventType(store, held ?? eventType);
-    merged += 1;
-  }
-  for (const calendar of snapshot.calendars) {
-    const held = store.calendarByProfileId.get(calendar.profileId);
-    if (held && (held.updatedAt ?? 0) >= (calendar.updatedAt ?? 0)) continue;
-    if (held) Object.assign(held, calendar);
-    else store.calendarByProfileId.set(calendar.profileId, calendar);
-    merged += 1;
-  }
+  const storedHours = new Map(
+    snapshot.availability.flatMap((entry): Array<[string, WeeklyAvailability]> => {
+      const profile = store.profilesById.get(entry.profileId);
+      if (!profile) return [];
+      const hours = normalizeWeeklyAvailability(entry.availability, profile.timeZone);
+      hours.updatedAt = hoursUpdatedAt(entry.availability, storedProfiles.get(entry.profileId));
+      return [[entry.profileId, hours]];
+    }),
+  );
+  merged += mergeNewestStamp(
+    { values: store.availabilityByProfileId, deletedAt: store.tombstones.availability },
+    { values: storedHours, deletedAt: deletionsOf(snapshot, "availability") },
+    (hours) => hours.updatedAt ?? 0,
+    {
+      set: (id, hours) => {
+        store.availabilityByProfileId.set(id, hours);
+        store.tombstones.availability.delete(id);
+      },
+      remove: (id, deletedAt) => {
+        store.availabilityByProfileId.delete(id);
+        drop("availability", id, deletedAt);
+      },
+    },
+  );
+  merged += mergeNewestStamp(
+    { values: store.eventTypesById, deletedAt: store.tombstones.event_type },
+    { values: new Map(snapshot.eventTypes.map((eventType) => [eventType.id, eventType])), deletedAt: deletionsOf(snapshot, "event_type") },
+    (eventType) => eventType.updatedAt,
+    {
+      set: (id, eventType) => {
+        const held = store.eventTypesById.get(id);
+        if (held) {
+          unindexEventType(store, held);
+          Object.assign(held, eventType);
+        }
+        registerEventType(store, held ?? eventType);
+        store.tombstones.event_type.delete(id);
+      },
+      remove: (id, deletedAt) => {
+        const held = store.eventTypesById.get(id);
+        if (held) unindexEventType(store, held);
+        store.eventTypesById.delete(id);
+        drop("event_type", id, deletedAt);
+      },
+    },
+  );
+  merged += mergeNewestStamp(
+    { values: store.calendarByProfileId, deletedAt: store.tombstones.calendar },
+    { values: new Map(snapshot.calendars.map((calendar) => [calendar.profileId, calendar])), deletedAt: deletionsOf(snapshot, "calendar") },
+    (calendar) => calendar.updatedAt ?? 0,
+    {
+      set: (id, calendar) => {
+        const held = store.calendarByProfileId.get(id);
+        if (held) Object.assign(held, calendar);
+        else store.calendarByProfileId.set(id, calendar);
+        store.tombstones.calendar.delete(id);
+      },
+      remove: (id, deletedAt) => {
+        store.calendarByProfileId.delete(id);
+        drop("calendar", id, deletedAt);
+      },
+    },
+  );
   return merged;
 };
 
@@ -1953,6 +1951,9 @@ export const loadPersistedScheduling = (
   }
   for (const calendar of snapshot.calendars) {
     store.calendarByProfileId.set(calendar.profileId, calendar);
+  }
+  for (const { kind, id, deletedAt } of snapshot.deleted ?? []) {
+    store.tombstones[kind].set(id, deletedAt);
   }
   return (
     snapshot.profiles.length +

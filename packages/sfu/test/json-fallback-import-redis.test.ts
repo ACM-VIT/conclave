@@ -97,14 +97,13 @@ describe.skipIf(!hasRedis)("importing JSON fallback files into Redis", () => {
     await importing.save([meeting("edited", 100, "first title")]);
     await importing.flush?.();
     writeFallback("sfu-a", "scheduled-meetings.json", [meeting("edited", 200, "fallback title"), meeting("only-in-fallback", 1, "fallback meeting")]);
-    const load = importing.load.bind(importing);
+    const importIfNewer = importing.importIfNewer.bind(importing);
     let otherSaved = false;
-    vi.spyOn(importing, "load").mockImplementationOnce(async () => {
-      const result = await load();
+    vi.spyOn(importing, "importIfNewer").mockImplementationOnce(async (record) => {
       await other.saveChanged?.([meeting("edited", 300, "saved by the other SFU")]);
       await other.flush?.();
       otherSaved = true;
-      return result;
+      return importIfNewer(record);
     });
 
     expect(await importFallbackMeetings(importing)).toBe(1);
@@ -113,7 +112,7 @@ describe.skipIf(!hasRedis)("importing JSON fallback files into Redis", () => {
     expect(stored).toEqual(new Map([["edited", "saved by the other SFU"], ["only-in-fallback", "fallback meeting"]]));
   });
 
-  it("a snapshot save keeps meetings the other SFU added and removes only its own", async () => {
+  it("a snapshot save keeps meetings the other SFU added and deletes nothing", async () => {
     const sfuA = track(createScheduledMeetingPersistence());
     await sfuA.save([meeting("first", 100, "saved by SFU A")]);
     await sfuA.flush?.();
@@ -128,6 +127,10 @@ describe.skipIf(!hasRedis)("importing JSON fallback files into Redis", () => {
     expect(await titles()).toEqual(new Map([["first", "saved by SFU A"], ["added-on-b", "saved by SFU B"]]));
 
     await sfuA.save([]);
+    await sfuA.flush?.();
+    expect(await titles()).toEqual(new Map([["first", "saved by SFU A"], ["added-on-b", "saved by SFU B"]]));
+
+    await sfuA.deleteRecords?.([{ id: "first", deletedAt: 150 }]);
     await sfuA.flush?.();
     expect(await titles()).toEqual(new Map([["added-on-b", "saved by SFU B"]]));
   });
@@ -164,7 +167,7 @@ describe.skipIf(!hasRedis)("importing JSON fallback files into Redis", () => {
     };
     const persistence = track(createSchedulingPersistence());
     await persistence.save({ profiles: [profile], availability: [], eventTypes: [eventType], calendars: [] });
-    await persistence.save({ profiles: [profile], availability: [], eventTypes: [], calendars: [] });
+    await persistence.save({ profiles: [profile], availability: [], eventTypes: [], calendars: [], deleted: [{ kind: "event_type", id: "intro-call", deletedAt: 150 }] });
     await persistence.flush?.();
     writeFallback("sfu-a", "scheduling.json", { profiles: [], availability: [], eventTypes: [eventType], calendars: [] });
 
