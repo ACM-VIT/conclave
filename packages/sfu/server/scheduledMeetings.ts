@@ -510,7 +510,9 @@ export const setScheduledInviteeReadmission = (
   meeting.readmissionRequiredEmails = required
     ? [...marked, email]
     : marked.filter((candidate) => candidate !== email);
-  meeting.updatedAt = Date.now();
+  // Strictly later than the copy it changes, even within one millisecond:
+  // another SFU tells a newer copy from its own by this.
+  meeting.updatedAt = Math.max(Date.now(), meeting.updatedAt + 1);
   return meeting;
 };
 
