@@ -7192,6 +7192,25 @@ export function useMeetSocket({
               },
             );
 
+            // The meeting's owner arrived and hosts it now. The SFU has
+            // already taken this seat's host rights away.
+            socket.on(
+              "hostRemoved",
+              ({
+                roomId: eventRoomId,
+                hostUserId,
+              }: {
+                roomId?: string;
+                hostUserId?: string | null;
+              }) => {
+                if (!isRoomEvent(eventRoomId)) return;
+                setIsAdmin(false);
+                setHostUserId(hostUserId ?? null);
+                setHostUserIds((prev) => prev.filter((id) => id !== userId));
+                setPendingUsers(new Map());
+              },
+            );
+
             socket.on(
               "serverRestarting",
               (notification: ServerRestartNotification) => {

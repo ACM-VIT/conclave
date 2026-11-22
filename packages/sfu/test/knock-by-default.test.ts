@@ -1206,6 +1206,13 @@ describe("the account a code belongs to", () => {
     expect(roomOf(state).getHostUserId()).toBe("owner@example.com#o");
     expect(opener.context.currentClient).not.toBeInstanceOf(Admin);
     expect(toldTheyNoLongerHost(opener)).toBe(true);
+    expect(
+      opener.peer.emit.mock.calls.some(
+        ([event, sent]) =>
+          event === "adminNotice" &&
+          (sent as { message: string }).message.includes("owner joined"),
+      ),
+    ).toBe(true);
   });
 
   it("is let in without knocking even though the guest locked the meeting", async () => {
