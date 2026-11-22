@@ -115,7 +115,10 @@ import type {
 import { getRenderableParticipantVideoStream } from "../lib/participant-media";
 import { prewarmVideoEffectsAssetsDeferred } from "../lib/video-effects-lazy";
 import ReconnectInviteCodeForm from "./ReconnectInviteCodeForm";
-import { formatReconnectAttemptLabel } from "../lib/reconnect-recovery-status";
+import {
+  describeRecoveryCard,
+  formatReconnectAttemptLabel,
+} from "../lib/reconnect-recovery-status";
 
 const loadChatPanel = () => import("./ChatPanel");
 const loadTranscriptPanel = () => import("./TranscriptPanel");
@@ -1721,7 +1724,6 @@ export default function MeetsMainContent({
     : formatReconnectAttemptLabel(reconnectRecoveryStatus ?? null, {
         waitingForNetwork: isNetworkOffline,
       });
-  const reconnectLastError = reconnectRecoveryStatus?.lastError ?? null;
   const isRestoringAfterReconnect =
     connectionState === "connected" || connectionState === "joining";
   // The ring spins only while a reconnect is running. A card that waits on
@@ -1738,32 +1740,20 @@ export default function MeetsMainContent({
               reconnectRecoveryStatus?.phase === "failed"
             ? Unplug
             : null;
-  const recoveryTitle = isNetworkOffline
-    ? "Waiting for internet"
-    : isTerminalMeetingError
-      ? "Meeting unavailable"
-      : needsInviteCodeToRejoin
-        ? "Invite code needed"
-      : reconnectRecoveryStatus?.phase === "failed"
-        ? "Reconnect failed"
-        : canRetryRecovery
-          ? "Connection interrupted"
-          : "Reconnecting";
-  const recoveryDetail = isNetworkOffline
-    ? "We are keeping the room open and will restore media when your connection returns."
-    : isRestoringAfterReconnect
-      ? "Connection is back. Restoring media, participants, and room state."
-      : isTerminalMeetingError
-        ? meetError?.message
-      : reconnectRetryAt && reconnectCountdownSeconds !== null
-        ? reconnectCountdownSeconds > 0
-          ? `Retrying automatically in ${reconnectCountdownSeconds}s.`
-          : "Retrying reconnect now."
-      : reconnectRecoveryStatus?.message
-        ? reconnectRecoveryStatus.message
-      : canRetryRecovery
-        ? (meetError?.message ?? "We could not restore the connection yet.")
-        : "Keeping your meeting open while the connection is restored.";
+  const {
+    title: recoveryTitle,
+    detail: recoveryDetail,
+    lastError: reconnectLastError,
+  } = describeRecoveryCard({
+    isOffline: isNetworkOffline,
+    isRestoring: isRestoringAfterReconnect,
+    terminalMessage: isTerminalMeetingError ? (meetError?.message ?? "") : null,
+    needsInviteCode: needsInviteCodeToRejoin,
+    status: reconnectRecoveryStatus ?? null,
+    countdownSeconds: reconnectCountdownSeconds,
+    canRetry: canRetryRecovery,
+    errorMessage: meetError?.message ?? null,
+  });
   const leaveRecoveryButton = (
       <button
         type="button"
