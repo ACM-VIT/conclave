@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { appIdProblem } from "./app-id-rules.mjs";
 
 const rootFlagIndex = process.argv.indexOf("--root");
 // `--root` scaffolds into another copy of this package. Tests use it.
@@ -25,7 +26,9 @@ Examples:
   pnpm -C packages/apps-sdk run new:app sign-up --runtime authority
 
 Options:
-  --id <id>              Explicit app id (defaults to normalized slug)
+  --id <id>              Explicit app id (defaults to normalized slug). An id
+                         the SDK uses itself, or one package.json already
+                         exports something under, is refused.
   --name <name>          Display name (defaults from id)
   --description <text>   App description
   --runtime <runtime>    "doc" (default): a shared Yjs document everyone edits.
@@ -406,6 +409,9 @@ const main = () => {
 
   const appId = toAppId(values.id ?? slug);
   if (!appId) throw new Error("Could not derive a valid app id.");
+  // Decided before anything is written: a refused id leaves no files behind.
+  const problem = appIdProblem(appId, readJson(packageJsonPath).exports);
+  if (problem) throw new Error(problem);
 
   const appName = (values.name ?? toTitleCase(appId)).trim();
   const appDescription = (values.description ?? `${appName} app`).trim();
