@@ -107,7 +107,9 @@ rollout reached only some instances. It goes back one release only. Afterwards, 
 deploy, because a normal deploy builds whatever `main` holds. A rollback of
 some instances (`SFU_DEPLOY_SERVICES`) keeps its target until every instance
 is back on it, so the rest can follow with another `--rollback`; likewise a
-deploy is recorded as a release only once every instance runs it.
+deploy is recorded as a release only once every instance runs it. The target
+is recorded before the first instance changes, so a `--rollback` rerun after
+an exit 3, an exit 4 or a killed run finishes going to that same release.
 
 `--rollback` is available after two releases have gone out with this script.
 Before that, revert and deploy.

@@ -844,6 +844,12 @@ if [[ "$ROLLBACK" == "true" ]]; then
     echo "No canary-verified release to roll back to is recorded in ${DEPLOY_STATE_FILE}; revert the commit and deploy instead." >&2
     exit 1
   fi
+  # Recorded before any instance changes, so a rerun after an interruption or
+  # an exit 3 finishes this rollback instead of choosing again from a mixed
+  # state.
+  ROLLBACK_TARGET_COMMIT="$TARGET_COMMIT"
+  ROLLBACK_TARGET_IMAGE="$TARGET_IMAGE"
+  save_deploy_state
 else
   TARGET_COMMIT="$(git -C "$ROOT_DIR" rev-parse --short=12 HEAD)"
   # A rebuild of the same commit gets a new image ID even when every layer is
@@ -877,9 +883,6 @@ done
 # deploy or rollback of some instances (SFU_DEPLOY_SERVICES) keeps what the
 # others still need: a partial rollback keeps its target for the rest.
 if [[ "$ROLLBACK" == "true" ]] && ! all_on_image "$TARGET_IMAGE"; then
-  ROLLBACK_TARGET_COMMIT="$TARGET_COMMIT"
-  ROLLBACK_TARGET_IMAGE="$TARGET_IMAGE"
-  save_deploy_state
   echo "Not every instance runs ${TARGET_COMMIT} yet; --rollback continues to it until every instance is back on it."
 elif [[ "$ROLLBACK" == "true" ]]; then
   # Back past the current release, one step only: a second --rollback has

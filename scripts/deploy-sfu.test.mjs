@@ -168,6 +168,15 @@ const main = async () => {
       const image = tags["vm-" + name] || "sha256:target";
       const response = await fetch("http://127.0.0.1:" + sfus[name].port + "/stand-in/recreate?draining=" + draining + "&image=" + image);
       if (!response.ok) process.exitCode = 1;
+      // DEPLOY_TEST_KILL_AFTER_RECREATES: kill the deploy, as a crash or a
+      // closed SSH session would, once that many recreates have run.
+      const killAfter = Number(process.env.DEPLOY_TEST_KILL_AFTER_RECREATES || 0);
+      if (killAfter) {
+        const countFile = process.env.DEPLOY_TEST_DOCKER_LOG + ".recreates";
+        const count = (fs.existsSync(countFile) ? Number(fs.readFileSync(countFile, "utf8")) : 0) + 1;
+        fs.writeFileSync(countFile, String(count));
+        if (count === killAfter) process.kill(process.ppid, "SIGKILL");
+      }
       return;
     }
     return;
@@ -626,6 +635,47 @@ test("--rollback after a partial rollout returns every instance to the last rele
       const rollback = await deploy(sfus, { args: ["--rollback"], env: { SFU_DEPLOY_STATE_DIR: stateDir } });
       assert.equal(rollback.code, 0, rollback.output);
       assert.deepEqual(Object.values(sfus).map((sfu) => sfu.image), ["sha256:running", "sha256:running"]);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+});
+
+test("a rollback killed after its first instance finishes going back to the same release when rerun", async () => {
+  await withSfus({ "sfu-a": { onTarget: true }, "sfu-b": { onTarget: true } }, async (sfus) => {
+    const stateDir = await mkdtemp(path.join(tmpdir(), "conclave-deploy-state-"));
+    try {
+      await writeFile(path.join(stateDir, "vm.env"), "LAST_GOOD_COMMIT=bad\nLAST_GOOD_IMAGE=sha256:target\nPREVIOUS_GOOD_COMMIT=good\nPREVIOUS_GOOD_IMAGE=sha256:previous\n");
+      const rollback = (env = {}) => deploy(sfus, { args: ["--rollback"], env: { SFU_DEPLOY_STATE_DIR: stateDir, ...env } });
+      // Killed once sfu-a's canary container and serving container are up.
+      const killed = await rollback({ DEPLOY_TEST_KILL_AFTER_RECREATES: "2" });
+      assert.equal(killed.code, null, killed.output);
+      assert.deepEqual(Object.values(sfus).map((sfu) => sfu.image), ["sha256:previous", "sha256:target"]);
+
+      const rerun = await rollback();
+      assert.equal(rerun.code, 0, rerun.output);
+      assert.match(rerun.output, /Finishing the rollback to good/);
+      assert.deepEqual(Object.values(sfus).map((sfu) => sfu.image), ["sha256:previous", "sha256:previous"]);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+});
+
+test("a rollback paused by a call (exit 3) keeps its target for the rerun", async () => {
+  await withSfus({ "sfu-a": { onTarget: true }, "sfu-b": { onTarget: true, rooms: 1 } }, async (sfus) => {
+    const stateDir = await mkdtemp(path.join(tmpdir(), "conclave-deploy-state-"));
+    try {
+      await writeFile(path.join(stateDir, "vm.env"), "LAST_GOOD_COMMIT=bad\nLAST_GOOD_IMAGE=sha256:target\nPREVIOUS_GOOD_COMMIT=good\nPREVIOUS_GOOD_IMAGE=sha256:previous\n");
+      const rollback = () => deploy(sfus, { args: ["--rollback"], env: { SFU_DEPLOY_STATE_DIR: stateDir } });
+      const paused = await rollback();
+      assert.equal(paused.code, 3, paused.output);
+      assert.deepEqual(Object.values(sfus).map((sfu) => sfu.image), ["sha256:previous", "sha256:target"]);
+
+      sfus["sfu-b"].rooms = 0;
+      const rerun = await rollback();
+      assert.equal(rerun.code, 0, rerun.output);
+      assert.deepEqual(Object.values(sfus).map((sfu) => sfu.image), ["sha256:previous", "sha256:previous"]);
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
