@@ -6,6 +6,7 @@ import { createCallMetricsTracker } from "../src/app/lib/call-quality-metrics";
 import type { ConnectionState } from "../src/app/lib/types";
 import {
   type EventOrigin,
+  FIRST_PARTY_SCRIPTS,
   scrubTelemetryEvent,
   scrubText,
   scrubUrl,
@@ -58,7 +59,7 @@ const exceptionEvent = (): CaptureResult => ({
           frames: [
             {
               filename:
-                "https://conclave.acmvit.in/_next/static/chunks/0f3e9d.js",
+                "https://conclave.acmvit.in/_next/static/chunks/0yo6oel71v_bh.js",
               lineno: 1,
               colno: 2048,
             },
@@ -107,7 +108,9 @@ describe("scrubTelemetryEvent", () => {
       "0b2d3b480f4621392a4151d750c90965b7c8b76c",
     );
     expect(properties.$exception_list[0].stacktrace.frames[0]).toEqual({
-      filename: "https://conclave.acmvit.in/_next/static/chunks/0f3e9d.js",
+      platform: "web:javascript",
+      function: "?",
+      filename: "https://conclave.acmvit.in/_next/static/chunks/0yo6oel71v_bh.js",
       lineno: 1,
       colno: 2048,
     });
@@ -263,7 +266,7 @@ describe("credentials, non-error rejections and first-party scripts", () => {
       value: "[Meets] Error joining room",
     });
     expect(properties.$exception_list[0].stacktrace.frames[0].filename).toBe(
-      "https://conclave.acmvit.in/_next/static/chunks/0f3e9d.js",
+      "https://conclave.acmvit.in/_next/static/chunks/0yo6oel71v_bh.js",
     );
     expect(JSON.stringify(properties)).not.toMatch(/Riya|lime-pear-plum/);
   });
@@ -324,7 +327,13 @@ describe("only trusted properties and paths", () => {
     ["file:///home/Review GivenName/config/env.js", "file://[path]"],
     ["chrome-extension://abcdef/content.js", "chrome-extension://[path]"],
     ["<anonymous>", "<anonymous>"],
-    ["https://conclave.acmvit.in/_next/static/chunks/app/page-0f3e9d.js", "https://conclave.acmvit.in/_next/static/chunks/app/page-0f3e9d.js"],
+    ["https://conclave.acmvit.in/_next/static/chunks/app/page-0f3e9d.js", "https://conclave.acmvit.in/[path]"],
+    ["https://conclave.acmvit.in/_next/static/chunks/quarterly-review-room.js", "https://conclave.acmvit.in/[path]"],
+    ["https://conclave.acmvit.in/_next/static/chunks/standup-notes.js", "https://conclave.acmvit.in/[path]"],
+    ["https://conclave.acmvit.in/_next/static/media/3u-6_1om1fv26.js", "https://conclave.acmvit.in/[path]"],
+    ["https://conclave.acmvit.in/_next/static/chunks/3u-6_1om1fv26.js", "https://conclave.acmvit.in/_next/static/chunks/3u-6_1om1fv26.js"],
+    ["https://conclave.acmvit.in/_next/static/chunks/turbopack-3-ry682tkyiqk.js", "https://conclave.acmvit.in/_next/static/chunks/turbopack-3-ry682tkyiqk.js"],
+    ["https://conclave.acmvit.in/_next/static/chunks/turbopack-worker-1hrsqshz0gfey.js", "https://conclave.acmvit.in/_next/static/chunks/turbopack-worker-1hrsqshz0gfey.js"],
   ])("sends the frame path %s as %s", (filename, expected) => {
     const event = exceptionEvent();
     event.properties.$exception_list[0].stacktrace.frames[1].filename = filename;
@@ -361,12 +370,12 @@ describe("only trusted properties and paths", () => {
     expect(keys.filter((key) => !(key in sent))).toEqual([]);
   });
 
-  it("keeps the path of every first-party script under public/", () => {
+  it("lists exactly the scripts under public/ as first-party, and keeps their paths", () => {
     const publicDir = path.resolve(import.meta.dirname, "../public");
     const scripts = readdirSync(publicDir, { recursive: true, withFileTypes: true })
       .filter((entry) => entry.isFile() && /\.m?js$/.test(entry.name))
       .map((entry) => `/${path.relative(publicDir, path.join(entry.parentPath, entry.name))}`);
-    expect(scripts.length).toBeGreaterThan(10);
+    expect([...FIRST_PARTY_SCRIPTS].sort()).toEqual([...scripts].sort());
 
     for (const script of scripts) {
       const event = exceptionEvent();
@@ -374,6 +383,67 @@ describe("only trusted properties and paths", () => {
       const frame = scrub(event).properties.$exception_list[0].stacktrace.frames[1];
       expect(frame.filename).toBe(`https://conclave.acmvit.in${script}`);
     }
+  });
+});
+
+describe("stack frames", () => {
+  const chunkId = "11079975-c075-50b3-ad5f-87be8f4248d0";
+
+  it("sends only a frame's file, line, column, in-app flag and chunk id", () => {
+    const event = exceptionEvent();
+    event.properties.$exception_list[0].stacktrace.frames = [
+      {
+        platform: "web:javascript",
+        filename: "https://conclave.acmvit.in/_next/static/chunks/3u-6_1om1fv26.js",
+        function: "Object.QuarterlyReviewRoom",
+        module: "QuarterlyReviewRoom",
+        abs_path: "https://conclave.acmvit.in/quarterly-review-room",
+        context_line: "const note = 'Meet Mira';",
+        vars: { note: "Meet Mira" },
+        lineno: 3,
+        colno: 41,
+        in_app: true,
+        chunk_id: chunkId,
+      },
+      { filename: "https://conclave.acmvit.in/quarterly-review-room", function: "QuarterlyReviewRoom", chunk_id: "QuarterlyReviewRoom", lineno: "3" },
+    ];
+    const [entry] = scrub(event).properties.$exception_list;
+
+    expect(entry.stacktrace.frames).toEqual([
+      {
+        platform: "web:javascript",
+        function: "?",
+        filename: "https://conclave.acmvit.in/_next/static/chunks/3u-6_1om1fv26.js",
+        lineno: 3,
+        colno: 41,
+        in_app: true,
+        chunk_id: chunkId,
+      },
+      { platform: "web:javascript", function: "?", filename: "https://conclave.acmvit.in/[code]" },
+    ]);
+    expect(JSON.stringify(entry)).not.toMatch(/Quarterly|Mira|quarterly/);
+  });
+
+  it("rebuilds an exception entry from the fields the SDK sets", () => {
+    const event = exceptionEvent();
+    event.properties.$exception_list = [
+      {
+        type: "TypeError",
+        value: "x",
+        module: "QuarterlyReviewRoom",
+        thread_id: 7,
+        mechanism: { type: "QuarterlyReview", source: "Meet Mira", handled: false, synthetic: false, exception_id: 0 },
+        stacktrace: { type: "raw", frames: [], note: "Meet Mira" },
+      },
+    ];
+    const [entry] = scrub(event).properties.$exception_list;
+
+    expect(entry).toEqual({
+      type: "TypeError",
+      value: "[message withheld]",
+      mechanism: { type: "generic", handled: false, synthetic: false, exception_id: 0 },
+      stacktrace: { type: "raw", frames: [] },
+    });
   });
 });
 

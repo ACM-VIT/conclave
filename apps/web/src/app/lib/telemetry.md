@@ -119,12 +119,16 @@ trust, instead of scrubbing what looks bad:
   `[Meets]` call-log label from the capture's own payload. Every other one, from an engine, a library, the server or a
   rejected value, becomes `[message withheld]`. Type names are kept only from
   a list of known error kinds (built-in, DOM, ours); any other, such as a
-  rejected object's `name`, becomes `[type withheld]`. Frames keep their line
-  numbers and chunk ids.
+  rejected object's `name`, becomes `[type withheld]`. Each entry is rebuilt
+  from the fields posthog-js sets, and each frame keeps only its file, line,
+  column, in-app flag and chunk id (a uuid). Function names are dropped;
+  source maps restore them in PostHog.
 - **URLs.** Every URL property and stack frame URL becomes its origin and route
   (`/[code]`, `/w/[code]`), without query or hash. A frame keeps its path only
-  for an exact first-party script file on the page's own origin, or a hashed
-  `/_next/static` chunk. A frame from another scheme keeps only the scheme.
+  for a script on the page's own origin that is one of the exact files under
+  `public/` (a test keeps that list equal to the folder), or a chunk directly
+  in `/_next/static/chunks` with a Turbopack name: 13 hashed characters, the
+  first 0 to 4. A frame from another scheme keeps only the scheme.
 - Our own string fields still go through the credential, email and token
   scrubber, and `save_campaign_params` is off.
 

@@ -73,9 +73,9 @@ const CREDENTIAL_HEADER_PATTERN =
 const AUTH_SCHEME_PATTERN = /\b(bearer|basic)\s+[^\s,;"']+/gi;
 const SECRET_ASSIGNMENT_PATTERN =
   /\b(password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|session)(\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;&"']+)/gi;
-// Our own script files, exactly. A stack frame in one keeps its path so
-// PostHog can match it to a source map; any other path is templated.
-const FIRST_PARTY_SCRIPTS = new Set([
+// Our own script files under public/, exactly. A stack frame in one keeps its
+// path; any other path is templated.
+export const FIRST_PARTY_SCRIPTS: ReadonlySet<string> = new Set([
   "/transcript-pcm-processor.js",
   "/effects/video-effects-output-writer.js",
   "/noise-suppressor/0.3.5/rnnoise-worklet.js",
@@ -90,10 +90,12 @@ const FIRST_PARTY_SCRIPTS = new Set([
     (file) => `/_/rtcvidproc/release/929503300/${file}`,
   ),
 ]);
-// Build chunks have hashed names, so they are matched by shape instead.
-const NEXT_STATIC_SCRIPT = /^\/_next\/static\/[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*\.m?js$/;
+// Build chunks are matched by the name Turbopack gives them: 13 characters of
+// [0-9a-z_-] holding a hash, the first always 0 to 4 (true of every chunk in
+// our builds), in chunks/ itself, never a folder or a word below it.
+const NEXT_CHUNK = /^\/_next\/static\/chunks\/(?:turbopack-(?:worker-)?)?[0-4][0-9a-z_-]{12}\.js$/;
 const isFirstPartyScript = (pathname: string): boolean =>
-  FIRST_PARTY_SCRIPTS.has(pathname) || NEXT_STATIC_SCRIPT.test(pathname);
+  FIRST_PARTY_SCRIPTS.has(pathname) || NEXT_CHUNK.test(pathname);
 // Frame names the browser gives code with no file, such as <anonymous>.
 const PLACEHOLDER_FRAME = /^(?:<[a-z ]+>|native|)$/;
 
@@ -144,10 +146,9 @@ export function scrubText(value: string): string {
 }
 
 type ExceptionFrame = Record<string, unknown>;
-type ExceptionEntry = {
-  value?: unknown;
-  stacktrace?: { frames?: ExceptionFrame[] } & Record<string, unknown>;
-} & Record<string, unknown>;
+type ExceptionEntry = Record<string, unknown> & {
+  stacktrace?: Record<string, unknown> & { frames?: unknown };
+};
 
 const originOf = (value: unknown): string | null => {
   if (typeof value !== "string") return null;
@@ -172,13 +173,44 @@ const scrubFrameUrl = (value: string, pageOrigin: string | null): string => {
   }
 };
 
-const scrubFrame = (frame: ExceptionFrame, pageOrigin: string | null): ExceptionFrame => {
-  const next = { ...frame };
-  for (const key of ["filename", "abs_path"]) {
-    const value = next[key];
-    if (typeof value === "string") next[key] = scrubFrameUrl(value, pageOrigin);
-  }
-  return next;
+// What posthog-js writes for a frame with no function name. Names are
+// dropped: source maps restore them in PostHog.
+const UNKNOWN_FUNCTION = "?";
+const isPosition = (value: unknown): value is number =>
+  typeof value === "number" && Number.isInteger(value) && value >= 0;
+
+/**
+ * A frame keeps only its file, line, column, in-app flag and the chunk id
+ * posthog-cli injected (a uuid), in the shape posthog-js sends.
+ */
+const scrubFrame = (frame: ExceptionFrame, pageOrigin: string | null): ExceptionFrame => ({
+  platform: "web:javascript",
+  function: UNKNOWN_FUNCTION,
+  ...(typeof frame.filename === "string"
+    ? { filename: scrubFrameUrl(frame.filename, pageOrigin) }
+    : {}),
+  ...(isPosition(frame.lineno) ? { lineno: frame.lineno } : {}),
+  ...(isPosition(frame.colno) ? { colno: frame.colno } : {}),
+  ...(typeof frame.in_app === "boolean" ? { in_app: frame.in_app } : {}),
+  ...(typeof frame.chunk_id === "string" && SDK_ID_PATTERN.test(frame.chunk_id)
+    ? { chunk_id: frame.chunk_id }
+    : {}),
+});
+
+// The mechanisms posthog-js reports: a caught or captured error, a cause in a
+// chain, and console capture.
+const MECHANISM_TYPES = new Set(["generic", "chained", "onconsole"]);
+
+const scrubMechanism = (mechanism: unknown): Record<string, unknown> | null => {
+  if (mechanism === null || typeof mechanism !== "object") return null;
+  const { type, handled, synthetic, exception_id, parent_id } = mechanism as Record<string, unknown>;
+  return {
+    type: typeof type === "string" && MECHANISM_TYPES.has(type) ? type : "generic",
+    ...(typeof handled === "boolean" ? { handled } : {}),
+    ...(typeof synthetic === "boolean" ? { synthetic } : {}),
+    ...(isPosition(exception_id) ? { exception_id } : {}),
+    ...(isPosition(parent_id) ? { parent_id } : {}),
+  };
 };
 
 // Type names that name a kind of failure, never data: built-in errors, DOM
@@ -207,25 +239,30 @@ const knownType = (type: unknown): string =>
 /**
  * An exception keeps its message only when we wrote it: a registered `[Meets]`
  * label that call-error-capture set. Every other message, from an engine, a
- * library, the server or a rejected value, is withheld.
+ * library, the server or a rejected value, is withheld. The entry is rebuilt
+ * from the fields posthog-js sets, so nothing else rides along.
  */
 const scrubExceptionEntry = (
   entry: ExceptionEntry,
   trustedMessage: string | null,
   pageOrigin: string | null,
-): ExceptionEntry => ({
-  ...entry,
-  type: knownType(entry.type),
-  value: trustedMessage ?? MESSAGE_WITHHELD,
-  ...(entry.stacktrace && Array.isArray(entry.stacktrace.frames)
-    ? {
-        stacktrace: {
-          ...entry.stacktrace,
-          frames: entry.stacktrace.frames.map((frame) => scrubFrame(frame, pageOrigin)),
-        },
-      }
-    : {}),
-});
+): ExceptionEntry => {
+  const mechanism = scrubMechanism(entry.mechanism);
+  const frames = entry.stacktrace?.frames;
+  return {
+    type: knownType(entry.type),
+    value: trustedMessage ?? MESSAGE_WITHHELD,
+    ...(mechanism ? { mechanism } : {}),
+    ...(Array.isArray(frames)
+      ? {
+          stacktrace: {
+            type: "raw",
+            frames: (frames as ExceptionFrame[]).map((frame) => scrubFrame(frame, pageOrigin)),
+          },
+        }
+      : {}),
+  };
+};
 
 const isPrimitive = (value: unknown): boolean => value === null || typeof value !== "object";
 
