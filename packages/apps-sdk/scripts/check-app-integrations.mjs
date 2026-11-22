@@ -6,14 +6,32 @@ import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const packageDir = path.resolve(__dirname, "..");
 
-const APPS_SRC_DIR = path.join(packageDir, "src", "apps");
-const PACKAGE_JSON_PATH = path.join(packageDir, "package.json");
-
-const args = new Set(process.argv.slice(2));
+const argv = process.argv.slice(2);
+const args = new Set(argv);
 const shouldFix = args.has("--fix");
 const showHelp = args.has("--help");
+const rootIndex = argv.indexOf("--root");
+// `--root` points the check at another copy of this package. Tests use it.
+const packageDir =
+  rootIndex === -1
+    ? path.resolve(__dirname, "..")
+    : path.resolve(argv[rootIndex + 1]);
+
+const SRC_DIR = path.join(packageDir, "src");
+const APPS_SRC_DIR = path.join(SRC_DIR, "apps");
+const PACKAGE_JSON_PATH = path.join(packageDir, "package.json");
+const PACKAGE_NAME = "@conclave/apps-sdk";
+const WEB_SRC_DIR = path.resolve(packageDir, "..", "..", "apps", "web", "src");
+const SFU_REGISTRY_PATH = path.resolve(
+  packageDir,
+  "..",
+  "sfu",
+  "server",
+  "apps",
+  "authority",
+  "registry.ts",
+);
 
 const usage = () => {
   console.log(`Usage:
@@ -21,8 +39,9 @@ const usage = () => {
   pnpm -C packages/apps-sdk run check:apps --fix
 
 Options:
-  --fix      Apply safe JSON fixes for package exports
-  --help     Show this help
+  --fix          Apply safe JSON fixes for package exports
+  --root <dir>   Check another copy of this package
+  --help         Show this help
 `);
 };
 
@@ -50,26 +69,33 @@ const sortObjectKeys = (record) => {
   return next;
 };
 
+const APP_PARTS = ["core", "web", "server"];
+
 const getApps = () => {
+  if (!fs.existsSync(APPS_SRC_DIR)) return [];
   const entries = fs.readdirSync(APPS_SRC_DIR, { withFileTypes: true });
   return entries
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
-    .filter((appId) => {
-      const appDir = path.join(APPS_SRC_DIR, appId);
-      const hasCore = fs.existsSync(path.join(appDir, "core", "index.ts"));
-      const hasWeb = fs.existsSync(path.join(appDir, "web", "index.ts"));
-      return hasCore || hasWeb;
-    })
+    .filter((appId) =>
+      APP_PARTS.some((part) =>
+        fs.existsSync(path.join(APPS_SRC_DIR, appId, part, "index.ts")),
+      ),
+    )
     .sort((a, b) => a.localeCompare(b));
 };
 
 const appInfo = (appId) => {
   const appDir = path.join(APPS_SRC_DIR, appId);
-  const core = fs.existsSync(path.join(appDir, "core", "index.ts"));
-  const coreDoc = fs.existsSync(path.join(appDir, "core", "doc", "index.ts"));
-  const web = fs.existsSync(path.join(appDir, "web", "index.ts"));
-  return { appId, core, coreDoc, web };
+  const has = (...parts) => fs.existsSync(path.join(appDir, ...parts));
+  return {
+    appId,
+    core: has("core", "index.ts"),
+    coreDoc: has("core", "doc", "index.ts"),
+    web: has("web", "index.ts"),
+    // A `server` entry makes this an authority app: its rules run on the SFU.
+    server: has("server", "index.ts"),
+  };
 };
 
 const apps = getApps().map(appInfo);
@@ -78,29 +104,187 @@ const errors = [];
 const warnings = [];
 const fixes = [];
 
+const readAppFile = (appId, ...parts) =>
+  fs.readFileSync(path.join(APPS_SRC_DIR, appId, ...parts), "utf8");
+
 for (const app of apps) {
   if (!app.core) {
     errors.push(`[${app.appId}] missing core/index.ts`);
   }
-  if (!app.coreDoc) {
+  if (!app.server && !app.coreDoc) {
     warnings.push(`[${app.appId}] missing core/doc/index.ts`);
   }
   if (!app.web) {
     errors.push(`[${app.appId}] missing web/index.ts`);
   }
+  if (!app.server) continue;
+
+  // An authority app's contract lives in `core`, the one part a renderer and
+  // the SFU both load. Its id must be the app's folder name.
+  if (app.core) {
+    const core = readAppFile(app.appId, "core", "index.ts");
+    if (!/\bdefineContract\s*\(/.test(core)) {
+      errors.push(
+        `[${app.appId}] core/index.ts must define the app's contract with defineContract`,
+      );
+    } else if (!new RegExp(`\\bid:\\s*["']${app.appId}["']`).test(core)) {
+      errors.push(
+        `[${app.appId}] the contract in core/index.ts must have id "${app.appId}"`,
+      );
+    }
+  }
+  const server = readAppFile(app.appId, "server", "index.ts");
+  if (!/\bdefineAuthority\s*\(/.test(server)) {
+    errors.push(
+      `[${app.appId}] server/index.ts must define the app's rules with defineAuthority`,
+    );
+  }
 }
 
+/* ---- Server code never reaches a browser or native bundle ---------------- */
+
+const SOURCE_EXTENSIONS = [".ts", ".tsx"];
+const IMPORT_PATTERN =
+  /(?:\bimport\b|\bexport\b)\s*(?:type\s+)?(?:[^'";]*?\bfrom\s*)?["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']\s*\)/g;
+
+const listSources = (dir) => {
+  if (!fs.existsSync(dir)) return [];
+  const found = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) found.push(...listSources(full));
+    else if (SOURCE_EXTENSIONS.includes(path.extname(entry.name))) found.push(full);
+  }
+  return found;
+};
+
+const specifiersOf = (filePath) => {
+  const source = fs.readFileSync(filePath, "utf8");
+  const specifiers = [];
+  for (const match of source.matchAll(IMPORT_PATTERN)) {
+    specifiers.push(match[1] ?? match[2]);
+  }
+  return specifiers;
+};
+
+const resolveFile = (candidate) => {
+  const withoutJs = candidate.replace(/\.js$/, "");
+  const attempts = [
+    candidate,
+    ...SOURCE_EXTENSIONS.map((extension) => `${withoutJs}${extension}`),
+    ...SOURCE_EXTENSIONS.map((extension) => path.join(withoutJs, `index${extension}`)),
+  ];
+  return attempts.find(
+    (attempt) => fs.existsSync(attempt) && fs.statSync(attempt).isFile(),
+  );
+};
+
 const pkg = readJson(PACKAGE_JSON_PATH);
+
+/** The file inside this package a specifier points at, if it points here. */
+const resolveSpecifier = (fromFile, specifier) => {
+  if (specifier.startsWith(".")) {
+    return resolveFile(path.resolve(path.dirname(fromFile), specifier));
+  }
+  if (specifier.startsWith("#")) {
+    const target = pkg.imports?.[specifier];
+    return typeof target === "string"
+      ? resolveFile(path.resolve(packageDir, target))
+      : undefined;
+  }
+  if (specifier === PACKAGE_NAME || specifier.startsWith(`${PACKAGE_NAME}/`)) {
+    const subpath = `.${specifier.slice(PACKAGE_NAME.length)}`;
+    const target = pkg.exports?.[subpath === "." ? "." : subpath];
+    return typeof target === "string"
+      ? resolveFile(path.resolve(packageDir, target))
+      : undefined;
+  }
+  return undefined;
+};
+
+const relative = (filePath) => path.relative(packageDir, filePath);
+
+/**
+ * Server-only code: an app's `server` folder and the SDK's server definition
+ * API. It holds an app's private rules, and can hold secrets such as a quiz's
+ * answer key, so nothing a browser or a native embed loads may import it.
+ */
+const isServerOnly = (filePath) => {
+  const rel = relative(filePath).split(path.sep).join("/");
+  return (
+    /^src\/apps\/[^/]+\/server\//.test(rel) ||
+    rel === "src/sdk/authority/server.ts" ||
+    rel === "src/sdk/authority/definition.ts"
+  );
+};
+
+for (const filePath of listSources(SRC_DIR)) {
+  if (isServerOnly(filePath)) continue;
+  for (const specifier of specifiersOf(filePath)) {
+    const target = resolveSpecifier(filePath, specifier);
+    if (target && isServerOnly(target)) {
+      errors.push(
+        `${relative(filePath)} imports server-only code (${specifier}). Only the SFU may load an app's server entry.`,
+      );
+    }
+  }
+}
+
+const SERVER_SUBPATH = new RegExp(
+  `^${PACKAGE_NAME.replace("/", "\\/")}\\/(?:authority\\/server|[^/]+\\/server)$`,
+);
+for (const filePath of listSources(WEB_SRC_DIR)) {
+  for (const specifier of specifiersOf(filePath)) {
+    if (SERVER_SUBPATH.test(specifier)) {
+      errors.push(
+        `${path.relative(path.resolve(packageDir, "..", ".."), filePath)} imports server-only code (${specifier}). Only the SFU may load an app's server entry.`,
+      );
+    }
+  }
+}
+
+/* ---- The SFU's allowlist names real apps --------------------------------- */
+
+if (fs.existsSync(SFU_REGISTRY_PATH)) {
+  const registry = fs.readFileSync(SFU_REGISTRY_PATH, "utf8");
+  const registered = new Set();
+  const pattern = new RegExp(
+    `["']${PACKAGE_NAME.replace("/", "\\/")}\\/([^/"']+)\\/server["']`,
+    "g",
+  );
+  for (const match of registry.matchAll(pattern)) {
+    // `authority/server` is the SDK's own definition API, not an app.
+    if (match[1] !== "authority") registered.add(match[1]);
+  }
+  for (const appId of registered) {
+    if (!apps.some((app) => app.appId === appId && app.server)) {
+      errors.push(
+        `The SFU registry imports ${PACKAGE_NAME}/${appId}/server, but ${appId} has no server/index.ts`,
+      );
+    }
+  }
+  for (const app of apps) {
+    if (app.server && !registered.has(app.appId)) {
+      warnings.push(
+        `[${app.appId}] is an authority app but is not in the SFU registry (packages/sfu/server/apps/authority/registry.ts), so no room runs it`,
+      );
+    }
+  }
+}
+
+/* ---- Package exports ------------------------------------------------------ */
+
 const pkgExports = { ...(pkg.exports ?? {}) };
 const nextExports = { ...pkgExports };
 
 const expectedExports = {};
 for (const app of apps) {
-  if (app.core) {
-    expectedExports[`./${app.appId}/core`] = `./src/apps/${app.appId}/core/index.ts`;
-  }
-  if (app.web) {
-    expectedExports[`./${app.appId}/web`] = `./src/apps/${app.appId}/web/index.ts`;
+  for (const part of APP_PARTS) {
+    if (app[part]) {
+      expectedExports[`./${app.appId}/${part}`] =
+        `./src/apps/${app.appId}/${part}/index.ts`;
+    }
   }
 }
 
@@ -119,9 +303,11 @@ for (const [key, expected] of Object.entries(expectedExports)) {
 }
 
 for (const key of Object.keys(nextExports)) {
-  const match = key.match(/^\.\/([^/]+)\/(core|web)$/);
+  const match = key.match(/^\.\/([^/]+)\/(core|web|server)$/);
   if (!match) continue;
   const [, appId, part] = match;
+  // `./authority/server` is the SDK's own subpath, not an app's.
+  if (appId === "authority") continue;
   const app = apps.find((item) => item.appId === appId);
   if (!app) {
     warnings.push(`package.json exports has stale entry ${key}`);

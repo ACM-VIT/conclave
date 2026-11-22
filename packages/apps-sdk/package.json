@@ -11,6 +11,7 @@
     "check:native-embed": "node ./src/native-embed/build/build-native-embed.mjs --check",
     "test:native-embed": "node --test ./scripts/native-embed-contract-test.mjs",
     "test:native-embed-apps": "node --test ./src/native-embed/tests/wheel-watch-contract-test.mjs",
+    "test:scripts": "node --test ./scripts/check-app-integrations.test.mjs",
     "typecheck": "tsc --noEmit"
   },
   "main": "src/index.ts",

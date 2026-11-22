@@ -60,7 +60,7 @@ export function AuthorityProvider({ socket, joined, children }: AuthorityProvide
   );
 }
 
-export type AuthorityApp<C extends AuthorityContract> = {
+export type AuthorityAppClient<C extends AuthorityContract> = {
   state: AuthoritySessionState<C>;
   act<K extends ActionName<C>>(
     action: K,
@@ -82,7 +82,7 @@ const noSubscription = () => () => {};
  * kind renders as unavailable. Several components may use the same contract;
  * they share one subscription.
  */
-export function useAuthority<C extends AuthorityContract>(contract: C): AuthorityApp<C> {
+export function useAuthority<C extends AuthorityContract>(contract: C): AuthorityAppClient<C> {
   const client = useContext(AuthorityContext);
   const [session, setSession] = useState<AuthoritySession<C> | null>(null);
 
@@ -104,14 +104,14 @@ export function useAuthority<C extends AuthorityContract>(contract: C): Authorit
     () => UNSUPPORTED,
   );
 
-  const act = useCallback<AuthorityApp<C>["act"]>(
+  const act = useCallback<AuthorityAppClient<C>["act"]>(
     (action, input) =>
       session
         ? session.act(action, input)
         : Promise.resolve({ ok: false, code: "unsupported" }),
     [session],
   );
-  const query = useCallback<AuthorityApp<C>["query"]>(
+  const query = useCallback<AuthorityAppClient<C>["query"]>(
     (name, input) =>
       session
         ? session.query(name, input)
