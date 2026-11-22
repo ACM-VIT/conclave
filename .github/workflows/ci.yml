@@ -38,6 +38,8 @@ jobs:
 
       - name: Check
         run: pnpm check
+        env:
+          COMMENT_RATCHET_BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || (github.event.before != '0000000000000000000000000000000000000000' && github.event.before) || 'origin/staging' }}
 
       - name: Build
         run: pnpm build

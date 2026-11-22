@@ -3,8 +3,8 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { countDisallowed, extractFile, listSourceFiles } from "./extract.mjs";
-import { ESLINT_LANGUAGE, configuresNoComments, languageOf, switchesOffNoComments } from "./policy.mjs";
+import { countDisallowed, extractComments, extractFile, listSourceFiles } from "./extract.mjs";
+import { ESLINT_LANGUAGE, configuresNoComments, isFirstPartySource, languageOf, switchesOffNoComments } from "./policy.mjs";
 
 export const BASELINE_FILE = "scripts/quality/comments/baseline.json";
 export const ESLINT_SUPPRESSION_FILES = ["eslint-suppressions.json", "apps/web/eslint-suppressions.json"];
@@ -58,12 +58,38 @@ const RATCHET_FILES = [
 
 const readJson = (file) => JSON.parse(readFileSync(file, "utf8"));
 
-export const growthSinceBase = (repo, baseRef) => {
+export const resolveBase = (repo, baseRef) => {
   if (tryGit(repo, ["rev-parse", "--verify", "--quiet", `${baseRef}^{commit}`]) === undefined) {
     return { skipped: `${baseRef} is not available` };
   }
   const base = tryGit(repo, ["merge-base", "HEAD", baseRef])?.trim();
   if (!base) return { skipped: `HEAD shares no history with ${baseRef}` };
+  if (base !== tryGit(repo, ["rev-parse", "HEAD"])?.trim()) return { base };
+  if (tryGit(repo, ["status", "--porcelain", "--untracked-files=no"])?.trim()) return { base };
+  const parent = tryGit(repo, ["rev-parse", "--verify", "--quiet", "HEAD^1"])?.trim();
+  return parent ? { base: parent } : { skipped: "HEAD has no parent to compare with" };
+};
+
+const disallowedIn = (text, file) =>
+  text === undefined ? 0 : extractComments(text, file).filter((comment) => !comment.allowed).length;
+
+const readIfPresent = (file) => (existsSync(file) ? readFileSync(file, "utf8") : undefined);
+
+export const countRisesSinceBase = (repo, base) =>
+  (tryGit(repo, ["diff", "--name-only", "-z", base, "--"]) ?? "")
+    .split("\0")
+    .filter((file) => file !== "" && isFirstPartySource(file))
+    .map((file) => ({
+      file,
+      from: disallowedIn(tryGit(repo, ["show", `${base}:${file}`]), file),
+      to: disallowedIn(readIfPresent(path.join(repo, file)), file),
+    }))
+    .filter(({ from, to }) => to > from);
+
+export const growthSinceBase = (repo, baseRef) => {
+  const resolved = resolveBase(repo, baseRef);
+  if (resolved.skipped) return resolved;
+  const { base } = resolved;
   const rises = RATCHET_FILES.flatMap(({ file, flatten }) => {
     const before = tryGit(repo, ["show", `${base}:${file}`]);
     const local = path.join(repo, file);
@@ -73,7 +99,7 @@ export const growthSinceBase = (repo, baseRef) => {
       baseline: file,
     }));
   });
-  return { base, rises };
+  return { base, rises, countRises: countRisesSinceBase(repo, base) };
 };
 
 export const inlineNoCommentsDisables = (repo) => {
@@ -108,6 +134,10 @@ const check = (repo, baseline, baseRef) => {
         ? `${record.file}:${record.line}: this inline config switches off conclave/no-comments. Delete it.`
         : `${record.file}:${record.line}: this directive switches off conclave/no-comments. Name the rules it disables.`,
     );
+  }
+  const reported = new Set(rises.map(({ file }) => file));
+  for (const { file, from, to } of (growth.countRises ?? []).filter(({ file }) => !reported.has(file))) {
+    failures.push(`${file}: comments rose from ${from} to ${to} since ${growth.base.slice(0, 8)}.`);
   }
   for (const { baseline: file, file: key, from, to } of growth.rises ?? []) {
     failures.push(`${file}: ${key} rose from ${from} to ${to} since ${growth.base.slice(0, 8)}. Baselines only go down.`);

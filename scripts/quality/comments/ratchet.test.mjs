@@ -157,3 +157,48 @@ test("a disable directive inside a license header still fails", (t) => {
   assert.equal(result.status, 1);
   assert.match(result.stderr, /src\/licensed\.ts:2: this directive switches off conclave\/no-comments/);
 });
+
+test("pull request mode compares with the merge base, so a comment added on the branch fails", (t) => {
+  const repo = repoWith(t, { "src/a.ts": "export const a = 1;\n", [BASELINE]: {} });
+  write(repo, { "src/a.ts": "// added\nexport const a = 1;\n" });
+  git(repo, "commit", "-q", "-m", "add a comment");
+  const result = ratchet(repo);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /src\/a\.ts: comments rose from 0 to 1 since/);
+});
+
+test("push mode compares a commit on the base branch with its parent", (t) => {
+  const repo = repoWith(t, {
+    [BASELINE]: { "App.swift": 1 },
+    "App.swift": "// one\nlet a = 1\n",
+  });
+  git(repo, "checkout", "-q", "base");
+  write(repo, { [BASELINE]: { "App.swift": 2 }, "App.swift": "// one\n// two\nlet a = 1\n" });
+  git(repo, "commit", "-q", "-m", "direct push");
+  const pushed = ratchet(repo);
+  assert.equal(pushed.status, 1);
+  assert.match(pushed.stderr, /baseline\.json: App\.swift rose from 1 to 2 since/);
+  const before = git(repo, "rev-parse", "HEAD^1").trim();
+  const withBefore = spawnSync(process.execPath, [RATCHET, "--repo", repo], {
+    encoding: "utf8",
+    env: { ...process.env, COMMENT_RATCHET_BASE: before },
+  });
+  assert.equal(withBefore.status, 1);
+  assert.match(withBefore.stderr, /App\.swift rose from 1 to 2 since/);
+});
+
+test("a deletion that was never pruned cannot be refilled later", (t) => {
+  const repo = repoWith(t, {
+    "src/a.ts": "// one\n// two\nexport const a = 1;\n",
+    "eslint-suppressions.json": { "src/a.ts": { "conclave/no-comments": { count: 2 } } },
+    [BASELINE]: {},
+  });
+  git(repo, "checkout", "-q", "base");
+  write(repo, { "src/a.ts": "export const a = 1;\n" });
+  git(repo, "commit", "-q", "-m", "delete comments, leave the suppression");
+  git(repo, "checkout", "-q", "-B", "feature");
+  write(repo, { "src/a.ts": "// back\nexport const a = 1;\n" });
+  const result = ratchet(repo);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /src\/a\.ts: comments rose from 0 to 1 since/);
+});
