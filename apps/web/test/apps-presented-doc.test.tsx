@@ -27,10 +27,14 @@ type SyncPolicy = {
   refuse?: number | "all";
   // Answer syncs at once instead of waiting for deliverSync().
   autoAnswer?: boolean;
+  // What each refusal says; REFUSED unless set.
+  refusal?: object;
 };
 
 // The refusal an SFU sends when a socket's sync budget is spent.
 const REFUSED = { error: "Too many app sync requests", retryable: true, retryAfterMs: 500 };
+// The same refusal from an SFU older than retryable refusals.
+const LEGACY_REFUSED = { error: "Too many app sync requests" };
 
 type Room = {
   status: () => string | null;
@@ -83,7 +87,7 @@ async function withSavedBoard(run: (room: Room) => Promise<void>, policy: SyncPo
         const refused =
           policy.refuse === "all" ? !syncsAllowed : syncs <= (policy.refuse ?? 0);
         if (refused) {
-          ack!(REFUSED);
+          ack!(policy.refusal ?? REFUSED);
           return;
         }
         const update = Y.encodeStateAsUpdate(roomDoc, data.syncMessage);
@@ -290,4 +294,32 @@ it("gives up 30 s after a sync that is never answered, whatever each attempt wai
     expect(status()).toBe("failed");
     expect(syncRequests()).toBe(4);
   });
+});
+
+it("retries a refusal from an older SFU and opens the board once a sync is answered", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  await withSavedBoard(
+    async ({ status, syncRequests }) => {
+      await advance(250);
+      expect(syncRequests()).toBe(2);
+      expect(status()).toBe("syncing");
+
+      await advance(500);
+      expect(syncRequests()).toBe(3);
+      expect(status()).toBe("synced");
+    },
+    { refuse: 2, autoAnswer: true, refusal: LEGACY_REFUSED },
+  );
+});
+
+it("fails at once on a refusal that is not worth retrying", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  await withSavedBoard(
+    async ({ status, syncRequests }) => {
+      expect(status()).toBe("failed");
+      await advance(40_000);
+      expect(syncRequests()).toBe(1);
+    },
+    { refuse: 1, autoAnswer: true, refusal: { error: "App not active" } },
+  );
 });

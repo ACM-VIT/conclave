@@ -86,7 +86,8 @@ and a retry that calls `retrySync()` when it is `failed`.
   would start after the deadline is not made. So the status turns `failed` within 30 s
   whether the room refuses every sync or never answers: refused at once,
   after about 28 s; never answered, at 30 s. A refusal that is not retryable
-  fails at once.
+  fails at once, except an older SFU's rate-limit refusal, which has no
+  `retryable` field and is retried with the backoff.
 - `presentedDocKey` changes with every new local copy: a new `docGeneration`,
   a close and present in one batch, or a new socket. The app then mounts
   again on the new document instead of keeping the one the provider dropped.

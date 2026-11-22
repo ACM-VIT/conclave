@@ -158,8 +158,9 @@ presented app after each stage change is free. Every stage change makes each
 client sync once, so other hosts switching apps cannot use up a viewer's
 budget; repeated syncs of the same stage still spend it. A sync refused by the
 limit acks `{ error, retryable: true, retryAfterMs }`, and the client tries
-again after at least `retryAfterMs`. Any other refusal acks `{ error }` and is
-final.
+again after at least `retryAfterMs`. An older SFU sends that refusal as only
+`{ error: "Too many app sync requests" }`; the client retries it with its own
+backoff. Any other refusal acks `{ error }` and is final.
 
 ## Sync Flow
 

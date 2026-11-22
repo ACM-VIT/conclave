@@ -23,6 +23,7 @@ import type {
   AppsUpdatePayload,
   AppUser,
 } from "../types/index";
+import { classifySyncReply } from "./syncReply";
 
 export const AppsContext = createContext<AppsContextValue | null>(null);
 
@@ -441,15 +442,15 @@ export function AppsProvider({
     (run: SyncRun) => {
       if (syncRunRef.current !== run) return;
 
-      const retryLater = (response?: AppsSyncError) => {
-        const hint = response?.retryAfterMs;
-        const usableHint = typeof hint === "number" && Number.isFinite(hint) ? Math.max(hint, 0) : 0;
+      const fail = () => {
+        syncRunRef.current = null;
+        setSyncStatus("failed");
+      };
+      const retryLater = (afterMs: number) => {
         const backoff = SYNC_RETRY_DELAYS_MS[Math.min(run.attempt, SYNC_RETRY_DELAYS_MS.length - 1)];
-        const delay = Math.max(backoff, usableHint);
-        const retryable = !response || response.retryable === true;
-        if (!retryable || Date.now() - run.startedAt + delay > SYNC_GIVE_UP_MS) {
-          syncRunRef.current = null;
-          setSyncStatus("failed");
+        const delay = Math.max(backoff, afterMs);
+        if (Date.now() - run.startedAt + delay > SYNC_GIVE_UP_MS) {
+          fail();
           return;
         }
         run.attempt += 1;
@@ -458,7 +459,7 @@ export function AppsProvider({
 
       const currentSocket = socketRef.current;
       if (!currentSocket?.connected) {
-        retryLater();
+        retryLater(0);
         return;
       }
 
@@ -470,12 +471,15 @@ export function AppsProvider({
         clearTimeout(run.timer);
         if (syncRunRef.current !== run) return;
 
-        if (response && !("error" in response)) {
+        const reply = classifySyncReply(response);
+        if (reply.kind === "synced") {
           syncRunRef.current = null;
-          setSyncStatus(applySync(run, response, currentSocket) ? "synced" : "failed");
-          return;
+          setSyncStatus(applySync(run, reply.response, currentSocket) ? "synced" : "failed");
+        } else if (reply.kind === "retry") {
+          retryLater(reply.afterMs);
+        } else {
+          fail();
         }
-        retryLater(response);
       };
 
       const remaining = SYNC_GIVE_UP_MS - (Date.now() - run.startedAt);
