@@ -249,6 +249,22 @@ test("an attribution header may follow a directive prologue", () => {
   );
 });
 
+test("Swift regex literals hide comment markers", () => {
+  const source = [
+    "let url = #/https?://example\\.com/#",
+    "let wide = ##/a/#b/##",
+    "let multi = #/",
+    "  // inside an extended literal",
+    "  /#",
+    "let bare = /a\\/*b/",
+    "let slashes = try Regex(/[/]+x/)",
+    "let half = total / 2 // real one",
+    "let ratio = a / b / c",
+    "// real two",
+  ].join("\n");
+  assert.deepEqual(texts(source, "Patterns.swift"), ["// real one", "// real two"]);
+});
+
 test("a directive is never part of a license header", () => {
   const source = [
     "// SPDX-License-Identifier: MIT",

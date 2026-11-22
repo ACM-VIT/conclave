@@ -71,6 +71,42 @@ const scanCLike = (text, language) => {
     }
   };
 
+  const swiftExtendedRegex = () => {
+    let hashes = 0;
+    while (text[i] === "#") {
+      hashes += 1;
+      i += 1;
+    }
+    i += 1;
+    const close = "/" + "#".repeat(hashes);
+    while (i < text.length && !text.startsWith(close, i)) i += text[i] === "\\" ? 2 : 1;
+    i += close.length;
+  };
+
+  const BARE_REGEX_PRECEDER = /(?:^|[(\[{,:;=!?&|^~+\-*%<>]|\b(?:return|case|in|where|try|await|throw|let|var|if|guard|while|else))\s*$/;
+
+  const swiftBareRegex = () => {
+    const start = i;
+    const next = text[i + 1];
+    if (next === undefined || /[\s/*=]/.test(next)) return false;
+    const lineStart = text.lastIndexOf("\n", i - 1) + 1;
+    if (!BARE_REGEX_PRECEDER.test(text.slice(lineStart, i))) return false;
+    i += 1;
+    let inClass = false;
+    while (i < text.length && text[i] !== "\n") {
+      const c = text[i];
+      if (c === "\\") i += 2;
+      else if (c === "[") (inClass = true), (i += 1);
+      else if (c === "]") (inClass = false), (i += 1);
+      else if (c === "/" && !inClass) {
+        i += 1;
+        return true;
+      } else i += 1;
+    }
+    i = start;
+    return false;
+  };
+
   const kotlinString = () => {
     const raw = text.startsWith('"""', i);
     i += raw ? 3 : 1;
@@ -110,6 +146,8 @@ const scanCLike = (text, language) => {
       if (text.startsWith("//", i)) lineComment();
       else if (text.startsWith("/*", i)) blockComment();
       else if (language === "swift" && (c === '"' || (c === "#" && /^#+"/.test(text.slice(i, i + 8))))) swiftString();
+      else if (language === "swift" && c === "#" && /^#+\//.test(text.slice(i, i + 8))) swiftExtendedRegex();
+      else if (language === "swift" && c === "/" && swiftBareRegex()) continue;
       else if (language === "kotlin" && c === '"') kotlinString();
       else if (language === "kotlin" && c === "'") kotlinChar();
       else {
