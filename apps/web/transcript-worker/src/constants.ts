@@ -33,12 +33,6 @@ export const TRANSCRIPT_SFU_RELAY_RECOVERY_ATTEMPTS = 8;
 export const TRANSCRIPTION_CONNECT_TIMEOUT_MS = 10_000;
 export const TRANSCRIPTION_COMMIT_ACK_TIMEOUT_MS = 45_000;
 export const TRANSCRIPTION_PROVIDER_DRAIN_MS = 10_000;
-// Sarvam sends one final per utterance and no flush acknowledgement, so a
-// replaced Sarvam connection closes once it has been quiet this long after
-// its last final (never past TRANSCRIPTION_PROVIDER_DRAIN_MS). Sarvam documents
-// no latency figures; this is a margin over sub-second finalization, not a
-// measurement.
-export const TRANSCRIPTION_DRAIN_QUIET_MS = 3_000;
 // Sequence numbers reserved for a replaced provider's late lines, so speech
 // from before a language switch sorts ahead of the new provider's.
 export const TRANSCRIPTION_DRAIN_SEQUENCE_BLOCK = 64;

@@ -163,7 +163,7 @@ describe("switching the caption language keeps speech the old provider already h
 
     expect(savedTexts()).toEqual(["Friday at noon"]);
     expect(before.closed).toBe(false);
-    await vi.advanceTimersByTimeAsync(3_100);
+    await vi.advanceTimersByTimeAsync(10_100);
     expect(before.closed).toBe(true);
   });
 
@@ -265,7 +265,7 @@ describe("drain cases reproduced across review rounds", () => {
     await settle();
 
     expect(savedTexts()).toEqual(["First utterance.", "Second utterance."]);
-    await vi.advanceTimersByTimeAsync(3_100);
+    await vi.advanceTimersByTimeAsync(9_100);
     expect(before.closed).toBe(true);
   });
 
@@ -361,6 +361,92 @@ describe("drain cases reproduced across review rounds", () => {
     await settle();
 
     expect(lastSnapshotTexts()).toContain("Friday at noon");
+  });
+});
+
+describe("Sarvam drains until 10 s after its last audio", () => {
+  it.each([
+    [0.75, "before"],
+    [2.5, "before"],
+    [3.001, "before"],
+    [4.2, "before"],
+    [6.5, "before"],
+    [0.75, "after"],
+    [2.5, "after"],
+    [3.001, "after"],
+    [4.2, "after"],
+    [6.5, "after"],
+  ])(
+    "keeps a second utterance %s s after the first, which arrived %s the switch",
+    async (gapSeconds, firstArrives) => {
+      vi.useFakeTimers();
+      const { sockets, start, switchTo, speak, savedTexts } = await fixture(SARVAM);
+      await start("hi");
+      const before = sockets[0];
+      await speak();
+      const spokeAt = Date.now();
+
+      if (firstArrives === "before") {
+        before.emit(sarvamFinal("first", "First utterance."));
+        await settle();
+      }
+      await switchTo("ta");
+      if (firstArrives === "after") {
+        before.emit(sarvamFinal("first", "First utterance."));
+        await settle();
+      }
+      await vi.advanceTimersByTimeAsync(gapSeconds * 1_000);
+      expect(before.closed).toBe(false);
+      before.emit(sarvamFinal("second", "Second utterance."));
+      await settle();
+
+      expect(savedTexts()).toEqual(["First utterance.", "Second utterance."]);
+      await vi.advanceTimersByTimeAsync(spokeAt + 10_100 - Date.now());
+      expect(before.closed).toBe(true);
+    },
+  );
+});
+
+describe("order inside a replaced provider", () => {
+  it("keeps commit order when the old provider's finals arrive reversed", async () => {
+    vi.useFakeTimers();
+    const { sockets, start, switchTo, speak, commit, savedTexts } = await fixture(OPENAI);
+    await start("en");
+    const before = sockets[0];
+    await speak();
+    await commit();
+    before.emit(openAiCommitted("first"));
+    await speak();
+    await commit();
+    before.emit(openAiCommitted("second"));
+    await settle();
+
+    await switchTo("hi");
+    before.emit(openAiFinal("second", "Second."));
+    before.emit(openAiFinal("first", "First."));
+    await settle();
+
+    expect(savedTexts()).toEqual(["First.", "Second."]);
+  });
+
+  it("keeps commit order for commits acknowledged after the switch", async () => {
+    vi.useFakeTimers();
+    const { sockets, start, switchTo, speak, commit, savedTexts } = await fixture(OPENAI);
+    await start("en");
+    const before = sockets[0];
+    await speak();
+    await commit();
+    await speak();
+    await commit();
+
+    await switchTo("hi");
+    before.emit(openAiCommitted("first"));
+    before.emit(openAiCommitted("second"));
+    before.emit(openAiFinal("second", "Second."));
+    before.emit(openAiFinal("first", "First."));
+    await settle();
+
+    expect(savedTexts()).toEqual(["First.", "Second."]);
   });
 });
 

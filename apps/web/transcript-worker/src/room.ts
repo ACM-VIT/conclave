@@ -39,7 +39,6 @@ import {
   TRANSCRIPT_SFU_RELAY_RECOVERY_GRACE_MS,
   TRANSCRIPTION_COMMIT_ACK_TIMEOUT_MS,
   TRANSCRIPTION_CONNECT_TIMEOUT_MS,
-  TRANSCRIPTION_DRAIN_QUIET_MS,
   TRANSCRIPTION_DRAIN_SEQUENCE_BLOCK,
   TRANSCRIPTION_PROVIDER_DRAIN_MS,
 } from "./constants";
@@ -140,10 +139,12 @@ type ProviderDrain = {
   session: LiveTranscriptionSession;
   epoch: number;
   partials: Map<string, TranscriptSegment>;
+  // Places taken in commit order for lines with no text yet.
+  reserved: Map<string, TranscriptSegment>;
   unfinalizedItems: Set<string>;
   pendingCommits: number;
   // OpenAI acknowledges each commit, so it is done once nothing is owed.
-  // Sarvam acknowledges nothing, so it is done once it has gone quiet.
+  // Sarvam acknowledges nothing, so it drains to its deadline.
   settlesOnAcks: boolean;
   speakers: TranscriptSpeakerAttribution;
   latestSpeaker: TranscriptSpeaker | null;
@@ -151,7 +152,6 @@ type ProviderDrain = {
   nextSequence: number;
   endSequence: number;
   deadline: ReturnType<typeof setTimeout>;
-  quietTimer: ReturnType<typeof setTimeout> | null;
 };
 
 export class TranscriptRoom {
@@ -166,6 +166,7 @@ export class TranscriptRoom {
   // whether it has heard audio since its last final.
   private readonly unfinalizedItems = new Set<string>();
   private audioSinceLastFinal = false;
+  private lastAudioAt = 0;
   private hasPendingAudio = false;
   private pendingAudioSamples = 0;
   private session: TranscriptSessionState | null = null;
@@ -1265,6 +1266,7 @@ export class TranscriptRoom {
       this.transcriptionReplayJournal.append(audio, speaker, sampleCount);
       this.latestSpeaker = speaker;
       this.audioSinceLastFinal = true;
+      this.lastAudioAt = Date.now();
       this.hasPendingAudio = true;
       this.pendingAudioSamples += sampleCount;
       return true;
@@ -1623,11 +1625,17 @@ export class TranscriptRoom {
         false,
       );
     }
-    const owesWork =
-      this.partialSegments.size > 0 ||
-      this.unfinalizedItems.size > 0 ||
-      this.pendingTranscriptionCommitAcks.length > 0 ||
-      this.audioSinceLastFinal;
+    const now = Date.now();
+    const settlesOnAcks = session.provider === "openai";
+    // Sarvam never says what it still owes, so any Sarvam connection that
+    // heard audio in the last 10 seconds drains until 10 seconds after it.
+    const owesWork = settlesOnAcks
+      ? this.partialSegments.size > 0 ||
+        this.unfinalizedItems.size > 0 ||
+        this.pendingTranscriptionCommitAcks.length > 0 ||
+        this.audioSinceLastFinal
+      : this.partialSegments.size > 0 ||
+        now - this.lastAudioAt < TRANSCRIPTION_PROVIDER_DRAIN_MS;
     if (!owesWork) return;
     try {
       session.finishAudio();
@@ -1635,24 +1643,27 @@ export class TranscriptRoom {
     const epoch = this.transcriptionConnectionEpoch;
     const firstSequence = this.sequence;
     this.sequence += TRANSCRIPTION_DRAIN_SEQUENCE_BLOCK;
+    const drainMs = settlesOnAcks
+      ? TRANSCRIPTION_PROVIDER_DRAIN_MS
+      : Math.max(0, this.lastAudioAt + TRANSCRIPTION_PROVIDER_DRAIN_MS - now);
     const drain: ProviderDrain = {
       session,
       epoch,
       partials: new Map(this.partialSegments),
+      reserved: new Map(),
       unfinalizedItems: new Set(this.unfinalizedItems),
       pendingCommits: this.pendingTranscriptionCommitAcks.length,
-      settlesOnAcks: session.provider === "openai",
+      settlesOnAcks,
       speakers: this.speakerAttribution,
       latestSpeaker: this.latestSpeaker,
-      startedAt: Date.now(),
+      startedAt: now,
       nextSequence: firstSequence,
       endSequence: this.sequence,
-      deadline: setTimeout(
-        () => void this.finishProviderDrain(drain),
-        TRANSCRIPTION_PROVIDER_DRAIN_MS,
-      ),
-      quietTimer: null,
+      deadline: setTimeout(() => void this.finishProviderDrain(drain), drainMs),
     };
+    for (const itemId of drain.unfinalizedItems) {
+      if (!drain.partials.has(itemId)) this.reserveDrainedSegment(drain, itemId);
+    }
     this.providerDrains.set(epoch, drain);
     this.transcriptionSession = null;
     this.speakerAttribution = new TranscriptSpeakerAttribution();
@@ -1663,7 +1674,6 @@ export class TranscriptRoom {
     if (this.providerDrains.get(drain.epoch) !== drain) return [];
     this.providerDrains.delete(drain.epoch);
     clearTimeout(drain.deadline);
-    if (drain.quietTimer !== null) clearTimeout(drain.quietTimer);
     try {
       drain.session.close();
     } catch {}
@@ -1714,20 +1724,19 @@ export class TranscriptRoom {
   }
 
   /**
-   * The segment for a drained item. One that has no partial yet takes a
-   * place reserved when the drain began, so speech from before the switch
-   * stays ahead of the new provider's.
+   * Takes the next place in the drain's reserved block for a line with no
+   * text yet, in commit order, so speech from before the switch stays ahead
+   * of the new provider's and in the order it was spoken.
    */
-  private drainedSegment(drain: ProviderDrain, itemId: string): TranscriptSegment {
-    const existing =
-      drain.partials.get(itemId) ??
-      this.segments.find((segment) => segment.itemId === itemId);
-    if (existing) return existing;
+  private reserveDrainedSegment(
+    drain: ProviderDrain,
+    itemId: string,
+  ): TranscriptSegment {
     const sequence =
       drain.nextSequence < drain.endSequence
         ? drain.nextSequence++
         : this.sequence++;
-    return this.createSegment(
+    const segment = this.createSegment(
       itemId,
       drain.speakers.getItemSpeaker(itemId) ??
         drain.speakers.peekPendingSpeaker() ??
@@ -1735,12 +1744,26 @@ export class TranscriptRoom {
         this.controllerSpeaker(),
       { sequence, startMs: drain.startedAt },
     );
+    drain.reserved.set(itemId, segment);
+    return segment;
+  }
+
+  private drainedSegment(drain: ProviderDrain, itemId: string): TranscriptSegment {
+    return (
+      drain.partials.get(itemId) ??
+      this.segments.find((segment) => segment.itemId === itemId) ??
+      drain.reserved.get(itemId) ??
+      this.reserveDrainedSegment(drain, itemId)
+    );
   }
 
   private applyDrainedCommit(drain: ProviderDrain, itemId: string): void {
     drain.pendingCommits = Math.max(0, drain.pendingCommits - 1);
     drain.speakers.bindCommittedItem(itemId);
     drain.unfinalizedItems.add(itemId);
+    if (!drain.partials.has(itemId) && !drain.reserved.has(itemId)) {
+      this.reserveDrainedSegment(drain, itemId);
+    }
   }
 
   private applyDrainedDelta(
@@ -1770,25 +1793,19 @@ export class TranscriptRoom {
   ): Promise<void> {
     const segment = this.drainedSegment(drain, itemId);
     drain.partials.delete(itemId);
+    drain.reserved.delete(itemId);
     drain.unfinalizedItems.delete(itemId);
     this.settleProviderDrain(drain);
     await this.saveFinalSegment(segment, transcript);
   }
 
   private settleProviderDrain(drain: ProviderDrain): void {
-    if (drain.settlesOnAcks) {
-      const owesNothing =
-        drain.partials.size === 0 &&
-        drain.unfinalizedItems.size === 0 &&
-        drain.pendingCommits === 0;
-      if (owesNothing) this.discardProviderDrain(drain);
-      return;
-    }
-    if (drain.quietTimer !== null) clearTimeout(drain.quietTimer);
-    drain.quietTimer = setTimeout(
-      () => void this.finishProviderDrain(drain),
-      TRANSCRIPTION_DRAIN_QUIET_MS,
-    );
+    if (!drain.settlesOnAcks) return;
+    const owesNothing =
+      drain.partials.size === 0 &&
+      drain.unfinalizedItems.size === 0 &&
+      drain.pendingCommits === 0;
+    if (owesNothing) this.discardProviderDrain(drain);
   }
 
   private resetTranscriptionAudioState(): void {
@@ -1796,6 +1813,7 @@ export class TranscriptRoom {
     this.partialSegments.clear();
     this.unfinalizedItems.clear();
     this.audioSinceLastFinal = false;
+    this.lastAudioAt = 0;
     this.speakerAttribution.reset();
     this.transcriptionReplayJournal.reset();
     this.latestSpeaker = null;
