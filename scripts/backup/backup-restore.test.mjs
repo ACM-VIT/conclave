@@ -19,7 +19,7 @@ const hasTool = (tool) => {
     return false;
   }
 };
-const missing = ["age", "age-keygen", "sqlite3", "sha256sum"].filter((tool) => !hasTool(tool));
+const missing = ["age", "age-keygen", "sqlite3", "sha256sum", "fuser"].filter((tool) => !hasTool(tool));
 const missingWithRedis = [...missing, ...["redis-server", "redis-cli"].filter((tool) => !hasTool(tool))];
 
 // A state dir, an age key pair and a backup.env, as on the VM.
@@ -54,7 +54,7 @@ const setUp = async (root, extraConfig = []) => {
   };
   const restore = (...args) =>
     run("bash", [path.join(scripts, "restore.sh"), "--identity", key, ...args], { env });
-  return { state, local, repo, backup, latestArchive, restore };
+  return { state, local, repo, config, backup, latestArchive, restore };
 };
 
 test(
@@ -62,18 +62,20 @@ test(
   { skip: missing.length > 0 && `needs ${missing.join(", ")} on PATH` },
   async (t) => {
     const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+    let db;
+    let writer;
     try {
       const { state, local, backup, latestArchive, restore } = await setUp(root);
 
       // The SFU's own settings: WAL mode, and a writer that keeps going while
       // the backup runs.
-      const db = new DatabaseSync(path.join(state, "conclave.sqlite"));
+      db = new DatabaseSync(path.join(state, "conclave.sqlite"));
       db.exec("PRAGMA journal_mode = WAL");
       db.exec("CREATE TABLE scheduled_meetings (id TEXT PRIMARY KEY, title TEXT)");
       const insert = db.prepare("INSERT INTO scheduled_meetings VALUES (?, ?)");
       for (let i = 0; i < 500; i += 1) insert.run(`m${i}`, `Meeting ${i}`);
       let written = 500;
-      const writer = setInterval(() => {
+      writer = setInterval(() => {
         insert.run(`m${written}`, `Meeting ${written}`);
         written += 1;
       }, 2);
@@ -81,10 +83,14 @@ test(
 
       await backup("--local-only");
       clearInterval(writer);
+
+      const archive = await latestArchive();
+      // This test process holds the database open, as a running SFU does,
+      // while its health URL answers nothing.
+      await assert.rejects(restore("--file", archive, "--yes"), /still holds .*conclave\.sqlite open/);
       db.close();
 
       assert.equal((await readdir(local)).filter((name) => name.endsWith(".tar.gz.age")).length, 1);
-      const archive = await latestArchive();
       assert.ok(!(await readFile(archive)).includes("SQLite format 3"), "the archive must be encrypted");
 
       const dryRun = await restore("--file", archive);
@@ -108,6 +114,8 @@ test(
       await writeFile(archive, damaged);
       await assert.rejects(restore("--file", archive), "a damaged archive must not restore");
     } finally {
+      clearInterval(writer);
+      if (db?.isOpen) db.close();
       await rm(root, { recursive: true, force: true });
     }
   },
@@ -142,7 +150,7 @@ test(
       for (let i = 0; i < 50 && (await cli("PING").catch(() => "")) !== "PONG"; i += 1) {
         await new Promise((done) => setTimeout(done, 100));
       }
-      const { state, repo, backup, latestArchive, restore } = await setUp(root, [
+      const { state, repo, config, backup, latestArchive, restore } = await setUp(root, [
         `SFU_PERSISTENCE_REDIS_URL=redis://127.0.0.1:${port}/0`,
       ]);
       // The SFU's database one level down, named the way the compose file
@@ -184,6 +192,17 @@ test(
       // volume, so the backup must fail rather than skip it.
       await writeFile(path.join(repo, ".env"), "CONCLAVE_SQLITE_PATH=/app/packages/sfu/data/conclave.sqlite\n");
       await assert.rejects(backup("--local-only"), /outside the state dir/);
+
+      // The Redis step cannot reach a TLS Redis, so the restore must refuse
+      // before it replaces any file.
+      await writeFile(config, `${await readFile(config, "utf8")}\nSFU_PERSISTENCE_REDIS_URL=rediss://127.0.0.1:${port}/0\n`);
+      const live = new DatabaseSync(path.join(state, "data", "conclave.sqlite"));
+      live.exec("INSERT INTO scheduled_webinars VALUES ('w2', 'Webinar 2')");
+      live.close();
+      await assert.rejects(restore("--file", await latestArchive(), "--yes"), /TLS/);
+      const untouched = new DatabaseSync(path.join(state, "data", "conclave.sqlite"), { readOnly: true });
+      assert.equal(untouched.prepare("SELECT count(*) AS n FROM scheduled_webinars").get().n, 2);
+      untouched.close();
     } finally {
       redis.kill();
       await rm(root, { recursive: true, force: true });

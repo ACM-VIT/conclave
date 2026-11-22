@@ -80,6 +80,17 @@ done
 log "Archive verified. Manifest:"
 sed 's/^/  /' "${payload}/MANIFEST"
 
+# The Redis step runs last, so anything that would stop it is checked before
+# the first file changes. MIGRATE runs inside the scratch server, which has no
+# TLS client setup, so it cannot reach a rediss:// destination.
+restore_redis="false"
+if wants redis && [[ -f "${payload}/redis/dump.rdb" ]]; then
+  restore_redis="true"
+  [[ -n "$REDIS_SOURCE_URL" ]] || die "no Redis URL configured to restore into; set one, or pass --only sqlite,files"
+  parse_redis_url "$REDIS_SOURCE_URL"
+  [[ "$REDIS_TLS" != "1" ]] || die "cannot restore Redis keys into a TLS (rediss://) Redis; pass --only sqlite,files"
+fi
+
 if [[ "$apply" != "true" ]]; then
   echo ""
   echo "Dry run: nothing changed. Rerun with --yes to restore ${only} into ${STATE_DIR}."
@@ -92,6 +103,15 @@ for url in ${CONCLAVE_SFU_HEALTH_URLS:-http://127.0.0.1:3031/health http://127.0
     die "an SFU still answers at ${url}; stop the SFU containers before restoring"
   fi
 done
+# Silence is not proof: a wrong health URL misses a running SFU. An SFU holds
+# its databases open for as long as it runs, in a container or not.
+command -v fuser >/dev/null || die "fuser is not installed (apt-get install psmisc)"
+mapfile -t live_databases < <(sqlite_files "$STATE_DIR")
+for rel in "${live_databases[@]}"; do
+  holders="$(fuser "${STATE_DIR}/${rel}" 2>/dev/null | xargs || true)"
+  [[ -z "$holders" ]] || die "PID ${holders} still holds ${STATE_DIR}/${rel} open; stop the SFU containers before restoring"
+done
+
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "$STATE_DIR"
 
@@ -121,9 +141,7 @@ fi
 # the restored SQLite copy, so a key written after the backup would otherwise
 # outlive the restore. Keys outside the pattern, such as room leases and
 # presence, are left alone.
-if wants redis && [[ -f "${payload}/redis/dump.rdb" ]]; then
-  [[ -n "$REDIS_SOURCE_URL" ]] || die "no Redis URL configured to restore into"
-  parse_redis_url "$REDIS_SOURCE_URL"
+if [[ "$restore_redis" == "true" ]]; then
   scratch="${work}/redis"
   mkdir -p "$scratch"
   mv "${payload}/redis/dump.rdb" "${scratch}/dump.rdb"
