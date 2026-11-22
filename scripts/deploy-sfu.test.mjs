@@ -19,17 +19,22 @@ const secret = "deploy-test-secret";
 // Every drain and recreate across the fake SFUs, in the order they happened.
 const events = [];
 
-// down: the container is stopped, so nothing answers until a recreate.
-// replacementHealthy: false for a build whose containers never report healthy.
-const startSfu = async (instanceId, { rooms = 0, statusAnswers = true, down = false, replacementHealthy = true } = {}) => {
-  const sfu = { instanceId, rooms, draining: false, statusAnswers, down, healthy: true, drains: [], recreates: [] };
+// container: "running" for an hour, "exited", "crash-looping" (restarted
+// seconds ago) or "hung" (running for an hour). Only "running" answers HTTP
+// until a recreate. replacementHealthy: false for a build whose containers
+// never report healthy.
+const startSfu = async (instanceId, { rooms = 0, statusAnswers = true, container = "running", replacementHealthy = true } = {}) => {
+  const sfu = { instanceId, rooms, draining: false, statusAnswers, container, healthy: true, drains: [], recreates: [] };
   const server = createServer(async (req, res) => {
     let body = "";
     for await (const chunk of req) body += chunk;
     const url = new URL(req.url, "http://sfu");
     const json = (value, status = 200) => res.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(value));
-    if (url.pathname === "/stand-in/state") return json({ status: sfu.down ? "exited" : "running" });
-    if (sfu.down && !url.pathname.startsWith("/stand-in/")) return req.socket.destroy();
+    if (url.pathname === "/stand-in/state") {
+      const startedAt = new Date(Date.now() - (sfu.container === "crash-looping" ? 3_000 : 3_600_000)).toISOString();
+      return json({ status: sfu.container === "exited" ? "exited" : "running", startedAt });
+    }
+    if (sfu.container !== "running" && !url.pathname.startsWith("/stand-in/")) return req.socket.destroy();
     if (url.pathname === "/health") return sfu.healthy ? json({ status: "healthy" }) : json({ status: "starting" }, 503);
     if (url.pathname === "/status") {
       if (!sfu.statusAnswers) return json({ error: "unavailable" }, 503);
@@ -48,7 +53,7 @@ const startSfu = async (instanceId, { rooms = 0, statusAnswers = true, down = fa
       sfu.recreates.push({ roomsCut: sfu.rooms });
       events.push(`recreate ${instanceId}`);
       sfu.rooms = 0;
-      sfu.down = false;
+      sfu.container = "running";
       sfu.healthy = replacementHealthy;
       sfu.draining = url.searchParams.get("draining") === "true";
       return json({ ok: true });
@@ -105,7 +110,7 @@ const main = async () => {
     if (format.includes(".State.Status")) {
       const name = args.at(-1).replace(/^ctr-/, "");
       const state = await (await fetch("http://127.0.0.1:" + sfus[name].port + "/stand-in/state")).json();
-      return out(state.status);
+      return out(format.includes(".State.StartedAt") ? state.status + " " + state.startedAt : state.status);
     }
     if (format.includes("config-hash")) return out("older-hash");
     if (format.includes(".Image")) return out("sha256:running");
@@ -254,7 +259,7 @@ test("a replacement that never reports healthy stops the deploy before the other
 });
 
 test("an instance that is down is brought up before a healthy one is drained", async () => {
-  await withSfus({ "sfu-a": { rooms: 1 }, "sfu-b": { down: true } }, async (sfus) => {
+  await withSfus({ "sfu-a": { rooms: 1 }, "sfu-b": { container: "exited" } }, async (sfus) => {
     const result = await deploy(sfus);
     passedPreflight(result);
     assert.equal(result.code, 3, result.output);
@@ -265,7 +270,7 @@ test("an instance that is down is brought up before a healthy one is drained", a
 });
 
 test("an instance that is down and whose replacement fails leaves the healthy one undrained", async () => {
-  await withSfus({ "sfu-a": { rooms: 1 }, "sfu-b": { down: true, replacementHealthy: false } }, async (sfus) => {
+  await withSfus({ "sfu-a": { rooms: 1 }, "sfu-b": { container: "exited", replacementHealthy: false } }, async (sfus) => {
     const result = await deploy(sfus);
     assert.equal(result.code, 4, result.output);
     assert.equal(sfus["sfu-a"].drains.length, 0);
@@ -273,7 +278,7 @@ test("an instance that is down and whose replacement fails leaves the healthy on
 });
 
 test("no instance is drained while another is down, even one outside the deploy", async () => {
-  await withSfus({ "sfu-a": { rooms: 0 }, "sfu-b": { down: true } }, async (sfus) => {
+  await withSfus({ "sfu-a": { rooms: 0 }, "sfu-b": { container: "exited" } }, async (sfus) => {
     const result = await deploy(sfus, { env: { SFU_DEPLOY_SERVICES: "sfu-a" } });
     assert.equal(result.code, 1, result.output);
     assert.match(result.output, /Not draining sfu-a: sfu-b does not report healthy/);
@@ -315,6 +320,24 @@ console.log("SFU deployment preflight passed (newer rules).");
     assert.match(result.output, /SFU_WORKER_COUNT 5 is above the WebRTC port budget 4/);
     const changes = result.docker.filter((args) => ["build", "up", "run", "tag", "stop"].some((verb) => args.includes(verb)));
     assert.deepEqual(changes, [], "nothing may be built or changed after the preflight fails");
+    assert.deepEqual(events, []);
+  });
+});
+
+test("a crash-looping instance is repaired first, before the healthy one is drained", async () => {
+  await withSfus({ "sfu-a": { rooms: 1 }, "sfu-b": { container: "crash-looping" } }, async (sfus) => {
+    const result = await deploy(sfus);
+    assert.equal(result.code, 3, result.output);
+    assert.equal(result.order, "sfu-b sfu-a");
+    assert.deepEqual(events, ["recreate sfu-b", "recreate sfu-b", "drain sfu-a", "drain sfu-a"]);
+  });
+});
+
+test("an instance that has run for an hour but stays silent is left alone", async () => {
+  await withSfus({ "sfu-a": { rooms: 0 }, "sfu-b": { container: "hung" } }, async (sfus) => {
+    const result = await deploy(sfus, { env: { SFU_DEPLOY_SERVICES: "sfu-b" } });
+    assert.equal(result.code, 1, result.output);
+    assert.match(result.output, /sfu-b's container is running but nothing answers/);
     assert.deepEqual(events, []);
   });
 });

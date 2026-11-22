@@ -398,9 +398,21 @@ service_container() {
   "${COMPOSE[@]}" ps -aq "$1" 2>/dev/null | head -n 1
 }
 
+# True when a container has been running for a minute or more, so it may
+# carry calls even while nothing answers. One that is restarting, or that
+# started moments ago as a crash-looping container does, carries none.
+container_long_running() {
+  local container="$1" state started
+  [[ -n "$container" ]] || return 1
+  read -r state started < <(docker inspect -f '{{.State.Status}} {{.State.StartedAt}}' "$container")
+  [[ "$state" == "running" ]] || return 1
+  (( $(node -e 'console.log(Math.floor((Date.now() - Date.parse(process.argv[1])) / 1000))' "$started") >= 60 ))
+}
+
 # An instance's place in the deploy order, as "<class> <rooms>". Instances
 # that take no new meetings go first, since rebuilding them costs no
-# capacity: 0 when its container is down, 1 when it is draining. Serving
+# capacity: 0 when its container is down or crash-looping, 1 when it is
+# draining. Serving
 # instances follow as class 2, emptiest first. Class 3, last, is one whose
 # /status cannot be read: its rooms are unknown, so it is never taken for
 # the idle instance.
@@ -421,8 +433,7 @@ deploy_rank() {
     return
   fi
   container="$(service_container "$svc")"
-  if ! answers_http "$url" &&
-     { [[ -z "$container" ]] || [[ "$(docker inspect -f '{{.State.Status}}' "$container")" != "running" ]]; }; then
+  if ! answers_http "$url" && ! container_long_running "$container"; then
     echo "0 0"
   else
     echo "3 0"
@@ -602,7 +613,7 @@ deploy_service() {
     # Up but its status is unreadable: its rooms are unknown, so leave it.
     echo "${svc} answers but its /status cannot be read; not rebuilding it." >&2
     return 1
-  elif [[ -n "$container" && "$(docker inspect -f '{{.State.Status}}' "$container")" == "running" ]]; then
+  elif container_long_running "$container"; then
     # Silent is not stopped: a wrong URL or proxy hides a container that may
     # still carry calls.
     echo "${svc}'s container is running but nothing answers at ${url}; check that URL, or stop ${svc} if it is hung. Not rebuilding it." >&2
