@@ -131,3 +131,45 @@ describe("a socket that is still open after a join failed", () => {
     expect(adoptJoinIdentity).toHaveBeenLastCalledWith(tokenFor("room-b"), "room-b");
   });
 });
+
+describe("a join that starts over under the identity its token named", () => {
+  const capture = (id: string) => {
+    const track = { id, kind: "audio", readyState: "live", stop: vi.fn() };
+    const stream = {
+      id,
+      getTracks: () => [track],
+      getAudioTracks: () => [track],
+      getVideoTracks: () => [],
+    } as unknown as MediaStream;
+    return { track, stream };
+  };
+
+  it("asks for the microphone once, and leaves no capture outside the page's stream", async () => {
+    const adoptJoinIdentity = vi.fn(() => false).mockReturnValueOnce(true);
+    const answerCapture: Array<(stream: MediaStream) => void> = [];
+    const captures = [capture("first"), capture("second")];
+    const requestMediaPermissions = vi.fn(
+      () => new Promise<MediaStream>((resolve) => answerCapture.push(resolve)),
+    );
+    let pageStream: MediaStream | null = null;
+    const setLocalStream = vi.fn((next: MediaStream | null | ((current: MediaStream | null) => MediaStream | null)) => {
+      pageStream = typeof next === "function" ? next(pageStream) : next;
+    });
+    const stopLocalTrack = vi.fn();
+    const h = createHarness({ adoptJoinIdentity, requestMediaPermissions, setLocalStream, stopLocalTrack });
+
+    await h.api.joinRoomById("room-a");
+    expect(answerCapture).toHaveLength(1);
+    const rejoined = h.api.joinRoomById("room-a");
+    await vi.waitFor(() => expect(h.io).toHaveBeenCalledTimes(1));
+    answerCapture.forEach((answer, index) => answer(captures[index].stream));
+    await vi.waitFor(() => expect(setLocalStream).toHaveBeenCalled());
+    const failSocket = h.socket.on.mock.calls.find(([name]) => name === "connect_error")?.[1];
+    failSocket?.(...([new Error("the signaling connection closed")] as never[]));
+    await rejoined;
+
+    expect(requestMediaPermissions).toHaveBeenCalledTimes(1);
+    expect(stopLocalTrack).toHaveBeenCalledWith(captures[0].track);
+    expect(pageStream).toBeNull();
+  });
+});

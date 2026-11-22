@@ -1096,6 +1096,10 @@ export function useMeetSocket({
   const serverRoomIdRef = useRef<string | null>(null);
   const socketRoomIdRef = useRef<string | null>(null);
   const identityRestartRoomIdRef = useRef<string | null>(null);
+  const identityRestartMediaRef = useRef<{
+    roomId: string;
+    request: Promise<MediaStream | null>;
+  } | null>(null);
   const foregroundRecoveryTimeoutRef = useRef<number | null>(null);
   const runtimeStunIceServersRef = useRef<RTCIceServer[] | null>(null);
   const runtimeTurnIceServersRef = useRef<RTCIceServer[] | null>(null);
@@ -9339,16 +9343,26 @@ export function useMeetSocket({
         !bypassMediaPermissions &&
         (mediaNeeds.needsAudio || mediaNeeds.needsVideo);
 
-      try {
-        const [, stream] = await Promise.all([
-          connectSocket(targetRoomId),
-          shouldRequestMedia
+      // The attempt that starts over waits for the media request the first
+      // one made. A second request would capture the microphone and camera
+      // again, and nothing would ever stop the first capture.
+      const heldMedia = identityRestartMediaRef.current;
+      identityRestartMediaRef.current = null;
+      const mediaRequest =
+        continuesAttempt && heldMedia?.roomId === targetRoomId
+          ? heldMedia.request
+          : shouldRequestMedia
             ? ensureLiveLocalMediaForJoin(
                 candidateStream,
                 joinOptions,
                 "initial join",
               )
-            : Promise.resolve(candidateStream),
+            : Promise.resolve(candidateStream);
+
+      try {
+        const [, stream] = await Promise.all([
+          connectSocket(targetRoomId),
+          mediaRequest,
         ]);
         if (
           joinGeneration !== reconnectGenerationRef.current ||
@@ -9461,7 +9475,14 @@ export function useMeetSocket({
           joinGeneration !== reconnectGenerationRef.current ||
           intentionalDisconnectRef.current
         ) return;
-        if (err instanceof JoinIdentityChangedError) return;
+        if (err instanceof JoinIdentityChangedError) {
+          identityRestartMediaRef.current = {
+            roomId: targetRoomId,
+            request: mediaRequest,
+          };
+          void mediaRequest.catch(() => undefined);
+          return;
+        }
         console.error("[Meets] Error joining room:", err);
         telemetry.capture("meet_join_failure", {
           roomId: targetRoomId,
