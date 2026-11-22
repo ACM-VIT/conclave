@@ -96,6 +96,22 @@ export const sarvamCanTranscribe = (
   env: LiveTranscriptionConnectOptions["env"],
 ): boolean => supportedSarvamLanguageCode(language, languageChosen, env) !== null;
 
+/**
+ * The language a Sarvam session really transcribes, or undefined when it
+ * auto-detects ("unknown").
+ */
+export const sarvamReportedLanguage = (
+  language: string,
+  languageChosen: boolean,
+  env: LiveTranscriptionConnectOptions["env"],
+): string | undefined => {
+  const code =
+    supportedSarvamLanguageCode(language, languageChosen, env) ??
+    env.TRANSCRIPT_SARVAM_LANGUAGE_CODE ??
+    language;
+  return code === "unknown" ? undefined : baseLanguage(code) || language;
+};
+
 const sarvamLanguageCode = (options: LiveTranscriptionConnectOptions): string =>
   supportedSarvamLanguageCode(
     options.language,

@@ -380,3 +380,31 @@ describe("drain lifetime", () => {
     expect(savedTexts()).toEqual([]);
   });
 });
+
+describe("the language a session reports", () => {
+  it("reports the operator's Sarvam language for a client that names none, and keeps it on a web resume", async () => {
+    vi.useFakeTimers();
+    const { room, sockets, start, switchTo } = await fixture(SARVAM, {
+      TRANSCRIPT_SARVAM_LANGUAGE_CODE: "hi-IN",
+    });
+    await start();
+    expect(room.session).toMatchObject({ language: "hi", languageChosen: false });
+
+    await switchTo();
+    expect(room.session).toMatchObject({ language: "hi", languageChosen: false });
+    const urls = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.map(([url]) =>
+      new URL(String(url)).searchParams.get("language-code"),
+    );
+    expect(urls).toEqual(["hi-IN", "hi-IN"]);
+    void sockets;
+  });
+
+  it("reports no fixed language when the operator's Sarvam code is auto-detect", async () => {
+    vi.useFakeTimers();
+    const { room, start } = await fixture(SARVAM, { TRANSCRIPT_SARVAM_LANGUAGE_CODE: "unknown" });
+    await start();
+
+    expect(room.session?.language).toBeUndefined();
+  });
+});
+

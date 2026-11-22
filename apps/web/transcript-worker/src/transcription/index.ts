@@ -5,7 +5,11 @@ import {
 } from "@conclave/meeting-core/transcript-models";
 import { DEFAULT_TRANSCRIPT_MODEL } from "../constants";
 import { connectOpenAiRealtimeTranscription } from "./openai-realtime";
-import { connectSarvamTranscription, sarvamCanTranscribe } from "./sarvam";
+import {
+  connectSarvamTranscription,
+  sarvamCanTranscribe,
+  sarvamReportedLanguage,
+} from "./sarvam";
 import type {
   LiveTranscriptionConnectOptions,
   LiveTranscriptionSession,
@@ -20,6 +24,17 @@ export const canTranscribeLanguage = (
   env: LiveTranscriptionConnectOptions["env"],
 ): boolean =>
   provider !== "sarvam" || sarvamCanTranscribe(language, languageChosen, env);
+
+/** The language a session reports: what the provider really transcribes. */
+export const reportedTranscriptionLanguage = (
+  provider: TranscriptTranscriptionProvider,
+  language: string,
+  languageChosen: boolean,
+  env: LiveTranscriptionConnectOptions["env"],
+): string | undefined =>
+  provider === "sarvam"
+    ? sarvamReportedLanguage(language, languageChosen, env)
+    : language;
 
 export const connectLiveTranscriptionProvider = async (
   options: LiveTranscriptionConnectOptions,

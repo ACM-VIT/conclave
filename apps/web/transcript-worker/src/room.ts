@@ -94,6 +94,7 @@ import type {
 } from "./types";
 import {
   canTranscribeLanguage,
+  reportedTranscriptionLanguage,
   connectLiveTranscriptionProvider,
   type LiveTranscriptionSession,
 } from "./transcription";
@@ -415,7 +416,12 @@ export class TranscriptRoom {
     this.session = {
       ...snapshot.session,
       status: "starting",
-      language: config.language,
+      language: reportedTranscriptionLanguage(
+        provider,
+        config.language,
+        config.languageChosen,
+        this.env,
+      ),
       languageChosen: config.languageChosen,
       updatedAt: Date.now(),
       error: null,
@@ -979,7 +985,12 @@ export class TranscriptRoom {
       transcriptModel,
       qaModel,
       transportMode,
-      language,
+      language: reportedTranscriptionLanguage(
+        transcriptionProvider,
+        language,
+        languageChosen,
+        providerEnv,
+      ),
       languageChosen,
       requestId,
       keySource:
