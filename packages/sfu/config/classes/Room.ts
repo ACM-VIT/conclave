@@ -119,7 +119,6 @@ const MAX_WEBINAR_QA_ENTRIES = 300;
 const MAX_WEBINAR_OPEN_QUESTIONS_PER_USER = 3;
 export const MAX_WEBINAR_QA_QUESTION_LENGTH = 500;
 export const MAX_WEBINAR_QA_ANSWER_LENGTH = 1000;
-const MAX_WEBINAR_PROMOTED_USER_KEYS = 200;
 const MAX_OPEN_ADMISSIONS = 50;
 const ADMISSION_TTL_MS = 2 * 60 * 1000;
 // A stage invite should cover one webinar (plus reconnects), not become a
@@ -336,13 +335,11 @@ export class Room {
    * gates (webinar room guard, lock, waiting room, invite code, guest policy)
    * without host re-approval.
    */
-  private webinarPromotedUserKeys: Map<string, number> = new Map();
   /**
    * Identities the host moved back to the audience. While webinar mode is on,
    * these may not re-enter as participants — a demoted client that ignores
    * the demote signal cannot simply rejoin the panel.
    */
-  private webinarDemotedUserKeys: Set<string> = new Set();
   private meetingParticipantCount = 0;
   private currentWebcamCodecPolicy: WebcamCodecPolicy =
     buildWebcamCodecPolicy("vp8", 0);
@@ -759,9 +756,7 @@ export class Room {
       this.adminUserKeys.has(userKey) ||
       this.admissions.names(this.principalOf(userKey), userKey) ||
       this.blockedUsers.has(userKey) ||
-      this.pendingClients.has(userKey) ||
-      this.webinarPromotedUserKeys.has(userKey) ||
-      this.webinarDemotedUserKeys.has(userKey)
+      this.pendingClients.has(userKey)
     ) {
       return true;
     }
@@ -1071,9 +1066,13 @@ export class Room {
     return kept;
   }
 
-  private recordRevocation(userKey: string, scopes: AdmissionScope[]): void {
-    this.admissions.revoke(this.principalOf(userKey), scopes, this.tick());
-    this.releaseGuestIdentity(userKey);
+  private recordRevocation(userKeys: string[], scopes: AdmissionScope[]): void {
+    this.admissions.revoke(
+      userKeys.map((userKey) => this.principalOf(userKey)),
+      scopes,
+      this.tick(),
+    );
+    for (const userKey of userKeys) this.releaseGuestIdentity(userKey);
   }
 
   // What a guest's waiting requests are filed under: its passes, by the
@@ -1555,79 +1554,76 @@ export class Room {
     return evictedIds;
   }
 
+  /**
+   * A host invites the guest behind `userKey` onto the stage. The invite is
+   * the guest's, under every linked pass, so the guest's stage tab is let in
+   * whatever key it comes back under. It also ends an earlier move back to
+   * the audience; nothing else does.
+   */
   promoteWebinarUserKey(userKey: string): void {
-    if (this.webinarPromotedUserKeys.size >= MAX_WEBINAR_PROMOTED_USER_KEYS) {
-      const oldest = this.webinarPromotedUserKeys.keys().next().value;
-      if (oldest !== undefined) {
-        this.revokeWebinarPromotion(oldest);
-      }
-    }
-    this.webinarPromotedUserKeys.set(
-      userKey,
-      Date.now() + WEBINAR_PROMOTION_TTL_MS,
-    );
-    for (const key of this.identitiesOfSameGuest(userKey)) {
-      this.webinarDemotedUserKeys.delete(key);
-    }
+    const principal = this.principalOf(userKey);
+    const at = this.tick();
+    this.admissions.admit(principal, userKey, ["stage"], at, {
+      answersRequest: false,
+      expiresAt: Date.now() + WEBINAR_PROMOTION_TTL_MS,
+    });
+    this.admissions.admit(principal, userKey, ["stageDemotion"], at, {
+      answersRequest: false,
+    });
   }
 
+  /** Takes back the stage invite of the guest behind `userKey`. */
   revokeWebinarPromotion(userKey: string): boolean {
-    const revoked = this.webinarPromotedUserKeys.delete(userKey);
+    const hadInvite = this.isWebinarPromotedUserKey(userKey);
+    this.admissions.revoke([this.principalOf(userKey)], ["stage"], this.tick());
     this.releaseGuestIdentity(userKey);
-    return revoked;
+    return hadInvite;
   }
 
   /**
-   * Whether a join as `userKey` holds a stage invite, taking the invite over
-   * when it was given to another key of the same guest pass.
-   *
-   * A guest's key is scoped to the room id it asked to join. An attendee
-   * joins through the webinar link and comes back for the stage through the
-   * room's own id, so it returns under another key than the one the host
-   * invited. The invite follows the pass: it moves to the key that presents
-   * the proof the invited key is bound to.
+   * Whether a join as `userKey` may go on stage: the latest stage decision
+   * across what the join speaks for is an invite that has not expired.
    */
-  takeWebinarPromotion(
-    userKey: string,
-    guestProof: string | undefined,
-  ): boolean {
-    if (this.isWebinarPromotedUserKey(userKey)) return true;
-    const bound = this.guestProofsByUserKey.get(userKey);
-    if (guestProof === undefined || (bound !== undefined && bound !== guestProof)) {
-      return false;
-    }
-    for (const [invitedKey, expiresAt] of this.webinarPromotedUserKeys) {
-      if (expiresAt <= Date.now() || !this.isKeyOfGuest(invitedKey, guestProof)) {
-        continue;
-      }
-      this.webinarPromotedUserKeys.delete(invitedKey);
-      this.webinarPromotedUserKeys.set(userKey, expiresAt);
-      // A fresh invite ends an earlier move back to the audience, for the
-      // key the invite lands on as for the key the host invited.
-      this.webinarDemotedUserKeys.delete(userKey);
-      this.bindGuestProof(userKey, guestProof);
-      this.releaseGuestIdentity(invitedKey);
-      return true;
-    }
-    return false;
+  hasStageInvite(userKey: string, roomGuestProof: string | undefined): boolean {
+    return this.admissions.admits(
+      this.principalsOfJoin(userKey, roomGuestProof),
+      "stage",
+    );
   }
 
   isWebinarPromotedUserKey(userKey: string): boolean {
-    const expiresAt = this.webinarPromotedUserKeys.get(userKey);
-    if (expiresAt === undefined) return false;
-    if (expiresAt <= Date.now()) {
-      this.revokeWebinarPromotion(userKey);
-      return false;
-    }
-    return true;
+    const invited = this.admissions.admits(
+      this.principalsOfRequest(userKey),
+      "stage",
+    );
+    // An invite that ran out no longer holds the key's binding.
+    if (!invited) this.releaseGuestIdentity(userKey);
+    return invited;
   }
 
+  /**
+   * A host moves the guest behind `userKey` back to the audience. Every stage
+   * invite the guest holds ends, under every linked pass, and the guest may
+   * not come back as a participant until a newer invite.
+   */
   markWebinarDemotedUserKey(userKey: string): void {
-    this.webinarDemotedUserKeys.add(userKey);
+    this.admissions.revoke(
+      [this.principalOf(userKey)],
+      ["stage", "stageDemotion"],
+      this.tick(),
+    );
+    this.releaseGuestIdentity(userKey);
   }
 
+  /**
+   * Whether the guest behind `userKey` was moved back to the audience and
+   * not invited since. A refusal follows any proof the join carries.
+   */
   isWebinarDemotedUserKey(userKey: string, guestProof?: string): boolean {
-    return this.guestHolds(this.webinarDemotedUserKeys, userKey, guestProof);
+    return this.admissions.refuses(
+      this.principalsOfJoin(userKey, guestProof),
+      "stageDemotion",
+    );
   }
 
   // Retain the most recent broadcast (non-DM) chat messages so a late-joining
@@ -2518,15 +2514,15 @@ export class Room {
   }
 
   private dropRejoinGrantsOf(userKeys: Iterable<string>): void {
-    for (const key of userKeys) {
-      this.admissions.revoke(
-        this.principalOf(key),
-        ["waitingRoom", "lock"],
-        this.tick(),
-      );
+    const keys = [...userKeys];
+    this.admissions.revoke(
+      keys.map((key) => this.principalOf(key)),
+      ["waitingRoom", "lock", "stage"],
+      this.tick(),
+    );
+    for (const key of keys) {
       this.adminUserKeys.delete(key);
       if (this.hostUserKey === key) this.hostUserKey = null;
-      this.webinarPromotedUserKeys.delete(key);
       this.releaseGuestIdentity(key);
     }
   }
@@ -3064,8 +3060,6 @@ export class Room {
     this.webinarFeedProducerIds = [];
     this.webinarRaisedHandAt.clear();
     this.webinarQaEntries.clear();
-    this.webinarPromotedUserKeys.clear();
-    this.webinarDemotedUserKeys.clear();
     this.assignMeetingInviteCodeHash(null);
   }
 
@@ -3196,9 +3190,7 @@ export class Room {
   }
 
   revokeAllowedUser(userKey: string) {
-    for (const key of this.identitiesOfSameGuest(userKey)) {
-      this.recordRevocation(key, ["waitingRoom"]);
-    }
+    this.recordRevocation(this.identitiesOfSameGuest(userKey), ["waitingRoom"]);
   }
 
   /** Returns false when the room cannot admit `userKey` (see `canGrantTo`). */
@@ -3218,9 +3210,7 @@ export class Room {
   }
 
   revokeLockedAllowedUser(userKey: string) {
-    for (const key of this.identitiesOfSameGuest(userKey)) {
-      this.recordRevocation(key, ["lock"]);
-    }
+    this.recordRevocation(this.identitiesOfSameGuest(userKey), ["lock"]);
   }
 
   /**

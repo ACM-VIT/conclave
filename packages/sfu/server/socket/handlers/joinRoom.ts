@@ -292,7 +292,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           Boolean(
             state.rooms
               .get(resolvedChannelId)
-              ?.takeWebinarPromotion(userKey, roomGuestProof),
+              ?.hasStageInvite(userKey, roomGuestProof),
           );
         if (
           isActiveScheduledWebinarRoom &&
@@ -843,6 +843,8 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         }
 
         room.clearPendingDisconnect(userId);
+        // This tab is let in, so a request it left in the lobby is over.
+        withdrawWaitingRequest(room, userKey);
 
         for (const stale of staleSameIdentitySeats) {
           Logger.warn(

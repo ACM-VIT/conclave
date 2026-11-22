@@ -429,10 +429,9 @@ export const registerWebinarInteractionHandlers = (
         }
 
         if (targetUserKey) {
-          guard.room.revokeWebinarPromotion(targetUserKey);
-          // While webinar mode is on, this identity may not slip back in as
-          // a participant — a client that ignores the demote signal below
-          // must not be able to simply rejoin the panel.
+          // While webinar mode is on, this guest may not slip back in as a
+          // participant under any of its keys: a client that ignores the
+          // demote signal below must not be able to simply rejoin the panel.
           guard.room.markWebinarDemotedUserKey(targetUserKey);
         }
 

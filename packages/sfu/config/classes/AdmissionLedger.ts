@@ -3,17 +3,36 @@
  * decision per principal and per scope, on the room's lobby clock.
  *
  * A principal is a guest pass (`pass:<proof>`) or a single user key
- * (`key:<userKey>`). Whether a join may pass the waiting room or the lock
- * is never stored as a flag: it is the latest decision across the
- * principals the join speaks for (see `admits`). Requests to be let in are
- * on the same clock, so a decision can be told apart from a request that
- * came after it (see `latestAnswer`).
+ * (`key:<userKey>`). Whether a join may pass the waiting room or the lock,
+ * or go on stage in a webinar, is never stored as a flag: it is the latest
+ * decision for that scope across the principals the join speaks for (see
+ * `admits`). Every refusal is recorded, whether or not the principal had a
+ * record, so a refusal made after an admission always wins. Requests to be
+ * let in are on the same clock, so a decision can be told apart from a
+ * request that came after it (see `latestAnswer`).
+ *
+ * Scopes: `waitingRoom` and `lock` are admissions; `stage` is a webinar
+ * stage invite, which expires; `stageDemotion` is a move back to the
+ * audience, refused until a newer invite.
  */
-export type AdmissionScope = "waitingRoom" | "lock";
+export type AdmissionScope = "waitingRoom" | "lock" | "stage" | "stageDemotion";
 
-const SCOPES: readonly AdmissionScope[] = ["waitingRoom", "lock"];
+const SCOPES: readonly AdmissionScope[] = [
+  "waitingRoom",
+  "lock",
+  "stage",
+  "stageDemotion",
+];
+// The scopes in which an admitted mark lets someone in. In `stageDemotion`
+// it only says that a newer invite ended a demotion.
+const RIGHTS: readonly AdmissionScope[] = ["waitingRoom", "lock", "stage"];
 
-type Mark = { admitted: boolean; at: number; userKeys: string[] };
+type Mark = {
+  admitted: boolean;
+  at: number;
+  userKeys: string[];
+  expiresAt?: number;
+};
 
 type PrincipalRecord = {
   marks: Partial<Record<AdmissionScope, Mark>>;
@@ -51,6 +70,7 @@ export class AdmissionLedger {
     userKey: string,
     scopes: readonly AdmissionScope[],
     at: number,
+    options: { answersRequest?: boolean; expiresAt?: number } = {},
   ): boolean {
     const record = this.touch(principal, { refusal: false });
     if (!record) {
@@ -66,27 +86,45 @@ export class AdmissionLedger {
         userKeys: stillAdmitted
           ? [...new Set([...current.userKeys, userKey])]
           : [userKey],
+        ...(options.expiresAt !== undefined ? { expiresAt: options.expiresAt } : {}),
       };
     }
-    record.answer = { admitted: true, at };
+    if (options.answersRequest !== false) record.answer = { admitted: true, at };
     return true;
   }
 
   /** A host turned a request away. It also ends any admission. */
   deny(principal: string, at: number): void {
     const record = this.touch(principal, { refusal: true })!;
-    for (const scope of SCOPES) {
+    for (const scope of ["waitingRoom", "lock"] as const) {
       record.marks[scope] = { admitted: false, at, userKeys: [] };
     }
     record.answer = { admitted: false, at };
   }
 
-  /** An admission was taken back, as by a revocation, a removal or a block. */
-  revoke(principal: string, scopes: readonly AdmissionScope[], at: number): void {
-    if (!this.records.has(principal)) return;
-    const record = this.touch(principal, { refusal: true })!;
-    for (const scope of scopes) {
-      record.marks[scope] = { admitted: false, at, userKeys: [] };
+  /**
+   * Takes back what `principals` hold for `scopes`, as a revocation, a
+   * removal, a block or a demotion does. Each principal gets the refusal
+   * whether or not it had a record. The ones that had a record take it
+   * first, so making room for the new ones never drops a record this
+   * refusal is about.
+   */
+  revoke(
+    principals: Iterable<string>,
+    scopes: readonly AdmissionScope[],
+    at: number,
+  ): void {
+    const unique = [...new Set(principals)];
+    const refuse = (record: PrincipalRecord) => {
+      for (const scope of scopes) {
+        record.marks[scope] = { admitted: false, at, userKeys: [] };
+      }
+    };
+    for (const principal of unique.filter((one) => this.records.has(one))) {
+      refuse(this.touch(principal, { refusal: true })!);
+    }
+    for (const principal of unique.filter((one) => !this.records.has(one))) {
+      refuse(this.touch(principal, { refusal: true })!);
     }
   }
 
@@ -115,6 +153,18 @@ export class AdmissionLedger {
     return latest?.admitted === true;
   }
 
+  /** Whether the latest decision for `scope` across `principals` refuses. */
+  refuses(principals: Iterable<string>, scope: AdmissionScope): boolean {
+    let latest: Mark | undefined;
+    for (const principal of principals) {
+      const mark = this.records.get(principal)?.marks[scope];
+      if (mark && this.counts(scope, mark) && (!latest || mark.at > latest.at)) {
+        latest = mark;
+      }
+    }
+    return latest !== undefined && !latest.admitted;
+  }
+
   /** The hosts' latest answer across `principals`. */
   latestAnswer(
     principals: Iterable<string>,
@@ -131,11 +181,14 @@ export class AdmissionLedger {
     return this.records.has(principal);
   }
 
-  /** Whether `principal` holds an admission that names `userKey`. */
+  /**
+   * Whether `principal` holds a right that names `userKey`: an admission or
+   * a stage invite that still counts.
+   */
   names(principal: string, userKey: string): boolean {
     const record = this.records.get(principal);
     if (!record) return false;
-    return SCOPES.some((scope) => {
+    return RIGHTS.some((scope) => {
       const mark = record.marks[scope];
       return (
         mark?.admitted === true &&
@@ -169,7 +222,9 @@ export class AdmissionLedger {
   }
 
   private counts(scope: AdmissionScope, mark: Mark): boolean {
-    return scope !== "lock" || mark.at > this.lockedAt;
+    if (scope === "lock") return mark.at > this.lockedAt;
+    if (mark.expiresAt !== undefined) return mark.expiresAt > Date.now();
+    return true;
   }
 
   /**

@@ -345,8 +345,35 @@ describe("a stage invite for a guest whose key differs between the audience and 
     expect(promoted.ack).toHaveBeenCalledWith(
       expect.objectContaining({ status: "joined", webinarRole: "participant" }),
     );
+    // The invite is the guest's, so it holds under both keys.
     expect(room.isWebinarPromotedUserKey(onStage.userId)).toBe(true);
-    expect(room.isWebinarPromotedUserKey(audience.userId)).toBe(false);
+    expect(room.isWebinarPromotedUserKey(audience.userId)).toBe(true);
+  });
+
+  it("keeps a guest moved back to the audience off the stage under every key until a newer invite (Greptile)", async () => {
+    const { state, room } = await invited();
+    const secondStageTab = { ...onStage, userId: "guest-gp_MMMMMMMMMMMMMMMMMMMMMM", sessionId: "view-2" } satisfies SfuAuthPayload;
+    const onStageAs: unknown = expect.objectContaining({ status: "joined", webinarRole: "participant" });
+    expect((await join(state, onStage)).ack).toHaveBeenCalledWith(onStageAs);
+    expect((await join(state, secondStageTab)).ack).toHaveBeenCalledWith(onStageAs);
+
+    // The host moves the first stage tab back to the audience.
+    room.markWebinarDemotedUserKey(onStage.userId);
+    room.removeClient(`${onStage.userId}#${onStage.sessionId}`);
+    await endOfTurn();
+    const firstBack = await join(state, onStage);
+    const secondBack = await join(state, secondStageTab);
+
+    const toTheAudience: unknown = expect.objectContaining({ error: "Use the public webinar link to join as an attendee." });
+    expect(firstBack.ack).toHaveBeenCalledWith(toTheAudience);
+    expect(secondBack.ack).toHaveBeenCalledWith(toTheAudience);
+    expect(room.isWebinarPromotedUserKey(onStage.userId)).toBe(false);
+    expect(room.isWebinarPromotedUserKey(secondStageTab.userId)).toBe(false);
+    expect(room.isWebinarDemotedUserKey(audience.userId, audience.guestProof)).toBe(true);
+
+    // Only a newer invite lets the guest back on stage.
+    room.promoteWebinarUserKey(audience.userId);
+    expect((await join(state, onStage)).ack).toHaveBeenCalledWith(onStageAs);
   });
 
   it.each([
@@ -2207,6 +2234,57 @@ describe("what a join costs a room with a large lobby", () => {
   });
 });
 
+describe("a removal of a tab whose pass the room links later", () => {
+  const hostTab = { ...guestHost, guestRoom: "room" } satisfies SfuAuthPayload;
+  const tabA = {
+    userId: "guest-gp_tab-1-under-pass-A",
+    clientId: "conclave",
+    sessionId: "tab-1",
+    guestProof: "proof-of-pass-A",
+    guestRoom: "room",
+  } satisfies SfuAuthPayload;
+  const tabB = {
+    userId: "guest-gp_tab-2-under-pass-B",
+    clientId: "conclave",
+    sessionId: "tab-2",
+    guestProof: "proof-of-pass-B",
+    guestRoom: "room",
+  } satisfies SfuAuthPayload;
+  const waiting: unknown = expect.objectContaining({ status: "waiting" });
+  const hostAsks = async (host: Awaited<ReturnType<typeof join>>, event: string, payload: unknown) => {
+    const ack = vi.fn();
+    await host.peer.handlers.get(event)!(...([payload, ack] as never[]));
+    return ack.mock.calls[0]?.[0] as { error?: string } | undefined;
+  };
+
+  it.each([
+    ["a lock that records nothing for the tabs already in (Greptile)", (room: Room) => room.setLocked(true)],
+    ["the host's lock, which admits the tabs already in", undefined],
+  ] as const)("still refuses the guest once its passes link, after %s", async (_label, lock) => {
+    const state = makeState();
+    const host = await join(state, hostTab);
+    const room = state.rooms.get("conclave:room")!;
+    // Tab B comes into the open room under pass B.
+    expect((await join(state, tabB)).ack).toHaveBeenCalledWith(joined);
+    if (lock) lock(room);
+    else expect(await hostAsks(host, "lockRoom", { locked: true })).not.toHaveProperty("error");
+    // Tab A knocks under pass A, which the room cannot tell is the same guest, and is admitted.
+    expect((await join(state, tabA)).ack).toHaveBeenCalledWith(waiting);
+    expect(await hostAsks(host, "admitUser", { userId: tabA.userId })).not.toHaveProperty("error");
+
+    expect(await hostAsks(host, "kickUser", { userId: `${tabB.userId}#${tabB.sessionId}` })).not.toHaveProperty("error");
+    await endOfTurn();
+    const back = await join(state, {
+      ...tabB,
+      guestWas: [{ userKey: "guest-gp_tab-2-under-pass-A", guestProof: tabA.guestProof }],
+    });
+
+    expect(back.ack).toHaveBeenCalledWith(waiting);
+    expect(room.isLockedAllowed(tabB.userId, tabB.guestProof)).toBe(false);
+    expect(room.isLockedAllowed(tabA.userId, tabA.guestProof)).toBe(false);
+  });
+});
+
 describe("a guest that is a co-host under one pass and blocked under another", () => {
   const hostTab = { ...guestHost, guestRoom: "room" } satisfies SfuAuthPayload;
   const coHostTab = {
@@ -2590,10 +2668,10 @@ describe("a guest identity that holds nothing in the room", () => {
       (room) => room.revokeWebinarPromotion(guest.userId),
     ],
     [
-      "newer stage invites push its invite out",
+      "newer stage invites push its invite out of a full decision record",
       (room) => room.promoteWebinarUserKey(guest.userId),
       (room) => {
-        for (let invited = 0; invited < 200; invited += 1) {
+        for (let invited = 0; invited < sfuConfig.lobbyDecisionRecordLimit; invited += 1) {
           room.promoteWebinarUserKey(`invited-${invited}@example.com`);
         }
       },
@@ -2740,8 +2818,9 @@ describe("who may come in, against a slow reading of every decision", () => {
       allowRoomCreation: true,
     }) satisfies SfuAuthPayload;
 
-  type Mark = { admitted: boolean; at: number };
-  type PassRecord = { lock?: Mark; answer?: Mark };
+  type Mark = { admitted: boolean; at: number; keys: Set<string> };
+  type Scope = "wr" | "lock";
+  type PassRecord = { wr?: Mark; lock?: Mark; answer?: { admitted: boolean; at: number } };
   class Oracle {
     constructor(readonly limit?: number) {}
     // Every decision ever made, never trimmed, to check that trimming the
@@ -2749,6 +2828,8 @@ describe("who may come in, against a slow reading of every decision", () => {
     full = new Map<string, PassRecord>();
     activity = new Map<string, number>();
     clock = 0;
+    locked = true;
+    lockedAt = 0;
     root = new Map<string, string>();
     records = new Map<string, PassRecord>();
     blocked = new Set<string>();
@@ -2765,72 +2846,128 @@ describe("who may come in, against a slow reading of every decision", () => {
       const top = this.find(pass);
       return new Set(tabs.map((tab) => tab.pass).filter((other) => this.find(other) === top));
     }
+    counts(scope: Scope, mark: Mark | undefined): mark is Mark {
+      return mark !== undefined && (scope !== "lock" || mark.at > this.lockedAt);
+    }
+    named(key: string): boolean {
+      const record = this.records.get(tabByKey.get(key)!.pass);
+      return (["wr", "lock"] as const).some((scope) => {
+        const mark = record?.[scope];
+        return this.counts(scope, mark) && mark.admitted && mark.keys.has(key);
+      });
+    }
+    // The keys the room has bound to the guest's passes.
+    boundKeys(pass: string): string[] {
+      const group = this.group(pass);
+      return tabs
+        .filter((tab) => group.has(tab.pass))
+        .filter((tab) => this.status.get(tab.key) === "pending" || this.status.get(tab.key) === "seated" || this.blocked.has(tab.key) || this.named(tab.key))
+        .map((tab) => tab.key);
+    }
     known(pass: string): boolean {
-      return (
-        this.records.has(pass) ||
-        tabs.some(
-          (tab) =>
-            tab.pass === pass &&
-            (this.status.get(tab.key) === "pending" ||
-              this.status.get(tab.key) === "seated" ||
-              this.blocked.has(tab.key)),
-        )
-      );
+      return this.records.has(pass) || this.boundKeys(pass).some((key) => tabByKey.get(key)!.pass === pass);
     }
     tabsOfGuest(pass: string, state: "pending" | "seated"): Tab[] {
       const group = this.group(pass);
       return tabs.filter((tab) => group.has(tab.pass) && this.status.get(tab.key) === state);
     }
-    latest(pass: string, field: "lock" | "answer"): Mark | undefined {
+    latestMark(pass: string, scope: Scope, source = this.records): Mark | undefined {
       let latest: Mark | undefined;
       for (const other of this.group(pass)) {
-        const mark = this.records.get(other)?.[field];
-        if (mark && (!latest || mark.at > latest.at)) latest = mark;
+        const mark = source.get(other)?.[scope];
+        if (this.counts(scope, mark) && (!latest || mark.at > latest.at)) latest = mark;
       }
       return latest;
     }
-    admits(pass: string): boolean {
-      return this.latest(pass, "lock")?.admitted === true;
-    }
-    admitsWithWholeHistory(pass: string): boolean {
-      let latest: Mark | undefined;
+    latestAnswer(pass: string) {
+      let latest: { admitted: boolean; at: number } | undefined;
       for (const other of this.group(pass)) {
-        const mark = this.full.get(other)?.lock;
-        if (mark && (!latest || mark.at > latest.at)) latest = mark;
+        const answer = this.records.get(other)?.answer;
+        if (answer && (!latest || answer.at > latest.at)) latest = answer;
       }
-      return latest?.admitted === true;
+      return latest;
     }
-    refuses(record: PassRecord): boolean {
-      return record.lock?.admitted === false || record.answer?.admitted === false;
+    scopeOfRoom(): Scope {
+      return this.locked ? "lock" : "wr";
+    }
+    admits(pass: string, scope: Scope = this.scopeOfRoom()): boolean {
+      return this.latestMark(pass, scope)?.admitted === true;
+    }
+    admitsWithWholeHistory(pass: string, scope: Scope = this.scopeOfRoom()): boolean {
+      return this.latestMark(pass, scope, this.full)?.admitted === true;
     }
     guestBlocked(pass: string): boolean {
       const group = this.group(pass);
       return [...this.blocked].some((key) => group.has(tabByKey.get(key)!.pass));
     }
-    record(pass: string, admitted: boolean) {
-      const at = this.tick();
-      this.full.set(pass, { lock: { admitted, at }, answer: { admitted, at } });
-      if (!this.records.has(pass) && this.limit !== undefined && this.records.size >= this.limit) {
-        const evictable = [...this.records.keys()]
-          .filter((other) => !this.refuses(this.records.get(other)!))
-          .sort((a, b) => this.activity.get(a)! - this.activity.get(b)!);
-        if (evictable.length > 0) this.records.delete(evictable[0]);
-        else if (admitted) return;
+    refuses(record: PassRecord): boolean {
+      return record.wr?.admitted === false || record.lock?.admitted === false || record.answer?.admitted === false;
+    }
+    // Finds room for a new record, as the room's ledger does. Returns false
+    // when an admission cannot be kept.
+    makeRoom(pass: string, refusal: boolean): boolean {
+      if (this.records.has(pass) || this.limit === undefined || this.records.size < this.limit) return true;
+      const evictable = [...this.records.keys()]
+        .filter((other) => !this.refuses(this.records.get(other)!))
+        .sort((a, b) => this.activity.get(a)! - this.activity.get(b)!);
+      if (evictable.length > 0) {
+        this.records.delete(evictable[0]);
+        return true;
       }
-      this.records.set(pass, { lock: { admitted, at }, answer: { admitted, at } });
+      return refusal;
+    }
+    write(pass: string, change: (record: PassRecord, at: number) => void, refusal: boolean) {
+      const at = this.tick();
+      const whole = this.full.get(pass) ?? {};
+      change(whole, at);
+      this.full.set(pass, whole);
+      if (!this.makeRoom(pass, refusal)) return;
+      const record = this.records.get(pass) ?? {};
+      change(record, at);
+      this.records.set(pass, record);
       this.activity.set(pass, at);
     }
-    revokeGuest(pass: string) {
-      for (const other of this.group(pass)) {
-        const at = this.tick();
-        const record = this.records.get(other);
-        if (record?.lock?.admitted) {
-          record.lock = { admitted: false, at };
-          this.activity.set(other, at);
-        }
-        const whole = this.full.get(other);
-        if (whole?.lock?.admitted) whole.lock = { admitted: false, at };
+    admit(key: string, scopes: Scope[]) {
+      for (const scope of scopes) {
+        this.write(tabByKey.get(key)!.pass, (record, at) => {
+          const current = record[scope];
+          const keys = current?.admitted && this.counts(scope, current) ? new Set([...current.keys, key]) : new Set([key]);
+          record[scope] = { admitted: true, at, keys };
+          record.answer = { admitted: true, at };
+        }, false);
       }
+    }
+    deny(key: string) {
+      this.write(tabByKey.get(key)!.pass, (record, at) => {
+        record.wr = { admitted: false, at, keys: new Set() };
+        record.lock = { admitted: false, at, keys: new Set() };
+        record.answer = { admitted: false, at };
+      }, true);
+    }
+    // A revocation, a removal or a block: every pass the keys are bound
+    // under gets the refusal, the ones with a record first.
+    revokeKeys(keys: string[]) {
+      const passes = [...new Set(keys.map((key) => tabByKey.get(key)!.pass))];
+      const at = this.tick();
+      const refuse = (record: PassRecord) => {
+        record.wr = { admitted: false, at, keys: new Set() };
+        record.lock = { admitted: false, at, keys: new Set() };
+      };
+      for (const pass of passes) {
+        const whole = this.full.get(pass) ?? {};
+        refuse(whole);
+        this.full.set(pass, whole);
+      }
+      for (const pass of [...passes.filter((pass) => this.records.has(pass)), ...passes.filter((pass) => !this.records.has(pass))]) {
+        this.makeRoom(pass, true);
+        const record = this.records.get(pass) ?? {};
+        refuse(record);
+        this.records.set(pass, record);
+        this.activity.set(pass, at);
+      }
+    }
+    identities(key: string): string[] {
+      return [...new Set([key, ...this.boundKeys(tabByKey.get(key)!.pass)])];
     }
     prune() {
       const groups = new Map<string, string[]>();
@@ -2858,6 +2995,18 @@ describe("who may come in, against a slow reading of every decision", () => {
       }
       return rows.sort();
     }
+    removeGuestOf(pass: string, events: Map<string, string>, removedKeys: string[]) {
+      for (const waiting of this.tabsOfGuest(pass, "pending")) {
+        this.deny(waiting.key);
+        this.status.set(waiting.key, "idle");
+        events.set(waiting.key, "joinRejected");
+      }
+      for (const seated of this.tabsOfGuest(pass, "seated")) {
+        if (!removedKeys.includes(seated.key)) continue;
+        this.status.set(seated.key, "idle");
+        events.set(seated.key, "kicked");
+      }
+    }
 
     knock(tab: Tab, names: string[]) {
       const events = new Map<string, string>();
@@ -2870,19 +3019,12 @@ describe("who may come in, against a slow reading of every decision", () => {
       }
       if (linked) {
         if (this.guestBlocked(tab.pass)) {
-          this.revokeGuest(tab.pass);
-          for (const waiting of this.tabsOfGuest(tab.pass, "pending")) {
-            this.record(waiting.pass, false);
-            this.status.set(waiting.key, "idle");
-            events.set(waiting.key, "joinRejected");
-          }
-          for (const seated of this.tabsOfGuest(tab.pass, "seated")) {
-            this.status.set(seated.key, "idle");
-            events.set(seated.key, "kicked");
-          }
+          const keys = this.boundKeys(tab.pass);
+          this.revokeKeys(keys);
+          this.removeGuestOf(tab.pass, events, keys);
         } else {
           for (const waiting of this.tabsOfGuest(tab.pass, "pending")) {
-            const answer = this.latest(waiting.pass, "answer");
+            const answer = this.latestAnswer(waiting.pass);
             if (!answer || answer.at < this.arrival.get(waiting.key)!) continue;
             if (!answer.admitted) {
               this.status.set(waiting.key, "idle");
@@ -2897,8 +3039,10 @@ describe("who may come in, against a slow reading of every decision", () => {
       let outcome: "joined" | "waiting" | "refused";
       if (this.blocked.has(tab.key) || this.guestBlocked(tab.pass)) {
         outcome = "refused";
-      } else if (this.admits(tab.pass)) {
-        expect(this.admitsWithWholeHistory(tab.pass), `${tab.key} let in although the whole history refuses it`).toBe(true);
+      } else if (!this.locked || this.admits(tab.pass)) {
+        if (this.locked) {
+          expect(this.admitsWithWholeHistory(tab.pass), `${tab.key} let in although the whole history refuses it`).toBe(true);
+        }
         outcome = "joined";
         this.status.set(tab.key, "seated");
       } else {
@@ -2914,7 +3058,8 @@ describe("who may come in, against a slow reading of every decision", () => {
     answer(row: string, admitted: boolean) {
       const events = new Map<string, string>();
       for (const waiting of this.tabsOfGuest(tabByKey.get(row)!.pass, "pending")) {
-        this.record(waiting.pass, admitted);
+        if (admitted) this.admit(waiting.key, this.locked ? ["lock", "wr"] : ["wr"]);
+        else this.deny(waiting.key);
         this.status.set(waiting.key, "idle");
         events.set(waiting.key, admitted ? "joinApproved" : "joinRejected");
       }
@@ -2924,19 +3069,42 @@ describe("who may come in, against a slow reading of every decision", () => {
     block(key: string) {
       const events = new Map<string, string>();
       const pass = tabByKey.get(key)!.pass;
+      const identities = this.identities(key);
+      const pending = identities.filter((other) => this.status.get(other) === "pending");
+      const seated = identities.filter((other) => this.status.get(other) === "seated");
+      this.revokeKeys(identities);
       this.blocked.add(key);
-      this.revokeGuest(pass);
-      for (const waiting of this.tabsOfGuest(pass, "pending")) {
-        this.record(waiting.pass, false);
-        this.status.set(waiting.key, "idle");
-        events.set(waiting.key, "joinRejected");
+      for (const other of pending) {
+        this.deny(other);
+        this.status.set(other, "idle");
+        events.set(other, "joinRejected");
       }
-      for (const seated of this.tabsOfGuest(pass, "seated")) {
-        this.status.set(seated.key, "idle");
-        events.set(seated.key, "kicked");
+      for (const other of seated) {
+        this.revokeKeys(this.identities(other));
+        this.status.set(other, "idle");
+        events.set(other, "kicked");
       }
+      void pass;
       this.prune();
       return events;
+    }
+    kick(key: string) {
+      const events = new Map<string, string>();
+      this.revokeKeys(this.identities(key));
+      this.status.set(key, "idle");
+      events.set(key, "kicked");
+      this.prune();
+      return events;
+    }
+    setLocked(locked: boolean) {
+      if (locked === this.locked) return;
+      this.locked = locked;
+      if (!locked) return;
+      this.lockedAt = this.tick();
+      for (const tab of tabs) {
+        if (this.status.get(tab.key) === "seated") this.admit(tab.key, ["lock"]);
+      }
+      this.prune();
     }
     unblock(key: string) {
       this.blocked.delete(key);
@@ -2960,6 +3128,9 @@ describe("who may come in, against a slow reading of every decision", () => {
   };
 
   const run = async (seed: number, steps: number, limit?: number) => {
+    // A lock admits the tabs already in, in the order they sat down, which
+    // the oracle does not track; runs with a small record keep the room locked.
+    const toggleLock = limit === undefined;
     // A host who acts once a second stays inside the admin rate limit.
     let now = Date.UTC(2026, 10, 22);
     vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -3024,7 +3195,7 @@ describe("who may come in, against a slow reading of every decision", () => {
       const pendingKeys = tabs.filter((tab) => oracle.status.get(tab.key) === "pending").map((tab) => tab.key);
       const seatedKeys = tabs.filter((tab) => oracle.status.get(tab.key) === "seated").map((tab) => tab.key);
       const rows = oracle.rows();
-      const action = pick(20);
+      const action = pick(22);
       let events = new Map<string, string>();
       if (action < 9) {
         const free = tabs.filter((tab) => oracle.status.get(tab.key) !== "seated");
@@ -3076,7 +3247,17 @@ describe("who may come in, against a slow reading of every decision", () => {
         history.push(`unblock ${key}`);
         oracle.unblock(key);
         await hostAsks("admin:unblockUsers", { userKeys: [key] });
-      } else if (action < 19 && pendingKeys.length > 0) {
+      } else if (action < 18 && seatedKeys.length > 0) {
+        const key = seatedKeys[pick(seatedKeys.length)];
+        history.push(`kick ${key}`);
+        events = oracle.kick(key);
+        await hostAsks("kickUser", { userId: `${key}#${tabByKey.get(key)!.session}` });
+      } else if (action < 19 && toggleLock) {
+        const locked = !oracle.locked;
+        history.push(locked ? "lock" : "unlock");
+        oracle.setLocked(locked);
+        await hostAsks("lockRoom", { locked });
+      } else if (action < 21 && pendingKeys.length > 0) {
         const key = pendingKeys[pick(pendingKeys.length)];
         history.push(`withdraw ${key}`);
         oracle.withdraw(key);
@@ -3092,7 +3273,7 @@ describe("who may come in, against a slow reading of every decision", () => {
 
   afterEach(() => vi.restoreAllMocks());
 
-  it.each([1, 7, 42, 2026, 31337, 99991])("agrees with the oracle over 300 random steps (seed %i)", async (seed) => {
+  it.each([1, 7, 42, 2026, 31337, 99991])("agrees with the oracle over 300 random steps (seed %i)", { timeout: 60_000 }, async (seed) => {
     await run(seed, 300);
   });
 
@@ -3103,7 +3284,7 @@ describe("who may come in, against a slow reading of every decision", () => {
     [2026, 3],
     [31337, 1],
     [99991, 4],
-  ])("agrees with the oracle when the decision record is small (seed %i, %i records)", async (seed, limit) => {
+  ])("agrees with the oracle when the decision record is small (seed %i, %i records)", { timeout: 60_000 }, async (seed, limit) => {
     await run(seed, 300, limit);
   });
 });
