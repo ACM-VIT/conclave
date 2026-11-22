@@ -62,6 +62,17 @@ class MicrophoneReplacementRecoveryTests {
     }
 
     /** A connected socket whose acknowledgements never arrive. */
+    class RecordingSendTransport : SendTransport(0L) {
+        var events: MutableList<String>? = null
+        @Volatile var closed = false
+        override fun isClosed(): Boolean = closed
+        override fun getId(): String = "send-old"
+        override fun close() {
+            closed = true
+            events?.add("old transport closed")
+        }
+    }
+
     class SilentSocket : io.socket.client.Socket(null, "/", null) {
         var emitted: MutableList<String>? = null
         override fun emit(event: String?, vararg args: Any?): io.socket.emitter.Emitter {
@@ -444,6 +455,69 @@ class MicrophoneReplacementRecoveryTests {
     @Test
     fun aProduceQueuedWhenTheCallEndsNeverSignalsThroughTheRejoinedSession() {
         assertAQueuedProduceOfAnEndedSessionEmitsNothing(rejoinBeforeTheLaneFrees = true)
+    }
+
+    @Test
+    fun aRejoinBeforeTheOldLaneFreesDisposesTheOldTransportOnlyAfterItsLaneClosedItAndTheNewCallEnded() {
+        val call = liveCall()
+        val media = call.media
+        prepareForCleanup(call)
+        val events = CopyOnWriteArrayList<String>()
+        val oldTransport = unsafe.allocateInstance(RecordingSendTransport::class.java) as RecordingSendTransport
+        oldTransport.events = events
+        field("sendTransport").set(media, oldTransport)
+        val disposed = CopyOnWriteArrayList<Any?>()
+        val reaper = RetiredTransportReaper<Any>(
+            idleDelayMs = 45_000L,
+            isIdle = {
+                listOf("device", "sendTransport", "receiveTransport", "sendTransportLane").all { field(it).get(media) == null }
+            },
+            dispose = { retired ->
+                disposed.add(retired.javaClass.getDeclaredField("transport").apply { isAccessible = true }.get(retired))
+            },
+        )
+        field("retiredTransports").set(media, reaper)
+        val (oldSocket, oldEmitted) = silentSocketManager()
+        val callbacks = startSendSession(media, oldSocket)
+        val laneBusy = CountDownLatch(1)
+        val laneEntered = CountDownLatch(1)
+        call.lane.post {
+            laneEntered.countDown()
+            laneBusy.await(10, TimeUnit.SECONDS)
+        }
+        assertTrue(laneEntered.await(3, TimeUnit.SECONDS))
+        call.lane.post {
+            callbacks.onProduce(oldTransport, "video", "{}", cameraAppData)
+            events.add("old produce returned")
+        }
+
+        runBlocking { media.cleanup(notifyLocalState = false, preserveCallAudioRouting = true) }
+        val (newSocket, newEmitted) = silentSocketManager()
+        startSendSession(media, newSocket)
+        val newLane = SendTransportLane("Rejoined")
+        field("sendTransportLane").set(media, newLane)
+        field("sendTransport").set(media, unsafe.allocateInstance(FakeSendTransport::class.java))
+        reaper.disposeIfIdle()
+        assertFalse(oldTransport.closed)
+        assertEquals(emptyList<Any?>(), disposed.toList())
+
+        laneBusy.countDown()
+        awaitLane(call.lane)
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(listOf("old produce returned", "old transport closed"), events.toList())
+        assertEquals(emptyList<String>(), oldEmitted.toList())
+        assertEquals(emptyList<String>(), newEmitted.toList())
+        assertTrue(call.old.closed)
+        assertTrue(call.track.disposed)
+        reaper.disposeIfIdle()
+        shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(60))
+        assertEquals(emptyList<Any?>(), disposed.toList())
+
+        field("sendTransport").set(media, null)
+        field("sendTransportLane").set(media, null)
+        newLane.retire {}
+        reaper.disposeIfIdle()
+        assertEquals(listOf<Any?>(oldTransport), disposed.toList())
     }
 
     @Test
