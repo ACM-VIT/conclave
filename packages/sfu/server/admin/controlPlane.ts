@@ -1033,6 +1033,32 @@ export const blockUserKey = (
   return { rejectedPendingUserKeys, kickedUserIds };
 };
 
+/**
+ * Removes every seat and every waiting request under `userKeys`. This is
+ * for a guest that a block has come to cover without a host action: the
+ * room learned that a blocked key and these keys are one guest.
+ */
+export const removeBlockedGuest = (
+  room: Room,
+  userKeys: string[],
+  options: { io: SocketIOServer; state: SfuState },
+): void => {
+  for (const userKey of userKeys) {
+    const waiting = room.pendingClients.get(userKey);
+    if (!waiting) continue;
+    waiting.socket.emit("joinRejected", { roomId: room.id });
+    room.removePendingClient(userKey);
+    for (const admin of room.getAdmins()) {
+      admin.socket.emit("userRejected", { userId: userKey, roomId: room.id });
+    }
+  }
+  for (const [userId, userKey] of Array.from(room.userKeysById.entries())) {
+    if (userKeys.includes(userKey)) {
+      kickClient(room, userId, "Blocked by host", options);
+    }
+  }
+};
+
 export const kickClient = (
   room: Room,
   userId: string,

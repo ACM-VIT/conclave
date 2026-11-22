@@ -50,6 +50,7 @@ import {
   resolveScheduledWebinarAttendeeEntry,
 } from "../../scheduledWebinars.js";
 import { ensureWebinarRoomConfig } from "../../scheduledWebinarScheduler.js";
+import { removeBlockedGuest } from "../../admin/controlPlane.js";
 import { getSocketAuthUser } from "../auth.js";
 import type { ConnectionContext } from "../context.js";
 import { registerAdminHandlers } from "./adminHandlers.js";
@@ -265,10 +266,15 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           guestClaims?.scope === "room" ? guestClaims : null;
         const roomGuestProof = roomScopedClaims?.guestProof;
         const otherGuestSeats = roomScopedClaims?.guestWas ?? [];
-        if (roomGuestProof !== undefined) {
-          state.rooms
-            .get(resolvedChannelId)
-            ?.linkGuestPasses(otherGuestSeats, roomGuestProof);
+        const knownRoom = state.rooms.get(resolvedChannelId);
+        if (knownRoom && roomGuestProof !== undefined) {
+          const blockedGuestKeys = knownRoom.linkGuestPasses(
+            otherGuestSeats,
+            roomGuestProof,
+          );
+          if (blockedGuestKeys.length > 0) {
+            removeBlockedGuest(knownRoom, blockedGuestKeys, { io, state });
+          }
         }
         // A host invite ("bring on stage") lets an attendee identity rejoin as
         // a full participant; the promotion registry lives on the live room.
@@ -487,6 +493,28 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             .filter((seat) => room.isGuestKeyOfPass(seat.userKey, seat.guestProof))
             .map((seat) => seatIdOf(seat.userKey, identity.sessionId)),
         );
+        // A request to be let in that this tab made under another pass is
+        // withdrawn now. Left in the lobby, the host would see two requests
+        // for one tab, and admitting the old one would answer a dead socket.
+        for (const seat of otherGuestSeats) {
+          const waiting = room.pendingClients.get(seat.userKey);
+          if (
+            !waiting ||
+            waiting.socket.id === socket.id ||
+            waiting.userId !== seatIdOf(seat.userKey, identity.sessionId) ||
+            !room.isGuestKeyOfPass(seat.userKey, seat.guestProof)
+          ) {
+            continue;
+          }
+          room.removePendingClient(seat.userKey);
+          for (const admin of room.getAdmins()) {
+            admin.socket.emit("pendingUserLeft", {
+              userId: seat.userKey,
+              roomId,
+            });
+          }
+          waiting.socket.disconnect(true);
+        }
         const existingClient = room.getClient(userId);
         const staleSameIdentitySeats = Array.from(
           room.userKeysById.entries(),
@@ -584,6 +612,20 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           return;
         }
 
+        // A block comes before every right the room keeps for a rejoin: host,
+        // co-host, an admission, a stage invite. The one exemption is an
+        // account that is a host by configuration outside the room, which
+        // the room also refuses to block or remove.
+        if (
+          !forcedHostJoin &&
+          user?.isSuperAdmin !== true &&
+          room.isBlocked(userKey, guestProof)
+        ) {
+          Logger.info(`Blocked identity ${userKey} denied access to room ${roomId}`);
+          respond(callback, { error: "You are not allowed to join this meeting." });
+          return;
+        }
+
         const isReturningPrimaryHost =
           !isWebinarAttendeeJoin &&
           room.isHostUserKey(userKey, roomGuestProof);
@@ -602,16 +644,6 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             ? true
             : isAdminForExistingRoom;
         const hasPrivilegedJoinAccess = isAdminJoin;
-
-        if (
-          !hasPrivilegedJoinAccess &&
-          user?.isSuperAdmin !== true &&
-          room.isBlocked(userKey, guestProof)
-        ) {
-          Logger.info(`Blocked identity ${userKey} denied access to room ${roomId}`);
-          respond(callback, { error: "You are not allowed to join this meeting." });
-          return;
-        }
 
         let meetingInviteCode = "";
         if (data?.meetingInviteCode !== undefined) {

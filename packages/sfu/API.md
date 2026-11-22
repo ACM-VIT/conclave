@@ -44,9 +44,12 @@ The proof is how the SFU treats two keys as one guest. What a guest may do does 
 - A right that one key of a guest holds in a room holds for every key of that guest: host, co-host, and an admission past the waiting room or the lock. A second tab in the host's browser joins as a host. Removing a guest, or revoking its admission, ends the right for every one of its keys.
 - This applies to tokens issued for the room (`guestRoom`). A token with no `guestRoom` holds only what its own key holds.
 - Blocking a guest removes and keeps out every other key of the same guest, so the guest's other tabs leave too. A block covers any token that presents the proof. The guest stays out while any of its keys is on the block list.
+- A block wins over every right. A join is checked against the block list before host, co-host, an admission or a stage invite is looked at. Blocking a guest also ends those rights for all of its keys. When the room learns that a blocked key and other keys are one guest, it ends their rights and removes every seat and waiting request of that guest. The one exemption is an account that is a host by configuration outside the room (a super admin or forced host), which the room refuses to block or remove.
 - A stage invite follows the pass. An invited attendee returns through the room's own id, under another key than the one the host invited, and the SFU hands the invite to the key that presents the same proof.
 
-A browser can hold more than one pass, when two of its first requests were each answered before either cookie had arrived. Every pass has a cookie of its own and the browser keeps them all. It goes by the lowest pass id, so every tab and every request picks the same pass. A tab may still have joined under another one. The route therefore signs `guestWas` into the token: for each other pass among the browser's cookies, the key this tab would hold under it in this room, with that pass's proof. The SFU treats those passes as one guest for as long as any of their keys holds something in the room. It also replaces the seat the tab held under its old key, whatever that seat's socket looks like, so a tab has one seat.
+A browser can hold more than one pass, when several of its first requests were each answered before any cookie had arrived. Every pass has a cookie of its own and the browser keeps them all. It goes by the lowest pass id, so every tab and every request picks the same pass, whatever order the passes arrived in. A tab may still have joined under another one. The route therefore signs `guestWas` into the token: for every other pass among the browser's cookies, the key this tab would hold under it in this room, with that pass's proof. The SFU treats those passes as one guest for as long as any of their keys holds something in the room. It also replaces the seat the tab held under its old key, whatever that seat's socket looks like, and withdraws a request to be let in that the tab made under its old key. A tab has one seat, or one request in the lobby.
+
+A token names up to 15 other passes. A browser that sends more is logged by the route. The token then names the lowest pass, the passes the tab says it has joined under (`guestJoinedAs` in the join request, a hint that proves nothing by itself), and the lowest of the rest.
 
 Only the HttpOnly pass cookies vouch for `guestWas`. A copy of a join token is not enough to be taken for its guest under another pass.
 
@@ -60,7 +63,7 @@ Two calls admit a guest the host cannot name yet:
 - `admin:createAdmission` answers `{ success, admissionCode, expiresAt }`. One join that sends `admissionCode` in its `joinRoom` payload within two minutes is let in past the waiting room and the lock, and its key stays admitted until `admin:revokeAllowedUsers`.
 - `Room.restoreAdmission(userKey, guestProof, { pastLock })` is for server code that vouches for a join it is deciding, such as one that presents a recovery pass after a restart. It binds the admission to the proof.
 
-Clients that predate guest passes still send their own session id and get `guest-<sessionId>`.
+Clients that predate guest passes still send their own session id and get `guest-<sessionId>`. Such a token never names a room, and it can never name a `guest-gp_` key.
 Such a client that keeps cookies proves its pass from its second join call on, and the SFU binds that identity the same way.
 A guest identity that enters a room with no `guestProof` stays unbound in that room, as before guest passes.
 

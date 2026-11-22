@@ -839,14 +839,18 @@ export class Room {
    * the seats in `guestWas`. From then on the room treats those passes as
    * one guest, so rights and blocks under any of them hold under all.
    *
-   * A pass the room has never seen is not recorded. A guest that a block
-   * covers after this loses the admissions its keys held, as a guest does
-   * when a host blocks it.
+   * A pass the room has never seen is not recorded.
+   *
+   * A block on any key of the guest wins over every right the guest holds
+   * under any other. When the passes that were linked here bring a block
+   * and rights together, the guest loses what a rejoin would honour, host
+   * rights included, and this returns all of its keys so that the caller
+   * removes its seats. Otherwise it returns none.
    */
   linkGuestPasses(
     otherSeats: ReadonlyArray<{ guestProof: string }>,
     guestProof: string,
-  ): void {
+  ): string[] {
     const known = new Set(this.guestProofsByUserKey.values());
     let linked = false;
     for (const seat of otherSeats) {
@@ -865,12 +869,14 @@ export class Room {
       for (const proof of group) this.guestPassGroups.set(proof, group);
       linked = true;
     }
-    if (!linked || !this.guestHolds(this.blockedUsers, "", guestProof)) return;
-    for (const [userKey, bound] of this.guestProofsByUserKey) {
-      if (!this.isSameGuestPass(bound, guestProof)) continue;
-      this.allowedUsers.delete(userKey);
-      this.lockedAllowedUsers.delete(userKey);
+    if (!linked || !this.guestHolds(this.blockedUsers, "", guestProof)) {
+      return [];
     }
+    const userKeys = [...this.guestProofsByUserKey]
+      .filter(([, bound]) => this.isSameGuestPass(bound, guestProof))
+      .map(([userKey]) => userKey);
+    this.dropRejoinGrantsOf(userKeys);
+    return userKeys;
   }
 
   /** Whether the room knows `userKey` as a key of the pass behind `guestProof`. */
@@ -2199,7 +2205,11 @@ export class Room {
    * admissions, retained host rights, primary host, and a stage invite.
    */
   dropRejoinGrants(userKey: string): void {
-    for (const key of this.identitiesOfSameGuest(userKey)) {
+    this.dropRejoinGrantsOf(this.identitiesOfSameGuest(userKey));
+  }
+
+  private dropRejoinGrantsOf(userKeys: Iterable<string>): void {
+    for (const key of userKeys) {
       this.allowedUsers.delete(key);
       this.lockedAllowedUsers.delete(key);
       this.adminUserKeys.delete(key);
@@ -2887,12 +2897,14 @@ export class Room {
     }
   }
 
+  /**
+   * A block also ends what a rejoin would honour for the guest: admissions,
+   * a stage invite, and host rights. A join that still held host rights
+   * would be let past the block.
+   */
   blockUser(userKey: string) {
+    this.dropRejoinGrants(userKey);
     this.blockedUsers.add(userKey);
-    for (const key of this.identitiesOfSameGuest(userKey)) {
-      this.allowedUsers.delete(key);
-      this.lockedAllowedUsers.delete(key);
-    }
     this.pendingClients.delete(userKey);
   }
 
