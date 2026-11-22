@@ -2377,6 +2377,11 @@ export default function MeetsClient({
   }, [webinarStageInvite]);
 
   const declineWebinarStageInvite = socket.declineWebinarStageInvite;
+  const forgetWebinarQaEntries = useCallback(
+    () => setWebinarQaEntries(null),
+    [setWebinarQaEntries],
+  );
+
   const handleDismissWebinarStageInvite = useCallback(() => {
     setWebinarStageInvite(null);
     declineWebinarStageInvite();
@@ -3402,6 +3407,7 @@ export default function MeetsClient({
         webinarLink={webinarLink}
         webinarTitle={webinarTitle}
         webinarQaEntries={webinarQaEntries}
+        onForgetWebinarQaEntries={forgetWebinarQaEntries}
         webinarHandQueue={webinarHandQueue}
         isWebinarHandRaised={isWebinarHandRaised}
         webinarStageInvite={webinarStageInvite}

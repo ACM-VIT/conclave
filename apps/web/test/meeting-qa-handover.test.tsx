@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act } from "react";
+import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { AuthorityProvider } from "@conclave/apps-sdk";
@@ -50,9 +50,25 @@ const legacy = {
 
 let root: Root;
 let qa: ReturnType<typeof useMeetingQa>;
+/** The ids each render of the hook showed, in order. */
+const renders: string[][] = [];
 
+/**
+ * The hook over a list as the socket holds it. A list the hook is done with
+ * is forgotten, and a list the socket is sent after that is a new one.
+ */
 function Probe({ isWebinar, legacyQa }: { isWebinar: boolean; legacyQa: typeof legacy }) {
-  qa = useMeetingQa({ legacy: legacyQa, isWebinar, currentUserId: "me" });
+  const [forgotten, setForgotten] = useState<WebinarQaEntry[] | null>(null);
+  qa = useMeetingQa({
+    legacy: {
+      ...legacyQa,
+      entries: legacyQa.entries === forgotten ? null : legacyQa.entries,
+      forget: () => setForgotten(legacyQa.entries),
+    },
+    isWebinar,
+    currentUserId: "me",
+  });
+  renders.push(qa.entries.map((entry) => entry.id));
   return null;
 }
 
@@ -119,6 +135,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   listeners.clear();
   sent.length = 0;
+  renders.length = 0;
   root = createRoot(document.createElement("div"));
 });
 
@@ -127,6 +144,57 @@ afterEach(async () => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
+
+const fire = async (event: string) =>
+  act(async () => {
+    for (const listener of [...(listeners.get(event) ?? [])]) listener();
+  });
+
+const pendingQuestion = (id: string, text: string) => ({
+  bucket: "questions",
+  key: id,
+  value: { id, askerName: "Gia", text, status: "pending", askedAt: 1, updatedAt: 1, answerText: null, answeredByName: null },
+});
+
+/** Two public questions in the app's view, then the host hides the second. */
+const hideAfterTheHandover = async () => {
+  const offTopic: WebinarQaEntry = {
+    ...fromOldEvents,
+    id: "q2",
+    question: "Off-topic: who is getting lunch?",
+    status: "pending",
+  };
+  // The old events showed both questions before the app's view came.
+  await mount(true, { ...legacy, entries: [fromOldEvents, offTopic] });
+  await offerQa();
+  const subscription = last(AUTHORITY_EVENTS.subscribe)!.payload.subscription as string;
+  await act(async () =>
+    push({
+      kind: "replace",
+      subscription,
+      generation: 1,
+      serverNowMs: Date.now(),
+      part: 0,
+      last: true,
+      rows: [pendingQuestion("q1", "Is this recorded?"), pendingQuestion("q2", "Off-topic: who is getting lunch?")],
+      grants: { actions: ["ask", "upvote"], needsIdentity: [], queries: [] },
+    }),
+  );
+  const atHandover = qa.entries.map((entry) => entry.id);
+  await act(async () =>
+    push({
+      kind: "patch",
+      subscription,
+      generation: 1,
+      serverNowMs: Date.now(),
+      seq: 1,
+      put: [],
+      remove: [{ bucket: "questions", key: "q2" }],
+    }),
+  );
+  const afterTheHide = qa.entries.map((entry) => entry.id);
+  return { subscription, atHandover, afterTheHide, fromTheHide: renders.length };
+};
 
 it("keeps a webinar on the old events until its own view of Q&A has arrived", async () => {
   await mount(true);
@@ -270,10 +338,6 @@ it("goes back to the old events on a new connection, and stays on them while its
   await offerQa();
   await sendView();
   const handedOver = qa.fromApp;
-  const fire = async (event: string) =>
-    act(async () => {
-      for (const listener of [...(listeners.get(event) ?? [])]) listener();
-    });
 
   // The connection drops and comes back. On the new connection the server
   // feeds the old events again, from a list as it is now.
@@ -297,10 +361,6 @@ it("goes back to the old events when the connection drops while a new view is co
   await mount(true, { ...legacy, entries: [fromOldEvents] });
   await offerQa();
   await sendView();
-  const fire = async (event: string) =>
-    act(async () => {
-      for (const listener of [...(listeners.get(event) ?? [])]) listener();
-    });
   // A new view starts to come in parts.
   const subscription = last(AUTHORITY_EVENTS.subscribe)!.payload.subscription as string;
   await act(async () =>
@@ -316,19 +376,28 @@ it("goes back to the old events when the connection drops while a new view is co
     }),
   );
   const whileReplacing = qa;
-  // The connection drops before the last part, and comes back.
+  // The connection drops before the last part, and comes back. The old
+  // events give the new connection its own list.
   await fire("disconnect");
   await fire("connect");
   await offerQa();
+  const beforeItsList = qa;
+  await mount(true, { ...legacy, entries: [fromOldEvents] });
   await act(async () => vi.advanceTimersByTimeAsync(8_000));
   const afterOneReconnect = qa;
   // It drops and comes back again before any view arrives.
   await fire("disconnect");
+  await mount(true, { ...legacy, entries: null });
   await fire("connect");
   await offerQa();
+  const beforeTheNextList = qa;
+  await mount(true, { ...legacy, entries: [fromOldEvents] });
   await act(async () => vi.advanceTimersByTimeAsync(8_000));
 
   expect(whileReplacing).toMatchObject({ fromApp: false, entries: [] });
+  // Until the new connection has a list, what was shown stays.
+  expect(beforeItsList.entries).toEqual([]);
+  expect(beforeTheNextList.entries.map((entry) => entry.id)).toEqual(["q1"]);
   // A new connection is a new subscription: the old events again.
   expect(afterOneReconnect).toMatchObject({ offered: true, fromApp: false });
   expect(afterOneReconnect.entries.map((entry) => entry.id)).toEqual(["q1"]);
@@ -338,3 +407,62 @@ it("goes back to the old events when the connection drops while a new view is co
   expect(qa.onUpvote).toBe(legacy.upvote);
 });
 
+
+it("never shows a question the host hid again while the connection comes back, at any render", async () => {
+  const { atHandover, afterTheHide, fromTheHide } = await hideAfterTheHandover();
+
+  // The attendee's socket drops and comes back. The new connection's first
+  // list is slow to come, as it was in the browser.
+  await fire("disconnect");
+  await fire("connect");
+  await offerQa();
+  await act(async () => vi.advanceTimersByTimeAsync(1_270));
+  const whileWaiting = qa;
+  // The old events give the new connection its list, as it is now.
+  await mount(true, { ...legacy, entries: [fromOldEvents] });
+  const onTheNewList = qa.entries.map((entry) => entry.id);
+  // Then the new connection's view of the app comes.
+  await sendView();
+
+  expect(atHandover).toEqual(["q1", "q2"]);
+  expect(afterTheHide).toEqual(["q1"]);
+  for (const shown of renders.slice(fromTheHide)) expect(shown).not.toContain("q2");
+  // Until the new connection sends anything, the list last shown stays.
+  expect(whileWaiting).toMatchObject({ offered: true, fromApp: false });
+  expect(whileWaiting.entries.map((entry) => entry.id)).toEqual(["q1"]);
+  expect(renders.slice(fromTheHide).every((shown) => shown.join() === "q1")).toBe(true);
+  expect(onTheNewList).toEqual(["q1"]);
+  expect(qa.fromApp).toBe(true);
+});
+
+it("never shows a question the host hid again while the same connection subscribes again, at any render", async () => {
+  const { subscription, atHandover, afterTheHide, fromTheHide } = await hideAfterTheHandover();
+  const subscribed = sent.filter((entry) => entry.event === AUTHORITY_EVENTS.subscribe).length;
+
+  // A patch goes missing, so the client starts over on the same connection.
+  await act(async () =>
+    push({
+      kind: "patch",
+      subscription,
+      generation: 1,
+      serverNowMs: Date.now(),
+      seq: 3,
+      put: [],
+      remove: [],
+    }),
+  );
+  const subscribedAgain = sent.filter((entry) => entry.event === AUTHORITY_EVENTS.subscribe).length;
+  await act(async () => vi.advanceTimersByTimeAsync(1_270));
+  const whileWaiting = qa;
+  // The old events resume with a whole list, as it is now.
+  await mount(true, { ...legacy, entries: [fromOldEvents] });
+  const onTheNewList = qa.entries.map((entry) => entry.id);
+
+  expect(atHandover).toEqual(["q1", "q2"]);
+  expect(afterTheHide).toEqual(["q1"]);
+  expect(subscribedAgain).toBe(subscribed + 1);
+  for (const shown of renders.slice(fromTheHide)) expect(shown).not.toContain("q2");
+  expect(whileWaiting.entries.map((entry) => entry.id)).toEqual(["q1"]);
+  expect(onTheNewList).toEqual(["q1"]);
+  expect(qa.onSubmit).toBe(legacy.submit);
+});

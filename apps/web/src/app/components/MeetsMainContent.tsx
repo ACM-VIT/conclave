@@ -323,7 +323,10 @@ interface MeetsMainContentProps {
   webinarSpeakerUserId?: string | null;
   webinarLink?: string | null;
   webinarTitle?: string;
-  webinarQaEntries?: WebinarQaEntry[];
+  /** The old events' Q&A list for this connection, null until it is sent one. */
+  webinarQaEntries?: WebinarQaEntry[] | null;
+  /** Drops that list, once the Q&A app's view has taken over from it. */
+  onForgetWebinarQaEntries: () => void;
   webinarHandQueue?: WebinarHandQueueEntry[];
   isWebinarHandRaised?: boolean;
   webinarStageInvite?: {
@@ -587,7 +590,8 @@ export default function MeetsMainContent({
   webinarSpeakerUserId,
   webinarLink,
   webinarTitle,
-  webinarQaEntries: legacyQaEntries = [],
+  webinarQaEntries: legacyQaEntries = null,
+  onForgetWebinarQaEntries,
   webinarHandQueue = [],
   isWebinarHandRaised = false,
   webinarStageInvite = null,
@@ -624,6 +628,7 @@ export default function MeetsMainContent({
   const meetingQa = useMeetingQa({
     legacy: {
       entries: legacyQaEntries,
+      forget: onForgetWebinarQaEntries,
       submit: legacySubmitQuestion,
       upvote: legacyUpvoteQuestion,
       moderate: legacyModerateQuestion,

@@ -901,7 +901,7 @@ interface UseMeetSocketOptions {
   >;
   setWebinarRole: (role: "attendee" | "participant" | "host" | null) => void;
   setWebinarSpeakerUserId: (userId: string | null) => void;
-  setWebinarQaEntries: React.Dispatch<React.SetStateAction<WebinarQaEntry[]>>;
+  setWebinarQaEntries: React.Dispatch<React.SetStateAction<WebinarQaEntry[] | null>>;
   setWebinarHandQueue: React.Dispatch<
     React.SetStateAction<WebinarHandQueueEntry[]>
   >;
@@ -1885,6 +1885,10 @@ export function useMeetSocket({
         webinarJoinedParticipantIdsRef.current.clear();
         webinarVisibleParticipantIdsRef.current.clear();
         serverRoomIdRef.current = null;
+      } else {
+        // The old events' Q&A list was this connection's. The next one is
+        // sent its own.
+        setWebinarQaEntries(null);
       }
       webinarJoinedParticipantIdsRef.current.clear();
       webinarVisibleParticipantIdsRef.current.clear();
@@ -8583,6 +8587,9 @@ export function useMeetSocket({
               (notification: WebinarQaChangedNotification) => {
                 if (!isRoomEvent(notification.roomId)) return;
                 setWebinarQaEntries((previous) => {
+                  // A change is to a list this connection was sent. Without
+                  // one, the whole list that comes next already has it.
+                  if (previous === null) return null;
                   if (notification.removedId) {
                     return previous.filter(
                       (entry) => entry.id !== notification.removedId,
@@ -10012,15 +10019,17 @@ export function useMeetSocket({
       const socket = socketRef.current;
       if (!socket) return;
       setWebinarQaEntries((previous) =>
-        previous.map((entry) =>
-          entry.id === id
-            ? {
-                ...entry,
-                hasUpvoted: !entry.hasUpvoted,
-                upvotes: Math.max(0, entry.upvotes + (entry.hasUpvoted ? -1 : 1)),
-              }
-            : entry,
-        ),
+        previous === null
+          ? null
+          : previous.map((entry) =>
+              entry.id === id
+                ? {
+                    ...entry,
+                    hasUpvoted: !entry.hasUpvoted,
+                    upvotes: Math.max(0, entry.upvotes + (entry.hasUpvoted ? -1 : 1)),
+                  }
+                : entry,
+            ),
       );
       socket.emit(
         "webinar:qa:upvote",
@@ -10032,31 +10041,35 @@ export function useMeetSocket({
         ) => {
           if ("error" in response) {
             setWebinarQaEntries((previous) =>
-              previous.map((entry) =>
-                entry.id === id
-                  ? {
-                      ...entry,
-                      hasUpvoted: !entry.hasUpvoted,
-                      upvotes: Math.max(
-                        0,
-                        entry.upvotes + (entry.hasUpvoted ? -1 : 1),
-                      ),
-                    }
-                  : entry,
-              ),
+              previous === null
+                ? null
+                : previous.map((entry) =>
+                    entry.id === id
+                      ? {
+                          ...entry,
+                          hasUpvoted: !entry.hasUpvoted,
+                          upvotes: Math.max(
+                            0,
+                            entry.upvotes + (entry.hasUpvoted ? -1 : 1),
+                          ),
+                        }
+                      : entry,
+                  ),
             );
             return;
           }
           setWebinarQaEntries((previous) =>
-            previous.map((entry) =>
-              entry.id === id
-                ? {
-                    ...entry,
-                    upvotes: response.upvotes,
-                    hasUpvoted: response.hasUpvoted,
-                  }
-                : entry,
-            ),
+            previous === null
+              ? null
+              : previous.map((entry) =>
+                  entry.id === id
+                    ? {
+                        ...entry,
+                        upvotes: response.upvotes,
+                        hasUpvoted: response.hasUpvoted,
+                      }
+                    : entry,
+                ),
           );
         },
       );

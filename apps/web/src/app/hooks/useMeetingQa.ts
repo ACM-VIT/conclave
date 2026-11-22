@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuthorityAvailable } from "@conclave/apps-sdk";
 import { qaContract, useQa } from "@conclave/apps-sdk/qa/web";
 import type { WebinarQaEntry, WebinarQaModerateRequest } from "../lib/types";
@@ -10,7 +10,13 @@ type Result = { ok: boolean; error?: string };
 const NO_ENTRIES: WebinarQaEntry[] = [];
 
 type LegacyQa = {
-  entries: WebinarQaEntry[];
+  /**
+   * The list the old events gave this connection, or null while they have
+   * given it none. The socket drops it when its connection ends.
+   */
+  entries: WebinarQaEntry[] | null;
+  /** Drops `entries`: the old events rest once the app's view is in. */
+  forget: () => void;
   submit?: (question: string) => Promise<Result>;
   upvote?: (id: string) => void | Promise<Result>;
   moderate?: (request: WebinarQaModerateRequest) => Promise<Result>;
@@ -59,14 +65,18 @@ export const hasUnseenMeetingQuestion = ({
  * Nothing is inferred from the old events about a regular meeting, which
  * they do not carry: there Q&A is offered when the server offers the app.
  *
- * Once a subscription's view has arrived, the server stops sending the old
- * events to this connection, so the list they left is stale while that
- * subscription lasts. A replacement of its view in parts shows nothing until
- * it is in: never that stale list, and never the view before it, which the
- * client dropped because the new one may hold less. A new subscription, on a
- * new connection or the same one, starts on the old events again: the
- * server feeds them until the connection holds its own view, so they are
- * current for as long as that view does not come.
+ * Each source's list lasts only as long as what supplied it. The app's view
+ * goes when its subscription ends. The old events' list goes when its
+ * connection ends, and when the app's view arrives, because the server stops
+ * sending the old events to that connection then: it resumes them with a
+ * whole list once the subscription ends.
+ *
+ * What is shown never goes back. While no source has a list, as when a
+ * connection is coming back or a new subscription has started, the list last
+ * shown stays until a source has one, which is newer. It never falls back to
+ * an older source's list. A replacement of the view in parts shows nothing
+ * until it is in: never the view before it, which the client dropped because
+ * the new one may hold less.
  */
 export function useMeetingQa({
   legacy,
@@ -103,6 +113,26 @@ export function useMeetingQa({
     [qa.questions, currentUserId],
   );
 
+  // The server rests the old events once this connection holds the app's
+  // view, so the list they left no longer follows the room.
+  const { forget } = legacy;
+  const forgetLegacy = fromApp && legacy.entries !== null;
+  useEffect(() => {
+    if (forgetLegacy) forget();
+  }, [forgetLegacy, forget]);
+
+  // The list a source has now, or null while none has one.
+  const live: WebinarQaEntry[] | null = fromApp
+    ? appEntries
+    : awaitingNewView
+      ? NO_ENTRIES
+      : isWebinar
+        ? legacy.entries
+        : null;
+  const [shown, setShown] = useState<WebinarQaEntry[]>(NO_ENTRIES);
+  if (live !== null && live !== shown) setShown(live);
+  const entries = live ?? shown;
+
   const { ask, toggleUpvote, moderate } = qa;
   const appModerate = useCallback(
     (request: WebinarQaModerateRequest) => moderate(request),
@@ -113,7 +143,7 @@ export function useMeetingQa({
     return {
       offered,
       fromApp: true as const,
-      entries: appEntries,
+      entries,
       askNeedsIdentity: qa.askNeedsIdentity,
       onSubmit: qa.canAsk ? ask : undefined,
       onUpvote: qa.canUpvote ? toggleUpvote : undefined,
@@ -121,11 +151,11 @@ export function useMeetingQa({
     };
   }
   if ((offered && !isWebinar) || awaitingNewView) {
-    // A view of the app is on its way: nothing to show yet.
+    // A view of the app is on its way, and nothing to act through until then.
     return {
       offered,
       fromApp: false as const,
-      entries: NO_ENTRIES,
+      entries,
       askNeedsIdentity: false,
       onSubmit: undefined,
       onUpvote: undefined,
@@ -135,7 +165,7 @@ export function useMeetingQa({
   return {
     offered,
     fromApp: false as const,
-    entries: legacy.entries,
+    entries,
     askNeedsIdentity: false,
     onSubmit: legacy.submit,
     onUpvote: legacy.upvote,
