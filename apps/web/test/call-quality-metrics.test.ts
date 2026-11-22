@@ -858,6 +858,32 @@ describe("call_summary", () => {
     });
   });
 
+  it.each(["cpuLimitedSec", "bandwidthLimitedSec"] as const)(
+    "keeps %s within the send time over 15 s when a layer misses two samples",
+    (counter) => {
+      const { tracker, state, named } = setup();
+      state("connecting", 0);
+      state("joined", 1000);
+      const limited = (id: string, sec: number, bytesSent: number) =>
+        layer({ id, bytesSent, [counter]: sec });
+      tracker.onStats(sample([], { outboundVideo: [limited("send:L1", 0, 0), limited("send:L2", 0, 0)] }), 1000);
+      tracker.onStats(sample([], { outboundVideo: [limited("send:L1", 5, 50_000)] }), 6000);
+      tracker.onStats(sample([], { outboundVideo: [limited("send:L1", 10, 100_000)] }), 11_000);
+      tracker.onStats(
+        sample([], { outboundVideo: [limited("send:L1", 15, 150_000), limited("send:L2", 15, 150_000)] }),
+        16_000,
+      );
+      state("disconnected", 17_000);
+
+      const { props } = named("call_summary")[0];
+      expect(props.outbound_video_ms).toBe(15_000);
+      expect({
+        cpu: props.outbound_cpu_limited_pct,
+        bandwidth: props.outbound_bandwidth_limited_pct,
+      }).toEqual(counter === "cpuLimitedSec" ? { cpu: 100, bandwidth: 0 } : { cpu: 0, bandwidth: 100 });
+    },
+  );
+
   it("never counts more limited time than the interval it falls in", () => {
     const { tracker, state, named } = setup();
     state("connecting", 0);
