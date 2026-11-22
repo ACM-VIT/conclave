@@ -55,6 +55,15 @@ export const qaContract = defineContract({
       input: s.object({ id: questionId, value: s.boolean() }),
       receipt: s.null(),
     },
+    /**
+     * Flips the caller's upvote, for the released clients whose upvote is a
+     * toggle. The receipt is the count and the caller's vote as this action
+     * left them. New code sends `upvote` with the state it wants.
+     */
+    toggleUpvote: {
+      input: s.object({ id: questionId }),
+      receipt: s.object({ upvotes: s.int({ min: 0 }), hasUpvoted: s.boolean() }),
+    },
     moderate: {
       input: s.object({
         id: questionId,
@@ -66,13 +75,7 @@ export const qaContract = defineContract({
       receipt: s.null(),
     },
   },
-  queries: {
-    /** A visible question's count and whether the caller upvoted it. */
-    upvoteState: {
-      input: s.object({ id: questionId }),
-      output: s.object({ upvotes: s.int({ min: 0 }), hasUpvoted: s.boolean() }),
-    },
-  },
+  queries: {},
   views: {
     /** Every question for hosts; the public ones for everyone else. */
     questions: questionCard,

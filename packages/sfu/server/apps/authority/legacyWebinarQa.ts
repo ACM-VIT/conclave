@@ -1,7 +1,6 @@
 import type {
   AuthorityFailure,
   AuthorityFrame,
-  AuthorityResult,
   Json,
 } from "@conclave/apps-sdk/authority";
 import {
@@ -277,31 +276,27 @@ export const legacyQaSubmit = (
 };
 
 /**
- * The old upvote is a toggle. It reads the caller's vote and sets the
- * opposite in one turn of the event loop, so nothing can come between.
+ * The old upvote is a toggle. The app flips the caller's vote in one
+ * transaction and answers with the count that transaction made, so the reply
+ * never carries a number that was not read.
  */
 export const legacyQaUpvote = (
   authority: RoomAuthority,
   context: ConnectionContext,
   id: string,
 ): { success: boolean; upvotes: number; hasUpvoted: boolean } | LegacyError => {
-  const read = (): AuthorityResult<Json> =>
-    authority.queryAs(context, QA_APP, "upvoteState", { id });
-  const before = read();
-  if (!before.ok) return contributorError(context, before, "Question not found");
-  const wanted = !(before.value as { hasUpvoted: boolean }).hasUpvoted;
-  const result = authority.actAs(context, QA_APP, "upvote", { id, value: wanted });
+  const result = authority.actAs(context, QA_APP, "toggleUpvote", { id });
   if (!result.ok) {
     if (result.code === "rate-limited") {
       return { error: "You are voting too quickly" };
     }
     return contributorError(context, result, "Question not found");
   }
-  const after = read();
-  const state = after.ok
-    ? (after.value as { upvotes: number; hasUpvoted: boolean })
-    : { upvotes: 0, hasUpvoted: wanted };
-  return { success: true, upvotes: state.upvotes, hasUpvoted: state.hasUpvoted };
+  const { upvotes, hasUpvoted } = result.value as {
+    upvotes: number;
+    hasUpvoted: boolean;
+  };
+  return { success: true, upvotes, hasUpvoted };
 };
 
 export const legacyQaModerate = (

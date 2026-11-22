@@ -191,6 +191,55 @@ describe("webinar Q&A with old and new clients in one room", () => {
     expect(oldAttendee.entries.get(id)?.hasUpvoted).toBe(false);
   });
 
+  it("answers an upvote with the count it made, even after a run of refused ones", async () => {
+    const stack = await startWebinar();
+    const host = await open(stack, asha, qaContract);
+    const asker = await open(stack, omar, qaContract, asAttendee);
+    const oldAttendee = await oldClient(stack, vik, asAttendee);
+    const asked = await asker.session.act("ask", { text: "How many of us want this?" });
+    const id = asked.ok ? asked.value.id : "";
+    await host.session.act("moderate", { id, action: "answering" });
+    // Fifteen other people upvote it.
+    for (let index = 0; index < 15; index += 1) {
+      const voter = await open(
+        stack,
+        { email: `voter${index}@example.com`, name: `Voter ${index}`, session: `voter${index}` },
+        qaContract,
+        asAttendee,
+      );
+      await voter.session.act("upvote", { id, value: true });
+      voter.socket.disconnect();
+    }
+    await until(() => oldAttendee.entries.get(id)?.upvotes === 15, "the old attendee sees 15");
+
+    // The same person has a second tab open, and taps upvote there on
+    // questions that are gone. Then they tap this one, here, six times.
+    const otherTab = await oldClient(stack, { ...vik, session: "v2" }, asAttendee);
+    const refused: { error?: string }[] = [];
+    for (let index = 0; index < 9; index += 1) {
+      refused.push(await otherTab.upvote(`q-missing-${index}`));
+    }
+    const replies: Awaited<ReturnType<typeof oldAttendee.upvote>>[] = [];
+    for (let index = 0; index < 6; index += 1) replies.push(await oldAttendee.upvote(id));
+    const accepted = replies.filter((reply) => reply.success);
+    const last = accepted[accepted.length - 1];
+    await until(
+      () => field(row(host, "votes", id), "upvotes") === last?.upvotes,
+      "the host sees the count the last answer gave",
+    );
+
+    expect(refused.map((reply) => reply.error)).toEqual(Array(9).fill("Question not found"));
+    // Every answer that says the upvote counted carries the count it made.
+    expect(accepted.length).toBeGreaterThanOrEqual(1);
+    expect(accepted.map((reply) => [reply.upvotes, reply.hasUpvoted])).toEqual(
+      accepted.map((_, index) => (index % 2 === 0 ? [16, true] : [15, false])),
+    );
+    // The rest are refused in so many words, never answered with a guess.
+    expect(replies.filter((reply) => !reply.success).map((reply) => reply.error)).toEqual(
+      Array(replies.length - accepted.length).fill("You are voting too quickly"),
+    );
+  });
+
   it("an old host moderates the same book, and a hidden question leaves old and new lists", async () => {
     const stack = await startWebinar();
     const host = await open(stack, asha, qaContract);

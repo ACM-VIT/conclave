@@ -85,9 +85,16 @@ const qaWithoutSockets = (mode: "meeting" | "webinar") => {
     displayName,
   });
   let now = 1_000_000;
+  /** One action, a moment after the last. */
   const act = (who: Actor, action: string, input: unknown): AuthorityResult<Json> => {
     now += 10;
     return qa.act(who, action, input, null, now);
+  };
+  /** One action in the same instant as the last: the clock does not move. */
+  const actNow = (who: Actor, action: string, input: unknown): AuthorityResult<Json> =>
+    qa.act(who, action, input, null, now);
+  const rest = (ms: number): void => {
+    now += ms;
   };
   const askAs = (who: Actor, text: string): string => {
     const asked = act(who, "ask", { text });
@@ -114,7 +121,17 @@ const qaWithoutSockets = (mode: "meeting" | "webinar") => {
         ),
       0,
     );
-  return { qa, actor, act, askAs, questions, bookBytes, hostActor: actor("host", "moderator", "Asha") };
+  return {
+    qa,
+    actor,
+    act,
+    actNow,
+    rest,
+    askAs,
+    questions,
+    bookBytes,
+    hostActor: actor("host", "moderator", "Asha"),
+  };
 };
 
 beforeEach(() => {
@@ -638,9 +655,45 @@ describe("a Q&A book of the longest questions", () => {
   });
 });
 
+describe("the upvote toggle the old wire uses", () => {
+  it("flips the caller's upvote and answers with the count it made", () => {
+    const { actor, act, askAs, hostActor } = qaWithoutSockets("webinar");
+    const asker = actor("asker", "attendee", "Asker");
+    const voters = Array.from({ length: 15 }, (_, index) =>
+      actor(`voter-${index}`, "attendee", `Voter ${index}`),
+    );
+    const id = askAs(asker, "Count me properly");
+    act(hostActor, "moderate", { id, action: "answering" });
+    for (const voter of voters) act(voter, "upvote", { id, value: true });
+
+    const on = act(asker, "toggleUpvote", { id });
+    const off = act(asker, "toggleUpvote", { id });
+    const again = act(voters[0], "toggleUpvote", { id });
+
+    expect(on).toEqual({ ok: true, value: { upvotes: 16, hasUpvoted: true } });
+    expect(off).toEqual({ ok: true, value: { upvotes: 15, hasUpvoted: false } });
+    // Someone who had upvoted takes theirs back.
+    expect(again).toEqual({ ok: true, value: { upvotes: 14, hasUpvoted: false } });
+  });
+
+  it("answers for a question the caller cannot see as for one that does not exist", () => {
+    const { actor, act, askAs, hostActor } = qaWithoutSockets("webinar");
+    const asker = actor("asker", "attendee", "Asker");
+    const other = actor("other", "attendee", "Other");
+    const waiting = askAs(asker, "Still waiting for a host");
+    const hidden = askAs(asker, "Hidden by a host");
+    act(hostActor, "moderate", { id: hidden, action: "dismissed" });
+
+    expect(act(other, "toggleUpvote", { id: waiting })).toMatchObject({ ok: false, reason: "not-found" });
+    expect(act(other, "toggleUpvote", { id: hidden })).toMatchObject({ ok: false, reason: "not-found" });
+    expect(act(other, "toggleUpvote", { id: "q-nope" })).toMatchObject({ ok: false, reason: "not-found" });
+  });
+});
+
 describe("making room in a Q&A book that a large webinar upvoted", () => {
   it("lets the host answer when room is made by dropping questions 5,000 people upvoted", () => {
-    const { qa, actor, act, askAs, questions, bookBytes, hostActor } = qaWithoutSockets("webinar");
+    const { qa, actor, act, actNow, rest, askAs, questions, bookBytes, hostActor } =
+      qaWithoutSockets("webinar");
     const attendees = Array.from({ length: 5_000 }, (_, index) =>
       actor(`attendee-${index}`, "attendee", `Attendee ${index}`),
     );
@@ -651,9 +704,19 @@ describe("making room in a Q&A book that a large webinar upvoted", () => {
       act(hostActor, "moderate", { id, action: "answered" });
       return id;
     });
-    for (const attendee of attendees) {
-      for (const id of popular) act(attendee, "upvote", { id, value: true });
+    // The audience upvotes as fast as the room takes it: a wave of people in
+    // one instant, then the two seconds the room's budget needs to come back.
+    const wave = DEFAULT_AUTHORITY_LIMITS.mutationBurst / popular.length;
+    let refused = 0;
+    for (let first = 0; first < attendees.length; first += wave) {
+      rest(2_000);
+      for (const attendee of attendees.slice(first, first + wave)) {
+        for (const id of popular) {
+          if (!actNow(attendee, "upvote", { id, value: true }).ok) refused += 1;
+        }
+      }
     }
+    rest(2_000);
     // Longer questions then fill the book to just under its size cap.
     const longQuestion = "問".repeat(500);
     let waiting = "";
@@ -674,12 +737,24 @@ describe("making room in a Q&A book that a large webinar upvoted", () => {
     qa.flushViews(live);
     const heldBefore = heldUpvotes(attendees[4_999]);
 
-    // The long answer takes the book over its cap. Making room for it means
-    // dropping all five answered questions and the 25,000 upvotes on them.
+    // Everyone presses upvote at once, far more than the room takes in one
+    // instant, and in that same instant the host answers. The long answer
+    // takes the book over its cap. Making room for it means dropping all five
+    // answered questions and the 25,000 upvotes on them.
+    rest(10_000);
+    const pressed = attendees.map((attendee) =>
+      actNow(attendee, "upvote", { id: popular[0], value: true }),
+    );
     const longAnswer = "答".repeat(1_000);
-    const answered = act(hostActor, "moderate", { id: waiting, action: "answered", answerText: longAnswer });
+    const answered = actNow(hostActor, "moderate", { id: waiting, action: "answered", answerText: longAnswer });
 
+    expect(refused).toBe(0);
     expect([popularBefore, upvotesBefore]).toEqual([5, 25_000]);
+    // The crowd is held to the room's budget. The host is not in that queue.
+    expect(pressed.filter((result) => result.ok).length).toBe(DEFAULT_AUTHORITY_LIMITS.mutationBurst);
+    expect(pressed.filter((result) => !result.ok && result.code === "busy").length).toBe(
+      attendees.length - DEFAULT_AUTHORITY_LIMITS.mutationBurst,
+    );
     expect(answered).toEqual({ ok: true, value: null });
     expect(questions().find((row) => row.id === waiting)?.answerText).toBe(longAnswer);
     expect(questions().filter((row) => popular.includes(row.id as string))).toEqual([]);

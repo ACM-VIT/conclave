@@ -79,6 +79,48 @@ const mayContribute = (ctx: GateContext): boolean =>
 const contributorIdentity = (ctx: GateContext): IdentityRequirement =>
   ctx.room.mode === "webinar" ? "any" : "verified";
 
+type QaTransaction = AuthorityTransaction<QaTables, Record<never, never>>;
+
+/**
+ * The question a caller may vote on. People may only vote on questions they
+ * can see, and a hidden question answers exactly like one that does not
+ * exist.
+ */
+const votable = (
+  ctx: GateContext,
+  tx: QaTransaction,
+  id: string,
+): QuestionRow | null => {
+  const question = tx.get("questions", key(id));
+  return question && question.status !== "dismissed" && isVisibleTo(question, ctx)
+    ? question
+    : null;
+};
+
+/**
+ * Sets whether the caller upvotes a question, and returns the question's
+ * count afterwards. One upvote per person per question: the key is both, so
+ * setting the same state twice changes nothing.
+ */
+const setUpvote = (
+  ctx: GateContext,
+  tx: QaTransaction,
+  question: QuestionRow,
+  value: boolean,
+): number => {
+  const voteKey = key(question.id, ctx.subject);
+  const changed = value
+    ? tx.insertIfAbsent("upvotes", voteKey, {
+        questionId: question.id,
+        voter: ctx.subject,
+      }) === "inserted"
+    : tx.delete("upvotes", voteKey);
+  if (!changed) return question.upvotes;
+  const upvotes = question.upvotes + (value ? 1 : -1);
+  tx.put("questions", key(question.id), { ...question, upvotes });
+  return upvotes;
+};
+
 /**
  * Trims the book to its caps on count and on size: hidden questions first,
  * then answered, then waiting, then whatever is oldest. `keep` is the
@@ -89,10 +131,7 @@ const contributorIdentity = (ctx: GateContext): IdentityRequirement =>
  * questions with long answers outgrow the largest view the runtime sends,
  * and a host who joins late is refused the whole book.
  */
-const trimBook = (
-  tx: AuthorityTransaction<QaTables, Record<never, never>>,
-  keep: string,
-): void => {
+const trimBook = (tx: QaTransaction, keep: string): void => {
   const rows = tx.scan("questions");
   const sizes = new Map<TableKey, number>();
   let bytes = 0;
@@ -173,32 +212,26 @@ export const qaAuthority = defineAuthority({
       identity: contributorIdentity,
       rate: { burst: 10, perSecond: 2 },
       run(ctx, tx, input) {
-        const question = tx.get("questions", key(input.id));
-        // People may only vote on questions they can see, and a hidden
-        // question answers exactly like one that does not exist.
-        if (
-          !question ||
-          question.status === "dismissed" ||
-          !isVisibleTo(question, ctx)
-        ) {
-          return reject("not-found");
-        }
-        // One upvote per person per question: the key is both.
-        const voteKey = key(input.id, ctx.subject);
-        if (input.value) {
-          const inserted = tx.insertIfAbsent("upvotes", voteKey, {
-            questionId: input.id,
-            voter: ctx.subject,
-          });
-          if (inserted === "exists") return null;
-        } else if (!tx.delete("upvotes", voteKey)) {
-          return null;
-        }
-        tx.put("questions", key(question.id), {
-          ...question,
-          upvotes: question.upvotes + (input.value ? 1 : -1),
-        });
+        const question = votable(ctx, tx, input.id);
+        if (!question) return reject("not-found");
+        setUpvote(ctx, tx, question, input.value);
         return null;
+      },
+    },
+    toggleUpvote: {
+      roles: ["moderator", "member", "attendee"],
+      when: mayContribute,
+      identity: contributorIdentity,
+      rate: { burst: 10, perSecond: 2 },
+      run(ctx, tx, input) {
+        const question = votable(ctx, tx, input.id);
+        if (!question) return reject("not-found");
+        const hasUpvoted =
+          tx.get("upvotes", key(input.id, ctx.subject)) === undefined;
+        return {
+          upvotes: setUpvote(ctx, tx, question, hasUpvoted),
+          hasUpvoted,
+        };
       },
     },
     moderate: {
@@ -235,28 +268,7 @@ export const qaAuthority = defineAuthority({
       },
     },
   },
-  queries: {
-    upvoteState: {
-      roles: ["moderator", "member", "attendee"],
-      when: mayContribute,
-      rate: { burst: 20, perSecond: 4 },
-      read(ctx, db, input) {
-        const question = db.get("questions", key(input.id));
-        if (
-          !question ||
-          question.status === "dismissed" ||
-          !isVisibleTo(question, ctx)
-        ) {
-          return reject("not-found");
-        }
-        return {
-          upvotes: question.upvotes,
-          hasUpvoted:
-            db.get("upvotes", key(input.id, ctx.subject)) !== undefined,
-        };
-      },
-    },
-  },
+  queries: {},
   onTimer: {},
   views: {
     questions: {
