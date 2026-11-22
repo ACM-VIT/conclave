@@ -2,6 +2,7 @@
 
 import { X } from "lucide-react";
 import { useCallback, useState } from "react";
+import { InCallNotice } from "./InCallNotices";
 
 const MIN_MISSED_MS = 2 * 60 * 1000;
 
@@ -49,16 +50,14 @@ export default function CatchUpPill({
     onOpen();
   }, [dismiss, onOpen]);
 
-  if (dismissed || startedAt == null || joinedAt == null) return null;
-  const missedMs = joinedAt - startedAt;
-  if (missedMs < MIN_MISSED_MS) return null;
-
+  const missedMs =
+    startedAt == null || joinedAt == null ? 0 : joinedAt - startedAt;
   const missedMinutes = Math.max(2, Math.round(missedMs / 60_000));
 
   return (
-    <div className="pointer-events-none absolute inset-x-0 top-4 z-40 flex justify-center px-4">
+    <InCallNotice show={!dismissed && missedMs >= MIN_MISSED_MS}>
       <div
-        className="pointer-events-auto flex max-w-[min(30rem,calc(100vw-2rem))] items-center gap-1 rounded-full border border-[#fafafa]/10 bg-[#0a0a0b]/85 p-1 shadow-[0_14px_42px_rgba(0,0,0,0.32)] backdrop-blur-md"
+        className="flex max-w-[min(30rem,calc(100vw-2rem))] items-center gap-1 rounded-full border border-[#fafafa]/10 bg-[#0a0a0b] p-1 shadow-[0_14px_42px_rgba(0,0,0,0.32)]"
         style={{ fontFamily: "'PolySans Trial', sans-serif" }}
         role="status"
       >
@@ -81,6 +80,6 @@ export default function CatchUpPill({
           <X size={13} strokeWidth={1.75} />
         </button>
       </div>
-    </div>
+    </InCallNotice>
   );
 }

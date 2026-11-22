@@ -2,7 +2,12 @@
 
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Dispatch, PointerEvent, SetStateAction } from "react";
+import type {
+  Dispatch,
+  PointerEvent,
+  ReactNode,
+  SetStateAction,
+} from "react";
 import {
   Home,
   Loader2,
@@ -23,6 +28,7 @@ import GridLayout from "./GridLayout";
 import ConnectionBanner from "./ConnectionBanner";
 import AdminNoticePill from "./AdminNoticePill";
 import CatchUpPill from "./CatchUpPill";
+import { InCallNotice, InCallNoticeSlot } from "./InCallNotices";
 import ParticipantsPanel from "./ParticipantsPanel";
 import MeetSettingsPanel from "./MeetSettingsPanel";
 import MeetViewPanel from "./MeetViewPanel";
@@ -127,6 +133,7 @@ const DevMeetToolsPanel = dynamic(() => import("./DevMeetToolsPanel"), {
 
 interface MeetsMainContentProps {
   roomAi: RoomAiController;
+  errorNotice?: ReactNode;
   isJoined: boolean;
   isMobile?: boolean;
   viewSettings: MeetViewSettings;
@@ -602,6 +609,7 @@ export default function MeetsMainContent({
   onRotateWebinarLink,
   transcript,
   roomAi,
+  errorNotice,
 }: MeetsMainContentProps) {
   const {
     state: appsState,
@@ -1875,15 +1883,6 @@ export default function MeetsMainContent({
       }`}
       style={mainContentStyle}
     >
-      {isJoined &&
-        !isRecoveringMeeting &&
-        (!isWebinarAttendee || serverRestartNotice) && (
-        <ConnectionBanner
-          state={connectionState}
-          isOffline={isNetworkOffline}
-          serverRestartNotice={serverRestartNotice}
-        />
-      )}
       {isRecoveringMeeting && (
         <div
           className="absolute inset-0 z-[95] flex items-center justify-center bg-[#050506]/70 px-4 backdrop-blur-md animate-fade-in"
@@ -1977,15 +1976,61 @@ export default function MeetsMainContent({
           </section>
         </div>
       )}
-      {isJoined && <AdminNoticePill notice={adminNotice} />}
-      {isJoined && !isWebinarAttendee && !isTranscriptOpen && transcript.isLive ? (
-        <CatchUpPill
-          startedAt={transcript.session.startedAt}
-          joinedAt={joinedAt}
-          sessionKey={`${transcript.session.roomId}:${transcript.session.startedAt ?? 0}`}
-          onOpen={handleOpenCatchUp}
-        />
+      {isJoined ? (
+        <InCallNoticeSlot
+          rightInset={isWebinarAttendee ? 0 : dockedPanelReserve}
+          belowWebinarHeader={isWebinarAttendee}
+        >
+          <InCallNotice show={Boolean(errorNotice)} className="w-full max-w-[640px]">
+            {errorNotice}
+          </InCallNotice>
+          {!isRecoveringMeeting && (!isWebinarAttendee || serverRestartNotice) ? (
+            <ConnectionBanner
+              state={connectionState}
+              isOffline={isNetworkOffline}
+              serverRestartNotice={serverRestartNotice}
+            />
+          ) : null}
+          <InCallNotice show={!isWebinarAttendee && participantAudioBlocked}>
+            <div role="status" className="flex max-w-full">
+              <button
+                type="button"
+                onClick={handlePlayParticipantAudio}
+                className="inline-flex max-w-full items-center gap-2.5 rounded-full border border-[#F95F4A]/60 bg-[#131316] px-5 py-2.5 text-xs uppercase tracking-[0.14em] text-[#fafafa] transition hover:bg-[#F95F4A]/15"
+                style={{ fontFamily: "'PolySans Trial', sans-serif" }}
+              >
+                <span className="h-2 w-2 shrink-0 rounded-full bg-[#F95F4A] animate-pulse" />
+                Audio is paused by your browser — click to listen
+              </button>
+            </div>
+          </InCallNotice>
+          <InCallNotice show={!isWebinarAttendee && browserAudioNeedsGesture}>
+            <div
+              role="status"
+              className="max-w-full rounded-full border border-[#fafafa]/10 bg-[#18181b] px-3.5 py-2 text-center text-[11px] uppercase tracking-[0.3em] text-[#F95F4A]"
+            >
+              Click “Shared browser audio” to unlock the system sound.
+            </div>
+          </InCallNotice>
+          {!isWebinarAttendee && !isTranscriptOpen && transcript.isLive ? (
+            <CatchUpPill
+              startedAt={transcript.session.startedAt}
+              joinedAt={joinedAt}
+              sessionKey={`${transcript.session.roomId}:${transcript.session.startedAt ?? 0}`}
+              onOpen={handleOpenCatchUp}
+            />
+          ) : null}
+          <InCallNotice show={viewSettings.audioOnlyMode} passive>
+            <div
+              role="status"
+              className="rounded-full border border-[#F95F4A]/40 bg-[#18181b] px-3 py-1.5 text-[12px] font-medium text-[#fafafa] shadow-lg"
+            >
+              Audio-only mode active
+            </div>
+          </InCallNotice>
+        </InCallNoticeSlot>
       ) : null}
+      {isJoined && <AdminNoticePill notice={adminNotice} />}
       {endFlowState !== "idle" ? (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/55 px-4">
           <div
@@ -2441,29 +2486,6 @@ export default function MeetsMainContent({
         />
       )}
 
-      {isJoined && viewSettings.audioOnlyMode && (
-        <div
-          role="status"
-          className="pointer-events-none fixed left-1/2 top-4 z-30 -translate-x-1/2 rounded-full border border-[#F95F4A]/40 bg-[#18181b]/95 px-3 py-1.5 text-[12px] font-medium text-[#fafafa] shadow-lg backdrop-blur"
-        >
-          Audio-only mode active
-        </div>
-      )}
-
-      {isJoined && !isWebinarAttendee && participantAudioBlocked && (
-        <div className="pointer-events-none fixed inset-x-0 top-16 z-[70] flex justify-center px-4">
-          <button
-            type="button"
-            onClick={handlePlayParticipantAudio}
-            className="pointer-events-auto inline-flex items-center gap-2.5 rounded-full border border-[#F95F4A]/60 bg-[#131316] px-5 py-2.5 text-xs uppercase tracking-[0.14em] text-[#fafafa] transition hover:bg-[#F95F4A]/15"
-            style={{ fontFamily: "'PolySans Trial', sans-serif" }}
-          >
-            <span className="h-2 w-2 rounded-full bg-[#F95F4A] animate-pulse" />
-            Audio is paused by your browser — click to listen
-          </button>
-        </div>
-      )}
-
       {isJoined &&
         (isWebinarAttendee ? null : (
           <div className="safe-area-pb flex w-full flex-col items-center gap-2">
@@ -2473,11 +2495,6 @@ export default function MeetsMainContent({
               onSendChatMessage={handleSendChat}
             />
             <ShortcutsHelpDialog />
-            {browserAudioNeedsGesture && (
-              <div className="w-full mt-2 text-center text-[11px] text-[#F95F4A]/70 uppercase tracking-[0.3em]">
-                Click “Shared browser audio” to unlock the system sound.
-              </div>
-            )}
           </div>
         ))}
 

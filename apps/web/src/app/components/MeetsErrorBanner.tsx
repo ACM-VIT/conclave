@@ -31,13 +31,15 @@ export default function MeetsErrorBanner({
     ? "Check that your camera and microphone aren’t in use by another app."
     : null;
 
-  const shellClass =
-    variant === "inline"
-      ? "w-full min-w-0 rounded-xl border border-[#F95F4A]/20 bg-[#F95F4A]/[0.07] px-3.5 py-3 flex items-start gap-3"
-      : "w-full min-w-0 px-6 py-3.5 bg-[#F95F4A]/[0.07] border-b border-[#F95F4A]/25 flex items-start gap-3 backdrop-blur-sm";
-
-  return (
-    <div className={shellClass} role="alert">
+  const banner = (
+    <div
+      className={
+        variant === "inline"
+          ? "w-full min-w-0 rounded-xl border border-[#F95F4A]/20 bg-[#F95F4A]/[0.07] px-3.5 py-3 flex items-start gap-3"
+          : "w-full min-w-0 rounded-xl border border-[#F95F4A]/25 bg-[#F95F4A]/[0.07] px-4 py-3.5 sm:px-6 flex items-start gap-3"
+      }
+      role="alert"
+    >
       <AlertCircle
         className="mt-0.5 h-4 w-4 shrink-0 text-[#F95F4A]"
         strokeWidth={2}
@@ -69,6 +71,13 @@ export default function MeetsErrorBanner({
       >
         <X className="h-4 w-4" />
       </button>
+    </div>
+  );
+
+  if (variant === "inline") return banner;
+  return (
+    <div className="w-full min-w-0 rounded-xl bg-[#18181b] shadow-[0_12px_32px_rgba(0,0,0,0.35)]">
+      {banner}
     </div>
   );
 }

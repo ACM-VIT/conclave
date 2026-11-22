@@ -3217,26 +3217,28 @@ export default function MeetsClient({
   return renderWithApps(
     <div className="flex flex-col h-full w-full bg-[#18181b] text-white">
       <MeetsHeader isJoined={isJoined} />
-      {connectionState === "joined" && meetError && (
-        <MeetsErrorBanner
-          meetError={meetError}
-          onDismiss={() => setMeetError(null)}
-          primaryActionLabel={
-            meetError.code === "PERMISSION_DENIED"
-              ? "Retry Permissions"
-              : meetError.code === "MEDIA_ERROR"
-                ? "Retry Devices"
-                : undefined
-          }
-          onPrimaryAction={
-            meetError.code === "PERMISSION_DENIED" ||
-            meetError.code === "MEDIA_ERROR"
-              ? handleRetryMedia
-              : undefined
-          }
-        />
-      )}
       <MeetsMainContent
+        errorNotice={
+          connectionState === "joined" && meetError ? (
+            <MeetsErrorBanner
+              meetError={meetError}
+              onDismiss={() => setMeetError(null)}
+              primaryActionLabel={
+                meetError.code === "PERMISSION_DENIED"
+                  ? "Retry Permissions"
+                  : meetError.code === "MEDIA_ERROR"
+                    ? "Retry Devices"
+                    : undefined
+              }
+              onPrimaryAction={
+                meetError.code === "PERMISSION_DENIED" ||
+                meetError.code === "MEDIA_ERROR"
+                  ? handleRetryMedia
+                  : undefined
+              }
+            />
+          ) : null
+        }
         roomAi={roomAi}
         isJoined={isJoined}
         isMobile={isMobile}
