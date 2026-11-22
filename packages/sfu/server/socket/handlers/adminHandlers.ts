@@ -364,6 +364,12 @@ export const registerAdminHandlers = (
 ): void => {
   const { socket, io, state } = context;
 
+  // Idempotent per socket. joinRoom (incl. the in-place room-switch path) and
+  // both host-promotion paths can each invoke this on the SAME live socket;
+  // binding twice would stack duplicate socket.on listeners so every admin
+  // action (kick / end-room / promote) fires N times and listeners leak. The
+  // single bound set always acts on the CURRENT room; the handlers resolve it
+  // live from the (per-socket, mutated-in-place) context via ensureAdminRoom.
   if (context.adminHandlersRegistered) {
     return;
   }
@@ -806,6 +812,8 @@ export const registerAdminHandlers = (
     });
   });
 
+  // Listing other meetings is for verified super admins (operators); a room
+  // admin, which anyone can become by creating a room, sees only their own.
   const canSeeOtherRooms = () =>
     getSocketAuthUser(socket)?.isSuperAdmin === true;
 
@@ -1592,6 +1600,9 @@ export const registerAdminHandlers = (
   ) => {
     const roomChannelId = endedRoom.channelId;
     if (!isCurrentRoom(state, endedRoom)) {
+      // Everyone left early and the channel was reopened (or this room was
+      // already closed): the sockets in the channel now belong to a newer
+      // room, so leave them and that room alone.
       Logger.info(`Skipping delayed close of ${roomChannelId}: room already replaced or closed`);
       return;
     }
@@ -1648,6 +1659,10 @@ export const registerAdminHandlers = (
       });
     }
 
+    // Give the roomEnded broadcast and the admin ack a moment to flush before
+    // the hard disconnect. Closing on the very next tick races the network
+    // write, and a client that loses that race sees a raw socket drop (the
+    // "connection interrupted" reconnect banner) instead of the ended screen.
     const ROOM_END_FLUSH_GRACE_MS = 400;
     setTimeout(
       () => {

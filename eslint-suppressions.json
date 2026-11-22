@@ -59,6 +59,11 @@
       "count": 27
     }
   },
+  "packages/sfu/server/cors.ts": {
+    "conclave/no-comments": {
+      "count": 3
+    }
+  },
   "packages/sfu/server/createSfuServer.ts": {
     "conclave/no-comments": {
       "count": 4
@@ -109,6 +114,11 @@
       "count": 3
     }
   },
+  "packages/sfu/server/socket/handlers/adminHandlers.ts": {
+    "conclave/no-comments": {
+      "count": 15
+    }
+  },
   "packages/sfu/server/socket/handlers/appsHandlers.ts": {
     "conclave/no-comments": {
       "count": 12
@@ -154,6 +164,11 @@
       "count": 1
     }
   },
+  "packages/sfu/server/transcript/relayRegistry.ts": {
+    "conclave/no-comments": {
+      "count": 3
+    }
+  },
   "packages/sfu/server/webcamReceiverCapacityProof.ts": {
     "conclave/no-comments": {
       "count": 4
@@ -185,6 +200,11 @@
     }
   },
   "packages/sfu/test/room-placement-http.test.ts": {
+    "conclave/no-comments": {
+      "count": 2
+    }
+  },
+  "packages/sfu/test/transcript-relay-registry.test.ts": {
     "conclave/no-comments": {
       "count": 2
     }
