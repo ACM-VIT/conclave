@@ -36,10 +36,13 @@ import {
 } from "../lib/media-capture-timeout";
 import {
   clearMediaDeviceError,
+  createMediaDeviceError,
   createMeetError,
   mergeMediaDeviceError,
+  type MediaDeviceFailures,
 } from "../lib/utils";
 import type { MeetMediaDevice } from "../lib/types";
+import { acquireLocalTracks } from "../lib/media-acquisition";
 import {
   createCapturedSurfaceControlState,
   createCaptureController,
@@ -2047,16 +2050,6 @@ export function useMeetMedia({
         return new MediaStream();
       }
 
-      const acquiredTracks: MediaStreamTrack[] = [];
-      let firstRequiredError: unknown = null;
-      const rememberRequiredError = (
-        error: unknown,
-        required: boolean,
-      ) => {
-        if (required && !firstRequiredError) {
-          firstRequiredError = error;
-        }
-      };
       const requestTracks = async (
         requestAudio: boolean,
         requestVideo: boolean,
@@ -2084,50 +2077,16 @@ export function useMeetMedia({
           },
         );
       };
-      const appendLiveTracks = (stream: MediaStream) => {
-        acquiredTracks.push(
-          ...stream
-            .getTracks()
-            .filter((track) => track.readyState === "live"),
-        );
-      };
-
-      if (shouldRequestAudio || shouldRequestVideo) {
-        try {
-          appendLiveTracks(
-            await requestTracks(shouldRequestAudio, shouldRequestVideo),
-          );
-        } catch (combinedErr) {
-          if (shouldRequestAudio && shouldRequestVideo) {
-            try {
-              appendLiveTracks(await requestTracks(true, false));
-            } catch (audioErr) {
-              rememberRequiredError(audioErr, audioRequired);
-              if (!audioRequired) {
-                console.info(
-                  "[Meets] Muted microphone warmup skipped:",
-                  audioErr,
-                );
-              }
-            }
-            try {
-              appendLiveTracks(await requestTracks(false, true));
-            } catch (videoErr) {
-              rememberRequiredError(videoErr, videoRequired);
-            }
-          } else {
-            rememberRequiredError(
-              combinedErr,
-              shouldRequestAudio ? audioRequired : videoRequired,
-            );
-            if (shouldRequestAudio && !audioRequired) {
-              console.info(
-                "[Meets] Muted microphone warmup skipped:",
-                combinedErr,
-              );
-            }
-          }
-        }
+      const { streams: acquiredStreams, failures } = await acquireLocalTracks({
+        audio: shouldRequestAudio,
+        video: shouldRequestVideo,
+        request: requestTracks,
+      });
+      const acquiredTracks = acquiredStreams.flatMap((stream) =>
+        stream.getTracks().filter((track) => track.readyState === "live"),
+      );
+      if (failures.microphone && !audioRequired) {
+        console.info("[Meets] Muted microphone warmup skipped:", failures.microphone);
       }
 
       let nextAudioTrack =
@@ -2153,31 +2112,20 @@ export function useMeetMedia({
         hasVideoPermission: hasVideo,
       });
 
-      const audioUnavailable = audioRequired && !hasAudio;
-      const videoUnavailable = videoRequired && !hasVideo;
-      if (audioUnavailable) {
-        firstRequiredError ??= new Error("Microphone access was unavailable");
+      const requiredFailures: MediaDeviceFailures = {};
+      if (audioRequired && !hasAudio) {
+        requiredFailures.microphone =
+          failures.microphone ?? new Error("Microphone access was unavailable");
         setIsMuted(true);
       }
-      if (videoUnavailable) {
-        firstRequiredError ??= new Error("Camera access was unavailable");
+      if (videoRequired && !hasVideo) {
+        requiredFailures.camera =
+          failures.camera ?? new Error("Camera access was unavailable");
         setIsCameraOff(true);
       }
-      if (firstRequiredError) {
-        setMeetError((current) =>
-          mergeMediaDeviceError(
-            current,
-            createMeetError(
-              firstRequiredError,
-              "PERMISSION_DENIED",
-              audioUnavailable && videoUnavailable
-                ? "both"
-                : videoUnavailable
-                  ? "camera"
-                  : "microphone",
-            ),
-          ),
-        );
+      const requiredError = createMediaDeviceError(requiredFailures, "PERMISSION_DENIED");
+      if (requiredError) {
+        setMeetError((current) => mergeMediaDeviceError(current, requiredError));
       }
 
       if (nextAudioTrack) {

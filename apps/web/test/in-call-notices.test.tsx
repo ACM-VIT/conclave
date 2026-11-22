@@ -319,7 +319,7 @@ describe("in-call notices", () => {
     );
     expect(errorCard()?.textContent).toContain("Microphone is blocked and no camera found");
     expect(errorCard()?.textContent).toContain(
-      "Allow microphone access in your browser, and check that your camera isn’t in use by another app, then try again.",
+      "Allow microphone access in your browser, and connect or select a camera, then try again.",
     );
   });
 });

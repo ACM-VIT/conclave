@@ -25,7 +25,7 @@ describe("media device errors", () => {
   it("names only the device that is missing", () => {
     expect(createMeetError(missing, "MEDIA_ERROR", "camera").message).toBe("No camera found");
     expect(createMeetError(missing, "MEDIA_ERROR", "microphone").message).toBe("No microphone found");
-    expect(createMeetError(missing, "MEDIA_ERROR").message).toBe("Camera or microphone not found");
+    expect(createMeetError(missing, "MEDIA_ERROR").message).toBe("No camera or microphone found");
   });
 
   it("clears an error only when the device it names recovers", () => {

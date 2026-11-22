@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { AlertCircle, X } from "lucide-react";
 import type { MeetError } from "../lib/types";
+import { mediaErrorAdvice } from "../lib/utils";
 import InCallNoticeCard from "./InCallNoticeCard";
 
 interface MeetsErrorBannerProps {
@@ -20,28 +21,6 @@ const DEVICE_ACCESS = {
   both: "camera and microphone",
 } as const;
 
-const causeAdvice = (
-  device: "camera" | "microphone",
-  cause: NonNullable<MeetError["causes"]>["camera"],
-) =>
-  !cause || cause.kind === "other"
-    ? null
-    : cause.kind === "blocked"
-      ? `allow ${device} access in your browser`
-      : `check that your ${device} isn’t in use by another app`;
-
-function mixedCauseAdvice(meetError: MeetError): string | null {
-  const camera = meetError.causes?.camera;
-  const microphone = meetError.causes?.microphone;
-  if (!camera || !microphone || camera.kind === microphone.kind) return null;
-  const parts = [causeAdvice("microphone", microphone), causeAdvice("camera", camera)].filter(
-    (part): part is string => Boolean(part),
-  );
-  if (parts.length === 0) return null;
-  const sentence = parts.join(", and ");
-  return `${sentence.charAt(0).toUpperCase()}${sentence.slice(1)}, then try again.`;
-}
-
 export default function MeetsErrorBanner({
   meetError,
   onDismiss,
@@ -58,10 +37,9 @@ export default function MeetsErrorBanner({
   const isGuestBlockedError =
     meetError.message === "Guests are not allowed in this meeting.";
   const isRoomNotFoundError = meetError.message === "No room found.";
-  const mixedAdvice = mixedCauseAdvice(meetError);
-  const helperText = mixedAdvice
-    ? mixedAdvice
-    : isGuestBlockedError
+  const helperText =
+    mediaErrorAdvice(meetError) ??
+    (isGuestBlockedError
     ? "This room only allows signed-in users. Sign in to join."
     : isRoomNotFoundError
     ? "Double-check the code and try again."
@@ -71,7 +49,7 @@ export default function MeetsErrorBanner({
     ? meetError.device === "both" || !meetError.device
       ? "Check that your camera and microphone aren’t in use by another app."
       : `Check that your ${devices} isn’t in use by another app.`
-    : null;
+    : null);
 
   if (variant === "strip") {
     return (

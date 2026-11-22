@@ -634,7 +634,7 @@ export interface MeetError {
 
 export interface MeetMediaDeviceCause {
   code: MeetError["code"];
-  kind: "blocked" | "missing" | "unresponsive" | "other";
+  kind: "blocked" | "missing" | "busy" | "unresponsive" | "other";
   message: string;
 }
 
