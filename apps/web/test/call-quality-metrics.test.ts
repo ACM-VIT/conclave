@@ -742,6 +742,48 @@ describe("call_summary", () => {
     });
   });
 
+  it("counts only freezes after the first sample, even when it came before joined", () => {
+    const { tracker, state, named } = setup();
+    state("connecting", 0);
+    state("joining", 400);
+    tracker.onStats(
+      sample([video({ bytesReceived: 100_000, framesDecoded: 100, freezeCount: 3, totalFreezesDurationSec: 1.5 })]),
+      2000,
+    );
+    state("joined", 5000);
+    tracker.onStats(
+      sample([video({ bytesReceived: 110_000, framesDecoded: 110, freezeCount: 3, totalFreezesDurationSec: 1.5 })]),
+      5250,
+    );
+    tracker.onStats(
+      sample([video({ bytesReceived: 260_000, framesDecoded: 260, freezeCount: 4, totalFreezesDurationSec: 1.8 })]),
+      10_250,
+    );
+    state("disconnected", 11_000);
+
+    expect(named("call_summary")[0].props).toMatchObject({
+      video_freeze_count: 1,
+      video_freeze_ms: 300,
+    });
+  });
+
+  it("takes the first sample of a call as the baseline, not as a delta from zero", () => {
+    const { tracker, state, named } = setup();
+    state("connecting", 0);
+    state("joined", 1000);
+    tracker.onStats(
+      sample([audio({ packetsReceived: 50, concealedSamples: 4800, totalSamplesReceived: 9600 })]),
+      1250,
+    );
+    tracker.onStats(
+      sample([audio({ packetsReceived: 300, concealedSamples: 4800, totalSamplesReceived: 249_600 })]),
+      6250,
+    );
+    state("disconnected", 7000);
+
+    expect(named("call_summary")[0].props.audio_concealed_pct).toBe(0);
+  });
+
   it("measures the sample after a failed read over the whole interval", () => {
     const { tracker, state, named } = setup();
     state("connecting", 0);

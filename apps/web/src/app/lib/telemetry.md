@@ -45,8 +45,9 @@ click" means from the moment the join started (`connecting`). Stats are sampled
 from the receive transport and the camera producer every 250 ms from the join
 click (except in the waiting room) until first media arrives, then every 5 s, so
 first-media times are stamped at the first sample that shows them, even when
-media arrives before the join finishes. A gap of more than 15 s between readable
-samples is left out of every total.
+media arrives before the join finishes. The first sample, during the join or
+after, is only a baseline: totals add deltas over measured intervals. A gap of
+more than 15 s between readable samples is left out of every total.
 
 ### `call_join`
 

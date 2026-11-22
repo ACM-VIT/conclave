@@ -124,6 +124,14 @@ type Attempt = {
   /** Remote media can start flowing while the join is still finishing. */
   firstAudioAt: number | null;
   firstVideoAt: number | null;
+  /** When each direction was last read; a failed read leaves it in place. */
+  lastInboundAt: number | null;
+  lastOutboundAt: number | null;
+  /** Last counters per stream and layer id, from the first sample on, even
+   *  during the join; kept for the whole call so one that drops out of a
+   *  report and comes back is not counted twice. */
+  streams: Map<string, StreamMemory>;
+  outboundLayers: Map<string, OutboundLayerStats>;
 };
 
 type MediaTotals = {
@@ -154,13 +162,6 @@ type Call = Attempt & {
   peakParticipants: number;
   remotePresentAt: number | null;
   firstMediaReported: boolean;
-  /** When each direction was last read; a failed read leaves it in place. */
-  lastInboundAt: number | null;
-  lastOutboundAt: number | null;
-  /** Last counters per stream and layer id; kept for the whole call so one that
-   *  drops out of a report and comes back is not counted twice. */
-  streams: Map<string, StreamMemory>;
-  outboundLayers: Map<string, OutboundLayerStats>;
   lastProfile: VideoQuality | null;
   totals: MediaTotals;
 };
@@ -372,10 +373,6 @@ export function createCallMetricsTracker({
     peakParticipants: participants,
     remotePresentAt: participants > 1 ? at : null,
     firstMediaReported: false,
-    lastInboundAt: null,
-    lastOutboundAt: null,
-    streams: new Map(),
-    outboundLayers: new Map(),
     lastProfile: null,
     totals: emptyTotals(),
   });
@@ -416,19 +413,23 @@ export function createCallMetricsTracker({
     return stalled;
   };
 
-  /** `dt` is null for an interval that is not measured: only the baseline moves. */
+  /**
+   * `dt` is null for an interval that is not measured, and `totals` is null
+   * before the call starts: then only the baseline moves.
+   */
   const foldInbound = (
-    call: Call,
+    media: Attempt,
+    totals: MediaTotals | null,
     stream: InboundStreamStats,
     dt: number | null,
   ) => {
-    const previous = call.streams.get(stream.id);
+    const previous = media.streams.get(stream.id);
     const stalled =
-      dt === null
+      dt === null || totals === null
         ? (previous?.stalled ?? false)
-        : addInbound(call.totals, stream, previous, dt);
+        : addInbound(totals, stream, previous, dt);
 
-    call.streams.set(stream.id, {
+    media.streams.set(stream.id, {
       packetsReceived: stream.packetsReceived,
       bytesReceived: stream.bytesReceived,
       framesDecoded: stream.framesDecoded,
@@ -486,12 +487,13 @@ export function createCallMetricsTracker({
   };
 
   /**
-   * The time since a direction's last read, or null when a gap this long (a
+   * The time since a direction's last read, or null when there is nothing to
+   * measure against: the first read is only a baseline, and a gap this long (a
    * throttled tab, failed reads) cannot say when its bytes and freezes
    * happened.
    */
   const measuredInterval = (since: number | null, at: number) => {
-    if (since === null) return 0;
+    if (since === null) return null;
     const dt = at - since;
     return dt > MAX_SAMPLE_GAP_MS ? null : dt;
   };
@@ -512,6 +514,10 @@ export function createCallMetricsTracker({
             waitingEndedAt: null,
             firstAudioAt: null,
             firstVideoAt: null,
+            lastInboundAt: null,
+            lastOutboundAt: null,
+            streams: new Map(),
+            outboundLayers: new Map(),
           },
         };
         return;
@@ -581,24 +587,28 @@ export function createCallMetricsTracker({
     },
 
     onStats(sample, at) {
-      if (phase.name === "joining") {
-        if (sample.inbound) noteFirstMedia(phase.attempt, sample.inbound, at);
-        return;
-      }
-      if (phase.name !== "in_call") return;
-      const { call } = phase;
+      if (phase.name === "idle") return;
+      // During the join a sample only sets baselines; a call adds deltas.
+      const media = phase.name === "joining" ? phase.attempt : phase.call;
+      const call = phase.name === "in_call" ? phase.call : null;
       if (sample.inbound) {
-        noteFirstMedia(call, sample.inbound, at);
-        const dt = measuredInterval(call.lastInboundAt, at);
-        call.lastInboundAt = at;
-        sample.inbound.forEach((stream) => foldInbound(call, stream, dt));
+        noteFirstMedia(media, sample.inbound, at);
+        const dt = call ? measuredInterval(media.lastInboundAt, at) : null;
+        media.lastInboundAt = at;
+        sample.inbound.forEach((stream) =>
+          foldInbound(media, call?.totals ?? null, stream, dt),
+        );
       }
       if (sample.outboundVideo) {
-        const dt = measuredInterval(call.lastOutboundAt, at);
-        call.lastOutboundAt = at;
-        foldOutbound(call, sample.outboundVideo, sample.outboundProfile, dt);
+        if (call) {
+          const dt = measuredInterval(call.lastOutboundAt, at);
+          foldOutbound(call, sample.outboundVideo, sample.outboundProfile, dt);
+        } else {
+          sample.outboundVideo.forEach((layer) => media.outboundLayers.set(layer.id, layer));
+        }
+        media.lastOutboundAt = at;
       }
-      reportFirstMedia(call, at);
+      if (call) reportFirstMedia(call, at);
     },
 
     onPageHidden(at) {
