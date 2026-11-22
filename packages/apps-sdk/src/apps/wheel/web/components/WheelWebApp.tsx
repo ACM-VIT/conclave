@@ -297,10 +297,13 @@ export function WheelWebApp() {
 
   return (
     <div className="@container h-full min-h-0 w-full">
-      <div className="flex h-full min-h-0 w-full flex-col bg-[#0a0a0b] text-[#fafafa] @min-[720px]:flex-row">
+      <div
+        data-wheel-scroll
+        className="flex h-full min-h-0 w-full flex-col overflow-y-auto bg-[#0a0a0b] text-[#fafafa] @min-[720px]:flex-row @min-[720px]:overflow-visible"
+      >
         <section
           ref={sectionRef}
-          className={`relative flex min-h-[260px] min-w-0 flex-1 flex-col ${wheelHidden ? "justify-center" : ""}`}
+          className={`relative flex min-h-[240px] min-w-0 flex-1 flex-col @min-[720px]:min-h-[260px] ${wheelHidden ? "justify-center" : ""}`}
         >
           <div
             ref={readoutRef}
@@ -400,7 +403,7 @@ export function WheelWebApp() {
           </div>
         </section>
 
-        <aside className="flex h-[44%] min-h-[200px] w-full shrink-0 flex-col border-t border-white/[0.08] bg-[#111113] @min-[720px]:h-auto @min-[720px]:w-[320px] @min-[720px]:border-l @min-[720px]:border-t-0">
+        <aside className="flex h-[44%] min-h-[280px] w-full shrink-0 @min-[720px]:min-h-[200px] flex-col border-t border-white/[0.08] bg-[#111113] @min-[720px]:h-auto @min-[720px]:w-[320px] @min-[720px]:border-l @min-[720px]:border-t-0">
           <WheelPanel
             entries={entries}
             history={history}
