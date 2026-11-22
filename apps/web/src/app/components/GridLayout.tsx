@@ -2117,6 +2117,7 @@ function GridLayout({
   const latestRoomTilingMetadataBaseRef =
     useRef<MeetRoomTilingMetadataBase | null>(null);
   const latestRoomTilingMetadataSignatureRef = useRef("");
+  const publishRoomTilingMetadataRef = useRef<(() => void) | null>(null);
   const roomTilingMetadataBase = useMemo<MeetRoomTilingMetadataBase>(
     () => ({
       source: "client",
@@ -2292,9 +2293,10 @@ function GridLayout({
     [roomTilingMetadataBase],
   );
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     latestRoomTilingMetadataBaseRef.current = roomTilingMetadataBase;
     latestRoomTilingMetadataSignatureRef.current = roomTilingMetadataSignature;
+    publishRoomTilingMetadataRef.current?.();
   }, [roomTilingMetadataBase, roomTilingMetadataSignature]);
 
   useEffect(() => {
@@ -2343,6 +2345,7 @@ function GridLayout({
     };
 
     window.__conclaveGetMeetRoomTilingDebug = getSnapshot;
+    publishRoomTilingMetadataRef.current = publish;
     publish({ force: true });
     const interval = window.setInterval(
       () => publish({ heartbeat: true }),
@@ -2351,6 +2354,7 @@ function GridLayout({
 
     return () => {
       window.clearInterval(interval);
+      publishRoomTilingMetadataRef.current = null;
       if (window.__conclaveGetMeetRoomTilingDebug === getSnapshot) {
         delete window.__conclaveGetMeetRoomTilingDebug;
       }
