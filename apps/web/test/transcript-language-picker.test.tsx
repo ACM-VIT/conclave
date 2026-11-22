@@ -38,6 +38,7 @@ const controller = (
     isStreamingAudio: true,
     isServiceUpdateAvailable: false,
     supportsCaptionLanguage: true,
+    captionLanguageDefaults: { openai: "en", sarvam: "en" },
     error: null,
     allSegments: [],
     qaMessages: [],
@@ -68,6 +69,10 @@ const roomUsing = (transcriptionModel: string) =>
 
 const select = (id: string) =>
   container.querySelector<HTMLSelectElement>(`#${id}`);
+const selectedText = (id: string) => {
+  const element = select(id);
+  return element?.options[element.selectedIndex]?.textContent ?? null;
+};
 
 const choose = async (id: string, value: string) => {
   const element = select(id);
@@ -141,7 +146,7 @@ describe("caption language picker", () => {
     const transcript = controller({});
     await render(transcript);
 
-    expect(select("captions-language-start")?.value).toBe("en");
+    expect(selectedText("captions-language-start")).toBe("Default (English)");
     await submit();
 
     expect(transcript.start).toHaveBeenCalled();
@@ -184,7 +189,7 @@ describe("caption language picker", () => {
     );
     expect(options).toContain("hi");
     expect(options).not.toContain("es");
-    expect(select("captions-language-start")?.value).toBe("en");
+    expect(selectedText("captions-language-start")).toBe("Default (English)");
   });
 
   it("lets the controller switch the language of live captions", async () => {
@@ -248,12 +253,33 @@ describe("caption language picker", () => {
     expect(container.textContent).not.toContain("Hindi");
   });
 
-  it("hides the live switch when the worker does not report a language", async () => {
-    await render(
-      controller({ status: "live", keySource: "global" }, { isController: true }),
-    );
+  it("shows what will be used when nobody picked a language: the worker's default", async () => {
+    const transcript = controller({}, { captionLanguageDefaults: { openai: "hi", sarvam: "hi" } });
+    await render(transcript);
 
-    expect(select("captions-language-live")).toBeNull();
+    expect(selectedText("captions-language-start")).toBe("Default (Hindi)");
+    await submit();
+    expect(sentLanguage(transcript.start as ReturnType<typeof vi.fn>)).toBeUndefined();
+  });
+
+  it("shows Auto-detect when the worker's Sarvam default detects the language", async () => {
+    await render(controller({}, { captionLanguageDefaults: { openai: "en", sarvam: null } }));
+
+    await clickText("Sarvam");
+
+    expect(selectedText("captions-language-start")).toBe("Auto-detect");
+  });
+
+  it("keeps the live switch for an auto-detecting session and shows Auto-detect", async () => {
+    const transcript = controller(
+      { status: "live", language: undefined, keySource: "global", transcriptModel: "saaras:v3" },
+      { isController: true },
+    );
+    await render(transcript);
+
+    expect(selectedText("captions-language-live")).toBe("Auto-detect");
+    await choose("captions-language-live", "ta");
+    expect(transcript.takeover).toHaveBeenCalledWith(expect.objectContaining({ language: "ta" }));
   });
 
   it("shows other people the language captions are in", async () => {

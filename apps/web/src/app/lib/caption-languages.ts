@@ -61,6 +61,19 @@ export function captionLanguageLabel(code: string | undefined): string {
   );
 }
 
+/**
+ * The label for "nobody picked a language": the worker's default for the
+ * provider, Auto-detect when that default detects the language, or plain
+ * Default for a worker that does not say.
+ */
+export function defaultCaptionLanguageLabel(
+  defaultLanguage: string | null | undefined,
+): string {
+  if (defaultLanguage === null) return "Auto-detect";
+  if (defaultLanguage === undefined) return "Default";
+  return `Default (${captionLanguageLabel(defaultLanguage)})`;
+}
+
 /** The language this browser last picked, or null when it never picked one. */
 export function readCaptionLanguage(): string | null {
   try {

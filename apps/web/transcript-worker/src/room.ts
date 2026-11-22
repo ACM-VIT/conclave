@@ -278,6 +278,7 @@ export class TranscriptRoom {
       globalProviderKeysAvailable: this.globalProviderKeysAvailable(),
       serviceVersion: this.serviceVersion(),
       supportsCaptionLanguage: true,
+      captionLanguageDefaults: this.captionLanguageDefaults(),
       segments: this.segments,
       partials: this.visiblePartials(),
       minutes: this.minutes,
@@ -568,6 +569,15 @@ export class TranscriptRoom {
     return getTranscriptServiceVersion(this.env);
   }
 
+  /** Per provider, what a session uses when nobody picks a language; null is auto-detect. */
+  private captionLanguageDefaults(): Record<"openai" | "sarvam", string | null> {
+    const language = normalizeLanguage(this.env.TRANSCRIPT_TRANSCRIPTION_LANGUAGE);
+    return {
+      openai: reportedTranscriptionLanguage("openai", language, false, this.env) ?? null,
+      sarvam: reportedTranscriptionLanguage("sarvam", language, false, this.env) ?? null,
+    };
+  }
+
   private sendError(viewer: Viewer, message: string, requestId?: string): void {
     this.send(viewer.socket, {
       type: "error",
@@ -661,6 +671,7 @@ export class TranscriptRoom {
           globalProviderKeysAvailable: this.globalProviderKeysAvailable(),
           serviceVersion: this.serviceVersion(),
           supportsCaptionLanguage: true,
+          captionLanguageDefaults: this.captionLanguageDefaults(),
           segments: this.segments,
           partials: this.visiblePartials(),
           minutes: this.minutes,
@@ -1132,6 +1143,7 @@ export class TranscriptRoom {
       globalProviderKeysAvailable: this.globalProviderKeysAvailable(),
       serviceVersion: this.serviceVersion(),
       supportsCaptionLanguage: true,
+      captionLanguageDefaults: this.captionLanguageDefaults(),
       segments: [],
       partials: [],
       minutes: this.minutes,

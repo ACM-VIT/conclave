@@ -112,7 +112,26 @@ async function fixture(transcriptModel: string, env: Partial<Env> = {}) {
       .filter((message) => message.type === "segment.final")
       .map((message) => message.segment.text);
   const lastSnapshotTexts = () => snapshots.at(-1)?.segments.map(({ text }) => text) ?? [];
-  return { room, sockets, start, switchTo, stop, speak, commit, savedTexts, broadcastFinals, lastSnapshotTexts };
+  const viewerSnapshot = async () => {
+    await send({ type: "export.snapshot" });
+    return (viewer.socket.send as ReturnType<typeof vi.fn>).mock.calls
+      .map(([raw]) => JSON.parse(raw))
+      .filter((message) => message.type === "snapshot")
+      .at(-1);
+  };
+  return {
+    room,
+    sockets,
+    start,
+    switchTo,
+    stop,
+    speak,
+    commit,
+    savedTexts,
+    broadcastFinals,
+    lastSnapshotTexts,
+    viewerSnapshot,
+  };
 }
 
 const settle = () => vi.advanceTimersByTimeAsync(0);
@@ -382,6 +401,20 @@ describe("drain lifetime", () => {
 });
 
 describe("the language a session reports", () => {
+  it("tells clients each provider's default language, null for auto-detect", async () => {
+    const hindi = await fixture(OPENAI, { TRANSCRIPT_SARVAM_LANGUAGE_CODE: "hi-IN" });
+    expect((await hindi.viewerSnapshot())?.captionLanguageDefaults).toEqual({
+      openai: "en",
+      sarvam: "hi",
+    });
+
+    const auto = await fixture(OPENAI, { TRANSCRIPT_SARVAM_LANGUAGE_CODE: "unknown" });
+    expect((await auto.viewerSnapshot())?.captionLanguageDefaults).toEqual({
+      openai: "en",
+      sarvam: null,
+    });
+  });
+
   it("reports the operator's Sarvam language for a client that names none, and keeps it on a web resume", async () => {
     vi.useFakeTimers();
     const { room, sockets, start, switchTo } = await fixture(SARVAM, {

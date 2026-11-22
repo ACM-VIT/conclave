@@ -92,6 +92,7 @@ type ServerEnvelope =
       globalProviderKeysAvailable?: TranscriptProviderKeyAvailability;
       serviceVersion?: TranscriptServiceVersion;
       supportsCaptionLanguage?: boolean;
+      captionLanguageDefaults?: CaptionLanguageDefaults;
       session: TranscriptSessionState;
       segments?: TranscriptSegment[];
       partials?: TranscriptSegment[];
@@ -149,6 +150,11 @@ type SessionRequestOutcome =
   | { kind: "rejected" }
   | { kind: "replaced" }
   | { kind: "timeout" };
+
+/** Per provider, the language a session uses when nobody picks one; null is auto-detect. */
+export type CaptionLanguageDefaults = Partial<
+  Record<"openai" | "sarvam", string | null>
+>;
 
 type TranscriptSessionWaiter = {
   requestId: string;
@@ -318,6 +324,8 @@ export function useMeetingTranscript({
   const [globalProviderKeysAvailable, setGlobalProviderKeysAvailable] =
     useState<TranscriptProviderKeyAvailability>({});
   const [supportsCaptionLanguage, setSupportsCaptionLanguage] = useState(false);
+  const [captionLanguageDefaults, setCaptionLanguageDefaults] =
+    useState<CaptionLanguageDefaults>({});
   const [serviceVersion, setServiceVersion] =
     useState<TranscriptServiceVersion | null>(null);
   const [availableServiceVersion, setAvailableServiceVersion] =
@@ -789,6 +797,7 @@ export function useMeetingTranscript({
           applyProviderKeyAvailability(message);
           applyServiceVersion(message.serviceVersion);
           setSupportsCaptionLanguage(message.supportsCaptionLanguage === true);
+          setCaptionLanguageDefaults(message.captionLanguageDefaults ?? {});
           applySessionState(message.session, true);
           setSegments(message.segments ?? []);
           setPartials(
@@ -1501,6 +1510,7 @@ export function useMeetingTranscript({
       setGlobalProviderKeysAvailable({});
       setServiceVersion(null);
       setSupportsCaptionLanguage(false);
+      setCaptionLanguageDefaults({});
       serviceVersionRef.current = null;
       setAvailableServiceVersion(null);
       setViewerConnectionId(null);
@@ -1648,6 +1658,7 @@ export function useMeetingTranscript({
     hasGlobalOpenAiKey,
     globalProviderKeysAvailable,
     supportsCaptionLanguage,
+    captionLanguageDefaults,
     hasGlobalKeysForTranscriptModel,
     serviceVersion,
     availableServiceVersion,

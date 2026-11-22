@@ -36,10 +36,9 @@ import {
 } from "../lib/transcript-models";
 import type { TranscriptMinutesEntry, TranscriptSegment } from "../lib/types";
 import {
-  captionLanguageFor,
   captionLanguageLabel,
   captionLanguagesFor,
-  DEFAULT_CAPTION_LANGUAGE,
+  defaultCaptionLanguageLabel,
   readCaptionLanguage,
   saveCaptionLanguage,
 } from "../lib/caption-languages";
@@ -229,12 +228,15 @@ function CaptionLanguageSelect({
   id,
   value,
   provider,
+  defaultLabel,
   onChange,
   className,
 }: {
   id: string;
+  /** A language code, or "" for the default option. */
   value: string;
   provider: ReturnType<typeof getTranscriptTranscriptionProvider>;
+  defaultLabel?: string;
   onChange: (code: string) => void;
   className: string;
 }) {
@@ -248,6 +250,7 @@ function CaptionLanguageSelect({
       }}
       className={className}
     >
+      {defaultLabel ? <option value="">{defaultLabel}</option> : null}
       {captionLanguagesFor(provider).map(({ code, label }) => (
         <option key={code} value={code}>
           {label}
@@ -280,20 +283,24 @@ function StartStage({
   const needsTakeover = transcript.session.status === "takeover_needed";
   const provider = getTranscriptTranscriptionProvider(transcriptModel);
   const isSarvam = provider === "sarvam";
+  // What the form shows is what will be used: a language someone picked
+  // (now, or earlier and saved, for a new session), the resumed session's
+  // own language, or "" for the worker's default. Only a pick is sent.
+  const offered = (code: string | null | undefined): code is string =>
+    Boolean(code) && captionLanguagesFor(provider).some((language) => language.code === code);
   const resumedLanguage = needsTakeover ? transcript.session.language : undefined;
-  const language = captionLanguageFor(
-    provider,
-    chosenLanguage ?? resumedLanguage ?? savedLanguage ?? DEFAULT_CAPTION_LANGUAGE,
-  );
-  // Only a language someone picked is sent: now, or earlier and saved for a
-  // new session. Otherwise the worker keeps the resumed session's language,
-  // or the deployment default (which can be Sarvam auto-detect).
-  const pickedLanguage = chosenLanguage ?? (needsTakeover ? null : savedLanguage);
+  const untouchedLanguage = needsTakeover
+    ? (offered(resumedLanguage) ? resumedLanguage : "")
+    : (offered(savedLanguage) ? savedLanguage : "");
+  const language =
+    chosenLanguage === null
+      ? untouchedLanguage
+      : (offered(chosenLanguage) ? chosenLanguage : "");
   const sentLanguage =
-    pickedLanguage &&
-    captionLanguagesFor(provider).some(({ code }) => code === pickedLanguage)
-      ? pickedLanguage
-      : undefined;
+    (chosenLanguage === null && needsTakeover) || !language ? undefined : language;
+  const defaultLanguageLabel = defaultCaptionLanguageLabel(
+    transcript.captionLanguageDefaults[provider],
+  );
   const assistantProvider = getResponseProvider(qaModel);
   const available = (name: typeof provider | typeof assistantProvider) =>
     transcript.globalProviderKeysAvailable[name] === true ||
@@ -495,6 +502,7 @@ function StartStage({
                   id="captions-language-start"
                   value={language}
                   provider={provider}
+                  defaultLabel={defaultLanguageLabel}
                   onChange={setChosenLanguage}
                   className="h-10 w-full rounded-lg border border-white/10 bg-[#18181b] px-3 text-[12px] text-[#fafafa] outline-none focus:border-[#4F9CF9]/60"
                 />
@@ -1242,21 +1250,22 @@ export default function TranscriptPanel({
                         : "Connecting audio"
                       : "Following live"}
               </span>
-              {shownLanguage && !canSwitchLanguage ? (
+              {transcript.supportsCaptionLanguage && isRunning && !canSwitchLanguage ? (
                 <span className="shrink-0 text-[#d4d4d8]">
-                  {captionLanguageLabel(shownLanguage)}
+                  {shownLanguage ? captionLanguageLabel(shownLanguage) : "Auto-detect"}
                 </span>
               ) : null}
             </div>
             <div className="flex shrink-0 items-center gap-1">
-              {canSwitchLanguage && shownLanguage ? (
+              {canSwitchLanguage ? (
                 <>
                   <label htmlFor="captions-language-live" className="sr-only">
                     Meeting language
                   </label>
                   <CaptionLanguageSelect
                     id="captions-language-live"
-                    value={shownLanguage}
+                    value={shownLanguage ?? ""}
+                    defaultLabel={shownLanguage ? undefined : "Auto-detect"}
                     provider={sessionProvider}
                     onChange={(code) => {
                       void transcript.takeover({
