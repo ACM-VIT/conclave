@@ -348,13 +348,14 @@ $beforePull = (& git -C $rootDir rev-parse HEAD)
 Invoke-Checked -Command "git" -Arguments @("-C", $rootDir, "pull")
 # PowerShell keeps running the script it parsed at start, so a pull that
 # changed this file would deploy with the old steps. Start over with the new
-# one; the guard stops a second restart.
-if (-not $env:SFU_DEPLOY_REEXEC) {
+# one. --reexec, which only the restarted run receives, stops a second
+# restart; nothing is set in the calling session, so a later deploy from the
+# same window restarts again when it needs to.
+if (-not ($args -contains "--reexec")) {
   & git -C $rootDir diff --quiet $beforePull HEAD -- scripts/deploy-sfu.ps1
   if ($LASTEXITCODE -ne 0) {
     Write-Host "This pull changed deploy-sfu.ps1; restarting with the new version."
-    $env:SFU_DEPLOY_REEXEC = "1"
-    & (Get-Process -Id $PID).Path -NoProfile -File $PSCommandPath @args
+    & (Get-Process -Id $PID).Path -NoProfile -File $PSCommandPath @args --reexec
     exit $LASTEXITCODE
   }
 }
