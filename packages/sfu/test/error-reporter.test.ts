@@ -7,14 +7,38 @@ import { connect, type AddressInfo } from "node:net";
 import { gunzipSync } from "node:zlib";
 import { PostHog } from "posthog-node";
 import { afterEach, describe, expect, it } from "vitest";
+import type { EventMessage } from "posthog-node";
 import {
   createErrorReporter,
-  createExceptionScrubber,
   scrubErrorText,
-  scrubExceptionEvent,
   type ExceptionClient,
 } from "../server/analytics/errorReporter.js";
+import {
+  createFramePath,
+  createOutboundEvent,
+  type FramePathOptions,
+  SFU_ROOT,
+} from "../server/analytics/outbound.js";
 import { ConfigError } from "../server/configError.js";
+import { getGameCatalog } from "../server/games/registry.js";
+
+const SFU_ID = "sfu_0123456789abcdef";
+const RELEASE = "0b2d3b48";
+
+// The SFU's beforeSend, for a release and the socket events a test registered.
+const outboundFor = (frames: FramePathOptions = { root: SFU_ROOT, cwd: () => process.cwd() }) =>
+  createOutboundEvent({
+    release: RELEASE,
+    framePath: createFramePath(frames),
+    games: getGameCatalog,
+    isSocketEvent: (name) => name === "joinRoom",
+  });
+const scrubExceptionEvent = outboundFor();
+const exception = (properties: Record<string, unknown>): EventMessage => ({
+  distinctId: SFU_ID,
+  event: "$exception",
+  properties,
+});
 
 type CapturedEvent = {
   event: string;
@@ -114,7 +138,7 @@ const reporterFor = (client: ExceptionClient | null, now = Date.now) =>
     instanceId: "sfu-a",
     hashKey: "test-instance-key",
     region: "eu-west-1",
-    version: "0b2d3b48",
+    version: RELEASE,
     now,
   });
 
@@ -159,12 +183,12 @@ describe("SFU error reporter", () => {
   });
 
   it.each([
-    ["Review Operator laptop", "operator-desk-7", "Review-build-7", "other", "unknown"],
-    ["sfu-b", "me-central-1", "1.4.2", "me-central-1", "1.4.2"],
-    ["sfu-b", "local", "v2", "local", "unknown"],
+    ["Review Operator laptop", "operator-desk-7", "other"],
+    ["sfu-b", "me-central-1", "me-central-1"],
+    ["sfu-b", "local", "local"],
   ])(
-    "sends instance %s hashed, region %s only from the list, release %s only as a sha or semver",
-    async (instanceId, region, version, sentRegion, sentVersion) => {
+    "sends instance %s hashed, region %s only from the list, and the release it was given",
+    async (instanceId, region, sentRegion) => {
       const sent: Array<{ options: { distinctId: string; properties: Record<string, unknown> } }> = [];
       const reporter = createErrorReporter({
         getClient: () => ({
@@ -175,7 +199,7 @@ describe("SFU error reporter", () => {
         instanceId,
         hashKey: "test-instance-key",
         region,
-        version,
+        version: RELEASE,
       });
 
       reporter.report(new Error("x"), { source: "socket_handler" });
@@ -185,7 +209,7 @@ describe("SFU error reporter", () => {
       expect(options.properties).toMatchObject({
         sfu_instance_id: hashedInstance(instanceId),
         sfu_region: sentRegion,
-        sfu_version: sentVersion,
+        sfu_version: RELEASE,
       });
       expect(JSON.stringify(sent)).not.toMatch(/Review|operator-desk/);
     },
@@ -368,34 +392,32 @@ describe("SFU error reporter", () => {
   );
 
   it("trusts no message by its type name alone", () => {
-    const scrubbed = scrubExceptionEvent({
-      event: "$exception",
-      properties: {
+    const scrubbed = scrubExceptionEvent(
+      exception({
         $exception_list: [
           { type: "ConfigError", value: "Meet Mira in sample-room" },
           { type: "NonErrorValue", value: "Meet Mira in sample-room" },
           { type: "Error", value: "ENOENT: Meet Mira" },
         ],
-      },
-    });
+      }),
+    );
 
     expect(JSON.stringify(scrubbed)).not.toMatch(/Mira/);
   });
 
   it("withholds unknown types and keeps a stackless TypeError's type", () => {
-    const scrubbed = scrubExceptionEvent({
-      event: "$exception",
-      properties: {
+    const scrubbed = scrubExceptionEvent(
+      exception({
         $exception_list: [
           { type: "Meet Mira", value: "ReviewMessageCanary", mechanism: { synthetic: true } },
           { type: "TypeError", value: "ReviewTypeCanary is not a function", mechanism: { synthetic: true } },
         ],
-      },
-    });
+      }),
+    );
 
-    expect(scrubbed.properties?.$exception_list).toEqual([
-      { type: "[type withheld]", value: "[message withheld]", mechanism: { synthetic: true } },
-      { type: "TypeError", value: "[message withheld]", mechanism: { synthetic: true } },
+    expect(scrubbed?.properties?.$exception_list).toEqual([
+      { type: "[type withheld]", value: "[message withheld]", mechanism: { type: "generic", synthetic: true } },
+      { type: "TypeError", value: "[message withheld]", mechanism: { type: "generic", synthetic: true } },
     ]);
   });
 
@@ -403,24 +425,24 @@ describe("SFU error reporter", () => {
     const root = path.resolve(import.meta.dirname, "..");
     const own = "server/analytics/errorReporter.ts";
     const sentFrame = (cwd: string, filename: string) => {
-      const scrub = createExceptionScrubber({ root, cwd: () => cwd });
-      const scrubbed = scrub({
-        event: "$exception",
-        properties: {
+      const scrub = outboundFor({ root, cwd: () => cwd });
+      const scrubbed = scrub(
+        exception({
           $exception_list: [
             {
               type: "Error",
               value: "x",
               stacktrace: {
+                type: "raw",
                 frames: [
                   { platform: "node:javascript", filename, abs_path: filename, module: "Review Operator.service:main", function: "main", lineno: 3, colno: 9, in_app: true },
                 ],
               },
             },
           ],
-        },
-      });
-      return (scrubbed.properties?.$exception_list as Array<{ stacktrace: { frames: unknown[] } }>)[0]
+        }),
+      );
+      return (scrubbed?.properties?.$exception_list as Array<{ stacktrace: { frames: unknown[] } }>)[0]
         .stacktrace.frames[0];
     };
 
@@ -431,14 +453,13 @@ describe("SFU error reporter", () => {
         mkdirSync(path.join(fixture, "node_modules", "Fixture Operator extensions"), { recursive: true });
         writeFileSync(path.join(fixture, "server", "main.ts"), "");
         writeFileSync(path.join(fixture, "node_modules", "Fixture Operator extensions", "local-helper.js"), "");
-        const scrub = createExceptionScrubber({ root: fixture, cwd: () => fixture });
+        const scrub = outboundFor({ root: fixture, cwd: () => fixture });
         const sent = (filename: string, in_app: boolean) =>
-          (scrub({
-            event: "$exception",
-            properties: {
-              $exception_list: [{ type: "Error", value: "x", stacktrace: { frames: [{ filename, lineno: 1, in_app }] } }],
-            },
-          }).properties?.$exception_list as Array<{ stacktrace: { frames: Array<{ filename: string }> } }>)[0]
+          (scrub(
+            exception({
+              $exception_list: [{ type: "Error", value: "x", stacktrace: { type: "raw", frames: [{ filename, lineno: 1, in_app }] } }],
+            }),
+          )?.properties?.$exception_list as Array<{ stacktrace: { frames: Array<{ filename: string }> } }>)[0]
             .stacktrace.frames[0].filename;
 
         expect(sent("server/main.ts", true)).toBe("server/main.ts");
@@ -461,11 +482,11 @@ describe("SFU error reporter", () => {
       ["a ~ path", root, "~/conclave/packages/sfu/server.ts", "[path]"],
       ["a library file", root, path.resolve(root, "../../node_modules/posthog-node/package.json"), "[path]"],
       ["a Node internal", root, "node:internal/process/task_queues", "[path]"],
-    ])("sends %s as its path in the SFU, or [path]", (_case, cwd, filename, sent) => {
+    ])("sends %s as its path in the SFU, or [path] and no function", (_case, cwd, filename, sent) => {
       expect(sentFrame(cwd, filename)).toEqual({
         platform: "node:javascript",
         filename: sent,
-        function: "main",
+        function: sent === "[path]" ? "?" : "main",
         lineno: 3,
         colno: 9,
         in_app: true,
@@ -600,7 +621,7 @@ describe("SFU error reporter", () => {
       instanceId: "sfu-a",
       hashKey: "test-instance-key",
       region: null,
-      version: "v2",
+      version: RELEASE,
       onReportFailure: () => {
         throw new Error("stdout closed");
       },

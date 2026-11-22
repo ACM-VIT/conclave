@@ -22,11 +22,19 @@
 import { PostHog } from "posthog-node";
 import { config as sfuConfig } from "../../config/config.js";
 import { Logger } from "../../utilities/loggers.js";
+import { getGameCatalog } from "../games/registry.js";
+import { createErrorReporter, SFU_RELEASE } from "./errorReporter.js";
 import { analyticsKey, analyticsRoomKey } from "./identity.js";
-import {
-  createErrorReporter,
-  scrubExceptionEvent,
-} from "./errorReporter.js";
+import { createFramePath, createOutboundEvent, SFU_ROOT } from "./outbound.js";
+import { isSocketEvent } from "./socketEvents.js";
+
+// Every event this client sends is built from the outbound schema.
+const outboundEvent = createOutboundEvent({
+  release: SFU_RELEASE,
+  framePath: createFramePath({ root: SFU_ROOT, cwd: () => process.cwd() }),
+  games: getGameCatalog,
+  isSocketEvent,
+});
 
 /** The PostHog group type used to roll events up by meeting/room. */
 const ROOM_GROUP_TYPE = "room" as const;
@@ -75,7 +83,7 @@ const getClient = (): PostHog | null => {
       // The crash guards decide what is fatal (transient Redis errors are
       // not), so they report exceptions themselves.
       enableExceptionAutocapture: false,
-      beforeSend: scrubExceptionEvent,
+      beforeSend: outboundEvent,
     });
     Logger.info(
       `[Analytics] PostHog enabled (host: ${sfuConfig.analytics.host})`,
@@ -92,7 +100,7 @@ const errorReporter = createErrorReporter({
   instanceId: sfuConfig.instanceId,
   hashKey: analyticsKey,
   region: sfuConfig.region,
-  version: sfuConfig.version,
+  version: SFU_RELEASE,
   onReportFailure: (error) =>
     Logger.warn("[Analytics] exception capture failed", error),
 });

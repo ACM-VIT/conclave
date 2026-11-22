@@ -30,13 +30,13 @@ starts as soon as it loads. Each report is built once, when it is sent:
 - Call failures logged with `logCallError(label, ...details)` (`lib/call-error-capture.ts`): `source: "call_log"`, `call_log` (the label). The exception's message is the label. `label` is a `CallLogLabel`, the type of `CALL_LOG_LABELS` in `lib/call-log-labels.ts`, so an unregistered label does not compile, and a lint rule rejects `console.error("[Meets] ...")`, which would bypass it. A logged Error keeps its type and stack frames, never its message. Other logged values are dropped. At most 3 per label and 30 in total per minute.
 - Errors built from server text (socket ack `error` fields and the like) are thrown as `ServerError`, so the type says where the text came from. Like every message that is not a call-log label, theirs is withheld. A lint rule flags `new Error(x.error)`.
 
-SFU, from `server/analytics/errorReporter.ts`, every event tagged `sfu_instance_id`, `sfu_region`, `sfu_version`. The configured values are operator text, so `sfu_instance_id` is `sfu_` and a keyed hash of the instance name (also the event's distinct id), keyed with `SFU_SECRET` or, without a real one, a key that lives only in that process; `sfu_region` comes from a fixed list of cloud regions plus `local`, else `other`; and `sfu_version` is sent only as a git sha or a plain `x.y.z`, else `unknown`:
+SFU, from `server/analytics/errorReporter.ts`, every event tagged `sfu_instance_id`, `sfu_region`, `sfu_version`. The configured instance and region are operator text, so `sfu_instance_id` is `sfu_` and a keyed hash of the instance name (also the event's distinct id), keyed with `SFU_SECRET` or, without a real one, a key that lives only in that process; and `sfu_region` comes from a fixed list of cloud regions plus `local`, else `other`. `sfu_version` is the version the SFU's own `package.json` declares, never `SFU_VERSION` or any other configured text:
 
 | `source` | When | Extra properties |
 | --- | --- | --- |
 | `uncaught_exception`, `unhandled_rejection` | The process is about to exit (level `fatal`, waits at most 2s to send) | |
 | `startup_failed` | `server.start()` rejected | |
-| `socket_handler` | A socket.io handler threw or rejected | `socket_event` |
+| `socket_handler` | A socket.io handler threw or rejected | `socket_event`, only when the server registered a handler for that event |
 | `worker_died` | A mediasoup worker died | `worker_label`, `worker_pid` |
 | `worker_respawn_failed` | Its replacement failed to start. The slot keeps retrying, and attempts 1, 2, 4, 8 and so on are reported | `worker_label`, `respawn_attempt` |
 | `redis_transient` | A Redis error the crash guard swallowed (level `warning`) | `process_event` |
@@ -200,19 +200,28 @@ only shapes the values of listed properties:
   before receipt. The browser's send time is not forwarded.
 
 Session replay, surveys, DOM autocapture, feature flags and pageviews are off,
-and no user is ever identified. The SFU follows the same rule: a thrown or
-rejected value that is not an Error is reported as `NonErrorValue`; type names
-are kept only from a known list; a message is sent only for a real instance of
-our constant-message classes (`ConfigError`, which names the variable and never
-its value, and `NonErrorValue`), checked with `instanceof` when the error is
-reported and never by its name. Otherwise it is `[message withheld]`, keeping
-just a Node errno code read from the error's own `code` (`ECONNREFUSED` and the
-like), whatever its message says. Frames lose the source lines and module names
-posthog-node attaches, and keep a path only for an in-app frame of our own
-source: a file that exists inside the SFU's own folder (`packages/sfu`) and is
-not under `node_modules`, sent relative to that folder. Any other path, a
-library's, a Node internal, a home folder or a name that only looks like ours,
-is `[path]`.
+and no user is ever identified.
+
+The SFU's posthog-node client builds every event the same way, through the
+outbound schema in `server/analytics/outbound.ts` (its `beforeSend`). The
+schema lists each event it sends (`$exception`, `$groupidentify` and the
+`game_*` events), the form of its distinct id, every property and the form of
+each value; anything else, at any depth, is dropped, and so is any other event.
+Game ids and options come from the game registry: a number option only within
+its bounds, a select only as one of its choices, a text option only as whether
+it was set. The exception shaping follows the same rule as the browser's: a
+thrown or rejected value that is not an Error is reported as `NonErrorValue`;
+type names are kept only from a known list; a message is sent only for a real
+instance of our constant-message classes (`ConfigError`, which names the
+variable and never its value, and `NonErrorValue`), checked with `instanceof`
+when the error is reported and never by its name. Otherwise it is
+`[message withheld]`, keeping just a Node errno code read from the error's own
+`code` (`ECONNREFUSED` and the like), whatever its message says. Frames lose the
+source lines and module names posthog-node attaches, and keep a path and a
+function name only for an in-app frame of our own source: a file that exists
+inside the SFU's own folder (`packages/sfu`) and is not under `node_modules`,
+sent relative to that folder. Any other frame, a library's, a Node internal, a
+home folder or a name that only looks like ours, is `[path]` with function `?`.
 Game events group by a keyed hash of the room (`room_<hmac>`), never its code.
 Without a real `SFU_SECRET` they are not grouped at all, and distinct ids use a
 key that lives only in that process.

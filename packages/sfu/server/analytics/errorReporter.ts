@@ -9,22 +9,39 @@
  */
 
 import { createHmac } from "node:crypto";
-import { realpathSync } from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
 import { getSystemErrorMap } from "node:util";
+import { z } from "zod";
 import { ConfigError } from "../configError.js";
 
-export type ServerErrorSource =
-  | "uncaught_exception"
-  | "unhandled_rejection"
-  | "startup_failed"
-  | "socket_handler"
-  | "worker_died"
-  | "worker_respawn_failed"
-  | "redis_transient";
+export const SERVER_ERROR_SOURCES = [
+  "uncaught_exception",
+  "unhandled_rejection",
+  "startup_failed",
+  "socket_handler",
+  "worker_died",
+  "worker_respawn_failed",
+  "redis_transient",
+] as const;
+export type ServerErrorSource = (typeof SERVER_ERROR_SOURCES)[number];
 
-export type ServerErrorLevel = "fatal" | "error" | "warning";
+export const SERVER_ERROR_LEVELS = ["fatal", "error", "warning"] as const;
+export type ServerErrorLevel = (typeof SERVER_ERROR_LEVELS)[number];
+
+/**
+ * The SFU's release: the version its own package declares, never text an
+ * operator configured. "unknown" when the package cannot be read.
+ */
+export const SFU_RELEASE = ((): string => {
+  try {
+    const parsed = z
+      .object({ version: z.string().regex(/^\d{1,4}\.\d{1,4}\.\d{1,6}$/) })
+      .safeParse(JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")));
+    return parsed.success ? parsed.data.version : "unknown";
+  } catch {
+    return "unknown";
+  }
+})();
 
 export type ServerErrorProperties = Record<string, string | number | boolean>;
 
@@ -51,6 +68,7 @@ export type ErrorReporterOptions = {
   /** The key for that hash: the real SFU_SECRET, or one that lives only in this process. */
   hashKey: string | Uint8Array;
   region: string | null;
+  /** The SFU's release, SFU_RELEASE. */
   version: string;
   now?: () => number;
   onReportFailure?: (error: unknown) => void;
@@ -98,8 +116,8 @@ const KNOWN_ERROR_TYPES = new Set([
 ]);
 const ERRNO_CODES = new Set([...getSystemErrorMap().values()].map(([name]) => name));
 const ERRNO_MESSAGE = /^([A-Z][A-Z0-9_]*): \[message withheld\]$/;
-const MESSAGE_WITHHELD = "[message withheld]";
-const TYPE_WITHHELD = "[type withheld]";
+export const MESSAGE_WITHHELD = "[message withheld]";
+export const TYPE_WITHHELD = "[type withheld]";
 const MAX_CAUSE_DEPTH = 3;
 
 // The messages of real ConfigError and NonErrorValue instances that were
@@ -182,10 +200,9 @@ const createRateLimiter = (now: () => number) => {
   };
 };
 
-// The configured instance, region and release are operator text, so each goes
-// out only in a form we can vouch for: the instance as a keyed hash (also the
-// distinct id), the region from this list, the release as a git sha or a
-// plain semver.
+// The configured instance and region are operator text, so each goes out
+// only in a form we can vouch for: the instance as a keyed hash (also the
+// distinct id), and the region from this list.
 const hashedInstance = (instanceId: string, key: string | Uint8Array): string =>
   `sfu_${createHmac("sha256", key).update(`instance:${instanceId}`).digest("hex").slice(0, 16)}`;
 
@@ -206,10 +223,8 @@ const REGIONS = new Set([
 ]);
 const listedRegion = (region: string | null): string =>
   region === null ? "unset" : REGIONS.has(region) ? region : "other";
-
-const BUILD_VERSION = /^(?:[0-9a-f]{7,40}|\d{1,4}\.\d{1,4}\.\d{1,6})$/;
-const buildVersion = (version: string): string =>
-  BUILD_VERSION.test(version) ? version : "unknown";
+/** Every value sfu_region takes. */
+export const SENT_REGIONS: readonly string[] = [...REGIONS, "unset", "other"];
 
 export const createErrorReporter = ({
   getClient,
@@ -223,7 +238,6 @@ export const createErrorReporter = ({
   const allow = createRateLimiter(now);
   const distinctId = hashedInstance(instanceId, hashKey);
   const sentRegion = listedRegion(region);
-  const sentVersion = buildVersion(version);
   const failed = (failure: unknown) => {
     try {
       onReportFailure(failure);
@@ -248,7 +262,7 @@ export const createErrorReporter = ({
           source,
           sfu_instance_id: distinctId,
           sfu_region: sentRegion,
-          sfu_version: sentVersion,
+          sfu_version: version,
           $process_person_profile: false,
         },
       },
@@ -353,142 +367,15 @@ export const scrubErrorText = (value: string): string =>
     .replace(EMAIL_PATTERN, "[email]")
     .replace(LONG_TOKEN_PATTERN, "[token]");
 
-type ExceptionFrame = Record<string, unknown>;
-type ExceptionListEntry = {
-  type?: unknown;
-  value?: unknown;
-  stacktrace?: { frames?: unknown } & Record<string, unknown>;
-};
-
 /**
- * A message is sent only when the capture chose it (see reportedError), or it
- * is an errno code; any other text is withheld.
+ * Whether an exception's message is one the capture chose (see
+ * reportedError), an errno code, or withheld: the only messages sent.
  */
-const trustedMessage = (value: unknown): string => {
-  if (typeof value !== "string") return MESSAGE_WITHHELD;
-  if (chosenMessages.has(value)) return value;
+export const isSentMessage = (value: string): boolean => {
+  if (value === MESSAGE_WITHHELD || chosenMessages.has(value)) return true;
   const code = ERRNO_MESSAGE.exec(value)?.[1];
-  return code && ERRNO_CODES.has(code) ? value : MESSAGE_WITHHELD;
+  return code !== undefined && ERRNO_CODES.has(code);
 };
 
-// Our own classes, by the names reportedError gives only to real instances.
-const SENT_TYPES = new Set([...KNOWN_ERROR_TYPES, "ConfigError", "NonErrorValue"]);
-
-// The SFU's own folder (packages/sfu, /app/packages/sfu in the image), whose
-// source the server runs.
-const SFU_ROOT = fileURLToPath(new URL("../../", import.meta.url));
-const PATH_WITHHELD = "[path]";
-const MAX_KNOWN_PATHS = 1000;
-
-export type FramePathOptions = {
-  /** The folder whose files may be named. */
-  root: string;
-  /** The folder posthog-node made frame paths relative to. */
-  cwd: () => string;
-};
-
-/**
- * A frame's path relative to the SFU's folder, or [path]. A path is kept only
- * when it names a file of our own source: one that exists inside that folder
- * once links are followed and is not under node_modules. A name alone, a home
- * folder, a library's file or a Node internal is never sent.
- */
-const createFramePath = ({ root, cwd }: FramePathOptions) => {
-  let realRoot: string | null = null;
-  try {
-    realRoot = realpathSync(root);
-  } catch {}
-  const known = new Map<string, string>();
-  return (filename: string): string => {
-    const key = `${cwd()}\0${filename}`;
-    const cached = known.get(key);
-    if (cached !== undefined) return cached;
-    let sent = PATH_WITHHELD;
-    try {
-      if (realRoot) {
-        const inRoot = path.relative(realRoot, realpathSync(path.resolve(cwd(), filename)));
-        const segments = inRoot.split(path.sep);
-        if (
-          inRoot &&
-          !path.isAbsolute(inRoot) &&
-          segments[0] !== ".." &&
-          !segments.includes("node_modules")
-        ) {
-          sent = segments.join("/");
-        }
-      }
-    } catch {}
-    if (known.size < MAX_KNOWN_PATHS) known.set(key, sent);
-    return sent;
-  };
-};
-
-const isPosition = (value: unknown): value is number =>
-  typeof value === "number" && Number.isInteger(value) && value >= 0;
-
-// A frame keeps its function, position, in-app flag and, for an in-app frame
-// of our own source, its path in the SFU's folder. The module name
-// posthog-node derives from the full path, the source lines it reads from
-// disk and anything else are left out.
-const scrubFrame = (
-  frame: ExceptionFrame,
-  framePath: (filename: string) => string,
-): ExceptionFrame => ({
-  platform: "node:javascript",
-  ...(typeof frame.filename === "string"
-    ? { filename: frame.in_app === true ? framePath(frame.filename) : PATH_WITHHELD }
-    : {}),
-  ...(typeof frame.function === "string" ? { function: frame.function } : {}),
-  ...(isPosition(frame.lineno) ? { lineno: frame.lineno } : {}),
-  ...(isPosition(frame.colno) ? { colno: frame.colno } : {}),
-  ...(typeof frame.in_app === "boolean" ? { in_app: frame.in_app } : {}),
-});
-
-const scrubEntry = (
-  entry: ExceptionListEntry,
-  framePath: (filename: string) => string,
-): ExceptionListEntry => {
-  const type =
-    typeof entry?.type === "string" && SENT_TYPES.has(entry.type) ? entry.type : TYPE_WITHHELD;
-  return {
-    ...entry,
-    type,
-    value: trustedMessage(entry?.value),
-    ...(entry?.stacktrace && Array.isArray(entry.stacktrace.frames)
-      ? {
-          stacktrace: {
-            ...entry.stacktrace,
-            frames: (entry.stacktrace.frames as ExceptionFrame[]).map((frame) =>
-              scrubFrame(frame, framePath),
-            ),
-          },
-        }
-      : {}),
-  };
-};
-
-/**
- * Builds the posthog-node `beforeSend` hook: an exception keeps only a known
- * type, a message we wrote, and frames with paths inside the SFU's folder;
- * other events pass through.
- */
-export const createExceptionScrubber = (options: FramePathOptions) => {
-  const framePath = createFramePath(options);
-  return <T extends { event: string; properties?: Record<string, unknown> }>(message: T): T => {
-    if (message.event !== "$exception" || !message.properties) return message;
-    const list = message.properties.$exception_list;
-    if (!Array.isArray(list)) return message;
-    return {
-      ...message,
-      properties: {
-        ...message.properties,
-        $exception_list: list.map((entry: ExceptionListEntry) => scrubEntry(entry, framePath)),
-      },
-    };
-  };
-};
-
-export const scrubExceptionEvent = createExceptionScrubber({
-  root: SFU_ROOT,
-  cwd: () => process.cwd(),
-});
+/** Every type an exception is sent with: known kinds, and our own classes by the names reportedError gives only to real instances. */
+export const SENT_ERROR_TYPES: readonly string[] = [...KNOWN_ERROR_TYPES, "ConfigError", "NonErrorValue", TYPE_WITHHELD];
