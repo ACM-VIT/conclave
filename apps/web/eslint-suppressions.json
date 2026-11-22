@@ -24,44 +24,9 @@
       "count": 3
     }
   },
-  "src/app/components/ParticipantVideo.tsx": {
-    "conclave/no-comments": {
-      "count": 4
-    }
-  },
   "src/app/hooks/useMeetChat.ts": {
     "conclave/no-comments": {
       "count": 2
-    }
-  },
-  "src/app/lib/chat-images.ts": {
-    "conclave/no-comments": {
-      "count": 4
-    }
-  },
-  "src/app/lib/emoji-shortcodes.ts": {
-    "conclave/no-comments": {
-      "count": 14
-    }
-  },
-  "src/app/lib/microphone-send-estimate.ts": {
-    "conclave/no-comments": {
-      "count": 3
-    }
-  },
-  "src/app/lib/tile-video-framing.ts": {
-    "conclave/no-comments": {
-      "count": 15
-    }
-  },
-  "src/app/lib/types.ts": {
-    "conclave/no-comments": {
-      "count": 1
-    }
-  },
-  "test/participant-video-framing.test.tsx": {
-    "conclave/no-comments": {
-      "count": 1
     }
   }
 }
