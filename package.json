@@ -53,6 +53,7 @@
     "test:native-tokens": "node --test packages/ui-tokens/scripts/gen-native-tokens.test.mjs"
   },
   "devDependencies": {
+    "@csstools/css-tokenizer": "4.0.3",
     "eslint": "^10.15.0",
     "konsistent": "1.0.0-beta.13",
     "sh-syntax": "0.8.7",
