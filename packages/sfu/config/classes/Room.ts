@@ -306,6 +306,9 @@ export class Room {
   // outlive the room (a scheduled meeting's invitations) can keep up.
   public onReadmissionChange: ((userKey: string, required: boolean) => void) | null =
     null;
+  // A host ended the meeting for everyone. It may stay open a little longer
+  // to say so, but it is over: it hands out no more recovery passes.
+  private endedForEveryone = false;
   // Set while this room stands in for a call the SFU lost and nobody from
   // that call has come back yet. Until one does, or until no pass from the
   // lost call can still be good, the room has no host and whoever recreated
@@ -2581,6 +2584,14 @@ export class Room {
     if (required) this.readmissionRequiredUserKeys.add(userKey);
     else this.readmissionRequiredUserKeys.delete(userKey);
     this.onReadmissionChange?.(userKey, required);
+  }
+
+  markEnded() {
+    this.endedForEveryone = true;
+  }
+
+  get hasEnded(): boolean {
+    return this.endedForEveryone;
   }
 
   awaitRestorer(until: number) {

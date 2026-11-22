@@ -891,6 +891,34 @@ describe("a meeting a host ended for everyone", () => {
     ).toBe("waiting");
   });
 
+  it("signs no more passes while it waits to close, so none outlives the end", async () => {
+    vi.useFakeTimers({
+      toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
+    vi.setSystemTime(new Date("2026-11-22T08:00:00Z"));
+    const state = makeState();
+    const created = await join(state, host);
+    roomOf(state).allowLockedUser(guest.userId);
+    const member = await join(state, guest);
+    const stopRefreshing = startRoomRecoveryPassRefresh(state, config.sfuSecret);
+
+    vi.advanceTimersByTime(MINUTE_MS - 2_000);
+    await send(created.peer, "admin:endRoom", { delayMs: 30_000 });
+    const heldAtTheEnd = passesHeldBy(member).length;
+    // The renewal falls inside the half minute the room stays open.
+    vi.advanceTimersByTime(5_000);
+    expect(state.rooms.size).toBe(1);
+    expect(passesHeldBy(member)).toHaveLength(heldAtTheEnd);
+
+    vi.advanceTimersByTime(30_000);
+    stopRefreshing();
+    expect(state.rooms.size).toBe(0);
+    await join(state, host);
+    for (const pass of passesHeldBy(member)) {
+      expect((await join(state, guest, { roomRecoveryPass: pass })).status).toBe("waiting");
+    }
+  });
+
   it("opens afresh for whoever comes next, even someone who only has the link", async () => {
     const { state } = await endedMeeting();
     const after = await restart(state);

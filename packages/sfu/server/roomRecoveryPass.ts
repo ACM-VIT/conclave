@@ -30,13 +30,14 @@ type RecoveryRoom = Pick<
   "channelId" | "incarnationId" | "recoveryPassesVoidUntil"
 >;
 type PassIssuingRoom = RecoveryRoom &
-  Pick<Room, "userKeysById" | "needsReadmission">;
+  Pick<Room, "userKeysById" | "needsReadmission" | "hasEnded">;
 type PassHolder = Pick<Client, "id" | "isObserver">;
 
 /**
  * Proof that `client` was let into this room, or null for someone a recreated
- * room should not take back unasked: a webinar attendee, or a person a host
- * removed or took admission back from, on any of their devices. A room that
+ * room should not take back unasked: a webinar attendee, a person a host
+ * removed or took admission back from, on any of their devices, or anyone
+ * once a host has ended the meeting. A room that
  * is recreated after the SFU lost it (a crash, a forced restart) has no
  * admission lists; this is how the people who were in the call get back in
  * without knocking. `tokenUse` keeps it from working as a join token.
@@ -47,7 +48,12 @@ export const issueRoomRecoveryPass = (
   secret: string,
 ): string | null => {
   const userKey = room.userKeysById.get(client.id);
-  if (!userKey || client.isObserver || room.needsReadmission(userKey)) {
+  if (
+    !userKey ||
+    client.isObserver ||
+    room.hasEnded ||
+    room.needsReadmission(userKey)
+  ) {
     return null;
   }
   return jwt.sign(

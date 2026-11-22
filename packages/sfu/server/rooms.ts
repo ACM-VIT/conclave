@@ -50,7 +50,7 @@ const getRoomWorkerLoads = (state: SfuState): Map<number, WorkerLoad> => {
 
 export const markRoomEnded = (
   state: SfuState,
-  room: Pick<Room, "id" | "clientId" | "channelId">,
+  room: Pick<Room, "id" | "clientId" | "channelId" | "markEnded">,
   options: {
     message: string;
     endedBy: string;
@@ -65,6 +65,9 @@ export const markRoomEnded = (
   };
 
   state.endedRooms.set(room.channelId, endedRoom);
+  // Ended from this moment, not from when the room closes: it may stay open
+  // up to half a minute to say goodbye, and must not renew passes meanwhile.
+  room.markEnded();
   state.roomRecovery.noteEnded(room);
   return endedRoom;
 };
