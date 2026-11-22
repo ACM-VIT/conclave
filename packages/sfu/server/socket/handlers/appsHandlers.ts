@@ -135,6 +135,8 @@ const canControlStage = (context: ConnectionContext): boolean =>
 
 export const registerAppsHandlers = (context: ConnectionContext): void => {
   const { socket, io } = context;
+  // The stage this socket last synced without spending its sync budget.
+  let lastFreeSyncStage: string | null = null;
 
   const emitAppsState = (): AppsState => {
     const state = getRoomAppsState(context);
@@ -276,18 +278,24 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
         respond(callback, { error: "Not in a room" });
         return;
       }
-      if (!takeToken(socket, "apps:yjs:sync", RATE_LIMITS.appsYjsSync)) {
+
+      // Every stage change makes each client sync the presented app once.
+      // That first sync is free, so hosts switching apps cannot use up a
+      // viewer's budget; repeated syncs of the same stage still spend it.
+      const appId = normalizeAppId(data?.appId);
+      const doc = appId ? context.currentRoom.apps.liveDoc(appId) : null;
+      const stage = `${context.currentRoom.id}:${context.currentRoom.apps.stageRevision}`;
+      const freeSync = doc !== null && stage !== lastFreeSyncStage;
+      if (!freeSync && !takeToken(socket, "apps:yjs:sync", RATE_LIMITS.appsYjsSync)) {
         respond(callback, { error: "Too many app sync requests" });
         return;
       }
+      if (freeSync) lastFreeSyncStage = stage;
 
-      const appId = normalizeAppId(data?.appId);
       if (!appId) {
         respond(callback, { error: "Invalid app id" });
         return;
       }
-
-      const doc = context.currentRoom.apps.liveDoc(appId);
       if (!doc) {
         respond(callback, { error: "App not active" });
         return;

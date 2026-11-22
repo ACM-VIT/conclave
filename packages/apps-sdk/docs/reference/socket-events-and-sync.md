@@ -146,6 +146,11 @@ Server behavior:
 
 Present, close, discard and lock share one rate limit per socket.
 
+`apps:yjs:sync` has its own per-socket limit, but a socket's first sync of the
+presented app after each stage change is free. Every stage change makes each
+client sync once, so other hosts switching apps cannot use up a viewer's
+budget; repeated syncs of the same stage still spend it.
+
 ## Sync Flow
 
 `AppsProvider` syncs when an app becomes active:

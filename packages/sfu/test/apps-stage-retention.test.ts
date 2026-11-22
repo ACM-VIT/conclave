@@ -405,6 +405,30 @@ describe("stage revision", () => {
     expect(host.present("watch")).toEqual({ success: false, error: "Too many app changes" });
   });
 
+  it("answers a viewer's sync for every new stage however fast hosts switch", () => {
+    const { join } = makeRoom();
+    const hosts = [join("host#1", "host"), join("host#2", "host")];
+    const viewer = join("viewer#1", "participant");
+    const answers: Array<{ shapes?: string[]; error?: string }> = [];
+    for (let index = 0; index < 12; index += 1) {
+      const appId = index % 2 === 0 ? "whiteboard" : "wheel";
+      hosts[Math.floor(index / 6)].present(appId);
+      answers.push(viewer.coldSync(appId));
+    }
+
+    expect(answers.filter((answer) => answer.error)).toEqual([]);
+  });
+
+  it("still limits repeated syncs of one stage", () => {
+    const { join } = makeRoom();
+    const host = join("host#1", "host");
+    const viewer = join("viewer#1", "participant");
+    host.present("whiteboard");
+    const answers = Array.from({ length: 14 }, () => viewer.coldSync("whiteboard"));
+
+    expect(answers.at(-1)).toEqual({ error: "Too many app sync requests" });
+  });
+
   it("starts a newly presented app unlocked", () => {
     const { join } = makeRoom();
     const host = join("host#1", "host");

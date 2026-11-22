@@ -147,6 +147,11 @@ export class RoomApps {
     return this.stage.locked;
   }
 
+  /** Moves forward with every change to the stage. */
+  get stageRevision(): number {
+    return this.revision;
+  }
+
   snapshot(): AppsSnapshot {
     const presented = this.stage.activeAppId;
     return {
