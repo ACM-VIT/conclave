@@ -83,16 +83,22 @@ Some files say GENERATED or "do not edit". Fix their comments in the generator, 
 - **Decision record:** delete it and move it into an ADR under `docs/adr`, following `docs/adr/README.md`. Group comments on one topic into one record. Add the record's files and symbols to its Code section and the index. Then carry the decision in code without a comment, through an identifier that names it or a test named `ADR NNNN: ...`.
 - **Keep tooling, Keep license:** leave them, because the rule allows them. Add a ` -- reason` to a bare `eslint-disable`, and a description to a bare `@ts-expect-error`. A blanket `eslint-disable` must name its rules.
 
-## 5. Shrink the baselines
+## 5. Sweep the whole tree and shrink the baselines
 
 ```sh
 pnpm -C apps/web exec next typegen
-pnpm comments:prune
+pnpm comments:sweep
 ```
 
-Run `next typegen` first: without the generated route types, the typed web lint fails and the prune stops before it writes anything.
+Run `next typegen` first: without the generated route types, the typed web lint fails and the sweep stops before it writes anything.
 
-This runs `eslint --prune-suppressions` at the root and in `apps/web`, then `ratchet.mjs --update`. Both only lower counts.
+`pnpm check` (and so the pre-push path) only reads the files changed since the base, and loads a language's parser only when that language is in the diff. A web-only change never needs Swift, Python or sh-syntax; a change to a `.swift` file without a Swift toolchain fails and names the file and the missing tool. `pnpm comments:sweep` is the explicit full-tree pass and needs every parser:
+
+1. `sweep.mjs` appends an end marker to every tracked file and fails if any scanner stops before it.
+2. `ratchet.mjs --full` checks every tracked file against the baselines.
+3. `eslint --prune-suppressions` at the root and in `apps/web`, then `ratchet.mjs --update`, lower the baselines. Both only lower counts. `pnpm comments:prune` is an alias.
+
+The Swift parser builds once per machine into `~/Library/Caches/conclave/swift-trivia/swift-syntax-<version>` (or `$XDG_CACHE_HOME`, `~/.cache`, or `$CONCLAVE_CACHE_DIR`), so every worktree reuses it. The first build takes a few CPU minutes; later runs are a no-op check of a few seconds.
 
 `pnpm lint` runs ESLint with `--pass-on-unpruned-suppressions`, so a change that deletes comments passes without a prune, and so does the ratchet. A count left high cannot be refilled: the ratchet compares each changed file's comment count with the base commit and fails on any rise. Prune anyway in a comment pass, so the baselines show what is left.
 
