@@ -16,35 +16,21 @@ export type BufferedTranscriptAudioEvent =
       speaker: TranscriptSpeaker;
       sampleCount: number;
       createdAt: number;
-      /** The line this audio belongs to, so an utterance heard in it on replay is that line. */
-      owner?: string;
     }
   | {
-      type: "commit";
-      speaker: TranscriptSpeaker;
-      createdAt: number;
-      /** The line this audio belongs to, so the replacement's ack claims that line. */
-      owner?: string;
-    }
-  | {
-      type: "clear";
+      type: "commit" | "clear";
       speaker: TranscriptSpeaker;
       createdAt: number;
     };
 
-type ReplayChunk = {
-  audio: string;
-  sampleCount: number;
-  createdAt: number;
-  /** The line this audio belongs to; ending that line drops it. */
-  owner: string | null;
-};
-
-export type ReplayBatch = {
-  owner: string | null;
+type ReplayBatch = {
   sequence: number;
   speaker: TranscriptSpeaker;
-  chunks: ReplayChunk[];
+  chunks: Array<{
+    audio: string;
+    sampleCount: number;
+    createdAt: number;
+  }>;
   createdAt: number;
   committedAt: number;
   bytes: number;
@@ -128,19 +114,13 @@ export class TranscriptRecoveryAudioBuffer {
   }
 }
 
-/**
- * Audio sent to a provider that may need sending again after a reconnect,
- * each piece owned by the line it belongs to, committed or not. Ending a
- * line drops all of its audio and nothing of any other line's.
- */
 export class TranscriptAudioReplayJournal {
-  private current: {
-    speaker: TranscriptSpeaker;
-    chunks: ReplayChunk[];
-    createdAt: number;
-    bytes: number;
-  } | null = null;
+  private current:
+    | Omit<ReplayBatch, "sequence" | "committedAt">
+    | null = null;
   private batches: ReplayBatch[] = [];
+  private pendingBindings: ReplayBatch[] = [];
+  private readonly itemBatches = new Map<string, ReplayBatch>();
   private nextSequence = 0;
   private bytes = 0;
 
@@ -149,7 +129,6 @@ export class TranscriptAudioReplayJournal {
     speaker: TranscriptSpeaker,
     sampleCount: number,
     now = Date.now(),
-    owner: string | null = null,
   ): void {
     if (
       !this.current ||
@@ -162,110 +141,70 @@ export class TranscriptAudioReplayJournal {
         bytes: 0,
       };
     }
-    this.current.chunks.push({ audio, sampleCount, createdAt: now, owner });
+    this.current.chunks.push({ audio, sampleCount, createdAt: now });
     this.current.bytes += audio.length;
     this.bytes += audio.length;
     this.prune(now);
   }
 
-  /** A line just accepted owns the audio no line owns yet from where its utterance began. */
-  claim(owner: string, since: number): void {
-    for (const chunk of this.current?.chunks ?? []) {
-      if (chunk.owner === null && chunk.createdAt >= since) chunk.owner = owner;
-    }
-    this.batches = this.batches.flatMap((batch) => {
-      if (batch.owner !== null || !batch.chunks.some(({ createdAt }) => createdAt >= since)) return [batch];
-      const runs: ReplayChunk[][] = [];
-      for (const chunk of batch.chunks) {
-        const chunkOwner = chunk.createdAt >= since ? owner : null;
-        const run = runs.at(-1);
-        if (run && run[0]!.owner === chunkOwner) run.push({ ...chunk, owner: chunkOwner });
-        else runs.push([{ ...chunk, owner: chunkOwner }]);
-      }
-      return runs.map((chunks) => ({
-        ...batch,
-        owner: chunks[0]!.owner,
-        chunks,
-        createdAt: chunks[0]!.createdAt,
-        bytes: chunks.reduce((sum, chunk) => sum + chunk.audio.length, 0),
-      }));
-    });
-  }
-
-  /** Commits the pending audio, one batch per line it belongs to. */
-  commit(
-    speaker: TranscriptSpeaker,
-    now = Date.now(),
-    owner: string | null = null,
-  ): ReplayBatch[] {
+  commit(speaker: TranscriptSpeaker, now = Date.now()): void {
     if (
       !this.current ||
       !isSameTranscriptAudioSpeaker(this.current.speaker, speaker) ||
       this.current.chunks.length === 0
     ) {
-      return [];
+      return;
     }
-    const committed = this.toBatches(this.current, now, owner);
+    const batch: ReplayBatch = {
+      ...this.current,
+      sequence: this.nextSequence,
+      committedAt: now,
+    };
+    this.nextSequence += 1;
     this.current = null;
-    this.batches.push(...committed);
+    this.batches.push(batch);
+    this.pendingBindings.push(batch);
     this.prune(now);
-    return committed;
   }
 
-  /** An acknowledged commit's audio belongs to the line the ack named. */
-  own(batches: readonly ReplayBatch[], owner: string): void {
-    for (const batch of batches) {
-      batch.owner = owner;
-      for (const chunk of batch.chunks) chunk.owner = owner;
+  bindCommittedItem(itemId: string): void {
+    let batch = this.pendingBindings.shift();
+    while (batch && !this.batches.includes(batch)) {
+      batch = this.pendingBindings.shift();
     }
+    if (batch) this.itemBatches.set(itemId, batch);
   }
 
-  /** Drops audio a provider has already finished with. */
-  drop(batches: readonly ReplayBatch[]): void {
-    for (const batch of batches) this.removeBatch(batch);
-  }
-
-  /** Drops all of one line's audio, committed or not, once that line has ended. */
-  release(owner: string): void {
-    for (const batch of this.batches.filter((candidate) => candidate.owner === owner)) {
-      this.removeBatch(batch);
-    }
-    const current = this.current;
-    if (!current) return;
-    const kept = current.chunks.filter((chunk) => chunk.owner !== owner);
-    const dropped = current.bytes - kept.reduce((sum, chunk) => sum + chunk.audio.length, 0);
-    current.chunks = kept;
-    current.bytes -= dropped;
-    this.bytes -= dropped;
-    if (kept.length === 0) this.current = null;
+  finalizeItem(itemId: string): void {
+    const batch = this.itemBatches.get(itemId);
+    if (!batch) return;
+    this.itemBatches.delete(itemId);
+    this.removeBatch(batch);
   }
 
   takeRecoveryEvents(now = Date.now()): BufferedTranscriptAudioEvent[] {
-    const batches = [
-      ...this.batches,
-      ...(this.current?.chunks.length ? this.toBatches(this.current, now, null) : []),
-    ];
+    const batches = [...this.batches];
+    if (this.current?.chunks.length) {
+      batches.push({
+        ...this.current,
+        sequence: this.nextSequence,
+        committedAt: now,
+      });
+    }
     batches.sort((left, right) => left.sequence - right.sequence);
-    // Each line's audio is replayed as a turn of its own, so a provider that
-    // segments by turn answers it apart from the audio around it.
-    const events = batches.flatMap<BufferedTranscriptAudioEvent>((batch, index) => [
+    const events = batches.flatMap<BufferedTranscriptAudioEvent>((batch) => [
       ...batch.chunks.map<BufferedTranscriptAudioEvent>((chunk) => ({
         type: "chunk",
         audio: chunk.audio,
         speaker: batch.speaker,
         sampleCount: chunk.sampleCount,
         createdAt: chunk.createdAt,
-        ...(batch.owner ? { owner: batch.owner } : {}),
       })),
       {
         type: "commit",
         speaker: batch.speaker,
         createdAt: batch.committedAt,
-        ...(batch.owner ? { owner: batch.owner } : {}),
       },
-      ...(batches[index + 1]?.owner === batch.owner && batch.owner !== null
-        ? []
-        : [{ type: "clear" as const, speaker: batch.speaker, createdAt: batch.committedAt }]),
     ]);
     this.reset();
     return events;
@@ -274,38 +213,9 @@ export class TranscriptAudioReplayJournal {
   reset(): void {
     this.current = null;
     this.batches = [];
+    this.pendingBindings = [];
+    this.itemBatches.clear();
     this.bytes = 0;
-  }
-
-  get isEmpty(): boolean {
-    return this.current === null && this.batches.length === 0;
-  }
-
-  private toBatches(
-    pending: NonNullable<TranscriptAudioReplayJournal["current"]>,
-    now: number,
-    owner: string | null,
-  ): ReplayBatch[] {
-    const runs: ReplayChunk[][] = [];
-    for (const chunk of pending.chunks) {
-      const chunkOwner = owner ?? chunk.owner;
-      const run = runs.at(-1);
-      if (run && (owner ?? run[0]!.owner) === chunkOwner) run.push(chunk);
-      else runs.push([chunk]);
-    }
-    return runs.map((chunks) => {
-      const batchOwner = owner ?? chunks[0]!.owner;
-      this.nextSequence += 1;
-      return {
-        owner: batchOwner,
-        sequence: this.nextSequence,
-        speaker: pending.speaker,
-        chunks: chunks.map((chunk) => ({ ...chunk, owner: batchOwner })),
-        createdAt: chunks[0]!.createdAt,
-        committedAt: now,
-        bytes: chunks.reduce((sum, chunk) => sum + chunk.audio.length, 0),
-      };
-    });
   }
 
   private prune(now: number): void {
@@ -336,8 +246,10 @@ export class TranscriptAudioReplayJournal {
 
   private removeBatch(batch: ReplayBatch): void {
     const index = this.batches.indexOf(batch);
-    if (index < 0) return;
-    this.batches.splice(index, 1);
+    if (index >= 0) this.batches.splice(index, 1);
     this.bytes -= batch.bytes;
+    for (const [itemId, candidate] of this.itemBatches) {
+      if (candidate === batch) this.itemBatches.delete(itemId);
+    }
   }
 }

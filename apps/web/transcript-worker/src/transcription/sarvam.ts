@@ -1,8 +1,6 @@
 import { AI_ENDPOINTS } from "@conclave/ai/models";
 import { DEFAULT_TRANSCRIPTION_LOCALE } from "../constants";
 import { normalizeLocale, safeJsonParse, trimText } from "../utils";
-import type { TranscriptSpeaker } from "@conclave/meeting-core/transcript-types";
-import { VoiceActivity } from "./voice-activity";
 import type {
   LiveTranscriptionCallbacks,
   LiveTranscriptionConnectOptions,
@@ -16,8 +14,6 @@ const SARVAM_AUDIO_ENCODING = "audio/wav";
 const SARVAM_INPUT_AUDIO_CODEC = "pcm_s16le";
 const SARVAM_DEFAULT_LANGUAGE_CODE = "unknown";
 const SARVAM_DEFAULT_MODE = "codemix";
-/** How long before Sarvam's speech signal our own speech onset may be, given its detection and network delay. */
-const SARVAM_SIGNAL_LOOKBACK_MS = 1_500;
 export const SARVAM_SUPPORTED_LANGUAGE_CODES = new Set([
   "unknown",
   "en-IN",
@@ -64,8 +60,6 @@ type SarvamResponse = {
 
 type ParsedSarvamEvent =
   | { type: "final"; itemId: string; transcript: string }
-  | { type: "speech_start" }
-  | { type: "speech_end" }
   | { type: "error"; message: string }
   | { type: "ignore" };
 
@@ -197,10 +191,7 @@ export class Pcm24To16Downsampler {
   private carry = new Int16Array(0);
 
   downsample(base64: string): string {
-    return this.downsampleSamples(decodePcm16Base64(base64));
-  }
-
-  downsampleSamples(input: Int16Array): string {
+    const input = decodePcm16Base64(base64);
     if (input.length === 0) return "";
 
     const samples =
@@ -292,18 +283,6 @@ export const parseSarvamEvent = (raw: string): ParsedSarvamEvent => {
 
   const responseType = response.type ?? "";
   if (
-    responseType === "speech_start" ||
-    (responseType === "events" && data.signal_type === "START_SPEECH")
-  ) {
-    return { type: "speech_start" };
-  }
-  if (
-    responseType === "speech_end" ||
-    (responseType === "events" && data.signal_type === "END_SPEECH")
-  ) {
-    return { type: "speech_end" };
-  }
-  if (
     responseType !== "data" &&
     responseType !== "transcript" &&
     responseType !== "translation"
@@ -320,6 +299,7 @@ export const parseSarvamEvent = (raw: string): ParsedSarvamEvent => {
           : typeof response.text === "string"
             ? response.text.trim()
             : "";
+  if (!transcript) return { type: "ignore" };
   const requestId =
     typeof data.request_id === "string" && data.request_id.trim()
       ? data.request_id.trim()
@@ -333,60 +313,22 @@ export const parseSarvamEvent = (raw: string): ParsedSarvamEvent => {
   };
 };
 
-/**
- * Sarvam names no utterance until its final, so this connection names them.
- * An utterance is accepted when Sarvam signals speech started, or, before
- * Sarvam has sent any speech signal, when our own voice check first hears
- * speech in a turn; bare audio is never enough. Finals answer accepted
- * utterances oldest first.
- */
 class SarvamTranscriptionSession implements LiveTranscriptionSession {
   readonly provider = "sarvam" as const;
 
   private closed = false;
   private readonly downsampler = new Pcm24To16Downsampler();
-  private readonly voice = new VoiceActivity();
-  private readonly connectionId = crypto.randomUUID();
-  private utteranceCount = 0;
-  private readonly awaitingFinal: string[] = [];
-  private openedByVoice: string[] = [];
-  /** Voiced chunks no speech signal has taken yet, newest last. */
-  private evidence: Array<{ at: number; speaker: TranscriptSpeaker | null; turnStartedAt: number }> = [];
-  private unheardSignals: Array<{ itemId: string; at: number }> = [];
-  private resolveTimer: ReturnType<typeof setTimeout> | null = null;
-  private lastSpeaker: TranscriptSpeaker | null = null;
-  private signalsSpeech = false;
-  private turnAccepted = false;
-  private turnStartedAt = 0;
-  private turnEnded = true;
+  private finalSequence = 0;
 
   constructor(
     private readonly socket: WebSocket,
     private readonly callbacks: LiveTranscriptionCallbacks,
   ) {}
 
-  appendAudio(audioBase64: string, speaker?: TranscriptSpeaker): void {
-    const samples = decodePcm16Base64(audioBase64);
-    const downsampled = this.downsampler.downsampleSamples(samples);
-    if (downsampled) this.socket.send(buildSarvamAudioMessage(downsampled));
-    this.lastSpeaker = speaker ?? this.lastSpeaker;
-    const now = Date.now();
-    if (this.turnEnded) {
-      this.turnEnded = false;
-      this.turnStartedAt = now;
-    }
-    const voice = this.voice.push(samples, now);
-    if (voice === "quiet") return;
-    if (!this.signalsSpeech) {
-      if (!this.turnAccepted) {
-        this.turnAccepted = true;
-        this.openedByVoice.push(this.acceptUtterance(speaker ?? null, true, this.turnStartedAt, true));
-      }
-      return;
-    }
-    this.evidence = this.evidence.filter(({ at }) => now - at <= 2 * SARVAM_SIGNAL_LOOKBACK_MS);
-    this.evidence.push({ at: now, speaker: speaker ?? null, turnStartedAt: this.turnStartedAt });
-    this.scheduleResolve();
+  appendAudio(audioBase64: string): void {
+    const downsampled = this.downsampler.downsample(audioBase64);
+    if (!downsampled) return;
+    this.socket.send(buildSarvamAudioMessage(downsampled));
   }
 
   commitAudio(): void {
@@ -395,114 +337,14 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
   clearAudio(): void {
     this.socket.send(buildSarvamFlushMessage());
     this.downsampler.reset();
-    this.endTurn();
   }
 
   finishAudio(): void {
     this.socket.send(buildSarvamFlushMessage());
-    this.endTurn();
-  }
-
-  private endTurn(): void {
-    this.turnAccepted = false;
-    this.turnEnded = true;
-    this.voice.restart();
-  }
-
-  private nextUtteranceId(): string {
-    this.utteranceCount += 1;
-    return createSarvamSegmentItemId(`sarvam-${this.connectionId}`, this.utteranceCount);
-  }
-
-  private acceptUtterance(
-    speaker: TranscriptSpeaker | null,
-    heard: boolean,
-    since: number,
-    ownsNewAudio: boolean,
-  ): string {
-    const itemId = this.nextUtteranceId();
-    this.awaitingFinal.push(itemId);
-    this.callbacks.onAccepted?.(itemId, { heard, speaker, since, ownsNewAudio });
-    return itemId;
-  }
-
-  /**
-   * A speech signal takes the oldest utterance our voice check opened before
-   * Sarvam signalled anything. Otherwise it opens one, and takes the speech
-   * our check heard since the last signal: heard when any of it is within
-   * the lookback, with the speaker of its first chunk and its audio from
-   * where that chunk's turn began. A signal with none is a false start that
-   * ends with nothing shown, unless speech our check hears just after it is
-   * shown to be its own.
-   */
-  private handleSpeechStart(): void {
-    this.signalsSpeech = true;
-    const now = Date.now();
-    this.resolveUnheardSignals(now);
-    const taken = this.takeEvidence(now).filter(({ at }) => now - at <= SARVAM_SIGNAL_LOOKBACK_MS);
-    if (this.openedByVoice.shift()) return;
-    const first = taken[0];
-    const itemId = this.acceptUtterance(
-      first?.speaker ?? this.lastSpeaker,
-      Boolean(first),
-      first ? Math.max(first.turnStartedAt, first.at - SARVAM_SIGNAL_LOOKBACK_MS) : Number.POSITIVE_INFINITY,
-      Boolean(first) && !this.turnEnded && taken.at(-1)?.turnStartedAt === this.turnStartedAt,
-    );
-    if (!first) this.unheardSignals.push({ itemId, at: now });
-  }
-
-  /** Speech our check heard before Sarvam says an utterance ended belongs to that utterance. */
-  private handleSpeechEnd(): void {
-    const now = Date.now();
-    const taken = this.takeEvidence(now);
-    const latest = this.unheardSignals.at(-1);
-    if (latest && taken.some(({ at }) => at > latest.at)) {
-      this.unheardSignals.pop();
-      this.callbacks.onHeard?.(latest.itemId);
-    }
-  }
-
-  private takeEvidence(now: number): typeof this.evidence {
-    const taken = this.evidence.filter(({ at }) => at <= now);
-    this.evidence = this.evidence.filter(({ at }) => at > now);
-    return taken;
-  }
-
-  /**
-   * Speech heard just after an unheard signal is that signal's once no
-   * newer signal has taken it within the lookback.
-   */
-  private resolveUnheardSignals(now: number): void {
-    for (const signal of [...this.unheardSignals]) {
-      const heard = this.evidence.find(
-        ({ at }) =>
-          at > signal.at &&
-          at - signal.at <= SARVAM_SIGNAL_LOOKBACK_MS &&
-          now - at > SARVAM_SIGNAL_LOOKBACK_MS,
-      );
-      if (heard) {
-        this.evidence = this.evidence.filter(({ at }) => at > heard.at || at <= signal.at);
-        this.unheardSignals.splice(this.unheardSignals.indexOf(signal), 1);
-        this.callbacks.onHeard?.(signal.itemId);
-      } else if (now - signal.at > 2 * SARVAM_SIGNAL_LOOKBACK_MS) {
-        this.unheardSignals.splice(this.unheardSignals.indexOf(signal), 1);
-      }
-    }
-  }
-
-  private scheduleResolve(): void {
-    if (this.resolveTimer !== null || this.unheardSignals.length === 0) return;
-    this.resolveTimer = setTimeout(() => {
-      this.resolveTimer = null;
-      if (this.closed) return;
-      this.resolveUnheardSignals(Date.now());
-      if (this.evidence.length > 0) this.scheduleResolve();
-    }, SARVAM_SIGNAL_LOOKBACK_MS + 1);
   }
 
   close(): void {
     this.closed = true;
-    if (this.resolveTimer !== null) clearTimeout(this.resolveTimer);
     try {
       this.socket.send(buildSarvamFlushMessage());
       this.socket.send(buildSarvamEndOfStreamMessage());
@@ -535,27 +377,11 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
       await this.callbacks.onFailure(event.message);
       return;
     }
-    if (event.type === "speech_start") {
-      this.handleSpeechStart();
-      return;
-    }
-    if (event.type === "speech_end") {
-      this.handleSpeechEnd();
-      return;
-    }
-    const answered = this.awaitingFinal.shift();
-    if (!answered && !event.transcript) return;
-    const itemId = answered ?? this.nextUtteranceId();
-    if (!answered) {
-      this.callbacks.onAccepted?.(itemId, {
-        heard: true,
-        speaker: this.lastSpeaker,
-        since: this.turnStartedAt,
-        ownsNewAudio: false,
-      });
-    }
-    this.openedByVoice = this.openedByVoice.filter((opened) => opened !== itemId);
-    this.unheardSignals = this.unheardSignals.filter((signal) => signal.itemId !== itemId);
+    this.finalSequence += 1;
+    const itemId = createSarvamSegmentItemId(
+      event.itemId,
+      this.finalSequence,
+    );
     this.callbacks.onCommitted(itemId);
     await this.callbacks.onFinal(itemId, event.transcript);
   }

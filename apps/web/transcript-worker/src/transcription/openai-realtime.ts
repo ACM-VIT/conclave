@@ -82,12 +82,9 @@ class OpenAiRealtimeTranscriptionSession implements LiveTranscriptionSession {
       return;
     }
     if (event.type === "conversation.item.input_audio_transcription.failed") {
-      const message = event.error?.message || "Realtime input audio transcription failed.";
-      if (event.item_id && this.callbacks.onItemFailed) {
-        await this.callbacks.onItemFailed(event.item_id, message);
-      } else {
-        await this.callbacks.onFailure(message);
-      }
+      await this.callbacks.onFailure(
+        event.error?.message || "Realtime input audio transcription failed.",
+      );
       return;
     }
     if (event.type === "input_audio_buffer.committed" && event.item_id) {

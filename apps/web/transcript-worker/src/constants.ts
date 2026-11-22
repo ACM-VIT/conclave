@@ -33,10 +33,6 @@ export const TRANSCRIPT_SFU_RELAY_RECOVERY_ATTEMPTS = 8;
 export const TRANSCRIPTION_CONNECT_TIMEOUT_MS = 10_000;
 export const TRANSCRIPTION_COMMIT_ACK_TIMEOUT_MS = 45_000;
 export const TRANSCRIPTION_PROVIDER_DRAIN_MS = 10_000;
-/** How long a line a provider accepted waits for its final before it ends as a gap. */
-export const TRANSCRIPTION_LINE_DEADLINE_MS = 30_000;
-/** Shown in place of an accepted line its provider never finished. */
-export const TRANSCRIPTION_GAP_MARKER = "[Some speech here was not captioned]";
 // Sequence numbers reserved for a replaced provider's late lines, so speech
 // from before a language switch sorts ahead of the new provider's.
 export const TRANSCRIPTION_DRAIN_SEQUENCE_BLOCK = 64;

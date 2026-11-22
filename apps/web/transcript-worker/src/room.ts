@@ -40,8 +40,6 @@ import {
   TRANSCRIPTION_COMMIT_ACK_TIMEOUT_MS,
   TRANSCRIPTION_CONNECT_TIMEOUT_MS,
   TRANSCRIPTION_DRAIN_SEQUENCE_BLOCK,
-  TRANSCRIPTION_LINE_DEADLINE_MS,
-  TRANSCRIPTION_GAP_MARKER,
   TRANSCRIPTION_PROVIDER_DRAIN_MS,
 } from "./constants";
 import {
@@ -70,12 +68,12 @@ import {
   type TranscriptRateBucketName,
 } from "./rate-limit";
 import { getTranscriptServiceVersion } from "./service-version";
-import { TranscriptLines, type LinePlace, type LineRecord } from "./transcript-lines";
 import {
   recoverPersistedTranscriptSession,
   shouldAutomaticallyRecoverPersistedTranscriptSession,
   shouldRetainRecoverableTranscriptSnapshot,
 } from "./session-recovery";
+import { TranscriptSpeakerAttribution } from "./speaker-attribution";
 import {
   canRefreshTranscriptMinutes,
   canStopTranscriptSession,
@@ -103,7 +101,6 @@ import {
 } from "./transcription";
 import {
   TranscriptAudioReplayJournal,
-  type ReplayBatch,
   TranscriptRecoveryAudioBuffer,
   isRetryableTranscriptionFailure,
   transcriptionRecoveryDelayMs,
@@ -140,35 +137,23 @@ const createIdleSession = (roomId: string): TranscriptSessionState => ({
   error: null,
 });
   
-/** A commit sent to OpenAI and not yet acknowledged, with the line its audio belongs to once known. */
-type PendingCommit = {
-  at: number;
-  speaker: TranscriptSpeaker;
-  owner: string | null;
-  batches: ReplayBatch[];
-};
-
 type ProviderDrain = {
   session: LiveTranscriptionSession;
   epoch: number;
-  lines: TranscriptLines;
-  // Sarvam may still report speech it heard until 10 s after its last audio.
-  quietAt: number;
-  pendingCommits: PendingCommit[];
+  partials: Map<string, TranscriptSegment>;
+  // Places taken in commit order for lines with no text yet.
+  reserved: Map<string, TranscriptSegment>;
+  unfinalizedItems: Set<string>;
+  pendingCommits: number;
+  // OpenAI acknowledges each commit, so it is done once nothing is owed.
+  // Sarvam acknowledges nothing, so it drains to its deadline.
+  settlesOnAcks: boolean;
+  speakers: TranscriptSpeakerAttribution;
+  latestSpeaker: TranscriptSpeaker | null;
   startedAt: number;
   nextSequence: number;
   endSequence: number;
-  timer: ReturnType<typeof setTimeout> | null;
-};
-
-/** One provider connection's lines, live or being replaced, behind one set of handlers. */
-type LineSource = {
-  lines: TranscriptLines;
-  drain: ProviderDrain | null;
-  takeCommit: () => PendingCommit | null;
-  nextCommit: () => PendingCommit | null;
-  nextPlace: () => LinePlace;
-  changed: () => void;
+  deadline: ReturnType<typeof setTimeout>;
 };
 
 export class TranscriptRoom {
@@ -176,14 +161,17 @@ export class TranscriptRoom {
   private readonly env: Env;
   private readonly loaded: Promise<void>;
   private readonly viewers = new Map<WebSocket, Viewer>();
-  // The current provider's lines, each placed when the provider accepted it,
-  // before any of its text: lines keep speaking order whatever order their
-  // text arrives in, across a provider switch too.
-  private liveLines = new TranscriptLines();
-  private liveLineTimer: ReturnType<typeof setTimeout> | null = null;
-  // The line whose audio is being replayed to a replacement right now.
-  private replayingOwner: string | null = null;
+  private readonly partialSegments = new Map<string, TranscriptSegment>();
+  // A line's place is fixed when its audio is committed, before any of its
+  // text: finals and partials then keep commit order whatever order they
+  // arrive in, across a provider switch too.
+  private readonly committedPlaces = new Map<string, { sequence: number; startMs: number }>();
+  private speakerAttribution = new TranscriptSpeakerAttribution();
   private latestSpeaker: TranscriptSpeaker | null = null;
+  // Work the current provider owes us: committed items without a final, and
+  // whether it has heard audio since its last final.
+  private readonly unfinalizedItems = new Set<string>();
+  private audioSinceLastFinal = false;
   private lastAudioAt = 0;
   private hasPendingAudio = false;
   private pendingAudioSamples = 0;
@@ -214,7 +202,7 @@ export class TranscriptRoom {
   private transcriptionProviderOpeningGeneration: number | null = null;
   private transcriptionRecoveryPromise: Promise<void> | null = null;
   private pendingTranscriptionRecoveryFailure: string | null = null;
-  private pendingCommits: PendingCommit[] = [];
+  private pendingTranscriptionCommitAcks: number[] = [];
   private transcriptionCommitWatchdogTimer: ReturnType<typeof setTimeout> | null =
     null;
   private readonly transcriptionRecoveryAudio =
@@ -1340,16 +1328,10 @@ export class TranscriptRoom {
       return false;
     }
     try {
-      this.transcriptionSession.appendAudio(audio, speaker);
-      this.transcriptionReplayJournal.append(
-        audio,
-        speaker,
-        sampleCount,
-        Date.now(),
-        this.replayingOwner ??
-          (this.transcriptionSession.provider === "sarvam" ? this.liveLines.audioOwner : null),
-      );
+      this.transcriptionSession.appendAudio(audio);
+      this.transcriptionReplayJournal.append(audio, speaker, sampleCount);
       this.latestSpeaker = speaker;
+      this.audioSinceLastFinal = true;
       this.lastAudioAt = Date.now();
       this.hasPendingAudio = true;
       this.pendingAudioSamples += sampleCount;
@@ -1415,7 +1397,6 @@ export class TranscriptRoom {
     speaker: TranscriptSpeaker,
     failureMessage: string,
     reportFailure = true,
-    owner: string | null = null,
   ): boolean {
     if (!this.transcriptionSession || !this.hasPendingAudio) return false;
     try {
@@ -1429,10 +1410,10 @@ export class TranscriptRoom {
         }
       }
       this.transcriptionSession.commitAudio();
-      const batches = this.transcriptionReplayJournal.commit(speaker, Date.now(), owner);
+      this.speakerAttribution.enqueueCommit(speaker);
+      this.transcriptionReplayJournal.commit(speaker);
       if (this.transcriptionSession.provider === "openai") {
-        this.pendingCommits.push({ at: Date.now(), speaker, owner, batches });
-        this.armTranscriptionCommitWatchdog();
+        this.trackPendingTranscriptionCommit();
       }
       this.hasPendingAudio = false;
       this.pendingAudioSamples = 0;
@@ -1469,7 +1450,6 @@ export class TranscriptRoom {
       void this.handleTranscriptionFailure("Transcript audio clear failed.");
       return;
     }
-    this.liveLines.audioOwner = null;
     this.hasPendingAudio = false;
     this.pendingAudioSamples = 0;
   }
@@ -1639,39 +1619,35 @@ export class TranscriptRoom {
         ...options,
         signal: controller.signal,
         callbacks: {
-          onAccepted: (itemId, utterance) => {
-            const source = this.sourceOf(epoch);
-            if (source) this.acceptLine(source, itemId, utterance);
-          },
-          onHeard: (itemId) => {
-            const source = this.sourceOf(epoch);
-            if (source) this.markLineHeard(source, itemId);
-          },
           onCommitted: (itemId) => {
-            const source = this.sourceOf(epoch);
-            if (source) this.acknowledgeLine(source, itemId);
+            if (epoch === this.transcriptionConnectionEpoch) {
+              this.handleTranscriptItemCommitted(itemId);
+              return;
+            }
+            const drain = this.providerDrains.get(epoch);
+            if (drain) this.applyDrainedCommit(drain, itemId);
           },
           onDelta: (itemId, delta) => {
-            const source = this.sourceOf(epoch);
-            if (source) this.applyLineDelta(source, itemId, delta);
+            if (epoch === this.transcriptionConnectionEpoch) {
+              this.applyTranscriptDelta(itemId, delta);
+              return;
+            }
+            const drain = this.providerDrains.get(epoch);
+            if (drain) this.applyDrainedDelta(drain, itemId, delta);
           },
           onFinal: (itemId, transcript) => {
-            const source = this.sourceOf(epoch);
-            if (source) return this.applyLineFinal(source, itemId, transcript);
-          },
-          onItemFailed: (itemId, message) => {
             if (epoch === this.transcriptionConnectionEpoch) {
-              return this.handleTranscriptionFailure(message);
+              return this.applyTranscriptFinal(itemId, transcript);
             }
-            const source = this.sourceOf(epoch);
-            if (source) return this.applyLineFailure(source, itemId);
+            const drain = this.providerDrains.get(epoch);
+            if (drain) return this.applyDrainedFinal(drain, itemId, transcript);
           },
           onFailure: (message) => {
             if (epoch === this.transcriptionConnectionEpoch) {
               return this.handleTranscriptionFailure(message);
             }
             const drain = this.providerDrains.get(epoch);
-            if (drain) return this.endProviderDrainLines(drain, "failed");
+            if (drain) return this.finishProviderDrain(drain);
           },
         },
       });
@@ -1685,11 +1661,6 @@ export class TranscriptRoom {
     }
   }
 
-  private sourceOf(epoch: number): LineSource | null {
-    if (epoch === this.transcriptionConnectionEpoch) return this.liveSource();
-    return this.drainSource(this.providerDrains.get(epoch));
-  }
-
   private closeTranscriptionProvider(): void {
     this.transcriptionRecoveryGeneration += 1;
     this.transcriptionProviderOpeningGeneration = null;
@@ -1700,8 +1671,6 @@ export class TranscriptRoom {
     this.transcriptionSession = null;
     this.transcriptionConnectionOptions = null;
     this.transcriptionRecoveryAudio.reset();
-    this.liveLines = new TranscriptLines();
-    this.clearLiveLineTimer();
     this.resetTranscriptionAudioState();
     try {
       session?.close();
@@ -1709,22 +1678,14 @@ export class TranscriptRoom {
   }
 
   /**
-   * Keeps a provider that is being replaced open until every line it owes
-   * ends: lines it accepted, audio it was sent but has not acknowledged, and
-   * for Sarvam, speech it may still report from its last 10 seconds of
-   * audio. Each replaced provider drains on its own; a later switch never
-   * cuts an earlier drain short.
+   * Keeps a provider that is being replaced open until it finishes the speech
+   * it already has: its partials, committed items and audio not yet final.
+   * Each replaced provider drains on its own; a later switch never cuts an
+   * earlier drain short.
    */
   private drainTranscriptionProvider(): void {
     const session = this.transcriptionSession;
-    if (!session) {
-      this.endUnfinishedLines(
-        this.liveLines.takeAll(),
-        "A switch replaced a reconnecting provider",
-        "none",
-      );
-      return;
-    }
+    if (!session) return;
     if (this.hasPendingAudio && this.latestSpeaker) {
       this.commitTranscriptionBuffer(
         this.latestSpeaker,
@@ -1733,10 +1694,16 @@ export class TranscriptRoom {
       );
     }
     const now = Date.now();
-    const quietAt =
-      session.provider === "sarvam" ? this.lastAudioAt + TRANSCRIPTION_PROVIDER_DRAIN_MS : 0;
-    const owesWork =
-      this.liveLines.size > 0 || this.pendingCommits.length > 0 || now < quietAt;
+    const settlesOnAcks = session.provider === "openai";
+    // Sarvam never says what it still owes, so any Sarvam connection that
+    // heard audio in the last 10 seconds drains until 10 seconds after it.
+    const owesWork = settlesOnAcks
+      ? this.partialSegments.size > 0 ||
+        this.unfinalizedItems.size > 0 ||
+        this.pendingTranscriptionCommitAcks.length > 0 ||
+        this.audioSinceLastFinal
+      : this.partialSegments.size > 0 ||
+        now - this.lastAudioAt < TRANSCRIPTION_PROVIDER_DRAIN_MS;
     if (!owesWork) return;
     try {
       session.finishAudio();
@@ -1744,44 +1711,43 @@ export class TranscriptRoom {
     const epoch = this.transcriptionConnectionEpoch;
     const firstSequence = this.sequence;
     this.sequence += TRANSCRIPTION_DRAIN_SEQUENCE_BLOCK;
+    const drainMs = settlesOnAcks
+      ? TRANSCRIPTION_PROVIDER_DRAIN_MS
+      : Math.max(0, this.lastAudioAt + TRANSCRIPTION_PROVIDER_DRAIN_MS - now);
     const drain: ProviderDrain = {
       session,
       epoch,
-      lines: this.liveLines,
-      quietAt,
-      pendingCommits: this.pendingCommits,
+      partials: new Map(this.partialSegments),
+      reserved: new Map(),
+      unfinalizedItems: new Set(this.unfinalizedItems),
+      pendingCommits: this.pendingTranscriptionCommitAcks.length,
+      settlesOnAcks,
+      speakers: this.speakerAttribution,
+      latestSpeaker: this.latestSpeaker,
       startedAt: now,
       nextSequence: firstSequence,
       endSequence: this.sequence,
-      timer: null,
+      deadline: setTimeout(() => void this.finishProviderDrain(drain), drainMs),
     };
-    for (const commit of drain.pendingCommits) {
-      if (commit.owner) continue;
-      const held = drain.lines.hold({
-        place: this.drainPlace(drain),
-        speaker: commit.speaker,
-        heard: true,
-        deadlineAt: now + TRANSCRIPTION_LINE_DEADLINE_MS,
-      });
-      commit.owner = held.id;
-      this.giveLineCommit(held, commit);
+    for (const itemId of drain.unfinalizedItems) {
+      if (!drain.partials.has(itemId)) {
+        this.reserveDrainedSegment(drain, itemId, this.committedPlaces.get(itemId));
+      }
     }
-    drain.lines.limitAwaiting(now + TRANSCRIPTION_LINE_DEADLINE_MS);
     this.providerDrains.set(epoch, drain);
     this.transcriptionSession = null;
-    this.pendingCommits = [];
-    this.liveLines = new TranscriptLines();
-    this.clearLiveLineTimer();
-    this.settleProviderDrain(drain);
+    this.speakerAttribution = new TranscriptSpeakerAttribution();
+    this.partialSegments.clear();
   }
 
-  private discardProviderDrain(drain: ProviderDrain): void {
-    if (this.providerDrains.get(drain.epoch) !== drain) return;
+  private discardProviderDrain(drain: ProviderDrain): TranscriptSegment[] {
+    if (this.providerDrains.get(drain.epoch) !== drain) return [];
     this.providerDrains.delete(drain.epoch);
-    if (drain.timer !== null) clearTimeout(drain.timer);
+    clearTimeout(drain.deadline);
     try {
       drain.session.close();
     } catch {}
+    return Array.from(drain.partials.values());
   }
 
   private discardProviderDrains(): void {
@@ -1790,111 +1756,35 @@ export class TranscriptRoom {
     }
   }
 
-  /** Lets a drain go once it owes nothing, else wakes it at its next deadline. */
-  private settleProviderDrain(drain: ProviderDrain): void {
-    if (this.providerDrains.get(drain.epoch) !== drain) return;
-    if (drain.timer !== null) clearTimeout(drain.timer);
-    drain.timer = null;
-    const now = Date.now();
-    const wakeAt = Math.min(
-      drain.lines.nextDeadline() ?? Infinity,
-      now < drain.quietAt ? drain.quietAt : Infinity,
-    );
-    if (wakeAt === Infinity) {
-      this.discardProviderDrain(drain);
-      return;
-    }
-    drain.timer = setTimeout(
-      () => void this.endProviderDrainLines(drain, "timed out"),
-      Math.max(0, wakeAt - now),
-    );
-  }
-
   /**
-   * Ends a replaced provider's lines that are past their deadline, or all of
-   * them when its connection failed, in one snapshot write, and only then
-   * lets the drain go or waits for the rest.
+   * Saves the drained lines still on screen, unless a final already landed,
+   * in one snapshot write, and only then lets the drain go.
    */
-  private async endProviderDrainLines(
-    drain: ProviderDrain,
-    reason: "timed out" | "failed",
-  ): Promise<void> {
+  private async finishProviderDrain(drain: ProviderDrain): Promise<void> {
     if (this.providerDrains.get(drain.epoch) !== drain) return;
-    drain.timer = null;
-    const lines = reason === "failed" ? drain.lines.takeAll() : drain.lines.takeDue(Date.now());
-    if (this.endUnfinishedLines(lines, `A replaced provider ${reason}`, drain.session.provider)) {
+    let saved = false;
+    for (const segment of drain.partials.values()) {
+      if (this.hasFinalSegment(segment.itemId)) continue;
+      saved = this.recordFinalSegment(segment, "") || saved;
+    }
+    if (saved) {
       await this.persist();
       this.scheduleMinutes();
     }
-    if (reason === "failed") {
-      this.discardProviderDrain(drain);
-      return;
-    }
-    this.settleProviderDrain(drain);
+    this.discardProviderDrain(drain);
   }
 
   /**
-   * Ends lines their provider will not finish, already taken out of their
-   * book: words on screen stay as the line, a line our side heard speech in
-   * becomes a gap, and one it never heard ends with nothing shown. Each drops
-   * only its own replay audio. True when the transcript changed.
-   */
-  private endUnfinishedLines(
-    lines: LineRecord[],
-    context: string,
-    provider: string,
-  ): boolean {
-    let changed = false;
-    let gaps = 0;
-    for (const record of lines) {
-      this.forgetLine(record);
-      if (this.hasFinalSegment(record.itemId)) continue;
-      const segment = this.lineSegment(record);
-      const hasWords = Boolean(segment.text.trim());
-      if (!hasWords && !record.heard) continue;
-      if (!this.recordFinalSegment(segment, hasWords ? "" : TRANSCRIPTION_GAP_MARKER)) continue;
-      changed = true;
-      if (!hasWords) gaps += 1;
-    }
-    if (gaps > 0) {
-      console.warn(
-        `[Transcript] ${context} with ${gaps} accepted line(s) not captioned; recorded a gap.`,
-        JSON.stringify({ provider }),
-      );
-    }
-    return changed;
-  }
-
-  /** A line that ended drops all of its replay audio, committed or not, and nothing newer. */
-  private forgetLine(record: LineRecord): void {
-    this.transcriptionReplayJournal.release(record.id);
-  }
-
-  /**
-   * Finals plus every line still owed, saved as finals: its words so far, or
-   * a gap while it has none. A restarted or rolled-back worker cannot resume
-   * a provider connection, so this is how those lines end there, in a form
-   * older workers read too.
+   * Finals plus the lines a replaced provider is still finishing, saved as
+   * finals: a restarted or rolled-back worker cannot resume a drain, and
+   * would otherwise drop words already on screen.
    */
   private segmentsForSnapshot(): TranscriptSegment[] {
-    const owed = [
-      ...this.liveLines.all(),
-      ...Array.from(this.providerDrains.values()).flatMap((drain) => drain.lines.all()),
-    ]
-      .filter((record) => !this.hasFinalSegment(record.itemId))
-      .flatMap((record) => {
-        const segment = this.lineSegment(record);
-        const hasWords = Boolean(segment.text.trim());
-        if (!hasWords && !record.heard) return [];
-        return [{
-          ...segment,
-          text: hasWords ? segment.text : TRANSCRIPTION_GAP_MARKER,
-          isFinal: true,
-          endMs: segment.updatedAt,
-        }];
-      });
-    if (owed.length === 0) return this.segments;
-    return [...this.segments, ...owed].sort(
+    const draining = this.drainedPartials()
+      .filter(({ itemId, text }) => text.trim() && !this.hasFinalSegment(itemId))
+      .map((segment) => ({ ...segment, isFinal: true, endMs: segment.updatedAt }));
+    if (draining.length === 0) return this.segments;
+    return [...this.segments, ...draining].sort(
       (left, right) => left.sequence - right.sequence,
     );
   }
@@ -1903,268 +1793,126 @@ export class TranscriptRoom {
     return this.segments.some((segment) => segment.itemId === itemId);
   }
 
+  private drainedPartials(): TranscriptSegment[] {
+    return Array.from(this.providerDrains.values()).flatMap((drain) =>
+      Array.from(drain.partials.values()),
+    );
+  }
+
   private visiblePartials(): TranscriptSegment[] {
-    return [
-      ...this.liveLines.shown(),
-      ...Array.from(this.providerDrains.values()).flatMap((drain) => drain.lines.shown()),
-    ];
-  }
-
-  private lineSegment(record: LineRecord): TranscriptSegment {
-    return record.shown ?? this.createSegment(record.itemId, record.speaker, record.place);
-  }
-
-  private liveSource(): LineSource {
-    return {
-      lines: this.liveLines,
-      drain: null,
-      takeCommit: () => this.acknowledgeTranscriptionCommit(),
-      nextCommit: () => this.pendingCommits[0] ?? null,
-      nextPlace: () => ({ sequence: this.sequence++, startMs: Date.now() }),
-      changed: () => this.armLiveLineTimer(),
-    };
-  }
-
-  private drainSource(drain: ProviderDrain | undefined): LineSource | null {
-    if (!drain) return null;
-    return {
-      lines: drain.lines,
-      drain,
-      takeCommit: () => drain.pendingCommits.shift() ?? null,
-      nextCommit: () => drain.pendingCommits[0] ?? null,
-      nextPlace: () => this.drainPlace(drain),
-      changed: () => this.settleProviderDrain(drain),
-    };
+    return [...this.partialSegments.values(), ...this.drainedPartials()];
   }
 
   /**
-   * The next place in a replaced provider's block, which sits ahead of the
-   * new provider's lines, for audio it acknowledges only after the switch.
+   * Takes the next place in the drain's reserved block for a line with no
+   * text yet, in commit order, so speech from before the switch stays ahead
+   * of the new provider's and in the order it was spoken.
    */
-  private drainPlace(drain: ProviderDrain): LinePlace {
-    return {
+  /**
+   * Holds a drained line's place: the one its commit took, or for audio the
+   * old provider acknowledges only after the switch, the next place in the
+   * drain's block, which sits ahead of the new provider's lines.
+   */
+  private reserveDrainedSegment(
+    drain: ProviderDrain,
+    itemId: string,
+    committedPlace?: { sequence: number; startMs: number },
+  ): TranscriptSegment {
+    const place = committedPlace ?? {
       sequence:
         drain.nextSequence < drain.endSequence
           ? drain.nextSequence++
           : this.sequence++,
       startMs: drain.startedAt,
     };
+    const segment = this.createSegment(
+      itemId,
+      drain.speakers.getItemSpeaker(itemId) ??
+        drain.speakers.peekPendingSpeaker() ??
+        drain.latestSpeaker ??
+        this.controllerSpeaker(),
+      place,
+    );
+    drain.reserved.set(itemId, segment);
+    return segment;
   }
 
-  private lineDeadline(): number {
-    return Date.now() + TRANSCRIPTION_LINE_DEADLINE_MS;
-  }
-
-  /**
-   * Sarvam accepted an utterance: heard in a line's own replayed audio, it
-   * is that line; otherwise it takes a new place, with the speaker of the
-   * audio that started it and that audio from where it began. Saved at
-   * once, so a restart still shows it.
-   */
-  private acceptLine(
-    source: LineSource,
-    itemId: string,
-    utterance: { heard: boolean; speaker: TranscriptSpeaker | null; since: number; ownsNewAudio: boolean },
-  ): void {
-    if (source.lines.get(itemId) || this.hasFinalSegment(this.publicItemId(source, itemId))) return;
-    const record =
-      (this.replayingOwner ? source.lines.claim(this.replayingOwner, itemId, this.lineDeadline()) : null) ??
-      source.lines.accept(itemId, {
-        place: source.nextPlace(),
-        speaker: utterance.speaker ?? this.controllerSpeaker(),
-        heard: utterance.heard,
-        deadlineAt: this.lineDeadline(),
-      });
-    if (utterance.ownsNewAudio) source.lines.audioOwner = record.id;
-    if (!source.drain) this.transcriptionReplayJournal.claim(record.id, utterance.since);
-    void this.persist();
-    source.changed();
-  }
-
-  /** The itemId viewers know a provider's id by: a line keeps the one it was accepted with. */
-  private publicItemId(source: LineSource, providerItemId: string): string {
+  private drainedSegment(drain: ProviderDrain, itemId: string): TranscriptSegment {
     return (
-      source.lines.get(providerItemId)?.itemId ??
-      source.lines.endedItemId(providerItemId) ??
-      providerItemId
+      drain.partials.get(itemId) ??
+      this.segments.find((segment) => segment.itemId === itemId) ??
+      drain.reserved.get(itemId) ??
+      this.reserveDrainedSegment(drain, itemId)
     );
   }
 
-  private markLineHeard(source: LineSource, itemId: string): void {
-    const record = source.lines.get(itemId);
-    if (!record || record.heard) return;
-    record.heard = true;
-    void this.persist();
-  }
-
-  /**
-   * A provider acknowledged a commit: the line of exactly that commit's
-   * audio, whether it is waiting for this ack after a handoff or new.
-   */
-  private acknowledgeLine(source: LineSource, itemId: string): void {
-    const commit = source.takeCommit();
-    const open = source.lines.get(itemId);
-    if (open) {
-      this.giveLineCommit(open, commit);
-      return;
+  private applyDrainedCommit(drain: ProviderDrain, itemId: string): void {
+    drain.pendingCommits = Math.max(0, drain.pendingCommits - 1);
+    drain.speakers.bindCommittedItem(itemId);
+    drain.unfinalizedItems.add(itemId);
+    if (!drain.partials.has(itemId) && !drain.reserved.has(itemId)) {
+      this.reserveDrainedSegment(drain, itemId);
     }
-    const ended =
-      this.hasFinalSegment(this.publicItemId(source, itemId)) ||
-      (commit?.owner ? source.lines.reviveEnded(commit.owner, itemId) !== null : false);
-    if (ended) {
-      this.releaseCommit(commit);
-      return;
-    }
-    const record =
-      (commit?.owner ? source.lines.claim(commit.owner, itemId, this.lineDeadline()) : null) ??
-      source.lines.accept(itemId, {
-        place: source.nextPlace(),
-        speaker: commit?.speaker ?? this.controllerSpeaker(),
-        heard: true,
-        deadlineAt: this.lineDeadline(),
-      });
-    this.giveLineCommit(record, commit);
-    void this.persist();
-    source.changed();
   }
 
-  private releaseCommit(commit: PendingCommit | null): void {
-    if (commit) this.transcriptionReplayJournal.drop(commit.batches);
-  }
-
-  private giveLineCommit(record: LineRecord, commit: PendingCommit | null): void {
-    if (!commit) return;
-    this.transcriptionReplayJournal.own(commit.batches, record.id);
-    this.setLineSpeaker(record, commit.speaker);
-  }
-
-  /** Words from a provider that has not acknowledged their commit yet take that commit's speaker. */
-  private openUnacknowledgedLine(source: LineSource, itemId: string): LineRecord | null {
-    if (this.hasFinalSegment(itemId)) return null;
-    const record = source.lines.accept(itemId, {
-      place: source.nextPlace(),
-      speaker: source.nextCommit()?.speaker ?? this.controllerSpeaker(),
-      heard: true,
-      deadlineAt: this.lineDeadline(),
-    });
-    void this.persist();
-    source.changed();
-    return record;
-  }
-
-  private applyLineDelta(source: LineSource, itemId: string, delta: string): void {
-    if (this.hasFinalSegment(this.publicItemId(source, itemId))) return;
-    const record = source.lines.get(itemId) ?? this.openUnacknowledgedLine(source, itemId);
-    if (!record || record.state !== "open") return;
-    const segment = this.lineSegment(record);
+  private applyDrainedDelta(
+    drain: ProviderDrain,
+    itemId: string,
+    delta: string,
+  ): void {
+    if (this.hasFinalSegment(itemId)) return;
+    const segment = this.drainedSegment(drain, itemId);
     const now = Date.now();
     const next: TranscriptSegment = {
       ...segment,
       text: `${segment.text}${delta}`,
       updatedAt: now,
     };
-    record.shown = next;
-    // A replaced provider's words are saved as they arrive, and the output
-    // gate holds this delta until a restarted worker would still have them.
-    if (source.drain) void this.persist();
+    drain.partials.set(itemId, next);
+    // The snapshot write starts first, so the output gate holds this delta
+    // until a restarted worker would still have its words.
+    void this.persist();
     this.broadcast({
       type: "segment.delta",
       delta: this.toSegmentDelta(next, delta, now),
     });
   }
 
-  /** A line's segment as it ends: its own, an earlier final of it, or a new place. */
-  private endLineFor(source: LineSource, itemId: string): {
-    segment: TranscriptSegment;
-    endedLine: boolean;
-  } {
-    const record = source.lines.get(itemId);
-    if (record) {
-      source.lines.end(record);
-      this.forgetLine(record);
-      return { segment: this.lineSegment(record), endedLine: true };
-    }
-    const publicItemId = this.publicItemId(source, itemId);
-    return {
-      segment:
-        this.segments.find((segment) => segment.itemId === publicItemId) ??
-        this.createSegment(
-          publicItemId,
-          source.nextCommit()?.speaker ?? this.controllerSpeaker(),
-          source.nextPlace(),
-        ),
-      endedLine: false,
-    };
-  }
-
-  private async applyLineFinal(
-    source: LineSource,
+  private async applyDrainedFinal(
+    drain: ProviderDrain,
     itemId: string,
     transcript: string,
   ): Promise<void> {
-    const { segment, endedLine } = this.endLineFor(source, itemId);
-    source.changed();
-    await this.saveFinalSegment(segment, transcript, endedLine);
+    const segment = this.drainedSegment(drain, itemId);
+    drain.partials.delete(itemId);
+    drain.reserved.delete(itemId);
+    drain.unfinalizedItems.delete(itemId);
+    this.settleProviderDrain(drain);
+    await this.saveFinalSegment(segment, transcript);
   }
 
-  /**
-   * One acknowledged item a replaced provider could not transcribe: only
-   * that item becomes a gap, words already on screen are kept, and the drain
-   * goes on until every other line is final, failed or late.
-   */
-  private async applyLineFailure(source: LineSource, itemId: string): Promise<void> {
-    const { segment, endedLine } = this.endLineFor(source, itemId);
-    console.warn(
-      "[Transcript] A replaced provider failed one acknowledged line; it was not captioned.",
-      JSON.stringify({ epoch: source.drain?.epoch, provider: source.drain?.session.provider }),
-    );
-    source.changed();
-    await this.saveFinalSegment(
-      segment,
-      segment.text.trim() ? "" : TRANSCRIPTION_GAP_MARKER,
-      endedLine,
-    );
-  }
-
-  private armLiveLineTimer(): void {
-    if (this.liveLineTimer !== null) clearTimeout(this.liveLineTimer);
-    this.liveLineTimer = null;
-    const next = this.liveLines.nextDeadline();
-    if (next === null) return;
-    this.liveLineTimer = setTimeout(() => {
-      this.liveLineTimer = null;
-      void this.endOverdueLiveLines();
-    }, Math.max(0, next - Date.now()));
-  }
-
-  private clearLiveLineTimer(): void {
-    if (this.liveLineTimer !== null) clearTimeout(this.liveLineTimer);
-    this.liveLineTimer = null;
-  }
-
-  /** A line the provider never finished ends at its deadline; a later final still fills its place. */
-  private async endOverdueLiveLines(): Promise<void> {
-    const changed = this.endUnfinishedLines(
-      this.liveLines.takeDue(Date.now()),
-      "The provider did not finish in time",
-      this.transcriptionSession?.provider ?? "none",
-    );
-    this.armLiveLineTimer();
-    if (changed) {
-      await this.persist();
-      this.scheduleMinutes();
-    }
+  private settleProviderDrain(drain: ProviderDrain): void {
+    if (!drain.settlesOnAcks) return;
+    const owesNothing =
+      drain.partials.size === 0 &&
+      drain.unfinalizedItems.size === 0 &&
+      drain.pendingCommits === 0;
+    if (owesNothing) this.discardProviderDrain(drain);
   }
 
   private resetTranscriptionAudioState(): void {
-    const hadPartials = this.liveLines.shown().length > 0;
-    this.liveLines.audioOwner = null;
+    const hadPartials = this.partialSegments.size > 0;
+    this.partialSegments.clear();
+    this.committedPlaces.clear();
+    this.unfinalizedItems.clear();
+    this.audioSinceLastFinal = false;
     this.lastAudioAt = 0;
+    this.speakerAttribution.reset();
     this.transcriptionReplayJournal.reset();
     this.latestSpeaker = null;
     this.hasPendingAudio = false;
     this.pendingAudioSamples = 0;
-    this.pendingCommits = [];
+    this.pendingTranscriptionCommitAcks = [];
     if (this.transcriptionCommitWatchdogTimer !== null) {
       clearTimeout(this.transcriptionCommitWatchdogTimer);
       this.transcriptionCommitWatchdogTimer = null;
@@ -2174,10 +1922,31 @@ export class TranscriptRoom {
     }
   }
 
-  private acknowledgeTranscriptionCommit(): PendingCommit | null {
-    const commit = this.pendingCommits.shift() ?? null;
+  private handleTranscriptItemCommitted(itemId: string): void {
+    this.acknowledgeTranscriptionCommit();
+    this.unfinalizedItems.add(itemId);
+    if (
+      !this.committedPlaces.has(itemId) &&
+      !this.partialSegments.has(itemId) &&
+      !this.hasFinalSegment(itemId)
+    ) {
+      this.committedPlaces.set(itemId, { sequence: this.sequence++, startMs: Date.now() });
+    }
+    this.transcriptionReplayJournal.bindCommittedItem(itemId);
+    const speaker = this.speakerAttribution.bindCommittedItem(itemId);
+    if (speaker) {
+      this.reassignSegmentSpeaker(itemId, speaker);
+    }
+  }
+
+  private trackPendingTranscriptionCommit(): void {
+    this.pendingTranscriptionCommitAcks.push(Date.now());
     this.armTranscriptionCommitWatchdog();
-    return commit;
+  }
+
+  private acknowledgeTranscriptionCommit(): void {
+    this.pendingTranscriptionCommitAcks.shift();
+    this.armTranscriptionCommitWatchdog();
   }
 
   private armTranscriptionCommitWatchdog(): void {
@@ -2185,7 +1954,7 @@ export class TranscriptRoom {
       clearTimeout(this.transcriptionCommitWatchdogTimer);
       this.transcriptionCommitWatchdogTimer = null;
     }
-    const oldestCommitAt = this.pendingCommits[0]?.at;
+    const oldestCommitAt = this.pendingTranscriptionCommitAcks[0];
     if (oldestCommitAt === undefined) return;
     const delay = Math.max(
       0,
@@ -2193,7 +1962,7 @@ export class TranscriptRoom {
     );
     this.transcriptionCommitWatchdogTimer = setTimeout(() => {
       this.transcriptionCommitWatchdogTimer = null;
-      const currentOldestCommitAt = this.pendingCommits[0]?.at;
+      const currentOldestCommitAt = this.pendingTranscriptionCommitAcks[0];
       if (currentOldestCommitAt === undefined) return;
       if (
         currentOldestCommitAt + TRANSCRIPTION_COMMIT_ACK_TIMEOUT_MS >
@@ -2240,13 +2009,7 @@ export class TranscriptRoom {
       return;
     }
 
-    // Every line stays owed and saved through the handoff, until the
-    // replacement's ack of its own replayed audio claims it.
-    const replayEvents = this.transcriptionReplayJournal.takeRecoveryEvents(Date.now());
-    const hadPartials = this.liveLines.shown().length > 0;
-    this.liveLines.awaitReplacement();
-    this.clearLiveLineTimer();
-    if (hadPartials) this.broadcast({ type: "partials.reset" });
+    const replayEvents = this.transcriptionReplayJournal.takeRecoveryEvents();
     const failedSession = this.transcriptionSession;
     this.transcriptionSession = null;
     this.transcriptionConnectionEpoch += 1;
@@ -2346,8 +2109,6 @@ export class TranscriptRoom {
 
       const droppedEvents =
         this.transcriptionRecoveryAudio.consumeDroppedEventCount();
-      this.liveLines.limitAwaiting(this.lineDeadline());
-      this.armLiveLineTimer();
       console.info("[TranscriptWorker] transcription provider recovered", {
         roomId: this.session?.roomId,
         transportMode: this.session?.transportMode,
@@ -2382,21 +2143,9 @@ export class TranscriptRoom {
     events: BufferedTranscriptAudioEvent[],
     reportFailure = true,
   ): boolean {
-    try {
-      return this.replayEvents(events, reportFailure);
-    } finally {
-      this.replayingOwner = null;
-    }
-  }
-
-  private replayEvents(
-    events: BufferedTranscriptAudioEvent[],
-    reportFailure: boolean,
-  ): boolean {
     for (const event of events) {
       if (!this.transcriptionSession) return false;
       if (event.type === "chunk") {
-        this.replayingOwner = event.owner ?? null;
         if (
           !this.appendNormalizedAudio(
             event.audio,
@@ -2420,7 +2169,6 @@ export class TranscriptRoom {
               event.speaker,
               "Recovered transcript audio commit failed.",
               reportFailure,
-              event.owner ?? null,
             )
           ) {
             return false;
@@ -2441,7 +2189,6 @@ export class TranscriptRoom {
       } else {
         try {
           this.transcriptionSession.clearAudio();
-          this.liveLines.audioOwner = null;
         } catch {
           if (reportFailure) {
             void this.handleTranscriptionFailure(
@@ -2492,10 +2239,27 @@ export class TranscriptRoom {
     return segment;
   }
 
-  /** A line's speaker is the speaker of its own audio; its words and any final follow it. */
-  private setLineSpeaker(record: LineRecord, speaker: TranscriptSpeaker): void {
-    record.speaker = speaker;
-    const partial = record.shown;
+  private allocateSegment(itemId: string): TranscriptSegment {
+    const existing = this.partialSegments.get(itemId);
+    if (existing) return existing;
+    const segment = this.createSegment(
+      itemId,
+      this.speakerAttribution.getItemSpeaker(itemId) ??
+        this.speakerAttribution.peekPendingSpeaker() ??
+        this.latestSpeaker ??
+        this.controllerSpeaker(),
+      this.committedPlaces.get(itemId),
+    );
+    this.committedPlaces.delete(itemId);
+    this.partialSegments.set(itemId, segment);
+    return segment;
+  }
+
+  private reassignSegmentSpeaker(
+    itemId: string,
+    speaker: TranscriptSpeaker,
+  ): void {
+    const partial = this.partialSegments.get(itemId);
     if (partial && !this.hasSegmentSpeaker(partial, speaker)) {
       const now = Date.now();
       const next: TranscriptSegment = {
@@ -2505,7 +2269,7 @@ export class TranscriptRoom {
         source: speaker.source,
         updatedAt: now,
       };
-      record.shown = next;
+      this.partialSegments.set(itemId, next);
       this.broadcast({
         type: "segment.delta",
         delta: this.toSegmentDelta(next, "", now),
@@ -2513,7 +2277,7 @@ export class TranscriptRoom {
     }
 
     const finalIndex = this.segments.findIndex(
-      (candidate) => candidate.itemId === record.itemId,
+      (candidate) => candidate.itemId === itemId,
     );
     if (finalIndex < 0) return;
 
@@ -2562,16 +2326,42 @@ export class TranscriptRoom {
     };
   }
 
-  /** Shows a final in its place; a line that ends with no words still drops its saved place. */
+  private applyTranscriptDelta(itemId: string, delta: string): void {
+    const segment = this.allocateSegment(itemId);
+    const now = Date.now();
+    const next: TranscriptSegment = {
+      ...segment,
+      text: `${segment.text}${delta}`,
+      updatedAt: now,
+    };
+    this.partialSegments.set(itemId, next);
+    this.broadcast({
+      type: "segment.delta",
+      delta: this.toSegmentDelta(next, delta, now),
+    });
+  }
+
+  private async applyTranscriptFinal(
+    itemId: string,
+    transcript: string,
+  ): Promise<void> {
+    if (this.transcriptionSession?.provider === "sarvam") {
+      this.transcriptionReplayJournal.reset();
+    } else {
+      this.transcriptionReplayJournal.finalizeItem(itemId);
+    }
+    const segment = this.allocateSegment(itemId);
+    this.partialSegments.delete(itemId);
+    this.unfinalizedItems.delete(itemId);
+    this.audioSinceLastFinal = false;
+    await this.saveFinalSegment(segment, transcript);
+  }
+
   private async saveFinalSegment(
     segment: TranscriptSegment,
     transcript: string,
-    endedLine = false,
   ): Promise<void> {
-    if (!this.recordFinalSegment(segment, transcript)) {
-      if (endedLine) await this.persist();
-      return;
-    }
+    if (!this.recordFinalSegment(segment, transcript)) return;
     await this.persist();
     this.scheduleMinutes();
   }
@@ -2616,21 +2406,12 @@ export class TranscriptRoom {
     );
     if (this.segments.length <= maxSegments) return;
     this.segments.splice(0, this.segments.length - maxSegments);
-    const kept = new Set(this.segments.map(({ itemId }) => itemId));
-    for (const lines of [this.liveLines, ...Array.from(this.providerDrains.values(), ({ lines }) => lines)]) {
-      lines.forgetEndedExcept(kept);
-    }
   }
 
   private markTakeoverNeeded(error: string): void {
     this.sessionRevision += 1;
     this.cancelControllerReconnect();
     this.cancelSfuRelayRecovery();
-    this.endUnfinishedLines(
-      this.liveLines.takeAll(),
-      "Transcription stopped for a takeover",
-      this.transcriptionSession?.provider ?? "none",
-    );
     this.closeTranscriptionProvider();
     this.responseApiKey = null;
     this.responseAbort.abort();
