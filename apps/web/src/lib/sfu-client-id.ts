@@ -25,17 +25,42 @@ export const resolveServerSfuClientId = (): string =>
   canonicalizeSfuClientId(process.env.SFU_CLIENT_ID) ||
   resolveBrowserSfuClientId();
 
+const CONCLAVE_CLIENT_IDS = [
+  CONCLAVE_SFU_CLIENT_ID,
+  ...LEGACY_CONCLAVE_SFU_CLIENT_IDS,
+];
+
 /**
- * Client IDs a room code can be stored under for one tenant: the tenant a
- * link names, or the browser default for a bare link, which is the tenant
- * the meeting page joins. Never another tenant's.
+ * Client IDs to look a room code's booking up under. A link that names its
+ * tenant is looked up under that tenant only. A bare link or typed code keeps
+ * its old meaning: the server's default first, then Conclave's ids.
  */
 export const resolveSfuClientIdCandidates = (
   preferred?: string | null,
 ): string[] => {
-  const tenant =
-    canonicalizeSfuClientId(preferred) || resolveBrowserSfuClientId();
-  return tenant === CONCLAVE_SFU_CLIENT_ID
-    ? [CONCLAVE_SFU_CLIENT_ID, ...LEGACY_CONCLAVE_SFU_CLIENT_IDS]
-    : [tenant];
+  const named = canonicalizeSfuClientId(preferred);
+  if (named) return named === CONCLAVE_SFU_CLIENT_ID ? CONCLAVE_CLIENT_IDS : [named];
+  return Array.from(new Set([resolveServerSfuClientId(), ...CONCLAVE_CLIENT_IDS]));
+};
+
+/**
+ * The booking a meeting link opens, with the tenant it really belongs to.
+ * The booking service falls back across tenants, so a link that names its
+ * tenant ignores a booking from any other.
+ */
+export const findScheduledMeetingForLink = async <
+  Meeting extends { clientId?: string },
+>(
+  linkedClientId: string | null | undefined,
+  lookup: (clientId: string) => Promise<Meeting | null>,
+): Promise<{ clientId: string; meeting: Meeting } | null> => {
+  const named = canonicalizeSfuClientId(linkedClientId);
+  for (const candidate of resolveSfuClientIdCandidates(linkedClientId)) {
+    const meeting = await lookup(candidate);
+    if (!meeting) continue;
+    const booked = meeting.clientId?.trim() || candidate;
+    if (named && canonicalizeSfuClientId(booked) !== named) continue;
+    return { clientId: booked, meeting };
+  }
+  return null;
 };

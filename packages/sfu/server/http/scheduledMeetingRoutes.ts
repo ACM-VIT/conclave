@@ -114,8 +114,9 @@ const parseStatusFilter = (
 
 const serializeMeeting = (meeting: ScheduledMeeting): ScheduledMeeting => meeting;
 
-const publicMeetingView = (meeting: ScheduledMeeting) => ({
+export const publicMeetingView = (meeting: ScheduledMeeting) => ({
   id: meeting.id,
+  clientId: meeting.clientId,
   roomCode: meeting.roomCode,
   title: meeting.title,
   hostName: meeting.hostName,

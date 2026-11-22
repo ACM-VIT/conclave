@@ -11,6 +11,8 @@ import {
 
 export interface PublicScheduledMeeting {
   id: string;
+  /** The booking's own tenant; older SFUs leave it out. */
+  clientId?: string;
   roomCode: string;
   title: string;
   hostName: string;

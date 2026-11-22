@@ -11,7 +11,7 @@ import {
   type PublicScheduledMeeting,
 } from "@/lib/scheduled-meetings";
 import { auth } from "@/lib/auth";
-import { resolveSfuClientIdCandidates } from "@/lib/sfu-client-id";
+import { findScheduledMeetingForLink } from "@/lib/sfu-client-id";
 
 type MeetRoomPageProps = {
   params: Promise<{ code: string }>;
@@ -55,21 +55,13 @@ const resolveSessionEmail = async (): Promise<string | null> => {
   }
 };
 
-const lookupScheduledMeetingCandidate = async (
+const lookupScheduledMeetingCandidate = (
   roomCode: string,
-  preferredClientId?: string,
-): Promise<{ clientId: string; meeting: PublicScheduledMeeting } | null> => {
-  for (const clientId of resolveSfuClientIdCandidates(preferredClientId)) {
-    const meeting = await lookupPublicScheduledMeetingByRoomCode(
-      clientId,
-      roomCode,
-    );
-    if (meeting) {
-      return { clientId, meeting };
-    }
-  }
-  return null;
-};
+  linkedClientId?: string,
+): Promise<{ clientId: string; meeting: PublicScheduledMeeting } | null> =>
+  findScheduledMeetingForLink(linkedClientId, (clientId) =>
+    lookupPublicScheduledMeetingByRoomCode(clientId, roomCode),
+  );
 
 export default function MeetRoomPage({
   params,

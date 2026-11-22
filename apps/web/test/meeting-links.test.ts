@@ -2,23 +2,33 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildMeetingPath } from "../src/lib/meeting-links";
 import {
   canonicalizeSfuClientId,
+  findScheduledMeetingForLink,
   resolveBrowserSfuClientId,
-  resolveSfuClientIdCandidates,
 } from "../src/lib/sfu-client-id";
 
 afterEach(() => vi.unstubAllEnvs());
 
 const ROOM = "abc-defg-hij";
 
-// What /[code] opens: a scheduled meeting found under one of the candidate
-// tenants, otherwise the link's tenant, otherwise the browser default.
-const tenantOpenedBy = (path: string, bookedUnder: string[] = []) => {
+type Booking = { clientId: string; roomCode: string };
+
+// The SFU's by-room lookup: the asked tenant first, then the deployment's
+// default and Conclave's legacy ids, returning the booking with its own id.
+const sfuLookup = (bookedUnder: string[]) => async (clientId: string) => {
+  const serverDefault = canonicalizeSfuClientId(process.env.SFU_CLIENT_ID) ?? "conclave";
+  for (const candidate of [clientId, serverDefault, "conclave", "default", "public"]) {
+    if (bookedUnder.includes(candidate)) return { clientId: candidate, roomCode: ROOM };
+  }
+  return null;
+};
+
+// What /[code] opens: a scheduled meeting found for the link, otherwise the
+// link's tenant, otherwise the browser default.
+const tenantOpenedBy = async (path: string, bookedUnder: string[] = []) => {
   const linked =
     new URL(path, "https://web.test").searchParams.get("clientId") ?? undefined;
-  const booked = resolveSfuClientIdCandidates(linked).find((clientId) =>
-    bookedUnder.includes(clientId),
-  );
-  return booked ?? (canonicalizeSfuClientId(linked) || resolveBrowserSfuClientId());
+  const found = await findScheduledMeetingForLink<Booking>(linked, sfuLookup(bookedUnder));
+  return found?.clientId ?? (canonicalizeSfuClientId(linked) || resolveBrowserSfuClientId());
 };
 
 const deployment = (browserDefault: string, serverDefault: string) => {
@@ -28,48 +38,49 @@ const deployment = (browserDefault: string, serverDefault: string) => {
 
 describe("meeting links", () => {
   it.each([
+    ["conclave", "conclave"],
+    ["default", "conclave"],
+    ["acme", "acme"],
+  ])("always name the %s room's tenant", (clientId, linked) => {
+    deployment("conclave", "conclave");
+
+    expect(buildMeetingPath({ roomCode: ROOM, clientId })).toBe(`/${ROOM}?clientId=${linked}`);
+  });
+
+  it.each([
     ["conclave", "conclave", "acme"],
-    ["acme", "acme", "conclave"],
-    ["acme", "acme", "default"],
-    ["acme", "acme", "acme"],
-    ["conclave", "conclave", "conclave"],
-    ["acme", "conclave", "acme"],
     ["acme", "conclave", "conclave"],
+    ["acme", "conclave", "acme"],
     ["conclave", "acme", "conclave"],
-    ["conclave", "acme", "acme"],
   ])(
-    "with browser default %s and server default %s, a link to a %s room opens that room",
-    (browserDefault, serverDefault, roomClientId) => {
+    "with browser default %s and server default %s, a new link to a %s room opens it even when both tenants booked the code",
+    async (browserDefault, serverDefault, roomClientId) => {
       deployment(browserDefault, serverDefault);
 
       const path = buildMeetingPath({ roomCode: ROOM, clientId: roomClientId });
 
-      expect(tenantOpenedBy(path)).toBe(canonicalizeSfuClientId(roomClientId));
+      expect(await tenantOpenedBy(path, ["conclave", "acme"])).toBe(roomClientId);
     },
   );
 
-  it("does not trade the room's tenant for another tenant's booking with the same code", () => {
+  it("does not trade a named tenant for another tenant's booking with the same code", async () => {
     deployment("acme", "conclave");
+
     expect(
-      tenantOpenedBy(buildMeetingPath({ roomCode: ROOM, clientId: "acme" }), ["conclave"]),
+      await tenantOpenedBy(buildMeetingPath({ roomCode: ROOM, clientId: "acme" }), ["conclave"]),
     ).toBe("acme");
-
-    deployment("conclave", "acme");
-    expect(
-      tenantOpenedBy(buildMeetingPath({ roomCode: ROOM, clientId: "conclave" }), ["acme"]),
-    ).toBe("conclave");
   });
 
-  it("opens a typed code in the browser's default tenant", () => {
-    deployment("conclave", "acme");
-    expect(tenantOpenedBy(`/${ROOM}`, ["acme"])).toBe("conclave");
+  it("opens an old bare booking link in the booking's tenant, as before", async () => {
+    deployment("acme", "conclave");
 
-    expect(tenantOpenedBy(`/${ROOM}`, ["default"])).toBe("default");
+    expect(await tenantOpenedBy(`/${ROOM}`, ["conclave"])).toBe("conclave");
+    expect(await tenantOpenedBy(`/${ROOM}`, ["default"])).toBe("default");
   });
 
-  it("keeps links clean on a deployment that only uses the default tenant", () => {
-    deployment("conclave", "conclave");
+  it("opens a typed code with no booking in the browser's default room", async () => {
+    deployment("acme", "conclave");
 
-    expect(buildMeetingPath({ roomCode: ROOM, clientId: "conclave" })).toBe(`/${ROOM}`);
+    expect(await tenantOpenedBy(`/${ROOM}`)).toBe("acme");
   });
 });
