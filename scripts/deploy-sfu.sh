@@ -269,13 +269,25 @@ run_deploy_preflight() {
   fi
 
   # `docker compose config` only renders local configuration. In explicit live
-  # preflight mode, the Node probe makes GET-only health/status requests.
-  "${COMPOSE[@]}" config --format json | "${preflight[@]}"
+  # preflight mode, the Node probe makes GET-only health/status requests. Only
+  # its explicit pass line counts: a preflight that printed nothing has not
+  # checked anything.
+  local result
+  result="$("${COMPOSE[@]}" config --format json | "${preflight[@]}")" || {
+    [[ -n "$result" ]] && printf '%s\n' "$result"
+    echo "SFU deployment preflight failed." >&2
+    return 1
+  }
+  printf '%s\n' "$result"
+  if ! grep -q '^SFU deployment preflight passed' <<< "$result"; then
+    echo "SFU deployment preflight reported no result, so the deploy stops." >&2
+    return 1
+  fi
 }
 
 if [[ "$PREFLIGHT_ONLY" == "true" ]]; then
   echo "Running fail-closed SFU deployment preflight..."
-  run_deploy_preflight
+  run_deploy_preflight || exit 1
   echo "Preflight-only run complete; no code, container, drain, or DNS changes were made."
   exit 0
 fi
@@ -299,7 +311,7 @@ fi
 # before anything is built or changed, so an older preflight cannot approve a
 # config the new SFU rejects.
 echo "Running fail-closed SFU deployment preflight on $(git -C "$ROOT_DIR" rev-parse --short=12 HEAD)..."
-run_deploy_preflight
+run_deploy_preflight || exit 1
 
 HAS_REDIS_SERVICE="false"
 if "${COMPOSE[@]}" config --services 2>/dev/null | grep -x "redis" >/dev/null; then

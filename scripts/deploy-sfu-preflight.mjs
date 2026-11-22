@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 
 import { isIP } from "node:net";
+import { realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import path from "node:path";
 import process from "node:process";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { readRtcPortRange, readWorkerSizing, resolveWebRtcPortBudget } from "../packages/sfu/config/workerSettings.mjs";
 
 const REGION_PATTERN = /^[a-z0-9](?:[a-z0-9._:-]{0,62}[a-z0-9])?$/;
@@ -441,6 +443,22 @@ const main = async () => {
   }
 };
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Node gives this module its real path but leaves argv[1] as typed, so both
+// sides are resolved before comparing; a checkout reached through a symlink
+// must still run the checks. An entry that names this file but does not
+// resolve to it is an error, never a silent pass.
+const realPath = (file) => {
+  try {
+    return realpathSync.native(file);
+  } catch {
+    return null;
+  }
+};
+const self = fileURLToPath(import.meta.url);
+const entry = process.argv[1];
+if (entry && realPath(entry) === realPath(self)) {
   await main();
+} else if (entry && path.basename(entry) === path.basename(self)) {
+  console.error(`deploy-sfu-preflight.mjs cannot tell whether ${entry} is this file (${self}); refusing to report a result.`);
+  process.exitCode = 1;
 }

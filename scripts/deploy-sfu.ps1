@@ -323,9 +323,16 @@ function Invoke-DeployPreflight {
   if ($preflightConfigOnly -or -not $preflightOnly) {
     $preflightArguments += "--config-only"
   }
-  ($composeJsonLines -join [Environment]::NewLine) | & node @preflightArguments
-  if ($LASTEXITCODE -ne 0) {
+  $result = @(($composeJsonLines -join [Environment]::NewLine) | & node @preflightArguments)
+  $exitCode = $LASTEXITCODE
+  $result | ForEach-Object { Write-Host $_ }
+  if ($exitCode -ne 0) {
     Exit-WithError "SFU deployment preflight failed"
+  }
+  # Only the explicit pass line counts: a preflight that printed nothing has
+  # not checked anything.
+  if (-not ($result | Where-Object { $_ -match '^SFU deployment preflight passed' })) {
+    Exit-WithError "SFU deployment preflight reported no result, so the deploy stops"
   }
 }
 

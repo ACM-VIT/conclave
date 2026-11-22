@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 
@@ -317,4 +320,31 @@ test("a public route resolving to the wrong instance or region is fatal", async 
     runSfuDeployPreflight({ compose: makeCompose(), fetchImpl }),
     /public route returned instance.*public route returned region/s,
   );
+});
+
+// The deploy scripts run this file directly; a checkout reached through a
+// symlink must still run the checks rather than exit 0 having done nothing.
+test("run through a symlinked path, the preflight still checks the config", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "conclave-preflight-"));
+  try {
+    const linked = path.join(root, "linked-scripts");
+    symlinkSync(import.meta.dirname, linked);
+    const run = (compose) =>
+      spawnSync(process.execPath, [path.join(linked, "deploy-sfu-preflight.mjs"), "--compose-json", "-", "--config-only"], {
+        input: JSON.stringify(compose),
+        encoding: "utf8",
+      });
+
+    const good = run(makeCompose());
+    assert.equal(good.status, 0, good.stderr);
+    assert.match(good.stdout, /SFU deployment preflight passed/);
+
+    const broken = makeCompose();
+    broken.services["edge-fra"].environment.SFU_SECRET = "development-secret";
+    const bad = run(broken);
+    assert.equal(bad.status, 1, bad.stdout);
+    assert.match(bad.stderr, /SFU_SECRET must be a non-default value/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

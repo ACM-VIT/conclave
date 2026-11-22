@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { chmod, copyFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -129,9 +129,9 @@ main();
 // upstream: files the next commit on origin changes, so the checkout is one
 // pull behind the revision it will deploy.
 const deploy = async (sfus, { args: extraArgs = [], env: extraEnv = {}, envLines = [], upstream } = {}) => {
-  // The real path: the preflight only runs when its own path has no symlink
-  // in it, and macOS temp dirs sit behind one.
-  const root = await realpath(await mkdtemp(path.join(tmpdir(), "conclave-deploy-")));
+  // On macOS this path sits behind the /var symlink, so the preflight also
+  // runs through one.
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-deploy-"));
   try {
     const src = path.join(root, "src");
     await mkdir(path.join(src, "scripts"), { recursive: true });
@@ -349,5 +349,17 @@ test("an instance that has run for an hour but stays silent is left alone", asyn
     assert.equal(result.code, 1, result.output);
     assert.match(result.output, /sfu-b's container is running but nothing answers/);
     assert.deepEqual(events, []);
+  });
+});
+
+test("a preflight that reports nothing stops the deploy before anything is built", async () => {
+  await withSfus({ "sfu-a": { rooms: 0 }, "sfu-b": { rooms: 0 } }, async (sfus) => {
+    // It reads the compose JSON, then exits 0 without a verdict.
+    const silent = "for await (const chunk of process.stdin) void chunk;\nprocess.exit(0);\n";
+    const result = await deploy(sfus, { upstream: { "scripts/deploy-sfu-preflight.mjs": silent } });
+    assert.equal(result.code, 1, result.output);
+    assert.match(result.output, /SFU deployment preflight reported no result/);
+    const changes = result.docker.filter((args) => ["build", "up", "run", "tag", "stop"].some((verb) => args.includes(verb)));
+    assert.deepEqual(changes, []);
   });
 });
