@@ -17,6 +17,10 @@ services:
       RTC_MAX_PORT: "${SFU_STAGING_RTC_MAX_PORT:-42200}"
       SFU_VERSION: "staging"
       SFU_WORKER_COUNT: "1"
+      # Pinned so the firewall split in docs/ops/staging.md (public WebRTC on
+      # 42001-42004, relay-only RTP on 42005-42200) holds whatever the staging
+      # .env says.
+      SFU_WEBRTC_PORT_BUDGET: "4"
       RECORDING_STORAGE_PATH: /var/lib/conclave/recordings
     # Its own state directory, so a staging build can never open the
     # production SQLite file.

@@ -38,13 +38,14 @@ What A shares, and why it is still safe:
   channels. Staging runs its own Redis container on 127.0.0.1:6380.
 - **Disk**: `/var/lib/conclave-staging`, never the production state dir.
 - **Ports**: HTTP 3033, RTC 42001-42200 (production uses 3031, 3032 and
-  40000-42000). With #268's port budget (`SFU_WEBRTC_PORT_BUDGET`, 4 by
-  default) and staging's single worker, WebRTC uses 42001-42004 and
-  42005-42200 carries plain RTP from relay sources only. This split follows
-  the firewall policy in #268's `packages/sfu/README.md`, so the rules below
-  depend on #268: before it, the SFU puts WebRTC ports anywhere in the range.
-  Whichever of #268 and this runbook changes second must keep the two in
-  step.
+  40000-42000). The WebRTC port budget is pinned to 4 in
+  `docker-compose.sfu-staging.yml` and staging runs one worker, so WebRTC uses
+  42001-42004 and 42005-42200 carries plain RTP from relay sources only. This
+  is the firewall policy in `packages/sfu/README.md`; change the rules below,
+  the compose file and that README together.
+- **CPU**: staging pins one worker. Set `SFU_WORKER_HOST_INSTANCES=3` in
+  production's `.env`, so `sfu-a` and `sfu-b` size their worker pools for three
+  SFUs on the VM (`packages/sfu/README.md`).
 
 ## One-time setup (option A)
 
@@ -96,6 +97,9 @@ STAGING_STATE_DIR=/var/lib/conclave-staging
 EOF
 chown azureuser:azureuser "$S/.env" && chmod 0600 "$S/.env"
 echo "staging SFU secret: ${STAGING_SFU_SECRET}"   # needed for the Worker secret below
+# The reserved ports must cover staging's range too (packages/sfu/README.md
+# reserves 40000-42200 for production and staging).
+sysctl net.ipv4.ip_local_reserved_ports
 ```
 
 Leave the AI, email and transcription keys out at first; those features stay
