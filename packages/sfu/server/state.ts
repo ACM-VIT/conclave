@@ -35,6 +35,7 @@ export type SfuState = {
   workers: Worker[];
   rooms: Map<string, Room>;
   roomCreations: Map<string, Promise<Room>>;
+  workerRoomReservations: Map<number, number>;
   endedRooms: Map<string, EndedRoom>;
   webinarConfigs: Map<string, WebinarRoomConfig>;
   webinarLinks: Map<string, WebinarLinkTarget>;
@@ -58,6 +59,7 @@ export const createSfuState = (options?: {
     workers: [],
     rooms: new Map(),
     roomCreations: new Map(),
+    workerRoomReservations: new Map(),
     endedRooms: new Map(),
     webinarConfigs: new Map(),
     webinarLinks: new Map(),

@@ -1,37 +1,36 @@
 import type { Worker } from "mediasoup/types";
 
-type WorkerLoadOptions = {
-  loadScoresByPid?: Map<number, number>;
+export type WorkerLoad = {
+  consumers: number;
+  rooms: number;
+  pendingRooms: number;
 };
 
-const getWorker = async (
+const idle: WorkerLoad = { consumers: 0, rooms: 0, pendingRooms: 0 };
+
+const getWorker = (
   workers: Worker[],
-  options: WorkerLoadOptions = {},
-): Promise<Worker> => {
-  // Only consider live workers. A worker that just died and is mid-replacement
-  // must not receive a new router.
-  const liveWorkers = workers.filter((worker) => !worker.closed);
-  if (liveWorkers.length === 0) {
-    throw new Error("No workers available");
-  }
-
-  let leastLoadedWorker = liveWorkers[0];
-  let leastWorkerLoad =
-    typeof leastLoadedWorker.pid === "number"
-      ? options.loadScoresByPid?.get(leastLoadedWorker.pid) ?? 0
-      : 0;
-
-  for (const worker of liveWorkers.slice(1)) {
-    const workerLoad =
-      typeof worker.pid === "number"
-        ? options.loadScoresByPid?.get(worker.pid) ?? 0
-        : 0;
-    if (workerLoad < leastWorkerLoad) {
+  loads: ReadonlyMap<number, WorkerLoad>,
+): Worker => {
+  let leastLoadedWorker: Worker | undefined;
+  let leastScore = Infinity;
+  let fewestRooms = Infinity;
+  for (const worker of workers) {
+    if (worker.closed) continue;
+    const load = loads.get(worker.pid) ?? idle;
+    const rooms = load.rooms + load.pendingRooms;
+    const score = load.consumers + rooms;
+    if (
+      score < leastScore ||
+      (score === leastScore && rooms < fewestRooms)
+    ) {
       leastLoadedWorker = worker;
-      leastWorkerLoad = workerLoad;
+      leastScore = score;
+      fewestRooms = rooms;
     }
   }
 
+  if (!leastLoadedWorker) throw new Error("No workers available");
   return leastLoadedWorker;
 };
 
