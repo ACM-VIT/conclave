@@ -1,15 +1,36 @@
 // Shared-browser audio and video each use separate RTP and RTCP ports.
 const SHARED_BROWSER_PLAIN_PORT_RESERVE = 4;
 
+const parseDecimalInteger = (value) => {
+  const digits = typeof value === "string" ? value.trim() : "";
+  return /^\d+$/.test(digits) ? Number(digits) : NaN;
+};
+
 const readPositiveInteger = (env, name) => {
   const value = env[name];
   if (value === undefined || value === null) return undefined;
-  const digits = typeof value === "string" ? value.trim() : "";
-  const parsed = Number(digits);
-  if (!/^\d+$/.test(digits) || !Number.isSafeInteger(parsed) || parsed < 1) {
+  const parsed = parseDecimalInteger(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
     throw new Error(`${name} must be a positive integer`);
   }
   return parsed;
+};
+
+const parseRtcPort = (value, name) => {
+  const port = parseDecimalInteger(value);
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new Error(`${name} must be an integer from 1 through 65535.`);
+  }
+  return port;
+};
+
+export const readRtcPortRange = (environment, defaults = {}) => {
+  const rtcMinPort = parseRtcPort(environment.RTC_MIN_PORT ?? defaults.RTC_MIN_PORT, "RTC_MIN_PORT");
+  const rtcMaxPort = parseRtcPort(environment.RTC_MAX_PORT ?? defaults.RTC_MAX_PORT, "RTC_MAX_PORT");
+  if (rtcMaxPort < rtcMinPort) {
+    throw new Error("RTC_MAX_PORT must be greater than or equal to RTC_MIN_PORT.");
+  }
+  return { rtcMinPort, rtcMaxPort };
 };
 
 export const readWorkerSizing = (environment) => ({

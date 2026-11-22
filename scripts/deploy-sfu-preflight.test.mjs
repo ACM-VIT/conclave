@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import test from "node:test";
 
 import {
@@ -108,6 +109,61 @@ test("config-only validates without performing a network request", async () => {
   });
   assert.equal(result.configOnly, true);
   assert.equal(fetched, false);
+});
+
+test("deploy preflight and SFU startup agree on configured RTC ports", () => {
+  const valid = [
+    ["40000", "40999"],
+    [" 00001 ", "65535"],
+  ];
+  const invalid = [
+    ["typo", "40999"],
+    ["40000", "typo"],
+    ["", "40999"],
+    ["40000", " "],
+    ["0x9c40", "40999"],
+    ["40000", "+40999"],
+    ["40000.0", "40999"],
+    ["0", "40999"],
+    ["40000", "65536"],
+    ["42000", "41000"],
+  ];
+  const cases = [...valid, ...invalid];
+  const startup = execFileSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
+    const results = [];
+    for (const [index, [min, max]] of JSON.parse(process.argv[1]).entries()) {
+      process.env.RTC_MIN_PORT = min;
+      process.env.RTC_MAX_PORT = max;
+      try {
+        const { config } = await import("./config/config.ts?rtcCase=" + index);
+        results.push([config.workerSettings.rtcMinPort, config.workerSettings.rtcMaxPort]);
+      } catch (error) {
+        results.push(error.message);
+      }
+    }
+    console.log(JSON.stringify(results));
+  `, JSON.stringify(cases)], {
+    cwd: new URL("../packages/sfu/", import.meta.url),
+    env: { PATH: process.env.PATH, HOME: process.env.HOME, NODE_ENV: "test", SFU_SECRET: "rtc-validation-fixture" },
+    encoding: "utf8",
+  });
+  const startupResults = JSON.parse(startup.trim().split("\n").at(-1));
+  assert.deepEqual(startupResults.slice(0, valid.length), valid.map(([min, max]) => [Number(min), Number(max)]));
+  for (const [index, [min, max]] of cases.entries()) {
+    const compose = makeCompose();
+    const service = "edge-dxb";
+    Object.assign(compose.services[service].environment, { RTC_MIN_PORT: min, RTC_MAX_PORT: max });
+    let preflightResult;
+    try {
+      const [{ rtcMinPort, rtcMaxPort }] = resolveSfuTargets({ compose, serviceNames: [service] });
+      preflightResult = [rtcMinPort, rtcMaxPort];
+    } catch (error) {
+      assert.ok(error instanceof SfuDeployPreflightError);
+      preflightResult = error.errors[0].slice(service.length + 2);
+    }
+    assert.deepEqual(startupResults[index], preflightResult, JSON.stringify([min, max]));
+  }
+  assert.ok(startupResults.slice(valid.length).every((result) => typeof result === "string"));
 });
 
 for (const name of ["SFU_WEBRTC_PORT_BUDGET", "SFU_WORKER_COUNT", "SFU_WORKER_HOST_INSTANCES"]) {

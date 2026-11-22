@@ -4,7 +4,7 @@ import { isIP } from "node:net";
 import { readFile } from "node:fs/promises";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import { readWorkerSizing, resolveWebRtcPortBudget } from "../packages/sfu/config/workerSettings.mjs";
+import { readRtcPortRange, readWorkerSizing, resolveWebRtcPortBudget } from "../packages/sfu/config/workerSettings.mjs";
 
 const REGION_PATTERN = /^[a-z0-9](?:[a-z0-9._:-]{0,62}[a-z0-9])?$/;
 const INSTANCE_ID_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._:-]{0,126}[A-Za-z0-9])?$/;
@@ -179,8 +179,14 @@ export const resolveSfuTargets = ({ compose, serviceNames }) => {
     const publicUrl = parsePublicUrl(String(env.SFU_PUBLIC_URL || ""), service, errors);
     const announcedIpInput = String(env.ANNOUNCED_IP || "").trim();
     const announcedIp = normalizeIp(announcedIpInput);
-    const rtcMinPort = parseRequiredPort(env.RTC_MIN_PORT, `${service}: RTC_MIN_PORT`, errors);
-    const rtcMaxPort = parseRequiredPort(env.RTC_MAX_PORT, `${service}: RTC_MAX_PORT`, errors);
+    let rtcMinPort = null;
+    let rtcMaxPort = null;
+    try {
+      ({ rtcMinPort, rtcMaxPort } = readRtcPortRange(env));
+      resolveWebRtcPortBudget({ rtcMinPort, rtcMaxPort, ...readWorkerSizing(env) });
+    } catch (error) {
+      errors.push(`${service}: ${error.message}`);
+    }
     const serverPort = parseRequiredPort(env.SFU_PORT || env.PORT, `${service}: SFU_PORT`, errors);
     const redisRegistry = normalizeRedisRegistry(
       String(env.SFU_REDIS_URL || env.REDIS_URL || ""),
@@ -201,18 +207,6 @@ export const resolveSfuTargets = ({ compose, serviceNames }) => {
       errors.push(`${service}: ANNOUNCED_IP must be an IP literal.`);
     } else if (publicUrl && !isLocalUrl(publicUrl) && !isPublicIp(announcedIpInput)) {
       errors.push(`${service}: ANNOUNCED_IP must be a publicly routable IP for a non-local public URL.`);
-    }
-    if (rtcMinPort !== null && rtcMaxPort !== null && rtcMaxPort < rtcMinPort) {
-      errors.push(`${service}: RTC_MAX_PORT must be greater than or equal to RTC_MIN_PORT.`);
-    } else {
-      try {
-        const sizing = readWorkerSizing(env);
-        if (rtcMinPort !== null && rtcMaxPort !== null) {
-          resolveWebRtcPortBudget({ rtcMinPort, rtcMaxPort, ...sizing });
-        }
-      } catch (error) {
-        errors.push(`${service}: ${error.message}`);
-      }
     }
     if (!String(env.SFU_SECRET || "").trim() || env.SFU_SECRET === "development-secret") {
       errors.push(`${service}: SFU_SECRET must be a non-default value.`);

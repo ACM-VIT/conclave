@@ -4,8 +4,15 @@ type WorkerSizing = {
   webRtcPortBudget: number | undefined;
 };
 
+type WorkerEnvironment = Readonly<Record<string, string | null | undefined>>;
+
+export function readRtcPortRange(
+  environment: WorkerEnvironment,
+  defaults?: Partial<Record<"RTC_MIN_PORT" | "RTC_MAX_PORT", string>>,
+): { rtcMinPort: number; rtcMaxPort: number };
+
 export function readWorkerSizing(
-  environment: Readonly<Record<string, string | null | undefined>>,
+  environment: WorkerEnvironment,
 ): WorkerSizing;
 
 export function resolveWebRtcPortBudget(
