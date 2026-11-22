@@ -160,6 +160,15 @@ function ParticipantsPanel({
         );
       });
   }, [webinarEnabled, webinarQaEntries]);
+  // A question a host hid stays here, after the open ones, so whoever
+  // moderates the webinar can bring it back.
+  const hostWebinarQuestions = useMemo(() => {
+    if (!webinarEnabled) return [];
+    const hidden = webinarQaEntries
+      .filter((entry) => entry.status === "dismissed")
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+    return [...openWebinarQuestions, ...hidden];
+  }, [openWebinarQuestions, webinarEnabled, webinarQaEntries]);
 
   const runWebinarAction = async (
     key: string,
@@ -585,34 +594,49 @@ function ParticipantsPanel({
           </button>
           {isQaSectionExpanded && (
             <div className="px-4 pb-3">
-              {openWebinarQuestions.length === 0 ? (
+              {hostWebinarQuestions.length === 0 ? (
                 <p className="text-[12px] leading-snug text-[#71717a]">
                   Attendee questions land here for you to answer live or
                   hide.
                 </p>
               ) : (
                 <div className="max-h-56 space-y-1.5 overflow-y-auto">
-                  {openWebinarQuestions.map((entry) => {
+                  {hostWebinarQuestions.map((entry) => {
                     const isAnswering = entry.status === "answering";
+                    const isHidden = entry.status === "dismissed";
                     return (
                       <div
                         key={entry.id}
+                        data-testid="webinar-host-question"
                         className={`rounded-lg border px-2.5 py-2 ${
                           isAnswering
                             ? "border-[#F95F4A]/40 bg-[#F95F4A]/[0.06]"
-                            : "border-white/10 bg-black/20"
+                            : isHidden
+                              ? "border-white/[0.06] bg-transparent"
+                              : "border-white/10 bg-black/20"
                         }`}
                       >
                         <div className="flex items-center justify-between gap-2">
-                          <span className="truncate text-[11.5px] font-medium text-[#a1a1aa]">
-                            {formatDisplayName(entry.displayName)}
+                          <span className="flex min-w-0 items-center gap-1.5">
+                            <span className="truncate text-[11.5px] font-medium text-[#a1a1aa]">
+                              {formatDisplayName(entry.displayName)}
+                            </span>
+                            {isHidden && (
+                              <span className="shrink-0 rounded-full border border-white/[0.12] px-2 py-0.5 text-[9.5px] font-medium uppercase tracking-[0.08em] text-[#fafafa]/50">
+                                Hidden
+                              </span>
+                            )}
                           </span>
                           <span className="inline-flex shrink-0 items-center gap-1 text-[11px] tabular-nums text-[#71717a]">
                             <ChevronUp size={12} strokeWidth={STROKE} />
                             {entry.upvotes}
                           </span>
                         </div>
-                        <p className="mt-1 text-[13px] leading-snug text-[#fafafa]">
+                        <p
+                          className={`mt-1 text-[13px] leading-snug ${
+                            isHidden ? "text-[#fafafa]/50" : "text-[#fafafa]"
+                          }`}
+                        >
                           {entry.question}
                         </p>
                         {onModerateWebinarQuestion && (
