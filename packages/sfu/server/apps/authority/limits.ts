@@ -37,8 +37,6 @@ export type AuthorityLimits = {
    */
   clearedRowsPerFlush: number;
   subscriptionsPerSocket: number;
-  /** Patches held for a subscription while its snapshot is still in flight. */
-  backlogFrames: number;
   /** Unsent packets or bytes on a socket before it is treated as behind. */
   socketSoftPackets: number;
   socketSoftBytes: number;
@@ -68,7 +66,6 @@ export const DEFAULT_AUTHORITY_LIMITS: AuthorityLimits = {
   transactionOps: 50_000,
   clearedRowsPerFlush: 1_000,
   subscriptionsPerSocket: 16,
-  backlogFrames: 32,
   socketSoftPackets: 256,
   socketSoftBytes: 1024 * 1024,
   socketHardPackets: 4_096,

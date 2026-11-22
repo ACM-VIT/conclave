@@ -13,7 +13,6 @@ import {
   type AuthorityRevokeReason,
   type CapabilitiesRequest,
   type Json,
-  type PatchFrame,
   type ProjectedRow,
   type QueryReply,
   type QueryRequest,
@@ -36,6 +35,7 @@ import { AuthorityInstance, type Actor } from "./instance.js";
 import type { AuthorityLimits } from "./limits.js";
 import type {
   CommittedView,
+  HeldRows,
   LiveAudiences,
   SizedRow,
   ViewOps,
@@ -69,9 +69,12 @@ type Subscription = {
   actor: Actor;
   generation: number;
   seq: number;
-  /** Snapshot parts still to send. Patches wait behind them. */
-  transfer: { frames: ReplaceFrame[]; next: number } | null;
-  backlog: PatchFrame[];
+  /**
+   * A snapshot in parts on its way: the parts, the next to send, and what
+   * the parts sent so far carried. Nothing else is sent until the last part
+   * has gone, and then one catch-up from what was carried to the view now.
+   */
+  transfer: { frames: ReplaceFrame[]; next: number; held: HeldRows } | null;
   /** The socket fell behind. Patches are skipped until it is replaced. */
   lagging: boolean;
   /**
@@ -173,6 +176,15 @@ const samePolicy = (a: RoomPolicy, b: RoomPolicy): boolean =>
 
 const sameActor = (a: Actor, b: Actor): boolean =>
   a.subject === b.subject && a.role === b.role && a.verified === b.verified;
+
+/** Notes the rows a part of a snapshot carried, as it carried them. */
+const carried = (held: HeldRows, part: ReplaceFrame): void => {
+  for (const row of part.rows) {
+    const rows = held.get(row.bucket);
+    if (rows) rows.set(row.key, row.value);
+    else held.set(row.bucket, new Map([[row.key, row.value]]));
+  }
+};
 
 /** Splits a snapshot into parts of at most `chunkBytes`, one row at least. */
 const partsOf = (rows: SizedRow[], chunkBytes: number): SizedRow[][] => {
@@ -332,7 +344,6 @@ export class RoomAuthority {
       generation: 1,
       seq: 0,
       transfer: null,
-      backlog: [],
       lagging: false,
       viewVersion: 0,
       grantsSent: "",
@@ -397,7 +408,6 @@ export class RoomAuthority {
       generation: 1,
       seq: 0,
       transfer: null,
-      backlog: [],
       lagging: false,
       viewVersion: 0,
       grantsSent: "",
@@ -733,7 +743,6 @@ export class RoomAuthority {
     this.dormant.add(subscription);
     this.viewerLeft(subscription.instance);
     subscription.transfer = null;
-    subscription.backlog = [];
     this.send(subscription, {
       kind: "revoke",
       subscription: subscription.id,
@@ -777,7 +786,6 @@ export class RoomAuthority {
       this.byInstance.get(instance)?.delete(observer);
       this.dormant.add(observer);
       observer.transfer = null;
-      observer.backlog = [];
     }
   }
 
@@ -922,6 +930,9 @@ export class RoomAuthority {
         continue;
       }
       for (const subscription of [...subscriptions]) {
+        // One whose snapshot is still in parts is caught up after its last
+        // part, from what the parts carried. Nothing is held for it here.
+        if (subscription.transfer) continue;
         // Each is told from its own snapshot on: a change that snapshot
         // already had, or a row gone before it was read, is not sent.
         const shared = changes.shared
@@ -982,8 +993,9 @@ export class RoomAuthority {
     personal: ViewOps | undefined,
     grants?: AuthorityGrants,
   ): void {
-    // A lagging subscription is caught up by a whole replacement later.
-    if (subscription.lagging || subscription.dropped) return;
+    // A lagging subscription is caught up by a whole replacement later, and
+    // one with a snapshot in parts by its catch-up after the last part.
+    if (subscription.lagging || subscription.dropped || subscription.transfer) return;
     if (!this.hasRoom(subscription)) return;
 
     const bytes = (shared?.bytes ?? 0) + (personal?.bytes ?? 0);
@@ -992,7 +1004,7 @@ export class RoomAuthority {
       return;
     }
     subscription.seq += 1;
-    const frame: PatchFrame = {
+    this.emit(subscription, {
       kind: "patch",
       subscription: subscription.id,
       generation: subscription.generation,
@@ -1001,17 +1013,7 @@ export class RoomAuthority {
       put: [...(shared?.put ?? []), ...(personal?.put ?? [])],
       remove: [...(shared?.remove ?? []), ...(personal?.remove ?? [])],
       ...(grants ? { grants } : {}),
-    };
-    if (!subscription.transfer) {
-      this.emit(subscription, frame);
-      return;
-    }
-    if (subscription.backlog.length >= this.limits.backlogFrames) {
-      // Too much changed while the snapshot was in flight: start over.
-      this.regenerate(subscription, subscription.actor);
-      return;
-    }
-    subscription.backlog.push(frame);
+    });
   }
 
   /** A whole view under a new generation. */
@@ -1030,7 +1032,6 @@ export class RoomAuthority {
   private sendReplace(subscription: Subscription): void {
     subscription.seq = 0;
     subscription.transfer = null;
-    subscription.backlog = [];
     subscription.lagging = false;
     if (!this.hasRoom(subscription)) return;
 
@@ -1079,7 +1080,9 @@ export class RoomAuthority {
     this.stats.replaces += 1;
     this.emit(subscription, frames[0]);
     if (frames.length === 1) return;
-    subscription.transfer = { frames, next: 1 };
+    const held: HeldRows = new Map();
+    carried(held, frames[0]);
+    subscription.transfer = { frames, next: 1, held };
     this.continueTransfer(subscription, subscription.generation);
   }
 
@@ -1088,8 +1091,8 @@ export class RoomAuthority {
    * cut from one view when the snapshot began, and a part waits a turn or
    * more for its place. A row that has been hidden in the meantime is left
    * out, and one that has changed goes as it is now, so no part carries what
-   * was withdrawn before it left. The patch that follows the last part
-   * brings the viewer the rest of what changed.
+   * was withdrawn before it left. The catch-up after the last part brings
+   * the viewer the rest of what changed.
    */
   private asCommitted(subscription: Subscription, part: ReplaceFrame): ReplaceFrame {
     const view = subscription.instance.committedView(subscription.actor);
@@ -1118,26 +1121,33 @@ export class RoomAuthority {
       }
       if (this.refresh(subscription) !== "live") return;
       if (!this.hasRoom(subscription)) return;
-      this.emit(
-        subscription,
-        this.asCommitted(subscription, transfer.frames[transfer.next]),
-      );
+      const part = this.asCommitted(subscription, transfer.frames[transfer.next]);
+      this.emit(subscription, part);
+      carried(transfer.held, part);
       transfer.next += 1;
       if (transfer.next < transfer.frames.length) {
         this.continueTransfer(subscription, generation);
         return;
       }
       subscription.transfer = null;
-      const backlog = subscription.backlog;
-      subscription.backlog = [];
-      // Each queued change is a frame like any other, so the socket is asked
-      // again before each one. If it has fallen behind, the rest are dropped
-      // and the view is caught up whole once the socket drains.
-      for (const frame of backlog) {
-        if (!this.hasRoom(subscription)) return;
-        this.emit(subscription, frame);
-      }
+      this.catchUp(subscription, transfer.held);
     });
+  }
+
+  /**
+   * Tells a viewer whose snapshot's last part has just gone what changed
+   * while the parts were on their way: what the parts carried, set against
+   * their view as committed now. It is one patch, read at this moment, so it
+   * never sends a row older than one the viewer already has, nor one their
+   * view no longer has. A socket that is behind is sent nothing, and gets a
+   * whole view once it drains, like any other frame that finds it so.
+   */
+  private catchUp(subscription: Subscription, held: HeldRows): void {
+    const { ops, version } = subscription.instance.catchUp(subscription.actor, held);
+    subscription.viewVersion = version;
+    const grants = subscription.grantsDue ? this.changedGrants(subscription) : undefined;
+    if (ops.put.length === 0 && ops.remove.length === 0 && !grants) return;
+    this.sendPatch(subscription, ops, undefined, grants);
   }
 
   /**
@@ -1249,7 +1259,6 @@ export class RoomAuthority {
     if (congestion === "behind") {
       subscription.lagging = true;
       subscription.transfer = null;
-      subscription.backlog = [];
       this.scheduleLagCheck();
       return false;
     }
@@ -1311,7 +1320,6 @@ export class RoomAuthority {
     if (!subscription.dropped) subscription.ended?.();
     subscription.dropped = true;
     subscription.transfer = null;
-    subscription.backlog = [];
     this.dormant.delete(subscription);
     this.byInstance.get(subscription.instance)?.delete(subscription);
     const subscriptions = this.bySocket.get(subscription.socket.id);

@@ -11,6 +11,7 @@ import {
   type AuthorityResult,
   type Json,
   type PatchFrame,
+  type ProjectedRow,
   type ReplaceFrame,
 } from "@conclave/apps-sdk/authority";
 import { defineAuthority, type Subject } from "@conclave/apps-sdk/authority/server";
@@ -1499,7 +1500,7 @@ describe("large views and slow sockets", () => {
     expect(raviTab.rows("notes").length).toBe(5);
   });
 
-  it("queues changes behind a snapshot in flight and applies them after it", async () => {
+  it("catches a snapshot in flight up with one patch after its last part", async () => {
     const room = new Harness([probeAuthority], { runtime: { limits: small } });
     const hostTab = await room.open(host, probeContract);
     for (let index = 0; index < 4; index += 1) {
@@ -1598,26 +1599,83 @@ describe("large views and slow sockets", () => {
     };
   };
 
-  const bytesOf = (frames: AuthorityFrame[]): number =>
-    frames.reduce((total, frame) => total + JSON.stringify(frame).length, 0);
-
-  it("stops the changes queued behind a snapshot once the socket is behind, and catches an idle view up when it drains", async () => {
-    const softBytes = 2_200;
-    // A socket that takes nothing off its queue: all it was sent is unsent.
-    let stuck = true;
-    const { room, hostTab, changeDuringTransfer, sent } = await snapshotInFlight(
-      { socketSoftBytes: softBytes },
-      (tab, name) => {
-        const queued = stuck ? tab.frames.filter((frame) => frame.subscription === name) : [];
-        return { packets: queued.length, bytes: bytesOf(queued) };
-      },
+  /** Each frame's rows for one key, in the order they were sent. */
+  const rowsFor = (frames: AuthorityFrame[], key: string): ProjectedRow[] =>
+    frames.flatMap((frame) =>
+      (frame.kind === "replace" ? frame.rows : frame.kind === "patch" ? frame.put : []).filter(
+        (row) => row.key === key,
+      ),
     );
+
+  /** What a viewer holds after these frames, by key. */
+  const heldAfter = (frames: AuthorityFrame[]): Map<string, Json> => {
+    const held = new Map<string, Json>();
+    for (const frame of frames) {
+      if (frame.kind === "replace") {
+        if (frame.part === 0) held.clear();
+        for (const row of frame.rows) held.set(`${row.bucket}/${row.key}`, row.value);
+      }
+      if (frame.kind === "patch") {
+        for (const row of frame.remove) held.delete(`${row.bucket}/${row.key}`);
+        for (const row of frame.put) held.set(`${row.bucket}/${row.key}`, row.value);
+      }
+    }
+    return held;
+  };
+
+  it("never sends a row older than one the viewer already holds, after a snapshot in parts", async () => {
+    const { room, changeDuringTransfer, sent } = await snapshotInFlight({}, () => ({
+      packets: 0,
+      bytes: 0,
+    }));
     const texts: string[] = [];
     for (let index = 0; index < 8; index += 1) texts.push(await changeDuringTransfer());
     await room.drain();
 
+    const frames = sent();
+    const kinds = frames.map((frame) => frame.kind);
+    // Which change each row a note was sent as came from: 0 for none.
+    const changesOf = (key: string): number[] =>
+      rowsFor(frames, key).map((row) => {
+        const match = /^change (\d+) /.exec(String(field(row.value, "text")));
+        return match ? Number(match[1]) : 0;
+      });
+    const held = heldAfter(frames);
+
+    for (const key of ["n0", "n1", "n2", "n3"]) {
+      expect(changesOf(key), key).toEqual([...changesOf(key)].sort((a, b) => a - b));
+    }
+    // n1 was changed by the first change and again by the fifth, both before
+    // its part left. It is never sent as the first change.
+    expect(changesOf("n1")).not.toContain(1);
+    // The parts, then one catch-up.
+    expect(kinds.filter((kind) => kind === "patch")).toEqual(["patch"]);
+    expect(kinds.indexOf("patch")).toBe(kinds.lastIndexOf("replace") + 1);
+    expect([0, 1, 2, 3].map((index) => field(held.get(`notes/n${index}`) ?? null, "text"))).toEqual([
+      texts[7],
+      texts[4],
+      texts[5],
+      texts[6],
+    ]);
+  });
+
+  it("sends a socket that is behind when its snapshot's last part leaves no catch-up, and a whole view once it drains", async () => {
+    // A socket that takes nothing more off its queue once the last part is
+    // on it, until it is let go.
+    let stuck = true;
+    const { room, hostTab, changeDuringTransfer, sent } = await snapshotInFlight({}, (tab, name) => {
+      const lastPartOut = tab.frames.some(
+        (frame) => frame.subscription === name && frame.kind === "replace" && frame.last,
+      );
+      return {
+        packets: 0,
+        bytes: stuck && lastPartOut ? DEFAULT_AUTHORITY_LIMITS.socketSoftBytes + 1 : 0,
+      };
+    });
+    const texts: string[] = [];
+    for (let index = 0; index < 8; index += 1) texts.push(await changeDuringTransfer());
+    await room.drain();
     const whileStuck = sent();
-    const queuedBefore = whileStuck.map((_, index) => bytesOf(whileStuck.slice(0, index)));
     // The app does nothing more, and the socket stays stuck a while longer.
     await vi.advanceTimersByTimeAsync(1_000);
     await room.drain();
@@ -1627,18 +1685,10 @@ describe("large views and slow sockets", () => {
     await vi.advanceTimersByTimeAsync(300);
     await room.drain();
     const caughtUp = sent().slice(whileStuck.length);
-    const held = new Map<string, Json>();
-    for (const frame of caughtUp) {
-      if (frame.kind === "replace") for (const row of frame.rows) held.set(row.key, row.value);
-    }
+    const held = heldAfter(caughtUp);
 
-    expect(replaces(whileStuck).length).toBeGreaterThan(2);
     expect(replaces(whileStuck).at(-1)?.last).toBe(true);
-    // Some of the eight queued changes went, until the queue was over its
-    // limit. Nothing was added to a queue already over it.
-    expect(patches(whileStuck).length).toBeGreaterThan(0);
-    expect(patches(whileStuck).length).toBeLessThan(8);
-    expect(Math.max(...queuedBefore)).toBeLessThanOrEqual(softBytes);
+    expect(patches(whileStuck)).toEqual([]);
     expect(afterWaiting).toBe(whileStuck.length);
     // With no further change in the app, the drained socket gets a whole
     // fresh view carrying every change.
@@ -1646,7 +1696,7 @@ describe("large views and slow sockets", () => {
     expect(replaces(caughtUp).at(-1)?.last).toBe(true);
     expect(new Set(caughtUp.map((frame) => frame.generation)).size).toBe(1);
     expect(caughtUp[0]?.generation).toBeGreaterThan(1);
-    expect([0, 1, 2, 3].map((index) => field(held.get(`n${index}`) ?? null, "text"))).toEqual([
+    expect([0, 1, 2, 3].map((index) => field(held.get(`notes/n${index}`) ?? null, "text"))).toEqual([
       texts[7],
       texts[4],
       texts[5],
@@ -1655,6 +1705,61 @@ describe("large views and slow sockets", () => {
     expect(hostTab.rows("notes").length).toBe(4);
     expect(room.authority.stats.resnapshots).toBe(1);
     expect(room.authority.stats.disconnects).toBe(0);
+  });
+
+  it("never sends a question the host hid while a snapshot was in parts, after the hide", async () => {
+    const room = new Harness([qaAuthority], { runtime: { limits: small } });
+    const hostTab = await room.open(host, qaContract);
+    const priyaTab = await room.open(priya, qaContract);
+    const ids: string[] = [];
+    for (let index = 0; index < 3; index += 1) {
+      const asked = await priyaTab.act("ask", { text: `Question ${index}? `.repeat(20) });
+      ids.push(field(asked.ok ? asked.value : null, "id") as string);
+    }
+    await room.deliver();
+    const raviTab = await room.open(ravi, qaContract);
+    const entry = hostTab.client.entryFor(qaContract)!;
+    const name = "hidden-after-a-change";
+    const moderate = (nonce: string, action: string) =>
+      hostTab.raw<AuthorityResult<Json>>(AUTHORITY_EVENTS.act, {
+        roomEpoch: room.authority.roomEpoch,
+        subscription: hostTab.frames[0].subscription,
+        generation: 1,
+        operation: { issuedAtMs: Date.now(), nonce },
+        action: "moderate",
+        input: { id: ids[0], action },
+      });
+
+    // A view that comes in parts. Its first part, with the first question,
+    // has gone out.
+    void raviTab.raw(AUTHORITY_EVENTS.subscribe, {
+      roomEpoch: room.authority.roomEpoch,
+      instance: entry.instance,
+      app: entry.app,
+      major: entry.major,
+      subscription: name,
+    });
+    const mine = () => raviTab.frames.filter((frame) => frame.subscription === name);
+    const inFirstPart = rowsFor(mine(), ids[0]).length > 0;
+    // Before the next part, the host answers the question, and that is
+    // flushed. Then the host hides it, and that is flushed too.
+    const answered = await moderate("answer-mid-transfer", "answered");
+    room.authority.flushNow();
+    const hidden = await moderate("hide-mid-transfer", "dismissed");
+    room.authority.flushNow();
+    const sentBeforeTheHide = mine().length;
+    await room.drain();
+    await room.deliver();
+    await room.drain();
+    const afterTheHide = mine().slice(sentBeforeTheHide);
+
+    expect([answered.ok, hidden.ok]).toEqual([true, true]);
+    expect(inFirstPart).toBe(true);
+    expect(replaces(mine()).at(-1)?.last).toBe(true);
+    // Nothing sent once the question was hidden carries any copy of it.
+    expect(rowsFor(afterTheHide, ids[0])).toEqual([]);
+    expect(JSON.stringify(afterTheHide)).not.toContain("Question 0?");
+    expect([...heldAfter(mine()).keys()].filter((key) => key.endsWith(`/${ids[0]}`))).toEqual([]);
   });
 
   it("disconnects a socket whose queue is full when the changes queued behind its snapshot come due", async () => {
