@@ -40,6 +40,13 @@ docker compose -f docker-compose.sfu.yml run --rm --no-deps --user root \
   --cap-add CHOWN --cap-add DAC_READ_SEARCH --entrypoint chown sfu-a -R node:node /var/lib/conclave/recordings
 ```
 
+Both SFUs keep scheduled meetings, webinars and scheduling records in one
+SQLite file on the recordings volume. If it will not open, a production SFU
+exits at startup instead of falling back to a JSON copy that the other instance
+would overwrite and SQLite would never import back. The container restart then
+retries SQLite. Set `SCHEDULING_PERSISTENCE`, `SCHEDULED_MEETINGS_PERSISTENCE`
+or `SCHEDULED_WEBINARS_PERSISTENCE` to `json` only for a single instance.
+
 ## Development
 
 ```sh

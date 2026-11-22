@@ -20,6 +20,7 @@ import {
   normalizeHostEmail,
 } from "./webinar.js";
 import { canonicalizeClientId } from "./clientIds.js";
+import { ensureJsonFallbackAllowed } from "./jsonFallback.js";
 
 const DEFAULT_EARLY_ENTRY_MINUTES = 10;
 const MAX_EARLY_ENTRY_MINUTES = 240;
@@ -533,9 +534,7 @@ export const createScheduledWebinarPersistence = (): ScheduledWebinarPersistence
     }
     return sqlitePersistence;
   } catch (error) {
-    if (mode === "sqlite") {
-      throw error;
-    }
+    ensureJsonFallbackAllowed("SCHEDULED_WEBINARS_PERSISTENCE", mode, error);
     Logger.warn(
       `SQLite scheduled-webinar persistence unavailable; falling back to JSON: ${(error as Error).message}`,
     );

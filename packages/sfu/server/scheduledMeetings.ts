@@ -24,6 +24,7 @@ import {
   type RedisPersistenceClient,
 } from "./redisPersistence.js";
 import { canonicalizeClientId } from "./clientIds.js";
+import { ensureJsonFallbackAllowed } from "./jsonFallback.js";
 
 type MaybePromise<T> = T | Promise<T>;
 
@@ -1190,9 +1191,7 @@ export const createScheduledMeetingPersistence = (): ScheduledMeetingPersistence
     }
     return sqlitePersistence;
   } catch (error) {
-    if (mode === "sqlite") {
-      throw error;
-    }
+    ensureJsonFallbackAllowed("SCHEDULED_MEETINGS_PERSISTENCE", mode, error);
     Logger.warn(
       `SQLite scheduled-meeting persistence unavailable; falling back to JSON: ${(error as Error).message}`,
     );

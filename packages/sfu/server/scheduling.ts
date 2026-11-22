@@ -31,6 +31,7 @@ import {
   canonicalizeClientId,
   CONCLAVE_CLIENT_ID,
 } from "./clientIds.js";
+import { ensureJsonFallbackAllowed } from "./jsonFallback.js";
 
 type MaybePromise<T> = T | Promise<T>;
 
@@ -1604,7 +1605,7 @@ export const createSchedulingPersistence = (): SchedulingPersistence => {
     }
     return sqlitePersistence;
   } catch (error) {
-    if (mode === "sqlite") throw error;
+    ensureJsonFallbackAllowed("SCHEDULING_PERSISTENCE", mode, error);
     Logger.warn(
       `SQLite scheduling persistence unavailable; falling back to JSON: ${(error as Error).message}`,
     );
