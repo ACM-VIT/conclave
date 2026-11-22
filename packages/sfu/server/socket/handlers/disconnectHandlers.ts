@@ -3,7 +3,8 @@ import type { Room } from "../../../config/classes/Room.js";
 import { config } from "../../../config/config.js";
 import type { AppsAwarenessData } from "../../../types.js";
 import { Logger } from "../../../utilities/loggers.js";
-import { cleanupRoom, leaveNextMeetingLobby } from "../../rooms.js";
+import { cleanupRoom } from "../../rooms.js";
+import { leaveNextMeetingLobby } from "../../nextMeetingLobby.js";
 import {
   emitWebinarAttendeeCountChanged,
   emitWebinarFeedChanged,

@@ -23,10 +23,14 @@ import {
   clearEndedRoom,
   getEndedRoom,
   getOrCreateRoomWithOrigin,
-  leaveNextMeetingLobby,
   renewLocalRoom,
   getRoomChannelId,
 } from "../../rooms.js";
+import {
+  MEETING_ENDED_WHILE_WAITING,
+  leaveNextMeetingLobby,
+  returnToNextMeetingLobby,
+} from "../../nextMeetingLobby.js";
 import {
   RoomOwnershipError,
   type RoomAssignmentRecord,
@@ -116,16 +120,18 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
       callback: (response: JoinRoomResponse | JoinRoomErrorResponse) => void,
     ) => {
       try {
-        // Asking again, whatever comes of it, ends waiting for the next
-        // meeting where this socket was knocking.
-        if (context.pendingRoomChannelId && context.pendingUserKey) {
-          leaveNextMeetingLobby(
-            state,
-            context.pendingRoomChannelId,
-            context.pendingUserKey,
-            socket.id,
-          );
-        }
+        // Asking again ends waiting for the next meeting where this socket
+        // was knocking, unless that meeting turns out not to be open yet.
+        const parkedChannelId = context.pendingRoomChannelId;
+        const parked =
+          parkedChannelId && context.pendingUserKey
+            ? leaveNextMeetingLobby(
+                state,
+                parkedChannelId,
+                context.pendingUserKey,
+                socket.id,
+              )
+            : null;
         const requestedRoomId = normalizeIdentifier(
           data?.roomId,
           MAX_ROOM_ID_LENGTH,
@@ -382,7 +388,26 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             respond(callback, { error: "Webinar is not live." });
             return;
           }
+          // Someone waiting for the next meeting who asks again before it is
+          // open, here or anywhere the registry knows of, keeps waiting.
+          const keepWaiting = (): boolean => {
+            if (!parked || parkedChannelId !== roomChannelId) return false;
+            returnToNextMeetingLobby(state, roomChannelId, roomId, parked);
+            socket.emit("waitingRoomStatus", {
+              message: MEETING_ENDED_WHILE_WAITING,
+              roomId,
+            });
+            respond(callback, {
+              roomId,
+              rtpCapabilities: { codecs: [], headerExtensions: [] },
+              existingProducers: [],
+              status: "waiting",
+              isLocked: true,
+            });
+            return true;
+          };
           if (state.isDraining && !hasReservedLocalPlacement) {
+            if (keepWaiting()) return;
             respond(callback, {
               error: "Meeting server is draining. Try again shortly.",
             });
@@ -404,6 +429,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             !clientPolicy.allowNonHostRoomCreation &&
             !(await opensOwnCode())
           ) {
+            if (keepWaiting()) return;
             respond(callback, { error: "No room found." });
             return;
           }

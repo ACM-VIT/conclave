@@ -167,6 +167,16 @@ const send = async (
   return ack.mock.calls[0]?.[0] as { success?: boolean; error?: string } | undefined;
 };
 
+// What a tab does when the SFU says "joinApproved": it asks again on the
+// socket it has.
+const askAgain = async (member: Awaited<ReturnType<typeof join>>, roomId = "abc-mnop-xyz") => {
+  const ack = vi.fn();
+  await member.peer.handlers.get("joinRoom")!(
+    ...([{ roomId, sessionId: member.peer.socket.data.user.sessionId }, ack] as never[]),
+  );
+  return (ack.mock.calls[0]?.[0] ?? {}) as JoinAck;
+};
+
 const CHANNEL = "conclave:abc-mnop-xyz";
 const roomOf = (state: SfuState) => state.rooms.get(CHANNEL)!;
 const hangUp = async (peer: ReturnType<typeof makeSocket>) => {
@@ -912,6 +922,48 @@ describe("who hosts a call the server lost", () => {
       expect(again.context.currentClient).toBeInstanceOf(Admin);
     });
 
+    // Two knockers wait in the room recreated for the lost call; one leaves,
+    // and with nobody in it the room closes.
+    const otherKnockerLeft = async (remaining: typeof knocker) => {
+      useFullTestClock();
+      const { before } = await lostCall();
+      const after = await restart(before);
+      const leaving = await join(after, {
+        ...knockerAsking,
+        userId: "guest-second-knocker",
+        sessionId: "k2",
+      });
+      const waiting = await join(after, remaining);
+      expect([leaving.status, waiting.status]).toEqual(["waiting", "waiting"]);
+      await hangUp(leaving.peer);
+      expect(after.rooms.size).toBe(0);
+      return { after, waiting };
+    };
+
+    it("still asks a knocker to try again on time once the other knocker has left", async () => {
+      const { waiting } = await otherKnockerLeft(knockerAsking);
+
+      vi.advanceTimersByTime(6 * MINUTE_MS);
+      expect(toldToTryAgain(waiting.peer)).toBe(false);
+      vi.advanceTimersByTime(2 * MINUTE_MS);
+      expect(toldToTryAgain(waiting.peer)).toBe(true);
+
+      const again = await askAgain(waiting);
+      expect(again.status).toBe("joined");
+      expect(waiting.context.currentClient).toBeInstanceOf(Admin);
+    });
+
+    it("keeps one who may not open the code waiting for whoever opens it", async () => {
+      const { after, waiting } = await otherKnockerLeft(knocker);
+      vi.advanceTimersByTime(8 * MINUTE_MS);
+      expect(toldToTryAgain(waiting.peer)).toBe(true);
+      expect((await askAgain(waiting)).status).toBe("waiting");
+
+      const opener = await join(after, { ...guest, allowRoomCreation: true });
+      expect(opener.context.currentClient).toBeInstanceOf(Admin);
+      expect(knocksShownTo(opener)).toEqual([knocker.userId]);
+    });
+
     it("does not make the lost call's host a host of the meeting opened after it", async () => {
       useFullTestClock();
       const { before } = await lostCall();
@@ -1515,11 +1567,18 @@ describe("a meeting whose last participant leaves while someone is still knockin
     expect(knocksShownTo(reopened)).toEqual([]);
   });
 
-  it("does not show the next meeting's host a knocker who asked again and was turned away", async () => {
+  it("keeps a knocker who asks again before the next meeting opens waiting for it", async () => {
     const { state, knocking } = await everyoneLeftButTheKnocker();
-    await knocking.peer.handlers.get("joinRoom")!(
-      ...([{ roomId: "abc-mnop-xyz", sessionId: knocker.sessionId }, vi.fn()] as never[]),
-    );
+    expect((await askAgain(knocking)).status).toBe("waiting");
+    expect(statusesShownTo(knocking).at(-1)).toMatch(/ended/i);
+
+    const reopened = await join(state, host);
+    expect(knocksShownTo(reopened)).toEqual(["guest-knocker"]);
+  });
+
+  it("does not show the next meeting's host a knocker who went to another code", async () => {
+    const { state, knocking } = await everyoneLeftButTheKnocker();
+    expect((await askAgain(knocking, "other-code-xyz")).error).toBe("No room found.");
     const reopened = await join(state, host);
     expect(knocksShownTo(reopened)).toEqual([]);
   });

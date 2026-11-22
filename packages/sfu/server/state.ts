@@ -1,6 +1,7 @@
 import type { Worker } from "mediasoup/types";
 import { config } from "../config/config.js";
-import { Room, type WaitingGuest } from "../config/classes/Room.js";
+import { Room } from "../config/classes/Room.js";
+import type { NextMeetingLobby } from "./nextMeetingLobby.js";
 import type { WebinarLinkTarget, WebinarRoomConfig } from "./webinar.js";
 import {
   createScheduledWebinarStore,
@@ -43,7 +44,7 @@ export type SfuState = {
   roomCreations: Map<string, Promise<Room>>;
   // By channel: who was still knocking when the meeting there ended. The
   // next meeting at the code shows them to its hosts.
-  nextMeetingLobbies: Map<string, Map<string, WaitingGuest>>;
+  nextMeetingLobbies: Map<string, NextMeetingLobby>;
   workerRoomReservations: Map<number, number>;
   endedRooms: Map<string, EndedRoom>;
   webinarConfigs: Map<string, WebinarRoomConfig>;

@@ -1,0 +1,127 @@
+import type { WaitingGuest } from "../config/classes/Room.js";
+import type { SfuState } from "./state.js";
+
+// What someone still knocking is told when the meeting they knock on ends.
+// Older apps match "no one to let you in".
+export const MEETING_ENDED_WHILE_WAITING =
+  "The meeting ended when everyone left. No one to let you in until it starts again.";
+
+// Someone waiting for the next meeting at a code. `retryAt` is their own:
+// when the meeting they knocked on stood in for a lost call, the moment that
+// call stops holding the code, from which they may ask again and open it.
+export type LobbyGuest = WaitingGuest & { retryAt: number | null };
+
+export type NextMeetingLobby = {
+  roomId: string;
+  guests: Map<string, LobbyGuest>;
+  retryTimer: NodeJS.Timeout | null;
+};
+
+// Asks again for everyone whose moment has come, as a room standing in for a
+// lost call does for its knockers once that call's time is up.
+const armRetry = (lobby: NextMeetingLobby): void => {
+  if (lobby.retryTimer) clearTimeout(lobby.retryTimer);
+  lobby.retryTimer = null;
+  const due = [...lobby.guests.values()].flatMap((guest) =>
+    guest.retryAt === null ? [] : [guest.retryAt],
+  );
+  if (due.length === 0) return;
+  lobby.retryTimer = setTimeout(() => {
+    lobby.retryTimer = null;
+    const now = Date.now();
+    for (const guest of lobby.guests.values()) {
+      if (guest.retryAt === null || guest.retryAt > now) continue;
+      guest.retryAt = null;
+      guest.socket.emit("joinApproved", { roomId: lobby.roomId });
+    }
+    armRetry(lobby);
+  }, Math.max(0, Math.min(...due) - Date.now()) + 1);
+  lobby.retryTimer.unref?.();
+};
+
+const close = (state: SfuState, channelId: string, lobby: NextMeetingLobby): void => {
+  if (lobby.retryTimer) clearTimeout(lobby.retryTimer);
+  lobby.retryTimer = null;
+  if (state.nextMeetingLobbies.get(channelId) === lobby) {
+    state.nextMeetingLobbies.delete(channelId);
+  }
+};
+
+const place = (
+  state: SfuState,
+  channelId: string,
+  roomId: string,
+  guests: LobbyGuest[],
+): NextMeetingLobby => {
+  const lobby = state.nextMeetingLobbies.get(channelId) ?? {
+    roomId,
+    guests: new Map<string, LobbyGuest>(),
+    retryTimer: null,
+  };
+  for (const guest of guests) lobby.guests.set(guest.userKey, guest);
+  state.nextMeetingLobbies.set(channelId, lobby);
+  armRetry(lobby);
+  return lobby;
+};
+
+// The people knocking on a meeting that ended wait for the next one at the
+// code, out of the room that has gone, each keeping the moment they may ask
+// again.
+export const waitForNextMeeting = (
+  state: SfuState,
+  room: { channelId: string; id: string },
+  waiting: WaitingGuest[],
+  retryAt: number | null,
+): void => {
+  if (waiting.length === 0) return;
+  place(
+    state,
+    room.channelId,
+    room.id,
+    waiting.map((guest) => ({ ...guest, retryAt })),
+  );
+  for (const guest of waiting) {
+    guest.socket.emit("waitingRoomStatus", {
+      message: MEETING_ENDED_WHILE_WAITING,
+      roomId: room.id,
+    });
+  }
+};
+
+// Someone waiting for the next meeting stops: they left, or asked again. A
+// guest who asked again and found no meeting yet gets the place back.
+export const leaveNextMeetingLobby = (
+  state: SfuState,
+  channelId: string,
+  userKey: string,
+  socketId: string,
+): LobbyGuest | null => {
+  const lobby = state.nextMeetingLobbies.get(channelId);
+  const guest = lobby?.guests.get(userKey);
+  if (!lobby || guest?.socket.id !== socketId) return null;
+  lobby.guests.delete(userKey);
+  if (lobby.guests.size === 0) close(state, channelId, lobby);
+  else armRetry(lobby);
+  return guest;
+};
+
+export const returnToNextMeetingLobby = (
+  state: SfuState,
+  channelId: string,
+  roomId: string,
+  guest: LobbyGuest,
+): void => {
+  place(state, channelId, roomId, [guest]);
+};
+
+// The next meeting at the code opened here: those waiting for it are its
+// first knocks.
+export const takeNextMeetingLobby = (
+  state: SfuState,
+  channelId: string,
+): LobbyGuest[] => {
+  const lobby = state.nextMeetingLobbies.get(channelId);
+  if (!lobby) return [];
+  close(state, channelId, lobby);
+  return [...lobby.guests.values()];
+};

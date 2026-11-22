@@ -2711,6 +2711,10 @@ export class Room {
     return now <= this.restorer.until ? "awaited" : "lapsed";
   }
 
+  get restorerDeadline(): number | null {
+    return this.restorer?.until ?? null;
+  }
+
   get knowsLostRoster(): boolean {
     return this.restorer?.rosterKnown !== false;
   }
