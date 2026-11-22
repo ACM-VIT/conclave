@@ -24,7 +24,7 @@
     "sync:noise-suppressor": "node scripts/sync-noise-suppressor-assets.mjs",
     "sync:mediapipe": "node scripts/sync-mediapipe-assets.mjs",
     "start": "next start",
-    "lint": "eslint \"src/**/*.{ts,tsx}\""
+    "lint": "eslint ."
   },
   "dependencies": {
     "@conclave/ai": "workspace:*",

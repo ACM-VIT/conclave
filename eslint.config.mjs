@@ -1,4 +1,5 @@
 import tseslint from "typescript-eslint";
+import conclave from "./scripts/quality/comments/eslint-plugin.mjs";
 
 // Lint policy for the TypeScript workspace packages (apps/web has its own
 // config with the same philosophy). Deliberately cherry-picked: every rule
@@ -54,7 +55,25 @@ const typedRules = {
 
 export default tseslint.config(
   {
-    ignores: ["**/dist/**", "**/node_modules/**", "apps/**"],
+    ignores: [
+      "**/dist/**",
+      "**/node_modules/**",
+      "**/.build/**",
+      "artifacts/**",
+      "coverage/**",
+      "apps/*",
+      "!apps/conclave-skip/",
+      "apps/conclave-skip/*",
+      "!apps/conclave-skip/Tests/",
+      "apps/conclave-skip/Tests/*",
+      "!apps/conclave-skip/Tests/Rig/",
+    ],
+  },
+  {
+    files: ["**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}"],
+    languageOptions: { parser: tseslint.parser },
+    plugins: { conclave },
+    rules: { "conclave/no-comments": "error" },
   },
   {
     // Packages with a tsconfig — full type-aware linting.

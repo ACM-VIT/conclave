@@ -1,0 +1,117 @@
+{
+  "src/app/components/ChatPanel.tsx": {
+    "conclave/no-comments": {
+      "count": 6
+    }
+  },
+  "src/app/components/GridLayout.tsx": {
+    "conclave/no-comments": {
+      "count": 6
+    }
+  },
+  "src/app/components/JoinScreen.tsx": {
+    "conclave/no-comments": {
+      "count": 7
+    }
+  },
+  "src/app/components/MeetingAppLayout.tsx": {
+    "conclave/no-comments": {
+      "count": 1
+    }
+  },
+  "src/app/components/MeetsMainContent.tsx": {
+    "conclave/no-comments": {
+      "count": 3
+    }
+  },
+  "src/app/components/ParticipantVideo.tsx": {
+    "conclave/no-comments": {
+      "count": 4
+    }
+  },
+  "src/app/components/ai-elements/chain-of-thought.tsx": {
+    "conclave/no-comments": {
+      "count": 1
+    }
+  },
+  "src/app/components/ai-elements/conversation.tsx": {
+    "conclave/no-comments": {
+      "count": 1
+    }
+  },
+  "src/app/components/ai-elements/loader.tsx": {
+    "conclave/no-comments": {
+      "count": 1
+    }
+  },
+  "src/app/components/ai-elements/message.tsx": {
+    "conclave/no-comments": {
+      "count": 1
+    }
+  },
+  "src/app/components/ai-elements/prompt-input.tsx": {
+    "conclave/no-comments": {
+      "count": 1
+    }
+  },
+  "src/app/components/ai-elements/reasoning.tsx": {
+    "conclave/no-comments": {
+      "count": 1
+    }
+  },
+  "src/app/components/ai-elements/response.tsx": {
+    "conclave/no-comments": {
+      "count": 1
+    }
+  },
+  "src/app/components/ai-elements/shimmer.tsx": {
+    "conclave/no-comments": {
+      "count": 1
+    }
+  },
+  "src/app/components/ai-elements/suggestion.tsx": {
+    "conclave/no-comments": {
+      "count": 1
+    }
+  },
+  "src/app/components/ai-elements/task.tsx": {
+    "conclave/no-comments": {
+      "count": 1
+    }
+  },
+  "src/app/hooks/useMeetChat.ts": {
+    "conclave/no-comments": {
+      "count": 2
+    }
+  },
+  "src/app/lib/chat-images.ts": {
+    "conclave/no-comments": {
+      "count": 4
+    }
+  },
+  "src/app/lib/emoji-shortcodes.ts": {
+    "conclave/no-comments": {
+      "count": 14
+    }
+  },
+  "src/app/lib/microphone-send-estimate.ts": {
+    "conclave/no-comments": {
+      "count": 3
+    }
+  },
+  "src/app/lib/tile-video-framing.ts": {
+    "conclave/no-comments": {
+      "count": 15
+    }
+  },
+  "src/app/lib/types.ts": {
+    "conclave/no-comments": {
+      "count": 1
+    }
+  },
+  "test/participant-video-framing.test.tsx": {
+    "conclave/no-comments": {
+      "count": 1
+    }
+  }
+}

@@ -1,7 +1,27 @@
 import reactHooks from "eslint-plugin-react-hooks";
 import tseslint from "typescript-eslint";
+import conclave, { vendoredIgnores } from "../../scripts/quality/comments/eslint-plugin.mjs";
 
 export default tseslint.config(
+  {
+    ignores: [
+      ".next/**",
+      ".open-next/**",
+      ".wrangler/**",
+      "out/**",
+      "next-env.d.ts",
+      ...vendoredIgnores("apps/web/"),
+    ],
+  },
+  {
+    files: ["**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}"],
+    languageOptions: {
+      parser: tseslint.parser,
+      parserOptions: { ecmaFeatures: { jsx: true } },
+    },
+    plugins: { conclave },
+    rules: { "conclave/no-comments": "error" },
+  },
   {
     files: ["src/**/*.{ts,tsx,js,jsx}"],
     linterOptions: { reportUnusedDisableDirectives: "off" },
