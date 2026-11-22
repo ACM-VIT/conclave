@@ -320,11 +320,13 @@ export class NativeEmbedSession {
     this.send("update", { update: base64FromBytes(update) });
   };
 
+  // Forwards only this client's own entry: a peer's cursor that times out
+  // here is timed out by every client on its own.
   private readonly handleAwarenessUpdate = (change: AwarenessChange, origin: unknown): void => {
     if (origin === REMOTE || this.closed) return;
-    for (const id of change.added) this.pendingAwareness.add(id);
-    for (const id of change.updated) this.pendingAwareness.add(id);
-    for (const id of change.removed) this.pendingAwareness.add(id);
+    const own = this.awareness.clientID;
+    if (![...change.added, ...change.updated, ...change.removed].includes(own)) return;
+    this.pendingAwareness.add(own);
     if (this.awarenessTimer === null) this.awarenessTimer = setTimeout(this.flushAwareness, AWARENESS_INTERVAL_MS);
   };
 

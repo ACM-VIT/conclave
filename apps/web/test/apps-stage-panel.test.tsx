@@ -3,6 +3,12 @@ import { act, useContext, useRef, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
+import {
+  Awareness,
+  applyAwarenessUpdate,
+  encodeAwarenessUpdate,
+  removeAwarenessStates,
+} from "y-protocols/awareness";
 import type { Socket } from "socket.io-client";
 import {
   AppsContext,
@@ -219,6 +225,33 @@ describe("the presented board", () => {
       return received.getMap("shapes").get("arrow");
     });
     expect(uploads).toContain(1);
+  });
+
+  it("sends only its own cursor when a peer's cursor times out here", async () => {
+    await serverState({ activeAppId: "whiteboard", revision: 1, savedAppIds: [], docGeneration: 1 });
+    const presence = ctx.getAwareness("whiteboard");
+    const peer = new Awareness(new Y.Doc());
+    peer.setLocalState({ user: { id: "peer" } });
+    applyAwarenessUpdate(presence, encodeAwarenessUpdate(peer, [peer.clientID]), "remote");
+    emitted.length = 0;
+
+    removeAwarenessStates(presence, [peer.clientID], "timeout");
+    presence.setLocalStateField("cursor", { x: 1, y: 1 });
+
+    const sentIds = sent("apps:awareness").flatMap((entry) => {
+      const forwarded = new Awareness(new Y.Doc());
+      applyAwarenessUpdate(
+        forwarded,
+        (entry.args[0] as { awarenessUpdate: Uint8Array }).awarenessUpdate,
+        "remote",
+      );
+      const ids = Array.from(forwarded.meta.keys()).filter((id) => id !== forwarded.clientID);
+      forwarded.destroy();
+      return ids;
+    });
+    expect(sentIds.length).toBeGreaterThan(0);
+    expect(new Set(sentIds)).toEqual(new Set([presence.clientID]));
+    peer.destroy();
   });
 
   it("keeps drawing while anyone opens and closes the apps panel", async () => {

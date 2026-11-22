@@ -350,7 +350,11 @@ export function AppsProvider({
       const currentSocket = socketRef.current;
       if (!currentSocket || !currentSocket.connected) return;
 
-      const changed = added.concat(updated, removed);
+      // Only this client's own entry: a peer's cursor that times out here is
+      // timed out by every client on its own.
+      const changed = added
+        .concat(updated, removed)
+        .filter((clientId) => clientId === awareness.clientID);
       if (changed.length === 0) return;
 
       const update = encodeAwarenessUpdate(awareness, changed);
