@@ -301,6 +301,7 @@ const parsedRtcMaxPort = toNumber(process.env.RTC_MAX_PORT, 49999, {
   max: 65535,
 });
 const rtcMaxPort = parsedRtcMaxPort >= rtcMinPort ? parsedRtcMaxPort : rtcMinPort;
+const configuredWebRtcPortBase = process.env.SFU_WEBRTC_PORT_BASE?.trim();
 if (parsedRtcMaxPort < rtcMinPort) {
   console.warn("[SFU] RTC_MAX_PORT is lower than RTC_MIN_PORT; using a single-port range.");
 }
@@ -444,11 +445,7 @@ export const config = {
     }),
     rtcMinPort,
     rtcMaxPort,
-    webRtcPortBase: toNumber(process.env.SFU_WEBRTC_PORT_BASE, rtcMinPort, {
-      integer: true,
-      min: 1,
-      max: 65535,
-    }),
+    webRtcPortBase: configuredWebRtcPortBase ? Number(configuredWebRtcPortBase) : rtcMinPort,
     logLevel: "warn" as WorkerLogLevel,
     logTags: ["info", "ice", "dtls", "rtp", "srtp", "rtcp"] as WorkerLogTag[],
   },

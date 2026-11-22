@@ -18,7 +18,7 @@ const makeWorker = () => Object.assign(new EventEmitter(), {
   close: vi.fn(),
 });
 
-it.each([39999, 41001])("rejects WebRTC port %d outside the instance RTC range", async (port) => {
+it.each([0, 39999, 40001.5, 41001, 65536, NaN])("rejects invalid WebRTC port %s", async (port) => {
   const settings = config.workerSettings;
   const originalBase = settings.webRtcPortBase;
   const worker = makeWorker();

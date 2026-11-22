@@ -63,8 +63,8 @@ const createWorkers = async (
   const workers: Worker[] = [];
   const workerCount = getWorkerCount();
   const { rtcMinPort, rtcMaxPort, webRtcPortBase } = config.workerSettings;
-  if (webRtcPortBase < rtcMinPort || webRtcPortBase > rtcMaxPort) {
-    throw new Error("SFU_WEBRTC_PORT_BASE must be between RTC_MIN_PORT and RTC_MAX_PORT");
+  if (!Number.isInteger(webRtcPortBase) || webRtcPortBase < rtcMinPort || webRtcPortBase > rtcMaxPort) {
+    throw new Error("SFU_WEBRTC_PORT_BASE must be an integer between RTC_MIN_PORT and RTC_MAX_PORT");
   }
   const lastWebRtcPort = webRtcPortBase + workerCount - 1;
   const plainMinPort = webRtcPortBase === rtcMinPort ? lastWebRtcPort + 1 : rtcMinPort;
