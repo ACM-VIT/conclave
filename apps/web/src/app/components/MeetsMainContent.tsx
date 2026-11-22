@@ -2644,12 +2644,16 @@ export default function MeetsMainContent({
           </div>
         ))}
 
+      {/* Apps covers a running game while it is open, so the panel apps
+          stay reachable. The game goes on underneath and is back when Apps
+          closes or one of its apps is picked. */}
       {isJoined && !isWebinarAttendee && isGameActive && (
         <GamePanel
           rightOffset={gameDockOffset}
           dockWidth={gameDockPanelWidth}
           maxDockWidth={gameDockMaxWidth}
           onDockWidthChange={handleGameDockWidthChange}
+          isCovered={isAppsOpen}
         />
       )}
 
@@ -2663,7 +2667,7 @@ export default function MeetsMainContent({
         />
       )}
 
-      {isJoined && !isWebinarAttendee && isAppsOpen && !isGameActive && (
+      {isJoined && !isWebinarAttendee && isAppsOpen && (
         <AppsPanel
           panelApps={panelApps}
           rightOffset={gameDockOffset}
