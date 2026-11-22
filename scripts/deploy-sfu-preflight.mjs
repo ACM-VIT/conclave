@@ -275,7 +275,12 @@ export const resolveSfuTargets = ({ allowPublicRedis = false, compose, serviceNa
     if (!secret.trim() || secret.trim() === "development-secret") {
       errors.push(`${service}: SFU_SECRET must be a non-default value.`);
     } else if (secret !== secret.trim()) {
-      errors.push(`${service}: SFU_SECRET has leading or trailing whitespace. Remove it; the SFU refuses to start with it.`);
+      // Mirrors paddedSfuSecretMessage in packages/sfu/config/config.ts.
+      errors.push(
+        env.SCHEDULING_TOKEN_SECRET
+          ? `${service}: SFU_SECRET has leading or trailing whitespace. Remove it; SCHEDULING_TOKEN_SECRET keeps saved calendar tokens readable.`
+          : `${service}: SFU_SECRET has leading or trailing whitespace. Saved calendar tokens are encrypted with the padded value, so first set SCHEDULING_TOKEN_SECRET to the exact current SFU_SECRET, padding included, before you trim SFU_SECRET.`,
+      );
     }
     checkProductionMode(env, service, errors);
 

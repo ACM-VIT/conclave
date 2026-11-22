@@ -456,10 +456,32 @@ test("SFU_SECRET must be a non-default value with no surrounding whitespace", ()
   // Startup refuses padding, and calendar token encryption hashes the raw value,
   // so two SFUs that differ only by padding would encrypt with different keys.
   assert.match(productionErrors({ SFU_SECRET: " shared-secret-value " }).join("\n"), /SFU_SECRET has leading or trailing whitespace/);
+  // Saved calendar tokens are encrypted with the padded value until SCHEDULING_TOKEN_SECRET holds it.
+  assert.match(
+    productionErrors({ SFU_SECRET: " shared-secret-value ", SCHEDULING_TOKEN_SECRET: undefined }).join("\n"),
+    /set SCHEDULING_TOKEN_SECRET to the exact current SFU_SECRET, padding included, before you trim SFU_SECRET/,
+  );
+  assert.doesNotMatch(
+    productionErrors({ SFU_SECRET: " shared-secret-value ", SCHEDULING_TOKEN_SECRET: " shared-secret-value " }).join("\n"),
+    /set SCHEDULING_TOKEN_SECRET/,
+  );
   const compose = makeCompose();
   compose.services["edge-dxb"].environment.SFU_SECRET = "shared-secret-value ";
   compose.services["edge-fra"].environment.SFU_SECRET = "shared-secret-value";
   assert.throws(() => resolveSfuTargets({ compose }), /edge-dxb: SFU_SECRET has leading or trailing whitespace/);
+});
+
+test("compose forwards SCHEDULING_TOKEN_SECRET to both SFUs, padding included", () => {
+  const rendered = spawnSync("docker", ["compose", "--env-file", "/dev/null", "-f", "docker-compose.sfu.yml", "config", "--format", "json"], {
+    cwd: fileURLToPath(new URL("..", import.meta.url)),
+    env: { PATH: process.env.PATH, HOME: process.env.HOME, ANNOUNCED_IP: "127.0.0.1", SFU_SECRET: "clean-secret-value", SCHEDULING_TOKEN_SECRET: "  padded-secret-value " },
+    encoding: "utf8",
+  });
+  assert.equal(rendered.status, 0, rendered.stderr);
+  const { services } = JSON.parse(rendered.stdout);
+  for (const name of ["sfu-a", "sfu-b"]) {
+    assert.equal(services[name].environment.SCHEDULING_TOKEN_SECRET, "  padded-secret-value ", name);
+  }
 });
 
 test("SFU services must run in production mode", () => {

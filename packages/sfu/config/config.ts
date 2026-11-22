@@ -120,16 +120,19 @@ export const resolveWebRtcTransportProtocolPolicy = (
   });
 };
 
+// Calendar tokens are encrypted with a key hashed from the raw secret, padding
+// included, unless SCHEDULING_TOKEN_SECRET is set. Keep in step with
+// scripts/deploy-sfu-preflight.mjs.
+function paddedSfuSecretMessage(schedulingTokenSecret: string | undefined): string {
+  return schedulingTokenSecret
+    ? "SFU_SECRET has leading or trailing whitespace. Remove it; SCHEDULING_TOKEN_SECRET keeps saved calendar tokens readable."
+    : "SFU_SECRET has leading or trailing whitespace. Saved calendar tokens are encrypted with the padded value, so first set SCHEDULING_TOKEN_SECRET to the exact current SFU_SECRET, padding included, before you trim SFU_SECRET.";
+}
+
 function resolveSfuSecret(): string {
   const raw = process.env.SFU_SECRET;
   const configured = raw?.trim();
-  // Calendar token encryption hashes the raw value, so padding would give
-  // instances that look identical different keys.
-  if (raw && raw !== configured) {
-    throw new Error(
-      "SFU_SECRET has leading or trailing whitespace. Remove it so every SFU signs and encrypts with the same value.",
-    );
-  }
+  if (raw && raw !== configured) throw new Error(paddedSfuSecretMessage(process.env.SCHEDULING_TOKEN_SECRET));
   if (configured && configured !== "development-secret") {
     return configured;
   }
