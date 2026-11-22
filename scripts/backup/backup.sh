@@ -105,10 +105,14 @@ fi
 sums="$(cd "$payload" && find . -type f | sort | xargs sha256sum)"
 printf '%s\n' "$sums" > "${payload}/SHA256SUMS"
 
-archive="${work}/${name}.tar.gz.age"
-tar -C "$payload" -czf - . | age --encrypt -R "$recipients" -o "$archive"
+tar -C "$payload" -czf - . | age --encrypt -R "$recipients" -o "${work}/${name}.tar.gz.age"
+# The finished archive is kept on the VM before the upload, so an Azure or
+# identity outage still leaves tonight's backup here. The job still fails, and
+# the heartbeat is not sent.
+mv "${work}/${name}.tar.gz.age" "${BACKUP_LOCAL_DIR}/"
+archive="${BACKUP_LOCAL_DIR}/${name}.tar.gz.age"
 size="$(wc -c < "$archive" | tr -d ' ')"
-log "Encrypted archive ${name}.tar.gz.age (${size} bytes)"
+log "Encrypted archive ${archive} (${size} bytes)"
 
 if [[ "$UPLOAD" == "true" ]]; then
   year="${stamp:0:4}"
@@ -123,7 +127,6 @@ if [[ "$UPLOAD" == "true" ]]; then
   fi
 fi
 
-mv "$archive" "${BACKUP_LOCAL_DIR}/"
 keep="${BACKUP_LOCAL_KEEP:-3}"
 find "$BACKUP_LOCAL_DIR" -maxdepth 1 -name 'conclave-*.tar.gz.age' | sort -r | tail -n "+$((keep + 1))" | while read -r old; do
   rm -f "$old"

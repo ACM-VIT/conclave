@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile, execFileSync, spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { createServer as createHttpServer } from "node:http";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -185,6 +186,52 @@ test(
       await assert.rejects(backup("--local-only"), /outside the state dir/);
     } finally {
       redis.kill();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "a failed upload keeps the night's archive on the VM and sends no heartbeat",
+  { skip: missing.length > 0 && `needs ${missing.join(", ")} on PATH` },
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+    // One stand-in for the managed identity, the storage account (down) and
+    // the heartbeat check.
+    const hits = { token: 0, upload: 0, heartbeat: 0 };
+    const azure = createHttpServer((req, res) => {
+      if (req.url.startsWith("/metadata/identity/oauth2/token")) {
+        hits.token += 1;
+        res.end(JSON.stringify({ access_token: "token", expires_in: "3599" }));
+      } else if (req.url.startsWith("/heartbeat")) {
+        hits.heartbeat += 1;
+        res.end("ok");
+      } else {
+        hits.upload += 1;
+        req.resume();
+        res.writeHead(503).end();
+      }
+    });
+    await new Promise((done) => azure.listen(0, "127.0.0.1", done));
+    const origin = `http://127.0.0.1:${azure.address().port}`;
+    try {
+      const { state, local, backup } = await setUp(root, [
+        "AZURE_STORAGE_ACCOUNT=devstoreaccount1",
+        "AZURE_STORAGE_CONTAINER=sfu-backups",
+        `AZURE_BLOB_ENDPOINT=${origin}/devstoreaccount1`,
+        `AZURE_IMDS_ENDPOINT=${origin}`,
+        `BACKUP_HEARTBEAT_URL=${origin}/heartbeat`,
+      ]);
+      const db = new DatabaseSync(path.join(state, "conclave.sqlite"));
+      db.exec("CREATE TABLE scheduled_webinars (id TEXT PRIMARY KEY)");
+      db.close();
+
+      await assert.rejects(backup(), /upload of daily\/.* failed with HTTP 503/);
+      assert.equal(hits.upload, 1);
+      assert.equal(hits.heartbeat, 0, "a failed backup must not send the heartbeat");
+      assert.equal((await readdir(local)).filter((name) => name.endsWith(".tar.gz.age")).length, 1);
+    } finally {
+      azure.close();
       await rm(root, { recursive: true, force: true });
     }
   },
