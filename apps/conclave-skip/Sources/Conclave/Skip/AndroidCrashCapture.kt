@@ -28,6 +28,7 @@ internal object AndroidCrashCapture {
         breadcrumbs: List<String>,
         phase: String,
         createdAtMillis: Double,
+        appVersion: String = NativePerformanceDiagnostics.appVersion(),
     ): DiagnosticsStoredPayload {
         val exceptions = mutableListOf<CrashReportException>()
         var current: Throwable? = throwable
@@ -41,6 +42,7 @@ internal object AndroidCrashCapture {
             breadcrumbs = skip.lib.Array(breadcrumbs),
             phase = phase,
             createdAtMillis = createdAtMillis,
+            appVersion = appVersion,
         )
     }
 

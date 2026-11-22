@@ -208,7 +208,7 @@ enum CallDiagnosticsMetricPayloads {
         for payload in payloads {
             let createdAt = payload.timeStampEnd.timeIntervalSince1970 * 1000.0
             for crash in payload.crashDiagnostics ?? [] {
-                var fields = baseFields(crash)
+                var fields = baseFields(crash, payload: payload)
                 if let value = crash.exceptionType {
                     fields.append(DiagnosticsPayloadFactory.number("exceptionType", value.doubleValue))
                 }
@@ -231,14 +231,14 @@ enum CallDiagnosticsMetricPayloads {
                                                                 detailJSON: tree(crash.callStackTree)))
             }
             for hang in payload.hangDiagnostics ?? [] {
-                var fields = baseFields(hang)
+                var fields = baseFields(hang, payload: payload)
                 fields.append(DiagnosticsPayloadFactory.number("hangDurationMillis",
                                                                hang.hangDuration.converted(to: .milliseconds).value))
                 result.append(DiagnosticsPayloadFactory.payload(kind: .hang, createdAtMillis: createdAt, fields: fields,
                                                                 detailJSON: tree(hang.callStackTree)))
             }
             for cpu in payload.cpuExceptionDiagnostics ?? [] {
-                var fields = baseFields(cpu)
+                var fields = baseFields(cpu, payload: payload)
                 fields.append(DiagnosticsPayloadFactory.number("totalCPUTimeMillis",
                                                                cpu.totalCPUTime.converted(to: .milliseconds).value))
                 fields.append(DiagnosticsPayloadFactory.number("totalSampledTimeMillis",
@@ -247,14 +247,14 @@ enum CallDiagnosticsMetricPayloads {
                                                                 fields: fields, detailJSON: tree(cpu.callStackTree)))
             }
             for disk in payload.diskWriteExceptionDiagnostics ?? [] {
-                var fields = baseFields(disk)
+                var fields = baseFields(disk, payload: payload)
                 fields.append(DiagnosticsPayloadFactory.number("totalWritesBytes",
                                                                disk.totalWritesCaused.converted(to: .bytes).value))
                 result.append(DiagnosticsPayloadFactory.payload(kind: .diskWriteException, createdAtMillis: createdAt,
                                                                 fields: fields, detailJSON: tree(disk.callStackTree)))
             }
             for launch in payload.appLaunchDiagnostics ?? [] {
-                var fields = baseFields(launch)
+                var fields = baseFields(launch, payload: payload)
                 fields.append(DiagnosticsPayloadFactory.number("launchDurationMillis",
                                                                launch.launchDuration.converted(to: .milliseconds).value))
                 result.append(DiagnosticsPayloadFactory.payload(kind: .appLaunch, createdAtMillis: createdAt,
@@ -264,8 +264,10 @@ enum CallDiagnosticsMetricPayloads {
         return result
     }
 
-    private static func baseFields(_ diagnostic: MXDiagnostic) -> [DiagnosticsField] {
-        var fields: [DiagnosticsField] = []
+    private static func baseFields(_ diagnostic: MXDiagnostic, payload: MXDiagnosticPayload) -> [DiagnosticsField] {
+        var fields: [DiagnosticsField] = [
+            DiagnosticsPayloadFactory.number("windowStartMillis", payload.timeStampBegin.timeIntervalSince1970 * 1000.0),
+        ]
         let candidates = [
             ("appVersion", diagnostic.applicationVersion),
             ("osVersion", diagnostic.metaData.osVersion),

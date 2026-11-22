@@ -289,6 +289,93 @@ struct CrashReportingTests {
         #expect(CrashReportPrivacy.symbol("conclave.module.WebRTCClient$onProduce$1") == "conclave.module.WebRTCClient$onProduce$1")
     }
 
+    private func uncaughtObjectiveCCrash(atMillis: Double) -> DiagnosticsStoredPayload {
+        CrashCaptureRecord.payload(
+            exceptions: [CrashReportException(type: "NSInvalidArgumentException", frames: [
+                CrashReportFrame(function: "-[ConclaveRoom join]", module: "Conclave", filename: "", line: 0, inApp: true),
+            ])],
+            breadcrumbs: [], phase: "live", createdAtMillis: atMillis, appVersion: "2.0.0 (63)"
+        )
+    }
+
+    private func metricKitCrash(name: String, windowStart: Double, delivered: Double) throws -> DiagnosticsStoredPayload {
+        DiagnosticsPayloadFactory.payload(
+            kind: .crash, createdAtMillis: delivered,
+            fields: [
+                try #require(DiagnosticsPayloadFactory.text("exceptionName", name)),
+                DiagnosticsPayloadFactory.number("signal", 6.0),
+                DiagnosticsPayloadFactory.number("windowStartMillis", windowStart),
+            ],
+            detailJSON: "{}"
+        )
+    }
+
+    private func exceptionTypes(_ plan: CrashReportPlan) throws -> [String] {
+        var types: [String] = []
+        for batch in plan.batches {
+            let body = try json(batch.body)
+            for event in body["batch"] as? [[String: Any]] ?? [] {
+                let properties = event["properties"] as? [String: Any]
+                let list = properties?["$exception_list"] as? [[String: Any]]
+                types.append(list?.first?["type"] as? String ?? "")
+            }
+        }
+        return types
+    }
+
+    @Test func anObjectiveCCrashThatMetricKitReportsAgainUploadsOnce() throws {
+        let crashAt = 1_795_000_000_000.0
+        let loaded = [
+            DiagnosticsLoadedPayload(name: "payload-uncaught.json", byteCount: 10, payload: uncaughtObjectiveCCrash(atMillis: crashAt)),
+            DiagnosticsLoadedPayload(name: "payload-metrickit.json", byteCount: 10,
+                                     payload: try metricKitCrash(name: "NSInvalidArgumentException", windowStart: crashAt - 3_600_000,
+                                                                 delivered: crashAt + 7_200_000)),
+        ]
+        let plan = CrashReportPlanner.plan(loaded, reported: [], projectKey: "phc_test", context: Self.context)
+        #expect(try exceptionTypes(plan) == ["NSInvalidArgumentException"])
+        #expect(plan.skipped == ["payload-metrickit.json"])
+
+        let alreadySent = CrashReportPlanner.plan(loaded, reported: ["payload-uncaught.json"], projectKey: "phc_test",
+                                                  context: Self.context)
+        #expect(alreadySent.batches.isEmpty && alreadySent.skipped == ["payload-metrickit.json"])
+    }
+
+    @Test func aDifferentOrLaterMetricKitCrashStillUploads() throws {
+        let crashAt = 1_795_000_000_000.0
+        let loaded = [
+            DiagnosticsLoadedPayload(name: "payload-uncaught.json", byteCount: 10, payload: uncaughtObjectiveCCrash(atMillis: crashAt)),
+            DiagnosticsLoadedPayload(name: "payload-other.json", byteCount: 10,
+                                     payload: try metricKitCrash(name: "NSRangeException", windowStart: crashAt - 3_600_000,
+                                                                 delivered: crashAt + 7_200_000)),
+            DiagnosticsLoadedPayload(name: "payload-later.json", byteCount: 10,
+                                     payload: try metricKitCrash(name: "NSInvalidArgumentException", windowStart: crashAt + 60_000,
+                                                                 delivered: crashAt + 7_200_000)),
+        ]
+        let plan = CrashReportPlanner.plan(loaded, reported: [], projectKey: "phc_test", context: Self.context)
+        #expect(try exceptionTypes(plan).count == 3)
+        #expect(plan.skipped.isEmpty)
+    }
+
+    @Test func aReportNamesTheReleaseThatCrashedNotTheOneUploading() throws {
+        let uploader = CrashReportContext(installId: "install-1", platform: "ios", appVersion: "2.0.1 (64)",
+                                          osVersion: "iOS 26.1", deviceClass: "phone")
+        let uncaught = try json(try #require(CrashReportEventBuilder.event(for: uncaughtObjectiveCCrash(atMillis: 1.0),
+                                                                            eventId: "id", context: uploader)))
+        #expect((uncaught["properties"] as? [String: Any])?["$app_version"] as? String == "2.0.0 (63)")
+
+        let metricKit = DiagnosticsPayloadFactory.payload(
+            kind: .hang, createdAtMillis: 1.0,
+            fields: [try #require(DiagnosticsPayloadFactory.text("appVersion", "2.0.0")),
+                     try #require(DiagnosticsPayloadFactory.text("appBuild", "63"))],
+            detailJSON: "{}"
+        )
+        let hang = try json(try #require(CrashReportEventBuilder.event(for: metricKit, eventId: "id", context: uploader)))
+        #expect((hang["properties"] as? [String: Any])?["$app_version"] as? String == "2.0.0 (63)")
+
+        let unknown = try json(try #require(CrashReportEventBuilder.event(for: crashPayload(), eventId: "id", context: uploader)))
+        #expect((unknown["properties"] as? [String: Any])?["$app_version"] as? String == "2.0.1 (64)")
+    }
+
     @Test func aPathWithSpacesAndDotsNeverLeaksItsDirectories() {
         let cleaned = CrashReportPrivacy.symbol("native: /Users/Jane.Doe Smith/private/libExample.so")
         #expect(cleaned == "native: libExample.so")

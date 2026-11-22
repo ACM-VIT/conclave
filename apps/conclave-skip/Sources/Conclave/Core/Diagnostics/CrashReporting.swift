@@ -381,15 +381,38 @@ enum CrashReportEventBuilder {
         return "{ " + fields.joined(separator: ", ") + " }"
     }
 
+    /// The release that was running: stored with the record, or MetricKit's version and build. Empty when unknown.
+    static func recordedAppVersion(_ payload: DiagnosticsStoredPayload) -> String {
+        let version = textField(payload, "appVersion")
+        let build = textField(payload, "appBuild")
+        if version.isEmpty || build.isEmpty || version.contains("(") { return version }
+        return version + " (" + build + ")"
+    }
+
+    /// MetricKit re-reports, a launch or more later, an Objective-C exception the uncaught handler already stored.
+    /// The same exception name with the stored crash inside MetricKit's reporting window is the same crash.
+    static func repeatsUncaughtCrash(_ payload: DiagnosticsStoredPayload, uncaught: [DiagnosticsStoredPayload]) -> Bool {
+        if payload.kind != DiagnosticsPayloadKind.crash.rawValue || numberField(payload, "uncaught") > 0.0 { return false }
+        let name = textField(payload, "exceptionName")
+        let windowStart = numberField(payload, "windowStartMillis")
+        if name.isEmpty || windowStart <= 0.0 { return false }
+        for crash in uncaught where crash.createdAtMillis >= windowStart && crash.createdAtMillis <= payload.createdAtMillis {
+            if capturedExceptions(parseDetail(crash.detailJSON))?.first?.type == name { return true }
+        }
+        return false
+    }
+
     static func baseProperties(_ payload: DiagnosticsStoredPayload, kind: CrashReportKind,
                                context: CrashReportContext) -> [String] {
+        let crashedVersion = CrashReportPrivacy.symbol(recordedAppVersion(payload))
         var properties: [String] = [
             DiagnosticsJSON.string("$lib") + ": " + DiagnosticsJSON.string("conclave-native"),
             DiagnosticsJSON.string("$process_person_profile") + ": false",
             DiagnosticsJSON.string("$geoip_disable") + ": true",
             DiagnosticsJSON.string("$os") + ": " + DiagnosticsJSON.string(context.platform == "ios" ? "iOS" : "Android"),
             DiagnosticsJSON.string("$os_version") + ": " + DiagnosticsJSON.string(context.osVersion),
-            DiagnosticsJSON.string("$app_version") + ": " + DiagnosticsJSON.string(context.appVersion),
+            DiagnosticsJSON.string("$app_version") + ": "
+                + DiagnosticsJSON.string(crashedVersion.isEmpty ? context.appVersion : crashedVersion),
             DiagnosticsJSON.string("platform") + ": " + DiagnosticsJSON.string(context.platform),
             DiagnosticsJSON.string("device_class") + ": " + DiagnosticsJSON.string(context.deviceClass),
             DiagnosticsJSON.string("report_kind") + ": " + DiagnosticsJSON.string(kind.rawValue),
@@ -510,9 +533,13 @@ enum CrashCaptureRecord {
     }
 
     static func payload(exceptions: [CrashReportException], breadcrumbs: [String], phase: String,
-                        createdAtMillis: Double) -> DiagnosticsStoredPayload {
-        DiagnosticsPayloadFactory.payload(kind: DiagnosticsPayloadKind.crash, createdAtMillis: createdAtMillis,
-                                          fields: [DiagnosticsPayloadFactory.number("uncaught", 1.0)],
+                        createdAtMillis: Double, appVersion: String = "") -> DiagnosticsStoredPayload {
+        var fields: [DiagnosticsField] = [DiagnosticsPayloadFactory.number("uncaught", 1.0)]
+        if let version = DiagnosticsPayloadFactory.text("appVersion", appVersion) {
+            fields.append(version)
+        }
+        return DiagnosticsPayloadFactory.payload(kind: DiagnosticsPayloadKind.crash, createdAtMillis: createdAtMillis,
+                                          fields: fields,
                                           detailJSON: detailJSON(exceptions: exceptions, breadcrumbs: breadcrumbs,
                                                                  phase: phase))
     }
@@ -570,7 +597,15 @@ enum CrashReportPlanner {
         var skipped: [String] = []
         var events: [String] = []
         var names: [String] = []
+        var uncaught: [DiagnosticsStoredPayload] = []
+        for item in loaded where CrashReportEventBuilder.numberField(item.payload, "uncaught") > 0.0 {
+            uncaught.append(item.payload)
+        }
         for item in loaded where !reported.contains(item.name) {
+            if CrashReportEventBuilder.repeatsUncaughtCrash(item.payload, uncaught: uncaught) {
+                skipped.append(item.name)
+                continue
+            }
             guard let event = CrashReportEventBuilder.event(
                 for: item.payload,
                 eventId: CrashReportEventBuilder.eventId(forPayloadName: item.name),

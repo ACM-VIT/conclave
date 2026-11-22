@@ -34,9 +34,16 @@ enum CrashCaptureIOS {
                                               frames: CrashCaptureRecord.symbolFrames(exception.callStackSymbols))],
             breadcrumbs: breadcrumbs,
             phase: phase,
-            createdAtMillis: DiagnosticsClock.wallMillis()
+            createdAtMillis: DiagnosticsClock.wallMillis(),
+            appVersion: runningVersion()
         )
         DiagnosticsFileStore.standard().writePayload(payload)
+    }
+
+    static func runningVersion() -> String {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
+        return build.isEmpty ? version : version + " (" + build + ")"
     }
 
     #if DEBUG
