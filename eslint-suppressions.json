@@ -49,29 +49,9 @@
       "count": 5
     }
   },
-  "packages/meeting-core/scripts/gen-swift-events.mjs": {
-    "conclave/no-comments": {
-      "count": 4
-    }
-  },
-  "packages/meeting-core/src/chat-commands.ts": {
-    "conclave/no-comments": {
-      "count": 2
-    }
-  },
   "packages/meeting-core/src/grid-layout.ts": {
     "conclave/no-comments": {
       "count": 53
-    }
-  },
-  "packages/meeting-core/src/host-grant.ts": {
-    "conclave/no-comments": {
-      "count": 12
-    }
-  },
-  "packages/meeting-core/src/participant-reducer.ts": {
-    "conclave/no-comments": {
-      "count": 11
     }
   },
   "packages/meeting-core/src/sfu-events.ts": {
@@ -94,24 +74,9 @@
       "count": 4
     }
   },
-  "packages/meeting-core/test/host-grant.test.ts": {
-    "conclave/no-comments": {
-      "count": 5
-    }
-  },
-  "packages/meeting-core/test/participant-reducer.test.ts": {
-    "conclave/no-comments": {
-      "count": 4
-    }
-  },
   "packages/meeting-core/test/video-encodings.test.ts": {
     "conclave/no-comments": {
       "count": 4
-    }
-  },
-  "packages/meeting-core/vitest.config.ts": {
-    "conclave/no-comments": {
-      "count": 2
     }
   },
   "packages/sfu/config/classes/Room.ts": {

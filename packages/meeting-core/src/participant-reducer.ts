@@ -47,11 +47,6 @@ export type ParticipantAction =
     }
   | { type: "CLEAR_ALL" };
 
-// A brand-new entry has no producers, so it cannot be sending media: it starts
-// muted and camera-off. Anything else lies in the UI for participants who
-// joined with media off, since they never produce and so no later event
-// corrects the flag. Attaching a stream (UPDATE_STREAM) and the producer sync
-// paths flip these to on as soon as media actually flows.
 const createEmptyParticipant = (
   userId: string
 ): Participant => ({
@@ -70,9 +65,6 @@ const createEmptyParticipant = (
   isHandRaised: false,
 });
 
-// Clone the Map and set the participant in one step. Only ever called once a
-// real change is known, so the new Map identity always signals a real update —
-// this is what lets memoized consumers (GridLayout) skip no-op re-renders.
 const withParticipant = (
   state: Map<string, Participant>,
   userId: string,
@@ -98,8 +90,6 @@ export function participantReducer(
         ) {
           return state;
         }
-        // Re-add of an already-present, non-leaving participant is a no-op
-        // (server re-sync) — keep the same reference.
         if (!existing.isLeaving) {
           return state;
         }
@@ -170,7 +160,6 @@ export function participantReducer(
         if (action.stream) updated.isMuted = false;
       }
 
-      // Bail if every field matches (re-emitted producer state).
       if (
         state.has(action.userId) &&
         updated.videoStream === participant.videoStream &&

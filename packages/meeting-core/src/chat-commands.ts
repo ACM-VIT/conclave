@@ -135,7 +135,6 @@ export function getHelpText(): string {
   return `Commands: ${items}`;
 }
 
-/** Hard cap on spoken text, mirrored by the web TTS speech endpoint. */
 export const TTS_MAX_TEXT_LENGTH = 500;
 
 const TTS_CONTENT_PREFIX = "TTS: ";
@@ -151,7 +150,6 @@ export function formatTtsContent(text: string): string {
   return `${TTS_CONTENT_PREFIX}${text}`;
 }
 
-/** Spoken text of an already-normalized TTS message ("TTS: hi" → "hi"). */
 export function getTtsMessageText(content: string): string {
   return content.startsWith(TTS_CONTENT_PREFIX)
     ? content.slice(TTS_CONTENT_PREFIX.length)

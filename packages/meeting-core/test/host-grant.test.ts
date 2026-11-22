@@ -14,7 +14,6 @@ describe("resolveHostGrant — privilege-escalation invariant", () => {
   it("a bare client host CLAIM never confers host (the fixed exploit)", () => {
     const g = resolveHostGrant({ ...base, requestedHost: true });
     expect(g.isHost).toBe(false);
-    // ...but it does let them CREATE a new room → host via the SFU createdRoom path.
     expect(g.allowRoomCreation).toBe(true);
   });
 
@@ -30,9 +29,6 @@ describe("resolveHostGrant — privilege-escalation invariant", () => {
   it("grants host to a verified forced host (env allowlist)", () => {
     const g = resolveHostGrant({ ...base, isForcedHost: true });
     expect(g.isHost).toBe(true);
-    // On its own allowRoomCreation is false — but the host token (isHost=true)
-    // makes the SFU treat the join as hostRequested, which DOES let it create
-    // the room server-side. With an explicit claim this flag is true too:
     expect(g.allowRoomCreation).toBe(false);
     expect(
       resolveHostGrant({ ...base, isForcedHost: true, requestedHost: true })
@@ -47,7 +43,6 @@ describe("resolveHostGrant — privilege-escalation invariant", () => {
       scheduledRoomHostMatch: true,
     });
     expect(g.isHost).toBe(true);
-    // Scheduled rooms are never created by a join.
     expect(g.allowRoomCreation).toBe(false);
   });
 
