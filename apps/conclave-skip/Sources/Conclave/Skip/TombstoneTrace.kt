@@ -148,6 +148,7 @@ internal object TombstoneTrace {
             filename = module,
             line = 0,
             inApp = file.contains(APP_PACKAGE),
+            address = CrashReportPrivacy.address(java.lang.Long.toHexString(relPc)),
         )
     }
 }

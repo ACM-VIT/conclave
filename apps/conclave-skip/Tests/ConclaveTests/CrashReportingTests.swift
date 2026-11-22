@@ -290,17 +290,43 @@ struct CrashReportingTests {
         #expect(CrashReportPrivacy.symbol("conclave.module.WebRTCClient$onProduce$1") == "conclave.module.WebRTCClient$onProduce$1")
     }
 
-    private func uncaughtObjectiveCCrash(atMillis: Double) -> DiagnosticsStoredPayload {
-        CrashCaptureRecord.payload(
-            exceptions: [CrashReportException(type: "NSInvalidArgumentException", frames: [
-                CrashReportFrame(function: "-[ConclaveRoom join]", module: "Conclave", filename: "", line: 0, inApp: true),
-            ])],
+    /// The raise site and its callers, as the dynamic linker names them: Conclave frames at these image offsets.
+    static let raiseStack = [0x1000, 0x2000]
+
+    private func uncaughtObjectiveCCrash(atMillis: Double, stack: [Int] = raiseStack) -> DiagnosticsStoredPayload {
+        var frames: [CrashReportFrame] = [
+            CrashReportFrame(function: "__exceptionPreprocess", module: "CoreFoundation", filename: "", line: 0, inApp: false,
+                             address: "0x51a8"),
+        ]
+        for offset in stack {
+            frames.append(CrashReportFrame(function: "-[ConclaveRoom join]", module: "Conclave", filename: "", line: 0,
+                                           inApp: true, address: "0x" + String(offset, radix: 16)))
+        }
+        return CrashCaptureRecord.payload(
+            exceptions: [CrashReportException(type: "NSInvalidArgumentException", frames: frames)],
             breadcrumbs: [], phase: "live", createdAtMillis: atMillis, appVersion: "2.0.0 (63)"
         )
     }
 
-    private func metricKitCrash(name: String, windowStart: Double, delivered: Double,
-                                build: String = "63") throws -> DiagnosticsStoredPayload {
+    /// MetricKit's crash stack: the terminate path in system frames, then the same app frames.
+    private func metricKitTree(_ stack: [Int]) throws -> String {
+        var frame: [String: Any]? = nil
+        for offset in stack.reversed() {
+            var next: [String: Any] = ["binaryName": "Conclave", "offsetIntoBinaryTextSegment": offset]
+            if let frame { next["subFrames"] = [frame] }
+            frame = next
+        }
+        for (binary, offset) in [("libc++abi.dylib", 0x9f10), ("libsystem_kernel.dylib", 0x1234)] {
+            var next: [String: Any] = ["binaryName": binary, "offsetIntoBinaryTextSegment": offset]
+            if let frame { next["subFrames"] = [frame] }
+            frame = next
+        }
+        let tree: [String: Any] = ["callStacks": [["threadAttributed": true, "callStackRootFrames": [frame ?? [:]]]]]
+        return String(decoding: try JSONSerialization.data(withJSONObject: tree), as: UTF8.self)
+    }
+
+    private func metricKitCrash(name: String, windowStart: Double, delivered: Double, build: String = "63",
+                                stack: [Int] = raiseStack) throws -> DiagnosticsStoredPayload {
         DiagnosticsPayloadFactory.payload(
             kind: .crash, createdAtMillis: delivered,
             fields: [
@@ -310,7 +336,7 @@ struct CrashReportingTests {
                 try #require(DiagnosticsPayloadFactory.text("appVersion", "2.0.0")),
                 try #require(DiagnosticsPayloadFactory.text("appBuild", build)),
             ],
-            detailJSON: "{}"
+            detailJSON: try metricKitTree(stack)
         )
     }
 
@@ -342,6 +368,36 @@ struct CrashReportingTests {
         let alreadySent = CrashReportPlanner.plan(loaded, reported: ["payload-uncaught.json"], projectKey: "phc_test",
                                                   context: Self.context)
         #expect(alreadySent.batches.isEmpty && alreadySent.skipped.isEmpty && alreadySent.duplicates == ["payload-metrickit.json"])
+    }
+
+    /// Two crashes can share the exception name, build and window; only the same app frames make one a repeat, and a
+    /// stack that cannot be compared never deletes anything.
+    @Test func aMetricKitCrashWithADifferentStackIsNotARepeat() async throws {
+        let crashAt = 1_795_000_000_000.0
+        let otherStack = CrashReportPlanner.plan([
+            DiagnosticsLoadedPayload(name: "payload-uncaught.json", byteCount: 10, payload: uncaughtObjectiveCCrash(atMillis: crashAt)),
+            DiagnosticsLoadedPayload(name: "payload-other.json", byteCount: 10,
+                                     payload: try metricKitCrash(name: "NSInvalidArgumentException", windowStart: crashAt - 3_600_000,
+                                                                 delivered: crashAt + 7_200_000, stack: [0x3000, 0x2000])),
+        ], reported: [], projectKey: "phc_test", context: Self.context)
+        #expect(try exceptionTypes(otherStack).count == 2 && otherStack.duplicates.isEmpty)
+
+        let noAppFrames = CrashReportPlanner.plan([
+            DiagnosticsLoadedPayload(name: "payload-uncaught.json", byteCount: 10, payload: uncaughtObjectiveCCrash(atMillis: crashAt,
+                                                                                                                    stack: [])),
+            DiagnosticsLoadedPayload(name: "payload-bare.json", byteCount: 10,
+                                     payload: try metricKitCrash(name: "NSInvalidArgumentException", windowStart: crashAt - 3_600_000,
+                                                                 delivered: crashAt + 7_200_000, stack: [])),
+        ], reported: [], projectKey: "phc_test", context: Self.context)
+        #expect(try exceptionTypes(noAppFrames).count == 2 && noAppFrames.duplicates.isEmpty)
+
+        let store = temporaryStore()
+        #expect(store.writePayload(uncaughtObjectiveCCrash(atMillis: crashAt)))
+        #expect(store.writePayload(try metricKitCrash(name: "NSInvalidArgumentException", windowStart: crashAt - 3_600_000,
+                                                      delivered: crashAt + 7_200_000, stack: [0x3000, 0x2000])))
+        #expect(await CrashReportUploader().upload(store: store, config: config(), context: Self.context,
+                                                   transport: RecordingTransport()) == 2)
+        #expect(store.loadPayloads().count == 2)
     }
 
     /// MetricKit names a binary by its image name; one that is not a known module never reaches the endpoint, even

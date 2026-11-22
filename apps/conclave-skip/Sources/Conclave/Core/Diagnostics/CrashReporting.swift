@@ -46,7 +46,7 @@ struct CrashReportFrame: Equatable {
     let filename: String
     let line: Int
     let inApp: Bool
-    /// The frame's program counter (`0x4e8b8`), when its source gives one.
+    /// The frame's program counter (`0x4e8b8`), relative to its image when the source gives that, else empty.
     var address: String = ""
     /// A Java or Kotlin stack trace element, whose module is a class name; every other frame's module is a binary.
     var classFrame: Bool = false
@@ -166,6 +166,19 @@ enum CrashReportPrivacy {
     }
 
     static let hexCharacters = "0123456789abcdefABCDEF"
+    static let hexDigits = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"]
+
+    /// Lowercase hex digits of a non-negative offset.
+    static func hex(_ value: Int) -> String {
+        if value <= 0 { return "0" }
+        var rest = value
+        var text = ""
+        while rest > 0 {
+            text = hexDigits[rest % 16] + text
+            rest = rest / 16
+        }
+        return text
+    }
 
     /// `0x` plus the hex digits of a program counter, or empty when the text is not one.
     static func address(_ hex: String) -> String {
@@ -419,6 +432,7 @@ enum CrashReportEventBuilder {
                     filename: frame["filename"] as? String ?? "",
                     line: intValue(frame["line"]),
                     inApp: frame["inApp"] as? Bool ?? false,
+                    address: frame["address"] as? String ?? "",
                     classFrame: frame["classFrame"] as? Bool ?? false
                 ))
                 if frames.count >= maxFrames { break }
@@ -446,7 +460,8 @@ enum CrashReportEventBuilder {
             let binary = CrashReportPrivacy.binaryName(frame["binaryName"] as? String ?? "")
             let offset = intValue(frame["offsetIntoBinaryTextSegment"])
             frames.append(CrashReportFrame(function: binary + " + " + String(offset), module: binary, filename: "",
-                                           line: 0, inApp: binary == "Conclave"))
+                                           line: 0, inApp: binary == "Conclave",
+                                           address: offset > 0 ? CrashReportPrivacy.address(CrashReportPrivacy.hex(offset)) : ""))
             next = (frame["subFrames"] as? [Any])?.first as? [String: Any]
         }
         return frames
@@ -578,20 +593,36 @@ enum CrashReportEventBuilder {
     }
 
     /// MetricKit re-reports, a launch or more later, an Objective-C exception the uncaught handler already stored.
-    /// It is the same crash only with the same release (version and build), the same exception name, and the stored
-    /// crash inside MetricKit's reporting window; without a known release on both it uploads.
+    /// It is the same crash only with the same release (version and build), the same exception name, the stored crash
+    /// inside MetricKit's reporting window, and the same stack signature. Anything less certain uploads both.
     static func repeatsUncaughtCrash(_ payload: DiagnosticsStoredPayload, uncaught: [DiagnosticsStoredPayload]) -> Bool {
         if payload.kind != DiagnosticsPayloadKind.crash.rawValue || numberField(payload, "uncaught") > 0.0 { return false }
         let name = textField(payload, "exceptionName")
         let windowStart = numberField(payload, "windowStartMillis")
         let release = recordedAppVersion(payload)
-        if name.isEmpty || windowStart <= 0.0 || release.isEmpty { return false }
+        let signature = stackSignature(metricKitFrames(parseDetail(payload.detailJSON) ?? [:]))
+        if name.isEmpty || windowStart <= 0.0 || release.isEmpty || signature.isEmpty { return false }
         for crash in uncaught where crash.createdAtMillis >= windowStart && crash.createdAtMillis <= payload.createdAtMillis {
-            if recordedAppVersion(crash) == release && capturedExceptions(parseDetail(crash.detailJSON))?.first?.type == name {
-                return true
-            }
+            guard recordedAppVersion(crash) == release,
+                  let exception = capturedExceptions(parseDetail(crash.detailJSON))?.first,
+                  exception.type == name else { continue }
+            if stackSignature(exception.frames) == signature { return true }
         }
         return false
+    }
+
+    /// Conclave's own binaries, where an uncaught exception's stack and MetricKit's report of the same crash agree;
+    /// the system frames around them differ (MetricKit's stack runs on into the terminate path).
+    static let appModules: [String] = ["Conclave", "Conclave.debug.dylib", "Mediasoup", "WebRTC"]
+
+    /// The app frames of a stack as `module@offset`, innermost first, from structured fields only. Empty when the stack
+    /// has none, which never matches.
+    static func stackSignature(_ frames: [CrashReportFrame]) -> [String] {
+        var signature: [String] = []
+        for frame in frames where appModules.contains(frame.module) && !frame.address.isEmpty {
+            signature.append(frame.module + "@" + frame.address)
+        }
+        return signature
     }
 
     static func baseProperties(_ payload: DiagnosticsStoredPayload, kind: CrashReportKind,
@@ -687,6 +718,7 @@ enum CrashCaptureRecord {
                     + ", " + DiagnosticsJSON.string("filename") + ": " + DiagnosticsJSON.string(frame.filename)
                     + ", " + DiagnosticsJSON.string("line") + ": " + String(frame.line)
                     + ", " + DiagnosticsJSON.string("inApp") + ": " + (frame.inApp ? "true" : "false")
+                    + ", " + DiagnosticsJSON.string("address") + ": " + DiagnosticsJSON.string(frame.address)
                     + ", " + DiagnosticsJSON.string("classFrame") + ": " + (frame.classFrame ? "true" : "false") + " }")
             }
             exceptionParts.append("{ " + DiagnosticsJSON.string("type") + ": " + DiagnosticsJSON.string(exception.type)
@@ -721,8 +753,11 @@ enum CrashCaptureRecord {
             let image = info.dli_fname.map { String(cString: $0) } ?? ""
             let module = CrashReportPrivacy.moduleNameFromPath(image)
             let symbol = info.dli_sname.map { String(cString: $0) } ?? CrashReportEventBuilder.unknownFunction
+            let base = UInt(bitPattern: info.dli_fbase)
+            let pc = UInt(bitPattern: address)
+            let offset = base > 0 && pc >= base ? CrashReportPrivacy.address(String(pc - base, radix: 16)) : ""
             frames.append(CrashReportFrame(function: symbol, module: module, filename: "", line: 0,
-                                           inApp: module.hasPrefix("Conclave")))
+                                           inApp: module.hasPrefix("Conclave"), address: offset))
         }
         return frames
     }
