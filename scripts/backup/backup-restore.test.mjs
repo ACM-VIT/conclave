@@ -547,3 +547,106 @@ test(
     }
   },
 );
+
+test(
+  "SQLite and Redis come back from one point in time while an SFU keeps writing",
+  { skip: missingWithRedis.length > 0 && `needs ${missingWithRedis.join(", ")} on PATH` },
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+    const port = await freePort();
+    const redis = spawn("redis-server", ["--port", String(port), "--bind", "127.0.0.1", "--save", "", "--appendonly no"], { stdio: "ignore" });
+    const cli = async (...args) => (await run("redis-cli", ["-h", "127.0.0.1", "-p", String(port), ...args])).stdout.trim();
+    let writer;
+    let sfu;
+    let db;
+    try {
+      for (let i = 0; i < 50 && (await cli("PING").catch(() => "")) !== "PONG"; i += 1) {
+        await new Promise((done) => setTimeout(done, 100));
+      }
+      // A stand-in SFU that, like the real one, writes each record to both
+      // stores and holds its writes while a backup holds the fence.
+      const { state, config, backup, latestArchive, restore } = await setUp(root, [`SFU_PERSISTENCE_REDIS_URL=redis://127.0.0.1:${port}/0`]);
+      db = new DatabaseSync(path.join(state, "conclave.sqlite"));
+      db.exec("PRAGMA journal_mode = WAL");
+      db.exec("CREATE TABLE records (id INTEGER PRIMARY KEY)");
+      const redisWriter = spawn("redis-cli", ["-h", "127.0.0.1", "-p", String(port)], { stdio: ["pipe", "pipe", "ignore"] });
+      let sent = 0;
+      let acked = 0;
+      redisWriter.stdout.on("data", (chunk) => (acked += String(chunk).split("\n").filter(Boolean).length));
+      let fenced = false;
+      let next = 0;
+      writer = setInterval(() => {
+        if (fenced) return;
+        next += 1;
+        db.prepare("INSERT INTO records VALUES (?)").run(next);
+        redisWriter.stdin.write(`SET conclave:sfu:persistence:record:${next} 1\n`);
+        sent += 1;
+      }, 50);
+      sfu = createHttpServer(async (req, res) => {
+        if (req.url === "/health") return res.end('{"status":"healthy"}');
+        if (req.url === "/admin/persistence-fence" && req.method === "POST") {
+          fenced = true;
+          while (acked < sent) await new Promise((done) => setTimeout(done, 5));
+          return res.end(JSON.stringify({ held: true, until: Date.now() + 20_000, instanceId: "sfu-a" }));
+        }
+        if (req.url === "/admin/persistence-fence" && req.method === "DELETE") {
+          fenced = false;
+          return res.end('{"held":false}');
+        }
+        res.writeHead(404).end();
+      });
+      await new Promise((done) => sfu.listen(0, "127.0.0.1", done));
+      await writeFile(config, `${await readFile(config, "utf8")}\nCONCLAVE_SFU_HEALTH_URLS="http://127.0.0.1:${sfu.address().port}/health"\n`);
+      await new Promise((done) => setTimeout(done, 300));
+
+      await backup("--local-only");
+      clearInterval(writer);
+      redisWriter.stdin.end();
+      db.close();
+      await new Promise((done) => sfu.close(done));
+      sfu = null;
+      await writeFile(config, `${await readFile(config, "utf8")}\nCONCLAVE_SFU_HEALTH_URLS="http://127.0.0.1:9/health"\n`);
+
+      await rm(state, { recursive: true });
+      await restore("--file", await latestArchive(), "--yes");
+      const restored = new DatabaseSync(path.join(state, "conclave.sqlite"), { readOnly: true });
+      const rows = restored.prepare("SELECT id FROM records ORDER BY id").all().map((row) => row.id);
+      restored.close();
+      const keys = (await cli("--scan", "--pattern", "conclave:sfu:persistence:record:*"))
+        .split("\n")
+        .filter(Boolean)
+        .map((key) => Number(key.split(":").at(-1)))
+        .sort((a, b) => a - b);
+      assert.ok(rows.length > 0);
+      assert.deepEqual(keys, rows, "both stores must hold the same records");
+    } finally {
+      clearInterval(writer);
+      if (db?.isOpen) db.close();
+      if (sfu) await new Promise((done) => sfu.close(done));
+      redis.kill();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "an SFU that answers but will not hold the write fence stops the backup",
+  { skip: missing.length > 0 && `needs ${missing.join(", ")} on PATH` },
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+    // An SFU from before the fence existed: it answers, with 404.
+    const older = createHttpServer((req, res) => res.writeHead(req.url === "/health" ? 200 : 404).end());
+    await new Promise((done) => older.listen(0, "127.0.0.1", done));
+    try {
+      const { state, local, backup } = await setUp(root, [`CONCLAVE_SFU_HEALTH_URLS="http://127.0.0.1:${older.address().port}/health"`]);
+      const db = new DatabaseSync(path.join(state, "conclave.sqlite"));
+      db.exec("CREATE TABLE meetings (id TEXT PRIMARY KEY)");
+      db.close();
+      await assert.rejects(backup("--local-only"), /did not hold the write fence \(HTTP 404\)/);
+      assert.deepEqual((await readdir(local)).filter((name) => name.endsWith(".tar.gz.age")), []);
+    } finally {
+      await new Promise((done) => older.close(done));
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);

@@ -34,7 +34,8 @@ stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 name="conclave-${BACKUP_NAME:-$(hostname -s)}-${stamp}"
 mkdir -p "$BACKUP_LOCAL_DIR"
 work="$(mktemp -d "${BACKUP_LOCAL_DIR}/.work.XXXXXX")"
-trap 'rm -rf "$work"' EXIT
+fenced=()
+trap 'release_fences; rm -rf "$work"' EXIT
 payload="${work}/payload"
 mkdir -p "${payload}/sqlite" "${payload}/redis"
 manifest="${payload}/MANIFEST"
@@ -52,6 +53,34 @@ sources=0
 # every deploy, and cannot be backed up from the host.
 configured="$(configured_database "$STATE_DIR")" ||
   die "CONCLAVE_SQLITE_PATH=${CONCLAVE_SQLITE_PATH} is outside the state dir, so it is not on the volume; move it under ${CONTAINER_STATE_DIR}"
+
+# One point in time for SQLite and Redis: every SFU holds its durable writes
+# behind a short fence while both are copied, and the release lets them
+# through. An SFU that does not answer is not running and writes nothing; one
+# that answers but will not hold the fence stops the backup.
+FENCE_HOLD_MS="${BACKUP_FENCE_HOLD_MS:-20000}"
+fence_until=0
+release_fences() {
+  local base
+  for base in "${fenced[@]}"; do
+    curl -s -o /dev/null --max-time 5 -X DELETE -H "x-sfu-secret: ${SFU_SECRET:-}" "${base}/admin/persistence-fence" || true
+  done
+  fenced=()
+}
+for health in ${CONCLAVE_SFU_HEALTH_URLS:-http://127.0.0.1:3031/health http://127.0.0.1:3032/health}; do
+  base="${health%/health}"
+  reply="$(curl -s --max-time 30 -w $'\n%{http_code}' -X POST -H "x-sfu-secret: ${SFU_SECRET:-}" \
+    -H "content-type: application/json" -d "{\"holdMs\": ${FENCE_HOLD_MS}}" "${base}/admin/persistence-fence" || true)"
+  code="${reply##*$'\n'}"
+  [[ "$code" == 000 ]] && continue
+  until_ms="$(sed -nE 's/.*"until":([0-9]+).*/\1/p' <<< "${reply%$'\n'*}")"
+  if [[ "$code" != 200 || -z "$until_ms" ]]; then
+    die "the SFU at ${base} did not hold the write fence (HTTP ${code}); deploy an SFU with /admin/persistence-fence before backing up"
+  fi
+  fenced+=("$base")
+  (( fence_until == 0 || until_ms < fence_until )) && fence_until="$until_ms"
+done
+(( ${#fenced[@]} > 0 )) && log "Holding the write fence on ${#fenced[@]} SFU(s)"
 
 # SQLite: the online backup API copies a consistent snapshot while the SFUs
 # keep writing; copying the file (or its WAL) directly would not. Each
@@ -119,6 +148,12 @@ fi
 
 (( sources > 0 )) || die "found no SQLite database in ${STATE_DIR} and no Redis URL; check the config"
 
+if (( ${#fenced[@]} > 0 )); then
+  (( $(date +%s) * 1000 < fence_until )) || die "the write fence lifted before SQLite and Redis were both copied; raise BACKUP_FENCE_HOLD_MS"
+  release_fences
+  log "Released the write fence"
+fi
+
 # Everything else in the state directory (JSON stores and the like).
 # A database reached through a link need not end in .sqlite, so each one is
 # excluded by its path as well.
@@ -152,7 +187,7 @@ prune_local_archives() {
     rm -f "${archives[i]}"
   done
 }
-trap 'rm -rf "$work"; prune_local_archives' EXIT
+trap 'release_fences; rm -rf "$work"; prune_local_archives' EXIT
 size="$(wc -c < "$archive" | tr -d ' ')"
 log "Encrypted archive ${archive} (${size} bytes)"
 

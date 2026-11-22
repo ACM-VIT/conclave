@@ -12,6 +12,15 @@ IST to Azure Blob Storage in another region.
 | Scheduled meetings and scheduling (Redis mode) | Host Redis, keys `conclave:sfu:persistence*` | `redis-cli --rdb`: the server forks a fresh snapshot, the same way `BGSAVE` does, and streams it |
 | Anything else in the state dir | JSON stores and similar files | `tar` |
 
+SQLite and Redis are copied at one point in time. Before either copy, the
+backup asks every SFU in `CONCLAVE_SFU_HEALTH_URLS` to hold its durable
+writes (`POST /admin/persistence-fence`, at most 30 s, `BACKUP_FENCE_HOLD_MS`
+20 s by default); the SFUs keep serving from memory, and the held writes land
+when the backup releases the fence or at its timeout. An SFU that does not
+answer is not running and writes nothing. One that answers but will not hold
+the fence, such as an SFU from before the fence existed, stops the backup, so
+deploy the SFU before turning backups on.
+
 Each archive also holds a `MANIFEST` (row counts per table, Redis key count,
 repo commit) and `SHA256SUMS`. The archive is encrypted with
 [age](https://age-encryption.org) to a public key. The VM can write backups
