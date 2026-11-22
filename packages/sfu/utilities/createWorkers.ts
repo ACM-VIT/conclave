@@ -13,6 +13,8 @@ type CreateWorkersOptions = {
 
 const INITIAL_RESPAWN_DELAY_MS = 100;
 const MAX_RESPAWN_DELAY_MS = 2000;
+// Shared-browser audio and video each use separate RTP and RTCP ports.
+const SHARED_BROWSER_PLAIN_PORT_RESERVE = 4;
 
 const webRtcServers = new WeakMap<Worker, WebRtcServer>();
 
@@ -73,15 +75,32 @@ const createWorkers = async (
   const signal = options.signal
     ? AbortSignal.any([options.signal, startupFailure.signal])
     : startupFailure.signal;
-  const { rtcMinPort, rtcMaxPort, workerCount: override, hostInstanceCount } = config.workerSettings;
-  const workerCount = override || Math.max(1, Math.min(
-    Math.floor(Math.min(availableParallelism(), getWorkerCpuQuota()) / hostInstanceCount),
-    rtcMaxPort - rtcMinPort,
-  ));
-  const plainMinPort = rtcMinPort + workerCount;
-  if (plainMinPort > rtcMaxPort) {
-    throw new Error("RTC_MIN_PORT through RTC_MAX_PORT must fit the worker ports and leave space for plain RTP");
+  const {
+    rtcMinPort,
+    rtcMaxPort,
+    workerCount: override,
+    hostInstanceCount,
+    webRtcPortBudget,
+  } = config.workerSettings;
+  if (webRtcPortBudget !== undefined && (!Number.isInteger(webRtcPortBudget) || webRtcPortBudget < 1)) {
+    throw new Error("SFU_WEBRTC_PORT_BUDGET must be a positive integer");
   }
+  const rangeBudget = rtcMaxPort - rtcMinPort + 1 - SHARED_BROWSER_PLAIN_PORT_RESERVE;
+  if (rangeBudget < 1) {
+    throw new Error(`RTC_MIN_PORT through RTC_MAX_PORT must fit at least one worker port and ${SHARED_BROWSER_PLAIN_PORT_RESERVE} plain RTP ports`);
+  }
+  const effectiveBudget = Math.min(webRtcPortBudget ?? rangeBudget, rangeBudget);
+  if (override > effectiveBudget) {
+    throw new Error(`SFU_WORKER_COUNT=${override} exceeds the WebRTC port budget of ${effectiveBudget} with ${SHARED_BROWSER_PLAIN_PORT_RESERVE} ports reserved for plain RTP`);
+  }
+  const cpuWorkerCount = override || Math.max(1, Math.floor(
+    Math.min(availableParallelism(), getWorkerCpuQuota()) / hostInstanceCount,
+  ));
+  if (!override && cpuWorkerCount > effectiveBudget) {
+    Logger.warn(`CPU capacity allows ${cpuWorkerCount} workers. Capping the derived count at the WebRTC port budget of ${effectiveBudget}.`);
+  }
+  const workerCount = Math.min(cpuWorkerCount, effectiveBudget);
+  const plainMinPort = rtcMinPort + (webRtcPortBudget === undefined ? workerCount : effectiveBudget);
 
   // Placement skips closed workers. Keep their slots so recovery keeps the
   // same port and worker index while other slots continue serving rooms.

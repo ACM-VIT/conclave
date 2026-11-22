@@ -16,7 +16,13 @@ vi.mock("node:os", () => {
 });
 vi.mock("../config/config.js", () => ({
   config: {
-    workerSettings: { workerCount: 1, hostInstanceCount: 1, rtcMinPort: 42001, rtcMaxPort: 42200 },
+    workerSettings: {
+      workerCount: 1,
+      hostInstanceCount: 1,
+      webRtcPortBudget: undefined,
+      rtcMinPort: 42001,
+      rtcMaxPort: 42200,
+    },
     webRtcTransport: { enableUdp: true, enableTcp: true, listenIps: [{ ip: "127.0.0.1" }] },
   },
 }));
@@ -24,6 +30,65 @@ vi.mock("../config/config.js", () => ({
 const makeWorker = () => Object.assign(new EventEmitter(), {
   createWebRtcServer: vi.fn<Worker["createWebRtcServer"]>(),
   close: vi.fn(),
+});
+
+it.each([
+  { name: "18 CPUs behind the Compose firewall budget", affinity: 18, instances: 2, ports: 200, expected: 4 },
+  { name: "six ports with the browser relay reserve", affinity: 18, instances: 1, ports: 6, expected: 2 },
+  { name: "the smallest range that supports the browser relay", affinity: 18, instances: 1, ports: 5, expected: 1 },
+  { name: "one worker with the full firewall budget reserved", affinity: 2, instances: 2, ports: 200, expected: 1 },
+])("respects the port budget for $name", async ({ affinity, instances, ports, expected }) => {
+  const settings = config.workerSettings;
+  const previous = { ...settings };
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  Object.assign(settings, {
+    workerCount: 0,
+    hostInstanceCount: instances,
+    webRtcPortBudget: 4,
+    rtcMaxPort: settings.rtcMinPort + ports - 1,
+  });
+  vi.mocked(availableParallelism).mockReturnValue(affinity);
+  vi.mocked(readFileSync).mockImplementation(() => { throw new Error("no cgroup limit"); });
+  vi.mocked(createWorker).mockReset().mockImplementation(async () => {
+    const worker = makeWorker();
+    worker.createWebRtcServer.mockResolvedValue({} as WebRtcServer);
+    return worker as unknown as Worker;
+  });
+  try {
+    expect(await createWorkers()).toHaveLength(expected);
+    expect(createWorker).toHaveBeenCalledWith(expect.objectContaining({
+      rtcMinPort: settings.rtcMinPort + Math.min(4, ports - 4),
+      rtcMaxPort: settings.rtcMaxPort,
+    }));
+    if (Math.floor(affinity / instances) > expected) {
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("WebRTC port budget"));
+    }
+  } finally {
+    Object.assign(settings, previous);
+    warn.mockRestore();
+    vi.mocked(createWorker).mockReset();
+    vi.mocked(readFileSync).mockReset();
+  }
+});
+
+it.each([
+  { ports: 6, workers: 3 },
+  { ports: 200, workers: 5 },
+])("rejects $workers configured workers with a $ports-port RTC range and a four-port budget", async ({ ports, workers }) => {
+  const settings = config.workerSettings;
+  const previous = { ...settings };
+  Object.assign(settings, {
+    workerCount: workers,
+    webRtcPortBudget: 4,
+    rtcMaxPort: settings.rtcMinPort + ports - 1,
+  });
+  vi.mocked(createWorker).mockClear();
+  try {
+    await expect(createWorkers()).rejects.toThrow("SFU_WORKER_COUNT");
+    expect(createWorker).not.toHaveBeenCalled();
+  } finally {
+    Object.assign(settings, previous);
+  }
 });
 
 it.each([

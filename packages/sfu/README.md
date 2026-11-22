@@ -18,19 +18,26 @@ Resize the VM before configuring a higher worker count, leaving headroom for
 signaling and colocated services. Compose assumes two SFU instances share the
 host. Set `SFU_WORKER_HOST_INSTANCES=3` on production when staging shares that VM.
 The default divides the effective CPU affinity and quota limit by the instance
-count, rounds down, and reserves one worker at minimum. Outside Compose, it
-assumes one instance unless you supply the count. Startup logs the worker count.
+count, rounds down, and starts at least one worker. Outside Compose it assumes
+one instance unless you supply the count.
 
-For an instance with `N` workers, allow inbound UDP and TCP from `RTC_MIN_PORT`
-through `RTC_MIN_PORT + N - 1`. With one worker per instance, the production
-defaults are 40000 for `sfu-a` and 41001 for `sfu-b`. Keep the legacy UDP and TCP
-ranges open until calls on both old instances have drained and both instances
-have restarted. Check the logged count before narrowing firewall rules.
+Compose defaults `SFU_WEBRTC_PORT_BUDGET` to 4 per instance. The effective
+budget `B` is the smaller of that setting and the size of the RTC range minus
+four. The final four ports support separate RTP and RTCP for shared-browser
+audio and video. Startup logs the selected count, warns when the budget caps
+automatic sizing, and rejects an explicit worker count above the budget.
 
-Shared browser relays need plain RTP over UDP from `RTC_MIN_PORT + N` through
-`RTC_MAX_PORT`. With one worker per instance, the production defaults are
-40001 through 41000 and 41002 through 42000. Preserve access from the relay
-sources. Update the firewall when changing worker counts or RTC ranges.
+Allow public UDP and TCP from `RTC_MIN_PORT` through `RTC_MIN_PORT + B - 1`.
+Allow plain RTP over UDP from `RTC_MIN_PORT + B` through `RTC_MAX_PORT` from
+authorized relay sources. With the default budget, public WebRTC uses 40000
+through 40003 for `sfu-a` and 41001 through 41004 for `sfu-b`. The relay ranges
+are 40004 through 41000 and 41005 through 42000. The split stays fixed when
+the CPU-derived worker count changes.
+
+Keep the legacy UDP and TCP ranges open until calls on both old instances have
+drained and both instances have restarted. Update the firewall before changing
+the budget or RTC ranges. Outside Compose, if you omit the budget, plain RTP
+starts after the actual worker ports.
 
 ## Development
 
