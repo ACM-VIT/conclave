@@ -78,6 +78,8 @@ export type SizedRow = { row: ProjectedRow; bytes: number };
 /** One viewer's rows as committed, read at the moment of asking. */
 export type CommittedView = {
   get(bucket: string, key: string): Json | undefined;
+  /** What a row takes on the wire, counted as a snapshot's parts count it. */
+  bytes(bucket: string, key: string): number;
   keys(bucket: string): Iterable<string>;
   size(bucket: string): number;
 };
@@ -335,6 +337,7 @@ export class ViewTracker {
     const bucketOf = (name: string) => shared.get(name) ?? own.get(name);
     return {
       get: (bucket, key) => bucketOf(bucket)?.rows.get(key)?.value,
+      bytes: (bucket, key) => bucketOf(bucket)?.rows.get(key)?.bytes ?? 0,
       keys: (bucket) => bucketOf(bucket)?.rows.keys() ?? [],
       size: (bucket) => bucketOf(bucket)?.rows.size ?? 0,
     };

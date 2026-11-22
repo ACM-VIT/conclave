@@ -67,7 +67,13 @@ type Subscription = {
    * the parts sent so far carried. Nothing else is sent until the last part
    * has gone, and then one catch-up from what was carried to the view now.
    */
-  transfer: { frames: ReplaceFrame[]; next: number; held: HeldRows } | null;
+  transfer: {
+    frames: ReplaceFrame[];
+    next: number;
+    /** Parts sent so far, which numbers the next one. */
+    sent: number;
+    held: HeldRows;
+  } | null;
   /** The socket fell behind. Patches are skipped until it is replaced. */
   lagging: boolean;
   /**
@@ -811,26 +817,40 @@ export class RoomAuthority {
     if (frames.length === 1) return;
     const held: HeldRows = new Map();
     carried(held, frames[0]);
-    subscription.transfer = { frames, next: 1, held };
+    subscription.transfer = { frames, next: 1, sent: 1, held };
     this.continueTransfer(subscription, subscription.generation);
   }
 
   /**
-   * A later part of a snapshot, as it may be sent now. The parts were all
-   * cut from one view when the snapshot began, and a part waits a turn or
-   * more for its place. A row that has been hidden in the meantime is left
-   * out, and one that has changed goes as it is now, so no part carries what
-   * was withdrawn before it left. The catch-up after the last part brings
-   * the viewer the rest of what changed.
+   * The rows of a later part of a snapshot, as they may be sent now. The
+   * parts were all cut from one view when the snapshot began, and a part
+   * waits a turn or more for its place. A row that has been hidden in the
+   * meantime is left out, and one that has changed goes as it is now, so no
+   * part carries what was withdrawn before it left. A row can have grown, so
+   * the part is cut to the part size again: what does not fit is returned,
+   * to go in the part after. The catch-up after the last part brings the
+   * viewer the rest of what changed.
    */
-  private asCommitted(subscription: Subscription, part: ReplaceFrame): ReplaceFrame {
+  private asCommitted(
+    subscription: Subscription,
+    planned: ProjectedRow[],
+  ): { rows: ProjectedRow[]; rest: ProjectedRow[] } {
     const view = subscription.instance.committedView(subscription.actor);
     const rows: ProjectedRow[] = [];
-    for (const row of part.rows) {
+    let bytes = 0;
+    for (let index = 0; index < planned.length; index += 1) {
+      const row = planned[index];
       const value = view.get(row.bucket, row.key);
-      if (value !== undefined) rows.push(value === row.value ? row : { ...row, value });
+      if (value === undefined) continue;
+      const size = view.bytes(row.bucket, row.key);
+      // At least one row a part, as when the parts were first cut.
+      if (rows.length > 0 && bytes + size > this.limits.chunkBytes) {
+        return { rows, rest: planned.slice(index) };
+      }
+      rows.push(value === row.value ? row : { ...row, value });
+      bytes += size;
     }
-    return { ...part, rows, serverNowMs: this.now() };
+    return { rows, rest: [] };
   }
 
   /**
@@ -850,10 +870,20 @@ export class RoomAuthority {
       }
       if (this.refresh(subscription) !== "live") return;
       if (!this.hasRoom(subscription)) return;
-      const part = this.asCommitted(subscription, transfer.frames[transfer.next]);
+      const planned = transfer.frames[transfer.next];
+      const { rows, rest } = this.asCommitted(subscription, planned.rows);
+      if (rest.length > 0) transfer.frames[transfer.next] = { ...planned, rows: rest };
+      else transfer.next += 1;
+      const part: ReplaceFrame = {
+        ...planned,
+        serverNowMs: this.now(),
+        part: transfer.sent,
+        last: transfer.next === transfer.frames.length,
+        rows,
+      };
+      transfer.sent += 1;
       this.emit(subscription, part);
       carried(transfer.held, part);
-      transfer.next += 1;
       if (transfer.next < transfer.frames.length) {
         this.continueTransfer(subscription, generation);
         return;

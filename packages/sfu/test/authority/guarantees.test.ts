@@ -1686,6 +1686,65 @@ describe("large views and slow sockets", () => {
     expect(room.authority.stats.disconnects).toBe(0);
   });
 
+  it("keeps every part of a snapshot within the part size when rows grow while the parts are on their way", async () => {
+    const room = new Harness([probeAuthority], { runtime: { limits: small } });
+    const hostTab = await room.open(host, probeContract);
+    // The probe's notes table holds five.
+    for (let index = 0; index < 5; index += 1) {
+      await hostTab.act("put", { id: `n${index}`, text: `${index}`.repeat(100) });
+    }
+    await room.deliver();
+    const raviTab = await room.open(ravi, probeContract);
+    const entry = hostTab.client.entryFor(probeContract)!;
+    const name = "rows-grow-in-flight";
+    // Bytes a row takes on the wire, counted as the server counts them.
+    const rowBytes = (row: ProjectedRow): number =>
+      Buffer.byteLength(JSON.stringify(row.value)) + row.bucket.length + row.key.length + 32;
+
+    void raviTab.raw(AUTHORITY_EVENTS.subscribe, {
+      roomEpoch: room.authority.roomEpoch,
+      instance: entry.instance,
+      app: entry.app,
+      major: entry.major,
+      subscription: name,
+    });
+    // Before the next part, the notes still to come grow threefold.
+    const grown: string[] = [];
+    for (let index = 2; index < 5; index += 1) {
+      const text = `${index}`.repeat(300);
+      grown.push(text);
+      await hostTab.raw(AUTHORITY_EVENTS.act, {
+        roomEpoch: room.authority.roomEpoch,
+        subscription: hostTab.frames[0].subscription,
+        generation: 1,
+        operation: { issuedAtMs: Date.now(), nonce: `grow-row-${index}-in-flight` },
+        action: "put",
+        input: { id: `n${index}`, text },
+      });
+    }
+    await room.drain();
+    await room.deliver();
+    await room.drain();
+
+    const parts = replaces(raviTab.frames.filter((frame) => frame.subscription === name));
+    const held = new Map<string, Json>();
+    for (const part of parts) for (const row of part.rows) held.set(row.key, row.value);
+    for (const frame of patches(raviTab.frames.filter((frame) => frame.subscription === name))) {
+      for (const row of frame.put) held.set(row.key, row.value);
+    }
+
+    expect(parts.length).toBeGreaterThan(2);
+    for (const part of parts) {
+      const bytes = part.rows.reduce((total, row) => total + rowBytes(row), 0);
+      // A part holds at most the part size, or a single row larger than it.
+      expect(part.rows.length === 1 || bytes <= small.chunkBytes, `part ${part.part}: ${bytes} bytes`).toBe(true);
+    }
+    expect(parts.map((part) => part.part)).toEqual(parts.map((_, index) => index));
+    expect(parts.map((part) => part.last)).toEqual(parts.map((_, index) => index === parts.length - 1));
+    expect([2, 3, 4].map((index) => field(held.get(`n${index}`) ?? null, "text"))).toEqual(grown);
+    expect(raviTab.rows("notes").length).toBe(5);
+  });
+
   it("never sends a question the host hid while a snapshot was in parts, after the hide", async () => {
     const room = new Harness([qaAuthority], { runtime: { limits: small } });
     const hostTab = await room.open(host, qaContract);
