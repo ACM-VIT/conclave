@@ -71,17 +71,21 @@ type Tab = {
 
 /**
  * What one person has done, across their tabs: the oracle for their rows.
- * `everUpvoted` only grows. A person's two tabs are two sockets with no
- * order between them, so one tab's "upvoted" frame can land after the other
- * tab took the upvote back. That row is still theirs. A row for a question
- * they never upvoted is not.
+ * `upvoteTakenBackAt` is when each upvote was last taken back. A person's
+ * two tabs are two sockets with no order between them, so one tab's
+ * "upvoted" frame can land just after the other tab took the upvote back.
+ * That row is still theirs for a moment. A row for a question they do not
+ * hold an upvote on, and did not just release, is someone else's.
  */
 type Ledger = {
   votes: Set<string>;
   upvotes: Set<string>;
-  everUpvoted: Set<string>;
+  upvoteTakenBackAt: Map<string, number>;
   asked: Set<string>;
 };
+
+/** How long after taking an upvote back its row may still arrive. */
+const CROSS_TAB_GRACE_MS = 1_000;
 
 const ledgers = new Map<string, Ledger>();
 const ledgerOf = (person: Person): Ledger => {
@@ -90,7 +94,7 @@ const ledgerOf = (person: Person): Ledger => {
     ledger = {
       votes: new Set(),
       upvotes: new Set(),
-      everUpvoted: new Set(),
+      upvoteTakenBackAt: new Map(),
       asked: new Set(),
     };
     ledgers.set(person.key, ledger);
@@ -126,7 +130,11 @@ const audit = (tab: Tab, frame: AuthorityFrame): void => {
         violations.push(`${tab.person.name}: someone else's ballot ${row.key}`);
       }
     } else if (row.bucket === "myUpvotes") {
-      if (!ledger.everUpvoted.has(row.key)) {
+      const takenBackAt = ledger.upvoteTakenBackAt.get(row.key);
+      const justTakenBack =
+        takenBackAt !== undefined &&
+        Date.now() - takenBackAt < CROSS_TAB_GRACE_MS;
+      if (!ledger.upvotes.has(row.key) && !justTakenBack) {
         violations.push(`${tab.person.name}: someone else's upvote ${row.key}`);
       }
     } else if (row.bucket === "myQuestions") {
@@ -374,14 +382,14 @@ const main = async (): Promise<void> => {
             const id = pick(questionIds);
             const value = !ledger.upvotes.has(id);
             // Recorded before sending: the row may arrive before the ack.
-            if (value) {
-              ledger.upvotes.add(id);
-              ledger.everUpvoted.add(id);
-            }
+            if (value) ledger.upvotes.add(id);
             pending.push(
               tab.qa.act("upvote", { id, value }).then((result) => {
                 record("upvote", result);
-                if (result.ok && !value) ledger.upvotes.delete(id);
+                if (result.ok && !value) {
+                  ledger.upvotes.delete(id);
+                  ledger.upvoteTakenBackAt.set(id, Date.now());
+                }
               }),
             );
           } else if (roll < 0.9 && pollIds.length > 0) {
