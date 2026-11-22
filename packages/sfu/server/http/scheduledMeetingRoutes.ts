@@ -7,7 +7,6 @@ import {
   getScheduledMeetingById,
   getScheduledMeetingByRoomCode,
   listScheduledMeetings,
-  moveScheduledMeetingToClient,
   persistScheduledMeetingChanges,
   persistScheduledMeetingDeletes,
   updateScheduledMeeting,
@@ -167,55 +166,29 @@ export const registerScheduledMeetingRoutes = (
     }
   };
 
-  const migrateMeetingNamespace = async (
-    meeting: ScheduledMeeting,
-    clientId: string,
-  ): Promise<ScheduledMeeting | null> => {
-    if (meeting.clientId === clientId) return meeting;
-    if (!canMigrateClientNamespace(meeting.clientId, clientId)) return null;
-    try {
-      const migrated = moveScheduledMeetingToClient(
-        state.scheduledMeetings,
-        meeting.id,
-        clientId,
-      );
-      if (migrated) {
-        await persistChanged(migrated);
-      }
-      return migrated;
-    } catch (error) {
-      Logger.warn(
-        `Failed to migrate scheduled meeting ${meeting.id} from ${meeting.clientId} to ${clientId}`,
-        error,
-      );
-      return null;
-    }
-  };
-
-  const findMeetingByRoomCode = async (
+  const findMeetingByRoomCode = (
     clientId: string,
     roomCode: string,
-  ): Promise<ScheduledMeeting | null> => {
+  ): ScheduledMeeting | null => {
     for (const candidateClientId of clientIdCandidates(clientId)) {
       const meeting = getScheduledMeetingByRoomCode(
         state.scheduledMeetings,
         candidateClientId,
         roomCode,
       );
-      if (!meeting) continue;
-      if (meeting.clientId === clientId) return meeting;
-      const migrated = await migrateMeetingNamespace(meeting, clientId);
-      return migrated ?? meeting;
+      // Returned as stored, with its own clientId: a lookup never moves a
+      // booking to the tenant it was asked under.
+      if (meeting) return meeting;
     }
     return null;
   };
 
-  const listMeetingsForClient = async (options: {
+  const listMeetingsForClient = (options: {
     clientId: string;
     ownerEmail?: string;
     includeAll: boolean;
     status?: ScheduledMeetingStatus[];
-  }): Promise<ScheduledMeeting[]> => {
+  }): ScheduledMeeting[] => {
     const byId = new Map<string, ScheduledMeeting>();
     const seenRoomCodes = new Set<string>();
     for (const candidateClientId of clientIdCandidates(options.clientId)) {
@@ -227,13 +200,12 @@ export const registerScheduledMeetingRoutes = (
       });
       for (const meeting of meetings) {
         if (seenRoomCodes.has(meeting.roomCode)) continue;
-        const normalized =
-          meeting.clientId === options.clientId
-            ? meeting
-            : await migrateMeetingNamespace(meeting, options.clientId);
-        if (!normalized) continue;
-        seenRoomCodes.add(normalized.roomCode);
-        byId.set(normalized.id, normalized);
+        const belongsHere =
+          meeting.clientId === options.clientId ||
+          canMigrateClientNamespace(meeting.clientId, options.clientId);
+        if (!belongsHere) continue;
+        seenRoomCodes.add(meeting.roomCode);
+        byId.set(meeting.id, meeting);
       }
     }
     return Array.from(byId.values()).sort(
@@ -248,7 +220,7 @@ export const registerScheduledMeetingRoutes = (
     const includeAll = req.query.scope === "all" && user.isAdmin;
     const statusFilter = parseStatusFilter(req.query.status);
 
-    const list = await listMeetingsForClient({
+    const list = listMeetingsForClient({
       clientId,
       ownerEmail: user.email || undefined,
       includeAll,
@@ -298,7 +270,7 @@ export const registerScheduledMeetingRoutes = (
       res.status(400).json({ error: "Room code is required" });
       return;
     }
-    const meeting = await findMeetingByRoomCode(clientId, roomCode);
+    const meeting = findMeetingByRoomCode(clientId, roomCode);
     if (!meeting) {
       res.status(404).json({ error: "Scheduled meeting not found" });
       return;
@@ -317,7 +289,7 @@ export const registerScheduledMeetingRoutes = (
       res.status(400).json({ error: "Room code is required" });
       return;
     }
-    const meeting = await findMeetingByRoomCode(clientId, roomCode);
+    const meeting = findMeetingByRoomCode(clientId, roomCode);
     if (!meeting) {
       res.status(404).json({ error: "Scheduled meeting not found" });
       return;

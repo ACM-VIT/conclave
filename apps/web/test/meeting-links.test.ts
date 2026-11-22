@@ -11,23 +11,37 @@ afterEach(() => vi.unstubAllEnvs());
 const ROOM = "abc-defg-hij";
 
 type Booking = { clientId: string; roomCode: string };
+const olderSfu = { reportsClientId: false };
 
 // The SFU's by-room lookup: the asked tenant first, then the deployment's
 // default and Conclave's legacy ids, returning the booking with its own id.
-const sfuLookup = (bookedUnder: string[]) => async (clientId: string) => {
-  const serverDefault = canonicalizeSfuClientId(process.env.SFU_CLIENT_ID) ?? "conclave";
-  for (const candidate of [clientId, serverDefault, "conclave", "default", "public"]) {
-    if (bookedUnder.includes(candidate)) return { clientId: candidate, roomCode: ROOM };
-  }
-  return null;
-};
+const sfuLookup =
+  (bookedUnder: string[], { reportsClientId = true } = {}) =>
+  async (clientId: string) => {
+    const serverDefault = canonicalizeSfuClientId(process.env.SFU_CLIENT_ID) ?? "conclave";
+    for (const candidate of [clientId, serverDefault, "conclave", "default", "public"]) {
+      if (bookedUnder.includes(candidate)) {
+        return reportsClientId
+          ? { clientId: candidate, roomCode: ROOM }
+          : { roomCode: ROOM };
+      }
+    }
+    return null;
+  };
 
 // What /[code] opens: a scheduled meeting found for the link, otherwise the
 // link's tenant, otherwise the browser default.
-const tenantOpenedBy = async (path: string, bookedUnder: string[] = []) => {
+const tenantOpenedBy = async (
+  path: string,
+  bookedUnder: string[] = [],
+  options?: { reportsClientId?: boolean },
+) => {
   const linked =
     new URL(path, "https://web.test").searchParams.get("clientId") ?? undefined;
-  const found = await findScheduledMeetingForLink<Booking>(linked, sfuLookup(bookedUnder));
+  const found = await findScheduledMeetingForLink<Partial<Booking>>(
+    linked,
+    sfuLookup(bookedUnder, options),
+  );
   return found?.clientId ?? (canonicalizeSfuClientId(linked) || resolveBrowserSfuClientId());
 };
 
@@ -83,4 +97,15 @@ describe("meeting links", () => {
 
     expect(await tenantOpenedBy(`/${ROOM}`)).toBe("acme");
   });
+
+  it("never labels an older SFU's booking with the browser default", async () => {
+    vi.stubEnv("NEXT_PUBLIC_SFU_CLIENT_ID", "acme");
+    vi.stubEnv("SFU_CLIENT_ID", "");
+
+    expect(await tenantOpenedBy(`/${ROOM}`, ["conclave"], olderSfu)).toBe("conclave");
+    expect(await tenantOpenedBy(`/${ROOM}?clientId=conclave`, ["conclave"], olderSfu)).toBe(
+      "conclave",
+    );
+  });
 });
+
