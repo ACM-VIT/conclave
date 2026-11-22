@@ -14,7 +14,10 @@ import {
 import { pollsContract } from "@conclave/apps-sdk/polls/core";
 import { pollsAuthority } from "@conclave/apps-sdk/polls/server";
 import { qaAuthority } from "@conclave/apps-sdk/qa/server";
-import { getRoomAuthority } from "../../server/apps/authority/index.js";
+import {
+  getRoomAuthority,
+  socketPressure,
+} from "../../server/apps/authority/index.js";
 import { forceCloseRoom } from "../../server/rooms.js";
 import {
   getOrCreateWebinarRoomConfig,
@@ -297,6 +300,64 @@ describe("authority transport on real sockets", () => {
     expect(result).toEqual({ ok: false, code: "unknown-outcome" });
     expect(rows(host, "notes")).toEqual([]);
   });
+
+  it("holds patches back from a polling client that has stopped asking for them", async () => {
+    // Only the bytes can say this client is behind: the packet marks are out of reach.
+    const stack = await start([probeAuthority], {
+      socketSoftBytes: 24 * 1024,
+      socketSoftPackets: 100_000,
+      socketHardPackets: 1_000_000,
+      lagRecheckMs: 50,
+    });
+    const hostPeer = await open(stack, asha, probeContract);
+    const slow = await open(stack, priya, probeContract, { transports: ["polling"] });
+    const serverSide = stack.io.sockets.sockets.get(slow.socket.id ?? "");
+    if (!serverSide) throw new Error("no server socket for the polling client");
+    const authority = getRoomAuthority(stack.state, stack.room);
+    if (!authority) throw new Error("the room has no authority runtime");
+    const transport = slow.socket.io.engine.transport as unknown as {
+      pause(done: () => void): void;
+      readyState: string;
+      _poll(): void;
+    };
+    const before = socketPressure(serverSide);
+    const framesBefore = slow.frames.length;
+    // The client stops polling, as one on a stalled connection would. The
+    // poll it already has open is answered, and it asks for nothing after.
+    transport.pause(() => {});
+
+    // Sixty notes of about 4 KB each, changed one after another.
+    const text = (round: number) => `${round} `.padEnd(3_900, "x");
+    const queued: number[] = [];
+    for (let round = 0; round < 60; round += 1) {
+      await hostPeer.session.act("put", { id: `n${round % 5}`, text: text(round) });
+      await wait(12);
+      queued.push(socketPressure(serverSide).packets);
+    }
+    await until(() => row(hostPeer, "notes", "n4") !== null, "the host has the last notes");
+    const behind = socketPressure(serverSide);
+    const patchesQueuedAtTheEnd = queued[queued.length - 1] - queued[queued.length - 10];
+
+    // It polls again, and is caught up with one whole view.
+    transport.readyState = "open";
+    transport._poll();
+    await until(
+      () => field(row(slow, "notes", "n4"), "text") === text(59),
+      "the slow client has the latest notes",
+      6_000,
+    );
+
+    expect(before).toEqual({ packets: 0, bytes: 0 });
+    // Its queue is counted in bytes, and passes the mark long before 60 patches.
+    expect(behind.bytes).toBeGreaterThan(24 * 1024);
+    expect(behind.bytes).toBeLessThan(60 * 3_900);
+    expect(behind.packets).toBeLessThan(20);
+    // Once it was behind, nothing more was queued for it.
+    expect(patchesQueuedAtTheEnd).toBe(0);
+    expect(authority.stats.resnapshots).toBeGreaterThanOrEqual(1);
+    expect(slow.frames.slice(framesBefore).some((frame) => frame.kind === "replace")).toBe(true);
+    expect(rows(slow, "notes").length).toBe(5);
+  }, 20_000);
 
   it("fires a timer on the server with no client asking", async () => {
     const stack = await start([probeAuthority]);

@@ -18,16 +18,19 @@ export type ViewOps = { put: ProjectedRow[]; remove: RowRef[]; bytes: number };
 
 type Delivered = { encoded: string; value: Json; bytes: number };
 
+/** What a projected key became at one version of the views: a row, or none. */
+type Step = { at: number; encoded: string | undefined };
+
 /**
- * One projected key that changed since its audience was last told: when it
- * first changed, when it last did, and what the audience held before.
+ * One projected key that changed since its audience was last told: what the
+ * audience held before, and each thing it became since, oldest first. From
+ * that, what any one viewer holds of it is known exactly, whenever their
+ * snapshot was read.
  */
 type Untold = {
-  /** The version of the views at the first change, and at the last. */
-  since: number;
-  at: number;
   /** The row as it was before the first change, or undefined for none. */
   before: string | undefined;
+  steps: Step[];
 };
 
 /** What one audience (a role, or one subject) holds of one bucket. */
@@ -98,10 +101,12 @@ type Told = Untold & {
 
 /**
  * What one audience is told in one flush. Its viewers did not all take
- * their view at the same moment, so each is told from their own: a change
- * their snapshot already had is left out, and so is a row that came and
- * went before they looked. Nobody is told of a row that was gone before
- * their snapshot, not even its key.
+ * their view at the same moment, so each is told from their own. For every
+ * changed row, what a viewer holds is the row as it stood at their snapshot,
+ * and they are sent the difference between that and the row now. So a
+ * viewer is told to drop a row only if they were handed it: one that came
+ * and went without ever being in their view is not named to them, not even
+ * by its key, whatever it did in between.
  */
 export class ViewChanges {
   /** The first version any of these changes was made at. */
@@ -110,7 +115,7 @@ export class ViewChanges {
 
   constructor(private readonly told: readonly Told[]) {
     this.since = told.reduce(
-      (first, change) => Math.min(first, change.since),
+      (first, change) => Math.min(first, change.steps[0].at),
       Number.POSITIVE_INFINITY,
     );
   }
@@ -131,12 +136,14 @@ export class ViewChanges {
   private opsSince(version: number): ViewOps {
     const ops = emptyOps();
     for (const change of this.told) {
-      // Their snapshot was read after the last change, so it has it.
-      if (version >= change.at) continue;
-      // What they hold is known only if they looked before the first change.
-      const knownBefore = version < change.since;
+      // The row as their snapshot had it: the last thing it became by then.
+      let held = change.before;
+      for (const step of change.steps) {
+        if (step.at > version) break;
+        held = step.encoded;
+      }
       if (change.now) {
-        if (knownBefore && change.before === change.now.encoded) continue;
+        if (held === change.now.encoded) continue;
         ops.put.push({
           bucket: change.bucket,
           key: change.key,
@@ -144,7 +151,8 @@ export class ViewChanges {
         });
         ops.bytes += change.now.bytes;
       } else {
-        if (knownBefore && change.before === undefined) continue;
+        // Never in their view, so there is nothing for them to drop.
+        if (held === undefined) continue;
         ops.remove.push({ bucket: change.bucket, key: change.key });
         ops.bytes += change.bucket.length + change.key.length + ROW_OVERHEAD_BYTES;
       }
@@ -510,18 +518,23 @@ export class ViewTracker {
   }
 
   /**
-   * Notes that a key is about to change for an audience whose viewers hold
-   * it as it is now. `later` marks a row a `clear` took, which is told in
-   * batches.
+   * Notes what a key is about to become for an audience whose viewers hold
+   * it as it is now: the row `next`, or nothing. `later` marks a row a
+   * `clear` took, which is told in batches.
    */
-  private note(audience: Audience, bucket: Bucket, key: string, later: boolean): void {
+  private note(
+    audience: Audience,
+    bucket: Bucket,
+    key: string,
+    later: boolean,
+    next: string | undefined,
+  ): void {
     const noted = bucket.untold.get(key) ?? bucket.owed.get(key);
-    const change = noted ?? {
-      since: this.version,
-      at: this.version,
-      before: bucket.rows.get(key)?.encoded,
-    };
-    change.at = this.version;
+    const change = noted ?? { before: bucket.rows.get(key)?.encoded, steps: [] };
+    // One version is one moment: only where the key ended up in it counts.
+    const last = change.steps[change.steps.length - 1];
+    if (last?.at === this.version) last.encoded = next;
+    else change.steps.push({ at: this.version, encoded: next });
     (later ? bucket.untold : bucket.owed).delete(key);
     (later ? bucket.owed : bucket.untold).set(key, change);
     this.changed.add(audience);
@@ -534,7 +547,7 @@ export class ViewTracker {
     if (!bucket || key === undefined) return;
     bucket.bySource.delete(source);
     if (bucket.owner.get(key) !== source) return;
-    this.note(audience, bucket, key, true);
+    this.note(audience, bucket, key, true, undefined);
     bucket.owner.delete(key);
     bucket.rows.delete(key);
   }
@@ -556,7 +569,7 @@ export class ViewTracker {
     }
     bucket.bySource.delete(source);
     if (bucket.owner.get(previousKey) !== source) return;
-    this.note(audience, bucket, previousKey, false);
+    this.note(audience, bucket, previousKey, false, undefined);
     bucket.owner.delete(previousKey);
     bucket.rows.delete(previousKey);
   }
@@ -584,7 +597,7 @@ export class ViewTracker {
     bucket.bySource.set(source, projected.key);
     bucket.owner.set(projected.key, source);
     if (bucket.rows.get(projected.key)?.encoded === encoded) return;
-    if (tell) this.note(audience, bucket, projected.key, false);
+    if (tell) this.note(audience, bucket, projected.key, false, encoded);
     const bytes =
       Buffer.byteLength(encoded) +
       name.length +

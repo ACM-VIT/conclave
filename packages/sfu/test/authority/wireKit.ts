@@ -20,6 +20,10 @@ import type { AuthorityModule } from "@conclave/apps-sdk/authority/server";
 import { config } from "../../config/config.js";
 import { Room } from "../../config/classes/Room.js";
 import { createAppsAuthorityRuntime } from "../../server/apps/authority/index.js";
+import {
+  DEFAULT_AUTHORITY_LIMITS,
+  type AuthorityLimits,
+} from "../../server/apps/authority/limits.js";
 import { LocalRoomRegistry } from "../../server/roomRegistry.js";
 import { createSfuSocketServer } from "../../server/socket/createSocketServer.js";
 import { createSfuState, type SfuState } from "../../server/state.js";
@@ -87,7 +91,10 @@ export const addRoom = (state: SfuState, id: string): Room => {
   return room;
 };
 
-export const start = async (modules: readonly AuthorityModule[] | null): Promise<Stack> => {
+export const start = async (
+  modules: readonly AuthorityModule[] | null,
+  limits: Partial<AuthorityLimits> = {},
+): Promise<Stack> => {
   const state = createSfuState({
     roomRegistry: new LocalRoomRegistry({
       instanceId: "authority-wire",
@@ -95,7 +102,11 @@ export const start = async (modules: readonly AuthorityModule[] | null): Promise
       ttlMs: 45_000,
     }),
     appsAuthority: modules
-      ? createAppsAuthorityRuntime({ modules, verifyViews: true })
+      ? createAppsAuthorityRuntime({
+          modules,
+          verifyViews: true,
+          limits: { ...DEFAULT_AUTHORITY_LIMITS, ...limits },
+        })
       : null,
   });
   const http = createServer();
@@ -126,6 +137,7 @@ export const connect = async (
   options: {
     join?: { roomId: string; joinMode?: string };
     reconnection?: boolean;
+    transports?: ("polling" | "websocket")[];
     /** Runs before the join, as a client that listens first would. */
     prepare?: (socket: ClientSocket) => void;
   } = {},
@@ -145,7 +157,7 @@ export const connect = async (
   );
   const socket = connectSocket(stack.url, {
     auth: { token },
-    transports: ["websocket"],
+    transports: options.transports ?? ["websocket"],
     forceNew: true,
     reconnection: options.reconnection ?? false,
     reconnectionDelay: 20,
@@ -177,11 +189,13 @@ export const open = async <C extends AuthorityContract>(
     ackTimeoutMs?: number;
     expectReady?: boolean;
     reconnection?: boolean;
+    transports?: ("polling" | "websocket")[];
     join?: { roomId: string; joinMode?: string };
   } = {},
 ): Promise<Peer<C>> => {
   const connection = await connect(stack, who, {
     reconnection: options.reconnection,
+    transports: options.transports,
     join: options.join,
   });
   const client = new AuthorityClient({

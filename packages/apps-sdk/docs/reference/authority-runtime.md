@@ -53,7 +53,7 @@ The room epoch changes when the room is recreated. A request under an old epoch 
 | Work in one transaction | 50,000 operations. A read or write is one. A `scan` costs one for each row it returns. Rows that are only walked, as `count` and `clear` do under a prefix, cost about one per 64. An action that goes over fails and keeps nothing, even if its handler catches the error |
 | Rows of a `clear` that viewers who held them are told of per flush | 1,000 for each role, and 1,000 between everyone's own rows |
 | Subscriptions per socket | 16 |
-| Socket behind (resnapshot later) | more than 256 queued packets or 1 MiB |
+| Socket behind (resnapshot later) | more than 256 queued packets or 1 MiB. The queue is counted in bytes on every transport, long polling included |
 | Query on a socket that is behind | refused with `busy` |
 | Streamed result on a socket that falls behind | waits for it, cut off after 5 s |
 | Socket disconnected | more than 4,096 queued packets or 8 MiB |

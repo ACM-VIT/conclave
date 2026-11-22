@@ -17,7 +17,7 @@ import { defineAuthority, type Subject } from "@conclave/apps-sdk/authority/serv
 import { Admin } from "../../config/classes/Admin.js";
 import { Client } from "../../config/classes/Client.js";
 import { Room } from "../../config/classes/Room.js";
-import { getRoomAuthority } from "../../server/apps/authority/index.js";
+import { getRoomAuthority, socketPressure } from "../../server/apps/authority/index.js";
 import { AuthorityInstance, type Actor } from "../../server/apps/authority/instance.js";
 import { DEFAULT_AUTHORITY_LIMITS } from "../../server/apps/authority/limits.js";
 import { ensureWebinarRoomConfig } from "../../server/scheduledWebinarScheduler.js";
@@ -776,6 +776,69 @@ describe("a view taken between a write and its flush", () => {
     expect(await room.converged()).toBe(true);
   });
 
+  it("names no question to a viewer who was never handed it, however it came and went since", async () => {
+    const room = new Harness([qaAuthority]);
+    const hostTab = await room.open(host, qaContract);
+    const early = await room.open(priya, qaContract);
+    const asked = await early.act("ask", { text: "Now you see me" });
+    const id = field(asked.ok ? asked.value : null, "id") as string;
+    await room.deliver();
+    const earlyHeld = early.row("questions", id) !== null;
+
+    // Shown. Hidden when Ravi opens the app. Shown again when Tara opens
+    // it. Hidden again. All of it before the flush.
+    const flushesBefore = room.authority.stats.flushes;
+    await hostTab.act("moderate", { id, action: "dismissed" });
+    const late = await room.open(ravi, qaContract);
+    const handedToLate = handed(late, "questions").map((row) => row.key);
+    await hostTab.act("moderate", { id, action: "reopen" });
+    const later = await room.open(person("tara@example.com", "Tara"), qaContract);
+    const handedToLater = handed(later, "questions").map((row) => row.key);
+    await hostTab.act("moderate", { id, action: "dismissed" });
+    const flushedMeanwhile = room.authority.stats.flushes - flushesBefore;
+    await room.deliver();
+
+    expect(earlyHeld).toBe(true);
+    expect(flushedMeanwhile).toBe(0);
+    expect(handedToLate).toEqual([]);
+    expect(handedToLater).toEqual([id]);
+    // Ravi never held it, so he is told nothing: not even its id, to drop.
+    expect(patches(late.frames)).toEqual([]);
+    expect(JSON.stringify(late.frames)).not.toContain(id);
+    // Priya and Tara did hold it, and are told to drop it.
+    expect(toldToDrop(early)).toContain(id);
+    expect(toldToDrop(later)).toContain(id);
+    expect([early.row("questions", id), later.row("questions", id)]).toEqual([null, null]);
+    expect(await room.converged()).toBe(true);
+  });
+
+  it("sends a viewer a question that was hidden when they looked and is shown since", async () => {
+    const room = new Harness([qaAuthority]);
+    const hostTab = await room.open(host, qaContract);
+    const early = await room.open(priya, qaContract);
+    const asked = await early.act("ask", { text: "Back again" });
+    const id = field(asked.ok ? asked.value : null, "id") as string;
+    await room.deliver();
+    const earlyFrames = early.frames.length;
+
+    await hostTab.act("moderate", { id, action: "dismissed" });
+    const late = await room.open(ravi, qaContract);
+    const handedToLate = handed(late, "questions").map((row) => row.key);
+    await hostTab.act("moderate", { id, action: "reopen" });
+    await room.deliver();
+
+    expect(handedToLate).toEqual([]);
+    expect(field(late.row("questions", id), "text")).toBe("Back again");
+    // Priya holds it exactly as it is again, so she is sent nothing of it.
+    expect(
+      patches(early.frames.slice(earlyFrames)).flatMap((frame) => [
+        ...frame.put.filter((row) => row.bucket === "questions"),
+        ...frame.remove.filter((row) => row.bucket === "questions"),
+      ]),
+    ).toEqual([]);
+    expect(await room.converged()).toBe(true);
+  });
+
   it("sends a change made after a view was taken to that viewer too", async () => {
     const room = new Harness([probeAuthority]);
     const hostTab = await room.open(host, probeContract);
@@ -1257,6 +1320,36 @@ describe("bounds", () => {
     expect(busy(fromHost)).toBe(2);
   });
 
+  it("holds a person to their cooldown when the table of limits is cleaned up", async () => {
+    // A table small enough that every new person's first action cleans it.
+    const room = new Harness([qaAuthority], {
+      runtime: { limits: { ...DEFAULT_AUTHORITY_LIMITS, rateBuckets: 2 } },
+    });
+    const priyaTab = await room.open(priya, qaContract);
+    const others = [await room.open(ravi, qaContract), await room.open(host, qaContract)];
+
+    // Three questions in a burst, then one every ten seconds.
+    const burst: AuthorityResult<Json>[] = [];
+    for (let index = 0; index < 4; index += 1) {
+      burst.push(await priyaTab.session.act("ask", { text: `Question ${index}` }));
+    }
+    await vi.advanceTimersByTimeAsync(1_000);
+    for (const other of others) await other.session.act("ask", { text: "Mine" });
+    const afterOneSecond = await priyaTab.session.act("ask", { text: "Again, a second later" });
+    await vi.advanceTimersByTimeAsync(9_000);
+    const afterTen = await priyaTab.session.act("ask", { text: "Again, ten seconds on" });
+
+    expect(burst.map((result) => (result.ok ? "ok" : result.code))).toEqual([
+      "ok",
+      "ok",
+      "ok",
+      "rate-limited",
+    ]);
+    expect(afterOneSecond).toMatchObject({ ok: false, code: "rate-limited" });
+    // Her fourth question is refused for being her fourth open one, not for its pace.
+    expect(afterTen).toMatchObject({ ok: false, code: "rejected" });
+  });
+
   it("caps subscriptions per socket", async () => {
     const room = new Harness([probeAuthority], {
       runtime: { limits: { ...DEFAULT_AUTHORITY_LIMITS, subscriptionsPerSocket: 2 } },
@@ -1548,6 +1641,39 @@ describe("large views and slow sockets", () => {
 
     expect(raviTab.state).toEqual({ kind: "revoked", reason: "too-large" });
     expect(replaces(raviTab.frames)).toEqual([]);
+  });
+
+  it("counts what is queued for a socket in bytes as well as packets, on any transport", () => {
+    type Queued = { type: string; data?: unknown };
+    const socketWith = (writeBuffer: Queued[], bufferedAmount?: number) =>
+      ({
+        conn: {
+          writeBuffer,
+          transport: bufferedAmount === undefined ? {} : { socket: { bufferedAmount } },
+        },
+      }) as unknown as Parameters<typeof socketPressure>[0];
+    const part = "x".repeat(64 * 1024);
+
+    // Long polling has no socket to ask: all there is to count is the queue.
+    const polling = socketPressure(
+      socketWith(Array.from({ length: 20 }, () => ({ type: "message", data: part }))),
+    );
+    // A WebSocket holds bytes below the queue as well, and both count.
+    const webSocket = socketPressure(
+      socketWith(
+        [
+          { type: "message", data: "\u00e9".repeat(10) },
+          { type: "message", data: Buffer.alloc(100) },
+          { type: "ping" },
+        ],
+        5_000,
+      ),
+    );
+
+    expect(polling).toEqual({ packets: 20, bytes: 20 * 64 * 1024 });
+    expect(polling.bytes).toBeGreaterThan(DEFAULT_AUTHORITY_LIMITS.socketSoftBytes);
+    expect(webSocket).toEqual({ packets: 3, bytes: 20 + 100 + 5_000 });
+    expect(socketPressure({} as Parameters<typeof socketPressure>[0])).toEqual({ packets: 0, bytes: 0 });
   });
 
   it("skips patches for a socket that fell behind, then sends it a fresh view", async () => {
