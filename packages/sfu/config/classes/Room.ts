@@ -3307,6 +3307,14 @@ export class Room {
     return userKeys;
   }
 
+  /** The seats held under `userKey` and every other key of the same guest. */
+  seatsOfSameGuest(userKey: string): string[] {
+    const userKeys = new Set(this.identitiesOfSameGuest(userKey));
+    return Array.from(this.userKeysById)
+      .filter(([, key]) => userKeys.has(key))
+      .map(([userId]) => userId);
+  }
+
   /**
    * A block on one key keeps out every key of the same guest, for as long
    * as the blocked key is on the list.

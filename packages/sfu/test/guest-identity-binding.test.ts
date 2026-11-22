@@ -16,6 +16,7 @@ import { LocalRoomRegistry } from "../server/roomRegistry.js";
 import type { SfuAuthPayload } from "../server/socket/auth.js";
 import { createConnectionContext } from "../server/socket/context.js";
 import { registerJoinRoomHandler } from "../server/socket/handlers/joinRoom.js";
+import { registerWebinarInteractionHandlers } from "../server/socket/handlers/webinarInteractionHandlers.js";
 import { createSfuState, type SfuState } from "../server/state.js";
 import {
   getOrCreateWebinarRoomConfig,
@@ -28,18 +29,19 @@ const makeSocket = (id: string, user: SfuAuthPayload) => {
   const handlers = new Map<string, Handler>();
   const leave = vi.fn();
   const emit = vi.fn();
+  const disconnect = vi.fn();
   const socket = {
     id,
     data: { user },
     on: (event: string, handler: Handler) => handlers.set(event, handler),
     emit,
-    disconnect: vi.fn(),
+    disconnect,
     connected: true,
     join: vi.fn(),
     leave,
     to: () => ({ emit: vi.fn() }),
   } as unknown as Socket;
-  return { socket, handlers, leave, emit };
+  return { socket, handlers, leave, emit, disconnect };
 };
 
 const makeState = (): SfuState => {
@@ -320,7 +322,7 @@ describe("a stage invite for a guest whose key differs between the audience and 
   // A locked webinar: only the host's invite gets anyone past the lock.
   const invited = async () => {
     const state = makeState();
-    await join(state, guestHost);
+    const host = await join(state, guestHost);
     const room = state.rooms.get("conclave:room")!;
     const config = getOrCreateWebinarRoomConfig(state.webinarConfigs, room.channelId);
     config.enabled = true;
@@ -334,7 +336,7 @@ describe("a stage invite for a guest whose key differs between the audience and 
     expect((await join(state, audience, "launch")).ack).toHaveBeenCalledWith(joined);
     room.setLocked(true);
     room.promoteWebinarUserKey(audience.userId);
-    return { state, room };
+    return { state, room, host };
   };
 
   it("lets the invited guest onto the stage under its other key", async () => {
@@ -350,16 +352,42 @@ describe("a stage invite for a guest whose key differs between the audience and 
     expect(room.isWebinarPromotedUserKey(audience.userId)).toBe(true);
   });
 
-  it("keeps a guest moved back to the audience off the stage under every key until a newer invite (Greptile)", async () => {
-    const { state, room } = await invited();
+  it("moves every stage tab of a demoted guest off the stage at once, and keeps them off until a newer invite (Greptile)", async () => {
+    const { state, room, host } = await invited();
     const secondStageTab = { ...onStage, userId: "guest-gp_MMMMMMMMMMMMMMMMMMMMMM", sessionId: "view-2" } satisfies SfuAuthPayload;
+    const otherAudience = { ...audience, userId: "guest-gp_NNNNNNNNNNNNNNNNNNNNNN", sessionId: "view-3", guestProof: "proof-of-another-viewer-pass" } satisfies SfuAuthPayload;
+    const otherOnStage = { ...otherAudience, userId: "guest-gp_OOOOOOOOOOOOOOOOOOOOOO", joinMode: "meeting", guestRoom: "room" } satisfies SfuAuthPayload;
     const onStageAs: unknown = expect.objectContaining({ status: "joined", webinarRole: "participant" });
-    expect((await join(state, onStage)).ack).toHaveBeenCalledWith(onStageAs);
-    expect((await join(state, secondStageTab)).ack).toHaveBeenCalledWith(onStageAs);
+    const first = await join(state, onStage);
+    const second = await join(state, secondStageTab);
+    expect(first.ack).toHaveBeenCalledWith(onStageAs);
+    expect(second.ack).toHaveBeenCalledWith(onStageAs);
+    await join(state, otherAudience, "launch");
+    room.promoteWebinarUserKey(otherAudience.userId);
+    expect((await join(state, otherOnStage)).ack).toHaveBeenCalledWith(onStageAs);
+    const seatOf = (user: SfuAuthPayload) => `${user.userId}#${user.sessionId}`;
 
     // The host moves the first stage tab back to the audience.
-    room.markWebinarDemotedUserKey(onStage.userId);
-    room.removeClient(`${onStage.userId}#${onStage.sessionId}`);
+    registerWebinarInteractionHandlers(host.context);
+    const demoted = vi.fn();
+    await host.peer.handlers.get("webinar:demoteParticipant")!(...[
+      { userId: seatOf(onStage) },
+      demoted,
+    ] as never[]);
+
+    expect(demoted).toHaveBeenCalledWith({ success: true });
+    for (const tab of [first, second]) {
+      expect(tab.peer.emit).toHaveBeenCalledWith(
+        "webinar:demoted",
+        expect.objectContaining({ roomId: room.id, webinarLinkSlug: "launch" }),
+      );
+      expect(tab.peer.disconnect).toHaveBeenCalledWith(true);
+    }
+    expect(room.getClient(seatOf(onStage))).toBeUndefined();
+    expect(room.getClient(seatOf(secondStageTab))).toBeUndefined();
+    expect(room.getClient(seatOf(audience))?.isWebinarAttendee).toBe(true);
+    expect(room.getClient(seatOf(otherOnStage))?.isWebinarAttendee).toBe(false);
+    expect(room.getClient(guestHostSeat)).toBeDefined();
     await endOfTurn();
     const firstBack = await join(state, onStage);
     const secondBack = await join(state, secondStageTab);
