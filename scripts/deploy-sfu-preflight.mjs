@@ -270,7 +270,9 @@ export const resolveSfuTargets = ({ allowPublicRedis = false, compose, serviceNa
     } else if (publicUrl && !isLocalUrl(publicUrl) && !isPublicIp(announcedIpInput)) {
       errors.push(`${service}: ANNOUNCED_IP must be a publicly routable IP for a non-local public URL.`);
     }
-    if (!String(env.SFU_SECRET || "").trim() || env.SFU_SECRET === "development-secret") {
+    // Startup trims SFU_SECRET before it checks or uses it (config/config.ts).
+    const secret = String(env.SFU_SECRET || "").trim();
+    if (!secret || secret === "development-secret") {
       errors.push(`${service}: SFU_SECRET must be a non-default value.`);
     }
     checkProductionMode(env, service, errors);
@@ -283,7 +285,7 @@ export const resolveSfuTargets = ({ allowPublicRedis = false, compose, serviceNa
       region,
       rtcMaxPort,
       rtcMinPort,
-      secret: String(env.SFU_SECRET || ""),
+      secret,
       serverPort,
       service,
     });

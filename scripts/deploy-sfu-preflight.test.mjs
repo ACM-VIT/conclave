@@ -449,6 +449,16 @@ const productionErrors = (environment) => {
   }
 };
 
+test("SFU_SECRET is checked the way startup reads it, trimmed", () => {
+  for (const secret of [" development-secret ", "development-secret\n", "   "]) {
+    assert.match(productionErrors({ SFU_SECRET: secret }).join("\n"), /SFU_SECRET must be a non-default value/, JSON.stringify(secret));
+  }
+  const compose = makeCompose();
+  compose.services["edge-dxb"].environment.SFU_SECRET = " shared-secret-value ";
+  compose.services["edge-fra"].environment.SFU_SECRET = "shared-secret-value";
+  assert.doesNotThrow(() => resolveSfuTargets({ compose }));
+});
+
 test("SFU services must run in production mode", () => {
   assert.match(productionErrors({ NODE_ENV: undefined }).join("\n"), /NODE_ENV must be production/);
   assert.match(productionErrors({ NODE_ENV: "development" }).join("\n"), /NODE_ENV must be production/);
