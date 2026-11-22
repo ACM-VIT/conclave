@@ -43,6 +43,8 @@ for (const envPath of envCandidates) {
 }
 
 const sfuSecret = resolveSfuSecret();
+// False when running on the public development fallback.
+const sfuSecretConfigured = sfuSecret !== "development-secret";
 const sfuSecretFingerprint = (() => {
   const value = sfuSecret;
   return createHash("sha256").update(value).digest("hex").slice(0, 12);
@@ -376,6 +378,7 @@ export const config = {
   version: process.env.SFU_VERSION || "dev",
   draining: toBoolean(process.env.SFU_DRAINING),
   sfuSecret,
+  sfuSecretConfigured,
   clientPolicies,
   openAi: {
     apiKey: openAiApiKey,

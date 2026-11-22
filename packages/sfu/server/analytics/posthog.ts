@@ -129,7 +129,7 @@ export const captureGameEvent = ({
     // alone is enough to roll events up.
     const groupKey = analyticsRoomKey(roomKey);
     const groupCacheKey = `${groupKey}::${distinctId}`;
-    if (!identifiedRoomGroups.has(groupCacheKey)) {
+    if (groupKey && !identifiedRoomGroups.has(groupCacheKey)) {
       posthog.groupIdentify({
         groupType: ROOM_GROUP_TYPE,
         groupKey,
@@ -142,7 +142,7 @@ export const captureGameEvent = ({
       distinctId,
       event,
       properties,
-      groups: { [ROOM_GROUP_TYPE]: groupKey },
+      ...(groupKey ? { groups: { [ROOM_GROUP_TYPE]: groupKey } } : {}),
     });
   } catch (error) {
     // Telemetry must never surface to the user or break the calling flow.

@@ -127,3 +127,5 @@ from exception messages and frame paths, cuts every URL to its origin and route 
 `/w/[code]`, `/[path]`), and drops the source lines posthog-node attaches to
 stack frames before sending. Config errors name the variable, never its value.
 Game events group by a keyed hash of the room (`room_<hmac>`), never its code.
+Without a real `SFU_SECRET` they are not grouped at all, and distinct ids use a
+key that lives only in that process.
