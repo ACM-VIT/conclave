@@ -318,8 +318,9 @@ final class ChatPresenter {
             implicitTarget = implicit.recipient?.userId ?? ""
         }
         let suppress = photoFileURL.isEmpty && ChatComposerPolicy.suppressesEmbeds(draft: trimmed, dismissedURL: url)
-        let replyServerId = replyRowId.isEmpty ? "" : rows.entry(for: replyRowId).row.serverId
-        onCommand?(ChatCommandRequest.make(ChatCommandKind.send, rowId: replyRowId, messageId: replyServerId,
+        flushDeferredRows()
+        let reply = replyTarget
+        onCommand?(ChatCommandRequest.make(ChatCommandKind.send, rowId: reply?.id ?? "", messageId: reply?.serverId ?? "",
                                            text: route.wireText, emoji: route.kind.rawValue, userId: implicitTarget,
                                            fileURL: photoFileURL, flag: suppress))
         if route.kind != ChatRouteKind.command {
@@ -343,8 +344,10 @@ final class ChatPresenter {
             return
         }
         sentGifs[gif.id] = gif
-        let replyServerId = replyRowId.isEmpty ? "" : rows.entry(for: replyRowId).row.serverId
-        onCommand?(ChatCommandRequest.make(ChatCommandKind.sendGif, rowId: replyRowId, messageId: replyServerId, text: gif.id,
+        flushDeferredRows()
+        let reply = replyTarget
+        onCommand?(ChatCommandRequest.make(ChatCommandKind.sendGif, rowId: reply?.id ?? "", messageId: reply?.serverId ?? "",
+                                           text: gif.id,
                                            emoji: gif.kind ?? "", fileURL: gif.url))
         replyRowId = ""
         inlineNotice = ChatFailure.none
@@ -529,7 +532,6 @@ final class ChatPresenter {
         hiddenSenderNames[userId] = displayName(userId)
         hiddenSenderTimes[userId] = now()
         if privateToUserId == userId { privateToUserId = "" }
-        if !replyRowId.isEmpty && rows.entry(for: replyRowId).row.senderId == userId { replyRowId = "" }
         onCommand?(ChatCommandRequest.make(ChatCommandKind.hideSender, userId: userId))
         rebuildRows(previousRowIds: currentTimeline.rowIds)
         publishComposer()
@@ -607,7 +609,14 @@ final class ChatPresenter {
         if catchesUp { suppressesNewRowTracking = true }
         rebuildRowsNow(previousRowIds: previousRowIds)
         suppressesNewRowTracking = !tracksNewRows
-        if catchesUp { publishComposer() }
+        let dropsReply = !replyRowId.isEmpty && !rowStore.hasEntry(replyRowId)
+        if dropsReply { replyRowId = "" }
+        if catchesUp || dropsReply { publishComposer() }
+    }
+
+    private var replyTarget: ChatRowModel? {
+        guard !replyRowId.isEmpty, rowStore.hasEntry(replyRowId) else { return nil }
+        return rowStore.entry(for: replyRowId).row
     }
 
     private func rebuildRowsNow(previousRowIds: [String]) {
@@ -1271,8 +1280,7 @@ final class ChatPresenter {
             }
         }
         var reply: ChatReplyRef? = nil
-        if !replyRowId.isEmpty && rowStore.hasEntry(replyRowId) {
-            let row = rowStore.entry(for: replyRowId).row
+        if let row = replyTarget {
             var media = ""
             if row.kind == ChatRowKind.photo { media = "photo" }
             if row.kind == ChatRowKind.gif { media = "gif" }
