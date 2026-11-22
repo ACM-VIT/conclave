@@ -993,6 +993,46 @@ export const forceRemoveClientNow = (options: {
   return true;
 };
 
+/**
+ * Blocks `userKey` and takes away what its guest has in the room right now:
+ * the waiting entry and the seats of that key, and those of the other tabs of
+ * the same guest pass. A join by any of them is refused from here on.
+ */
+export const blockUserKey = (
+  room: Room,
+  userKey: string,
+  options: {
+    reason: string;
+    kickPresent: boolean;
+    io: SocketIOServer;
+    state: SfuState;
+  },
+): { rejectedPendingUserKeys: string[]; kickedUserIds: string[] } => {
+  const userKeys = room.identitiesOfSameGuest(userKey);
+  const rejectedPendingUserKeys: string[] = [];
+  for (const key of userKeys) {
+    const pending = room.pendingClients.get(key);
+    if (!pending) continue;
+    pending.socket.emit("joinRejected", { roomId: room.id });
+    rejectedPendingUserKeys.push(key);
+  }
+  room.blockUser(userKey);
+  for (const key of rejectedPendingUserKeys) {
+    room.removePendingClient(key);
+  }
+
+  const kickedUserIds: string[] = [];
+  if (options.kickPresent) {
+    for (const [userId, key] of Array.from(room.userKeysById.entries())) {
+      if (!userKeys.includes(key)) continue;
+      if (kickClient(room, userId, options.reason, options)) {
+        kickedUserIds.push(userId);
+      }
+    }
+  }
+  return { rejectedPendingUserKeys, kickedUserIds };
+};
+
 export const kickClient = (
   room: Room,
   userId: string,

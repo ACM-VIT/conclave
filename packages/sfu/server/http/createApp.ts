@@ -22,6 +22,7 @@ import {
   clearAllRaisedHands,
   closeClientProducers,
   closeProducerById,
+  blockUserKey,
   kickClient,
   rejectAllPendingUsers,
   resolveRoom,
@@ -1410,23 +1411,15 @@ export const createSfuApp = ({
     const rejectedPending: string[] = [];
 
     for (const userKey of userKeys) {
-      const pending = lookup.room.pendingClients.get(userKey);
-      lookup.room.blockUser(userKey);
-
-      if (pending) {
-        pending.socket.emit("joinRejected", { roomId: lookup.room.id });
-        rejectedPending.push(userKey);
-      }
-
-      if (kickPresent) {
-        for (const [userId, key] of [
-          ...lookup.room.userKeysById.entries(),
-        ]) {
-          if (key !== userKey) continue;
-          if (kickClient(lookup.room, userId, reason, { io, state })) {
-            kickedUserIds.add(userId);
-          }
-        }
+      const result = blockUserKey(lookup.room, userKey, {
+        reason,
+        kickPresent,
+        io,
+        state,
+      });
+      rejectedPending.push(...result.rejectedPendingUserKeys);
+      for (const userId of result.kickedUserIds) {
+        kickedUserIds.add(userId);
       }
     }
 
@@ -1555,8 +1548,12 @@ export const createSfuApp = ({
       requestBody(req).reason,
       "Blocked by operator",
     );
-    lookup.room.blockUser(userKey);
-    kickClient(lookup.room, userId, reason, { io, state });
+    blockUserKey(lookup.room, userKey, {
+      reason,
+      kickPresent: true,
+      io,
+      state,
+    });
 
     res.json({
       success: true,

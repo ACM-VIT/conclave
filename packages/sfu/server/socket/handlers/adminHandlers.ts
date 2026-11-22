@@ -12,6 +12,7 @@ import {
   closeClientProducers,
   closeProducerById,
   closeProducerForMediaKey,
+  blockUserKey,
   kickClient,
   rejectAllPendingUsers,
   toPendingUserSnapshots,
@@ -1000,29 +1001,23 @@ export const registerAdminHandlers = (
       const rejectedPending: string[] = [];
 
       for (const userKey of userKeys) {
-        const pending = guard.room.pendingClients.get(userKey);
-        guard.room.blockUser(userKey);
-
-        if (pending) {
-          pending.socket.emit("joinRejected", { roomId: guard.room.id });
-          rejectedPending.push(userKey);
+        const result = blockUserKey(guard.room, userKey, {
+          reason,
+          kickPresent,
+          io,
+          state,
+        });
+        for (const rejectedUserKey of result.rejectedPendingUserKeys) {
+          rejectedPending.push(rejectedUserKey);
           for (const admin of guard.room.getAdmins()) {
             admin.socket.emit("userRejected", {
-              userId: userKey,
+              userId: rejectedUserKey,
               roomId: guard.room.id,
             });
           }
         }
-
-        if (kickPresent) {
-          for (const [userId, key] of [
-            ...guard.room.userKeysById.entries(),
-          ]) {
-            if (key !== userKey) continue;
-            if (kickClient(guard.room, userId, reason, { io, state })) {
-              kickedUserIds.add(userId);
-            }
-          }
+        for (const userId of result.kickedUserIds) {
+          kickedUserIds.add(userId);
         }
       }
 

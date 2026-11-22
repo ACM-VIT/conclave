@@ -18,18 +18,19 @@ type Handler = (...args: never[]) => void | Promise<void>;
 const makeSocket = (id: string, user: SfuAuthPayload) => {
   const handlers = new Map<string, Handler>();
   const leave = vi.fn();
+  const emit = vi.fn();
   const socket = {
     id,
     data: { user },
     on: (event: string, handler: Handler) => handlers.set(event, handler),
-    emit: vi.fn(),
+    emit,
     disconnect: vi.fn(),
     connected: true,
     join: vi.fn(),
     leave,
     to: () => ({ emit: vi.fn() }),
   } as unknown as Socket;
-  return { socket, handlers, leave };
+  return { socket, handlers, leave, emit };
 };
 
 const makeState = (): SfuState => {
@@ -325,6 +326,67 @@ describe("blocking a guest", () => {
     expect(sameTab.ack).toHaveBeenCalledWith(notAllowed);
     expect(otherTab.ack).toHaveBeenCalledWith(notAllowed);
     expect(someoneElse.ack).toHaveBeenCalledWith(joined);
+  });
+
+  it("removes every seated tab of the blocked guest's pass, and no one else", async () => {
+    const state = makeState();
+    const host = await join(state, guestHost);
+    const room = state.rooms.get("conclave:room")!;
+    const first = tab("tab-1", "proof-of-pass-e", "E");
+    const second = tab("tab-2", "proof-of-pass-e", "E");
+    const someoneElse = tab("tab-1", "proof-of-pass-f", "F");
+    await join(state, first);
+    const sibling = await join(state, second);
+    await join(state, someoneElse);
+
+    const blocked = vi.fn();
+    await host.peer.handlers.get("admin:blockUsers")!(...[
+      { userKeys: [first.userId] },
+      blocked,
+    ] as never[]);
+
+    expect(blocked).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: true,
+        kickedUserIds: expect.arrayContaining([
+          `${first.userId}#tab-1`,
+          `${second.userId}#tab-2`,
+        ]) as unknown,
+      }),
+    );
+    expect(room.getClient(`${first.userId}#tab-1`)).toBeUndefined();
+    expect(room.getClient(`${second.userId}#tab-2`)).toBeUndefined();
+    expect(sibling.peer.emit).toHaveBeenCalledWith(
+      "kicked",
+      expect.objectContaining({ roomId: "room" }),
+    );
+    expect(room.getClient(`${someoneElse.userId}#tab-1`)).toBeDefined();
+    expect(room.getClient(guestHostSeat)).toBeDefined();
+  });
+
+  it("sends away a tab of the blocked guest's pass that is waiting to be let in", async () => {
+    const state = makeState();
+    const host = await join(state, guestHost);
+    const room = state.rooms.get("conclave:room")!;
+    const first = tab("tab-1", "proof-of-pass-e", "E");
+    const second = tab("tab-2", "proof-of-pass-e", "E");
+    await join(state, first);
+    room.setLocked(true);
+    const waiting = await join(state, second);
+    expect(waiting.ack).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "waiting" }),
+    );
+
+    await host.peer.handlers.get("admin:blockUsers")!(...[
+      { userKeys: [first.userId] },
+      vi.fn(),
+    ] as never[]);
+
+    expect(room.pendingClients.has(second.userId)).toBe(false);
+    expect(waiting.peer.emit).toHaveBeenCalledWith(
+      "joinRejected",
+      expect.objectContaining({ roomId: "room" }),
+    );
   });
 
   it("lets every tab of the pass back in once the host unblocks it", async () => {

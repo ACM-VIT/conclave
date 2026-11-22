@@ -2646,6 +2646,20 @@ export class Room {
   }
 
   /**
+   * `userKey` and every other identity bound to the same guest pass: the
+   * guest's other tabs. A key with no proof has no other tabs to find.
+   */
+  identitiesOfSameGuest(userKey: string): string[] {
+    const proof = this.guestProofsByUserKey.get(userKey);
+    const userKeys = [userKey];
+    if (proof === undefined) return userKeys;
+    for (const [otherKey, otherProof] of this.guestProofsByUserKey) {
+      if (otherKey !== userKey && otherProof === proof) userKeys.push(otherKey);
+    }
+    return userKeys;
+  }
+
+  /**
    * A blocked guest's other tabs carry the same pass, so `guestProof` keeps
    * them out too for as long as any identity of that pass is blocked.
    */
