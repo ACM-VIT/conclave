@@ -457,9 +457,11 @@ const FRESH_READ_DEADLINE_MS = 1000;
 
 /**
  * Brings this SFU's copy of the meeting at a room code up to date with the
- * store, if the store holds a newer one. Each SFU loads meetings when it
- * starts, so without this an SFU that takes over a room would grant entry on
- * invitations another SFU has since changed, such as a removed invitee's.
+ * store. Each SFU loads meetings when it starts, so without this an SFU that
+ * takes over a room would grant entry on invitations another SFU has since
+ * changed, such as a removed invitee's. The store's list of removed invitees
+ * is taken as it is, whichever copy of the meeting is newer: SFUs change
+ * that list in the store one person at a time, never by saving a copy.
  * A store that cannot be read one meeting at a time, or does not answer in
  * a second, leaves the copy as it is: a room must not wait on it.
  */
@@ -479,15 +481,28 @@ export const refreshScheduledMeeting = async (
         timer = setTimeout(() => resolve(null), FRESH_READ_DEADLINE_MS);
       }),
     ]);
-    if (stored && stored.updatedAt > known.updatedAt) {
+    if (!stored) return;
+    if (stored.updatedAt > known.updatedAt) {
       unregisterStore(store, known);
       registerStore(store, stored);
+    } else {
+      known.readmissionRequiredEmails = stored.readmissionRequiredEmails;
     }
   } catch (error) {
     Logger.warn(`Failed to refresh scheduled meeting ${known.id}`, error);
   } finally {
     clearTimeout(timer);
   }
+};
+
+// A list of removed invitees with one person added to it, or taken off it.
+const withInvitee = (
+  removed: string[] | undefined,
+  email: string,
+  required: boolean,
+): string[] => {
+  const others = (removed ?? []).filter((candidate) => candidate !== email);
+  return required ? [...others, email] : others;
 };
 
 /**
@@ -507,12 +522,7 @@ export const setScheduledInviteeReadmission = (
   if (meeting.hostEmail !== email && meeting.attendeeEmail !== email) return null;
   const marked = meeting.readmissionRequiredEmails ?? [];
   if (marked.includes(email) === required) return null;
-  meeting.readmissionRequiredEmails = required
-    ? [...marked, email]
-    : marked.filter((candidate) => candidate !== email);
-  // Strictly later than the copy it changes, even within one millisecond:
-  // another SFU tells a newer copy from its own by this.
-  meeting.updatedAt = Math.max(Date.now(), meeting.updatedAt + 1);
+  meeting.readmissionRequiredEmails = withInvitee(marked, email, required);
   return meeting;
 };
 
@@ -574,6 +584,15 @@ export type ScheduledMeetingPersistence = {
   // One meeting as the store holds it now, or null if it holds none by that
   // id. SFUs that share a store read each other's changes through this.
   loadOne?: (id: string) => MaybePromise<ScheduledMeeting | null>;
+  // Adds one person to the meeting's removed invitees as the store holds
+  // them now, or takes them off. Saves never write that list: they carry an
+  // SFU's whole copy of a meeting, and a copy from before a removal would
+  // undo it.
+  setInviteeReadmission?: (
+    meetingId: string,
+    email: string,
+    required: boolean,
+  ) => MaybePromise<void>;
   close?: () => MaybePromise<void>;
   flush?: () => Promise<void>;
 };
@@ -743,6 +762,29 @@ const normalizeStoredMeeting = (raw: unknown): ScheduledMeeting | null => {
   };
 };
 
+// A meeting as a save writes it, without its removed invitees (see
+// setInviteeReadmission). An SFU from before that list existed writes the
+// same, and so cannot undo a removal either.
+const meetingRecord = (meeting: ScheduledMeeting): string =>
+  JSON.stringify({ ...meeting, readmissionRequiredEmails: undefined });
+
+// Removed invitees as a store lists them, one (meeting, email) pair at a
+// time, gathered by meeting.
+const removedInviteesByMeeting = (
+  pairs: Array<[meetingId: string, email: string]>,
+): Map<string, string[]> => {
+  const removed = new Map<string, string[]>();
+  for (const [meetingId, email] of pairs) {
+    removed.set(meetingId, [...(removed.get(meetingId) ?? []), email]);
+  }
+  return removed;
+};
+
+const textColumn = (row: unknown, column: string): string =>
+  row && typeof row === "object" && column in row
+    ? String((row as Record<string, unknown>)[column])
+    : "";
+
 const createSqliteScheduledMeetingPersistence = (
   path: string = scheduledMeetingsSqlitePath(),
 ): ScheduledMeetingPersistence => {
@@ -773,6 +815,11 @@ const createSqliteScheduledMeetingPersistence = (
       ON scheduled_meetings(client_id, room_code);
     CREATE INDEX IF NOT EXISTS scheduled_meetings_status_start_idx
       ON scheduled_meetings(status, scheduled_start_at);
+    CREATE TABLE IF NOT EXISTS scheduled_meeting_removed_invitees (
+      meeting_id TEXT NOT NULL,
+      email TEXT NOT NULL,
+      PRIMARY KEY (meeting_id, email)
+    );
   `);
 
   const insert = db.prepare(`
@@ -799,6 +846,21 @@ const createSqliteScheduledMeetingPersistence = (
   const loadRowById = db.prepare(
     "SELECT payload_json FROM scheduled_meetings WHERE id = ?",
   );
+  const removeInvitee = db.prepare(
+    "INSERT OR IGNORE INTO scheduled_meeting_removed_invitees (meeting_id, email) VALUES (?, ?)",
+  );
+  const restoreInvitee = db.prepare(
+    "DELETE FROM scheduled_meeting_removed_invitees WHERE meeting_id = ? AND email = ?",
+  );
+  const forgetRemovedInvitees = db.prepare(
+    "DELETE FROM scheduled_meeting_removed_invitees WHERE meeting_id = ?",
+  );
+  const loadRemovedInvitees = db.prepare(
+    "SELECT meeting_id, email FROM scheduled_meeting_removed_invitees",
+  );
+  const loadRemovedInviteesOf = db.prepare(
+    "SELECT email FROM scheduled_meeting_removed_invitees WHERE meeting_id = ?",
+  );
   let knownIds = new Set<string>();
 
   const upsertMeeting = (meeting: ScheduledMeeting): void => {
@@ -810,8 +872,12 @@ const createSqliteScheduledMeetingPersistence = (
       meeting.scheduledStartAt,
       meeting.scheduledEndAt,
       meeting.updatedAt,
-      JSON.stringify(meeting),
+      meetingRecord(meeting),
     );
+  };
+  const deleteMeeting = (id: string): void => {
+    deleteById.run(id);
+    forgetRemovedInvitees.run(id);
   };
 
   return {
@@ -824,7 +890,7 @@ const createSqliteScheduledMeetingPersistence = (
         }
         for (const id of knownIds) {
           if (!snapshotIds.has(id)) {
-            deleteById.run(id);
+            deleteMeeting(id);
           }
         }
         db.exec("COMMIT");
@@ -857,7 +923,7 @@ const createSqliteScheduledMeetingPersistence = (
       try {
         db.exec("BEGIN IMMEDIATE");
         for (const id of ids) {
-          deleteById.run(id);
+          deleteMeeting(id);
           knownIds.delete(id);
         }
         db.exec("COMMIT");
@@ -873,14 +939,19 @@ const createSqliteScheduledMeetingPersistence = (
         const meetings = loadRows
           .all()
           .map((row) => {
-            const payload =
-              row && typeof row === "object" && "payload_json" in row
-                ? String((row).payload_json)
-                : "";
+            const payload = textColumn(row, "payload_json");
             if (!payload) return null;
             return normalizeStoredMeeting(JSON.parse(payload));
           })
           .filter((entry): entry is ScheduledMeeting => Boolean(entry));
+        const removed = removedInviteesByMeeting(
+          loadRemovedInvitees
+            .all()
+            .map((row) => [textColumn(row, "meeting_id"), textColumn(row, "email")]),
+        );
+        for (const meeting of meetings) {
+          meeting.readmissionRequiredEmails = removed.get(meeting.id) ?? [];
+        }
         knownIds = new Set(meetings.map((meeting) => meeting.id));
         return meetings;
       } catch (error) {
@@ -889,12 +960,21 @@ const createSqliteScheduledMeetingPersistence = (
       }
     },
     loadOne: (id) => {
-      const row = loadRowById.get(id);
-      const payload =
-        row && typeof row === "object" && "payload_json" in row
-          ? String(row.payload_json)
-          : "";
-      return payload ? normalizeStoredMeeting(JSON.parse(payload)) : null;
+      const payload = textColumn(loadRowById.get(id), "payload_json");
+      const meeting = payload ? normalizeStoredMeeting(JSON.parse(payload)) : null;
+      if (meeting) {
+        meeting.readmissionRequiredEmails = loadRemovedInviteesOf
+          .all(id)
+          .map((row) => textColumn(row, "email"));
+      }
+      return meeting;
+    },
+    setInviteeReadmission: (meetingId, email, required) => {
+      try {
+        (required ? removeInvitee : restoreInvitee).run(meetingId, email);
+      } catch (error) {
+        Logger.error("Failed to persist a removed invitee", error);
+      }
     },
     close: () => db.close(),
   };
@@ -909,14 +989,69 @@ const readStoredMeetings = (path: string): ScheduledMeeting[] => {
     .filter((entry): entry is ScheduledMeeting => Boolean(entry));
 };
 
+// What the file says of each meeting's removed invitees. A file that cannot
+// be read says nothing, and the save about to replace it goes ahead.
+const storedRemovedInvitees = (path: string): Map<string, string[] | undefined> => {
+  try {
+    return new Map(
+      readStoredMeetings(path).map((meeting) => [
+        meeting.id,
+        meeting.readmissionRequiredEmails,
+      ]),
+    );
+  } catch {
+    return new Map();
+  }
+};
+
+// One file holding every meeting, rewritten whole. A save keeps the removed
+// invitees the file already has. Two SFUs writing it at once can still lose
+// each other's whole write, as they always could: this store is for one SFU.
 const createFileScheduledMeetingPersistence = (
   path: string = scheduledMeetingsPath(),
 ): ScheduledMeetingPersistence => ({
   save: (snapshot) => {
     try {
-      writeJsonAtomic(path, JSON.stringify(snapshot, null, 2));
+      const removed = storedRemovedInvitees(path);
+      writeJsonAtomic(
+        path,
+        JSON.stringify(
+          snapshot.map((meeting) => ({
+            ...meeting,
+            readmissionRequiredEmails:
+              removed.get(meeting.id) ?? meeting.readmissionRequiredEmails,
+          })),
+          null,
+          2,
+        ),
+      );
     } catch (error) {
       Logger.error("Failed to persist scheduled meetings to JSON", error);
+    }
+  },
+  setInviteeReadmission: (meetingId, email, required) => {
+    try {
+      writeJsonAtomic(
+        path,
+        JSON.stringify(
+          readStoredMeetings(path).map((meeting) =>
+            meeting.id === meetingId
+              ? {
+                  ...meeting,
+                  readmissionRequiredEmails: withInvitee(
+                    meeting.readmissionRequiredEmails,
+                    email,
+                    required,
+                  ),
+                }
+              : meeting,
+          ),
+          null,
+          2,
+        ),
+      );
+    } catch (error) {
+      Logger.error("Failed to persist a removed invitee to JSON", error);
     }
   },
   load: () => {
@@ -1053,12 +1188,40 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
     }
   }
 
+  // Removed invitees are members of one set, "<meeting id> <email>", changed
+  // with SADD and SREM. No save of a meeting touches it.
+  private get removedInviteesKey(): string {
+    return `${this.key}:removed-invitees`;
+  }
+
+  private removedInvitee(meetingId: string, email: string): string {
+    return `${meetingId} ${email}`;
+  }
+
+  private async removedInvitees(): Promise<Map<string, string[]>> {
+    const members = await this.client.sMembers(this.removedInviteesKey);
+    return removedInviteesByMeeting(
+      members.map((member) => {
+        const split = member.indexOf(" ");
+        return [member.slice(0, split), member.slice(split + 1)];
+      }),
+    );
+  }
+
+  private async withRemovedInvitees(
+    meeting: ScheduledMeeting,
+  ): Promise<ScheduledMeeting> {
+    const removed = await this.removedInvitees();
+    meeting.readmissionRequiredEmails = removed.get(meeting.id) ?? [];
+    return meeting;
+  }
+
   save(snapshot: ScheduledMeeting[]): void {
     this.knownMeetings = new Map(snapshot.map((meeting) => [meeting.id, meeting]));
     void this.fallback.save(snapshot);
     const payload = snapshot.map((meeting) => [
       meeting.id,
-      JSON.stringify(meeting),
+      meetingRecord(meeting),
     ] as const);
     this.queueWrite("save snapshot", async () => {
       const transaction = this.client.multi();
@@ -1077,10 +1240,19 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
     }
     void this.fallback.save(Array.from(this.knownMeetings.values()));
     const payload = Object.fromEntries(
-      meetings.map((meeting) => [meeting.id, JSON.stringify(meeting)]),
+      meetings.map((meeting) => [meeting.id, meetingRecord(meeting)]),
     );
     this.queueWrite("save changed meetings", async () => {
       await this.client.hSet(this.key, payload);
+    });
+  }
+
+  setInviteeReadmission(meetingId: string, email: string, required: boolean): void {
+    void this.fallback.setInviteeReadmission?.(meetingId, email, required);
+    const member = this.removedInvitee(meetingId, email);
+    this.queueWrite("set a removed invitee", async () => {
+      if (required) await this.client.sAdd(this.removedInviteesKey, member);
+      else await this.client.sRem(this.removedInviteesKey, member);
     });
   }
 
@@ -1092,6 +1264,11 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
     void this.fallback.save(Array.from(this.knownMeetings.values()));
     this.queueWrite("delete meetings", async () => {
       await this.client.hDel(this.key, ids);
+      const removed = await this.removedInvitees();
+      const gone = ids.flatMap((id) =>
+        (removed.get(id) ?? []).map((email) => this.removedInvitee(id, email)),
+      );
+      if (gone.length > 0) await this.client.sRem(this.removedInviteesKey, gone);
     });
   }
 
@@ -1137,8 +1314,9 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
       String(claim.leadMs),
     ]);
     if (typeof result !== "string" || !result) return null;
-    const meeting = normalizeStoredMeeting(JSON.parse(result));
-    if (!meeting) return null;
+    const claimed = normalizeStoredMeeting(JSON.parse(result));
+    if (!claimed) return null;
+    const meeting = await this.withRemovedInvitees(claimed);
     this.knownMeetings.set(meeting.id, meeting);
     if (this.fallback.saveChanged) {
       await Promise.resolve(this.fallback.saveChanged([meeting]));
@@ -1152,8 +1330,11 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
 
   async loadOne(id: string): Promise<ScheduledMeeting | null> {
     await this.start();
+    // After this SFU's own writes have gone out, so it never reads past one.
+    await this.flush().catch(() => undefined);
     const payload = await this.client.hGet(this.key, id);
-    return payload ? normalizeStoredMeeting(JSON.parse(payload)) : null;
+    const meeting = payload ? normalizeStoredMeeting(JSON.parse(payload)) : null;
+    return meeting ? this.withRemovedInvitees(meeting) : null;
   }
 
   async load(): Promise<ScheduledMeeting[]> {
@@ -1164,6 +1345,10 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
         const meetings = values
           .map((value) => normalizeStoredMeeting(JSON.parse(value)))
           .filter((entry): entry is ScheduledMeeting => Boolean(entry));
+        const removed = await this.removedInvitees();
+        for (const meeting of meetings) {
+          meeting.readmissionRequiredEmails = removed.get(meeting.id) ?? [];
+        }
         this.knownMeetings = new Map(
           meetings.map((meeting) => [meeting.id, meeting]),
         );
@@ -1176,6 +1361,11 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
       );
       if (fallbackMeetings.length > 0) {
         this.save(fallbackMeetings);
+        for (const meeting of fallbackMeetings) {
+          for (const email of meeting.readmissionRequiredEmails ?? []) {
+            this.setInviteeReadmission(meeting.id, email, true);
+          }
+        }
         await this.flush();
         Logger.info(
           `Migrated ${fallbackMeetings.length} scheduled meeting(s) into Redis persistence`,
@@ -1328,6 +1518,23 @@ export const persistScheduledMeetingChanges = (
     );
   }
   return persistScheduledMeetings(store, persistence);
+};
+
+// Stores one invitee's removal, or the end of it. A store with no write of
+// its own for that gets the whole meeting, removed invitees included.
+export const persistInviteeReadmission = (
+  store: ScheduledMeetingStore,
+  persistence: ScheduledMeetingPersistence,
+  meeting: ScheduledMeeting,
+  email: string,
+  required: boolean,
+): Promise<void> => {
+  if (!persistence.setInviteeReadmission) {
+    return persistScheduledMeetingChanges(store, persistence, [meeting]);
+  }
+  return Promise.resolve(
+    persistence.setInviteeReadmission(meeting.id, email, required),
+  ).then(() => persistence.flush?.());
 };
 
 export const persistScheduledMeetingDeletes = (

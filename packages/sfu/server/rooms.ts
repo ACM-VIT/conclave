@@ -10,7 +10,7 @@ import {
 } from "./roomRegistry.js";
 import {
   getScheduledMeetingByRoomCode,
-  persistScheduledMeetingChanges,
+  persistInviteeReadmission,
   refreshScheduledMeeting,
   setScheduledInviteeReadmission,
 } from "./scheduledMeetings.js";
@@ -104,10 +104,12 @@ const bindScheduledInvitations = (state: SfuState, room: Room): void => {
       required,
     );
     if (!changed || !state.scheduledMeetingPersistence) return;
-    persistScheduledMeetingChanges(
+    persistInviteeReadmission(
       state.scheduledMeetings,
       state.scheduledMeetingPersistence,
-      [changed],
+      changed,
+      userKey,
+      required,
     ).catch((error) => {
       Logger.warn(`Failed to persist an invitee's removal from ${room.id}`, error);
     });
