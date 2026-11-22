@@ -135,6 +135,19 @@ if [[ -n "$restore_owner" && "$EUID" != 0 && "$restore_owner" != "$(id -u):$(id 
   die "only root can give the restored files to ${restore_owner}; rerun restore.sh as root"
 fi
 
+# Every place the restore writes stays inside the state dir, checked before
+# the first file changes.
+restore_tar=""
+restore_links=""
+restore_databases=()
+wants files && [[ -f "${payload}/state-files.tar" ]] && restore_tar="${payload}/state-files.tar"
+if wants sqlite; then
+  [[ -f "${payload}/sqlite-links" ]] && restore_links="${payload}/sqlite-links"
+  restore_databases=("${databases[@]}")
+fi
+check_restore_targets "$STATE_DIR" "$CONTAINER_STATE_DIR" "$restore_tar" "$restore_links" "${restore_databases[@]}" ||
+  die "the restore would write outside ${STATE_DIR}; nothing was changed. Remove the links that lead out of it and rerun"
+
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 
 if wants sqlite; then
@@ -166,7 +179,7 @@ if wants sqlite; then
 fi
 
 if wants files && [[ -f "${payload}/state-files.tar" ]]; then
-  tar -C "$STATE_DIR" -xf "${payload}/state-files.tar"
+  extract_state_files "$STATE_DIR" "${payload}/state-files.tar"
   log "Restored the other files in ${STATE_DIR}"
 fi
 

@@ -1221,3 +1221,69 @@ test(
     }
   },
 );
+
+test(
+  "a restore refuses to write through a directory link on disk that leads outside the state dir",
+  { skip: missing.length > 0 && `needs ${missing.join(", ")} on PATH` },
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+    try {
+      const { state, backup, latestArchive, restore } = await setUp(root, ["CONCLAVE_SQLITE_PATH=/var/lib/conclave/recordings/data/live.db"]);
+      await mkdir(path.join(state, "data"));
+      const db = new DatabaseSync(path.join(state, "data", "live.db"));
+      db.exec("CREATE TABLE meetings (id TEXT PRIMARY KEY); INSERT INTO meetings VALUES ('kept')");
+      db.close();
+      await writeFile(path.join(state, "data", "notes.json"), "{}");
+      await backup("--local-only");
+      const archive = await latestArchive();
+
+      // Since the backup, data has become a link to a directory elsewhere.
+      const outside = path.join(root, "outside");
+      await mkdir(outside);
+      await rm(path.join(state, "data"), { recursive: true });
+      await symlink(outside, path.join(state, "data"));
+      await assert.rejects(restore("--file", archive, "--yes"), /data\/live\.db would land outside the state dir/);
+      assert.deepEqual(await readdir(outside), [], "nothing was written outside");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "a restore recreates only recorded links that stay inside the state dir",
+  { skip: missing.length > 0 && `needs ${missing.join(", ")} on PATH` },
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+    try {
+      const { state, backup, latestArchive, restore } = await setUp(root);
+      withDatabase(state);
+      await backup("--local-only");
+
+      // An archive whose recorded links were changed to include one that
+      // leads out of the state dir, with checksums to match.
+      const work = path.join(root, "tampered");
+      await mkdir(work);
+      const tampered = path.join(root, "local", "conclave-test-20260101T000000Z.tar.gz.age");
+      await run("bash", [
+        "-c",
+        'set -e; age --decrypt -i "$1" "$2" | tar -C "$3" -xzf -; printf "escape\\t%s\\n" "$4" >> "$3/sqlite-links"; ' +
+          '(cd "$3" && rm SHA256SUMS && find . -type f | sort | xargs sha256sum > "$5" && mv "$5" SHA256SUMS); ' +
+          'tar -C "$3" -czf - . | age --encrypt -R "$6" -o "$7"',
+        "_",
+        path.join(root, "key.txt"),
+        await latestArchive(),
+        work,
+        path.join(root, "elsewhere"),
+        path.join(root, "sums.tmp"),
+        path.join(root, "recipients.txt"),
+        tampered,
+      ]);
+      await rm(state, { recursive: true });
+      await assert.rejects(restore("--file", tampered, "--only", "sqlite", "--yes"), /the recorded link escape leads outside the state dir/);
+      assert.equal(await readlink(path.join(state, "escape")).catch(() => "absent"), "absent");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);

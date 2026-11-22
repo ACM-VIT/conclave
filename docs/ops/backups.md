@@ -169,7 +169,13 @@ To apply it:
 1. Stop new work: drain both SFUs and wait for 0 rooms, as the deploy does.
 2. `cd $R && docker compose -f docker-compose.sfu.yml stop sfu-a sfu-b`
 3. `sudo $R/scripts/backup/restore.sh --identity /root/conclave-backup.key --latest --yes`
-   It refuses while an SFU answers or any process holds a database open. The
+   It refuses while an SFU answers or any process holds a database open, and
+   before anything changes it checks that every database copy, recorded link
+   and file stays inside the real state dir once the links already on disk
+   are followed; a link that leads out (say `data -> /elsewhere`) stops the
+   restore. The only links it recreates are the recorded database chains,
+   whose targets must stay inside too; other links in the archive are
+   skipped. The
    current databases are kept as `*.pre-restore-<stamp>`. The Redis keys
    matching `conclave:sfu:persistence*` end up exactly as in the backup: those
    it has are restored, and those it lacks are deleted, so a meeting created

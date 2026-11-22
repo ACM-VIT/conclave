@@ -167,6 +167,75 @@ print(f"file\t{rel}")
 '
 }
 
+# Checks every place a restore will write, before it writes any: each
+# database copy, each recorded link and the place it leads to, and each file
+# and directory in the archive must stay inside the real state dir once the
+# links already on disk are followed. A link on disk that leads out (data ->
+# /elsewhere) would otherwise make the restore write there. Prints why for
+# each that would not, and fails.
+#   check_restore_targets STATE_DIR CONTAINER_DIR TAR_OR_EMPTY LINKS_OR_EMPTY DB_REL...
+check_restore_targets() {
+  python3 -c '
+import os, sys, tarfile
+state_in, container, tar_path, links_path, *databases = sys.argv[1:]
+state = os.path.realpath(state_in)
+mounts = [container.rstrip("/"), state_in.rstrip("/"), state]
+def lands_inside(rel):
+    rel = os.path.normpath(rel)
+    if os.path.isabs(rel) or rel == ".." or rel.startswith(".." + os.sep):
+        return False
+    probe = os.path.join(state, rel)
+    while not os.path.lexists(probe):
+        probe = os.path.dirname(probe)
+    real = os.path.realpath(probe)
+    return real == state or real.startswith(state + os.sep)
+problems = []
+for rel in databases:
+    if not lands_inside(rel):
+        problems.append(f"{rel} would land outside the state dir")
+if links_path:
+    for line in open(links_path):
+        link, _, target = line.rstrip("\n").partition("\t")
+        if not link:
+            continue
+        if not lands_inside(link):
+            problems.append(f"the recorded link {link} would land outside the state dir")
+            continue
+        if os.path.isabs(target):
+            mount = next((m for m in mounts if target == m or target.startswith(m + "/")), None)
+            leads = None if mount is None else target[len(mount):].lstrip("/") or "."
+        else:
+            leads = os.path.join(os.path.dirname(link), target)
+        if leads is None or not lands_inside(leads):
+            problems.append(f"the recorded link {link} leads outside the state dir ({target})")
+if tar_path:
+    with tarfile.open(tar_path) as tar:
+        for member in tar.getmembers():
+            if (member.isfile() or member.isdir()) and not lands_inside(member.name):
+                problems.append(f"{member.name} would land outside the state dir")
+for problem in problems:
+    print(problem, file=sys.stderr)
+sys.exit(1 if problems else 0)
+' "$@"
+}
+
+# Restores the archive's other files into the state dir: regular files and
+# directories only, since the only links a restore recreates are the
+# recorded database chains, and nothing outside the state dir.
+extract_state_files() {
+  python3 -c '
+import sys, tarfile
+state, tar_path = sys.argv[1:3]
+def files_only(member, path):
+    if not (member.isfile() or member.isdir()):
+        print(f"Skipped {member.name}: only files and directories are restored from the archive", file=sys.stderr)
+        return None
+    return tarfile.data_filter(member, path)
+with tarfile.open(tar_path) as tar:
+    tar.extractall(state, filter=files_only)
+' "$@"
+}
+
 # Orders archive names oldest first by the stamp in them
 # (conclave-<host>-<YYYYMMDDTHHMMSSZ>.tar.gz.age), never by the whole name: a
 # renamed host must not make an older archive look newer.
