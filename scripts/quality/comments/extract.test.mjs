@@ -1,13 +1,19 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { extractComments, iconGeneratorOutputs, listSourceFiles } from "./extract.mjs";
-import { configuresNoComments, languageOf } from "./policy.mjs";
+import { extractComments, iconGeneratorOutputs } from "./extract.mjs";
+import { configuresNoComments } from "./policy.mjs";
 
+
+const swiftMissing = spawnSync("swift", ["--version"]).error ? "swift is not on PATH" : false;
+const python312Missing =
+  spawnSync("python3", ["-c", "import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)"]).status === 0
+    ? false
+    : "python3 3.12 or newer is not on PATH";
 
 const texts = (source, file) => extractComments(source, file).map((comment) => comment.text);
 const disallowed = (source, file) =>
@@ -56,7 +62,7 @@ test("positions report lines, ownership and the lines a deletion sheds", () => {
   ]);
 });
 
-test("shebangs are reported as allowed directives in every language", () => {
+test("shebangs are reported as allowed directives in every language", { skip: python312Missing }, () => {
   for (const [file, source] of [
     ["run.mjs", "#!/usr/bin/env node\n// note\nrun();\n"],
     ["run.sh", "#!/bin/sh\n# note\nrun\n"],
@@ -117,7 +123,7 @@ test("a license header is allowed only at the very top of the file", () => {
   );
 });
 
-test("Swift raw, multiline and interpolated strings hide comment markers", () => {
+test("Swift raw, multiline and interpolated strings hide comment markers", { skip: swiftMissing }, () => {
   const source = [
     "// swift-tools-version: 5.9",
     'let raw = #"// not a comment "quoted" "#',
@@ -171,7 +177,7 @@ test("shell # is a comment only at the start of a word outside quotes", () => {
   assert.deepEqual(texts(source, "run.sh"), ["#!/usr/bin/env bash", "# real one", "# real two"]);
 });
 
-test("Python strings hide hash marks", () => {
+test("Python strings hide hash marks", { skip: python312Missing }, () => {
   const source = ['a = "# not"', "b = '''", "# docstring line", "'''", 'c = f"{x}#"  # real'].join("\n");
   assert.deepEqual(texts(source, "tool.py"), ["# real"]);
 });
@@ -187,7 +193,7 @@ test("CSS strings hide comment markers and sourceMappingURL is allowed", () => {
   );
 });
 
-test("Skip transpiler directives are allowed in Swift and nowhere else", () => {
+test("Skip transpiler directives are allowed in Swift and nowhere else", { skip: swiftMissing }, () => {
   const source = [
     "// SKIP SYMBOLFILE",
     "// SKIP INSERT: @Suppress(\"UNCHECKED_CAST\")",
@@ -231,7 +237,7 @@ test("a license notice may follow a directive prologue, an attribution is a comm
   );
 });
 
-test("Swift regex literals hide comment markers", () => {
+test("Swift regex literals hide comment markers", { skip: swiftMissing }, () => {
   const source = [
     "let url = #/https?://example\\.com/#",
     "let wide = ##/a/#b/##",
@@ -299,7 +305,7 @@ test("CSS unquoted url() is not a comment", () => {
   assert.deepEqual(texts(source, "a.css"), ["/* real */"]);
 });
 
-test("Python f-string replacement fields can hold comments, format specs cannot", () => {
+test("Python f-string replacement fields can hold comments, format specs cannot", { skip: python312Missing }, () => {
   const source = [
     'value = f"""{',
     "    total  # inside a replacement field",
@@ -311,13 +317,13 @@ test("Python f-string replacement fields can hold comments, format specs cannot"
   assert.deepEqual(texts(source, "a.py"), ["# inside a replacement field", "# real"]);
 });
 
-test("Swift raw strings take any number of hashes", () => {
+test("Swift raw strings take any number of hashes", { skip: swiftMissing }, () => {
   const hashes = "#".repeat(12);
   const source = [`let s = ${hashes}"// not a comment "${"#".repeat(11)} still raw"${hashes}`, "// real"].join("\n");
   assert.deepEqual(texts(source, "Raw.swift"), ["// real"]);
 });
 
-test("Skip directives follow the pinned skipstone grammar in line and block form", () => {
+test("Skip directives follow the pinned skipstone grammar in line and block form", { skip: swiftMissing }, () => {
   const source = [
     "// SKIP INSERT: val x = 1",
     "// val y = 2",
@@ -351,7 +357,7 @@ test("a license header needs a real marker and covers only the top block", () =>
   }
 });
 
-test("NOWARN takes only skipstone's diagnostic ids, and trailing spaces are trimmed", () => {
+test("NOWARN takes only skipstone's diagnostic ids, and trailing spaces are trimmed", { skip: swiftMissing }, () => {
   const source = [
     "// SKIP NOWARN   ",
     "// SKIP NOWARN(free text)",
@@ -419,14 +425,13 @@ test("escapes in CSS, shell and Kotlin never open a comment", () => {
   assert.deepEqual(texts("echo word\\ #suffix\necho one\\ #literal # real\n", "a.sh"), ["# real"]);
   assert.deepEqual(texts('val `a"b` = 1 // real\nval c = "x"\n', "a.kt"), ["// real"]);
   assert.deepEqual(texts('val d = $$"""$$${ 1 /* real */ }"""\n', "b.kt"), ["/* real */"]);
-  assert.deepEqual(texts('let r = /=a"b/ // real\n', "R.swift"), ["// real"]);
 });
 
-test("Python comments come from tokenize, so format specs stay code", () => {
+test("Python comments come from tokenize, so format specs stay code", { skip: python312Missing }, () => {
   assert.deepEqual(texts('print(f"{1:=#6x}")  # real\n', "a.py"), ["# real"]);
 });
 
-test("Python 3.12 comments inside a multiline f-string field", () => {
+test("Python 3.12 comments inside a multiline f-string field", { skip: python312Missing }, () => {
   assert.deepEqual(texts('value = f"""{\n    total  # inside\n}"""\n', "a.py"), ["# inside"]);
 });
 
@@ -448,7 +453,10 @@ test("shell fixtures that bash runs agree with the extractor", (t) => {
     "x=$((1 << 4)); echo \"$x\"",
     "# last",
   ].join("\n");
-  const run = spawnSync("bash", ["-c", source], { encoding: "utf8" });
+  const run = spawnSync("bash", ["-c", source], {
+    encoding: "utf8",
+    env: { PATH: `${process.env.PATH}${path.delimiter}/usr/bin${path.delimiter}/bin` },
+  });
   assert.equal(run.status, 0, run.stderr);
   assert.deepEqual(run.stdout.split("\n").filter(Boolean), [
     "4",
@@ -473,7 +481,7 @@ test("a # inside ${...} and a comment after a line continuation, run by bash", (
     "echo three",
     "# last",
   ].join("\n");
-  const run = spawnSync("bash", ["-c", source], { encoding: "utf8", env: { PATH: process.env.PATH } });
+  const run = spawnSync("bash", ["-c", source], { encoding: "utf8", env: { PATH: `${process.env.PATH}${path.delimiter}/usr/bin${path.delimiter}/bin` } });
   assert.equal(run.status, 0, run.stderr);
   assert.deepEqual(run.stdout.split("\n").filter(Boolean), ["hello", "#world", "one two", "three"]);
   assert.deepEqual(texts(source, "fixture.sh"), ["# it's a comment", "# last"]);
@@ -492,16 +500,17 @@ test("a license notice must start its comment", () => {
   assert.deepEqual(extractComments(dialog, "c.ts").map((c) => c.allowed), ["license-header", null]);
 });
 
-test("a Swift raw string #\"\"\"# holds one quote and does not open a multiline string", () => {
+test("a Swift raw string #\"\"\"# holds one quote and does not open a multiline string", { skip: swiftMissing }, () => {
   assert.deepEqual(texts('let a = #"""#\n// real\nlet b = ##"""##\n// two\n', "A.swift"), ["// real", "// two"]);
   assert.deepEqual(texts('let c = #"""\n  // inside\n  """#\n// three\n', "B.swift"), ["// three"]);
+  assert.deepEqual(texts('let r = /=a"b/ // real\n', "R.swift"), ["// real"]);
 });
 
 test("an unquoted CSS url() is scanned to its closing paren however much whitespace it has", () => {
   assert.deepEqual(texts(`a { b: url(${" ".repeat(60)}img/*large*/x.png); }\n/* real */\n`, "a.css"), ["/* real */"]);
 });
 
-test("a # license notice in shell or Python is recognised", () => {
+test("a # license notice in shell or Python is recognised", { skip: python312Missing }, () => {
   for (const [file, source] of [
     ["a.sh", "# SPDX-License-Identifier: MIT\necho\n"],
     ["b.sh", "#!/bin/sh\n# SPDX-License-Identifier: MIT\necho\n"],
@@ -509,18 +518,6 @@ test("a # license notice in shell or Python is recognised", () => {
   ]) {
     assert.equal(extractComments(source, file).at(-1).allowed, "license-header", file);
   }
-});
-
-test("every tracked file's last comment is an end marker appended to it", () => {
-  const repo = fileURLToPath(new URL("../../..", import.meta.url));
-  const markers = { script: "// END-OF-FILE-MARKER", swift: "// END-OF-FILE-MARKER", kotlin: "// END-OF-FILE-MARKER", css: "/* END-OF-FILE-MARKER */", shell: "# END-OF-FILE-MARKER", python: "# END-OF-FILE-MARKER" };
-  const misses = [];
-  for (const file of listSourceFiles(repo)) {
-    const marker = markers[languageOf(file)];
-    const text = `${readFileSync(path.join(repo, file), "utf8")}\n${marker}\n`;
-    if (extractComments(text, file).at(-1)?.text !== marker) misses.push(file);
-  }
-  assert.deepEqual(misses, []);
 });
 
 test("bash continuations, arithmetic and command substitution in parameter defaults, run by bash", (t) => {
@@ -540,13 +537,13 @@ test("bash continuations, arithmetic and command substitution in parameter defau
     "echo after",
     "# last",
   ].join("\n");
-  const run = spawnSync("bash", ["-c", source], { encoding: "utf8", env: { PATH: process.env.PATH } });
+  const run = spawnSync("bash", ["-c", source], { encoding: "utf8", env: { PATH: `${process.env.PATH}${path.delimiter}/usr/bin${path.delimiter}/bin` } });
   assert.equal(run.status, 0, run.stderr);
   assert.deepEqual(run.stdout.split("\n").filter(Boolean), ["word#literal", "16", "backtick", "tag Issue #123", "after"]);
   assert.deepEqual(texts(source, "fixture.sh"), ["# Don't restart yet", "# last"]);
 });
 
-test("an f-string with reused quotes reads the same as Python 3.12 does", () => {
+test("an f-string with reused quotes reads the same as Python 3.12 does", { skip: python312Missing }, () => {
   assert.deepEqual(texts('label = f"{labels["#primary"]}"\n# real\n', "a.py"), ["# real"]);
 });
 
@@ -575,4 +572,13 @@ test("with only a Python older than 3.12 the extractor fails instead of guessing
   });
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /Python 3\.12 or newer is required to read Python comments/);
+});
+
+test("the sweep finds a file whose scanner stops before the end", async (t) => {
+  const { filesMissingEndMarker } = await import("./sweep.mjs");
+  const repo = mkdtempSync(path.join(tmpdir(), "comment-sweep-"));
+  t.after(() => rmSync(repo, { recursive: true, force: true }));
+  writeFileSync(path.join(repo, "ok.ts"), "export const a = 1; // fine\n");
+  writeFileSync(path.join(repo, "unterminated.css"), "a { content: '/* x */ }\n/* no end");
+  assert.deepEqual(filesMissingEndMarker(repo, ["ok.ts", "unterminated.css"]), ["unterminated.css"]);
 });

@@ -26,10 +26,18 @@ const tryGit = (repo, args) => {
   }
 };
 
-const ratchetedRecords = (repo) =>
-  listSourceFiles(repo)
-    .filter((file) => languageOf(file) !== ESLINT_LANGUAGE)
-    .flatMap((file) => extractFile(repo, file));
+const ratchetedRecords = (repo, files = listSourceFiles(repo)) =>
+  files.filter((file) => languageOf(file) !== ESLINT_LANGUAGE).flatMap((file) => extractFile(repo, file));
+
+export const changedSince = (repo, bases) => {
+  const files = new Set();
+  for (const base of bases) {
+    for (const file of (tryGit(repo, ["diff", "--name-only", "-z", base, "--"]) ?? "").split("\0")) {
+      if (file !== "" && isFirstPartySource(file)) files.add(file);
+    }
+  }
+  return [...files].sort();
+};
 
 export const compareCounts = (baseline, current) => {
   const rises = [];
@@ -114,15 +122,14 @@ const baselineRisesSince = (repo, base) =>
     }));
   });
 
+const growthSince = (repo, bases) => ({
+  rises: bases.flatMap((base) => baselineRisesSince(repo, base)),
+  countRises: bases.flatMap((base) => countRisesSinceBase(repo, base).map((rise) => ({ ...rise, base }))),
+});
+
 export const growthSinceBase = (repo, baseRef, mode) => {
   const resolved = resolveBases(repo, baseRef, mode);
-  if (resolved.skipped) return resolved;
-  const { bases, note } = resolved;
-  return {
-    note,
-    rises: bases.flatMap((base) => baselineRisesSince(repo, base)),
-    countRises: bases.flatMap((base) => countRisesSinceBase(repo, base).map((rise) => ({ ...rise, base }))),
-  };
+  return resolved.skipped ? resolved : { note: resolved.note, ...growthSince(repo, resolved.bases) };
 };
 
 export const inlineNoCommentsDisables = (repo) => {
@@ -142,11 +149,20 @@ const describe = (records, file) =>
     .map((record) => `    ${record.file}:${record.line}  ${record.text.split("\n")[0].slice(0, 100)}`)
     .join("\n");
 
-const check = (repo, baseline, baseRef, mode) => {
-  const records = ratchetedRecords(repo);
-  const { rises, falls } = compareCounts(baseline, countDisallowed(records));
-  const growth = growthSinceBase(repo, baseRef, mode);
-  if (growth.note) console.log(`comment ratchet: ${growth.note}.`);
+const check = (repo, baseline, baseRef, mode, { full = false } = {}) => {
+  const resolved = resolveBases(repo, baseRef, mode);
+  if (resolved.note) console.log(`comment ratchet: ${resolved.note}.`);
+  const tracked = listSourceFiles(repo);
+  const wholeTree = full || Boolean(resolved.skipped);
+  if (wholeTree && !full) console.log("comment ratchet: no base commit to diff against, so every tracked file is checked.");
+  const trackedSet = new Set(tracked);
+  const scope = wholeTree ? tracked : changedSince(repo, resolved.bases);
+  const records = ratchetedRecords(repo, scope.filter((file) => trackedSet.has(file)));
+  const scopedBaseline = wholeTree
+    ? baseline
+    : Object.fromEntries(scope.filter((file) => baseline[file] !== undefined).map((file) => [file, baseline[file]]));
+  const { rises, falls } = compareCounts(scopedBaseline, countDisallowed(records));
+  const growth = resolved.skipped ? resolved : growthSince(repo, resolved.bases);
   const disables = inlineNoCommentsDisables(repo);
   const failures = [];
   for (const { file, from, to } of rises) {
@@ -171,7 +187,11 @@ const check = (repo, baseline, baseRef, mode) => {
     console.log(`comment ratchet: ${falls.length} file(s) have fewer comments than the baseline. Run \`${UPDATE_COMMAND}\` to lower it.`);
   }
   if (failures.length === 0) {
-    console.log("comment ratchet: no new comments in Swift, Kotlin, CSS, shell or Python.");
+    console.log(
+      wholeTree
+        ? "comment ratchet: no new comments in Swift, Kotlin, CSS, shell or Python."
+        : `comment ratchet: no new comments in the ${scope.length} file(s) changed since the base.`,
+    );
     return 0;
   }
   console.error(
@@ -223,7 +243,9 @@ const main = () => {
   if (args.includes("--init")) return init(repo, baselineFile);
   const baseline = existsSync(baselineFile) ? readJson(baselineFile) : {};
   if (args.includes("--update")) return update(repo, baselineFile, baseline);
-  return check(repo, baseline, process.env.COMMENT_RATCHET_BASE || DEFAULT_BASE, process.env.COMMENT_RATCHET_MODE || "merge-base");
+  return check(repo, baseline, process.env.COMMENT_RATCHET_BASE || DEFAULT_BASE, process.env.COMMENT_RATCHET_MODE || "merge-base", {
+    full: args.includes("--full"),
+  });
 };
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

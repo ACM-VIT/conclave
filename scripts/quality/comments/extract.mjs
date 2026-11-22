@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { parse as parseShell } from "sh-syntax/sync";
 import tseslint from "typescript-eslint";
 import { classifyComments, isFirstPartySource, languageOf } from "./policy.mjs";
 
@@ -112,18 +113,35 @@ const scanKotlin = (text) => {
 export class SwiftParseError extends Error {}
 
 const SWIFT_TRIVIA_PACKAGE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "swift-trivia");
+
+const swiftSyntaxVersion = () =>
+  JSON.parse(readFileSync(path.join(SWIFT_TRIVIA_PACKAGE, "Package.resolved"), "utf8")).pins.find(
+    (pin) => pin.identity === "swift-syntax",
+  ).state.version;
+
+const cacheRoot = () =>
+  process.env.CONCLAVE_CACHE_DIR ||
+  process.env.XDG_CACHE_HOME ||
+  (process.platform === "darwin" ? path.join(os.homedir(), "Library", "Caches") : path.join(os.homedir(), ".cache"));
+
+export const swiftTriviaScratchPath = () =>
+  path.join(cacheRoot(), "conclave", "swift-trivia", `swift-syntax-${swiftSyntaxVersion()}`);
+
 let swiftTriviaBinary;
 
 const swiftTrivia = () => {
   if (swiftTriviaBinary) return swiftTriviaBinary;
-  const build = spawnSync("swift", ["build", "-c", "release", "--package-path", SWIFT_TRIVIA_PACKAGE], {
+  const scratch = swiftTriviaScratchPath();
+  const build = spawnSync("swift", ["build", "-c", "release", "--package-path", SWIFT_TRIVIA_PACKAGE, "--scratch-path", scratch], {
     encoding: "utf8",
     stdio: ["ignore", "ignore", "pipe"],
   });
   if (build.error?.code === "ENOENT") {
-    throw new SwiftParseError("a Swift toolchain is required to read Swift comments (scripts/quality/comments/swift-trivia uses swift-syntax 604.0.0).");
+    throw new SwiftParseError(
+      `a Swift toolchain is required to read Swift comments, and \`swift\` is not on PATH (scripts/quality/comments/swift-trivia builds on swift-syntax ${swiftSyntaxVersion()} into ${scratch}).`,
+    );
   }
-  const binary = path.join(SWIFT_TRIVIA_PACKAGE, ".build", "release", "swift-comment-trivia");
+  const binary = path.join(scratch, "release", "swift-comment-trivia");
   if (build.status !== 0 || !existsSync(binary)) {
     throw new SwiftParseError(`could not build scripts/quality/comments/swift-trivia:\n${build.stderr ?? ""}`);
   }
@@ -132,7 +150,13 @@ const swiftTrivia = () => {
 };
 
 const scanSwift = (text, file) => {
-  const result = spawnSync(swiftTrivia(), [], { input: text, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  let binary;
+  try {
+    binary = swiftTrivia();
+  } catch (error) {
+    throw new SwiftParseError(`cannot read the comments in ${file}: ${error.message}`);
+  }
+  const result = spawnSync(binary, [], { input: text, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
   if (result.error || result.status !== 0) {
     throw new SwiftParseError(`swift-comment-trivia could not read ${file}: ${result.error?.message ?? result.stderr}`);
   }
@@ -180,7 +204,20 @@ const utf8IndexMapper = (text) => {
   return (byteOffset) => buffer.subarray(0, byteOffset).toString("utf8").length;
 };
 
+let shellParser;
+
+const loadShellParser = (file) => {
+  if (shellParser) return shellParser;
+  try {
+    shellParser = createRequire(import.meta.url)("sh-syntax/sync").parse;
+  } catch (error) {
+    throw new ShellParseError(`cannot read the comments in ${file}: the sh-syntax dev dependency is missing, run pnpm install (${error.message}).`);
+  }
+  return shellParser;
+};
+
 const scanShell = (text, file) => {
+  const parseShell = loadShellParser(file);
   let tree;
   try {
     tree = parseShell(text, { keepComments: true });
