@@ -24,14 +24,16 @@ const makeSocket = (activeAppId: string | null = null) => {
   const syncTimes: number[] = [];
   const unanswered: Ack[] = [];
   const uploads: Uint8Array[] = [];
-  const control = { answerSync: (_attempt: number): SyncReply => undefined };
+  const control = { answerSync: (_attempt: number): SyncReply => undefined, getState: true };
+  const pendingState: Ack[] = [];
   const socket = {
     connected: true,
     on: (event: string, listener: Listener) => listeners.set(event, (listeners.get(event) ?? new Set()).add(listener)),
     off: (event: string, listener: Listener) => listeners.get(event)?.delete(listener),
     emit: (event: string, payload?: unknown, ack?: Ack) => {
       if (event === "apps:getState" && typeof payload === "function") {
-        (payload as Ack)({ activeAppId, locked: false });
+        if (control.getState) (payload as Ack)({ activeAppId, locked: false });
+        else pendingState.push(payload as Ack);
         return;
       }
       if (event === "apps:yjs:update") uploads.push((payload as { update: Uint8Array }).update);
@@ -43,7 +45,7 @@ const makeSocket = (activeAppId: string | null = null) => {
     },
   } as unknown as Socket;
   const fire = (event: string, ...args: unknown[]) => listeners.get(event)?.forEach((listener) => listener(...args));
-  return { socket, syncTimes, unanswered, uploads, control, fire };
+  return { socket, syncTimes, unanswered, uploads, pendingState, control, fire };
 };
 
 let root: Root;
@@ -179,6 +181,51 @@ it("reports a sync answer it cannot apply as failed", async () => {
   await openBoard();
 
   expect(ctx.syncStatus).toBe("failed");
+});
+
+it("reports an empty sync update as failed", async () => {
+  first.control.answerSync = () => ({ syncMessage: new Uint8Array(0), stateVector: Y.encodeStateVector(board) });
+
+  await openBoard();
+
+  expect(ctx.syncStatus).toBe("failed");
+});
+
+it("settles a sync whose state vector is unreadable", async () => {
+  first.control.answerSync = () => ({ syncMessage: Y.encodeStateAsUpdate(board), stateVector: new Uint8Array(0) });
+
+  await openBoard();
+
+  expect(boardText()).toBe("drawn before you joined");
+  expect(ctx.syncStatus).not.toBe("syncing");
+});
+
+it("keeps retrying through a disconnect and gives up after about 30 seconds", async () => {
+  first.control.answerSync = () => busy;
+  await openBoard();
+  (first.socket as { connected: boolean }).connected = false;
+
+  await wait(30_000);
+  expect(ctx.syncStatus).toBe("failed");
+
+  (first.socket as { connected: boolean }).connected = true;
+  first.control.answerSync = () => boardContent();
+  await act(async () => ctx.retrySync());
+  expect(boardText()).toBe("drawn before you joined");
+  expect(ctx.syncStatus).toBe("synced");
+});
+
+it("starts no sync after it unmounts", async () => {
+  const late = makeSocket("board");
+  late.control.getState = false;
+  await mount(late.socket);
+
+  await act(async () => root.unmount());
+  late.pendingState.shift()!({ activeAppId: "board", locked: false });
+  await wait(30_000);
+
+  expect(late.syncTimes).toHaveLength(0);
+  root = createRoot(document.createElement("div"));
 });
 
 it("does not bring back a closed board when an old sync answer lands after it reopens", async () => {
