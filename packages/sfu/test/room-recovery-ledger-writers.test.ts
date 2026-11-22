@@ -87,6 +87,7 @@ const record = (hostUserKey: string, writer: string, liveAt = Date.now()): RoomR
   readmissionRequiredUserKeys: [],
   overAt: null,
   writer,
+  ownerEmail: null,
 });
 const filesIn = (dir: string): string[] =>
   readdirSync(dir).flatMap((name) => {
@@ -120,7 +121,7 @@ describe("two SFUs writing recovery records into one directory", () => {
         import { createFileRoomRecoveryStore } from "./server/roomRecoveryLedger.ts";
         const store = createFileRoomRecoveryStore(${JSON.stringify(directory)});
         await Promise.all(Array.from({ length: ${ROOMS_EACH} }, (_, i) =>
-          store.write(${JSON.stringify(name)} + ":room-" + i, { liveAt: Date.now(), hostUserKey: ${JSON.stringify(name)}, adminUserKeys: [], readmissionRequiredUserKeys: [], overAt: null, writer: ${JSON.stringify(name)} + "-" + i }, null)));
+          store.write(${JSON.stringify(name)} + ":room-" + i, { liveAt: Date.now(), hostUserKey: ${JSON.stringify(name)}, adminUserKeys: [], readmissionRequiredUserKeys: [], overAt: null, ownerEmail: null, writer: ${JSON.stringify(name)} + "-" + i }, null)));
       `);
     const results = await Promise.all([writer("a"), writer("b")]);
     expect(results).toEqual([
@@ -154,7 +155,7 @@ describe("two SFUs writing recovery records into one directory", () => {
       ${holdAt(signals, "readFileSync", markers)}
       await createFileRoomRecoveryStore(${JSON.stringify(directory)}).write(
         "conclave:another-room",
-        { liveAt: Date.now(), hostUserKey: "another-host", adminUserKeys: [], readmissionRequiredUserKeys: [], overAt: null, writer: "another-room" },
+        { liveAt: Date.now(), hostUserKey: "another-host", adminUserKeys: [], readmissionRequiredUserKeys: [], overAt: null, ownerEmail: null, writer: "another-room" },
         null,
       );
     `);
@@ -229,7 +230,7 @@ describe("two SFUs writing recovery records into one directory", () => {
       ${holdAt(signals, "writeFileSync", ["host-a-later"])}
       await createFileRoomRecoveryStore(${JSON.stringify(directory)}).write(
         ${JSON.stringify(CHANNEL)},
-        { liveAt: Date.now(), hostUserKey: "host-a-later", adminUserKeys: [], readmissionRequiredUserKeys: [], overAt: null, writer: "room-a" },
+        { liveAt: Date.now(), hostUserKey: "host-a-later", adminUserKeys: [], readmissionRequiredUserKeys: [], overAt: null, ownerEmail: null, writer: "room-a" },
         null,
       );
     `);

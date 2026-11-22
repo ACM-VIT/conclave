@@ -1083,6 +1083,110 @@ describe("an invited attendee the host removed, after a restart", () => {
   });
 });
 
+describe("the account a code belongs to", () => {
+  // A signed-in account: its verified email is in the join token.
+  const owner = {
+    userId: "owner@example.com",
+    email: "owner@example.com",
+    clientId: "conclave",
+    sessionId: "o",
+    allowRoomCreation: true,
+  };
+  const guestOpener = { ...guest, allowRoomCreation: true };
+  const anotherGuest = { ...knocker, allowRoomCreation: true };
+  const scheduledHost = {
+    userId: "host@example.com",
+    email: "host@example.com",
+    clientId: "conclave",
+    sessionId: "sh",
+    allowRoomCreation: true,
+  };
+  const emptyOut = async (state: SfuState, ...peers: Array<ReturnType<typeof makeSocket>>) => {
+    for (const peer of peers) await hangUp(peer);
+    vi.advanceTimersByTime(10 * MINUTE_MS);
+    expect(state.rooms.size).toBe(0);
+  };
+  const useClock = () =>
+    vi.useFakeTimers({
+      toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
+  const toldTheyNoLongerHost = (member: Awaited<ReturnType<typeof join>>) =>
+    member.peer.emit.mock.calls.some(([event]) => event === "hostRemoved");
+
+  it("hosts again when they come back to a meeting a guest reopened, and the guest is a participant", async () => {
+    useClock();
+    const state = makeState();
+    const created = await join(state, owner);
+    await emptyOut(state, created.peer);
+
+    const opener = await join(state, guestOpener);
+    expect(opener.context.currentClient).toBeInstanceOf(Admin);
+    const back = await join(state, owner);
+
+    expect(back.status).toBe("joined");
+    expect(back.context.currentClient).toBeInstanceOf(Admin);
+    expect(roomOf(state).getHostUserId()).toBe("owner@example.com#o");
+    expect(opener.context.currentClient).not.toBeInstanceOf(Admin);
+    expect(toldTheyNoLongerHost(opener)).toBe(true);
+  });
+
+  it("is let in without knocking even though the guest locked the meeting", async () => {
+    useClock();
+    const state = makeState();
+    const created = await join(state, owner);
+    await emptyOut(state, created.peer);
+    await join(state, guestOpener);
+    expect(roomOf(state).isLocked).toBe(true);
+
+    expect((await join(state, owner)).status).toBe("joined");
+  });
+
+  it("still owns the code after the SFU restarts", async () => {
+    useClock();
+    const before = makeState();
+    const created = await join(before, owner);
+    await emptyOut(before, created.peer);
+    const after = await restart(before);
+
+    const opener = await join(after, guestOpener);
+    const back = await join(after, owner);
+    expect(back.context.currentClient).toBeInstanceOf(Admin);
+    expect(opener.context.currentClient).not.toBeInstanceOf(Admin);
+  });
+
+  it("hosts the scheduled meeting they booked even when an invitee opened it first", async () => {
+    useClock();
+    const state = makeState();
+    schedule(state);
+    const attendee = await join(state, { ...invitee, allowRoomCreation: true });
+    expect(attendee.context.currentClient).toBeInstanceOf(Admin);
+
+    const booker = await join(state, scheduledHost);
+    expect(booker.status).toBe("joined");
+    expect(booker.context.currentClient).toBeInstanceOf(Admin);
+    expect(attendee.context.currentClient).not.toBeInstanceOf(Admin);
+  });
+
+  it("is not an account a guest made the code with: the first to arrive hosts", async () => {
+    useClock();
+    const state = makeState();
+    const created = await join(state, guestOpener);
+    await emptyOut(state, created.peer);
+
+    const someoneElse = await join(state, anotherGuest);
+    expect(someoneElse.context.currentClient).toBeInstanceOf(Admin);
+    expect((await join(state, guestOpener)).status).toBe("waiting");
+  });
+
+  it("is not whoever signs in next: another account knocks", async () => {
+    useClock();
+    const state = makeState();
+    await join(state, owner);
+    const other = { ...owner, userId: "other@example.com", email: "other@example.com", sessionId: "x" };
+    expect((await join(state, other)).status).toBe("waiting");
+  });
+});
+
 describe("an invited attendee a host removed, once that meeting is over", () => {
   // A host removes the invitee, then the meeting ends: by its last person
   // leaving, or by a host ending it for everyone.

@@ -9,11 +9,13 @@ import {
 
 const CHANNEL = "conclave:abc-mnop-xyz";
 const MINUTE_MS = 60_000;
-const NOTHING_KNOWN = { lost: null, passesVoidUntil: null, lastWriter: null };
+const NOTHING_KNOWN = { lost: null, passesVoidUntil: null, lastWriter: null, owner: null };
+const GUEST_MADE = { email: null };
 const room = {
   channelId: CHANNEL,
   incarnationId: "room-1",
   takesOverRecordOf: null,
+  ownerEmail: null,
   hostUserKey: "host@example.com",
   adminUserKeys: new Set(["host@example.com", "guest-cohost"]),
   usersNeedingReadmission: ["guest-removed"],
@@ -47,6 +49,7 @@ describe("what the SFU remembers about a room across a restart", () => {
       },
       passesVoidUntil: null,
       lastWriter: "room-1",
+      owner: GUEST_MADE,
     });
   });
 
@@ -64,9 +67,14 @@ describe("what the SFU remembers about a room across a restart", () => {
       lost: null,
       passesVoidUntil: emptiedAt,
       lastWriter: "room-1",
+      owner: GUEST_MADE,
     });
     vi.advanceTimersByTime(6 * MINUTE_MS + 1);
-    expect(await sfu().recall(CHANNEL)).toEqual({ ...NOTHING_KNOWN, lastWriter: "room-1" });
+    expect(await sfu().recall(CHANNEL)).toEqual({
+      ...NOTHING_KNOWN,
+      lastWriter: "room-1",
+      owner: GUEST_MADE,
+    });
   });
 
   it("stops calling a room lost once no pass from it can still be good", async () => {
@@ -88,9 +96,14 @@ describe("what the SFU remembers about a room across a restart", () => {
       lost: null,
       passesVoidUntil: endedAt,
       lastWriter: "room-1",
+      owner: GUEST_MADE,
     });
     vi.advanceTimersByTime(6 * MINUTE_MS + 1);
-    expect(await sfu().recall(CHANNEL)).toEqual({ ...NOTHING_KNOWN, lastWriter: "room-1" });
+    expect(await sfu().recall(CHANNEL)).toEqual({
+      ...NOTHING_KNOWN,
+      lastWriter: "room-1",
+      owner: GUEST_MADE,
+    });
   });
 
   it("keeps the end on record while the reopened meeting runs, and moves it on when that one empties", async () => {
@@ -112,6 +125,7 @@ describe("what the SFU remembers about a room across a restart", () => {
       lost: null,
       passesVoidUntil: endedAt + MINUTE_MS,
       lastWriter: "room-2",
+      owner: GUEST_MADE,
     });
   });
 
@@ -123,6 +137,23 @@ describe("what the SFU remembers about a room across a restart", () => {
 
     writeFileSync(file, JSON.stringify({ liveAt: "soon" }));
     expect(await sfu().recall(CHANNEL)).toEqual(NOTHING_KNOWN);
+  });
+});
+
+describe("whose code it is", () => {
+  it("is remembered after the meeting is over", async () => {
+    const owned = { ...room, ownerEmail: "owner@example.com" };
+    const before = sfu();
+    before.noteRunning(owned);
+    before.noteOver(owned);
+
+    expect((await sfu().recall(CHANNEL)).owner).toEqual({ email: "owner@example.com" });
+  });
+
+  it("is known to be nobody's for a code a guest made, and unknown for a code with no record", async () => {
+    sfu().noteRunning(room);
+    expect((await sfu().recall(CHANNEL)).owner).toEqual(GUEST_MADE);
+    expect((await sfu().recall("conclave:never-used")).owner).toBeNull();
   });
 });
 

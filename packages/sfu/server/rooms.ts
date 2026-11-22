@@ -59,6 +59,7 @@ export const markRoomEnded = (
     | "markEnded"
     | "incarnationId"
     | "takesOverRecordOf"
+    | "ownerEmail"
   >,
   options: {
     message: string;
@@ -89,7 +90,10 @@ export const markRoomEnded = (
  */
 const noteMeetingOver = (
   state: SfuState,
-  room: Pick<Room, "id" | "clientId" | "channelId" | "incarnationId" | "takesOverRecordOf">,
+  room: Pick<
+    Room,
+    "id" | "clientId" | "channelId" | "incarnationId" | "takesOverRecordOf" | "ownerEmail"
+  >,
 ): void => {
   state.roomRecovery.noteOver(room);
   const meeting = getScheduledMeetingByRoomCode(

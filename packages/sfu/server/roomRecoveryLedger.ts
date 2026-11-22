@@ -38,6 +38,9 @@ export type RoomRecoveryRecord = {
   overAt: number | null;
   // The room (Room.incarnationId) that wrote it.
   writer: string;
+  // The signed-in account the code belongs to, which hosts whenever it is
+  // there. Null for a code a guest made. Kept when a meeting is over.
+  ownerEmail: string | null;
 };
 
 /**
@@ -72,6 +75,8 @@ export type RecalledRoom = {
   passesVoidUntil: number | null;
   // Who wrote the newest record. A room created now takes that record over.
   lastWriter: string | null;
+  // Whose code it is, if there is a record of it at all.
+  owner: { email: string | null } | null;
 };
 
 type LedgerRoom = Pick<
@@ -79,6 +84,7 @@ type LedgerRoom = Pick<
   | "channelId"
   | "incarnationId"
   | "takesOverRecordOf"
+  | "ownerEmail"
   | "hostUserKey"
   | "adminUserKeys"
   | "usersNeedingReadmission"
@@ -88,7 +94,7 @@ type LedgerRoom = Pick<
 export type RoomRecoveryLedger = {
   noteRunning: (room: LedgerRoom) => void;
   noteOver: (
-    room: Pick<Room, "channelId" | "incarnationId" | "takesOverRecordOf">,
+    room: Pick<Room, "channelId" | "incarnationId" | "takesOverRecordOf" | "ownerEmail">,
   ) => void;
   recall: (channelId: string) => Promise<RecalledRoom>;
 };
@@ -106,10 +112,12 @@ const parseRoomRecoveryRecord = (raw: unknown): RoomRecoveryRecord | null => {
     readmissionRequiredUserKeys,
     overAt,
     writer,
+    ownerEmail,
   } = raw as Record<string, unknown>;
   if (liveAt !== null && typeof liveAt !== "number") return null;
   if (overAt !== null && typeof overAt !== "number") return null;
   if (typeof writer !== "string") return null;
+  if (ownerEmail !== null && typeof ownerEmail !== "string") return null;
   if (hostUserKey !== null && typeof hostUserKey !== "string") return null;
   if (!isStringList(adminUserKeys)) return null;
   if (!isStringList(readmissionRequiredUserKeys)) return null;
@@ -120,6 +128,7 @@ const parseRoomRecoveryRecord = (raw: unknown): RoomRecoveryRecord | null => {
     readmissionRequiredUserKeys,
     overAt,
     writer,
+    ownerEmail,
   };
 };
 
@@ -150,13 +159,21 @@ const stillVoids = (overAt: number | null): number | null =>
     ? overAt
     : null;
 
-// Whether a stored record still says anything. One that does not parse is
-// not a record at all.
-const hasExpired = (raw: unknown): boolean => {
+// How long a room whose newest record says nothing else keeps that record
+// once it stops changing: a day, or a month when it names whose code it is.
+const CLEARED_ROOM_KEPT_MS = 24 * 60 * 60 * 1000;
+const OWNED_CODE_KEPT_MS = 30 * CLEARED_ROOM_KEPT_MS;
+
+// Whether a room whose newest record is `raw`, unchanged for `unchangedMs`,
+// may be cleared out. One that does not parse is not a record at all.
+const mayClearOut = (raw: unknown, unchangedMs: number): boolean => {
   const record = parseRoomRecoveryRecord(raw);
+  if (!record) return unchangedMs >= CLEARED_ROOM_KEPT_MS;
+  if (wasRunningRecently(record.liveAt) || stillVoids(record.overAt) !== null) {
+    return false;
+  }
   return (
-    !record ||
-    (!wasRunningRecently(record.liveAt) && stillVoids(record.overAt) === null)
+    unchangedMs >= (record.ownerEmail ? OWNED_CODE_KEPT_MS : CLEARED_ROOM_KEPT_MS)
   );
 };
 
@@ -190,6 +207,7 @@ export const createRoomRecoveryLedger = (
         readmissionRequiredUserKeys: room.usersNeedingReadmission,
         overAt: stillVoids(room.recoveryPassesVoidUntil),
         writer: room.incarnationId,
+        ownerEmail: room.ownerEmail,
       }),
     noteOver: (room) =>
       save(room, {
@@ -199,6 +217,7 @@ export const createRoomRecoveryLedger = (
         readmissionRequiredUserKeys: [],
         overAt: Date.now(),
         writer: room.incarnationId,
+        ownerEmail: room.ownerEmail,
       }),
     recall: async (channelId) => {
       const stored = await store.read(channelId).catch((error) => {
@@ -219,6 +238,7 @@ export const createRoomRecoveryLedger = (
             : null,
         passesVoidUntil: stillVoids(record?.overAt ?? null),
         lastWriter: writerOf(stored),
+        owner: record ? { email: record.ownerEmail } : null,
       };
     },
   };
@@ -242,10 +262,6 @@ export const createMemoryRoomRecoveryStore = (): RoomRecoveryStore => {
 
 const PRUNE_EVERY_MS = 10 * 60 * 1000;
 const ABANDONED_TEMP_FILE_MS = 60 * 1000;
-// How long a room whose newest record says nothing keeps that record before
-// the room is cleared out. Until then the record still fences off writes
-// from rooms that came before it.
-const CLEARED_ROOM_KEPT_MS = 24 * 60 * 60 * 1000;
 const WRITE_ATTEMPTS = 8;
 
 const roomRecoveryDirectory = (): string => {
@@ -291,7 +307,8 @@ const VERSION_FILE = /^(\d+)\.json$/;
  * wrote meanwhile, does not write. No lock, no clock.
  *
  * Tidying removes versions below the newest, which no one reads any more,
- * and a whole room only once its newest record has said nothing for a day.
+ * and a whole room only once its newest record has said nothing for a day
+ * (a month, if it names whose code it is).
  */
 export const createFileRoomRecoveryStore = (
   directory: string = roomRecoveryDirectory(),
@@ -329,11 +346,14 @@ export const createFileRoomRecoveryStore = (
       return;
     }
     for (const version of older) rmSync(versionPath(room, version), { force: true });
+    // Until then the record still fences off writes from rooms before it.
     const path = versionPath(room, newest);
     const written = unlessGone(() => statSync(path).mtimeMs);
     if (written === null || Date.now() - written < CLEARED_ROOM_KEPT_MS) return;
     const text = unlessGone(() => readFileSync(path, "utf8"));
-    if (text === null || !hasExpired(parsedOrUndefined(text))) return;
+    if (text === null || !mayClearOut(parsedOrUndefined(text), Date.now() - written)) {
+      return;
+    }
     rmSync(path, { force: true });
     try {
       rmdirSync(room);

@@ -33,7 +33,7 @@ import { MAX_REACTIONS_PER_CHAT_MESSAGE } from "../../types.js";
 import { Logger } from "../../utilities/loggers.js";
 import { config } from "../config.js";
 import { Admin } from "./Admin.js";
-import type { Client } from "./Client.js";
+import { Client } from "./Client.js";
 import type { ProducerType } from "./Client.js";
 import type { GameSession } from "../../server/games/engine.js";
 import {
@@ -234,6 +234,11 @@ export class Room {
   // the writer of the newest record then. It may write over that room's
   // records, and over no one else's but its own.
   public takesOverRecordOf: string | null = null;
+  // The signed-in account this room's code belongs to (who booked it, or who
+  // made it), which hosts whenever it is here. Null for a code a guest made.
+  public ownerEmail: string | null = null;
+  // Who opened this room, the user key of the join that created it.
+  public openedBy: string | null = null;
   // Set when this code was ended for everyone a moment ago: recovery passes
   // signed up to then are from the ended meeting, not from this one.
   public recoveryPassesVoidUntil: number | null = null;
@@ -2773,6 +2778,21 @@ export class Room {
 
   unblockUser(userKey: string) {
     this.blockedUsers.delete(userKey);
+  }
+
+  // Takes host rights away from everyone in the room with this user key.
+  // Returns those who had them.
+  demoteToParticipant(userKey: string): Client[] {
+    this.adminUserKeys.delete(userKey);
+    if (this.hostUserKey === userKey) this.hostUserKey = null;
+    const demoted: Client[] = [];
+    for (const [userId, key] of this.userKeysById) {
+      const client = this.clients.get(userId);
+      if (key !== userKey || !(client instanceof Admin) || client.isObserver) continue;
+      Object.setPrototypeOf(client, Client.prototype);
+      demoted.push(client);
+    }
+    return demoted;
   }
 
   isBlocked(userKey: string): boolean {

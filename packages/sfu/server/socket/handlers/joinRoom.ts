@@ -48,7 +48,10 @@ import {
   resolveScheduledWebinarAttendeeEntry,
 } from "../../scheduledWebinars.js";
 import { ensureWebinarRoomConfig } from "../../scheduledWebinarScheduler.js";
-import { isScheduledMeetingInvitee } from "../../scheduledMeetings.js";
+import {
+  getScheduledMeetingByRoomCode,
+  isScheduledMeetingInvitee,
+} from "../../scheduledMeetings.js";
 import {
   issueRoomRecoveryPass,
   provesEarlierRoomMembership,
@@ -388,6 +391,23 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
               room.recoveryPassesVoidUntil = recalled.passesVoidUntil;
               room.takesOverRecordOf = recalled.lastWriter;
               lostRoom = recalled.lost;
+              room.openedBy = userKey;
+              // Whose code it is: who booked it, else whoever made it, which
+              // the record keeps. A code with no record is made by this join,
+              // and belongs to its account, if it is signed in.
+              const booking = getScheduledMeetingByRoomCode(
+                state.scheduledMeetings,
+                clientId,
+                roomId,
+              );
+              room.ownerEmail =
+                booking && booking.status !== "cancelled"
+                  ? booking.hostEmail
+                  : recalled.owner
+                    ? recalled.owner.email
+                    : isWebinarAttendeeJoin
+                      ? null
+                      : normalizedJoinEmail || null;
             }
           } catch (error) {
             if (error instanceof RoomOwnershipError) {
@@ -555,10 +575,17 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           room.hostUserKey === userKey;
         const isPersistedAdminForExistingRoom =
           !isWebinarAttendeeJoin && room.isAdminUserKey(userKey);
+        // The verified account the code belongs to hosts whenever it is
+        // here, without knocking, whoever opened the room before it came.
+        const isCodeOwner =
+          !isWebinarAttendeeJoin &&
+          Boolean(normalizedJoinEmail) &&
+          room.ownerEmail === normalizedJoinEmail;
         const isAdminForExistingRoom =
           !isWebinarAttendeeJoin &&
           (isReturningPrimaryHost ||
             isPersistedAdminForExistingRoom ||
+            isCodeOwner ||
             (hostRequested &&
               (clientPolicy.allowHostJoin || forcedHostJoin)));
         const needsReadmission = room.needsReadmission(userKey);
@@ -672,6 +699,19 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         }
         if (isAdminJoin && !room.hostUserKey) {
           room.hostUserKey = userKey;
+        }
+        // The owner is back: it hosts, and whoever opened the room in its
+        // absence is a participant now. A block or removal by them does not
+        // hold against the owner.
+        let demotedForOwner: Client[] = [];
+        if (isAdminJoin && isCodeOwner) {
+          if (room.openedBy && room.openedBy !== userKey) {
+            demotedForOwner = room.demoteToParticipant(room.openedBy);
+          }
+          room.hostUserKey = userKey;
+          if (room.isBlocked(userKey) || room.needsReadmission(userKey)) {
+            room.allowLockedUser(userKey);
+          }
         }
         if (isAdminJoin && (createdRoom || restorerState !== "none")) {
           room.markRestored();
@@ -972,6 +1012,9 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           roomId,
           hostUserIds,
         });
+        for (const demoted of demotedForOwner) {
+          demoted.socket.emit("hostRemoved", { roomId, hostUserId });
+        }
 
         if (context.currentClient instanceof Admin && !context.currentClient.isObserver) {
           const pendingUsers = Array.from(
