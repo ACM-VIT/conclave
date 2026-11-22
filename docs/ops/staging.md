@@ -38,7 +38,13 @@ What A shares, and why it is still safe:
   channels. Staging runs its own Redis container on 127.0.0.1:6380.
 - **Disk**: `/var/lib/conclave-staging`, never the production state dir.
 - **Ports**: HTTP 3033, RTC 42001-42200 (production uses 3031, 3032 and
-  40000-42000).
+  40000-42000). With #268's port budget (`SFU_WEBRTC_PORT_BUDGET`, 4 by
+  default) and staging's single worker, WebRTC uses 42001-42004 and
+  42005-42200 carries plain RTP from relay sources only. This split follows
+  the firewall policy in #268's `packages/sfu/README.md`, so the rules below
+  depend on #268: before it, the SFU puts WebRTC ports anywhere in the range.
+  Whichever of #268 and this runbook changes second must keep the two in
+  step.
 
 ## One-time setup (option A)
 
@@ -47,12 +53,21 @@ What A shares, and why it is still safe:
 ```bash
 RG=RG-CONCLAVE-SFU-PROD-CENTRALINDIA
 NSG=nsg-conclave-sfu-prod-ci
-az network nsg rule create -g "$RG" --nsg-name "$NSG" -n allow-sfu-staging-rtc-udp \
+# Set to the hosts that send plain RTP to the SFU, such as the shared
+# browser. Never Internet or *. The relay rule refuses to run while it is empty.
+RELAY_SOURCES=
+# WebRTC: public UDP and TCP on the first SFU_WEBRTC_PORT_BUDGET ports only.
+az network nsg rule create -g "$RG" --nsg-name "$NSG" -n allow-sfu-staging-webrtc-udp \
   --priority 150 --direction Inbound --access Allow --protocol Udp \
-  --source-address-prefixes Internet --destination-port-ranges 42001-42200
-az network nsg rule create -g "$RG" --nsg-name "$NSG" -n allow-sfu-staging-rtc-tcp \
+  --source-address-prefixes Internet --destination-port-ranges 42001-42004
+az network nsg rule create -g "$RG" --nsg-name "$NSG" -n allow-sfu-staging-webrtc-tcp \
   --priority 155 --direction Inbound --access Allow --protocol Tcp \
-  --source-address-prefixes Internet --destination-port-ranges 42001-42200
+  --source-address-prefixes Internet --destination-port-ranges 42001-42004
+# Plain RTP: UDP from the relay sources only.
+az network nsg rule create -g "$RG" --nsg-name "$NSG" -n allow-sfu-staging-relay-rtp \
+  --priority 156 --direction Inbound --access Allow --protocol Udp \
+  --source-address-prefixes "${RELAY_SOURCES:?set RELAY_SOURCES to the relay hosts}" \
+  --destination-port-ranges 42005-42200
 ```
 
 ### 2. DNS (Cloudflare, zone acmvit.in)
