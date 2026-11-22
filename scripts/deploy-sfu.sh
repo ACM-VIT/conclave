@@ -493,6 +493,10 @@ deploy_service() {
   if [[ "$previous_image" == "$TARGET_IMAGE" ]]; then
     previous_image="$(docker image inspect -f '{{.Id}}' "${IMAGE_REPO}:rollback-${svc}" 2>/dev/null || true)"
   fi
+  # A stopped container can outlive its image; there is nothing to return to.
+  if [[ -n "$previous_image" ]] && ! docker image inspect "$previous_image" >/dev/null 2>&1; then
+    previous_image=""
+  fi
 
   if [[ -n "$container" && -n "$status" ]] &&
      [[ "$(printf "%s" "$status" | json_field draining)" == "false" ]] &&
