@@ -406,6 +406,7 @@ describe("Q&A in a regular meeting", () => {
     expect(afterDismiss.ok).toBe(true);
   });
 
+  // Asks 300 real questions through the wire, so it is given more time.
   it("drops hidden questions first when the book passes 300, then answered ones", async () => {
     const room = new Harness([qaAuthority]);
     const hostTab = await room.open(host, qaContract);
@@ -448,7 +449,7 @@ describe("Q&A in a regular meeting", () => {
     expect(watcher.row("myUpvotes", ids[0])).toBeNull();
     expect(hostTab.rows("questions").length).toBe(300);
     expect(field(hostTab.row("questions", overCap), "status")).toBe("pending");
-  });
+  }, 60_000);
 });
 
 describe("switching webinar mode", () => {
