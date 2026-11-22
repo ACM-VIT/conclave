@@ -181,7 +181,9 @@ const expectSteadyStep = (
 // line up their edges.
 const expectWithinStretch = (position: { width: number; height: number }, aspect: number) => {
   const natural = position.height * aspect;
-  expect(position.width).toBeGreaterThanOrEqual(Math.ceil(natural / 1.25));
+  expect(position.width).toBeGreaterThanOrEqual(
+    Math.min(Math.ceil(natural / 1.25), Math.floor(natural)),
+  );
   expect(position.width).toBeLessThanOrEqual(Math.floor(natural * 1.25));
 };
 
@@ -469,6 +471,13 @@ describe("computeGridLayout — mixed rows line up", () => {
     expectSteadyStep(from, to);
   });
 
+  it("keeps a tile a few px wide inside its caps", () => {
+    const aspects = [0.5, 1.25, 0.3, 2 / 3, 4 / 3, 0.3, 0.2, 0.8, 1];
+    const r = computeGridLayout(9, 211, 50, { maxCols: 7, tileAspects: aspects });
+
+    r.positions.forEach((position, index) => expectWithinStretch(position, aspects[index]));
+  });
+
   it("brings a near miss within a pixel with a fractional gap", () => {
     const aspects = [0.59, 0.4, 1.5];
     const r = computeGridLayout(3, 108.4, 73.4, { maxCols: 2, gap: 0.4, tileAspects: aspects });
@@ -556,7 +565,9 @@ describe("computeGridLayout — mixed rows, random layouts", () => {
         const natural = position.height * c.aspects[index];
         if (!Number.isInteger(position.width)) fail("fractional width");
         if (position.height !== r.tileHeight) fail("height");
-        if (position.width < Math.ceil(natural / 1.25)) fail("past the shrink cap");
+        if (position.width < Math.min(Math.ceil(natural / 1.25), Math.floor(natural))) {
+          fail("past the shrink cap");
+        }
         if (position.width > Math.floor(natural * 1.25)) fail("past the stretch cap");
         if (position.x < 0 || position.x + position.width > c.width + 1e-9) fail("x overflow");
         if (position.y + position.height > c.height + 1e-9) fail("y overflow");

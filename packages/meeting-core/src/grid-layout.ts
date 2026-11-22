@@ -178,11 +178,14 @@ const roundToTotal = (sizes: number[], total: number) => {
 
 /**
  * How far each tile may resize, in whole pixels, from its unrounded width
- * `exact`: `floor` and `hard` are the 1.25x caps either way, and `soft` holds
- * portrait tiles at 4:5, since a portrait tile crops a face sooner.
+ * `exact`: `floor` and `hard` are the 1.25x caps either way, never past the
+ * tile's own whole-pixel width, and `soft` holds portrait tiles at 4:5, since
+ * a portrait tile crops a face sooner.
  */
 const resizeLimits = (exact: number[], height: number) => {
-  const floor = exact.map((width) => Math.ceil(width / MAX_ROW_STRETCH));
+  const floor = exact.map((width) =>
+    Math.min(Math.ceil(width / MAX_ROW_STRETCH), Math.floor(width)),
+  );
   const hard = exact.map((width) => Math.floor(width * MAX_ROW_STRETCH));
   const soft = exact.map((width, index) =>
     width < height
