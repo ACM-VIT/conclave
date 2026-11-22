@@ -4,6 +4,7 @@ import { lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, PointerEvent, SetStateAction } from "react";
 import {
   Home,
+  KeyRound,
   Loader2,
   LogOut,
   MonitorPlay,
@@ -1931,11 +1932,22 @@ export default function MeetsMainContent({
             role="dialog"
             aria-modal="true"
           >
-            <div className="relative mx-auto h-11 w-11">
-              <div className="absolute inset-0 rounded-full border-2 border-[#fafafa]/10" />
-              <div className="absolute inset-0 animate-spin rounded-full border-2 border-transparent border-t-[#F95F4A]" />
-              <div className="absolute inset-[5px] rounded-full bg-[#F95F4A]/10" />
-            </div>
+            {needsInviteCodeToRejoin ? (
+              <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-full border-2 border-[#fafafa]/10 bg-[#F95F4A]/10">
+                <KeyRound
+                  size={18}
+                  strokeWidth={1.8}
+                  className="text-[#F95F4A]"
+                  aria-hidden="true"
+                />
+              </div>
+            ) : (
+              <div className="relative mx-auto h-11 w-11">
+                <div className="absolute inset-0 rounded-full border-2 border-[#fafafa]/10" />
+                <div className="absolute inset-0 animate-spin rounded-full border-2 border-transparent border-t-[#F95F4A]" />
+                <div className="absolute inset-[5px] rounded-full bg-[#F95F4A]/10" />
+              </div>
+            )}
             <h2
               className="mt-5 text-balance text-[17px] leading-tight text-[#fafafa]"
               style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
