@@ -34,6 +34,16 @@ struct ActiveAppRelayItem: Equatable {
     let clientId: Int
 }
 
+enum AppDocumentPolicy {
+    /// True when the presented app stayed the same but the room started its document over, as when
+    /// a host cleared and presented it again while this client was away. The local copy is stale.
+    static func replacesDocument(appId: String?, generation: Int?, previousAppId: String?, previousGeneration: Int?) -> Bool {
+        guard let appId = appId, appId == previousAppId, let generation = generation,
+              let previousGeneration = previousGeneration else { return false }
+        return generation != previousGeneration
+    }
+}
+
 struct ActiveAppSessionError: LocalizedError, Equatable {
     let reason: String
 

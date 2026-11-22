@@ -2,6 +2,7 @@ package conclave.module
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -14,12 +15,24 @@ import skip.foundation.JSONDecoder
 class AppsStateBridgeTests {
     @Test fun decodesTheAppsStateANewerSfuSends() {
         val json = "{\"roomId\":\"room-a\",\"activeAppId\":\"wheel\",\"locked\":false," +
-            "\"revision\":7,\"savedAppIds\":[\"watch\",\"whiteboard\"]}"
+            "\"revision\":7,\"savedAppIds\":[\"watch\",\"whiteboard\"],\"docGeneration\":3}"
 
-        val state = JSONDecoder().decode(AppsStateNotification::class, from = Data(platformValue = json.toByteArray(Charsets.UTF_8)))
+        val state = decode(json)
 
         assertEquals("room-a", state.roomId)
         assertEquals("wheel", state.activeAppId)
         assertFalse(state.locked)
+        assertEquals(7, state.revision)
+        assertEquals(3, state.docGeneration)
     }
+
+    @Test fun decodesNoRevisionOrDocumentFromAnOlderSfu() {
+        val state = decode("{\"roomId\":\"room-a\",\"activeAppId\":\"whiteboard\",\"locked\":false}")
+
+        assertNull(state.revision)
+        assertNull(state.docGeneration)
+    }
+
+    private fun decode(json: String): AppsStateNotification =
+        JSONDecoder().decode(AppsStateNotification::class, from = Data(platformValue = json.toByteArray(Charsets.UTF_8)))
 }

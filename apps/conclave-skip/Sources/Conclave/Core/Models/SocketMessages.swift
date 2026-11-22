@@ -2162,17 +2162,26 @@ struct AppsStateNotification: Codable {
     let activeAppId: String?
     let locked: Bool
     let roomId: String?
+    /// Absent from an older SFU, which erases an app's document when it leaves the stage.
+    let revision: Int?
+    /// The presented app's document. A new number means the room started it over.
+    let docGeneration: Int?
 
-    init(activeAppId: String? = nil, locked: Bool = false, roomId: String? = nil) {
+    init(activeAppId: String? = nil, locked: Bool = false, roomId: String? = nil, revision: Int? = nil,
+         docGeneration: Int? = nil) {
         self.activeAppId = activeAppId
         self.locked = locked
         self.roomId = roomId
+        self.revision = revision
+        self.docGeneration = docGeneration
     }
 
     enum CodingKeys: String, CodingKey {
         case activeAppId
         case locked
         case roomId
+        case revision
+        case docGeneration
     }
 
     init(from decoder: Decoder) throws {
@@ -2180,6 +2189,8 @@ struct AppsStateNotification: Codable {
         activeAppId = try container.decodeIfPresent(String.self, forKey: .activeAppId)
         locked = try container.decodeIfPresent(Bool.self, forKey: .locked) ?? false
         roomId = try container.decodeIfPresent(String.self, forKey: .roomId)
+        revision = try? container.decodeIfPresent(Int.self, forKey: .revision)
+        docGeneration = try? container.decodeIfPresent(Int.self, forKey: .docGeneration)
     }
 }
 

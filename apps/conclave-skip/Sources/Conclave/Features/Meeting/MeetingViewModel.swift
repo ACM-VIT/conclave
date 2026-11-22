@@ -5118,11 +5118,8 @@ final class MeetingViewModel {
         }
 
         if let appsState = snapshot.appsState {
-            applyAppsState(AppsStateNotification(
-                activeAppId: appsState.activeAppId,
-                locked: appsState.locked ?? state.isAppsLocked,
-                roomId: roomId
-            ))
+            applyAppsState(localAppsState(activeAppId: appsState.activeAppId,
+                                          locked: appsState.locked ?? state.isAppsLocked, roomId: roomId))
         }
 
         if let participants = snapshot.participants {
@@ -5589,12 +5586,18 @@ final class MeetingViewModel {
     private func applyAppsState(_ notification: AppsStateNotification) {
         guard isCurrentRoomEvent(notification.roomId) else { return }
         let previousAppId = state.activeAppId
+        let previousGeneration = state.activeAppDocGeneration
         let activeAppId = notification.activeAppId?.trimmingCharacters(in: .whitespacesAndNewlines)
         state.activeAppId = activeAppId?.isEmpty == false ? activeAppId : nil
+        state.activeAppDocGeneration = state.activeAppId == nil ? nil : notification.docGeneration
+        state.appsRevision = notification.revision
         state.isAppsLocked = notification.locked
         state.isAppsActionInFlight = false
-        if previousAppId != state.activeAppId {
-
+        let documentReplaced = AppDocumentPolicy.replacesDocument(
+            appId: state.activeAppId, generation: state.activeAppDocGeneration,
+            previousAppId: previousAppId, previousGeneration: previousGeneration)
+        if previousAppId != state.activeAppId || documentReplaced {
+            if documentReplaced { activeAppSession.end() }
             if state.activeAppHasRoomData { state.activeAppHasRoomData = false }
             syncActiveAppSessionIdentity()
             if state.activeAppId != nil,
@@ -5603,6 +5606,16 @@ final class MeetingViewModel {
                 activeAppSession.primeSnapshot()
             }
         }
+    }
+
+    // A stage change this client learned from somewhere other than apps:state. It keeps the
+    // SFU's revision and, for the same app, the document generation apps:state last sent.
+    private func localAppsState(activeAppId: String?, locked: Bool, roomId: String?) -> AppsStateNotification {
+        let trimmed = activeAppId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sameApp = trimmed?.isEmpty == false && trimmed == state.activeAppId
+        return AppsStateNotification(activeAppId: activeAppId, locked: locked, roomId: roomId,
+                                     revision: state.appsRevision,
+                                     docGeneration: sameApp ? state.activeAppDocGeneration : nil)
     }
 
     private func normalizedActiveAppId() -> String? {
@@ -5633,6 +5646,7 @@ final class MeetingViewModel {
 
     private func clearAppsState() {
         state.activeAppId = nil
+        state.activeAppDocGeneration = nil
         state.isAppsLocked = false
         state.isAppsActionInFlight = false
         clearAppSyncState()
@@ -15395,11 +15409,8 @@ final class MeetingViewModel {
                     return
                 }
                 let activeAppId = response.activeAppId?.trimmingCharacters(in: .whitespacesAndNewlines)
-                applyAppsState(AppsStateNotification(
-                    activeAppId: activeAppId?.isEmpty == false ? activeAppId : trimmedAppId,
-                    locked: state.isAppsLocked,
-                    roomId: state.roomId
-                ))
+                applyAppsState(localAppsState(activeAppId: activeAppId?.isEmpty == false ? activeAppId : trimmedAppId,
+                                              locked: state.isAppsLocked, roomId: state.roomId))
             } catch {
                 applyActionError(error, context: actionContext)
                 activitySession.activities.commandFailed(.openApp, serverText: "")
