@@ -388,6 +388,25 @@ struct CrashReportingTests {
         #expect(CrashReportPrivacy.symbol("kotlin.collections.ArrayList.get") == "kotlin.collections.ArrayList.get")
     }
 
+    @Test func aPathKeepsOnlyALibraryOrBinaryNameAndOtherwiseDropsEverythingAfterIt() {
+        let dottedFolder = CrashReportPrivacy.symbol("native: /Users/Jane.Doe Smith")
+        #expect(dottedFolder == "native:")
+        let spacedLibrary = CrashReportPrivacy.symbol(
+            "#03 pc 0004 /data/user/0/com.acmvit.conclave/files/Jane Doe Plugins/libplugin.so (run+4)")
+        #expect(spacedLibrary == "#03 pc 0004 libplugin.so (run+4)")
+        let dottedFile = CrashReportPrivacy.symbol("open /data/user/0/com.acmvit.conclave/files/Jane.Doe Smith.json")
+        #expect(dottedFile == "open")
+        let relative = CrashReportPrivacy.symbol("load Users/Jane.Doe/notes.txt")
+        #expect(relative == "load")
+        for (text, leaked) in [(dottedFolder, "Jane"), (dottedFolder, "Smith"), (spacedLibrary, "Doe"), (spacedLibrary, "user"),
+                               (dottedFile, "Jane"), (dottedFile, "Smith"), (relative, "Jane")] {
+            #expect(!text.contains(leaked), "\(leaked) in \(text)")
+        }
+        #expect(CrashReportPrivacy.symbol("at /System/Library/Frameworks/UIKit.framework/UIKit (run)") == "at UIKit.framework (run)")
+        #expect(CrashReportPrivacy.symbol("/private/var/containers/Bundle/Application/A1/Conclave.app/Conclave") == "Conclave")
+        #expect(CrashReportPrivacy.symbol("/usr/lib/system/libsystem_kernel.dylib") == "libsystem_kernel.dylib")
+    }
+
     @Test func theLedgerForgetsReportsRetentionDeleted() {
         let store = temporaryStore()
         let ledger = CrashReportLedger(store: store)

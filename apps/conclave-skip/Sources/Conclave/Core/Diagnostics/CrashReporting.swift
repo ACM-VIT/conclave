@@ -54,14 +54,19 @@ struct CrashReportException: Equatable {
 }
 
 /// Character checks alone do not make text safe to upload, so uploads take text fields from a fixed key list
-/// and reduce exception names and stack frames to code-symbol characters. A token holding a path keeps only a
-/// file name with an extension (`libc.so`), so directory names such as a user folder never leave the device.
+/// and reduce exception names and stack frames to code-symbol characters. A path keeps only a library or binary
+/// name (`libc.so`, `UIKit.framework`, `Conclave`); anything else in it, such as a user folder, never leaves the device.
 enum CrashReportPrivacy {
     static let uploadedTextKeys: [String] = [
         "reason", "summaryPhase", "appVersion", "osVersion", "appBuild", "architecture", "exceptionName", "exceptionKind",
     ]
     static let symbolCharacters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.$:<>()[]+-#/ ,"
     static let maxSymbolLength = 160
+    /// Native libraries and binaries a frame can name on iOS (`.dylib`, `.framework`) and Android (`.so`, plus the
+    /// runtime's `.apk`, `.oat`, `.odex`, `.vdex`, `.jar` and `.dex` files).
+    static let binarySuffixes = [".so", ".dylib", ".framework", ".apk", ".oat", ".odex", ".vdex", ".jar", ".dex"]
+    static let appBinaryNames = ["Conclave"]
+    static let binaryNameCharacters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.+-"
 
     static func symbol(_ text: String) -> String {
         var kept = ""
@@ -75,7 +80,7 @@ enum CrashReportPrivacy {
                 continue
             }
             let fileName = token.components(separatedBy: "/").last ?? ""
-            if fileName.contains(".") {
+            if isBinaryName(fileName) {
                 tokens.append(fileName)
             }
         }
@@ -83,28 +88,45 @@ enum CrashReportPrivacy {
         return joined.count > maxSymbolLength ? String(joined.prefix(maxSymbolLength)) : joined
     }
 
-    /// A path can hold spaces and dots (`/Users/Jane.Doe Smith/lib.so`), so everything from a path's first `/` to the
-    /// last `/` after it goes before the text is split on spaces. Only a file name with an extension survives.
+    static func isBinaryName(_ name: String) -> Bool {
+        if name.isEmpty { return false }
+        for character in name where !binaryNameCharacters.contains(character) {
+            return false
+        }
+        if appBinaryNames.contains(name) { return true }
+        for suffix in binarySuffixes where name.count > suffix.count && name.hasSuffix(suffix) {
+            return true
+        }
+        return false
+    }
+
+    /// Fails closed. A path can hold spaces and dots (`/Users/Jane.Doe Smith/lib.so`), so no text between its first
+    /// `/` and the last `/` after it survives, and the name after that last `/` survives only when it is a library or
+    /// binary (or the binary inside its `.framework`). Otherwise everything from the path on goes, because a name with
+    /// a dot or a word after a space could still be a folder.
     static func withoutPaths(_ text: String) -> String {
         var characters: [String] = []
         for character in text {
             characters.append(String(character))
         }
-        let pathOpeners = [" ", "(", "[", "=", ":", "\"", "'"]
-        let nameEnders = [" ", "(", ")", "[", "]", ","]
+        let nameEnders = [" ", "(", ")", "[", "]", ",", "\"", "'", ":", ";", "\t", "\n"]
         var result = ""
         var index = 0
         while index < characters.count {
-            let startsPath = characters[index] == "/" && (index == 0 || pathOpeners.contains(characters[index - 1]))
+            let startsPath = characters[index] == "/" && (index == 0 || !isPathWordCharacter(characters[index - 1]))
             if !startsPath {
                 result += characters[index]
                 index += 1
                 continue
             }
             var lastSlash = index
+            var previousSlash = -1
             var probe = index + 1
             while probe < characters.count {
-                if characters[probe] == "/" { lastSlash = probe }
+                if characters[probe] == "/" {
+                    previousSlash = lastSlash
+                    lastSlash = probe
+                }
                 probe += 1
             }
             var nameEnd = lastSlash + 1
@@ -113,12 +135,29 @@ enum CrashReportPrivacy {
                 name += characters[nameEnd]
                 nameEnd += 1
             }
-            if name.contains(".") {
+            var folder = ""
+            if previousSlash >= 0 {
+                var folderIndex = previousSlash + 1
+                while folderIndex < lastSlash {
+                    folder += characters[folderIndex]
+                    folderIndex += 1
+                }
+            }
+            if isBinaryName(name) {
                 result += name
+            } else if !name.isEmpty && folder == name + ".framework" {
+                result += folder
+            } else {
+                break
             }
             index = nameEnd
         }
         return result
+    }
+
+    /// A `/` right after one of these continues a relative name (`lib/arm64`) rather than starting an absolute path.
+    private static func isPathWordCharacter(_ character: String) -> Bool {
+        binaryNameCharacters.contains(character)
     }
 
     static func frame(_ frame: CrashReportFrame) -> CrashReportFrame {
