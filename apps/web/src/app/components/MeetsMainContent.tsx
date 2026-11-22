@@ -600,6 +600,7 @@ export default function MeetsMainContent({
   const {
     state: appsState,
     presentedDoc,
+    retryPresentedDoc,
     apps,
     presentApp,
     closeApp,
@@ -2353,7 +2354,8 @@ export default function MeetsMainContent({
           app={ActiveMeetingApp}
           appName={activeMeetingApp?.name ?? ""}
           appKey={presentedDoc?.key ?? ""}
-          appReady={presentedDoc?.ready ?? false}
+          appStatus={presentedDoc?.status ?? "loading"}
+          onRetryApp={retryPresentedDoc}
           frameContent={!isDevPlaygroundActive}
           leaveAction={isWatchActive ? watchLeaveAction : undefined}
           localStream={localStream}

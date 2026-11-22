@@ -107,6 +107,9 @@ export type AppsCommandResult =
   | { ok: true }
   | { ok: false; reason: "roomFull" | "staleStage" | "failed" };
 
+/** Where the presented app's local document stands; see `presentedDoc`. */
+export type PresentedDocStatus = "loading" | "ready" | "failed";
+
 export type AppsContextValue = {
   state: AppsState;
   apps: ConclaveApp[];
@@ -122,11 +125,14 @@ export type AppsContextValue = {
   getAwareness: (appId: string) => Awareness;
   /**
    * The presented app's local document. `key` changes with every new local
-   * copy, and `ready` turns true once the room's first sync reply has filled
-   * it. Hosts mount the app only when ready, keyed by `key`, so an app never
+   * copy. `status` is `ready` once the room's first sync reply has filled it,
+   * and `failed` when every retry of that sync was refused or unanswered.
+   * Hosts mount the app only when ready, keyed by `key`, so an app never
    * edits a copy the room has not filled yet or one the provider dropped.
    */
-  presentedDoc: { key: string; ready: boolean } | null;
+  presentedDoc: { key: string; status: PresentedDocStatus } | null;
+  /** Starts the presented app's first sync over, as after `failed`. */
+  retryPresentedDoc: () => void;
   user?: AppUser;
   participants?: AppUser[];
   isAdmin?: boolean;

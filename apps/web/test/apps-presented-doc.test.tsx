@@ -22,7 +22,17 @@ const PAGE_ID = "page-1";
 const stroke = (id: string) =>
   ({ id, type: "pen", points: [{ x: 1, y: 1 }, { x: 2, y: 2 }] }) as never;
 
+type SyncPolicy = {
+  // How many sync requests the room refuses first, or all until allowSyncs().
+  refuse?: number | "all";
+  // Answer syncs at once instead of waiting for deliverSync().
+  autoAnswer?: boolean;
+};
+
 type Room = {
+  status: () => string | null;
+  retry: () => void;
+  allowSyncs: () => void;
   receive: () => void;
   room: RoomApps;
   deliverSync: () => void;
@@ -36,7 +46,7 @@ type Room = {
 // A room whose whiteboard already holds one saved stroke, and a client that
 // mounts the board the way the meeting stage does. Sync replies wait until
 // the test delivers them, like a slow link.
-async function withSavedBoard(run: (room: Room) => Promise<void>) {
+async function withSavedBoard(run: (room: Room) => Promise<void>, policy: SyncPolicy = {}) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const room = new RoomApps();
   const original = createWhiteboardDoc();
@@ -51,6 +61,7 @@ async function withSavedBoard(run: (room: Room) => Promise<void>) {
   const listeners = new Map<string, (payload: unknown) => void>();
   let pendingSync = () => {};
   let syncs = 0;
+  let syncsAllowed = false;
   const socket = {
     connected: true,
     on: (event: string, listener: (payload: unknown) => void) => listeners.set(event, listener),
@@ -63,9 +74,16 @@ async function withSavedBoard(run: (room: Room) => Promise<void>) {
       const roomDoc = room.liveDoc(APP_ID);
       if (event === "apps:yjs:sync" && roomDoc) {
         syncs += 1;
+        const refused =
+          policy.refuse === "all" ? !syncsAllowed : syncs <= (policy.refuse ?? 0);
+        if (refused) {
+          ack!({ error: "Too many app sync requests" });
+          return;
+        }
         const update = Y.encodeStateAsUpdate(roomDoc, data.syncMessage);
         const stateVector = Y.encodeStateVector(roomDoc);
         pendingSync = () => ack!({ syncMessage: update, stateVector });
+        if (policy.autoAnswer) pendingSync();
       }
       if (
         event === "apps:yjs:update" &&
@@ -79,6 +97,8 @@ async function withSavedBoard(run: (room: Room) => Promise<void>) {
   } as unknown as Socket;
 
   let drawOnBoard: (() => void) | null = null;
+  let lastStatus: string | null = null;
+  let retryPresentedDoc = () => {};
   function Board() {
     const { doc } = useAppDoc(APP_ID);
     // The canvas binds its document once, as the whiteboard's tool engine does.
@@ -89,8 +109,11 @@ async function withSavedBoard(run: (room: Room) => Promise<void>) {
     return null;
   }
   function Stage() {
-    const { presentedDoc } = useContext(AppsContext)!;
-    if (!presentedDoc?.ready) {
+    const context = useContext(AppsContext)!;
+    const { presentedDoc } = context;
+    lastStatus = presentedDoc?.status ?? null;
+    retryPresentedDoc = context.retryPresentedDoc;
+    if (presentedDoc?.status !== "ready") {
       drawOnBoard = null;
       return null;
     }
@@ -112,6 +135,11 @@ async function withSavedBoard(run: (room: Room) => Promise<void>) {
   try {
     await act(async () => receive());
     await run({
+      status: () => lastStatus,
+      retry: () => retryPresentedDoc(),
+      allowSyncs: () => {
+        syncsAllowed = true;
+      },
       receive,
       room,
       deliverSync: () => pendingSync(),
@@ -131,8 +159,15 @@ async function withSavedBoard(run: (room: Room) => Promise<void>) {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
+
+const advance = async (ms: number) => {
+  await act(async () => {
+    vi.advanceTimersByTime(ms);
+  });
+};
 
 it("keeps the saved board when someone tries to draw before a slow sync arrives", async () => {
   await withSavedBoard(async ({ deliverSync, draw, roomStrokes }) => {
@@ -170,4 +205,43 @@ it("hands the board a fresh document when Close and Present arrive in one batch"
     expect(syncRequests()).toBe(2);
     expect(roomStrokes()).toEqual(["kept", "new"]);
   });
+});
+
+it("retries a refused first sync and opens the board once a sync is answered", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  await withSavedBoard(
+    async ({ status, syncRequests, draw, roomStrokes }) => {
+      expect(status()).toBe("loading");
+      await advance(250);
+      await advance(500);
+
+      expect(syncRequests()).toBe(3);
+      expect(status()).toBe("ready");
+      await act(async () => {
+        draw();
+      });
+      expect(roomStrokes()).toEqual(["kept", "new"]);
+    },
+    { refuse: 2, autoAnswer: true },
+  );
+});
+
+it("offers a retry once every sync is refused, and the retry opens the board", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  await withSavedBoard(
+    async ({ status, syncRequests, retry, allowSyncs }) => {
+      await advance(40_000);
+      expect(status()).toBe("failed");
+      const attempts = syncRequests();
+      expect(attempts).toBeGreaterThan(5);
+      await advance(40_000);
+      expect(syncRequests()).toBe(attempts);
+
+      allowSyncs();
+      await act(async () => retry());
+
+      expect(status()).toBe("ready");
+    },
+    { refuse: "all", autoAnswer: true },
+  );
 });
