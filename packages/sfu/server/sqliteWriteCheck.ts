@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { Logger } from "../utilities/loggers.js";
 
 type SqliteDatabase = { exec(sql: string): void; close(): void };
 
@@ -42,5 +43,29 @@ export const assertSqliteWritable = (db: SqliteDatabase, path: string): void => 
       `${path} is not writable by uid ${process.getuid?.() ?? "unknown"} (${reason}). Hand the recordings volume to the SFU user with the ownership step in packages/sfu/README.md; scripts/deploy-sfu.sh runs it before starting each container.`,
       { cause: error },
     );
+  }
+};
+
+const LOCKED = /database is locked|SQLITE_BUSY/i;
+
+/**
+ * Two SFUs open the shared SQLite file together at boot, and one can hold its
+ * write lock past the other's busy timeout. Retries a locked store with
+ * backoff inside a startup budget; any other failure stops startup at once.
+ */
+export const retryWhileSqliteLocked = async <T>(
+  step: () => T | Promise<T>,
+  { budgetMs = 60_000, sleep = (ms: number) => new Promise<void>((done) => setTimeout(done, ms)) } = {},
+): Promise<T> => {
+  const deadline = Date.now() + budgetMs;
+  for (let delay = 250; ; delay = Math.min(delay * 2, 4_000)) {
+    try {
+      return await step();
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      if (!LOCKED.test(reason) || Date.now() + delay > deadline) throw error;
+      Logger.warn(`SQLite is locked by another process (${reason}); retrying in ${delay} ms`);
+      await sleep(delay);
+    }
   }
 };
