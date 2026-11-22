@@ -91,6 +91,7 @@ import type {
   Viewer,
 } from "./types";
 import {
+  canTranscribeLanguage,
   connectLiveTranscriptionProvider,
   type LiveTranscriptionSession,
 } from "./transcription";
@@ -905,17 +906,35 @@ export class TranscriptRoom {
       if (!key.ok) { this.sendError(viewer, key.message); return; }
     }
 
+    const providerEnv = { ...this.env, ...effectiveEnv };
+    const deploymentLanguage = normalizeLanguage(
+      this.env.TRANSCRIPT_TRANSCRIPTION_LANGUAGE,
+    );
+    const requestedLanguage = normalizeLanguage(
+      message.language ??
+        (takeover ? this.session?.language : undefined) ??
+        deploymentLanguage,
+    );
+    const canCaption = canTranscribeLanguage(
+      transcriptionProvider,
+      requestedLanguage,
+      providerEnv,
+    );
+    if (!canCaption && message.language) {
+      this.sendError(
+        viewer,
+        "This room's transcription model can't caption in that language.",
+      );
+      return;
+    }
+    const language = canCaption ? requestedLanguage : deploymentLanguage;
+
     this.responseAbort.abort();
     this.responseAbort = new AbortController();
     const acceptedRevision = ++this.sessionRevision;
-    this.responseEnvironment = { ...this.env, ...effectiveEnv };
+    this.responseEnvironment = providerEnv;
     const transportMode = normalizeTransportMode(message.transportMode);
     const wasIdle = existingStatus === "idle" || existingStatus === "error";
-    const language = normalizeLanguage(
-      message.language ??
-        (takeover ? this.session?.language : undefined) ??
-        this.env.TRANSCRIPT_TRANSCRIPTION_LANGUAGE,
-    );
     this.responseApiKey = responseKey.ok ? responseKey.apiKey : null;
     this.responseRoute = viewer.sfuUrl && viewer.clientId && viewer.channelId ? {sfuUrl: viewer.sfuUrl, identity: {userId: viewer.userId, roomId, clientId: viewer.clientId, channelId: viewer.channelId}} : null;
     this.personalResponseKeys = personalResponseKeys;

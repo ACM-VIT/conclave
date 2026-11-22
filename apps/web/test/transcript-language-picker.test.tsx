@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import TranscriptPanel from "../src/app/components/TranscriptPanel";
 import type { MeetingTranscriptController } from "../src/app/hooks/useMeetingTranscript";
+import type { RoomAiController } from "../src/app/hooks/useRoomAi";
 import type { TranscriptSessionState } from "../src/app/lib/types";
 import { createEmptyTranscriptMinutes } from "../src/app/lib/transcript-reducer";
 
@@ -47,11 +48,22 @@ const controller = (
     ...overrides,
   }) as unknown as MeetingTranscriptController;
 
-async function render(transcript: MeetingTranscriptController) {
+async function render(
+  transcript: MeetingTranscriptController,
+  roomAi?: RoomAiController,
+) {
   await act(async () =>
-    root.render(<TranscriptPanel transcript={transcript} onClose={() => {}} />),
+    root.render(
+      <TranscriptPanel transcript={transcript} roomAi={roomAi} onClose={() => {}} />,
+    ),
   );
 }
+
+const roomUsing = (transcriptionModel: string) =>
+  ({
+    ready: true,
+    state: { features: { transcription: { model: transcriptionModel } } },
+  }) as unknown as RoomAiController;
 
 const select = (id: string) =>
   container.querySelector<HTMLSelectElement>(`#${id}`);
@@ -159,6 +171,28 @@ describe("caption language picker", () => {
 
     expect(select("captions-language-live")).toBeNull();
     expect(container.textContent).toContain("Hindi");
+  });
+
+  it("hides the live switch when the room now runs a model with other languages", async () => {
+    await render(
+      controller(
+        { status: "live", language: "fr", keySource: "global" },
+        { isController: true },
+      ),
+      roomUsing("saaras:v3"),
+    );
+
+    expect(select("captions-language-live")).toBeNull();
+    expect(container.textContent).toContain("French");
+  });
+
+  it("keeps the live switch when the room still runs the same model", async () => {
+    await render(
+      controller({ status: "live", language: "fr" }, { isController: true }),
+      roomUsing("gpt-live-transcribe"),
+    );
+
+    expect(select("captions-language-live")?.value).toBe("fr");
   });
 
   it("hides the live switch when the worker does not report a language", async () => {

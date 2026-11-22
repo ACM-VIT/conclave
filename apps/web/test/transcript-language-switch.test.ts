@@ -87,6 +87,13 @@ async function fixture() {
 
 const savedTexts = (room: TestRoom) => room.segments.map(({ text }) => text);
 
+const moveRoomToSarvam = () =>
+  lookup.mockResolvedValue({
+    OPENAI_API_KEY: "sk-room",
+    SARVAM_API_KEY: "sarvam-room",
+    CONCLAVE_AI_SETTINGS: JSON.stringify({ transcription: { model: "saaras:v3" } }),
+  });
+
 describe("switching the caption language mid-sentence", () => {
   it("keeps the words already on screen once the old provider finishes them", async () => {
     const { room, viewer, providers } = await fixture();
@@ -132,5 +139,37 @@ describe("switching the caption language mid-sentence", () => {
     await before.callbacks.onFinal("later", "Words after the switch.");
 
     expect(savedTexts(room)).toEqual(["Hello there."]);
+  });
+});
+
+describe("caption languages the running provider can transcribe", () => {
+  it("refuses a picked language the room's transcription model cannot caption", async () => {
+    const { room, viewer, providers, sent } = await fixture();
+    await room.startSession(viewer, { ...roomSession, type: "session.start", language: "en" });
+    moveRoomToSarvam();
+
+    await room.startSession(viewer, { ...roomSession, type: "session.takeover", language: "fr" });
+
+    expect(sent.filter((message) => message.type === "error")).toHaveLength(1);
+    expect(providers).toHaveLength(1);
+    expect(room.session).toMatchObject({
+      status: "live",
+      language: "en",
+      transcriptModel: "gpt-live-transcribe",
+    });
+  });
+
+  it("falls back to the deployment language when a kept language cannot be captioned", async () => {
+    const { room, viewer, providers } = await fixture();
+    await room.startSession(viewer, { ...roomSession, type: "session.start", language: "fr" });
+    moveRoomToSarvam();
+
+    await room.startSession(viewer, { ...roomSession, type: "session.takeover" });
+
+    expect(providers.map(({ provider, language }) => `${provider}:${language}`)).toEqual([
+      "openai:fr",
+      "sarvam:en",
+    ]);
+    expect(room.session?.language).toBe("en");
   });
 });

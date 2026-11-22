@@ -77,10 +77,10 @@ const normalizeSarvamLanguageCode = (
 const baseLanguage = (language: string): string =>
   language.trim().toLowerCase().split("-")[0] ?? "";
 
-const sarvamLanguageCode = (
+const supportedSarvamLanguageCode = (
   language: string,
   env: LiveTranscriptionConnectOptions["env"],
-): string => {
+): string | null => {
   const base = baseLanguage(language);
   const regional = `${base}-IN`;
   const override = env.TRANSCRIPT_SARVAM_LANGUAGE_CODE;
@@ -90,9 +90,21 @@ const sarvamLanguageCode = (
   // that send none keep it. Without one, every supported pick gets its
   // regional code, including the deployment language.
   if (override && isDeploymentLanguage) return override;
-  if (SARVAM_SUPPORTED_LANGUAGE_CODES.has(regional)) return regional;
-  return override ?? language;
+  return SARVAM_SUPPORTED_LANGUAGE_CODES.has(regional) ? regional : null;
 };
+
+export const sarvamCanTranscribe = (
+  language: string,
+  env: LiveTranscriptionConnectOptions["env"],
+): boolean => supportedSarvamLanguageCode(language, env) !== null;
+
+const sarvamLanguageCode = (
+  language: string,
+  env: LiveTranscriptionConnectOptions["env"],
+): string =>
+  supportedSarvamLanguageCode(language, env) ??
+  env.TRANSCRIPT_SARVAM_LANGUAGE_CODE ??
+  language;
 
 const normalizeSarvamMode = (value: string | undefined): string => {
   const candidate = value?.trim() || SARVAM_DEFAULT_MODE;

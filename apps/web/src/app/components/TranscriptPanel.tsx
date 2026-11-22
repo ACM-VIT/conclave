@@ -1042,11 +1042,15 @@ export default function TranscriptPanel({
     session.status === "stopping";
   const sessionProvider = getTranscriptTranscriptionProvider(session.transcriptModel);
   const keysOutliveTakeover = Boolean(roomAi) || session.keySource === "global";
+  const switchProvider = getTranscriptTranscriptionProvider(
+    roomAi?.state.features?.transcription?.model ?? session.transcriptModel,
+  );
   const canSwitchLanguage =
     session.status === "live" &&
     transcript.isController &&
     transcript.canTakeover &&
-    keysOutliveTakeover;
+    keysOutliveTakeover &&
+    switchProvider === sessionProvider;
   const tabs = useMemo<TranscriptTab[]>(
     () =>
       transcript.isViewOnly
