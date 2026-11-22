@@ -37,7 +37,7 @@ Old servers and old clients do not know these events. Support is learned from th
 | `apps:authority:query` | client, acked | a one-shot read for the caller alone |
 | `apps:authority:frame` | server | `replace`, `patch`, `revoke`, `query`, `queryAbort` |
 
-A `replace` frame is a whole view under a new generation. A large one arrives in parts and is installed only when the last part is in. A `patch` puts and removes whole rows and carries a per-subscription sequence that counts only frames sent. A `revoke` withdraws the view, and the client forgets what it held. A client that sees a gap subscribes again.
+A `replace` frame is a whole view under a new generation. It is read from the committed rows, so it never carries a row that was hidden, changed or removed a moment earlier, even when the flush that tells the other viewers has yet to run. A large one arrives in parts and is installed only when the last part is in. A `patch` puts and removes whole rows and carries a per-subscription sequence that counts only frames sent. Each connection is patched from its own snapshot on: it is not sent a change that snapshot already had, nor the key of a row that was gone before it. A `revoke` withdraws the view, and the client forgets what it held. A client that sees a gap subscribes again.
 
 The room epoch changes when the room is recreated. A request under an old epoch fails with `stale-epoch`.
 
@@ -49,8 +49,8 @@ The room epoch changes when the room is recreated. A request under an old epoch 
 | Snapshot or query result | 1 MiB, sent in 64 KiB parts |
 | Flush interval | 50 ms, immediate after a quiet period |
 | Operation id validity | 120 s, issue time at most 5 s ahead |
-| Accepted mutations per app per room | 120 a second, burst 240 |
-| Reads and writes in one transaction | 50,000. `clear` removes any number of rows for about one per 64 |
+| Accepted mutations per app per room | 120 a second, burst 240. Moderators have this to themselves and everyone else has it between them, so a crowd cannot use up a host's |
+| Work in one transaction | 50,000 operations. A read or write is one. A `scan` costs one for each row it returns. Rows that are only walked, as `count` and `clear` do under a prefix, cost about one per 64. An action that goes over fails and keeps nothing, even if its handler catches the error |
 | Rows of a `clear` that viewers who held them are told of per flush | 1,000 for each role, and 1,000 between everyone's own rows |
 | Subscriptions per socket | 16 |
 | Socket behind (resnapshot later) | more than 256 queued packets or 1 MiB |
@@ -63,6 +63,8 @@ Each table declares its own row cap. Per-action rates are declared by the module
 ## Turning it on
 
 Set `SFU_APPS_AUTHORITY_ENABLED=1` on the SFU. With it off no authority event has a listener, so the SFU behaves like one that predates the runtime: a client's capability request goes unanswered and it hides every authority app.
+
+The switch is read once, when the SFU process starts. Changing it needs a restart of the SFU, and there is no live toggle. A process that is already running keeps the mode it started with for every room it holds, so during a rolling deploy the rooms on the old process stay as they were until they move or end.
 
 Deploy the SFU before the web client that uses a new app or a new contract major. A room pins the modules it started with.
 
