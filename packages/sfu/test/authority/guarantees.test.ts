@@ -2392,6 +2392,48 @@ describe("revisions", () => {
     expect(fresh.frames.slice(fromBefore)).toEqual([]);
   });
 
+  it("answers an existing viewer the same whether or not someone opened a tab while edits were waiting", async () => {
+    const outcome = async (freshTabs: number) => {
+      vi.setSystemTime(1_000_000);
+      const room = new Harness([probeAuthority]);
+      const writer = await room.open(priya, probeContract);
+      const viewer = await room.open(ravi, probeContract);
+      const put = async (tab: Tab, text: string) => {
+        const answer = await tab.session.act("put", { id: "x", text });
+        if (!answer.ok) throw new Error(`put failed: ${answer.code}`);
+        return answer;
+      };
+      await put(writer, "original");
+      await room.deliver();
+      const before = viewer.state.kind === "ready" ? viewer.state.revision : -1;
+      const from = viewer.frames.length;
+      // Edits that are never flushed: the last one puts the row back as it was.
+      for (let index = 0; index < 6; index += 1) {
+        await put(writer, `edit ${index}`);
+        // Someone opens the app in between, and their snapshot is read now.
+        if (index < freshTabs) await room.open(person(`other${index}@example.com`, "Other"), probeContract);
+      }
+      await put(writer, "original");
+      // The viewer writes what they already hold.
+      const answer = await put(viewer, "original");
+      await room.deliver();
+      return {
+        before,
+        answer: answer.revision,
+        after: viewer.state.kind === "ready" ? viewer.state.revision : -1,
+        frames: viewer.frames.slice(from).map((frame) => frame.kind),
+      };
+    };
+
+    const none = await outcome(0);
+    const one = await outcome(1);
+    const many = await outcome(6);
+
+    expect(none).toEqual({ before: none.before, answer: none.before, after: none.before, frames: [] });
+    expect(one).toEqual(none);
+    expect(many).toEqual(none);
+  });
+
   it("keeps a client's view version going up when it subscribes again, and reads answers the same way", async () => {
     const room = new Harness([probeAuthority]);
     const hostTab = await room.open(host, probeContract);

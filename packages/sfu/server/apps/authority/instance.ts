@@ -388,6 +388,11 @@ export class AuthorityInstance {
     return this.views.committed(actor.role, actor.subject);
   }
 
+  /** One viewer's rows worked out afresh from the tables, touching no cache. */
+  projectedView(actor: Actor): CommittedView {
+    return this.views.projectedFor(actor.role, actor.subject);
+  }
+
   /** A whole view for one audience: its role's rows and its own. */
   snapshot(actor: Actor): ViewSnapshot {
     return this.views.snapshot(actor.role, actor.subject);

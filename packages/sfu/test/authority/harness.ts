@@ -293,6 +293,11 @@ export class Harness {
       session?: string;
       /** The `email` claim of a signed-in join token. */
       tokenEmail?: string;
+      /**
+       * Open without moving any timer, so no flush that was waiting runs:
+       * the snapshot is read in the middle of whatever is pending.
+       */
+      quiet?: boolean;
     } = {},
   ): Promise<Tab<C>> {
     this.sequence += 1;
@@ -333,7 +338,11 @@ export class Harness {
     tab = new Tab(who, seat, context, pair.client, client, session, this);
     this.tabs.push(tab);
     client.joined();
-    await this.idle();
+    if (options.quiet) {
+      for (let turn = 0; turn < 50; turn += 1) await Promise.resolve();
+    } else {
+      await this.idle();
+    }
     return tab;
   }
 

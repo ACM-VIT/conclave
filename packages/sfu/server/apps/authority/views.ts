@@ -412,79 +412,116 @@ export class ViewTracker {
 
   /**
    * Whether a viewer whose snapshot was read at `version` is behind what has
-   * been committed. Only their own audiences are read, their role's rows and
-   * their own, and only what changed after their snapshot counts:
+   * been committed. For every row that could differ, it sets what this
+   * viewer holds against what the committed rows project for them now, and
+   * nothing else:
    *
-   * - a change taken in and not yet told that differs from what they hold;
-   * - a removal still owed of a row they held;
-   * - a row cleared, or a write committed, since the views last took writes
-   *   in, that projects for them otherwise than their view has it.
+   * - What they hold is the row as their snapshot had it, or as they were
+   *   last told, and the cache where nothing changed since.
+   * - What is committed is the cache, except for rows written or cleared
+   *   since the views last took writes in, which are projected again here.
    *
-   * So nothing they cannot see, and nothing their snapshot already showed,
-   * makes them behind. Nothing is taken in here: taking in one action's
-   * writes at a time could split a handoff of a key between two rows that
-   * the flush takes in together.
+   * The cache is shared by everyone in a role and can hold a moment someone
+   * else's snapshot took in, half way through edits that were then undone.
+   * That moment is never compared with: a row put back as it was is not
+   * behind, whoever opened the app in between. Only this viewer's audiences
+   * are read, so writes they cannot see never count either. Nothing is taken
+   * in here: taking in one action's writes at a time could split a handoff of
+   * a key between two rows that the flush takes in together.
    */
   pendingSince(role: Role, subject: Subject, version: number): boolean {
-    const shared = this.roles.get(role);
-    const own = this.subjects.get(subject);
-    for (const audience of [shared, own]) {
-      for (const bucket of audience?.buckets.values() ?? []) {
-        for (const [key, change] of bucket.untold) {
-          if (bucket.rows.get(key)?.encoded !== heldAt(change, version)) return true;
-        }
-        for (const [key, change] of bucket.owed) {
-          if (bucket.rows.get(key)?.encoded !== heldAt(change, version)) return true;
-        }
-      }
-    }
-    for (const [tableName, keys] of this.store.clearedRows) {
-      for (const [name] of this.viewsByTable.get(tableName) ?? []) {
-        for (const audience of [shared, own]) {
-          const bucket = audience?.buckets.get(name);
-          if (bucket && keys.some((key) => bucket.bySource.has(key))) return true;
-        }
-      }
-    }
-    for (const [tableName, keys] of this.store.dirtyRows) {
-      const views = this.viewsByTable.get(tableName);
-      if (!views) continue;
-      for (const key of keys) {
-        const row = this.store.get(tableName, key);
-        for (const [name, view] of views) {
-          if (view.kind === "shared") {
-            if (!shared) continue;
-            const projected = row
-              ? this.project(name, () => view.project(row, role, this.policy))
-              : null;
-            if (this.differs(shared, name, key, projected)) return true;
-            continue;
-          }
-          if (!own) continue;
-          const mine = row !== undefined && view.owner(row) === subject;
-          if (!mine && !own.buckets.get(name)?.bySource.has(key)) continue;
-          const projected = mine
-            ? this.project(name, () => view.project(row, this.policy))
-            : null;
-          if (this.differs(own, name, key, projected)) return true;
+    const audiences = [this.roles.get(role), this.subjects.get(subject)].filter(
+      (audience): audience is Audience => audience !== undefined,
+    );
+    const committed = this.committedSinceTakenIn(role, subject);
+    for (const audience of audiences) {
+      for (const [name, bucket] of audience.buckets) {
+        const written = committed.get(audience)?.get(name);
+        const keys = new Set<string>([
+          ...bucket.untold.keys(),
+          ...bucket.owed.keys(),
+          ...(written?.keys() ?? []),
+        ]);
+        for (const key of keys) {
+          const change = bucket.untold.get(key) ?? bucket.owed.get(key);
+          const held = change ? heldAt(change, version) : bucket.rows.get(key)?.encoded;
+          const now = written?.has(key) ? written.get(key) : bucket.rows.get(key)?.encoded;
+          if (held !== now) return true;
         }
       }
     }
     return false;
   }
 
-  /** Whether a source row projects for an audience otherwise than it holds. */
-  private differs(
-    audience: Audience,
-    name: string,
-    source: TableKey,
-    projected: { key: string; value: Json } | null,
-  ): boolean {
-    const bucket = audience.buckets.get(name);
-    const heldKey = bucket?.bySource.get(source);
-    if (!projected) return heldKey !== undefined;
-    if (heldKey !== projected.key) return true;
-    return bucket?.rows.get(heldKey)?.encoded !== JSON.stringify(projected.value);
+  /**
+   * What the rows written or cleared since the views last took writes in
+   * project for one viewer, by audience, bucket and key: the encoded row, or
+   * undefined where the row is gone. A row that moves gives up its old key
+   * before any row takes a new one, as when the flush takes them in.
+   */
+  private committedSinceTakenIn(
+    role: Role,
+    subject: Subject,
+  ): Map<Audience, Map<string, Map<string, string | undefined>>> {
+    const shared = this.roles.get(role);
+    const own = this.subjects.get(subject);
+    const out = new Map<Audience, Map<string, Map<string, string | undefined>>>();
+    const set = (audience: Audience, name: string, key: string, encoded: string | undefined) => {
+      let buckets = out.get(audience);
+      if (!buckets) {
+        buckets = new Map<string, Map<string, string | undefined>>();
+        out.set(audience, buckets);
+      }
+      let keys = buckets.get(name);
+      if (!keys) {
+        keys = new Map<string, string | undefined>();
+        buckets.set(name, keys);
+      }
+      keys.set(key, encoded);
+    };
+    const placements: [Audience, string, TableKey, { key: string; value: Json }][] = [];
+    const release = (audience: Audience, name: string, source: TableKey) => {
+      const key = audience.buckets.get(name)?.bySource.get(source);
+      if (key !== undefined) set(audience, name, key, undefined);
+    };
+    for (const [tableName, keys] of this.store.clearedRows) {
+      for (const [name] of this.viewsByTable.get(tableName) ?? []) {
+        for (const audience of [shared, own]) {
+          if (audience) for (const source of keys) release(audience, name, source);
+        }
+      }
+    }
+    for (const [tableName, keys] of this.store.dirtyRows) {
+      const views = this.viewsByTable.get(tableName);
+      if (!views) continue;
+      for (const source of keys) {
+        const row = this.store.get(tableName, source);
+        for (const [name, view] of views) {
+          if (view.kind === "shared") {
+            if (!shared) continue;
+            release(shared, name, source);
+            const projected = row
+              ? this.project(name, () => view.project(row, role, this.policy))
+              : null;
+            if (projected) placements.push([shared, name, source, projected]);
+            continue;
+          }
+          if (!own) continue;
+          release(own, name, source);
+          if (!row || view.owner(row) !== subject) continue;
+          const projected = this.project(name, () => view.project(row, this.policy));
+          if (projected) placements.push([own, name, source, projected]);
+        }
+      }
+    }
+    for (const [audience, name, source, projected] of placements) {
+      // A key another row still holds stays theirs, as in `place`.
+      const owner = audience.buckets.get(name)?.owner.get(projected.key);
+      const released = out.get(audience)?.get(name)?.has(projected.key) ?? false;
+      if (owner !== undefined && owner !== source && !released) continue;
+      set(audience, name, projected.key, JSON.stringify(projected.value));
+    }
+    return out;
   }
 
   /**
@@ -502,6 +539,23 @@ export class ViewTracker {
       }
     }
     return false;
+  }
+
+  /**
+   * One viewer's rows as the committed rows project them now, worked out
+   * afresh from the tables and kept nowhere: nothing is taken in and no
+   * cache changes. For checks that must not disturb what they check.
+   */
+  projectedFor(role: Role, subject: Subject): CommittedView {
+    const shared = this.buildRole(role).buckets;
+    const own = this.scanSubject(subject).buckets;
+    const bucketOf = (name: string) => shared.get(name) ?? own.get(name);
+    return {
+      get: (bucket, key) => bucketOf(bucket)?.rows.get(key)?.value,
+      bytes: (bucket, key) => bucketOf(bucket)?.rows.get(key)?.bytes ?? 0,
+      keys: (bucket) => bucketOf(bucket)?.rows.keys() ?? [],
+      size: (bucket) => bucketOf(bucket)?.rows.size ?? 0,
+    };
   }
 
   /** Forgets the views of audiences nobody holds any more. */
