@@ -3,13 +3,6 @@ import React from "react";
 import type { LucideIcon } from "lucide-react";
 import { color } from "../tokens";
 
-/* ------------------------------------------------------------------ Switch ---
- * THE single toggle primitive for web. Flat pill + sliding knob, motion capped
- * at 120ms, no glow. Replaces the per-component switches that used to drift
- * (MeetSettingsPanel ToggleSwitch, MeetViewPanel custom switch, the bare text
- * "On/Off" toggles in DeviceCaretMenu / video-settings, and the mobile
- * "Webinar: On" text buttons). */
-
 export type SwitchTone = "accent" | "success" | "warning" | "danger";
 
 const TONE_FILL: Record<SwitchTone, string> = {
@@ -19,8 +12,6 @@ const TONE_FILL: Record<SwitchTone, string> = {
   danger: color.danger,
 };
 
-/** Visual-only pill (no semantics). Used inside an interactive row/button so we
- * never nest two interactive elements. */
 function SwitchVisual({
   checked,
   tone = "accent",
@@ -47,12 +38,10 @@ export interface SwitchProps {
   onChange?: (next: boolean) => void;
   tone?: SwitchTone;
   disabled?: boolean;
-  /** Accessible label (required — the switch is icon-only). */
   label: string;
   className?: string;
 }
 
-/** Standalone switch (when there is no row label wrapper). */
 export function Switch({
   checked,
   onChange,
@@ -79,9 +68,6 @@ export function Switch({
   );
 }
 
-/* --------------------------------------------------------------- SwitchRow ---
- * A full settings row: optional leading icon, label + optional description, and
- * a trailing switch. The whole row is the toggle (one interactive element). */
 export interface SwitchRowProps {
   icon?: LucideIcon;
   label: string;

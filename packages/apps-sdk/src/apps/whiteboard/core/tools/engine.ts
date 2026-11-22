@@ -247,7 +247,6 @@ export class ToolEngine {
       let start: Point = this.dragStart;
       let end: Point = point;
       if (element.shape === "arrow") {
-        // Attach either end to a nearby shape, aimed at its center.
         const others = elements.filter((item) => item.id !== element.id);
         ({ start, end } = snapArrow(this.dragStart, point, others));
       }

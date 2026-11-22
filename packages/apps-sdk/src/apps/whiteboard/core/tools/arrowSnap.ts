@@ -1,9 +1,7 @@
 import { containsPoint, getBoundsForElement, type Bounds } from "../model/geometry";
 import type { Point, WhiteboardElement } from "../model/types";
 
-/** How close (in canvas units) an arrow end must be to a shape to snap. */
 export const ARROW_SNAP_DISTANCE = 16;
-/** Space left between a snapped arrow end and the shape's outline. */
 export const ARROW_SNAP_GAP = 6;
 
 export type ArrowSnap = { point: Point; targetId: string };
@@ -30,11 +28,6 @@ function toSnapTarget(element: WhiteboardElement): SnapTarget | null {
   return null;
 }
 
-/**
- * Point on the target's outline (pushed out by `gap`) along the line from its
- * center toward `toward`, so a snapped arrow points at the middle of the shape
- * and stops just short of its edge.
- */
 function outlinePointToward(target: SnapTarget, toward: Point, gap: number): Point {
   const { bounds } = target;
   const cx = bounds.x + bounds.width / 2;
@@ -45,7 +38,6 @@ function outlinePointToward(target: SnapTarget, toward: Point, gap: number): Poi
   let dy = toward.y - cy;
   const length = Math.hypot(dx, dy);
   if (length < 1e-6) {
-    // The other end sits on the center; aim straight up.
     dx = 0;
     dy = -1;
   } else {
@@ -88,11 +80,6 @@ function centerOf(target: SnapTarget): Point {
 
 type SnapOptions = { excludeIds?: readonly string[]; distance?: number; gap?: number };
 
-/**
- * The element an arrow end at `point` should attach to: the topmost snap
- * target within `distance` of the point, unless `otherEnd` is inside that same
- * element (an arrow drawn within one shape is a mark on it, not a link).
- */
 function findSnapTarget(
   point: Point,
   otherEnd: Point,
@@ -113,11 +100,6 @@ function findSnapTarget(
   return null;
 }
 
-/**
- * Finds the shape an arrow end at `point` should attach to and the point on
- * its outline to attach at, aimed from `otherEnd`. Returns null when nothing
- * is close.
- */
 export function snapArrowEndpoint(
   point: Point,
   otherEnd: Point,
@@ -132,12 +114,6 @@ export function snapArrowEndpoint(
   };
 }
 
-/**
- * Snaps both ends of an arrow drawn from `start` to `end`. Targets are found
- * first; then each snapped end is placed on the line toward the other end's
- * target center (or the other raw end), so with two targets both ends sit on
- * one center-to-center line and the arrow never cuts through either shape.
- */
 export function snapArrow(
   start: Point,
   end: Point,
@@ -147,7 +123,6 @@ export function snapArrow(
   const gap = options.gap ?? ARROW_SNAP_GAP;
   const endTarget = findSnapTarget(end, start, elements, options);
   const startTarget = findSnapTarget(start, end, elements, options);
-  // Both ends on the same element is not a link; leave the arrow as drawn.
   if (startTarget && endTarget && startTarget.id === endTarget.id) {
     return { start, end };
   }
@@ -164,8 +139,6 @@ export function snapArrow(
       ...(endTarget ? { endTargetId: endTarget.id } : {}),
     };
   }
-  // Shapes that touch or nearly touch leave no room for both gaps, and the
-  // paired ends would cross. Keep the head attached and the tail as drawn.
   if (endTarget) {
     const headOnly = outlinePointToward(endTarget, start, gap);
     if (pointsForward(start, headOnly, start, end)) {
@@ -175,13 +148,8 @@ export function snapArrow(
   return { start, end };
 }
 
-/** Shortest snapped arrow kept; anything shorter is left as drawn. */
 const MIN_SNAPPED_ARROW_LENGTH = 4;
 
-/**
- * True when the arrow from `from` to `to` is long enough and still points the
- * same way as the arrow as drawn, so snapping never reverses it.
- */
 function pointsForward(from: Point, to: Point, drawnFrom: Point, drawnTo: Point): boolean {
   const dx = to.x - from.x;
   const dy = to.y - from.y;

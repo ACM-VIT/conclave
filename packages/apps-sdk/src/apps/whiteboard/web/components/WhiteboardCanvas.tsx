@@ -80,8 +80,6 @@ const ERASER_HIT_RADIUS = 12;
 const LASER_TTL_MS = 1000;
 const LASER_MAX_POINTS = 48;
 const LASER_GAP_RESET_MS = 300;
-// While the laser is held still, re-stamp its head this often so the dot
-// stays visible (and synced) instead of fading out under the pointer.
 const LASER_HOLD_REFRESH_MS = 250;
 
 type LaserPoint = { x: number; y: number; t: number };
@@ -396,7 +394,6 @@ export function WhiteboardCanvas({
   const laserTrailsRef = useRef<Map<number | "self", LaserTrail>>(new Map());
   const laserFrameRef = useRef<number | null>(null);
   const laserSyncRafRef = useRef<number | null>(null);
-  // The pointer currently holding the laser down; the laser shows only then.
   const laserPointerIdRef = useRef<number | null>(null);
   const syncOwnLaserRef = useRef<() => void>(() => {});
   const eraserRingRef = useRef<HTMLDivElement>(null);
@@ -1189,8 +1186,6 @@ export function WhiteboardCanvas({
       }
       if (tool === "laser") {
         if (laserPointerIdRef.current === event.pointerId) {
-          // Pointer capture keeps delivering moves after the pointer leaves the
-          // canvas, and suppresses pointerleave, so end the laser here.
           const rect = event.currentTarget.getBoundingClientRect();
           const outside =
             event.clientX < rect.left ||

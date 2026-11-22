@@ -1,8 +1,6 @@
 {
   "apps/conclave-skip/Sources/Conclave/Core/Networking/SfuEvents.swift": 1,
   "apps/conclave-skip/Sources/Conclave/Features/Meeting/MeetingViewModel.swift": 12,
-  "packages/shared-browser/docker/start-video.sh": 1,
-  "packages/ui-tokens/src/tokens.css": 8,
   "scripts/deploy-browser-service.sh": 1,
   "scripts/deploy-sfu.sh": 10
 }

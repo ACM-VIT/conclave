@@ -4,51 +4,6 @@
       "count": 15
     }
   },
-  "packages/ai/src/catalog-server.ts": {
-    "conclave/no-comments": {
-      "count": 5
-    }
-  },
-  "packages/ai/src/errors.ts": {
-    "conclave/no-comments": {
-      "count": 2
-    }
-  },
-  "packages/ai/src/models.ts": {
-    "conclave/no-comments": {
-      "count": 6
-    }
-  },
-  "packages/ai/src/providers/anthropic.ts": {
-    "conclave/no-comments": {
-      "count": 6
-    }
-  },
-  "packages/ai/src/providers/openai.ts": {
-    "conclave/no-comments": {
-      "count": 2
-    }
-  },
-  "packages/ai/src/room-server.ts": {
-    "conclave/no-comments": {
-      "count": 6
-    }
-  },
-  "packages/apps-sdk/src/apps/whiteboard/core/tools/arrowSnap.ts": {
-    "conclave/no-comments": {
-      "count": 12
-    }
-  },
-  "packages/apps-sdk/src/apps/whiteboard/core/tools/engine.ts": {
-    "conclave/no-comments": {
-      "count": 1
-    }
-  },
-  "packages/apps-sdk/src/apps/whiteboard/web/components/WhiteboardCanvas.tsx": {
-    "conclave/no-comments": {
-      "count": 5
-    }
-  },
   "packages/meeting-core/src/grid-layout.ts": {
     "conclave/no-comments": {
       "count": 53
@@ -259,44 +214,9 @@
       "count": 2
     }
   },
-  "packages/shared-browser/src/KitesurfManager.ts": {
-    "conclave/no-comments": {
-      "count": 4
-    }
-  },
   "packages/shared-browser/src/server.ts": {
     "conclave/no-comments": {
       "count": 4
-    }
-  },
-  "packages/ui-tokens/src/core/index.ts": {
-    "conclave/no-comments": {
-      "count": 10
-    }
-  },
-  "packages/ui-tokens/src/index.ts": {
-    "conclave/no-comments": {
-      "count": 1
-    }
-  },
-  "packages/ui-tokens/src/tokens.ts": {
-    "conclave/no-comments": {
-      "count": 49
-    }
-  },
-  "packages/ui-tokens/src/web/controls.tsx": {
-    "conclave/no-comments": {
-      "count": 5
-    }
-  },
-  "packages/ui-tokens/src/web/index.ts": {
-    "conclave/no-comments": {
-      "count": 1
-    }
-  },
-  "packages/ui-tokens/src/web/tile.tsx": {
-    "conclave/no-comments": {
-      "count": 33
     }
   },
   "scripts/check-mediapipe-privacy.mjs": {
