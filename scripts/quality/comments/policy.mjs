@@ -103,15 +103,17 @@ const containsKnownLicense = (lines) => {
   return CANONICAL_LICENSES.some((sentences) => sentences.every((sentence) => body.includes(sentence)));
 };
 
+const NOTICE_ATTRIBUTION = /^(?:Copyright\s+(?:\(c\)|\(C\)|©)\s+\S.*|https?:\/\/\S+)$/;
+
 const isLicenseFragment = (line) => {
-  if (isNoticeLine(line) || LICENSE_TITLE.test(line)) return true;
+  if (isNoticeLine(line) || LICENSE_TITLE.test(line) || NOTICE_ATTRIBUTION.test(line)) return true;
   const text = canonical(line.replace(/^\d\.\s+/, ""));
   return CANONICAL_LICENSE_BODIES.some((body) => body.includes(text)) || BSD_THIRD_CLAUSE.test(text);
 };
 
 export const isLicenseNotice = (text) => {
   const lines = commentContentLines(text);
-  return lines.length > 0 && (lines.every(isNoticeLine) || containsKnownLicense(lines));
+  return lines.length > 0 && (lines.every(isNoticeLine) || (lines.every(isLicenseFragment) && containsKnownLicense(lines)));
 };
 
 
@@ -257,24 +259,18 @@ const licenseHeaderIndexes = (source, comments, isDirective) => {
     if (!isDirective(index)) run.push(index);
   }
   const indexes = new Set();
-  for (let position = 0; position < run.length; ) {
-    const lines = commentContentLines(comments[run[position]].text);
-    if (lines.length > 0 && (lines.every(isNoticeLine) || containsKnownLicense(lines))) {
-      indexes.add(run[position]);
-      position += 1;
-      continue;
+  const linesOf = run.map((index) => commentContentLines(comments[index].text));
+  run.forEach((index, position) => {
+    if (linesOf[position].length > 0 && linesOf[position].every(isNoticeLine)) indexes.add(index);
+  });
+  for (let start = 0; start < run.length; start += 1) {
+    if (!linesOf[start].every(isLicenseFragment)) continue;
+    let end = start;
+    while (end < run.length && linesOf[end].every(isLicenseFragment)) end += 1;
+    if (containsKnownLicense(linesOf.slice(start, end).flat())) {
+      for (let position = start; position < end; position += 1) indexes.add(run[position]);
     }
-    let end = position;
-    const fragmentLines = [];
-    while (end < run.length) {
-      const fragment = commentContentLines(comments[run[end]].text);
-      if (!fragment.every(isLicenseFragment)) break;
-      fragmentLines.push(...fragment);
-      end += 1;
-    }
-    if (end === position || !containsKnownLicense(fragmentLines)) break;
-    for (let index = position; index < end; index += 1) indexes.add(run[index]);
-    position = end;
+    start = end;
   }
   return indexes;
 };

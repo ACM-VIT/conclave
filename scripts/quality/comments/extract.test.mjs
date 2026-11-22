@@ -760,6 +760,37 @@ toolTest("the Swift helper refuses a file swift-syntax cannot parse", ["swift"],
   assert.throws(() => extractComments('let s = """\n  unterminated\n// after\n', "Broken.swift"), /cannot read the comments in Broken\.swift: swift-syntax reported syntax errors/);
 });
 
+const ISC_NOTICE = [
+  "Copyright 2026 Example Inc.",
+  "",
+  "Permission to use, copy, modify, and/or distribute this software for any",
+  "purpose with or without fee is hereby granted, provided that the above",
+  "copyright notice and this permission notice appear in all copies.",
+  "",
+  'THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES',
+  "WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF",
+  "MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR",
+  "ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES",
+  "WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN",
+  "ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF",
+  "OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.",
+];
+
+toolTest("text outside a matched license notice is an ordinary comment", [], () => {
+  const block = (extra) => ["/*", ...[...ISC_NOTICE, ...extra].map((line) => ` * ${line}`.trimEnd()), " */"].join("\n");
+  assert.deepEqual(extract(`${block([])}\nexport {};\n`, "plain.ts").map((c) => c.allowed), ["license-header"]);
+  assert.deepEqual(extract(`${block(["TODO: replace the temporary cache."])}\nexport {};\n`, "same.ts").map((c) => c.allowed), [null]);
+  const lines = ISC_NOTICE.map((line) => `// ${line}`.trimEnd());
+  const before = ["// TODO: replace the temporary cache.", ...lines, "export {};"].join("\n");
+  const beforeVerdicts = extract(before, "before.ts").map((c) => c.allowed);
+  assert.equal(beforeVerdicts[0], null);
+  assert.ok(beforeVerdicts.slice(1).every((verdict) => verdict === "license-header"));
+  const after = [...lines, "// TODO: replace the temporary cache.", "export {};"].join("\n");
+  const afterVerdicts = extract(after, "after.ts").map((c) => c.allowed);
+  assert.equal(afterVerdicts.at(-1), null);
+  assert.ok(afterVerdicts.slice(0, -1).every((verdict) => verdict === "license-header"));
+});
+
 toolTest("a fixture whose language needs an undeclared tool fails in every environment", [], () => {
   assert.throws(() => extract("x = 1\n", "a.py"), /a\.py needs python312, which this test does not declare/);
   assert.throws(() => extract("let a = 1\n", "A.swift"), /A\.swift needs swift, which this test does not declare/);
