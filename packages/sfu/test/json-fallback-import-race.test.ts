@@ -36,6 +36,7 @@ beforeEach(() => {
   stateDir = mkdtempSync(join(tmpdir(), "sfu-fallback-import-race-"));
   vi.stubEnv("RECORDING_STORAGE_PATH", stateDir);
   vi.stubEnv("CONCLAVE_SQLITE_PATH", join(stateDir, "conclave.sqlite"));
+  vi.stubEnv("CONCLAVE_FALLBACK_IMPORT_DIR", join(stateDir, "json-fallback-import"));
   for (const variable of ["SCHEDULING_SQLITE_PATH", "SCHEDULING_PERSISTENCE", "REDIS_URL", "SFU_REDIS_URL", "SFU_PERSISTENCE_REDIS_URL"]) {
     vi.stubEnv(variable, "");
   }

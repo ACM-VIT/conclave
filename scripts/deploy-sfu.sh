@@ -238,6 +238,8 @@ COMPOSE=(docker compose "${COMPOSE_ENV_FILES[@]}" -f "$COMPOSE_FILE")
 # Older images fell back to JSON files in the container layer when SQLite was
 # locked. The old container is stopped first, so it cannot write after the
 # copy; the new SFU imports the copies on startup and renames each .imported.
+# The copy runs in a container of the new image and writes to the import folder
+# that image names (CONCLAVE_FALLBACK_IMPORT_DIR), the path the SFU reads.
 copy_fallback_json() {
   local service="$1" container changes staging name path
   local -a copied=()
@@ -261,7 +263,7 @@ copy_fallback_json() {
   if (( ${#copied[@]} > 0 )); then
     chmod -R a+rX "$staging"
     if ! "${COMPOSE[@]}" run --rm --no-deps --user node -v "${staging}:/fallback-json:ro" --entrypoint sh "$service" -c \
-      "mkdir -p /var/lib/conclave/recordings/json-fallback-import/${service} && cp /fallback-json/*.json /var/lib/conclave/recordings/json-fallback-import/${service}/"; then
+      'dest=${CONCLAVE_FALLBACK_IMPORT_DIR:?}/$1 && mkdir -p $dest && cp /fallback-json/*.json $dest/' sh "$service"; then
       echo "Could not copy the old ${service} container's JSON fallback files onto the volume." >&2
       rm -rf "$staging"
       return 1

@@ -39,6 +39,7 @@ beforeEach(() => {
   stateDir = mkdtempSync(join(tmpdir(), "sfu-fallback-import-"));
   vi.stubEnv("RECORDING_STORAGE_PATH", stateDir);
   vi.stubEnv("CONCLAVE_SQLITE_PATH", join(stateDir, "conclave.sqlite"));
+  vi.stubEnv("CONCLAVE_FALLBACK_IMPORT_DIR", join(stateDir, "json-fallback-import"));
   for (const variable of ["SCHEDULING_SQLITE_PATH", "SCHEDULED_MEETINGS_SQLITE_PATH", "SCHEDULED_WEBINARS_SQLITE_PATH", "SCHEDULING_PERSISTENCE", "SCHEDULED_MEETINGS_PERSISTENCE", "SCHEDULED_WEBINARS_PERSISTENCE", "SCHEDULING_PATH", "SCHEDULED_MEETINGS_PATH", "SCHEDULED_WEBINARS_PATH", "REDIS_URL", "SFU_REDIS_URL", "SFU_PERSISTENCE_REDIS_URL"]) {
     vi.stubEnv(variable, "");
   }
@@ -76,6 +77,16 @@ describe("importing JSON fallback files copied from old containers", () => {
     expect(await importFallbackWebinars(persistence)).toBe(1);
     expect(createScheduledWebinarPersistence().load().map((entry) => entry.id)).toEqual(["prior-webinar"]);
     expect(await importFallbackWebinars(persistence)).toBe(0);
+  });
+
+  it("reads the folder the deploy copied into when RECORDING_STORAGE_PATH names a custom host folder", async () => {
+    // Compose mounts that host folder at /var/lib/conclave/recordings but passes the host path in as is.
+    vi.stubEnv("RECORDING_STORAGE_PATH", "/srv/conclave-state");
+    const persistence = createScheduledWebinarPersistence();
+    writeFallback("sfu-a", "scheduled-webinars.json", [webinar("prior-webinar", 1)]);
+
+    expect(await importFallbackWebinars(persistence)).toBe(1);
+    expect(readdirSync(importDir("sfu-a"))).toEqual(["scheduled-webinars.json.imported"]);
   });
 
   it("keeps a file that does not parse and imports it on a later start", async () => {

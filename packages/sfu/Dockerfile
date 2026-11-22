@@ -43,8 +43,11 @@ RUN mkdir -p /var/lib/conclave/recordings && chown -R node:node /var/lib/conclav
 
 # The JSON persistence backends (selected by a *_PERSISTENCE variable, or the
 # fallback when SQLite cannot open) write to the recordings volume, the only
-# writable path under compose's read-only root.
+# writable path under compose's read-only root. The deploy copies old
+# containers' JSON fallback files into CONCLAVE_FALLBACK_IMPORT_DIR from a
+# container of this image, and the SFU imports them from the same path.
 ENV CONCLAVE_SQLITE_PATH=/var/lib/conclave/conclave.sqlite \
+    CONCLAVE_FALLBACK_IMPORT_DIR=/var/lib/conclave/recordings/json-fallback-import \
     SCHEDULING_PATH=/var/lib/conclave/recordings/scheduling.json \
     SCHEDULED_MEETINGS_PATH=/var/lib/conclave/recordings/scheduled-meetings.json \
     SCHEDULED_WEBINARS_PATH=/var/lib/conclave/recordings/scheduled-webinars.json

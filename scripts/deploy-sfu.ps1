@@ -208,6 +208,8 @@ function Get-PublicUrl {
 # Older images fell back to JSON files in the container layer when SQLite was
 # locked. The old container is stopped first, so it cannot write after the
 # copy; the new SFU imports the copies on startup and renames each .imported.
+# The copy runs in a container of the new image and writes to the import folder
+# that image names (CONCLAVE_FALLBACK_IMPORT_DIR), the path the SFU reads.
 function Copy-FallbackJson {
   param([string]$Service)
 
@@ -241,7 +243,7 @@ function Copy-FallbackJson {
     if ($copied.Count -gt 0) {
       & docker @($composeBaseArgs + @(
         "run", "--rm", "--no-deps", "--user", "node", "-v", "${staging}:/fallback-json:ro", "--entrypoint", "sh", $Service, "-c",
-        "mkdir -p /var/lib/conclave/recordings/json-fallback-import/$Service && cp /fallback-json/*.json /var/lib/conclave/recordings/json-fallback-import/$Service/"
+        'dest=${CONCLAVE_FALLBACK_IMPORT_DIR:?}/$1 && mkdir -p $dest && cp /fallback-json/*.json $dest/', "sh", $Service
       ))
       if ($LASTEXITCODE -ne 0) {
         throw "Could not copy the old $Service container's JSON fallback files onto the volume."

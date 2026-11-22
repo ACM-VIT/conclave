@@ -1,19 +1,16 @@
 import { existsSync, readdirSync, readFileSync, renameSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { Logger } from "../utilities/loggers.js";
 import { isSqliteLockedError } from "./sqliteWriteCheck.js";
 
 /**
  * Older SFUs fell back to JSON files in their container layer when SQLite was
- * locked. scripts/deploy-sfu.sh copies those files here, one folder per old
- * container, before it replaces the container; each store imports them once.
+ * locked. The deploy copies them into CONCLAVE_FALLBACK_IMPORT_DIR, one folder
+ * per old container. The SFU image sets that path on the recordings mount, so
+ * the copy and this import read the same container path, never a host path.
  */
-export const fallbackImportDir = (): string => {
-  const stateDir =
-    process.env.RECORDING_STORAGE_PATH?.trim() ||
-    dirname(resolve(process.env.CONCLAVE_SQLITE_PATH?.trim() || join(process.cwd(), "data", "conclave.sqlite")));
-  return join(stateDir, "json-fallback-import");
-};
+export const fallbackImportDir = (): string =>
+  resolve(process.env.CONCLAVE_FALLBACK_IMPORT_DIR?.trim() || join(process.cwd(), "data", "json-fallback-import"));
 
 const pendingFallbackFiles = (fileName: string): string[] => {
   const root = fallbackImportDir();

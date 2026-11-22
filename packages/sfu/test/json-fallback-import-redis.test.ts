@@ -68,6 +68,7 @@ describe.skipIf(!hasRedis)("importing JSON fallback files into Redis", () => {
     prefix += 1;
     vi.stubEnv("RECORDING_STORAGE_PATH", stateDir);
     vi.stubEnv("CONCLAVE_SQLITE_PATH", join(stateDir, "conclave.sqlite"));
+    vi.stubEnv("CONCLAVE_FALLBACK_IMPORT_DIR", join(stateDir, "json-fallback-import"));
     vi.stubEnv("SFU_PERSISTENCE_REDIS_URL", redisUrl);
     vi.stubEnv("SFU_PERSISTENCE_REDIS_KEY_PREFIX", `fallback-import-test-${process.pid}-${prefix}`);
     for (const variable of ["SCHEDULING_SQLITE_PATH", "SCHEDULED_MEETINGS_SQLITE_PATH", "SCHEDULED_MEETINGS_PATH", "SCHEDULING_PATH", "REDIS_URL", "SFU_REDIS_URL"]) {

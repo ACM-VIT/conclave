@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -17,7 +17,19 @@ if [[ "$1" == "compose" ]]; then
   for ((i = 1; i < \${#args[@]}; i++)); do
     case "\${args[i]}" in
       ps) [[ -n "$FAKE_CONTAINER" ]] && echo "$FAKE_CONTAINER"; exit 0 ;;
-      stop|build|run|up|start) exit 0 ;;
+      run)
+        mount="" script="" rest=()
+        for ((j = i + 1; j < \${#args[@]}; j++)); do
+          case "\${args[j]}" in
+            *:/fallback-json:ro) mount="\${args[j]%%:/fallback-json:ro}" ;;
+            -c) script="\${args[j + 1]}"; rest=("\${args[@]:j + 2}"); break ;;
+          esac
+        done
+        [[ -n "$script" ]] || exit 0
+        script="\${script//\\/fallback-json/$mount}"
+        script="\${script//\\/var\\/lib\\/conclave\\/recordings/$FAKE_VOLUME}"
+        CONCLAVE_FALLBACK_IMPORT_DIR="$FAKE_IMAGE_IMPORT_DIR" exec sh -c "$script" "\${rest[@]}" ;;
+      stop|build|up|start) exit 0 ;;
     esac
   done
   exit 0
@@ -72,7 +84,7 @@ const harnesses = {
 
 const hasPwsh = spawnSync("pwsh", ["-NoProfile", "-Command", "exit 0"]).status === 0;
 
-const replaceService = (shell, { container = OLD_CONTAINER, diff = "", diffStatus = 0, cpFail = "" } = {}) => {
+const replaceService = (shell, { container = OLD_CONTAINER, diff = "", diffStatus = 0, cpFail = "", imageImportDir = true } = {}) => {
   const harness = harnesses[shell];
   const dir = mkdtempSync(join(tmpdir(), "deploy-sfu-state-"));
   try {
@@ -82,6 +94,9 @@ const replaceService = (shell, { container = OLD_CONTAINER, diff = "", diffStatu
     chmodSync(join(bin, "docker"), 0o755);
     const log = join(dir, "docker.log");
     writeFileSync(log, "");
+    const volume = join(dir, "volume");
+    const importDir = join(dir, "image-import-dir");
+    mkdirSync(volume);
     writeFileSync(join(dir, harness.file), harness.source());
     const result = spawnSync(harness.command, [...(harness.args ?? []), join(dir, harness.file)], {
       encoding: "utf8",
@@ -93,9 +108,17 @@ const replaceService = (shell, { container = OLD_CONTAINER, diff = "", diffStatu
         FAKE_DIFF: diff,
         FAKE_DIFF_STATUS: String(diffStatus),
         FAKE_CP_FAIL: cpFail,
+        FAKE_VOLUME: volume,
+        FAKE_IMAGE_IMPORT_DIR: imageImportDir ? importDir : "",
       },
     });
-    return { ...result, calls: readFileSync(log, "utf8").trim().split("\n").filter(Boolean) };
+    const listing = (path) => (existsSync(path) ? readdirSync(path).sort() : []);
+    return {
+      ...result,
+      calls: readFileSync(log, "utf8").trim().split("\n").filter(Boolean),
+      imported: listing(join(importDir, "sfu-a")),
+      volumeEntries: listing(volume),
+    };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -114,6 +137,20 @@ for (const shell of Object.keys(harnesses)) {
     const copy = callIndex(calls, new RegExp(`^cp ${OLD_CONTAINER}:${DATA}/scheduling\\.json `));
     const start = callIndex(calls, /^compose .* up -d sfu-a$/);
     assert.ok(stop >= 0 && copy > stop && start > copy, calls.join("\n"));
+  });
+
+  test(`${shell}: copies into the import folder the SFU image names, not a path of its own`, { skip }, () => {
+    const { status, stderr, imported, volumeEntries } = replaceService(shell, { diff: wrote("scheduling.json") + wrote("scheduled-webinars.json") });
+    assert.equal(status, 0, stderr);
+    assert.deepEqual(imported, ["scheduled-webinars.json", "scheduling.json"]);
+    assert.deepEqual(volumeEntries, []);
+  });
+
+  test(`${shell}: an image that does not name the import folder stops the deploy`, { skip }, () => {
+    const { status, calls, imported, volumeEntries } = replaceService(shell, { diff: wrote("scheduling.json"), imageImportDir: false });
+    assert.notEqual(status, 0);
+    assert.equal(callIndex(calls, / up -d /), -1, calls.join("\n"));
+    assert.deepEqual([...imported, ...volumeEntries], []);
   });
 
   test(`${shell}: copies only the fallback files the old SFU wrote`, { skip }, () => {
