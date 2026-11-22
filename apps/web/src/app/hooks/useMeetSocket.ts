@@ -144,18 +144,24 @@ import {
 } from "../lib/consumer-resume-retry";
 import {
   INITIAL_MEDIA_PATH_WATCH,
-  blockedPathsAfterRebuildStarts,
+  HEALTHY_MEDIA_PATHS,
+  MEDIA_PATH_FLOW_CHECK_MS,
+  advanceMediaPathHealth,
+  blockedMediaDirections,
   judgeReceiveRebuild,
+  planSilentPathStep,
+  type MediaPathHealth,
+  type MediaPathHealthEvent,
   type DirectionRebuildResult,
   type ProducerListResult,
   MEDIA_PATH_STALL_MS,
   MEDIA_PATH_VERIFY_MS,
-  NETWORK_BLOCKED_MESSAGE,
   advanceMediaPathWatch,
   planMediaPathEscalation,
   readRtpBytes,
   type MediaPathWatch,
 } from "../lib/media-path-recovery";
+import { readProducerScore } from "../lib/adaptive-consumer-score";
 import {
   buildReconnectRecoveryStatus,
   buildStoppedRecoveryStatus,
@@ -267,11 +273,6 @@ type JoinInfo = {
 
 const MAX_JOIN_ROOM_REDIRECTS = 1;
 type ProducerSyncResult = ProducerListResult<ProducerInfo>;
-const NETWORK_BLOCKED_ERROR: MeetError = {
-  code: "NETWORK_BLOCKED",
-  message: NETWORK_BLOCKED_MESSAGE,
-  recoverable: true,
-};
 const DEFAULT_SERVER_RESTART_NOTICE =
   "Meeting server is restarting. You will be reconnected automatically.";
 const ADMIN_NOTICE_DURATION_MS = 60000;
@@ -1083,7 +1084,17 @@ export function useMeetSocket({
   const pendingMediaPathRecoveryRef = useRef(
     new Map<"producer" | "consumer", { transport: Transport; reason: string }>(),
   );
-  const blockedMediaPathsRef = useRef(new Set<"producer" | "consumer">());
+  // Per-direction media health is the only source of the blocked warning and
+  // its Try again. Only media seen flowing in a direction clears it.
+  const [mediaPathHealth, setMediaPathHealth] =
+    useState<MediaPathHealth>(HEALTHY_MEDIA_PATHS);
+  const mediaPathHealthRef = useRef<MediaPathHealth>(HEALTHY_MEDIA_PATHS);
+  const updateMediaPathHealth = useCallback((event: MediaPathHealthEvent) => {
+    const next = advanceMediaPathHealth(mediaPathHealthRef.current, event);
+    if (next === mediaPathHealthRef.current) return;
+    mediaPathHealthRef.current = next;
+    setMediaPathHealth(next);
+  }, []);
   const reconnectGenerationRef = useRef(0);
   const reconnectBackoffCancelRef = useRef<(() => void) | null>(null);
   const manualReconnectRetryRequestedRef = useRef(false);
@@ -1490,11 +1501,11 @@ export function useMeetSocket({
       }
       escalatedTransportsRef.current.add(transport);
       if (step === "report-blocked") {
-        const blockedPaths = blockedMediaPathsRef.current;
-        if (blockedPaths.has(transportKind)) return;
+        const health = mediaPathHealthRef.current;
+        if (health[transportKind] === "blocked") return;
         console.warn(`[Meets] ${reason}. Media cannot get through this network.`);
-        const isFirstBlockedPath = blockedPaths.size === 0;
-        blockedPaths.add(transportKind);
+        const isFirstBlockedPath = blockedMediaDirections(health).length === 0;
+        updateMediaPathHealth({ type: "blocked", direction: transportKind });
         if (!isFirstBlockedPath) return;
         telemetry.capture("meet_media_path_blocked", {
           reason,
@@ -1502,23 +1513,17 @@ export function useMeetSocket({
           relayOnly: relayOnlyIceRef.current,
           roomId: currentRoomIdRef.current ?? undefined,
         });
-        setMeetError(NETWORK_BLOCKED_ERROR);
         return;
       }
 
       mediaPathReconnectTriedRef.current[transportKind] = true;
+      updateMediaPathHealth({ type: "trouble", direction: transportKind });
       if (step === "reconnect-relay-only") {
         relayOnlyIceRef.current = true;
         console.warn(`[Meets] ${reason}. Retrying through TURN only.`);
         telemetry.capture("meet_turn_relay_activated", {
           reason,
           roomId: currentRoomIdRef.current ?? undefined,
-        });
-      } else {
-        setMeetError({
-          code: "TRANSPORT_ERROR",
-          message: reason,
-          recoverable: true,
         });
       }
       void handleReconnectRef.current?.({
@@ -1532,17 +1537,9 @@ export function useMeetSocket({
       handleReconnectRef,
       producerTransportRef,
       reconnectInFlightRef,
-      setMeetError,
+      updateMediaPathHealth,
     ],
   );
-
-  // A rejoin can finish while a direction is still blocked, and the warning
-  // holds the only Try again, so it stays until that direction connects.
-  const clearMeetErrorUnlessMediaBlocked = useCallback(() => {
-    setMeetError(
-      blockedMediaPathsRef.current.size > 0 ? NETWORK_BLOCKED_ERROR : null,
-    );
-  }, [setMeetError]);
 
   const noteMediaPathConnected = useCallback(
     (transportKind: "producer" | "consumer", transport: Transport) => {
@@ -1551,11 +1548,8 @@ export function useMeetSocket({
       if (pending.get(transportKind)?.transport === transport) {
         pending.delete(transportKind);
       }
-      mediaPathReconnectTriedRef.current[transportKind] = false;
-      const blockedPaths = blockedMediaPathsRef.current;
-      if (blockedPaths.delete(transportKind) && blockedPaths.size === 0) {
-        setMeetError(null);
-      }
+      // Connecting is not recovery: the watchdog marks the direction healthy
+      // once media is seen flowing on it.
       // Remember which relay actually carries media, so a newer relay that
       // has not worked yet never replaces it.
       void transport
@@ -1572,7 +1566,7 @@ export function useMeetSocket({
         })
         .catch(() => {});
     },
-    [setMeetError],
+    [],
   );
 
   // TURN servers are offered from the first attempt, so a network that blocks
@@ -2101,7 +2095,7 @@ export function useMeetSocket({
         runtimeIceServersRef.current = NO_RUNTIME_ICE_SERVERS;
         relayOnlyIceRef.current = false;
         mediaPathReconnectTriedRef.current = { producer: false, consumer: false };
-        blockedMediaPathsRef.current.clear();
+        updateMediaPathHealth({ type: "reset" });
       }
     },
     [
@@ -6198,6 +6192,53 @@ export function useMeetSocket({
       return false;
     };
 
+    // The senders a silent receive path still expects media from, by how well
+    // each one reaches the server.
+    const expectedConsumerProducerScores = (): Array<number | null> => {
+      const scores: Array<number | null> = [];
+      for (const [producerId, consumer] of consumersRef.current) {
+        if (
+          consumer.closed ||
+          consumer.kind !== "audio" ||
+          consumer.paused ||
+          producerPausedStateRef.current.get(producerId) === true
+        ) {
+          continue;
+        }
+        scores.push(
+          readProducerScore(consumerTelemetryRef.current.get(producerId)?.score),
+        );
+      }
+      return scores;
+    };
+
+    // Restarts ICE on a path that says connected but carries nothing, and
+    // reports whether media moved again within the check window.
+    const restartIceAndCheckMedia = async (
+      kind: "producer" | "consumer",
+      transport: Transport,
+    ): Promise<boolean> => {
+      if (!connectedOnce.has(transport)) return false;
+      const direction = kind === "producer" ? "send" : "recv";
+      const readBytes = async () =>
+        readRtpBytes((await transport.getStats()).values(), direction);
+      try {
+        const before = await readBytes();
+        if (!(await attemptIceRestart(kind))) return false;
+        await new Promise<void>((resolve) =>
+          window.setTimeout(resolve, MEDIA_PATH_FLOW_CHECK_MS),
+        );
+        const current =
+          kind === "producer"
+            ? producerTransportRef.current
+            : consumerTransportRef.current;
+        if (transport.closed || current !== transport) return true;
+        return (await readBytes()) > before;
+      } catch {
+        return false;
+      }
+    };
+
     const sample = async (kind: "producer" | "consumer") => {
       const transport =
         kind === "producer"
@@ -6240,30 +6281,61 @@ export function useMeetSocket({
         rtpBytes,
       });
       entry.watch = result.watch;
+      if (result.mediaMoved) {
+        mediaPathReconnectTriedRef.current[kind] = false;
+        updateMediaPathHealth({ type: "media-flowing", direction: kind });
+      } else if (
+        result.condition === "idle" &&
+        transport.connectionState === "connected"
+      ) {
+        mediaPathReconnectTriedRef.current[kind] = false;
+      }
       if (result.stalledForMs < MEDIA_PATH_STALL_MS) return;
 
       entry.watch = INITIAL_MEDIA_PATH_WATCH;
       const isSilentWhileConnected =
         result.condition === "connected-without-media";
-      if (isSilentWhileConnected) {
-        if (reportedSilentWhileConnected.has(transport)) return;
-        reportedSilentWhileConnected.add(transport);
+      if (isSilentWhileConnected && kind === "consumer") {
+        void syncProducersRef.current();
+      }
+      const stalledSeconds = Math.round(result.stalledForMs / 1000);
+      if (
+        isSilentWhileConnected &&
+        planSilentPathStep({
+          direction: kind,
+          expectedProducerScores:
+            kind === "consumer" ? expectedConsumerProducerScores() : [],
+        }) === "remote-not-sending"
+      ) {
+        if (!reportedSilentWhileConnected.has(transport)) {
+          reportedSilentWhileConnected.add(transport);
+          console.warn(
+            `[Meets] ${kind} transport has carried no media for ${stalledSeconds}s, and its senders report sending nothing.`,
+          );
+        }
+        return;
       }
       console.warn(
-        `[Meets] ${kind} transport has carried no media for ${Math.round(
-          result.stalledForMs / 1000,
-        )}s (${result.condition}).`,
+        `[Meets] ${kind} transport has carried no media for ${stalledSeconds}s (${result.condition}).`,
       );
       telemetry.capture("meet_media_path_stalled", {
         transport: kind,
         condition: result.condition,
         roomId: currentRoomIdRef.current ?? undefined,
       });
+      updateMediaPathHealth({ type: "trouble", direction: kind });
       if (isSilentWhileConnected) {
-        // ICE and DTLS are up, so the network is not blocking this path and
-        // rebuilding it would only interrupt the call. Record it, and let
-        // the per-stream recovery re-check what should be arriving.
-        if (kind === "consumer") void syncProducersRef.current();
+        // ICE says connected but nothing arrives, so treat it as a failed
+        // path: restart ICE, and rebuild if media still does not move.
+        if (await restartIceAndCheckMedia(kind, transport)) return;
+        if (entry.transport !== transport) return;
+        escalateMediaPathFailure(
+          kind,
+          transport,
+          kind === "producer"
+            ? "Producer transport carried no media"
+            : "Consumer transport carried no media",
+        );
         return;
       }
       // An ICE restart can revive a path that worked before. One that never
@@ -6298,8 +6370,10 @@ export function useMeetSocket({
   }, [
     attemptIceRestart,
     audioProducerRef,
+    consumerTelemetryRef,
     consumerTransportRef,
     consumersRef,
+    updateMediaPathHealth,
     currentRoomIdRef,
     escalateMediaPathFailure,
     intentionalDisconnectRef,
@@ -7488,7 +7562,7 @@ export function useMeetSocket({
                 `[Meets] Connected to SFU in ${(performance.now() - joinStartTime).toFixed(0)}ms`,
               );
               setConnectionState("connected");
-              clearMeetErrorUnlessMediaBlocked();
+              setMeetError(null);
               serverRestartNoticeRef.current = null;
               setServerRestartNotice(null);
               intentionalDisconnectRef.current = false;
@@ -9214,7 +9288,6 @@ export function useMeetSocket({
       onTtsMessage,
       onSocketReady,
       applyJoinAnswerIceServers,
-      clearMeetErrorUnlessMediaBlocked,
     ],
   );
 
@@ -9366,13 +9439,6 @@ export function useMeetSocket({
       });
       const scopedRoomId = currentRoomIdRef.current;
       if (scopedDirection && scopedRoomId) {
-        // Only the rebuilt direction gets a fresh verdict; a direction that is
-        // still blocked keeps its warning and Try again.
-        blockedMediaPathsRef.current = blockedPathsAfterRebuildStarts(
-          blockedMediaPathsRef.current,
-          [scopedDirection],
-        );
-        clearMeetErrorUnlessMediaBlocked();
         if (pendingIceServersRefresh) {
           pendingIceServersRefresh = false;
           await refreshIceServersOnOpenSocket(scopedRoomId);
@@ -9387,7 +9453,6 @@ export function useMeetSocket({
         if (intentionalDisconnectRef.current) return;
         if (result.rebuilt) {
           reconnectAttemptsRef.current = 0;
-          clearMeetErrorUnlessMediaBlocked();
           rejoined = true;
           return;
         }
@@ -9395,12 +9460,6 @@ export function useMeetSocket({
           `[Meets] Could not rebuild the ${scopedDirection} transport on its own (${result.reason}); rejoining.`,
         );
       }
-      // A rejoin rebuilds both directions, so both get a fresh verdict, and a
-      // fresh warning if media is still blocked.
-      blockedMediaPathsRef.current = blockedPathsAfterRebuildStarts(
-        blockedMediaPathsRef.current,
-        ["producer", "consumer"],
-      );
       setMeetError(null);
       while (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
         if (reconnectGeneration !== reconnectGenerationRef.current) return;
@@ -9522,7 +9581,7 @@ export function useMeetSocket({
             await connectSocket(reconnectRoomId, { reconnectJoinInfo });
             pendingIceServersRefresh = false;
           } else {
-            clearMeetErrorUnlessMediaBlocked();
+            setMeetError(null);
           }
           if (reconnectGeneration !== reconnectGenerationRef.current) return;
           if (intentionalDisconnectRef.current) return;
@@ -9597,7 +9656,7 @@ export function useMeetSocket({
           reconnectAttemptsRef.current = 0;
           manualReconnectRetryRequestedRef.current = false;
           updateReconnectRecoveryStatus(null);
-          clearMeetErrorUnlessMediaBlocked();
+          setMeetError(null);
           rejoined = true;
           return;
         } catch (err) {
@@ -9780,7 +9839,6 @@ export function useMeetSocket({
     currentRoomIdRef,
     ensureLiveLocalMediaForJoin,
     refreshIceServersOnOpenSocket,
-    clearMeetErrorUnlessMediaBlocked,
     escalateMediaPathFailure,
     rebuildReceivePath,
     rebuildSendPath,
@@ -9932,7 +9990,7 @@ export function useMeetSocket({
       runtimeIceServersRef.current = NO_RUNTIME_ICE_SERVERS;
       relayOnlyIceRef.current = false;
       mediaPathReconnectTriedRef.current = { producer: false, consumer: false };
-      blockedMediaPathsRef.current.clear();
+      updateMediaPathHealth({ type: "reset" });
       setRoomId(targetRoomId);
       if (joinMode === "webinar_attendee") {
         setIsAdmin(false);
@@ -10179,7 +10237,6 @@ export function useMeetSocket({
     reconnectAttemptsRef.current = 0;
     relayOnlyIceRef.current = false;
     mediaPathReconnectTriedRef.current = { producer: false, consumer: false };
-    blockedMediaPathsRef.current.clear();
     setMeetError(null);
     updateReconnectRecoveryStatus(
       buildReconnectRecoveryStatus(
@@ -10859,6 +10916,7 @@ export function useMeetSocket({
     joinRoom,
     joinRoomById,
     retryReconnect,
+    mediaPathHealth,
     reconnectRecoveryStatus,
     toggleRoomLock,
     toggleNoGuests,

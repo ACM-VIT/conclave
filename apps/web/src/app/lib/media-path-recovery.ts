@@ -2,6 +2,8 @@
 export const MEDIA_PATH_STALL_MS = 15_000;
 /** How long an ICE restart gets to bring a transport back. */
 export const MEDIA_PATH_VERIFY_MS = 10_000;
+/** How long media gets to move again after an ICE restart on a silent path. */
+export const MEDIA_PATH_FLOW_CHECK_MS = 4_000;
 
 export const NETWORK_BLOCKED_MESSAGE =
   "Your network is blocking audio and video.";
@@ -74,7 +76,13 @@ const getMediaPathCondition = (
 export const advanceMediaPathWatch = (
   watch: MediaPathWatch,
   sample: MediaPathSample,
-): { watch: MediaPathWatch; condition: MediaPathCondition; stalledForMs: number } => {
+): {
+  watch: MediaPathWatch;
+  condition: MediaPathCondition;
+  stalledForMs: number;
+  /** RTP bytes grew since the last connected sample: media is really moving. */
+  mediaMoved: boolean;
+} => {
   const condition = getMediaPathCondition(watch, sample);
   const inTrouble =
     condition === "not-connected" || condition === "connected-without-media";
@@ -87,6 +95,10 @@ export const advanceMediaPathWatch = (
     },
     condition,
     stalledForMs: troubleSince === null ? 0 : sample.at - troubleSince,
+    mediaMoved:
+      sample.connectionState === "connected" &&
+      watch.lastRtpBytes !== null &&
+      sample.rtpBytes > watch.lastRtpBytes,
   };
 };
 
@@ -160,14 +172,68 @@ export const judgeReceiveRebuild = <P>({
 };
 
 /**
- * The blocked directions left once a rebuild starts. Only the directions
- * being rebuilt get a fresh verdict; any other one is still blocked.
+ * What a stall on a connected transport calls for. ICE saying connected does
+ * not mean media arrives, so it goes through the same escalation as a failed
+ * transport, unless every sender this path expects reports that it is not
+ * sending: then the silence is at the other end, not on this network.
  */
-export const blockedPathsAfterRebuildStarts = (
-  blocked: ReadonlySet<MediaDirection>,
-  rebuilding: readonly MediaDirection[],
-): Set<MediaDirection> => {
-  const next = new Set(blocked);
-  for (const direction of rebuilding) next.delete(direction);
-  return next;
+export const planSilentPathStep = ({
+  direction,
+  expectedProducerScores,
+}: {
+  direction: MediaDirection;
+  expectedProducerScores: Array<number | null>;
+}): "escalate" | "remote-not-sending" =>
+  direction === "consumer" &&
+  expectedProducerScores.length > 0 &&
+  expectedProducerScores.every((score) => score === 0)
+    ? "remote-not-sending"
+    : "escalate";
+
+export type MediaPathHealthState = "healthy" | "recovering" | "blocked";
+export type MediaPathHealth = Record<MediaDirection, MediaPathHealthState>;
+
+export const HEALTHY_MEDIA_PATHS: MediaPathHealth = {
+  producer: "healthy",
+  consumer: "healthy",
 };
+
+/**
+ * The only ways a direction's health changes. Trouble starts recovery, a
+ * finished escalation that did not help blocks it, and only media seen
+ * flowing in that direction makes it healthy again. Nothing else, such as
+ * an unmute or a device change, can clear a blocked direction.
+ */
+export type MediaPathHealthEvent =
+  | { type: "trouble"; direction: MediaDirection }
+  | { type: "blocked"; direction: MediaDirection }
+  | { type: "media-flowing"; direction: MediaDirection }
+  | { type: "reset" };
+
+export const advanceMediaPathHealth = (
+  health: MediaPathHealth,
+  event: MediaPathHealthEvent,
+): MediaPathHealth => {
+  if (event.type === "reset") {
+    return health.producer === "healthy" && health.consumer === "healthy"
+      ? health
+      : HEALTHY_MEDIA_PATHS;
+  }
+  const current = health[event.direction];
+  const next: MediaPathHealthState =
+    event.type === "media-flowing"
+      ? "healthy"
+      : event.type === "blocked"
+        ? "blocked"
+        : current === "blocked"
+          ? "blocked"
+          : "recovering";
+  return next === current ? health : { ...health, [event.direction]: next };
+};
+
+export const blockedMediaDirections = (
+  health: MediaPathHealth,
+): MediaDirection[] =>
+  (["producer", "consumer"] as const).filter(
+    (direction) => health[direction] === "blocked",
+  );

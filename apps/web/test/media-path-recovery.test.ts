@@ -3,8 +3,11 @@ import {
   INITIAL_MEDIA_PATH_WATCH,
   MEDIA_PATH_STALL_MS,
   advanceMediaPathWatch,
-  blockedPathsAfterRebuildStarts,
+  HEALTHY_MEDIA_PATHS,
+  advanceMediaPathHealth,
+  blockedMediaDirections,
   judgeReceiveRebuild,
+  planSilentPathStep,
   planMediaPathEscalation,
   readRtpBytes,
   type MediaPathSample,
@@ -231,23 +234,66 @@ describe("judging a rebuilt receive path", () => {
   });
 });
 
-describe("blocked directions when a rebuild starts", () => {
-  it("keeps a blocked direction the rebuild does not touch", () => {
-    expect([...blockedPathsAfterRebuildStarts(new Set(["producer"]), ["consumer"])]).toEqual([
-      "producer",
-    ]);
+describe("per-direction media health", () => {
+  const blockedReceive = advanceMediaPathHealth(HEALTHY_MEDIA_PATHS, {
+    type: "blocked",
+    direction: "consumer",
   });
 
-  it("clears the direction being rebuilt", () => {
-    expect([...blockedPathsAfterRebuildStarts(new Set(["consumer"]), ["consumer"])]).toEqual([]);
+  it("stays blocked through new trouble and other rebuilds", () => {
+    let health = advanceMediaPathHealth(blockedReceive, { type: "trouble", direction: "consumer" });
+    health = advanceMediaPathHealth(health, { type: "trouble", direction: "producer" });
+
+    expect(health).toEqual({ producer: "recovering", consumer: "blocked" });
   });
 
-  it("clears both when both are rebuilt", () => {
-    expect([
-      ...blockedPathsAfterRebuildStarts(new Set(["producer", "consumer"]), [
-        "producer",
-        "consumer",
-      ]),
-    ]).toEqual([]);
+  it("is cleared for a direction only when media flows in that direction", () => {
+    const sendFlowing = advanceMediaPathHealth(blockedReceive, {
+      type: "media-flowing",
+      direction: "producer",
+    });
+    expect(sendFlowing.consumer).toBe("blocked");
+
+    expect(
+      advanceMediaPathHealth(sendFlowing, { type: "media-flowing", direction: "consumer" }),
+    ).toEqual(HEALTHY_MEDIA_PATHS);
+  });
+
+  it("starts fresh for a new join", () => {
+    expect(advanceMediaPathHealth(blockedReceive, { type: "reset" })).toEqual(HEALTHY_MEDIA_PATHS);
+  });
+
+  it("lists the blocked directions", () => {
+    expect(blockedMediaDirections(blockedReceive)).toEqual(["consumer"]);
+    expect(blockedMediaDirections(HEALTHY_MEDIA_PATHS)).toEqual([]);
+  });
+});
+
+describe("a stall while the transport says connected", () => {
+  it("escalates the receive path when the remote side is still sending", () => {
+    expect(
+      planSilentPathStep({ direction: "consumer", expectedProducerScores: [10, null] }),
+    ).toBe("escalate");
+  });
+
+  it("escalates the send path", () => {
+    expect(planSilentPathStep({ direction: "producer", expectedProducerScores: [] })).toBe(
+      "escalate",
+    );
+  });
+
+  it("does not blame this network when every expected sender reports no media", () => {
+    expect(
+      planSilentPathStep({ direction: "consumer", expectedProducerScores: [0, 0] }),
+    ).toBe("remote-not-sending");
+  });
+});
+
+describe("knowing that media moved", () => {
+  it("needs bytes to grow between two connected samples", () => {
+    const first = advanceMediaPathWatch(INITIAL_MEDIA_PATH_WATCH, sample({ at: 0, rtpBytes: 100 }));
+    expect(first.mediaMoved).toBe(false);
+    expect(advanceMediaPathWatch(first.watch, sample({ at: 1, rtpBytes: 100 })).mediaMoved).toBe(false);
+    expect(advanceMediaPathWatch(first.watch, sample({ at: 1, rtpBytes: 250 })).mediaMoved).toBe(true);
   });
 });

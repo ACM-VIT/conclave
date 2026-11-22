@@ -87,7 +87,12 @@ import {
   clearStoredVoiceAgentKey,
   storeVoiceAgentKey,
 } from "./lib/voice-agent-key";
-import type { ChatMessage, JoinMode, PrejoinMediaHandoff } from "./lib/types";
+import type {
+  ChatMessage,
+  JoinMode,
+  MeetError,
+  PrejoinMediaHandoff,
+} from "./lib/types";
 import { getTtsMessageText } from "./lib/chat-commands";
 import {
   readStoredMeetViewSettings,
@@ -120,6 +125,8 @@ import {
   sanitizeRoomCode,
 } from "./lib/utils";
 import type { VideoEffectsBridgeState } from "./components/VideoEffectsBridge";
+import { deriveInCallAlerts } from "./lib/in-call-alerts";
+import { NETWORK_BLOCKED_MESSAGE } from "./lib/media-path-recovery";
 
 type MeetUser = {
   id?: string;
@@ -149,6 +156,11 @@ const VIDEO_EFFECTS_OFF_STATE: VideoEffectsBridgeState = {
   debugStats: null,
 };
 
+const MEDIA_BLOCKED_ALERT: MeetError = {
+  code: "NETWORK_BLOCKED",
+  message: NETWORK_BLOCKED_MESSAGE,
+  recoverable: true,
+};
 const GUEST_USER_STORAGE_KEY = "conclave:guest-user";
 const DEBUG_VIDEO_EFFECTS_STORAGE_KEY = "conclave:debug-video-effects";
 const VIDEO_EFFECTS_STORAGE_KEY = "conclave:video-effects";
@@ -2590,6 +2602,10 @@ export default function MeetsClient({
 
   const joinRoomById = socket.joinRoomById;
   const retryReconnect = socket.retryReconnect;
+  const inCallAlerts = deriveInCallAlerts({
+    meetError,
+    mediaPathHealth: socket.mediaPathHealth,
+  });
   const reconnectRecoveryStatus = socket.reconnectRecoveryStatus;
   const getMeetingConfig = socket.getMeetingConfig;
   const getWebinarConfig = socket.getWebinarConfig;
@@ -3175,26 +3191,30 @@ export default function MeetsClient({
   return renderWithApps(
     <div className="flex flex-col h-full w-full bg-[#18181b] text-white">
       <MeetsHeader isJoined={isJoined} />
-      {connectionState === "joined" && meetError && (
+      {connectionState === "joined" && inCallAlerts.mediaBlocked && (
         <MeetsErrorBanner
-          meetError={meetError}
+          meetError={MEDIA_BLOCKED_ALERT}
+          onDismiss={() => {}}
+          primaryActionLabel="Try again"
+          onPrimaryAction={() => void retryReconnect()}
+        />
+      )}
+      {connectionState === "joined" && inCallAlerts.error && (
+        <MeetsErrorBanner
+          meetError={inCallAlerts.error}
           onDismiss={() => setMeetError(null)}
           primaryActionLabel={
-            meetError.code === "PERMISSION_DENIED"
+            inCallAlerts.error.code === "PERMISSION_DENIED"
               ? "Retry Permissions"
-              : meetError.code === "MEDIA_ERROR"
+              : inCallAlerts.error.code === "MEDIA_ERROR"
                 ? "Retry Devices"
-                : meetError.code === "NETWORK_BLOCKED"
-                  ? "Try again"
-                  : undefined
+                : undefined
           }
           onPrimaryAction={
-            meetError.code === "PERMISSION_DENIED" ||
-            meetError.code === "MEDIA_ERROR"
+            inCallAlerts.error.code === "PERMISSION_DENIED" ||
+            inCallAlerts.error.code === "MEDIA_ERROR"
               ? handleRetryMedia
-              : meetError.code === "NETWORK_BLOCKED"
-                ? () => void retryReconnect()
-                : undefined
+              : undefined
           }
         />
       )}
