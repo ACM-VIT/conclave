@@ -710,6 +710,19 @@ describe("the language a session reports", () => {
     expect(codes).toEqual(["hi-IN", "unknown"]);
   });
 
+  it("Sarvam: a client that names no language keeps the deployment locale, as before", async () => {
+    vi.useFakeTimers();
+    const { room, start, switchTo } = await fixture(SARVAM, { TRANSCRIPT_TRANSCRIPTION_LOCALE: "ta-IN" });
+    await start();
+    await switchTo();
+
+    const codes = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.map(([url]) =>
+      new URL(String(url)).searchParams.get("language-code"),
+    );
+    expect(codes).toEqual(["ta-IN", "ta-IN"]);
+    expect(room.session).toMatchObject({ language: "ta", languageChosen: false });
+  });
+
   it("reports no fixed language when the operator's Sarvam code is auto-detect", async () => {
     vi.useFakeTimers();
     const { room, start } = await fixture(SARVAM, { TRANSCRIPT_SARVAM_LANGUAGE_CODE: "unknown" });

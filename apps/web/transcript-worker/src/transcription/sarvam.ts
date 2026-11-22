@@ -1,6 +1,6 @@
 import { AI_ENDPOINTS } from "@conclave/ai/models";
 import { DEFAULT_TRANSCRIPTION_LOCALE } from "../constants";
-import { safeJsonParse, trimText } from "../utils";
+import { normalizeLocale, safeJsonParse, trimText } from "../utils";
 import type {
   LiveTranscriptionCallbacks,
   LiveTranscriptionConnectOptions,
@@ -77,15 +77,21 @@ const normalizeSarvamLanguageCode = (
 const baseLanguage = (language: string): string =>
   language.trim().toLowerCase().split("-")[0] ?? "";
 
-// A picked language gets its regional code. The operator's code applies only
-// when nobody picked one, as with clients that send no language.
+// A picked language gets its regional code. With no pick, as from clients
+// that send no language, the code resolves exactly as it did before picks:
+// the operator's code or the language, else the deployment locale.
 const supportedSarvamLanguageCode = (
   language: string,
   languageChosen: boolean,
   env: LiveTranscriptionConnectOptions["env"],
+  locale = normalizeLocale(env.TRANSCRIPT_TRANSCRIPTION_LOCALE),
 ): string | null => {
-  const override = env.TRANSCRIPT_SARVAM_LANGUAGE_CODE;
-  if (override && !languageChosen) return override;
+  if (!languageChosen) {
+    return normalizeSarvamLanguageCode(
+      env.TRANSCRIPT_SARVAM_LANGUAGE_CODE ?? language,
+      locale || DEFAULT_TRANSCRIPTION_LOCALE,
+    );
+  }
   const regional = `${baseLanguage(language)}-IN`;
   return SARVAM_SUPPORTED_LANGUAGE_CODES.has(regional) ? regional : null;
 };
@@ -117,6 +123,7 @@ const sarvamLanguageCode = (options: LiveTranscriptionConnectOptions): string =>
     options.language,
     options.languageChosen === true,
     options.env,
+    options.locale,
   ) ??
   options.env.TRANSCRIPT_SARVAM_LANGUAGE_CODE ??
   options.language;
