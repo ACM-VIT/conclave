@@ -13,7 +13,7 @@ private struct ChatTimelineItem {
 @Observable
 final class ChatPresenter {
     private(set) var panel: ChatPanelSnapshot = ChatPanelSnapshot.initial
-    private(set) var timeline: ChatTimelineSnapshot = ChatTimelineSnapshot.empty
+    private(set) var currentTimeline: ChatTimelineSnapshot = ChatTimelineSnapshot.empty
     private(set) var composer: ChatComposerSnapshot = ChatComposerSnapshot.initial
 
     private(set) var playback = ChatPlaybackSnapshot(activeVoiceRowId: "")
@@ -22,7 +22,19 @@ final class ChatPresenter {
 
     private(set) var announcement: ChatAnnouncement? = nil
 
-    @ObservationIgnored let rows = ChatRowStore()
+    @ObservationIgnored private let rowStore = ChatRowStore()
+
+    /// The timeline and rows a chat panel shows. While the panel is closed new messages only update the
+    /// unread bookkeeping; the rows are rebuilt once, on the first read or when the panel opens.
+    var timeline: ChatTimelineSnapshot {
+        flushDeferredRows()
+        return currentTimeline
+    }
+
+    var rows: ChatRowStore {
+        flushDeferredRows()
+        return rowStore
+    }
     @ObservationIgnored let drafts = ChatDraftStore()
 
     @ObservationIgnored let embeds = ChatEmbedStore()
@@ -66,6 +78,8 @@ final class ChatPresenter {
 
     @ObservationIgnored private var hasTimeline = false
     @ObservationIgnored private var suppressesNewRowTracking = false
+    @ObservationIgnored private(set) var hasDeferredRows = false
+    @ObservationIgnored private var unreadRowIdsWhileClosed: Set<String> = []
 
     @ObservationIgnored private var serverToClientRowId: [String: String] = [:]
 
@@ -142,7 +156,12 @@ final class ChatPresenter {
             localAttachment = nil
         }
         if rowsChanged || change == ChatInputChange.messages {
-            rebuildRows(previousRowIds: timeline.rowIds)
+            if isOpen || !hasTimeline {
+                rebuildRows(previousRowIds: currentTimeline.rowIds)
+            } else {
+                hasDeferredRows = true
+                trackUnreadWhileClosed()
+            }
         }
         stepGateLine(isFirstApply: gateLineIsFirstApply, at: now())
         gateLineIsFirstApply = false
@@ -168,6 +187,7 @@ final class ChatPresenter {
             pendingFirstUnreadId = ""
             pendingUnreadCount = 0
         }
+        flushDeferredRows()
         switch destination {
         case .message:
             jumpTo(messageId: targetId)
@@ -179,14 +199,14 @@ final class ChatPresenter {
         default:
             break
         }
-        rebuildRows(previousRowIds: timeline.rowIds)
+        rebuildRows(previousRowIds: currentTimeline.rowIds)
     }
 
     func panelDidClose() {
         guard isOpen else { return }
         isOpen = false
         firstUnreadId = ""
-        rebuildRows(previousRowIds: timeline.rowIds)
+        rebuildRows(previousRowIds: currentTimeline.rowIds)
     }
 
     func reset() {
@@ -195,7 +215,9 @@ final class ChatPresenter {
         hasBuilt = false
         hasTimeline = false
         isOpen = false
-        if timeline != ChatTimelineSnapshot.empty { timeline = ChatTimelineSnapshot.empty }
+        hasDeferredRows = false
+        unreadRowIdsWhileClosed = []
+        if currentTimeline != ChatTimelineSnapshot.empty { currentTimeline = ChatTimelineSnapshot.empty }
         if composer != ChatComposerSnapshot.initial { composer = ChatComposerSnapshot.initial }
         if panel != ChatPanelSnapshot.initial { panel = ChatPanelSnapshot.initial }
         if announcement != nil { announcement = nil }
@@ -209,7 +231,7 @@ final class ChatPresenter {
         }
         slowTasks = [:]
         slowRowIds = [:]
-        rows.reset()
+        rowStore.reset()
         drafts.reset()
         embeds.reset()
         embedURLCache = [:]
@@ -505,7 +527,7 @@ final class ChatPresenter {
         if privateToUserId == userId { privateToUserId = "" }
         if !replyRowId.isEmpty && rows.entry(for: replyRowId).row.senderId == userId { replyRowId = "" }
         onCommand?(ChatCommandRequest.make(ChatCommandKind.hideSender, userId: userId))
-        rebuildRows(previousRowIds: timeline.rowIds)
+        rebuildRows(previousRowIds: currentTimeline.rowIds)
         publishComposer()
     }
 
@@ -521,7 +543,7 @@ final class ChatPresenter {
         onCommand?(ChatCommandRequest.make(ChatCommandKind.showSender, userId: userId))
 
         suppressesNewRowTracking = true
-        rebuildRows(previousRowIds: timeline.rowIds)
+        rebuildRows(previousRowIds: currentTimeline.rowIds)
         suppressesNewRowTracking = false
     }
 
@@ -549,7 +571,40 @@ final class ChatPresenter {
         publishTimeline(force: true)
     }
 
+    private func flushDeferredRows() {
+        guard hasDeferredRows else { return }
+        rebuildRows(previousRowIds: currentTimeline.rowIds)
+    }
+
+    /// The closed-panel half of `trackNewRows`: remembers where the unread divider goes without building
+    /// any row. It counts the same messages a rebuild would: not your own, not history, not from a hidden
+    /// sender, and not an assistant answer that has no text yet.
+    private func trackUnreadWhileClosed() {
+        var known: Set<String> = []
+        for id in currentTimeline.rowIds { known.insert(id) }
+        for message in inputs.messages {
+            if message.isOwn || message.isHistory { continue }
+            if hiddenSenderIds.contains(message.senderId) { continue }
+            if message.isAssistant && message.content.isEmpty { continue }
+            let rowId = rowIdFor(message)
+            if known.contains(rowId) || unreadRowIdsWhileClosed.contains(rowId) { continue }
+            unreadRowIdsWhileClosed.insert(rowId)
+            if pendingFirstUnreadId.isEmpty { pendingFirstUnreadId = rowId }
+            pendingUnreadCount += 1
+        }
+    }
+
     private func rebuildRows(previousRowIds: [String]) {
+        let catchesUp = hasDeferredRows
+        hasDeferredRows = false
+        unreadRowIdsWhileClosed = []
+        let tracksNewRows = !suppressesNewRowTracking
+        if catchesUp { suppressesNewRowTracking = true }
+        rebuildRowsNow(previousRowIds: previousRowIds)
+        suppressesNewRowTracking = !tracksNewRows
+    }
+
+    private func rebuildRowsNow(previousRowIds: [String]) {
         rebuildCount += 1
         let messages = inputs.messages
         var items: [ChatTimelineItem] = []
@@ -906,7 +961,11 @@ final class ChatPresenter {
 
     private func embedDidResolve() {
         guard hasBuilt else { return }
-        rebuildRows(previousRowIds: timeline.rowIds)
+        if !isOpen && hasTimeline {
+            hasDeferredRows = true
+            return
+        }
+        rebuildRows(previousRowIds: currentTimeline.rowIds)
     }
 
     private func trimCaches(messages: [ChatMessageInput]) {
@@ -1088,7 +1147,7 @@ final class ChatPresenter {
         }
         guard stillSending else { return }
         slowRowIds[rowId] = true
-        rebuildRows(previousRowIds: timeline.rowIds)
+        rebuildRows(previousRowIds: currentTimeline.rowIds)
     }
 
     private var currentGateLine: ChatSendGate {
@@ -1142,7 +1201,7 @@ final class ChatPresenter {
     }
 
     private func publishTimeline(_ next: ChatTimelineSnapshot) {
-        let current = timeline
+        let current = currentTimeline
         let same = current.rowIds == next.rowIds && current.rowKinds == next.rowKinds && current.newestId == next.newestId
             && current.newestIsOwn == next.newestIsOwn && current.newestIsRemoteMessage == next.newestIsRemoteMessage
             && current.firstUnreadId == next.firstUnreadId && current.focusId == next.focusId
@@ -1150,14 +1209,14 @@ final class ChatPresenter {
         if same { return }
         timelineRevision += 1
         timelinePublishCount += 1
-        timeline = ChatTimelineSnapshot(revision: timelineRevision, rowIds: next.rowIds, rowKinds: next.rowKinds,
+        currentTimeline = ChatTimelineSnapshot(revision: timelineRevision, rowIds: next.rowIds, rowKinds: next.rowKinds,
                                         newestId: next.newestId, newestIsOwn: next.newestIsOwn,
                                         newestIsRemoteMessage: next.newestIsRemoteMessage, firstUnreadId: next.firstUnreadId,
                                         focusId: next.focusId, focusRequest: next.focusRequest, isEmpty: next.isEmpty)
     }
 
     private func publishTimeline(force: Bool) {
-        let current = timeline
+        let current = currentTimeline
         publishTimeline(ChatTimelineSnapshot(revision: current.revision, rowIds: current.rowIds, rowKinds: current.rowKinds,
                                              newestId: current.newestId, newestIsOwn: current.newestIsOwn,
                                              newestIsRemoteMessage: current.newestIsRemoteMessage,
@@ -1184,7 +1243,7 @@ final class ChatPresenter {
     }
 
     private func publishPlayback() {
-        let rowId = inputs.activeTtsMessageId.isEmpty ? "" : rows.rowId(forMessageId: inputs.activeTtsMessageId)
+        let rowId = inputs.activeTtsMessageId.isEmpty ? "" : rowStore.rowId(forMessageId: inputs.activeTtsMessageId)
         if playback.activeVoiceRowId == rowId { return }
         playback = ChatPlaybackSnapshot(activeVoiceRowId: rowId)
     }
@@ -1202,8 +1261,8 @@ final class ChatPresenter {
             }
         }
         var reply: ChatReplyRef? = nil
-        if !replyRowId.isEmpty && rows.hasEntry(replyRowId) {
-            let row = rows.entry(for: replyRowId).row
+        if !replyRowId.isEmpty && rowStore.hasEntry(replyRowId) {
+            let row = rowStore.entry(for: replyRowId).row
             var media = ""
             if row.kind == ChatRowKind.photo { media = "photo" }
             if row.kind == ChatRowKind.gif { media = "gif" }
