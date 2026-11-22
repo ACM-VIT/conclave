@@ -1,4 +1,5 @@
 import type { CaptureResult, Properties } from "posthog-js";
+import { isCallLogLabel } from "./call-log-labels";
 
 const STATIC_PAGES = new Set([
   "schedule",
@@ -204,8 +205,8 @@ const knownType = (type: unknown): string =>
   typeof type === "string" && KNOWN_ERROR_TYPES.has(type) ? type : TYPE_WITHHELD;
 
 /**
- * An exception keeps its message only when we wrote it: the `[Meets]` label
- * that call-error-capture sets. Every other message, from an engine, a
+ * An exception keeps its message only when we wrote it: a registered `[Meets]`
+ * label that call-error-capture set. Every other message, from an engine, a
  * library, the server or a rejected value, is withheld.
  */
 const scrubExceptionEntry = (
@@ -239,9 +240,7 @@ function scrubProperties(
   pageOrigin: string | null,
 ): Properties {
   const trustedMessage =
-    payload?.source === "call_log" && typeof payload.call_log === "string"
-      ? scrubText(payload.call_log)
-      : null;
+    payload?.source === "call_log" && isCallLogLabel(payload.call_log) ? payload.call_log : null;
   const scrubbed: Properties = {};
   const sdkEntries: Array<[string, unknown]> = Object.entries(properties);
   const appEntries: Array<[string, unknown]> = Object.entries(payload ?? {});
@@ -261,6 +260,7 @@ function scrubProperties(
     }
   }
   for (const [key, value] of appEntries) {
+    if (key === "call_log" && !isCallLogLabel(value)) continue;
     if (APP_PROPERTIES.has(key) && isPrimitive(value)) scrubbed[key] = scrubAppValue(key, value);
   }
   if (clientVersion) scrubbed.client_version = clientVersion;

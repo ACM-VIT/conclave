@@ -83,7 +83,7 @@ describe("scrubTelemetryEvent", () => {
     expect(properties).not.toHaveProperty("$title");
     expect(properties).not.toHaveProperty("roomId");
     expect(properties).not.toHaveProperty("userId");
-    expect(properties.call_log).toBe("[Meets] Failed to produce video for [email]");
+    expect(properties).not.toHaveProperty("call_log");
 
     const [entry] = properties.$exception_list;
     expect(entry.value).toBe("[message withheld]");
@@ -266,6 +266,17 @@ describe("credentials, non-error rejections and first-party scripts", () => {
       "https://conclave.acmvit.in/_next/static/chunks/0f3e9d.js",
     );
     expect(JSON.stringify(properties)).not.toMatch(/Riya|lime-pear-plum/);
+  });
+
+  it("sends a call-log message only for a registered label", () => {
+    const event = exceptionEvent();
+    event.properties.source = "call_log";
+    event.properties.call_log = "[Meets] Fixture meeting note";
+    const scrubbed = scrub(event);
+
+    expect(scrubbed.properties.$exception_list[0].value).toBe("[message withheld]");
+    expect(scrubbed.properties).not.toHaveProperty("call_log");
+    expect(JSON.stringify(scrubbed)).not.toMatch(/Fixture/);
   });
 
   it.each(["/transcript-pcm-processor.js", "/effects/video-effects-output-writer.js"])(

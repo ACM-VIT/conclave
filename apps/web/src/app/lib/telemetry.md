@@ -20,7 +20,7 @@ the first report arrives, and holds up to 50 reports until it has loaded:
 
 - Unhandled errors and promise rejections (posthog-js autocapture, rate limited per error type by the SDK).
 - Errors caught by `app/error.tsx` and `app/global-error.tsx`: `source: "react_error_boundary"`, `boundary: "route" | "root"`, `digest`.
-- `console.error("[Meets] ...")` lines from the call code: `source: "call_log"`, `call_log` (the log label). The exception's message is the label. A logged Error keeps its type and stack frames, never its message. Other logged values are dropped. mediasoup ids in a label become `[id]`, so one failure type shares one budget: at most 3 per label and 30 in total per minute.
+- `console.error("[Meets] ...")` lines from the call code whose label is registered in `lib/call-log-labels.ts`, exactly: `source: "call_log"`, `call_log` (the label). The exception's message is the label. A label is written out in full where it is logged, never built at runtime, and a test keeps the registry equal to the source; any other `[Meets]` line is not reported. A logged Error keeps its type and stack frames, never its message. Other logged values are dropped. At most 3 per label and 30 in total per minute.
 - Errors built from server text (socket ack `error` fields and the like) are thrown as `ServerError`, so the type says where the text came from. Like every message that is not a call-log label, theirs is withheld. A lint rule flags `new Error(x.error)`.
 
 SFU, from `server/analytics/errorReporter.ts`, every event tagged `sfu_instance_id`, `sfu_region`, `sfu_version`:
@@ -115,8 +115,8 @@ trust, instead of scrubbing what looks bad:
   `lib/telemetry.ts` removes everything but those ids from both stores. Person
   properties (`$set`, `$set_once`) are never sent. A new event field has to be
   added to the list to be sent.
-- **Exception messages.** A message is sent only when it is the `[Meets]`
-  call-log label. Every other one, from an engine, a library, the server or a
+- **Exception messages.** A message is sent only when it is a registered
+  `[Meets]` call-log label from the capture's own payload. Every other one, from an engine, a library, the server or a
   rejected value, becomes `[message withheld]`. Type names are kept only from
   a list of known error kinds (built-in, DOM, ours); any other, such as a
   rejected object's `name`, becomes `[type withheld]`. Frames keep their line

@@ -89,23 +89,16 @@ describe("installCallErrorCapture", () => {
     expect(reported).toHaveLength(5);
   });
 
-  it("keeps a producer id in the log line from defeating the per-label cap", () => {
-    const { target, reported } = setup();
+  it("reports nothing for a label that is not registered", () => {
+    const { target, logged, reported } = setup();
+    const producerId = "0f8c2a1e-5b7d-4c3e-9a10-000000000001";
 
-    for (let failure = 0; failure < 40; failure += 1) {
-      const producerId = `0f8c2a1e-5b7d-4c3e-9a10-${String(failure).padStart(12, "0")}`;
-      target.error(`[Meets] Failed to recover stale consumer ${producerId}:`, new Error("gone"));
-    }
+    target.error("[Meets] Fixture meeting note", new Error("Meet Mira in sample-room"));
+    target.error(`[Meets] Failed to recover stale consumer ${producerId}:`, new Error("gone"));
+    target.error("[Meets] Failed to produce video for mira@example.com:", new Error("gone"));
 
-    expect(reported).toHaveLength(3);
-    expect(reported.map(({ props }) => props.call_log)).toEqual([
-      "[Meets] Failed to recover stale consumer [id]",
-      "[Meets] Failed to recover stale consumer [id]",
-      "[Meets] Failed to recover stale consumer [id]",
-    ]);
-    expect(JSON.stringify(reported.map(({ error, props }) => [error.message, props]))).not.toMatch(
-      /0f8c2a1e/,
-    );
+    expect(logged).toHaveLength(3);
+    expect(reported).toEqual([]);
   });
 
   it("restores console.error when uninstalled", () => {

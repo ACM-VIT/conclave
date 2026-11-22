@@ -3567,10 +3567,11 @@ export function useMeetSocket({
           );
           return true;
         } catch (err) {
-          console.error(
-            `[Meets] ${transportKind} transport ICE restart failed:`,
-            err,
-          );
+          if (transportKind === "producer") {
+            console.error("[Meets] Producer transport ICE restart failed:", err);
+          } else {
+            console.error("[Meets] Consumer transport ICE restart failed:", err);
+          }
           return false;
         } finally {
           inFlight[transportKind] = false;

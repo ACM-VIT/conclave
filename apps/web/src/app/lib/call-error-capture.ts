@@ -1,6 +1,6 @@
+import { isCallLogLabel } from "./call-log-labels";
 import type { TelemetryProps } from "./telemetry";
 
-const CALL_LOG_PREFIX = "[Meets]";
 const RATE_WINDOW_MS = 60_000;
 const MAX_REPORTS_PER_LABEL = 3;
 const MAX_REPORTS_PER_WINDOW = 30;
@@ -8,10 +8,6 @@ const MAX_REPORTS_PER_WINDOW = 30;
 export type CallErrorReport = (error: unknown, props: TelemetryProps) => void;
 
 type ConsoleLike = { error: (...args: unknown[]) => void };
-
-// mediasoup producer, consumer and transport ids. In a label they would give
-// every failure its own rate-limit budget and its own issue in PostHog.
-const ID_PATTERN = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
 
 // V8 writes "Name: message" above the frames; Firefox and Safari write frames only.
 const framesOf = (stack: string): string => {
@@ -21,18 +17,18 @@ const framesOf = (stack: string): string => {
 
 /**
  * Turns a `console.error("[Meets] ...", ...)` call into an exception named by
- * its developer-written label. A logged Error keeps its type and stack frames
- * but never its message, which can carry server text such as a host's
- * end-room note. Every other logged value is dropped.
+ * its label, when that label is registered in call-log-labels exactly. A
+ * logged Error keeps its type and stack frames but never its message, which
+ * can carry server text such as a host's end-room note. Every other logged
+ * value is dropped.
  */
 export function describeCallError(
   args: unknown[],
 ): { label: string; error: Error } | null {
   const [first, ...rest] = args;
-  if (typeof first !== "string" || !first.startsWith(CALL_LOG_PREFIX)) {
-    return null;
-  }
-  const label = first.trim().replace(/:$/, "").replace(ID_PATTERN, "[id]");
+  if (typeof first !== "string") return null;
+  const label = first.trim().replace(/:$/, "");
+  if (!isCallLogLabel(label)) return null;
   const thrown = rest.find((value): value is Error => value instanceof Error);
   const error = new Error(label);
   error.name = thrown?.name ?? "CallError";
