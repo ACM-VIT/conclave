@@ -98,7 +98,7 @@ import { GamesPanel } from "./games/GamesPanel";
 import { AppsPanel, type PanelAppEntry } from "./apps/AppsPanel";
 import { pollsApp, pollsContract, usePolls } from "@conclave/apps-sdk/polls/web";
 import { qaApp } from "@conclave/apps-sdk/qa/web";
-import { useMeetingQa } from "../hooks/useMeetingQa";
+import { hasUnseenMeetingQuestion, useMeetingQa } from "../hooks/useMeetingQa";
 import {
   GAME_DOCK_DEFAULT_WIDTH,
   GAME_DOCK_MAX_WIDTH,
@@ -1506,14 +1506,13 @@ export default function MeetsMainContent({
       setSeenMeetingQuestionIds(new Set(webinarQaEntries.map((entry) => entry.id)));
     }
   }, [isMeetingQaOpen, webinarQaEntries]);
-  const hasUnseenMeetingQuestion =
-    !isMeetingQaOpen &&
-    webinarQaEntries.some(
-      (entry) =>
-        entry.status !== "dismissed" &&
-        entry.userId !== currentUserId &&
-        !seenMeetingQuestionIds.has(entry.id),
-    );
+  const hasUnseenQuestion = hasUnseenMeetingQuestion({
+    isAvailable: isMeetingQaAvailable,
+    isOpen: isMeetingQaOpen,
+    entries: webinarQaEntries,
+    currentUserId,
+    seenIds: seenMeetingQuestionIds,
+  });
 
   // Polls and Q&A open beside the call for this viewer alone. They are
   // listed in the Apps panel only when the server offers them.
@@ -1542,7 +1541,7 @@ export default function MeetsMainContent({
             description: qaApp.description,
             icon: <MessageCircleQuestion size={19} strokeWidth={1.75} />,
             isOpen: isMeetingQaOpen,
-            needsAttention: hasUnseenMeetingQuestion,
+            needsAttention: hasUnseenQuestion,
             onToggle: () => {
               setIsAppsOpen(false);
               handleToggleQa();
@@ -2018,7 +2017,7 @@ export default function MeetsMainContent({
     onCloseWatch: isAdmin ? closeWatch : undefined,
     isAppsOpen,
     hasActiveApp: Boolean(appsState.activeAppId),
-    hasAppWaiting: hasPollAwaitingVote || hasUnseenMeetingQuestion,
+    hasAppWaiting: hasPollAwaitingVote || hasUnseenQuestion,
     isToastShowing: isJoined && toasts.some(Boolean),
     onToggleApps: handleToggleApps,
     isDevPlaygroundEnabled,

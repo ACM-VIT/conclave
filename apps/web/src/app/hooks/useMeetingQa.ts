@@ -15,6 +15,34 @@ type LegacyQa = {
 };
 
 /**
+ * Whether the Apps entry for meeting Q&A should ask for attention: someone
+ * else's question the viewer has not seen yet. Only while Apps lists that
+ * entry. In a webinar the questions live in the Questions section instead,
+ * and opening Apps could never mark them seen.
+ */
+export const hasUnseenMeetingQuestion = ({
+  isAvailable,
+  isOpen,
+  entries,
+  currentUserId,
+  seenIds,
+}: {
+  isAvailable: boolean;
+  isOpen: boolean;
+  entries: readonly WebinarQaEntry[];
+  currentUserId?: string | null;
+  seenIds: ReadonlySet<string>;
+}): boolean =>
+  isAvailable &&
+  !isOpen &&
+  entries.some(
+    (entry) =>
+      entry.status !== "dismissed" &&
+      entry.userId !== currentUserId &&
+      !seenIds.has(entry.id),
+  );
+
+/**
  * The room's Q&A from whichever source this server has.
  *
  * A server that runs the Q&A app offers it in its capabilities, and the list
