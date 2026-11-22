@@ -25,20 +25,17 @@ export const resolveServerSfuClientId = (): string =>
   canonicalizeSfuClientId(process.env.SFU_CLIENT_ID) ||
   resolveBrowserSfuClientId();
 
+/**
+ * Client IDs a room code can be stored under for one tenant: the tenant a
+ * link names, or the browser default for a bare link, which is the tenant
+ * the meeting page joins. Never another tenant's.
+ */
 export const resolveSfuClientIdCandidates = (
   preferred?: string | null,
 ): string[] => {
-  const seen = new Set<string>();
-  const candidates = [
-    canonicalizeSfuClientId(preferred),
-    resolveServerSfuClientId(),
-    CONCLAVE_SFU_CLIENT_ID,
-    "default",
-    "public",
-  ];
-  return candidates.filter((candidate): candidate is string => {
-    if (!candidate || seen.has(candidate)) return false;
-    seen.add(candidate);
-    return true;
-  });
+  const tenant =
+    canonicalizeSfuClientId(preferred) || resolveBrowserSfuClientId();
+  return tenant === CONCLAVE_SFU_CLIENT_ID
+    ? [CONCLAVE_SFU_CLIENT_ID, ...LEGACY_CONCLAVE_SFU_CLIENT_IDS]
+    : [tenant];
 };
