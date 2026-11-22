@@ -16,6 +16,7 @@ import { guardRedisPublisher, type RedisPublisherHealth } from "./redisPublisher
 // as a documented backstop against a client trying to push oversized frames
 // (e.g. a huge Yjs/awareness payload) to exhaust memory.
 const MAX_HTTP_BUFFER_SIZE = 1_000_000;
+const REDIS_UNAVAILABLE_GRACE_MS = 5_000;
 
 export type CreateSocketServerOptions = {
   state: SfuState;
@@ -33,15 +34,9 @@ export const createSfuSocketServer = (
   options: CreateSocketServerOptions,
 ): SocketIOServer => {
   const socketConfig = options.config ?? defaultConfig;
-  const connectionStateRecovery =
-    socketConfig.socket.recoveryMaxDisconnectionMs > 0
-      ? {
-          maxDisconnectionDuration:
-            socketConfig.socket.recoveryMaxDisconnectionMs,
-          skipMiddlewares: true,
-        }
-      : undefined;
 
+  // The Redis adapter cannot restore Socket.IO sessions. Clients rejoin using
+  // the application's own disconnect grace and join snapshots.
   const io = new SocketIOServer(httpServer, {
     cors: {
       // Env-driven allow-list; dev may default to "*", production requires
@@ -52,7 +47,6 @@ export const createSfuSocketServer = (
     maxHttpBufferSize: MAX_HTTP_BUFFER_SIZE,
     pingInterval: socketConfig.socket.pingIntervalMs,
     pingTimeout: socketConfig.socket.pingTimeoutMs,
-    connectionStateRecovery,
   });
 
   attachSocketAuth(io, { config: options.config });
@@ -94,6 +88,18 @@ export const connectSocketAdapter = async (
   const publisher = guardRedisPublisher(pubClient, {
     onFailure: (reason, health) => Logger.warn("[Socket.IO] Redis publishing degraded", { reason, ...health }),
   });
+  let unavailableSince: number | null = null;
+  const trackAvailability = () => {
+    unavailableSince = pubClient.isReady && subClient.isReady
+      ? null
+      : unavailableSince ?? performance.now();
+  };
+  for (const client of [pubClient, subClient]) {
+    client.on("ready", trackAvailability);
+    client.on("reconnecting", trackAvailability);
+    client.on("end", trackAvailability);
+    client.on("error", trackAvailability);
+  }
 
   pubClient.on("error", (error) => {
     const log = isRedisTransientError(error) ? Logger.warn : Logger.error;
@@ -116,8 +122,13 @@ export const connectSocketAdapter = async (
   return {
     mode: "redis",
     health: () => {
+      trackAvailability();
       const health = publisher.health();
-      return { ...health, healthy: health.healthy && subClient.isReady };
+      return {
+        ...health,
+        healthy: unavailableSince === null
+          || performance.now() - unavailableSince < REDIS_UNAVAILABLE_GRACE_MS,
+      };
     },
     close: async () => {
       publisher.close();

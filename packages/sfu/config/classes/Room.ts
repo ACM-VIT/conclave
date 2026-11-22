@@ -6,6 +6,7 @@ import type {
   Producer,
   Router,
   RtpCapabilities,
+  WebRtcServer,
   WebRtcTransport,
 } from "mediasoup/types";
 import type { Socket } from "socket.io";
@@ -54,6 +55,7 @@ import {
 export interface RoomOptions {
   id: string;
   router: Router;
+  webRtcServer?: WebRtcServer;
   clientId: string;
   workerPid: number | null;
   webcamVp9Enabled?: boolean;
@@ -191,6 +193,7 @@ export type RoomLifecycleEvent = "membership" | "closed";
 export class Room {
   public readonly id: string;
   public readonly router: Router;
+  private readonly webRtcServer: RoomOptions["webRtcServer"];
   public readonly clientId: string;
   public readonly workerPid: number | null;
   public readonly channelId: string;
@@ -300,6 +303,7 @@ export class Room {
   constructor(options: RoomOptions) {
     this.id = options.id;
     this.router = options.router;
+    this.webRtcServer = options.webRtcServer;
     this.clientId = options.clientId;
     this.workerPid = options.workerPid;
     this.webcamVp9Enabled = options.webcamVp9Enabled ?? config.webcamVp9Enabled;
@@ -1140,8 +1144,9 @@ export class Room {
   async createWebRtcTransport(
     role: WebRtcTransportRole,
   ): Promise<WebRtcTransport> {
+    if (!this.webRtcServer) throw new Error("Room has no WebRTC server");
     const transport = await this.router.createWebRtcTransport({
-      listenIps: config.webRtcTransport.listenIps,
+      webRtcServer: this.webRtcServer,
       enableUdp: config.webRtcTransport.enableUdp,
       enableTcp: config.webRtcTransport.enableTcp,
       preferUdp: config.webRtcTransport.preferUdp,
@@ -1175,10 +1180,16 @@ export class Room {
       userId,
     };
 
+    const recipients: string[] = [];
+    let namespace: Socket["nsp"] | undefined;
     for (const client of this.clients.values()) {
       if (client.isWebinarAttendee) continue;
-      client.socket.emit("activeSpeakerChanged", notification);
+      recipients.push(client.socket.id);
+      namespace ??= client.socket.nsp;
     }
+    // Encode once for the local meeting sockets. Webinar attendees have a
+    // separate active-speaker signal and must stay out of this audience.
+    namespace?.local.to(recipients).emit("activeSpeakerChanged", notification);
   }
 
   private setMeetingActiveSpeakerUserId(

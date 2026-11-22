@@ -71,6 +71,22 @@ function useSmartParticipantOrderWithMetadata<
   );
   const [featuredSpeakerId, setFeaturedSpeakerId] = useState<string | null>(null);
   const [raisedOrder, setRaisedOrder] = useState<string[]>([]);
+  const raisedParticipantIds = new Set<string>();
+  for (const participant of participants) {
+    if (participant.isHandRaised) raisedParticipantIds.add(participant.userId);
+  }
+  // Reconcile actual hand changes before commit, independent of roster identity.
+  if (
+    raisedParticipantIds.size !== raisedOrder.length ||
+    raisedOrder.some((userId) => !raisedParticipantIds.has(userId))
+  ) {
+    const nextRaisedOrder: string[] = [];
+    for (const userId of raisedOrder) {
+      if (raisedParticipantIds.delete(userId)) nextRaisedOrder.push(userId);
+    }
+    setRaisedOrder([...nextRaisedOrder, ...raisedParticipantIds]);
+  }
+
   const participantsRef = useRef(participants);
   const featuredSpeakerIdRef = useRef<string | null>(null);
   const candidateIdRef = useRef<string | null>(null);
@@ -78,7 +94,6 @@ function useSmartParticipantOrderWithMetadata<
   const lastSwitchAtRef = useRef(0);
   const promoteTimeoutRef = useRef<number | null>(null);
   const previousOrderRef = useRef<Map<string, number>>(new Map());
-  const previousRaisedMapRef = useRef<Map<string, boolean>>(new Map());
   const previousResultRef = useRef<T[]>([]);
 
   const clearPromoteTimeout = () => {
@@ -113,39 +128,6 @@ function useSmartParticipantOrderWithMetadata<
       setFeaturedSpeakerId(null);
     }
   }, [participantIdsKey]);
-
-  useEffect(() => {
-    setRaisedOrder((previousOrder) => {
-      const currentIds = new Set(participants.map((participant) => participant.userId));
-      let nextOrder = previousOrder.filter((userId) => currentIds.has(userId));
-      const nextRaisedMap = new Map<string, boolean>();
-
-      for (const participant of participants) {
-        const userId = participant.userId;
-        const isRaised = Boolean(participant.isHandRaised);
-        const wasRaised = previousRaisedMapRef.current.get(userId) ?? false;
-        nextRaisedMap.set(userId, isRaised);
-
-        if (isRaised) {
-          if (!wasRaised && !nextOrder.includes(userId)) {
-            nextOrder = [...nextOrder, userId];
-          }
-          continue;
-        }
-
-        if (nextOrder.includes(userId)) {
-          nextOrder = nextOrder.filter((raisedUserId) => raisedUserId !== userId);
-        }
-      }
-
-      previousRaisedMapRef.current = nextRaisedMap;
-
-      const isUnchanged =
-        previousOrder.length === nextOrder.length &&
-        previousOrder.every((userId, index) => userId === nextOrder[index]);
-      return isUnchanged ? previousOrder : nextOrder;
-    });
-  }, [participants]);
 
   useEffect(() => {
     clearPromoteTimeout();
