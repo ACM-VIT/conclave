@@ -19,7 +19,9 @@ import { Client } from "../../config/classes/Client.js";
 import { Room } from "../../config/classes/Room.js";
 import { getRoomAuthority } from "../../server/apps/authority/index.js";
 import { DEFAULT_AUTHORITY_LIMITS } from "../../server/apps/authority/limits.js";
+import { ensureWebinarRoomConfig } from "../../server/scheduledWebinarScheduler.js";
 import { getOrCreateWebinarRoomConfig } from "../../server/webinar.js";
+import type { ScheduledWebinar } from "../../types.js";
 import type { Router } from "mediasoup/types";
 import { Harness, person, type Tab } from "./harness.js";
 import { pollsAuthority, pollsContract } from "./fixtures/polls.js";
@@ -55,6 +57,43 @@ const createPoll = async (room: Harness, tab: Tab): Promise<string> => {
   await room.deliver();
   return field(created.value, "pollId") as string;
 };
+
+/** A webinar schedule for the room `roomId`, as the scheduling routes hold it. */
+const schedule = (
+  roomId: string,
+  status: ScheduledWebinar["status"],
+): ScheduledWebinar => ({
+  id: "webinar-1",
+  clientId: "conclave",
+  roomId,
+  linkSlug: "launch",
+  title: "Launch",
+  description: "",
+  hostEmail: host.userKey,
+  hostName: host.name,
+  hostUserId: null,
+  coHosts: [],
+  scheduledStartAt: 1_000_000,
+  scheduledEndAt: 4_600_000,
+  status,
+  publicAccess: true,
+  maxAttendees: 500,
+  requiresInviteCode: false,
+  waitingRoomEnabled: false,
+  earlyEntryMinutes: 10,
+  qaEnabled: true,
+  notes: "",
+  createdAt: 900_000,
+  createdBy: host.userKey,
+  updatedAt: 900_000,
+  liveStartedAt: 1_000_000,
+  endedAt: null,
+  totalJoinCount: 0,
+  peakAttendeeCount: 0,
+  webinarLink: "http://localhost:3000/w/launch",
+  coHostInviteTokenHash: null,
+  coHostInviteTokenCreatedAt: null,
+});
 
 beforeEach(() => {
   vi.useFakeTimers({ now: 1_000_000 });
@@ -475,6 +514,30 @@ describe("membership", () => {
     await room.deliver();
     expect(viewerTab.state.kind).not.toBe("ready");
     expect(viewerTab.rows("questions")).toEqual([]);
+  });
+});
+
+describe("room policy", () => {
+  it("ends an idle attendee's view when the webinar's schedule is cancelled", async () => {
+    const room = new Harness([qaAuthority], { roomId: "scheduled" });
+    const live = schedule("scheduled", "live");
+    ensureWebinarRoomConfig(room.state, live);
+    const viewer = await room.open(person("guest-viewer", "Viewer", "attendee"), qaContract);
+    const readyBefore = viewer.state.kind;
+
+    // What the cancel route does: record the status, apply it to the room.
+    // Nobody acts afterwards, so nothing else would bring the change in.
+    ensureWebinarRoomConfig(room.state, { ...live, status: "cancelled" });
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(readyBefore).toBe("ready");
+    expect(viewer.frames[viewer.frames.length - 1]).toMatchObject({
+      kind: "revoke",
+      reason: "forbidden",
+    });
+    // The room is a meeting again, which offers an attendee no Q&A.
+    expect(viewer.state).toEqual({ kind: "unsupported" });
+    expect(viewer.client.entryFor(qaContract)).toBeNull();
   });
 });
 
