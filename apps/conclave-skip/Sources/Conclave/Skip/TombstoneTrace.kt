@@ -143,7 +143,7 @@ internal object TombstoneTrace {
         }
         val module = CrashReportPrivacy.moduleNameFromPath(file)
         return CrashReportFrame(
-            function = function.ifEmpty { "$module+0x${java.lang.Long.toHexString(relPc)}" },
+            function = function.ifEmpty { CrashReportEventBuilder.unknownFunction },
             module = module,
             filename = module,
             line = 0,
