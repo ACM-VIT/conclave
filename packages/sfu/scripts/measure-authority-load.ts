@@ -69,14 +69,30 @@ type Tab = {
   tcpAtStart: number;
 };
 
-/** What one person has done, across their tabs: the oracle for their rows. */
-type Ledger = { votes: Set<string>; upvotes: Set<string>; asked: Set<string> };
+/**
+ * What one person has done, across their tabs: the oracle for their rows.
+ * `everUpvoted` only grows. A person's two tabs are two sockets with no
+ * order between them, so one tab's "upvoted" frame can land after the other
+ * tab took the upvote back. That row is still theirs. A row for a question
+ * they never upvoted is not.
+ */
+type Ledger = {
+  votes: Set<string>;
+  upvotes: Set<string>;
+  everUpvoted: Set<string>;
+  asked: Set<string>;
+};
 
 const ledgers = new Map<string, Ledger>();
 const ledgerOf = (person: Person): Ledger => {
   let ledger = ledgers.get(person.key);
   if (!ledger) {
-    ledger = { votes: new Set(), upvotes: new Set(), asked: new Set() };
+    ledger = {
+      votes: new Set(),
+      upvotes: new Set(),
+      everUpvoted: new Set(),
+      asked: new Set(),
+    };
     ledgers.set(person.key, ledger);
   }
   return ledger;
@@ -110,7 +126,7 @@ const audit = (tab: Tab, frame: AuthorityFrame): void => {
         violations.push(`${tab.person.name}: someone else's ballot ${row.key}`);
       }
     } else if (row.bucket === "myUpvotes") {
-      if (!ledger.upvotes.has(row.key)) {
+      if (!ledger.everUpvoted.has(row.key)) {
         violations.push(`${tab.person.name}: someone else's upvote ${row.key}`);
       }
     } else if (row.bucket === "myQuestions") {
@@ -358,7 +374,10 @@ const main = async (): Promise<void> => {
             const id = pick(questionIds);
             const value = !ledger.upvotes.has(id);
             // Recorded before sending: the row may arrive before the ack.
-            if (value) ledger.upvotes.add(id);
+            if (value) {
+              ledger.upvotes.add(id);
+              ledger.everUpvoted.add(id);
+            }
             pending.push(
               tab.qa.act("upvote", { id, value }).then((result) => {
                 record("upvote", result);
