@@ -791,6 +791,34 @@ toolTest("text outside a matched license notice is an ordinary comment", [], () 
   assert.ok(afterVerdicts.slice(0, -1).every((verdict) => verdict === "license-header"));
 });
 
+const SPDX_TEXTS = JSON.parse(readFileSync(new URL("./fixtures/spdx-license-texts.json", import.meta.url), "utf8")).texts;
+const filled = (text) =>
+  text
+    .replace(/<year>|\[yyyy\]/g, "2024")
+    .replace(/<copyright holders>|<owner>|\[name of copyright owner\]/g, "Example Inc.")
+    .trim()
+    .split("\n")
+    .map((line) => line.trimEnd());
+const asLines = (lines) => lines.map((line) => `// ${line}`.trimEnd());
+const asBlock = (lines) => ["/*", ...lines.map((line) => ` * ${line}`.trimEnd()), " */"];
+const withRights = (lines) => lines.flatMap((line) => (/^Copyright /.test(line) ? [line, "All rights reserved."] : [line]));
+
+for (const id of ["MIT", "ISC", "BSD-2-Clause", "BSD-3-Clause", "Apache-2.0"]) {
+  toolTest(`the verbatim SPDX ${id} notice is a license header and a TODO after it is not`, [], () => {
+    for (const lines of [filled(SPDX_TEXTS[id]), withRights(filled(SPDX_TEXTS[id]))]) {
+      for (const comment of [asLines, asBlock]) {
+        const notice = comment(lines).join("\n");
+        assert.ok(extract(`${notice}\nexport {};\n`, "notice.ts").every((c) => c.allowed === "license-header"), `${id} ${comment.name}`);
+        const todo = extract(`${notice}\n// TODO: replace the temporary cache.\nexport {};\n`, "todo.ts");
+        assert.equal(todo.at(-1).allowed, null, `${id} ${comment.name}`);
+        assert.ok(todo.slice(0, -1).every((c) => c.allowed === "license-header"), `${id} ${comment.name}`);
+      }
+      const inside = asBlock([...lines, "", "TODO: replace the temporary cache."]).join("\n");
+      assert.deepEqual(extract(`${inside}\nexport {};\n`, "inside.ts").map((c) => c.allowed), [null], id);
+    }
+  });
+}
+
 toolTest("concurrent cold-cache Kotlin runs share one install", ["jdk"], async (t) => {
   const cache = mkdtempSync(path.join(tmpdir(), "comment-cold-cache-"));
   t.after(() => rmSync(cache, { recursive: true, force: true }));

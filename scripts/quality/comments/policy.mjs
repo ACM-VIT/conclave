@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 export const NO_COMMENTS_RULE = "conclave/no-comments";
 
 const LANGUAGE_BY_EXTENSION = {
@@ -52,42 +53,43 @@ export const vendoredIgnores = (packageDir) =>
 
 const SPDX_LINE = /^SPDX-License-Identifier: [A-Za-z0-9.+()-]+(?: (?:AND|OR|WITH) [A-Za-z0-9.+()-]+)*$/;
 const COPYRIGHT_LINE = /^Copyright (?:\(c\) |\(C\) |© )?\d{4}(?:\s*[-,]\s*\d{4})*,? \S.*$/;
-const LICENSE_TITLE = /^(?:The )?(?:MIT|ISC|BSD [23]-Clause|Apache) License(?: \(MIT\))?\.?$|^Version 2\.0, January 2004$/;
+const LICENSE_TITLE = /^(?:The )?(?:MIT|ISC|BSD [23]-Clause|Apache) License(?: \((?:MIT|ISC)\))?:?\.?$|^Version 2\.0, January 2004$/i;
+const NOTICE_LINE = /^(?:Copyright\b.*|All rights reserved\.?|https?:\/\/\S+)$/i;
 
-const KNOWN_LICENSE_TEXTS = {
-  MIT: [
-    'Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:',
-    "The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.",
-    'THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.',
-  ],
-  ISC: [
-    "Permission to use, copy, modify, and/or distribute this software for any purpose with or without fee is hereby granted, provided that the above copyright notice and this permission notice appear in all copies.",
-    'THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.',
-  ],
-  BSD: [
-    "Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:",
-    "Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.",
-    "Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.",
-    'THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.',
-  ],
-  "Apache-2.0": [
-    'Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at',
-    "http://www.apache.org/licenses/LICENSE-2.0",
-    'Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the specific language governing permissions and limitations under the License.',
-  ],
+const squash = (text) => text.replace(/[“”]/g, '"').replace(/[‘’]/g, "'").replace(/\s+/g, "").toLowerCase();
+
+const escapeRegex = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const SPDX_VAR = /<<var;name="([^"]*)";original="(?:[^"\\]|\\.)*";match="((?:[^"\\]|\\.)*)">>/y;
+
+const compileSpdxTemplate = (template) => {
+  let pattern = "";
+  for (let index = 0; index < template.length; ) {
+    SPDX_VAR.lastIndex = index;
+    const variable = SPDX_VAR.exec(template);
+    if (variable) {
+      if (variable[1] !== "copyright") pattern += `(?:${variable[2].replace(/\\s[+*]?|\s/g, "")})`;
+      else pattern = pattern.replace(/(?:copyright)?$/, "");
+      index = SPDX_VAR.lastIndex;
+    } else if (template.startsWith("<<beginOptional>>", index)) {
+      pattern += "(?:";
+      index += "<<beginOptional>>".length;
+    } else if (template.startsWith("<<endOptional>>", index)) {
+      pattern += ")?";
+      index += "<<endOptional>>".length;
+    } else if (template.startsWith("<<", index)) {
+      throw new Error(`unknown SPDX template markup at ${template.slice(index, index + 40)}`);
+    } else {
+      if (!/\s/.test(template[index])) pattern += escapeRegex(squash(template[index]));
+      index += 1;
+    }
+  }
+  return new RegExp(pattern, "gi");
 };
 
-const canonical = (text) =>
-  text
-    .replace(/[“”]/g, '"')
-    .replace(/[‘’]/g, "'")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
-
-const CANONICAL_LICENSES = Object.values(KNOWN_LICENSE_TEXTS).map((sentences) => sentences.map(canonical));
-const CANONICAL_LICENSE_BODIES = CANONICAL_LICENSES.map((sentences) => sentences.join(" "));
-const BSD_THIRD_CLAUSE = /^(?:\d\.\s*)?neither the name of .+ nor the names of (?:its|their) contributors may be used to endorse or promote products derived from this software without specific prior written permission\.$/;
+const LICENSE_PATTERNS = Object.values(
+  JSON.parse(readFileSync(new URL("./license-templates.json", import.meta.url), "utf8")).templates,
+).map(compileSpdxTemplate);
 
 const commentContentLines = (text) =>
   text
@@ -98,24 +100,10 @@ const commentContentLines = (text) =>
 
 const isNoticeLine = (line) => SPDX_LINE.test(line) || COPYRIGHT_LINE.test(line);
 
-const containsKnownLicense = (lines) => {
-  const body = canonical(lines.join(" ").replace(/(^|\s)\d\.\s+/g, "$1"));
-  return CANONICAL_LICENSES.some((sentences) => sentences.every((sentence) => body.includes(sentence)));
-};
+const isNoticePart = (line) => isNoticeLine(line) || LICENSE_TITLE.test(line) || NOTICE_LINE.test(line);
 
-const NOTICE_ATTRIBUTION = /^(?:Copyright\s+(?:\(c\)|\(C\)|©)\s+\S.*|https?:\/\/\S+)$/;
-
-const isLicenseFragment = (line) => {
-  if (isNoticeLine(line) || LICENSE_TITLE.test(line) || NOTICE_ATTRIBUTION.test(line)) return true;
-  const text = canonical(line.replace(/^\d\.\s+/, ""));
-  return CANONICAL_LICENSE_BODIES.some((body) => body.includes(text)) || BSD_THIRD_CLAUSE.test(text);
-};
-
-export const isLicenseNotice = (text) => {
-  const lines = commentContentLines(text);
-  return lines.length > 0 && (lines.every(isNoticeLine) || (lines.every(isLicenseFragment) && containsKnownLicense(lines)));
-};
-
+const licenseMatches = (text) =>
+  LICENSE_PATTERNS.flatMap((pattern) => [...text.matchAll(pattern)].map((match) => [match.index, match.index + match[0].length]));
 
 const ESLINT_DIRECTIVE = /^(?:\/\/|\/\*)\s*eslint-(disable|enable)(?:-next-line|-line)?(?=\s|\*\/|$)/;
 const ESLINT_INLINE_CONFIG = /^\/\*\s*eslint(?:-env)?\s/;
@@ -263,14 +251,26 @@ const licenseHeaderIndexes = (source, comments, isDirective) => {
   run.forEach((index, position) => {
     if (linesOf[position].length > 0 && linesOf[position].every(isNoticeLine)) indexes.add(index);
   });
-  for (let start = 0; start < run.length; start += 1) {
-    if (!linesOf[start].every(isLicenseFragment)) continue;
-    let end = start;
-    while (end < run.length && linesOf[end].every(isLicenseFragment)) end += 1;
-    if (containsKnownLicense(linesOf.slice(start, end).flat())) {
-      for (let position = start; position < end; position += 1) indexes.add(run[position]);
+  let combined = "";
+  const spans = linesOf.map((lines) =>
+    lines.map((line) => {
+      const start = combined.length;
+      combined += squash(line);
+      return [start, combined.length];
+    }),
+  );
+  const covered = (from, to) => ([start, end]) => start >= from && end <= to;
+  const touches = (from, to) => ([start, end]) => start < to && end > from;
+  for (const [from, to] of licenseMatches(combined)) {
+    const inside = spans.map((lineSpans) => lineSpans.some(touches(from, to)));
+    let first = inside.indexOf(true);
+    let last = inside.lastIndexOf(true);
+    if (first === -1) continue;
+    while (first > 0 && linesOf[first - 1].every(isNoticePart)) first -= 1;
+    while (last < run.length - 1 && linesOf[last + 1].length > 0 && linesOf[last + 1].every(isNoticePart)) last += 1;
+    for (let position = first; position <= last; position += 1) {
+      if (linesOf[position].every((line, index) => isNoticePart(line) || covered(from, to)(spans[position][index]))) indexes.add(run[position]);
     }
-    start = end;
   }
   return indexes;
 };
