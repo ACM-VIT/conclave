@@ -84,8 +84,7 @@ internal class VideoTileRenderer(
     private var appliedToken = 0
     private var presented = false
     private var shownSize = NO_SIZE
-    private var bufferWaitStartedAt: Long? = null
-    private var bufferWaitGivenUp = false
+    private var bufferWait: BufferWait? = null
     private val renderPending = Runnable { renderPendingFrame() }
 
     override fun onFrame(frame: VideoFrame) {
@@ -135,8 +134,7 @@ internal class VideoTileRenderer(
                 surfaceFailures = 0
                 framesUntilRetry = 0
                 shownSize = NO_SIZE
-                bufferWaitStartedAt = null
-                bufferWaitGivenUp = false
+                bufferWait = null
                 ensureSurface()
             }
             renderPendingFrame()
@@ -144,6 +142,7 @@ internal class VideoTileRenderer(
     }
 
     fun detachSurface(done: Runnable?) {
+        windowSize = NO_SIZE
         tokenAtLastDetach = synchronized(frameLock) { requestedToken }
         val queued = backend.postFirst {
             destroySurface()
@@ -275,7 +274,7 @@ internal class VideoTileRenderer(
             if (surface.get() !== target || !windowTakesBufferOf(target)) return
             if (!backend.swap(target)) return surfaceStoppedWorking()
             surfaceFailures = 0
-            bufferWaitStartedAt = null
+            if (sizeOf(width, height) == windowSize) bufferWait = null
             if (shownSize != sizeOf(width, height)) {
                 shownSize = sizeOf(width, height)
                 onBufferSizeShown(appliedToken, width, height)
@@ -298,19 +297,28 @@ internal class VideoTileRenderer(
     }
 
     private fun windowTakesBufferOf(target: Any): Boolean {
-        if (windowSize == NO_SIZE || bufferWaitGivenUp) return true
+        val wanted = windowSize
+        if (wanted == NO_SIZE) return true
         val width = backend.surfaceWidth(target)
         val height = backend.surfaceHeight(target)
-        return width <= 0 || height <= 0 || sizeOf(width, height) == windowSize
+        if (width <= 0 || height <= 0 || sizeOf(width, height) == wanted) return true
+        return bufferWait?.let { it.windowSize == wanted && it.givenUp } == true
     }
 
     private fun bufferWaitIsOver(): Boolean {
+        val wanted = windowSize
         val now = nanoTime()
-        val started = bufferWaitStartedAt ?: now.also { bufferWaitStartedAt = it }
-        if (now - started < MAX_BUFFER_WAIT_NANOS) return false
-        bufferWaitGivenUp = true
-        Log.w(VideoRenderLoop.TAG, "a video buffer never got the size its window asked for, drawing into it as it is")
+        val wait = bufferWait?.takeIf { it.windowSize == wanted } ?: BufferWait(wanted, now).also { bufferWait = it }
+        if (now - wait.startedAt < MAX_BUFFER_WAIT_NANOS) return false
+        if (!wait.givenUp) {
+            wait.givenUp = true
+            Log.w(VideoRenderLoop.TAG, "a video buffer never got the size its window asked for, drawing into it as it is")
+        }
         return true
+    }
+
+    private class BufferWait(val windowSize: Long, val startedAt: Long) {
+        var givenUp = false
     }
 
     private fun boundSurface(): Any? {
