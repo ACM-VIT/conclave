@@ -478,6 +478,22 @@ describe("stack frames", () => {
   });
 });
 
+describe("user agent", () => {
+  it("drops the raw user agent and keeps the parsed browser and OS", () => {
+    const event = exceptionEvent();
+    Object.assign(event.properties, {
+      $raw_user_agent: "Mozilla/5.0 (Macintosh) Chrome/157.0.0.0 Safari/537.36 ReviewDevice/FleetAsset123",
+      $browser_version: 157,
+      $os: "Mac OS X",
+    });
+    const scrubbed = scrub(event);
+
+    expect(scrubbed.properties).not.toHaveProperty("$raw_user_agent");
+    expect(JSON.stringify(scrubbed)).not.toMatch(/ReviewDevice|FleetAsset/);
+    expect(scrubbed.properties).toMatchObject({ $browser: "Chrome", $browser_version: 157, $os: "Mac OS X" });
+  });
+});
+
 describe("stored state", () => {
   const sdkUuid = "0196f0a1-0000-7000-8000-000000000001";
 

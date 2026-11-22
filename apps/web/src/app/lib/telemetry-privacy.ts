@@ -10,13 +10,15 @@ const STATIC_PAGES = new Set([
 ]);
 // What posthog-js works out for each event from the page and its own config,
 // checked against real traffic. Fields it keeps in storage, such as the
-// referrer and the session's entry page, are not here.
+// referrer and the session's entry page, are not here, and neither is the raw
+// user agent, which can carry a device or fleet tag; the parsed browser,
+// version and OS stay.
 const SDK_PROPERTIES = new Set([
   "token", "$browser", "$browser_language", "$browser_language_prefix", "$browser_version",
   "$config_defaults", "$configured_session_timeout_ms", "$current_url", "$device_type",
   "$exception_level", "$exception_list", "$host", "$insert_id", "$is_identified", "$lib",
   "$lib_custom_api_host", "$lib_version", "$os", "$os_version", "$pathname",
-  "$process_person_profile", "$raw_user_agent", "$recording_status", "$screen_height",
+  "$process_person_profile", "$recording_status", "$screen_height",
   "$screen_width", "$sdk_debug_extensions_init_method", "$sdk_debug_extensions_init_time_ms",
   "$sdk_dist_channel", "$search_engine", "$time", "$timezone", "$timezone_offset",
   "$viewport_height", "$viewport_width",
