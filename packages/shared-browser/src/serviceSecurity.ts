@@ -45,8 +45,12 @@ const isLoopbackOrPrivateHost = (host: string): boolean => {
     return false;
 };
 
+// Fetch strips only these from the ends of a header value; String#trim would
+// also drop Unicode spaces the SFU still sends.
+const trimHttpWhitespace = (value: string): string => value.replace(/^[\t\n\r ]+|[\t\n\r ]+$/g, "");
+
 const readToken = (raw: string | undefined, problems: string[]): string => {
-    const token = raw?.trim() ?? "";
+    const token = trimHttpWhitespace(raw ?? "");
     if (!token) {
         problems.push("BROWSER_SERVICE_TOKEN is required. Generate one with `openssl rand -hex 32` and set the same value on the SFU.");
     } else if (token.length < MIN_TOKEN_LENGTH || new Set(token).size < MIN_DISTINCT_TOKEN_CHARACTERS) {
