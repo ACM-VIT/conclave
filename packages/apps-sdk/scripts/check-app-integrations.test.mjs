@@ -277,6 +277,42 @@ test("a Node script that loads files by path is not taken for bundled code", () 
   assert.match(checked.output, /tests\/peek-test\.mjs imports server-only code/);
 });
 
+test("a type-only import of a Node builtin does not make a file a Node script", () => {
+  const repo = makeRepo();
+  repo.scaffold("sign-up", "--runtime", "authority");
+  // Types are erased when the file is built, so each of these is a renderer
+  // that a bundler ships, and the path it works out at run time is a leak.
+  repo.write(
+    "packages/apps-sdk/src/apps/sign-up/web/typed.ts",
+    'import type { Buffer } from "node:buffer";\nexport type Bytes = Buffer;\nexport const load = (part: string) => import(`../${part}/index`);\n',
+  );
+  repo.write(
+    "packages/apps-sdk/src/apps/sign-up/web/inline.ts",
+    'import { type Buffer } from "node:buffer";\nexport type Bytes = Buffer;\nexport const load = (part: string) => import(`../${part}/index`);\n',
+  );
+  repo.write(
+    "packages/apps-sdk/src/apps/sign-up/web/reexported.ts",
+    'export type { Buffer } from "node:buffer";\nexport const load = (part: string) => import(`../${part}/index`);\n',
+  );
+  repo.write(
+    "packages/apps-sdk/src/apps/sign-up/web/queried.ts",
+    'export type Bytes = import("node:buffer").Buffer;\nexport const load = (part: string) => import(`../${part}/index`);\n',
+  );
+  // One value among the names is enough for the import to stay when built.
+  repo.write(
+    "packages/apps-sdk/src/native-embed/tests/mixed-test.ts",
+    'import { type Buffer, constants } from "node:buffer";\nexport type Bytes = Buffer;\nexport const max = constants.MAX_LENGTH;\nexport const load = (file: string) => import(file);\n',
+  );
+
+  const checked = repo.check();
+
+  assert.equal(checked.status, 1);
+  for (const file of ["typed", "inline", "reexported", "queried"]) {
+    assert.match(checked.output, new RegExp(`sign-up/web/${file}\\.ts builds an import path at run time`));
+  }
+  assert.doesNotMatch(checked.output, /mixed-test\.ts/);
+});
+
 test("words that only look like an import are left alone", () => {
   const repo = makeRepo();
   repo.scaffold("sign-up", "--runtime", "authority");

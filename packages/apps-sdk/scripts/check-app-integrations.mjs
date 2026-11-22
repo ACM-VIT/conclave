@@ -185,12 +185,44 @@ const fixedHead = (expression) => {
 };
 
 /**
+ * Whether an import or re-export names only types: `import type`, `export
+ * type`, or a list whose every name is marked `type`. Such a statement is
+ * erased when the file is built.
+ */
+const namesOnlyTypes = (node) => {
+  if (ts.isExportDeclaration(node)) {
+    if (node.isTypeOnly) return true;
+    const names = node.exportClause;
+    return Boolean(
+      names &&
+        ts.isNamedExports(names) &&
+        names.elements.length > 0 &&
+        names.elements.every((element) => element.isTypeOnly),
+    );
+  }
+  const clause = node.importClause;
+  // `import "x"` has no names at all and runs the module for its effects.
+  if (!clause) return false;
+  if (clause.isTypeOnly) return true;
+  const names = clause.namedBindings;
+  return Boolean(
+    !clause.name &&
+      names &&
+      ts.isNamedImports(names) &&
+      names.elements.length > 0 &&
+      names.elements.every((element) => element.isTypeOnly),
+  );
+};
+
+/**
  * Every module a file loads, read from its syntax tree. Text matching would
  * miss a path written as a template string or after a comment, and would
  * trip over a comment that only mentions an import.
  *
  * `fixed` holds the paths written out in full. `computed` holds the fixed
- * head of each path that is put together at run time.
+ * head of each path that is put together at run time. `loaded` holds the
+ * fixed paths that are still imports once the file is built: an import that
+ * names only types is erased, and loads nothing when the file runs.
  */
 const importsOf = (filePath) => {
   const tree = ts.createSourceFile(
@@ -202,6 +234,7 @@ const importsOf = (filePath) => {
   );
   const fixed = [];
   const computed = [];
+  const loaded = [];
   const visit = (node) => {
     if (
       (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
@@ -209,12 +242,14 @@ const importsOf = (filePath) => {
       ts.isStringLiteralLike(node.moduleSpecifier)
     ) {
       fixed.push(node.moduleSpecifier.text);
+      if (!namesOnlyTypes(node)) loaded.push(node.moduleSpecifier.text);
     } else if (
       ts.isImportEqualsDeclaration(node) &&
       ts.isExternalModuleReference(node.moduleReference) &&
       ts.isStringLiteralLike(node.moduleReference.expression)
     ) {
       fixed.push(node.moduleReference.expression.text);
+      if (!node.isTypeOnly) loaded.push(node.moduleReference.expression.text);
     } else if (
       ts.isImportTypeNode(node) &&
       ts.isLiteralTypeNode(node.argument) &&
@@ -227,13 +262,15 @@ const importsOf = (filePath) => {
         (ts.isIdentifier(node.expression) && node.expression.text === "require"))
     ) {
       const [target] = node.arguments;
-      if (target && ts.isStringLiteralLike(target)) fixed.push(target.text);
-      else if (target) computed.push(fixedHead(target));
+      if (target && ts.isStringLiteralLike(target)) {
+        fixed.push(target.text);
+        loaded.push(target.text);
+      } else if (target) computed.push(fixedHead(target));
     }
     ts.forEachChild(node, visit);
   };
   visit(tree);
-  return { fixed, computed };
+  return { fixed, computed, loaded };
 };
 
 const resolveFile = (candidate) => {
@@ -304,10 +341,12 @@ for (const filePath of listSources(SRC_DIR)) {
       );
     }
   }
-  // A file that imports a Node builtin is a script Node runs, such as a
-  // build step or a test. No browser or native bundle can hold it, so a
-  // path it works out at run time ships nothing.
-  const runsInNode = imports.fixed.some((specifier) => specifier.startsWith("node:"));
+  // A file that loads a Node builtin is a script Node runs, such as a build
+  // step or a test. No browser or native bundle can hold it, so a path it
+  // works out at run time ships nothing. Naming a builtin's types is not
+  // loading it: that import is gone from the built file, which a bundle can
+  // hold like any other.
+  const runsInNode = imports.loaded.some((specifier) => specifier.startsWith("node:"));
   if (imports.computed.length > 0 && !runsInNode) {
     errors.push(`${relative(filePath)} ${COMPUTED_IMPORT}`);
   }
