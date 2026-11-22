@@ -100,7 +100,8 @@ Released web and native clients send `webinar:qa:submit`, `webinar:qa:upvote` an
 - A connection is fed the old events for as long as it does not read Q&A itself. Once it holds its own subscription to the app the feed rests, and it starts again with a whole list when that subscription ends. Asking for capabilities changes nothing: the answer may reach a client after it has given up waiting and fallen back to the old events.
 - A changed question is one `webinar:qaChanged` for each connection, as the old wire has it. The event is built and encoded once for everyone it reads the same for, which is everyone of a role who neither asked nor upvoted the question, and the sockets are written 2,000 events a turn. A question that changes again while a connection waits is said once, as it stands.
 - The old upvote is a toggle. It runs the app's `toggleUpvote` action, and the reply carries the count that one transaction made.
-- The native app up to build 63 saves the questions it upvoted and shows that over what a change event says. When such an upvote is taken back in another tab the connection is sent a whole `webinar:qaSnapshot`, the one form that build applies to what it saved.
+- The native app up to build 63 saves the questions it upvoted and shows that over what a change event says. When such an upvote is taken back in another tab, on a question the client still lists, the connection is sent a whole `webinar:qaSnapshot`, the one form that build applies to what it saved.
+- A question that is gone, dropped from a full book or hidden by a host, is said to be gone once to each connection that lists it. The upvotes that go with a dropped question bring no list and no second word.
 - The old events carry webinar Q&A only. Nothing is sent on them in a regular meeting.
 - A seat id for the asker is given to hosts and to the asker. Everyone else gets an empty `userId`.
 
