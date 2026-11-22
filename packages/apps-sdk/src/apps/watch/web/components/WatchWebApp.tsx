@@ -644,7 +644,7 @@ export function WatchWebApp() {
 
       {hasVideo ? (
         <aside
-          className={`flex min-h-0 shrink-0 flex-col overflow-hidden border-white/10 transition-[max-height,width] duration-[120ms] ease-out lg:max-h-none ${
+          className={`flex min-h-0 shrink-0 flex-col overflow-hidden border-white/10 transition-[max-height,width,border-top-width,border-left-width] duration-[120ms] ease-out lg:max-h-none ${
             railOpen
               ? "max-h-[38%] border-t lg:w-72 lg:border-l lg:border-t-0"
               : "max-h-0 lg:w-0"

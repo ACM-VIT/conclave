@@ -426,7 +426,7 @@ function Slider({
         style={{ backgroundColor: "#33333b" }}
       />
       <div
-        className="absolute left-0 h-[3px] rounded-full transition-[height] duration-[120ms] group-hover:h-1"
+        className="absolute left-0 h-[3px] rounded-full transition-[height,width,background-color] duration-[120ms] group-hover:h-1"
         style={{ width: `${pct}%`, backgroundColor: fillColor }}
       />
       <div
