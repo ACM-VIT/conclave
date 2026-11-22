@@ -24,18 +24,10 @@ export default function RoomPresenceBadge({
       role="status"
       aria-live="polite"
       className={
-        "flex items-center gap-1.5 text-[11.5px] font-medium leading-none " + className
+        "flex items-center text-[11.5px] font-medium leading-none " + className
       }
       style={{ color: hasPeople ? color.textMuted : color.textFaint }}
     >
-      {hasPeople ? (
-        <span className="relative flex h-1.5 w-1.5 shrink-0" aria-hidden>
-          <span
-            className="relative inline-flex h-1.5 w-1.5 rounded-full"
-            style={{ backgroundColor: color.accent }}
-          />
-        </span>
-      ) : null}
       <span className="truncate">{label}</span>
     </span>
   );
