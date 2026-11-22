@@ -6194,16 +6194,18 @@ export function useMeetSocket({
           producersToConsume,
           countWebcamVideoProducerEntries(producerMapRef.current),
         );
-        await Promise.all(
-          producersToConsume.map((producerInfo) =>
-            consumeProducer(producerInfo, {
-              knownScreenShareVideoActive: snapshotHasScreenShareVideo,
-              webcamVideoStartupRank: webcamVideoStartupRanks.get(
-                producerInfo.producerId,
-              ),
-            }),
-          ),
-        );
+        // Syncs are serialized, so they must not wait on negotiation: a
+        // consume cut off by its transport closing never settles.
+        for (const producerInfo of producersToConsume) {
+          consumeProducer(producerInfo, {
+            knownScreenShareVideoActive: snapshotHasScreenShareVideo,
+            webcamVideoStartupRank: webcamVideoStartupRanks.get(
+              producerInfo.producerId,
+            ),
+          }).catch((err) => {
+            console.error("[Meets] Failed to sync producers:", err);
+          });
+        }
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err ?? "");
