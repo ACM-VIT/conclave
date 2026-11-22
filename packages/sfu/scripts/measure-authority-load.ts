@@ -104,6 +104,22 @@ const ledgerOf = (person: Person): Ledger => {
 
 const violations: string[] = [];
 const sharedPolls = new Set<string>();
+/**
+ * Question rows that reached a person before the ack that names their new
+ * question. Only the ack says which id is theirs, so these are judged once
+ * every ack is in.
+ */
+const unsettledQuestions: { person: Person; key: string }[] = [];
+let questionRowsJudgedLate = 0;
+
+const settleQuestions = (): void => {
+  questionRowsJudgedLate += unsettledQuestions.length;
+  for (const { person, key } of unsettledQuestions.splice(0)) {
+    if (!ledgerOf(person).asked.has(key)) {
+      violations.push(`${person.name}: someone else's question ${key}`);
+    }
+  }
+};
 
 const field = (value: Json, name: string): Json | null =>
   value !== null && typeof value === "object" && !Array.isArray(value)
@@ -139,7 +155,7 @@ const audit = (tab: Tab, frame: AuthorityFrame): void => {
       }
     } else if (row.bucket === "myQuestions") {
       if (!ledger.asked.has(row.key)) {
-        violations.push(`${tab.person.name}: someone else's question ${row.key}`);
+        unsettledQuestions.push({ person: tab.person, key: row.key });
       }
     } else if (row.bucket === "questions") {
       if (field(row.value, "status") === "dismissed" && !tab.person.host) {
@@ -453,6 +469,7 @@ const main = async (): Promise<void> => {
       new Promise((resolve) => setTimeout(resolve, 5_000)),
     ]);
     await new Promise((resolve) => setTimeout(resolve, 300));
+    settleQuestions();
     const seconds = (Date.now() - startedAt) / 1000;
     const server = await request<Record<string, unknown>>(sfu, "report", "report");
 
@@ -476,6 +493,7 @@ const main = async (): Promise<void> => {
         roomWireBytesPerSecond: Math.round(sum(wire) / seconds),
       },
       removedMidRun: tabs.filter((tab) => tab.kickedAt !== null).length,
+      questionRowsJudgedLate,
       unauthorizedFrames: violations.length,
       unauthorizedSamples: violations.slice(0, 10),
     };
