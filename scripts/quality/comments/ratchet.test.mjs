@@ -34,10 +34,12 @@ const repoWith = (t, files) => {
   return repo;
 };
 
+const cleanEnv = () => Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("COMMENT_RATCHET_")));
+
 const ratchet = (repo, ...args) =>
   spawnSync(process.execPath, [RATCHET, "--repo", repo, ...args], {
     encoding: "utf8",
-    env: { ...process.env, COMMENT_RATCHET_BASE: "base" },
+    env: { ...cleanEnv(), COMMENT_RATCHET_BASE: "base", COMMENT_RATCHET_MODE: "merge-base" },
   });
 
 const baselineOf = (repo) => JSON.parse(readFileSync(path.join(repo, BASELINE), "utf8"));
@@ -115,7 +117,7 @@ test("the growth check is skipped when the base ref is missing", (t) => {
   const repo = repoWith(t, { [BASELINE]: {} });
   const result = spawnSync(process.execPath, [RATCHET, "--repo", repo], {
     encoding: "utf8",
-    env: { ...process.env, COMMENT_RATCHET_BASE: "no-such-ref" },
+    env: { ...cleanEnv(), COMMENT_RATCHET_BASE: "no-such-ref", COMMENT_RATCHET_MODE: "merge-base" },
   });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /growth check skipped \(no-such-ref is not available\)/);
@@ -181,7 +183,7 @@ test("push mode compares a commit on the base branch with its parent", (t) => {
   const before = git(repo, "rev-parse", "HEAD^1").trim();
   const withBefore = spawnSync(process.execPath, [RATCHET, "--repo", repo], {
     encoding: "utf8",
-    env: { ...process.env, COMMENT_RATCHET_BASE: before },
+    env: { ...cleanEnv(), COMMENT_RATCHET_BASE: before, COMMENT_RATCHET_MODE: "merge-base" },
   });
   assert.equal(withBefore.status, 1);
   assert.match(withBefore.stderr, /App\.swift rose from 1 to 2 since/);
@@ -216,7 +218,7 @@ test("a native comment removed without --update cannot be added back later", (t)
 });
 
 const ratchetWith = (repo, env) =>
-  spawnSync(process.execPath, [RATCHET, "--repo", repo], { encoding: "utf8", env: { ...process.env, ...env } });
+  spawnSync(process.execPath, [RATCHET, "--repo", repo], { encoding: "utf8", env: { ...cleanEnv(), ...env } });
 
 test("push mode compares a force push with the tip it replaced, not their merge base", (t) => {
   const repo = repoWith(t, { "App.swift": "// one\n// two\nlet a = 1\n", [BASELINE]: { "App.swift": 2 } });
