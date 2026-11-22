@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Router, Worker } from "mediasoup/types";
 import type { Server as SocketIOServer, Socket } from "socket.io";
 import { Admin } from "../config/classes/Admin.js";
@@ -1604,7 +1604,7 @@ describe("a guest who asks to be let in from more than one tab", () => {
     expect(second.peer.emit).toHaveBeenCalledWith(...approved);
     expect(other.peer.emit).not.toHaveBeenCalledWith(...approved);
     expect([...room.pendingClients.keys()]).toEqual([stranger.userId]);
-    expect(heard(host, "userAdmitted")).toEqual([guest.userId, otherTab.userId]);
+    expect(heard(host, "userAdmitted")).toEqual([guest.userId]);
     expect(lobbyOnHostScreen(host)).toEqual([stranger.userId]);
     expect((await join(state, guest)).ack).toHaveBeenCalledWith(joined);
     expect((await join(state, otherTab)).ack).toHaveBeenCalledWith(joined);
@@ -1623,7 +1623,7 @@ describe("a guest who asks to be let in from more than one tab", () => {
     expect(second.peer.emit).toHaveBeenCalledWith(...turnedAway);
     expect(other.peer.emit).not.toHaveBeenCalledWith(...turnedAway);
     expect([...room.pendingClients.keys()]).toEqual([stranger.userId]);
-    expect(heard(host, "userRejected")).toEqual([guest.userId, otherTab.userId]);
+    expect(heard(host, "userRejected")).toEqual([guest.userId]);
     expect(lobbyOnHostScreen(host)).toEqual([stranger.userId]);
   });
 
@@ -1961,6 +1961,49 @@ describe("a host's answer to a guest whose tabs the room has not linked yet", ()
     expect(room.pendingClients.has(tabUnderC("tab-5").userId)).toBe(true);
   });
 
+  it("admitted under one pass and denied under the other, then linked: the later denial wins (Daybreak)", async () => {
+    const { state, room, host } = await bothKnock();
+    await hostAsks(host, "admitUser", { userId: tabA.userId });
+    await hostAsks(host, "rejectUser", { userId: tabB.userId });
+
+    // A new tab shows the room both passes, and B's tab tries again.
+    const linking = await join(state, {
+      ...tabA,
+      userId: "guest-gp_tab-3-under-pass-A",
+      sessionId: "tab-3",
+      guestWas: [{ userKey: "guest-gp_tab-3-under-pass-B", guestProof: tabB.guestProof }],
+    });
+    const retry = await join(state, tabB);
+
+    expect(linking.ack).toHaveBeenCalledWith(waiting);
+    expect(retry.ack).toHaveBeenCalledWith(waiting);
+    expect(room.isLockedAllowed(tabB.userId, tabB.guestProof)).toBe(false);
+    expect(room.isAllowed(tabB.userId, tabB.guestProof)).toBe(false);
+    expect(screenOf(host)).toEqual(["guest-gp_tab-3-under-pass-A"]);
+    expect(toPendingUserSnapshots(room).map((row) => row.userId)).toEqual(screenOf(host));
+  });
+
+  it("denied, a fresh knock behind an older waiting tab, then linked: the fresh request takes the row (Astra)", async () => {
+    const { state, room, host, second } = await bothKnock();
+    await hostAsks(host, "rejectUser", { userId: tabA.userId });
+    const freshUnderB = { ...tabB, userId: "guest-gp_tab-3-under-pass-B", sessionId: "tab-3" } satisfies SfuAuthPayload;
+    const fresh = await join(state, freshUnderB);
+    expect(screenOf(host)).toEqual([tabB.userId]);
+
+    await join(state, {
+      ...tabA,
+      userId: "guest-gp_tab-4-under-pass-A",
+      sessionId: "tab-4",
+      guestWas: [{ userKey: "guest-gp_tab-4-under-pass-B", guestProof: tabB.guestProof }],
+    });
+
+    expect(second.peer.emit).toHaveBeenCalledWith(...turnedAway);
+    expect(fresh.peer.emit).not.toHaveBeenCalledWith(...turnedAway);
+    expect(screenOf(host)).toEqual([freshUnderB.userId]);
+    expect(toPendingUserSnapshots(room).map((row) => row.userId)).toEqual([freshUnderB.userId]);
+    expect(room.waitingGuestCount).toBe(1);
+  });
+
   it("a denial does not turn away a tab that knocks after it", async () => {
     const { state, room, host } = await bothKnock();
     await hostAsks(host, "rejectUser", { userId: tabA.userId });
@@ -2258,7 +2301,6 @@ describe("a guest that is a co-host under one pass and blocked under another", (
   it.each([
     ["a co-host", (room: Room, userKey: string) => room.registerAdminUserKey(userKey)],
     ["the primary host", (room: Room, userKey: string) => void (room.hostUserKey = userKey)],
-    ["admitted past the lock", (room: Room, userKey: string) => void room.lockedAllowedUsers.add(userKey)],
   ])("is refused before any right is looked at, even were it still on record as %s", async (_label, keepRight) => {
     const state = makeState();
     await join(state, hostTab);
@@ -2598,5 +2640,340 @@ describe("a guest identity that holds nothing in the room", () => {
     room.removePendingClient(visitor.userId);
     const later = await join(state, { ...visitor, guestProof: "proof-of-pass-h" });
     expect(later.ack).toHaveBeenCalledWith(expect.objectContaining({ status: "waiting" }));
+  });
+});
+
+describe("who may come in, against a slow reading of every decision", () => {
+  // A locked room. Two guest browsers, each with passes the room learns are
+  // one guest only when a tab's token names them. Every tab keeps one
+  // session on one pass. The oracle below recomputes everything from the
+  // whole history on every step, with none of the room's indexes.
+  const BROWSERS = [
+    ["proof-X1", "proof-X2", "proof-X3"],
+    ["proof-Y1", "proof-Y2"],
+  ];
+  type Tab = { key: string; session: string; pass: string; browser: number };
+  const tabs: Tab[] = BROWSERS.flatMap((passes, browser) =>
+    passes.flatMap((pass) =>
+      [0, 1].map((index) => {
+        const session = `b${browser}-${pass.slice(-2)}-s${index}`;
+        return { key: `guest-gp_${session}`, session, pass, browser };
+      }),
+    ),
+  );
+  const tabByKey = new Map(tabs.map((tab) => [tab.key, tab]));
+  const hostPass = "proof-of-the-oracle-host";
+  const hostTab = (session: string) =>
+    ({
+      userId: `guest-gp_host-${session}`,
+      clientId: "conclave",
+      sessionId: session,
+      guestProof: hostPass,
+      guestRoom: "room",
+      allowRoomCreation: true,
+    }) satisfies SfuAuthPayload;
+
+  type Mark = { admitted: boolean; at: number };
+  class Oracle {
+    clock = 0;
+    root = new Map<string, string>();
+    records = new Map<string, { lock?: Mark; answer?: Mark }>();
+    blocked = new Set<string>();
+    status = new Map<string, "idle" | "pending" | "seated">();
+    arrival = new Map<string, number>();
+    tick() {
+      return (this.clock += 1);
+    }
+    find(pass: string): string {
+      const parent = this.root.get(pass) ?? pass;
+      return parent === pass ? pass : this.find(parent);
+    }
+    group(pass: string): Set<string> {
+      const top = this.find(pass);
+      return new Set(tabs.map((tab) => tab.pass).filter((other) => this.find(other) === top));
+    }
+    known(pass: string): boolean {
+      return (
+        this.records.has(pass) ||
+        tabs.some(
+          (tab) =>
+            tab.pass === pass &&
+            (this.status.get(tab.key) === "pending" ||
+              this.status.get(tab.key) === "seated" ||
+              this.blocked.has(tab.key)),
+        )
+      );
+    }
+    tabsOfGuest(pass: string, state: "pending" | "seated"): Tab[] {
+      const group = this.group(pass);
+      return tabs.filter((tab) => group.has(tab.pass) && this.status.get(tab.key) === state);
+    }
+    latest(pass: string, field: "lock" | "answer"): Mark | undefined {
+      let latest: Mark | undefined;
+      for (const other of this.group(pass)) {
+        const mark = this.records.get(other)?.[field];
+        if (mark && (!latest || mark.at > latest.at)) latest = mark;
+      }
+      return latest;
+    }
+    admits(pass: string): boolean {
+      return this.latest(pass, "lock")?.admitted === true;
+    }
+    guestBlocked(pass: string): boolean {
+      const group = this.group(pass);
+      return [...this.blocked].some((key) => group.has(tabByKey.get(key)!.pass));
+    }
+    record(pass: string, admitted: boolean) {
+      const at = this.tick();
+      this.records.set(pass, { lock: { admitted, at }, answer: { admitted, at } });
+    }
+    revokeGuest(pass: string) {
+      for (const other of this.group(pass)) {
+        const record = this.records.get(other);
+        if (record?.lock?.admitted) record.lock = { admitted: false, at: this.tick() };
+      }
+    }
+    prune() {
+      const groups = new Map<string, string[]>();
+      for (const tab of tabs) {
+        const top = this.find(tab.pass);
+        groups.set(top, [...new Set([...(groups.get(top) ?? []), tab.pass])]);
+      }
+      for (const passes of groups.values()) {
+        if (passes.length > 1 && !passes.some((pass) => this.known(pass))) {
+          for (const pass of passes) this.root.delete(pass);
+        }
+      }
+    }
+    rows(): string[] {
+      const rows: string[] = [];
+      const seen = new Set<string>();
+      const pending = tabs
+        .filter((tab) => this.status.get(tab.key) === "pending")
+        .sort((a, b) => this.arrival.get(a.key)! - this.arrival.get(b.key)!);
+      for (const tab of pending) {
+        const top = this.find(tab.pass);
+        if (seen.has(top)) continue;
+        seen.add(top);
+        rows.push(tab.key);
+      }
+      return rows.sort();
+    }
+
+    knock(tab: Tab, names: string[]) {
+      const events = new Map<string, string>();
+      let linked = false;
+      for (const other of names) {
+        if (this.known(other) && this.find(other) !== this.find(tab.pass)) {
+          this.root.set(this.find(other), this.find(tab.pass));
+          linked = true;
+        }
+      }
+      if (linked) {
+        if (this.guestBlocked(tab.pass)) {
+          this.revokeGuest(tab.pass);
+          for (const waiting of this.tabsOfGuest(tab.pass, "pending")) {
+            this.record(waiting.pass, false);
+            this.status.set(waiting.key, "idle");
+            events.set(waiting.key, "joinRejected");
+          }
+          for (const seated of this.tabsOfGuest(tab.pass, "seated")) {
+            this.status.set(seated.key, "idle");
+            events.set(seated.key, "kicked");
+          }
+        } else {
+          for (const waiting of this.tabsOfGuest(tab.pass, "pending")) {
+            const answer = this.latest(waiting.pass, "answer");
+            if (!answer || answer.at < this.arrival.get(waiting.key)!) continue;
+            if (!answer.admitted) {
+              this.status.set(waiting.key, "idle");
+              events.set(waiting.key, "joinRejected");
+            } else if (this.admits(waiting.pass)) {
+              this.status.set(waiting.key, "idle");
+              events.set(waiting.key, "joinApproved");
+            }
+          }
+        }
+      }
+      let outcome: "joined" | "waiting" | "refused";
+      if (this.blocked.has(tab.key) || this.guestBlocked(tab.pass)) {
+        outcome = "refused";
+      } else if (this.admits(tab.pass)) {
+        outcome = "joined";
+        this.status.set(tab.key, "seated");
+      } else {
+        outcome = "waiting";
+        if (this.status.get(tab.key) !== "pending") {
+          this.arrival.set(tab.key, this.tick());
+          this.status.set(tab.key, "pending");
+        }
+      }
+      this.prune();
+      return { outcome, events };
+    }
+    answer(row: string, admitted: boolean) {
+      const events = new Map<string, string>();
+      for (const waiting of this.tabsOfGuest(tabByKey.get(row)!.pass, "pending")) {
+        this.record(waiting.pass, admitted);
+        this.status.set(waiting.key, "idle");
+        events.set(waiting.key, admitted ? "joinApproved" : "joinRejected");
+      }
+      this.prune();
+      return events;
+    }
+    block(key: string) {
+      const events = new Map<string, string>();
+      const pass = tabByKey.get(key)!.pass;
+      this.blocked.add(key);
+      this.revokeGuest(pass);
+      for (const waiting of this.tabsOfGuest(pass, "pending")) {
+        this.record(waiting.pass, false);
+        this.status.set(waiting.key, "idle");
+        events.set(waiting.key, "joinRejected");
+      }
+      for (const seated of this.tabsOfGuest(pass, "seated")) {
+        this.status.set(seated.key, "idle");
+        events.set(seated.key, "kicked");
+      }
+      this.prune();
+      return events;
+    }
+    unblock(key: string) {
+      this.blocked.delete(key);
+      this.prune();
+    }
+    withdraw(key: string) {
+      this.status.set(key, "idle");
+      this.prune();
+    }
+  }
+
+  // What a host's screen holds, built from what its socket was sent.
+  const screenOf = (emit: ReturnType<typeof vi.fn>): string[] => {
+    let rows: string[] = [];
+    for (const [event, payload] of emit.mock.calls as Array<[string, { userId?: string; users?: Array<{ userId: string }> }]>) {
+      if (event === "userRequestedJoin") rows = [...rows.filter((row) => row !== payload.userId), payload.userId!];
+      if (["pendingUserLeft", "userAdmitted", "userRejected"].includes(event)) rows = rows.filter((row) => row !== payload.userId);
+      if (event === "pendingUsersSnapshot") rows = payload.users!.map((user) => user.userId);
+    }
+    return rows.sort();
+  };
+
+  const run = async (seed: number, steps: number) => {
+    // A host who acts once a second stays inside the admin rate limit.
+    let now = Date.UTC(2026, 10, 22);
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    let random = seed;
+    const pick = (below: number) => {
+      random = (random * 1103515245 + 12345) % 2147483648;
+      return random % below;
+    };
+    const state = makeState();
+    const firstHost = await join(state, hostTab("host-0"));
+    const room = state.rooms.get("conclave:room")!;
+    room.setLocked(true);
+    const hosts = [firstHost];
+    const oracle = new Oracle();
+    const peerOf = new Map<string, Awaited<ReturnType<typeof join>>["peer"]>();
+    const history: string[] = [];
+    const hostAsks = async (event: string, payload: unknown) => {
+      const ack = vi.fn();
+      await hosts[0].peer.handlers.get(event)!(...([payload, ack] as never[]));
+      const answer = ack.mock.calls[0]?.[0] as { error?: string } | undefined;
+      expect(answer?.error, `${event} ${JSON.stringify(payload)}, seed ${seed}`).toBeUndefined();
+    };
+    const expectAgreement = (events: Map<string, string>, callsBefore: Map<string, number>) => {
+      const where = `seed ${seed}, after: ${history.slice(-6).join(" | ")}`;
+      const pending = [...room.pendingClients.keys()].sort();
+      const expectedPending = tabs.filter((tab) => oracle.status.get(tab.key) === "pending").map((tab) => tab.key).sort();
+      expect(pending, `pending, ${where}`).toEqual(expectedPending);
+      const seated = [...room.userKeysById.values()].filter((key) => tabByKey.has(key)).sort();
+      const expectedSeated = tabs.filter((tab) => oracle.status.get(tab.key) === "seated").map((tab) => tab.key).sort();
+      expect(seated, `seated, ${where}`).toEqual(expectedSeated);
+      for (const [key, event] of events) {
+        const peer = peerOf.get(key)!;
+        const fresh = (peer.emit.mock.calls as Array<[string, ...unknown[]]>)
+          .slice(callsBefore.get(key) ?? 0)
+          .map(([name]) => name);
+        expect(fresh, `${key} told ${event}, ${where}`).toContain(event);
+      }
+      const rows = oracle.rows();
+      expect(toPendingUserSnapshots(room).map((row) => row.userId).sort(), `lobby, ${where}`).toEqual(rows);
+      for (const host of hosts) {
+        expect(screenOf(host.peer.emit), `host screen, ${where}`).toEqual(rows);
+      }
+      expect(room.waitingGuestCount, `count, ${where}`).toBe(rows.length);
+    };
+
+    for (let step = 0; step < steps; step += 1) {
+      now += 1000;
+      const callsBefore = new Map([...peerOf].map(([key, peer]) => [key, peer.emit.mock.calls.length]));
+      const pendingKeys = tabs.filter((tab) => oracle.status.get(tab.key) === "pending").map((tab) => tab.key);
+      const seatedKeys = tabs.filter((tab) => oracle.status.get(tab.key) === "seated").map((tab) => tab.key);
+      const rows = oracle.rows();
+      const action = pick(20);
+      let events = new Map<string, string>();
+      if (action < 9) {
+        const free = tabs.filter((tab) => oracle.status.get(tab.key) !== "seated");
+        const tab = free[pick(free.length)];
+        const names = BROWSERS[tab.browser].filter((other) => other !== tab.pass && pick(3) === 0);
+        history.push(`knock ${tab.key} naming [${names.join(",")}]`);
+        const expected = oracle.knock(tab, names);
+        events = expected.events;
+        const joinedTab = await join(state, {
+          userId: tab.key,
+          clientId: "conclave",
+          sessionId: tab.session,
+          guestProof: tab.pass,
+          guestRoom: "room",
+          ...(names.length > 0
+            ? { guestWas: names.map((other) => ({ userKey: `guest-gp_${tab.session}-under-${other}`, guestProof: other })) }
+            : {}),
+        });
+        peerOf.set(tab.key, joinedTab.peer);
+        callsBefore.set(tab.key, 0);
+        const ack = joinedTab.ack.mock.calls[0]?.[0] as { status?: string; error?: string };
+        const outcome = ack?.status === "joined" ? "joined" : ack?.status === "waiting" ? "waiting" : /not allowed/i.test(ack?.error ?? "") ? "refused" : `other: ${JSON.stringify(ack)}`;
+        expect(outcome, `join of ${tab.key}, seed ${seed}, after: ${history.slice(-6).join(" | ")}`).toBe(expected.outcome);
+      } else if (action < 12 && rows.length > 0) {
+        const row = rows[pick(rows.length)];
+        history.push(`admit ${row}`);
+        events = oracle.answer(row, true);
+        await hostAsks("admitUser", { userId: row });
+      } else if (action < 15 && rows.length > 0) {
+        const row = rows[pick(rows.length)];
+        history.push(`deny ${row}`);
+        events = oracle.answer(row, false);
+        await hostAsks("rejectUser", { userId: row });
+      } else if (action < 16 && pendingKeys.length + seatedKeys.length > 0) {
+        const candidates = [...pendingKeys, ...seatedKeys];
+        const key = candidates[pick(candidates.length)];
+        history.push(`block ${key}`);
+        events = oracle.block(key);
+        await hostAsks("admin:blockUsers", { userKeys: [key] });
+      } else if (action < 17 && oracle.blocked.size > 0) {
+        const blockedKeys = [...oracle.blocked];
+        const key = blockedKeys[pick(blockedKeys.length)];
+        history.push(`unblock ${key}`);
+        oracle.unblock(key);
+        await hostAsks("admin:unblockUsers", { userKeys: [key] });
+      } else if (action < 19 && pendingKeys.length > 0) {
+        const key = pendingKeys[pick(pendingKeys.length)];
+        history.push(`withdraw ${key}`);
+        oracle.withdraw(key);
+        withdrawWaitingRequest(room, key);
+      } else {
+        history.push("host reconnects");
+        hosts.push(await join(state, hostTab(`host-${hosts.length}`)));
+      }
+      await endOfTurn();
+      expectAgreement(events, callsBefore);
+    }
+  };
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each([1, 7, 42, 2026, 31337, 99991])("agrees with the oracle over 300 random steps (seed %i)", async (seed) => {
+    await run(seed, 300);
   });
 });

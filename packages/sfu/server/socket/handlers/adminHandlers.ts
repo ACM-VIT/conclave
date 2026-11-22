@@ -1021,15 +1021,7 @@ export const registerAdminHandlers = (
           io,
           state,
         });
-        for (const rejectedUserKey of result.rejectedPendingUserKeys) {
-          rejectedPending.push(rejectedUserKey);
-          for (const admin of guard.room.getAdmins()) {
-            admin.socket.emit("userRejected", {
-              userId: rejectedUserKey,
-              roomId: guard.room.id,
-            });
-          }
-        }
+        rejectedPending.push(...result.rejectedPendingUserKeys);
         for (const userId of result.kickedUserIds) {
           kickedUserIds.add(userId);
         }

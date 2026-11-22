@@ -7,7 +7,7 @@ import type {
   ProducerKey,
   ProducerType,
 } from "../../config/classes/Client.js";
-import type { Room, WaitingRequest } from "../../config/classes/Room.js";
+import type { Room } from "../../config/classes/Room.js";
 import type { AppsAwarenessData } from "../../types.js";
 import { isGuestUserKey } from "../identity.js";
 import { cleanupRoom, getRoomChannelId } from "../rooms.js";
@@ -353,8 +353,8 @@ export const toRoomSnapshot = (room: Room): RoomSnapshot => {
       requiresMeetingInviteCode: room.requiresMeetingInviteCode,
     },
     access: {
-      allowedUserKeys: Array.from(room.allowedUsers.values()).sort(),
-      lockedAllowedUserKeys: Array.from(room.lockedAllowedUsers.values()).sort(),
+      allowedUserKeys: room.admittedUserKeys("waitingRoom"),
+      lockedAllowedUserKeys: room.admittedUserKeys("lock"),
       blockedUserKeys: Array.from(room.blockedUsers.values()).sort(),
     },
     counts: {
@@ -847,110 +847,96 @@ export const applyRoomPolicyUpdate = (
   return { changed };
 };
 
-const tellHosts = (
+/**
+ * Tells the hosts what changed in the lobby since they were last told: the
+ * rows to take off, as admitted, turned away or gone, and the rows to add.
+ * Every change to who waits goes through here, so a host's screen always
+ * shows one row per waiting guest.
+ */
+export const publishLobby = (
   room: Room,
-  event: "userAdmitted" | "userRejected" | "pendingUserLeft" | "userRequestedJoin",
-  request: { userKey: string; displayName?: string },
+  options: { reason?: "locked" } = {},
 ): void => {
-  for (const admin of room.getAdmins()) {
-    admin.socket.emit(event, {
-      userId: request.userKey,
-      roomId: room.id,
-      ...(event === "userRequestedJoin"
-        ? { displayName: request.displayName || request.userKey }
-        : {}),
-    });
+  const { removed, added } = room.takeLobbyChanges();
+  if (removed.length === 0 && added.length === 0) return;
+  const admins = room.getAdmins();
+  for (const row of removed) {
+    const event =
+      row.outcome === "admitted"
+        ? "userAdmitted"
+        : row.outcome === "rejected"
+          ? "userRejected"
+          : "pendingUserLeft";
+    for (const admin of admins) {
+      admin.socket.emit(event, { userId: row.userKey, roomId: room.id });
+    }
+  }
+  for (const request of added) {
+    for (const admin of admins) {
+      admin.socket.emit("userRequestedJoin", {
+        userId: request.userKey,
+        displayName: request.displayName || request.userKey,
+        roomId: room.id,
+        ...(options.reason ? { reason: options.reason } : {}),
+      });
+    }
   }
 };
 
 /**
  * Lets in the guest behind `userKey`: every tab of that guest that waits.
- * Hosts are told about every key that leaves the lobby, not only the one
- * their list shows now: a host's screen can still hold a row from before
- * the room knew two keys were one guest. Returns the keys that were let in.
+ * Returns the keys that were let in.
  */
-export const admitWaitingGuest = (room: Room, userKey: string): string[] =>
-  admitRequests(room, room.waitingRequestsOfGuest(userKey));
-
-/** Turns away the guest behind `userKey`: every tab of that guest that waits. */
-export const rejectWaitingGuest = (room: Room, userKey: string): string[] =>
-  rejectRequests(room, room.waitingRequestsOfGuest(userKey));
-
-const admitRequests = (room: Room, requests: WaitingRequest[]): string[] => {
+export const admitWaitingGuest = (room: Room, userKey: string): string[] => {
+  const requests = room.waitingRequestsOfGuest(userKey);
   for (const request of requests) {
     if (room.isLocked) {
       room.allowLockedUser(request.userKey);
     }
     room.allowUser(request.userKey);
     request.socket.emit("joinApproved", { roomId: room.id });
-    tellHosts(room, "userAdmitted", request);
   }
+  publishLobby(room);
   return requests.map((request) => request.userKey);
 };
 
-const rejectRequests = (room: Room, requests: WaitingRequest[]): string[] => {
+/** Turns away the guest behind `userKey`: every tab of that guest that waits. */
+export const rejectWaitingGuest = (room: Room, userKey: string): string[] => {
+  const requests = room.waitingRequestsOfGuest(userKey);
   for (const request of requests) {
     room.denyWaitingRequest(request.userKey);
     request.socket.emit("joinRejected", { roomId: room.id });
-    tellHosts(room, "userRejected", request);
   }
+  publishLobby(room);
   return requests.map((request) => request.userKey);
 };
 
 /**
- * Gives waiting tabs the answer hosts already gave their guest. The room
- * learned only now that these tabs are that guest's (see
- * `Room.linkGuestPasses`): `admit` are let in, `deny` are turned away.
+ * Acts on what a join that linked passes changed (see
+ * `Room.linkGuestPasses`): a guest a block now covers is removed, and the
+ * waiting tabs an earlier decision now answers are told.
  */
-export const settleWaitingTabs = (
+export const applyGuestLink = (
   room: Room,
-  answer: { admit: string[]; deny: string[] },
+  linked: ReturnType<Room["linkGuestPasses"]>,
+  options: { io: SocketIOServer; state: SfuState },
 ): void => {
-  for (const [userKeys, admitted] of [
-    [answer.admit, true],
-    [answer.deny, false],
-  ] as const) {
-    for (const userKey of userKeys) {
-      const request = room.pendingClients.get(userKey);
-      if (!request) continue;
-      room.settleWaitingRequest(userKey, admitted);
-      request.socket.emit(admitted ? "joinApproved" : "joinRejected", {
-        roomId: room.id,
-      });
-      tellHosts(room, admitted ? "userAdmitted" : "userRejected", request);
-    }
+  if (linked.blocked.length > 0) {
+    removeBlockedGuest(room, linked.blocked, options);
   }
+  for (const { request, admitted } of linked.settled) {
+    request.socket.emit(admitted ? "joinApproved" : "joinRejected", {
+      roomId: room.id,
+    });
+  }
+  publishLobby(room);
 };
 
-/**
- * Takes rows off the hosts' lobby after the room learned that some keys
- * are one guest: `userKeys` were a guest's shown request and no longer
- * are. Their tabs still wait, as part of the one request that is left.
- */
-export const hideLobbyRows = (room: Room, userKeys: string[]): void => {
-  for (const userKey of userKeys) {
-    if (room.pendingClients.has(userKey)) {
-      tellHosts(room, "pendingUserLeft", { userKey });
-    }
-  }
-};
-
-/**
- * Takes back one tab's request, because the tab left or came back another
- * way. Hosts are told the key is gone whether or not their list showed it.
- * When it was the request they were shown and the guest still waits in
- * another tab, they are shown that tab's request in its place.
- */
+/** Takes back one tab's request, because the tab left or came back another way. */
 export const withdrawWaitingRequest = (room: Room, userKey: string): void => {
-  const requests = room.waitingRequestsOfGuest(userKey);
-  const wasShown = requests[0]?.userKey === userKey;
-  const withdrawn = room.pendingClients.get(userKey);
-  if (!withdrawn) return;
+  if (!room.pendingClients.has(userKey)) return;
   room.removePendingClient(userKey);
-  tellHosts(room, "pendingUserLeft", withdrawn);
-  if (wasShown && requests[1]) {
-    tellHosts(room, "userRequestedJoin", requests[1]);
-  }
+  publishLobby(room);
 };
 
 export const admitAllPendingUsers = (
@@ -967,15 +953,7 @@ export const admitAllPendingUsers = (
     pending.socket.emit("joinApproved", { roomId: room.id });
     admitted.push({ userId: pending.userId, userKey: pending.userKey });
   }
-
-  for (const admin of room.getAdmins()) {
-    for (const user of admitted) {
-      admin.socket.emit("userAdmitted", {
-        userId: user.userKey,
-        roomId: room.id,
-      });
-    }
-  }
+  publishLobby(room);
 
   return admitted;
 };
@@ -991,15 +969,7 @@ export const rejectAllPendingUsers = (
     pending.socket.emit("joinRejected", { roomId: room.id });
     rejected.push({ userId: pending.userId, userKey: pending.userKey });
   }
-
-  for (const admin of room.getAdmins()) {
-    for (const user of rejected) {
-      admin.socket.emit("userRejected", {
-        userId: user.userKey,
-        roomId: room.id,
-      });
-    }
-  }
+  publishLobby(room);
 
   return rejected;
 };
@@ -1122,8 +1092,9 @@ export const blockUserKey = (
   }
   room.blockUser(userKey);
   for (const key of rejectedPendingUserKeys) {
-    room.removePendingClient(key);
+    room.denyWaitingRequest(key);
   }
+  publishLobby(room);
 
   const kickedUserIds: string[] = [];
   if (options.kickPresent) {

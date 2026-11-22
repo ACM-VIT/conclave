@@ -2,7 +2,6 @@ import { readAiEnvironment } from "@conclave/ai/models";
 import { parseGuestJoinClaims } from "@conclave/meeting-core/guest-join-claims";
 import { Admin } from "../../../config/classes/Admin.js";
 import { Client } from "../../../config/classes/Client.js";
-import type { Room } from "../../../config/classes/Room.js";
 import { config } from "../../../config/config.js";
 import type {
   AppsAwarenessData,
@@ -52,9 +51,8 @@ import {
 } from "../../scheduledWebinars.js";
 import { ensureWebinarRoomConfig } from "../../scheduledWebinarScheduler.js";
 import {
-  hideLobbyRows,
-  removeBlockedGuest,
-  settleWaitingTabs,
+  applyGuestLink,
+  publishLobby,
   withdrawWaitingRequest,
 } from "../../admin/controlPlane.js";
 import { getSocketAuthUser } from "../auth.js";
@@ -92,9 +90,6 @@ const normalizeIdentifier = (
   }
   return normalized;
 };
-
-const isFirstRequestOfGuest = (room: Room, userKey: string): boolean =>
-  room.waitingRequestsOfGuest(userKey)[0]?.userKey === userKey;
 
 export const registerJoinRoomHandler = (context: ConnectionContext): void => {
   const { socket, io, state } = context;
@@ -281,15 +276,11 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           roomGuestProof !== undefined &&
           otherGuestSeats.length > 0
         ) {
-          const linked = knownRoom.linkGuestPasses(
-            otherGuestSeats,
-            roomGuestProof,
+          applyGuestLink(
+            knownRoom,
+            knownRoom.linkGuestPasses(otherGuestSeats, roomGuestProof),
+            { io, state },
           );
-          if (linked.blocked.length > 0) {
-            removeBlockedGuest(knownRoom, linked.blocked, { io, state });
-          }
-          settleWaitingTabs(knownRoom, linked);
-          hideLobbyRows(knownRoom, linked.noLongerShown);
         }
         // A host invite ("bring on stage") lets an attendee identity rejoin as
         // a full participant; the promotion registry lives on the live room.
@@ -778,17 +769,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
 
           // Hosts are shown one request per guest. A second tab of a guest
           // who already waits joins that request without a new knock.
-          const admins = isFirstRequestOfGuest(room, userKey)
-            ? room.getAdmins()
-            : [];
-          for (const admin of admins) {
-            admin.socket.emit("userRequestedJoin", {
-              userId: userKey,
-              displayName,
-              roomId,
-              reason: "locked",
-            });
-          }
+          publishLobby(room, { reason: "locked" });
 
           respond(callback, {
             roomId,
@@ -838,16 +819,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             });
           }
 
-          const admins = isFirstRequestOfGuest(room, userKey)
-            ? room.getAdmins()
-            : [];
-          for (const admin of admins) {
-            admin.socket.emit("userRequestedJoin", {
-              userId: userKey,
-              displayName,
-              roomId,
-            });
-          }
+          publishLobby(room);
 
           respond(callback, {
             roomId,

@@ -56,6 +56,12 @@ Only the HttpOnly pass cookies vouch for `guestWas`. A copy of a join token is n
 
 The guest claims of a join token (`userId`, `guestProof`, `guestRoom`, `clientId`, `sessionId`, `guestWas`) have one schema, in `@conclave/meeting-core/guest-join-claims`. The route signs what that schema parses, and the SFU reads the token through it. A guest token whose claims do not parse is refused.
 
+Who may come in is decided from one record of host decisions, kept per pass (for seat keys) or per key (for accounts and keys a client chose itself), on the same clock as requests to be let in (`config/classes/AdmissionLedger.ts`). There are no separate allow lists.
+
+- A join may pass the lock, or the waiting room, only if the latest decision for that scope across everything the join speaks for is an admission. For a token issued for the room that is every linked pass of the guest; for any other token it is its own key. An admission, a denial, a revocation, a removal and a block are all decisions; a later one always wins. Locking the room starts lock admissions afresh.
+- A waiting request is answered only by a decision made after it arrived. When a join links passes, the guest's waiting requests are judged again: a later denial turns a request away, a later admission lets it in if the guest still holds it, and any other request stays. Applying an earlier decision records nothing new, so the decision keeps its time.
+- After every change to who waits, the SFU tells hosts the difference between the rows they were shown and the rows that are now true: removals (`userAdmitted`, `userRejected`, `pendingUserLeft`) and additions (`userRequestedJoin`). `pendingUsersSnapshot` and the admin counts come from the same rows.
+
 A host action can admit a guest key only while the room knows who the guest is: its proof is on record, it is seated or waiting, or it is already admitted.
 `admin:allowUsers` and `POST /admin/rooms/:roomId/access/allow` answer with `allowed` and `refused` key lists. When no key could be admitted the answer is a failure (`success: false` with an `error`, HTTP 409), and a block on a refused key stays. A guest the room does not know knocks and is admitted from its waiting entry. An account key, which is an email, can still be admitted ahead of time.
 
