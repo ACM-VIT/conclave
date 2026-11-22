@@ -1235,6 +1235,36 @@ describe("bounds", () => {
     expect(busy(fromHost)).toBe(2);
   });
 
+  it("holds a person to their cooldown when the table of limits is cleaned up", async () => {
+    // A table small enough that every new person's first action cleans it.
+    const room = new Harness([qaAuthority], {
+      runtime: { limits: { ...DEFAULT_AUTHORITY_LIMITS, rateBuckets: 2 } },
+    });
+    const priyaTab = await room.open(priya, qaContract);
+    const others = [await room.open(ravi, qaContract), await room.open(host, qaContract)];
+
+    // Three questions in a burst, then one every ten seconds.
+    const burst: AuthorityResult<Json>[] = [];
+    for (let index = 0; index < 4; index += 1) {
+      burst.push(await priyaTab.session.act("ask", { text: `Question ${index}` }));
+    }
+    await vi.advanceTimersByTimeAsync(1_000);
+    for (const other of others) await other.session.act("ask", { text: "Mine" });
+    const afterOneSecond = await priyaTab.session.act("ask", { text: "Again, a second later" });
+    await vi.advanceTimersByTimeAsync(9_000);
+    const afterTen = await priyaTab.session.act("ask", { text: "Again, ten seconds on" });
+
+    expect(burst.map((result) => (result.ok ? "ok" : result.code))).toEqual([
+      "ok",
+      "ok",
+      "ok",
+      "rate-limited",
+    ]);
+    expect(afterOneSecond).toMatchObject({ ok: false, code: "rate-limited" });
+    // Her fourth question is refused for being her fourth open one, not for its pace.
+    expect(afterTen).toMatchObject({ ok: false, code: "rejected" });
+  });
+
   it("caps subscriptions per socket", async () => {
     const room = new Harness([probeAuthority], {
       runtime: { limits: { ...DEFAULT_AUTHORITY_LIMITS, subscriptionsPerSocket: 2 } },

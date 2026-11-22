@@ -49,7 +49,10 @@ export type AuthorityLimits = {
   lagRecheckMs: number;
   /** How long a streamed result waits for such a socket before it is cut off. */
   queryStallMs: number;
-  /** Idle rate-limit buckets are dropped once this many exist. */
+  /**
+   * Rate-limit buckets that have refilled are dropped once this many exist.
+   * One still cooling down is kept, so there can be more than this.
+   */
   rateBuckets: number;
 };
 
