@@ -13,8 +13,10 @@ const PASS_AUDIENCE = "conclave-guest-pass";
 const GRANT_AUDIENCE = "conclave-guest-grant";
 const PASS_TTL_SECONDS = 30 * 24 * 60 * 60;
 const GRANT_TTL_SECONDS = 24 * 60 * 60;
-// More pass cookies than a browser can come to hold by honest means.
-const MAX_PASSES_READ = 8;
+// A token has room for every pass this reads (see MAX_OTHER_GUEST_SEATS).
+const MAX_BROWSER_PASSES = MAX_OTHER_GUEST_SEATS + 1;
+// Signatures checked per request, whatever a client puts in its cookies.
+const MAX_PASS_COOKIES_CHECKED = 64;
 
 const GUEST_ID_PREFIX = "gp_";
 const GUEST_SESSION_ID_PATTERN = /^[^\u0000-\u001f\u007f#@]{1,128}$/;
@@ -32,15 +34,20 @@ const passClaimsSchema = z.object({ gid: guestPassIdSchema });
  * The guest side of a join request. A client that sends `guestId` takes its
  * identity from this server. `guestGrant` stands in for a pass cookie the
  * client could not send, and a malformed one counts as none.
+ * `guestJoinedAs` lists the passes the tab has joined under. It proves
+ * nothing. It only says which of the browser's own passes matter to this
+ * tab, should the browser hold more than a token can name.
  */
 const guestJoinRequestSchema = z
   .object({
     guestId: z.unknown(),
     guestGrant: z.string().optional().catch(undefined),
+    guestJoinedAs: z.array(guestPassIdSchema).max(8).catch([]).default([]),
   })
-  .transform(({ guestId, guestGrant }) => ({
+  .transform(({ guestId, guestGrant, guestJoinedAs }) => ({
     takesIdentityFromServer: guestId !== undefined,
     guestGrant,
+    joinedAs: guestJoinedAs,
   }));
 
 /**
@@ -146,9 +153,11 @@ const seatKeyOf = (
 };
 
 /**
- * Every pass the browser holds, lowest id first. The first is the pass the
- * browser goes by: the order depends on nothing but the passes themselves,
- * so every tab and every request picks the same one.
+ * The passes the browser holds. The first is the lowest id, and it is the
+ * pass the browser goes by: that choice depends on nothing but the passes
+ * themselves, so every tab and every request makes it the same way,
+ * whatever order the passes arrived in. Every pass the browser sends is
+ * returned, up to what a token can name.
  *
  * A cookie value may arrive in double quotes (RFC 6265). The Android app's
  * cookie jar sends a cookie that was set with Max-Age back that way.
@@ -156,14 +165,17 @@ const seatKeyOf = (
 const readBrowserPasses = (
   sfuSecret: string,
   cookieHeader: string | null,
+  joinedAs: readonly GuestPassId[] = [],
 ): GuestPassId[] => {
   const prefix = guestPassCookiePrefix(sfuSecret);
   const passes = new Set<GuestPassId>();
+  let checked = 0;
   for (const part of cookieHeader?.split(";") ?? []) {
     const separator = part.indexOf("=");
     if (separator <= 0 || !part.slice(0, separator).trim().startsWith(prefix)) {
       continue;
     }
+    if ((checked += 1) > MAX_PASS_COOKIES_CHECKED) break;
     const pass = readPass(
       sfuSecret,
       part
@@ -173,9 +185,21 @@ const readBrowserPasses = (
       PASS_AUDIENCE,
     );
     if (pass) passes.add(pass);
-    if (passes.size === MAX_PASSES_READ) break;
   }
-  return [...passes].sort();
+  const [lowest, ...others] = [...passes].sort();
+  if (others.length < MAX_BROWSER_PASSES) {
+    return lowest === undefined ? [] : [lowest, ...others];
+  }
+  // More passes than a token can name. None is dropped without a trace, and
+  // the ones this tab joined under go first: its rights are under those.
+  console.warn(
+    `[Guest pass] A browser sent ${passes.size} passes. A join token names ${MAX_BROWSER_PASSES}.`,
+  );
+  return [
+    lowest,
+    ...others.filter((pass) => joinedAs.includes(pass)),
+    ...others.filter((pass) => !joinedAs.includes(pass)),
+  ].slice(0, MAX_BROWSER_PASSES);
 };
 
 const passCookie = (sfuSecret: string, guestId: GuestPassId): string =>
@@ -242,10 +266,10 @@ export type GuestJoinIdentity =
  * server issued: the lowest pass among the browser's cookies, else the one a
  * grant proves, else a new one.
  *
- * A browser can hold more than one pass, when two of its first requests
- * were each answered before either cookie had arrived. A tab may then have
+ * A browser can hold more than one pass, when several of its first requests
+ * were each answered before any cookie had arrived. A tab may then have
  * joined under a pass that is not the one the browser goes by. The token
- * therefore also names the seat this tab would hold under each other pass
+ * therefore also names the seat this tab would hold under every other pass
  * in the browser's cookies (`guestWas`), and the SFU treats all of them as
  * one guest. Only the pass cookies vouch for that. They are HttpOnly, so
  * holding a copy of a join token is not enough to be taken for its guest
@@ -269,10 +293,15 @@ export const resolveGuestJoinIdentity = (input: {
   const caller = guestJoinRequestSchema.safeParse(input.body).data ?? {
     takesIdentityFromServer: false,
     guestGrant: undefined,
+    joinedAs: [],
   };
   const usesCookie = !isCrossSiteRequest(input.request);
   const held = usesCookie
-    ? readBrowserPasses(sfuSecret, input.request.headers.get("cookie"))
+    ? readBrowserPasses(
+        sfuSecret,
+        input.request.headers.get("cookie"),
+        caller.joinedAs,
+      )
     : [];
   const fromCookie = held.at(0);
 
@@ -280,10 +309,13 @@ export const resolveGuestJoinIdentity = (input: {
     if (isReservedGuestSessionId(sessionId)) {
       return { ok: false, status: 400, error: "Invalid session ID" };
     }
-    const claims = issueSelfNamedGuestClaims({
+    const { claims } = issueSelfNamedGuestClaims({
       userId: `guest-${sessionId}`,
       ...(fromCookie ? { guestProof: proofOf(sfuSecret, fromCookie) } : {}),
     });
+    if (!claims) {
+      return { ok: false, status: 400, error: "Invalid session ID" };
+    }
     return {
       ok: true,
       userKey: claims.userId,
@@ -303,12 +335,11 @@ export const resolveGuestJoinIdentity = (input: {
     mintGuestId();
   const otherSeats = held
     .filter((pass) => pass !== guestId)
-    .slice(0, MAX_OTHER_GUEST_SEATS)
     .map((pass) => ({
       userKey: seatKeyOf(sfuSecret, pass, seat),
       guestProof: proofOf(sfuSecret, pass),
     }));
-  const claims = issueRoomScopedClaims({
+  const { claims, invalid } = issueRoomScopedClaims({
     userId: seatKeyOf(sfuSecret, guestId, seat),
     guestProof: proofOf(sfuSecret, guestId),
     guestRoom: seat.roomId,
@@ -316,6 +347,14 @@ export const resolveGuestJoinIdentity = (input: {
     sessionId,
     ...(otherSeats.length > 0 ? { guestWas: otherSeats } : {}),
   });
+  if (!claims) {
+    // A value the caller sent cannot go into a join token.
+    return {
+      ok: false,
+      status: 400,
+      error: invalid === "guestRoom" ? "Invalid room ID" : "Invalid session ID",
+    };
+  }
   return {
     ok: true,
     userKey: claims.userId,

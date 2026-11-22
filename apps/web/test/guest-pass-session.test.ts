@@ -38,14 +38,58 @@ describe("a page's guest join calls", () => {
     expect(route.sent).toEqual([{ guestId: "" }, { guestId: "", guestGrant: "grant-1" }, { guestId: "" }]);
   });
 
-  it("keep nothing the tab would have to hand back later", async () => {
-    const stored = vi.fn();
-    vi.stubGlobal("window", { sessionStorage: { getItem: () => null, setItem: stored } });
-    const route = joinRoute([{ token: "token-1", guestId: "gp_issued", guestGrant: "grant-1" }]);
+  // One tab's session storage. A reload keeps it, another tab has its own.
+  const tabStorage = () => {
+    const items = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => items.get(key) ?? null,
+      setItem: (key: string, value: string) => void items.set(key, value),
+    };
+    vi.stubGlobal("window", { sessionStorage: storage });
+    return { items, storage };
+  };
+
+  it("say which passes the tab has joined under, and keep that across a reload", async () => {
+    const tab = tabStorage();
+    const first = joinRoute([
+      { token: "token-1", guestId: "gp_first", guestGrant: "grant-1" },
+      { token: "token-2", guestId: "gp_second" },
+    ]);
+    const join = openPage();
+    await join(first.send);
+    await join(first.send);
+
+    vi.stubGlobal("window", { sessionStorage: tab.storage });
+    const afterReload = joinRoute([{ token: "token-3", guestId: "gp_second" }]);
+    await openPage()(afterReload.send);
+
+    expect(first.sent).toEqual([
+      { guestId: "" },
+      { guestId: "", guestGrant: "grant-1", guestJoinedAs: ["gp_first"] },
+    ]);
+    expect(afterReload.sent).toEqual([{ guestId: "", guestJoinedAs: ["gp_first", "gp_second"] }]);
+  });
+
+  it("keep ids only, never a token or a grant, and at most the last four", async () => {
+    const tab = tabStorage();
+    const join = openPage();
+    const route = joinRoute(
+      ["a", "b", "c", "d", "e", "c"].map((id) => ({ token: `token-${id}`, guestId: `gp_${id}`, guestGrant: `grant-${id}` })),
+    );
+
+    for (let call = 0; call < 6; call += 1) await join(route.send);
+
+    expect([...tab.items.values()]).toEqual([JSON.stringify(["gp_b", "gp_d", "gp_e", "gp_c"])]);
+  });
+
+  it("go out with no such list when what the tab stored is not one", async () => {
+    const tab = tabStorage();
+    tab.items.set("conclave:guest-passes-joined-as", JSON.stringify({ not: "a list" }));
+    const route = joinRoute([{ token: "token-1", guestId: "gp_issued" }]);
 
     await openPage()(route.send);
 
-    expect(stored).not.toHaveBeenCalled();
+    expect(route.sent).toEqual([{ guestId: "" }]);
   });
 
   it("keep the grant they have when an account's answer comes in between", async () => {

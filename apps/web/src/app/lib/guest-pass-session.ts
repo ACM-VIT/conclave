@@ -3,14 +3,45 @@ import { z } from "zod";
 const GUEST_PASS_REQUEST_TIMEOUT_MS = 5000;
 const GUEST_PASS_LOCK_NAME = "conclave:guest-pass";
 const GUEST_PASS_LOCK_TIMEOUT_MS = 10000;
+const JOINED_AS_STORAGE_KEY = "conclave:guest-passes-joined-as";
+const MAX_JOINED_AS = 4;
 
 /**
  * What a client adds to a join request so the server picks its guest
- * identity: an empty `guestId`, and the grant from the last answer.
+ * identity: an empty `guestId`, the grant from the last answer, and the ids
+ * of the passes this tab has joined under.
  */
 export type GuestPassFields = {
   guestId: "";
   guestGrant?: string;
+  guestJoinedAs?: string[];
+};
+
+const joinedAsSchema = z.array(z.string().min(1)).max(MAX_JOINED_AS);
+
+// The ids of the passes this tab has joined under, newest last. They are
+// ids, not passes: the join route answers with them, and they prove nothing.
+// The route uses them only to tell which of the browser's own passes matter
+// to this tab when the browser holds more than a join token can name.
+const readJoinedAs = (): string[] => {
+  try {
+    const stored = window.sessionStorage.getItem(JOINED_AS_STORAGE_KEY);
+    return joinedAsSchema.parse(JSON.parse(stored ?? "[]"));
+  } catch {
+    return [];
+  }
+};
+
+const rememberJoinedAs = (guestId: string): void => {
+  try {
+    const others = readJoinedAs().filter((id) => id !== guestId);
+    window.sessionStorage.setItem(
+      JOINED_AS_STORAGE_KEY,
+      JSON.stringify([...others, guestId].slice(-MAX_JOINED_AS)),
+    );
+  } catch {
+    // Without session storage the hint is lost on a reload.
+  }
 };
 
 /** The guest side of the join route's answer. An account's answer has none. */
@@ -61,10 +92,10 @@ export const guestPassRequestFor =
 /**
  * The guest side of one page's join calls.
  *
- * The page never names a pass. The join route picks it from the browser's
- * cookies. One thing travels with each call: the grant from the last answer,
+ * The page never picks a pass. The join route picks it from the browser's
+ * cookies. Two things travel with each call: the grant from the last answer,
  * which stands in for the cookie in a browser that has not sent it back yet,
- * or never will.
+ * or never will, and the ids of the passes the tab has joined under.
  *
  * Calls go one at a time within the page, so a second call always carries
  * what the first one was answered with. `askForPass` goes ahead of them all:
@@ -88,12 +119,17 @@ export const createGuestPassSession = (askForPass: () => Promise<unknown>) => {
   ): Promise<Answer> => {
     askForPassOnce();
     const call = async () => {
+      const joinedAs = readJoinedAs();
       const answer = await send({
         guestId: "",
         ...(grant ? { guestGrant: grant } : {}),
+        ...(joinedAs.length > 0 ? { guestJoinedAs: joinedAs } : {}),
       });
       const issued = guestJoinAnswerSchema.safeParse(answer).data;
-      if (issued) grant = issued.guestGrant;
+      if (issued) {
+        grant = issued.guestGrant;
+        rememberJoinedAs(issued.guestId);
+      }
       return answer;
     };
     const result = queue.then(call, call);

@@ -51,6 +51,8 @@ type JoinRequestBody = {
    */
   guestId?: string | null;
   guestGrant?: string | null;
+  /** Ids of the passes this tab has joined under. A hint, never a proof. */
+  guestJoinedAs?: string[] | null;
   joinMode?: "meeting" | "webinar_attendee";
   user?: {
     id?: string | null;

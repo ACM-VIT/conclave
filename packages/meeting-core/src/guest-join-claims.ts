@@ -40,7 +40,13 @@ const otherGuestSeatSchema = z.object({
   guestProof: guestProofSchema,
 });
 export type OtherGuestSeat = z.infer<typeof otherGuestSeatSchema>;
-export const MAX_OTHER_GUEST_SEATS = 3;
+/**
+ * A token names every other pass the join route reads from a browser. The
+ * route reads one more than this, so no pass it goes by is ever left out.
+ * A browser comes to hold several only when that many of its first requests
+ * cross, which Web Locks prevent.
+ */
+export const MAX_OTHER_GUEST_SEATS = 15;
 
 /** A guest token issued from a pass. It is good for `guestRoom` only. */
 export const roomScopedClaimsSchema = z.object({
@@ -56,10 +62,11 @@ export type RoomScopedClaims = z.infer<typeof roomScopedClaimsSchema>;
 /**
  * A guest token for a client that names its own `guest-<sessionId>`: a tab
  * from before guest passes, or an older native build. It names no room, so
- * it can never carry `guestRoom`.
+ * it can never carry `guestRoom`, and it can never name a seat key: those
+ * are issued, and only for a room.
  */
 export const selfNamedGuestClaimsSchema = z.object({
-  userId: z.string().max(320).regex(/^guest-/),
+  userId: z.string().max(320).regex(/^guest-(?!gp_)/),
   guestProof: guestProofSchema.optional(),
   guestRoom: z.never().optional(),
 });
@@ -86,10 +93,23 @@ export const parseGuestJoinClaims = (claims: unknown): GuestJoinClaims | null =>
 export const parseRoomScopedClaims = (claims: unknown): RoomScopedClaims | null =>
   roomScopedClaimsSchema.safeParse(claims).data ?? null;
 
+/** Claims ready to sign, or the name of the first claim that is not valid. */
+export type IssuedClaims<Claims> =
+  | { claims: Claims; invalid?: undefined }
+  | { claims?: undefined; invalid: string };
+
+const issue = <Claims>(
+  parsed: z.ZodSafeParseResult<Claims>,
+): IssuedClaims<Claims> =>
+  parsed.success
+    ? { claims: parsed.data }
+    : { invalid: String(parsed.error.issues[0]?.path[0] ?? "") };
+
 /**
  * The claims the join route signs for a guest it issued a seat key. Going
  * through the schema here means the route cannot sign what a reader of the
- * token would refuse.
+ * token would refuse. Part of the input comes from the caller, such as the
+ * room id, so the answer can be that one claim is not valid.
  */
 export const issueRoomScopedClaims = (claims: {
   userId: string;
@@ -98,13 +118,15 @@ export const issueRoomScopedClaims = (claims: {
   clientId: string;
   sessionId: string;
   guestWas?: Array<{ userKey: string; guestProof: string }>;
-}): RoomScopedClaims => roomScopedClaimsSchema.parse(claims);
+}): IssuedClaims<RoomScopedClaims> =>
+  issue(roomScopedClaimsSchema.safeParse(claims));
 
 /** The same for a guest that names its own `guest-<sessionId>`. */
 export const issueSelfNamedGuestClaims = (claims: {
   userId: string;
   guestProof?: string;
-}): SelfNamedGuestClaims => selfNamedGuestClaimsSchema.parse(claims);
+}): IssuedClaims<SelfNamedGuestClaims> =>
+  issue(selfNamedGuestClaimsSchema.safeParse(claims));
 
 /** The part of any join token that says who it is for. */
 const joinTokenSubjectSchema = z.object({

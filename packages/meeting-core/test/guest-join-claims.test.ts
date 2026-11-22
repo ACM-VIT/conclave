@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   issueRoomScopedClaims,
+  issueSelfNamedGuestClaims,
   parseGuestJoinClaims,
   parseRoomScopedClaims,
   readJoinTokenSubject,
@@ -22,6 +23,12 @@ describe("a guest join token issued from a pass", () => {
       ...roomScoped,
       guestWas: [otherSeat],
     });
+  });
+
+  it("parses with a former seat for every other pass the join route reads", () => {
+    const guestWas = Array.from({ length: 15 }, () => otherSeat);
+
+    expect(parseRoomScopedClaims({ ...roomScoped, guestWas })?.guestWas).toHaveLength(15);
   });
 
   it("parses beside the rest of a join token, which it leaves out", () => {
@@ -56,28 +63,27 @@ describe("a guest join token issued from a pass", () => {
     ["one former seat that is not a list", { ...roomScoped, guestWas: otherSeat }],
     ["a former seat with another prefix", { ...roomScoped, guestWas: [{ ...otherSeat, userKey: "guest-tab-9" }] }],
     ["a former seat with no proof", { ...roomScoped, guestWas: [{ userKey: otherSeat.userKey }] }],
-    ["more former seats than a browser has passes", { ...roomScoped, guestWas: [otherSeat, otherSeat, otherSeat, otherSeat] }],
+    ["more former seats than the join route ever names", { ...roomScoped, guestWas: Array.from({ length: 16 }, () => otherSeat) }],
   ])("is refused with %s", (_label, claims) => {
     expect(parseGuestJoinClaims(claims)).toBeNull();
     expect(parseRoomScopedClaims(claims)).toBeNull();
   });
 
-  it("is not read as a token for any room when its room is missing or malformed", () => {
+  it("is refused when its room is missing or malformed, and is never read as a token for any room", () => {
     const { guestRoom: _room, ...noRoom } = roomScoped;
 
     expect(parseRoomScopedClaims(noRoom)).toBeNull();
-    expect(parseGuestJoinClaims(noRoom)).toEqual({
-      scope: "none",
-      userId: roomScoped.userId,
-      guestProof: roomScoped.guestProof,
-    });
+    expect(parseGuestJoinClaims(noRoom)).toBeNull();
     expect(parseGuestJoinClaims({ ...noRoom, guestRoom: null })).toBeNull();
+    expect(parseGuestJoinClaims({ userId: roomScoped.userId })).toBeNull();
   });
 
-  it("cannot be issued in a shape a reader would refuse", () => {
-    expect(issueRoomScopedClaims(roomScoped)).toEqual(roomScoped);
-    expect(() => issueRoomScopedClaims({ ...roomScoped, userId: "guest-tab-1" })).toThrow();
-    expect(() => issueRoomScopedClaims({ ...roomScoped, guestRoom: "" })).toThrow();
+  it("cannot be issued in a shape a reader would refuse, and says which claim is at fault", () => {
+    expect(issueRoomScopedClaims(roomScoped)).toEqual({ claims: roomScoped });
+    expect(issueRoomScopedClaims({ ...roomScoped, userId: "guest-tab-1" })).toEqual({ invalid: "userId" });
+    expect(issueRoomScopedClaims({ ...roomScoped, guestRoom: "" })).toEqual({ invalid: "guestRoom" });
+    expect(issueRoomScopedClaims({ ...roomScoped, guestRoom: "r".repeat(257) })).toEqual({ invalid: "guestRoom" });
+    expect(issueRoomScopedClaims({ ...roomScoped, clientId: "c".repeat(257) })).toEqual({ invalid: "clientId" });
   });
 });
 
@@ -102,8 +108,14 @@ describe("a guest join token for a client that names itself", () => {
     });
   });
 
+  it("cannot be issued under a seat key, which only a room-scoped token can name", () => {
+    expect(issueSelfNamedGuestClaims({ userId: "guest-tab-1" })).toEqual({ claims: { userId: "guest-tab-1" } });
+    expect(issueSelfNamedGuestClaims({ userId: "guest-gp_AAAAAAAAAAAAAAAAAAAAAA" })).toEqual({ invalid: "userId" });
+  });
+
   it.each([
     ["a user id that is not a guest's", { userId: "me@example.com" }],
+    ["an issued seat key as its user id", { userId: "guest-gp_AAAAAAAAAAAAAAAAAAAAAA", guestProof: "proof-of-a-pass" }],
     ["no user id", { guestProof: "proof-of-a-pass" }],
     ["a proof of the wrong type", { userId: "guest-tab-1", guestProof: 9 }],
   ])("is refused with %s", (_label, claims) => {

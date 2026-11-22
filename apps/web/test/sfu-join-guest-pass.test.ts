@@ -516,20 +516,103 @@ describe("a copy of a guest's join token in another browser", () => {
   });
 });
 
-describe("a browser that holds more passes than it could have been given", () => {
-  it("names at most three other seats in a token", async () => {
-    const tab = browser();
-    for (let extra = 0; extra < 6; extra += 1) {
+describe("a browser that was given several passes at once", () => {
+  // Pages that load together in a browser without Web Locks are each given a
+  // pass, and the browser keeps them all.
+  const withPasses = async (count: number) => {
+    const tabs = browser();
+    for (let given = 0; given < count; given += 1) {
       const answer = await askForPass(new Request("http://localhost/api/guest-pass", { method: "POST" }));
       const [pair] = answer.headers.getSetCookie()[0].split(";");
-      tab.jar.set(pair.slice(0, pair.indexOf("=")), pair.slice(pair.indexOf("=") + 1));
+      tabs.jar.set(pair.slice(0, pair.indexOf("=")), pair.slice(pair.indexOf("=") + 1));
     }
+    return tabs;
+  };
+  const passIdOf = (pass: string) => (jwt.decode(pass) as { gid: string }).gid;
 
-    const joined = await tab.join({ sessionId: "tab-1", guestId: "" });
+  it("names the seat a tab took under any one of them, wherever that pass sorts", async () => {
+    const tabs = await withPasses(5);
+    const lowest = tabs.passes().map(([, pass]) => passIdOf(pass)).sort()[0];
+    const seat = { sessionId: "tab-1", guestId: "", isHost: true };
 
-    expect(tab.passes()).toHaveLength(6);
-    expect(joined.claims!.guestWas).toHaveLength(3);
+    for (const [name, pass] of tabs.passes()) {
+      // This tab joined when only this one pass had arrived.
+      const early = browser();
+      early.jar.set(name, pass);
+      const first = await early.join(seat);
+
+      const later = await tabs.join(seat);
+
+      expect(later.body.guestId).toBe(lowest);
+      if (passIdOf(pass) === lowest) {
+        expect(later.claims!.userId).toBe(first.claims!.userId);
+      } else {
+        expect(later.claims!.guestWas).toContainEqual({
+          userKey: first.claims!.userId,
+          guestProof: first.claims!.guestProof,
+        });
+      }
+    }
+    expect((await tabs.join(seat)).claims!.guestWas).toHaveLength(4);
+  });
+
+  it("names the seat of the pass a tab joined under first, when it holds more than a token can name", async () => {
+    const warned = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const tabs = await withPasses(19);
+    const sorted = [...tabs.passes()].sort((a, b) => (passIdOf(a[1]) < passIdOf(b[1]) ? -1 : 1));
+    const [name, pass] = sorted.at(-1)!;
+    const early = browser();
+    early.jar.set(name, pass);
+    const seat = { sessionId: "tab-1", guestId: "", isHost: true };
+    const first = await early.join(seat);
+    const former = { userKey: first.claims!.userId, guestProof: first.claims!.guestProof };
+
+    const unaided = await tabs.join(seat);
+    const hinted = await tabs.join({ ...seat, guestJoinedAs: [first.body.guestId] });
+    const forged = await browser().join({ ...seat, guestJoinedAs: [first.body.guestId] });
+
+    expect(unaided.claims!.guestWas).not.toContainEqual(former);
+    expect(hinted.body.guestId).toBe(passIdOf(sorted[0][1]));
+    expect(hinted.claims!.guestWas).toHaveLength(15);
+    expect(hinted.claims!.guestWas).toContainEqual(former);
+    expect(forged.claims!.guestWas).toBeUndefined();
+    expect(warned).toHaveBeenCalledWith(expect.stringContaining("19 passes"));
+    warned.mockRestore();
+  });
+
+  it("goes by the lowest of them, and names the fifteen next, when it holds more than sixteen", async () => {
+    const tabs = await withPasses(19);
+    const ids = tabs.passes().map(([, pass]) => passIdOf(pass)).sort();
+
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const joined = await tabs.join({ sessionId: "tab-1", guestId: "" });
+    const again = await tabs.join({ sessionId: "tab-1", guestId: "" });
+    vi.restoreAllMocks();
+
+    expect(joined.body.guestId).toBe(ids[0]);
+    expect(joined.claims!.guestWas).toHaveLength(15);
+    expect(again.claims!.guestWas).toEqual(joined.claims!.guestWas);
     expect(joined.body.guestGrant).toBeUndefined();
+  });
+});
+
+describe("a join request with a value that cannot go into a token", () => {
+  it.each([
+    ["a room id that is too long", { roomId: "r".repeat(257) }, "Invalid room ID"],
+    ["a room id with a control character", { roomId: "room\u0007id" }, "Invalid room ID"],
+    ["a session id too long for a client that names itself", { sessionId: "s".repeat(400), guestId: undefined }, "Invalid session ID"],
+  ])("is answered with a 400 for %s", async (_label, body, error) => {
+    const attempt = await browser().join({ sessionId: "tab-1", guestId: "", ...body });
+
+    expect(attempt.status).toBe(400);
+    expect(attempt.body).toEqual({ error });
+  });
+
+  it("still joins a room id of the longest length a token takes", async () => {
+    const joined = await browser().join({ roomId: "r".repeat(256), sessionId: "tab-1", guestId: "" });
+
+    expect(joined.status).toBe(200);
+    expect(joined.claims!.guestRoom).toHaveLength(256);
   });
 });
 
