@@ -61,14 +61,20 @@ Returns the full runtime context:
 - `refreshState() => void`
 - `getDoc(appId) => Y.Doc`
 - `getAwareness(appId) => Awareness`
+- `presentedDoc`: `{ key: string, ready: boolean } | null` for the presented app's local document
 - `user`, `isAdmin`, `isReadOnly`
 
-### `presentedAppKey(state)`
+### Mounting the presented app
 
-A React key for the presented app's component. Render the app with
-`key={presentedAppKey(state)}`: when the room starts the presented app over on
-a new `docGeneration`, the provider drops its local document, and the key makes
-the app mount again on the new one instead of keeping the dropped one.
+Mount the presented app only when `presentedDoc.ready` is true, with
+`key={presentedDoc.key}`, and show a short loading state until then.
+
+- `ready` turns true once the room's first sync reply has filled the local
+  copy. Edits made before that would build a second document tree and could
+  hide the saved one for everyone.
+- `key` changes with every new local copy: a new `docGeneration`, a close and
+  present in one batch, or a new socket. The app then mounts again on the new
+  document instead of keeping the one the provider dropped.
 
 Ack behavior:
 

@@ -7,7 +7,6 @@ import type { Socket } from "socket.io-client";
 import {
   AppsContext,
   AppsProvider,
-  presentedAppKey,
 } from "../../../packages/apps-sdk/src/sdk/runtime/AppsProvider";
 import type { AppsContextValue } from "../../../packages/apps-sdk/src/sdk/types";
 import { useAppDoc } from "../../../packages/apps-sdk/src/sdk/hooks/useAppDoc";
@@ -67,11 +66,11 @@ function MountedWhiteboard() {
   return null;
 }
 
-// Mounts the whiteboard while it is presented, keyed as the meeting stage keys it.
+// Mounts the whiteboard once its document is ready, keyed as the meeting stage keys it.
 function Stage() {
-  const { state } = useContext(AppsContext)!;
-  return state.activeAppId === "whiteboard" ? (
-    <MountedWhiteboard key={presentedAppKey(state)} />
+  const { state, presentedDoc } = useContext(AppsContext)!;
+  return state.activeAppId === "whiteboard" && presentedDoc?.ready ? (
+    <MountedWhiteboard key={presentedDoc.key} />
   ) : null;
 }
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { memo, type ComponentType } from "react";
-import { LogOut } from "lucide-react";
+import { LoaderCircle, LogOut } from "lucide-react";
 import { useSmartParticipantOrder } from "../hooks/useSmartParticipantOrder";
 import type { Participant } from "../lib/types";
 import { isSystemUserId } from "../lib/utils";
@@ -10,8 +10,11 @@ import RailLocalTile from "./RailLocalTile";
 
 interface MeetingAppLayoutProps {
   app: ComponentType;
+  appName: string;
   /** Mounts the app again when it changes, as on a new document. */
   appKey: string;
+  /** False until the room has filled the app's document; the app waits. */
+  appReady: boolean;
   frameContent?: boolean;
   localStream: MediaStream | null;
   isCameraOff: boolean;
@@ -33,7 +36,9 @@ interface MeetingAppLayoutProps {
 
 function MeetingAppLayout({
   app: App,
+  appName,
   appKey,
+  appReady,
   frameContent = true,
   localStream,
   isCameraOff,
@@ -89,7 +94,17 @@ function MeetingAppLayout({
               : "min-h-0 min-w-0 flex-1 overflow-hidden"
           }
         >
-          <App key={appKey} />
+          {appReady ? (
+            <App key={appKey} />
+          ) : (
+            <div
+              role="status"
+              className="flex h-full min-h-0 w-full items-center justify-center gap-2 text-[13px] text-[#a1a1aa]"
+            >
+              <LoaderCircle size={15} strokeWidth={2} className="animate-spin" aria-hidden="true" />
+              Loading {appName}
+            </div>
+          )}
         </div>
       </div>
       <aside className="hidden lg:flex w-64 shrink-0 flex-col gap-3 overflow-y-auto overflow-x-visible px-1">

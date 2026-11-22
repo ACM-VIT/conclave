@@ -24,13 +24,10 @@ import type {
 
 export const AppsContext = createContext<AppsContextValue | null>(null);
 
-/**
- * A React key for the presented app's component. It changes when the room
- * presents another app or starts the presented one over, so the app mounts
- * again on its new document instead of keeping the one the provider dropped.
- */
-export const presentedAppKey = (state: AppsState): string =>
-  `${state.activeAppId ?? ""}:${state.docGeneration ?? ""}`;
+// Names a local copy of an app's document by how many copies of that app the
+// provider has dropped before it, so every new copy gets a new name.
+const localCopyKey = (appId: string, dropped: Readonly<Record<string, number>>): string =>
+  `${appId}:${dropped[appId] ?? 0}`;
 
 export type AppsProviderProps = {
   socket: Socket | null;
@@ -206,7 +203,21 @@ export function AppsProvider({
 
   const serverStateRef = useRef<AppsState>(EMPTY_APPS_STATE);
 
+  const [droppedCopies, setDroppedCopies] = useState<Readonly<Record<string, number>>>({});
+  const droppedCopiesRef = useRef<Readonly<Record<string, number>>>({});
+  // The local copy whose first sync reply has filled it from the room.
+  const [syncedCopy, setSyncedCopy] = useState<string | null>(null);
+
+  const noteDropped = useCallback((appIds: string[]) => {
+    if (appIds.length === 0) return;
+    const next = { ...droppedCopiesRef.current };
+    for (const appId of appIds) next[appId] = (next[appId] ?? 0) + 1;
+    droppedCopiesRef.current = next;
+    setDroppedCopies(next);
+  }, []);
+
   const resetLocalData = useCallback(() => {
+    noteDropped(Array.from(docsRef.current.keys()));
     for (const [appId, doc] of docsRef.current.entries()) {
       const handler = docHandlersRef.current.get(appId);
       if (handler) {
@@ -235,7 +246,8 @@ export function AppsProvider({
     initialUpdateSentRef.current.clear();
     serverStateRef.current = EMPTY_APPS_STATE;
     setState(EMPTY_APPS_STATE);
-  }, []);
+    setSyncedCopy(null);
+  }, [noteDropped]);
 
   useEffect(() => {
     if (socketRef.current !== socket) {
@@ -247,6 +259,7 @@ export function AppsProvider({
   const discardLocalApp = useCallback((appId: string) => {
     const doc = docsRef.current.get(appId);
     if (doc) {
+      noteDropped([appId]);
       const handler = docHandlersRef.current.get(appId);
       if (handler) doc.off("update", handler);
       try {
@@ -267,7 +280,7 @@ export function AppsProvider({
     awarenessHandlersRef.current.delete(appId);
     pendingInitialUpdatesRef.current.delete(appId);
     initialUpdateSentRef.current.delete(appId);
-  }, []);
+  }, [noteDropped]);
 
   // Only the presented app is live, and only from the moment it was
   // presented. Every other local copy is dropped, and an app entering the
@@ -389,8 +402,10 @@ export function AppsProvider({
     });
   }, [applyServerAppsState]);
 
+  // `copy` names the local copy this sync fills; once its reply is applied,
+  // and the copy is still the current one, the app may edit it.
   const syncApp = useCallback(
-    (appId: string) => {
+    (appId: string, copy: string) => {
       const currentSocket = socketRef.current;
       if (!currentSocket || !currentSocket.connected) return;
 
@@ -409,6 +424,13 @@ export function AppsProvider({
           Y.applyUpdate(doc, update, "remote");
         } catch (err) {
           console.warn("[Apps] Failed to apply sync update", err);
+          return;
+        }
+        if (
+          docsRef.current.get(appId) === doc &&
+          localCopyKey(appId, droppedCopiesRef.current) === copy
+        ) {
+          setSyncedCopy(copy);
         }
 
         if (response.awarenessUpdate) {
@@ -502,10 +524,21 @@ export function AppsProvider({
     };
   }, [socket]);
 
+  const presentedCopy =
+    state.activeAppId === null ? null : localCopyKey(state.activeAppId, droppedCopies);
+
   useEffect(() => {
-    if (!socket || !state.activeAppId) return;
-    syncApp(state.activeAppId);
-  }, [socket, state.activeAppId, state.docGeneration, syncApp]);
+    if (!socket || !state.activeAppId || !presentedCopy) return;
+    syncApp(state.activeAppId, presentedCopy);
+  }, [socket, state.activeAppId, presentedCopy, syncApp]);
+
+  const presentedDoc = useMemo(
+    () =>
+      presentedCopy === null
+        ? null
+        : { key: presentedCopy, ready: syncedCopy === presentedCopy },
+    [presentedCopy, syncedCopy],
+  );
 
   const sendStageCommand = useCallback(
     (event: string, payload: object | null): Promise<AppsCommandResult> => {
@@ -588,6 +621,7 @@ export function AppsProvider({
       refreshState,
       getDoc,
       getAwareness,
+      presentedDoc,
       user,
       participants: roster,
       isAdmin,
@@ -603,6 +637,7 @@ export function AppsProvider({
       refreshState,
       getDoc,
       getAwareness,
+      presentedDoc,
       user,
       roster,
       isAdmin,

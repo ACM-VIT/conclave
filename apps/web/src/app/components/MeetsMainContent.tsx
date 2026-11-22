@@ -88,7 +88,7 @@ import {
   isBrowserVideoUserId,
   isSystemUserId,
 } from "../lib/utils";
-import { presentedAppKey, useApps, useGame } from "@conclave/apps-sdk";
+import { useApps, useGame } from "@conclave/apps-sdk";
 import { GamePanel } from "./games/GamePanel";
 import { GamesPanel } from "./games/GamesPanel";
 import { AppsPanel } from "./apps/AppsPanel";
@@ -599,6 +599,7 @@ export default function MeetsMainContent({
 }: MeetsMainContentProps) {
   const {
     state: appsState,
+    presentedDoc,
     apps,
     presentApp,
     closeApp,
@@ -631,10 +632,11 @@ export default function MeetsMainContent({
   const isWhiteboardActive = appsState.activeAppId === "whiteboard";
   const isWatchActive = appsState.activeAppId === "watch";
   const isDevPlaygroundActive = appsState.activeAppId === "dev-playground";
-  const ActiveMeetingApp = useMemo(
-    () => apps.find((app) => app.id === appsState.activeAppId)?.web ?? null,
+  const activeMeetingApp = useMemo(
+    () => apps.find((app) => app.id === appsState.activeAppId) ?? null,
     [apps, appsState.activeAppId],
   );
+  const ActiveMeetingApp = activeMeetingApp?.web ?? null;
   const handleOpenWhiteboard = useCallback(
     () => presentApp("whiteboard"),
     [presentApp],
@@ -2349,7 +2351,9 @@ export default function MeetsMainContent({
         (!isDevPlaygroundActive || isDevPlaygroundEnabled) ? (
         <MeetingAppLayout
           app={ActiveMeetingApp}
-          appKey={presentedAppKey(appsState)}
+          appName={activeMeetingApp?.name ?? ""}
+          appKey={presentedDoc?.key ?? ""}
+          appReady={presentedDoc?.ready ?? false}
           frameContent={!isDevPlaygroundActive}
           leaveAction={isWatchActive ? watchLeaveAction : undefined}
           localStream={localStream}
