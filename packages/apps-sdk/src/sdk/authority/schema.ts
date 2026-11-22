@@ -67,6 +67,11 @@ type StringOptions = {
   collapse?: boolean;
   /** Cut a longer string to `max` and keep it. Without this it is refused. */
   truncate?: boolean;
+  /**
+   * What the whole string must match, tried after the length is settled so
+   * it only ever runs on a string of at most `max` characters.
+   */
+  pattern?: RegExp;
 };
 
 const string = (options: StringOptions): Schema<string> => ({
@@ -79,6 +84,9 @@ const string = (options: StringOptions): Schema<string> => ({
     }
     if (value.length < (options.min ?? 0)) {
       return fail(path, `shorter than ${options.min}`);
+    }
+    if (options.pattern && !options.pattern.test(value)) {
+      return fail(path, `does not match ${options.pattern.source}`);
     }
     return value;
   },

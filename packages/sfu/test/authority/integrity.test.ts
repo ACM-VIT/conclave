@@ -4,7 +4,15 @@
  * under rate pressure, hostile record keys, and views that outlive a grant.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { s, SchemaError, type Json } from "@conclave/apps-sdk/authority";
+import {
+  APP_ID_MAX_LENGTH,
+  appIdProblem,
+  appIdSchema,
+  defineContract,
+  s,
+  SchemaError,
+  type Json,
+} from "@conclave/apps-sdk/authority";
 import { key } from "@conclave/apps-sdk/authority/server";
 import { Client } from "../../config/classes/Client.js";
 import { DEFAULT_AUTHORITY_LIMITS } from "../../server/apps/authority/limits.js";
@@ -363,5 +371,36 @@ describe("schemas", () => {
     expect(note.parse({ id: "a", extra: true, text: undefined })).toEqual({ id: "a" });
     expect(() => note.parse({ id: "a", extra: true }, "strict")).toThrow(SchemaError);
     expect(() => note.parse({ id: 4 })).toThrow(SchemaError);
+  });
+
+  it("holds a string to its pattern, once its length is settled", () => {
+    const slug = s.string({ max: 8, pattern: /^[a-z]+$/ });
+    const cut = s.string({ max: 3, truncate: true, pattern: /^[a-z]+$/ });
+
+    expect(slug.parse("abc")).toBe("abc");
+    expect(() => slug.parse("Abc")).toThrow(/does not match/);
+    expect(() => slug.parse("abc1")).toThrow(SchemaError);
+    expect(() => slug.parse("a".repeat(9))).toThrow(/longer than 8/);
+    // What is matched is what is kept.
+    expect(cut.parse("abc9")).toBe("abc");
+  });
+
+  it("has one rule for an app id, and holds a contract to it", () => {
+    const contract = (id: string) =>
+      defineContract({ id, major: 1, surface: "panel", actions: {}, queries: {}, views: {} });
+    const longest = `a${"b".repeat(APP_ID_MAX_LENGTH - 1)}`;
+
+    expect(APP_ID_MAX_LENGTH).toBe(48);
+    expect(appIdSchema.parse(longest)).toBe(longest);
+    expect(appIdProblem(longest)).toBeNull();
+    expect(contract(longest).id).toBe(longest);
+    expect(appIdProblem(`${longest}b`)).toMatch(/^longer than 48\. /);
+    expect(() => contract(`${longest}b`)).toThrow(/Invalid authority app id .*: longer than 48/);
+    for (const id of ["", "3d", "Sign-Up", "sign_up", "sign up", "-sign"]) {
+      expect(appIdProblem(id), id).toMatch(/^does not match /);
+      expect(() => contract(id), id).toThrow(/Invalid authority app id/);
+    }
+    expect(appIdProblem(48)).toMatch(/^expected a string/);
+    expect(appIdProblem("sign-up-2")).toBeNull();
   });
 });
