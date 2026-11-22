@@ -1,5 +1,9 @@
+import { rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
+import { createAppDocumentEngine, type FromWorker } from "../server/apps/documents/engine.js";
 import {
   createAppDocumentPool,
   type AppDocumentPool,
@@ -9,6 +13,8 @@ import { edit, inAppRoom as inRoom } from "./fixtures/app-room.js";
 
 const STALLING_WORKER = new URL("./fixtures/stalling-app-document-worker.ts", import.meta.url);
 const SLOW_START_WORKER = new URL("./fixtures/slow-start-app-document-worker.ts", import.meta.url);
+const FAILING_WORKER = new URL("./fixtures/failing-app-document-worker.ts", import.meta.url);
+const CRASHED_ONCE_FLAG = join(tmpdir(), `conclave-app-document-crash-${process.pid}`);
 
 const pools: AppDocumentPool[] = [];
 const createPool = (options: Partial<AppDocumentPoolOptions> = {}): AppDocumentPool => {
@@ -24,8 +30,17 @@ const createPool = (options: Partial<AppDocumentPoolOptions> = {}): AppDocumentP
 
 afterEach(async () => {
   await Promise.all(pools.splice(0).map((pool) => pool.close()));
+  rmSync(CRASHED_ONCE_FLAG, { force: true });
   vi.restoreAllMocks();
 });
+
+const joinedText = async (document: { sync: (vector: Uint8Array) => Promise<{ ok: true; update: Uint8Array } | { ok: false; reason: string }> }) => {
+  const synced = await document.sync(Y.encodeStateVector(new Y.Doc()));
+  if (!synced.ok) throw new Error(synced.reason);
+  const joined = new Y.Doc();
+  Y.applyUpdate(joined, synced.update);
+  return joined.getText("t").toString();
+};
 
 const authors = () => {
   const author = new Y.Doc();
@@ -39,7 +54,52 @@ const authors = () => {
   };
 };
 
+describe("app document engine", () => {
+  it("yields the rest of a run once the run has used its time slice", () => {
+    let clock = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => (clock += 15));
+    const engine = createAppDocumentEngine({ maxDocumentBytes: 1024 * 1024 });
+    const author = new Y.Doc();
+    const operations = ["a", "b", "c"].map((word) => ({
+      kind: "apply" as const,
+      update: edit(author, (text) => text.insert(text.length, word)),
+    }));
+    const replies: FromWorker["type"][] = [];
+
+    engine.handle({ type: "run", document: 1, load: { base: null, tail: [] }, operations }, (reply) => {
+      replies.push(reply.type);
+    });
+
+    expect(replies).toEqual(["loaded", "applied", "yielded"]);
+  });
+});
+
 describe("app documents", () => {
+  it("keeps a document a late joiner can load when an update unlocks pending edits", async () => {
+    const room = inRoom(createPool({ maxDocumentBytes: 10_000 }), "pending");
+    await room.open();
+    const first = new Y.Doc();
+    first.clientID = 1;
+    const second = new Y.Doc();
+    second.clientID = 2;
+    const base = edit(first, (text) => text.insert(0, "x".repeat(5000)));
+    const unlock = edit(first, (text) => text.insert(5000, "y"));
+    Y.applyUpdate(second, base);
+    Y.applyUpdate(second, unlock);
+    const inserts = edit(second, (text) => {
+      text.insert(5001, "z");
+      for (let index = 4990; index > 0; index -= 12) text.insert(index, "b");
+    });
+
+    room.send(base);
+    room.send(inserts);
+    room.send(unlock);
+
+    expect((await room.joinDocument()).encodedBytes).toBeLessThanOrEqual(10_000);
+    expect(room.relayed).toEqual([base, inserts]);
+  });
+
+
   it("gives a late joiner every accepted update and relays each one in order", async () => {
     const room = inRoom(createPool(), "order");
     await room.open();
@@ -81,6 +141,20 @@ describe("app documents", () => {
 
     room.send(hello);
     room.send(stalled);
+    room.send(next);
+
+    expect(await room.join()).toBe("hello world");
+    expect(room.relayed).toEqual([hello, next]);
+  });
+
+  it("refuses an update the worker finished only after its deadline", async () => {
+    const room = inRoom(createPool({ workerUrl: STALLING_WORKER }), "late");
+    await room.open();
+    const { hello, fromOther, world } = authors();
+    const next = world();
+
+    room.send(hello);
+    room.send(fromOther("LATE"));
     room.send(next);
 
     expect(await room.join()).toBe("hello world");
@@ -155,6 +229,53 @@ describe("app documents", () => {
     const joined = new Y.Doc();
     Y.applyUpdate(joined, synced.update);
     expect(joined.getText("t").toString()).toBe("hello");
+  });
+
+  it("refuses every queued update when the worker cannot start", async () => {
+    const pool = createPool({ workerUrl: FAILING_WORKER });
+    const document = pool.open();
+    const { hello, fromOther } = authors();
+
+    const results = await Promise.all([document.apply(hello), document.apply(fromOther("x"))]);
+
+    expect(results).toEqual([
+      { ok: false, reason: "crashed" },
+      { ok: false, reason: "crashed" },
+    ]);
+  });
+
+  it("rebuilds a document again when its worker dies while rebuilding it", async () => {
+    const pool = createPool({ deadlineMs: 300, workerUrl: STALLING_WORKER });
+    const fragile = pool.open();
+    const other = pool.open();
+    const { hello, fromOther } = authors();
+    const notes = new Y.Doc();
+    expect(await fragile.apply(edit(notes, (text) => text.insert(0, "CRASH-LOAD")))).toEqual({ ok: true });
+    expect(await other.apply(hello)).toEqual({ ok: true });
+    expect(await other.apply(fromOther("STALL"))).toEqual({ ok: false, reason: "timed-out" });
+
+    expect(await fragile.apply(edit(notes, (text) => text.insert(10, " kept")))).toEqual({ ok: true });
+    expect(await joinedText(fragile)).toBe("CRASH-LOAD kept");
+  });
+
+  it("lets another document go first when a run yields", async () => {
+    const pool = createPool({ workerUrl: STALLING_WORKER });
+    const blocker = pool.open();
+    const yielding = pool.open();
+    const waiting = pool.open();
+    const { fromOther } = authors();
+    const order: string[] = [];
+    const track = (name: string, result: Promise<unknown>) => result.then(() => order.push(name));
+    const blocked = track("pause", blocker.apply(fromOther("PAUSE")));
+    const settled = [
+      track("yield", yielding.apply(fromOther("YIELD"))),
+      track("after yield", yielding.apply(fromOther("y"))),
+      track("other", waiting.apply(fromOther("o"))),
+    ];
+
+    await Promise.all([blocked, ...settled]);
+
+    expect(order).toEqual(["pause", "yield", "other", "after yield"]);
   });
 
   it("refuses a flood instead of queueing it", async () => {

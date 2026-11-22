@@ -1,3 +1,6 @@
+import { existsSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { parentPort, workerData } from "node:worker_threads";
 import {
   createAppDocumentEngine,
@@ -6,6 +9,8 @@ import {
   type Snapshot,
   type ToWorker,
 } from "#app-documents/engine";
+
+const crashedOnceFlag = join(tmpdir(), `conclave-app-document-crash-${process.pid}`);
 
 const port = parentPort!;
 const engine = createAppDocumentEngine(workerData as EngineOptions);
@@ -27,17 +32,27 @@ port.on("message", (message: ToWorker) => {
     return;
   }
   if (loads(message.load, "SLOW-LOAD")) Atomics.wait(forever, 0, 0);
+  if (loads(message.load, "CRASH-LOAD") && !existsSync(crashedOnceFlag)) {
+    writeFileSync(crashedOnceFlag, "");
+    process.exit(1);
+  }
   let load = message.load;
-  for (const operation of message.operations) {
-    if (operation.kind === "apply" && holds(operation.update, "STALL")) Atomics.wait(forever, 0, 0);
-    if (operation.kind === "apply" && holds(operation.update, "CRASH")) process.exit(1);
-    if (operation.kind === "apply" && holds(operation.update, "PAUSE")) Atomics.wait(forever, 0, 0, 300);
+  for (const [index, operation] of message.operations.entries()) {
+    const update = operation.kind === "apply" ? operation.update : null;
+    if (holds(update, "STALL")) Atomics.wait(forever, 0, 0);
+    if (holds(update, "CRASH") && !holds(update, "CRASH-LOAD")) process.exit(1);
+    if (holds(update, "PAUSE")) Atomics.wait(forever, 0, 0, 300);
     let evicted = false;
     engine.handle({ ...message, load, operations: [operation] }, (reply, transfer) => {
       if (reply.type === "refused" && reply.evicted) evicted = true;
-      post(reply, transfer);
+      const late = holds(update, "LATE") && reply.type !== "loaded" && "elapsedMs" in reply;
+      post(late ? { ...reply, elapsedMs: Number.MAX_SAFE_INTEGER } : reply, transfer);
     });
     load = null;
     if (evicted) return;
+    if (holds(update, "YIELD") && index < message.operations.length - 1) {
+      post({ type: "yielded" }, []);
+      return;
+    }
   }
 });

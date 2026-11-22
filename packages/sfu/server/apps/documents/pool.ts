@@ -44,9 +44,10 @@ export type AppDocumentPoolOptions = {
   workerUrl?: URL;
 };
 
-type Job =
+type Job = { bytes: number } & (
   | { kind: "apply"; update: Uint8Array; settle: (result: ApplyResult) => void }
-  | { kind: "sync"; stateVector: Uint8Array; settle: (result: SyncResult) => void };
+  | { kind: "sync"; stateVector: Uint8Array; settle: (result: SyncResult) => void }
+);
 
 type Entry = {
   id: number;
@@ -56,6 +57,7 @@ type Entry = {
   waiting: Job[];
   queued: Bound;
   loadedIn: number;
+  loadFailures: number;
   status: "open" | "broken" | "closed";
   ready: boolean;
 };
@@ -80,10 +82,8 @@ type Slot = {
 
 const JOBS_PER_RUN = 64;
 const LOAD_DEADLINE_FACTOR = 4;
+const LOAD_ATTEMPTS = 3;
 const BOOT_DEADLINE_MS = 10_000;
-
-const bytesOf = (job: Job): number =>
-  job.kind === "apply" ? job.update.length : job.stateVector.length;
 
 const operationOf = (job: Job): Operation =>
   job.kind === "apply"
@@ -97,6 +97,7 @@ export const createAppDocumentPool = ({
   limits = DEFAULT_QUEUE_LIMITS,
   workerUrl = new URL("./worker.ts", import.meta.url),
 }: AppDocumentPoolOptions): AppDocumentPool => {
+  const loadDeadlineMs = deadlineMs * LOAD_DEADLINE_FACTOR;
   const slots: Slot[] = Array.from({ length: workers }, () => ({
     worker: null,
     booted: false,
@@ -105,18 +106,20 @@ export const createAppDocumentPool = ({
     ready: [],
     run: null,
   }));
+  const entries = new Set<Entry>();
+  const terminating = new Set<Promise<number>>();
   const total: Bound = { jobs: 0, bytes: 0 };
   let nextId = 1;
   let closed = false;
+  let closing: Promise<void> | null = null;
 
   const refuse = (job: Job, reason: Refusal): void => job.settle({ ok: false, reason });
 
   const release = (entry: Entry, job: Job): void => {
-    const bytes = bytesOf(job);
     entry.queued.jobs -= 1;
-    entry.queued.bytes -= bytes;
+    entry.queued.bytes -= job.bytes;
     total.jobs -= 1;
-    total.bytes -= bytes;
+    total.bytes -= job.bytes;
   };
 
   const drop = (entry: Entry, jobs: Job[], reason: Refusal): void => {
@@ -149,11 +152,26 @@ export const createAppDocumentPool = ({
     run.timer = setTimeout(() => fail(slot, "timed-out"), ms);
   };
 
+  const startClock = (slot: Slot, run: Run): void =>
+    arm(slot, run, run.loading ? loadDeadlineMs : deadlineMs);
+
   const finish = (slot: Slot, run: Run): void => {
     clearTimeout(run.timer);
     slot.run = null;
     markReady(run.entry);
     pump(slot);
+  };
+
+  const retire = (slot: Slot): void => {
+    const { worker } = slot;
+    slot.worker = null;
+    slot.booted = false;
+    clearTimeout(slot.bootTimer);
+    slot.generation += 1;
+    if (!worker) return;
+    const stopped = worker.terminate();
+    terminating.add(stopped);
+    void stopped.finally(() => terminating.delete(stopped));
   };
 
   const settle = (entry: Entry, job: Job, reply: FromWorker): void => {
@@ -183,9 +201,6 @@ export const createAppDocumentPool = ({
     refuse(job, "crashed");
   };
 
-  const startClock = (slot: Slot, run: Run): void =>
-    arm(slot, run, run.loading ? deadlineMs * LOAD_DEADLINE_FACTOR : deadlineMs);
-
   const receive = (slot: Slot, reply: FromWorker): void => {
     if (reply.type === "ready") {
       slot.booted = true;
@@ -195,12 +210,22 @@ export const createAppDocumentPool = ({
     }
     const run = slot.run;
     if (!run) return;
+    const { entry } = run;
+    if (reply.type === "yielded") {
+      requeue(entry, run.jobs.slice(run.next));
+      finish(slot, run);
+      return;
+    }
+    if (reply.elapsedMs > (run.loading ? loadDeadlineMs : deadlineMs)) {
+      fail(slot, "timed-out");
+      return;
+    }
     if (reply.type === "loaded") {
       run.loading = false;
+      entry.loadFailures = 0;
       arm(slot, run, deadlineMs);
       return;
     }
-    const { entry } = run;
     const job = run.jobs[run.next];
     run.next += 1;
     release(entry, job);
@@ -218,45 +243,54 @@ export const createAppDocumentPool = ({
     arm(slot, run, deadlineMs);
   };
 
-  const fail = (slot: Slot, reason: "timed-out" | "crashed"): void => {
-    const { worker, booted } = slot;
-    slot.worker = null;
-    slot.booted = false;
-    clearTimeout(slot.bootTimer);
-    slot.generation += 1;
-    void worker?.terminate();
-    const run = slot.run;
-    slot.run = null;
-    if (run) {
-      clearTimeout(run.timer);
-      const { entry } = run;
-      const remaining = run.jobs.slice(run.next);
-      if (!booted) {
-        Logger.error("[Apps] App document worker did not start");
-        drop(entry, remaining, refusalFor(entry, "crashed"));
-      } else if (run.loading && entry.status === "open") {
+  const failRun = (run: Run, booted: boolean, reason: "timed-out" | "crashed"): void => {
+    clearTimeout(run.timer);
+    const { entry } = run;
+    const remaining = run.jobs.slice(run.next);
+    if (!booted) {
+      Logger.error("[Apps] App document worker did not start");
+      drop(entry, remaining, refusalFor(entry, "crashed"));
+    } else if (run.loading) {
+      entry.loadFailures += 1;
+      if (entry.status === "open" && entry.loadFailures >= LOAD_ATTEMPTS) {
         Logger.error(
-          `[Apps] App document ${entry.id} could not be rebuilt within ${deadlineMs * LOAD_DEADLINE_FACTOR} ms; refusing it until the app is reopened`,
+          `[Apps] App document ${entry.id} could not be rebuilt in ${LOAD_ATTEMPTS} attempts; refusing it until the app is reopened`,
         );
         entry.status = "broken";
         drop(entry, [...remaining, ...entry.waiting], "unavailable");
         entry.waiting = [];
       } else {
-        drop(entry, remaining.slice(0, 1), refusalFor(entry, reason));
-        requeue(entry, remaining.slice(1));
-        markReady(entry);
+        requeue(entry, remaining);
       }
+    } else {
+      drop(entry, remaining.slice(0, 1), refusalFor(entry, reason));
+      requeue(entry, remaining.slice(1));
     }
-    if (booted && slot.documents > 0 && !closed) spawn(slot);
+    markReady(entry);
+  };
+
+  const fail = (slot: Slot, reason: "timed-out" | "crashed"): void => {
+    const { booted, run } = slot;
+    retire(slot);
+    slot.run = null;
+    if (run) failRun(run, booted, reason);
+    if (closed) return;
+    if (!booted) {
+      setImmediate(() => pump(slot));
+      return;
+    }
+    if (slot.documents > 0) start(slot);
     pump(slot);
   };
 
-  const spawn = (slot: Slot): Worker => {
-    const worker = new Worker(workerUrl, { workerData: { maxDocumentBytes } });
-    worker.unref();
-    slot.bootTimer = setTimeout(() => {
-      if (slot.worker === worker) fail(slot, "crashed");
-    }, BOOT_DEADLINE_MS);
+  const start = (slot: Slot): Worker | null => {
+    let worker: Worker;
+    try {
+      worker = new Worker(workerUrl, { workerData: { maxDocumentBytes } });
+    } catch (error) {
+      Logger.error("[Apps] Could not start an app document worker", error);
+      return null;
+    }
     worker.on("message", (reply: FromWorker) => {
       if (slot.worker === worker) receive(slot, reply);
     });
@@ -268,7 +302,11 @@ export const createAppDocumentPool = ({
     worker.on("exit", () => {
       if (slot.worker === worker) fail(slot, "crashed");
     });
+    worker.unref();
     slot.worker = worker;
+    slot.bootTimer = setTimeout(() => {
+      if (slot.worker === worker) fail(slot, "crashed");
+    }, BOOT_DEADLINE_MS);
     return worker;
   };
 
@@ -278,7 +316,6 @@ export const createAppDocumentPool = ({
     if (!entry) return;
     entry.ready = false;
     const jobs = entry.waiting.splice(0, JOBS_PER_RUN);
-    const worker = slot.worker ?? spawn(slot);
     const cold = entry.loadedIn !== slot.generation;
     const message: ToWorker = {
       type: "run",
@@ -286,9 +323,14 @@ export const createAppDocumentPool = ({
       load: cold ? { base: entry.base, tail: entry.tail } : null,
       operations: jobs.map(operationOf),
     };
-    entry.loadedIn = slot.generation;
     const run: Run = { entry, jobs, next: 0, loading: cold };
     slot.run = run;
+    const worker = slot.worker ?? start(slot);
+    if (!worker) {
+      fail(slot, "crashed");
+      return;
+    }
+    entry.loadedIn = slot.generation;
     if (slot.booted) startClock(slot, run);
     worker.postMessage(message);
   };
@@ -302,20 +344,19 @@ export const createAppDocumentPool = ({
       refuse(job, "unavailable");
       return;
     }
-    const bytes = bytesOf(job);
     if (
       entry.queued.jobs + 1 > limits.document.jobs ||
-      entry.queued.bytes + bytes > limits.document.bytes ||
+      entry.queued.bytes + job.bytes > limits.document.bytes ||
       total.jobs + 1 > limits.total.jobs ||
-      total.bytes + bytes > limits.total.bytes
+      total.bytes + job.bytes > limits.total.bytes
     ) {
       refuse(job, "queue-full");
       return;
     }
     entry.queued.jobs += 1;
-    entry.queued.bytes += bytes;
+    entry.queued.bytes += job.bytes;
     total.jobs += 1;
-    total.bytes += bytes;
+    total.bytes += job.bytes;
     entry.waiting.push(job);
     markReady(entry);
     pump(entry.slot);
@@ -326,6 +367,7 @@ export const createAppDocumentPool = ({
     const { slot } = entry;
     const loaded = entry.loadedIn === slot.generation;
     entry.status = "closed";
+    entries.delete(entry);
     slot.documents -= 1;
     if (entry.ready) slot.ready.splice(slot.ready.indexOf(entry), 1);
     entry.ready = false;
@@ -341,7 +383,7 @@ export const createAppDocumentPool = ({
       candidate.documents < least.documents ? candidate : least,
     );
     slot.documents += 1;
-    if (!slot.worker && !closed) spawn(slot);
+    if (!slot.worker && !closed) start(slot);
     const entry: Entry = {
       id: nextId++,
       slot,
@@ -350,39 +392,47 @@ export const createAppDocumentPool = ({
       waiting: [],
       queued: { jobs: 0, bytes: 0 },
       loadedIn: -1,
+      loadFailures: 0,
       status: "open",
       ready: false,
     };
+    entries.add(entry);
     return {
-      apply: (update) =>
-        new Promise((settle) => enqueue(entry, { kind: "apply", update, settle })),
-      sync: (stateVector) =>
-        new Promise((settle) => enqueue(entry, { kind: "sync", stateVector, settle })),
+      apply: (update) => {
+        const owned = update.slice();
+        return new Promise((settle) =>
+          enqueue(entry, { kind: "apply", update: owned, bytes: owned.length, settle }),
+        );
+      },
+      sync: (stateVector) => {
+        const owned = stateVector.slice();
+        return new Promise((settle) =>
+          enqueue(entry, { kind: "sync", stateVector: owned, bytes: owned.length, settle }),
+        );
+      },
       close: () => closeEntry(entry),
     };
   };
 
-  const close = async (): Promise<void> => {
+  const shutDown = async (): Promise<void> => {
     closed = true;
-    const stopping = slots.flatMap((slot) => {
-      const { run, worker } = slot;
+    for (const slot of slots) {
+      const { run } = slot;
       slot.run = null;
-      slot.worker = null;
-      clearTimeout(slot.bootTimer);
       if (run) {
         clearTimeout(run.timer);
         drop(run.entry, run.jobs.slice(run.next), "closed");
       }
-      for (const entry of [...slot.ready, ...(run ? [run.entry] : [])]) {
-        drop(entry, entry.waiting, "closed");
-        entry.waiting = [];
-        entry.ready = false;
-      }
       slot.ready = [];
-      return worker ? [worker.terminate()] : [];
-    });
-    await Promise.all(stopping);
+      retire(slot);
+    }
+    for (const entry of entries) {
+      drop(entry, entry.waiting, "closed");
+      entry.waiting = [];
+      entry.ready = false;
+    }
+    await Promise.all(terminating);
   };
 
-  return { open, close };
+  return { open, close: () => (closing ??= shutDown()) };
 };

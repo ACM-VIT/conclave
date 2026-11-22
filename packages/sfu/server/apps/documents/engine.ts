@@ -11,12 +11,16 @@ export type ToWorker =
   | { type: "run"; document: number; load: Snapshot | null; operations: Operation[] }
   | { type: "drop"; document: number };
 
-export type FromWorker =
-  | { type: "ready" }
-  | { type: "loaded" }
+type Answer =
   | { type: "applied"; compacted: Uint8Array | null }
   | { type: "synced"; update: Uint8Array; stateVector: Uint8Array }
   | { type: "refused"; reason: "too-large" | "invalid"; evicted: boolean };
+
+export type FromWorker =
+  | { type: "ready" }
+  | { type: "yielded" }
+  | { type: "loaded"; elapsedMs: number }
+  | (Answer & { elapsedMs: number });
 
 export type EngineOptions = { maxDocumentBytes: number };
 
@@ -33,8 +37,12 @@ type Loaded = {
 const GROWTH_MARGIN = 16;
 const COMPACT_AFTER_BYTES = 256 * 1024;
 const COMPACT_AFTER_MS = 50;
+const RUN_SLICE_MS = 20;
 
 const transferable = (bytes: Uint8Array): ArrayBuffer => bytes.buffer as ArrayBuffer;
+
+const hasPending = (doc: Y.Doc): boolean =>
+  doc.store.pendingStructs !== null || doc.store.pendingDs !== null;
 
 export const createAppDocumentEngine = ({ maxDocumentBytes }: EngineOptions) => {
   const documents = new Map<number, Loaded>();
@@ -65,55 +73,51 @@ export const createAppDocumentEngine = ({ maxDocumentBytes }: EngineOptions) => 
     return loaded;
   };
 
-  const apply = (id: number, loaded: Loaded, update: Uint8Array, post: Post): boolean => {
+  const apply = (id: number, loaded: Loaded, update: Uint8Array): [Answer, ArrayBuffer[]] => {
+    const unlocksPending = hasPending(loaded.doc);
     const started = performance.now();
     try {
       Y.applyUpdate(loaded.doc, update);
     } catch {
       evict(id);
-      post({ type: "refused", reason: "invalid", evicted: true }, []);
-      return false;
+      return [{ type: "refused", reason: "invalid", evicted: true }, []];
     }
     loaded.uncompactedMs += performance.now() - started;
     loaded.uncompactedBytes += update.length;
     const growth = update.length * GROWTH_MARGIN;
     if (
+      !unlocksPending &&
       loaded.measuredBytes + loaded.estimatedGrowth + growth <= maxDocumentBytes &&
       loaded.uncompactedBytes < COMPACT_AFTER_BYTES &&
       loaded.uncompactedMs < COMPACT_AFTER_MS
     ) {
       loaded.estimatedGrowth += growth;
-      post({ type: "applied", compacted: null }, []);
-      return true;
+      return [{ type: "applied", compacted: null }, []];
     }
     const state = Y.encodeStateAsUpdate(loaded.doc);
     if (state.length > maxDocumentBytes) {
       evict(id);
-      post({ type: "refused", reason: "too-large", evicted: true }, []);
-      return false;
+      return [{ type: "refused", reason: "too-large", evicted: true }, []];
     }
     loaded.measuredBytes = state.length;
     loaded.estimatedGrowth = 0;
     loaded.uncompactedBytes = 0;
     loaded.uncompactedMs = 0;
-    post({ type: "applied", compacted: state }, [transferable(state)]);
-    return true;
+    return [{ type: "applied", compacted: state }, [transferable(state)]];
   };
 
-  const sync = (loaded: Loaded, stateVector: Uint8Array, post: Post): void => {
+  const sync = (loaded: Loaded, stateVector: Uint8Array): [Answer, ArrayBuffer[]] => {
     let update: Uint8Array;
     try {
       update = Y.encodeStateAsUpdate(loaded.doc, stateVector);
     } catch {
-      post({ type: "refused", reason: "invalid", evicted: false }, []);
-      return;
+      return [{ type: "refused", reason: "invalid", evicted: false }, []];
     }
     if (update.length > maxDocumentBytes) {
-      post({ type: "refused", reason: "too-large", evicted: false }, []);
-      return;
+      return [{ type: "refused", reason: "too-large", evicted: false }, []];
     }
     const vector = Y.encodeStateVector(loaded.doc);
-    post({ type: "synced", update, stateVector: vector }, [transferable(update), transferable(vector)]);
+    return [{ type: "synced", update, stateVector: vector }, [transferable(update), transferable(vector)]];
   };
 
   const handle = (message: ToWorker, post: Post): void => {
@@ -121,16 +125,25 @@ export const createAppDocumentEngine = ({ maxDocumentBytes }: EngineOptions) => 
       evict(message.document);
       return;
     }
+    const runStarted = performance.now();
     let loaded = documents.get(message.document);
     if (message.load) {
       loaded = load(message.document, message.load);
-      post({ type: "loaded" }, []);
+      post({ type: "loaded", elapsedMs: performance.now() - runStarted }, []);
     }
     if (!loaded) throw new Error(`App document ${message.document} is not loaded`);
-    for (const operation of message.operations) {
-      if (operation.kind === "sync") {
-        sync(loaded, operation.stateVector, post);
-      } else if (!apply(message.document, loaded, operation.update, post)) {
+    const { operations } = message;
+    for (let index = 0; index < operations.length; index += 1) {
+      const operation = operations[index];
+      const started = performance.now();
+      const [answer, transfer] =
+        operation.kind === "sync"
+          ? sync(loaded, operation.stateVector)
+          : apply(message.document, loaded, operation.update);
+      post({ ...answer, elapsedMs: performance.now() - started }, transfer);
+      if (answer.type === "refused" && answer.evicted) return;
+      if (index < operations.length - 1 && performance.now() - runStarted >= RUN_SLICE_MS) {
+        post({ type: "yielded" }, []);
         return;
       }
     }
