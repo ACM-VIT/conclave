@@ -144,6 +144,50 @@ describe("attribution and asset paths", () => {
   });
 });
 
+describe("referrer keywords, nested values and other origins", () => {
+  it("drops search keywords the SDK takes from a search-engine referrer", () => {
+    const event = exceptionEvent();
+    Object.assign(event.properties, {
+      $referrer: "https://www.google.com/search?q=Meet+Sylvia+in+hazel-lime-pine",
+      $search_engine: "google",
+      ph_keyword: "Meet Sylvia in hazel-lime-pine",
+      $session_entry_ph_keyword: "Meet Sylvia in hazel-lime-pine",
+    });
+    event.$set_once = { $initial_ph_keyword: "Meet Sylvia in hazel-lime-pine" };
+    const scrubbed = scrubTelemetryEvent(event);
+
+    expect(JSON.stringify(scrubbed)).not.toMatch(/Sylvia|hazel|ph_keyword/);
+    expect(scrubbed.properties.$search_engine).toBe("google");
+    expect(scrubbed.properties.$referrer).toBe("https://www.google.com/[code]");
+  });
+
+  it("drops nested values such as a seeded super property", () => {
+    const event = exceptionEvent();
+    Object.assign(event.properties, {
+      room: { id: "hazel-lime-pine", chat: "see you at five" },
+      recent: ["hazel-lime-pine"],
+    });
+    event.$set = { profile: { note: "see you at five" } };
+    const scrubbed = scrubTelemetryEvent(event);
+
+    expect(JSON.stringify(scrubbed)).not.toMatch(/hazel|see you/);
+    expect(scrubbed.properties.$exception_list).toHaveLength(1);
+  });
+
+  it("keeps an asset path only for frames served from the page's own origin", () => {
+    const event = exceptionEvent();
+    const frames = event.properties.$exception_list[0].stacktrace.frames;
+    frames[0].filename = "https://cdn.example.net/mediapipe/alice@example.com.js";
+    frames[1].filename = "https://conclave.acmvit.in/mediapipe/vision_bundle.js";
+    const scrubbed = scrubTelemetryEvent(event);
+
+    const [other, own] = scrubbed.properties.$exception_list[0].stacktrace.frames;
+    expect(other.filename).toBe("https://cdn.example.net/[path]");
+    expect(own.filename).toBe("https://conclave.acmvit.in/mediapipe/vision_bundle.js");
+    expect(JSON.stringify(scrubbed)).not.toMatch(/alice/);
+  });
+});
+
 describe("server text", () => {
   it("drops the message of an error the server wrote", () => {
     const event = exceptionEvent();

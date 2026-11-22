@@ -104,10 +104,13 @@ and reconnect failures carry a `failure_reason` category, never the error text.
 property and stack frame URL to its route (`/[code]`, `/w/[code]`), drops query
 strings, hashes, the page title and any `roomId` or `userId` property, and
 replaces emails and tokens in free text. It also drops campaign and click-id
-properties (`utm_*`, `fbclid`, `gclid` and friends) with the SDK's `$initial_`
-and `$session_entry_` copies, and `save_campaign_params` is off.
+properties (`utm_*`, `fbclid`, `gclid` and friends) and the search keywords the
+SDK takes from a search-engine referrer (`ph_keyword`), with their `$initial_`
+and `$session_entry_` copies, and `save_campaign_params` is off. `$search_engine`
+stays. Any object or array property other than `$exception_list` is dropped.
 Stack frames in our script folders (`/_next/static/`, `/mediapipe/` and so on)
-keep their path so they can be symbolicated. URL properties never do.
+on the page's own origin keep their path so they can be symbolicated. URL
+properties never do.
 Session replay, surveys, DOM autocapture, feature flags and pageviews are off,
 and no user is ever identified. The SFU scrubs emails and tokens from exception
 messages and cuts every URL to its origin and route (`/[code]`, `/w/[code]`,

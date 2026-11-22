@@ -9,10 +9,14 @@ const STATIC_PAGES = new Set([
 ]);
 // Room codes let anyone join, and user ids can embed an email.
 const DROPPED_PROPERTIES = new Set(["$title", "roomId", "userId"]);
-// Campaign and click-id parameters, plus the SDK's $initial_ and
-// $session_entry_ copies. They can carry emails and ad ids.
+// Campaign and click-id parameters and the search keywords the SDK pulls out
+// of a search-engine referrer, plus their $initial_ and $session_entry_
+// copies. They can carry emails, ad ids and whatever someone searched for.
 const ATTRIBUTION_PROPERTY =
-  /^(?:\$initial_|\$session_entry_)?(?:utm_\w+|gad_source|mc_cid|gclsrc|gbraid|wbraid|msclkid|li_fat_id|igshid|rdt_cid|epik|sccid|oppref|bfcid|_kx|\w*clid|\$fb[cp])$/;
+  /^(?:\$initial_|\$session_entry_)?(?:utm_\w+|gad_source|mc_cid|gclsrc|gbraid|wbraid|msclkid|li_fat_id|igshid|rdt_cid|epik|sccid|oppref|bfcid|_kx|\w*clid|\$fb[cp]|ph_keyword)$/;
+// The one structured property PostHog needs; any other object or array is
+// dropped, such as a super property someone seeded into storage.
+const STRUCTURED_PROPERTIES = new Set(["$exception_list"]);
 // Values we set or the SDK needs as-is: the project key in `token` must
 // survive for ingestion, and `client_version` is a git sha, not a secret.
 const TRUSTED_PROPERTIES = new Set(["token", "distinct_id", "client_version"]);
@@ -82,11 +86,21 @@ type ExceptionEntry = {
   stacktrace?: { frames?: ExceptionFrame[] } & Record<string, unknown>;
 } & Record<string, unknown>;
 
-const scrubFrameUrl = (value: string): string => {
+const originOf = (value: unknown): string | null => {
+  if (typeof value !== "string") return null;
+  try {
+    return new URL(value).origin;
+  } catch {
+    return null;
+  }
+};
+
+const scrubFrameUrl = (value: string, pageOrigin: string | null): string => {
   try {
     const url = new URL(value);
     const ownScript =
       (url.protocol === "http:" || url.protocol === "https:") &&
+      url.origin === pageOrigin &&
       ASSET_PATH_PREFIXES.some((prefix) => url.pathname.startsWith(prefix));
     if (ownScript) return `${url.origin}${url.pathname}`;
   } catch {
@@ -94,11 +108,11 @@ const scrubFrameUrl = (value: string): string => {
   return scrubUrl(value);
 };
 
-const scrubFrame = (frame: ExceptionFrame): ExceptionFrame => {
+const scrubFrame = (frame: ExceptionFrame, pageOrigin: string | null): ExceptionFrame => {
   const next = { ...frame };
   for (const key of ["filename", "abs_path"]) {
     const value = next[key];
-    if (typeof value === "string") next[key] = scrubFrameUrl(value);
+    if (typeof value === "string") next[key] = scrubFrameUrl(value, pageOrigin);
   }
   return next;
 };
@@ -111,26 +125,33 @@ const scrubExceptionValue = (entry: ExceptionEntry): unknown => {
   return typeof entry.value === "string" ? scrubText(entry.value) : entry.value;
 };
 
-const scrubExceptionEntry = (entry: ExceptionEntry): ExceptionEntry => ({
+const scrubExceptionEntry = (
+  entry: ExceptionEntry,
+  pageOrigin: string | null,
+): ExceptionEntry => ({
   ...entry,
   value: scrubExceptionValue(entry),
   ...(entry.stacktrace && Array.isArray(entry.stacktrace.frames)
     ? {
         stacktrace: {
           ...entry.stacktrace,
-          frames: entry.stacktrace.frames.map(scrubFrame),
+          frames: entry.stacktrace.frames.map((frame) => scrubFrame(frame, pageOrigin)),
         },
       }
     : {}),
 });
 
-function scrubProperties(properties: Properties): Properties {
+function scrubProperties(properties: Properties, pageOrigin: string | null): Properties {
   const scrubbed: Properties = {};
   const entries: Array<[string, unknown]> = Object.entries(properties);
   for (const [key, value] of entries) {
     if (DROPPED_PROPERTIES.has(key) || ATTRIBUTION_PROPERTY.test(key)) continue;
     if (key === "$exception_list" && Array.isArray(value)) {
-      scrubbed[key] = (value as ExceptionEntry[]).map(scrubExceptionEntry);
+      scrubbed[key] = (value as ExceptionEntry[]).map((entry) =>
+        scrubExceptionEntry(entry, pageOrigin),
+      );
+    } else if (value !== null && typeof value === "object") {
+      if (STRUCTURED_PROPERTIES.has(key)) scrubbed[key] = value;
     } else if (typeof value === "string" && URL_PROPERTY.test(key)) {
       scrubbed[key] = scrubUrl(value);
     } else if (
@@ -151,10 +172,14 @@ function scrubProperties(properties: Properties): Properties {
  * codes, user ids, query strings, page titles, emails or tokens.
  */
 export function scrubTelemetryEvent(event: CaptureResult): CaptureResult {
+  // Stack frames keep asset paths only for scripts the page itself served.
+  const pageOrigin = originOf(event.properties.$current_url);
   return {
     ...event,
-    properties: scrubProperties(event.properties),
-    ...(event.$set ? { $set: scrubProperties(event.$set) } : {}),
-    ...(event.$set_once ? { $set_once: scrubProperties(event.$set_once) } : {}),
+    properties: scrubProperties(event.properties, pageOrigin),
+    ...(event.$set ? { $set: scrubProperties(event.$set, pageOrigin) } : {}),
+    ...(event.$set_once
+      ? { $set_once: scrubProperties(event.$set_once, pageOrigin) }
+      : {}),
   };
 }
