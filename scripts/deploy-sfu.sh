@@ -722,7 +722,9 @@ deploy_service() {
     previous_image=""
   fi
 
+  # Deployed means serving: the status, from this instance, says healthy.
   if [[ -n "$container" && -n "$status" ]] &&
+     [[ "$(printf "%s" "$status" | json_field healthy)" == "true" ]] &&
      [[ "$(printf "%s" "$status" | json_field draining)" == "false" ]] &&
      [[ "$(docker inspect -f '{{.Image}}' "$container")" == "$TARGET_IMAGE" ]] &&
      [[ "$(docker inspect -f '{{index .Config.Labels "com.docker.compose.config-hash"}}' "$container")" == "$("${COMPOSE[@]}" config --hash "$svc" | awk '{print $2}')" ]]; then

@@ -30,8 +30,9 @@ let beforeDrain = null;
 // never report healthy. bootExit: "exited" or "crash-looping", the state a
 // container of the target image ends in right after it starts; the previous
 // image still boots. stateInspectFails: docker inspect of the container's
-// state fails. onTarget: already runs the target image with the current
-// compose config.
+// state fails. statusHealthy: false for an instance whose /status says
+// healthy: false until it is recreated. onTarget: already runs the target
+// image with the current compose config.
 const startSfu = async (
   instanceId,
   {
@@ -41,6 +42,7 @@ const startSfu = async (
     replacementHealthy = true,
     bootExit = null,
     stateInspectFails = false,
+    statusHealthy = true,
     draining = false,
     onTarget = false,
     failRecreate = 0,
@@ -53,6 +55,7 @@ const startSfu = async (
     statusAnswers,
     container,
     healthy: true,
+    statusHealthy,
     image: onTarget ? "sha256:target" : "sha256:running",
     configHash: onTarget ? "current-hash" : "older-hash",
     restartCount: 0,
@@ -84,7 +87,7 @@ const startSfu = async (
     if (url.pathname === "/health") return sfu.healthy ? json({ status: "healthy" }) : json({ status: "starting" }, 503);
     if (url.pathname === "/status") {
       if (!sfu.statusAnswers) return json({ error: "unavailable" }, 503);
-      return json({ instanceId, region: "local", healthy: true, rooms: sfu.rooms, draining: sfu.draining });
+      return json({ instanceId, region: "local", healthy: sfu.statusHealthy, rooms: sfu.rooms, draining: sfu.draining });
     }
     if (url.pathname === "/drain" && req.method === "POST") {
       const request = JSON.parse(body || "{}");
@@ -105,6 +108,7 @@ const startSfu = async (
         return json({ error: "compose failed after stopping the old container" }, 500);
       }
       sfu.container = "running";
+      sfu.statusHealthy = true;
       sfu.bootDrained = url.searchParams.get("draining") === "true";
       sfu.healthy = replacementHealthy;
       sfu.draining = url.searchParams.get("draining") === "true";
@@ -763,6 +767,17 @@ test("a deploy paused by a call leaves that instance's compose image on the rele
     const built = result.docker.find((args) => args[0] === "build");
     assert.match(built[built.indexOf("-t") + 1], /^vm-sfu:[0-9a-f]{12}-candidate$/);
     assert.deepEqual(cutRooms(sfus), []);
+  });
+});
+
+test("an instance on the target whose status says unhealthy is redeployed, not counted as deployed", async () => {
+  await withSfus({ "sfu-a": { onTarget: true, statusHealthy: false }, "sfu-b": { onTarget: true } }, async (sfus) => {
+    const result = await deploy(sfus);
+    assert.equal(result.code, 0, result.output);
+    assert.doesNotMatch(result.output, /sfu-a already runs/);
+    assert.equal(sfus["sfu-a"].recreates.length, 2, "canary container, then the serving one");
+    assert.equal(sfus["sfu-b"].recreates.length, 0);
+    assert.match(result.output, /sfu-b already runs .* leaving it alone/);
   });
 });
 

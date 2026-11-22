@@ -73,7 +73,8 @@ is recreated while it has rooms unless you pass `--force-drain`:
    and exit 4. The instances not yet touched were
    never drained and keep serving.
 
-An instance that is serving, undrained, on the target image and config is
+An instance whose `/status`, from that instance, says healthy and undrained,
+on the target image and config, is
 skipped once its public URL still reaches it, so a rerun only does what is
 left; an earlier run that stopped on that route stops again there. An instance that answers HTTP but
 whose `/status` cannot be read is left alone (exit 1), because its rooms are
