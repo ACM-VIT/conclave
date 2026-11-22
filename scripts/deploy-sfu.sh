@@ -582,16 +582,25 @@ if [[ "$ROLLBACK" == "true" ]]; then
 else
   TARGET_COMMIT="$(git -C "$ROOT_DIR" rev-parse --short=12 HEAD)"
   # A rebuild of the same commit gets a new image ID even when every layer is
-  # cached, which would defeat the skip check on a rerun. Reuse the image
-  # this commit already has, unless tracked files differ from it.
-  if git -C "$ROOT_DIR" diff --quiet HEAD &&
+  # cached, which would defeat the skip check on a rerun. So the commit's
+  # image is reused, and only a build from a clean build context (no edited
+  # or untracked files) is ever tagged as the commit's image.
+  build_inputs_clean="false"
+  if [[ -z "$(git -C "$ROOT_DIR" status --porcelain -- package.json pnpm-lock.yaml pnpm-workspace.yaml patches packages)" ]]; then
+    build_inputs_clean="true"
+  fi
+  if [[ "$build_inputs_clean" == "true" ]] &&
      TARGET_IMAGE="$(docker image inspect -f '{{.Id}}' "${IMAGE_REPO}:${TARGET_COMMIT}" 2>/dev/null)"; then
     echo "Reusing the image already built for ${TARGET_COMMIT}."
   else
     echo "Building the SFU image for ${TARGET_COMMIT}..."
     "${COMPOSE[@]}" build "${ORDERED_SERVICES[0]}"
     TARGET_IMAGE="$(docker image inspect -f '{{.Id}}' "$(service_image_name "${ORDERED_SERVICES[0]}")")"
-    docker tag "$TARGET_IMAGE" "${IMAGE_REPO}:${TARGET_COMMIT}"
+    if [[ "$build_inputs_clean" == "true" ]]; then
+      docker tag "$TARGET_IMAGE" "${IMAGE_REPO}:${TARGET_COMMIT}"
+    else
+      echo "The checkout has local changes; this build is not recorded as ${TARGET_COMMIT}'s image."
+    fi
   fi
 fi
 
