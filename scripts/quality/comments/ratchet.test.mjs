@@ -244,3 +244,23 @@ test("push mode falls back to HEAD^1 when the previous tip is gone, and says so"
   assert.match(result.stdout, /is not available, so comparing with HEAD\^1/);
   assert.match(result.stderr, /App\.swift rose from 1 to 2 since/);
 });
+
+test("with the previous tip gone, a refill under a stale baseline still fails against origin/staging", (t) => {
+  const repo = repoWith(t, { "App.swift": "// one\n// two\nlet a = 1\n", [BASELINE]: { "App.swift": 2 } });
+  git(repo, "checkout", "-q", "base");
+  write(repo, { "App.swift": "// one\nlet a = 1\n" });
+  git(repo, "commit", "-q", "-m", "delete a comment, keep the baseline at 2");
+  git(repo, "update-ref", "refs/remotes/origin/staging", "HEAD");
+  git(repo, "checkout", "-q", "-B", "feature");
+  write(repo, { "App.swift": "// one\nlet a = 1 // back\n" });
+  git(repo, "commit", "-q", "-m", "refill");
+  write(repo, { "notes.txt": "unrelated\n" });
+  git(repo, "commit", "-q", "-m", "unrelated");
+  const result = spawnSync(process.execPath, [RATCHET, "--repo", repo], {
+    encoding: "utf8",
+    env: { ...cleanEnv(), COMMENT_RATCHET_BASE: "0123456789abcdef0123456789abcdef01234567", COMMENT_RATCHET_MODE: "exact" },
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /comparing with HEAD\^1 \([0-9a-f]{8}\) and the merge base with origin\/staging \([0-9a-f]{8}\)/);
+  assert.match(result.stderr, /App\.swift: comments rose from 1 to 2 since/);
+});
