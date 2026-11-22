@@ -39,6 +39,8 @@ import {
   TRANSCRIPT_SFU_RELAY_RECOVERY_GRACE_MS,
   TRANSCRIPTION_COMMIT_ACK_TIMEOUT_MS,
   TRANSCRIPTION_CONNECT_TIMEOUT_MS,
+  TRANSCRIPTION_DRAIN_QUIET_MS,
+  TRANSCRIPTION_DRAIN_SEQUENCE_BLOCK,
   TRANSCRIPTION_PROVIDER_DRAIN_MS,
 } from "./constants";
 import {
@@ -139,9 +141,16 @@ type ProviderDrain = {
   partials: Map<string, TranscriptSegment>;
   unfinalizedItems: Set<string>;
   pendingCommits: number;
+  // OpenAI acknowledges each commit, so it is done once nothing is owed.
+  // Sarvam acknowledges nothing, so it is done once it has gone quiet.
+  settlesOnAcks: boolean;
   speakers: TranscriptSpeakerAttribution;
   latestSpeaker: TranscriptSpeaker | null;
-  timer: ReturnType<typeof setTimeout>;
+  startedAt: number;
+  nextSequence: number;
+  endSequence: number;
+  deadline: ReturnType<typeof setTimeout>;
+  quietTimer: ReturnType<typeof setTimeout> | null;
 };
 
 export class TranscriptRoom {
@@ -169,7 +178,7 @@ export class TranscriptRoom {
   private responseRoute: {sfuUrl: string; identity: {userId: string; roomId: string; clientId: string; channelId: string}} | null = null;
   private personalResponseKeys: Partial<Record<"openai" | "anthropic", string>> = {};
   private transcriptionSession: LiveTranscriptionSession | null = null;
-  private providerDrain: ProviderDrain | null = null;
+  private readonly providerDrains = new Map<number, ProviderDrain>();
   private transcriptionConnectionOptions:
     | (PersistedTranscriptionConfig & {
         apiKey: string;
@@ -1083,7 +1092,7 @@ export class TranscriptRoom {
     this.cancelControllerReconnect();
     this.cancelSfuRelayRecovery();
     this.closeTranscriptionProvider();
-    this.discardProviderDrain();
+    this.discardProviderDrains();
     const roomId = this.session?.roomId || "unknown";
     this.responseApiKey = null;
     this.responseAbort.abort();
@@ -1520,32 +1529,32 @@ export class TranscriptRoom {
           onCommitted: (itemId) => {
             if (epoch === this.transcriptionConnectionEpoch) {
               this.handleTranscriptItemCommitted(itemId);
-            } else if (epoch === this.providerDrain?.epoch) {
-              this.applyDrainedCommit(itemId);
+              return;
             }
+            const drain = this.providerDrains.get(epoch);
+            if (drain) this.applyDrainedCommit(drain, itemId);
           },
           onDelta: (itemId, delta) => {
             if (epoch === this.transcriptionConnectionEpoch) {
               this.applyTranscriptDelta(itemId, delta);
-            } else if (epoch === this.providerDrain?.epoch) {
-              this.applyDrainedDelta(itemId, delta);
+              return;
             }
+            const drain = this.providerDrains.get(epoch);
+            if (drain) this.applyDrainedDelta(drain, itemId, delta);
           },
           onFinal: (itemId, transcript) => {
             if (epoch === this.transcriptionConnectionEpoch) {
               return this.applyTranscriptFinal(itemId, transcript);
             }
-            if (epoch === this.providerDrain?.epoch) {
-              return this.applyDrainedFinal(itemId, transcript);
-            }
+            const drain = this.providerDrains.get(epoch);
+            if (drain) return this.applyDrainedFinal(drain, itemId, transcript);
           },
           onFailure: (message) => {
             if (epoch === this.transcriptionConnectionEpoch) {
               return this.handleTranscriptionFailure(message);
             }
-            if (epoch === this.providerDrain?.epoch) {
-              return this.finishProviderDrain();
-            }
+            const drain = this.providerDrains.get(epoch);
+            if (drain) return this.finishProviderDrain(drain);
           },
         },
       });
@@ -1578,6 +1587,8 @@ export class TranscriptRoom {
   /**
    * Keeps a provider that is being replaced open until it finishes the speech
    * it already has: its partials, committed items and audio not yet final.
+   * Each replaced provider drains on its own; a later switch never cuts an
+   * earlier drain short.
    */
   private drainTranscriptionProvider(): void {
     const session = this.transcriptionSession;
@@ -1598,75 +1609,123 @@ export class TranscriptRoom {
     try {
       session.finishAudio();
     } catch {}
-    void this.finishProviderDrain();
-    this.transcriptionSession = null;
-    this.providerDrain = {
+    const epoch = this.transcriptionConnectionEpoch;
+    const firstSequence = this.sequence;
+    this.sequence += TRANSCRIPTION_DRAIN_SEQUENCE_BLOCK;
+    const drain: ProviderDrain = {
       session,
-      epoch: this.transcriptionConnectionEpoch,
+      epoch,
       partials: new Map(this.partialSegments),
       unfinalizedItems: new Set(this.unfinalizedItems),
       pendingCommits: this.pendingTranscriptionCommitAcks.length,
+      settlesOnAcks: session.provider === "openai",
       speakers: this.speakerAttribution,
       latestSpeaker: this.latestSpeaker,
-      timer: setTimeout(
-        () => void this.finishProviderDrain(),
+      startedAt: Date.now(),
+      nextSequence: firstSequence,
+      endSequence: this.sequence,
+      deadline: setTimeout(
+        () => void this.finishProviderDrain(drain),
         TRANSCRIPTION_PROVIDER_DRAIN_MS,
       ),
+      quietTimer: null,
     };
+    this.providerDrains.set(epoch, drain);
+    this.transcriptionSession = null;
     this.speakerAttribution = new TranscriptSpeakerAttribution();
     this.partialSegments.clear();
   }
 
-  private discardProviderDrain(): TranscriptSegment[] {
-    const drain = this.providerDrain;
-    if (!drain) return [];
-    this.providerDrain = null;
-    clearTimeout(drain.timer);
+  private discardProviderDrain(drain: ProviderDrain): TranscriptSegment[] {
+    if (this.providerDrains.get(drain.epoch) !== drain) return [];
+    this.providerDrains.delete(drain.epoch);
+    clearTimeout(drain.deadline);
+    if (drain.quietTimer !== null) clearTimeout(drain.quietTimer);
     try {
       drain.session.close();
     } catch {}
     return Array.from(drain.partials.values());
   }
 
+  private discardProviderDrains(): void {
+    for (const drain of Array.from(this.providerDrains.values())) {
+      this.discardProviderDrain(drain);
+    }
+  }
+
   /** Saves the drained lines still on screen, unless a final already landed. */
-  private async finishProviderDrain(): Promise<void> {
-    for (const segment of this.discardProviderDrain()) {
-      if (this.segments.some(({ itemId }) => itemId === segment.itemId)) continue;
+  private async finishProviderDrain(drain: ProviderDrain): Promise<void> {
+    for (const segment of this.discardProviderDrain(drain)) {
+      if (this.hasFinalSegment(segment.itemId)) continue;
       await this.saveFinalSegment(segment, "");
     }
   }
 
-  private visiblePartials(): TranscriptSegment[] {
-    return [
-      ...this.partialSegments.values(),
-      ...(this.providerDrain?.partials.values() ?? []),
-    ];
-  }
-
-  private drainedSegment(drain: ProviderDrain, itemId: string): TranscriptSegment {
-    return (
-      drain.partials.get(itemId) ??
-      this.createSegment(
-        itemId,
-        drain.speakers.getItemSpeaker(itemId) ??
-          drain.speakers.peekPendingSpeaker() ??
-          drain.latestSpeaker ??
-          this.controllerSpeaker(),
-      )
+  /**
+   * Finals plus the lines a replaced provider is still finishing, saved as
+   * finals: a restarted or rolled-back worker cannot resume a drain, and
+   * would otherwise drop words already on screen.
+   */
+  private segmentsForSnapshot(): TranscriptSegment[] {
+    const draining = this.drainedPartials()
+      .filter(({ itemId, text }) => text.trim() && !this.hasFinalSegment(itemId))
+      .map((segment) => ({ ...segment, isFinal: true, endMs: segment.updatedAt }));
+    if (draining.length === 0) return this.segments;
+    return [...this.segments, ...draining].sort(
+      (left, right) => left.sequence - right.sequence,
     );
   }
 
-  private applyDrainedCommit(itemId: string): void {
-    const drain = this.providerDrain;
-    if (!drain) return;
+  private hasFinalSegment(itemId: string): boolean {
+    return this.segments.some((segment) => segment.itemId === itemId);
+  }
+
+  private drainedPartials(): TranscriptSegment[] {
+    return Array.from(this.providerDrains.values()).flatMap((drain) =>
+      Array.from(drain.partials.values()),
+    );
+  }
+
+  private visiblePartials(): TranscriptSegment[] {
+    return [...this.partialSegments.values(), ...this.drainedPartials()];
+  }
+
+  /**
+   * The segment for a drained item. One that has no partial yet takes a
+   * place reserved when the drain began, so speech from before the switch
+   * stays ahead of the new provider's.
+   */
+  private drainedSegment(drain: ProviderDrain, itemId: string): TranscriptSegment {
+    const existing =
+      drain.partials.get(itemId) ??
+      this.segments.find((segment) => segment.itemId === itemId);
+    if (existing) return existing;
+    const sequence =
+      drain.nextSequence < drain.endSequence
+        ? drain.nextSequence++
+        : this.sequence++;
+    return this.createSegment(
+      itemId,
+      drain.speakers.getItemSpeaker(itemId) ??
+        drain.speakers.peekPendingSpeaker() ??
+        drain.latestSpeaker ??
+        this.controllerSpeaker(),
+      { sequence, startMs: drain.startedAt },
+    );
+  }
+
+  private applyDrainedCommit(drain: ProviderDrain, itemId: string): void {
     drain.pendingCommits = Math.max(0, drain.pendingCommits - 1);
     drain.speakers.bindCommittedItem(itemId);
     drain.unfinalizedItems.add(itemId);
   }
 
-  private applyDrainedDelta(itemId: string, delta: string): void {
-    const drain = this.providerDrain;
-    if (!drain) return;
+  private applyDrainedDelta(
+    drain: ProviderDrain,
+    itemId: string,
+    delta: string,
+  ): void {
+    if (this.hasFinalSegment(itemId)) return;
     const segment = this.drainedSegment(drain, itemId);
     const now = Date.now();
     const next: TranscriptSegment = {
@@ -1682,20 +1741,31 @@ export class TranscriptRoom {
   }
 
   private async applyDrainedFinal(
+    drain: ProviderDrain,
     itemId: string,
     transcript: string,
   ): Promise<void> {
-    const drain = this.providerDrain;
-    if (!drain) return;
     const segment = this.drainedSegment(drain, itemId);
     drain.partials.delete(itemId);
     drain.unfinalizedItems.delete(itemId);
-    const settled =
-      drain.partials.size === 0 &&
-      drain.unfinalizedItems.size === 0 &&
-      drain.pendingCommits === 0;
-    if (settled) this.discardProviderDrain();
+    this.settleProviderDrain(drain);
     await this.saveFinalSegment(segment, transcript);
+  }
+
+  private settleProviderDrain(drain: ProviderDrain): void {
+    if (drain.settlesOnAcks) {
+      const owesNothing =
+        drain.partials.size === 0 &&
+        drain.unfinalizedItems.size === 0 &&
+        drain.pendingCommits === 0;
+      if (owesNothing) this.discardProviderDrain(drain);
+      return;
+    }
+    if (drain.quietTimer !== null) clearTimeout(drain.quietTimer);
+    drain.quietTimer = setTimeout(
+      () => void this.finishProviderDrain(drain),
+      TRANSCRIPTION_DRAIN_QUIET_MS,
+    );
   }
 
   private resetTranscriptionAudioState(): void {
@@ -2009,22 +2079,22 @@ export class TranscriptRoom {
   private createSegment(
     itemId: string,
     speaker: TranscriptSpeaker,
+    placement?: { sequence: number; startMs: number },
   ): TranscriptSegment {
     const now = Date.now();
     const segment: TranscriptSegment = {
       id: itemId,
       itemId,
-      sequence: this.sequence,
+      sequence: placement?.sequence ?? this.sequence++,
       speakerUserId: speaker.userId,
       speakerDisplayName: speaker.displayName,
       source: speaker.source,
       text: "",
-      startMs: now,
+      startMs: placement?.startMs ?? now,
       endMs: null,
       isFinal: false,
       updatedAt: now,
     };
-    this.sequence += 1;
     return segment;
   }
 
@@ -2150,18 +2220,21 @@ export class TranscriptRoom {
   ): Promise<void> {
     const text = transcript.trim() || segment.text.trim();
     if (!text) return;
+    const existingIndex = this.segments.findIndex(
+      (candidate) => candidate.itemId === segment.itemId,
+    );
+    const existing = existingIndex >= 0 ? this.segments[existingIndex] : null;
+    // A repeated final changes nothing; a corrected one keeps its place.
+    if (existing?.text === text) return;
 
     const now = Date.now();
     const finalSegment: TranscriptSegment = {
-      ...segment,
+      ...(existing ?? segment),
       text,
       endMs: now,
       isFinal: true,
       updatedAt: now,
     };
-    const existingIndex = this.segments.findIndex(
-      (candidate) => candidate.itemId === segment.itemId,
-    );
     if (existingIndex >= 0) {
       this.segments[existingIndex] = finalSegment;
     } else {
@@ -2520,7 +2593,7 @@ export class TranscriptRoom {
       : undefined;
     await this.state.storage.put("snapshot", {
       session: this.session,
-      segments: this.segments,
+      segments: this.segmentsForSnapshot(),
       minutes: this.minutes,
       minutesCompactedAt: this.lastMinutesCompactionAt,
       sequence: this.sequence,
@@ -2553,7 +2626,7 @@ export class TranscriptRoom {
     this.cancelControllerReconnect();
     this.cancelSfuRelayRecovery();
     this.closeTranscriptionProvider();
-    this.discardProviderDrain();
+    this.discardProviderDrains();
     this.responseApiKey = null;
     this.responseAbort.abort();
     this.responseAbort = new AbortController();
