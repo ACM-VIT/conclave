@@ -285,9 +285,10 @@ describe("TranscriptRelayRegistry", () => {
     releaseHandoff();
     await expect(stopping).resolves.toEqual({ success: true });
 
-    // The replacement is still registered, so the room can stop it.
+    // u1's late stop must leave the replacement running; only the room stops it.
+    expect(closed).toEqual(["u1"]);
     registry.stopRoom(room.channelId);
-    expect(closed).toContain("u2");
+    expect(closed).toEqual(["u1", "u2"]);
   });
 
   it("leaves only the newest relay open when replacements overlap, and stop closes it", async () => {
