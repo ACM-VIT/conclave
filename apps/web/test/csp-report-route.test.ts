@@ -70,6 +70,26 @@ describe("CSP report endpoint", () => {
     expect(line).not.toContain("secret-token");
   });
 
+  it("drops query strings from fields that are not absolute URLs", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const relative = {
+      "csp-report": {
+        "document-uri": "/room-code?token=secret-token",
+        "blocked-uri": "inline",
+        "source-file": "/app.js?token=secret-token#frag",
+        disposition: "report",
+      },
+    };
+    expect((await post(JSON.stringify(relative))).status).toBe(204);
+    const line = String(warn.mock.calls[0][0]);
+    expect(line).not.toContain("secret-token");
+    expect(JSON.parse(line.slice("[csp-report] ".length))).toMatchObject({
+      blocked: "inline",
+      document: "/room-code",
+      source: "/app.js",
+    });
+  });
+
   it("rejects bodies that are not CSP reports", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     expect((await post(JSON.stringify(report), { "content-type": "text/plain" })).status).toBe(415);

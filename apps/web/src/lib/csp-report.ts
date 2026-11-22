@@ -32,7 +32,7 @@ const withoutQuery = (value: unknown): string => {
     const url = new URL(raw);
     return `${url.origin}${url.pathname}`.slice(0, MAX_FIELD_LENGTH);
   } catch {
-    return raw.slice(0, MAX_FIELD_LENGTH);
+    return raw.split(/[?#]/, 1)[0].slice(0, MAX_FIELD_LENGTH);
   }
 };
 
