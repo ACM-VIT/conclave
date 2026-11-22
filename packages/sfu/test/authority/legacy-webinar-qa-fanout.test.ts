@@ -13,7 +13,9 @@ import {
   LEGACY_QA_SENDS_PER_TURN,
   attachLegacyQaFeed,
   legacyQaSubmit,
+  legacyQaUpvote,
 } from "../../server/apps/authority/legacyWebinarQa.js";
+import { DEFAULT_AUTHORITY_LIMITS } from "../../server/apps/authority/limits.js";
 import type {
   WebinarQaChangedNotification,
   WebinarQaEntry,
@@ -34,7 +36,7 @@ afterEach(() => {
 /** An old client: it keeps what the old events tell it. */
 const listen = (tab: Tab) => {
   const entries = new Map<string, WebinarQaEntry>();
-  const heard = { snapshots: 0, changes: 0 };
+  const heard = { snapshots: 0, changes: 0, removed: [] as string[] };
   tab.socket.on("webinar:qaSnapshot", (payload: unknown) => {
     heard.snapshots += 1;
     entries.clear();
@@ -43,8 +45,10 @@ const listen = (tab: Tab) => {
   tab.socket.on("webinar:qaChanged", (payload: unknown) => {
     heard.changes += 1;
     const notification = payload as WebinarQaChangedNotification;
-    if (notification.removedId) entries.delete(notification.removedId);
-    else if (notification.entry) entries.set(notification.entry.id, notification.entry);
+    if (notification.removedId) {
+      heard.removed.push(notification.removedId);
+      entries.delete(notification.removedId);
+    } else if (notification.entry) entries.set(notification.entry.id, notification.entry);
   });
   attachLegacyQaFeed(tab.context);
   return { tab, entries, heard };
@@ -54,8 +58,14 @@ const listen = (tab: Tab) => {
  * A webinar with a host on the new transport and `count` attendees on the
  * old events, holding `questions` questions the host has started answering.
  */
-const webinar = async (count: number, questions: number) => {
-  const room = new Harness([pollsAuthority, qaAuthority]);
+const webinar = async (
+  count: number,
+  questions: number,
+  limits: Partial<typeof DEFAULT_AUTHORITY_LIMITS> = {},
+) => {
+  const room = new Harness([pollsAuthority, qaAuthority], {
+    runtime: { limits: { ...DEFAULT_AUTHORITY_LIMITS, ...limits } },
+  });
   room.setWebinar(true);
   const hostTab = await room.open(host, qaContract);
   const listeners: ReturnType<typeof listen>[] = [];
@@ -222,6 +232,63 @@ describe("telling a webinar of old clients about a change", () => {
     expect(
       listeners.slice(0, -1).every((listener) => ids.every((id) => listener.entries.get(id)?.status === "answered")),
     ).toBe(true);
+  }, 60_000);
+
+  it("says a question dropped from the book once to each old client that upvoted it, with no list", async () => {
+    // Their upvote rows are told a few people a flush, after the question's own row.
+    const { room, hostTab, listeners, ids } = await webinar(100, 1, { clearedRowsPerFlush: 30 });
+    const [popular] = ids;
+    // Everyone upvotes it with the old event, so each client has saved its vote.
+    for (const listener of listeners) {
+      const voted = legacyQaUpvote(room.authority, listener.tab.context, popular);
+      if (!("success" in voted)) throw new Error(`upvote failed: ${JSON.stringify(voted)}`);
+    }
+    await hostTab.act("moderate", { id: popular, action: "answered" });
+    // The book fills to its cap of 300 with questions still waiting.
+    const fill = async (round: number): Promise<void> => {
+      await vi.advanceTimersByTimeAsync(40_000);
+      for (const listener of listeners) {
+        const asked = legacyQaSubmit(room.authority, listener.tab.context, `Waiting ${round}?`);
+        if (!("id" in asked)) throw new Error(`ask failed: ${JSON.stringify(asked)}`);
+      }
+      await room.deliver();
+      await room.drain();
+    };
+    await fill(1);
+    await fill(2);
+    await vi.advanceTimersByTimeAsync(40_000);
+    for (const listener of listeners.slice(0, 99)) {
+      legacyQaSubmit(room.authority, listener.tab.context, "Waiting 3?");
+    }
+    await room.deliver();
+    await room.drain();
+    const before = listeners.map((listener) => ({
+      snapshots: listener.heard.snapshots,
+      removals: listener.heard.removed.length,
+      upvotes: listener.entries.get(popular)?.upvotes,
+    }));
+
+    // One more question takes the book over its cap. The answered one is the
+    // first it gives up, and its 100 upvotes go with it.
+    const last = legacyQaSubmit(room.authority, listeners[99].tab.context, "Waiting 3?");
+    for (let flush = 0; flush < 8; flush += 1) {
+      await room.advance(50);
+      await room.drain();
+    }
+
+    expect("id" in last).toBe(true);
+    expect(before.every((held) => held.upvotes === 100)).toBe(true);
+    expect(listeners.every((listener) => !listener.entries.has(popular))).toBe(true);
+    // Each client hears that the question is gone, once.
+    expect(
+      listeners.map((listener, index) =>
+        listener.heard.removed.slice(before[index].removals).filter((id) => id === popular).length,
+      ),
+    ).toEqual(Array(100).fill(1));
+    // Nobody is sent the whole list over it: the saved upvote went with the question.
+    expect(
+      listeners.map((listener, index) => listener.heard.snapshots - before[index].snapshots),
+    ).toEqual(Array(100).fill(0));
   }, 60_000);
 
   it("sends a listener whose socket is behind nothing, then a whole list once it has caught up", async () => {

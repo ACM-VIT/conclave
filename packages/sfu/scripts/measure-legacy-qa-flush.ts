@@ -1,7 +1,13 @@
 /**
- * Measures telling a webinar of old clients about one flush of Q&A changes.
+ * Measures telling a webinar of old clients about Q&A changes.
  *
  *   pnpm -C packages/sfu exec tsx scripts/measure-legacy-qa-flush.ts [listeners] [questions] [--out file.json]
+ *   pnpm -C packages/sfu exec tsx scripts/measure-legacy-qa-flush.ts [listeners] --trim [--out file.json]
+ *
+ * The first form changes `questions` questions in one flush. The second has
+ * every listener upvote one question with the old event, beside 50 answered
+ * questions everyone lists, then fills the book until the upvoted question
+ * is dropped, and measures telling them so.
  *
  * The room, the Q&A app, the runtime and the legacy adapter are the real
  * ones. The sockets are simulated: nothing crosses a network, but every
@@ -29,12 +35,22 @@ import {
 import {
   attachLegacyQaFeed,
   legacyQaSubmit,
+  legacyQaUpvote,
 } from "../server/apps/authority/legacyWebinarQa.js";
+import { DEFAULT_AUTHORITY_LIMITS } from "../server/apps/authority/limits.js";
 import { LocalRoomRegistry } from "../server/roomRegistry.js";
 import { createConnectionContext } from "../server/socket/context.js";
 import { createSfuState } from "../server/state.js";
 import { getOrCreateWebinarRoomConfig } from "../server/webinar.js";
-import type { WebinarQaChangedNotification } from "../types.js";
+import type {
+  WebinarQaChangedNotification,
+  WebinarQaSnapshot,
+} from "../types.js";
+
+// The room's budgets refill with the clock, so the setup moves it by hand.
+const realNow = Date.now.bind(Date);
+let clockOffsetMs = 0;
+Date.now = () => realNow() + clockOffsetMs;
 
 const fromSocketIo = createRequire(createRequire(import.meta.url).resolve("socket.io"));
 const { Encoder } = fromSocketIo("socket.io-parser") as {
@@ -52,9 +68,12 @@ const numbers = args.filter(
 );
 const LISTENERS = Number(numbers[0] ?? 5_000);
 const QUESTIONS = Number(numbers[1] ?? 20);
+const TRIM = args.includes("--trim");
 const RUNS = 5;
 
 const counters = { encodings: 0, encodedBytes: 0, socketWrites: 0 };
+/** Socket writes by event name. */
+const writesByEvent = new Map<string, number>();
 const encoder = new Encoder();
 
 /** One packet as it would leave for a websocket: encoded, then framed. */
@@ -88,6 +107,7 @@ const makeSocket = (
     /** Queues bytes for this socket and hands the client the payload. */
     queue(_frame: Buffer[], event: string, payload: unknown) {
       counters.socketWrites += 1;
+      writesByEvent.set(event, (writesByEvent.get(event) ?? 0) + 1);
       listeners.get(event)?.(payload);
     },
     emit(event: string, payload?: unknown) {
@@ -153,7 +173,43 @@ const settle = async (): Promise<void> => {
   for (let index = 0; index < 400; index += 1) await turn();
 };
 
-const main = async (): Promise<void> => {
+const megabytes = (bytes: number): number => Number((bytes / 1024 / 1024).toFixed(2));
+
+/**
+ * Runs `step` and every turn of the event loop after it until `done`, and
+ * times the longest of those turns.
+ */
+const timed = async (
+  step: () => void,
+  done: () => boolean,
+): Promise<{ longestBlockMs: number; totalMs: number; turns: number }> => {
+  let longest = 0;
+  let turns = 0;
+  const started = performance.now();
+  let mark = started;
+  step();
+  // The microtasks the step queued run before this continues.
+  await Promise.resolve();
+  await Promise.resolve();
+  for (;;) {
+    const now = performance.now();
+    longest = Math.max(longest, now - mark);
+    turns += 1;
+    if (done()) break;
+    if (turns > 10_000) throw new Error("The fan-out never finished");
+    await turn();
+    mark = now;
+  }
+  return { longestBlockMs: longest, totalMs: performance.now() - started, turns };
+};
+
+const finish = (report: object): void => {
+  console.log(JSON.stringify(report, null, 2));
+  if (out) writeFileSync(out, `${JSON.stringify(report, null, 2)}\n`);
+};
+
+/** One flush that changes `QUESTIONS` questions for every listener. */
+const measureChange = async (): Promise<void> => {
   const host = seat("asha@example.com", "Asha", "host");
   const authority = getRoomAuthority(state, room);
   if (!authority) throw new Error("The room has no authority runtime");
@@ -197,45 +253,27 @@ const main = async (): Promise<void> => {
   }[] = [];
   for (let run = 0; run < RUNS; run += 1) {
     // The moderator's own rate refills between runs.
-    await new Promise((resolve) => setTimeout(resolve, 5_500));
+    clockOffsetMs += 10_000;
     const next = run % 2 === 0 ? "answered" : "answering";
     for (const id of ids) moderate(id, next);
     await turn();
     counters.encodings = counters.encodedBytes = counters.socketWrites = 0;
-
-    // Each turn of the event loop that does part of the fan-out is timed.
-    const everyoneHeard = (): boolean =>
-      heard.every((statuses) => ids.every((id) => statuses.get(id) === next));
-    let longest = 0;
-    let turns = 0;
-    const started = performance.now();
-    let mark = started;
-    authority.flushNow();
-    // The microtasks the flush queued run before this continues.
-    await Promise.resolve();
-    await Promise.resolve();
-    for (;;) {
-      const now = performance.now();
-      longest = Math.max(longest, now - mark);
-      turns += 1;
-      if (everyoneHeard()) break;
-      if (turns > 10_000) throw new Error("The fan-out never finished");
-      await turn();
-      mark = now;
-    }
-    const totalMs = performance.now() - started;
-    runs.push({ ...counters, longestBlockMs: longest, totalMs, turns });
+    const timing = await timed(
+      () => authority.flushNow(),
+      () => heard.every((statuses) => ids.every((id) => statuses.get(id) === next)),
+    );
+    runs.push({ ...counters, ...timing });
   }
 
   const median = (values: number[]): number =>
     [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
-  const report = {
+  finish({
     listeners: LISTENERS,
     changedQuestions: QUESTIONS,
     runs: RUNS,
     socketWrites: median(runs.map((run) => run.socketWrites)),
     encodings: median(runs.map((run) => run.encodings)),
-    encodedMegabytes: Number((median(runs.map((run) => run.encodedBytes)) / 1024 / 1024).toFixed(2)),
+    encodedMegabytes: megabytes(median(runs.map((run) => run.encodedBytes))),
     turnsOfTheEventLoop: median(runs.map((run) => run.turns)),
     longestBlockMs: Number(median(runs.map((run) => run.longestBlockMs)).toFixed(1)),
     totalMs: Number(median(runs.map((run) => run.totalMs)).toFixed(1)),
@@ -244,11 +282,124 @@ const main = async (): Promise<void> => {
       longestBlockMs: Number(run.longestBlockMs.toFixed(1)),
       totalMs: Number(run.totalMs.toFixed(1)),
     })),
-  };
-  console.log(JSON.stringify(report, null, 2));
-  if (out) writeFileSync(out, `${JSON.stringify(report, null, 2)}\n`);
+  });
   authority.close();
 };
+
+/**
+ * Every listener upvotes one question with the old event. The book then
+ * fills until that question is dropped, and its upvotes with it.
+ */
+const measureTrim = async (): Promise<void> => {
+  const host = seat("asha@example.com", "Asha", "host");
+  const authority = getRoomAuthority(state, room);
+  if (!authority) throw new Error("The room has no authority runtime");
+
+  const lists: Set<string>[] = [];
+  const attendees: ReturnType<typeof seat>[] = [];
+  for (let index = 0; index < LISTENERS; index += 1) {
+    const attendee = seat(`attendee${index}@example.com`, `Attendee ${index}`, "attendee");
+    const list = new Set<string>();
+    attendee.on("webinar:qaSnapshot", (payload) => {
+      list.clear();
+      for (const entry of (payload as WebinarQaSnapshot).entries) list.add(entry.id);
+    });
+    attendee.on("webinar:qaChanged", (payload) => {
+      const { entry, removedId } = payload as WebinarQaChangedNotification;
+      if (removedId) list.delete(removedId);
+      else if (entry) list.add(entry.id);
+    });
+    lists.push(list);
+    attendees.push(attendee);
+    attachLegacyQaFeed(attendee.context);
+  }
+  const ask = (index: number, text: string): string => {
+    const asked = legacyQaSubmit(authority, attendees[index].context, text);
+    if (!("id" in asked)) throw new Error(`ask failed: ${JSON.stringify(asked)}`);
+    return asked.id;
+  };
+  const moderate = (id: string, action: string): void => {
+    const result = authority.actAs(host.context, "qa", "moderate", { id, action });
+    if (!result.ok) throw new Error(`moderate failed: ${JSON.stringify(result)}`);
+  };
+
+  const popular = ask(0, "The question everybody upvotes?");
+  moderate(popular, "answering");
+  authority.flushNow();
+  await settle();
+  // As fast as the room takes it: a wave in one instant, then two seconds.
+  for (let first = 0; first < LISTENERS; first += 200) {
+    clockOffsetMs += 2_000;
+    for (const attendee of attendees.slice(first, first + 200)) {
+      const voted = legacyQaUpvote(authority, attendee.context, popular);
+      if (!("success" in voted)) throw new Error(`upvote failed: ${JSON.stringify(voted)}`);
+    }
+    authority.flushNow();
+    await settle();
+  }
+  moderate(popular, "answered");
+  // Fifty more answered questions, which every attendee lists.
+  const ANSWERED = 50;
+  for (let index = 1; index <= ANSWERED; index += 1) {
+    clockOffsetMs += 1_000;
+    moderate(ask(index, `An answered question, number ${index}, at some length?`), "answered");
+  }
+  authority.flushNow();
+  await settle();
+  // Questions still waiting fill the book to one short of its cap of 300.
+  let waiting = 299 - ANSWERED;
+  for (let round = 0; waiting > 0; round += 1) {
+    clockOffsetMs += 60_000;
+    for (let index = 100; index < 200 && waiting > 0; index += 1, waiting -= 1) {
+      ask(index, `Still waiting for a host, round ${round}?`);
+    }
+    authority.flushNow();
+    await settle();
+  }
+  const listedBefore = lists.filter((list) => list.has(popular)).length;
+
+  counters.encodings = counters.encodedBytes = counters.socketWrites = 0;
+  writesByEvent.clear();
+  // The 301st question takes the book over its cap.
+  clockOffsetMs += 60_000;
+  ask(200, "The one that takes the book over its cap?");
+  let longestBlockMs = 0;
+  let totalMs = 0;
+  let flushes = 0;
+  // The upvote rows are told to their owners a bounded number a flush, so
+  // flush for as long as that takes, and then until two in a row send nothing.
+  const atLeast =
+    Math.ceil(LISTENERS / DEFAULT_AUTHORITY_LIMITS.clearedRowsPerFlush) + 1;
+  for (let quiet = 0; quiet < 2 || flushes < atLeast; ) {
+    const writesBefore = counters.socketWrites;
+    clockOffsetMs += 50;
+    const timing = await timed(() => authority.flushNow(), () => true);
+    await settle();
+    longestBlockMs = Math.max(longestBlockMs, timing.longestBlockMs);
+    totalMs += timing.totalMs;
+    flushes += 1;
+    quiet = counters.socketWrites === writesBefore ? quiet + 1 : 0;
+    if (flushes > 200) throw new Error("The trim never finished telling");
+  }
+
+  finish({
+    listeners: LISTENERS,
+    upvotersOfTheDroppedQuestion: LISTENERS,
+    listedItBefore: listedBefore,
+    stillListIt: lists.filter((list) => list.has(popular)).length,
+    flushes,
+    wholeListsSent: writesByEvent.get("webinar:qaSnapshot") ?? 0,
+    changeEventsSent: writesByEvent.get("webinar:qaChanged") ?? 0,
+    socketWrites: counters.socketWrites,
+    encodings: counters.encodings,
+    encodedMegabytes: megabytes(counters.encodedBytes),
+    longestBlockMs: Number(longestBlockMs.toFixed(1)),
+    flushCpuMs: Number(totalMs.toFixed(1)),
+  });
+  authority.close();
+};
+
+const main = TRIM ? measureTrim : measureChange;
 
 main().then(
   () => process.exit(0),

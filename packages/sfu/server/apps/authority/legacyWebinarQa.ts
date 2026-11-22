@@ -56,10 +56,16 @@ type Feed = {
   /** Questions that changed for this connection and are yet to be said. */
   pending: Set<string>;
   /**
+   * Questions the client has been told of and still lists. A question it
+   * was never told of, or was told is gone, is not said to be gone again.
+   */
+  listed: Set<string>;
+  /**
    * Questions the client keeps as upvoted by itself. The native app up to
    * build 63 saves an upvote from a list or from its own upvote's answer,
    * and from then on shows that over what a change event says. Only a whole
-   * list makes it forget one.
+   * list makes it forget one, which matters while it still lists the
+   * question. A saved upvote on a question that is gone shows nowhere.
    */
   saved: Set<string>;
   /**
@@ -114,6 +120,15 @@ const isWebinar = (state: SfuState, channelId: string): boolean =>
 const isHost = (context: ConnectionContext): boolean => {
   const client = context.currentClient;
   return Boolean(client && context.currentRoom?.isAdminClient(client));
+};
+
+/** Whether this connection's view holds a question at all. */
+const holds = (rows: Rows, id: string): boolean => {
+  if (rows.get("questions")?.has(id)) return true;
+  const own = rows.get("myQuestions")?.get(id) as
+    | { hidden: HiddenQuestion | null }
+    | undefined;
+  return Boolean(own?.hidden);
 };
 
 /** One question in the old shape, from what this connection's view holds. */
@@ -202,6 +217,12 @@ const readingOf = (feed: Feed, id: string): string =>
  * sockets that share it. Only the asker's copy, which names them, is their
  * own. A question that changes again while a connection waits its turn is
  * said once, as it stands by then.
+ *
+ * A question that is gone is said to be gone once to each connection that
+ * lists it, however many of that connection's rows went with it. When the
+ * book drops a question, its upvotes follow over later flushes, one row for
+ * each person who upvoted, and none of those is news to a client that has
+ * already been told the question is gone.
  */
 const say = (authority: RoomAuthority, outbox: Outbox): void => {
   outbox.scheduled = false;
@@ -220,6 +241,8 @@ const say = (authority: RoomAuthority, outbox: Outbox): void => {
     feed.pending.clear();
     if (!mayHear) continue;
     for (const id of ids) {
+      if (holds(feed.rows, id)) feed.listed.add(id);
+      else if (!feed.listed.delete(id)) continue;
       sends += 1;
       if (feed.rows.get("myQuestions")?.has(id)) {
         const entry = entryOf(context, authority, feed.rows, id);
@@ -289,6 +312,7 @@ export const attachLegacyQaFeed = (context: ConnectionContext): boolean => {
     rows: new Map(),
     incoming: [],
     pending: new Set(),
+    listed: new Set(),
     saved: new Set(),
     isLive: () => false,
     close: () => {},
@@ -302,6 +326,7 @@ export const attachLegacyQaFeed = (context: ConnectionContext): boolean => {
       .map((id) => entryOf(context, authority, feed.rows, id))
       .filter((entry): entry is WebinarQaEntry => entry !== null)
       .sort((a, b) => a.askedAt - b.askedAt);
+    feed.listed = new Set(entries.map((entry) => entry.id));
     feed.saved = new Set(
       entries.filter((entry) => entry.hasUpvoted).map((entry) => entry.id),
     );
@@ -319,6 +344,7 @@ export const attachLegacyQaFeed = (context: ConnectionContext): boolean => {
       feed.pending.clear();
       if (feed.rows.size === 0) return;
       feed.rows = new Map();
+      feed.listed = new Set();
       feed.saved = new Set();
       socket.emit("webinar:qaSnapshot", {
         roomId: room.id,
@@ -347,12 +373,13 @@ export const attachLegacyQaFeed = (context: ConnectionContext): boolean => {
     if (frame.kind !== "patch") return;
 
     const touched = new Set<string>();
-    let unsaved = false;
+    const lostUpvotes: string[] = [];
     for (const ref of frame.remove) {
       feed.rows.get(ref.bucket)?.delete(ref.key);
       touched.add(ref.key);
-      // An upvote the client saved was taken back somewhere else.
-      if (ref.bucket === "myUpvotes" && feed.saved.has(ref.key)) unsaved = true;
+      if (ref.bucket === "myUpvotes" && feed.saved.has(ref.key)) {
+        lostUpvotes.push(ref.key);
+      }
     }
     for (const row of frame.put) {
       const bucket = feed.rows.get(row.bucket) ?? new Map<string, Json>();
@@ -360,8 +387,17 @@ export const attachLegacyQaFeed = (context: ConnectionContext): boolean => {
       feed.rows.set(row.bucket, bucket);
       touched.add(row.key);
     }
-    // A change event cannot make such a client forget a saved upvote. A
-    // whole list can, and carries everything else this patch changed.
+    // An upvote the client saved is gone, and not by its own tap. If the
+    // question went too, as when the book drops it, the saved vote shows
+    // nowhere and saying the question is gone is all there is to say. If
+    // the question is still listed, the upvote was taken back somewhere
+    // else, and a change event cannot make such a client forget it. A whole
+    // list can, and carries everything else this patch changed.
+    let unsaved = false;
+    for (const id of lostUpvotes) {
+      if (holds(feed.rows, id)) unsaved = true;
+      else feed.saved.delete(id);
+    }
     if (unsaved) sendSnapshot();
     else queue(authority, feed, touched);
   };
