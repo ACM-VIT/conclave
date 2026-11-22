@@ -36,9 +36,12 @@ enum MeetingLinkBuilder {
     static func path(roomCode: String, clientId: String?) -> String {
         let room = roomCode.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !room.isEmpty else { return "" }
-        // Every link names its tenant, the default included: the web opens a
-        // bare link in its own default tenant, which can differ.
-        let tenant = canonicalClientId(clientId) ?? defaultClientId
+        // Every link names its tenant: the one given, else the one this build
+        // joins with, as the join itself falls back. The web opens a bare
+        // link in its own default tenant, which can differ.
+        let tenant = canonicalClientId(clientId)
+            ?? canonicalClientId(SfuJoinService.resolveClientId())
+            ?? defaultClientId
         return "/" + encodeURIComponent(room) + "?clientId=" + encodeURIComponent(tenant)
     }
 

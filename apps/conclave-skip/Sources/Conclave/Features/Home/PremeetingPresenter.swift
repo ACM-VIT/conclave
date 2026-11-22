@@ -1354,7 +1354,7 @@ final class PremeetingPresenter {
             formIssue: formIssue
         ))
         publishLobbyLink(LobbySnapshotPolicy.link(routeId: target.routeId, intent: target.intent, roomId: target.roomId,
-                                              title: target.title, clientId: target.clientId))
+                                              title: target.title, clientId: joinClientId(target)))
         refreshAudioSnapshot()
         updatePresencePolling()
         updatePreviewDemand()
@@ -1541,7 +1541,15 @@ final class PremeetingPresenter {
     }
 
     private func presenceClientId(routeId: Int) -> String {
-        if let clientId = target(forRoute: routeId)?.clientId, !clientId.isEmpty {
+        guard let target = target(forRoute: routeId) else {
+            return lobbyHooks?.resolvedClientId?() ?? ""
+        }
+        return joinClientId(target)
+    }
+
+    /// The tenant a lobby's room is joined in: the one its link named, else this build's.
+    private func joinClientId(_ target: PremeetingRouteTarget) -> String {
+        if let clientId = target.clientId, !clientId.isEmpty {
             return clientId
         }
         return lobbyHooks?.resolvedClientId?() ?? ""

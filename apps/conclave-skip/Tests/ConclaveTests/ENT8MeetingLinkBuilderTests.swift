@@ -65,5 +65,26 @@ struct ENT8MeetingLinkBuilderTests {
         let promotion = LobbySnapshotPolicy.link(routeId: 1, intent: .promotion, roomId: "r", title: "r", clientId: nil)
         #expect(!promotion.canShare)
     }
+
+    @MainActor
+    @Test func aBareLinkLobbyNamesTheTenantThisBuildJoinsWith() {
+        let presenter = PremeetingPresenter()
+        let hooks = LobbyCoreHooks()
+        hooks.resolvedClientId = { "acme" }
+        presenter.lobbyHooks = hooks
+        presenter.handleIncomingURL("https://conclave.acmvit.in/rose-sora-luffy")
+        #expect(presenter.lobbyLink?.meetingLink == "https://conclave.acmvit.in/rose-sora-luffy?clientId=acme")
+
+        presenter.handleIncomingURL("https://conclave.acmvit.in/sora-luffy-rose?clientId=beta")
+        #expect(presenter.lobbyLink?.meetingLink == "https://conclave.acmvit.in/sora-luffy-rose?clientId=beta")
+    }
+
+    @Test func aLinkWithNoTenantNamesTheOneThisBuildJoinsWith() {
+        let joined = MeetingLinkBuilder.canonicalClientId(SfuJoinService.resolveClientId()) ?? "conclave"
+        let expected = "https://conclave.acmvit.in/r?clientId=" + MeetingLinkBuilder.encodeURIComponent(joined)
+        #expect(MeetingLinkBuilder.url(roomCode: "r", clientId: nil) == expected)
+        #expect(MeetingLinkBuilder.url(roomCode: "r", clientId: "bad id") == expected)
+        #expect(EntryPolicies.recentLink(roomId: "r", isWebinar: false) == expected)
+    }
 }
 #endif

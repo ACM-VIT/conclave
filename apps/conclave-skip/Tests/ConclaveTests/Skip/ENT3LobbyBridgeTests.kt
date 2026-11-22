@@ -41,6 +41,15 @@ class ENT3LobbyBridgeTests {
         assertEquals("conclave.acmvit.in/r", MeetingLinkBuilder.displayText("https://conclave.acmvit.in/r"))
     }
 
+    @Test fun aBareLinkLobbyNamesTheTenantThisBuildJoinsWith() {
+        val presenter = presenter()
+        val hooks = LobbyCoreHooks()
+        hooks.resolvedClientId = { "acme" }
+        presenter.lobbyHooks = hooks
+        presenter.handleIncomingURL("https://conclave.acmvit.in/rose-sora-luffy")
+        assertEquals("https://conclave.acmvit.in/rose-sora-luffy?clientId=acme", presenter.lobbyLink?.meetingLink)
+    }
+
     @Test fun theTranspiledPresenterPublishesTheSixLobbySnapshots() {
         val presenter = presenter()
         presenter.handleIncomingURL("https://conclave.acmvit.in/rose-sora-luffy?clientId=acme")
