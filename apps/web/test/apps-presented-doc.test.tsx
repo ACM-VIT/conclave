@@ -274,3 +274,20 @@ it("keeps retrying the current sync when a reply to an earlier one arrives late"
     expect(status()).toBe("failed");
   });
 });
+
+it("gives up 30 s after a sync that is never answered, whatever each attempt waits", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  await withSavedBoard(async ({ status, syncRequests, deliverSyncNumber }) => {
+    await advance(29_999);
+    expect(status()).toBe("syncing");
+    expect(syncRequests()).toBe(4);
+
+    await advance(1);
+    expect(status()).toBe("failed");
+
+    await act(async () => deliverSyncNumber(4));
+    await advance(60_000);
+    expect(status()).toBe("failed");
+    expect(syncRequests()).toBe(4);
+  });
+});

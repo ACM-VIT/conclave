@@ -80,8 +80,13 @@ and a retry that calls `retrySync()` when it is `failed`.
   attempt, changes nothing.
 - A retryable refusal, an unanswered request or a disconnected socket is
   retried after 250 ms, doubling to a 4 s cap, or after the refusal's
-  `retryAfterMs` when that is longer. After about 30 s, or on a refusal that
-  is not retryable, the status turns `failed`.
+  `retryAfterMs` when that is longer.
+- The whole run has one 30 s deadline from the moment it starts. Each attempt
+  waits up to 8 s for a reply, never past the deadline, and a retry that
+  would start after the deadline is not made. So the status turns `failed` within 30 s
+  whether the room refuses every sync or never answers: refused at once,
+  after about 28 s; never answered, at 30 s. A refusal that is not retryable
+  fails at once.
 - `presentedDocKey` changes with every new local copy: a new `docGeneration`,
   a close and present in one batch, or a new socket. The app then mounts
   again on the new document instead of keeping the one the provider dropped.
