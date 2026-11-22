@@ -9126,6 +9126,7 @@ export function useMeetSocket({
     let nextDelayOverrideMs: number | null = null;
     let hasTriedHeldJoinInfo = false;
     let mayReuseSocket = true;
+    let roomWaitExpired = false;
     reconnectInFlightRef.current = true;
     reconnectAttemptsRef.current = resolveReconnectStartAttempts(
       reconnectAttemptsRef.current,
@@ -9361,7 +9362,9 @@ export function useMeetSocket({
               nextDelayOverrideMs = retryPlan.delayMs;
               reconnectAttemptsRef.current = attempt - 1;
             } else {
-              isRecoverable = false;
+              // Stop retrying, but leave Try again: the room can still come
+              // back after the window.
+              roomWaitExpired = true;
             }
           }
           console.warn(
@@ -9409,6 +9412,7 @@ export function useMeetSocket({
             }
             continue;
           }
+          if (roomWaitExpired) break;
           if (shouldSurfaceReconnectState) {
             updateReconnectRecoveryStatus(
               buildReconnectRecoveryStatus(
