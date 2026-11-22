@@ -162,10 +162,15 @@ export function QaPanel({
   const orderedEntries = useMemo(() => {
     const rank = (entry: WebinarQaEntry): number =>
       entry.status === "answering" ? 0 : entry.status === "dismissed" ? 2 : 1;
+    // A hidden question stays in two lists: a host's, and its asker's own.
+    const isOwn = (entry: WebinarQaEntry): boolean =>
+      Boolean(currentUserId && entry.userId === currentUserId);
     return [...entries]
-      .filter((entry) => onModerate || entry.status !== "dismissed")
+      .filter(
+        (entry) => onModerate || entry.status !== "dismissed" || isOwn(entry),
+      )
       .sort((a, b) => rank(a) - rank(b) || a.askedAt - b.askedAt);
-  }, [entries, onModerate]);
+  }, [entries, onModerate, currentUserId]);
 
   useEffect(() => {
     if (orderedEntries.length > previousCountRef.current) {

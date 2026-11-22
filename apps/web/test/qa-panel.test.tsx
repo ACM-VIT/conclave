@@ -93,6 +93,21 @@ it("shows participants public questions without moderation controls", async () =
   expect(container.textContent).toContain("Everyone in the meeting can see questions.");
 });
 
+it("keeps the asker's own question in their list after a host hides it", async () => {
+  await render({
+    entries: [
+      entry({ id: "q1", question: "Mine, hidden by a host", status: "dismissed", userId: "ben#1" }),
+      entry({ id: "q2", question: "Someone else's, hidden", status: "dismissed" }),
+    ],
+    onUpvote: () => {},
+  });
+
+  const own = entryCard("Mine, hidden by a host");
+  expect(own?.textContent).toContain("Hidden");
+  expect(own?.querySelector<HTMLButtonElement>('[data-testid="qa-upvote"]')?.disabled).toBe(true);
+  expect(entryCard("Someone else's, hidden")).toBeUndefined();
+});
+
 it("tells a viewer without a verified identity to sign in, in place of the composer", async () => {
   await render({ askNeedsIdentity: true, onSubmit: undefined });
 
