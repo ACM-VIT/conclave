@@ -7242,6 +7242,67 @@ export function useMeetSocket({
     ],
   );
 
+  const applyJoinAnswerIceServers = useCallback(
+    (iceServers: RTCIceServer[] | undefined) => {
+      if (!Array.isArray(iceServers)) return;
+      const { stunIceServers, turnIceServers } =
+        splitIceServersByType(iceServers);
+      runtimeStunIceServersRef.current =
+        stunIceServers.length > 0 ? stunIceServers : null;
+      runtimeTurnIceServersRef.current =
+        turnIceServers.length > 0 ? turnIceServers : null;
+      // Relay-only needs a relay. Without TURN in this answer, go back to the
+      // direct path rather than offer no candidates.
+      if (turnIceServers.length === 0) relayOnlyIceRef.current = false;
+    },
+    [],
+  );
+
+  // Fetches a fresh join answer for its ICE servers while the socket stays
+  // connected, so the user keeps their place in the room instead of going
+  // back through the room's entry checks.
+  const refreshIceServersOnOpenSocket = useCallback(
+    async (roomId: string) => {
+      const generation = reconnectGenerationRef.current;
+      const request = new AbortController();
+      joinInfoRequestRef.current = request;
+      try {
+        const joinInfo = await getJoinInfo(roomId, sessionIdRef.current, {
+          user,
+          isHost: isAdmin,
+          joinMode,
+          signal: request.signal,
+        });
+        if (
+          generation !== reconnectGenerationRef.current ||
+          intentionalDisconnectRef.current
+        ) {
+          return;
+        }
+        applyJoinAnswerIceServers(joinInfo.iceServers);
+        heldJoinInfoRef.current = holdJoinInfo(joinInfo, {
+          roomId,
+          grant: { joinMode, userId: user?.id ?? "", isHost: isAdmin },
+          receivedAt: Date.now(),
+        });
+      } catch (error) {
+        console.warn(
+          "[Meets] Could not refresh ICE servers; keeping the current ones:",
+          error,
+        );
+      }
+    },
+    [
+      applyJoinAnswerIceServers,
+      getJoinInfo,
+      intentionalDisconnectRef,
+      isAdmin,
+      joinMode,
+      sessionIdRef,
+      user,
+    ],
+  );
+
   const connectSocket = useCallback(
     (
       targetRoomId: string,
@@ -7353,17 +7414,7 @@ export function useMeetSocket({
             }
             const socketUrl = sfuUrlOverride ?? sfuUrl;
 
-            if (Array.isArray(iceServers)) {
-              const { stunIceServers, turnIceServers } =
-                splitIceServersByType(iceServers);
-              runtimeStunIceServersRef.current =
-                stunIceServers.length > 0 ? stunIceServers : null;
-              runtimeTurnIceServersRef.current =
-                turnIceServers.length > 0 ? turnIceServers : null;
-              // Relay-only needs a relay. Without TURN in this answer, go
-              // back to the direct path rather than offer no candidates.
-              if (turnIceServers.length === 0) relayOnlyIceRef.current = false;
-            }
+            applyJoinAnswerIceServers(iceServers);
 
             const socket = io(socketUrl, {
               transports: ["websocket", "polling"],
@@ -9117,6 +9168,7 @@ export function useMeetSocket({
       userId,
       onTtsMessage,
       onSocketReady,
+      applyJoinAnswerIceServers,
     ],
   );
 
@@ -9166,11 +9218,11 @@ export function useMeetSocket({
     let roomUnavailableSince: number | null = null;
     let roomUnavailableRetries = 0;
     let nextDelayOverrideMs: number | null = null;
-    // A refresh skips both the held answer and the open socket, so the first
-    // attempt asks the join route.
-    const refreshIceServers = options?.refreshIceServers === true;
-    let hasTriedHeldJoinInfo = refreshIceServers;
-    let mayReuseSocket = !refreshIceServers;
+    // A refresh asks the join route for current ICE servers: on the open
+    // socket when it is still connected, or for the next socket otherwise.
+    let pendingIceServersRefresh = options?.refreshIceServers === true;
+    let hasTriedHeldJoinInfo = pendingIceServersRefresh;
+    let mayReuseSocket = true;
     let roomWaitExpired = false;
     reconnectInFlightRef.current = true;
     reconnectAttemptsRef.current = resolveReconnectStartAttempts(
@@ -9287,7 +9339,12 @@ export function useMeetSocket({
               : "held-first";
             hasTriedHeldJoinInfo = true;
             await connectSocket(reconnectRoomId, { reconnectJoinInfo });
+            pendingIceServersRefresh = false;
           } else {
+            if (pendingIceServersRefresh) {
+              pendingIceServersRefresh = false;
+              await refreshIceServersOnOpenSocket(reconnectRoomId);
+            }
             setMeetError(null);
           }
           if (reconnectGeneration !== reconnectGenerationRef.current) return;
@@ -9508,6 +9565,7 @@ export function useMeetSocket({
     connectSocket,
     currentRoomIdRef,
     ensureLiveLocalMediaForJoin,
+    refreshIceServersOnOpenSocket,
     getJoinMediaNeeds,
     intentionalDisconnectRef,
     joinOptionsRef,
