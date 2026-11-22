@@ -1,24 +1,53 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { extractComments, iconGeneratorOutputs, listSourceFiles, toolWorks } from "./extract.mjs";
-import { configuresNoComments } from "./policy.mjs";
+import { configuresNoComments, languageOf } from "./policy.mjs";
 
 
 const missing = (command, args) => {
   const probe = toolWorks(command, args);
   return probe.ok ? false : probe.reason;
 };
-const swiftMissing = missing("swift", ["--version"]);
-const kotlinMissing = missing("java", ["-version"]) || missing("javac", ["-version"]);
-const python312Missing =
-  spawnSync("python3", ["-c", "import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)"]).status === 0
-    ? false
-    : "python3 3.12 or newer is not on PATH";
+const TOOL_REASONS = {
+  swift: missing("swift", ["--version"]),
+  jdk: missing("java", ["-version"]) || missing("javac", ["-version"]),
+  python312: (() => {
+    const probe = spawnSync("python3", ["-c", "import sys; sys.exit(0 if sys.version_info >= (3, 12) else 3)"]);
+    if (probe.error) return "`python3` is not on PATH";
+    return probe.status === 0 ? false : "python3 is older than 3.12";
+  })(),
+  bash: missing("bash", ["--version"]),
+};
+const TOOL_FOR_LANGUAGE = { swift: "swift", kotlin: "jdk", python: "python312" };
+
+const requires = (tools) => {
+  const reasons = tools.filter((tool) => TOOL_REASONS[tool]).map((tool) => `${tool}: ${TOOL_REASONS[tool]}`);
+  return reasons.length > 0 ? `needs ${reasons.join("; ")}` : false;
+};
+
+let declaredTools = null;
+
+const toolTest = (name, tools, fn) =>
+  test(name, { skip: requires(tools) }, async (t) => {
+    declaredTools = new Set(tools);
+    try {
+      await fn(t);
+    } finally {
+      declaredTools = null;
+    }
+  });
+
+const toolsFor = (file) => (TOOL_FOR_LANGUAGE[languageOf(file)] ? [TOOL_FOR_LANGUAGE[languageOf(file)]] : []);
+
+const assertDeclared = (file) => {
+  const tool = TOOL_FOR_LANGUAGE[languageOf(file)];
+  if (tool && !declaredTools?.has(tool)) throw new Error(`${file} needs ${tool}, which this test does not declare`);
+};
 
 const ENDINGS = [
   ["CRLF", (source) => source.replace(/\n/g, "\r\n")],
@@ -28,6 +57,7 @@ const ENDINGS = [
 const comparable = (comments) => comments.map(({ line, endLine, ownLines, linesShed, allowed, text }) => ({ line, endLine, ownLines, linesShed, allowed, text }));
 
 const extract = (source, file) => {
+  assertDeclared(file);
   const lf = extractComments(source, file);
   for (const [name, convert] of ENDINGS) {
     assert.deepEqual(comparable(extractComments(convert(source), file)), comparable(lf), `${file} differs with ${name} line endings`);
@@ -41,7 +71,7 @@ const disallowed = (source, file) =>
     .filter((comment) => !comment.allowed)
     .map((comment) => comment.text);
 
-test("strings, templates and regexes that look like comments are code", () => {
+toolTest("strings, templates and regexes that look like comments are code", [], (t) => {
   const source = [
     'const url = "https://example.com/a";',
     "const glob = 'public/*.css';",
@@ -54,7 +84,7 @@ test("strings, templates and regexes that look like comments are code", () => {
   assert.deepEqual(texts(source, "a.ts"), ["// trailing"]);
 });
 
-test("JSX text is not a comment but a JSX comment expression is", () => {
+toolTest("JSX text is not a comment but a JSX comment expression is", [], (t) => {
   const source = [
     "export const View = () => (",
     "  <div title=\"//x\">",
@@ -67,7 +97,7 @@ test("JSX text is not a comment but a JSX comment expression is", () => {
   assert.deepEqual(texts(source, "view.tsx"), ["/* hidden note */"]);
 });
 
-test("positions report lines, ownership and the lines a deletion sheds", () => {
+toolTest("positions report lines, ownership and the lines a deletion sheds", [], (t) => {
   const source = ["const a = 1;", "/**", " * block", " */", "const b = 2; // tail", "  // own"].join("\n");
   const comments = extract(source, "a.ts").map(({ line, endLine, ownLines, linesShed }) => ({
     line,
@@ -82,20 +112,20 @@ test("positions report lines, ownership and the lines a deletion sheds", () => {
   ]);
 });
 
-test("shebangs are reported as allowed directives in every language", { skip: python312Missing }, () => {
-  for (const [file, source] of [
-    ["run.mjs", "#!/usr/bin/env node\n// note\nrun();\n"],
-    ["run.sh", "#!/bin/sh\n# note\nrun\n"],
-    ["run.py", "#!/usr/bin/env python3\n# note\nrun()\n"],
-  ]) {
+for (const [file, source] of [
+  ["run.mjs", "#!/usr/bin/env node\n// note\nrun();\n"],
+  ["run.sh", "#!/bin/sh\n# note\nrun\n"],
+  ["run.py", "#!/usr/bin/env python3\n# note\nrun()\n"],
+]) {
+  toolTest(`a shebang is an allowed directive in ${file}`, toolsFor(file), () => {
     const [shebang, note] = extract(source, file);
-    assert.equal(shebang.allowed, "shebang", file);
-    assert.equal(shebang.line, 1, file);
-    assert.equal(note.allowed, null, file);
-  }
-});
+    assert.equal(shebang.allowed, "shebang");
+    assert.equal(shebang.line, 1);
+    assert.equal(note.allowed, null);
+  });
+}
 
-test("only the allowlisted script directives are allowed", () => {
+toolTest("only the allowlisted script directives are allowed", [], (t) => {
   const source = [
     "/// <reference types=\"vite/client\" />",
     "// @vitest-environment happy-dom",
@@ -128,7 +158,7 @@ test("only the allowlisted script directives are allowed", () => {
   );
 });
 
-test("a license header is allowed only at the very top of the file", () => {
+toolTest("a license header is allowed only at the very top of the file", [], (t) => {
   const header = ["// Copyright 2024 Example Inc.", "// Licensed under the MIT License.", "// See LICENSE."].join("\n");
   const source = `${header}\n\n// Narrative about the module.\nconst a = 1;\n// Copyright notice in the middle.\n`;
   assert.deepEqual(
@@ -143,7 +173,7 @@ test("a license header is allowed only at the very top of the file", () => {
   );
 });
 
-test("Swift raw, multiline and interpolated strings hide comment markers", { skip: swiftMissing }, () => {
+toolTest("Swift raw, multiline and interpolated strings hide comment markers", ["swift"], (t) => {
   const source = [
     "// swift-tools-version: 5.9",
     'let raw = #"// not a comment "quoted" "#',
@@ -165,7 +195,7 @@ test("Swift raw, multiline and interpolated strings hide comment markers", { ski
   assert.deepEqual(disallowed(source, "Package.swift").length, 2);
 });
 
-test("Kotlin raw strings, templates and char literals hide comment markers", { skip: kotlinMissing }, () => {
+toolTest("Kotlin raw strings, templates and char literals hide comment markers", ["jdk"], (t) => {
   const source = [
     'val raw = """// not a comment /* nor this */"""',
     'val quoteRun = """ends with quotes"""" // real one',
@@ -182,7 +212,7 @@ test("Kotlin raw strings, templates and char literals hide comment markers", { s
   ]);
 });
 
-test("shell # is a comment only at the start of a word outside quotes", () => {
+toolTest("shell # is a comment only at the start of a word outside quotes", [], (t) => {
   const source = [
     "#!/usr/bin/env bash",
     'echo "# not a comment" \'# nor this\' a#b ${#items[@]} $#',
@@ -197,12 +227,12 @@ test("shell # is a comment only at the start of a word outside quotes", () => {
   assert.deepEqual(texts(source, "run.sh"), ["#!/usr/bin/env bash", "# real one", "# real two"]);
 });
 
-test("Python strings hide hash marks", { skip: python312Missing }, () => {
+toolTest("Python strings hide hash marks", ["python312"], (t) => {
   const source = ['a = "# not"', "b = '''", "# docstring line", "'''", 'c = f"{x}#"  # real'].join("\n");
   assert.deepEqual(texts(source, "tool.py"), ["# real"]);
 });
 
-test("CSS strings hide comment markers and sourceMappingURL is allowed", () => {
+toolTest("CSS strings hide comment markers and sourceMappingURL is allowed", [], (t) => {
   const source = ['a::after { content: "/* not */"; }', "/* real */", "/*# sourceMappingURL=app.css.map */"].join("\n");
   assert.deepEqual(
     extract(source, "app.css").map((comment) => [comment.text, comment.allowed]),
@@ -213,7 +243,7 @@ test("CSS strings hide comment markers and sourceMappingURL is allowed", () => {
   );
 });
 
-test("Skip transpiler directives are allowed in Swift and nowhere else", { skip: swiftMissing || kotlinMissing }, () => {
+toolTest("Skip transpiler directives are allowed in Swift", ["swift"], () => {
   const source = [
     "// SKIP SYMBOLFILE",
     "// SKIP INSERT: @Suppress(\"UNCHECKED_CAST\")",
@@ -229,17 +259,18 @@ test("Skip transpiler directives are allowed in Swift and nowhere else", { skip:
     extract(source, "Bridge+Android.swift").map((comment) => comment.allowed),
     ["skip-directive", "skip-directive", "skip-directive", "skip-directive", "skip-directive", "skip-directive", null, null],
   );
-  assert.deepEqual(
-    extract("// SKIP SYMBOLFILE\nval a = 1\n", "a.kt").map((comment) => comment.allowed),
-    [null],
-  );
-  assert.deepEqual(
-    extract("// SKIP SYMBOLFILE\nconst a = 1;\n", "a.ts").map((comment) => comment.allowed),
-    [null],
-  );
 });
 
-test("a license notice may follow a directive prologue, an attribution is a comment", { skip: kotlinMissing }, () => {
+for (const [file, source] of [
+  ["a.kt", "// SKIP SYMBOLFILE\nval a = 1\n"],
+  ["a.ts", "// SKIP SYMBOLFILE\nconst a = 1;\n"],
+]) {
+  toolTest(`a Skip directive is an ordinary comment in ${file}`, toolsFor(file), () => {
+    assert.deepEqual(extract(source, file).map((comment) => comment.allowed), [null]);
+  });
+}
+
+toolTest("a license notice may follow a directive prologue, an attribution is a comment", [], () => {
   const source = [
     '"use client";',
     "",
@@ -249,15 +280,18 @@ test("a license notice may follow a directive prologue, an attribution is a comm
     "import { a } from \"a\";",
   ].join("\n");
   assert.deepEqual(extract(source, "prompt-input.tsx").map((comment) => comment.allowed), ["license-header", null]);
-  const apache = ["/* Licensed under the Apache License, Version 2.0: Material Symbols by Google. */", "package a"].join("\n");
-  assert.deepEqual(extract(apache, "Icons.kt").map((comment) => comment.allowed), [null]);
   assert.deepEqual(
     extract('const a = "use client";\n// Copyright 2024 Example\n', "a.ts").map((comment) => comment.allowed),
     [null],
   );
 });
 
-test("Swift regex literals hide comment markers", { skip: swiftMissing }, () => {
+toolTest("a Kotlin attribution that only names a license is a comment", ["jdk"], () => {
+  const apache = ["/* Licensed under the Apache License, Version 2.0: Material Symbols by Google. */", "package a"].join("\n");
+  assert.deepEqual(extract(apache, "Icons.kt").map((comment) => comment.allowed), [null]);
+});
+
+toolTest("Swift regex literals hide comment markers", ["swift"], (t) => {
   const source = [
     "let url = #/https?://example\\.com/#",
     "let wide = ##/a/#b/##",
@@ -273,7 +307,7 @@ test("Swift regex literals hide comment markers", { skip: swiftMissing }, () => 
   assert.deepEqual(texts(source, "Patterns.swift"), ["// real one", "// real two"]);
 });
 
-test("a directive is never part of a license header", () => {
+toolTest("a directive is never part of a license header", [], (t) => {
   const source = [
     "// SPDX-License-Identifier: MIT",
     "/* eslint-disable conclave/no-comments -- copyright notice below */",
@@ -292,7 +326,7 @@ test("a directive is never part of a license header", () => {
   );
 });
 
-test("shell here-strings, arithmetic shifts and escaped heredoc delimiters", () => {
+toolTest("shell here-strings, arithmetic shifts and escaped heredoc delimiters", [], (t) => {
   const source = [
     "#!/bin/bash",
     "cat <<< hello",
@@ -311,7 +345,7 @@ test("shell here-strings, arithmetic shifts and escaped heredoc delimiters", () 
   assert.deepEqual(texts(source, "run.sh").slice(1), ["# after here-string", "# after arithmetic", "# trailing"]);
 });
 
-test("Kotlin multi-dollar strings interpolate only with the full dollar run", { skip: kotlinMissing }, () => {
+toolTest("Kotlin multi-dollar strings interpolate only with the full dollar run", ["jdk"], (t) => {
   const source = [
     'val a = $$"""value ${ /* literal */ } and $${ x /* real one */ }"""',
     'val b = "plain ${ y /* real two */ }"',
@@ -320,12 +354,12 @@ test("Kotlin multi-dollar strings interpolate only with the full dollar run", { 
   assert.deepEqual(texts(source, "a.kt"), ["/* real one */", "/* real two */"]);
 });
 
-test("CSS unquoted url() is not a comment", () => {
+toolTest("CSS unquoted url() is not a comment", [], (t) => {
   const source = ["a { background: url(img/*2x*/a.png); }", "/* real */", 'b { background: URL( "x/*y" ); }'].join("\n");
   assert.deepEqual(texts(source, "a.css"), ["/* real */"]);
 });
 
-test("Python f-string replacement fields can hold comments, format specs cannot", { skip: python312Missing }, () => {
+toolTest("Python f-string replacement fields can hold comments, format specs cannot", ["python312"], (t) => {
   const source = [
     'value = f"""{',
     "    total  # inside a replacement field",
@@ -337,13 +371,13 @@ test("Python f-string replacement fields can hold comments, format specs cannot"
   assert.deepEqual(texts(source, "a.py"), ["# inside a replacement field", "# real"]);
 });
 
-test("Swift raw strings take any number of hashes", { skip: swiftMissing }, () => {
+toolTest("Swift raw strings take any number of hashes", ["swift"], (t) => {
   const hashes = "#".repeat(12);
   const source = [`let s = ${hashes}"// not a comment "${"#".repeat(11)} still raw"${hashes}`, "// real"].join("\n");
   assert.deepEqual(texts(source, "Raw.swift"), ["// real"]);
 });
 
-test("Skip directives follow the pinned skipstone grammar in line and block form", { skip: swiftMissing }, () => {
+toolTest("Skip directives follow the pinned skipstone grammar in line and block form", ["swift"], (t) => {
   const source = [
     "// SKIP INSERT: val x = 1",
     "// val y = 2",
@@ -364,7 +398,7 @@ test("Skip directives follow the pinned skipstone grammar in line and block form
   );
 });
 
-test("a license header needs a real marker and covers only the top block", () => {
+toolTest("a license header needs a real marker and covers only the top block", [], (t) => {
   const todo = ["// TODO revisit the copyright dialog", "// and the licensed under review copy", "export {};"].join("\n");
   assert.deepEqual(extract(todo, "a.ts").map((c) => c.allowed), [null, null]);
   const split = ["// Copyright (c) 2024 Example Inc.", "", "// Narrative about the module.", "export {};"].join("\n");
@@ -377,7 +411,7 @@ test("a license header needs a real marker and covers only the top block", () =>
   }
 });
 
-test("NOWARN takes only skipstone's diagnostic ids, and trailing spaces are trimmed", { skip: swiftMissing }, () => {
+toolTest("NOWARN takes only skipstone's diagnostic ids, and trailing spaces are trimmed", ["swift"], (t) => {
   const source = [
     "// SKIP NOWARN   ",
     "// SKIP NOWARN(free text)",
@@ -391,7 +425,7 @@ test("NOWARN takes only skipstone's diagnostic ids, and trailing spaces are trim
   );
 });
 
-test("provenance hashes are allowed only in files the icon generator writes", { skip: kotlinMissing }, () => {
+toolTest("provenance hashes are allowed only in files the icon generator writes", ["jdk"], (t) => {
   const hash = "a8f815b7cd4ceb7bf9c5d04f6fed8528a3cf77981e3994e91cace24d6e25b541";
   const header = `// Profile material-rounded-24-absolute-v1; manifest SHA256 ${hash}; generator SHA256 ${hash}.`;
   const vector = `    // mic.fill1; input SHA256 ${hash}.`;
@@ -404,7 +438,7 @@ test("provenance hashes are allowed only in files the icon generator writes", { 
   );
 });
 
-test("the icon generator's output list is read from the generator", () => {
+toolTest("the icon generator's output list is read from the generator", [], (t) => {
   assert.deepEqual([...iconGeneratorOutputs()].sort(), [
     "apps/conclave-skip/Sources/Conclave/DesignSystem/iOS/Icons/ConclaveSymbols.swift",
     "apps/conclave-skip/Sources/Conclave/DesignSystem/iOS/Icons/NativeSymbolCatalog.swift",
@@ -414,7 +448,7 @@ test("the icon generator's output list is read from the generator", () => {
   ]);
 });
 
-test("a license block counts only comments that are notices themselves", () => {
+toolTest("a license block counts only comments that are notices themselves", [], (t) => {
   const todo = ["// TODO change the MIT License dialog", "// and the copy next to it", "export {};"].join("\n");
   assert.deepEqual(extract(todo, "a.ts").map((c) => c.allowed), [null, null]);
   const spdx = ["// SPDX-License-Identifier: MIT", "/* TODO clean this module up */", "export {};"].join("\n");
@@ -425,7 +459,7 @@ test("a license block counts only comments that are notices themselves", () => {
   assert.deepEqual(extract(block, "e.ts").map((c) => c.allowed), ["license-header"]);
 });
 
-test("inline config that enables the rule is not a bypass, escaped names are decoded", () => {
+toolTest("inline config that enables the rule is not a bypass, escaped names are decoded", [], (t) => {
   const source = [
     '/* eslint conclave/no-comments: "error" */',
     '/* eslint "conclave\\u002fno-comments": "off" */',
@@ -439,23 +473,26 @@ test("inline config that enables the rule is not a bypass, escaped names are dec
   );
 });
 
-test("escapes in CSS, shell and Kotlin never open a comment", { skip: kotlinMissing }, () => {
+toolTest("escapes in CSS and shell never open a comment", [], () => {
   assert.deepEqual(texts("a { background: url(a\\)b/*literal*/x); }\n/* real */\n", "a.css"), ["/* real */"]);
   assert.deepEqual(texts('.a\\"b { color: red; }\n/* real */\n.c { content: "x"; }\n', "b.css"), ["/* real */"]);
   assert.deepEqual(texts("echo word\\ #suffix\necho one\\ #literal # real\n", "a.sh"), ["# real"]);
+});
+
+toolTest("Kotlin backtick names and multi-dollar strings never open a comment", ["jdk"], () => {
   assert.deepEqual(texts('val `a"b` = 1 // real\nval c = "x"\n', "a.kt"), ["// real"]);
   assert.deepEqual(texts('val d = $$"""$$${ 1 /* real */ }"""\n', "b.kt"), ["/* real */"]);
 });
 
-test("Python comments come from tokenize, so format specs stay code", { skip: python312Missing }, () => {
+toolTest("Python comments come from tokenize, so format specs stay code", ["python312"], (t) => {
   assert.deepEqual(texts('print(f"{1:=#6x}")  # real\n', "a.py"), ["# real"]);
 });
 
-test("Python 3.12 comments inside a multiline f-string field", { skip: python312Missing }, () => {
+toolTest("Python 3.12 comments inside a multiline f-string field", ["python312"], (t) => {
   assert.deepEqual(texts('value = f"""{\n    total  # inside\n}"""\n', "a.py"), ["# inside"]);
 });
 
-test("shell fixtures that bash runs agree with the extractor", (t) => {
+toolTest("shell fixtures that bash runs agree with the extractor", ["bash"], (t) => {
   const bash = spawnSync("bash", ["--version"]);
   if (bash.error) {
     t.skip("bash is not installed");
@@ -489,7 +526,7 @@ test("shell fixtures that bash runs agree with the extractor", (t) => {
   assert.deepEqual(texts(source, "fixture.sh"), ["# after quoted arithmetic", "# real", "# last"]);
 });
 
-test("a # inside ${...} and a comment after a line continuation, run by bash", (t) => {
+toolTest("a # inside ${...} and a comment after a line continuation, run by bash", ["bash"], (t) => {
   if (spawnSync("bash", ["--version"]).error) {
     t.skip("bash is not installed");
     return;
@@ -507,7 +544,7 @@ test("a # inside ${...} and a comment after a line continuation, run by bash", (
   assert.deepEqual(texts(source, "fixture.sh"), ["# it's a comment", "# last"]);
 });
 
-test("a license notice must start its comment", () => {
+toolTest("a license notice must start its comment", [], (t) => {
   const source = [
     "// SPDX-License-Identifier: MIT",
     "// TODO: Update the Copyright 2026 label in Settings.",
@@ -520,27 +557,27 @@ test("a license notice must start its comment", () => {
   assert.deepEqual(extract(dialog, "c.ts").map((c) => c.allowed), ["license-header", null]);
 });
 
-test("a Swift raw string #\"\"\"# holds one quote and does not open a multiline string", { skip: swiftMissing }, () => {
+toolTest("a Swift raw string #\"\"\"# holds one quote and does not open a multiline string", ["swift"], (t) => {
   assert.deepEqual(texts('let a = #"""#\n// real\nlet b = ##"""##\n// two\n', "A.swift"), ["// real", "// two"]);
   assert.deepEqual(texts('let c = #"""\n  // inside\n  """#\n// three\n', "B.swift"), ["// three"]);
   assert.deepEqual(texts('let r = /=a"b/ // real\n', "R.swift"), ["// real"]);
 });
 
-test("an unquoted CSS url() is scanned to its closing paren however much whitespace it has", () => {
+toolTest("an unquoted CSS url() is scanned to its closing paren however much whitespace it has", [], (t) => {
   assert.deepEqual(texts(`a { b: url(${" ".repeat(60)}img/*large*/x.png); }\n/* real */\n`, "a.css"), ["/* real */"]);
 });
 
-test("a # license notice in shell or Python is recognised", { skip: python312Missing }, () => {
-  for (const [file, source] of [
-    ["a.sh", "# SPDX-License-Identifier: MIT\necho\n"],
-    ["b.sh", "#!/bin/sh\n# SPDX-License-Identifier: MIT\necho\n"],
-    ["a.py", "# SPDX-License-Identifier: MIT\nx = 1\n"],
-  ]) {
-    assert.equal(extract(source, file).at(-1).allowed, "license-header", file);
-  }
-});
+for (const [file, source] of [
+  ["a.sh", "# SPDX-License-Identifier: MIT\necho\n"],
+  ["b.sh", "#!/bin/sh\n# SPDX-License-Identifier: MIT\necho\n"],
+  ["a.py", "# SPDX-License-Identifier: MIT\nx = 1\n"],
+]) {
+  toolTest(`a # license notice is recognised in ${file}`, toolsFor(file), () => {
+    assert.equal(extract(source, file).at(-1).allowed, "license-header");
+  });
+}
 
-test("bash continuations, arithmetic and command substitution in parameter defaults, run by bash", (t) => {
+toolTest("bash continuations, arithmetic and command substitution in parameter defaults, run by bash", ["bash"], (t) => {
   if (spawnSync("bash", ["--version"]).error) {
     t.skip("bash is not installed");
     return;
@@ -563,7 +600,7 @@ test("bash continuations, arithmetic and command substitution in parameter defau
   assert.deepEqual(texts(source, "fixture.sh"), ["# Don't restart yet", "# last"]);
 });
 
-test("an f-string with reused quotes reads the same as Python 3.12 does", { skip: python312Missing }, () => {
+toolTest("an f-string with reused quotes reads the same as Python 3.12 does", ["python312"], (t) => {
   assert.deepEqual(texts('label = f"{labels["#primary"]}"\n# real\n', "a.py"), ["# real"]);
 });
 
@@ -576,7 +613,7 @@ const olderPython = () => {
   return undefined;
 };
 
-test("with only a Python older than 3.12 the extractor fails instead of guessing", (t) => {
+toolTest("with only a Python older than 3.12 the extractor fails instead of guessing", [], (t) => {
   const older = olderPython();
   if (!older) {
     t.skip("no Python older than 3.12 is installed");
@@ -594,7 +631,7 @@ test("with only a Python older than 3.12 the extractor fails instead of guessing
   assert.match(run.stderr, /Python 3\.12 or newer is required to read Python comments/);
 });
 
-test("the sweep finds a file whose scanner stops before the end", async (t) => {
+toolTest("the sweep finds a file whose scanner stops before the end", [], async (t) => {
   const { filesMissingEndMarker } = await import("./sweep.mjs");
   const repo = mkdtempSync(path.join(tmpdir(), "comment-sweep-"));
   t.after(() => rmSync(repo, { recursive: true, force: true }));
@@ -603,7 +640,7 @@ test("the sweep finds a file whose scanner stops before the end", async (t) => {
   assert.deepEqual(filesMissingEndMarker(repo, ["ok.ts", "unterminated.css"]), ["unterminated.css"]);
 });
 
-test("a license notice after a shebang and a blank line is still the leading block", () => {
+toolTest("a license notice after a shebang and a blank line is still the leading block", [], (t) => {
   assert.deepEqual(
     extract("#!/bin/sh\n\n# Copyright 2026 Example Inc.\necho hi\n", "run.sh").map((comment) => comment.allowed),
     ["shebang", "license-header"],
@@ -614,7 +651,7 @@ test("a license notice after a shebang and a blank line is still the leading blo
   );
 });
 
-test("a tracked file deleted from the working tree does not break listing or the sweep", async (t) => {
+toolTest("a tracked file deleted from the working tree does not break listing or the sweep", [], async (t) => {
   const { filesMissingEndMarker } = await import("./sweep.mjs");
   const repo = mkdtempSync(path.join(tmpdir(), "comment-deleted-"));
   t.after(() => rmSync(repo, { recursive: true, force: true }));
@@ -629,7 +666,7 @@ test("a tracked file deleted from the working tree does not break listing or the
   assert.deepEqual(filesMissingEndMarker(repo), []);
 });
 
-test("CSS comments come from the CSS tokenizer, so url() bodies stay data", () => {
+toolTest("CSS comments come from the CSS tokenizer, so url() bodies stay data", [], (t) => {
   assert.deepEqual(texts("a { b: u\\72l(icon/*crop*/x.svg) }\n/* real */\n", "a.css"), ["/* real */"]);
   assert.deepEqual(texts("a { b: u\\72l(img/*2x*/x.png) }\n", "b.css"), []);
   assert.deepEqual(texts("a { --x: #url(/* real */ red) }\n", "c.css"), ["/* real */"]);
@@ -641,27 +678,35 @@ const FACEHASH_NOTICE = readFileSync(new URL("../../../apps/web/src/lib/avatar-f
   .slice(0, 21)
   .join("\n");
 
-test("the repo's facehash MIT notice is a license header in a new file", () => {
+toolTest("the repo's facehash MIT notice is a license header in a new file", [], (t) => {
   assert.match(FACEHASH_NOTICE, /^\/\*\*[\s\S]*Permission is hereby granted[\s\S]*\*\/$/);
   assert.deepEqual(extract(`${FACEHASH_NOTICE}\nexport const a = 1;\n// prose\n`, "new.ts").map((c) => c.allowed), ["license-header", null]);
 });
 
-test("an SPDX and Copyright header passes in every language and line ending", { skip: swiftMissing }, () => {
-  for (const [file, marker] of [["a.ts", "//"], ["a.sh", "#"], ["a.py", "#"], ["A.swift", "//"]]) {
-    const source = `${marker} SPDX-License-Identifier: MIT\n${marker} Copyright 2026 Example Inc.\n${file.endsWith(".swift") ? "let a = 1" : file.endsWith(".py") ? "a = 1" : file.endsWith(".sh") ? "echo a" : "export {};"}\n`;
-    assert.deepEqual(extract(source, file).map((c) => c.allowed), ["license-header", "license-header"], file);
-  }
+for (const [file, marker, code] of [
+  ["a.ts", "//", "export {};"],
+  ["a.sh", "#", "echo a"],
+  ["a.py", "#", "a = 1"],
+  ["A.swift", "//", "let a = 1"],
+]) {
+  toolTest(`an SPDX and Copyright header passes in ${file} with every line ending`, toolsFor(file), () => {
+    const source = `${marker} SPDX-License-Identifier: MIT\n${marker} Copyright 2026 Example Inc.\n${code}\n`;
+    assert.deepEqual(extract(source, file).map((c) => c.allowed), ["license-header", "license-header"]);
+  });
+}
+
+toolTest("a license header may follow a Swift shebang", ["swift"], () => {
+  assert.deepEqual(extract("#!/usr/bin/env swift\n// SPDX-License-Identifier: MIT\nprint(1)\n", "tool.swift").map((c) => c.allowed), ["license-header"]);
 });
 
-test("a license header may follow a Swift shebang or a Python encoding line", { skip: swiftMissing }, () => {
-  assert.deepEqual(extract("#!/usr/bin/env swift\n// SPDX-License-Identifier: MIT\nprint(1)\n", "tool.swift").map((c) => c.allowed), ["license-header"]);
+toolTest("a license header may follow a Python encoding line", ["python312"], () => {
   assert.deepEqual(
     extract("#!/usr/bin/env python3\n# -*- coding: utf-8 -*-\n# SPDX-License-Identifier: MIT\nx = 1\n", "tool.py").map((c) => c.allowed),
     ["shebang", "encoding-declaration", "license-header"],
   );
 });
 
-test("standard license texts in line comments are one notice, prose is not", () => {
+toolTest("standard license texts in line comments are one notice, prose is not", [], (t) => {
   const isc = [
     "// Copyright 2026 Example Inc.",
     "//",
@@ -700,11 +745,23 @@ test("standard license texts in line comments are one notice, prose is not", () 
   assert.ok(extract(apache, "apache.sh").every((c) => c.allowed === "license-header"));
 });
 
-test("files with bare CR line endings are read line by line", { skip: kotlinMissing || python312Missing }, () => {
+toolTest("a Kotlin file with bare CR line endings is read line by line", ["jdk"], () => {
+  assertDeclared("Main.kt");
   assert.deepEqual(extractComments('fun main() {\r    println("x")\r}\r// actual\r', "Main.kt").map((c) => [c.line, c.text]), [[4, "// actual"]]);
+});
+
+toolTest("a Python file with bare CR line endings is read line by line", ["python312"], () => {
+  assertDeclared("a.py");
   assert.deepEqual(extractComments("x = 1\r# actual\r", "a.py").map((c) => [c.line, c.text]), [[2, "# actual"]]);
 });
 
-test("the Swift helper refuses a file swift-syntax cannot parse", { skip: swiftMissing }, () => {
+toolTest("the Swift helper refuses a file swift-syntax cannot parse", ["swift"], (t) => {
+  assertDeclared("Broken.swift");
   assert.throws(() => extractComments('let s = """\n  unterminated\n// after\n', "Broken.swift"), /cannot read the comments in Broken\.swift: swift-syntax reported syntax errors/);
+});
+
+toolTest("a fixture whose language needs an undeclared tool fails in every environment", [], () => {
+  assert.throws(() => extract("x = 1\n", "a.py"), /a\.py needs python312, which this test does not declare/);
+  assert.throws(() => extract("let a = 1\n", "A.swift"), /A\.swift needs swift, which this test does not declare/);
+  assert.throws(() => extract("val a = 1\n", "A.kt"), /A\.kt needs jdk, which this test does not declare/);
 });
