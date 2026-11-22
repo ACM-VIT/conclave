@@ -55,6 +55,23 @@ struct ChatInputMemoTests {
                                                       pictureInPictureReplacesCallUI: true))
     }
 
+    @Test func anOpenCancelledBeforeTheChatAppearsLeavesTheUnreadMessagesUnread() {
+        let viewModel = joinedViewModel()
+        viewModel.state.chatMessages.append(ChatMessage(id: "m-a", userId: "remote@example.com#w", displayName: "Remote",
+                                                        content: "first unseen", roomId: "room-a"))
+        viewModel.shell.panels.toggle(.chat, from: .call)
+        viewModel.shell.panels.toggle(.chat, from: .call)
+        let dismissing = viewModel.shell.panels.snapshot
+        viewModel.shell.panels.didDismiss(session: dismissing.session, presentationID: dismissing.current?.presentationID ?? 0)
+        viewModel.state.chatMessages.append(ChatMessage(id: "m-b", userId: "remote@example.com#w", displayName: "Remote",
+                                                        content: "second unseen", roomId: "room-a"))
+        #expect(viewModel.chat.pendingUnreadCount == 2)
+
+        viewModel.shell.panels.toggle(.chat, from: .call)
+        let rowIds = viewModel.chat.timeline.rowIds
+        #expect(rowIds.firstIndex(of: "unread").map { rowIds[$0 + 1] } == "m-a")
+    }
+
     @Test func backgroundingTheAppClosesChatUntilItComesBack() {
         let viewModel = joinedViewModel()
         viewModel.shell.panels.present(.chat, from: .call)
