@@ -1,0 +1,129 @@
+import { readFileSync, readdirSync, existsSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+export const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+
+export const jobs = {
+  lint: {
+    budgetSeconds: 150,
+    before: [{ dir: "apps/web", exec: "next typegen" }],
+    tasks: [
+      { dir: ".", script: "lint:packages" },
+      { dir: "apps/web", script: "lint" },
+      { dir: ".", script: "konsistent" },
+    ],
+  },
+  typecheck: {
+    budgetSeconds: 75,
+    tasks: [
+      { dir: "apps/web", script: "typecheck" },
+      { dir: "packages/apps-sdk", script: "typecheck" },
+      { dir: "packages/meeting-core", script: "typecheck" },
+      { dir: "packages/ai", script: "typecheck" },
+      { dir: "packages/sfu", script: "typecheck" },
+      { dir: "packages/shared-browser", script: "typecheck" },
+    ],
+  },
+  test: {
+    budgetSeconds: 110,
+    tasks: [
+      { dir: "apps/web", script: "test:unit" },
+      { dir: "packages/sfu", script: "test" },
+      { dir: "packages/meeting-core", script: "test" },
+      { dir: "packages/ai", script: "test" },
+      { dir: "packages/shared-browser", script: "test" },
+    ],
+  },
+  build: {
+    budgetSeconds: 240,
+    tasks: [
+      { dir: "apps/web", script: "build" },
+      { dir: "packages/shared-browser", script: "build" },
+    ],
+  },
+  checks: {
+    budgetSeconds: 100,
+    tasks: [
+      { dir: ".", script: "test:quality-harness" },
+      { dir: ".", script: "test:deploy-preflight" },
+      { dir: ".", script: "test:cloudflare-manifests" },
+      { dir: ".", script: "test:native-tokens" },
+      { dir: ".", script: "test:native-icons" },
+      { dir: "packages/apps-sdk", script: "test:native-embed" },
+      { dir: "packages/apps-sdk", script: "test:native-embed-apps" },
+      { dir: "packages/apps-sdk", script: "check:apps" },
+      { dir: ".", script: "check:video-effect-assets" },
+      { dir: ".", script: "check:swift-events" },
+      { dir: ".", script: "check:native-tokens" },
+      { dir: ".", script: "check:native-icons" },
+      { dir: "packages/apps-sdk", script: "check:native-embed" },
+      { dir: ".", script: "check:native-emoji" },
+      { dir: ".", script: "check:native-game-fixtures" },
+      { dir: ".", exec: "node --test scripts/ci/*.test.mjs" },
+    ],
+  },
+};
+
+export function taskName(task) {
+  const where = task.dir === "." ? "" : `${task.dir} `;
+  const what = task.script ?? task.exec;
+  return `${where}${what}${task.args?.length ? ` ${task.args.join(" ")}` : ""}`;
+}
+
+export function taskCommand(task) {
+  if (task.exec) return `pnpm --dir ${task.dir} exec ${task.exec}`;
+  return ["pnpm", "--dir", task.dir, "run", task.script, ...(task.args ?? [])].join(" ");
+}
+
+export function workspacePackages(root = repoRoot) {
+  const byName = new Map();
+  for (const parent of ["apps", "packages"]) {
+    for (const entry of readdirSync(path.join(root, parent), { withFileTypes: true })) {
+      const manifest = path.join(root, parent, entry.name, "package.json");
+      if (!entry.isDirectory() || !existsSync(manifest)) continue;
+      const pkg = JSON.parse(readFileSync(manifest, "utf8"));
+      byName.set(pkg.name, { dir: `${parent}/${entry.name}`, scripts: pkg.scripts ?? {} });
+    }
+  }
+  const rootPkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
+  return { byName, scriptsByDir: new Map([[".", rootPkg.scripts ?? {}], ...[...byName.values()].map((p) => [p.dir, p.scripts])]) };
+}
+
+function tokenize(command) {
+  return command.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
+}
+
+function parsePnpmRun(command, cwd, byName) {
+  const tokens = tokenize(command);
+  if (tokens[0] !== "pnpm") return null;
+  const dirs = [];
+  let i = 1;
+  while (i < tokens.length && tokens[i] !== "run") {
+    const flag = tokens[i];
+    const value = tokens[i + 1];
+    if ((flag === "-C" || flag === "--dir") && value) dirs.push(path.posix.join(cwd, value));
+    else if (flag === "--filter" && byName.has(value)) dirs.push(byName.get(value).dir);
+    else return null;
+    i += 2;
+  }
+  if (tokens[i] !== "run" || !tokens[i + 1]) return null;
+  return { dirs: dirs.length ? dirs : [cwd], script: tokens[i + 1], args: tokens.slice(i + 2) };
+}
+
+export function expandScript(dir, script, args = [], packages = workspacePackages()) {
+  const body = packages.scriptsByDir.get(dir)?.[script];
+  if (body === undefined) throw new Error(`no script "${script}" in ${dir}`);
+  const parts = body.split("&&").map((part) => part.trim());
+  const runs = parts.map((part) => parsePnpmRun(part, dir, packages.byName));
+  if (args.length || runs.some((run) => run === null)) return [{ dir, script, args }];
+  return runs.flatMap((run) =>
+    run.dirs
+      .filter((target) => run.dirs.length === 1 || packages.scriptsByDir.get(target)?.[run.script] !== undefined)
+      .flatMap((target) => expandScript(target, run.script, run.args, packages)),
+  );
+}
+
+export function leafKey(task) {
+  return `${task.dir}\t${task.script ?? `exec ${task.exec}`}\t${(task.args ?? []).join(" ")}`;
+}
