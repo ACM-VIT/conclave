@@ -183,15 +183,16 @@ export async function forwardCapture(
     const events = Array.isArray(body) ? body : "batch" in body ? body.batch : [body];
     const ours = events.filter((event) => event.properties.token === deps.projectKey);
     if (ours.length === 0) return reply(400);
-    // A tab can still run an older build than the one deployed, so each event
-    // is checked against the manifest of the build it came from.
-    const builds = [...new Set(ours.map(buildOf))];
-    const manifests = new Map(
-      await Promise.all(builds.map(async (build) => [build, await deps.chunkFiles(build)] as const)),
-    );
+    // A tab sends only its own build's events, so a request carries one build:
+    // the first event's. Events from any other build are dropped, which holds
+    // a request to at most one manifest lookup. A tab can still run an older
+    // build than the one deployed, so that build's own manifest is used.
+    const build = buildOf(ours[0]);
+    const sameBuild = ours.filter((event) => buildOf(event) === build);
+    const chunkFiles = build ? await deps.chunkFiles(build) : new Map<string, string>();
     const forwarded = {
       api_key: deps.projectKey,
-      batch: ours.map((event) => scrubForwarded(event, manifests.get(buildOf(event)) ?? new Map())),
+      batch: sameBuild.map((event) => scrubForwarded(event, chunkFiles)),
       ...(!Array.isArray(body) && "sent_at" in body && body.sent_at ? { sent_at: body.sent_at } : {}),
     };
     const upstream = await deps.fetch(`${deps.ingestHost.replace(/\/$/, "")}/e/`, {
@@ -213,10 +214,12 @@ const MAX_MANIFESTS = 16;
 
 /**
  * Loads a build's chunk manifest from our own static files, by the build's
- * version, and keeps it for a while; an older build's tabs report against
- * their own manifest, which `dpl` (the build's deployment id) can reach while
- * that build is still served. A manifest it cannot find or read counts as
- * empty, so those frames keep no path or chunk id.
+ * version, and keeps the 16 most recently used, found or not; an older
+ * build's tabs report against their own manifest, which `dpl` (the build's
+ * deployment id) can reach while that build is still served. Concurrent
+ * loads of one build share a fetch. A manifest it cannot find or read counts
+ * as empty, so those frames keep no path or chunk id, and a version that is
+ * not a build's is never fetched.
  */
 export function createChunkManifestLoader({
   origin,
@@ -228,11 +231,15 @@ export function createChunkManifestLoader({
   now?: () => number;
 }): (version: string | null) => Promise<ReadonlyMap<string, string>> {
   const known = new Map<string, { files: ReadonlyMap<string, string>; until: number }>();
-  return async (version) => {
-    const url = chunkManifestUrl(version);
-    if (!url || !version) return new Map();
-    const cached = known.get(version);
-    if (cached && cached.until > now()) return cached.files;
+  const loading = new Map<string, Promise<ReadonlyMap<string, string>>>();
+
+  const remember = (version: string, files: ReadonlyMap<string, string>) => {
+    known.delete(version);
+    if (known.size >= MAX_MANIFESTS) known.delete(known.keys().next().value as string);
+    known.set(version, { files, until: now() + (files.size > 0 ? MANIFEST_TTL_MS : MISSING_MANIFEST_TTL_MS) });
+  };
+
+  const fetchManifest = async (version: string, url: string): Promise<ReadonlyMap<string, string>> => {
     let files: ReadonlyMap<string, string> = new Map();
     try {
       const response = await fetch(`${origin}${url}?dpl=${version}`, {
@@ -240,9 +247,23 @@ export function createChunkManifestLoader({
       });
       if (response.ok) files = parseChunkManifest(await response.json());
     } catch {}
-    known.delete(version);
-    if (known.size >= MAX_MANIFESTS) known.delete(known.keys().next().value as string);
-    known.set(version, { files, until: now() + (files.size > 0 ? MANIFEST_TTL_MS : MISSING_MANIFEST_TTL_MS) });
+    remember(version, files);
     return files;
+  };
+
+  return (version) => {
+    const url = chunkManifestUrl(version);
+    if (!url || !version) return Promise.resolve(new Map());
+    const cached = known.get(version);
+    if (cached && cached.until > now()) {
+      known.delete(version);
+      known.set(version, cached);
+      return Promise.resolve(cached.files);
+    }
+    const inFlight = loading.get(version);
+    if (inFlight) return inFlight;
+    const load = fetchManifest(version, url).finally(() => loading.delete(version));
+    loading.set(version, load);
+    return load;
   };
 }

@@ -115,11 +115,14 @@ The browser sends its events to `/ingest` on our own site (`app/ingest/[...path]
 endpoint (`/ingest/e/`) as a POST of at most 256 KB, 1 MB once decoded, and 200
 events. It decodes the body (gzip, base64 or JSON), drops events for any project
 but ours, and scrubs every event again with the rules below, so the browser's
-scrub is not the only guard. Chunk paths are checked against the manifest of
-the build the event came from (its `client_version`), fetched from our static
-files with `?dpl=<build>` and kept for 10 minutes, so a tab still running an
-older build is not judged by the newest one; a build whose manifest cannot be
-found keeps no chunk path or id. It forwards the batch to PostHog as plain JSON with
+scrub is not the only guard. A request carries one build, the first event's
+`client_version`; events from any other build are dropped, so a request costs
+at most one manifest lookup. Chunk paths are checked against that build's
+manifest, fetched from our static files with `?dpl=<build>` (a version that is
+not a git sha is never fetched), shared by concurrent requests, and kept for 10
+minutes, or 1 minute when missing, for the 16 most recently used builds. A tab
+still running an older build is not judged by the newest one, and a build whose
+manifest cannot be found keeps no chunk path or id. It forwards the batch to PostHog as plain JSON with
 the fixed User-Agent `conclave-web-ingest/1` and no header of the browser's: no
 cookie, no IP address and no forwarded or referrer header reaches PostHog. If
 PostHog fails, the browser is told to retry (503).
