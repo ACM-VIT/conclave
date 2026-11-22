@@ -2040,16 +2040,6 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         return producerRestarted && consumerRestarted
     }
 
-    // close() leaves a mediasoup transport's native peer connection alive, and with it the factory mediasoup
-    // builds per Device (signaling, network, rtc-low-prio and its legacy voiceengine audio module): every call
-    // left one set of threads behind. dispose() frees them, with two constraints:
-    // - that audio module registers its JNI natives per instance but unregisters them for the whole class when
-    //   destroyed, so a factory may only be freed while no other mediasoup device or transport is alive, and
-    //   always before the next Device is created (freeing it later strips the natives from the live call);
-    // - base Transport methods reach native code without a disposed check, so a suspended caller must not be
-    //   able to touch a freed transport (restartIce re-checks identity after its ack).
-    // Retired transports are therefore freed when the next call is configured, or after the app sat idle
-    // long enough for any outstanding socket ack (30 s) to settle.
     private val retiredTransports = RetiredTransportReaper<Transport>(
         idleDelayMs = RETIRED_TRANSPORT_DISPOSE_DELAY_MS,
         isIdle = { device == null && sendTransport == null && receiveTransport == null },
@@ -7416,8 +7406,6 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             .createPeerConnectionFactory()
     }
 
-    // Read on every stage, controls and settings refresh: never enumerate cameras here. Until the first
-    // off-main probe lands this says no; onCameraFacingsChanged then refreshes the callers.
     internal fun canSwitchCamera(): Boolean = cameraFacings.current?.canSwitch ?: false
 
     internal fun setPreferredCameraFacing(facing: LocalCameraFacing) {

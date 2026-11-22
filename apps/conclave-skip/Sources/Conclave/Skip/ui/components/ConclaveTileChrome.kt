@@ -255,8 +255,6 @@ private fun TileNamePill(model: TileChromeModel, speaking: TileSpeakingState, de
     }
 }
 
-// Draw-phase only: the animated heights are read inside drawBehind, so each frame redraws this one node
-// instead of recomposing and relaying out the name pill (and the tile around it) at display rate.
 @Composable
 private fun VoiceActivityBars(color: Color) {
     val heights = if (rememberReduceMotion()) staticVoiceBarHeights else rememberVoiceBarHeights()

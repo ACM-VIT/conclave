@@ -328,9 +328,6 @@ private struct PillWaveform: View {
     }
 }
 
-/// Three coral bars animated by Core Animation, matching Android's speaking bars. The render server runs the
-/// repeat, so a talking tile costs the main thread nothing per frame (a repeating SwiftUI symbol effect redrew
-/// the display list for as long as anyone spoke).
 private struct SpeakingBars: UIViewRepresentable {
     let animates: Bool
 
@@ -387,8 +384,6 @@ final class SpeakingBarsView: UIView {
         CATransaction.commit()
     }
 
-    // Core Animation can drop animations when a layer leaves the window or the app goes to the background;
-    // these re-add whatever is missing.
     override func didMoveToWindow() {
         super.didMoveToWindow()
         syncAnimation()
