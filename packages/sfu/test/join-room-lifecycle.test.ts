@@ -115,6 +115,48 @@ describe("host roster on join", () => {
       hostUserIds: [host.id, "carol#cohost"],
     });
   });
+
+  it("updates peers when a returning co-host becomes the primary host", async () => {
+    vi.useFakeTimers();
+    const state = makeState();
+    const room = new Room({
+      id: "room",
+      clientId: "conclave",
+      workerPid: null,
+      router: {} as Router,
+    });
+    state.rooms.set(room.channelId, room);
+    const first = new Admin({
+      id: "alice#a",
+      socket: makeSocket("first-host").socket,
+    });
+    room.setUserIdentity(first.id, "alice", "Alice");
+    room.hostUserKey = "alice";
+    room.addClient(first);
+    const fallback = await join(state, "fallback-host", {
+      userId: "bob", clientId: "conclave", sessionId: "b", isForcedHost: true,
+    });
+    const returningUser = { userId: "carol", clientId: "conclave", sessionId: "c" };
+    const returning = await join(state, "returning-host", {
+      ...returningUser, isForcedHost: true,
+    });
+
+    registerAdminHandlers(fallback.context, { roomId: room.id });
+    const kickAck = vi.fn();
+    await fallback.peer.handlers.get("kickUser")!(
+      ...[{ userId: first.id }, kickAck] as never[]
+    );
+    expect(kickAck).toHaveBeenCalledWith({ success: true });
+    expect(room.getHostUserId()).toBe("bob#b");
+    room.scheduleDisconnect("carol#c", returning.peer.socket.id, 10_000, vi.fn());
+    broadcast.mockClear();
+
+    const rejoined = await join(state, "rejoined-host", returningUser);
+    const host = { roomId: room.id, hostUserId: "carol#c" };
+    expect(rejoined.ack).toHaveBeenCalledWith(expect.objectContaining(host));
+    expect(broadcast).toHaveBeenCalledWith("hostChanged", host);
+    expect(broadcast).not.toHaveBeenCalledWith("adminUsersChanged", expect.anything());
+  });
 });
 
 describe("reconnect grace timer", () => {

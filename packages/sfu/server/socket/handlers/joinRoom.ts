@@ -579,6 +579,14 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           return;
         }
 
+        const mayChangeRoster = isAdminJoin ||
+          existingClient instanceof Admin ||
+          staleSameIdentitySeats.some(({ userId: staleUserId }) =>
+            room.getClient(staleUserId) instanceof Admin,
+          );
+        const previousHostUserId = mayChangeRoster ? room.getHostUserId() : null;
+        const previousAdminUserIds = mayChangeRoster ? room.getAdminUserIds() : [];
+
         if (isAdminJoin) {
           room.registerAdminUserKey(userKey);
         }
@@ -725,14 +733,6 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           });
           return;
         }
-
-        const mayChangeRoster = isAdminJoin ||
-          existingClient instanceof Admin ||
-          staleSameIdentitySeats.some(({ userId: staleUserId }) =>
-            room.getClient(staleUserId) instanceof Admin,
-          );
-        const previousHostUserId = mayChangeRoster ? room.getHostUserId() : null;
-        const previousAdminUserIds = mayChangeRoster ? room.getAdminUserIds() : [];
 
         room.clearPendingDisconnect(userId);
 
