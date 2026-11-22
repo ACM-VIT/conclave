@@ -10,6 +10,7 @@ import {
   getRoomAuthority,
   peekRoomAuthority,
 } from "../../apps/authority/index.js";
+import { detachLegacyQaFeed } from "../../apps/authority/legacyWebinarQa.js";
 import { parseOperationId } from "../../apps/authority/receipts.js";
 import type { ConnectionContext } from "../context.js";
 import { RATE_LIMITS, takeToken } from "../rateLimit.js";
@@ -123,7 +124,13 @@ export const registerAuthorityHandlers = (context: ConnectionContext): void => {
       return;
     }
     const room = authority();
-    respond(callback, room ? room.capabilities(context, request) : fail("not-in-room"));
+    const reply = room
+      ? room.capabilities(context, request)
+      : fail("not-in-room");
+    // A client that speaks this transport reads Q&A through it. Stop saying
+    // the same things to it over the old Q&A events.
+    if (reply.ok) detachLegacyQaFeed(context);
+    respond(callback, reply);
   });
 
   socket.on(AUTHORITY_EVENTS.subscribe, (data: unknown, callback: unknown) => {

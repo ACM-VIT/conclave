@@ -28,6 +28,7 @@ import type {
 import type { Client } from "../../../config/classes/Client.js";
 import type { Room } from "../../../config/classes/Room.js";
 import type { ConnectionContext } from "../../socket/context.js";
+import { Logger } from "../../../utilities/loggers.js";
 import type { IdentityAdapter } from "./identity.js";
 import { AuthorityInstance, type Actor } from "./instance.js";
 import type { AuthorityLimits } from "./limits.js";
@@ -67,6 +68,20 @@ type Subscription = {
   /** The socket fell behind. Patches are skipped until it is replaced. */
   lagging: boolean;
   dropped: boolean;
+  /**
+   * Where frames go when not to the socket: an in-process observer, such as
+   * the adapter that feeds a legacy event from an app's view.
+   */
+  sink: ((frame: AuthorityFrame) => void) | null;
+};
+
+/** A successful action, for in-process code that keeps its own index. */
+export type ActionNotice = {
+  app: string;
+  action: string;
+  /** The seat that acted, as the room names it. */
+  seatId: string;
+  value: Json;
 };
 
 type Watcher = { context: ConnectionContext; signature: string };
@@ -161,6 +176,10 @@ export class RoomAuthority {
   private wakeTimer: NodeJS.Timeout | null = null;
   private lagTimer: NodeJS.Timeout | null = null;
   private wakeAt: number | null = null;
+  private observers = 0;
+  /** Observers whose seat may not view the app right now. */
+  private readonly dormant = new Set<Subscription>();
+  private readonly actionListeners = new Set<(notice: ActionNotice) => void>();
   private lastFlushAt = 0;
   private lastNow = 0;
   private closed = false;
@@ -230,7 +249,8 @@ export class RoomAuthority {
       this.bySocket.set(context.socket.id, subscriptions);
     }
     if (subscriptions.has(request.subscription)) return failure("invalid-input");
-    if (subscriptions.size >= this.limits.subscriptionsPerSocket) {
+    const held = [...subscriptions.values()].filter((held) => !held.sink);
+    if (held.length >= this.limits.subscriptionsPerSocket) {
       return failure("capacity");
     }
 
@@ -247,11 +267,101 @@ export class RoomAuthority {
       backlog: [],
       lagging: false,
       dropped: false,
+      sink: null,
     };
     subscriptions.set(subscription.id, subscription);
     this.byInstance.get(instance)!.add(subscription);
     this.sendReplace(subscription);
     return { ok: true, value: null };
+  }
+
+  /* ---- In-process access ------------------------------------------------- */
+
+  /** Whether this room runs the app. */
+  runs(app: string): boolean {
+    return this.instanceOf(app) !== null;
+  }
+
+  /**
+   * Follows an app's view for a connection from inside the SFU. The view is
+   * exactly the one that connection would be sent: the same binding, role
+   * and identity checks run before every frame. Used to feed a legacy event
+   * from an app, so no second copy of its visibility rules exists.
+   */
+  observe(
+    context: ConnectionContext,
+    app: string,
+    sink: (frame: AuthorityFrame) => void,
+  ): { close(): void } | null {
+    const bound = this.bind(context);
+    const instance = this.instanceOf(app);
+    if (!bound || !instance) return null;
+    this.syncPolicy();
+    let subscriptions = this.bySocket.get(context.socket.id);
+    if (!subscriptions) {
+      subscriptions = new Map();
+      this.bySocket.set(context.socket.id, subscriptions);
+    }
+    this.observers += 1;
+    const subscription: Subscription = {
+      id: `observer.${this.observers}`,
+      context,
+      socket: context.socket,
+      instance,
+      client: bound.client,
+      actor: bound.actor,
+      generation: 1,
+      seq: 0,
+      transfer: null,
+      backlog: [],
+      lagging: false,
+      dropped: false,
+      sink,
+    };
+    subscriptions.set(subscription.id, subscription);
+    this.byInstance.get(instance)!.add(subscription);
+    if (instance.canView(bound.actor)) this.sendReplace(subscription);
+    else this.dormant.add(subscription);
+    return { close: () => this.drop(subscription) };
+  }
+
+  /**
+   * Runs an action for a connection from inside the SFU, for an adapter that
+   * turns a legacy event into an app action. Every gate, identity rule and
+   * rate still applies. There is no operation id, because the legacy wire
+   * has no retry channel: each received request runs once.
+   */
+  actAs(
+    context: ConnectionContext,
+    app: string,
+    action: string,
+    input: unknown,
+  ): AuthorityResult<Json> {
+    const bound = this.bind(context);
+    const instance = this.instanceOf(app);
+    if (!bound || !instance) return failure("not-in-room");
+    this.syncPolicy();
+    const result = instance.act(bound.actor, action, input, null, this.now());
+    this.afterAction(instance, action, bound.client.id, result);
+    return result;
+  }
+
+  queryAs(
+    context: ConnectionContext,
+    app: string,
+    query: string,
+    input: unknown,
+  ): AuthorityResult<Json> {
+    const bound = this.bind(context);
+    const instance = this.instanceOf(app);
+    if (!bound || !instance) return failure("not-in-room");
+    this.syncPolicy();
+    return instance.query(bound.actor, query, input, this.now());
+  }
+
+  /** Called after every action that succeeded, whoever sent it. */
+  onAction(listener: (notice: ActionNotice) => void): void {
+    this.actionListeners.add(listener);
   }
 
   unsubscribe(context: ConnectionContext, subscriptionId: string): void {
@@ -272,7 +382,12 @@ export class RoomAuthority {
       request.operation,
       this.now(),
     );
-    this.afterWrite(subscription.instance);
+    this.afterAction(
+      subscription.instance,
+      request.action,
+      subscription.client.id,
+      result,
+    );
     return result;
   }
 
@@ -334,6 +449,8 @@ export class RoomAuthority {
     this.flushTimer = this.sweepTimer = this.wakeTimer = this.lagTimer = null;
     this.bySocket.clear();
     this.byInstance.clear();
+    this.dormant.clear();
+    this.actionListeners.clear();
     this.watchers.clear();
     this.instances.clear();
   }
@@ -399,7 +516,7 @@ export class RoomAuthority {
       return "gone";
     }
     if (!subscription.instance.canView(bound.actor)) {
-      this.revoke(subscription, "forbidden");
+      this.withdraw(subscription);
       return "gone";
     }
     if (!sameActor(subscription.actor, bound.actor)) {
@@ -439,16 +556,52 @@ export class RoomAuthority {
       instance.setPolicy(policy);
       for (const subscription of [...this.byInstance.get(instance)!]) {
         const bound = this.bind(subscription.context);
-        if (
-          !bound ||
-          bound.client !== subscription.client ||
-          !instance.canView(bound.actor)
-        ) {
+        if (!bound || bound.client !== subscription.client) {
           this.revoke(subscription, "forbidden");
+        } else if (!instance.canView(bound.actor)) {
+          this.withdraw(subscription);
         } else {
           this.regenerate(subscription, bound.actor);
         }
       }
+    }
+    this.wakeDormant();
+  }
+
+  /**
+   * Takes a view away from a seat that may no longer see the app. A socket's
+   * subscription ends. An in-process observer waits instead: its seat cannot
+   * ask again, so it is resumed when the seat may view the app once more.
+   */
+  private withdraw(subscription: Subscription): void {
+    if (!subscription.sink) {
+      this.revoke(subscription, "forbidden");
+      return;
+    }
+    this.byInstance.get(subscription.instance)?.delete(subscription);
+    this.dormant.add(subscription);
+    subscription.transfer = null;
+    subscription.backlog = [];
+    this.send(subscription, {
+      kind: "revoke",
+      subscription: subscription.id,
+      generation: subscription.generation,
+      serverNowMs: this.now(),
+      reason: "forbidden",
+    });
+  }
+
+  private wakeDormant(): void {
+    for (const subscription of [...this.dormant]) {
+      const bound = this.bind(subscription.context);
+      if (!bound || bound.client !== subscription.client) {
+        this.drop(subscription);
+        continue;
+      }
+      if (!subscription.instance.canView(bound.actor)) continue;
+      this.dormant.delete(subscription);
+      this.byInstance.get(subscription.instance)?.add(subscription);
+      this.regenerate(subscription, bound.actor);
     }
   }
 
@@ -489,9 +642,10 @@ export class RoomAuthority {
     this.syncPolicy();
     for (const subscriptions of [...this.bySocket.values()]) {
       for (const subscription of [...subscriptions.values()]) {
-        this.refresh(subscription);
+        if (!this.dormant.has(subscription)) this.refresh(subscription);
       }
     }
+    this.wakeDormant();
     for (const [socketId, watcher] of [...this.watchers]) {
       const bound = this.bind(watcher.context);
       if (!bound) {
@@ -511,9 +665,25 @@ export class RoomAuthority {
 
   /* ---- Delivery ---------------------------------------------------------- */
 
-  private afterWrite(instance: AuthorityInstance): void {
+  private afterAction(
+    instance: AuthorityInstance,
+    action: string,
+    seatId: string,
+    result: AuthorityResult<Json>,
+  ): void {
     if (instance.hasPendingChanges) this.scheduleFlush(false);
     this.armWake();
+    if (!result.ok) return;
+    for (const listener of this.actionListeners) {
+      listener({ app: instance.appId, action, seatId, value: result.value });
+    }
+  }
+
+  private instanceOf(app: string): AuthorityInstance | null {
+    for (const instance of this.instances.values()) {
+      if (instance.appId === app) return instance;
+    }
+    return null;
   }
 
   /**
@@ -769,28 +939,41 @@ export class RoomAuthority {
 
   private emit(subscription: Subscription, frame: AuthorityFrame): void {
     if (frame.kind === "patch") this.stats.patches += 1;
-    subscription.socket.emit(AUTHORITY_EVENTS.frame, frame);
+    this.send(subscription, frame);
+  }
+
+  private send(subscription: Subscription, frame: AuthorityFrame): void {
+    if (!subscription.sink) {
+      subscription.socket.emit(AUTHORITY_EVENTS.frame, frame);
+      return;
+    }
+    try {
+      subscription.sink(frame);
+    } catch (error) {
+      Logger.error("[Authority] An observer failed to take a frame", error);
+    }
   }
 
   private revoke(subscription: Subscription, reason: AuthorityRevokeReason): void {
     if (subscription.dropped) return;
     this.drop(subscription);
-    if (!subscription.socket.connected) return;
+    if (!subscription.sink && !subscription.socket.connected) return;
     this.stats.revokes += 1;
     // Carries no data, so it is safe for any socket that held the view.
-    subscription.socket.emit(AUTHORITY_EVENTS.frame, {
+    this.send(subscription, {
       kind: "revoke",
       subscription: subscription.id,
       generation: subscription.generation,
       serverNowMs: this.now(),
       reason,
-    } satisfies AuthorityFrame);
+    });
   }
 
   private drop(subscription: Subscription): void {
     subscription.dropped = true;
     subscription.transfer = null;
     subscription.backlog = [];
+    this.dormant.delete(subscription);
     this.byInstance.get(subscription.instance)?.delete(subscription);
     const subscriptions = this.bySocket.get(subscription.socket.id);
     subscriptions?.delete(subscription.id);

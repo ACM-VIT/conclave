@@ -50,6 +50,7 @@ import {
 import { ensureWebinarRoomConfig } from "../../scheduledWebinarScheduler.js";
 import { getSocketAuthUser } from "../auth.js";
 import type { ConnectionContext } from "../context.js";
+import { attachLegacyQaFeed } from "../../apps/authority/legacyWebinarQa.js";
 import { registerAdminHandlers } from "./adminHandlers.js";
 import { respond } from "./ack.js";
 import { emitChatHistorySnapshot } from "./chatHistory.js";
@@ -913,7 +914,10 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         const isModeratorClient =
           context.currentClient instanceof Admin &&
           !context.currentClient.isObserver;
+        // A room that runs the Q&A app has one book. There the old Q&A
+        // events are fed from that book for the life of this seat.
         if (
+          !attachLegacyQaFeed(context) &&
           webinarConfig.enabled &&
           (isModeratorClient || context.currentClient.isWebinarAttendee)
         ) {
