@@ -555,6 +555,10 @@ enum CrashReportEventBuilder {
         return "{ " + fields.joined(separator: ", ") + " }"
     }
 
+    /// A record whose release was never stamped (an exit from a build before stamping) uploads as this, never as the
+    /// uploading release.
+    static let unknownAppVersion = "unknown"
+
     /// The release that was running: stored with the record, or MetricKit's version and build. Empty when unknown.
     static func recordedAppVersion(_ payload: DiagnosticsStoredPayload) -> String {
         let version = textField(payload, "appVersion")
@@ -564,14 +568,18 @@ enum CrashReportEventBuilder {
     }
 
     /// MetricKit re-reports, a launch or more later, an Objective-C exception the uncaught handler already stored.
-    /// The same exception name with the stored crash inside MetricKit's reporting window is the same crash.
+    /// It is the same crash only with the same release (version and build), the same exception name, and the stored
+    /// crash inside MetricKit's reporting window; without a known release on both it uploads.
     static func repeatsUncaughtCrash(_ payload: DiagnosticsStoredPayload, uncaught: [DiagnosticsStoredPayload]) -> Bool {
         if payload.kind != DiagnosticsPayloadKind.crash.rawValue || numberField(payload, "uncaught") > 0.0 { return false }
         let name = textField(payload, "exceptionName")
         let windowStart = numberField(payload, "windowStartMillis")
-        if name.isEmpty || windowStart <= 0.0 { return false }
+        let release = recordedAppVersion(payload)
+        if name.isEmpty || windowStart <= 0.0 || release.isEmpty { return false }
         for crash in uncaught where crash.createdAtMillis >= windowStart && crash.createdAtMillis <= payload.createdAtMillis {
-            if capturedExceptions(parseDetail(crash.detailJSON))?.first?.type == name { return true }
+            if recordedAppVersion(crash) == release && capturedExceptions(parseDetail(crash.detailJSON))?.first?.type == name {
+                return true
+            }
         }
         return false
     }
@@ -586,7 +594,7 @@ enum CrashReportEventBuilder {
             DiagnosticsJSON.string("$os") + ": " + DiagnosticsJSON.string(context.platform == "ios" ? "iOS" : "Android"),
             DiagnosticsJSON.string("$os_version") + ": " + DiagnosticsJSON.string(context.osVersion),
             DiagnosticsJSON.string("$app_version") + ": "
-                + DiagnosticsJSON.string(crashedVersion.isEmpty ? context.appVersion : crashedVersion),
+                + DiagnosticsJSON.string(crashedVersion.isEmpty ? unknownAppVersion : crashedVersion),
             DiagnosticsJSON.string("platform") + ": " + DiagnosticsJSON.string(context.platform),
             DiagnosticsJSON.string("device_class") + ": " + DiagnosticsJSON.string(context.deviceClass),
             DiagnosticsJSON.string("report_kind") + ": " + DiagnosticsJSON.string(kind.rawValue),
@@ -767,7 +775,8 @@ struct CrashReportBatch: Equatable {
 }
 
 enum CrashReportPlanner {
-    /// `skipped` lists payloads with nothing worth reporting, so the ledger stops reconsidering them.
+    /// `skipped` lists payloads with nothing worth reporting, so the ledger stops reconsidering them. A MetricKit repeat
+    /// of a stored uncaught crash is left out of both: it is not sent, and not recorded as sent.
     static func plan(_ loaded: [DiagnosticsLoadedPayload], reported: [String], projectKey: String,
                      context: CrashReportContext) -> CrashReportPlan {
         var batches: [CrashReportBatch] = []
@@ -779,10 +788,7 @@ enum CrashReportPlanner {
             uncaught.append(item.payload)
         }
         for item in loaded where !reported.contains(item.name) {
-            if CrashReportEventBuilder.repeatsUncaughtCrash(item.payload, uncaught: uncaught) {
-                skipped.append(item.name)
-                continue
-            }
+            if CrashReportEventBuilder.repeatsUncaughtCrash(item.payload, uncaught: uncaught) { continue }
             guard let event = CrashReportEventBuilder.event(
                 for: item.payload,
                 eventId: CrashReportEventBuilder.eventId(forPayloadName: item.name),

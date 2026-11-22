@@ -299,13 +299,16 @@ struct CrashReportingTests {
         )
     }
 
-    private func metricKitCrash(name: String, windowStart: Double, delivered: Double) throws -> DiagnosticsStoredPayload {
+    private func metricKitCrash(name: String, windowStart: Double, delivered: Double,
+                                build: String = "63") throws -> DiagnosticsStoredPayload {
         DiagnosticsPayloadFactory.payload(
             kind: .crash, createdAtMillis: delivered,
             fields: [
                 try #require(DiagnosticsPayloadFactory.text("exceptionName", name)),
                 DiagnosticsPayloadFactory.number("signal", 6.0),
                 DiagnosticsPayloadFactory.number("windowStartMillis", windowStart),
+                try #require(DiagnosticsPayloadFactory.text("appVersion", "2.0.0")),
+                try #require(DiagnosticsPayloadFactory.text("appBuild", build)),
             ],
             detailJSON: "{}"
         )
@@ -334,11 +337,37 @@ struct CrashReportingTests {
         ]
         let plan = CrashReportPlanner.plan(loaded, reported: [], projectKey: "phc_test", context: Self.context)
         #expect(try exceptionTypes(plan) == ["NSInvalidArgumentException"])
-        #expect(plan.skipped == ["payload-metrickit.json"])
+        #expect(plan.skipped.isEmpty)
 
         let alreadySent = CrashReportPlanner.plan(loaded, reported: ["payload-uncaught.json"], projectKey: "phc_test",
                                                   context: Self.context)
-        #expect(alreadySent.batches.isEmpty && alreadySent.skipped == ["payload-metrickit.json"])
+        #expect(alreadySent.batches.isEmpty && alreadySent.skipped.isEmpty)
+    }
+
+    /// A MetricKit crash from another build with the same exception inside the window is a different crash, and a
+    /// repeat that dedupe holds back is never recorded as sent.
+    @Test func aMetricKitCrashFromAnotherBuildUploadsAndARepeatIsNeverRecordedAsSent() async throws {
+        let crashAt = 1_795_000_000_000.0
+        let loaded = [
+            DiagnosticsLoadedPayload(name: "payload-uncaught.json", byteCount: 10, payload: uncaughtObjectiveCCrash(atMillis: crashAt)),
+            DiagnosticsLoadedPayload(name: "payload-build64.json", byteCount: 10,
+                                     payload: try metricKitCrash(name: "NSInvalidArgumentException", windowStart: crashAt - 3_600_000,
+                                                                 delivered: crashAt + 7_200_000, build: "64")),
+        ]
+        let plan = CrashReportPlanner.plan(loaded, reported: [], projectKey: "phc_test", context: Self.context)
+        #expect(try exceptionTypes(plan) == ["NSInvalidArgumentException", "NSInvalidArgumentException"])
+
+        let store = temporaryStore()
+        #expect(store.writePayload(uncaughtObjectiveCCrash(atMillis: crashAt)))
+        #expect(store.writePayload(try metricKitCrash(name: "NSInvalidArgumentException", windowStart: crashAt - 3_600_000,
+                                                      delivered: crashAt + 7_200_000)))
+        let transport = RecordingTransport()
+        #expect(await CrashReportUploader().upload(store: store, config: config(), context: Self.context,
+                                                   transport: transport) == 1)
+        let reported = CrashReportLedger(store: store).reportedNames()
+        #expect(reported.count == 1)
+        let repeatName = store.loadPayloads().first { CrashReportEventBuilder.numberField($0.payload, "uncaught") == 0.0 }?.name
+        #expect(repeatName != nil && !reported.contains(repeatName ?? ""))
     }
 
     @Test func aDifferentOrLaterMetricKitCrashStillUploads() throws {
@@ -374,7 +403,10 @@ struct CrashReportingTests {
         #expect((hang["properties"] as? [String: Any])?["$app_version"] as? String == "2.0.0 (63)")
 
         let unknown = try json(try #require(CrashReportEventBuilder.event(for: crashPayload(), eventId: "id", context: uploader)))
-        #expect((unknown["properties"] as? [String: Any])?["$app_version"] as? String == "2.0.1 (64)")
+        #expect((unknown["properties"] as? [String: Any])?["$app_version"] as? String == "unknown")
+        let unstampedExit = try json(try #require(CrashReportEventBuilder.event(for: exitRecord("anr"), eventId: "id",
+                                                                                 context: uploader)))
+        #expect((unstampedExit["properties"] as? [String: Any])?["$app_version"] as? String == "unknown")
     }
 
     @Test func aPathWithSpacesAndDotsNeverLeaksItsDirectories() {
