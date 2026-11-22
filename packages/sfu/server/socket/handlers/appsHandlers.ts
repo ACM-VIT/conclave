@@ -100,7 +100,13 @@ const toUint8Array = (value: unknown): Uint8Array | null => {
 
 const getRoomAppsState = (context: ConnectionContext): AppsState => {
   if (!context.currentRoom) {
-    return { activeAppId: null, locked: false, revision: 0, savedAppIds: [] };
+    return {
+      activeAppId: null,
+      locked: false,
+      revision: 0,
+      savedAppIds: [],
+      docGeneration: null,
+    };
   }
   return { ...context.currentRoom.apps.snapshot(), roomId: context.currentRoom.id };
 };
@@ -330,6 +336,10 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     const update = toUint8Array(data.update);
     if (!update || update.length === 0) return;
     if (update.length > MAX_APPS_UPDATE_BYTES) return;
+    if (!context.currentRoom.apps.acceptsContent(update)) {
+      Logger.warn(`[Apps] Dropping update for ${appId}: it carries a cleared document`);
+      return;
+    }
     if (!context.currentRoom.apps.reserveUpdate(appId, update)) {
       Logger.warn(`[Apps] Dropping update for ${appId}: document size limit reached`);
       return;

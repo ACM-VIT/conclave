@@ -1128,6 +1128,12 @@ export interface AppsState {
   revision: number;
   /** Apps off the stage whose document the room keeps. */
   savedAppIds: string[];
+  /**
+   * The presented app's document. A new number means the room started it
+   * over, so a client's copy of the earlier one is stale. Null when nothing
+   * is presented.
+   */
+  docGeneration: number | null;
   roomId?: string;
 }
 

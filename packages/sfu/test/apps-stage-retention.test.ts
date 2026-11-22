@@ -81,10 +81,23 @@ const makeRoom = () => {
       lock: (locked: boolean, expectedRevision?: number) =>
         ask<{ success: boolean; error?: string }>("apps:lock", { locked, expectedRevision }),
       state: () => ask<AppsState>("apps:getState"),
-      draw: (appId: string, key: string) => {
+      draw: (appId: string, key: string, value: unknown = true) => {
         const before = Y.encodeStateVector(doc);
-        doc.getMap("shapes").set(key, true);
+        doc.getMap("shapes").set(key, value);
         listeners.get("apps:yjs:update")!({ appId, update: Y.encodeStateAsUpdate(doc, before) });
+      },
+      // What a native client does when it reconnects: sync its local copy,
+      // then send the server whatever that copy has and the server lacks.
+      resync: (appId: string) => {
+        const response = ask<{ syncMessage: Uint8Array; stateVector: Uint8Array }>(
+          "apps:yjs:sync",
+          { appId, syncMessage: Y.encodeStateVector(doc) },
+        );
+        Y.applyUpdate(doc, response.syncMessage);
+        listeners.get("apps:yjs:update")!({
+          appId,
+          update: Y.encodeStateAsUpdate(doc, response.stateVector),
+        });
       },
       sendAwareness: (appId: string, awareness: Awareness) =>
         listeners.get("apps:awareness")!({
@@ -202,6 +215,48 @@ describe("clearing an app", () => {
 
     expect(host.discard("whiteboard").success).toBe(true);
     expect(lastState(broadcasts)).toMatchObject({ activeAppId: null, savedAppIds: [] });
+  });
+
+  it("stays cleared when a client that missed the clear resyncs its old copy", () => {
+    const { join } = makeRoom();
+    const host = join("host#1", "host");
+    const away = join("native#1", "participant");
+    host.present("whiteboard");
+    away.draw("whiteboard", "circle");
+    host.draw("whiteboard", "arrow");
+
+    host.close(host.state().revision);
+    host.discard("whiteboard", host.state().revision);
+    host.present("whiteboard");
+    const fresh = join("fresh#1", "participant");
+    fresh.draw("whiteboard", "square");
+    away.relayed.length = 0;
+
+    away.resync("whiteboard");
+    away.draw("whiteboard", "circle", "moved");
+    away.draw("whiteboard", "late-stroke");
+
+    expect(away.relayed).toEqual([]);
+    expect(join("late#1", "participant").coldSync("whiteboard")).toEqual({ shapes: ["square"] });
+  });
+
+  it("starts a cleared app on a new document generation", () => {
+    const { join } = makeRoom();
+    const host = join("host#1", "host");
+    host.present("whiteboard");
+    host.draw("whiteboard", "circle");
+    const first = host.state().docGeneration;
+
+    host.lock(true);
+    host.present("watch");
+    host.present("whiteboard");
+    expect(host.state().docGeneration).toBe(first);
+
+    host.discard("whiteboard");
+    expect(host.state().docGeneration).toBeNull();
+    host.present("whiteboard");
+    expect(host.state().docGeneration).not.toBe(first);
+    expect(host.state().docGeneration).toEqual(expect.any(Number));
   });
 
   it("is only for hosts", () => {

@@ -13,6 +13,9 @@ export const MAX_APP_DOC_BYTES = 1024 * 1024;
 // documents are also bounded per room: by count, and by total encoded bytes.
 export const MAX_ROOM_APP_DOCS = 8;
 export const MAX_ROOM_APP_DOC_BYTES = 4 * 1024 * 1024;
+// Yjs client IDs that wrote to a cleared document, kept so a client that
+// missed the clear cannot write that content back. Oldest are forgotten first.
+export const MAX_CLEARED_WRITERS = 4096;
 
 // An update can grow the encoded document by more than its own size: a
 // deletion splits existing items, and alternating single-character deletions
@@ -32,6 +35,7 @@ export type AppsSnapshot = {
   locked: boolean;
   revision: number;
   savedAppIds: string[];
+  docGeneration: number | null;
 };
 
 export type StageCommandResult =
@@ -40,6 +44,9 @@ export type StageCommandResult =
 
 type AppDoc = {
   doc: Y.Doc;
+  // A new number for every document the room starts, so a client holding a
+  // copy of an earlier one can tell it is stale.
+  generation: number;
   // Encoded bytes when last measured, plus a conservative estimate of what
   // accepted updates added since.
   measuredBytes: number;
@@ -76,6 +83,23 @@ const encodedSizeAfter = (doc: Y.Doc, update: Uint8Array): number => {
 const appDocBytes = (entry: AppDoc): number =>
   entry.measuredBytes + entry.unmeasuredBytes;
 
+// Every Yjs client an update writes as, builds on or deletes from.
+const clientsIn = (update: Uint8Array): { writers: number[]; touched: number[] } => {
+  const { structs, ds } = Y.decodeUpdate(update);
+  const writers = new Set<number>();
+  const touched = new Set<number>(ds.clients.keys());
+  for (const struct of structs) {
+    writers.add(struct.id.client);
+    touched.add(struct.id.client);
+    if (struct instanceof Y.Item) {
+      if (struct.origin) touched.add(struct.origin.client);
+      if (struct.rightOrigin) touched.add(struct.rightOrigin.client);
+      if (struct.parent instanceof Y.ID) touched.add(struct.parent.client);
+    }
+  }
+  return { writers: Array.from(writers), touched: Array.from(touched) };
+};
+
 // Presence lives for one stay on the stage, on a document of its own: an
 // Awareness never lets go of the document it is given.
 const createPresence = (): Awareness => new Awareness(new Y.Doc());
@@ -100,7 +124,9 @@ export class RoomApps {
     locked: false,
   };
   private revision = 0;
+  private generations = 0;
   private docs: Map<string, AppDoc> = new Map();
+  private clearedWriters: Set<number> = new Set();
   private awareness: Map<string, Awareness> = new Map();
   private awarenessClientIdsByUser: Map<string, Map<string, Set<number>>> =
     new Map();
@@ -114,13 +140,16 @@ export class RoomApps {
   }
 
   snapshot(): AppsSnapshot {
+    const presented = this.stage.activeAppId;
     return {
-      activeAppId: this.stage.activeAppId,
+      activeAppId: presented,
       locked: this.stage.locked,
       revision: this.revision,
       savedAppIds: Array.from(this.docs.keys())
-        .filter((appId) => appId !== this.stage.activeAppId)
+        .filter((appId) => appId !== presented)
         .sort(),
+      docGeneration:
+        presented === null ? null : (this.docs.get(presented)?.generation ?? null),
     };
   }
 
@@ -142,8 +171,10 @@ export class RoomApps {
     }
     const awarenessRemoval = this.leaveStage();
     if (!this.docs.has(appId)) {
+      this.generations += 1;
       this.docs.set(appId, {
         doc: new Y.Doc(),
+        generation: this.generations,
         measuredBytes: EMPTY_DOC_BYTES,
         unmeasuredBytes: 0,
       });
@@ -180,6 +211,7 @@ export class RoomApps {
       awarenessRemoval = this.removeAwareness(appId);
       this.stage = { activeAppId: null, locked: false };
     }
+    this.markCleared(Y.decodeStateVector(Y.encodeStateVector(entry.doc)).keys());
     this.destroyDoc(appId, entry);
     this.revision += 1;
     return { ok: true, changed: true, awarenessRemoval };
@@ -195,6 +227,26 @@ export class RoomApps {
     this.stage = { ...this.stage, locked };
     this.revision += 1;
     return { ok: true, changed: true, awarenessRemoval: null };
+  }
+
+  /**
+   * False when `update` holds, builds on or deletes content of a cleared
+   * document, as a client that missed the clear sends when it resyncs. Its
+   * writers then count as cleared too, so their later edits stay out.
+   */
+  acceptsContent(update: Uint8Array): boolean {
+    if (this.clearedWriters.size === 0) return true;
+    let clients: { writers: number[]; touched: number[] };
+    try {
+      clients = clientsIn(update);
+    } catch {
+      return false;
+    }
+    if (!clients.touched.some((client) => this.clearedWriters.has(client))) {
+      return true;
+    }
+    this.markCleared(clients.writers);
+    return false;
   }
 
   /**
@@ -262,6 +314,17 @@ export class RoomApps {
       if (entry.measuredBytes <= EMPTY_DOC_BYTES) this.destroyDoc(appId, entry);
     }
     return awarenessRemoval;
+  }
+
+  private markCleared(clients: Iterable<number>): void {
+    for (const client of clients) {
+      this.clearedWriters.delete(client);
+      this.clearedWriters.add(client);
+    }
+    for (const client of this.clearedWriters) {
+      if (this.clearedWriters.size <= MAX_CLEARED_WRITERS) break;
+      this.clearedWriters.delete(client);
+    }
   }
 
   private destroyDoc(appId: string, entry: AppDoc): void {
@@ -422,6 +485,7 @@ export class RoomApps {
     for (const [appId, entry] of Array.from(this.docs)) {
       this.destroyDoc(appId, entry);
     }
+    this.clearedWriters.clear();
     this.stage = { activeAppId: null, locked: false };
     this.revision += 1;
   }
