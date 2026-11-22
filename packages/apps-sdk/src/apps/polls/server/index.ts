@@ -1,8 +1,11 @@
+import { boundedJsonBytes } from "@conclave/apps-sdk/authority";
 import {
   MAX_POLLS_PER_ROOM,
+  POLL_EXPORT_PAGE_BYTES,
   POLL_MAX_OPTIONS,
   POLL_MIN_OPTIONS,
   pollsContract,
+  type PollBallot,
   type PollCard,
   type PollResults,
 } from "@conclave/apps-sdk/polls/core";
@@ -36,6 +39,8 @@ type Ballot = {
 
 /** Ballots a room can hold across all its polls. */
 const MAX_BALLOTS = 100_000;
+/** Ballots read per scan while a page of an export is filled. */
+const EXPORT_SCAN_ROWS = 2_000;
 const HOST_RATE = { burst: 40, perSecond: 8 };
 
 const card = (row: PollRow): PollCard => ({
@@ -176,21 +181,42 @@ export const pollsAuthority = defineAuthority({
     },
   },
   queries: {
+    // One page of a poll's ballots, sized to fit one answer. Ballots are
+    // only ever added and are kept in the order they were cast, so a page
+    // stays where it was while later pages are read.
     exportBallots: {
       roles: ["moderator"],
       rate: HOST_RATE,
       read(_ctx, db, input) {
         const poll = db.get("polls", key(input.pollId));
         if (!poll) return reject("not-found");
-        const ballots = db
-          .scan("ballots", key(input.pollId))
-          .map(([, ballot]) => ({
-            name: ballot.voterName,
-            optionIds: [...ballot.optionIds],
-            votedAt: ballot.votedAt,
-          }))
-          .sort((a, b) => a.votedAt - b.votedAt);
-        return { poll: card(poll), results: totals(poll), ballots };
+        const ballots: PollBallot[] = [];
+        let offset = input.offset ?? 0;
+        let bytes = 0;
+        let nextOffset: number | null = null;
+        page: for (;;) {
+          const rows = db.scan("ballots", key(input.pollId), {
+            offset,
+            limit: EXPORT_SCAN_ROWS,
+          });
+          for (const [, row] of rows) {
+            const ballot: PollBallot = {
+              name: row.voterName,
+              optionIds: [...row.optionIds],
+              votedAt: row.votedAt,
+            };
+            const size = boundedJsonBytes(ballot, POLL_EXPORT_PAGE_BYTES) + 1;
+            if (ballots.length > 0 && bytes + size > POLL_EXPORT_PAGE_BYTES) {
+              nextOffset = offset;
+              break page;
+            }
+            ballots.push(ballot);
+            bytes += size;
+            offset += 1;
+          }
+          if (rows.length < EXPORT_SCAN_ROWS) break;
+        }
+        return { poll: card(poll), results: totals(poll), ballots, nextOffset };
       },
     },
   },

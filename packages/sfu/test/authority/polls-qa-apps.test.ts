@@ -13,6 +13,9 @@ import { pollsContract } from "@conclave/apps-sdk/polls/core";
 import { pollsAuthority } from "@conclave/apps-sdk/polls/server";
 import { qaContract } from "@conclave/apps-sdk/qa/core";
 import { qaAuthority } from "@conclave/apps-sdk/qa/server";
+import type { Subject } from "@conclave/apps-sdk/authority/server";
+import { AuthorityInstance, type Actor } from "../../server/apps/authority/instance.js";
+import { DEFAULT_AUTHORITY_LIMITS } from "../../server/apps/authority/limits.js";
 import { Harness, person, type Tab } from "./harness.js";
 
 const host = person("asha@example.com", "Asha", "host");
@@ -287,6 +290,52 @@ describe("result visibility", () => {
       voterCount: 2,
       votes: { o1: 1, o2: 2 },
     });
+  });
+
+  it("exports a poll with more ballots than one answer holds, a page at a time", () => {
+    // The app itself, without sockets: 3,000 people cannot each open a tab.
+    const polls = new AuthorityInstance(
+      "polls.test",
+      pollsAuthority,
+      { mode: "meeting", qaEnabled: true },
+      {
+        limits: DEFAULT_AUTHORITY_LIMITS,
+        random: { next: Math.random, int: (max) => Math.floor(Math.random() * max), shuffle: (list) => [...list] },
+        verifyViews: false,
+      },
+    );
+    const actor = (id: string, role: Actor["role"], displayName: string): Actor => ({
+      subject: id as Subject,
+      role,
+      verified: true,
+      displayName,
+    });
+    const hostActor = actor("host", "moderator", "Asha");
+    let now = 1_000_000;
+    const created = polls.act(hostActor, "create", { question: "Lunch?", options: ["Tea", "Coffee"] }, null, now);
+    const pollId = created.ok ? (field(created.value, "pollId") as string) : "";
+    // Names at the longest the contract allows, three bytes a character.
+    const voters = Array.from({ length: 3_000 }, (_, index) => `${"名".repeat(190)} ${index}`);
+    for (const [index, name] of voters.entries()) {
+      now += 20;
+      polls.act(actor(`voter-${index}`, "member", name), "vote", { pollId, optionIds: ["o1"] }, null, now);
+    }
+
+    const names: Json[] = [];
+    const pages: number[] = [];
+    let offset: number | null = 0;
+    while (offset !== null) {
+      now += 1_000;
+      const page: AuthorityResult<Json> = polls.query(hostActor, "exportBallots", { pollId, offset }, now);
+      if (!page.ok) throw new Error(`page at ${offset} failed: ${page.code}`);
+      const ballots = field(page.value, "ballots") as Json[];
+      pages.push(ballots.length);
+      names.push(...ballots.map((ballot) => field(ballot, "name")));
+      offset = field(page.value, "nextOffset") as number | null;
+    }
+
+    expect(pages.length).toBeGreaterThan(1);
+    expect(names).toEqual(voters);
   });
 
   it("leaves webinar attendees out", async () => {

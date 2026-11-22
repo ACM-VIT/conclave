@@ -6,6 +6,7 @@ import {
   pollCsvFilename,
   pollResultRows,
   pollsContract,
+  type PollBallot,
   type PollCard,
   type PollChoiceMode,
   type PollResultRow,
@@ -47,6 +48,14 @@ const describe = (failure: AuthorityFailure): string =>
   (failure.code === "rejected"
     ? REASONS[failure.reason ?? ""]
     : FAILURES[failure.code]) ?? "That did not go through.";
+
+/** How long to wait before asking again for a page the server refused as busy. */
+const EXPORT_WAIT_MS = 1_000;
+/** Waits in a row before an export gives up. */
+const EXPORT_MAX_WAITS = 10;
+
+const pause = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
 
 const downloadCsv = (filename: string, csv: string): void => {
   const url = URL.createObjectURL(
@@ -140,12 +149,36 @@ export function usePolls(options?: {
     },
     [act],
   );
+  /**
+   * Downloads every ballot of a poll. A poll can hold more ballots than one
+   * answer carries, so they are read a page at a time and joined here. A
+   * page the server is too busy to give is asked for again after a wait.
+   */
   const exportCsv = useCallback(
     async (pollId: string): Promise<PollActionResult> => {
-      const result = await query("exportBallots", { pollId });
-      if (!result.ok) return { ok: false, error: describe(result) };
-      downloadCsv(pollCsvFilename(result.value.poll), buildPollCsv(result.value));
-      return { ok: true };
+      const ballots: PollBallot[] = [];
+      let offset = 0;
+      let waits = 0;
+      for (;;) {
+        const result = await query("exportBallots", { pollId, offset });
+        if (!result.ok) {
+          const busy = result.code === "rate-limited" || result.code === "busy";
+          if (!busy || waits >= EXPORT_MAX_WAITS) {
+            return { ok: false, error: describe(result) };
+          }
+          waits += 1;
+          await pause(result.retryAfterMs ?? EXPORT_WAIT_MS);
+          continue;
+        }
+        waits = 0;
+        ballots.push(...result.value.ballots);
+        if (result.value.nextOffset === null) {
+          const { poll } = result.value;
+          downloadCsv(pollCsvFilename(poll), buildPollCsv({ poll, ballots }));
+          return { ok: true };
+        }
+        offset = result.value.nextOffset;
+      }
     },
     [query],
   );

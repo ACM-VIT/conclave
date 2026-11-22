@@ -81,8 +81,8 @@ State lives in the SFU process for the lifetime of the room. It is lost if the p
 
 | App | Folder | What the server holds |
 | --- | --- | --- |
-| Polls | `src/apps/polls` | polls, one ballot per person per poll, results private to hosts until shared |
-| Q&A | `src/apps/qa` | questions, one upvote per person per question, hidden questions for hosts and the asker only |
+| Polls | `src/apps/polls` | polls, one ballot per person per poll, results private to hosts until shared. A host's export is read in pages of at most 512 KiB and joined in the browser |
+| Q&A | `src/apps/qa` | questions, one upvote per person per question, hidden questions for hosts and the asker only. The book holds at most 300 questions and 400 KiB, so every viewer's view fits in one snapshot |
 
 Both are panel apps. They open from the Apps panel, beside whatever is on the stage, and never take the stage or the whiteboard. Each has its hook in `web` (`usePolls`, `useQa`) and the web client draws the panel.
 

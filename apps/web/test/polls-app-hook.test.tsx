@@ -194,3 +194,50 @@ it("forgets every poll when the server withdraws the view", async () => {
   expect(polls.polls).toEqual([]);
   expect(polls.isReady).toBe(false);
 });
+
+it("builds one download from every page of a large export", async () => {
+  await serve([card("p1")], { actions: ["create"], needsIdentity: [], queries: ["exportBallots"] });
+  const saved: Blob[] = [];
+  const createUrl = vi.spyOn(URL, "createObjectURL").mockImplementation((file) => {
+    saved.push(file as Blob);
+    return "blob:poll";
+  });
+  const revokeUrl = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+  const ballot = (name: string, votedAt: number) => ({ name, optionIds: ["o1"], votedAt });
+  const page = (ballots: unknown[], nextOffset: number | null) => ({
+    ok: true,
+    value: { poll: card("p1").value, results: { voterCount: 3, votes: { o1: 3 } }, ballots, nextOffset },
+  });
+  const queries = () => sent.filter((entry) => entry.event === AUTHORITY_EVENTS.query);
+
+  let outcome: unknown;
+  await act(async () => {
+    void polls.exportCsv("p1").then((result) => {
+      outcome = result;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  await act(async () => {
+    queries()[0].ack!(page([ballot("Ana", 1), ballot("Ben", 2)], 2));
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  // The server is busy for a moment: the same page is asked for again.
+  await act(async () => {
+    queries()[1].ack!({ ok: false, code: "rate-limited" });
+    await vi.advanceTimersByTimeAsync(1_500);
+  });
+  await act(async () => {
+    queries()[2].ack!(page([ballot("Cy", 3)], null));
+    await vi.advanceTimersByTimeAsync(0);
+  });
+
+  createUrl.mockRestore();
+  revokeUrl.mockRestore();
+  vi.useRealTimers();
+  const csv = saved.length === 1 ? await saved[0].text() : "";
+
+  expect(queries().map((entry) => (entry.payload.input as { offset: number }).offset)).toEqual([0, 2, 2]);
+  expect(outcome).toEqual({ ok: true });
+  expect(csv).toContain("Voters,3");
+  expect(csv).toMatch(/Ana,Yes,[^]*Ben,Yes,[^]*Cy,Yes,/);
+});

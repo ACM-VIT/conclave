@@ -1,10 +1,21 @@
-import { defineContract, s, type Infer } from "@conclave/apps-sdk/authority";
+import {
+  AUTHORITY_LIMITS,
+  defineContract,
+  s,
+  type Infer,
+} from "@conclave/apps-sdk/authority";
 
 export const POLL_MIN_OPTIONS = 2;
 export const POLL_MAX_OPTIONS = 10;
 export const POLL_MAX_QUESTION_LENGTH = 300;
 export const POLL_MAX_OPTION_LENGTH = 120;
 export const MAX_POLLS_PER_ROOM = 50;
+/**
+ * The most ballots one page of an export carries, as JSON. The runtime
+ * answers a query with at most 1 MiB, and a poll can hold far more ballots
+ * than that, so an export comes in pages of half that size.
+ */
+export const POLL_EXPORT_PAGE_BYTES = AUTHORITY_LIMITS.snapshotBytes / 2;
 
 const pollId = s.string({ min: 1, max: 64 });
 const optionId = s.string({ min: 1, max: 16 });
@@ -37,10 +48,13 @@ const pollBallot = s.object({
   votedAt: s.number(),
 });
 
-const pollExport = s.object({
+const pollExportPage = s.object({
   poll: pollCard,
   results: pollResults,
-  ballots: s.array(pollBallot, { max: 100_000 }),
+  /** One page of ballots, oldest first. */
+  ballots: s.array(pollBallot, { max: 20_000 }),
+  /** Where the next page starts, or null after the last one. */
+  nextOffset: s.nullable(s.int({ min: 0 })),
 });
 
 /**
@@ -79,7 +93,10 @@ export const pollsContract = defineContract({
   },
   queries: {
     /** Named ballots, for the host's download. */
-    exportBallots: { input: s.object({ pollId }), output: pollExport },
+    exportBallots: {
+      input: s.object({ pollId, offset: s.optional(s.int({ min: 0 })) }),
+      output: pollExportPage,
+    },
   },
   views: {
     polls: pollCard,
@@ -97,7 +114,10 @@ export const pollsContract = defineContract({
 export type PollCard = Infer<typeof pollCard>;
 export type PollResults = Infer<typeof pollResults>;
 export type PollChoiceMode = PollCard["choiceMode"];
-export type PollExport = Infer<typeof pollExport>;
+export type PollExportPage = Infer<typeof pollExportPage>;
+export type PollBallot = PollExportPage["ballots"][number];
+/** A whole export: the poll, and every ballot from every page. */
+export type PollExport = { poll: PollCard; ballots: readonly PollBallot[] };
 
 export type PollResultRow = {
   id: string;
