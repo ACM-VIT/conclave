@@ -120,12 +120,10 @@ describe("transcription provider recovery", () => {
   it("replays only committed audio that has not produced a final item", () => {
     const journal = new TranscriptAudioReplayJournal();
     journal.append("audio-a", ada, 2_400, 1_000);
-    journal.commit(ada, 1_100);
-    journal.bindCommittedItem("item-a");
+    const first = journal.commit(ada, 1_100, "line-a");
     journal.append("audio-b", ada, 2_400, 1_200);
     journal.commit(ada, 1_300);
-    journal.bindCommittedItem("item-b");
-    journal.finalizeItem("item-a");
+    journal.release([first!]);
 
     expect(journal.takeRecoveryEvents(1_400)).toEqual([
       {
@@ -136,6 +134,7 @@ describe("transcription provider recovery", () => {
         createdAt: 1_200,
       },
       { type: "commit", speaker: ada, createdAt: 1_300 },
+      { type: "clear", speaker: ada, createdAt: 1_300 },
     ]);
     expect(journal.takeRecoveryEvents()).toEqual([]);
   });
@@ -216,6 +215,23 @@ describe("transcription provider recovery", () => {
         sampleCount: 2_400,
       }),
       expect.objectContaining({ type: "commit", speaker: ada }),
+      expect.objectContaining({ type: "clear", speaker: ada }),
     ]);
+  });
+
+  it("replays each line's audio as its own turn, with the line it belongs to", () => {
+    const journal = new TranscriptAudioReplayJournal();
+    journal.append("audio-a1", ada, 2_400, 1_000);
+    journal.commit(ada, 1_100, "line-a");
+    journal.append("audio-a2", ada, 2_400, 1_200);
+    journal.commit(ada, 1_300, "line-a");
+    journal.append("audio-b", ada, 2_400, 1_400);
+    journal.commit(ada, 1_500, "line-b");
+
+    expect(
+      journal.takeRecoveryEvents(1_600).map((event) =>
+        event.type === "chunk" ? event.audio : `${event.type}${"owner" in event && event.owner ? `:${event.owner}` : ""}`,
+      ),
+    ).toEqual(["audio-a1", "commit:line-a", "audio-a2", "commit:line-a", "clear", "audio-b", "commit:line-b", "clear"]);
   });
 });

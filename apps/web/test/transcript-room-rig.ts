@@ -1,6 +1,7 @@
 import { vi, type Mock } from "vitest";
 import { TranscriptRoom } from "../transcript-worker/src/room";
 import type { Env, Viewer } from "../transcript-worker/src/types";
+import { clicksPcm, noisePcm, pcmBase64, silencePcm, voicedPcm } from "./transcript-audio-fixtures";
 
 type Listener = (event: { data?: unknown }) => void;
 
@@ -35,6 +36,7 @@ export class FakeProviderSocket {
 
 export type TestSegment = {
   itemId: string;
+  speakerUserId?: string;
   text: string;
   sequence: number;
   startMs: number;
@@ -53,7 +55,15 @@ type TestRoom = {
 
 export const OPENAI = "gpt-live-transcribe";
 export const SARVAM = "saaras:v3";
-const AUDIO = Buffer.alloc(9600).toString("base64");
+/** 200 ms chunks as the relays send them: speech, a quiet room, key clicks, silence. */
+export const AUDIO = {
+  speech: pcmBase64(voicedPcm(-26)),
+  noise: pcmBase64(noisePcm(-60)),
+  clicks: pcmBase64(clicksPcm(-12)),
+  silence: pcmBase64(silencePcm()),
+} as const;
+export type AudioKind = keyof typeof AUDIO;
+export type TestSpeaker = { userId: string; displayName: string; source?: "local" | "remote" | "screen" | "mixed" | "unknown" };
 
 const roomSettings = (transcriptModel: string) => ({
   OPENAI_API_KEY: "sk-room",
@@ -120,13 +130,15 @@ export async function transcriptRoomRig(
   };
   const send = (message: object) => room.handleMessage(viewer, JSON.stringify(message));
   const stop = () => send({ type: "session.stop" });
-  const speak = () => send({ type: "audio.chunk", audio: AUDIO });
-  const commit = () => send({ type: "audio.commit" });
-  const clear = () => send({ type: "audio.clear" });
+  const sendAudio = (kind: AudioKind, speaker?: TestSpeaker) =>
+    send({ type: "audio.chunk", audio: AUDIO[kind], speaker });
+  const speak = (speaker?: TestSpeaker) => sendAudio("speech", speaker);
+  const commit = (speaker?: TestSpeaker) => send({ type: "audio.commit", speaker });
+  const clear = (speaker?: TestSpeaker) => send({ type: "audio.clear", speaker });
   /** A turn ends as both relays end one: the last audio is committed, then cleared. */
-  const endTurn = async () => {
-    await commit();
-    await clear();
+  const endTurn = async (speaker?: TestSpeaker) => {
+    await commit(speaker);
+    await clear(speaker);
   };
   const providerSockets = () => sockets.filter(({ url }) => /\/v1\/realtime|speech-to-text/.test(url));
   const savedTexts = () => room.segments.map(({ text }) => text);
@@ -183,6 +195,7 @@ export async function transcriptRoomRig(
     useModel,
     stop,
     speak,
+    sendAudio,
     commit,
     clear,
     endTurn,

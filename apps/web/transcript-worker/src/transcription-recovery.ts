@@ -18,12 +18,21 @@ export type BufferedTranscriptAudioEvent =
       createdAt: number;
     }
   | {
-      type: "commit" | "clear";
+      type: "commit";
+      speaker: TranscriptSpeaker;
+      createdAt: number;
+      /** The line this audio belongs to, so the replacement's ack claims that line. */
+      owner?: string;
+    }
+  | {
+      type: "clear";
       speaker: TranscriptSpeaker;
       createdAt: number;
     };
 
-type ReplayBatch = {
+export type ReplayBatch = {
+  /** The line whose audio this is; ending that line drops it. */
+  owner: string | null;
   sequence: number;
   speaker: TranscriptSpeaker;
   chunks: Array<{
@@ -116,11 +125,9 @@ export class TranscriptRecoveryAudioBuffer {
 
 export class TranscriptAudioReplayJournal {
   private current:
-    | Omit<ReplayBatch, "sequence" | "committedAt">
+    | Omit<ReplayBatch, "sequence" | "committedAt" | "owner">
     | null = null;
   private batches: ReplayBatch[] = [];
-  private pendingBindings: ReplayBatch[] = [];
-  private readonly itemBatches = new Map<string, ReplayBatch>();
   private nextSequence = 0;
   private bytes = 0;
 
@@ -147,52 +154,53 @@ export class TranscriptAudioReplayJournal {
     this.prune(now);
   }
 
-  commit(speaker: TranscriptSpeaker, now = Date.now()): void {
+  commit(
+    speaker: TranscriptSpeaker,
+    now = Date.now(),
+    owner: string | null = null,
+  ): ReplayBatch | null {
     if (
       !this.current ||
       !isSameTranscriptAudioSpeaker(this.current.speaker, speaker) ||
       this.current.chunks.length === 0
     ) {
-      return;
+      return null;
     }
     const batch: ReplayBatch = {
       ...this.current,
+      owner,
       sequence: this.nextSequence,
       committedAt: now,
     };
     this.nextSequence += 1;
     this.current = null;
     this.batches.push(batch);
-    this.pendingBindings.push(batch);
     this.prune(now);
+    return batch;
   }
 
-  bindCommittedItem(itemId: string): void {
-    let batch = this.pendingBindings.shift();
-    while (batch && !this.batches.includes(batch)) {
-      batch = this.pendingBindings.shift();
-    }
-    if (batch) this.itemBatches.set(itemId, batch);
+  /** Drops one line's audio once that line has ended; every other line keeps its own. */
+  release(batches: readonly ReplayBatch[]): void {
+    for (const batch of batches) this.removeBatch(batch);
   }
 
-  finalizeItem(itemId: string): void {
-    const batch = this.itemBatches.get(itemId);
-    if (!batch) return;
-    this.itemBatches.delete(itemId);
-    this.removeBatch(batch);
-  }
-
-  takeRecoveryEvents(now = Date.now()): BufferedTranscriptAudioEvent[] {
+  takeRecoveryEvents(
+    now = Date.now(),
+    currentOwner: string | null = null,
+  ): BufferedTranscriptAudioEvent[] {
     const batches = [...this.batches];
     if (this.current?.chunks.length) {
       batches.push({
         ...this.current,
+        owner: currentOwner,
         sequence: this.nextSequence,
         committedAt: now,
       });
     }
     batches.sort((left, right) => left.sequence - right.sequence);
-    const events = batches.flatMap<BufferedTranscriptAudioEvent>((batch) => [
+    // Each line's audio is replayed as a turn of its own, so a provider that
+    // segments by turn answers it apart from the audio around it.
+    const events = batches.flatMap<BufferedTranscriptAudioEvent>((batch, index) => [
       ...batch.chunks.map<BufferedTranscriptAudioEvent>((chunk) => ({
         type: "chunk",
         audio: chunk.audio,
@@ -204,7 +212,11 @@ export class TranscriptAudioReplayJournal {
         type: "commit",
         speaker: batch.speaker,
         createdAt: batch.committedAt,
+        ...(batch.owner ? { owner: batch.owner } : {}),
       },
+      ...(batches[index + 1]?.owner === batch.owner && batch.owner !== null
+        ? []
+        : [{ type: "clear" as const, speaker: batch.speaker, createdAt: batch.committedAt }]),
     ]);
     this.reset();
     return events;
@@ -213,8 +225,6 @@ export class TranscriptAudioReplayJournal {
   reset(): void {
     this.current = null;
     this.batches = [];
-    this.pendingBindings = [];
-    this.itemBatches.clear();
     this.bytes = 0;
   }
 
@@ -246,10 +256,8 @@ export class TranscriptAudioReplayJournal {
 
   private removeBatch(batch: ReplayBatch): void {
     const index = this.batches.indexOf(batch);
-    if (index >= 0) this.batches.splice(index, 1);
+    if (index < 0) return;
+    this.batches.splice(index, 1);
     this.bytes -= batch.bytes;
-    for (const [itemId, candidate] of this.itemBatches) {
-      if (candidate === batch) this.itemBatches.delete(itemId);
-    }
   }
 }
