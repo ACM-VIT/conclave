@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import * as mediasoup from "mediasoup";
 import type { TransportListenInfo, WebRtcServer, Worker } from "mediasoup/types";
 import os from "os";
@@ -44,6 +45,18 @@ const spawnWorker = async (port: number, plainMinPort: number): Promise<Worker> 
   }
 };
 
+const respawnWorker = async (port: number, plainMinPort: number): Promise<Worker> => {
+  for (const delayMs of [100, 200, 400]) {
+    try {
+      return await spawnWorker(port, plainMinPort);
+    } catch (error) {
+      Logger.warn(`Worker on WebRTC port ${port} failed to respawn; retrying in ${delayMs} ms`, error);
+      await delay(delayMs);
+    }
+  }
+  return spawnWorker(port, plainMinPort);
+};
+
 const createWorkers = async (
   options: CreateWorkersOptions = {},
 ): Promise<Worker[]> => {
@@ -80,7 +93,7 @@ const createWorkers = async (
         },
       );
       const deadIndex = workers.indexOf(worker);
-      spawnWorker(webRtcPortBase + index, plainMinPort)
+      respawnWorker(webRtcPortBase + index, plainMinPort)
         .then((replacement) => {
           if (deadIndex >= 0) {
             workers[deadIndex] = replacement;
