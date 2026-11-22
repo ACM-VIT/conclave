@@ -104,6 +104,7 @@ import { AppsPanel, type PanelAppEntry } from "./apps/AppsPanel";
 import { pollsApp, pollsContract, usePolls } from "@conclave/apps-sdk/polls/web";
 import { qaApp } from "@conclave/apps-sdk/qa/web";
 import { hasUnseenMeetingQuestion, useMeetingQa } from "../hooks/useMeetingQa";
+import { panelAppNeedsServerUpdate } from "../lib/panel-app-availability";
 import {
   GAME_DOCK_DEFAULT_WIDTH,
   GAME_DOCK_MAX_WIDTH,
@@ -1481,9 +1482,9 @@ export default function MeetsMainContent({
   );
   const polls = usePolls({ onPollStarted: handlePollStarted });
   const authorityRuntime = useAuthorityRuntime();
-  // Offered by the server to this connection, or not shown at all.
-  const isPollsAvailable =
-    useAuthorityAvailable(pollsContract) && isJoined && !isWebinarAttendee;
+  const pollsOffered = useAuthorityAvailable(pollsContract);
+  // Opened only when the server offers it to this connection.
+  const isPollsAvailable = pollsOffered && isJoined && !isWebinarAttendee;
   const isPollsOpen = activityPanel === "polls" && isPollsAvailable;
   const awaitsVote = (poll: (typeof polls.polls)[number]) =>
     poll.status === "open" && poll.myVote.length === 0;
@@ -1524,10 +1525,24 @@ export default function MeetsMainContent({
 
   // Polls and Q&A open beside the call for this viewer alone. They are
   // opened from the Apps panel when the server offers them. On a server that
-  // does not run them at all, an older one or one with them turned off, they
-  // are listed switched off with the reason, so their absence is explained.
-  const needsServerUpdate =
-    authorityRuntime === "unsupported" && isJoined && !isWebinarAttendee;
+  // does not, whatever the reason, they are listed switched off as needing
+  // a server update, so their absence is explained.
+  const pollsNeedServerUpdate = panelAppNeedsServerUpdate({
+    runtime: authorityRuntime,
+    offered: pollsOffered,
+    isJoined,
+    isWebinarAttendee,
+  });
+  // A webinar's questions live in its own Questions section, which an older
+  // server still feeds, so nothing is missing there.
+  const qaNeedsServerUpdate =
+    !webinarConfig?.enabled &&
+    panelAppNeedsServerUpdate({
+      runtime: authorityRuntime,
+      offered: meetingQa.offered,
+      isJoined,
+      isWebinarAttendee,
+    });
   const panelApps: PanelAppEntry[] = [
     ...(isPollsAvailable
       ? [
@@ -1544,7 +1559,7 @@ export default function MeetsMainContent({
             },
           },
         ]
-      : needsServerUpdate
+      : pollsNeedServerUpdate
         ? [
             {
               id: pollsApp.id,
@@ -1571,9 +1586,7 @@ export default function MeetsMainContent({
             },
           },
         ]
-      : // A webinar's questions live in its own Questions section, which an
-        // older server still feeds, so nothing is missing there.
-        needsServerUpdate && !webinarConfig?.enabled
+      : qaNeedsServerUpdate
         ? [
             {
               id: qaApp.id,
