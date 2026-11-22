@@ -10,6 +10,28 @@ import { config } from "../config/config.js";
 import { readWorkerSizing } from "../config/workerSettings.mjs";
 import createWorkers, { getWorkerWebRtcServer } from "../utilities/createWorkers.js";
 
+// Error reports go through the real reporter, rate limit included, to a
+// client that collects them. Moving the clock on starts a new limit window.
+const collector = vi.hoisted(() => ({
+  reports: [] as Array<{ error: Error; properties: Record<string, unknown> }>,
+  clockOffsetMs: 0,
+}));
+vi.mock("../server/analytics/posthog.js", async () => {
+  const { createErrorReporter } = await import("../server/analytics/errorReporter.js");
+  const reporter = createErrorReporter({
+    getClient: () => ({
+      captureException: (error, { properties }) =>
+        collector.reports.push({ error: error as Error, properties }),
+      captureExceptionImmediate: async () => {},
+      flush: async () => {},
+    }),
+    instanceId: "sfu-test",
+    region: null,
+    version: "test",
+    now: () => Date.now() + collector.clockOffsetMs,
+  });
+  return { captureServerException: reporter.report };
+});
 vi.mock("mediasoup", () => ({ createWorker: vi.fn() }));
 vi.mock("node:fs", () => ({ readFileSync: vi.fn() }));
 vi.mock("node:os", () => {
@@ -286,6 +308,50 @@ it("recovers a slot when the port becomes available after four failed attempts",
     expect(onWorkerDied).toHaveBeenCalledOnce();
   } finally {
     shutdown.abort();
+    vi.mocked(createWorker).mockReset();
+  }
+});
+
+it("reports a slot's failed respawns while its port stays taken", async () => {
+  const original = makeWorker();
+  original.createWebRtcServer.mockResolvedValue({} as WebRtcServer);
+  const shutdown = new AbortController();
+  let portTaken = true;
+  let failedBinds = 0;
+  vi.mocked(createWorker).mockClear()
+    .mockResolvedValueOnce(original as unknown as Worker)
+    .mockImplementation(async () => {
+      const worker = makeWorker();
+      worker.createWebRtcServer.mockImplementation(async () => {
+        if (!portTaken) return {} as WebRtcServer;
+        failedBinds++;
+        throw new Error("uv_udp_bind() failed: address already in use");
+      });
+      return worker as unknown as Worker;
+    });
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  collector.reports.length = 0;
+  collector.clockOffsetMs += 120_000;
+  try {
+    const workers = await createWorkers({ signal: shutdown.signal });
+    original.emit("died");
+    await vi.waitFor(() => expect(failedBinds).toBeGreaterThanOrEqual(5), { timeout: 4000 });
+    portTaken = false;
+    await vi.waitFor(() => expect(workers[0]).not.toBe(original), { timeout: 3000 });
+
+    const respawnReports = collector.reports.filter(
+      ({ properties }) => properties.source === "worker_respawn_failed",
+    );
+    expect(respawnReports.map(({ properties }) => properties.respawn_attempt)).toEqual(
+      [1, 2, 4, 8, 16].filter((attempt) => attempt <= failedBinds),
+    );
+    for (const { properties, error } of respawnReports) {
+      expect(properties).toMatchObject({ worker_label: "0", sfu_instance_id: "sfu-test" });
+      expect(error.message).toBe("[message withheld]");
+    }
+  } finally {
+    shutdown.abort();
+    warn.mockRestore();
     vi.mocked(createWorker).mockReset();
   }
 });

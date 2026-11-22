@@ -30,7 +30,8 @@ SFU, from `server/analytics/errorReporter.ts`, every event tagged `sfu_instance_
 | `uncaught_exception`, `unhandled_rejection` | The process is about to exit (level `fatal`, waits at most 2s to send) | |
 | `startup_failed` | `server.start()` rejected | |
 | `socket_handler` | A socket.io handler threw or rejected | `socket_event` |
-| `worker_died`, `worker_respawn_failed` | A mediasoup worker died or could not be replaced | `worker_label`, `worker_pid` |
+| `worker_died` | A mediasoup worker died | `worker_label`, `worker_pid` |
+| `worker_respawn_failed` | Its replacement failed to start. The slot keeps retrying, and attempts 1, 2, 4, 8 and so on are reported | `worker_label`, `respawn_attempt` |
 | `redis_transient` | A Redis error the crash guard swallowed (level `warning`) | `process_event` |
 
 At most 5 reports per distinct error and 60 in total per minute per instance.
