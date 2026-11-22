@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Room } from "../config/classes/Room.js";
 import { createTranscriptRelayRegistry } from "../server/transcript/relayRegistry.js";
+import { TranscriptWorkerRelayClient } from "../server/transcript/workerClient.js";
 
 const room = {
   id: "room-a",
@@ -450,5 +451,139 @@ describe("relay handoffs that overlap", () => {
     expect(closed).toEqual(["A", "B"]);
     await stop();
     expect(closed).toEqual(["A", "B", "C"]);
+  });
+});
+
+class FakeWorkerSocket {
+  static OPEN = 1;
+  static sockets: FakeWorkerSocket[] = [];
+  static answering = new Set<string>();
+  static opening = new Map<string, Promise<void>>();
+  readyState = 0;
+  onopen: (() => void) | null = null;
+  onmessage: ((event: { data: string }) => void) | null = null;
+  onerror: (() => void) | null = null;
+  onclose: (() => void) | null = null;
+  readonly token: string;
+
+  constructor(url: string) {
+    this.token = new URL(url).searchParams.get("token") ?? "";
+    FakeWorkerSocket.sockets.push(this);
+    void (FakeWorkerSocket.opening.get(this.token) ?? Promise.resolve()).then(() => {
+      this.readyState = 1;
+      this.onopen?.();
+    });
+  }
+
+  send(raw: string) {
+    const message = JSON.parse(raw) as { type?: string; id?: string };
+    if (message.type === "relay.handoff.prepare" && FakeWorkerSocket.answering.has(this.token)) {
+      queueMicrotask(() =>
+        this.onmessage?.({ data: JSON.stringify({ type: "relay.handoff.ready", id: message.id }) }),
+      );
+    }
+  }
+
+  close() {
+    this.readyState = 3;
+  }
+}
+
+describe("relay handoffs through the real worker client", () => {
+  afterEach(() => {
+    FakeWorkerSocket.sockets = [];
+    FakeWorkerSocket.answering.clear();
+    FakeWorkerSocket.opening.clear();
+    vi.unstubAllGlobals();
+  });
+
+  const workerFixture = () => {
+    vi.stubGlobal("WebSocket", FakeWorkerSocket);
+    const closed = new Set<string>();
+    const registry = createTranscriptRelayRegistry({
+      enabled: true,
+      createRelay: ({ workerToken, controllerUserId }) => {
+        const client = new TranscriptWorkerRelayClient({
+          workerUrl: "http://worker.test",
+          roomId: "room-a",
+          token: workerToken,
+        });
+        return {
+          controllerUserId,
+          start: () => client.connect(),
+          prepareHandoff: () => client.prepareHandoff(),
+          syncProducers: async () => {},
+          close: () => {
+            closed.add(workerToken);
+            client.close();
+          },
+        };
+      },
+    });
+    const start = (workerToken: string) =>
+      registry.start({
+        room,
+        workerUrl: "http://worker.test",
+        workerToken,
+        controllerUserId: "host",
+        controllerDisplayName: "Host",
+        canReplaceExistingRelay: true,
+      });
+    // The browser retries a failed start, and each start gets a new relay.
+    const startLikeTheBrowser = async (workerToken: string) => {
+      const first = await start(workerToken);
+      if (first.success) return first;
+      FakeWorkerSocket.answering.add(`${workerToken}-retry`);
+      return start(`${workerToken}-retry`);
+    };
+    const stop = () => registry.stopRoom(room.channelId);
+    return { closed, start, startLikeTheBrowser, stop };
+  };
+
+  it("reports an overtaken handoff as the room's relay, so the browser's retry never closes the winner", async () => {
+    const { closed, start, startLikeTheBrowser, stop } = workerFixture();
+    for (const token of ["C", "D"]) FakeWorkerSocket.answering.add(token);
+    await start("A");
+    const b = startLikeTheBrowser("B");
+    await vi.waitFor(() => expect(FakeWorkerSocket.sockets.some(({ token }) => token === "B")).toBe(true));
+    await Promise.resolve();
+
+    const c = start("C");
+    const d = start("D");
+    const results = await Promise.all([b, c, d]);
+
+    expect(results.map(({ success }) => success)).toEqual([true, true, true]);
+    expect(closed.has("D")).toBe(false);
+    expect([...closed].sort()).toEqual(["A", "B", "C"]);
+    stop();
+  });
+
+  it("still fails a start that a stop overtook, so it never reports a stopped room's relay", async () => {
+    const { closed, start, stop } = workerFixture();
+    let openA!: () => void;
+    FakeWorkerSocket.opening.set("A", new Promise<void>((resolve) => { openA = resolve; }));
+    const a = start("A");
+    await Promise.resolve();
+    stop();
+    openA();
+
+    expect((await a).success).toBe(false);
+    expect(closed.has("A")).toBe(true);
+  });
+
+  it("reports a start overtaken before its handoff as the room's relay", async () => {
+    const { closed, startLikeTheBrowser, start, stop } = workerFixture();
+    FakeWorkerSocket.answering.add("C");
+    let openB!: () => void;
+    FakeWorkerSocket.opening.set("B", new Promise<void>((resolve) => { openB = resolve; }));
+    await start("A");
+    const b = startLikeTheBrowser("B");
+    await Promise.resolve();
+    expect((await start("C")).success).toBe(true);
+    openB();
+
+    expect((await b).success).toBe(true);
+    expect(closed.has("C")).toBe(false);
+    stop();
   });
 });

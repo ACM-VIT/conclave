@@ -142,21 +142,40 @@ export const createTranscriptRelayRegistry = (options: {
         opened.get(key) ?? new Map<TranscriptRelayInstance, number>();
       opened.set(key, roomRelays.set(relay, generation));
       relays.set(key, relay);
+      // A newer start took the room while this one waited, and closing this
+      // relay fails its start or handoff. The room has a relay, so report it:
+      // a failure would make the browser retry and close the newer one. A
+      // stop leaves the room with none, and still fails the start.
+      const superseded = (): TranscriptSfuRelayStartResponse | null => {
+        const current = relays.get(key);
+        if (!current || current === relay) return null;
+        if (opened.get(key)?.has(relay)) closeRelay(key, relay);
+        return {
+          mode: "sfu",
+          success: true,
+          status: "available",
+          updatedAt: Date.now(),
+        };
+      };
       try {
         await relay.start();
+        const overtaken = superseded();
+        if (overtaken) return overtaken;
         if (relays.get(key) !== relay) {
           closeRelay(key, relay);
           return {
             mode: "sfu",
             success: false,
             status: "error",
-            reason: "A newer SFU transcript relay start superseded this request.",
+            reason: "Notes stopped before the SFU transcript relay started.",
             updatedAt: Date.now(),
           };
         }
         if (existingRelay && existingRelay !== relay) {
           const handoffReady = await relay.prepareHandoff();
           if (!handoffReady) {
+            const overtakenDuringHandoff = superseded();
+            if (overtakenDuringHandoff) return overtakenDuringHandoff;
             if (relays.get(key) === relay) {
               relays.set(key, existingRelay);
             }
@@ -178,6 +197,8 @@ export const createTranscriptRelayRegistry = (options: {
           updatedAt: Date.now(),
         };
       } catch (error) {
+        const overtaken = superseded();
+        if (overtaken) return overtaken;
         if (relays.get(key) === relay) {
           if (existingRelay) {
             relays.set(key, existingRelay);
