@@ -501,6 +501,9 @@ importers:
       '@typescript/native':
         specifier: npm:typescript@^7.0.2
         version: typescript@7.0.2
+      socket.io-client:
+        specifier: ^4.8.4
+        version: 4.8.4(supports-color@11.0.0)
       typescript:
         specifier: npm:@typescript/typescript6@^6.0.2
         version: '@typescript/typescript6@6.0.2'
