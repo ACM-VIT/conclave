@@ -400,15 +400,19 @@ export class TranscriptRoom {
 
     const wasPaused = snapshot.session.status === "paused";
     const savedConfig = snapshot.transcriptionConfig;
+    // A pick resumes as picked, the session's newest one first. Without one,
+    // resume exactly as before picks existed: the saved connection's
+    // language, else the deployment's, never the language the session reports.
+    const languageChosen = snapshot.session.language
+      ? snapshot.session.languageChosen === true
+      : savedConfig?.languageChosen === true;
     const config = {
       language: normalizeLanguage(
-        snapshot.session.language ??
-          savedConfig?.language ??
-          this.env.TRANSCRIPT_TRANSCRIPTION_LANGUAGE,
+        (languageChosen
+          ? snapshot.session.language ?? savedConfig?.language
+          : savedConfig?.language) ?? this.env.TRANSCRIPT_TRANSCRIPTION_LANGUAGE,
       ),
-      languageChosen: snapshot.session.language
-        ? snapshot.session.languageChosen === true
-        : savedConfig?.languageChosen === true,
+      languageChosen,
       delay: savedConfig?.delay ?? normalizeDelay(undefined),
       locale:
         savedConfig?.locale ??
@@ -954,15 +958,14 @@ export class TranscriptRoom {
     const deploymentLanguage = normalizeLanguage(
       this.env.TRANSCRIPT_TRANSCRIPTION_LANGUAGE,
     );
-    const keepsLanguage = message.language === undefined && takeover;
-    const requestedLanguage = normalizeLanguage(
-      message.language ??
-        (keepsLanguage ? this.session?.language : undefined) ??
-        deploymentLanguage,
-    );
-    const requestedLanguageChosen =
-      Boolean(message.language) ||
-      (keepsLanguage && this.session?.languageChosen === true);
+    // Only a pick names a language: this request's, or the resumed session's.
+    // Without one the provider gets exactly what it did before picks existed,
+    // the deployment language, never the language the session reports.
+    const keepsPick =
+      message.language === undefined && takeover && this.session?.languageChosen === true;
+    const pickedLanguage = message.language || (keepsPick ? this.session?.language : undefined);
+    const requestedLanguage = normalizeLanguage(pickedLanguage || deploymentLanguage);
+    const requestedLanguageChosen = Boolean(pickedLanguage);
     const canCaption = canTranscribeLanguage(
       transcriptionProvider,
       requestedLanguage,

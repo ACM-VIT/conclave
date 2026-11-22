@@ -134,6 +134,7 @@ describe("caption language in the transcript worker", () => {
         qaModel: "gpt-6.1-sol",
         transportMode: "sfu",
         language: "ta",
+        languageChosen: true,
         keySource: "global",
         startedAt: 1,
         updatedAt: 1,
