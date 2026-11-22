@@ -24,7 +24,7 @@ swift test -q
 Both work on the default Swift 6.4 build engine. The app is Skip Lite only
 (transpiled); do not add `skip-fuse` back.
 
-Android uses the checked-in Gradle wrapper (Gradle 9.7.1) and is verified with
+Android uses the checked-in Gradle wrapper (Gradle 9.9.2) and is verified with
 JDK 21, so pin `JAVA_HOME`:
 
 ```sh
