@@ -2,7 +2,7 @@ import { gzipSync } from "node:zlib";
 import { describe, expect, it, vi } from "vitest";
 import {
   createChunkManifestLoader,
-  createEventTimes,
+  createForwardedEvents,
   forwardCapture,
   INGEST_USER_AGENT,
   type IngestDeps,
@@ -67,7 +67,7 @@ const forward = async (request: Request, path = ["e"], deps: Partial<IngestDeps>
       version === BUILD ? new Map([[CHUNK_ID, "/_next/static/chunks/3u-6_1om1fv26.js"]]) : null,
     siteOrigin: "https://conclave.acmvit.in",
     now: () => NOW,
-    eventTimes: createEventTimes(),
+    forwarded: createForwardedEvents(),
     ...deps,
   });
   return { response, upstream };
@@ -549,15 +549,15 @@ describe("round 9 at /ingest", () => {
   });
 
   it("sends a retried event as it sent it the first time, timestamp included", async () => {
-    const eventTimes = createEventTimes();
+    const forwarded = createForwardedEvents();
     const events = [
       { ...event(), uuid: "0196f0a1-0000-7000-8000-0000000000b1", timestamp: "2026-11-22T11:59:58.000Z" },
       { ...event(), uuid: "0196f0a1-0000-7000-8000-0000000000b2", timestamp: "2026-11-22T09:00:00.000Z" },
       { ...event(), uuid: "0196f0a1-0000-7000-8000-0000000000b3", timestamp: "2031-01-01T00:00:00.000Z" },
     ];
     const json = JSON.stringify({ ...captureBody(events), sent_at: undefined });
-    const first = await forward(post(json, "application/json"), ["e"], at(RECEIVED, { eventTimes }));
-    const retry = await forward(post(json, "application/json"), ["e"], at(RECEIVED + 20_000, { eventTimes }));
+    const first = await forward(post(json, "application/json"), ["e"], at(RECEIVED, { forwarded }));
+    const retry = await forward(post(json, "application/json"), ["e"], at(RECEIVED + 20_000, { forwarded }));
 
     expect(sentBody(retry.upstream).batch).toEqual(sentBody(first.upstream).batch);
     expect(timesOf(first.upstream)).toEqual([
@@ -567,8 +567,31 @@ describe("round 9 at /ingest", () => {
     ]);
   });
 
+  it("forwards a retry exactly as the first delivery, even from a browser clock 90 s ahead", async () => {
+    const forwarded = createForwardedEvents();
+    const ahead = { ...event(), uuid: "0196f0a1-0000-7000-8000-0000000000c1", timestamp: "2026-11-22T12:01:30.000Z" };
+    const json = JSON.stringify({ ...captureBody([ahead]), sent_at: "2026-11-22T12:01:30.000Z" });
+    const first = await forward(post(json, "application/json"), ["e"], at(RECEIVED, { forwarded }));
+    const retry = await forward(post(json, "application/json"), ["e"], at(RECEIVED + 40_000, { forwarded }));
+
+    expect(sentBody(first.upstream).batch).toHaveLength(1);
+    expect(sentBody(retry.upstream).batch).toEqual(sentBody(first.upstream).batch);
+    expect(timesOf(first.upstream)).toEqual(["2026-11-22T12:00:00.000Z"]);
+  });
+
+  it("forwards an event once when one request names its uuid twice", async () => {
+    const { upstream } = await forward(post(JSON.stringify(captureBody([event(), event()])), "application/json"));
+
+    expect(sentBody(upstream).batch.map((sent) => sent.uuid)).toEqual(["0196f0a1-0000-7000-8000-0000000000aa"]);
+  });
+
   it("forwards no exception without an exception list", async () => {
-    const exception = (properties: Record<string, unknown>) => ({ ...event(), event: "$exception", properties: { ...event().properties, ...properties } });
+    const exception = (properties: Record<string, unknown>) => ({
+      ...event(),
+      uuid: "0196f0a1-0000-7000-8000-0000000000e1",
+      event: "$exception",
+      properties: { ...event().properties, ...properties },
+    });
     for (const list of [undefined, []]) {
       const { response, upstream } = await forward(post(JSON.stringify(captureBody([exception({ $exception_list: list })])), "application/json"));
       expect(response.status).toBe(400);

@@ -236,13 +236,15 @@ shapes the values of listed properties:
   so until the manifest loads, and in a build without one, chunk frames are
   `[path]`.
 - **Times.** `/ingest` keeps an event's own time when it lies within 5 minutes
-  before receipt (or a minute after), so a retried event is sent exactly as
-  the first time. A time outside that window moves nothing: the event is as
-  old as the browser says it was when sent (posthog-js's send time against the
-  event's own), at most 5 minutes, or with no send time it is held to the
-  window. That time depends on when the request arrived, so it is kept by uuid
-  (the last 10,000), and a retry gets the time its first delivery got. The
-  browser's send time is not forwarded.
+  before receipt (or a minute after). A time outside that window moves
+  nothing: the event is as old as the browser says it was when sent
+  (posthog-js's send time against the event's own), at most 5 minutes, or with
+  no send time it is held to the window. The browser's send time is not
+  forwarded.
+- **Retries.** `/ingest` keeps every event it forwarded by uuid (the last
+  10,000, within 4 MB) and checks that first: a retry, or an event sent again,
+  is forwarded exactly as the first delivery was, timestamp included, without
+  being built again. One request naming a uuid twice forwards it once.
 - **Required fields.** An `$exception` with no exception list, or an empty
   one, is not sent.
 

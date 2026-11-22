@@ -1,6 +1,6 @@
 import {
   createChunkManifestLoader,
-  createEventTimes,
+  createForwardedEvents,
   forwardCapture,
   ingestHostFrom,
 } from "@/app/lib/telemetry-ingest";
@@ -14,7 +14,7 @@ const manifest = createChunkManifestLoader({
   fetch: (url, init) => fetch(url, init),
 });
 
-const eventTimes = createEventTimes();
+const forwarded = createForwardedEvents();
 let warnedUnconfigured = false;
 
 const handle = async (
@@ -40,7 +40,7 @@ const handle = async (
     manifest,
     siteOrigin,
     now: Date.now,
-    eventTimes,
+    forwarded,
   });
 };
 

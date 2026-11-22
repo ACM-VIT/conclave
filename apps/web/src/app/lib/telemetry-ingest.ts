@@ -3,6 +3,7 @@ import {
   buildOutboundEvent,
   chunkManifestUrl,
   isBuildVersion,
+  type OutboundEvent,
   parseChunkManifest,
 } from "./telemetry-privacy";
 import { createOutboundSchemas, UNKNOWN_BUILD } from "./telemetry-schema";
@@ -67,8 +68,8 @@ export type IngestDeps = {
   /** Our site's origin: a frame of a script served from any other names no file. */
   siteOrigin: string;
   now: () => number;
-  /** The times given to events this process forwarded, by uuid (createEventTimes). */
-  eventTimes: EventTimes;
+  /** The events this process forwarded, by uuid (createForwardedEvents). */
+  forwarded: ForwardedEvents;
 };
 
 // How far an event's time may be from when we received it: posthog-js sends
@@ -76,12 +77,39 @@ export type IngestDeps = {
 // little ahead is fine.
 const MAX_EVENT_AGE_MS = 5 * 60_000;
 const MAX_EVENT_LEAD_MS = 60_000;
-const MAX_EVENT_TIMES = 10_000;
+const MAX_FORWARDED_EVENTS = 10_000;
+const MAX_FORWARDED_BYTES = 4 * 1024 * 1024;
 
-export type EventTimes = Map<string, string>;
+type ForwardedEvent = OutboundEvent & { timestamp: string };
 
-/** The times given to recent events, by uuid, so a retry is sent the same. */
-export const createEventTimes = (): EventTimes => new Map();
+export type ForwardedEvents = {
+  get: (uuid: string) => ForwardedEvent | undefined;
+  remember: (event: ForwardedEvent) => void;
+};
+
+/**
+ * The events this process forwarded, by uuid, the most recent 10,000 within
+ * 4 MB: a retry of one is forwarded exactly as the first delivery was,
+ * timestamp included, without being built again.
+ */
+export const createForwardedEvents = (): ForwardedEvents => {
+  const events = new Map<string, { event: ForwardedEvent; bytes: number }>();
+  let total = 0;
+  return {
+    get: (uuid) => events.get(uuid)?.event,
+    remember(event) {
+      if (events.has(event.uuid)) return;
+      const bytes = JSON.stringify(event).length;
+      events.set(event.uuid, { event, bytes });
+      total += bytes;
+      while (events.size > MAX_FORWARDED_EVENTS || total > MAX_FORWARDED_BYTES) {
+        const [uuid, oldest] = events.entries().next().value as [string, { bytes: number }];
+        events.delete(uuid);
+        total -= oldest.bytes;
+      }
+    },
+  };
+};
 
 // The parts of an exception posthog-js sends that the scrubber reads, typed
 // as posthog-js writes them; anything else in an entry or frame is dropped.
@@ -220,37 +248,24 @@ const clientSentAt = (url: URL, body: unknown): number | null => {
 };
 
 /**
- * An event's time. The browser's own time when it lies within
- * MAX_EVENT_AGE_MS before we received it (or a minute after), so a retry of
- * the same event gets the same time. Otherwise, a skewed or made-up clock
- * moves nothing: the event is as old as the browser says it was when sent,
- * at most MAX_EVENT_AGE_MS, or with no send time, held to that window. Such a
- * time depends on when the request arrived, so it is kept by uuid and a retry
- * gets the time the first delivery got.
+ * A new event's time: the browser's own when it lies within MAX_EVENT_AGE_MS
+ * before we received it (or a minute after). Otherwise a skewed or made-up
+ * clock moves nothing: the event is as old as the browser says it was when
+ * sent, at most MAX_EVENT_AGE_MS, or with no send time, held to that window.
+ * A retry never comes here: it is forwarded as its first delivery was.
  */
-const eventTime = (
-  uuid: string,
-  timestamp: unknown,
-  sentAt: number | null,
-  receivedAt: number,
-  eventTimes: EventTimes,
-): string => {
+const eventTime = (timestamp: unknown, sentAt: number | null, receivedAt: number): string => {
   const time = timeOf(timestamp);
   if (time !== null && time >= receivedAt - MAX_EVENT_AGE_MS && time <= receivedAt + MAX_EVENT_LEAD_MS) {
     return new Date(time).toISOString();
   }
-  const known = eventTimes.get(uuid);
-  if (known) return known;
   const at =
     time === null
       ? receivedAt
       : sentAt === null
         ? Math.min(Math.max(time, receivedAt - MAX_EVENT_AGE_MS), receivedAt)
         : receivedAt - Math.min(Math.max(sentAt - time, 0), MAX_EVENT_AGE_MS);
-  const stamp = new Date(at).toISOString();
-  if (eventTimes.size >= MAX_EVENT_TIMES) eventTimes.delete(eventTimes.keys().next().value as string);
-  eventTimes.set(uuid, stamp);
-  return stamp;
+  return new Date(at).toISOString();
 };
 
 const reply = (status: number) =>
@@ -324,17 +339,25 @@ const prepareForward = async (request: Request, deps: IngestDeps) => {
   };
   const schemas = createOutboundSchemas(context);
   const sentAt = clientSentAt(url, decoded);
+  const inRequest = new Set<string>();
   const batch = sameBuild.flatMap((event) => {
+    const uuid = event.uuid ?? crypto.randomUUID();
+    if (inRequest.has(uuid)) return [];
+    inRequest.add(uuid);
+    // A retry, or an event sent again, goes exactly as it went the first time.
+    const known = deps.forwarded.get(uuid);
+    if (known) return [known];
     const built = buildOutboundEvent(
-      { uuid: event.uuid ?? crypto.randomUUID(), event: event.event, properties: event.properties },
+      { uuid, event: event.event, properties: event.properties },
       // Our fields are the event's own: the browser took them from the
       // capture's payload, and nothing here counts as stored.
       { ...context, payload: event.properties, storedKeys: new Set(), siteOrigin: deps.siteOrigin },
       schemas,
     );
-    return built
-      ? [{ ...built, timestamp: eventTime(built.uuid, event.timestamp, sentAt, receivedAt, deps.eventTimes) }]
-      : [];
+    if (!built) return [];
+    const forwarded = { ...built, timestamp: eventTime(event.timestamp, sentAt, receivedAt) };
+    deps.forwarded.remember(forwarded);
+    return [forwarded];
   });
   if (batch.length === 0) throw new Refused(400);
   return { api_key: deps.projectKey, batch };

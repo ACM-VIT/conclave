@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createEventTimes, forwardCapture } from "../src/app/lib/telemetry-ingest";
+import { createForwardedEvents, forwardCapture } from "../src/app/lib/telemetry-ingest";
 
 const BUILD = "0b2d3b480f4621392a4151d750c90965b7c8b76c";
 const KEY = "phc_test_project";
@@ -101,7 +101,7 @@ const sentEvents = async (list: Sent[] = sent): Promise<Event_[]> => {
         manifest: async () => null,
         siteOrigin: "https://conclave.example",
         now: () => Date.now(),
-        eventTimes: createEventTimes(),
+        forwarded: createForwardedEvents(),
       },
     );
     for (const body of forwarded) events.push(...(JSON.parse(body) as { batch: Event_[] }).batch);
