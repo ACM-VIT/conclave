@@ -29,56 +29,6 @@
       "count": 4
     }
   },
-  "src/app/components/ai-elements/chain-of-thought.tsx": {
-    "conclave/no-comments": {
-      "count": 1
-    }
-  },
-  "src/app/components/ai-elements/conversation.tsx": {
-    "conclave/no-comments": {
-      "count": 1
-    }
-  },
-  "src/app/components/ai-elements/loader.tsx": {
-    "conclave/no-comments": {
-      "count": 1
-    }
-  },
-  "src/app/components/ai-elements/message.tsx": {
-    "conclave/no-comments": {
-      "count": 1
-    }
-  },
-  "src/app/components/ai-elements/prompt-input.tsx": {
-    "conclave/no-comments": {
-      "count": 1
-    }
-  },
-  "src/app/components/ai-elements/reasoning.tsx": {
-    "conclave/no-comments": {
-      "count": 1
-    }
-  },
-  "src/app/components/ai-elements/response.tsx": {
-    "conclave/no-comments": {
-      "count": 1
-    }
-  },
-  "src/app/components/ai-elements/shimmer.tsx": {
-    "conclave/no-comments": {
-      "count": 1
-    }
-  },
-  "src/app/components/ai-elements/suggestion.tsx": {
-    "conclave/no-comments": {
-      "count": 1
-    }
-  },
-  "src/app/components/ai-elements/task.tsx": {
-    "conclave/no-comments": {
-      "count": 1
-    }
-  },
   "src/app/hooks/useMeetChat.ts": {
     "conclave/no-comments": {
       "count": 2

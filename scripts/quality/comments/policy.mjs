@@ -34,13 +34,28 @@ export const vendoredIgnores = (packageDir) =>
   VENDORED_PREFIXES.filter((prefix) => prefix.startsWith(packageDir)).map((prefix) => prefix.slice(packageDir.length));
 
 const LICENSE_MARKER =
-  /SPDX-License-Identifier:|@license\b|\bcopyright\b|\bpermission is hereby granted\b|\blicensed under\b/i;
+  /SPDX-License-Identifier:|@license\b|\bcopyright\b|\bpermission is hereby granted\b|\blicensed under\b|\bApache-2\.0\b|^\/\/ Ported (?:verbatim |\(and trimmed\) )?from \S/i;
+
+const DIRECTIVE_PROLOGUE = /^\s*(?:(["'])use [a-z ]+\1;?\s*)*$/;
 
 const ESLINT_DIRECTIVE = /^(?:\/\/|\/\*)\s*eslint-(disable|enable)(?:-next-line|-line)?(?=\s|\*\/|$)/;
 const ESLINT_REASON = /\s-{2,}\s+\S/;
 const TS_EXPECT_ERROR = /^(?:\/\/|\/\*)\s*@ts-expect-error\b([\s\S]*?)(?:\*\/)?$/;
 
 const SOURCE_MAP_URL = /^(?:\/\/|\/\*)[#@]\s*sourceMappingURL=\S+\s*(?:\*\/)?$/;
+
+const SKIP_DIRECTIVE = /^\/\/ SKIP (?:[A-Z]+\b|@\w)/;
+
+const PROVENANCE_CLAUSE = /^(?:[\w.-]+ )*SHA256 [0-9a-f]{64}$/;
+const PROVENANCE_LABEL = /^[\w.-]+(?: [\w.-]+)?$/;
+
+const isProvenanceHash = (text) => {
+  const match = /^\/\/ (.+)\.$/.exec(text);
+  if (!match) return false;
+  const clauses = match[1].split("; ");
+  return clauses.some((clause) => PROVENANCE_CLAUSE.test(clause)) &&
+    clauses.every((clause) => PROVENANCE_CLAUSE.test(clause) || PROVENANCE_LABEL.test(clause));
+};
 
 const scriptDirectives = [
   ["prettier-ignore", /^(?:\/\/\s*prettier-ignore\s*|\/\*\s*prettier-ignore\s*\*\/)$/],
@@ -80,6 +95,8 @@ const directiveKind = (language, text, start) => {
   if (language === "swift" && start === 0 && /^\/\/\s*swift-tools-version:/.test(text)) {
     return { kind: "swift-tools-version" };
   }
+  if (language === "swift" && SKIP_DIRECTIVE.test(text)) return { kind: "skip-directive" };
+  if ((language === "swift" || language === "kotlin") && isProvenanceHash(text)) return { kind: "provenance-hash" };
   if (language === "css" && SOURCE_MAP_URL.test(text)) return { kind: "source-map-url" };
   return undefined;
 };
@@ -96,7 +113,7 @@ const licenseHeaderIndexes = (source, comments) => {
   };
   for (let index = 0; index < comments.length; index += 1) {
     const gap = source.slice(previousEnd, comments[index].start);
-    if (gap.trim() !== "") break;
+    if (index === 0 ? !DIRECTIVE_PROLOGUE.test(gap) : gap.trim() !== "") break;
     if ((gap.match(/\n/g) ?? []).length > 1) flush();
     block.push(index);
     previousEnd = comments[index].end;

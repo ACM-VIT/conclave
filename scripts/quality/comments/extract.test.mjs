@@ -179,3 +179,72 @@ test("CSS strings hide comment markers and sourceMappingURL is allowed", () => {
     ],
   );
 });
+
+test("Skip transpiler directives are allowed in Swift and nowhere else", () => {
+  const source = [
+    "// SKIP SYMBOLFILE",
+    "// SKIP INSERT: @Suppress(\"UNCHECKED_CAST\")",
+    "// SKIP DECLARE: class Bridge: Base",
+    "// SKIP REPLACE: fun f() = Unit",
+    "// SKIP NOWARN",
+    "// SKIP @nobridge",
+    "// SKIP this is prose, not a directive",
+    "// skip the rest",
+    "let a = 1",
+  ].join("\n");
+  assert.deepEqual(
+    extractComments(source, "Bridge+Android.swift").map((comment) => comment.allowed),
+    ["skip-directive", "skip-directive", "skip-directive", "skip-directive", "skip-directive", "skip-directive", null, null],
+  );
+  assert.deepEqual(
+    extractComments("// SKIP SYMBOLFILE\nval a = 1\n", "a.kt").map((comment) => comment.allowed),
+    [null],
+  );
+  assert.deepEqual(
+    extractComments("// SKIP SYMBOLFILE\nconst a = 1;\n", "a.ts").map((comment) => comment.allowed),
+    [null],
+  );
+});
+
+test("generated provenance hashes are allowed, prose beside a hash is not", () => {
+  const hash = "a8f815b7cd4ceb7bf9c5d04f6fed8528a3cf77981e3994e91cace24d6e25b541";
+  const source = [
+    `// Profile material-rounded-24-absolute-v1; manifest SHA256 ${hash}; generator SHA256 ${hash}.`,
+    "val a = 1",
+    `    // mic.fill1; input SHA256 ${hash}.`,
+    `// We pinned this because the upstream glyph moved; input SHA256 ${hash}.`,
+    `// input SHA256 ${hash.slice(1)}.`,
+  ].join("\n");
+  assert.deepEqual(
+    extractComments(source, "Icons.kt").map((comment) => comment.allowed),
+    ["provenance-hash", "provenance-hash", null, null],
+  );
+  assert.deepEqual(
+    extractComments(`// mic.fill1; input SHA256 ${hash}.\nconst a = 1;\n`, "a.ts").map((comment) => comment.allowed),
+    [null],
+  );
+});
+
+test("an attribution header may follow a directive prologue", () => {
+  const source = [
+    '"use client";',
+    "",
+    '// Ported (and trimmed) from AI SDK Elements (elements.ai-sdk.dev) "PromptInput".',
+    "",
+    "import { a } from \"a\";",
+    "// Ported from somewhere, but not at the top.",
+  ].join("\n");
+  assert.deepEqual(
+    extractComments(source, "prompt-input.tsx").map((comment) => comment.allowed),
+    ["license-header", null],
+  );
+  const apache = ["// Material Symbols by Google.", "// Apache-2.0, complete text: LICENSE", "package a"].join("\n");
+  assert.deepEqual(
+    extractComments(apache, "Icons.kt").map((comment) => comment.allowed),
+    ["license-header", "license-header"],
+  );
+  assert.deepEqual(
+    extractComments('const a = "use client";\n// Copyright 2024 Example\n', "a.ts").map((comment) => comment.allowed),
+    [null],
+  );
+});
