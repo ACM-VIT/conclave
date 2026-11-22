@@ -385,6 +385,26 @@ describe("schemas", () => {
     expect(cut.parse("abc9")).toBe("abc");
   });
 
+  it("gives a string schema with a pattern the same answer on every call, and refuses a pattern that keeps state", () => {
+    const slug = s.string({ max: 8, pattern: /^[a-z]+$/ });
+    const answers = (input: string) =>
+      Array.from({ length: 4 }, () => {
+        try {
+          return slug.parse(input);
+        } catch (error) {
+          return error instanceof SchemaError ? "refused" : "threw";
+        }
+      });
+
+    expect(answers("abc")).toEqual(["abc", "abc", "abc", "abc"]);
+    expect(answers("Abc")).toEqual(["refused", "refused", "refused", "refused"]);
+    // test() on a global or sticky expression moves its lastIndex, so the
+    // same input would be taken on one call and refused on the next.
+    expect(() => s.string({ max: 8, pattern: /^[a-z]+$/g })).toThrow(/g or y flag/);
+    expect(() => s.string({ max: 8, pattern: /^[a-z]+$/y })).toThrow(/g or y flag/);
+    expect(() => s.string({ max: 8, pattern: /^[a-z]+$/i })).not.toThrow();
+  });
+
   it("has one rule for an app id, and holds a contract to it", () => {
     const contract = (id: string) =>
       defineContract({ id, major: 1, surface: "panel", actions: {}, queries: {}, views: {} });
