@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import {
   existsSync,
   mkdtempSync,
+  readFileSync,
   readdirSync,
   rmSync,
   statSync,
@@ -47,23 +48,35 @@ const sfuProcess = (code: string) => {
 };
 
 // Holds a process the moment it calls `fs.<call>` with something that
-// contains `marker`, until the test lets it go on.
-const holdAt = (signals: string, call: "readFileSync" | "writeFileSync", markers: string[]) => `
+// contains `marker`, until the test lets it go on. Unless `armed`, nothing
+// holds until the process calls `armHold()`; `pauseAt(name)` holds it there.
+const holdAt = (
+  signals: string,
+  call: "readFileSync" | "writeFileSync",
+  markers: string[],
+  { armed = true } = {},
+) => `
   import fs from "node:fs";
   import { syncBuiltinESMExports } from "node:module";
   const signals = ${JSON.stringify(signals)};
   const markers = ${JSON.stringify(markers)};
+  let armed = ${armed};
+  globalThis.armHold = () => { armed = true; };
+  const pauseAt = (marker) => {
+    fs.writeFileSync(signals + "/at-" + marker, "");
+    const giveUpAt = Date.now() + 30000;
+    while (!fs.existsSync(signals + "/go-on-" + marker) && Date.now() < giveUpAt) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+    }
+  };
+  globalThis.pauseAt = pauseAt;
   const original = fs.${call};
   fs.${call} = (...args) => {
     const seen = ${call === "readFileSync" ? "original(...args)" : "args[1]"};
-    const marker = markers.find((name) => String(seen).includes(name));
+    const marker = armed && markers.find((name) => String(seen).includes(name));
     if (marker) {
       markers.splice(markers.indexOf(marker), 1);
-      fs.writeFileSync(signals + "/at-" + marker, "");
-      const giveUpAt = Date.now() + 30000;
-      while (!fs.existsSync(signals + "/go-on-" + marker) && Date.now() < giveUpAt) {
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-      }
+      pauseAt(marker);
     }
     return ${call === "readFileSync" ? "seen" : "original(...args)"};
   };
@@ -343,6 +356,100 @@ describe("two SFUs writing recovery records into one directory", () => {
     expect(await stalled).toEqual({ code: 0, stderr: "" });
     expect(await createFileRoomRecoveryStore(directory).read(CHANNEL)).toMatchObject({
       hostUserKey: "host-new",
+    });
+  }, 120_000);
+
+  it("never numbers a room again, however long its tombstone stood, while a write decided on it is stalled", async () => {
+    const directory = tempDir("room-recovery-writers-");
+    const signals = tempDir("room-recovery-signals-");
+    const longGone = Date.now() - 3 * DAY_MS;
+    const store = createFileRoomRecoveryStore(directory);
+    await store.write(CHANNEL, record("host-long-gone", "room-gone", longGone), null);
+    // Tidying turns the expired record into the room's tombstone.
+    ageEverything(directory);
+    await createFileRoomRecoveryStore(directory).write(
+      "conclave:tidy-once",
+      record("tidy-host", "tidy-room"),
+      null,
+    );
+    expect(await store.read(CHANNEL)).toMatchObject({ hostUserKey: null, writer: "room-gone" });
+
+    // An SFU that tidied already reads that tombstone to take the room over,
+    // and stops right after.
+    const stalled = sfuProcess(`
+      ${holdAt(signals, "readFileSync", ["room-gone"], { armed: false })}
+      const store = createFileRoomRecoveryStore(${JSON.stringify(directory)});
+      await store.write("conclave:warm-up", { liveAt: Date.now(), hostUserKey: "warm-up", adminUserKeys: [], readmissionRequiredUserKeys: [], overAt: null, ownerEmail: null, writer: "warm-up" }, null);
+      pauseAt("warmed-up");
+      armHold();
+      const landed = await store.write(
+        ${JSON.stringify(CHANNEL)},
+        { liveAt: Date.now(), hostUserKey: "host-stalled", adminUserKeys: [], readmissionRequiredUserKeys: [], overAt: null, ownerEmail: null, writer: "room-stalled" },
+        "room-gone",
+      );
+      fs.writeFileSync(signals + "/landed", String(landed));
+    `);
+    const signalled = signalsOf(signals);
+    await signalled.reaches("warmed-up");
+    // Meanwhile the tombstone has stood untouched for well over a month.
+    const longAgo = new Date(Date.now() - 45 * DAY_MS);
+    for (const file of filesIn(directory)) utimesSync(file, longAgo, longAgo);
+    signalled.goOnPast("warmed-up");
+    await signalled.reaches("room-gone");
+
+    // Another SFU tidies the directory, then opens a new room at the code,
+    // taking over whatever record it finds there.
+    const other = createFileRoomRecoveryStore(directory);
+    await other.write("conclave:another-room", record("another-host", "another-room"), null);
+    const found = (await other.read(CHANNEL)) as { writer?: string } | null;
+    expect(await other.write(CHANNEL, record("host-new", "room-new"), found?.writer ?? null)).toBe(
+      true,
+    );
+
+    signalled.goOnPast("room-gone");
+    expect(await stalled).toEqual({ code: 0, stderr: "" });
+    expect(readFileSync(join(signals, "landed"), "utf8")).toBe("false");
+    expect(await createFileRoomRecoveryStore(directory).read(CHANNEL)).toMatchObject({
+      hostUserKey: "host-new",
+    });
+  }, 120_000);
+
+  it("does not report a stalled write as landed when it came in below newer records", async () => {
+    const directory = tempDir("room-recovery-writers-");
+    const signals = tempDir("room-recovery-signals-");
+    await createFileRoomRecoveryStore(directory).write(CHANNEL, record("host-a", "room-a"), null);
+    // Room A's SFU reads the room's record to write after it, and stops.
+    const roomA = sfuProcess(`
+      ${holdAt(signals, "readFileSync", ["host-a"], { armed: false })}
+      const store = createFileRoomRecoveryStore(${JSON.stringify(directory)});
+      await store.write("conclave:warm-up", { liveAt: Date.now(), hostUserKey: "warm-up", adminUserKeys: [], readmissionRequiredUserKeys: [], overAt: null, ownerEmail: null, writer: "warm-up" }, null);
+      armHold();
+      const landed = await store.write(
+        ${JSON.stringify(CHANNEL)},
+        { liveAt: Date.now(), hostUserKey: "host-a-later", adminUserKeys: [], readmissionRequiredUserKeys: [], overAt: null, ownerEmail: null, writer: "room-a" },
+        null,
+      );
+      fs.writeFileSync(signals + "/landed", String(landed));
+    `);
+    const signalled = signalsOf(signals);
+    await signalled.reaches("host-a");
+
+    // Room B takes the call over and writes twice, then a third SFU's tidying
+    // clears out every version below B's newest, the one A meant to take too.
+    const roomB = createFileRoomRecoveryStore(directory);
+    expect(await roomB.write(CHANNEL, record("host-b", "room-b"), "room-a")).toBe(true);
+    expect(await roomB.write(CHANNEL, record("host-b-later", "room-b"), "room-a")).toBe(true);
+    await createFileRoomRecoveryStore(directory).write(
+      "conclave:another-room",
+      record("another-host", "another-room"),
+      null,
+    );
+
+    signalled.goOnPast("host-a");
+    expect(await roomA).toEqual({ code: 0, stderr: "" });
+    expect(readFileSync(join(signals, "landed"), "utf8")).toBe("false");
+    expect(await createFileRoomRecoveryStore(directory).read(CHANNEL)).toMatchObject({
+      hostUserKey: "host-b-later",
     });
   }, 120_000);
 

@@ -2,12 +2,14 @@ import { createHash, randomBytes } from "node:crypto";
 import {
   linkSync,
   mkdirSync,
+  opendirSync,
   readFileSync,
   readdirSync,
   rmSync,
-  rmdirSync,
   statSync,
   writeFileSync,
+  type Dir,
+  type Dirent,
 } from "node:fs";
 import { join, resolve } from "node:path";
 import type { Room } from "../config/classes/Room.js";
@@ -326,9 +328,10 @@ export const createMemoryRoomRecoveryStore = (): RoomRecoveryStore => {
 };
 
 const PRUNE_EVERY_MS = 10 * 60 * 1000;
-// How long a room whose newest record is a tombstone stays before it goes,
-// far longer than any write could stall between reading and publishing.
-const ROOM_KEPT_IDLE_MS = 30 * 24 * 60 * 60 * 1000;
+// How many entries of the shared directory a pass looks at besides the rooms
+// this SFU wrote: enough to get round, in time, the rooms an SFU that has
+// gone left untidy, and few enough that a pass never holds up a call.
+const SWEPT_PER_PASS = 200;
 const ABANDONED_TEMP_FILE_MS = 60 * 1000;
 const WRITE_ATTEMPTS = 8;
 
@@ -374,11 +377,14 @@ const VERSION_FILE = /^(\d+)\.json$/;
  * the writer looks again and either writes after it or, if another room
  * wrote meanwhile, does not write. No lock, no clock.
  *
- * Versions are never numbered again. Tidying removes versions below the
- * newest, which no one reads any more, and never the newest: one that no
- * longer says anything is replaced by a tombstone published as the next
- * version, like any write. A whole room goes only once its tombstone has
- * stood untouched for a month.
+ * Versions are never numbered again, so a room's newest record and its
+ * directory are never removed. Tidying removes versions below the newest,
+ * which no one reads any more, and replaces a newest that no longer says
+ * anything with a tombstone published as the next version, like any write.
+ * The tombstone stays, a few bytes for each code ever used, and a room
+ * opened at the code later goes on from its number. A write decided on an
+ * older version finds its number taken, or a newer one above it, and does
+ * not land.
  */
 export const createFileRoomRecoveryStore = (
   directory: string = roomRecoveryDirectory(),
@@ -406,56 +412,61 @@ export const createFileRoomRecoveryStore = (
     throw new Error(`Could not read the newest recovery record in ${room}`);
   };
   // Publishes `record` as this version, only if no one has: a temp file
-  // written in full, then linked into place. Says whether it landed.
+  // written in full, then linked into place. Says whether it landed: not if
+  // the number was taken, nor if a newer version is there already, which
+  // was decided on what came after this write's view.
   const publish = (room: string, version: number, record: unknown): boolean => {
     mkdirSync(room, { recursive: true });
     const pending = resolve(directory, `.${randomBytes(6).toString("hex")}.tmp`);
     writeFileSync(pending, JSON.stringify(record), "utf8");
     try {
       linkSync(pending, versionPath(room, version));
-      return true;
     } catch (error) {
-      if (failedWith(error, "EEXIST", "ENOENT", "EINVAL")) return false;
+      // Another SFU took the number first, or cleared out this write's temp
+      // file after it stalled.
+      if (failedWith(error, "EEXIST", "ENOENT")) return false;
       throw error;
     } finally {
       rmSync(pending, { force: true });
     }
+    return versionsIn(room)[0] === version;
   };
-  const pruneRoom = (room: string) => {
+  // Says whether the room is settled: it holds a tombstone and nothing else.
+  const pruneRoom = (room: string): boolean => {
     const [newest, ...older] = versionsIn(room);
-    if (newest === undefined) {
-      // A room with no record yet: one a write is about to fill, or one a
-      // write that never finished left behind. Only the second goes.
-      const madeAt = unlessGone(() => statSync(room).mtimeMs);
-      if (madeAt === null || Date.now() - madeAt <= ABANDONED_TEMP_FILE_MS) return;
-      try {
-        rmdirSync(room);
-      } catch (error) {
-        if (!failedWith(error, "ENOENT", "ENOTEMPTY", "EEXIST")) throw error;
-      }
-      return;
-    }
+    // A room with no record yet: a write is about to fill it.
+    if (newest === undefined) return true;
     for (const version of older) rmSync(versionPath(room, version), { force: true });
     const path = versionPath(room, newest);
     const text = unlessGone(() => readFileSync(path, "utf8"));
-    if (text === null) return;
+    if (text === null) return false;
     const stored = parsedOrUndefined(text);
-    if (stillMatters(stored)) return;
-    if (!isTombstone(stored)) {
-      // Once the tombstone is the newest, the record it replaces is below
-      // it. Taken by a write that came in meanwhile, it is that write's room.
-      if (publish(room, newest + 1, tombstoneOf(stored))) rmSync(path, { force: true });
-      return;
-    }
-    const written = unlessGone(() => statSync(path).mtimeMs);
-    if (written === null || Date.now() - written < ROOM_KEPT_IDLE_MS) return;
+    if (stillMatters(stored)) return false;
+    if (isTombstone(stored)) return true;
+    // Once the tombstone is the newest, the record it replaces is below it.
+    // Taken by a write that came in meanwhile, it is that write's room.
+    if (!publish(room, newest + 1, tombstoneOf(stored))) return false;
     rmSync(path, { force: true });
-    try {
-      rmdirSync(room);
-    } catch (error) {
-      // A write has come in since: the room stays.
-      if (!failedWith(error, "ENOENT", "ENOTEMPTY", "EEXIST")) throw error;
+    return true;
+  };
+  // Rooms this SFU wrote that are not settled yet.
+  const written = new Set<string>();
+  // Goes round the shared directory a few entries at a time, so no pass
+  // looks at every room ever opened.
+  let sweep: Dir | null = null;
+  const nextEntries = (count: number): Dirent[] => {
+    const entries: Dirent[] = [];
+    while (entries.length < count) {
+      sweep ??= opendirSync(directory);
+      const entry = sweep.readSync();
+      if (!entry) {
+        sweep.closeSync();
+        sweep = null;
+        break;
+      }
+      entries.push(entry);
     }
+    return entries;
   };
   // Nothing touches the disk until the first room does.
   let prunedAt = 0;
@@ -463,19 +474,23 @@ export const createFileRoomRecoveryStore = (
     if (Date.now() - prunedAt < PRUNE_EVERY_MS) return;
     prunedAt = Date.now();
     try {
-      for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      for (const room of written) if (pruneRoom(room)) written.delete(room);
+      for (const entry of nextEntries(SWEPT_PER_PASS)) {
         const path = resolve(directory, entry.name);
         if (entry.isDirectory()) {
           pruneRoom(path);
           continue;
         }
         // What is left of a write that never finished.
-        const written = unlessGone(() => statSync(path).mtimeMs);
-        if (written !== null && Date.now() - written > ABANDONED_TEMP_FILE_MS) {
+        const madeAt = unlessGone(() => statSync(path).mtimeMs);
+        if (madeAt !== null && Date.now() - madeAt > ABANDONED_TEMP_FILE_MS) {
           rmSync(path, { force: true });
         }
       }
     } catch (error) {
+      const broken = sweep;
+      sweep = null;
+      void broken?.close().catch(() => undefined);
       Logger.warn(`Failed to clear out old recovery records in ${directory}`, error);
     }
   };
@@ -490,9 +505,11 @@ export const createFileRoomRecoveryStore = (
         if (newest && !mayFollow(newest.stored, record.writer, takesOver)) {
           return false;
         }
-        // Someone created that version first, or the room was just cleared
-        // out (macOS can say EINVAL while it goes): look again.
-        if (publish(room, (newest?.version ?? 0) + 1, record)) return true;
+        // Someone wrote first: look again.
+        if (publish(room, (newest?.version ?? 0) + 1, record)) {
+          written.add(room);
+          return true;
+        }
       }
       throw new Error(`Gave up writing the recovery record of ${channelId}`);
     },
