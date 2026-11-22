@@ -106,7 +106,6 @@ export const createApp = (browserManager: BrowserManager, security: ServiceSecur
     // The SFU calls this API server to server. Browsers get CORS only from the
     // origins an operator lists, and none by default.
     app.use(cors({ origin: security.corsOrigins }));
-    app.use(express.json());
 
     app.use((req, res, next) => {
         if (req.path === "/health" || req.path === "/health/") {
@@ -128,6 +127,7 @@ export const createApp = (browserManager: BrowserManager, security: ServiceSecur
 
         res.status(401).json({ error: "Unauthorized" });
     });
+    app.use(express.json());
 
     app.get("/health", async (_req, res) => {
         try {

@@ -67,6 +67,18 @@ test("the control API rejects requests without the service token", async () => {
     });
 });
 
+test("the control API authenticates before it reads a request body", async () => {
+    await withApp({ token: STRONG_TOKEN, listenHost: "127.0.0.1", corsOrigins: [] }, async (baseUrl) => {
+        const malformed = { method: "POST", headers: { "content-type": "application/json" }, body: "{not json" };
+        assert.equal((await fetch(`${baseUrl}/launch`, malformed)).status, 401);
+        const authorized = await fetch(`${baseUrl}/launch`, {
+            ...malformed,
+            headers: { ...malformed.headers, "x-browser-service-token": STRONG_TOKEN },
+        });
+        assert.equal(authorized.status, 400);
+    });
+});
+
 test("CORS answers only the configured web origins", async () => {
     await withApp(
         { token: STRONG_TOKEN, listenHost: "127.0.0.1", corsOrigins: ["https://conclave.example"] },
