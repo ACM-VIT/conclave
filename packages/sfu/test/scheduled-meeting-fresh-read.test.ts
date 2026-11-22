@@ -1,8 +1,10 @@
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { createConnection, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createClient } from "redis";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   advanceScheduledMeetings,
@@ -86,8 +88,7 @@ type StoreKind = "sqlite" | "json" | "redis";
 let keyPrefix = 0;
 // Where the SFUs of one test keep their meetings. Over Redis each SFU has a
 // local copy of its own as well, as SFUs on different hosts do.
-const useStore = (kind: StoreKind) => {
-  const dir = tempDir();
+const useStore = (kind: StoreKind, dir = tempDir()) => {
   vi.stubEnv("SCHEDULED_MEETINGS_PERSISTENCE", kind);
   vi.stubEnv("SCHEDULED_MEETINGS_SQLITE_PATH", join(dir, "conclave.sqlite"));
   vi.stubEnv("SCHEDULED_MEETINGS_PATH", join(dir, "scheduled-meetings.json"));
@@ -99,7 +100,7 @@ const useStore = (kind: StoreKind) => {
   );
   keyPrefix += 1;
   vi.stubEnv("SFU_PERSISTENCE_REDIS_KEY_PREFIX", `test:${process.pid}:${keyPrefix}`);
-  return kind;
+  return dir;
 };
 
 // One SFU: its own copy of the meetings in memory, over a store it may share.
@@ -245,6 +246,93 @@ describe("an SFU whose Redis holds no meetings yet", () => {
     });
     expect(claimed?.emailReminderStatus).toBe("pending");
     expect(claimed?.readmissionRequiredEmails).toEqual([INVITEE]);
+  });
+});
+
+// Before removed invitees had writes of their own, every store kept them as
+// a field of the meeting. The JSON file still does. Wherever such a meeting
+// is read from, the people in that field stay removed.
+describe("removed invitees kept inside the meeting, as stores used to keep them", () => {
+  const redisTest = redisServerPath ? it : it.skip;
+  // A JSON file holding the meeting with its invitee removed.
+  const jsonFileWithRemoval = async () => {
+    const dir = useStore("json");
+    const sfu = await startSfu("json");
+    await scheduleIntroCall(sfu);
+    await setRemoved(sfu, true);
+    return dir;
+  };
+  const withRemovalInside = (record: string): string =>
+    JSON.stringify({ ...(JSON.parse(record) as object), readmissionRequiredEmails: [INVITEE] });
+
+  it("come along when a JSON file's meetings move into SQLite", async () => {
+    const dir = await jsonFileWithRemoval();
+    useStore("sqlite", dir);
+
+    expect(isInvited(await startSfu("sqlite"))).toBe(false);
+    expect(isInvited(await startSfu("sqlite"))).toBe(false);
+  });
+
+  redisTest("come along when a JSON file's meetings move into Redis", async () => {
+    const dir = await jsonFileWithRemoval();
+    useStore("redis", dir);
+    expect(isInvited(await startSfu("redis", dir))).toBe(false);
+
+    // Another host: no JSON file, a local copy of its own, the same Redis.
+    vi.stubEnv("SCHEDULED_MEETINGS_PATH", join(tempDir(), "none.json"));
+    expect(isInvited(await startSfu("redis"))).toBe(false);
+  });
+
+  redisTest("come along when the JSON file is all an SFU has besides Redis", async () => {
+    const dir = await jsonFileWithRemoval();
+    useStore("redis", dir);
+    // No SQLite can be opened under a path that runs through a file.
+    const unusable = join(dir, "scheduled-meetings.json", "no-such-folder");
+    expect(isInvited(await startSfu("redis", unusable))).toBe(false);
+
+    vi.stubEnv("SCHEDULED_MEETINGS_PATH", join(tempDir(), "none.json"));
+    expect(isInvited(await startSfu("redis"))).toBe(false);
+  });
+
+  it("are read from a SQLite row that still carries them, and a host can bring the person back", async () => {
+    const dir = useStore("sqlite");
+    const meeting = await scheduleIntroCall(await startSfu("sqlite"));
+    const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as {
+      DatabaseSync: new (path: string) => {
+        prepare: (sql: string) => { get: (...p: unknown[]) => unknown; run: (...p: unknown[]) => unknown };
+        close: () => void;
+      };
+    };
+    const db = new DatabaseSync(join(dir, "conclave.sqlite"));
+    const row = db
+      .prepare("SELECT payload_json FROM scheduled_meetings WHERE id = ?")
+      .get(meeting.id) as { payload_json: string };
+    db.prepare("UPDATE scheduled_meetings SET payload_json = ? WHERE id = ?").run(
+      withRemovalInside(row.payload_json),
+      meeting.id,
+    );
+    db.close();
+
+    const sfu = await startSfu("sqlite");
+    expect(isInvited(sfu)).toBe(false);
+    await setRemoved(sfu, false);
+    expect(isInvited(await startSfu("sqlite"))).toBe(true);
+  });
+
+  redisTest("are read from a Redis record that still carries them, and a host can bring the person back", async () => {
+    useStore("redis");
+    const meeting = await scheduleIntroCall(await startSfu("redis"));
+    const client = createClient({ url: process.env.SFU_PERSISTENCE_REDIS_URL });
+    await client.connect();
+    const key = `${process.env.SFU_PERSISTENCE_REDIS_KEY_PREFIX}:scheduled-meetings`;
+    const record = await client.hGet(key, meeting.id);
+    await client.hSet(key, meeting.id, withRemovalInside(record!));
+    await client.quit();
+
+    const sfu = await startSfu("redis");
+    expect(isInvited(sfu)).toBe(false);
+    await setRemoved(sfu, false);
+    expect(isInvited(await startSfu("redis"))).toBe(true);
   });
 });
 

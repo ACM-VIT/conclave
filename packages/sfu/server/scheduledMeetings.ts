@@ -643,7 +643,7 @@ const writeJsonAtomic = (path: string, data: string): void => {
 };
 
 type SqliteStatement = {
-  run: (...params: unknown[]) => unknown;
+  run: (...params: unknown[]) => { changes: number | bigint };
   all: (...params: unknown[]) => unknown[];
   get: (...params: unknown[]) => unknown;
 };
@@ -765,8 +765,22 @@ const normalizeStoredMeeting = (raw: unknown): ScheduledMeeting | null => {
 // A meeting as a save writes it, without its removed invitees (see
 // setInviteeReadmission). An SFU from before that list existed writes the
 // same, and so cannot undo a removal either.
-const meetingRecord = (meeting: ScheduledMeeting): string =>
+const meetingRecord = (meeting: object): string =>
   JSON.stringify({ ...meeting, readmissionRequiredEmails: undefined });
+
+// Hands a store the meetings read from another one. Their removed invitees
+// go with them: a save alone leaves those behind.
+const handOver = (
+  store: ScheduledMeetingPersistence,
+  meetings: ScheduledMeeting[],
+): void => {
+  void store.save(meetings);
+  for (const meeting of meetings) {
+    for (const email of meeting.readmissionRequiredEmails ?? []) {
+      void store.setInviteeReadmission?.(meeting.id, email, true);
+    }
+  }
+};
 
 // Removed invitees as a store lists them, one (meeting, email) pair at a
 // time, gathered by meeting.
@@ -861,6 +875,9 @@ const createSqliteScheduledMeetingPersistence = (
   const loadRemovedInviteesOf = db.prepare(
     "SELECT email FROM scheduled_meeting_removed_invitees WHERE meeting_id = ?",
   );
+  const takeCarriedRemovals = db.prepare(
+    "UPDATE scheduled_meetings SET payload_json = ? WHERE id = ? AND payload_json = ?",
+  );
   let knownIds = new Set<string>();
 
   const upsertMeeting = (meeting: ScheduledMeeting): void => {
@@ -878,6 +895,34 @@ const createSqliteScheduledMeetingPersistence = (
   const deleteMeeting = (id: string): void => {
     deleteById.run(id);
     forgetRemovedInvitees.run(id);
+  };
+  // A row written before removed invitees had a table of their own carries
+  // them inside the meeting. Reading such a row moves them to the table and
+  // takes them out of the row, in one step. Left in the row they would come
+  // back at every read, also after a host had let the person in again.
+  const readRow = (row: unknown): ScheduledMeeting | null => {
+    const payload = textColumn(row, "payload_json");
+    const meeting = payload ? normalizeStoredMeeting(JSON.parse(payload)) : null;
+    const carried = meeting?.readmissionRequiredEmails ?? [];
+    if (!meeting || carried.length === 0) return meeting;
+    try {
+      db.exec("BEGIN IMMEDIATE");
+      const taken = takeCarriedRemovals.run(
+        meetingRecord(JSON.parse(payload) as object),
+        meeting.id,
+        payload,
+      );
+      if (Number(taken.changes) > 0) {
+        for (const email of carried) removeInvitee.run(meeting.id, email);
+      }
+      db.exec("COMMIT");
+    } catch (error) {
+      try {
+        db.exec("ROLLBACK");
+      } catch {}
+      Logger.error("Failed to move a meeting's removed invitees to their table", error);
+    }
+    return meeting;
   };
 
   return {
@@ -938,11 +983,7 @@ const createSqliteScheduledMeetingPersistence = (
       try {
         const meetings = loadRows
           .all()
-          .map((row) => {
-            const payload = textColumn(row, "payload_json");
-            if (!payload) return null;
-            return normalizeStoredMeeting(JSON.parse(payload));
-          })
+          .map(readRow)
           .filter((entry): entry is ScheduledMeeting => Boolean(entry));
         const removed = removedInviteesByMeeting(
           loadRemovedInvitees
@@ -960,8 +1001,7 @@ const createSqliteScheduledMeetingPersistence = (
       }
     },
     loadOne: (id) => {
-      const payload = textColumn(loadRowById.get(id), "payload_json");
-      const meeting = payload ? normalizeStoredMeeting(JSON.parse(payload)) : null;
+      const meeting = readRow(loadRowById.get(id));
       if (meeting) {
         meeting.readmissionRequiredEmails = loadRemovedInviteesOf
           .all(id)
@@ -1130,6 +1170,15 @@ redis.call("HSET", key, meetingId, nextPayload)
 return nextPayload
 `;
 
+// Replaces a meeting's record only if it still is the one that was read.
+const REPLACE_RECORD_IF_UNCHANGED_SCRIPT = `
+if redis.call("HGET", KEYS[1], ARGV[1]) == ARGV[2] then
+  redis.call("HSET", KEYS[1], ARGV[1], ARGV[3])
+  return 1
+end
+return 0
+`;
+
 const bookingSlotLockTtlMs = (): number => {
   const parsed = Number(process.env.SFU_BOOKING_SLOT_LOCK_TTL_MS);
   return Number.isFinite(parsed) && parsed >= 1000 ? parsed : 30000;
@@ -1206,6 +1255,33 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
         return [member.slice(0, split), member.slice(split + 1)];
       }),
     );
+  }
+
+  // A record written before removed invitees had a set of their own carries
+  // them inside the meeting. Reading one moves them to the set, then takes
+  // them out of the record. Left there they would come back at every read,
+  // also after a host had let the person in again.
+  private async readRecord(record: string): Promise<ScheduledMeeting | null> {
+    const meeting = normalizeStoredMeeting(JSON.parse(record));
+    const carried = meeting?.readmissionRequiredEmails ?? [];
+    if (!meeting || carried.length === 0) return meeting;
+    await this.client.sAdd(
+      this.removedInviteesKey,
+      carried.map((email) => this.removedInvitee(meeting.id, email)),
+    );
+    for (const email of carried) {
+      void this.fallback.setInviteeReadmission?.(meeting.id, email, true);
+    }
+    await this.client.sendCommand([
+      "EVAL",
+      REPLACE_RECORD_IF_UNCHANGED_SCRIPT,
+      "1",
+      this.key,
+      meeting.id,
+      record,
+      meetingRecord(JSON.parse(record) as object),
+    ]);
+    return meeting;
   }
 
   private async withRemovedInvitees(
@@ -1314,7 +1390,7 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
       String(claim.leadMs),
     ]);
     if (typeof result !== "string" || !result) return null;
-    const claimed = normalizeStoredMeeting(JSON.parse(result));
+    const claimed = await this.readRecord(result);
     if (!claimed) return null;
     const meeting = await this.withRemovedInvitees(claimed);
     this.knownMeetings.set(meeting.id, meeting);
@@ -1333,7 +1409,7 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
     // After this SFU's own writes have gone out, so it never reads past one.
     await this.flush().catch(() => undefined);
     const payload = await this.client.hGet(this.key, id);
-    const meeting = payload ? normalizeStoredMeeting(JSON.parse(payload)) : null;
+    const meeting = payload ? await this.readRecord(payload) : null;
     return meeting ? this.withRemovedInvitees(meeting) : null;
   }
 
@@ -1342,9 +1418,11 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
       await this.start();
       const values = await this.client.hVals(this.key);
       if (values.length > 0) {
-        const meetings = values
-          .map((value) => normalizeStoredMeeting(JSON.parse(value)))
-          .filter((entry): entry is ScheduledMeeting => Boolean(entry));
+        const meetings: ScheduledMeeting[] = [];
+        for (const value of values) {
+          const meeting = await this.readRecord(value);
+          if (meeting) meetings.push(meeting);
+        }
         const removed = await this.removedInvitees();
         for (const meeting of meetings) {
           meeting.readmissionRequiredEmails = removed.get(meeting.id) ?? [];
@@ -1360,12 +1438,7 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
         fallbackMeetings.map((meeting) => [meeting.id, meeting]),
       );
       if (fallbackMeetings.length > 0) {
-        this.save(fallbackMeetings);
-        for (const meeting of fallbackMeetings) {
-          for (const email of meeting.readmissionRequiredEmails ?? []) {
-            this.setInviteeReadmission(meeting.id, email, true);
-          }
-        }
+        handOver(this, fallbackMeetings);
         await this.flush();
         Logger.info(
           `Migrated ${fallbackMeetings.length} scheduled meeting(s) into Redis persistence`,
@@ -1428,7 +1501,7 @@ const migrateJsonScheduledMeetingsToSqlite = (
   const legacy = json.load() as ScheduledMeeting[];
   if (legacy.length === 0) return 0;
 
-  void sqlite.save(legacy);
+  handOver(sqlite, legacy);
   return (sqlite.load() as ScheduledMeeting[]).length;
 };
 
