@@ -55,8 +55,13 @@ struct ChatInputMemoTests {
         #expect(!viewModel.state.isChatOpen)
         #expect(!viewModel.chat.isOpen)
 
-        viewModel.state.chatMessages.append(ChatMessage(id: "m-1", userId: "remote@example.com#w", displayName: "Remote",
-                                                        content: "while closed", roomId: "room-a"))
+        let built = viewModel.chat.rebuildCount
+        for index in 1...10 {
+            viewModel.state.chatMessages.append(ChatMessage(id: "m-" + String(index), userId: "remote@example.com#w",
+                                                            displayName: "Remote", content: "while closed", roomId: "room-a"))
+        }
+        #expect(viewModel.chat.rebuildCount == built)
+        #expect(viewModel.chat.pendingUnreadCount == 10)
         #expect(viewModel.chat.hasDeferredRows)
         let dismissing = viewModel.shell.panels.snapshot
         viewModel.shell.panels.didDismiss(session: dismissing.session, presentationID: dismissing.current?.presentationID ?? 0)

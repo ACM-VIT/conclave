@@ -54,7 +54,7 @@ struct ClosedChatWorkTests {
         #expect(chat.emojiParseCount == parsed + 30)
     }
 
-    @Test func theUnreadDividerGoesBeforeTheEarliestNewMessageEvenWhenTheyArriveOutOfOrder() {
+    @Test func theUnreadDividerSitsAtTheFirstMessageThatArrivedUnreadEvenWhenAnOlderOneArrivesLater() {
         var messages = history(3)
         let chat = Chat.presenter(Chat.inputs(messages))
         messages.append(Chat.peer("late", "sent second", at: 200, history: false))
@@ -64,7 +64,8 @@ struct ClosedChatWorkTests {
         chat.openPanel()
         let rowIds = chat.timeline.rowIds
         let divider = rowIds.firstIndex(of: "unread")
-        #expect(divider.map { rowIds[$0 + 1] } == "early")
+        #expect(divider.map { rowIds[$0 + 1] } == "late")
+        #expect(rowIds.firstIndex(of: "early").map { $0 < divider ?? 0 } == true)
     }
 
     @Test func readingTheClosedTimelineCatchesUpWithoutCountingAnythingTwice() {
@@ -106,6 +107,12 @@ struct ClosedChatWorkTests {
         let chat = Chat.presenter(Chat.inputs(messages))
         messages.append(ChatMessageInput.make(id: "answer", senderId: ConclaveAssistantChatIdentity.userId, senderName: "Conclave",
                                               isAssistant: true, content: "Here is the answer.", timestampMillis: Chat.base + 100))
+        chat.apply(Chat.inputs(messages), change: .messages)
+        #expect(chat.pendingUnreadCount == 1)
+        messages[messages.count - 1] = ChatMessageInput.make(id: "answer", senderId: ConclaveAssistantChatIdentity.userId,
+                                                             senderName: "Conclave", isAssistant: true,
+                                                             content: "Here is the answer.", timestampMillis: Chat.base + 100,
+                                                             assistant: ChatAssistantInput.make(reasoningDone: true, isDone: true))
         chat.apply(Chat.inputs(messages), change: .messages)
         #expect(chat.pendingUnreadCount == 1)
         chat.openPanel()
