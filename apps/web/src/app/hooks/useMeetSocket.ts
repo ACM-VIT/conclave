@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { planJoinInfo, type HeldJoinInfo } from "../lib/held-join-info";
 import { createProducerSlotOrder } from "../lib/producer-slot-order";
 import { toError } from "../lib/utils";
 import type { Socket } from "socket.io-client";
@@ -1069,6 +1070,8 @@ export function useMeetSocket({
   const isCameraOffRef = useRef(isCameraOff);
   const serverRoomIdRef = useRef<string | null>(null);
   const foregroundRecoveryTimeoutRef = useRef<number | null>(null);
+  const heldJoinInfoRef = useRef<HeldJoinInfo<JoinInfo> | null>(null);
+  const lastJoinInfoSourceRef = useRef<"held" | "fresh">("fresh");
   const runtimeStunIceServersRef = useRef<RTCIceServer[] | null>(null);
   const runtimeTurnIceServersRef = useRef<RTCIceServer[] | null>(null);
   const useTurnFallbackRef = useRef(false);
@@ -2058,6 +2061,7 @@ export function useMeetSocket({
     socketRef.current?.disconnect();
     socketRef.current = null;
     onSocketReady?.(null);
+    heldJoinInfoRef.current = null;
     deviceRef.current = null;
     webcamCodecPolicyRef.current = { ...BASELINE_WEBCAM_CODEC_POLICY };
 
@@ -6939,7 +6943,11 @@ export function useMeetSocket({
   const connectSocket = useCallback(
     (
       targetRoomId: string,
-      options?: { sfuUrlOverride?: string },
+      options?: {
+        sfuUrlOverride?: string;
+        /** Set by a reconnect. The first join always asks the join route. */
+        reconnectJoinInfo?: "held-first" | "fresh-first";
+      },
     ): Promise<Socket> => {
       const connectionGeneration = reconnectGenerationRef.current;
       return new Promise((resolve, reject) => {
@@ -6973,18 +6981,50 @@ export function useMeetSocket({
               : import("socket.io-client");
 
             const cachedToken = prewarm?.getCachedToken?.(roomIdForJoin);
+            const joinInfoGrant = `${joinMode}:${isAdmin ? "host" : "participant"}:${user?.id ?? ""}`;
+            const joinInfoPlan = planJoinInfo({
+              held: options?.reconnectJoinInfo ? heldJoinInfoRef.current : null,
+              roomId: roomIdForJoin,
+              grant: joinInfoGrant,
+              now: Date.now(),
+              isFirstReconnectAttempt:
+                options?.reconnectJoinInfo === "held-first",
+            });
+            lastJoinInfoSourceRef.current =
+              !cachedToken && joinInfoPlan.source === "held" ? "held" : "fresh";
             const tokenPromise = cachedToken
               ? Promise.resolve(cachedToken)
+              : joinInfoPlan.source === "held"
+                ? Promise.resolve(joinInfoPlan.joinInfo)
                 : getJoinInfo(roomIdForJoin, sessionIdRef.current, {
                     user,
                     isHost: isAdmin,
                     joinMode,
+                  }).catch((error: unknown) => {
+                    if (
+                      !joinInfoPlan.fallback ||
+                      getReconnectFailureKind(error) !== "transient"
+                    ) {
+                      throw error;
+                    }
+                    console.warn(
+                      "[Meets] Join route unreachable; reconnecting with the held SFU token:",
+                      error,
+                    );
+                    lastJoinInfoSourceRef.current = "held";
+                    return joinInfoPlan.fallback;
                   });
 
-            const [{ token, sfuUrl, iceServers }, { io }] = await Promise.all([
+            const [joinInfo, { io }] = await Promise.all([
               tokenPromise,
               socketIoPromise,
             ]);
+            const { token, sfuUrl, iceServers } = joinInfo;
+            heldJoinInfoRef.current = {
+              joinInfo,
+              roomId: roomIdForJoin,
+              grant: joinInfoGrant,
+            };
             if (
               connectionGeneration !== reconnectGenerationRef.current ||
               intentionalDisconnectRef.current
@@ -8804,6 +8844,7 @@ export function useMeetSocket({
     let roomUnavailableSince: number | null = null;
     let roomUnavailableRetries = 0;
     let nextDelayOverrideMs: number | null = null;
+    let hasTriedHeldJoinInfo = false;
     reconnectInFlightRef.current = true;
     reconnectAttemptsRef.current = resolveReconnectStartAttempts(
       reconnectAttemptsRef.current,
@@ -8904,11 +8945,16 @@ export function useMeetSocket({
             resetRoomId: false,
             preserveMeetingState: true,
           });
+          lastJoinInfoSourceRef.current = "fresh";
           if (!canReuseSocket) {
             socketRef.current?.disconnect();
             socketRef.current = null;
             onSocketReady?.(null);
-            await connectSocket(reconnectRoomId);
+            const reconnectJoinInfo = hasTriedHeldJoinInfo
+              ? "fresh-first"
+              : "held-first";
+            hasTriedHeldJoinInfo = true;
+            await connectSocket(reconnectRoomId, { reconnectJoinInfo });
           } else {
             setMeetError(null);
           }
@@ -8963,6 +9009,7 @@ export function useMeetSocket({
             onSocketReady?.(null);
             await connectSocket(reconnectRoomId, {
               sfuUrlOverride: joinError.redirectUrl,
+              reconnectJoinInfo: "fresh-first",
             });
             if (intentionalDisconnectRef.current) return;
             await joinRoomInternal(reconnectRoomId, stream, joinOptions);
@@ -8992,6 +9039,17 @@ export function useMeetSocket({
           const reconnectFailure = describeReconnectFailure(err);
           const failureKind = getReconnectFailureKind(err);
           let isRecoverable = failureKind !== "final";
+          if (lastJoinInfoSourceRef.current === "held") {
+            // The SFU refused or could not use the held token, which says
+            // nothing about a new one. Ask the join route before giving up.
+            lastJoinInfoSourceRef.current = "fresh";
+            if (failureKind === "final") {
+              heldJoinInfoRef.current = null;
+              isRecoverable = true;
+              nextDelayOverrideMs = 0;
+              reconnectAttemptsRef.current = attempt - 1;
+            }
+          }
           if (failureKind === "room-unavailable") {
             roomUnavailableSince ??= Date.now();
             const retryPlan = planRoomUnavailableRetry({
