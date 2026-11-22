@@ -818,6 +818,29 @@ describe("call_summary", () => {
     expect(props.video_freeze_ms as number).toBeLessThanOrEqual(props.remote_video_ms as number);
   });
 
+  it("counts the whole of a freeze that happens inside the measured call", () => {
+    const { tracker, state, named } = setup();
+    tracker.onParticipants(2, 0);
+    state("connecting", 0);
+    state("joined", 1000);
+    const at = (frames: number, bytes: number, freezes = 0, freezeSec = 0) =>
+      sample([video({ framesDecoded: frames, bytesReceived: bytes, freezeCount: freezes, totalFreezesDurationSec: freezeSec })]);
+    tracker.onStats(at(0, 0), 1000);
+    tracker.onStats(at(150, 100_000), 6000);
+    tracker.onStats(at(300, 200_000), 11_000);
+    tracker.onStats(at(450, 300_000), 16_000);
+    tracker.onStats(at(600, 400_000), 21_000);
+    // Video stops from 21 s to 29 s; Chrome adds the 8 s freeze when it resumes.
+    tracker.onStats(at(600, 400_000), 26_000);
+    tracker.onStats(at(660, 440_000, 1, 8), 31_000);
+    state("disconnected", 32_000);
+
+    const { props } = named("call_summary")[0];
+    expect(props.video_freeze_count).toBe(1);
+    expect(props.video_freeze_ms).toBe(8000);
+    expect(props.video_freeze_ms as number).toBeLessThanOrEqual(props.remote_video_ms as number);
+  });
+
   it("charges nothing from before joined to a call", () => {
     const { tracker, state, named } = setup();
     state("connecting", 0);

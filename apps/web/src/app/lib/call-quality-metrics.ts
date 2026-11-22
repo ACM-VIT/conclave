@@ -109,6 +109,13 @@ type StreamMemory = {
   concealedSamples: number;
   totalSamplesReceived: number;
   stalled: boolean;
+  /**
+   * Video time measured and freeze time counted for this stream since its
+   * baseline (joined, the end of a dropped gap, or a missed sample): the
+   * freeze time it may still add is the difference.
+   */
+  videoMs: number;
+  freezeMs: number;
   /** The sample these counters were read in. */
   readAt: number;
 };
@@ -390,13 +397,16 @@ export function createCallMetricsTracker({
     totals: emptyTotals(),
   });
 
-  /** Adds one stream's progress over `dt` to the totals; returns whether it stalled. */
+  type StreamProgress = Pick<StreamMemory, "stalled" | "videoMs" | "freezeMs">;
+  const BASELINE: StreamProgress = { stalled: false, videoMs: 0, freezeMs: 0 };
+
+  /** Adds one stream's progress over `dt` to the totals. */
   const addInbound = (
     totals: MediaTotals,
     stream: InboundStreamStats,
     previous: StreamMemory | undefined,
     dt: number,
-  ): boolean => {
+  ): StreamProgress => {
     const delta = (current: number | null, prior: number | undefined) =>
       current === null ? 0 : counterDelta(current, prior ?? 0);
     if (stream.kind === "audio") {
@@ -408,30 +418,31 @@ export function createCallMetricsTracker({
         stream.totalSamplesReceived,
         previous?.totalSamplesReceived,
       );
-      return false;
+      return BASELINE;
     }
     const bytes = delta(stream.bytesReceived, previous?.bytesReceived);
     const frames = delta(stream.framesDecoded, previous?.framesDecoded);
     // Credits whole sample intervals: a consumer swapped out between two
     // samples leaves no stats, so its replacement covers the interval.
-    const receiving = bytes > 0 || frames > 0;
-    if (receiving) totals.remoteVideoMs += dt;
+    const videoMs = (previous?.videoMs ?? 0) + (bytes > 0 || frames > 0 ? dt : 0);
+    if (bytes > 0 || frames > 0) totals.remoteVideoMs += dt;
     totals.freezeCount += delta(stream.freezeCount, previous?.freezeCount);
     // Chrome adds a freeze's whole duration when video resumes, so one that
-    // began before the baseline (before joined, or across a dropped gap)
-    // lands at once. Each interval adds at most the video time it measured.
-    if (receiving) {
-      totals.freezeMs += Math.min(
-        delta(stream.totalFreezesDurationSec, previous?.freezesSec) * 1000,
-        dt,
-      );
-    }
+    // began before the stream's baseline (before joined, or across a dropped
+    // gap) lands at once. A stream adds at most the video time it has
+    // measured since that baseline, less the freeze time already counted.
+    const counted = previous?.freezeMs ?? 0;
+    const freezeMs = Math.min(
+      delta(stream.totalFreezesDurationSec, previous?.freezesSec) * 1000,
+      videoMs - counted,
+    );
+    totals.freezeMs += freezeMs;
     const stalled = dt > 0 && frames === 0 && bytes >= STALL_MIN_BYTE_DELTA;
     if (stalled) {
       totals.stallMs += dt;
       if (!previous?.stalled) totals.stallCount += 1;
     }
-    return stalled;
+    return { stalled, videoMs, freezeMs: counted + freezeMs };
   };
 
   /**
@@ -451,9 +462,9 @@ export function createCallMetricsTracker({
     const previous = media.streams.get(stream.id);
     const measured =
       dt !== null && totals !== null && (previous === undefined || previous.readAt === previousAt);
-    const stalled = measured
+    const progress = measured
       ? addInbound(totals, stream, previous, dt)
-      : dt === null && (previous?.stalled ?? false);
+      : { ...BASELINE, stalled: dt === null && (previous?.stalled ?? false) };
 
     media.streams.set(stream.id, {
       packetsReceived: stream.packetsReceived,
@@ -463,7 +474,7 @@ export function createCallMetricsTracker({
       freezesSec: stream.totalFreezesDurationSec ?? 0,
       concealedSamples: stream.concealedSamples ?? 0,
       totalSamplesReceived: stream.totalSamplesReceived ?? 0,
-      stalled,
+      ...progress,
       readAt: at,
     });
   };

@@ -93,7 +93,7 @@ closes. Errors between reconnect attempts never end a call; one call id spans ev
 | `reconnect_count`, `reconnect_total_ms`, `reconnect_longest_ms` | Times the connection dropped mid-call, timed from the drop (the start of the reconnect loop, even in a hidden tab whose UI stays `joined`) until it was back |
 | `reconnect_unrecovered` | The call ended while still reconnecting |
 | `remote_video_ms` | Time remote video was arriving, summed over streams, in 5 s sample steps. Divide freeze and stall time by it for a rate |
-| `video_freeze_count`, `video_freeze_ms` | The browser's `freezeCount` and `totalFreezesDuration` over all remote video. Chrome adds a freeze's whole duration when video resumes, so each interval adds at most the video time it measured: freeze time never exceeds `remote_video_ms`, and a freeze that began before `joined` or across a dropped gap counts only from the baseline |
+| `video_freeze_count`, `video_freeze_ms` | The browser's `freezeCount` and `totalFreezesDuration` over all remote video. Chrome adds a freeze's whole duration when video resumes, so each stream adds at most the video time it has measured since its baseline (`joined`, the end of a dropped gap, or a missed sample), less the freeze time already counted: freeze time never exceeds `remote_video_ms`, a freeze that began before the baseline counts only from it, and one wholly inside the call counts in full |
 | `video_stall_count`, `video_stall_ms` | Intervals where bytes arrived but no frame decoded (the freeze watchdog's signal). mediasoup's padding-only probator stream is ignored |
 | `audio_concealed_pct` | Share of remote audio samples the browser had to conceal |
 | `outbound_video_ms` | Time the camera was sending. Screen sharing is not counted |
