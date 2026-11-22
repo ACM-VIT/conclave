@@ -231,6 +231,22 @@ export function clearMediaDeviceError(
   };
 }
 
+export function mergeMediaDeviceError(
+  current: MeetError | null,
+  next: MeetError,
+): MeetError {
+  if (!current?.device || !next.device || current.device === next.device) return next;
+  if (next.device === "both") return next;
+  const kind = (
+    Object.keys(MEDIA_ERROR_MESSAGES) as (keyof typeof MEDIA_ERROR_MESSAGES)[]
+  ).find((key) => MEDIA_ERROR_MESSAGES[key][next.device ?? "both"] === next.message);
+  return {
+    ...next,
+    device: "both",
+    message: kind ? MEDIA_ERROR_MESSAGES[kind].both : next.message,
+  };
+}
+
 export function generateSessionId(): string {
   return `${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
 }

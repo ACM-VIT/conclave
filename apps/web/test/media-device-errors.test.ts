@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { clearMediaDeviceError, createMeetError } from "../src/app/lib/utils";
+import { clearMediaDeviceError, createMeetError, mergeMediaDeviceError } from "../src/app/lib/utils";
 import { isDevicePublishing, retryFailedMediaDevices } from "../src/app/lib/media-retry";
 
 const denied = new DOMException("Permission denied", "NotAllowedError");
@@ -139,6 +139,27 @@ describe("deciding whether a retried device is publishing", () => {
 
   it("is not publishing when the user has the device turned off", () => {
     expect(isDevicePublishing({ intendedOn: false, producer: producer() })).toBe(false);
+  });
+});
+
+describe("tracking every device that is still failing", () => {
+  it("keeps the microphone when the camera fails after it", () => {
+    const mic = createMeetError(denied, "MEDIA_ERROR", "microphone");
+    const camera = createMeetError(denied, "MEDIA_ERROR", "camera");
+    const merged = mergeMediaDeviceError(mic, camera);
+    expect(merged).toMatchObject({ device: "both", message: "Camera and microphone are blocked" });
+    const afterMic = clearMediaDeviceError(merged, "microphone");
+    expect(afterMic).toMatchObject({ device: "camera", message: "Camera is blocked" });
+    expect(clearMediaDeviceError(afterMic, "camera")).toBeNull();
+  });
+
+  it("replaces an error for the same device, or one that names no device", () => {
+    const camera = createMeetError(denied, "MEDIA_ERROR", "camera");
+    const missingCamera = createMeetError(missing, "MEDIA_ERROR", "camera");
+    expect(mergeMediaDeviceError(camera, missingCamera)).toBe(missingCamera);
+    const transport = { code: "CONNECTION_FAILED" as const, message: "Failed to connect to server", recoverable: true };
+    expect(mergeMediaDeviceError(transport, camera)).toBe(camera);
+    expect(mergeMediaDeviceError(null, camera)).toBe(camera);
   });
 });
 

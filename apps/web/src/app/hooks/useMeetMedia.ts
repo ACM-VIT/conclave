@@ -34,7 +34,11 @@ import {
   MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS,
   MEDIA_CAPTURE_RECOVERY_TIMEOUT_MS,
 } from "../lib/media-capture-timeout";
-import { clearMediaDeviceError, createMeetError } from "../lib/utils";
+import {
+  clearMediaDeviceError,
+  createMeetError,
+  mergeMediaDeviceError,
+} from "../lib/utils";
 import type { MeetMediaDevice } from "../lib/types";
 import {
   createCapturedSurfaceControlState,
@@ -2160,15 +2164,18 @@ export function useMeetMedia({
         setIsCameraOff(true);
       }
       if (firstRequiredError) {
-        setMeetError(
-          createMeetError(
-            firstRequiredError,
-            "PERMISSION_DENIED",
-            audioUnavailable && videoUnavailable
-              ? "both"
-              : videoUnavailable
-                ? "camera"
-                : "microphone",
+        setMeetError((current) =>
+          mergeMediaDeviceError(
+            current,
+            createMeetError(
+              firstRequiredError,
+              "PERMISSION_DENIED",
+              audioUnavailable && videoUnavailable
+                ? "both"
+                : videoUnavailable
+                  ? "camera"
+                  : "microphone",
+            ),
           ),
         );
       }
@@ -2192,7 +2199,7 @@ export function useMeetMedia({
       return liveTracks.length > 0 ? new MediaStream(liveTracks) : null;
     } catch (err) {
       const meetErr = createMeetError(err, "PERMISSION_DENIED", requestedDevice);
-      setMeetError(meetErr);
+      setMeetError((current) => mergeMediaDeviceError(current, meetErr));
       setIsCameraOff(true);
       if (meetErr.code === "PERMISSION_DENIED") {
         setIsMuted(true);
@@ -3505,7 +3512,7 @@ export function useMeetMedia({
         }
       }
       setMutedIntent(previousMuted);
-      setMeetError(meetErr);
+      setMeetError((current) => mergeMediaDeviceError(current, meetErr));
     } finally {
       toggleMuteInFlightRef.current = false;
     }
@@ -3780,7 +3787,7 @@ export function useMeetMedia({
             }));
           }
           if (!failedMutedWarmup) {
-            setMeetError(meetErr);
+            setMeetError((current) => mergeMediaDeviceError(current, meetErr));
           }
         }
       } finally {
@@ -4166,7 +4173,9 @@ export function useMeetMedia({
             }
           }
           setIsCameraOff(true);
-          setMeetError(createMeetError(err, "MEDIA_ERROR", "camera"));
+          setMeetError((current) =>
+            mergeMediaDeviceError(current, createMeetError(err, "MEDIA_ERROR", "camera")),
+          );
         }
       }
     } finally {
@@ -5388,7 +5397,7 @@ export function useMeetMedia({
           ) {
             setIsCameraOff(true);
           }
-          setMeetError(meetErr);
+          setMeetError((current) => mergeMediaDeviceError(current, meetErr));
         }
       } finally {
         if (
