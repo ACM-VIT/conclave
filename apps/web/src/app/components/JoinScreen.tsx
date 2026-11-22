@@ -1314,7 +1314,9 @@ function JoinScreen({
                 />
                 {!isCameraOn && (
                   <div
-                    className="absolute inset-0 flex flex-col items-center justify-center gap-2.5 pb-14 pt-12 sm:pt-0"
+                    className={`absolute inset-0 flex flex-col items-center justify-center gap-2.5 pb-14 pt-12 sm:pt-0 ${
+                      meetingEndedNotice ? "max-sm:invisible" : ""
+                    }`}
                   >
                     <Avatar id={user?.id || previewName} name={previewName} size={76} />
                     <span className="text-[13.5px] text-[#fafafa]/45">Camera is off</span>
@@ -1348,8 +1350,35 @@ function JoinScreen({
                     </span>
                   ) : null}
                 </div>
+                {meetingEndedNotice ? (
+                  <div
+                    role="status"
+                    className="absolute inset-x-3 top-14 z-20 flex items-start gap-2 rounded-xl border border-white/10 bg-[#18181b] px-3.5 py-3 text-left text-[13px] leading-snug text-[#fafafa]"
+                  >
+                    <Info
+                      size={16}
+                      className="mt-0.5 shrink-0 text-[#F95F4A]"
+                      aria-hidden="true"
+                    />
+                    <p className="min-w-0 flex-1">{meetingEndedNotice}</p>
+                    {onDismissMeetingEndedNotice ? (
+                      <button
+                        type="button"
+                        onClick={onDismissMeetingEndedNotice}
+                        aria-label="Dismiss meeting ended notice"
+                        className="-mr-1 -mt-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[#fafafa]/55 transition-colors hover:bg-white/[0.08] hover:text-[#fafafa]"
+                      >
+                        <X size={14} aria-hidden="true" />
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
                 {(showPermissionHint || permissionRequestError) && (
-                  <div className="pointer-events-none absolute bottom-[76px] left-1/2 max-w-[calc(100%-2rem)] -translate-x-1/2 rounded-full bg-black/65 px-3 py-1.5 text-center text-[12.5px] font-medium text-white/80 backdrop-blur-sm">
+                  <div
+                    className={`pointer-events-none absolute bottom-[76px] left-1/2 max-w-[calc(100%-2rem)] -translate-x-1/2 rounded-full bg-black/65 px-3 py-1.5 text-center text-[12.5px] font-medium text-white/80 backdrop-blur-sm ${
+                      meetingEndedNotice ? "max-sm:invisible" : ""
+                    }`}
+                  >
                     {permissionRequestError ?? "Permission needed"}
                   </div>
                 )}
@@ -1443,29 +1472,6 @@ function JoinScreen({
                   : "Create a room, or join one with a code."}
               </p>
             </div>
-            {meetingEndedNotice ? (
-              <div
-                role="status"
-                className="flex items-start gap-2 rounded-xl border border-[#F95F4A]/25 bg-[#F95F4A]/10 px-3.5 py-3 text-left text-[13px] leading-snug text-[#fafafa]"
-              >
-                <Info
-                  size={16}
-                  className="mt-0.5 shrink-0 text-[#F95F4A]"
-                  aria-hidden="true"
-                />
-                <p className="min-w-0 flex-1">{meetingEndedNotice}</p>
-                {onDismissMeetingEndedNotice ? (
-                  <button
-                    type="button"
-                    onClick={onDismissMeetingEndedNotice}
-                    aria-label="Dismiss meeting ended notice"
-                    className="-mr-1 -mt-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[#fafafa]/55 transition-colors hover:bg-white/[0.08] hover:text-[#fafafa]"
-                  >
-                    <X size={14} aria-hidden="true" />
-                  </button>
-                ) : null}
-              </div>
-            ) : null}
               {isSignedInUser ? (
                 <div className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3">
                   <div className="min-w-0">
