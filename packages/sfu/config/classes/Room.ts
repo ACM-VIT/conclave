@@ -71,6 +71,17 @@ type ProducerIndexEntry = {
   userId: string;
   type: ProducerType;
   system: boolean;
+  seq: number;
+};
+
+let lastProducerSeq = 0;
+
+// Clients order producer announcements by this. It only ever increases, and
+// it follows the clock so a producer created after a restart still sorts
+// after one created before it.
+const nextProducerSeq = (): number => {
+  lastProducerSeq = Math.max(lastProducerSeq + 1, Date.now());
+  return lastProducerSeq;
 };
 
 export type TranscriptAudioProducerEntry = {
@@ -1486,6 +1497,7 @@ export class Room {
       kind: entry.producer.kind,
       type: entry.type,
       paused: entry.producer.paused,
+      producerSeq: entry.seq,
     };
   }
 
@@ -1504,10 +1516,13 @@ export class Room {
   }
 
   private indexProducer(
-    entry: ProducerIndexEntry,
+    entry: Omit<ProducerIndexEntry, "seq">,
     options?: { skipWebcamReceiverCapacityRefresh?: boolean },
   ): void {
-    this.producerIndex.set(entry.producer.id, entry);
+    this.producerIndex.set(entry.producer.id, {
+      ...entry,
+      seq: nextProducerSeq(),
+    });
 
     const cleanup = () => {
       this.removeProducerIndexById(entry.producer.id, entry.producer);
@@ -1988,6 +2003,7 @@ export class Room {
       kind: info.kind,
       type: info.type,
       paused: info.paused,
+      producerSeq: this.producerIndex.get(info.producerId)?.seq,
     }));
 
     producers.sort((a, b) => {
