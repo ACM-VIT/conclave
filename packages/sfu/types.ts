@@ -466,6 +466,9 @@ export interface ScheduledMeeting {
   attendeeEmail?: string | null;
   attendeeNote?: string | null;
   attendeeTimeZone?: string | null;
+  // Invited people a host removed from the meeting or took admission back
+  // from. They knock like anyone else until a host lets them in again.
+  readmissionRequiredEmails?: string[];
   googleCalendarEventId?: string | null;
   calendarSyncStatus?: "not_required" | "pending" | "synced" | "failed";
   calendarSyncError?: string | null;

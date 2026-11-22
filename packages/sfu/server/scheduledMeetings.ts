@@ -449,7 +449,32 @@ export const isScheduledMeetingInvitee = (
   if (!email) return false;
   const meeting = getScheduledMeetingByRoomCode(store, clientId, roomCode);
   if (!meeting || meeting.status === "cancelled") return false;
+  if (meeting.readmissionRequiredEmails?.includes(email)) return false;
   return meeting.hostEmail === email || meeting.attendeeEmail === email;
+};
+
+/**
+ * Records that a host removed an invited person from the meeting at this room
+ * code (`required`), or let them in again. Returns the meeting when that
+ * changed it, for the caller to persist; null for anyone who was not invited.
+ */
+export const setScheduledInviteeReadmission = (
+  store: ScheduledMeetingStore,
+  clientId: string,
+  roomCode: string,
+  email: string,
+  required: boolean,
+): ScheduledMeeting | null => {
+  const meeting = getScheduledMeetingByRoomCode(store, clientId, roomCode);
+  if (!meeting) return null;
+  if (meeting.hostEmail !== email && meeting.attendeeEmail !== email) return null;
+  const marked = meeting.readmissionRequiredEmails ?? [];
+  if (marked.includes(email) === required) return null;
+  meeting.readmissionRequiredEmails = required
+    ? [...marked, email]
+    : marked.filter((candidate) => candidate !== email);
+  meeting.updatedAt = Date.now();
+  return meeting;
 };
 
 export const moveScheduledMeetingToClient = (
@@ -631,6 +656,11 @@ const normalizeStoredMeeting = (raw: unknown): ScheduledMeeting | null => {
       typeof record.attendeeTimeZone === "string"
         ? record.attendeeTimeZone
         : null,
+    readmissionRequiredEmails: Array.isArray(record.readmissionRequiredEmails)
+      ? record.readmissionRequiredEmails.filter(
+          (email): email is string => typeof email === "string",
+        )
+      : [],
     googleCalendarEventId:
       typeof record.googleCalendarEventId === "string"
         ? record.googleCalendarEventId

@@ -291,6 +291,10 @@ export class Room {
   // a host letting them in again gets them past the lock: not an invite, not
   // proof they were here before.
   private readmissionRequiredUserKeys: Set<string> = new Set();
+  // Told when someone starts or stops needing readmission, so what must
+  // outlive the room (a scheduled meeting's invitations) can keep up.
+  public onReadmissionChange: ((userKey: string, required: boolean) => void) | null =
+    null;
   // Set while this room stands in for a call the SFU lost and nobody from
   // that call has come back yet. Until one does, or until no pass from the
   // lost call can still be good, the room has no host and whoever recreated
@@ -2549,6 +2553,20 @@ export class Room {
     return this.readmissionRequiredUserKeys.has(userKey);
   }
 
+  // For a mark that was made before this room existed, such as a scheduled
+  // meeting's removed invitee. It tells nobody: nothing changed.
+  requireReadmission(userKey: string) {
+    this.readmissionRequiredUserKeys.add(userKey);
+  }
+
+  private setReadmissionRequired(userKey: string, required: boolean) {
+    const marked = this.readmissionRequiredUserKeys.has(userKey);
+    if (marked === required) return;
+    if (required) this.readmissionRequiredUserKeys.add(userKey);
+    else this.readmissionRequiredUserKeys.delete(userKey);
+    this.onReadmissionChange?.(userKey, required);
+  }
+
   awaitRestorer(until: number) {
     this.restorerDeadline = until;
   }
@@ -2570,7 +2588,7 @@ export class Room {
   }
 
   allowUser(userKey: string) {
-    this.readmissionRequiredUserKeys.delete(userKey);
+    this.setReadmissionRequired(userKey, false);
     this.blockedUsers.delete(userKey);
     this.allowedUsers.add(userKey);
     this.pendingClients.delete(userKey);
@@ -2585,7 +2603,7 @@ export class Room {
   }
 
   allowLockedUser(userKey: string) {
-    this.readmissionRequiredUserKeys.delete(userKey);
+    this.setReadmissionRequired(userKey, false);
     this.blockedUsers.delete(userKey);
     this.lockedAllowedUsers.add(userKey);
     this.pendingClients.delete(userKey);
@@ -2596,7 +2614,7 @@ export class Room {
   }
 
   revokeLockedAllowedUser(userKey: string) {
-    this.readmissionRequiredUserKeys.add(userKey);
+    this.setReadmissionRequired(userKey, true);
     this.lockedAllowedUsers.delete(userKey);
   }
 

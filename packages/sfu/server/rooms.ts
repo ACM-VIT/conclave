@@ -8,6 +8,11 @@ import {
   RoomLeaseExpiredError,
   RoomOwnershipError,
 } from "./roomRegistry.js";
+import {
+  getScheduledMeetingByRoomCode,
+  persistScheduledMeetingChanges,
+  setScheduledInviteeReadmission,
+} from "./scheduledMeetings.js";
 import { cleanupRoomBrowser } from "./socket/handlers/sharedBrowserHandlers.js";
 import type { EndedRoom, SfuState } from "./state.js";
 import { clearWebinarLinkSlug } from "./webinar.js";
@@ -61,6 +66,39 @@ export const markRoomEnded = (
 
   state.endedRooms.set(room.channelId, endedRoom);
   return endedRoom;
+};
+
+/**
+ * A scheduled meeting's invitations outlive its room, so a host removing an
+ * invited person has to outlive it too. The room starts with the removals the
+ * schedule already holds, and tells the schedule about new ones.
+ */
+const bindScheduledInvitations = (state: SfuState, room: Room): void => {
+  const meeting = getScheduledMeetingByRoomCode(
+    state.scheduledMeetings,
+    room.clientId,
+    room.id,
+  );
+  for (const email of meeting?.readmissionRequiredEmails ?? []) {
+    room.requireReadmission(email);
+  }
+  room.onReadmissionChange = (userKey, required) => {
+    const changed = setScheduledInviteeReadmission(
+      state.scheduledMeetings,
+      room.clientId,
+      room.id,
+      userKey,
+      required,
+    );
+    if (!changed || !state.scheduledMeetingPersistence) return;
+    persistScheduledMeetingChanges(
+      state.scheduledMeetings,
+      state.scheduledMeetingPersistence,
+      [changed],
+    ).catch((error) => {
+      Logger.warn(`Failed to persist an invitee's removal from ${room.id}`, error);
+    });
+  };
 };
 
 export const clearEndedRoom = (state: SfuState, channelId: string): boolean =>
@@ -178,6 +216,7 @@ export const getOrCreateRoomWithOrigin = async (
         webRtcServer: getWorkerWebRtcServer(worker),
         workerPid: typeof worker.pid === "number" ? worker.pid : null,
       });
+      bindScheduledInvitations(state, createdRoom);
       state.rooms.set(channelId, createdRoom);
       Logger.success(`Created room: ${roomId} (${clientId})`);
       return createdRoom;

@@ -15,6 +15,7 @@ import { LocalRoomRegistry } from "../server/roomRegistry.js";
 import { forceCloseRoom } from "../server/rooms.js";
 import {
   createScheduledMeeting,
+  isScheduledMeetingInvitee,
   type ScheduledMeetingPersistence,
 } from "../server/scheduledMeetings.js";
 import {
@@ -197,6 +198,7 @@ const second = { userId: "guest-second", clientId: "conclave", sessionId: "s2" }
 const knocker = { userId: "guest-knocker", clientId: "conclave", sessionId: "k" };
 // The voice agent joins as a brand new guest that nobody has let in.
 const agent = { userId: "guest-agent-session-1", clientId: "conclave", sessionId: "agent-session-1" };
+const invitee = { userId: "user-2", email: "invitee@example.com", clientId: "conclave", sessionId: "i" };
 
 afterEach(() => {
   vi.useRealTimers();
@@ -807,5 +809,46 @@ describe("who hosts a call the server lost", () => {
     const visitor = await join(after, knockerAsking);
     expect(visitor.status).toBe("joined");
     expect(visitor.context.currentClient).toBeInstanceOf(Admin);
+  });
+});
+
+describe("an invited attendee the host removed, after a restart", () => {
+  it("still has to be let in again, and is invited again once a host does", async () => {
+    const before = makeState();
+    schedule(before);
+    const created = await join(before, host);
+    const invited = await join(before, invitee);
+    expect(invited.status).toBe("joined");
+    await send(created.peer, "kickUser", { userId: "invitee@example.com#i" });
+
+    const after = await restart(before);
+    const hostBack = await join(after, host);
+    expect(
+      (await join(after, invitee, { roomRecoveryPass: invited.response.roomRecoveryPass }))
+        .status,
+    ).toBe("waiting");
+
+    await send(hostBack.peer, "admitUser", { userId: "invitee@example.com" });
+    const later = await restart(after);
+    await join(later, host);
+    expect((await join(later, invitee)).status).toBe("joined");
+  });
+
+  it("is not counted as invited when the web asks who may see the headcount", async () => {
+    const before = makeState();
+    schedule(before);
+    const created = await join(before, host);
+    await join(before, invitee);
+    await send(created.peer, "kickUser", { userId: "invitee@example.com#i" });
+
+    const after = await restart(before);
+    expect(
+      isScheduledMeetingInvitee(
+        after.scheduledMeetings,
+        "conclave",
+        "abc-mnop-xyz",
+        "invitee@example.com",
+      ),
+    ).toBe(false);
   });
 });
