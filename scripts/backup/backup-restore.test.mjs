@@ -401,7 +401,8 @@ test(
       await rm(state, { recursive: true });
       await restore("--file", archive, "--yes");
       assert.equal(await readlink(path.join(state, "conclave.sqlite")), "data/live.sqlite");
-      assert.equal(await readlink(path.join(state, "scheduling.sqlite")), "/var/lib/conclave/recordings/data/sched.db");
+      // Recreated relative: it reaches the same file in the container and on the host.
+      assert.equal(await readlink(path.join(state, "scheduling.sqlite")), "data/sched.db");
       const throughLink = new DatabaseSync(path.join(state, "conclave.sqlite"), { readOnly: true });
       assert.deepEqual(throughLink.prepare("SELECT id FROM rows").all().map((row) => row.id), ["w1"]);
       throughLink.close();
@@ -1242,7 +1243,7 @@ test(
       await mkdir(outside);
       await rm(path.join(state, "data"), { recursive: true });
       await symlink(outside, path.join(state, "data"));
-      await assert.rejects(restore("--file", archive, "--yes"), /data\/live\.db would land outside the state dir/);
+      await assert.rejects(restore("--file", archive, "--yes"), /data is a link in the state dir, and a restore never writes through a link/);
       assert.deepEqual(await readdir(outside), [], "nothing was written outside");
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -1365,7 +1366,7 @@ test(
       await backup("--local-only");
       const archive = await latestArchive();
       const check = async () => {
-        assert.equal(await readlink(path.join(staging, "conclave.sqlite")), "/var/lib/conclave/recordings/data/live.db");
+        assert.equal(await readlink(path.join(staging, "conclave.sqlite")), "data/live.db", "relative, never a literal host path");
         const restored = new DatabaseSync(path.join(staging, "data", "live.db"), { readOnly: true });
         assert.deepEqual(restored.prepare("SELECT id FROM meetings").all().map((row) => row.id), ["kept"]);
         restored.close();
@@ -1505,6 +1506,76 @@ test(
       await restore("--file", await latestArchive(), "--yes");
       assert.equal(await readFile(path.join(state, "data", "notes.json"), "utf8"), "{}");
       assert.equal(await readlink(path.join(state, "shortcut")).catch(() => "absent"), "absent");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "a crafted link to the container's path, on a host where that folder exists, cannot reach it",
+  { skip: missing.length > 0 && `needs ${missing.join(", ")} on PATH` },
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+    try {
+      // Another SFU's folder on this host, at the path the containers mount.
+      const other = path.join(root, "recordings");
+      await mkdir(other);
+      await writeFile(path.join(other, "conclave.sqlite"), "the other SFU's data");
+      const { state, backup, latestArchive, restore } = await setUp(root, [`CONCLAVE_CONTAINER_STATE_DIR=${other}`]);
+      withDatabase(state);
+      await backup("--local-only");
+      const linked = await withExtraLink(root, await latestArchive(), `alias\t${other}`, path.join(root, "linked.tar.gz.age"));
+      const crafted = await withExtraMember(root, linked, { name: "./alias/conclave.sqlite" }, path.join(root, "local", "conclave-test-20260101T000000Z.tar.gz.age"));
+
+      await assert.rejects(restore("--file", crafted, "--yes"), /alias\/conclave\.sqlite sits under the recorded link alias, and a restore never writes through a link/);
+      assert.equal(await readFile(path.join(other, "conclave.sqlite"), "utf8"), "the other SFU's data");
+      assert.equal(await readlink(path.join(state, "alias")).catch(() => "absent"), "absent");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "two hard-linked names in the state dir back up and restore",
+  { skip: missing.length > 0 && `needs ${missing.join(", ")} on PATH` },
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+    try {
+      const { state, backup, latestArchive, restore } = await setUp(root);
+      withDatabase(state);
+      await mkdir(path.join(state, "data"));
+      await writeFile(path.join(state, "data", "notes.json"), "{\"kept\":true}");
+      await run("ln", [path.join(state, "data", "notes.json"), path.join(state, "data", "notes-copy.json")]);
+      await backup("--local-only");
+      await rm(state, { recursive: true });
+      await restore("--file", await latestArchive(), "--yes");
+      for (const name of ["notes.json", "notes-copy.json"]) {
+        assert.equal(await readFile(path.join(state, "data", name), "utf8"), "{\"kept\":true}");
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "a backup that would not restore fails and keeps the previous archives",
+  { skip: missing.length > 0 && `needs ${missing.join(", ")} on PATH` },
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+    try {
+      const { state, local, backup } = await setUp(root);
+      withDatabase(state);
+      await backup("--local-only");
+      const before = await archives(local);
+      assert.equal(before.length, 1);
+      // A name a restore refuses: a tab cannot round-trip through the archive.
+      await writeFile(path.join(state, "bad\tname.json"), "{}");
+      await new Promise((done) => setTimeout(done, 1_100));
+      await assert.rejects(backup("--local-only"), /bad\tname\.json is not a plain path inside the archive[\s\S]*this backup would not restore/);
+      assert.deepEqual(await archives(local), before, "only the earlier archive is kept");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

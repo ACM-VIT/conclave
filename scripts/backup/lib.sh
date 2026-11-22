@@ -27,7 +27,10 @@ load_backup_config() {
   source "$config"
   set +a
 
-  # These are read by the scripts that source this file.
+  # These are read by the scripts that source this file. The SFU containers
+  # mount the state dir at CONTAINER_STATE_DIR (the compose files'
+  # /var/lib/conclave/recordings unless CONCLAVE_CONTAINER_STATE_DIR says).
+  CONTAINER_STATE_DIR="${CONCLAVE_CONTAINER_STATE_DIR:-/var/lib/conclave/recordings}"
   # shellcheck disable=SC2034
   STATE_DIR="${CONCLAVE_STATE_DIR:-${RECORDING_STORAGE_PATH:-/var/lib/conclave/recordings}}"
   BACKUP_LOCAL_DIR="${BACKUP_LOCAL_DIR:-/var/backups/conclave}"
@@ -165,146 +168,6 @@ for link, target in links:
     print(f"link\t{link}\t{target}")
 print(f"file\t{rel}")
 '
-}
-
-# Checks every place a restore will write, before it writes any, on one
-# model whatever is already in the state dir:
-# - where a file or link is written, its directory, with the links on the way
-#   followed on this host as the OS will follow them, must be inside the real
-#   state dir. The destination itself is never followed: what is there is
-#   moved aside or replaced.
-# - a recorded link's target is read as the SFU reads it: a container (or
-#   host) path to the state dir maps to it, and links on disk on the way are
-#   followed the same way. It must stay inside.
-# - every member of the other-files archive is a plain relative path (no
-#   absolute name, no "..", nothing that normalises to another name) naming a
-#   regular file or a directory: the only links a restore makes are the
-#   recorded database links. One bad member refuses the whole archive.
-# Prints why for each that would not, and fails.
-#   check_restore_targets STATE_DIR CONTAINER_DIR TAR_OR_EMPTY LINKS_OR_EMPTY DB_REL...
-check_restore_targets() {
-  python3 -c '
-import os, sys, tarfile
-state_in, container, tar_path, links_path, *databases = sys.argv[1:]
-state = os.path.realpath(state_in)
-mounts = [container.rstrip("/"), state_in.rstrip("/"), state]
-def inside(real):
-    return real == state or real.startswith(state + os.sep)
-def clean(rel):
-    rel = os.path.normpath(rel)
-    return None if os.path.isabs(rel) or rel == ".." or rel.startswith(".." + os.sep) else rel
-def written_inside(rel, whole=False):
-    rel = clean(rel)
-    if rel is None:
-        return False
-    probe = os.path.join(state, rel)
-    if not whole:
-        probe = os.path.dirname(probe)
-    while not os.path.lexists(probe):
-        probe = os.path.dirname(probe)
-    return inside(os.path.realpath(probe))
-def mapped(target, link_dir):
-    if os.path.isabs(target):
-        mount = next((m for m in mounts if target == m or target.startswith(m + "/")), None)
-        return None if mount is None else clean(target[len(mount):].lstrip("/") or ".")
-    return clean(os.path.join(link_dir, target))
-def reaches_inside(rel):
-    pending, real, hops = [p for p in rel.split("/") if p not in ("", ".")], [], 0
-    while pending:
-        part = pending.pop(0)
-        if part == "..":
-            if not real:
-                return False
-            real.pop()
-            continue
-        here = os.path.join(state, *real, part)
-        if os.path.islink(here):
-            hops += 1
-            target = mapped(os.readlink(here), "/".join(real))
-            if hops > 40 or target is None:
-                return False
-            pending, real = [p for p in target.split("/") if p not in ("", ".")] + pending, []
-            continue
-        real.append(part)
-    return True
-problems = []
-for rel in databases:
-    if not written_inside(rel):
-        problems.append(f"{rel} would land outside the state dir")
-if links_path:
-    for line in open(links_path):
-        link, _, target = line.rstrip("\n").partition("\t")
-        if not link:
-            continue
-        if not written_inside(link):
-            problems.append(f"the recorded link {link} would land outside the state dir")
-            continue
-        leads = mapped(target, os.path.dirname(clean(link) or ""))
-        if leads is None or not reaches_inside(leads):
-            problems.append(f"the recorded link {link} leads outside the state dir ({target})")
-def plain(name):
-    name = name[2:] if name.startswith("./") else name
-    parts = name.split("/")
-    if name == "." or not name:
-        return "."
-    if name.startswith("/") or ".." in parts or os.path.normpath(name) != name:
-        return None
-    return name
-if tar_path:
-    with tarfile.open(tar_path) as tar:
-        for member in tar.getmembers():
-            name = plain(member.name)
-            shown = member.name[2:] if member.name.startswith("./") else member.name
-            if name is None:
-                problems.append(f"{shown} is not a plain path inside the archive")
-            elif member.issym() or member.islnk():
-                problems.append(f"{name} is a link, and the only links a restore makes are the recorded database links")
-            elif not (member.isfile() or member.isdir()):
-                problems.append(f"{name} is not a file or directory")
-            elif name == ".":
-                continue
-            elif member.isfile() and not written_inside(name):
-                problems.append(f"{name} would land outside the state dir")
-            elif member.isdir() and not written_inside(name, whole=True):
-                problems.append(f"{name}/ would land outside the state dir")
-            elif member.isfile() and os.path.isdir(os.path.join(state, name)) and not os.path.islink(os.path.join(state, name)):
-                problems.append(f"{name} is a file in the archive but a directory in the state dir")
-            elif member.isdir() and os.path.lexists(os.path.join(state, name)) and not os.path.isdir(os.path.join(state, name)):
-                problems.append(f"{name} is a directory in the archive but not in the state dir")
-for problem in problems:
-    print(problem, file=sys.stderr)
-sys.exit(1 if problems else 0)
-' "$@"
-}
-
-# Restores the archive's other files into the state dir, already checked by
-# check_restore_targets. They are extracted with tarfile's data filter into a
-# fresh staging dir made here (inside the state dir, so on its filesystem),
-# checked there to be plain files and directories only, and only then moved
-# into place by rename. Nothing in the live state dir is unlinked, and no
-# path from the archive is used before it has been checked.
-extract_state_files() {
-  python3 -c '
-import os, shutil, sys, tarfile, tempfile
-state, tar_path = os.path.realpath(sys.argv[1]), sys.argv[2]
-staging = tempfile.mkdtemp(prefix=".restore-", dir=state)
-try:
-    with tarfile.open(tar_path) as tar:
-        tar.extractall(staging, filter="data")
-    for root, dirs, files in os.walk(staging):
-        for entry in dirs + files:
-            full = os.path.join(root, entry)
-            if os.path.islink(full) or not (os.path.isdir(full) or os.path.isfile(full)):
-                sys.exit(f"{os.path.relpath(full, staging)} came out of the archive as neither a file nor a directory; nothing was moved in")
-    for root, dirs, files in os.walk(staging):
-        rel = os.path.relpath(root, staging)
-        target = state if rel == "." else os.path.join(state, rel)
-        os.makedirs(target, exist_ok=True)
-        for name in files:
-            os.replace(os.path.join(root, name), os.path.join(target, name))
-finally:
-    shutil.rmtree(staging, ignore_errors=True)
-' "$@"
 }
 
 # Orders archive names oldest first by the stamp in them

@@ -135,56 +135,24 @@ if [[ -n "$restore_owner" && "$EUID" != 0 && "$restore_owner" != "$(id -u):$(id 
   die "only root can give the restored files to ${restore_owner}; rerun restore.sh as root"
 fi
 
-# Every place the restore writes stays inside the state dir, checked before
-# the first file changes.
-restore_tar=""
-restore_links=""
-restore_databases=()
-wants files && [[ -f "${payload}/state-files.tar" ]] && restore_tar="${payload}/state-files.tar"
-if wants sqlite; then
-  [[ -f "${payload}/sqlite-links" ]] && restore_links="${payload}/sqlite-links"
-  restore_databases=("${databases[@]}")
-fi
-check_restore_targets "$STATE_DIR" "$CONTAINER_STATE_DIR" "$restore_tar" "$restore_links" "${restore_databases[@]}" ||
-  die "the restore would write outside ${STATE_DIR}; nothing was changed. Remove the links that lead out of it and rerun"
+# Every write is checked before the first one: the archive's paths and links
+# by the same validator a backup runs, and the live state dir they go into.
+# The writes then go one directory at a time through an open state dir and
+# never follow a link (scripts/backup/restore_paths.py).
+restore_parts=()
+wants sqlite && restore_parts+=(--sqlite)
+wants files && restore_parts+=(--files)
+python3 "${SCRIPT_DIR}/restore_paths.py" check "$payload" "$STATE_DIR" "$CONTAINER_STATE_DIR" "${restore_parts[@]}" ||
+  die "the restore would write outside ${STATE_DIR} or through a link; nothing was changed"
 
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-
-if wants sqlite; then
-  for rel in "${databases[@]}"; do
-    dest="${STATE_DIR}/${rel}"
-    mkdir -p "$(dirname "$dest")"
-    # The live database and its WAL move aside together, so they stay a
-    # consistent pair if this restore has to be undone.
-    for suffix in "" "-wal" "-shm"; do
-      [[ -e "${dest}${suffix}" ]] && mv "${dest}${suffix}" "${dest}${suffix}.pre-restore-${stamp}"
-    done
-    cp "${payload}/sqlite/${rel}" "${dest}.restore-tmp"
-    mv "${dest}.restore-tmp" "$dest"
-    log "Restored ${dest} (previous copy kept as ${dest}.pre-restore-${stamp})"
-  done
-  # The links the SFU opens its databases through, as they were.
-  if [[ -f "${payload}/sqlite-links" ]]; then
-    while IFS=$'\t' read -r link target; do
-      dest="${STATE_DIR}/${link}"
-      [[ -L "$dest" && "$(readlink "$dest")" == "$target" ]] && continue
-      mkdir -p "$(dirname "$dest")"
-      if [[ -e "$dest" || -L "$dest" ]]; then
-        mv "$dest" "${dest}.pre-restore-${stamp}"
-      fi
-      ln -s "$target" "$dest"
-      log "Restored the link ${dest} -> ${target}"
-    done < "${payload}/sqlite-links"
-  fi
-fi
-
-if wants files && [[ -f "${payload}/state-files.tar" ]]; then
-  extract_state_files "$STATE_DIR" "${payload}/state-files.tar"
-  log "Restored the other files in ${STATE_DIR}"
+if (( ${#restore_parts[@]} > 0 )); then
+  python3 "${SCRIPT_DIR}/restore_paths.py" apply "$payload" "$STATE_DIR" "$CONTAINER_STATE_DIR" "$stamp" "${restore_parts[@]}" ||
+    die "the restore stopped before every file was written; check ${STATE_DIR} and the *.pre-restore-${stamp} copies"
 fi
 
 if [[ -n "$restore_owner" ]] && { wants sqlite || wants files; }; then
-  find "$STATE_DIR" \( ! -user "${restore_owner%%:*}" -o ! -group "${restore_owner##*:}" \) -exec chown -h "$restore_owner" {} + ||
+  find -H "$STATE_DIR" \( ! -user "${restore_owner%%:*}" -o ! -group "${restore_owner##*:}" \) -exec chown -h "$restore_owner" {} + ||
     die "could not give ${STATE_DIR} to ${restore_owner}; the SFU cannot read files it does not own"
   log "Gave the files in ${STATE_DIR} to ${restore_owner}, the user the SFU runs as"
 fi

@@ -51,7 +51,11 @@ missing state dir fails it, and so does a missing database the SFU opens
 (`CONCLAVE_SQLITE_PATH`, or the compose default `conclave.sqlite` in the
 state dir), even when Redis alone could be copied. Each expected source (that
 database, and Redis when configured) must be in the payload before it is
-encrypted, and the encrypted file is checked before the job keeps it. Only
+encrypted, and the encrypted file is checked before the job keeps it. The
+other files go in as files and directories only, hard links stored whole (as
+`tar --hard-dereference` does), with any other link or special file left out
+and logged; and the restore's own validator runs over the payload, so a
+backup that would not restore fails and the previous archives stay. Only
 then are older local archives rotated, and the newest is always kept, so a
 bad night never pushes out the last complete backup.
 
@@ -169,24 +173,24 @@ To apply it:
 1. Stop new work: drain both SFUs and wait for 0 rooms, as the deploy does.
 2. `cd $R && docker compose -f docker-compose.sfu.yml stop sfu-a sfu-b`
 3. `sudo $R/scripts/backup/restore.sh --identity /root/conclave-backup.key --latest --yes`
-   It refuses while an SFU answers or any process holds a database open, and
-   before anything changes it checks every place it will write: each
-   database copy, recorded link and file is written into a directory that,
-   with the links on disk followed as the host will follow them, must be
-   inside the real state dir, so a link that leads out (say
-   `data -> /elsewhere`) stops the restore. What already sits at a
-   destination is moved aside or replaced, never written through. The only
-   links it recreates are the recorded database chains; their targets are
-   read as the SFU reads them, with the container's path
-   (`/var/lib/conclave/recordings`) mapped to the state dir, and must stay
-   inside. So a populated dir restores the same as an empty one. The
-   archive's other files must all be plain relative paths (no absolute name,
-   no `..`) naming regular files or directories; one link, special file or
-   crafted path refuses the whole archive before anything changes. They are
-   extracted into a fresh staging dir inside the state dir, checked there,
-   and moved in by rename; nothing in the live dir is unlinked. A backup
-   leaves out any link other than the database chains, and any special
-   file, and logs each one. The
+   It refuses while an SFU answers or any process holds a database open. The
+   path rules live in one place, `scripts/backup/restore_paths.py`. Before
+   anything changes, its validator checks the archive: every database copy,
+   recorded link and file is a plain relative path (no absolute name, no
+   `..`, no control characters), the files are regular files and directories
+   only, nothing sits under a recorded link, and every recorded link's
+   target, read as the SFU reads it with the container's path
+   (`/var/lib/conclave/recordings`, or `CONCLAVE_CONTAINER_STATE_DIR`) mapped
+   to the state dir, stays inside. It then checks the live state dir: no link
+   or file on the way to any write. One problem refuses the whole restore.
+   The writes go through an open state dir one directory at a time with
+   `O_NOFOLLOW`, so a link anywhere on the way stops a write instead of being
+   followed; what sits at a destination is moved aside or replaced by
+   rename, never written through. Recorded links are recreated relative
+   (`conclave.sqlite -> data/live.db`), never to a literal host path. Other
+   files are extracted into a fresh staging dir inside the state dir, checked
+   there and renamed into place. So a populated dir restores the same as an
+   empty one. The
    current databases are kept as `*.pre-restore-<stamp>`. The Redis keys
    matching `conclave:sfu:persistence*` end up exactly as in the backup: those
    it has are restored, and those it lacks are deleted, so a meeting created

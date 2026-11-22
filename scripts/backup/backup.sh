@@ -219,28 +219,18 @@ if (( ${#fenced[@]} > 0 )); then
   log "Released the write fence"
 fi
 
-# Everything else in the state directory (JSON stores and the like).
+# Everything else in the state directory (JSON stores and the like), as
+# files and directories only: hard links are stored whole, and any link other
+# than the database chains recorded above, or any special file, is left out.
 # A database reached through a link need not end in .sqlite, so each one is
-# excluded by its path as well.
-if [[ -d "$STATE_DIR" ]]; then
-  excludes=(--exclude='*.sqlite' --exclude='*.sqlite-wal' --exclude='*.sqlite-shm' --exclude='*.pre-restore-*')
-  for rel in "${databases[@]}"; do
-    excludes+=(--exclude="./${rel}" --exclude="./${rel}-wal" --exclude="./${rel}-shm" --exclude="./${rel}-journal")
-  done
-  for rel in "${links[@]}"; do
-    excludes+=(--exclude="./${rel}")
-  done
-  # Only files and directories go in: a restore makes no other links than the
-  # database chains recorded above, and refuses an archive with any. Special
-  # files and a restore's leftover staging dir stay out too.
-  excludes+=(--exclude='./.restore-*')
-  while IFS= read -r -d '' extra; do
-    printf '%s\n' "${links[@]}" | grep -qxF "${extra#./}" && continue
-    excludes+=(--exclude="${extra}")
-    log "Left out ${STATE_DIR}/${extra#./}: only files, directories and the database links are backed up"
-  done < <(cd "$STATE_DIR" && find . -mindepth 1 \( -type l -o \( ! -type f ! -type d \) \) -print0)
-  tar -C "$STATE_DIR" "${excludes[@]}" -cf "${payload}/state-files.tar" .
-fi
+# left out by its path as well.
+python3 "${SCRIPT_DIR}/restore_paths.py" pack "$STATE_DIR" "${payload}/state-files.tar" \
+  --db "${databases[@]}" --link "${links[@]}" || die "could not archive the other files in ${STATE_DIR}"
+
+# A backup counts only if it would restore: the restore's own validator runs
+# over the payload first, so a failure keeps the previous archives.
+python3 "${SCRIPT_DIR}/restore_paths.py" validate "$payload" "$STATE_DIR" "$CONTAINER_STATE_DIR" ||
+  die "this backup would not restore (see above), so it was not kept; the previous archives are untouched"
 
 sums="$(cd "$payload" && find . -type f | sort | xargs sha256sum)"
 printf '%s\n' "$sums" > "${payload}/SHA256SUMS"
