@@ -861,7 +861,8 @@ struct CrashSignatureLedgerFile: Codable, Equatable {
 }
 
 /// Signatures of sent uncaught crashes, kept 30 days (longer than MetricKit takes to deliver a report) whatever
-/// happens to the payloads, so a MetricKit copy that arrives after its original was pruned is still recognized.
+/// happens to the payloads, so a MetricKit copy that arrives after its original was pruned is still recognized. Expired
+/// entries leave the file whenever it is read and at every launch, so retention holds even when nothing else happens.
 final class CrashSignatureLedger {
     static let fileName = "sent-crash-signatures.json"
     static let retentionMillis: Double = 30.0 * 24.0 * 60.0 * 60.0 * 1000.0
@@ -873,13 +874,23 @@ final class CrashSignatureLedger {
     }
 
     func entries() -> [CrashSignatureEntry] {
-        guard let data = try? Data(contentsOf: store.fileURL(CrashSignatureLedger.fileName)),
-              let file = try? JSONDecoder().decode(CrashSignatureLedgerFile.self, from: data) else { return [] }
-        let now = store.wallClock()
+        prune(nowMillis: store.wallClock())
+    }
+
+    /// Drops expired entries from disk too, rewriting the file atomically, or deleting it once none remain.
+    @discardableResult
+    func prune(nowMillis: Double) -> [CrashSignatureEntry] {
+        let url = store.fileURL(CrashSignatureLedger.fileName)
+        guard let data = try? Data(contentsOf: url) else { return [] }
+        guard let file = try? JSONDecoder().decode(CrashSignatureLedgerFile.self, from: data) else {
+            try? FileManager.default.removeItem(at: url)
+            return []
+        }
         var kept: [CrashSignatureEntry] = []
-        for entry in file.signatures where now - entry.crashedAtMillis <= CrashSignatureLedger.retentionMillis {
+        for entry in file.signatures where nowMillis - entry.crashedAtMillis <= CrashSignatureLedger.retentionMillis {
             kept.append(entry)
         }
+        if kept.count != file.signatures.count { write(kept) }
         return kept
     }
 
@@ -889,10 +900,20 @@ final class CrashSignatureLedger {
         for signature in signatures where !kept.contains(signature) {
             kept.append(signature)
         }
+        return write(kept)
+    }
+
+    @discardableResult
+    private func write(_ signatures: [CrashSignatureEntry]) -> Bool {
+        let url = store.fileURL(CrashSignatureLedger.fileName)
+        if signatures.isEmpty {
+            try? FileManager.default.removeItem(at: url)
+            return !FileManager.default.fileExists(atPath: url.path)
+        }
         guard store.ensureDirectory(store.directoryPath),
-              let data = try? JSONEncoder().encode(CrashSignatureLedgerFile(signatures: kept)) else { return false }
+              let data = try? JSONEncoder().encode(CrashSignatureLedgerFile(signatures: signatures)) else { return false }
         do {
-            try data.write(to: store.fileURL(CrashSignatureLedger.fileName), options: Data.WritingOptions.atomic)
+            try data.write(to: url, options: Data.WritingOptions.atomic)
             return true
         } catch {
             return false

@@ -556,6 +556,35 @@ struct CrashReportingTests {
         #expect(CrashSignatureLedger(store: store).entries().isEmpty)
     }
 
+    /// Retention holds with no further crash: launch housekeeping removes expired signatures from disk, and a read
+    /// rewrites the file without them.
+    @Test func expiredCrashSignaturesLeaveTheDiskAtLaunch() throws {
+        let crashAt = 1_795_000_000_000.0
+        let clock = TestClock(now: crashAt)
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("crash-" + UUID().uuidString, isDirectory: true)
+        let store = DiagnosticsFileStore(directoryPath: base.appendingPathComponent("store").path,
+                                         exportDirectoryPath: base.appendingPathComponent("exports").path,
+                                         wallClock: { clock.now })
+        let ledgerFile = store.fileURL(CrashSignatureLedger.fileName).path
+        let old = CrashSignatureEntry(name: "NSInvalidArgumentException", release: "2.0.0 (63)", stack: "Conclave@0x1000",
+                                      crashedAtMillis: crashAt)
+        let recent = CrashSignatureEntry(name: "NSRangeException", release: "2.0.0 (63)", stack: "Conclave@0x2000",
+                                         crashedAtMillis: crashAt + 20.0 * 24.0 * 3_600_000)
+        #expect(CrashSignatureLedger(store: store).record([old]))
+        #expect(FileManager.default.fileExists(atPath: ledgerFile))
+
+        let launchAt = crashAt + 31.0 * 24.0 * 3_600_000
+        _ = store.launchHousekeeping(nowMillis: launchAt)
+        #expect(!FileManager.default.fileExists(atPath: ledgerFile))
+
+        clock.now = crashAt + 20.0 * 24.0 * 3_600_000
+        #expect(CrashSignatureLedger(store: store).record([old, recent]))
+        clock.now = launchAt
+        #expect(CrashSignatureLedger(store: store).entries() == [recent])
+        let onDisk = try JSONDecoder().decode(CrashSignatureLedgerFile.self, from: Data(contentsOf: URL(fileURLWithPath: ledgerFile)))
+        #expect(onDisk.signatures == [recent])
+    }
+
     @Test func aReportNamesTheReleaseThatCrashedNotTheOneUploading() throws {
         let uploader = CrashReportContext(installId: "install-1", platform: "ios", appVersion: "2.0.1 (64)",
                                           osVersion: "iOS 26.1", deviceClass: "phone")

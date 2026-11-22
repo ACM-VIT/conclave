@@ -125,6 +125,7 @@ final class DiagnosticsFileStore {
             try? FileManager.default.moveItem(at: current, to: previous)
         }
         prune(nowMillis: nowMillis)
+        CrashSignatureLedger(store: self).prune(nowMillis: nowMillis)
         guard let file = readBreadcrumbs(DiagnosticsFileStore.previousBreadcrumbsName) else { return nil }
         if nowMillis - file.writtenAtMillis > DiagnosticsLimits.retentionMillis {
             try? FileManager.default.removeItem(at: previous)
