@@ -125,4 +125,5 @@ It fails if either side goes more than 2 s without audio or is disconnected.
   `docker-compose.sfu.yml` is rolled back to the old image with the new
   container config.
 - `scripts/deploy-sfu.ps1` does not have the canary; the VM runs the bash
-  script.
+  script. It does restart itself when the pull changed it, and runs the pulled
+  revision's preflight, like the bash script.

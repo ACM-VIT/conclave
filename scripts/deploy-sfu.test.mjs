@@ -435,3 +435,17 @@ test("a partial rollback keeps the rollback target until every instance is back"
     }
   });
 });
+
+test("a pull that changes deploy-sfu.sh hands the deploy to the new script", async () => {
+  await withSfus({ "sfu-a": { rooms: 0 }, "sfu-b": { rooms: 0 } }, async (sfus) => {
+    const current = await readFile(path.join(scripts, "deploy-sfu.sh"), "utf8");
+    const marker = 'echo "The pulled deploy-sfu.sh is running."\n';
+    const pulled = current.replace("set -euo pipefail\n", `set -euo pipefail\n${marker}`);
+    assert.notEqual(pulled, current);
+    const result = await deploy(sfus, { upstream: { "scripts/deploy-sfu.sh": pulled } });
+    assert.equal(result.code, 0, result.output);
+    assert.match(result.output, /This pull changed deploy-sfu.sh; restarting with the new version/);
+    assert.equal(result.output.split("The pulled deploy-sfu.sh is running.").length - 1, 1, "the new script runs once");
+    assert.match(result.output, /SFU deploy complete/);
+  });
+});

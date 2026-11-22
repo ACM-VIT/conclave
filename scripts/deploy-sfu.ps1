@@ -344,7 +344,20 @@ if ($preflightOnly) {
 }
 
 Write-Host "Pulling latest code..."
+$beforePull = (& git -C $rootDir rev-parse HEAD)
 Invoke-Checked -Command "git" -Arguments @("-C", $rootDir, "pull")
+# PowerShell keeps running the script it parsed at start, so a pull that
+# changed this file would deploy with the old steps. Start over with the new
+# one; the guard stops a second restart.
+if (-not $env:SFU_DEPLOY_REEXEC) {
+  & git -C $rootDir diff --quiet $beforePull HEAD -- scripts/deploy-sfu.ps1
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "This pull changed deploy-sfu.ps1; restarting with the new version."
+    $env:SFU_DEPLOY_REEXEC = "1"
+    & (Get-Process -Id $PID).Path -NoProfile -File $PSCommandPath @args
+    exit $LASTEXITCODE
+  }
+}
 
 # The revision about to be built checks its own compose file against the env,
 # before anything is built or changed, so an older preflight cannot approve a
