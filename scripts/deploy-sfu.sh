@@ -236,25 +236,50 @@ COMPOSE=(docker compose "${COMPOSE_ENV_FILES[@]}" -f "$COMPOSE_FILE")
 # directories it does not own.
 #
 # Older images fell back to JSON files in the container layer when SQLite was
-# locked. Copy them from the container being replaced onto the volume; the new
-# SFU imports them on startup and renames each file .imported.
-ensure_state_ownership() {
-  local service="$1" container staging name
-  "${COMPOSE[@]}" run --rm --no-deps --user root --cap-add CHOWN --cap-add DAC_READ_SEARCH --entrypoint find "$service" \
-    /var/lib/conclave/recordings \( ! -user node -o ! -group node \) -exec chown node:node {} +
-  container="$("${COMPOSE[@]}" ps -a -q "$service" 2>/dev/null | head -n 1)"
+# locked. The old container is stopped first, so it cannot write after the
+# copy; the new SFU imports the copies on startup and renames each .imported.
+copy_fallback_json() {
+  local service="$1" container changes staging name path
+  local -a copied=()
+  container="$("${COMPOSE[@]}" ps -a -q "$service" | head -n 1)" || return 1
   [[ -n "$container" ]] || return 0
+  if ! changes="$(docker diff "$container")"; then
+    echo "Could not list the files the old ${service} container wrote." >&2
+    return 1
+  fi
   staging="$(mktemp -d)"
   for name in scheduling.json scheduled-meetings.json scheduled-webinars.json; do
-    docker cp "${container}:/app/packages/sfu/data/${name}" "${staging}/${name}" >/dev/null 2>&1 || true
+    path="/app/packages/sfu/data/${name}"
+    grep -qxF -e "A ${path}" -e "C ${path}" <<<"$changes" || continue
+    if ! docker cp "${container}:${path}" "${staging}/${name}"; then
+      echo "Could not copy ${name} out of the old ${service} container." >&2
+      rm -rf "$staging"
+      return 1
+    fi
+    copied+=("$name")
   done
-  if compgen -G "${staging}/*.json" >/dev/null; then
+  if (( ${#copied[@]} > 0 )); then
     chmod -R a+rX "$staging"
-    "${COMPOSE[@]}" run --rm --no-deps --user node -v "${staging}:/fallback-json:ro" --entrypoint sh "$service" -c \
-      "mkdir -p /var/lib/conclave/recordings/json-fallback-import/${service} && cp /fallback-json/*.json /var/lib/conclave/recordings/json-fallback-import/${service}/"
-    echo "Copied JSON fallback files from the old ${service} container onto the volume: $(cd "$staging" && echo *.json)"
+    if ! "${COMPOSE[@]}" run --rm --no-deps --user node -v "${staging}:/fallback-json:ro" --entrypoint sh "$service" -c \
+      "mkdir -p /var/lib/conclave/recordings/json-fallback-import/${service} && cp /fallback-json/*.json /var/lib/conclave/recordings/json-fallback-import/${service}/"; then
+      echo "Could not copy the old ${service} container's JSON fallback files onto the volume." >&2
+      rm -rf "$staging"
+      return 1
+    fi
+    echo "Copied JSON fallback files from the old ${service} container onto the volume: ${copied[*]}"
   fi
   rm -rf "$staging"
+}
+
+ensure_state_ownership() {
+  local service="$1"
+  "${COMPOSE[@]}" stop "$service"
+  "${COMPOSE[@]}" run --rm --no-deps --user root --cap-add CHOWN --cap-add DAC_READ_SEARCH --entrypoint find "$service" \
+    /var/lib/conclave/recordings \( ! -user node -o ! -group node \) -exec chown node:node {} +
+  if ! copy_fallback_json "$service"; then
+    echo "Stopped before replacing ${service}. Its old container is stopped, not removed; start it again with: ${COMPOSE[*]} start ${service}" >&2
+    exit 1
+  fi
 }
 
 build_and_start() {

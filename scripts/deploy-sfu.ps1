@@ -206,27 +206,46 @@ function Get-PublicUrl {
 # in the recordings volume. Hand anything node does not own over before a new
 # container starts. Safe to repeat; it only touches mismatched files.
 # Older images fell back to JSON files in the container layer when SQLite was
-# locked. Copy them from the container being replaced onto the volume; the new
-# SFU imports them on startup and renames each file .imported.
+# locked. The old container is stopped first, so it cannot write after the
+# copy; the new SFU imports the copies on startup and renames each .imported.
 function Copy-FallbackJson {
   param([string]$Service)
 
-  $container = (& docker @($composeBaseArgs + @("ps", "-a", "-q", $Service)) 2>$null | Select-Object -First 1)
+  $containers = @(& docker @($composeBaseArgs + @("ps", "-a", "-q", $Service)))
+  if ($LASTEXITCODE -ne 0) {
+    throw "Could not look up the old $Service container."
+  }
+  $container = $containers | Select-Object -First 1
   if ([string]::IsNullOrWhiteSpace($container)) {
     return
+  }
+  $changes = @(& docker diff $container)
+  if ($LASTEXITCODE -ne 0) {
+    throw "Could not list the files the old $Service container wrote."
   }
   $staging = Join-Path ([System.IO.Path]::GetTempPath()) ("conclave-fallback-" + [guid]::NewGuid())
   New-Item -ItemType Directory -Path $staging | Out-Null
   try {
+    $copied = @()
     foreach ($name in @("scheduling.json", "scheduled-meetings.json", "scheduled-webinars.json")) {
-      & docker cp "${container}:/app/packages/sfu/data/$name" (Join-Path $staging $name) *> $null
+      $path = "/app/packages/sfu/data/$name"
+      if (-not (($changes -ccontains "A $path") -or ($changes -ccontains "C $path"))) {
+        continue
+      }
+      & docker cp "${container}:$path" (Join-Path $staging $name)
+      if ($LASTEXITCODE -ne 0) {
+        throw "Could not copy $name out of the old $Service container."
+      }
+      $copied += $name
     }
-    $copied = @(Get-ChildItem -Path $staging -Filter "*.json" | ForEach-Object { $_.Name })
     if ($copied.Count -gt 0) {
-      Invoke-Checked -Command "docker" -Arguments ($composeBaseArgs + @(
+      & docker @($composeBaseArgs + @(
         "run", "--rm", "--no-deps", "--user", "node", "-v", "${staging}:/fallback-json:ro", "--entrypoint", "sh", $Service, "-c",
         "mkdir -p /var/lib/conclave/recordings/json-fallback-import/$Service && cp /fallback-json/*.json /var/lib/conclave/recordings/json-fallback-import/$Service/"
       ))
+      if ($LASTEXITCODE -ne 0) {
+        throw "Could not copy the old $Service container's JSON fallback files onto the volume."
+      }
       Write-Host "Copied JSON fallback files from the old $Service container onto the volume: $($copied -join ' ')"
     }
   } finally {
@@ -238,12 +257,17 @@ function Start-SfuService {
   param([string]$Service)
 
   Invoke-Checked -Command "docker" -Arguments ($composeBaseArgs + @("build", $Service))
+  Invoke-Checked -Command "docker" -Arguments ($composeBaseArgs + @("stop", $Service))
   Invoke-Checked -Command "docker" -Arguments ($composeBaseArgs + @(
     "run", "--rm", "--no-deps", "--user", "root", "--cap-add", "CHOWN", "--cap-add", "DAC_READ_SEARCH", "--entrypoint", "find", $Service,
     "/var/lib/conclave/recordings", "(", "!", "-user", "node", "-o", "!", "-group", "node", ")",
     "-exec", "chown", "node:node", "{}", "+"
   ))
-  Copy-FallbackJson -Service $Service
+  try {
+    Copy-FallbackJson -Service $Service
+  } catch {
+    Exit-WithError "$($_.Exception.Message) Stopped before replacing $Service. Its old container is stopped, not removed; start it again with: docker $($composeBaseArgs -join ' ') start $Service"
+  }
   Invoke-Checked -Command "docker" -Arguments ($composeBaseArgs + @("up", "-d", $Service))
 }
 
