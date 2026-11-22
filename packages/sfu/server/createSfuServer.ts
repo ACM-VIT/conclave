@@ -27,6 +27,7 @@ import {
   type SocketAdapterLifecycle,
 } from "./socket/createSocketServer.js";
 import { createRoomRegistry } from "./roomRegistry.js";
+import { startRoomRecoveryPassRefresh } from "./roomRecoveryPass.js";
 import {
   AUDIO_CONSUMER_HEAL_INTERVAL_MS,
   healAllRooms,
@@ -84,6 +85,7 @@ export const createSfuServer = (
   let scheduledMeetingTickTimer: NodeJS.Timeout | null = null;
   let roomOwnershipRenewTimer: NodeJS.Timeout | null = null;
   let audioConsumerHealTimer: NodeJS.Timeout | null = null;
+  let stopRoomRecoveryPassRefresh: (() => void) | null = null;
 
   const start = async (): Promise<void> => {
     await state.roomRegistry.start();
@@ -129,6 +131,10 @@ export const createSfuServer = (
     if (audioConsumerHealTimer.unref) {
       audioConsumerHealTimer.unref();
     }
+    stopRoomRecoveryPassRefresh = startRoomRecoveryPassRefresh(
+      state,
+      config.sfuSecret,
+    );
 
     await new Promise<void>((resolve) => {
       httpServer.listen(config.port, () => {
@@ -153,6 +159,8 @@ export const createSfuServer = (
       clearInterval(audioConsumerHealTimer);
       audioConsumerHealTimer = null;
     }
+    stopRoomRecoveryPassRefresh?.();
+    stopRoomRecoveryPassRefresh = null;
     state.scheduledWebinarPersistence?.close?.();
     state.scheduledWebinarPersistence = null;
     await state.scheduledMeetingPersistence?.close?.();

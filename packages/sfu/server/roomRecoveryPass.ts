@@ -1,25 +1,45 @@
 import jwt from "jsonwebtoken";
+import type { Client } from "../config/classes/Client.js";
 import type { Room } from "../config/classes/Room.js";
+import { Logger } from "../utilities/loggers.js";
 
 const TOKEN_USE = "room-recovery";
-// A call can run this long between reconnects, the life of a join token.
-const TTL_SECONDS = 12 * 60 * 60;
 const MAX_PASS_LENGTH = 2048;
 
+// A pass lasts five minutes and the SFU renews it every minute. A pass that
+// someone kept after a host removed them is therefore dead within five
+// minutes. A member's pass has four minutes left when the SFU loses the room,
+// or three if their last renewal went missing. That has to cover the restart
+// (about 18 seconds until video is back), the web client's reconnect backoff
+// (it retries 1, 3, 7, 15, 31, 63 and 127 seconds after the drop), and an
+// instance recreating the room with a clock up to a minute ahead of the one
+// that signed.
+const TTL_SECONDS = 5 * 60;
+const REFRESH_INTERVAL_MS = 60 * 1000;
+
 type RecoveryRoom = Pick<Room, "channelId" | "incarnationId">;
+type PassIssuingRoom = RecoveryRoom &
+  Pick<Room, "userKeysById" | "needsReadmission">;
+type PassHolder = Pick<Client, "id" | "isObserver">;
 
 /**
- * Proof that `userKey` was let into this room, handed to them when they join.
- * A room that is recreated after the SFU lost it (a crash, a forced restart)
- * has no admission lists; this is how the people who were in the call get
- * back in without knocking. `tokenUse` keeps it from working as a join token.
+ * Proof that `client` was let into this room, or null for someone a recreated
+ * room should not take back unasked: a webinar attendee, or a person a host
+ * removed or took admission back from, on any of their devices. A room that
+ * is recreated after the SFU lost it (a crash, a forced restart) has no
+ * admission lists; this is how the people who were in the call get back in
+ * without knocking. `tokenUse` keeps it from working as a join token.
  */
 export const issueRoomRecoveryPass = (
-  room: RecoveryRoom,
-  userKey: string,
+  room: PassIssuingRoom,
+  client: PassHolder,
   secret: string,
-): string =>
-  jwt.sign(
+): string | null => {
+  const userKey = room.userKeysById.get(client.id);
+  if (!userKey || client.isObserver || room.needsReadmission(userKey)) {
+    return null;
+  }
+  return jwt.sign(
     {
       tokenUse: TOKEN_USE,
       channelId: room.channelId,
@@ -29,6 +49,36 @@ export const issueRoomRecoveryPass = (
     secret,
     { algorithm: "HS256", expiresIn: TTL_SECONDS },
   );
+};
+
+/**
+ * Hands everyone in every room a new pass from time to time, so the one they
+ * hold never runs out while they are in the call. Returns how to stop.
+ */
+export const startRoomRecoveryPassRefresh = (
+  state: { rooms: ReadonlyMap<string, Room> },
+  secret: string,
+): (() => void) => {
+  const timer = setInterval(() => {
+    try {
+      for (const room of state.rooms.values()) {
+        for (const client of room.clients.values()) {
+          if (!client.socket.connected) continue;
+          const roomRecoveryPass = issueRoomRecoveryPass(room, client, secret);
+          if (!roomRecoveryPass) continue;
+          client.socket.emit("roomRecoveryPass", {
+            roomId: room.id,
+            roomRecoveryPass,
+          });
+        }
+      }
+    } catch (error) {
+      Logger.warn("Room recovery pass refresh failed", error);
+    }
+  }, REFRESH_INTERVAL_MS);
+  timer.unref();
+  return () => clearInterval(timer);
+};
 
 /**
  * Whether `pass` proves `userKey` was in an earlier incarnation of `room`.

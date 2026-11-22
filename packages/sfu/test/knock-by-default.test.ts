@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Router, Worker } from "mediasoup/types";
 import type { Server as SocketIOServer, Socket } from "socket.io";
 import { Admin } from "../config/classes/Admin.js";
+import { config } from "../config/config.js";
+import { startRoomRecoveryPassRefresh } from "../server/roomRecoveryPass.js";
 import { LocalRoomRegistry } from "../server/roomRegistry.js";
 import { createScheduledMeeting } from "../server/scheduledMeetings.js";
 import {
@@ -98,6 +100,22 @@ const send = async (
 };
 
 const roomOf = (state: SfuState) => state.rooms.get("conclave:abc-mnop-xyz")!;
+
+// Every pass a member's tab has been handed: with the join reply, then by the
+// SFU during the call. A tab keeps the newest.
+const passesHeldBy = (member: Awaited<ReturnType<typeof join>>): string[] => [
+  ...(member.response.roomRecoveryPass ? [member.response.roomRecoveryPass] : []),
+  ...member.peer.emit.mock.calls
+    .filter(([event]) => event === "roomRecoveryPass")
+    .map(([, sent]) => (sent as { roomRecoveryPass: string }).roomRecoveryPass),
+];
+const secondsLeftOn = (pass: string): number =>
+  (jwt.decode(pass) as jwt.JwtPayload).exp! - Date.now() / 1000;
+const MINUTE_MS = 60_000;
+const useTestClock = () => {
+  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+  vi.setSystemTime(new Date("2026-11-22T08:00:00Z"));
+};
 
 const host = { userId: "guest-host", clientId: "conclave", sessionId: "h", allowRoomCreation: true };
 const guest = { userId: "guest-visitor", clientId: "conclave", sessionId: "v" };
@@ -311,6 +329,8 @@ describe("a call whose server lost the room", () => {
     return {
       before,
       hostJoin,
+      guestJoin,
+      secondJoin,
       knock,
       passes: {
         host: hostJoin.response.roomRecoveryPass,
@@ -443,17 +463,148 @@ describe("a call whose server lost the room", () => {
     ).toBe("waiting");
   });
 
-  it("stops honouring a pass once it is older than a join token", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date("2026-11-22T08:00:00Z"));
+  it("stops renewing the pass of someone whose admission a host revoked", async () => {
+    useTestClock();
+    const state = makeState();
+    const created = await join(state, host);
+    roomOf(state).allowLockedUser(guest.userId);
+    const member = await join(state, guest);
+    const stopRefreshing = startRoomRecoveryPassRefresh(state, config.sfuSecret);
+    vi.advanceTimersByTime(MINUTE_MS);
+
+    await send(created.peer, "admin:revokeAllowedUsers", {
+      userKeys: [guest.userId],
+    });
+    const kept = passesHeldBy(member);
+    vi.advanceTimersByTime(3 * MINUTE_MS);
+    stopRefreshing();
+    expect(roomOf(state).clients.size).toBe(2);
+    expect(passesHeldBy(member)).toEqual(kept);
+  });
+
+  it("stops honouring a pass a few minutes after the SFU last renewed it", async () => {
+    useTestClock();
     const { passes } = await callBeforeRestart();
     const after = makeState();
     await join(after, rejoining(guest), { roomRecoveryPass: passes.guest });
 
-    vi.setSystemTime(new Date("2026-11-22T20:00:01Z"));
+    vi.setSystemTime(Date.now() + 5 * MINUTE_MS + 1000);
     expect(
       (await join(after, second, { roomRecoveryPass: passes.second })).status,
     ).toBe("waiting");
+  });
+
+  it("keeps every member's pass good through a long idle call", async () => {
+    useTestClock();
+    const { before, hostJoin, guestJoin, secondJoin, passes } =
+      await callBeforeRestart();
+    const members = [hostJoin, guestJoin, secondJoin];
+    const stopRefreshing = startRoomRecoveryPassRefresh(before, config.sfuSecret);
+
+    for (let minute = 1; minute <= 30; minute += 1) {
+      vi.advanceTimersByTime(MINUTE_MS);
+      for (const member of members) {
+        // Even a tab that missed the latest renewal holds a pass with time
+        // left to get through a restart.
+        expect(secondsLeftOn(passesHeldBy(member).at(-2)!)).toBeGreaterThan(120);
+      }
+    }
+    stopRefreshing();
+    // Quietly: a renewal every so often, not a stream of them.
+    expect(passesHeldBy(guestJoin).length).toBeLessThanOrEqual(31);
+
+    const after = makeState();
+    const first = await join(after, rejoining(guest), {
+      roomRecoveryPass: passesHeldBy(guestJoin).at(-1),
+    });
+    // The pass from joining half an hour ago ran out long since.
+    expect(
+      (await join(after, rejoining(second), { roomRecoveryPass: passes.second }))
+        .status,
+    ).toBe("waiting");
+    for (const [user, member] of [
+      [host, hostJoin],
+      [second, secondJoin],
+    ] as const) {
+      const back = await join(after, rejoining(user), {
+        roomRecoveryPass: passesHeldBy(member).at(-1),
+      });
+      expect(back.status).toBe("joined");
+    }
+    expect(roomOf(after).clients.size).toBe(3);
+    expect(
+      first.peer.emit.mock.calls.filter(([event]) => event === "userRequestedJoin"),
+    ).toHaveLength(1);
+  });
+
+  it("brings back a member who missed a renewal, on a server whose clock runs ahead", async () => {
+    useTestClock();
+    const { before, hostJoin, secondJoin } = await callBeforeRestart();
+    const stopRefreshing = startRoomRecoveryPassRefresh(before, config.sfuSecret);
+    vi.advanceTimersByTime(10 * MINUTE_MS - 1000);
+    stopRefreshing();
+    const missedOne = passesHeldBy(secondJoin).at(-2);
+
+    // The room comes back on an instance a minute ahead of the one that
+    // signed the pass, and the tab gets through two minutes after the crash.
+    vi.setSystemTime(Date.now() + 3 * MINUTE_MS);
+    const after = makeState();
+    await join(after, rejoining(host), {
+      roomRecoveryPass: passesHeldBy(hostJoin).at(-1),
+    });
+    expect(
+      (await join(after, rejoining(second), { roomRecoveryPass: missedOne })).status,
+    ).toBe("joined");
+  });
+
+  it("stops renewing a removed member's pass at once, and the one they kept runs out", async () => {
+    useTestClock();
+    const state = makeState();
+    const created = await join(state, host);
+    roomOf(state).allowLockedUser(guest.userId);
+    const member = await join(state, guest);
+    const stopRefreshing = startRoomRecoveryPassRefresh(state, config.sfuSecret);
+    vi.advanceTimersByTime(2 * MINUTE_MS);
+
+    await send(created.peer, "kickUser", { userId: "guest-visitor#v" });
+    const kept = passesHeldBy(member);
+    vi.advanceTimersByTime(MINUTE_MS);
+    expect(passesHeldBy(member)).toEqual(kept);
+    expect(passesHeldBy(created).length).toBeGreaterThan(3);
+    stopRefreshing();
+
+    // Still inside the kept pass's last minutes, a recreated room cannot
+    // know about the removal and takes it.
+    const soon = makeState();
+    await join(soon, rejoining(host));
+    expect(
+      (await join(soon, guest, { roomRecoveryPass: kept.at(-1) })).status,
+    ).toBe("joined");
+
+    vi.setSystemTime(Date.now() + 4 * MINUTE_MS + 1000);
+    const later = makeState();
+    await join(later, rejoining(host));
+    expect(
+      (await join(later, guest, { roomRecoveryPass: kept.at(-1) })).status,
+    ).toBe("waiting");
+  });
+
+  it("gives no pass to a removed member's other device", async () => {
+    useTestClock();
+    const state = makeState();
+    const created = await join(state, host);
+    const laptop = { userId: "user-9", email: "sam@example.com", clientId: "conclave", sessionId: "laptop" };
+    const phone = { ...laptop, sessionId: "phone" };
+    roomOf(state).allowLockedUser("sam@example.com");
+    await join(state, laptop);
+    const onPhone = await join(state, phone);
+    const stopRefreshing = startRoomRecoveryPassRefresh(state, config.sfuSecret);
+
+    await send(created.peer, "kickUser", { userId: "sam@example.com#laptop" });
+    const kept = passesHeldBy(onPhone);
+    vi.advanceTimersByTime(3 * MINUTE_MS);
+    stopRefreshing();
+    expect(passesHeldBy(onPhone)).toEqual(kept);
   });
 
   it("issues a pass that cannot be used to sign in to the SFU", async () => {

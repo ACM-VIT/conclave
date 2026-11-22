@@ -1086,6 +1086,11 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           );
         }
 
+        const roomRecoveryPass = issueRoomRecoveryPass(
+          context.currentRoom,
+          context.currentClient,
+          config.sfuSecret,
+        );
         respond(callback, {
           roomId,
           rtpCapabilities: context.currentRoom.rtpCapabilities,
@@ -1123,16 +1128,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             ? { webinarSpeakerUserId: feedSnapshot.speakerUserId }
             : {}),
           webcamCodecPolicy: context.currentRoom.webcamCodecPolicy,
-          ...(context.currentClient.isWebinarAttendee ||
-          context.currentClient.isObserver
-            ? {}
-            : {
-                roomRecoveryPass: issueRoomRecoveryPass(
-                  context.currentRoom,
-                  userKey,
-                  config.sfuSecret,
-                ),
-              }),
+          ...(roomRecoveryPass ? { roomRecoveryPass } : {}),
         });
       } catch (error) {
         Logger.error("Error joining room:", error);
