@@ -247,6 +247,7 @@ export const createAppDocumentPool = ({
         markReady(entry);
       }
     }
+    if (booted && slot.documents > 0 && !closed) spawn(slot);
     pump(slot);
   };
 
@@ -340,6 +341,7 @@ export const createAppDocumentPool = ({
       candidate.documents < least.documents ? candidate : least,
     );
     slot.documents += 1;
+    if (!slot.worker && !closed) spawn(slot);
     const entry: Entry = {
       id: nextId++,
       slot,
