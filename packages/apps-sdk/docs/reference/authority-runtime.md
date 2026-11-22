@@ -90,7 +90,7 @@ A signed-in person votes, asks and upvotes once per account across tabs and rejo
 
 ### The old Q&A events
 
-Released web and native clients know `webinar:qaSubmit`, `webinar:qaUpvote`, `webinar:qaModerate`, `webinar:qaSnapshot` and `webinar:qaChanged`. In a room that runs the Q&A app those events are an adapter over the app's book (`server/apps/authority/legacyWebinarQa.ts` in the SFU), so an old client and a new one see the same questions:
+Released web and native clients send `webinar:qa:submit`, `webinar:qa:upvote` and `webinar:qa:moderate`, and are sent `webinar:qaSnapshot` and `webinar:qaChanged`. In a room that runs the Q&A app those events are an adapter over the app's book (`server/apps/authority/legacyWebinarQa.ts` in the SFU), so an old client and a new one see the same questions:
 
 - A joining connection is followed as the app would follow it and is sent the old snapshot and change events. The adapter holds no questions and no visibility rule of its own.
 - When a client asks for capabilities it speaks the new transport, and the old feed for that connection stops.
