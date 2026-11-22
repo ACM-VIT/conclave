@@ -212,3 +212,30 @@ it("does not read out a reconnect as everyone leaving and joining", async () => 
 
   expect(announced()).toBe("");
 });
+
+it("names the person who left, though their name goes before their tile does", async () => {
+  const known = new Map([["ann", "Ann"], ["bob", "Bob"]]);
+  const resolver = (userId: string) => known.get(userId) ?? "Guest";
+  const render = async (people: Participant[]) =>
+    act(async () =>
+      root.render(
+        <MeetingAnnouncer
+          isLive
+          participants={new Map(people.map((p) => [p.userId, p]))}
+          chatMessages={[]}
+          currentUserId="me"
+          resolveDisplayName={(userId) => resolver(userId)}
+        />,
+      ),
+    );
+  await render([person("ann"), person("bob")]);
+  await wait(3500);
+
+  known.delete("bob");
+  await render([person("ann"), { ...person("bob"), isLeaving: true }]);
+  await wait(200);
+  await render([person("ann")]);
+  await wait(1300);
+
+  expect(announced()).toBe("Bob left");
+});
