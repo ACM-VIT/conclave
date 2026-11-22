@@ -1083,6 +1083,49 @@ describe("an invited attendee the host removed, after a restart", () => {
   });
 });
 
+describe("an invited attendee a host removed, once that meeting is over", () => {
+  // A host removes the invitee, then the meeting ends: by its last person
+  // leaving, or by a host ending it for everyone.
+  const removedThenOver = async (ending: "emptied" | "ended") => {
+    vi.useFakeTimers({
+      toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
+    const state = makeState();
+    schedule(state);
+    const created = await join(state, host);
+    const invited = await join(state, invitee);
+    await send(created.peer, "kickUser", { userId: "invitee@example.com#i" });
+    const knocking = await join(state, invitee);
+    expect(knocking.status).toBe("waiting");
+    if (ending === "ended") await send(created.peer, "admin:endRoom", {});
+    await hangUp(knocking.peer);
+    await hangUp(invited.peer);
+    await hangUp(created.peer);
+    vi.advanceTimersByTime(10 * MINUTE_MS);
+    expect(state.rooms.size).toBe(0);
+    return state;
+  };
+
+  it.each(["emptied", "ended"] as const)(
+    "joins the next meeting at the code directly after it %s, and knocks once removed again",
+    async (ending) => {
+      const state = await removedThenOver(ending);
+      const reopened = await join(state, host);
+      expect((await join(state, invitee)).status).toBe("joined");
+
+      await send(reopened.peer, "kickUser", { userId: "invitee@example.com#i" });
+      expect((await join(state, invitee)).status).toBe("waiting");
+    },
+  );
+
+  it("joins it directly after a restart too", async () => {
+    const state = await removedThenOver("emptied");
+    const after = await restart(state);
+    await join(after, host);
+    expect((await join(after, invitee)).status).toBe("joined");
+  });
+});
+
 describe("an invited attendee removed on one SFU", () => {
   it("still has to be let in again on the SFU the meeting fails over to", async () => {
     // Both SFUs use one schedule store. B loaded the meeting when it started,

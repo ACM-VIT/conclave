@@ -77,8 +77,45 @@ export const markRoomEnded = (
   // Ended from this moment, not from when the room closes: it may stay open
   // up to half a minute to say goodbye, and must not renew passes meanwhile.
   room.markEnded();
-  state.roomRecovery.noteOver(room);
+  noteMeetingOver(state, room);
   return endedRoom;
+};
+
+/**
+ * A meeting is over when a host ends it for everyone or its last person
+ * leaves. Whoever opens its code next opens a new meeting: passes from this
+ * one count for nothing there, and the people a host removed from this one
+ * are invited again, as anyone a booking invites is.
+ */
+const noteMeetingOver = (
+  state: SfuState,
+  room: Pick<Room, "id" | "clientId" | "channelId" | "incarnationId" | "takesOverRecordOf">,
+): void => {
+  state.roomRecovery.noteOver(room);
+  const meeting = getScheduledMeetingByRoomCode(
+    state.scheduledMeetings,
+    room.clientId,
+    room.id,
+  );
+  for (const email of [...(meeting?.readmissionRequiredEmails ?? [])]) {
+    const changed = setScheduledInviteeReadmission(
+      state.scheduledMeetings,
+      room.clientId,
+      room.id,
+      email,
+      false,
+    );
+    if (!changed || !state.scheduledMeetingPersistence) continue;
+    persistInviteeReadmission(
+      state.scheduledMeetings,
+      state.scheduledMeetingPersistence,
+      changed,
+      email,
+      false,
+    ).catch((error) => {
+      Logger.warn(`Failed to persist the end of a removal from ${room.id}`, error);
+    });
+  }
 };
 
 // A change to who hosts, or to who has to be let in again, goes to the
@@ -349,12 +386,10 @@ export const cleanupRoom = (state: SfuState, channelId: string): boolean => {
   if (!closedRoom) {
     return false;
   }
-  // An emptied room's meeting is over: the next visitor opens a new one, and
-  // passes from this one count for nothing there. Not so for a room that only
-  // stood in for a lost call, or one a host ended: what the ledger says about
-  // those still holds.
+  // An emptied room's meeting is over. Not so for a room that only stood in
+  // for a lost call, or one a host ended, which was over already.
   if (closedRoom.recordsItsCall) {
-    state.roomRecovery.noteOver(closedRoom);
+    noteMeetingOver(state, closedRoom);
   }
 
   Logger.info(`Closed empty room: ${closedRoom.id} (${closedRoom.clientId})`);
