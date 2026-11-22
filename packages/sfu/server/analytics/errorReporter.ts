@@ -175,7 +175,14 @@ export const createErrorReporter = ({
 
 const EMAIL_PATTERN = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
 const JWT_PATTERN = /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g;
+const LONG_TOKEN_PATTERN = /\b[A-Za-z0-9_-]{40,}\b/g;
 const URL_PATTERN = /\bhttps?:\/\/[^\s"'<>)]+/gi;
+// Any scheme with user info: redis://:pass@host, postgres://user:pass@host,
+// https://token@host. The whole URI goes, host included.
+const CREDENTIAL_URI_PATTERN = /\b[a-z][a-z0-9+.-]*:\/\/[^\s/?#@"'<>]*@[^\s"'<>)]*/gi;
+const SECRET_ASSIGNMENT_PATTERN =
+  /\b(password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|authorization|cookie)(\s*[:=]\s*)(?:(?:bearer|basic)\s+)?("[^"]*"|'[^']*'|[^\s,;]+)/gi;
+const AUTH_HEADER_PATTERN = /\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{6,}/gi;
 
 /** Replaces the meeting code or ids in a path, like the web scrubber does. */
 const templatePath = (pathname: string): string => {
@@ -194,16 +201,55 @@ const scrubUrl = (value: string): string => {
   }
 };
 
-/** Removes URL paths and queries, emails and tokens from an error message. */
+/**
+ * Removes credentials (URIs with user info, secret assignments, auth headers),
+ * URL paths and queries, emails and tokens from an error message.
+ */
 export const scrubErrorText = (value: string): string =>
   value
+    .replace(CREDENTIAL_URI_PATTERN, "[credentials]")
     .replace(URL_PATTERN, scrubUrl)
+    .replace(SECRET_ASSIGNMENT_PATTERN, "$1$2[redacted]")
+    .replace(AUTH_HEADER_PATTERN, "$1 [redacted]")
     .replace(JWT_PATTERN, "[token]")
-    .replace(EMAIL_PATTERN, "[email]");
+    .replace(EMAIL_PATTERN, "[email]")
+    .replace(LONG_TOKEN_PATTERN, "[token]");
 
-type ExceptionListEntry = { value?: unknown };
+type ExceptionFrame = Record<string, unknown>;
+type ExceptionListEntry = {
+  value?: unknown;
+  stacktrace?: { frames?: unknown } & Record<string, unknown>;
+};
 
-/** posthog-node `beforeSend` hook: scrubs exception messages, passes other events through. */
+// posthog-node reads the lines around each frame from disk. They are source,
+// not data, but a literal in that source still leaves the box, so they go.
+const withoutSourceContext = (frame: ExceptionFrame): ExceptionFrame => {
+  const {
+    pre_context: _before,
+    context_line: _line,
+    post_context: _after,
+    ...rest
+  } = frame;
+  return rest;
+};
+
+const scrubEntry = (entry: ExceptionListEntry): ExceptionListEntry => ({
+  ...entry,
+  ...(typeof entry?.value === "string" ? { value: scrubErrorText(entry.value) } : {}),
+  ...(entry?.stacktrace && Array.isArray(entry.stacktrace.frames)
+    ? {
+        stacktrace: {
+          ...entry.stacktrace,
+          frames: (entry.stacktrace.frames as ExceptionFrame[]).map(withoutSourceContext),
+        },
+      }
+    : {}),
+});
+
+/**
+ * posthog-node `beforeSend` hook: scrubs exception messages and drops source
+ * context from stack frames; passes other events through.
+ */
 export const scrubExceptionEvent = <
   T extends { event: string; properties?: Record<string, unknown> },
 >(
@@ -216,11 +262,7 @@ export const scrubExceptionEvent = <
     ...message,
     properties: {
       ...message.properties,
-      $exception_list: list.map((entry: ExceptionListEntry) =>
-        typeof entry?.value === "string"
-          ? { ...entry, value: scrubErrorText(entry.value) }
-          : entry,
-      ),
+      $exception_list: list.map(scrubEntry),
     },
   };
 };

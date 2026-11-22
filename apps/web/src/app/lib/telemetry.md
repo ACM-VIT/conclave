@@ -112,6 +112,8 @@ Stack frames in our script folders (`/_next/static/`, `/mediapipe/` and so on)
 on the page's own origin keep their path so they can be symbolicated. URL
 properties never do.
 Session replay, surveys, DOM autocapture, feature flags and pageviews are off,
-and no user is ever identified. The SFU scrubs emails and tokens from exception
-messages and cuts every URL to its origin and route (`/[code]`, `/w/[code]`,
-`/[path]`) before sending.
+and no user is ever identified. The SFU scrubs emails, tokens and credentials
+(any URI with user info, `password=` style assignments, auth headers) from
+exception messages, cuts every URL to its origin and route (`/[code]`,
+`/w/[code]`, `/[path]`), and drops the source lines posthog-node attaches to
+stack frames before sending. Config errors name the variable, never its value.

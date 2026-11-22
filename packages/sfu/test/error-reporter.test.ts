@@ -32,9 +32,11 @@ const eventsIn = (payload: unknown): CapturedEvent[] => {
 
 const startFakePostHog = async () => {
   const events: CapturedEvent[] = [];
+  const bodies: string[] = [];
   const record = async (request: IncomingMessage) => {
     if (request.method !== "POST") return;
     const body = await readBody(request);
+    bodies.push(body.toString("utf8"));
     try {
       events.push(...eventsIn(JSON.parse(body.toString("utf8"))));
     } catch {}
@@ -47,7 +49,7 @@ const startFakePostHog = async () => {
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address() as AddressInfo;
-  return { server, events, host: `http://127.0.0.1:${port}` };
+  return { server, events, bodies, host: `http://127.0.0.1:${port}` };
 };
 
 /** Accepts connections and never answers, like a host behind a dead route. */
@@ -157,17 +159,31 @@ describe("SFU error reporter", () => {
     );
 
     const exception = fake.events.find((event) => event.event === "$exception");
-    const list = exception?.properties.$exception_list as Array<{
-      value: string;
-      stacktrace?: unknown;
-    }>;
+    const list = exception?.properties.$exception_list as Array<{ value: string }>;
     expect(list[0].value).toBe("Join failed at https://conclave.test/[code]");
-    // Frames carry source lines of this test file, which hold the literal.
-    const withoutFrames = {
-      ...exception?.properties,
-      $exception_list: list.map(({ stacktrace: _frames, ...entry }) => entry),
-    };
-    expect(JSON.stringify(withoutFrames)).not.toMatch(/lime-pear-plum|private/);
+    expect(fake.bodies.join("\n")).not.toMatch(/lime-pear-plum|private/);
+  });
+
+  it("sends no source lines and no credentials, whatever the URI scheme", async () => {
+    const fake = await startFakePostHog();
+    servers.push(fake.server);
+    const reporter = reporterFor(posthogClient(fake.host));
+
+    reporter.report(
+      new Error(
+        "Startup failed: redis://:review-secret@127.0.0.1:6379/0 postgres://app:pg-pass@db.internal/main " +
+          "https://deploy-token@git.conclave.test/x password=hunter2 api_key: sk-live-0123 " +
+          "Authorization: Bearer abc.def.ghi for alice@example.com?token=secret",
+      ),
+      { source: "startup_failed" },
+    );
+
+    await waitFor(() => fake.events.some((event) => event.event === "$exception"));
+    const request = fake.bodies.join("\n");
+    expect(request).not.toMatch(
+      /review-secret|pg-pass|deploy-token|hunter2|sk-live|abc\.def|alice@example|token=secret/,
+    );
+    expect(request).not.toMatch(/pre_context|context_line|post_context/);
   });
 
   it.each([

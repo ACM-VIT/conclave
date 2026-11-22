@@ -51,7 +51,7 @@ export const resolveCorsOrigins = (): "*" | string[] => {
   }
 
   const normalizedOrigins: string[] = [];
-  for (const origin of origins) {
+  for (const [index, origin] of origins.entries()) {
     try {
       const parsed = new URL(origin);
       if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
@@ -62,7 +62,9 @@ export const resolveCorsOrigins = (): "*" | string[] => {
       parsed.hash = "";
       normalizedOrigins.push(parsed.toString().replace(/\/$/, ""));
     } catch {
-      throw new Error(`Invalid SFU_CORS_ORIGINS entry: ${origin}`);
+      // The value may be a credential pasted into the wrong variable, and this
+      // error is reported to PostHog, so it names the entry, not its text.
+      throw new Error(`Invalid SFU_CORS_ORIGINS entry at index ${index}`);
     }
   }
 
