@@ -31,7 +31,7 @@ enum CrashCaptureIOS {
         }
         let payload = CrashCaptureRecord.payload(
             exceptions: [CrashReportException(type: exception.name.rawValue,
-                                              frames: CrashCaptureRecord.symbolFrames(exception.callStackSymbols))],
+                                              frames: CrashCaptureRecord.addressFrames(exception.callStackReturnAddresses))],
             breadcrumbs: breadcrumbs,
             phase: phase,
             createdAtMillis: DiagnosticsClock.wallMillis(),
