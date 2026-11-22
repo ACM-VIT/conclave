@@ -373,9 +373,6 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             respond(callback, { error: "No room found." });
             return;
           }
-          // Read before the room exists, so nothing can await between
-          // creating it and settling who hosts it.
-          const recalled = await state.roomRecovery.recall(roomChannelId);
           try {
             // Several joiners can miss the lookup above while the room is
             // still being created; only the one whose call created it is the
@@ -387,9 +384,11 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             );
             room = result.room;
             createdRoom = result.created;
-            if (createdRoom) {
-              room.recoveryPassesVoidUntil = recalled.passesVoidUntil;
-              room.takesOverRecordOf = recalled.lastWriter;
+            // The recovery record was read once this SFU held the code, so
+            // nothing awaits between creating the room and settling who
+            // hosts it.
+            const recalled = result.recalled;
+            if (createdRoom && recalled) {
               lostRoom = recalled.lost;
               room.openedBy = userKey;
               // Whose code it is: who booked it, else whoever made it, which

@@ -975,6 +975,84 @@ describe("who hosts a call the server lost", () => {
     });
   });
 
+  it("keeps saving the meeting that replaces a room which emptied while a join waited on it", async () => {
+    vi.useFakeTimers({
+      toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
+    vi.setSystemTime(new Date("2026-11-22T08:00:00Z"));
+    const state = makeState();
+    const recovery = durableOf.get(state)!.recovery;
+
+    // The host's join reads the recovery record, and is held right after.
+    const read = recovery.read.bind(recovery);
+    let readDone = false;
+    let readGoesOn: () => void = () => {};
+    const readHeld = new Promise<void>((resolve) => (readGoesOn = resolve));
+    recovery.read = async (channelId) => {
+      recovery.read = read;
+      const answer = await read(channelId);
+      readDone = true;
+      await readHeld;
+      return answer;
+    };
+    const hostJoining = join(state, host);
+    await vi.waitFor(() => expect(readDone).toBe(true));
+
+    // Where the join reads before it holds the room, Dan can open the room
+    // in between and host it. The host's join then finds Dan's room and
+    // waits on its lease, and Dan's room empties during the wait.
+    if (!state.roomCreations.has(CHANNEL)) {
+      const dan = await join(state, { ...knocker, allowRoomCreation: true });
+      expect(dan.context.currentClient).toBeInstanceOf(Admin);
+      const registry = state.roomRegistry;
+      const renewRoom = registry.renewRoom.bind(registry);
+      let renewalStarted = false;
+      let renewalGoesOn: () => void = () => {};
+      const renewalHeld = new Promise<void>((resolve) => (renewalGoesOn = resolve));
+      registry.renewRoom = async (input) => {
+        registry.renewRoom = renewRoom;
+        renewalStarted = true;
+        await renewalHeld;
+        return renewRoom(input);
+      };
+      readGoesOn();
+      await vi.waitFor(() => expect(renewalStarted).toBe(true));
+      await hangUp(dan.peer);
+      vi.advanceTimersByTime(10 * MINUTE_MS);
+      expect(state.rooms.size).toBe(0);
+      renewalGoesOn();
+    } else {
+      readGoesOn();
+    }
+
+    // The host's join creates the room that replaces Dan's.
+    const hostIn = await hostJoining;
+    expect(hostIn.context.currentClient).toBeInstanceOf(Admin);
+    const replacement = roomOf(state).incarnationId;
+
+    // A removal there is saved: after a restart the removed guest's pass
+    // gets her nowhere.
+    roomOf(state).allowLockedUser(second.userId);
+    const cara = await join(state, second);
+    await send(hostIn.peer, "kickUser", { userId: `${second.userId}#${second.sessionId}` });
+    const afterRemoval = await restart(state);
+    expect(
+      (
+        await join(
+          afterRemoval,
+          { ...second, allowRoomCreation: true },
+          { roomRecoveryPass: cara.response.roomRecoveryPass },
+        )
+      ).status,
+    ).toBe("waiting");
+
+    // And so is the end.
+    await send(hostIn.peer, "admin:endRoom", {});
+    const saved = (await recovery.read(CHANNEL)) as { writer?: string; overAt?: number | null };
+    expect(saved.writer).toBe(replacement);
+    expect(saved.overAt).toBeTypeOf("number");
+  });
+
   it("keeps what the SFU that took a call over wrote when the SFU it took it from writes again", async () => {
     const first = makeState();
     await join(first, host);

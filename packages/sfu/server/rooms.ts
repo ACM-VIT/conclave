@@ -16,6 +16,7 @@ import {
 } from "./scheduledMeetings.js";
 import { cleanupRoomBrowser } from "./socket/handlers/sharedBrowserHandlers.js";
 import type { EndedRoom, SfuState } from "./state.js";
+import type { RecalledRoom } from "./roomRecoveryLedger.js";
 import { clearWebinarLinkSlug } from "./webinar.js";
 import { canonicalizeClientId } from "./clientIds.js";
 
@@ -232,7 +233,8 @@ export const renewLocalRoom = async (
 };
 
 /**
- * Like getOrCreateRoom, but also reports whether this call created the room.
+ * Like getOrCreateRoom, but also reports whether this call created the room,
+ * and if it did, what the recovery record said when it did.
  * `created` is true only for the caller that started the creation; callers
  * that found the room already registered, or joined a creation already in
  * flight, get false.
@@ -241,19 +243,20 @@ export const getOrCreateRoomWithOrigin = async (
   state: SfuState,
   requestedClientId: string,
   roomId: string,
-): Promise<{ room: Room; created: boolean }> => {
+): Promise<{ room: Room; created: boolean; recalled: RecalledRoom | null }> => {
   const clientId = canonicalizeClientId(requestedClientId);
   const channelId = getRoomChannelId(clientId, roomId);
   const existing = await renewLocalRoom(state, clientId, roomId);
   if (existing) {
-    return { room: existing, created: false };
+    return { room: existing, created: false, recalled: null };
   }
 
   const pendingCreation = state.roomCreations.get(channelId);
   if (pendingCreation) {
-    return { room: await pendingCreation, created: false };
+    return { room: await pendingCreation, created: false, recalled: null };
   }
 
+  let recalled: RecalledRoom | null = null;
   const creation = (async (): Promise<Room> => {
     const ownership = await state.roomRegistry.claimRoom({
       channelId,
@@ -263,6 +266,12 @@ export const getOrCreateRoomWithOrigin = async (
     if (!ownership.ok) {
       throw new RoomOwnershipError(ownership.owner);
     }
+    // Read only now that this SFU holds the code, and before the room is in
+    // anyone's hands. A room that came and went while this join waited has
+    // written its last by now, so the record this room takes over is the
+    // newest one.
+    const record = await state.roomRecovery.recall(channelId);
+    recalled = record;
     // Another SFU may have changed this meeting's invitations since this one
     // loaded them.
     await refreshScheduledMeeting(
@@ -288,6 +297,8 @@ export const getOrCreateRoomWithOrigin = async (
         webRtcServer: getWorkerWebRtcServer(worker),
         workerPid: typeof worker.pid === "number" ? worker.pid : null,
       });
+      createdRoom.recoveryPassesVoidUntil = record.passesVoidUntil;
+      createdRoom.takesOverRecordOf = record.lastWriter;
       bindScheduledInvitations(state, createdRoom);
       recordRecoverableChanges(state, createdRoom);
       state.rooms.set(channelId, createdRoom);
@@ -309,7 +320,8 @@ export const getOrCreateRoomWithOrigin = async (
   state.roomCreations.set(channelId, creation);
 
   try {
-    return { room: await creation, created: true };
+    const room = await creation;
+    return { room, created: true, recalled };
   } finally {
     if (state.roomCreations.get(channelId) === creation) {
       state.roomCreations.delete(channelId);

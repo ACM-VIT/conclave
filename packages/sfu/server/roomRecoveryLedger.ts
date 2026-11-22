@@ -177,25 +177,64 @@ const mayClearOut = (raw: unknown, unchangedMs: number): boolean => {
   );
 };
 
+// Rooms this SFU has seen finish, newest last. Such a room never writes
+// again, so a room may always take over a record one of them holds.
+const FINISHED_ROOMS_KEPT = 10_000;
+
 export const createRoomRecoveryLedger = (
   store: RoomRecoveryStore,
 ): RoomRecoveryLedger => {
+  const finished = new Set<string>();
+  const noteFinished = (writer: string) => {
+    finished.add(writer);
+    if (finished.size > FINISHED_ROOMS_KEPT) {
+      const [oldest] = finished;
+      finished.delete(oldest);
+    }
+  };
+  // Saves still settling, per code. A recall waits for them.
+  const settling = new Map<string, Set<Promise<void>>>();
+
+  // A refused save means another room wrote since this one took the record
+  // over. If that room is one this SFU saw finish, this room takes its
+  // record over and writes. Otherwise the record belongs to a room still
+  // running somewhere, and this room must not write over it: that is loud.
+  const retakeOrRefuse = async (
+    room: Pick<Room, "channelId" | "takesOverRecordOf">,
+    record: RoomRecoveryRecord,
+  ): Promise<void> => {
+    const holder = writerOf(await store.read(room.channelId));
+    if (holder !== null && finished.has(holder)) {
+      Logger.warn(
+        `Room ${record.writer} takes over the recovery record of ${room.channelId} from ${holder}, a room that finished here`,
+      );
+      room.takesOverRecordOf = holder;
+      if (await store.write(room.channelId, record, holder)) return;
+    }
+    Logger.error(
+      `Refused to save the recovery record of ${room.channelId}: room ${record.writer} took over ${room.takesOverRecordOf ?? "no record"}, but ${holder ?? "an unreadable record"} has written it since`,
+    );
+  };
   const save = (
     room: Pick<Room, "channelId" | "takesOverRecordOf">,
     record: RoomRecoveryRecord,
   ) => {
-    store
-      .write(room.channelId, record, room.takesOverRecordOf)
-      .then((landed) => {
-        if (!landed) {
-          Logger.warn(
-            `Did not update the recovery record of ${room.channelId}: another room has written it since`,
-          );
-        }
-      })
+    const channelId = room.channelId;
+    const done = store
+      .write(channelId, record, room.takesOverRecordOf)
+      .then((landed) => (landed ? undefined : retakeOrRefuse(room, record)))
       .catch((error) => {
-        Logger.warn(`Failed to update the recovery record of ${room.channelId}`, error);
+        Logger.warn(`Failed to update the recovery record of ${channelId}`, error);
       });
+    const pending = settling.get(channelId) ?? new Set<Promise<void>>();
+    pending.add(done);
+    settling.set(channelId, pending);
+    void done.then(() => {
+      pending.delete(done);
+      if (pending.size === 0 && settling.get(channelId) === pending) {
+        settling.delete(channelId);
+      }
+    });
   };
 
   return {
@@ -209,7 +248,7 @@ export const createRoomRecoveryLedger = (
         writer: room.incarnationId,
         ownerEmail: room.ownerEmail,
       }),
-    noteOver: (room) =>
+    noteOver: (room) => {
       save(room, {
         liveAt: null,
         hostUserKey: null,
@@ -218,8 +257,11 @@ export const createRoomRecoveryLedger = (
         overAt: Date.now(),
         writer: room.incarnationId,
         ownerEmail: room.ownerEmail,
-      }),
+      });
+      noteFinished(room.incarnationId);
+    },
     recall: async (channelId) => {
+      await Promise.all([...(settling.get(channelId) ?? new Set<Promise<void>>())]);
       const stored = await store.read(channelId).catch((error) => {
         Logger.warn(`Failed to read the recovery record of ${channelId}`, error);
         return null;

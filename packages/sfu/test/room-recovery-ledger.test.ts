@@ -6,6 +6,7 @@ import {
   createFileRoomRecoveryStore,
   createRoomRecoveryLedger,
 } from "../server/roomRecoveryLedger.js";
+import { Logger } from "../utilities/loggers.js";
 
 const CHANNEL = "conclave:abc-mnop-xyz";
 const MINUTE_MS = 60_000;
@@ -154,6 +155,40 @@ describe("whose code it is", () => {
     sfu().noteRunning(room);
     expect((await sfu().recall(CHANNEL)).owner).toEqual(GUEST_MADE);
     expect((await sfu().recall("conclave:never-used")).owner).toBeNull();
+  });
+});
+
+describe("a room whose idea of the record it took over is out of date", () => {
+  const stale = {
+    ...room,
+    incarnationId: "room-3",
+    takesOverRecordOf: "room-0",
+    hostUserKey: "host-3@example.com",
+  };
+
+  it("takes over a record held by a room this SFU saw finish, and keeps saving", async () => {
+    const ledger = sfu();
+    ledger.noteRunning(room);
+    ledger.noteOver(room);
+    const replacement = { ...stale };
+
+    ledger.noteRunning(replacement);
+    await vi.waitFor(async () =>
+      expect((await sfu().recall(CHANNEL)).lastWriter).toBe("room-3"),
+    );
+    expect(replacement.takesOverRecordOf).toBe("room-1");
+    const endedAt = Date.now();
+    ledger.noteOver(replacement);
+    expect((await sfu().recall(CHANNEL)).passesVoidUntil).toBe(endedAt);
+  });
+
+  it("does not take over a record a room elsewhere is still writing, and says so loudly", async () => {
+    const loud = vi.spyOn(Logger, "error").mockImplementation(() => {});
+    sfu().noteRunning(room);
+    sfu().noteRunning(stale);
+
+    await vi.waitFor(() => expect(loud).toHaveBeenCalled());
+    expect((await sfu().recall(CHANNEL)).lastWriter).toBe("room-1");
   });
 });
 
