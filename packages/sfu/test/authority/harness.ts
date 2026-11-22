@@ -57,13 +57,22 @@ export const person = (
  * listeners, and a client emit runs the server's handler. Delivery is
  * synchronous; payloads are copied through JSON as a real socket would.
  */
-const makeSocketPair = (id: string, onServerEmit: (event: string, payload: unknown) => void) => {
+const makeSocketPair = (
+  id: string,
+  onServerEmit: (event: string, payload: unknown) => void,
+  onDirectEmit: (event: string) => void = () => {},
+) => {
   const serverHandlers = new Map<string, Listener[]>();
   const clientListeners = new Map<string, Set<Listener>>();
   const call = (listeners: Iterable<Listener> | undefined, ...args: unknown[]) => {
     for (const listener of [...(listeners ?? [])]) {
       (listener)(...args);
     }
+  };
+  /** What reaches the client, already encoded: an emit or a broadcast. */
+  const receive = (event: string, wire: unknown): void => {
+    onServerEmit(event, wire);
+    if (client.connected) call(clientListeners.get(event), wire);
   };
 
   const client = {
@@ -96,9 +105,8 @@ const makeSocketPair = (id: string, onServerEmit: (event: string, payload: unkno
       return server;
     },
     emit(event: string, payload?: unknown) {
-      const wire = overWire(payload);
-      onServerEmit(event, wire);
-      if (client.connected) call(clientListeners.get(event), wire);
+      onDirectEmit(event);
+      receive(event, overWire(payload));
       return true;
     },
     disconnect() {
@@ -117,6 +125,7 @@ const makeSocketPair = (id: string, onServerEmit: (event: string, payload: unkno
   return {
     server: server as unknown as Socket,
     client: client satisfies AuthoritySocket,
+    receive,
     /** Whether the server registered a handler for this event. */
     serverHandles: (event: string) => serverHandlers.has(event),
   };
@@ -233,7 +242,27 @@ export class Harness {
   private readonly log: Sent[] = [];
   private delivered = 0;
   private sequence = 0;
-  private readonly io = { to: () => ({ emit: vi.fn() }) } as unknown as SocketIOServer;
+  /** Each server emit to one socket, by event: one encoding each. */
+  readonly directEmits = new Map<string, number>();
+  /** Each broadcast: one encoding, written to this many sockets. */
+  readonly broadcasts: { event: string; sockets: number }[] = [];
+  private readonly receivers = new Map<string, (event: string, wire: unknown) => void>();
+  private readonly io = {
+    to: () => ({ emit: vi.fn() }),
+    // A local broadcast to sockets by id, as socket.io does it: the payload
+    // is encoded once and the same bytes go to each socket.
+    local: {
+      to: (ids: string | string[]) => ({
+        emit: (event: string, payload: unknown) => {
+          const sockets = [ids].flat();
+          const wire = overWire(payload);
+          this.broadcasts.push({ event, sockets: sockets.length });
+          for (const id of sockets) this.receivers.get(id)?.(event, wire);
+          return true;
+        },
+      }),
+    },
+  } as unknown as SocketIOServer;
 
   constructor(
     private readonly modules: readonly AuthorityModule[],
@@ -299,12 +328,17 @@ export class Harness {
     const sessionId = options.session ?? `s${this.sequence}`;
     const seatId = `${who.userKey}#${sessionId}`;
     let tab: Tab<C> | null = null;
-    const pair = makeSocketPair(`socket-${this.sequence}`, (event, payload) => {
-      if (event !== AUTHORITY_EVENTS.frame || !tab) return;
-      const frame = payload as AuthorityFrame;
-      tab.frames.push(frame);
-      this.log.push({ tab: tab, frame });
-    });
+    const pair = makeSocketPair(
+      `socket-${this.sequence}`,
+      (event, payload) => {
+        if (event !== AUTHORITY_EVENTS.frame || !tab) return;
+        const frame = payload as AuthorityFrame;
+        tab.frames.push(frame);
+        this.log.push({ tab: tab, frame });
+      },
+      (event) => this.directEmits.set(event, (this.directEmits.get(event) ?? 0) + 1),
+    );
+    this.receivers.set(pair.server.id, pair.receive);
     const seat =
       who.role === "host"
         ? new Admin({ id: seatId, socket: pair.server })

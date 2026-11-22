@@ -38,16 +38,32 @@ import type { RoomAuthority } from "./roomAuthority.js";
  */
 const QA_APP = "qa";
 
+/**
+ * How many `webinar:qaChanged` events are written to sockets in one turn of
+ * the event loop. A change to 20 questions in a webinar of 5,000 old clients
+ * is 100,000 of them. They go out a slice a turn, so the room keeps
+ * answering between slices.
+ */
+export const LEGACY_QA_SENDS_PER_TURN = 2_000;
+
 type Rows = Map<string, Map<string, Json>>;
 
 type Feed = {
+  context: ConnectionContext;
   rows: Rows;
   /** Parts of a replacement still arriving. */
   incoming: AuthorityFrame[];
+  /** Questions that changed for this connection and are yet to be said. */
+  pending: Set<string>;
+  closed: boolean;
   close(): void;
 };
 
+/** A room's feeds with something yet to say, the longest waiting first. */
+type Outbox = { waiting: Set<Feed>; scheduled: boolean };
+
 const feeds = new WeakMap<object, Feed>();
+const outboxes = new WeakMap<RoomAuthority, Outbox>();
 /** Question id to the seat that asked, per room, for hosts on the old wire. */
 const askerSeats = new WeakMap<RoomAuthority, Map<string, string>>();
 
@@ -83,6 +99,11 @@ export const qaBookOf = (context: ConnectionContext): RoomAuthority | null => {
 const isWebinar = (state: SfuState, channelId: string): boolean =>
   Boolean(state.webinarConfigs.get(channelId)?.enabled);
 
+const isHost = (context: ConnectionContext): boolean => {
+  const client = context.currentClient;
+  return Boolean(client && context.currentRoom?.isAdminClient(client));
+};
+
 /** One question in the old shape, from what this connection's view holds. */
 const entryOf = (
   context: ConnectionContext,
@@ -98,14 +119,12 @@ const entryOf = (
   if (!question) return null;
   const votes = rows.get("votes")?.get(id) as { upvotes: number } | undefined;
 
-  const client = context.currentClient;
-  const room = context.currentRoom;
   // The old wire names the asker by seat. A viewer is told their own, and a
   // host is told everyone's, as hosts already see who is in the room. Nobody
   // else is handed another person's seat id.
   const userId = own
-    ? (client?.id ?? "")
-    : client && room?.isAdminClient(client)
+    ? (context.currentClient?.id ?? "")
+    : isHost(context)
       ? (seatsOf(authority).get(id) ?? "")
       : "";
 
@@ -133,6 +152,111 @@ const questionIds = (rows: Rows): string[] => [
   ]),
 ];
 
+/** A number for each row a view holds, to tell two readings of one apart. */
+const rowNumbers = new WeakMap<object, number>();
+let lastRowNumber = 0;
+const numberOf = (row: Json | undefined): number => {
+  if (row === undefined || row === null || typeof row !== "object") return 0;
+  let number = rowNumbers.get(row);
+  if (number === undefined) {
+    lastRowNumber += 1;
+    number = lastRowNumber;
+    rowNumbers.set(row, number);
+  }
+  return number;
+};
+
+/**
+ * What a question's change event depends on for a connection that did not
+ * ask it: the rows its role holds, whether it is a host, and whether it
+ * upvoted. Connections with the same answer are sent the same bytes. The
+ * rows of a role are one object for everyone in it, so comparing them is
+ * comparing two numbers.
+ */
+const readingOf = (feed: Feed, id: string): string =>
+  [
+    id,
+    numberOf(feed.rows.get("questions")?.get(id)),
+    numberOf(feed.rows.get("votes")?.get(id)),
+    isHost(feed.context) ? "h" : "",
+    feed.rows.get("myUpvotes")?.has(id) ? "u" : "",
+  ].join("|");
+
+/**
+ * Says the waiting changes of a room, one slice of sockets a turn.
+ *
+ * A changed question reads the same for nearly everyone, so its event is
+ * built and encoded once for each distinct reading and written to all the
+ * sockets that share it. Only the asker's copy, which names them, is their
+ * own. A question that changes again while a connection waits its turn is
+ * said once, as it stands by then.
+ */
+const say = (authority: RoomAuthority, outbox: Outbox): void => {
+  outbox.scheduled = false;
+  let sends = 0;
+  const shared = new Map<string, { from: Feed; id: string; sockets: string[] }>();
+  for (const feed of outbox.waiting) {
+    if (sends >= LEGACY_QA_SENDS_PER_TURN) break;
+    outbox.waiting.delete(feed);
+    const { context } = feed;
+    const room = context.currentRoom;
+    const ids = [...feed.pending];
+    feed.pending.clear();
+    if (feed.closed || !room || !isWebinar(context.state, room.channelId)) {
+      continue;
+    }
+    for (const id of ids) {
+      sends += 1;
+      if (feed.rows.get("myQuestions")?.has(id)) {
+        const entry = entryOf(context, authority, feed.rows, id);
+        context.socket.emit(
+          "webinar:qaChanged",
+          (entry
+            ? { roomId: room.id, entry }
+            : { roomId: room.id, removedId: id }) satisfies WebinarQaChangedNotification,
+        );
+        continue;
+      }
+      const reading = readingOf(feed, id);
+      const group = shared.get(reading);
+      if (group) group.sockets.push(context.socket.id);
+      else shared.set(reading, { from: feed, id, sockets: [context.socket.id] });
+    }
+  }
+  for (const { from, id, sockets } of shared.values()) {
+    const room = from.context.currentRoom;
+    if (!room) continue;
+    const entry = entryOf(from.context, authority, from.rows, id);
+    // Local: the sockets are all on this server, where the room is.
+    from.context.io.local.to(sockets).emit(
+      "webinar:qaChanged",
+      (entry
+        ? { roomId: room.id, entry }
+        : { roomId: room.id, removedId: id }) satisfies WebinarQaChangedNotification,
+    );
+  }
+  if (outbox.waiting.size === 0) return;
+  outbox.scheduled = true;
+  setImmediate(() => say(authority, outbox));
+};
+
+/** Queues a connection's changed questions to be said after this flush. */
+const queue = (authority: RoomAuthority, feed: Feed, ids: Iterable<string>): void => {
+  for (const id of ids) feed.pending.add(id);
+  if (feed.pending.size === 0) return;
+  let outbox = outboxes.get(authority);
+  if (!outbox) {
+    outbox = { waiting: new Set(), scheduled: false };
+    outboxes.set(authority, outbox);
+  }
+  outbox.waiting.add(feed);
+  if (outbox.scheduled) return;
+  outbox.scheduled = true;
+  const waiting = outbox;
+  // After the flush that is running now has reached every connection.
+  queueMicrotask(() => say(authority, waiting));
+};
+
 /**
  * Starts the old-wire feed for a connection that has just joined. Returns
  * false when the room does not run the Q&A app, and the caller then sends
@@ -146,9 +270,18 @@ export const attachLegacyQaFeed = (context: ConnectionContext): boolean => {
   seatsOf(authority);
 
   const { socket, state } = context;
-  const feed: Feed = { rows: new Map(), incoming: [], close: () => {} };
+  const feed: Feed = {
+    context,
+    rows: new Map(),
+    incoming: [],
+    pending: new Set(),
+    closed: false,
+    close: () => {},
+  };
 
+  /** A whole list. It replaces whatever was still waiting to be said. */
   const sendSnapshot = (): void => {
+    feed.pending.clear();
     if (!isWebinar(state, room.channelId)) return;
     const entries = questionIds(feed.rows)
       .map((id) => entryOf(context, authority, feed.rows, id))
@@ -165,6 +298,7 @@ export const attachLegacyQaFeed = (context: ConnectionContext): boolean => {
       // The seat may no longer see Q&A. An old client keeps a list until it
       // is told otherwise, so it is sent an empty one.
       feed.incoming = [];
+      feed.pending.clear();
       if (feed.rows.size === 0) return;
       feed.rows = new Map();
       socket.emit("webinar:qaSnapshot", {
@@ -204,21 +338,15 @@ export const attachLegacyQaFeed = (context: ConnectionContext): boolean => {
       feed.rows.set(row.bucket, bucket);
       touched.add(row.key);
     }
-    if (!isWebinar(state, room.channelId)) return;
-    for (const id of touched) {
-      const entry = entryOf(context, authority, feed.rows, id);
-      socket.emit(
-        "webinar:qaChanged",
-        (entry
-          ? { roomId: room.id, entry }
-          : { roomId: room.id, removedId: id }) satisfies WebinarQaChangedNotification,
-      );
-    }
+    queue(authority, feed, touched);
   };
 
   const observer = authority.observe(context, QA_APP, sink);
   if (!observer) return true;
-  feed.close = () => observer.close();
+  feed.close = () => {
+    feed.closed = true;
+    observer.close();
+  };
   feeds.set(socket, feed);
   return true;
 };
