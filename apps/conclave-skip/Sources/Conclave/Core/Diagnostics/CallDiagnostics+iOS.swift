@@ -24,6 +24,7 @@ enum CallDiagnosticsIOS {
             CallDiagnosticsLog.write(category: category, code: code, phase: phase)
         }
         hooks.installListeners = { store in
+            CrashCaptureIOS.install()
             CallDiagnosticsMetricSubscriber.install(store: store)
             CallDiagnosticsBackgroundFlush.install()
         }
@@ -197,6 +198,7 @@ final class CallDiagnosticsMetricSubscriber: NSObject, MXMetricManagerSubscriber
         for record in CallDiagnosticsMetricPayloads.records(from: payloads) {
             store.writePayload(record)
         }
+        CrashReporting.scheduleUpload(afterMillis: 1_000)
     }
 }
 

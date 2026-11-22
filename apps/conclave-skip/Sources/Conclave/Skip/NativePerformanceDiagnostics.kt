@@ -301,6 +301,7 @@ object NativePerformanceDiagnostics {
     internal fun installDiagnosticsListeners(store: DiagnosticsFileStore) {
         if (diagnosticsListenersInstalled) return
         diagnosticsListenersInstalled = true
+        AndroidCrashCapture.install(store)
         val register = {
             ProcessLifecycleOwner.get().lifecycle.addObserver(backgroundObserver)
             if (AndroidRuntimeConfig.isDebuggable()) {
@@ -357,6 +358,7 @@ object NativePerformanceDiagnostics {
             }
             if (newest > last) {
                 prefs.edit().putLong(PREF_LAST_EXIT_TIMESTAMP, newest).apply()
+                CrashReporting.scheduleUpload(afterMillis = 1_000)
             }
         } catch (error: Throwable) {
             if (verboseLogsEnabled()) Log.w(DIAG_TAG, "exit reasons unavailable: ${error.javaClass.simpleName}")
@@ -571,5 +573,8 @@ fun DiagnosticsFixtureReadouts(modifier: Modifier = Modifier) {
             diagnostics.debugSimulateHang(milliseconds = 6_000)
             tick += 1
         }, modifier = Modifier.testTag("sys.diagTestHang")) { Text(conclaveString("sys_diag_fixture_hang")) }
+        TextButton(onClick = {
+            AndroidCrashCapture.debugForceCrash()
+        }, modifier = Modifier.testTag("sys.diagTestCrash")) { Text(conclaveString("sys_diag_fixture_crash")) }
     }
 }

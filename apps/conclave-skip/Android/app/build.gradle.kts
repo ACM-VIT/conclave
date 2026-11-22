@@ -65,6 +65,9 @@ val productionConclaveBaseUrl = "https://conclave.acmvit.in"
 val productionSfuJoinUrl = "$productionConclaveBaseUrl/api/sfu/join"
 val debugViewerProfile = configuredValue("CONCLAVE_DEBUG_VIEWER_PROFILE").lowercase() in setOf("yes", "true", "1")
 val sfuJoinUrl = configuredValue("SFU_JOIN_URL").ifBlank { productionSfuJoinUrl }
+val postHogProjectKey = configuredValue("POSTHOG_PROJECT_KEY")
+val postHogHost = configuredValue("POSTHOG_HOST")
+val crashReportsInDebug = configuredValue("CONCLAVE_CRASH_REPORTS_IN_DEBUG").lowercase() in setOf("yes", "true", "1")
 val releaseArtifactRequested = gradle.startParameter.taskNames.any { taskName ->
     val lower = taskName.substringAfterLast(":").lowercase()
     lower in setOf("assemble", "bundle", "build") ||
@@ -119,6 +122,9 @@ android {
         manifestPlaceholders["SFU_JOIN_URL"] = sfuJoinUrl
         manifestPlaceholders["CONCLAVE_DEBUG_VIEWER_PROFILE"] = "false"
         manifestPlaceholders["USES_CLEARTEXT_TRAFFIC"] = "true"
+        manifestPlaceholders["POSTHOG_PROJECT_KEY"] = postHogProjectKey
+        manifestPlaceholders["POSTHOG_HOST"] = postHogHost
+        manifestPlaceholders["CONCLAVE_CRASH_REPORTS_IN_DEBUG"] = "false"
 
     }
 
@@ -169,6 +175,7 @@ android {
         debug {
             isPseudoLocalesEnabled = true
             manifestPlaceholders["CONCLAVE_DEBUG_VIEWER_PROFILE"] = debugViewerProfile.toString()
+            manifestPlaceholders["CONCLAVE_CRASH_REPORTS_IN_DEBUG"] = crashReportsInDebug.toString()
         }
         release {
             signingConfig = signingConfigs.findByName("release")
