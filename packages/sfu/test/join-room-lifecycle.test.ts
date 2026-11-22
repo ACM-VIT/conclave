@@ -277,7 +277,8 @@ describe("concurrent room creation", () => {
   });
 
   it("spreads a burst across workers with unequal consumer counts", async () => {
-    const { promise: routersReady, resolve: finishRouters } = Promise.withResolvers<void>();
+    let finishRouters!: () => void;
+    const routersReady = new Promise<void>((resolve) => { finishRouters = resolve; });
     const workers = [1, 2].map((pid) => ({
       pid,
       closed: false,
