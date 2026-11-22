@@ -230,6 +230,15 @@ if [[ -d "$STATE_DIR" ]]; then
   for rel in "${links[@]}"; do
     excludes+=(--exclude="./${rel}")
   done
+  # Only files and directories go in: a restore makes no other links than the
+  # database chains recorded above, and refuses an archive with any. Special
+  # files and a restore's leftover staging dir stay out too.
+  excludes+=(--exclude='./.restore-*')
+  while IFS= read -r -d '' extra; do
+    printf '%s\n' "${links[@]}" | grep -qxF "${extra#./}" && continue
+    excludes+=(--exclude="${extra}")
+    log "Left out ${STATE_DIR}/${extra#./}: only files, directories and the database links are backed up"
+  done < <(cd "$STATE_DIR" && find . -mindepth 1 \( -type l -o \( ! -type f ! -type d \) \) -print0)
   tar -C "$STATE_DIR" "${excludes[@]}" -cf "${payload}/state-files.tar" .
 fi
 

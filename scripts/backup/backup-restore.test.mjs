@@ -1405,3 +1405,108 @@ test(
     }
   },
 );
+
+// Rewrites an archive with one more member in its other-files tar (a regular
+// file, a symlink or a fifo), checksums to match.
+const withExtraMember = async (root, archive, { name, type = "file", target = "" }, out) => {
+  const work = await mkdtemp(path.join(root, "tamper-"));
+  await run("bash", [
+    "-c",
+    'set -e; age --decrypt -i "$1" "$2" | tar -C "$3" -xzf -; ' +
+      'python3 -c \'import io, sys, tarfile\n' +
+      'tar_path, name, kind, target = sys.argv[1:5]\n' +
+      'member = tarfile.TarInfo(name)\n' +
+      'data = b"planted"\n' +
+      'if kind == "file": member.size = len(data)\n' +
+      'elif kind == "symlink": member.type, member.linkname = tarfile.SYMTYPE, target\n' +
+      'else: member.type = tarfile.FIFOTYPE\n' +
+      'with tarfile.open(tar_path, "a") as tar: tar.addfile(member, io.BytesIO(data) if kind == "file" else None)\' "$3/state-files.tar" "$4" "$5" "$6"; ' +
+      '(cd "$3" && rm SHA256SUMS && find . -type f | sort | xargs sha256sum > "$7" && mv "$7" SHA256SUMS); ' +
+      'tar -C "$3" -czf - . | age --encrypt -R "$8" -o "$9"',
+    "_",
+    path.join(root, "key.txt"),
+    archive,
+    work,
+    name,
+    type,
+    target,
+    path.join(root, "sums.tmp"),
+    path.join(root, "recipients.txt"),
+    out,
+  ]);
+  return out;
+};
+
+test(
+  "a crafted member that climbs through a link out of the state dir is refused before anything changes",
+  { skip: missing.length > 0 && `needs ${missing.join(", ")} on PATH` },
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+    try {
+      const { state, backup, latestArchive, restore } = await setUp(root);
+      withDatabase(state);
+      await backup("--local-only");
+      // alias -> outside/ssl, and outside/resolv.conf is a link the member
+      // alias/../resolv.conf would reach.
+      const outside = path.join(root, "outside");
+      await mkdir(path.join(outside, "ssl"), { recursive: true });
+      await writeFile(path.join(outside, "resolver"), "nameserver 127.0.0.53\n");
+      await symlink(path.join(outside, "resolver"), path.join(outside, "resolv.conf"));
+      await symlink(path.join(outside, "ssl"), path.join(state, "alias"));
+      const crafted = await withExtraMember(root, await latestArchive(), { name: "./alias/../resolv.conf" }, path.join(root, "local", "conclave-test-20260101T000000Z.tar.gz.age"));
+
+      await assert.rejects(restore("--file", crafted, "--yes"), /alias\/\.\.\/resolv\.conf is not a plain path inside the archive/);
+      assert.equal(await readlink(path.join(outside, "resolv.conf")), path.join(outside, "resolver"), "the outside link is untouched");
+      assert.equal(await readFile(path.join(outside, "resolver"), "utf8"), "nameserver 127.0.0.53\n");
+      assert.equal(await readlink(path.join(state, "alias")), path.join(outside, "ssl"));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "an archive whose other files include a link or a special file is refused whole",
+  { skip: missing.length > 0 && `needs ${missing.join(", ")} on PATH` },
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+    try {
+      const { state, backup, latestArchive, restore } = await setUp(root);
+      withDatabase(state);
+      await writeFile(path.join(state, "notes.json"), "{}");
+      await backup("--local-only");
+      const archive = await latestArchive();
+      const linked = await withExtraMember(root, archive, { name: "./shortcut", type: "symlink", target: "/etc" }, path.join(root, "linked.tar.gz.age"));
+      const fifo = await withExtraMember(root, archive, { name: "./pipe", type: "fifo" }, path.join(root, "fifo.tar.gz.age"));
+      await rm(state, { recursive: true });
+      await assert.rejects(restore("--file", linked, "--yes"), /shortcut is a link, and the only links a restore makes are the recorded database links/);
+      await assert.rejects(restore("--file", fifo, "--yes"), /pipe is not a file or directory/);
+      assert.equal(await readFile(path.join(state, "notes.json"), "utf8").catch(() => "absent"), "absent", "nothing was restored");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "a stray link or fifo in the state dir is left out of the archive, so it restores",
+  { skip: missing.length > 0 && `needs ${missing.join(", ")} on PATH` },
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+    try {
+      const { state, backup, latestArchive, restore } = await setUp(root);
+      withDatabase(state);
+      await mkdir(path.join(state, "data"));
+      await writeFile(path.join(state, "data", "notes.json"), "{}");
+      await symlink("data", path.join(state, "shortcut"));
+      await run("mkfifo", [path.join(state, "pipe")]);
+      await backup("--local-only");
+      await rm(state, { recursive: true });
+      await restore("--file", await latestArchive(), "--yes");
+      assert.equal(await readFile(path.join(state, "data", "notes.json"), "utf8"), "{}");
+      assert.equal(await readlink(path.join(state, "shortcut")).catch(() => "absent"), "absent");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);

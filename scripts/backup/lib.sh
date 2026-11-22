@@ -176,6 +176,10 @@ print(f"file\t{rel}")
 # - a recorded link's target is read as the SFU reads it: a container (or
 #   host) path to the state dir maps to it, and links on disk on the way are
 #   followed the same way. It must stay inside.
+# - every member of the other-files archive is a plain relative path (no
+#   absolute name, no "..", nothing that normalises to another name) naming a
+#   regular file or a directory: the only links a restore makes are the
+#   recorded database links. One bad member refuses the whole archive.
 # Prints why for each that would not, and fails.
 #   check_restore_targets STATE_DIR CONTAINER_DIR TAR_OR_EMPTY LINKS_OR_EMPTY DB_REL...
 check_restore_targets() {
@@ -238,37 +242,68 @@ if links_path:
         leads = mapped(target, os.path.dirname(clean(link) or ""))
         if leads is None or not reaches_inside(leads):
             problems.append(f"the recorded link {link} leads outside the state dir ({target})")
+def plain(name):
+    name = name[2:] if name.startswith("./") else name
+    parts = name.split("/")
+    if name == "." or not name:
+        return "."
+    if name.startswith("/") or ".." in parts or os.path.normpath(name) != name:
+        return None
+    return name
 if tar_path:
     with tarfile.open(tar_path) as tar:
         for member in tar.getmembers():
-            if member.isfile() and not written_inside(member.name):
-                problems.append(f"{member.name} would land outside the state dir")
-            elif member.isdir() and not written_inside(member.name, whole=True):
-                problems.append(f"{member.name}/ would land outside the state dir")
+            name = plain(member.name)
+            shown = member.name[2:] if member.name.startswith("./") else member.name
+            if name is None:
+                problems.append(f"{shown} is not a plain path inside the archive")
+            elif member.issym() or member.islnk():
+                problems.append(f"{name} is a link, and the only links a restore makes are the recorded database links")
+            elif not (member.isfile() or member.isdir()):
+                problems.append(f"{name} is not a file or directory")
+            elif name == ".":
+                continue
+            elif member.isfile() and not written_inside(name):
+                problems.append(f"{name} would land outside the state dir")
+            elif member.isdir() and not written_inside(name, whole=True):
+                problems.append(f"{name}/ would land outside the state dir")
+            elif member.isfile() and os.path.isdir(os.path.join(state, name)) and not os.path.islink(os.path.join(state, name)):
+                problems.append(f"{name} is a file in the archive but a directory in the state dir")
+            elif member.isdir() and os.path.lexists(os.path.join(state, name)) and not os.path.isdir(os.path.join(state, name)):
+                problems.append(f"{name} is a directory in the archive but not in the state dir")
 for problem in problems:
     print(problem, file=sys.stderr)
 sys.exit(1 if problems else 0)
 ' "$@"
 }
 
-# Restores the archive's other files into the state dir: regular files and
-# directories only, since the only links a restore recreates are the
-# recorded database chains, and nothing outside the state dir. A link where
-# the archive has a file is replaced by the file, never written through.
+# Restores the archive's other files into the state dir, already checked by
+# check_restore_targets. They are extracted with tarfile's data filter into a
+# fresh staging dir made here (inside the state dir, so on its filesystem),
+# checked there to be plain files and directories only, and only then moved
+# into place by rename. Nothing in the live state dir is unlinked, and no
+# path from the archive is used before it has been checked.
 extract_state_files() {
   python3 -c '
-import os, sys, tarfile
-state, tar_path = sys.argv[1:3]
-def files_only(member, path):
-    if not (member.isfile() or member.isdir()):
-        print(f"Skipped {member.name}: only files and directories are restored from the archive", file=sys.stderr)
-        return None
-    dest = os.path.join(path, member.name)
-    if member.isfile() and os.path.islink(dest):
-        os.unlink(dest)
-    return tarfile.data_filter(member, path)
-with tarfile.open(tar_path) as tar:
-    tar.extractall(state, filter=files_only)
+import os, shutil, sys, tarfile, tempfile
+state, tar_path = os.path.realpath(sys.argv[1]), sys.argv[2]
+staging = tempfile.mkdtemp(prefix=".restore-", dir=state)
+try:
+    with tarfile.open(tar_path) as tar:
+        tar.extractall(staging, filter="data")
+    for root, dirs, files in os.walk(staging):
+        for entry in dirs + files:
+            full = os.path.join(root, entry)
+            if os.path.islink(full) or not (os.path.isdir(full) or os.path.isfile(full)):
+                sys.exit(f"{os.path.relpath(full, staging)} came out of the archive as neither a file nor a directory; nothing was moved in")
+    for root, dirs, files in os.walk(staging):
+        rel = os.path.relpath(root, staging)
+        target = state if rel == "." else os.path.join(state, rel)
+        os.makedirs(target, exist_ok=True)
+        for name in files:
+            os.replace(os.path.join(root, name), os.path.join(target, name))
+finally:
+    shutil.rmtree(staging, ignore_errors=True)
 ' "$@"
 }
 

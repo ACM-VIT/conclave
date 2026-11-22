@@ -179,8 +179,14 @@ To apply it:
    links it recreates are the recorded database chains; their targets are
    read as the SFU reads them, with the container's path
    (`/var/lib/conclave/recordings`) mapped to the state dir, and must stay
-   inside. So a populated dir restores the same as an empty one. Other links
-   in the archive are skipped. The
+   inside. So a populated dir restores the same as an empty one. The
+   archive's other files must all be plain relative paths (no absolute name,
+   no `..`) naming regular files or directories; one link, special file or
+   crafted path refuses the whole archive before anything changes. They are
+   extracted into a fresh staging dir inside the state dir, checked there,
+   and moved in by rename; nothing in the live dir is unlinked. A backup
+   leaves out any link other than the database chains, and any special
+   file, and logs each one. The
    current databases are kept as `*.pre-restore-<stamp>`. The Redis keys
    matching `conclave:sfu:persistence*` end up exactly as in the backup: those
    it has are restored, and those it lacks are deleted, so a meeting created
