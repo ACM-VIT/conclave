@@ -8,10 +8,13 @@ import type { Consumer } from "../src/app/lib/types";
 type Options = Parameters<typeof useAdaptiveConsumerPreferences>[0];
 type Refs = Options["refs"];
 type Socket = NonNullable<Refs["socketRef"]["current"]>;
-type Preference = { consumerId: string; preferredLayers?: { spatialLayer: number } };
+type Preference = {
+  consumerId: string;
+  preferredLayers?: { spatialLayer: number; temporalLayer?: number };
+};
 type Ack = (result: { success: true; paused: boolean; producerPaused: boolean }) => void;
 
-it("sends the latest tile size when an older request settles before the next poll", async () => {
+const createPreferenceRig = (type: "webcam" | "screen") => {
   vi.useFakeTimers();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const requests: { preference: Preference; ack: Ack }[] = [];
@@ -24,14 +27,14 @@ it("sends the latest tile size when an older request settles before the next pol
   const refs: Refs = {
     socketRef: { current: socket },
     consumersRef: {
-      current: new Map([["camera", {
+      current: new Map([["video", {
         id: "consumer",
         closed: false,
         rtpParameters: { encodings: [{ scalabilityMode: "L3T3" }] },
       } as Consumer]]),
     },
     producerMapRef: {
-      current: new Map([["camera", { userId: "peer", kind: "video", type: "webcam" }]]),
+      current: new Map([["video", { userId: "peer", kind: "video", type }]]),
     },
     consumerTelemetryRef: { current: new Map() },
     adaptivelyPausedConsumerProducerIdsRef: { current: new Set() },
@@ -46,16 +49,18 @@ it("sends the latest tile size when an older request settles before the next pol
     offsetWidth: { get: () => height * 16 / 9 },
   });
   document.body.append(tile);
-  vi.stubGlobal("__conclaveMeetRoomTilingDebug", {
-    current: { visibleRemoteIds: ["peer"], orderedRemoteIds: ["peer"], signature: "120" },
-  });
+  if (type === "webcam") {
+    vi.stubGlobal("__conclaveMeetRoomTilingDebug", {
+      current: { visibleRemoteIds: ["peer"], orderedRemoteIds: ["peer"], signature: "120" },
+    });
+  }
 
-  function Harness() {
+  function Harness({ emergencyMode }: { emergencyMode: boolean }) {
     useAdaptiveConsumerPreferences({
       refs,
       enabled: true,
       connectionQuality: "good",
-      emergencyMode: false,
+      emergencyMode,
       receiveContinuityRisk: false,
       availableIncomingBitrateBps: 10_000_000,
       activeSpeakerId: null,
@@ -72,9 +77,28 @@ it("sends the latest tile size when an older request settles before the next pol
   const acknowledge = (index: number) =>
     requests[index].ack({ success: true, paused: false, producerPaused: false });
 
+  return {
+    requests,
+    resize,
+    acknowledge,
+    async render(emergencyMode = false) {
+      await act(async () => root.render(<Harness emergencyMode={emergencyMode} />));
+      await vi.advanceTimersByTimeAsync(10);
+    },
+    async dispose() {
+      await act(async () => root.unmount());
+      tile.remove();
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    },
+  };
+};
+
+it("sends the latest tile size when an older request settles before the next poll", async () => {
+  const rig = createPreferenceRig("webcam");
+  const { requests, resize, acknowledge } = rig;
   try {
-    await act(async () => root.render(<Harness />));
-    await vi.advanceTimersByTimeAsync(10);
+    await rig.render();
     expect(requests[0].preference.preferredLayers?.spatialLayer).toBe(0);
     acknowledge(0);
 
@@ -90,9 +114,28 @@ it("sends the latest tile size when an older request settles before the next pol
     expect(requests).toHaveLength(3);
     expect(requests[2].preference.preferredLayers?.spatialLayer).toBe(0);
   } finally {
-    await act(async () => root.unmount());
-    tile.remove();
-    vi.unstubAllGlobals();
-    vi.useRealTimers();
+    await rig.dispose();
+  }
+});
+
+it("restores screen share frame rate when receive settings recover before the downgrade ack", async () => {
+  const rig = createPreferenceRig("screen");
+  const { requests, acknowledge } = rig;
+  try {
+    await rig.render();
+    expect(requests[0].preference.preferredLayers?.temporalLayer).toBe(2);
+    acknowledge(0);
+
+    await rig.render(true);
+    expect(requests[1].preference.preferredLayers?.temporalLayer).toBe(1);
+    await rig.render();
+    expect(requests).toHaveLength(2);
+
+    acknowledge(1);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(requests).toHaveLength(3);
+    expect(requests[2].preference.preferredLayers?.temporalLayer).toBe(2);
+  } finally {
+    await rig.dispose();
   }
 });

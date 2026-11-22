@@ -1110,6 +1110,7 @@ export function useAdaptiveConsumerPreferences({
   }>());
   const scheduledPreferenceTimeoutsRef = useRef<Set<number>>(new Set());
   const queuedPreferenceTimeoutRef = useRef<number | null>(null);
+  const applyLatestPreferencesRef = useRef<(() => void) | null>(null);
   const rateLimitRetryTimeoutRef = useRef<number | null>(null);
   const preferenceDebugRef = useRef<
     Map<string, AdaptiveConsumerPreferenceDebugEntry>
@@ -1264,6 +1265,9 @@ export function useAdaptiveConsumerPreferences({
       }
     }
 
+    for (const producerId of inFlightPreferencesRef.current.keys()) {
+      lastAppliedRef.current.delete(producerId);
+    }
     inFlightPreferencesRef.current.clear();
   }, []);
 
@@ -1758,7 +1762,14 @@ export function useAdaptiveConsumerPreferences({
         unsupportedLayers: shouldSuppressPreferredLayers,
       };
       const signature = getPreferenceSignature(consumer.id, preferences);
-      const inFlight = inFlightPreferencesRef.current.get(producerId);
+      const trackedRequest = inFlightPreferencesRef.current.get(producerId);
+      const inFlight = trackedRequest?.update.consumer === consumer
+        ? trackedRequest
+        : undefined;
+      if (trackedRequest && !inFlight) {
+        inFlightPreferencesRef.current.delete(producerId);
+        lastAppliedRef.current.delete(producerId);
+      }
       if (inFlight) inFlight.reapply = inFlight.update.signature !== signature;
       if (
         inFlight ||
@@ -1871,6 +1882,7 @@ export function useAdaptiveConsumerPreferences({
     }
 
     for (const update of updatesToSend) {
+      lastAppliedRef.current.delete(update.producerId);
       inFlightPreferencesRef.current.set(update.producerId, { update, reapply: false });
     }
 
@@ -1886,7 +1898,9 @@ export function useAdaptiveConsumerPreferences({
 
       queuedPreferenceTimeoutRef.current = window.setTimeout(() => {
         queuedPreferenceTimeoutRef.current = null;
-        if (rateLimitRetryTimeoutRef.current === null) applyPreferences();
+        if (rateLimitRetryTimeoutRef.current === null) {
+          applyLatestPreferencesRef.current?.();
+        }
       }, 0);
     };
 
@@ -1900,7 +1914,7 @@ export function useAdaptiveConsumerPreferences({
 
       rateLimitRetryTimeoutRef.current = window.setTimeout(() => {
         rateLimitRetryTimeoutRef.current = null;
-        applyPreferences();
+        applyLatestPreferencesRef.current?.();
       }, RATE_LIMIT_RETRY_DELAY_MS);
     };
 
@@ -2355,6 +2369,7 @@ export function useAdaptiveConsumerPreferences({
   );
 
   useEffect(() => {
+    applyLatestPreferencesRef.current = applyPreferences;
     if (!enabled) {
       clearScheduledPreferenceWork();
       resetLiveVideoJitterBufferTargets();
@@ -2377,6 +2392,18 @@ export function useAdaptiveConsumerPreferences({
     }
 
     applyPreferences();
+  }, [
+    applyPreferences,
+    clearScheduledPreferenceWork,
+    enabled,
+    refs.adaptivelyPausedConsumerProducerIdsRef,
+    resetLiveVideoJitterBufferTargets,
+    writeDebugSnapshot,
+  ]);
+
+  useEffect(() => {
+    if (!enabled) return;
+
     lastRoomTilingEventSignatureRef.current =
       readRoomTilingCurrentSignature();
     const handleRoomTilingChange = (event: Event) => {
@@ -2388,10 +2415,12 @@ export function useAdaptiveConsumerPreferences({
         return;
       }
       lastRoomTilingEventSignatureRef.current = signature;
-      applyPreferences();
+      applyLatestPreferencesRef.current?.();
     };
     window.addEventListener("conclave:meet-room-tiling", handleRoomTilingChange);
-    const interval = window.setInterval(applyPreferences, APPLY_INTERVAL_MS);
+    const interval = window.setInterval(() => {
+      applyLatestPreferencesRef.current?.();
+    }, APPLY_INTERVAL_MS);
     return () => {
       window.clearInterval(interval);
       window.removeEventListener(
@@ -2400,12 +2429,5 @@ export function useAdaptiveConsumerPreferences({
       );
       clearScheduledPreferenceWork();
     };
-  }, [
-    applyPreferences,
-    clearScheduledPreferenceWork,
-    enabled,
-    refs.adaptivelyPausedConsumerProducerIdsRef,
-    resetLiveVideoJitterBufferTargets,
-    writeDebugSnapshot,
-  ]);
+  }, [clearScheduledPreferenceWork, enabled]);
 }
