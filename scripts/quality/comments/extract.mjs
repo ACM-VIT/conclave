@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -88,7 +88,7 @@ const scanCLike = (text, language) => {
   const swiftBareRegex = () => {
     const start = i;
     const next = text[i + 1];
-    if (next === undefined || /[\s/*=]/.test(next)) return false;
+    if (next === undefined || /[\s/*]/.test(next)) return false;
     const lineStart = text.lastIndexOf("\n", i - 1) + 1;
     if (!BARE_REGEX_PRECEDER.test(text.slice(lineStart, i))) return false;
     i += 1;
@@ -115,7 +115,7 @@ const scanCLike = (text, language) => {
     i += raw ? 3 : 1;
     while (i < text.length) {
       if (!raw && text[i] === "\\") i += 2;
-      else if (text.startsWith(interpolation, i) && text[i - 1] !== "$") {
+      else if (text.startsWith(interpolation, i)) {
         i += interpolation.length;
         code("}");
       } else if (raw && text.startsWith('"""', i)) {
@@ -157,6 +157,11 @@ const scanCLike = (text, language) => {
       else if (language === "swift" && (c === '"' || (c === "#" && hashesThen('"')))) swiftString();
       else if (language === "swift" && c === "#" && hashesThen("/")) swiftExtendedRegex();
       else if (language === "swift" && c === "/" && swiftBareRegex()) continue;
+      else if (c === "`") {
+        const close = text.indexOf("`", i + 1);
+        const lineEnd = text.indexOf("\n", i + 1);
+        i = close !== -1 && (lineEnd === -1 || close < lineEnd) ? close + 1 : i + 1;
+      }
       else if (language === "kotlin" && c === '"') kotlinString();
       else if (language === "kotlin" && c === "'") kotlinChar();
       else {
@@ -181,10 +186,12 @@ const scanCss = (text) => {
   const comments = [];
   let i = 0;
   while (i < text.length) {
-    if (text[i] === '"' || text[i] === "'") i = skipQuoted(text, i, text[i], true);
+    if (text[i] === "\\") i += 2;
+    else if (text[i] === '"' || text[i] === "'") i = skipQuoted(text, i, text[i], true);
     else if (/^url\(\s*[^\s"')]/i.test(text.slice(i, i + 64)) && !/[\w-]/.test(text[i - 1] ?? "")) {
-      const close = text.indexOf(")", i);
-      i = close === -1 ? text.length : close + 1;
+      i += 4;
+      while (i < text.length && text[i] !== ")") i += text[i] === "\\" ? 2 : 1;
+      i += 1;
     } else if (text.startsWith("/*", i)) {
       const end = text.indexOf("*/", i + 2);
       const stop = end === -1 ? text.length : end + 2;
@@ -230,12 +237,37 @@ const scanShell = (text) => {
     i += 1;
     while (i < text.length && text[i] !== '"') {
       if (text[i] === "\\") i += 2;
-      else if (text.startsWith("$(", i)) {
+      else if (text.startsWith("$((", i)) {
+        i += 1;
+        arithmetic();
+      } else if (text.startsWith("$(", i)) {
         i += 2;
         code(")");
       } else i += 1;
     }
     i += 1;
+  };
+
+  const heredocWord = () => {
+    let word = "";
+    let quoted = false;
+    while (i < text.length && !/[\s;&|<>()]/.test(text[i])) {
+      if (text[i] === "\\") {
+        quoted = true;
+        word += text[i + 1] ?? "";
+        i += 2;
+      } else if (text[i] === "'" || text[i] === '"') {
+        quoted = true;
+        const close = text.indexOf(text[i], i + 1);
+        const stop = close === -1 ? text.length : close;
+        word += text.slice(i + 1, stop);
+        i = stop + 1;
+      } else {
+        word += text[i];
+        i += 1;
+      }
+    }
+    return { word, quoted };
   };
 
   function code(closer) {
@@ -246,8 +278,10 @@ const scanShell = (text) => {
         i += 1;
         return;
       }
-      if (c === "\\") i += 2;
-      else if (c === "'") i = skipQuoted(text, i, "'", false);
+      if (c === "\\") {
+        i += 2;
+        if (text[i] === "#") i += 1;
+      } else if (c === "'") i = skipQuoted(text, i, "'", false);
       else if (c === "$" && text[i + 1] === "'") i = skipQuoted(text, i + 1, "'", true);
       else if (c === '"') doubleQuoted();
       else if (text.startsWith("$((", i)) {
@@ -263,11 +297,11 @@ const scanShell = (text) => {
         comments.push([start, i]);
       } else if (text.startsWith("<<<", i)) i += 3;
       else if (text.startsWith("<<", i)) {
-        const match = /^<<(-?)[ \t]*(?:\\([\w.-]+)|'([^'\n]+)'|"([^"\n]+)"|([\w.-]+))/.exec(text.slice(i, i + 256));
-        if (match) {
-          heredocs.push({ delimiter: match[2] ?? match[3] ?? match[4] ?? match[5], stripTabs: match[1] === "-" });
-          i += match[0].length;
-        } else i += 2;
+        const stripTabs = text[i + 2] === "-";
+        i += stripTabs ? 3 : 2;
+        while (text[i] === " " || text[i] === "\t") i += 1;
+        const { word } = heredocWord();
+        if (word !== "") heredocs.push({ delimiter: word, stripTabs });
       } else if (c === "\n") {
         i += 1;
         skipHeredocBodies();
@@ -283,7 +317,51 @@ const scanShell = (text) => {
   return comments;
 };
 
-const scanPython = (text) => {
+const PYTHON_TOKENIZE = `
+import io, json, sys, tokenize
+text = sys.stdin.read()
+lines = io.StringIO(text).readlines()
+starts = [0]
+for line in lines:
+    starts.append(starts[-1] + len(line.encode("utf-16-le")) // 2)
+def offset(row, col):
+    if row > len(lines):
+        return starts[-1]
+    return starts[row - 1] + len(lines[row - 1][:col].encode("utf-16-le")) // 2
+try:
+    found = [[offset(*t.start), offset(*t.end)] for t in tokenize.generate_tokens(io.StringIO(text).readline) if t.type == tokenize.COMMENT]
+except (tokenize.TokenError, SyntaxError) as error:
+    print(json.dumps({"error": str(error)}))
+else:
+    print(json.dumps({"comments": found}))
+`;
+
+let pythonFallbackReason;
+
+export const pythonScannerFallback = () => pythonFallbackReason;
+
+const tokenizePython = (text, file) => {
+  const result = spawnSync("python3", ["-I", "-c", PYTHON_TOKENIZE], { input: text, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  if (result.error || result.status !== 0) {
+    pythonFallbackReason = result.error?.code === "ENOENT" ? "python3 is not installed" : `python3 tokenize failed on ${file}`;
+    return undefined;
+  }
+  const parsed = JSON.parse(result.stdout);
+  if (parsed.error) {
+    pythonFallbackReason = `python3 tokenize could not read ${file}: ${parsed.error}`;
+    return undefined;
+  }
+  return parsed.comments;
+};
+
+const scanPython = (text, file) => {
+  const tokenized = tokenizePython(text, file);
+  if (tokenized) return tokenized;
+  process.emitWarning(`comment extractor: ${pythonFallbackReason}; using the built-in Python scanner.`);
+  return scanPythonByHand(text);
+};
+
+const scanPythonByHand = (text) => {
   const comments = [];
   let i = 0;
 
@@ -363,7 +441,7 @@ export const scanComments = (text, file) => {
   if (language === "swift" || language === "kotlin") return scanCLike(text, language);
   if (language === "css") return scanCss(text);
   if (language === "shell") return scanShell(text);
-  if (language === "python") return scanPython(text);
+  if (language === "python") return scanPython(text, file);
   throw new Error(`No comment scanner for ${file}`);
 };
 

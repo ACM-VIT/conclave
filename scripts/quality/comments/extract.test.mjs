@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
-import { extractComments } from "./extract.mjs";
+import { extractComments, pythonScannerFallback } from "./extract.mjs";
 
 const texts = (source, file) => extractComments(source, file).map((comment) => comment.text);
 const disallowed = (source, file) =>
@@ -378,4 +379,49 @@ test("a license header needs a real marker and covers only the top block", () =>
   for (const marker of ["// SPDX-License-Identifier: MIT", "// © 2024 Example", "// Licensed under the Apache License, Version 2.0"]) {
     assert.deepEqual(extractComments(`${marker}\nexport {};\n`, "c.ts").map((c) => c.allowed), ["license-header"], marker);
   }
+});
+
+test("escapes in CSS, shell and Kotlin never open a comment", () => {
+  assert.deepEqual(texts("a { background: url(a\\)b/*literal*/x); }\n/* real */\n", "a.css"), ["/* real */"]);
+  assert.deepEqual(texts('.a\\"b { color: red; }\n/* real */\n.c { content: "x"; }\n', "b.css"), ["/* real */"]);
+  assert.deepEqual(texts("echo word\\ #suffix\necho one\\ #literal # real\n", "a.sh"), ["# real"]);
+  assert.deepEqual(texts('val `a"b` = 1 // real\nval c = "x"\n', "a.kt"), ["// real"]);
+  assert.deepEqual(texts('val d = $$"""$$${ 1 /* real */ }"""\n', "b.kt"), ["/* real */"]);
+  assert.deepEqual(texts('let r = /=a"b/ // real\n', "R.swift"), ["// real"]);
+});
+
+test("Python comments come from tokenize, so format specs stay code", () => {
+  assert.equal(pythonScannerFallback(), undefined);
+  assert.deepEqual(texts('print(f"{1:=#6x}")  # real\nvalue = f"""{\n    total  # inside\n}"""\n', "a.py"), ["# real", "# inside"]);
+});
+
+test("shell fixtures that bash runs agree with the extractor", (t) => {
+  const bash = spawnSync("bash", ["--version"]);
+  if (bash.error) {
+    t.skip("bash is not installed");
+    return;
+  }
+  const source = [
+    'echo "$((1 << 2))"',
+    "# after quoted arithmetic",
+    'cat <<E"O"F',
+    "# heredoc body, not a comment",
+    "EOF",
+    "echo word\\ #suffix",
+    "echo one\\ #literal # real",
+    "cat <<< here",
+    "x=$((1 << 4)); echo \"$x\"",
+    "# last",
+  ].join("\n");
+  const run = spawnSync("bash", ["-c", source], { encoding: "utf8" });
+  assert.equal(run.status, 0, run.stderr);
+  assert.deepEqual(run.stdout.split("\n").filter(Boolean), [
+    "4",
+    "# heredoc body, not a comment",
+    "word #suffix",
+    "one #literal",
+    "here",
+    "16",
+  ]);
+  assert.deepEqual(texts(source, "fixture.sh"), ["# after quoted arithmetic", "# real", "# last"]);
 });
