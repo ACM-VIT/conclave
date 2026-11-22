@@ -114,16 +114,12 @@ export function WatchControls({
           onClick={onGoLive}
           disabled={readOnly || isAtLiveEdge}
           aria-label={isAtLiveEdge ? "At live edge" : "Go to live edge"}
-          className={`inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-[10px] font-semibold uppercase tracking-[0.08em] transition-colors ${
+          className={`inline-flex h-7 shrink-0 items-center rounded-full border px-2.5 text-[11px] font-medium transition-colors ${
             isAtLiveEdge
               ? "cursor-default border-[#F95F4A]/35 bg-[#F95F4A]/10 text-[#ff8a78]"
               : "cursor-pointer border-white/10 text-[#e4e4e7] hover:border-[#F95F4A]/35 hover:bg-[#F95F4A]/10 hover:text-[#ff8a78] disabled:cursor-not-allowed disabled:opacity-45"
           }`}
         >
-          <span
-            className="h-1.5 w-1.5 rounded-full"
-            style={{ backgroundColor: "#F95F4A" }}
-          />
           {isAtLiveEdge ? "Live" : "Go live"}
         </button>
       ) : (
@@ -153,7 +149,7 @@ export function WatchControls({
             </svg>
           )}
         </button>
-        <div className="hidden w-0 overflow-hidden transition-all duration-200 group-focus-within/vol:w-16 group-hover/vol:w-16 sm:block">
+        <div className="hidden w-0 overflow-hidden transition-[width] duration-[120ms] group-focus-within/vol:w-16 group-hover/vol:w-16 sm:block">
           <Slider
             className="w-16 pl-1 pr-1.5"
             value={muted ? 0 : volume}
@@ -426,11 +422,11 @@ function Slider({
   return (
     <div className={`group relative flex h-4 items-center ${className ?? ""}`}>
       <div
-        className="absolute left-0 right-0 h-[3px] rounded-full transition-all group-hover:h-1"
+        className="absolute left-0 right-0 h-[3px] rounded-full transition-[height] duration-[120ms] group-hover:h-1"
         style={{ backgroundColor: "#33333b" }}
       />
       <div
-        className="absolute left-0 h-[3px] rounded-full transition-all group-hover:h-1"
+        className="absolute left-0 h-[3px] rounded-full transition-[height] duration-[120ms] group-hover:h-1"
         style={{ width: `${pct}%`, backgroundColor: fillColor }}
       />
       <div
