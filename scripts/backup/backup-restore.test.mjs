@@ -1287,3 +1287,42 @@ test(
     }
   },
 );
+
+// Resolves once at least count processes hold path open: the holder, and
+// the run that now waits on it.
+const openedBy = async (path_, count) => {
+  for (let i = 0; i < 400; i += 1) {
+    const pids = await run("lsof", ["-t", path_]).then((r) => r.stdout.split("\n").filter(Boolean), () => []);
+    if (pids.length >= count) return;
+    await new Promise((done) => setTimeout(done, 50));
+  }
+  throw new Error(`${path_} was never opened by ${count} processes`);
+};
+
+test(
+  "a backup that waited on a deploy lock file replaced meanwhile does not run on the old one",
+  { skip: (missing.length > 0 && `needs ${missing.join(", ")} on PATH`) || (!hasTool("lsof") && "needs lsof on PATH") },
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+    let deploy;
+    try {
+      const { state, local, env, backup } = await setUp(root, ["BACKUP_DEPLOY_LOCK_WAIT_SECONDS=20"]);
+      withDatabase(state);
+      const lock = path.join(root, "deploy.lock");
+      deploy = spawn("bash", ["-c", 'exec 9>>"$1"; flock -n 9 && echo locked && exec sleep 30', "_", lock], { env });
+      await new Promise((done) => deploy.stdout.once("data", done));
+      const running = backup("--local-only");
+      running.catch(() => undefined);
+      // While the backup waits, the lock file is replaced, then the deploy ends.
+      await openedBy(lock, 2);
+      await rm(lock);
+      await writeFile(lock, "");
+      deploy.kill();
+      await assert.rejects(running, /deploy\.lock was replaced while this run waited for it/);
+      assert.deepEqual(await archives(local), []);
+    } finally {
+      deploy?.kill();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);

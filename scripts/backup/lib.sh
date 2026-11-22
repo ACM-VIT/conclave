@@ -329,6 +329,18 @@ take_backup_lock() {
   mkdir -p "$BACKUP_LOCAL_DIR" || die "cannot create ${BACKUP_LOCAL_DIR} for the backup lock; set BACKUP_LOCAL_DIR"
   exec 8>>"${BACKUP_LOCAL_DIR}/.backup.lock"
   flock -n 8 || die "another backup or restore is running on this host (${BACKUP_LOCAL_DIR}/.backup.lock)"
+  locked_file_is 8 "${BACKUP_LOCAL_DIR}/.backup.lock"
+}
+
+# A lock counts only on the file its path names now: the file can be
+# replaced while a run waits, and the old one then guards nothing. Locks are
+# always opened by path here, never inherited or taken on a flag's word, and
+# checked by device and inode once held.
+locked_file_is() {
+  python3 -c 'import os, sys
+held, named = os.fstat(int(sys.argv[1])), os.stat(sys.argv[2])
+sys.exit(0 if (held.st_dev, held.st_ino) == (named.st_dev, named.st_ino) else 1)' "$1" "$2" ||
+    die "${2} was replaced while this run waited for it; rerun it"
 }
 
 # No deploy may start or replace an SFU while a backup copies or a restore
@@ -344,9 +356,11 @@ take_sfu_host_lock() {
   fi
   [[ -e "$lock" ]] || (umask 0111 && : >> "$lock") || die "cannot create the host deploy lock ${lock}"
   exec 7<"$lock" || die "cannot open the host deploy lock ${lock}"
-  flock -n 7 && return 0
-  log "An SFU deploy holds ${lock}; waiting up to ${wait}s for it"
-  flock -w "$wait" 7 || die "an SFU deploy held ${lock} for ${wait}s, so nothing was copied or replaced; rerun once the deploy ends"
+  if ! flock -n 7; then
+    log "An SFU deploy holds ${lock}; waiting up to ${wait}s for it"
+    flock -w "$wait" 7 || die "an SFU deploy held ${lock} for ${wait}s, so nothing was copied or replaced; rerun once the deploy ends"
+  fi
+  locked_file_is 7 "$lock"
 }
 
 # Prints one string or integer field of a JSON object read from stdin, or
