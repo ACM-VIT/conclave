@@ -155,25 +155,29 @@ export const registerScheduledWebinarRoutes = (
 
   const persistChanged = (webinar: ScheduledWebinar): void => {
     if (state.scheduledWebinarPersistence) {
-      persistScheduledWebinarChanges(
-        state.scheduledWebinars,
-        state.scheduledWebinarPersistence,
-        [webinar],
-      ).catch((error) => {
+      try {
+        persistScheduledWebinarChanges(
+          state.scheduledWebinars,
+          state.scheduledWebinarPersistence,
+          [webinar],
+        );
+      } catch (error) {
         Logger.warn("Failed to persist scheduled webinars", error);
-      });
+      }
     }
   };
 
   const persistDeleted = (id: string): void => {
     if (state.scheduledWebinarPersistence) {
-      persistScheduledWebinarDeletes(
-        state.scheduledWebinars,
-        state.scheduledWebinarPersistence,
-        [id],
-      ).catch((error) => {
+      try {
+        persistScheduledWebinarDeletes(
+          state.scheduledWebinars,
+          state.scheduledWebinarPersistence,
+          [id],
+        );
+      } catch (error) {
         Logger.warn("Failed to delete scheduled webinar", error);
-      });
+      }
     }
   };
 

@@ -292,11 +292,12 @@ if [[ "$PREFLIGHT_ONLY" == "true" ]]; then
 fi
 
 # One deploy at a time on this host: two runs against different instances can
-# each find the other serving and drain both. The nightly backup holds the
-# same lock while it copies, so no deploy starts or replaces an SFU under it;
-# a deploy waits for it a while (SFU_DEPLOY_LOCK_WAIT_SECONDS). The lock lives
-# in /run/lock, which the backup's systemd unit (with its private /tmp) sees
-# too. The kernel holds the flock on fd 9 until this process, and the re-exec
+# each find the other serving and drain both. A host job that must not
+# overlap a deploy, such as the nightly backup, can hold the same lock, so no
+# deploy starts or replaces an SFU under it; a deploy waits for it a while
+# (SFU_DEPLOY_LOCK_WAIT_SECONDS). The lock lives in /run/lock, which a systemd
+# unit with a private /tmp sees too. The kernel holds the flock on fd 9 until
+# this process, and the re-exec
 # below that inherits the fd, exit, however they exit.
 if [[ -d /run/lock ]]; then
   DEPLOY_LOCK="${SFU_DEPLOY_LOCK_FILE:-/run/lock/conclave-sfu-deploy.lock}"

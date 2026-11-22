@@ -1342,7 +1342,7 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
     }
   }
 
-  save(snapshot: SchedulingSnapshot): Promise<void> {
+  save(snapshot: SchedulingSnapshot): void {
     void this.fallback.save(snapshot);
     const profileRecords = snapshot.profiles.map((profile) => ({
       id: profile.id,
@@ -1390,7 +1390,7 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
     );
     this.knownCalendarIds = new Set(calendarRecords.map((record) => record.id));
 
-    return this.queueWrite("save snapshot", async () => {
+    this.queueWrite("save snapshot", async () => {
       await Promise.all([
         this.upsertRecords(this.profilesKey, "profile", profileRecords),
         this.upsertRecords(
@@ -1434,7 +1434,8 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
         legacySnapshot.calendars.length;
       if (legacyTotal > 0) {
         this.rememberKnownIds(legacySnapshot);
-        await this.save(legacySnapshot);
+        this.save(legacySnapshot);
+        await this.flush();
         Logger.info(
           `Migrated ${legacyTotal} legacy scheduling record(s) into Redis hashes`,
         );
@@ -1449,7 +1450,8 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
         fallbackSnapshot.calendars.length;
       if (total > 0) {
         this.rememberKnownIds(fallbackSnapshot);
-        await this.save(fallbackSnapshot);
+        this.save(fallbackSnapshot);
+        await this.flush();
         Logger.info(`Migrated ${total} scheduling record(s) into Redis persistence`);
       }
       return fallbackSnapshot;
@@ -1474,18 +1476,17 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
     await this.client.quit();
   }
 
-  // Writes go to Redis one after another. Each caller gets its own write's
-  // result or error; the queue moves on past a failed write, so flush() only
-  // waits and never hands one write's error to another caller.
-  private queueWrite(label: string, write: () => Promise<void>): Promise<void> {
-    const writePromise = this.pendingWrite.then(async () => {
-      await this.start();
-      await write();
-    });
+  private queueWrite(label: string, write: () => Promise<void>): void {
+    const writePromise = this.pendingWrite
+      .catch(() => undefined)
+      .then(async () => {
+        await this.start();
+        await write();
+      });
     this.pendingWrite = writePromise.catch((error) => {
       Logger.error(`Failed to persist scheduling records to Redis (${label})`, error);
+      throw error;
     });
-    return writePromise;
   }
 
   private async upsertRecords<T>(

@@ -5,11 +5,6 @@ import { Logger } from "../utilities/loggers.js";
 import { forceCloseRoom } from "./rooms.js";
 import type { SfuState } from "./state.js";
 import {
-  fenceScheduledMeetingPersistence,
-  fenceScheduledWebinarPersistence,
-  fenceSchedulingPersistence,
-} from "./persistenceFence.js";
-import {
   createScheduledWebinarPersistence,
   loadPersistedSchedules,
   type ScheduledWebinarPersistence,
@@ -112,7 +107,7 @@ export const initScheduledWebinars = (
   state: SfuState,
   persistence: ScheduledWebinarPersistence = createScheduledWebinarPersistence(),
 ): void => {
-  state.scheduledWebinarPersistence = fenceScheduledWebinarPersistence(persistence, state.persistenceFence);
+  state.scheduledWebinarPersistence = persistence;
   const loaded = loadPersistedSchedules(state.scheduledWebinars, persistence);
   if (loaded > 0) {
     Logger.info(`Restored ${loaded} scheduled webinar(s) from persistence`);
@@ -123,8 +118,8 @@ export const initScheduledMeetings = (
   state: SfuState,
   persistence: ScheduledMeetingPersistence = createScheduledMeetingPersistence(),
 ): Promise<void> => {
-  state.scheduledMeetingPersistence = fenceScheduledMeetingPersistence(persistence, state.persistenceFence);
-  return loadPersistedMeetings(state.scheduledMeetings, state.scheduledMeetingPersistence).then((loaded) => {
+  state.scheduledMeetingPersistence = persistence;
+  return loadPersistedMeetings(state.scheduledMeetings, persistence).then((loaded) => {
     if (loaded > 0) {
       Logger.info(`Restored ${loaded} scheduled meeting(s) from persistence`);
     }
@@ -135,8 +130,8 @@ export const initScheduling = (
   state: SfuState,
   persistence: SchedulingPersistence = createSchedulingPersistence(),
 ): Promise<void> => {
-  state.schedulingPersistence = fenceSchedulingPersistence(persistence, state.persistenceFence);
-  return loadPersistedScheduling(state.scheduling, state.schedulingPersistence).then((loaded) => {
+  state.schedulingPersistence = persistence;
+  return loadPersistedScheduling(state.scheduling, persistence).then((loaded) => {
     if (loaded > 0) {
       Logger.info(`Restored ${loaded} scheduling record(s) from persistence`);
     }

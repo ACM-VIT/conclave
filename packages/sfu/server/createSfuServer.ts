@@ -155,7 +155,7 @@ export const createSfuServer = (
       clearInterval(audioConsumerHealTimer);
       audioConsumerHealTimer = null;
     }
-    await state.scheduledWebinarPersistence?.close?.();
+    state.scheduledWebinarPersistence?.close?.();
     state.scheduledWebinarPersistence = null;
     await state.scheduledMeetingPersistence?.close?.();
     state.scheduledMeetingPersistence = null;
