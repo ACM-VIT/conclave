@@ -357,6 +357,14 @@ Write-Host "Running fail-closed SFU deployment preflight..."
 if ($LASTEXITCODE -ne 0) {
   Exit-WithError "SFU deployment preflight failed"
 }
+if ($deployBrowserLocal) {
+  # The browser service deploys last, after both SFUs changed; refuse its
+  # configuration now rather than after the SFU swap.
+  & (Join-Path $rootDir "scripts/deploy-browser-service.ps1") --check-config
+  if ($LASTEXITCODE -ne 0) {
+    Exit-WithError "Browser service configuration is invalid."
+  }
+}
 if ($preflightOnly) {
   Write-Host "Preflight-only run complete; no code, container, drain, or DNS changes were made."
   exit 0

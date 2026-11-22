@@ -274,6 +274,11 @@ run_deploy_preflight() {
 
 echo "Running fail-closed SFU deployment preflight..."
 run_deploy_preflight
+if [[ "$DEPLOY_BROWSER_LOCAL" == "true" ]]; then
+  # The browser service deploys last, after both SFUs changed; refuse its
+  # configuration now rather than after the SFU swap.
+  "${ROOT_DIR}/scripts/deploy-browser-service.sh" --check-config
+fi
 if [[ "$PREFLIGHT_ONLY" == "true" ]]; then
   echo "Preflight-only run complete; no code, container, drain, or DNS changes were made."
   exit 0
