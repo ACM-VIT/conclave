@@ -366,6 +366,7 @@ describe("telling a webinar of old clients about a change", () => {
   it("builds and encodes a whole list once for everyone who reads it alike", async () => {
     const { room, listeners, ids } = await webinar(60, 5);
     const before = sent(room, "webinar:qaSnapshot");
+    const changesBefore = sent(room, "webinar:qaChanged");
 
     // Webinar mode goes off, where an attendee has no Q&A, and on again.
     room.setWebinar(false);
@@ -382,10 +383,12 @@ describe("telling a webinar of old clients about a change", () => {
     expect(heldWhileOff).toEqual(Array(60).fill(0));
     expect(off.writes - before.writes).toBe(60);
     expect(off.encodings - before.encodings).toBe(1);
-    // On: one list for the 55 who asked nothing, and one each for the five askers.
+    // On: one list for all sixty, built and encoded once. Each of the five
+    // askers is then sent their own question as a change, which names them.
     expect(listeners.every((listener) => ids.every((id) => listener.entries.has(id)))).toBe(true);
     expect(on.writes - off.writes).toBe(60);
-    expect(on.encodings - off.encodings).toBe(6);
+    expect(on.encodings - off.encodings).toBe(1);
+    expect(sent(room, "webinar:qaChanged").writes - changesBefore.writes).toBe(5);
     expect(listeners.slice(0, 5).map((listener, index) => listener.entries.get(ids[index])?.userId)).toEqual(
       listeners.slice(0, 5).map((listener) => listener.tab.seat.id),
     );

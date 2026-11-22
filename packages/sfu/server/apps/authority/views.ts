@@ -337,6 +337,18 @@ export class ViewTracker {
     };
   }
 
+  /**
+   * Starts keeping a viewer's view without reading it out, and returns the
+   * version it is at. For a viewer that reads rows itself, when it needs
+   * them, and only has to be told what changes from here on.
+   */
+  hold(role: Role, subject: Subject): number {
+    this.absorb();
+    this.roleAudience(role);
+    this.subjectAudience(subject);
+    return this.version;
+  }
+
   /** Forgets the views of audiences nobody holds any more. */
   keep(live: LiveAudiences): void {
     for (const [role, audience] of this.roles) {

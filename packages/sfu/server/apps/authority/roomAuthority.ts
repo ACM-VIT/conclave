@@ -351,6 +351,10 @@ export class RoomAuthority {
    * and identity checks run before every frame. Used to feed a legacy event
    * from an app, so no second copy of its visibility rules exists.
    *
+   * An observer is told which rows changed, and when its whole view was
+   * replaced. A replacement names no rows: the observer reads them, and
+   * anything else it is about to say, from `view()` at that moment.
+   *
    * An observer stands in for a subscription the connection does not have.
    * While the connection holds its own subscription to the app the observer
    * rests, and it starts again with a whole view when that subscription
@@ -689,7 +693,7 @@ export class RoomAuthority {
           !sameActor(subscription.actor, bound.actor)
         ) {
           this.regenerate(subscription, bound.actor);
-        } else {
+        } else if (!subscription.sink) {
           subscription.grantsDue = true;
         }
       }
@@ -1015,6 +1019,24 @@ export class RoomAuthority {
     subscription.backlog = [];
     subscription.lagging = false;
     if (!this.hasRoom(subscription)) return;
+
+    if (subscription.sink) {
+      // An observer reads rows itself, from `view()`, when it has a use for
+      // them. It is only told that its view was replaced. Building the whole
+      // view for each of a room's observers would be work nobody reads.
+      subscription.viewVersion = subscription.instance.holdView(subscription.actor);
+      this.stats.replaces += 1;
+      this.emit(subscription, {
+        kind: "replace",
+        subscription: subscription.id,
+        generation: subscription.generation,
+        serverNowMs: this.now(),
+        part: 0,
+        last: true,
+        rows: [],
+      });
+      return;
+    }
 
     const { rows, version } = subscription.instance.snapshot(subscription.actor);
     subscription.viewVersion = version;

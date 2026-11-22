@@ -3,11 +3,14 @@
  *
  *   pnpm -C packages/sfu exec tsx scripts/measure-legacy-qa-flush.ts [listeners] [questions] [--out file.json]
  *   pnpm -C packages/sfu exec tsx scripts/measure-legacy-qa-flush.ts [listeners] --trim [--out file.json]
+ *   pnpm -C packages/sfu exec tsx scripts/measure-legacy-qa-flush.ts [listeners] [questions] --policy [--out file.json]
  *
  * The first form changes `questions` questions in one flush. The second has
  * every listener upvote one question with the old event, beside 50 answered
  * questions everyone lists, then fills the book until the upvoted question
- * is dropped, and measures telling them so.
+ * is dropped, and measures telling them so. The third fills the book with
+ * `questions` answered questions, then has the host turn Q&A off and on,
+ * and webinar mode off and on, and measures what each switch sends.
  *
  * The room, the Q&A app, the runtime and the legacy adapter are the real
  * ones. The sockets are simulated: nothing crosses a network, but every
@@ -69,6 +72,7 @@ const numbers = args.filter(
 const LISTENERS = Number(numbers[0] ?? 5_000);
 const QUESTIONS = Number(numbers[1] ?? 20);
 const TRIM = args.includes("--trim");
+const POLICY = args.includes("--policy");
 const RUNS = 5;
 
 const counters = { encodings: 0, encodedBytes: 0, socketWrites: 0 };
@@ -399,7 +403,102 @@ const measureTrim = async (): Promise<void> => {
   authority.close();
 };
 
-const main = TRIM ? measureTrim : measureChange;
+/**
+ * The host's switches in a webinar whose book is full of answered
+ * questions: Q&A off and on, which decides only who may ask, and webinar
+ * mode off and on, which takes Q&A from the attendees and gives it back.
+ */
+const measurePolicy = async (): Promise<void> => {
+  const host = seat("asha@example.com", "Asha", "host");
+  const authority = getRoomAuthority(state, room);
+  if (!authority) throw new Error("The room has no authority runtime");
+  const attendees: ReturnType<typeof seat>[] = [];
+  const listed: number[] = [];
+  for (let index = 0; index < LISTENERS; index += 1) {
+    const attendee = seat(`attendee${index}@example.com`, `Attendee ${index}`, "attendee");
+    const at = index;
+    listed.push(0);
+    attendee.on("webinar:qaSnapshot", (payload) => {
+      listed[at] = (payload as WebinarQaSnapshot).entries.length;
+    });
+    attendees.push(attendee);
+    attachLegacyQaFeed(attendee.context);
+  }
+  for (let index = 0; index < QUESTIONS; index += 1) {
+    clockOffsetMs += 1_000;
+    const asked = legacyQaSubmit(
+      authority,
+      attendees[index % LISTENERS].context,
+      `Question number ${index}, asked at a length that a real one might have, about the thing being shown?`,
+    );
+    if (!("id" in asked)) throw new Error(`ask failed: ${JSON.stringify(asked)}`);
+    const answered = authority.actAs(host.context, "qa", "moderate", {
+      id: asked.id,
+      action: "answered",
+      answerText: "An answer of a sentence or two, as a host would give it during the session.",
+    });
+    if (!answered.ok) throw new Error(`moderate failed: ${JSON.stringify(answered)}`);
+    if (index % 20 === 19) {
+      authority.flushNow();
+      await settle();
+    }
+  }
+  authority.flushNow();
+  await settle();
+
+  const config = getOrCreateWebinarRoomConfig(state.webinarConfigs, room.channelId);
+  const measure = async (name: string, change: () => void) => {
+    clockOffsetMs += 10_000;
+    counters.encodings = counters.encodedBytes = counters.socketWrites = 0;
+    writesByEvent.clear();
+    // Done when four turns in a row write nothing.
+    let quiet = 0;
+    let writes = 0;
+    const timing = await timed(
+      () => {
+        change();
+        authority.policyChanged();
+        authority.flushNow();
+      },
+      () => {
+        quiet = counters.socketWrites === writes ? quiet + 1 : 0;
+        writes = counters.socketWrites;
+        return quiet >= 4;
+      },
+    );
+    await settle();
+    return {
+      switch: name,
+      wholeListsSent: writesByEvent.get("webinar:qaSnapshot") ?? 0,
+      changeEventsSent: writesByEvent.get("webinar:qaChanged") ?? 0,
+      encodings: counters.encodings,
+      encodedMegabytes: megabytes(counters.encodedBytes),
+      turnsOfTheEventLoop: timing.turns,
+      longestBlockMs: Number(timing.longestBlockMs.toFixed(1)),
+      totalMs: Number(timing.totalMs.toFixed(1)),
+      entriesInTheLastListAnAttendeeWasSent: listed[LISTENERS - 1],
+    };
+  };
+
+  const switches = [
+    await measure("Q&A off", () => {
+      config.qaEnabled = false;
+    }),
+    await measure("Q&A on", () => {
+      config.qaEnabled = true;
+    }),
+    await measure("webinar mode off", () => {
+      config.enabled = false;
+    }),
+    await measure("webinar mode on", () => {
+      config.enabled = true;
+    }),
+  ];
+  finish({ listeners: LISTENERS, questions: QUESTIONS, switches });
+  authority.close();
+};
+
+const main = POLICY ? measurePolicy : TRIM ? measureTrim : measureChange;
 
 main().then(
   () => process.exit(0),

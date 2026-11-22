@@ -371,6 +371,11 @@ export class AuthorityInstance {
     return this.views.held;
   }
 
+  /** Keeps a viewer's view from now on, and returns the version it is at. */
+  holdView(actor: Actor): number {
+    return this.views.hold(actor.role, actor.subject);
+  }
+
   /** One viewer's rows as committed right now, for reading at once. */
   committedView(actor: Actor): CommittedView {
     return this.views.committed(actor.role, actor.subject);

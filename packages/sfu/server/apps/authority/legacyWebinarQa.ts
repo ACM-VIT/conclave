@@ -59,7 +59,7 @@ export const LEGACY_QA_SENDS_PER_TURN = 2_000;
  * list is the whole book as one connection sees it, so far fewer of them fit
  * in a turn than of single changes.
  */
-export const LEGACY_QA_LISTS_PER_TURN = 250;
+export const LEGACY_QA_LISTS_PER_TURN = 100;
 
 /**
  * How long after a person's upvote changes their other clients' saved
@@ -214,14 +214,19 @@ const ownOf = (view: CommittedView, id: string) =>
 const sees = (view: CommittedView, id: string): boolean =>
   view.get("questions", id) !== undefined || Boolean(ownOf(view, id)?.hidden);
 
-/** One question in the old shape, from a connection's view. */
+/**
+ * One question in the old shape, from a connection's view. `asAsker` false
+ * leaves out what is the asker's alone, for an entry that is shared with
+ * everyone who reads the question alike.
+ */
 const entryOf = (
   feed: Feed,
   room: RoomFeeds,
   view: CommittedView,
   id: string,
+  asAsker = true,
 ): WebinarQaEntry | null => {
-  const own = ownOf(view, id);
+  const own = asAsker ? ownOf(view, id) : undefined;
   const shared = view.get("questions", id) as QuestionCard | undefined;
   const question = shared ?? own?.hidden?.question;
   if (!question) return null;
@@ -253,10 +258,6 @@ const entryOf = (
   };
 };
 
-const questionIds = (view: CommittedView): string[] => [
-  ...new Set([...view.keys("questions"), ...view.keys("myQuestions")]),
-];
-
 /** A number for each row a view holds, to tell two readings of one apart. */
 const rowNumbers = new WeakMap<object, number>();
 let lastRowNumber = 0;
@@ -278,19 +279,27 @@ const numberOf = (row: Json | undefined): number => {
  * reading are sent the same bytes, unless one of them asked the question,
  * and a connection is sent a question again only when its reading changes.
  * The rows of a role are one object for everyone in it, so comparing rows is
- * comparing numbers.
+ * comparing numbers. `asAsker` false leaves the connection's own row out, for
+ * the reading it shares with everyone who did not ask the question.
  */
-const readingOf = (feed: Feed, view: CommittedView, id: string): string =>
+const readingOf = (
+  feed: Feed,
+  view: CommittedView,
+  id: string,
+  asAsker = true,
+): string =>
   [
     id,
     numberOf(view.get("questions", id)),
     numberOf(view.get("votes", id)),
-    numberOf(view.get("myQuestions", id)),
+    asAsker ? numberOf(view.get("myQuestions", id)) : 0,
     isHost(feed.context) ? "h" : "",
     view.get("myUpvotes", id) !== undefined ? "u" : "",
   ].join("|");
 
 type SharedList = { entries: WebinarQaEntry[]; roomId: string; sockets: string[] };
+/** A connection's own questions, said after the list it shares with others. */
+type OwnEntries = { feed: Feed; entries: WebinarQaEntry[] };
 type SharedChange = { payload: WebinarQaChangedNotification; sockets: string[] };
 
 /**
@@ -303,8 +312,9 @@ type SharedChange = { payload: WebinarQaChangedNotification; sockets: string[] }
  *
  * A changed question reads the same for nearly everyone, so its event is
  * built and encoded once for each distinct reading and written to all the
- * sockets that share it. A whole list is shared the same way by everyone who
- * asked nothing. Only what names its recipient is their own copy.
+ * sockets that share it. A whole list is shared the same way: it holds the
+ * questions as anyone of that role reads them, and a connection's own
+ * questions, which name it as the asker, follow as changes of its own.
  *
  * A question is said to a connection only when its reading differs from the
  * one that connection was last sent, so one that changes again while it
@@ -318,6 +328,7 @@ const say = (authority: RoomAuthority, room: RoomFeeds): void => {
   let lists = 0;
   const changes = new Map<string, SharedChange>();
   const sharedLists = new Map<string, SharedList>();
+  const ownAfterList: OwnEntries[] = [];
   const emptied = new Map<string, string[]>();
 
   for (const feed of room.waiting) {
@@ -380,31 +391,48 @@ const say = (authority: RoomAuthority, room: RoomFeeds): void => {
       feed.listDue = false;
       feed.pending.clear();
       lists += 1;
-      const ids = questionIds(view).filter((id) => sees(view, id));
-      const readings = ids.map((id) => readingOf(feed, view, id));
-      feed.said = new Map(ids.map((id, index) => [id, readings[index]]));
-      feed.saved = new Set(ids.filter((id) => view.get("myUpvotes", id) !== undefined));
-      const build = (): WebinarQaEntry[] =>
-        ids
-          .map((id) => entryOf(feed, room, view, id))
-          .filter((entry): entry is WebinarQaEntry => entry !== null)
-          .sort((a, b) => a.askedAt - b.askedAt);
-      if (view.size("myQuestions") > 0) {
-        // It names them as the asker of their own questions.
-        socket.emit("webinar:qaSnapshot", {
-          roomId: feed.roomId,
-          entries: build(),
-        } satisfies WebinarQaSnapshot);
-        continue;
+      // The list is the questions as anyone of this role reads them, so it
+      // is one list for nearly everyone.
+      const shared = [...view.keys("questions")];
+      const asks = view.size("myQuestions") > 0;
+      const said = new Map<string, string>();
+      const saved = new Set<string>();
+      const readings: string[] = [];
+      for (const id of shared) {
+        const alike = readingOf(feed, view, id, false);
+        readings.push(alike);
+        said.set(id, asks ? readingOf(feed, view, id) : alike);
+        if (view.get("myUpvotes", id) !== undefined) saved.add(id);
       }
+      if (asks) {
+        // One of their own that is still waiting for a host is in no list.
+        for (const id of view.keys("myQuestions")) {
+          if (!said.has(id) && sees(view, id)) said.set(id, readingOf(feed, view, id));
+        }
+      }
+      feed.said = said;
+      feed.saved = saved;
       const reading = readings.join(";");
       const group = sharedLists.get(reading);
       if (group) group.sockets.push(socket.id);
       else {
         sharedLists.set(reading, {
-          entries: build(),
+          entries: shared
+            .map((id) => entryOf(feed, room, view, id, false))
+            .filter((entry): entry is WebinarQaEntry => entry !== null)
+            .sort((a, b) => a.askedAt - b.askedAt),
           roomId: feed.roomId,
           sockets: [socket.id],
+        });
+      }
+      // Their own questions name them as the asker, and one still waiting
+      // for a host is in no shared list. Those follow, each as a change.
+      if (asks) {
+        ownAfterList.push({
+          feed,
+          entries: [...view.keys("myQuestions")]
+            .map((id) => entryOf(feed, room, view, id))
+            .filter((entry): entry is WebinarQaEntry => entry !== null),
         });
       }
       continue;
@@ -462,6 +490,14 @@ const say = (authority: RoomAuthority, room: RoomFeeds): void => {
       roomId,
       entries,
     } satisfies WebinarQaSnapshot);
+  }
+  for (const { feed, entries } of ownAfterList) {
+    for (const entry of entries) {
+      feed.context.socket.emit("webinar:qaChanged", {
+        roomId: feed.roomId,
+        entry,
+      } satisfies WebinarQaChangedNotification);
+    }
   }
   for (const { payload, sockets } of changes.values()) {
     local.to(sockets).emit("webinar:qaChanged", payload);
@@ -524,8 +560,10 @@ export const attachLegacyQaFeed = (context: ConnectionContext): boolean => {
       return;
     }
     if (frame.kind === "replace") {
-      // A whole view. What it holds is read when the list is said.
-      if (!frame.last) return;
+      // A whole view is on its way. What it holds is read from the
+      // committed view when the list is said, so its first part is all the
+      // notice needed, and a view sent in parts is still one list.
+      if (frame.part !== 0) return;
       index(room, feed);
       feed.listDue = true;
       queue(authority, room, feed);
