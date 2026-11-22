@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { AlertCircle, X } from "lucide-react";
 import type { MeetError } from "../lib/types";
 
@@ -18,6 +19,12 @@ export default function MeetsErrorBanner({
   onPrimaryAction,
   variant = "strip",
 }: MeetsErrorBannerProps) {
+  const [isCollapsed, setIsCollapsed] = useState(false);
+  // While media is blocked, Try again is the only way out, so dismissing
+  // shrinks the warning to one line instead of removing the action.
+  const collapsesOnDismiss =
+    meetError.code === "NETWORK_BLOCKED" &&
+    Boolean(primaryActionLabel && onPrimaryAction);
   const isGuestBlockedError =
     meetError.message === "Guests are not allowed in this meeting.";
   const isRoomNotFoundError = meetError.message === "No room found.";
@@ -38,6 +45,34 @@ export default function MeetsErrorBanner({
       ? "w-full min-w-0 rounded-xl border border-[#F95F4A]/20 bg-[#F95F4A]/[0.07] px-3.5 py-3 flex items-start gap-3"
       : "w-full min-w-0 px-6 py-3.5 bg-[#F95F4A]/[0.07] border-b border-[#F95F4A]/25 flex items-start gap-3 backdrop-blur-sm";
 
+  if (collapsesOnDismiss && isCollapsed) {
+    return (
+      <div
+        className={
+          variant === "inline"
+            ? "w-full min-w-0 rounded-xl border border-[#F95F4A]/20 bg-[#F95F4A]/[0.07] px-3.5 py-2 flex items-center gap-3"
+            : "w-full min-w-0 px-6 py-2 bg-[#F95F4A]/[0.07] border-b border-[#F95F4A]/25 flex items-center gap-3 backdrop-blur-sm"
+        }
+        role="status"
+      >
+        <AlertCircle
+          className="h-3.5 w-3.5 shrink-0 text-[#F95F4A]"
+          strokeWidth={2}
+        />
+        <span className="min-w-0 flex-1 truncate text-[12.5px] leading-5 text-[#fafafa]/80">
+          {meetError.message}
+        </span>
+        <button
+          type="button"
+          onClick={onPrimaryAction}
+          className="inline-flex shrink-0 items-center rounded-lg bg-[#F95F4A]/15 px-2.5 py-1 text-[12px] font-medium text-[#F95F4A] transition-colors hover:bg-[#F95F4A]/25"
+        >
+          {primaryActionLabel}
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className={shellClass} role="alert">
       <AlertCircle
@@ -55,6 +90,7 @@ export default function MeetsErrorBanner({
         )}
         {primaryActionLabel && onPrimaryAction && (
           <button
+            type="button"
             onClick={onPrimaryAction}
             className="mt-2 inline-flex w-fit items-center rounded-lg bg-[#F95F4A]/15 px-3 py-1.5 text-[12.5px] font-medium text-[#F95F4A] transition-colors hover:bg-[#F95F4A]/25"
           >
@@ -64,7 +100,7 @@ export default function MeetsErrorBanner({
       </div>
       <button
         type="button"
-        onClick={onDismiss}
+        onClick={collapsesOnDismiss ? () => setIsCollapsed(true) : onDismiss}
         className="-mr-1 -mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[#fafafa]/40 transition-colors hover:bg-white/[0.06] hover:text-[#fafafa]/80"
         aria-label="Dismiss error"
         title="Dismiss"
