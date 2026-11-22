@@ -60,7 +60,20 @@ it("says who is sharing the browser", () => {
   expect(text()).toContain("You’re sharing a browser");
 
   render({ controllerName: "  " });
-  expect(text()).toContain("The host is sharing a browser");
+  expect(text()).toContain("Shared browser");
+  expect(text()).not.toContain("is sharing");
+});
+
+it("tells everyone the shared browser is live and who shares it", () => {
+  render({ controllerName: "Bo Sharer" });
+  const stage = container.querySelector('[role="region"]');
+  expect(stage?.getAttribute("aria-label")).toBe("Shared browser");
+  expect(text()).toContain("Bo Sharer is sharing a browser");
+  expect(text()).not.toContain("Live");
+
+  finishLoading();
+  expect(text()).toContain("Bo Sharer is sharing a browser");
+  expect(text()).toContain("Live");
 });
 
 it("shows the page only once it has loaded", () => {
@@ -112,11 +125,30 @@ it("goes back to loading when the shared page changes", () => {
   render({ noVncUrl: NEXT_LIVE_VIEW_URL });
   expect(text()).toContain("Loading shared browser");
   expect(pageFrame().getAttribute("src")).toBe(NEXT_LIVE_VIEW_URL);
+
+  render({ noVncUrl: LIVE_VIEW_URL });
+  expect(text()).toContain("Loading shared browser");
+  expect(pageFrame().style.opacity).toBe("0");
+});
+
+it("does not carry an old timeout into a new page", () => {
+  render();
+  act(() => {
+    vi.advanceTimersByTime(SHARED_BROWSER_LOAD_TIMEOUT_MS - 1000);
+  });
+  render({ noVncUrl: NEXT_LIVE_VIEW_URL });
+  act(() => {
+    vi.advanceTimersByTime(1000);
+  });
+  expect(text()).toContain("Loading shared browser");
+  expect(text()).not.toContain("Couldn\u2019t load");
 });
 
 it("keeps the noVNC input layer over the browser video", () => {
   const stream = new MediaStream();
   render({ provider: "chromium", browserVideoStream: stream });
+  const video = container.querySelector("video") as HTMLVideoElement;
+  expect(video.srcObject).toBe(stream);
 
   const frame = pageFrame();
   expect(frame.getAttribute("title")).toBe("Shared browser input");
@@ -126,4 +158,22 @@ it("keeps the noVNC input layer over the browser video", () => {
   expect(container.querySelector("video")).not.toBeNull();
   expect(text()).not.toContain("Loading shared browser");
   expect(text()).toContain("Alice is sharing a browser");
+});
+
+it("loads the page from scratch when the browser video goes away", () => {
+  const stream = new MediaStream();
+  render({ provider: "chromium", browserVideoStream: stream });
+  const video = container.querySelector("video") as HTMLVideoElement;
+  act(() => {
+    pageFrame().dispatchEvent(new Event("load"));
+    vi.advanceTimersByTime(SHARED_BROWSER_LOAD_TIMEOUT_MS + 1);
+  });
+
+  render({ provider: "chromium", browserVideoStream: null });
+
+  expect(video.srcObject).toBeNull();
+  expect(container.querySelector("video")).toBeNull();
+  expect(text()).toContain("Loading shared browser");
+  expect(text()).not.toContain("Couldn\u2019t load");
+  expect(pageFrame().style.opacity).toBe("0");
 });

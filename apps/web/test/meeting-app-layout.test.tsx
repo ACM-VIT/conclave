@@ -47,10 +47,12 @@ afterEach(() => {
 });
 
 it("puts the shared browser on the stage with everyone in the rail", () => {
+  const bobAudio = new MediaStream();
+  const carolAudio = new MediaStream();
   const participants = new Map<string, Participant>([
     ["alice#1", remote("alice#1")],
-    ["bob#2", remote("bob#2", { isMuted: true })],
-    ["carol#3", remote("carol#3")],
+    ["bob#2", remote("bob#2", { isMuted: true, audioStream: bobAudio })],
+    ["carol#3", remote("carol#3", { audioStream: carolAudio })],
     ["shared-browser-video:room", remote("shared-browser-video:room")],
   ]);
 
@@ -98,4 +100,10 @@ it("puts the shared browser on the stage with everyone in the rail", () => {
   expect(rail?.textContent).toContain("Bob Guest");
   expect(rail?.textContent).toContain("Carol Viewer");
   expect(rail?.textContent).not.toContain("shared-browser-video");
+
+  const playing = Array.from(container.querySelectorAll("audio")).map(
+    (audio) => audio.srcObject,
+  );
+  expect(playing).toContain(bobAudio);
+  expect(playing).toContain(carolAudio);
 });
