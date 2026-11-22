@@ -164,6 +164,16 @@ export class AuthorityStore {
     return this.table(table).rows;
   }
 
+  /** The rows written since the views last took them in, left in place. */
+  get dirtyRows(): ReadonlyMap<string, ReadonlySet<TableKey>> {
+    return this.dirty;
+  }
+
+  /** The rows cleared since the views last took them in, left in place. */
+  get clearedRows(): ReadonlyMap<string, readonly TableKey[]> {
+    return this.cleared;
+  }
+
   /** Hands over the rows written since the last call and forgets them. */
   takeDirty(): Map<string, Set<TableKey>> {
     const taken = new Map(this.dirty);

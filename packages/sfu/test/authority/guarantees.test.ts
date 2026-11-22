@@ -2299,6 +2299,39 @@ describe("revisions", () => {
     expect(versionOf(raviTab)).toBe(afterOwnVote + 1);
   });
 
+  it("names a version that shows what others already committed, when the answer itself changed nothing", async () => {
+    const room = new Harness([pollsAuthority]);
+    const hostTab = await room.open(host, pollsContract);
+    const coHost = await room.open(person("dev@example.com", "Dev", "host"), pollsContract);
+    const pollId = await createPoll(room, hostTab);
+    const versionOf = (tab: Tab): number => (tab.state.kind === "ready" ? tab.state.revision : -1);
+    const named = (result: AuthorityResult<Json>): number =>
+      result.ok ? (result.revision ?? -1) : -1;
+    const before = versionOf(coHost);
+
+    // Both hosts end the poll before any flush. The second end writes
+    // nothing: the poll is already ended, though not yet in its view.
+    const first = await hostTab.actWith(
+      { issuedAtMs: Date.now(), nonce: "first-host-ends-the-poll" },
+      "end",
+      { pollId },
+    );
+    const second = await coHost.actWith(
+      { issuedAtMs: Date.now(), nonce: "second-host-ends-it-too" },
+      "end",
+      { pollId },
+    );
+    const statusWhenAnswered = field(coHost.row("polls", pollId), "status");
+    await room.deliver();
+
+    expect([first.ok, second.ok]).toEqual([true, true]);
+    expect(statusWhenAnswered).toBe("open");
+    // The answer is reached only by the frame that shows the poll ended.
+    expect(named(second)).toBeGreaterThan(before);
+    expect(versionOf(coHost)).toBe(named(second));
+    expect(field(coHost.row("polls", pollId), "status")).toBe("ended");
+  });
+
   it("keeps a client's view version going up when it subscribes again, and reads answers the same way", async () => {
     const room = new Harness([probeAuthority]);
     const hostTab = await room.open(host, probeContract);

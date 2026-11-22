@@ -494,7 +494,6 @@ export class RoomAuthority {
     if (!target.ok) return target;
     const { subscription } = target;
     const { instance, actor } = subscription;
-    const writesBefore = instance.writes;
     const result = instance.act(
       actor,
       request.action,
@@ -510,21 +509,20 @@ export class RoomAuthority {
       result,
     );
     if (!result.ok) return result;
-    const wrote = instance.writes > writesBefore;
-    return { ...result, revision: this.answerRevision(subscription, wrote) };
+    return { ...result, revision: this.answerRevision(subscription) };
   }
 
   /**
-   * The view version an answer names: the one the actor's view will have
-   * once it shows what they did. It depends on nothing but their own view
-   * and their own action, so it says nothing of what others did out of their
-   * sight. An action that wrote something gets the next version, and that
-   * version is sent at the next flush whatever the write turned out to change
-   * in their view, so it is always reached. One that wrote nothing, a replay
-   * among them, gets the version they hold, or one already promised.
+   * The view version an answer names: one at which the actor's view shows
+   * everything committed so far that changes it, their action and anyone
+   * else's alike. If anything committed has yet to reach their view, that is
+   * the next version, and it is sent at the next flush even if a later write
+   * undoes the change, so it is always reached. If nothing has, it is the
+   * version they hold, or one already promised. It reads only their own
+   * view, so it says nothing of what others did out of their sight.
    */
-  private answerRevision(subscription: Subscription, wrote: boolean): number {
-    if (wrote) {
+  private answerRevision(subscription: Subscription): number {
+    if (subscription.instance.pendingFor(subscription.actor)) {
       subscription.promised = subscription.viewRevision + 1;
       this.promising.add(subscription.instance);
       this.scheduleFlush(false);
