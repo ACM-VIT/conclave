@@ -16,6 +16,8 @@ export class ServiceSecurityError extends Error {
 
 const MIN_TOKEN_LENGTH = 32;
 const MIN_DISTINCT_TOKEN_CHARACTERS = 8;
+// The SFU sends the token in an HTTP header, so it must be visible ASCII.
+const HEADER_SAFE_TOKEN = /^[\x21-\x7e]+$/;
 const DEFAULT_LISTEN_HOST = "127.0.0.1";
 
 const isLoopbackOrPrivateIpv4 = (host: string): boolean => {
@@ -49,6 +51,8 @@ const readToken = (raw: string | undefined, problems: string[]): string => {
         problems.push("BROWSER_SERVICE_TOKEN is required. Generate one with `openssl rand -hex 32` and set the same value on the SFU.");
     } else if (token.length < MIN_TOKEN_LENGTH || new Set(token).size < MIN_DISTINCT_TOKEN_CHARACTERS) {
         problems.push(`BROWSER_SERVICE_TOKEN must be a random value of at least ${MIN_TOKEN_LENGTH} characters.`);
+    } else if (!HEADER_SAFE_TOKEN.test(token)) {
+        problems.push("BROWSER_SERVICE_TOKEN may contain only visible ASCII characters, with no spaces, because the SFU sends it as an HTTP header.");
     }
     return token;
 };

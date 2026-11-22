@@ -107,6 +107,9 @@ test("startup configuration fails closed", () => {
     refuses({});
     refuses({ BROWSER_SERVICE_TOKEN: "short-token" });
     refuses({ BROWSER_SERVICE_TOKEN: "a".repeat(48) });
+    // The SFU sends the token as an HTTP header, which carries visible ASCII only.
+    refuses({ BROWSER_SERVICE_TOKEN: `${STRONG_TOKEN}\u0100` });
+    refuses({ BROWSER_SERVICE_TOKEN: `${STRONG_TOKEN.slice(0, 16)} ${STRONG_TOKEN.slice(16)}` });
     refuses({ BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_HOST: "0.0.0.0" });
     refuses({ BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_HOST: "::" });
     refuses({ BROWSER_SERVICE_TOKEN: STRONG_TOKEN, BROWSER_SERVICE_HOST: "57.159.28.54" });
