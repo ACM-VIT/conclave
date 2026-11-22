@@ -123,13 +123,13 @@ trust, instead of scrubbing what looks bad:
   scrubber, and `save_campaign_params` is off.
 
 Session replay, surveys, DOM autocapture, feature flags and pageviews are off,
-and no user is ever identified. The SFU scrubs emails, tokens and credentials
-(any URI with user info, the whole value of `Cookie`, `Set-Cookie`,
-`Authorization` and `Proxy-Authorization` lines, Bearer and Basic tokens,
-`password=` style values) and home folder names (`/Users/<name>` becomes `~`)
-from exception messages and frame paths, cuts every URL to its origin and route (`/[code]`,
-`/w/[code]`, `/[path]`), and drops the source lines posthog-node attaches to
-stack frames before sending. Config errors name the variable, never its value.
+and no user is ever identified. The SFU follows the same rule: a thrown or
+rejected value that is not an Error is reported as `NonErrorValue`; type names
+are kept only from a known list; a message is sent only for our constant-message
+classes (`ConfigError`, which names the variable and never its value, and
+`NonErrorValue`), otherwise it is `[message withheld]`, keeping just a Node
+errno code such as `ENOENT`. Frames lose the source lines posthog-node attaches
+and any home folder's account name (`/home/<name>` becomes `~`, spaces included).
 Game events group by a keyed hash of the room (`room_<hmac>`), never its code.
 Without a real `SFU_SECRET` they are not grouped at all, and distinct ids use a
 key that lives only in that process.

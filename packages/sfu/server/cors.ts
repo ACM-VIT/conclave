@@ -1,4 +1,5 @@
 import { Logger } from "../utilities/loggers.js";
+import { ConfigError } from "./configError.js";
 
 /**
  * Resolve the allowed CORS origins from the SFU_CORS_ORIGINS env var.
@@ -21,7 +22,7 @@ export const resolveCorsOrigins = (): "*" | string[] => {
 
   if (!raw) {
     if (isProduction && !allowOpenCors) {
-      throw new Error(
+      throw new ConfigError(
         "SFU_CORS_ORIGINS must be set in production, or set SFU_ALLOW_OPEN_CORS=1 to explicitly allow wildcard CORS.",
       );
     }
@@ -40,7 +41,7 @@ export const resolveCorsOrigins = (): "*" | string[] => {
   // allow-any so an operator can intentionally opt back into the open policy.
   if (origins.length === 0 || origins.includes("*")) {
     if (isProduction && !allowOpenCors) {
-      throw new Error(
+      throw new ConfigError(
         "Wildcard SFU_CORS_ORIGINS is not allowed in production unless SFU_ALLOW_OPEN_CORS=1.",
       );
     }
@@ -64,7 +65,7 @@ export const resolveCorsOrigins = (): "*" | string[] => {
     } catch {
       // The value may be a credential pasted into the wrong variable, and this
       // error is reported to PostHog, so it names the entry, not its text.
-      throw new Error(`Invalid SFU_CORS_ORIGINS entry at index ${index}`);
+      throw new ConfigError(`Invalid SFU_CORS_ORIGINS entry at index ${index}`);
     }
   }
 

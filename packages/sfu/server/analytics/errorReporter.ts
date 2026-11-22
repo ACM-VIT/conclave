@@ -8,6 +8,8 @@
  * fatal report sits outside that budget: the process sends it once, then exits.
  */
 
+import { constants as osConstants } from "node:os";
+
 export type ServerErrorSource =
   | "uncaught_exception"
   | "unhandled_rejection"
@@ -61,6 +63,19 @@ export type ErrorReporter = {
     timeoutMs: number,
   ) => Promise<void>;
 };
+
+/** What a thrown or rejected value that is not an Error is reported as. */
+class NonErrorValue extends Error {
+  constructor(value: unknown) {
+    super(`non-Error ${value === null ? "null" : typeof value} thrown or rejected`);
+    this.name = "NonErrorValue";
+  }
+}
+
+// A rejected string or object would otherwise reach PostHog as the message,
+// or with its own `name` as the type.
+const asError = (error: unknown): Error =>
+  error instanceof Error ? error : new NonErrorValue(error);
 
 const RATE_WINDOW_MS = 60_000;
 const MAX_REPORTS_PER_KEY_PER_WINDOW = 5;
@@ -138,8 +153,9 @@ export const createErrorReporter = ({
   };
 
   return {
-    report: (error, context) => {
+    report: (thrown, context) => {
       try {
+        const error = asError(thrown);
         const prepared = prepare(error, context, { budgeted: true });
         prepared?.client.captureException(error, prepared.options);
       } catch (failure) {
@@ -147,9 +163,10 @@ export const createErrorReporter = ({
       }
     },
 
-    reportFatal: async (error, context, timeoutMs) => {
+    reportFatal: async (thrown, context, timeoutMs) => {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
+        const error = asError(thrown);
         const prepared = prepare(
           error,
           { level: "fatal", ...context },
@@ -186,8 +203,14 @@ const CREDENTIAL_HEADER_PATTERN =
 const AUTH_SCHEME_PATTERN = /\b(bearer|basic)\s+[^\s,;"']+/gi;
 const SECRET_ASSIGNMENT_PATTERN =
   /\b(password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|session)(\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;&"']+)/gi;
-// The account name in a home folder: /Users/<name>, /home/<name>, C:\Users\<name>.
-const HOME_FOLDER_PATTERN = /(?:\/Users|\/home)\/[^/\s"'`]+|[A-Za-z]:\\Users\\[^\\\s"'`]+/g;
+// The account name in a home folder: /Users/<name>, /home/<name>,
+// C:\Users\<name>. A name may hold spaces when the path goes on after it.
+const HOME_FOLDER_PATTERNS = [
+  /(?:\/Users|\/home)\/[^/"'`\r\n]+(?=\/)/g,
+  /(?:\/Users|\/home)\/[^/\s"'`]+/g,
+  /[A-Za-z]:\\Users\\[^\\"'`\r\n]+(?=\\)/g,
+  /[A-Za-z]:\\Users\\[^\\\s"'`]+/g,
+];
 
 /** Replaces the meeting code or ids in a path, like the web scrubber does. */
 const templatePath = (pathname: string): string => {
@@ -207,7 +230,7 @@ const scrubUrl = (value: string): string => {
 };
 
 const scrubHomeFolders = (value: string): string =>
-  value.replace(HOME_FOLDER_PATTERN, "~");
+  HOME_FOLDER_PATTERNS.reduce((text, pattern) => text.replace(pattern, "~"), value);
 
 /**
  * Removes credentials (URIs with user info, credential headers, auth tokens,
@@ -229,8 +252,35 @@ export const scrubErrorText = (value: string): string =>
 
 type ExceptionFrame = Record<string, unknown>;
 type ExceptionListEntry = {
+  type?: unknown;
   value?: unknown;
   stacktrace?: { frames?: unknown } & Record<string, unknown>;
+};
+
+// Type names that name a kind of failure, never data: built-in errors, the
+// libraries the SFU calls (redis, mediasoup, jsonwebtoken) and ours.
+const KNOWN_ERROR_TYPES = new Set([
+  "Error", "EvalError", "RangeError", "ReferenceError", "SyntaxError", "TypeError",
+  "URIError", "AggregateError", "AbortError", "ClientClosedError", "ClientOfflineError",
+  "ConnectionTimeoutError", "DisconnectsClientError", "ReconnectStrategyError",
+  "SocketClosedUnexpectedlyError", "SocketTimeoutError", "TimeoutError", "ErrorReply",
+  "WatchError", "UnsupportedError", "InvalidStateError", "JsonWebTokenError",
+  "TokenExpiredError", "NotBeforeError", "ConfigError", "NonErrorValue",
+]);
+// Our classes whose messages are text we wrote with no values in them.
+const CONSTANT_MESSAGE_TYPES = new Set(["ConfigError", "NonErrorValue"]);
+const ERRNO_CODES = new Set(Object.keys(osConstants.errno));
+const MESSAGE_WITHHELD = "[message withheld]";
+
+/**
+ * A message is sent only when we wrote it. Otherwise only a Node errno code
+ * (ENOENT and the like) survives, never the rest of the text.
+ */
+const trustedMessage = (type: string, value: unknown): string => {
+  if (typeof value !== "string") return MESSAGE_WITHHELD;
+  if (CONSTANT_MESSAGE_TYPES.has(type)) return scrubErrorText(value);
+  const code = /^([A-Z][A-Z0-9_]*):/.exec(value)?.[1];
+  return code && ERRNO_CODES.has(code) ? `${code}: ${MESSAGE_WITHHELD}` : MESSAGE_WITHHELD;
 };
 
 // posthog-node reads the lines around each frame from disk. They are source,
@@ -250,22 +300,30 @@ const scrubFrame = (frame: ExceptionFrame): ExceptionFrame => {
   return rest;
 };
 
-const scrubEntry = (entry: ExceptionListEntry): ExceptionListEntry => ({
-  ...entry,
-  ...(typeof entry?.value === "string" ? { value: scrubErrorText(entry.value) } : {}),
-  ...(entry?.stacktrace && Array.isArray(entry.stacktrace.frames)
-    ? {
-        stacktrace: {
-          ...entry.stacktrace,
-          frames: (entry.stacktrace.frames as ExceptionFrame[]).map(scrubFrame),
-        },
-      }
-    : {}),
-});
+const scrubEntry = (entry: ExceptionListEntry): ExceptionListEntry => {
+  const type =
+    typeof entry?.type === "string" && KNOWN_ERROR_TYPES.has(entry.type)
+      ? entry.type
+      : "[type withheld]";
+  return {
+    ...entry,
+    type,
+    value: trustedMessage(type, entry?.value),
+    ...(entry?.stacktrace && Array.isArray(entry.stacktrace.frames)
+      ? {
+          stacktrace: {
+            ...entry.stacktrace,
+            frames: (entry.stacktrace.frames as ExceptionFrame[]).map(scrubFrame),
+          },
+        }
+      : {}),
+  };
+};
 
 /**
- * posthog-node `beforeSend` hook: scrubs exception messages and drops source
- * context from stack frames; passes other events through.
+ * posthog-node `beforeSend` hook: an exception keeps only a known type, a
+ * message we wrote, and frames without source lines or account names; other
+ * events pass through.
  */
 export const scrubExceptionEvent = <
   T extends { event: string; properties?: Record<string, unknown> },

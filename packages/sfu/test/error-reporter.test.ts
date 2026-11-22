@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { gunzipSync } from "node:zlib";
@@ -9,6 +10,7 @@ import {
   scrubExceptionEvent,
   type ExceptionClient,
 } from "../server/analytics/errorReporter.js";
+import { ConfigError } from "../server/configError.js";
 
 type CapturedEvent = {
   event: string;
@@ -140,9 +142,7 @@ describe("SFU error reporter", () => {
       $exception_level: "error",
     });
     expect(entry.type).toBe("TypeError");
-    expect(entry.value).toBe(
-      "Cannot read joinRoom for [email] at https://conclave.test/[code]",
-    );
+    expect(entry.value).toBe("[message withheld]");
     expect(
       entry.stacktrace.frames.some((frame) =>
         frame.filename?.endsWith("error-reporter.test.ts"),
@@ -163,7 +163,7 @@ describe("SFU error reporter", () => {
 
     const exception = fake.events.find((event) => event.event === "$exception");
     const list = exception?.properties.$exception_list as Array<{ value: string }>;
-    expect(list[0].value).toBe("Join failed at https://conclave.test/[code]");
+    expect(list[0].value).toBe("[message withheld]");
     expect(fake.bodies.join("\n")).not.toMatch(/lime-pear-plum|private/);
   });
 
@@ -210,8 +210,77 @@ describe("SFU error reporter", () => {
     expect(request).not.toMatch(
       /theme=dark|second_private|set_private|short_private|cHJveHk|operator_private|deploy_private/,
     );
-    expect(request).toContain("~/config/tls.crt");
-    expect(request).toContain("~/conclave/.env");
+  });
+
+  it("keeps only the errno code of a system error", async () => {
+    const fake = await startFakePostHog();
+    servers.push(fake.server);
+    const reporter = reporterFor(posthogClient(fake.host));
+    let failure: unknown;
+    try {
+      readFileSync("/Users/Review GivenName/config/tls.crt");
+    } catch (error) {
+      failure = error;
+    }
+
+    reporter.report(failure, { source: "startup_failed" });
+
+    await waitFor(() => fake.events.some((event) => event.event === "$exception"));
+    const [entry] = fake.events.find((event) => event.event === "$exception")!.properties
+      .$exception_list as Array<{ value: string }>;
+    expect(entry.value).toBe("ENOENT: [message withheld]");
+    expect(fake.bodies.join("\n")).not.toMatch(/GivenName|tls\.crt/);
+  });
+
+  it.each([
+    ["a rejected string", "Meet Mira in sample-room at seven", "non-Error string thrown or rejected"],
+    ["a rejected {name, message} object", { name: "Meet Mira", message: "ReviewMessageCanary" }, "non-Error object thrown or rejected"],
+  ])("normalizes %s to a NonErrorValue", async (_case, value, message) => {
+    const fake = await startFakePostHog();
+    servers.push(fake.server);
+    const reporter = reporterFor(posthogClient(fake.host));
+
+    await reporter.reportFatal(value, { source: "unhandled_rejection" }, 2000);
+
+    const [entry] = fake.events.find((event) => event.event === "$exception")!.properties
+      .$exception_list as Array<{ type: string; value: string }>;
+    expect(entry).toMatchObject({ type: "NonErrorValue", value: message });
+    expect(fake.bodies.join("\n")).not.toMatch(/Mira|sample-room|ReviewMessageCanary/);
+  });
+
+  it("keeps the message of a ConfigError, which names the variable only", async () => {
+    const fake = await startFakePostHog();
+    servers.push(fake.server);
+    const reporter = reporterFor(posthogClient(fake.host));
+
+    reporter.report(new ConfigError("Invalid SFU_CORS_ORIGINS entry at index 1"), {
+      source: "startup_failed",
+    });
+
+    await waitFor(() => fake.events.some((event) => event.event === "$exception"));
+    const [entry] = fake.events.find((event) => event.event === "$exception")!.properties
+      .$exception_list as Array<{ type: string; value: string }>;
+    expect(entry).toMatchObject({
+      type: "ConfigError",
+      value: "Invalid SFU_CORS_ORIGINS entry at index 1",
+    });
+  });
+
+  it("withholds unknown types and keeps a stackless TypeError's type", () => {
+    const scrubbed = scrubExceptionEvent({
+      event: "$exception",
+      properties: {
+        $exception_list: [
+          { type: "Meet Mira", value: "ReviewMessageCanary", mechanism: { synthetic: true } },
+          { type: "TypeError", value: "ReviewTypeCanary is not a function", mechanism: { synthetic: true } },
+        ],
+      },
+    });
+
+    expect(scrubbed.properties?.$exception_list).toEqual([
+      { type: "[type withheld]", value: "[message withheld]", mechanism: { synthetic: true } },
+      { type: "TypeError", value: "[message withheld]", mechanism: { synthetic: true } },
+    ]);
   });
 
   it("strips home folders from stack frame paths", () => {
@@ -224,6 +293,7 @@ describe("SFU error reporter", () => {
             stacktrace: {
               frames: [
                 { filename: "/Users/operator_private/conclave/packages/sfu/server.ts", lineno: 1 },
+                { filename: "/home/Review GivenName/conclave/packages/sfu/server.ts", lineno: 4 },
                 { filename: "C:\\Users\\operator_private\\sfu\\server.js", lineno: 2 },
                 { filename: "server/socket/joinRoom.ts", lineno: 3 },
               ],
@@ -233,7 +303,8 @@ describe("SFU error reporter", () => {
       },
     });
 
-    expect(JSON.stringify(scrubbed)).not.toContain("operator_private");
+    expect(JSON.stringify(scrubbed)).not.toMatch(/operator_private|Review|GivenName/);
+    expect(JSON.stringify(scrubbed)).toContain("~/conclave/packages/sfu/server.ts");
     expect(JSON.stringify(scrubbed)).toContain("server/socket/joinRoom.ts");
   });
 
