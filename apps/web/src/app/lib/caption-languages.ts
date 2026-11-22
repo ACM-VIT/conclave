@@ -61,14 +61,13 @@ export function captionLanguageLabel(code: string | undefined): string {
   );
 }
 
-export function readCaptionLanguage(): string {
+/** The language this browser last picked, or null when it never picked one. */
+export function readCaptionLanguage(): string | null {
   try {
     const stored = window.localStorage.getItem(STORAGE_KEY);
-    return CAPTION_LANGUAGES.some(({ code }) => code === stored)
-      ? (stored as string)
-      : DEFAULT_CAPTION_LANGUAGE;
+    return CAPTION_LANGUAGES.some(({ code }) => code === stored) ? stored : null;
   } catch {
-    return DEFAULT_CAPTION_LANGUAGE;
+    return null;
   }
 }
 

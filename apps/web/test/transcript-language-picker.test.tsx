@@ -118,19 +118,45 @@ describe("caption language picker", () => {
     expect(window.localStorage.getItem("conclave:captions-language")).toBe("hi");
   });
 
-  it("resumes someone else's notes in the language they were in", async () => {
+  const submit = () =>
+    act(async () => {
+      container.querySelector("form")?.requestSubmit();
+    });
+  const sentLanguage = (call: ReturnType<typeof vi.fn>) =>
+    (call.mock.calls[0]?.[0] as { language?: string } | undefined)?.language;
+
+  it("resumes notes in their own language without naming one, so the worker keeps it", async () => {
     window.localStorage.setItem("conclave:captions-language", "en");
     const transcript = controller({ status: "takeover_needed", language: "ta" });
     await render(transcript);
 
     expect(select("captions-language-start")?.value).toBe("ta");
-    await act(async () => {
-      container.querySelector("form")?.requestSubmit();
-    });
+    await submit();
 
-    expect(transcript.takeover).toHaveBeenCalledWith(
-      expect.objectContaining({ language: "ta" }),
-    );
+    expect(transcript.takeover).toHaveBeenCalled();
+    expect(sentLanguage(transcript.takeover as ReturnType<typeof vi.fn>)).toBeUndefined();
+  });
+
+  it("starts without naming a language when nobody picked one, so the deployment default applies", async () => {
+    const transcript = controller({});
+    await render(transcript);
+
+    expect(select("captions-language-start")?.value).toBe("en");
+    await submit();
+
+    expect(transcript.start).toHaveBeenCalled();
+    expect(sentLanguage(transcript.start as ReturnType<typeof vi.fn>)).toBeUndefined();
+  });
+
+  it("names English when someone picks it", async () => {
+    window.localStorage.setItem("conclave:captions-language", "hi");
+    const transcript = controller({});
+    await render(transcript);
+
+    await choose("captions-language-start", "en");
+    await submit();
+
+    expect(sentLanguage(transcript.start as ReturnType<typeof vi.fn>)).toBe("en");
   });
 
   it("hides the language choice until the transcript worker supports it", async () => {

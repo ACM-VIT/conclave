@@ -39,6 +39,7 @@ import {
   captionLanguageFor,
   captionLanguageLabel,
   captionLanguagesFor,
+  DEFAULT_CAPTION_LANGUAGE,
   readCaptionLanguage,
   saveCaptionLanguage,
 } from "../lib/caption-languages";
@@ -282,8 +283,17 @@ function StartStage({
   const resumedLanguage = needsTakeover ? transcript.session.language : undefined;
   const language = captionLanguageFor(
     provider,
-    chosenLanguage ?? resumedLanguage ?? savedLanguage,
+    chosenLanguage ?? resumedLanguage ?? savedLanguage ?? DEFAULT_CAPTION_LANGUAGE,
   );
+  // Only a language someone picked is sent: now, or earlier and saved for a
+  // new session. Otherwise the worker keeps the resumed session's language,
+  // or the deployment default (which can be Sarvam auto-detect).
+  const pickedLanguage = chosenLanguage ?? (needsTakeover ? null : savedLanguage);
+  const sentLanguage =
+    pickedLanguage &&
+    captionLanguagesFor(provider).some(({ code }) => code === pickedLanguage)
+      ? pickedLanguage
+      : undefined;
   const assistantProvider = getResponseProvider(qaModel);
   const available = (name: typeof provider | typeof assistantProvider) =>
     transcript.globalProviderKeysAvailable[name] === true ||
@@ -358,7 +368,7 @@ function StartStage({
         transcriptModel,
         qaModel,
         transportMode: "sfu" as const,
-        language: transcript.supportsCaptionLanguage ? language : undefined,
+        language: transcript.supportsCaptionLanguage ? sentLanguage : undefined,
       };
       const ok = needsTakeover
         ? await transcript.takeover(options)
