@@ -366,9 +366,11 @@ const main = async (): Promise<void> => {
       new Promise((resolve) => setTimeout(resolve, 5_000)),
     ]);
     await new Promise((resolve) => setTimeout(resolve, 300));
-    audit.settleQuestions();
     const seconds = (Date.now() - startedAt) / 1000;
     const server = await request<Record<string, unknown>>(sfu, "report", "report");
+    // Taken after the last wait, with nothing awaited before it is printed,
+    // so no frame can arrive between the verdict and the report.
+    const verdict = audit.finish();
 
     const live = tabs.filter((tab) => tab.kickedAt === null);
     const wire = live.map((tab) => (tab.tcp?.bytesRead ?? 0) - tab.tcpAtStart);
@@ -390,13 +392,13 @@ const main = async (): Promise<void> => {
         roomWireBytesPerSecond: Math.round(sum(wire) / seconds),
       },
       removedMidRun: tabs.filter((tab) => tab.kickedAt !== null).length,
-      questionRowsJudgedLate: audit.questionRowsJudgedLate,
-      unauthorizedFrames: audit.violations.length,
-      unauthorizedSamples: audit.violations.slice(0, 10),
+      questionRowsJudgedLate: verdict.questionRowsJudgedLate,
+      unauthorizedFrames: verdict.violations.length,
+      unauthorizedSamples: verdict.violations.slice(0, 10),
     };
     console.log(JSON.stringify(report, null, 2));
     if (OUT) writeFileSync(OUT, `${JSON.stringify(report, null, 2)}\n`);
-    process.exitCode = audit.violations.length === 0 ? 0 : 1;
+    process.exitCode = verdict.violations.length === 0 ? 0 : 1;
   } finally {
     for (const tab of tabs) tab.socket.disconnect();
     sfu.send("stop");

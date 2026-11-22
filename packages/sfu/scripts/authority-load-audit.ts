@@ -11,22 +11,55 @@ export type AuditPerson = { key: string; name: string; host: boolean };
 export type AuditRecipient = { person: AuditPerson; removed: boolean };
 
 /**
- * What one person has done, across their tabs: the oracle for their rows.
- * `upvoteTakenBackAt` is when each upvote was last taken back. A person's
- * two tabs are two sockets with no order between them, so one tab's
- * "upvoted" frame can land just after the other tab took the upvote back.
- * That row is still theirs for a moment. A row for a question they do not
- * hold an upvote on, and did not just release, is someone else's.
+ * One upvote or take-back as the script saw it: when it left and when its
+ * answer came. The server ran it at some moment between the two.
  */
+type UpvoteRequest = {
+  value: boolean;
+  sentAt: number;
+  ackedAt: number | null;
+  ok: boolean | null;
+};
+
+/** What one person has done, across their tabs: the oracle for their rows. */
 type Ledger = {
   votes: Set<string>;
-  upvotes: Set<string>;
-  upvoteTakenBackAt: Map<string, number>;
+  /** Questions the person holds an upvote on, as far as answers say. */
+  upvoted: Set<string>;
+  upvoteRequests: Map<string, UpvoteRequest[]>;
   asked: Set<string>;
 };
 
-/** How long after taking an upvote back its row may still arrive. */
-const CROSS_TAB_GRACE_MS = 1_000;
+/**
+ * Whether the person could have held the upvote when the server sent a row
+ * at `rowSentAt`. A row is judged by when it was sent, never by when it
+ * arrived: a person's tabs are separate sockets with no order between them,
+ * and a slow one can deliver a row long after another tab took the upvote
+ * back.
+ *
+ * An upvote sent by then stood, unless a take-back that was sent after the
+ * upvote's answer had itself been answered before the row left. Only then
+ * is it certain the server ran the take-back second, and before the row.
+ */
+const couldHoldUpvote = (
+  requests: readonly UpvoteRequest[],
+  rowSentAt: number,
+): boolean =>
+  requests.some(
+    (upvote) =>
+      upvote.value &&
+      upvote.ok !== false &&
+      upvote.sentAt <= rowSentAt &&
+      !requests.some(
+        (back) =>
+          !back.value &&
+          back.ok === true &&
+          upvote.ackedAt !== null &&
+          back.sentAt >= upvote.ackedAt &&
+          back.ackedAt !== null &&
+          back.ackedAt < rowSentAt,
+      ),
+  );
 
 const field = (value: Json, name: string): Json | null =>
   value !== null && typeof value === "object" && !Array.isArray(value)
@@ -34,7 +67,7 @@ const field = (value: Json, name: string): Json | null =>
     : null;
 
 export class LoadAudit {
-  readonly violations: string[] = [];
+  private readonly violations: string[] = [];
   private readonly ledgers = new Map<string, Ledger>();
   private readonly sharedPolls = new Set<string>();
   /**
@@ -43,8 +76,12 @@ export class LoadAudit {
    * every ack is in.
    */
   private readonly unsettledQuestions: { person: AuditPerson; key: string }[] = [];
-  questionRowsJudgedLate = 0;
+  private questionRowsJudgedLate = 0;
 
+  /**
+   * `now` must be the clock the server stamps its frames with. The SFU under
+   * measurement is a child process on this machine, so it is.
+   */
   constructor(private readonly now: () => number = Date.now) {}
 
   /** Records a vote being sent. Returns whether it is the person's first on the poll. */
@@ -55,15 +92,15 @@ export class LoadAudit {
     return first;
   }
 
-  /** Whether the person holds an upvote on the question, as far as acks say. */
+  /** Whether the person holds an upvote on the question, as far as answers say. */
   holdsUpvote(person: AuditPerson, questionId: string): boolean {
-    return this.ledgerOf(person).upvotes.has(questionId);
+    return this.ledgerOf(person).upvoted.has(questionId);
   }
 
   /**
    * Records an upvote (`value` true) or a take-back being sent. Call it
-   * before sending, because the row may arrive before the ack, and call what
-   * it returns with the answer.
+   * before sending, because the row may arrive before the answer, and call
+   * what it returns with the answer.
    */
   upvote(
     person: AuditPerson,
@@ -71,11 +108,20 @@ export class LoadAudit {
     value: boolean,
   ): (ok: boolean) => void {
     const ledger = this.ledgerOf(person);
-    if (value) ledger.upvotes.add(questionId);
+    const request: UpvoteRequest = {
+      value,
+      sentAt: this.now(),
+      ackedAt: null,
+      ok: null,
+    };
+    const requests = ledger.upvoteRequests.get(questionId);
+    if (requests) requests.push(request);
+    else ledger.upvoteRequests.set(questionId, [request]);
+    if (value) ledger.upvoted.add(questionId);
     return (ok) => {
-      if (!ok || value) return;
-      ledger.upvotes.delete(questionId);
-      ledger.upvoteTakenBackAt.set(questionId, this.now());
+      request.ackedAt = this.now();
+      request.ok = ok;
+      if (ok && !value) ledger.upvoted.delete(questionId);
     };
   }
 
@@ -105,11 +151,8 @@ export class LoadAudit {
           this.violations.push(`${person.name}: someone else's ballot ${row.key}`);
         }
       } else if (row.bucket === "myUpvotes") {
-        const takenBackAt = ledger.upvoteTakenBackAt.get(row.key);
-        const justTakenBack =
-          takenBackAt !== undefined &&
-          this.now() - takenBackAt < CROSS_TAB_GRACE_MS;
-        if (!ledger.upvotes.has(row.key) && !justTakenBack) {
+        const requests = ledger.upvoteRequests.get(row.key) ?? [];
+        if (!couldHoldUpvote(requests, frame.serverNowMs)) {
           this.violations.push(`${person.name}: someone else's upvote ${row.key}`);
         }
       } else if (row.bucket === "myQuestions") {
@@ -124,14 +167,22 @@ export class LoadAudit {
     }
   }
 
-  /** Judges the question rows that were waiting for an ack. */
-  settleQuestions(): void {
+  /**
+   * The verdict on every frame received so far. It first judges the question
+   * rows that were waiting for an ack, so take it after the last wait: a row
+   * that arrives later is not in it.
+   */
+  finish(): { violations: string[]; questionRowsJudgedLate: number } {
     this.questionRowsJudgedLate += this.unsettledQuestions.length;
     for (const { person, key } of this.unsettledQuestions.splice(0)) {
       if (!this.ledgerOf(person).asked.has(key)) {
         this.violations.push(`${person.name}: someone else's question ${key}`);
       }
     }
+    return {
+      violations: [...this.violations],
+      questionRowsJudgedLate: this.questionRowsJudgedLate,
+    };
   }
 
   private ledgerOf(person: AuditPerson): Ledger {
@@ -139,8 +190,8 @@ export class LoadAudit {
     if (!ledger) {
       ledger = {
         votes: new Set(),
-        upvotes: new Set(),
-        upvoteTakenBackAt: new Map(),
+        upvoted: new Set(),
+        upvoteRequests: new Map(),
         asked: new Set(),
       };
       this.ledgers.set(person.key, ledger);
