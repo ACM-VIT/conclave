@@ -1245,7 +1245,11 @@ const createSqliteSchedulingPersistence = (
   };
 };
 
-/** Hours without their own updatedAt take their profile's, which every hours edit bumps, else 0 so they only fill a gap. */
+/**
+ * Hours saved before they carried their own updatedAt take their profile's,
+ * which every hours edit bumps, else 0 so they only fill a gap. Imported hours
+ * are stamped with that time, so they never need the fallback again.
+ */
 const hoursUpdatedAt = (hours: unknown, profile: unknown): number =>
   finiteNumber((hours as { updatedAt?: unknown } | null)?.updatedAt) ??
   finiteNumber((profile as { updatedAt?: unknown } | null)?.updatedAt) ??
@@ -1258,27 +1262,39 @@ const SNAPSHOT_FIELD: Record<SchedulingRecordKind, keyof SchedulingSnapshot> = {
   calendar: "calendars",
 };
 
-const importIntoJsonSnapshot = (path: string, record: SchedulingRecordWrite): boolean => {
+const readJsonSnapshot = (path: string): Record<string, unknown> => {
   const stored = readJsonStore(path) ?? {};
   if (!stored || typeof stored !== "object" || Array.isArray(stored)) {
     throw new Error(`${path} is not a scheduling snapshot`);
   }
-  const snapshot = stored as Record<string, unknown>;
+  return stored as Record<string, unknown>;
+};
+
+const snapshotList = (snapshot: Record<string, unknown>, field: string): unknown[] =>
+  snapshot[field] === undefined ? [] : requireArray(snapshot[field], field);
+
+const storedProfilesById = (snapshot: Record<string, unknown>): Map<unknown, unknown> =>
+  new Map(
+    snapshotList(snapshot, "profiles").map((profile) => [(profile as { id?: unknown } | null)?.id, profile]),
+  );
+
+const importIntoJsonSnapshot = (
+  path: string,
+  record: SchedulingRecordWrite,
+  profilesBeforeImport: Map<unknown, unknown>,
+): boolean => {
+  const snapshot = readJsonSnapshot(path);
   const field = SNAPSHOT_FIELD[record.kind];
-  const entries = snapshot[field] === undefined ? [] : requireArray(snapshot[field], field);
-  const profiles = snapshot.profiles === undefined ? [] : requireArray(snapshot.profiles, "profiles");
+  const entries = snapshotList(snapshot, field);
   const keyField = record.kind === "profile" || record.kind === "event_type" ? "id" : "profileId";
-  const storedHoursAt = (entry: Record<string, unknown>) =>
-    hoursUpdatedAt(
-      entry.availability,
-      profiles.find((profile) => (profile as { id?: unknown } | null)?.id === entry.profileId),
-    );
   const replaced = replaceIfNewer(
     entries,
     (entry) => entry[keyField] === record.id,
     record.payload,
     record.updatedAt,
-    record.kind === "availability" ? storedHoursAt : undefined,
+    record.kind === "availability"
+      ? (entry) => hoursUpdatedAt(entry.availability, profilesBeforeImport.get(entry.profileId))
+      : undefined,
   );
   if (replaced) writeJsonAtomic(path, JSON.stringify({ ...snapshot, [field]: entries }, null, 2));
   return replaced;
@@ -1286,38 +1302,44 @@ const importIntoJsonSnapshot = (path: string, record: SchedulingRecordWrite): bo
 
 const createFileSchedulingPersistence = (
   path: string = getSchedulingJsonPath(),
-): SchedulingPersistence => ({
-  importIfNewer: (record) => importIntoJsonSnapshot(path, record),
-  save: (snapshot) => {
-    try {
-      writeJsonAtomic(
-        path,
-        JSON.stringify(
-          {
-            ...snapshot,
-            calendars: snapshot.calendars.map(serializeCalendar),
-          },
-          null,
-          2,
-        ),
-      );
-    } catch (error) {
-      Logger.error("Failed to persist scheduling records to JSON", error);
-    }
-  },
-  load: () => {
-    try {
-      if (!existsSync(path)) return normalizeSnapshot({});
-      // Own serialized writes; normalizeSnapshot re-checks the array shape.
-      return normalizeSnapshot(
-        JSON.parse(readFileSync(path, "utf8")) as Partial<SchedulingSnapshot>,
-      );
-    } catch (error) {
-      Logger.error("Failed to load scheduling records from JSON", error);
-      return normalizeSnapshot({});
-    }
-  },
-});
+): SchedulingPersistence => {
+  let profilesBeforeImport: Map<unknown, unknown> | null = null;
+  return {
+    importIfNewer: (record) => {
+      profilesBeforeImport ??= storedProfilesById(readJsonSnapshot(path));
+      return importIntoJsonSnapshot(path, record, profilesBeforeImport);
+    },
+    save: (snapshot) => {
+      try {
+        writeJsonAtomic(
+          path,
+          JSON.stringify(
+            {
+              ...snapshot,
+              calendars: snapshot.calendars.map(serializeCalendar),
+            },
+            null,
+            2,
+          ),
+        );
+      } catch (error) {
+        Logger.error("Failed to persist scheduling records to JSON", error);
+      }
+    },
+    load: () => {
+      try {
+        if (!existsSync(path)) return normalizeSnapshot({});
+        // Own serialized writes; normalizeSnapshot re-checks the array shape.
+        return normalizeSnapshot(
+          JSON.parse(readFileSync(path, "utf8")) as Partial<SchedulingSnapshot>,
+        );
+      } catch (error) {
+        Logger.error("Failed to load scheduling records from JSON", error);
+        return normalizeSnapshot({});
+      }
+    },
+  };
+};
 
 const UPSERT_SCHEDULING_RECORD_SCRIPT = `
 local recordKey = KEYS[1]
@@ -1794,12 +1816,13 @@ const schedulingRecordFromFallback = ({
     const hours = record.availability;
     if (!hours || typeof hours !== "object") throw new Error("availability is missing");
     const profile = profilesById.get(profileId);
+    const updatedAt = hoursUpdatedAt(hours, profile);
     return {
       kind,
       id: profileId,
       clientId: normalizeSnapshotClientId(profile?.clientId),
-      updatedAt: hoursUpdatedAt(hours, profile),
-      payload: { profileId, availability: hours },
+      updatedAt,
+      payload: { profileId, availability: { ...hours, updatedAt } },
     };
   }
   const clientId = normalizeSnapshotClientId(record.clientId);

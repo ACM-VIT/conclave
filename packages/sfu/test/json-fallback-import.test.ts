@@ -138,6 +138,7 @@ describe("importing JSON fallback files copied from old containers", () => {
 
 describe("importing JSON fallback files into a single-instance JSON store", () => {
   const store = (file: string) => join(stateDir, "store", file);
+  const storedJson = (file: string): unknown => JSON.parse(readFileSync(store(file), "utf8"));
 
   beforeEach(() => {
     for (const prefix of ["SCHEDULING", "SCHEDULED_MEETINGS", "SCHEDULED_WEBINARS"]) {
@@ -191,6 +192,42 @@ describe("importing JSON fallback files into a single-instance JSON store", () =
     const saved = await createSchedulingPersistence().load();
     expect(saved.profiles.map((entry) => entry.id).sort()).toEqual(["host", "prior-host"]);
     expect(saved.availability).toEqual([hours(200, 600)]);
+  });
+
+  describe("when the stored hours predate their own updatedAt", () => {
+    const profile = (updatedAt: number) => ({ id: "host", clientId: "conclave", userId: "user-host", email: "host@example.test", name: "Host", username: "host", timeZone: "Asia/Kolkata", createdAt: 1, updatedAt });
+    const hours = (startMinutes: number, updatedAt?: number) => ({
+      profileId: "host",
+      availability: { timeZone: "Asia/Kolkata", windows: [{ day: 1 as const, startMinutes, endMinutes: 1020 }], overrides: [], ...(updatedAt === undefined ? {} : { updatedAt }) },
+    });
+    const storedHours = () => (storedJson("scheduling.json") as { availability: ReturnType<typeof hours>[] }).availability;
+
+    beforeEach(() => {
+      mkdirSync(join(stateDir, "store"), { recursive: true });
+      writeFileSync(store("scheduling.json"), JSON.stringify({ profiles: [profile(100)], availability: [hours(540)], eventTypes: [], calendars: [] }));
+    });
+
+    it("compares them with the profile as stored before the import, not the recovered profile", async () => {
+      writeFallback("sfu-a", "scheduling.json", { profiles: [profile(200)], availability: [hours(600, 200)], eventTypes: [], calendars: [] });
+
+      expect(await importFallbackScheduling(createSchedulingPersistence())).toBe(2);
+      expect(storedHours()).toEqual([hours(600, 200)]);
+    });
+
+    it("still does when an earlier file brought the newer profile", async () => {
+      writeFallback("sfu-a", "scheduling.json", { profiles: [profile(200)], availability: [], eventTypes: [], calendars: [] });
+      writeFallback("sfu-b", "scheduling.json", { profiles: [], availability: [hours(600, 200)], eventTypes: [], calendars: [] });
+
+      expect(await importFallbackScheduling(createSchedulingPersistence())).toBe(2);
+      expect(storedHours()).toEqual([hours(600, 200)]);
+    });
+
+    it("stamps imported hours with the time they were compared at", async () => {
+      writeFallback("sfu-a", "scheduling.json", { profiles: [profile(300)], availability: [hours(660)], eventTypes: [], calendars: [] });
+
+      expect(await importFallbackScheduling(createSchedulingPersistence())).toBe(2);
+      expect(storedHours()).toEqual([hours(660, 300)]);
+    });
   });
 
   it("keeps the fallback file and leaves a damaged store untouched", async () => {

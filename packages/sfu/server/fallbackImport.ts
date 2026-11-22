@@ -20,7 +20,9 @@ const pendingFallbackFiles = (fileName: string): string[] => {
   if (!existsSync(root)) return [];
   return readdirSync(root, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
-    .map((entry) => join(root, entry.name, fileName))
+    .map((entry) => entry.name)
+    .sort()
+    .map((name) => join(root, name, fileName))
     .filter((file) => existsSync(file));
 };
 
