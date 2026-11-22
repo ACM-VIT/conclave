@@ -25,8 +25,15 @@ afterEach(() => {
 const makeSocket = (id: string, user: SfuAuthPayload = {}) => {
   const handlers = new Map<string, Handler>();
   const emit = vi.fn();
-  const emitToRoom = vi.fn();
-  const to = vi.fn((_roomChannel: string) => ({ emit: emitToRoom }));
+  const roomEmits = new Map<string, ReturnType<typeof vi.fn>>();
+  const emitToRoom = (channelId: string) => {
+    const existing = roomEmits.get(channelId);
+    if (existing) return existing;
+    const recorder = vi.fn();
+    roomEmits.set(channelId, recorder);
+    return recorder;
+  };
+  const to = (channelId: string) => ({ emit: emitToRoom(channelId) });
   const socket = {
     id,
     data: { user },
@@ -38,7 +45,7 @@ const makeSocket = (id: string, user: SfuAuthPayload = {}) => {
     leave: vi.fn(),
     to,
   } as unknown as Socket;
-  return { socket, handlers, emit, to, emitToRoom };
+  return { socket, handlers, emit, emitToRoom };
 };
 
 const makeState = (workers: Worker[] = []): SfuState => {
@@ -88,18 +95,20 @@ describe("host roster on join", () => {
       userId: "bob", clientId: "conclave", sessionId: "b", isForcedHost: true,
     }, oldRoom.id);
     expect(oldRoom.getHostUserId()).toBe("alice#a");
-    peer.to.mockClear();
-    peer.emitToRoom.mockClear();
+    const oldRoomEvents = peer.emitToRoom(oldRoom.channelId);
+    const nextRoomEvents = peer.emitToRoom(nextRoom.channelId);
+    oldRoomEvents.mockClear();
+    nextRoomEvents.mockClear();
     const ack = vi.fn();
     await peer.handlers.get("joinRoom")!(
       ...[{ roomId: nextRoom.id, sessionId: "a" }, ack] as never[]
     );
 
     expect(ack).toHaveBeenCalledWith(expect.objectContaining({ roomId: nextRoom.id, status: "joined" }));
-    expect(peer.to).toHaveBeenCalledWith(oldRoom.channelId);
-    expect(peer.emitToRoom).toHaveBeenCalledWith("userLeft", { roomId: oldRoom.id, userId: "alice#a" });
-    expect(peer.emitToRoom).toHaveBeenCalledWith("hostChanged", { roomId: oldRoom.id, hostUserId: "bob#b" });
-    expect(peer.emitToRoom).toHaveBeenCalledWith("adminUsersChanged", { roomId: oldRoom.id, hostUserIds: ["bob#b"] });
+    expect(oldRoomEvents).toHaveBeenCalledWith("userLeft", { roomId: oldRoom.id, userId: "alice#a" });
+    expect(oldRoomEvents).toHaveBeenCalledWith("hostChanged", { roomId: oldRoom.id, hostUserId: "bob#b" });
+    expect(oldRoomEvents).toHaveBeenCalledWith("adminUsersChanged", { roomId: oldRoom.id, hostUserIds: ["bob#b"] });
+    expect(nextRoomEvents).not.toHaveBeenCalled();
   });
 
   it("sends an unchanged roster to the guest and broadcasts a new co-host", async () => {
