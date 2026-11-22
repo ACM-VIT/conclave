@@ -755,6 +755,7 @@ export class Room {
       this.hostUserKey === userKey ||
       this.adminUserKeys.has(userKey) ||
       this.admissions.names(this.principalOf(userKey), userKey) ||
+      this.admissions.holdsRefusalFor(`key:${userKey}`) ||
       this.blockedUsers.has(userKey) ||
       this.pendingClients.has(userKey)
     ) {
@@ -921,6 +922,19 @@ export class Room {
   }
 
   /**
+   * Where a refusal of `userKey` is kept: where its decisions are, and
+   * against the pass whenever a proof ties the key to one, so the refusal
+   * reaches the pass's other tabs after this key is gone.
+   */
+  private refusalPrincipalsOf(userKey: string): string[] {
+    const principal = this.principalOf(userKey);
+    const guestProof = this.guestProofsByUserKey.get(userKey);
+    return guestProof === undefined || principal === `pass:${guestProof}`
+      ? [principal]
+      : [principal, `pass:${guestProof}`];
+  }
+
+  /**
    * The principals whose decisions a join as `userKey` may lean on. A token
    * issued for this room (`roomGuestProof`) speaks for the whole guest:
    * every linked pass, and the keys bound to them. Any other token speaks
@@ -1049,7 +1063,10 @@ export class Room {
 
   /** A host turned away the request `userKey` made to be let in. */
   denyWaitingRequest(userKey: string): void {
-    this.admissions.deny(this.principalOf(userKey), this.tick());
+    const at = this.tick();
+    for (const principal of this.refusalPrincipalsOf(userKey)) {
+      this.admissions.deny(principal, at);
+    }
     if (this.pendingClients.has(userKey)) {
       this.lobbyOutcomes.set(userKey, "rejected");
     }
@@ -1073,7 +1090,7 @@ export class Room {
 
   private recordRevocation(userKeys: string[], scopes: AdmissionScope[]): void {
     this.admissions.revoke(
-      userKeys.map((userKey) => this.principalOf(userKey)),
+      userKeys.flatMap((userKey) => this.refusalPrincipalsOf(userKey)),
       scopes,
       this.tick(),
     );
@@ -1580,7 +1597,11 @@ export class Room {
   /** A host takes back the stage invite of the guest behind `userKey`. */
   revokeWebinarPromotion(userKey: string): boolean {
     const hadInvite = this.isWebinarPromotedUserKey(userKey);
-    this.admissions.revoke([this.principalOf(userKey)], ["stage"], this.tick());
+    this.admissions.revoke(
+      this.refusalPrincipalsOf(userKey),
+      ["stage"],
+      this.tick(),
+    );
     this.releaseGuestIdentity(userKey);
     return hadInvite;
   }
@@ -1630,7 +1651,7 @@ export class Room {
    */
   markWebinarDemotedUserKey(userKey: string): void {
     this.admissions.revoke(
-      [this.principalOf(userKey)],
+      this.refusalPrincipalsOf(userKey),
       ["stage", "stageDemotion"],
       this.tick(),
     );
@@ -2541,7 +2562,7 @@ export class Room {
   ): void {
     const keys = [...userKeys];
     this.admissions.revoke(
-      keys.map((key) => this.principalOf(key)),
+      keys.flatMap((key) => this.refusalPrincipalsOf(key)),
       ["waitingRoom", "lock", "stage"],
       this.tick(),
       options,

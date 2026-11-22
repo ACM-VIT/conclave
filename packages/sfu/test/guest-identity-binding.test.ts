@@ -2936,6 +2936,35 @@ describe("what a participant's own action adds to the decision record", () => {
     }
     expect(room.decisionRecordCount).toBe(before);
   });
+
+  it("keeps a legacy speaker moved back to the audience off the stage when its pass comes back in a new tab (Greptile)", async () => {
+    const { state, room, host } = await webinar({ locked: false });
+    const legacy = {
+      userId: "guest-legacy-speaker",
+      clientId: "conclave",
+      sessionId: "speaker-1",
+      joinMode: "meeting",
+      guestProof: "proof-of-the-speaker-pass",
+    } satisfies SfuAuthPayload;
+    const speaker = await join(state, legacy);
+    expect(speaker.ack).toHaveBeenCalledWith(expect.objectContaining({ status: "joined", webinarRole: "participant" }));
+
+    expect(await ask(host.peer, "webinar:demoteParticipant", { userId: seatOf(legacy) })).toHaveBeenCalledWith({ success: true });
+    await endOfTurn();
+    const newTab = {
+      userId: "guest-gp_SSSSSSSSSSSSSSSSSSSSSS",
+      clientId: "conclave",
+      sessionId: "speaker-2",
+      joinMode: "meeting",
+      guestProof: legacy.guestProof,
+    } satisfies SfuAuthPayload;
+    const back = await join(state, newTab);
+
+    expect(back.ack).toHaveBeenCalledWith(expect.objectContaining({ error: "Use the public webinar link to join as an attendee." }));
+    expect(room.getClient(seatOf(newTab))).toBeUndefined();
+    // The refusal keeps the legacy key bound to its pass.
+    expect(room.isGuestKeyOfPass(legacy.userId, legacy.guestProof)).toBe(true);
+  });
 });
 
 describe("who may come in, against a slow reading of every decision", () => {
