@@ -149,4 +149,7 @@ It fails if either side goes more than 2 s without audio or is disconnected.
   container config.
 - `scripts/deploy-sfu.ps1` only runs `scripts/deploy-sfu.sh` with the same
   arguments, so a deploy started from PowerShell follows every rule above. It
-  needs bash on PATH with Docker reachable from it (WSL or Git Bash).
+  runs where PowerShell runs on Linux or macOS, with bash, flock and Docker on
+  PATH. On Windows it exits 1 at once: WSL's `bash.exe` cannot open the
+  script's Windows path and Git Bash has no `flock`, so open a WSL shell in
+  the checkout and run `./scripts/deploy-sfu.sh` there.

@@ -700,6 +700,16 @@ test("a host without flock refuses to deploy rather than lock some other way", a
   });
 });
 
+test("deploy-sfu.ps1 refuses to start on Windows and says to run deploy-sfu.sh in WSL", { skip: !hasPowerShell && "needs pwsh on PATH" }, async () => {
+  await withSfus({ "sfu-a": {}, "sfu-b": {} }, async (sfus) => {
+    // OS=Windows_NT is how Windows identifies itself to every process.
+    const result = await deploy(sfus, { powershell: true, env: { OS: "Windows_NT" } });
+    assert.equal(result.code, 1, result.output);
+    assert.match(result.output, /Open a WSL shell in the checkout and run \.\/scripts\/deploy-sfu\.sh/);
+    assert.deepEqual(result.docker, [], "deploy-sfu.sh never ran");
+  });
+});
+
 test("deploy-sfu.ps1 hands the deploy, --rollback included, to deploy-sfu.sh", { skip: !hasPowerShell && "needs pwsh on PATH" }, async () => {
   await withSfus({ "sfu-a": { onTarget: true }, "sfu-b": { onTarget: true } }, async (sfus) => {
     const stateDir = await mkdtemp(path.join(tmpdir(), "conclave-deploy-state-"));
