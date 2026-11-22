@@ -182,6 +182,59 @@ describe("in-call notices", () => {
     expect(toggle()).toBeUndefined();
   });
 
+  it("opens notices in a sheet instead of over controls when the stage has no room", async () => {
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(60);
+    const clientHeight = vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(70);
+    const notices = ["Camera is blocked", "You’re offline", "Audio-only mode is on"].map((text) => (
+      <InCallNotice key={text} show>
+        <InCallNoticeCard tone={text === "Camera is blocked" ? "error" : "neutral"} icon={Headphones} title={text} />
+      </InCallNotice>
+    ));
+    const button = (name: string) =>
+      [...document.querySelectorAll("button")].find(
+        (b) => b.getAttribute("aria-label") === name || b.textContent === name,
+      );
+    const mode = () => slot()?.getAttribute("data-lane-mode");
+    const sheet = () => document.querySelector("dialog");
+    await render(notices);
+    await waitOutExit();
+    expect(mode()).toBe("compact");
+    const inserted: string[] = [];
+    const observer = new MutationObserver((records) => {
+      for (const record of records) for (const node of record.addedNodes) inserted.push(node.textContent ?? "");
+    });
+    for (const region of [slot()?.querySelector('[aria-live="polite"]'), alertRegion()]) {
+      if (region) observer.observe(region, { childList: true, subtree: true, characterData: true });
+    }
+
+    await act(async () => button("Show 2 more notices")?.click());
+    await waitOutExit();
+    expect(mode()).toBe("sheet");
+    expect(sheet()?.getAttribute("aria-label")).toBe("Notices");
+    expect(sheet()?.querySelectorAll("[data-in-call-notice]")).toHaveLength(3);
+    expect(slot()?.querySelector("[data-in-call-notices] > div [data-in-call-notice]")).toBeNull();
+
+    await act(async () => button("Close notices")?.click());
+    await waitOutExit();
+    expect(sheet()).toBeNull();
+    expect(mode()).toBe("compact");
+
+    clientHeight.mockReturnValue(20);
+    await act(async () => window.dispatchEvent(new Event("resize")));
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 700)));
+    expect(mode()).toBe("chip");
+    const chip = button("Show 3 notices");
+    expect(chip).toBeTruthy();
+    expect(slot()?.querySelector("[data-in-call-notices] > div > div[inert]")).toBeTruthy();
+
+    await act(async () => chip?.click());
+    await waitOutExit();
+    expect(mode()).toBe("sheet");
+    expect(sheet()?.querySelectorAll("[data-in-call-notice]")).toHaveLength(3);
+    observer.disconnect();
+    expect(inserted).toEqual([]);
+  });
+
   it("resumes paused audio from a click anywhere on the notice, once per click", async () => {
     const onResume = vi.fn();
     await render(
@@ -275,6 +328,7 @@ describe("in-call notices", () => {
   it("puts notices in the open phone panel's flow instead of over its rows", async () => {
     const panel = document.createElement("div");
     panel.innerHTML = '<header>Participants</header><div data-panel-notices></div><section>Host controls</section>';
+    panel.getBoundingClientRect = () => new DOMRect(0, 0, 390, 844);
     document.body.append(panel);
     await act(async () =>
       root.render(
@@ -331,6 +385,7 @@ describe("in-call notices", () => {
     const panel = document.createElement("div");
     panel.className = "fixed";
     panel.innerHTML = "<header>Chat</header><div data-panel-notices></div><form>Composer</form>";
+    panel.getBoundingClientRect = () => new DOMRect(0, 0, 390, 844);
     document.body.append(panel);
     await act(async () => root.render(notices(true)));
     await waitOutExit();

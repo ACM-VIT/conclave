@@ -10,16 +10,21 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
+import { AlertCircle, Bell, X } from "lucide-react";
 import {
-  findLaneGap,
+  findClearSpot,
   InCallNoticeLaneContext,
   placeNoticeLane,
+  placeNoticeList,
   type LaneObstacle,
 } from "../lib/in-call-notice-lane";
 
 const NOTICE_GAP_PX = 8;
 const TOGGLE_HEIGHT_PX = 36;
 const COMPACT_HEIGHT_PX = 44;
+const LIST_MIN_HEIGHT_PX = 2 * COMPACT_HEIGHT_PX + NOTICE_GAP_PX;
+const CHIP_HEIGHT_PX = 40;
+const CHIP_WIDTH_PX = 56;
 const MAX_PEEKS = 2;
 const PANEL_NOTICE_SHARE = 0.5;
 const MAX_LANE_WIDTH_PX = 560;
@@ -40,6 +45,8 @@ interface InCallNoticeSlotProps {
   overPanel?: boolean;
 }
 
+type NoticeView = "stack" | "list" | "sheet";
+
 interface Announcement {
   text: string;
   urgent: boolean;
@@ -52,9 +59,12 @@ interface LaneState {
   count: number;
   room: number;
   narrow?: { left: number; width: number };
-  bare?: boolean;
   cramped?: boolean;
+  probing?: boolean;
+  chip?: { left: number; top: number; urgent: boolean };
 }
+
+const EMPTY_LANE: LaneState = { compact: false, offset: 0, count: 0, room: 0 };
 
 const sameLane = (a: LaneState, b: LaneState) =>
   a.compact === b.compact &&
@@ -63,8 +73,11 @@ const sameLane = (a: LaneState, b: LaneState) =>
   a.room === b.room &&
   a.narrow?.left === b.narrow?.left &&
   a.narrow?.width === b.narrow?.width &&
-  a.bare === b.bare &&
-  a.cramped === b.cramped;
+  a.cramped === b.cramped &&
+  a.probing === b.probing &&
+  a.chip?.left === b.chip?.left &&
+  a.chip?.top === b.chip?.top &&
+  a.chip?.urgent === b.chip?.urgent;
 
 const narrowLane = (
   placement: { left?: number; right?: number },
@@ -74,13 +87,10 @@ const narrowLane = (
     ? undefined
     : { left: Math.round(placement.left - padLeft), width: Math.round(placement.right - placement.left) };
 
-function layoutStack(
-  list: HTMLElement,
-  items: HTMLElement[],
-  heights: number[],
-  expanded: boolean,
-  bare: boolean,
-) {
+const noticeContent = (item: Element) =>
+  item.querySelector("[data-notice-content]")?.getAttribute("data-notice-content") ?? "";
+
+function layoutStack(list: HTMLElement, items: HTMLElement[], heights: number[], expanded: boolean) {
   if (expanded || items.length <= 1) {
     let y = 0;
     items.forEach((item, index) => {
@@ -105,22 +115,18 @@ function layoutStack(
       item.setAttribute("data-peek", "");
       item.style.height = `${top}px`;
     }
-    item.style.translate = `0 ${bare ? 0 : depth * PEEK_STEP_PX}px`;
+    item.style.translate = `0 ${depth * PEEK_STEP_PX}px`;
     item.style.scale = `${1 - depth * PEEK_SHRINK} 1`;
     item.style.zIndex = String(items.length - index);
     item.style.setProperty(
       "--notice-opacity",
-      index === 0 ? "1" : index <= MAX_PEEKS && !bare ? String(PEEK_OPACITY[index - 1]) : "0",
+      index === 0 ? "1" : index <= MAX_PEEKS ? String(PEEK_OPACITY[index - 1]) : "0",
     );
   });
-  list.style.height = `${top + (bare ? 0 : Math.min(MAX_PEEKS, items.length - 1) * PEEK_STEP_PX)}px`;
+  list.style.height = `${top + Math.min(MAX_PEEKS, items.length - 1) * PEEK_STEP_PX}px`;
 }
 
-function collectObstacles(
-  slot: HTMLElement,
-  slotRect: DOMRect,
-  root: Element | null,
-) {
+function collectObstacles(slot: HTMLElement, slotRect: DOMRect, root: Element | null) {
   const obstacles: LaneObstacle[] = [];
   if (!root) return obstacles;
   for (const el of root.querySelectorAll<HTMLElement>(CONTROL_SELECTOR)) {
@@ -155,6 +161,41 @@ function fullScreenPanel() {
   return { panel, headerBottom: header ? header.getBoundingClientRect().bottom : 60 };
 }
 
+function heightKeptBelow(target: Element) {
+  let kept = 0;
+  for (let sibling = target.nextElementSibling; sibling; sibling = sibling.nextElementSibling) {
+    const style = getComputedStyle(sibling);
+    if (style.display === "none" || style.position === "absolute" || style.position === "fixed") continue;
+    const shrinksToContent =
+      style.minHeight === "auto" && style.overflowX === "visible" && style.overflowY === "visible";
+    const frame = ["paddingTop", "paddingBottom", "borderTopWidth", "borderBottomWidth"] as const;
+    const minimum =
+      style.flexShrink === "0" || shrinksToContent
+        ? (sibling as HTMLElement).offsetHeight
+        : Math.max(
+            parseFloat(style.minHeight) || 0,
+            frame.reduce((sum, side) => sum + (parseFloat(style[side]) || 0), 0),
+          );
+    kept += minimum + (parseFloat(style.marginTop) || 0) + (parseFloat(style.marginBottom) || 0);
+  }
+  return kept;
+}
+
+function panelRoom(target: HTMLElement) {
+  const panel = target.closest(".fixed") ?? target.parentElement ?? target;
+  const panelRect = panel.getBoundingClientRect();
+  const top = target.offsetParent
+    ? target.getBoundingClientRect().top
+    : (target.previousElementSibling?.getBoundingClientRect().bottom ?? panelRect.top);
+  const padTop = parseFloat(getComputedStyle(target).paddingTop) || 0;
+  return {
+    panel,
+    top,
+    height: panelRect.height,
+    room: Math.floor(Math.min(panelRect.bottom, window.innerHeight) - top - padTop - heightKeptBelow(target)),
+  };
+}
+
 export default function InCallNoticeSlot({
   children,
   rightInset = 0,
@@ -166,23 +207,27 @@ export default function InCallNoticeSlot({
   const columnRef = useRef<HTMLDivElement>(null);
   const rowRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const sheetRef = useRef<HTMLDialogElement>(null);
   const fullHeightsRef = useRef(new WeakMap<Element, { key: string; height: number }>());
   const fullListHeightRef = useRef<{ key: string; height: number } | null>(null);
-  const [lane, setLane] = useState<LaneState>({ compact: false, offset: 0, count: 0, room: 0 });
-  const [expanded, setExpanded] = useState(false);
+  const [lane, setLane] = useState<LaneState>(EMPTY_LANE);
+  const [view, setView] = useState<NoticeView>("stack");
   const [announcements, setAnnouncements] = useState<ReadonlyMap<string, Announcement>>(
     () => new Map(),
   );
+  const [panelTarget, setPanelTarget] = useState<HTMLElement | null>(null);
+  const [sheetBody, setSheetBody] = useState<HTMLDivElement | null>(null);
   const laneRef = useRef(lane);
   laneRef.current = lane;
-  const expandedRef = useRef(expanded);
-  expandedRef.current = expanded;
+  const viewRef = useRef(view);
+  viewRef.current = view;
   const overPanelRef = useRef(overPanel);
   overPanelRef.current = overPanel;
-  const [panelTarget, setPanelTarget] = useState<HTMLElement | null>(null);
   const panelTargetRef = useRef(panelTarget);
   panelTargetRef.current = panelTarget;
   const scheduleRef = useRef<() => void>(() => {});
+  const surface =
+    view === "sheet" && sheetBody ? sheetBody : panelTarget && !lane.chip ? panelTarget : null;
 
   useLayoutEffect(() => {
     if (!overPanel) {
@@ -200,6 +245,11 @@ export default function InCallNoticeSlot({
   }, [overPanel]);
 
   useLayoutEffect(() => {
+    const sheet = sheetRef.current;
+    if (view === "sheet" && sheet && !sheet.open) sheet.showModal?.();
+  }, [view]);
+
+  useLayoutEffect(() => {
     const slot = slotRef.current;
     const column = columnRef.current;
     const row = rowRef.current;
@@ -207,131 +257,144 @@ export default function InCallNoticeSlot({
     if (!slot || !column || !row || !list) return;
 
     const commit = (next: LaneState) => {
-      if (next.count <= 1) setExpanded(false);
+      if (next.count === 0) setView("stack");
+      else if (next.count === 1) setView((current) => (current === "list" ? "stack" : current));
       setLane((prev) => (sameLane(prev, next) ? prev : next));
     };
+    const openSheet = () => setView("sheet");
 
     const measure = () => {
       const items = [...list.children] as HTMLElement[];
       const count = items.length;
       if (count === 0) {
         list.style.height = "0px";
-        commit({ compact: false, offset: 0, count: 0, room: 0 });
+        commit(EMPTY_LANE);
         return;
       }
       for (const item of items) item.style.height = "";
       const heights = items.map((item) => item.offsetHeight);
-      const isExpanded = expandedRef.current && count > 1;
-      layoutStack(list, items, heights, isExpanded, Boolean(laneRef.current.bare));
+      const currentView = viewRef.current;
+      const showsList = currentView === "sheet" || (currentView === "list" && count > 1);
+      layoutStack(list, items, heights, showsList);
+      if (currentView === "sheet") {
+        commit({ compact: false, offset: 0, count, room: 0 });
+        return;
+      }
 
       const peekSpace = Math.min(MAX_PEEKS, count - 1) * PEEK_STEP_PX;
       const footerSpace = count > 1 ? TOGGLE_HEIGHT_PX : 0;
       const listHeight =
         heights.reduce((sum, height) => sum + height, 0) + NOTICE_GAP_PX * (count - 1);
+
+      const urgent = items.some((item) => item.querySelector('[data-tone="error"]'));
       const slotRect = slot.getBoundingClientRect();
-      const cssMinTop = parseFloat(getComputedStyle(column).paddingTop) || 0;
-      const maxBottom = column.clientHeight;
+      const listContent = items.map(noticeContent).join("|");
+      const fullListHeight = (naturalWidth: number) => {
+        if (!laneRef.current.cramped) {
+          fullListHeightRef.current = {
+            key: `${Math.round(row.clientWidth)}:${listContent}`,
+            height: listHeight,
+          };
+          return listHeight;
+        }
+        const cached = fullListHeightRef.current;
+        return cached?.key === `${Math.round(naturalWidth)}:${listContent}` ? cached.height : null;
+      };
+      const probeFullList = () =>
+        commit({ ...laneRef.current, cramped: false, narrow: undefined, probing: true, count });
 
       const target = panelTargetRef.current;
       if (target) {
-        const panelRect = (target.closest(".fixed") ?? target.parentElement ?? target).getBoundingClientRect();
-        const listTop = list.getBoundingClientRect().top;
-        const panelRoom = Math.min(
-          panelRect.bottom - listTop - TOGGLE_HEIGHT_PX - NOTICE_GAP_PX,
-          panelRect.height * PANEL_NOTICE_SHARE - TOGGLE_HEIGHT_PX,
-        );
+        const inPanel = panelRoom(target);
+        if (showsList) {
+          const full = fullListHeight(row.clientWidth);
+          if (full === null) {
+            probeFullList();
+            return;
+          }
+          const room = Math.min(
+            inPanel.room - TOGGLE_HEIGHT_PX - NOTICE_GAP_PX,
+            Math.floor(inPanel.height * PANEL_NOTICE_SHARE) - TOGGLE_HEIGHT_PX,
+          );
+          if (room < Math.min(full, LIST_MIN_HEIGHT_PX)) openSheet();
+          else commit({ compact: false, offset: 0, count, room, cramped: room < full });
+          return;
+        }
+        if (inPanel.room >= COMPACT_HEIGHT_PX + peekSpace) {
+          commit({ compact: true, offset: 0, count, room: 0 });
+          return;
+        }
+        const chipBounds = {
+          left: NOTICE_GAP_PX,
+          right: slotRect.width - NOTICE_GAP_PX,
+          minTop: inPanel.top - slotRect.top,
+          maxBottom: slotRect.height,
+        };
+        const obstacles = collectObstacles(slot, slotRect, inPanel.panel);
+        const spot = findClearSpot(obstacles, chipBounds, CHIP_WIDTH_PX, CHIP_HEIGHT_PX) ?? {
+          left: chipBounds.left,
+          top: chipBounds.minTop,
+        };
         commit({
-          compact: !isExpanded,
+          compact: true,
           offset: 0,
           count,
-          room: Math.max(COMPACT_HEIGHT_PX, Math.floor(panelRoom)),
+          room: 0,
+          chip: { left: Math.round(spot.left), top: Math.round(spot.top), urgent },
         });
         return;
       }
 
       const columnStyle = getComputedStyle(column);
+      const cssMinTop = parseFloat(columnStyle.paddingTop) || 0;
       const padLeft = parseFloat(columnStyle.paddingLeft) || 0;
-      const contentWidth =
-        column.clientWidth - padLeft - (parseFloat(columnStyle.paddingRight) || 0);
+      const contentWidth = column.clientWidth - padLeft - (parseFloat(columnStyle.paddingRight) || 0);
+      const contentLeft = column.getBoundingClientRect().left - slotRect.left + padLeft;
       const laneWidth = Math.min(MAX_LANE_WIDTH_PX, contentWidth);
-      const laneLeft = column.getBoundingClientRect().left - slotRect.left + padLeft + (contentWidth - laneWidth) / 2;
-      const bounds = {
-        left: laneLeft,
-        right: laneLeft + laneWidth,
-        minTop: cssMinTop,
-        maxBottom,
-      };
-      if (overPanelRef.current) {
-        const { panel, headerBottom } = fullScreenPanel();
-        const placement = placeNoticeLane(collectObstacles(slot, slotRect, panel), {
-          ...bounds,
-          minTop: Math.max(cssMinTop, headerBottom - slotRect.top + NOTICE_GAP_PX),
-          count: 1,
-          fullHeight: Number.POSITIVE_INFINITY,
-          collapsedHeight: Number.POSITIVE_INFINITY,
-          compactHeight: COMPACT_HEIGHT_PX + peekSpace,
-        });
-        commit({
-          compact: true,
-          offset: Math.max(0, placement.top - cssMinTop),
-          count,
-          room: maxBottom - placement.top,
-        });
-        return;
-      }
+      const laneLeft = contentLeft + (contentWidth - laneWidth) / 2;
+      const coversPanel = overPanelRef.current;
+      const { panel, headerBottom } = coversPanel ? fullScreenPanel() : { panel: null, headerBottom: 0 };
+      const minTop = coversPanel
+        ? Math.max(cssMinTop, headerBottom - slotRect.top + NOTICE_GAP_PX)
+        : cssMinTop;
+      const bounds = { left: laneLeft, right: laneLeft + laneWidth, minTop, maxBottom: column.clientHeight };
+      const obstacles = collectObstacles(slot, slotRect, coversPanel ? panel : slot.parentElement);
 
-      const obstacles = collectObstacles(slot, slotRect, slot.parentElement);
-      if (isExpanded) {
-        const listContent = items
-          .map((item) => item.querySelector("[data-notice-content]")?.getAttribute("data-notice-content") ?? "")
-          .join("|");
-        const crampedNow = Boolean(laneRef.current.cramped);
-        if (!crampedNow) {
-          fullListHeightRef.current = {
-            key: `${Math.round(row.clientWidth)}:${listContent}`,
-            height: listHeight,
-          };
-        } else if (fullListHeightRef.current?.key !== `${Math.round(laneWidth)}:${listContent}`) {
-          commit({ ...laneRef.current, cramped: false, narrow: undefined, count });
+      if (showsList) {
+        const full = fullListHeight(laneWidth);
+        if (full === null) {
+          probeFullList();
           return;
         }
-        const desired = (fullListHeightRef.current?.height ?? listHeight) + TOGGLE_HEIGHT_PX;
-        const gap = findLaneGap(
+        const desired = full + TOGGLE_HEIGHT_PX;
+        const spot = placeNoticeList(
           obstacles,
           bounds,
           desired,
-          Math.min(desired, COMPACT_HEIGHT_PX + TOGGLE_HEIGHT_PX),
+          Math.min(desired, LIST_MIN_HEIGHT_PX + TOGGLE_HEIGHT_PX),
         );
-        const fallback = gap
-          ? null
-          : placeNoticeLane(obstacles, {
-              ...bounds,
-              count: 1,
-              fullHeight: Number.POSITIVE_INFINITY,
-              collapsedHeight: Number.POSITIVE_INFINITY,
-              compactHeight: COMPACT_HEIGHT_PX + TOGGLE_HEIGHT_PX,
-            });
-        const top = gap ? gap.top : (fallback?.top ?? cssMinTop);
-        const height = gap ? Math.min(gap.height, desired) : COMPACT_HEIGHT_PX + TOGGLE_HEIGHT_PX;
+        if (!spot) {
+          openSheet();
+          return;
+        }
+        const height = Math.min(spot.height, desired);
         commit({
           compact: false,
-          offset: Math.max(0, top - cssMinTop),
+          offset: Math.max(0, spot.top - cssMinTop),
           count,
-          room: Math.max(COMPACT_HEIGHT_PX, height - TOGGLE_HEIGHT_PX),
-          narrow: fallback ? narrowLane(fallback, padLeft) : undefined,
-          cramped: !gap || gap.height < desired,
+          room: height - TOGGLE_HEIGHT_PX,
+          narrow: narrowLane(spot, padLeft),
+          cramped: height < desired,
         });
         return;
       }
 
-      const compactNow = laneRef.current.compact;
-      const topContent =
-        items[0].querySelector("[data-notice-content]")?.getAttribute("data-notice-content") ?? "";
+      const topContent = noticeContent(items[0]);
       let topFullHeight = heights[0];
-      if (compactNow) {
+      if (laneRef.current.compact) {
         const cached = fullHeightsRef.current.get(items[0]);
         if (!cached || cached.key !== `${Math.round(laneWidth)}:${topContent}`) {
-          commit({ ...laneRef.current, compact: false, narrow: undefined, bare: false, count });
+          commit({ ...laneRef.current, compact: false, narrow: undefined, probing: true, count });
           return;
         }
         topFullHeight = cached.height;
@@ -343,18 +406,29 @@ export default function InCallNoticeSlot({
       }
       const placement = placeNoticeLane(obstacles, {
         ...bounds,
-        count: 1,
-        fullHeight: topFullHeight + peekSpace + footerSpace,
-        collapsedHeight: Number.POSITIVE_INFINITY,
+        fullHeight: coversPanel ? Number.POSITIVE_INFINITY : topFullHeight + peekSpace + footerSpace,
         compactHeight: COMPACT_HEIGHT_PX + peekSpace,
       });
+      if (!placement) {
+        const chipBounds = { ...bounds, left: contentLeft, right: contentLeft + contentWidth };
+        const spot =
+          findClearSpot(obstacles, chipBounds, CHIP_WIDTH_PX, CHIP_HEIGHT_PX) ??
+          { left: contentLeft, top: minTop };
+        commit({
+          compact: true,
+          offset: 0,
+          count,
+          room: 0,
+          chip: { left: Math.round(spot.left), top: Math.round(spot.top), urgent },
+        });
+        return;
+      }
       commit({
         compact: placement.mode !== "full",
         offset: Math.max(0, placement.top - cssMinTop),
         count,
-        room: maxBottom - placement.top,
+        room: bounds.maxBottom - placement.top,
         narrow: narrowLane(placement, padLeft),
-        bare: Boolean(placement.blocked),
       });
     };
 
@@ -408,11 +482,12 @@ export default function InCallNoticeSlot({
       for (const type of revealEvents) stage?.removeEventListener(type, schedule);
       resizes.disconnect();
     };
-  }, [panelTarget]);
+  }, [surface]);
 
+  const chipShown = Boolean(lane.chip);
   useLayoutEffect(() => {
     scheduleRef.current();
-  }, [expanded, lane.compact, lane.bare, lane.cramped]);
+  }, [view, lane.compact, lane.cramped, lane.probing, chipShown, panelTarget]);
 
   const announce = useCallback((text: string, urgent: boolean) => {
     const key = `${urgent ? "alert" : "status"}:${text}`;
@@ -430,23 +505,25 @@ export default function InCallNoticeSlot({
   }, [announcements]);
   const spoken = [...announcements].filter(([, entry]) => entry.holders > 0);
 
-  const isExpanded = expanded && lane.count > 1;
-  const compact = isExpanded ? Boolean(lane.cramped) : lane.compact;
+  const inSheet = view === "sheet";
+  const isExpanded = inSheet || (view === "list" && lane.count > 1);
+  const compact = inSheet ? false : isExpanded ? Boolean(lane.cramped) : lane.compact;
   const laneContext = useMemo(
     () => ({ compact, expanded: isExpanded, announce }),
     [compact, isExpanded, announce],
   );
-  const toggleExpanded = () => setExpanded((value) => !value);
+  const toggleExpanded = () => setView((current) => (current === "stack" ? "list" : "stack"));
   const more = lane.count - 1;
+  const chip = inSheet ? undefined : lane.chip;
   const expandFromPeek = (event: { target: EventTarget }) => {
     if (!isExpanded && more > 0 && (event.target as Element).closest("[data-peek]")) {
-      setExpanded(true);
+      setView("list");
     }
   };
 
-  const inlineCount = more > 0 && compact && !isExpanded;
+  const inlineCount = more > 0 && compact && !isExpanded && !chip;
   const footer =
-    more > 0 && !inlineCount ? (
+    more > 0 && !inlineCount && !inSheet && !chip ? (
       <button
         type="button"
         onClick={toggleExpanded}
@@ -462,16 +539,17 @@ export default function InCallNoticeSlot({
     <>
       <div
         ref={rowRef}
-        className="relative flex w-full max-w-[560px] items-start gap-1"
+        inert={chip ? true : undefined}
+        className={`${chip ? "invisible absolute" : lane.probing ? "invisible relative" : "relative"} flex w-full max-w-[560px] items-start gap-1`}
         style={
-          lane.narrow
+          lane.narrow && !inSheet
             ? {
                 marginTop: lane.offset,
                 alignSelf: "flex-start",
                 marginLeft: lane.narrow.left,
                 width: lane.narrow.width,
               }
-            : { marginTop: lane.offset }
+            : { marginTop: inSheet ? 0 : lane.offset }
         }
       >
         <div
@@ -502,18 +580,34 @@ export default function InCallNoticeSlot({
     </>
   );
 
+  const ChipIcon = chip?.urgent ? AlertCircle : Bell;
+
   return (
     <InCallNoticeLaneContext.Provider value={laneContext}>
-      {panelTarget
+      {surface
         ? createPortal(
             <div className="flex w-full flex-col items-center">{laneContent}</div>,
-            panelTarget,
+            surface,
           )
         : null}
       <div
         ref={slotRef}
         data-in-call-notices
-        data-lane-mode={lane.count > 0 ? (isExpanded ? "expanded" : compact ? "compact" : lane.count > 1 ? "stack" : "full") : undefined}
+        data-lane-mode={
+          lane.count > 0
+            ? inSheet
+              ? "sheet"
+              : chip
+                ? "chip"
+                : isExpanded
+                  ? "expanded"
+                  : compact
+                    ? "compact"
+                    : lane.count > 1
+                      ? "stack"
+                      : "full"
+            : undefined
+        }
         className={`@container pointer-events-none absolute inset-x-0 top-0 ${
           overPanel ? "z-[45]" : "z-40"
         }`}
@@ -533,8 +627,48 @@ export default function InCallNoticeSlot({
               : undefined,
           }}
         >
-          {panelTarget ? null : laneContent}
+          {surface ? null : laneContent}
         </div>
+        {chip ? (
+          <button
+            type="button"
+            onClick={() => setView("sheet")}
+            aria-label={lane.count === 1 ? "Show notice" : `Show ${lane.count} notices`}
+            className="pointer-events-auto absolute inline-flex h-10 items-center justify-center gap-1.5 rounded-full border border-[#fafafa]/10 bg-[#232327] px-3 text-[12px] font-medium tabular-nums text-[#fafafa] transition-colors duration-100 hover:bg-[#2a2a2f]"
+            style={{ left: chip.left, top: chip.top, minWidth: CHIP_HEIGHT_PX }}
+          >
+            <ChipIcon
+              size={18}
+              strokeWidth={1.75}
+              className={chip.urgent ? "text-[#F95F4A]" : "text-[#fafafa]"}
+            />
+            {lane.count > 1 ? lane.count : null}
+          </button>
+        ) : null}
+        {inSheet ? (
+          <dialog
+            ref={sheetRef}
+            aria-label="Notices"
+            onClose={() => setView((current) => (current === "sheet" ? "stack" : current))}
+            onClick={(event) => {
+              if (event.target === event.currentTarget) event.currentTarget.close();
+            }}
+            className="pointer-events-auto m-auto mb-[calc(env(safe-area-inset-bottom,0px)+12px)] max-h-[min(80dvh,640px)] w-[min(560px,calc(100vw-24px))] max-w-none flex-col overflow-hidden rounded-2xl border border-[#fafafa]/10 bg-[#18181b] p-0 text-[#fafafa] backdrop:bg-black/50 open:flex motion-safe:open:animate-[acm-fade-in_120ms_ease-out_both]"
+          >
+            <div className="flex shrink-0 items-center justify-between py-2 pl-4 pr-2">
+              <h2 className="text-[13.5px] font-medium">Notices</h2>
+              <button
+                type="button"
+                aria-label="Close notices"
+                onClick={() => sheetRef.current?.close()}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[#fafafa]/55 transition-colors duration-100 hover:bg-[#fafafa]/[0.06] hover:text-[#fafafa]"
+              >
+                <X size={18} strokeWidth={1.75} />
+              </button>
+            </div>
+            <div ref={setSheetBody} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-3" />
+          </dialog>
+        ) : null}
         <div aria-live="polite" className="sr-only">
           {spoken.map(([key, { text, urgent }]) => (urgent ? null : <p key={key}>{text}</p>))}
         </div>
