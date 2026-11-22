@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { countDisallowed, extractComments, extractFile, listSourceFiles } from "./extract.mjs";
+import { countDisallowed, extractComments, extractFiles, listSourceFiles, prepareFiles } from "./extract.mjs";
 import { ESLINT_LANGUAGE, configuresNoComments, isFirstPartySource, languageOf, switchesOffNoComments } from "./policy.mjs";
 
 export const BASELINE_FILE = "scripts/quality/comments/baseline.json";
@@ -27,7 +27,7 @@ const tryGit = (repo, args) => {
 };
 
 const ratchetedRecords = (repo, files = listSourceFiles(repo)) =>
-  files.filter((file) => languageOf(file) !== ESLINT_LANGUAGE).flatMap((file) => extractFile(repo, file));
+  extractFiles(repo, files.filter((file) => languageOf(file) !== ESLINT_LANGUAGE));
 
 export const changedSince = (repo, bases) => {
   const files = new Set();
@@ -72,43 +72,67 @@ const commitOf = (repo, ref) => tryGit(repo, ["rev-parse", "--verify", "--quiet"
 
 const mergeBaseWith = (repo, ref) => (commitOf(repo, ref) ? tryGit(repo, ["merge-base", "HEAD", ref])?.trim() : undefined);
 
+const fetchBranch = (repo, ref) => {
+  const match = /^origin\/(.+)$/.exec(ref);
+  if (!match) return false;
+  return tryGit(repo, ["fetch", "--quiet", "origin", `+refs/heads/${match[1]}:refs/remotes/origin/${match[1]}`]) !== undefined;
+};
+
+const commitOrFetch = (repo, ref) => commitOf(repo, ref) ?? (fetchBranch(repo, ref) ? commitOf(repo, ref) : undefined);
+
+const missingBase = (ref) => ({
+  error: `base ref ${ref} is missing: run git fetch origin ${ref.replace(/^origin\//, "")}`,
+});
+
+const noMergeBase = (repo, ref) => ({
+  error:
+    tryGit(repo, ["rev-parse", "--is-shallow-repository"])?.trim() === "true"
+      ? `HEAD shares no history with ${ref} because this clone is shallow: run git fetch --unshallow origin`
+      : `HEAD shares no history with ${ref}`,
+});
+
 export const resolveBases = (repo, baseRef, mode = "merge-base") => {
-  const commit = commitOf(repo, baseRef);
+  const commit = commitOrFetch(repo, baseRef);
   if (mode === "exact") {
     if (commit) return { bases: [commit] };
+    const stagingBase = commitOrFetch(repo, DEFAULT_BASE) ? mergeBaseWith(repo, DEFAULT_BASE) : undefined;
     const fallbacks = [
       ["HEAD^1", parentOfHead(repo)],
-      [`the merge base with ${DEFAULT_BASE}`, mergeBaseWith(repo, DEFAULT_BASE)],
+      [`the merge base with ${DEFAULT_BASE}`, stagingBase],
     ].filter(([, sha]) => sha);
-    if (fallbacks.length === 0) return { skipped: `${baseRef} is not available, HEAD has no parent and ${DEFAULT_BASE} is missing` };
+    if (fallbacks.length === 0) return { error: `${baseRef} is not available, HEAD has no parent and ${DEFAULT_BASE} is missing` };
     const bases = [...new Set(fallbacks.map(([, sha]) => sha))];
     const used = fallbacks.map(([label, sha]) => `${label} (${sha.slice(0, 8)})`).join(" and ");
     return { bases, note: `${baseRef} is not available, so comparing with ${used}` };
   }
-  if (!commit) return { skipped: `${baseRef} is not available` };
+  if (!commit) return missingBase(baseRef);
   const base = mergeBaseWith(repo, baseRef);
-  if (!base) return { skipped: `HEAD shares no history with ${baseRef}` };
+  if (!base) return noMergeBase(repo, baseRef);
   if (base !== tryGit(repo, ["rev-parse", "HEAD"])?.trim()) return { bases: [base] };
   if (tryGit(repo, ["status", "--porcelain", "--untracked-files=no"])?.trim()) return { bases: [base] };
   const parent = parentOfHead(repo);
-  return parent ? { bases: [parent] } : { skipped: "HEAD has no parent to compare with" };
+  return parent ? { bases: [parent] } : { bases: [], note: "HEAD has no parent and no changes, so there is nothing to compare" };
 };
 
-const disallowedIn = (text, file) =>
-  text === undefined ? 0 : extractComments(text, file).filter((comment) => !comment.allowed).length;
+const disallowedIn = (text, file) => extractComments(text, file).filter((comment) => !comment.allowed).length;
 
 const readIfPresent = (file) => (existsSync(file) ? readFileSync(file, "utf8") : undefined);
 
-export const countRisesSinceBase = (repo, base) =>
-  (tryGit(repo, ["diff", "--name-only", "-z", base, "--"]) ?? "")
+export const countRisesSinceBase = (repo, base) => {
+  const present = (tryGit(repo, ["diff", "--name-only", "-z", base, "--"]) ?? "")
     .split("\0")
     .filter((file) => file !== "" && isFirstPartySource(file))
-    .map((file) => ({
-      file,
-      from: disallowedIn(tryGit(repo, ["show", `${base}:${file}`]), file),
-      to: disallowedIn(readIfPresent(path.join(repo, file)), file),
-    }))
-    .filter(({ from, to }) => to > from);
+    .map((file) => ({ file, text: readIfPresent(path.join(repo, file)) }))
+    .filter(({ text }) => text !== undefined);
+  prepareFiles(present);
+  const commented = present.map(({ file, text }) => ({ file, to: disallowedIn(text, file) })).filter(({ to }) => to > 0);
+  const before = commented
+    .map(({ file }) => ({ file, text: tryGit(repo, ["show", `${base}:${file}`]) }))
+    .filter(({ text }) => text !== undefined);
+  prepareFiles(before);
+  const fromCounts = new Map(before.map(({ file, text }) => [file, disallowedIn(text, file)]));
+  return commented.map(({ file, to }) => ({ file, from: fromCounts.get(file) ?? 0, to })).filter(({ from, to }) => to > from);
+};
 
 const baselineRisesSince = (repo, base) =>
   RATCHET_FILES.flatMap(({ file, flatten }) => {
@@ -129,7 +153,7 @@ const growthSince = (repo, bases) => ({
 
 export const growthSinceBase = (repo, baseRef, mode) => {
   const resolved = resolveBases(repo, baseRef, mode);
-  return resolved.skipped ? resolved : { note: resolved.note, ...growthSince(repo, resolved.bases) };
+  return resolved.error ? resolved : { note: resolved.note, ...growthSince(repo, resolved.bases) };
 };
 
 export const inlineNoCommentsDisables = (repo) => {
@@ -139,7 +163,7 @@ export const inlineNoCommentsDisables = (repo) => {
   return candidates
     .split("\0")
     .filter((file) => files.has(file))
-    .flatMap((file) => extractFile(repo, file))
+    .flatMap((file) => extractFiles(repo, [file]))
     .filter((record) => switchesOffNoComments(record.text));
 };
 
@@ -151,18 +175,20 @@ const describe = (records, file) =>
 
 const check = (repo, baseline, baseRef, mode, { full = false } = {}) => {
   const resolved = resolveBases(repo, baseRef, mode);
+  if (resolved.error) {
+    console.error(`comment ratchet: ${resolved.error}.`);
+    return 2;
+  }
   if (resolved.note) console.log(`comment ratchet: ${resolved.note}.`);
   const tracked = listSourceFiles(repo);
-  const wholeTree = full || Boolean(resolved.skipped);
-  if (wholeTree && !full) console.log("comment ratchet: no base commit to diff against, so every tracked file is checked.");
   const trackedSet = new Set(tracked);
-  const scope = wholeTree ? tracked : changedSince(repo, resolved.bases);
+  const scope = full ? tracked : changedSince(repo, resolved.bases);
   const records = ratchetedRecords(repo, scope.filter((file) => trackedSet.has(file)));
-  const scopedBaseline = wholeTree
+  const scopedBaseline = full
     ? baseline
     : Object.fromEntries(scope.filter((file) => baseline[file] !== undefined).map((file) => [file, baseline[file]]));
   const { rises, falls } = compareCounts(scopedBaseline, countDisallowed(records));
-  const growth = resolved.skipped ? resolved : growthSince(repo, resolved.bases);
+  const growth = growthSince(repo, resolved.bases);
   const disables = inlineNoCommentsDisables(repo);
   const failures = [];
   for (const { file, from, to } of rises) {
@@ -182,13 +208,12 @@ const check = (repo, baseline, baseRef, mode, { full = false } = {}) => {
   for (const { baseline: file, file: key, from, to, base } of growth.rises ?? []) {
     failures.push(`${file}: ${key} rose from ${from} to ${to} since ${base.slice(0, 8)}. Baselines only go down.`);
   }
-  if (growth.skipped) console.log(`comment ratchet: baseline growth check skipped (${growth.skipped}).`);
   if (falls.length > 0) {
     console.log(`comment ratchet: ${falls.length} file(s) have fewer comments than the baseline. Run \`${UPDATE_COMMAND}\` to lower it.`);
   }
   if (failures.length === 0) {
     console.log(
-      wholeTree
+      full
         ? "comment ratchet: no new comments in Swift, Kotlin, CSS, shell or Python."
         : `comment ratchet: no new comments in the ${scope.length} file(s) changed since the base.`,
     );
