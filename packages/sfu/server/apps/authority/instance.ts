@@ -27,6 +27,7 @@ import { ReceiptBook, requestDigest } from "./receipts.js";
 import { AuthorityStore } from "./store.js";
 import {
   ViewTracker,
+  type CommittedView,
   type LiveAudiences,
   type ViewFlush,
   type ViewSnapshot,
@@ -368,6 +369,11 @@ export class AuthorityInstance {
   /** How many audiences' views are kept. */
   get viewsHeld(): { roles: number; subjects: number } {
     return this.views.held;
+  }
+
+  /** One viewer's rows as committed right now, for reading at once. */
+  committedView(actor: Actor): CommittedView {
+    return this.views.committed(actor.role, actor.subject);
   }
 
   /** A whole view for one audience: its role's rows and its own. */

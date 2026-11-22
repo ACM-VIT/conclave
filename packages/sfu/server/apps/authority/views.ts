@@ -75,6 +75,13 @@ const bucketOf = (audience: Audience, name: string): Bucket => {
 /** A projected row and its size on the wire, for splitting a snapshot. */
 export type SizedRow = { row: ProjectedRow; bytes: number };
 
+/** One viewer's rows as committed, read at the moment of asking. */
+export type CommittedView = {
+  get(bucket: string, key: string): Json | undefined;
+  keys(bucket: string): Iterable<string>;
+  size(bucket: string): number;
+};
+
 /** A whole view, and the version of the views it was read at. */
 export type ViewSnapshot = { rows: SizedRow[]; version: number };
 
@@ -310,6 +317,24 @@ export class ViewTracker {
     rowsOf(this.roleAudience(role), rows);
     rowsOf(this.subjectAudience(subject), rows);
     return { rows, version: this.version };
+  }
+
+  /**
+   * One viewer's view as committed right now, to read rows from. It is for
+   * code that says later what a frame told it: reading here at the moment
+   * of saying means a row hidden or changed since is never said as it was.
+   * The reader is good only until the next write.
+   */
+  committed(role: Role, subject: Subject): CommittedView {
+    this.absorb();
+    const shared = this.roleAudience(role).buckets;
+    const own = this.subjectAudience(subject).buckets;
+    const bucketOf = (name: string) => shared.get(name) ?? own.get(name);
+    return {
+      get: (bucket, key) => bucketOf(bucket)?.rows.get(key)?.value,
+      keys: (bucket) => bucketOf(bucket)?.rows.keys() ?? [],
+      size: (bucket) => bucketOf(bucket)?.rows.size ?? 0,
+    };
   }
 
   /** Forgets the views of audiences nobody holds any more. */

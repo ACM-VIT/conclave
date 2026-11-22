@@ -253,10 +253,15 @@ describe("webinar Q&A with old and new clients in one room", () => {
     await until(() => oldAttendee.entries.get(id)?.upvotes === 2, "the old attendee sees the tally");
     const off = await oldAttendee.upvote(id);
     await until(() => field(row(host, "votes", id), "upvotes") === 1, "the toggle took one back");
+    // Its own socket is told on its own time, apart from the host's.
+    await until(
+      () => oldAttendee.entries.get(id)?.hasUpvoted === false,
+      "the old attendee is told its upvote is off",
+    );
 
     expect(on).toEqual({ success: true, upvotes: 1, hasUpvoted: true });
     expect(off).toEqual({ success: true, upvotes: 1, hasUpvoted: false });
-    expect(oldAttendee.entries.get(id)?.hasUpvoted).toBe(false);
+    expect(oldAttendee.entries.get(id)?.upvotes).toBe(1);
   });
 
   it("answers an upvote with the count it made, even after a run of refused ones", async () => {
@@ -322,8 +327,8 @@ describe("webinar Q&A with old and new clients in one room", () => {
 
     const tapped = await native.tapUpvote(id);
     const shownAfterTap = native.showsUpvoted(id);
-    await until(() => row(browser, "myUpvotes", id) !== null, "the tab sees the phone's upvote");
 
+    // The tab takes it back at once, without waiting to be told of it.
     await browser.session.act("upvote", { id, value: false });
     await until(() => !native.showsUpvoted(id), "the phone shows the upvote gone");
     const countAfterRemoval = native.shownCount(id);
@@ -334,6 +339,34 @@ describe("webinar Q&A with old and new clients in one room", () => {
     expect(tapped).toEqual({ success: true, upvotes: 1, hasUpvoted: true });
     expect(shownAfterTap).toBe(true);
     expect(countAfterRemoval).toBe(0);
+    expect(tappedAgain).toEqual({ success: true, upvotes: 1, hasUpvoted: true });
+    expect(native.showsUpvoted(id)).toBe(true);
+  });
+
+  it("takes an upvote off a native build 63 screen when a second tap elsewhere lands in the same flush", async () => {
+    const stack = await startWebinar();
+    const host = await open(stack, asha, qaContract);
+    const asker = await open(stack, omar, qaContract, asAttendee);
+    const native = await build63(stack, vik);
+    // The same person on a released web build in another tab.
+    const otherTab = await oldClient(stack, { ...vik, session: "v2" }, asAttendee);
+    const asked = await asker.session.act("ask", { text: "Tapped twice, on two screens" });
+    const id = asked.ok ? asked.value.id : "";
+    await host.session.act("moderate", { id, action: "answering" });
+    await until(() => native.shownCount(id) === 0, "the phone lists the question");
+    await until(() => otherTab.entries.has(id), "the other tab lists it");
+
+    // Two taps, one on each, close enough to land in one flush. The vote
+    // starts and ends absent, so no change to it is ever flushed.
+    const [tapped, secondTap] = await Promise.all([native.tapUpvote(id), otherTab.upvote(id)]);
+    await until(() => !native.showsUpvoted(id), "the phone shows the upvote gone");
+    await until(() => field(row(host, "votes", id), "upvotes") === 0, "nobody upvotes it now");
+    const tappedAgain = await native.tapUpvote(id);
+
+    expect(tapped).toEqual({ success: true, upvotes: 1, hasUpvoted: true });
+    expect(secondTap).toEqual({ success: true, upvotes: 0, hasUpvoted: false });
+    expect(native.shownCount(id)).toBe(1);
+    // The button was off, so the next tap put the upvote back.
     expect(tappedAgain).toEqual({ success: true, upvotes: 1, hasUpvoted: true });
     expect(native.showsUpvoted(id)).toBe(true);
   });

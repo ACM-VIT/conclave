@@ -33,7 +33,12 @@ import { Logger } from "../../../utilities/loggers.js";
 import type { IdentityAdapter } from "./identity.js";
 import { AuthorityInstance, type Actor } from "./instance.js";
 import type { AuthorityLimits } from "./limits.js";
-import type { LiveAudiences, SizedRow, ViewOps } from "./views.js";
+import type {
+  CommittedView,
+  LiveAudiences,
+  SizedRow,
+  ViewOps,
+} from "./views.js";
 
 export type SocketPressure = { packets: number; bytes: number };
 
@@ -83,6 +88,8 @@ type Subscription = {
    * the adapter that feeds a legacy event from an app's view.
    */
   sink: ((frame: AuthorityFrame) => void) | null;
+  /** Told once when an observer ends for good, so its owner can let go of it. */
+  ended: (() => void) | null;
 };
 
 /** What `observe` hands back to the in-process code that follows a view. */
@@ -96,6 +103,14 @@ export type Observer = {
    * the answer is then no: what was waiting is out of date.
    */
   isLive: () => boolean;
+  /**
+   * The connection's view as committed at this moment, to read rows from
+   * before saying them. Ask `isLive` first. The reader is good only for the
+   * turn it was taken in.
+   */
+  view: () => CommittedView;
+  /** Who the connection is to the app right now. */
+  subject: () => Subject;
 };
 
 /** A successful action, for in-process code that keeps its own index. */
@@ -104,6 +119,8 @@ export type ActionNotice = {
   action: string;
   /** The seat that acted, as the room names it. */
   seatId: string;
+  /** The person who acted, as the app knows them across tabs. */
+  subject: Subject;
   value: Json;
 };
 
@@ -217,6 +234,9 @@ export class RoomAuthority {
    */
   private readonly dormant = new Set<Subscription>();
   private readonly actionListeners = new Set<(notice: ActionNotice) => void>();
+  private readonly policyListeners = new Set<
+    (policy: RoomPolicy, previous: RoomPolicy) => void
+  >();
   private lastFlushAt = 0;
   private lastNow = 0;
   private closed = false;
@@ -309,6 +329,7 @@ export class RoomAuthority {
       grantsDue: false,
       dropped: false,
       sink: null,
+      ended: null,
     };
     subscriptions.set(subscription.id, subscription);
     this.byInstance.get(instance)!.add(subscription);
@@ -340,6 +361,7 @@ export class RoomAuthority {
     context: ConnectionContext,
     app: string,
     sink: (frame: AuthorityFrame) => void,
+    ended: () => void = () => {},
   ): Observer | null {
     const bound = this.bind(context);
     const instance = this.instanceOf(app);
@@ -368,6 +390,7 @@ export class RoomAuthority {
       grantsDue: false,
       dropped: false,
       sink,
+      ended,
     };
     subscriptions.set(subscription.id, subscription);
     this.dormant.add(subscription);
@@ -375,6 +398,8 @@ export class RoomAuthority {
     return {
       close: () => this.drop(subscription),
       isLive: () => this.refresh(subscription) === "live",
+      view: () => subscription.instance.committedView(subscription.actor),
+      subject: () => subscription.actor.subject,
     };
   }
 
@@ -395,13 +420,18 @@ export class RoomAuthority {
     if (!bound || !instance) return failure("not-in-room");
     this.syncPolicy();
     const result = instance.act(bound.actor, action, input, null, this.now());
-    this.afterAction(instance, action, bound.client.id, result);
+    this.afterAction(instance, action, bound.client.id, bound.actor.subject, result);
     return result;
   }
 
   /** Called after every action that succeeded, whoever sent it. */
   onAction(listener: (notice: ActionNotice) => void): void {
     this.actionListeners.add(listener);
+  }
+
+  /** Called when the room's policy has changed, with the new and the old. */
+  onPolicy(listener: (policy: RoomPolicy, previous: RoomPolicy) => void): void {
+    this.policyListeners.add(listener);
   }
 
   unsubscribe(context: ConnectionContext, subscriptionId: string): void {
@@ -426,6 +456,7 @@ export class RoomAuthority {
       subscription.instance,
       request.action,
       subscription.client.id,
+      subscription.actor.subject,
       result,
     );
     return result;
@@ -509,6 +540,7 @@ export class RoomAuthority {
     this.byInstance.clear();
     this.dormant.clear();
     this.actionListeners.clear();
+    this.policyListeners.clear();
     this.watchers.clear();
     this.instances.clear();
   }
@@ -639,10 +671,10 @@ export class RoomAuthority {
    */
   private applyPolicy(): boolean {
     const policy = this.options.policy();
-    let changed = false;
+    let previous: RoomPolicy | null = null;
     for (const instance of this.instances.values()) {
       if (samePolicy(instance.policy, policy)) continue;
-      changed = true;
+      previous ??= instance.policy;
       instance.setPolicy(policy);
       for (const subscription of [...this.byInstance.get(instance)!]) {
         const bound = this.bind(subscription.context);
@@ -664,7 +696,9 @@ export class RoomAuthority {
       this.grantsDue.add(instance);
       this.scheduleFlush(true);
     }
-    return changed;
+    if (!previous) return false;
+    for (const listener of this.policyListeners) listener(policy, previous);
+    return true;
   }
 
   /**
@@ -814,13 +848,14 @@ export class RoomAuthority {
     instance: AuthorityInstance,
     action: string,
     seatId: string,
+    subject: Subject,
     result: AuthorityResult<Json>,
   ): void {
     if (instance.hasPendingChanges) this.scheduleFlush(false);
     this.armWake();
     if (!result.ok) return;
     for (const listener of this.actionListeners) {
-      listener({ app: instance.appId, action, seatId, value: result.value });
+      listener({ app: instance.appId, action, seatId, subject, value: result.value });
     }
   }
 
@@ -1210,6 +1245,7 @@ export class RoomAuthority {
   }
 
   private drop(subscription: Subscription): void {
+    if (!subscription.dropped) subscription.ended?.();
     subscription.dropped = true;
     subscription.transfer = null;
     subscription.backlog = [];

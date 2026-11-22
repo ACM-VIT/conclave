@@ -10,6 +10,7 @@ import { pollsAuthority } from "@conclave/apps-sdk/polls/server";
 import { qaContract } from "@conclave/apps-sdk/qa/core";
 import { qaAuthority } from "@conclave/apps-sdk/qa/server";
 import {
+  LEGACY_QA_LISTS_PER_TURN,
   LEGACY_QA_SENDS_PER_TURN,
   attachLegacyQaFeed,
   legacyQaSubmit,
@@ -36,19 +37,32 @@ afterEach(() => {
 /** An old client: it keeps what the old events tell it. */
 const listen = (tab: Tab) => {
   const entries = new Map<string, WebinarQaEntry>();
-  const heard = { snapshots: 0, changes: 0, removed: [] as string[] };
+  const heard = {
+    snapshots: 0,
+    changes: 0,
+    removed: [] as string[],
+    /** Every status heard of every question, in order, as `id:status`. */
+    said: [] as string[],
+  };
   tab.socket.on("webinar:qaSnapshot", (payload: unknown) => {
     heard.snapshots += 1;
     entries.clear();
-    for (const entry of (payload as WebinarQaSnapshot).entries) entries.set(entry.id, entry);
+    for (const entry of (payload as WebinarQaSnapshot).entries) {
+      entries.set(entry.id, entry);
+      heard.said.push(`${entry.id}:${entry.status}`);
+    }
   });
   tab.socket.on("webinar:qaChanged", (payload: unknown) => {
     heard.changes += 1;
     const notification = payload as WebinarQaChangedNotification;
     if (notification.removedId) {
       heard.removed.push(notification.removedId);
+      heard.said.push(`${notification.removedId}:removed`);
       entries.delete(notification.removedId);
-    } else if (notification.entry) entries.set(notification.entry.id, notification.entry);
+    } else if (notification.entry) {
+      entries.set(notification.entry.id, notification.entry);
+      heard.said.push(`${notification.entry.id}:${notification.entry.status}`);
+    }
   });
   attachLegacyQaFeed(tab.context);
   return { tab, entries, heard };
@@ -289,6 +303,119 @@ describe("telling a webinar of old clients about a change", () => {
     expect(
       listeners.map((listener, index) => listener.heard.snapshots - before[index].snapshots),
     ).toEqual(Array(100).fill(0));
+  }, 60_000);
+
+  it("says nothing of a question the host hid while it waited to be said", async () => {
+    const perListener = 20;
+    const count = Math.ceil((LEGACY_QA_SENDS_PER_TURN * 1.5) / perListener);
+    const { room, hostTab, listeners, ids } = await webinar(count, perListener);
+    const last = listeners[listeners.length - 1];
+
+    for (const id of ids) await hostTab.act("moderate", { id, action: "answered" });
+    await vi.advanceTimersByTimeAsync(0);
+    const saidBefore = last.heard.said.length;
+    room.authority.flushNow();
+    await Promise.resolve();
+    await Promise.resolve();
+    const saidInFirstTurn = last.heard.said.length - saidBefore;
+    // The answers wait their turn for the last listener. Before it comes,
+    // the host hides one of those questions. That is committed, not flushed.
+    const hidden = room.authority.actAs(hostTab.context, "qa", "moderate", {
+      id: ids[1],
+      action: "dismissed",
+    });
+    await room.drain();
+    const saidWhileWaiting = last.heard.said.slice(saidBefore).filter((line) => line.startsWith(`${ids[1]}:`));
+    await room.advance(50);
+    await room.drain();
+
+    expect(saidInFirstTurn).toBe(0);
+    expect(hidden.ok).toBe(true);
+    // The hidden question's answer is never said to them. When their turn
+    // came it was no longer theirs to see, so all they hear is that it is
+    // gone, and that once: the flush that follows has nothing to add.
+    expect(saidWhileWaiting).toEqual([`${ids[1]}:removed`]);
+    expect(last.heard.said.slice(saidBefore).filter((line) => line.startsWith(`${ids[1]}:`))).toEqual([
+      `${ids[1]}:removed`,
+    ]);
+    expect(last.entries.has(ids[1])).toBe(false);
+    expect(last.entries.get(ids[2])?.status).toBe("answered");
+  }, 60_000);
+
+  it("sends no list to anyone when the host turns Q&A off or on", async () => {
+    const { room, listeners } = await webinar(40, 5);
+    const before = {
+      lists: sent(room, "webinar:qaSnapshot").writes,
+      changes: sent(room, "webinar:qaChanged").writes,
+      held: listeners.map((listener) => listener.entries.size),
+    };
+
+    room.setWebinar(true, false);
+    await room.advance(50);
+    await room.drain();
+    room.setWebinar(true, true);
+    await room.advance(50);
+    await room.drain();
+
+    // The switch decides who may ask. Nobody's list is any different.
+    expect(sent(room, "webinar:qaSnapshot").writes - before.lists).toBe(0);
+    expect(sent(room, "webinar:qaChanged").writes - before.changes).toBe(0);
+    expect(listeners.map((listener) => listener.entries.size)).toEqual(before.held);
+  });
+
+  it("builds and encodes a whole list once for everyone who reads it alike", async () => {
+    const { room, listeners, ids } = await webinar(60, 5);
+    const before = sent(room, "webinar:qaSnapshot");
+
+    // Webinar mode goes off, where an attendee has no Q&A, and on again.
+    room.setWebinar(false);
+    await room.advance(50);
+    await room.drain();
+    const off = sent(room, "webinar:qaSnapshot");
+    const heldWhileOff = listeners.map((listener) => listener.entries.size);
+    room.setWebinar(true, true);
+    await room.advance(50);
+    await room.drain();
+    const on = sent(room, "webinar:qaSnapshot");
+
+    // Off: everyone is sent the same empty list.
+    expect(heldWhileOff).toEqual(Array(60).fill(0));
+    expect(off.writes - before.writes).toBe(60);
+    expect(off.encodings - before.encodings).toBe(1);
+    // On: one list for the 55 who asked nothing, and one each for the five askers.
+    expect(listeners.every((listener) => ids.every((id) => listener.entries.has(id)))).toBe(true);
+    expect(on.writes - off.writes).toBe(60);
+    expect(on.encodings - off.encodings).toBe(6);
+    expect(listeners.slice(0, 5).map((listener, index) => listener.entries.get(ids[index])?.userId)).toEqual(
+      listeners.slice(0, 5).map((listener) => listener.tab.seat.id),
+    );
+    expect(listeners[10].entries.get(ids[0])?.userId).toBe("");
+  });
+
+  it("sends whole lists a bounded number a turn", async () => {
+    const count = Math.ceil(LEGACY_QA_LISTS_PER_TURN * 2.2);
+    const { room, listeners } = await webinar(count, 3);
+    room.setWebinar(false);
+    await room.advance(50);
+    await room.drain();
+    const before = listeners.map((listener) => listener.heard.snapshots);
+    const listsSince = (): number =>
+      listeners.reduce((total, listener, index) => total + listener.heard.snapshots - before[index], 0);
+
+    room.setWebinar(true, true);
+    room.authority.flushNow();
+    await Promise.resolve();
+    await Promise.resolve();
+    const inTheFirstTurn = listsSince();
+    await vi.advanceTimersByTimeAsync(0);
+    const afterOneMoreTurn = listsSince();
+    await room.drain();
+
+    expect(inTheFirstTurn).toBeGreaterThan(0);
+    expect(inTheFirstTurn).toBeLessThanOrEqual(LEGACY_QA_LISTS_PER_TURN);
+    expect(afterOneMoreTurn).toBeGreaterThan(inTheFirstTurn);
+    expect(listsSince()).toBe(count);
+    expect(listeners.every((listener) => listener.entries.size === 3)).toBe(true);
   }, 60_000);
 
   it("sends a listener whose socket is behind nothing, then a whole list once it has caught up", async () => {
