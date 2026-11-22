@@ -6248,13 +6248,18 @@ export function useMeetSocket({
       if (
         !transport ||
         transport.closed ||
-        entry.transport !== transport ||
         intentionalDisconnectRef.current ||
         reconnectInFlightRef.current
       ) {
         entry.transport = transport ?? null;
         entry.watch = INITIAL_MEDIA_PATH_WATCH;
         return;
+      }
+      // A new transport starts a fresh watch, and this sample already counts
+      // as its baseline, so media is verified one interval after a rebuild.
+      if (entry.transport !== transport) {
+        entry.transport = transport;
+        entry.watch = INITIAL_MEDIA_PATH_WATCH;
       }
 
       let rtpBytes: number;
