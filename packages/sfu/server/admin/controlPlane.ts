@@ -1111,7 +1111,9 @@ export const blockUserKey = (
 /**
  * Removes every seat and every waiting request under `userKeys`. This is
  * for a guest that a block has come to cover without a host action: the
- * room learned that a blocked key and these keys are one guest.
+ * room learned that a blocked key and these keys are one guest. The join
+ * that taught the room this is the guest's, so nothing here is recorded:
+ * the block is the answer, and `linkGuestPasses` already ended the rights.
  */
 export const removeBlockedGuest = (
   room: Room,
@@ -1119,11 +1121,15 @@ export const removeBlockedGuest = (
   options: { io: SocketIOServer; state: SfuState },
 ): void => {
   for (const userKey of userKeys) {
-    rejectWaitingGuest(room, userKey);
+    const request = room.pendingClients.get(userKey);
+    if (!request) continue;
+    room.turnAwayBlockedRequest(userKey);
+    request.socket.emit("joinRejected", { roomId: room.id });
   }
+  publishLobby(room);
   for (const [userId, userKey] of Array.from(room.userKeysById.entries())) {
     if (userKeys.includes(userKey)) {
-      kickClient(room, userId, "Blocked by host", options);
+      removeSeat(room, userId, "Blocked by host", options);
     }
   }
 };
@@ -1143,6 +1149,19 @@ export const kickClient = (
   const userKey = room.userKeysById.get(userId);
   if (userKey) {
     room.dropRejoinGrants(userKey);
+  }
+  return removeSeat(room, userId, reason, options);
+};
+
+const removeSeat = (
+  room: Room,
+  userId: string,
+  reason: string,
+  options?: { io?: SocketIOServer; state?: SfuState },
+): boolean => {
+  const target = room.getClient(userId);
+  if (!target || isSuperAdminClient(target)) {
+    return false;
   }
   target.socket.emit("kicked", { reason, roomId: room.id });
   target.socket.disconnect(true);

@@ -6,10 +6,13 @@
  * (`key:<userKey>`). Whether a join may pass the waiting room or the lock,
  * or go on stage in a webinar, is never stored as a flag: it is the latest
  * decision for that scope across the principals the join speaks for (see
- * `admits`). Every refusal is recorded, whether or not the principal had a
- * record, so a refusal made after an admission always wins. Requests to be
- * let in are on the same clock, so a decision can be told apart from a
- * request that came after it (see `latestAnswer`).
+ * `admits`). Every refusal a host makes is recorded, whether or not the
+ * principal had a record, so a refusal made after an admission always wins.
+ * Nothing a participant does adds a record: a refusal that follows from
+ * one only rewrites records that exist (`recordedOnly`), and a decline only
+ * takes back an invite (`consume`). Requests to be let in are on the same
+ * clock, so a decision can be told apart from a request that came after it
+ * (see `latestAnswer`).
  *
  * Scopes: `waitingRoom` and `lock` are admissions; `stage` is a webinar
  * stage invite, which expires; `stageDemotion` is a move back to the
@@ -107,12 +110,15 @@ export class AdmissionLedger {
    * removal, a block or a demotion does. Each principal gets the refusal
    * whether or not it had a record. The ones that had a record take it
    * first, so making room for the new ones never drops a record this
-   * refusal is about.
+   * refusal is about. With `recordedOnly`, only principals that have a
+   * record take it: a refusal that a participant's action sets off ends
+   * what is there and adds nothing.
    */
   revoke(
     principals: Iterable<string>,
     scopes: readonly AdmissionScope[],
     at: number,
+    options: { recordedOnly?: boolean } = {},
   ): void {
     const unique = [...new Set(principals)];
     const refuse = (record: PrincipalRecord) => {
@@ -123,9 +129,30 @@ export class AdmissionLedger {
     for (const principal of unique.filter((one) => this.records.has(one))) {
       refuse(this.touch(principal, { refusal: true })!);
     }
+    if (options.recordedOnly) return;
     for (const principal of unique.filter((one) => !this.records.has(one))) {
       refuse(this.touch(principal, { refusal: true })!);
     }
+  }
+
+  /**
+   * Takes back the admissions `principals` hold for `scope` without a
+   * refusal, as a guest who declines an invite does. A record left with
+   * nothing goes. Returns the keys those admissions named.
+   */
+  consume(principals: Iterable<string>, scope: AdmissionScope): string[] {
+    const named = new Set<string>();
+    for (const principal of new Set(principals)) {
+      const record = this.records.get(principal);
+      const mark = record?.marks[scope];
+      if (!record || !mark?.admitted) continue;
+      for (const userKey of mark.userKeys) named.add(userKey);
+      delete record.marks[scope];
+      if (record.answer === undefined && Object.keys(record.marks).length === 0) {
+        this.records.delete(principal);
+      }
+    }
+    return [...named];
   }
 
   /** Returns the keys whose lock admission this ends. */
@@ -179,6 +206,16 @@ export class AdmissionLedger {
 
   has(principal: string): boolean {
     return this.records.has(principal);
+  }
+
+  /** Whether `principal` holds a refusal, which the ledger never drops. */
+  holdsRefusalFor(principal: string): boolean {
+    const record = this.records.get(principal);
+    return record !== undefined && holdsRefusal(record);
+  }
+
+  get size(): number {
+    return this.records.size;
   }
 
   /**

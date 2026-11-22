@@ -2816,6 +2816,128 @@ describe("a guest identity that holds nothing in the room", () => {
   });
 });
 
+describe("what a participant's own action adds to the decision record", () => {
+  const withDecisionRecordLimit = async (limit: number, body: () => Promise<void>) => {
+    const before = sfuConfig.lobbyDecisionRecordLimit;
+    sfuConfig.lobbyDecisionRecordLimit = limit;
+    try {
+      await body();
+    } finally {
+      sfuConfig.lobbyDecisionRecordLimit = before;
+    }
+  };
+  const seatOf = (user: SfuAuthPayload) => `${user.userId}#${user.sessionId}`;
+  const ask = async (peer: { handlers: Map<string, Handler> }, event: string, ...payload: unknown[]) => {
+    const ack = vi.fn();
+    await peer.handlers.get(event)!(...([...payload, ack] as never[]));
+    return ack;
+  };
+  const viewer = (index: number) =>
+    ({
+      userId: `guest-gp_viewer-${index}`,
+      clientId: "conclave",
+      sessionId: `view-${index}`,
+      joinMode: "webinar_attendee",
+      guestProof: `proof-of-viewer-pass-${index}`,
+    }) satisfies SfuAuthPayload;
+  const webinar = async (options: { locked: boolean }) => {
+    const state = makeState();
+    const host = await join(state, guestHost);
+    const room = state.rooms.get("conclave:room")!;
+    const config = getOrCreateWebinarRoomConfig(state.webinarConfigs, room.channelId);
+    config.enabled = true;
+    config.publicAccess = true;
+    setCustomWebinarLinkSlug({
+      webinarConfig: config,
+      webinarLinks: state.webinarLinks,
+      room: { channelId: room.channelId, id: room.id, clientId: room.clientId },
+      slug: "launch",
+    });
+    if (options.locked) room.setLocked(true);
+    registerWebinarInteractionHandlers(host.context);
+    return { state, room, host };
+  };
+  const inTheAudience = async (state: SfuState, user: SfuAuthPayload) => {
+    const attendee = await join(state, user, "launch");
+    expect(attendee.ack).toHaveBeenCalledWith(expect.objectContaining({ status: "joined", webinarRole: "attendee" }));
+    registerWebinarInteractionHandlers(attendee.context);
+    return attendee;
+  };
+
+  it("adds nothing when many fresh attendees decline an invite they never had, so hosts can still invite (Greptile)", async () => {
+    await withDecisionRecordLimit(3, async () => {
+      const { state, room, host } = await webinar({ locked: true });
+      const before = room.decisionRecordCount;
+
+      for (let index = 0; index < 8; index += 1) {
+        const attendee = await inTheAudience(state, viewer(index));
+        expect(await ask(attendee.peer, "webinar:declineStage")).toHaveBeenCalledWith({ success: true });
+      }
+
+      expect(room.decisionRecordCount).toBe(before);
+      await inTheAudience(state, viewer(99));
+      expect(await ask(host.peer, "webinar:promoteAttendee", { userId: seatOf(viewer(99)) })).toHaveBeenCalledWith({ success: true });
+      expect(room.isWebinarPromotedUserKey(viewer(99).userId)).toBe(true);
+    });
+  });
+
+  it("uses up a real invite when its guest declines it, and leaves no refusal behind", async () => {
+    await withDecisionRecordLimit(1, async () => {
+      const { state, room, host } = await webinar({ locked: true });
+      const first = await inTheAudience(state, viewer(1));
+      await ask(host.peer, "webinar:promoteAttendee", { userId: seatOf(viewer(1)) });
+      expect(room.isWebinarPromotedUserKey(viewer(1).userId)).toBe(true);
+
+      expect(await ask(first.peer, "webinar:declineStage")).toHaveBeenCalledWith({ success: true });
+
+      expect(room.isWebinarPromotedUserKey(viewer(1).userId)).toBe(false);
+      const onStage = await join(state, { ...viewer(1), userId: "guest-gp_viewer-1-on-stage", joinMode: "meeting" });
+      expect(onStage.ack).toHaveBeenCalledWith(expect.objectContaining({ status: "waiting" }));
+      // A declined invite holds no refusal, so it makes room for the next.
+      await inTheAudience(state, viewer(2));
+      await ask(host.peer, "webinar:promoteAttendee", { userId: seatOf(viewer(2)) });
+      expect(room.isWebinarPromotedUserKey(viewer(2).userId)).toBe(true);
+    });
+  });
+
+  it("adds nothing when a blocked guest comes back under fresh passes", async () => {
+    const state = makeState();
+    await join(state, guestHost);
+    const room = state.rooms.get("conclave:room")!;
+    const blocked = {
+      userId: "guest-gp_blocked-tab",
+      clientId: "conclave",
+      sessionId: "blocked-tab",
+      guestProof: "proof-of-the-blocked-pass",
+    } satisfies SfuAuthPayload;
+    await join(state, blocked);
+    blockUserKey(room, blocked.userId, { reason: "Blocked by host", kickPresent: true, io, state });
+    const before = room.decisionRecordCount;
+
+    for (let index = 0; index < 6; index += 1) {
+      const fresh = {
+        userId: `guest-gp_fresh-${index}`,
+        clientId: "conclave",
+        sessionId: `fresh-${index}`,
+        guestProof: `proof-of-fresh-pass-${index}`,
+      } satisfies SfuAuthPayload;
+      const seated = await join(state, fresh);
+      expect(seated.ack).toHaveBeenCalledWith(joined);
+      const linking = await join(state, {
+        ...fresh,
+        userId: `guest-gp_fresh-${index}-tab-2`,
+        sessionId: `fresh-${index}-tab-2`,
+        guestWas: [{ userKey: blocked.userId, guestProof: blocked.guestProof }],
+      });
+
+      expect(linking.ack).toHaveBeenCalledWith(refused);
+      expect(seated.peer.emit).toHaveBeenCalledWith("kicked", expect.objectContaining({ roomId: "room" }));
+      expect(room.getClient(seatOf(fresh))).toBeUndefined();
+    }
+    expect(room.decisionRecordCount).toBe(before);
+  });
+});
+
 describe("who may come in, against a slow reading of every decision", () => {
   // A locked room. Two guest browsers, each with passes the room learns are
   // one guest only when a tab's token names them. Every tab keeps one
@@ -2973,9 +3095,13 @@ describe("who may come in, against a slow reading of every decision", () => {
       }, true);
     }
     // A revocation, a removal or a block: every pass the keys are bound
-    // under gets the refusal, the ones with a record first.
-    revokeKeys(keys: string[]) {
-      const passes = [...new Set(keys.map((key) => tabByKey.get(key)!.pass))];
+    // under gets the refusal, the ones with a record first. One that a
+    // guest's own join sets off (`recordedOnly`) reaches only passes that
+    // have a record, and is no decision of the hosts.
+    revokeKeys(keys: string[], options: { recordedOnly?: boolean } = {}) {
+      const passes = [...new Set(keys.map((key) => tabByKey.get(key)!.pass))].filter(
+        (pass) => !options.recordedOnly || this.records.has(pass),
+      );
       const at = this.tick();
       const refuse = (record: PassRecord) => {
         record.wr = { admitted: false, at, keys: new Set() };
@@ -3025,7 +3151,6 @@ describe("who may come in, against a slow reading of every decision", () => {
     }
     removeGuestOf(pass: string, events: Map<string, string>, removedKeys: string[]) {
       for (const waiting of this.tabsOfGuest(pass, "pending")) {
-        this.deny(waiting.key);
         this.status.set(waiting.key, "idle");
         events.set(waiting.key, "joinRejected");
       }
@@ -3048,7 +3173,7 @@ describe("who may come in, against a slow reading of every decision", () => {
       if (linked) {
         if (this.guestBlocked(tab.pass)) {
           const keys = this.boundKeys(tab.pass);
-          this.revokeKeys(keys);
+          this.revokeKeys(keys, { recordedOnly: true });
           this.removeGuestOf(tab.pass, events, keys);
         } else {
           for (const waiting of this.tabsOfGuest(tab.pass, "pending")) {

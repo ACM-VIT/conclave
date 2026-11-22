@@ -109,3 +109,30 @@ describe("a full lobby decision record", () => {
     expect(ledger.admits(["pass:A"], "lock")).toBe(true);
   });
 });
+
+describe("what a participant's own action may change", () => {
+  it("rewrites only the records that exist when a refusal is recorded only", () => {
+    let clock = 0;
+    const ledger = new AdmissionLedger(PRODUCTION_LIMIT);
+    ledger.admit("pass:A", "guest-gp_a", BOTH, (clock += 1));
+
+    ledger.revoke(["pass:A", "pass:fresh"], BOTH, (clock += 1), { recordedOnly: true });
+
+    expect(ledger.admits(["pass:A"], "lock")).toBe(false);
+    expect(ledger.has("pass:fresh")).toBe(false);
+    expect(ledger.size).toBe(1);
+  });
+
+  it("uses up an invite without a refusal, and drops a record left with nothing", () => {
+    let clock = 0;
+    const ledger = new AdmissionLedger(PRODUCTION_LIMIT);
+    ledger.admit("pass:A", "guest-gp_a", ["stage"], (clock += 1), { answersRequest: false });
+    ledger.admit("pass:B", "guest-gp_b", ["stage"], (clock += 1), { answersRequest: false });
+
+    expect(ledger.consume(["pass:A", "pass:B"], "stage")).toEqual(["guest-gp_a", "guest-gp_b"]);
+
+    expect(ledger.admits(["pass:A", "pass:B"], "stage")).toBe(false);
+    expect(ledger.holdsRefusalFor("pass:B")).toBe(false);
+    expect(ledger.size).toBe(0);
+  });
+});

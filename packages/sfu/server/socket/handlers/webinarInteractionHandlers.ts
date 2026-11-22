@@ -334,7 +334,7 @@ export const registerWebinarInteractionHandlers = (
         }
         const userKey = guard.room.userKeysById.get(guard.userId);
         if (userKey) {
-          guard.room.revokeWebinarPromotion(userKey);
+          guard.room.declineStageInvite(userKey);
         }
         respond(callback, { success: true });
       } catch (error) {

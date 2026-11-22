@@ -796,6 +796,11 @@ export class Room {
     return this.guestProofsByUserKey.size;
   }
 
+  /** How many passes and keys the room's decision record holds. */
+  get decisionRecordCount(): number {
+    return this.admissions.size;
+  }
+
   /**
    * Keeps the map from growing with every guest that ever passed through a
    * long-lived room. Every method that removes something `holdsUserKey`
@@ -1016,7 +1021,7 @@ export class Room {
       const blocked = [...this.passesOfGuest(guestProof)].flatMap((proof) => [
         ...(this.userKeysByGuestProof.get(proof) ?? []),
       ]);
-      this.dropRejoinGrantsOf(blocked);
+      this.dropRejoinGrantsOf(blocked, { recordedOnly: true });
       return { ...nothing, blocked };
     }
     const settled: Array<{ request: WaitingRequest; admitted: boolean }> = [];
@@ -1572,12 +1577,29 @@ export class Room {
     });
   }
 
-  /** Takes back the stage invite of the guest behind `userKey`. */
+  /** A host takes back the stage invite of the guest behind `userKey`. */
   revokeWebinarPromotion(userKey: string): boolean {
     const hadInvite = this.isWebinarPromotedUserKey(userKey);
     this.admissions.revoke([this.principalOf(userKey)], ["stage"], this.tick());
     this.releaseGuestIdentity(userKey);
     return hadInvite;
+  }
+
+  /**
+   * The guest behind `userKey` declines its stage invite. The invite is
+   * used up and nothing is recorded, so a decline never adds to the
+   * decision record. A guest with no invite declines nothing.
+   */
+  declineStageInvite(userKey: string): boolean {
+    if (!this.isWebinarPromotedUserKey(userKey)) return false;
+    const named = this.admissions.consume(
+      this.principalsOfRequest(userKey),
+      "stage",
+    );
+    for (const key of new Set([userKey, ...named])) {
+      this.releaseGuestIdentity(key);
+    }
+    return true;
   }
 
   /**
@@ -2513,12 +2535,16 @@ export class Room {
     this.dropRejoinGrantsOf(this.identitiesOfSameGuest(userKey));
   }
 
-  private dropRejoinGrantsOf(userKeys: Iterable<string>): void {
+  private dropRejoinGrantsOf(
+    userKeys: Iterable<string>,
+    options: { recordedOnly?: boolean } = {},
+  ): void {
     const keys = [...userKeys];
     this.admissions.revoke(
       keys.map((key) => this.principalOf(key)),
       ["waitingRoom", "lock", "stage"],
       this.tick(),
+      options,
     );
     for (const key of keys) {
       this.adminUserKeys.delete(key);
@@ -3167,6 +3193,16 @@ export class Room {
   removePendingClient(userKey: string) {
     this.stopWaiting(userKey);
     this.releaseGuestIdentity(userKey);
+  }
+
+  /**
+   * Turns away the request of `userKey` without a decision of its own: the
+   * guest turned out to be blocked, and the block is the answer.
+   */
+  turnAwayBlockedRequest(userKey: string): void {
+    if (!this.pendingClients.has(userKey)) return;
+    this.lobbyOutcomes.set(userKey, "rejected");
+    this.removePendingClient(userKey);
   }
 
   /** Returns false when the room cannot admit `userKey` (see `canGrantTo`). */
