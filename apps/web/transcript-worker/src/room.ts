@@ -1780,6 +1780,9 @@ export class TranscriptRoom {
       updatedAt: now,
     };
     drain.partials.set(itemId, next);
+    // The snapshot write starts first, so the output gate holds this delta
+    // until a restarted worker would still have its words.
+    void this.persist();
     this.broadcast({
       type: "segment.delta",
       delta: this.toSegmentDelta(next, delta, now),

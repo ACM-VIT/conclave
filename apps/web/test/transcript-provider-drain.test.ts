@@ -112,6 +112,25 @@ async function fixture(transcriptModel: string, env: Partial<Env> = {}) {
       .filter((message) => message.type === "segment.final")
       .map((message) => message.segment.text);
   const lastSnapshotTexts = () => snapshots.at(-1)?.segments.map(({ text }) => text) ?? [];
+  const lastSnapshotSegment = (text: string) =>
+    snapshots.at(-1)?.segments.find((segment) => segment.text === text);
+  const restartedTexts = async () => {
+    const saved = structuredClone(snapshots.at(-1));
+    const restarted = new TranscriptRoom(
+      {
+        storage: {
+          get: async (key: string) => (key === "snapshot" ? saved : undefined),
+          put: async () => {},
+          delete: async () => true,
+          setAlarm: async () => {},
+        },
+        waitUntil: () => undefined,
+      } as unknown as DurableObjectState,
+      { TRANSCRIPT_TRANSCRIPTION_LANGUAGE: "en", ...env } as Env,
+    ) as unknown as TestRoom;
+    await restarted.loaded;
+    return restarted.segments.map(({ text }) => text);
+  };
   const viewerSnapshot = async () => {
     await send({ type: "export.snapshot" });
     return (viewer.socket.send as ReturnType<typeof vi.fn>).mock.calls
@@ -130,6 +149,8 @@ async function fixture(transcriptModel: string, env: Partial<Env> = {}) {
     savedTexts,
     broadcastFinals,
     lastSnapshotTexts,
+    lastSnapshotSegment,
+    restartedTexts,
     viewerSnapshot,
   };
 }
@@ -361,6 +382,101 @@ describe("drain cases reproduced across review rounds", () => {
     await settle();
 
     expect(lastSnapshotTexts()).toContain("Friday at noon");
+  });
+
+  it("saves words a replaced provider first shows after the switch, so a restart keeps them", async () => {
+    vi.useFakeTimers();
+    const { sockets, start, switchTo, speak, commit, lastSnapshotTexts, lastSnapshotSegment, restartedTexts } =
+      await fixture(OPENAI);
+    await start("en");
+    const before = sockets[0];
+    await speak();
+    await commit();
+    before.emit(openAiCommitted("late_partial"));
+    await settle();
+
+    await switchTo("hi");
+    before.emit(openAiDelta("late_partial", "Shown after the switch"));
+    await settle();
+
+    expect(lastSnapshotTexts()).toContain("Shown after the switch");
+    expect(lastSnapshotSegment("Shown after the switch")).toMatchObject({ isFinal: true });
+    expect(await restartedTexts()).toEqual(["Shown after the switch"]);
+  });
+
+  it("saves each new word of a draining line as it is shown", async () => {
+    vi.useFakeTimers();
+    const { sockets, start, switchTo, speak, commit, restartedTexts } = await fixture(OPENAI);
+    await start("en");
+    const before = sockets[0];
+    await speak();
+    await commit();
+    before.emit(openAiCommitted("item_1"));
+    before.emit(openAiDelta("item_1", "Friday"));
+    await settle();
+
+    await switchTo("hi");
+    before.emit(openAiDelta("item_1", " at noon"));
+    await settle();
+
+    expect(await restartedTexts()).toEqual(["Friday at noon"]);
+  });
+
+  it("orders reverse-arriving finals across three switches and closes every old socket", async () => {
+    vi.useFakeTimers();
+    const { sockets, start, switchTo, speak, commit, stop, savedTexts } = await fixture(OPENAI);
+    await start("en");
+    for (const [index, language] of ["en", "hi", "ta", "en"].entries()) {
+      if (index > 0) await switchTo(language);
+      await speak();
+      await commit();
+      sockets[index].emit(openAiCommitted(`item_${index}`));
+      await settle();
+      await vi.advanceTimersByTimeAsync(100);
+    }
+    for (const index of [3, 2, 0, 1]) {
+      sockets[index].emit(openAiFinal(`item_${index}`, `spoken-${index}`));
+      await settle();
+    }
+
+    expect(savedTexts()).toEqual(["spoken-0", "spoken-1", "spoken-2", "spoken-3"]);
+    expect(sockets.map(({ closed }) => closed)).toEqual([true, true, true, false]);
+    await stop();
+    expect(sockets.every(({ closed }) => closed)).toBe(true);
+  });
+
+  it("Sarvam: keeps a tail when the turn before it finalized just before the switch", async () => {
+    vi.useFakeTimers();
+    const { sockets, start, switchTo, speak, savedTexts } = await fixture(SARVAM);
+    await start("hi");
+    const before = sockets[0];
+    await speak();
+    await speak();
+    before.emit(sarvamFinal("turn1", "Turn one."));
+    await settle();
+
+    await switchTo("ta");
+    expect(before.closed).toBe(false);
+    before.emit(sarvamFinal("turn2", "Turn two."));
+    await settle();
+
+    expect(savedTexts()).toEqual(["Turn one.", "Turn two."]);
+  });
+
+  it("Sarvam: ends three drains with unanswered flushes at their deadlines", async () => {
+    vi.useFakeTimers();
+    const { sockets, start, switchTo, speak, stop } = await fixture(SARVAM);
+    await start("hi");
+    for (const language of ["ta", "bn", "en"]) {
+      await speak();
+      await switchTo(language);
+    }
+    expect(sockets.map(({ closed }) => closed)).toEqual([false, false, false, false]);
+
+    await vi.advanceTimersByTimeAsync(10_001);
+    expect(sockets.map(({ closed }) => closed)).toEqual([true, true, true, false]);
+    await stop();
+    expect(sockets.every(({ closed }) => closed)).toBe(true);
   });
 });
 
