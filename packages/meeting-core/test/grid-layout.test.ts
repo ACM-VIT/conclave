@@ -128,11 +128,11 @@ describe("computeGridLayout — degenerate inputs", () => {
 });
 
 // How far a 1 px resize that keeps the row split and tile height may move a
-// tile. Base moves widths 2 px and edges up to 5.5 px, since a row re-centres
-// as it grows. A tile that meets another row can take a few px more where its
-// neighbours sit at their caps.
-const MAX_WIDTH_STEP = 5;
-const MAX_EDGE_STEP = 6;
+// tile. Base moves widths 2 px and edges up to 7.5 px, since a row re-centres
+// as it grows. A row stretched to meet another grows up to 1.25x as fast, so
+// its edges move up to 1.25x as far, plus a pixel of rounding.
+const MAX_WIDTH_STEP = 4;
+const MAX_EDGE_STEP = 10;
 
 const PORTRAIT = 3 / 4;
 const LANDSCAPE = 16 / 9;
@@ -313,14 +313,14 @@ describe("computeGridLayout — mixed rows line up", () => {
     expectEvenGaps(r);
     expect(new Set(r.positions.map((position) => position.height)).size).toBe(1);
     // The two-laptop row sets the width and keeps its 16:9 tiles.
-    expect(r.positions[3].width).toBe(Math.floor(r.tileHeight * LANDSCAPE));
-    // Phones widen no further than 4:5, so the laptop takes the rest.
+    expect(Math.abs(r.positions[3].width - r.tileHeight * LANDSCAPE)).toBeLessThan(1);
+    // Phones widen at half the laptop's rate, so the laptop takes most of it.
     const [phone, laptop] = r.positions;
-    expect(phone.width).toBeGreaterThan(Math.floor(phone.height * PORTRAIT));
+    const phoneGrowth = phone.width / (phone.height * PORTRAIT) - 1;
+    const laptopGrowth = laptop.width / (laptop.height * LANDSCAPE) - 1;
+    expect(phoneGrowth).toBeGreaterThan(0);
     expect(phone.width).toBeLessThanOrEqual(Math.floor(phone.height * 0.8));
-    expect(laptop.width / Math.floor(laptop.height * LANDSCAPE)).toBeGreaterThan(
-      phone.width / Math.floor(phone.height * PORTRAIT),
-    );
+    expect(phoneGrowth / laptopGrowth).toBeCloseTo(0.5, 1);
     r.positions.forEach((position, index) => expectWithinStretch(position, aspects[index]));
   });
 
@@ -332,7 +332,11 @@ describe("computeGridLayout — mixed rows line up", () => {
     expectAlignedEdges(r, [0, 1]);
     expectEvenGaps(r);
     expect(r.offsetX).toBe((1416 - r.contentWidth) / 2);
-    expect(r.positions[0].width).toBeLessThanOrEqual(Math.floor(r.tileHeight * 0.8));
+    // The phone widens at half the laptop's rate.
+    const [phone, laptop] = r.positions;
+    const phoneGrowth = phone.width / (phone.height * PORTRAIT) - 1;
+    const laptopGrowth = laptop.width / (laptop.height * LANDSCAPE) - 1;
+    expect(phoneGrowth / laptopGrowth).toBeCloseTo(0.5, 1);
     r.positions.forEach((position, index) => expectWithinStretch(position, aspects[index]));
   });
 
@@ -462,6 +466,14 @@ describe("computeGridLayout — mixed rows line up", () => {
     ["nine people, 1 px taller", NINE, { width: 1988, height: 716, maxCols: 4 }, { width: 1988, height: 717, maxCols: 4 }],
     // Astra: three phones over a laptop, the meeting at 1003 to 1004 by 974.
     ["three phones over a laptop", [PORTRAIT, PORTRAIT, PORTRAIT, LANDSCAPE], { width: 971, height: 942 }, { width: 972, height: 942 }],
+    // Sol: five laptops then six phones, 1 px taller; one laptop took the whole row's growth.
+    ["five laptops and six phones, 1 px taller", [...Array<number>(5).fill(LANDSCAPE), ...Array<number>(6).fill(PORTRAIT)], { width: 1737, height: 423 }, { width: 1737, height: 424 }],
+    // Astra: three laptops above three phones and a laptop, the meeting 1047 to 1048 wide.
+    ["three laptops over three phones and a laptop", [LANDSCAPE, LANDSCAPE, LANDSCAPE, PORTRAIT, PORTRAIT, PORTRAIT, LANDSCAPE], { width: 1015, height: 515 }, { width: 1016, height: 515 }],
+    // Twelve people, 1 px wider: the worst twelve-tile width step 6985f195 showed.
+    ["a laptop and eleven phones, 1 px wider", [LANDSCAPE, ...Array<number>(11).fill(PORTRAIT)], { width: 1678, height: 857 }, { width: 1679, height: 857 }],
+    // Ten people, 1 px taller: the worst ten-tile edge step 6985f195 showed.
+    ["nine laptops and a phone, 1 px taller", [...Array<number>(9).fill(LANDSCAPE), 9 / 16], { width: 2085, height: 375 }, { width: 2085, height: 376 }],
   ])("moves %s by about what base does", (_, aspects, before, after) => {
     const [from, to] = [before, after].map(({ width, height, ...options }) =>
       computeGridLayout(aspects.length, width, height, { ...options, tileAspects: aspects }),
@@ -469,6 +481,16 @@ describe("computeGridLayout — mixed rows line up", () => {
 
     expect(rowsOf(to)).toEqual(rowsOf(from));
     expectSteadyStep(from, to);
+  });
+
+  it("keeps full rows on one pixel width when a shorter row can't share it", () => {
+    const aspects = [LANDSCAPE, 9 / 16, LANDSCAPE, 2 / 3, LANDSCAPE, PORTRAIT, PORTRAIT, 0.6, 2 / 3, 0.6, PORTRAIT];
+    const r = computeGridLayout(11, 2183, 1421, { tileAspects: aspects });
+
+    expect(rowsOf(r).map((row) => row.length)).toEqual([3, 4, 4]);
+    const [, first, second] = rowEdges(r);
+    expect(second).toEqual(first);
+    r.positions.forEach((position, index) => expectWithinStretch(position, aspects[index]));
   });
 
   it("keeps a tile a few px wide inside its caps", () => {
@@ -501,12 +523,14 @@ describe("computeGridLayout — mixed rows line up", () => {
 
     expect(rowsOf(r)).toEqual(rows);
     const lastRow = rows[rows.length - 1];
+    // A row at its own width rounds its unrounded width once, so a tile sits
+    // within a pixel of it.
     lastRow.forEach((index) => {
-      expect(r.positions[index].width).toBe(Math.floor(r.tileHeight * aspects[index]));
+      expect(Math.abs(r.positions[index].width - r.tileHeight * aspects[index])).toBeLessThan(1);
     });
     // The full row above keeps its own tiles too.
     rows[0].forEach((index) => {
-      expect(r.positions[index].width).toBe(Math.floor(r.tileHeight * aspects[index]));
+      expect(Math.abs(r.positions[index].width - r.tileHeight * aspects[index])).toBeLessThan(1);
     });
     const edges = rowEdges(r);
     const last = edges[edges.length - 1];
@@ -655,11 +679,18 @@ describe("computeGridLayout — mixed rows, random layouts", () => {
     let compared = 0;
     const jumps: string[] = [];
     for (let run = 0; run < 1500; run += 1) {
-      const count = pick(2, 12);
+      const count = pick(2, 14);
       const width = pick(400, 2400);
       const height = pick(300, 1400);
-      const maxCols = pick(2, 7);
-      const aspects = Array.from({ length: count }, () => SHAPES[pick(0, SHAPES.length - 1)]);
+      const maxCols = sweep() < 0.6 ? 7 : pick(2, 7);
+      // Half the runs group cameras the way calls often look: laptops, then
+      // phones of one shape, which leaves rows of tiles sharing a cap.
+      const laptops = pick(0, count);
+      const phone = [9 / 16, PORTRAIT, PORTRAIT, 0.8][pick(0, 3)];
+      const aspects =
+        sweep() < 0.5
+          ? Array.from({ length: count }, (_, index) => (index < laptops ? LANDSCAPE : phone))
+          : Array.from({ length: count }, () => SHAPES[pick(0, SHAPES.length - 1)]);
       for (const axis of ["width", "height"] as const) {
         const at = (step: number) =>
           computeGridLayout(
@@ -697,6 +728,39 @@ describe("computeGridLayout — mixed rows, random layouts", () => {
     expect(jumps).toEqual([]);
     expect(compared).toBeGreaterThan(40000);
   }, 30_000);
+
+  it("returns finite, non-negative rects for tiny containers", () => {
+    const tiny = seededRandom(30);
+    const pick = (min: number, max: number) => min + Math.floor(tiny() * (max - min + 1));
+    const bad: string[] = [];
+    const runs = [
+      // Greptile: one tile's unrounded width rounds down to 0 px here.
+      { count: 6, width: 30, height: 14, maxCols: 7, gap: 12, aspects: [LANDSCAPE, 9 / 16, 9 / 16, 0.8, 9 / 16, 9 / 16] },
+      // Sol: a sliver of a tile in a wide grid.
+      { count: 4, width: 2800, height: 292, maxCols: 2, gap: 12, aspects: [0.0058, LANDSCAPE, 1.5, 1.28] },
+    ];
+    for (let run = 0; run < 3000; run += 1) {
+      const count = pick(1, 12);
+      runs.push({
+        count,
+        width: pick(1, 120) + (tiny() < 0.3 ? tiny() : 0),
+        height: pick(1, 120) + (tiny() < 0.3 ? tiny() : 0),
+        maxCols: pick(1, 7),
+        gap: GAPS[pick(0, GAPS.length - 1)],
+        aspects: Array.from({ length: count }, () => SHAPES[pick(0, SHAPES.length - 1)]),
+      });
+    }
+    runs.forEach(({ count, width, height, maxCols, gap, aspects }) => {
+      const r = computeGridLayout(count, width, height, { maxCols, gap, tileAspects: aspects });
+      r.positions.forEach((position) => {
+        const values = [position.x, position.y, position.width, position.height];
+        if (values.some((value) => !Number.isFinite(value) || value < 0)) {
+          bad.push(JSON.stringify({ count, width, height, maxCols, gap, aspects, position }));
+        }
+      });
+    });
+    expect(bad).toEqual([]);
+  });
 
   it("lays out all-16:9 pages exactly as the uniform grid", () => {
     cases.forEach(({ count, width, height, maxCols, gap }) => {

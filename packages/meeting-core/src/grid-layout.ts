@@ -163,55 +163,63 @@ const sum = (values: readonly number[]) =>
 const rowWidthOf = (widths: readonly number[], gap: number) =>
   sum(widths) + (widths.length - 1) * gap;
 
-/** Floor each size, then give the pixels left over to the largest remainders. */
-const roundToTotal = (sizes: number[], total: number) => {
-  const floored = sizes.map(Math.floor);
-  sizes
-    .map((size, index) => ({ index, remainder: size - floored[index] }))
-    .sort((a, b) => b.remainder - a.remainder)
-    .slice(0, Math.round(total - sum(floored)))
-    .forEach(({ index }) => {
-      floored[index] += 1;
+/**
+ * Whole pixels summing to `total`, each inside `low` to `high`: floor each
+ * size, then move the pixels left over one at a time to the tiles nearest the
+ * next pixel that still have room.
+ */
+const roundWithin = (sizes: number[], low: number[], high: number[], total: number) => {
+  const pixels = sizes.map((size, index) =>
+    Math.min(Math.max(Math.floor(size), low[index]), high[index]),
+  );
+  for (let left = total - sum(pixels); left !== 0; ) {
+    const grow = left > 0;
+    const movable = pixels
+      .map((pixel, index) => ({ index, remainder: sizes[index] - pixel }))
+      .filter(({ index }) => (grow ? pixels[index] < high[index] : pixels[index] > low[index]))
+      .sort((a, b) => (grow ? b.remainder - a.remainder : a.remainder - b.remainder))
+      .slice(0, Math.abs(left));
+    if (movable.length === 0) break;
+    movable.forEach(({ index }) => {
+      pixels[index] += grow ? 1 : -1;
     });
-  return floored;
+    left = total - sum(pixels);
+  }
+  return pixels;
 };
+
+// Portrait tiles grow and shrink at this share of their width's rate, so a
+// row widens its landscape tiles first and crops a face as little as it can.
+const PORTRAIT_RESIZE_WEIGHT = 0.5;
 
 /**
  * How far each tile may resize, in whole pixels, from its unrounded width
  * `exact`: `floor` and `hard` are the 1.25x caps either way, never past the
- * tile's own whole-pixel width, and `soft` holds portrait tiles at 4:5, since
- * a portrait tile crops a face sooner.
+ * tile's own whole-pixel width. `weight` is each tile's share of a row's
+ * resize: its unrounded width, halved for a portrait tile, and never zero.
  */
-const resizeLimits = (exact: number[], height: number) => {
-  const floor = exact.map((width) =>
-    Math.min(Math.ceil(width / MAX_ROW_STRETCH), Math.floor(width)),
-  );
-  const hard = exact.map((width) => Math.floor(width * MAX_ROW_STRETCH));
-  const soft = exact.map((width, index) =>
-    width < height
-      ? Math.min(
-          hard[index],
-          Math.max(Math.floor(width), Math.floor(height * PORTRAIT_STRETCH_ASPECT)),
-        )
-      : hard[index],
-  );
-  return { floor, soft, hard };
-};
+const resizeLimits = (exact: number[], height: number) => ({
+  floor: exact.map((width) => Math.min(Math.ceil(width / MAX_ROW_STRETCH), Math.floor(width))),
+  hard: exact.map((width) => Math.floor(width * MAX_ROW_STRETCH)),
+  weight: exact.map((width) =>
+    Math.max(width < height ? width * PORTRAIT_RESIZE_WEIGHT : width, ASPECT_EPSILON),
+  ),
+});
 
 /**
- * Move `sizes` by `amount` px in total, each tile in proportion to its natural
- * width, until it reaches its limit. Returns the px no tile could take.
+ * Move `sizes` by `amount` px in total, each tile in proportion to its
+ * weight, until it reaches its limit. Returns the px no tile could take.
  */
-const fillToward = (widths: number[], sizes: number[], limits: number[], amount: number) => {
+const fillToward = (weights: number[], sizes: number[], limits: number[], amount: number) => {
   const direction = Math.sign(amount);
   const room = (index: number) => (limits[index] - sizes[index]) * direction;
   let left = Math.abs(amount);
   let open = sizes.flatMap((_, index) => (room(index) > ASPECT_EPSILON ? [index] : []));
   while (left > ASPECT_EPSILON && open.length > 0) {
-    const base = sum(open.map((index) => widths[index]));
-    const step = Math.min(left / base, ...open.map((index) => room(index) / widths[index]));
+    const base = sum(open.map((index) => weights[index]));
+    const step = Math.min(left / base, ...open.map((index) => room(index) / weights[index]));
     open.forEach((index) => {
-      sizes[index] += direction * widths[index] * step;
+      sizes[index] += direction * weights[index] * step;
       // Land exactly on a limit, so rounding can never cross it.
       if (room(index) <= ASPECT_EPSILON) sizes[index] = limits[index];
     });
@@ -234,25 +242,24 @@ const tileBudget = (count: number, gap: number, rowWidth: number) => {
 
 /**
  * Resize a row's tiles so the row spans `rowWidth` at most, to the whole pixel
- * below when the gap is fractional. Tiles grow to their soft caps before their
- * hard caps, and shrink no further than their floors. Returns null when the
- * caps cannot reach `rowWidth`.
+ * below when the gap is fractional. The row fills in unrounded pixels from the
+ * tiles' unrounded widths toward their unrounded 1.25x caps, every tile taking
+ * its weighted share, so a row's growth spreads across it instead of landing
+ * on one tile. Only then do the tiles go to whole pixels inside their caps.
+ * Returns null when the caps cannot reach `rowWidth`.
  */
 const resizeRow = (
-  widths: number[],
-  { floor, soft, hard }: ReturnType<typeof resizeLimits>,
+  exact: number[],
+  { floor, hard, weight }: ReturnType<typeof resizeLimits>,
   gap: number,
   rowWidth: number,
 ) => {
-  const total = tileBudget(widths.length, gap, rowWidth);
+  const total = tileBudget(exact.length, gap, rowWidth);
   if (total < sum(floor) || total > sum(hard)) return null;
-  const sizes = [...widths];
-  if (total < sum(widths)) {
-    fillToward(widths, sizes, floor, total - sum(widths));
-  } else {
-    fillToward(widths, sizes, hard, fillToward(widths, sizes, soft, total - sum(widths)));
-  }
-  return roundToTotal(sizes, total);
+  const sizes = [...exact];
+  const limit = total < sum(exact) ? 1 / MAX_ROW_STRETCH : MAX_ROW_STRETCH;
+  fillToward(weight, sizes, exact.map((width) => width * limit), total - sum(exact));
+  return roundWithin(sizes, floor, hard, total);
 };
 
 // A row that misses the shared width by this much or less stays at its
@@ -270,8 +277,7 @@ const ROW_EASE_RATE = 3;
  * Every width here is unrounded, `height * aspect` and its 1.25x caps, so it
  * moves in proportion to the tile height and the ease never multiplies a
  * pixel that rounding added or took away. Only the final widths go to whole
- * pixels: rows that met share one pixel width inside all their caps, and any
- * other row keeps its offset from its own whole-pixel width.
+ * pixels, and rows that met share one width inside all their whole-pixel caps.
  *
  * The shared width minimises a convex cost: 1 per px from the full rows'
  * preferred width (nearest the widest row, portrait tiles held at 4:5), 4 per
@@ -292,11 +298,11 @@ const alignRows = (rowAspects: number[][], height: number, gap: number, cols: nu
     const tiles = exact.map(Math.floor);
     const limits = resizeLimits(exact, height);
     return {
+      exact,
       tiles,
       limits,
       full: aspects.length === cols,
       natural: rowWidthOf(exact, gap),
-      rounding: sum(exact) - sum(tiles),
       low: rowWidthOf(exact.map((width) => width / MAX_ROW_STRETCH), gap),
       soft: rowWidthOf(
         exact.map((width) =>
@@ -344,19 +350,29 @@ const alignRows = (rowAspects: number[][], height: number, gap: number, cols: nu
       ? Math.max(row.natural, nearest - ease)
       : Math.min(row.natural, nearest + ease);
   });
+  // Rows that met share one pixel width inside all their caps. When a shorter
+  // row's caps leave no such width, the full rows still share one.
   const met = rows.filter((_, index) => Math.abs(widths[index] - target) <= ASPECT_EPSILON);
-  const metLow = Math.max(...met.map((row) => row.pixelLow));
-  const metHigh = Math.min(...met.map((row) => row.pixelHigh));
-  const metWidth = Math.min(
-    Math.max(target - Math.max(...met.map((row) => row.rounding)), metLow),
-    metHigh,
+  const overlap = (group: typeof rows) => ({
+    group,
+    low: Math.max(...group.map((row) => row.pixelLow)),
+    high: Math.min(...group.map((row) => row.pixelHigh)),
+  });
+  const shared = [overlap(met), overlap(met.filter((row) => row.full))].find(
+    ({ group, low, high }) => group.length > 0 && low <= high,
   );
+  const sharedWidth =
+    shared &&
+    Math.min(
+      Math.max(target, shared.low),
+      shared.high,
+    );
   return rows.map((row, index) => {
     const pixelWidth =
-      met.includes(row) && metLow <= metHigh
-        ? metWidth
-        : Math.min(Math.max(widths[index] - row.rounding, row.pixelLow), row.pixelHigh);
-    return resizeRow(row.tiles, row.limits, gap, pixelWidth) ?? row.tiles;
+      shared && sharedWidth !== undefined && shared.group.includes(row)
+        ? sharedWidth
+        : Math.min(Math.max(widths[index], row.pixelLow), row.pixelHigh);
+    return resizeRow(row.exact, row.limits, gap, pixelWidth) ?? row.tiles;
   });
 };
 
