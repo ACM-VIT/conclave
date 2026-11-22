@@ -37,11 +37,20 @@ const DELETED = Symbol("deleted");
 type Staged = Row | typeof DELETED;
 
 const deepFreeze = (value: unknown): void => {
-  if (value === null || typeof value !== "object" || Object.isFrozen(value)) {
-    return;
-  }
+  if (value === null || typeof value !== "object") return;
   Object.freeze(value);
   for (const entry of Object.values(value)) deepFreeze(entry);
+};
+
+/**
+ * The row as the store keeps it: a private copy, frozen at once. A handler
+ * that keeps its own reference cannot grow the row past the size it was
+ * checked at, or change it after it is staged.
+ */
+const sealed = (row: Row): Row => {
+  const copy = JSON.parse(JSON.stringify(row)) as Row;
+  deepFreeze(copy);
+  return copy;
 };
 
 class TableStore {
@@ -180,7 +189,6 @@ export class AuthorityStore {
           if (!table.rows.has(key)) continue;
           table.delete(key);
         } else {
-          deepFreeze(staged);
           table.set(key, staged);
         }
         changed = true;
@@ -286,7 +294,7 @@ class Draft implements RuntimeTransaction {
     if (isNew && this.count(table) >= spec.maxRows) {
       throw new AuthorityCapacityError(`Table ${table} is full`);
     }
-    this.stage(table, key, row);
+    this.stage(table, key, sealed(row));
   }
 
   insertIfAbsent(table: string, key: TableKey, row: Row): "inserted" | "exists" {

@@ -236,7 +236,15 @@ const SERVER_SUBPATH = new RegExp(
 );
 for (const filePath of listSources(WEB_SRC_DIR)) {
   for (const specifier of specifiersOf(filePath)) {
-    if (SERVER_SUBPATH.test(specifier)) {
+    // By package name, or by a relative path that reaches into this package.
+    const reached = specifier.startsWith(".")
+      ? resolveFile(path.resolve(path.dirname(filePath), specifier))
+      : undefined;
+    const reachesServer =
+      reached !== undefined &&
+      reached.startsWith(`${packageDir}${path.sep}`) &&
+      isServerOnly(reached);
+    if (SERVER_SUBPATH.test(specifier) || reachesServer) {
       errors.push(
         `${path.relative(path.resolve(packageDir, "..", ".."), filePath)} imports server-only code (${specifier}). Only the SFU may load an app's server entry.`,
       );

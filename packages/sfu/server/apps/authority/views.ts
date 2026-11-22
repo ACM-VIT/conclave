@@ -151,6 +151,22 @@ export class ViewTracker {
       return ops;
     };
 
+    // Every key a changed row gives up is released before any changed row
+    // takes a key, so one row can take over a key another just left.
+    const placements: (() => void)[] = [];
+    const change = (
+      bucket: Bucket,
+      name: string,
+      source: TableKey,
+      projected: { key: string; value: Json } | null,
+      ops: ViewOps,
+    ): void => {
+      this.release(bucket, name, source, projected, ops);
+      if (projected) {
+        placements.push(() => this.place(bucket, name, source, projected, ops));
+      }
+    };
+
     for (const [tableName, keys] of this.store.takeDirty()) {
       const views = this.viewsByTable.get(tableName);
       if (!views) continue;
@@ -159,7 +175,7 @@ export class ViewTracker {
         for (const [name, view] of views) {
           if (view.kind === "shared") {
             for (const [role, audience] of this.roles) {
-              this.apply(
+              change(
                 bucketOf(audience, name),
                 name,
                 key,
@@ -175,14 +191,14 @@ export class ViewTracker {
             this.disown(name, previousOwner, key);
             const audience = this.subjects.get(previousOwner);
             if (audience) {
-              this.apply(bucketOf(audience, name), name, key, null, opsFor(personal, previousOwner));
+              change(bucketOf(audience, name), name, key, null, opsFor(personal, previousOwner));
             }
           }
           if (nextOwner === undefined || !row) continue;
           this.own(name, nextOwner, key);
           const audience = this.subjects.get(nextOwner);
           if (audience) {
-            this.apply(
+            change(
               bucketOf(audience, name),
               name,
               key,
@@ -193,6 +209,7 @@ export class ViewTracker {
         }
       }
     }
+    for (const place of placements) place();
 
     for (const [role, ops] of shared) if (isEmpty(ops)) shared.delete(role);
     for (const [subject, ops] of personal) {
@@ -307,7 +324,20 @@ export class ViewTracker {
     }
   }
 
+  /** One row's change to one audience's bucket, all at once. */
   private apply(
+    bucket: Bucket,
+    name: string,
+    source: TableKey,
+    projected: { key: string; value: Json } | null,
+    ops: ViewOps,
+  ): void {
+    this.release(bucket, name, source, projected, ops);
+    if (projected) this.place(bucket, name, source, projected, ops);
+  }
+
+  /** Gives up the key a source row held when it no longer projects to it. */
+  private release(
     bucket: Bucket,
     name: string,
     source: TableKey,
@@ -316,18 +346,36 @@ export class ViewTracker {
   ): void {
     const previousKey = bucket.bySource.get(source);
     if (
-      previousKey !== undefined &&
-      (projected === null || projected.key !== previousKey)
+      previousKey === undefined ||
+      (projected !== null && projected.key === previousKey)
     ) {
-      bucket.bySource.delete(source);
-      if (bucket.owner.get(previousKey) === source) {
-        bucket.owner.delete(previousKey);
-        bucket.rows.delete(previousKey);
-        ops.remove.push({ bucket: name, key: previousKey });
-        ops.bytes += name.length + previousKey.length + ROW_OVERHEAD_BYTES;
-      }
+      return;
     }
-    if (projected === null) return;
+    bucket.bySource.delete(source);
+    if (bucket.owner.get(previousKey) !== source) return;
+    bucket.owner.delete(previousKey);
+    bucket.rows.delete(previousKey);
+    ops.remove.push({ bucket: name, key: previousKey });
+    ops.bytes += name.length + previousKey.length + ROW_OVERHEAD_BYTES;
+  }
+
+  private place(
+    bucket: Bucket,
+    name: string,
+    source: TableKey,
+    projected: { key: string; value: Json },
+    ops: ViewOps,
+  ): void {
+    // Each projected row needs its own key. When two source rows claim one,
+    // the first keeps it and the second is withheld, so removing either can
+    // never take the other's row away from a viewer.
+    const owner = bucket.owner.get(projected.key);
+    if (owner !== undefined && owner !== source) {
+      const message = `${this.definition.contract.id}: view ${name} projected two rows to the key "${projected.key}"`;
+      if (this.options.verify) throw new Error(message);
+      Logger.error(`[Authority] ${message}. The later row is withheld.`);
+      return;
+    }
 
     const encoded = JSON.stringify(projected.value);
     bucket.bySource.set(source, projected.key);

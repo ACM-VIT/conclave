@@ -195,7 +195,14 @@ const record = <T>(
     const maxKeyLength = options.maxKeyLength ?? 64;
     const output: Record<string, T> = {};
     for (const [key, entry] of entries) {
-      if (key.length === 0 || key.length > maxKeyLength) {
+      // Assigning these would set the object's prototype, not a key.
+      if (
+        key.length === 0 ||
+        key.length > maxKeyLength ||
+        key === "__proto__" ||
+        key === "constructor" ||
+        key === "prototype"
+      ) {
         fail(`${path}.${key}`, "invalid key");
       }
       output[key] = value.parse(entry, mode, `${path}.${key}`);

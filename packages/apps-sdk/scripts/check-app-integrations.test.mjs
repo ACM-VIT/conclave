@@ -134,6 +134,20 @@ test("the web app may not import any server entry", () => {
   assert.match(checked.output, /apps\/web\/src\/app\/panel\.tsx imports server-only code/);
 });
 
+test("the web app may not reach a server entry by relative path either", () => {
+  const repo = makeRepo();
+  repo.scaffold("sign-up", "--runtime", "authority");
+  repo.write(
+    "apps/web/src/app/panel.tsx",
+    'import { signUpAuthority } from "../../../../packages/apps-sdk/src/apps/sign-up/server/index";\nexport const rules = signUpAuthority;\n',
+  );
+
+  const checked = repo.check();
+
+  assert.equal(checked.status, 1);
+  assert.match(checked.output, /apps\/web\/src\/app\/panel\.tsx imports server-only code/);
+});
+
 test("an authority app needs a contract with its own id and a server definition", () => {
   const repo = makeRepo();
   repo.scaffold("sign-up", "--runtime", "authority");

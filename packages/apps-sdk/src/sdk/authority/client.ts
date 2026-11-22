@@ -516,6 +516,16 @@ export class AuthoritySession<C extends AuthorityContract> {
           return;
         }
         this.incoming = { generation: frame.generation, frames: [] };
+        // A replacement means what is held may no longer be this viewer's
+        // to see. When it comes in parts, forget the old view now and not
+        // when the last part lands.
+        if (!frame.last) {
+          this.generation = frame.generation;
+          this.seq = 0;
+          this.rows = new Map();
+          this.failStreams();
+          this.setState({ kind: "connecting" });
+        }
       }
       if (frame.part !== this.incoming.frames.length) {
         this.resubscribe();

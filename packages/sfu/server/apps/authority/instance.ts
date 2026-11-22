@@ -147,6 +147,21 @@ export class AuthorityInstance {
       return failure("identity-required");
     }
 
+    const parsed = this.parseInput(spec.input, rawInput);
+    if (!parsed.ok) return parsed;
+
+    // A repeat of an operation that already ran gets its first answer before
+    // any budget is charged: it is not new work, and a client whose ack was
+    // lost must not be told "slow down" in place of what happened.
+    let digest = "";
+    if (operation) {
+      const outside = this.receipts.window(operation, now);
+      if (outside) return outside;
+      digest = requestDigest(name, parsed.value);
+      const replayed = this.receipts.replay(actor.subject, operation, digest);
+      if (replayed) return replayed;
+    }
+
     const limited = this.rates.take(
       `${actor.subject}\u0000act\u0000${name}`,
       action.rate,
@@ -155,18 +170,8 @@ export class AuthorityInstance {
     if (!limited.ok) {
       return failure("rate-limited", { retryAfterMs: limited.retryAfterMs });
     }
-
-    const parsed = this.parseInput(spec.input, rawInput);
-    if (!parsed.ok) return parsed;
-
-    let digest = "";
-    if (operation) {
-      const outside = this.receipts.window(operation, now);
-      if (outside) return outside;
-      digest = requestDigest(name, parsed.value);
-      const replayed = this.receipts.replay(actor.subject, operation, digest);
-      if (replayed) return replayed;
-      if (!this.receipts.hasRoom(actor.subject, now)) return failure("capacity");
+    if (operation && !this.receipts.hasRoom(actor.subject, now)) {
+      return failure("capacity");
     }
 
     const budget = this.rates.take(

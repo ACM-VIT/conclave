@@ -216,7 +216,8 @@ export class Tab<C extends AuthorityContract = AuthorityContract> {
 }
 
 export type HarnessOptions = {
-  runtime?: Partial<AppsAuthorityRuntime>;
+  /** Null stands for an SFU that does not run authority apps at all. */
+  runtime?: Partial<AppsAuthorityRuntime> | null;
   roomId?: string;
 };
 
@@ -244,11 +245,14 @@ export class Harness {
         instanceUrl: "http://localhost",
         ttlMs: 45_000,
       }),
-      appsAuthority: createAppsAuthorityRuntime({
-        modules,
-        verifyViews: true,
-        ...options.runtime,
-      }),
+      appsAuthority:
+        options.runtime === null
+          ? null
+          : createAppsAuthorityRuntime({
+              modules,
+              verifyViews: true,
+              ...options.runtime,
+            }),
     });
     const router = {
       closed: false,
@@ -285,7 +289,11 @@ export class Harness {
   async open<C extends AuthorityContract>(
     who: Person,
     contract: C,
-    options: { session?: string } = {},
+    options: {
+      session?: string;
+      /** The `email` claim of a signed-in join token. */
+      tokenEmail?: string;
+    } = {},
   ): Promise<Tab<C>> {
     this.sequence += 1;
     const sessionId = options.session ?? `s${this.sequence}`;
@@ -314,7 +322,11 @@ export class Harness {
     const context = createConnectionContext(this.io, pair.server, this.state);
     context.currentRoom = this.room;
     context.currentClient = seat;
-    registerAuthorityHandlers(context);
+    if (options.tokenEmail) {
+      (pair.server.data as { user?: unknown }).user = { email: options.tokenEmail };
+    }
+    // As the SFU does: no runtime, no authority handler on the socket.
+    if (this.state.appsAuthority) registerAuthorityHandlers(context);
 
     const client = new AuthorityClient({ socket: pair.client });
     const session = client.open(contract);

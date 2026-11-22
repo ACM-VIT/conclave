@@ -579,7 +579,7 @@ describe("bounds", () => {
     const room = new Harness([probeAuthority]);
     const hostTab = await room.open(host, probeContract);
     for (let index = 0; index < 5; index += 1) {
-      await hostTab.act("put", { id: `n${index}`, text: "ok" });
+      await hostTab.act("put", { id: `n${index}`, text: `ok ${index}` });
     }
 
     const overflow = await hostTab.act("put", { id: "n5", text: "one too many" });
@@ -591,7 +591,7 @@ describe("bounds", () => {
       { ok: false, code: "capacity" },
     ]);
     expect(hostTab.rows("notes").length).toBe(5);
-    expect(field(hostTab.row("notes", "n0"), "text")).toBe("ok");
+    expect(field(hostTab.row("notes", "n0"), "text")).toBe("ok 0");
   });
 
   it("keeps nothing from a handler that throws or rejects, and freezes committed rows", async () => {
@@ -792,7 +792,7 @@ describe("large views and slow sockets", () => {
     });
     const hostTab = await room.open(host, probeContract);
     for (let index = 0; index < 3; index += 1) {
-      await hostTab.act("put", { id: `n${index}`, text: "z".repeat(300) });
+      await hostTab.act("put", { id: `n${index}`, text: `${index}`.repeat(300) });
     }
     await room.deliver();
 
@@ -899,7 +899,11 @@ describe("teardown", () => {
     });
 
     expect(authority.isClosed).toBe(true);
-    expect(hostTab.frames.slice(before)).toEqual([]);
+    // The socket outlives the room, so it is told to forget what it held.
+    expect(hostTab.frames.slice(before)).toMatchObject([
+      { kind: "revoke", reason: "closed" },
+    ]);
+    expect(hostTab.state).toEqual({ kind: "revoked", reason: "closed" });
     expect(afterClose).toEqual({ ok: false, code: "not-in-room" });
     expect(getRoomAuthority(room.state, room.room)).toBeNull();
     expect(vi.getTimerCount()).toBe(0);

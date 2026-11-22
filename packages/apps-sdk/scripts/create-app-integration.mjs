@@ -213,6 +213,7 @@ const scaffoldAuthorityApp = ({ appId, appName, appDescription, dryRun }) => {
  * the app's rules a browser loads, so nothing private belongs here.
  */
 const entry = s.object({
+  id: s.string({ max: 64 }),
   name: s.string({ max: 200 }),
   joinedAt: s.number(),
 });
@@ -250,7 +251,7 @@ import {
  * The app's rules. This runs on the SFU and nowhere else: a browser never
  * loads it, and \`check:apps\` fails any web or native file that imports it.
  */
-type Entry = { subject: Subject; name: string; joinedAt: number };
+type Entry = { id: string; subject: Subject; name: string; joinedAt: number };
 
 const MAX_ENTRIES = 500;
 
@@ -270,6 +271,7 @@ export const ${camel}Authority = defineAuthority({
         // One entry per person: the key is the person. A second tab, a
         // reconnect or a retry lands on the same key and changes nothing.
         tx.insertIfAbsent("entries", key(ctx.subject), {
+          id: ctx.nextId("e"),
           subject: ctx.subject,
           name: ctx.displayName,
           joinedAt: ctx.now,
@@ -292,10 +294,10 @@ export const ${camel}Authority = defineAuthority({
     entries: {
       kind: "shared",
       source: "entries",
-      // The subject never leaves the server. The row is keyed by join time.
+      // The subject never leaves the server. Each row has its own public id.
       project: (row) => ({
-        key: \`\${row.joinedAt}-\${row.name}\`,
-        value: { name: row.name, joinedAt: row.joinedAt },
+        key: row.id,
+        value: { id: row.id, name: row.name, joinedAt: row.joinedAt },
       }),
     },
     mine: {
@@ -333,7 +335,7 @@ export function ${pascal}Panel() {
     <div className="flex flex-col gap-3 px-4 py-4">
       <ul className="flex flex-col gap-1 text-sm text-white">
         {entries.map((entry) => (
-          <li key={\`\${entry.joinedAt}-\${entry.name}\`}>{entry.name}</li>
+          <li key={entry.id}>{entry.name}</li>
         ))}
       </ul>
       {actions.has(joined ? "leave" : "join") && (
