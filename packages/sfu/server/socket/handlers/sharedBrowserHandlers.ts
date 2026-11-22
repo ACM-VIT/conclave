@@ -263,6 +263,8 @@ const createBrowserAudioProducer = async (
         kind: "audio",
         type: "webcam",
         paused: producer.paused,
+        producerSeq: context.currentRoom.getProducerInfoById(producer.id)
+            ?.producerSeq,
         roomId: context.currentRoom.id,
     });
 
@@ -375,6 +377,8 @@ const createBrowserVideoProducer = async (
         kind: "video",
         type: "screen",
         paused: producer.paused,
+        producerSeq: context.currentRoom.getProducerInfoById(producer.id)
+            ?.producerSeq,
         roomId: context.currentRoom.id,
     });
 
