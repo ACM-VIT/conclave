@@ -1,21 +1,27 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { extractComments, iconGeneratorOutputs, listSourceFiles, toolWorks } from "./extract.mjs";
 import { configuresNoComments, languageOf } from "./policy.mjs";
+import { localKotlinJars, swiftTriviaScratchPath } from "./tokenizers.mjs";
 
 
 const missing = (command, args) => {
   const probe = toolWorks(command, args);
   return probe.ok ? false : probe.reason;
 };
+const SWIFT_TOOLCHAIN = missing("swift", ["--version"]);
+const JAVA = missing("java", ["-version"]) || missing("javac", ["-version"]);
+const NOT_FETCHED = "run `pnpm comments:tools`, the suite never downloads";
 const TOOL_REASONS = {
-  swift: missing("swift", ["--version"]),
-  jdk: missing("java", ["-version"]) || missing("javac", ["-version"]),
+  swiftToolchain: SWIFT_TOOLCHAIN,
+  swift: SWIFT_TOOLCHAIN || (!existsSync(path.join(swiftTriviaScratchPath(), "checkouts", "swift-syntax")) && `swift-syntax is not fetched for scripts/quality/comments/swift-trivia; ${NOT_FETCHED}`),
+  java: JAVA,
+  jdk: JAVA || (!localKotlinJars() && `no verified copy of the pinned Kotlin lexer jars is on this machine; ${NOT_FETCHED}`),
   python312: (() => {
     const probe = spawnSync("python3", ["-c", "import sys; sys.exit(0 if sys.version_info >= (3, 12) else 3)"]);
     if (probe.error) return "`python3` is not on PATH";
@@ -819,25 +825,61 @@ for (const id of ["MIT", "ISC", "BSD-2-Clause", "BSD-3-Clause", "Apache-2.0"]) {
   });
 }
 
-toolTest("concurrent cold-cache Kotlin runs share one install", ["jdk"], async (t) => {
-  const cache = mkdtempSync(path.join(tmpdir(), "comment-cold-cache-"));
-  t.after(() => rmSync(cache, { recursive: true, force: true }));
-  const script = `import(${JSON.stringify(new URL("./extract.mjs", import.meta.url).href)}).then(({ extractComments }) => console.log(JSON.stringify(extractComments("val a = 1 // one\\n", "A.kt").map((c) => c.text))))`;
-  const run = () =>
+const EXTRACT_SCRIPT = `import(${JSON.stringify(new URL("./extract.mjs", import.meta.url).href)}).then(({ extractComments }) => console.log(JSON.stringify(extractComments(process.argv[1], process.argv[2]).map((c) => c.text))))`;
+
+const offlineRig = (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), "comment-offline-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const bin = path.join(root, "bin");
+  const home = path.join(root, "home");
+  const cache = path.join(root, "cache");
+  const downloads = path.join(root, "downloads.log");
+  for (const dir of [bin, home, cache]) mkdirSync(dir);
+  writeFileSync(path.join(bin, "curl"), `#!/bin/sh\necho "$@" >> ${JSON.stringify(downloads)}\nexit 7\n`);
+  chmodSync(path.join(bin, "curl"), 0o755);
+  const env = { ...process.env, HOME: home, CONCLAVE_CACHE_DIR: cache, PATH: `${bin}${path.delimiter}${process.env.PATH}`, HTTPS_PROXY: "http://127.0.0.1:9", HTTP_PROXY: "http://127.0.0.1:9", ALL_PROXY: "http://127.0.0.1:9" };
+  const run = (source, file) =>
     new Promise((resolve) => {
-      const child = spawn(process.execPath, ["--input-type=module", "-e", script], { env: { ...process.env, CONCLAVE_CACHE_DIR: cache } });
+      const child = spawn(process.execPath, ["--input-type=module", "-e", EXTRACT_SCRIPT, source, file], { env });
       let stdout = "";
       let stderr = "";
       child.stdout.on("data", (chunk) => (stdout += chunk));
       child.stderr.on("data", (chunk) => (stderr += chunk));
       child.on("close", (code) => resolve({ pid: child.pid, code, stdout, stderr }));
     });
-  const results = await Promise.all([run(), run(), run(), run()]);
+  return { home, cache, run, downloaded: () => (existsSync(downloads) ? readFileSync(downloads, "utf8") : "") };
+};
+
+toolTest("a cold Kotlin cache fails with the fetch command and never downloads", ["java"], async (t) => {
+  const rig = offlineRig(t);
+  const result = await rig.run("val a = 1 // one\n", "A.kt");
+  assert.notEqual(result.code, 0);
+  assert.match(result.stderr, /cannot read the comments in A\.kt: the Kotlin lexer needs kotlin-compiler-embeddable 2\.4\.21, which is neither in .* nor in the Gradle cache; run `pnpm comments:tools` once to fetch it/);
+  assert.equal(rig.downloaded(), "");
+});
+
+toolTest("a cold Swift cache fails with the fetch command and never resolves packages", ["swiftToolchain"], async (t) => {
+  const rig = offlineRig(t);
+  const result = await rig.run("let a = 1 // one\n", "A.swift");
+  assert.notEqual(result.code, 0);
+  assert.match(result.stderr, /cannot read the comments in A\.swift: the Swift comment parser needs swift-syntax 604\.0\.0 in .*; run `pnpm comments:tools` once to fetch it/);
+  assert.equal(readdirSync(rig.cache).length, 0);
+});
+
+toolTest("concurrent cold-cache Kotlin runs share one install from verified local jars", ["jdk"], async (t) => {
+  const rig = offlineRig(t);
+  for (const jar of localKotlinJars()) {
+    const dir = path.join(rig.home, ".gradle", "caches", "modules-2", "files-2.1", "org.jetbrains.kotlin", jar.artifact, jar.version, "seeded");
+    mkdirSync(dir, { recursive: true });
+    copyFileSync(jar.path, path.join(dir, `${jar.artifact}-${jar.version}.jar`));
+  }
+  const results = await Promise.all([1, 2, 3, 4].map(() => rig.run("val a = 1 // one\n", "A.kt")));
   for (const result of results) {
     assert.equal(result.code, 0, `${result.pid}: ${result.stderr}`);
     assert.equal(result.stdout.trim(), '["// one"]');
   }
-  const kotlinDir = path.join(cache, "conclave", "kotlin-lexer", "kotlin-2.4.21");
+  assert.equal(rig.downloaded(), "");
+  const kotlinDir = path.join(rig.cache, "conclave", "kotlin-lexer", "kotlin-2.4.21");
   assert.deepEqual(readdirSync(path.join(kotlinDir, "jars")).sort(), ["kotlin-compiler-embeddable-2.4.21.jar", "kotlin-stdlib-2.4.21.jar"]);
   assert.equal(readdirSync(kotlinDir).filter((entry) => entry.startsWith("helper-")).length, 1);
 });

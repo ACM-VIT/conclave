@@ -145,21 +145,29 @@ export const swiftTriviaScratchPath = () => toolCache("swift-trivia", `swift-syn
 
 let swiftTriviaBinary;
 
-const swiftTrivia = (file) => {
-  if (swiftTriviaBinary) return swiftTriviaBinary;
-  const swift = toolWorks("swift");
-  if (!swift.ok) fail(file, `a working Swift toolchain is required to read Swift comments: ${swift.reason}`);
-  const scratch = swiftTriviaScratchPath();
+const NEVER_DOWNLOADS = "run `pnpm comments:tools` once to fetch it; the comment check never downloads anything";
+
+const buildSwiftTrivia = (scratch) => {
   const build = spawnSync("swift", ["build", "-c", "release", "--package-path", SWIFT_TRIVIA_PACKAGE, "--scratch-path", scratch], {
     encoding: "utf8",
     stdio: ["ignore", "ignore", "pipe"],
   });
   const binary = path.join(scratch, "release", "swift-comment-trivia");
-  if (build.status !== 0 || !existsSync(binary)) {
-    fail(file, `could not build scripts/quality/comments/swift-trivia (swift-syntax ${swiftSyntaxVersion()}):\n${build.stderr ?? ""}`);
+  return build.status === 0 && existsSync(binary) ? { binary } : { error: build.stderr ?? build.error?.message ?? "" };
+};
+
+const swiftTrivia = (file) => {
+  if (swiftTriviaBinary) return swiftTriviaBinary;
+  const swift = toolWorks("swift");
+  if (!swift.ok) fail(file, `a working Swift toolchain is required to read Swift comments: ${swift.reason}`);
+  const scratch = swiftTriviaScratchPath();
+  if (!existsSync(path.join(scratch, "checkouts", "swift-syntax"))) {
+    fail(file, `the Swift comment parser needs swift-syntax ${swiftSyntaxVersion()} in ${scratch}; ${NEVER_DOWNLOADS}`);
   }
-  swiftTriviaBinary = binary;
-  return binary;
+  const built = buildSwiftTrivia(scratch);
+  if (built.error !== undefined) fail(file, `could not build scripts/quality/comments/swift-trivia (swift-syntax ${swiftSyntaxVersion()}):\n${built.error}`);
+  swiftTriviaBinary = built.binary;
+  return built.binary;
 };
 
 const scanSwift = (text, file) => {
@@ -200,30 +208,77 @@ const publishFile = (temp, target) => {
   }
 };
 
-const kotlinJar = (file, { artifact, sha256 }) => {
-  const dir = toolCache("kotlin-lexer", `kotlin-${KOTLIN_VERSION}`, "jars");
-  const target = path.join(dir, `${artifact}-${KOTLIN_VERSION}.jar`);
-  if (existsSync(target) && sha256Of(target) === sha256) return target;
-  if (existsSync(target)) fail(file, `${target} does not match the pinned SHA-256 for ${artifact} ${KOTLIN_VERSION}; delete it and retry`);
-  mkdirSync(dir, { recursive: true });
+const kotlinJarTarget = (artifact) => path.join(toolCache("kotlin-lexer", `kotlin-${KOTLIN_VERSION}`, "jars"), `${artifact}-${KOTLIN_VERSION}.jar`);
+
+const verified = (candidate, sha256) => candidate !== undefined && existsSync(candidate) && sha256Of(candidate) === sha256;
+
+const installJar = (source, { artifact, sha256 }) => {
+  const target = kotlinJarTarget(artifact);
+  mkdirSync(path.dirname(target), { recursive: true });
   const temp = `${target}.${uniqueSuffix()}.partial`;
-  const gradle = gradleCopyOf(artifact);
-  if (gradle) copyFileSync(gradle, temp);
-  else {
-    const url = `https://repo1.maven.org/maven2/org/jetbrains/kotlin/${artifact}/${KOTLIN_VERSION}/${artifact}-${KOTLIN_VERSION}.jar`;
-    const download = spawnSync("curl", ["-sSfL", "-o", temp, url], { encoding: "utf8" });
-    if (download.error || download.status !== 0) {
-      rmSync(temp, { force: true });
-      fail(file, `the Kotlin lexer needs ${artifact} ${KOTLIN_VERSION}, which is not in the Gradle cache and could not be downloaded from ${url} (${(download.stderr ?? download.error?.message ?? "").trim()})`);
-    }
+  const written = source(temp);
+  if (written !== true) {
+    rmSync(temp, { force: true });
+    return written;
   }
   if (sha256Of(temp) !== sha256) {
     rmSync(temp, { force: true });
-    fail(file, `${artifact} ${KOTLIN_VERSION} does not match its pinned SHA-256`);
+    return `${artifact} ${KOTLIN_VERSION} does not match its pinned SHA-256`;
   }
   publishFile(temp, target);
-  if (sha256Of(target) !== sha256) fail(file, `${target} does not match the pinned SHA-256 after publishing`);
+  return verified(target, sha256) ? true : `${target} does not match the pinned SHA-256 after publishing`;
+};
+
+const copyFrom = (from) => (temp) => {
+  copyFileSync(from, temp);
+  return true;
+};
+
+const kotlinJar = (file, jar) => {
+  const target = kotlinJarTarget(jar.artifact);
+  if (verified(target, jar.sha256)) return target;
+  if (existsSync(target)) fail(file, `${target} does not match the pinned SHA-256 for ${jar.artifact} ${KOTLIN_VERSION}; delete it and retry`);
+  const gradle = gradleCopyOf(jar.artifact);
+  if (!gradle) fail(file, `the Kotlin lexer needs ${jar.artifact} ${KOTLIN_VERSION}, which is neither in ${path.dirname(target)} nor in the Gradle cache; ${NEVER_DOWNLOADS}`);
+  const installed = installJar(copyFrom(gradle), jar);
+  if (installed !== true) fail(file, installed);
   return target;
+};
+
+export const localKotlinJars = () => {
+  const found = KOTLIN_JARS.map((jar) => ({
+    artifact: jar.artifact,
+    version: KOTLIN_VERSION,
+    path: [kotlinJarTarget(jar.artifact), gradleCopyOf(jar.artifact)].find((candidate) => verified(candidate, jar.sha256)),
+  }));
+  return found.every((jar) => jar.path) ? found : undefined;
+};
+
+export const installCommentTools = () => {
+  const report = [];
+  const record = (name, outcome, success) => report.push(outcome === true ? { ok: true, line: `${name}: ${success}` } : { ok: false, line: `${name}: ${outcome}` });
+  for (const jar of KOTLIN_JARS) {
+    const name = `${jar.artifact} ${KOTLIN_VERSION}`;
+    const target = kotlinJarTarget(jar.artifact);
+    const gradle = gradleCopyOf(jar.artifact);
+    if (verified(target, jar.sha256)) record(name, true, `already in ${target}`);
+    else if (verified(gradle, jar.sha256)) record(name, installJar(copyFrom(gradle), jar), "copied from the Gradle cache");
+    else {
+      const url = `https://repo1.maven.org/maven2/org/jetbrains/kotlin/${jar.artifact}/${KOTLIN_VERSION}/${jar.artifact}-${KOTLIN_VERSION}.jar`;
+      const download = (temp) => {
+        const result = spawnSync("curl", ["-sSfL", "-o", temp, url], { encoding: "utf8" });
+        return result.error || result.status !== 0 ? `could not download ${url} (${(result.stderr ?? result.error?.message ?? "").trim()})` : true;
+      };
+      record(name, installJar(download, jar), "downloaded from Maven Central and verified");
+    }
+  }
+  const swift = toolWorks("swift");
+  if (!swift.ok) record("swift-trivia", true, `skipped, ${swift.reason}`);
+  else {
+    const built = buildSwiftTrivia(swiftTriviaScratchPath());
+    record("swift-trivia", built.error === undefined || `could not build:\n${built.error.trim()}`, `built at ${built.binary}`);
+  }
+  return report;
 };
 
 let kotlinCommand;

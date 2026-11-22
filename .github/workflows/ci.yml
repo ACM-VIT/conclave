@@ -36,16 +36,21 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Cache the Swift comment parser
+      - name: Cache the comment parsers
         uses: actions/cache@v4
         with:
-          path: ~/.cache/conclave/swift-trivia
-          key: swift-trivia-${{ runner.os }}-${{ hashFiles('scripts/quality/comments/swift-trivia/Package.resolved') }}
+          path: |
+            ~/.cache/conclave/swift-trivia
+            ~/.cache/conclave/kotlin-lexer
+          key: comment-parsers-${{ runner.os }}-${{ hashFiles('scripts/quality/comments/swift-trivia/Package.resolved', 'scripts/quality/comments/tokenizers.mjs') }}
 
       - name: Check toolchains for the comment ratchet
         run: |
           swift --version
           python3 -c 'import sys; assert sys.version_info >= (3, 12), sys.version'
+
+      - name: Fetch the comment parsers
+        run: pnpm comments:tools
 
       - name: Check
         run: pnpm check
