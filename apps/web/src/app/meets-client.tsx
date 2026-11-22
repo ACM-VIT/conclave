@@ -13,6 +13,7 @@ import { useSession } from "@/lib/auth-client";
 import { shouldRetainMeetingSurface } from "./lib/meeting-surface-policy";
 import {
   AppsProvider,
+  AuthorityProvider,
   GameProvider,
 } from "@conclave/apps-sdk";
 import { devPlaygroundApp } from "@conclave/apps-sdk/dev-playground/web";
@@ -3097,12 +3098,17 @@ export default function MeetsClient({
           isAdmin={canModerateMeeting}
           isReadOnly={isReadOnlyObserver}
         >
-          <MeetVolumeProvider
-            meetVolume={meetVolume}
-            setMeetVolume={setMeetVolume}
+          <AuthorityProvider
+            socket={appsSocket}
+            joined={connectionState === "joined"}
           >
-            {content}
-          </MeetVolumeProvider>
+            <MeetVolumeProvider
+              meetVolume={meetVolume}
+              setMeetVolume={setMeetVolume}
+            >
+              {content}
+            </MeetVolumeProvider>
+          </AuthorityProvider>
         </GameProvider>
       </AppsProvider>
       <MeetingEnterOverlay

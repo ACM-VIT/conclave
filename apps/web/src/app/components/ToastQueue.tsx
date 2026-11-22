@@ -8,6 +8,7 @@ export interface ToastItem {
   label: string;
   message: string;
   tone?: "accent" | "danger";
+  action?: { label: string; onPress: () => void };
   onDismiss?: () => void;
 }
 
@@ -55,6 +56,16 @@ export default function ToastQueue({ toasts }: { toasts: (ToastItem | null | und
             </p>
           )}
         </div>
+        {toast.action && (
+          <button
+            type="button"
+            onClick={toast.action.onPress}
+            className="inline-flex h-8 shrink-0 items-center rounded-lg px-3 text-[12.5px] font-medium text-white transition-[filter] duration-[120ms] hover:brightness-110"
+            style={{ backgroundColor: accentColor }}
+          >
+            {toast.action.label}
+          </button>
+        )}
         {toast.onDismiss && (
           <button
             type="button"
