@@ -228,6 +228,9 @@ export class Room {
    */
   private guestProofsByUserKey: Map<string, string> = new Map();
   private guestIdentitiesToRelease: Set<string> = new Set();
+  // Passes that a join token showed to be in one browser. Every proof of a
+  // group maps to the same set.
+  private guestPassGroups: Map<string, Set<string>> = new Map();
   /** Admissions a host created and no join has used yet (code → expiry). */
   private openAdmissions: Map<string, number> = new Map();
   public cleanupTimer: NodeJS.Timeout | null = null;
@@ -793,55 +796,86 @@ export class Room {
     return false;
   }
 
-  /**
-   * Moves what `from` holds in this room to `toUserKey`, when the join token
-   * proves that both keys are one guest (see `guestWas` in `SfuAuthPayload`).
-   * Nothing moves unless `from` is bound here to the proof the token names.
-   * A block moves too, so a pass change never lifts one.
-   */
-  succeedGuestIdentity(
-    from: { userKey?: string; guestProof?: string },
-    toUserKey: string,
-    toGuestProof: string,
-  ): boolean {
-    const fromUserKey = from.userKey;
-    if (!fromUserKey || !from.guestProof || fromUserKey === toUserKey) {
-      return false;
-    }
-    if (this.guestProofsByUserKey.get(fromUserKey) !== from.guestProof) {
-      return false;
-    }
-    const bound = this.guestProofsByUserKey.get(toUserKey);
-    if (bound !== undefined && bound !== toGuestProof) return false;
+  private isSameGuestPass(guestProof: string, otherProof: string): boolean {
+    return (
+      guestProof === otherProof ||
+      this.guestPassGroups.get(guestProof)?.has(otherProof) === true
+    );
+  }
 
-    if (this.hostUserKey === fromUserKey) this.hostUserKey = toUserKey;
-    for (const userKeys of [
-      this.adminUserKeys,
-      this.allowedUsers,
-      this.lockedAllowedUsers,
-      this.blockedUsers,
-      this.webinarDemotedUserKeys,
-    ]) {
-      if (userKeys.delete(fromUserKey)) userKeys.add(toUserKey);
+  /** Whether `userKey` is a key of the guest who presents `guestProof`. */
+  private isKeyOfGuest(
+    userKey: string,
+    guestProof: string | undefined,
+  ): boolean {
+    if (guestProof === undefined) return false;
+    const bound = this.guestProofsByUserKey.get(userKey);
+    return bound !== undefined && this.isSameGuestPass(bound, guestProof);
+  }
+
+  /**
+   * Whether one of `userKeys` is `userKey` or another key of the same guest.
+   *
+   * A guest has one public key per tab, so that its tabs cannot be linked.
+   * What a guest may do does not depend on the tab: a right a host gave to
+   * one key, and a block on one key, hold for every key of that guest, the
+   * way they hold for every tab of a signed-in account. `guestProof` is what
+   * tells that two keys are one guest.
+   */
+  private guestHolds(
+    userKeys: Iterable<string>,
+    userKey: string,
+    guestProof: string | undefined,
+  ): boolean {
+    for (const key of userKeys) {
+      if (key === userKey || this.isKeyOfGuest(key, guestProof)) return true;
     }
-    const inviteExpiresAt = this.webinarPromotedUserKeys.get(fromUserKey);
-    if (inviteExpiresAt !== undefined) {
-      this.webinarPromotedUserKeys.delete(fromUserKey);
-      this.webinarPromotedUserKeys.set(toUserKey, inviteExpiresAt);
+    return false;
+  }
+
+  /**
+   * Records that the guest who joins with `guestProof` holds other passes
+   * too: the join route found their cookies in the same browser and named
+   * the seats in `guestWas`. From then on the room treats those passes as
+   * one guest, so rights and blocks under any of them hold under all.
+   *
+   * A pass the room has never seen is not recorded. A guest that a block
+   * covers after this loses the admissions its keys held, as a guest does
+   * when a host blocks it.
+   */
+  linkGuestPasses(
+    otherSeats: ReadonlyArray<{ guestProof: string }>,
+    guestProof: string,
+  ): void {
+    const known = new Set(this.guestProofsByUserKey.values());
+    let linked = false;
+    for (const seat of otherSeats) {
+      if (
+        !known.has(seat.guestProof) ||
+        this.isSameGuestPass(seat.guestProof, guestProof)
+      ) {
+        continue;
+      }
+      const group = this.guestPassGroups.get(guestProof) ?? new Set([guestProof]);
+      for (const proof of this.guestPassGroups.get(seat.guestProof) ?? [
+        seat.guestProof,
+      ]) {
+        group.add(proof);
+      }
+      for (const proof of group) this.guestPassGroups.set(proof, group);
+      linked = true;
     }
-    const displayName = this.displayNamesByKey.get(fromUserKey);
-    if (displayName !== undefined && !this.displayNamesByKey.has(toUserKey)) {
-      this.displayNamesByKey.set(toUserKey, displayName);
+    if (!linked || !this.guestHolds(this.blockedUsers, "", guestProof)) return;
+    for (const [userKey, bound] of this.guestProofsByUserKey) {
+      if (!this.isSameGuestPass(bound, guestProof)) continue;
+      this.allowedUsers.delete(userKey);
+      this.lockedAllowedUsers.delete(userKey);
     }
-    this.pendingClients.delete(fromUserKey);
-    // The tab's earlier seats stay until the join reclaims them, now under
-    // the key it joins with.
-    for (const [userId, userKey] of this.userKeysById) {
-      if (userKey === fromUserKey) this.userKeysById.set(userId, toUserKey);
-    }
-    this.guestProofsByUserKey.set(toUserKey, toGuestProof);
-    this.releaseGuestIdentity(fromUserKey);
-    return true;
+  }
+
+  /** Whether the room knows `userKey` as a key of the pass behind `guestProof`. */
+  isGuestKeyOfPass(userKey: string, guestProof: string): boolean {
+    return this.guestProofsByUserKey.get(userKey) === guestProof;
   }
 
   /**
@@ -909,6 +943,12 @@ export class Room {
       }
     }
     this.guestIdentitiesToRelease.clear();
+    if (this.guestPassGroups.size === 0) return;
+    const known = new Set(this.guestProofsByUserKey.values());
+    for (const group of new Set(this.guestPassGroups.values())) {
+      if ([...group].some((proof) => known.has(proof))) continue;
+      for (const proof of group) this.guestPassGroups.delete(proof);
+    }
   }
 
   setUserIdentity(
@@ -1224,7 +1264,9 @@ export class Room {
       userKey,
       Date.now() + WEBINAR_PROMOTION_TTL_MS,
     );
-    this.webinarDemotedUserKeys.delete(userKey);
+    for (const key of this.identitiesOfSameGuest(userKey)) {
+      this.webinarDemotedUserKeys.delete(key);
+    }
   }
 
   revokeWebinarPromotion(userKey: string): boolean {
@@ -1253,10 +1295,7 @@ export class Room {
       return false;
     }
     for (const [invitedKey, expiresAt] of this.webinarPromotedUserKeys) {
-      if (
-        expiresAt <= Date.now() ||
-        this.guestProofsByUserKey.get(invitedKey) !== guestProof
-      ) {
+      if (expiresAt <= Date.now() || !this.isKeyOfGuest(invitedKey, guestProof)) {
         continue;
       }
       this.webinarPromotedUserKeys.delete(invitedKey);
@@ -1285,8 +1324,8 @@ export class Room {
     this.webinarDemotedUserKeys.add(userKey);
   }
 
-  isWebinarDemotedUserKey(userKey: string): boolean {
-    return this.webinarDemotedUserKeys.has(userKey);
+  isWebinarDemotedUserKey(userKey: string, guestProof?: string): boolean {
+    return this.guestHolds(this.webinarDemotedUserKeys, userKey, guestProof);
   }
 
   // Retain the most recent broadcast (non-DM) chat messages so a late-joining
@@ -2143,8 +2182,31 @@ export class Room {
     this.adminUserKeys.add(userKey);
   }
 
-  isAdminUserKey(userKey: string): boolean {
-    return this.adminUserKeys.has(userKey);
+  isAdminUserKey(userKey: string, guestProof?: string): boolean {
+    return this.guestHolds(this.adminUserKeys, userKey, guestProof);
+  }
+
+  isHostUserKey(userKey: string, guestProof?: string): boolean {
+    return (
+      this.hostUserKey !== null &&
+      this.guestHolds([this.hostUserKey], userKey, guestProof)
+    );
+  }
+
+  /**
+   * A removed user has to be let in again. This drops every grant a rejoin
+   * would honour, for every key of the same guest: waiting-room and lock
+   * admissions, retained host rights, primary host, and a stage invite.
+   */
+  dropRejoinGrants(userKey: string): void {
+    for (const key of this.identitiesOfSameGuest(userKey)) {
+      this.allowedUsers.delete(key);
+      this.lockedAllowedUsers.delete(key);
+      this.adminUserKeys.delete(key);
+      if (this.hostUserKey === key) this.hostUserKey = null;
+      this.webinarPromotedUserKeys.delete(key);
+      this.releaseGuestIdentity(key);
+    }
   }
 
   promoteClientToAdmin(userId: string): Admin | null {
@@ -2164,13 +2226,17 @@ export class Room {
 
   getHostUserId(): string | null {
     if (this.hostUserKey) {
+      // The host's own seat, else another tab of the same guest.
+      const hostProof = this.guestProofsByUserKey.get(this.hostUserKey);
+      let otherTab: string | null = null;
       for (const [userId, userKey] of this.userKeysById.entries()) {
-        if (userKey !== this.hostUserKey) continue;
-        const client = this.clients.get(userId);
-        if (client instanceof Admin) {
-          return userId;
+        if (!(this.clients.get(userId) instanceof Admin)) continue;
+        if (userKey === this.hostUserKey) return userId;
+        if (otherTab === null && this.isKeyOfGuest(userKey, hostProof)) {
+          otherTab = userId;
         }
       }
+      if (otherTab !== null) return otherTab;
     }
 
     const fallbackAdmin = this.getAdmins()[0];
@@ -2790,13 +2856,15 @@ export class Room {
     return true;
   }
 
-  isAllowed(userKey: string): boolean {
-    return this.allowedUsers.has(userKey);
+  isAllowed(userKey: string, guestProof?: string): boolean {
+    return this.guestHolds(this.allowedUsers, userKey, guestProof);
   }
 
   revokeAllowedUser(userKey: string) {
-    this.allowedUsers.delete(userKey);
-    this.releaseGuestIdentity(userKey);
+    for (const key of this.identitiesOfSameGuest(userKey)) {
+      this.allowedUsers.delete(key);
+      this.releaseGuestIdentity(key);
+    }
   }
 
   /** Returns false when the room cannot admit `userKey` (see `canGrantTo`). */
@@ -2808,53 +2876,57 @@ export class Room {
     return true;
   }
 
-  isLockedAllowed(userKey: string): boolean {
-    return this.lockedAllowedUsers.has(userKey);
+  isLockedAllowed(userKey: string, guestProof?: string): boolean {
+    return this.guestHolds(this.lockedAllowedUsers, userKey, guestProof);
   }
 
   revokeLockedAllowedUser(userKey: string) {
-    this.lockedAllowedUsers.delete(userKey);
-    this.releaseGuestIdentity(userKey);
+    for (const key of this.identitiesOfSameGuest(userKey)) {
+      this.lockedAllowedUsers.delete(key);
+      this.releaseGuestIdentity(key);
+    }
   }
 
   blockUser(userKey: string) {
     this.blockedUsers.add(userKey);
-    this.allowedUsers.delete(userKey);
-    this.lockedAllowedUsers.delete(userKey);
+    for (const key of this.identitiesOfSameGuest(userKey)) {
+      this.allowedUsers.delete(key);
+      this.lockedAllowedUsers.delete(key);
+    }
     this.pendingClients.delete(userKey);
   }
 
+  /**
+   * Lifts the block that was set on `userKey`. A guest stays out for as long
+   * as any of its keys is still on the list.
+   */
   unblockUser(userKey: string) {
     this.blockedUsers.delete(userKey);
     this.releaseGuestIdentity(userKey);
   }
 
   /**
-   * `userKey` and every other identity bound to the same guest pass: the
-   * guest's other tabs. A key with no proof has no other tabs to find.
+   * `userKey` and every other key of the same guest: the guest's other
+   * tabs, under the same pass or one the room linked to it. A key with no
+   * proof has no other tabs to find.
    */
   identitiesOfSameGuest(userKey: string): string[] {
     const proof = this.guestProofsByUserKey.get(userKey);
     const userKeys = [userKey];
     if (proof === undefined) return userKeys;
     for (const [otherKey, otherProof] of this.guestProofsByUserKey) {
-      if (otherKey !== userKey && otherProof === proof) userKeys.push(otherKey);
+      if (otherKey !== userKey && this.isSameGuestPass(otherProof, proof)) {
+        userKeys.push(otherKey);
+      }
     }
     return userKeys;
   }
 
   /**
-   * A blocked guest's other tabs carry the same pass, so `guestProof` keeps
-   * them out too for as long as any identity of that pass is blocked.
+   * A block on one key keeps out every key of the same guest, for as long
+   * as the blocked key is on the list.
    */
   isBlocked(userKey: string, guestProof?: string): boolean {
-    if (this.blockedUsers.has(userKey)) return true;
-    if (guestProof === undefined) return false;
-    for (const blockedKey of this.blockedUsers) {
-      if (this.guestProofsByUserKey.get(blockedKey) === guestProof) {
-        return true;
-      }
-    }
-    return false;
+    return this.guestHolds(this.blockedUsers, userKey, guestProof);
   }
 }

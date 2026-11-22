@@ -39,12 +39,18 @@ The route also signs a `guestProof` claim into the join token. `guestProof` is a
 The SFU binds a guest `userKey` to the `guestProof` it enters a room with. The binding lasts while the key holds anything in the room: a seat, a waiting-room entry, host, an admission, a stage invite, or a block.
 A later join under that `userKey` must carry the same `guestProof`. Otherwise the SFU refuses the join.
 
-The proof is how the SFU treats two keys as one guest:
+The proof is how the SFU treats two keys as one guest. What a guest may do does not depend on the tab:
 
-- Blocking a guest removes and keeps out every other key of the same pass, so the guest's other tabs leave too. Unblocking the guest lifts that.
+- A right that one key of a guest holds in a room holds for every key of that guest: host, co-host, and an admission past the waiting room or the lock. A second tab in the host's browser joins as a host. Removing a guest, or revoking its admission, ends the right for every one of its keys.
+- This applies to tokens issued for the room (`guestRoom`). A token with no `guestRoom` holds only what its own key holds.
+- Blocking a guest removes and keeps out every other key of the same guest, so the guest's other tabs leave too. A block covers any token that presents the proof. The guest stays out while any of its keys is on the block list.
 - A stage invite follows the pass. An invited attendee returns through the room's own id, under another key than the one the host invited, and the SFU hands the invite to the key that presents the same proof.
 
-A browser can end up with a join under one pass and a cookie for another, when two of its tabs are each given a pass before either has a cookie. The cookie wins. On its next join the tab sends the token of its previous join, and the route signs the seat it held into `guestWas`. The SFU then moves what that seat held (host, admissions, a stage invite, a block) to the new key, if the old key is bound to the proof the token names.
+A browser can hold more than one pass, when two of its first requests were each answered before either cookie had arrived. Every pass has a cookie of its own and the browser keeps them all. It goes by the lowest pass id, so every tab and every request picks the same pass. A tab may still have joined under another one. The route therefore signs `guestWas` into the token: for each other pass among the browser's cookies, the key this tab would hold under it in this room, with that pass's proof. The SFU treats those passes as one guest for as long as any of their keys holds something in the room. It also replaces the seat the tab held under its old key, whatever that seat's socket looks like, so a tab has one seat.
+
+Only the HttpOnly pass cookies vouch for `guestWas`. A copy of a join token is not enough to be taken for its guest under another pass.
+
+The guest claims of a join token (`userId`, `guestProof`, `guestRoom`, `clientId`, `sessionId`, `guestWas`) have one schema, in `@conclave/meeting-core/guest-join-claims`. The route signs what that schema parses, and the SFU reads the token through it. A guest token whose claims do not parse is refused.
 
 A host action can admit a guest key only while the room knows who the guest is: its proof is on record, it is seated or waiting, or it is already admitted.
 `admin:allowUsers` and `POST /admin/rooms/:roomId/access/allow` answer with `allowed` and `refused` key lists. When no key could be admitted the answer is a failure (`success: false` with an `error`, HTTP 409), and a block on a refused key stays. A guest the room does not know knocks and is admitted from its waiting entry. An account key, which is an email, can still be admitted ahead of time.

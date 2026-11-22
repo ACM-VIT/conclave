@@ -15,25 +15,15 @@ export type SfuAuthPayload = JwtPayload & {
   name?: string;
   sessionId?: string;
   /**
-   * Keyed hash of the guest pass behind a guest `userId`. Never sent to other
-   * participants, so holding a guest's public id is not enough to rejoin as
-   * that guest. Absent on signed-in tokens and on guests from clients that
-   * predate guest passes.
+   * The guest claims: the pass proof behind a guest `userId`, the room the
+   * token was issued for, and the seats the same browser holds under its
+   * other passes. They are read only through `parseGuestJoinClaims`
+   * (`@conclave/meeting-core/guest-join-claims`), which says what each one
+   * is and refuses a token whose guest claims are malformed.
    */
-  guestProof?: string;
-  /**
-   * The room id a guest's seat key was issued for. A token that carries it
-   * joins that room and no other. Absent on signed-in tokens and on guests
-   * from clients that predate guest passes.
-   */
-  guestRoom?: string;
-  /**
-   * The seat this guest held before the browser's pass changed, with that
-   * seat's proof. The join route adds it when a tab comes back under another
-   * pass and still has the token of its previous join. What the old key
-   * holds in the room moves to the new key.
-   */
-  guestWas?: { userKey?: string; guestProof?: string };
+  guestProof?: unknown;
+  guestRoom?: unknown;
+  guestWas?: unknown;
   isHost?: boolean;
   isAdmin?: boolean;
   isForcedHost?: boolean;
