@@ -27,7 +27,7 @@ let ip = 0;
 const post = (body: BodyInit, headers: Record<string, string> = {}, clientIp = `10.1.0.${++ip}`) =>
   POST(new Request("https://conclave.example/api/csp-report", {
     method: "POST",
-    headers: { "content-type": "application/csp-report", "x-real-ip": clientIp, ...headers },
+    headers: { "content-type": "application/csp-report", "cf-connecting-ip": clientIp, ...headers },
     body,
     duplex: "half",
   } as RequestInit));
@@ -44,7 +44,10 @@ const streamOf = (totalBytes: number) => {
   });
 };
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 
 describe("CSP report endpoint", () => {
   it("logs one compact line per report without query strings", async () => {
@@ -89,5 +92,16 @@ describe("CSP report endpoint", () => {
     expect(statuses.slice(0, 30).every((status) => status === 204)).toBe(true);
     expect(statuses[30]).toBe(429);
     expect((await post(JSON.stringify(report), {}, "10.9.9.10")).status).toBe(204);
+  });
+
+  it("refuses reports on a production server without the Cloudflare limiter", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const statuses = [];
+    for (let index = 0; index < 5; index += 1) {
+      statuses.push((await post(JSON.stringify(report), { "cf-connecting-ip": `203.0.113.${index}` })).status);
+    }
+    expect(statuses).toEqual([503, 503, 503, 503, 503]);
+    expect(warn).not.toHaveBeenCalled();
   });
 });

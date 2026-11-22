@@ -11,16 +11,10 @@ type CloudflareRateLimitBinding = {
 type LocalRateLimitBucket = { windowStartedAt: number; count: number };
 const localBuckets = new Map<string, LocalRateLimitBucket>();
 
-const clientKey = (request: Request): string => {
-  const forwardedFor = request.headers.get("x-forwarded-for")?.split(",").at(0)?.trim();
-  const candidate =
-    [
-      request.headers.get("cf-connecting-ip")?.trim(),
-      request.headers.get("x-real-ip")?.trim(),
-      forwardedFor,
-    ].find((value): value is string => Boolean(value)) ?? "anonymous";
-  return candidate.slice(0, 128);
-};
+// Cloudflare sets cf-connecting-ip on every request it forwards. Other client
+// IP headers are whatever the caller sent, so they never pick the bucket.
+const clientKey = (request: Request): string =>
+  (request.headers.get("cf-connecting-ip")?.trim() || "anonymous").slice(0, 128);
 
 const takeLocalRateLimit = (key: string): boolean => {
   const now = Date.now();
@@ -39,28 +33,34 @@ const takeLocalRateLimit = (key: string): boolean => {
   return true;
 };
 
+const readCloudflareRateLimiter = async (): Promise<CloudflareRateLimitBinding | null> => {
+  try {
+    const { env } = await getCloudflareContext({ async: true });
+    const binding = (env as { CSP_REPORT_RATE_LIMITER?: CloudflareRateLimitBinding })
+      .CSP_REPORT_RATE_LIMITER;
+    return binding && typeof binding.limit === "function" ? binding : null;
+  } catch {
+    return null;
+  }
+};
+
 export type CspReportRateLimitOutcome = "allowed" | "limited" | "unavailable";
 
 export async function takeCspReportRateLimit(
   request: Request,
 ): Promise<CspReportRateLimitOutcome> {
   const key = `csp-report:${clientKey(request)}`;
-  let env: unknown;
-  try {
-    ({ env } = await getCloudflareContext({ async: true }));
-  } catch {
-    return takeLocalRateLimit(key) ? "allowed" : "limited";
+  const limiter = await readCloudflareRateLimiter();
+  if (limiter) {
+    try {
+      const { success } = await limiter.limit({ key });
+      return success ? "allowed" : "limited";
+    } catch {
+      return "unavailable";
+    }
   }
-  const binding = (env as { CSP_REPORT_RATE_LIMITER?: CloudflareRateLimitBinding })
-    .CSP_REPORT_RATE_LIMITER;
-  if (!binding || typeof binding.limit !== "function") {
-    if (process.env.NODE_ENV === "production") return "unavailable";
-    return takeLocalRateLimit(key) ? "allowed" : "limited";
-  }
-  try {
-    const { success } = await binding.limit({ key });
-    return success ? "allowed" : "limited";
-  } catch {
-    return "unavailable";
-  }
+  // Off Cloudflare the server cannot tell clients apart, so production refuses
+  // reports rather than letting each request claim a fresh bucket.
+  if (process.env.NODE_ENV === "production") return "unavailable";
+  return takeLocalRateLimit(key) ? "allowed" : "limited";
 }
