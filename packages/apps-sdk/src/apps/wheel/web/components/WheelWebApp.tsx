@@ -380,7 +380,7 @@ export function WheelWebApp() {
       <WheelStage
         entries={frozen ? frozen.entries : entries}
         spin={spin}
-        canSpin={canEdit}
+        canSpin={canEdit && entries.length >= 2 && (!frozen || showReveal)}
         sounds={soundsRef.current}
         reducedMotion={reducedMotion}
         highlightIndex={frozen && landed ? frozen.winnerIndex : null}
