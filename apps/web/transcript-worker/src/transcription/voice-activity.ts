@@ -1,34 +1,13 @@
-/** 20 ms frames of the 24 kHz PCM the worker receives. */
 export const VOICE_FRAME_SAMPLES = 480;
-/**
- * Frame RMS, after a 150 Hz high-pass, that counts as voiced: -50 dBFS,
- * low enough for soft speakers; the zero-crossing guard keeps noise out.
- */
 export const VOICE_THRESHOLD_RMS = 10 ** (-50 / 20);
-/**
- * Most zero crossings a voiced frame may have: vowels cross about 20 times
- * in 20 ms, breath, hiss and broadband noise 140 to 250 times.
- */
 export const VOICE_MAX_CROSSINGS = 80;
-/** Voiced frames in a row before a stretch counts as speech: 60 ms, longer than a key click. */
 export const VOICE_MIN_RUN_FRAMES = 3;
-/**
- * How long speech counts as still going after its last voiced chunk: two of
- * the relays' 250 ms chunks, so arrival jitter never splits one stretch.
- * A longer gap means no audio was sent, so the next chunk starts afresh.
- */
 export const VOICE_HANGOVER_MS = 500;
 
 export type VoiceReading = "onset" | "speech" | "quiet";
 
 const HIGH_PASS_COEFFICIENT = 1 / (1 + (2 * Math.PI * 150) / 24_000);
 
-/**
- * A cheap energy check over the audio sent to a provider: frame RMS after a
- * high-pass that drops hum and rumble, a zero-crossing limit that tells a
- * voiced frame from noise as loud, a run of voiced frames to start a stretch
- * of speech, and a short hangover to bridge pauses between words.
- */
 export class VoiceActivity {
   private previousInput = 0;
   private previousOutput = 0;
@@ -39,7 +18,6 @@ export class VoiceActivity {
   private voicedUntil = Number.NEGATIVE_INFINITY;
   private lastPushAt = Number.NEGATIVE_INFINITY;
 
-  /** Feeds one chunk; returns "onset" when it starts a stretch of speech, "speech" when it continues one. */
   push(samples: Int16Array, now: number): VoiceReading {
     if (now - this.lastPushAt > VOICE_HANGOVER_MS) this.restart();
     this.lastPushAt = now;
@@ -71,7 +49,6 @@ export class VoiceActivity {
     return now <= this.voicedUntil;
   }
 
-  /** A turn ended: the next chunk starts a new run, though speech still counts as recent. */
   restart(): void {
     this.previousInput = 0;
     this.previousOutput = 0;

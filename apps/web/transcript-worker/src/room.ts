@@ -157,17 +157,13 @@ export class TranscriptRoom {
   private readonly env: Env;
   private readonly loaded: Promise<void>;
   private readonly viewers = new Map<WebSocket, Viewer>();
-  // Every caption line of the session, each with one public itemId for life.
   private readonly ledger = new CaptionLedger();
   private liveConnection: ProviderConnection | null = null;
-  // Audio sent to the live provider that no line owns yet, per speaker.
   private readonly uncommittedAudio = new Map<string, { speaker: TranscriptSpeaker; chunks: AudioChunk[] }>();
-  // Sarvam: the line each speaker's new audio belongs to until the turn ends.
   private readonly speakingLine = new Map<string, string>();
   private readonly voiceChecks = new Map<string, VoiceActivity>();
   private audioTurn = 0;
   private lineTimer: ReturnType<typeof setTimeout> | null = null;
-  // Set from accepting a switch until its provider opens, so audio meanwhile is kept.
   private switchingProvider = false;
   private latestSpeaker: TranscriptSpeaker | null = null;
   private lastAudioAt = 0;
@@ -178,8 +174,6 @@ export class TranscriptRoom {
   private segments: TranscriptSegment[] = [];
   private minutes: TranscriptMinutesSnapshot = createEmptyMinutes();
   private sequence = 0;
-  // The exact language code this session's provider is sent, fixed when the
-  // session is accepted and saved with it, so a restore resends it unchanged.
   private sessionProviderLanguage: string | undefined;
   private responseApiKey: string | null = null;
   private responseEnvironment: Env | null = null;
@@ -371,20 +365,11 @@ export class TranscriptRoom {
     }
   }
 
-  /**
-   * What a saved session was connected with, from any snapshot layout: the
-   * exact provider code on the session (current), at the snapshot root
-   * (earlier builds of this change), or, for staging's snapshots that saved
-   * none, the code staging itself resolves from the saved connection.
-   */
   private savedTranscription(snapshot: PersistedSnapshot) {
     const provider = getTranscriptTranscriptionProvider(
       normalizeRealtimeTranscriptModel(snapshot.session.transcriptModel, DEFAULT_TRANSCRIPT_MODEL),
     );
     const savedConfig = snapshot.transcriptionConfig;
-    // A pick resumes as picked, the session's newest one first. Without one,
-    // resume exactly as before picks existed: the saved connection's
-    // language, else the deployment's, never the language the session reports.
     const languageChosen = snapshot.session.language
       ? snapshot.session.languageChosen === true
       : savedConfig?.languageChosen === true;
@@ -434,8 +419,6 @@ export class TranscriptRoom {
 
     const wasPaused = snapshot.session.status === "paused";
     const revision = this.sessionRevision;
-    // A saved session resends the code it was sent, whatever the environment
-    // is now; only a snapshot without one resolves it from its saved config.
     const { config, providerLanguage } = this.savedTranscription(snapshot);
     this.sessionProviderLanguage = providerLanguage;
     this.responseApiKey = responseKey.apiKey;
@@ -480,7 +463,6 @@ export class TranscriptRoom {
       }
       await this.persist();
     } catch (error) {
-      // A session someone started meanwhile is theirs, not this restore's to fail.
       if (revision !== this.sessionRevision || this.session.status !== "starting") return;
       const message =
         error instanceof Error
@@ -592,7 +574,6 @@ export class TranscriptRoom {
     return getTranscriptServiceVersion(this.env);
   }
 
-  /** Per provider, the exact code its provider is sent when nobody picks a language. */
   private captionLanguageDefaults(): Record<"openai" | "sarvam", string> {
     const unpicked = {
       language: normalizeLanguage(this.env.TRANSCRIPT_TRANSCRIPTION_LANGUAGE),
@@ -968,9 +949,6 @@ export class TranscriptRoom {
     const deploymentLanguage = normalizeLanguage(
       this.env.TRANSCRIPT_TRANSCRIPTION_LANGUAGE,
     );
-    // Only a pick names a language: this request's, or the resumed session's.
-    // Without one the provider gets exactly what it did before picks existed,
-    // the deployment language, never the language the session reports.
     const keepsPick =
       message.language === undefined && takeover && this.session?.languageChosen === true;
     const pickedLanguage = message.language || (keepsPick ? this.session?.language : undefined);
@@ -987,8 +965,6 @@ export class TranscriptRoom {
       return;
     }
     const locale = normalizeLocale(this.env.TRANSCRIPT_TRANSCRIPTION_LOCALE);
-    // A client that shows a language sends the exact code it shows, and that
-    // code is used as it is; only a request with none resolves one here.
     const sentProviderLanguage = message.providerLanguage?.trim();
     if (
       sentProviderLanguage &&
@@ -1337,13 +1313,6 @@ export class TranscriptRoom {
     return true;
   }
 
-  /**
-   * Keeps a chunk for a replay with the line it belongs to: a Sarvam
-   * speaker's open line, which then waits 30 s from this chunk, else that
-   * speaker's audio no line owns yet, which a line accepted for it adopts.
-   * Sarvam's unowned audio matters only while a late speech signal could
-   * still claim it, so only that much is kept or replayed.
-   */
   private keepAudio(provider: string, speaker: TranscriptSpeaker, chunk: AudioChunk): void {
     const key = speakerKey(speaker);
     const owner = provider === "sarvam" ? this.ledger.get(this.speakingLine.get(key) ?? "") : undefined;
@@ -1361,11 +1330,6 @@ export class TranscriptRoom {
     this.keepReplayAudioWithinLimit();
   }
 
-  /**
-   * Replay audio, owned by a line or by no line yet, stays within one
-   * limit for the whole room, so a relay that never commits cannot grow
-   * it without end. The oldest chunks go first.
-   */
   private keepReplayAudioWithinLimit(): void {
     const lines = this.ledger.activeUnordered();
     const held: { audio: string; createdAt: number }[] = [
@@ -1400,7 +1364,6 @@ export class TranscriptRoom {
     return check;
   }
 
-  /** A speaker's audio no line owns yet, from `since` in the turn it began, for the line just accepted. */
   private adoptAudio(
     speaker: TranscriptSpeaker,
     since: number,
@@ -1418,10 +1381,6 @@ export class TranscriptRoom {
     return adopted;
   }
 
-  /**
-   * A new utterance in a turn an older line took keeps its own audio from
-   * where it began, and the older line's wait goes back to its own audio.
-   */
   private takeFromSpeakingLine(
     speaker: TranscriptSpeaker,
     since: number,
@@ -1438,7 +1397,6 @@ export class TranscriptRoom {
     return taken;
   }
 
-  /** A live Sarvam line waits 30 s from when it was accepted or from its last own chunk, whichever is later. */
   private ownAudioDeadline(line: CaptionLine): number {
     const lastAudioAt = line.audio.reduce((latest, { createdAt }) => Math.max(latest, createdAt), line.place.startMs);
     return lastAudioAt + TRANSCRIPTION_LINE_DEADLINE_MS;
@@ -1480,11 +1438,6 @@ export class TranscriptRoom {
     );
   }
 
-  /**
-   * Commits the pending audio. For OpenAI that audio becomes a line now,
-   * awaiting its ack, with its speaker, its place and its audio; Sarvam
-   * accepts utterances on its own, so its commit only sends the audio on.
-   */
   private commitTranscriptionBuffer(
     speaker: TranscriptSpeaker,
     failureMessage: string,
@@ -1556,7 +1509,6 @@ export class TranscriptRoom {
     this.pendingAudioSamples = 0;
   }
 
-  /** A turn ended: new audio starts a new turn, and no line owns it yet. */
   private endAudioTurn(): void {
     this.audioTurn += 1;
     this.speakingLine.clear();
@@ -1779,11 +1731,6 @@ export class TranscriptRoom {
     this.transcriptionSession = connection.session;
   }
 
-  /**
-   * Stops the live provider. Lines still owed and audio buffered while it
-   * was reconnecting stay for the next connection when it is replaced, and
-   * go when notes stop.
-   */
   private closeTranscriptionProvider(keepOwed: boolean): void {
     this.transcriptionRecoveryGeneration += 1;
     this.transcriptionProviderOpeningGeneration = null;
@@ -1806,12 +1753,6 @@ export class TranscriptRoom {
     } catch {}
   }
 
-  /**
-   * Keeps a provider that is being replaced open until every line it owes
-   * ends, or, for Sarvam, 10 seconds after its last audio, in case it
-   * reports more speech; it drains on its own and never replays, so its
-   * lines let their audio go.
-   */
   private drainTranscriptionProvider(): void {
     const live = this.liveConnection;
     if (!live) return;
@@ -1844,7 +1785,6 @@ export class TranscriptRoom {
     this.armLineTimer();
   }
 
-  /** Lets a drain go once it owes nothing, else wakes it when Sarvam's quiet window ends. */
   private settleDrain(drain: ProviderConnection): void {
     if (this.providerDrains.get(drain.epoch) !== drain) return;
     if (drain.timer !== null) clearTimeout(drain.timer);
@@ -1875,7 +1815,6 @@ export class TranscriptRoom {
     for (const drain of Array.from(this.providerDrains.values())) this.closeDrain(drain);
   }
 
-  /** A replaced provider failed: every line it owed ends now, in one snapshot write. */
   private async endDrain(drain: ProviderConnection, reason: string): Promise<void> {
     if (this.providerDrains.get(drain.epoch) !== drain) return;
     const owed = this.ledger.active().filter(({ epoch }) => epoch === drain.epoch);
@@ -1908,19 +1847,12 @@ export class TranscriptRoom {
     });
   }
 
-  /** A line whose connection failed waits for a replacement, keeping its audio and words. */
   private awaitReplacement(line: CaptionLine): void {
     line.state = "replaying";
     line.epoch = null;
     line.deadlineAt = Number.POSITIVE_INFINITY;
   }
 
-  /**
-   * Sarvam accepted an utterance: heard in a line's replayed audio, it is
-   * that line; otherwise it is a new line in its place, with the speaker
-   * of the audio that started it and that speaker's audio from where it
-   * began in its turn. Saved at once, so a restart still shows it.
-   */
   private acceptLine(
     connection: ProviderConnection,
     providerItemId: string,
@@ -1955,12 +1887,6 @@ export class TranscriptRoom {
     this.armLineTimer();
   }
 
-  /**
-   * Our check heard speech for a line after Sarvam signalled it: the line
-   * takes that speaker's audio from the signal on, in that turn, so a
-   * replay sends it as this line and its end lets that audio go; while the
-   * turn goes on, newer audio is the line's too.
-   */
   private markLineHeard(connection: ProviderConnection, providerItemId: string, heard: HeardSpeech): void {
     const line = this.ledger.get(connection.providerToLine.get(providerItemId) ?? "");
     if (!line || !isActive(line)) return;
@@ -1978,12 +1904,6 @@ export class TranscriptRoom {
     void this.persist();
   }
 
-  /**
-   * A provider named a line: the line of exactly that commit's audio, by
-   * OpenAI's ack order, or the one it already named. A line that ended
-   * keeps its place, so its late final fills it under the same itemId; one
-   * whose segment was trimmed shows nothing.
-   */
   private acknowledgeLine(connection: ProviderConnection, providerItemId: string): CaptionLine | null {
     const known = connection.providerToLine.get(providerItemId);
     if (known) return this.ledger.get(known) ?? null;
@@ -2004,11 +1924,6 @@ export class TranscriptRoom {
     return line;
   }
 
-  /**
-   * The line a delta, final or failure names. OpenAI names only items it
-   * acknowledged, so one it no longer has a line for, such as a trimmed
-   * line's late final, shows nothing and never takes another line's commit.
-   */
   private namedLine(connection: ProviderConnection, providerItemId: string): CaptionLine | null {
     if (connection.session.provider === "openai" && !connection.providerToLine.has(providerItemId)) return null;
     return this.acknowledgeLine(connection, providerItemId);
@@ -2022,9 +1937,6 @@ export class TranscriptRoom {
     line.text = line.freshText ? delta : `${line.text}${delta}`;
     line.freshText = false;
     const segment = this.lineSegment(line, now);
-    // A replaced provider's words are saved as they arrive, and the output
-    // gate holds this delta until a restarted worker would still have them.
-    // A live line is saved once, when it first has a place to keep.
     if (connection.role === "draining" || !saved) void this.persist();
     this.broadcast({
       type: "segment.delta",
@@ -2032,7 +1944,6 @@ export class TranscriptRoom {
     });
   }
 
-  /** A final ends its line with its words, or fills the gap a late final was owed. */
   private async applyLineFinal(
     connection: ProviderConnection,
     providerItemId: string,
@@ -2062,7 +1973,6 @@ export class TranscriptRoom {
     this.scheduleMinutes();
   }
 
-  /** One item a provider could not transcribe: only that line ends, as its words or a gap. */
   private async applyLineFailure(connection: ProviderConnection, providerItemId: string): Promise<void> {
     const line = this.namedLine(connection, providerItemId);
     if (!line || !isActive(line)) return;
@@ -2074,11 +1984,6 @@ export class TranscriptRoom {
     }
   }
 
-  /**
-   * Ends lines their provider will not finish: words already on screen stay
-   * as the line, a line our side heard speech in becomes a gap, and one it
-   * never heard ends with nothing shown. True when the transcript changed.
-   */
   private endUnfinishedLines(
     lines: CaptionLine[],
     context: string,
@@ -2117,7 +2022,6 @@ export class TranscriptRoom {
     return changed;
   }
 
-  /** A line that ended with nothing to show and that no later answer can fill goes now, with its provider ids. */
   private forgetLine(connection: ProviderConnection | null, line: CaptionLine): void {
     for (const providerItemId of connection?.providerIdsOf(line.id) ?? []) {
       connection?.providerToLine.delete(providerItemId);
@@ -2131,7 +2035,6 @@ export class TranscriptRoom {
     }
   }
 
-  /** One timer for every owed line's deadline, live or draining. */
   private armLineTimer(): void {
     if (this.lineTimer !== null) clearTimeout(this.lineTimer);
     this.lineTimer = null;
@@ -2203,13 +2106,6 @@ export class TranscriptRoom {
     }, delay);
   }
 
-  /**
-   * A live connection failed: every line it owed waits for a replacement
-   * with its own audio and words, and speech no line owns yet that our check
-   * heard becomes a line of its own. For Sarvam that is only speech a late
-   * signal could still have claimed; older speech Sarvam never signalled is
-   * not replayed. Words stay on screen meanwhile.
-   */
   private handOffLiveLines(live: ProviderConnection): void {
     const owed = this.ledger.active().filter(({ epoch }) => epoch === live.epoch);
     const replayedUnanswered = owed.filter(({ state, replayed }) => state === "pending_ack" && replayed);
@@ -2232,12 +2128,6 @@ export class TranscriptRoom {
     this.ledger.forgetEnded(live.epoch);
   }
 
-  /**
-   * Sends a replacement every owed line's own audio, in place order: OpenAI
-   * gets it as one commit per line, queued for that line's ack; Sarvam gets
-   * it as one turn per line, each chunk naming its line. False when a send
-   * fails, after putting every line back to wait for the next replacement.
-   */
   private replayOwedLines(connection: ProviderConnection): boolean {
     const owed = this.ledger.active().filter(({ state, epoch }) => state === "replaying" && epoch === null);
     try {
@@ -2281,11 +2171,6 @@ export class TranscriptRoom {
     );
   }
 
-  /**
-   * A replacement that failed gives back every owed line it was given, in
-   * one pass; lines it started from buffered audio go, since that audio is
-   * queued again for the next replacement.
-   */
   private abandonReplacement(connection: ProviderConnection, owed: ReadonlySet<string>): void {
     for (const line of this.ledger.active()) {
       if (line.epoch !== connection.epoch) continue;
@@ -2305,7 +2190,6 @@ export class TranscriptRoom {
     this.resetTranscriptionAudioState();
   }
 
-  /** Once a replacement has every owed line's audio, a line it never takes ends at a deadline. */
   private settleReplayedLines(connection: ProviderConnection): void {
     const deadline = Date.now() + TRANSCRIPTION_LINE_DEADLINE_MS;
     for (const line of this.ledger.active()) {
@@ -2581,7 +2465,6 @@ export class TranscriptRoom {
     return segment;
   }
 
-  /** Stopping notes: every connection closes and nothing a line held stays. */
   private forgetAllLines(): void {
     this.switchingProvider = false;
     this.closeTranscriptionProvider(false);
@@ -2591,7 +2474,6 @@ export class TranscriptRoom {
     this.lineTimer = null;
   }
 
-  /** Nothing will finish the owed lines: each ends as its words, a gap if heard, or nothing, and replaced providers close. */
   private endEveryOwedLine(context: string): void {
     for (const connection of [this.liveConnection, ...this.providerDrains.values(), null]) {
       const owed = this.ledger.active().filter(({ epoch }) => epoch === (connection?.epoch ?? null));
@@ -2601,12 +2483,6 @@ export class TranscriptRoom {
     this.armLineTimer();
   }
 
-  /**
-   * Finals plus every line still owed, saved as finals: its words so far, or
-   * a gap while it has none but was heard. A restarted or rolled-back worker
-   * cannot resume a provider connection, so this is how those lines end
-   * there, in a form older workers read too.
-   */
   private segmentsForSnapshot(): TranscriptSegment[] {
     const owed = new Map<string, TranscriptSegment>();
     for (const line of this.ledger.active()) {
@@ -2628,7 +2504,6 @@ export class TranscriptRoom {
     );
   }
 
-  /** What a viewer that joins or asks for a snapshot gets: the same lines and words every other viewer sees. */
   private snapshotMessage(viewer: Viewer) {
     return {
       type: "snapshot",
@@ -2646,12 +2521,10 @@ export class TranscriptRoom {
     };
   }
 
-  /** Words of every owed line, live, draining or waiting for a replacement. */
   private visiblePartials(): TranscriptSegment[] {
     return this.ledger.active().flatMap((line) => (line.text ? [this.lineSegment(line)] : []));
   }
 
-  /** A line as viewers see it, under its own itemId in its own place. */
   private lineSegment(line: CaptionLine, now = Date.now()): TranscriptSegment {
     return {
       ...this.createSegment(line.id, line.speaker, line.place),
@@ -2660,7 +2533,6 @@ export class TranscriptRoom {
     };
   }
 
-  /** A line's speaker is the speaker of its own audio; its words and any final follow it. */
   private setLineSpeaker(line: CaptionLine, speaker: TranscriptSpeaker): void {
     if (
       line.speaker.userId === speaker.userId &&
@@ -2723,7 +2595,6 @@ export class TranscriptRoom {
     };
   }
 
-  /** Puts a final in its place and shows it; false when nothing changed. */
   private recordFinalSegment(
     segment: TranscriptSegment,
     transcript: string,
@@ -2734,7 +2605,6 @@ export class TranscriptRoom {
       (candidate) => candidate.itemId === segment.itemId,
     );
     const existing = existingIndex >= 0 ? this.segments[existingIndex] : null;
-    // A repeated final changes nothing; a corrected one keeps its place.
     if (existing?.text === text) return false;
 
     const now = Date.now();

@@ -12,7 +12,6 @@ const toPcm = (signal: Float64Array, rmsDbfs: number): Int16Array => {
   );
 };
 
-/** A voiced, vowel-like sound: a 140 Hz pitch with falling harmonics, at a set RMS level. */
 export const voicedPcm = (rmsDbfs = -26, ms = 200, pitch = 140): Int16Array => {
   const signal = new Float64Array((RATE * ms) / 1_000);
   for (let index = 0; index < signal.length; index += 1) {
@@ -31,13 +30,11 @@ const seededNoise = (seed: number) => () => {
   return seed / 1_073_741_824 - 1;
 };
 
-/** Broadband noise at a set RMS level, like a room's floor after noise suppression. */
 export const noisePcm = (rmsDbfs = -60, ms = 200, seed = 7): Int16Array => {
   const next = seededNoise(seed);
   return toPcm(Float64Array.from({ length: (RATE * ms) / 1_000 }, next), rmsDbfs);
 };
 
-/** Key clicks: 4 ms bursts at a loud peak every 100 ms, silence between. */
 export const clicksPcm = (peakDbfs = -12, ms = 200, seed = 11): Int16Array => {
   const next = seededNoise(seed);
   const samples = new Int16Array((RATE * ms) / 1_000);

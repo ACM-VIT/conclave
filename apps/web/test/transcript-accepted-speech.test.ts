@@ -725,7 +725,6 @@ type Connection = {
   awaiting: Utterance[];
   stalled: boolean;
   dead: boolean;
-  /** Sarvam has sent it a speech signal, so our voice check no longer opens lines on it. */
   signalled: boolean;
 };
 type Utterance = {
@@ -733,7 +732,6 @@ type Utterance = {
   text: string;
   noise: boolean;
   speaker: Speaker;
-  /** Speech chunks its audio was sent as. */
   chunks: number;
   itemId: string;
   connection: Connection;
@@ -845,7 +843,6 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
     const roomCommitQueue = () =>
       (harness.room as unknown as { liveConnection: { commitQueue: { committedAt: number }[] } | null }).liveConnection
         ?.commitQueue ?? [];
-    /** The live connection fails: its socket drops, or the ack watchdog gives up on it. */
     const failLive = async (cause: "drop" | "ackTimeout", handOffTo?: Provider) => {
       if (live.dead) return;
       const failed = live;

@@ -131,7 +131,6 @@ export const decodePcm16Base64 = (base64: string): Int16Array => {
   return samples;
 };
 
-/** One key per speaker stream: the same person's camera and screen audio are separate. */
 export const speakerKey = (speaker: { userId: string; source?: string }): string =>
   `${speaker.userId}:${speaker.source ?? "mixed"}`;
 

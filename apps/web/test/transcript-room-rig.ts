@@ -10,7 +10,6 @@ type Listener = (event: { data?: unknown }) => void;
 export class FakeProviderSocket {
   sent: Record<string, unknown>[] = [];
   closed = false;
-  /** Sends that succeed before the socket starts throwing, as a dying connection does. */
   sendsBeforeFailing = Number.POSITIVE_INFINITY;
   private listeners = new Map<string, Listener[]>();
   constructor(readonly url: string) {}
@@ -33,7 +32,6 @@ export class FakeProviderSocket {
   sentTypes() {
     return this.sent.map((message) => message.type);
   }
-  /** The provider drops the connection on its own. */
   disconnect() {
     for (const listener of this.listeners.get("close") ?? []) listener({});
   }
@@ -60,7 +58,6 @@ type TestRoom = {
 
 export const OPENAI = "gpt-live-transcribe";
 export const SARVAM = "saaras:v3";
-/** 200 ms chunks as the relays send them: speech, speech too soft for our check, a quiet room, key clicks, silence. */
 export const AUDIO = {
   speech: pcmBase64(voicedPcm(-26)),
   softSpeech: pcmBase64(voicedPcm(-44)),
@@ -78,17 +75,12 @@ const roomSettings = (transcriptModel: string) => ({
   CONCLAVE_AI_SETTINGS: JSON.stringify({ transcription: { model: transcriptModel } }),
 });
 
-/**
- * A transcript room wired to fake provider sockets, with the room AI lookup
- * the test file mocks, so tests drive both providers through the real worker.
- */
 export async function transcriptRoomRig(
   lookup: Mock,
   transcriptModel: string,
   env: Partial<Env> = {},
 ) {
   const sockets: FakeProviderSocket[] = [];
-  /** How the next connections go: unreachable, or a socket that fails after that many sends. */
   const connectPlans: Array<"unreachable" | number> = [];
   vi.stubGlobal(
     "fetch",
@@ -147,7 +139,6 @@ export async function transcriptRoomRig(
   const speak = (speaker?: TestSpeaker) => sendAudio("speech", speaker);
   const commit = (speaker?: TestSpeaker) => send({ type: "audio.commit", speaker });
   const clear = (speaker?: TestSpeaker) => send({ type: "audio.clear", speaker });
-  /** A turn ends as both relays end one: the last audio is committed, then cleared. */
   const endTurn = async (speaker?: TestSpeaker) => {
     await commit(speaker);
     await clear(speaker);
@@ -170,7 +161,6 @@ export async function transcriptRoomRig(
     }
     return places;
   };
-  /** Places by the words a line shows, for lines whose itemId is not the provider's. */
   const broadcastPlacesByWords = () => {
     const places = new Map<string, Set<number>>();
     for (const message of sentMessages()) {
@@ -181,7 +171,6 @@ export async function transcriptRoomRig(
     }
     return places;
   };
-  /** What a viewer shows, built from the room's broadcasts with the client's own merge. */
   const viewerTranscript = () => {
     let segments: TranscriptSegment[] = [];
     let partials = new Map<string, TranscriptSegment>();
@@ -195,7 +184,6 @@ export async function transcriptRoomRig(
     }
     return { segments, partials };
   };
-  /** Everything the room still holds for lines, providers and replay audio. */
   const retainedLineState = () => {
     const internals = room as unknown as {
       ledger: { size: number };
@@ -214,7 +202,6 @@ export async function transcriptRoomRig(
       timers: internals.lineTimer === null ? 0 : 1,
     };
   };
-  /** Base64 bytes of replay audio the room holds, owned by lines or by no line yet. */
   const retainedAudioBytes = () => {
     const internals = room as unknown as {
       ledger: { all(): { audio: { audio: string }[] }[] };
@@ -225,7 +212,6 @@ export async function transcriptRoomRig(
       ...Array.from(internals.uncommittedAudio.values()).flatMap(({ chunks }) => chunks),
     ].reduce((sum, { audio }) => sum + audio.length, 0);
   };
-  /** Every byte of audio the room holds for replays, audio buffered while reconnecting included. */
   const heldAudioBytes = () =>
     retainedAudioBytes() + (room as unknown as { transcriptionRecoveryAudio: { bytes: number } }).transcriptionRecoveryAudio.bytes;
   const lastSnapshotSegment = (text: string) =>
@@ -303,7 +289,6 @@ export const sarvamFinal = (requestId: string, transcript: string) => ({
   type: "data",
   data: { transcript, request_id: requestId },
 });
-/** Sarvam's VAD signal, as sent when the connection asks for vad_signals. */
 export const sarvamSpeechStart = () => ({
   type: "events",
   data: { signal_type: "START_SPEECH", occured_at: Date.now() / 1000 },
@@ -313,7 +298,6 @@ export const sarvamSpeechEnd = () => ({
   data: { signal_type: "END_SPEECH", occured_at: Date.now() / 1000 },
 });
 
-/** A small seeded generator, so a failing property case replays exactly. */
 export const seeded = (seed: number) => () => {
   seed = (seed + 0x6d2b79f5) | 0;
   let value = Math.imul(seed ^ (seed >>> 15), seed | 1);
