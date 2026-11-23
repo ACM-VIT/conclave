@@ -126,6 +126,15 @@ export function useQa() {
   const view = state.kind === "ready" ? state.view : null;
   const revision = state.kind === "ready" ? state.revision : 0;
   const [wishes, setWishes] = useState(NO_WISHES);
+  // A new connection is a new session, whose view and revisions start over.
+  // A wish its answer settled was the old session's, and its revision says
+  // nothing of the new one: the new view decides.
+  const [wishesOf, setWishesOf] = useState(() => act);
+  if (act !== wishesOf) {
+    setWishesOf(() => act);
+    const kept = new Map([...wishes].filter(([, wish]) => wish.revision === undefined));
+    if (kept.size !== wishes.size) setWishes(kept.size === 0 ? NO_WISHES : kept);
+  }
   // Counted from each view to the next, as React keeps what a render saw.
   const myUpvotes = view?.myUpvotes ?? null;
   const [upvoteChanges, setUpvoteChanges] = useState<UpvoteChanges>(() => ({
@@ -196,6 +205,9 @@ export function useQa() {
     countsRef.current = counts;
   }, [view, revision, counts]);
   const wishesRef = useRef(wishes);
+  useEffect(() => {
+    wishesRef.current = wishes;
+  }, [wishes]);
   const sendingRef = useRef(new Set<string>());
 
   /**
