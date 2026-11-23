@@ -26,7 +26,7 @@ const MAX_APPS_AWARENESS_BYTES = 64 * 1024;
 const MAX_REPLICA_ID_LENGTH = 64;
 const REMEMBERED_REFUSED_REPLICAS = 16;
 const LEGACY_SYNC_HOLD_MS = 25_000;
-const MAX_HELD_SYNCS = 4;
+const MAX_OPEN_LEGACY_SYNCS = 4;
 
 const retryLater = (error: string, retryAfterMs: number): AppsSyncError => ({
   error,
@@ -240,7 +240,6 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
   );
 
   const openLegacySyncs = new Set<() => void>();
-  let heldSyncs = 0;
   socket.on("disconnect", () => {
     for (const stop of [...openLegacySyncs]) stop();
   });
@@ -283,8 +282,11 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
   };
 
   const holdSync = (scope: SyncScope, data: AppsSyncData, callback: (response: AppsSyncResponse | AppsSyncError) => void): void => {
+    if (openLegacySyncs.size >= MAX_OPEN_LEGACY_SYNCS) {
+      respond(callback, { error: "Too many app sync requests" });
+      return;
+    }
     let lastError = "App document is busy";
-    let held = false;
     let paid = false;
     let settled = false;
     let retry: NodeJS.Timeout | undefined;
@@ -293,8 +295,6 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       clearTimeout(retry);
       clearTimeout(deadline);
       openLegacySyncs.delete(stop);
-      if (held) heldSyncs -= 1;
-      held = false;
     };
     const settle = (outcome: AppsSyncResponse | AppsSyncError): void => {
       if (settled) return;
@@ -312,14 +312,6 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
           return;
         }
         lastError = outcome.error;
-        if (!held) {
-          if (heldSyncs >= MAX_HELD_SYNCS) {
-            settle({ error: lastError });
-            return;
-          }
-          held = true;
-          heldSyncs += 1;
-        }
         retry = setTimeout(attempt, outcome.retryAfterMs ?? 250);
       });
     };

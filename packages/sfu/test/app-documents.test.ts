@@ -524,13 +524,30 @@ describe("app documents", { timeout: 30_000 }, () => {
     stuck.send(write("b"));
     const held = Array.from({ length: 4 }, () => room.requestSync(new Y.Doc(), false));
     expect(await settledNow(Promise.race(held))).toBeUndefined();
-    expect(await settledNow(room.requestSync(new Y.Doc(), false))).toEqual({ error: "App document is busy" });
+    expect(await settledNow(room.requestSync(new Y.Doc(), false))).toEqual({ error: "Too many app sync requests" });
 
     await stuck.close();
     await vi.advanceTimersByTimeAsync(250);
 
     expect(await settledNow(Promise.race(held))).toBeUndefined();
-    expect(await settledNow(room.requestSync(new Y.Doc(), false))).toEqual({ error: "App document is busy" });
+    expect(await settledNow(room.requestSync(new Y.Doc(), false))).toEqual({ error: "Too many app sync requests" });
+  });
+
+  it("counts every open older-client sync against the cap, whether it is queued, waiting for room or waiting for budget", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const { room } = await stuckBehindAnotherRoom("cap-every-path", 3);
+    const queued = [room.requestSync(new Y.Doc(), false), room.requestSync(new Y.Doc(), false)];
+    const waitingForRoom = room.requestSync(new Y.Doc(), false);
+    const spent = await Promise.all(Array.from({ length: 7 }, () => room.requestSync(new Y.Doc(), true)));
+    expect(spent.every((reply) => "retryable" in reply)).toBe(true);
+    const waitingForBudget = room.requestSync(new Y.Doc(), false);
+    expect(await settledNow(Promise.race([...queued, waitingForRoom, waitingForBudget]))).toBeUndefined();
+
+    expect(await settledNow(room.requestSync(new Y.Doc(), false))).toEqual({ error: "Too many app sync requests" });
+
+    await vi.advanceTimersByTimeAsync(25_000);
+    expect(await settledNow(Promise.all([...queued, waitingForRoom, waitingForBudget]))).toHaveLength(4);
+    expect(await settledNow(room.requestSync(new Y.Doc(), false))).toBeUndefined();
   });
 
   it("uses the app document deadline from the config passed to createSfuServer", async () => {
