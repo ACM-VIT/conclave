@@ -93,7 +93,6 @@ describe("media producer codec-policy fencing", () => {
       activeConclaveAnswers: new Map(),
       adminHandlersRegistered: false,
       joinAttempts: 0,
-      opening: null,
     });
 
     const produceHandler = handlers.get("produce") as unknown as (
@@ -232,7 +231,6 @@ describe("media producer codec-policy fencing", () => {
       activeConclaveAnswers: new Map(),
       adminHandlersRegistered: false,
       joinAttempts: 0,
-      opening: null,
     });
 
     const produceHandler = handlers.get("produce") as unknown as (

@@ -1912,7 +1912,7 @@ describe("a join asked again on the same connection while its room is still open
     expect(opening.opened).toHaveBeenCalledTimes(1);
   });
 
-  it("closes a room it opened for a tab that left before taking its seat", async () => {
+  it("closes a room it opened for a tab that left before taking its seat, once nobody takes it", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const state = makeState();
     const opening = holdRoomOpening(state);
@@ -1924,12 +1924,52 @@ describe("a join asked again on the same connection while its room is still open
     await hangUp(tab.peer);
 
     opening.goOn();
-    // The room opens, and closes again with nobody in it.
-    await vi.waitFor(() => expect(state.roomCreations.size + state.rooms.size).toBe(0));
+    await vi.waitFor(() => expect(state.rooms.size).toBe(1));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(state.rooms.size).toBe(0);
     vi.useRealTimers();
     const next = await join(state, host);
     expect(next.status).toBe("joined");
     expect(next.context.currentClient).toBeInstanceOf(Admin);
+  });
+
+  it("does not seat a tab that left while its room was opening, nor keep its call as one to bring back", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const state = makeState();
+    const opening = holdRoomOpening(state);
+    const tab = connect(state, opener);
+    const firstTry = tab.ask();
+    await vi.waitFor(() => expect(opening.opened).toHaveBeenCalled());
+    await hangUp(tab.peer);
+    opening.goOn();
+    await firstTry;
+
+    expect(tab.context.currentClient).toBeNull();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(state.rooms.size).toBe(0);
+    vi.useRealTimers();
+    const next = await join(state, host);
+    expect(next.status).toBe("joined");
+    expect(next.context.currentClient).toBeInstanceOf(Admin);
+  });
+
+  it("lets the next visitor who may open the code host the room a tab that left was opening", async () => {
+    const state = makeState();
+    const opening = holdRoomOpening(state);
+    const tab = connect(state, opener);
+    const firstTry = tab.ask();
+    await vi.waitFor(() => expect(opening.opened).toHaveBeenCalled());
+    await hangUp(tab.peer);
+    const next = join(state, host);
+    opening.goOn();
+    await firstTry;
+
+    const hostJoin = await next;
+    expect(hostJoin.status).toBe("joined");
+    expect(hostJoin.context.currentClient).toBeInstanceOf(Admin);
+    expect(tab.context.currentClient).toBeNull();
+    expect(roomOf(state).getAdminUserIds()).toEqual(["guest-host#h"]);
+    expect(opening.opened).toHaveBeenCalledTimes(1);
   });
 });
 

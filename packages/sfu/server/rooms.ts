@@ -293,6 +293,7 @@ export const getOrCreateRoomWithOrigin = async (
       });
       createdRoom.recoveryPassesVoidUntil = record.passesVoidUntil;
       createdRoom.takesOverRecordOf = record.lastWriter;
+      createdRoom.awaitingOpener = { lost: record.lost };
       for (const guest of takeNextMeetingLobby(state, channelId)) {
         createdRoom.pendingClients.set(guest.userKey, guest);
       }
@@ -387,6 +388,14 @@ export const cleanupStaleRoom = (
     `Discarded stale room with closed router: ${room.id} (${room.clientId})`,
   );
   return true;
+};
+
+export const closeRoomIfUnclaimed = (state: SfuState, room: Room, afterMs: number): void => {
+  setTimeout(() => {
+    if (state.rooms.get(room.channelId) === room && room.awaitingOpener) {
+      cleanupRoom(state, room.channelId);
+    }
+  }, afterMs).unref?.();
 };
 
 export const cleanupRoom = (state: SfuState, channelId: string): boolean => {

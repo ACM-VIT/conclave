@@ -11,6 +11,7 @@ import type {
 } from "mediasoup/types";
 import type { Socket } from "socket.io";
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import type { LostRoom } from "../../server/roomRecoveryLedger.js";
 import {
   Awareness,
   applyAwarenessUpdate,
@@ -371,6 +372,7 @@ export class Room {
   public onRecoverableChange: (() => void) | null = null;
   // Told once, when the lost call this room stood in for is over for good.
   public onLostCallEnded: (() => void) | null = null;
+  public awaitingOpener: { lost: LostRoom | null } | null = null;
   private lostCallEnded = false;
   // A host ended the meeting for everyone. It may stay open a little longer
   // to say so, but it is over: it hands out no more recovery passes.

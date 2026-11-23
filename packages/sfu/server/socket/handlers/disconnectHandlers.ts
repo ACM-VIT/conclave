@@ -33,6 +33,7 @@ export const registerDisconnectHandlers = (
   const { socket, state, io } = context;
 
   socket.on("disconnect", (reason) => {
+    context.joinAttempts += 1;
     Logger.info(`Client disconnected: ${socket.id} (${reason})`);
     interruptActiveConclaveAnswers(io, context.activeConclaveAnswers);
 
@@ -276,19 +277,6 @@ export const registerDisconnectHandlers = (
           }
         }
       }
-    }
-
-    // A room this socket's join opened and nobody took a seat in, because
-    // the join was answered before it opened, is closed once it opens: left
-    // standing it would be a locked room with no host.
-    const abandoned = context.opening;
-    context.opening = null;
-    if (abandoned) {
-      void abandoned.outcome.then((opened) => {
-        if (opened && state.rooms.get(abandoned.channelId) === opened.room) {
-          cleanupRoom(state, abandoned.channelId);
-        }
-      });
     }
 
     context.currentRoom = null;
