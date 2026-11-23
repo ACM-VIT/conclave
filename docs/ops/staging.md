@@ -35,7 +35,14 @@ What A shares, and why it is still safe:
   already do.
 - **Redis**: not shared. Redis pub/sub ignores the database number, so a
   staging SFU on production's Redis would join production's socket.io
-  channels. Staging runs its own Redis container on 127.0.0.1:6380.
+  channels. Staging runs its own Redis container on 127.0.0.1:6380. The
+  staging compose file sets every Redis variable the SFU reads (`REDIS_URL`,
+  `SFU_REDIS_URL`, `SFU_PERSISTENCE_REDIS_URL`) from `STAGING_REDIS_PASSWORD`
+  and `STAGING_REDIS_PORT`, so a Redis URL in the shell or a copied
+  production `.env` never reaches it, and the deploy preflight refuses a
+  config whose SFU points at any Redis but the compose file's own. The deploy
+  starts that Redis whatever Upstash settings the shell carries, and needs no
+  `REDIS_URL` in staging's `.env`.
 - **Disk**: `/var/lib/conclave-staging`, never the production state dir.
 - **Ports**: HTTP 3033, RTC 42001-42200 (production uses 3031, 3032 and
   40000-42000). The WebRTC port budget is pinned to 4 in
@@ -100,7 +107,6 @@ cat > "$S/.env" <<EOF
 SFU_SECRET=${STAGING_SFU_SECRET}
 ANNOUNCED_IP=57.159.28.54
 STAGING_REDIS_PASSWORD=${STAGING_REDIS_PASSWORD}
-REDIS_URL=redis://:${STAGING_REDIS_PASSWORD}@127.0.0.1:6380/0
 SFU_REQUIRE_REDIS_ADAPTER=1
 SFU_REGION=staging
 SFU_STAGING_PUBLIC_URL=https://sfu-staging.acmvit.in

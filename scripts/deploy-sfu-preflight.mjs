@@ -282,8 +282,51 @@ export const resolveSfuTargets = ({ compose, serviceNames }) => {
     }
   }
 
+  checkOwnRedis({ services, selectedNames, errors });
+
   if (errors.length > 0) throw new SfuDeployPreflightError(errors);
   return targets;
+};
+
+// Every Redis variable an SFU reads. Redis pub/sub ignores the database
+// number, so one of them on another Redis joins that Redis's channels.
+const SFU_REDIS_VARIABLES = ["REDIS_URL", "SFU_REDIS_URL", "SFU_PERSISTENCE_REDIS_URL"];
+
+// A compose file that runs its own Redis (staging's) must point every SFU's
+// every Redis variable at it, on 127.0.0.1 and the port it listens on, so a
+// Redis URL inherited from the shell or a production .env can never reach
+// another deployment's Redis.
+const checkOwnRedis = ({ services, selectedNames, errors }) => {
+  const redis = services.redis;
+  if (!redis) return;
+  const redisEnv = parseEnvironment(redis.environment);
+  const command = Array.isArray(redis.command) ? redis.command.join(" ") : String(redis.command ?? "");
+  const port = String(redisEnv.REDIS_PORT || command.match(/--port\s+"?(\d+)/)?.[1] || "6379");
+  for (const service of selectedNames) {
+    const definition = services[service];
+    if (!definition) continue;
+    const env = parseEnvironment(definition.environment);
+    for (const name of SFU_REDIS_VARIABLES) {
+      const value = String(env[name] ?? "").trim();
+      if (!value) {
+        errors.push(`${service}: ${name} must be set to this compose file's own Redis on 127.0.0.1:${port}.`);
+        continue;
+      }
+      let host = "";
+      let urlPort = "";
+      try {
+        const url = new URL(value);
+        host = url.hostname.toLowerCase();
+        urlPort = url.port || "6379";
+      } catch {
+        errors.push(`${service}: ${name} is not a valid URL.`);
+        continue;
+      }
+      if (!["127.0.0.1", "localhost"].includes(host) || urlPort !== port) {
+        errors.push(`${service}: ${name} points at ${host}:${urlPort}, not this compose file's own Redis on 127.0.0.1:${port}.`);
+      }
+    }
+  }
 };
 
 const readJsonResponse = async ({ fetchImpl, url, headers, timeoutMs }) => {

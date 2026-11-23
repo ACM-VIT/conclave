@@ -693,7 +693,7 @@ export default function TtsVoiceSettings({
                 Your voice
               </p>
               <span className="inline-flex items-center gap-1 text-[11px] text-[#32d583]">
-                <Check size={12} strokeWidth={2} /> Ready
+                <Check size={12} strokeWidth={1.75} /> Ready
               </span>
             </div>
             <p className="mt-1 truncate text-[13px]" style={{ color: color.text }}>
@@ -825,7 +825,7 @@ export default function TtsVoiceSettings({
                 {phase === "uploading" ? (
                   <LoaderCircle size={14} className="animate-spin" />
                 ) : (
-                  <Check size={14} strokeWidth={2} />
+                  <Check size={14} strokeWidth={1.75} />
                 )}
                 {phase === "uploading" ? "Creating" : "Create my voice"}
               </button>
@@ -855,8 +855,7 @@ export default function TtsVoiceSettings({
             {phase === "recording" ? (
               <div className="mt-3">
                 <div className="mb-1 flex items-center justify-between text-[11.5px]">
-                  <span className="inline-flex items-center gap-1.5 text-[#f97066]">
-                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#f97066]" />
+                  <span className="font-medium" style={{ color: color.accent }}>
                     Recording
                   </span>
                   <span className="tabular-nums" style={{ color: color.textMuted }}>

@@ -348,3 +348,66 @@ test("run through a symlinked path, the preflight still checks the config", () =
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+// A compose file with its own Redis service, as staging's: the redis service
+// listens on 127.0.0.1:6380, and the SFU's Redis variables are as given.
+const withOwnRedis = (redisEnv) => {
+  const compose = makeCompose();
+  delete compose.services["edge-fra"];
+  Object.assign(compose.services["edge-dxb"].environment, redisEnv);
+  compose.services.redis = { image: "redis:7.2", environment: { REDIS_PORT: "6380" } };
+  return compose;
+};
+
+test("an SFU beside its own Redis must reach that Redis with every Redis variable", () => {
+  const own = "redis://:pw@127.0.0.1:6380/0";
+  assert.equal(
+    resolveSfuTargets({ compose: withOwnRedis({ REDIS_URL: own, SFU_REDIS_URL: own, SFU_PERSISTENCE_REDIS_URL: own }) }).length,
+    1,
+  );
+  // Sol's case: the runbook's REDIS_URL on 6380, with an SFU_REDIS_URL on
+  // production's 6379 inherited from the shell.
+  assert.throws(
+    () => resolveSfuTargets({ compose: withOwnRedis({ REDIS_URL: own, SFU_REDIS_URL: "redis://127.0.0.1:6379/0", SFU_PERSISTENCE_REDIS_URL: own }) }),
+    /edge-dxb: SFU_REDIS_URL points at 127\.0\.0\.1:6379, not this compose file's own Redis on 127\.0\.0\.1:6380/,
+  );
+  assert.throws(
+    () => resolveSfuTargets({ compose: withOwnRedis({ REDIS_URL: own, SFU_REDIS_URL: own }) }),
+    /edge-dxb: SFU_PERSISTENCE_REDIS_URL must be set to this compose file's own Redis on 127\.0\.0\.1:6380/,
+  );
+});
+
+const hasCompose = spawnSync("docker", ["compose", "version"], { stdio: "ignore" }).status === 0;
+
+test(
+  "staging's compose file gives its SFU staging's Redis whatever Redis URLs the shell holds",
+  { skip: !hasCompose && "needs docker compose" },
+  () => {
+    const root = path.join(import.meta.dirname, "..");
+    const rendered = spawnSync("docker", ["compose", "-f", path.join(root, "docker-compose.sfu-staging.yml"), "config", "--format", "json"], {
+      cwd: mkdtempSync(path.join(tmpdir(), "staging-compose-")),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        COMPOSE_PROJECT_NAME: "conclave-staging",
+        STAGING_REDIS_PASSWORD: "staging-pw",
+        SFU_SECRET: "staging-secret",
+        ANNOUNCED_IP: "127.0.0.1",
+        SFU_STAGING_PUBLIC_URL: "http://localhost:3033",
+        SFU_REQUIRE_REDIS_ADAPTER: "1",
+        // Production's Redis, inherited from the shell.
+        REDIS_URL: "redis://127.0.0.1:6379/0",
+        SFU_REDIS_URL: "redis://127.0.0.1:6379/0",
+        SFU_PERSISTENCE_REDIS_URL: "redis://127.0.0.1:6379/0",
+      },
+    });
+    assert.equal(rendered.status, 0, rendered.stderr);
+    const compose = JSON.parse(rendered.stdout);
+    const env = compose.services["sfu-staging"].environment;
+    for (const name of ["REDIS_URL", "SFU_REDIS_URL", "SFU_PERSISTENCE_REDIS_URL"]) {
+      assert.equal(env[name], "redis://:staging-pw@127.0.0.1:6380/0", name);
+    }
+    assert.equal(resolveSfuTargets({ compose, serviceNames: ["sfu-staging"] }).length, 1);
+    assert.notEqual(compose.services["sfu-staging"].image, "conclave-sfu-a", "staging never retags production's image");
+  },
+);
