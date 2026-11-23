@@ -238,6 +238,7 @@ abstract class CrashCodeManifestTask : DefaultTask() {
             }
         }
         val output = outputDirectory.get().asFile
+        output.deleteRecursively()
         output.mkdirs()
         DataOutputStream(output.resolve("crash-code-frames.bin").outputStream().buffered()).use { out ->
             for (hash in hashes) out.writeLong(hash)
