@@ -829,6 +829,19 @@ describe("client id reservations", () => {
     expect(join("late#1", "participant").coldSync("whiteboard").shapes).toHaveLength(allowed.length);
   });
 
+  it("takes an empty update as nothing, even on a locked board, so no copy is started over", () => {
+    const { join } = makeRoom();
+    const host = join("host#1", "host");
+    const viewer = join("viewer#1", "participant");
+    host.present("whiteboard");
+    host.lock(true, host.state().revision);
+
+    viewer.sendWithReplica("whiteboard", Y.encodeStateAsUpdate(new Y.Doc()), "copy-1");
+
+    expect(viewer.received.filter((sent) => sent.event === "apps:yjs:refused")).toEqual([]);
+    expect(viewer.relayed).toEqual([]);
+  });
+
   it("tells the writer, once per copy, that the room refused its change", () => {
     const { join } = makeRoom();
     const host = join("host#1", "host");

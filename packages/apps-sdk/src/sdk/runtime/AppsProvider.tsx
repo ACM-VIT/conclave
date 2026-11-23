@@ -436,7 +436,7 @@ export function AppsProvider({
       if (serverVector && !isReadOnlyRef.current) {
         try {
           const updateForServer = Y.encodeStateAsUpdate(run.doc, serverVector);
-          if (updateForServer.length > 0) {
+          if (!Y.snapshotContainsUpdate(Y.emptySnapshot, updateForServer)) {
             currentSocket.emit("apps:yjs:update", {
               appId: run.appId,
               update: updateForServer,

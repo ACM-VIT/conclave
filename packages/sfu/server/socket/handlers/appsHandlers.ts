@@ -36,6 +36,14 @@ const MAX_APPS_AWARENESS_BYTES = 64 * 1024;
 const MAX_REPLICA_ID_LENGTH = 64;
 const REMEMBERED_REFUSED_REPLICAS = 16;
 
+const changesNothing = (update: Uint8Array): boolean => {
+  try {
+    return Y.snapshotContainsUpdate(Y.emptySnapshot, update);
+  } catch {
+    return false;
+  }
+};
+
 const normalizeReplicaId = (value: unknown): string | undefined =>
   typeof value === "string" && value.length > 0 && value.length <= MAX_REPLICA_ID_LENGTH
     ? value
@@ -383,11 +391,6 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
       signalRefused(appId, replicaId, "not-live");
       return;
     }
-    if (apps.locked && !canControlStage(context)) {
-      signalRefused(appId, replicaId, "locked");
-      return;
-    }
-
     const update = toUint8Array(data.update);
     if (!update || update.length === 0) {
       refuse("invalid");
@@ -409,6 +412,11 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
         } satisfies AppsUpdateData);
       }
       refuse("not-synced");
+      return;
+    }
+    if (changesNothing(update)) return;
+    if (apps.locked && !canControlStage(context)) {
+      signalRefused(appId, replicaId, "locked");
       return;
     }
     const refusal = apps.contentRefusal(appId, writer, update, mark);

@@ -168,6 +168,13 @@ describe("the presented board", () => {
     expect(ctx.getDoc("whiteboard").getMap("shapes").get("circle")).toBeUndefined();
   });
 
+  it("sends nothing after its sync when its copy adds nothing to the room's", async () => {
+    await serverState({ activeAppId: "whiteboard", revision: 1, savedAppIds: [], docGeneration: 1 });
+
+    expect(sent("apps:yjs:sync")).toHaveLength(1);
+    expect(sent("apps:yjs:update")).toEqual([]);
+  });
+
   it("ignores a refusal meant for a copy it no longer holds", async () => {
     await serverState({ activeAppId: "whiteboard", revision: 1, savedAppIds: [], docGeneration: 1 });
     const keyBefore = ctx.presentedDocKey;
