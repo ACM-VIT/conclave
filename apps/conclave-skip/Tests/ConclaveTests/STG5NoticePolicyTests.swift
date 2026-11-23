@@ -34,7 +34,7 @@ struct STG5NoticePolicyTests {
     }
 
     private func presenter(_ clock: Clock) -> StagePresenter {
-        let stage = StagePresenter(shell: MeetingShellPresenter())
+        let stage = StagePresenter(shell: MeetingShellPresenter(defaults: IsolatedDefaults.make()))
         stage.now = { clock.millis }
         stage.sleep = STG5NoticePolicyTests.longSleep
         stage.captions.sleep = STG5NoticePolicyTests.longSleep
@@ -87,7 +87,7 @@ struct STG5NoticePolicyTests {
 
     @Test func closingOrDecliningTheNotificationsPromptBothRememberTheChoice() {
         for actionId in ["close", NoticeAction.notNow] {
-            let stage = StagePresenter(shell: MeetingShellPresenter())
+            let stage = StagePresenter(shell: MeetingShellPresenter(defaults: IsolatedDefaults.make()))
             var remembered = 0
             stage.dismissNotificationsPrime = { remembered += 1 }
             stage.setNoticePlatform(NoticePlatform.android)

@@ -23,40 +23,40 @@ enum VoicePreferences {
     static let voiceKindKey = "conclave.pref.voiceKind"
     static let standardVoiceIdKey = "conclave.pref.standardVoice"
 
-    static func showsChatPreviews(defaults: UserDefaults = UserDefaults.standard) -> Bool {
+    static func showsChatPreviews(defaults: UserDefaults) -> Bool {
         boolValue(forKey: showsChatPreviewsKey, fallback: VoicePreferenceSnapshot.defaults.showsChatPreviews, defaults: defaults)
     }
 
-    static func setShowsChatPreviews(_ on: Bool, defaults: UserDefaults = UserDefaults.standard) {
+    static func setShowsChatPreviews(_ on: Bool, defaults: UserDefaults) {
         defaults.set(on, forKey: showsChatPreviewsKey)
     }
 
-    static func playsVoiceMessages(defaults: UserDefaults = UserDefaults.standard) -> Bool {
+    static func playsVoiceMessages(defaults: UserDefaults) -> Bool {
         boolValue(forKey: playsVoiceMessagesKey, fallback: VoicePreferenceSnapshot.defaults.playsVoiceMessages, defaults: defaults)
     }
 
-    static func setPlaysVoiceMessages(_ on: Bool, defaults: UserDefaults = UserDefaults.standard) {
+    static func setPlaysVoiceMessages(_ on: Bool, defaults: UserDefaults) {
         defaults.set(on, forKey: playsVoiceMessagesKey)
     }
 
-    static func voiceKind(defaults: UserDefaults = UserDefaults.standard) -> VoiceKind {
+    static func voiceKind(defaults: UserDefaults) -> VoiceKind {
         guard let raw = defaults.string(forKey: voiceKindKey) else { return VoicePreferenceSnapshot.defaults.voiceKind }
         return VoiceKind(rawValue: raw) ?? VoicePreferenceSnapshot.defaults.voiceKind
     }
 
-    static func setVoiceKind(_ kind: VoiceKind, defaults: UserDefaults = UserDefaults.standard) {
+    static func setVoiceKind(_ kind: VoiceKind, defaults: UserDefaults) {
         defaults.set(kind.rawValue, forKey: voiceKindKey)
     }
 
-    static func standardVoiceId(defaults: UserDefaults = UserDefaults.standard) -> String {
+    static func standardVoiceId(defaults: UserDefaults) -> String {
         defaults.string(forKey: standardVoiceIdKey) ?? VoicePreferenceSnapshot.defaults.standardVoiceId
     }
 
-    static func setStandardVoiceId(_ voiceId: String, defaults: UserDefaults = UserDefaults.standard) {
+    static func setStandardVoiceId(_ voiceId: String, defaults: UserDefaults) {
         defaults.set(voiceId.trimmingCharacters(in: .whitespacesAndNewlines), forKey: standardVoiceIdKey)
     }
 
-    static func snapshot(defaults: UserDefaults = UserDefaults.standard) -> VoicePreferenceSnapshot {
+    static func snapshot(defaults: UserDefaults) -> VoicePreferenceSnapshot {
         VoicePreferenceSnapshot(showsChatPreviews: showsChatPreviews(defaults: defaults),
                                 playsVoiceMessages: playsVoiceMessages(defaults: defaults),
                                 voiceKind: voiceKind(defaults: defaults),
@@ -68,7 +68,7 @@ enum VoicePreferences {
         return VoiceKind.system
     }
 
-    static func composerVoiceKind(canUsePersonalVoice: Bool = false, defaults: UserDefaults = UserDefaults.standard) -> VoiceKind {
+    static func composerVoiceKind(canUsePersonalVoice: Bool = false, defaults: UserDefaults) -> VoiceKind {
         effectiveVoiceKind(preferred: voiceKind(defaults: defaults), canUsePersonalVoice: canUsePersonalVoice)
     }
 
@@ -300,7 +300,7 @@ final class TtsPlaybackQueue {
     var onCancel: (() -> Void)? = nil
 
     var onPlaybackChanged: ((String, String) -> Void)? = nil
-    var preferences: () -> VoicePreferenceSnapshot = { VoicePreferences.snapshot() }
+    var preferences: () -> VoicePreferenceSnapshot
 
     var isOutputBlocked: () -> Bool = { false }
     var sleep: (Double) async -> Void = { millis in
@@ -321,7 +321,9 @@ final class TtsPlaybackQueue {
     private var advanceTask: Task<Void, Never>? = nil
     private var failsafeTask: Task<Void, Never>? = nil
 
-    init() {}
+    init(defaults: UserDefaults) {
+        preferences = { VoicePreferences.snapshot(defaults: defaults) }
+    }
 
     var isIdle: Bool {
         activeToken == 0 && queued.isEmpty && !isAdvancePending

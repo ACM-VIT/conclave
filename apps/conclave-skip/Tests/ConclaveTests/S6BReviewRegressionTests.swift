@@ -7,7 +7,7 @@ import Testing
 @Suite(.serialized)
 struct S6BReviewRegressionTests {
     private func queue() -> TtsPlaybackQueue {
-        let queue = TtsPlaybackQueue()
+        let queue = TtsPlaybackQueue(defaults: IsolatedDefaults.make())
         VoicePlaybackQueues.register(queue)
         queue.schedulesTimers = false
         queue.preferences = { VoicePreferenceSnapshot.defaults }
@@ -128,9 +128,6 @@ struct S6BReviewRegressionTests {
 
     @Test(arguments: [false, true])
     func refreshBeforeSignOutCannotOverwriteANewSameAccountSession(_ expired: Bool) async throws {
-        let key = "conclave.auth.user"
-        let defaults = UserDefaults.standard
-        let saved = defaults.string(forKey: key)
         let storage = HTTPCookieStorage.shared
         let cookies = storage.cookies ?? []
         let baseURL = try #require(NativeAuthService.resolveAppBaseURL())
@@ -141,9 +138,8 @@ struct S6BReviewRegressionTests {
         defer {
             storage.deleteCookie(cookie)
             for cookie in cookies { storage.setCookie(cookie) }
-            if let saved { defaults.set(saved, forKey: key) } else { defaults.removeObject(forKey: key) }
         }
-        let app = AppState()
+        let app = AppState(defaults: IsolatedDefaults.make())
         let account = AccountPresenter()
         app.setAuthenticatedUser(AppState.User(id: "same-id", name: "Old", provider: .google))
         account.apply(AccountPresenterInputs.make(isSignedIn: true, userId: "same-id", name: "Old", provider: "google"))

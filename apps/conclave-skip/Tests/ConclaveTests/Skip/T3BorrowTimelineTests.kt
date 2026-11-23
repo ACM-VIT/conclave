@@ -184,21 +184,21 @@ class T3BorrowTimelineTests {
         clock = 0.0
         assertEquals(ChatFixtureState.draftMultiline, ChatFixtureDriver.state("chat-draft-multiline"))
         assertEquals(ChatFixtureState.suggestionsMentionQuery, ChatFixtureDriver.state("chat-suggestions-mention-query"))
-        val multilineShell = MeetingShellPresenter()
+        val multilineShell = MeetingShellPresenter(defaults = IsolatedDefaults.make())
         val multiline = ChatFixtureDriver.installOnStage(ChatFixtureState.draftMultiline, multilineShell)
         assertEquals(3, multiline.chat.drafts.text(multiline.chat.composer.draftKey).split("\n").size)
-        val queryShell = MeetingShellPresenter()
+        val queryShell = MeetingShellPresenter(defaults = IsolatedDefaults.make())
         val query = ChatFixtureDriver.installOnStage(ChatFixtureState.suggestionsMentionQuery, queryShell)
         assertEquals("@av", query.chat.drafts.text(query.chat.composer.draftKey))
 
-        val shell = MeetingShellPresenter()
+        val shell = MeetingShellPresenter(defaults = IsolatedDefaults.make())
         val driver = ChatFixtureDriver.installOnStage(ChatFixtureState.busy, shell)
         driver.run(ChatFixtureScriptName.photoTwice)
         assertEquals(ChatAttachmentPhase.preparing, shell.chat.composer.attachment.phase)
         assertEquals(ChatFailure.oneAttachment, shell.chat.composer.inlineNotice)
         assertEquals(1, driver.actionsReadout.split("\n").count { it.startsWith("attachPhoto") })
 
-        val gateShell = MeetingShellPresenter()
+        val gateShell = MeetingShellPresenter(defaults = IsolatedDefaults.make())
         val gate = ChatFixtureDriver.installOnStage(ChatFixtureState.busy, gateShell)
         gateShell.chat.now = { base + clock }
         gateShell.chat.sleep = { _ -> kotlinx.coroutines.delay(60_000) }

@@ -40,7 +40,7 @@ struct EntryCoreDeltaTests {
 @Suite(.serialized)
 struct EntryCoreDeltaViewModelTests {
     @Test func theShellRefreshAlsoFeedsThePremeetingPresenter() {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.roomId = "lily-zoro-iris"
         viewModel.state.connectionState = ConnectionState.connecting
@@ -54,7 +54,7 @@ struct EntryCoreDeltaViewModelTests {
     }
 
     @Test func identityAndAppActivityArePushedOnceEach() {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.setPremeetingIdentity(isSignedIn: true, accountName: "Avery", accountSeed: "u1")
         #expect(viewModel.premeeting.home.isSignedIn)
         #expect(viewModel.premeeting.home.accountName == "Avery")
