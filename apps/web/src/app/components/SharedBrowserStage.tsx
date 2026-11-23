@@ -30,7 +30,9 @@ export function formatSharedBrowserLabel(
 function SharedBrowserPill({ label, isLive }: { label: string; isLive: boolean }) {
   return (
     <StageSourcePill icon={Globe} label={label} className="pointer-events-none">
-      {isLive ? <span className="sr-only">{" Live"}</span> : null}
+      <span className="sr-only" role="status">
+        {isLive ? " Live" : ""}
+      </span>
     </StageSourcePill>
   );
 }
@@ -96,6 +98,7 @@ function SharedBrowserVideo({
   label: string;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -133,6 +136,7 @@ function SharedBrowserVideo({
             autoPlay
             playsInline
             muted
+            onPlaying={() => setIsPlaying(true)}
             className="absolute inset-0 h-full w-full"
             style={{ objectFit: "fill", pointerEvents: "none" }}
           />
@@ -146,7 +150,7 @@ function SharedBrowserVideo({
           />
         </div>
       </div>
-      <SharedBrowserPill label={label} isLive />
+      <SharedBrowserPill label={label} isLive={isPlaying} />
     </div>
   );
 }

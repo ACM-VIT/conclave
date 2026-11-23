@@ -25,6 +25,7 @@ afterEach(() => {
   container.remove();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 function render(props: Partial<Parameters<typeof SharedBrowserStage>[0]> = {}) {
@@ -73,7 +74,7 @@ it("tells everyone the shared browser is live and who shares it", () => {
 
   finishLoading();
   expect(text()).toContain("Bo Sharer is sharing a browser");
-  expect(text()).toContain("Live");
+  expect(container.querySelector('[role="status"]')?.textContent).toContain("Live");
 });
 
 it("shows the page only once it has loaded", () => {
@@ -145,6 +146,9 @@ it("does not carry an old timeout into a new page", () => {
 });
 
 it("keeps the noVNC input layer over the browser video", () => {
+  vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(
+    () => new Promise<void>(() => {}),
+  );
   const stream = new MediaStream();
   render({ provider: "chromium", browserVideoStream: stream });
   const video = container.querySelector("video") as HTMLVideoElement;
@@ -158,6 +162,12 @@ it("keeps the noVNC input layer over the browser video", () => {
   expect(container.querySelector("video")).not.toBeNull();
   expect(text()).not.toContain("Loading shared browser");
   expect(text()).toContain("Alice is sharing a browser");
+  expect(text()).not.toContain("Live");
+
+  act(() => {
+    video.dispatchEvent(new Event("playing"));
+  });
+  expect(text()).toContain("Live");
 });
 
 it("loads the page from scratch when the browser video goes away", () => {
