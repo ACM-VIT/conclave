@@ -2356,6 +2356,7 @@ export default function MeetsMainContent({
         (!isDevPlaygroundActive || isDevPlaygroundEnabled) ? (
         <MeetingAppLayout
           stageId="app"
+          fullStageBelowLarge
           frameContent={!isDevPlaygroundActive}
           leaveAction={isWatchActive ? watchLeaveAction : undefined}
           localStream={localStream}

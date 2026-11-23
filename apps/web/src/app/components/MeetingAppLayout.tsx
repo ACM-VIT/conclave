@@ -17,6 +17,7 @@ interface MeetingAppLayoutProps {
   children: ReactNode;
   stageId: string;
   frameContent?: boolean;
+  fullStageBelowLarge?: boolean;
   localStream: MediaStream | null;
   isCameraOff: boolean;
   isMuted: boolean;
@@ -38,6 +39,7 @@ function MeetingAppLayout({
   children,
   stageId,
   frameContent = true,
+  fullStageBelowLarge = false,
   localStream,
   isCameraOff,
   isMuted,
@@ -102,37 +104,41 @@ function MeetingAppLayout({
             {children}
           </div>
         </div>
-        <div className={STAGE_RAIL_CLASS} data-meet-stage-rail>
-          <div className={STAGE_RAIL_TILE_CLASS} data-userid={currentUserId}>
-            <LocalVideoTile
-              stream={localStream}
-              isCameraOff={isCameraOff}
-              isMuted={isMuted}
-              isHandRaised={isHandRaised}
-              isMirrorCamera={isMirrorCamera}
-              displayName={getDisplayName(currentUserId)}
-              userEmail={userEmail}
-              isActiveSpeaker={activeSpeakerId === currentUserId}
-              size="rail"
-            />
-          </div>
-          {participantsList.map((participant) => (
-            <div
-              key={participant.userId}
-              className={STAGE_RAIL_TILE_CLASS}
-              data-userid={participant.userId}
-            >
-              <ParticipantVideo
-                participant={participant}
-                displayName={getDisplayName(participant.userId)}
-                isActiveSpeaker={activeSpeakerId === participant.userId}
-                audioOutputDeviceId={audioOutputDeviceId}
-                onAudioAutoplayBlocked={onAudioAutoplayBlocked}
-                onAudioPlaybackStarted={onAudioPlaybackStarted}
-                audioPlaybackAttemptToken={audioPlaybackAttemptToken}
+        <div
+          className={fullStageBelowLarge ? "hidden lg:contents" : "contents"}
+        >
+          <div className={STAGE_RAIL_CLASS} data-meet-stage-rail>
+            <div className={STAGE_RAIL_TILE_CLASS} data-userid={currentUserId}>
+              <LocalVideoTile
+                stream={localStream}
+                isCameraOff={isCameraOff}
+                isMuted={isMuted}
+                isHandRaised={isHandRaised}
+                isMirrorCamera={isMirrorCamera}
+                displayName={getDisplayName(currentUserId)}
+                userEmail={userEmail}
+                isActiveSpeaker={activeSpeakerId === currentUserId}
+                size="rail"
               />
             </div>
-          ))}
+            {participantsList.map((participant) => (
+              <div
+                key={participant.userId}
+                className={STAGE_RAIL_TILE_CLASS}
+                data-userid={participant.userId}
+              >
+                <ParticipantVideo
+                  participant={participant}
+                  displayName={getDisplayName(participant.userId)}
+                  isActiveSpeaker={activeSpeakerId === participant.userId}
+                  audioOutputDeviceId={audioOutputDeviceId}
+                  onAudioAutoplayBlocked={onAudioAutoplayBlocked}
+                  onAudioPlaybackStarted={onAudioPlaybackStarted}
+                  audioPlaybackAttemptToken={audioPlaybackAttemptToken}
+                />
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     </div>
