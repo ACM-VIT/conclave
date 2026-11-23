@@ -28,7 +28,9 @@ The order puts first the instances that take no new meetings anyway (one
 whose container is down, then one already draining), then the serving ones,
 emptiest first. An instance whose `/status` cannot be read goes last, so an
 idle instance is always rebuilt before one that may carry calls. No instance
-is recreated while it has rooms unless you pass `--force-drain`:
+is recreated while it has rooms unless you pass `--force-drain` (its
+`--force-drain-notice-ms`, 4000 by default, is at most 30000, the longest
+notice the SFU gives; the drain request waits that long for the SFU's answer):
 
 1. Check that every other instance is serving: healthy, a readable `/status`
    that says it is not draining (`/health` stays healthy while an instance

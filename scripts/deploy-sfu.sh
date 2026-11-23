@@ -57,6 +57,12 @@ if ! [[ "$FORCE_DRAIN_NOTICE_MS" =~ ^[0-9]+$ ]]; then
   echo "FORCE_DRAIN_NOTICE_MS must be a non-negative integer (milliseconds)." >&2
   exit 1
 fi
+# The SFU caps a restart notice at 30 s and answers a forced drain only once
+# the notice has run, so a longer one would outlast the request.
+if (( FORCE_DRAIN_NOTICE_MS > 30000 )); then
+  echo "FORCE_DRAIN_NOTICE_MS (--force-drain-notice-ms) is at most 30000, the longest notice the SFU gives." >&2
+  exit 1
+fi
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${ROOT_DIR}/.env"
@@ -93,10 +99,6 @@ if [[ -n "${UPSTASH_REDIS_REST_URL:-}" && -n "${UPSTASH_REDIS_REST_TOKEN:-}" ]];
   HAS_UPSTASH="true"
 fi
 
-if [[ "$HAS_UPSTASH" != "true" && -z "${REDIS_PASSWORD:-}" && -z "${REDIS_URL:-}" && -z "${SFU_REDIS_URL:-}" ]]; then
-  echo "REDIS_PASSWORD, REDIS_URL, or SFU_REDIS_URL is required in .env when not using Upstash" >&2
-  exit 1
-fi
 
 trim() {
   local value="$1"
@@ -388,13 +390,18 @@ fi
 
 # SFU dependencies are installed inside the Docker image; the host does not need them.
 
-# A compose file that defines its own Redis (staging) gets it started; the
-# production file has none and uses the host Redis from .env.
-if [[ "$HAS_UPSTASH" == "true" ]]; then
-  echo "Using Upstash Redis; skipping local Redis container."
-elif [[ "$HAS_REDIS_SERVICE" == "true" ]]; then
+# A compose file that defines its own Redis (staging) gets it started, whatever
+# Upstash settings the shell or a copied .env carries: its SFU reaches only that
+# Redis. The production file has none and uses the host Redis from .env.
+if [[ "$HAS_REDIS_SERVICE" != "true" && "$HAS_UPSTASH" != "true" && -z "${REDIS_PASSWORD:-}" && -z "${REDIS_URL:-}" && -z "${SFU_REDIS_URL:-}" ]]; then
+  echo "REDIS_PASSWORD, REDIS_URL, or SFU_REDIS_URL is required in .env when not using Upstash" >&2
+  exit 1
+fi
+if [[ "$HAS_REDIS_SERVICE" == "true" ]]; then
   echo "Ensuring Redis is running..."
   "${COMPOSE[@]}" up -d redis
+elif [[ "$HAS_UPSTASH" == "true" ]]; then
+  echo "Using Upstash Redis; skipping local Redis container."
 elif [[ -n "${SFU_REDIS_URL:-}" || -n "${REDIS_URL:-}" ]]; then
   echo "Using Redis at $(redis_url_host); skipping compose Redis container."
 else
@@ -564,11 +571,13 @@ deploy_rank() {
 }
 
 set_draining() {
-  local payload="{\"draining\": $2}"
+  local payload="{\"draining\": $2}" max_time=10
   if [[ "$2" == "true" && "$FORCE_DRAIN" == "true" ]]; then
     payload="{\"draining\": true, \"force\": true, \"noticeMs\": ${FORCE_DRAIN_NOTICE_MS}}"
+    # The SFU answers once the notice has run.
+    max_time=$(( 10 + (FORCE_DRAIN_NOTICE_MS + 999) / 1000 ))
   fi
-  curl -fsS --connect-timeout 3 --max-time 10 -X POST "${1}/drain" \
+  curl -fsS --connect-timeout 3 --max-time "$max_time" -X POST "${1}/drain" \
     -H "x-sfu-secret: ${SFU_SECRET}" \
     -H "content-type: application/json" \
     -d "$payload"
@@ -661,7 +670,7 @@ peers_serving() {
 # not boot drained, as an unverified build does) goes back into service before
 # this run drains anything.
 restore_service_when_none_serves() {
-  local svc status container
+  local svc status container env
   for svc in "${ALL_SFU_SERVICES[@]}"; do
     status="$(instance_status "$svc" 2>/dev/null)" || continue
     [[ "$(printf "%s" "$status" | json_field draining)" == "false" ]] && is_healthy "$(service_url "$svc")" && return 0
@@ -672,7 +681,9 @@ restore_service_when_none_serves() {
     is_healthy "$(service_url "$svc")" || continue
     container="$(service_container "$svc")"
     [[ -n "$container" ]] || continue
-    docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$container" | grep -qx 'SFU_DRAINING=true' && continue
+    # Only an env Docker could read shows the container did not boot drained.
+    env="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$container" 2>/dev/null)" || continue
+    grep -qx 'SFU_DRAINING=true' <<< "$env" && continue
     echo "No SFU is taking new meetings; putting ${svc} back into service before this deploy drains anything."
     set_draining "$(service_url "$svc")" false >/dev/null || true
   done
@@ -724,11 +735,13 @@ started_on() {
 # healthy and not draining, and its container did not boot drained, as a
 # container under its canary does.
 serving_now() {
-  local container="$1" status="$2"
+  local container="$1" status="$2" env
   [[ -n "$container" && -n "$status" ]] || return 1
   [[ "$(printf "%s" "$status" | json_field healthy)" == "true" ]] || return 1
   [[ "$(printf "%s" "$status" | json_field draining)" == "false" ]] || return 1
-  ! docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$container" | grep -qx 'SFU_DRAINING=true'
+  # An env Docker cannot read proves nothing about how the container booted.
+  env="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$container" 2>/dev/null)" || return 1
+  ! grep -qx 'SFU_DRAINING=true' <<< "$env"
 }
 
 # Puts an instance back on the image it last served calls on. It counts as

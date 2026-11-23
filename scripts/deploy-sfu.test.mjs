@@ -46,6 +46,7 @@ const startSfu = async (
     replacementHealthy = true,
     bootExit = null,
     stateInspectFails = false,
+    envInspectFails = false,
     statusHealthy = true,
     draining = false,
     onTarget = false,
@@ -86,6 +87,7 @@ const startSfu = async (
         image: sfu.image,
         configHash: sfu.configHash,
         stateInspectFails,
+        envInspectFails,
       });
     }
     if (sfu.container !== "running" && !url.pathname.startsWith("/stand-in/")) return req.socket.destroy();
@@ -100,7 +102,9 @@ const startSfu = async (
       sfu.drains.push(request);
       context.events.push(`drain ${instanceId}`);
       sfu.draining = request.draining === true;
-      // A forced drain ends the instance's rooms after the notice.
+      // A forced drain answers once its notice has run, as the SFU does, and
+      // ends the instance's rooms.
+      if (request.force && request.noticeMs) await new Promise((done) => setTimeout(done, request.noticeMs));
       if (request.force) sfu.rooms = 0;
       return json({ draining: sfu.draining, forced: request.force === true });
     }
@@ -172,7 +176,9 @@ const main = async () => {
   if (args[0] === "compose") {
     const rest = args.slice(1).filter((arg, i, all) => !["--env-file", "-f"].includes(arg) && !["--env-file", "-f"].includes(all[i - 1]));
     const names = Object.keys(sfus);
-    if (rest[0] === "config" && rest[1] === "--services") return out(names.join("\\n"));
+    // DEPLOY_TEST_REDIS_SERVICE: the compose file runs its own Redis, as
+    // staging's does.
+    if (rest[0] === "config" && rest[1] === "--services") return out([...names, ...(process.env.DEPLOY_TEST_REDIS_SERVICE ? ["redis"] : [])].join("\\n"));
     if (rest[0] === "config" && rest[1] === "--format") {
       return out(JSON.stringify({ name: "vm", services: Object.fromEntries(names.map((n, i) => [n, service(n, sfus[n], i)])) }));
     }
@@ -187,6 +193,7 @@ const main = async () => {
       await fetch("http://127.0.0.1:" + sfus[rest.at(-1)].port + "/stand-in/stop");
       return;
     }
+    if (rest[0] === "up" && rest.at(-1) === "redis") return;
     if (rest[0] === "up") {
       const name = rest.at(-1);
       const draining = process.env.SFU_START_DRAINING === "true";
@@ -213,7 +220,14 @@ const main = async () => {
   if (args[0] === "inspect") {
     const format = args[2];
     const name = args.at(-1).replace(/^ctr-/, "");
-    if (format.includes(".Config.Env")) return out("SFU_DRAINING=" + (await state(name)).bootDrained);
+    if (format.includes(".Config.Env")) {
+      const current = await state(name);
+      if (current.envInspectFails) {
+        process.exitCode = 1;
+        return;
+      }
+      return out("SFU_DRAINING=" + current.bootDrained);
+    }
     if (format.includes(".State.Status")) {
       const current = await state(name);
       if (current.stateInspectFails) {
@@ -283,7 +297,7 @@ main();
 // deploy-sfu.sh the checkout starts with, in place of the current one.
 const deploy = async (
   sfus,
-  { args: extraArgs = [], env: extraEnv = {}, envLines = [], upstream, powershell = false, withoutFlock = false, script } = {},
+  { args: extraArgs = [], env: extraEnv = {}, envLines = [], upstream, powershell = false, withoutFlock = false, script, noRedisUrl = false } = {},
 ) => {
   // On macOS this path sits behind the /var symlink, so the preflight also
   // runs through one.
@@ -323,7 +337,7 @@ const deploy = async (
       path.join(vm, ".env"),
       [
         `SFU_SECRET=${secret}`,
-        "REDIS_URL=redis://127.0.0.1:6379/0",
+        ...(noRedisUrl ? [] : ["REDIS_URL=redis://127.0.0.1:6379/0"]),
         ...Object.entries(sfus).flatMap(([name, sfu]) => [
           `SFU_${name.at(-1).toUpperCase()}_URL=http://127.0.0.1:${sfu.port}`,
           `SFU_${name.at(-1).toUpperCase()}_PUBLIC_URL=http://127.0.0.1:${sfu.port}`,
@@ -1122,6 +1136,51 @@ test("FORCE_COLOR in the environment does not change the numbers the deploy read
     const result = await deploy(sfus, { env: { FORCE_COLOR: "1" } });
     assert.equal(result.order, "sfu-b sfu-a", result.output);
     assert.match(result.output, /sfu-b active rooms: 0\n/);
+  });
+});
+
+test("a serving container whose env Docker cannot read is never taken for one that served", async () => {
+  // Greptile: a failed inspect gave grep no match, which read as "did not
+  // boot drained".
+  await withSfus({ "sfu-a": { rooms: 1 }, "sfu-b": { rooms: 0, envInspectFails: true } }, async (sfus) => {
+    const result = await deploy(sfus, { env: { SFU_DEPLOY_SERVICES: "sfu-b", DEPLOY_TEST_NO_BUNDLE: "sha256:target" } });
+    assert.equal(result.code, 5, result.output);
+    assert.match(result.output, /sfu-b has no image it last served calls on; it is stopped/);
+    assert.equal(sfus["sfu-a"].drains.length, 0);
+  });
+});
+
+test("a drained instance whose env Docker cannot read is not put back into service", async () => {
+  // Greptile: with no instance serving, an unreadable env counted as a
+  // container that had served, so an untested build could take meetings.
+  await withSfus({ "sfu-a": { draining: true, envInspectFails: true }, "sfu-b": { draining: true } }, async (sfus) => {
+    const result = await deploy(sfus);
+    assert.deepEqual(sfus["sfu-a"].drains.filter((request) => request.draining === false), [], result.output);
+    assert.ok(sfus["sfu-b"].drains.some((request) => request.draining === false), "the readable one goes back into service");
+  });
+});
+
+test("a forced drain with a long notice waits for the SFU's answer, and a notice past its cap is refused", async () => {
+  await withSfus({ "sfu-a": { rooms: 1 }, "sfu-b": { rooms: 1 } }, async (sfus) => {
+    const refused = await deploy(sfus, { args: ["--force-drain", "--force-drain-notice-ms=30001"] });
+    assert.equal(refused.code, 1, refused.output);
+    assert.match(refused.output, /at most 30000/);
+    assert.equal(sfus["sfu-a"].drains.length + sfus["sfu-b"].drains.length, 0);
+
+    const result = await deploy(sfus, { args: ["--force-drain", "--force-drain-notice-ms=10500"], env: { SFU_DEPLOY_SERVICES: "sfu-a" } });
+    assert.equal(result.code, 0, result.output);
+    assert.match(result.output, /Force drain applied to sfu-a/);
+  });
+});
+
+test("a compose file with its own Redis starts it, with Upstash settings inherited or no Redis URL in .env", async () => {
+  await withSfus({ "sfu-a": {}, "sfu-b": {} }, async (sfus) => {
+    const result = await deploy(sfus, {
+      env: { DEPLOY_TEST_REDIS_SERVICE: "1", UPSTASH_REDIS_REST_URL: "https://upstash.example", UPSTASH_REDIS_REST_TOKEN: "token" },
+      noRedisUrl: true,
+    });
+    assert.equal(result.code, 0, result.output);
+    assert.ok(result.docker.some((args) => args[0] === "compose" && args.slice(-3).join(" ") === "up -d redis"), result.output);
   });
 });
 

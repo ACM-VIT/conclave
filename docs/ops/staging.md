@@ -40,7 +40,9 @@ What A shares, and why it is still safe:
   `SFU_REDIS_URL`, `SFU_PERSISTENCE_REDIS_URL`) from `STAGING_REDIS_PASSWORD`
   and `STAGING_REDIS_PORT`, so a Redis URL in the shell or a copied
   production `.env` never reaches it, and the deploy preflight refuses a
-  config whose SFU points at any Redis but the compose file's own.
+  config whose SFU points at any Redis but the compose file's own. The deploy
+  starts that Redis whatever Upstash settings the shell carries, and needs no
+  `REDIS_URL` in staging's `.env`.
 - **Disk**: `/var/lib/conclave-staging`, never the production state dir.
 - **Ports**: HTTP 3033, RTC 42001-42200 (production uses 3031, 3032 and
   40000-42000). The WebRTC port budget is pinned to 4 in
