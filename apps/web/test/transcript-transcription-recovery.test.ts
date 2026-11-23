@@ -5,7 +5,6 @@ import type {
 } from "@conclave/meeting-core/transcript-types";
 import { TranscriptRoom } from "../transcript-worker/src/room";
 import {
-  TranscriptAudioReplayJournal,
   TranscriptRecoveryAudioBuffer,
   isRetryableTranscriptionFailure,
   transcriptionRecoveryDelayMs,
@@ -62,7 +61,6 @@ type TestableTranscriptRoom = {
   session: TranscriptSessionState | null;
   transcriptionProviderOpeningGeneration: number | null;
   transcriptionRecoveryAudio: TranscriptRecoveryAudioBuffer;
-  transcriptionReplayJournal: TranscriptAudioReplayJournal;
   transcriptionSession: LiveTranscriptionSession | null;
   appendAudio: (
     viewer: Viewer,
@@ -117,28 +115,6 @@ describe("transcription provider recovery", () => {
     expect(transcriptionRecoveryDelayMs(999)).toBe(10_000);
   });
 
-  it("replays only committed audio that has not produced a final item", () => {
-    const journal = new TranscriptAudioReplayJournal();
-    journal.append("audio-a", ada, 2_400, 1_000);
-    journal.commit(ada, 1_100);
-    journal.bindCommittedItem("item-a");
-    journal.append("audio-b", ada, 2_400, 1_200);
-    journal.commit(ada, 1_300);
-    journal.bindCommittedItem("item-b");
-    journal.finalizeItem("item-a");
-
-    expect(journal.takeRecoveryEvents(1_400)).toEqual([
-      {
-        type: "chunk",
-        audio: "audio-b",
-        speaker: ada,
-        sampleCount: 2_400,
-        createdAt: 1_200,
-      },
-      { type: "commit", speaker: ada, createdAt: 1_300 },
-    ]);
-    expect(journal.takeRecoveryEvents()).toEqual([]);
-  });
 
   it("keeps recovery audio ordered and drops stale buffered events", () => {
     const buffer = new TranscriptRecoveryAudioBuffer();
@@ -192,30 +168,4 @@ describe("transcription provider recovery", () => {
     ]);
   });
 
-  it("journals unfinalized Sarvam audio for provider recovery", () => {
-    const room = createTestRoom();
-    room.session = activeSession();
-    room.transcriptionSession = {
-      provider: "sarvam",
-      appendAudio: () => undefined,
-      commitAudio: () => undefined,
-      clearAudio: () => undefined,
-      close: () => undefined,
-    };
-
-    expect(room.appendNormalizedAudio("audio-sarvam", ada, 2_400)).toBe(true);
-    expect(
-      room.commitTranscriptionBuffer(ada, "Sarvam commit failed."),
-    ).toBe(true);
-
-    expect(room.transcriptionReplayJournal.takeRecoveryEvents(2_000)).toEqual([
-      expect.objectContaining({
-        type: "chunk",
-        audio: "audio-sarvam",
-        speaker: ada,
-        sampleCount: 2_400,
-      }),
-      expect.objectContaining({ type: "commit", speaker: ada }),
-    ]);
-  });
 });

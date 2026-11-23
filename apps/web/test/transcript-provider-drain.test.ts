@@ -1,6 +1,20 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { TranscriptRoom } from "../transcript-worker/src/room";
-import type { Env, Viewer } from "../transcript-worker/src/types";
+import {
+  TRANSCRIPTION_LINE_DEADLINE_MS,
+  TRANSCRIPTION_GAP_MARKER,
+} from "../transcript-worker/src/constants";
+import type { Env } from "../transcript-worker/src/types";
+import {
+  OPENAI,
+  SARVAM,
+  openAiCommitted,
+  openAiDelta,
+  openAiFinal,
+  sarvamFinal,
+  seeded,
+  settle,
+  transcriptRoomRig,
+} from "./transcript-room-rig";
 
 const { lookup } = vi.hoisted(() => ({ lookup: vi.fn() }));
 vi.mock("@conclave/ai/room-server", async (original) => ({
@@ -14,172 +28,8 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-type Listener = (event: { data?: unknown }) => void;
-
-class FakeProviderSocket {
-  sent: Record<string, unknown>[] = [];
-  closed = false;
-  private listeners = new Map<string, Listener[]>();
-  accept() {}
-  send(raw: string) {
-    this.sent.push(JSON.parse(raw));
-  }
-  close() {
-    this.closed = true;
-  }
-  addEventListener(type: string, listener: Listener) {
-    this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
-  }
-  emit(event: object) {
-    for (const listener of this.listeners.get("message") ?? []) {
-      listener({ data: JSON.stringify(event) });
-    }
-  }
-  sentTypes() {
-    return this.sent.map((message) => message.type);
-  }
-}
-
-type TestRoom = {
-  loaded: Promise<void>;
-  session: { language?: string; languageChosen?: boolean } | null;
-  segments: { text: string; sequence: number; startMs: number }[];
-  viewers: Map<WebSocket, Viewer>;
-  startSession: (viewer: Viewer, message: object) => Promise<void>;
-  handleMessage: (viewer: Viewer, raw: string) => Promise<void>;
-};
-
-const OPENAI = "gpt-live-transcribe";
-const SARVAM = "saaras:v3";
-const AUDIO = Buffer.alloc(9600).toString("base64");
-
-async function fixture(transcriptModel: string, env: Partial<Env> = {}) {
-  const sockets: FakeProviderSocket[] = [];
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async () => {
-      const socket = new FakeProviderSocket();
-      sockets.push(socket);
-      return { webSocket: socket, status: 101 };
-    }),
-  );
-  lookup.mockResolvedValue({
-    OPENAI_API_KEY: "sk-room",
-    SARVAM_API_KEY: "sarvam-room",
-    CONCLAVE_AI_SETTINGS: JSON.stringify({ transcription: { model: transcriptModel } }),
-  });
-  const snapshots: { segments: { text: string }[] }[] = [];
-  const room = new TranscriptRoom(
-    {
-      storage: {
-        get: async () => undefined,
-        put: async (_key: string, value: { segments: { text: string }[] }) => {
-          snapshots.push(structuredClone(value));
-        },
-        delete: async () => true,
-        setAlarm: async () => {},
-      },
-      waitUntil: () => undefined,
-    } as unknown as DurableObjectState,
-    { TRANSCRIPT_TRANSCRIPTION_LANGUAGE: "en", ...env } as Env,
-  ) as unknown as TestRoom;
-  await room.loaded;
-  const viewer = {
-    id: "host",
-    userId: "host",
-    displayName: "Host",
-    socket: { send: vi.fn() },
-    sfuUrl: "https://sfu.example",
-    clientId: "conclave",
-    channelId: "room",
-    capabilities: { start: true, stop: true, takeover: true },
-    rateLimits: {},
-  } as unknown as Viewer;
-  room.viewers.set(viewer.socket, viewer);
-  const session = { transcriptModel, qaModel: "gpt-6.1-sol", transportMode: "sfu" };
-  const start = (language?: string) =>
-    room.startSession(viewer, { ...session, type: "session.start", language });
-  const switchTo = (language?: string | null) =>
-    room.startSession(viewer, { ...session, type: "session.takeover", language });
-  const send = (message: object) => room.handleMessage(viewer, JSON.stringify(message));
-  const stop = () => send({ type: "session.stop" });
-  const speak = () => send({ type: "audio.chunk", audio: AUDIO });
-  const commit = () => send({ type: "audio.commit" });
-  const savedTexts = () => room.segments.map(({ text }) => text);
-  const broadcastFinals = () =>
-    (viewer.socket.send as ReturnType<typeof vi.fn>).mock.calls
-      .map(([raw]) => JSON.parse(raw))
-      .filter((message) => message.type === "segment.final")
-      .map((message) => message.segment.text);
-  const lastSnapshotTexts = () => snapshots.at(-1)?.segments.map(({ text }) => text) ?? [];
-  const broadcastPlaces = () => {
-    const places = new Map<string, Set<number>>();
-    for (const [raw] of (viewer.socket.send as ReturnType<typeof vi.fn>).mock.calls) {
-      const message = JSON.parse(raw);
-      const line = message.type === "segment.delta" ? message.delta : message.type === "segment.final" ? message.segment : null;
-      if (!line) continue;
-      places.set(line.itemId, (places.get(line.itemId) ?? new Set()).add(line.sequence));
-    }
-    return places;
-  };
-  const lastSnapshotSegment = (text: string) =>
-    snapshots.at(-1)?.segments.find((segment) => segment.text === text);
-  const snapshotCount = () => snapshots.length;
-  const restartedTexts = async (snapshotIndex = snapshots.length - 1) => {
-    const saved = structuredClone(snapshots[snapshotIndex]);
-    const restarted = new TranscriptRoom(
-      {
-        storage: {
-          get: async (key: string) => (key === "snapshot" ? saved : undefined),
-          put: async () => {},
-          delete: async () => true,
-          setAlarm: async () => {},
-        },
-        waitUntil: () => undefined,
-      } as unknown as DurableObjectState,
-      { TRANSCRIPT_TRANSCRIPTION_LANGUAGE: "en", ...env } as Env,
-    ) as unknown as TestRoom;
-    await restarted.loaded;
-    return restarted.segments.map(({ text }) => text);
-  };
-  const viewerSnapshot = async () => {
-    await send({ type: "export.snapshot" });
-    return (viewer.socket.send as ReturnType<typeof vi.fn>).mock.calls
-      .map(([raw]) => JSON.parse(raw))
-      .filter((message) => message.type === "snapshot")
-      .at(-1);
-  };
-  return {
-    room,
-    sockets,
-    start,
-    switchTo,
-    stop,
-    speak,
-    commit,
-    savedTexts,
-    broadcastFinals,
-    lastSnapshotTexts,
-    lastSnapshotSegment,
-    restartedTexts,
-    snapshotCount,
-    broadcastPlaces,
-    viewerSnapshot,
-  };
-}
-
-const settle = () => vi.advanceTimersByTimeAsync(0);
-const openAiCommitted = (itemId: string) => ({ type: "input_audio_buffer.committed", item_id: itemId });
-const openAiDelta = (itemId: string, delta: string) => ({
-  type: "conversation.item.input_audio_transcription.delta",
-  item_id: itemId,
-  delta,
-});
-const openAiFinal = (itemId: string, transcript: string) => ({
-  type: "conversation.item.input_audio_transcription.completed",
-  item_id: itemId,
-  transcript,
-});
+const fixture = (transcriptModel: string, env: Partial<Env> = {}) =>
+  transcriptRoomRig(lookup, transcriptModel, env);
 
 describe("switching the caption language keeps speech the old provider already has", () => {
   it("Sarvam: saves a final that arrives after the switch with no partial before it", async () => {
@@ -271,17 +121,13 @@ describe("switching the caption language keeps speech the old provider already h
     await settle();
 
     await switchTo("hi");
-    await vi.advanceTimersByTimeAsync(15_000);
+    await vi.advanceTimersByTimeAsync(TRANSCRIPTION_LINE_DEADLINE_MS + 100);
 
     expect(savedTexts()).toEqual(["Friday"]);
     expect(before.closed).toBe(true);
   });
 });
 
-const sarvamFinal = (requestId: string, transcript: string) => ({
-  type: "data",
-  data: { transcript, request_id: requestId },
-});
 describe("drain cases reproduced across review rounds", () => {
   it("Sarvam: keeps the old socket open for a second buffered utterance after the first final", async () => {
     vi.useFakeTimers();
@@ -450,7 +296,7 @@ describe("drain cases reproduced across review rounds", () => {
 
     await switchTo("hi");
     const finishing = snapshotCount();
-    await vi.advanceTimersByTimeAsync(15_000);
+    await vi.advanceTimersByTimeAsync(TRANSCRIPTION_LINE_DEADLINE_MS + 100);
 
     expect(snapshotCount()).toBeGreaterThan(finishing);
     expect(await restartedTexts(finishing)).toEqual(["First line", "Second line"]);
@@ -525,7 +371,8 @@ describe("drain cases reproduced across review rounds", () => {
 
   it("Sarvam: ends three drains with unanswered flushes at their deadlines", async () => {
     vi.useFakeTimers();
-    const { sockets, start, switchTo, speak, stop } = await fixture(SARVAM);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { sockets, start, switchTo, speak, stop, savedTexts } = await fixture(SARVAM);
     await start("hi");
     for (const language of ["ta", "bn", "en"]) {
       await speak();
@@ -534,7 +381,10 @@ describe("drain cases reproduced across review rounds", () => {
     expect(sockets.map(({ closed }) => closed)).toEqual([false, false, false, false]);
 
     await vi.advanceTimersByTimeAsync(10_001);
+    expect(sockets.map(({ closed }) => closed)).toEqual([false, false, false, false]);
+    await vi.advanceTimersByTimeAsync(TRANSCRIPTION_LINE_DEADLINE_MS);
     expect(sockets.map(({ closed }) => closed)).toEqual([true, true, true, false]);
+    expect(savedTexts()).toEqual([TRANSCRIPTION_GAP_MARKER, TRANSCRIPTION_GAP_MARKER, TRANSCRIPTION_GAP_MARKER]);
     await stop();
     expect(sockets.every(({ closed }) => closed)).toBe(true);
   });
@@ -627,18 +477,20 @@ describe("order inside a replaced provider", () => {
 });
 
 describe("drain lifetime", () => {
-  it("Sarvam: a replaced provider that never answers closes at the deadline, not at the quiet window", async () => {
+  it("Sarvam: a replaced provider that never answers stays open past the quiet window and ends its line as a gap", async () => {
     vi.useFakeTimers();
-    const { sockets, start, switchTo, speak } = await fixture(SARVAM);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { sockets, start, switchTo, speak, savedTexts } = await fixture(SARVAM);
     await start("hi");
     const before = sockets[0];
     await speak();
 
     await switchTo("ta");
-    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(10_100);
     expect(before.closed).toBe(false);
-    await vi.advanceTimersByTimeAsync(5_100);
+    await vi.advanceTimersByTimeAsync(TRANSCRIPTION_LINE_DEADLINE_MS - 10_000);
     expect(before.closed).toBe(true);
+    expect(savedTexts()).toEqual([TRANSCRIPTION_GAP_MARKER]);
   });
 
   it("stopping notes ends every drain and ignores what the old provider sends after", async () => {
@@ -744,12 +596,6 @@ describe("the language a session reports", () => {
 });
 
 
-const seeded = (seed: number) => () => {
-  seed = (seed + 0x6d2b79f5) | 0;
-  let value = Math.imul(seed ^ (seed >>> 15), seed | 1);
-  value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
-  return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
-};
 const shuffled = <T,>(items: T[], random: () => number) => {
   const copy = [...items];
   for (let index = copy.length - 1; index > 0; index -= 1) {
@@ -763,7 +609,7 @@ describe("caption lines across a switch keep commit order", () => {
   it.each(Array.from({ length: 300 }, (_, index) => index + 1))("seed %i", async (seed) => {
     vi.useFakeTimers();
     const random = seeded(seed);
-    const { sockets, start, switchTo, speak, commit, savedTexts, broadcastPlaces } = await fixture(OPENAI);
+    const { sockets, start, switchTo, speak, commit, savedTexts, broadcastPlacesByWords } = await fixture(OPENAI);
     await start("en");
     const before = sockets[0];
     const oldIds = Array.from({ length: 1 + Math.floor(random() * 5) }, (_, index) => `old_${index}`);
@@ -824,7 +670,7 @@ describe("caption lines across a switch keep commit order", () => {
 
     const commitOrder = [...oldIds, ...newIds];
     expect(savedTexts()).toEqual(commitOrder.map((id) => `${id}.`));
-    const places = broadcastPlaces();
+    const places = broadcastPlacesByWords();
     for (const id of commitOrder) expect([...(places.get(id) ?? [])], `${id} keeps one place`).toHaveLength(1);
     const placeOf = (id: string) => [...places.get(id)!][0];
     expect([...commitOrder].sort((left, right) => placeOf(left) - placeOf(right))).toEqual(commitOrder);
@@ -834,7 +680,7 @@ describe("caption lines across a switch keep commit order", () => {
 describe("one place per line, fixed at commit", () => {
   it("keeps an earlier line with partial text ahead of a later line that finished before the switch", async () => {
     vi.useFakeTimers();
-    const { sockets, start, switchTo, speak, commit, savedTexts, broadcastPlaces } = await fixture(OPENAI);
+    const { sockets, start, switchTo, speak, commit, savedTexts, broadcastPlacesByWords } = await fixture(OPENAI);
     await start("en");
     const before = sockets[0];
     await speak();
@@ -852,7 +698,7 @@ describe("one place per line, fixed at commit", () => {
     await settle();
 
     expect(savedTexts()).toEqual(["Earlier.", "Later."]);
-    expect([...broadcastPlaces().get("earlier")!]).toHaveLength(1);
+    expect([...broadcastPlacesByWords().get("Earlier")!]).toHaveLength(1);
   });
 
   it.each(Array.from({ length: 100 }, (_, index) => index + 1))("Sarvam keeps commit order, seed %i", async (seed) => {
@@ -886,5 +732,81 @@ describe("one place per line, fixed at commit", () => {
     }
 
     expect(savedTexts()).toEqual([...oldIds, ...newIds].map((id) => `${id}.`));
+  });
+});
+
+describe("a switch never drops audio the old provider acknowledged", () => {
+  it("gap-marks only the item that failed and keeps draining the rest", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { sockets, start, switchTo, speak, commit, savedTexts } = await fixture(OPENAI);
+    await start("fr");
+    const before = sockets[0];
+    await speak();
+    await commit();
+    before.emit(openAiCommitted("failed"));
+    await speak();
+    await commit();
+    before.emit(openAiCommitted("healthy"));
+    await settle();
+
+    await switchTo("de");
+    before.emit({
+      type: "conversation.item.input_audio_transcription.failed",
+      item_id: "failed",
+      error: { message: "This item could not be transcribed" },
+    });
+    await settle();
+    expect(before.closed).toBe(false);
+    await vi.advanceTimersByTimeAsync(15_000);
+    before.emit(openAiFinal("healthy", "Healthy line."));
+    await settle();
+
+    expect(savedTexts()).toEqual([TRANSCRIPTION_GAP_MARKER, "Healthy line."]);
+    expect(before.closed).toBe(true);
+  });
+
+  it("keeps an acknowledged line whose final arrives 15 s after the switch, in speaking order", async () => {
+    vi.useFakeTimers();
+    const { sockets, start, switchTo, speak, commit, savedTexts } = await fixture(OPENAI);
+    await start("fr");
+    const french = sockets[0];
+    await speak();
+    await commit();
+    french.emit(openAiCommitted("fr_1"));
+    await settle();
+
+    await switchTo("de");
+    const german = sockets[1];
+    await speak();
+    await commit();
+    german.emit(openAiCommitted("de_1"));
+    german.emit(openAiFinal("de_1", "German line."));
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(french.closed).toBe(false);
+    french.emit(openAiFinal("fr_1", "French line."));
+    await settle();
+
+    expect(savedTexts()).toEqual(["French line.", "German line."]);
+    expect(french.closed).toBe(true);
+  });
+
+  it("records a gap, and logs it, when an acknowledged line never arrives before the bound", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { sockets, start, switchTo, speak, commit, savedTexts } = await fixture(OPENAI);
+    await start("fr");
+    const french = sockets[0];
+    await speak();
+    await commit();
+    french.emit(openAiCommitted("fr_1"));
+    await settle();
+
+    await switchTo("de");
+    await vi.advanceTimersByTimeAsync(TRANSCRIPTION_LINE_DEADLINE_MS + 100);
+
+    expect(savedTexts()).toEqual([TRANSCRIPTION_GAP_MARKER]);
+    expect(french.closed).toBe(true);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("not captioned"), expect.anything());
   });
 });

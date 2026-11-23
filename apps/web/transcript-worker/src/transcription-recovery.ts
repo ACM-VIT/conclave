@@ -7,7 +7,6 @@ import {
   TRANSCRIPTION_RECOVERY_MAX_AUDIO_BYTES,
   TRANSCRIPTION_RECOVERY_MAX_EVENTS,
 } from "./constants";
-import { isSameTranscriptAudioSpeaker } from "./audio-speaker";
 
 export type BufferedTranscriptAudioEvent =
   | {
@@ -22,19 +21,6 @@ export type BufferedTranscriptAudioEvent =
       speaker: TranscriptSpeaker;
       createdAt: number;
     };
-
-type ReplayBatch = {
-  sequence: number;
-  speaker: TranscriptSpeaker;
-  chunks: Array<{
-    audio: string;
-    sampleCount: number;
-    createdAt: number;
-  }>;
-  createdAt: number;
-  committedAt: number;
-  bytes: number;
-};
 
 const eventBytes = (event: BufferedTranscriptAudioEvent): number =>
   event.type === "chunk" ? event.audio.length : 0;
@@ -114,142 +100,3 @@ export class TranscriptRecoveryAudioBuffer {
   }
 }
 
-export class TranscriptAudioReplayJournal {
-  private current:
-    | Omit<ReplayBatch, "sequence" | "committedAt">
-    | null = null;
-  private batches: ReplayBatch[] = [];
-  private pendingBindings: ReplayBatch[] = [];
-  private readonly itemBatches = new Map<string, ReplayBatch>();
-  private nextSequence = 0;
-  private bytes = 0;
-
-  append(
-    audio: string,
-    speaker: TranscriptSpeaker,
-    sampleCount: number,
-    now = Date.now(),
-  ): void {
-    if (
-      !this.current ||
-      !isSameTranscriptAudioSpeaker(this.current.speaker, speaker)
-    ) {
-      this.current = {
-        speaker,
-        chunks: [],
-        createdAt: now,
-        bytes: 0,
-      };
-    }
-    this.current.chunks.push({ audio, sampleCount, createdAt: now });
-    this.current.bytes += audio.length;
-    this.bytes += audio.length;
-    this.prune(now);
-  }
-
-  commit(speaker: TranscriptSpeaker, now = Date.now()): void {
-    if (
-      !this.current ||
-      !isSameTranscriptAudioSpeaker(this.current.speaker, speaker) ||
-      this.current.chunks.length === 0
-    ) {
-      return;
-    }
-    const batch: ReplayBatch = {
-      ...this.current,
-      sequence: this.nextSequence,
-      committedAt: now,
-    };
-    this.nextSequence += 1;
-    this.current = null;
-    this.batches.push(batch);
-    this.pendingBindings.push(batch);
-    this.prune(now);
-  }
-
-  bindCommittedItem(itemId: string): void {
-    let batch = this.pendingBindings.shift();
-    while (batch && !this.batches.includes(batch)) {
-      batch = this.pendingBindings.shift();
-    }
-    if (batch) this.itemBatches.set(itemId, batch);
-  }
-
-  finalizeItem(itemId: string): void {
-    const batch = this.itemBatches.get(itemId);
-    if (!batch) return;
-    this.itemBatches.delete(itemId);
-    this.removeBatch(batch);
-  }
-
-  takeRecoveryEvents(now = Date.now()): BufferedTranscriptAudioEvent[] {
-    const batches = [...this.batches];
-    if (this.current?.chunks.length) {
-      batches.push({
-        ...this.current,
-        sequence: this.nextSequence,
-        committedAt: now,
-      });
-    }
-    batches.sort((left, right) => left.sequence - right.sequence);
-    const events = batches.flatMap<BufferedTranscriptAudioEvent>((batch) => [
-      ...batch.chunks.map<BufferedTranscriptAudioEvent>((chunk) => ({
-        type: "chunk",
-        audio: chunk.audio,
-        speaker: batch.speaker,
-        sampleCount: chunk.sampleCount,
-        createdAt: chunk.createdAt,
-      })),
-      {
-        type: "commit",
-        speaker: batch.speaker,
-        createdAt: batch.committedAt,
-      },
-    ]);
-    this.reset();
-    return events;
-  }
-
-  reset(): void {
-    this.current = null;
-    this.batches = [];
-    this.pendingBindings = [];
-    this.itemBatches.clear();
-    this.bytes = 0;
-  }
-
-  private prune(now: number): void {
-    const cutoff = now - TRANSCRIPTION_RECOVERY_MAX_AUDIO_AGE_MS;
-    while (
-      this.batches.length > 0 &&
-      (this.bytes > TRANSCRIPTION_RECOVERY_MAX_AUDIO_BYTES ||
-        (this.batches[0]?.createdAt ?? now) < cutoff)
-    ) {
-      const batch = this.batches[0];
-      if (!batch) break;
-      this.removeBatch(batch);
-    }
-
-    if (this.current && this.bytes > TRANSCRIPTION_RECOVERY_MAX_AUDIO_BYTES) {
-      while (
-        this.current.chunks.length > 0 &&
-        this.bytes > TRANSCRIPTION_RECOVERY_MAX_AUDIO_BYTES
-      ) {
-        const chunk = this.current.chunks.shift();
-        if (!chunk) break;
-        this.current.bytes -= chunk.audio.length;
-        this.bytes -= chunk.audio.length;
-      }
-      if (this.current.chunks.length === 0) this.current = null;
-    }
-  }
-
-  private removeBatch(batch: ReplayBatch): void {
-    const index = this.batches.indexOf(batch);
-    if (index >= 0) this.batches.splice(index, 1);
-    this.bytes -= batch.bytes;
-    for (const [itemId, candidate] of this.itemBatches) {
-      if (candidate === batch) this.itemBatches.delete(itemId);
-    }
-  }
-}

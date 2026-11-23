@@ -33,6 +33,12 @@ export const TRANSCRIPT_SFU_RELAY_RECOVERY_ATTEMPTS = 8;
 export const TRANSCRIPTION_CONNECT_TIMEOUT_MS = 10_000;
 export const TRANSCRIPTION_COMMIT_ACK_TIMEOUT_MS = 45_000;
 export const TRANSCRIPTION_PROVIDER_DRAIN_MS = 10_000;
+/** How long a line a provider accepted waits for its final before it ends as its words or a gap. */
+export const TRANSCRIPTION_LINE_DEADLINE_MS = 30_000;
+/** Shown in place of a line our side heard speech in that its provider never finished. */
+export const TRANSCRIPTION_GAP_MARKER = "[Some speech here was not captioned]";
+/** How long audio no line owns is kept for a late speech signal to claim; it is never replayed on its own. */
+export const UNOWNED_AUDIO_KEPT_MS = 3_000;
 // Sequence numbers reserved for a replaced provider's late lines, so speech
 // from before a language switch sorts ahead of the new provider's.
 export const TRANSCRIPTION_DRAIN_SEQUENCE_BLOCK = 64;

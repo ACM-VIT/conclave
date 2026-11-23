@@ -1,3 +1,4 @@
+import { TRANSCRIPTION_LINE_DEADLINE_MS } from "../transcript-worker/src/constants";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TranscriptRoom } from "../transcript-worker/src/room";
 import { connectSarvamTranscription } from "../transcript-worker/src/transcription/sarvam";
@@ -132,7 +133,7 @@ describe("switching the caption language mid-sentence", () => {
 
     await room.startSession(viewer, { ...roomSession, type: "session.takeover", language: "hi" });
     expect(savedTexts(room)).toEqual([]);
-    await vi.advanceTimersByTimeAsync(15_000);
+    await vi.advanceTimersByTimeAsync(TRANSCRIPTION_LINE_DEADLINE_MS + 100);
 
     expect(savedTexts(room)).toEqual(["The release date is"]);
     expect(before.close).toHaveBeenCalled();
