@@ -46,6 +46,7 @@ const makeRoom = () => {
   const join = (id: string, role: "host" | "participant", doc: Y.Doc = new Y.Doc()) => {
     const listeners = new Map<string, Listener>();
     const relayed: Sent[] = [];
+    const received: Sent[] = [];
     const socket = {
       id: `socket-${id}`,
       data: { user: {} },
@@ -56,7 +57,10 @@ const makeRoom = () => {
       to: () => ({
         emit: (event: string, payload: unknown) => relayed.push({ event, payload }),
       }),
-      emit: vi.fn(),
+      emit: (event: string, payload: unknown) => {
+        received.push({ event, payload });
+        return true;
+      },
     } as unknown as Socket;
     const client = role === "host" ? new Admin({ id, socket }) : new Client({ id, socket });
     room.addClient(client);
@@ -72,11 +76,36 @@ const makeRoom = () => {
       });
       return response as T;
     };
+    // Like every client, sync the presented app once per stay on the stage
+    // before writing to it.
+    let syncedActivation: number | null = null;
+    const sync = (appId: string) => {
+      const response = ask<{ syncMessage?: Uint8Array; stateVector?: Uint8Array; error?: string }>(
+        "apps:yjs:sync",
+        { appId, syncMessage: Y.encodeStateVector(doc) },
+      );
+      if (response.syncMessage) {
+        Y.applyUpdate(doc, response.syncMessage);
+        syncedActivation = room.apps.activation;
+      }
+      return response;
+    };
+    const ensureSynced = (appId: string) => {
+      if (syncedActivation !== room.apps.activation) sync(appId);
+    };
+    const send = (appId: string, update: Uint8Array) =>
+      listeners.get("apps:yjs:update")!({ appId, update });
     return {
       relayed,
+      received,
       doc,
-      sendUpdate: (appId: string, update: Uint8Array) =>
-        listeners.get("apps:yjs:update")!({ appId, update }),
+      sendUpdate: (appId: string, update: Uint8Array) => {
+        ensureSynced(appId);
+        send(appId, update);
+      },
+      // Sends without syncing first, as an older client that draws before its
+      // first sync reply arrives does.
+      sendBeforeSync: send,
       present: (appId: string, expectedRevision?: number) =>
         ask<{ success: boolean; error?: string }>("apps:open", { appId, expectedRevision }),
       closeLegacy: () => ask<{ success: boolean; error?: string }>("apps:close"),
@@ -88,25 +117,21 @@ const makeRoom = () => {
         ask<{ success: boolean; error?: string }>("apps:lock", { locked, expectedRevision }),
       state: () => ask<AppsState>("apps:getState"),
       draw: (appId: string, key: string, value: unknown = true) => {
+        ensureSynced(appId);
         const before = Y.encodeStateVector(doc);
         doc.getMap("shapes").set(key, value);
         listeners.get("apps:yjs:update")!({ appId, update: Y.encodeStateAsUpdate(doc, before) });
       },
       // Sends everything this client's copy holds, whoever wrote it.
-      sendWholeCopy: (appId: string) =>
-        listeners.get("apps:yjs:update")!({ appId, update: Y.encodeStateAsUpdate(doc) }),
+      sendWholeCopy: (appId: string) => {
+        ensureSynced(appId);
+        send(appId, Y.encodeStateAsUpdate(doc));
+      },
       // What a native client does when it reconnects: sync its local copy,
       // then send the server whatever that copy has and the server lacks.
       resync: (appId: string) => {
-        const response = ask<{ syncMessage: Uint8Array; stateVector: Uint8Array }>(
-          "apps:yjs:sync",
-          { appId, syncMessage: Y.encodeStateVector(doc) },
-        );
-        Y.applyUpdate(doc, response.syncMessage);
-        listeners.get("apps:yjs:update")!({
-          appId,
-          update: Y.encodeStateAsUpdate(doc, response.stateVector),
-        });
+        const response = sync(appId);
+        send(appId, Y.encodeStateAsUpdate(doc, response.stateVector));
       },
       sendAwareness: (appId: string, awareness: Awareness) =>
         listeners.get("apps:awareness")!({
@@ -124,6 +149,11 @@ const makeRoom = () => {
         }),
       syncReply: (appId: string) =>
         ask<unknown>("apps:yjs:sync", { appId, syncMessage: Y.encodeStateVector(new Y.Doc()) }),
+      coldUpdate: (appId: string) =>
+        ask<{ syncMessage: Uint8Array }>("apps:yjs:sync", {
+          appId,
+          syncMessage: Y.encodeStateVector(new Y.Doc()),
+        }).syncMessage,
       // What a client that joins (or returns to) the app now receives.
       coldSync: (appId: string) => {
         const response = ask<{ syncMessage?: Uint8Array; error?: string }>("apps:yjs:sync", {
@@ -154,6 +184,27 @@ const forgedUpdate = (clientID: number, clock: number, key: string): Uint8Array 
 
 const clockOf = (doc: Y.Doc): number =>
   Y.decodeStateVector(Y.encodeStateVector(doc)).get(doc.clientID) ?? 0;
+
+// Writes a page of strokes the way a whiteboard does: one page map under a
+// fixed key of the board, holding a stroke per key.
+const writePage = (doc: Y.Doc, strokes: string[]): Uint8Array => {
+  const before = Y.encodeStateVector(doc);
+  const board = doc.getMap("board");
+  let page = board.get("page");
+  if (!(page instanceof Y.Map)) {
+    page = new Y.Map();
+    board.set("page", page);
+  }
+  for (const stroke of strokes) (page as Y.Map<boolean>).set(stroke, true);
+  return Y.encodeStateAsUpdate(doc, before);
+};
+
+const pageOf = (update: Uint8Array): string[] => {
+  const doc = new Y.Doc();
+  Y.applyUpdate(doc, update);
+  const page = doc.getMap("board").get("page");
+  return page instanceof Y.Map ? Array.from(page.keys()).sort() : [];
+};
 
 const lastState = (broadcasts: Sent[]): AppsState =>
   broadcasts.filter((sent) => sent.event === "apps:state").at(-1)!.payload as AppsState;
@@ -607,6 +658,85 @@ describe("Yjs client ids", () => {
     expect(join("late#1", "participant").coldSync("whiteboard")).toEqual({
       shapes: ["circle", "square"],
     });
+  });
+});
+
+describe("writes made before a client's first sync", () => {
+  // A host saves a page, closes the board and presents it again; an older
+  // client then opens it on a fresh copy and draws before the room's copy
+  // reaches it. Its page would replace the saved one for everyone.
+  const savedBoardWithEarlyDrawer = () => {
+    const { room, join } = makeRoom();
+    const hostDoc = new Y.Doc();
+    hostDoc.clientID = 1;
+    const host = join("host#1", "host", hostDoc);
+    host.present("whiteboard");
+    host.sendUpdate("whiteboard", writePage(hostDoc, ["kept-1", "kept-2"]));
+    host.close(host.state().revision);
+    host.present("whiteboard");
+    const earlyDoc = new Y.Doc();
+    earlyDoc.clientID = 2 ** 31;
+    const early = join("early#1", "participant", earlyDoc);
+    const cold = () => pageOf(join(`cold#${Math.random()}`, "participant").coldUpdate("whiteboard"));
+    return { room, host, early, earlyDoc, cold };
+  };
+
+  it("keeps the saved board when an older client draws before its first sync", () => {
+    const { early, earlyDoc, cold } = savedBoardWithEarlyDrawer();
+
+    early.sendBeforeSync("whiteboard", writePage(earlyDoc, ["early"]));
+    const pushed = early.received.find((sent) => sent.event === "apps:yjs:update");
+    expect(pushed).toBeDefined();
+    const roomCopy = (pushed!.payload as { update: Uint8Array }).update;
+    Y.applyUpdate(earlyDoc, roomCopy);
+    early.sendBeforeSync(
+      "whiteboard",
+      Y.encodeStateAsUpdate(earlyDoc, Y.encodeStateVectorFromUpdate(roomCopy)),
+    );
+    early.sendBeforeSync("whiteboard", writePage(earlyDoc, ["later"]));
+
+    expect(early.relayed).toEqual([]);
+    expect(cold()).toEqual(["kept-1", "kept-2"]);
+  });
+
+  it("takes an early write that replaces nothing once the client has the room's copy", () => {
+    const { early, earlyDoc, cold } = savedBoardWithEarlyDrawer();
+    const before = Y.encodeStateVector(earlyDoc);
+    earlyDoc.getMap("notes").set("early", true);
+
+    early.sendBeforeSync("whiteboard", Y.encodeStateAsUpdate(earlyDoc, before));
+    expect(early.relayed).toEqual([]);
+    early.resync("whiteboard");
+
+    expect(early.relayed.map((sent) => sent.event)).toEqual(["apps:yjs:update"]);
+    expect(cold()).toEqual(["kept-1", "kept-2"]);
+  });
+
+  it("sends a client that writes before syncing the room's copy once per stay", () => {
+    const { early, earlyDoc } = savedBoardWithEarlyDrawer();
+
+    early.sendBeforeSync("whiteboard", writePage(earlyDoc, ["early-1"]));
+    early.sendBeforeSync("whiteboard", writePage(earlyDoc, ["early-2"]));
+
+    const pushes = early.received.filter((sent) => sent.event === "apps:yjs:update");
+    expect(pushes).toHaveLength(1);
+    expect(pageOf((pushes[0]!.payload as { update: Uint8Array }).update)).toEqual([
+      "kept-1",
+      "kept-2",
+    ]);
+  });
+
+  it("lets a synced client replace a value it has seen", () => {
+    const { host, cold } = savedBoardWithEarlyDrawer();
+    const hostDoc = host.doc;
+    const before = Y.encodeStateVector(hostDoc);
+    const fresh = new Y.Map<boolean>();
+    hostDoc.getMap("board").set("page", fresh);
+    fresh.set("redrawn", true);
+
+    host.sendUpdate("whiteboard", Y.encodeStateAsUpdate(hostDoc, before));
+
+    expect(cold()).toEqual(["redrawn"]);
   });
 });
 

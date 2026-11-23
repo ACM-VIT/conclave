@@ -20,6 +20,8 @@ import { Admin } from "../../../config/classes/Admin.js";
 import {
   MAX_APP_DOC_BYTES,
   type AppAwarenessRemoval,
+  type AppSyncMark,
+  type RoomApps,
   type StageCommandResult,
 } from "../../roomApps.js";
 import { Logger } from "../../../utilities/loggers.js";
@@ -144,6 +146,11 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
   const { socket, io } = context;
   // The stage this socket last synced without spending its sync budget.
   let lastFreeSyncStage: string | null = null;
+  // What the room had sent this socket when it last synced the presented
+  // app, and which room's apps that was.
+  let synced: { apps: RoomApps; mark: AppSyncMark } | null = null;
+  const syncMarkHere = (): AppSyncMark | null =>
+    synced && synced.apps === context.currentRoom?.apps ? synced.mark : null;
 
   const emitAppsState = (): AppsState => {
     const state = getRoomAppsState(context);
@@ -323,6 +330,8 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
         respond(callback, { error: "App document too large to sync" });
         return;
       }
+      const mark = context.currentRoom.apps.syncMark(appId);
+      if (mark) synced = { apps: context.currentRoom.apps, mark };
       const awarenessSnapshot =
         context.currentRoom.apps.encodeAwarenessSnapshot(appId) ?? undefined;
       const awarenessUpdate =
@@ -354,8 +363,31 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     const update = toUint8Array(data.update);
     if (!update || update.length === 0) return;
     if (update.length > MAX_APPS_UPDATE_BYTES) return;
-    if (!context.currentRoom.apps.acceptsContent(appId, context.currentClient.id, update)) {
-      Logger.warn(`[Apps] Dropping update for ${appId}: its client ids or content are not this writer's to send`);
+
+    // A socket writes only once the room has sent it the app's state for
+    // this stay on the stage. One that writes first, as an older client
+    // drawing before its sync reply arrives does, gets that state instead.
+    const mark = syncMarkHere();
+    if (!context.currentRoom.apps.isCurrentSync(mark)) {
+      const resync = context.currentRoom.apps.syncMark(appId);
+      if (resync) {
+        synced = { apps: context.currentRoom.apps, mark: resync };
+        socket.emit("apps:yjs:update", {
+          appId,
+          update: Y.encodeStateAsUpdate(doc),
+        } satisfies AppsUpdateData);
+      }
+      Logger.warn(`[Apps] Dropping update for ${appId} from ${context.currentClient.id}: not_synced`);
+      return;
+    }
+    const refusal = context.currentRoom.apps.contentRefusal(
+      appId,
+      context.currentClient.id,
+      update,
+      mark,
+    );
+    if (refusal) {
+      Logger.warn(`[Apps] Dropping update for ${appId} from ${context.currentClient.id}: ${refusal}`);
       return;
     }
     if (!context.currentRoom.apps.reserveUpdate(appId, update)) {

@@ -37,6 +37,26 @@ export type AppAwarenessRemoval = {
   awarenessUpdate: Uint8Array;
 };
 
+/**
+ * What the room had sent a socket when it last synced the presented app,
+ * for one stay of that app on the stage. The socket keeps it and hands it
+ * back with each update.
+ */
+export type AppSyncMark = {
+  readonly activation: number;
+  readonly seen: ReadonlyMap<number, number>;
+};
+
+export type ContentRefusal =
+  | "not_live"
+  | "not_synced"
+  | "malformed"
+  | "unresolved"
+  | "unseen_value"
+  | "other_app"
+  | "cleared"
+  | "foreign_id";
+
 export type AppsSnapshot = {
   activeAppId: string | null;
   locked: boolean;
@@ -81,22 +101,70 @@ const writersOf = (doc: Y.Doc): Iterable<number> =>
 const clearedWriterKey = (appId: string, client: number): string =>
   `${appId}\u0000${client}`;
 
-// The Yjs clients an update writes as, and every client it writes as, builds
-// on or deletes from.
-const clientsIn = (update: Uint8Array): { writers: Set<number>; touched: Set<number> } => {
-  const { structs, ds } = Y.decodeUpdate(update);
-  const writers = new Set<number>();
-  const touched = new Set<number>(ds.clients.keys());
-  for (const struct of structs) {
-    writers.add(struct.id.client);
-    touched.add(struct.id.client);
-    if (struct instanceof Y.Item) {
-      if (struct.origin) touched.add(struct.origin.client);
-      if (struct.rightOrigin) touched.add(struct.rightOrigin.client);
-      if (struct.parent instanceof Y.ID) touched.add(struct.parent.client);
+// The live value under `key` of the map `parent` names in `doc`: a root type
+// by name, or a nested type by the id of the item holding it.
+const liveMapValue = (doc: Y.Doc, parent: unknown, key: string): Y.Item | null => {
+  let entries: Map<string, Y.Item> | undefined;
+  if (typeof parent === "string") {
+    entries = doc.share.get(parent)?._map;
+  } else if (parent instanceof Y.ID) {
+    if (parent.clock >= Y.getState(doc.store, parent.client)) return null;
+    const holder = Y.getItem(doc.store, parent);
+    if (holder instanceof Y.Item && holder.content instanceof Y.ContentType) {
+      entries = holder.content.type._map;
     }
   }
-  return { writers, touched };
+  const value = entries?.get(key);
+  return value && !value.deleted ? value : null;
+};
+
+type UpdateFacts = {
+  // The Yjs clients the update writes as.
+  writers: Set<number>;
+  // Every client it writes as, builds on or deletes from.
+  touched: Set<number>;
+  // Whether the document and the update itself hold everything it refers
+  // to. An update that builds on content the room refused does not.
+  resolvable: boolean;
+  // Live map values it replaces without having seen any value of their key,
+  // as a client writing on a copy that never held the room's state does.
+  blindlyReplaced: Y.ID[];
+};
+
+const readUpdate = (doc: Y.Doc, update: Uint8Array): UpdateFacts => {
+  const { structs, ds } = Y.decodeUpdate(update);
+  const ends = new Map<number, number>();
+  const end = (client: number): number => ends.get(client) ?? Y.getState(doc.store, client);
+  const writers = new Set<number>();
+  const touched = new Set<number>(ds.clients.keys());
+  let resolvable = true;
+  for (const struct of structs) {
+    const client = struct.id.client;
+    writers.add(client);
+    touched.add(client);
+    if (struct instanceof Y.Skip || struct.id.clock > end(client)) resolvable = false;
+    ends.set(client, Math.max(end(client), struct.id.clock + struct.length));
+  }
+  const blindlyReplaced: Y.ID[] = [];
+  for (const struct of structs) {
+    if (!(struct instanceof Y.Item)) continue;
+    const parent: unknown = struct.parent;
+    for (const ref of [struct.origin, struct.rightOrigin, parent instanceof Y.ID ? parent : null]) {
+      if (!ref) continue;
+      touched.add(ref.client);
+      if (ref.clock >= end(ref.client)) resolvable = false;
+    }
+    if (struct.origin === null && struct.rightOrigin === null && struct.parentSub !== null) {
+      const replaced = liveMapValue(doc, parent, struct.parentSub);
+      if (replaced) blindlyReplaced.push(replaced.id);
+    }
+  }
+  for (const [client, deletes] of ds.clients) {
+    for (const { clock, len } of deletes) {
+      if (clock + len > end(client)) resolvable = false;
+    }
+  }
+  return { writers, touched, resolvable, blindlyReplaced };
 };
 
 type AwarenessEntry = { clientID: number; clock: number; state: string };
@@ -160,6 +228,9 @@ export class RoomApps {
     locked: false,
   };
   private revision = 0;
+  // Moves forward each time the presented app changes, so a sync mark
+  // belongs to one stay of one app on the stage.
+  private activations = 0;
   private generations = 0;
   private docs: Map<string, AppDoc> = new Map();
   private clearedWriters: Set<string> = new Set();
@@ -182,6 +253,11 @@ export class RoomApps {
 
   get locked(): boolean {
     return this.stage.locked;
+  }
+
+  /** Moves forward each time the presented app changes. */
+  get activation(): number {
+    return this.activations;
   }
 
   /** Moves forward with every change to the stage. */
@@ -230,6 +306,7 @@ export class RoomApps {
       });
     }
     this.stage = { activeAppId: appId, locked: false };
+    this.activations += 1;
     this.revision += 1;
     this.refreshOtherAppWriters();
     return { ok: true, changed: true, awarenessRemoval };
@@ -244,6 +321,7 @@ export class RoomApps {
     }
     const awarenessRemoval = this.leaveStage();
     this.stage = { activeAppId: null, locked: false };
+    this.activations += 1;
     this.revision += 1;
     this.refreshOtherAppWriters();
     return { ok: true, changed: true, awarenessRemoval };
@@ -262,6 +340,7 @@ export class RoomApps {
     if (this.stage.activeAppId === appId) {
       awarenessRemoval = this.removeAwareness(appId);
       this.stage = { activeAppId: null, locked: false };
+      this.activations += 1;
     }
     this.markCleared(appId, writersOf(entry.doc));
     this.destroyDoc(appId, entry);
@@ -282,29 +361,72 @@ export class RoomApps {
     return { ok: true, changed: true, awarenessRemoval: null };
   }
 
+  /** The mark a socket keeps when the room answers its sync of `appId`. */
+  syncMark(appId: string): AppSyncMark | null {
+    const doc = this.liveDoc(appId);
+    if (!doc) return null;
+    return {
+      activation: this.activations,
+      seen: Y.decodeStateVector(Y.encodeStateVector(doc)),
+    };
+  }
+
+  /** Whether `mark` is from the presented app's current stay on the stage. */
+  isCurrentSync(mark: AppSyncMark | null): mark is AppSyncMark {
+    return mark !== null && mark.activation === this.activations;
+  }
+
   /**
-   * False when an update from `userId` for `appId` writes under a client id
-   * bound to another participant, writes under an id already in another
-   * app's document, or holds, builds on or deletes content of one of the
-   * app's cleared documents, as a client that missed the clear sends when it
-   * resyncs. Accepting it binds its new client ids to the participant, so a
+   * False when an update from `userId` for `appId`, sent by a socket whose
+   * sync of the app's current stay is `mark`:
+   * - comes from a socket that has not synced this stay;
+   * - replaces a map value that socket was sent without having seen it, as a
+   *   client drawing on a fresh copy before the room's copy reached it does;
+   * - builds on content the room does not hold, such as content it refused;
+   * - writes under a client id bound to another participant, or already in
+   *   another app's document;
+   * - holds, builds on or deletes content of one of the app's cleared
+   *   documents, as a client that missed the clear sends when it resyncs.
+   * Accepting it binds its new client ids to the participant, so a
    * participant is only ever blocked by their own writes, or by a host
    * clearing a document they wrote.
    */
-  acceptsContent(appId: string, userId: string, update: Uint8Array): boolean {
-    let clients: { writers: Set<number>; touched: Set<number> };
+  acceptsContent(
+    appId: string,
+    userId: string,
+    update: Uint8Array,
+    mark: AppSyncMark | null,
+  ): boolean {
+    return this.contentRefusal(appId, userId, update, mark) === null;
+  }
+
+  /** Why `acceptsContent` refuses an update, or null when it accepts it. */
+  contentRefusal(
+    appId: string,
+    userId: string,
+    update: Uint8Array,
+    mark: AppSyncMark | null,
+  ): ContentRefusal | null {
+    const doc = this.liveDoc(appId);
+    if (!doc) return "not_live";
+    if (!this.isCurrentSync(mark)) return "not_synced";
+    let facts: UpdateFacts;
     try {
-      clients = clientsIn(update);
+      facts = readUpdate(doc, update);
     } catch {
-      return false;
+      return "malformed";
     }
-    for (const client of clients.writers) {
-      if (this.otherAppWriters.has(client)) return false;
+    if (!facts.resolvable) return "unresolved";
+    for (const replaced of facts.blindlyReplaced) {
+      if (replaced.clock < (mark.seen.get(replaced.client) ?? 0)) return "unseen_value";
     }
-    for (const client of clients.touched) {
-      if (this.clearedWriters.has(clearedWriterKey(appId, client))) return false;
+    for (const client of facts.writers) {
+      if (this.otherAppWriters.has(client)) return "other_app";
     }
-    return this.claimClientIds(this.participantOf(userId), clients.writers);
+    for (const client of facts.touched) {
+      if (this.clearedWriters.has(clearedWriterKey(appId, client))) return "cleared";
+    }
+    return this.claimClientIds(this.participantOf(userId), facts.writers) ? null : "foreign_id";
   }
 
   /**
@@ -592,6 +714,7 @@ export class RoomApps {
     this.clientIdOwners.clear();
     this.clientIdCounts.clear();
     this.stage = { activeAppId: null, locked: false };
+    this.activations += 1;
     this.revision += 1;
   }
 }

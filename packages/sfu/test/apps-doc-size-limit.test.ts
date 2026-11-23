@@ -35,6 +35,10 @@ const joinBoardApp = (id: string) => {
   context.currentRoom = room;
   context.currentClient = admin;
   registerAppsHandlers(context);
+  listeners.get("apps:yjs:sync")!(
+    { appId: "board", syncMessage: Y.encodeStateVector(new Y.Doc()) },
+    () => {},
+  );
   return {
     send: (update: Uint8Array) => listeners.get("apps:yjs:update")!({ appId: "board", update }),
     serverDoc: () => room.apps.liveDoc("board")!,

@@ -72,6 +72,7 @@ async function withSavedBoard(run: (room: Room) => Promise<void>, policy: SyncPo
   const syncReplies: Array<() => void> = [];
   let syncs = 0;
   let syncsAllowed = false;
+  let syncMark: ReturnType<RoomApps["syncMark"]> = null;
   const socket = {
     connected: true,
     on: (event: string, listener: (payload: unknown) => void) => listeners.set(event, listener),
@@ -92,14 +93,18 @@ async function withSavedBoard(run: (room: Room) => Promise<void>, policy: SyncPo
         }
         const update = Y.encodeStateAsUpdate(roomDoc, data.syncMessage);
         const stateVector = Y.encodeStateVector(roomDoc);
-        pendingSync = () => ack!({ syncMessage: update, stateVector });
+        const mark = room.syncMark(APP_ID);
+        pendingSync = () => {
+          syncMark = mark;
+          ack!({ syncMessage: update, stateVector });
+        };
         syncReplies[syncs - 1] = pendingSync;
         if (policy.autoAnswer) pendingSync();
       }
       if (
         event === "apps:yjs:update" &&
         roomDoc &&
-        room.acceptsContent(APP_ID, "viewer#1", data.update) &&
+        room.acceptsContent(APP_ID, "viewer#1", data.update, syncMark) &&
         room.reserveUpdate(APP_ID, data.update)
       ) {
         Y.applyUpdate(roomDoc, data.update);

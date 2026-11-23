@@ -58,6 +58,22 @@ the room, and refuses that id from anyone else. A participant who rejoins
 keeps their ids. A viewer that only syncs binds nothing. Each participant may
 hold up to 1024 ids and a room 16384; past that, new ids are refused.
 
+A socket's `apps:yjs:update` is taken only once the room has answered its
+`apps:yjs:sync` for the presented app's current stay on the stage. An update
+sent before that, as an older client that draws before its sync reply arrives
+sends, is dropped, and the room sends that socket its copy of the document as
+an `apps:yjs:update`. After that the room drops an update that:
+
+- sets a map key that already held a value when the socket synced, without
+  having seen that value: a client drawing on a fresh copy writes its own
+  page under the saved page's key, which would replace it for everyone
+- refers to content the room does not hold, such as content it dropped, so
+  nothing that builds on a dropped update is kept half applied
+
+A client that drew on a fresh copy before its sync keeps its own drawing
+locally and cannot write again until the stage changes; everyone else keeps
+the saved document.
+
 A cleared document stays cleared. The SFU remembers, per app, the Yjs clients
 that wrote to it and drops any later `apps:yjs:update` for that app from those
 clients or that holds, builds on or deletes their content, as a client that
@@ -186,6 +202,9 @@ Client -> server (`apps:yjs:update`):
 - emitted for local doc changes
 - ignored if app is not active
 - ignored for non-admins when room is locked
+- ignored until the socket has synced the app's current stay on the stage,
+  and when it replaces a value it never saw or builds on content the room
+  does not hold (see Document lifetime)
 
 Server -> peers (`apps:yjs:update`):
 
