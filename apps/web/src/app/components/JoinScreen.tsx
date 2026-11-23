@@ -400,24 +400,24 @@ function JoinScreen({
   // how to unblock it.
   const [blockedDevices, setBlockedDevices] = useState<BlockedDevice[]>([]);
   const [isRetryingBlocked, setIsRetryingBlocked] = useState(false);
-  // Bumped on every capture outcome, so a slow permission check for an
-  // older failure cannot re-block a device that has since worked.
-  const captureOutcomeRef = useRef<Record<BlockedDevice, number>>({
-    camera: 0,
-    microphone: 0,
-  });
-  const markDeviceAvailable = (device: BlockedDevice) => {
-    captureOutcomeRef.current[device] += 1;
+  const isCurrentRequestFor = (device: BlockedDevice, generation: number | undefined) =>
+    isCurrentPrejoinMediaRequest(device === "camera" ? "video" : "audio", generation);
+  const markDeviceAvailable = (device: BlockedDevice, generation: number | undefined) => {
+    if (!isCurrentRequestFor(device, generation)) return;
     setBlockedDevices((current) =>
       current.includes(device)
         ? current.filter((candidate) => candidate !== device)
         : current,
     );
   };
-  const reportCaptureFailure = (device: BlockedDevice, error: unknown) => {
-    const outcome = (captureOutcomeRef.current[device] += 1);
+  const reportCaptureFailure = (
+    device: BlockedDevice,
+    error: unknown,
+    generation: number | undefined,
+  ) => {
+    if (!isCurrentRequestFor(device, generation)) return;
     void isCaptureBlocked(device, error).then((blocked) => {
-      if (!blocked || captureOutcomeRef.current[device] !== outcome) return;
+      if (!blocked || !isCurrentRequestFor(device, generation)) return;
       setBlockedDevices((current) =>
         current.includes(device)
           ? current
@@ -643,8 +643,8 @@ function JoinScreen({
         "get_user_media_full_done",
         requestGeneration,
       );
-      markDeviceAvailable("microphone");
-      if (wantsVideo) markDeviceAvailable("camera");
+      markDeviceAvailable("microphone", requestGeneration.audio);
+      if (wantsVideo) markDeviceAvailable("camera", requestGeneration.video);
     } catch (err) {
       warnJoinMedia("get_user_media_full_failed", {
         error:
@@ -678,9 +678,9 @@ function JoinScreen({
 
       if (audioResult.status === "fulfilled") {
         fallbackTracks.push(...audioResult.value.getAudioTracks());
-        markDeviceAvailable("microphone");
+        markDeviceAvailable("microphone", requestGeneration.audio);
       } else {
-        reportCaptureFailure("microphone", audioResult.reason);
+        reportCaptureFailure("microphone", audioResult.reason, requestGeneration.audio);
         warnJoinMedia("get_user_media_audio_fallback_failed", {
           error:
             audioResult.reason instanceof Error
@@ -693,9 +693,9 @@ function JoinScreen({
       }
       if (videoResult.status === "fulfilled") {
         fallbackTracks.push(...videoResult.value.getVideoTracks());
-        if (wantsVideo) markDeviceAvailable("camera");
+        if (wantsVideo) markDeviceAvailable("camera", requestGeneration.video);
       } else {
-        reportCaptureFailure("camera", videoResult.reason);
+        reportCaptureFailure("camera", videoResult.reason, requestGeneration.video);
         warnJoinMedia("get_user_media_video_fallback_failed", {
           error:
             videoResult.reason instanceof Error
@@ -994,7 +994,7 @@ function JoinScreen({
         }
         cameraIntentRef.current = true;
         setIsCameraOn(true);
-        markDeviceAvailable("camera");
+        markDeviceAvailable("camera", requestGeneration.video);
         prewarmLiveCameraEffects("prejoin-camera-toggle-live");
         logJoinMedia("toggle_camera_on_done", {
           track: getJoinTrackDebugSnapshot(videoTrack),
@@ -1007,7 +1007,7 @@ function JoinScreen({
               : err,
         });
         cameraIntentRef.current = false;
-        reportCaptureFailure("camera", err);
+        reportCaptureFailure("camera", err, requestGeneration.video);
       }
     } finally {
       toggleCameraInFlightRef.current = false;
@@ -1098,7 +1098,7 @@ function JoinScreen({
       }
       micIntentRef.current = true;
       setIsMicOn(true);
-      markDeviceAvailable("microphone");
+      markDeviceAvailable("microphone", requestGeneration.audio);
       logJoinMedia("toggle_mic_on_done", {
         track: getJoinTrackDebugSnapshot(audioTrack),
       });
@@ -1110,7 +1110,7 @@ function JoinScreen({
             : err,
       });
       micIntentRef.current = false;
-      reportCaptureFailure("microphone", err);
+      reportCaptureFailure("microphone", err, requestGeneration.audio);
     } finally {
       toggleMicInFlightRef.current = false;
     }
