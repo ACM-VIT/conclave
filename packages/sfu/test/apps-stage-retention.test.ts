@@ -45,6 +45,21 @@ const makeRoom = () => {
   const room = new Room({ id: "room", clientId: "conclave", workerPid: null, router });
   state.rooms.set(room.channelId, room);
 
+  // How many times the stage moved to another app or document, as a client
+  // following apps:state sees it.
+  const stageChanges = (): number => {
+    let changes = 0;
+    let last = "";
+    for (const sent of broadcasts) {
+      if (sent.event !== "apps:state") continue;
+      const state = sent.payload as AppsState;
+      const key = `${state.activeAppId}:${state.docGeneration}`;
+      if (key !== last) changes += 1;
+      last = key;
+    }
+    return changes;
+  };
+
   const join = (id: string, role: "host" | "participant", doc: Y.Doc = new Y.Doc()) => {
     const listeners = new Map<string, Listener>();
     const relayed: Sent[] = [];
@@ -78,9 +93,9 @@ const makeRoom = () => {
       });
       return response as T;
     };
-    // Like every client, sync the presented app once per stay on the stage
-    // before writing to it.
-    let syncedActivation: number | null = null;
+    // Like every client, sync the presented app again whenever the stage
+    // moves to another app or document before writing to it.
+    let syncedAt: number | null = null;
     const sync = (appId: string) => {
       const response = ask<{ syncMessage?: Uint8Array; stateVector?: Uint8Array; error?: string }>(
         "apps:yjs:sync",
@@ -88,12 +103,12 @@ const makeRoom = () => {
       );
       if (response.syncMessage) {
         Y.applyUpdate(doc, response.syncMessage);
-        syncedActivation = room.apps.activation;
+        syncedAt = stageChanges();
       }
       return response;
     };
     const ensureSynced = (appId: string) => {
-      if (syncedActivation !== room.apps.activation) sync(appId);
+      if (syncedAt !== stageChanges()) sync(appId);
     };
     const send = (appId: string, update: Uint8Array) =>
       listeners.get("apps:yjs:update")!({ appId, update });
@@ -105,9 +120,9 @@ const makeRoom = () => {
         ensureSynced(appId);
         send(appId, update);
       },
-      // Sends without syncing first, as an older client that draws before its
-      // first sync reply arrives does.
-      sendBeforeSync: send,
+      // Sends without syncing first: an older client drawing before its sync
+      // reply arrives, or a packet still in flight from an earlier stay.
+      sendAsIs: send,
       present: (appId: string, expectedRevision?: number) =>
         ask<{ success: boolean; error?: string }>("apps:open", { appId, expectedRevision }),
       closeLegacy: () => ask<{ success: boolean; error?: string }>("apps:close"),
@@ -151,6 +166,8 @@ const makeRoom = () => {
         }),
       syncReply: (appId: string) =>
         ask<unknown>("apps:yjs:sync", { appId, syncMessage: Y.encodeStateVector(new Y.Doc()) }),
+      // Syncs this client's own copy, as a client does when the app opens.
+      syncReplyInto: (appId: string) => sync(appId),
       coldUpdate: (appId: string) =>
         ask<{ syncMessage: Uint8Array }>("apps:yjs:sync", {
           appId,
@@ -688,6 +705,74 @@ describe("Yjs client ids", () => {
   });
 });
 
+describe("updates in flight across a stage change", () => {
+  const savedBoard = () => {
+    const { join } = makeRoom();
+    const hostDoc = new Y.Doc();
+    hostDoc.clientID = 1;
+    const host = join("host#1", "host", hostDoc);
+    host.present("whiteboard");
+    host.sendUpdate("whiteboard", writePage(hostDoc, ["saved"]));
+    const reopen = () => {
+      host.close(host.state().revision);
+      host.present("whiteboard");
+    };
+    const cold = () => pageOf(join(`cold#${Math.random()}`, "participant").coldUpdate("whiteboard"));
+    return { join, reopen, cold };
+  };
+
+  it("keeps a synced viewer's stroke that arrives after the board is closed and presented again", () => {
+    const { join, reopen, cold } = savedBoard();
+    const viewerDoc = new Y.Doc();
+    const viewer = join("viewer#1", "participant", viewerDoc);
+    viewer.syncReplyInto("whiteboard");
+    const late = writePage(viewerDoc, ["late"]);
+
+    reopen();
+    viewer.sendAsIs("whiteboard", late);
+
+    expect(viewer.relayed.map((sent) => sent.event)).toEqual(["apps:yjs:update"]);
+    expect(cold()).toEqual(["late", "saved"]);
+  });
+
+  it("keeps a build 63 client's stroke sent before Close, and takes its next session's strokes", () => {
+    const { join, reopen, cold } = savedBoard();
+    const firstSession = new Y.Doc();
+    const native = join("native#1", "participant", firstSession);
+    native.syncReplyInto("whiteboard");
+    const sentBeforeClose = writePage(firstSession, ["before-close"]);
+
+    reopen();
+    native.sendAsIs("whiteboard", sentBeforeClose);
+    const nextSession = new Y.Doc();
+    Y.applyUpdate(nextSession, native.coldUpdate("whiteboard"));
+    native.sendAsIs("whiteboard", writePage(nextSession, ["next-session"]));
+
+    expect(native.relayed.map((sent) => sent.event)).toEqual(["apps:yjs:update", "apps:yjs:update"]);
+    expect(cold()).toEqual(["before-close", "next-session", "saved"]);
+  });
+
+  it("refuses a fresh copy's page from a tab that synced before the saved page existed", () => {
+    const { join } = makeRoom();
+    const hostDoc = new Y.Doc();
+    hostDoc.clientID = 1;
+    const host = join("host#1", "host", hostDoc);
+    host.present("whiteboard");
+    const tab = join("tab#1", "participant");
+    tab.syncReplyInto("whiteboard");
+    host.sendUpdate("whiteboard", writePage(hostDoc, ["kept"]));
+    host.close(host.state().revision);
+    host.present("whiteboard");
+    const freshCopy = new Y.Doc();
+    freshCopy.clientID = 2 ** 31;
+
+    tab.sendAsIs("whiteboard", writePage(freshCopy, ["early"]));
+
+    expect(tab.relayed).toEqual([]);
+    expect(pageOf(join("cold#1", "participant").coldUpdate("whiteboard"))).toEqual(["kept"]);
+  });
+});
+
 describe("writes made before a client's first sync", () => {
   // A host saves a page, closes the board and presents it again; an older
   // client then opens it on a fresh copy and draws before the room's copy
@@ -711,16 +796,16 @@ describe("writes made before a client's first sync", () => {
   it("keeps the saved board when an older client draws before its first sync", () => {
     const { early, earlyDoc, cold } = savedBoardWithEarlyDrawer();
 
-    early.sendBeforeSync("whiteboard", writePage(earlyDoc, ["early"]));
+    early.sendAsIs("whiteboard", writePage(earlyDoc, ["early"]));
     const pushed = early.received.find((sent) => sent.event === "apps:yjs:update");
     expect(pushed).toBeDefined();
     const roomCopy = (pushed!.payload as { update: Uint8Array }).update;
     Y.applyUpdate(earlyDoc, roomCopy);
-    early.sendBeforeSync(
+    early.sendAsIs(
       "whiteboard",
       Y.encodeStateAsUpdate(earlyDoc, Y.encodeStateVectorFromUpdate(roomCopy)),
     );
-    early.sendBeforeSync("whiteboard", writePage(earlyDoc, ["later"]));
+    early.sendAsIs("whiteboard", writePage(earlyDoc, ["later"]));
 
     expect(early.relayed).toEqual([]);
     expect(cold()).toEqual(["kept-1", "kept-2"]);
@@ -731,7 +816,7 @@ describe("writes made before a client's first sync", () => {
     const before = Y.encodeStateVector(earlyDoc);
     earlyDoc.getMap("notes").set("early", true);
 
-    early.sendBeforeSync("whiteboard", Y.encodeStateAsUpdate(earlyDoc, before));
+    early.sendAsIs("whiteboard", Y.encodeStateAsUpdate(earlyDoc, before));
     expect(early.relayed).toEqual([]);
     early.resync("whiteboard");
 
@@ -742,8 +827,8 @@ describe("writes made before a client's first sync", () => {
   it("sends a client that writes before syncing the room's copy once per stay", () => {
     const { early, earlyDoc } = savedBoardWithEarlyDrawer();
 
-    early.sendBeforeSync("whiteboard", writePage(earlyDoc, ["early-1"]));
-    early.sendBeforeSync("whiteboard", writePage(earlyDoc, ["early-2"]));
+    early.sendAsIs("whiteboard", writePage(earlyDoc, ["early-1"]));
+    early.sendAsIs("whiteboard", writePage(earlyDoc, ["early-2"]));
 
     const pushes = early.received.filter((sent) => sent.event === "apps:yjs:update");
     expect(pushes).toHaveLength(1);

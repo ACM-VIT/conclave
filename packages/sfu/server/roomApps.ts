@@ -38,12 +38,13 @@ export type AppAwarenessRemoval = {
 };
 
 /**
- * What the room had sent a socket when it last synced the presented app,
- * for one stay of that app on the stage. The socket keeps it and hands it
- * back with each update.
+ * Which app document a socket last synced, and what the room had sent it
+ * then. The socket keeps it and hands it back with each update; it holds
+ * while that document is presented, across Close and Present.
  */
 export type AppSyncMark = {
-  readonly activation: number;
+  readonly appId: string;
+  readonly generation: number;
   readonly seen: ReadonlyMap<number, number>;
 };
 
@@ -93,6 +94,12 @@ const encodedSizeAfter = (doc: Y.Doc, update: Uint8Array): number => {
 
 const appDocBytes = (entry: AppDoc): number =>
   entry.measuredBytes + entry.unmeasuredBytes;
+
+const stateOf = (doc: Y.Doc): Map<number, number> =>
+  Y.decodeStateVector(Y.encodeStateVector(doc));
+
+const heldIn = (state: ReadonlyMap<number, number>, id: Y.ID): boolean =>
+  id.clock < (state.get(id.client) ?? 0);
 
 const writersOf = (doc: Y.Doc): Iterable<number> =>
   Y.decodeStateVector(Y.encodeStateVector(doc)).keys();
@@ -228,9 +235,9 @@ export class RoomApps {
     locked: false,
   };
   private revision = 0;
-  // Moves forward each time the presented app changes, so a sync mark
-  // belongs to one stay of one app on the stage.
-  private activations = 0;
+  // The presented document's state when its current stay on the stage
+  // began. Every client that writes during the stay has seen at least this.
+  private stayStart: ReadonlyMap<number, number> = new Map();
   private generations = 0;
   private docs: Map<string, AppDoc> = new Map();
   private clearedWriters: Set<string> = new Set();
@@ -253,11 +260,6 @@ export class RoomApps {
 
   get locked(): boolean {
     return this.stage.locked;
-  }
-
-  /** Moves forward each time the presented app changes. */
-  get activation(): number {
-    return this.activations;
   }
 
   /** Moves forward with every change to the stage. */
@@ -306,7 +308,7 @@ export class RoomApps {
       });
     }
     this.stage = { activeAppId: appId, locked: false };
-    this.activations += 1;
+    this.stayStart = stateOf(this.docs.get(appId)!.doc);
     this.revision += 1;
     this.refreshOtherAppWriters();
     return { ok: true, changed: true, awarenessRemoval };
@@ -321,7 +323,6 @@ export class RoomApps {
     }
     const awarenessRemoval = this.leaveStage();
     this.stage = { activeAppId: null, locked: false };
-    this.activations += 1;
     this.revision += 1;
     this.refreshOtherAppWriters();
     return { ok: true, changed: true, awarenessRemoval };
@@ -340,7 +341,6 @@ export class RoomApps {
     if (this.stage.activeAppId === appId) {
       awarenessRemoval = this.removeAwareness(appId);
       this.stage = { activeAppId: null, locked: false };
-      this.activations += 1;
     }
     this.markCleared(appId, writersOf(entry.doc));
     this.destroyDoc(appId, entry);
@@ -365,23 +365,25 @@ export class RoomApps {
   syncMark(appId: string): AppSyncMark | null {
     const doc = this.liveDoc(appId);
     if (!doc) return null;
-    return {
-      activation: this.activations,
-      seen: Y.decodeStateVector(Y.encodeStateVector(doc)),
-    };
+    return { appId, generation: this.docs.get(appId)!.generation, seen: stateOf(doc) };
   }
 
-  /** Whether `mark` is from the presented app's current stay on the stage. */
+  /** Whether `mark` is a sync of the document presented now. */
   isCurrentSync(mark: AppSyncMark | null): mark is AppSyncMark {
-    return mark !== null && mark.activation === this.activations;
+    return (
+      mark !== null &&
+      mark.appId === this.stage.activeAppId &&
+      mark.generation === this.docs.get(mark.appId)?.generation
+    );
   }
 
   /**
    * False when an update from `userId` for `appId`, sent by a socket whose
    * sync of the app's current stay is `mark`:
-   * - comes from a socket that has not synced this stay;
-   * - replaces a map value that socket was sent without having seen it, as a
-   *   client drawing on a fresh copy before the room's copy reached it does;
+   * - comes from a socket that has not synced the presented document;
+   * - replaces a map value without having seen it, when that value was in
+   *   the room's copy the socket synced or when this stay began: a client
+   *   drawing on a fresh copy before the room's copy reached it writes that;
    * - builds on content the room does not hold, such as content it refused;
    * - writes under a client id bound to another participant, or already in
    *   another app's document;
@@ -418,7 +420,7 @@ export class RoomApps {
     }
     if (!facts.resolvable) return "unresolved";
     for (const replaced of facts.blindlyReplaced) {
-      if (replaced.clock < (mark.seen.get(replaced.client) ?? 0)) return "unseen_value";
+      if (heldIn(mark.seen, replaced) || heldIn(this.stayStart, replaced)) return "unseen_value";
     }
     for (const client of facts.writers) {
       if (this.otherAppWriters.has(client)) return "other_app";
@@ -714,7 +716,6 @@ export class RoomApps {
     this.clientIdOwners.clear();
     this.clientIdCounts.clear();
     this.stage = { activeAppId: null, locked: false };
-    this.activations += 1;
     this.revision += 1;
   }
 }
