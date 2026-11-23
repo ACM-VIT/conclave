@@ -3,7 +3,14 @@
 import type { CaptureResult, PostHog } from "posthog-js";
 import { installCallErrorCapture } from "./call-error-capture";
 import { randomUuid } from "./random-uuid";
-import { createBatchStore, createOutbox, type Outbox, type OutboxEvent } from "./telemetry-outbox";
+import {
+  countDropped,
+  createBatchStore,
+  createOutbox,
+  type Outbox,
+  type OutboxEvent,
+  STORED_BATCH_PREFIX,
+} from "./telemetry-outbox";
 import {
   beforeSend,
   buildOutboundEvent,
@@ -289,6 +296,9 @@ const installLifecycleFlush = (): void => {
   const returned = () => {
     if (!leaving()) outbox?.replaySaved();
   };
+  window.addEventListener("storage", (event) => {
+    if (event.key === null || event.key.startsWith(STORED_BATCH_PREFIX)) outbox?.replaySaved();
+  });
   window.addEventListener(
     "pageshow",
     () => {
@@ -397,7 +407,7 @@ export function startTelemetry(): void {
     newId: randomUuid,
     store: createBatchStore(() => localStorage),
     lock: replayLock,
-    onStale: (dropped) => telemetry.capture("telemetry_reports_dropped", dropped),
+    onStale: (dropped) => telemetry.capture("telemetry_reports_dropped", countDropped(dropped)),
   });
   outbox.replaySaved();
   installLifecycleFlush();

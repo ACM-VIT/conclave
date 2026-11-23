@@ -1,23 +1,3 @@
-/**
- * The browser's telemetry outbox: built events wait here and go to /ingest in
- * batches, so a call costs a handful of requests rather than one per event.
- *
- * A batch goes when the interval ends, when it holds MAX_BATCH_EVENTS, or
- * before it would pass MAX_BATCH_BYTES. An exception sends early, at most
- * once per URGENT_FLUSH_GAP_MS.
- *
- * The outbox owns every batch until /ingest answers a send of it: a batch is
- * queued, in flight or waiting to retry. When the page goes away, the queue
- * and every batch waiting to retry go by beacon, within one budget shared by
- * every beacon and keepalive request still outstanding, as the browser counts
- * them, and every batch not yet answered, in flight or not, is saved in
- * storage, one entry per batch. A saved copy is removed only once a send of it
- * is answered; a later page load, or this one when it comes back, sends what
- * storage holds. A beacon is never answered, so its batch is sent again then,
- * and /ingest takes each uuid once. A batch too old for /ingest to date by its
- * own clock is dropped, never sent, and counted.
- */
-
 import { z } from "zod";
 import { answerOf } from "./telemetry-answers";
 import { MAX_EVENT_AGE_MS } from "./telemetry-schema";
@@ -31,41 +11,29 @@ export type OutboxEvent = {
 
 export const FLUSH_INTERVAL_MS = 5000;
 export const MAX_BATCH_EVENTS = 20;
-// The browser allows 64 KB across all outstanding beacons and keepalive
-// requests of a page; batches and that shared budget stay under it.
 export const MAX_BATCH_BYTES = 48 * 1024;
 export const UNLOAD_BUDGET_BYTES = 56 * 1024;
-// How long a beacon is counted as outstanding: it cannot be observed to end.
 const BEACON_OUTSTANDING_MS = 10_000;
 export const URGENT_FLUSH_GAP_MS = 3000;
-const RETRY_DELAYS_MS = [2000, 4000, 8000, 16000, 30000];
+export const RETRY_DELAYS_MS: readonly number[] = [2000, 4000, 8000, 16000, 30000];
 const MAX_REMEMBERED_UUIDS = 2000;
-// /ingest keeps an event's own time only within MAX_EVENT_AGE_MS of receiving
-// it. A batch older than this, a minute short of that for the request and a
-// clock a little off, is dropped rather than sent to be dated wrong.
 export const MAX_SEND_AGE_MS = MAX_EVENT_AGE_MS - 60_000;
-// The longest a replay holds the tabs' lock waiting for its sends' first
-// answers, so a send that never answers holds up no other tab.
-export const REPLAY_HOLD_MS = 10_000;
+export const SEND_DEADLINE_MS = 15_000;
+export const LEASE_MS = SEND_DEADLINE_MS + 1000;
+export const BEACON_CONFIRM_MS = 30_000;
 
-/** A batch as storage keeps it for a later page load. */
 export type StoredBatch = {
   id: string;
   events: OutboxEvent[];
-  /** When its oldest event happened, by this browser's clock. */
   oldestAt: number;
-  /**
-   * A send of it may have arrived without an answer: it went by beacon, or by
-   * a keepalive request still in flight when it was saved.
-   */
   sent: boolean;
-  /** No send before this time, by this browser's clock: a Retry-After /ingest gave. */
   notBefore: number;
+  nextTry: number;
   attempt: number;
   sendId: string;
+  leaseUntil: number;
 };
 
-/** Storage the site's tabs share, one entry per batch. */
 export type BatchStore = {
   save: (batch: StoredBatch) => boolean;
   get: (id: string) => StoredBatch | null;
@@ -73,72 +41,72 @@ export type BatchStore = {
   list: () => StoredBatch[];
 };
 
-/** Batches dropped as too old to send: `unsent` of them had no send that may have arrived. */
 export type DroppedBatches = { batches: number; events: number; unsent: number };
+
+export const countDropped = (batches: readonly StoredBatch[]): DroppedBatches => ({
+  batches: batches.length,
+  events: batches.reduce((total, batch) => total + batch.events.length, 0),
+  unsent: batches.filter((batch) => !batch.sent).length,
+});
+
+export const retryDelay = (attempt: number): number =>
+  RETRY_DELAYS_MS[Math.min(attempt, RETRY_DELAYS_MS.length - 1)];
 
 export type OutboxDeps = {
   token: string;
   now: () => number;
   setTimer: (run: () => void, ms: number) => unknown;
   clearTimer: (timer: unknown) => void;
-  /**
-   * Posts a batch body to /ingest: the response's status and Retry-After
-   * header, or a rejection with no answer.
-   */
   post: (body: string, keepalive: boolean, signal?: AbortSignal) => Promise<{ status: number; retryAfter: string | null }>;
-  /** Queues a batch body by beacon; false when the browser will not take it. */
   beacon: (body: string) => boolean;
-  /** A new batch's id, a uuid. */
   newId: () => string;
   store: BatchStore;
-  /** Runs `replay` holding a lock the site's tabs share, once it is this tab's turn. */
   lock: (replay: () => Promise<void>) => void;
-  onStale: (dropped: DroppedBatches) => void;
+  onStale: (dropped: readonly StoredBatch[]) => void;
 };
+
+type InFlight = { keepalive: boolean };
 
 type Batch = {
   id: string;
   events: OutboxEvent[];
   oldestAt: number;
-  attempt: number;
-  timer: unknown;
-  // How a request for it is in flight, if one is.
-  inFlight: "keepalive" | "fetch" | null;
-  // A beacon of it was taken, which no answer confirms.
-  beaconed: boolean;
-  // No send before this time: the Retry-After of its last answer.
+  sent: boolean;
   notBefore: number;
+  nextTry: number;
+  attempt: number;
   sendId: string;
+  leaseUntil: number;
   saved: boolean;
+  timer: unknown;
+  inFlight: InFlight | null;
 };
 
 type Queued = { event: OutboxEvent; bytes: number };
 
+type Reply = { status: number; retryAfter: string | null };
+
 const byteLength = (text: string): number => new TextEncoder().encode(text).byteLength;
+
+const dueAt = (batch: { notBefore: number; nextTry: number; leaseUntil: number }): number =>
+  Math.max(batch.notBefore, batch.nextTry, batch.leaseUntil);
 
 export function createOutbox(deps: OutboxDeps) {
   const queue: Queued[] = [];
   let queuedBytes = 0;
   const seen = new Set<string>();
-  // An interval or early send, and when it is due.
   let flushTimer: { handle: unknown; due: number } | null = null;
   let lastUrgentAt = Number.NEGATIVE_INFINITY;
-  // Every batch this page holds until /ingest answers it.
   const live = new Map<string, Batch>();
-  // Bytes of keepalive requests still in flight, and of recent beacons.
   let keepaliveBytes = 0;
   const beacons: Array<{ bytes: number; at: number }> = [];
-  // A replay waiting for the lock reads storage once it has it, so one
-  // waiting covers every later ask; an ask while one runs adds one more pass.
   let replay: "idle" | "waiting" | "running" = "idle";
   let replayAgain = false;
+  let wakeTimer: { handle: unknown; at: number } | null = null;
 
-  // The wrapper a batch body adds around its events.
   const overhead = byteLength(
     JSON.stringify({ api_key: deps.token, batch: [], sent_at: new Date(0).toISOString() }),
   );
-  // Stamped with the time of each send, so /ingest can tell an event's age
-  // by the browser's own clock.
   const bodyOf = (events: OutboxEvent[]): string =>
     JSON.stringify({ api_key: deps.token, batch: events, sent_at: new Date(deps.now()).toISOString() });
 
@@ -161,7 +129,6 @@ export function createOutbox(deps: OutboxDeps) {
     flushTimer = { handle: deps.setTimer(flush, ms), due };
   };
 
-  // Splits queued events into batches within MAX_BATCH_BYTES and MAX_BATCH_EVENTS.
   const batchesOf = (items: Queued[]): Batch[] => {
     const groups: OutboxEvent[][] = [];
     let current: OutboxEvent[] = [];
@@ -184,13 +151,15 @@ export function createOutbox(deps: OutboxDeps) {
         const at = Date.parse(event.timestamp ?? "");
         return Number.isNaN(at) ? oldest : Math.min(oldest, at);
       }, deps.now()),
+      sent: false,
+      notBefore: 0,
+      nextTry: 0,
       attempt: 0,
+      sendId: "",
+      leaseUntil: 0,
+      saved: false,
       timer: null,
       inFlight: null,
-      beaconed: false,
-      notBefore: 0,
-      sendId: "",
-      saved: false,
     }));
   };
 
@@ -203,55 +172,104 @@ export function createOutbox(deps: OutboxDeps) {
     id: batch.id,
     events: batch.events,
     oldestAt: batch.oldestAt,
-    sent: batch.beaconed || batch.inFlight === "keepalive",
+    sent: batch.sent || batch.inFlight?.keepalive === true,
     notBefore: batch.notBefore,
+    nextTry: batch.nextTry,
     attempt: batch.attempt,
     sendId: batch.sendId,
+    leaseUntil: batch.leaseUntil,
+  });
+
+  const fromStorage = (saved: StoredBatch): Batch => ({
+    ...saved,
+    saved: true,
+    timer: null,
+    inFlight: null,
   });
 
   const tooOld = (oldestAt: number): boolean => deps.now() - oldestAt > MAX_SEND_AGE_MS;
 
-  const counted = (batches: StoredBatch[]): DroppedBatches => ({
-    batches: batches.length,
-    events: batches.reduce((total, batch) => total + batch.events.length, 0),
-    unsent: batches.filter((batch) => !batch.sent).length,
-  });
-
-  // Answered, or dropped: the outbox and storage let it go.
-  const release = (batch: Batch): void => {
+  const finish = (batch: Batch): void => {
     live.delete(batch.id);
-    deps.store.remove(batch.id);
+    if (batch.saved) deps.store.remove(batch.id);
   };
 
-  // A batch goes by keepalive only within the shared budget, so the page can
-  // still send what it holds when it goes away. Resolves on the first answer.
-  const send = (batch: Batch, signal?: AbortSignal): Promise<void> => {
-    if (tooOld(batch.oldestAt)) {
-      release(batch);
-      deps.onStale(counted([stored(batch)]));
-      return Promise.resolve();
-    }
-    if (batch.saved && deps.store.get(batch.id)?.sendId !== batch.sendId) {
+  const expire = (batch: Batch): void => {
+    finish(batch);
+    deps.onStale([stored(batch)]);
+  };
+
+  const wakeAt = (at: number): void => {
+    if (wakeTimer && wakeTimer.at <= at) return;
+    if (wakeTimer) deps.clearTimer(wakeTimer.handle);
+    const handle = deps.setTimer(() => {
+      wakeTimer = null;
+      replaySaved();
+    }, Math.max(at - deps.now(), 0));
+    wakeTimer = { handle, at };
+  };
+
+  const holdInMemory = (batch: Batch): void => {
+    live.set(batch.id, batch);
+    if (batch.timer !== null) deps.clearTimer(batch.timer);
+    batch.timer = deps.setTimer(() => {
+      batch.timer = null;
+      send(batch);
+    }, Math.max(dueAt(batch) - deps.now(), 0));
+  };
+
+  const toStorage = (batch: Batch): boolean => {
+    if (!deps.store.save(stored(batch))) return false;
+    batch.saved = true;
+    if (batch.timer !== null) deps.clearTimer(batch.timer);
+    batch.timer = null;
+    live.delete(batch.id);
+    wakeAt(dueAt(batch));
+    return true;
+  };
+
+  const leaveStorage = (batch: Batch): void => {
+    deps.store.remove(batch.id);
+    batch.saved = false;
+  };
+
+  const retry = (batch: Batch, afterMs: number | null): void => {
+    batch.nextTry = deps.now() + retryDelay(batch.attempt);
+    batch.attempt += 1;
+    if (afterMs !== null) batch.notBefore = Math.max(batch.notBefore, deps.now() + afterMs);
+    if (batch.saved) {
       live.delete(batch.id);
-      return Promise.resolve();
+      if (toStorage(batch)) return;
+      leaveStorage(batch);
+    }
+    holdInMemory(batch);
+  };
+
+  const send = (batch: Batch): void => {
+    if (tooOld(batch.oldestAt)) {
+      expire(batch);
+      return;
     }
     batch.sendId = deps.newId();
-    if (batch.saved) batch.saved = deps.store.save(stored(batch));
+    batch.leaseUntil = deps.now() + LEASE_MS;
+    if (batch.saved && !deps.store.save(stored(batch))) leaveStorage(batch);
     const sendId = batch.sendId;
     live.set(batch.id, batch);
     const body = bodyOf(batch.events);
     const bytes = byteLength(body);
     const keepalive = bytes <= MAX_BATCH_BYTES && keepaliveBytes + beaconBytes() + bytes <= UNLOAD_BUDGET_BYTES;
     if (keepalive) keepaliveBytes += bytes;
-    batch.inFlight = keepalive ? "keepalive" : "fetch";
-    const answered = (reply: { status: number; retryAfter: string | null } | null): void => {
+    batch.inFlight = { keepalive };
+    const cancel = new AbortController();
+    let settled = false;
+    let deadline: unknown = null;
+    const settle = (reply: Reply | null): void => {
+      if (settled) return;
+      settled = true;
+      deps.clearTimer(deadline);
       if (keepalive) keepaliveBytes -= bytes;
-      if (batch.sendId !== sendId) return;
       batch.inFlight = null;
-      if (signal?.aborted) {
-        live.delete(batch.id);
-        return;
-      }
+      batch.leaseUntil = 0;
       if (batch.saved) {
         const current = deps.store.get(batch.id);
         if (current?.sendId !== sendId) {
@@ -261,109 +279,38 @@ export function createOutbox(deps: OutboxDeps) {
         batch.notBefore = Math.max(batch.notBefore, current.notBefore);
       }
       const answer = reply ? answerOf(reply.status, reply.retryAfter, deps.now()) : null;
-      if (answer && answer.outcome !== "retry") release(batch);
+      if (answer && answer.outcome !== "retry") finish(batch);
       else retry(batch, answer?.afterMs ?? null);
     };
-    return deps.post(body, keepalive, signal).then(answered, () => answered(null));
+    deadline = deps.setTimer(() => {
+      cancel.abort();
+      settle(null);
+    }, SEND_DEADLINE_MS);
+    deps.post(body, keepalive, cancel.signal).then(settle, () => settle(null));
   };
 
-  // After the next delay of the schedule, or the Retry-After /ingest asked
-  // for when that is longer.
-  const retry = (batch: Batch, afterMs: number | null): void => {
-    const delay = RETRY_DELAYS_MS[batch.attempt];
-    batch.attempt += 1;
-    const wait = Math.max(delay ?? RETRY_DELAYS_MS[RETRY_DELAYS_MS.length - 1], afterMs ?? 0);
-    if (afterMs !== null) batch.notBefore = Math.max(batch.notBefore, deps.now() + wait);
-    if (delay === undefined) {
-      if (!handOff(batch)) sendLater(batch, wait);
-      return;
-    }
-    if (afterMs === null) {
-      sendLater(batch, delay);
-      return;
-    }
-    if (handOff(batch)) replayAt(batch.notBefore);
-    else sendLater(batch, wait);
-  };
-
-  const handOff = (batch: Batch): boolean => {
-    if (!deps.store.save(stored(batch))) return false;
-    batch.saved = true;
-    live.delete(batch.id);
-    return true;
-  };
-
-  // Held as a batch waiting to send, so the page going away saves it.
-  const sendLater = (batch: Batch, ms: number): void => {
-    live.set(batch.id, batch);
-    batch.timer = deps.setTimer(() => {
-      batch.timer = null;
-      void send(batch);
-    }, ms);
-  };
-
-  // One timer, for the earliest saved batch /ingest asked to wait for.
-  let waitTimer: { handle: unknown; at: number } | null = null;
-  const replayAt = (at: number): void => {
-    if (waitTimer && waitTimer.at <= at) return;
-    if (waitTimer) deps.clearTimer(waitTimer.handle);
-    const handle = deps.setTimer(() => {
-      waitTimer = null;
-      replaySaved();
-    }, Math.max(at - deps.now(), 0));
-    waitTimer = { handle, at };
-  };
-
-  // One pass over storage: sends each batch in it, from any tab, that this
-  // page is not already sending, and drops the ones too old to send.
-  const replayPass = async (): Promise<void> => {
-    const cutOff = new AbortController();
+  const replayPass = (): void => {
     const stale: StoredBatch[] = [];
-    const sends: Array<Promise<void>> = [];
     for (const saved of deps.store.list()) {
       if (live.has(saved.id)) continue;
+      if (saved.leaseUntil > deps.now()) {
+        wakeAt(saved.leaseUntil);
+        continue;
+      }
       if (tooOld(saved.oldestAt)) {
         deps.store.remove(saved.id);
         stale.push(saved);
         continue;
       }
-      const batch: Batch = {
-        id: saved.id,
-        events: saved.events,
-        oldestAt: saved.oldestAt,
-        attempt: saved.attempt,
-        timer: null,
-        inFlight: null,
-        beaconed: saved.sent,
-        notBefore: saved.notBefore,
-        sendId: saved.sendId,
-        saved: true,
-      };
-      if (saved.notBefore > deps.now()) replayAt(saved.notBefore);
-      else sends.push(send(batch, cutOff.signal));
+      if (dueAt(saved) > deps.now()) {
+        wakeAt(dueAt(saved));
+        continue;
+      }
+      send(fromStorage(saved));
     }
-    if (stale.length > 0) deps.onStale(counted(stale));
-    if (sends.length === 0) return;
-    let answered = false;
-    let timer: unknown = null;
-    await Promise.race([
-      Promise.all(sends).then(() => (answered = true)),
-      new Promise<void>((resolve) => (timer = deps.setTimer(resolve, REPLAY_HOLD_MS))),
-    ]);
-    deps.clearTimer(timer);
-    if (!answered) cutOff.abort();
+    if (stale.length > 0) deps.onStale(stale);
   };
 
-  /**
-   * Sends what storage holds, from any tab, holding the replay lock until
-   * each send has its first answer, or REPLAY_HOLD_MS; a batch this page is
-   * still sending is left to that send. A batch too old to send is dropped,
-   * and the drops of one pass are counted together. An ask while a pass
-   * runs, such as a page coming back as one waits for its answers, gets a
-   * pass of its own after it, so nothing saved meanwhile waits for the
-   * next page load. A batch /ingest asked to wait for is left in storage,
-   * and a locked replay reads storage again when its time comes.
-   */
   function replaySaved(): void {
     if (replay === "waiting") return;
     if (replay === "running") {
@@ -376,7 +323,7 @@ export function createOutbox(deps: OutboxDeps) {
       try {
         do {
           replayAgain = false;
-          await replayPass();
+          replayPass();
         } while (replayAgain);
       } finally {
         replay = "idle";
@@ -389,15 +336,10 @@ export function createOutbox(deps: OutboxDeps) {
     if (queue.length === 0) return;
     const items = queue.splice(0);
     queuedBytes = 0;
-    for (const batch of batchesOf(items)) void send(batch);
+    for (const batch of batchesOf(items)) send(batch);
   }
 
   return {
-    /**
-     * Queues a built event; `urgent` (an exception) asks for an early send,
-     * and `deferred` (a page going away, whose flushForUnload follows) asks
-     * for none at all.
-     */
     add(event: OutboxEvent, { urgent = false, deferred = false }: { urgent?: boolean; deferred?: boolean } = {}): void {
       if (!remember(event.uuid)) return;
       const bytes = byteLength(JSON.stringify(event));
@@ -424,34 +366,24 @@ export function createOutbox(deps: OutboxDeps) {
       }
     },
 
-    /**
-     * The page is going away: the queue and every batch waiting to retry go
-     * now by beacon, as far as the shared budget allows, and storage takes
-     * them over. A batch in flight is saved too, and stays until its answer.
-     */
     flushForUnload(): void {
       cancelFlush();
       const items = queue.splice(0);
       queuedBytes = 0;
-      const held = [...live.values()];
       let budget = UNLOAD_BUDGET_BYTES - keepaliveBytes - beaconBytes();
-      for (const batch of [...held.filter((each) => each.inFlight === null), ...batchesOf(items)]) {
+      const waiting = [...live.values()].filter((batch) => batch.inFlight === null);
+      for (const batch of [...waiting, ...batchesOf(items)]) {
         const body = bodyOf(batch.events);
         const bytes = byteLength(body);
-        const due = batch.notBefore <= deps.now();
-        if (due && !tooOld(batch.oldestAt) && bytes <= budget && deps.beacon(body)) {
+        if (batch.notBefore <= deps.now() && !tooOld(batch.oldestAt) && bytes <= budget && deps.beacon(body)) {
           budget -= bytes;
           beacons.push({ bytes, at: deps.now() });
-          batch.beaconed = true;
+          batch.sent = true;
+          batch.nextTry = Math.max(batch.nextTry, deps.now() + BEACON_CONFIRM_MS);
         }
-        if (handOff(batch)) {
-          if (batch.timer !== null) deps.clearTimer(batch.timer);
-          batch.timer = null;
-        } else if (batch.timer === null) {
-          sendLater(batch, RETRY_DELAYS_MS[0]);
-        }
+        if (!toStorage(batch) && batch.timer === null) holdInMemory(batch);
       }
-      for (const batch of held) {
+      for (const batch of live.values()) {
         if (batch.inFlight !== null && deps.store.save(stored(batch))) batch.saved = true;
       }
     },
@@ -462,7 +394,6 @@ export function createOutbox(deps: OutboxDeps) {
 
 export type Outbox = ReturnType<typeof createOutbox>;
 
-// Saved batches the tabs of a site keep together, at most: the oldest go first.
 export const STORED_BATCH_PREFIX = "conclave:telemetry:batch:";
 export const MAX_STORED_CHARS = 512 * 1024;
 
@@ -482,15 +413,12 @@ const StoredBatchSchema = z.object({
   oldestAt: z.number(),
   sent: z.boolean(),
   notBefore: z.number().default(0),
+  nextTry: z.number().default(0),
   attempt: z.number().int().min(0).max(1000).default(0),
   sendId: z.string().max(64).default(""),
+  leaseUntil: z.number().default(0),
 });
 
-/**
- * Saved batches in web storage, each under its own key (the prefix and the
- * batch's id), so tabs saving or removing at once never write over each
- * other's entries. An entry that does not parse is removed.
- */
 export function createBatchStore(storage: () => Storage): BatchStore {
   const keyOf = (id: string) => `${STORED_BATCH_PREFIX}${id}`;
   const entries = (area: Storage): Array<{ key: string; text: string }> => {
@@ -517,17 +445,8 @@ export function createBatchStore(storage: () => Storage): BatchStore {
         const key = keyOf(batch.id);
         const text = JSON.stringify(batch);
         const others = entries(area).filter((entry) => entry.key !== key);
-        let total = others.reduce((sum, entry) => sum + entry.text.length, text.length);
-        if (total > MAX_STORED_CHARS) {
-          const oldestFirst = others
-            .map((entry) => ({ ...entry, oldestAt: parse(entry.key, entry.text)?.oldestAt ?? Number.NEGATIVE_INFINITY }))
-            .sort((a, b) => a.oldestAt - b.oldestAt);
-          for (const entry of oldestFirst) {
-            if (total <= MAX_STORED_CHARS) break;
-            area.removeItem(entry.key);
-            total -= entry.text.length;
-          }
-        }
+        const total = others.reduce((sum, entry) => sum + entry.text.length, text.length);
+        if (total > MAX_STORED_CHARS) return false;
         area.setItem(key, text);
         return true;
       } catch {

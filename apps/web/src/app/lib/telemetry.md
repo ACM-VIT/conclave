@@ -32,59 +32,54 @@ of requests rather than one per event. A batch goes 5 s after its first event,
 as soon as it holds 20 events, or before it would pass 48 KB (under the
 browser's 64 KB budget for keepalive requests and beacons), whichever comes
 first. An exception sends early, at most once every 3 s. An event is queued
-once by its uuid. One table, in `lib/telemetry-answers.ts`, says what an
+once by its uuid. Batches go by keepalive fetch, without cookies, and each
+send carries its own `sent_at`, so `/ingest` can tell the events' age by the
+browser's clock. One table, in `lib/telemetry-answers.ts`, says what an
 answer means, for the outbox reading `/ingest` and for `/ingest` reading
 PostHog: 2xx is delivered; 408, 425, 429 and any 5xx are worth sending again;
-anything else is refused for good. A batch with no answer, or one worth
-sending again, is retried with the very same events after 2, 4, 8, 16 and
-30 s, or after the answer's `Retry-After` when that is longer (seconds or an
-HTTP date, held to 60 s). A batch `/ingest` asks to wait goes to storage
-with the time it may go, and its next send is a replay at that time, under
-the tabs' lock, which reads storage again: no tab sends it sooner, beacons it
-as the page goes away, or sends it after another tab already has. A saved
-batch keeps its place in the retry schedule, so replays go on with it rather
-than start it again, and a batch storage refuses, blocked or full, stays in
-memory and keeps retrying there, until it is answered or too old to send. Each send carries its own `sent_at`, so
-`/ingest` can tell the events' age by the browser's clock. A batch whose retries run
-out is saved, as below, for the next replay. A refused batch is dropped.
-Batches go by keepalive fetch, without cookies.
+anything else is refused for good.
 
-The outbox owns every batch until `/ingest` answers a send of it: a batch is
-queued, in flight or waiting to retry. A lifecycle flush is installed when
-telemetry starts, before the SDK downloads, and stays for the page's life. On
-`visibilitychange` to hidden, on `pagehide` and on `freeze`, everything still
-queued, and any batch waiting to retry, goes out at once by beacon, once,
-split to stay within the beacon limit. The browser allows 64 KB across all of
-a page's outstanding beacons and keepalive requests, so the outbox counts them
-against one 56 KB budget: a batch goes by keepalive only while it fits, and at
-unload only what fits goes by beacon. Every batch not yet answered is saved
-in local storage then, in flight or not, beaconed or not: a request past the
-budget, which the browser cancels as the page goes away, is kept like the
-rest. Each batch has its own entry, `conclave:telemetry:batch:<uuid>`, so
-tabs saving at once never write over each other (at most 512 KB in all, the
-oldest batches going first). A saved copy is removed only once a send of it
-is answered. The next page load, and a page coming back into view, sends what
-storage holds, from any tab, while holding a Web Locks lock
-(`conclave:telemetry:replay`), so one tab replays at a time. A replay waits
-its turn for the lock and holds it until its sends have their first answers,
-or 10 s at most, and then stops any request still open before it lets the
-lock go. Each send of a saved batch claims it in storage under a new attempt
-id, and an answer from an earlier attempt changes nothing: a late reply can
-neither resend the batch nor shorten the wait a newer send was given, and a
-`Retry-After` only ever moves the next send later. A replay asked for while one runs, such as a page coming back
-while its own replay still waits for an answer, runs after it, so a batch
-saved meanwhile is not left for the next page load. Without the Web Locks API
-two tabs may both send a batch, and `/ingest` takes each uuid once. A beacon
-is never answered, so its batch is sent again then too.
+The outbox owns every batch until `/ingest` answers it, and each batch has
+one owner at a time:
 
-Saved batches expire. `/ingest` keeps an event's own time only within 5
-minutes of receiving it, so a batch whose oldest event is more than 4 minutes
-old is dropped, never sent to be dated by when it arrived, whether it is
-being replayed or retried. The batches one
-replay drops are reported together as `telemetry_reports_dropped`: `batches`,
-`events` (the reports in them), and `unsent`, the batches that had no send
-which may have arrived (a beacon or a keepalive request in flight as the page
-went away); those are reports lost for good.
+- **In memory.** A batch only this tab holds is sent by this tab and retried
+  by this tab's timer: after 2, 4, 8 and 16 s, then every 30 s, or after the
+  answer's `Retry-After` when that is later (seconds or an HTTP date, held to
+  60 s). A `Retry-After` only ever moves the next try later. Every request has
+  a 15 s deadline (`/ingest` itself allows 2 s for a manifest and 10 s for
+  PostHog); at the deadline it is aborted and counts as no answer.
+- **Saved.** On `visibilitychange` to hidden, on `pagehide` and on `freeze`,
+  everything queued and every batch waiting in memory goes by beacon, within
+  one 56 KB budget for every beacon and keepalive request still outstanding,
+  unless its `Retry-After` has not passed; then each is saved in local storage
+  under its own key, `conclave:telemetry:batch:<uuid>`, at most 512 KB in
+  all. A request in flight is saved too, with its attempt id and a lease. A
+  saved batch keeps its place in the retry schedule (`attempt`, `nextTry`,
+  `notBefore`), and a beaconed one is sent again 30 s later to confirm it,
+  since a beacon is never answered.
+- **Replayed.** A saved batch is sent only by a replay pass, which runs under
+  a Web Locks lock (`conclave:telemetry:replay`) at its due time, when a tab
+  loads or comes back into view, and when another tab changes a saved batch
+  (the `storage` event). The pass claims a due batch by writing a new attempt
+  id and a lease until 16 s after the send, so another tab leaves it alone
+  until the request has settled; an answer from an earlier attempt changes
+  nothing. Without the Web Locks API two tabs may both claim a batch, and
+  `/ingest` takes each uuid once.
+- **Refused by storage.** When local storage refuses a write, blocked or
+  full, the batch stays in memory and its tab keeps retrying it. A tab that
+  closes while storage refuses it and its beacon fails loses that batch; that
+  is the one loss nothing can count.
+
+Saved and retried batches expire. `/ingest` keeps an event's own time only
+within 5 minutes of receiving it, so a batch whose oldest event is more than 4
+minutes old is dropped, never sent to be dated by when it arrived. The
+batches one replay drops are reported together as
+`telemetry_reports_dropped`: `batches`, `events` (the reports in them), and
+`unsent`, the batches that had no send which may have arrived (a beacon or a
+keepalive request in flight as the page went away). The full lifecycle, every
+state and event with the owner of the next step, is in the PR that added it
+(#265), and `test/telemetry-outbox-model.test.ts` checks it in a seeded
+simulation of up to three tabs.
 
 Once the page has started to go away (hidden, `pagehide` or `freeze` seen),
 every later report, such as the call summary the call tracker sends as the

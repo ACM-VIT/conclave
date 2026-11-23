@@ -1,14 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
+  countDropped,
   createBatchStore,
   createOutbox,
   type DroppedBatches,
   FLUSH_INTERVAL_MS,
+  LEASE_MS,
   MAX_BATCH_BYTES,
   MAX_BATCH_EVENTS,
   MAX_STORED_CHARS,
   type OutboxEvent,
-  REPLAY_HOLD_MS,
+  SEND_DEADLINE_MS,
   type StoredBatch,
   UNLOAD_BUDGET_BYTES,
   URGENT_FLUSH_GAP_MS,
@@ -130,7 +132,7 @@ const harness = ({
     newId: () => `0196f0a1-0000-7000-9000-${String(++batchIds).padStart(12, "0")}`,
     store,
     lock,
-    onStale: (counted) => dropped.push(counted),
+    onStale: (batches) => dropped.push(countDropped(batches)),
   });
   const advance = async (ms: number) => {
     const until = clock.now + ms;
@@ -351,8 +353,8 @@ describe("a batch storage cannot take", () => {
   it("says so when web storage refuses the write", () => {
     const store = createBatchStore(fullStorage);
 
-    expect(store.save({ id: "batch-full", events: [event()], oldestAt: START, sent: false, notBefore: 0, attempt: 0, sendId: "" })).toBe(false);
-    expect(createBatchStore(() => memoryWebStorage()).save({ id: "batch-ok", events: [event()], oldestAt: START, sent: false, notBefore: 0, attempt: 0, sendId: "" })).toBe(true);
+    expect(store.save({ id: "batch-full", events: [event()], oldestAt: START, sent: false, notBefore: 0, nextTry: 0, attempt: 0, sendId: "", leaseUntil: 0 })).toBe(false);
+    expect(createBatchStore(() => memoryWebStorage()).save({ id: "batch-ok", events: [event()], oldestAt: START, sent: false, notBefore: 0, nextTry: 0, attempt: 0, sendId: "", leaseUntil: 0 })).toBe(true);
   });
 
   it("waits out a Retry-After in memory, and sends it then", async () => {
@@ -392,15 +394,30 @@ describe("a batch storage cannot take", () => {
 });
 
 describe("retries /ingest asked to wait for", () => {
-  it("keep the backoff schedule through each replay, and stop after the last retry", async () => {
+  it("keep the backoff schedule, then try every 30 s at its last step", async () => {
     const store = memoryStore();
     const h = harness({ answers: Array.from({ length: 30 }, () => ({ status: 429, retryAfter: "1" })), store });
     const limited = event();
     h.outbox.add(limited);
     await h.advance(3 * MINUTE);
 
-    expect(h.posts.map((post) => post.at - START)).toEqual([5000, 7000, 11_000, 19_000, 35_000, 65_000]);
-    expect(store.list()).toEqual([expect.objectContaining({ events: [limited], attempt: 6 })]);
+    expect(h.posts.map((post) => post.at - START)).toEqual([5000, 7000, 11_000, 19_000, 35_000, 65_000, 95_000, 125_000, 155_000]);
+    expect(store.list()).toEqual([]);
+  });
+
+  it("keep the schedule through a save and a replay", async () => {
+    const store = memoryStore();
+    const h = harness({ answers: Array.from({ length: 30 }, () => ({ status: 429, retryAfter: "1" })), store });
+    h.refuseBeacons();
+    h.outbox.add(event());
+    await h.advance(FLUSH_INTERVAL_MS + 500);
+    h.outbox.flushForUnload();
+    expect(store.list()).toEqual([expect.objectContaining({ attempt: 1, nextTry: START + 7000 })]);
+    h.outbox.replaySaved();
+    await h.advance(59_000);
+
+    expect(h.posts.map((post) => post.at - START)).toEqual([5000, 7000, 11_000, 19_000, 35_000]);
+    expect(store.list()).toEqual([expect.objectContaining({ attempt: 5, nextTry: START + 65_000 })]);
   });
 });
 
@@ -414,57 +431,55 @@ describe("a reply from a send another has replaced", () => {
     return waiting;
   };
 
-  it("is cut off as the replay gives up the lock, and cannot shorten the wait a newer send was given", async () => {
+  it("is cut off at its deadline, and cannot shorten the wait a newer send was given", async () => {
     const store = memoryStore();
     const waiting = savedBatch(store);
     const lock = sharedLock();
     const clock = { now: START + 5000 };
     const late = answerLater();
-    const first = harness({ answers: [late.promise], store, lock, clock });
-    const second = harness({ answers: [{ status: 429, retryAfter: "60" }], store, lock, clock });
+    const limited = { status: 429, retryAfter: "60" };
+    const first = harness({ answers: [late.promise, limited], store, lock, clock });
+    const second = harness({ answers: [limited], store, lock, clock });
     first.outbox.replaySaved();
     second.outbox.replaySaved();
     await settle();
     expect(second.posts).toEqual([]);
 
-    await first.advance(REPLAY_HOLD_MS);
+    await first.advance(SEND_DEADLINE_MS);
     expect(first.posts[0].signal?.aborted).toBe(true);
-    await second.advance(0);
-    expect(second.posted()).toEqual([waiting.uuid]);
+    for (let step = 0; step < 3; step++) {
+      await second.advance(1000);
+      await first.advance(0);
+    }
+    const sends = () => [...first.posts, ...second.posts];
+    expect(sends().map((post) => post.at - START)).toEqual([5000, 5000 + SEND_DEADLINE_MS + 2000]);
 
     late.answer({ status: 429, retryAfter: "1" });
-    await first.advance(30_000);
-    await second.advance(0);
-    expect(first.posts).toHaveLength(1);
-    expect(second.posts).toHaveLength(1);
-    expect(store.list()).toEqual([expect.objectContaining({ notBefore: START + 5000 + REPLAY_HOLD_MS + 60_000 })]);
-
-    await second.advance(START + 5000 + REPLAY_HOLD_MS + 60_000 - clock.now);
-    expect(second.posted()).toEqual([waiting.uuid, waiting.uuid]);
-    expect(store.list()).toEqual([]);
+    for (let step = 0; step < 30; step++) {
+      await first.advance(1000);
+      await second.advance(0);
+    }
+    expect(sends()).toHaveLength(2);
+    expect(store.list()).toEqual([expect.objectContaining({ notBefore: START + 5000 + SEND_DEADLINE_MS + 2000 + 60_000 })]);
+    expect([...first.posted(), ...second.posted()]).toEqual([waiting.uuid, waiting.uuid]);
   });
 
-  it("moves nothing when it arrives after a newer send took the batch, even if its request was never stopped", async () => {
+  it("moves nothing when it arrives after its deadline, even if its request was never stopped", async () => {
     const store = memoryStore();
     const waiting = savedBatch(store);
-    const lock = sharedLock();
     const clock = { now: START + 5000 };
     const late = answerLater();
-    const first = harness({ answers: [late.promise], store, lock, clock, ignoreAbort: true });
-    const second = harness({ answers: [{ status: 429, retryAfter: "60" }], store, lock, clock });
-    first.outbox.replaySaved();
-    second.outbox.replaySaved();
-    await first.advance(REPLAY_HOLD_MS);
-    await second.advance(0);
-    expect(second.posted()).toEqual([waiting.uuid]);
+    const page = harness({ answers: [late.promise, { status: 429, retryAfter: "60" }], store, clock, ignoreAbort: true });
+    page.outbox.replaySaved();
+    await page.advance(SEND_DEADLINE_MS + 2000);
+    expect(page.posts.map((post) => post.at - START)).toEqual([5000, 5000 + SEND_DEADLINE_MS + 2000]);
 
     late.answer({ status: 429, retryAfter: "1" });
-    await first.advance(30_000);
-    await second.advance(0);
+    await page.advance(30_000);
 
-    expect(first.posts).toHaveLength(1);
-    expect(second.posts).toHaveLength(1);
-    expect(store.list()).toEqual([expect.objectContaining({ notBefore: START + 5000 + REPLAY_HOLD_MS + 60_000 })]);
+    expect(page.posts).toHaveLength(2);
+    expect(store.list()).toEqual([expect.objectContaining({ notBefore: START + 5000 + SEND_DEADLINE_MS + 2000 + 60_000 })]);
+    expect(page.posted()).toEqual([waiting.uuid, waiting.uuid]);
   });
 });
 
@@ -561,7 +576,7 @@ describe("a batch /ingest asked to wait for", () => {
 });
 
 describe("the outbox as the page goes away", () => {
-  it("saves every batch not yet answered, and beacons the ones not in flight", async () => {
+  it("saves every batch not yet answered, beacons the ones not in flight, and confirms each while the page stays", async () => {
     const store = memoryStore();
     const h = harness({ answers: [503, "pending"], store });
     const waiting = event();
@@ -577,14 +592,13 @@ describe("the outbox as the page goes away", () => {
     expect(h.uuidsIn(h.beacons).sort()).toEqual([waiting.uuid, queued.uuid].sort());
     expect(storedUuids(store).sort()).toEqual([waiting.uuid, inFlight.uuid, queued.uuid].sort());
     await h.advance(120_000);
-    expect(h.posts).toHaveLength(2);
+    expect(store.list()).toEqual([]);
+    expect(new Set(h.posted())).toEqual(new Set([waiting.uuid, inFlight.uuid, queued.uuid]));
   });
 
   it("saves a request in flight past the keepalive budget, which the page's end cancels, and the next load sends it", async () => {
     const store = memoryStore();
     const h = harness({ answers: ["pending", "pending"], store });
-    // The first batch takes most of the shared budget by keepalive; the next
-    // goes as a plain request the browser cancels as the page goes away.
     for (let i = 0; i < 2; i++) h.outbox.add(event("meet_join_attempt", 20 * 1024));
     await h.advance(FLUSH_INTERVAL_MS);
     const overflow = [event("meet_join_attempt", 15 * 1024), event("meet_join_attempt", 15 * 1024)];
@@ -600,6 +614,8 @@ describe("the outbox as the page goes away", () => {
     const nextLoad = harness({ store, at: START + 20_000 });
     nextLoad.outbox.replaySaved();
     await nextLoad.advance(0);
+    expect(nextLoad.posts).toEqual([]);
+    await nextLoad.advance(LEASE_MS);
     expect(nextLoad.posted()).toEqual(expect.arrayContaining(overflow.map((item) => item.uuid)));
     expect(store.list()).toEqual([]);
   });
@@ -692,16 +708,15 @@ describe("the outbox as the page goes away", () => {
     );
   });
 
-  it("keeps a batch whose retries ran out for the next replay", async () => {
+  it("keeps retrying a batch every 30 s once its schedule runs out, until it is answered", async () => {
     const store = memoryStore();
     const h = harness({ answers: Array.from({ length: 6 }, () => 503), store });
-    const failing = event();
-    h.outbox.add(failing);
+    h.outbox.add(event());
     await h.advance(FLUSH_INTERVAL_MS);
     await h.advance(120_000);
 
-    expect(h.posts).toHaveLength(6);
-    expect(store.list()).toEqual([expect.objectContaining({ sent: false, events: [failing] })]);
+    expect(h.posts.map((post) => post.at - START)).toEqual([5000, 7000, 11_000, 19_000, 35_000, 65_000, 95_000]);
+    expect(store.list()).toEqual([]);
   });
 });
 
@@ -831,7 +846,7 @@ describe("saved batches across tabs", () => {
     expect(store.list()).toEqual([]);
   });
 
-  it("waits its turn when another tab holds the lock, then sends what was saved meanwhile", async () => {
+  it("sends what was saved meanwhile at once, and leaves the batch another tab is sending to it", async () => {
     const store = memoryStore();
     const lock = sharedLock();
     const closed = harness({ store });
@@ -852,15 +867,17 @@ describe("saved batches across tabs", () => {
     other.outbox.flushForUnload();
     other.outbox.replaySaved();
     await settle();
-    expect(other.posts).toEqual([]);
+    expect(other.posted()).toEqual([meanwhile.uuid]);
 
     later.answer(200);
+    await holder.advance(0);
     await other.advance(0);
+    expect(holder.posted()).toEqual([earlier.uuid]);
     expect(other.posted()).toEqual([meanwhile.uuid]);
     expect(store.list()).toEqual([]);
   });
 
-  it("holds the lock no longer than REPLAY_HOLD_MS for a send that never answers", async () => {
+  it("aborts a send that never answers at its deadline, and no other tab sends the batch before then", async () => {
     const store = memoryStore();
     const lock = sharedLock();
     const closed = harness({ store });
@@ -869,16 +886,24 @@ describe("saved batches across tabs", () => {
     closed.outbox.add(stuck);
     closed.outbox.flushForUnload();
 
-    const holder = harness({ answers: ["pending"], store, lock, at: START + 5000 });
+    const clock = { now: START + 5000 };
+    const holder = harness({ answers: ["pending"], store, lock, clock });
     holder.outbox.replaySaved();
-    const other = harness({ store, lock, at: START + 5000 });
+    const other = harness({ store, lock, clock });
     other.outbox.replaySaved();
-    await holder.advance(REPLAY_HOLD_MS - 1);
+    await holder.advance(SEND_DEADLINE_MS - 1);
+    await other.advance(0);
     expect(other.posts).toEqual([]);
 
     await holder.advance(1);
-    await other.advance(0);
-    expect(other.posted()).toEqual([stuck.uuid]);
+    expect(holder.posts[0].signal?.aborted).toBe(true);
+    for (let step = 0; step < 4; step++) {
+      await other.advance(1000);
+      await holder.advance(0);
+    }
+    const sends = [...holder.posts, ...other.posts];
+    expect(sends.map((post) => post.at - START)).toEqual([5000, 5000 + SEND_DEADLINE_MS + 2000]);
+    expect(store.list()).toEqual([]);
     expect(lock.held()).toBe(false);
   });
 
@@ -892,7 +917,7 @@ describe("saved batches across tabs", () => {
     expect(lock.waiting()).toBe(1);
   });
 
-  it("loses nothing without the lock: two tabs replaying at once both send, and /ingest takes the uuid once", async () => {
+  it("leaves a batch another tab has just claimed, even without the lock", async () => {
     const store = memoryStore();
     const closed = harness({ store });
     closed.refuseBeacons();
@@ -904,25 +929,28 @@ describe("saved batches across tabs", () => {
     for (const load of loads) load.outbox.replaySaved();
     await settle();
 
-    for (const load of loads) expect(load.posted().sort()).toEqual(items.map((item) => item.uuid).sort());
+    expect(loads[0].posted().sort()).toEqual(items.map((item) => item.uuid).sort());
+    expect(loads[1].posts).toEqual([]);
     expect(store.list()).toEqual([]);
   });
 
-  it("keeps at most the storage cap, the oldest batches going first", () => {
+  it("refuses a batch past the storage cap, and keeps what it holds", () => {
     const site = origin();
     const storage = site.tab();
     const store = createBatchStore(() => storage);
     const size = 40 * 1024;
     const count = Math.ceil(MAX_STORED_CHARS / size) + 2;
-    for (let i = 0; i < count; i++) {
-      store.save({ id: `batch-${i}`, events: [event("meet_join_attempt", size, START + i * 1000)], oldestAt: START + i * 1000, sent: false, notBefore: 0, attempt: 0, sendId: "" });
-    }
+    const taken = Array.from({ length: count }, (_, i) =>
+      store.save({ id: `batch-${i}`, events: [event("meet_join_attempt", size, START + i * 1000)], oldestAt: START + i * 1000, sent: false, notBefore: 0, nextTry: 0, attempt: 0, sendId: "", leaseUntil: 0 }),
+    );
 
     const kept = store.list().map((batch) => batch.id);
     const chars = [...site.items.values()].reduce((total, text) => total + text.length, 0);
     expect(chars).toBeLessThanOrEqual(MAX_STORED_CHARS);
-    expect(kept).toContain(`batch-${count - 1}`);
-    expect(kept).not.toContain("batch-0");
+    expect(taken.at(-1)).toBe(false);
+    expect(kept).toContain("batch-0");
+    expect(kept).not.toContain(`batch-${count - 1}`);
+    expect(kept).toEqual(Array.from({ length: taken.filter(Boolean).length }, (_, i) => `batch-${i}`));
   });
 });
 

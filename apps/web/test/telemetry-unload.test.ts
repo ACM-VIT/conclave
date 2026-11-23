@@ -323,12 +323,11 @@ describe("batches the browser will not take as the page goes away", () => {
     startTelemetry();
     await loaded();
     telemetry.capture("meet_join_attempt", { joinMode: "meeting", isAdmin: false });
+    Object.defineProperty(navigator, "sendBeacon", { configurable: true, value: () => false });
     hide();
-    expect(sent.map((item) => item.via)).toEqual(["beacon"]);
+    expect(sent).toEqual([]);
     expect(savedKeys()).toHaveLength(1);
 
-    // Every earlier test's page is still listening, as other tabs would be:
-    // each may send the batch again, and /ingest takes its uuid once.
     document.dispatchEvent(new Event("visibilitychange"));
     await vi.waitFor(() => expect(sent.filter((item) => item.via === "fetch").length).toBeGreaterThan(0));
     expect(new Set(await names(sent.filter((item) => item.via === "fetch")))).toEqual(new Set(["meet_join_attempt"]));
