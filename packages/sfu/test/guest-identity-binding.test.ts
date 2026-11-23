@@ -3156,6 +3156,17 @@ describe("a guest who is a co-host in two tabs, when one tab is removed", () => 
     }
     expect(room.getClient(guestHostSeat)).toBeInstanceOf(Admin);
   });
+
+  it("tells the room's listeners that its seats changed when a block leaves the tabs seated but no longer hosts", async () => {
+    const { state, room } = await coHostInTwoTabs();
+    const events: string[] = [];
+    room.onLifecycle((event) => events.push(event));
+
+    blockUserKey(room, tabA.userId, { reason: "Blocked by host", kickPresent: false, io, state });
+
+    expect(room.getClient(seatOf(tabB))).not.toBeInstanceOf(Admin);
+    expect(events).toContain("membership");
+  });
 });
 
 describe("a guest join token whose claims are malformed", () => {

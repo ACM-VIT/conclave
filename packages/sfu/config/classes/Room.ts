@@ -2788,6 +2788,9 @@ export class Room {
       Object.setPrototypeOf(client, Client.prototype);
       demoted.push(userId);
     }
+    if (demoted.length > 0) {
+      this.notifyLifecycle("membership");
+    }
     return demoted;
   }
 
