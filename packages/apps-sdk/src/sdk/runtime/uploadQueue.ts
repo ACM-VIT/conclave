@@ -1,5 +1,6 @@
 import * as Y from "yjs";
 import { APP_DOCUMENT_UPDATE_MAX_BYTES, APP_DOCUMENT_UPLOAD_INTERVAL_MS } from "../limits";
+import { splitUpdate } from "./splitUpdate";
 
 type Pending = { appId: string; replicaId: string | undefined; updates: Uint8Array[] };
 
@@ -22,6 +23,8 @@ const takeBatch = (updates: Uint8Array[]): number => {
   return count;
 };
 
+const merge = (updates: Uint8Array[]): Uint8Array => (updates.length === 1 ? updates[0] : Y.mergeUpdates(updates));
+
 export const createUploadQueue = (send: SendUpload): UploadQueue => {
   const pending = new Map<string, Pending>();
   let lastSentAt = Number.NEGATIVE_INFINITY;
@@ -33,8 +36,7 @@ export const createUploadQueue = (send: SendUpload): UploadQueue => {
     if (next.done) return;
     const [key, entry] = next.value;
     const count = takeBatch(entry.updates);
-    const batch = entry.updates.slice(0, count);
-    const update = batch.length === 1 ? batch[0] : Y.mergeUpdates(batch);
+    const update = merge(entry.updates.slice(0, count));
     if (!send(entry.appId, entry.replicaId, update)) return;
     entry.updates.splice(0, count);
     if (entry.updates.length === 0) pending.delete(key);
@@ -62,9 +64,10 @@ export const createUploadQueue = (send: SendUpload): UploadQueue => {
   return {
     add: (appId, replicaId, update) => {
       const key = `${appId}\u0000${replicaId ?? ""}`;
+      const pieces = splitUpdate(update, APP_DOCUMENT_UPDATE_MAX_BYTES);
       const entry = pending.get(key);
-      if (entry) entry.updates.push(update);
-      else pending.set(key, { appId, replicaId, updates: [update] });
+      if (entry) entry.updates.push(...pieces);
+      else pending.set(key, { appId, replicaId, updates: pieces });
       schedule();
     },
     drop: (appId) => {

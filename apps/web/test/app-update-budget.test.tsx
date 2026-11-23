@@ -9,6 +9,7 @@ import { useApps } from "../../../packages/apps-sdk/src/sdk/hooks/useApps";
 import { useAppDoc } from "../../../packages/apps-sdk/src/sdk/hooks/useAppDoc";
 import { APP_DOCUMENT_UPDATE_MAX_BYTES, APP_DOCUMENT_UPLOADS_PER_SECOND } from "../../../packages/apps-sdk/src/sdk/limits";
 import { createUploadQueue } from "../../../packages/apps-sdk/src/sdk/runtime/uploadQueue";
+import { splitUpdate } from "../../../packages/apps-sdk/src/sdk/runtime/splitUpdate";
 import { whiteboardApp } from "../../../packages/apps-sdk/src/apps/whiteboard/web/index";
 import {
   addElement,
@@ -36,6 +37,8 @@ const budgetedSfu = (appId: string, serverDoc: Y.Doc) => {
   const limiter = {} as never;
   const listeners = new Map<string, Set<Listener>>();
   const sentAt: number[] = [];
+  const sentBytes: number[] = [];
+  const reasons: string[] = [];
   const state = {
     refusals: 0,
     refuseNext: null as null | ((after: Y.Doc) => boolean),
@@ -64,7 +67,15 @@ const budgetedSfu = (appId: string, serverDoc: Y.Doc) => {
       if (event !== "apps:yjs:update") return;
       const { update, replicaId } = payload as { update: Uint8Array; replicaId: string };
       sentAt.push(Date.now());
+      sentBytes.push(update.length);
       if (state.refusedReplicas.has(replicaId)) return;
+      if (update.length > APP_DOCUMENT_UPDATE_MAX_BYTES) {
+        state.refusals += 1;
+        reasons.push("too-large");
+        state.refusedReplicas.add(replicaId);
+        setTimeout(() => fire("apps:yjs:refused", { appId, replicaId, reason: "too-large" }), 0);
+        return;
+      }
       const after = new Y.Doc();
       Y.applyUpdate(after, Y.encodeStateAsUpdate(serverDoc));
       Y.applyUpdate(after, update);
@@ -76,6 +87,7 @@ const budgetedSfu = (appId: string, serverDoc: Y.Doc) => {
         state.refusals += 1;
         state.refusedReplicas.add(replicaId);
         const reason = refusedByTest ? state.refusalReason : limited ? "rate-limited" : "missing-dependency";
+        reasons.push(reason);
         setTimeout(() => fire("apps:yjs:refused", { appId, replicaId, reason }), refusedByTest ? state.refusalDelayMs : 0);
         return;
       }
@@ -84,7 +96,7 @@ const budgetedSfu = (appId: string, serverDoc: Y.Doc) => {
   } as unknown as Socket;
   const busiestSecond = () =>
     sentAt.reduce((most, start, index) => Math.max(most, sentAt.slice(index).filter((time) => time < start + 1_000).length), 0);
-  return { socket, state, sentAt, busiestSecond, fire };
+  return { socket, state, sentAt, sentBytes, reasons, busiestSecond, fire };
 };
 
 const mount = async (socket: Socket, Body: ComponentType, apps: never[]) => {
@@ -300,6 +312,38 @@ describe("app updates stay inside the server's budget", () => {
     expect(getPageElements(server, pageId).map((element) => element.id).sort()).toEqual(["during", "refused"]);
   });
 
+  it("sends more than the server takes in one update, made while it resends, as ordered pieces with nothing refused as too large", async () => {
+    const server = createWhiteboardDoc();
+    ensureDefaultPage(server);
+    const sfu = budgetedSfu("whiteboard", server);
+    await mount(sfu.socket, () => null, [whiteboardApp as never]);
+    const pageId = getActivePageId(ctx.getDoc("whiteboard"))!;
+    const live = ctx.getDoc("whiteboard");
+    sfu.state.refuseNext = (after) => getPageElements(after, pageId).some((element) => element.id === "refused");
+    sfu.state.syncDelayMs = 1_000;
+
+    await act(async () => {
+      addElement(live, pageId, { id: "refused", type: "rect", x: 0, y: 0, width: 5, height: 5 } as never);
+    });
+    await advance(100);
+    for (let index = 0; index < 40; index += 1) {
+      await act(async () => {
+        addElement(live, pageId, { id: `note-${index}`, type: "text", x: index, y: 0, text: `${index}`.padEnd(10_000, "x"), color: "#fff", fontSize: 16 } as never);
+      });
+      await advance(10);
+    }
+    await advance(5_000);
+
+    expect(sfu.reasons).toEqual(["timed-out"]);
+    expect(Math.max(...sfu.sentBytes)).toBeLessThanOrEqual(APP_DOCUMENT_UPDATE_MAX_BYTES);
+    expect(sfu.sentBytes.reduce((total, bytes) => total + bytes, 0)).toBeGreaterThan(APP_DOCUMENT_UPDATE_MAX_BYTES);
+    expect(ctx.getDoc("whiteboard")).toBe(live);
+    expect(getPageElements(server, pageId).map((element) => element.id).sort()).toEqual(
+      getPageElements(live, pageId).map((element) => element.id).sort(),
+    );
+    expect(getPageElements(server, pageId)).toHaveLength(41);
+  });
+
   it("holds its changes while the socket is down and sends them as one upload when it connects", async () => {
     const server = createWhiteboardDoc();
     ensureDefaultPage(server);
@@ -388,5 +432,135 @@ describe("the upload queue", () => {
     const rebuilt = new Y.Doc();
     sent.forEach((update) => Y.applyUpdate(rebuilt, update));
     expect(rebuilt.getText("t").toString()).toBe(doc.getText("t").toString());
+  });
+});
+
+describe("splitting an update", () => {
+  const MAX = APP_DOCUMENT_UPDATE_MAX_BYTES;
+
+  const editedCopy = () => {
+    const server = new Y.Doc();
+    server.getArray<string>("list").push(["kept", "dropped"]);
+    server.getMap("meta").set("title", "draft");
+    const client = new Y.Doc();
+    Y.applyUpdate(client, Y.encodeStateAsUpdate(server));
+    for (let index = 0; index < 120; index += 1) {
+      client.transact(() => {
+        client.getArray<string>("list").push([`${index}`.padEnd(5_000, "y")]);
+        client.getMap("meta").set("title", `draft ${index}`);
+      });
+    }
+    client.getText("notes").insert(0, "notes");
+    client.getArray<string>("list").delete(1, 1);
+    client.getArray<string>("list").delete(4, 3);
+    return { server, client, missing: Y.encodeStateAsUpdate(client, Y.encodeStateVector(server)) };
+  };
+
+  it("cuts what the server lacks into pieces under the cap that each apply in order", () => {
+    const { server, client, missing } = editedCopy();
+    expect(missing.length).toBeGreaterThan(2 * MAX);
+
+    const pieces = splitUpdate(missing, MAX);
+
+    expect(pieces.length).toBeGreaterThan(2);
+    expect(pieces.every((piece) => piece.length <= MAX)).toBe(true);
+    for (const piece of pieces) {
+      Y.applyUpdate(server, piece);
+      expect(server.store.pendingStructs).toBeNull();
+      expect(server.store.pendingDs).toBeNull();
+    }
+    expect(server.getArray("list").toJSON()).toEqual(client.getArray("list").toJSON());
+    expect(server.getMap("meta").toJSON()).toEqual(client.getMap("meta").toJSON());
+    expect(server.getText("notes").toString()).toBe("notes");
+    expect(Y.encodeStateVector(server)).toEqual(Y.encodeStateVector(client));
+  });
+
+  it("cuts inside one long insert, keeping every character whole", () => {
+    const doc = new Y.Doc();
+    const text = "a\u{1F600}b".repeat(Math.ceil(MAX / 2));
+    doc.getText("t").insert(0, text);
+    doc.getArray("list").push(Array.from({ length: 60 }, (_, index) => `${index}`.padEnd(8_000, "q")));
+    const whole = Y.encodeStateAsUpdate(doc);
+
+    const pieces = splitUpdate(whole, MAX);
+    const rebuilt = new Y.Doc();
+    for (const piece of pieces) {
+      expect(piece.length).toBeLessThanOrEqual(MAX);
+      Y.applyUpdate(rebuilt, piece);
+      expect(rebuilt.store.pendingStructs).toBeNull();
+    }
+
+    expect(pieces.length).toBeGreaterThan(2);
+    expect(rebuilt.getText("t").toString()).toBe(text);
+    expect(rebuilt.getArray("list").toJSON()).toEqual(doc.getArray("list").toJSON());
+  });
+
+  it("keeps every piece under the cap even when the cap is a few struct headers wide", () => {
+    const doc = new Y.Doc();
+    for (let round = 0; round < 12; round += 1) {
+      doc.transact(() => {
+        doc.getText("t").insert(doc.getText("t").length, `round ${round} `.repeat(4));
+        doc.getMap("m").set(`k${round}`, round);
+        doc.getArray<string>("a").push([`a${round}`, `b${round}`]);
+      });
+    }
+    doc.getText("t").delete(3, 20);
+    doc.getArray("a").delete(2, 4);
+    const whole = Y.encodeStateAsUpdate(doc);
+
+    for (let cap = 100; cap < 1_200; cap += 7) {
+      const pieces = splitUpdate(whole, cap);
+      const rebuilt = new Y.Doc();
+      pieces.forEach((piece) => Y.applyUpdate(rebuilt, piece));
+      expect({ cap, largest: Math.max(...pieces.map((piece) => piece.length)) <= cap }).toEqual({ cap, largest: true });
+      expect(rebuilt.getText("t").toString()).toBe(doc.getText("t").toString());
+      expect(rebuilt.getArray("a").toJSON()).toEqual(doc.getArray("a").toJSON());
+      expect(rebuilt.getMap("m").toJSON()).toEqual(doc.getMap("m").toJSON());
+    }
+  });
+
+  it("keeps a cut piece under the cap when it sits between two neighbours with large clocks", () => {
+    const doc = new Y.Doc();
+    const text = doc.getText("t");
+    text.insert(0, "x".repeat(40_000));
+    text.delete(0, 39_990);
+    for (let round = 0; round < 40; round += 1) text.insert(5, `${round}`.padEnd(90, "m"));
+    const whole = Y.encodeStateAsUpdate(doc);
+
+    for (let cap = 100; cap < 400; cap += 1) {
+      const pieces = splitUpdate(whole, cap);
+      const rebuilt = new Y.Doc();
+      pieces.forEach((piece) => Y.applyUpdate(rebuilt, piece));
+      expect({ cap, fits: pieces.every((piece) => piece.length <= cap) }).toEqual({ cap, fits: true });
+      expect(rebuilt.getText("t").toString()).toBe(text.toString());
+    }
+  });
+
+  it("leaves an update under the cap, or one value too big to cut, whole", () => {
+    const small = Y.encodeStateAsUpdate(editedCopy().server);
+    expect(splitUpdate(small, MAX)).toEqual([small]);
+    const doc = new Y.Doc();
+    doc.getArray("list").push([{ image: "z".repeat(MAX + 10) }]);
+    const whole = Y.encodeStateAsUpdate(doc);
+
+    expect(splitUpdate(whole, MAX)).toEqual([whole]);
+    const unreadable = new Uint8Array(MAX + 10).fill(255);
+    expect(splitUpdate(unreadable, MAX)).toEqual([unreadable]);
+  });
+
+  it("splits what a queue is handed before it merges, so every upload fits", async () => {
+    const { missing } = editedCopy();
+    const sent: Uint8Array[] = [];
+    const queue = createUploadQueue((_appId, _replicaId, update) => {
+      sent.push(update);
+      return true;
+    });
+
+    queue.add("board", "r", missing);
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(sent.length).toBeGreaterThan(2);
+    expect(sent.every((update) => update.length <= MAX)).toBe(true);
+    expect(Y.encodeStateVectorFromUpdate(Y.mergeUpdates(sent))).toEqual(Y.encodeStateVectorFromUpdate(missing));
   });
 });

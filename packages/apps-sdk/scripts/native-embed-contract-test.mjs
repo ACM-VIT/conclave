@@ -228,6 +228,7 @@ const makeRoom = (mod, context) => {
       received: [],
       acks: [],
       updatesPostedAt: [],
+      updateSizes: [],
       requestNumber: 0,
       handler: () => "none",
     };
@@ -235,7 +236,11 @@ const makeRoom = (mod, context) => {
       platform: "ios",
       post: (message) => {
         outbox.push(message);
-        if (JSON.parse(message).type === "update") client.updatesPostedAt.push(Date.now());
+        const posted = JSON.parse(message);
+        if (posted.type === "update") {
+          client.updatesPostedAt.push(Date.now());
+          client.updateSizes.push(Buffer.from(posted.payload.update, "base64").length);
+        }
       },
       onMessage: (next) => {
         client.handler = next;
@@ -303,6 +308,36 @@ test("a fast stroke leaves the embed no faster than the server refills, and land
   assert.ok(busiest <= limits.APP_DOCUMENT_UPLOADS_PER_SECOND, `${busiest} updates in one second`);
   assert.deepEqual(text(harness.Y, harness.room), { stroke: 375 });
   assert.deepEqual(text(harness.Y, ben.session.doc), { stroke: 375 });
+});
+
+test("a resync bigger than one update reaches the room in pieces that each fit", { skip: skipConvergence }, async (context) => {
+  const harness = makeRoom(sessionModule, context);
+  const ada = await harness.join("ada");
+  const ben = await harness.join("ben");
+  ada.host = { ...ada.host, connection: "reconnecting" };
+  harness.deliver(ada, "status", ada.host);
+  const strokes = ada.session.doc.getArray("strokes");
+  for (let index = 0; index < 40; index += 1) strokes.push([`${index}`.padEnd(10_000, "s")]);
+  await harness.pump();
+  assert.equal(harness.roomUpdates.length, 0, "nothing leaves while reconnecting");
+  ada.host = { ...ada.host, connection: "live" };
+  harness.deliver(ada, "status", ada.host);
+  harness.deliver(ada, "resync", {});
+  await harness.pump();
+
+  assert.ok(ada.updateSizes.length > 1, `${ada.updateSizes.length} updates`);
+  assert.ok(Math.max(...ada.updateSizes) <= limits.APP_DOCUMENT_UPDATE_MAX_BYTES, `largest ${Math.max(...ada.updateSizes)} bytes`);
+  assert.equal(harness.room.getArray("strokes").length, 40);
+  assert.deepEqual(ben.session.doc.getArray("strokes").toJSON(), strokes.toJSON());
+
+  const sentBefore = ada.updateSizes.length;
+  ada.session.doc.transact(() => {
+    for (let index = 0; index < 30; index += 1) strokes.push([`live ${index}`.padEnd(10_000, "l")]);
+  });
+  await harness.pump();
+  assert.ok(ada.updateSizes.length - sentBefore > 1, "one big change leaves in pieces");
+  assert.ok(Math.max(...ada.updateSizes) <= limits.APP_DOCUMENT_UPDATE_MAX_BYTES);
+  assert.equal(harness.room.getArray("strokes").length, 70);
 });
 
 test("read-only embeds draw nothing into the room", { skip: skipConvergence }, async (context) => {

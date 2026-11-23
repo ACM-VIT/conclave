@@ -103,7 +103,7 @@ export class NativeEmbedSession {
   private lastStatus = "";
   private readonly uploads = createUploadQueue((_appId, _replicaId, update) => {
     if (this.closed || this.host.readOnly || this.host.connection !== "live") return false;
-    this.send("update", { update: base64FromBytes(update) });
+    if (update.length <= NATIVE_EMBED_LIMITS.updateBytes) this.send("update", { update: base64FromBytes(update) });
     return true;
   });
 
@@ -278,7 +278,7 @@ export class NativeEmbedSession {
     } catch {
       return;
     }
-    if (diff.length <= 2 || diff.length > NATIVE_EMBED_LIMITS.updateBytes) return;
+    if (diff.length <= 2) return;
     this.uploads.add(this.scope.appId, undefined, diff);
   }
 
@@ -324,7 +324,6 @@ export class NativeEmbedSession {
   private readonly handleDocUpdate = (update: Uint8Array, origin: unknown): void => {
     if (origin === REMOTE || this.closed || !this.synced) return;
     if (this.host.readOnly || this.host.connection !== "live") return;
-    if (update.length > NATIVE_EMBED_LIMITS.updateBytes) return;
     this.uploads.add(this.scope.appId, undefined, update);
   };
 

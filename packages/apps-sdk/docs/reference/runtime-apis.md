@@ -76,6 +76,13 @@ Every change an app makes reaches the server through one paced upload path:
   is dropped, and no merged upload grows past `APP_DOCUMENT_UPDATE_MAX_BYTES`.
   While the socket is down, changes wait and leave as one upload when it
   connects.
+- An update bigger than that cap, such as a resend after many edits piled up
+  during a catch-up, is cut into ordered pieces that each fit and each apply on
+  the server, the way Yjs itself splits an item. Only a single value bigger than
+  the cap cannot be cut, and the server refuses it as too large.
+- Nothing else sends app updates. `apps/web/test/app-upload-path.test.ts` fails
+  when code in the SDK, the web app or meeting core emits `apps:yjs:update`, or
+  the native embed posts an update, outside the queue.
 - A refusal for a passing reason (`rate-limited`, `timed-out`, `queue-full`,
   `missing-dependency` and the like) keeps the live copy. The provider syncs
   with the server and sends everything the server lacks, the refused change and
