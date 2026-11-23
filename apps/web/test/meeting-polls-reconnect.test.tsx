@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { AuthorityProvider } from "@conclave/apps-sdk";
 import { AUTHORITY_EVENTS, type AuthoritySocket } from "@conclave/apps-sdk/authority";
 import { useMeetingPolls } from "../src/app/hooks/useMeetingPolls";
+import { WAITING_FOR_VIEW } from "../src/app/hooks/useHeldThroughReconnect";
 
 type Listener = (...args: unknown[]) => void;
 type Sent = { event: string; payload: Record<string, unknown>; ack?: (reply: unknown) => void };
@@ -208,7 +209,7 @@ it("keeps every poll action waiting while the view comes back, and sends nothing
   await offer();
   const whileWaiting = current;
   const fromTheGap = sent.length;
-  const answers: Promise<{ ok: boolean }>[] = [];
+  const answers: Promise<{ ok: boolean; error?: string }>[] = [];
   await act(async () => {
     answers.push(whileWaiting.createPoll({ question: "Lunch?", options: ["Yes", "No"], choiceMode: "single" }));
     answers.push(whileWaiting.vote("p1", ["o1"]));
@@ -227,5 +228,5 @@ it("keeps every poll action waiting while the view comes back, and sends nothing
   expect(whileWaiting.waiting).toBe(true);
   expect(current.waiting).toBe(false);
   const results = await Promise.all(answers);
-  expect(results.map((result) => result.ok)).toEqual([false, false, false, false, false]);
+  expect(results).toEqual([WAITING_FOR_VIEW, WAITING_FOR_VIEW, WAITING_FOR_VIEW, WAITING_FOR_VIEW, WAITING_FOR_VIEW]);
 });

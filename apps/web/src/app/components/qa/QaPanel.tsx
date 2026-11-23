@@ -198,7 +198,7 @@ export function QaPanel({
   }, [draft, isSending, onSubmit, waiting]);
 
   const moderate = async (id: string, action: QaModerateAction) => {
-    if (!onModerate || waiting) return;
+    if (!onModerate) return;
     setBusyEntryId(id);
     setListError(null);
     const result = await onModerate({ id, action });
@@ -207,7 +207,7 @@ export function QaPanel({
   };
 
   const upvote = async (id: string) => {
-    if (!onUpvote || waiting) return;
+    if (!onUpvote) return;
     setListError(null);
     const result = await onUpvote(id);
     if (result && !result.ok) {

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { AuthorityProvider } from "@conclave/apps-sdk";
 import { AUTHORITY_EVENTS, type AuthoritySocket } from "@conclave/apps-sdk/authority";
 import { useMeetingQa } from "../src/app/hooks/useMeetingQa";
+import { WAITING_FOR_VIEW } from "../src/app/hooks/useHeldThroughReconnect";
 import type { WebinarQaChangedNotification, WebinarQaEntry } from "../src/app/lib/types";
 import { withQaChange, type WebinarQaList } from "../src/app/lib/webinarQaList";
 
@@ -655,5 +656,5 @@ it("keeps every action of a meeting's Q&A waiting while its view comes back, and
   expect(qa.waiting).toBe(false);
   expect(qa.entries.map((entry) => entry.hasUpvoted)).toEqual([true]);
   const results = await Promise.all(answers);
-  expect(results.map((result) => (result as { ok: boolean } | undefined)?.ok)).toEqual([false, false, false]);
+  expect(results).toEqual([WAITING_FOR_VIEW, WAITING_FOR_VIEW, WAITING_FOR_VIEW]);
 });

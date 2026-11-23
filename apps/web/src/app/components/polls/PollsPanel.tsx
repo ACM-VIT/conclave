@@ -315,7 +315,6 @@ function PollCard({
   const isMultiple = poll.choiceMode === "multiple";
 
   const run = async (action: string, task: () => Promise<PollActionResult>) => {
-    if (waiting) return;
     setBusyAction(action);
     setError(null);
     const result = await task();

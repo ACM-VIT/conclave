@@ -159,11 +159,11 @@ it("keeps the draft and every control in place but sends nothing while the view 
     for (const button of [send, upvote, ...moderation]) button.click();
   });
 
-  expect(input.value).toBe("Will the slides be shared?");
-  expect(input.disabled).toBe(false);
-  expect(actionsOf("Is this recorded?")).toEqual(["Answer live", "Mark answered", "Hide"]);
-  expect([send, upvote, ...moderation].every((button) => button.disabled)).toBe(true);
   expect(onSubmit).not.toHaveBeenCalled();
   expect(onUpvote).not.toHaveBeenCalled();
   expect(onModerate).not.toHaveBeenCalled();
+  expect([send, upvote, ...moderation].every((button) => button.disabled)).toBe(true);
+  expect(input.value).toBe("Will the slides be shared?");
+  expect(input.disabled).toBe(false);
+  expect(actionsOf("Is this recorded?")).toEqual(["Answer live", "Mark answered", "Hide"]);
 });

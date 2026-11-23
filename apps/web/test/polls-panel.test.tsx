@@ -220,22 +220,23 @@ it("keeps a host's draft and every control in place but sends nothing while the 
     byTestId("poll-composer")?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
   });
 
-  expect((byTestId("poll-question-input") as HTMLInputElement).value).toBe("Lunch?");
-  expect([first.value, second.value]).toEqual(["Tacos", "Ramen"]);
-  expect(first.disabled).toBe(false);
-  expect(controls.every((control) => control.disabled)).toBe(true);
   expect(onCreate).not.toHaveBeenCalled();
   expect(onShare).not.toHaveBeenCalled();
   expect(onEnd).not.toHaveBeenCalled();
   expect(onExport).not.toHaveBeenCalled();
+  expect(controls.every((control) => control.disabled)).toBe(true);
+  expect((byTestId("poll-question-input") as HTMLInputElement).value).toBe("Lunch?");
+  expect([first.value, second.value]).toEqual(["Tacos", "Ramen"]);
+  expect(first.disabled).toBe(false);
 });
 
 it("keeps a participant's choice in place but sends no vote while the view comes back", async () => {
   const onVote = vi.fn(ok);
-  await render({ waiting: true, polls: [poll()] });
+  await render({ waiting: true, onVote, polls: [poll()] });
   await click(optionInput("Yes"));
   await click(byTestId("poll-vote"));
 
-  expect((byTestId("poll-vote") as HTMLButtonElement).disabled).toBe(true);
   expect(onVote).not.toHaveBeenCalled();
+  expect((byTestId("poll-vote") as HTMLButtonElement).disabled).toBe(true);
+  expect((optionInput("Yes") as HTMLInputElement).checked).toBe(true);
 });
