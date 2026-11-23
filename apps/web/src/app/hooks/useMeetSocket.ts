@@ -20,6 +20,7 @@ import {
 } from "../lib/constants";
 import { emitWithAckTimeout } from "../lib/socket-ack";
 import { beginJoinRequest } from "../lib/join-requests";
+import { JOIN_ROOM_ACK_TIMEOUT_MS } from "../lib/join-timeouts";
 import {
   forgetJoinedRoom,
   getJoinedRoom,
@@ -245,9 +246,6 @@ const RESUME_CONSUMER_MAX_ATTEMPTS = 6;
 
 const getResumeConsumerRetryDelayMs = (attempt: number): number =>
   Math.min(8000, 400 * 2 ** attempt) + Math.floor(Math.random() * 250);
-// Longer than the SFU waits for a room to open before it answers a join
-// (10 seconds), so the tab hears that answer instead of timing out.
-const JOIN_ROOM_ACK_TIMEOUT_MS = 15000;
 const RESTART_ICE_ACK_TIMEOUT_MS = 5000;
 const PARTICIPANT_RECONNECTING_STATUS_FALLBACK_MS = 30000;
 const PARTICIPANT_RECONNECTING_STATUS_BUFFER_MS = 5000;
@@ -493,8 +491,6 @@ export const isRecoverableReconnectFailure = (error: unknown): boolean => {
   if (createMeetError(error).code === "ROOM_NOT_FOUND") return true;
   const message = getRawReconnectErrorMessage(error).trim();
   if (!message) return true;
-  // The SFU answers a join whose room is still opening before this tab
-  // would give up on it; the next try takes that opening over.
   return /timeout|xhr poll|websocket|transport|socket|network|fetch|load failed|connection|still opening/i.test(
     message,
   );

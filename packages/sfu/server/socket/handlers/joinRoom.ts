@@ -33,6 +33,7 @@ import {
   lobbyGuestOf,
 } from "../../nextMeetingLobby.js";
 import type { EndedRoom } from "../../state.js";
+import { ROOM_OPEN_DEADLINE_MS } from "../../joinDeadlines.js";
 import {
   RoomOwnershipError,
   type RoomAssignmentRecord,
@@ -114,10 +115,6 @@ const recordedOwnerOf = (
 
 const JOIN_OVERTAKEN = "A newer join from this connection took over.";
 
-// How long a join waits for its room to open before it answers. Web tabs
-// give up on a join after 15 seconds, so this stays well inside that; the
-// opening goes on, and the tab's next join takes it over.
-const ROOM_OPEN_DEADLINE_MS = 10_000;
 const ROOM_STILL_OPENING = "The meeting is still opening. Try again in a moment.";
 const STILL_OPENING = Symbol("still opening");
 const withinOpenDeadline = async <T>(work: Promise<T>): Promise<T | typeof STILL_OPENING> => {
