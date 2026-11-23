@@ -1,4 +1,8 @@
-import type { MediaDirection } from "./media-path-recovery";
+import {
+  advanceMediaPathRecovery,
+  type MediaDirection,
+  type MediaPathRecovery,
+} from "./media-path-recovery";
 
 export type ReconnectRequest = {
   immediate?: boolean;
@@ -208,3 +212,51 @@ export const noteRoomUnavailable = (
       : { since, retries: wait.retries, expired: true },
   };
 };
+
+export type ReconnectAttemptState = {
+  roomWait: RoomWait;
+  retryingForRoom: boolean;
+  skipNextDelay: boolean;
+  nextDelayOverrideMs: number | null;
+  refreshIceServers: boolean;
+  heldJoinInfoTried: boolean;
+  mayReuseSocket: boolean;
+  lastError: unknown;
+  relayOnlyRequest: { reason: string } | null;
+};
+
+export const freshReconnectAttemptState = (
+  request?: ReconnectRequest,
+): ReconnectAttemptState => ({
+  roomWait: FRESH_ROOM_WAIT,
+  retryingForRoom: false,
+  skipNextDelay: request?.immediate === true,
+  nextDelayOverrideMs: null,
+  refreshIceServers: request?.refreshIceServers === true,
+  heldJoinInfoTried: request?.refreshIceServers === true,
+  mayReuseSocket: true,
+  lastError: null,
+  relayOnlyRequest: request?.relayOnly ?? null,
+});
+
+export const USER_RETRY_REQUEST = {
+  immediate: true,
+  userInitiated: true,
+  refreshIceServers: true,
+} as const satisfies ReconnectRequest;
+
+export type RetryScopedRecovery = {
+  attempt: ReconnectAttemptState;
+  attempts: number;
+  relayOnly: boolean;
+  mediaPaths: MediaPathRecovery;
+};
+
+export const restartForUserRetry = ({
+  mediaPaths,
+}: RetryScopedRecovery): RetryScopedRecovery => ({
+  attempt: freshReconnectAttemptState(USER_RETRY_REQUEST),
+  attempts: 0,
+  relayOnly: false,
+  mediaPaths: advanceMediaPathRecovery(mediaPaths, { type: "user-retry" }),
+});

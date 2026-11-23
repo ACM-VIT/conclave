@@ -6,11 +6,21 @@ import {
   planMediaRebuildScope,
   planReconnectSettlement,
   FRESH_ROOM_WAIT,
+  USER_RETRY_REQUEST,
+  freshReconnectAttemptState,
   noteRoomUnavailable,
+  restartForUserRetry,
+  type ReconnectAttemptState,
   planRoomUnavailableRetry,
   resolveInFlightReconnectRequest,
   resolveReconnectStartAttempts,
 } from "../src/app/lib/reconnect-request-policy";
+import {
+  INITIAL_MEDIA_PATH_RECOVERY,
+  advanceMediaPathRecovery,
+  planMediaPathFailure,
+  type MediaPathFailure,
+} from "../src/app/lib/media-path-recovery";
 
 const waiting = { isWaitingForBackoff: true, canCancelBackoff: true };
 const connecting = { isWaitingForBackoff: false, canCancelBackoff: false };
@@ -268,5 +278,91 @@ describe("a reconnect run that is ending", () => {
     expect(
       planReconnectSettlement({ rejoined: true, userRetryQueued: true, leaving: true }),
     ).toEqual({ runUserRetry: false, replayDeferredRebuilds: false });
+  });
+});
+
+describe("the recovery a Retry starts fresh", () => {
+  const userRetry = freshReconnectAttemptState(USER_RETRY_REQUEST);
+  const dirty: ReconnectAttemptState = {
+    roomWait: { since: 5_000, retries: 7, expired: true },
+    retryingForRoom: true,
+    skipNextDelay: false,
+    nextDelayOverrideMs: 4_000,
+    refreshIceServers: false,
+    heldJoinInfoTried: false,
+    mayReuseSocket: false,
+    lastError: new Error("joinRoom acknowledgement timeout"),
+    relayOnlyRequest: { reason: "Consumer transport carried no media" },
+  };
+  const receiveFailure = (transportId: string, relayOnly: boolean): MediaPathFailure => ({
+    direction: "consumer",
+    transportId,
+    reason: "Consumer transport carried no media",
+    relayOnly,
+    reconnectInFlight: false,
+  });
+  const rebuiltOnce = planMediaPathFailure(INITIAL_MEDIA_PATH_RECOVERY, receiveFailure("t1", false));
+
+  it("uses a fixture that differs from a fresh Retry in every per-attempt field", () => {
+    expect(Object.keys(dirty).sort()).toEqual(Object.keys(userRetry).sort());
+    for (const key of Object.keys(userRetry) as Array<keyof ReconnectAttemptState>) {
+      expect(dirty[key], key).not.toEqual(userRetry[key]);
+    }
+  });
+
+  it("keeps nothing of the run it interrupts", () => {
+    const restarted = restartForUserRetry({
+      attempt: dirty,
+      attempts: 6,
+      relayOnly: true,
+      mediaPaths: rebuiltOnce.recovery,
+    });
+
+    expect(restarted).toEqual({
+      attempt: userRetry,
+      attempts: 0,
+      relayOnly: false,
+      mediaPaths: advanceMediaPathRecovery(rebuiltOnce.recovery, { type: "user-retry" }),
+    });
+  });
+
+  it("starts what Try again starts when nothing is running", () => {
+    expect(
+      restartForUserRetry({
+        attempt: freshReconnectAttemptState(),
+        attempts: 0,
+        relayOnly: false,
+        mediaPaths: INITIAL_MEDIA_PATH_RECOVERY,
+      }).attempt,
+    ).toEqual(userRetry);
+  });
+
+  it("gives the next transport failure the relay ladder after a Retry queued behind a failed rebuild and a room wait", () => {
+    expect(rebuiltOnce.step).toBe("reconnect-relay-only");
+    const scoped = freshReconnectAttemptState({
+      refreshIceServers: true,
+      failedDirections: ["consumer"],
+      relayOnly: { reason: "Consumer transport carried no media" },
+    });
+    const waitingForRoom: ReconnectAttemptState = {
+      ...scoped,
+      refreshIceServers: false,
+      roomWait: noteRoomUnavailable(scoped.roomWait, 1_000).wait,
+      retryingForRoom: true,
+    };
+
+    const queuedRetry = restartForUserRetry({
+      attempt: waitingForRoom,
+      attempts: 2,
+      relayOnly: true,
+      mediaPaths: rebuiltOnce.recovery,
+    });
+
+    expect(
+      planMediaPathFailure(queuedRetry.mediaPaths, receiveFailure("t3", queuedRetry.relayOnly)).step,
+    ).toBe("reconnect-relay-only");
+    expect(planMediaPathFailure(rebuiltOnce.recovery, receiveFailure("t3", true)).step).toBe(
+      "report-blocked",
+    );
   });
 });

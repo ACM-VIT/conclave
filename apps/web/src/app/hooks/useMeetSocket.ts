@@ -26,14 +26,17 @@ import {
 } from "../lib/constants";
 import { emitWithAckTimeout } from "../lib/socket-ack";
 import {
-  FRESH_ROOM_WAIT,
+  USER_RETRY_REQUEST,
   canReuseSocketAfterFailure,
   classifyReconnectFailure,
+  freshReconnectAttemptState,
   noteRoomUnavailable,
   planMediaRebuildScope,
   planReconnectSettlement,
   resolveInFlightReconnectRequest,
   resolveReconnectStartAttempts,
+  restartForUserRetry,
+  type ReconnectAttemptState,
   type ReconnectFailureKind,
   type ReconnectRequest,
 } from "../lib/reconnect-request-policy";
@@ -9392,6 +9395,38 @@ export function useMeetSocket({
     requestCameraProducerRecovery,
   ]);
 
+  const applyUserRetry = useCallback(
+    (attempt: ReconnectAttemptState): ReconnectAttemptState => {
+      const next = restartForUserRetry({
+        attempt,
+        attempts: reconnectAttemptsRef.current,
+        relayOnly: relayOnlyIceRef.current,
+        mediaPaths: mediaPathRecoveryRef.current,
+      });
+      manualReconnectRetryRequestedRef.current = false;
+      reconnectAttemptsRef.current = next.attempts;
+      relayOnlyIceRef.current = next.relayOnly;
+      commitMediaPathRecovery(next.mediaPaths);
+      setMeetError(null);
+      updateReconnectRecoveryStatus(
+        buildReconnectRecoveryStatus(
+          "connecting",
+          1,
+          "Retrying reconnect now.",
+        ),
+      );
+      setConnectionState("reconnecting");
+      return next.attempt;
+    },
+    [
+      commitMediaPathRecovery,
+      reconnectAttemptsRef,
+      setConnectionState,
+      setMeetError,
+      updateReconnectRecoveryStatus,
+    ],
+  );
+
   const handleReconnect = useCallback(async (options?: ReconnectRequest) => {
     if (reconnectInFlightRef.current) {
       const cancelBackoff = reconnectBackoffCancelRef.current;
@@ -9433,25 +9468,11 @@ export function useMeetSocket({
       return;
     }
     const reconnectGeneration = reconnectGenerationRef.current;
-    let skipNextDelay = options?.immediate === true;
-    let lastReconnectError: unknown = null;
-    let roomWait = FRESH_ROOM_WAIT;
-    let nextDelayOverrideMs: number | null = null;
-    // A refresh asks the join route for current ICE servers: on the open
-    // socket when it is still connected, or for the next socket otherwise.
-    let pendingIceServersRefresh = options?.refreshIceServers === true;
-    let hasTriedHeldJoinInfo = pendingIceServersRefresh;
-    let mayReuseSocket = true;
+    let attemptState = freshReconnectAttemptState(options);
     let rejoined = false;
-    // Waiting for a missing room is bounded by time, so those retries do not
-    // count against the attempt budget and show no attempt number.
-    let retryingForRoom = false;
-    // TURN alone is chosen with the credentials the new transports will use,
-    // never the held ones: those can have expired while a fresh answer brings
-    // a working relay.
     const applyRequestedRelayPolicy = () => {
       const relayOnly = resolveRebuildRelayOnly({
-        requested: Boolean(options?.relayOnly),
+        requested: attemptState.relayOnlyRequest !== null,
         relayOnly: relayOnlyIceRef.current,
         hasTurnServers:
           getUsableTurnIceServers(runtimeIceServersRef.current, Date.now()) !==
@@ -9461,28 +9482,9 @@ export function useMeetSocket({
       relayOnlyIceRef.current = relayOnly;
       console.warn("[Meets] Rebuilding through TURN only.");
       telemetry.capture("meet_turn_relay_activated", {
-        reason: options?.relayOnly?.reason ?? "media path rebuild",
+        reason: attemptState.relayOnlyRequest?.reason ?? "media path rebuild",
         roomId: currentRoomIdRef.current ?? undefined,
       });
-    };
-    const restartForUserRetry = (
-      surfaceState: boolean,
-      lastError: string | null,
-    ) => {
-      manualReconnectRetryRequestedRef.current = false;
-      reconnectAttemptsRef.current = 0;
-      roomWait = FRESH_ROOM_WAIT;
-      retryingForRoom = false;
-      skipNextDelay = true;
-      if (!surfaceState) return;
-      updateReconnectRecoveryStatus(
-        buildReconnectRecoveryStatus(
-          "connecting",
-          1,
-          "Retrying reconnect now.",
-          lastError,
-        ),
-      );
     };
     reconnectInFlightRef.current = true;
     reconnectAttemptsRef.current = resolveReconnectStartAttempts(
@@ -9499,8 +9501,8 @@ export function useMeetSocket({
       });
       const scopedRoomId = currentRoomIdRef.current;
       if (scopedDirection && scopedRoomId) {
-        if (pendingIceServersRefresh) {
-          pendingIceServersRefresh = false;
+        if (attemptState.refreshIceServers) {
+          attemptState.refreshIceServers = false;
           await refreshIceServersOnOpenSocket(scopedRoomId);
         }
         if (reconnectGeneration !== reconnectGenerationRef.current) return;
@@ -9535,12 +9537,13 @@ export function useMeetSocket({
           );
         }
         const attempt = reconnectAttemptsRef.current + 1;
-        const countedAttempt = retryingForRoom ? null : attempt;
-        const delay = skipNextDelay
+        const countedAttempt = attemptState.retryingForRoom ? null : attempt;
+        const delay = attemptState.skipNextDelay
           ? 0
-          : (nextDelayOverrideMs ?? RECONNECT_DELAY_MS * 2 ** (attempt - 1));
-        skipNextDelay = false;
-        nextDelayOverrideMs = null;
+          : (attemptState.nextDelayOverrideMs ??
+            RECONNECT_DELAY_MS * 2 ** (attempt - 1));
+        attemptState.skipNextDelay = false;
+        attemptState.nextDelayOverrideMs = null;
         reconnectAttemptsRef.current = attempt;
 
         if (shouldSurfaceReconnectState) {
@@ -9552,8 +9555,8 @@ export function useMeetSocket({
               delay > 0
                 ? "Retrying automatically."
                 : "Retrying reconnect now.",
-              lastReconnectError
-                ? describeReconnectFailure(lastReconnectError)
+              attemptState.lastError
+                ? describeReconnectFailure(attemptState.lastError)
                 : null,
               retryAt,
             ),
@@ -9575,12 +9578,7 @@ export function useMeetSocket({
         if (intentionalDisconnectRef.current) return;
         if (reconnectGeneration !== reconnectGenerationRef.current) return;
         if (manualReconnectRetryRequestedRef.current) {
-          restartForUserRetry(
-            shouldSurfaceReconnectState,
-            lastReconnectError
-              ? describeReconnectFailure(lastReconnectError)
-              : null,
-          );
+          attemptState = applyUserRetry(attemptState);
           continue;
         }
 
@@ -9595,8 +9593,8 @@ export function useMeetSocket({
                 "connecting",
                 countedAttempt,
                 "Connecting to the meeting server.",
-                lastReconnectError
-                  ? describeReconnectFailure(lastReconnectError)
+                attemptState.lastError
+                  ? describeReconnectFailure(attemptState.lastError)
                   : null,
               ),
             );
@@ -9604,18 +9602,18 @@ export function useMeetSocket({
           // Fetch current credentials before closing anything, so media that
           // still flows keeps flowing while the join route answers.
           if (
-            pendingIceServersRefresh &&
-            mayReuseSocket &&
+            attemptState.refreshIceServers &&
+            attemptState.mayReuseSocket &&
             socketRef.current?.connected === true
           ) {
-            pendingIceServersRefresh = false;
+            attemptState.refreshIceServers = false;
             await refreshIceServersOnOpenSocket(reconnectRoomId);
             if (reconnectGeneration !== reconnectGenerationRef.current) return;
             if (intentionalDisconnectRef.current) return;
           }
           const canReuseSocket =
-            mayReuseSocket && socketRef.current?.connected === true;
-          mayReuseSocket = true;
+            attemptState.mayReuseSocket && socketRef.current?.connected === true;
+          attemptState.mayReuseSocket = true;
           cleanupRoomResources({
             resetRoomId: false,
             preserveMeetingState: true,
@@ -9625,12 +9623,12 @@ export function useMeetSocket({
             socketRef.current?.disconnect();
             socketRef.current = null;
             onSocketReady?.(null);
-            const reconnectJoinInfo = hasTriedHeldJoinInfo
+            const reconnectJoinInfo = attemptState.heldJoinInfoTried
               ? "fresh-first"
               : "held-first";
-            hasTriedHeldJoinInfo = true;
+            attemptState.heldJoinInfoTried = true;
             await connectSocket(reconnectRoomId, { reconnectJoinInfo });
-            pendingIceServersRefresh = false;
+            attemptState.refreshIceServers = false;
           } else {
             setMeetError(null);
           }
@@ -9665,8 +9663,8 @@ export function useMeetSocket({
                 shouldRetryLocalMediaAfterJoin
                   ? "Rejoining the room first. Your devices will be retried after the meeting is back."
                   : "Restoring media, participants, and room state.",
-                lastReconnectError
-                  ? describeReconnectFailure(lastReconnectError)
+                attemptState.lastError
+                  ? describeReconnectFailure(attemptState.lastError)
                   : null,
               ),
             );
@@ -9713,13 +9711,13 @@ export function useMeetSocket({
           return;
         } catch (err) {
           if (reconnectGeneration !== reconnectGenerationRef.current) return;
-          lastReconnectError = err;
+          attemptState.lastError = err;
           const reconnectFailure = describeReconnectFailure(err);
           const failureKind = getReconnectFailureKind(err);
-          retryingForRoom = false;
+          attemptState.retryingForRoom = false;
           let isRecoverable = failureKind !== "final";
           const usedHeldJoinInfo = lastJoinInfoSourceRef.current === "held";
-          mayReuseSocket = canReuseSocketAfterFailure({
+          attemptState.mayReuseSocket = canReuseSocketAfterFailure({
             failureKind,
             usedHeldJoinInfo,
           });
@@ -9733,7 +9731,7 @@ export function useMeetSocket({
             if (failureKind === "final") {
               heldJoinInfoRef.current = null;
               isRecoverable = true;
-              nextDelayOverrideMs = 0;
+              attemptState.nextDelayOverrideMs = 0;
               reconnectAttemptsRef.current = attempt - 1;
             }
           }
@@ -9741,12 +9739,15 @@ export function useMeetSocket({
             failureKind === "room-unavailable" ||
             failureKind === "server-draining"
           ) {
-            const noted = noteRoomUnavailable(roomWait, Date.now());
-            roomWait = noted.wait;
+            const noted = noteRoomUnavailable(
+              attemptState.roomWait,
+              Date.now(),
+            );
+            attemptState.roomWait = noted.wait;
             if (noted.plan.retry) {
-              nextDelayOverrideMs = noted.plan.delayMs;
+              attemptState.nextDelayOverrideMs = noted.plan.delayMs;
               reconnectAttemptsRef.current = attempt - 1;
-              retryingForRoom = true;
+              attemptState.retryingForRoom = true;
             }
           }
           console.warn(
@@ -9796,10 +9797,10 @@ export function useMeetSocket({
             return;
           }
           if (manualReconnectRetryRequestedRef.current) {
-            restartForUserRetry(shouldSurfaceReconnectState, reconnectFailure);
+            attemptState = applyUserRetry(attemptState);
             continue;
           }
-          if (roomWait.expired) break;
+          if (attemptState.roomWait.expired) break;
           if (shouldSurfaceReconnectState) {
             updateReconnectRecoveryStatus(
               attempt >= MAX_RECONNECT_ATTEMPTS
@@ -9812,7 +9813,7 @@ export function useMeetSocket({
                   )
                 : buildReconnectRecoveryStatus(
                     "waiting",
-                    retryingForRoom ? null : attempt,
+                    attemptState.retryingForRoom ? null : attempt,
                     "Reconnect attempt failed. Retrying automatically.",
                     reconnectFailure,
                   ),
@@ -9824,7 +9825,7 @@ export function useMeetSocket({
       if (intentionalDisconnectRef.current) return;
       if (reconnectGeneration !== reconnectGenerationRef.current) return;
 
-      const reconnectFailure = describeReconnectFailure(lastReconnectError);
+      const reconnectFailure = describeReconnectFailure(attemptState.lastError);
       manualReconnectRetryRequestedRef.current = false;
       telemetry.capture("meet_reconnect_give_up", {
         roomId: currentRoomIdRef.current ?? undefined,
@@ -9836,7 +9837,7 @@ export function useMeetSocket({
         buildStoppedRecoveryStatus(
           describeReconnectGiveUp({
             attempts: reconnectAttemptsRef.current,
-            roomWaitExpired: roomWait.expired,
+            roomWaitExpired: attemptState.roomWait.expired,
           }),
           reconnectFailure,
         ),
@@ -9877,6 +9878,7 @@ export function useMeetSocket({
       }
     }
   }, [
+    applyUserRetry,
     cleanupRoomResources,
     connectSocket,
     currentRoomIdRef,
@@ -10267,39 +10269,21 @@ export function useMeetSocket({
     }
 
     if (reconnectInFlightRef.current) {
-      await handleReconnect({
-        immediate: true,
-        userInitiated: true,
-        refreshIceServers: true,
-      });
+      await handleReconnect(USER_RETRY_REQUEST);
       return;
     }
 
     reconnectGenerationRef.current += 1;
-    reconnectAttemptsRef.current = 0;
-    relayOnlyIceRef.current = false;
-    updateMediaPathRecovery({ type: "user-retry" });
-    setMeetError(null);
-    updateReconnectRecoveryStatus(
-      buildReconnectRecoveryStatus(
-        "connecting",
-        1,
-        "Retrying reconnect now.",
-      ),
-    );
-    setConnectionState("reconnecting");
+    applyUserRetry(freshReconnectAttemptState());
 
     if (currentRoomIdRef.current) {
-      await handleReconnect({
-        immediate: true,
-        userInitiated: true,
-        refreshIceServers: true,
-      });
+      await handleReconnect(USER_RETRY_REQUEST);
       return;
     }
 
     await startJoin(targetRoomId);
   }, [
+    applyUserRetry,
     currentRoomIdRef,
     handleReconnect,
     joinOptionsRef,
