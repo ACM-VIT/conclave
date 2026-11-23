@@ -357,6 +357,11 @@ has the numbers.
   (YUV, OES, RGB). The loop keeps one drawer per kind.
 - A surface has no view transform, so aspect-fit bars are drawn into its
   buffer. A TextureView fills its buffer and fits with `setTransform`.
+- The bars are worked out for the view's shape, not the buffer's. Until a
+  resize lands the buffer keeps its old shape and the display stretches it to
+  the view, so a frame boxed for the buffer shows squashed. A pinned tile
+  moving into picture-in-picture showed as a thin strip between dark bars for
+  1.5 to 8 s on the API 36 emulator before this.
 - A surface's buffer is never larger than the visible part of the frame
   (`VideoBufferSizePolicy`, through `SurfaceHolder.setFixedSize`). The display
   scales the small buffer. The buffer follows a resize one frame late, so the

@@ -19,16 +19,17 @@ internal object VideoDrawLayoutPolicy {
     ): VideoDrawLayout {
         val frameAspect = frameWidth.toFloat() / frameHeight.toFloat()
         val surfaceAspect = surfaceWidth.toFloat() / surfaceHeight.toFloat()
+        val drawnAspect = if (viewAspect > 0f) viewAspect else surfaceAspect
         if (fit && letterboxInBuffer) {
             var x = 0
             var y = 0
             var width = surfaceWidth
             var height = surfaceHeight
-            if (surfaceAspect > frameAspect) {
-                width = Math.round(surfaceHeight * frameAspect).coerceIn(1, surfaceWidth)
+            if (drawnAspect > frameAspect) {
+                width = Math.round(surfaceWidth * frameAspect / drawnAspect).coerceIn(1, surfaceWidth)
                 x = (surfaceWidth - width) / 2
             } else {
-                height = Math.round(surfaceWidth / frameAspect).coerceIn(1, surfaceHeight)
+                height = Math.round(surfaceHeight * drawnAspect / frameAspect).coerceIn(1, surfaceHeight)
                 y = (surfaceHeight - height) / 2
             }
             return VideoDrawLayout(x, y, width, height, 1f, 1f, mirror, clearsSurface = width != surfaceWidth || height != surfaceHeight)
@@ -36,7 +37,6 @@ internal object VideoDrawLayoutPolicy {
         var scaleX = 1f
         var scaleY = 1f
         if (!fit) {
-            val drawnAspect = if (viewAspect > 0f) viewAspect else surfaceAspect
             if (frameAspect > drawnAspect) scaleX = drawnAspect / frameAspect else scaleY = frameAspect / drawnAspect
         }
         return VideoDrawLayout(0, 0, surfaceWidth, surfaceHeight, scaleX, scaleY, mirror, clearsSurface = false)
