@@ -41,7 +41,10 @@ sending again, is retried with the very same events after 2, 4, 8, 16 and
 HTTP date, held to 60 s). A batch `/ingest` asks to wait goes to storage
 with the time it may go, and its next send is a replay at that time, under
 the tabs' lock, which reads storage again: no tab sends it sooner, beacons it
-as the page goes away, or sends it after another tab already has. Each send carries its own `sent_at`, so
+as the page goes away, or sends it after another tab already has. A saved
+batch keeps its place in the retry schedule, so replays go on with it rather
+than start it again, and a batch storage refuses, blocked or full, stays in
+memory and keeps retrying there, until it is answered or too old to send. Each send carries its own `sent_at`, so
 `/ingest` can tell the events' age by the browser's clock. A batch whose retries run
 out is saved, as below, for the next replay. A refused batch is dropped.
 Batches go by keepalive fetch, without cookies.

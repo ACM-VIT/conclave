@@ -25,11 +25,25 @@ type Answer = number | Reply | "offline" | "pending" | Promise<number>;
 const memoryStore = () => {
   const saved = new Map<string, StoredBatch>();
   return {
-    save: (batch: StoredBatch) => void saved.set(batch.id, structuredClone(batch)),
+    save: (batch: StoredBatch) => {
+      saved.set(batch.id, structuredClone(batch));
+      return true;
+    },
     remove: (id: string) => void saved.delete(id),
     list: () => [...saved.values()].map((batch) => structuredClone(batch)),
   };
 };
+
+const fullStorage = (): Storage => ({
+  length: 0,
+  key: () => null,
+  getItem: () => null,
+  setItem: () => {
+    throw new DOMException("The quota has been exceeded.", "QuotaExceededError");
+  },
+  removeItem: () => {},
+  clear: () => {},
+});
 
 type Store = ReturnType<typeof memoryStore> | ReturnType<typeof createBatchStore>;
 
@@ -133,6 +147,20 @@ const harness = ({
 };
 
 const storedUuids = (store: Store) => store.list().flatMap((batch) => batch.events.map((event) => event.uuid));
+
+const memoryWebStorage = (): Storage => {
+  const items = new Map<string, string>();
+  return {
+    get length() {
+      return items.size;
+    },
+    key: (index: number) => [...items.keys()][index] ?? null,
+    getItem: (key: string) => items.get(key) ?? null,
+    setItem: (key: string, value: string) => void items.set(key, value),
+    removeItem: (key: string) => void items.delete(key),
+    clear: () => items.clear(),
+  };
+};
 
 let n = 0;
 const event = (name = "meet_join_attempt", padding = 0, at = START): OutboxEvent => ({
@@ -299,6 +327,63 @@ describe("answers from /ingest", () => {
     long.outbox.add(event());
     await long.advance(FLUSH_INTERVAL_MS + 2 * MINUTE);
     expect(at(long)).toEqual([5000, 65_000]);
+  });
+});
+
+describe("a batch storage cannot take", () => {
+  it("says so when web storage refuses the write", () => {
+    const store = createBatchStore(fullStorage);
+
+    expect(store.save({ id: "batch-full", events: [event()], oldestAt: START, sent: false, notBefore: 0, attempt: 0 })).toBe(false);
+    expect(createBatchStore(() => memoryWebStorage()).save({ id: "batch-ok", events: [event()], oldestAt: START, sent: false, notBefore: 0, attempt: 0 })).toBe(true);
+  });
+
+  it("waits out a Retry-After in memory, and sends it then", async () => {
+    const h = harness({ answers: [{ status: 503, retryAfter: "60" }], store: createBatchStore(fullStorage) });
+    const waiting = event();
+    h.outbox.add(waiting);
+    await h.advance(FLUSH_INTERVAL_MS + 60_000);
+
+    expect(h.posts.map((post) => post.at - START)).toEqual([5000, 65_000]);
+    expect(h.posted()).toEqual([waiting.uuid, waiting.uuid]);
+  });
+
+  it("stays in memory as the page hides, and goes once the page stays", async () => {
+    const h = harness({ answers: [503], store: createBatchStore(fullStorage) });
+    h.refuseBeacons();
+    const waiting = event();
+    h.outbox.add(waiting);
+    await h.advance(FLUSH_INTERVAL_MS);
+    const queued = event();
+    h.outbox.add(queued);
+    h.outbox.flushForUnload();
+    await h.advance(10_000);
+
+    expect(h.posted()).toEqual(expect.arrayContaining([waiting.uuid, queued.uuid]));
+    expect(h.posted().filter((uuid) => uuid === waiting.uuid)).toHaveLength(2);
+  });
+
+  it("keeps trying after its retries run out, until it is too old to send, and then counts it", async () => {
+    const h = harness({ answers: Array.from({ length: 30 }, () => 503), store: createBatchStore(fullStorage) });
+    h.outbox.add(event());
+    await h.advance(6 * MINUTE);
+
+    expect(h.posts.length).toBeGreaterThan(6);
+    for (const post of h.posts) expect(post.at - START).toBeLessThanOrEqual(4 * MINUTE);
+    expect(h.dropped).toEqual([{ batches: 1, events: 1, unsent: 1 }]);
+  });
+});
+
+describe("retries /ingest asked to wait for", () => {
+  it("keep the backoff schedule through each replay, and stop after the last retry", async () => {
+    const store = memoryStore();
+    const h = harness({ answers: Array.from({ length: 30 }, () => ({ status: 429, retryAfter: "1" })), store });
+    const limited = event();
+    h.outbox.add(limited);
+    await h.advance(3 * MINUTE);
+
+    expect(h.posts.map((post) => post.at - START)).toEqual([5000, 7000, 11_000, 19_000, 35_000, 65_000]);
+    expect(store.list()).toEqual([expect.objectContaining({ events: [limited], attempt: 6 })]);
   });
 });
 
@@ -749,7 +834,7 @@ describe("saved batches across tabs", () => {
     const size = 40 * 1024;
     const count = Math.ceil(MAX_STORED_CHARS / size) + 2;
     for (let i = 0; i < count; i++) {
-      store.save({ id: `batch-${i}`, events: [event("meet_join_attempt", size, START + i * 1000)], oldestAt: START + i * 1000, sent: false, notBefore: 0 });
+      store.save({ id: `batch-${i}`, events: [event("meet_join_attempt", size, START + i * 1000)], oldestAt: START + i * 1000, sent: false, notBefore: 0, attempt: 0 });
     }
 
     const kept = store.list().map((batch) => batch.id);
