@@ -173,7 +173,11 @@ private fun ParticipantTile(
     val stripHidden = stripHides && (chromeVisibility?.state?.isHidden ?: false)
     val reduceMotion = rememberReduceMotion()
     val stripAlpha = animateFloatAsState(if (stripHidden) 0f else 1f,
-        if (reduceMotion) snap<Float>() else ConclaveMotion.chromeFade<Float>(), label = "stage.strip")
+        if (reduceMotion || !stripHides) snap<Float>() else ConclaveMotion.chromeFade<Float>(), label = "stage.strip")
+
+    val backing = StageVideoBackingPolicy.backing(role = role, hasRail = StageVideoBackingPolicy.hasRail(stage.layout.slots),
+        fadesWithChrome = stripHides || stripAlpha.value < 1f)
+    val backedRadius = if (bare) 0f else with(LocalDensity.current) { stageCornerRadius(role).toPx() }
 
     val drag = remember { SelfViewDragState() }
     val scope = rememberCoroutineScope()
@@ -219,7 +223,8 @@ private fun ParticipantTile(
             bare = bare,
         ) {
             ShareZoomBox(zoom, zoomable, slot.id, stage, Modifier.fillMaxSize().graphicsLayer { alpha = if (minimized) 0f else 1f }) {
-                StageRendererSlot(slot.id, slot.userId, model.isLocal, isShare, slot.fit, binding, stage, renderers, Modifier.fillMaxSize())
+                StageRendererSlot(slot.id, slot.userId, model.isLocal, isShare, slot.fit, binding, stage, renderers, backing,
+                    backedRadius, Modifier.fillMaxSize())
             }
             SharePlaceholder(model, binding, isShare, Modifier.fillMaxSize())
         }
@@ -502,7 +507,7 @@ private fun tileAnnouncementWords(parts: List<String>): String = parts.filter { 
 @Composable
 private fun StageRendererSlot(
     slotId: String, userId: String, isLocal: Boolean, isShare: Boolean, fit: StageVideoFit, binding: RendererBinding,
-    stage: StagePresenter, renderers: StageRenderers, modifier: Modifier,
+    stage: StagePresenter, renderers: StageRenderers, backing: StageVideoBacking, cornerRadiusPx: Float, modifier: Modifier,
 ) {
     val videoKey = binding.videoKey
     Box(modifier.background(Color(DesignTokens.androidInCallBackground)).semantics { hideFromAccessibility() }) {
@@ -515,7 +520,8 @@ private fun StageRendererSlot(
             } else false
             StageLiveVideo(slotId, userId, isLocal, isShare, videoKey, fit, mirror,
                 avatarSeed = stage.tileChrome.entry(userId).model.avatarSeed,
-                isSpotlight = stage.layout.slots.firstOrNull { it.id == slotId }?.role == StageSlotRole.spotlightMain)
+                isSpotlight = stage.layout.slots.firstOrNull { it.id == slotId }?.role == StageSlotRole.spotlightMain,
+                backing = backing, cornerRadiusPx = cornerRadiusPx)
         }
     }
 }
@@ -524,13 +530,15 @@ private fun StageRendererSlot(
 internal fun StageLiveVideo(
     slotId: String, userId: String, isLocal: Boolean, isShare: Boolean, videoKey: String, fit: StageVideoFit, mirror: Boolean,
     avatarSeed: String = "", isSpotlight: Boolean = false,
+    backing: StageVideoBacking = StageVideoBacking.Texture, cornerRadiusPx: Float = 0f,
 ) {
     val track = remember(videoKey, userId, isLocal, isShare) { stageLiveTrack(userId, isLocal, isShare, videoKey) }
     val wrapper = if (!isLocal && !isShare && videoKey.isNotEmpty()) {
         MeetingViewModel.shared.webRTCClient.remoteVideoTrack(forUserId = userId)
     } else null
     Box(Modifier.fillMaxSize()) {
-        VideoTrackView(track = track, mirror = mirror, fit = fit == StageVideoFit.fit, rendererKey = "stage:$slotId", clearBeforeAttach = false)
+        VideoTrackView(track = track, mirror = mirror, fit = fit == StageVideoFit.fit, rendererKey = "stage:$slotId", clearBeforeAttach = false,
+            backing = backing, cornerRadiusPx = cornerRadiusPx)
         if (wrapper != null && !wrapper.isReceivingFrames) {
             androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize().background(LocalConclaveExtendedColors.current.tile)) {
                 val density = TileChromePolicy.density(width = maxWidth.value.toDouble(), height = maxHeight.value.toDouble(), isSpotlight = isSpotlight)
