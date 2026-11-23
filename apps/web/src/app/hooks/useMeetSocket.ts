@@ -19,6 +19,7 @@ import {
   buildScreenShareAudioOpusCodecOptions,
 } from "../lib/constants";
 import { emitWithAckTimeout } from "../lib/socket-ack";
+import { beginJoinRequest } from "../lib/join-requests";
 import {
   forgetJoinedRoom,
   getJoinedRoom,
@@ -1096,6 +1097,7 @@ export function useMeetSocket({
   const reconnectPhaseRef =
     useRef<ReconnectRecoveryStatus["phase"] | "idle">("idle");
   const serverRestartNoticeRef = useRef<string | null>(null);
+  const newestJoinRequestRef = useRef(0);
   const adminNoticeTimeoutRef = useRef<number | null>(null);
   const consumeRetryAttemptsRef = useRef<Map<string, number>>(new Map());
   const consumerConsumeInFlightRef = useRef<Map<string, symbol>>(new Map());
@@ -6601,14 +6603,18 @@ export function useMeetSocket({
         webinarInviteCode?: string;
         meetingInviteCode?: string;
       },
-    ): Promise<"joined" | "waiting"> => {
+    ): Promise<"joined" | "waiting" | "overtaken"> => {
       const socket = socketRef.current;
       if (!socket) throw new Error("Socket not connected");
+      // A newer join this tab begins while this one waits makes this one
+      // settle as "overtaken": its answer and its setup never apply.
+      const request = beginJoinRequest(newestJoinRequestRef);
       const assertJoinCurrent = () => {
         if (
           intentionalDisconnectRef.current ||
           socketRef.current !== socket ||
-          !socket.connected
+          !socket.connected ||
+          !request.isNewest()
         ) {
           throw new Error("Meeting join was cancelled");
         }
@@ -6627,12 +6633,14 @@ export function useMeetSocket({
         },
       );
 
+      if (!request.isNewest()) return "overtaken";
       assertJoinCurrent();
       setWaitingMessage(null);
       setConnectionState("joining");
 
       const joinRequestedAt = producerSlotOrder.markListRequested();
-      return new Promise<"joined" | "waiting">((resolve, reject) => {
+      return new Promise<"joined" | "waiting" | "overtaken">((settle, fail) => {
+        const { resolve, reject } = request.settleWith<"joined" | "waiting">(settle, fail);
         const settleJoinRoom = startSocketAckTimeout(
           "joinRoom",
           reject,
@@ -9033,8 +9041,9 @@ export function useMeetSocket({
               ),
             );
           }
+          let joinResult: Awaited<ReturnType<typeof joinRoomInternal>>;
           try {
-            await joinRoomInternal(reconnectRoomId, stream, joinOptions);
+            joinResult = await joinRoomInternal(reconnectRoomId, stream, joinOptions);
           } catch (joinError) {
             if (!(joinError instanceof JoinRoomRedirectError)) {
               throw joinError;
@@ -9050,7 +9059,15 @@ export function useMeetSocket({
               sfuUrlOverride: joinError.redirectUrl,
             });
             if (intentionalDisconnectRef.current) return;
-            await joinRoomInternal(reconnectRoomId, stream, joinOptions);
+            joinResult = await joinRoomInternal(reconnectRoomId, stream, joinOptions);
+          }
+          // A newer join this tab began, such as one on "joinApproved",
+          // owns the meeting now: this reconnect only stands down.
+          if (joinResult === "overtaken") {
+            reconnectAttemptsRef.current = 0;
+            manualReconnectRetryRequestedRef.current = false;
+            updateReconnectRecoveryStatus(null);
+            return;
           }
           if (shouldRetryLocalMediaAfterJoin) {
             if (mediaNeeds.needsAudio) {
