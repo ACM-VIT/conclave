@@ -1,5 +1,6 @@
 import {
   AUTHORITY_LIMITS,
+  DISPLAY_NAME_MAX_LENGTH,
   defineContract,
   s,
   type Infer,
@@ -19,7 +20,8 @@ export const POLL_EXPORT_PAGE_BYTES = AUTHORITY_LIMITS.snapshotBytes / 2;
 
 const pollId = s.string({ min: 1, max: 64 });
 const optionId = s.string({ min: 1, max: 16 });
-const name = s.string({ max: 200 });
+// As long as the runtime ever hands an app, so a stored name always fits.
+const name = s.string({ max: DISPLAY_NAME_MAX_LENGTH });
 
 const pollCard = s.object({
   id: pollId,

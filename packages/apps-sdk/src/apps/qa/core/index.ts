@@ -1,4 +1,4 @@
-import { defineContract, s, type Infer } from "@conclave/apps-sdk/authority";
+import { DISPLAY_NAME_MAX_LENGTH, defineContract, s, type Infer } from "@conclave/apps-sdk/authority";
 
 export const QA_MIN_QUESTION_LENGTH = 2;
 export const QA_MAX_QUESTION_LENGTH = 500;
@@ -14,7 +14,8 @@ export const QA_MAX_BOOK_BYTES = 400 * 1024;
 export const QA_MAX_OPEN_PER_PERSON = 3;
 
 const questionId = s.string({ min: 1, max: 64 });
-const name = s.string({ max: 200 });
+// As long as the runtime ever hands an app, so a stored name always fits.
+const name = s.string({ max: DISPLAY_NAME_MAX_LENGTH });
 
 const questionCard = s.object({
   id: questionId,

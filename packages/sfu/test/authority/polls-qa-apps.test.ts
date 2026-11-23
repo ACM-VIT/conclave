@@ -13,7 +13,7 @@ import { pollsContract } from "@conclave/apps-sdk/polls/core";
 import { pollsAuthority } from "@conclave/apps-sdk/polls/server";
 import { QA_MAX_BOOK_BYTES, qaContract } from "@conclave/apps-sdk/qa/core";
 import { qaAuthority } from "@conclave/apps-sdk/qa/server";
-import type { Subject } from "@conclave/apps-sdk/authority/server";
+import { DISPLAY_NAME_MAX_LENGTH, type Subject } from "@conclave/apps-sdk/authority/server";
 import { AuthorityInstance, type Actor } from "../../server/apps/authority/instance.js";
 import { DEFAULT_AUTHORITY_LIMITS } from "../../server/apps/authority/limits.js";
 import { answer } from "./answer.js";
@@ -1035,5 +1035,37 @@ describe("the five findings from PR #260's review", () => {
     expect(hostQa.getState()).toEqual({ kind: "unsupported" });
     expect(hostPolls.client.entryFor(pollsContract)).toBeNull();
     expect(hostPolls.client.entryFor(qaContract)).toBeNull();
+  });
+});
+
+describe("a person named by a long email", () => {
+  // With no name, the join path names a person by their email, up to 320
+  // characters.
+  const email = `${"a".repeat(300)}@example.com`;
+  const longNamed = person(email, email);
+
+  it("can vote, and the host can still export the ballots", async () => {
+    const room = new Harness([pollsAuthority]);
+    const hostTab = await room.open(host, pollsContract);
+    const voterTab = await room.open(longNamed, pollsContract);
+    const pollId = await createPoll(room, hostTab);
+
+    const voted = await voterTab.act("vote", { pollId, optionIds: ["o1"] });
+    const exported = await hostTab.query("exportBallots", { pollId });
+    const ballots = (field(exported.ok ? exported.value : null, "ballots") ?? []) as { name: string }[];
+
+    expect(voted.ok).toBe(true);
+    expect(exported.ok).toBe(true);
+    expect(ballots.map((ballot) => ballot.name.length)).toEqual([DISPLAY_NAME_MAX_LENGTH]);
+  });
+
+  it("can ask, and the host sees the question under that name", async () => {
+    const room = new Harness([qaAuthority]);
+    const hostTab = await room.open(host, qaContract);
+    const askerTab = await room.open(longNamed, qaContract);
+    const id = await ask(room, askerTab, "Is this recorded?");
+
+    expect(field(hostTab.row("questions", id), "askerName")).toBe(email.slice(0, DISPLAY_NAME_MAX_LENGTH));
+    expect(field(askerTab.row("questions", id), "text")).toBe("Is this recorded?");
   });
 });
