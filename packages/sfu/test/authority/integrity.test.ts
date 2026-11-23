@@ -258,6 +258,31 @@ describe("projected keys", () => {
     expect(raviTab.rows("notes").length).toBe(1);
   });
 
+  it("answers a viewer from the same placement the flush makes when two rows claim one key", async () => {
+    const room = new Harness([probeAuthority], { runtime: { verifyViews: false } });
+    const hostTab = await room.open(host, probeContract);
+    const raviTab = await room.open(ravi, probeContract);
+    // A mark that only the slots view shows holds slot 1.
+    await hostTab.act("mark", { id: "a", from: 1, count: 1, shown: false, slot: true });
+    await room.deliver();
+    const revisionBefore = raviTab.state.kind === "ready" ? raviTab.state.revision : -1;
+    const framesBefore = raviTab.frames.length;
+
+    // In one window the holder is written again as it was, and another
+    // mark claims the same slot. The holder keeps it.
+    await hostTab.act("mark", { id: "a", from: 1, count: 1, shown: false, slot: true });
+    await hostTab.act("mark", { id: "b", from: 1, count: 1, shown: false, slot: true });
+    // An action that changes nothing Ravi sees.
+    const answer = await raviTab.act("cancel", { id: "no-such-timer" });
+    await room.deliver();
+
+    expect(raviTab.row("slots", "1")).toEqual({ n: 1, of: "a" });
+    // Nothing he holds changed, so the answer names the version he has, and
+    // no frame comes to move it.
+    expect(answer).toMatchObject({ ok: true, revision: revisionBefore });
+    expect(raviTab.frames.slice(framesBefore)).toEqual([]);
+  });
+
   it("lets one row take a key another row gave up in the same flush", async () => {
     const room = new Harness([probeAuthority]);
     const hostTab = await room.open(host, probeContract);

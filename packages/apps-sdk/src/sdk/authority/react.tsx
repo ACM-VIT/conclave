@@ -49,7 +49,8 @@ export function AuthorityProvider({ socket, joined, children }: AuthorityProvide
       setClient(null);
       return;
     }
-    const next = new AuthorityClient({ socket });
+    // Nothing is asked until the room is joined, below.
+    const next = new AuthorityClient({ socket, joined: false });
     setClient(next);
     return () => next.dispose();
   }, [socket]);

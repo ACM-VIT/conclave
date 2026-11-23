@@ -805,6 +805,13 @@ describe("making room in a Q&A book that a large webinar upvoted", () => {
     for (const attendee of attendees) qa.snapshot(attendee);
     qa.flushViews(live);
     const heldBefore = heldUpvotes(attendees[4_999]);
+    // Each attendee's view as their tab holds it.
+    const views = new Map(
+      attendees.map((attendee) => [
+        attendee,
+        { version: qa.snapshot(attendee).version, owed: qa.owedEnd(attendee) },
+      ]),
+    );
 
     // Everyone presses upvote at once, far more than the room takes in one
     // instant, and in that same instant the host answers. The long answer
@@ -830,21 +837,18 @@ describe("making room in a Q&A book that a large webinar upvoted", () => {
     expect(qa.store.rows("upvotes").size).toBe(0);
     expect(bookBytes()).toBeLessThanOrEqual(QA_MAX_BOOK_BYTES);
 
-    // The host then takes the 25,000 upvote rows out of the attendees' views
-    // a thousand per flush, and nobody is left holding one.
-    const removedPerFlush: number[] = [];
-    while (qa.hasPendingChanges) {
-      const flushed = qa.flushViews(live);
-      removedPerFlush.push(
-        [...flushed.personal.values()]
-          // As told to someone who has held their view all along.
-          .flatMap((changes) => changes.for(0)?.remove ?? [])
-          .filter((row) => row.bucket === "myUpvotes").length,
-      );
-    }
+    // Each attendee is then told of their own five upvote rows, in their
+    // own turn and in one flush: nobody waits behind the others, and nobody
+    // is told of a row that was not theirs.
+    qa.flushViews(live);
+    const told = attendees.map((attendee) => {
+      const { version, owed } = views.get(attendee)!;
+      const { ops, more } = qa.owedFor(attendee, version, owed);
+      return { removed: ops?.remove.filter((row) => row.bucket === "myUpvotes").length ?? 0, more };
+    });
     expect(heldBefore).toBe(5);
-    expect(Math.max(...removedPerFlush)).toBeLessThanOrEqual(1_000);
-    expect(removedPerFlush.reduce((total, removed) => total + removed, 0)).toBe(25_000);
+    expect(told.every((each) => each.removed === 5 && !each.more)).toBe(true);
+    expect(told.reduce((total, each) => total + each.removed, 0)).toBe(25_000);
     const sampled = attendees.filter((_, index) => index % 50 === 0);
     expect(sampled.map(heldUpvotes).filter((held) => held > 0)).toEqual([]);
   }, 60_000);

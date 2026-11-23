@@ -1291,7 +1291,7 @@ describe("bounds", () => {
     expect(await room.converged()).toBe(true);
   });
 
-  it("tells people of their own cleared rows out of one allowance a flush", () => {
+  it("tells each person of their own cleared rows in their own turn, however many others held some", () => {
     // The Q&A fixture without sockets: 300 people upvote one question, and
     // each of them holds their upvote as a row of their own.
     const qa = new AuthorityInstance(
@@ -1332,30 +1332,31 @@ describe("bounds", () => {
     }
     qa.flushViews(live);
     const heldBefore = ownUpvotes(voters[299]);
+    // Each voter's view as it stands now, as their tab holds it.
+    const views = new Map(
+      voters.map((voter) => [voter, { version: qa.snapshot(voter).version, owed: qa.owedEnd(voter) }]),
+    );
     // The book fills. The answered question is the first it gives up, and
     // its 300 upvotes go with it.
     for (let index = 1; index <= 300; index += 1) {
       act(actor(`asker-${Math.ceil(index / 3)}`, "member"), "ask", { text: `Question ${index}` });
     }
 
-    const toldPerFlush: number[] = [];
-    const heldAfterFirstFlush: number[] = [];
-    while (qa.hasPendingChanges) {
-      const flushed = qa.flushViews(live);
-      toldPerFlush.push(
-        [...flushed.personal.values()]
-          // As told to someone who has held their view all along.
-          .flatMap((changes) => changes.for(0)?.remove ?? [])
-          .filter((row) => row.bucket === "myUpvotes").length,
-      );
-      if (toldPerFlush.length === 1) heldAfterFirstFlush.push(...voters.map(ownUpvotes));
-    }
+    qa.flushViews(live);
+    const told = voters.map((voter) => {
+      const { version, owed } = views.get(voter)!;
+      const { ops, more } = qa.owedFor(voter, version, owed);
+      return { removed: ops?.remove.filter((row) => row.bucket === "myUpvotes").length ?? 0, more };
+    });
+    const heldAfter = voters.map(ownUpvotes);
 
     expect(heldBefore).toBe(1);
     expect(qa.store.rows("upvotes").size).toBe(0);
-    // A snapshot is without the rows from the first flush on.
-    expect(heldAfterFirstFlush.filter((held) => held > 0)).toEqual([]);
-    expect(toldPerFlush).toEqual([100, 100, 100]);
+    // Everyone is told of their own row in the first flush: nobody waits
+    // behind 299 others, and nobody is told of a row that was not theirs.
+    expect(told.every((each) => each.removed === 1 && !each.more)).toBe(true);
+    // A snapshot is without the rows at once.
+    expect(heldAfter.filter((held) => held > 0)).toEqual([]);
   });
 
   it("limits a person across their tabs, and the room as a whole", async () => {

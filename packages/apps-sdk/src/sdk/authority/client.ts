@@ -47,6 +47,11 @@ export type AuthorityClientOptions = {
   /** How long to wait for an ack before treating it as lost. */
   ackTimeoutMs?: number;
   now?: () => number;
+  /**
+   * Whether the socket is in its room already. A client made before the
+   * join asks nothing until `joined` is called. True when left out.
+   */
+  joined?: boolean;
 };
 
 export type CapabilityState =
@@ -91,6 +96,9 @@ export type AuthoritySessionState<C extends AuthorityContract> =
 const DEFAULT_ACK_TIMEOUT_MS = 5_000;
 const NOT_JOINED_RETRY_MS = [500, 1_000, 2_000, 4_000, 8_000];
 const RETRY_PAUSE_MS = 400;
+/** The first wait before a refused subscribe is asked again, doubling each time. */
+const SUBSCRIBE_RETRY_MS = 500;
+const SUBSCRIBE_RETRY_MAX_MS = 30_000;
 const NONCE_ALPHABET =
   "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
@@ -135,10 +143,13 @@ export class AuthorityClient {
   private notJoinedAttempts = 0;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   /** The app said it left its room. Nothing is asked until it rejoins. */
-  private away = false;
+  private away: boolean;
   private disposed = false;
+  /** The server's clock less this one's, as its capability answer told it. */
+  private offsetMs: number | null = null;
 
   constructor(options: AuthorityClientOptions) {
+    this.away = options.joined === false;
     this.socket = options.socket;
     this.ackTimeoutMs = options.ackTimeoutMs ?? DEFAULT_ACK_TIMEOUT_MS;
     this.localNow = options.now ?? (() => Date.now());
@@ -151,6 +162,11 @@ export class AuthorityClient {
 
   get capabilities(): CapabilityState {
     return this.state;
+  }
+
+  /** The server's clock less this one's, from its last capability answer, if any. */
+  get serverOffsetMs(): number | null {
+    return this.offsetMs;
   }
 
   subscribe = (listener: Listener): (() => void) => {
@@ -189,6 +205,9 @@ export class AuthorityClient {
       }
       if (reply.ok) {
         this.notJoinedAttempts = 0;
+        if (Number.isFinite(reply.value.serverNowMs)) {
+          this.offsetMs = reply.value.serverNowMs - this.localNow();
+        }
         this.setCapabilities({ kind: "ready", capability: reply.value });
         return;
       }
@@ -380,6 +399,12 @@ export class AuthoritySession<C extends AuthorityContract> {
   private revisionBase = 0;
   private revisionOf: string | null = null;
   private clockOffsetMs = 0;
+  /** A frame has told this session the server's time. */
+  private clockKnown = false;
+  /** Refused subscribes in a row, for how long to wait before the next. */
+  private refusals = 0;
+  private restartTimer: ReturnType<typeof setTimeout> | null = null;
+  private restartEpoch: string | null = null;
 
   constructor(
     private readonly client: AuthorityClient,
@@ -412,6 +437,7 @@ export class AuthoritySession<C extends AuthorityContract> {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    this.clearRestart();
     this.unsubscribe();
     this.failStreams();
     this.listeners.clear();
@@ -430,10 +456,8 @@ export class AuthoritySession<C extends AuthorityContract> {
     action: K,
     input: ActionInput<C, K>,
   ): Promise<AuthorityResult<ActionReceipt<C, K>>> {
-    const operation: OperationId = {
-      issuedAtMs: Math.round(this.serverNow()),
-      nonce: randomId(),
-    };
+    // Stamped once the view is in, so with the server's clock as it is told.
+    let operation: OperationId | null = null;
     const deadline =
       this.client.now() + AUTHORITY_LIMITS.operationMaxAgeMs - RETRY_PAUSE_MS * 4;
     let sentToEpoch: string | null = null;
@@ -453,6 +477,7 @@ export class AuthoritySession<C extends AuthorityContract> {
         return failure("unknown-outcome");
       }
       sentToEpoch = epoch;
+      operation ??= { issuedAtMs: Math.round(this.serverNow()), nonce: randomId() };
 
       const request: ActRequest = {
         roomEpoch: epoch,
@@ -538,16 +563,22 @@ export class AuthoritySession<C extends AuthorityContract> {
     if (this.closed) return;
     const capabilities = this.client.capabilities;
     if (capabilities.kind === "unknown") {
+      this.clearRestart();
+      this.refusals = 0;
       this.reset({ kind: "connecting" });
       return;
     }
     const entry = this.client.entryFor(this.contract);
     if (!entry || capabilities.kind !== "ready") {
+      this.clearRestart();
+      this.refusals = 0;
       this.reset({ kind: "unsupported" });
       return;
     }
     const epoch = capabilities.capability.roomEpoch;
     if (this.subscription && this.subscribedEpoch === epoch) return;
+    // Refused a moment ago in this same room: the wait already set asks again.
+    if (this.restartTimer && this.restartEpoch === epoch) return;
     this.start(entry, epoch);
   }
 
@@ -555,6 +586,7 @@ export class AuthoritySession<C extends AuthorityContract> {
   receive(frame: AuthorityFrame): void {
     if (this.closed || frame.subscription !== this.subscription) return;
     this.clockOffsetMs = frame.serverNowMs - this.client.now();
+    this.clockKnown = true;
 
     if (frame.kind === "query" || frame.kind === "queryAbort") {
       this.receiveQuery(frame);
@@ -629,6 +661,7 @@ export class AuthoritySession<C extends AuthorityContract> {
   /* ---- Internals --------------------------------------------------------- */
 
   private start(entry: AuthorityAppEntry, epoch: string): void {
+    this.clearRestart();
     this.unsubscribe();
     this.failStreams();
     this.subscription = randomId();
@@ -661,13 +694,44 @@ export class AuthoritySession<C extends AuthorityContract> {
         this.subscription = null;
         if (reply.code === "forbidden") {
           this.reset({ kind: "revoked", reason: "forbidden" }, { keepSubscription: true });
-        } else {
-          this.reset({ kind: "unsupported" }, { keepSubscription: true });
-          if (reply.code === "stale-epoch" || reply.code === "not-in-room") {
-            this.client.refresh();
-          }
+          return;
+        }
+        // Only the server's capability answer says an app is not offered.
+        // Any other refusal passes: the view is still on its way, and is
+        // asked for again after a wait that grows each time.
+        this.reset({ kind: "connecting" }, { keepSubscription: true });
+        this.restartLater(epoch);
+        if (
+          reply.code === "stale-epoch" ||
+          reply.code === "not-in-room" ||
+          reply.code === "unknown-app"
+        ) {
+          this.client.refresh();
         }
       });
+  }
+
+  /** Asks for the view again later, waiting longer after each refusal. */
+  private restartLater(epoch: string): void {
+    this.clearRestart();
+    const wait = Math.min(SUBSCRIBE_RETRY_MAX_MS, SUBSCRIBE_RETRY_MS * 2 ** this.refusals);
+    this.refusals += 1;
+    this.restartEpoch = epoch;
+    this.restartTimer = setTimeout(
+      () => {
+        this.restartTimer = null;
+        this.restartEpoch = null;
+        if (!this.closed) this.resubscribe();
+      },
+      // Spread out, so clients refused together do not all ask again together.
+      wait * (0.75 + Math.random() * 0.25),
+    );
+  }
+
+  private clearRestart(): void {
+    if (this.restartTimer) clearTimeout(this.restartTimer);
+    this.restartTimer = null;
+    this.restartEpoch = null;
   }
 
   /** Drops the current subscription and asks for a fresh one. */
@@ -695,6 +759,7 @@ export class AuthoritySession<C extends AuthorityContract> {
     };
     for (const frame of frames) for (const row of frame.rows) put(row);
 
+    this.refusals = 0;
     this.generation = frames[0].generation;
     this.seq = 0;
     this.incoming = null;
@@ -811,7 +876,8 @@ export class AuthoritySession<C extends AuthorityContract> {
   }
 
   private serverNow(): number {
-    return this.client.now() + this.clockOffsetMs;
+    const offset = this.clockKnown ? this.clockOffsetMs : (this.client.serverOffsetMs ?? 0);
+    return this.client.now() + offset;
   }
 }
 

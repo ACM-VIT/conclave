@@ -17,6 +17,7 @@ import type {
   RoomPolicy,
   RuntimeAction,
   RuntimeQuery,
+  RuntimeTransaction,
   Subject,
   TimerContext,
 } from "@conclave/apps-sdk/authority/server";
@@ -24,12 +25,13 @@ import { Logger } from "../../../utilities/loggers.js";
 import type { AuthorityLimits } from "./limits.js";
 import { RateBuckets } from "./rate.js";
 import { ReceiptBook, requestDigest } from "./receipts.js";
-import { AuthorityStore } from "./store.js";
+import { AuthorityStore, type TransactionOutcome } from "./store.js";
 import {
   ViewTracker,
   type CommittedView,
   type HeldRows,
   type LiveAudiences,
+  type OwedCursor,
   type ViewFlush,
   type ViewOps,
   type ViewSnapshot,
@@ -230,7 +232,7 @@ export class AuthorityInstance {
       random: this.options.random,
       nextId: (prefix) => this.nextId(prefix),
     };
-    const outcome = this.store.transact((tx) =>
+    const outcome = this.transact((tx) =>
       spec.receipt.parse(
         finished(action.run(writeContext, tx, parsed.value), `Action ${name}`),
         "strict",
@@ -334,7 +336,7 @@ export class AuthorityInstance {
         random: this.options.random,
         nextId: (prefix) => this.nextId(prefix),
       };
-      const outcome = this.store.transact((tx) => {
+      const outcome = this.transact((tx) => {
         tx.cancelTimer(timer.key);
         finished(handler(ctx, tx, timer.payload), `Timer ${timer.kind}`);
       });
@@ -349,19 +351,59 @@ export class AuthorityInstance {
         );
       }
       // The handler's writes were dropped; still consume the timer.
-      this.store.transact((tx) => tx.cancelTimer(timer.key));
+      this.transact((tx) => tx.cancelTimer(timer.key));
     }
     return changed;
   }
 
-  /** Whether a viewer whose snapshot was read at `version` is behind what was committed. */
-  pendingSince(actor: Actor, version: number): boolean {
-    return this.views.pendingSince(actor.role, actor.subject, version);
+  /**
+   * Runs one transaction, and takes what it committed into the views at
+   * once, so they are always the committed rows.
+   */
+  private transact<R>(run: (tx: RuntimeTransaction) => R): TransactionOutcome<R> {
+    const outcome = this.store.transact(run);
+    this.views.takeIn();
+    return outcome;
   }
 
-  /** Whether removals from a large clear are still owed to such a viewer. */
-  owesSince(actor: Actor, version: number): boolean {
-    return this.views.owesSince(actor.role, actor.subject, version);
+  /**
+   * Whether a viewer whose snapshot was read at `version`, got to `owed` in
+   * the rows clears took, holds anything other than what was committed.
+   */
+  pendingSince(actor: Actor, version: number, owed: OwedCursor): boolean {
+    return this.views.pendingSince(actor.role, actor.subject, version, owed);
+  }
+
+  /** The rows clears took that such a viewer is told of now, and where it then is. */
+  owedFor(
+    actor: Actor,
+    version: number,
+    owed: OwedCursor,
+  ): { ops: ViewOps | undefined; next: OwedCursor; more: boolean } {
+    return this.views.owedFor(actor.role, actor.subject, version, owed);
+  }
+
+  /** Where a viewer whose view is the committed rows now starts in rows clears took. */
+  owedEnd(actor: Actor): OwedCursor {
+    return this.views.owedEnd(actor.role, actor.subject);
+  }
+
+  /** Lets go of rows clears took that every viewer of an audience has passed. */
+  settleOwed(least: {
+    roles: ReadonlyMap<Role, number>;
+    subjects: ReadonlyMap<Subject, number>;
+  }): void {
+    this.views.settleOwed(least);
+  }
+
+  /** Whether some viewer may still be owed a row a clear took. */
+  get hasOwedRows(): boolean {
+    return this.views.hasOwed;
+  }
+
+  /** Changed or owed rows the views' checks have looked at, to bound their cost. */
+  get viewWork(): number {
+    return this.views.examined;
   }
 
   /** Rows the views have yet to take in, or viewers have yet to be told of. */

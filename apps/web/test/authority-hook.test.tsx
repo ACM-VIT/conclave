@@ -319,5 +319,154 @@ it("asks for nothing before the room is joined", async () => {
   await act(async () => vi.advanceTimersByTimeAsync(20_000));
 
   expect(rendered()).toMatchObject({ kind: "connecting", offered: "false" });
+  expect(server.count(AUTHORITY_EVENTS.capabilities)).toBe(0);
   expect(server.count(AUTHORITY_EVENTS.subscribe)).toBe(0);
+});
+
+/** The server's answer to the capability request, offering the app. */
+const offer = async (serverNowMs = Date.now(), roomEpoch = "epoch-1") => {
+  await act(async () =>
+    server.last(AUTHORITY_EVENTS.capabilities)!.ack!({
+      ok: true,
+      value: {
+        protocol: 1,
+        roomEpoch,
+        serverNowMs,
+        apps: [{ instance: "notes.1", app: "notes", major: 1, surface: "panel" }],
+      },
+    }),
+  );
+};
+
+/** The first view, sent to whichever subscription asked last. */
+const sendView = async (serverNowMs = Date.now()) => {
+  const subscribe = server.last(AUTHORITY_EVENTS.subscribe)!;
+  await act(async () => {
+    server.push(AUTHORITY_EVENTS.frame, {
+      kind: "replace",
+      subscription: subscribe.payload.subscription,
+      generation: 1,
+      serverNowMs,
+      part: 0,
+      last: true,
+      rows: [],
+      grants: { actions: ["add"], needsIdentity: [], queries: [] },
+    });
+    subscribe.ack!({ ok: true, value: null });
+  });
+};
+
+for (const code of ["rate-limited", "capacity", "busy", "invalid-input", "unknown-app"] as const) {
+  it(`keeps a view on its way and asks again when a subscribe is refused with ${code}`, async () => {
+    await mount();
+    await offer();
+    const shown: string[] = [];
+    let result: unknown;
+    await act(async () => {
+      void app.act("add", { text: "while refused" }).then((value) => {
+        result = value;
+      });
+    });
+    await act(async () => {
+      server.last(AUTHORITY_EVENTS.subscribe)!.ack!({ ok: false, code });
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    shown.push(rendered().kind ?? "");
+    const asked = server.count(AUTHORITY_EVENTS.subscribe);
+    // Asked what it offers again, the server answers as it did before.
+    if (server.count(AUTHORITY_EVENTS.capabilities) > 1) await offer();
+    await act(async () => vi.advanceTimersByTimeAsync(10_000));
+    shown.push(rendered().kind ?? "");
+    await sendView();
+    const sent = server.last(AUTHORITY_EVENTS.act);
+    await act(async () => {
+      sent?.ack!({ ok: true, value: null, revision: 2 });
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(shown).toEqual(["connecting", "connecting"]);
+    expect(server.count(AUTHORITY_EVENTS.subscribe)).toBeGreaterThan(asked);
+    expect(rendered()).toMatchObject({ kind: "ready", offered: "true" });
+    // The action waited for the view instead of failing.
+    expect(sent?.payload).toMatchObject({ action: "add", input: { text: "while refused" } });
+    expect(result).toMatchObject({ ok: true });
+  });
+}
+
+for (const code of ["stale-epoch", "not-in-room"] as const) {
+  it(`asks what the server offers again and stays on its way when a subscribe is refused with ${code}`, async () => {
+    await mount();
+    await offer();
+    const asked = server.count(AUTHORITY_EVENTS.capabilities);
+    await act(async () => {
+      server.last(AUTHORITY_EVENTS.subscribe)!.ack!({ ok: false, code });
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const meanwhile = rendered().kind;
+    const refreshed = server.count(AUTHORITY_EVENTS.capabilities) > asked;
+    // The room was recreated: the answer names a new one, and the client
+    // subscribes there.
+    await offer(Date.now(), "epoch-2");
+    await act(async () => vi.advanceTimersByTimeAsync(0));
+    const subscribedAgain = server.last(AUTHORITY_EVENTS.subscribe)!.payload.roomEpoch;
+    await sendView();
+
+    expect(meanwhile).toBe("connecting");
+    expect(refreshed).toBe(true);
+    expect(subscribedAgain).toBe("epoch-2");
+    expect(rendered()).toMatchObject({ kind: "ready", offered: "true" });
+  });
+}
+
+it("spaces its subscribe attempts out while the server keeps refusing them", async () => {
+  await mount();
+  await offer();
+  const at: number[] = [];
+  const started = Date.now();
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    await act(async () => {
+      server.last(AUTHORITY_EVENTS.subscribe)!.ack!({ ok: false, code: "rate-limited" });
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const count = server.count(AUTHORITY_EVENTS.subscribe);
+    while (server.count(AUTHORITY_EVENTS.subscribe) === count) {
+      await act(async () => vi.advanceTimersByTimeAsync(10));
+      if (Date.now() - started > 120_000) break;
+    }
+    at.push(Date.now() - started);
+  }
+  const gaps = at.map((time, index) => time - (at[index - 1] ?? 0));
+
+  expect(rendered().kind).toBe("connecting");
+  // Each wait is longer than the one before it.
+  for (let index = 1; index < gaps.length; index += 1) {
+    expect(gaps[index]).toBeGreaterThan(gaps[index - 1]);
+  }
+});
+
+it("still revokes the view when a subscribe is refused as forbidden", async () => {
+  await mount();
+  await offer();
+  await act(async () => {
+    server.last(AUTHORITY_EVENTS.subscribe)!.ack!({ ok: false, code: "forbidden" });
+    await vi.advanceTimersByTimeAsync(0);
+  });
+
+  expect(rendered().kind).toBe("revoked");
+});
+
+it("stamps an action with the server's clock even when the client's is 30 seconds off", async () => {
+  await mount();
+  const serverAhead = 30_000;
+  await offer(Date.now() + serverAhead);
+  // Pressed before the view, and so before any frame has told the time.
+  await act(async () => {
+    void app.act("add", { text: "early" });
+  });
+  await sendView(Date.now() + serverAhead);
+  await act(async () => vi.advanceTimersByTimeAsync(0));
+  const sent = server.last(AUTHORITY_EVENTS.act)!;
+  const issuedAtMs = (sent.payload.operation as { issuedAtMs: number }).issuedAtMs;
+
+  expect(Math.abs(issuedAtMs - (Date.now() + serverAhead))).toBeLessThan(1_000);
 });
