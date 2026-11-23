@@ -49,6 +49,13 @@ export type AppSyncStatus = "idle" | "syncing" | "synced" | "failed";
 export type AppsUpdatePayload = {
   appId: string;
   update: Uint8Array;
+  replicaId?: string;
+};
+
+export type AppsRefusedPayload = {
+  appId: string;
+  replicaId: string;
+  reason: string;
 };
 
 export type AppsAwarenessPayload = {
@@ -141,6 +148,7 @@ export type AppsContextValue = {
    * never edits a copy the room has not filled yet or one the provider dropped.
    */
   presentedDocKey: string | null;
+  rejectedChange: { at: number; reason: string } | null;
   user?: AppUser;
   participants?: AppUser[];
   isAdmin?: boolean;

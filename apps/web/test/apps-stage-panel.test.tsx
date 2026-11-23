@@ -144,6 +144,44 @@ describe("the presented board", () => {
     expect(ctx.getDoc("whiteboard").getMap("shapes").get("circle")).toBe(1);
   });
 
+  it("starts its copy over and says so when the room refuses a change", async () => {
+    await serverState({ activeAppId: "whiteboard", revision: 1, savedAppIds: [], docGeneration: 1 });
+    const keyBefore = ctx.presentedDocKey;
+    await act(async () => {
+      ctx.getDoc("whiteboard").getMap("shapes").set("circle", 1);
+    });
+    const change = sent("apps:yjs:update").at(-1)!.args[0] as { replicaId?: string };
+    expect(change.replicaId).toBeTruthy();
+    const syncsBefore = sent("apps:yjs:sync").length;
+
+    await act(async () =>
+      listeners.get("apps:yjs:refused")!({
+        appId: "whiteboard",
+        replicaId: change.replicaId,
+        reason: "id-limit",
+      }),
+    );
+
+    expect(sent("apps:yjs:sync").length).toBe(syncsBefore + 1);
+    expect(ctx.presentedDocKey).not.toBe(keyBefore);
+    expect(ctx.rejectedChange?.reason).toBe("id-limit");
+    expect(ctx.getDoc("whiteboard").getMap("shapes").get("circle")).toBeUndefined();
+  });
+
+  it("ignores a refusal meant for a copy it no longer holds", async () => {
+    await serverState({ activeAppId: "whiteboard", revision: 1, savedAppIds: [], docGeneration: 1 });
+    const keyBefore = ctx.presentedDocKey;
+    const syncsBefore = sent("apps:yjs:sync").length;
+
+    await act(async () =>
+      listeners.get("apps:yjs:refused")!({ appId: "whiteboard", replicaId: "an-old-copy", reason: "id-limit" }),
+    );
+
+    expect(sent("apps:yjs:sync").length).toBe(syncsBefore);
+    expect(ctx.presentedDocKey).toBe(keyBefore);
+    expect(ctx.rejectedChange).toBeNull();
+  });
+
   it("sends nothing before its first sync for a copy that holds nothing", async () => {
     let sentBeforeSync = -1;
     const answer = socket.emit;

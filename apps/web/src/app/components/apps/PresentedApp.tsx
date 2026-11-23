@@ -1,8 +1,19 @@
 "use client";
 
-import type { ComponentType } from "react";
+import { useEffect, useState, type ComponentType, type ReactNode } from "react";
 import { LoaderCircle, RotateCw } from "lucide-react";
 import type { AppSyncStatus } from "@conclave/apps-sdk";
+import AdminNoticePill from "../AdminNoticePill";
+
+const REJECTED_CHANGE_NOTICE_MS = 4_000;
+
+const rejectedChangeNotice = (reason: string) => ({
+  message:
+    reason === "too-large"
+      ? "This app is full, so your last change couldn't be saved"
+      : "Your last change couldn't be saved",
+  level: "info" as const,
+});
 
 interface PresentedAppProps {
   app: ComponentType;
@@ -10,15 +21,42 @@ interface PresentedAppProps {
   appKey: string;
   syncStatus: AppSyncStatus;
   onRetrySync: () => void;
+  rejectedChange: { at: number; reason: string } | null;
 }
 
 export default function PresentedApp({
+  rejectedChange,
+  ...stateProps
+}: PresentedAppProps) {
+  const [noticeFor, setNoticeFor] = useState<number | null>(null);
+  const rejectedAt = rejectedChange?.at ?? null;
+
+  useEffect(() => {
+    if (rejectedAt === null) return;
+    const remaining = rejectedAt + REJECTED_CHANGE_NOTICE_MS - Date.now();
+    if (remaining <= 0) return;
+    setNoticeFor(rejectedAt);
+    const timer = window.setTimeout(() => setNoticeFor(null), remaining);
+    return () => window.clearTimeout(timer);
+  }, [rejectedAt]);
+
+  return (
+    <>
+      <AppState {...stateProps} />
+      {rejectedChange && noticeFor === rejectedChange.at ? (
+        <AdminNoticePill notice={rejectedChangeNotice(rejectedChange.reason)} compact />
+      ) : null}
+    </>
+  );
+}
+
+function AppState({
   app: App,
   appName,
   appKey,
   syncStatus,
   onRetrySync,
-}: PresentedAppProps) {
+}: Omit<PresentedAppProps, "rejectedChange">): ReactNode {
   if (syncStatus === "synced") return <App key={appKey} />;
   if (syncStatus === "failed") {
     return (

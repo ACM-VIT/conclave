@@ -631,6 +631,7 @@ export default function MeetsMainContent({
     presentedDocKey,
     syncStatus: appSyncStatus,
     retrySync: retryAppSync,
+    rejectedChange: rejectedAppChange,
     apps,
     presentApp,
     closeApp,
@@ -2465,6 +2466,7 @@ export default function MeetsMainContent({
             appKey={presentedDocKey ?? ""}
             syncStatus={appSyncStatus}
             onRetrySync={retryAppSync}
+            rejectedChange={rejectedAppChange}
           />
         </MeetingAppLayout>
       ) : browserState?.active && browserState.noVncUrl ? (

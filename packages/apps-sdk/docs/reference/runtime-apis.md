@@ -64,6 +64,7 @@ Returns the full runtime context:
 - `syncStatus`: `"idle" | "syncing" | "synced" | "failed"`, the presented app's first sync
 - `retrySync() => void`: start the presented app's first sync over
 - `presentedDocKey`: `string | null`, names the presented app's local document
+- `rejectedChange`: `{ at: number, reason: string } | null`, the last change the room refused
 - `user`, `isAdmin`, `isReadOnly`
 
 ### Mounting the presented app
@@ -89,8 +90,12 @@ and a retry that calls `retrySync()` when it is `failed`.
   fails at once, except an older SFU's rate-limit refusal, which has no
   `retryable` field and is retried with the backoff.
 - `presentedDocKey` changes with every new local copy: a new `docGeneration`,
-  a close and present in one batch, or a new socket. The app then mounts
-  again on the new document instead of keeping the one the provider dropped.
+  a close and present in one batch, a new socket, or a change the room
+  refused. The app then mounts again on the new document instead of keeping
+  the one the provider dropped.
+- When the room refuses a change, the provider drops that copy, syncs a fresh
+  one and sets `rejectedChange`; show a short notice that the last change was
+  not saved.
 
 Ack behavior:
 

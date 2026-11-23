@@ -20,6 +20,7 @@ import type {
   AppSyncStatus,
   AppsSyncPayload,
   AppsSyncResponse,
+  AppsRefusedPayload,
   AppsUpdatePayload,
   AppUser,
 } from "../types/index";
@@ -29,6 +30,9 @@ export const AppsContext = createContext<AppsContextValue | null>(null);
 
 // Names a local copy of an app's document by how many copies of that app the
 // provider has dropped before it, so every new copy gets a new name.
+const newReplicaId = (): string =>
+  `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+
 const localCopyKey = (appId: string, dropped: Readonly<Record<string, number>>): string =>
   `${appId}:${dropped[appId] ?? 0}`;
 
@@ -203,6 +207,7 @@ export function AppsProvider({
   }, [participants]);
 
   const docsRef = useRef<Map<string, Y.Doc>>(new Map());
+  const replicaIdsRef = useRef<Map<string, string>>(new Map());
   const awarenessRef = useRef<Map<string, Awareness>>(new Map());
   const pendingInitialUpdatesRef = useRef<Map<string, Uint8Array>>(new Map());
   const initialUpdateSentRef = useRef<Set<string>>(new Set());
@@ -222,6 +227,7 @@ export function AppsProvider({
   const serverStateRef = useRef<AppsState>(EMPTY_APPS_STATE);
 
   const [droppedCopies, setDroppedCopies] = useState<Readonly<Record<string, number>>>({});
+  const [rejectedChange, setRejectedChange] = useState<{ at: number; reason: string } | null>(null);
   const droppedCopiesRef = useRef<Readonly<Record<string, number>>>({});
   const [syncStatus, setSyncStatus] = useState<AppSyncStatus>("idle");
   const syncRunRef = useRef<SyncRun | null>(null);
@@ -265,6 +271,8 @@ export function AppsProvider({
     }
 
     docsRef.current.clear();
+    replicaIdsRef.current.clear();
+    setRejectedChange(null);
     awarenessRef.current.clear();
     docHandlersRef.current.clear();
     awarenessHandlersRef.current.clear();
@@ -283,6 +291,7 @@ export function AppsProvider({
 
   const discardLocalApp = useCallback((appId: string) => {
     const doc = docsRef.current.get(appId);
+    replicaIdsRef.current.delete(appId);
     if (doc) {
       noteDropped([appId]);
       const handler = docHandlersRef.current.get(appId);
@@ -315,7 +324,7 @@ export function AppsProvider({
       if (isReadOnlyRef.current) return;
       const currentSocket = socketRef.current;
       if (!currentSocket) return;
-      const payload: AppsUpdatePayload = { appId, update };
+      const payload: AppsUpdatePayload = { appId, update, replicaId: replicaIdsRef.current.get(appId) };
       currentSocket.emit("apps:yjs:update", payload);
     };
 
@@ -332,7 +341,7 @@ export function AppsProvider({
 
     const currentSocket = socketRef.current;
     if (currentSocket && currentSocket.connected) {
-      currentSocket.emit("apps:yjs:update", { appId, update });
+      currentSocket.emit("apps:yjs:update", { appId, update, replicaId: replicaIdsRef.current.get(appId) });
       initialUpdateSentRef.current.add(appId);
       pendingInitialUpdatesRef.current.delete(appId);
       return;
@@ -379,6 +388,7 @@ export function AppsProvider({
       const app = apps.find((candidate) => candidate.id === appId);
       const doc = app?.createDoc ? app.createDoc() : new Y.Doc();
       docsRef.current.set(appId, doc);
+      replicaIdsRef.current.set(appId, newReplicaId());
       registerDocHandlers(appId, doc);
       queueInitialUpdate(appId, doc);
       return doc;
@@ -427,7 +437,11 @@ export function AppsProvider({
         try {
           const updateForServer = Y.encodeStateAsUpdate(run.doc, serverVector);
           if (updateForServer.length > 0) {
-            currentSocket.emit("apps:yjs:update", { appId: run.appId, update: updateForServer });
+            currentSocket.emit("apps:yjs:update", {
+              appId: run.appId,
+              update: updateForServer,
+              replicaId: replicaIdsRef.current.get(run.appId),
+            });
           }
         } catch (err) {
           console.warn("[Apps] Failed to read the server state vector", err);
@@ -521,7 +535,10 @@ export function AppsProvider({
         previous.activeAppId !== next.activeAppId ||
         previous.docGeneration !== next.docGeneration;
       serverStateRef.current = next;
-      if (stageChanged) stopSync();
+      if (stageChanged) {
+        stopSync();
+        setRejectedChange(null);
+      }
       for (const appId of Array.from(docsRef.current.keys())) {
         if (stageChanged || appId !== next.activeAppId) discardLocalApp(appId);
       }
@@ -591,14 +608,25 @@ export function AppsProvider({
     socket.on("apps:yjs:update", handleUpdate);
     socket.on("apps:awareness", handleAwareness);
 
+    const handleRefused = (payload: AppsRefusedPayload) => {
+      const appId = payload?.appId;
+      if (!appId || appId !== serverStateRef.current.activeAppId) return;
+      if (!payload.replicaId || payload.replicaId !== replicaIdsRef.current.get(appId)) return;
+      discardLocalApp(appId);
+      setRejectedChange({ at: Date.now(), reason: typeof payload.reason === "string" ? payload.reason : "refused" });
+      startSync(appId);
+    };
+    socket.on("apps:yjs:refused", handleRefused);
+
     refreshState();
 
     return () => {
       socket.off("apps:state", handleState);
       socket.off("apps:yjs:update", handleUpdate);
       socket.off("apps:awareness", handleAwareness);
+      socket.off("apps:yjs:refused", handleRefused);
     };
-  }, [socket, getDoc, getAwareness, refreshState, applyServerAppsState]);
+  }, [socket, getDoc, getAwareness, refreshState, applyServerAppsState, discardLocalApp, startSync]);
 
   useEffect(() => {
     if (!socket) return;
@@ -609,7 +637,7 @@ export function AppsProvider({
       if (pending.size === 0) return;
 
       for (const [appId, update] of pending.entries()) {
-        socket.emit("apps:yjs:update", { appId, update });
+        socket.emit("apps:yjs:update", { appId, update, replicaId: replicaIdsRef.current.get(appId) });
         initialUpdateSentRef.current.add(appId);
         pending.delete(appId);
       }
@@ -709,6 +737,7 @@ export function AppsProvider({
       syncStatus,
       retrySync,
       presentedDocKey,
+      rejectedChange,
       user,
       participants: roster,
       isAdmin,
@@ -727,6 +756,7 @@ export function AppsProvider({
       syncStatus,
       retrySync,
       presentedDocKey,
+      rejectedChange,
       user,
       roster,
       isAdmin,
