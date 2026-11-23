@@ -658,10 +658,14 @@ class RedisRestore:
         self.live = ["-h", target["host"], "-p", str(target["port"]), "-n", target["db"], "--no-auth-warning"]
         if target["user"]:
             self.live += ["--user", target["user"]]
-        self.scratch = os.path.join(work_real, "redis")
+        self.work = os.path.join(work_real, "redis")
         self.dump = os.path.join(archive.payload, "redis", "dump.rdb")
-        self.socket = os.path.join(self.scratch, "redis.sock")
-        self.snapshot = ["-s", self.socket, "-n", target["db"]]
+        # The snapshot is read from the database it was taken from, and
+        # written into the one the target URL names.
+        self.source_db = archive.redis_db
+        self.scratch = None
+        self.socket = None
+        self.snapshot = None
         self.server = None
         self.container = None
         self.server_log = None
@@ -680,10 +684,28 @@ class RedisRestore:
             if any(word in said for word in ("NOAUTH", "WRONGPASS", "NOPERM", "invalid password")):
                 raise Refused(f"the Redis at {self.where} refused this restore ({said}); check the user and password in its URL; nothing was changed")
             raise Refused(f"cannot reach the Redis at {self.where} ({said or 'no answer'}); nothing was changed")
+        os.mkdir(self.work, 0o700)
+        # The host's redis-server first, then the live server's version in
+        # Docker: an older host package must not stop a dump it cannot read.
+        loaders = [name for name, tool in (("this host's redis-server", "redis-server"), ("Docker", "docker")) if shutil.which(tool)]
+        failures = []
+        for loader in loaders:
+            try:
+                self.load(loader)
+                return
+            except Refused as refused:
+                failures.append(f"{loader}: {refused}")
+                self.stop()
+        raise Refused(f"the Redis snapshot in the backup does not load ({'; '.join(failures) or 'no redis-server or Docker on this host to load it with'}); nothing was changed")
+
+    def load(self, loader):
+        self.scratch = os.path.join(self.work, "docker" if loader == "Docker" else "local")
         os.mkdir(self.scratch, 0o700)
         shutil.copyfile(self.dump, os.path.join(self.scratch, "dump.rdb"))
+        self.socket = os.path.join(self.scratch, "redis.sock")
+        self.snapshot = ["-s", self.socket, "-n", self.source_db]
         self.server_log = open(os.path.join(self.scratch, "server.log"), "w")
-        if shutil.which("redis-server"):
+        if loader != "Docker":
             self.server = subprocess.Popen(
                 ["redis-server", "--port", "0", "--unixsocket", self.socket, "--dir", self.scratch, "--dbfilename", "dump.rdb",
                  "--save", "", "--appendonly", "no", "--daemonize", "no"],
@@ -692,13 +714,15 @@ class RedisRestore:
             info = run_cli(self.live + ["INFO", "server"], password=self.target["password"])
             version = re.search(r"^redis_version:(\d+\.\d+)", info, re.M)
             if not version:
-                raise Refused("cannot tell the live Redis version to load the snapshot with; nothing was changed")
+                raise Refused("cannot tell the live Redis version to load the snapshot with")
             self.container = f"conclave-restore-redis-{os.getpid()}"
-            subprocess.run(
+            started = subprocess.run(
                 ["docker", "run", "--rm", "-d", "--name", self.container, "--network", "host", "-v", f"{self.scratch}:/data",
                  f"redis:{version.group(1)}", "redis-server", "--port", "0", "--unixsocket", "/data/redis.sock",
                  "--unixsocketperm", "777", "--dir", "/data", "--dbfilename", "dump.rdb", "--save", "", "--appendonly", "no"],
-                check=True, capture_output=True)
+                capture_output=True, text=True)
+            if started.returncode != 0:
+                raise Refused(f"docker run redis:{version.group(1)} failed: {started.stderr.strip()[-300:]}")
         for _ in range(60):
             if self.server is not None and self.server.poll() is not None:
                 break
@@ -708,7 +732,7 @@ class RedisRestore:
         self.server_log.flush()
         with open(os.path.join(self.scratch, "server.log"), encoding="utf-8", errors="replace") as handle:
             tail = " ".join(handle.read().split())[-600:]
-        raise Refused(f"the Redis snapshot in the backup does not load ({tail or 'the scratch server never answered'}); nothing was changed")
+        raise Refused(tail or "the scratch server never answered")
 
     def migrate(self):
         target = self.target
@@ -738,6 +762,7 @@ class RedisRestore:
             subprocess.run(["docker", "rm", "-f", self.container], capture_output=True)
         if self.server_log is not None:
             self.server_log.close()
+        self.server = self.container = self.server_log = None
 
 
 def coverage_problems(archive, state, container):

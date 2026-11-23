@@ -185,6 +185,7 @@ if [[ -n "$REDIS_SOURCE_URL" ]]; then
   parse_redis_url "$REDIS_SOURCE_URL"
   log "Redis snapshot from ${REDIS_HOST}:${REDIS_PORT}"
   redis_cli --rdb "${payload}/redis/dump.rdb" >/dev/null
+  printf '%s\n' "$REDIS_DB" > "${payload}/redis/database"
   if command -v redis-check-rdb >/dev/null; then
     redis-check-rdb "${payload}/redis/dump.rdb" >/dev/null || die "redis-check-rdb rejected the snapshot"
   fi
