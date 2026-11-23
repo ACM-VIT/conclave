@@ -11,7 +11,7 @@ struct GuestJoinIdentityTests {
 
     /// A guest in `room-a` whose join token has already named the identity of its guest pass.
     private func guest(_ connectionState: ConnectionState) -> MeetingViewModel {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "guest-native-session#native-session", sessionId: Self.sessionId)
         viewModel.state.roomId = "room-a"
         viewModel.applyLocalJoinIdentity(
