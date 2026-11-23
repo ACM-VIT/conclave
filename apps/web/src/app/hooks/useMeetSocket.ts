@@ -186,6 +186,10 @@ import {
   getUsableTurnIceServers,
   normalizeIceServerUrls,
   noteRelayCarryingMedia,
+  offerRelays,
+  offeredTurnServers,
+  relayCarryingUrl,
+  type RelayOffer,
   readRelayPairBytes,
   relayProvenByMedia,
   type RuntimeIceServers,
@@ -1090,6 +1094,7 @@ export function useMeetSocket({
   const joinInfoRequestRef = useRef<AbortController | null>(null);
   const lastJoinInfoSourceRef = useRef<"held" | "fresh">("fresh");
   const runtimeIceServersRef = useRef<RuntimeIceServers>(NO_RUNTIME_ICE_SERVERS);
+  const relayOffersRef = useRef(new WeakMap<Transport, RelayOffer[]>());
   const relayOnlyIceRef = useRef(false);
   // Each direction's health, escalated transport, rebuild step and held
   // rebuild live in one record, so they change together. Its health is the
@@ -1567,13 +1572,14 @@ export function useMeetSocket({
 
   // TURN servers are offered from the first attempt, so a network that blocks
   // the direct path connects through the relay without a failed attempt first.
-  const resolveIceServers = useCallback((): RTCIceServer[] | undefined => {
-    const runtime = runtimeIceServersRef.current;
-    return mergeIceServers(
-      runtime.stun ?? MEETS_ICE_SERVERS,
-      getUsableTurnIceServers(runtime, Date.now()),
-    );
-  }, []);
+  const resolveIceServers = useCallback(
+    (offers: RelayOffer[]): RTCIceServer[] | undefined =>
+      mergeIceServers(
+        runtimeIceServersRef.current.stun ?? MEETS_ICE_SERVERS,
+        offeredTurnServers(offers),
+      ),
+    [],
+  );
 
   const resolveIceTransportPolicy = useCallback(
     (): RTCIceTransportPolicy => (relayOnlyIceRef.current ? "relay" : "all"),
@@ -3727,11 +3733,16 @@ export function useMeetSocket({
               return;
             }
 
+            const relayOffers = offerRelays(
+              runtimeIceServersRef.current,
+              Date.now(),
+            );
             const transport = device.createSendTransport({
               ...response,
-              iceServers: resolveIceServers(),
+              iceServers: resolveIceServers(relayOffers),
               iceTransportPolicy: resolveIceTransportPolicy(),
             });
+            relayOffersRef.current.set(transport, relayOffers);
 
             transport.on(
               "connect",
@@ -4003,11 +4014,16 @@ export function useMeetSocket({
               return;
             }
 
+            const relayOffers = offerRelays(
+              runtimeIceServersRef.current,
+              Date.now(),
+            );
             const transport = device.createRecvTransport({
               ...response,
-              iceServers: resolveIceServers(),
+              iceServers: resolveIceServers(relayOffers),
               iceTransportPolicy: resolveIceTransportPolicy(),
             });
+            relayOffersRef.current.set(transport, relayOffers);
 
             transport.on(
               "connect",
@@ -6316,10 +6332,17 @@ export function useMeetSocket({
         entry.reportedRemoteSilence = false;
         // Only a relay seen carrying media replaces the one that worked
         // before; a newer relay that merely connected stays on probation.
-        if (provenRelayUrl) {
+        const carrier = provenRelayUrl
+          ? relayCarryingUrl(
+              relayOffersRef.current.get(transport) ?? [],
+              provenRelayUrl,
+            )
+          : null;
+        if (carrier) {
           runtimeIceServersRef.current = noteRelayCarryingMedia(
             runtimeIceServersRef.current,
-            provenRelayUrl,
+            carrier,
+            Date.now(),
           );
         }
         updateMediaPathRecovery({ type: "media-flowing", direction: kind });

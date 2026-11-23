@@ -84,26 +84,47 @@ export const isRelayDueForRefresh = (
 const usableRelay = (relay: RelaySet | null, now: number): RelaySet | null =>
   relay && isRelayUsable(relay.expiresAt, now) ? relay : null;
 
-const relayHasUrl = (relay: RelaySet, url: string): boolean =>
-  relay.servers.some((server) => normalizeIceServerUrls(server.urls).includes(url));
+export type RelayOffer = { relay: RelaySet; servers: RTCIceServer[] };
 
-/**
- * The TURN servers to offer new transports: the newest relay, and the one
- * last seen carrying media when that is a different set, both only while
- * their credentials have time left. Null when neither is usable.
- */
+const serverUrls = (servers: RTCIceServer[]): Set<string> =>
+  new Set(servers.flatMap((server) => normalizeIceServerUrls(server.urls)));
+
+export const offerRelays = (
+  servers: RuntimeIceServers,
+  now: number,
+): RelayOffer[] => {
+  const latest = usableRelay(servers.latestRelay, now);
+  const proven = usableRelay(servers.provenRelay, now);
+  const offers: RelayOffer[] = latest
+    ? [{ relay: latest, servers: latest.servers }]
+    : [];
+  if (!proven || proven === latest) return offers;
+  const taken = serverUrls(latest?.servers ?? []);
+  const provenServers = proven.servers.filter(
+    (server) => !normalizeIceServerUrls(server.urls).some((url) => taken.has(url)),
+  );
+  return provenServers.length > 0
+    ? [...offers, { relay: proven, servers: provenServers }]
+    : offers;
+};
+
+export const offeredTurnServers = (
+  offers: RelayOffer[],
+): RTCIceServer[] | null => {
+  const servers = offers.flatMap((offer) => offer.servers);
+  return servers.length > 0 ? servers : null;
+};
+
+export const relayCarryingUrl = (
+  offers: RelayOffer[],
+  url: string,
+): RelaySet | null =>
+  offers.find((offer) => serverUrls(offer.servers).has(url))?.relay ?? null;
+
 export const getUsableTurnIceServers = (
   servers: RuntimeIceServers,
   now: number,
-): RTCIceServer[] | null => {
-  const latest = usableRelay(servers.latestRelay, now);
-  const proven = usableRelay(servers.provenRelay, now);
-  const offered = [
-    ...(latest?.servers ?? []),
-    ...(proven && proven !== latest ? proven.servers : []),
-  ];
-  return offered.length > 0 ? offered : null;
-};
+): RTCIceServer[] | null => offeredTurnServers(offerRelays(servers, now));
 
 /**
  * The ICE servers to offer after a join answer. A route whose TURN provider
@@ -130,23 +151,14 @@ export const applyJoinAnswerToIceServers = (
   };
 };
 
-/**
- * Media was seen moving through the relay at `url` (see relayProvenByMedia).
- * When that is the newest relay it becomes the proven one and the older
- * relay stops being offered. Media through the older relay, or through one
- * that both sets list, changes nothing, so a working relay is never dropped
- * for one that has not carried media.
- */
 export const noteRelayCarryingMedia = (
   current: RuntimeIceServers,
-  url: string,
-): RuntimeIceServers => {
-  const { latestRelay, provenRelay } = current;
-  if (!latestRelay || latestRelay === provenRelay) return current;
-  if (!relayHasUrl(latestRelay, url)) return current;
-  if (provenRelay && relayHasUrl(provenRelay, url)) return current;
-  return { ...current, provenRelay: latestRelay };
-};
+  carrier: RelaySet,
+  now: number,
+): RuntimeIceServers =>
+  carrier === current.provenRelay || !isRelayUsable(carrier.expiresAt, now)
+    ? current
+    : { ...current, provenRelay: carrier };
 
 type StatsEntry = {
   type?: string;

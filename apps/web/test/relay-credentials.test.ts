@@ -4,6 +4,8 @@ import {
   applyJoinAnswerToIceServers,
   getUsableTurnIceServers,
   noteRelayCarryingMedia,
+  offerRelays,
+  relayCarryingUrl,
   readRelayPairBytes,
   relayProvenByMedia,
   type RuntimeIceServers,
@@ -92,48 +94,35 @@ describe("ICE servers after a join answer", () => {
 });
 
 describe("a relay that is carrying media", () => {
-  const relayA = { urls: "turn:127.0.0.1:30603?transport=udp", username: "a", credential: "a" };
-  const relayB = { urls: "turn:127.0.0.1:30606?transport=udp", username: "b", credential: "b" };
+  const urlA = "turn:127.0.0.1:30603?transport=udp";
+  const urlB = "turn:127.0.0.1:30606?transport=udp";
+  const relayA = { urls: urlA, username: "a", credential: "a" };
+  const relayB = { urls: urlB, username: "b", credential: "b" };
   const provenA: RuntimeIceServers = {
     stun: [stun],
     latestRelay: { servers: [relayA], expiresAt: NOW + HOUR_MS },
     provenRelay: { servers: [relayA], expiresAt: NOW + HOUR_MS },
   };
+  const rotatedToB = applyJoinAnswerToIceServers(
+    provenA,
+    { iceServers: [stun, relayB], relayExpiresAt: NOW + HOUR_MS },
+    NOW,
+  );
+  const carriedOver = (servers: RuntimeIceServers, url: string, at = NOW) => {
+    const carrier = relayCarryingUrl(offerRelays(servers, at), url);
+    return carrier ? noteRelayCarryingMedia(servers, carrier, at) : servers;
+  };
 
   it("is still offered when a new answer brings another relay", () => {
-    const next = applyJoinAnswerToIceServers(
-      provenA,
-      { iceServers: [stun, relayB], relayExpiresAt: NOW + HOUR_MS },
-      NOW,
-    );
-
-    expect(getUsableTurnIceServers(next, NOW)).toEqual([relayB, relayA]);
+    expect(getUsableTurnIceServers(rotatedToB, NOW)).toEqual([relayB, relayA]);
   });
 
-  it("stays offered while transports keep connecting through it", () => {
-    const next = noteRelayCarryingMedia(
-      applyJoinAnswerToIceServers(
-        provenA,
-        { iceServers: [stun, relayB], relayExpiresAt: NOW + HOUR_MS },
-        NOW,
-      ),
-      "turn:127.0.0.1:30603?transport=udp",
-    );
-
-    expect(getUsableTurnIceServers(next, NOW)).toEqual([relayB, relayA]);
+  it("stays offered while transports keep carrying media through it", () => {
+    expect(getUsableTurnIceServers(carriedOver(rotatedToB, urlA), NOW)).toEqual([relayB, relayA]);
   });
 
   it("is dropped once the new relay has carried media", () => {
-    const next = noteRelayCarryingMedia(
-      applyJoinAnswerToIceServers(
-        provenA,
-        { iceServers: [stun, relayB], relayExpiresAt: NOW + HOUR_MS },
-        NOW,
-      ),
-      "turn:127.0.0.1:30606?transport=udp",
-    );
-
-    expect(getUsableTurnIceServers(next, NOW)).toEqual([relayB]);
+    expect(getUsableTurnIceServers(carriedOver(rotatedToB, urlB), NOW)).toEqual([relayB]);
   });
 
   it("is no longer offered once it expires", () => {
@@ -144,6 +133,52 @@ describe("a relay that is carrying media", () => {
     );
 
     expect(getUsableTurnIceServers(next, NOW)).toEqual([relayB]);
+  });
+});
+
+describe("refreshed credentials for the same relay URL", () => {
+  const url = "turn:127.0.0.1:30603?transport=udp";
+  const older = { urls: url, username: "1700000000:guest", credential: "old" };
+  const fresher = { urls: url, username: "1700003600:guest", credential: "new" };
+  const refreshed: RuntimeIceServers = {
+    stun: [stun],
+    latestRelay: { servers: [fresher], expiresAt: NOW + HOUR_MS },
+    provenRelay: { servers: [older], expiresAt: NOW + 30_000 },
+  };
+
+  it("offers one set of credentials per URL, the newest", () => {
+    expect(getUsableTurnIceServers(refreshed, NOW)).toEqual([fresher]);
+  });
+
+  it("are proven by media even while the older credentials for that URL are proven", () => {
+    const carrier = relayCarryingUrl(offerRelays(refreshed, NOW), url);
+    const next = carrier ? noteRelayCarryingMedia(refreshed, carrier, NOW) : refreshed;
+
+    expect(next.provenRelay).toBe(refreshed.latestRelay);
+  });
+
+  it("stay offered after the older credentials expire and a new answer brings another relay", () => {
+    const carrier = relayCarryingUrl(offerRelays(refreshed, NOW), url);
+    const proven = carrier ? noteRelayCarryingMedia(refreshed, carrier, NOW) : refreshed;
+    const later = NOW + 60_000;
+    const relayB = { urls: "turn:127.0.0.1:30606?transport=udp", username: "b", credential: "b" };
+
+    expect(
+      getUsableTurnIceServers(
+        applyJoinAnswerToIceServers(
+          proven,
+          { iceServers: [stun, relayB], relayExpiresAt: later + HOUR_MS },
+          later,
+        ),
+        later,
+      ),
+    ).toEqual([relayB, fresher]);
+  });
+
+  it("never credits credentials that have expired", () => {
+    const expired = { servers: [older], expiresAt: NOW - 1_000 };
+
+    expect(noteRelayCarryingMedia(refreshed, expired, NOW)).toBe(refreshed);
   });
 });
 
