@@ -32,7 +32,6 @@ type SpeechEvidence = {
   /** The newest speech signal when it was heard; speech heard after a newer signal is that signal's. */
   afterSignal: number;
   turn?: number;
-  lineId?: string;
 };
 export const SARVAM_SUPPORTED_LANGUAGE_CODES = new Set([
   "unknown",
@@ -365,11 +364,17 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
   private readonly connectionId = crypto.randomUUID();
   private utteranceCount = 0;
   private awaitingFinal: string[] = [];
-  private openedByVoice: string[] = [];
-  /** Lines whose replayed audio our voice check took no utterance from yet; Sarvam answers them first, soon after. */
-  private replayedUnclaimed: Array<{ lineId: string; at: number }> = [];
-  /** Lines whose replayed audio an utterance already took, so their later chunks never offer them again. */
-  private readonly replayedClaimed = new Set<string>();
+  /**
+   * Utterances opened before Sarvam signalled them, oldest first: replayed
+   * lines as their audio is sent, and turns our voice check heard before any
+   * signal. Sarvam answers in send order, so each speech signal answers the
+   * oldest.
+   */
+  private openedBeforeSignal: Array<{ itemId: string; turnId: number }> = [];
+  /** Replayed lines already opened on this connection. */
+  private readonly replayedLines = new Set<string>();
+  /** The speech signal and turn each open utterance's speech evidence belongs to. */
+  private readonly utteranceSpeech = new Map<string, { signal: number; turnId: number }>();
   /** Voiced chunks no speech signal has taken yet, newest last. */
   private evidence: SpeechEvidence[] = [];
   private unheardSignals: Array<{ itemId: string; at: number; signal: number }> = [];
@@ -406,28 +411,39 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
       this.turnCount += 1;
       this.turn = { id: this.turnCount, speakerKey, startedAt: now, ended: false, accepted: false, needsOnset: false };
     }
-    if (
-      context?.lineId &&
-      !this.replayedClaimed.has(context.lineId) &&
-      !this.replayedUnclaimed.some(({ lineId }) => lineId === context.lineId)
-    ) {
-      this.replayedUnclaimed.push({ lineId: context.lineId, at: now });
-    }
     const voice = context?.voice ?? "quiet";
+    if (context?.lineId) {
+      if (!this.replayedLines.has(context.lineId)) {
+        this.replayedLines.add(context.lineId);
+        this.turn.accepted = true;
+        this.openedBeforeSignal.push({
+          itemId: this.acceptUtterance({
+            heard: voice !== "quiet",
+            speaker: speaker ?? null,
+            since: this.turn.startedAt,
+            turn: context.turn,
+            ownsNewAudio: false,
+            lineId: context.lineId,
+          }),
+          turnId: this.turn.id,
+        });
+      }
+      return;
+    }
     if (voice === "quiet") return;
     if (!this.signalsSpeech) {
       if (this.turn.accepted || (this.turn.needsOnset && voice !== "onset")) return;
       this.turn.accepted = true;
-      this.openedByVoice.push(
-        this.acceptUtterance({
+      this.openedBeforeSignal.push({
+        itemId: this.acceptUtterance({
           heard: true,
           speaker: speaker ?? null,
           since: this.turn.startedAt,
           turn: context?.turn,
           ownsNewAudio: true,
-          lineId: context?.lineId,
         }),
-      );
+        turnId: this.turn.id,
+      });
       return;
     }
     this.evidence = this.evidence.filter(({ at }) => now - at <= SARVAM_EVIDENCE_KEPT_MS);
@@ -438,7 +454,6 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
       turnStartedAt: this.turn.startedAt,
       afterSignal: this.signalCount,
       turn: context?.turn,
-      lineId: context?.lineId,
     });
     this.scheduleResolve();
   }
@@ -457,10 +472,20 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
     if (this.turn) this.turn.ended = true;
   }
 
+  /**
+   * An utterance is done: its final came or its line ended. It never takes
+   * a later final, and its speech evidence goes with it, so a later signal
+   * never takes its speaker.
+   */
   retire(itemId: string): void {
     this.awaitingFinal = this.awaitingFinal.filter((awaiting) => awaiting !== itemId);
-    this.openedByVoice = this.openedByVoice.filter((opened) => opened !== itemId);
+    this.openedBeforeSignal = this.openedBeforeSignal.filter((opened) => opened.itemId !== itemId);
     this.unheardSignals = this.unheardSignals.filter((signal) => signal.itemId !== itemId);
+    const own = this.utteranceSpeech.get(itemId);
+    if (own) {
+      this.evidence = this.evidence.filter(({ afterSignal, turnId }) => afterSignal !== own.signal || turnId !== own.turnId);
+      this.utteranceSpeech.delete(itemId);
+    }
   }
 
   private nextUtteranceId(): string {
@@ -470,13 +495,8 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
 
   private acceptUtterance(utterance: AcceptedUtterance): string {
     const itemId = this.nextUtteranceId();
-    const now = Date.now();
-    this.replayedUnclaimed = this.replayedUnclaimed.filter(({ at }) => now - at <= SARVAM_EVIDENCE_KEPT_MS);
-    const lineId = utterance.lineId ?? this.replayedUnclaimed[0]?.lineId;
-    this.replayedUnclaimed = this.replayedUnclaimed.filter((replayed) => replayed.lineId !== lineId);
-    if (lineId) this.replayedClaimed.add(lineId);
     this.awaitingFinal.push(itemId);
-    this.callbacks.onAccepted?.(itemId, lineId ? { ...utterance, lineId } : utterance);
+    this.callbacks.onAccepted?.(itemId, utterance);
     return itemId;
   }
 
@@ -501,7 +521,11 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
     // A turn an earlier signal already took is that utterance's up to here; this one starts at its own speech.
     const sharesTurn = first !== undefined && first.turnId === this.signalledTurn;
     this.signalledTurn = first?.turnId ?? current;
-    if (this.openedByVoice.shift()) return;
+    const opened = this.openedBeforeSignal.shift();
+    if (opened) {
+      this.utteranceSpeech.set(opened.itemId, { signal: this.signalCount, turnId: opened.turnId });
+      return;
+    }
     const itemId = this.acceptUtterance({
       heard: Boolean(first),
       speaker: first?.speaker ?? this.evidence.at(-1)?.speaker ?? this.lastSpeaker,
@@ -512,9 +536,9 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
           : Math.max(first.turnStartedAt, first.at - SARVAM_SIGNAL_LOOKBACK_MS),
       turn: first?.turn,
       ownsNewAudio: first !== undefined && first.turnId === current,
-      lineId: first?.lineId,
     });
-    if (!first) this.unheardSignals.push({ itemId, at: now, signal: this.signalCount });
+    if (first) this.utteranceSpeech.set(itemId, { signal: this.signalCount, turnId: first.turnId });
+    else this.unheardSignals.push({ itemId, at: now, signal: this.signalCount });
   }
 
   /**
@@ -529,25 +553,29 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
     const heard = latest
       ? ended.find(({ at, afterSignal }) => at > latest.at && afterSignal === latest.signal)
       : undefined;
-    if (latest && heard) {
-      this.unheardSignals.pop();
-      this.callbacks.onHeard?.(latest.itemId, this.heardSpeech(latest.at, heard, false));
-    }
+    if (latest && heard) this.resolveSignal(latest, heard, false);
   }
 
   /**
    * An unheard signal's utterance is the speech heard after it: that
    * speaker's audio from the signal on, in that turn, and the turn's newer
-   * audio too while it is still going.
+   * audio too while it is still going. Its later speech evidence is its own.
    */
-  private heardSpeech(signalAt: number, heard: SpeechEvidence, ongoing: boolean): HeardSpeech {
-    return {
+  private resolveSignal(
+    signal: { itemId: string; at: number; signal: number },
+    heard: SpeechEvidence,
+    ongoing: boolean,
+  ): void {
+    this.evidence = this.evidence.filter(({ at }) => at > heard.at || at <= signal.at);
+    this.unheardSignals.splice(this.unheardSignals.indexOf(signal), 1);
+    this.utteranceSpeech.set(signal.itemId, { signal: signal.signal, turnId: heard.turnId });
+    const speech: HeardSpeech = {
       speaker: heard.speaker,
-      since: signalAt,
+      since: signal.at,
       turn: heard.turn,
       ownsNewAudio: ongoing && this.turn !== null && !this.turn.ended && heard.turnId === this.turn.id,
-      lineId: heard.lineId,
     };
+    this.callbacks.onHeard?.(signal.itemId, speech);
   }
 
   private takeEvidence(belongs: (evidence: SpeechEvidence) => boolean): SpeechEvidence[] {
@@ -571,9 +599,7 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
           now - at > SARVAM_SIGNAL_LOOKBACK_MS,
       );
       if (heard) {
-        this.evidence = this.evidence.filter(({ at }) => at > heard.at || at <= signal.at);
-        this.unheardSignals.splice(this.unheardSignals.indexOf(signal), 1);
-        this.callbacks.onHeard?.(signal.itemId, this.heardSpeech(signal.at, heard, true));
+        this.resolveSignal(signal, heard, true);
       } else if (now - signal.at > 2 * SARVAM_SIGNAL_LOOKBACK_MS) {
         this.unheardSignals.splice(this.unheardSignals.indexOf(signal), 1);
       }
@@ -593,10 +619,7 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
       ({ at, afterSignal }) =>
         afterSignal === signal.signal && at > signal.at && at - signal.at <= SARVAM_SIGNAL_LOOKBACK_MS,
     );
-    if (!heard) return;
-    this.evidence = this.evidence.filter(({ at }) => at > heard.at || at <= signal.at);
-    this.unheardSignals.splice(this.unheardSignals.indexOf(signal), 1);
-    this.callbacks.onHeard?.(itemId, this.heardSpeech(signal.at, heard, false));
+    if (heard) this.resolveSignal(signal, heard, false);
   }
 
   private scheduleResolve(): void {

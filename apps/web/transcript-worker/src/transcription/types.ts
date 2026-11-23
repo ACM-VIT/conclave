@@ -20,7 +20,7 @@ export type AcceptedUtterance = {
 };
 
 /** Speech our voice check heard for an utterance after it was accepted, so its line takes that audio. */
-export type HeardSpeech = Pick<AcceptedUtterance, "speaker" | "since" | "turn" | "ownsNewAudio" | "lineId">;
+export type HeardSpeech = Pick<AcceptedUtterance, "speaker" | "since" | "turn" | "ownsNewAudio">;
 
 /** What the room knows about a chunk it sends: our voice check's reading, and the line it belongs to on a replay. */
 export type AudioContext = { voice: VoiceReading; turn: number; lineId?: string };

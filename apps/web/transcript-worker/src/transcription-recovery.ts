@@ -46,10 +46,17 @@ export const transcriptionRecoveryDelayMs = (attempt: number): number =>
     )
   ] ?? 0;
 
+/**
+ * Audio and turn events that arrive while no provider is connected. It
+ * shares the room's one replay audio budget with the audio lines already
+ * hold, which `heldElsewhere` reports, and lets its oldest events go first.
+ */
 export class TranscriptRecoveryAudioBuffer {
   private events: BufferedTranscriptAudioEvent[] = [];
   private bytes = 0;
   private droppedEvents = 0;
+
+  constructor(private readonly heldElsewhere: () => number = () => 0) {}
 
   enqueue(event: BufferedTranscriptAudioEvent, now = Date.now()): void {
     this.events.push(event);
@@ -86,10 +93,11 @@ export class TranscriptRecoveryAudioBuffer {
 
   private prune(now: number): void {
     const cutoff = now - TRANSCRIPTION_RECOVERY_MAX_AUDIO_AGE_MS;
+    const budget = TRANSCRIPTION_RECOVERY_MAX_AUDIO_BYTES - this.heldElsewhere();
     while (
       this.events.length > 0 &&
       (this.events.length > TRANSCRIPTION_RECOVERY_MAX_EVENTS ||
-        this.bytes > TRANSCRIPTION_RECOVERY_MAX_AUDIO_BYTES ||
+        this.bytes > budget ||
         (this.events[0]?.createdAt ?? now) < cutoff)
     ) {
       const removed = this.events.shift();

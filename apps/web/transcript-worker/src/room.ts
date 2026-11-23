@@ -203,7 +203,7 @@ export class TranscriptRoom {
   private transcriptionCommitWatchdogTimer: ReturnType<typeof setTimeout> | null =
     null;
   private readonly transcriptionRecoveryAudio =
-    new TranscriptRecoveryAudioBuffer();
+    new TranscriptRecoveryAudioBuffer(() => this.replayAudioBytes());
   private lastMinutesRefreshAt = 0;
   private lastMinutesCompactionAt = 0;
   private minutesTimer: ReturnType<typeof setTimeout> | null = null;
@@ -275,20 +275,7 @@ export class TranscriptRoom {
       this.cancelSfuRelayRecovery();
     }
     const controllerRebound = this.rebindControllerAfterReconnect(viewer);
-    this.send(server, {
-      type: "snapshot",
-      viewerConnectionId: viewer.id,
-      session: this.session,
-      globalOpenAiKeyAvailable: this.hasGlobalOpenAiKey(),
-      globalProviderKeysAvailable: this.globalProviderKeysAvailable(),
-      serviceVersion: this.serviceVersion(),
-      supportsCaptionLanguage: true,
-      captionLanguageDefaults: this.captionLanguageDefaults(),
-      segments: this.segments,
-      partials: this.visiblePartials(),
-      minutes: this.minutes,
-      minutesStatus: this.minutesStatus,
-    });
+    this.send(server, this.snapshotMessage(viewer));
     this.broadcastSession();
 
     server.addEventListener("message", (event) => {
@@ -704,20 +691,7 @@ export class TranscriptRoom {
         await this.forceRefreshMinutes();
         return;
       case "export.snapshot":
-        this.send(viewer.socket, {
-          type: "snapshot",
-          viewerConnectionId: viewer.id,
-          session: this.session,
-          globalOpenAiKeyAvailable: this.hasGlobalOpenAiKey(),
-          globalProviderKeysAvailable: this.globalProviderKeysAvailable(),
-          serviceVersion: this.serviceVersion(),
-          supportsCaptionLanguage: true,
-          captionLanguageDefaults: this.captionLanguageDefaults(),
-          segments: this.segments,
-          partials: this.visiblePartials(),
-          minutes: this.minutes,
-          minutesStatus: this.minutesStatus,
-        });
+        this.send(viewer.socket, this.snapshotMessage(viewer));
         return;
       case "relay.ping":
         this.handleSfuRelayPing(viewer, message.id);
@@ -1390,9 +1364,7 @@ export class TranscriptRoom {
   private keepReplayAudioWithinLimit(): void {
     const lines = this.ledger.activeUnordered();
     const holders = [...lines.map(({ audio }) => audio), ...Array.from(this.uncommittedAudio.values(), ({ chunks }) => chunks)];
-    let total = 0;
-    for (const chunks of holders) for (const { audio } of chunks) total += audio.length;
-    if (total <= TRANSCRIPTION_RECOVERY_MAX_AUDIO_BYTES) return;
+    if (this.replayAudioBytes() <= TRANSCRIPTION_RECOVERY_MAX_AUDIO_BYTES) return;
     const kept = new Set<AudioChunk>();
     let bytes = 0;
     for (const chunk of holders.flat().sort((left, right) => right.createdAt - left.createdAt)) {
@@ -1405,6 +1377,14 @@ export class TranscriptRoom {
       pending.chunks = pending.chunks.filter((chunk) => kept.has(chunk));
       if (pending.chunks.length === 0) this.uncommittedAudio.delete(key);
     }
+  }
+
+  /** Bytes of replay audio lines and the unowned records hold. */
+  private replayAudioBytes(): number {
+    let total = 0;
+    for (const line of this.ledger.activeUnordered()) for (const { audio } of line.audio) total += audio.length;
+    for (const { chunks } of this.uncommittedAudio.values()) for (const { audio } of chunks) total += audio.length;
+    return total;
   }
 
   private voiceCheckFor(key: string): VoiceActivity {
@@ -1835,6 +1815,7 @@ export class TranscriptRoom {
     for (const line of this.ledger.active()) {
       if (line.epoch !== live.epoch) continue;
       line.audio = [];
+      if (!Number.isFinite(line.deadlineAt)) line.deadlineAt = now + TRANSCRIPTION_LINE_DEADLINE_MS;
     }
     this.providerDrains.set(live.epoch, live);
     this.liveConnection = null;
@@ -1962,7 +1943,7 @@ export class TranscriptRoom {
     if (!line || !isActive(line)) return;
     line.heard = true;
     if (heard.speaker) this.setLineSpeaker(line, heard.speaker);
-    if (connection === this.liveConnection && !heard.lineId) {
+    if (connection === this.liveConnection) {
       const taken = [
         ...this.takeFromSpeakingLine(line.speaker, heard.since, heard.turn),
         ...this.adoptAudio(line.speaker, heard.since, heard.turn),
@@ -2014,12 +1995,18 @@ export class TranscriptRoom {
     const line = this.namedLine(connection, providerItemId);
     if (!line || line.state !== "open") return;
     const now = Date.now();
+    const saved = line.heard || line.text.trim() !== "";
     line.text = line.freshText ? delta : `${line.text}${delta}`;
     line.freshText = false;
+    if (line.shownAsFinal) {
+      if (this.recordFinalSegment(this.lineSegment(line, now), line.text)) void this.persist();
+      return;
+    }
     const segment = this.lineSegment(line, now);
     // A replaced provider's words are saved as they arrive, and the output
     // gate holds this delta until a restarted worker would still have them.
-    if (connection.role === "draining") void this.persist();
+    // A live line is saved once, when it first has a place to keep.
+    if (connection.role === "draining" || !saved) void this.persist();
     this.broadcast({
       type: "segment.delta",
       delta: this.toSegmentDelta(segment, delta, now),
@@ -2039,8 +2026,15 @@ export class TranscriptRoom {
     if (isActive(line)) {
       const text = words || line.text.trim();
       this.forgetSpeakingLine(line);
-      this.ledger.end(line, text ? "final" : "dropped", text);
-      changed = text ? this.recordFinalSegment(this.lineSegment(line), text) : true;
+      if (text) {
+        this.ledger.end(line, "final", text);
+        changed = this.recordFinalSegment(this.lineSegment(line), text);
+      } else if (line.shownAsFinal) {
+        this.ledger.end(line, "gap", TRANSCRIPTION_GAP_MARKER);
+      } else {
+        this.forgetLine(connection, line);
+        changed = true;
+      }
     } else if (words && words !== line.text) {
       this.ledger.end(line, "final", words);
       changed = this.recordFinalSegment(this.lineSegment(line), words);
@@ -2089,8 +2083,11 @@ export class TranscriptRoom {
         this.ledger.end(line, "gap", TRANSCRIPTION_GAP_MARKER);
         changed = this.recordFinalSegment(this.lineSegment(line), TRANSCRIPTION_GAP_MARKER) || changed;
         gaps += 1;
-      } else {
+      } else if (connection?.session.provider === "openai") {
         this.ledger.end(line, "dropped", "");
+        changed = true;
+      } else {
+        this.forgetLine(connection, line);
         changed = true;
       }
     }
@@ -2101,6 +2098,14 @@ export class TranscriptRoom {
       );
     }
     return changed;
+  }
+
+  /** A line that ended with nothing to show and that no later answer can fill goes now, with its provider ids. */
+  private forgetLine(connection: ProviderConnection | null, line: CaptionLine): void {
+    for (const providerItemId of connection?.providerIdsOf(line.id) ?? []) {
+      connection?.providerToLine.delete(providerItemId);
+    }
+    this.ledger.remove(line.id);
   }
 
   private forgetSpeakingLine(line: CaptionLine): void {
@@ -2128,11 +2133,20 @@ export class TranscriptRoom {
     const now = Date.now();
     let changed = false;
     for (const connection of [this.liveConnection, ...this.providerDrains.values(), null]) {
-      const owed = this.ledger
+      const overdue = this.ledger
         .active()
         .filter((line) => line.deadlineAt <= now && line.epoch === (connection?.epoch ?? null));
+      const unacknowledged =
+        connection !== null && connection === this.liveConnection && connection.session.provider === "openai"
+          ? overdue.filter(({ state }) => state === "pending_ack")
+          : [];
+      for (const line of unacknowledged) changed = this.showOwedLine(line) || changed;
       changed =
-        this.endUnfinishedLines(owed, "A provider did not finish in time", connection) || changed;
+        this.endUnfinishedLines(
+          overdue.filter((line) => !unacknowledged.includes(line)),
+          "A provider did not finish in time",
+          connection,
+        ) || changed;
     }
     for (const drain of Array.from(this.providerDrains.values())) this.settleDrain(drain);
     this.armLineTimer();
@@ -2140,6 +2154,21 @@ export class TranscriptRoom {
       await this.persist();
       this.scheduleMinutes();
     }
+  }
+
+  /**
+   * An OpenAI line no connection has acknowledged yet: at its deadline
+   * viewers see it as a final, its words or a gap if our check heard
+   * speech, but it keeps its audio and stays owed, so the ack watchdog's
+   * reconnect replays it and an answer updates that final in place.
+   */
+  private showOwedLine(line: CaptionLine): boolean {
+    line.deadlineAt = Number.POSITIVE_INFINITY;
+    if (line.shownAsFinal) return false;
+    const text = line.text.trim() || (line.heard ? TRANSCRIPTION_GAP_MARKER : "");
+    if (!text) return false;
+    line.shownAsFinal = true;
+    return this.recordFinalSegment(this.lineSegment(line), text);
   }
 
   private resetTranscriptionAudioState(): void {
@@ -2580,26 +2609,47 @@ export class TranscriptRoom {
    * there, in a form older workers read too.
    */
   private segmentsForSnapshot(): TranscriptSegment[] {
-    const owed = this.ledger.active().flatMap((line) => {
+    const owed = new Map<string, TranscriptSegment>();
+    for (const line of this.ledger.active()) {
       const words = line.text.trim();
-      if (!words && !line.heard) return [];
+      if (!words && !line.heard) continue;
       const segment = this.lineSegment(line);
-      return [{
+      owed.set(line.id, {
         ...segment,
         text: words ? line.text : TRANSCRIPTION_GAP_MARKER,
         isFinal: true,
         endMs: segment.updatedAt,
-      }];
-    });
-    if (owed.length === 0) return this.segments;
-    return [...this.segments, ...owed].sort(
+      });
+    }
+    if (owed.size === 0) return this.segments;
+    const saved = this.segments.map((segment) => owed.get(segment.itemId) ?? segment);
+    const shown = new Set(this.segments.map(({ itemId }) => itemId));
+    return [...saved, ...Array.from(owed.values()).filter(({ itemId }) => !shown.has(itemId))].sort(
       (left, right) => left.sequence - right.sequence,
     );
   }
 
+  /** What a viewer that joins or asks for a snapshot gets: the same lines and words every other viewer sees. */
+  private snapshotMessage(viewer: Viewer) {
+    return {
+      type: "snapshot",
+      viewerConnectionId: viewer.id,
+      session: this.session,
+      globalOpenAiKeyAvailable: this.hasGlobalOpenAiKey(),
+      globalProviderKeysAvailable: this.globalProviderKeysAvailable(),
+      serviceVersion: this.serviceVersion(),
+      supportsCaptionLanguage: true,
+      captionLanguageDefaults: this.captionLanguageDefaults(),
+      segments: this.segments,
+      partials: this.visiblePartials(),
+      minutes: this.minutes,
+      minutesStatus: this.minutesStatus,
+    };
+  }
+
   /** Words of every owed line, live, draining or waiting for a replacement. */
   private visiblePartials(): TranscriptSegment[] {
-    return this.ledger.active().flatMap((line) => (line.text ? [this.lineSegment(line)] : []));
+    return this.ledger.active().flatMap((line) => (line.text && !line.shownAsFinal ? [this.lineSegment(line)] : []));
   }
 
   /** A line as viewers see it, under its own itemId in its own place. */
@@ -2715,7 +2765,7 @@ export class TranscriptRoom {
     if (this.segments.length <= maxSegments) return;
     this.segments.splice(0, this.segments.length - maxSegments);
     const kept = new Set(this.segments.map(({ itemId }) => itemId));
-    this.ledger.forgetEndedExcept(kept);
+    this.ledger.forgetShownExcept(kept);
     for (const connection of [this.liveConnection, ...this.providerDrains.values()]) {
       connection?.forgetLinesExcept((lineId) => this.ledger.get(lineId) !== undefined);
     }

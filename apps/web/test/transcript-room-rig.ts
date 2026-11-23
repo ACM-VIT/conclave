@@ -225,6 +225,9 @@ export async function transcriptRoomRig(
       ...Array.from(internals.uncommittedAudio.values()).flatMap(({ chunks }) => chunks),
     ].reduce((sum, { audio }) => sum + audio.length, 0);
   };
+  /** Every byte of audio the room holds for replays, audio buffered while reconnecting included. */
+  const heldAudioBytes = () =>
+    retainedAudioBytes() + (room as unknown as { transcriptionRecoveryAudio: { bytes: number } }).transcriptionRecoveryAudio.bytes;
   const lastSnapshotSegment = (text: string) =>
     snapshots.at(-1)?.segments.find((segment) => segment.text === text);
   const snapshotCount = () => snapshots.length;
@@ -279,6 +282,7 @@ export async function transcriptRoomRig(
     viewerTranscript,
     retainedLineState,
     retainedAudioBytes,
+    heldAudioBytes,
     viewerSnapshot,
   };
 }

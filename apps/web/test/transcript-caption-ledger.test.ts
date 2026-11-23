@@ -933,3 +933,134 @@ describe("replay audio stays within one shared limit", () => {
     expect(replayed).toBeGreaterThan(0);
   });
 });
+
+describe("Sol: one line model across connections", () => {
+  it("OpenAI: an unacknowledged commit shows a gap at its deadline but keeps its audio for the watchdog's replay, whose answer fills that gap", async () => {
+    vi.useFakeTimers();
+    quiet();
+    const { providerSockets, start, speak, commit, savedTexts, viewerTranscript } = await rig(OPENAI);
+    await start("en");
+    await speak(ada);
+    await commit(ada);
+    await vi.advanceTimersByTimeAsync(DEADLINE + 100);
+    expect(savedTexts()).toEqual([GAP]);
+
+    await vi.advanceTimersByTimeAsync(COMMIT_ACK_TIMEOUT - DEADLINE);
+    const replacement = providerSockets().at(-1)!;
+    expect(providerSockets()).toHaveLength(2);
+    expect(replacement.sentTypes().filter((type) => type === "input_audio_buffer.commit")).toHaveLength(1);
+    replacement.emit(openAiCommitted("r"));
+    replacement.emit(openAiFinal("r", "Recovered."));
+    await settle();
+
+    expect(savedTexts()).toEqual(["Recovered."]);
+    expect(viewerTranscript().segments.map(({ text }) => text)).toEqual(["Recovered."]);
+  });
+
+  it("Sarvam: replayed lines are answered in the order they were sent, whatever our check hears in them", async () => {
+    vi.useFakeTimers();
+    quiet();
+    const { room, providerSockets, connectPlans, start, switchTo, useModel, speak, sendAudio, commit } = await rig(OPENAI);
+    await start("en");
+    const [socket] = providerSockets();
+    await sendAudio("whisper", ada);
+    await commit(ada);
+    socket.emit(openAiCommitted("a"));
+    socket.emit(openAiDelta("a", "Ada so far"));
+    await speak(grace);
+    await commit(grace);
+    socket.emit(openAiCommitted("g"));
+    await settle();
+
+    connectPlans.push("unreachable");
+    socket.disconnect();
+    await settle();
+    useModel(SARVAM);
+    await switchTo("hi");
+    const sarvam = providerSockets().at(-1)!;
+    sarvam.emit(sarvamSpeechStart());
+    sarvam.emit(sarvamSpeechEnd());
+    sarvam.emit(sarvamFinal("1", "Ada in Hindi."));
+    sarvam.emit(sarvamSpeechStart());
+    sarvam.emit(sarvamSpeechEnd());
+    sarvam.emit(sarvamFinal("2", "Grace in Hindi."));
+    await vi.advanceTimersByTimeAsync(DEADLINE + 100);
+
+    expect(speakers(room.segments)).toEqual([["Ada in Hindi.", "ada"], ["Grace in Hindi.", "grace"]]);
+  });
+
+  it("Sarvam: a final with no end-of-speech signal takes the rest of its speech, so the next signal keeps its own speaker", async () => {
+    vi.useFakeTimers();
+    quiet();
+    const { room, providerSockets, start, speak, endTurn } = await rig(SARVAM);
+    await start("hi");
+    const [socket] = providerSockets();
+    await speak(grace);
+    socket.emit(sarvamSpeechStart());
+    socket.emit(sarvamSpeechEnd());
+    socket.emit(sarvamFinal("setup", "Setup."));
+    await endTurn(grace);
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    await speak(ada);
+    socket.emit(sarvamSpeechStart());
+    await vi.advanceTimersByTimeAsync(200);
+    await speak(ada);
+    socket.emit(sarvamFinal("early", "Already final."));
+    await endTurn(ada);
+    await speak(grace);
+    socket.emit(sarvamSpeechStart());
+    await endTurn(grace);
+    socket.emit(sarvamSpeechEnd());
+    socket.emit(sarvamFinal("grace", "Grace owns this."));
+    await vi.advanceTimersByTimeAsync(DEADLINE + 100);
+
+    expect(speakers(room.segments)).toEqual([
+      ["Setup.", "grace"],
+      ["Already final.", "ada"],
+      ["Grace owns this.", "grace"],
+    ]);
+  });
+
+  it("owed lines and audio buffered while reconnecting share one limit", async () => {
+    vi.useFakeTimers();
+    quiet();
+    const { providerSockets, connectPlans, start, speak, commit, heldAudioBytes } = await rig(OPENAI);
+    await start("en");
+    const [socket] = providerSockets();
+    const chunks = Math.ceil((0.6 * REPLAY_AUDIO_LIMIT) / AUDIO.speech.length);
+    for (let index = 0; index < chunks; index += 1) {
+      await speak(ada);
+      await vi.advanceTimersByTimeAsync(20);
+    }
+    await commit(ada);
+    socket.emit(openAiCommitted("a"));
+    connectPlans.push(...Array<"unreachable">(30).fill("unreachable"));
+    socket.disconnect();
+    await settle();
+    for (let index = 0; index < chunks; index += 1) {
+      await speak(grace);
+      await vi.advanceTimersByTimeAsync(20);
+    }
+
+    expect(heldAudioBytes()).toBeLessThanOrEqual(REPLAY_AUDIO_LIMIT);
+    expect(heldAudioBytes()).toBeGreaterThan(REPLAY_AUDIO_LIMIT - AUDIO.speech.length);
+  });
+
+  it("a line its provider ends with an empty final is let go at once", async () => {
+    vi.useFakeTimers();
+    const { providerSockets, start, sendAudio, commit, savedTexts, retainedLineState } = await rig(OPENAI);
+    await start("en");
+    const [socket] = providerSockets();
+    for (let index = 0; index < 50; index += 1) {
+      await sendAudio("silence", ada);
+      await commit(ada);
+      socket.emit(openAiCommitted(`i${index}`));
+      socket.emit(openAiFinal(`i${index}`, ""));
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+
+    expect(savedTexts()).toEqual([]);
+    expect(retainedLineState().lines).toBe(0);
+  });
+});

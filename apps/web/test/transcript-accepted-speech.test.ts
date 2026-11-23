@@ -794,6 +794,7 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
       utterance.itemId = `ack_${(acks += 1)}`;
       connection.socket.emit(openAiCommitted(utterance.itemId));
       place(utterance);
+      if (connection === live && Date.now() >= utterance.deadlineAt!) utterance.deadlineAt = Date.now() + DEADLINE;
       if (utterance.claiming && !connection.socket.closed) utterance.claiming = false;
       connection.awaiting.push(utterance);
     };
@@ -1043,7 +1044,7 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
         const now = Date.now();
         for (const utterance of previous.unacknowledged) {
           place(utterance, now);
-          utterance.deadlineAt = Math.min(utterance.deadlineAt!, now + DEADLINE);
+          utterance.deadlineAt = utterance.deadlineAt! <= now ? now + DEADLINE : Math.min(utterance.deadlineAt!, now + DEADLINE);
         }
         live = connect();
       },
@@ -1053,7 +1054,7 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
         const owed = [...failed.awaiting]
           .filter(({ noise, deadlineAt }) => !noise && Date.now() < deadlineAt!)
           .sort((left, right) => left.index - right.index);
-        const unacknowledged = failed.unacknowledged.filter(({ deadlineAt }) => Date.now() < deadlineAt!);
+        const unacknowledged = [...failed.unacknowledged];
         const picked = pick(["plain", "plain", "midReplay", "unreachable"] as const);
         const kind = picked === "midReplay" && owed.length + unacknowledged.length === 0 ? "plain" : picked;
         if (kind === "midReplay") connectPlans.push(1);
