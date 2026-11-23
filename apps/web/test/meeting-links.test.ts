@@ -117,15 +117,25 @@ describe("meeting links", () => {
     expect(await tenantOpenedBy(path, ["other"])).toBe("conclave");
   });
 
-  it("labels an older SFU's booking with the tenant it was looked up under, as base did", async () => {
+  it("labels an older SFU's booking on a bare link with the tenant it was looked up under, as base did", async () => {
     vi.stubEnv("NEXT_PUBLIC_SFU_CLIENT_ID", "acme");
     vi.stubEnv("SFU_CLIENT_ID", "");
     const acmeSfu = { ...olderSfu, sfuDefault: "acme" };
 
     expect(await tenantOpenedBy(`/${ROOM}`, ["acme"], acmeSfu)).toBe("acme");
-    expect(await tenantOpenedBy(`/${ROOM}?clientId=conclave`, ["conclave"], olderSfu)).toBe(
-      "conclave",
-    );
+  });
+
+  it("never takes an older SFU's booking, which names no tenant, for a link that names one", async () => {
+    deployment("conclave", "conclave");
+
+    expect(await findScheduledMeetingForLink("acme", sfuLookup(["conclave"], olderSfu))).toBeNull();
+    expect(await findScheduledMeetingForLink("acme", sfuLookup(["acme"], olderSfu))).toBeNull();
+    expect(await findScheduledMeetingForLink("conclave", sfuLookup(["conclave"], olderSfu))).toBeNull();
+    expect(await tenantOpenedBy(`/${ROOM}?clientId=acme`, ["conclave"], olderSfu)).toBe("acme");
+    expect(await findScheduledMeetingForLink("acme", sfuLookup(["acme"]))).toEqual({
+      clientId: "acme",
+      meeting: { clientId: "acme", roomCode: ROOM },
+    });
   });
 
   it("labels an older SFU's booking with the server's default when one is set", async () => {

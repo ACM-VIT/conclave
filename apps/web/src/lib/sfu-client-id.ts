@@ -46,7 +46,9 @@ export const resolveSfuClientIdCandidates = (
 /**
  * The booking a meeting link opens, with the tenant it really belongs to.
  * The booking service falls back across tenants, so a link that names its
- * tenant ignores a booking from any other.
+ * tenant ignores a booking from any other, and one an older service returns
+ * without its tenant, since that could be any tenant's. A bare link takes the
+ * tenant a booking was looked up under, as before.
  */
 export const findScheduledMeetingForLink = async <
   Meeting extends { clientId?: string },
@@ -58,11 +60,9 @@ export const findScheduledMeetingForLink = async <
   for (const candidate of resolveSfuClientIdCandidates(linkedClientId)) {
     const meeting = await lookup(candidate);
     if (!meeting) continue;
-    // An older booking service leaves the booking's tenant out; take the
-    // tenant it was looked up under, as before.
-    const booked = meeting.clientId?.trim() || candidate;
-    if (named && canonicalizeSfuClientId(booked) !== named) continue;
-    return { clientId: booked, meeting };
+    const booked = meeting.clientId?.trim();
+    if (named && (!booked || canonicalizeSfuClientId(booked) !== named)) continue;
+    return { clientId: booked || candidate, meeting };
   }
   return null;
 };
