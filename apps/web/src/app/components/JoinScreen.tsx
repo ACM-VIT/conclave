@@ -1463,7 +1463,7 @@ function JoinScreen({
                   <button
                     type="button"
                     onClick={onDismissMeetingEndedNotice}
-                    aria-label="Dismiss meeting ended notice"
+                    aria-label="Dismiss notice"
                     className="-mr-1 -mt-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[#fafafa]/55 transition-colors hover:bg-white/[0.08] hover:text-[#fafafa]"
                   >
                     <X size={14} aria-hidden="true" />

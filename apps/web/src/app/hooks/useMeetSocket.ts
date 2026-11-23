@@ -8350,11 +8350,9 @@ export function useMeetSocket({
 
             socket.on("joinRejected", () => {
               console.info("[Meets] Join rejected.");
-              setMeetError({
-                code: "JOIN_REJECTED",
-                message: "The host has denied your request to join.",
-                recoverable: false,
-              });
+              const rejection = "The host has denied your request to join.";
+              setMeetError({ code: "JOIN_REJECTED", message: rejection, recoverable: false });
+              setMeetingEndedNotice?.(rejection);
               setConnectionState("error");
               setWaitingMessage(null);
               cleanup();
