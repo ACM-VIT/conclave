@@ -33,6 +33,7 @@ import {
 import {
   emitWebinarAttendeeCountChanged,
   emitWebinarFeedChanged,
+  grantWebinarQaList,
 } from "../../webinarNotifications.js";
 import {
   getOrCreateWebinarRoomConfig,
@@ -943,19 +944,10 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           context.currentClient instanceof Admin &&
           !context.currentClient.isObserver;
         // A room that runs the Q&A app has one book. There the old Q&A
-        // events are fed from that book for the life of this seat.
-        if (
-          !attachLegacyQaFeed(context) &&
-          webinarConfig.enabled &&
-          (isModeratorClient || context.currentClient.isWebinarAttendee)
-        ) {
-          socket.emit("webinar:qaSnapshot", {
-            roomId: context.currentRoom.id,
-            entries: context.currentRoom.getWebinarQaSnapshotFor(
-              userId,
-              isModeratorClient,
-            ),
-          });
+        // events are fed from that book for the life of this seat. Elsewhere
+        // a seat joining a webinar is sent the list as its role reads it.
+        if (!attachLegacyQaFeed(context)) {
+          grantWebinarQaList(state, context.currentRoom, context.currentClient);
         }
         if (webinarConfig.enabled && isModeratorClient) {
           socket.emit("webinar:handQueueChanged", {

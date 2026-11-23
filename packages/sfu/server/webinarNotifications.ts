@@ -1,4 +1,5 @@
 import type { Server as SocketIOServer } from "socket.io";
+import type { Client } from "../config/classes/Client.js";
 import type { Room } from "../config/classes/Room.js";
 import type {
   WebinarAttendeeCountChangedNotification,
@@ -8,6 +9,7 @@ import type {
   WebinarLinkResponse,
   WebinarQaChangedNotification,
   WebinarQaEntry,
+  WebinarQaSnapshot,
 } from "../types.js";
 import { peekRoomAuthority } from "./apps/authority/index.js";
 import type { SfuState } from "./state.js";
@@ -44,6 +46,39 @@ export const getWebinarConfigSnapshot = (
   return toWebinarConfigSnapshot(webinarConfig, attendeeCount);
 };
 
+/**
+ * Clients sent the room's webinar Q&A list on the old events since the room
+ * last became a webinar. Every grant of Q&A comes with a list, so no client
+ * is left to build one from changes alone.
+ */
+const listedForQa = new WeakSet<Client>();
+
+/**
+ * Whether the old Q&A events are the room's own book. A process that runs
+ * the Q&A app keeps one book in the app, and its adapter sends those lists.
+ */
+const oldEventsAreTheBook = (state: SfuState): boolean =>
+  !state.appsAuthority?.modules.some((module) => module.contract.id === "qa");
+
+/** Sends one client the room's webinar Q&A as their role reads it. */
+const sendWebinarQaList = (room: Room, client: Client): void => {
+  client.socket.emit("webinar:qaSnapshot", {
+    roomId: room.id,
+    entries: room.getWebinarQaSnapshotFor(client.id, room.isAdminClient(client)),
+  } satisfies WebinarQaSnapshot);
+  listedForQa.add(client);
+};
+
+/**
+ * Sends a client the webinar Q&A list when they are granted it: on joining
+ * a webinar, and on becoming a host, who reads more of it.
+ */
+export const grantWebinarQaList = (state: SfuState, room: Room, client: Client): void => {
+  if (!oldEventsAreTheBook(state)) return;
+  if (!state.webinarConfigs.get(room.channelId)?.enabled) return;
+  sendWebinarQaList(room, client);
+};
+
 export const emitWebinarConfigChanged = (
   io: SocketIOServer,
   state: SfuState,
@@ -55,6 +90,14 @@ export const emitWebinarConfigChanged = (
   );
   // Webinar mode and the Q&A switch decide what authority apps show to whom.
   peekRoomAuthority(room)?.policyChanged();
+  // A room that has just become a webinar grants its Q&A to everyone in it.
+  if (oldEventsAreTheBook(state)) {
+    const webinar = Boolean(state.webinarConfigs.get(room.channelId)?.enabled);
+    for (const client of room.clients.values()) {
+      if (!webinar) listedForQa.delete(client);
+      else if (!listedForQa.has(client)) sendWebinarQaList(room, client);
+    }
+  }
 };
 
 const emitWebinarAttendeeCountNow = (

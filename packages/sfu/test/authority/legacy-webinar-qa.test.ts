@@ -719,3 +719,79 @@ describe("webinar Q&A with old and new clients in one room", () => {
   });
 });
 
+
+describe("webinar Q&A on a server without the runtime", () => {
+  /** The room's webinar link, so attendees can come in by it. */
+  const linkRoom = (stack: Stack) =>
+    setCustomWebinarLinkSlug({
+      webinarConfig: getOrCreateWebinarRoomConfig(stack.state.webinarConfigs, stack.room.channelId),
+      webinarLinks: stack.state.webinarLinks,
+      room: stack.room,
+      slug: SLUG,
+    });
+  const startWebinarWithoutRuntime = async (): Promise<Stack> => {
+    const stack = await start(null);
+    const webinar = getOrCreateWebinarRoomConfig(stack.state.webinarConfigs, stack.room.channelId);
+    webinar.enabled = true;
+    webinar.publicAccess = true;
+    linkRoom(stack);
+    return stack;
+  };
+
+  it("sends a host the list when their meeting becomes a webinar, and every question after it", async () => {
+    const stack = await start(null);
+    const host = await oldClient(stack, asha);
+    const listsInTheMeeting = host.snapshots();
+
+    const turnedOn = await ask<{ success?: boolean; error?: string }>(host.socket, "webinar:updateConfig", {
+      enabled: true,
+      publicAccess: true,
+    });
+    await until(() => host.snapshots() > listsInTheMeeting, "the host is sent the list");
+    linkRoom(stack);
+    const attendee = await oldClient(stack, vik, asAttendee);
+    const asked = await attendee.submit("Is this recorded?");
+    await until(() => host.entries.has(asked.id ?? ""), "the host sees the question");
+
+    expect(listsInTheMeeting).toBe(0);
+    expect(turnedOn.success).toBe(true);
+    expect(host.snapshots()).toBe(1);
+    expect(host.entries.get(asked.id ?? "")?.question).toBe("Is this recorded?");
+  });
+
+  it("sends a new host the list with the questions only hosts see", async () => {
+    const stack = await startWebinarWithoutRuntime();
+    const host = await oldClient(stack, asha);
+    const panelist = await oldClient(stack, omar);
+    const attendee = await oldClient(stack, vik, asAttendee);
+    const asked = await attendee.submit("Waiting for a host");
+    await until(() => host.entries.has(asked.id ?? ""), "the host sees it");
+    const listsBefore = panelist.snapshots();
+    const heldBefore = panelist.entries.has(asked.id ?? "");
+
+    const promoted = await ask<{ success?: boolean; error?: string }>(host.socket, "promoteHost", {
+      userId: panelist.seatId,
+    });
+    await until(() => panelist.snapshots() > listsBefore, "the new host is sent the list");
+
+    expect(promoted.success).toBe(true);
+    expect(heldBefore).toBe(false);
+    expect(panelist.entries.get(asked.id ?? "")?.status).toBe("pending");
+  });
+
+  it("sends a panelist the list as they join a webinar", async () => {
+    const stack = await startWebinarWithoutRuntime();
+    const host = await oldClient(stack, asha);
+    const attendee = await oldClient(stack, vik, asAttendee);
+    const shown = await attendee.submit("Shown to everyone");
+    const waiting = await attendee.submit("Still waiting");
+    await host.moderate(shown.id ?? "", "answering");
+    await until(() => attendee.entries.get(shown.id ?? "")?.status === "answering", "it is shown");
+
+    const panelist = await oldClient(stack, omar);
+    await until(() => panelist.snapshots() > 0, "the panelist is sent the list");
+
+    expect([...panelist.entries.keys()]).toEqual([shown.id]);
+    expect(panelist.entries.has(waiting.id ?? "")).toBe(false);
+  });
+});

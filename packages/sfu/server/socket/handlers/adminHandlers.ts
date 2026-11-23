@@ -23,6 +23,7 @@ import {
   SUPER_ADMIN_REMOVAL_ERROR,
 } from "../../admin/moderation.js";
 import { forceCloseRoom, isCurrentRoom, markRoomEnded } from "../../rooms.js";
+import { grantWebinarQaList } from "../../webinarNotifications.js";
 import { getSocketAuthUser } from "../auth.js";
 import { getSocketContext, type ConnectionContext } from "../context.js";
 import { RATE_LIMITS, takeToken } from "../rateLimit.js";
@@ -356,6 +357,8 @@ const activatePromotedAdmin = (
     roomId,
     snapshot: toRoomSnapshot(context.currentRoom),
   });
+  // A host reads questions others do not, so the list comes again.
+  grantWebinarQaList(context.state, context.currentRoom, promoted);
 };
 
 export const registerAdminHandlers = (
