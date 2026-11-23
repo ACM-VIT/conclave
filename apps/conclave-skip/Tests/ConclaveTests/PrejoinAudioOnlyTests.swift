@@ -52,7 +52,7 @@ struct PrejoinAudioOnlyLobbyTests {
     private static let link = "https://conclave.acmvit.in/rose-sora-luffy"
 
     @Test func choosingAudioOnlyBeforeJoiningStopsThePreviewAndLocksTheCamera() {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         let hooks = LobbyCoreHooks()
         var permissionRequests: [String] = []
@@ -172,7 +172,7 @@ struct PrejoinAudioOnlyLobbyTests {
     }
 
     @Test func abandoningALobbyLeavesTheNextRoomInVideoMode() {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         let hooks = LobbyCoreHooks()
         hooks.setEntryMediaIntent = { mic, camera in viewModel.setEntryMediaIntent(mic: mic, camera: camera) }
         hooks.setEntryAudioOnly = { on in viewModel.setEntryAudioOnly(on) }

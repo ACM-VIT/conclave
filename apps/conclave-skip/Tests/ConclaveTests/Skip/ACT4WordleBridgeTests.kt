@@ -97,7 +97,7 @@ class ACT4WordleBridgeTests {
         assertEquals(WordleRole.spectator, spectator.scene.wordle!!.role)
         spectator.typeWordleLetter("A")
         assertEquals("", spectator.wordleDraft)
-        val shell = MeetingShellPresenter()
+        val shell = MeetingShellPresenter(defaults = IsolatedDefaults.make())
         val session = ActivitySession(shell = shell, stage = StagePresenter(shell = shell))
         assertEquals(WordleFixtureState.reconnecting, WordleFixtures.apply(WordleFixtureState.reconnecting.rawValue, session, ActivityFixtureOwner()))
         assertEquals("LEMO", session.games.wordleDraft)

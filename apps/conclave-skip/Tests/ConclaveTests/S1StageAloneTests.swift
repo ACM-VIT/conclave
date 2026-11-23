@@ -6,7 +6,7 @@ import Testing
 @MainActor
 struct S1StageAloneTests {
     private func presenter(_ inputs: StageInputs, viewport: StageViewport = StagePoliciesTests.iphone17e) -> StagePresenter {
-        let stage = StagePresenter(shell: MeetingShellPresenter())
+        let stage = StagePresenter(shell: MeetingShellPresenter(defaults: IsolatedDefaults.make()))
         stage.setViewport(viewport)
         stage.apply(inputs)
         return stage

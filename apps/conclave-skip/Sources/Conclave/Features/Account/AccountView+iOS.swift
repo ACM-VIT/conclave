@@ -60,7 +60,7 @@ struct AccountView: View {
     }
 
     private static func makeAppSettings() -> SettingsPresenter {
-        let settings = SettingsPresenter(scope: SettingsScope.app)
+        let settings = SettingsPresenter(scope: SettingsScope.app, defaults: UserDefaults.standard)
         let notifications = SystemNotifications.shared.snapshot
         settings.apply(SettingsInputs.make(messageNotificationsAvailable: true,
                                            messageNotificationsOn: notifications.messageNotificationsPreference,

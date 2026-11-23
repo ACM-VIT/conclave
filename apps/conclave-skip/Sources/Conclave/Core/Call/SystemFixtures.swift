@@ -262,7 +262,7 @@ final class SystemShareFixtureRig {
     init(phase: ShareFixturePhase, platform: ScreenSharePlatform) {
         self.phase = phase
         self.platform = platform
-        let owner = MeetingShellPresenter()
+        let owner = MeetingShellPresenter(defaults: IsolatedDefaults.make())
         shell = owner
         let stagePresenter = StagePresenter(shell: owner)
         stage = stagePresenter
