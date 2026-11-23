@@ -102,6 +102,14 @@ describe("wheel label fitting", () => {
     expect(fitSingleLabel(" \u0600 BBBBBBBBBBB", 600, fitsCodePoints(3))).toBeNull();
   });
 
+  it("numbers a slice whose name cannot fit even one cluster while the others show", () => {
+    const names = [...twelve.slice(0, 11), `\u0915${"\u094D\u0915".repeat(23)}`];
+    const fitted = fitWheelLabels(names, geometry(12), measure);
+    expect(fitted.labels.slice(0, 11).map((label) => label?.text)).toEqual(names.slice(0, 11));
+    expect(fitted.labels[11]).toEqual({ text: "12", truncated: true, numbered: true });
+    expect(fitted.labels.slice(0, 11).every((label) => label?.numbered === false)).toBe(true);
+  });
+
   it("keeps 64 names readable at the smallest allowed size, or hides them when nothing fits", () => {
     const names = Array.from({ length: 64 }, (_, i) => `Person ${i + 1}`);
     const desktop = fitWheelLabels(names, geometry(64), measure);

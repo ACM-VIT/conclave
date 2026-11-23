@@ -23,6 +23,7 @@ export type LabelGeometry = {
 export type FittedLabel = {
   text: string;
   truncated: boolean;
+  numbered: boolean;
 };
 
 export type FittedLabels = {
@@ -93,7 +94,7 @@ const truncateToWidth = (
   widthAtSize: (text: string) => number,
   limit: number
 ): FittedLabel | null => {
-  if (widthAtSize(label) <= limit) return { text: label, truncated: false };
+  if (widthAtSize(label) <= limit) return { text: label, truncated: false, numbered: false };
   const characters = graphemes(label);
   let low = 0;
   let high = characters.length - 1;
@@ -107,7 +108,17 @@ const truncateToWidth = (
   return {
     text: shortened(characters, low),
     truncated: true,
+    numbered: false,
   };
+};
+
+const numberedLabel = (
+  index: number,
+  widthAtSize: (text: string) => number,
+  limit: number
+): FittedLabel | null => {
+  const text = String(index + 1);
+  return widthAtSize(text) <= limit ? { text, truncated: true, numbered: true } : null;
 };
 
 export const fitWheelLabels = (
@@ -136,7 +147,10 @@ export const fitWheelLabels = (
   if (fullCount < labels.length * MIN_FULL_RATIO) {
     return { fontSize, labels: labels.map(() => null) };
   }
-  return { fontSize, labels: fitted };
+  return {
+    fontSize,
+    labels: fitted.map((label, index) => label ?? numberedLabel(index, widthAtSize, limit)),
+  };
 };
 
 const SINGLE_LABEL_DIRECTION = 90;

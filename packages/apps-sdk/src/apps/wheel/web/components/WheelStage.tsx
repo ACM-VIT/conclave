@@ -54,6 +54,7 @@ const COLOR = {
   oddSeam: "#242428",
   emptySlices: ["#1a1a1d", "#151518"],
   ink: "rgba(250, 250, 250, 0.88)",
+  numberInk: "rgba(250, 250, 250, 0.4)",
   winner: "#F95F4A",
   winnerInk: "#0a0a0b",
   rim: "#18181b",
@@ -473,8 +474,8 @@ export function WheelStage({
     if (!fitted) return null;
     const sweep = 360 / count;
     return displayedEntries.map((entry, index) => {
-      const text = fitted.labels[index]?.text;
-      if (!text) return null;
+      const label = fitted.labels[index];
+      if (!label) return null;
       const mid = sweep * (index + 0.5);
       const [x, y] = polar(mid, WHEEL_RADIUS - LABEL_PAD);
       const flipped = isLabelFlipped(index, count, flipRotation);
@@ -489,10 +490,11 @@ export function WheelStage({
           dominantBaseline="central"
           fontSize={fitted.fontSize}
           fontWeight={600}
-          fill={highlighted ? COLOR.winnerInk : COLOR.ink}
+          fill={highlighted ? COLOR.winnerInk : label.numbered ? COLOR.numberInk : COLOR.ink}
           opacity={hasHighlight && !highlighted ? 0.4 : 1}
+          style={label.numbered ? { fontVariantNumeric: "tabular-nums" } : undefined}
         >
-          {text}
+          {label.text}
         </text>
       );
     });
