@@ -41,6 +41,7 @@ import {
   sanitizeInstitutionDisplayName,
   sanitizeRoomCodeInput,
   sanitizeRoomCode,
+  isMediaDeviceBlocked,
 } from "../lib/utils";
 import RoomPresenceBadge from "./RoomPresenceBadge";
 import { useCameraPermissionState } from "../hooks/useCameraPermissionState";
@@ -160,7 +161,6 @@ interface JoinScreenProps {
   onDisplayNameInputChange: (value: string) => void;
   onUserChange: (user: { id: string; email: string; name: string } | null) => void;
   onIsAdminChange: (isAdmin: boolean) => void;
-  meetError?: MeetError | null;
   mediaError?: MeetError | null;
   meetingEndedNotice?: string | null;
   onDismissMeetingEndedNotice?: () => void;
@@ -302,7 +302,6 @@ function JoinScreen({
   onDisplayNameInputChange,
   onUserChange,
   onIsAdminChange,
-  meetError,
   mediaError,
   meetingEndedNotice,
   onDismissMeetingEndedNotice,
@@ -396,10 +395,9 @@ function JoinScreen({
       ?.getVideoTracks()
       .some((track) => track.readyState === "live" && track.enabled),
   );
-  const isPermissionDenied =
-    mediaError?.code === "PERMISSION_DENIED" || meetError?.code === "PERMISSION_DENIED";
+  const isCameraBlocked = isMediaDeviceBlocked(mediaError, "camera");
   const isCameraPermissionBlocked =
-    isPermissionDenied ||
+    isCameraBlocked ||
     (!hasLivePreviewCamera &&
       (cameraPermissionState === "prompt" ||
         cameraPermissionState === "denied"));
@@ -408,7 +406,7 @@ function JoinScreen({
     !isCameraOn &&
     (cameraPermissionState === "prompt" ||
       cameraPermissionState === "denied" ||
-      isPermissionDenied);
+      isCameraBlocked);
   const prewarmLiveCameraEffects = (reason: string) => {
     if (activeVideoEffectsCount <= 0 && !isEffectsOpen) return;
     if (shouldDeferPreviewVideoEffectsPreload) return;

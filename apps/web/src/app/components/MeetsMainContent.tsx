@@ -99,6 +99,7 @@ import {
   formatDisplayName,
   isBrowserVideoUserId,
   isSystemUserId,
+  isMediaDeviceBlocked,
 } from "../lib/utils";
 import { useApps, useGame } from "@conclave/apps-sdk";
 import { GamePanel } from "./games/GamePanel";
@@ -840,7 +841,7 @@ export default function MeetsMainContent({
   const hasLiveLocalCamera = Boolean(getLiveVideoStream(localStream));
   const hasLiveDevCamera = Boolean(getLiveVideoStream(devCameraStream));
   const isCameraPermissionBlocked =
-    mediaError?.code === "PERMISSION_DENIED" ||
+    isMediaDeviceBlocked(mediaError, "camera") ||
     (!hasLiveLocalCamera &&
       !hasLiveDevCamera &&
       (cameraPermissionState === "prompt" ||
@@ -2280,7 +2281,6 @@ export default function MeetsMainContent({
             onDisplayNameInputChange={setDisplayNameInput}
             onUserChange={onUserChange}
             onIsAdminChange={onIsAdminChange}
-            meetError={meetError}
             mediaError={mediaError}
             meetingEndedNotice={meetingEndedNotice}
             onDismissMeetingEndedNotice={onDismissMeetingEndedNotice}

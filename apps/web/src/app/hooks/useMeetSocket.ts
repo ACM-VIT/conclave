@@ -8351,7 +8351,7 @@ export function useMeetSocket({
             socket.on("joinRejected", () => {
               console.info("[Meets] Join rejected.");
               setMeetError({
-                code: "PERMISSION_DENIED",
+                code: "JOIN_REJECTED",
                 message: "The host has denied your request to join.",
                 recoverable: false,
               });
