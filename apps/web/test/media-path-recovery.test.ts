@@ -4,12 +4,17 @@ import {
   MEDIA_PATH_STALL_MS,
   advanceMediaPathWatch,
   HEALTHY_MEDIA_PATHS,
-  advanceMediaPathHealth,
+  INITIAL_MEDIA_PATH_RECOVERY,
+  advanceMediaPathRecovery,
   blockedMediaDirections,
   judgeReceiveRebuild,
+  planMediaPathFailure,
   planSilentPathStep,
   planMediaPathEscalation,
+  readMediaPathHealth,
   readRtpBytes,
+  takeDeferredRebuilds,
+  type MediaPathFailure,
   type MediaPathSample,
   type MediaPathWatch,
 } from "../src/app/lib/media-path-recovery";
@@ -234,37 +239,156 @@ describe("judging a rebuilt receive path", () => {
   });
 });
 
-describe("per-direction media health", () => {
-  const blockedReceive = advanceMediaPathHealth(HEALTHY_MEDIA_PATHS, {
-    type: "blocked",
+describe("a direction's media path recovery", () => {
+  const failure = (
+    transportId: string,
+    overrides: Partial<MediaPathFailure> = {},
+  ): MediaPathFailure => ({
     direction: "consumer",
+    transportId,
+    reason: "Consumer transport carried no media",
+    relayOnly: false,
+    hasTurnServers: true,
+    reconnectInFlight: false,
+    ...overrides,
+  });
+  const connected = (transportId: string) =>
+    ({ type: "transport-connected", direction: "consumer", transportId }) as const;
+
+  // t1 fails, its rebuild t2 connects but carries nothing, so the receive
+  // path ends blocked on t2.
+  const blockedOnT2 = () => {
+    const rebuild = planMediaPathFailure(INITIAL_MEDIA_PATH_RECOVERY, failure("t1"));
+    expect(rebuild.step).toBe("reconnect-relay-only");
+    const blocked = planMediaPathFailure(
+      advanceMediaPathRecovery(rebuild.recovery, connected("t2")),
+      failure("t2", { relayOnly: true }),
+    );
+    expect(blocked.step).toBe("report-blocked");
+    expect(readMediaPathHealth(blocked.recovery).consumer).toBe("blocked");
+    return blocked.recovery;
+  };
+
+  it("starts the ladder again when media resumes on a blocked transport that never reconnected", () => {
+    const flowing = advanceMediaPathRecovery(blockedOnT2(), {
+      type: "media-flowing",
+      direction: "consumer",
+    });
+    expect(readMediaPathHealth(flowing)).toEqual(HEALTHY_MEDIA_PATHS);
+
+    const rebuildAgain = planMediaPathFailure(flowing, failure("t2", { relayOnly: true }));
+    expect(rebuildAgain.step).toBe("reconnect");
+
+    const blockedAgain = planMediaPathFailure(
+      advanceMediaPathRecovery(rebuildAgain.recovery, connected("t3")),
+      failure("t3", { relayOnly: true }),
+    );
+    expect(blockedAgain.step).toBe("report-blocked");
+    expect(blockedMediaDirections(readMediaPathHealth(blockedAgain.recovery))).toEqual([
+      "consumer",
+    ]);
   });
 
-  it("stays blocked through new trouble and other rebuilds", () => {
-    let health = advanceMediaPathHealth(blockedReceive, { type: "trouble", direction: "consumer" });
-    health = advanceMediaPathHealth(health, { type: "trouble", direction: "producer" });
+  it("resets every part of a direction together once media flows", () => {
+    const held = planMediaPathFailure(
+      blockedOnT2(),
+      failure("t9", { direction: "producer", reconnectInFlight: true }),
+    ).recovery;
+    expect(
+      advanceMediaPathRecovery(held, { type: "media-flowing", direction: "consumer" }),
+    ).toEqual({ ...held, consumer: INITIAL_MEDIA_PATH_RECOVERY.consumer });
+  });
 
-    expect(health).toEqual({ producer: "recovering", consumer: "blocked" });
+  it("acts once on a failure that several watchers report", () => {
+    const first = planMediaPathFailure(INITIAL_MEDIA_PATH_RECOVERY, failure("t1"));
+    const second = planMediaPathFailure(first.recovery, failure("t1"));
+
+    expect(second.step).toBe("already-escalated");
+    expect(second.recovery).toBe(first.recovery);
+  });
+
+  it("acts on a transport again once it reconnects", () => {
+    const reconnected = advanceMediaPathRecovery(blockedOnT2(), connected("t2"));
+
+    expect(planMediaPathFailure(reconnected, failure("t2", { relayOnly: true })).step).toBe(
+      "report-blocked",
+    );
+  });
+
+  it("holds a rebuild asked for during a rejoin, one per direction, until the rejoin settles", () => {
+    let recovery = planMediaPathFailure(
+      INITIAL_MEDIA_PATH_RECOVERY,
+      failure("r1", { reconnectInFlight: true }),
+    ).recovery;
+    recovery = planMediaPathFailure(
+      recovery,
+      failure("s1", { direction: "producer", reason: "send failed", reconnectInFlight: true }),
+    ).recovery;
+
+    const taken = takeDeferredRebuilds(recovery);
+    expect(taken.deferred).toEqual([
+      { direction: "producer", transportId: "s1", reason: "send failed" },
+      { direction: "consumer", transportId: "r1", reason: "Consumer transport carried no media" },
+    ]);
+    expect(taken.recovery).toEqual(INITIAL_MEDIA_PATH_RECOVERY);
+  });
+
+  it("drops a held rebuild once its transport connects", () => {
+    const held = planMediaPathFailure(
+      INITIAL_MEDIA_PATH_RECOVERY,
+      failure("r1", { reconnectInFlight: true }),
+    ).recovery;
+
+    expect(takeDeferredRebuilds(advanceMediaPathRecovery(held, connected("r1"))).deferred).toEqual(
+      [],
+    );
+  });
+
+  it("gives Try again a fresh ladder but keeps the warning until media flows", () => {
+    const retried = advanceMediaPathRecovery(blockedOnT2(), { type: "user-retry" });
+
+    expect(readMediaPathHealth(retried).consumer).toBe("blocked");
+    expect(planMediaPathFailure(retried, failure("t2", { relayOnly: true })).step).toBe("reconnect");
+  });
+
+  it("treats a connected direction with nothing to carry as recovered, unless it is blocked", () => {
+    const rebuilding = planMediaPathFailure(INITIAL_MEDIA_PATH_RECOVERY, failure("t1")).recovery;
+    expect(
+      advanceMediaPathRecovery(rebuilding, { type: "connected-idle", direction: "consumer" }),
+    ).toEqual(INITIAL_MEDIA_PATH_RECOVERY);
+
+    const blocked = blockedOnT2();
+    expect(
+      advanceMediaPathRecovery(blocked, { type: "connected-idle", direction: "consumer" }),
+    ).toBe(blocked);
+  });
+
+  it("stays blocked through new trouble and other directions' rebuilds", () => {
+    let recovery = advanceMediaPathRecovery(blockedOnT2(), {
+      type: "trouble",
+      direction: "consumer",
+    });
+    recovery = planMediaPathFailure(recovery, failure("s1", { direction: "producer" })).recovery;
+
+    expect(readMediaPathHealth(recovery)).toEqual({ producer: "recovering", consumer: "blocked" });
   });
 
   it("is cleared for a direction only when media flows in that direction", () => {
-    const sendFlowing = advanceMediaPathHealth(blockedReceive, {
+    const sendFlowing = advanceMediaPathRecovery(blockedOnT2(), {
       type: "media-flowing",
       direction: "producer",
     });
-    expect(sendFlowing.consumer).toBe("blocked");
-
-    expect(
-      advanceMediaPathHealth(sendFlowing, { type: "media-flowing", direction: "consumer" }),
-    ).toEqual(HEALTHY_MEDIA_PATHS);
+    expect(readMediaPathHealth(sendFlowing).consumer).toBe("blocked");
   });
 
   it("starts fresh for a new join", () => {
-    expect(advanceMediaPathHealth(blockedReceive, { type: "reset" })).toEqual(HEALTHY_MEDIA_PATHS);
+    expect(advanceMediaPathRecovery(blockedOnT2(), { type: "reset" })).toEqual(
+      INITIAL_MEDIA_PATH_RECOVERY,
+    );
   });
 
   it("lists the blocked directions", () => {
-    expect(blockedMediaDirections(blockedReceive)).toEqual(["consumer"]);
+    expect(blockedMediaDirections(readMediaPathHealth(blockedOnT2()))).toEqual(["consumer"]);
     expect(blockedMediaDirections(HEALTHY_MEDIA_PATHS)).toEqual([]);
   });
 });

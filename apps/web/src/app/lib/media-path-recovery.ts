@@ -199,41 +199,192 @@ export const HEALTHY_MEDIA_PATHS: MediaPathHealth = {
 };
 
 /**
- * The only ways a direction's health changes. Trouble starts recovery, a
- * finished escalation that did not help blocks it, and only media seen
- * flowing in that direction makes it healthy again. Nothing else, such as
- * an unmute or a device change, can clear a blocked direction.
+ * Everything one direction's recovery knows, kept together so that media
+ * seen flowing again resets all of it at once and a later failure always
+ * starts the ladder from the first rebuild.
  */
-export type MediaPathHealthEvent =
+export type DirectionRecovery = {
+  health: MediaPathHealthState;
+  /**
+   * The transport this direction last escalated. Several watchers see the
+   * same failure, and it is acted on once until that transport connects
+   * again or media flows.
+   */
+  escalatedTransportId: string | null;
+  /** A rebuild was tried since media last flowed, so the next failure is reported. */
+  rebuildTried: boolean;
+  /** A rebuild asked for while a rejoin was running, run once it settles. */
+  deferredRebuild: { transportId: string; reason: string } | null;
+};
+
+export type MediaPathRecovery = Record<MediaDirection, DirectionRecovery>;
+
+const FRESH_DIRECTION: DirectionRecovery = {
+  health: "healthy",
+  escalatedTransportId: null,
+  rebuildTried: false,
+  deferredRebuild: null,
+};
+
+export const INITIAL_MEDIA_PATH_RECOVERY: MediaPathRecovery = {
+  producer: FRESH_DIRECTION,
+  consumer: FRESH_DIRECTION,
+};
+
+const MEDIA_DIRECTIONS = ["producer", "consumer"] as const;
+
+const patchDirection = (
+  recovery: MediaPathRecovery,
+  direction: MediaDirection,
+  changes: Partial<DirectionRecovery>,
+): MediaPathRecovery => {
+  const current = recovery[direction];
+  const keys = Object.keys(changes) as Array<keyof DirectionRecovery>;
+  if (keys.every((key) => changes[key] === current[key])) return recovery;
+  return { ...recovery, [direction]: { ...current, ...changes } };
+};
+
+const restartDirection = (
+  recovery: MediaPathRecovery,
+  direction: MediaDirection,
+): MediaPathRecovery =>
+  patchDirection(recovery, direction, FRESH_DIRECTION) === recovery
+    ? recovery
+    : { ...recovery, [direction]: FRESH_DIRECTION };
+
+/**
+ * Trouble starts recovery and keeps a blocked direction blocked. Media seen
+ * flowing makes a direction healthy and clears all of its recovery. A
+ * connected direction with nothing to carry has nothing left to recover,
+ * unless it is blocked: only media clears that, never an unmute or a device
+ * change. Try again starts the ladder over but keeps the warning until
+ * media flows.
+ */
+export type MediaPathRecoveryEvent =
   | { type: "trouble"; direction: MediaDirection }
-  | { type: "blocked"; direction: MediaDirection }
+  | { type: "transport-connected"; direction: MediaDirection; transportId: string }
   | { type: "media-flowing"; direction: MediaDirection }
+  | { type: "connected-idle"; direction: MediaDirection }
+  | { type: "user-retry" }
   | { type: "reset" };
 
-export const advanceMediaPathHealth = (
-  health: MediaPathHealth,
-  event: MediaPathHealthEvent,
-): MediaPathHealth => {
-  if (event.type === "reset") {
-    return health.producer === "healthy" && health.consumer === "healthy"
-      ? health
-      : HEALTHY_MEDIA_PATHS;
+export const advanceMediaPathRecovery = (
+  recovery: MediaPathRecovery,
+  event: MediaPathRecoveryEvent,
+): MediaPathRecovery => {
+  switch (event.type) {
+    case "reset":
+      return MEDIA_DIRECTIONS.reduce(restartDirection, recovery);
+    case "user-retry":
+      return MEDIA_DIRECTIONS.reduce(
+        (next, direction) =>
+          patchDirection(next, direction, {
+            escalatedTransportId: null,
+            rebuildTried: false,
+            deferredRebuild: null,
+          }),
+        recovery,
+      );
+    case "media-flowing":
+      return restartDirection(recovery, event.direction);
+    case "connected-idle":
+      return recovery[event.direction].health === "blocked"
+        ? recovery
+        : restartDirection(recovery, event.direction);
+    case "trouble":
+      return patchDirection(recovery, event.direction, {
+        health:
+          recovery[event.direction].health === "blocked" ? "blocked" : "recovering",
+      });
+    case "transport-connected": {
+      const current = recovery[event.direction];
+      return patchDirection(recovery, event.direction, {
+        escalatedTransportId:
+          current.escalatedTransportId === event.transportId
+            ? null
+            : current.escalatedTransportId,
+        deferredRebuild:
+          current.deferredRebuild?.transportId === event.transportId
+            ? null
+            : current.deferredRebuild,
+      });
+    }
   }
-  const current = health[event.direction];
-  const next: MediaPathHealthState =
-    event.type === "media-flowing"
-      ? "healthy"
-      : event.type === "blocked"
-        ? "blocked"
-        : current === "blocked"
-          ? "blocked"
-          : "recovering";
-  return next === current ? health : { ...health, [event.direction]: next };
 };
+
+export type MediaPathFailure = {
+  direction: MediaDirection;
+  transportId: string;
+  reason: string;
+  relayOnly: boolean;
+  hasTurnServers: boolean;
+  reconnectInFlight: boolean;
+};
+
+/**
+ * The next step for a transport an ICE restart could not bring back, and
+ * the recovery it leaves.
+ */
+export const planMediaPathFailure = (
+  recovery: MediaPathRecovery,
+  { direction, transportId, reason, ...network }: MediaPathFailure,
+): {
+  step: MediaPathEscalation | "already-escalated";
+  recovery: MediaPathRecovery;
+} => {
+  const current = recovery[direction];
+  if (current.escalatedTransportId === transportId) {
+    return { step: "already-escalated", recovery };
+  }
+  const step = planMediaPathEscalation({
+    hasReconnected: current.rebuildTried,
+    ...network,
+  });
+  if (step === "wait-for-reconnect") {
+    return {
+      step,
+      recovery: patchDirection(recovery, direction, {
+        deferredRebuild: { transportId, reason },
+      }),
+    };
+  }
+  return {
+    step,
+    recovery: patchDirection(recovery, direction, {
+      health:
+        step === "report-blocked" || current.health === "blocked"
+          ? "blocked"
+          : "recovering",
+      escalatedTransportId: transportId,
+      rebuildTried: true,
+      deferredRebuild: null,
+    }),
+  };
+};
+
+/** The rebuilds held for a rejoin that has settled, and the recovery without them. */
+export const takeDeferredRebuilds = (
+  recovery: MediaPathRecovery,
+): {
+  deferred: Array<{ direction: MediaDirection; transportId: string; reason: string }>;
+  recovery: MediaPathRecovery;
+} => ({
+  deferred: MEDIA_DIRECTIONS.flatMap((direction) => {
+    const held = recovery[direction].deferredRebuild;
+    return held ? [{ direction, ...held }] : [];
+  }),
+  recovery: MEDIA_DIRECTIONS.reduce(
+    (next, direction) => patchDirection(next, direction, { deferredRebuild: null }),
+    recovery,
+  ),
+});
+
+export const readMediaPathHealth = (recovery: MediaPathRecovery): MediaPathHealth =>
+  recovery.producer.health === "healthy" && recovery.consumer.health === "healthy"
+    ? HEALTHY_MEDIA_PATHS
+    : { producer: recovery.producer.health, consumer: recovery.consumer.health };
 
 export const blockedMediaDirections = (
   health: MediaPathHealth,
 ): MediaDirection[] =>
-  (["producer", "consumer"] as const).filter(
-    (direction) => health[direction] === "blocked",
-  );
+  MEDIA_DIRECTIONS.filter((direction) => health[direction] === "blocked");
