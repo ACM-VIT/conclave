@@ -560,6 +560,8 @@ export default function MeetsClient({
     setActiveSpeakerId,
     meetError,
     setMeetError,
+    mediaError,
+    setMediaError,
     waitingMessage,
     setWaitingMessage,
     pendingUsers,
@@ -1225,6 +1227,7 @@ export default function MeetsClient({
     localStream,
     setLocalStream,
     setMeetError,
+    setMediaError,
     selectedAudioInputDeviceId,
     setSelectedAudioInputDeviceId,
     setSelectedAudioOutputDeviceId,
@@ -1340,11 +1343,10 @@ export default function MeetsClient({
   }, [isMuted, isCameraOff]);
   const mediaRetryRef = useRef<Promise<void> | null>(null);
 
-  const canRetryMedia =
-    Boolean(meetError?.device) && meetError?.code !== "TRANSPORT_ERROR";
+  const canRetryMedia = Boolean(mediaError?.device);
 
   const handleRetryMedia = useCallback(() => {
-    const device = meetError?.device;
+    const device = mediaError?.device;
     if (!device) return;
     if (mediaRetryRef.current) return;
     mediaRetryRef.current = retryFailedMediaDevices({
@@ -1392,18 +1394,18 @@ export default function MeetsClient({
           : toggleMuteCommandRef.current?.());
       },
       markRecovered: (target) =>
-        setMeetError((current) => clearMediaDeviceError(current, target)),
+        setMediaError((current) => clearMediaDeviceError(current, target)),
     }).finally(() => {
       mediaRetryRef.current = null;
     });
   }, [
-    meetError,
+    mediaError,
     refs.audioProducerRef,
     refs.localStreamRef,
     refs.videoProducerRef,
     requestMediaPermissions,
     setLocalStream,
-    setMeetError,
+    setMediaError,
     stopLocalTrack,
   ]);
 
@@ -1447,6 +1449,12 @@ export default function MeetsClient({
           : { ...settings, audioOnlyMode: joinAudioOnly },
       );
       setMeetError(null);
+      setMediaError((current) => {
+        let next = current;
+        if (hasLiveAudio) next = clearMediaDeviceError(next, "microphone");
+        if (hasLiveVideo) next = clearMediaDeviceError(next, "camera");
+        return next;
+      });
       logMeetVideo("adopt_prejoin_media", {
         handoff: {
           stream: getMeetStreamDebugSnapshot(handoff.stream),
@@ -2305,6 +2313,7 @@ export default function MeetsClient({
   const handleLocalRoomEnded = useCallback(() => {
     setMeetingEndedNotice(null);
     setMeetError(null);
+    setMediaError(null);
     setWaitingMessage(null);
     setPendingNewMeetingRoomId(null);
     setCurrentIsAdmin(false);
@@ -2656,6 +2665,7 @@ export default function MeetsClient({
     handleStopVoiceAgent();
     socket.cleanup();
     setMeetError(null);
+    setMediaError(null);
     setMeetingEndedNotice(null);
     setWaitingMessage(null);
     setPendingNewMeetingRoomId(null);
@@ -2680,6 +2690,7 @@ export default function MeetsClient({
       setViewSettings((settings) => ({ ...settings, audioOnlyMode: false }));
     }
     setMeetError(null);
+    setMediaError(null);
     setMeetingEndedNotice(null);
     setWaitingMessage(null);
     setCurrentIsAdmin(true);
@@ -3229,9 +3240,14 @@ export default function MeetsClient({
       <MeetsMainContent
         errorNotice={
           connectionState === "joined" && meetError ? (
+            <MeetsErrorBanner meetError={meetError} onDismiss={() => setMeetError(null)} />
+          ) : null
+        }
+        mediaErrorNotice={
+          connectionState === "joined" && mediaError ? (
             <MeetsErrorBanner
-              meetError={meetError}
-              onDismiss={() => setMeetError(null)}
+              meetError={mediaError}
+              onDismiss={() => setMediaError(null)}
               primaryActionLabel={canRetryMedia ? "Try again" : undefined}
               onPrimaryAction={canRetryMedia ? handleRetryMedia : undefined}
             />
@@ -3423,6 +3439,7 @@ export default function MeetsClient({
         onBrowserAudioAutoplayBlocked={handleBrowserAudioAutoplayBlocked}
         onBrowserAudioPlaybackStarted={handleBrowserAudioPlaybackStarted}
         meetError={meetError}
+        mediaError={mediaError}
         meetingEndedNotice={meetingEndedNotice}
         onDismissMeetingEndedNotice={() => setMeetingEndedNotice(null)}
         isPopoutActive={isPopoutActive}

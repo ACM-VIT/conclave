@@ -134,6 +134,7 @@ interface UseMeetMediaOptions {
   localStream: MediaStream | null;
   setLocalStream: React.Dispatch<React.SetStateAction<MediaStream | null>>;
   setMeetError: React.Dispatch<React.SetStateAction<MeetError | null>>;
+  setMediaError: React.Dispatch<React.SetStateAction<MeetError | null>>;
   selectedAudioInputDeviceId?: string;
   setSelectedAudioInputDeviceId: React.Dispatch<
     React.SetStateAction<string | undefined>
@@ -513,6 +514,7 @@ export function useMeetMedia({
   localStream,
   setLocalStream,
   setMeetError,
+  setMediaError,
   selectedAudioInputDeviceId,
   setSelectedAudioInputDeviceId,
   setSelectedAudioOutputDeviceId,
@@ -2120,7 +2122,7 @@ export function useMeetMedia({
         setIsCameraOff(true);
       }
       const requiredError = createMediaDeviceError(requiredFailures, "PERMISSION_DENIED");
-      setMeetError((current) => {
+      setMediaError((current) => {
         let next = current;
         if (hasAudio) next = clearMediaDeviceError(next, "microphone");
         if (hasVideo) next = clearMediaDeviceError(next, "camera");
@@ -2169,6 +2171,7 @@ export function useMeetMedia({
     localStreamRef,
     permissionHintTimeoutRef,
     setMeetError,
+    setMediaError,
     setIsCameraOff,
     setIsMuted,
   ]);
@@ -3376,7 +3379,7 @@ export function useMeetMedia({
           producer.resume();
         } catch {}
         setMutedIntent(false);
-        setMeetError((current) => clearMediaDeviceError(current, "microphone"));
+        setMediaError((current) => clearMediaDeviceError(current, "microphone"));
         confirmAudioProducerUnmuted(producer.id);
         return;
       }
@@ -3420,7 +3423,7 @@ export function useMeetMedia({
         }
       }
       setMutedIntent(previousMuted);
-      setMeetError((current) => mergeMediaDeviceError(current, meetErr));
+      setMediaError((current) => mergeMediaDeviceError(current, meetErr));
     } finally {
       toggleMuteInFlightRef.current = false;
     }
@@ -3438,6 +3441,7 @@ export function useMeetMedia({
     commitLocalStream,
     commitAudioTrackToLocalStream,
     setMeetError,
+    setMediaError,
     closeLocalAudioProducerForReplacement,
     confirmAudioProducerUnmuted,
     setMutedIntent,
@@ -3667,7 +3671,7 @@ export function useMeetMedia({
 
         audioProducerRef.current = audioProducer;
         createdTrack = null;
-        setMeetError((current) => clearMediaDeviceError(current, "microphone"));
+        setMediaError((current) => clearMediaDeviceError(current, "microphone"));
         audioProducer.on("transportclose", () => {
           if (audioProducerRef.current?.id === audioProducer.id) {
             audioProducerRef.current = null;
@@ -3695,7 +3699,7 @@ export function useMeetMedia({
             }));
           }
           if (!failedMutedWarmup) {
-            setMeetError((current) => mergeMediaDeviceError(current, meetErr));
+            setMediaError((current) => mergeMediaDeviceError(current, meetErr));
           }
         }
       } finally {
@@ -3730,6 +3734,7 @@ export function useMeetMedia({
     setLocalStream,
     setIsMuted,
     setMeetError,
+    setMediaError,
     closeLocalAudioProducerForReplacement,
     flushPendingAudioProcessingSwitch,
     getPublishNetworkProfile,
@@ -3915,7 +3920,7 @@ export function useMeetMedia({
           }
           isCameraOffRef.current = false;
           setIsCameraOff(false);
-          setMeetError((current) => clearMediaDeviceError(current, "camera"));
+          setMediaError((current) => clearMediaDeviceError(current, "camera"));
           return;
         }
 
@@ -4065,7 +4070,7 @@ export function useMeetMedia({
             }
           });
           setIsCameraOff(false);
-          setMeetError((current) => clearMediaDeviceError(current, "camera"));
+          setMediaError((current) => clearMediaDeviceError(current, "camera"));
         } catch (err) {
           console.error("[Meets] Failed to restart video:", err);
           if (createdTrack) {
@@ -4081,7 +4086,7 @@ export function useMeetMedia({
             }
           }
           setIsCameraOff(true);
-          setMeetError((current) =>
+          setMediaError((current) =>
             mergeMediaDeviceError(current, createMeetError(err, "MEDIA_ERROR", "camera")),
           );
         }
@@ -4107,6 +4112,7 @@ export function useMeetMedia({
     videoQualityRef,
     setIsCameraOff,
     setMeetError,
+    setMediaError,
     emitToggleCamera,
     waitForPreferredVideoPublishTrack,
     buildVideoConstraints,
@@ -5289,7 +5295,7 @@ export function useMeetMedia({
           }
         });
         setIsCameraOff(false);
-        setMeetError((current) => clearMediaDeviceError(current, "camera"));
+        setMediaError((current) => clearMediaDeviceError(current, "camera"));
       } catch (err) {
         console.error("[Meets] Camera producer recovery failed:", err);
         if (cameraPublishingDisabledRef.current) {
@@ -5305,7 +5311,7 @@ export function useMeetMedia({
           ) {
             setIsCameraOff(true);
           }
-          setMeetError((current) => mergeMediaDeviceError(current, meetErr));
+          setMediaError((current) => mergeMediaDeviceError(current, meetErr));
         }
       } finally {
         if (
@@ -5347,6 +5353,7 @@ export function useMeetMedia({
     setLocalStream,
     setIsCameraOff,
     setMeetError,
+    setMediaError,
     producerTransportRef,
     ensureProducerTransportRef,
     prepareCameraProducerTransport,

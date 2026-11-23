@@ -134,6 +134,7 @@ const DevMeetToolsPanel = lazy(() => import("./DevMeetToolsPanel"));
 interface MeetsMainContentProps {
   roomAi: RoomAiController;
   errorNotice?: ReactNode;
+  mediaErrorNotice?: ReactNode;
   isJoined: boolean;
   isMobile?: boolean;
   viewSettings: MeetViewSettings;
@@ -289,6 +290,7 @@ interface MeetsMainContentProps {
   isBrowserAudioMuted: boolean;
   onToggleBrowserAudio: () => void;
   meetError?: MeetError | null;
+  mediaError?: MeetError | null;
   meetingEndedNotice?: string | null;
   onDismissMeetingEndedNotice?: () => void;
   browserAudioNeedsGesture: boolean;
@@ -566,6 +568,7 @@ export default function MeetsMainContent({
   onStopVoiceAgent,
   onClearVoiceAgentError,
   meetError,
+  mediaError,
   meetingEndedNotice,
   onDismissMeetingEndedNotice,
   isPopoutActive,
@@ -613,6 +616,7 @@ export default function MeetsMainContent({
   transcript,
   roomAi,
   errorNotice,
+  mediaErrorNotice,
 }: MeetsMainContentProps) {
   const {
     state: appsState,
@@ -836,7 +840,7 @@ export default function MeetsMainContent({
   const hasLiveLocalCamera = Boolean(getLiveVideoStream(localStream));
   const hasLiveDevCamera = Boolean(getLiveVideoStream(devCameraStream));
   const isCameraPermissionBlocked =
-    meetError?.code === "PERMISSION_DENIED" ||
+    mediaError?.code === "PERMISSION_DENIED" ||
     (!hasLiveLocalCamera &&
       !hasLiveDevCamera &&
       (cameraPermissionState === "prompt" ||
@@ -2021,6 +2025,7 @@ export default function MeetsMainContent({
           clearWebinarChrome={isWebinarAttendee}
           overPanel={isFullScreenPanelOpen}
         >
+          <InCallNotice show={Boolean(mediaErrorNotice)}>{mediaErrorNotice}</InCallNotice>
           <InCallNotice show={Boolean(errorNotice)}>{errorNotice}</InCallNotice>
           {!isRecoveringMeeting && (!isWebinarAttendee || serverRestartNotice) ? (
             <ConnectionBanner
@@ -2276,6 +2281,7 @@ export default function MeetsMainContent({
             onUserChange={onUserChange}
             onIsAdminChange={onIsAdminChange}
             meetError={meetError}
+            mediaError={mediaError}
             meetingEndedNotice={meetingEndedNotice}
             onDismissMeetingEndedNotice={onDismissMeetingEndedNotice}
             videoEffects={videoEffects}
