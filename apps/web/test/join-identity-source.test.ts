@@ -64,7 +64,7 @@ const createHarness = (
     await pending;
   };
   const tokenOfSocket = (call: number) => io.mock.calls[call][1].auth.token;
-  return { api, socket, io, getJoinInfo, connect, tokenOfSocket };
+  return { api, socket, io, getJoinInfo, connect, tokenOfSocket, handlers };
 };
 
 beforeEach(() => {
@@ -143,6 +143,36 @@ describe("a join that adopts the identity its token names", () => {
     expect(setMeetError).toHaveBeenCalledWith(connectionFailed);
     expect(setConnectionState).toHaveBeenCalledWith("error");
     consoleError.mockRestore();
+  });
+});
+
+describe("a waiting tab that the host approves twice", () => {
+  it("joins once (Greptile)", async () => {
+    let refs!: ReturnType<typeof useMeetRefs>;
+    const h = createHarness({
+      adoptJoinIdentity: () => false,
+      joinMode: "webinar_attendee",
+      bypassMediaPermissions: true,
+      captureRefs: (captured: ReturnType<typeof useMeetRefs>) => {
+        refs = captured;
+      },
+    } as Partial<Options>);
+    await h.connect("room-a", 1);
+    refs.currentRoomIdRef.current = "room-a";
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const joinsStarted = () =>
+      info.mock.calls.filter(([message]) => message === "[Meets] Join approved! Re-attempting join...").length;
+
+    h.handlers.get("joinApproved")?.(...([] as never[]));
+    h.handlers.get("joinApproved")?.(...([] as never[]));
+    await vi.waitFor(() => expect(error).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(joinsStarted()).toBe(1);
+    expect(info).toHaveBeenCalledWith("[Meets] Join already approved; ignoring a repeated approval.");
+    info.mockRestore();
+    error.mockRestore();
   });
 });
 

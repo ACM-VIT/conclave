@@ -8338,8 +8338,20 @@ export function useMeetSocket({
               },
             );
 
-            socket.on("joinApproved", async () => {
+            // One approval starts one join. A repeated approval for a join
+            // that is still under way is ignored: a second join would race it.
+            let approvedJoin: Promise<void> | null = null;
+            socket.on("joinApproved", () => {
               if (intentionalDisconnectRef.current || socketRef.current !== socket) return;
+              if (approvedJoin) {
+                console.info("[Meets] Join already approved; ignoring a repeated approval.");
+                return;
+              }
+              approvedJoin = joinAfterApproval().finally(() => {
+                approvedJoin = null;
+              });
+            });
+            const joinAfterApproval = async (): Promise<void> => {
               const approvalGeneration = reconnectGenerationRef.current;
               console.info("[Meets] Join approved! Re-attempting join...");
               const joinOptions = joinOptionsRef.current;
@@ -8372,7 +8384,7 @@ export function useMeetSocket({
                   bypassMediaPermissions ||
                   joinOptions.joinMode === "webinar_attendee")
               ) {
-                joinRoomInternal(
+                await joinRoomInternal(
                   currentRoomIdRef.current,
                   stream,
                   joinOptions,
@@ -8403,7 +8415,7 @@ export function useMeetSocket({
                 );
                 setConnectionState("error");
               }
-            });
+            };
 
             socket.on("joinRejected", () => {
               console.info("[Meets] Join rejected.");
