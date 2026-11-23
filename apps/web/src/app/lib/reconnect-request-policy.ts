@@ -178,3 +178,33 @@ export const planRoomUnavailableRetry = ({
           ROOM_UNAVAILABLE_RETRY_MAX_DELAY_MS,
         ),
       };
+
+export type RoomWait = {
+  since: number | null;
+  retries: number;
+  expired: boolean;
+};
+
+export const FRESH_ROOM_WAIT: RoomWait = {
+  since: null,
+  retries: 0,
+  expired: false,
+};
+
+export const noteRoomUnavailable = (
+  wait: RoomWait,
+  now: number,
+): { wait: RoomWait; plan: RoomUnavailableRetryPlan } => {
+  const since = wait.since ?? now;
+  const plan = planRoomUnavailableRetry({
+    unavailableSince: since,
+    now,
+    retries: wait.retries,
+  });
+  return {
+    plan,
+    wait: plan.retry
+      ? { since, retries: wait.retries + 1, expired: false }
+      : { since, retries: wait.retries, expired: true },
+  };
+};

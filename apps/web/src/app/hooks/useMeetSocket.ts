@@ -26,9 +26,10 @@ import {
 } from "../lib/constants";
 import { emitWithAckTimeout } from "../lib/socket-ack";
 import {
+  FRESH_ROOM_WAIT,
   canReuseSocketAfterFailure,
   classifyReconnectFailure,
-  planRoomUnavailableRetry,
+  noteRoomUnavailable,
   planMediaRebuildScope,
   planReconnectSettlement,
   resolveInFlightReconnectRequest,
@@ -9434,15 +9435,13 @@ export function useMeetSocket({
     const reconnectGeneration = reconnectGenerationRef.current;
     let skipNextDelay = options?.immediate === true;
     let lastReconnectError: unknown = null;
-    let roomUnavailableSince: number | null = null;
-    let roomUnavailableRetries = 0;
+    let roomWait = FRESH_ROOM_WAIT;
     let nextDelayOverrideMs: number | null = null;
     // A refresh asks the join route for current ICE servers: on the open
     // socket when it is still connected, or for the next socket otherwise.
     let pendingIceServersRefresh = options?.refreshIceServers === true;
     let hasTriedHeldJoinInfo = pendingIceServersRefresh;
     let mayReuseSocket = true;
-    let roomWaitExpired = false;
     let rejoined = false;
     // Waiting for a missing room is bounded by time, so those retries do not
     // count against the attempt budget and show no attempt number.
@@ -9465,6 +9464,25 @@ export function useMeetSocket({
         reason: options?.relayOnly?.reason ?? "media path rebuild",
         roomId: currentRoomIdRef.current ?? undefined,
       });
+    };
+    const restartForUserRetry = (
+      surfaceState: boolean,
+      lastError: string | null,
+    ) => {
+      manualReconnectRetryRequestedRef.current = false;
+      reconnectAttemptsRef.current = 0;
+      roomWait = FRESH_ROOM_WAIT;
+      retryingForRoom = false;
+      skipNextDelay = true;
+      if (!surfaceState) return;
+      updateReconnectRecoveryStatus(
+        buildReconnectRecoveryStatus(
+          "connecting",
+          1,
+          "Retrying reconnect now.",
+          lastError,
+        ),
+      );
     };
     reconnectInFlightRef.current = true;
     reconnectAttemptsRef.current = resolveReconnectStartAttempts(
@@ -9557,22 +9575,12 @@ export function useMeetSocket({
         if (intentionalDisconnectRef.current) return;
         if (reconnectGeneration !== reconnectGenerationRef.current) return;
         if (manualReconnectRetryRequestedRef.current) {
-          manualReconnectRetryRequestedRef.current = false;
-          reconnectAttemptsRef.current = 0;
-          retryingForRoom = false;
-          skipNextDelay = true;
-          if (shouldSurfaceReconnectState) {
-            updateReconnectRecoveryStatus(
-              buildReconnectRecoveryStatus(
-                "connecting",
-                1,
-                "Retrying reconnect now.",
-                lastReconnectError
-                  ? describeReconnectFailure(lastReconnectError)
-                  : null,
-              ),
-            );
-          }
+          restartForUserRetry(
+            shouldSurfaceReconnectState,
+            lastReconnectError
+              ? describeReconnectFailure(lastReconnectError)
+              : null,
+          );
           continue;
         }
 
@@ -9733,23 +9741,12 @@ export function useMeetSocket({
             failureKind === "room-unavailable" ||
             failureKind === "server-draining"
           ) {
-            roomUnavailableSince ??= Date.now();
-            const retryPlan = planRoomUnavailableRetry({
-              unavailableSince: roomUnavailableSince,
-              now: Date.now(),
-              retries: roomUnavailableRetries,
-            });
-            if (retryPlan.retry) {
-              // These waits are bounded by time, so they do not use up the
-              // attempts kept for an unreachable server.
-              roomUnavailableRetries += 1;
-              nextDelayOverrideMs = retryPlan.delayMs;
+            const noted = noteRoomUnavailable(roomWait, Date.now());
+            roomWait = noted.wait;
+            if (noted.plan.retry) {
+              nextDelayOverrideMs = noted.plan.delayMs;
               reconnectAttemptsRef.current = attempt - 1;
               retryingForRoom = true;
-            } else {
-              // Stop retrying, but leave Try again: the room can still come
-              // back after the window.
-              roomWaitExpired = true;
             }
           }
           console.warn(
@@ -9799,23 +9796,10 @@ export function useMeetSocket({
             return;
           }
           if (manualReconnectRetryRequestedRef.current) {
-            manualReconnectRetryRequestedRef.current = false;
-            reconnectAttemptsRef.current = 0;
-            retryingForRoom = false;
-            skipNextDelay = true;
-            if (shouldSurfaceReconnectState) {
-              updateReconnectRecoveryStatus(
-                buildReconnectRecoveryStatus(
-                  "connecting",
-                  1,
-                  "Retrying reconnect now.",
-                  reconnectFailure,
-                ),
-              );
-            }
+            restartForUserRetry(shouldSurfaceReconnectState, reconnectFailure);
             continue;
           }
-          if (roomWaitExpired) break;
+          if (roomWait.expired) break;
           if (shouldSurfaceReconnectState) {
             updateReconnectRecoveryStatus(
               attempt >= MAX_RECONNECT_ATTEMPTS
@@ -9852,7 +9836,7 @@ export function useMeetSocket({
         buildStoppedRecoveryStatus(
           describeReconnectGiveUp({
             attempts: reconnectAttemptsRef.current,
-            roomWaitExpired,
+            roomWaitExpired: roomWait.expired,
           }),
           reconnectFailure,
         ),

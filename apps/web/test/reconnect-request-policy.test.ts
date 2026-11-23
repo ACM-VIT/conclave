@@ -5,6 +5,8 @@ import {
   classifyReconnectFailure,
   planMediaRebuildScope,
   planReconnectSettlement,
+  FRESH_ROOM_WAIT,
+  noteRoomUnavailable,
   planRoomUnavailableRetry,
   resolveInFlightReconnectRequest,
   resolveReconnectStartAttempts,
@@ -137,6 +139,49 @@ describe("waiting for a room to come back", () => {
       delayMs: 4_000,
     });
     expect(plan(ROOM_UNAVAILABLE_RETRY_WINDOW_MS, 12)).toEqual({ retry: false });
+  });
+});
+
+describe("the room wait of one reconnect run", () => {
+  const T0 = 1_000;
+  const waitedFor = (elapsedMs: number) => {
+    let wait = FRESH_ROOM_WAIT;
+    for (let at = 0; at <= elapsedMs; at += 4_000) {
+      wait = noteRoomUnavailable(wait, T0 + at).wait;
+    }
+    return wait;
+  };
+
+  it("gives up once the room has been missing for the whole window", () => {
+    const wait = waitedFor(56_000);
+    const next = noteRoomUnavailable(wait, T0 + ROOM_UNAVAILABLE_RETRY_WINDOW_MS);
+
+    expect(next.plan).toEqual({ retry: false });
+    expect(next.wait.expired).toBe(true);
+  });
+
+  it("starts a whole new window when the user retries near the deadline", () => {
+    waitedFor(56_000);
+    const retriedAt = T0 + 57_000;
+    const afterRetry = noteRoomUnavailable(FRESH_ROOM_WAIT, retriedAt);
+
+    expect(afterRetry.plan).toEqual({ retry: true, delayMs: 1_000 });
+    expect(
+      noteRoomUnavailable(afterRetry.wait, retriedAt + ROOM_UNAVAILABLE_RETRY_WINDOW_MS - 1).plan
+        .retry,
+    ).toBe(true);
+  });
+
+  it("counts its retries for the backoff", () => {
+    let wait = FRESH_ROOM_WAIT;
+    const delays: number[] = [];
+    for (let i = 0; i < 4; i += 1) {
+      const next = noteRoomUnavailable(wait, T0 + i * 1_000);
+      if (next.plan.retry) delays.push(next.plan.delayMs);
+      wait = next.wait;
+    }
+
+    expect(delays).toEqual([1_000, 2_000, 4_000, 4_000]);
   });
 });
 
