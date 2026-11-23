@@ -146,7 +146,11 @@ export function extractRoomCode(input: string): string {
   return sanitizeRoomCode(trimmed);
 }
 
-const PLAIN_ROOM_CODE = /^[a-z0-9-]+$/i;
+export type CodeFieldPaste =
+  | { kind: "insert"; text: string }
+  | { kind: "replace"; code: string };
+
+const ROOM_CODE_TEXT = /^[a-z0-9-]+$/i;
 const MEETING_LINK = new RegExp(
   String.raw`^(?:(?:https?:)?\/\/(?<prefixed>[^\/?#\\\s@]+)|(?<bare>(?:\[[0-9a-f:.]+\]|[^\/?#\\\s@:\[\]]+)(?::\d*)?))?\/(?<segment>[^\/?#\\\s]+)\/?(?:[?#]\S*)?$`,
   "i",
@@ -178,15 +182,21 @@ const fitsDns = (hostname: string) => {
   );
 };
 
-const asRoomCode = (candidate: string) => {
-  if (!PLAIN_ROOM_CODE.test(candidate)) return null;
-  const code = candidate.toLowerCase();
+const linkRoomCode = (segment: string) => {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(segment);
+  } catch {
+    return null;
+  }
+  if (!ROOM_CODE_TEXT.test(decoded)) return null;
+  const code = decoded.toLowerCase();
   return !NOT_ROOM_CODES.has(code) && sanitizeRoomCode(code) === code ? code : null;
 };
 
-export function roomCodeFromPaste(text: string): string | null {
+export function parseCodeFieldPaste(text: string): CodeFieldPaste | null {
   const trimmed = text.trim();
-  if (PLAIN_ROOM_CODE.test(trimmed)) return asRoomCode(trimmed);
+  if (ROOM_CODE_TEXT.test(trimmed)) return { kind: "insert", text: trimmed.toLowerCase() };
   if (trimmed.includes("\\")) return null;
   const { prefixed, bare, segment } = MEETING_LINK.exec(trimmed)?.groups ?? {};
   if (!segment) return null;
@@ -198,13 +208,8 @@ export function roomCodeFromPaste(text: string): string | null {
       hostname === "localhost" || hostname.startsWith("[") || hostname.includes(".");
     if (bare && !bareLooksLikeHost) return null;
   }
-  let decoded: string;
-  try {
-    decoded = decodeURIComponent(segment);
-  } catch {
-    return null;
-  }
-  return asRoomCode(decoded);
+  const code = linkRoomCode(segment);
+  return code ? { kind: "replace", code } : null;
 }
 
 type MediaDevice = "camera" | "microphone";

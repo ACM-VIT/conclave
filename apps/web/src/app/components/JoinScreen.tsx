@@ -38,7 +38,7 @@ import {
   generateRoomCode,
   ROOM_CODE_MAX_LENGTH,
   extractRoomCode,
-  roomCodeFromPaste,
+  parseCodeFieldPaste,
   sanitizeInstitutionDisplayName,
   sanitizeRoomCodeInput,
   sanitizeRoomCode,
@@ -1563,9 +1563,20 @@ function JoinScreen({
                     onChange={(e) => onCodeChange(e.target.value)}
                     onPaste={(e) => {
                       if (isRoutedRoom) return;
+                      const text = e.clipboardData.getData("text");
+                      const paste = parseCodeFieldPaste(text);
+                      if (paste?.kind === "insert" && paste.text === text) return;
                       e.preventDefault();
-                      const code = roomCodeFromPaste(e.clipboardData.getData("text"));
-                      if (code) onCodeChange(code);
+                      if (paste?.kind === "replace") onCodeChange(paste.code);
+                      if (paste?.kind !== "insert") return;
+                      const input = e.currentTarget;
+                      input.setRangeText(
+                        paste.text,
+                        input.selectionStart ?? input.value.length,
+                        input.selectionEnd ?? input.value.length,
+                        "end",
+                      );
+                      input.dispatchEvent(new Event("input", { bubbles: true }));
                     }}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" && canJoin) joinMeeting();
