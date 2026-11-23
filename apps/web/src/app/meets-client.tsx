@@ -2722,6 +2722,7 @@ export default function MeetsClient({
     playNotificationSoundForEvents("leave");
     shouldResetMeetingSurfaceOnDisconnectRef.current = true;
     socket.cleanup();
+    setSetupNotice(null);
     setViewSettings((settings) => ({ ...settings, audioOnlyMode: false }));
     setIsCameraOff(true);
     setIsMuted(true);

@@ -9,6 +9,16 @@ import {
 
 const dismiss = (): SetupNotice | null => null;
 
+const PROPER_NOUNS = new Set<string>();
+
+const isSentenceCase = (text: string) => {
+  const words = text.split(" ");
+  if (!text.trim() || words.some((word) => !word)) return false;
+  const [first, ...rest] = words;
+  const firstOk = first.charAt(0) === first.charAt(0).toUpperCase() && first.charAt(0) !== first.charAt(0).toLowerCase() && first.slice(1) === first.slice(1).toLowerCase();
+  return firstOk && rest.every((word) => PROPER_NOUNS.has(word) || word === word.toLowerCase());
+};
+
 describe("a waiting guest the host rejects", () => {
   it("shows the reason on setup until it is dismissed", () => {
     const rejected = joinRejectedUpdate();
@@ -57,8 +67,14 @@ describe("a waiting guest the host rejects", () => {
       hiddenSetupView({ notice: null, errorMessage: "", isLoading: true }).headline,
       hiddenSetupView({ notice: null, errorMessage: "", isLoading: false }).headline,
     ];
-    for (const headline of headlines) {
-      expect(headline.charAt(0)).toBe(headline.charAt(0).toUpperCase());
-    }
+    for (const headline of headlines) expect(isSentenceCase(headline)).toBe(true);
+  });
+
+  it("tells sentence case apart from empty, title case and all caps headings", () => {
+    expect(isSentenceCase("You weren't let in")).toBe(true);
+    expect(isSentenceCase("")).toBe(false);
+    expect(isSentenceCase("you weren't let in")).toBe(false);
+    expect(isSentenceCase("You Weren't Let In")).toBe(false);
+    expect(isSentenceCase("WEBINAR ENDED")).toBe(false);
   });
 });
