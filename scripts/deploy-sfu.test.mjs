@@ -4,7 +4,7 @@ import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:f
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { test } from "node:test";
+import { describe, test as nodeTest } from "node:test";
 import { promisify } from "node:util";
 import { hasHostTool, pathWithout, provideFlock } from "./test-support/host-tools.mjs";
 
@@ -17,10 +17,13 @@ const run = promisify(execFile);
 const scripts = import.meta.dirname;
 const secret = "deploy-test-secret";
 
-// Every drain and recreate across the fake SFUs, in the order they happened.
-const events = [];
-// Called before a fake SFU applies a drain, so a test can line two up.
-let beforeDrain = null;
+// The tests run side by side, each with its own fake SFUs, so whatever a
+// test watches lives in its own context: every drain, stop and recreate
+// across its fake SFUs in the order they happened (events), and a hook called
+// before one of them applies a drain, so a test can line two up
+// (beforeDrain).
+const queued = [];
+const test = (...args) => queued.push(args);
 
 // container: "running" for an hour, "exited", "crash-looping" (Docker keeps
 // restarting it), "hung" (running for an hour) or "young" (running for a few
@@ -34,6 +37,7 @@ let beforeDrain = null;
 // healthy: false until it is recreated. onTarget: already runs the target
 // image with the current compose config.
 const startSfu = async (
+  context,
   instanceId,
   {
     rooms = 0,
@@ -92,22 +96,22 @@ const startSfu = async (
     }
     if (url.pathname === "/drain" && req.method === "POST") {
       const request = JSON.parse(body || "{}");
-      if (request.draining && beforeDrain) await beforeDrain();
+      if (request.draining && context.beforeDrain) await context.beforeDrain();
       sfu.drains.push(request);
-      events.push(`drain ${instanceId}`);
+      context.events.push(`drain ${instanceId}`);
       sfu.draining = request.draining === true;
       // A forced drain ends the instance's rooms after the notice.
       if (request.force) sfu.rooms = 0;
       return json({ draining: sfu.draining, forced: request.force === true });
     }
     if (url.pathname === "/stand-in/stop") {
-      events.push(`stop ${instanceId}`);
+      context.events.push(`stop ${instanceId}`);
       sfu.container = "exited";
       return json({ ok: true });
     }
     if (url.pathname === "/stand-in/recreate") {
       sfu.recreates.push({ roomsCut: sfu.rooms });
-      events.push(`recreate ${instanceId}`);
+      context.events.push(`recreate ${instanceId}`);
       sfu.rooms = 0;
       if (sfu.failRecreate === sfu.recreates.length) {
         sfu.container = "exited";
@@ -345,6 +349,9 @@ const deploy = async (
       DRAIN_POLL_SECONDS: "0.2",
       PLACEMENT_SETTLE_SECONDS: "0",
       HEALTH_TIMEOUT_SECONDS: "5",
+      CONTAINER_SAMPLE_SECONDS: "0.2",
+      DEPLOY_POLL_SECONDS: "0.1",
+      DEPLOY_STATUS_RETRY_SECONDS: "0.2",
       SFU_DEPLOY_LOCK_FILE: path.join(root, "deploy.lock"),
       ...extraEnv,
     };
@@ -365,10 +372,10 @@ const deploy = async (
 
 const withSfus = async (specs, body) => {
   const sfus = {};
-  events.length = 0;
+  const context = { events: [], beforeDrain: null };
   try {
-    for (const [name, spec] of Object.entries(specs)) sfus[name] = await startSfu(name, spec);
-    await body(sfus);
+    for (const [name, spec] of Object.entries(specs)) sfus[name] = await startSfu(context, name, spec);
+    await body(sfus, context.events, context);
   } finally {
     await Promise.all(Object.values(sfus).map((sfu) => sfu.close()));
   }
@@ -403,7 +410,7 @@ test("an idle instance is rebuilt first, and the one carrying calls is not touch
 });
 
 test("an instance whose status cannot be read is neither taken for the idle one nor drained against", async () => {
-  await withSfus({ "sfu-a": { rooms: 2, statusAnswers: false }, "sfu-b": { rooms: 0 } }, async (sfus) => {
+  await withSfus({ "sfu-a": { rooms: 2, statusAnswers: false }, "sfu-b": { rooms: 0 } }, async (sfus, events) => {
     const result = await deploy(sfus);
     assert.equal(result.code, 1, result.output);
     assert.equal(result.order, "sfu-b sfu-a");
@@ -447,7 +454,7 @@ for (const bootExit of ["exited", "crash-looping"]) {
 }
 
 test("an instance that is down is brought up before a healthy one is drained", async () => {
-  await withSfus({ "sfu-a": { rooms: 1 }, "sfu-b": { container: "exited" } }, async (sfus) => {
+  await withSfus({ "sfu-a": { rooms: 1 }, "sfu-b": { container: "exited" } }, async (sfus, events) => {
     const result = await deploy(sfus);
     passedPreflight(result);
     assert.equal(result.code, 3, result.output);
@@ -470,7 +477,7 @@ test("an instance that is down and whose replacement fails leaves the healthy on
 });
 
 test("no instance is drained while another is down, even one outside the deploy", async () => {
-  await withSfus({ "sfu-a": { rooms: 0 }, "sfu-b": { container: "exited" } }, async (sfus) => {
+  await withSfus({ "sfu-a": { rooms: 0 }, "sfu-b": { container: "exited" } }, async (sfus, events) => {
     const result = await deploy(sfus, { env: { SFU_DEPLOY_SERVICES: "sfu-a" } });
     assert.equal(result.code, 1, result.output);
     assert.match(result.output, /Not draining sfu-a: sfu-b does not report healthy/);
@@ -490,7 +497,7 @@ test("a public URL that does not reach the new instance stops the deploy before 
 });
 
 test("the revision being deployed checks its own config before anything is built", async () => {
-  await withSfus({ "sfu-a": { rooms: 0 }, "sfu-b": { rooms: 0 } }, async (sfus) => {
+  await withSfus({ "sfu-a": { rooms: 0 }, "sfu-b": { rooms: 0 } }, async (sfus, events) => {
     // The next revision's preflight knows a limit the checkout's does not:
     // the checkout allows 3 workers within its budget of 4, the next allows 2.
     const newerPreflight = `
@@ -517,7 +524,7 @@ console.log("SFU deployment preflight passed (newer rules).");
 });
 
 test("a crash-looping instance is repaired first, before the healthy one is drained", async () => {
-  await withSfus({ "sfu-a": { rooms: 1 }, "sfu-b": { container: "crash-looping" } }, async (sfus) => {
+  await withSfus({ "sfu-a": { rooms: 1 }, "sfu-b": { container: "crash-looping" } }, async (sfus, events) => {
     const result = await deploy(sfus);
     assert.equal(result.code, 3, result.output);
     assert.equal(result.order, "sfu-b sfu-a");
@@ -526,7 +533,7 @@ test("a crash-looping instance is repaired first, before the healthy one is drai
 });
 
 test("an instance that has run for an hour but stays silent is left alone", async () => {
-  await withSfus({ "sfu-a": { rooms: 0 }, "sfu-b": { container: "hung" } }, async (sfus) => {
+  await withSfus({ "sfu-a": { rooms: 0 }, "sfu-b": { container: "hung" } }, async (sfus, events) => {
     const result = await deploy(sfus, { env: { SFU_DEPLOY_SERVICES: "sfu-b" } });
     assert.equal(result.code, 1, result.output);
     assert.match(result.output, /sfu-b's container is running but nothing answers/);
@@ -617,14 +624,14 @@ const hasPowerShell = (() => {
 })();
 
 test("two deploys at once on one host: the second refuses and only one instance drains", async () => {
-  await withSfus({ "sfu-a": { rooms: 1 }, "sfu-b": { rooms: 1 } }, async (sfus) => {
+  await withSfus({ "sfu-a": { rooms: 1 }, "sfu-b": { rooms: 1 } }, async (sfus, events, context) => {
     const lock = path.join(await mkdtemp(path.join(tmpdir(), "conclave-deploy-lock-")), "deploy.lock");
     // Hold every drain until both runs have reached one, as Sol's probe did.
     let release;
     const both = new Promise((resolve) => (release = resolve));
     const guard = setTimeout(release, 8000);
     let reached = 0;
-    beforeDrain = async () => {
+    context.beforeDrain = async () => {
       reached += 1;
       if (reached === 2) release();
       await both;
@@ -638,7 +645,7 @@ test("two deploys at once on one host: the second refuses and only one instance 
       assert.equal(runs.filter((run) => /still holds .* not starting a second one/.test(run.output)).length, 1, runs.map((run) => run.output).join("\n"));
       assert.equal(Object.values(sfus).filter((sfu) => sfu.drains.some((drain) => drain.draining)).length, 1);
     } finally {
-      beforeDrain = null;
+      context.beforeDrain = null;
       clearTimeout(guard);
     }
   });
@@ -656,7 +663,7 @@ test("a rerun after an interrupted pair of deploys puts a healthy instance back 
 });
 
 test("a management URL that answers as another instance is refused before any drain", async () => {
-  await withSfus({ "sfu-a": { rooms: 2 }, "sfu-b": { rooms: 0 } }, async (sfus) => {
+  await withSfus({ "sfu-a": { rooms: 2 }, "sfu-b": { rooms: 0 } }, async (sfus, events) => {
     // sfu-a's management URL reaches sfu-b, as in Astra's probe.
     const result = await deploy(sfus, { envLines: [`SFU_A_URL=http://127.0.0.1:${sfus["sfu-b"].port}`] });
     assert.equal(result.code, 1, result.output);
@@ -684,7 +691,7 @@ test("a deploy of one instance refuses while the other is not publicly reachable
 });
 
 test("a deploy of one instance still runs the full preflight", async () => {
-  await withSfus({ "sfu-a": { rooms: 0 }, "sfu-b": { rooms: 0 } }, async (sfus) => {
+  await withSfus({ "sfu-a": { rooms: 0 }, "sfu-b": { rooms: 0 } }, async (sfus, events) => {
     const result = await deploy(sfus, { env: { SFU_DEPLOY_SERVICES: "sfu-a", DEPLOY_TEST_OVERLAP: "1" } });
     assert.equal(result.code, 1, result.output);
     assert.match(result.output, /overlap/i);
@@ -807,7 +814,7 @@ test("a deploy that restarts into this script holding the same lock file under t
 });
 
 test("a deploy that restarts into this script from one that locked another file takes this lock too", async () => {
-  await withSfus({ "sfu-a": { rooms: 1 }, "sfu-b": { rooms: 1 } }, async (sfus) => {
+  await withSfus({ "sfu-a": { rooms: 1 }, "sfu-b": { rooms: 1 } }, async (sfus, events, context) => {
     const dir = await mkdtemp(path.join(tmpdir(), "conclave-deploy-lock-"));
     const lock = path.join(dir, "deploy.lock");
     const { current, older } = await olderScript();
@@ -816,7 +823,7 @@ test("a deploy that restarts into this script from one that locked another file 
     let firstAtDrain;
     const firstReached = new Promise((resolve) => (firstAtDrain = resolve));
     let reached = 0;
-    beforeDrain = async () => {
+    context.beforeDrain = async () => {
       reached += 1;
       if (reached === 1) firstAtDrain();
       else releaseDrains();
@@ -840,7 +847,7 @@ test("a deploy that restarts into this script from one that locked another file 
       assert.match(second.output, /still holds .* not starting a second one/);
       assert.equal(sfus["sfu-b"].drains.filter((drain) => drain.draining).length, 0, "the second deploy drained nothing");
     } finally {
-      beforeDrain = null;
+      context.beforeDrain = null;
       clearTimeout(guard);
       await rm(dir, { recursive: true, force: true });
     }
@@ -859,7 +866,7 @@ const openedBy = async (path_, count) => {
 };
 
 test("a deploy that waited on a lock file replaced meanwhile does not run on the old one", { skip: !hasHostTool("lsof") && "needs lsof on PATH" }, async () => {
-  await withSfus({ "sfu-a": {}, "sfu-b": {} }, async (sfus) => {
+  await withSfus({ "sfu-a": {}, "sfu-b": {} }, async (sfus, events) => {
     const dir = await mkdtemp(path.join(tmpdir(), "conclave-deploy-lock-"));
     const lock = path.join(dir, "deploy.lock");
     const bin = path.join(dir, "bin");
@@ -935,7 +942,7 @@ test("an instance on the target whose status says unhealthy is redeployed, not c
 });
 
 test("a host without flock refuses to deploy rather than lock some other way", async () => {
-  await withSfus({ "sfu-a": {}, "sfu-b": {} }, async (sfus) => {
+  await withSfus({ "sfu-a": {}, "sfu-b": {} }, async (sfus, events) => {
     const result = await deploy(sfus, { withoutFlock: true });
     assert.equal(result.code, 1, result.output);
     assert.match(result.output, /needs flock \(util-linux\)/);
@@ -1107,4 +1114,10 @@ test("a host bash older than 4 is refused with a message that says why", { skip:
   const result = spawnSync("/bin/bash", [path.join(scripts, "deploy-sfu.sh"), "--help"], { encoding: "utf8" });
   assert.equal(result.status, 1, result.stdout + result.stderr);
   assert.match(result.stderr, /deploy-sfu\.sh needs bash 4 or newer; this is bash 3\./);
+});
+
+// Every test above has its own fake SFUs, state dir, lock file and docker
+// stand-in, and its waits are cut short in deploy(), so they run side by side.
+describe("deploy-sfu.sh", { concurrency: 8 }, () => {
+  for (const args of queued) nodeTest(...args);
 });

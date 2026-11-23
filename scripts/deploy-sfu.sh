@@ -17,6 +17,11 @@ if (( BASH_VERSINFO[0] < 4 )); then
   exit 1
 fi
 
+# How often the waits below look again, and how long a status read that got
+# no answer waits before its retry. The tests shorten both.
+POLL_SECONDS="${DEPLOY_POLL_SECONDS:-1}"
+STATUS_RETRY_SECONDS="${DEPLOY_STATUS_RETRY_SECONDS:-5}"
+
 DEPLOY_BROWSER_LOCAL="false"
 ROLLBACK="false"
 FORCE_DRAIN="false"
@@ -249,7 +254,7 @@ validate_public_route() {
       fi
       return 1
     fi
-    sleep 1
+    sleep "$POLL_SECONDS"
   done
 }
 
@@ -607,7 +612,7 @@ wait_for_healthy() {
     if (( $(date +%s) - start_ts >= HEALTH_TIMEOUT_SECONDS )); then
       return 1
     fi
-    sleep 1
+    sleep "$POLL_SECONDS"
   done
 }
 
@@ -635,7 +640,7 @@ peers_serving() {
         echo "Not draining ${svc}: ${peer}'s /status cannot be read at ${url}, so whether it takes new meetings is unknown." >&2
         return 1
       fi
-      sleep 1
+      sleep "$POLL_SECONDS"
     done
     if [[ "$(printf "%s" "$status" | json_field draining || true)" != "false" ]]; then
       echo "Not draining ${svc}: ${peer} is draining too, so new meetings would have nowhere to go." >&2
@@ -773,7 +778,7 @@ deploy_service() {
     status_code=0
     status="$(instance_status "$svc")" || status_code=$?
     (( status_code == 1 )) || break
-    sleep 5
+    sleep "$STATUS_RETRY_SECONDS"
   done
   if (( status_code == 2 )); then
     echo "${svc} was not drained or rebuilt." >&2
