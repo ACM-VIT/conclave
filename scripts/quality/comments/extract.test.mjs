@@ -913,6 +913,10 @@ toolTest("concurrent cold-cache Kotlin runs share one install from verified loca
   assert.equal(readdirSync(kotlinDir).filter((entry) => entry.startsWith("helper-")).length, 1);
 });
 
+toolTest("a script file the parser rejects is reported with its name", [], () => {
+  assert.throws(() => extract("export const = ;\n", "broken.ts"), /cannot read the comments in broken\.ts: typescript-eslint could not parse it: /);
+});
+
 toolTest("a fixture whose language needs an undeclared tool fails in every environment", [], () => {
   assert.throws(() => extract("x = 1\n", "a.py"), /a\.py needs python312, which this test does not declare/);
   assert.throws(() => extract("let a = 1\n", "A.swift"), /A\.swift needs swift, which this test does not declare/);

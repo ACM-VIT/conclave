@@ -40,15 +40,20 @@ export const toolWorks = (command, args = ["--version"]) => {
 
 const scanScript = (text, file) => {
   const source = text.replace(/^#!([^\n]*)/, "//$1");
-  const { ast } = tseslint.parser.parseForESLint(source, {
-    filePath: file,
-    comment: true,
-    range: true,
-    loc: false,
-    tokens: false,
-    ecmaVersion: "latest",
-    sourceType: "module",
-  });
+  let ast;
+  try {
+    ({ ast } = tseslint.parser.parseForESLint(source, {
+      filePath: file,
+      comment: true,
+      range: true,
+      loc: false,
+      tokens: false,
+      ecmaVersion: "latest",
+      sourceType: "module",
+    }));
+  } catch (error) {
+    fail(file, `typescript-eslint could not parse it: ${error instanceof Error ? error.message : String(error)}`);
+  }
   return ast.comments.map((comment) => [comment.range[0], comment.range[1]]);
 };
 
