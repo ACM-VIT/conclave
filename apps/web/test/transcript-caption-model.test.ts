@@ -210,6 +210,67 @@ const cases: { thread: string; model: string; run: (rig: Rig) => Promise<Outcome
       return { shown: shown(rig) };
     },
   },
+  {
+    thread: "Delayed claims steal later audio",
+    model: SARVAM,
+    async run(rig) {
+      const socket = await signalsActive(rig);
+      await rig.speak(ada);
+      await vi.advanceTimersByTimeAsync(100);
+      await rig.speak(grace);
+      await vi.advanceTimersByTimeAsync(100);
+      await rig.speak(ada);
+      await vi.advanceTimersByTimeAsync(300);
+      for (const _ of [1, 2, 3]) socket.emit(sarvamSpeechStart());
+      socket.emit(sarvamFinal("one", "Ada one."));
+      await rig.endTurn(ada);
+      socket.disconnect();
+      await settle();
+      const replacement = rig.providerSockets().at(-1)!;
+      const replayedChunks = audioMessages(replacement);
+      replacement.emit(sarvamSpeechStart());
+      replacement.emit(sarvamSpeechStart());
+      replacement.emit(sarvamFinal("g", "Grace words."));
+      replacement.emit(sarvamFinal("a", "Ada again."));
+      await vi.advanceTimersByTimeAsync(DEADLINE + 100);
+      return { shown: shown(rig), replayedChunks };
+    },
+  },
+  {
+    thread: "Late signals miss ongoing speech",
+    model: SARVAM,
+    async run(rig) {
+      const socket = await signalsActive(rig);
+      for (let elapsed = 0; elapsed <= 2_500; elapsed += 250) {
+        await rig.speak(ada);
+        await vi.advanceTimersByTimeAsync(250);
+      }
+      socket.emit(sarvamSpeechStart());
+      await rig.endTurn(ada);
+      await vi.advanceTimersByTimeAsync(DEADLINE + 100);
+      return { shown: shown(rig) };
+    },
+  },
+  {
+    thread: "Brief drops end recoverable captions",
+    model: OPENAI,
+    async run(rig) {
+      const [socket] = rig.providerSockets();
+      await rig.speak(ada);
+      await rig.commit(ada);
+      socket.emit(openAiCommitted("a"));
+      socket.disconnect();
+      await settle();
+      rig.providerSockets().at(-1)!.disconnect();
+      await settle();
+      const replacement = rig.providerSockets().at(-1)!;
+      const replayedChunks = audioMessages(replacement);
+      replacement.emit(openAiCommitted("r"));
+      replacement.emit(openAiFinal("r", "Recovered."));
+      await settle();
+      return { shown: shown(rig), replayedChunks };
+    },
+  },
 ];
 
 const expected: Record<string, Outcome> = {
@@ -231,6 +292,12 @@ const expected: Record<string, Outcome> = {
   "Resolving speech hides another speaker": {
     shown: [["Setup.", "grace"], ["Ada words.", "ada"], [GAP, "grace"]],
   },
+  "Delayed claims steal later audio": {
+    shown: [["Setup.", "grace"], ["Ada one.", "ada"], ["Grace words.", "grace"], ["Ada again.", "ada"]],
+    replayedChunks: 2,
+  },
+  "Late signals miss ongoing speech": { shown: [["Setup.", "grace"], [GAP, "ada"]] },
+  "Brief drops end recoverable captions": { shown: [["Recovered.", "ada"]], replayedChunks: 1 },
 };
 
 describe("the caption model: what each signal claims, what is shown and what is replayed", () => {

@@ -854,8 +854,9 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
       const owed = [...failed.awaiting]
         .filter(({ noise, deadlineAt }) => !noise && Date.now() < deadlineAt!)
         .sort((left, right) => left.index - right.index);
-      const unacknowledged = failed.unacknowledged.filter(({ claiming }) => !claiming);
-      for (const utterance of failed.unacknowledged) if (utterance.claiming) utterance.deadlineAt = Date.now();
+      const unanswered = cause === "ackTimeout" ? failed.unacknowledged.filter(({ claiming }) => claiming) : [];
+      const unacknowledged = failed.unacknowledged.filter((utterance) => !unanswered.includes(utterance));
+      for (const utterance of unanswered) utterance.deadlineAt = Date.now();
       const picked = handOffTo
         ? "unreachable"
         : cause === "drop"

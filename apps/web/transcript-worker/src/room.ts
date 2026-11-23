@@ -2104,15 +2104,15 @@ export class TranscriptRoom {
         this.armTranscriptionCommitWatchdog();
         return;
       }
-      void this.handleTranscriptionFailure(
-        "Transcription provider acknowledgment timed out.",
-      );
+      void this.handleTranscriptionFailure("Transcription provider acknowledgment timed out.", [], true);
     }, delay);
   }
 
-  private handOffLiveLines(live: ProviderConnection): void {
+  private handOffLiveLines(live: ProviderConnection, ackTimedOut: boolean): void {
     const owed = this.ledger.active().filter(({ epoch }) => epoch === live.epoch);
-    const replayedUnanswered = owed.filter(({ state, replayed }) => state === "pending_ack" && replayed);
+    const replayedUnanswered = ackTimedOut
+      ? owed.filter(({ state, replayed }) => state === "pending_ack" && replayed)
+      : [];
     if (this.endUnfinishedLines(replayedUnanswered, "A replacement never acknowledged a replayed line", live)) {
       void this.persist();
     }
@@ -2207,6 +2207,7 @@ export class TranscriptRoom {
   private async handleTranscriptionFailure(
     message: string,
     failedEvents: BufferedTranscriptAudioEvent[] = [],
+    ackTimedOut = false,
   ): Promise<void> {
     const redactedMessage = redactSensitiveText(message);
     console.warn("[TranscriptWorker] transcription provider failure", {
@@ -2241,7 +2242,7 @@ export class TranscriptRoom {
     this.transcriptionSession = null;
     this.transcriptionConnectionEpoch += 1;
     if (failed) {
-      this.handOffLiveLines(failed);
+      this.handOffLiveLines(failed, ackTimedOut);
       failed.commitQueue.length = 0;
       try {
         failed.session.close();

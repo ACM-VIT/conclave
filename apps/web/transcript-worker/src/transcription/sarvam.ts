@@ -23,6 +23,8 @@ const SARVAM_SEGMENT_KEPT_MS = 3_000;
 
 type SpeechSegment = {
   speaker: TranscriptSpeaker | null;
+  speakerKey: string;
+  heardAt: number;
   turnId: number;
   turn?: number;
   turnStartedAt: number;
@@ -433,6 +435,7 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
     }
     const open = this.openSegment;
     if (open && voice !== "onset" && open.turnId === this.turn.id) {
+      open.heardAt = now;
       if (open.claimed && open.continuedAt === null) open.continuedAt = now;
       return;
     }
@@ -445,6 +448,8 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
     this.segments = this.segments.filter(({ startedAt }) => now - startedAt <= SARVAM_SEGMENT_KEPT_MS);
     const segment: SpeechSegment = {
       speaker,
+      speakerKey: current.speakerKey,
+      heardAt: now,
       turnId: current.id,
       turn,
       turnStartedAt: current.startedAt,
@@ -497,7 +502,7 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
 
   private segmentSpeech(segment: SpeechSegment, from: number, ongoing: boolean): HeardSpeech {
     const index = this.segments.indexOf(segment);
-    const next = this.segments.find((other, at) => at > index && other.turnId === segment.turnId);
+    const next = this.segments.find((other, at) => at > index && other.speakerKey === segment.speakerKey);
     return {
       speaker: segment.speaker,
       since: segment.firstInTurn ? Math.max(segment.turnStartedAt, from) : segment.startedAt,
@@ -518,7 +523,7 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
       return;
     }
     const segment = this.segments.find(
-      ({ claimed, startedAt }) => !claimed && now - startedAt <= SARVAM_SIGNAL_LOOKBACK_MS,
+      ({ claimed, heardAt }) => !claimed && now - heardAt <= SARVAM_SIGNAL_LOOKBACK_MS,
     );
     if (segment) {
       segment.claimed = true;
