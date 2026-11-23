@@ -13,7 +13,7 @@ import {
   SchemaError,
   type Json,
 } from "@conclave/apps-sdk/authority";
-import { key } from "@conclave/apps-sdk/authority/server";
+import { DISPLAY_NAME_MAX_LENGTH, key } from "@conclave/apps-sdk/authority/server";
 import { Client } from "../../config/classes/Client.js";
 import { DEFAULT_AUTHORITY_LIMITS } from "../../server/apps/authority/limits.js";
 import { AuthorityStore } from "../../server/apps/authority/store.js";
@@ -449,5 +449,30 @@ describe("schemas", () => {
     }
     expect(appIdProblem(48)).toMatch(/^expected a string/);
     expect(appIdProblem("sign-up-2")).toBeNull();
+  });
+});
+
+describe("names", () => {
+  it("hands apps a name no longer than the bound, so a long email as a name never breaks what stores it", async () => {
+    const room = new Harness([pollsAuthority]);
+    const hostTab = await room.open(host, pollsContract);
+    // With no name, the join path names a person by their email, up to 320
+    // characters.
+    const email = `${"a".repeat(300)}@example.com`;
+    const voterTab = await room.open(person(email, email), pollsContract);
+    const created = await hostTab.act("create", { question: "Lunch?", options: ["Tea", "Coffee"] });
+    const pollId = created.ok ? (created.value as { pollId: string }).pollId : "";
+    await room.deliver();
+
+    const voted = await voterTab.act("vote", { pollId, optionIds: ["o1"] });
+    const exported = await hostTab.query("exportBallots", { pollId });
+    const name = exported.ok
+      ? (exported.value as { ballots: { name: string }[] }).ballots[0]?.name ?? ""
+      : "";
+
+    expect(voted.ok).toBe(true);
+    expect(exported.ok).toBe(true);
+    expect(name.length).toBe(DISPLAY_NAME_MAX_LENGTH);
+    expect(email.startsWith(name)).toBe(true);
   });
 });
