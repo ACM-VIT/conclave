@@ -605,7 +605,7 @@ describe("one owner and one release point per line", () => {
     expect(viewerTranscript().segments.map(({ text }) => text)).toEqual(["Already captioned."]);
   });
 
-  it("OpenAI: a line that became a gap before the replacement acked is corrected under the same itemId", async () => {
+  it("OpenAI: a replayed line that became a gap before the replacement's final came is corrected under the same itemId", async () => {
     vi.useFakeTimers();
     quiet();
     const { room, providerSockets, start, speak, commit, savedTexts, viewerTranscript } = await rig(OPENAI);
@@ -619,10 +619,10 @@ describe("one owner and one release point per line", () => {
     socket.disconnect();
     await settle();
     const replacement = providerSockets()[1];
+    replacement.emit(openAiCommitted("a2"));
     await vi.advanceTimersByTimeAsync(DEADLINE + 100);
     expect(savedTexts()).toEqual([GAP]);
     const gapId = room.segments[0]!.itemId;
-    replacement.emit(openAiCommitted("a2"));
     replacement.emit(openAiFinal("a2", "Late but right."));
     await settle();
 
@@ -801,7 +801,7 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
       utterance.itemId = `ack_${(acks += 1)}`;
       connection.socket.emit(openAiCommitted(utterance.itemId));
       place(utterance);
-      if (connection === live && Date.now() >= utterance.deadlineAt!) utterance.deadlineAt = Date.now() + DEADLINE;
+      if (connection === live) utterance.deadlineAt = Date.now() + DEADLINE;
       if (utterance.claiming && !connection.socket.closed) utterance.claiming = false;
       connection.awaiting.push(utterance);
     };
@@ -857,7 +857,8 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
       const owed = [...failed.awaiting]
         .filter(({ noise, deadlineAt }) => !noise && Date.now() < deadlineAt!)
         .sort((left, right) => left.index - right.index);
-      const unacknowledged = [...failed.unacknowledged];
+      const unacknowledged = failed.unacknowledged.filter(({ claiming }) => !claiming);
+      for (const utterance of failed.unacknowledged) if (utterance.claiming) utterance.deadlineAt = Date.now();
       const picked = handOffTo
         ? "unreachable"
         : cause === "drop"
@@ -1141,7 +1142,7 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
         const now = Date.now();
         for (const utterance of previous.unacknowledged) {
           place(utterance, now);
-          utterance.deadlineAt = utterance.deadlineAt! <= now ? now + DEADLINE : Math.min(utterance.deadlineAt!, now + DEADLINE);
+          utterance.deadlineAt = now + DEADLINE;
         }
         live = connect();
       },

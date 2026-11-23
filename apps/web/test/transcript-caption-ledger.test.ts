@@ -847,34 +847,42 @@ describe("Sarvam: speech evidence belongs to its own turn", () => {
 });
 
 describe("OpenAI: a commit's line keeps its own deadline and watchdog", () => {
-  it("a commit never acknowledged on a quiet connection shows a gap at its own deadline", async () => {
+  it("a commit no connection acknowledges, even after its replay, ends as a gap", async () => {
     vi.useFakeTimers();
     quiet();
     const { providerSockets, start, speak, commit, savedTexts } = await rig(OPENAI);
     await start("en");
     await speak(ada);
     await commit(ada);
-    await vi.advanceTimersByTimeAsync(DEADLINE + 100);
+    await vi.advanceTimersByTimeAsync(COMMIT_ACK_TIMEOUT + 100);
+    expect(providerSockets()).toHaveLength(2);
+    expect(savedTexts()).toEqual([]);
 
+    await vi.advanceTimersByTimeAsync(COMMIT_ACK_TIMEOUT + 100);
     expect(savedTexts()).toEqual([GAP]);
-    expect(providerSockets()).toHaveLength(1);
+    expect(providerSockets().at(-1)!.sentTypes()).not.toContain("input_audio_buffer.commit");
   });
 
-  it("trimming a line still waiting for its ack keeps the watchdog that reconnects", async () => {
+  it("trimming finished lines never stops the watchdog that reconnects a provider that stopped acknowledging", async () => {
     vi.useFakeTimers();
     quiet();
     const { providerSockets, start, speak, commit, savedTexts } = await transcriptRoomRig(lookup, OPENAI, {
       TRANSCRIPT_MAX_SEGMENTS: "1",
     });
     await start("en");
-    for (const speaker of [ada, grace]) {
-      await speak(speaker);
-      await commit(speaker);
+    const [socket] = providerSockets();
+    for (const [itemId, words] of [["a", "Ada."], ["b", "Bea."]]) {
+      await speak(ada);
+      await commit(ada);
+      socket.emit(openAiCommitted(itemId));
+      socket.emit(openAiFinal(itemId, words));
     }
-    await vi.advanceTimersByTimeAsync(DEADLINE + 100);
-    expect(savedTexts()).toEqual([GAP]);
+    await speak(grace);
+    await commit(grace);
+    await settle();
+    expect(savedTexts()).toEqual(["Bea."]);
 
-    await vi.advanceTimersByTimeAsync(COMMIT_ACK_TIMEOUT - DEADLINE);
+    await vi.advanceTimersByTimeAsync(COMMIT_ACK_TIMEOUT + 100);
     expect(providerSockets()).toHaveLength(2);
   });
 
@@ -886,21 +894,17 @@ describe("OpenAI: a commit's line keeps its own deadline and watchdog", () => {
     });
     await start("en");
     const [socket] = providerSockets();
-    await speak(ada);
-    await commit(ada);
-    socket.emit(openAiCommitted("a"));
-    for (const speaker of [grace, ada]) {
+    for (const [itemId, speaker] of [["a", ada], ["g", grace], ["h", ada]] as const) {
       await speak(speaker);
       await commit(speaker);
+      socket.emit(openAiCommitted(itemId));
     }
     await vi.advanceTimersByTimeAsync(DEADLINE + 100);
     await speak(grace);
     await commit(grace);
 
     socket.emit(openAiFinal("a", "Ada, late."));
-    socket.emit(openAiCommitted("g"));
     socket.emit(openAiFinal("g", "Grace, late."));
-    socket.emit(openAiCommitted("h"));
     socket.emit(openAiCommitted("x"));
     socket.emit(openAiFinal("x", "Grace again."));
     await settle();
@@ -935,7 +939,7 @@ describe("replay audio stays within one shared limit", () => {
 });
 
 describe("Sol: one line model across connections", () => {
-  it("OpenAI: an unacknowledged commit shows a gap at its deadline but keeps its audio for the watchdog's replay, whose answer fills that gap", async () => {
+  it("OpenAI: an unacknowledged commit keeps its audio for the watchdog's replay, and shows nothing until something answers it", async () => {
     vi.useFakeTimers();
     quiet();
     const { providerSockets, start, speak, commit, savedTexts, viewerTranscript } = await rig(OPENAI);
@@ -943,7 +947,7 @@ describe("Sol: one line model across connections", () => {
     await speak(ada);
     await commit(ada);
     await vi.advanceTimersByTimeAsync(DEADLINE + 100);
-    expect(savedTexts()).toEqual([GAP]);
+    expect(savedTexts()).toEqual([]);
 
     await vi.advanceTimersByTimeAsync(COMMIT_ACK_TIMEOUT - DEADLINE);
     const replacement = providerSockets().at(-1)!;

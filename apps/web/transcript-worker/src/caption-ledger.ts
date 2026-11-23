@@ -33,8 +33,7 @@ export type CaptionLine = {
   text: string;
   /** A replacement re-transcribes this line's audio, so its next words replace the old ones. */
   freshText: boolean;
-  /** Viewers already see this owed line as a final, its words or a gap; its later words and its answer update that final in place. */
-  shownAsFinal: boolean;
+  replayed: boolean;
   audio: AudioChunk[];
   /** The connection that owes it, or null while it waits for a replacement. */
   epoch: number | null;
@@ -80,8 +79,8 @@ export class CaptionLedger {
     return Array.from(this.lines.values()).filter(isActive);
   }
 
-  add(line: Omit<CaptionLine, "id" | "text" | "freshText" | "shownAsFinal"> & { text?: string }): CaptionLine {
-    const created: CaptionLine = { id: crypto.randomUUID(), text: "", freshText: false, shownAsFinal: false, ...line };
+  add(line: Omit<CaptionLine, "id" | "text" | "freshText" | "replayed"> & { text?: string }): CaptionLine {
+    const created: CaptionLine = { id: crypto.randomUUID(), text: "", freshText: false, replayed: false, ...line };
     this.lines.set(created.id, created);
     return created;
   }
@@ -109,7 +108,7 @@ export class CaptionLedger {
   /** Forgets lines whose segment was trimmed, or ended lines that never showed anything; an owed line not yet shown stays. */
   forgetShownExcept(kept: ReadonlySet<string>): void {
     for (const line of this.lines.values()) {
-      if ((!isActive(line) || line.shownAsFinal) && !kept.has(line.id)) this.lines.delete(line.id);
+      if (!isActive(line) && !kept.has(line.id)) this.lines.delete(line.id);
     }
   }
 

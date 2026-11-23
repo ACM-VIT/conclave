@@ -46,22 +46,18 @@ export const transcriptionRecoveryDelayMs = (attempt: number): number =>
     )
   ] ?? 0;
 
-/**
- * Audio and turn events that arrive while no provider is connected. It
- * shares the room's one replay audio budget with the audio lines already
- * hold, which `heldElsewhere` reports, and lets its oldest events go first.
- */
 export class TranscriptRecoveryAudioBuffer {
   private events: BufferedTranscriptAudioEvent[] = [];
   private bytes = 0;
   private droppedEvents = 0;
 
-  constructor(private readonly heldElsewhere: () => number = () => 0) {}
+  constructor(private readonly afterEnqueue: () => void = () => {}) {}
 
   enqueue(event: BufferedTranscriptAudioEvent, now = Date.now()): void {
     this.events.push(event);
     this.bytes += eventBytes(event);
     this.prune(now);
+    this.afterEnqueue();
   }
 
   enqueueMany(events: BufferedTranscriptAudioEvent[], now = Date.now()): void {
@@ -70,6 +66,18 @@ export class TranscriptRecoveryAudioBuffer {
       this.bytes += eventBytes(event);
     }
     this.prune(now);
+    this.afterEnqueue();
+  }
+
+  chunks(): Extract<BufferedTranscriptAudioEvent, { type: "chunk" }>[] {
+    return this.events.filter((event) => event.type === "chunk");
+  }
+
+  keepChunks(kept: (chunk: BufferedTranscriptAudioEvent) => boolean): void {
+    const before = this.events.length;
+    this.events = this.events.filter((event) => event.type !== "chunk" || kept(event));
+    this.droppedEvents += before - this.events.length;
+    this.bytes = this.events.reduce((sum, event) => sum + eventBytes(event), 0);
   }
 
   drain(): BufferedTranscriptAudioEvent[] {
@@ -93,11 +101,10 @@ export class TranscriptRecoveryAudioBuffer {
 
   private prune(now: number): void {
     const cutoff = now - TRANSCRIPTION_RECOVERY_MAX_AUDIO_AGE_MS;
-    const budget = TRANSCRIPTION_RECOVERY_MAX_AUDIO_BYTES - this.heldElsewhere();
     while (
       this.events.length > 0 &&
       (this.events.length > TRANSCRIPTION_RECOVERY_MAX_EVENTS ||
-        this.bytes > budget ||
+        this.bytes > TRANSCRIPTION_RECOVERY_MAX_AUDIO_BYTES ||
         (this.events[0]?.createdAt ?? now) < cutoff)
     ) {
       const removed = this.events.shift();

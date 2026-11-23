@@ -203,7 +203,7 @@ export class TranscriptRoom {
   private transcriptionCommitWatchdogTimer: ReturnType<typeof setTimeout> | null =
     null;
   private readonly transcriptionRecoveryAudio =
-    new TranscriptRecoveryAudioBuffer(() => this.replayAudioBytes());
+    new TranscriptRecoveryAudioBuffer(() => this.keepReplayAudioWithinLimit());
   private lastMinutesRefreshAt = 0;
   private lastMinutesCompactionAt = 0;
   private minutesTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1311,6 +1311,11 @@ export class TranscriptRoom {
     const now = Date.now();
     const key = speakerKey(speaker);
     const voice = this.voiceCheckFor(key).push(decodePcm16Base64(audio), now);
+    if (session.provider === "sarvam") {
+      for (const other of Array.from(this.speakingLine.keys())) {
+        if (other !== key || voice === "onset") this.speakingLine.delete(other);
+      }
+    }
     try {
       session.appendAudio(audio, speaker, { voice, turn: this.audioTurn });
     } catch {
@@ -1363,11 +1368,17 @@ export class TranscriptRoom {
    */
   private keepReplayAudioWithinLimit(): void {
     const lines = this.ledger.activeUnordered();
-    const holders = [...lines.map(({ audio }) => audio), ...Array.from(this.uncommittedAudio.values(), ({ chunks }) => chunks)];
-    if (this.replayAudioBytes() <= TRANSCRIPTION_RECOVERY_MAX_AUDIO_BYTES) return;
-    const kept = new Set<AudioChunk>();
+    const held: { audio: string; createdAt: number }[] = [
+      ...lines.flatMap(({ audio }) => audio),
+      ...Array.from(this.uncommittedAudio.values()).flatMap(({ chunks }) => chunks),
+      ...this.transcriptionRecoveryAudio.chunks(),
+    ];
+    let total = 0;
+    for (const { audio } of held) total += audio.length;
+    if (total <= TRANSCRIPTION_RECOVERY_MAX_AUDIO_BYTES) return;
+    const kept = new Set<object>();
     let bytes = 0;
-    for (const chunk of holders.flat().sort((left, right) => right.createdAt - left.createdAt)) {
+    for (const chunk of held.sort((left, right) => right.createdAt - left.createdAt)) {
       if (bytes + chunk.audio.length > TRANSCRIPTION_RECOVERY_MAX_AUDIO_BYTES) break;
       bytes += chunk.audio.length;
       kept.add(chunk);
@@ -1377,14 +1388,7 @@ export class TranscriptRoom {
       pending.chunks = pending.chunks.filter((chunk) => kept.has(chunk));
       if (pending.chunks.length === 0) this.uncommittedAudio.delete(key);
     }
-  }
-
-  /** Bytes of replay audio lines and the unowned records hold. */
-  private replayAudioBytes(): number {
-    let total = 0;
-    for (const line of this.ledger.activeUnordered()) for (const { audio } of line.audio) total += audio.length;
-    for (const { chunks } of this.uncommittedAudio.values()) for (const { audio } of chunks) total += audio.length;
-    return total;
+    this.transcriptionRecoveryAudio.keepChunks((chunk) => kept.has(chunk));
   }
 
   private voiceCheckFor(key: string): VoiceActivity {
@@ -1897,7 +1901,10 @@ export class TranscriptRoom {
       ...init,
       place: this.nextPlace(connection),
       epoch: connection?.epoch ?? null,
-      deadlineAt: init.state === "replaying" ? Number.POSITIVE_INFINITY : now + TRANSCRIPTION_LINE_DEADLINE_MS,
+      deadlineAt:
+        init.state === "replaying" || init.state === "pending_ack"
+          ? Number.POSITIVE_INFINITY
+          : now + TRANSCRIPTION_LINE_DEADLINE_MS,
     });
   }
 
@@ -1934,9 +1941,11 @@ export class TranscriptRoom {
         state: "open",
         speaker,
         heard: utterance.heard,
-        audio: isLive ? this.adoptAudio(speaker, utterance.since, utterance.turn) : [],
+        audio: isLive ? this.adoptAudio(speaker, utterance.since, utterance.turn, utterance.until) : [],
       });
-      if (isLive) line.audio.unshift(...this.takeFromSpeakingLine(speaker, utterance.since, utterance.turn));
+      if (isLive) {
+        line.audio.unshift(...this.takeFromSpeakingLine(speaker, utterance.since, utterance.turn, utterance.until));
+      }
     }
     connection.bind(providerItemId, line.id);
     if (utterance.ownsNewAudio && isLive && line !== replayed) {
@@ -2012,10 +2021,6 @@ export class TranscriptRoom {
     const saved = line.heard || line.text.trim() !== "";
     line.text = line.freshText ? delta : `${line.text}${delta}`;
     line.freshText = false;
-    if (line.shownAsFinal) {
-      if (this.recordFinalSegment(this.lineSegment(line, now), line.text)) void this.persist();
-      return;
-    }
     const segment = this.lineSegment(line, now);
     // A replaced provider's words are saved as they arrive, and the output
     // gate holds this delta until a restarted worker would still have them.
@@ -2040,12 +2045,9 @@ export class TranscriptRoom {
     if (isActive(line)) {
       const text = words || line.text.trim();
       this.forgetSpeakingLine(line);
-      this.giveBackLaterSpeech(connection, line);
       if (text) {
         this.ledger.end(line, "final", text);
         changed = this.recordFinalSegment(this.lineSegment(line), text);
-      } else if (line.shownAsFinal) {
-        this.ledger.end(line, "gap", TRANSCRIPTION_GAP_MARKER);
       } else {
         this.forgetLine(connection, line);
         changed = true;
@@ -2087,7 +2089,6 @@ export class TranscriptRoom {
     for (const line of lines) {
       if (!isActive(line)) continue;
       this.forgetSpeakingLine(line);
-      this.giveBackLaterSpeech(connection, line);
       for (const providerItemId of connection?.providerIdsOf(line.id) ?? []) {
         connection?.session.retire?.(providerItemId);
       }
@@ -2114,25 +2115,6 @@ export class TranscriptRoom {
       );
     }
     return changed;
-  }
-
-  /**
-   * A Sarvam line's speech runs from where it began to the next onset in
-   * its turn; audio it took after that is the next utterance's, so when the
-   * line ends that audio goes back to its speaker for that utterance's
-   * signal to claim, rather than with this line.
-   */
-  private giveBackLaterSpeech(connection: ProviderConnection | null, line: CaptionLine): void {
-    if (connection !== this.liveConnection || connection?.session.provider !== "sarvam") return;
-    const began = line.audio.findIndex(({ voice }) => voice !== "quiet");
-    const next = began < 0 ? -1 : line.audio.findIndex(({ voice }, index) => index > began && voice === "onset");
-    if (next < 0) return;
-    const later = line.audio.slice(next);
-    line.audio = line.audio.slice(0, next);
-    const key = speakerKey(line.speaker);
-    const pending = this.uncommittedAudio.get(key) ?? { speaker: line.speaker, chunks: [] };
-    pending.chunks = [...later, ...pending.chunks].sort((left, right) => left.createdAt - right.createdAt);
-    this.uncommittedAudio.set(key, pending);
   }
 
   /** A line that ended with nothing to show and that no later answer can fill goes now, with its provider ids. */
@@ -2168,20 +2150,11 @@ export class TranscriptRoom {
     const now = Date.now();
     let changed = false;
     for (const connection of [this.liveConnection, ...this.providerDrains.values(), null]) {
-      const overdue = this.ledger
+      const owed = this.ledger
         .active()
         .filter((line) => line.deadlineAt <= now && line.epoch === (connection?.epoch ?? null));
-      const unacknowledged =
-        connection !== null && connection === this.liveConnection && connection.session.provider === "openai"
-          ? overdue.filter(({ state }) => state === "pending_ack")
-          : [];
-      for (const line of unacknowledged) changed = this.showOwedLine(line) || changed;
       changed =
-        this.endUnfinishedLines(
-          overdue.filter((line) => !unacknowledged.includes(line)),
-          "A provider did not finish in time",
-          connection,
-        ) || changed;
+        this.endUnfinishedLines(owed, "A provider did not finish in time", connection) || changed;
     }
     for (const drain of Array.from(this.providerDrains.values())) this.settleDrain(drain);
     this.armLineTimer();
@@ -2189,21 +2162,6 @@ export class TranscriptRoom {
       await this.persist();
       this.scheduleMinutes();
     }
-  }
-
-  /**
-   * An OpenAI line no connection has acknowledged yet: at its deadline
-   * viewers see it as a final, its words or a gap if our check heard
-   * speech, but it keeps its audio and stays owed, so the ack watchdog's
-   * reconnect replays it and an answer updates that final in place.
-   */
-  private showOwedLine(line: CaptionLine): boolean {
-    line.deadlineAt = Number.POSITIVE_INFINITY;
-    if (line.shownAsFinal) return false;
-    const text = line.text.trim() || (line.heard ? TRANSCRIPTION_GAP_MARKER : "");
-    if (!text) return false;
-    line.shownAsFinal = true;
-    return this.recordFinalSegment(this.lineSegment(line), text);
   }
 
   private resetTranscriptionAudioState(): void {
@@ -2253,17 +2211,21 @@ export class TranscriptRoom {
    * not replayed. Words stay on screen meanwhile.
    */
   private handOffLiveLines(live: ProviderConnection): void {
-    for (const line of this.ledger.active()) {
-      if (line.epoch === live.epoch) this.awaitReplacement(line);
+    const owed = this.ledger.active().filter(({ epoch }) => epoch === live.epoch);
+    const replayedUnanswered = owed.filter(({ state, replayed }) => state === "pending_ack" && replayed);
+    if (this.endUnfinishedLines(replayedUnanswered, "A replacement never acknowledged a replayed line", live)) {
+      void this.persist();
+    }
+    for (const line of owed) {
+      if (!replayedUnanswered.includes(line)) this.awaitReplacement(line);
     }
     const now = Date.now();
     for (const { speaker, chunks } of this.uncommittedAudio.values()) {
-      const audio =
-        live.session.provider === "sarvam"
-          ? chunks.filter(({ createdAt }) => now - createdAt <= UNOWNED_AUDIO_KEPT_MS)
-          : chunks;
-      if (!audio.some(({ voice }) => voice !== "quiet")) continue;
-      this.awaitReplacement(this.newLine(null, { state: "replaying", speaker, heard: true, audio }));
+      const sarvam = live.session.provider === "sarvam";
+      const audio = sarvam ? chunks.filter(({ createdAt }) => now - createdAt <= UNOWNED_AUDIO_KEPT_MS) : chunks;
+      const heard = audio.some(({ voice }) => voice !== "quiet");
+      if (audio.length === 0 || (sarvam && !heard)) continue;
+      this.awaitReplacement(this.newLine(null, { state: "replaying", speaker, heard, audio }));
     }
     this.uncommittedAudio.clear();
     this.speakingLine.clear();
@@ -2290,6 +2252,7 @@ export class TranscriptRoom {
           }
           connection.session.commitAudio();
           line.state = "pending_ack";
+          line.replayed = true;
           line.freshText = true;
           connection.commitQueue.push({ lineId: line.id, committedAt: Date.now() });
         } else {
@@ -2346,7 +2309,8 @@ export class TranscriptRoom {
   private settleReplayedLines(connection: ProviderConnection): void {
     const deadline = Date.now() + TRANSCRIPTION_LINE_DEADLINE_MS;
     for (const line of this.ledger.active()) {
-      if (line.epoch === connection.epoch && line.deadlineAt > deadline) line.deadlineAt = deadline;
+      if (line.epoch !== connection.epoch || line.state === "pending_ack") continue;
+      if (line.deadlineAt > deadline) line.deadlineAt = deadline;
     }
     this.armTranscriptionCommitWatchdog();
     this.armLineTimer();
@@ -2684,7 +2648,7 @@ export class TranscriptRoom {
 
   /** Words of every owed line, live, draining or waiting for a replacement. */
   private visiblePartials(): TranscriptSegment[] {
-    return this.ledger.active().flatMap((line) => (line.text && !line.shownAsFinal ? [this.lineSegment(line)] : []));
+    return this.ledger.active().flatMap((line) => (line.text ? [this.lineSegment(line)] : []));
   }
 
   /** A line as viewers see it, under its own itemId in its own place. */

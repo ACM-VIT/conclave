@@ -15,15 +15,13 @@ export type AcceptedUtterance = {
   turn?: number;
   /** Its turn is still going, so that speaker's audio from now on is its too. */
   ownsNewAudio: boolean;
+  until?: number;
   /** When it was heard in a line's replayed audio, that line. */
   lineId?: string;
 };
 
 /** Speech our voice check heard for an utterance after it was accepted, so its line takes that audio. */
-export type HeardSpeech = Pick<AcceptedUtterance, "speaker" | "since" | "turn" | "ownsNewAudio"> & {
-  /** Where the next utterance in its turn began, for one that already ended; its audio stops there. */
-  until?: number;
-};
+export type HeardSpeech = Pick<AcceptedUtterance, "speaker" | "since" | "turn" | "ownsNewAudio" | "until">;
 
 /** What the room knows about a chunk it sends: our voice check's reading, and the line it belongs to on a replay. */
 export type AudioContext = { voice: VoiceReading; turn: number; lineId?: string };
