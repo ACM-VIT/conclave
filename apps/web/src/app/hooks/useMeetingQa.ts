@@ -1,9 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useAuthorityAvailable } from "@conclave/apps-sdk";
+import { useAuthorityAvailable, useAuthorityRuntime } from "@conclave/apps-sdk";
 import { qaContract, useQa } from "@conclave/apps-sdk/qa/web";
 import type { WebinarQaEntry, WebinarQaModerateRequest } from "../lib/types";
+import { useHeldThroughReconnect } from "./useHeldThroughReconnect";
 
 type Result = { ok: boolean; error?: string };
 
@@ -84,16 +85,33 @@ export const hasUnseenMeetingQuestion = ({
 export function useMeetingQa({
   legacy,
   isWebinar,
+  isJoined,
   currentUserId,
 }: {
   legacy: LegacyQa;
   isWebinar: boolean;
+  isJoined: boolean;
   currentUserId?: string | null;
 }) {
-  const offered = useAuthorityAvailable(qaContract);
+  const runtime = useAuthorityRuntime();
+  const liveOffer = useAuthorityAvailable(qaContract);
+  const awaitingServer = isJoined && runtime === "unknown";
+  const offered = useHeldThroughReconnect(liveOffer, awaitingServer);
   const qa = useQa();
   const fromApp = offered && qa.isReady;
   const awaitingNewView = offered && qa.isReplacing;
+  const meetingViewComing = !isWebinar && (awaitingServer || (offered && qa.isConnecting));
+  const liveApp = useMemo(
+    () => ({
+      fromApp,
+      askNeedsIdentity: qa.askNeedsIdentity,
+      canAsk: qa.canAsk,
+      canUpvote: qa.canUpvote,
+      canModerate: qa.canModerate,
+    }),
+    [fromApp, qa.askNeedsIdentity, qa.canAsk, qa.canUpvote, qa.canModerate],
+  );
+  const app = useHeldThroughReconnect(liveApp, meetingViewComing);
 
   const appEntries = useMemo<WebinarQaEntry[]>(
     () =>
@@ -135,7 +153,7 @@ export function useMeetingQa({
           (isWebinar ? legacy.entries : null) ?? NO_ENTRIES
         : isWebinar
           ? legacy.entries
-          : qa.isConnecting
+          : qa.isConnecting || awaitingServer
             ? null
             : NO_ENTRIES;
   const [shown, setShown] = useState<WebinarQaEntry[]>(NO_ENTRIES);
@@ -148,15 +166,15 @@ export function useMeetingQa({
     [moderate],
   );
 
-  if (fromApp) {
+  if (app.fromApp) {
     return {
       offered,
       fromApp: true as const,
       entries,
-      askNeedsIdentity: qa.askNeedsIdentity,
-      onSubmit: qa.canAsk ? ask : undefined,
-      onUpvote: qa.canUpvote ? toggleUpvote : undefined,
-      onModerate: qa.canModerate ? appModerate : undefined,
+      askNeedsIdentity: app.askNeedsIdentity,
+      onSubmit: app.canAsk ? ask : undefined,
+      onUpvote: app.canUpvote ? toggleUpvote : undefined,
+      onModerate: app.canModerate ? appModerate : undefined,
     };
   }
   if ((offered && !isWebinar) || awaitingNewView) {

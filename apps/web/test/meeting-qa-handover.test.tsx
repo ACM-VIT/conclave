@@ -54,6 +54,7 @@ let root: Root;
 let qa: ReturnType<typeof useMeetingQa>;
 /** The ids each render of the hook showed, in order. */
 const renders: string[][] = [];
+const offers: { offered: boolean; ids: string[]; asks: "app" | "old events" | "nothing" }[] = [];
 
 /** What the socket was sent on the old events, as `useMeetSocket` keeps it. */
 let oldEvents: { change: (notification: WebinarQaChangedNotification) => void };
@@ -63,7 +64,15 @@ let oldEvents: { change: (notification: WebinarQaChangedNotification) => void };
  * list the socket was sent, a change goes through the socket's own rule,
  * and a list the hook is done with is forgotten.
  */
-function Probe({ isWebinar, legacyQa }: { isWebinar: boolean; legacyQa: typeof legacy }) {
+function Probe({
+  isWebinar,
+  isJoined,
+  legacyQa,
+}: {
+  isWebinar: boolean;
+  isJoined: boolean;
+  legacyQa: typeof legacy;
+}) {
   const [list, setList] = useState<WebinarQaList>(legacyQa.entries);
   const [sent, setSent] = useState<WebinarQaList>(legacyQa.entries);
   if (legacyQa.entries !== sent) {
@@ -74,17 +83,27 @@ function Probe({ isWebinar, legacyQa }: { isWebinar: boolean; legacyQa: typeof l
   qa = useMeetingQa({
     legacy: { ...legacyQa, entries: list, forget: () => setList(null) },
     isWebinar,
+    isJoined,
     currentUserId: "me",
   });
   renders.push(qa.entries.map((entry) => entry.id));
+  offers.push({
+    offered: qa.offered,
+    ids: qa.entries.map((entry) => entry.id),
+    asks: !qa.onSubmit ? "nothing" : qa.onSubmit === legacyQa.submit ? "old events" : "app",
+  });
   return null;
 }
 
-const mount = async (isWebinar: boolean, legacyQa: typeof legacy = legacy) => {
+const mount = async (
+  isWebinar: boolean,
+  legacyQa: typeof legacy = legacy,
+  { connected = true, isJoined = true }: { connected?: boolean; isJoined?: boolean } = {},
+) => {
   await act(async () =>
     root.render(
-      <AuthorityProvider socket={socket} joined>
-        <Probe isWebinar={isWebinar} legacyQa={legacyQa} />
+      <AuthorityProvider socket={connected ? socket : null} joined={connected}>
+        <Probe isWebinar={isWebinar} isJoined={isJoined} legacyQa={legacyQa} />
       </AuthorityProvider>,
     ),
   );
@@ -144,6 +163,7 @@ beforeEach(() => {
   listeners.clear();
   sent.length = 0;
   renders.length = 0;
+  offers.length = 0;
   root = createRoot(document.createElement("div"));
 });
 
@@ -535,5 +555,57 @@ it("clears a meeting's list at once when the server withdraws Q&A", async () => 
 
   expect(onTheApp).toEqual(["q1"]);
   expect(renders.slice(fromTheRevoke).every((shown) => shown.length === 0)).toBe(true);
+  expect(qa.entries).toEqual([]);
+});
+
+it("keeps a meeting's Q&A, its list and its composer while the connection comes back, at every render", async () => {
+  const noOldList = { ...legacy, entries: null };
+  await mount(false, noOldList);
+  await offerQa();
+  await sendView();
+  const beforeTheDrop = offers[offers.length - 1];
+  const fromTheDrop = offers.length;
+
+  await mount(false, noOldList, { connected: false });
+  await act(async () => vi.advanceTimersByTimeAsync(5_000));
+  await mount(false, noOldList);
+  await offerQa();
+  await act(async () => vi.advanceTimersByTimeAsync(1_000));
+  await sendView();
+  const throughTheReconnect = offers.slice(fromTheDrop);
+
+  expect(beforeTheDrop).toEqual({ offered: true, ids: ["q1"], asks: "app" });
+  expect(throughTheReconnect.length).toBeGreaterThan(0);
+  expect(throughTheReconnect.every((shown) => JSON.stringify(shown) === JSON.stringify(beforeTheDrop))).toBe(true);
+});
+
+it("lets a meeting's Q&A go when the server answers without it after a reconnect", async () => {
+  const noOldList = { ...legacy, entries: null };
+  await mount(false, noOldList);
+  await offerQa();
+  await sendView();
+
+  await mount(false, noOldList, { connected: false });
+  await mount(false, noOldList);
+  await act(async () =>
+    last(AUTHORITY_EVENTS.capabilities)!.ack!({
+      ok: true,
+      value: { protocol: 1, roomEpoch: "epoch", serverNowMs: Date.now(), apps: [] },
+    }),
+  );
+
+  expect(qa.offered).toBe(false);
+  expect(qa.entries).toEqual([]);
+});
+
+it("lets a meeting's Q&A go when the person leaves the meeting while the connection is down", async () => {
+  const noOldList = { ...legacy, entries: null };
+  await mount(false, noOldList);
+  await offerQa();
+  await sendView();
+
+  await mount(false, noOldList, { connected: false, isJoined: false });
+
+  expect(qa.offered).toBe(false);
   expect(qa.entries).toEqual([]);
 });

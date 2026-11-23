@@ -186,6 +186,8 @@ export function usePolls(options?: {
   const ready = state.kind === "ready" ? state : null;
   return {
     isReady: ready !== null,
+    isConnecting: state.kind === "connecting",
+    isReplacing: state.kind === "connecting" && state.replacing === true,
     polls,
     /** Hosts: may start, end, share and export. */
     canManage: ready?.actions.has("create") ?? false,

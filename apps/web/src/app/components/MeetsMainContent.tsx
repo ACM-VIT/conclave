@@ -103,18 +103,14 @@ import {
   isBrowserVideoUserId,
   isSystemUserId,
 } from "../lib/utils";
-import {
-  useApps,
-  useAuthorityAvailable,
-  useAuthorityRuntime,
-  useGame,
-} from "@conclave/apps-sdk";
+import { useApps, useAuthorityRuntime, useGame } from "@conclave/apps-sdk";
 import { GamePanel } from "./games/GamePanel";
 import { GamesPanel } from "./games/GamesPanel";
 import { AppsPanel, type PanelAppEntry } from "./apps/AppsPanel";
-import { pollsApp, pollsContract, usePolls } from "@conclave/apps-sdk/polls/web";
+import { pollsApp } from "@conclave/apps-sdk/polls/web";
 import { qaApp } from "@conclave/apps-sdk/qa/web";
 import { hasUnseenMeetingQuestion, useMeetingQa } from "../hooks/useMeetingQa";
+import { useMeetingPolls } from "../hooks/useMeetingPolls";
 import { panelAppNeedsServerUpdate } from "../lib/panel-app-availability";
 import {
   GAME_DOCK_DEFAULT_WIDTH,
@@ -656,6 +652,7 @@ export default function MeetsMainContent({
       moderate: legacyModerateQuestion,
     },
     isWebinar: Boolean(webinarConfig?.enabled) || isWebinarAttendee,
+    isJoined,
     currentUserId,
   });
   const webinarQaEntries = meetingQa.entries;
@@ -1519,11 +1516,13 @@ export default function MeetsMainContent({
     },
     [],
   );
-  const polls = usePolls({ onPollStarted: handlePollStarted });
+  const polls = useMeetingPolls({
+    isJoined,
+    isWebinarAttendee,
+    onPollStarted: handlePollStarted,
+  });
   const authorityRuntime = useAuthorityRuntime();
-  const pollsOffered = useAuthorityAvailable(pollsContract);
-  // Opened only when the server offers it to this connection.
-  const isPollsAvailable = pollsOffered && isJoined && !isWebinarAttendee;
+  const isPollsAvailable = polls.isAvailable;
   const isPollsOpen = activityPanel === "polls" && isPollsAvailable;
   const awaitsVote = (poll: (typeof polls.polls)[number]) =>
     poll.status === "open" && poll.myVote.length === 0;
@@ -1568,7 +1567,7 @@ export default function MeetsMainContent({
   // a server update, so their absence is explained.
   const pollsNeedServerUpdate = panelAppNeedsServerUpdate({
     runtime: authorityRuntime,
-    offered: pollsOffered,
+    offered: polls.offered,
     isJoined,
     isWebinarAttendee,
   });
