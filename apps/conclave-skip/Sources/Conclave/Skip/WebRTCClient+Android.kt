@@ -1811,6 +1811,8 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
     private var pendingNoiseSuppression: Boolean? = null
     private var videoBandwidthRefreshInFlight = false
     private var screenBandwidthRefreshInFlight = false
+    private var mediaPublishSettingsRevision = 0
+    private var videoSettingsRefreshPending = false
     private var lastAppliedLocalBandwidthSignature: String? = null
     private val screenShareTemporalLayerCount: Int
         get() = if (configuredScreenContentHint == "motion") 3 else 2
@@ -2362,11 +2364,14 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
             videoTrack.setEnabled(true)
 
             val appData = encodeJSONString(ProducerAppData(type = ProducerType.webcam.rawValue, paused = false))
+            val producedQuality = currentLocalBandwidthQuality
+            val producedSignature = localVideoBandwidthSignature(currentVideoQuality, producedQuality)
+            val settingsRevision = mediaPublishSettingsRevision
             val producer = produceWebcamVideo(
                 sendTransport,
                 videoTrack,
                 appData,
-                currentLocalBandwidthQuality
+                producedQuality
             )
             pendingProducer = producer
             ensureCurrentConfiguration(generation)
@@ -2401,15 +2406,13 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
             } else {
                 WebcamProducerTopology.vp8Simulcast
             }
-            videoProducerBandwidthQuality = currentLocalBandwidthQuality
-            videoProducerBandwidthSignature = localVideoBandwidthSignature(
-                currentVideoQuality,
-                currentLocalBandwidthQuality,
-            )
+            videoProducerBandwidthQuality = producedQuality
+            videoProducerBandwidthSignature = producedSignature
             val wrapper = VideoTrackWrapper(id = producer.id, userId = "local", isLocal = true, track = videoTrack)
             localVideoTrackWrapper = wrapper
             localVideoEnabled = true
             onLocalVideoEnabledChanged?.invoke(true)
+            replayVideoSettingsRefreshIfChangedSince(settingsRevision)
         } catch (t: Throwable) {
             closeSendProducer(pendingProducer)
 
@@ -2468,7 +2471,10 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
             screenVideoTrack = track
 
             val appData = encodeJSONString(ProducerAppData(type = ProducerType.screen.rawValue, paused = false))
-            val producer = produceScreenVideo(sendTransport, track, appData, currentLocalBandwidthQuality)
+            val producedQuality = currentLocalBandwidthQuality
+            val producedSignature = localScreenBandwidthSignature(producedQuality)
+            val settingsRevision = mediaPublishSettingsRevision
+            val producer = produceScreenVideo(sendTransport, track, appData, producedQuality)
             pendingProducer = producer
             ensureCurrentConfiguration(generation)
             if (screenCapturer !== capturer) {
@@ -2476,9 +2482,10 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
             }
             resumeSendProducer(producer)
             screenProducer = producer
-            screenProducerBandwidthQuality = currentLocalBandwidthQuality
-            screenProducerBandwidthSignature = localScreenBandwidthSignature(currentLocalBandwidthQuality)
+            screenProducerBandwidthQuality = producedQuality
+            screenProducerBandwidthSignature = producedSignature
             evaluateWebcamTopologyTransition()
+            replayVideoSettingsRefreshIfChangedSince(settingsRevision)
             debugLog("[WebRTC] Screen sharing producer created: ${producer.id}")
         } catch (t: Throwable) {
             val droppedProducer = pendingProducer
@@ -3769,10 +3776,26 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         configuredScreenMaxBitrateBps = screenMaxBitrateBps.coerceIn(150_000, 15_000_000)
         configuredScreenContentHint = screenContentHint
         configuredScreenDegradationPreference = screenDegradationPreference
+        mediaPublishSettingsRevision += 1
         videoProducerBandwidthSignature = null
         screenProducerBandwidthSignature = null
         lastAppliedLocalBandwidthSignature = null
         applyLocalBandwidthProfile(currentLocalBandwidthQuality)
+    }
+
+    private fun replayVideoSettingsRefreshIfChangedSince(settingsRevision: Int) {
+        if (settingsRevision != mediaPublishSettingsRevision) videoSettingsRefreshPending = true
+        replayPendingVideoSettingsRefresh()
+    }
+
+    private fun replayPendingVideoSettingsRefresh() {
+        if (!videoSettingsRefreshPending || videoBandwidthRefreshInFlight || screenBandwidthRefreshInFlight) return
+        if (webcamTopologyCommandJob?.isActive == true) return
+        videoSettingsRefreshPending = false
+        val generation = configurationGeneration
+        webcamTopologyScope.launch(Dispatchers.Main) {
+            if (generation == configurationGeneration) refreshLocalMediaForQualitySettings()
+        }
     }
 
     internal suspend fun refreshLocalMediaForQualitySettings() {
@@ -3850,10 +3873,12 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         val track = localVideoTrack ?: return
         val generation = configurationGeneration
         val offIntentGeneration = localVideoOffIntentGeneration
+        val settingsRevision = mediaPublishSettingsRevision
         videoBandwidthRefreshInFlight = true
         try {
             val appData = encodeJSONString(ProducerAppData(type = ProducerType.webcam.rawValue, paused = false))
             intentionalLocalVideoProducerCloseIds.add(oldProducer.id)
+            val producedSignature = localVideoBandwidthSignature(currentVideoQuality, connectionQuality)
             val nextProducer = produceWebcamVideo(transport, track, appData, connectionQuality)
             if (generation != configurationGeneration) {
                 closeSendProducer(nextProducer)
@@ -3882,10 +3907,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
                 WebcamProducerTopology.vp8Simulcast
             }
             videoProducerBandwidthQuality = connectionQuality
-            videoProducerBandwidthSignature = localVideoBandwidthSignature(
-                currentVideoQuality,
-                connectionQuality,
-            )
+            videoProducerBandwidthSignature = producedSignature
             localVideoEnabled = true
             localVideoTrackWrapper = VideoTrackWrapper(
                 id = nextProducer.id,
@@ -3916,6 +3938,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
             debugLog("[WebRTC] Failed to refresh webcam producer for bandwidth: ${error}")
         } finally {
             videoBandwidthRefreshInFlight = false
+            if (generation == configurationGeneration) replayVideoSettingsRefreshIfChangedSince(settingsRevision)
         }
     }
 
@@ -4007,6 +4030,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         val oldProducer = screenProducer ?: return
         val track = screenVideoTrack ?: return
         val generation = configurationGeneration
+        val settingsRevision = mediaPublishSettingsRevision
         screenBandwidthRefreshInFlight = true
         lastScreenProducerSignalingError = null
         try {
@@ -4015,6 +4039,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
                 intentionalLocalScreenProducerCloseIds.clear()
             }
             intentionalLocalScreenProducerCloseIds.add(oldProducer.id)
+            val producedSignature = localScreenBandwidthSignature(connectionQuality)
             val nextProducer = try {
                 produceScreenVideo(transport, track, appData, connectionQuality)
             } catch (t: Throwable) {
@@ -4045,7 +4070,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
             resumeSendProducer(nextProducer)
             screenProducer = nextProducer
             screenProducerBandwidthQuality = connectionQuality
-            screenProducerBandwidthSignature = localScreenBandwidthSignature(connectionQuality)
+            screenProducerBandwidthSignature = producedSignature
             applyScreenOutputFormat(connectionQuality)
 
             try {
@@ -4060,6 +4085,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
             debugLog("[WebRTC] Failed to refresh screen producer for bandwidth: ${error}")
         } finally {
             screenBandwidthRefreshInFlight = false
+            if (generation == configurationGeneration) replayVideoSettingsRefreshIfChangedSince(settingsRevision)
         }
     }
 
@@ -4684,7 +4710,9 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
             if (webcamTopologyControlGeneration != generation) break
             val command = pendingWebcamTopologyCommand ?: break
             pendingWebcamTopologyCommand = null
+            val settingsRevision = mediaPublishSettingsRevision
             val result = applyWebcamTopologyReplacement(command, generation)
+            if (settingsRevision != mediaPublishSettingsRevision) videoSettingsRefreshPending = true
             if (webcamTopologyControlGeneration != generation) break
             val now = webcamTopologyMonotonicMs()
             val step = WebcamTopologyTransitionMachine.settle(
@@ -4708,6 +4736,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
             pendingWebcamTopologyCommand = null
             enqueueWebcamTopologyCommand(command)
         }
+        replayPendingVideoSettingsRefresh()
     }
 
     private suspend fun applyWebcamTopologyReplacement(
@@ -4800,6 +4829,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
             }
             val codecOptions = webcamVideoCodecOptionsJson(VideoQuality.standard, ConnectionQuality.good)
             val preferredCodec = preferredVideoCodecJson()
+            val producedSignature = localVideoBandwidthSignature(VideoQuality.standard, ConnectionQuality.good)
             val producer = requireRegisteredProducer(
                 produceOnSendTransportLane(transport) {
                     transport.produce(
@@ -4839,10 +4869,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
             if (targetTopology == WebcamProducerTopology.vp8Simulcast) {
 
                 videoProducerBandwidthQuality = ConnectionQuality.good
-                videoProducerBandwidthSignature = localVideoBandwidthSignature(
-                    VideoQuality.standard,
-                    ConnectionQuality.good,
-                )
+                videoProducerBandwidthSignature = producedSignature
             }
             localVideoTrackWrapper = VideoTrackWrapper(
                 id = producer.id,
@@ -4965,6 +4992,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         pendingNoiseSuppression = null
         videoBandwidthRefreshInFlight = false
         screenBandwidthRefreshInFlight = false
+        videoSettingsRefreshPending = false
         lastAppliedLocalBandwidthSignature = null
 
         consumers.values.forEach { it.consumer.close() }

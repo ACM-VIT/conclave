@@ -2685,6 +2685,7 @@ final class WebRTCClient: NSObject, ObservableObject {
             }
 
             let appData = try encodeJSONString(ProducerAppData(type: ProducerType.webcam.rawValue, paused: false))
+            let appliedProfile = lastAppliedLocalBandwidthSignature
             let producer = try await createProducerOffMain(
                 on: sendTransport,
                 track: track,
@@ -2753,6 +2754,7 @@ final class WebRTCClient: NSObject, ObservableObject {
                 track: track
             )
             localVideoTrack = trackWrapper
+            reapplyLocalBandwidthProfile(ifChangedSince: appliedProfile)
 
             debugLog("[WebRTC] Video producer created: \(producer.id)")
         } catch {
@@ -4631,6 +4633,7 @@ final class WebRTCClient: NSObject, ObservableObject {
 
             intentionalLocalVideoProducerCloseIds.insert(oldProducer.id)
 
+            let appliedProfile = lastAppliedLocalBandwidthSignature
             let producer = try await createProducerOffMain(
                 on: sendTransport,
                 track: track,
@@ -4673,6 +4676,7 @@ final class WebRTCClient: NSObject, ObservableObject {
                 track: track
             )
             pendingProducer = nil
+            reapplyLocalBandwidthProfile(ifChangedSince: appliedProfile)
 
             do {
                 try await socketManager.closeProducer(producerId: oldProducer.id)
@@ -4780,6 +4784,12 @@ final class WebRTCClient: NSObject, ObservableObject {
 
     func refreshLocalMediaForQualitySettings() async {
 
+    }
+
+    private func reapplyLocalBandwidthProfile(ifChangedSince appliedProfile: String?) {
+        guard lastAppliedLocalBandwidthSignature != appliedProfile else { return }
+        lastAppliedLocalBandwidthSignature = nil
+        applyLocalBandwidthProfile(connectionQuality: currentLocalBandwidthQuality)
     }
 
     func updateVideoQuality(_ quality: VideoQuality) {
@@ -5028,6 +5038,7 @@ final class WebRTCClient: NSObject, ObservableObject {
                 intentionalLocalScreenProducerCloseIds.removeAll()
             }
             intentionalLocalScreenProducerCloseIds.insert(oldProducer.id)
+            let appliedProfile = lastAppliedLocalBandwidthSignature
             let producer = try await createScreenProducerOffMain(
                 on: sendTransport,
                 track: screenTrack,
@@ -5047,6 +5058,7 @@ final class WebRTCClient: NSObject, ObservableObject {
             screenProducerBandwidthQuality = connectionQuality
             updateScreenCaptureProfile(connectionQuality: connectionQuality)
             resetScreenFrameLimiter()
+            reapplyLocalBandwidthProfile(ifChangedSince: appliedProfile)
 
             do {
                 try await socketManager.closeProducer(producerId: oldProducer.id)
@@ -6805,11 +6817,13 @@ extension WebRTCClient {
 
         do {
             let appData = try encodeJSONString(ProducerAppData(type: ProducerType.screen.rawValue, paused: false))
+            let producedQuality = currentLocalBandwidthQuality
+            let appliedProfile = lastAppliedLocalBandwidthSignature
             let producer = try await createScreenProducerOffMain(
                 on: sendTransport,
                 track: screenTrack,
                 encodings: screenShareEncodings(
-                    connectionQuality: currentLocalBandwidthQuality
+                    connectionQuality: producedQuality
                 ),
                 codec: preferredVideoCodecJSON(),
                 appData: appData
@@ -6819,8 +6833,9 @@ extension WebRTCClient {
 
             screenProducer = producer
             applyConfiguredDegradationPreference(to: producer, type: .screen)
-            screenProducerBandwidthQuality = currentLocalBandwidthQuality
+            screenProducerBandwidthQuality = producedQuality
             evaluateWebcamTopologyTransition()
+            reapplyLocalBandwidthProfile(ifChangedSince: appliedProfile)
 
             debugLog("[WebRTC] Screen sharing producer created: \(producer.id)")
         } catch {
