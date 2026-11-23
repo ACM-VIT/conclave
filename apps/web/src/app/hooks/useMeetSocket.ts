@@ -183,7 +183,7 @@ import {
   getUsableTurnIceServers,
   normalizeIceServerUrls,
   noteRelayCarryingMedia,
-  readSelectedRelayUrl,
+  readRelayPairBytes,
   relayProvenByMedia,
   type RuntimeIceServers,
 } from "../lib/relay-credentials";
@@ -6143,20 +6143,20 @@ export function useMeetSocket({
       {
         transport: Transport | null;
         watch: MediaPathWatch;
-        relayUrl: string | null;
+        relayBytes: Record<string, number> | null;
         reportedRemoteSilence: boolean;
       }
     > = {
       producer: {
         transport: null,
         watch: INITIAL_MEDIA_PATH_WATCH,
-        relayUrl: null,
+        relayBytes: null,
         reportedRemoteSilence: false,
       },
       consumer: {
         transport: null,
         watch: INITIAL_MEDIA_PATH_WATCH,
-        relayUrl: null,
+        relayBytes: null,
         reportedRemoteSilence: false,
       },
     };
@@ -6265,7 +6265,7 @@ export function useMeetSocket({
       ) {
         entry.transport = transport ?? null;
         entry.watch = INITIAL_MEDIA_PATH_WATCH;
-        entry.relayUrl = null;
+        entry.relayBytes = null;
         return;
       }
       // A new transport starts a fresh watch, and this sample already counts
@@ -6274,20 +6274,22 @@ export function useMeetSocket({
         entry.transport = transport;
         entry.watch = INITIAL_MEDIA_PATH_WATCH;
         entry.reportedRemoteSilence = false;
-        entry.relayUrl = null;
+        entry.relayBytes = null;
       }
 
       let rtpBytes: number;
-      let relayUrl: string | null;
+      let relayBytes: Record<string, number>;
       try {
         const stats = [...(await transport.getStats()).values()];
-        rtpBytes = readRtpBytes(stats, kind === "producer" ? "send" : "recv");
-        relayUrl = readSelectedRelayUrl(stats);
+        const direction = kind === "producer" ? "send" : "recv";
+        rtpBytes = readRtpBytes(stats, direction);
+        relayBytes = readRelayPairBytes(stats, direction);
       } catch {
         return;
       }
       if (entry.transport !== transport) return;
 
+      const previousRtpBytes = entry.watch.lastRtpBytes;
       const result = advanceMediaPathWatch(entry.watch, {
         at: Date.now(),
         connectionState: transport.connectionState,
@@ -6299,11 +6301,14 @@ export function useMeetSocket({
       });
       entry.watch = result.watch;
       const provenRelayUrl = relayProvenByMedia({
-        mediaMoved: result.mediaMoved,
-        relayUrl,
-        previousRelayUrl: entry.relayUrl,
+        mediaBytes:
+          result.mediaMoved && previousRtpBytes !== null
+            ? rtpBytes - previousRtpBytes
+            : 0,
+        relayBytes,
+        previousRelayBytes: entry.relayBytes,
       });
-      entry.relayUrl = relayUrl;
+      entry.relayBytes = relayBytes;
       if (result.mediaMoved) {
         carriedMediaOnce.add(transport);
         entry.reportedRemoteSilence = false;

@@ -148,53 +148,52 @@ export const noteRelayCarryingMedia = (
   return { ...current, provenRelay: latestRelay };
 };
 
-/**
- * The relay a transport just proved by carrying media: RTP moved between two
- * samples that both had this relay selected. A relay that only connected
- * proves nothing, because a relay can pass ICE checks and drop every media
- * packet.
- */
-export const relayProvenByMedia = ({
-  mediaMoved,
-  relayUrl,
-  previousRelayUrl,
-}: {
-  mediaMoved: boolean;
-  relayUrl: string | null;
-  previousRelayUrl: string | null;
-}): string | null =>
-  mediaMoved && relayUrl !== null && relayUrl === previousRelayUrl
-    ? relayUrl
-    : null;
-
 type StatsEntry = {
   type?: string;
   id?: string;
-  selectedCandidatePairId?: string;
   localCandidateId?: string;
-  nominated?: boolean;
-  selected?: boolean;
-  state?: string;
   candidateType?: string;
   url?: string;
+  bytesReceived?: number;
+  bytesSent?: number;
 };
 
-/** The TURN URL of a transport's selected relay candidate, or null. */
-export const readSelectedRelayUrl = (stats: Iterable<StatsEntry>): string | null => {
+export const readRelayPairBytes = (
+  stats: Iterable<StatsEntry>,
+  direction: "send" | "recv",
+): Record<string, number> => {
   const entries = [...stats];
   const byId = new Map(entries.map((entry) => [entry.id, entry]));
-  const pairId = entries.find((entry) => entry.type === "transport")
-    ?.selectedCandidatePairId;
-  const pair =
-    (pairId ? byId.get(pairId) : undefined) ??
-    entries.find(
-      (entry) =>
-        entry.type === "candidate-pair" &&
-        (entry.selected === true ||
-          (entry.nominated === true && entry.state === "succeeded")),
-    );
-  const local = pair?.localCandidateId ? byId.get(pair.localCandidateId) : undefined;
-  return local?.candidateType === "relay" && typeof local.url === "string" && local.url
-    ? local.url.trim()
-    : null;
+  const bytes: Record<string, number> = {};
+  for (const entry of entries) {
+    if (entry.type !== "candidate-pair" || !entry.localCandidateId) continue;
+    const local = byId.get(entry.localCandidateId);
+    if (local?.candidateType !== "relay" || !local.url) continue;
+    const url = local.url.trim();
+    const total = direction === "recv" ? entry.bytesReceived : entry.bytesSent;
+    bytes[url] = (bytes[url] ?? 0) + (total ?? 0);
+  }
+  return bytes;
+};
+
+export const relayProvenByMedia = ({
+  mediaBytes,
+  relayBytes,
+  previousRelayBytes,
+}: {
+  mediaBytes: number;
+  relayBytes: Record<string, number>;
+  previousRelayBytes: Record<string, number> | null;
+}): string | null => {
+  if (mediaBytes <= 0 || !previousRelayBytes) return null;
+  let carrier: string | null = null;
+  let carried = 0;
+  for (const [url, total] of Object.entries(relayBytes)) {
+    const grown = total - (previousRelayBytes[url] ?? total);
+    if (grown > carried) {
+      carrier = url;
+      carried = grown;
+    }
+  }
+  return carrier !== null && carried * 2 >= mediaBytes ? carrier : null;
 };

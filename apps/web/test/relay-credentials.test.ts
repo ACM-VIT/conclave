@@ -4,7 +4,7 @@ import {
   applyJoinAnswerToIceServers,
   getUsableTurnIceServers,
   noteRelayCarryingMedia,
-  readSelectedRelayUrl,
+  readRelayPairBytes,
   relayProvenByMedia,
   type RuntimeIceServers,
 } from "../src/app/lib/relay-credentials";
@@ -147,84 +147,100 @@ describe("a relay that is carrying media", () => {
   });
 });
 
-describe("reading which relay a transport uses", () => {
-  const stats = (pairLocal: string, local: Record<string, unknown>) => [
-    { type: "transport", id: "T", selectedCandidatePairId: "P" },
-    { type: "candidate-pair", id: "P", localCandidateId: pairLocal, state: "succeeded" },
-    { type: "local-candidate", id: "L1", ...local },
-  ];
-
-  it("returns the TURN URL of the selected relay candidate", () => {
-    expect(
-      readSelectedRelayUrl(
-        stats("L1", { candidateType: "relay", url: "turn:127.0.0.1:30603?transport=udp" }),
-      ),
-    ).toBe("turn:127.0.0.1:30603?transport=udp");
-  });
-
-  it("returns nothing for a direct path", () => {
-    expect(readSelectedRelayUrl(stats("L1", { candidateType: "host" }))).toBeNull();
-  });
-
-  it("falls back to the nominated pair when the transport does not name one", () => {
-    expect(
-      readSelectedRelayUrl([
-        { type: "candidate-pair", id: "P", localCandidateId: "L1", nominated: true, state: "succeeded" },
-        { type: "local-candidate", id: "L1", candidateType: "relay", url: "turns:turn.example:5349" },
-      ]),
-    ).toBe("turns:turn.example:5349");
-  });
-});
-
 describe("knowing that a relay works", () => {
+  const relayA = "turn:127.0.0.1:30603?transport=udp";
   const relayB = "turn:127.0.0.1:30606?transport=udp";
+  const pairs = (bytes: Record<string, number>, direction: "send" | "recv" = "recv") =>
+    Object.entries(bytes).flatMap(([url, total], index) => [
+      {
+        type: "candidate-pair",
+        id: `P${index}`,
+        localCandidateId: `L${index}`,
+        ...(direction === "recv" ? { bytesReceived: total } : { bytesSent: total }),
+      },
+      { type: "local-candidate", id: `L${index}`, candidateType: "relay", url },
+    ]);
 
-  it("takes media moving between two samples on the same relay", () => {
+  it("reads each relay's bytes from its own candidate pairs", () => {
     expect(
-      relayProvenByMedia({ mediaMoved: true, relayUrl: relayB, previousRelayUrl: relayB }),
-    ).toBe(relayB);
+      readRelayPairBytes(
+        [
+          ...pairs({ [relayA]: 1_000, [relayB]: 50 }),
+          { type: "candidate-pair", id: "D", localCandidateId: "H", bytesReceived: 9_000 },
+          { type: "local-candidate", id: "H", candidateType: "host" },
+        ],
+        "recv",
+      ),
+    ).toEqual({ [relayA]: 1_000, [relayB]: 50 });
+    expect(readRelayPairBytes(pairs({ [relayA]: 700 }, "send"), "send")).toEqual({ [relayA]: 700 });
   });
 
-  it("never takes a relay that only connected", () => {
-    expect(
-      relayProvenByMedia({ mediaMoved: false, relayUrl: relayB, previousRelayUrl: relayB }),
-    ).toBeNull();
-    expect(
-      relayProvenByMedia({ mediaMoved: false, relayUrl: relayB, previousRelayUrl: null }),
-    ).toBeNull();
-  });
-
-  it("does not credit a relay that was selected after the media moved", () => {
+  it("credits the relay whose pairs carried the media, whichever pair is selected when sampled", () => {
     expect(
       relayProvenByMedia({
-        mediaMoved: true,
-        relayUrl: relayB,
-        previousRelayUrl: "turn:127.0.0.1:30603?transport=udp",
+        mediaBytes: 90_000,
+        relayBytes: { [relayA]: 108_000, [relayB]: 770 },
+        previousRelayBytes: { [relayA]: 0, [relayB]: 770 },
+      }),
+    ).toBe(relayA);
+  });
+
+  it("never credits a relay that only connected", () => {
+    expect(
+      relayProvenByMedia({
+        mediaBytes: 0,
+        relayBytes: { [relayB]: 770 },
+        previousRelayBytes: { [relayB]: 0 },
       }),
     ).toBeNull();
   });
 
-  it("proves nothing about a relay when media moved on a direct path", () => {
+  it("credits no relay when the media went another way", () => {
     expect(
-      relayProvenByMedia({ mediaMoved: true, relayUrl: null, previousRelayUrl: null }),
+      relayProvenByMedia({
+        mediaBytes: 90_000,
+        relayBytes: { [relayB]: 1_500 },
+        previousRelayBytes: { [relayB]: 770 },
+      }),
+    ).toBeNull();
+  });
+
+  it("needs a sample before it to measure against", () => {
+    expect(
+      relayProvenByMedia({
+        mediaBytes: 90_000,
+        relayBytes: { [relayA]: 108_000 },
+        previousRelayBytes: null,
+      }),
+    ).toBeNull();
+    expect(
+      relayProvenByMedia({
+        mediaBytes: 90_000,
+        relayBytes: { [relayA]: 108_000 },
+        previousRelayBytes: {},
+      }),
     ).toBeNull();
   });
 
   it("keeps the working relay offered while a newer one has only connected", () => {
-    const relayA = { urls: "turn:127.0.0.1:30603?transport=udp", username: "a", credential: "a" };
+    const relayAServer = { urls: relayA, username: "a", credential: "a" };
     const relayBServer = { urls: relayB, username: "b", credential: "b" };
     const rotated = applyJoinAnswerToIceServers(
       {
         stun: [stun],
-        latestRelay: { servers: [relayA], expiresAt: NOW + HOUR_MS },
-        provenRelay: { servers: [relayA], expiresAt: NOW + HOUR_MS },
+        latestRelay: { servers: [relayAServer], expiresAt: NOW + HOUR_MS },
+        provenRelay: { servers: [relayAServer], expiresAt: NOW + HOUR_MS },
       },
       { iceServers: [stun, relayBServer], relayExpiresAt: NOW + HOUR_MS },
       NOW,
     );
-    const proven = relayProvenByMedia({ mediaMoved: false, relayUrl: relayB, previousRelayUrl: relayB });
+    const proven = relayProvenByMedia({
+      mediaBytes: 0,
+      relayBytes: { [relayB]: 770 },
+      previousRelayBytes: { [relayB]: 0 },
+    });
     const next = proven ? noteRelayCarryingMedia(rotated, proven) : rotated;
 
-    expect(getUsableTurnIceServers(next, NOW)).toEqual([relayBServer, relayA]);
+    expect(getUsableTurnIceServers(next, NOW)).toEqual([relayBServer, relayAServer]);
   });
 });
