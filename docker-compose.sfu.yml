@@ -1,5 +1,8 @@
 services:
   sfu-a:
+    # Named here, so the image deploy-sfu.sh tags is the one compose starts
+    # whatever compose's own naming (COMPOSE_COMPATIBILITY uses underscores).
+    image: conclave-sfu-a
     build:
       context: .
       dockerfile: packages/sfu/Dockerfile
@@ -62,6 +65,9 @@ services:
     restart: unless-stopped
 
   sfu-b:
+    # Named here, so the image deploy-sfu.sh tags is the one compose starts
+    # whatever compose's own naming (COMPOSE_COMPATIBILITY uses underscores).
+    image: conclave-sfu-b
     build:
       context: .
       dockerfile: packages/sfu/Dockerfile

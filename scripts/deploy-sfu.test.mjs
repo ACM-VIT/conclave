@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFile, execFileSync, spawn } from "node:child_process";
+import { execFile, execFileSync, spawn, spawnSync } from "node:child_process";
 import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -27,7 +27,7 @@ let beforeDrain = null;
 // seconds). Only "running" answers HTTP until a recreate. failRecreate: the
 // recreate (1st, 2nd...) at which compose fails after stopping the old
 // container. replacementHealthy: false for a build whose containers
-// never report healthy. bootExit: "exited" or "crash-looping", the state a
+// never report healthy (the image the instance started on still does). bootExit: "exited" or "crash-looping", the state a
 // container of the target image ends in right after it starts; the previous
 // image still boots. stateInspectFails: docker inspect of the container's
 // state fails. statusHealthy: false for an instance whose /status says
@@ -57,6 +57,7 @@ const startSfu = async (
     healthy: true,
     statusHealthy,
     image: onTarget ? "sha256:target" : "sha256:running",
+    firstImage: onTarget ? "sha256:target" : "sha256:running",
     configHash: onTarget ? "current-hash" : "older-hash",
     restartCount: 0,
     bootDrained: false,
@@ -99,6 +100,11 @@ const startSfu = async (
       if (request.force) sfu.rooms = 0;
       return json({ draining: sfu.draining, forced: request.force === true });
     }
+    if (url.pathname === "/stand-in/stop") {
+      events.push(`stop ${instanceId}`);
+      sfu.container = "exited";
+      return json({ ok: true });
+    }
     if (url.pathname === "/stand-in/recreate") {
       sfu.recreates.push({ roomsCut: sfu.rooms });
       events.push(`recreate ${instanceId}`);
@@ -110,9 +116,10 @@ const startSfu = async (
       sfu.container = "running";
       sfu.statusHealthy = true;
       sfu.bootDrained = url.searchParams.get("draining") === "true";
-      sfu.healthy = replacementHealthy;
       sfu.draining = url.searchParams.get("draining") === "true";
       sfu.image = url.searchParams.get("image");
+      // The image it ran before the deploy still boots healthy.
+      sfu.healthy = replacementHealthy || sfu.image === sfu.firstImage;
       sfu.configHash = "current-hash";
       if (bootExit && sfu.image === "sha256:target") sfu.container = bootExit;
       return json({ ok: true });
@@ -172,10 +179,18 @@ const main = async () => {
       tags["vm-" + rest.at(-1)] = "sha256:checkout-build";
       return fs.writeFileSync(tagsFile, JSON.stringify(tags));
     }
+    if (rest[0] === "stop") {
+      await fetch("http://127.0.0.1:" + sfus[rest.at(-1)].port + "/stand-in/stop");
+      return;
+    }
     if (rest[0] === "up") {
       const name = rest.at(-1);
       const draining = process.env.SFU_START_DRAINING === "true";
-      const image = tags["vm-" + name] || "sha256:target";
+      // COMPOSE_COMPATIBILITY=true names a build's image <project>_<service>,
+      // as Compose does, so a tag on <project>-<service> does not reach it.
+      const image = process.env.COMPOSE_COMPATIBILITY === "true"
+        ? tags["vm_" + name] || "sha256:running"
+        : tags["vm-" + name] || "sha256:target";
       const response = await fetch("http://127.0.0.1:" + sfus[name].port + "/stand-in/recreate?draining=" + draining + "&image=" + image);
       if (!response.ok) process.exitCode = 1;
       // DEPLOY_TEST_KILL_AFTER_RECREATES: kill the deploy, as a crash or a
@@ -224,6 +239,11 @@ const main = async () => {
     process.exitCode = 1;
     return;
   }
+  // A rollback-<service> tag exists only once a deploy has set it.
+  if (args[0] === "image" && args[1] === "inspect" && /:rollback-/.test(args.at(-1)) && !(args.at(-1) in tags)) {
+    process.exitCode = 1;
+    return;
+  }
   if (args[0] === "image" && args[1] === "inspect") return args[2] === "-f" ? out(tags[args.at(-1)] || "sha256:target") : undefined;
   if (args[0] === "tag") {
     tags[args[2]] = tags[args[1]] || args[1];
@@ -232,6 +252,16 @@ const main = async () => {
   // DEPLOY_TEST_NO_BUNDLE: images built before the canary bundle existed.
   if (args[0] === "run") {
     const image = args[args.indexOf("--entrypoint") + 2];
+    // DEPLOY_TEST_BAD_IMAGES: builds whose calls carry no media, so the
+    // canary fails against an instance running one of them.
+    // DEPLOY_TEST_KILL_ON_CANARY_FAILURE: the deploy is killed right then.
+    const target = Object.keys(sfus).find((name) => args.at(-1).endsWith(":" + sfus[name].port));
+    if (target && (process.env.DEPLOY_TEST_BAD_IMAGES || "").split(",").includes((await state(target)).image)) {
+      process.stderr.write("FAIL canary: zero RTP in both directions\\n");
+      if (process.env.DEPLOY_TEST_KILL_ON_CANARY_FAILURE) process.kill(process.ppid, "SIGKILL");
+      process.exitCode = 1;
+      return;
+    }
     if ((process.env.DEPLOY_TEST_NO_BUNDLE || "").split(",").includes(image)) {
       process.stderr.write("Error: Cannot find module '/app/packages/sfu/dist/canary-call.mjs'\\n");
       process.exitCode = 1;
@@ -430,7 +460,11 @@ test("an instance that is down is brought up before a healthy one is drained", a
 test("an instance that is down and whose replacement fails leaves the healthy one undrained", async () => {
   await withSfus({ "sfu-a": { rooms: 1 }, "sfu-b": { container: "exited", replacementHealthy: false } }, async (sfus) => {
     const result = await deploy(sfus);
-    assert.equal(result.code, 4, result.output);
+    // It never served on this host's record, so nothing known-good is put
+    // back into rotation: it stays stopped, and the exit says it is down.
+    assert.equal(result.code, 5, result.output);
+    assert.match(result.output, /sfu-b has no image it last served calls on; it is stopped/);
+    assert.equal(sfus["sfu-b"].container, "exited");
     assert.equal(sfus["sfu-a"].drains.length, 0);
   });
 });
@@ -1017,4 +1051,60 @@ test("the deploy runs the bundled canary from the image", async () => {
     assert.ok(canary.includes("dist/canary-call.mjs"), canary.join(" "));
     assert.ok(!canary.includes("tsx"), canary.join(" "));
   });
+});
+
+test("a deploy never falls back to a build an interrupted canary left drained", async () => {
+  // Sol's probe: revision A fails its canary and the deploy dies right then,
+  // leaving sfu-a drained on A. The next deploy, of B, fails its canary too.
+  await withSfus({ "sfu-a": {}, "sfu-b": { rooms: 1 } }, async (sfus) => {
+    const dir = await mkdtemp(path.join(tmpdir(), "deploy-fallback-"));
+    try {
+      const env = { SFU_DEPLOY_STATE_DIR: dir, DEPLOY_TEST_DOCKER_TAGS: path.join(dir, "docker-tags.json") };
+      const first = await deploy(sfus, { env: { ...env, DEPLOY_TEST_BAD_IMAGES: "sha256:target", DEPLOY_TEST_KILL_ON_CANARY_FAILURE: "1" } });
+      assert.equal(first.code, null, first.output);
+      assert.equal(sfus["sfu-a"].image, "sha256:target");
+      assert.equal(sfus["sfu-a"].draining, true);
+
+      const next = await deploy(sfus, {
+        env: { ...env, DEPLOY_TEST_NO_COMMIT_IMAGES: "1", DEPLOY_TEST_BAD_IMAGES: "sha256:target,sha256:candidate-build" },
+        upstream: { "packages/sfu/config/workerSettings.mjs": `${await readFile(path.join(scripts, "..", "packages", "sfu", "config", "workerSettings.mjs"), "utf8")}\n// a newer build\n` },
+      });
+      assert.equal(next.code, 4, next.output);
+      assert.match(next.output, /the canary call against sfu-a failed/);
+      assert.equal(sfus["sfu-a"].image, "sha256:running", "back on the image it last served calls on, never on A");
+      assert.equal(sfus["sfu-a"].draining, false);
+      assert.equal(sfus["sfu-b"].drains.length, 0);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+test("a compose that starts another image than the one tagged for the deploy fails it loudly", async () => {
+  // Sol's probe: with COMPOSE_COMPATIBILITY=true Compose names the image
+  // vm_sfu-a, so the tag on vm-sfu-a never reaches the container.
+  await withSfus({ "sfu-a": {}, "sfu-b": {} }, async (sfus) => {
+    const result = await deploy(sfus, { envLines: ["COMPOSE_COMPATIBILITY=true"] });
+    assert.notEqual(result.code, 0, result.output);
+    assert.match(result.output, /compose started sfu-[ab] on sha256:running, not the image tagged for it/);
+    assert.doesNotMatch(result.output, /SFU deploy complete/);
+  });
+});
+
+test("a canary failure whose rollback cannot bring the instance back exits 5, not 4", async () => {
+  // Sol's probe: the canary fails, then compose fails to restart the
+  // previous image, so the instance is down.
+  await withSfus({ "sfu-a": { failRecreate: 2 }, "sfu-b": { rooms: 1 } }, async (sfus) => {
+    const result = await deploy(sfus, { env: { DEPLOY_TEST_NO_BUNDLE: "sha256:target" } });
+    assert.equal(result.code, 5, result.output);
+    assert.match(result.output, /compose could not restart sfu-a on its previous image; it is down/);
+    assert.equal(sfus["sfu-a"].container, "exited");
+    assert.equal(sfus["sfu-b"].drains.length, 0);
+  });
+});
+
+test("a host bash older than 4 is refused with a message that says why", { skip: !/^3\./.test(spawnSync("/bin/bash", ["-c", "echo $BASH_VERSION"], { encoding: "utf8" }).stdout ?? "") && "needs a bash 3 at /bin/bash (macOS)" }, async () => {
+  const result = spawnSync("/bin/bash", [path.join(scripts, "deploy-sfu.sh"), "--help"], { encoding: "utf8" });
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stderr, /deploy-sfu\.sh needs bash 4 or newer; this is bash 3\./);
 });

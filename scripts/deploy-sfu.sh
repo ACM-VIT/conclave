@@ -6,8 +6,16 @@
 # touched keep serving. Runbook: docs/ops/sfu-deploys.md.
 #
 # Exit codes: 0 deployed, 3 a meeting outlasted the drain deadline (rerun
-# later), 4 the canary failed and the instance was rolled back.
+# later), 4 the canary failed and the instance is serving on its previous
+# image again, 5 the canary failed and the instance could not be brought back
+# (it is down or stopped; act now).
 set -euo pipefail
+
+# mapfile and other bash 4 features run below; macOS ships bash 3.2.
+if (( BASH_VERSINFO[0] < 4 )); then
+  echo "deploy-sfu.sh needs bash 4 or newer; this is bash ${BASH_VERSION}. On macOS, install a newer bash (brew install bash) and run the script with it." >&2
+  exit 1
+fi
 
 DEPLOY_BROWSER_LOCAL="false"
 ROLLBACK="false"
@@ -406,6 +414,7 @@ PLACEMENT_SETTLE_SECONDS="${PLACEMENT_SETTLE_SECONDS:-25}"
 # under it, and rerunning the deploy later finishes the job.
 EXIT_BLOCKED_BY_ROOMS=3
 EXIT_CANARY_FAILED=4
+EXIT_NOT_RESTORED=5
 
 PROJECT="$(printf "%s" "$COMPOSE_JSON" | json_field name)"
 IMAGE_REPO="${PROJECT}-sfu"
@@ -685,27 +694,68 @@ run_canary() {
     dist/canary-call.mjs --url "$2"
 }
 
-# Puts an instance back on the image it ran before this deploy. With no
-# previous image there is nothing known-good to return to, so it is stopped
-# rather than left serving a build that failed its canary.
+# The image ID a service's container runs, or nothing.
+container_image() {
+  local container
+  container="$(service_container "$1")" || return 0
+  [[ -n "$container" ]] || return 0
+  docker inspect -f '{{.Image}}' "$container" 2>/dev/null || true
+}
+
+# Compose starts whatever its own image name for a service points at, so after
+# every start the container must run the very image the deploy tagged there;
+# anything else (another image name, a compatibility-mode name) fails loudly.
+started_on() {
+  local svc="$1" image="$2" image_name="$3" running
+  running="$(container_image "$svc")"
+  [[ "$running" == "$image" ]] && return 0
+  echo "compose started ${svc} on ${running:-no image}, not the image tagged for it as ${image_name} (${image}); check that the compose file names ${image_name} for ${svc}" >&2
+  return 1
+}
+
+# True when an instance is serving calls right now: its own status says
+# healthy and not draining, and its container did not boot drained, as a
+# container under its canary does.
+serving_now() {
+  local container="$1" status="$2"
+  [[ -n "$container" && -n "$status" ]] || return 1
+  [[ "$(printf "%s" "$status" | json_field healthy)" == "true" ]] || return 1
+  [[ "$(printf "%s" "$status" | json_field draining)" == "false" ]] || return 1
+  ! docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$container" | grep -qx 'SFU_DRAINING=true'
+}
+
+# Puts an instance back on the image it last served calls on. It counts as
+# restored only once its container runs that image and it reports healthy
+# and not draining. With no such image there is nothing known-good to return
+# to, so it is stopped rather than left serving a build that failed its
+# canary. Returns 1 whenever the instance is not serving again.
 rollback_service() {
-  local svc="$1" url="$2" image_name="$3" previous_image="$4"
+  local svc="$1" url="$2" image_name="$3" previous_image="$4" status=""
   if [[ -z "$previous_image" ]]; then
-    "${COMPOSE[@]}" stop "$svc"
-    echo "${svc} had no previous image; it is stopped." >&2
-    return
+    "${COMPOSE[@]}" stop "$svc" || true
+    echo "ERROR: ${svc} has no image it last served calls on; it is stopped. Check it now." >&2
+    return 1
   fi
   echo "Rolling ${svc} back to its previous image..." >&2
   docker tag "$previous_image" "$image_name"
   if ! "${COMPOSE[@]}" up -d --no-build --no-deps --force-recreate "$svc"; then
     echo "ERROR: compose could not restart ${svc} on its previous image; it is down. Check it now." >&2
-    return
+    return 1
   fi
-  if wait_for_healthy "$url"; then
-    echo "${svc} is serving on its previous image again." >&2
-  else
-    echo "WARNING: ${svc} did not report healthy after the rollback; check it now." >&2
+  if ! started_on "$svc" "$previous_image" "$image_name"; then
+    echo "ERROR: ${svc} is not back on its previous image. Check it now." >&2
+    return 1
   fi
+  if ! wait_for_healthy "$url"; then
+    echo "ERROR: ${svc} did not report healthy after the rollback; check it now." >&2
+    return 1
+  fi
+  status="$(instance_status "$svc" 2>/dev/null)" || status=""
+  if [[ "$(printf "%s" "$status" | json_field draining 2>/dev/null || true)" != "false" ]]; then
+    echo "ERROR: ${svc} is back on its previous image but does not report taking meetings; check it now." >&2
+    return 1
+  fi
+  echo "${svc} is serving on its previous image again." >&2
 }
 
 # Moves one instance onto TARGET_IMAGE without cutting a call: drain it, wait
@@ -729,14 +779,15 @@ deploy_service() {
     echo "${svc} was not drained or rebuilt." >&2
     return 1
   fi
-  if [[ -n "$container" ]]; then
+  # The fallback is the image this instance last served calls on: the one it
+  # runs now when it is serving, else the one recorded the last time it was
+  # (the rollback-<service> tag, set when a deploy found it serving and when
+  # it passed a canary and served). An image that merely runs, such as a
+  # build an interrupted canary left drained, or that a stopped container
+  # last ran, is never a fallback.
+  previous_image="$(docker image inspect -f '{{.Id}}' "${IMAGE_REPO}:rollback-${svc}" 2>/dev/null || true)"
+  if serving_now "$container" "$status"; then
     previous_image="$(docker inspect -f '{{.Image}}' "$container")"
-  fi
-  # A container already on the target image that is not serving normally was
-  # left by an interrupted run, so it is not a known-good fallback; use what
-  # ran before that run.
-  if [[ "$previous_image" == "$TARGET_IMAGE" ]]; then
-    previous_image="$(docker image inspect -f '{{.Id}}' "${IMAGE_REPO}:rollback-${svc}" 2>/dev/null || true)"
   fi
   # A stopped container can outlive its image; there is nothing to return to.
   if [[ -n "$previous_image" ]] && ! docker image inspect "$previous_image" >/dev/null 2>&1; then
@@ -817,6 +868,8 @@ deploy_service() {
   local failure=""
   if ! SFU_START_DRAINING=true "${COMPOSE[@]}" up -d --no-build --no-deps --force-recreate "$svc"; then
     failure="compose could not start ${svc} on ${TARGET_COMMIT}"
+  elif ! started_on "$svc" "$TARGET_IMAGE" "$image_name"; then
+    failure="${svc} is not running ${TARGET_COMMIT}'s image"
   elif ! wait_for_healthy "$url"; then
     failure="${svc} did not report healthy within ${HEALTH_TIMEOUT_SECONDS}s"
   elif ! run_canary "$svc" "$url"; then
@@ -836,6 +889,8 @@ deploy_service() {
     # stays that way across restarts.
     if ! "${COMPOSE[@]}" up -d --no-build --no-deps --force-recreate "$svc"; then
       failure="compose could not recreate ${svc} after its canary"
+    elif ! started_on "$svc" "$TARGET_IMAGE" "$image_name"; then
+      failure="${svc} is not running ${TARGET_COMMIT}'s image after its canary"
     elif ! wait_for_healthy "$url"; then
       failure="${svc} did not come back healthy after its canary"
     fi
@@ -843,12 +898,17 @@ deploy_service() {
   if [[ -n "$failure" ]]; then
     echo "" >&2
     echo "Deploy stopped: ${failure}." >&2
-    rollback_service "$svc" "$url" "$image_name" "$previous_image"
-    echo "Instances not yet deployed were left untouched and keep serving." >&2
-    return "$EXIT_CANARY_FAILED"
+    if rollback_service "$svc" "$url" "$image_name" "$previous_image"; then
+      echo "Instances not yet deployed were left untouched and keep serving." >&2
+      return "$EXIT_CANARY_FAILED"
+    fi
+    echo "${svc} is not serving. Instances not yet deployed were left untouched and keep serving." >&2
+    return "$EXIT_NOT_RESTORED"
   fi
   VERIFIED_IMAGE="$TARGET_IMAGE"
   save_deploy_state
+  # It passed its canary and serves calls: the image to return to next time.
+  docker tag "$TARGET_IMAGE" "${IMAGE_REPO}:rollback-${svc}"
   echo "${svc} passed its canary on ${TARGET_COMMIT} and is serving."
   if ! validate_public_route "$svc" "$(service_public_url "$svc")"; then
     echo "" >&2

@@ -39,7 +39,9 @@ is recreated while it has rooms unless you pass `--force-drain`:
    is not, the deploy stops (exit 1) before this drain, because new meetings
    would have nowhere to go. An instance that is down is deployed
    first for that reason, and if its new container never gets healthy the
-   deploy stops with exit 4 before anything is drained.
+   deploy stops before anything is drained: exit 4 when the instance is back
+   on the image it last served calls on, exit 5 when it has none and stays
+   stopped.
 2. Mark the instance draining. New meetings go to the other instance; meetings
    already on this one continue.
 3. Wait until its rooms reach 0, up to `DRAIN_TIMEOUT_SECONDS` (3600), and
@@ -49,7 +51,13 @@ is recreated while it has rooms unless you pass `--force-drain`:
    as unknown, not as empty. There is no force drain unless you pass
    `--force-drain`.
 4. Recreate it from the new image with `SFU_START_DRAINING=true`, so it boots
-   out of rotation and no meeting can land on an unverified build.
+   out of rotation and no meeting can land on an unverified build. The
+   compose file names each service's image (`conclave-sfu-a`,
+   `conclave-sfu-b`, staging's `conclave-staging-sfu`), the deploy tags the
+   build there, and after every start the container must run that very
+   image ID, or the deploy stops and rolls back. Compose's own naming
+   (`COMPOSE_COMPATIBILITY` uses underscores) can never start another image
+   unnoticed.
 5. Run the canary: a real two-person call against that instance
    (`packages/sfu/scripts/canary-call.ts`, bundled at image build into
    `dist/canary-call.mjs` with its dependencies inside). It always runs from
@@ -70,9 +78,17 @@ is recreated while it has rooms unless you pass `--force-drain`:
    reach it, the deploy waits for that
    call like a drain, and at the deadline exits 3 with the instance still
    drained on the new image. Canary failed, or compose could not recreate the
-   instance at either step: recreate it from the image it ran before, stop,
-   and exit 4. The instances not yet touched were
-   never drained and keep serving.
+   instance at either step: recreate it from the image it last served calls
+   on and stop. That is the image it was serving on when this deploy found
+   it, or, when it was not serving (down, or left drained by an interrupted
+   canary), the image recorded the last time it served (the
+   `<project>-sfu:rollback-<service>` tag, set when a deploy finds it serving
+   and when it passes its canary and serves). A build that only ran, never
+   one that failed or never finished its canary, is ever a fallback. Exit 4
+   once it runs that image, reports healthy and takes meetings again; exit 5
+   when it could not be brought back (compose failed, it did not come back
+   healthy, or it has no such image and stays stopped). The instances not yet
+   touched were never drained and keep serving.
 
 An instance whose `/status`, from that instance, says healthy and undrained,
 on the target image and config, is
@@ -94,10 +110,11 @@ if it is hung, and rerun.
 | --- | --- | --- |
 | 0 | Every instance is on the new commit and passed its canary. | Nothing. |
 | 3 | A meeting outlasted the drain deadline. That instance was put back into service untouched, or, if the call reached it after its canary, left drained on the new image. | Rerun later. Instances already deployed are skipped. |
-| 4 | The canary failed. The instance is back on its previous image. | Read the canary lines in the log, fix forward, deploy again. |
+| 4 | The canary failed. The instance runs the image it last served calls on, healthy and taking meetings. | Read the canary lines in the log, fix forward, deploy again. |
+| 5 | The canary failed and the instance could not be brought back: it is down or stopped. | Act now: read the log, start it on a known-good release (`--rollback`, or fix forward and deploy). |
 | 1 | Another instance is not serving, a public URL does not reach its instance, or anything else (preflight, build, Docker). Nothing after the failing step was drained. | Read the log. |
 
-During an exit 3 or 4 the two instances can run different commits. That is the
+During an exit 3, 4 or 5 the two instances can run different commits. That is the
 same mixed state every blue-green deploy passes through, and the SFU tolerates
 it.
 
@@ -122,7 +139,7 @@ some instances (`SFU_DEPLOY_SERVICES`) keeps its target until every instance
 is back on it, so the rest can follow with another `--rollback`; likewise a
 deploy is recorded as a release only once every instance runs it. The target
 is recorded before the first instance changes, so a `--rollback` rerun after
-an exit 3, an exit 4 or a killed run finishes going to that same release.
+an exit 3, an exit 4, an exit 5 or a killed run finishes going to that same release.
 
 `--rollback` is available after two releases have gone out with this script.
 Before that, revert and deploy.
@@ -135,7 +152,8 @@ without changing anything.
 
 Run it as before: as `azureuser` in the repo, under `nohup` with a log file.
 The log ends with `SFU deploy complete`, `Deploy paused` (exit 3) or
-`Deploy stopped` (exit 4).
+`Deploy stopped` (exit 4, or 5 when the instance is not serving). The script
+needs bash 4 or newer and says so on an older one (macOS ships 3.2).
 
 ## Test it locally
 
