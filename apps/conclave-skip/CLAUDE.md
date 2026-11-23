@@ -187,6 +187,15 @@ File-reading tests are kept only for:
   (`S1ChatPhotosTests`);
 - the two media invariant guards named under Media Threading below.
 
+Swift tests never touch `UserDefaults.standard`. Concurrent test processes
+share that domain, so one test's write lands in another's read. Every API
+that takes a preferences store requires it (no `= .standard` default), and
+only the production singletons pass `UserDefaults.standard`. A test passes
+`IsolatedDefaults.make()` or builds its view model with `isolatedViewModel()`,
+and does not reach `AppState.shared`, `MeetingViewModel.shared` or the other
+singletons listed in `scripts/check-native-test-stores.mjs`. `pnpm check`
+runs that guard.
+
 ## Performance Learnings
 
 The app felt sluggish mostly because of over-broad recomposition, not because
