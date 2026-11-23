@@ -2014,6 +2014,38 @@ describe("an invited attendee a host removed from a call the server lost", () =>
   });
 });
 
+describe("an invited attendee a host lets back in after a failover", () => {
+  it("stays let in, though the SFU's own copy of the meeting never saw the removal", async () => {
+    vi.useFakeTimers({
+      toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
+    vi.setSystemTime(new Date("2026-11-22T08:00:00Z"));
+    const sfuA = makeState();
+    schedule(sfuA);
+    const sfuB = await restart(sfuA);
+    const created = await join(sfuA, host);
+    expect((await join(sfuA, invitee)).status).toBe("joined");
+    await send(created.peer, "kickUser", { userId: "invitee@example.com#i" });
+
+    // SFU A loses the call. SFU B's fresh read of the schedule finds nothing,
+    // while the recovery record brings the removal back with the call.
+    sfuB.scheduledMeetingPersistence = {
+      ...sfuB.scheduledMeetingPersistence!,
+      loadOne: () => null,
+    };
+    const hostBack = await join(sfuB, host);
+    expect(hostBack.context.currentClient).toBeInstanceOf(Admin);
+    expect((await join(sfuB, invitee)).status).toBe("waiting");
+    expect(await send(hostBack.peer, "admitUser", { userId: "invitee@example.com" })).toEqual({
+      success: true,
+    });
+
+    const later = await restart(sfuB);
+    await join(later, host);
+    expect((await join(later, invitee)).status).toBe("joined");
+  });
+});
+
 describe("an invited attendee removed on one SFU", () => {
   it("still has to be let in again on the SFU the meeting fails over to", async () => {
     // Both SFUs use one schedule store. B loaded the meeting when it started,

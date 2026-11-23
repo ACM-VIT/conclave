@@ -521,8 +521,9 @@ export const setScheduledInviteeReadmission = (
   if (!meeting) return null;
   if (meeting.hostEmail !== email && meeting.attendeeEmail !== email) return null;
   const marked = meeting.readmissionRequiredEmails ?? [];
-  if (marked.includes(email) === required) return null;
-  meeting.readmissionRequiredEmails = withInvitee(marked, email, required);
+  if (marked.includes(email) !== required) {
+    meeting.readmissionRequiredEmails = withInvitee(marked, email, required);
+  }
   return meeting;
 };
 

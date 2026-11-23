@@ -140,18 +140,18 @@ const bindScheduledInvitations = (state: SfuState, room: Room): void => {
     room.requireReadmission(email);
   }
   room.onReadmissionChange = (userKey, required) => {
-    const changed = setScheduledInviteeReadmission(
+    const decided = setScheduledInviteeReadmission(
       state.scheduledMeetings,
       room.clientId,
       room.id,
       userKey,
       required,
     );
-    if (!changed || !state.scheduledMeetingPersistence) return;
+    if (!decided || !state.scheduledMeetingPersistence) return;
     persistInviteeReadmission(
       state.scheduledMeetings,
       state.scheduledMeetingPersistence,
-      changed,
+      decided,
       userKey,
       required,
     ).catch((error) => {
