@@ -32,6 +32,7 @@ interface MeetingAppLayoutProps {
   onRetrySync?: () => void;
   rejectedChangeAt?: number | null;
   frozen?: boolean;
+  documentsVersion?: number;
 }
 
 const REJECTED_CHANGE_NOTICE_MS = 4_000;
@@ -59,6 +60,7 @@ function MeetingAppLayout({
   onRetrySync,
   rejectedChangeAt = null,
   frozen = false,
+  documentsVersion,
 }: MeetingAppLayoutProps) {
   const [noticeFor, setNoticeFor] = useState<number | null>(null);
 
@@ -127,7 +129,7 @@ function MeetingAppLayout({
           }
         >
           <div inert={frozen} className="contents">
-            <App />
+            <App key={documentsVersion} />
           </div>
           {noticeFor !== null && noticeFor === rejectedChangeAt ? <AdminNoticePill notice={REJECTED_CHANGE_NOTICE} compact /> : null}
         </div>

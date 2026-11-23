@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import ReactPlayer from "react-player";
+import type * as Y from "yjs";
 import { useApps } from "../../../../sdk/hooks/useApps";
 import { useAppDoc } from "../../../../sdk/hooks/useAppDoc";
 import {
@@ -37,8 +38,17 @@ import { WatchQueue } from "./WatchQueue";
 const CONTROLS_IDLE_MS = 2600;
 
 export function WatchWebApp() {
-  const { user, isAdmin, isReadOnly: appReadOnly, setLocked } = useApps();
+  const { user, isAdmin, isReadOnly: appReadOnly, setLocked, documents } = useApps();
   const { doc, locked, awareness } = useAppDoc("watch");
+  const saveTitleWhenKnown = useCallback(
+    (videoId: string, save: (live: Y.Doc, title: string) => void) => {
+      void fetchVideoTitle(videoId).then((title) => {
+        const live = documents.current("watch");
+        if (title && live) save(live, title);
+      });
+    },
+    [documents],
+  );
   const isReadOnly = Boolean(appReadOnly) || (locked && !isAdmin);
   const canRequest = !appReadOnly && locked && !isAdmin;
 
@@ -104,9 +114,7 @@ export function WatchWebApp() {
           title: knownTitle ?? null,
         });
         if (!knownTitle) {
-          void fetchVideoTitle(nextVideoId).then((title) => {
-            if (title) setVideoTitle(doc, nextVideoId, title);
-          });
+          saveTitleWhenKnown(nextVideoId, (live, title) => setVideoTitle(live, nextVideoId, title));
         }
         return;
       }
@@ -116,12 +124,10 @@ export function WatchWebApp() {
         { userId: user?.id ?? null, userName: user?.name ?? null },
       );
       if (!knownTitle) {
-        void fetchVideoTitle(nextVideoId).then((title) => {
-          if (title) setQueueItemTitle(doc, item.id, title);
-        });
+        saveTitleWhenKnown(nextVideoId, (live, title) => setQueueItemTitle(live, item.id, title));
       }
     },
-    [doc, isReadOnly, user?.id, user?.name],
+    [doc, isReadOnly, user?.id, user?.name, saveTitleWhenKnown],
   );
 
   const handleStart = useCallback(
@@ -137,12 +143,10 @@ export function WatchWebApp() {
         title: knownTitle ?? null,
       });
       if (!knownTitle) {
-        void fetchVideoTitle(nextVideoId).then((title) => {
-          if (title) setVideoTitle(doc, nextVideoId, title);
-        });
+        saveTitleWhenKnown(nextVideoId, (live, title) => setVideoTitle(live, nextVideoId, title));
       }
     },
-    [doc, handleAdd, isReadOnly],
+    [doc, handleAdd, isReadOnly, saveTitleWhenKnown],
   );
 
   const handleRemove = useCallback(
@@ -159,12 +163,10 @@ export function WatchWebApp() {
       const item = queue.find((entry) => entry.id === itemId);
       playQueueItemNow(doc, itemId);
       if (item && !item.title) {
-        void fetchVideoTitle(item.videoId).then((title) => {
-          if (title) setVideoTitle(doc, item.videoId, title);
-        });
+        saveTitleWhenKnown(item.videoId, (live, title) => setVideoTitle(live, item.videoId, title));
       }
     },
-    [doc, isReadOnly, queue],
+    [doc, isReadOnly, queue, saveTitleWhenKnown],
   );
 
   const handleMove = useCallback(
@@ -212,12 +214,10 @@ export function WatchWebApp() {
         { userId: request.byId, userName: request.byName },
       );
       if (!request.title) {
-        void fetchVideoTitle(request.videoId).then((title) => {
-          if (title) setQueueItemTitle(doc, item.id, title);
-        });
+        saveTitleWhenKnown(request.videoId, (live, title) => setQueueItemTitle(live, item.id, title));
       }
     },
-    [doc],
+    [doc, saveTitleWhenKnown],
   );
 
   const declineRequest = useCallback(

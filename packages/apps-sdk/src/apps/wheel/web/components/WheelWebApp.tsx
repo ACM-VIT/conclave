@@ -174,13 +174,10 @@ export function WheelWebApp() {
 
   const handleSettled = useCallback(
     (settled: WheelSpin, fresh: boolean) => {
-      if (!fresh) return;
       const winner = settled.entries[settled.winnerIndex];
       if (!winner) return;
-
-      setAnnouncement(`Winner: ${winner.label}`);
-
       const isSpinner = Boolean(user?.id) && user?.id === settled.spunById;
+      const recorded = () => getHistory(doc).some((result) => result.spinId === settled.spinId);
       const finalizeResult = () => {
         recordResult(doc, {
           spinId: settled.spinId,
@@ -192,14 +189,18 @@ export function WheelWebApp() {
           removeEntryById(doc, winner.id);
         }
       };
+      if (!fresh) {
+        if (isSpinner && canEditRef.current && !recorded()) finalizeResult();
+        return;
+      }
+
+      setAnnouncement(`Winner: ${winner.label}`);
+
       if (!isSpinner && canEditRef.current) {
         const jitteredDelay = RESULT_FAILOVER_MS + Math.random() * 900;
         failoverTimerRef.current = setTimeout(() => {
           failoverTimerRef.current = null;
-          const recorded = getHistory(doc).some(
-            (result) => result.spinId === settled.spinId
-          );
-          if (!recorded && canEditRef.current) finalizeResult();
+          if (!recorded() && canEditRef.current) finalizeResult();
         }, jitteredDelay);
       }
 

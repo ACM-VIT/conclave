@@ -748,9 +748,15 @@ export function AppsProvider({
     });
   }, []);
 
+  const currentDoc = useCallback(
+    (appId: string): Y.Doc | null =>
+      staleAppsRef.current.has(appId) ? null : (docsRef.current.get(appId) ?? null),
+    []
+  );
+
   const documents = useMemo<AppDocuments>(
-    () => ({ version: docsVersion, doc: getDoc, awareness: getAwareness }),
-    [docsVersion, getDoc, getAwareness]
+    () => ({ version: docsVersion, doc: getDoc, awareness: getAwareness, current: currentDoc }),
+    [docsVersion, getDoc, getAwareness, currentDoc]
   );
 
   const contextValue = useMemo<AppsContextValue>(

@@ -608,6 +608,7 @@ export default function MeetsMainContent({
     retrySync: retryAppSync,
     rejectedChangeAt: rejectedAppChangeAt,
     isRebuilding: isAppRebuilding,
+    documents: appDocuments,
   } = useApps();
   const { isActive: isGameActive, refresh: refreshGameState } = useGame();
   const [isGamesOpen, setIsGamesOpen] = useState(false);
@@ -2358,6 +2359,7 @@ export default function MeetsMainContent({
           onRetrySync={retryAppSync}
           rejectedChangeAt={rejectedAppChangeAt}
           frozen={isAppRebuilding}
+          documentsVersion={appDocuments.version}
           leaveAction={isWatchActive ? watchLeaveAction : undefined}
           localStream={localStream}
           isCameraOff={isCameraOff}

@@ -37,6 +37,7 @@ export type AppDocuments = {
   version: number;
   doc: (appId: string) => Y.Doc;
   awareness: (appId: string) => Awareness;
+  current: (appId: string) => Y.Doc | null;
 };
 
 export type AppsUpdatePayload = {
