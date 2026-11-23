@@ -35,6 +35,7 @@ export function useMeetState({ initialRoomId }: UseMeetStateOptions) {
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [activeSpeakerId, setActiveSpeakerId] = useState<string | null>(null);
   const [meetError, setMeetError] = useState<MeetError | null>(null);
+  const [mediaError, setMediaError] = useState<MeetError | null>(null);
   const [waitingMessage, setWaitingMessage] = useState<string | null>(null);
   const [pendingUsers, setPendingUsers] = useState<Map<string, string>>(
     new Map(),
@@ -115,6 +116,8 @@ export function useMeetState({ initialRoomId }: UseMeetStateOptions) {
     setActiveSpeakerId,
     meetError,
     setMeetError,
+    mediaError,
+    setMediaError,
     waitingMessage,
     setWaitingMessage,
     pendingUsers,

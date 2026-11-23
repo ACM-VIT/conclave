@@ -12,6 +12,7 @@ import {
   Leaderboard,
 } from "./gameUi";
 import { getGameRenderer } from "./registry";
+import PanelNoticeSlot from "../PanelNoticeSlot";
 
 type ScoreRow = { id: string; name: string; score: number };
 
@@ -121,6 +122,7 @@ export function GamePanel({
         ) : null}
       </div>
 
+      <PanelNoticeSlot />
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
         {!Game ? (
           <p style={{ fontSize: 13, color: color.textFaint }}>
