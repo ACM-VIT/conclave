@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  TRANSCRIPTION_COMMIT_ACK_TIMEOUT_MS as COMMIT_ACK_TIMEOUT,
   TRANSCRIPTION_GAP_MARKER as GAP,
   TRANSCRIPTION_LINE_DEADLINE_MS as DEADLINE,
+  TRANSCRIPTION_RECOVERY_MAX_AUDIO_BYTES as REPLAY_AUDIO_LIMIT,
 } from "../transcript-worker/src/constants";
 import { Pcm24To16Downsampler } from "../transcript-worker/src/transcription/sarvam";
 import {
@@ -21,6 +23,11 @@ import {
 } from "./transcript-room-rig";
 
 const { lookup } = vi.hoisted(() => ({ lookup: vi.fn() }));
+const { SPEECH_CHUNK_BYTES, FLOOD_CHUNKS } = vi.hoisted(() => ({ SPEECH_CHUNK_BYTES: 12_800, FLOOD_CHUNKS: 120 }));
+vi.mock("../transcript-worker/src/constants", async (original) => ({
+  ...(await original<typeof import("../transcript-worker/src/constants")>()),
+  TRANSCRIPTION_RECOVERY_MAX_AUDIO_BYTES: FLOOD_CHUNKS * SPEECH_CHUNK_BYTES,
+}));
 vi.mock("@conclave/ai/room-server", async (original) => ({
   ...(await original<typeof import("@conclave/ai/room-server")>()),
   fetchRoomAiEnvironment: lookup,
@@ -835,6 +842,85 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
       return utterance;
     };
 
+    const roomCommitQueue = () =>
+      (harness.room as unknown as { liveConnection: { commitQueue: { committedAt: number }[] } | null }).liveConnection
+        ?.commitQueue ?? [];
+    /** The live connection fails: its socket drops, or the ack watchdog gives up on it. */
+    const failLive = async (cause: "drop" | "ackTimeout", handOffTo?: Provider) => {
+      if (live.dead) return;
+      const failed = live;
+      if (cause === "ackTimeout") {
+        const head = roomCommitQueue()[0];
+        if (!head) return;
+        await vi.advanceTimersByTimeAsync(Math.max(0, head.committedAt + COMMIT_ACK_TIMEOUT - Date.now()));
+      }
+      const owed = [...failed.awaiting]
+        .filter(({ noise, deadlineAt }) => !noise && Date.now() < deadlineAt!)
+        .sort((left, right) => left.index - right.index);
+      const unacknowledged = [...failed.unacknowledged];
+      const picked = handOffTo
+        ? "unreachable"
+        : cause === "drop"
+          ? pick(["plain", "plain", "midReplay", "unreachable"] as const)
+          : "plain";
+      const kind = picked === "midReplay" && owed.length + unacknowledged.length === 0 ? "plain" : picked;
+      if (kind === "midReplay") connectPlans.push(1);
+      if (kind === "unreachable") connectPlans.push("unreachable");
+      if (cause === "drop") failed.socket.disconnect();
+      await settle();
+      failed.dead = true;
+      failed.awaiting = failed.awaiting.filter((utterance) => !owed.includes(utterance));
+      failed.unacknowledged = [];
+      const buffered: Utterance[] = [];
+      if (kind === "unreachable") {
+        while (random() < 0.5) {
+          const utterance = newUtterance(false);
+          buffered.push(utterance);
+          await speak(utterance.speaker);
+          await endTurn(utterance.speaker);
+        }
+        if (handOffTo || random() < 0.4) {
+          if (handOffTo || random() < 0.4) {
+            provider = handOffTo ?? (provider === "openai" ? "sarvam" : "openai");
+            useModel(model(provider));
+          }
+          await switchTo(pick(LANGUAGES[provider]));
+        } else {
+          await vi.advanceTimersByTimeAsync(300);
+        }
+      } else if (kind === "midReplay") {
+        await vi.advanceTimersByTimeAsync(300);
+      }
+      await settle();
+      live = connect();
+      const now = Date.now();
+      for (const utterance of [...owed, ...unacknowledged]) {
+        utterance.claiming = true;
+        utterance.lost = false;
+        utterance.deadlineAt = now + DEADLINE;
+      }
+      for (const utterance of buffered) {
+        utterance.placedAt = now;
+        utterance.deadlineAt = now + DEADLINE;
+      }
+      const replayed = [...owed, ...unacknowledged, ...buffered].sort((left, right) => left.index - right.index);
+      for (const utterance of replayed) utterance.connection = live;
+      const replayedChunks = replayed.reduce((sum, { chunks }) => sum + chunks, 0);
+      const sent = live.socket.sent;
+      if (live.provider === "openai") {
+        const commits = sent.filter(({ type }) => type === "input_audio_buffer.commit").length;
+        const speech = sent.filter((message) => audioOf(message) === AUDIO.speech).length;
+        expect(commits, "every owed line's audio is replayed with its commit").toBe(replayed.length);
+        expect(speech, "no line's replay audio was dropped by another line ending").toBe(replayedChunks);
+        live.unacknowledged = replayed;
+      } else {
+        const speech = sent.filter((message) => audioOf(message) === sarvamSpeechPayload).length;
+        expect(speech, "no line's replay audio was dropped by another line ending").toBe(replayedChunks);
+        if (sarvamSignalsSpeech) for (const _ of replayed) signalSpeech(live);
+        live.awaiting = replayed;
+      }
+    };
+
     const moves: Record<string, () => Promise<void>> = {
       async utter() {
         const utterance = newUtterance(false);
@@ -849,11 +935,20 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
         if (sarvamSignalsSpeech) signalSpeech(live);
         place(utterance);
         live.awaiting.push(utterance);
-        if (live.awaiting.length === 1 && !live.stalled && random() < 0.25) {
+        const tail = sarvamSignalsSpeech && random() < 0.3;
+        if (tail) {
+          await vi.advanceTimersByTimeAsync(200);
+          await speak(utterance.speaker);
+          utterance.chunks += 1;
+          utterance.deadlineAt = Date.now() + DEADLINE;
+        }
+        if (live.awaiting.length === 1 && !live.stalled && random() < (tail ? 0.6 : 0.25)) {
           live.awaiting.shift();
           utterance.final = "shown";
           live.socket.emit(sarvamFinal(utterance.itemId, utterance.text));
           await settle();
+        } else if (tail) {
+          live.socket.emit(sarvamSpeechEnd());
         }
         await endTurn(utterance.speaker);
       },
@@ -1049,69 +1144,53 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
         live = connect();
       },
       async disconnect() {
-        if (live.dead) return;
-        const failed = live;
-        const owed = [...failed.awaiting]
-          .filter(({ noise, deadlineAt }) => !noise && Date.now() < deadlineAt!)
-          .sort((left, right) => left.index - right.index);
-        const unacknowledged = [...failed.unacknowledged];
-        const picked = pick(["plain", "plain", "midReplay", "unreachable"] as const);
-        const kind = picked === "midReplay" && owed.length + unacknowledged.length === 0 ? "plain" : picked;
-        if (kind === "midReplay") connectPlans.push(1);
-        if (kind === "unreachable") connectPlans.push("unreachable");
-        failed.socket.disconnect();
-        await settle();
-        failed.dead = true;
-        failed.awaiting = failed.awaiting.filter((utterance) => !owed.includes(utterance));
-        failed.unacknowledged = [];
-        const buffered: Utterance[] = [];
-        if (kind === "unreachable") {
-          while (random() < 0.5) {
-            const utterance = newUtterance(false);
-            buffered.push(utterance);
-            await speak(utterance.speaker);
-            await endTurn(utterance.speaker);
-          }
-          if (random() < 0.4) {
-            if (random() < 0.4) {
-              provider = provider === "openai" ? "sarvam" : "openai";
-              useModel(model(provider));
-            }
-            await switchTo(pick(LANGUAGES[provider]));
-          } else {
-            await vi.advanceTimersByTimeAsync(300);
-          }
-        } else if (kind === "midReplay") {
-          await vi.advanceTimersByTimeAsync(300);
+        await failLive("drop");
+      },
+      async handOffToSarvam() {
+        if (live.provider !== "openai" || live.dead) return moves.utter();
+        await failLive("drop", "sarvam");
+      },
+      async ackTimeout() {
+        if (live.provider !== "openai" || live.dead) return moves.utter();
+        const utterance = newUtterance(false);
+        await speak(utterance.speaker);
+        await commit(utterance.speaker);
+        place(utterance);
+        live.unacknowledged.push(utterance);
+        const opened = providerSockets().length;
+        await failLive("ackTimeout");
+        expect(providerSockets(), "the ack watchdog reconnects a provider that stopped acknowledging").toHaveLength(opened + 1);
+      },
+      async whisper() {
+        if (live.provider !== "openai") return moves.utter();
+        const utterance = newUtterance(false);
+        utterance.chunks = 0;
+        await sendAudio("whisper", utterance.speaker);
+        await commit(utterance.speaker);
+        place(utterance);
+        live.unacknowledged.push(utterance);
+        acknowledgeLive();
+        utterance.partial = `${utterance.text} so far`;
+        live.socket.emit(openAiDelta(utterance.itemId, utterance.partial));
+      },
+      async flood() {
+        if (live.provider !== "openai" || harness.heldAudioBytes() > 0) return moves.utter();
+        expect(AUDIO.speech.length).toBe(SPEECH_CHUNK_BYTES);
+        const utterance = newUtterance(false);
+        for (let index = 0; index < FLOOD_CHUNKS + 10; index += 1) {
+          await speak(utterance.speaker);
+          await vi.advanceTimersByTimeAsync(20);
         }
-        await settle();
-        live = connect();
-        const now = Date.now();
-        for (const utterance of [...owed, ...unacknowledged]) {
-          utterance.claiming = true;
-          utterance.lost = false;
-          utterance.deadlineAt = now + DEADLINE;
-        }
-        for (const utterance of buffered) {
-          utterance.placedAt = now;
-          utterance.deadlineAt = now + DEADLINE;
-        }
-        const replayed = [...owed, ...unacknowledged, ...buffered].sort((left, right) => left.index - right.index);
-        for (const utterance of replayed) utterance.connection = live;
-        const replayedChunks = replayed.reduce((sum, { chunks }) => sum + chunks, 0);
-        const sent = live.socket.sent;
-        if (live.provider === "openai") {
-          const commits = sent.filter(({ type }) => type === "input_audio_buffer.commit").length;
-          const speech = sent.filter((message) => audioOf(message) === AUDIO.speech).length;
-          expect(commits, "every owed line's audio is replayed with its commit").toBe(replayed.length);
-          expect(speech, "no line's replay audio was dropped by another line ending").toBe(replayedChunks);
-          live.unacknowledged = replayed;
-        } else {
-          const speech = sent.filter((message) => audioOf(message) === sarvamSpeechPayload).length;
-          expect(speech, "no line's replay audio was dropped by another line ending").toBe(replayedChunks);
-          if (sarvamSignalsSpeech) for (const _ of replayed) signalSpeech(live);
-          live.awaiting = replayed;
-        }
+        expect(harness.heldAudioBytes(), "a relay that never commits stays within the replay audio limit").toBeLessThanOrEqual(
+          REPLAY_AUDIO_LIMIT,
+        );
+        await commit(utterance.speaker);
+        place(utterance);
+        live.unacknowledged.push(utterance);
+        acknowledgeLive();
+        live.awaiting.splice(live.awaiting.indexOf(utterance), 1);
+        utterance.final = "shown";
+        live.socket.emit(openAiFinal(utterance.itemId, utterance.text));
       },
       async lateAck() {
         if (live.provider !== "openai" || live.dead || live.unacknowledged.length === 0) return;
@@ -1164,6 +1243,18 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
           viewer.segments.map(({ itemId, text }) => [itemId, text]),
           "a viewer shows exactly what the room saved",
         ).toEqual(harness.room.segments.map(({ itemId, text }) => [itemId, text]));
+        const joined = (await harness.viewerSnapshot()) as {
+          segments: { itemId: string; text: string }[];
+          partials: { itemId: string; text: string }[];
+        };
+        expect(
+          joined.segments.map(({ itemId, text }) => [itemId, text]),
+          "a viewer that joins now sees every line other viewers see",
+        ).toEqual(viewer.segments.map(({ itemId, text }) => [itemId, text]));
+        expect(
+          new Map(joined.partials.map(({ itemId, text }) => [itemId, text])),
+          "and the same words in progress",
+        ).toEqual(new Map(Array.from(viewer.partials.values(), ({ itemId, text }) => [itemId, text])));
         const placed = real().filter(({ placedAt }) => placedAt !== null);
         const saved = await harness.restartedSegments();
         expect(
@@ -1186,6 +1277,10 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
       ["lateTurns", 3],
       ["lateEnd", 3],
       ["cough", 2],
+      ["whisper", 4],
+      ["flood", 3],
+      ["ackTimeout", 3],
+      ["handOffToSarvam", 3],
       ["turnPair", 4],
       ["lateAck", 3],
       ["itemFails", 3],
