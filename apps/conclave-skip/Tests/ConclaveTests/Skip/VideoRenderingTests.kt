@@ -53,6 +53,7 @@ private class RecordingBackend(private val eglLock: Any = Any()) : VideoRenderBa
     @Volatile private var stalledBind: CountDownLatch? = null
     @Volatile private var stalledUnbind: CountDownLatch? = null
     @Volatile private var stalledSizeQuery: CountDownLatch? = null
+    @Volatile private var stalledCreate: CountDownLatch? = null
     private val stalled = CountDownLatch(1)
     val unbound: MutableList<Any> = Collections.synchronizedList(mutableListOf())
     @Volatile var stopped = false
@@ -79,6 +80,7 @@ private class RecordingBackend(private val eglLock: Any = Any()) : VideoRenderBa
             return null
         }
         calls.add("create")
+        stallOn(stalledCreate) { stalledCreate = null }
         sizeOfTheNextSurface?.let { size ->
             width = size.first
             height = size.second
@@ -165,6 +167,7 @@ private class RecordingBackend(private val eglLock: Any = Any()) : VideoRenderBa
     fun stallNextBind(): CountDownLatch = CountDownLatch(1).also { stalledBind = it }
     fun stallNextUnbind(): CountDownLatch = CountDownLatch(1).also { stalledUnbind = it }
     fun stallNextSizeQuery(): CountDownLatch = CountDownLatch(1).also { stalledSizeQuery = it }
+    fun stallNextCreate(): CountDownLatch = CountDownLatch(1).also { stalledCreate = it }
 
     fun awaitStall() {
         assertTrue("the render thread never reached the stall", stalled.await(5, TimeUnit.SECONDS))
@@ -1237,7 +1240,7 @@ class VideoRenderingTests {
         host.surfaceDestroyed(host.holder)
         gate.countDown()
         backend.settle()
-        assertEquals("the render thread touched a window after its surfaceDestroyed returned", listOf<String>(), backend.calls.toList())
+        assertEquals("ADR 0022: the render thread touched a window after its surfaceDestroyed returned", listOf<String>(), backend.calls.toList())
     }
 
     @Test fun aDrawPausedBetweenTwoWindowCallsStopsOnceTheCallbackHasReturned() {
@@ -1250,7 +1253,22 @@ class VideoRenderingTests {
         host.surfaceDestroyed(host.holder)
         stall.countDown()
         backend.settle()
-        assertEquals("the render thread drew into a window after its surfaceDestroyed returned",
+        assertEquals("ADR 0022: the render thread drew into a window after its surfaceDestroyed returned",
+            listOf("create", "destroy surface-1"), backend.calls.toList())
+        assertEveryFrameGivenBack()
+    }
+
+    @Test fun aSurfaceStillBeingCreatedWhenTheWaitRunsOutIsDestroyedAsSoonAsItExists() {
+        val host = surfaceHost(detachWait = VideoDetachWait(limitMillis = 100, windowMillis = 60_000))
+        val stall = backend.stallNextCreate()
+        host.surfaceAvailable("window")
+        host.sink.onFrame(frame())
+        backend.awaitStall()
+        host.surfaceDestroyed(host.holder)
+        assertEquals(listOf("create"), backend.calls.toList())
+        stall.countDown()
+        backend.settle()
+        assertEquals("ADR 0022: a surface created after the callback returned was used or kept",
             listOf("create", "destroy surface-1"), backend.calls.toList())
         assertEveryFrameGivenBack()
     }
