@@ -161,6 +161,7 @@ export interface InCallNoticeLane {
   compact: boolean;
   expanded: boolean;
   announce: (text: string, tone: "error" | "warning" | "neutral") => () => void;
+  probe: HTMLElement | null;
 }
 
 export const InCallNoticeLaneContext = createContext<InCallNoticeLane | null>(null);

@@ -246,6 +246,41 @@ describe("in-call notices", () => {
     expect(sheet()?.querySelector('[aria-live="polite"]')?.textContent).toBe("");
   });
 
+  it("settles within a couple of frames in chip mode through a notice change and a resize storm", async () => {
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(60);
+    let height = 20;
+    let width = 366;
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(() => height);
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (this: HTMLElement) {
+      return /\babsolute\b/.test(this.className) ? width + 24 : width;
+    });
+    const notices = (first: string) =>
+      [first, "You’re offline", "Audio-only mode is on"].map((text, index) => (
+        <InCallNotice key={index} show>
+          <InCallNoticeCard tone={index === 0 ? "error" : "neutral"} icon={Headphones} title={text} detail="Check your settings." />
+        </InCallNotice>
+      ));
+    await render(notices("Camera is blocked"));
+    await waitOutExit();
+    expect(slot()?.getAttribute("data-lane-mode")).toBe("chip");
+
+    await render(notices("Camera didn’t respond"));
+    for (let step = 0; step < 12; step++) {
+      width = 340 + (step % 4) * 10;
+      height = 16 + (step % 3) * 4;
+      await act(async () => {
+        container.dispatchEvent(new Event("transitionend"));
+        await new Promise((resolve) => setTimeout(resolve, 8));
+      });
+    }
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 200)));
+    expect(slot()?.getAttribute("data-lane-mode")).toBe("chip");
+
+    const frames = vi.spyOn(window, "requestAnimationFrame");
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 500)));
+    expect(frames.mock.calls.length).toBeLessThanOrEqual(2);
+  });
+
   it("keeps a collapsed error collapsed when it moves into an opened phone panel", async () => {
     const meetError = { code: "PERMISSION_DENIED" as const, message: "Camera is blocked", recoverable: true, device: "camera" as const };
     const banner = (overPanel: boolean) => (

@@ -61,7 +61,6 @@ interface LaneState {
   room: number;
   narrow?: { left: number; width: number };
   cramped?: boolean;
-  probing?: boolean;
   chip?: { left: number; top: number; urgent: boolean };
 }
 
@@ -75,7 +74,6 @@ const sameLane = (a: LaneState, b: LaneState) =>
   a.narrow?.left === b.narrow?.left &&
   a.narrow?.width === b.narrow?.width &&
   a.cramped === b.cramped &&
-  a.probing === b.probing &&
   a.chip?.left === b.chip?.left &&
   a.chip?.top === b.chip?.top &&
   a.chip?.urgent === b.chip?.urgent;
@@ -88,8 +86,8 @@ const narrowLane = (
     ? undefined
     : { left: Math.round(placement.left - padLeft), width: Math.round(placement.right - placement.left) };
 
-const noticeContent = (item: Element) =>
-  item.querySelector("[data-notice-content]")?.getAttribute("data-notice-content") ?? "";
+const roundRect = ({ left, right, top, bottom }: LaneObstacle) =>
+  [left, right, top, bottom].map(Math.round);
 
 function layoutStack(list: HTMLElement, items: HTMLElement[], heights: number[], expanded: boolean) {
   if (expanded || items.length <= 1) {
@@ -210,11 +208,8 @@ export default function InCallNoticeSlot({
 }: InCallNoticeSlotProps) {
   const slotRef = useRef<HTMLDivElement>(null);
   const columnRef = useRef<HTMLDivElement>(null);
-  const rowRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const sheetRef = useRef<HTMLDialogElement>(null);
-  const fullHeightsRef = useRef(new WeakMap<Element, { key: string; height: number }>());
-  const listHeightsRef = useRef(new Map<string, number>());
   const refocusRef = useRef(false);
   const [host, setHost] = useState<HTMLDivElement | null>(null);
   const [lane, setLane] = useState<LaneState>(EMPTY_LANE);
@@ -224,6 +219,7 @@ export default function InCallNoticeSlot({
   );
   const [panelTarget, setPanelTarget] = useState<HTMLElement | null>(null);
   const [sheetBody, setSheetBody] = useState<HTMLDivElement | null>(null);
+  const [probe, setProbe] = useState<HTMLDivElement | null>(null);
   const laneRef = useRef(lane);
   laneRef.current = lane;
   const viewRef = useRef(view);
@@ -274,10 +270,10 @@ export default function InCallNoticeSlot({
   useLayoutEffect(() => {
     const slot = slotRef.current;
     const column = columnRef.current;
-    const row = rowRef.current;
     const list = listRef.current;
-    if (!slot || !column || !row || !list) return;
+    if (!slot || !column || !list || !probe) return;
 
+    let lastInputs = "";
     const commit = (next: LaneState) => {
       if (next.count === 0) setView("stack");
       else if (next.count === 1) setView((current) => (current === "list" ? "stack" : current));
@@ -285,52 +281,64 @@ export default function InCallNoticeSlot({
     };
     const openSheet = () => setView("sheet");
 
+    const fullHeights = (items: HTMLElement[], width: number) => {
+      probe.style.width = `${width}px`;
+      const twins = new Map<string, number>();
+      for (const twin of probe.children) {
+        const id = twin.getAttribute("data-notice-twin");
+        if (id) twins.set(id, (twin as HTMLElement).offsetHeight);
+      }
+      return items.map((item) => {
+        const id = item.querySelector("[data-notice-id]")?.getAttribute("data-notice-id");
+        return (id ? twins.get(id) : undefined) ?? item.offsetHeight;
+      });
+    };
+    const listSpan = (heights: number[]) =>
+      heights.reduce((sum, height) => sum + height, 0) + NOTICE_GAP_PX * (heights.length - 1);
+
     const measure = () => {
       const items = [...list.children] as HTMLElement[];
       const count = items.length;
       if (count === 0) {
         list.style.height = "0px";
+        lastInputs = "";
         commit(EMPTY_LANE);
         return;
       }
       for (const item of items) item.style.height = "";
-      const heights = items.map((item) => item.offsetHeight);
       const currentView = viewRef.current;
       const showsList = currentView === "sheet" || (currentView === "list" && count > 1);
-      layoutStack(list, items, heights, showsList);
+      layoutStack(list, items, items.map((item) => item.offsetHeight), showsList);
       if (currentView === "sheet") {
+        lastInputs = "";
         commit({ compact: false, offset: 0, count, room: 0 });
         return;
       }
 
       const peekSpace = Math.min(MAX_PEEKS, count - 1) * PEEK_STEP_PX;
       const footerSpace = count > 1 ? TOGGLE_HEIGHT_PX : 0;
-      const listHeight =
-        heights.reduce((sum, height) => sum + height, 0) + NOTICE_GAP_PX * (count - 1);
-
       const urgent = items.some((item) => item.querySelector('[data-tone="error"]'));
       const slotRect = slot.getBoundingClientRect();
-      const listContent = items.map(noticeContent).join("|");
-      const listHeights = listHeightsRef.current;
-      if (showsList && !laneRef.current.cramped) {
-        for (const key of listHeights.keys()) {
-          if (!key.endsWith(`:${listContent}`)) listHeights.delete(key);
-        }
-        listHeights.set(`${Math.round(row.clientWidth)}:${listContent}`, listHeight);
-      }
-      const fullListHeight = (width: number) => listHeights.get(`${Math.round(width)}:${listContent}`);
-      const probeFullList = () =>
-        commit({ ...laneRef.current, cramped: false, narrow: undefined, probing: true, count });
-
       const target = panelTargetRef.current;
+
       if (target) {
         const inPanel = panelRoom(target);
+        const targetStyle = getComputedStyle(target);
+        const laneWidth = Math.min(
+          MAX_LANE_WIDTH_PX,
+          (target.parentElement?.clientWidth ?? 0) -
+            (parseFloat(targetStyle.paddingLeft) || 0) -
+            (parseFloat(targetStyle.paddingRight) || 0),
+        );
+        const heights = fullHeights(items, laneWidth);
+        const obstacles = showsList || inPanel.room >= COMPACT_HEIGHT_PX + peekSpace
+          ? []
+          : collectObstacles(slot, slotRect, inPanel.panel);
+        const inputs = JSON.stringify(["panel", currentView, urgent, heights, inPanel.room, inPanel.top, inPanel.height, Math.round(slotRect.width), Math.round(slotRect.height), obstacles.map(roundRect)]);
+        if (inputs === lastInputs) return;
+        lastInputs = inputs;
         if (showsList) {
-          const full = fullListHeight(row.clientWidth);
-          if (full === undefined) {
-            probeFullList();
-            return;
-          }
+          const full = listSpan(heights);
           const room = Math.min(
             inPanel.room - TOGGLE_HEIGHT_PX - NOTICE_GAP_PX,
             Math.floor(inPanel.height * PANEL_NOTICE_SHARE) - TOGGLE_HEIGHT_PX,
@@ -349,7 +357,6 @@ export default function InCallNoticeSlot({
           minTop: inPanel.top - slotRect.top,
           maxBottom: slotRect.height,
         };
-        const obstacles = collectObstacles(slot, slotRect, inPanel.panel);
         const spot = findClearSpot(obstacles, chipBounds, CHIP_WIDTH_PX, CHIP_HEIGHT_PX) ?? {
           left: chipBounds.left,
           top: chipBounds.minTop,
@@ -378,57 +385,42 @@ export default function InCallNoticeSlot({
         : cssMinTop;
       const bounds = { left: laneLeft, right: laneLeft + laneWidth, minTop, maxBottom: column.clientHeight };
       const obstacles = collectObstacles(slot, slotRect, coversPanel ? panel : slot.parentElement);
+      const heights = fullHeights(items, laneWidth);
+      const inputs = JSON.stringify(["lane", currentView, coversPanel, urgent, heights, Math.round(contentLeft), Math.round(contentWidth), Math.round(bounds.minTop), Math.round(bounds.maxBottom), obstacles.map(roundRect)]);
+      if (inputs === lastInputs) return;
+      lastInputs = inputs;
 
       if (showsList) {
-        const natural = fullListHeight(laneWidth);
-        if (natural === undefined) {
-          probeFullList();
-          return;
-        }
+        const natural = listSpan(heights) + TOGGLE_HEIGHT_PX;
         const spot = placeNoticeList(
           obstacles,
           bounds,
-          natural + TOGGLE_HEIGHT_PX,
-          Math.min(natural + TOGGLE_HEIGHT_PX, LIST_MIN_HEIGHT_PX + TOGGLE_HEIGHT_PX),
+          natural,
+          Math.min(natural, LIST_MIN_HEIGHT_PX + TOGGLE_HEIGHT_PX),
         );
         if (!spot) {
           openSheet();
           return;
         }
-        const placed = {
+        const narrow = narrowLane(spot, padLeft);
+        const full = narrow
+          ? COMPACT_HEIGHT_PX * count + NOTICE_GAP_PX * (count - 1) + TOGGLE_HEIGHT_PX
+          : natural;
+        const height = Math.min(spot.height, full);
+        commit({
           compact: false,
           offset: Math.max(0, spot.top - cssMinTop),
           count,
-          narrow: narrowLane(spot, padLeft),
-        };
-        const full = placed.narrow ? fullListHeight(placed.narrow.width) : natural;
-        if (full === undefined) {
-          commit({ ...placed, room: spot.height - TOGGLE_HEIGHT_PX, cramped: false, probing: true });
-          return;
-        }
-        const height = Math.min(spot.height, full + TOGGLE_HEIGHT_PX);
-        commit({ ...placed, room: height - TOGGLE_HEIGHT_PX, cramped: height < full + TOGGLE_HEIGHT_PX });
+          room: height - TOGGLE_HEIGHT_PX,
+          narrow,
+          cramped: Boolean(narrow) || height < natural,
+        });
         return;
       }
 
-      const topContent = noticeContent(items[0]);
-      let topFullHeight = heights[0];
-      if (laneRef.current.compact) {
-        const cached = fullHeightsRef.current.get(items[0]);
-        if (!cached || cached.key !== `${Math.round(laneWidth)}:${topContent}`) {
-          commit({ ...laneRef.current, compact: false, narrow: undefined, probing: true, count });
-          return;
-        }
-        topFullHeight = cached.height;
-      } else {
-        fullHeightsRef.current.set(items[0], {
-          key: `${Math.round(row.clientWidth)}:${topContent}`,
-          height: heights[0],
-        });
-      }
       const placement = placeNoticeLane(obstacles, {
         ...bounds,
-        fullHeight: coversPanel ? Number.POSITIVE_INFINITY : topFullHeight + peekSpace + footerSpace,
+        fullHeight: coversPanel ? Number.POSITIVE_INFINITY : heights[0] + peekSpace + footerSpace,
         compactHeight: COMPACT_HEIGHT_PX + peekSpace,
       });
       if (!placement) {
@@ -474,10 +466,12 @@ export default function InCallNoticeSlot({
       resizes.disconnect();
       resizes.observe(slot);
       for (const notice of list.children) resizes.observe(notice);
+      for (const twin of probe.children) resizes.observe(twin);
       schedule();
     };
     const listMutations = new MutationObserver(observeNotices);
     listMutations.observe(list, { childList: true, subtree: true, characterData: true });
+    listMutations.observe(probe, { childList: true, subtree: true, characterData: true });
     const stage = slot.parentElement;
     const stageMutations = new MutationObserver(schedule);
     const revealEvents = ["transitionend", "animationend"] as const;
@@ -508,12 +502,12 @@ export default function InCallNoticeSlot({
       for (const type of revealEvents) stage?.removeEventListener(type, schedule);
       resizes.disconnect();
     };
-  }, [host]);
+  }, [host, probe]);
 
   const chipShown = Boolean(lane.chip);
   useLayoutEffect(() => {
     scheduleRef.current();
-  }, [view, lane.compact, lane.cramped, lane.probing, chipShown, panelTarget]);
+  }, [view, lane.compact, lane.cramped, chipShown, panelTarget]);
 
   const announce = useCallback((text: string, tone: NoticeTone) => {
     const key = `${tone}:${text}`;
@@ -558,8 +552,8 @@ export default function InCallNoticeSlot({
   const isExpanded = inSheet || (view === "list" && lane.count > 1);
   const compact = inSheet ? false : isExpanded ? Boolean(lane.cramped) : lane.compact;
   const laneContext = useMemo(
-    () => ({ compact, expanded: isExpanded, announce }),
-    [compact, isExpanded, announce],
+    () => ({ compact, expanded: isExpanded, announce, probe }),
+    [compact, isExpanded, announce, probe],
   );
   const toggleExpanded = () => setView((current) => (current === "stack" ? "list" : "stack"));
   const more = lane.count - 1;
@@ -588,9 +582,8 @@ export default function InCallNoticeSlot({
   const laneContent = (
     <>
       <div
-        ref={rowRef}
         inert={chip ? true : undefined}
-        className={`${chip ? "invisible absolute" : lane.probing ? "invisible relative" : "relative"} flex w-full max-w-[560px] items-start gap-1`}
+        className={`${chip ? "invisible absolute" : "relative"} flex w-full max-w-[560px] items-start gap-1`}
         style={
           lane.narrow && !inSheet
             ? {
@@ -723,6 +716,12 @@ export default function InCallNoticeSlot({
             </div>
           </dialog>
         ) : null}
+        <div
+          ref={setProbe}
+          aria-hidden
+          inert
+          className="pointer-events-none invisible absolute left-0 top-0 flex flex-col"
+        />
         <div aria-live="polite" className="sr-only">
           {spoken.map(([key, { text, urgent }]) => (urgent ? null : <p key={key}>{text}</p>))}
         </div>
