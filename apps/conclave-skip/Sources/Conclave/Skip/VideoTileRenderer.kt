@@ -43,8 +43,33 @@ internal object VideoDrawLayoutPolicy {
     }
 }
 
-internal class VideoTileRenderer(
+private class WindowLease(val window: Any) {
+    @Volatile var revoked = false
+        private set
+
+    fun revoke() {
+        revoked = true
+    }
+}
+
+private class LeasedWindowBackend(
     private val backend: VideoRenderBackend,
+    private val windowIsLive: () -> Boolean,
+) : VideoRenderBackend by backend {
+    override fun createSurface(target: Any): Any? = if (windowIsLive()) backend.createSurface(target) else null
+    override fun makeCurrent(surface: Any): Boolean = windowIsLive() && backend.makeCurrent(surface)
+    override fun surfaceWidth(surface: Any): Int = if (windowIsLive()) backend.surfaceWidth(surface) else 0
+    override fun surfaceHeight(surface: Any): Int = if (windowIsLive()) backend.surfaceHeight(surface) else 0
+    override fun swap(surface: Any): Boolean = windowIsLive() && backend.swap(surface)
+    override fun clear(red: Float, green: Float, blue: Float) {
+        if (windowIsLive()) backend.clear(red, green, blue)
+    }
+    override fun draw(frame: VideoFrame, layout: VideoDrawLayout): Boolean = windowIsLive() && backend.draw(frame, layout)
+    override fun cutCorners(width: Int, height: Int, radius: Float): Boolean = windowIsLive() && backend.cutCorners(width, height, radius)
+}
+
+internal class VideoTileRenderer(
+    backend: VideoRenderBackend,
     private val letterboxInBuffer: Boolean,
     backgroundRgb: Long,
     private val onFrameSizeChanged: (width: Int, height: Int) -> Unit,
@@ -52,6 +77,7 @@ internal class VideoTileRenderer(
     private val onBufferSizeShown: (token: Int, width: Int, height: Int) -> Unit = { _, _, _ -> },
     private val nanoTime: () -> Long = System::nanoTime,
 ) : VideoSink {
+    private val backend: VideoRenderBackend = LeasedWindowBackend(backend) { lease?.revoked == false }
     private val backgroundRed = ((backgroundRgb shr 16) and 0xFF).toFloat() / 255f
     private val backgroundGreen = ((backgroundRgb shr 8) and 0xFF).toFloat() / 255f
     private val backgroundBlue = (backgroundRgb and 0xFF).toFloat() / 255f
@@ -69,15 +95,15 @@ internal class VideoTileRenderer(
     @Volatile var viewAspect = 0f
     @Volatile var viewWidth = 0
     @Volatile var cornerRadiusInViewPixels = 0f
-    @Volatile private var windowSize = NO_SIZE
+    @Volatile private var sizeRequest: SizeRequest? = null
     @Volatile var frameWidth = 0
         private set
     @Volatile var frameHeight = 0
         private set
-    @Volatile private var tokenAtLastDetach = 0
     private val surfaceGoneAfterRelease = CountDownLatch(1)
+    private var attached: WindowLease? = null
 
-    private var window: Any? = null
+    private var lease: WindowLease? = null
     private val surface = AtomicReference<Any?>(null)
     private var surfaceFailures = 0
     private var framesUntilRetry = 0
@@ -125,12 +151,13 @@ internal class VideoTileRenderer(
             requestedToken = token
             if (pendingFrame != null) pendingToken = token
         }
+        val granted = WindowLease(target).also { attached = it }
         backend.post {
             appliedToken = token
             presented = false
-            if (token > tokenAtLastDetach) {
+            if (!granted.revoked) {
                 destroySurface()
-                window = target
+                lease = granted
                 surfaceFailures = 0
                 framesUntilRetry = 0
                 shownSize = NO_SIZE
@@ -142,14 +169,19 @@ internal class VideoTileRenderer(
     }
 
     fun detachSurface(done: Runnable?) {
-        windowSize = NO_SIZE
-        tokenAtLastDetach = synchronized(frameLock) { requestedToken }
+        sizeRequest = null
+        revokeWindow()
         val queued = backend.postFirst {
             destroySurface()
-            window = null
+            lease = null
             done?.run()
         }
         if (!queued) done?.run()
+    }
+
+    private fun revokeWindow() {
+        attached?.revoke()
+        attached = null
     }
 
     fun surfaceGoneAfterDetach(): CountDownLatch {
@@ -164,7 +196,7 @@ internal class VideoTileRenderer(
     }
 
     fun windowSized(width: Int, height: Int) {
-        windowSize = sizeOf(width, height)
+        sizeRequest = SizeRequest(sizeOf(width, height))
     }
 
     fun clearImage(token: Int) = forget(token, paint = true)
@@ -196,10 +228,11 @@ internal class VideoTileRenderer(
             dropped = pendingFrame
             pendingFrame = null
         }
+        revokeWindow()
         dropped?.release()
         val queued = backend.post {
             destroySurface()
-            window = null
+            lease = null
             surfaceGoneAfterRelease.countDown()
             done?.run()
         }
@@ -217,17 +250,15 @@ internal class VideoTileRenderer(
 
     private fun ensureSurface(): Any? {
         surface.get()?.let { return it }
-        val target = window ?: return null
-        if (appliedToken <= tokenAtLastDetach) return null
+        val window = lease?.window ?: return null
         if (framesUntilRetry > 0) {
             framesUntilRetry -= 1
             return null
         }
-        val created = backend.createSurface(target)
+        val created = backend.createSurface(window)
         if (created == null) retryLater()
         surface.set(created)
-        if (appliedToken <= tokenAtLastDetach) destroySurface()
-        return surface.get()
+        return created
     }
 
     private fun surfaceStoppedWorking() {
@@ -274,7 +305,7 @@ internal class VideoTileRenderer(
             if (surface.get() !== target || !windowTakesBufferOf(target)) return
             if (!backend.swap(target)) return surfaceStoppedWorking()
             surfaceFailures = 0
-            if (sizeOf(width, height) == windowSize) bufferWait = null
+            if (sizeOf(width, height) == sizeRequest?.size) bufferWait = null
             if (shownSize != sizeOf(width, height)) {
                 shownSize = sizeOf(width, height)
                 onBufferSizeShown(appliedToken, width, height)
@@ -297,18 +328,17 @@ internal class VideoTileRenderer(
     }
 
     private fun windowTakesBufferOf(target: Any): Boolean {
-        val wanted = windowSize
-        if (wanted == NO_SIZE) return true
+        val wanted = sizeRequest ?: return true
         val width = backend.surfaceWidth(target)
         val height = backend.surfaceHeight(target)
-        if (width <= 0 || height <= 0 || sizeOf(width, height) == wanted) return true
-        return bufferWait?.let { it.windowSize == wanted && it.givenUp } == true
+        if (width <= 0 || height <= 0 || sizeOf(width, height) == wanted.size) return true
+        return bufferWait?.let { it.request === wanted && it.givenUp } == true
     }
 
     private fun bufferWaitIsOver(): Boolean {
-        val wanted = windowSize
+        val wanted = sizeRequest ?: return true
         val now = nanoTime()
-        val wait = bufferWait?.takeIf { it.windowSize == wanted } ?: BufferWait(wanted, now).also { bufferWait = it }
+        val wait = bufferWait?.takeIf { it.request === wanted } ?: BufferWait(wanted, now).also { bufferWait = it }
         if (now - wait.startedAt < MAX_BUFFER_WAIT_NANOS) return false
         if (!wait.givenUp) {
             wait.givenUp = true
@@ -317,7 +347,9 @@ internal class VideoTileRenderer(
         return true
     }
 
-    private class BufferWait(val windowSize: Long, val startedAt: Long) {
+    private class SizeRequest(val size: Long)
+
+    private class BufferWait(val request: SizeRequest, val startedAt: Long) {
         var givenUp = false
     }
 

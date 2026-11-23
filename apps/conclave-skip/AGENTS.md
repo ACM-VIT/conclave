@@ -301,9 +301,16 @@ has the numbers.
   render thread. So a frame that arrives after a clear is never painted over
   by it, and the first-frame notice a host acts on is for the picture it is
   showing now.
-- A detach goes to the front of the render thread's queue. An attach it
-  overtakes is skipped: its window is gone, and Android throws on a released
-  window. `surfaceDestroyed` waits for the detach, which normally takes as
+- Each attach gives the renderer a lease on that window (`WindowLease`). The
+  main thread revokes it first thing when the window detaches or the view is
+  released. Every render-thread call that touches the window's surface
+  (create, bind, size query, clear, draw, corner cut, swap) goes through
+  `LeasedWindowBackend`, which refuses it once the lease is revoked. So
+  nothing the render thread starts after `surfaceDestroyed` begins can touch
+  that window: an attach still queued creates nothing (Android throws on a
+  released window), and a draw paused between two calls stops at the next one.
+- A detach goes to the front of the render thread's queue.
+  `surfaceDestroyed` waits for the detach, which normally takes as
   long as the draw in progress. All surface tiles share one allowance for
   that wait (`VideoDetachWait`, 150 ms in any second), because a rotation or
   a move to the background destroys several surfaces in a row and a wait per
@@ -312,10 +319,13 @@ has the numbers.
   render thread is doing. When the detach has not been answered within the
   allowance, the main thread destroys the EGL surface itself
   (`VideoTileRenderer.abandonSurface`). Android disconnects the window from
-  EGL at that point, which also ends a swap stalled inside it. The render
-  thread then finds its surface gone: a swap about to start is skipped, a
-  swap in progress fails, no new surface is made on the dead window, and the
-  task queued ahead of the detach takes the surface off its context. After
+  EGL at that point, which also ends a swap stalled inside it. A render
+  thread call already inside EGL then (a bind waiting on the shared lock, a
+  draw or swap waiting on the window) is cut off from the window by that
+  destroy and fails, and the lease refuses every call after it. Only an
+  `eglCreateWindowSurface` already running when the allowance ran out can
+  finish later, and the next call destroys what it made. The task queued
+  ahead of the detach takes the surface off its context. After
   `release()` the callback waits for the release that is already queued, from
   the same allowance and with the same fallback.
 - The render thread keeps its surface reachable for that fallback. It destroys
@@ -392,8 +402,9 @@ has the numbers.
     the draw, because the window can be resized while a frame is drawn. A
     window that gives no buffer of its size for a second gets a warning in the
     log, and frames are then drawn into what there is. That give-up belongs to
-    the size asked for (`BufferWait`), not to the surface: the next size the
-    window asks for is checked from the start again.
+    one size request (`SizeRequest`, one per `surfaceChanged`), not to the
+    surface or to the dimensions: every size the window reports, even one it
+    reported before, is checked from the start again.
   - A window's size belongs to that window. The renderer forgets it when the
     window detaches, so a new window's first frame is not held to the size of
     the one before.
