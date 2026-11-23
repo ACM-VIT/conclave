@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Socket } from "socket.io-client";
 
+export type BrowserCommand = "launch" | "navigate" | "close";
+
 export interface BrowserState {
     active: boolean;
     url?: string;
@@ -29,6 +31,7 @@ interface UseSharedBrowserReturn {
     isAvailable: boolean;
     isLaunching: boolean;
     launchError: string | null;
+    failedCommand: BrowserCommand | null;
     launchBrowser: (url: string) => Promise<boolean>;
     navigateTo: (url: string) => Promise<boolean>;
     closeBrowser: () => Promise<boolean>;
@@ -110,12 +113,15 @@ export function useSharedBrowser({
     const [browserState, setBrowserState] = useState<BrowserState>({ active: false });
     const [isAvailable, setIsAvailable] = useState(false);
     const [isLaunching, setIsLaunching] = useState(false);
-    const [launchError, setLaunchError] = useState<string | null>(null);
+    const [commandError, setCommandError] = useState<{
+        command: BrowserCommand;
+        message: string;
+    } | null>(null);
     const activityIntervalRef = useRef<NodeJS.Timeout | null>(null);
     const browserStateEpochRef = useRef(0);
 
     const clearError = useCallback(() => {
-        setLaunchError(null);
+        setCommandError(null);
     }, []);
 
     useEffect(() => {
@@ -225,13 +231,13 @@ export function useSharedBrowser({
             if (!socket || !isAdmin) return false;
 
             setIsLaunching(true);
-            setLaunchError(null);
+            setCommandError(null);
 
             const requestEpoch = browserStateEpochRef.current;
             const response = await emitBrowserCommand(socket, "browser:launch", { url });
             setIsLaunching(false);
             if (response.error) {
-                setLaunchError(response.error);
+                setCommandError({ command: "launch", message: response.error });
                 return false;
             }
 
@@ -253,13 +259,13 @@ export function useSharedBrowser({
             if (!socket || !isAdmin) return false;
 
             setIsLaunching(true);
-            setLaunchError(null);
+            setCommandError(null);
 
             const requestEpoch = browserStateEpochRef.current;
             const response = await emitBrowserCommand(socket, "browser:navigate", { url });
             setIsLaunching(false);
             if (response.error) {
-                setLaunchError(response.error);
+                setCommandError({ command: "navigate", message: response.error });
                 return false;
             }
 
@@ -278,10 +284,11 @@ export function useSharedBrowser({
         const socket = socketRef.current;
         if (!socket || !isAdmin) return false;
 
+        setCommandError(null);
         const requestEpoch = browserStateEpochRef.current;
         const response = await emitBrowserCommand(socket, "browser:close");
         if (response.error) {
-            setLaunchError(response.error);
+            setCommandError({ command: "close", message: response.error });
             return false;
         }
 
@@ -294,7 +301,8 @@ export function useSharedBrowser({
         browserState,
         isAvailable,
         isLaunching,
-        launchError,
+        launchError: commandError?.message ?? null,
+        failedCommand: commandError?.command ?? null,
         launchBrowser,
         navigateTo,
         closeBrowser,
