@@ -526,6 +526,7 @@ describe("our own fields", () => {
     meet_join_attempt: { joinMode: "meeting", isAdmin: false },
     meet_join_success: { joinMode: "meeting", status: "waiting" },
     meet_join_failure: { joinMode: "webinar_attendee", failure_reason: "auth" },
+    telemetry_reports_dropped: { batches: 2, events: 9, unsent: 1 },
   };
 
   it.each(Object.keys(TELEMETRY_EVENTS).filter((name) => name !== "$exception") as TelemetryEventName[])(

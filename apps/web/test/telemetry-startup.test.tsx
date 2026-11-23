@@ -2,6 +2,7 @@
 import { act, type ComponentType } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { STORED_BATCH_PREFIX } from "../src/app/lib/telemetry-outbox";
 
 const posthog = vi.hoisted(() => ({
   init: vi.fn(),
@@ -38,6 +39,7 @@ let root: Root | null = null;
 beforeEach(() => {
   vi.resetModules();
   vi.clearAllMocks();
+  localStorage.clear();
   console.error = () => {};
   vi.stubEnv("NEXT_PUBLIC_POSTHOG_KEY", "phc_test_project");
   vi.stubEnv("NEXT_PUBLIC_POSTHOG_DEV", "1");
@@ -165,14 +167,19 @@ describe("what each event carries", () => {
     ).toBeNull();
     document.dispatchEvent(new Event("freeze"));
     document.dispatchEvent(new Event("resume"));
-    const kept = JSON.parse(localStorage.getItem("conclave:telemetry:spill") ?? "[]") as string[];
-    localStorage.removeItem("conclave:telemetry:spill");
+    type Built = SentEvent & { uuid: string };
+    const savedKeys = Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index) ?? "").filter(
+      (key) => key.startsWith(STORED_BATCH_PREFIX),
+    );
+    const kept = savedKeys.flatMap((key) => {
+      const saved = JSON.parse(localStorage.getItem(key) ?? "null") as { events: Built[] } | null;
+      localStorage.removeItem(key);
+      return saved?.events ?? [];
+    });
     const posted = (fetch as unknown as { mock: { calls: Array<[unknown, RequestInit?]> } }).mock.calls
       .filter(([url]) => String(url).includes("/ingest/e/"))
-      .map(([, init]) => String(init?.body));
-    const events = [...posted, ...kept].flatMap(
-      (body) => (JSON.parse(body) as { batch: Array<SentEvent & { uuid: string }> }).batch,
-    );
+      .flatMap(([, init]) => (JSON.parse(String(init?.body)) as { batch: Built[] }).batch);
+    const events = [...posted, ...kept];
     return events.find((sent) => sent.uuid === uuid) as SentEvent;
   };
 

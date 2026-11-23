@@ -1,10 +1,9 @@
 "use client";
 
 import type { CaptureResult, PostHog } from "posthog-js";
-import { z } from "zod";
 import { installCallErrorCapture } from "./call-error-capture";
 import { randomUuid } from "./random-uuid";
-import { createOutbox, type Outbox, type OutboxEvent } from "./telemetry-outbox";
+import { createBatchStore, createOutbox, type Outbox, type OutboxEvent } from "./telemetry-outbox";
 import {
   beforeSend,
   buildOutboundEvent,
@@ -81,38 +80,23 @@ const sendForUnload = (build: () => void): void => {
 // Capped so a load that never finishes cannot grow the queue.
 const MAX_PENDING = 50;
 
-// Batches a page going away could not send, kept for the next page load:
-// built events only, which the outbound schema already shaped. Capped, oldest
-// first out.
-const SPILL_KEY = "conclave:telemetry:spill";
-const MAX_SPILL_CHARS = 256 * 1024;
-const SpilledBodies = z.array(z.string().max(MAX_SPILL_CHARS));
+// Batches not yet answered when a page went away, one local storage entry
+// each, which a later page load (or this one, back again) sends. A page's
+// tabs replay one at a time where the browser has the Web Locks API; without
+// it, two tabs may send a batch twice, and /ingest takes each uuid once.
+const REPLAY_LOCK = "conclave:telemetry:replay";
 
-const readSpill = (): string[] => {
-  try {
-    const parsed = SpilledBodies.safeParse(JSON.parse(localStorage.getItem(SPILL_KEY) ?? "[]"));
-    return parsed.success ? parsed.data : [];
-  } catch {
-    return [];
+const replayLock = (replay: () => Promise<void>): void => {
+  const locks = typeof navigator === "undefined" ? undefined : navigator.locks;
+  if (!locks) {
+    void replay();
+    return;
   }
-};
-
-const storageSpill = {
-  save(bodies: string[]): void {
-    const kept = [...readSpill(), ...bodies];
-    let chars = kept.reduce((total, body) => total + body.length, 0);
-    while (kept.length > 0 && chars > MAX_SPILL_CHARS) chars -= (kept.shift() as string).length;
-    try {
-      localStorage.setItem(SPILL_KEY, JSON.stringify(kept));
-    } catch {}
-  },
-  take(): string[] {
-    const bodies = readSpill();
-    try {
-      localStorage.removeItem(SPILL_KEY);
-    } catch {}
-    return bodies;
-  },
+  locks
+    .request(REPLAY_LOCK, { ifAvailable: true }, async (lock) => {
+      if (lock) await replay();
+    })
+    .catch(() => void replay());
 };
 
 // The page has started to go away: pagehide until a pageshow brings it back,
@@ -303,12 +287,31 @@ const installLifecycleFlush = (): void => {
     },
     { capture: true },
   );
-  window.addEventListener("pageshow", () => (unloading = false), { capture: true });
-  document.addEventListener("resume", () => (frozen = false), { capture: true });
+  // A page back in view sends what it saved as it went, and any other tab's.
+  const returned = () => {
+    if (!leaving()) outbox?.replaySaved();
+  };
+  window.addEventListener(
+    "pageshow",
+    () => {
+      unloading = false;
+      returned();
+    },
+    { capture: true },
+  );
+  document.addEventListener(
+    "resume",
+    () => {
+      frozen = false;
+      returned();
+    },
+    { capture: true },
+  );
   document.addEventListener(
     "visibilitychange",
     () => {
       if (document.visibilityState === "hidden") flushForLifecycle();
+      else returned();
     },
     { capture: true },
   );
@@ -392,9 +395,12 @@ export function startTelemetry(): void {
         return false;
       }
     },
-    spill: storageSpill,
+    newId: randomUuid,
+    store: createBatchStore(() => localStorage),
+    lock: replayLock,
+    onStale: (dropped) => telemetry.capture("telemetry_reports_dropped", dropped),
   });
-  outbox.sendSpilled();
+  outbox.replaySaved();
   installLifecycleFlush();
   const manifestReady = manifestOrTimeout();
   void Promise.all([

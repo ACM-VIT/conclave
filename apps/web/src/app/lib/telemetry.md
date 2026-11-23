@@ -31,24 +31,44 @@ The outbox sends events to `/ingest` in batches, so a call costs a handful
 of requests rather than one per event. A batch goes 5 s after its first event,
 as soon as it holds 20 events, or before it would pass 48 KB (under the
 browser's 64 KB budget for keepalive requests and beacons), whichever comes
-first. An exception sends early, at most once every 3 s. Each event is in
-exactly one batch: it is queued once by its uuid, a delivered batch is never
-sent again, and a batch that fails (no answer, 429 or 5xx) is retried with the
-very same body after 2, 4, 8, 16 and 30 s, which `/ingest` and PostHog take as
-the same events. A batch `/ingest` refuses is dropped. Batches go by keepalive
-fetch, without cookies.
+first. An exception sends early, at most once every 3 s. An event is queued
+once by its uuid. A batch that fails (no answer, 429 or 5xx) is retried with
+the very same events after 2, 4, 8, 16 and 30 s; each send carries its own
+`sent_at`, so `/ingest` can tell the events' age by the browser's clock. A
+batch whose retries run out is saved, as below, for the next replay. A batch
+`/ingest` refuses is dropped. Batches go by keepalive fetch, without
+cookies.
 
-A lifecycle flush is installed when telemetry starts, before the SDK
-downloads, and stays for the page's life. On `visibilitychange` to hidden, on
-`pagehide` and on `freeze`, everything still queued, and any batch waiting to
-retry, goes out at once by beacon, once, split to stay within the beacon
-limit; a batch in flight is left to finish. The browser allows 64 KB across
-all of a page's outstanding beacons and keepalive requests, so the outbox
-counts them against one 56 KB budget: a batch goes by keepalive only while it
-fits, and at unload only what fits goes by beacon. A batch the budget cannot
-take, or the browser refuses, stays in local storage (at most 256 KB, already
-built by the outbound schema), and the next page load sends it before
-anything else; a batch leaves the outbox only once a send of it was accepted.
+The outbox owns every batch until `/ingest` answers a send of it: a batch is
+queued, in flight or waiting to retry. A lifecycle flush is installed when
+telemetry starts, before the SDK downloads, and stays for the page's life. On
+`visibilitychange` to hidden, on `pagehide` and on `freeze`, everything still
+queued, and any batch waiting to retry, goes out at once by beacon, once,
+split to stay within the beacon limit. The browser allows 64 KB across all of
+a page's outstanding beacons and keepalive requests, so the outbox counts them
+against one 56 KB budget: a batch goes by keepalive only while it fits, and at
+unload only what fits goes by beacon. Every batch not yet answered is saved
+in local storage then, in flight or not, beaconed or not: a request past the
+budget, which the browser cancels as the page goes away, is kept like the
+rest. Each batch has its own entry, `conclave:telemetry:batch:<uuid>`, so
+tabs saving at once never write over each other (at most 512 KB in all, the
+oldest batches going first). A saved copy is removed only once a send of it
+is answered. The next page load, and a page coming back into view, sends what
+storage holds, from any tab, while holding a Web Locks lock
+(`conclave:telemetry:replay`, taken only if free, so one tab replays at a
+time); without the Web Locks API two tabs may both send a batch, and `/ingest`
+takes each uuid once. A beacon is never answered, so its batch is sent again
+then too.
+
+Saved batches expire. `/ingest` keeps an event's own time only within 5
+minutes of receiving it, so a batch whose oldest event is more than 4 minutes
+old is dropped, never sent to be dated by when it arrived, whether it is
+being replayed or retried. The batches one
+replay drops are reported together as `telemetry_reports_dropped`: `batches`,
+`events` (the reports in them), and `unsent`, the batches that had no send
+which may have arrived (a beacon or a keepalive request in flight as the page
+went away); those are reports lost for good.
+
 Once the page has started to go away (hidden, `pagehide` or `freeze` seen),
 every later report, such as the call summary the call tracker sends as the
 page closes, goes out at once the same way, whatever state the SDK is in; so
@@ -248,7 +268,7 @@ shapes the values of listed properties:
 - **Times.** `/ingest` keeps an event's own time when it lies within 5 minutes
   before receipt (or a minute after). A time outside that window moves
   nothing: the event is as old as the browser says it was when sent
-  (posthog-js's send time against the event's own), at most 5 minutes, or with
+  (the outbox's send time against the event's own), at most 5 minutes, or with
   no send time it is held to the window. The browser's send time is not
   forwarded.
 - **Retries.** `/ingest` keeps every event it forwarded by uuid (the last

@@ -254,6 +254,8 @@ export const TELEMETRY_EVENTS = {
   meet_join_attempt: z.object({ joinMode: JOIN_MODE, isAdmin: flag }),
   meet_join_success: z.object({ joinMode: JOIN_MODE, status: z.enum(["joined", "waiting"]) }),
   meet_join_failure: z.object({ joinMode: JOIN_MODE, failure_reason: MEET_FAILURE }),
+  // Saved batches a page load dropped as too old for /ingest to date.
+  telemetry_reports_dropped: z.object({ batches: count, events: count, unsent: count }),
 } as const;
 
 export type OutboundEventName = keyof typeof TELEMETRY_EVENTS;

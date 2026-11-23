@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createForwardedEvents, forwardCapture } from "../src/app/lib/telemetry-ingest";
+import { STORED_BATCH_PREFIX } from "../src/app/lib/telemetry-outbox";
 
 const BUILD = "0b2d3b480f4621392a4151d750c90965b7c8b76c";
 const KEY = "phc_test_project";
@@ -32,6 +33,7 @@ beforeEach(async () => {
   const { PostHog } = await import("posthog-js");
   vi.spyOn(PostHog.prototype, "init");
   sent = [];
+  localStorage.clear();
   manifest = "pending";
   sdk.release = () => {};
   vi.stubEnv("NEXT_PUBLIC_POSTHOG_KEY", KEY);
@@ -70,6 +72,8 @@ afterEach(() => {
   sdk.release();
   vi.doUnmock(EXTENSION);
   window.dispatchEvent(new Event("pagehide"));
+  // What that saved would otherwise be sent by a later test's page.
+  localStorage.clear();
   window.dispatchEvent(new Event("pageshow"));
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
@@ -108,6 +112,10 @@ const sentEvents = async (list: Sent[] = sent): Promise<Event_[]> => {
   }
   return events;
 };
+const savedKeys = () =>
+  Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index) ?? "").filter((key) =>
+    key.startsWith(STORED_BATCH_PREFIX),
+  );
 const names = async (list?: Sent[]) => (await sentEvents(list)).map((event) => event.event).sort();
 const beacons = () => sent.filter((item) => item.via === "beacon");
 
@@ -248,8 +256,8 @@ describe("batches the browser will not take as the page goes away", () => {
     telemetry.capture("meet_join_success", { joinMode: "meeting", status: "joined" });
     Object.defineProperty(navigator, "sendBeacon", { configurable: true, value: () => false });
     window.dispatchEvent(new Event("pagehide"));
-    window.dispatchEvent(new Event("pageshow"));
     expect(sent).toEqual([]);
+    expect(savedKeys()).toHaveLength(1);
 
     vi.resetModules();
     const nextLoad = await import("../src/app/lib/telemetry");
@@ -257,7 +265,88 @@ describe("batches the browser will not take as the page goes away", () => {
     await vi.waitFor(() => expect(sent.filter((item) => item.via === "fetch")).toHaveLength(1));
 
     expect(await names()).toEqual(["meet_join_attempt", "meet_join_success"]);
-    expect(localStorage.getItem("conclave:telemetry:spill")).toBeNull();
+    await vi.waitFor(() => expect(savedKeys()).toEqual([]));
+  });
+
+  it("sends them again when the page comes back, and keeps each until its send is answered", async () => {
+    manifest = "missing";
+    const { telemetry, startTelemetry } = await import("../src/app/lib/telemetry");
+    startTelemetry();
+    await loaded();
+    telemetry.capture("meet_join_attempt", { joinMode: "meeting", isAdmin: false });
+    hide();
+    expect(sent.map((item) => item.via)).toEqual(["beacon"]);
+    expect(savedKeys()).toHaveLength(1);
+
+    // Every earlier test's page is still listening, as other tabs would be:
+    // each may send the batch again, and /ingest takes its uuid once.
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.waitFor(() => expect(sent.filter((item) => item.via === "fetch").length).toBeGreaterThan(0));
+    expect(new Set(await names(sent.filter((item) => item.via === "fetch")))).toEqual(new Set(["meet_join_attempt"]));
+    await vi.waitFor(() => expect(savedKeys()).toEqual([]));
+  });
+
+  it("drops what was saved more than 5 minutes ago and counts it, never sending it to be dated now", async () => {
+    manifest = "missing";
+    const savedAt = Date.now() - 5 * 60_000 - 1000;
+    const old = (n: number) => ({
+      uuid: `0196f0a1-0000-7000-8000-0000000000f${n}`,
+      event: "meet_join_attempt",
+      timestamp: new Date(savedAt).toISOString(),
+      properties: { token: KEY, distinct_id: "0196f0a1-0000-7000-8000-00000000d15d", joinMode: "meeting", isAdmin: false },
+    });
+    const id = "0196f0a1-0000-7000-9000-0000000000f0";
+    localStorage.setItem(`${STORED_BATCH_PREFIX}${id}`, JSON.stringify({ id, events: [old(1), old(2)], oldestAt: savedAt, sent: false }));
+
+    const { startTelemetry } = await import("../src/app/lib/telemetry");
+    startTelemetry();
+    await loaded();
+    await vi.waitFor(() => expect(savedKeys()).toEqual([]));
+    hide();
+
+    const events = await sentEvents();
+    expect(events.map((event) => event.event)).toEqual(["telemetry_reports_dropped"]);
+    expect(events[0].properties).toMatchObject({ batches: 1, events: 2, unsent: 1 });
+  });
+
+  it("replays only while holding the tabs' lock, and leaves the batches to the tab holding it", async () => {
+    manifest = "missing";
+    const id = "0196f0a1-0000-7000-9000-0000000000e0";
+    const recent = {
+      uuid: "0196f0a1-0000-7000-8000-0000000000e1",
+      event: "meet_join_attempt",
+      timestamp: new Date().toISOString(),
+      properties: { token: KEY, distinct_id: "0196f0a1-0000-7000-8000-00000000d15d", joinMode: "meeting", isAdmin: false },
+    };
+    localStorage.setItem(`${STORED_BATCH_PREFIX}${id}`, JSON.stringify({ id, events: [recent], oldestAt: Date.now(), sent: false }));
+    const requests: Array<{ name: string; ifAvailable?: boolean }> = [];
+    let otherTabHolds = true;
+    Object.defineProperty(navigator, "locks", {
+      configurable: true,
+      value: {
+        request: (name: string, options: { ifAvailable?: boolean }, run: (lock: { name: string } | null) => Promise<void>) => {
+          requests.push({ name, ifAvailable: options.ifAvailable });
+          return run(otherTabHolds ? null : { name });
+        },
+      },
+    });
+    try {
+      const { startTelemetry } = await import("../src/app/lib/telemetry");
+      startTelemetry();
+      await loaded();
+      expect(requests).toEqual([{ name: "conclave:telemetry:replay", ifAvailable: true }]);
+      expect(sent).toEqual([]);
+      expect(savedKeys()).toHaveLength(1);
+
+      otherTabHolds = false;
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.waitFor(() => expect(sent.length).toBeGreaterThan(0));
+      expect(sent.every((item) => item.via === "fetch")).toBe(true);
+      expect(new Set((await sentEvents()).map((event) => event.event))).toEqual(new Set(["meet_join_attempt"]));
+      await vi.waitFor(() => expect(savedKeys()).toEqual([]));
+    } finally {
+      delete (navigator as unknown as { locks?: unknown }).locks;
+    }
   });
 });
 
