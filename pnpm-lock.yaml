@@ -422,6 +422,9 @@ importers:
       '@conclave/ai':
         specifier: workspace:*
         version: link:../ai
+      '@conclave/apps-sdk':
+        specifier: workspace:*
+        version: link:../apps-sdk
       '@conclave/shared-browser':
         specifier: workspace:*
         version: link:../shared-browser

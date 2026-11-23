@@ -34,7 +34,14 @@ import {
   MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS,
   MEDIA_CAPTURE_RECOVERY_TIMEOUT_MS,
 } from "../lib/media-capture-timeout";
-import { createMeetError } from "../lib/utils";
+import {
+  clearMediaDeviceError,
+  createMediaDeviceError,
+  createMeetError,
+  mergeMediaDeviceError,
+  type MediaDeviceFailures,
+} from "../lib/utils";
+import { acquireLocalTracks, settleLocalTracks } from "../lib/media-acquisition";
 import {
   createCapturedSurfaceControlState,
   createCaptureController,
@@ -128,6 +135,7 @@ interface UseMeetMediaOptions {
   localStream: MediaStream | null;
   setLocalStream: React.Dispatch<React.SetStateAction<MediaStream | null>>;
   setMeetError: React.Dispatch<React.SetStateAction<MeetError | null>>;
+  setMediaError: React.Dispatch<React.SetStateAction<MeetError | null>>;
   selectedAudioInputDeviceId?: string;
   setSelectedAudioInputDeviceId: React.Dispatch<
     React.SetStateAction<string | undefined>
@@ -484,6 +492,7 @@ const shouldDisableMediaIntentAfterRecoveryFailure = (
   if (meetError.code === "PERMISSION_DENIED") return true;
   const message = error instanceof Error ? error.message : String(error);
   return (
+    (error instanceof Error && error.name === "NotFoundError") ||
     message.includes("NotFoundError") ||
     message.includes("DevicesNotFoundError")
   );
@@ -506,6 +515,7 @@ export function useMeetMedia({
   localStream,
   setLocalStream,
   setMeetError,
+  setMediaError,
   selectedAudioInputDeviceId,
   setSelectedAudioInputDeviceId,
   setSelectedAudioOutputDeviceId,
@@ -2035,16 +2045,6 @@ export function useMeetMedia({
         return new MediaStream();
       }
 
-      const acquiredTracks: MediaStreamTrack[] = [];
-      let firstRequiredError: unknown = null;
-      const rememberRequiredError = (
-        error: unknown,
-        required: boolean,
-      ) => {
-        if (required && !firstRequiredError) {
-          firstRequiredError = error;
-        }
-      };
       const requestTracks = async (
         requestAudio: boolean,
         requestVideo: boolean,
@@ -2072,86 +2072,55 @@ export function useMeetMedia({
           },
         );
       };
-      const appendLiveTracks = (stream: MediaStream) => {
-        acquiredTracks.push(
-          ...stream
-            .getTracks()
-            .filter((track) => track.readyState === "live"),
-        );
-      };
-
-      if (shouldRequestAudio || shouldRequestVideo) {
-        try {
-          appendLiveTracks(
-            await requestTracks(shouldRequestAudio, shouldRequestVideo),
-          );
-        } catch (combinedErr) {
-          if (shouldRequestAudio && shouldRequestVideo) {
-            try {
-              appendLiveTracks(await requestTracks(true, false));
-            } catch (audioErr) {
-              rememberRequiredError(audioErr, audioRequired);
-              if (!audioRequired) {
-                console.info(
-                  "[Meets] Muted microphone warmup skipped:",
-                  audioErr,
-                );
-              }
-            }
-            try {
-              appendLiveTracks(await requestTracks(false, true));
-            } catch (videoErr) {
-              rememberRequiredError(videoErr, videoRequired);
-            }
-          } else {
-            rememberRequiredError(
-              combinedErr,
-              shouldRequestAudio ? audioRequired : videoRequired,
-            );
-            if (shouldRequestAudio && !audioRequired) {
-              console.info(
-                "[Meets] Muted microphone warmup skipped:",
-                combinedErr,
-              );
-            }
-          }
-        }
-      }
-
-      let nextAudioTrack =
-        getFirstLiveTrack(
-          acquiredTracks.filter((track) => track.kind === "audio"),
-        ) ?? reusableAudioTrack;
-      const nextVideoTrack =
-        getFirstLiveTrack(
-          acquiredTracks.filter((track) => track.kind === "video"),
-        ) ?? reusableVideoTrack;
-      if (nextAudioTrack) {
-        nextAudioTrack = await prepareAudioPublishTrack(nextAudioTrack);
-      }
-      const liveTracks = [nextAudioTrack, nextVideoTrack].filter(
-        (track): track is MediaStreamTrack =>
-          Boolean(track && track.readyState === "live"),
+      const { streams: acquiredStreams, failures } = await acquireLocalTracks({
+        audio: shouldRequestAudio,
+        video: shouldRequestVideo,
+        request: requestTracks,
+      });
+      const acquiredTracks = acquiredStreams.flatMap((stream) =>
+        stream.getTracks().filter((track) => track.readyState === "live"),
       );
-      const hasAudio = Boolean(nextAudioTrack);
-      const hasVideo = Boolean(nextVideoTrack);
+      if (failures.microphone && !audioRequired) {
+        console.info("[Meets] Muted microphone warmup skipped:", failures.microphone);
+      }
+
+      const settled = await settleLocalTracks({
+        acquired: acquiredTracks,
+        reusable: { audio: reusableAudioTrack, video: reusableVideoTrack },
+        prepareAudio: prepareAudioPublishTrack,
+      });
+      const nextAudioTrack = settled.audio;
+      const nextVideoTrack = settled.video;
+      if (settled.audioFailure !== undefined) failures.microphone = settled.audioFailure;
+      const hasAudio = nextAudioTrack?.readyState === "live";
+      const hasVideo = nextVideoTrack?.readyState === "live";
+      const liveTracks = [hasAudio ? nextAudioTrack : null, hasVideo ? nextVideoTrack : null].filter(
+        (track): track is MediaStreamTrack => Boolean(track),
+      );
 
       setMediaState({
         hasAudioPermission: hasAudio,
         hasVideoPermission: hasVideo,
       });
 
+      const requiredFailures: MediaDeviceFailures = {};
       if (audioRequired && !hasAudio) {
-        firstRequiredError ??= new Error("Microphone access was unavailable");
+        requiredFailures.microphone =
+          failures.microphone ?? new Error("Microphone access was unavailable");
         setIsMuted(true);
       }
       if (videoRequired && !hasVideo) {
-        firstRequiredError ??= new Error("Camera access was unavailable");
+        requiredFailures.camera =
+          failures.camera ?? new Error("Camera access was unavailable");
         setIsCameraOff(true);
       }
-      if (firstRequiredError) {
-        setMeetError(createMeetError(firstRequiredError, "PERMISSION_DENIED"));
-      }
+      const requiredError = createMediaDeviceError(requiredFailures, "PERMISSION_DENIED");
+      setMediaError((current) => {
+        let next = current;
+        if (hasAudio) next = clearMediaDeviceError(next, "microphone");
+        if (hasVideo) next = clearMediaDeviceError(next, "camera");
+        return requiredError ? mergeMediaDeviceError(next, requiredError) : next;
+      });
 
       if (nextAudioTrack) {
         setNoiseCancellationTrackEnabled(nextAudioTrack, !isMuted);
@@ -2171,49 +2140,10 @@ export function useMeetMedia({
 
       return liveTracks.length > 0 ? new MediaStream(liveTracks) : null;
     } catch (err) {
-      const meetErr = createMeetError(err, "PERMISSION_DENIED");
-      setMeetError(meetErr);
+      logCallError("[Meets] Local media setup failed", err);
+      setMeetError((current) => current ?? createMeetError(err, "MEDIA_ERROR"));
       setIsCameraOff(true);
-      if (meetErr.code === "PERMISSION_DENIED") {
-        setIsMuted(true);
-      }
-
-      if (
-        meetErr.code === "PERMISSION_DENIED" ||
-        meetErr.code === "MEDIA_ERROR"
-      ) {
-        try {
-          if (isMuted) {
-            return null;
-          }
-
-          const audioOnlyConstraints = buildAudioConstraints(
-            selectedAudioInputDeviceId
-          );
-
-          const audioStream = await getUserMediaWithTimeout(
-            { audio: audioOnlyConstraints },
-            {
-              label: "fallback microphone permission request",
-              timeoutMs: MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS,
-            },
-          );
-          const audioTrack = audioStream.getAudioTracks()[0];
-          const publishAudioTrack = audioTrack
-            ? await prepareAudioPublishTrack(audioTrack)
-            : null;
-          setMediaState({
-            hasAudioPermission: true,
-            hasVideoPermission: false,
-          });
-          setIsCameraOff(true);
-          return publishAudioTrack
-            ? new MediaStream([publishAudioTrack])
-            : audioStream;
-        } catch {
-          return null;
-        }
-      }
+      setIsMuted(true);
       return null;
     } finally {
       if (permissionHintTimeoutRef.current) {
@@ -2234,6 +2164,7 @@ export function useMeetMedia({
     localStreamRef,
     permissionHintTimeoutRef,
     setMeetError,
+    setMediaError,
     setIsCameraOff,
     setIsMuted,
   ]);
@@ -3383,6 +3314,7 @@ export function useMeetMedia({
               code: "TRANSPORT_ERROR",
               message: toggleResult.error || "Failed to mute microphone",
               recoverable: true,
+              device: "microphone",
             });
             return;
           }
@@ -3440,18 +3372,17 @@ export function useMeetMedia({
           producer.resume();
         } catch {}
         setMutedIntent(false);
-        setMeetError(null);
+        setMediaError((current) => clearMediaDeviceError(current, "microphone"));
         confirmAudioProducerUnmuted(producer.id);
         return;
       }
 
       setMutedIntent(false);
-      setMeetError(null);
       requestAudioProducerRecovery();
       return;
     } catch (err) {
       logCallError("[Meets] Failed to restart audio", err);
-      const meetErr = createMeetError(err, "MEDIA_ERROR");
+      const meetErr = createMeetError(err, "MEDIA_ERROR", "microphone");
       const liveAudioTrackAfterFailure = getFirstLiveTrack(
         localStreamRef.current?.getAudioTracks() ?? [],
       );
@@ -3470,7 +3401,6 @@ export function useMeetMedia({
           closeLocalAudioProducerForReplacement(producer);
         }
         setMutedIntent(false);
-        setMeetError(null);
         requestAudioProducerRecovery();
         return;
       }
@@ -3486,7 +3416,7 @@ export function useMeetMedia({
         }
       }
       setMutedIntent(previousMuted);
-      setMeetError(meetErr);
+      setMediaError((current) => mergeMediaDeviceError(current, meetErr));
     } finally {
       toggleMuteInFlightRef.current = false;
     }
@@ -3504,6 +3434,7 @@ export function useMeetMedia({
     commitLocalStream,
     commitAudioTrackToLocalStream,
     setMeetError,
+    setMediaError,
     closeLocalAudioProducerForReplacement,
     confirmAudioProducerUnmuted,
     setMutedIntent,
@@ -3733,6 +3664,7 @@ export function useMeetMedia({
 
         audioProducerRef.current = audioProducer;
         createdTrack = null;
+        setMediaError((current) => clearMediaDeviceError(current, "microphone"));
         audioProducer.on("transportclose", () => {
           if (audioProducerRef.current?.id === audioProducer.id) {
             audioProducerRef.current = null;
@@ -3747,7 +3679,7 @@ export function useMeetMedia({
             setMutedIntent(true);
             return;
           }
-          const meetErr = createMeetError(err, "MEDIA_ERROR");
+          const meetErr = createMeetError(err, "MEDIA_ERROR", "microphone");
           const failedMutedWarmup = isMutedRef.current;
           if (
             !hadLiveAudioTrackBeforeRecovery &&
@@ -3760,7 +3692,7 @@ export function useMeetMedia({
             }));
           }
           if (!failedMutedWarmup) {
-            setMeetError(meetErr);
+            setMediaError((current) => mergeMediaDeviceError(current, meetErr));
           }
         }
       } finally {
@@ -3795,6 +3727,7 @@ export function useMeetMedia({
     setLocalStream,
     setIsMuted,
     setMeetError,
+    setMediaError,
     closeLocalAudioProducerForReplacement,
     flushPendingAudioProcessingSwitch,
     getPublishNetworkProfile,
@@ -3980,6 +3913,7 @@ export function useMeetMedia({
           }
           isCameraOffRef.current = false;
           setIsCameraOff(false);
+          setMediaError((current) => clearMediaDeviceError(current, "camera"));
           return;
         }
 
@@ -4129,6 +4063,7 @@ export function useMeetMedia({
             }
           });
           setIsCameraOff(false);
+          setMediaError((current) => clearMediaDeviceError(current, "camera"));
         } catch (err) {
           logCallError("[Meets] Failed to restart video", err);
           if (createdTrack) {
@@ -4144,7 +4079,9 @@ export function useMeetMedia({
             }
           }
           setIsCameraOff(true);
-          setMeetError(createMeetError(err, "MEDIA_ERROR"));
+          setMediaError((current) =>
+            mergeMediaDeviceError(current, createMeetError(err, "MEDIA_ERROR", "camera")),
+          );
         }
       }
     } finally {
@@ -4168,6 +4105,7 @@ export function useMeetMedia({
     videoQualityRef,
     setIsCameraOff,
     setMeetError,
+    setMediaError,
     emitToggleCamera,
     waitForPreferredVideoPublishTrack,
     buildVideoConstraints,
@@ -5350,6 +5288,7 @@ export function useMeetMedia({
           }
         });
         setIsCameraOff(false);
+        setMediaError((current) => clearMediaDeviceError(current, "camera"));
       } catch (err) {
         logCallError("[Meets] Camera producer recovery failed", err);
         if (cameraPublishingDisabledRef.current) {
@@ -5358,14 +5297,14 @@ export function useMeetMedia({
         }
         removeCreatedTrackFromLocalStream();
         if (!cancelled) {
-          const meetErr = createMeetError(err, "MEDIA_ERROR");
+          const meetErr = createMeetError(err, "MEDIA_ERROR", "camera");
           if (
             !hadLiveCameraTrackBeforeRecovery &&
             shouldDisableMediaIntentAfterRecoveryFailure(err, meetErr)
           ) {
             setIsCameraOff(true);
           }
-          setMeetError(meetErr);
+          setMediaError((current) => mergeMediaDeviceError(current, meetErr));
         }
       } finally {
         if (
@@ -5407,6 +5346,7 @@ export function useMeetMedia({
     setLocalStream,
     setIsCameraOff,
     setMeetError,
+    setMediaError,
     producerTransportRef,
     ensureProducerTransportRef,
     prepareCameraProducerTransport,

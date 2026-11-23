@@ -631,6 +631,8 @@ export type MeetFailureReason =
   | "connection_failed"
   | "unknown";
 
+export type MeetMediaDevice = "camera" | "microphone" | "both";
+
 export interface MeetError {
   code:
     | "PERMISSION_DENIED"
@@ -642,6 +644,14 @@ export interface MeetError {
   recoverable: boolean;
   /** Set where the cause is known, so reports need not read `message`. */
   reason?: MeetFailureReason;
+  device?: MeetMediaDevice;
+  causes?: Partial<Record<"camera" | "microphone", MeetMediaDeviceCause>>;
+}
+
+export interface MeetMediaDeviceCause {
+  code: MeetError["code"];
+  kind: "blocked" | "missing" | "busy" | "unresponsive" | "other";
+  message: string;
 }
 
 export type {

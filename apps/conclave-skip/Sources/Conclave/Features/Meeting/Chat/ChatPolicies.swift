@@ -1,8 +1,6 @@
 import Foundation
 
 enum ChatLinkifyPolicy {
-    private static let lettersLower = "abcdefghijklmnopqrstuvwxyz"
-    private static let digits = "0123456789"
     private static let trailingPunctuation = "),.!?;:"
 
     static func spans(_ content: String) -> [ChatSpan] {
@@ -136,12 +134,19 @@ enum ChatLinkifyPolicy {
         return first.isWhitespace || first.isNewline
     }
 
+    private static let asciiLetters: Set<String> = Set(characters("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"))
+    private static let asciiDigits: Set<String> = Set(characters("0123456789"))
+    private static let asciiCharacters: Set<String> = Set(characters(
+        " !\"#%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\t\n\r"))
+
     private static func isAsciiLetter(_ character: String) -> Bool {
-        lettersLower.contains(character.lowercased()) && character.count == 1
+        if asciiLetters.contains(character) { return true }
+        if asciiCharacters.contains(character) { return false }
+        return "abcdefghijklmnopqrstuvwxyz".contains(character.lowercased()) && character.count == 1
     }
 
     private static func isAlphanumeric(_ character: String) -> Bool {
-        isAsciiLetter(character) || (digits.contains(character) && character.count == 1)
+        isAsciiLetter(character) || asciiDigits.contains(character)
     }
 
     private static func isLabelCharacter(_ character: String) -> Bool {

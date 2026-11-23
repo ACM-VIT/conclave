@@ -55,6 +55,7 @@ export const CALL_LOG_LABELS = [
   "[Meets] Failed to update webinar config",
   "[Meets] Grid local video play error",
   "[Meets] Join after approval failed",
+  "[Meets] Local media setup failed",
   "[Meets] Planned webcam consumer generation reset failed",
   "[Meets] Presentation video play error",
   "[Meets] Producer transport ICE restart failed",
