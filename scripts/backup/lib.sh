@@ -1,6 +1,8 @@
 # Shared helpers for backup.sh and restore.sh. Source it; do not run it.
 # shellcheck shell=bash
 
+BACKUP_SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 die() {
   echo "error: $*" >&2
   exit 1
@@ -77,114 +79,11 @@ redis_cli() (
   exec redis-cli "${args[@]}" --no-auth-warning "$@"
 )
 
-# Where the compose file mounts the state dir inside the SFU containers.
-CONTAINER_STATE_DIR=/var/lib/conclave/recordings
-
-# Prints the database the SFU opens, relative to the state dir, whatever its
-# name: CONCLAVE_SQLITE_PATH as the compose file passes it to its containers,
-# or the compose default (conclave.sqlite in the state dir) when that is
-# unset. Fails when it is outside the state dir.
-configured_database() {
-  local state_dir="${1%/}" configured="${CONCLAVE_SQLITE_PATH:-${CONTAINER_STATE_DIR}/conclave.sqlite}"
-  case "$configured" in
-    "${CONTAINER_STATE_DIR}/"*) printf '%s\n' "${configured#"${CONTAINER_STATE_DIR}/"}" ;;
-    "${state_dir}/"*) printf '%s\n' "${configured#"${state_dir}/"}" ;;
-    *) return 1 ;;
-  esac
-}
-
-# Prints every SQLite database under a directory, at any depth, as a path
-# relative to it.
-sqlite_files() {
-  [[ -d "$1" ]] || return 0
-  (cd "$1" && find . -type f -name '*.sqlite' | sed 's#^\./##' | LC_ALL=C sort)
-}
-
-# Prints the database copies in an archive's sqlite/ dir, relative to it:
-# every file but SQLite's side files, since a database reached through a
-# link need not end in .sqlite.
-sqlite_copies() {
-  [[ -d "$1" ]] || return 0
-  (cd "$1" && find . -type f ! -name '*-wal' ! -name '*-shm' ! -name '*-journal' | sed 's#^\./##' | LC_ALL=C sort)
-}
-
-# Prints each *.sqlite symlink under a directory as "<path relative to
-# it><TAB><target as written>".
-sqlite_links() {
-  [[ -d "$1" ]] || return 0
-  (cd "$1" && find . -type l -name '*.sqlite' | sed 's#^\./##' | LC_ALL=C sort | while IFS= read -r link; do
-    printf '%s\t%s\n' "$link" "$(readlink "$link")"
-  done)
-}
-
-# Resolves a path below the state dir one component at a time, following
-# every symlink on the way, a directory link as much as a file link, to the
-# database it reaches. Prints "link<TAB><path><TAB><target as written>" for
-# each link, at the real place it sits, and "file<TAB><path>" for the
-# database, all relative to the state dir, so a restore can bring back the
-# whole chain and write the database where it really lives. An absolute
-# target may name the container's mount of the state dir. Fails when the path
-# leaves the state dir, loops, or ends anywhere but a regular file.
-sqlite_link_chain() {
-  STATE_IN="$1" LINK_IN="$2" CONTAINER_IN="$3" python3 -c '
-import os, sys
-state = os.path.realpath(os.environ["STATE_IN"])
-mounts = [os.environ["CONTAINER_IN"].rstrip("/"), os.environ["STATE_IN"].rstrip("/"), state]
-pending = os.environ["LINK_IN"].split("/")
-real = []
-links = []
-hops = 0
-while pending:
-    part = pending.pop(0)
-    if part in ("", "."):
-        continue
-    if part == "..":
-        if not real:
-            sys.exit(1)
-        real.pop()
-        continue
-    rel = "/".join(real + [part])
-    path = os.path.join(state, rel)
-    if not os.path.islink(path):
-        real.append(part)
-        continue
-    hops += 1
-    if hops > 40:
-        sys.exit(1)
-    target = os.readlink(path)
-    if (rel, target) not in links:
-        links.append((rel, target))
-    if os.path.isabs(target):
-        mount = next((m for m in mounts if target == m or target.startswith(m + "/")), None)
-        if mount is None:
-            sys.exit(1)
-        real = []
-        target = target[len(mount):]
-    pending = target.split("/") + pending
-rel = "/".join(real)
-if not rel or not os.path.isfile(os.path.join(state, rel)):
-    sys.exit(1)
-for link, target in links:
-    print(f"link\t{link}\t{target}")
-print(f"file\t{rel}")
-'
-}
-
 # Orders archive names oldest first by the stamp in them
 # (conclave-<host>-<YYYYMMDDTHHMMSSZ>.tar.gz.age), never by the whole name: a
 # renamed host must not make an older archive look newer.
 by_stamp() {
   sed -nE 's/^(.*-([0-9]{8}T[0-9]{6}Z)\.tar\.gz\.age)$/\2 \1/p' | LC_ALL=C sort | cut -d' ' -f2-
-}
-
-# redis-cli's own quoting for commands sent on stdin: double quotes with \\
-# and \" escapes.
-quote_args() {
-  local arg
-  for arg in "$@"; do
-    arg="${arg//\\/\\\\}"
-    printf '"%s" ' "${arg//\"/\\\"}"
-  done
 }
 
 # Prints the id of a "user" or "group" name on this host. BACKUP_ID_LOOKUP,
@@ -236,7 +135,8 @@ image_ids() {
 # Prints the numeric uid:gid the SFU runs as, or nothing to leave files owned
 # by root. An explicit user:group (from --owner or BACKUP_RESTORE_OWNER) wins.
 # Otherwise the SFU containers that mount the state dir are asked for the user
-# their image runs as. Names are never handed to chown.
+# their image runs as. Only numeric ids reach restore_state.py, which gives
+# them to the entries it creates and nothing else.
 sfu_file_owner() {
   local explicit="$1" state_dir="$2" containers id status port instance spec image ids
   if [[ -n "$explicit" ]]; then
@@ -244,8 +144,7 @@ sfu_file_owner() {
     host_ids "$explicit"
     return
   fi
-  command -v docker >/dev/null 2>&1 || return 0
-  containers="$(sfu_containers "$state_dir")" || return 1
+  containers="$(python3 -I "${BACKUP_SCRIPTS}/backup_state.py" containers "$state_dir")" || return 1
   while IFS='|' read -r id status port instance spec image; do
     [[ -n "$id" && "$status" != unknown ]] || continue
     [[ -n "$spec" ]] || return 0
@@ -281,20 +180,21 @@ sys.exit(0 if (held.st_dev, held.st_ino) == (named.st_dev, named.st_ino) else 1)
 # replaces files, so both hold the host's deploy lock (the one deploy-sfu.sh
 # takes, in /run/lock, which the backup's systemd unit sees despite its
 # private /tmp) for their whole run, waiting up to
-# BACKUP_DEPLOY_LOCK_WAIT_SECONDS for a deploy already under way. The file is
-# made readable by every user that deploys.
+# BACKUP_DEPLOY_LOCK_WAIT_SECONDS for a deploy already under way. The lock
+# file is made and checked by scripts/host_lock.py, the same rules
+# deploy-sfu.sh follows: a regular file no other user can open.
 take_sfu_host_lock() {
   local lock="${SFU_DEPLOY_LOCK_FILE:-}" wait="${BACKUP_DEPLOY_LOCK_WAIT_SECONDS:-900}"
   if [[ -z "$lock" ]]; then
     if [[ -d /run/lock ]]; then lock=/run/lock/conclave-sfu-deploy.lock; else lock=/tmp/conclave-sfu-deploy.lock; fi
   fi
-  [[ -e "$lock" ]] || (umask 0111 && : >> "$lock") || die "cannot create the host deploy lock ${lock}"
+  python3 -I "${BACKUP_SCRIPTS}/../host_lock.py" prepare "$lock" || die "cannot use the host deploy lock ${lock}"
   exec 7<"$lock" || die "cannot open the host deploy lock ${lock}"
   if ! flock -n 7; then
     log "An SFU deploy holds ${lock}; waiting up to ${wait}s for it"
     flock -w "$wait" 7 || die "an SFU deploy held ${lock} for ${wait}s, so nothing was copied or replaced; rerun once the deploy ends"
   fi
-  locked_file_is 7 "$lock"
+  python3 -I "${BACKUP_SCRIPTS}/../host_lock.py" check 7 "$lock" || die "the host deploy lock ${lock} cannot be trusted (see above); nothing was copied or replaced"
 }
 
 # Prints one string or integer field of a JSON object read from stdin, or
@@ -311,99 +211,6 @@ print(value if isinstance(value, str) or (isinstance(value, int) and not isinsta
 # The time in milliseconds, the precision the SFU's fence deadlines use.
 now_ms() {
   python3 -c 'import time; print(int(time.time() * 1000))'
-}
-
-# Prints the containers that mount the state dir, one per line as
-# "<container>|<state>|<SFU_PORT>|<SFU_INSTANCE_ID>|<user>|<image>" (empty
-# fields stay in place, which a tab separator would not do for read).
-# Paths are compared once every symlink is resolved on both sides, so a state
-# dir named through a link still finds the containers that mount its target.
-# An SFU container (one with SFU_INSTANCE_ID) with a mount that does not
-# resolve is listed with the state "unknown": nobody can say whether it
-# writes here. When the state dir itself does not exist, paths are compared
-# as written instead. Fails when Docker cannot list or inspect the containers.
-sfu_containers() {
-  local state_dir="$1" ids
-  command -v docker >/dev/null 2>&1 || return 1
-  ids="$(docker ps -aq)" || return 1
-  [[ -n "$ids" ]] || return 0
-  # shellcheck disable=SC2086
-  docker inspect $ids | STATE_IN="$state_dir" python3 -c '
-import json, os, sys
-def real(path):
-    try:
-        return os.path.realpath(path, strict=True)
-    except OSError:
-        return None
-given = os.path.normpath(os.path.abspath(os.environ["STATE_IN"]))
-state = real(given)
-for container in json.load(sys.stdin):
-    config = container.get("Config") or {}
-    env = dict(entry.split("=", 1) for entry in config.get("Env") or [] if "=" in entry)
-    raw = [mount["Source"] for mount in container.get("Mounts") or [] if mount.get("Source")]
-    sources = [real(source) for source in raw] if state else [os.path.normpath(source) for source in raw]
-    if (state or given) in sources:
-        status = (container.get("State") or {}).get("Status") or "unknown"
-    elif state and "SFU_INSTANCE_ID" in env and None in sources:
-        status = "unknown"
-    else:
-        continue
-    print("|".join([container["Id"][:12], status, env.get("SFU_PORT", ""), env.get("SFU_INSTANCE_ID", ""), config.get("User") or "", container.get("Image") or ""]))
-'
-}
-
-# Succeeds only when no SFU can write unseen: every SFU container that mounts
-# the state dir and is not exited, dead or created holds this backup's fence,
-# and each health URL that gave no fence answer belongs to a container Docker
-# reports stopped. Silence proves nothing (a wrong URL, a proxy, a hung
-# process), and what Docker cannot report counts as running. Says why on
-# stderr when it fails.
-#   writers_fenced STATE_DIR "HELD_INSTANCE_IDS" UNANSWERED_HEALTH_URL...
-writers_fenced() {
-  local state_dir="$1" held=" $2 " containers id status port instance url url_port stopped
-  shift 2
-  if ! containers="$(sfu_containers "$state_dir")"; then
-    echo "Docker cannot list the SFU containers, so a running SFU could go unseen" >&2
-    return 1
-  fi
-  while IFS='|' read -r id status port instance _; do
-    [[ -n "$id" ]] || continue
-    case "$status" in
-      exited|dead|created) ;;
-      unknown)
-        if [[ "$held" != *" ${instance} "* ]]; then
-          echo "Docker cannot tell whether the SFU container ${id} (${instance}) mounts the state dir, since one of its mounts does not resolve, and it does not hold the write fence" >&2
-          return 1
-        fi
-        ;;
-      *)
-        if [[ "$held" != *" ${instance} "* ]]; then
-          echo "the SFU container ${id} (${instance:-no SFU_INSTANCE_ID}) is ${status} but does not hold the write fence" >&2
-          return 1
-        fi
-        ;;
-    esac
-  done <<< "$containers"
-  for url in "$@"; do
-    url_port="${url#*://}"
-    url_port="${url_port%%/*}"
-    url_port="${url_port##*:}"
-    stopped=""
-    while IFS='|' read -r id status port instance _; do
-      [[ -n "$id" && "$port" == "$url_port" ]] || continue
-      case "$status" in
-        exited|dead|created) stopped="$id" ;;
-        *)
-          echo "${url} gave no fence answer, but Docker reports its container ${id} ${status}" >&2
-          return 1
-          ;;
-      esac
-    done <<< "$containers"
-    if [[ -z "$stopped" ]]; then
-      echo "${url} gave no fence answer, and Docker lists no stopped SFU container on port ${url_port}, so that SFU may still write" >&2
-      return 1
-    fi
-  done
 }
 
 # --- Azure Blob Storage over REST, authenticated by the VM's managed identity.

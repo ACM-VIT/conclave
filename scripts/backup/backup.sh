@@ -26,9 +26,14 @@ done
 load_backup_config
 recipients="${BACKUP_AGE_RECIPIENTS_FILE:-/etc/conclave/backup-recipients.txt}"
 [[ -s "$recipients" ]] || die "no age recipients in ${recipients}"
-for tool in age sqlite3 sha256sum openssl tar python3; do
+for tool in age openssl python3; do
   command -v "$tool" >/dev/null || die "${tool} is not installed"
 done
+# Every file operation on the state dir and the payload runs in Python, so no
+# path or name from the state dir passes through a shell.
+state_py() {
+  python3 -I "${SCRIPT_DIR}/backup_state.py" "$@"
+}
 # A second backup could release this one's fence or copy around it, and a
 # deploy could start an SFU between the copies.
 take_backup_lock
@@ -43,7 +48,7 @@ work="$(mktemp -d "${BACKUP_LOCAL_DIR}/.work.XXXXXX")"
 fenced=()
 trap 'release_fences; rm -rf "$work"' EXIT
 payload="${work}/payload"
-mkdir -p "${payload}/sqlite" "${payload}/redis"
+mkdir -p "${payload}/sqlite"
 manifest="${payload}/MANIFEST"
 {
   echo "created_at=${stamp}"
@@ -52,20 +57,11 @@ manifest="${payload}/MANIFEST"
   [[ -n "${CONCLAVE_REPO:-}" ]] && echo "repo_commit=$(git -C "$CONCLAVE_REPO" rev-parse HEAD 2>/dev/null || echo unknown)"
 } > "$manifest"
 
-sources=0
-
-# The compose file hands the SFU its database as CONCLAVE_SQLITE_PATH. A
-# database outside the mounted state dir lives in the container, is lost on
-# every deploy, and cannot be backed up from the host.
-configured="$(configured_database "$STATE_DIR")" ||
-  die "CONCLAVE_SQLITE_PATH=${CONCLAVE_SQLITE_PATH} is outside the state dir, so it is not on the volume; move it under ${CONTAINER_STATE_DIR}"
-# The SFU always opens that database, so a backup without it would leave out
-# its SQLite data (webinars among it). Settled before the fence.
-[[ -e "${STATE_DIR}/${configured}" || -L "${STATE_DIR}/${configured}" ]] ||
-  die "the configured database ${STATE_DIR}/${configured} is missing (CONCLAVE_SQLITE_PATH, or the compose default conclave.sqlite); nothing was archived"
-expected_chain="$(sqlite_link_chain "$STATE_DIR" "$configured" "$CONTAINER_STATE_DIR")" ||
-  die "${STATE_DIR}/${configured} does not lead to a file inside the state dir"
-expected_db="$(awk -F'\t' '$1 == "file" { print $2 }' <<< "$expected_chain")"
+# Settled before the fence: every database a store opens (its own SQLite
+# path, CONCLAVE_SQLITE_PATH or the compose default, as this host's config
+# and each SFU container's env set them) is inside the state dir, exists, and
+# leads to a regular file there.
+state_py preflight "$STATE_DIR" "$CONTAINER_STATE_DIR" "$BACKUP_LOCAL_DIR" || die "nothing was archived"
 
 # One point in time for SQLite and Redis: every SFU holds its durable writes
 # behind a short fence while both are copied, and the release lets them
@@ -103,10 +99,14 @@ note_until() {
 # this run's hold has never lapsed: an SFU that restarted, or whose hold ran
 # out, has no hold for this owner. The Docker check runs again too, for an
 # SFU that started meanwhile.
+writers_fenced() {
+  FENCE_HELD="$(printf '%s\n' "${held[@]}")" FENCE_UNANSWERED="$(printf '%s\n' "${unanswered[@]}")" state_py fenced "$STATE_DIR" ||
+    die "an SFU could write while the backup copies; nothing was archived"
+}
 renew_fences() {
   local base reply left
   if (( ${#fenced[@]} == 0 )); then
-    writers_fenced "$STATE_DIR" "${held_ids[*]}" "${unanswered[@]}" || die "an SFU could write while the backup copies; nothing was archived"
+    writers_fenced
     return 0
   fi
   left=$(( fence_until - $(now_ms) ))
@@ -119,9 +119,9 @@ renew_fences() {
       die "the SFU at ${base} no longer holds this backup's write fence (it lapsed or the SFU restarted), so the copies may not be from one point in time; rerun the backup"
     note_until "${reply%$'\n'*}" "$base"
   done
-  writers_fenced "$STATE_DIR" "${held_ids[*]}" "${unanswered[@]}" || die "an SFU could write while the backup copies; nothing was archived"
+  writers_fenced
 }
-held_ids=()
+held=()
 unanswered=()
 for health in ${CONCLAVE_SFU_HEALTH_URLS:-http://127.0.0.1:3031/health http://127.0.0.1:3032/health}; do
   base="${health%/health}"
@@ -136,54 +136,19 @@ for health in ${CONCLAVE_SFU_HEALTH_URLS:-http://127.0.0.1:3031/health http://12
     die "the SFU at ${base} did not hold the write fence (HTTP ${code}); deploy an SFU with /admin/persistence-fence before backing up"
   fi
   fenced+=("$base")
-  held_ids+=("$instance")
+  held+=("${base} ${instance}")
   note_until "${reply%$'\n'*}" "$base"
 done
-writers_fenced "$STATE_DIR" "${held_ids[*]}" "${unanswered[@]}" || die "an SFU could write while the backup copies; nothing was archived"
+writers_fenced
 (( ${#fenced[@]} > 0 )) && log "Holding the write fence on ${#fenced[@]} SFU(s)"
 
 # SQLite: the online backup API copies a consistent snapshot while the SFUs
 # keep writing; copying the file (or its WAL) directly would not. Each
-# database keeps its path below the state dir, so restore.sh puts it back
-# where the SFU opens it. A database the SFU opens through a symlink is
-# copied once, at the path the link reaches, and the link is recorded so
-# restore.sh can recreate it. Every link on the way to the database belongs to
-# the database, so the chain comes back with it and never on its own. The
-# configured database gets the same, whatever it is named.
-mapfile -t databases < <(sqlite_files "$STATE_DIR")
-mapfile -t starts < <(sqlite_links "$STATE_DIR" | cut -f1)
-# The configured database goes through the same walk: a directory link on
-# its way counts as much as a link to the file.
-starts+=("$configured")
-links=()
-: > "${payload}/sqlite-links"
-for start in "${starts[@]}"; do
-  chain="$(sqlite_link_chain "$STATE_DIR" "$start" "$CONTAINER_STATE_DIR")" ||
-    die "${STATE_DIR}/${start} does not lead to a file inside the state dir"
-  while IFS=$'\t' read -r kind rel target; do
-    if [[ "$kind" == file ]]; then
-      databases+=("$rel")
-    elif ! printf '%s\n' "${links[@]}" | grep -qxF "$rel"; then
-      links+=("$rel")
-      printf '%s\t%s\n' "$rel" "$target" >> "${payload}/sqlite-links"
-      echo "sqlite.link.${rel}=${target}" >> "$manifest"
-    fi
-  done <<< "$chain"
-done
-mapfile -t databases < <(printf '%s\n' "${databases[@]}" | grep -v '^$' | LC_ALL=C sort -u)
-for rel in "${databases[@]}"; do
-  db="${STATE_DIR}/${rel}"
-  copy="${payload}/sqlite/${rel}"
-  mkdir -p "$(dirname "$copy")"
-  log "SQLite online backup of ${db}"
-  sqlite3 -bail "$db" ".timeout 15000" ".backup '${copy}'"
-  integrity="$(sqlite3 "$copy" "PRAGMA integrity_check;")"
-  [[ "$integrity" == "ok" ]] || die "integrity check of the ${db} copy failed: ${integrity}"
-  while read -r table; do
-    echo "sqlite.${rel}.${table}=$(sqlite3 "$copy" "SELECT count(*) FROM \"${table}\";")" >> "$manifest"
-  done < <(sqlite3 "$copy" "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name;")
-  sources=$((sources + 1))
-done
+# database keeps its path below the state dir, so a restore puts it back
+# where the SFU opens it. A database the SFU opens through a link is copied
+# once, at the path the link reaches, and every link on the way is recorded
+# relative, so the chain comes back with it and never on its own.
+state_py copy "$STATE_DIR" "$CONTAINER_STATE_DIR" "$payload" || die "the SQLite copies failed; nothing was archived"
 
 renew_fences
 
@@ -192,6 +157,7 @@ renew_fences
 # runs from a package or a container, and never reads a dump file mid-write.
 if [[ -n "$REDIS_SOURCE_URL" ]]; then
   command -v redis-cli >/dev/null || die "redis-cli is not installed"
+  mkdir -p "${payload}/redis"
   parse_redis_url "$REDIS_SOURCE_URL"
   log "Redis snapshot from ${REDIS_HOST}:${REDIS_PORT}"
   redis_cli --rdb "${payload}/redis/dump.rdb" >/dev/null
@@ -203,15 +169,18 @@ if [[ -n "$REDIS_SOURCE_URL" ]]; then
     echo "redis.pattern=${REDIS_KEY_PATTERN}"
     echo "redis.keys=$(redis_cli --scan --pattern "$REDIS_KEY_PATTERN" | wc -l | tr -d ' ')"
   } >> "$manifest"
-  sources=$((sources + 1))
 fi
 
-(( sources > 0 )) || die "found no SQLite database in ${STATE_DIR} and no Redis URL; check the config"
-# Every expected source is in the payload before anything is archived.
-[[ -s "${payload}/sqlite/${expected_db}" ]] || die "the copy of ${STATE_DIR}/${expected_db} is missing from the backup; nothing was archived"
 if [[ -n "$REDIS_SOURCE_URL" ]]; then
   [[ -s "${payload}/redis/dump.rdb" ]] || die "the Redis snapshot is missing from the backup; nothing was archived"
 fi
+
+# Everything else in the state directory (JSON stores and the like), inside
+# the fence, so it is from the same point in time as the databases: files and
+# directories only, a hard link stored whole, and any other link or special
+# file left out. Every database, recorded link and SQLite side file is left
+# out by its path.
+state_py pack "$STATE_DIR" "$payload" || die "could not archive the other files in ${STATE_DIR}; nothing was archived"
 
 renew_fences
 if (( ${#fenced[@]} > 0 )); then
@@ -219,23 +188,13 @@ if (( ${#fenced[@]} > 0 )); then
   log "Released the write fence"
 fi
 
-# Everything else in the state directory (JSON stores and the like), as
-# files and directories only: hard links are stored whole, and any link other
-# than the database chains recorded above, or any special file, is left out.
-# A database reached through a link need not end in .sqlite, so each one is
-# left out by its path as well.
-python3 "${SCRIPT_DIR}/restore_paths.py" pack "$STATE_DIR" "${payload}/state-files.tar" \
-  --db "${databases[@]}" --link "${links[@]}" || die "could not archive the other files in ${STATE_DIR}"
-
-# A backup counts only if it would restore: the restore's own validator runs
+# A backup counts only if it would restore: the restore's own checks run
 # over the payload first, so a failure keeps the previous archives.
-python3 "${SCRIPT_DIR}/restore_paths.py" validate "$payload" "$STATE_DIR" "$CONTAINER_STATE_DIR" ||
+state_py validate "$STATE_DIR" "$CONTAINER_STATE_DIR" "$payload" ||
   die "this backup would not restore (see above), so it was not kept; the previous archives are untouched"
 
-sums="$(cd "$payload" && find . -type f | sort | xargs sha256sum)"
-printf '%s\n' "$sums" > "${payload}/SHA256SUMS"
-
-tar -C "$payload" -czf - . | age --encrypt -R "$recipients" -o "${work}/${name}.tar.gz.age"
+state_py seal "$payload" | age --encrypt -R "$recipients" -o "${work}/${name}.tar.gz.age" ||
+  die "could not write the encrypted archive; nothing was rotated"
 # The finished archive is kept on the VM before the upload, so an Azure or
 # identity outage still leaves tonight's backup here. The job still fails, and
 # the heartbeat is not sent.
@@ -252,7 +211,7 @@ keep="${BACKUP_LOCAL_KEEP:-3}"
 (( keep >= 1 )) || keep=1
 prune_local_archives() {
   local archives i
-  mapfile -t archives < <(find "$BACKUP_LOCAL_DIR" -maxdepth 1 -name 'conclave-*.tar.gz.age' | by_stamp)
+  mapfile -t archives < <(shopt -s nullglob; for found in "${BACKUP_LOCAL_DIR}"/conclave-*.tar.gz.age; do printf '%s\n' "$found"; done | by_stamp)
   for ((i = 0; i < ${#archives[@]} - keep; i++)); do
     rm -f "${archives[i]}"
   done
