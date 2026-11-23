@@ -161,6 +161,7 @@ interface JoinScreenProps {
   onUserChange: (user: { id: string; email: string; name: string } | null) => void;
   onIsAdminChange: (isAdmin: boolean) => void;
   meetError?: MeetError | null;
+  mediaError?: MeetError | null;
   meetingEndedNotice?: string | null;
   onDismissMeetingEndedNotice?: () => void;
   videoEffects: VideoEffectsState;
@@ -302,6 +303,7 @@ function JoinScreen({
   onUserChange,
   onIsAdminChange,
   meetError,
+  mediaError,
   meetingEndedNotice,
   onDismissMeetingEndedNotice,
   videoEffects,
@@ -394,8 +396,10 @@ function JoinScreen({
       ?.getVideoTracks()
       .some((track) => track.readyState === "live" && track.enabled),
   );
+  const isPermissionDenied =
+    mediaError?.code === "PERMISSION_DENIED" || meetError?.code === "PERMISSION_DENIED";
   const isCameraPermissionBlocked =
-    meetError?.code === "PERMISSION_DENIED" ||
+    isPermissionDenied ||
     (!hasLivePreviewCamera &&
       (cameraPermissionState === "prompt" ||
         cameraPermissionState === "denied"));
@@ -404,7 +408,7 @@ function JoinScreen({
     !isCameraOn &&
     (cameraPermissionState === "prompt" ||
       cameraPermissionState === "denied" ||
-      meetError?.code === "PERMISSION_DENIED");
+      isPermissionDenied);
   const prewarmLiveCameraEffects = (reason: string) => {
     if (activeVideoEffectsCount <= 0 && !isEffectsOpen) return;
     if (shouldDeferPreviewVideoEffectsPreload) return;

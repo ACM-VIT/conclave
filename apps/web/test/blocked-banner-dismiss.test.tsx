@@ -22,6 +22,7 @@ function InCallBanner({ initial, onRetry }: { initial: MeetError; onRetry: () =>
       onDismiss={() => setMeetError(null)}
       primaryActionLabel="Try again"
       onPrimaryAction={onRetry}
+      collapseOnDismiss={meetError.code === "NETWORK_BLOCKED"}
     />
   ) : null;
 }
