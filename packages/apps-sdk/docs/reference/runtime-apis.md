@@ -73,10 +73,15 @@ timer, an effect, a promise, a media event, or code that runs on mount.
   the replacement.
 - Each `key` runs once per app activation. Use a key that names the change, such
   as `result:<spinId>`.
-- If the server refuses the copy it ran on for a passing reason, it runs once
-  more on the replacement, at most three times in all. A refusal because the
-  document is full, locked or invalid is final.
-- `write` must be safe to run again on a copy that already has its change.
+- Everything `write` changes goes out as one update, so the server keeps all of
+  it or none of it.
+- If the copy it ran on is refused, the provider checks the replacement. When
+  the server already has the change, it is done. Otherwise it runs again on the
+  replacement, at most three times in all, unless the refusal was because the
+  document is full, locked or invalid, which is final.
+- `write` must re-check, on the copy it is given, the state it was decided
+  against (the same play, the same spin not yet recorded), because it can run
+  after that state has moved on.
 
 A test in `apps/web/test/app-automatic-writes.test.ts` fails when an app writes
 its document anywhere else outside a user event handler.

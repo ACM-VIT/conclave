@@ -701,12 +701,13 @@ export function useSyncedPlayback({
     } catch {
       position = 0;
     }
-    writeOnce(`ended:${ended}:${recordRef.current.updatedAt}`, (live) => {
+    const endedPlay = recordRef.current.updatedAt;
+    writeOnce(`ended:${ended}:${endedPlay}`, (live) => {
+      if (getVideoId(live) !== ended || getPlayback(live).updatedAt !== endedPlay) return;
       if (getQueue(live).length > 0) {
         advanceQueue(live, ended);
         return;
       }
-      if (getVideoId(live) !== ended) return;
       writePlayback(live, {
         state: "paused",
         positionSeconds: position,

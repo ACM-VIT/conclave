@@ -4,7 +4,6 @@ import type * as Y from "yjs";
 import { useApps } from "../../../../sdk/hooks/useApps";
 import { useAppDoc } from "../../../../sdk/hooks/useAppDoc";
 import {
-  advanceQueue,
   enqueue,
   getPlayback,
   getVideoId,
@@ -250,10 +249,11 @@ export function WatchWebApp() {
     !isPlaying &&
     player.duration > 0 &&
     player.currentTime >= player.duration - 1.5;
+  const finishPlay = player.onEnded;
   useEffect(() => {
     if (isReadOnly || !videoOver || queue.length === 0 || !videoId) return;
-    writeOnce(`ended:${videoId}:${getPlayback(doc).updatedAt}`, (live) => advanceQueue(live, videoId));
-  }, [doc, isReadOnly, queue.length, videoId, videoOver, writeOnce]);
+    finishPlay();
+  }, [finishPlay, isReadOnly, queue.length, videoId, videoOver]);
 
   const endedIdle = videoOver && queue.length === 0;
 

@@ -9,9 +9,9 @@ import { AppsContext, AppsProvider } from "../../../packages/apps-sdk/src/sdk/ru
 import { useApps } from "../../../packages/apps-sdk/src/sdk/hooks/useApps";
 import { useAppDoc } from "../../../packages/apps-sdk/src/sdk/hooks/useAppDoc";
 import { wheelApp } from "../../../packages/apps-sdk/src/apps/wheel/web/index";
-import { addEntry, createWheelDoc, getEntries, getHistory, startSpin } from "../../../packages/apps-sdk/src/apps/wheel/core/doc/index";
+import { addEntry, createWheelDoc, getEntries, getHistory, setRemoveWinnerOnDone, startSpin } from "../../../packages/apps-sdk/src/apps/wheel/core/doc/index";
 import { useSyncedPlayback } from "../../../packages/apps-sdk/src/apps/watch/web/hooks/useSyncedPlayback";
-import { createWatchDoc, enqueue, getQueue, getVideoId, setVideo } from "../../../packages/apps-sdk/src/apps/watch/core/doc/index";
+import { createWatchDoc, enqueue, getPlayback, getQueue, getVideoId, setVideo, writePlayback } from "../../../packages/apps-sdk/src/apps/watch/core/doc/index";
 import type { AppsContextValue } from "../../../packages/apps-sdk/src/sdk/types";
 import MeetingAppLayout from "../src/app/components/MeetingAppLayout";
 
@@ -357,5 +357,86 @@ describe("watch auto-advance under refusals", () => {
     expect(sfu.state.refusalsSent).toBe(1);
     expect(server.getMap("scratch").get("advance")).toBeUndefined();
     expect(ctx.rejectedChangeReason).toBe("too-large");
+  });
+});
+
+describe("automatic writes decided against an older state", () => {
+  it("save a wheel result and its winner's removal together, even when the server refuses the removal", async () => {
+    const server = wheelServer();
+    setRemoveWinnerOnDone(server, true);
+    const sfu = fakeSfu("wheel", server);
+    await mount(sfu.socket, wheelApp.web!, [wheelApp as never]);
+    await startOwnSpin(sfu);
+    sfu.refuseNext("rate-limited", (after, before) => getEntries(after).length < getEntries(before).length);
+
+    await advance(SPIN_MS + 2_000);
+    await sfu.deliverRefusals();
+    await advance(10_000);
+
+    expect(sfu.state.refusalsSent).toBe(1);
+    expect(resultsOn(server)).toBe(1);
+    expect(getEntries(server).map((entry) => entry.label)).toEqual(["Ada"]);
+    expect(getEntries(ctx.getDoc("wheel")).map((entry) => entry.label)).toEqual(["Ada"]);
+  });
+
+  it("do not pause a replay with an end action the server already saved", async () => {
+    const server = createWatchDoc();
+    setVideo(server, "first", { play: true });
+    const sfu = fakeSfu("watch", server);
+    await mount(sfu.socket, WatchPlayer, [{ id: "watch", name: "Watch" } as never]);
+    await act(async () => player.onEnded());
+    expect(getPlayback(server).state).toBe("paused");
+
+    await advance(1_000);
+    await act(async () => writePlayback(ctx.getDoc("watch"), { state: "playing", positionSeconds: 0 }));
+    sfu.refuseNext("timed-out", (after) => after.getMap("scratch").get("note") === "Unsaved");
+    await act(async () => ctx.getDoc("watch").getMap("scratch").set("note", "Unsaved"));
+    await sfu.deliverRefusals();
+    await advance(5_000);
+
+    expect(sfu.state.refusalsSent).toBe(1);
+    expect(getPlayback(server).state).toBe("playing");
+    expect(getPlayback(ctx.getDoc("watch")).state).toBe("playing");
+  });
+
+  it("skip a refused end action when someone replays the video before the rebuild lands", async () => {
+    const server = createWatchDoc();
+    setVideo(server, "first", { play: true });
+    const sfu = fakeSfu("watch", server);
+    await mount(sfu.socket, WatchPlayer, [{ id: "watch", name: "Watch" } as never]);
+    sfu.state.holdSyncs = true;
+    sfu.refuseNext("timed-out");
+    await act(async () => player.onEnded());
+    await sfu.deliverRefusals();
+    await advance(1_000);
+    writePlayback(server, { state: "playing", positionSeconds: 0 });
+
+    await sfu.releaseSyncs();
+    await advance(5_000);
+
+    expect(getPlayback(server).state).toBe("playing");
+    expect(getPlayback(ctx.getDoc("watch")).state).toBe("playing");
+  });
+
+  it("never run a saved automatic write again after an unrelated refusal", async () => {
+    const server = createWatchDoc();
+    const sfu = fakeSfu("watch", server);
+    await mount(sfu.socket, WatchPlayer, [{ id: "watch", name: "Watch" } as never]);
+    let runs = 0;
+    await act(async () =>
+      ctx.documents.writeOnce("watch", "count", (live) => {
+        runs += 1;
+        live.getMap("scratch").set("runs", runs);
+      }),
+    );
+    expect(server.getMap("scratch").get("runs")).toBe(1);
+
+    sfu.refuseNext("timed-out", (after) => after.getMap("scratch").get("note") === "Unsaved");
+    await act(async () => ctx.getDoc("watch").getMap("scratch").set("note", "Unsaved"));
+    await sfu.deliverRefusals();
+    await advance(5_000);
+
+    expect(runs).toBe(1);
+    expect(server.getMap("scratch").get("runs")).toBe(1);
   });
 });

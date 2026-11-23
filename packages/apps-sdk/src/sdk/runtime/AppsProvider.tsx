@@ -48,9 +48,26 @@ const FINAL_REFUSALS = new Set(["too-large", "locked", "invalid"]);
 
 type AutomaticWrite = {
   write: (doc: Y.Doc) => void;
+  state: "waiting" | "written" | "unconfirmed" | "done";
   writtenOn: string | null;
+  update: Uint8Array | null;
   attempts: number;
-  final: boolean;
+  finalIfLost: boolean;
+};
+
+const writeAtomically = (doc: Y.Doc, write: (doc: Y.Doc) => void): Uint8Array | null => {
+  const origin = {};
+  let written: Uint8Array | null = null;
+  const capture = (update: Uint8Array, updateOrigin: unknown) => {
+    if (updateOrigin === origin) written = update;
+  };
+  doc.on("update", capture);
+  try {
+    doc.transact(() => write(doc), origin);
+  } finally {
+    doc.off("update", capture);
+  }
+  return written;
 };
 
 type SyncRun = {
@@ -406,11 +423,18 @@ export function AppsProvider({
       const doc = docsRef.current.get(appId);
       const replicaId = replicaIdsRef.current.get(appId);
       if (!doc || !replicaId) return;
+      const committed = Y.snapshot(doc);
       for (const entry of writes.values()) {
-        if (entry.final || entry.writtenOn !== null) continue;
-        entry.writtenOn = replicaId;
+        if (entry.state === "unconfirmed") {
+          const saved = entry.update !== null && Y.snapshotContainsUpdate(committed, entry.update);
+          const exhausted = entry.finalIfLost || entry.attempts >= MAX_AUTOMATIC_WRITE_ATTEMPTS;
+          entry.state = saved || exhausted ? "done" : "waiting";
+        }
+        if (entry.state !== "waiting") continue;
         entry.attempts += 1;
-        entry.write(doc);
+        entry.writtenOn = replicaId;
+        entry.update = writeAtomically(doc, entry.write);
+        entry.state = entry.update ? "written" : "done";
       }
     },
     [canWrite]
@@ -421,12 +445,9 @@ export function AppsProvider({
       const writes = automaticWritesRef.current.get(appId);
       if (!writes || !replicaId) return;
       for (const entry of writes.values()) {
-        if (entry.writtenOn !== replicaId) continue;
-        if ((refusal && FINAL_REFUSALS.has(refusal.reason)) || entry.attempts >= MAX_AUTOMATIC_WRITE_ATTEMPTS) {
-          entry.final = true;
-        } else {
-          entry.writtenOn = null;
-        }
+        if (entry.state !== "written" || entry.writtenOn !== replicaId) continue;
+        entry.state = "unconfirmed";
+        entry.finalIfLost = refusal !== null && FINAL_REFUSALS.has(refusal.reason);
       }
     },
     []
@@ -437,7 +458,7 @@ export function AppsProvider({
       const writes = automaticWritesRef.current.get(appId) ?? new Map<string, AutomaticWrite>();
       automaticWritesRef.current.set(appId, writes);
       if (writes.has(key)) return;
-      writes.set(key, { write, writtenOn: null, attempts: 0, final: false });
+      writes.set(key, { write, state: "waiting", writtenOn: null, update: null, attempts: 0, finalIfLost: false });
       runAutomaticWrites(appId);
     },
     [runAutomaticWrites]
