@@ -851,6 +851,12 @@ try {
   checkpoint "journal ${svc} $*"
 }
 
+# The config hash a serving container of this service carries: rendered with
+# the very settings its serving start uses, never the shell's or .env's.
+serving_config_hash() {
+  env "$(image_var "$1")=$2" SFU_START_DRAINING=false "${COMPOSE[@]}" config --hash "$1" | awk '{print $2}'
+}
+
 # One rule for "serving", used for the last-known-good image, the deploy's
 # final check and whether a rollback restored the instance: its container runs
 # the image (when one is given) and did not boot drained, /health says
@@ -936,14 +942,47 @@ restore_lkg() {
   echo "${svc} is serving on its previous image again." >&2
 }
 
+# Whether repair may restart an instance: only one that cannot be carrying
+# a call. Its container is stopped or absent, or it is out of rotation
+# (draining) and reports no rooms for PLACEMENT_SETTLE_SECONDS, as long as a
+# placement reserved before its drain could still open one. An instance that
+# takes meetings, or whose /status cannot be read while its container runs,
+# is never restarted here: the deploy below drains it the normal way.
+repair_may_restart() {
+  local svc="$1" status settle_until
+  status="$(instance_status "$svc" 2>/dev/null)" || status=""
+  if [[ -z "$status" ]]; then
+    case "$(container_state "$svc")" in
+      stopped|absent) return 0 ;;
+    esac
+    echo "${svc}'s /status cannot be read, so it is not restarted now; the deploy below decides what to do with it."
+    return 1
+  fi
+  if [[ "$(printf "%s" "$status" | json_field draining)" != "true" ]]; then
+    echo "${svc} takes meetings, so it is not restarted now; the deploy below drains it first."
+    return 1
+  fi
+  settle_until=$(( $(date +%s) + PLACEMENT_SETTLE_SECONDS ))
+  while true; do
+    status="$(instance_status "$svc" 2>/dev/null)" || status=""
+    if [[ "$(printf "%s" "$status" | json_field rooms 2>/dev/null || true)" != "0" ]]; then
+      echo "${svc} has rooms on it (or no readable /status), so it is not restarted now; the deploy below waits for them."
+      return 1
+    fi
+    (( $(date +%s) >= settle_until )) && return 0
+    sleep "$DRAIN_POLL_SECONDS"
+  done
+}
+
 # A deploy that died mid-step left its journal behind. Before anything else,
 # each instance it touched is brought back to a state a deploy can build on:
-# one it drained goes back into service; one with a candidate started goes
-# back to its last-known-good image; one promoting a candidate that passed its
-# canary finishes, or goes back if it will not serve. An instance carrying a
-# call is never recreated here; the deploy below waits for that call.
+# one it drained goes back into service; one already serving its
+# last-known-good image (or, mid-promotion, the build that passed) only has
+# its journal finished; one with a candidate started goes back to its
+# last-known-good image; one promoting a build that passed finishes, or goes
+# back if it will not serve. Nothing that may carry a call is restarted.
 repair_interrupted() {
-  local svc phase lkg candidate prev url image_name status rooms
+  local svc phase lkg candidate prev url image_name status
   for svc in "${ALL_SFU_SERVICES[@]}"; do
     phase="$(journal_get "$svc" phase)"
     [[ -z "$phase" || "$phase" == "idle" || "$phase" == "passed" ]] && continue
@@ -953,16 +992,11 @@ repair_interrupted() {
     candidate="$(journal_get "$svc" candidate)"
     prev="$(journal_get "$svc" prevLkg)"
     echo "A deploy stopped while ${svc} was ${phase}; repairing it before anything else."
-    status="$(instance_status "$svc" 2>/dev/null)" || status=""
-    rooms="$(printf "%s" "$status" | json_field rooms 2>/dev/null || true)"
-    if [[ -n "$status" && "$rooms" != "0" && "$phase" != "drained" ]]; then
-      echo "${svc} has ${rooms:-unknown} rooms on it, so it is not recreated now; the deploy below waits for them."
-      continue
-    fi
     case "$phase" in
       drained)
         # The container still runs the image it served on; only the drain
         # this deploy sent is undone.
+        status="$(instance_status "$svc" 2>/dev/null)" || status=""
         if [[ "$(journal_get "$svc" wasDraining)" != "true" && -n "$status" && "$(container_image "$svc")" == "$lkg" ]]; then
           set_draining "$url" false >/dev/null || true
           checkpoint "undrain ${svc}"
@@ -973,17 +1007,25 @@ repair_interrupted() {
         if serving "$svc" "$candidate"; then
           journal_set "$svc" phase=idle lkg="$candidate" candidate= prevLkg=
           docker tag "$candidate" "${IMAGE_REPO}:rollback-${svc}"
-        elif docker tag "$candidate" "$image_name" && checkpoint "tag ${svc}" &&
+        elif [[ -n "$prev" ]] && serving "$svc" "$prev"; then
+          journal_set "$svc" phase=idle lkg="$prev" candidate= prevLkg=
+        elif repair_may_restart "$svc"; then
+          if docker tag "$candidate" "$image_name" && checkpoint "tag ${svc}" &&
              up_service "$svc" "$image_name" false && checkpoint "start ${svc}" &&
              wait_serving "$svc" "$candidate"; then
-          journal_set "$svc" phase=idle lkg="$candidate" candidate= prevLkg=
-          docker tag "$candidate" "${IMAGE_REPO}:rollback-${svc}"
-        else
-          restore_lkg "$svc" "$url" "$image_name" "$prev" || echo "ERROR: ${svc} could not be repaired; the deploy below treats it as down." >&2
+            journal_set "$svc" phase=idle lkg="$candidate" candidate= prevLkg=
+            docker tag "$candidate" "${IMAGE_REPO}:rollback-${svc}"
+          else
+            restore_lkg "$svc" "$url" "$image_name" "$prev" || echo "ERROR: ${svc} could not be repaired; the deploy below treats it as down." >&2
+          fi
         fi
         ;;
       *)
-        restore_lkg "$svc" "$url" "$image_name" "$lkg" || echo "ERROR: ${svc} could not be repaired; the deploy below treats it as down." >&2
+        if [[ -n "$lkg" ]] && serving "$svc" "$lkg"; then
+          journal_set "$svc" phase=idle candidate= prevLkg=
+        elif repair_may_restart "$svc"; then
+          restore_lkg "$svc" "$url" "$image_name" "$lkg" || echo "ERROR: ${svc} could not be repaired; the deploy below treats it as down." >&2
+        fi
         ;;
     esac
   done
@@ -1031,7 +1073,7 @@ deploy_service() {
   # Deployed means the target passed its canary here (the journal says it is
   # this instance's last-known-good), with the current config, and serves.
   if [[ -n "$container" && "$recorded" == "$TARGET_IMAGE" && "$(container_image "$svc")" == "$TARGET_IMAGE" ]] &&
-     [[ "$(docker inspect -f '{{index .Config.Labels "com.docker.compose.config-hash"}}' "$container")" == "$("${COMPOSE[@]}" config --hash "$svc" | awk '{print $2}')" ]]; then
+     [[ "$(docker inspect -f '{{index .Config.Labels "com.docker.compose.config-hash"}}' "$container")" == "$(serving_config_hash "$svc" "$image_name")" ]]; then
     if serving "$svc" "$TARGET_IMAGE"; then
       echo "${svc} already runs ${TARGET_COMMIT} with the current config; leaving it alone."
       return 0

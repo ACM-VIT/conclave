@@ -918,6 +918,56 @@ test("a rollback whose public route returns 502 is not reported as restored (exi
   });
 });
 
+// --- Greptile on 426f7eef.
+
+test("repair never restarts an instance that already serves its last-known-good image", async () => {
+  // A rollback killed after sfu-a came back serving: its journal still says
+  // rollback, but it takes calls, so restarting it would cut a caller who
+  // joined since.
+  await withSfus({ "sfu-a": {}, "sfu-b": { rooms: 1 } }, async (sfus) => {
+    const shared = await sharedRun("deploy-repair-");
+    try {
+      const first = await deploy(sfus, { env: { ...shared.env, DEPLOY_TEST_NO_BUNDLE: "sha256:target", SFU_DEPLOY_TEST_CRASH_AT: "start sfu-a back" } });
+      assert.equal(first.code, null, first.output);
+      assert.equal(sfus["sfu-a"].image, "sha256:running");
+      assert.equal(sfus["sfu-a"].draining, false);
+      const recreates = sfus["sfu-a"].recreates.length;
+      const next = await deploy(sfus, { env: { ...shared.env, SFU_DEPLOY_SERVICES: "sfu-b" } });
+      assert.equal(sfus["sfu-a"].recreates.length, recreates, `sfu-a was not restarted:\n${next.output}`);
+      assert.equal(sfus["sfu-a"].draining, false);
+    } finally {
+      await rm(shared.dir, { recursive: true, force: true });
+    }
+  });
+});
+
+test("repair never restarts an instance whose status it cannot read", async () => {
+  // A candidate phase on record, but sfu-a's /status does not answer while
+  // its container runs: its calls are unknown, so it is not restarted.
+  await withSfus({ "sfu-a": { statusAnswers: false }, "sfu-b": { rooms: 1 } }, async (sfus) => {
+    const result = await deploy(sfus, {
+      env: { SFU_DEPLOY_SERVICES: "sfu-b" },
+      journals: { "sfu-a": { phase: "candidate", lkg: "sha256:running", candidate: "sha256:target" } },
+    });
+    assert.equal(sfus["sfu-a"].recreates.length, 0, result.output);
+    assert.match(result.output, /sfu-a's \/status cannot be read, so it is not restarted/);
+  });
+});
+
+test("an inherited SFU_START_DRAINING=true does not make a retry redo finished instances", async () => {
+  await withSfus({ "sfu-a": { onTarget: true }, "sfu-b": { onTarget: true } }, async (sfus) => {
+    const result = await deploy(sfus, {
+      envLines: ["SFU_START_DRAINING=true"],
+      env: { SFU_START_DRAINING: "true" },
+      journals: { "sfu-a": { phase: "idle", lkg: "sha256:target" }, "sfu-b": { phase: "idle", lkg: "sha256:target" } },
+    });
+    assert.equal(result.code, 0, result.output);
+    assert.match(result.output, /sfu-a already runs .* leaving it alone/);
+    assert.match(result.output, /sfu-b already runs .* leaving it alone/);
+    assert.equal(sfus["sfu-a"].recreates.length + sfus["sfu-b"].recreates.length, 0);
+  });
+});
+
 // Every test above has its own fake SFUs, state dir, lock file and docker
 // stand-in, and its waits are cut short in deploy(), so they run side by side.
 describe("deploy-sfu.sh", { concurrency: 8 }, () => {
