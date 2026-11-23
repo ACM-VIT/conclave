@@ -4,6 +4,7 @@ import {
   canReuseSocketAfterFailure,
   classifyReconnectFailure,
   planMediaRebuildScope,
+  planReconnectSettlement,
   planRoomUnavailableRetry,
   resolveInFlightReconnectRequest,
   resolveReconnectStartAttempts,
@@ -196,5 +197,31 @@ describe("how much a media failure rebuilds", () => {
     ).toBeNull();
     expect(planMediaRebuildScope({ refreshIceServers: true }, { socketConnected: true })).toBeNull();
     expect(planMediaRebuildScope(undefined, { socketConnected: true })).toBeNull();
+  });
+});
+
+describe("a reconnect run that is ending", () => {
+  it("runs a Try again that was queued behind a one-direction rebuild that worked", () => {
+    expect(
+      planReconnectSettlement({ rejoined: true, userRetryQueued: true, leaving: false }),
+    ).toEqual({ runUserRetry: true, replayDeferredRebuilds: false });
+  });
+
+  it("runs a queued Try again after a run that stopped without rejoining", () => {
+    expect(
+      planReconnectSettlement({ rejoined: false, userRetryQueued: true, leaving: false }),
+    ).toEqual({ runUserRetry: true, replayDeferredRebuilds: false });
+  });
+
+  it("replays rebuilds held for the rejoin when nothing was queued", () => {
+    expect(
+      planReconnectSettlement({ rejoined: true, userRetryQueued: false, leaving: false }),
+    ).toEqual({ runUserRetry: false, replayDeferredRebuilds: true });
+  });
+
+  it("drops everything when the user is leaving", () => {
+    expect(
+      planReconnectSettlement({ rejoined: true, userRetryQueued: true, leaving: true }),
+    ).toEqual({ runUserRetry: false, replayDeferredRebuilds: false });
   });
 });

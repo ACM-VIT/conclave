@@ -57,6 +57,29 @@ export const resolveInFlightReconnectRequest = (
   };
 };
 
+/**
+ * What a reconnect run that is ending still owes. A Try again pressed while
+ * it ran was queued behind it, and a run can end without the rejoin that Try
+ * again means (one direction rebuilt on its own, or no rejoin at all), so the
+ * queued Try again runs now unless the user is leaving. It rebuilds
+ * everything, so rebuilds held for the rejoin are dropped with it.
+ */
+export const planReconnectSettlement = ({
+  rejoined,
+  userRetryQueued,
+  leaving,
+}: {
+  rejoined: boolean;
+  userRetryQueued: boolean;
+  leaving: boolean;
+}): { runUserRetry: boolean; replayDeferredRebuilds: boolean } => {
+  const runUserRetry = userRetryQueued && !leaving;
+  return {
+    runUserRetry,
+    replayDeferredRebuilds: rejoined && !leaving && !runUserRetry,
+  };
+};
+
 export const resolveReconnectStartAttempts = (
   previousAttempts: number,
   maxAttempts: number,

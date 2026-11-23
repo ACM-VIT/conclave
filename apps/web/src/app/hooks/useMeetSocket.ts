@@ -30,6 +30,7 @@ import {
   classifyReconnectFailure,
   planRoomUnavailableRetry,
   planMediaRebuildScope,
+  planReconnectSettlement,
   resolveInFlightReconnectRequest,
   resolveReconnectStartAttempts,
   type ReconnectFailureKind,
@@ -1112,6 +1113,7 @@ export function useMeetSocket({
   const reconnectGenerationRef = useRef(0);
   const reconnectBackoffCancelRef = useRef<(() => void) | null>(null);
   const manualReconnectRetryRequestedRef = useRef(false);
+  const retryReconnectRef = useRef<() => Promise<void>>(async () => {});
   const reconnectPhaseRef =
     useRef<ReconnectRecoveryStatus["phase"] | "idle">("idle");
   const serverRestartNoticeRef = useRef<string | null>(null);
@@ -9862,13 +9864,21 @@ export function useMeetSocket({
     } finally {
       if (reconnectGeneration === reconnectGenerationRef.current) {
         reconnectInFlightRef.current = false;
-        // A transport this rejoin built may have failed before it finished.
-        // Its rebuild waited for the rejoin, so run it now.
         const { deferred, recovery } = takeDeferredRebuilds(
           mediaPathRecoveryRef.current,
         );
         commitMediaPathRecovery(recovery);
-        if (rejoined) {
+        const settlement = planReconnectSettlement({
+          rejoined,
+          userRetryQueued: manualReconnectRetryRequestedRef.current,
+          leaving: intentionalDisconnectRef.current,
+        });
+        manualReconnectRetryRequestedRef.current = false;
+        if (settlement.runUserRetry) {
+          void retryReconnectRef.current();
+        } else if (settlement.replayDeferredRebuilds) {
+          // A transport this rejoin built may have failed before it finished.
+          // Its rebuild waited for the rejoin, so run it now.
           for (const { direction, transportId, reason } of deferred) {
             const transport =
               direction === "producer"
@@ -10315,6 +10325,10 @@ export function useMeetSocket({
     startJoin,
     updateReconnectRecoveryStatus,
   ]);
+
+  useEffect(() => {
+    retryReconnectRef.current = () => retryReconnect();
+  }, [retryReconnect]);
 
   useEffect(() => {
     if (shouldAutoJoinRef.current) {
