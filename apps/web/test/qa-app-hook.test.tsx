@@ -340,3 +340,28 @@ it("keeps showing an upvote until the view reaches the revision its answer named
   expect(qa.questions[0].hasUpvoted).toBe(true);
 });
 
+
+it("keeps a pending upvote when the person's vote on another question changes meanwhile", async () => {
+  await click();
+  const pending = qa.questions.find((item) => item.id === "q1")?.hasUpvoted;
+  // Another tab of theirs upvotes a different question before the answer.
+  await act(async () =>
+    push({
+      kind: "patch",
+      subscription,
+      generation: 1,
+      serverNowMs: Date.now(),
+      seq: 1,
+      put: [{ bucket: "myUpvotes", key: "q2", value: {} }],
+      remove: [],
+    }),
+  );
+  const afterOtherVote = qa.questions.find((item) => item.id === "q1")?.hasUpvoted;
+  // A second quick click is a change of mind about q1.
+  await click();
+  await answer({ ok: true, value: null, revision: 3 }, 2);
+
+  expect(pending).toBe(true);
+  expect(afterOtherVote).toBe(true);
+  expect(upvotesSent()).toEqual([true, false]);
+});
