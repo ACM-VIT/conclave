@@ -976,6 +976,26 @@ describe("the room lifecycle model", () => {
     expect(outcome.failures, report(outcome)).toEqual([]);
   });
 
+  it("records what a host of the lost call does in a room another tab is still opening", async () => {
+    const outcome = await runScript(false, [
+      open("alice"),
+      open("carol"),
+      host("alice", "admit", "carol"),
+      host("alice", "promote", "carol"),
+      open("invitee"),
+      host("alice", "admit", "invitee"),
+      { kind: "restart" },
+      open("alice", { hold: true }),
+      { kind: "leave", actor: "alice" },
+      { kind: "release", alongside: null },
+      open("carol"),
+      open("invitee"),
+      host("carol", "kick", "invitee"),
+      { kind: "restart" },
+    ]);
+    expect(outcome.failures, report(outcome)).toEqual([]);
+  });
+
   it("gives no recovery pass to someone let in while the room waits for its lost call", async () => {
     const outcome = await runScript(true, [
       open("alice"),

@@ -880,6 +880,8 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         const previousHostUserId = mayChangeRoster ? room.getHostUserId() : null;
         const previousAdminUserIds = mayChangeRoster ? room.getAdminUserIds() : [];
 
+        const hostsUnclaimedRoom = isAdminJoin && room.awaitingOpener !== null;
+        if (hostsUnclaimedRoom) room.awaitingOpener = null;
         if (isAdminJoin) {
           room.registerAdminUserKey(userKey);
         }
@@ -914,7 +916,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             room.allowLockedUser(userKey);
           }
         }
-        if (isAdminJoin && (createdRoom || restorerState !== "none")) {
+        if (isAdminJoin && (createdRoom || hostsUnclaimedRoom || restorerState !== "none")) {
           room.markRestored();
           state.roomRecovery.noteRunning(room);
         }

@@ -36,7 +36,7 @@ A room's stage follows from these: **Opening** (`awaitingOpener` set), **Recover
 | Event | Stage | Hosts | Admissions and removals | Ledger, passes, schedule |
 |---|---|---|---|---|
 | A join creates the room | Opening | Restored from the lost call, less anyone removed | Restored removals; locked | Nothing |
-| A join claims an Opening room (it created it, or may open the code) | One claim per room. Running if the claimer may host; Recovering if not. A lost call past its window ends first | The claimer hosts when Running; temporary host if the code has another owner | No change | Running: running record |
+| A join claims an Opening room (it created it, may open the code, or is seated as its host) | One claim per room. Running if the claimer may host; Recovering if not. A lost call past its window ends first | The claimer hosts when Running; temporary host if the code has another owner | No change | Running: running record |
 | A join into a claimed room | No change | Host only as the owner, a recorded host or co-host who is not removed, someone from a Recovering call, or someone who may open a Lapsed one | Seated if admitted, invited and not removed, or the room is unlocked; else knocks | Pass if Running |
 | Admit | No change | No change | Admission given; that person's removal and block cleared (the host decided) | Running record; schedule decision |
 | Reject | No change | No change | Knock dropped | Nothing |
