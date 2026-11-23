@@ -228,6 +228,67 @@ if [[ -f "$SFU_ENV_FILE" ]]; then
   COMPOSE_ENV_FILES+=(--env-file "$SFU_ENV_FILE")
 fi
 COMPOSE=(docker compose "${COMPOSE_ENV_FILES[@]}" -f "$COMPOSE_FILE")
+# The SFU image runs as the unprivileged node user. Containers from earlier
+# images ran as root and left root-owned files (the SQLite database among them)
+# in the recordings volume. Hand anything node does not own over before a new
+# container starts. Safe to repeat; it only touches mismatched files.
+# Compose drops every capability, so root also needs DAC_READ_SEARCH to walk
+# directories it does not own.
+#
+# Older images fell back to JSON files in the container layer when SQLite was
+# locked. The old container is stopped first, so it cannot write after the
+# copy, and the copies stay on the volume for a later import. The copy runs in
+# a container of the new image and writes to the folder that image names
+# (CONCLAVE_FALLBACK_IMPORT_DIR).
+copy_fallback_json() (
+  local service="$1" container changes staging name path
+  local -a copied=()
+  umask 077
+  container="$("${COMPOSE[@]}" ps -a -q "$service" | head -n 1)" || return 1
+  [[ -n "$container" ]] || return 0
+  if ! changes="$(docker diff "$container")"; then
+    echo "Could not list the files the old ${service} container wrote." >&2
+    return 1
+  fi
+  staging="$(mktemp -d)"
+  trap 'rm -rf "$staging"' EXIT
+  for name in scheduling.json scheduled-meetings.json scheduled-webinars.json; do
+    path="/app/packages/sfu/data/${name}"
+    grep -qxF -e "A ${path}" -e "C ${path}" <<<"$changes" || continue
+    if ! docker cp "${container}:${path}" "${staging}/${name}"; then
+      echo "Could not copy ${name} out of the old ${service} container." >&2
+      return 1
+    fi
+    chmod 0600 "${staging}/${name}"
+    copied+=("$name")
+  done
+  (( ${#copied[@]} > 0 )) || return 0
+  if ! tar -C "$staging" -cf - "${copied[@]}" | "${COMPOSE[@]}" run -T --rm --no-deps --user node --entrypoint sh "$service" -c \
+    'umask 077 && dest=${CONCLAVE_FALLBACK_IMPORT_DIR:?}/$1 && mkdir -p $dest && chmod 0700 $CONCLAVE_FALLBACK_IMPORT_DIR $dest && tar -xf - -C $dest && chmod 0600 $dest/*.json' sh "$service"; then
+    echo "Could not copy the old ${service} container's JSON fallback files onto the volume." >&2
+    return 1
+  fi
+  echo "Copied JSON fallback files from the old ${service} container onto the volume: ${copied[*]}"
+)
+
+ensure_state_ownership() {
+  local service="$1"
+  "${COMPOSE[@]}" stop "$service"
+  "${COMPOSE[@]}" run --rm --no-deps --user root --cap-add CHOWN --cap-add DAC_READ_SEARCH --entrypoint find "$service" \
+    /var/lib/conclave/recordings \( ! -user node -o ! -group node \) -exec chown node:node {} +
+  if ! copy_fallback_json "$service"; then
+    echo "Stopped before replacing ${service}. Its old container is stopped, not removed; start it again with: ${COMPOSE[*]} start ${service}" >&2
+    exit 1
+  fi
+}
+
+build_and_start() {
+  local service="$1"
+  "${COMPOSE[@]}" build "$service"
+  ensure_state_ownership "$service"
+  "${COMPOSE[@]}" up -d "$service"
+}
+
 HAS_REDIS_SERVICE="false"
 if "${COMPOSE[@]}" config --services | rg -x "redis" >/dev/null 2>&1; then
   HAS_REDIS_SERVICE="true"
@@ -257,6 +318,11 @@ run_deploy_preflight() {
 
 echo "Running fail-closed SFU deployment preflight..."
 run_deploy_preflight
+if [[ "$DEPLOY_BROWSER_LOCAL" == "true" ]]; then
+  # The browser service deploys last, after both SFUs changed; refuse its
+  # configuration now rather than after the SFU swap.
+  "${ROOT_DIR}/scripts/deploy-browser-service.sh" --check-config
+fi
 if [[ "$PREFLIGHT_ONLY" == "true" ]]; then
   echo "Preflight-only run complete; no code, container, drain, or DNS changes were made."
   exit 0
@@ -347,7 +413,7 @@ echo "Active service: ${ACTIVE_SERVICE}"
 echo "Inactive service: ${INACTIVE_SERVICE}"
 
 echo "Building and starting ${INACTIVE_SERVICE}..."
-"${COMPOSE[@]}" up -d --build "$INACTIVE_SERVICE"
+build_and_start "$INACTIVE_SERVICE"
 if [[ "$INACTIVE_SERVICE" == "sfu-a" ]]; then
   validate_public_route "sfu-a" "$SFU_A_PUBLIC_URL"
 else
@@ -417,7 +483,7 @@ elif [[ -n "$ACTIVE_URL" && "$HAS_STATUS_A" == "true" && "$ACTIVE_SERVICE" == "s
 fi
 
 echo "Rebuilding and starting ${ACTIVE_SERVICE}..."
-"${COMPOSE[@]}" up -d --build "$ACTIVE_SERVICE"
+build_and_start "$ACTIVE_SERVICE"
 if [[ "$ACTIVE_SERVICE" == "sfu-a" ]]; then
   validate_public_route "sfu-a" "$SFU_A_PUBLIC_URL"
 else

@@ -201,6 +201,84 @@ function Get-PublicUrl {
   return ""
 }
 
+# The SFU image runs as the unprivileged node user. Containers from earlier
+# images ran as root and left root-owned files (the SQLite database among them)
+# in the recordings volume. Hand anything node does not own over before a new
+# container starts. Safe to repeat; it only touches mismatched files.
+# Older images fell back to JSON files in the container layer when SQLite was
+# locked. The old container is stopped first, so it cannot write after the
+# copy, and the copies stay on the volume for a later import. The copy runs in
+# a container of the new image and writes to the folder that image names
+# (CONCLAVE_FALLBACK_IMPORT_DIR).
+function Copy-FallbackJson {
+  param([string]$Service)
+
+  $containers = @(& docker @($composeBaseArgs + @("ps", "-a", "-q", $Service)))
+  if ($LASTEXITCODE -ne 0) {
+    throw "Could not look up the old $Service container."
+  }
+  $container = $containers | Select-Object -First 1
+  if ([string]::IsNullOrWhiteSpace($container)) {
+    return
+  }
+  $changes = @(& docker diff $container)
+  if ($LASTEXITCODE -ne 0) {
+    throw "Could not list the files the old $Service container wrote."
+  }
+  $staging = Join-Path ([System.IO.Path]::GetTempPath()) ("conclave-fallback-" + [guid]::NewGuid())
+  New-Item -ItemType Directory -Path $staging | Out-Null
+  if (-not $IsWindows) {
+    & chmod 0700 $staging
+  }
+  try {
+    $copied = @()
+    foreach ($name in @("scheduling.json", "scheduled-meetings.json", "scheduled-webinars.json")) {
+      $path = "/app/packages/sfu/data/$name"
+      if (-not (($changes -ccontains "A $path") -or ($changes -ccontains "C $path"))) {
+        continue
+      }
+      & docker cp "${container}:$path" (Join-Path $staging $name)
+      if ($LASTEXITCODE -ne 0) {
+        throw "Could not copy $name out of the old $Service container."
+      }
+      if (-not $IsWindows) {
+        & chmod 0600 (Join-Path $staging $name)
+      }
+      $copied += $name
+    }
+    if ($copied.Count -gt 0) {
+      & tar -C $staging -cf - @copied | & docker @($composeBaseArgs + @(
+        "run", "-T", "--rm", "--no-deps", "--user", "node", "--entrypoint", "sh", $Service, "-c",
+        'umask 077 && dest=${CONCLAVE_FALLBACK_IMPORT_DIR:?}/$1 && mkdir -p $dest && chmod 0700 $CONCLAVE_FALLBACK_IMPORT_DIR $dest && tar -xf - -C $dest && chmod 0600 $dest/*.json', "sh", $Service
+      ))
+      if ($LASTEXITCODE -ne 0) {
+        throw "Could not copy the old $Service container's JSON fallback files onto the volume."
+      }
+      Write-Host "Copied JSON fallback files from the old $Service container onto the volume: $($copied -join ' ')"
+    }
+  } finally {
+    Remove-Item -Recurse -Force -Path $staging -ErrorAction SilentlyContinue
+  }
+}
+
+function Start-SfuService {
+  param([string]$Service)
+
+  Invoke-Checked -Command "docker" -Arguments ($composeBaseArgs + @("build", $Service))
+  Invoke-Checked -Command "docker" -Arguments ($composeBaseArgs + @("stop", $Service))
+  Invoke-Checked -Command "docker" -Arguments ($composeBaseArgs + @(
+    "run", "--rm", "--no-deps", "--user", "root", "--cap-add", "CHOWN", "--cap-add", "DAC_READ_SEARCH", "--entrypoint", "find", $Service,
+    "/var/lib/conclave/recordings", "(", "!", "-user", "node", "-o", "!", "-group", "node", ")",
+    "-exec", "chown", "node:node", "{}", "+"
+  ))
+  try {
+    Copy-FallbackJson -Service $Service
+  } catch {
+    Exit-WithError "$($_.Exception.Message) Stopped before replacing $Service. Its old container is stopped, not removed; start it again with: docker $($composeBaseArgs -join ' ') start $Service"
+  }
+  Invoke-Checked -Command "docker" -Arguments ($composeBaseArgs + @("up", "-d", $Service))
+}
+
 function Get-StatusJson {
   param([string]$Url)
 
@@ -341,6 +419,17 @@ Write-Host "Running fail-closed SFU deployment preflight..."
 if ($LASTEXITCODE -ne 0) {
   Exit-WithError "SFU deployment preflight failed"
 }
+if ($deployBrowserLocal) {
+  # The browser service deploys last, after both SFUs changed; refuse its
+  # configuration now rather than after the SFU swap. It runs in a child
+  # process because it imports the root .env, which would replace values that
+  # packages/sfu/.env set in this one (SFU_SECRET among them).
+  $powershell = (Get-Process -Id $PID).Path
+  & $powershell -NoProfile -File (Join-Path $rootDir "scripts/deploy-browser-service.ps1") --check-config
+  if ($LASTEXITCODE -ne 0) {
+    Exit-WithError "Browser service configuration is invalid."
+  }
+}
 if ($preflightOnly) {
   Write-Host "Preflight-only run complete; no code, container, drain, or DNS changes were made."
   exit 0
@@ -431,7 +520,7 @@ Write-Host "Active service: $activeService"
 Write-Host "Inactive service: $inactiveService"
 
 Write-Host "Building and starting $inactiveService..."
-Invoke-Checked -Command "docker" -Arguments ($composeBaseArgs + @("up", "-d", "--build", $inactiveService))
+Start-SfuService -Service $inactiveService
 
 $forcedDrainActive = $false
 if ($activeService -eq "sfu-a" -and -not $hasStatusA) {
@@ -508,7 +597,7 @@ if ($forcedDrainActive) {
 }
 
 Write-Host "Rebuilding and starting $activeService..."
-Invoke-Checked -Command "docker" -Arguments ($composeBaseArgs + @("up", "-d", "--build", $activeService))
+Start-SfuService -Service $activeService
 
 if ($deployBrowserLocal) {
   Write-Host ""

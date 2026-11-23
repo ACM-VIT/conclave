@@ -48,14 +48,19 @@ function Import-DotEnv {
 }
 
 $buildRuntimeImage = $true
+$checkConfigOnly = $false
 foreach ($arg in $args) {
   switch ($arg) {
     "--skip-runtime-image" {
       $buildRuntimeImage = $false
       continue
     }
+    "--check-config" {
+      $checkConfigOnly = $true
+      continue
+    }
     default {
-      Exit-WithError "Unknown argument: $arg`nUsage: .\deploy-browser-service.ps1 [--skip-runtime-image]"
+      Exit-WithError "Unknown argument: $arg`nUsage: .\deploy-browser-service.ps1 [--skip-runtime-image] [--check-config]"
     }
   }
 }
@@ -74,6 +79,15 @@ if (Test-Path -Path $envFile -PathType Leaf) {
   $composeArgs += @("--env-file", $envFile)
 }
 $composeArgs += @("-f", $composeFile)
+
+# Run the service's own startup checks in the new image, with the environment
+# compose will give it, before anything is replaced.
+Write-Host "Checking the shared browser service configuration..."
+Invoke-Checked -Command "docker" -Arguments ($composeArgs + @("build", "browser-service"))
+Invoke-Checked -Command "docker" -Arguments ($composeArgs + @("run", "--rm", "--no-deps", "browser-service", "node", "packages/shared-browser/dist/server.js", "--check-config"))
+if ($checkConfigOnly) {
+  exit 0
+}
 
 $runtimeImageName = if (-not [string]::IsNullOrWhiteSpace($env:BROWSER_IMAGE_NAME)) {
   $env:BROWSER_IMAGE_NAME
@@ -109,15 +123,43 @@ $novncPortEnd = if (-not [string]::IsNullOrWhiteSpace($env:NOVNC_PORT_END)) {
 } else {
   "6100"
 }
+$browserServiceHost = if (-not [string]::IsNullOrWhiteSpace($env:BROWSER_SERVICE_HOST)) {
+  $env:BROWSER_SERVICE_HOST
+} else {
+  "127.0.0.1"
+}
 $browserHostAddress = if (-not [string]::IsNullOrWhiteSpace($env:BROWSER_HOST_ADDRESS)) {
   $env:BROWSER_HOST_ADDRESS
 } else {
   "localhost"
 }
 
+$healthHost = if ($browserServiceHost.Contains(":")) { "[$browserServiceHost]" } else { $browserServiceHost }
+$healthUrl = "http://${healthHost}:$browserServicePort/health"
+
+# `up -d` returns once the container starts, before the service has checked
+# its configuration, so wait for the API to answer.
+Write-Host "Waiting for $healthUrl..."
+$healthy = $false
+for ($attempt = 0; $attempt -lt 60; $attempt++) {
+  try {
+    $response = Invoke-WebRequest -Uri $healthUrl -UseBasicParsing -TimeoutSec 3
+    if ($response.StatusCode -eq 200) {
+      $healthy = $true
+      break
+    }
+  } catch {
+    # Not listening yet.
+  }
+  Start-Sleep -Seconds 2
+}
+if (-not $healthy) {
+  Exit-WithError "The shared browser service did not become healthy at $healthUrl.`nSee: docker compose -f $composeFile logs browser-service"
+}
+
 Write-Host ""
 Write-Host "Shared browser service deployed."
-Write-Host "Control API: http://<browser-host>:$browserServicePort/health"
+Write-Host "Control API: $healthUrl"
 Write-Host "noVNC ports: $novncPortStart-$novncPortEnd"
 
 if ([string]::IsNullOrWhiteSpace($env:BROWSER_PUBLIC_BASE_URL) -and ($browserHostAddress -eq "localhost")) {

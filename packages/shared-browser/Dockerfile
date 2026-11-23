@@ -11,7 +11,12 @@ RUN pnpm install --filter @conclave/shared-browser... --frozen-lockfile --node-l
 
 COPY packages/shared-browser/tsconfig.json packages/shared-browser/tsconfig.json
 COPY packages/shared-browser/src packages/shared-browser/src
-RUN pnpm -C packages/shared-browser run build
+# Run the package's compiler directly, as the SFU image does after its filtered
+# install. `pnpm run` first re-installs the whole workspace, which this context
+# holds only part of, and stops on the MediaPipe patch that only apps/web uses.
+WORKDIR /app/packages/shared-browser
+RUN ./node_modules/.bin/tsc
+WORKDIR /app
 
 EXPOSE 3040
 

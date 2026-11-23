@@ -31,6 +31,7 @@ import {
   canonicalizeClientId,
   CONCLAVE_CLIENT_ID,
 } from "./clientIds.js";
+import { assertSqliteWritable } from "./sqliteWriteCheck.js";
 
 type MaybePromise<T> = T | Promise<T>;
 
@@ -1077,6 +1078,7 @@ const createSqliteSchedulingPersistence = (
   const { DatabaseSync } = loadNodeSqlite();
   const db = new DatabaseSync(path);
   db.exec("PRAGMA busy_timeout = 5000");
+  assertSqliteWritable(db, path);
   db.exec("PRAGMA journal_mode = WAL");
   db.exec(`
     CREATE TABLE IF NOT EXISTS scheduling_records (
@@ -1588,41 +1590,20 @@ export const createSchedulingPersistence = (): SchedulingPersistence => {
   const mode = process.env.SCHEDULING_PERSISTENCE?.trim().toLowerCase();
   if (mode === "json" || mode === "file") return createFileSchedulingPersistence();
   const redisUrl = resolveRedisPersistenceUrl();
-  try {
-    const sqlitePersistence = createSqliteSchedulingPersistence();
-    if (shouldUseRedisPersistence(mode, redisUrl)) {
-      if (!redisUrl) {
-        throw new Error(
-          "SCHEDULING_PERSISTENCE=redis requires SFU_PERSISTENCE_REDIS_URL, SFU_REDIS_URL, or REDIS_URL.",
-        );
-      }
-      return createRedisSchedulingPersistence(
-        redisUrl,
-        resolveRedisPersistenceKeyPrefix(),
-        sqlitePersistence,
+  const sqlitePersistence = createSqliteSchedulingPersistence();
+  if (shouldUseRedisPersistence(mode, redisUrl)) {
+    if (!redisUrl) {
+      throw new Error(
+        "SCHEDULING_PERSISTENCE=redis requires SFU_PERSISTENCE_REDIS_URL, SFU_REDIS_URL, or REDIS_URL.",
       );
     }
-    return sqlitePersistence;
-  } catch (error) {
-    if (mode === "sqlite") throw error;
-    Logger.warn(
-      `SQLite scheduling persistence unavailable; falling back to JSON: ${(error as Error).message}`,
+    return createRedisSchedulingPersistence(
+      redisUrl,
+      resolveRedisPersistenceKeyPrefix(),
+      sqlitePersistence,
     );
-    const filePersistence = createFileSchedulingPersistence();
-    if (shouldUseRedisPersistence(mode, redisUrl)) {
-      if (!redisUrl) {
-        throw new Error(
-          "SCHEDULING_PERSISTENCE=redis requires SFU_PERSISTENCE_REDIS_URL, SFU_REDIS_URL, or REDIS_URL.",
-        );
-      }
-      return createRedisSchedulingPersistence(
-        redisUrl,
-        resolveRedisPersistenceKeyPrefix(),
-        filePersistence,
-      );
-    }
-    return filePersistence;
   }
+  return sqlitePersistence;
 };
 
 const snapshotSchedulingStore = (

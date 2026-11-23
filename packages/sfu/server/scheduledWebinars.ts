@@ -20,6 +20,7 @@ import {
   normalizeHostEmail,
 } from "./webinar.js";
 import { canonicalizeClientId } from "./clientIds.js";
+import { assertSqliteWritable } from "./sqliteWriteCheck.js";
 
 const DEFAULT_EARLY_ENTRY_MINUTES = 10;
 const MAX_EARLY_ENTRY_MINUTES = 240;
@@ -354,6 +355,7 @@ const createSqliteScheduledWebinarPersistence = (
   const { DatabaseSync } = loadNodeSqlite();
   const db = new DatabaseSync(path);
   db.exec("PRAGMA busy_timeout = 5000");
+  assertSqliteWritable(db, path);
   db.exec("PRAGMA journal_mode = WAL");
   db.exec(`
     CREATE TABLE IF NOT EXISTS scheduled_webinars (
@@ -520,27 +522,17 @@ export const createScheduledWebinarPersistence = (): ScheduledWebinarPersistence
 
   const jsonPersistence = createFileScheduledWebinarPersistence();
 
-  try {
-    const sqlitePersistence = createSqliteScheduledWebinarPersistence();
-    const migrated = migrateJsonScheduledWebinarsToSqlite(
-      sqlitePersistence,
-      jsonPersistence,
+  const sqlitePersistence = createSqliteScheduledWebinarPersistence();
+  const migrated = migrateJsonScheduledWebinarsToSqlite(
+    sqlitePersistence,
+    jsonPersistence,
+  );
+  if (migrated > 0) {
+    Logger.info(
+      `Migrated ${migrated} scheduled webinar(s) from JSON into SQLite`,
     );
-    if (migrated > 0) {
-      Logger.info(
-        `Migrated ${migrated} scheduled webinar(s) from JSON into SQLite`,
-      );
-    }
-    return sqlitePersistence;
-  } catch (error) {
-    if (mode === "sqlite") {
-      throw error;
-    }
-    Logger.warn(
-      `SQLite scheduled-webinar persistence unavailable; falling back to JSON: ${(error as Error).message}`,
-    );
-    return jsonPersistence;
   }
+  return sqlitePersistence;
 };
 
 const normalizeStoredWebinar = (raw: unknown): ScheduledWebinar | null => {

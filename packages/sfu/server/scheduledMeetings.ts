@@ -24,6 +24,7 @@ import {
   type RedisPersistenceClient,
 } from "./redisPersistence.js";
 import { canonicalizeClientId } from "./clientIds.js";
+import { assertSqliteWritable } from "./sqliteWriteCheck.js";
 
 type MaybePromise<T> = T | Promise<T>;
 
@@ -689,6 +690,7 @@ const createSqliteScheduledMeetingPersistence = (
   const { DatabaseSync } = loadNodeSqlite();
   const db = new DatabaseSync(path);
   db.exec("PRAGMA busy_timeout = 5000");
+  assertSqliteWritable(db, path);
   db.exec("PRAGMA journal_mode = WAL");
   db.exec(`
     CREATE TABLE IF NOT EXISTS scheduled_meetings (
@@ -1165,51 +1167,29 @@ export const createScheduledMeetingPersistence = (): ScheduledMeetingPersistence
   const jsonPersistence = createFileScheduledMeetingPersistence();
   const redisUrl = resolveRedisPersistenceUrl();
 
-  try {
-    const sqlitePersistence = createSqliteScheduledMeetingPersistence();
-    const migrated = migrateJsonScheduledMeetingsToSqlite(
-      sqlitePersistence,
-      jsonPersistence,
+  const sqlitePersistence = createSqliteScheduledMeetingPersistence();
+  const migrated = migrateJsonScheduledMeetingsToSqlite(
+    sqlitePersistence,
+    jsonPersistence,
+  );
+  if (migrated > 0) {
+    Logger.info(
+      `Migrated ${migrated} scheduled meeting(s) from JSON into SQLite`,
     );
-    if (migrated > 0) {
-      Logger.info(
-        `Migrated ${migrated} scheduled meeting(s) from JSON into SQLite`,
-      );
-    }
-    if (shouldUseRedisPersistence(mode, redisUrl)) {
-      if (!redisUrl) {
-        throw new Error(
-          "SCHEDULED_MEETINGS_PERSISTENCE=redis requires SFU_PERSISTENCE_REDIS_URL, SFU_REDIS_URL, or REDIS_URL.",
-        );
-      }
-      return createRedisScheduledMeetingPersistence(
-        redisUrl,
-        resolveRedisPersistenceKeyPrefix(),
-        sqlitePersistence,
-      );
-    }
-    return sqlitePersistence;
-  } catch (error) {
-    if (mode === "sqlite") {
-      throw error;
-    }
-    Logger.warn(
-      `SQLite scheduled-meeting persistence unavailable; falling back to JSON: ${(error as Error).message}`,
-    );
-    if (shouldUseRedisPersistence(mode, redisUrl)) {
-      if (!redisUrl) {
-        throw new Error(
-          "SCHEDULED_MEETINGS_PERSISTENCE=redis requires SFU_PERSISTENCE_REDIS_URL, SFU_REDIS_URL, or REDIS_URL.",
-        );
-      }
-      return createRedisScheduledMeetingPersistence(
-        redisUrl,
-        resolveRedisPersistenceKeyPrefix(),
-        jsonPersistence,
-      );
-    }
-    return jsonPersistence;
   }
+  if (shouldUseRedisPersistence(mode, redisUrl)) {
+    if (!redisUrl) {
+      throw new Error(
+        "SCHEDULED_MEETINGS_PERSISTENCE=redis requires SFU_PERSISTENCE_REDIS_URL, SFU_REDIS_URL, or REDIS_URL.",
+      );
+    }
+    return createRedisScheduledMeetingPersistence(
+      redisUrl,
+      resolveRedisPersistenceKeyPrefix(),
+      sqlitePersistence,
+    );
+  }
+  return sqlitePersistence;
 };
 
 export const loadPersistedMeetings = (

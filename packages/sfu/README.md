@@ -11,6 +11,56 @@ services, the server-authoritative game runtime, and transcript relays.
 - **Deploy:** built via the included [Dockerfile](./Dockerfile); configuration
   comes from `.env` (see `config/config.ts` for every knob and default).
 
+## Container
+
+The image is multi-stage. Compilers and pnpm stay in the build stage; the
+runtime stage holds Node, the production dependencies (with the mediasoup
+worker binary) and the sources, owned by root. The SFU runs as the `node`
+user (uid 1000), and only `/var/lib/conclave` is writable.
+`docker-compose.sfu.yml` adds a read-only root filesystem with a `/tmp`
+tmpfs, `no-new-privileges` and `cap_drop: ALL`. mediasoup binds only ports
+above 1024, so it needs no capabilities.
+
+Both services run with `NODE_ENV=production`, which makes the SFU refuse to
+start with the default `SFU_SECRET` or without `SFU_CORS_ORIGINS` (compose
+defaults it to `https://conclave.acmvit.in`; list every web origin that
+uploads chat images or polls the socket). The deploy preflight checks both
+before anything restarts. Logs default to `warn` in production; set
+`SFU_LOG_LEVEL=info` in `.env` for join and room logs.
+
+Containers built before this change ran as root, so the recordings volume
+(and the SQLite database in it) is root-owned on existing hosts.
+`scripts/deploy-sfu.sh` builds each instance, then runs a one-shot root
+`find ... -exec chown node:node` on the volume before starting the new
+container, and repeats it before the second instance restarts. A manual
+`docker compose up` on such a host needs the same step first:
+
+```sh
+docker compose -f docker-compose.sfu.yml run --rm --no-deps --user root \
+  --cap-add CHOWN --cap-add DAC_READ_SEARCH --entrypoint chown sfu-a -R node:node /var/lib/conclave/recordings
+```
+
+Images before this change fell back to JSON files in the container layer
+when SQLite was locked. Before it replaces such a container, the deploy copies
+any of those files onto the volume under `CONCLAVE_FALLBACK_IMPORT_DIR`, readable
+only by the SFU user, so they survive the replacement. This SFU does not import
+them; multi-SFU persistence and that import move to a follow-up.
+
+To upgrade an existing host, run `git pull` to the reviewed revision first,
+then run the new `scripts/deploy-sfu.sh`. Do not start the upgrade with the
+deploy script already on the host: it pulls the new revision and then keeps
+running its own old commands, which skip the ownership step.
+
+Both SFUs keep scheduled meetings, webinars and scheduling records in one
+SQLite file on the recordings volume. At startup each store proves it can
+write that file and its directory with a rolled-back test transaction. If it
+cannot, or SQLite will not open, a production SFU exits before it reports
+healthy, instead of accepting saves it cannot keep or falling back to a JSON
+copy that the other instance would overwrite and SQLite would never import
+back. A permission failure names the ownership step above. The container
+restart then retries. Set `SCHEDULING_PERSISTENCE`, `SCHEDULED_MEETINGS_PERSISTENCE`
+or `SCHEDULED_WEBINARS_PERSISTENCE` to `json` only for a single instance.
+
 ## To apply in production
 
 Leave `SFU_WORKER_COUNT` unset on the 2-vCPU production VM to use the derived
