@@ -59,7 +59,7 @@ function ChatImageLightbox({
         aria-label="Close image preview"
         className="absolute right-5 top-5 inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/15 bg-black/40 text-white transition-colors hover:bg-white/10"
       >
-        <X size={20} strokeWidth={1.8} />
+        <X size={20} strokeWidth={1.75} />
       </button>
       <img
         src={image.url}
@@ -117,7 +117,7 @@ export default function ChatImageAttachmentView({
       >
         {picture}
         <span className="absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-full bg-black/55 text-white opacity-0 backdrop-blur-sm transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
-          <Maximize2 size={13} strokeWidth={1.8} />
+          <Maximize2 size={13} strokeWidth={1.75} />
         </span>
         {captionBar}
       </button>
