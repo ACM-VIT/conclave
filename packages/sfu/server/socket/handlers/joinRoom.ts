@@ -23,7 +23,6 @@ import {
   cleanupStaleRoom,
   clearEndedRoom,
   getEndedRoom,
-  closeRoomIfUnclaimed,
   getOrCreateRoomWithOrigin,
   renewLocalRoom,
   getRoomChannelId,
@@ -67,7 +66,7 @@ import {
   provesEarlierRoomMembership,
   ROOM_RECOVERY_PASS_TTL_MS,
 } from "../../roomRecoveryPass.js";
-import { offerLapsedRoom } from "../../admin/controlPlane.js";
+import { offerLapsedRoom, settleUnclaimedRoom } from "../../admin/controlPlane.js";
 import type { LostRoom, RecalledRoom } from "../../roomRecoveryLedger.js";
 import { getSocketAuthUser } from "../auth.js";
 import type { ConnectionContext } from "../context.js";
@@ -116,7 +115,7 @@ const recordedOwnerOf = (
 
 const JOIN_OVERTAKEN = "A newer join from this connection took over.";
 
-type OpenedRoom = { room: Room; created: boolean; lost: LostRoom | null };
+type OpenedRoom = { room: Room; created: boolean };
 
 const ROOM_STILL_OPENING = "The meeting is still opening. Try again in a moment.";
 const STILL_OPENING = Symbol("still opening");
@@ -432,7 +431,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         const joinOpenedRoom = (opened: Room): OpenedRoom | null => {
           if (!socket.connected) return null;
           if (opened.pendingClients.get(userKey)?.socket.id !== socket.id) {
-            return { room: opened, created: false, lost: null };
+            return { room: opened, created: false };
           }
           respond(callback, {
             roomId,
@@ -568,8 +567,13 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             if (lost) {
               openedRoom.restoreLostCall(lost);
             }
-            if (created) closeRoomIfUnclaimed(state, openedRoom, ROOM_OPEN_DEADLINE_MS);
-            return { room: openedRoom, created, lost };
+            if (created) {
+              setTimeout(
+                () => settleUnclaimedRoom(io, state, openedRoom),
+                ROOM_OPEN_DEADLINE_MS,
+              ).unref?.();
+            }
+            return { room: openedRoom, created };
           };
           const opened = openRoom();
           opened.catch(() => undefined);
@@ -599,7 +603,6 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           if (!found) return;
           room = found.room;
           createdRoom = found.created;
-          lostRoom = found.lost;
         }
 
         const mayOpenThisCode =
@@ -608,11 +611,12 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             allowRoomCreation ||
             clientPolicy.allowNonHostRoomCreation ||
             (Boolean(normalizedJoinEmail) && room.ownerEmail === normalizedJoinEmail));
-        if (!createdRoom && room.awaitingOpener && mayOpenThisCode) {
-          createdRoom = true;
-          lostRoom = room.awaitingOpener.lost;
-        }
+        const unclaimed = room.awaitingOpener;
+        createdRoom = unclaimed !== null && (createdRoom || mayOpenThisCode);
+        const lostCall = createdRoom ? (unclaimed?.lost ?? null) : null;
+        lostRoom = lostCall && Date.now() <= lostCall.claimableUntil ? lostCall : null;
         if (createdRoom) room.awaitingOpener = null;
+        if (lostCall && !lostRoom) room.endLostCall();
 
         // Past its deadline, a room that stood in for a lost call is a new
         // meeting to whoever opens it. Nothing of that call holds in it.

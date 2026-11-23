@@ -390,14 +390,6 @@ export const cleanupStaleRoom = (
   return true;
 };
 
-export const closeRoomIfUnclaimed = (state: SfuState, room: Room, afterMs: number): void => {
-  setTimeout(() => {
-    if (state.rooms.get(room.channelId) === room && room.awaitingOpener) {
-      cleanupRoom(state, room.channelId);
-    }
-  }, afterMs).unref?.();
-};
-
 export const cleanupRoom = (state: SfuState, channelId: string): boolean => {
   const room = state.rooms.get(channelId);
   if (!room || !room.isEmpty()) {

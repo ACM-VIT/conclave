@@ -1013,6 +1013,30 @@ export const offerLapsedRoom = (
   for (const pending of room.pendingClients.values()) {
     pending.socket.emit("joinApproved", { roomId: room.id });
   }
+  cleanupRoom(state, room.channelId);
+};
+
+export const settleUnclaimedRoom = (
+  io: SocketIOServer,
+  state: SfuState,
+  room: Room,
+): void => {
+  const unclaimed = room.awaitingOpener;
+  if (state.rooms.get(room.channelId) !== room || !unclaimed) return;
+  if (room.isEmpty()) {
+    cleanupRoom(state, room.channelId);
+    return;
+  }
+  room.awaitingOpener = null;
+  if (unclaimed.lost) {
+    room.awaitRestorer({
+      until: unclaimed.lost.claimableUntil,
+      rosterKnown: true,
+      onLapse: () => offerLapsedRoom(io, state, room),
+    });
+    return;
+  }
+  handleAdminRemoved(io, state, room);
 };
 
 export const kickClient = (

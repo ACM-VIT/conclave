@@ -2718,7 +2718,7 @@ export class Room {
   // Whether this room is a call of its own that the ledger should describe:
   // not one standing in for a lost call, and not one a host has ended.
   get recordsItsCall(): boolean {
-    return this.restorer === null && !this.endedForEveryone;
+    return this.awaitingOpener === null && this.restorer === null && !this.endedForEveryone;
   }
 
   // `rosterKnown` is false when this SFU has no record of the lost call and
