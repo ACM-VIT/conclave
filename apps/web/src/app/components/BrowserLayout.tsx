@@ -154,29 +154,19 @@ function BrowserLayout({
                     className="flex h-10 shrink-0 items-center justify-between gap-3 px-3"
                     style={{ borderBottom: `1px solid ${color.border}` }}
                 >
-                    <div className="flex min-w-0 items-center gap-2">
-                        <span
-                            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md"
-                            style={{ backgroundColor: color.accentSoft, color: color.accent }}
-                        >
-                            <Globe size={13} strokeWidth={1.8} />
-                        </span>
-                        <span className="truncate text-[11px] font-semibold" style={{ color: color.text }}>
+                    <div className="flex shrink-0 items-center gap-2">
+                        <Globe size={16} strokeWidth={1.75} className="shrink-0" style={{ color: color.textMuted }} aria-hidden="true" />
+                        <span className="text-[13px] font-medium" style={{ color: color.text }}>
                             {providerLabel}
                         </span>
-                        <span className="hidden text-[10px] sm:inline" style={{ color: color.textFaint }}>
+                        <span className="hidden text-[12px] sm:inline" style={{ color: color.textFaint }}>
                             {providerDetail}
                         </span>
+                        <span className="sr-only">Live</span>
                     </div>
-                    <div className="flex shrink-0 items-center gap-2.5 text-[10px]" style={{ color: color.textFaint }}>
-                        <span className="inline-flex items-center gap-1.5 font-medium uppercase tracking-[0.12em]">
-                            <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: color.success }} />
-                            Live
-                        </span>
-                        <span className="hidden sm:inline">
-                            Shared by <span style={{ color: color.textMuted }}>{displayControllerName}</span>
-                        </span>
-                    </div>
+                    <span className="min-w-0 truncate text-[12px]" style={{ color: color.textFaint }}>
+                        Shared by <span style={{ color: color.textMuted }}>{displayControllerName}</span>
+                    </span>
                 </header>
 
                 <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-black">
@@ -309,7 +299,7 @@ function BrowserLayout({
                                 {isMuted ? (
                                     <MicOff size={18} strokeWidth={1.75} className="h-3.5 w-3.5" style={{ color: color.accent }} />
                                 ) : (
-                                    <Mic size={18} strokeWidth={1.75} className="h-3.5 w-3.5" style={{ color: color.success }} />
+                                    <Mic size={18} strokeWidth={1.75} className="h-3.5 w-3.5" style={{ color: color.textMuted }} />
                                 )}
                             </div>
                         </div>

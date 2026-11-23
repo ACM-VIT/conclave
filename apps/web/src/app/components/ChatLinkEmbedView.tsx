@@ -497,7 +497,7 @@ export function ChatComposerLinkPreview({
         title="Send without link preview"
         className="shrink-0 self-center rounded-md p-1 text-[#a1a1aa] transition-colors hover:bg-white/[0.08] hover:text-[#fafafa]"
       >
-        <X size={14} strokeWidth={2} />
+        <X size={14} strokeWidth={1.75} />
       </button>
     </div>
   );
