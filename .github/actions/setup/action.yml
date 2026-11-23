@@ -24,6 +24,13 @@ runs:
       with:
         node-version: 22
 
+    - id: toolchain
+      shell: bash
+      run: |
+        store="$(pnpm store path --silent)"
+        echo "store-path=$store" >> "$GITHUB_OUTPUT"
+        echo "id=node22-pnpm$(pnpm --version)-store$(basename "$store")-$(printf '%s' "$store" | sha256sum | cut -c1-12)" >> "$GITHUB_OUTPUT"
+
     - id: modules
       uses: actions/cache/restore@v6.1.0
       with:
@@ -31,21 +38,21 @@ runs:
           node_modules
           apps/*/node_modules
           packages/*/node_modules
-        key: modules-v1-${{ runner.os }}-${{ runner.arch }}-node22-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', 'patches/**') }}
+        key: modules-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.id }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', 'patches/**', '.npmrc') }}
 
     - id: store
       if: steps.modules.outputs.cache-hit != 'true'
       shell: bash
       run: |
-        echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
-        echo "key=store-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}" >> "$GITHUB_OUTPUT"
+        echo "path=${{ steps.toolchain.outputs.store-path }}" >> "$GITHUB_OUTPUT"
+        echo "key=store-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.id }}-${{ hashFiles('pnpm-lock.yaml') }}" >> "$GITHUB_OUTPUT"
 
     - if: steps.modules.outputs.cache-hit != 'true'
       uses: actions/cache/restore@v6.1.0
       with:
         path: ${{ steps.store.outputs.path }}
         key: ${{ steps.store.outputs.key }}
-        restore-keys: store-v1-${{ runner.os }}-${{ runner.arch }}-
+        restore-keys: store-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.id }}-
 
     - shell: bash
       run: pnpm install --frozen-lockfile

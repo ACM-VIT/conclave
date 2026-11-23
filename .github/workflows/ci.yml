@@ -37,9 +37,14 @@ jobs:
         uses: ./.github/actions/setup
 
       - if: steps.setup.outputs.modules-hit != 'true'
+        env:
+          EVENT: ${{ github.event_name }}
         run: |
           echo "CI_JOB_STARTED_AT=$(date +%s%3N)" >> "$GITHUB_ENV"
           echo "CI_BUDGET_FROM=setup ended, as node_modules missed the cache" >> "$GITHUB_ENV"
+          if [ "$EVENT" != "push" ]; then
+            echo "::warning title=node_modules cache miss::This $EVENT run installed node_modules without a cache, so its budget clock started after setup. A miss on every run means staging or main has not saved a cache for this lockfile and toolchain."
+          fi
 
       - id: next-cache
         if: matrix.job == 'build'
@@ -47,9 +52,7 @@ jobs:
         with:
           path: apps/web/.next/cache
           key: next-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
-          restore-keys: |
-            next-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}-
-            next-v1-${{ runner.os }}-${{ runner.arch }}-
+          restore-keys: next-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}-
 
       - id: run
         run: node scripts/ci/run.mjs ${{ matrix.job }}

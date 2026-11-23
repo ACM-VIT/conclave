@@ -113,18 +113,32 @@ function parsePnpmRun(command, cwd, byName) {
 }
 
 export function expandScript(dir, script, args = [], packages = workspacePackages()) {
-  const body = packages.scriptsByDir.get(dir)?.[script];
+  const scripts = packages.scriptsByDir.get(dir) ?? {};
+  const body = scripts[script];
   if (body === undefined) throw new Error(`no script "${script}" in ${dir}`);
   const parts = body.split("&&").map((part) => part.trim());
   const runs = parts.map((part) => parsePnpmRun(part, dir, packages.byName));
   if (args.length || runs.some((run) => run === null)) return [{ dir, script, args }];
-  return runs.flatMap((run) => {
+  const hook = (name) => (scripts[name] === undefined ? [] : expandScript(dir, name, [], packages));
+  return [...hook(`pre${script}`), ...runs.flatMap((run) => {
     const targets = run.filtered
       ? run.dirs.filter((target) => packages.scriptsByDir.get(target)?.[run.script] !== undefined)
       : run.dirs;
     if (!targets.length) throw new Error(`no selected package has a "${run.script}" script in ${dir} ${script}`);
     return targets.flatMap((target) => expandScript(target, run.script, run.args, packages));
-  });
+  }), ...hook(`post${script}`)];
+}
+
+export function runStepProblems(workflow) {
+  const problems = [];
+  if (/^ {4}(if|continue-on-error):/m.test(workflow)) problems.push("the ci job has a job-level if or continue-on-error");
+  const runSteps = workflow.split(/\n(?= {6}- )/).filter((step) => /^ {6}- (?:.*\n)*? {8}run: node scripts\/ci\/run\.mjs /m.test(step) || /^ {6}- run: node scripts\/ci\/run\.mjs /m.test(step));
+  if (runSteps.length !== 1) problems.push(`expected one step running scripts/ci/run.mjs, found ${runSteps.length}`);
+  for (const step of runSteps) {
+    if (/^ {6}- if:|^ {8}if:/m.test(step)) problems.push("the run step has an if");
+    if (/^ {6}- continue-on-error:|^ {8}continue-on-error:/m.test(step)) problems.push("the run step has continue-on-error");
+  }
+  return problems;
 }
 
 export function leafKey(task) {

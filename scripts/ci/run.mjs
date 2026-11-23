@@ -42,6 +42,7 @@ function report(result) {
   else console.log(`\n=== ${title}`);
   console.log(`$ ${result.command}`);
   process.stdout.write(result.output);
+  if (result.output && !result.output.endsWith("\n")) process.stdout.write("\n");
   if (github) console.log("::endgroup::");
 }
 
@@ -75,7 +76,12 @@ const failures = results.filter((result) => result.code !== 0);
 const overBudget = elapsed > job.budgetSeconds;
 const skipped = job.tasks.length + (job.before?.length ?? 0) - results.length;
 
-const verdict = failures.length ? `${failures.length} failed` : skipped ? `${skipped} did not start` : "all passed";
+const problems = [
+  failures.length && `${failures.length} failed`,
+  skipped && `${skipped} did not start`,
+  overBudget && "over budget",
+].filter(Boolean);
+const verdict = problems.length ? problems.join(", ") : "all passed";
 const lines = [
   `### ${jobName}: ${verdict}, ${elapsed.toFixed(1)}s since ${process.env.CI_BUDGET_FROM ?? "the job's first step"}, budget ${job.budgetSeconds}s`,
   "",

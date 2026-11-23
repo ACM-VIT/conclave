@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { expandScript, jobs, leafKey, repoRoot, taskName, workspacePackages } from "./jobs.mjs";
+import { expandScript, jobs, leafKey, repoRoot, runStepProblems, taskName, workspacePackages } from "./jobs.mjs";
 
 const ciTasks = Object.entries(jobs).flatMap(([job, spec]) =>
   [...(spec.before ?? []), ...spec.tasks].map((task) => ({ job, task })),
@@ -46,8 +46,44 @@ test("the workflow runs every job in scripts/ci/jobs.mjs and never skips one", a
   const workflow = await readFile(path.join(repoRoot, ".github/workflows/ci.yml"), "utf8");
   const matrix = workflow.match(/^\s+job: \[(.*)\]$/m)?.[1].split(",").map((name) => name.trim());
   assert.deepEqual(matrix?.toSorted(), Object.keys(jobs).toSorted());
-  assert.doesNotMatch(workflow, /^ {4}if:/m, "a job-level if: could skip a required job");
-  assert.match(workflow, /^ {6}- id: run\n {8}run: node scripts\/ci\/run\.mjs \$\{\{ matrix\.job \}\}$/m);
+  assert.deepEqual(runStepProblems(workflow), []);
+});
+
+test("the workflow guard rejects a run step that can be skipped or ignored", () => {
+  const job = (step) => `jobs:\n  ci:\n    runs-on: x\n    steps:\n      - uses: actions/checkout@v7\n${step}\n      - run: echo after\n`;
+  const run = "run: node scripts/ci/run.mjs ${{ matrix.job }}";
+  assert.deepEqual(runStepProblems(job(`      - id: run\n        ${run}`)), []);
+  assert.deepEqual(runStepProblems(job(`      - if: github.event_name == 'push'\n        ${run}`)), ["the run step has an if"]);
+  assert.deepEqual(runStepProblems(job(`      - id: run\n        ${run}\n        if: false`)), ["the run step has an if"]);
+  assert.deepEqual(runStepProblems(job(`      - id: run\n        continue-on-error: true\n        ${run}`)), ["the run step has continue-on-error"]);
+  assert.deepEqual(runStepProblems(job(`      - continue-on-error: true\n        ${run}`)), ["the run step has continue-on-error"]);
+  assert.deepEqual(runStepProblems(`jobs:\n  ci:\n    continue-on-error: true\n    steps:\n      - id: run\n        ${run}\n`), ["the ci job has a job-level if or continue-on-error"]);
+  assert.deepEqual(runStepProblems(job("      - run: echo nothing")), ["expected one step running scripts/ci/run.mjs, found 0"]);
+});
+
+test("pre and post hooks of an expanded script are CI steps too", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "ci-jobs-"));
+  try {
+    await mkdir(path.join(root, "apps"), { recursive: true });
+    await mkdir(path.join(root, "packages/sfu"), { recursive: true });
+    await writeFile(path.join(root, "package.json"), JSON.stringify({
+      scripts: {
+        precheck: "node pre.js",
+        check: "pnpm run lint && pnpm -C packages/sfu run test",
+        postcheck: "pnpm -C packages/sfu run fixtures",
+        lint: "eslint .",
+        prelint: "node leaf-hook.js",
+      },
+    }));
+    await writeFile(path.join(root, "packages/sfu/package.json"), JSON.stringify({
+      name: "sfu",
+      scripts: { pretest: "node t.js", test: "pnpm run unit", unit: "vitest", fixtures: "tsx f.ts" },
+    }));
+    const leaves = expandScript(".", "check", [], workspacePackages(root)).map(taskName);
+    assert.deepEqual(leaves, ["precheck", "lint", "packages/sfu pretest", "packages/sfu unit", "packages/sfu fixtures"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("pnpm filters, -C and missing scripts expand the way pnpm runs them", async () => {
