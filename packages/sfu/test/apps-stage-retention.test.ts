@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as encoding from "lib0/encoding";
 import * as Y from "yjs";
 import {
   Awareness,
@@ -17,6 +18,7 @@ import { createSfuState } from "../server/state.js";
 import { LocalRoomRegistry } from "../server/roomRegistry.js";
 import {
   MAX_APP_DOC_BYTES,
+  MAX_CLIENT_IDS_PER_PARTICIPANT,
   MAX_ROOM_APP_DOCS,
   RoomApps,
 } from "../server/roomApps.js";
@@ -180,6 +182,18 @@ const forgedUpdate = (clientID: number, clock: number, key: string): Uint8Array 
   const before = Y.encodeStateVector(forger);
   forger.getMap("shapes").set(key, true);
   return Y.encodeStateAsUpdate(forger, before);
+};
+
+// A presence packet with one entry per id, in order, repeats included.
+const presencePacket = (clientIds: number[]): Uint8Array => {
+  const encoder = encoding.createEncoder();
+  encoding.writeVarUint(encoder, clientIds.length);
+  for (const clientId of clientIds) {
+    encoding.writeVarUint(encoder, clientId);
+    encoding.writeVarUint(encoder, 1);
+    encoding.writeVarString(encoder, "{}");
+  }
+  return encoding.toUint8Array(encoder);
 };
 
 const clockOf = (doc: Y.Doc): number =>
@@ -623,6 +637,19 @@ describe("Yjs client ids", () => {
     for (const presence of [peerPresence, viewerPresence, left]) presence.destroy();
   });
 
+  it("counts a client id once against a participant's limit, however often a packet names it", () => {
+    const { join } = makeRoom();
+    const host = join("host#1", "host");
+    const viewer = join("viewer#1", "participant");
+    host.present("whiteboard");
+    const held = Array.from({ length: MAX_CLIENT_IDS_PER_PARTICIPANT - 1 }, (_, index) => 1000 + index);
+
+    viewer.sendRawAwareness("whiteboard", presencePacket(held), held[0]);
+    viewer.sendRawAwareness("whiteboard", presencePacket([5, 5]), 5);
+
+    expect(viewer.relayed.filter((sent) => sent.event === "apps:awareness")).toHaveLength(2);
+  });
+
   it("removes no one's cursor when a participant who showed none leaves", () => {
     const { room, join } = makeRoom();
     const host = join("host#1", "host");
@@ -720,7 +747,7 @@ describe("writes made before a client's first sync", () => {
 
     const pushes = early.received.filter((sent) => sent.event === "apps:yjs:update");
     expect(pushes).toHaveLength(1);
-    expect(pageOf((pushes[0]!.payload as { update: Uint8Array }).update)).toEqual([
+    expect(pageOf((pushes[0].payload as { update: Uint8Array }).update)).toEqual([
       "kept-1",
       "kept-2",
     ]);

@@ -512,7 +512,7 @@ export class RoomApps {
   // someone else, or when the participant or the room holds as many as allowed.
   private claimClientIds(participant: string, clients: Iterable<number>): boolean {
     const unclaimed: number[] = [];
-    for (const client of clients) {
+    for (const client of new Set(clients)) {
       const owner = this.clientIdOwners.get(client);
       if (owner === undefined) unclaimed.push(client);
       else if (owner !== participant) return false;
