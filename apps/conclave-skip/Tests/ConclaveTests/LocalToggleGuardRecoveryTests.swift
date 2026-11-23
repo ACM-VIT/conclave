@@ -1585,7 +1585,7 @@ struct LocalToggleGuardRecoveryTests {
         let call = RejoinHarness()
         #expect(await call.join())
         let savedQuality = call.viewModel.state.videoQuality
-        let savedSettings = UserDefaults.standard.string(forKey: NativeMediaQualityPreferences.storageKey)
+        let savedSettings = call.defaults.string(forKey: NativeMediaQualityPreferences.storageKey)
         func qualityToasts() -> Int {
             call.viewModel.stage.recentEvents.filter { $0.kind == StageEventKind.qualityLowered }.count
         }
@@ -1597,19 +1597,19 @@ struct LocalToggleGuardRecoveryTests {
         #expect(call.viewModel.systemPressure.ceiling.thermalSteps == 2)
         #expect(call.viewModel.appliedCameraPublishSettings?.height == 360)
         #expect(call.viewModel.state.videoQuality == savedQuality)
-        #expect(UserDefaults.standard.string(forKey: NativeMediaQualityPreferences.storageKey) == savedSettings)
+        #expect(call.defaults.string(forKey: NativeMediaQualityPreferences.storageKey) == savedSettings)
 
         call.viewModel.handleSystemThermalLevel(.nominal)
         #expect(!call.viewModel.systemDataSaverOn && !call.viewModel.hostQualityCapped)
         #expect(call.viewModel.systemPressure.ceiling == .unconstrained)
         #expect(call.viewModel.appliedCameraPublishSettings
-            == NativeMediaQualityPolicy.resolvedCamera(NativeMediaQualityPreferences.load().camera))
+            == NativeMediaQualityPolicy.resolvedCamera(NativeMediaQualityPreferences.load(defaults: call.defaults).camera))
 
         call.viewModel.handleLowPowerModeChanged(true)
         #expect(qualityToasts() == 1)
         #expect(call.viewModel.appliedCameraPublishSettings?.height == 360)
         #expect(call.viewModel.state.videoQuality == savedQuality)
-        #expect(UserDefaults.standard.string(forKey: NativeMediaQualityPreferences.storageKey) == savedSettings)
+        #expect(call.defaults.string(forKey: NativeMediaQualityPreferences.storageKey) == savedSettings)
         await call.finish()
     }
 }

@@ -21,7 +21,7 @@ class PPL2PPL4BridgeTests {
     }
 
     private fun hostPeople(sharing: Boolean = false, hand: Boolean = false): Pair<PeoplePresenter, Log> {
-        val shell = MeetingShellPresenter()
+        val shell = MeetingShellPresenter(defaults = IsolatedDefaults.make())
         val people = PeoplePresenter(shell = shell, stage = StagePresenter(shell = shell))
         val log = Log()
         people.onCommand = { command, ticket ->

@@ -15,7 +15,7 @@ struct PPL5WebinarSettingsTests {
     private func webinarPeople(queue: [PeopleWebinarHandInput] = [], invites: [PeopleStageInviteInput] = [],
                                queueKnown: Bool = true, attendees: Int = 128,
                                phase: String = MeetingPhaseKind.inCall.rawValue) -> (PeoplePresenter, CommandLog) {
-        let shell = MeetingShellPresenter()
+        let shell = MeetingShellPresenter(defaults: IsolatedDefaults.make())
         let people = PeoplePresenter(shell: shell, stage: StagePresenter(shell: shell))
         let log = CommandLog()
         people.onCommand = { command, ticket in
@@ -150,7 +150,7 @@ struct PPL5WebinarSettingsTests {
     }
 
     @Test func meetingModeKeepsTheMeetingSections() {
-        let shell = MeetingShellPresenter()
+        let shell = MeetingShellPresenter(defaults: IsolatedDefaults.make())
         let people = PeoplePresenter(shell: shell, stage: StagePresenter(shell: shell))
         people.apply(inputs(queue: Self.fourHands, invites: [], queueKnown: true, attendees: 0, webinar: false))
         #expect(people.snapshot.section(.inMeeting) != nil)
@@ -221,7 +221,7 @@ struct PPL5WebinarSettingsTests {
     }
 
     @Test func theAttendeeHandRowFollowsTheCapability() {
-        let shell = MeetingShellPresenter()
+        let shell = MeetingShellPresenter(defaults: IsolatedDefaults.make())
         let identity = MeetingSessionIdentity(callSession: 1, attempt: 1, attemptToken: "t-1-1")
         shell.apply(MeetingShellInputs.make(identity: identity, connectionState: .joined, isWebinarAttendee: true))
         var hand = shell.controls.rows.first(where: { $0.id == MeetingControlID.hand.rawValue })

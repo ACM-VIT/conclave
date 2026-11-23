@@ -25,7 +25,7 @@ class PPL3AdmissionsBridgeTests {
     }
 
     private fun people(): PeoplePresenter {
-        val shell = MeetingShellPresenter()
+        val shell = MeetingShellPresenter(defaults = IsolatedDefaults.make())
         return PeoplePresenter(shell = shell, stage = StagePresenter(shell = shell))
     }
 
@@ -193,7 +193,7 @@ class PPL3AdmissionsBridgeTests {
     }
 
     @Test fun knockBannerGoesThroughPeopleAndStaysQuietWhileParticipantsIsCurrent() {
-        val shell = MeetingShellPresenter()
+        val shell = MeetingShellPresenter(defaults = IsolatedDefaults.make())
         val stage = StagePresenter(shell = shell)
         val p = PeoplePresenter(shell = shell, stage = stage)
         val log = record(p)
