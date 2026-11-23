@@ -5,7 +5,7 @@ import Testing
 @MainActor
 struct ParticipantAudioTests {
     private func makePeople() -> PeoplePresenter {
-        let shell = MeetingShellPresenter()
+        let shell = MeetingShellPresenter(defaults: IsolatedDefaults.make())
         return PeoplePresenter(shell: shell, stage: StagePresenter(shell: shell))
     }
 
@@ -127,7 +127,7 @@ struct ParticipantAudioTests {
 
     #if os(macOS)
     @Test func callCleanupResetsParticipantAudio() async {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.testDetachHostNetworkMonitor()
         viewModel.people.apply(roster())
         viewModel.people.setParticipantVolume(rowId: "other", volume: 0.25)

@@ -161,7 +161,7 @@ class STG5NoticeBridgeTests {
 
     @Test fun aSecondToastWaitsUntilTheHostDismissesTheFirst() {
 
-        val stage = StagePresenter(shell = MeetingShellPresenter())
+        val stage = StagePresenter(shell = MeetingShellPresenter(defaults = IsolatedDefaults.make()))
         stage.apply(StageFixtureScript.base(count = 4))
         stage.applyNotices(host())
         stage.post(join("a", "Avery"))
@@ -178,7 +178,7 @@ class STG5NoticeBridgeTests {
 
     @Test fun noticeSoundsPlayOncePerKindThroughARecordingOutput() {
         var clock = 10_000.0
-        val stage = StagePresenter(shell = MeetingShellPresenter())
+        val stage = StagePresenter(shell = MeetingShellPresenter(defaults = IsolatedDefaults.make()))
         stage.now = { clock }
         stage.sounds.now = { clock }
         stage.apply(StageFixtureScript.base(count = 4))

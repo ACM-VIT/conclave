@@ -94,7 +94,7 @@ class NativeHostingBridgeTests {
 
     @Test
     fun sessionReadoutValuesMatchSwift() {
-        val shell = MeetingShellPresenter()
+        val shell = MeetingShellPresenter(defaults = IsolatedDefaults.make())
         val identity = MeetingSessionIdentity(callSession = 3, attempt = 7, attemptToken = "attempt")
         shell.apply(MeetingShellInputs.make(identity = identity, connectionState = ConnectionState.connecting))
         shell.apply(MeetingShellInputs.make(identity = identity, connectionState = ConnectionState.joined, isAdmin = true, isHandRaised = true))

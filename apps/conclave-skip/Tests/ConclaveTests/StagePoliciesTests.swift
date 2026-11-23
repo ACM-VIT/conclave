@@ -25,7 +25,7 @@ struct StagePoliciesTests {
     static let allViewports = [iphoneSE, iphone17e, android360, androidLandscape, ipadPortrait, ipadLandscape, foldUnfolded]
 
     private func presenter(_ inputs: StageInputs, viewport: StageViewport = StagePoliciesTests.iphoneSE) -> StagePresenter {
-        let stage = StagePresenter(shell: MeetingShellPresenter())
+        let stage = StagePresenter(shell: MeetingShellPresenter(defaults: IsolatedDefaults.make()))
         stage.setViewport(viewport)
         stage.apply(inputs)
         return stage
@@ -246,7 +246,7 @@ struct StagePoliciesTests {
 
     @Test func overflowPromotionWaitsOneTwoSecondsAndSwapsAtMostOncePerEightSeconds() {
         var clock = 10_000.0
-        let stage = StagePresenter(shell: MeetingShellPresenter())
+        let stage = StagePresenter(shell: MeetingShellPresenter(defaults: IsolatedDefaults.make()))
         stage.now = { clock }
         stage.sleep = { _ in try? await Task.sleep(nanoseconds: 60_000_000_000) }
         stage.setViewport(Self.iphoneSE)
@@ -280,7 +280,7 @@ struct StagePoliciesTests {
         stage.firePendingPromotion()
         #expect(stage.layout.revision == revision + 2)
 
-        let small = StagePresenter(shell: MeetingShellPresenter())
+        let small = StagePresenter(shell: MeetingShellPresenter(defaults: IsolatedDefaults.make()))
         small.setViewport(Self.iphoneSE)
         small.apply(StageFixtureScript.base(count: 3))
         small.speakerChanged("r1", atMillis: clock)
@@ -291,7 +291,7 @@ struct StagePoliciesTests {
 
     @Test func spotlightFeaturedSpeakerHasHysteresis() {
         var clock = 50_000.0
-        let stage = StagePresenter(shell: MeetingShellPresenter())
+        let stage = StagePresenter(shell: MeetingShellPresenter(defaults: IsolatedDefaults.make()))
         stage.now = { clock }
         stage.sleep = { _ in try? await Task.sleep(nanoseconds: 60_000_000_000) }
         stage.setViewport(Self.iphone17e)
@@ -341,7 +341,7 @@ struct StagePoliciesTests {
     }
 
     @Test func rolesSweepKeepsOneSlotIdForYourRenderer() {
-        let stage = StagePresenter(shell: MeetingShellPresenter())
+        let stage = StagePresenter(shell: MeetingShellPresenter(defaults: IsolatedDefaults.make()))
         stage.setViewport(Self.iphone17e)
         var roles: [StageSlotRole] = []
         for step in 0..<StageFixtureScript.rolesSweepStepCount {
@@ -584,7 +584,7 @@ struct StagePoliciesTests {
 @Suite(.serialized)
 struct StageViewModelWiringTests {
     private func makeJoinedViewModel() -> MeetingViewModel {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.roomId = "room-a"

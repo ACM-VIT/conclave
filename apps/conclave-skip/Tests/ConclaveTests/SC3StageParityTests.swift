@@ -260,7 +260,7 @@ enum SC3Parity {
     }
 
     static func presenter(_ inputs: StageInputs, viewport: StageViewport) -> StagePresenter {
-        let stage = StagePresenter(shell: MeetingShellPresenter())
+        let stage = StagePresenter(shell: MeetingShellPresenter(defaults: IsolatedDefaults.make()))
         stage.setViewport(viewport)
         stage.apply(inputs)
         return stage
@@ -921,7 +921,7 @@ struct SC3StageParityViewModelTests {
             SC3Fixture(count: 3).with { $0.staleSharer = SC3Fixture.local },
         ]
         for fixture in fixtures {
-            let viewModel = MeetingViewModel()
+            let viewModel = isolatedViewModel()
             viewModel.state = SC3Parity.state(fixture)
             let production = SC3Parity.layoutFields(viewModel.makeStageInputs())
             let parity = SC3Parity.layoutFields(SC3Parity.inputs(viewModel.state))

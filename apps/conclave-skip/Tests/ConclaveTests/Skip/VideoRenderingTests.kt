@@ -1298,20 +1298,25 @@ class VideoRenderingTests {
     }
 
     @Test fun theSharedWaitIsSpentOncePerWindowAndThenComesBack() {
-        val wait = VideoDetachWait(limitMillis = 300, windowMillis = 900)
+        var now = 0L
+        val asked = mutableListOf<Long>()
+        val wait = VideoDetachWait(limitMillis = 300, windowMillis = 900, nanoTime = { now }, awaitFor = { gone, nanos ->
+            asked.add(TimeUnit.NANOSECONDS.toMillis(nanos))
+            now += nanos
+            gone.count == 0L
+        })
         val never = CountDownLatch(1)
-        val started = System.nanoTime()
         assertFalse(wait.await(never))
-        val first = (System.nanoTime() - started) / 1_000_000
+        assertEquals("the first wait did not get the whole limit", listOf(300L), asked)
         assertFalse(wait.await(never))
-        val both = (System.nanoTime() - started) / 1_000_000
-        assertTrue("the first wait took $first ms", first >= 290)
-        assertTrue("a second wait in the same window took ${both - first} ms", both - first < 200)
+        assertEquals("a second wait in the same window asked for more time", listOf(300L), asked)
         assertTrue("a surface that is already gone needs no wait", wait.await(CountDownLatch(0)))
-        Thread.sleep(maxOf(0L, 950 - both))
-        val again = System.nanoTime()
+        now = TimeUnit.MILLISECONDS.toNanos(899)
         assertFalse(wait.await(never))
-        assertTrue("the wait did not come back with the next window", (System.nanoTime() - again) / 1_000_000 >= 290)
+        assertEquals("the wait came back before its window ended", listOf(300L), asked)
+        now = TimeUnit.MILLISECONDS.toNanos(900)
+        assertFalse(wait.await(never))
+        assertEquals("the wait did not come back with the next window", listOf(300L, 300L), asked)
     }
 
     @Test fun tenSurfacesInARowLeaveNoneBehindAndReleaseStopsTheRenderLoop() {

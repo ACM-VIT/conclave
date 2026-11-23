@@ -27,7 +27,7 @@ class CTL2LeaveEndBridgeTests {
     private val titles = LeaveMenuTitles(leave = "Leave", endForEveryone = "End…", reconnecting = "R", offline = "O", ending = "N")
 
     private class Harness(inputs: MeetingShellInputs, admitFirst: MeetingShellInputs? = null) {
-        val shell = MeetingShellPresenter()
+        val shell = MeetingShellPresenter(defaults = IsolatedDefaults.make())
         val stage = StagePresenter(shell = shell)
         val controls = CallControlsPresenter(shell = shell, stage = stage)
         val commands = mutableListOf<MeetingShellCommand>()

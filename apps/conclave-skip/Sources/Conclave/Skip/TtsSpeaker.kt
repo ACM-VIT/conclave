@@ -24,7 +24,7 @@ internal class WeakPlaybackQueue(queue: TtsPlaybackQueue) {
         get() = reference.get()
 }
 
-internal class TtsSpeaker(internal val queue: TtsPlaybackQueue = TtsPlaybackQueue()) {
+internal class TtsSpeaker(internal val queue: TtsPlaybackQueue) {
     private var engine: TextToSpeech? = null
     private var isReady = false
     private var pendingItem: TtsQueueItem? = null
