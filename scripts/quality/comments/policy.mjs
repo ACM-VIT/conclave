@@ -68,7 +68,7 @@ const compileSpdxTemplate = (template) => {
     SPDX_VAR.lastIndex = index;
     const variable = SPDX_VAR.exec(template);
     if (variable) {
-      if (variable[1] !== "copyright") pattern += `(?:${variable[2].replace(/\\s[+*]?|\s/g, "")})`;
+      if (variable[1] !== "copyright") pattern += `(?:${variable[2].replace(/\\s[+*]?|\s/g, "").replace(/(?<!\\)([+*]|\{\d*,?\d*\})(?!\?)/g, "$1?")})`;
       else pattern = pattern.replace(/(?:copyright)?$/, "");
       index = SPDX_VAR.lastIndex;
     } else if (template.startsWith("<<beginOptional>>", index)) {

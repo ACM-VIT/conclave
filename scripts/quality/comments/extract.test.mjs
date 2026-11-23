@@ -797,6 +797,22 @@ toolTest("text outside a matched license notice is an ordinary comment", [], () 
   assert.ok(afterVerdicts.slice(0, -1).every((verdict) => verdict === "license-header"));
 });
 
+toolTest("an ordinary comment between two complete notices stays an ordinary comment", [], () => {
+  const block = ["/*", ...ISC_NOTICE.map((line) => ` * ${line}`.trimEnd()), " */"].join("\n");
+  const lines = ISC_NOTICE.map((line) => `// ${line}`.trimEnd()).join("\n");
+  for (const [notice, todo] of [
+    [block, "/* TODO: replace the temporary cache. */"],
+    [block, "// TODO: replace the temporary cache."],
+    [lines, "// TODO: replace the temporary cache."],
+    [lines, "/* TODO: replace the temporary cache. */"],
+  ]) {
+    const verdicts = extract(`${notice}\n${todo}\n${notice}\nexport {};\n`, "two.ts").map((c) => c.allowed);
+    const at = verdicts.length / 2 - 0.5;
+    assert.equal(verdicts[at], null, `${notice.slice(0, 2)} ${todo.slice(0, 2)}`);
+    assert.ok(verdicts.every((verdict, index) => index === at || verdict === "license-header"), `${notice.slice(0, 2)} ${todo.slice(0, 2)}`);
+  }
+});
+
 const SPDX_TEXTS = JSON.parse(readFileSync(new URL("./fixtures/spdx-license-texts.json", import.meta.url), "utf8")).texts;
 const filled = (text) =>
   text
