@@ -208,9 +208,11 @@ get_public_url() {
   fi
 }
 
+# Written as plain text, never through console.log, which colors a bare number
+# when FORCE_COLOR is set (CI sets it), so "0" would not read as 0.
 json_field() {
   local field="$1"
-  node -e "const fs=require('fs');const data=JSON.parse(fs.readFileSync(0,'utf8'));const val=data['$field'];if(typeof val==='boolean'){console.log(val?'true':'false');}else if(val===undefined||val===null){console.log('');}else{console.log(val);}"
+  node -e "const fs=require('fs');const data=JSON.parse(fs.readFileSync(0,'utf8'));const val=data['$field'];process.stdout.write((typeof val==='boolean'?(val?'true':'false'):val===undefined||val===null?'':String(val))+'\\n');"
 }
 
 # Reads one environment value of one service from the rendered compose file.

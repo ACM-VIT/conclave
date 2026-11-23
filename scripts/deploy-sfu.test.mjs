@@ -1116,6 +1116,15 @@ test("a host bash older than 4 is refused with a message that says why", { skip:
   assert.match(result.stderr, /deploy-sfu\.sh needs bash 4 or newer; this is bash 3\./);
 });
 
+test("FORCE_COLOR in the environment does not change the numbers the deploy reads", async () => {
+  // CI sets it for readable logs; node then colors a bare number it logs.
+  await withSfus({ "sfu-a": { rooms: 1 }, "sfu-b": { rooms: 0 } }, async (sfus) => {
+    const result = await deploy(sfus, { env: { FORCE_COLOR: "1" } });
+    assert.equal(result.order, "sfu-b sfu-a", result.output);
+    assert.match(result.output, /sfu-b active rooms: 0\n/);
+  });
+});
+
 // Every test above has its own fake SFUs, state dir, lock file and docker
 // stand-in, and its waits are cut short in deploy(), so they run side by side.
 describe("deploy-sfu.sh", { concurrency: 8 }, () => {
