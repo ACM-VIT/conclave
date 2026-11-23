@@ -871,6 +871,14 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
         await speak(utterance.speaker);
         utterance.deadlineAt = Date.now() + DEADLINE;
         await endTurn(utterance.speaker);
+        if (answerable(live).length === 1 && !live.stalled && random() < 0.4) {
+          await vi.advanceTimersByTimeAsync(100 + random() * 500);
+          live.awaiting.shift();
+          utterance.final = "shown";
+          live.socket.emit(sarvamFinal(utterance.itemId, utterance.text));
+          await settle();
+          return;
+        }
         await vi.advanceTimersByTimeAsync(1_600);
       },
       async monologue() {

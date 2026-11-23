@@ -580,6 +580,25 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
     }
   }
 
+  /**
+   * A final for an utterance whose signal our check has not resolved yet:
+   * Sarvam finished it, so the speech heard after its signal and before
+   * any newer signal is its now, and its line takes and then lets go of
+   * that audio with this final.
+   */
+  private resolveAtFinal(itemId: string): void {
+    const signal = this.unheardSignals.find((unheard) => unheard.itemId === itemId);
+    if (!signal) return;
+    const heard = this.evidence.find(
+      ({ at, afterSignal }) =>
+        afterSignal === signal.signal && at > signal.at && at - signal.at <= SARVAM_SIGNAL_LOOKBACK_MS,
+    );
+    if (!heard) return;
+    this.evidence = this.evidence.filter(({ at }) => at > heard.at || at <= signal.at);
+    this.unheardSignals.splice(this.unheardSignals.indexOf(signal), 1);
+    this.callbacks.onHeard?.(itemId, this.heardSpeech(signal.at, heard, false));
+  }
+
   private scheduleResolve(): void {
     if (this.resolveTimer !== null || this.unheardSignals.length === 0) return;
     this.resolveTimer = setTimeout(() => {
@@ -634,6 +653,7 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
     const answered = this.awaitingFinal.shift();
     if (!answered && !event.transcript) return;
     const itemId = answered ?? this.nextUtteranceId();
+    this.resolveAtFinal(itemId);
     if (!answered) {
       this.callbacks.onAccepted?.(itemId, {
         heard: true,

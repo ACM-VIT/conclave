@@ -628,6 +628,36 @@ describe("Sarvam: a line heard after its speech signal owns that speech", () => 
   });
 });
 
+describe("Sarvam: a final that comes before our check resolved its signal", () => {
+  it("takes the speech heard after its signal, with its speaker, so a reconnect never replays it", async () => {
+    vi.useFakeTimers();
+    quiet();
+    const { room, providerSockets, start, speak, endTurn, retainedLineState } = await rig(SARVAM);
+    await start("hi");
+    const [socket] = providerSockets();
+    await speak(ada);
+    socket.emit(sarvamSpeechStart());
+    await endTurn(ada);
+    socket.emit(sarvamFinal("one", "First."));
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    socket.emit(sarvamSpeechStart());
+    await vi.advanceTimersByTimeAsync(250);
+    await speak(grace);
+    await endTurn(grace);
+    await vi.advanceTimersByTimeAsync(300);
+    socket.emit(sarvamFinal("two", "Yes."));
+    await settle();
+    expect(retainedLineState().unownedAudio).toBe(0);
+
+    socket.disconnect();
+    await settle();
+    expect(speechSent(providerSockets().at(-1)!)).toBe(0);
+    await vi.advanceTimersByTimeAsync(DEADLINE + 100);
+    expect(speakers(room.segments)).toEqual([["First.", "ada"], ["Yes.", "grace"]]);
+  });
+});
+
 describe("Sarvam: a line waits while its speaker is still talking", () => {
   it.each([
     ["after Sarvam has signalled speech", true],
