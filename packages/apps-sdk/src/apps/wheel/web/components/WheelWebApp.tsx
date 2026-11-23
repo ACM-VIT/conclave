@@ -328,7 +328,9 @@ export function WheelWebApp() {
 
   const handlePointerLabel = useCallback((label: string | null) => {
     const element = liveLabelRef.current;
-    if (element && label) element.textContent = label;
+    if (!element) return;
+    element.textContent = label ?? "Spinning…";
+    element.toggleAttribute("data-pending", label === null);
   }, []);
 
   const roomy = layout === "side";
@@ -344,7 +346,10 @@ export function WheelWebApp() {
         className="h-[38px] max-w-full truncate text-[30px] font-semibold leading-[38px]"
         hidden={!isSpinning}
       >
-        <span ref={liveLabelRef} />
+        <span
+          ref={liveLabelRef}
+          className="data-[pending]:text-[20px] data-[pending]:font-medium data-[pending]:text-[#fafafa]/55"
+        />
       </p>
       {!isSpinning &&
         (winner ? (

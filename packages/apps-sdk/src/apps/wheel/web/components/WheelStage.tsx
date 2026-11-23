@@ -47,6 +47,8 @@ const DECAY_POWER = 2.5;
 const LABEL_FADE_FROM = 240;
 const LABEL_FADE_SPAN = 700;
 
+const HOLDING_STILL = Symbol("holding still");
+
 const COLOR = {
   slices: ["#1F1F23", "#29292E"],
   oddSeam: "#242428",
@@ -184,7 +186,7 @@ export function WheelStage({
   const restingRef = useRef(false);
   const speedRef = useRef(0);
   const flipKeyRef = useRef("");
-  const pointerLabelRef = useRef<string | null>(null);
+  const pointerLabelRef = useRef<string | symbol | null>(null);
 
   const [displayedSpin, setDisplayedSpin] = useState<WheelSpin | null>(null);
   const [flipRotation, setFlipRotation] = useState(0);
@@ -306,6 +308,7 @@ export function WheelStage({
     const frame = (frameAt: number) => {
       const dt = Math.min(0.05, Math.max(0.001, (frameAt - lastFrameAt) / 1000));
       lastFrameAt = frameAt;
+      const frameNow = Date.now();
 
       const previousDeg = rotationRef.current;
       const animation = animationRef.current;
@@ -313,7 +316,7 @@ export function WheelStage({
       let unwrappedDeg = previousDeg;
 
       if (animation) {
-        const elapsed = Date.now() - animation.anchor;
+        const elapsed = frameNow - animation.anchor;
         const launchAt = animation.reduced ? animation.flipAt : WINDUP_MS;
         if (!animation.launched && elapsed >= launchAt) {
           animation.launched = true;
@@ -364,14 +367,18 @@ export function WheelStage({
       }
 
       if (onPointerLabelRef.current && segments > 0) {
+        const holdingStill = Boolean(
+          animation?.reduced && frameNow - animation.anchor < animation.flipAt
+        );
         const index =
-          animationRef.current || restingRef.current
+          !holdingStill && (animationRef.current || restingRef.current)
             ? pointerIndex(rotationRef.current, segments)
             : -1;
         const label =
           index >= 0 ? displayedEntriesRef.current[index]?.label ?? null : null;
-        if (label !== pointerLabelRef.current) {
-          pointerLabelRef.current = label;
+        const key = holdingStill ? HOLDING_STILL : label;
+        if (key !== pointerLabelRef.current) {
+          pointerLabelRef.current = key;
           onPointerLabelRef.current(label);
         }
       }
