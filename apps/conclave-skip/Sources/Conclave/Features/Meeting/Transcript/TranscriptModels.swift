@@ -302,14 +302,14 @@ final class CaptionLineFeed {
 enum CaptionsPreference {
     static let defaultsKey = "conclave.pref.captions"
 
-    static func isOn(defaults: UserDefaults = UserDefaults.standard, systemDefault: Bool? = nil) -> Bool {
+    static func isOn(defaults: UserDefaults, systemDefault: Bool? = nil) -> Bool {
         if defaults.object(forKey: defaultsKey) != nil {
             return defaults.bool(forKey: defaultsKey)
         }
         return systemDefault ?? systemCaptionsEnabled()
     }
 
-    static func set(_ on: Bool, defaults: UserDefaults = UserDefaults.standard) {
+    static func set(_ on: Bool, defaults: UserDefaults) {
         defaults.set(on, forKey: defaultsKey)
     }
 

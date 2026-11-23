@@ -191,6 +191,11 @@ public final class ConclaveAppDelegate: Sendable {
     @discardableResult
     @MainActor
     public func onOpenURL(_ url: URL) -> Bool {
+        openURL(url, appState: AppState.shared)
+    }
+
+    @MainActor
+    func openURL(_ url: URL, appState: AppState) -> Bool {
         guard shouldHandleOpenURL(url.absoluteString) else {
             return true
         }
@@ -207,7 +212,7 @@ public final class ConclaveAppDelegate: Sendable {
         guard isJoinLinkURLString(url.absoluteString) else {
             return false
         }
-        AppState.shared.openJoinURL(url)
+        appState.openJoinURL(url)
         return true
     }
 
@@ -255,7 +260,7 @@ public final class ConclaveAppDelegate: Sendable {
 
     public func onDestroy() {
         #if !SKIP
-        MeetingResumeMarker.write()
+        MeetingResumeMarker.write(defaults: UserDefaults.standard)
         guard Thread.isMainThread else { return }
         MainActor.assumeIsolated {
             MeetingViewModel.shared.handleAppWillTerminate()

@@ -8,7 +8,7 @@ struct ChatInputMemoTests {
     typealias Chat = ChatPoliciesTests
 
     private func joinedViewModel() -> MeetingViewModel {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.displayName = "Local"
@@ -31,7 +31,7 @@ struct ChatInputMemoTests {
     }
 
     @Test func chatClosesWhileTheCallSurfaceIsHiddenAndShowsTheDividerWhenItReturns() {
-        let shell = MeetingShellPresenter()
+        let shell = MeetingShellPresenter(defaults: IsolatedDefaults.make())
         let chat = shell.chat
         chat.now = { Chat.base + 600_000 }
         var messages = [Chat.peer("h-0", "earlier", at: 0)]
@@ -129,7 +129,7 @@ struct ChatInputMemoTests {
     }
 
     @Test func onlyALiveAppearanceOfTheCurrentViewShowsChat() {
-        let shell = MeetingShellPresenter()
+        let shell = MeetingShellPresenter(defaults: IsolatedDefaults.make())
         let chat = shell.chat
         chat.now = { Chat.base + 600_000 }
         var messages = [Chat.peer("h-0", "earlier", at: 0)]
@@ -200,7 +200,7 @@ struct ChatInputMemoTests {
     }
 
     @Test func theViewModelConvertsOnlyTheNewMessage() {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.displayName = "Local"
@@ -243,7 +243,7 @@ struct ChatInputMemoTests {
     }
 
     @Test func cancellingChatBeforeItMountsLeavesThePresenterClosed() {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.displayName = "Local"

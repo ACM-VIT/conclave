@@ -25,7 +25,13 @@ import type { Dispatch, SetStateAction } from "react";
 import { Avatar } from "@conclave/ui-tokens/web";
 import { signOut, useSession } from "@/lib/auth-client";
 import type { RoomInfo } from "@/lib/sfu-types";
-import { buildMeetingUrl, crossTenantJoinPath, parseMeetingInput } from "@/lib/meeting-links";
+import {
+  buildMeetingPath,
+  buildMeetingUrl,
+  meetingTarget,
+  parseMeetingInput,
+  type MeetingInput,
+} from "@/lib/meeting-links";
 import type { RejoinMedia } from "../lib/call-outcome";
 import { useRejoinMediaRestore } from "../hooks/useRejoinMediaRestore";
 import type {
@@ -1066,7 +1072,12 @@ function JoinScreen({
     }
   };
 
-  const [linkedClientId, setLinkedClientId] = useState<string | null>(null);
+  const [pastedMeeting, setPastedMeeting] = useState<MeetingInput | null>(null);
+  const target = meetingTarget(
+    enforceShortCode ? sanitizeRoomCode(normalizedRoomId) : normalizedRoomId.trim(),
+    pastedMeeting,
+    clientId,
+  );
   const restoringMedia = useRejoinMediaRestore(initialMedia, async (media) => {
     if (media.isAudioOnly) toggleAudioOnly();
     await Promise.allSettled([
@@ -1114,20 +1125,16 @@ function JoinScreen({
     setPending({ mode: "new", roomId: generateRoomCode() });
   };
   const joinMeeting = () => {
-    const candidate = enforceShortCode
-      ? sanitizeRoomCode(normalizedRoomId)
-      : normalizedRoomId.trim();
-    if (!candidate || restoringMedia) return;
-    const elsewhere = crossTenantJoinPath(candidate, linkedClientId, clientId);
-    if (elsewhere) {
-      window.location.assign(elsewhere);
+    if (!target.roomCode || restoringMedia) return;
+    if (!target.onThisPage) {
+      window.location.assign(buildMeetingPath(target));
       return;
     }
     if (!ensureGuest()) return;
     onEnterStart?.("join");
     commitPrejoinMedia();
     onIsAdminChange(false);
-    setPending({ mode: "join", roomId: candidate });
+    setPending({ mode: "join", roomId: target.roomCode });
   };
 
   const handleSignOut = async () => {
@@ -1162,26 +1169,25 @@ function JoinScreen({
       return;
     }
     const pasted = parseMeetingInput(raw);
-    setLinkedClientId(pasted.clientId);
-    onRoomIdChange(pasted.roomCode.slice(0, ROOM_CODE_MAX_LENGTH));
+    const roomCode = pasted.roomCode.slice(0, ROOM_CODE_MAX_LENGTH);
+    setPastedMeeting({ roomCode: sanitizeRoomCode(roomCode), clientId: pasted.clientId });
+    onRoomIdChange(roomCode);
   };
 
   const canJoin = normalizedRoomId.trim().length > 0;
   const nameReady = hasIdentity || liveDisplayName.length > 0;
 
-  const presenceTarget = enforceShortCode
-    ? sanitizeRoomCode(normalizedRoomId)
-    : normalizedRoomId.trim();
   useEffect(() => {
     if (roomsStatus === "loading") setPresenceChecked(true);
     else if (roomsStatus === "idle" && presenceChecked) setPresenceSettled(true);
   }, [roomsStatus, presenceChecked]);
-  const matchedRoom = presenceTarget
+  const countsHere = target.onThisPage && target.roomCode.length > 0;
+  const matchedRoom = countsHere
     ? rooms.find(
-        (room) => room.id.toLowerCase() === presenceTarget.toLowerCase(),
+        (room) => room.id.toLowerCase() === target.roomCode.toLowerCase(),
       )
     : undefined;
-  const showPresence = presenceTarget.length > 0 && presenceChecked;
+  const showPresence = countsHere && presenceChecked;
   const presenceCount = presenceSettled ? matchedRoom?.userCount ?? 0 : null;
   const presenceLoading = !presenceSettled;
 
@@ -1317,9 +1323,9 @@ function JoinScreen({
   };
 
   const inviteLink =
-    typeof window === "undefined" || !presenceTarget
+    typeof window === "undefined" || !target.roomCode
       ? ""
-      : buildMeetingUrl(window.location.origin, { roomCode: presenceTarget, clientId });
+      : buildMeetingUrl(window.location.origin, target);
   const handleCopyLink = async () => {
     if (!inviteLink || !navigator.clipboard?.writeText) return;
     try {

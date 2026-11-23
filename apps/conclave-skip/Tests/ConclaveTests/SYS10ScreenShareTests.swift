@@ -314,7 +314,7 @@ struct SYS10ScreenShareTests {
 
     @MainActor
     private final class PickerHarness {
-        let shell = MeetingShellPresenter()
+        let shell = MeetingShellPresenter(defaults: IsolatedDefaults.make())
         let stage: StagePresenter
         let controls: CallControlsPresenter
         var commands: [MeetingShellCommand] = []

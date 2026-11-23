@@ -47,7 +47,7 @@ struct ControlsPoliciesTests {
         init(_ inputs: MeetingShellInputs, admitFirst: MeetingShellInputs? = nil,
              width: ControlsWindowClass = .compact, height: ControlsWindowClass = .regular, isPhone: Bool = true,
              extras: (@MainActor (MeetingShellPresenter) -> CallControlsInputs)? = nil) {
-            let owner = MeetingShellPresenter()
+            let owner = MeetingShellPresenter(defaults: IsolatedDefaults.make())
             let stagePresenter = StagePresenter(shell: owner)
             shell = owner
             stage = stagePresenter
@@ -477,7 +477,7 @@ struct ControlsPoliciesTests {
 @Suite(.serialized)
 struct ControlsViewModelWiringTests {
     private func makeJoinedViewModel() -> MeetingViewModel {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.roomId = "room-a"

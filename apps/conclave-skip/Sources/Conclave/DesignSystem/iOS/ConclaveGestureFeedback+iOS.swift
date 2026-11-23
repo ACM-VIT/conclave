@@ -37,7 +37,7 @@ extension View {
         return sensoryFeedback(trigger: trigger) { _, _ in
             guard let effect = ConclaveGestureFeedback.feedback(
                 for: kind,
-                enabled: ConclaveFeedback.isEnabled(),
+                enabled: ConclaveFeedback.isEnabled(in: UserDefaults.standard),
                 active: UIApplication.shared.applicationState == .active
             ) else { return nil }
             let now = ConclaveHapticFeedback.uptimeMilliseconds()

@@ -150,10 +150,7 @@ struct SET2AudioPagesTests {
     }
 
     nonisolated static func freshDefaults() -> UserDefaults {
-        let suite = "set2-audio-" + UUID().uuidString
-        let defaults = UserDefaults(suiteName: suite) ?? UserDefaults.standard
-        defaults.removePersistentDomain(forName: suite)
-        return defaults
+        IsolatedDefaults.make()
     }
 
     static func source(_ path: String) throws -> String {

@@ -191,7 +191,7 @@ private struct LobbyToggleStrip: View {
     let media: LobbyMediaSnapshot
     let premeeting: PremeetingPresenter
     @State private var showsEffectsSheet = false
-    @State private var lobbyEffects = EffectsPresenter(scope: EffectsScope.lobby)
+    @State private var lobbyEffects = EffectsPresenter(scope: EffectsScope.lobby, defaults: UserDefaults.standard)
 
     var body: some View {
         ViewThatFits(in: .horizontal) {

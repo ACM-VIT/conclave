@@ -152,7 +152,7 @@ class ChatBridgeTests {
 
     @Test
     fun theFixtureDriverLogsCommandsWithoutACore() {
-        val shell = MeetingShellPresenter()
+        val shell = MeetingShellPresenter(defaults = IsolatedDefaults.make())
         val driver = ChatFixtureDriver.installOnStage(ChatFixtureState.busy, shell)
         assertTrue(shell.chat.timeline.rowIds.count > 20)
         assertEquals(MeetingPanel.chat, shell.panels.snapshot.current?.panel)

@@ -20,7 +20,9 @@ export const buildMeetingUrl = (
 const HAS_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i;
 const LOOKS_LIKE_HOST_PATH = /^[^\s/]+\.[^\s/]+\//;
 
-export const parseMeetingInput = (raw: string): { roomCode: string; clientId: string | null } => {
+export type MeetingInput = { roomCode: string; clientId: string | null };
+
+export const parseMeetingInput = (raw: string): MeetingInput => {
   const trimmed = raw.trim();
   const typed = { roomCode: sanitizeRoomCodeInput(raw), clientId: null };
   if (!HAS_SCHEME.test(trimmed) && !LOOKS_LIKE_HOST_PATH.test(trimmed)) return typed;
@@ -37,12 +39,15 @@ export const parseMeetingInput = (raw: string): { roomCode: string; clientId: st
   };
 };
 
-export const crossTenantJoinPath = (
+export type MeetingTarget = MeetingInput & { onThisPage: boolean };
+
+export const meetingTarget = (
   roomCode: string,
-  linkedClientId: string | null,
-  currentClientId: string | null | undefined,
-): string | null => {
-  const linked = canonicalizeSfuClientId(linkedClientId);
-  if (!linked || !roomCode || linked === canonicalizeSfuClientId(currentClientId)) return null;
-  return buildMeetingPath({ roomCode, clientId: linked });
+  pasted: MeetingInput | null,
+  pageClientId: string | null | undefined,
+): MeetingTarget => {
+  const page = canonicalizeSfuClientId(pageClientId);
+  const linked = pasted?.roomCode === roomCode ? canonicalizeSfuClientId(pasted.clientId) : null;
+  const clientId = linked ?? page;
+  return { roomCode, clientId, onThisPage: clientId === page };
 };

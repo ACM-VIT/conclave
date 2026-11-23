@@ -15,7 +15,7 @@ import skip.foundation.UserDefaults
 @Config(manifest = Config.NONE, sdk = [28])
 class CHT6VoiceBridgeTests {
     private class Harness {
-        val queue = TtsPlaybackQueue()
+        val queue = TtsPlaybackQueue(defaults = IsolatedDefaults.make())
         val speaker = TtsRecordingSpeaker(queue)
         var prefs: VoicePreferenceSnapshot = VoicePreferenceSnapshot.defaults
         var blocked = false
@@ -158,7 +158,7 @@ class CHT6VoiceBridgeTests {
 
     @Test
     fun theHandwrittenSpeakerKeepsTheSharedMembers() {
-        val queue = TtsPlaybackQueue()
+        val queue = TtsPlaybackQueue(defaults = IsolatedDefaults.make())
         val speaker = TtsSpeaker(queue)
         val recording = TtsRecordingSpeaker(queue)
         queue.schedulesTimers = false

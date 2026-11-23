@@ -3357,6 +3357,9 @@ private struct NativeTapButtonSurface: UIViewRepresentable {
 
 #if os(iOS)
 #Preview {
-    JoinView(viewModel: MeetingViewModel(), appState: AppState())
+    let defaults = IsolatedDefaults.make()
+    let appState = AppState(defaults: defaults)
+    JoinView(viewModel: MeetingViewModel(defaults: defaults, appState: appState,
+                                        notifications: SystemNotifications(defaults: defaults)), appState: appState)
 }
 #endif
