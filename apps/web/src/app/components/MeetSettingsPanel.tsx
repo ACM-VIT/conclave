@@ -31,6 +31,7 @@ import type {
   WebinarLinkResponse,
   WebinarUpdateRequest,
 } from "../lib/types";
+import PanelNoticeSlot from "./PanelNoticeSlot";
 
 const DEFAULT_WEBINAR_CAP = 500;
 const MIN_WEBINAR_CAP = 1;
@@ -685,6 +686,7 @@ export default function MeetSettingsPanel({
             <X size={18} strokeWidth={ICON_STROKE} />
           </button>
         </div>
+        <PanelNoticeSlot />
 
         <div className="hostpanel-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden pb-2">
           <SectionHeader
