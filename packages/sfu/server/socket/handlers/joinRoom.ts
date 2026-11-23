@@ -1,5 +1,6 @@
 import { readAiEnvironment } from "@conclave/ai/models";
 import { Admin } from "../../../config/classes/Admin.js";
+import type { Room } from "../../../config/classes/Room.js";
 import { Client } from "../../../config/classes/Client.js";
 import { config } from "../../../config/config.js";
 import type {
@@ -30,7 +31,6 @@ import {
   MEETING_ENDED_WHILE_WAITING,
   leaveNextMeetingLobby,
   lobbyGuestOf,
-  placeWaitingGuest,
 } from "../../nextMeetingLobby.js";
 import type { EndedRoom } from "../../state.js";
 import {
@@ -387,47 +387,72 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           }
         }
 
-        if (!room) {
+        // A guest waiting for the next meeting here may see it open while
+        // this retry waits on the registry or the ledger. The room that
+        // opened took them into its waiting list, so the live room is read
+        // again after every wait: a knock still in its waiting list stands
+        // as it is, a guest a host has let in since is seated, and a retry
+        // whose tab has gone does nothing. Other joins reach a room opening
+        // meanwhile through its creation, once its creator has set it up.
+        type FoundRoom = { room: Room; created: boolean; lost: LostRoom | null };
+        const openedForThisGuest = (): Room | undefined =>
+          parked && parkedChannelId === roomChannelId
+            ? state.rooms.get(roomChannelId)
+            : undefined;
+        const joinOpenedRoom = (opened: Room): FoundRoom | null => {
+          if (!socket.connected) return null;
+          if (opened.pendingClients.get(userKey)?.socket.id !== socket.id) {
+            return { room: opened, created: false, lost: null };
+          }
+          respond(callback, {
+            roomId,
+            rtpCapabilities: opened.rtpCapabilities,
+            existingProducers: [],
+            status: "waiting",
+            isLocked: opened.isLocked,
+          });
+          return null;
+        };
+        // The room for a code with no room here yet: one that opened
+        // meanwhile, or this join opens it. Null once the join is answered.
+        const findOrOpenRoom = async (): Promise<FoundRoom | null> => {
           const assignment = await state.roomRegistry.getAssignment(roomChannelId);
+          const openedWhileAsking = openedForThisGuest();
+          if (openedWhileAsking) return joinOpenedRoom(openedWhileAsking);
           if (assignment && !state.roomRegistry.isLocalOwner(assignment)) {
             respondWithRoomOwner(assignment);
-            return;
+            return null;
           }
           const hasReservedLocalPlacement = assignment?.kind === "placement";
 
           if (isWebinarAttendeeJoin && !scheduledWebinarForAttendee) {
             respond(callback, { error: "Webinar is not live." });
-            return;
+            return null;
           }
           // Someone waiting for the next meeting who asks again before it is
-          // open anywhere the registry knows of keeps waiting: in the room
-          // that opened here while this join was decided, else the lobby.
+          // open anywhere the registry knows of keeps their place in the
+          // lobby, which nothing took them out of.
           const keepWaiting = (): boolean => {
             if (!parked || parkedChannelId !== roomChannelId) return false;
-            const opened = placeWaitingGuest(state, roomChannelId, parked);
             socket.emit("waitingRoomStatus", {
-              message: !opened
-                ? MEETING_ENDED_WHILE_WAITING
-                : opened.hasActiveAdmin()
-                  ? "A host is available to let you in."
-                  : "No one to let you in.",
+              message: MEETING_ENDED_WHILE_WAITING,
               roomId,
             });
             respond(callback, {
               roomId,
-              rtpCapabilities: opened?.rtpCapabilities ?? { codecs: [], headerExtensions: [] },
+              rtpCapabilities: { codecs: [], headerExtensions: [] },
               existingProducers: [],
               status: "waiting",
-              isLocked: opened?.isLocked ?? true,
+              isLocked: true,
             });
             return true;
           };
           if (state.isDraining && !hasReservedLocalPlacement) {
-            if (keepWaiting()) return;
+            if (keepWaiting()) return null;
             respond(callback, {
               error: "Meeting server is draining. Try again shortly.",
             });
-            return;
+            return null;
           }
           // The account a code belongs to opens it from anywhere: ownership
           // is on the server, not in what a tab remembers.
@@ -446,12 +471,17 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
               Boolean(scheduledWebinarForAttendee) ||
               clientPolicy.allowNonHostRoomCreation,
           });
+          const openedWhileDeciding = openedForThisGuest();
+          if (openedWhileDeciding) return joinOpenedRoom(openedWhileDeciding);
           if (!opening.opens) {
-            if (keepWaiting()) return;
+            if (keepWaiting()) return null;
             Logger.info(`Join refused for ${roomId} (${clientId}): ${opening.refusal}`);
             respond(callback, { error: opening.refusal });
-            return;
+            return null;
           }
+          let openedRoom: Room;
+          let created: boolean;
+          let lost: LostRoom | null = null;
           try {
             // Several joiners can miss the lookup above while the room is
             // still being created; only the one whose call created it is the
@@ -461,14 +491,14 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
               clientId,
               roomId,
             );
-            room = result.room;
-            createdRoom = result.created;
+            openedRoom = result.room;
+            created = result.created;
             // The recovery record was read once this SFU held the code, so
             // nothing awaits between creating the room and settling who
             // hosts it.
             const recalled = result.recalled;
-            if (createdRoom && recalled) {
-              lostRoom = recalled.lost;
+            if (created && recalled) {
+              lost = recalled.lost;
               // A code no one has recorded an owner for is made by this
               // join, and belongs to its account if it is signed in, unless
               // the join brings a recovery pass for the code: then a call ran
@@ -478,7 +508,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
                 getScheduledMeetingByRoomCode(state.scheduledMeetings, clientId, roomId),
                 recalled,
               );
-              room.ownerEmail =
+              openedRoom.ownerEmail =
                 recordedOwner !== undefined
                   ? recordedOwner
                   : isWebinarAttendeeJoin ||
@@ -493,25 +523,33 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           } catch (error) {
             if (error instanceof RoomOwnershipError) {
               respondWithRoomOwner(error.owner);
-              return;
+              return null;
             }
             throw error;
           }
-          if (createdRoom && endedRoom) {
+          if (created && endedRoom) {
             clearEndedRoom(state, roomChannelId);
             Logger.info(
               `Re-opened ended room ${roomId} (${clientId}) for ${userId}`,
             );
           }
-          if (createdRoom && clientPolicy.knockByDefault) {
-            room.setLocked(true);
+          if (created && clientPolicy.knockByDefault) {
+            openedRoom.setLocked(true);
           }
           // The SFU lost this call and it is coming back: its hosts are
           // hosts again when they return, and the people a host had put out
           // still have to be let in.
-          if (lostRoom) {
-            room.restoreLostCall(lostRoom);
+          if (lost) {
+            openedRoom.restoreLostCall(lost);
           }
+          return { room: openedRoom, created, lost };
+        };
+        if (!room) {
+          const found = await findOrOpenRoom();
+          if (!found) return;
+          room = found.room;
+          createdRoom = found.created;
+          lostRoom = found.lost;
         }
 
         // Past its deadline, a room that stood in for a lost call is a new

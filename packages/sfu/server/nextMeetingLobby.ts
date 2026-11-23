@@ -1,4 +1,4 @@
-import type { Room, WaitingGuest } from "../config/classes/Room.js";
+import type { WaitingGuest } from "../config/classes/Room.js";
 import type { SfuState } from "./state.js";
 
 // What someone still knocking is told when the meeting they knock on ends.
@@ -115,30 +115,6 @@ export const leaveNextMeetingLobby = (
   lobby.guests.delete(userKey);
   if (lobby.guests.size === 0) close(state, channelId, lobby);
   else armRetry(lobby);
-};
-
-// Where someone waiting for the next meeting at a code is now, decided in
-// one step with nothing awaited, so no room can open in between: in the
-// waiting list of the room open there, or still in the lobby.
-export const placeWaitingGuest = (
-  state: SfuState,
-  channelId: string,
-  guest: WaitingGuest,
-): Room | null => {
-  const room = state.rooms.get(channelId);
-  if (!room) return null;
-  leaveNextMeetingLobby(state, channelId, guest.userKey, guest.socket.id);
-  if (room.pendingClients.get(guest.userKey)?.socket.id !== guest.socket.id) {
-    room.addPendingClient(guest.userKey, guest.userId, guest.socket, guest.displayName);
-    for (const admin of room.getAdmins()) {
-      admin.socket.emit("userRequestedJoin", {
-        userId: guest.userKey,
-        displayName: guest.displayName || guest.userKey,
-        roomId: room.id,
-      });
-    }
-  }
-  return room;
 };
 
 // The next meeting at the code opened here: those waiting for it are its

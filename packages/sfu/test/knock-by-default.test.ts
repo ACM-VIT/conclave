@@ -1628,13 +1628,16 @@ describe("a meeting whose last participant leaves while someone is still knockin
     expect(knocksShownTo(reopened)).toEqual(["guest-knocker"]);
   });
 
-  it("takes a knocker whose retry was still being decided into the meeting that opened meanwhile", async () => {
-    const { state, knocking } = await everyoneLeftButTheKnocker();
-    // The knocker's tab asks again, and that join stops at the registry.
+  // The knocker's tab asks again, and that join stops at the registry
+  // until the test lets it go on.
+  const askAgainHeldAtTheRegistry = (
+    state: SfuState,
+    knocking: Awaited<ReturnType<typeof join>>,
+  ) => {
     const registry = state.roomRegistry;
     const lookUp = registry.getAssignment.bind(registry);
-    let release = () => {};
-    const held = new Promise<void>((resolve) => (release = resolve));
+    let goOn = () => {};
+    const held = new Promise<void>((resolve) => (goOn = resolve));
     let heldOnce = false;
     registry.getAssignment = async (channelId) => {
       if (!heldOnce) {
@@ -1643,23 +1646,63 @@ describe("a meeting whose last participant leaves while someone is still knockin
       }
       return lookUp(channelId);
     };
-    const asking = askAgain(knocking);
+    const reply = askAgain(knocking);
     expect(heldOnce).toBe(true);
+    return { reply, goOn };
+  };
+  const knocksAskedOf = (member: Awaited<ReturnType<typeof join>>) =>
+    member.peer.emit.mock.calls
+      .filter(([event]) => event === "userRequestedJoin")
+      .map(([, sent]) => (sent as { userId: string }).userId);
+
+  it("takes a knocker whose retry was still being decided into the meeting that opened meanwhile", async () => {
+    const { state, knocking } = await everyoneLeftButTheKnocker();
+    const retry = askAgainHeldAtTheRegistry(state, knocking);
 
     const reopened = await join(state, host);
-    release();
-    expect((await asking).status).toBe("waiting");
+    retry.goOn();
+    expect((await retry.reply).status).toBe("waiting");
 
     expect(roomOf(state).pendingClients.has(knocker.userId)).toBe(true);
     expect(state.nextMeetingLobbies.size).toBe(0);
-    const requests = reopened.peer.emit.mock.calls
-      .filter(([event]) => event === "userRequestedJoin")
-      .map(([, sent]) => (sent as { userId: string }).userId);
-    expect([...knocksShownTo(reopened), ...requests]).toContain(knocker.userId);
+    expect([...knocksShownTo(reopened), ...knocksAskedOf(reopened)]).toContain(knocker.userId);
     expect(await send(reopened.peer, "admitUser", { userId: knocker.userId })).toEqual({
       success: true,
     });
     expect((await askAgain(knocking)).status).toBe("joined");
+  });
+
+  it("seats a knocker the host let in while their retry was still being decided, with no second knock", async () => {
+    const { state, knocking } = await everyoneLeftButTheKnocker();
+    const retry = askAgainHeldAtTheRegistry(state, knocking);
+    const reopened = await join(state, host);
+    expect(knocksShownTo(reopened)).toEqual([knocker.userId]);
+    expect(await send(reopened.peer, "admitUser", { userId: knocker.userId })).toEqual({
+      success: true,
+    });
+
+    retry.goOn();
+    expect((await retry.reply).status).toBe("joined");
+    expect(knocking.context.currentRoom).toBe(roomOf(state));
+    expect(roomOf(state).pendingClients.has(knocker.userId)).toBe(false);
+    expect(knocksAskedOf(reopened)).toEqual([]);
+  });
+
+  it("does not knock again for a knocker the host turned away while their retry was still being decided", async () => {
+    const { state, knocking } = await everyoneLeftButTheKnocker();
+    const retry = askAgainHeldAtTheRegistry(state, knocking);
+    const reopened = await join(state, host);
+    expect(await send(reopened.peer, "rejectUser", { userId: knocker.userId })).toEqual({
+      success: true,
+    });
+    // The turned-away tab goes back to setup and closes its connection.
+    (knocking.peer.socket as { connected: boolean }).connected = false;
+    await hangUp(knocking.peer);
+
+    retry.goOn();
+    await retry.reply;
+    expect(roomOf(state).pendingClients.has(knocker.userId)).toBe(false);
+    expect(knocksAskedOf(reopened)).toEqual([]);
   });
 
   it("does not show the next meeting's host a knocker who went to another code", async () => {
