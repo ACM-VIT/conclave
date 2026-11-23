@@ -25,7 +25,7 @@ struct ChatInputMemoTests {
     private func readChat(_ viewModel: MeetingViewModel) {
         let panels = viewModel.shell.panels
         panels.present(.chat, from: .call)
-        panels.didPresent(session: panels.snapshot.session, presentationID: panels.snapshot.current?.presentationID ?? 0)
+        panels.panelDidAppear(session: panels.snapshot.session, presentationID: panels.snapshot.current?.presentationID ?? 0)
         panels.dismiss(cancelPending: true)
         panels.didDismiss(session: panels.snapshot.session, presentationID: panels.snapshot.current?.presentationID ?? 0)
     }
@@ -103,7 +103,7 @@ struct ChatInputMemoTests {
                                                         content: "seen", roomId: "room-a"))
         viewModel.shell.panels.toggle(.chat, from: .call)
         let shown = viewModel.shell.panels.snapshot
-        viewModel.shell.panels.didPresent(session: shown.session, presentationID: shown.current?.presentationID ?? 0)
+        viewModel.shell.panels.panelDidAppear(session: shown.session, presentationID: shown.current?.presentationID ?? 0)
         #expect(viewModel.chat.isShown)
         viewModel.shell.panels.toggle(.chat, from: .call)
         let dismissing = viewModel.shell.panels.snapshot
@@ -121,11 +121,63 @@ struct ChatInputMemoTests {
         let viewModel = joinedViewModel()
         viewModel.shell.panels.present(.chat, from: .call)
         let shown = viewModel.shell.panels.snapshot
-        viewModel.shell.panels.didPresent(session: shown.session, presentationID: shown.current?.presentationID ?? 0)
+        viewModel.shell.panels.panelDidAppear(session: shown.session, presentationID: shown.current?.presentationID ?? 0)
         viewModel.handleAppEnteredBackground()
         #expect(!viewModel.chat.isShown)
         viewModel.handleAppBecameActive()
         #expect(viewModel.chat.isShown)
+    }
+
+    @Test func onlyALiveAppearanceOfTheCurrentViewShowsChat() {
+        let shell = MeetingShellPresenter()
+        let chat = shell.chat
+        chat.now = { Chat.base + 600_000 }
+        var messages = [Chat.peer("h-0", "earlier", at: 0)]
+        chat.apply(Chat.inputs(messages), change: .messages)
+        let panels = shell.panels
+        panels.present(.chat, from: .call)
+        let mounted = panels.panelDidAppear(session: panels.snapshot.session, presentationID: panels.snapshot.current?.presentationID ?? 0)
+        #expect(chat.isShown)
+
+        panels.panelDidDisappear(token: mounted)
+        #expect(!chat.isShown)
+        messages.append(Chat.peer("transition", "while the panel leaves", at: 50, history: false))
+        chat.apply(Chat.inputs(messages), change: .messages)
+        #expect(chat.pendingUnreadCount == 1)
+
+        shell.setCallSurfaceVisible(false)
+        for index in 0..<500 {
+            messages.append(Chat.peer("hidden-" + String(index), "hidden " + String(index), at: 100.0 + Double(index), history: false))
+            chat.apply(Chat.inputs(messages), change: .messages)
+        }
+        shell.setCallSurfaceVisible(true)
+        #expect(!chat.isShown)
+        #expect(chat.pendingUnreadCount == 501)
+
+        shell.setCallSurfaceVisible(false)
+        shell.setCallSurfaceVisible(true)
+        panels.panelDidAppear(session: panels.snapshot.session, presentationID: panels.snapshot.current?.presentationID ?? 0)
+        #expect(chat.isShown)
+        let rowIds = chat.timeline.rowIds
+        #expect(rowIds.firstIndex(of: "unread").map { rowIds[$0 + 1] } == "transition")
+    }
+
+    @Test func theBadgeClearsOnlyWhenChatIsShown() {
+        let viewModel = joinedViewModel()
+        viewModel.state.unreadChatCount = 2
+        viewModel.shell.panels.toggle(.chat, from: .call)
+        #expect(!viewModel.state.isChatOpen, "new messages keep counting until chat appears")
+        #expect(viewModel.state.unreadChatCount == 2)
+        viewModel.shell.panels.toggle(.chat, from: .call)
+        let dismissing = viewModel.shell.panels.snapshot
+        viewModel.shell.panels.didDismiss(session: dismissing.session, presentationID: dismissing.current?.presentationID ?? 0)
+        #expect(viewModel.state.unreadChatCount == 2)
+
+        viewModel.shell.panels.toggle(.chat, from: .call)
+        let shown = viewModel.shell.panels.snapshot
+        viewModel.shell.panels.panelDidAppear(session: shown.session, presentationID: shown.current?.presentationID ?? 0)
+        #expect(viewModel.state.isChatOpen)
+        #expect(viewModel.state.unreadChatCount == 0)
     }
 
     @Test func backgroundingTheAppClosesChatUntilItComesBack() {

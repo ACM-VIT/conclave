@@ -153,6 +153,20 @@ struct ClosedChatWorkTests {
         #expect(chat.emojiParseCount == parsed + 2)
     }
 
+    @Test func messagesThatArriveBeforeTheFirstAppearanceGetTheDivider() {
+        var messages = history(1)
+        let chat = Chat.presenter(Chat.inputs(messages))
+        chat.openPanel()
+        messages.append(Chat.peer("A", "first", at: 100, history: false))
+        chat.apply(Chat.inputs(messages), change: .messages)
+        messages.append(Chat.peer("B", "second", at: 101, history: false))
+        chat.apply(Chat.inputs(messages), change: .messages)
+        chat.panelDidAppear()
+        #expect(chat.pendingUnreadCount == 0)
+        let rowIds = chat.timeline.rowIds
+        #expect(rowIds.firstIndex(of: "unread").map { rowIds[$0 + 1] } == "A")
+    }
+
     @Test func anOpenChatStillRebuildsAndAnnouncesEachMessage() {
         var messages = history(3)
         let chat = Chat.presenter(Chat.inputs(messages))

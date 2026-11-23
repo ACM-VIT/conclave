@@ -102,6 +102,15 @@ final class PanelCoordinator {
         afterSnapshotChanged?()
     }
 
+    @discardableResult
+    func panelDidAppear(session: Int, presentationID: Int) -> Int {
+        didPresent(session: session, presentationID: presentationID)
+        return 0
+    }
+
+    func panelDidDisappear(token: Int) {
+    }
+
     func reset(session: Int) {
 
         if destinationRequest != nil { destinationRequest = nil }
