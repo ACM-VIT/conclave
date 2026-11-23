@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildMeetingPath, crossTenantJoinPath, parseMeetingInput } from "../src/lib/meeting-links";
+import { buildMeetingPath, buildMeetingUrl, meetingTarget, parseMeetingInput } from "../src/lib/meeting-links";
 import {
   canonicalizeSfuClientId,
   findScheduledMeetingForLink,
@@ -161,10 +161,34 @@ describe("a pasted meeting link", () => {
     expect(parseMeetingInput("Rose Sora")).toEqual({ roomCode: "rose-sora", clientId: null });
   });
 
-  it("opens a link that names another tenant in that tenant, and keeps one in this tenant here", () => {
-    expect(crossTenantJoinPath("abc-defg-hij", "acme", "conclave")).toBe("/abc-defg-hij?clientId=acme");
-    expect(crossTenantJoinPath("abc-defg-hij", "conclave", "conclave")).toBeNull();
-    expect(crossTenantJoinPath("abc-defg-hij", "default", "conclave")).toBeNull();
-    expect(crossTenantJoinPath("abc-defg-hij", null, "conclave")).toBeNull();
+  const ORIGIN = "https://conclave.acmvit.in";
+  const pasteOnConclave = (link: string, roomCode = parseMeetingInput(link).roomCode) =>
+    meetingTarget(roomCode, parseMeetingInput(link), "conclave");
+
+  it("joins and copies a link that names another tenant in that tenant, and leaves this page's head count out of it", () => {
+    const target = pasteOnConclave("http://localhost:3000/abc-defg-hij?clientId=acme");
+
+    expect(target).toEqual({ roomCode: "abc-defg-hij", clientId: "acme", onThisPage: false });
+    expect(buildMeetingPath(target)).toBe("/abc-defg-hij?clientId=acme");
+    expect(buildMeetingUrl(ORIGIN, target)).toBe(`${ORIGIN}/abc-defg-hij?clientId=acme`);
+  });
+
+  it("keeps a link in this tenant, or a bare one, here", () => {
+    for (const link of [
+      "https://conclave.acmvit.in/abc-defg-hij?clientId=conclave",
+      "https://conclave.acmvit.in/abc-defg-hij?clientId=default",
+      "conclave.acmvit.in/abc-defg-hij",
+      "abc-defg-hij",
+    ]) {
+      const target = pasteOnConclave(link);
+      expect(target, link).toEqual({ roomCode: "abc-defg-hij", clientId: "conclave", onThisPage: true });
+      expect(buildMeetingUrl(ORIGIN, target), link).toBe(`${ORIGIN}/abc-defg-hij?clientId=conclave`);
+    }
+  });
+
+  it("drops the pasted tenant once the code no longer matches the pasted link", () => {
+    const target = pasteOnConclave("http://localhost:3000/abc-defg-hij?clientId=acme", "xyz-uvwx-rst");
+
+    expect(target).toEqual({ roomCode: "xyz-uvwx-rst", clientId: "conclave", onThisPage: true });
   });
 });
