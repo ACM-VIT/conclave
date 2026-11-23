@@ -72,12 +72,17 @@ const describe = (failure: AuthorityFailure, doing: Doing): string =>
  * - The view reaches the revision the request's answer named, a replayed
  *   answer included. The view then reflects the request and everything
  *   committed before the answer, even when nothing in it changed.
+ * - The connection changed, and the request on the old one has ended. The
+ *   old session can no longer settle it, and the new view decides.
  *
  * A wish not sent yet, a change of mind waiting for the request before it,
- * stands until it is sent.
+ * stands until it is sent, or until that request ends on a connection that
+ * has since changed.
  */
 type UpvoteWish = {
   value: boolean;
+  /** The session the click was made on, as its `act`. */
+  session: unknown;
   sentOn?: { changes: number };
   revision?: number;
 };
@@ -239,7 +244,7 @@ export function useQa() {
         wishedUpvote(wishesRef.current, id, seen) ??
         current?.myUpvotes.has(id) ??
         false;
-      wish({ value: !shown });
+      wish({ value: !shown, session: act });
       if (sendingRef.current.get(id) === act) return { ok: true };
 
       sendingRef.current.set(id, act);
@@ -255,13 +260,21 @@ export function useQa() {
           }
           const flag: UpvoteWish = {
             value,
+            session: act,
             sentOn: { changes: countsRef.current.get(id) ?? 0 },
           };
           wish(flag);
           const result = await act("upvote", { id, value });
-          // The connection changed while this was on its way. What is wished
-          // now is the new session's, and a click there sends it there.
-          if (actRef.current !== act) return { ok: true };
+          // The connection changed while this was on its way. A click on the
+          // new session sends there, and its wish is left to it. One made on
+          // this session goes: nothing here can settle it now.
+          if (actRef.current !== act) {
+            if (wishesRef.current.get(id)?.session !== act) return { ok: true };
+            wish(null);
+            return result.ok
+              ? { ok: true }
+              : { ok: false, error: describe(result, "upvote") };
+          }
           if (!result.ok) {
             wish(null);
             return { ok: false, error: describe(result, "upvote") };
