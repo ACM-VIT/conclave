@@ -6,25 +6,30 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct TestHarnessSettleTests {
-    private final class Hops {
-        var count = 0
+    private final class Chain {
+        var hops = 0
     }
 
-    @Test func aBusyMainActorSlowsTheWaitButNeverFailsIt() async {
-        let load = MainActorLoad(jobs: 20, burn: .milliseconds(5))
-        let hops = Hops()
+    @Test func aMainActorStallPastTheFloorKeepsTheWaitGoingUntilTheNextHop() async {
+        let floor: Duration = .milliseconds(20)
+        let chain = Chain()
         Task { @MainActor in
-            for _ in 0..<3 {
-                hops.count += 1
-                await Task.yield()
-            }
+            chain.hops = 1
+            let end = ContinuousClock.now.advanced(by: floor * 3)
+            while ContinuousClock.now < end {}
+            await Task.yield()
+            chain.hops = 2
         }
-        let started = ContinuousClock.now
-        let reached = await settle(floor: .milliseconds(20), turns: 50) { hops.count == 3 }
-        let waited = ContinuousClock.now - started
-        await load.stop()
-        #expect(reached)
-        #expect(waited > .milliseconds(20), "the busy main actor kept the chain going past the wall-clock floor")
+        let deadline = ContinuousClock.now.advanced(by: floor)
+        var sawUnfinishedChainPastTheFloor = false
+        let reached = await settle(floor: floor, turns: 50) {
+            if chain.hops == 1 && ContinuousClock.now >= deadline {
+                sawUnfinishedChainPastTheFloor = true
+            }
+            return chain.hops == 2
+        }
+        #expect(sawUnfinishedChainPastTheFloor, "the stall ended after the floor with one hop still queued")
+        #expect(reached, "one more turn lets the queued hop run")
     }
 
     @Test func aConditionThatNeverHoldsFailsOnceTheTurnsAndTheFloorAreSpent() async {
@@ -35,31 +40,6 @@ struct TestHarnessSettleTests {
         }
         #expect(!reached)
         #expect(checks == 11)
-    }
-}
-
-@MainActor
-final class MainActorLoad {
-    private var running = true
-    private var tasks: [Task<Void, Never>] = []
-
-    init(jobs: Int, burn: Duration) {
-        for _ in 0..<jobs {
-            tasks.append(Task { @MainActor [weak self] in
-                while self?.running == true {
-                    let end = ContinuousClock.now.advanced(by: burn)
-                    while ContinuousClock.now < end {}
-                    await Task.yield()
-                }
-            })
-        }
-    }
-
-    func stop() async {
-        running = false
-        for task in tasks {
-            await task.value
-        }
     }
 }
 #endif
