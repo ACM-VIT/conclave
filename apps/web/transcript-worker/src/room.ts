@@ -43,6 +43,7 @@ import {
   TRANSCRIPTION_GAP_MARKER,
   TRANSCRIPTION_LINE_DEADLINE_MS,
   TRANSCRIPTION_PROVIDER_DRAIN_MS,
+  TRANSCRIPTION_RECOVERY_MAX_AUDIO_BYTES,
   UNOWNED_AUDIO_KEPT_MS,
 } from "./constants";
 import {
@@ -1377,6 +1378,32 @@ export class TranscriptRoom {
         pending.chunks = pending.chunks.filter(({ createdAt }) => chunk.createdAt - createdAt <= UNOWNED_AUDIO_KEPT_MS);
       }
       this.uncommittedAudio.set(key, pending);
+    }
+    this.keepReplayAudioWithinLimit();
+  }
+
+  /**
+   * Replay audio, owned by a line or by no line yet, stays within one
+   * limit for the whole room, so a relay that never commits cannot grow
+   * it without end. The oldest chunks go first.
+   */
+  private keepReplayAudioWithinLimit(): void {
+    const lines = this.ledger.activeUnordered();
+    const holders = [...lines.map(({ audio }) => audio), ...Array.from(this.uncommittedAudio.values(), ({ chunks }) => chunks)];
+    let total = 0;
+    for (const chunks of holders) for (const { audio } of chunks) total += audio.length;
+    if (total <= TRANSCRIPTION_RECOVERY_MAX_AUDIO_BYTES) return;
+    const kept = new Set<AudioChunk>();
+    let bytes = 0;
+    for (const chunk of holders.flat().sort((left, right) => right.createdAt - left.createdAt)) {
+      if (bytes + chunk.audio.length > TRANSCRIPTION_RECOVERY_MAX_AUDIO_BYTES) break;
+      bytes += chunk.audio.length;
+      kept.add(chunk);
+    }
+    for (const line of lines) line.audio = line.audio.filter((chunk) => kept.has(chunk));
+    for (const [key, pending] of this.uncommittedAudio) {
+      pending.chunks = pending.chunks.filter((chunk) => kept.has(chunk));
+      if (pending.chunks.length === 0) this.uncommittedAudio.delete(key);
     }
   }
 

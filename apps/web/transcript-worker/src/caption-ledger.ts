@@ -73,6 +73,10 @@ export class CaptionLedger {
     return this.all().filter(isActive);
   }
 
+  /** Active lines in no particular order, for checks that run on every chunk. */
+  activeUnordered(): CaptionLine[] {
+    return Array.from(this.lines.values()).filter(isActive);
+  }
 
   add(line: Omit<CaptionLine, "id" | "text" | "freshText"> & { text?: string }): CaptionLine {
     const created: CaptionLine = { id: crypto.randomUUID(), text: "", freshText: false, ...line };

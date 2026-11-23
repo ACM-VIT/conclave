@@ -214,6 +214,17 @@ export async function transcriptRoomRig(
       timers: internals.lineTimer === null ? 0 : 1,
     };
   };
+  /** Base64 bytes of replay audio the room holds, owned by lines or by no line yet. */
+  const retainedAudioBytes = () => {
+    const internals = room as unknown as {
+      ledger: { all(): { audio: { audio: string }[] }[] };
+      uncommittedAudio: Map<string, { chunks: { audio: string }[] }>;
+    };
+    return [
+      ...internals.ledger.all().flatMap(({ audio }) => audio),
+      ...Array.from(internals.uncommittedAudio.values()).flatMap(({ chunks }) => chunks),
+    ].reduce((sum, { audio }) => sum + audio.length, 0);
+  };
   const lastSnapshotSegment = (text: string) =>
     snapshots.at(-1)?.segments.find((segment) => segment.text === text);
   const snapshotCount = () => snapshots.length;
@@ -267,6 +278,7 @@ export async function transcriptRoomRig(
     broadcastPlacesByWords,
     viewerTranscript,
     retainedLineState,
+    retainedAudioBytes,
     viewerSnapshot,
   };
 }

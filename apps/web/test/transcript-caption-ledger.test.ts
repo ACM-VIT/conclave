@@ -3,6 +3,7 @@ import {
   TRANSCRIPTION_COMMIT_ACK_TIMEOUT_MS as COMMIT_ACK_TIMEOUT,
   TRANSCRIPTION_GAP_MARKER as GAP,
   TRANSCRIPTION_LINE_DEADLINE_MS as DEADLINE,
+  TRANSCRIPTION_RECOVERY_MAX_AUDIO_BYTES as REPLAY_AUDIO_LIMIT,
 } from "../transcript-worker/src/constants";
 import {
   AUDIO,
@@ -799,5 +800,28 @@ describe("OpenAI: a commit's line keeps its own deadline and watchdog", () => {
     expect(broadcastFinals()).not.toContain("Ada, late.");
     expect(broadcastFinals()).not.toContain("Grace, late.");
     expect(speakers(room.segments)).toEqual([["Grace again.", "grace"]]);
+  });
+});
+
+describe("replay audio stays within one shared limit", () => {
+  it("a relay that never commits keeps only the newest audio, up to the limit", async () => {
+    vi.useFakeTimers();
+    quiet();
+    const { providerSockets, start, speak, retainedAudioBytes } = await rig(OPENAI);
+    await start("en");
+    const [socket] = providerSockets();
+    const chunks = Math.ceil((1.25 * REPLAY_AUDIO_LIMIT) / AUDIO.speech.length);
+    for (let index = 0; index < chunks; index += 1) {
+      await speak(ada);
+      await vi.advanceTimersByTimeAsync(20);
+    }
+    expect(retainedAudioBytes()).toBeLessThanOrEqual(REPLAY_AUDIO_LIMIT);
+    expect(retainedAudioBytes()).toBeGreaterThan(REPLAY_AUDIO_LIMIT - AUDIO.speech.length);
+
+    socket.disconnect();
+    await settle();
+    const replayed = speechSent(providerSockets().at(-1)!);
+    expect(replayed * AUDIO.speech.length).toBeLessThanOrEqual(REPLAY_AUDIO_LIMIT);
+    expect(replayed).toBeGreaterThan(0);
   });
 });
