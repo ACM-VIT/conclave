@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuthorityAvailable, useAuthorityRuntime } from "@conclave/apps-sdk";
 import { qaContract, useQa } from "@conclave/apps-sdk/qa/web";
 import type { WebinarQaEntry, WebinarQaModerateRequest } from "../lib/types";
-import { useHeldThroughReconnect } from "./useHeldThroughReconnect";
+import { useHeldThroughReconnect, waitForView } from "./useHeldThroughReconnect";
 
 type Result = { ok: boolean; error?: string };
 
@@ -167,14 +167,16 @@ export function useMeetingQa({
   );
 
   if (app.fromApp) {
+    const waiting = !fromApp;
     return {
       offered,
       fromApp: true as const,
+      waiting,
       entries,
       askNeedsIdentity: app.askNeedsIdentity,
-      onSubmit: app.canAsk ? ask : undefined,
-      onUpvote: app.canUpvote ? toggleUpvote : undefined,
-      onModerate: app.canModerate ? appModerate : undefined,
+      onSubmit: app.canAsk ? (waiting ? waitForView : ask) : undefined,
+      onUpvote: app.canUpvote ? (waiting ? waitForView : toggleUpvote) : undefined,
+      onModerate: app.canModerate ? (waiting ? waitForView : appModerate) : undefined,
     };
   }
   if ((offered && !isWebinar) || awaitingNewView) {
@@ -182,6 +184,7 @@ export function useMeetingQa({
     return {
       offered,
       fromApp: false as const,
+      waiting: false,
       entries,
       askNeedsIdentity: false,
       onSubmit: undefined,
@@ -192,6 +195,7 @@ export function useMeetingQa({
   return {
     offered,
     fromApp: false as const,
+    waiting: false,
     entries,
     askNeedsIdentity: false,
     onSubmit: legacy.submit,

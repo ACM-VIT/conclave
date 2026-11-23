@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 import { useAuthorityAvailable, useAuthorityRuntime } from "@conclave/apps-sdk";
 import { pollsContract, usePolls, type PollCard } from "@conclave/apps-sdk/polls/web";
-import { useHeldThroughReconnect } from "./useHeldThroughReconnect";
+import { useHeldThroughReconnect, waitForView } from "./useHeldThroughReconnect";
 
 export function useMeetingPolls({
   isJoined,
@@ -35,6 +35,12 @@ export function useMeetingPolls({
     ...grants,
     polls: shownPolls,
     offered,
+    waiting: viewComing,
+    createPoll: viewComing ? waitForView : polls.createPoll,
+    vote: viewComing ? waitForView : polls.vote,
+    endPoll: viewComing ? waitForView : polls.endPoll,
+    shareResults: viewComing ? waitForView : polls.shareResults,
+    exportCsv: viewComing ? waitForView : polls.exportCsv,
     isAvailable: offered && isJoined && !isWebinarAttendee,
   };
 }

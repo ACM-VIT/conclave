@@ -609,3 +609,51 @@ it("lets a meeting's Q&A go when the person leaves the meeting while the connect
   expect(qa.offered).toBe(false);
   expect(qa.entries).toEqual([]);
 });
+
+it("keeps every action of a meeting's Q&A waiting while its view comes back, and sends nothing for them", async () => {
+  const noOldList = { ...legacy, entries: null };
+  const viewWithMyVote = async () => {
+    const subscription = last(AUTHORITY_EVENTS.subscribe)!.payload.subscription as string;
+    await act(async () =>
+      push({
+        kind: "replace",
+        subscription,
+        generation: 1,
+        serverNowMs: Date.now(),
+        part: 0,
+        last: true,
+        rows: [
+          pendingQuestion("q1", "Is this recorded?"),
+          { bucket: "votes", key: "q1", value: { upvotes: 1 } },
+          { bucket: "myUpvotes", key: "q1", value: {} },
+        ],
+        grants: { actions: ["ask", "upvote", "moderate"], needsIdentity: [], queries: [] },
+      }),
+    );
+  };
+  await mount(false, noOldList);
+  await offerQa();
+  await viewWithMyVote();
+  await mount(false, noOldList, { connected: false });
+  await mount(false, noOldList);
+  await offerQa();
+  const whileWaiting = qa;
+  const fromTheGap = sent.length;
+  const answers: Promise<unknown>[] = [];
+  await act(async () => {
+    answers.push(Promise.resolve(whileWaiting.onUpvote?.("q1")));
+    answers.push(Promise.resolve(whileWaiting.onSubmit?.("Will the slides be shared?")));
+    answers.push(Promise.resolve(whileWaiting.onModerate?.({ id: "q1", action: "dismissed" })));
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  await viewWithMyVote();
+  await act(async () => vi.advanceTimersByTimeAsync(10_000));
+
+  expect(sent.slice(fromTheGap).filter((entry) => entry.event === AUTHORITY_EVENTS.act)).toEqual([]);
+  expect(whileWaiting.waiting).toBe(true);
+  expect(whileWaiting.entries.map((entry) => entry.hasUpvoted)).toEqual([true]);
+  expect(qa.waiting).toBe(false);
+  expect(qa.entries.map((entry) => entry.hasUpvoted)).toEqual([true]);
+  const results = await Promise.all(answers);
+  expect(results.map((result) => (result as { ok: boolean } | undefined)?.ok)).toEqual([false, false, false]);
+});

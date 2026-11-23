@@ -366,7 +366,9 @@ it("keeps a pending upvote when the person's vote on another question changes me
   expect(upvotesSent()).toEqual([true, false]);
 });
 
-const reconnect = async (rows: unknown[]): Promise<{ upvotesSent: () => boolean[] }> => {
+const reconnect = async (
+  rows: unknown[] | null,
+): Promise<{ upvotesSent: () => boolean[]; sendView: (viewRows: unknown[]) => Promise<void> }> => {
   const next = new Map<string, Set<Listener>>();
   const nextSent: Sent[] = [];
   const nextSocket: AuthoritySocket = {
@@ -400,22 +402,25 @@ const reconnect = async (rows: unknown[]): Promise<{ upvotesSent: () => boolean[
       },
     }),
   );
-  await act(async () => {
-    for (const listener of [...(next.get(AUTHORITY_EVENTS.frame) ?? [])]) {
-      listener({
-        kind: "replace",
-        subscription: nextLast(AUTHORITY_EVENTS.subscribe).payload.subscription,
-        generation: 1,
-        serverNowMs: Date.now(),
-        part: 0,
-        last: true,
-        revision: 1,
-        rows,
-        grants: { actions: ["upvote"], needsIdentity: [], queries: [] },
-      });
-    }
-  });
+  const sendView = async (viewRows: unknown[]) =>
+    act(async () => {
+      for (const listener of [...(next.get(AUTHORITY_EVENTS.frame) ?? [])]) {
+        listener({
+          kind: "replace",
+          subscription: nextLast(AUTHORITY_EVENTS.subscribe).payload.subscription,
+          generation: 1,
+          serverNowMs: Date.now(),
+          part: 0,
+          last: true,
+          revision: 1,
+          rows: viewRows,
+          grants: { actions: ["upvote"], needsIdentity: [], queries: [] },
+        });
+      }
+    });
+  if (rows) await sendView(rows);
   return {
+    sendView,
     upvotesSent: () =>
       nextSent
         .filter((entry) => entry.event === AUTHORITY_EVENTS.act)
@@ -480,4 +485,23 @@ it("drops an upvote the old connection never got through, once its request ends"
   expect(ended.ok).toBe(false);
   expect(next.upvotesSent()).toEqual([true]);
   expect(qa.questions[0].hasUpvoted).toBe(true);
+});
+
+it("sends nothing for an upvote clicked before the new connection's view is in", async () => {
+  const next = await reconnect(null);
+  let outcome!: Promise<QaActionResult>;
+  await act(async () => {
+    outcome = qa.toggleUpvote("q1");
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  await next.sendView([
+    question,
+    { bucket: "votes", key: "q1", value: { upvotes: 1 } },
+    { bucket: "myUpvotes", key: "q1", value: {} },
+  ]);
+  await act(async () => vi.advanceTimersByTimeAsync(10_000));
+
+  expect(next.upvotesSent()).toEqual([]);
+  expect(qa.questions[0].hasUpvoted).toBe(true);
+  expect((await outcome).ok).toBe(false);
 });

@@ -46,6 +46,11 @@ const FAILURES: Partial<
     upvote: "A lot is happening. Try again in a moment.",
     moderate: "A lot is happening. Try again in a moment.",
   },
+  "not-subscribed": {
+    ask: "Q&A is reconnecting. Try again in a moment.",
+    upvote: "Q&A is reconnecting. Try again in a moment.",
+    moderate: "Q&A is reconnecting. Try again in a moment.",
+  },
   "unknown-outcome": {
     ask: "The server did not respond. Try again.",
     upvote: "The server did not respond. Try again.",
@@ -235,11 +240,11 @@ export function useQa() {
         setWishes(wishes);
       };
       const current = viewRef.current;
+      if (!current) {
+        return { ok: false, error: describe({ ok: false, code: "not-subscribed" }, "upvote") };
+      }
       const seen: Seen = { changes: countsRef.current, revision: revisionRef.current };
-      const shown =
-        wishedUpvote(wishesRef.current, id, seen) ??
-        current?.myUpvotes.has(id) ??
-        false;
+      const shown = wishedUpvote(wishesRef.current, id, seen) ?? current.myUpvotes.has(id);
       wish({ value: !shown, session: act });
       if (sendingRef.current.get(id) === act) return { ok: true };
 

@@ -42,6 +42,7 @@ export type PollsPanelProps = {
   onEnd: (pollId: string) => Promise<PollActionResult>;
   onShare: (pollId: string, shared: boolean) => Promise<PollActionResult>;
   onExport: (pollId: string) => Promise<PollActionResult>;
+  waiting?: boolean;
 };
 
 export function PollsPanel({
@@ -55,6 +56,7 @@ export function PollsPanel({
   onEnd,
   onShare,
   onExport,
+  waiting = false,
 }: PollsPanelProps) {
   const [isComposing, setIsComposing] = useState(false);
   const newestFirst = useMemo(
@@ -101,6 +103,7 @@ export function PollsPanel({
 
         {isHost && isComposing ? (
           <PollComposer
+            waiting={waiting}
             onCancel={() => setIsComposing(false)}
             onLaunch={async (draft) => {
               const result = await onCreate(draft);
@@ -132,6 +135,7 @@ export function PollsPanel({
                   onEnd={onEnd}
                   onShare={onShare}
                   onExport={onExport}
+                  waiting={waiting}
                 />
               </li>
             ))}
@@ -145,6 +149,7 @@ export function PollsPanel({
 function PollComposer({
   onLaunch,
   onCancel,
+  waiting,
 }: {
   onLaunch: (draft: {
     question: string;
@@ -152,6 +157,7 @@ function PollComposer({
     choiceMode: PollChoiceMode;
   }) => Promise<PollActionResult>;
   onCancel: () => void;
+  waiting: boolean;
 }) {
   const [question, setQuestion] = useState("");
   const [options, setOptions] = useState<string[]>(["", ""]);
@@ -163,7 +169,8 @@ function PollComposer({
   const canLaunch =
     question.trim().length > 0 &&
     filledOptions.length >= POLL_MIN_OPTIONS &&
-    !isLaunching;
+    !isLaunching &&
+    !waiting;
 
   const launch = async () => {
     if (!canLaunch) return;
@@ -281,6 +288,7 @@ function PollCard({
   onEnd,
   onShare,
   onExport,
+  waiting,
 }: {
   poll: PollItem;
   isHost: boolean;
@@ -290,6 +298,7 @@ function PollCard({
   onEnd: PollsPanelProps["onEnd"];
   onShare: PollsPanelProps["onShare"];
   onExport: PollsPanelProps["onExport"];
+  waiting: boolean;
 }) {
   const [selection, setSelection] = useState<string[]>([]);
   const [busyAction, setBusyAction] = useState<string | null>(null);
@@ -306,6 +315,7 @@ function PollCard({
   const isMultiple = poll.choiceMode === "multiple";
 
   const run = async (action: string, task: () => Promise<PollActionResult>) => {
+    if (waiting) return;
     setBusyAction(action);
     setError(null);
     const result = await task();
@@ -420,7 +430,7 @@ function PollCard({
         <button
           type="button"
           data-testid="poll-vote"
-          disabled={selection.length === 0 || busyAction !== null}
+          disabled={selection.length === 0 || busyAction !== null || waiting}
           onClick={() => void run("vote", () => onVote(poll.id, selection))}
           className={`${primaryButtonClass} mt-3 w-full`}
         >
@@ -433,7 +443,7 @@ function PollCard({
           <SwitchRow
             label="Show results to everyone"
             checked={poll.resultsShared}
-            disabled={busyAction !== null}
+            disabled={busyAction !== null || waiting}
             onChange={(shared) => void run("share", () => onShare(poll.id, shared))}
             className="-mx-3 w-[calc(100%+1.5rem)] text-[13px]"
           />
@@ -442,7 +452,7 @@ function PollCard({
               <button
                 type="button"
                 data-testid="poll-end"
-                disabled={busyAction !== null}
+                disabled={busyAction !== null || waiting}
                 onClick={() => void run("end", () => onEnd(poll.id))}
                 className={quietButtonClass}
               >
@@ -452,7 +462,7 @@ function PollCard({
             <button
               type="button"
               data-testid="poll-export"
-              disabled={busyAction !== null}
+              disabled={busyAction !== null || waiting}
               onClick={() => void run("export", () => onExport(poll.id))}
               className={quietButtonClass}
             >

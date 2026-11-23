@@ -30,11 +30,13 @@ const push = (payload: unknown) => {
 };
 
 let root: Root;
+let current: ReturnType<typeof useMeetingPolls>;
 const renders: Shown[] = [];
 const latest = () => renders[renders.length - 1];
 
 function Probe({ isJoined, isWebinarAttendee }: { isJoined: boolean; isWebinarAttendee: boolean }) {
   const polls = useMeetingPolls({ isJoined, isWebinarAttendee });
+  current = polls;
   renders.push({
     isAvailable: polls.isAvailable,
     ids: polls.polls.map((poll) => poll.id),
@@ -195,4 +197,35 @@ it("forgets the polls and the composer when the server withdraws the view", asyn
   );
 
   expect(latest()).toMatchObject({ ids: [], canManage: false, canVote: false });
+});
+
+it("keeps every poll action waiting while the view comes back, and sends nothing for them", async () => {
+  await mount();
+  await offer();
+  await sendView();
+  await mount({ connected: false });
+  await mount();
+  await offer();
+  const whileWaiting = current;
+  const fromTheGap = sent.length;
+  const answers: Promise<{ ok: boolean }>[] = [];
+  await act(async () => {
+    answers.push(whileWaiting.createPoll({ question: "Lunch?", options: ["Yes", "No"], choiceMode: "single" }));
+    answers.push(whileWaiting.vote("p1", ["o1"]));
+    answers.push(whileWaiting.endPoll("p1"));
+    answers.push(whileWaiting.shareResults("p1", true));
+    answers.push(whileWaiting.exportCsv("p1"));
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  await sendView();
+  await act(async () => vi.advanceTimersByTimeAsync(10_000));
+  const sentInTheGap = sent
+    .slice(fromTheGap)
+    .filter((entry) => entry.event === AUTHORITY_EVENTS.act || entry.event === AUTHORITY_EVENTS.query);
+
+  expect(sentInTheGap).toEqual([]);
+  expect(whileWaiting.waiting).toBe(true);
+  expect(current.waiting).toBe(false);
+  const results = await Promise.all(answers);
+  expect(results.map((result) => result.ok)).toEqual([false, false, false, false, false]);
 });

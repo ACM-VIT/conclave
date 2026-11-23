@@ -2634,6 +2634,7 @@ export default function MeetsMainContent({
               onUpvote={
                 isWebinarQaEnabled ? onUpvoteWebinarQuestion : undefined
               }
+              waiting={meetingQa.waiting}
             />
           ) : null}
 
@@ -2894,6 +2895,7 @@ export default function MeetsMainContent({
           onEnd={polls.endPoll}
           onShare={polls.shareResults}
           onExport={polls.exportCsv}
+          waiting={polls.waiting}
         />
       )}
 
@@ -2908,6 +2910,7 @@ export default function MeetsMainContent({
           onSubmit={onSubmitWebinarQuestion}
           onUpvote={onUpvoteWebinarQuestion}
           onModerate={onModerateWebinarQuestion}
+          waiting={meetingQa.waiting}
         />
       )}
 

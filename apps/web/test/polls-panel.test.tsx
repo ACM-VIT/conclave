@@ -197,3 +197,45 @@ it("tells a viewer without a verified identity to sign in, and offers no vote", 
   expect(byTestId("poll-footnote")?.textContent).toBe("Sign in to vote.");
   expect(optionInput("Yes") ?? null).toBeNull();
 });
+
+it("keeps a host's draft and every control in place but sends nothing while the view comes back", async () => {
+  const onCreate = vi.fn(ok);
+  const onEnd = vi.fn(ok);
+  const onShare = vi.fn(ok);
+  const onExport = vi.fn(ok);
+  await render({ waiting: true, isHost: true, onCreate, onEnd, onShare, onExport, polls: [poll(tallied(2, 0))] });
+  await click(byTestId("poll-start"));
+  await type(byTestId("poll-question-input") as HTMLInputElement, "Lunch?");
+  const [first, second] = container.querySelectorAll<HTMLInputElement>('[data-testid="poll-option-input"]');
+  await type(first, "Tacos");
+  await type(second, "Ramen");
+  const controls = [
+    byTestId("poll-launch"),
+    button("Show results to everyone"),
+    byTestId("poll-end"),
+    byTestId("poll-export"),
+  ] as HTMLButtonElement[];
+  for (const control of controls) await click(control);
+  await act(async () => {
+    byTestId("poll-composer")?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  });
+
+  expect((byTestId("poll-question-input") as HTMLInputElement).value).toBe("Lunch?");
+  expect([first.value, second.value]).toEqual(["Tacos", "Ramen"]);
+  expect(first.disabled).toBe(false);
+  expect(controls.every((control) => control.disabled)).toBe(true);
+  expect(onCreate).not.toHaveBeenCalled();
+  expect(onShare).not.toHaveBeenCalled();
+  expect(onEnd).not.toHaveBeenCalled();
+  expect(onExport).not.toHaveBeenCalled();
+});
+
+it("keeps a participant's choice in place but sends no vote while the view comes back", async () => {
+  const onVote = vi.fn(ok);
+  await render({ waiting: true, polls: [poll()] });
+  await click(optionInput("Yes"));
+  await click(byTestId("poll-vote"));
+
+  expect((byTestId("poll-vote") as HTMLButtonElement).disabled).toBe(true);
+  expect(onVote).not.toHaveBeenCalled();
+});

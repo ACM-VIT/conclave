@@ -129,3 +129,41 @@ it("tells a viewer without a verified identity to sign in, in place of the compo
   );
   expect(container.querySelector('[data-testid="qa-input"]')).toBeNull();
 });
+
+it("keeps the draft and every control in place but sends nothing while the view comes back", async () => {
+  const onSubmit = vi.fn(async () => ({ ok: true }));
+  const onUpvote = vi.fn(async () => ({ ok: true }));
+  const onModerate = vi.fn(async () => ({ ok: true }));
+  await render({
+    waiting: true,
+    onSubmit,
+    onUpvote,
+    onModerate,
+    entries: [entry({ id: "q1", question: "Is this recorded?", hasUpvoted: true, upvotes: 1 })],
+  });
+  const input = container.querySelector<HTMLTextAreaElement>('[data-testid="qa-input"]')!;
+  const setValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+  await act(async () => {
+    setValue?.call(input, "Will the slides be shared?");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => {
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  });
+  const send = container.querySelector<HTMLButtonElement>('[data-testid="qa-send"]')!;
+  const upvote = container.querySelector<HTMLButtonElement>('[data-testid="qa-upvote"]')!;
+  const moderation = Array.from(entryCard("Is this recorded?")!.querySelectorAll("button")).filter(
+    (button) => button !== upvote,
+  );
+  await act(async () => {
+    for (const button of [send, upvote, ...moderation]) button.click();
+  });
+
+  expect(input.value).toBe("Will the slides be shared?");
+  expect(input.disabled).toBe(false);
+  expect(actionsOf("Is this recorded?")).toEqual(["Answer live", "Mark answered", "Hide"]);
+  expect([send, upvote, ...moderation].every((button) => button.disabled)).toBe(true);
+  expect(onSubmit).not.toHaveBeenCalled();
+  expect(onUpvote).not.toHaveBeenCalled();
+  expect(onModerate).not.toHaveBeenCalled();
+});

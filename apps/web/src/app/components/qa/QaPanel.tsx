@@ -131,6 +131,7 @@ export function QaPanel({
   onSubmit,
   onUpvote,
   onModerate,
+  waiting = false,
 }: {
   audience: QaAudience;
   entries: WebinarQaEntry[];
@@ -148,6 +149,7 @@ export function QaPanel({
   onModerate?: (
     request: WebinarQaModerateRequest,
   ) => Promise<{ ok: boolean; error?: string }>;
+  waiting?: boolean;
 }) {
   const [draft, setDraft] = useState("");
   const [isSending, setIsSending] = useState(false);
@@ -183,7 +185,7 @@ export function QaPanel({
 
   const handleSubmit = useCallback(async () => {
     const question = draft.trim();
-    if (!question || !onSubmit || isSending) return;
+    if (!question || !onSubmit || isSending || waiting) return;
     setIsSending(true);
     setSubmitError(null);
     const result = await onSubmit(question);
@@ -193,10 +195,10 @@ export function QaPanel({
       return;
     }
     setDraft("");
-  }, [draft, isSending, onSubmit]);
+  }, [draft, isSending, onSubmit, waiting]);
 
   const moderate = async (id: string, action: QaModerateAction) => {
-    if (!onModerate) return;
+    if (!onModerate || waiting) return;
     setBusyEntryId(id);
     setListError(null);
     const result = await onModerate({ id, action });
@@ -205,7 +207,7 @@ export function QaPanel({
   };
 
   const upvote = async (id: string) => {
-    if (!onUpvote) return;
+    if (!onUpvote || waiting) return;
     setListError(null);
     const result = await onUpvote(id);
     if (result && !result.ok) {
@@ -305,14 +307,14 @@ export function QaPanel({
                       type="button"
                       data-testid="qa-upvote"
                       onClick={onUpvote ? () => void upvote(entry.id) : undefined}
-                      disabled={!onUpvote || isHidden}
+                      disabled={!onUpvote || isHidden || waiting}
                       aria-pressed={Boolean(entry.hasUpvoted)}
                       aria-label={`Upvote, ${entry.upvotes} so far`}
                       className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11.5px] transition-colors duration-150 ${
                         entry.hasUpvoted
                           ? "border-[#F95F4A]/55 bg-[#F95F4A]/12 text-[#F95F4A]"
                           : "border-white/[0.12] text-[#fafafa]/65 hover:bg-white/[0.06]"
-                      } ${onUpvote && !isHidden ? "" : "opacity-50"}`}
+                      } ${onUpvote && !isHidden && !waiting ? "" : "opacity-50"}`}
                     >
                       <ChevronUp size={13} strokeWidth={ICON_STROKE} />
                       <span className="tabular-nums">{entry.upvotes}</span>
@@ -320,7 +322,7 @@ export function QaPanel({
                     {onModerate ? (
                       <QaModerationActions
                         status={entry.status}
-                        disabled={busyEntryId === entry.id}
+                        disabled={busyEntryId === entry.id || waiting}
                         onAction={(action) => void moderate(entry.id, action)}
                       />
                     ) : null}
@@ -375,7 +377,7 @@ export function QaPanel({
               type="button"
               data-testid="qa-send"
               onClick={() => void handleSubmit()}
-              disabled={!draft.trim() || isSending}
+              disabled={!draft.trim() || isSending || waiting}
               className="inline-flex h-[44px] items-center justify-center rounded-xl bg-[#F95F4A] px-4 text-[13px] font-medium text-white transition-[filter] duration-150 enabled:hover:brightness-105 disabled:opacity-40"
             >
               Ask
