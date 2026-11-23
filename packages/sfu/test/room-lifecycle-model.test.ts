@@ -106,7 +106,12 @@ type Phase =
       members: Set<string>;
       removals: Set<string>;
     };
-type Shadow = { phase: Phase; removed: Set<string>; members: Set<string> };
+type Shadow = {
+  phase: Phase;
+  removed: Set<string>;
+  members: Set<string>;
+  cohosts: Set<string>;
+};
 
 type HostAction =
   | "admit"
@@ -312,7 +317,12 @@ const createWorld = async (options: {
     held: [],
     holdNext: false,
     actors,
-    shadow: { phase: { kind: "none" }, removed: new Set(), members: new Set() },
+    shadow: {
+      phase: { kind: "none" },
+      removed: new Set(),
+      members: new Set(),
+      cohosts: new Set(),
+    },
     trace: [],
     completions: [],
     failures: [],
@@ -524,6 +534,7 @@ const callOver = (world: World, why: string): void => {
   world.shadow.phase = { kind: "none" };
   world.shadow.removed.clear();
   world.shadow.members.clear();
+  world.shadow.cohosts.clear();
 };
 
 const removes = (world: World, target: Actor): void => {
@@ -569,6 +580,23 @@ const performHostAction = async (
   if (step.action === "kick" || step.action === "block" || step.action === "revoke") {
     removes(world, target);
   }
+  if (step.action === "kick" || step.action === "block") world.shadow.cohosts.delete(target.key);
+  if (
+    (step.action === "promote" || step.action === "transfer") &&
+    world.shadow.phase.kind === "running" &&
+    !ownsCode(target, room.ownerEmail)
+  ) {
+    world.shadow.cohosts.add(target.key);
+  }
+};
+
+const seatedHostKeys = (room: Room): Set<string> => {
+  const keys = new Set<string>();
+  for (const [userId, client] of room.clients) {
+    const key = room.userKeysById.get(userId);
+    if (key && client instanceof Admin && !client.isObserver) keys.add(key);
+  }
+  return keys;
 };
 
 const restart = async (world: World): Promise<void> => {
@@ -758,6 +786,33 @@ const check = async (
       fail(
         `the room has been locked with nobody to let anyone in for ${Math.round((now - openedAt) / SECOND_MS)} s (${room.clients.size} in it, ${room.pendingClients.size} waiting)`,
       );
+    }
+  }
+
+  if (room && !room.hasEnded && room.ownerEmail && seatedHostKeys(room).has(room.ownerEmail)) {
+    for (const key of room.adminUserKeys) {
+      if (key === room.ownerEmail || shadow.cohosts.has(key)) continue;
+      fail(`${key} still hosts with the code's owner here, and no host made them a co-host`);
+    }
+  }
+
+  if (room && !room.hasEnded) {
+    for (const key of seatedHostKeys(room)) {
+      if (!room.adminUserKeys.has(key)) fail(`${key} has a host's seat with no recorded reason`);
+    }
+    for (const key of room.adminUserKeys) {
+      const expected =
+        key === room.ownerEmail
+          ? "owner"
+          : shadow.cohosts.has(key)
+            ? "cohost"
+            : room.ownerEmail
+              ? "temporary"
+              : "opener";
+      const recorded = room.hostReasonOf(key);
+      if (recorded !== expected) {
+        fail(`${key} hosts as ${recorded ?? "nobody"}, where the model says ${expected}`);
+      }
     }
   }
 
@@ -992,6 +1047,55 @@ describe("the room lifecycle model", () => {
       open("invitee"),
       host("carol", "kick", "invitee"),
       { kind: "restart" },
+    ]);
+    expect(outcome.failures, report(outcome)).toEqual([]);
+  });
+
+  it("takes host rights back from a member who took over a lost call when the code's owner arrives", async () => {
+    const outcome = await runScript(true, [
+      open("alice"),
+      open("carol"),
+      host("alice", "admit", "carol"),
+      { kind: "restart" },
+      open("bob"),
+      open("carol"),
+      open("owner"),
+    ]);
+    expect(outcome.failures, report(outcome)).toEqual([]);
+  });
+
+  it("takes host rights back from someone the lapse made host when the code's owner arrives", async () => {
+    const outcome = await runScript(true, [
+      open("alice"),
+      { kind: "restart" },
+      open("bob"),
+      open("invitee"),
+      { kind: "tick", ms: 8 * MINUTE_MS },
+      open("owner"),
+    ]);
+    expect(outcome.failures, report(outcome)).toEqual([]);
+  });
+
+  it("takes host rights back from someone made host when the last host left once the code's owner arrives", async () => {
+    const outcome = await runScript(true, [
+      open("alice"),
+      open("carol"),
+      host("alice", "admit", "carol"),
+      { kind: "leave", actor: "alice" },
+      open("owner"),
+    ]);
+    expect(outcome.failures, report(outcome)).toEqual([]);
+  });
+
+  it("keeps a co-host a host promoted when the code's owner arrives", async () => {
+    const outcome = await runScript(true, [
+      open("alice"),
+      open("carol"),
+      host("alice", "admit", "carol"),
+      host("alice", "promote", "carol"),
+      { kind: "restart" },
+      open("carol"),
+      open("owner"),
     ]);
     expect(outcome.failures, report(outcome)).toEqual([]);
   });
