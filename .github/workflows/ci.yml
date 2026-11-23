@@ -1,41 +1,79 @@
 name: CI
 
 "on":
-  push:
-    branches: ["**"]
   pull_request:
+    branches: [staging, main]
+  merge_group:
+    branches: [staging, main]
+  push:
+    branches: [staging, main]
+  workflow_dispatch:
 
-# Cancel superseded runs on the same ref to save CI minutes.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
 
 jobs:
-  build:
-    name: check + build
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-
+  ci:
+    name: ${{ matrix.job }}
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-24.04' }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        job: [lint, typecheck, test, build, checks]
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7.0.1
+      - run: echo "CI_JOB_STARTED_AT=$(date +%s%3N)" >> "$GITHUB_ENV"
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v6.1.0
+      - uses: actions/checkout@v7.0.1
         with:
-          version: 12.16.1
+          filter: blob:none
+          fetch-depth: 0
 
-      - name: Setup Node
-        uses: actions/setup-node@v7.1.0
+      - id: setup
+        uses: ./.github/actions/setup
+
+      - if: steps.setup.outputs.modules-hit != 'true'
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          echo "CI_JOB_STARTED_AT=$(date +%s%3N)" >> "$GITHUB_ENV"
+          echo "CI_BUDGET_FROM=setup ended, as node_modules missed the cache" >> "$GITHUB_ENV"
+          if [ "$EVENT" != "push" ]; then
+            echo "::warning title=node_modules cache miss::This $EVENT run installed node_modules without a cache, so its budget clock started after setup. A miss on every run means staging or main has not saved a cache for this lockfile and toolchain."
+          fi
+
+      - id: next-cache
+        if: matrix.job == 'build'
+        uses: actions/cache/restore@v6.1.0
         with:
-          node-version: 22
-          cache: pnpm
+          path: apps/web/.next/cache
+          key: next-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
+          restore-keys: next-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}-
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+      - id: run
+        run: node scripts/ci/run.mjs ${{ matrix.job }}
 
-      - name: Check
-        run: pnpm check
+      - if: always() && github.event_name == 'push' && matrix.job == 'typecheck' && steps.setup.outcome == 'success' && steps.setup.outputs.modules-hit != 'true'
+        uses: actions/cache/save@v6.1.0
+        with:
+          path: |
+            node_modules
+            apps/*/node_modules
+            packages/*/node_modules
+          key: ${{ steps.setup.outputs.modules-key }}
 
-      - name: Build
-        run: pnpm build
+      - if: always() && github.event_name == 'push' && matrix.job == 'typecheck' && steps.setup.outcome == 'success' && steps.setup.outputs.modules-hit != 'true'
+        uses: actions/cache/save@v6.1.0
+        with:
+          path: ${{ steps.setup.outputs.store-path }}
+          key: ${{ steps.setup.outputs.store-key }}
+
+      - if: github.event_name == 'push' && matrix.job == 'build' && steps.run.outcome == 'success' && steps.next-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6.1.0
+        with:
+          path: apps/web/.next/cache
+          key: ${{ steps.next-cache.outputs.cache-primary-key }}
