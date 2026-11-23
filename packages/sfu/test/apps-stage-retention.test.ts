@@ -842,6 +842,24 @@ describe("client id reservations", () => {
     expect(viewer.relayed).toEqual([]);
   });
 
+  it("takes a resent deletion the room already has as nothing on a locked board", () => {
+    const { join } = makeRoom();
+    const host = join("host#1", "host");
+    const viewer = join("viewer#1", "participant");
+    host.present("whiteboard");
+    host.draw("whiteboard", "circle");
+    const before = Y.encodeStateVector(host.doc);
+    host.doc.getMap("shapes").delete("circle");
+    host.sendUpdate("whiteboard", Y.encodeStateAsUpdate(host.doc, before));
+    host.lock(true, host.state().revision);
+    const copy = new Y.Doc();
+    Y.applyUpdate(copy, viewer.coldUpdate("whiteboard"));
+
+    viewer.sendWithReplica("whiteboard", Y.encodeStateAsUpdate(copy, Y.encodeStateVector(copy)), "copy-1");
+
+    expect(viewer.received.filter((sent) => sent.event === "apps:yjs:refused")).toEqual([]);
+  });
+
   it("tells the writer, once per copy, that the room refused its change", () => {
     const { join } = makeRoom();
     const host = join("host#1", "host");

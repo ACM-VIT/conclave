@@ -435,8 +435,11 @@ export function AppsProvider({
       const serverVector = response.stateVector ? toUint8Array(response.stateVector) : null;
       if (serverVector && !isReadOnlyRef.current) {
         try {
-          const updateForServer = Y.encodeStateAsUpdate(run.doc, serverVector);
-          if (!Y.snapshotContainsUpdate(Y.emptySnapshot, updateForServer)) {
+          const roomHas = Y.decodeStateVector(serverVector);
+          const localHas = Y.decodeStateVector(Y.encodeStateVector(run.doc));
+          const ahead = Array.from(localHas).some(([client, clock]) => clock > (roomHas.get(client) ?? 0));
+          if (ahead) {
+            const updateForServer = Y.encodeStateAsUpdate(run.doc, serverVector);
             currentSocket.emit("apps:yjs:update", {
               appId: run.appId,
               update: updateForServer,

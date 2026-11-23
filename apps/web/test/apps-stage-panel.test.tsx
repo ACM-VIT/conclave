@@ -169,6 +169,10 @@ describe("the presented board", () => {
   });
 
   it("sends nothing after its sync when its copy adds nothing to the room's", async () => {
+    const kept = new Y.Doc();
+    kept.getMap("shapes").set("circle", 1);
+    kept.getMap("shapes").delete("circle");
+    serverDocs.set("whiteboard", kept);
     await serverState({ activeAppId: "whiteboard", revision: 1, savedAppIds: [], docGeneration: 1 });
 
     expect(sent("apps:yjs:sync")).toHaveLength(1);
