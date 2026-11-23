@@ -1,8 +1,3 @@
-const graphemeSegmenter =
-  typeof Intl !== "undefined" && typeof Intl.Segmenter === "function"
-    ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
-    : null;
-
 const EXTENDS_CLUSTER =
   /^(?:\p{M}|[\u200C\u200D\u0E33\u0EB3\uFF9E\uFF9F]|[\u{1F3FB}-\u{1F3FF}]|[\u{E0020}-\u{E007F}])$/u;
 const STANDALONE_SPACING_MARK =
@@ -182,6 +177,31 @@ export const splitGraphemesFallback = (text: string): string[] => {
   }
   return clusters;
 };
+
+const SEGMENTER_PROBES: readonly (readonly [string, number])[] = [
+  ["\u0915\u094D\u0937", 1],
+  ["\u0995\u09CD\u09B7", 1],
+  ["\u1001\u1014\u1039\u1013\u102C", 3],
+  ["\u1021\u1004\u103A\u1039\u1002", 2],
+  ["\u1019\u103C\u1014\u103A", 2],
+  ["\u{1F468}\u200D\u{1F469}\u200D\u{1F467}", 1],
+  ["\u0600\u0661", 1],
+];
+
+const trustedSegmenter = (): Intl.Segmenter | null => {
+  if (typeof Intl === "undefined" || typeof Intl.Segmenter !== "function") return null;
+  try {
+    const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+    const correct = SEGMENTER_PROBES.every(
+      ([text, clusters]) => Array.from(segmenter.segment(text)).length === clusters
+    );
+    return correct ? segmenter : null;
+  } catch {
+    return null;
+  }
+};
+
+const graphemeSegmenter = trustedSegmenter();
 
 export const graphemes = (text: string): string[] =>
   graphemeSegmenter
