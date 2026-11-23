@@ -245,7 +245,7 @@ function LauncherView({
               </span>
               {isAdmin && !readOnly ? (
                 <svg width={16} height={16} viewBox="0 0 24 24" fill="none" aria-hidden>
-                  <path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
               ) : null}
             </span>

@@ -57,7 +57,7 @@ export default function Coachmark({
             className="shrink-0 rounded-md p-1 transition-[background-color,color] duration-[120ms] hover:bg-white/[0.08]"
             style={{ color: color.textFaint }}
           >
-            <X size={14} strokeWidth={2} />
+            <X size={14} strokeWidth={1.75} />
           </button>
         </div>
       </div>
