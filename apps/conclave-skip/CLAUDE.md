@@ -343,7 +343,9 @@ has the numbers.
   destroy and fails, and the lease refuses every call after it. Only an
   `eglCreateWindowSurface` already running when the allowance ran out can
   finish later, and the next call destroys what it made. The task queued
-  ahead of the detach takes the surface off its context. After
+  ahead of the detach takes the surface off its context. Why the main thread
+  cuts work off instead of waiting longer, and what was rejected, is ADR 0022
+  (`docs/adr/0022-android-surface-teardown-cuts-off-render-work.md`). After
   `release()` the callback waits for the release that is already queued, from
   the same allowance and with the same fallback.
 - The render thread keeps its surface reachable for that fallback. It destroys
