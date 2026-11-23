@@ -15,7 +15,9 @@ final class MeetingShellPresenter {
 
     let chat = ChatPresenter()
 
-    let settings = SettingsPresenter(scope: SettingsScope.call)
+    let settings: SettingsPresenter
+
+    let defaults: UserDefaults
 
     let transcript = TranscriptPresenter()
 
@@ -74,6 +76,11 @@ final class MeetingShellPresenter {
             revision: 0,
             rows: MeetingControlAvailabilityPolicy.rows(initial, context: MeetingControlRowContext.make(phase: phase))
         )
+    }
+
+    init(defaults: UserDefaults) {
+        self.defaults = defaults
+        settings = SettingsPresenter(scope: SettingsScope.call, defaults: defaults)
     }
 
     var currentInputs: MeetingShellInputs { inputs }

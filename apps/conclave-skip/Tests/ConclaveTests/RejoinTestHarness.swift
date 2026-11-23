@@ -18,7 +18,7 @@ final class RejoinHarness {
     var generation: Int { media.configurationGeneration }
 
     init() {
-        viewModel = MeetingViewModel(defaults: defaults)
+        viewModel = isolatedViewModel(defaults: defaults)
         viewModel.testDetachHostNetworkMonitor()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         let calls = self.calls
@@ -245,26 +245,6 @@ final class RejoinHarness {
         viewModel.testLocalToggleEnded = nil
         viewModel.testLocalMediaReportHandled = nil
         viewModel.testJoinFetch = nil
-    }
-}
-
-final class MemoryDefaults: UserDefaults, @unchecked Sendable {
-    private var values: [String: Any] = [:]
-
-    init() {
-        super.init(suiteName: nil)!
-    }
-
-    override func object(forKey defaultName: String) -> Any? {
-        values[defaultName]
-    }
-
-    override func set(_ value: Any?, forKey defaultName: String) {
-        values[defaultName] = value
-    }
-
-    override func removeObject(forKey defaultName: String) {
-        values.removeValue(forKey: defaultName)
     }
 }
 

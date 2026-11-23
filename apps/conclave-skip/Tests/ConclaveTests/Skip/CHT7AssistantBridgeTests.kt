@@ -186,7 +186,7 @@ class CHT7AssistantBridgeTests {
         assertEquals(AssistantRowState.done, model?.state)
         assertTrue(model?.blocks?.toList()?.any { it.kind == StreamingMarkdownBlockKind.codeFence } == true)
 
-        val shell = MeetingShellPresenter()
+        val shell = MeetingShellPresenter(defaults = IsolatedDefaults.make())
         ChatFixtureDriver.installOnStage(ChatFixtureState.busy, shell)
         assertEquals(AssistantRowState.thinking, shell.chat.rows.entry("s-a1").assistant?.state)
         assertEquals(AssistantRowState.streaming, shell.chat.rows.entry("s-a2").assistant?.state)

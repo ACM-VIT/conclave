@@ -272,7 +272,7 @@ struct SY10ResumePolicyTests {
 
     @Test func terminationOnHomeWritesTheMarkerWithoutAnOutcome() {
         let defaults = MemoryDefaults()
-        let viewModel = MeetingViewModel(defaults: defaults)
+        let viewModel = isolatedViewModel(defaults: defaults)
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         #expect(MeetingResumeMarker.read(defaults: defaults) == nil)
         viewModel.handleAppWillTerminate()
@@ -284,7 +284,7 @@ struct SY10ResumePolicyTests {
 
     @Test func homeRejoinKeepsThePreviousIntentAndNeverReadsTheSnapshot() async {
         let defaults = MemoryDefaults()
-        let viewModel = MeetingViewModel(defaults: defaults)
+        let viewModel = isolatedViewModel(defaults: defaults)
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.roomId = "room-a"

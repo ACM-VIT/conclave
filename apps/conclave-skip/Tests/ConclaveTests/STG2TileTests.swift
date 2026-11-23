@@ -10,7 +10,7 @@ struct STG2TileTests {
                                        showSelfView: "Show Self View", showFullVideo: "Show Full Video", cropToFill: "Crop to Fill")
 
     private func presenter(_ inputs: StageInputs, viewport: StageViewport? = nil) -> StagePresenter {
-        let stage = StagePresenter(shell: MeetingShellPresenter())
+        let stage = StagePresenter(shell: MeetingShellPresenter(defaults: IsolatedDefaults.make()))
         stage.setViewport(viewport ?? StagePoliciesTests.iphoneSE)
         stage.apply(inputs)
         return stage
@@ -212,7 +212,7 @@ struct STG2TileTests {
     @Test func aBurstOfSpeakersNeverSwapsTheMainAndAHeldSpeakerSwapsOnce() {
 
         var clock = 100_000.0
-        let stage = StagePresenter(shell: MeetingShellPresenter())
+        let stage = StagePresenter(shell: MeetingShellPresenter(defaults: IsolatedDefaults.make()))
         stage.now = { clock }
         stage.sleep = { _ in try? await Task.sleep(nanoseconds: 60_000_000_000) }
         stage.setViewport(StagePoliciesTests.iphone17e)
@@ -236,7 +236,7 @@ struct STG2TileTests {
     @Test func aCameraOffSpeakerNeverTakesTheMainWhileOthersHaveVideo() {
 
         var clock = 200_000.0
-        let stage = StagePresenter(shell: MeetingShellPresenter())
+        let stage = StagePresenter(shell: MeetingShellPresenter(defaults: IsolatedDefaults.make()))
         stage.now = { clock }
         stage.sleep = { _ in try? await Task.sleep(nanoseconds: 60_000_000_000) }
         stage.setViewport(StagePoliciesTests.iphone17e)
@@ -548,7 +548,7 @@ struct STG2PinViewModelTests {
     private static let viewModeKey = "conclave.meetView.viewMode"
 
     private func makeJoinedViewModel(defaults: UserDefaults) -> MeetingViewModel {
-        let viewModel = MeetingViewModel(defaults: defaults)
+        let viewModel = isolatedViewModel(defaults: defaults)
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.roomId = "room-a"

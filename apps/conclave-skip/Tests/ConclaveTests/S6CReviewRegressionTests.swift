@@ -99,7 +99,7 @@ struct S6CReviewRegressionTests {
     }
 
     private func gatedViewModel() -> MeetingViewModel {
-        let viewModel = MeetingViewModel(defaults: MemoryDefaults())
+        let viewModel = isolatedViewModel(defaults: MemoryDefaults())
         viewModel.testDetachHostNetworkMonitor()
         viewModel.versionGateDefaults = UserDefaults(suiteName: "s6c.version." + UUID().uuidString)!
         viewModel.currentAppVersion = { "2.0.0" }
@@ -223,7 +223,7 @@ struct S6CAuthRegressionTests {
             _ = try await NativeAuthService.signInWithSocialToken(provider: .google, idToken: "new-token", authenticationEpoch: epoch)
             #expect((HTTPCookieStorage.shared.cookies ?? []).first { $0.name == cookieName }?.value == "new-session")
         } else {
-            let appState = AppState()
+            let appState = AppState(defaults: IsolatedDefaults.make())
             let coordinator = AccountAuthCoordinator(appState: appState, account: AccountPresenter(), premeeting: nil)
             coordinator.perform(AccountRequest.make(kind: .cancelSignIn, generation: 1))
         }

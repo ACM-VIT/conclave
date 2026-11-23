@@ -5,7 +5,7 @@ import Testing
 @MainActor
 struct PR243IOSTtsRegressionTests {
     @Test func delayedPlaybackRechecksInterruptionAndPreservesNewerToken() {
-        let queue = TtsPlaybackQueue()
+        let queue = TtsPlaybackQueue(defaults: IsolatedDefaults.make())
         let speaker = TtsSpeaker(queue: queue)
         queue.schedulesTimers = false
         queue.onStart = { _, _ in }

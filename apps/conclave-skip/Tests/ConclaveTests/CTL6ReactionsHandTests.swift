@@ -149,7 +149,7 @@ struct CTL6ReactionsHandTests {
 
 @MainActor
 private final class HandHarness {
-    let shell = MeetingShellPresenter()
+    let shell = MeetingShellPresenter(defaults: IsolatedDefaults.make())
     let stage: StagePresenter
     let controls: CallControlsPresenter
     var tickets: [MeetingActionTicket] = []

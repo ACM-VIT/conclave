@@ -592,7 +592,7 @@ private func ent3Settle(_ condition: () -> Bool) async -> Bool {
 @Suite(.serialized)
 struct ENT3EntryCoreDeltaTests {
     private func viewModel() -> MeetingViewModel {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         return viewModel
     }

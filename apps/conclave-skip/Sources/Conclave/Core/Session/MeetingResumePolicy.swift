@@ -75,18 +75,18 @@ enum MeetingResumeMarker {
         return "\(millis)"
     }
 
-    static func write(now: Date = Date(), defaults: UserDefaults = .standard) {
+    static func write(now: Date = Date(), defaults: UserDefaults) {
         defaults.set(encode(now), forKey: key)
     }
 
-    static func read(defaults: UserDefaults = .standard) -> Double? {
+    static func read(defaults: UserDefaults) -> Double? {
         guard let value = defaults.string(forKey: key),
               let millis = Double(value),
               millis > 0.0 else { return nil }
         return millis
     }
 
-    static func clear(defaults: UserDefaults = .standard) {
+    static func clear(defaults: UserDefaults) {
         guard defaults.object(forKey: key) != nil else { return }
         defaults.removeObject(forKey: key)
     }
@@ -95,13 +95,13 @@ enum MeetingResumeMarker {
 enum MeetingResumeStore {
     static let key = "conclave.activeMeetingResume.v1"
 
-    static func save(_ snapshot: MeetingResumeSnapshot, defaults: UserDefaults = .standard) {
+    static func save(_ snapshot: MeetingResumeSnapshot, defaults: UserDefaults) {
         guard let data = try? JSONEncoder().encode(snapshot),
               let value = String(data: data, encoding: .utf8) else { return }
         defaults.set(value, forKey: key)
     }
 
-    static func load(now: Date = Date(), markerMillis: Double? = nil, defaults: UserDefaults = .standard) -> MeetingResumeSnapshot? {
+    static func load(now: Date = Date(), markerMillis: Double? = nil, defaults: UserDefaults) -> MeetingResumeSnapshot? {
         guard let value = defaults.string(forKey: key) else { return nil }
         guard let data = value.data(using: .utf8),
               let snapshot = try? JSONDecoder().decode(MeetingResumeSnapshot.self, from: data),
@@ -113,7 +113,7 @@ enum MeetingResumeStore {
         return snapshot
     }
 
-    static func clear(defaults: UserDefaults = .standard) {
+    static func clear(defaults: UserDefaults) {
         defaults.removeObject(forKey: key)
     }
 }
