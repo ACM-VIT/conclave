@@ -43,6 +43,7 @@ import {
   sanitizeRoomCode,
   isMediaDeviceBlocked,
 } from "../lib/utils";
+import { setupNotice } from "../lib/join-rejection";
 import RoomPresenceBadge from "./RoomPresenceBadge";
 import { useCameraPermissionState } from "../hooks/useCameraPermissionState";
 import {
@@ -164,6 +165,8 @@ interface JoinScreenProps {
   mediaError?: MeetError | null;
   meetingEndedNotice?: string | null;
   onDismissMeetingEndedNotice?: () => void;
+  joinRejection?: string | null;
+  onDismissJoinRejection?: () => void;
   videoEffects: VideoEffectsState;
   onVideoEffectsChange: Dispatch<SetStateAction<VideoEffectsState>>;
   onPrejoinMediaCommit?: (handoff: PrejoinMediaHandoff) => void;
@@ -305,6 +308,8 @@ function JoinScreen({
   mediaError,
   meetingEndedNotice,
   onDismissMeetingEndedNotice,
+  joinRejection,
+  onDismissJoinRejection,
   videoEffects,
   onVideoEffectsChange,
   onPrejoinMediaCommit,
@@ -396,6 +401,9 @@ function JoinScreen({
       .some((track) => track.readyState === "live" && track.enabled),
   );
   const isCameraBlocked = isMediaDeviceBlocked(mediaError, "camera");
+  const notice = setupNotice(joinRejection, meetingEndedNotice);
+  const dismissNotice =
+    notice?.kind === "rejected" ? onDismissJoinRejection : onDismissMeetingEndedNotice;
   const isCameraPermissionBlocked =
     isCameraBlocked ||
     (!hasLivePreviewCamera &&
@@ -1448,7 +1456,7 @@ function JoinScreen({
                   : "Create a room, or join one with a code."}
               </p>
             </div>
-            {meetingEndedNotice ? (
+            {notice ? (
               <div
                 role="status"
                 className="flex items-start gap-2 rounded-xl border border-[#F95F4A]/25 bg-[#F95F4A]/10 px-3.5 py-3 text-left text-[13px] leading-snug text-[#fafafa]"
@@ -1458,11 +1466,11 @@ function JoinScreen({
                   className="mt-0.5 shrink-0 text-[#F95F4A]"
                   aria-hidden="true"
                 />
-                <p className="min-w-0 flex-1">{meetingEndedNotice}</p>
-                {onDismissMeetingEndedNotice ? (
+                <p className="min-w-0 flex-1">{notice.message}</p>
+                {dismissNotice ? (
                   <button
                     type="button"
-                    onClick={onDismissMeetingEndedNotice}
+                    onClick={dismissNotice}
                     aria-label="Dismiss notice"
                     className="-mr-1 -mt-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[#fafafa]/55 transition-colors hover:bg-white/[0.08] hover:text-[#fafafa]"
                   >

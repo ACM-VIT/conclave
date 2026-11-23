@@ -176,6 +176,7 @@ import type {
   RequestMediaPermissionsOptions,
   ScreenShareRepublishOptions,
 } from "./useMeetMedia";
+import { joinRejectedUpdate } from "../lib/join-rejection";
 
 type ConsumerTelemetryPayload = Omit<
   ConsumerTelemetrySnapshot,
@@ -891,6 +892,7 @@ interface UseMeetSocketOptions {
   setConnectionState: (state: ConnectionState) => void;
   setMeetError: (error: MeetError | null) => void;
   setMeetingEndedNotice?: (message: string | null) => void;
+  setJoinRejection?: (message: string | null) => void;
   setWaitingMessage: (message: string | null) => void;
   setHostUserId: (userId: string | null) => void;
   setHostUserIds: React.Dispatch<React.SetStateAction<string[]>>;
@@ -1011,6 +1013,7 @@ export function useMeetSocket({
   setConnectionState,
   setMeetError,
   setMeetingEndedNotice,
+  setJoinRejection,
   setWaitingMessage,
   setHostUserId,
   setHostUserIds,
@@ -8350,11 +8353,11 @@ export function useMeetSocket({
 
             socket.on("joinRejected", () => {
               console.info("[Meets] Join rejected.");
-              const rejection = "The host has denied your request to join.";
-              setMeetError({ code: "JOIN_REJECTED", message: rejection, recoverable: false });
-              setMeetingEndedNotice?.(rejection);
-              setConnectionState("error");
-              setWaitingMessage(null);
+              const rejected = joinRejectedUpdate();
+              setMeetError(rejected.meetError);
+              setJoinRejection?.(rejected.joinRejection);
+              setConnectionState(rejected.connectionState);
+              setWaitingMessage(rejected.waitingMessage);
               cleanup();
             });
 
@@ -8773,6 +8776,7 @@ export function useMeetSocket({
       setLocalStream,
       setMeetError,
       setMeetingEndedNotice,
+      setJoinRejection,
       setPendingUsers,
       setWaitingMessage,
       setNetworkManagedVideoQuality,
@@ -9252,6 +9256,7 @@ export function useMeetSocket({
       localRoomEndedHandledRef.current = false;
       setMeetError(null);
       setMeetingEndedNotice?.(null);
+      setJoinRejection?.(null);
       updateReconnectRecoveryStatus(null);
       setConnectionState("connecting");
       if (!bypassMediaPermissions) {
@@ -9452,6 +9457,7 @@ export function useMeetSocket({
       setLocalStream,
       setMeetError,
       setMeetingEndedNotice,
+      setJoinRejection,
       setRoomId,
       socketRef,
       stopLocalTrack,

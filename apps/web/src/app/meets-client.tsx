@@ -426,6 +426,7 @@ export default function MeetsClient({
   const [meetingEndedNotice, setMeetingEndedNotice] = useState<string | null>(
     null,
   );
+  const [joinRejection, setJoinRejection] = useState<string | null>(null);
   const [guestStorageReady, setGuestStorageReady] = useState(false);
   const [appsSocket, setAppsSocket] = useState<Socket | null>(null);
   const [viewSettings, setViewSettings] = useState<MeetViewSettings>(
@@ -2312,6 +2313,7 @@ export default function MeetsClient({
 
   const handleLocalRoomEnded = useCallback(() => {
     setMeetingEndedNotice(null);
+    setJoinRejection(null);
     setMeetError(null);
     setMediaError(null);
     setWaitingMessage(null);
@@ -2367,6 +2369,7 @@ export default function MeetsClient({
     setConnectionState,
     setMeetError,
     setMeetingEndedNotice,
+    setJoinRejection,
     setWaitingMessage,
     setHostUserId,
     setHostUserIds,
@@ -2667,6 +2670,7 @@ export default function MeetsClient({
     setMeetError(null);
     setMediaError(null);
     setMeetingEndedNotice(null);
+    setJoinRejection(null);
     setWaitingMessage(null);
     setPendingNewMeetingRoomId(null);
     setCurrentIsAdmin(false);
@@ -2692,6 +2696,7 @@ export default function MeetsClient({
     setMeetError(null);
     setMediaError(null);
     setMeetingEndedNotice(null);
+    setJoinRejection(null);
     setWaitingMessage(null);
     setCurrentIsAdmin(true);
     setRoomId(targetRoomId);
@@ -3024,6 +3029,8 @@ export default function MeetsClient({
     (action: "new" | "join") => {
       setMeetError(null);
       setMeetingEndedNotice(null);
+    setJoinRejection(null);
+      setJoinRejection(null);
       setEnterErrored(false);
       setEnterAction(action);
     },
@@ -3033,6 +3040,7 @@ export default function MeetsClient({
   const handleEnterRetry = useCallback(() => {
     setMeetError(null);
     setMeetingEndedNotice(null);
+    setJoinRejection(null);
     setEnterErrored(false);
     setConnectionState("connecting");
     if (enterAction === "new") {
@@ -3054,6 +3062,7 @@ export default function MeetsClient({
     setEnterErrored(false);
     setMeetError(null);
     setMeetingEndedNotice(null);
+    setJoinRejection(null);
     setConnectionState("disconnected");
   }, [setConnectionState, setMeetError]);
 
@@ -3442,6 +3451,8 @@ export default function MeetsClient({
         mediaError={mediaError}
         meetingEndedNotice={meetingEndedNotice}
         onDismissMeetingEndedNotice={() => setMeetingEndedNotice(null)}
+        joinRejection={joinRejection}
+        onDismissJoinRejection={() => setJoinRejection(null)}
         isPopoutActive={isPopoutActive}
         isPopoutSupported={isPopoutSupported}
         onOpenPopout={openPopout}

@@ -101,6 +101,7 @@ import {
   isSystemUserId,
   isMediaDeviceBlocked,
 } from "../lib/utils";
+import { hiddenSetupView } from "../lib/join-rejection";
 import { useApps, useGame } from "@conclave/apps-sdk";
 import { GamePanel } from "./games/GamePanel";
 import { GamesPanel } from "./games/GamesPanel";
@@ -294,6 +295,8 @@ interface MeetsMainContentProps {
   mediaError?: MeetError | null;
   meetingEndedNotice?: string | null;
   onDismissMeetingEndedNotice?: () => void;
+  joinRejection?: string | null;
+  onDismissJoinRejection?: () => void;
   browserAudioNeedsGesture: boolean;
   browserAudioPlaybackAttemptToken?: number;
   onBrowserAudioAutoplayBlocked: () => void;
@@ -572,6 +575,8 @@ export default function MeetsMainContent({
   mediaError,
   meetingEndedNotice,
   onDismissMeetingEndedNotice,
+  joinRejection,
+  onDismissJoinRejection,
   isPopoutActive,
   isPopoutSupported,
   onOpenPopout,
@@ -2203,24 +2208,16 @@ export default function MeetsMainContent({
       {!isJoined ? (
         hideJoinUI ? (
           (() => {
-            const hasEnded = Boolean(meetingEndedNotice);
-            const errorMessage = meetError?.message ?? "";
-            const isWaitingForHost =
-              /not live|not started|no room|not ready/i.test(errorMessage);
-            const isFatal = errorMessage && !isWaitingForHost;
-            const headline = hasEnded
-              ? "Webinar ended"
-              : isFatal
-                ? "we hit a snag"
-                : isWaitingForHost
-                  ? "waiting for the host to start"
-                  : isLoading
-                    ? "getting you in"
-                    : "almost there";
+            const view = hiddenSetupView({
+              joinRejection,
+              meetingEndedNotice,
+              errorMessage: meetError?.message ?? "",
+              isLoading,
+            });
             return (
               <main className="flex min-h-dvh items-center justify-center bg-[#0a0a0b] px-6 py-10 text-[#fafafa]">
                 <div className="w-full max-w-md text-center">
-                  {!hasEnded && !isFatal && !isWaitingForHost ? (
+                  {view.busy ? (
                     <div className="relative mx-auto mb-5 h-9 w-9">
                       <div className="absolute inset-0 rounded-full border-2 border-[#fafafa]/10" />
                       <div className="absolute inset-0 animate-spin rounded-full border-2 border-transparent border-t-[#F95F4A]" />
@@ -2230,25 +2227,19 @@ export default function MeetsMainContent({
                     className="text-balance text-[24px] leading-tight text-[#fafafa]"
                     style={{ fontFamily: "'PolySans Bulky Wide', sans-serif" }}
                   >
-                    {headline}
+                    {view.headline}
                   </h1>
                   <p className="mx-auto mt-3 max-w-[340px] text-pretty text-[13.5px] leading-relaxed text-[#fafafa]/55">
-                    {hasEnded
-                      ? meetingEndedNotice
-                      : isWaitingForHost
-                        ? "Hang tight. This page will refresh on its own the moment the host opens the room."
-                        : isFatal
-                          ? errorMessage
-                          : "Sit tight. Getting the room ready in a moment."}
+                    {view.body}
                   </p>
-                  {hasEnded ? (
+                  {view.action === "home" ? (
                     <a
                       href="/"
                       className="mt-7 inline-flex h-11 items-center justify-center rounded-full bg-[#F95F4A] px-6 text-[14px] font-medium text-white transition-[filter] duration-150 hover:brightness-105"
                     >
                       Back to home
                     </a>
-                  ) : isFatal ? (
+                  ) : view.action === "retry" ? (
                     <button
                       type="button"
                       onClick={() => window.location.reload()}
@@ -2284,6 +2275,8 @@ export default function MeetsMainContent({
             mediaError={mediaError}
             meetingEndedNotice={meetingEndedNotice}
             onDismissMeetingEndedNotice={onDismissMeetingEndedNotice}
+            joinRejection={joinRejection}
+            onDismissJoinRejection={onDismissJoinRejection}
             videoEffects={videoEffects}
             onVideoEffectsChange={onVideoEffectsChange}
             onPrejoinMediaCommit={onPrejoinMediaCommit}
