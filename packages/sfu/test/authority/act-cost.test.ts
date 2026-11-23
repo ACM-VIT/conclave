@@ -6,9 +6,19 @@
  */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { AuthorityResult, Json } from "@conclave/apps-sdk/authority";
+import type { Subject } from "@conclave/apps-sdk/authority/server";
+import { AuthorityInstance, type Actor } from "../../server/apps/authority/instance.js";
 import { DEFAULT_AUTHORITY_LIMITS } from "../../server/apps/authority/limits.js";
 import { Harness, person, type Tab } from "./harness.js";
 import { ledgerAuthority, ledgerContract, ledgerCounters } from "./fixtures/ledger.js";
+
+/**
+ * The real clock in milliseconds, kept before the fake timers below replace
+ * `process.hrtime` too.
+ */
+const realMs = ((bigint: () => bigint) => () => Number(bigint()) / 1e6)(
+  process.hrtime.bigint.bind(process.hrtime),
+);
 
 beforeEach(() => {
   vi.useFakeTimers({ now: 1_000_000 });
@@ -50,7 +60,7 @@ const actsAfter = async (
   ledgerCounters.projections = 0;
   const flushesBefore = room.authority.stats.flushes;
   const examinedBefore = viewWork(room);
-  const started = process.hrtime.bigint();
+  const started = realMs();
   let refused = 0;
   // Through the client, without moving any timer, so the flush the first
   // action asked for waits until the last has been answered.
@@ -66,7 +76,7 @@ const actsAfter = async (
   }
   const flushesMeanwhile = room.authority.stats.flushes - flushesBefore;
   const examined = viewWork(room) - examinedBefore;
-  const ms = Number(process.hrtime.bigint() - started) / 1e6;
+  const ms = realMs() - started;
   const projections = ledgerCounters.projections;
   await room.deliver();
   return { ms, projections, refused, flushesMeanwhile, examined };
@@ -121,3 +131,49 @@ it("projects each of 240 large writes once per audience, not once per action aft
   expect(big.projections).toBeLessThanOrEqual(3 * ACTS);
   expect(big.examined).toBeLessThanOrEqual(2 * ACTS);
 });
+
+/**
+ * How long one clear of people's own rows takes, with each of `people`
+ * holding `rows` of them in a view of their own.
+ */
+const clearOfPeoplesRows = (people: number, rows: number): number => {
+  const instance = new AuthorityInstance(
+    "ledger.test",
+    ledgerAuthority,
+    { mode: "meeting", qaEnabled: true },
+    {
+      limits: { ...DEFAULT_AUTHORITY_LIMITS, mutationsPerSecond: 1e9, mutationBurst: 1e9 },
+      random: { next: Math.random, int: (max) => Math.floor(Math.random() * max), shuffle: (list) => [...list] },
+      verifyViews: false,
+    },
+  );
+  const actor = (id: string, role: Actor["role"]): Actor => ({
+    subject: id as Subject,
+    role,
+    verified: true,
+    displayName: id,
+  });
+  let now = 1_000_000;
+  for (let index = 0; index < people; index += 1) {
+    const who = actor(`person-${index}`, "member");
+    instance.snapshot(who);
+    instance.act(who, "stash", { count: rows }, null, (now += 1));
+  }
+  const started = realMs();
+  const wiped = instance.act(actor("host", "moderator"), "wipe", null, null, (now += 1));
+  const ms = realMs() - started;
+  expect(wiped).toEqual({ ok: true, value: { removed: people * rows } });
+  return ms;
+};
+
+it("takes a clear of people's own rows in at a cost that grows with the rows, not their square", () => {
+  // The fastest of three runs each, so a busy machine does not decide it.
+  const fastest = (people: number) =>
+    Math.min(...[0, 1, 2].map(() => clearOfPeoplesRows(people, 16)));
+  const quarter = fastest(1_250);
+  const whole = fastest(5_000);
+
+  // Four times the rows: three to six times as long here. Growing with
+  // their square it was 14 to 18 times.
+  expect(whole).toBeLessThan(quarter * 8 + 50);
+}, 180_000);

@@ -687,7 +687,10 @@ export class AuthoritySession<C extends AuthorityContract> {
       .then((reply) => {
         if (this.closed || this.subscription !== subscription) return;
         if (reply === LOST) {
-          // The view may still arrive. If it does not, a reconnect retries.
+          // Only the answer was lost when the view has come or is coming.
+          // Otherwise it may yet come, and installing it cancels this, or the
+          // server refused and nothing follows: ask again after a wait.
+          if (this.generation === 0 && this.incoming === null) this.restartLater(epoch);
           return;
         }
         if (reply.ok) return;
@@ -760,6 +763,7 @@ export class AuthoritySession<C extends AuthorityContract> {
     for (const frame of frames) for (const row of frame.rows) put(row);
 
     this.refusals = 0;
+    this.clearRestart();
     this.generation = frames[0].generation;
     this.seq = 0;
     this.incoming = null;
