@@ -8,7 +8,6 @@
 export const CALL_LOG_LABELS = [
   "[Meets] Audio play error",
   "[Meets] Audio producer recovery failed",
-  "[Meets] Browser layout local video play error",
   "[Meets] Browser video play error",
   "[Meets] Camera producer recovery failed",
   "[Meets] Cannot re-join: missing room ID or local stream",
