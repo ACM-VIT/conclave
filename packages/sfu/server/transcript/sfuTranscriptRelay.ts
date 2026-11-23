@@ -45,6 +45,7 @@ export class SfuTranscriptRelay implements TranscriptAudioBatchSink {
   private readonly pendingProducerIds = new Set<string>();
   private commitTimer: NodeJS.Timeout | null = null;
   private lastWorkerSendWarnAt = 0;
+  private closed = false;
   private started = false;
   controllerUserId: string;
 
@@ -71,6 +72,7 @@ export class SfuTranscriptRelay implements TranscriptAudioBatchSink {
 
   async start(): Promise<void> {
     if (this.started) return;
+    this.throwIfClosed();
     if (this.options.room.router.closed) {
       throw new Error("Room media router is closed.");
     }
@@ -92,17 +94,30 @@ export class SfuTranscriptRelay implements TranscriptAudioBatchSink {
       },
     });
     await this.workerClient.connect();
+    this.throwIfClosed();
 
-    this.directTransport = await this.options.room.router.createDirectTransport({
+    const directTransport = await this.options.room.router.createDirectTransport({
       appData: {
         kind: "transcript-sfu-relay",
         controllerUserId: this.controllerUserId,
         controllerDisplayName: this.options.controllerDisplayName,
       },
     });
+    if (this.closed) {
+      directTransport.close();
+      this.throwIfClosed();
+    }
+    this.directTransport = directTransport;
     this.started = true;
     await this.syncProducers();
+    this.throwIfClosed();
     this.startCommitTimer();
+  }
+
+  private throwIfClosed(): void {
+    if (this.closed) {
+      throw new Error("The SFU transcript relay was closed while it started.");
+    }
   }
 
   async syncProducers(): Promise<void> {
@@ -144,6 +159,7 @@ export class SfuTranscriptRelay implements TranscriptAudioBatchSink {
   }
 
   close(options: { flushBufferedAudio?: boolean } = {}): void {
+    this.closed = true;
     this.started = false;
     if (this.commitTimer) {
       clearInterval(this.commitTimer);

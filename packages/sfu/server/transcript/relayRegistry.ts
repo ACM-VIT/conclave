@@ -123,6 +123,7 @@ export const createTranscriptRelayRegistry = (options: {
         return failed("An SFU transcript relay is already controlled by another participant.");
       }
       rooms.set(key, slot);
+      slot.starting?.close();
 
       const relay: TranscriptRelayInstance = (options.createRelay ?? ((relayOptions) =>
         new SfuTranscriptRelay(relayOptions)))({
@@ -142,7 +143,7 @@ export const createTranscriptRelayRegistry = (options: {
         await relay.start();
         if (slot.starting === relay && slot.serving) {
           const handoffReady = await relay.prepareHandoff();
-          if (!handoffReady && slot.starting === relay) {
+          if (!handoffReady && slot.starting === relay && slot.serving) {
             slot.starting = null;
             relay.close();
             forget(key, slot);
@@ -177,9 +178,10 @@ export const createTranscriptRelayRegistry = (options: {
       const slot = rooms.get(roomKey);
       if (!slot) return { success: true };
       rooms.delete(roomKey);
-      const serving = slot.serving;
+      const { serving, starting } = slot;
       slot.serving = null;
       slot.starting = null;
+      starting?.close();
       serving?.close();
       return { success: true };
     },
@@ -192,10 +194,11 @@ export const createTranscriptRelayRegistry = (options: {
           error: "Only the transcript relay controller, host, or admin can stop the SFU relay.",
         };
       }
-      const serving = slot.serving;
+      const { serving, starting } = slot;
       slot.serving = null;
       slot.starting = null;
       forget(roomKey, slot);
+      starting?.close();
       if (serving) await stopServing(roomKey, serving);
       return { success: true };
     },
@@ -209,7 +212,9 @@ export const createTranscriptRelayRegistry = (options: {
     async releaseSeat({ roomKey, userId }) {
       const slot = rooms.get(roomKey);
       if (!slot) return;
-      if (slot.starting?.controllerUserId === userId) slot.starting = null;
+      const starting = slot.starting?.controllerUserId === userId ? slot.starting : null;
+      if (starting) slot.starting = null;
+      starting?.close();
       const serving = slot.serving?.controllerUserId === userId ? slot.serving : null;
       if (serving) slot.serving = null;
       forget(roomKey, slot);
@@ -232,9 +237,11 @@ export const createTranscriptRelayRegistry = (options: {
     },
     closeAll() {
       for (const slot of rooms.values()) {
-        slot.serving?.close();
+        const { serving, starting } = slot;
         slot.serving = null;
         slot.starting = null;
+        starting?.close();
+        serving?.close();
       }
       rooms.clear();
     },
