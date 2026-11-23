@@ -2066,6 +2066,40 @@ test("backup then restore over random trees reproduces what the SFU opens, or re
   }
 });
 
+test(
+  "a mount point inside the state dir, or a state dir that is one, is refused before anything changes",
+  { skip: needs.skip || ((process.getuid() !== 0 || process.platform !== "linux") && "needs root on Linux to mount a tmpfs") },
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+    const mounted = [];
+    try {
+      const { state, config, setDocker, backup, latestArchive, restore } = await setUp(root);
+      makeDb(path.join(state, "conclave.sqlite"), "before");
+      await mkdir(path.join(state, "data"));
+      await writeFile(path.join(state, "data", "notes.json"), "backed up");
+      await backup("--local-only");
+      // Neon: a bind mount inside the state dir made a rename fail with
+      // EXDEV halfway through the restore.
+      await run("mount", ["-t", "tmpfs", "tmpfs", path.join(state, "data")]);
+      mounted.push(path.join(state, "data"));
+      await writeFile(path.join(state, "data", "notes.json"), "live");
+      await assert.rejects(restore("--file", await latestArchive(), "--yes"), /data is a mount point inside the state dir/);
+      assert.equal(await readFile(path.join(state, "data", "notes.json"), "utf8"), "live");
+      const own = path.join(root, "own-fs");
+      await mkdir(own);
+      await run("mount", ["-t", "tmpfs", "tmpfs", own]);
+      mounted.push(own);
+      await writeFile(config, `${await readFile(config, "utf8")}\nCONCLAVE_STATE_DIR=${own}\n`);
+      await setDocker([{ id: "sfu-a", mounts: [own], status: "exited", env: ["SFU_PORT=9", "SFU_INSTANCE_ID=sfu-a"] }]);
+      await assert.rejects(restore("--file", await latestArchive(), "--yes"), /is a file system of its own \(a mount point\)/);
+      assert.deepEqual(await readdir(own), []);
+    } finally {
+      for (const dir of mounted.reverse()) await run("umount", [dir]).catch(() => undefined);
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
 describe("backup and restore", { concurrency: 6 }, () => {
   for (const args of queued) nodeTest(...args);
 });

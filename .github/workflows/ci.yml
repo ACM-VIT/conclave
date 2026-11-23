@@ -46,6 +46,13 @@ jobs:
             echo "::warning title=node_modules cache miss::This $EVENT run installed node_modules without a cache, so its budget clock started after setup. A miss on every run means staging or main has not saved a cache for this lockfile and toolchain."
           fi
 
+      # The backup and restore tests run the real scripts, which need these.
+      # The tests fail on CI when one is missing rather than skip.
+      - if: matrix.job == 'test'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends age psmisc redis-server
+
       - id: next-cache
         if: matrix.job == 'build'
         uses: actions/cache/restore@v6.1.0
