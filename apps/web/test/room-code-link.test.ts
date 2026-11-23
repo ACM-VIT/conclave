@@ -1,8 +1,41 @@
+import { domainToASCII } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseCodeFieldPaste } from "../src/app/lib/utils";
 import { getMeetingLinkHosts } from "../src/lib/site-url";
 
-const KNOWN_HOSTS = ["conclave.acmvit.in", "localhost:3615"];
+const KNOWN_HOSTS = [
+  "conclave.acmvit.in",
+  "localhost:3615",
+  "xn--mnchen-3ya.example",
+  "127.0.0.1:3615",
+  "0.0.0.11",
+];
+
+const PRINTABLE_ASCII = /^[\x20-\x7e]*$/;
+
+const referenceHost = (host: string): string | null => {
+  const lower = host.toLowerCase();
+  const portMatch = /:(\d*)$/.exec(lower);
+  const name = portMatch ? lower.slice(0, portMatch.index) : lower;
+  const port = portMatch ? portMatch[1].replace(/^0+(?=\d)/, "") : "";
+  if (port && Number(port) > 65535) return null;
+  const ascii = PRINTABLE_ASCII.test(name) ? name : domainToASCII(name);
+  if (!ascii) return null;
+  if (ascii !== name) {
+    const typedLabels = name.split(".");
+    const asciiLabels = ascii.split(".");
+    if (typedLabels.length !== asciiLabels.length) return null;
+    const onlyIdn = typedLabels.every(
+      (label, index) =>
+        label === asciiLabels[index] ||
+        (!PRINTABLE_ASCII.test(label) && asciiLabels[index].startsWith("xn--")),
+    );
+    if (!onlyIdn) return null;
+  }
+  return port && port !== "80" && port !== "443" ? `${ascii}:${port}` : ascii;
+};
+
+const KNOWN_REFERENCE_HOSTS = KNOWN_HOSTS.map(referenceHost);
 
 const parse = (text: string) => parseCodeFieldPaste(text, KNOWN_HOSTS);
 
@@ -33,7 +66,10 @@ const expectedReplacement = (text: string): string | null => {
   if (hostEnd <= 0 || rest[hostEnd] !== "/") return null;
   const host = rest.slice(0, hostEnd);
   if (/[\s@\\]/.test(host)) return null;
-  if (!scheme && !KNOWN_HOSTS.includes(host.toLowerCase())) return null;
+  if (!scheme) {
+    const typed = referenceHost(host);
+    if (!typed || !KNOWN_REFERENCE_HOSTS.includes(typed)) return null;
+  }
   let hostname: string;
   try {
     hostname = new URL(`https://${host}/`).hostname;
@@ -85,6 +121,10 @@ const PIECES = [
 
 const SCHEMES = ["", "", "", "https://", "http://", "HTTPS://", "//", "http:/", "javascript:", "ftp://", " "];
 const HOSTS = [
+  "M\u00dcNCHEN.example", "xn--mnchen-3ya.example", "XN--MNCHEN-3YA.EXAMPLE", "b\u00fccher.example",
+  "127.1:3615", "127.0.0.1:3615", "0x7f.0.0.1:3615", "conclave.acmvit.in:443",
+  "conclave.acmvit.in:000443", "conclave.acmvit.in:8443", "\uff43onclave.acmvit.in",
+  "conclave%2eacmvit.in",
   "conclave.acmvit.in", "Conclave.ACMVIT.in", "localhost:3615", "localhost:3005", "localhost",
   "11", "2026", "10.0.0.1", "127.0.0.1:3005", "[::1]", "m\u00fcnchen.example", "meet.example",
   "conclave.app", "999.999.999.999", "user@meet.example", "", " ",
@@ -114,6 +154,29 @@ describe("pasting into the join code field", () => {
     expect(linkCode("localhost:3615/abc-defg-hij")).toBe("abc-defg-hij");
     expect(linkCode("conclave.acmvit.in/abc%2Ddefg")).toBe("abc-defg");
     expect(linkCode("//CONCLAVE.ACMVIT.IN/ABC-123/")).toBe("abc-123");
+    expect(linkCode("conclave.acmvit.in:443/abc-defg-hij")).toBe("abc-defg-hij");
+    expect(linkCode("127.0.0.1:3615/abc-defg-hij")).toBe("abc-defg-hij");
+  });
+
+  it("matches an internationalized site host however it is typed", () => {
+    expect(linkCode("m\u00fcnchen.example/abc-defg-hij")).toBe("abc-defg-hij");
+    expect(linkCode("M\u00dcNCHEN.Example/abc-defg-hij")).toBe("abc-defg-hij");
+    expect(linkCode("xn--mnchen-3ya.example/abc-defg-hij")).toBe("abc-defg-hij");
+    expect(linkCode("XN--MNCHEN-3YA.EXAMPLE/abc-defg-hij")).toBe("abc-defg-hij");
+    expect(linkCode("b\u00fccher.example/abc-defg-hij")).toBeNull();
+  });
+
+  it("never lets URL rewriting turn a typed host into a known one", () => {
+    for (const text of [
+      "11/23",
+      "11/abc-defg-hij",
+      "127.1:3615/abc-defg-hij",
+      "0x7f.0.0.1:3615/abc-defg-hij",
+      "conclave%2eacmvit.in/abc-defg-hij",
+      "\uff43onclave.acmvit.in/abc-defg-hij",
+    ]) {
+      expect(parse(text), JSON.stringify(text)).toBeNull();
+    }
   });
 
   it("never treats other text with a slash as a link", () => {
@@ -124,8 +187,6 @@ describe("pasting into the join code field", () => {
       "10.0.0.1/abc-defg-hij",
       "conclave.app/abc-defg-hij",
       "meet.example/abc-defg-hij",
-      "m\u00fcnchen.example/abc-defg-hij",
-      "xn--mnchen-3ya.example/abc-defg-hij",
       "[::1]/abc-defg-hij",
       "devbox:3005/abc-defg-hij",
       "localhost:3005/abc-defg-hij",
@@ -244,6 +305,11 @@ describe("hosts a pasted meeting link may use without a scheme", () => {
     expect(getMeetingLinkHosts()).toEqual(
       expect.arrayContaining(["conclave.acmvit.in", "staging.example:8443", "app.example"]),
     );
+  });
+
+  it("stores an internationalized site host in its ASCII form", () => {
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", "https://m\u00fcnchen.example");
+    expect(getMeetingLinkHosts()).toContain("xn--mnchen-3ya.example");
   });
 
   it("ignores site settings that are not web addresses", () => {

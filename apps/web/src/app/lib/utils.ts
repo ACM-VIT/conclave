@@ -182,6 +182,30 @@ const fitsDns = (hostname: string) => {
   );
 };
 
+const PRINTABLE_ASCII = /^[\x20-\x7e]*$/;
+
+const comparableHost = (host: string): string | null => {
+  let parsed: URL;
+  try {
+    parsed = new URL(`https://${host}/`);
+  } catch {
+    return null;
+  }
+  const typedLabels = host.toLowerCase().replace(/:\d*$/, "").split(".");
+  const labels = parsed.hostname.split(".");
+  const onlyCaseOrIdn =
+    typedLabels.length === labels.length &&
+    typedLabels.every(
+      (label, index) =>
+        label === labels[index] ||
+        (!PRINTABLE_ASCII.test(label) && labels[index].startsWith("xn--")),
+    );
+  if (!onlyCaseOrIdn) return null;
+  return parsed.port && parsed.port !== "80"
+    ? `${parsed.hostname}:${parsed.port}`
+    : parsed.hostname;
+};
+
 const linkRoomCode = (segment: string) => {
   let decoded: string;
   try {
@@ -202,8 +226,12 @@ export function parseCodeFieldPaste(
   if (ROOM_CODE_TEXT.test(trimmed)) return { kind: "insert", text: trimmed.toLowerCase() };
   const { scheme, authority, segment } = MEETING_LINK.exec(trimmed)?.groups ?? {};
   if (!authority || !segment) return null;
-  const typedHost = authority.toLowerCase();
-  if (!scheme && !conclaveHosts.some((host) => host.toLowerCase() === typedHost)) return null;
+  if (!scheme) {
+    const typedHost = comparableHost(authority);
+    if (!typedHost || !conclaveHosts.some((host) => comparableHost(host) === typedHost)) {
+      return null;
+    }
+  }
   const hostname = linkHostname(authority);
   if (!hostname || !fitsDns(hostname)) return null;
   const code = linkRoomCode(segment);
