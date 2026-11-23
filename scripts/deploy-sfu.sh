@@ -942,6 +942,48 @@ restore_lkg() {
   echo "${svc} is serving on its previous image again." >&2
 }
 
+# Puts back the drain state an instance had before this deploy drained it,
+# and moves its journal to idle only once its own /status confirms that state.
+# Otherwise the journal stays drained, and the next deploy's repair tries
+# again.
+restore_drain_state() {
+  local svc="$1" url="$2" was_draining="$3" status
+  if [[ "$was_draining" != "true" ]]; then
+    set_draining "$url" false >/dev/null || true
+    checkpoint "undrain ${svc}"
+  fi
+  status="$(instance_status "$svc" 2>/dev/null)" || status=""
+  if [[ -n "$status" && "$(printf "%s" "$status" | json_field draining)" == "$was_draining" ]]; then
+    journal_set "$svc" phase=idle
+    return 0
+  fi
+  echo "${svc} could not be confirmed back to draining=${was_draining}; the next deploy puts it back before anything else." >&2
+  return 1
+}
+
+# A service's own image name must exist before anything changes, or a plain
+# compose up after a pause or a crash would build the unchecked checkout. On a
+# host whose running images carry other names, it is tagged from the
+# instance's last-known-good image.
+seed_service_tags() {
+  local svc image_name lkg
+  for svc in "${ALL_SFU_SERVICES[@]}"; do
+    image_name="$(service_image_name "$svc")"
+    docker image inspect "$image_name" >/dev/null 2>&1 && continue
+    lkg=""
+    serving "$svc" && lkg="$(container_image "$svc")"
+    [[ -n "$lkg" ]] || lkg="$(journal_get "$svc" lkg)"
+    [[ -n "$lkg" ]] || lkg="$(docker image inspect -f '{{.Id}}' "${IMAGE_REPO}:rollback-${svc}" 2>/dev/null || true)"
+    if [[ -n "$lkg" ]] && docker image inspect "$lkg" >/dev/null 2>&1; then
+      docker tag "$lkg" "$image_name"
+      checkpoint "seed ${svc}"
+      echo "Tagged ${svc}'s last-known-good image as ${image_name}, so compose never builds it from the checkout."
+    else
+      echo "WARNING: ${image_name} does not exist and ${svc} has no known-good image to give it; a plain compose up would build the checkout." >&2
+    fi
+  done
+}
+
 # Whether repair may restart an instance: only one that cannot be carrying
 # a call. Its container is stopped or absent, or it is out of rotation
 # (draining) and reports no rooms for PLACEMENT_SETTLE_SECONDS, as long as a
@@ -998,10 +1040,10 @@ repair_interrupted() {
         # this deploy sent is undone.
         status="$(instance_status "$svc" 2>/dev/null)" || status=""
         if [[ "$(journal_get "$svc" wasDraining)" != "true" && -n "$status" && "$(container_image "$svc")" == "$lkg" ]]; then
-          set_draining "$url" false >/dev/null || true
-          checkpoint "undrain ${svc}"
+          restore_drain_state "$svc" "$url" false || true
+        else
+          journal_set "$svc" phase=idle
         fi
-        journal_set "$svc" phase=idle
         ;;
       promoting)
         if serving "$svc" "$candidate"; then
@@ -1109,19 +1151,15 @@ deploy_service() {
     drain_response="$(set_draining "$url" true)" || drained="false"
     checkpoint "drain ${svc}"
     if [[ "$drained" != "true" ]]; then
-      journal_set "$svc" phase=idle
       echo "Failed to drain ${svc}; not rebuilding it." >&2
+      restore_drain_state "$svc" "$url" "$was_draining" || true
       return 1
     fi
     settle_until=$(( $(date +%s) + PLACEMENT_SETTLE_SECONDS ))
     if [[ "$FORCE_DRAIN" == "true" && "$(printf "%s" "$drain_response" | json_field forced || echo false)" == "true" ]]; then
       echo "Force drain applied to ${svc}; skipping the room wait."
     elif ! wait_for_empty "$svc" "$url" "$settle_until"; then
-      if [[ "$was_draining" != "true" ]]; then
-        set_draining "$url" false >/dev/null || true
-        checkpoint "undrain ${svc}"
-      fi
-      journal_set "$svc" phase=idle
+      restore_drain_state "$svc" "$url" "$was_draining" || true
       echo "" >&2
       echo "Deploy paused: ${svc} did not drain within ${DRAIN_TIMEOUT_SECONDS}s; a meeting is still running on it." >&2
       echo "${svc} was not rebuilt and keeps serving its calls. Rerun this script once the meeting ends." >&2
@@ -1152,7 +1190,7 @@ deploy_service() {
   fi
 
   echo "Starting ${svc} on ${TARGET_COMMIT} under its candidate tag, out of rotation until its canary passes..."
-  local failure=""
+  local failure="" promoted="false"
   docker tag "$TARGET_IMAGE" "$candidate"
   checkpoint "tag candidate ${svc}"
   journal_set "$svc" phase=candidate candidate="$TARGET_IMAGE"
@@ -1178,7 +1216,7 @@ deploy_service() {
     journal_set "$svc" phase=promoting prevLkg="$lkg"
     docker tag "$TARGET_IMAGE" "$image_name"
     checkpoint "tag ${svc}"
-    up_service "$svc" "$image_name" false || failure="compose could not recreate ${svc} after its canary"
+    up_service "$svc" "$image_name" false && promoted="true" || failure="compose could not recreate ${svc} after its canary"
     checkpoint "start ${svc}"
     [[ -n "$failure" ]] || started_on "$svc" "$TARGET_IMAGE" "$image_name" || failure="${svc} is not running ${TARGET_COMMIT}'s image after its canary"
     [[ -n "$failure" ]] || wait_serving "$svc" "$TARGET_IMAGE" || failure="${svc} passed its canary but is not serving on ${TARGET_COMMIT} (${SERVING_WHY})"
@@ -1187,6 +1225,17 @@ deploy_service() {
     echo "" >&2
     echo "Deploy stopped: ${failure}." >&2
     journal_set "$svc" phase=rollback
+    if [[ "$promoted" == "true" ]]; then
+      # It served undrained, so calls may have joined it: it is drained and
+      # waited for like any rebuild, and left alone while they run.
+      set_draining "$url" true >/dev/null || true
+      checkpoint "drain ${svc} back"
+      if ! wait_for_empty "$svc" "$url" "$(( $(date +%s) + PLACEMENT_SETTLE_SECONDS ))"; then
+        echo "" >&2
+        echo "Deploy paused: calls joined ${svc} on ${TARGET_COMMIT} before it failed its last check. It is drained and goes back to its previous image once they end; rerun this script then." >&2
+        return "$EXIT_BLOCKED_BY_ROOMS"
+      fi
+    fi
     if restore_lkg "$svc" "$url" "$image_name" "$lkg"; then
       echo "Instances not yet deployed were left untouched and keep serving." >&2
       return "$EXIT_CANARY_FAILED"
@@ -1217,6 +1266,7 @@ for svc in "${ALL_SFU_SERVICES[@]}"; do
   IMAGE_NAME[$svc]="$(service_image_name "$svc")"
 done
 
+seed_service_tags
 repair_interrupted
 restore_service_when_none_serves
 

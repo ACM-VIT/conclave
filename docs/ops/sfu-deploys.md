@@ -88,11 +88,23 @@ notice the SFU gives; the drain request waits that long for the SFU's answer):
    compose could not start it: put it back on its last-known-good image (the
    image it was serving on when this deploy found it, else the one its journal
    recorded the last time it served) and stop. A build that only ran, never
-   one that failed or never finished its canary, is ever last-known-good.
+   one that failed or never finished its canary, is ever last-known-good. A
+   build that already served undrained when it failed its last check may have
+   calls on it, so it is drained and waited for like any rebuild first; if
+   they outlast the deadline it is left drained on the build (exit 3) and goes
+   back on a rerun once they end.
    Exit 4 once it is serving again by that same rule; exit 5 when it could
    not be brought back (compose failed, it will not serve, its public URL does
    not reach it, or it has no last-known-good image and stays stopped). The
    instances not yet touched were never drained and keep serving.
+
+Before anything changes, each service's own image name must exist: on a host
+whose running images carry other names (another `COMPOSE_PROJECT_NAME`, or
+images from before the compose file named them), it is tagged from the
+instance's last-known-good image, so a plain `docker compose up` never builds
+the checkout. A drain request that fails is undone, and the instance's journal
+leaves the drained phase only once its `/status` confirms the drain state it
+had before.
 
 Every one of these steps is written to the instance's deploy journal
 (`<state dir>/<project>.<service>.journal.json`: phase, candidate, last-known-good

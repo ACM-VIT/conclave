@@ -968,6 +968,56 @@ test("an inherited SFU_START_DRAINING=true does not make a retry redo finished i
   });
 });
 
+// --- Greptile on 0a1f06a7 and 4661b731.
+
+test("a build that fails its last check after calls joined it is drained before any rollback, and left alone while they run", async () => {
+  // Once the build serves, a caller joins; then its public route fails, so
+  // the deploy must not restart it under that call.
+  const onRecreate = (sfu) => {
+    if (sfu.image === "sha256:target" && !sfu.draining) {
+      sfu.rooms = 1;
+      sfu.publicDown = true;
+    }
+  };
+  await withSfus({ "sfu-a": { rooms: 1 }, "sfu-b": { rooms: 0, publicRoute: true, onRecreate } }, async (sfus) => {
+    const result = await deploy(sfus, { env: { SFU_DEPLOY_SERVICES: "sfu-b" } });
+    assert.equal(result.code, 3, result.output);
+    assert.deepEqual(sfus["sfu-b"].recreates.map((recreate) => recreate.roomsCut), [0, 0], "no call was cut");
+    assert.equal(sfus["sfu-b"].rooms, 1);
+    assert.equal(sfus["sfu-b"].draining, true);
+  });
+});
+
+test("a drain whose reply is lost is undone, and the journal stays pending until it is", async () => {
+  await withSfus({ "sfu-a": { dropDrainReply: true }, "sfu-b": { rooms: 1 } }, async (sfus) => {
+    const result = await deploy(sfus);
+    assert.equal(result.code, 1, result.output);
+    assert.match(result.output, /Failed to drain sfu-a/);
+    assert.equal(sfus["sfu-a"].draining, false, "the drain the SFU applied was undone");
+    assert.equal(sfus["sfu-a"].recreates.length, 0);
+  });
+});
+
+test("on a host whose images carry other names, each service's tag is seeded from its last-known-good image first", async () => {
+  // A deploy dies right after its first drain; then an operator runs plain
+  // compose up. Compose must start the image that served, not build the
+  // unchecked checkout.
+  await withSfus({ "sfu-a": {}, "sfu-b": { rooms: 1 } }, async (sfus) => {
+    const shared = await sharedRun("deploy-seed-");
+    try {
+      const env = { ...shared.env, DEPLOY_TEST_UNTAGGED_SERVICE_BUILDS: "1" };
+      const first = await deploy(sfus, { env: { ...env, SFU_DEPLOY_TEST_CRASH_AT: "drain sfu-a" } });
+      assert.equal(first.code, null, first.output);
+      for (const service of ["sfu-a", "sfu-b"]) {
+        await composeUpByHand(sfus, { tags: shared.env.DEPLOY_TEST_DOCKER_TAGS, dir: path.join(shared.dir, "by-hand"), env: { DEPLOY_TEST_UNTAGGED_SERVICE_BUILDS: "1" } }, service);
+        assert.equal(sfus[service].image, "sha256:running", `${service} came up on the image it served on`);
+      }
+    } finally {
+      await rm(shared.dir, { recursive: true, force: true });
+    }
+  });
+});
+
 // Every test above has its own fake SFUs, state dir, lock file and docker
 // stand-in, and its waits are cut short in deploy(), so they run side by side.
 describe("deploy-sfu.sh", { concurrency: 8 }, () => {
