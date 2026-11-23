@@ -81,6 +81,22 @@ struct ChatInputMemoTests {
         #expect(rowIds.firstIndex(of: "unread").map { rowIds[$0 + 1] } == "m-a")
     }
 
+    @Test func aMessageThatArrivesBeforeTheChatAppearsStaysUnreadWhenItIsCancelled() {
+        let viewModel = joinedViewModel()
+        viewModel.shell.panels.toggle(.chat, from: .call)
+        #expect(viewModel.chat.isOpen && !viewModel.chat.isShown)
+        viewModel.state.chatMessages.append(ChatMessage(id: "m-p", userId: "remote@example.com#w", displayName: "Remote",
+                                                        content: "before the sheet mounted", roomId: "room-a"))
+        viewModel.shell.panels.toggle(.chat, from: .call)
+        let dismissing = viewModel.shell.panels.snapshot
+        viewModel.shell.panels.didDismiss(session: dismissing.session, presentationID: dismissing.current?.presentationID ?? 0)
+        #expect(viewModel.chat.pendingUnreadCount == 1)
+
+        viewModel.shell.panels.toggle(.chat, from: .call)
+        let rowIds = viewModel.chat.timeline.rowIds
+        #expect(rowIds.firstIndex(of: "unread").map { rowIds[$0 + 1] } == "m-p")
+    }
+
     @Test func aChatThatAppearedConsumesItsUnreadAnchor() {
         let viewModel = joinedViewModel()
         viewModel.state.chatMessages.append(ChatMessage(id: "m-a", userId: "remote@example.com#w", displayName: "Remote",
