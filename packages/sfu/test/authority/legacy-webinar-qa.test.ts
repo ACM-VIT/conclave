@@ -12,7 +12,14 @@ import {
   getOrCreateWebinarRoomConfig,
   setCustomWebinarLinkSlug,
 } from "../../server/webinar.js";
-import { emitWebinarConfigChanged } from "../../server/webinarNotifications.js";
+import {
+  WEBINAR_QA_LISTS_PER_TURN,
+  emitWebinarConfigChanged,
+} from "../../server/webinarNotifications.js";
+import { Admin } from "../../config/classes/Admin.js";
+import { Client } from "../../config/classes/Client.js";
+import { LocalRoomRegistry } from "../../server/roomRegistry.js";
+import { createSfuState } from "../../server/state.js";
 import type {
   WebinarQaChangedNotification,
   WebinarQaEntry,
@@ -20,6 +27,7 @@ import type {
 } from "../../types.js";
 import {
   HOST,
+  addRoom,
   ask,
   closeAll,
   connect,
@@ -793,5 +801,40 @@ describe("webinar Q&A on a server without the runtime", () => {
 
     expect([...panelist.entries.keys()]).toEqual([shown.id]);
     expect(panelist.entries.has(waiting.id ?? "")).toBe(false);
+  });
+});
+
+describe("webinar Q&A lists on a server without the runtime, in a large room", () => {
+  it("sends a room that becomes a webinar again its lists a slice a turn", async () => {
+    const state = createSfuState({
+      roomRegistry: new LocalRoomRegistry({ instanceId: "lists", instanceUrl: "http://localhost", ttlMs: 45_000 }),
+      appsAuthority: null,
+    });
+    const room = addRoom(state, "lists-room");
+    const lists: string[] = [];
+    const socketFor = (id: string) =>
+      ({
+        id,
+        emit: (event: string) => {
+          if (event === "webinar:qaSnapshot") lists.push(id);
+        },
+      }) as never;
+    room.addClient(new Admin({ id: "host#1", socket: socketFor("host#1") }));
+    for (let index = 0; index < 450; index += 1) {
+      room.addClient(
+        new Client({ id: `viewer-${index}#1`, socket: socketFor(`viewer-${index}`), mode: "webinar_attendee" }),
+      );
+    }
+    const io = { to: () => ({ emit: () => {} }) } as never;
+    const webinar = getOrCreateWebinarRoomConfig(state.webinarConfigs, room.channelId);
+
+    webinar.enabled = true;
+    emitWebinarConfigChanged(io, state, room);
+    const inTheCall = lists.length;
+    for (let turn = 0; turn < 20; turn += 1) await new Promise((resolve) => setImmediate(resolve));
+
+    expect(inTheCall).toBeLessThanOrEqual(WEBINAR_QA_LISTS_PER_TURN);
+    expect(lists.length).toBe(451);
+    expect(new Set(lists).size).toBe(451);
   });
 });

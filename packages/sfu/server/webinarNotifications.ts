@@ -70,6 +70,46 @@ const sendWebinarQaList = (room: Room, client: Client): void => {
 };
 
 /**
+ * How many clients one turn of the event loop sends a whole webinar Q&A
+ * list to when a room becomes a webinar. A list is the room's questions as
+ * one person reads them, and a webinar can hold thousands of people, so the
+ * room keeps answering between slices.
+ */
+export const WEBINAR_QA_LISTS_PER_TURN = 100;
+
+/** Rooms whose clients are being sent their lists, a slice a turn. */
+const listing = new WeakSet<Room>();
+
+/**
+ * Sends every client of a webinar who holds no list yet its list, a slice a
+ * turn. Each turn reads again who still needs one, so a seat that joined
+ * meanwhile, and was sent its own, is not sent another.
+ */
+const listInTurns = (state: SfuState, room: Room): void => {
+  if (listing.has(room)) return;
+  listing.add(room);
+  const turn = (): void => {
+    const live = state.rooms.get(room.channelId) === room;
+    if (!live || !state.webinarConfigs.get(room.channelId)?.enabled) {
+      listing.delete(room);
+      return;
+    }
+    let sent = 0;
+    for (const client of room.clients.values()) {
+      if (listedForQa.has(client)) continue;
+      if (sent === WEBINAR_QA_LISTS_PER_TURN) {
+        setImmediate(turn);
+        return;
+      }
+      sendWebinarQaList(room, client);
+      sent += 1;
+    }
+    listing.delete(room);
+  };
+  turn();
+};
+
+/**
  * Sends a client the webinar Q&A list when they are granted it: on joining
  * a webinar, and on becoming a host, who reads more of it.
  */
@@ -92,10 +132,10 @@ export const emitWebinarConfigChanged = (
   peekRoomAuthority(room)?.policyChanged();
   // A room that has just become a webinar grants its Q&A to everyone in it.
   if (oldEventsAreTheBook(state)) {
-    const webinar = Boolean(state.webinarConfigs.get(room.channelId)?.enabled);
-    for (const client of room.clients.values()) {
-      if (!webinar) listedForQa.delete(client);
-      else if (!listedForQa.has(client)) sendWebinarQaList(room, client);
+    if (state.webinarConfigs.get(room.channelId)?.enabled) {
+      listInTurns(state, room);
+    } else {
+      for (const client of room.clients.values()) listedForQa.delete(client);
     }
   }
 };
