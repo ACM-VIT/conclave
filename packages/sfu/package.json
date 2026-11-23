@@ -23,6 +23,7 @@
   "type": "module",
   "dependencies": {
     "@conclave/ai": "workspace:*",
+    "@conclave/apps-sdk": "workspace:*",
     "@conclave/meeting-core": "workspace:*",
     "@conclave/shared-browser": "workspace:*",
     "@conclave/ui-tokens": "workspace:*",

@@ -59,13 +59,6 @@ body,
   background: #141417;
 }
 
-.wheel-winner-swatch {
-  flex: none;
-  width: 14px;
-  height: 14px;
-  border-radius: 9999px;
-}
-
 .wheel-winner-label {
   min-width: 0;
   color: #fafafa;

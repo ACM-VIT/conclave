@@ -425,6 +425,9 @@ importers:
       '@conclave/ai':
         specifier: workspace:*
         version: link:../ai
+      '@conclave/apps-sdk':
+        specifier: workspace:*
+        version: link:../apps-sdk
       '@conclave/meeting-core':
         specifier: workspace:*
         version: link:../meeting-core
