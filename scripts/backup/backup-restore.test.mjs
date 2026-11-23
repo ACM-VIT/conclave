@@ -48,6 +48,28 @@ const fs = require("node:fs");
 const listed = JSON.parse(fs.readFileSync(process.env.BACKUP_TEST_DOCKER, "utf8"));
 const args = process.argv.slice(2);
 const out = (lines) => process.stdout.write(lines.map((line) => line + "\\n").join(""));
+// docker run of a redis image: the real redis-server (BACKUP_TEST_REAL_REDIS)
+// with the volume's /data mapped to its host dir, and docker rm -f to stop it.
+const runs = process.env.BACKUP_TEST_DOCKER + ".runs.json";
+if (args[0] === "run" && args.some((arg) => arg.startsWith("redis:"))) {
+  const dir = args[args.indexOf("-v") + 1].split(":")[0];
+  const name = args[args.indexOf("--name") + 1];
+  const server = args.indexOf("redis-server", args.findIndex((arg) => arg.startsWith("redis:")));
+  const rest = args.slice(server + 1).map((arg) => arg.replaceAll("/data", dir));
+  const child = require("node:child_process").spawn(process.env.BACKUP_TEST_REAL_REDIS, rest, { detached: true, stdio: "ignore" });
+  child.unref();
+  const started = fs.existsSync(runs) ? JSON.parse(fs.readFileSync(runs, "utf8")) : {};
+  started[name] = child.pid;
+  fs.writeFileSync(runs, JSON.stringify(started));
+  return void out([name]);
+}
+if (args[0] === "rm" && args[1] === "-f") {
+  const started = fs.existsSync(runs) ? JSON.parse(fs.readFileSync(runs, "utf8")) : {};
+  if (started[args[2]]) {
+    try { process.kill(started[args[2]]); } catch {}
+  }
+  return;
+}
 if (listed.fail) process.exit(1);
 if (args[0] === "ps") return void out(listed.map((c) => c.id));
 // docker inspect <ids...>: the JSON Docker prints, for the fields read.
@@ -64,7 +86,9 @@ if (args[0] === "inspect" && args[1] !== "-f") {
     Config: { Env: entry.env ?? [], User: entry.user ?? "" },
     Image: entry.image ?? "sha256:sfu-image",
     Mounts: (entry.mounts ?? []).map((mount) =>
-      typeof mount === "string" ? { Type: "bind", Source: mount, RW: true } : { Type: "bind", Source: mount.source, RW: mount.rw !== false },
+      typeof mount === "string"
+        ? { Type: "bind", Source: mount, Destination: "/var/lib/conclave/recordings", RW: true }
+        : { Type: "bind", Source: mount.source, Destination: mount.destination ?? "/var/lib/conclave/recordings", RW: mount.rw !== false },
     ),
   })))]);
 }
@@ -2136,6 +2160,76 @@ test("a backup that stops at any early exit leaves no work dir, holds no fence, 
     assert.deepEqual(await archives(local), []);
   } finally {
     await sfu.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// --- Greptile's round on 4d228bd1.
+
+test("a store an SFU keeps under a mount of a dir above the state dir is backed up as a database", needs, async () => {
+  // The SFU mounts <srv>/conclave at /var/lib/conclave and keeps meetings in
+  // /var/lib/conclave/recordings/meetings.db; the backup targets
+  // <srv>/conclave/recordings.
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  try {
+    const above = path.join(root, "srv", "conclave");
+    const state = path.join(above, "recordings");
+    const { setDocker, backup, latestArchive, restore } = await setUp(root, [`CONCLAVE_STATE_DIR=${state}`]);
+    await mkdir(state, { recursive: true });
+    withDatabase(state);
+    makeDb(path.join(state, "meetings.db"), "meeting");
+    await setDocker([{ id: "sfu-a", mounts: [{ source: above, destination: "/var/lib/conclave" }], status: "exited", env: ["SFU_PORT=9", "SFU_INSTANCE_ID=sfu-a", "SCHEDULED_MEETINGS_SQLITE_PATH=/var/lib/conclave/recordings/meetings.db"] }]);
+    await backup("--local-only");
+    await rm(state, { recursive: true });
+    await restore("--file", await latestArchive(), "--only", "sqlite", "--yes");
+    assert.deepEqual(rows(path.join(state, "meetings.db")), ["meeting"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a restore reads the Redis database the backup was taken from, whatever database it writes to", needsRedis, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  const source = await startRedis();
+  const drill = await startRedis();
+  try {
+    const { state, config, backup, latestArchive, restore } = await setUp(root, [`SFU_PERSISTENCE_REDIS_URL=redis://127.0.0.1:${source.port}/1`]);
+    withDatabase(state);
+    await source.cli("-n", "1", "SET", "conclave:sfu:persistence:meeting", "from db 1");
+    await backup("--local-only");
+    // The drill restores into database 0 of another Redis.
+    await writeFile(config, `${await readFile(config, "utf8")}\nSFU_PERSISTENCE_REDIS_URL=redis://127.0.0.1:${drill.port}/0\n`);
+    await rm(state, { recursive: true });
+    await restore("--file", await latestArchive(), "--yes");
+    assert.equal((await drill.cli("-n", "0", "GET", "conclave:sfu:persistence:meeting")).stdout.trim(), "from db 1");
+  } finally {
+    source.close();
+    drill.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a dump the host's redis-server cannot read is loaded with the live server's version in Docker", needsRedis, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  const live = await startRedis();
+  try {
+    const { state, env, backup, latestArchive } = await setUp(root, [`SFU_PERSISTENCE_REDIS_URL=redis://127.0.0.1:${live.port}/0`]);
+    withDatabase(state);
+    await live.cli("SET", "conclave:sfu:persistence:meeting", "kept");
+    await backup("--local-only");
+    await live.cli("DEL", "conclave:sfu:persistence:meeting");
+    // An older redis-server package on the host cannot read the dump.
+    const old = path.join(root, "old-redis");
+    await mkdir(old);
+    await writeFile(path.join(old, "redis-server"), "#!/bin/sh\necho \"Can't handle RDB format version 99\"\nexit 1\n", { mode: 0o755 });
+    const real = execFileSync("sh", ["-c", "command -v redis-server"], { encoding: "utf8" }).trim();
+    await rm(state, { recursive: true });
+    await run("bash", [path.join(scripts, "restore.sh"), "--identity", path.join(root, "key.txt"), "--file", await latestArchive(), "--yes"], {
+      env: { ...env, PATH: `${old}:${env.PATH}`, BACKUP_TEST_REAL_REDIS: real },
+    });
+    assert.equal((await live.cli("GET", "conclave:sfu:persistence:meeting")).stdout.trim(), "kept");
+  } finally {
+    live.close();
     await rm(root, { recursive: true, force: true });
   }
 });

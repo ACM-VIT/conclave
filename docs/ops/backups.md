@@ -153,7 +153,10 @@ systemctl list-timers conclave-backup.timer
 Every store's database (`CONCLAVE_SQLITE_PATH`, or a store's own
 `SCHEDULING_SQLITE_PATH`, `SCHEDULED_MEETINGS_SQLITE_PATH` or
 `SCHEDULED_WEBINARS_SQLITE_PATH`, in the repo `.env` or an SFU container's
-env) must point inside the state dir. A path outside the volume lives inside
+env, each store's precedence applied) must point inside the state dir. A
+container's path is read through that container's own mounts, so a store
+kept under a mount of a dir above the state dir (`/srv/conclave` at
+`/var/lib/conclave`, the state dir `/srv/conclave/recordings`) counts too. A path outside the volume lives inside
 the container and is lost on every deploy, so the backup fails until it is
 moved. Each gets the online backup whatever it is named (`live.db` as much as
 `conclave.sqlite`). If it is reached through links, the file they reach is
@@ -215,7 +218,11 @@ To apply it:
      SQLite out. With Redis configured, the archive must hold a Redis
      snapshot (or `--only sqlite,files` leaves Redis out), the live Redis
      must answer and take the URL's credentials, and the snapshot must load
-     into a throwaway server. All of this is settled before the first rename,
+     into a throwaway server: this host's `redis-server`, else the live
+     server's version in Docker when the host's cannot read it. The snapshot
+     is read from the database it was taken from, which the backup records,
+     and written into the one the target URL names, so a drill into another
+     database restores the same keys. All of this is settled before the first rename,
      so a Redis that is down, refuses the password or cannot load the dump
      changes nothing.
    - It builds the whole restored tree in a root-only staging dir beside the
