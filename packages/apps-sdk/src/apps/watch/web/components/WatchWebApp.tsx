@@ -586,7 +586,7 @@ export function WatchWebApp() {
 
           {hasVideo ? (
             <div
-              className={`absolute bottom-5 left-1/2 z-10 w-[min(34rem,calc(100%-1.5rem))] -translate-x-1/2 overflow-hidden rounded-2xl border border-white/10 transition-opacity duration-200 ${
+              className={`absolute bottom-5 left-1/2 z-10 w-[min(34rem,calc(100%-1.5rem))] -translate-x-1/2 overflow-hidden rounded-2xl border border-white/10 transition-opacity duration-[120ms] ${
                 controlsVisible ? "opacity-100" : "pointer-events-none opacity-0"
               }`}
               style={{
@@ -644,7 +644,7 @@ export function WatchWebApp() {
 
       {hasVideo ? (
         <aside
-          className={`flex min-h-0 shrink-0 flex-col overflow-hidden border-white/10 transition-all duration-300 ease-out lg:max-h-none ${
+          className={`flex min-h-0 shrink-0 flex-col overflow-hidden border-white/10 transition-[max-height,width,border-top-width,border-left-width] duration-[120ms] ease-out lg:max-h-none ${
             railOpen
               ? "max-h-[38%] border-t lg:w-72 lg:border-l lg:border-t-0"
               : "max-h-0 lg:w-0"
