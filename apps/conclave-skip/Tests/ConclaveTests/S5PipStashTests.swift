@@ -8,7 +8,7 @@ struct S5PipStashTests {
     private let remote = "r@example.com#r"
 
     private func joinedViewModel() -> MeetingViewModel {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state.participants[remote] = Participant(id: remote, isCameraOff: false)
         viewModel.state.pinnedUserId = remote
         viewModel.state.connectionState = .joined
@@ -49,7 +49,7 @@ struct S5PipStashTests {
     }
 
     @Test func noRequestIsSentWhileNotInACall() {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         #expect(!viewModel.setPipStashed(true))
         #expect(viewModel.isPipStashed, "the stash is still recorded for the next policy pass")
         #expect(!viewModel.setPipStashed(false))

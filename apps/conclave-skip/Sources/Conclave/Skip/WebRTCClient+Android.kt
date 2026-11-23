@@ -3512,7 +3512,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         clearAudioSource()
     }
 
-    private fun microphoneAudioConstraints(noiseSuppression: Boolean = SettingsPreferences.noiseSuppression()): MediaConstraints {
+    private fun microphoneAudioConstraints(noiseSuppression: Boolean = SettingsPreferences.noiseSuppression(defaults = skip.foundation.UserDefaults.standard)): MediaConstraints {
         return MediaConstraints().apply {
             optional.add(MediaConstraints.KeyValuePair("googEchoCancellation", "true"))
             optional.add(MediaConstraints.KeyValuePair("googAutoGainControl", "true"))

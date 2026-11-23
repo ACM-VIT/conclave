@@ -25,7 +25,7 @@ class ControlsBridgeTests {
         isCameraOff = isCameraOff, unreadChatCount = unreadChatCount, micToggleInFlight = micToggleInFlight)
 
     private class Harness(inputs: MeetingShellInputs, wide: Boolean = false) {
-        val shell = MeetingShellPresenter()
+        val shell = MeetingShellPresenter(defaults = IsolatedDefaults.make())
         val stage = StagePresenter(shell = shell)
         val controls = CallControlsPresenter(shell = shell, stage = stage)
         val commands = mutableListOf<MeetingShellCommand>()

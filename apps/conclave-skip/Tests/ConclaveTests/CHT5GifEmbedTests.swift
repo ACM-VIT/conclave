@@ -264,7 +264,7 @@ struct CHT5GifEmbedTests {
         #expect(ChatFixtureScript.embed(for: "https://other.example/") == nil)
         await ChatFixtureTestGate.acquire()
         defer { ChatFixtureTestGate.release() }
-        let shell = MeetingShellPresenter()
+        let shell = MeetingShellPresenter(defaults: IsolatedDefaults.make())
 
         let driver = ChatFixtureDriver.installOnStage(state: .busy, shell: shell)
         await settle()

@@ -6,7 +6,7 @@ import Testing
 @MainActor
 struct PeopleHostPoliciesTests {
     private func makePeople() -> PeoplePresenter {
-        let shell = MeetingShellPresenter()
+        let shell = MeetingShellPresenter(defaults: IsolatedDefaults.make())
         return PeoplePresenter(shell: shell, stage: StagePresenter(shell: shell))
     }
 
@@ -160,7 +160,7 @@ struct PeopleHostPoliciesTests {
     }
 
     @Test func speakerChangesPublishNothingToPeople() {
-        let shell = MeetingShellPresenter()
+        let shell = MeetingShellPresenter(defaults: IsolatedDefaults.make())
         let stage = StagePresenter(shell: shell)
         let people = PeoplePresenter(shell: shell, stage: stage)
         stage.apply(PeopleFixtureScript.stageInputs(for: .host6))
@@ -289,7 +289,7 @@ struct PeopleHostPoliciesTests {
     }
 
     @Test func theCoordinatorDismissalClosesThePresentation() throws {
-        let shell = MeetingShellPresenter()
+        let shell = MeetingShellPresenter(defaults: IsolatedDefaults.make())
         let people = PeoplePresenter(shell: shell, stage: StagePresenter(shell: shell))
         shell.panels.present(.participants, from: .call, destination: .peopleWaiting)
         let current = try #require(shell.panels.snapshot.current)
@@ -346,7 +346,7 @@ struct PeopleHostPoliciesTests {
         #expect(PeopleRowPolicy.avatarSeed(name: "Avery Lee Smith", userId: "user-1", isLocal: false)
                 == FacehashPresentation.seed(name: "Avery Lee", id: "user-1"))
         #expect(PeopleRowPolicy.avatarSeed(name: "", userId: "me", isLocal: true) == FacehashPresentation.seed(name: "You", id: "me"))
-        let shell = MeetingShellPresenter()
+        let shell = MeetingShellPresenter(defaults: IsolatedDefaults.make())
         let stage = StagePresenter(shell: shell)
         let people = PeoplePresenter(shell: shell, stage: stage)
         stage.apply(PeopleFixtureScript.stageInputs(for: .host6))
@@ -411,7 +411,7 @@ struct PeopleHostPoliciesTests {
 @Suite(.serialized)
 struct PeopleViewModelWiringTests {
     private func makeJoinedViewModel() -> MeetingViewModel {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.roomId = "room-a"

@@ -23,7 +23,7 @@ class StageBridgeTests {
     private val android360 = viewport(360.0, 800.0, 84.0, 124.0, heightClass = StageSizeClass.medium)
 
     private fun presenter(inputs: StageInputs, at: StageViewport = iphoneSE): StagePresenter {
-        val stage = StagePresenter(shell = MeetingShellPresenter())
+        val stage = StagePresenter(shell = MeetingShellPresenter(defaults = IsolatedDefaults.make()))
         stage.setViewport(at)
         stage.apply(inputs)
         return stage
@@ -123,7 +123,7 @@ class StageBridgeTests {
 
     @Test fun promotionWaitsAndSwapsAtMostOncePerEightSeconds() {
         var clock = 10_000.0
-        val stage = StagePresenter(shell = MeetingShellPresenter())
+        val stage = StagePresenter(shell = MeetingShellPresenter(defaults = IsolatedDefaults.make()))
         stage.now = { clock }
         stage.setViewport(iphoneSE)
         stage.apply(StageFixtureScript.base(count = 12))

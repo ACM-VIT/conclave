@@ -62,7 +62,7 @@ enum CrashReporting {
     static let installIdKey = "conclave.crashReports.installId"
     static let launchDelayMillis = 5_000
 
-    static func currentConfig(defaults: UserDefaults = UserDefaults.standard) -> CrashReportingConfig {
+    static func currentConfig(defaults: UserDefaults) -> CrashReportingConfig {
         let isDebug = DiagnosticsBuild.isDebug
         return CrashReportingConfig(
             projectKey: configuredValue(CrashReportingPolicy.projectKeyKey) ?? "",
@@ -86,7 +86,7 @@ enum CrashReporting {
     }
 
     /// Random and never tied to an account; it only lets PostHog count affected installs.
-    static func installId(defaults: UserDefaults = UserDefaults.standard) -> String {
+    static func installId(defaults: UserDefaults) -> String {
         if let existing = defaults.string(forKey: installIdKey), !existing.isEmpty {
             return existing
         }
@@ -107,15 +107,16 @@ enum CrashReporting {
 
     static func scheduleUpload(diagnostics: CallDiagnostics? = nil, afterMillis: Int = CrashReporting.launchDelayMillis) {
         Task { @MainActor in
-            if CrashReportingPolicy.endpoint(currentConfig()) == nil { return }
+            let defaults = UserDefaults.standard
+            if CrashReportingPolicy.endpoint(currentConfig(defaults: defaults)) == nil { return }
             try? await Task.sleep(nanoseconds: UInt64(Double(afterMillis) * 1_000_000.0))
             let target = diagnostics ?? CallDiagnostics.shared
             await CrashReportUploader.shared.upload(
                 store: target.store,
-                config: currentConfig(),
-                context: context(info: target.hooks.info(), installId: installId()),
+                config: currentConfig(defaults: defaults),
+                context: context(info: target.hooks.info(), installId: installId(defaults: defaults)),
                 transport: CrashReportHTTPTransport(),
-                allowsSending: { SettingsPreferences.shareCrashReports() }
+                allowsSending: { SettingsPreferences.shareCrashReports(defaults: defaults) }
             )
         }
     }

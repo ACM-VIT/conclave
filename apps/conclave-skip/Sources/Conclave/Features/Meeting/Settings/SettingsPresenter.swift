@@ -94,51 +94,51 @@ enum SettingsPreferences {
 
     static let shareCrashReportsKey = "conclave.pref.shareCrashReports"
 
-    static func noiseSuppression(defaults: UserDefaults = UserDefaults.standard) -> Bool {
+    static func noiseSuppression(defaults: UserDefaults) -> Bool {
         boolValue(noiseSuppressionKey, fallback: true, defaults: defaults)
     }
 
-    static func setNoiseSuppression(_ on: Bool, defaults: UserDefaults = UserDefaults.standard) {
+    static func setNoiseSuppression(_ on: Bool, defaults: UserDefaults) {
         defaults.set(on, forKey: noiseSuppressionKey)
     }
 
-    static func alwaysShowControls(defaults: UserDefaults = UserDefaults.standard) -> Bool {
+    static func alwaysShowControls(defaults: UserDefaults) -> Bool {
         boolValue(alwaysShowControlsKey, fallback: false, defaults: defaults)
     }
 
-    static func setAlwaysShowControls(_ on: Bool, defaults: UserDefaults = UserDefaults.standard) {
+    static func setAlwaysShowControls(_ on: Bool, defaults: UserDefaults) {
         defaults.set(on, forKey: alwaysShowControlsKey)
     }
 
-    static func haptics(defaults: UserDefaults = UserDefaults.standard) -> Bool {
+    static func haptics(defaults: UserDefaults) -> Bool {
         boolValue(hapticsKey, fallback: true, defaults: defaults)
     }
 
-    static func setHaptics(_ on: Bool, defaults: UserDefaults = UserDefaults.standard) {
+    static func setHaptics(_ on: Bool, defaults: UserDefaults) {
         defaults.set(on, forKey: hapticsKey)
     }
 
-    static func knockSound(defaults: UserDefaults = UserDefaults.standard) -> Bool {
+    static func knockSound(defaults: UserDefaults) -> Bool {
         boolValue(knockSoundKey, fallback: false, defaults: defaults)
     }
 
-    static func setKnockSound(_ on: Bool, defaults: UserDefaults = UserDefaults.standard) {
+    static func setKnockSound(_ on: Bool, defaults: UserDefaults) {
         defaults.set(on, forKey: knockSoundKey)
     }
 
-    static func handSound(defaults: UserDefaults = UserDefaults.standard) -> Bool {
+    static func handSound(defaults: UserDefaults) -> Bool {
         boolValue(handSoundKey, fallback: false, defaults: defaults)
     }
 
-    static func setHandSound(_ on: Bool, defaults: UserDefaults = UserDefaults.standard) {
+    static func setHandSound(_ on: Bool, defaults: UserDefaults) {
         defaults.set(on, forKey: handSoundKey)
     }
 
-    static func shareCrashReports(defaults: UserDefaults = UserDefaults.standard) -> Bool {
+    static func shareCrashReports(defaults: UserDefaults) -> Bool {
         boolValue(shareCrashReportsKey, fallback: true, defaults: defaults)
     }
 
-    static func setShareCrashReports(_ on: Bool, defaults: UserDefaults = UserDefaults.standard) {
+    static func setShareCrashReports(_ on: Bool, defaults: UserDefaults) {
         defaults.set(on, forKey: shareCrashReportsKey)
     }
 
@@ -815,6 +815,7 @@ final class SettingsPreviewHooks {
         }
         hooks.setMirror = { on in
             LocalPreviewController.shared.setMirrorPreference(on)
+            LocalVideoMirrorPreference.shared.update(on)
         }
         hooks.cameraPermission = {
             MediaPermissionStatusProvider.status(LobbyMediaKind.camera)
@@ -1008,7 +1009,7 @@ final class SettingsPresenter {
     @ObservationIgnored private(set) var hasEditedName = false
 
     init(scope: SettingsScope = SettingsScope.call, platform: SettingsPlatform = SettingsPlatform.current,
-         defaults: UserDefaults = UserDefaults.standard) {
+         defaults: UserDefaults) {
         self.scope = scope
         self.platform = platform
         self.defaults = defaults
@@ -1212,7 +1213,6 @@ final class SettingsPresenter {
     func setMirrorsSelfView(_ on: Bool) {
         guard prefs.mirrorsSelfView != on else { return }
         NativeVideoPreferences.setMirrorsSelfView(on, defaults: defaults)
-        LocalVideoMirrorPreference.shared.update(on)
         previewHooks.setMirror(on)
         preferenceWritten(SettingsPreferenceID.mirror)
     }
