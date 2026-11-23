@@ -503,14 +503,14 @@ const migrateJsonScheduledWebinarsToSqlite = (
   sqlite: ScheduledWebinarPersistence,
   json: ScheduledWebinarPersistence,
 ): number => {
-  const existing = sqlite.load();
-  if (existing.length > 0) return 0;
+  const existing = sqlite.loadState();
+  if (existing.records.length > 0 || existing.deletedAt.size > 0) return 0;
 
-  const legacy = json.load();
-  if (legacy.length === 0) return 0;
+  const legacy = json.loadState();
+  if (legacy.records.length === 0 && legacy.deletedAt.size === 0) return 0;
 
-  sqlite.saveChanged(legacy);
-  return sqlite.load().length;
+  sqlite.saveChanged(legacy.records, [...legacy.deletedAt].map(([id, deletedAt]) => ({ id, deletedAt })));
+  return legacy.records.length + legacy.deletedAt.size;
 };
 
 export const createScheduledWebinarPersistence = (): ScheduledWebinarPersistence => {
@@ -528,7 +528,7 @@ export const createScheduledWebinarPersistence = (): ScheduledWebinarPersistence
   );
   if (migrated > 0) {
     Logger.info(
-      `Migrated ${migrated} scheduled webinar(s) from JSON into SQLite`,
+      `Migrated ${migrated} scheduled webinar record(s) and deletion(s) from JSON into SQLite`,
     );
   }
   return sqlitePersistence;

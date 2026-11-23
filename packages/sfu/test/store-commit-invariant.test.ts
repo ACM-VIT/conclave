@@ -94,7 +94,7 @@ const openPersistence = (mode: Mode): ScheduledMeetingPersistence => {
       ? failingOnce(sqlite(), "sqlite", ["saveChanged", "importIfNewer"])
       : mode === "json"
         ? createScheduledMeetingPersistence()
-        : createRedisScheduledMeetingPersistence(redis!.url, prefix, failingOnce(sqlite(), "mirror", ["saveChanged", "importIfNewer", "syncFrom"]));
+        : createRedisScheduledMeetingPersistence(redis!.url, prefix, failingOnce(sqlite(), "mirror", ["mirror", "syncFrom"]));
   open.push(persistence);
   return persistence;
 };
@@ -380,7 +380,7 @@ describe.skipIf(!hasRedis)("a scheduling save in Redis mode", () => {
   };
   const redisProfiles = async (): Promise<string[]> => (await raw!.hKeys(`${prefix}:scheduling:profiles`)).sort();
   const open = () => {
-    const mirror = failingOnce(createSqliteSchedulingPersistence(sqlitePath()), "mirror", ["save", "importIfNewer", "syncFrom"]);
+    const mirror = failingOnce(createSqliteSchedulingPersistence(sqlitePath()), "mirror", ["mirror", "syncFrom"]);
     const persistence = createRedisSchedulingPersistence(redis!.url, prefix, mirror);
     closers.push(() => persistence.close?.());
     return persistence;
@@ -388,6 +388,31 @@ describe.skipIf(!hasRedis)("a scheduling save in Redis mode", () => {
   const closers: Array<() => unknown> = [];
   afterEach(async () => {
     for (const close of closers.splice(0)) await close();
+  });
+
+  it("keeps a profile another SFU saves after a mirror rebuild read Redis", async () => {
+    const sfuB = createRedisSchedulingPersistence(redis!.url, prefix, createSqliteSchedulingPersistence(sqlitePath()));
+    closers.push(() => sfuB.close?.());
+    await sfuB.load();
+    const mirrorA = createSqliteSchedulingPersistence(sqlitePath());
+    const syncFrom = mirrorA.syncFrom.bind(mirrorA);
+    const readRedis = gate();
+    const rebuild = gate();
+    mirrorA.syncFrom = async (...args: Parameters<typeof syncFrom>) => {
+      readRedis.open();
+      await rebuild.opened;
+      return syncFrom(...args);
+    };
+    const sfuA = createRedisSchedulingPersistence(redis!.url, prefix, mirrorA);
+    closers.push(() => sfuA.close?.());
+
+    const loading = sfuA.load();
+    await readRedis.opened;
+    await sfuB.save({ profiles: [profileRecord("planned-before-read", Date.now() - 60_000)], availability: [], eventTypes: [], calendars: [] });
+    rebuild.open();
+    await loading;
+
+    expect([await redisProfiles(), mirrorProfiles()]).toEqual([["planned-before-read"], ["planned-before-read"]]);
   });
 
   it("leaves nothing on disk when Redis refuses it", async () => {
@@ -408,5 +433,106 @@ describe.skipIf(!hasRedis)("a scheduling save in Redis mode", () => {
 
     await persistence.save({ profiles: [profileRecord("second", 6)], availability: [], eventTypes: [], calendars: [] });
     expect([await redisProfiles(), mirrorProfiles()]).toEqual([["first", "second"], ["first", "second"]]);
+  });
+});
+
+const meetingRecord = (id: string, updatedAt: number): ScheduledMeeting =>
+  ({
+    id, clientId: "conclave", roomCode: `${id}-room`, title: id, hostEmail: "host@example.test", hostName: "", hostUserId: null,
+    scheduledStartAt: Date.now() + 3_600_000, scheduledEndAt: Date.now() + 7_200_000, status: "scheduled", startedAt: null,
+    endedAt: null, createdAt: 1, createdBy: "host@example.test", updatedAt, source: "manual", eventTypeId: null,
+  }) as unknown as ScheduledMeeting;
+
+const gate = () => {
+  let open = (): void => {};
+  const opened = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return { opened, open };
+};
+
+describe.skipIf(!hasRedis)("a mirror rebuild", () => {
+  it("keeps every change another SFU commits after the rebuild read Redis", async () => {
+    const sfuB = createRedisScheduledMeetingPersistence(redis!.url, prefix, createSqliteScheduledMeetingPersistence(sqlitePath()));
+    open.push(sfuB);
+    await sfuB.loadState();
+    const edited = meetingRecord("edited-after-read", Date.now() - 120_000);
+    const removed = meetingRecord("deleted-after-read", Date.now() - 120_000);
+    await sfuB.saveChanged([edited, removed]);
+    const mirrorA = createSqliteScheduledMeetingPersistence(sqlitePath());
+    const syncFrom = mirrorA.syncFrom.bind(mirrorA);
+    const readRedis = gate();
+    const rebuild = gate();
+    mirrorA.syncFrom = async (...args: Parameters<typeof syncFrom>) => {
+      readRedis.open();
+      await rebuild.opened;
+      return syncFrom(...args);
+    };
+    const sfuA = createRedisScheduledMeetingPersistence(redis!.url, prefix, mirrorA);
+    open.push(sfuA);
+
+    const loading = sfuA.loadState();
+    await readRedis.opened;
+    await sfuB.saveChanged([meetingRecord("planned-before-read", Date.now() - 60_000), { ...edited, title: "edited", updatedAt: Date.now() }]);
+    await sfuB.saveChanged([], [{ id: removed.id, deletedAt: Date.now() }]);
+    rebuild.open();
+    await loading;
+
+    const stored = await authority("redis");
+    expect(stored.records["planned-before-read"]).toBeDefined();
+    expect(stored.records["edited-after-read"]?.title).toBe("edited");
+    expect(stored.records["deleted-after-read"]).toBeUndefined();
+    expect(sqliteRows()).toEqual(stored);
+  });
+});
+
+describe("a JSON store moved to SQLite", () => {
+  it("keeps a meeting the host deleted deleted when a recovery file still holds it", async () => {
+    vi.stubEnv("SCHEDULED_MEETINGS_PERSISTENCE", "json");
+    const inJson = await startState("json");
+    const deleted = await changeMeetings(inJson.scheduledMeetings, inJson.scheduledMeetingPersistence, [], (draft) =>
+      createScheduledMeeting(draft, { title: "moved", scheduledStartAt: Date.now() + 3_600_000 }, HOST),
+    );
+    const beforeDelete = structuredClone(deleted);
+    await changeMeetings(inJson.scheduledMeetings, inJson.scheduledMeetingPersistence, [deleted.id], (draft) =>
+      deleteScheduledMeeting(draft, deleted.id),
+    );
+    writeRecoveryFile([beforeDelete, { id: "broken" }]);
+    await closeAll();
+
+    vi.stubEnv("SCHEDULED_MEETINGS_PERSISTENCE", "sqlite");
+    const inSqlite = createSfuState({ roomRegistry: new LocalRoomRegistry({ instanceId: "moved", instanceUrl: "http://localhost", ttlMs: 45000 }) });
+    const persistence = createScheduledMeetingPersistence();
+    open.push(persistence);
+    await initScheduledMeetings(inSqlite, persistence);
+
+    expect(inSqlite.scheduledMeetings.byId.has(deleted.id)).toBe(false);
+    expect(sqliteRows()).toEqual({ records: {}, deleted: [deleted.id] });
+  });
+
+  it("keeps a webinar the host deleted deleted when a recovery file still holds it", async () => {
+    vi.stubEnv("SCHEDULED_WEBINARS_PERSISTENCE", "json");
+    vi.stubEnv("SCHEDULED_WEBINARS_PATH", join(stateDir, "json", "scheduled-webinars.json"));
+    const start = async () => {
+      const state = createSfuState({ roomRegistry: new LocalRoomRegistry({ instanceId: "webinars-moved", instanceUrl: "http://localhost", ttlMs: 45000 }) });
+      await initScheduledWebinars(state);
+      return state;
+    };
+    const inJson = await start();
+    const webinar = webinarRecord("moved-webinar", 5);
+    await changeWebinars(inJson.scheduledWebinars, inJson.scheduledWebinarPersistence, [], (draft) => {
+      draft.byId.set(webinar.id, webinar as never);
+    });
+    await changeWebinars(inJson.scheduledWebinars, inJson.scheduledWebinarPersistence, [webinar.id], (draft) =>
+      deleteScheduledWebinar(draft, webinar.id),
+    );
+    const dir = join(stateDir, "import", "sfu-old");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "scheduled-webinars.json"), JSON.stringify([webinar, { id: "broken" }]));
+
+    vi.stubEnv("SCHEDULED_WEBINARS_PERSISTENCE", "sqlite");
+    const inSqlite = await start();
+    expect(inSqlite.scheduledWebinars.byId.has(webinar.id)).toBe(false);
+    expect([...inSqlite.scheduledWebinars.deletedAt.keys()]).toEqual([webinar.id]);
   });
 });

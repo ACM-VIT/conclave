@@ -20,6 +20,8 @@ import {
 } from "./redisPersistence.js";
 import { canonicalizeClientId } from "./clientIds.js";
 import { assertSqliteWritable } from "./sqliteWriteCheck.js";
+import { addMirrorVersionColumn } from "./sqliteMirrorVersion.js";
+import { NEXT_VERSION_LUA } from "./redisCommitVersion.js";
 import { describeEntry, importFallbackFiles, requireArray, requireRecord } from "./fallbackImport.js";
 import { commitStampedJson, readStampedJson } from "./stampedJsonFile.js";
 import { mergeNewestStamp } from "./stampedMerge.js";
@@ -682,12 +684,17 @@ const normalizeStoredMeeting = (raw: unknown): ScheduledMeeting | null => {
   };
 };
 
-/**
- * The SQLite store, which can also serve as Redis's mirror: `syncFrom` makes
- * it match what Redis held at `readAt`, keeping rows written after that.
- */
+type VersionedMeetings = { version: number; state: StoredMeetings };
+
+export type MirroredMeetingChange = {
+  version: number;
+  upserts: ScheduledMeeting[];
+  deletions: Array<MeetingDeletion & { removed: boolean }>;
+};
+
 type SqliteMeetingStore = ScheduledMeetingPersistence & {
-  syncFrom: (authority: StoredMeetings, readAt: number) => Promise<void>;
+  mirror: (change: MirroredMeetingChange) => Promise<void>;
+  syncFrom: (authority: StoredMeetings, version: number) => Promise<void>;
 };
 
 export const createSqliteScheduledMeetingPersistence = (
@@ -730,6 +737,8 @@ export const createSqliteScheduledMeetingPersistence = (
       deleted_at INTEGER NOT NULL
     );
   `);
+  addMirrorVersionColumn(db, "scheduled_meetings");
+  addMirrorVersionColumn(db, "scheduled_meeting_tombstones");
 
   const upsertSql = (guard: ">=" | ">") => `
     INSERT INTO scheduled_meetings (
@@ -822,13 +831,18 @@ export const createSqliteScheduledMeetingPersistence = (
     }
   };
 
-  if (legacyJsonPath && loadStateSync().records.length === 0) {
-    const legacy = readMeetingsState(legacyJsonPath).records;
-    if (legacy.length > 0) {
+  const current = loadStateSync();
+  if (legacyJsonPath && current.records.length === 0 && current.deletedAt.size === 0) {
+    const legacy = readMeetingsState(legacyJsonPath);
+    if (legacy.records.length > 0 || legacy.deletedAt.size > 0) {
       inTransaction(() => {
-        for (const meeting of legacy) upsertMeeting(meeting);
+        for (const meeting of legacy.records) upsertMeeting(meeting);
+        for (const [id, deletedAt] of legacy.deletedAt) {
+          deleteOlder.run(id, deletedAt);
+          markDeleted.run(id, deletedAt);
+        }
       });
-      Logger.info(`Migrated ${legacy.length} scheduled meeting(s) from JSON into SQLite`);
+      Logger.info(`Migrated ${legacy.records.length} scheduled meeting(s) and ${legacy.deletedAt.size} deletion(s) from JSON into SQLite`);
     }
   }
 
@@ -838,9 +852,51 @@ export const createSqliteScheduledMeetingPersistence = (
       markDeleted.run(id, deletedAt);
     }
   };
-  const loadStamps = db.prepare("SELECT id, updated_at FROM scheduled_meetings");
-  const deleteRow = db.prepare("DELETE FROM scheduled_meetings WHERE id = ?");
-  const deleteStamp = db.prepare("DELETE FROM scheduled_meeting_tombstones WHERE id = ?");
+  const mirrorUpsert = db.prepare(`
+    INSERT INTO scheduled_meetings (
+      id, client_id, room_code, status, scheduled_start_at,
+      scheduled_end_at, updated_at, payload_json, mirror_version
+    )
+    SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9
+    WHERE NOT EXISTS (
+      SELECT 1 FROM scheduled_meeting_tombstones WHERE id = ?1 AND mirror_version > ?9
+    )
+    ON CONFLICT(id) DO UPDATE SET
+      client_id = excluded.client_id,
+      room_code = excluded.room_code,
+      status = excluded.status,
+      scheduled_start_at = excluded.scheduled_start_at,
+      scheduled_end_at = excluded.scheduled_end_at,
+      updated_at = excluded.updated_at,
+      payload_json = excluded.payload_json,
+      mirror_version = excluded.mirror_version
+    WHERE scheduled_meetings.mirror_version <= excluded.mirror_version
+  `);
+  const mirrorMark = db.prepare(`
+    INSERT INTO scheduled_meeting_tombstones (id, deleted_at, mirror_version) VALUES (?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      deleted_at = excluded.deleted_at,
+      mirror_version = excluded.mirror_version
+    WHERE scheduled_meeting_tombstones.mirror_version <= excluded.mirror_version
+  `);
+  const mirrorRemove = db.prepare("DELETE FROM scheduled_meetings WHERE id = ? AND mirror_version <= ?");
+  const mirrorRows = db.prepare("SELECT id, mirror_version FROM scheduled_meetings");
+  const mirrorStamps = db.prepare("SELECT id, mirror_version FROM scheduled_meeting_tombstones");
+  const dropRow = db.prepare("DELETE FROM scheduled_meetings WHERE id = ?");
+  const dropStamp = db.prepare("DELETE FROM scheduled_meeting_tombstones WHERE id = ?");
+  const mirrorMeeting = (meeting: ScheduledMeeting, version: number): void => {
+    mirrorUpsert.run(
+      meeting.id,
+      meeting.clientId,
+      meeting.roomCode,
+      meeting.status,
+      meeting.scheduledStartAt,
+      meeting.scheduledEndAt,
+      meeting.updatedAt,
+      JSON.stringify(meeting),
+      version,
+    );
+  };
 
   return {
     saveChanged: async (meetings, deletions = []) => {
@@ -851,16 +907,25 @@ export const createSqliteScheduledMeetingPersistence = (
       });
     },
     importIfNewer: async (meeting) => upsertMeeting(meeting, insertIfNewer),
-    syncFrom: async (authority, readAt) => {
+    mirror: async ({ version, upserts, deletions }) => {
       inTransaction(() => {
-        for (const meeting of authority.records) upsertMeeting(meeting);
-        markDeletions([...authority.deletedAt].map(([id, deletedAt]) => ({ id, deletedAt })));
-        const live = new Set(authority.records.map((meeting) => meeting.id));
-        for (const row of loadStamps.all() as Array<{ id: unknown; updated_at: unknown }>) {
-          if (!live.has(String(row.id)) && Number(row.updated_at) <= readAt) deleteRow.run(String(row.id));
+        for (const meeting of upserts) mirrorMeeting(meeting, version);
+        for (const { id, deletedAt, removed } of deletions) {
+          mirrorMark.run(id, deletedAt, version);
+          if (removed) mirrorRemove.run(id, version);
         }
-        for (const row of loadTombstones.all() as Array<{ id: unknown; deleted_at: unknown }>) {
-          if (!authority.deletedAt.has(String(row.id)) && Number(row.deleted_at) <= readAt) deleteStamp.run(String(row.id));
+      });
+    },
+    syncFrom: async (authority, version) => {
+      inTransaction(() => {
+        for (const meeting of authority.records) mirrorMeeting(meeting, version);
+        for (const [id, deletedAt] of authority.deletedAt) mirrorMark.run(id, deletedAt, version);
+        const live = new Set(authority.records.map((meeting) => meeting.id));
+        for (const row of mirrorRows.all() as Array<{ id: unknown; mirror_version: unknown }>) {
+          if (!live.has(String(row.id)) && Number(row.mirror_version) <= version) dropRow.run(String(row.id));
+        }
+        for (const row of mirrorStamps.all() as Array<{ id: unknown; mirror_version: unknown }>) {
+          if (!authority.deletedAt.has(String(row.id)) && Number(row.mirror_version) <= version) dropStamp.run(String(row.id));
         }
       });
     },
@@ -903,7 +968,7 @@ end
 return 0
 `;
 
-const CLAIM_EMAIL_REMINDER_SCRIPT = `
+const CLAIM_EMAIL_REMINDER_SCRIPT = `${NEXT_VERSION_LUA}
 local key = KEYS[1]
 local meetingId = ARGV[1]
 local now = tonumber(ARGV[2]) or 0
@@ -955,10 +1020,10 @@ meeting["updatedAt"] = now
 
 local nextPayload = cjson.encode(meeting)
 redis.call("HSET", key, meetingId, nextPayload)
-return nextPayload
+return { nextVersion(KEYS[2]), nextPayload }
 `;
 
-const STORED_AT_LUA = `
+const STORED_AT_LUA = `${NEXT_VERSION_LUA}
 local function storedAt(hash, id)
   local current = redis.call("HGET", hash, id)
   if not current then return nil end
@@ -969,10 +1034,16 @@ end
 
 local function markDeleted(hash, tombstones, id, deletedAt)
   local currentAt = storedAt(hash, id)
-  if currentAt and currentAt < deletedAt then redis.call("HDEL", hash, id) end
+  local removed = 0
+  if currentAt and currentAt < deletedAt then
+    redis.call("HDEL", hash, id)
+    removed = 1
+  end
   local previous = tonumber(redis.call("HGET", tombstones, id) or "")
   if not previous or previous < deletedAt then redis.call("HSET", tombstones, id, deletedAt) end
+  return removed
 end
+
 
 local function setIfNewer(hash, tombstones, id, updatedAt, payload, strict)
   local deletedAt = tonumber(redis.call("HGET", tombstones, id) or "")
@@ -986,23 +1057,25 @@ end
 
 const SET_MEETING_IF_NEWER_SCRIPT = `${STORED_AT_LUA}
 if redis.call("EXISTS", KEYS[3]) == 0 then return redis.error_reply("NOSEED the scheduled meetings store is not seeded") end
-return setIfNewer(KEYS[1], KEYS[2], ARGV[1], tonumber(ARGV[2]) or 0, ARGV[3], ARGV[4] == "newer")
+local applied = setIfNewer(KEYS[1], KEYS[2], ARGV[1], tonumber(ARGV[2]) or 0, ARGV[3], ARGV[4] == "newer")
+return { nextVersion(KEYS[4]), applied }
 `;
 
-/** Commits a change's meetings and deletion stamps in one script: Redis's single commit point. */
 const SAVE_MEETINGS_SCRIPT = `${STORED_AT_LUA}
 if redis.call("EXISTS", KEYS[3]) == 0 then return redis.error_reply("NOSEED the scheduled meetings store is not seeded") end
+local outcomes = {}
 local count = tonumber(ARGV[1]) or 0
 local index = 2
 for _ = 1, count do
-  setIfNewer(KEYS[1], KEYS[2], ARGV[index], tonumber(ARGV[index + 1]) or 0, ARGV[index + 2], false)
+  outcomes[#outcomes + 1] = setIfNewer(KEYS[1], KEYS[2], ARGV[index], tonumber(ARGV[index + 1]) or 0, ARGV[index + 2], false)
   index = index + 3
 end
 while index <= #ARGV do
-  markDeleted(KEYS[1], KEYS[2], ARGV[index], tonumber(ARGV[index + 1]) or 0)
+  outcomes[#outcomes + 1] = markDeleted(KEYS[1], KEYS[2], ARGV[index], tonumber(ARGV[index + 1]) or 0)
   index = index + 2
 end
-return 1
+table.insert(outcomes, 1, nextVersion(KEYS[4]))
+return outcomes
 `;
 
 /**
@@ -1026,6 +1099,7 @@ while index <= #ARGV do
   markDeleted(KEYS[1], KEYS[2], ARGV[index], tonumber(ARGV[index + 1]) or 0)
   index = index + 2
 end
+nextVersion(KEYS[4])
 redis.call("SET", KEYS[3], "1")
 return 1
 `;
@@ -1050,6 +1124,7 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
   private key: string;
   private tombstonesKey: string;
   private seededKey: string;
+  private versionKey: string;
   private keyPrefix: string;
   private startPromise: Promise<void> | null = null;
   private started = false;
@@ -1070,6 +1145,7 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
     this.key = `${options.keyPrefix}:scheduled-meetings`;
     this.tombstonesKey = `${options.keyPrefix}:scheduled-meetings:tombstones`;
     this.seededKey = `${options.keyPrefix}:scheduled-meetings:seeded`;
+    this.versionKey = `${options.keyPrefix}:scheduled-meetings:version`;
     this.client.on("ready", () => {
       this.seeded = null;
     });
@@ -1099,26 +1175,44 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
   async saveChanged(meetings: ScheduledMeeting[], deletions: MeetingDeletion[] = []): Promise<void> {
     if (meetings.length === 0 && deletions.length === 0) return;
     return this.queueWrite(async () => {
-      await this.evalSeeded([
+      const [version, ...outcomes] = (await this.evalSeeded([
         "EVAL",
         SAVE_MEETINGS_SCRIPT,
-        "3",
+        "4",
         this.key,
         this.tombstonesKey,
         this.seededKey,
+        this.versionKey,
         String(meetings.length),
         ...meetings.flatMap((meeting) => [meeting.id, String(meeting.updatedAt), JSON.stringify(meeting)]),
         ...deletions.flatMap(({ id, deletedAt }) => [id, String(deletedAt)]),
-      ]);
-      await this.updateMirror(() => this.mirror.saveChanged(meetings, deletions));
+      ])) as number[];
+      await this.updateMirror({
+        version: Number(version),
+        upserts: meetings.filter((_, index) => Number(outcomes[index]) === 1),
+        deletions: deletions.map((deletion, index) => ({ ...deletion, removed: Number(outcomes[meetings.length + index]) === 1 })),
+      });
     });
   }
 
   async importIfNewer(meeting: ScheduledMeeting): Promise<boolean> {
     let applied = false;
     await this.queueWrite(async () => {
-      applied = Number(await this.setIfNewer(meeting, "newer")) === 1;
-      await this.updateMirror(() => this.mirror.importIfNewer(meeting));
+      const [version, outcome] = (await this.evalSeeded([
+        "EVAL",
+        SET_MEETING_IF_NEWER_SCRIPT,
+        "4",
+        this.key,
+        this.tombstonesKey,
+        this.seededKey,
+        this.versionKey,
+        meeting.id,
+        String(meeting.updatedAt),
+        JSON.stringify(meeting),
+        "newer",
+      ])) as number[];
+      applied = Number(outcome) === 1;
+      await this.updateMirror({ version: Number(version), upserts: applied ? [meeting] : [], deletions: [] });
     });
     return applied;
   }
@@ -1160,17 +1254,19 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
       const result = await this.client.sendCommand([
         "EVAL",
         CLAIM_EMAIL_REMINDER_SCRIPT,
-        "1",
+        "2",
         this.key,
+        this.versionKey,
         claim.meetingId,
         String(claim.now),
         String(claim.leadMs),
       ]);
-      if (typeof result !== "string" || !result) return;
-      const meeting = normalizeStoredMeeting(JSON.parse(result));
+      if (!Array.isArray(result)) return;
+      const [version, payload] = result as unknown as [number, string];
+      const meeting = normalizeStoredMeeting(JSON.parse(String(payload)));
       if (!meeting) return;
       claimed = meeting;
-      await this.updateMirror(() => this.mirror.saveChanged([meeting]));
+      await this.updateMirror({ version: Number(version), upserts: [meeting], deletions: [] });
     });
     return claimed;
   }
@@ -1180,16 +1276,15 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
    * SFU never loads memory from the mirror, which can lag Redis.
    */
   async loadState(): Promise<StoredMeetings> {
-    let authority: StoredMeetings;
-    const readAt = Date.now();
+    let authority: VersionedMeetings;
     try {
       await this.start();
       authority = await this.readAuthority();
     } catch (error) {
       throw new Error("Could not read scheduled meetings from Redis, which holds them; not loading the local mirror instead", { cause: error });
     }
-    if (this.mirrorStale) await this.updateMirror(() => this.mirror.syncFrom(authority, readAt));
-    return authority;
+    if (this.mirrorStale) await this.rebuildMirror(authority);
+    return authority.state;
   }
 
   async load(): Promise<ScheduledMeeting[]> {
@@ -1208,52 +1303,60 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
     await this.client.quit();
   }
 
-  private async readAuthority(): Promise<StoredMeetings> {
+  private async readAuthority(): Promise<VersionedMeetings> {
     let read = await this.readSeeded();
     if (!read) {
       this.seeded = null;
       read = await this.readSeeded();
     }
     if (!read) throw new Error("Redis lost its scheduled meetings while reseeding");
-    const [values, tombstones] = read;
+    const [values, tombstones, version] = read;
     return {
-      records: values
-        .map((value) => normalizeStoredMeeting(JSON.parse(value)))
-        .filter((entry): entry is ScheduledMeeting => Boolean(entry)),
-      deletedAt: new Map(Object.entries(tombstones).map(([id, deletedAt]) => [id, Number(deletedAt)])),
+      version: Number(version ?? 0),
+      state: {
+        records: values
+          .map((value) => normalizeStoredMeeting(JSON.parse(value)))
+          .filter((entry): entry is ScheduledMeeting => Boolean(entry)),
+        deletedAt: new Map(Object.entries(tombstones).map(([id, deletedAt]) => [id, Number(deletedAt)])),
+      },
     };
   }
 
-  /**
-   * Brings the mirror up to date after Redis committed. A mirror that may have
-   * missed a change is rebuilt from Redis first. A failure is logged and only
-   * leaves the mirror stale: the change is already durable in Redis.
-   */
-  private async updateMirror(write: () => MaybePromise<unknown>): Promise<void> {
+  private async updateMirror(change: MirroredMeetingChange): Promise<void> {
+    if (this.mirrorStale) {
+      await this.rebuildMirror();
+      return;
+    }
     try {
-      if (this.mirrorStale) {
-        const readAt = Date.now();
-        await this.mirror.syncFrom(await this.readAuthority(), readAt);
-      } else {
-        await write();
-      }
-      this.mirrorStale = false;
+      await this.mirror.mirror(change);
     } catch (error) {
       this.mirrorStale = true;
       Logger.warn("[ScheduledMeetings] The SQLite mirror missed a change; it is rebuilt from Redis on the next write", error);
     }
   }
 
+  private async rebuildMirror(read?: VersionedMeetings): Promise<void> {
+    try {
+      const authority = read ?? (await this.readAuthority());
+      await this.mirror.syncFrom(authority.state, authority.version);
+      this.mirrorStale = false;
+    } catch (error) {
+      this.mirrorStale = true;
+      Logger.warn("[ScheduledMeetings] Could not rebuild the SQLite mirror from Redis; it is tried again on the next write", error);
+    }
+  }
+
   /** Runs before the first read or write, so nothing this SFU writes can make an empty Redis look established. */
-  private async readSeeded(): Promise<[string[], Record<string, string>] | null> {
+  private async readSeeded(): Promise<[string[], Record<string, string>, string | null] | null> {
     await this.ensureSeeded();
-    const [seeded, values, tombstones] = (await this.client
+    const [seeded, values, tombstones, version] = (await this.client
       .multi()
       .exists(this.seededKey)
       .hVals(this.key)
       .hGetAll(this.tombstonesKey)
-      .exec()) as unknown as [number, string[], Record<string, string>];
-    return Number(seeded) === 1 ? [values, tombstones] : null;
+      .get(this.versionKey)
+      .exec()) as unknown as [number, string[], Record<string, string>, string | null];
+    return Number(seeded) === 1 ? [values, tombstones, version] : null;
   }
 
   /** Runs a write script; if Redis lost its data since the seed, reseeds and retries once. */
@@ -1282,10 +1385,11 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
     const seeded = await this.client.sendCommand([
       "EVAL",
       SEED_MEETINGS_SCRIPT,
-      "3",
+      "4",
       this.key,
       this.tombstonesKey,
       this.seededKey,
+      this.versionKey,
       String(local.records.length),
       ...local.records.flatMap((meeting) => [meeting.id, String(meeting.updatedAt), JSON.stringify(meeting)]),
       ...[...local.deletedAt].flatMap(([id, deletedAt]) => [id, String(deletedAt)]),
@@ -1293,21 +1397,6 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
     if (Number(seeded) === 1 && local.records.length > 0) {
       Logger.info(`Seeded Redis with ${local.records.length} scheduled meeting(s) from local persistence`);
     }
-  }
-
-  private async setIfNewer(meeting: ScheduledMeeting, mode: "save" | "newer"): Promise<unknown> {
-    return this.evalSeeded([
-      "EVAL",
-      SET_MEETING_IF_NEWER_SCRIPT,
-      "3",
-      this.key,
-      this.tombstonesKey,
-      this.seededKey,
-      meeting.id,
-      String(meeting.updatedAt),
-      JSON.stringify(meeting),
-      mode,
-    ]);
   }
 
   /** Writes in order; each caller gets its own write's result. */

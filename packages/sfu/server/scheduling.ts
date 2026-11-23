@@ -36,6 +36,8 @@ import { assertSqliteWritable } from "./sqliteWriteCheck.js";
 import { finiteNumber, importFallbackFiles, readJsonStore, replaceIfNewer, requireArray } from "./fallbackImport.js";
 import { mergeNewestStamp } from "./stampedMerge.js";
 import { assignInPlace, persistThenApply, sameStoredValue, serialized } from "./persistThenApply.js";
+import { NEXT_VERSION_LUA } from "./redisCommitVersion.js";
+import { addMirrorVersionColumn } from "./sqliteMirrorVersion.js";
 
 type MaybePromise<T> = T | Promise<T>;
 
@@ -1152,12 +1154,17 @@ const schedulingRecordsOf = (snapshot: SchedulingSnapshot): SchedulingRecordWrit
   ];
 };
 
-/**
- * The SQLite store, which can also serve as Redis's mirror: `syncFrom` makes
- * it match what Redis held at `readAt`, keeping rows written after that.
- */
+type VersionedSnapshot = { version: number; snapshot: SchedulingSnapshot };
+
+export type MirroredSchedulingChange = {
+  version: number;
+  records: SchedulingRecordWrite[];
+  deletions: Array<SchedulingDeletion & { removed: boolean }>;
+};
+
 type SqliteSchedulingStore = SchedulingPersistence & {
-  syncFrom: (authority: SchedulingSnapshot, readAt: number) => Promise<void>;
+  mirror: (change: MirroredSchedulingChange) => Promise<void>;
+  syncFrom: (authority: SchedulingSnapshot, version: number) => Promise<void>;
 };
 
 export const createSqliteSchedulingPersistence = (
@@ -1191,6 +1198,8 @@ export const createSqliteSchedulingPersistence = (
       PRIMARY KEY (kind, id)
     );
   `);
+  addMirrorVersionColumn(db, "scheduling_records");
+  addMirrorVersionColumn(db, "scheduling_tombstones");
 
   const storedAt = `CASE scheduling_records.kind
     WHEN 'availability' THEN COALESCE(
@@ -1255,23 +1264,57 @@ export const createSqliteSchedulingPersistence = (
       markDeleted.run(kind, id, deletedAt);
     }
   };
-  const loadStamps = db.prepare("SELECT kind, id, updated_at FROM scheduling_records");
-  const deleteRow = db.prepare("DELETE FROM scheduling_records WHERE kind = ? AND id = ?");
-  const deleteStamp = db.prepare("DELETE FROM scheduling_tombstones WHERE kind = ? AND id = ?");
+  const mirrorUpsert = db.prepare(`
+    INSERT INTO scheduling_records (kind, id, client_id, updated_at, payload_json, mirror_version)
+    SELECT ?1, ?2, ?3, ?4, ?5, ?6
+    WHERE NOT EXISTS (
+      SELECT 1 FROM scheduling_tombstones WHERE kind = ?1 AND id = ?2 AND mirror_version > ?6
+    )
+    ON CONFLICT(kind, id) DO UPDATE SET
+      client_id = excluded.client_id,
+      updated_at = excluded.updated_at,
+      payload_json = excluded.payload_json,
+      mirror_version = excluded.mirror_version
+    WHERE scheduling_records.mirror_version <= excluded.mirror_version
+  `);
+  const mirrorMark = db.prepare(`
+    INSERT INTO scheduling_tombstones (kind, id, deleted_at, mirror_version) VALUES (?, ?, ?, ?)
+    ON CONFLICT(kind, id) DO UPDATE SET
+      deleted_at = excluded.deleted_at,
+      mirror_version = excluded.mirror_version
+    WHERE scheduling_tombstones.mirror_version <= excluded.mirror_version
+  `);
+  const mirrorRemove = db.prepare("DELETE FROM scheduling_records WHERE kind = ? AND id = ? AND mirror_version <= ?");
+  const mirrorRows = db.prepare("SELECT kind, id, mirror_version FROM scheduling_records");
+  const mirrorStamps = db.prepare("SELECT kind, id, mirror_version FROM scheduling_tombstones");
+  const dropRow = db.prepare("DELETE FROM scheduling_records WHERE kind = ? AND id = ?");
+  const dropStamp = db.prepare("DELETE FROM scheduling_tombstones WHERE kind = ? AND id = ?");
+  const mirrorRecord = (record: SchedulingRecordWrite, version: number): void => {
+    mirrorUpsert.run(record.kind, record.id, record.clientId, record.updatedAt, JSON.stringify(record.payload), version);
+  };
   return {
     save: async (snapshot) => inTransaction(() => applySnapshot(snapshot)),
     importIfNewer: async (record) => write(upsertIfNewer, record),
-    syncFrom: async (authority, readAt) =>
+    mirror: async ({ version, records, deletions }) =>
       inTransaction(() => {
-        applySnapshot(authority);
+        for (const record of records) mirrorRecord(record, version);
+        for (const { kind, id, deletedAt, removed } of deletions) {
+          mirrorMark.run(kind, id, deletedAt, version);
+          if (removed) mirrorRemove.run(kind, id, version);
+        }
+      }),
+    syncFrom: async (authority, version) =>
+      inTransaction(() => {
+        for (const record of schedulingRecordsOf(authority)) mirrorRecord(record, version);
+        for (const { kind, id, deletedAt } of authority.deleted ?? []) mirrorMark.run(kind, id, deletedAt, version);
         const key = (kind: unknown, id: unknown) => `${String(kind)}:${String(id)}`;
         const live = new Set(schedulingRecordsOf(authority).map((record) => key(record.kind, record.id)));
         const stamped = new Set((authority.deleted ?? []).map((entry) => key(entry.kind, entry.id)));
-        for (const row of loadStamps.all() as Array<{ kind: unknown; id: unknown; updated_at: unknown }>) {
-          if (!live.has(key(row.kind, row.id)) && Number(row.updated_at) <= readAt) deleteRow.run(row.kind, row.id);
+        for (const row of mirrorRows.all() as Array<{ kind: unknown; id: unknown; mirror_version: unknown }>) {
+          if (!live.has(key(row.kind, row.id)) && Number(row.mirror_version) <= version) dropRow.run(row.kind, row.id);
         }
-        for (const row of loadTombstones.all() as Array<{ kind: unknown; id: unknown; deleted_at: unknown }>) {
-          if (!stamped.has(key(row.kind, row.id)) && Number(row.deleted_at) <= readAt) deleteStamp.run(row.kind, row.id);
+        for (const row of mirrorStamps.all() as Array<{ kind: unknown; id: unknown; mirror_version: unknown }>) {
+          if (!stamped.has(key(row.kind, row.id)) && Number(row.mirror_version) <= version) dropStamp.run(row.kind, row.id);
         }
       }),
     load: async (options) => {
@@ -1420,7 +1463,7 @@ const createFileSchedulingPersistence = (
   };
 };
 
-const SCHEDULING_LUA = `
+const SCHEDULING_LUA = `${NEXT_VERSION_LUA}
 local function storedAt(hash, id)
   local current = redis.call("HGET", hash, id)
   if not current then return nil end
@@ -1440,33 +1483,40 @@ end
 
 local function markDeleted(hash, tombstones, tombstoneId, id, deletedAt)
   local currentAt = storedAt(hash, id)
-  if currentAt and currentAt < deletedAt then redis.call("HDEL", hash, id) end
+  local removed = 0
+  if currentAt and currentAt < deletedAt then
+    redis.call("HDEL", hash, id)
+    removed = 1
+  end
   local previous = tonumber(redis.call("HGET", tombstones, tombstoneId) or "")
   if not previous or previous < deletedAt then redis.call("HSET", tombstones, tombstoneId, deletedAt) end
+  return removed
 end
 `;
 
 const UPSERT_SCHEDULING_RECORD_SCRIPT = `${SCHEDULING_LUA}
 if redis.call("EXISTS", KEYS[3]) == 0 then return redis.error_reply("NOSEED the scheduling store is not seeded") end
-return setIfNewer(KEYS[1], KEYS[2], ARGV[2], ARGV[1], tonumber(ARGV[3]) or 0, ARGV[4], ARGV[5] == "newer")
+local applied = setIfNewer(KEYS[1], KEYS[2], ARGV[2], ARGV[1], tonumber(ARGV[3]) or 0, ARGV[4], ARGV[5] == "newer")
+return { nextVersion(KEYS[4]), applied }
 `;
 
-/** Commits a save's records and deletion stamps in one script: Redis's single commit point. */
 const SAVE_SCHEDULING_RECORDS_SCRIPT = `${SCHEDULING_LUA}
 if redis.call("EXISTS", KEYS[6]) == 0 then return redis.error_reply("NOSEED the scheduling store is not seeded") end
+local outcomes = {}
 local count = tonumber(ARGV[1]) or 0
 local index = 2
 for _ = 1, count do
   local kindIndex, kind, id = tonumber(ARGV[index]), ARGV[index + 1], ARGV[index + 2]
-  setIfNewer(KEYS[kindIndex], KEYS[5], kind .. ":" .. id, id, tonumber(ARGV[index + 3]) or 0, ARGV[index + 4], false)
+  outcomes[#outcomes + 1] = setIfNewer(KEYS[kindIndex], KEYS[5], kind .. ":" .. id, id, tonumber(ARGV[index + 3]) or 0, ARGV[index + 4], false)
   index = index + 5
 end
 while index <= #ARGV do
   local kindIndex, kind, id = tonumber(ARGV[index]), ARGV[index + 1], ARGV[index + 2]
-  markDeleted(KEYS[kindIndex], KEYS[5], kind .. ":" .. id, id, tonumber(ARGV[index + 3]) or 0)
+  outcomes[#outcomes + 1] = markDeleted(KEYS[kindIndex], KEYS[5], kind .. ":" .. id, id, tonumber(ARGV[index + 3]) or 0)
   index = index + 4
 end
-return 1
+table.insert(outcomes, 1, nextVersion(KEYS[7]))
+return outcomes
 `;
 
 /**
@@ -1494,6 +1544,7 @@ while index <= #ARGV do
   markDeleted(KEYS[kindIndex], KEYS[5], kind .. ":" .. id, id, tonumber(ARGV[index + 3]) or 0)
   index = index + 4
 end
+nextVersion(KEYS[7])
 redis.call("SET", KEYS[6], "1")
 return 1
 `;
@@ -1524,6 +1575,7 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
   private calendarsKey: string;
   private tombstonesKey: string;
   private seededKey: string;
+  private versionKey: string;
   private startPromise: Promise<void> | null = null;
   private started = false;
   private pendingWrite: Promise<void> = Promise.resolve();
@@ -1543,6 +1595,7 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
     this.calendarsKey = `${options.keyPrefix}:scheduling:calendars`;
     this.tombstonesKey = `${options.keyPrefix}:scheduling:tombstones`;
     this.seededKey = `${options.keyPrefix}:scheduling:seeded`;
+    this.versionKey = `${options.keyPrefix}:scheduling:version`;
     this.client.on("ready", () => {
       this.seeded = null;
     });
@@ -1573,13 +1626,14 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
     const records = schedulingRecordsOf(snapshot);
     const deleted = snapshot.deleted ?? [];
     return this.queueWrite(async () => {
-      await this.evalSeeded([
+      const [version, ...outcomes] = (await this.evalSeeded([
         "EVAL",
         SAVE_SCHEDULING_RECORDS_SCRIPT,
-        "6",
+        "7",
         ...this.hashKeys,
         this.tombstonesKey,
         this.seededKey,
+        this.versionKey,
         String(records.length),
         ...records.flatMap((record) => [
           kindIndex(record.kind),
@@ -1589,16 +1643,21 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
           JSON.stringify({ updatedAt: record.updatedAt, payload: record.payload }),
         ]),
         ...deleted.flatMap(({ kind, id, deletedAt }) => [kindIndex(kind), kind, id, String(deletedAt)]),
-      ]);
-      await this.updateMirror(() => this.mirror.save(snapshot));
+      ])) as number[];
+      await this.updateMirror({
+        version: Number(version),
+        records: records.filter((_, index) => Number(outcomes[index]) === 1),
+        deletions: deleted.map((deletion, index) => ({ ...deletion, removed: Number(outcomes[records.length + index]) === 1 })),
+      });
     });
   }
 
   async importIfNewer(record: SchedulingRecordWrite): Promise<boolean> {
     let applied = false;
     await this.queueWrite(async () => {
-      applied = Number(await this.upsertRecord(record, "newer")) === 1;
-      await this.updateMirror(() => this.mirror.importIfNewer(record));
+      const [version, outcome] = (await this.upsertRecord(record, "newer")) as number[];
+      applied = Number(outcome) === 1;
+      await this.updateMirror({ version: Number(version), records: applied ? [record] : [], deletions: [] });
     });
     return applied;
   }
@@ -1608,19 +1667,18 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
    * SFU never loads memory from the mirror, which can lag Redis.
    */
   async load(): Promise<SchedulingSnapshot> {
-    let authority: SchedulingSnapshot;
-    const readAt = Date.now();
+    let authority: VersionedSnapshot;
     try {
       await this.start();
       authority = await this.readAuthority();
     } catch (error) {
       throw new Error("Could not read scheduling records from Redis, which holds them; not loading the local mirror instead", { cause: error });
     }
-    if (this.mirrorStale) await this.updateMirror(() => this.mirror.syncFrom(authority, readAt));
-    return authority;
+    if (this.mirrorStale) await this.rebuildMirror(authority);
+    return authority.snapshot;
   }
 
-  private async readAuthority(): Promise<SchedulingSnapshot> {
+  private async readAuthority(): Promise<VersionedSnapshot> {
     await this.ensureSeeded();
     const loaded = await this.loadHashes();
     if (loaded) return loaded;
@@ -1631,23 +1689,27 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
     return reseeded;
   }
 
-  /**
-   * Brings the mirror up to date after Redis committed. A mirror that may have
-   * missed a change is rebuilt from Redis first. A failure is logged and only
-   * leaves the mirror stale: the change is already durable in Redis.
-   */
-  private async updateMirror(write: () => MaybePromise<unknown>): Promise<void> {
+  private async updateMirror(change: MirroredSchedulingChange): Promise<void> {
+    if (this.mirrorStale) {
+      await this.rebuildMirror();
+      return;
+    }
     try {
-      if (this.mirrorStale) {
-        const readAt = Date.now();
-        await this.mirror.syncFrom(await this.readAuthority(), readAt);
-      } else {
-        await write();
-      }
-      this.mirrorStale = false;
+      await this.mirror.mirror(change);
     } catch (error) {
       this.mirrorStale = true;
       Logger.warn("[Scheduling] The SQLite mirror missed a change; it is rebuilt from Redis on the next write", error);
+    }
+  }
+
+  private async rebuildMirror(read?: VersionedSnapshot): Promise<void> {
+    try {
+      const authority = read ?? (await this.readAuthority());
+      await this.mirror.syncFrom(authority.snapshot, authority.version);
+      this.mirrorStale = false;
+    } catch (error) {
+      this.mirrorStale = true;
+      Logger.warn("[Scheduling] Could not rebuild the SQLite mirror from Redis; it is tried again on the next write", error);
     }
   }
 
@@ -1697,10 +1759,11 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
     const seeded = await this.client.sendCommand([
       "EVAL",
       SEED_SCHEDULING_SCRIPT,
-      "6",
+      "7",
       ...this.hashKeys,
       this.tombstonesKey,
       this.seededKey,
+      this.versionKey,
       String(records.length),
       ...records.flatMap((record) => [
         kindIndex(record.kind),
@@ -1720,10 +1783,11 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
     return this.evalSeeded([
       "EVAL",
       UPSERT_SCHEDULING_RECORD_SCRIPT,
-      "3",
+      "4",
       this.hashKeys[SCHEDULING_KINDS.indexOf(record.kind)],
       this.tombstonesKey,
       this.seededKey,
+      this.versionKey,
       record.id,
       `${record.kind}:${record.id}`,
       String(record.updatedAt),
@@ -1743,8 +1807,8 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
     return writePromise;
   }
 
-  private async loadHashes(): Promise<SchedulingSnapshot | null> {
-    const [seeded, profiles, availability, eventTypes, calendars, tombstones] = (await this.client
+  private async loadHashes(): Promise<VersionedSnapshot | null> {
+    const [seeded, profiles, availability, eventTypes, calendars, tombstones, version] = (await this.client
       .multi()
       .exists(this.seededKey)
       .hVals(this.profilesKey)
@@ -1752,9 +1816,10 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
       .hVals(this.eventTypesKey)
       .hVals(this.calendarsKey)
       .hGetAll(this.tombstonesKey)
-      .exec()) as unknown as [number, string[], string[], string[], string[], Record<string, string>];
+      .get(this.versionKey)
+      .exec()) as unknown as [number, string[], string[], string[], string[], Record<string, string>, string | null];
     if (Number(seeded) !== 1) return null;
-    return normalizeSnapshot({
+    return { version: Number(version ?? 0), snapshot: normalizeSnapshot({
       profiles: profiles
         .map((value) => parseRedisRecord<SchedulingProfile>(value))
         .filter(isPresent),
@@ -1776,7 +1841,7 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
         const split = key.indexOf(":");
         return { kind: key.slice(0, split), id: key.slice(split + 1), deletedAt: Number(deletedAt) };
       }) as SchedulingDeletion[],
-    });
+    }) };
   }
 
   private async loadLegacySnapshot(): Promise<SchedulingSnapshot> {
