@@ -440,6 +440,11 @@ export class AuthorityInstance {
     return this.views.projectedFor(actor.role, actor.subject);
   }
 
+  /** The bytes one viewer's view as committed now takes in a snapshot's rows. */
+  viewBytes(actor: Actor): number {
+    return this.views.viewBytes(actor.role, actor.subject);
+  }
+
   /** A whole view for one audience: its role's rows and its own. */
   snapshot(actor: Actor): ViewSnapshot {
     return this.views.snapshot(actor.role, actor.subject);

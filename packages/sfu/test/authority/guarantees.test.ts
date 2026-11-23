@@ -1796,7 +1796,8 @@ describe("large views and slow sockets", () => {
 
     expect(parts.length).toBeGreaterThan(2);
     for (const part of parts) {
-      const bytes = Buffer.byteLength(JSON.stringify(part.rows));
+      // The whole frame as it went, envelope and all.
+      const bytes = Buffer.byteLength(JSON.stringify(part));
       // A part holds at most the part size on the wire, or a single row.
       expect(part.rows.length === 1 || bytes <= small.chunkBytes, `part ${part.part}: ${bytes} bytes`).toBe(true);
     }
@@ -1804,6 +1805,76 @@ describe("large views and slow sockets", () => {
     expect(parts.map((part) => part.last)).toEqual(parts.map((_, index) => index === parts.length - 1));
     expect([2, 3, 4].map((index) => field(held.get(`n${index}`) ?? null, "text"))).toEqual(grown);
     expect(raviTab.rows("notes").length).toBe(5);
+  });
+
+  it("keeps every whole frame of a snapshot within the part size, envelope and all", async () => {
+    const room = new Harness([ledgerAuthority], {
+      runtime: { limits: { ...DEFAULT_AUTHORITY_LIMITS, mutationsPerSecond: 1e6, mutationBurst: 1e6 } },
+    });
+    const hostTab = await room.open(host, ledgerContract);
+    await hostTab.act("deal", { count: 5_000 });
+    await room.deliver();
+    const raviTab = await room.open(ravi, ledgerContract);
+    await room.drain();
+
+    const parts = replaces(raviTab.frames);
+    const sizes = parts.map((part) => Buffer.byteLength(JSON.stringify(part)));
+
+    expect(parts.length).toBeGreaterThan(2);
+    expect(sizes.filter((size) => size > DEFAULT_AUTHORITY_LIMITS.chunkBytes)).toEqual([]);
+    expect(raviTab.rows("cards").length).toBe(5_000);
+  });
+
+  it("never lets a snapshot in parts grow past the snapshot limit while its parts are on their way", async () => {
+    const room = new Harness([ledgerAuthority], {
+      runtime: { limits: { ...DEFAULT_AUTHORITY_LIMITS, mutationsPerSecond: 1e6, mutationBurst: 1e6 } },
+    });
+    const hostTab = await room.open(host, ledgerContract);
+    for (let index = 0; index < 80; index += 1) {
+      await hostTab.act("card", { id: `c${index}`, text: `${index % 10}`.repeat(8_000) });
+    }
+    await room.deliver();
+    const raviTab = await room.open(ravi, ledgerContract);
+    await room.drain();
+    const entry = hostTab.client.entryFor(ledgerContract)!;
+    const name = "grows-past-the-limit";
+
+    // A view of about 650 KB comes in parts. Its first part has gone out.
+    void raviTab.raw(AUTHORITY_EVENTS.subscribe, {
+      roomEpoch: room.authority.roomEpoch,
+      instance: entry.instance,
+      app: entry.app,
+      major: entry.major,
+      subscription: name,
+    });
+    // Before the next part, every row grows, to about 1.1 MB in all.
+    const grew: boolean[] = [];
+    for (let index = 0; index < 80; index += 1) {
+      // The socket's own allowance refills with time. Setting the clock runs
+      // no timer, so the parts still wait.
+      vi.setSystemTime(Date.now() + 50);
+      const result = await hostTab.actWith(
+        { issuedAtMs: Date.now(), nonce: `grow-past-the-limit-${index}` },
+        "card",
+        { id: `c${index}`, text: `${index % 10}`.repeat(14_000) },
+      );
+      grew.push(result.ok);
+    }
+    await room.drain();
+    await room.deliver();
+    await room.drain();
+
+    const mine = raviTab.frames.filter((frame) => frame.subscription === name);
+    const parts = replaces(mine);
+    const assembled = parts.reduce((total, part) => total + Buffer.byteLength(JSON.stringify(part.rows)), 0);
+
+    expect(grew.every(Boolean)).toBe(true);
+    expect(parts.length).toBeGreaterThan(0);
+    // The view is withdrawn as too large before a part that would take it
+    // past the limit, so it is never installed.
+    expect(mine.some((frame) => frame.kind === "revoke" && frame.reason === "too-large")).toBe(true);
+    expect(parts.some((part) => part.last)).toBe(false);
+    expect(assembled).toBeLessThanOrEqual(DEFAULT_AUTHORITY_LIMITS.snapshotBytes);
   });
 
   it("keeps every part of a snapshot within the part size in real bytes, with keys and text that are not ASCII", async () => {
@@ -1824,7 +1895,8 @@ describe("large views and slow sockets", () => {
     const parts = replaces(raviTab.frames);
     const sizes = parts.map((part) => ({
       rows: part.rows.length,
-      bytes: Buffer.byteLength(JSON.stringify(part.rows)),
+      // The whole frame as it went, envelope and all.
+      bytes: Buffer.byteLength(JSON.stringify(part)),
     }));
     expect(parts.length).toBeGreaterThan(2);
     // A part holds at most the part size in bytes on the wire, or one row.

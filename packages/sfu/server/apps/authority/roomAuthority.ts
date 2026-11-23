@@ -82,6 +82,8 @@ type Subscription = {
     next: number;
     /** Parts sent so far, which numbers the next one. */
     sent: number;
+    /** The bytes of the rows the parts sent so far carried. */
+    bytes: number;
     held: HeldRows;
   } | null;
   /** The socket fell behind. Patches are skipped until it is replaced. */
@@ -238,16 +240,32 @@ const carried = (held: HeldRows, part: ReplaceFrame): void => {
   }
 };
 
+/** A part number at least as long as any a snapshot reaches, to size a later part. */
+const LATER_PART = 99_999;
+
+/** `[]`: what an empty array of rows takes in a frame. */
+const EMPTY_ROWS_BYTES = 2;
+
 /**
- * Splits a snapshot into parts whose rows take at most `chunkBytes` as JSON,
- * one row at least.
+ * The bytes a part leaves for its rows: the part size less the frame around
+ * them, measured as that frame goes on the wire, ids, clock, revision and
+ * the first part's grants included.
  */
-const partsOf = (rows: SizedRow[], chunkBytes: number): SizedRow[][] => {
+const rowBudget = (envelope: Omit<ReplaceFrame, "rows">, chunkBytes: number): number =>
+  chunkBytes - (Buffer.byteLength(JSON.stringify({ ...envelope, rows: [] })) - EMPTY_ROWS_BYTES);
+
+/**
+ * Splits a snapshot into parts whose whole frames take at most the part
+ * size, one row at least: `first` and `later` are what the first part and
+ * each later part leave for rows.
+ */
+const partsOf = (rows: SizedRow[], first: number, later: number): SizedRow[][] => {
   const parts: SizedRow[][] = [[]];
   let size = ARRAY_BYTES;
   for (const sized of rows) {
     const current = parts[parts.length - 1];
-    if (current.length > 0 && size + sized.bytes > chunkBytes) {
+    const budget = parts.length === 1 ? first : later;
+    if (current.length > 0 && size + sized.bytes > budget) {
       parts.push([sized]);
       size = ARRAY_BYTES + sized.bytes;
     } else {
@@ -1218,7 +1236,20 @@ export class RoomAuthority {
     const grants = subscription.instance.grants(subscription.actor, now);
     subscription.grantsSent = JSON.stringify(grants);
     subscription.grantsDue = false;
-    const parts = partsOf(rows, this.limits.chunkBytes);
+    const envelope = {
+      kind: "replace" as const,
+      subscription: subscription.id,
+      generation: subscription.generation,
+      serverNowMs: now,
+      part: 0,
+      last: false,
+    };
+    const parts = partsOf(
+      rows,
+      rowBudget({ ...envelope, grants, revision: subscription.viewRevision }, this.limits.chunkBytes),
+      // A later part is cut again as it leaves, to its own frame.
+      rowBudget({ ...envelope, part: LATER_PART }, this.limits.chunkBytes),
+    );
     const frames = parts.map(
       (part, index): ReplaceFrame => ({
         kind: "replace",
@@ -1236,7 +1267,8 @@ export class RoomAuthority {
     if (frames.length === 1) return;
     const held: HeldRows = new Map();
     carried(held, frames[0]);
-    subscription.transfer = { frames, next: 1, sent: 1, held };
+    const sentBytes = parts[0].reduce((total, sized) => total + sized.bytes, 0);
+    subscription.transfer = { frames, next: 1, sent: 1, bytes: sentBytes, held };
     this.continueTransfer(subscription, subscription.generation);
   }
 
@@ -1253,23 +1285,24 @@ export class RoomAuthority {
   private asCommitted(
     subscription: Subscription,
     planned: ProjectedRow[],
-  ): { rows: ProjectedRow[]; rest: ProjectedRow[] } {
+    budget: number,
+  ): { rows: ProjectedRow[]; rest: ProjectedRow[]; bytes: number } {
     const view = subscription.instance.committedView(subscription.actor);
     const rows: ProjectedRow[] = [];
-    let bytes = ARRAY_BYTES;
+    let size = ARRAY_BYTES;
     for (let index = 0; index < planned.length; index += 1) {
       const row = planned[index];
       const value = view.get(row.bucket, row.key);
       if (value === undefined) continue;
-      const size = view.bytes(row.bucket, row.key);
+      const bytes = view.bytes(row.bucket, row.key);
       // At least one row a part, as when the parts were first cut.
-      if (rows.length > 0 && bytes + size > this.limits.chunkBytes) {
-        return { rows, rest: planned.slice(index) };
+      if (rows.length > 0 && size + bytes > budget) {
+        return { rows, rest: planned.slice(index), bytes: size - ARRAY_BYTES };
       }
       rows.push(value === row.value ? row : { ...row, value });
-      bytes += size;
+      size += bytes;
     }
-    return { rows, rest: [] };
+    return { rows, rest: [], bytes: size - ARRAY_BYTES };
   }
 
   /**
@@ -1290,16 +1323,32 @@ export class RoomAuthority {
       if (this.refresh(subscription) !== "live") return;
       if (!this.hasRoom(subscription)) return;
       const planned = transfer.frames[transfer.next];
-      const { rows, rest } = this.asCommitted(subscription, planned.rows);
-      if (rest.length > 0) transfer.frames[transfer.next] = { ...planned, rows: rest };
-      else transfer.next += 1;
-      const part: ReplaceFrame = {
-        ...planned,
+      const { rows: _planned, ...plannedEnvelope } = planned;
+      const envelope = {
+        ...plannedEnvelope,
         serverNowMs: this.now(),
         part: transfer.sent,
-        last: transfer.next === transfer.frames.length,
-        rows,
+        last: false,
       };
+      const budget = rowBudget(envelope, this.limits.chunkBytes);
+      const { rows, rest, bytes } = this.asCommitted(subscription, planned.rows, budget);
+      if (rest.length > 0) transfer.frames[transfer.next] = { ...planned, rows: rest };
+      else transfer.next += 1;
+      const last = transfer.next === transfer.frames.length;
+      // Rows can grow while the parts are on their way. A view that would be
+      // over the snapshot limit, as the parts carry it or as the catch-up
+      // after the last part would leave it, is withdrawn before it can be
+      // installed.
+      const limit = this.limits.snapshotBytes;
+      if (
+        transfer.bytes + bytes > limit ||
+        (last && subscription.instance.viewBytes(subscription.actor) > limit)
+      ) {
+        this.revoke(subscription, "too-large");
+        return;
+      }
+      transfer.bytes += bytes;
+      const part: ReplaceFrame = { ...envelope, last, rows };
       transfer.sent += 1;
       this.emit(subscription, part);
       carried(transfer.held, part);

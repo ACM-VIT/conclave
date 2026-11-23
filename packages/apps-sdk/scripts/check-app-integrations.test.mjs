@@ -554,4 +554,3 @@ test("an app folder whose name no contract could have is reported", () => {
   assert.equal(checked.status, 1);
   assert.match(checked.output, new RegExp(`\\[${tooLong}\\] is not a valid app id: longer than 48`));
 });
-

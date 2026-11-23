@@ -12,7 +12,7 @@ import {
 } from "@conclave/apps-sdk/authority/server";
 
 const id = s.string({ min: 1, max: 32 });
-const text = s.string({ max: 4_096 });
+const text = s.string({ max: 20_000 });
 
 export const ledgerContract = defineContract({
   id: "ledger",

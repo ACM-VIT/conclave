@@ -550,6 +550,18 @@ export class ViewTracker {
     return { rows, version: this.version };
   }
 
+  /** The bytes one viewer's view as committed now takes in a snapshot's rows. */
+  viewBytes(role: Role, subject: Subject): number {
+    this.absorb();
+    let bytes = 0;
+    for (const audience of [this.roleAudience(role), this.subjectAudience(subject)]) {
+      for (const bucket of audience.buckets.values()) {
+        for (const row of bucket.rows.values()) bytes += row.bytes;
+      }
+    }
+    return bytes;
+  }
+
   /**
    * One viewer's view as committed right now, to read rows from. It is for
    * code that says later what a frame told it: reading here at the moment
