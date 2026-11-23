@@ -492,6 +492,7 @@ struct ENT9WebinarLandingTests {
         ]
         for (state, status) in expected {
             let session = PremeetingFixtureSession(state: state)
+            session.premeeting.nowMillis = { Self.t0 }
             session.start()
             defer { session.stop() }
             let routeId = session.premeeting.path.last?.id ?? -1

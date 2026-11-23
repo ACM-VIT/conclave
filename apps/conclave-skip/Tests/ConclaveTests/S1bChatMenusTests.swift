@@ -20,7 +20,7 @@ struct S1bChatMenusTests {
         let recipients = chat.composer.recipients
         #expect(recipients.map { $0.userId } == [avery, sam])
 
-        let shell = MeetingShellPresenter()
+        let shell = MeetingShellPresenter(defaults: IsolatedDefaults.make())
         let people = PeoplePresenter(shell: shell, stage: StagePresenter(shell: shell))
         people.apply(PeopleInputs.make(callSession: 1, phase: MeetingPhaseKind.inCall.rawValue, localUserId: local,
                                        participants: [PeopleParticipantInput.make(userId: local, displayName: "Jordan Lee", isLocal: true),

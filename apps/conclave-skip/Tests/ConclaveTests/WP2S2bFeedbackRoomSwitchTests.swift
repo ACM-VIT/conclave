@@ -33,7 +33,7 @@ struct WP2S2bFeedbackRoomSwitchTests {
     }
 
     @Test func aTokenIsDeliveredOnceAndNeverReplayedOnRemountOrPictureInPicture() throws {
-        let shell = MeetingShellPresenter()
+        let shell = MeetingShellPresenter(defaults: IsolatedDefaults.make())
         let identity = MeetingSessionIdentity(callSession: 1, attempt: 1, attemptToken: "attempt-1")
         shell.apply(MeetingShellInputs.make(identity: identity, connectionState: .connecting))
         func state() -> FeedbackSourceState {
@@ -116,7 +116,7 @@ struct WP2S2bFeedbackRoomSwitchTests {
     }
 
     @Test func sessionReadoutValuesAreMachineReadable() throws {
-        let shell = MeetingShellPresenter()
+        let shell = MeetingShellPresenter(defaults: IsolatedDefaults.make())
         let identity = MeetingSessionIdentity(callSession: 3, attempt: 7, attemptToken: "attempt")
         shell.apply(MeetingShellInputs.make(identity: identity, connectionState: .connecting))
         shell.apply(MeetingShellInputs.make(identity: identity, connectionState: .joined, isAdmin: true, isHandRaised: true))
@@ -160,7 +160,7 @@ struct WP2S2bFeedbackRoomSwitchTests {
 @Suite(.serialized)
 struct WP2S2bRoomSwitchViewModelTests {
     @Test func roomSwitchInputsReadTheShellPhaseAndTheCurrentJoinMode() {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.roomId = "lily-zoro-iris"
         viewModel.state.connectionState = ConnectionState.joined

@@ -8,7 +8,7 @@ struct STG9ActivityStageTests {
     private let names = ActivityStageNames(appId: "whiteboard", gameName: "Trivia")
 
     private func stage(_ inputs: StageInputs) -> StagePresenter {
-        let presenter = StagePresenter(shell: MeetingShellPresenter())
+        let presenter = StagePresenter(shell: MeetingShellPresenter(defaults: IsolatedDefaults.make()))
         presenter.setViewport(StagePoliciesTests.iphoneSE)
         presenter.apply(inputs)
         return presenter
@@ -146,7 +146,7 @@ struct STG9ActivityStageTests {
     }
 
     @Test func activitiesSessionSeesTheResolvedCard() {
-        let shell = MeetingShellPresenter()
+        let shell = MeetingShellPresenter(defaults: IsolatedDefaults.make())
         let presenter = StagePresenter(shell: shell)
         let session = ActivitySession(shell: shell, stage: presenter)
         session.bindStage()

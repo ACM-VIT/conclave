@@ -7,7 +7,7 @@ import Testing
 struct NativeRootFeedbackIntegrationTests {
     @MainActor
     private final class Owners {
-        let shell = MeetingShellPresenter()
+        let shell = MeetingShellPresenter(defaults: IsolatedDefaults.make())
         let stage: StagePresenter
         let controls: CallControlsPresenter
         let people: PeoplePresenter
@@ -215,7 +215,7 @@ struct NativeRootFeedbackIntegrationTests {
 
     @Test func premeetingInvalidInputPublishesOnceWithoutCoreOrShellDelivery() {
         let premeeting = PremeetingPresenter()
-        let shell = MeetingShellPresenter()
+        let shell = MeetingShellPresenter(defaults: IsolatedDefaults.make())
         var commands: [PremeetingCommand] = []
         premeeting.onCommand = { commands.append($0) }
         let shellBefore = shell.feedbackState

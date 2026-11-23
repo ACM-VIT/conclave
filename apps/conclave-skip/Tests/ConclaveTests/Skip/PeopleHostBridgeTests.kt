@@ -16,7 +16,7 @@ import org.robolectric.annotation.Config
 @Config(manifest = Config.NONE, sdk = [28])
 class PeopleHostBridgeTests {
     private fun people(): PeoplePresenter {
-        val shell = MeetingShellPresenter()
+        val shell = MeetingShellPresenter(defaults = IsolatedDefaults.make())
         return PeoplePresenter(shell = shell, stage = StagePresenter(shell = shell))
     }
 
@@ -64,7 +64,7 @@ class PeopleHostBridgeTests {
     }
 
     @Test fun oneRowMutationWritesOneRowAndSpeakersNone() {
-        val shell = MeetingShellPresenter()
+        val shell = MeetingShellPresenter(defaults = IsolatedDefaults.make())
         val stage = StagePresenter(shell = shell)
         val p = PeoplePresenter(shell = shell, stage = stage)
         stage.apply(PeopleFixtureScript.stageInputs(PeopleFixtureState.host6))
