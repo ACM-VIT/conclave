@@ -50,6 +50,7 @@ export const startSfu = async (
     failRecreate = 0,
     publicRoute = false,
     onRecreate = null,
+    dropDrainReply = false,
   } = {},
 ) => {
   const sfu = {
@@ -106,6 +107,8 @@ export const startSfu = async (
       // ends the instance's rooms.
       if (request.force && request.noticeMs) await new Promise((done) => setTimeout(done, request.noticeMs));
       if (request.force) sfu.rooms = 0;
+      // dropDrainReply: the drain is applied, then its reply is lost.
+      if (dropDrainReply && request.draining) return req.socket.destroy();
       return json({ draining: sfu.draining, forced: request.force === true });
     }
     if (url.pathname === "/stand-in/stop") {
@@ -226,10 +229,14 @@ const main = async () => {
       // image whatever it is told.
       // A service name nothing has tagged yet names the image the instance
       // started on, as it does on a host.
+      // DEPLOY_TEST_UNTAGGED_SERVICE_BUILDS: a host whose running images
+      // carry other names, where compose builds the checkout for a service
+      // name nothing has tagged.
       const told = process.env[imageVar(name)] || "vm-" + name;
-      const image = process.env.DEPLOY_TEST_COMPOSE_IGNORES_IMAGE
-        ? "sha256:running"
-        : tags[told] || (told === "vm-" + name ? (await state(name)).firstImage : "sha256:target");
+      const untagged = told === "vm-" + name
+        ? (process.env.DEPLOY_TEST_UNTAGGED_SERVICE_BUILDS ? "sha256:checkout-build" : (await state(name)).firstImage)
+        : "sha256:target";
+      const image = process.env.DEPLOY_TEST_COMPOSE_IGNORES_IMAGE ? "sha256:running" : tags[told] || untagged;
       const response = await fetch("http://127.0.0.1:" + sfus[name].port + "/stand-in/recreate?draining=" + draining + "&image=" + image + "&hash=" + encodeURIComponent(configHash(name)));
       if (!response.ok) process.exitCode = 1;
       // DEPLOY_TEST_KILL_AFTER_RECREATES: kill the deploy, as a crash or a
@@ -285,8 +292,10 @@ const main = async () => {
     process.exitCode = 1;
     return;
   }
-  // A rollback-<service> tag exists only once a deploy has set it.
-  if (args[0] === "image" && args[1] === "inspect" && /:rollback-/.test(args.at(-1)) && !(args.at(-1) in tags)) {
+  // A rollback-<service> tag exists only once a deploy has set it, and so
+  // does a service name on a host whose images carry other names.
+  const untaggedService = process.env.DEPLOY_TEST_UNTAGGED_SERVICE_BUILDS && /^vm-sfu-[a-z]+$/.test(args.at(-1));
+  if (args[0] === "image" && args[1] === "inspect" && (/:rollback-/.test(args.at(-1)) || untaggedService) && !(args.at(-1) in tags)) {
     process.exitCode = 1;
     return;
   }
@@ -423,12 +432,12 @@ export const deploy = async (
 // Runs `docker compose up -d <name>` through the stand-in, with no image
 // variable and no SFU_START_DRAINING, as an operator who restarts a service by
 // hand would: it starts whatever the service's own image name points at.
-export const composeUpByHand = async (sfus, { tags, dir }, name) => {
+export const composeUpByHand = async (sfus, { tags, dir, env: extra = {} }, name) => {
   await mkdir(dir, { recursive: true });
   const docker = path.join(dir, "docker");
   await writeFile(docker, dockerStandIn, { mode: 0o755 });
   const log = path.join(dir, "docker.log");
-  const env = { ...process.env, DEPLOY_TEST_SFUS: JSON.stringify(Object.fromEntries(Object.entries(sfus).map(([n, s]) => [n, { port: s.port }]))), DEPLOY_TEST_DOCKER_LOG: log, DEPLOY_TEST_DOCKER_TAGS: tags };
+  const env = { ...process.env, ...extra, DEPLOY_TEST_SFUS: JSON.stringify(Object.fromEntries(Object.entries(sfus).map(([n, s]) => [n, { port: s.port }]))), DEPLOY_TEST_DOCKER_LOG: log, DEPLOY_TEST_DOCKER_TAGS: tags };
   for (const variable of Object.keys(env)) if (variable.startsWith("SFU_IMAGE_") || variable === "SFU_START_DRAINING") delete env[variable];
   await run(docker, ["compose", "up", "-d", name], { env });
 };
