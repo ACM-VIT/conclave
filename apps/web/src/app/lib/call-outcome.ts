@@ -1,9 +1,21 @@
+import type { ReconnectRecoveryStatus } from "./types";
+
 export type CallOutcomeKind =
   | "left"
   | "connectionLost"
   | "endedByYou"
   | "endedByHost"
   | "removed";
+
+/**
+ * Reconnecting gave up for good after the call was joined, so the call ends
+ * as a lost connection; a brief reconnect stays on the meeting.
+ */
+export const reconnectEndedCall = (
+  phase: ReconnectRecoveryStatus["phase"] | undefined,
+  connectionState: string,
+  wasInCall: boolean,
+): boolean => wasInCall && connectionState === "error" && phase === "failed";
 
 export interface RejoinMedia {
   isMicOn: boolean;

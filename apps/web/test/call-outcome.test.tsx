@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import MeetingOutcomeScreen from "../src/app/components/MeetingOutcomeScreen";
 import {
   readRejoinIntent,
+  reconnectEndedCall,
   saveRejoinIntent,
   type CallOutcome,
   type CallOutcomeKind,
@@ -139,5 +140,16 @@ describe("rejoin intent", () => {
     expect(readRejoinIntent("xyz-defg-hij")).toBeNull();
     expect(readRejoinIntent(undefined)).toBeNull();
     expect(readRejoinIntent("abc-defg-hij", Date.now() + 11 * 60 * 1000)).toBeNull();
+  });
+});
+
+describe("a lost connection", () => {
+  it("ends the call only once reconnecting has failed for good, and only for someone who was in it", () => {
+    expect(reconnectEndedCall("waiting", "reconnecting", true)).toBe(false);
+    expect(reconnectEndedCall("connecting", "reconnecting", true)).toBe(false);
+    expect(reconnectEndedCall("failed", "reconnecting", true)).toBe(false);
+    expect(reconnectEndedCall("failed", "error", true)).toBe(true);
+    expect(reconnectEndedCall("failed", "error", false)).toBe(false);
+    expect(reconnectEndedCall(undefined, "error", true)).toBe(false);
   });
 });
