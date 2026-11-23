@@ -141,6 +141,44 @@ export function extractRoomCode(input: string): string {
   return sanitizeRoomCode(trimmed);
 }
 
+const BARE_LINK_HOST = String.raw`(?:localhost|\[[0-9a-f:.]+\]|[a-z0-9-]+(?:\.[a-z0-9-]+)+\.?)`;
+const MEETING_LINK = new RegExp(
+  String.raw`^(?:(?:https?:)?\/\/(?<prefixed>[^\/?#\\\s@]+)|(?<bare>${BARE_LINK_HOST}(?::\d{1,5})?))?\/(?<segment>[^\/?#\\\s]+)\/?(?:[?#]\S*)?$`,
+  "i",
+);
+const NOT_ROOM_CODES = new Set([
+  "null",
+  "undefined",
+  "delete-account",
+  "privacy",
+  "schedule",
+  "sfu-admin",
+  "sign-in",
+]);
+
+const isValidAuthority = (authority: string) => {
+  try {
+    new URL(`https://${authority}/`);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+export function roomCodeFromLink(text: string): string | null {
+  const { prefixed, bare, segment: rawSegment } = MEETING_LINK.exec(text.trim())?.groups ?? {};
+  const authority = prefixed ?? bare;
+  if (!rawSegment || (authority && !isValidAuthority(authority))) return null;
+  let segment: string;
+  try {
+    segment = decodeURIComponent(rawSegment).toLowerCase();
+  } catch {
+    return null;
+  }
+  if (NOT_ROOM_CODES.has(segment)) return null;
+  return segment && sanitizeRoomCode(segment) === segment ? segment : null;
+}
+
 export function createMeetError(
   error: unknown,
   defaultCode: MeetError["code"] = "UNKNOWN"

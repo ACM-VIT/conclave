@@ -38,6 +38,7 @@ import {
   generateRoomCode,
   ROOM_CODE_MAX_LENGTH,
   extractRoomCode,
+  roomCodeFromLink,
   sanitizeInstitutionDisplayName,
   sanitizeRoomCodeInput,
   sanitizeRoomCode,
@@ -1560,7 +1561,7 @@ function JoinScreen({
                       const pasted = e.clipboardData.getData("text");
                       if (isRoutedRoom || !pasted.includes("/")) return;
                       e.preventDefault();
-                      const code = extractRoomCode(pasted);
+                      const code = roomCodeFromLink(pasted);
                       if (code) onCodeChange(code);
                     }}
                     onKeyDown={(e) => {
