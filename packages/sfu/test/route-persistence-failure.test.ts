@@ -126,7 +126,7 @@ describe("a route whose save fails", () => {
     const created = await call("POST", "/scheduled-meetings", { title: "Planning", scheduledStartAt: later });
     expect(created.status).toBe(201);
     const id = (created.body.scheduledMeeting as { id: string }).id;
-    failSaves(state.scheduledMeetingPersistence!, ["saveChanged", "deleteRecords"]);
+    failSaves(state.scheduledMeetingPersistence!, ["saveChanged"]);
     const before = snapshot(state);
 
     const renamed = await call("PATCH", `/scheduled-meetings/${id}`, { title: "Renamed", roomCode: "fresh-room" });
@@ -147,7 +147,7 @@ describe("a route whose save fails", () => {
     const id = (created.body.scheduledMeeting as { id: string }).id;
     const deleteStarted = deferred();
     const failDelete = deferred();
-    vi.spyOn(state.scheduledMeetingPersistence!, "deleteRecords").mockImplementationOnce(async () => {
+    vi.spyOn(state.scheduledMeetingPersistence!, "saveChanged").mockImplementationOnce(async () => {
       deleteStarted.resolve();
       await failDelete.promise;
       throw new Error("database is locked");
@@ -171,7 +171,7 @@ describe("a route whose save fails", () => {
   it("lets only one of two creates racing for a code have it while the first save is still running", async () => {
     const { state, call } = await startSfu();
     const persistence = state.scheduledMeetingPersistence!;
-    const saveChanged = persistence.saveChanged!.bind(persistence);
+    const saveChanged = persistence.saveChanged.bind(persistence);
     const saveStarted = deferred();
     const finishSave = deferred();
     vi.spyOn(persistence, "saveChanged").mockImplementationOnce(async (meetings) => {
@@ -196,13 +196,13 @@ describe("a route whose save fails", () => {
     const created = await call("POST", "/scheduled-meetings", { title: "Planning", scheduledStartAt: later, roomCode: "free-room" });
     const id = (created.body.scheduledMeeting as { id: string }).id;
     const persistence = state.scheduledMeetingPersistence!;
-    const deleteRecords = persistence.deleteRecords!.bind(persistence);
+    const saveChanged = persistence.saveChanged.bind(persistence);
     const deleteStarted = deferred();
     const finishDelete = deferred();
-    vi.spyOn(persistence, "deleteRecords").mockImplementationOnce(async (deletions) => {
+    vi.spyOn(persistence, "saveChanged").mockImplementationOnce(async (meetings, deletions) => {
       deleteStarted.resolve();
       await finishDelete.promise;
-      await deleteRecords(deletions);
+      await saveChanged(meetings, deletions);
     });
 
     const deleting = call("DELETE", `/scheduled-meetings/${id}`);
@@ -221,7 +221,7 @@ describe("a route whose save fails", () => {
     const created = await call("POST", "/scheduled-webinars", { title: "Launch", scheduledStartAt: later, linkSlug: "launch-day" });
     expect(created.status).toBe(201);
     const id = (created.body.scheduledWebinar as { id: string }).id;
-    failSaves(state.scheduledWebinarPersistence!, ["saveChanged", "deleteRecords"]);
+    failSaves(state.scheduledWebinarPersistence!, ["saveChanged"]);
     const before = snapshot(state);
     const roomState = () => [state.webinarConfigs.size, state.webinarLinks.size];
     const roomStateBefore = roomState();
@@ -367,7 +367,7 @@ describe("a booking", () => {
     const outside = fakeOutsideServices();
     const { book } = await bookableHost(call);
     const persistence = state.scheduledMeetingPersistence!;
-    const saveChanged = persistence.saveChanged!.bind(persistence);
+    const saveChanged = persistence.saveChanged.bind(persistence);
     const allowRetry = deferred();
     let syncedSaves = 0;
     vi.spyOn(persistence, "saveChanged").mockImplementation(async (meetings) => {
@@ -442,7 +442,7 @@ describe("a booking", () => {
     const { state, call } = await startSfu();
     const { outside, booking, saved, startAt, answer } = await bookWithGoogleHeld(state, call);
     const persistence = state.scheduledMeetingPersistence!;
-    const saveChanged = persistence.saveChanged!.bind(persistence);
+    const saveChanged = persistence.saveChanged.bind(persistence);
     let syncedSaveFailed = false;
     vi.spyOn(persistence, "saveChanged").mockImplementation(async (meetings) => {
       if (!syncedSaveFailed && meetings.some((meeting) => meeting.calendarSyncStatus === "synced")) {

@@ -1152,9 +1152,17 @@ const schedulingRecordsOf = (snapshot: SchedulingSnapshot): SchedulingRecordWrit
   ];
 };
 
-const createSqliteSchedulingPersistence = (
+/**
+ * The SQLite store, which can also serve as Redis's mirror: `syncFrom` makes
+ * it match what Redis held at `readAt`, keeping rows written after that.
+ */
+type SqliteSchedulingStore = SchedulingPersistence & {
+  syncFrom: (authority: SchedulingSnapshot, readAt: number) => Promise<void>;
+};
+
+export const createSqliteSchedulingPersistence = (
   path: string = getSchedulingSqlitePath(),
-): SchedulingPersistence => {
+): SqliteSchedulingStore => {
   const dir = dirname(path);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   const { DatabaseSync } = loadNodeSqlite();
@@ -1228,24 +1236,44 @@ const createSqliteSchedulingPersistence = (
     ) as { changes: number | bigint };
     return Number(result.changes) > 0;
   };
-  return {
-    save: async (snapshot) => {
+  const inTransaction = (work: () => void): void => {
+    try {
+      db.exec("BEGIN IMMEDIATE");
+      work();
+      db.exec("COMMIT");
+    } catch (error) {
       try {
-        db.exec("BEGIN IMMEDIATE");
-        for (const record of schedulingRecordsOf(snapshot)) write(upsert, record);
-        for (const { kind, id, deletedAt } of snapshot.deleted ?? []) {
-          deleteOlder.run(kind, id, deletedAt);
-          markDeleted.run(kind, id, deletedAt);
-        }
-        db.exec("COMMIT");
-      } catch (error) {
-        try {
-          db.exec("ROLLBACK");
-        } catch {}
-        throw error;
-      }
-    },
+        db.exec("ROLLBACK");
+      } catch {}
+      throw error;
+    }
+  };
+  const applySnapshot = (snapshot: SchedulingSnapshot): void => {
+    for (const record of schedulingRecordsOf(snapshot)) write(upsert, record);
+    for (const { kind, id, deletedAt } of snapshot.deleted ?? []) {
+      deleteOlder.run(kind, id, deletedAt);
+      markDeleted.run(kind, id, deletedAt);
+    }
+  };
+  const loadStamps = db.prepare("SELECT kind, id, updated_at FROM scheduling_records");
+  const deleteRow = db.prepare("DELETE FROM scheduling_records WHERE kind = ? AND id = ?");
+  const deleteStamp = db.prepare("DELETE FROM scheduling_tombstones WHERE kind = ? AND id = ?");
+  return {
+    save: async (snapshot) => inTransaction(() => applySnapshot(snapshot)),
     importIfNewer: async (record) => write(upsertIfNewer, record),
+    syncFrom: async (authority, readAt) =>
+      inTransaction(() => {
+        applySnapshot(authority);
+        const key = (kind: unknown, id: unknown) => `${String(kind)}:${String(id)}`;
+        const live = new Set(schedulingRecordsOf(authority).map((record) => key(record.kind, record.id)));
+        const stamped = new Set((authority.deleted ?? []).map((entry) => key(entry.kind, entry.id)));
+        for (const row of loadStamps.all() as Array<{ kind: unknown; id: unknown; updated_at: unknown }>) {
+          if (!live.has(key(row.kind, row.id)) && Number(row.updated_at) <= readAt) deleteRow.run(row.kind, row.id);
+        }
+        for (const row of loadTombstones.all() as Array<{ kind: unknown; id: unknown; deleted_at: unknown }>) {
+          if (!stamped.has(key(row.kind, row.id)) && Number(row.deleted_at) <= readAt) deleteStamp.run(row.kind, row.id);
+        }
+      }),
     load: async (options) => {
       const snapshot: SchedulingSnapshot = {
         profiles: [],
@@ -1334,6 +1362,10 @@ const importIntoJsonSnapshot = (
   profilesBeforeImport: Map<unknown, unknown>,
 ): boolean => {
   const snapshot = readJsonSnapshot(path);
+  const deletedAt = normalizeDeletions(snapshot.deleted).find(
+    (entry) => entry.kind === record.kind && entry.id === record.id,
+  )?.deletedAt;
+  if (deletedAt !== undefined && deletedAt >= record.updatedAt) return false;
   const field = SNAPSHOT_FIELD[record.kind];
   const entries = snapshotList(snapshot, field);
   const keyField = record.kind === "profile" || record.kind === "event_type" ? "id" : "profileId";
@@ -1419,11 +1451,20 @@ if redis.call("EXISTS", KEYS[3]) == 0 then return redis.error_reply("NOSEED the 
 return setIfNewer(KEYS[1], KEYS[2], ARGV[2], ARGV[1], tonumber(ARGV[3]) or 0, ARGV[4], ARGV[5] == "newer")
 `;
 
-const DELETE_SCHEDULING_RECORDS_SCRIPT = `${SCHEDULING_LUA}
+/** Commits a save's records and deletion stamps in one script: Redis's single commit point. */
+const SAVE_SCHEDULING_RECORDS_SCRIPT = `${SCHEDULING_LUA}
 if redis.call("EXISTS", KEYS[6]) == 0 then return redis.error_reply("NOSEED the scheduling store is not seeded") end
-for index = 1, #ARGV, 4 do
+local count = tonumber(ARGV[1]) or 0
+local index = 2
+for _ = 1, count do
+  local kindIndex, kind, id = tonumber(ARGV[index]), ARGV[index + 1], ARGV[index + 2]
+  setIfNewer(KEYS[kindIndex], KEYS[5], kind .. ":" .. id, id, tonumber(ARGV[index + 3]) or 0, ARGV[index + 4], false)
+  index = index + 5
+end
+while index <= #ARGV do
   local kindIndex, kind, id = tonumber(ARGV[index]), ARGV[index + 1], ARGV[index + 2]
   markDeleted(KEYS[kindIndex], KEYS[5], kind .. ":" .. id, id, tonumber(ARGV[index + 3]) or 0)
+  index = index + 4
 end
 return 1
 `;
@@ -1474,7 +1515,8 @@ const parseRedisRecord = <T>(value: string): T | null => {
 
 class RedisSchedulingPersistence implements SchedulingPersistence {
   private client: RedisPersistenceClient;
-  private fallback: SchedulingPersistence;
+  private mirror: SqliteSchedulingStore;
+  private mirrorStale = true;
   private snapshotKey: string;
   private profilesKey: string;
   private availabilityKey: string;
@@ -1490,10 +1532,10 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
   constructor(options: {
     redisUrl: string;
     keyPrefix: string;
-    fallback: SchedulingPersistence;
+    mirror: SqliteSchedulingStore;
   }) {
     this.client = createRedisPersistenceClient("Scheduling", options.redisUrl);
-    this.fallback = options.fallback;
+    this.mirror = options.mirror;
     this.snapshotKey = `${options.keyPrefix}:scheduling:snapshot`;
     this.profilesKey = `${options.keyPrefix}:scheduling:profiles`;
     this.availabilityKey = `${options.keyPrefix}:scheduling:availability`;
@@ -1531,48 +1573,81 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
     const records = schedulingRecordsOf(snapshot);
     const deleted = snapshot.deleted ?? [];
     return this.queueWrite(async () => {
-      await this.fallback.save(snapshot);
-      for (const record of records) await this.upsertRecord(record, "save");
-      if (deleted.length > 0) {
-        await this.evalSeeded([
-          "EVAL",
-          DELETE_SCHEDULING_RECORDS_SCRIPT,
-          "6",
-          ...this.hashKeys,
-          this.tombstonesKey,
-          this.seededKey,
-          ...deleted.flatMap(({ kind, id, deletedAt }) => [kindIndex(kind), kind, id, String(deletedAt)]),
-        ]);
-      }
+      await this.evalSeeded([
+        "EVAL",
+        SAVE_SCHEDULING_RECORDS_SCRIPT,
+        "6",
+        ...this.hashKeys,
+        this.tombstonesKey,
+        this.seededKey,
+        String(records.length),
+        ...records.flatMap((record) => [
+          kindIndex(record.kind),
+          record.kind,
+          record.id,
+          String(record.updatedAt),
+          JSON.stringify({ updatedAt: record.updatedAt, payload: record.payload }),
+        ]),
+        ...deleted.flatMap(({ kind, id, deletedAt }) => [kindIndex(kind), kind, id, String(deletedAt)]),
+      ]);
+      await this.updateMirror(() => this.mirror.save(snapshot));
     });
   }
 
   async importIfNewer(record: SchedulingRecordWrite): Promise<boolean> {
-    await this.start();
-    await this.ensureSeeded();
-    const applied = await this.upsertRecord(record, "newer");
-    await this.fallback.importIfNewer(record);
-    return Number(applied) === 1;
+    let applied = false;
+    await this.queueWrite(async () => {
+      applied = Number(await this.upsertRecord(record, "newer")) === 1;
+      await this.updateMirror(() => this.mirror.importIfNewer(record));
+    });
+    return applied;
   }
 
-  async load(options?: { strict?: boolean }): Promise<SchedulingSnapshot> {
+  /**
+   * Reads the records from Redis, which holds them. A failed read fails: an
+   * SFU never loads memory from the mirror, which can lag Redis.
+   */
+  async load(): Promise<SchedulingSnapshot> {
+    let authority: SchedulingSnapshot;
+    const readAt = Date.now();
     try {
       await this.start();
-      await this.ensureSeeded();
-      const loaded = await this.loadHashes();
-      if (loaded) return loaded;
-      this.seeded = null;
-      await this.ensureSeeded();
-      const reseeded = await this.loadHashes();
-      if (!reseeded) throw new Error("Redis lost its scheduling records while reseeding");
-      return reseeded;
+      authority = await this.readAuthority();
     } catch (error) {
-      if (options?.strict) throw error;
-      Logger.error(
-        "Failed to load scheduling records from Redis; falling back to local persistence",
-        error,
-      );
-      return this.fallback.load();
+      throw new Error("Could not read scheduling records from Redis, which holds them; not loading the local mirror instead", { cause: error });
+    }
+    if (this.mirrorStale) await this.updateMirror(() => this.mirror.syncFrom(authority, readAt));
+    return authority;
+  }
+
+  private async readAuthority(): Promise<SchedulingSnapshot> {
+    await this.ensureSeeded();
+    const loaded = await this.loadHashes();
+    if (loaded) return loaded;
+    this.seeded = null;
+    await this.ensureSeeded();
+    const reseeded = await this.loadHashes();
+    if (!reseeded) throw new Error("Redis lost its scheduling records while reseeding");
+    return reseeded;
+  }
+
+  /**
+   * Brings the mirror up to date after Redis committed. A mirror that may have
+   * missed a change is rebuilt from Redis first. A failure is logged and only
+   * leaves the mirror stale: the change is already durable in Redis.
+   */
+  private async updateMirror(write: () => MaybePromise<unknown>): Promise<void> {
+    try {
+      if (this.mirrorStale) {
+        const readAt = Date.now();
+        await this.mirror.syncFrom(await this.readAuthority(), readAt);
+      } else {
+        await write();
+      }
+      this.mirrorStale = false;
+    } catch (error) {
+      this.mirrorStale = true;
+      Logger.warn("[Scheduling] The SQLite mirror missed a change; it is rebuilt from Redis on the next write", error);
     }
   }
 
@@ -1582,7 +1657,7 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
 
   async close(): Promise<void> {
     await this.flush();
-    await this.fallback.close?.();
+    await this.mirror.close?.();
     if (!this.started) return;
     this.started = false;
     await this.client.quit();
@@ -1616,7 +1691,7 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
   private async seed(): Promise<void> {
     if (await this.client.exists(this.seededKey)) return;
     const legacy = await this.loadLegacySnapshot();
-    const local = await this.fallback.load({ strict: true });
+    const local = await this.mirror.load({ strict: true });
     const records = [...schedulingRecordsOf(legacy), ...schedulingRecordsOf(local)];
     const deleted = [...(legacy.deleted ?? []), ...(local.deleted ?? [])];
     const seeded = await this.client.sendCommand([
@@ -1657,7 +1732,7 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
     ]);
   }
 
-  /** Writes in order; each caller gets its own write's result, mirror included. */
+  /** Writes in order; each caller gets its own write's result. */
   private queueWrite(write: () => Promise<void>): Promise<void> {
     const writePromise = this.pendingWrite.then(async () => {
       await this.start();
@@ -1712,12 +1787,12 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
   }
 }
 
-const createRedisSchedulingPersistence = (
+export const createRedisSchedulingPersistence = (
   redisUrl: string = resolveRedisPersistenceUrl(),
   keyPrefix: string = resolveRedisPersistenceKeyPrefix(),
-  fallback: SchedulingPersistence = createSqliteSchedulingPersistence(),
+  mirror: SqliteSchedulingStore = createSqliteSchedulingPersistence(),
 ): SchedulingPersistence =>
-  new RedisSchedulingPersistence({ redisUrl, keyPrefix, fallback });
+  new RedisSchedulingPersistence({ redisUrl, keyPrefix, mirror });
 
 export const createSchedulingPersistence = (): SchedulingPersistence => {
   const mode = process.env.SCHEDULING_PERSISTENCE?.trim().toLowerCase();

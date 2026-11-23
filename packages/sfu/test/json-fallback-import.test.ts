@@ -56,7 +56,7 @@ afterEach(() => {
 describe("importing JSON fallback files copied from old containers", () => {
   it("adds meetings SQLite lacks, keeps newer stored ones, and imports each file once", async () => {
     const persistence = createScheduledMeetingPersistence();
-    await persistence.save([meeting("stored-newer", 50, "kept from SQLite")]);
+    await persistence.saveChanged([meeting("stored-newer", 50, "kept from SQLite")]);
     writeFallback("sfu-a", "scheduled-meetings.json", [meeting("prior-meeting", 1), meeting("stored-newer", 10, "older copy")]);
     writeFallback("sfu-b", "scheduled-meetings.json", [meeting("other-instance", 1)]);
 
@@ -124,7 +124,7 @@ describe("importing JSON fallback files copied from old containers", () => {
 
   it("keeps a file when the store refuses one of its records and still imports the rest", async () => {
     const persistence = createScheduledWebinarPersistence();
-    persistence.save([webinar("stored", 50)]);
+    persistence.saveChanged([webinar("stored", 50)]);
     writeFallback("sfu-a", "scheduled-webinars.json", [
       { ...webinar("clashing-link", 5), linkSlug: "stored-room" },
       webinar("prior-webinar", 1),
@@ -181,7 +181,7 @@ describe("importing JSON fallback files into a single-instance JSON store", () =
 
   it("merges meetings by updated time and imports each file once", async () => {
     const persistence = createScheduledMeetingPersistence();
-    await persistence.save([meeting("stored-newer", 50, "kept from the store")]);
+    await persistence.saveChanged([meeting("stored-newer", 50, "kept from the store")]);
     writeFallback("sfu-a", "scheduled-meetings.json", [meeting("prior-meeting", 1), meeting("stored-newer", 10, "older copy")]);
 
     expect(await importFallbackMeetings(persistence)).toBe(1);
@@ -193,7 +193,7 @@ describe("importing JSON fallback files into a single-instance JSON store", () =
 
   it("merges webinars by updated time", async () => {
     const persistence = createScheduledWebinarPersistence();
-    persistence.save([webinar("stored-newer", 50)]);
+    persistence.saveChanged([webinar("stored-newer", 50)]);
     writeFallback("sfu-a", "scheduled-webinars.json", [webinar("prior-webinar", 1), webinar("stored-newer", 10)]);
 
     expect(await importFallbackWebinars(persistence)).toBe(1);

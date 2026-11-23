@@ -200,7 +200,7 @@ describe.skipIf(!hasRedis)("SFUs sharing one Redis", () => {
     expect(await ids(sfuA)).toEqual(["after-loss", "first", "second"]);
   });
 
-  it("answers 500 when the SQLite mirror cannot take a reload's write-back", async () => {
+  it("answers 200 when only the SQLite mirror is locked during a reload, then rebuilds the mirror from Redis", async () => {
     const state = createSfuState({
       roomRegistry: new LocalRoomRegistry({ instanceId: "mirror-lock", instanceUrl: "http://localhost", ttlMs: 45000 }),
     });
@@ -209,21 +209,40 @@ describe.skipIf(!hasRedis)("SFUs sharing one Redis", () => {
     await initScheduling(state);
     track(state.scheduledMeetingPersistence!);
     track(state.schedulingPersistence!);
+    for (const method of ["warn"] as const) vi.spyOn(console, method).mockImplementation(() => {});
+    await state.schedulingPersistence!.save({ profiles: [profile("in-redis")], availability: [], eventTypes: [], calendars: [] });
     const server: Server = createServer(createSfuApp({ state, config, getIo: () => null }));
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("no port");
-    const holder = new DatabaseSync(join(stateDir, "conclave.sqlite"));
-    holder.exec("BEGIN IMMEDIATE");
+    const reload = () =>
+      fetch(`http://127.0.0.1:${address.port}/admin/reload-stores`, { method: "POST", headers: { "x-sfu-secret": config.sfuSecret } });
+    const mirrorProfiles = () => {
+      const db = new DatabaseSync(join(stateDir, "conclave.sqlite"));
+      try {
+        return (db.prepare("SELECT id FROM scheduling_records WHERE kind = 'profile' ORDER BY id").all() as Array<{ id: string }>).map((row) => row.id);
+      } finally {
+        db.close();
+      }
+    };
     try {
-      const response = await fetch(`http://127.0.0.1:${address.port}/admin/reload-stores`, {
-        method: "POST",
-        headers: { "x-sfu-secret": config.sfuSecret },
-      });
-      expect(response.status).toBe(500);
+      const holder = new DatabaseSync(join(stateDir, "conclave.sqlite"));
+      holder.exec("BEGIN IMMEDIATE");
+      try {
+        expect((await reload()).status).toBe(200);
+      } finally {
+        holder.exec("ROLLBACK");
+        holder.close();
+      }
+      const outside = new DatabaseSync(join(stateDir, "conclave.sqlite"));
+      outside.prepare("DELETE FROM scheduling_records").run();
+      outside.close();
+
+      expect((await reload()).status).toBe(200);
+      const authority = (await track(createSchedulingPersistence()).load()).profiles.map((entry) => entry.id).sort();
+      expect(authority).toEqual(["in-redis"]);
+      expect(mirrorProfiles()).toEqual(authority);
     } finally {
-      holder.exec("ROLLBACK");
-      holder.close();
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   }, 30_000);

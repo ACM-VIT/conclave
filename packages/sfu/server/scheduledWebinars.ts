@@ -1,5 +1,5 @@
 import { createHash, randomUUID, randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import type {
@@ -21,9 +21,10 @@ import {
 } from "./webinar.js";
 import { canonicalizeClientId } from "./clientIds.js";
 import { assertSqliteWritable } from "./sqliteWriteCheck.js";
-import { describeEntry, importFallbackFiles, readJsonStore, replaceIfNewer, requireArray, requireRecord } from "./fallbackImport.js";
+import { describeEntry, importFallbackFiles, requireArray, requireRecord } from "./fallbackImport.js";
 import { mergeNewestStamp } from "./stampedMerge.js";
 import { assignInPlace, committedRecords, persistThenApply, sameStoredValue, serialized, targetIds, type ChangeTargets } from "./persistThenApply.js";
+import { commitStampedJson, readStampedJson } from "./stampedJsonFile.js";
 
 const DEFAULT_EARLY_ENTRY_MINUTES = 10;
 const MAX_EARLY_ENTRY_MINUTES = 240;
@@ -269,11 +270,11 @@ export const listScheduledWebinars = (
 
 export type StoredWebinars = { records: ScheduledWebinar[]; deletedAt: Map<string, number> };
 
+/** SQLite or the JSON file is the one authority, with one commit point per change. */
 export type ScheduledWebinarPersistence = {
-  save: (snapshot: ScheduledWebinar[]) => void;
-  saveChanged?: (webinars: ScheduledWebinar[]) => void;
+  /** Commits changed webinars and deletion stamps as one write; per record the newest stamp wins. */
+  saveChanged: (webinars: ScheduledWebinar[], deletions?: Array<{ id: string; deletedAt: number }>) => void;
   importIfNewer: (webinar: ScheduledWebinar) => boolean;
-  deleteRecords?: (deletions: Array<{ id: string; deletedAt: number }>) => void;
   loadState: (options?: { strict?: boolean }) => StoredWebinars;
   load: (options?: { strict?: boolean }) => ScheduledWebinar[];
   close?: () => void;
@@ -299,44 +300,27 @@ const scheduledWebinarsSqlitePath = (): string => {
   return resolve(process.cwd(), "data", "conclave.sqlite");
 };
 
-const writeJsonAtomic = (path: string, data: string): void => {
-  const dir = dirname(path);
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
+const readWebinarsState = (path: string, options?: { strict?: boolean }): StoredWebinars => {
+  try {
+    return readStampedJson(path, normalizeStoredWebinar);
+  } catch (error) {
+    if (options?.strict) throw error;
+    Logger.error("Failed to load scheduled webinars", error);
+    return { records: [], deletedAt: new Map() };
   }
-  const tmp = `${path}.${randomBytes(4).toString("hex")}.tmp`;
-  writeFileSync(tmp, data, "utf8");
-  renameSync(tmp, path);
 };
 
+/** The JSON store keeps deletion stamps beside the records, so an import never brings back what a host deleted. */
 const createFileScheduledWebinarPersistence = (
   path: string = scheduledWebinarsPath(),
 ): ScheduledWebinarPersistence => ({
-  save: (snapshot) => {
-    writeJsonAtomic(path, JSON.stringify(snapshot, null, 2));
+  saveChanged: (webinars, deletions = []) => {
+    commitStampedJson(path, normalizeStoredWebinar, { upserts: webinars, deletions });
   },
-  importIfNewer: (webinar) => {
-    const entries = requireArray(readJsonStore(path) ?? [], "scheduled webinars");
-    if (!replaceIfNewer(entries, (entry) => entry.id === webinar.id, webinar, webinar.updatedAt)) return false;
-    writeJsonAtomic(path, JSON.stringify(entries, null, 2));
-    return true;
-  },
-  loadState: (options) => ({ records: createFileScheduledWebinarPersistence(path).load(options), deletedAt: new Map() }),
-  load: (options) => {
-    try {
-      if (!existsSync(path)) return [];
-      const raw = readFileSync(path, "utf8");
-      const data: unknown = JSON.parse(raw);
-      if (!Array.isArray(data)) return [];
-      return data
-        .map((entry) => normalizeStoredWebinar(entry))
-        .filter((entry): entry is ScheduledWebinar => Boolean(entry));
-    } catch (error) {
-      if (options?.strict) throw error;
-      Logger.error("Failed to load scheduled webinars", error);
-      return [];
-    }
-  },
+  importIfNewer: (webinar) =>
+    commitStampedJson(path, normalizeStoredWebinar, { upserts: [webinar], deletions: [] }, "newer") > 0,
+  loadState: (options) => readWebinarsState(path, options),
+  load: (options) => readWebinarsState(path, options).records,
 });
 
 type SqliteStatement = {
@@ -498,27 +482,17 @@ const createSqliteScheduledWebinarPersistence = (
   };
 
   return {
-    save: (snapshot) => {
-      inTransaction(() => {
-        for (const webinar of snapshot) upsertWebinar(webinar);
-      });
-    },
-    saveChanged: (webinars) => {
-      if (webinars.length === 0) return;
+    saveChanged: (webinars, deletions = []) => {
+      if (webinars.length === 0 && deletions.length === 0) return;
       inTransaction(() => {
         for (const webinar of webinars) upsertWebinar(webinar);
-      });
-    },
-    importIfNewer: (webinar) => upsertWebinar(webinar, insertIfNewer),
-    deleteRecords: (deletions) => {
-      if (deletions.length === 0) return;
-      inTransaction(() => {
         for (const { id, deletedAt } of deletions) {
           deleteOlder.run(id, deletedAt);
           markDeleted.run(id, deletedAt);
         }
       });
     },
+    importIfNewer: (webinar) => upsertWebinar(webinar, insertIfNewer),
     loadState,
     load: (options) => loadState(options).records,
     close: () => db.close(),
@@ -535,7 +509,7 @@ const migrateJsonScheduledWebinarsToSqlite = (
   const legacy = json.load();
   if (legacy.length === 0) return 0;
 
-  sqlite.save(legacy);
+  sqlite.saveChanged(legacy);
   return sqlite.load().length;
 };
 
@@ -975,12 +949,7 @@ export const changeWebinars = async <R>(
     plan: () => planWebinarChange(store, ids, mutate),
     save: (planned) => {
       if (!persistence || (planned.upserts.length === 0 && planned.deletions.length === 0)) return;
-      if (!persistence.saveChanged || !persistence.deleteRecords) {
-        persistence.save([...planned.draft.byId.values()]);
-        return;
-      }
-      if (planned.upserts.length > 0) persistence.saveChanged(planned.upserts);
-      if (planned.deletions.length > 0) persistence.deleteRecords(planned.deletions);
+      persistence.saveChanged(planned.upserts, planned.deletions);
     },
     apply: (planned) => {
       for (const webinar of planned.upserts) {
