@@ -423,6 +423,40 @@ it("rebuilds a seeded copy that opened while locked once writes are allowed", as
   expect(first.uploads).toEqual([]);
 });
 
+it("rebuilds a seeded copy when the app unlocks before its first sync answers", async () => {
+  const seeded = () => {
+    const doc = new Y.Doc();
+    doc.getText("t").insert(0, "seed ");
+    return doc;
+  };
+  await mount(first.socket, { isAdmin: false, apps: [{ id: "board", name: "Board", createDoc: seeded } as never] });
+  await appState("board", true);
+
+  await appState("board", false);
+  expect(first.unanswered).toHaveLength(2);
+  await act(async () => first.unanswered[1](boardContent()));
+  await act(async () => first.unanswered[0](boardContent()));
+
+  expect(boardText()).toBe("drawn before you joined");
+  expect(first.uploads).toEqual([]);
+  expect(ctx.syncStatus).toBe("synced");
+});
+
+it("applies no sync reply that lands after it unmounts", async () => {
+  await openBoard();
+  await draw("mine ");
+  const uploads = first.uploads.length;
+  const ack = first.unanswered.shift()!;
+
+  await act(async () => {
+    root.unmount();
+    ack(boardContent());
+  });
+  root = createRoot(document.createElement("div"));
+
+  expect(first.uploads).toHaveLength(uploads);
+});
+
 it("syncs the open app through a StrictMode effect replay even when replies arrive at once", async () => {
   const live = makeSocket("board");
   live.control.answerSync = () => boardContent();

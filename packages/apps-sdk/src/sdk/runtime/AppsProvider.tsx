@@ -323,10 +323,13 @@ export function AppsProvider({
 
   const queueInitialUpdate = useCallback((appId: string, doc: Y.Doc) => {
     if (initialUpdateSentRef.current.has(appId)) return;
-    if (!canWrite()) return;
 
     const update = Y.encodeStateAsUpdate(doc);
     if (isEmptyUpdate(update)) return;
+    if (!canWrite()) {
+      unsentAppsRef.current.add(appId);
+      return;
+    }
 
     const currentSocket = socketRef.current;
     if (currentSocket && currentSocket.connected) {
@@ -489,7 +492,7 @@ export function AppsProvider({
       const payload: AppsSyncPayload = { appId: run.appId, syncMessage: Y.encodeStateVector(run.doc), canRetry: true };
       let answered = false;
       const answer = (response?: AppsSyncResponse | AppsSyncError) => {
-        if (answered) return;
+        if (answered || disposedRef.current) return;
         answered = true;
         clearTimeout(run.timer);
         if (syncRunRef.current !== run) return;
