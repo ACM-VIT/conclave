@@ -30,7 +30,7 @@ type RecoveryRoom = Pick<
   "channelId" | "incarnationId" | "recoveryPassesVoidUntil"
 >;
 type PassIssuingRoom = RecoveryRoom &
-  Pick<Room, "userKeysById" | "needsReadmission" | "hasEnded">;
+  Pick<Room, "userKeysById" | "needsReadmission" | "recordsItsCall">;
 type PassHolder = Pick<Client, "id" | "isObserver">;
 
 /**
@@ -51,7 +51,7 @@ export const issueRoomRecoveryPass = (
   if (
     !userKey ||
     client.isObserver ||
-    room.hasEnded ||
+    !room.recordsItsCall ||
     room.needsReadmission(userKey)
   ) {
     return null;
