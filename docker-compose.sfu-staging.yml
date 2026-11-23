@@ -15,7 +15,7 @@ services:
       service: sfu-a
     # Its own image name: sharing production's would let a staging deploy
     # retag the image production's sfu-a starts from.
-    image: conclave-staging-sfu
+    image: ${SFU_IMAGE_SFU_STAGING:-conclave-staging-sfu}
     environment:
       SFU_PORT: "${SFU_STAGING_PORT:-3033}"
       SFU_INSTANCE_ID: "sfu-staging"

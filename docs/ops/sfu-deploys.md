@@ -51,14 +51,18 @@ notice the SFU gives; the drain request waits that long for the SFU's answer):
    rooms only counts once those have expired. An unreadable `/status` counts
    as unknown, not as empty. There is no force drain unless you pass
    `--force-drain`.
-4. Recreate it from the new image with `SFU_START_DRAINING=true`, so it boots
-   out of rotation and no meeting can land on an unverified build. The
-   compose file names each service's image (`conclave-sfu-a`,
-   `conclave-sfu-b`, staging's `conclave-staging-sfu`), the deploy tags the
-   build there, and after every start the container must run that very
-   image ID, or the deploy stops and rolls back. Compose's own naming
-   (`COMPOSE_COMPATIBILITY` uses underscores) can never start another image
-   unnoticed.
+4. Start the new build under its own candidate tag
+   (`<project>-sfu:candidate-<service>`) with `SFU_START_DRAINING=true`, so it
+   boots out of rotation and no meeting can land on an unverified build. The
+   compose file names each service's image through a variable
+   (`${SFU_IMAGE_SFU_A:-conclave-sfu-a}`, and so on; the deploy refuses a
+   compose file that does not), and every start sets both that variable and
+   `SFU_START_DRAINING` explicitly, never inherited from the shell or `.env`.
+   The service's own image name (`conclave-sfu-a`) only ever names its
+   last-known-good image or a build that passed its canary, so a plain
+   `docker compose up`, a restart or a reboot after a crash never brings back
+   an untested build. After every start the container must run that very
+   image ID, or the deploy stops and rolls back.
 5. Run the canary: a real two-person call against that instance
    (`packages/sfu/scripts/canary-call.ts`, bundled at image build into
    `dist/canary-call.mjs` with its dependencies inside). It always runs from
@@ -72,29 +76,59 @@ notice the SFU gives; the drain request waits that long for the SFU's answer):
    join, publish Opus audio and must receive each other's RTP through the SFU,
    and the room must close when they leave.
 6. Canary passed: check that no other call reached the instance while it was
-   out of rotation, then recreate it once more from the same image with the
-   normal config, so it serves undrained and stays that way across restarts.
-   Its public URL must then reach it within `HEALTH_TIMEOUT_SECONDS` (120);
-   if not, the deploy stops (exit 1) before the next drain. If a call did
-   reach it, the deploy waits for that
-   call like a drain, and at the deadline exits 3 with the instance still
-   drained on the new image. Canary failed, or compose could not recreate the
-   instance at either step: recreate it from the image it last served calls
-   on and stop. That is the image it was serving on when this deploy found
-   it, or, when it was not serving (down, or left drained by an interrupted
-   canary), the image recorded the last time it served (the
-   `<project>-sfu:rollback-<service>` tag, set when a deploy finds it serving
-   and when it passes its canary and serves). A build that only ran, never
-   one that failed or never finished its canary, is ever a fallback. Exit 4
-   once it runs that image, reports healthy and takes meetings again; exit 5
-   when it could not be brought back (compose failed, it did not come back
-   healthy, or it has no such image and stays stopped). The instances not yet
-   touched were never drained and keep serving.
+   out of rotation, then tag the build as the service's own image and
+   restart it serving. It must then be serving within
+   `HEALTH_TIMEOUT_SECONDS` (120), by the one rule the deploy uses
+   everywhere: its container runs the build and did not boot drained,
+   `/health` says healthy, its own `/status` says healthy and
+   `draining: false`, and its public URL reaches it. If a call did reach it,
+   the deploy waits for that call like a drain, and at the deadline exits 3
+   with the instance still drained on the new build and its service tag on
+   the last-known-good image. Canary failed, the build would not serve, or
+   compose could not start it: put it back on its last-known-good image (the
+   image it was serving on when this deploy found it, else the one its journal
+   recorded the last time it served) and stop. A build that only ran, never
+   one that failed or never finished its canary, is ever last-known-good.
+   Exit 4 once it is serving again by that same rule; exit 5 when it could
+   not be brought back (compose failed, it will not serve, its public URL does
+   not reach it, or it has no last-known-good image and stays stopped). The
+   instances not yet touched were never drained and keep serving.
 
-An instance whose `/status`, from that instance, says healthy and undrained,
-on the target image and config, is
-skipped once its public URL still reaches it, so a rerun only does what is
-left; an earlier run that stopped on that route stops again there. An instance that answers HTTP but
+Every one of these steps is written to the instance's deploy journal
+(`<state dir>/<project>.<service>.journal.json`: phase, candidate, last-known-good
+image, whether it was draining before) before it is taken, whole, fsynced and
+renamed into place. Every deploy starts by reading the journals and repairing
+what a run that died left behind, before it drains anything: an instance it
+drained goes back into service, one with a candidate started goes back to its
+last-known-good image, and one promoting a build that passed finishes, or goes
+back if it will not serve. An instance carrying a call is never recreated
+there; the deploy waits for it as usual. So a crash, a closed SSH session or a
+second deploy waiting on the lock always ends with every instance serving its
+last-known-good image or a build that passed its canary
+(`scripts/deploy-sfu-crash.test.mjs` kills a deploy at every step boundary to
+check it).
+
+An instance whose public URL does not reach it is not drained or rebuilt at
+all, and neither is any instance after it (exit 1, `Deploy stopped: clients
+cannot reach <service> at its public URL`): it could be shown to serve neither
+before a rebuild nor after one. It keeps running and serving whatever calls
+reach it. To fix it:
+
+1. See where the route goes:
+   `curl -sS -H "x-sfu-secret: $SFU_SECRET" "$SFU_A_PUBLIC_URL/status"` (or
+   `SFU_B_PUBLIC_URL`, or `SFU_PUBLIC_URL` in the service's env) must answer
+   with that instance's own `instanceId`. No answer means the DNS record, the
+   proxy in front of it or the NSG rule is wrong; another `instanceId` means
+   the route lands on the other instance.
+2. Fix that route (or the URL in `.env`, if the URL itself is wrong). Do not
+   restart the SFU for it: the deploy refused before changing anything.
+3. Run `./scripts/deploy-sfu.sh --preflight-only` until it passes, then rerun
+   the deploy.
+
+An instance whose journal shows the target passed its canary there, still on
+the target image and config and serving by the rule above, is skipped, so a
+rerun only does what is left; an earlier run that stopped on its public route
+stops again there. An instance that answers HTTP but
 whose `/status` cannot be read is left alone (exit 1), because its rooms are
 unknown. So is one whose container Docker runs while nothing answers at its
 URL (exit 1), however recently it started: a wrong `SFU_A_URL` or proxy can
@@ -113,7 +147,7 @@ if it is hung, and rerun.
 | 3 | A meeting outlasted the drain deadline. That instance was put back into service untouched, or, if the call reached it after its canary, left drained on the new image. | Rerun later. Instances already deployed are skipped. |
 | 4 | The canary failed. The instance runs the image it last served calls on, healthy and taking meetings. | Read the canary lines in the log, fix forward, deploy again. |
 | 5 | The canary failed and the instance could not be brought back: it is down or stopped. | Act now: read the log, start it on a known-good release (`--rollback`, or fix forward and deploy). |
-| 1 | Another instance is not serving, a public URL does not reach its instance, or anything else (preflight, build, Docker). Nothing after the failing step was drained. | Read the log. |
+| 1 | Another instance is not serving, a public URL does not reach its instance, or anything else (preflight, build, Docker). Nothing after the failing step was drained. | Read the log. For a public URL, follow the steps above: fix the route, pass `--preflight-only`, rerun. |
 
 During an exit 3, 4 or 5 the two instances can run different commits. That is the
 same mixed state every blue-green deploy passes through, and the SFU tolerates

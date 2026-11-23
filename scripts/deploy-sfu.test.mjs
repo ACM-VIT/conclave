@@ -7,398 +7,13 @@ import path from "node:path";
 import { describe, test as nodeTest } from "node:test";
 import { promisify } from "node:util";
 import { hasHostTool, pathWithout, provideFlock } from "./test-support/host-tools.mjs";
+import { composeUpByHand, cutRooms, deploy, dockerStandIn, passedPreflight, run, scripts, startSfu, withSfus } from "./test-support/deploy-harness.mjs";
 
-// Runs the real deploy-sfu.sh against two fake SFUs (HTTP servers that report
-// rooms and take drains) and a stand-in docker CLI. A recreate replaces the
-// instance's container, so any rooms it still had are cut; the stand-in asks
-// the fake SFU how many that was.
-
-const run = promisify(execFile);
-const scripts = import.meta.dirname;
-const secret = "deploy-test-secret";
-
-// The tests run side by side, each with its own fake SFUs, so whatever a
-// test watches lives in its own context: every drain, stop and recreate
-// across its fake SFUs in the order they happened (events), and a hook called
-// before one of them applies a drain, so a test can line two up
-// (beforeDrain).
+// Every helper lives in test-support/deploy-harness.mjs. The tests run side
+// by side (see the end of the file).
 const queued = [];
 const test = (...args) => queued.push(args);
 
-// container: "running" for an hour, "exited", "crash-looping" (Docker keeps
-// restarting it), "hung" (running for an hour) or "young" (running for a few
-// seconds). Only "running" answers HTTP until a recreate. failRecreate: the
-// recreate (1st, 2nd...) at which compose fails after stopping the old
-// container. replacementHealthy: false for a build whose containers
-// never report healthy (the image the instance started on still does). bootExit: "exited" or "crash-looping", the state a
-// container of the target image ends in right after it starts; the previous
-// image still boots. stateInspectFails: docker inspect of the container's
-// state fails. statusHealthy: false for an instance whose /status says
-// healthy: false until it is recreated. onTarget: already runs the target
-// image with the current compose config.
-const startSfu = async (
-  context,
-  instanceId,
-  {
-    rooms = 0,
-    statusAnswers = true,
-    container = "running",
-    replacementHealthy = true,
-    bootExit = null,
-    stateInspectFails = false,
-    envInspectFails = false,
-    statusHealthy = true,
-    draining = false,
-    onTarget = false,
-    failRecreate = 0,
-  } = {},
-) => {
-  const sfu = {
-    instanceId,
-    rooms,
-    draining,
-    statusAnswers,
-    container,
-    healthy: true,
-    statusHealthy,
-    image: onTarget ? "sha256:target" : "sha256:running",
-    firstImage: onTarget ? "sha256:target" : "sha256:running",
-    configHash: onTarget ? "current-hash" : "older-hash",
-    restartCount: 0,
-    bootDrained: false,
-    failRecreate,
-    drains: [],
-    recreates: [],
-  };
-  const server = createServer(async (req, res) => {
-    let body = "";
-    for await (const chunk of req) body += chunk;
-    const url = new URL(req.url, "http://sfu");
-    const json = (value, status = 200) => res.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(value));
-    if (url.pathname === "/stand-in/state") {
-      const startedAt = new Date(Date.now() - (["crash-looping", "young"].includes(sfu.container) ? 3_000 : 3_600_000)).toISOString();
-      if (sfu.container === "crash-looping") sfu.restartCount += 1;
-      const status = { exited: "exited", "crash-looping": "restarting" }[sfu.container] ?? "running";
-      return json({
-        status,
-        startedAt,
-        restartCount: sfu.restartCount,
-        bootDrained: sfu.bootDrained,
-        image: sfu.image,
-        configHash: sfu.configHash,
-        stateInspectFails,
-        envInspectFails,
-      });
-    }
-    if (sfu.container !== "running" && !url.pathname.startsWith("/stand-in/")) return req.socket.destroy();
-    if (url.pathname === "/health") return sfu.healthy ? json({ status: "healthy" }) : json({ status: "starting" }, 503);
-    if (url.pathname === "/status") {
-      if (!sfu.statusAnswers) return json({ error: "unavailable" }, 503);
-      return json({ instanceId, region: "local", healthy: sfu.statusHealthy, rooms: sfu.rooms, draining: sfu.draining });
-    }
-    if (url.pathname === "/drain" && req.method === "POST") {
-      const request = JSON.parse(body || "{}");
-      if (request.draining && context.beforeDrain) await context.beforeDrain();
-      sfu.drains.push(request);
-      context.events.push(`drain ${instanceId}`);
-      sfu.draining = request.draining === true;
-      // A forced drain answers once its notice has run, as the SFU does, and
-      // ends the instance's rooms.
-      if (request.force && request.noticeMs) await new Promise((done) => setTimeout(done, request.noticeMs));
-      if (request.force) sfu.rooms = 0;
-      return json({ draining: sfu.draining, forced: request.force === true });
-    }
-    if (url.pathname === "/stand-in/stop") {
-      context.events.push(`stop ${instanceId}`);
-      sfu.container = "exited";
-      return json({ ok: true });
-    }
-    if (url.pathname === "/stand-in/recreate") {
-      sfu.recreates.push({ roomsCut: sfu.rooms });
-      context.events.push(`recreate ${instanceId}`);
-      sfu.rooms = 0;
-      if (sfu.failRecreate === sfu.recreates.length) {
-        sfu.container = "exited";
-        return json({ error: "compose failed after stopping the old container" }, 500);
-      }
-      sfu.container = "running";
-      sfu.statusHealthy = true;
-      sfu.bootDrained = url.searchParams.get("draining") === "true";
-      sfu.draining = url.searchParams.get("draining") === "true";
-      sfu.image = url.searchParams.get("image");
-      // The image it ran before the deploy still boots healthy.
-      sfu.healthy = replacementHealthy || sfu.image === sfu.firstImage;
-      sfu.configHash = "current-hash";
-      if (bootExit && sfu.image === "sha256:target") sfu.container = bootExit;
-      return json({ ok: true });
-    }
-    return json({ error: "not found" }, 404);
-  });
-  await new Promise((done) => server.listen(0, "127.0.0.1", done));
-  sfu.port = server.address().port;
-  sfu.close = () => new Promise((done) => server.close(done));
-  return sfu;
-};
-
-const dockerStandIn = `#!/usr/bin/env node
-const fs = require("node:fs");
-const args = process.argv.slice(2);
-const sfus = JSON.parse(process.env.DEPLOY_TEST_SFUS);
-fs.appendFileSync(process.env.DEPLOY_TEST_DOCKER_LOG, JSON.stringify(args) + "\\n");
-const out = (text) => process.stdout.write(text + "\\n");
-// docker tag, kept per run unless DEPLOY_TEST_DOCKER_TAGS shares them across
-// runs as one host would: a recreated container gets the image tagged for it.
-const tagsFile = process.env.DEPLOY_TEST_DOCKER_TAGS || process.env.DEPLOY_TEST_DOCKER_LOG + ".tags";
-const tags = fs.existsSync(tagsFile) ? JSON.parse(fs.readFileSync(tagsFile, "utf8")) : {};
-const state = async (name) => (await fetch("http://127.0.0.1:" + sfus[name].port + "/stand-in/state")).json();
-const service = (name, sfu, index) => ({
-  environment: {
-    ANNOUNCED_IP: "127.0.0.1",
-    // DEPLOY_TEST_OVERLAP gives both services one RTC range, which the full
-    // preflight rejects.
-    RTC_MIN_PORT: process.env.DEPLOY_TEST_OVERLAP ? "41001" : String(40000 + index * 1000),
-    RTC_MAX_PORT: process.env.DEPLOY_TEST_OVERLAP ? "42000" : String(40999 + index * 1000),
-    SFU_INSTANCE_ID: name,
-    SFU_PORT: String(sfu.port),
-    SFU_PUBLIC_URL: "http://127.0.0.1:" + sfu.port,
-    SFU_REDIS_URL: "redis://127.0.0.1:6379/0",
-    SFU_REGION: "local",
-    SFU_REQUIRE_REDIS_ADAPTER: "1",
-    SFU_SECRET: process.env.SFU_SECRET,
-    // As the compose file passes them: a budget of 4, and a worker count
-    // only when the env sets one.
-    SFU_WEBRTC_PORT_BUDGET: "4",
-    SFU_WORKER_HOST_INSTANCES: "2",
-    ...(process.env.SFU_WORKER_COUNT ? { SFU_WORKER_COUNT: process.env.SFU_WORKER_COUNT } : {}),
-  },
-});
-const main = async () => {
-  if (args[0] === "compose") {
-    const rest = args.slice(1).filter((arg, i, all) => !["--env-file", "-f"].includes(arg) && !["--env-file", "-f"].includes(all[i - 1]));
-    const names = Object.keys(sfus);
-    // DEPLOY_TEST_REDIS_SERVICE: the compose file runs its own Redis, as
-    // staging's does.
-    if (rest[0] === "config" && rest[1] === "--services") return out([...names, ...(process.env.DEPLOY_TEST_REDIS_SERVICE ? ["redis"] : [])].join("\\n"));
-    if (rest[0] === "config" && rest[1] === "--format") {
-      return out(JSON.stringify({ name: "vm", services: Object.fromEntries(names.map((n, i) => [n, service(n, sfus[n], i)])) }));
-    }
-    if (rest[0] === "config" && rest[1] === "--hash") return out(rest[2] + " current-hash");
-    if (rest[0] === "ps") return out("ctr-" + rest.at(-1));
-    // A build retags the service's own image, as compose does.
-    if (rest[0] === "build") {
-      tags["vm-" + rest.at(-1)] = "sha256:checkout-build";
-      return fs.writeFileSync(tagsFile, JSON.stringify(tags));
-    }
-    if (rest[0] === "stop") {
-      await fetch("http://127.0.0.1:" + sfus[rest.at(-1)].port + "/stand-in/stop");
-      return;
-    }
-    if (rest[0] === "up" && rest.at(-1) === "redis") return;
-    if (rest[0] === "up") {
-      const name = rest.at(-1);
-      const draining = process.env.SFU_START_DRAINING === "true";
-      // COMPOSE_COMPATIBILITY=true names a build's image <project>_<service>,
-      // as Compose does, so a tag on <project>-<service> does not reach it.
-      const image = process.env.COMPOSE_COMPATIBILITY === "true"
-        ? tags["vm_" + name] || "sha256:running"
-        : tags["vm-" + name] || "sha256:target";
-      const response = await fetch("http://127.0.0.1:" + sfus[name].port + "/stand-in/recreate?draining=" + draining + "&image=" + image);
-      if (!response.ok) process.exitCode = 1;
-      // DEPLOY_TEST_KILL_AFTER_RECREATES: kill the deploy, as a crash or a
-      // closed SSH session would, once that many recreates have run.
-      const killAfter = Number(process.env.DEPLOY_TEST_KILL_AFTER_RECREATES || 0);
-      if (killAfter) {
-        const countFile = process.env.DEPLOY_TEST_DOCKER_LOG + ".recreates";
-        const count = (fs.existsSync(countFile) ? Number(fs.readFileSync(countFile, "utf8")) : 0) + 1;
-        fs.writeFileSync(countFile, String(count));
-        if (count === killAfter) process.kill(process.ppid, "SIGKILL");
-      }
-      return;
-    }
-    return;
-  }
-  if (args[0] === "inspect") {
-    const format = args[2];
-    const name = args.at(-1).replace(/^ctr-/, "");
-    if (format.includes(".Config.Env")) {
-      const current = await state(name);
-      if (current.envInspectFails) {
-        process.exitCode = 1;
-        return;
-      }
-      return out("SFU_DRAINING=" + current.bootDrained);
-    }
-    if (format.includes(".State.Status")) {
-      const current = await state(name);
-      if (current.stateInspectFails) {
-        process.exitCode = 1;
-        return;
-      }
-      if (format.includes(".RestartCount")) return out(current.status + ":" + current.restartCount);
-      return out(format.includes(".State.StartedAt") ? current.status + " " + current.startedAt : current.status);
-    }
-    if (format.includes("config-hash")) return out((await state(name)).configHash);
-    if (format.includes(".Image")) return out((await state(name)).image);
-    return out(args.at(-1));
-  }
-  if (args[0] === "build") {
-    const tag = args[args.indexOf("-t") + 1];
-    tags[tag] = tag.includes("-canary:") ? "sha256:canary-build" : "sha256:candidate-build";
-    return fs.writeFileSync(tagsFile, JSON.stringify(tags));
-  }
-  // DEPLOY_TEST_NO_COMMIT_IMAGES: no image was ever tagged for a commit.
-  if (
-    args[0] === "image" &&
-    args[1] === "inspect" &&
-    process.env.DEPLOY_TEST_NO_COMMIT_IMAGES &&
-    /:[0-9a-f]{12}$/.test(args.at(-1)) &&
-    !(args.at(-1) in tags)
-  ) {
-    process.exitCode = 1;
-    return;
-  }
-  // A rollback-<service> tag exists only once a deploy has set it.
-  if (args[0] === "image" && args[1] === "inspect" && /:rollback-/.test(args.at(-1)) && !(args.at(-1) in tags)) {
-    process.exitCode = 1;
-    return;
-  }
-  if (args[0] === "image" && args[1] === "inspect") return args[2] === "-f" ? out(tags[args.at(-1)] || "sha256:target") : undefined;
-  if (args[0] === "tag") {
-    tags[args[2]] = tags[args[1]] || args[1];
-    return fs.writeFileSync(tagsFile, JSON.stringify(tags));
-  }
-  // DEPLOY_TEST_NO_BUNDLE: images built before the canary bundle existed.
-  if (args[0] === "run") {
-    const image = args[args.indexOf("--entrypoint") + 2];
-    // DEPLOY_TEST_BAD_IMAGES: builds whose calls carry no media, so the
-    // canary fails against an instance running one of them.
-    // DEPLOY_TEST_KILL_ON_CANARY_FAILURE: the deploy is killed right then.
-    const target = Object.keys(sfus).find((name) => args.at(-1).endsWith(":" + sfus[name].port));
-    if (target && (process.env.DEPLOY_TEST_BAD_IMAGES || "").split(",").includes((await state(target)).image)) {
-      process.stderr.write("FAIL canary: zero RTP in both directions\\n");
-      if (process.env.DEPLOY_TEST_KILL_ON_CANARY_FAILURE) process.kill(process.ppid, "SIGKILL");
-      process.exitCode = 1;
-      return;
-    }
-    if ((process.env.DEPLOY_TEST_NO_BUNDLE || "").split(",").includes(image)) {
-      process.stderr.write("Error: Cannot find module '/app/packages/sfu/dist/canary-call.mjs'\\n");
-      process.exitCode = 1;
-    }
-    return;
-  }
-  // rmi succeeds.
-};
-main();
-`;
-
-// upstream: files the next commit on origin changes, so the checkout is one
-// pull behind the revision it will deploy.
-// withoutFlock: run on a host whose PATH has no flock. script: the
-// deploy-sfu.sh the checkout starts with, in place of the current one.
-const deploy = async (
-  sfus,
-  { args: extraArgs = [], env: extraEnv = {}, envLines = [], upstream, powershell = false, withoutFlock = false, script, noRedisUrl = false } = {},
-) => {
-  // On macOS this path sits behind the /var symlink, so the preflight also
-  // runs through one.
-  const root = await mkdtemp(path.join(tmpdir(), "conclave-deploy-"));
-  try {
-    const src = path.join(root, "src");
-    await mkdir(path.join(src, "scripts"), { recursive: true });
-    await copyFile(path.join(scripts, "deploy-sfu.sh"), path.join(src, "scripts", "deploy-sfu.sh"));
-    if (script) await writeFile(path.join(src, "scripts", "deploy-sfu.sh"), script);
-    await copyFile(path.join(scripts, "deploy-sfu.ps1"), path.join(src, "scripts", "deploy-sfu.ps1"));
-    await copyFile(path.join(scripts, "deploy-sfu-preflight.mjs"), path.join(src, "scripts", "deploy-sfu-preflight.mjs"));
-    await copyFile(path.join(scripts, "host_lock.py"), path.join(src, "scripts", "host_lock.py"));
-    // The preflight shares the SFU's own worker and port rules.
-    await mkdir(path.join(src, "packages", "sfu", "config"), { recursive: true });
-    await copyFile(
-      path.join(scripts, "..", "packages", "sfu", "config", "workerSettings.mjs"),
-      path.join(src, "packages", "sfu", "config", "workerSettings.mjs"),
-    );
-    await copyFile(path.join(scripts, "..", "docker-compose.sfu.yml"), path.join(src, "docker-compose.sfu.yml"));
-    // Fixed dates, so the same files make the same commit in every run, as a
-    // rerun on the VM sees the same checkout.
-    const git = (...args) =>
-      run("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", ...args], {
-        env: { ...process.env, GIT_AUTHOR_DATE: "2026-01-01T00:00:00Z", GIT_COMMITTER_DATE: "2026-01-01T00:00:00Z" },
-      });
-    await git("-C", src, "init", "-q");
-    await git("-C", src, "add", ".");
-    await git("-C", src, "commit", "-qm", "deploy test");
-    await git("clone", "-q", "--bare", src, path.join(root, "origin.git"));
-    const vm = path.join(root, "vm");
-    await git("clone", "-q", path.join(root, "origin.git"), vm);
-    if (upstream) {
-      for (const [file, content] of Object.entries(upstream)) await writeFile(path.join(src, file), content);
-      await git("-C", src, "commit", "-qam", "the revision to deploy");
-      await git("-C", src, "push", "-q", path.join(root, "origin.git"), "HEAD");
-    }
-    await writeFile(
-      path.join(vm, ".env"),
-      [
-        `SFU_SECRET=${secret}`,
-        ...(noRedisUrl ? [] : ["REDIS_URL=redis://127.0.0.1:6379/0"]),
-        ...Object.entries(sfus).flatMap(([name, sfu]) => [
-          `SFU_${name.at(-1).toUpperCase()}_URL=http://127.0.0.1:${sfu.port}`,
-          `SFU_${name.at(-1).toUpperCase()}_PUBLIC_URL=http://127.0.0.1:${sfu.port}`,
-        ]),
-        ...envLines,
-      ].join("\n"),
-    );
-    const bin = path.join(root, "bin");
-    await mkdir(bin);
-    await writeFile(path.join(bin, "docker"), dockerStandIn);
-    await chmod(path.join(bin, "docker"), 0o755);
-    if (!withoutFlock) await provideFlock(bin);
-    const hostPath = withoutFlock ? await pathWithout(path.join(root, "host-bin"), ["flock"]) : process.env.PATH;
-    const dockerLog = path.join(root, "docker.log");
-    await writeFile(dockerLog, "");
-    const env = {
-      ...process.env,
-      PATH: `${bin}:${hostPath}`,
-      DEPLOY_TEST_SFUS: JSON.stringify(Object.fromEntries(Object.entries(sfus).map(([n, s]) => [n, { port: s.port }]))),
-      DEPLOY_TEST_DOCKER_LOG: dockerLog,
-      SFU_DEPLOY_STATE_DIR: path.join(root, "state"),
-      DRAIN_TIMEOUT_SECONDS: "2",
-      DRAIN_POLL_SECONDS: "0.2",
-      PLACEMENT_SETTLE_SECONDS: "0",
-      HEALTH_TIMEOUT_SECONDS: "5",
-      CONTAINER_SAMPLE_SECONDS: "0.2",
-      DEPLOY_POLL_SECONDS: "0.1",
-      DEPLOY_STATUS_RETRY_SECONDS: "0.2",
-      SFU_DEPLOY_LOCK_FILE: path.join(root, "deploy.lock"),
-      ...extraEnv,
-    };
-    const command = powershell
-      ? ["pwsh", ["-NoProfile", "-File", path.join(vm, "scripts", "deploy-sfu.ps1"), ...extraArgs]]
-      : ["bash", [path.join(vm, "scripts", "deploy-sfu.sh"), ...extraArgs]];
-    const result = await run(...command, { env }).then(
-      ({ stdout, stderr }) => ({ code: 0, output: stdout + stderr }),
-      (error) => ({ code: error.code, output: `${error.stdout}${error.stderr}` }),
-    );
-    const docker = (await readFile(dockerLog, "utf8")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
-    const tags = JSON.parse(await readFile(env.DEPLOY_TEST_DOCKER_TAGS || `${dockerLog}.tags`, "utf8").catch(() => "{}"));
-    return { ...result, docker, tags, order: result.output.match(/^Deploy order: (.*)$/m)?.[1] };
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-};
-
-const withSfus = async (specs, body) => {
-  const sfus = {};
-  const context = { events: [], beforeDrain: null };
-  try {
-    for (const [name, spec] of Object.entries(specs)) sfus[name] = await startSfu(context, name, spec);
-    await body(sfus, context.events, context);
-  } finally {
-    await Promise.all(Object.values(sfus).map((sfu) => sfu.close()));
-  }
-};
-
-const passedPreflight = (result) => assert.match(result.output, /SFU deployment preflight passed/, result.output);
-
-const cutRooms = (sfus) => Object.values(sfus).flatMap((sfu) => sfu.recreates.map((r) => r.roomsCut));
 
 test("with calls on both instances, the deploy rebuilds neither while those calls run", async () => {
   await withSfus({ "sfu-a": { rooms: 2 }, "sfu-b": { rooms: 1 } }, async (sfus) => {
@@ -500,13 +115,28 @@ test("no instance is drained while another is down, even one outside the deploy"
   });
 });
 
-test("a public URL that does not reach the new instance stops the deploy before the next drain", async () => {
+test("an instance whose public URL does not reach it is left alone, and nothing else is drained", async () => {
   await withSfus({ "sfu-a": { rooms: 1 }, "sfu-b": { rooms: 0 } }, async (sfus) => {
-    // sfu-b's public route lands on sfu-a, as a misrouted proxy would.
+    // sfu-b's public route lands on sfu-a, as a misrouted proxy would: it
+    // cannot be shown to serve before or after, so it is not rebuilt.
     const result = await deploy(sfus, { envLines: [`SFU_B_PUBLIC_URL=http://127.0.0.1:${sfus["sfu-a"].port}`] });
     assert.equal(result.code, 1, result.output);
     assert.match(result.output, /Public URL for sfu-b reaches instance 'sfu-a' instead/);
-    assert.equal(sfus["sfu-b"].recreates.length, 2);
+    assert.equal(sfus["sfu-b"].recreates.length, 0);
+    assert.equal(sfus["sfu-b"].draining, false);
+    assert.equal(sfus["sfu-a"].drains.length, 0);
+  });
+});
+
+test("a new build whose public route fails after its canary is rolled back before the next drain (exit 4)", async () => {
+  // The route reaches the old image and returns 502 for the new one.
+  const onRecreate = (sfu) => (sfu.publicDown = sfu.image !== "sha256:running");
+  await withSfus({ "sfu-a": { rooms: 1 }, "sfu-b": { rooms: 0, publicRoute: true, onRecreate } }, async (sfus) => {
+    const result = await deploy(sfus);
+    assert.equal(result.code, 4, result.output);
+    assert.match(result.output, /sfu-b passed its canary but is not serving .*public URL/);
+    assert.equal(sfus["sfu-b"].image, "sha256:running");
+    assert.equal(sfus["sfu-b"].draining, false);
     assert.equal(sfus["sfu-a"].drains.length, 0, "no drain may follow an unreachable replacement");
   });
 });
@@ -579,7 +209,10 @@ test("a peer left draining whose status cannot be read is not drained against", 
 test("a rerun checks the public route of an instance already on the target", async () => {
   await withSfus({ "sfu-a": { rooms: 1 }, "sfu-b": { onTarget: true } }, async (sfus) => {
     // sfu-b passed its canary on an earlier run but its public route lands on sfu-a.
-    const result = await deploy(sfus, { envLines: [`SFU_B_PUBLIC_URL=http://127.0.0.1:${sfus["sfu-a"].port}`] });
+    const result = await deploy(sfus, {
+      envLines: [`SFU_B_PUBLIC_URL=http://127.0.0.1:${sfus["sfu-a"].port}`],
+      journals: { "sfu-b": { phase: "idle", lkg: "sha256:target" } },
+    });
     assert.equal(result.code, 1, result.output);
     assert.match(result.output, /sfu-b already runs .* but clients cannot reach it/);
     assert.equal(sfus["sfu-a"].drains.length, 0);
@@ -947,7 +580,8 @@ test("a deploy paused by a call leaves that instance's compose image on the rele
 
 test("an instance on the target whose status says unhealthy is redeployed, not counted as deployed", async () => {
   await withSfus({ "sfu-a": { onTarget: true, statusHealthy: false }, "sfu-b": { onTarget: true } }, async (sfus) => {
-    const result = await deploy(sfus);
+    // Both passed their canary on an earlier run.
+    const result = await deploy(sfus, { journals: { "sfu-a": { phase: "idle", lkg: "sha256:target" }, "sfu-b": { phase: "idle", lkg: "sha256:target" } } });
     assert.equal(result.code, 0, result.output);
     assert.doesNotMatch(result.output, /sfu-a already runs/);
     assert.equal(sfus["sfu-a"].recreates.length, 2, "canary container, then the serving one");
@@ -1103,10 +737,11 @@ test("a deploy never falls back to a build an interrupted canary left drained", 
 });
 
 test("a compose that starts another image than the one tagged for the deploy fails it loudly", async () => {
-  // Sol's probe: with COMPOSE_COMPATIBILITY=true Compose names the image
-  // vm_sfu-a, so the tag on vm-sfu-a never reaches the container.
+  // Sol's probe: with COMPOSE_COMPATIBILITY=true and an implicit image name,
+  // Compose started vm_sfu-a, so the tag on vm-sfu-a never reached the
+  // container. Here the stand-in starts the old image whatever it is told.
   await withSfus({ "sfu-a": {}, "sfu-b": {} }, async (sfus) => {
-    const result = await deploy(sfus, { envLines: ["COMPOSE_COMPATIBILITY=true"] });
+    const result = await deploy(sfus, { env: { DEPLOY_TEST_COMPOSE_IGNORES_IMAGE: "1" } });
     assert.notEqual(result.code, 0, result.output);
     assert.match(result.output, /compose started sfu-[ab] on sha256:running, not the image tagged for it/);
     assert.doesNotMatch(result.output, /SFU deploy complete/);
@@ -1208,6 +843,78 @@ test("the deploy lock is made so no other user can open it, and one that is a li
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// --- Sol's second final review: crashes and interruptions mid-deploy.
+
+const sharedRun = async (prefix) => {
+  const dir = await mkdtemp(path.join(tmpdir(), prefix));
+  return { dir, env: { SFU_DEPLOY_STATE_DIR: path.join(dir, "state"), DEPLOY_TEST_DOCKER_TAGS: path.join(dir, "tags.json"), SFU_DEPLOY_LOCK_FILE: path.join(dir, "deploy.lock") } };
+};
+
+test("after a canary failure kills the deploy, a hand-run compose up starts the last good image and the retry runs the canary", async () => {
+  await withSfus({ "sfu-a": {}, "sfu-b": { rooms: 1 } }, async (sfus) => {
+    const shared = await sharedRun("deploy-crash-");
+    try {
+      const first = await deploy(sfus, { env: { ...shared.env, DEPLOY_TEST_BAD_IMAGES: "sha256:target", DEPLOY_TEST_KILL_ON_CANARY_FAILURE: "1" } });
+      assert.equal(first.code, null, first.output);
+      // An operator brings sfu-a up by hand: Compose starts whatever the
+      // service's own image name points at.
+      await composeUpByHand(sfus, { tags: shared.env.DEPLOY_TEST_DOCKER_TAGS, dir: path.join(shared.dir, "by-hand") }, "sfu-a");
+      assert.equal(sfus["sfu-a"].image, "sha256:running", "the service's own tag never named the build that failed");
+      assert.equal(sfus["sfu-a"].draining, false);
+      const retry = await deploy(sfus, { env: { ...shared.env, DEPLOY_TEST_BAD_IMAGES: "sha256:target" } });
+      assert.equal(retry.code, 4, retry.output);
+      assert.match(retry.output, /Running the canary call against sfu-a/);
+      assert.equal(sfus["sfu-a"].image, "sha256:running");
+      assert.equal(sfus["sfu-a"].draining, false);
+    } finally {
+      await rm(shared.dir, { recursive: true, force: true });
+    }
+  });
+});
+
+test("a deploy killed just after an instance accepted its drain leaves its last good image on record", async () => {
+  await withSfus({ "sfu-a": {}, "sfu-b": { rooms: 1 } }, async (sfus) => {
+    const shared = await sharedRun("deploy-crash-");
+    try {
+      const first = await deploy(sfus, { env: { ...shared.env, SFU_DEPLOY_TEST_CRASH_AT: "drain sfu-a" } });
+      assert.equal(first.code, null, first.output);
+      assert.equal(sfus["sfu-a"].draining, true);
+      // The next deploy's build fails its canary: sfu-a must go back to the
+      // image it served on, not be stopped for want of one.
+      const retry = await deploy(sfus, { env: { ...shared.env, DEPLOY_TEST_NO_BUNDLE: "sha256:target" } });
+      assert.equal(retry.code, 4, retry.output);
+      assert.equal(sfus["sfu-a"].image, "sha256:running");
+      assert.equal(sfus["sfu-a"].container, "running");
+      assert.equal(sfus["sfu-a"].draining, false);
+    } finally {
+      await rm(shared.dir, { recursive: true, force: true });
+    }
+  });
+});
+
+test("an inherited SFU_START_DRAINING=true never leaves a deployed instance drained", async () => {
+  await withSfus({ "sfu-a": {}, "sfu-b": {} }, async (sfus) => {
+    const result = await deploy(sfus, { envLines: ["SFU_START_DRAINING=true"], env: { SFU_START_DRAINING: "true" } });
+    assert.equal(result.code, 0, result.output);
+    for (const sfu of Object.values(sfus)) {
+      assert.equal(sfu.image, "sha256:target");
+      assert.equal(sfu.draining, false, `${sfu.instanceId} serves`);
+      assert.equal(sfu.bootDrained, false, `${sfu.instanceId}'s container did not boot drained`);
+    }
+  });
+});
+
+test("a rollback whose public route returns 502 is not reported as restored (exit 5, not 4)", async () => {
+  // Sol's probe: the management URL answers, the route clients use does not.
+  const onRecreate = (sfu) => (sfu.publicDown = true);
+  await withSfus({ "sfu-a": { rooms: 1 }, "sfu-b": { rooms: 0, publicRoute: true, onRecreate } }, async (sfus) => {
+    const result = await deploy(sfus, { env: { DEPLOY_TEST_NO_BUNDLE: "sha256:target" } });
+    assert.equal(result.code, 5, result.output);
+    assert.match(result.output, /sfu-b is back on its previous image but is not serving \(its public URL/);
+    assert.equal(sfus["sfu-a"].drains.length, 0);
   });
 });
 

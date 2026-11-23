@@ -49,6 +49,7 @@ export const jobs = {
     tasks: [
       { dir: ".", script: "test:quality-harness" },
       { dir: ".", script: "test:deploy-preflight" },
+      { dir: ".", script: "test:deploy-crash" },
       { dir: ".", script: "test:cloudflare-manifests" },
       { dir: ".", script: "test:native-tokens" },
       { dir: ".", script: "test:native-icons" },
