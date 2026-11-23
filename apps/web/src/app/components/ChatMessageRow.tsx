@@ -102,7 +102,7 @@ function TtsMessageBody({
         isOwn ? "bg-white/[0.16] text-white" : "bg-white/[0.08] text-[#fafafa]"
       }`}
     >
-      <AudioLines size={12} strokeWidth={2} />
+      <AudioLines size={12} strokeWidth={1.75} />
     </span>
   );
 
@@ -110,7 +110,7 @@ function TtsMessageBody({
     <div className="px-3.5 pb-2 pt-2.5">
       <div className={`flex items-center gap-2 ${headerTone}`}>
         {control}
-        <span className="text-[10px] font-semibold uppercase tracking-[0.09em]">
+        <span className="text-[12px] font-medium">
           {isSpeaking ? "Speaking" : "Voice message"}
         </span>
         {isSpeaking ? <TtsEqualizer /> : null}

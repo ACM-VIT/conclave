@@ -86,7 +86,7 @@ export default function ShortcutsHelpDialog() {
         >
           <Keyboard
             size={16}
-            strokeWidth={2}
+            strokeWidth={1.75}
             className="shrink-0"
             style={{ color: color.textFaint }}
           />
