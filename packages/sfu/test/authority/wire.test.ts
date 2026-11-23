@@ -579,7 +579,7 @@ describe("authority transport on real sockets", () => {
     const authority = getRoomAuthority(stack.state, stack.room)!;
     const framesAtClose = host.frames.length;
 
-    forceCloseRoom(stack.state, stack.room.channelId);
+    forceCloseRoom(stack.state, stack.room);
     await wait(400);
     const afterClose = await ask<AuthorityResult<Json>>(host.socket, AUTHORITY_EVENTS.act, {
       roomEpoch: authority.roomEpoch,
