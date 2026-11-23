@@ -55,10 +55,13 @@ tabs saving at once never write over each other (at most 512 KB in all, the
 oldest batches going first). A saved copy is removed only once a send of it
 is answered. The next page load, and a page coming back into view, sends what
 storage holds, from any tab, while holding a Web Locks lock
-(`conclave:telemetry:replay`, taken only if free, so one tab replays at a
-time); without the Web Locks API two tabs may both send a batch, and `/ingest`
-takes each uuid once. A beacon is never answered, so its batch is sent again
-then too.
+(`conclave:telemetry:replay`), so one tab replays at a time. A replay waits
+its turn for the lock and holds it until its sends have their first answers,
+or 10 s at most. A replay asked for while one runs, such as a page coming back
+while its own replay still waits for an answer, runs after it, so a batch
+saved meanwhile is not left for the next page load. Without the Web Locks API
+two tabs may both send a batch, and `/ingest` takes each uuid once. A beacon
+is never answered, so its batch is sent again then too.
 
 Saved batches expire. `/ingest` keeps an event's own time only within 5
 minutes of receiving it, so a batch whose oldest event is more than 4 minutes

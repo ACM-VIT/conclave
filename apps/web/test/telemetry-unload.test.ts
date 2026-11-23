@@ -23,6 +23,9 @@ const holdSdk = () => {
 type Sent = { via: "beacon" | "fetch"; url: string; body: BodyInit; type: string };
 let sent: Sent[] = [];
 
+// While set, /ingest answers only once the test releases it.
+let ingestHeld: Promise<void> | null = null;
+
 // The page's fetch of its chunk manifest: pending until a test aborts it, or
 // missing at once.
 let manifest: "pending" | "missing" = "pending";
@@ -33,6 +36,7 @@ beforeEach(async () => {
   const { PostHog } = await import("posthog-js");
   vi.spyOn(PostHog.prototype, "init");
   sent = [];
+  ingestHeld = null;
   localStorage.clear();
   manifest = "pending";
   sdk.release = () => {};
@@ -49,10 +53,12 @@ beforeEach(async () => {
           abortManifest = () => reject(new TypeError("Failed to fetch"));
         });
       }
+      const answer = new Response('{"status":1}', { status: 200 });
       if (url.includes("/ingest/") && init?.body) {
         sent.push({ via: "fetch", url, body: init.body, type: new Headers(init.headers).get("content-type") ?? "" });
+        if (ingestHeld) return ingestHeld.then(() => answer);
       }
-      return Promise.resolve(new Response('{"status":1}', { status: 200 }));
+      return Promise.resolve(answer);
     }),
   );
   // posthog-js drops every event from a browser that says it is automated.
@@ -116,6 +122,49 @@ const savedKeys = () =>
   Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index) ?? "").filter((key) =>
     key.startsWith(STORED_BATCH_PREFIX),
   );
+const fetches = () => sent.filter((item) => item.via === "fetch");
+
+/**
+ * The Web Locks API as a browser has it: each request waits its turn, and
+ * one made `ifAvailable` while the lock is held gets null at once.
+ */
+const webLocks = () => {
+  const requests: Array<{ name: string; ifAvailable: boolean }> = [];
+  const waiting: Array<() => void> = [];
+  let held = false;
+  const grantNext = () => waiting.shift()?.();
+  type Run = (lock: { name: string } | null) => Promise<void> | void;
+  const request = (name: string, optionsOrRun: Run | { ifAvailable?: boolean }, maybeRun?: Run) => {
+    const run = (typeof optionsOrRun === "function" ? optionsOrRun : maybeRun) as Run;
+    const ifAvailable = typeof optionsOrRun === "function" ? false : (optionsOrRun.ifAvailable ?? false);
+    requests.push({ name, ifAvailable });
+    if (held && ifAvailable) return Promise.resolve(run(null));
+    return new Promise<void>((resolve, reject) => {
+      const start = () => {
+        held = true;
+        Promise.resolve(run({ name }))
+          .then(resolve, reject)
+          .finally(() => {
+            held = false;
+            grantNext();
+          });
+      };
+      if (held) waiting.push(start);
+      else start();
+    });
+  };
+  // Another tab takes the lock; the returned function lets it go.
+  const hold = () => {
+    held = true;
+    return () => {
+      held = false;
+      grantNext();
+    };
+  };
+  Object.defineProperty(navigator, "locks", { configurable: true, value: { request } });
+  return { requests, hold };
+};
+
 const names = async (list?: Sent[]) => (await sentEvents(list)).map((event) => event.event).sort();
 const beacons = () => sent.filter((item) => item.via === "beacon");
 
@@ -309,7 +358,7 @@ describe("batches the browser will not take as the page goes away", () => {
     expect(events[0].properties).toMatchObject({ batches: 1, events: 2, unsent: 1 });
   });
 
-  it("replays only while holding the tabs' lock, and leaves the batches to the tab holding it", async () => {
+  it("waits its turn for the tabs' lock, and replays once the tab holding it lets go", async () => {
     manifest = "missing";
     const id = "0196f0a1-0000-7000-9000-0000000000e0";
     const recent = {
@@ -319,30 +368,55 @@ describe("batches the browser will not take as the page goes away", () => {
       properties: { token: KEY, distinct_id: "0196f0a1-0000-7000-8000-00000000d15d", joinMode: "meeting", isAdmin: false },
     };
     localStorage.setItem(`${STORED_BATCH_PREFIX}${id}`, JSON.stringify({ id, events: [recent], oldestAt: Date.now(), sent: false }));
-    const requests: Array<{ name: string; ifAvailable?: boolean }> = [];
-    let otherTabHolds = true;
-    Object.defineProperty(navigator, "locks", {
-      configurable: true,
-      value: {
-        request: (name: string, options: { ifAvailable?: boolean }, run: (lock: { name: string } | null) => Promise<void>) => {
-          requests.push({ name, ifAvailable: options.ifAvailable });
-          return run(otherTabHolds ? null : { name });
-        },
-      },
-    });
+    const locks = webLocks();
+    const otherTabLetsGo = locks.hold();
     try {
       const { startTelemetry } = await import("../src/app/lib/telemetry");
       startTelemetry();
       await loaded();
-      expect(requests).toEqual([{ name: "conclave:telemetry:replay", ifAvailable: true }]);
+      expect(locks.requests).toEqual([{ name: "conclave:telemetry:replay", ifAvailable: false }]);
       expect(sent).toEqual([]);
       expect(savedKeys()).toHaveLength(1);
 
-      otherTabHolds = false;
-      document.dispatchEvent(new Event("visibilitychange"));
-      await vi.waitFor(() => expect(sent.length).toBeGreaterThan(0));
-      expect(sent.every((item) => item.via === "fetch")).toBe(true);
+      otherTabLetsGo();
+      await vi.waitFor(() => expect(fetches().length).toBeGreaterThan(0));
       expect(new Set((await sentEvents()).map((event) => event.event))).toEqual(new Set(["meet_join_attempt"]));
+      await vi.waitFor(() => expect(savedKeys()).toEqual([]));
+    } finally {
+      delete (navigator as unknown as { locks?: unknown }).locks;
+    }
+  });
+
+  it("sends a batch saved while a replay waited for its answer, once that replay ends", async () => {
+    manifest = "missing";
+    const id = "0196f0a1-0000-7000-9000-0000000000c0";
+    const earlier = {
+      uuid: "0196f0a1-0000-7000-8000-0000000000c1",
+      event: "meet_join_attempt",
+      timestamp: new Date().toISOString(),
+      properties: { token: KEY, distinct_id: "0196f0a1-0000-7000-8000-00000000d15d", joinMode: "meeting", isAdmin: false },
+    };
+    localStorage.setItem(`${STORED_BATCH_PREFIX}${id}`, JSON.stringify({ id, events: [earlier], oldestAt: Date.now(), sent: false }));
+    webLocks();
+    let answer = () => {};
+    ingestHeld = new Promise<void>((resolve) => (answer = resolve));
+    try {
+      const { telemetry, startTelemetry } = await import("../src/app/lib/telemetry");
+      startTelemetry();
+      await loaded();
+      await vi.waitFor(() => expect(fetches()).toHaveLength(1));
+
+      // The page hides, saving what it holds, and comes back while the
+      // replay still waits for its answer.
+      Object.defineProperty(navigator, "sendBeacon", { configurable: true, value: () => false });
+      telemetry.capture("meet_join_success", { joinMode: "meeting", status: "joined" });
+      hide();
+      expect(savedKeys()).toHaveLength(2);
+      document.dispatchEvent(new Event("visibilitychange"));
+      ingestHeld = null;
+      answer();
+
+      await vi.waitFor(async () => expect(await names(fetches())).toContain("meet_join_success"));
       await vi.waitFor(() => expect(savedKeys()).toEqual([]));
     } finally {
       delete (navigator as unknown as { locks?: unknown }).locks;

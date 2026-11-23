@@ -43,6 +43,9 @@ const MAX_REMEMBERED_UUIDS = 2000;
 // it. A batch older than this, a minute short of that for the request and a
 // clock a little off, is dropped rather than sent to be dated wrong.
 export const MAX_SEND_AGE_MS = MAX_EVENT_AGE_MS - 60_000;
+// The longest a replay holds the tabs' lock waiting for its sends' first
+// answers, so a send that never answers holds up no other tab.
+export const REPLAY_HOLD_MS = 10_000;
 
 /** A batch as storage keeps it for a later page load. */
 export type StoredBatch = {
@@ -79,7 +82,7 @@ export type OutboxDeps = {
   /** A new batch's id, a uuid. */
   newId: () => string;
   store: BatchStore;
-  /** Runs `replay` holding a lock the site's tabs share, or not at all while another tab holds it. */
+  /** Runs `replay` holding a lock the site's tabs share, once it is this tab's turn. */
   lock: (replay: () => Promise<void>) => void;
   onStale: (dropped: DroppedBatches) => void;
 };
@@ -112,6 +115,10 @@ export function createOutbox(deps: OutboxDeps) {
   // Bytes of keepalive requests still in flight, and of recent beacons.
   let keepaliveBytes = 0;
   const beacons: Array<{ bytes: number; at: number }> = [];
+  // A replay waiting for the lock reads storage once it has it, so one
+  // waiting covers every later ask; an ask while one runs adds one more pass.
+  let replay: "idle" | "waiting" | "running" = "idle";
+  let replayAgain = false;
 
   // The wrapper a batch body adds around its events.
   const overhead = byteLength(
@@ -236,6 +243,40 @@ export function createOutbox(deps: OutboxDeps) {
     }, delay);
   };
 
+  // One pass over storage: sends each batch in it, from any tab, that this
+  // page is not already sending, and drops the ones too old to send.
+  const replayPass = async (): Promise<void> => {
+    const stale: StoredBatch[] = [];
+    const sends: Array<Promise<void>> = [];
+    for (const saved of deps.store.list()) {
+      if (live.has(saved.id)) continue;
+      if (tooOld(saved.oldestAt)) {
+        deps.store.remove(saved.id);
+        stale.push(saved);
+        continue;
+      }
+      sends.push(
+        send({
+          id: saved.id,
+          events: saved.events,
+          oldestAt: saved.oldestAt,
+          attempt: 0,
+          timer: null,
+          inFlight: null,
+          beaconed: saved.sent,
+        }),
+      );
+    }
+    if (stale.length > 0) deps.onStale(counted(stale));
+    if (sends.length === 0) return;
+    let timer: unknown = null;
+    await Promise.race([
+      Promise.all(sends),
+      new Promise<void>((resolve) => (timer = deps.setTimer(resolve, REPLAY_HOLD_MS))),
+    ]);
+    deps.clearTimer(timer);
+  };
+
   function flush(): void {
     cancelFlush();
     if (queue.length === 0) return;
@@ -304,35 +345,30 @@ export function createOutbox(deps: OutboxDeps) {
 
     /**
      * Sends what storage holds, from any tab, holding the replay lock until
-     * each send has its first answer; a batch this page is still sending is
-     * left to that send. A batch too old to send is dropped, and the drops of
-     * one replay are counted together.
+     * each send has its first answer, or REPLAY_HOLD_MS; a batch this page is
+     * still sending is left to that send. A batch too old to send is dropped,
+     * and the drops of one pass are counted together. An ask while a pass
+     * runs, such as a page coming back as one waits for its answers, gets a
+     * pass of its own after it, so nothing saved meanwhile waits for the
+     * next page load.
      */
     replaySaved(): void {
+      if (replay === "waiting") return;
+      if (replay === "running") {
+        replayAgain = true;
+        return;
+      }
+      replay = "waiting";
       deps.lock(async () => {
-        const stale: StoredBatch[] = [];
-        const sends: Array<Promise<void>> = [];
-        for (const saved of deps.store.list()) {
-          if (live.has(saved.id)) continue;
-          if (tooOld(saved.oldestAt)) {
-            deps.store.remove(saved.id);
-            stale.push(saved);
-            continue;
-          }
-          sends.push(
-            send({
-              id: saved.id,
-              events: saved.events,
-              oldestAt: saved.oldestAt,
-              attempt: 0,
-              timer: null,
-              inFlight: null,
-              beaconed: saved.sent,
-            }),
-          );
+        replay = "running";
+        try {
+          do {
+            replayAgain = false;
+            await replayPass();
+          } while (replayAgain);
+        } finally {
+          replay = "idle";
         }
-        if (stale.length > 0) deps.onStale(counted(stale));
-        await Promise.all(sends);
       });
     },
   };

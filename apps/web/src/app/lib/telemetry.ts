@@ -81,9 +81,11 @@ const sendForUnload = (build: () => void): void => {
 const MAX_PENDING = 50;
 
 // Batches not yet answered when a page went away, one local storage entry
-// each, which a later page load (or this one, back again) sends. A page's
-// tabs replay one at a time where the browser has the Web Locks API; without
-// it, two tabs may send a batch twice, and /ingest takes each uuid once.
+// each, which a later page load (or this one, back again) sends. A site's
+// tabs replay one at a time where the browser has the Web Locks API: a
+// replay waits its turn, so one asked for while another tab's runs still
+// happens, after it. Without the API two tabs may send a batch twice, and
+// /ingest takes each uuid once.
 const REPLAY_LOCK = "conclave:telemetry:replay";
 
 const replayLock = (replay: () => Promise<void>): void => {
@@ -92,11 +94,7 @@ const replayLock = (replay: () => Promise<void>): void => {
     void replay();
     return;
   }
-  locks
-    .request(REPLAY_LOCK, { ifAvailable: true }, async (lock) => {
-      if (lock) await replay();
-    })
-    .catch(() => void replay());
+  locks.request(REPLAY_LOCK, replay).catch(() => void replay());
 };
 
 // The page has started to go away: pagehide until a pageshow brings it back,

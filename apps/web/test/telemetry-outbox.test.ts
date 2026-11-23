@@ -8,6 +8,7 @@ import {
   MAX_BATCH_EVENTS,
   MAX_STORED_CHARS,
   type OutboxEvent,
+  REPLAY_HOLD_MS,
   type StoredBatch,
   UNLOAD_BUDGET_BYTES,
   URGENT_FLUSH_GAP_MS,
@@ -31,14 +32,24 @@ const memoryStore = () => {
 
 type Store = ReturnType<typeof memoryStore> | ReturnType<typeof createBatchStore>;
 
-/** The Web Locks API's `ifAvailable` request, shared by the tabs of a test. */
+/** A Web Locks lock the tabs of a test share: each request waits its turn. */
 const sharedLock = () => {
+  const waiting: Array<() => Promise<void>> = [];
   let held = false;
-  return (replay: () => Promise<void>) => {
-    if (held) return;
+  const next = (): void => {
+    const run = waiting.shift();
+    if (!run) return;
     held = true;
-    void replay().finally(() => (held = false));
+    void run().finally(() => {
+      held = false;
+      next();
+    });
   };
+  const lock = (replay: () => Promise<void>) => {
+    waiting.push(replay);
+    if (!held) next();
+  };
+  return Object.assign(lock, { waiting: () => waiting.length, held: () => held });
 };
 
 const noLock = (replay: () => Promise<void>) => void replay();
@@ -480,6 +491,95 @@ describe("saved batches across tabs", () => {
 
     expect(loads.flatMap((load) => load.posted()).sort()).toEqual(items.map((item) => item.uuid).sort());
     expect(store.list()).toEqual([]);
+  });
+
+  it("replays again once a replay in progress ends, for a batch saved while it waited for an answer", async () => {
+    const store = memoryStore();
+    const closed = harness({ store });
+    closed.refuseBeacons();
+    const earlier = event();
+    closed.outbox.add(earlier);
+    closed.outbox.flushForUnload();
+
+    const later = answerLater();
+    const page = harness({ answers: [later.promise], store, lock: sharedLock(), at: START + 5000 });
+    page.outbox.replaySaved();
+    await settle();
+    expect(page.posted()).toEqual([earlier.uuid]);
+
+    // The page hides, saving what it holds, and comes back while the
+    // replay still waits for its answer.
+    page.refuseBeacons();
+    const meanwhile = event("meet_join_attempt", 0, START + 5000);
+    page.outbox.add(meanwhile);
+    page.outbox.flushForUnload();
+    page.outbox.replaySaved();
+    later.answer(200);
+    await page.advance(0);
+
+    expect(page.posted()).toEqual([earlier.uuid, meanwhile.uuid]);
+    expect(store.list()).toEqual([]);
+  });
+
+  it("waits its turn when another tab holds the lock, then sends what was saved meanwhile", async () => {
+    const store = memoryStore();
+    const lock = sharedLock();
+    const closed = harness({ store });
+    closed.refuseBeacons();
+    const earlier = event();
+    closed.outbox.add(earlier);
+    closed.outbox.flushForUnload();
+
+    const later = answerLater();
+    const holder = harness({ answers: [later.promise], store, lock, at: START + 5000 });
+    holder.outbox.replaySaved();
+    await settle();
+
+    const other = harness({ store, lock, at: START + 5000 });
+    other.refuseBeacons();
+    const meanwhile = event("meet_join_attempt", 0, START + 5000);
+    other.outbox.add(meanwhile);
+    other.outbox.flushForUnload();
+    other.outbox.replaySaved();
+    await settle();
+    expect(other.posts).toEqual([]);
+
+    later.answer(200);
+    await other.advance(0);
+    expect(other.posted()).toEqual([meanwhile.uuid]);
+    expect(store.list()).toEqual([]);
+  });
+
+  it("holds the lock no longer than REPLAY_HOLD_MS for a send that never answers", async () => {
+    const store = memoryStore();
+    const lock = sharedLock();
+    const closed = harness({ store });
+    closed.refuseBeacons();
+    const stuck = event();
+    closed.outbox.add(stuck);
+    closed.outbox.flushForUnload();
+
+    const holder = harness({ answers: ["pending"], store, lock, at: START + 5000 });
+    holder.outbox.replaySaved();
+    const other = harness({ store, lock, at: START + 5000 });
+    other.outbox.replaySaved();
+    await holder.advance(REPLAY_HOLD_MS - 1);
+    expect(other.posts).toEqual([]);
+
+    await holder.advance(1);
+    await other.advance(0);
+    expect(other.posted()).toEqual([stuck.uuid]);
+    expect(lock.held()).toBe(false);
+  });
+
+  it("asks for the lock once while a replay waits for it, however often the page comes back", async () => {
+    const lock = sharedLock();
+    const holder = harness({ answers: ["pending"], lock });
+    holder.outbox.replaySaved();
+    const page = harness({ lock });
+    for (let i = 0; i < 5; i++) page.outbox.replaySaved();
+
+    expect(lock.waiting()).toBe(1);
   });
 
   it("loses nothing without the lock: two tabs replaying at once both send, and /ingest takes the uuid once", async () => {
