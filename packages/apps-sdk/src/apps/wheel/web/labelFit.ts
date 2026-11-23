@@ -77,6 +77,14 @@ const largestFittingSize = (
   return Math.min(geometry.maxFontSize, byLength, byWedge);
 };
 
+const WHITESPACE_CLUSTER = /^\s+$/u;
+
+const shortened = (clusters: string[], count: number): string => {
+  let end = count;
+  while (end > 0 && WHITESPACE_CLUSTER.test(clusters[end - 1])) end -= 1;
+  return `${clusters.slice(0, end).join("")}${ELLIPSIS}`;
+};
+
 const truncateToWidth = (
   label: string,
   widthAtSize: (text: string) => number,
@@ -88,13 +96,13 @@ const truncateToWidth = (
   let high = characters.length - 1;
   while (low < high) {
     const mid = Math.ceil((low + high) / 2);
-    const candidate = `${characters.slice(0, mid).join("").trimEnd()}${ELLIPSIS}`;
+    const candidate = shortened(characters, mid);
     if (widthAtSize(candidate) <= limit) low = mid;
     else high = mid - 1;
   }
   if (low < 1) return null;
   return {
-    text: `${characters.slice(0, low).join("").trimEnd()}${ELLIPSIS}`,
+    text: shortened(characters, low),
     truncated: true,
   };
 };
