@@ -23,7 +23,7 @@ import {
 } from "./transcript-room-rig";
 
 const { lookup } = vi.hoisted(() => ({ lookup: vi.fn() }));
-const { SPEECH_CHUNK_BYTES, FLOOD_CHUNKS } = vi.hoisted(() => ({ SPEECH_CHUNK_BYTES: 12_800, FLOOD_CHUNKS: 120 }));
+const { SPEECH_CHUNK_BYTES, FLOOD_CHUNKS } = vi.hoisted(() => ({ SPEECH_CHUNK_BYTES: 12_800, FLOOD_CHUNKS: 240 }));
 vi.mock("../transcript-worker/src/constants", async (original) => ({
   ...(await original<typeof import("../transcript-worker/src/constants")>()),
   TRANSCRIPTION_RECOVERY_MAX_AUDIO_BYTES: FLOOD_CHUNKS * SPEECH_CHUNK_BYTES,
@@ -985,14 +985,16 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
         await vi.advanceTimersByTimeAsync(1_600);
       },
       async monologue() {
-        if (live.provider !== "sarvam") return moves.utter();
+        if (live.provider !== "sarvam" || utterances.some(({ chunks, final }) => chunks > 1 && final === "pending")) {
+          return moves.utter();
+        }
         const utterance = newUtterance(false);
         await speak(utterance.speaker);
         if (sarvamSignalsSpeech) signalSpeech(live);
         place(utterance);
         live.awaiting.push(utterance);
-        for (let elapsed = 0; elapsed < DEADLINE + 2_000; elapsed += 1_000) {
-          await vi.advanceTimersByTimeAsync(1_000);
+        for (let elapsed = 0; elapsed < DEADLINE + 2_000; elapsed += 250) {
+          await vi.advanceTimersByTimeAsync(250);
           await speak(utterance.speaker);
           utterance.chunks += 1;
         }

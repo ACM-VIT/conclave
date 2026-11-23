@@ -1397,11 +1397,18 @@ export class TranscriptRoom {
   }
 
   /** A speaker's audio no line owns yet, from `since` in the turn it began, for the line just accepted. */
-  private adoptAudio(speaker: TranscriptSpeaker, since: number, turn: number | undefined): AudioChunk[] {
+  private adoptAudio(
+    speaker: TranscriptSpeaker,
+    since: number,
+    turn: number | undefined,
+    until = Number.POSITIVE_INFINITY,
+  ): AudioChunk[] {
     const key = speakerKey(speaker);
     const pending = this.uncommittedAudio.get(key);
     if (!pending || turn === undefined) return [];
-    const adopted = pending.chunks.filter((chunk) => chunk.createdAt >= since && chunk.turn === turn);
+    const adopted = pending.chunks.filter(
+      (chunk) => chunk.createdAt >= since && chunk.createdAt < until && chunk.turn === turn,
+    );
     pending.chunks = pending.chunks.filter((chunk) => !adopted.includes(chunk));
     if (pending.chunks.length === 0) this.uncommittedAudio.delete(key);
     return adopted;
@@ -1411,10 +1418,17 @@ export class TranscriptRoom {
    * A new utterance in a turn an older line took keeps its own audio from
    * where it began, and the older line's wait goes back to its own audio.
    */
-  private takeFromSpeakingLine(speaker: TranscriptSpeaker, since: number, turn: number | undefined): AudioChunk[] {
+  private takeFromSpeakingLine(
+    speaker: TranscriptSpeaker,
+    since: number,
+    turn: number | undefined,
+    until = Number.POSITIVE_INFINITY,
+  ): AudioChunk[] {
     const older = this.ledger.get(this.speakingLine.get(speakerKey(speaker)) ?? "");
     if (!older || turn === undefined) return [];
-    const taken = older.audio.filter((chunk) => chunk.createdAt >= since && chunk.turn === turn);
+    const taken = older.audio.filter(
+      (chunk) => chunk.createdAt >= since && chunk.createdAt < until && chunk.turn === turn,
+    );
     older.audio = older.audio.filter((chunk) => !taken.includes(chunk));
     if (taken.length > 0 && isActive(older)) older.deadlineAt = this.ownAudioDeadline(older);
     return taken;
@@ -1945,8 +1959,8 @@ export class TranscriptRoom {
     if (heard.speaker) this.setLineSpeaker(line, heard.speaker);
     if (connection === this.liveConnection) {
       const taken = [
-        ...this.takeFromSpeakingLine(line.speaker, heard.since, heard.turn),
-        ...this.adoptAudio(line.speaker, heard.since, heard.turn),
+        ...this.takeFromSpeakingLine(line.speaker, heard.since, heard.turn, heard.until),
+        ...this.adoptAudio(line.speaker, heard.since, heard.turn, heard.until),
       ];
       line.audio = [...line.audio, ...taken].sort((left, right) => left.createdAt - right.createdAt);
       line.deadlineAt = Math.max(line.deadlineAt, this.ownAudioDeadline(line));
@@ -2026,6 +2040,7 @@ export class TranscriptRoom {
     if (isActive(line)) {
       const text = words || line.text.trim();
       this.forgetSpeakingLine(line);
+      this.giveBackLaterSpeech(connection, line);
       if (text) {
         this.ledger.end(line, "final", text);
         changed = this.recordFinalSegment(this.lineSegment(line), text);
@@ -2072,6 +2087,7 @@ export class TranscriptRoom {
     for (const line of lines) {
       if (!isActive(line)) continue;
       this.forgetSpeakingLine(line);
+      this.giveBackLaterSpeech(connection, line);
       for (const providerItemId of connection?.providerIdsOf(line.id) ?? []) {
         connection?.session.retire?.(providerItemId);
       }
@@ -2098,6 +2114,25 @@ export class TranscriptRoom {
       );
     }
     return changed;
+  }
+
+  /**
+   * A Sarvam line's speech runs from where it began to the next onset in
+   * its turn; audio it took after that is the next utterance's, so when the
+   * line ends that audio goes back to its speaker for that utterance's
+   * signal to claim, rather than with this line.
+   */
+  private giveBackLaterSpeech(connection: ProviderConnection | null, line: CaptionLine): void {
+    if (connection !== this.liveConnection || connection?.session.provider !== "sarvam") return;
+    const began = line.audio.findIndex(({ voice }) => voice !== "quiet");
+    const next = began < 0 ? -1 : line.audio.findIndex(({ voice }, index) => index > began && voice === "onset");
+    if (next < 0) return;
+    const later = line.audio.slice(next);
+    line.audio = line.audio.slice(0, next);
+    const key = speakerKey(line.speaker);
+    const pending = this.uncommittedAudio.get(key) ?? { speaker: line.speaker, chunks: [] };
+    pending.chunks = [...later, ...pending.chunks].sort((left, right) => left.createdAt - right.createdAt);
+    this.uncommittedAudio.set(key, pending);
   }
 
   /** A line that ended with nothing to show and that no later answer can fill goes now, with its provider ids. */
