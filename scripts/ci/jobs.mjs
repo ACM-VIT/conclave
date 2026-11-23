@@ -42,8 +42,6 @@ export const jobs = {
     tasks: [
       { dir: "apps/web", script: "build" },
       { dir: "packages/shared-browser", script: "build" },
-      // The deploy suites run about two hundred deploys between them; the
-      // build job has the time for them and checks does not.
       { dir: ".", script: "test:deploy-preflight" },
       { dir: ".", script: "test:deploy-crash" },
     ],
@@ -57,6 +55,7 @@ export const jobs = {
       { dir: ".", script: "test:native-icons" },
       { dir: "packages/apps-sdk", script: "test:native-embed" },
       { dir: "packages/apps-sdk", script: "test:native-embed-apps" },
+      { dir: "packages/apps-sdk", script: "test:scripts" },
       { dir: "packages/apps-sdk", script: "check:apps" },
       { dir: ".", script: "check:video-effect-assets" },
       { dir: ".", script: "check:swift-events" },

@@ -8,6 +8,14 @@ final class PanelCoordinator {
     private(set) var destinationRequest: PanelDestinationRequest? = nil
 
     @ObservationIgnored var onSnapshotChanged: (() -> Void)? = nil
+    @ObservationIgnored var afterSnapshotChanged: (() -> Void)? = nil
+    @ObservationIgnored private var liveAppearance: PanelMount? = nil
+    @ObservationIgnored private var nextAppearanceToken = 0
+
+    var currentIsOnScreen: Bool {
+        guard let appearance = liveAppearance, !snapshot.isDismissing else { return false }
+        return snapshot.current?.presentationID == appearance.presentationID
+    }
     private var nextID = 0
     private var nextDestinationSequence = 0
 
@@ -88,6 +96,23 @@ final class PanelCoordinator {
         publish(PanelSnapshot(session: session, current: snapshot.pending, pending: nil, isDismissing: false))
     }
 
+    @discardableResult
+    func panelDidAppear(session: Int, presentationID: Int) -> Int {
+        guard snapshot.session == session, snapshot.current?.presentationID == presentationID, !snapshot.isDismissing else {
+            return 0
+        }
+        nextAppearanceToken += 1
+        liveAppearance = PanelMount(presentationID: presentationID, token: nextAppearanceToken)
+        afterSnapshotChanged?()
+        return nextAppearanceToken
+    }
+
+    func panelDidDisappear(token: Int) {
+        guard token != 0, liveAppearance?.token == token else { return }
+        liveAppearance = nil
+        afterSnapshotChanged?()
+    }
+
     func reset(session: Int) {
 
         if destinationRequest != nil { destinationRequest = nil }
@@ -96,7 +121,14 @@ final class PanelCoordinator {
 
     private func publish(_ next: PanelSnapshot) {
         guard next != snapshot else { return }
+        if next.current?.presentationID != liveAppearance?.presentationID { liveAppearance = nil }
         snapshot = next
         onSnapshotChanged?()
+        afterSnapshotChanged?()
     }
+}
+
+struct PanelMount: Equatable {
+    let presentationID: Int
+    let token: Int
 }

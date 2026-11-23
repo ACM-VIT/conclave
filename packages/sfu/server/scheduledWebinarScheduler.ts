@@ -1,5 +1,6 @@
 import type { Server as SocketIOServer } from "socket.io";
 import { Logger } from "../utilities/loggers.js";
+import { notifyAuthorityPolicy } from "./apps/authority/index.js";
 import { getRoomChannelId } from "./rooms.js";
 import type { ScheduledWebinar } from "../types.js";
 import {
@@ -151,6 +152,8 @@ const applyScheduledWebinarToConfig = (
   }
   webinarConfig.forcedHostEmails = nextForcedHosts;
 
+  // A schedule can open, cancel or reopen the webinar and switch its Q&A.
+  notifyAuthorityPolicy(state, channelId);
   return webinarConfig;
 };
 

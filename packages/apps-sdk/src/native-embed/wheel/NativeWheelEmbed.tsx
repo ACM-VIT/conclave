@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { WheelStage } from "../../apps/wheel/web/components/WheelStage";
 import { useWheelDocState } from "../../apps/wheel/web/hooks/useWheelDocState";
-import { segmentColor } from "../../apps/wheel/web/palette";
 import { WheelSounds } from "../../apps/wheel/web/sounds";
 import {
   addEntries,
@@ -63,7 +62,7 @@ const labelsFrom = (payload: Record<string, unknown>): string[] => {
   return labels;
 };
 
-type Winner = { spinId: string; label: string; color: string };
+type Winner = { spinId: string; label: string };
 
 export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
   const { doc } = session;
@@ -147,7 +146,7 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
   const reveal = useCallback((settled: WheelSpin) => {
     const winnerEntry = settled.entries[settled.winnerIndex];
     if (!winnerEntry) return;
-    const shown = { spinId: settled.spinId, label: winnerEntry.label, color: segmentColor(settled.winnerIndex, settled.entries.length) };
+    const shown = { spinId: settled.spinId, label: winnerEntry.label };
     setHighlightIndex(null);
     soundsRef.current?.win();
     setOverlay(shown);
@@ -352,7 +351,6 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
       {overlay ? (
         <div className="wheel-winner" aria-hidden="true" onClick={() => setOverlay(null)}>
           <div className="wheel-winner-card">
-            <span className="wheel-winner-swatch" style={{ backgroundColor: overlay.color }} />
             <span className="wheel-winner-label">{overlay.label}</span>
           </div>
         </div>
