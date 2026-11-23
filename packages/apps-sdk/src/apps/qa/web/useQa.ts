@@ -72,16 +72,12 @@ const describe = (failure: AuthorityFailure, doing: Doing): string =>
  * - The view reaches the revision the request's answer named, a replayed
  *   answer included. The view then reflects the request and everything
  *   committed before the answer, even when nothing in it changed.
- * - The connection changed, and the request on the old one has ended. The
- *   old session can no longer settle it, and the new view decides.
  *
  * A wish not sent yet, a change of mind waiting for the request before it,
- * stands until it is sent, or until that request ends on a connection that
- * has since changed.
+ * stands until it is sent, or until its connection's request ends after a reconnect.
  */
 type UpvoteWish = {
   value: boolean;
-  /** The session the click was made on, as its `act`. */
   session: unknown;
   sentOn?: { changes: number };
   revision?: number;
@@ -265,9 +261,8 @@ export function useQa() {
           };
           wish(flag);
           const result = await act("upvote", { id, value });
-          // The connection changed while this was on its way. A click on the
-          // new session sends there, and its wish is left to it. One made on
-          // this session goes: nothing here can settle it now.
+          // The connection changed while this was on its way. A wish made on
+          // the new session is its own; one made here can no longer settle.
           if (actRef.current !== act) {
             if (wishesRef.current.get(id)?.session !== act) return { ok: true };
             wish(null);

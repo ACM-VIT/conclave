@@ -366,10 +366,6 @@ it("keeps a pending upvote when the person's vote on another question changes me
   expect(upvotesSent()).toEqual([true, false]);
 });
 
-/**
- * A new socket, and a new client, whose first view holds `rows`. Returns the
- * upvotes the new connection sends.
- */
 const reconnect = async (rows: unknown[]): Promise<{ upvotesSent: () => boolean[] }> => {
   const next = new Map<string, Set<Listener>>();
   const nextSent: Sent[] = [];
@@ -469,15 +465,12 @@ it("sends a click made after a reconnect on the new connection, while the old on
 });
 
 it("drops an upvote the old connection never got through, once its request ends", async () => {
-  // The upvote is on its way when the socket drops, and it never landed:
-  // the new connection's view has no vote, the same as the old one had.
   const { outcome } = await click();
-  const next = await reconnect([question, { bucket: "votes", key: "q1", value: { upvotes: 0 } }]);
-  // The old connection's request ends without an answer.
+  const viewWithoutTheVote = [question, { bucket: "votes", key: "q1", value: { upvotes: 0 } }];
+  const next = await reconnect(viewWithoutTheVote);
   await act(async () => vi.advanceTimersByTimeAsync(10_000));
   const shownOnceItEnded = qa.questions[0].hasUpvoted;
   const ended = await outcome;
-  // The viewer clicks to add the vote.
   await act(async () => {
     void qa.toggleUpvote("q1");
     await vi.advanceTimersByTimeAsync(0);
