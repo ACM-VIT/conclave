@@ -545,6 +545,20 @@ def database_paths(archive):
     return set(archive.databases) | {rel for rel, _ in archive.links} | {start for start, _ in archive.chains}
 
 
+def planned_sides(archive, writes, roots):
+    tree = overlay(None, archive, writes)
+    sides = set()
+    for rel in side_files(database_paths(archive)):
+        parent, _, name = rel.rpartition("/")
+        if parent:
+            try:
+                parent = resolve(tree, parent, roots, final="any")[1]
+            except Unresolved as unresolved:
+                raise Refused(f"the SQLite side file {rel} has no place in the restored tree: {unresolved}")
+        sides.add(f"{parent}/{name}" if parent else name)
+    return sides
+
+
 def store_paths(env, fallback=None):
     """(variable, path) for each store's database, the way the SFU picks it:
     the store's own variable, else CONCLAVE_SQLITE_PATH, else fallback (the

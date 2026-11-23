@@ -1857,6 +1857,27 @@ test("a live database's hot journal is moved aside with it, never replayed onto 
   }
 });
 
+test("a restore over a live state dir moves aside the side files where a database behind a directory link lives", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  try {
+    const { state, backup, latestArchive, restore } = await setUp(root, ["CONCLAVE_SQLITE_PATH=/var/lib/conclave/recordings/current/conclave.sqlite"]);
+    await mkdir(path.join(state, "data"));
+    makeDb(path.join(state, "data", "conclave.sqlite"), "backed up");
+    await symlink("data", path.join(state, "current"));
+    await backup("--local-only");
+    await writeFile(path.join(state, "data", "conclave.sqlite-journal"), "a hot journal from before the restore");
+    await writeFile(path.join(state, "data", "conclave.sqlite-wal"), "a stale WAL");
+    const result = await restore("--file", await latestArchive(), "--yes");
+    assert.equal(await readlink(path.join(state, "current")), "data");
+    assert.deepEqual((await readdir(path.join(state, "data"))).filter((name) => name.startsWith("conclave.sqlite-")), []);
+    const aside = result.stdout.match(/kept in (\S+)/)[1];
+    assert.deepEqual((await readdir(path.join(aside, "data"))).sort(), ["conclave.sqlite", "conclave.sqlite-journal", "conclave.sqlite-wal"]);
+    assert.deepEqual(rows(path.join(state, "current", "conclave.sqlite")), ["backed up"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("a SQLite side file in the archive's other files is refused, whatever it belongs to", needs, async () => {
   const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
   try {

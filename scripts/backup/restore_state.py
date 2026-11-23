@@ -58,9 +58,9 @@ from statelib import (  # noqa: E402
     open_parts,
     overlay,
     plain,
+    planned_sides,
     restore_writes,
     running,
-    side_files,
     state_mounts,
     walk,
     within,
@@ -827,7 +827,7 @@ def restore(args):
         if archive.has_redis:
             redis = redis_target()
     writes = restore_writes(archive, sqlite, "files" in wants)
-    sides = side_files(database_paths(archive)) if sqlite else set()
+    sides = planned_sides(archive, writes, roots) if sqlite else set()
     state = StateDir(args.state)
     redis_step = None
     try:
