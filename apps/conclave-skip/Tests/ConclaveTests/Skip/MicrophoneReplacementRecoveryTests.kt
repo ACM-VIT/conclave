@@ -484,7 +484,6 @@ class MicrophoneReplacementRecoveryTests {
         assertEquals(0, call.lost)
     }
 
-    /** Records every `toggleMute` the SFU is asked for and holds the old microphone's unmute acknowledgement. */
     class HeldUnmuteSocket : io.socket.client.Socket(null, "/", null) {
         var heldUnmute: io.socket.client.Ack? = null
         var muteRequests: CopyOnWriteArrayList<Pair<String, Boolean>>? = null

@@ -3292,8 +3292,6 @@ final class WebRTCClient: NSObject, ObservableObject {
         changeSendProducer(producer) { try? $0.setMaxSpatialLayer(layers) }
     }
 
-    /// libmediasoupclient's producer calls share unsynchronized send-handler state with produce and replaceTrack (a pause reads
-    /// the track a replaceTrack writes), so each one runs on the producer's queue.
     private func changeSendProducer(_ producer: Producer?, _ change: @escaping @Sendable (Producer) -> Void) {
         guard let producer, let queue = sendProducerOperationQueues[ObjectIdentifier(producer)] else { return }
         let handle = SendTransportOperationHandle(producer: producer)

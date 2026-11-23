@@ -2091,7 +2091,6 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         lane.post { producer.setMaxSpatialLayer(layers) }
     }
 
-    /** libmediasoupclient's pause and resume read the track a replaceTrack writes, so they run on the producer's lane too. */
     private fun pauseSendProducer(producer: Producer?) = changeSendProducer(producer) { it.pause() }
 
     private fun resumeSendProducer(producer: Producer?) = changeSendProducer(producer) { it.resume() }
