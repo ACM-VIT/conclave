@@ -176,7 +176,6 @@ struct PPL5WebinarSettingsTests {
 
     @Test func guestInviteClearsWhenTheServerNamesTheInviteItsStageSeatUsed() throws {
         let invites = WebinarStageInvitePolicy.added([:], userId: "guest-gp_audience-key#view-1", name: "Mina T.")
-        // A guest comes on stage under another key than its audience key.
         #expect(WebinarStageInvitePolicy.afterPanelistJoin(invites, joinedUserId: "guest-gp_stage-key#view-1").count == 1)
 
         let payload = #"{"roomId":"room","userId":"guest-gp_stage-key#view-1","invitedUserKeys":["guest-gp_audience-key"]}"#

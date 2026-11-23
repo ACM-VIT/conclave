@@ -1193,7 +1193,6 @@ export const blockUserKey = (
       })
     : [];
   if (!options.kickPresent && demoted.length > 0) {
-    // The guest's seats stay, but no longer as a host's.
     handOffRoom(options.io, options.state, room, new Set(userKeys));
   }
   return { rejectedPendingUserKeys, kickedUserIds };
@@ -1235,8 +1234,7 @@ export const kickClient = (
     return false;
   }
   // A removed user has to be let in again, or they could rejoin at once,
-  // still admitted and still a host. The guest's other live tabs stop being
-  // a host's in the same step.
+  // still admitted and still a host.
   const userKey = room.userKeysById.get(userId);
   const demoted = userKey ? room.dropRejoinGrants(userKey) : [];
   return (
@@ -1265,8 +1263,6 @@ const removeSeats = (
   userIds: readonly string[],
   reason: string,
   options?: { io?: SocketIOServer; state?: SfuState },
-  // Whether dropping the guests' rights already took a host's seat, so the
-  // room is handed on even if no seat removed here is still a host's.
   removal: { hostLost?: boolean } = {},
 ): string[] => {
   const targets = userIds.filter((userId) => {

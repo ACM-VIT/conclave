@@ -1084,8 +1084,7 @@ export class Room {
    * A block on any of a plan's passes wins over every right the guest holds
    * under any other: the guest loses what a rejoin would honour, host rights
    * included. Only what the room already records is changed. Returns all of
-   * the guest's keys, so that the caller removes its seats and requests, and
-   * the seats that stopped being a host's (see `dropRejoinGrantsOf`).
+   * the guest's keys, so that the caller removes its seats and requests.
    */
   refuseBlockedLink(link: GuestLinkPlan): { userKeys: string[]; demoted: string[] } {
     const userKeys = [...link.passes].flatMap((proof) => [
@@ -1792,11 +1791,6 @@ export class Room {
     );
   }
 
-  /**
-   * The keys the hosts invited onto the stage whose invite a join as
-   * `userKey` uses: a guest's invite follows it from its audience key to
-   * its key for the room, so hosts are told which invite it was.
-   */
   stageInviteKeys(
     userKey: string,
     roomGuestProof: string | undefined,
@@ -2758,13 +2752,6 @@ export class Room {
     return this.dropRejoinGrantsOf(this.identitiesOfSameGuest(userKey));
   }
 
-  /**
-   * Drops what a rejoin would honour for `userKeys`, and in the same step
-   * takes the host's seat from every live seat whose guest no longer holds
-   * host or co-host rights: a host's command is authorized by the seat
-   * (`instanceof Admin`), so a seat must never outlive its guest's grant.
-   * Returns the seats that stopped being a host's.
-   */
   private dropRejoinGrantsOf(
     userKeys: Iterable<string>,
     options: { recordedOnly?: boolean } = {},
@@ -2784,8 +2771,6 @@ export class Room {
     return this.demoteSeatsWithoutRights(keys);
   }
 
-  // Turns every live host seat under `userKeys` whose guest holds no host or
-  // co-host right into an ordinary seat. Returns the seats it changed.
   private demoteSeatsWithoutRights(userKeys: readonly string[]): string[] {
     const keys = new Set(userKeys);
     const demoted: string[] = [];

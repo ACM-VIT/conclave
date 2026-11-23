@@ -3113,7 +3113,6 @@ describe("a guest who is a co-host in two tabs, when one tab is removed", () => 
     expect(room.isAdminUserKey(tabB.userId, tabB.guestProof)).toBe(false);
     expect(broadcast).toHaveBeenCalledWith("adminUsersChanged", { roomId: "room", hostUserIds: [guestHostSeat] });
 
-    // Every host command the tab had, from the room's, is refused now.
     const commands = [...second.peer.handlers.keys()].filter((event) => event !== "joinRoom");
     expect(commands.length).toBeGreaterThan(30);
     const payload = {
@@ -3133,8 +3132,6 @@ describe("a guest who is a co-host in two tabs, when one tab is removed", () => 
       const ack = vi.fn();
       await (handler.length >= 2 ? handler(...([payload, ack] as never[])) : handler(...([ack] as never[])));
       const answer = ack.mock.calls[0]?.[0] as { error?: unknown; rooms?: Array<{ id: string }> } | undefined;
-      // `getRooms` grants nothing: the token, not the seat, decides whether
-      // it lists more than the caller's own room.
       if (event === "getRooms") {
         expect(answer?.rooms?.map((listed) => listed.id)).toEqual(["room"]);
         continue;
@@ -3814,7 +3811,6 @@ describe("who may come in, against a slow reading of every decision", () => {
     // have a record, and is no decision of the hosts.
     revokeKeys(keys: string[], options: { recordedOnly?: boolean } = {}) {
       for (const key of keys) this.coHosts.delete(key);
-      // A live seat is a host's only while its guest holds the right.
       for (const key of [...this.adminSeats]) {
         if (!this.isCoHost(tabByKey.get(key)!.pass)) this.adminSeats.delete(key);
       }

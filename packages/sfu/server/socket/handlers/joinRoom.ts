@@ -1046,9 +1046,6 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           context.currentRoom.getDisplayNameForUser(userId) || displayName;
         if (!wasReconnecting) {
           if (!context.currentClient.isWebinarAttendee) {
-            // Hosts track the invites they sent by the invited attendee's
-            // key. A guest comes on stage under another key, so hosts are
-            // told which invites this join used.
             const usedStageInvites = isWebinarPromotedJoin
               ? context.currentRoom.stageInviteKeys(userKey, roomGuestProof, guestLink)
               : [];

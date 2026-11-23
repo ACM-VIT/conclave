@@ -7385,8 +7385,6 @@ export function useMeetSocket({
                 if (!isRoomEvent(eventRoomId)) return;
                 const nextHostUserIds = Array.isArray(hostUserIds) ? hostUserIds : [];
                 setHostUserIds(nextHostUserIds);
-                // A tab whose guest lost its host rights is told only by the
-                // roster: the SFU no longer takes its host commands.
                 if (!nextHostUserIds.includes(userId)) setIsAdmin(false);
               },
             );

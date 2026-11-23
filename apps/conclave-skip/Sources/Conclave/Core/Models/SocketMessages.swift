@@ -2054,9 +2054,6 @@ struct WebinarDemotedNotification: Codable {
     let webinarLinkSlug: String?
 }
 
-/// Sent to hosts when a join comes on stage through their invite. A guest's
-/// invite follows it from its audience key to its key for the room, so the
-/// invite is named by the keys the hosts invited.
 struct WebinarStageInviteUsedNotification: Codable {
     let roomId: String
     let userId: String?

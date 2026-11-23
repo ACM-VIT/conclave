@@ -239,7 +239,6 @@ export class AdmissionLedger {
     return latest !== undefined && !latest.admitted;
   }
 
-  /** The keys named by the admissions for `scope` that count across `principals`. */
   namedKeys(principals: Iterable<string>, scope: AdmissionScope): string[] {
     const userKeys = new Set<string>();
     for (const principal of principals) {
