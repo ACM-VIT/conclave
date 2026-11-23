@@ -54,6 +54,7 @@ The room epoch changes when the room is recreated. A request under an old epoch 
 | Accepted mutations per app per room | 120 a second, burst 240. Moderators have this to themselves and everyone else has it between them, so a crowd cannot use up a host's |
 | Work in one transaction | 50,000 operations. A read or write is one. A `scan` costs one for each row it returns. Rows that are only walked, as `count` and `clear` do under a prefix, cost about one per 64. An action that goes over fails and keeps nothing, even if its handler catches the error |
 | Rows of a `clear` one viewer is told of per flush | 1,000, counting only rows that viewer held |
+| Actions and queries one contract may name | 256 of each, and at most 16 KiB of names as grants, with every one granted. Grants go in the first part of every view, so its whole frame always fits in a part with room for rows |
 | Subscriptions per socket | 16 |
 | Socket behind (resnapshot later) | more than 256 queued packets or 1 MiB. The queue is counted in bytes on every transport, long polling included, and asked before every frame, the catch-up after a snapshot in parts among them |
 | Query on a socket that is behind | refused with `busy` |
