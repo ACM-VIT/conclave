@@ -70,6 +70,7 @@ const isEditableElement = (element: WhiteboardElement): element is EditableEleme
 
 const FONT_STACK = 'Virgil, "Segoe Print", "Comic Sans MS", "Marker Felt", cursive';
 const STICKY_TEXT_INSET = 8;
+const MOVE_WRITE_INTERVAL_MS = 16;
 const RESIZE_HANDLE_HIT_RADIUS = 8;
 const ROTATE_HANDLE_OFFSET = 26;
 const ROTATE_HANDLE_HIT_RADIUS = 10;
@@ -368,7 +369,7 @@ export function WhiteboardCanvas({
   const resolvedCanvasRef = canvasRef ?? internalCanvasRef;
   const engineRef = useRef<ToolEngine | null>(null);
   const cursorRafRef = useRef<number | null>(null);
-  const moveRafRef = useRef<number | null>(null);
+  const lastMoveWriteRef = useRef(0);
   const pendingMoveRef = useRef<{ x: number; y: number; pressure?: number } | null>(null);
   const renderFrameRef = useRef<number | null>(null);
   const renderQueuedRef = useRef(false);
@@ -780,10 +781,6 @@ export function WhiteboardCanvas({
 
   useEffect(() => {
     return () => {
-      if (moveRafRef.current !== null) {
-        cancelAnimationFrame(moveRafRef.current);
-        moveRafRef.current = null;
-      }
       pendingMoveRef.current = null;
       if (renderFrameRef.current !== null) {
         cancelAnimationFrame(renderFrameRef.current);
@@ -842,26 +839,30 @@ export function WhiteboardCanvas({
     setEditingText("");
   }, [doc, editingElementId, editingText, pageId, selectedId]);
 
-  useEffect(() => {
-    if (!editingElementId) return;
-    const element = getPageElements(doc, pageId).find(
-      (item): item is EditableElement =>
-        item.id === editingElementId && isEditableElement(item)
-    );
-    if (!element) return;
-    const text = editingText.replace(/\r\n/g, "\n");
-    if (element.type === "text") {
-      const bounds = measureTextBounds(text.length > 0 ? text : " ", element.fontSize);
-      updateElement(doc, pageId, {
-        ...element,
-        text,
-        width: bounds.width,
-        height: bounds.height,
-      });
-    } else {
-      updateElement(doc, pageId, { ...element, text });
-    }
-  }, [editingText, editingElementId, doc, pageId]);
+  const handleEditingTextChange = useCallback(
+    (value: string) => {
+      setEditingText(value);
+      if (!editingElementId) return;
+      const element = getPageElements(doc, pageId).find(
+        (item): item is EditableElement =>
+          item.id === editingElementId && isEditableElement(item)
+      );
+      if (!element) return;
+      const text = value.replace(/\r\n/g, "\n");
+      if (element.type === "text") {
+        const bounds = measureTextBounds(text.length > 0 ? text : " ", element.fontSize);
+        updateElement(doc, pageId, {
+          ...element,
+          text,
+          width: bounds.width,
+          height: bounds.height,
+        });
+      } else {
+        updateElement(doc, pageId, { ...element, text });
+      }
+    },
+    [doc, editingElementId, pageId]
+  );
 
   useEffect(() => {
     if (!editingElementId) return;
@@ -907,16 +908,16 @@ export function WhiteboardCanvas({
   const flushPendingMove = useCallback(() => {
     const point = pendingMoveRef.current;
     pendingMoveRef.current = null;
-    moveRafRef.current = null;
     if (!point || locked) return;
+    lastMoveWriteRef.current = performance.now();
     engineRef.current?.onPointerMove(point);
   }, [locked]);
 
   const queuePointerMove = useCallback(
     (point: { x: number; y: number; pressure?: number }) => {
       pendingMoveRef.current = point;
-      if (moveRafRef.current !== null) return;
-      moveRafRef.current = requestAnimationFrame(flushPendingMove);
+      if (performance.now() - lastMoveWriteRef.current < MOVE_WRITE_INTERVAL_MS) return;
+      flushPendingMove();
     },
     [flushPendingMove]
   );
@@ -1101,10 +1102,6 @@ export function WhiteboardCanvas({
       }
       event.currentTarget.setPointerCapture(event.pointerId);
       pendingMoveRef.current = null;
-      if (moveRafRef.current !== null) {
-        cancelAnimationFrame(moveRafRef.current);
-        moveRafRef.current = null;
-      }
       if (!locked) {
         undoManager?.stopCapturing();
         if (tool === "select" && selectedId) {
@@ -1636,7 +1633,7 @@ export function WhiteboardCanvas({
             <textarea
               ref={textEditorRef}
               value={editingText}
-              onChange={(event) => setEditingText(event.target.value)}
+              onChange={(event) => handleEditingTextChange(event.target.value)}
               onWheel={(event) => event.stopPropagation()}
               onBlur={() => commitEditing()}
               onKeyDown={(event) => {
