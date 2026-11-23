@@ -123,6 +123,69 @@ describe("wheel label fitting", () => {
   });
 });
 
+describe("wheel label coverage", () => {
+  const CONJUNCT = `\u0915${"\u094D\u0915".repeat(23)}`;
+  const pool = [
+    "A",
+    "Ada",
+    "Margaret Hamilton",
+    "Maximiliana Featherstonehaugh-Worthington",
+    "\u0932\u0915\u094D\u0937\u094D\u092E\u0940\u0928\u093E\u0930\u093E\u092F\u0923",
+    "\u1001\u1014\u1039\u1013\u102C\u1001\u1014\u1039\u1013\u102C",
+    "\u5C71\u7530\u592A\u90CE",
+    "\u0E19\u0E49\u0E33",
+    "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u200D\u{1F466} Team",
+  ];
+  const extremes = [
+    (size: number) => `\u0915${"\u094D\u0915".repeat(size)}`,
+    (size: number) => `\u1000${"\u1039\u1000".repeat(size)}`,
+    (size: number) => `\u{1F468}${"\u200D\u{1F469}".repeat(size)}`,
+  ];
+
+  it("numbers the last slice when 63 one letter names set a size its number cannot fit", () => {
+    const names = [...Array.from({ length: 63 }, () => "A"), CONJUNCT];
+    const fitted = fitWheelLabels(names, geometry(64, 700), measure);
+    expect(fitted.labels.every((label) => label !== null)).toBe(true);
+    expect(fitted.labels[63]).toEqual({ text: "64", truncated: true, numbered: true });
+  });
+
+  it("never leaves a slice blank while other slices are labelled", () => {
+    let seed = 20261123;
+    const random = (limit: number): number => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return seed % limit;
+    };
+    let numberedRuns = 0;
+    for (let run = 0; run < 1500; run += 1) {
+      const count = 2 + random(63);
+      const letters = random(3) === 0;
+      const names = Array.from({ length: count }, () =>
+        letters
+          ? String.fromCharCode(65 + random(26))
+          : random(5) === 0
+            ? extremes[random(extremes.length)](1 + random(23))
+            : random(2) === 0
+              ? String.fromCharCode(65 + random(26))
+              : pool[random(pool.length)]
+      );
+      if (letters) names[random(count)] = extremes[random(extremes.length)](1 + random(23));
+      const wheelPx = 180 + random(721);
+      const shape = geometry(count, wheelPx);
+      const fitted = fitWheelLabels(names, shape, measure);
+      const shown = fitted.labels.filter((label) => label !== null).length;
+      expect(shown === 0 || shown === count, `run ${run}: ${shown} of ${count} labelled at ${wheelPx}px`).toBe(true);
+      if (shown === 0) continue;
+      expect(fitted.fontSize * shape.pxPerUnit).toBeGreaterThanOrEqual(shape.minScreenPx - 1e-9);
+      fitted.labels.forEach((label, index) => {
+        expect(fitsInSlice(label!.text, fitted.fontSize, shape), `run ${run}: slice ${index + 1}`).toBe(true);
+        if (label!.numbered) expect(label!.text).toBe(String(index + 1));
+      });
+      if (fitted.labels.some((label) => label?.numbered)) numberedRuns += 1;
+    }
+    expect(numberedRuns).toBeGreaterThan(20);
+  });
+});
+
 describe("wheel label emoji", () => {
   const family = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u200D\u{1F466}";
 

@@ -121,36 +121,58 @@ const numberedLabel = (
   return widthAtSize(text) <= limit ? { text, truncated: true, numbered: true } : null;
 };
 
+const fitAtSize = (
+  labels: string[],
+  fontSize: number,
+  geometry: LabelGeometry,
+  measure: MeasureText
+): (FittedLabel | null)[] => {
+  const limit = maxLabelWidth(fontSize, geometry);
+  const widthAtSize = (text: string) => measure(text) * fontSize;
+  return labels.map(
+    (label, index) =>
+      truncateToWidth(label, widthAtSize, limit) ?? numberedLabel(index, widthAtSize, limit)
+  );
+};
+
+const sizeStep = (size: number): number => Math.floor(size * 20) / 20;
+
 export const fitWheelLabels = (
   labels: string[],
   geometry: LabelGeometry,
   measure: MeasureText
 ): FittedLabels => {
   if (labels.length === 0) return { fontSize: geometry.maxFontSize, labels: [] };
+  const hidden = (fontSize: number): FittedLabels => ({
+    fontSize,
+    labels: labels.map(() => null),
+  });
   const minFontSize = geometry.minScreenPx / geometry.pxPerUnit;
   if (!(geometry.pxPerUnit > 0) || !(minFontSize <= geometry.maxFontSize)) {
-    return { fontSize: geometry.maxFontSize, labels: labels.map(() => null) };
+    return hidden(geometry.maxFontSize);
   }
   const sizes = labels
     .map((label) => largestFittingSize(measure(label), geometry))
     .sort((a, b) => a - b);
   const typical = sizes[Math.floor((sizes.length - 1) / 2)];
   const chosen = sizes[0] >= typical * OUTLIER_RATIO ? sizes[0] : typical;
-  const fontSize = Math.max(
-    minFontSize,
-    Math.floor(Math.min(geometry.maxFontSize, chosen) * 20) / 20
-  );
-  const limit = maxLabelWidth(fontSize, geometry);
-  const widthAtSize = (text: string) => measure(text) * fontSize;
-  const fitted = labels.map((label) => truncateToWidth(label, widthAtSize, limit));
+  const fontSize = Math.max(minFontSize, sizeStep(Math.min(geometry.maxFontSize, chosen)));
+  const fitted = fitAtSize(labels, fontSize, geometry, measure);
   const fullCount = fitted.filter((label) => label && !label.truncated).length;
-  if (fullCount < labels.length * MIN_FULL_RATIO) {
-    return { fontSize, labels: labels.map(() => null) };
-  }
-  return {
+  if (fullCount < labels.length * MIN_FULL_RATIO) return hidden(fontSize);
+  if (fitted.every((label) => label !== null)) return { fontSize, labels: fitted };
+  const needed = Math.min(
     fontSize,
-    labels: fitted.map((label, index) => label ?? numberedLabel(index, widthAtSize, limit)),
-  };
+    ...fitted.flatMap((label, index) =>
+      label ? [] : [largestFittingSize(measure(String(index + 1)), geometry)]
+    )
+  );
+  if (needed < minFontSize) return hidden(fontSize);
+  const smaller = Math.max(minFontSize, sizeStep(needed));
+  const refitted = fitAtSize(labels, smaller, geometry, measure);
+  return refitted.every((label) => label !== null)
+    ? { fontSize: smaller, labels: refitted }
+    : hidden(fontSize);
 };
 
 const SINGLE_LABEL_DIRECTION = 90;
