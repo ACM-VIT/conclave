@@ -136,10 +136,10 @@ const scanPython = (text, file) => {
 
 const SWIFT_TRIVIA_PACKAGE = path.join(HERE, "swift-trivia");
 
-const swiftSyntaxVersion = () =>
-  JSON.parse(readFileSync(path.join(SWIFT_TRIVIA_PACKAGE, "Package.resolved"), "utf8")).pins.find(
-    (pin) => pin.identity === "swift-syntax",
-  ).state.version;
+const swiftSyntaxPin = () =>
+  JSON.parse(readFileSync(path.join(SWIFT_TRIVIA_PACKAGE, "Package.resolved"), "utf8")).pins.find((pin) => pin.identity === "swift-syntax").state;
+
+const swiftSyntaxVersion = () => swiftSyntaxPin().version;
 
 export const swiftTriviaScratchPath = () => toolCache("swift-trivia", `swift-syntax-${swiftSyntaxVersion()}`);
 
@@ -147,10 +147,36 @@ let swiftTriviaBinary;
 
 const NEVER_DOWNLOADS = "run `pnpm comments:tools` once to fetch it; the comment check never downloads anything";
 
-const buildSwiftTrivia = (scratch) => {
-  const build = spawnSync("swift", ["build", "-c", "release", "--package-path", SWIFT_TRIVIA_PACKAGE, "--scratch-path", scratch], {
+const readJsonIfPresent = (file) => {
+  try {
+    return JSON.parse(readFileSync(file, "utf8"));
+  } catch {
+    return undefined;
+  }
+};
+
+export const swiftCacheProblem = (scratch) => {
+  const { revision, version } = swiftSyntaxPin();
+  const dependency = readJsonIfPresent(path.join(scratch, "workspace-state.json"))?.object?.dependencies?.find(
+    (entry) => entry.packageRef?.identity === "swift-syntax",
+  );
+  if (dependency?.state?.checkoutState?.revision !== revision) return `its workspace state does not record swift-syntax ${version} at ${revision}`;
+  const checkout = path.join(scratch, "checkouts", dependency.subpath ?? "swift-syntax");
+  if (!existsSync(path.join(checkout, "Package.swift")) || !existsSync(path.join(checkout, "Sources", "SwiftParser"))) return "its swift-syntax checkout is incomplete";
+  const repositories = path.join(scratch, "repositories");
+  const clones = existsSync(repositories) ? readdirSync(repositories).filter((entry) => entry.startsWith("swift-syntax-")) : [];
+  if (!clones.some((entry) => existsSync(path.join(repositories, entry, "HEAD")))) return "it has no swift-syntax repository";
+  return undefined;
+};
+
+const SWIFT_OFFLINE = { GIT_ALLOW_PROTOCOL: "file", GIT_TERMINAL_PROMPT: "0" };
+
+const buildSwiftTrivia = (scratch, { offline }) => {
+  const args = ["build", "-c", "release", "--package-path", SWIFT_TRIVIA_PACKAGE, "--scratch-path", scratch, "--disable-automatic-resolution"];
+  const build = spawnSync("swift", offline ? [...args, "--skip-update"] : args, {
     encoding: "utf8",
     stdio: ["ignore", "ignore", "pipe"],
+    env: offline ? { ...process.env, ...SWIFT_OFFLINE } : process.env,
   });
   const binary = path.join(scratch, "release", "swift-comment-trivia");
   return build.status === 0 && existsSync(binary) ? { binary } : { error: build.stderr ?? build.error?.message ?? "" };
@@ -161,11 +187,10 @@ const swiftTrivia = (file) => {
   const swift = toolWorks("swift");
   if (!swift.ok) fail(file, `a working Swift toolchain is required to read Swift comments: ${swift.reason}`);
   const scratch = swiftTriviaScratchPath();
-  if (!existsSync(path.join(scratch, "checkouts", "swift-syntax"))) {
-    fail(file, `the Swift comment parser needs swift-syntax ${swiftSyntaxVersion()} in ${scratch}; ${NEVER_DOWNLOADS}`);
-  }
-  const built = buildSwiftTrivia(scratch);
-  if (built.error !== undefined) fail(file, `could not build scripts/quality/comments/swift-trivia (swift-syntax ${swiftSyntaxVersion()}):\n${built.error}`);
+  const problem = swiftCacheProblem(scratch);
+  if (problem) fail(file, `the Swift comment parser needs swift-syntax ${swiftSyntaxVersion()} in ${scratch}, but ${problem}; ${NEVER_DOWNLOADS}`);
+  const built = buildSwiftTrivia(scratch, { offline: true });
+  if (built.error !== undefined) fail(file, `could not build scripts/quality/comments/swift-trivia offline (swift-syntax ${swiftSyntaxVersion()}); if it needs anything new, ${NEVER_DOWNLOADS}:\n${built.error}`);
   swiftTriviaBinary = built.binary;
   return built.binary;
 };
@@ -275,7 +300,7 @@ export const installCommentTools = () => {
   const swift = toolWorks("swift");
   if (!swift.ok) record("swift-trivia", true, `skipped, ${swift.reason}`);
   else {
-    const built = buildSwiftTrivia(swiftTriviaScratchPath());
+    const built = buildSwiftTrivia(swiftTriviaScratchPath(), { offline: false });
     record("swift-trivia", built.error === undefined || `could not build:\n${built.error.trim()}`, `built at ${built.binary}`);
   }
   return report;

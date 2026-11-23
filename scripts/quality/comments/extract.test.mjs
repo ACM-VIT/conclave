@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { extractComments, iconGeneratorOutputs, listSourceFiles, toolWorks } from "./extract.mjs";
 import { configuresNoComments, languageOf } from "./policy.mjs";
-import { localKotlinJars, swiftTriviaScratchPath } from "./tokenizers.mjs";
+import { localKotlinJars, swiftCacheProblem, swiftTriviaScratchPath } from "./tokenizers.mjs";
 
 
 const missing = (command, args) => {
@@ -19,7 +19,7 @@ const JAVA = missing("java", ["-version"]) || missing("javac", ["-version"]);
 const NOT_FETCHED = "run `pnpm comments:tools`, the suite never downloads";
 const TOOL_REASONS = {
   swiftToolchain: SWIFT_TOOLCHAIN,
-  swift: SWIFT_TOOLCHAIN || (!existsSync(path.join(swiftTriviaScratchPath(), "checkouts", "swift-syntax")) && `swift-syntax is not fetched for scripts/quality/comments/swift-trivia; ${NOT_FETCHED}`),
+  swift: SWIFT_TOOLCHAIN || (swiftCacheProblem(swiftTriviaScratchPath()) && `the swift-trivia cache is not ready (${swiftCacheProblem(swiftTriviaScratchPath())}); ${NOT_FETCHED}`),
   java: JAVA,
   jdk: JAVA || (!localKotlinJars() && `no verified copy of the pinned Kotlin lexer jars is on this machine; ${NOT_FETCHED}`),
   python312: (() => {
@@ -847,6 +847,8 @@ const offlineRig = (t) => {
       child.stderr.on("data", (chunk) => (stderr += chunk));
       child.on("close", (code) => resolve({ pid: child.pid, code, stdout, stderr }));
     });
+  writeFileSync(path.join(bin, "git"), `#!/bin/sh\necho "git $@" >> ${JSON.stringify(downloads)}\nexit 128\n`);
+  chmodSync(path.join(bin, "git"), 0o755);
   return { home, cache, run, downloaded: () => (existsSync(downloads) ? readFileSync(downloads, "utf8") : "") };
 };
 
@@ -864,6 +866,17 @@ toolTest("a cold Swift cache fails with the fetch command and never resolves pac
   assert.notEqual(result.code, 0);
   assert.match(result.stderr, /cannot read the comments in A\.swift: the Swift comment parser needs swift-syntax 604\.0\.0 in .*; run `pnpm comments:tools` once to fetch it/);
   assert.equal(readdirSync(rig.cache).length, 0);
+});
+
+toolTest("a partial Swift cache fails with the fetch command and never runs git", ["swiftToolchain"], async (t) => {
+  const rig = offlineRig(t);
+  const scratch = path.join(rig.cache, "conclave", "swift-trivia", "swift-syntax-604.0.0");
+  mkdirSync(path.join(scratch, "checkouts", "swift-syntax"), { recursive: true });
+  const result = await rig.run("let a = 1 // one\n", "A.swift");
+  assert.notEqual(result.code, 0);
+  assert.match(result.stderr, /cannot read the comments in A\.swift: the Swift comment parser needs swift-syntax 604\.0\.0 in .*, but its workspace state does not record swift-syntax 604\.0\.0 at 050f1a34[0-9a-f]+; run `pnpm comments:tools` once to fetch it/);
+  assert.equal(rig.downloaded(), "");
+  assert.deepEqual(readdirSync(scratch), ["checkouts"]);
 });
 
 toolTest("concurrent cold-cache Kotlin runs share one install from verified local jars", ["jdk"], async (t) => {
