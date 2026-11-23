@@ -3696,7 +3696,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         intentionalLocalAudioProducerCloseIds.add(producerId)
     }
 
-    /** The SFU closed [oldProducer] when it acknowledged [nextProducer], so a mute that landed meanwhile pauses the replacement instead of falling back. */
+    /** The SFU closed [oldProducer] when it acknowledged [nextProducer], so the replacement takes the user's newest mute intent instead of falling back. */
     private fun commitMicrophoneReplacement(
         nextProducer: Producer,
         oldProducer: Producer,
@@ -3714,7 +3714,6 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         } else {
             nextProducer.resume()
             localAudioEnabled = true
-            localAudioTargetEnabled = true
         }
     }
 
@@ -3964,7 +3963,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
                 closeUncommittedReplacementProducer(nextProducer, socket, "superseded bandwidth refresh")
                 return
             }
-            val muted = !localAudioTargetEnabled || !localAudioEnabled
+            val muted = !localAudioTargetEnabled
             commitMicrophoneReplacement(nextProducer, oldProducer, connectionQuality, muted)
             if (muted) {
                 markMicrophoneProducerMuted(nextProducer.id, "bandwidth refresh")
@@ -5548,7 +5547,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
 
                 val previousTrack = localAudioTrack
                 val previousSource = audioSource
-                val muted = !localAudioTargetEnabled || !localAudioEnabled
+                val muted = !localAudioTargetEnabled
                 audioSource = nextSource
                 localAudioTrack = track
                 nextSource = null

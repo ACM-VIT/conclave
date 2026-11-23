@@ -4897,7 +4897,6 @@ final class WebRTCClient: NSObject, ObservableObject {
             try configureCallAudioSession()
             let oldTrack = rtcLocalAudioTrack
 
-            let muteIntentGeneration = localAudioMuteIntentGeneration
             let microphone = createMicrophoneAudioTrack()
             pendingTrack = microphone.track
             markIntentionalLocalAudioProducerClose(oldProducer.id)
@@ -4925,9 +4924,7 @@ final class WebRTCClient: NSObject, ObservableObject {
                 return
             }
 
-            let muted = isLocalAudioMuteInEffect(since: muteIntentGeneration) ||
-                !localAudioEnabled ||
-                !localAudioIntentEnabled
+            let muted = !localAudioIntentEnabled
             commitMicrophoneReplacement(
                 nextProducer,
                 microphone: microphone,
@@ -4972,7 +4969,6 @@ final class WebRTCClient: NSObject, ObservableObject {
         } else {
             nextProducer.resume()
             microphone.track.isEnabled = true
-            localAudioIntentEnabled = true
             localAudioEnabled = true
         }
         closeSendProducer(oldProducer)
@@ -6160,9 +6156,7 @@ extension WebRTCClient {
                 return
             }
 
-            let muted = isLocalAudioMuteInEffect(since: muteIntentGeneration) ||
-                !localAudioEnabled ||
-                !localAudioIntentEnabled
+            let muted = !localAudioIntentEnabled
             commitMicrophoneReplacement(
                 nextProducer,
                 microphone: microphone,

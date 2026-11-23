@@ -481,4 +481,67 @@ class MicrophoneReplacementRecoveryTests {
         assertSame(call.old, field("audioProducer").get(call.media))
         assertEquals(0, call.lost)
     }
+
+    /** Records every `toggleMute` the SFU is asked for and holds the old microphone's unmute acknowledgement. */
+    class HeldUnmuteSocket : io.socket.client.Socket(null, "/", null) {
+        var heldUnmute: io.socket.client.Ack? = null
+        var muteRequests: CopyOnWriteArrayList<Pair<String, Boolean>>? = null
+        override fun emit(event: String?, vararg args: Any?): io.socket.emitter.Emitter {
+            val ack = args.lastOrNull() as? io.socket.client.Ack
+            if (event == "toggleMute") {
+                val request = args.first() as JSONObject
+                val producerId = request.getString("producerId")
+                val paused = request.getBoolean("paused")
+                muteRequests!!.add(producerId to paused)
+                if (producerId == "mic-1" && !paused) {
+                    heldUnmute = ack
+                    return this
+                }
+            }
+            ack?.call(JSONObject())
+            return this
+        }
+    }
+
+    @Test
+    fun anUnmuteWhileAReplacementIsAcknowledgedReachesTheReplacement() {
+        val app = org.robolectric.RuntimeEnvironment.getApplication()
+        skip.foundation.ProcessInfo.launch(app)
+        shadowOf(app).grantPermissions(android.Manifest.permission.RECORD_AUDIO)
+        val call = liveCall()
+        val media = call.media
+        val produces = producingCall(call)
+        val wire = unsafe.allocateInstance(HeldUnmuteSocket::class.java) as HeldUnmuteSocket
+        wire.muteRequests = CopyOnWriteArrayList()
+        val socket = field("socketManager").get(media) as SocketIOManager
+        SocketIOManager::class.java.getDeclaredField("socket").apply { isAccessible = true }.set(socket, wire)
+        field("mainHandler").set(media, android.os.Handler(Looper.getMainLooper()))
+        val scope = CoroutineScope(Dispatchers.Main.immediate + SupervisorJob())
+        val refresh = scope.async(start = CoroutineStart.UNDISPATCHED) {
+            media.refreshLocalAudioProducerForBandwidthProfile(ConnectionQuality.emergency)
+        }
+        pumpMainLooperUntil { produces.codecOptions.size == 1 }
+
+        val mute = scope.async(start = CoroutineStart.UNDISPATCHED) { media.setAudioEnabled(false) }
+        pumpMainLooperUntil { mute.isCompleted }
+        runBlocking { mute.await() }
+        val unmute = scope.async(start = CoroutineStart.UNDISPATCHED) { media.setAudioEnabled(true) }
+        pumpMainLooperUntil { wire.heldUnmute != null || unmute.isCompleted }
+        assertTrue("the unmute waits on the old microphone's acknowledgement", wire.heldUnmute != null)
+
+        assertTrue(media.consumeIntentionalLocalAudioProducerClose(call.old.id))
+        produces.firstAck.countDown()
+        pumpMainLooperUntil { refresh.isCompleted }
+        runBlocking { refresh.await() }
+        assertEquals("mic-2", (field("audioProducer").get(media) as Producer).id)
+        wire.heldUnmute!!.call(JSONObject().put("error", "Microphone producer not found"))
+        pumpMainLooperUntil { unmute.isCompleted }
+        runBlocking { unmute.await() }
+        val confirm = scope.async(start = CoroutineStart.UNDISPATCHED) { media.reassertLocalAudioProducerUnmuted() }
+        pumpMainLooperUntil { confirm.isCompleted }
+        runBlocking { confirm.await() }
+
+        assertEquals("mic-2" to false, wire.muteRequests!!.last { it.first == "mic-2" })
+        assertTrue(media.isLocalAudioPublishingHealthy)
+    }
 }

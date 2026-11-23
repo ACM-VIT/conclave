@@ -376,8 +376,11 @@ Fixed 2026-10-22 and guarded by `testNativeCallCorrectnessBlockersStayFixed`:
   `intentionalLocalAudioProducerCloseIds` before the create, and
   `handleLocalProducerClosed` consumes it (like the video marker). Once the
   replacement's create returns in the same session, never fall back to the
-  predecessor: commit the replacement, paused and server-muted if a mute
-  landed (`isLocalAudioMuteInEffect`). `startProducingAudio` is single-flight
+  predecessor: commit the replacement at the user's newest mute intent
+  (iOS `localAudioIntentEnabled`, Android `localAudioTargetEnabled`), paused
+  and server-muted when muted, live and server-unmuted when an unmute landed
+  during the create (that unmute's late ack belongs to the predecessor and
+  changes nothing). `startProducingAudio` is single-flight
   (`audioStartTask`) so two starts never race a produce, and microphone tracks
   are created disabled and enabled only by a live commit.
 - A failed mute fails closed on both platforms: `setAudioEnabled(false)`
