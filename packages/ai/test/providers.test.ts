@@ -340,32 +340,28 @@ describe("provider routing", () => {
     expect(JSON.stringify(requests[1].messages)).toContain("Research notes");
   });
 
-  it("shares one absolute deadline across Claude research and structured output", async () => {
+  it.each([1, 2])("shares one absolute deadline across Claude research and structured output when it passes during call %i", async (abortingCall) => {
+    const deadline = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
     let calls = 0;
+    const abortedCalls: number[] = [];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (_url: unknown, init: RequestInit) => {
-        ++calls;
-        if (calls === 1) {
-          await new Promise((resolve) => setTimeout(resolve, 120));
+        const call = ++calls;
+        if (call < abortingCall) {
           return json(message([{ type: "text", text: "Research notes" }]));
         }
-        return new Promise<Response>((_resolve, reject) => {
-          const timer = setTimeout(
-            () =>
-              _resolve(json(message([{ type: "text", text: '{"ok":true}' }]))),
-            120,
-          );
-          const abort = () => {
-            clearTimeout(timer);
+        return new Promise<Response>((resolve, reject) => {
+          init.signal?.addEventListener("abort", () => {
+            abortedCalls.push(call);
             reject(new Error("Aborted"));
-          };
-          if (init.signal?.aborted) abort();
-          else init.signal?.addEventListener("abort", abort, { once: true });
+          }, { once: true });
+          deadline.abort(new DOMException("The deadline passed", "TimeoutError"));
+          if (!init.signal?.aborted) resolve(json(message([{ type: "text", text: '{"ok":true}' }])));
         });
       }),
     );
-    const started = Date.now();
     await expect(
       generateAiText({
         ...options,
@@ -375,8 +371,10 @@ describe("provider routing", () => {
         format: { name: "game", schema: { type: "object", properties: {} } },
       }),
     ).rejects.toThrow();
-    expect(calls).toBe(2);
-    expect(Date.now() - started).toBeLessThan(1000);
+    expect(timeout).toHaveBeenCalledTimes(1);
+    expect(timeout).toHaveBeenCalledWith(200);
+    expect(abortedCalls).toEqual([abortingCall]);
+    expect(calls).toBe(abortingCall);
   });
 
   it("finishes structured output after truncated research, but rejects truncated final JSON", async () => {
