@@ -29,7 +29,8 @@ import {
 import {
   MEETING_ENDED_WHILE_WAITING,
   leaveNextMeetingLobby,
-  returnToNextMeetingLobby,
+  lobbyGuestOf,
+  placeWaitingGuest,
 } from "../../nextMeetingLobby.js";
 import type { EndedRoom } from "../../state.js";
 import {
@@ -136,17 +137,12 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
       callback: (response: JoinRoomResponse | JoinRoomErrorResponse) => void,
     ) => {
       try {
-        // Asking again ends waiting for the next meeting where this socket
-        // was knocking, unless that meeting turns out not to be open yet.
+        // A socket waiting for the next meeting keeps its place while this
+        // join is decided, so a room opening meanwhile takes it in.
         const parkedChannelId = context.pendingRoomChannelId;
         const parked =
           parkedChannelId && context.pendingUserKey
-            ? leaveNextMeetingLobby(
-                state,
-                parkedChannelId,
-                context.pendingUserKey,
-                socket.id,
-              )
+            ? lobbyGuestOf(state, parkedChannelId, context.pendingUserKey, socket.id)
             : null;
         const requestedRoomId = normalizeIdentifier(
           data?.roomId,
@@ -344,6 +340,10 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         }
 
         const roomChannelId = getRoomChannelId(clientId, roomId);
+        // Asking for another code ends waiting for the next meeting here.
+        if (parked && parkedChannelId && parkedChannelId !== roomChannelId) {
+          leaveNextMeetingLobby(state, parkedChannelId, parked.userKey, socket.id);
+        }
         let room = state.rooms.get(roomChannelId);
         let createdRoom = false;
         let lostRoom: LostRoom | null = null;
@@ -400,20 +400,25 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             return;
           }
           // Someone waiting for the next meeting who asks again before it is
-          // open, here or anywhere the registry knows of, keeps waiting.
+          // open anywhere the registry knows of keeps waiting: in the room
+          // that opened here while this join was decided, else the lobby.
           const keepWaiting = (): boolean => {
             if (!parked || parkedChannelId !== roomChannelId) return false;
-            returnToNextMeetingLobby(state, roomChannelId, roomId, parked);
+            const opened = placeWaitingGuest(state, roomChannelId, parked);
             socket.emit("waitingRoomStatus", {
-              message: MEETING_ENDED_WHILE_WAITING,
+              message: !opened
+                ? MEETING_ENDED_WHILE_WAITING
+                : opened.hasActiveAdmin()
+                  ? "A host is available to let you in."
+                  : "No one to let you in.",
               roomId,
             });
             respond(callback, {
               roomId,
-              rtpCapabilities: { codecs: [], headerExtensions: [] },
+              rtpCapabilities: opened?.rtpCapabilities ?? { codecs: [], headerExtensions: [] },
               existingProducers: [],
               status: "waiting",
-              isLocked: true,
+              isLocked: opened?.isLocked ?? true,
             });
             return true;
           };
@@ -1080,6 +1085,11 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           });
         }
 
+        // A tab that waited for this meeting and is now in it is not also
+        // knocking on it.
+        if (context.currentRoom.pendingClients.get(userKey)?.socket.id === socket.id) {
+          context.currentRoom.removePendingClient(userKey);
+        }
         context.currentRoom.setUserIdentity(userId, userKey, displayName, {
           forceDisplayName: hasDisplayNameOverride,
         });

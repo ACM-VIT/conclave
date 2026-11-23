@@ -1,4 +1,4 @@
-import type { WaitingGuest } from "../config/classes/Room.js";
+import type { Room, WaitingGuest } from "../config/classes/Room.js";
 import type { SfuState } from "./state.js";
 
 // What someone still knocking is told when the meeting they knock on ends.
@@ -91,30 +91,54 @@ export const waitForNextMeeting = (
   }
 };
 
-// Someone waiting for the next meeting stops: they left, or asked again. A
-// guest who asked again and found no meeting yet gets the place back.
-export const leaveNextMeetingLobby = (
+// This socket's place in the lobby at a code, if it has one. Looking takes
+// nothing: a guest stays in the lobby until they are placed somewhere.
+export const lobbyGuestOf = (
   state: SfuState,
   channelId: string,
   userKey: string,
   socketId: string,
 ): LobbyGuest | null => {
+  const guest = state.nextMeetingLobbies.get(channelId)?.guests.get(userKey);
+  return guest?.socket.id === socketId ? guest : null;
+};
+
+// Someone waiting for the next meeting stops: they left, or went elsewhere.
+export const leaveNextMeetingLobby = (
+  state: SfuState,
+  channelId: string,
+  userKey: string,
+  socketId: string,
+): void => {
   const lobby = state.nextMeetingLobbies.get(channelId);
-  const guest = lobby?.guests.get(userKey);
-  if (!lobby || guest?.socket.id !== socketId) return null;
+  if (!lobby || !lobbyGuestOf(state, channelId, userKey, socketId)) return;
   lobby.guests.delete(userKey);
   if (lobby.guests.size === 0) close(state, channelId, lobby);
   else armRetry(lobby);
-  return guest;
 };
 
-export const returnToNextMeetingLobby = (
+// Where someone waiting for the next meeting at a code is now, decided in
+// one step with nothing awaited, so no room can open in between: in the
+// waiting list of the room open there, or still in the lobby.
+export const placeWaitingGuest = (
   state: SfuState,
   channelId: string,
-  roomId: string,
-  guest: LobbyGuest,
-): void => {
-  place(state, channelId, roomId, [guest]);
+  guest: WaitingGuest,
+): Room | null => {
+  const room = state.rooms.get(channelId);
+  if (!room) return null;
+  leaveNextMeetingLobby(state, channelId, guest.userKey, guest.socket.id);
+  if (room.pendingClients.get(guest.userKey)?.socket.id !== guest.socket.id) {
+    room.addPendingClient(guest.userKey, guest.userId, guest.socket, guest.displayName);
+    for (const admin of room.getAdmins()) {
+      admin.socket.emit("userRequestedJoin", {
+        userId: guest.userKey,
+        displayName: guest.displayName || guest.userKey,
+        roomId: room.id,
+      });
+    }
+  }
+  return room;
 };
 
 // The next meeting at the code opened here: those waiting for it are its
@@ -154,6 +178,8 @@ export const sendNextMeetingLobbyOn = (
 export const followMeetingsOpenedElsewhere = async (state: SfuState): Promise<void> => {
   for (const channelId of [...state.nextMeetingLobbies.keys()]) {
     const assignment = await state.roomRegistry.getAssignment(channelId);
+    // A room opened here while the registry answered took the lobby in.
+    if (state.rooms.has(channelId)) continue;
     if (assignment && !state.roomRegistry.isLocalOwner(assignment)) {
       sendNextMeetingLobbyOn(state, channelId, MEETING_OPENED_ELSEWHERE);
     }
