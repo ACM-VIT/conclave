@@ -47,10 +47,7 @@ import {
 } from "../schedulingEmails.js";
 import { buildSchedulingMeetingLink } from "../schedulingLinks.js";
 import { applyIfUnchanged, basisOf, retryInBackground, sameStoredValue } from "../persistThenApply.js";
-import {
-  PersistenceUnavailableError,
-  sendPersistenceUnavailable,
-} from "./persistenceUnavailable.js";
+import { answerStoreFailure, ChangedElsewhereError } from "./persistenceUnavailable.js";
 import type { SfuState } from "../state.js";
 import {
   canonicalizeClientId,
@@ -199,7 +196,7 @@ const profilePayload = (
 const changeHost = <R>(
   state: SfuState,
   host: string | ((store: SchedulingStore) => string | null),
-  mutate: (draft: SchedulingStore) => R,
+  mutate: (draft: SchedulingStore, at: number) => R,
 ): Promise<R> => changeSchedulingHost(state.scheduling, state.schedulingPersistence, host, mutate);
 
 /** The draft's copy of a host profile, which a change may edit. */
@@ -367,10 +364,7 @@ const acquireBookingSlotLease = async (
 };
 
 const answerFailure = (res: Response, error: unknown, status: number): void => {
-  if (error instanceof PersistenceUnavailableError) {
-    sendPersistenceUnavailable(res);
-    return;
-  }
+  if (answerStoreFailure(res, error)) return;
   res.status(status).json({ error: (error as Error).message });
 };
 
@@ -422,81 +416,90 @@ const googleFetchJson = async <T>(
   return data as T;
 };
 
-const refreshGoogleAccessToken = async (
-  state: SfuState,
-  connection: SchedulingCalendarConnection,
-): Promise<string> => {
-  if (
-    connection.accessToken &&
-    connection.accessTokenExpiresAt &&
-    connection.accessTokenExpiresAt > Date.now() + 60_000
-  ) {
-    return connection.accessToken;
-  }
+type CalendarCredentials = {
+  profileId: string;
+  id: string;
+  refreshToken: string | null;
+  accessToken: string | null;
+  accessTokenExpiresAt: number | null;
+  calendarId: string;
+};
 
-  const grant = grantOf(connection);
+type CalendarGrant = Pick<CalendarCredentials, "profileId" | "id" | "refreshToken">;
+
+const credentialsOf = (connection: SchedulingCalendarConnection): CalendarCredentials =>
+  structuredClone({
+    profileId: connection.profileId,
+    id: connection.id,
+    refreshToken: connection.refreshToken,
+    accessToken: connection.accessToken,
+    accessTokenExpiresAt: connection.accessTokenExpiresAt,
+    calendarId: connection.calendarId || "primary",
+  });
+
+const grantOf = (holder: CalendarGrant): CalendarGrant => ({
+  profileId: holder.profileId,
+  id: holder.id,
+  refreshToken: holder.refreshToken,
+});
+
+const grantStillHeld = (state: SfuState, grant: CalendarGrant): boolean => {
+  const connection = state.scheduling.calendarByProfileId.get(grant.profileId);
+  return Boolean(connection) && sameStoredValue(grantOf(connection!), grantOf(grant));
+};
+
+const accessTokenFor = async (state: SfuState, credentials: CalendarCredentials): Promise<string> => {
+  if (credentials.accessToken && credentials.accessTokenExpiresAt && credentials.accessTokenExpiresAt > Date.now() + 60_000) {
+    return credentials.accessToken;
+  }
   const config = requireGoogleConfig();
   const body = new URLSearchParams({
     client_id: config.clientId,
     client_secret: config.clientSecret,
-    refresh_token: connection.refreshToken || "",
+    refresh_token: credentials.refreshToken || "",
     grant_type: "refresh_token",
   });
-  let token: {
-    access_token?: string;
-    expires_in?: number;
-    scope?: string;
-  };
+  let token: { access_token?: string; expires_in?: number; scope?: string };
   try {
-    token = await googleFetchJson<{
-      access_token?: string;
-      expires_in?: number;
-      scope?: string;
-    }>(GOOGLE_TOKEN_URL, {
+    token = await googleFetchJson<{ access_token?: string; expires_in?: number; scope?: string }>(GOOGLE_TOKEN_URL, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body,
     });
   } catch (error) {
-    if (shouldMarkCalendarReconnectRequired(error)) {
-      await markCalendarError(state, grant, error);
-    }
+    if (shouldMarkCalendarReconnectRequired(error)) await markCalendarError(state, credentials, error);
     throw error;
   }
-  if (!token.access_token) {
-    throw new Error("Google did not return an access token.");
-  }
-  await saveConnectionState(state, grant, "refreshed Google access token", {
-    accessToken: token.access_token,
-    accessTokenExpiresAt: Date.now() + Math.max(token.expires_in ?? 3600, 60) * 1000,
+  if (!token.access_token) throw new Error("Google did not return an access token.");
+  credentials.accessToken = token.access_token;
+  credentials.accessTokenExpiresAt = Date.now() + Math.max(token.expires_in ?? 3600, 60) * 1000;
+  await saveConnectionState(state, credentials, "refreshed Google access token", {
+    accessToken: credentials.accessToken,
+    accessTokenExpiresAt: credentials.accessTokenExpiresAt,
     status: "connected",
     error: null,
   });
-  return token.access_token;
+  return credentials.accessToken;
 };
 
-/** The Google grant a call was made with: the connection and the refresh token it held. */
-type CalendarGrant = Pick<SchedulingCalendarConnection, "profileId" | "id" | "refreshToken">;
+const CALENDAR_CHANGED = "Google Calendar was reconnected while this booking synced.";
 
-const grantOf = (connection: SchedulingCalendarConnection): CalendarGrant =>
-  basisOf(connection, ["profileId", "id", "refreshToken"]);
+const tokenForHeldGrant = async (state: SfuState, credentials: CalendarCredentials): Promise<string | null> => {
+  const accessToken = await accessTokenFor(state, credentials);
+  return grantStillHeld(state, credentials) ? accessToken : null;
+};
 
-/**
- * Saves what a Google call returned about a host's calendar connection, but
- * only while the connection still holds the grant the call was made with, so
- * a reply that comes back after a reconnect is dropped. These are caches and
- * status marks, so a failed save is logged and the request goes on.
- */
 const saveConnectionState = async (
   state: SfuState,
   grant: CalendarGrant,
   what: string,
   patch: Partial<SchedulingCalendarConnection>,
 ): Promise<void> => {
+  const basis = grantOf(grant);
   try {
-    await changeHost(state, grant.profileId, (draft) =>
-      applyIfUnchanged(what, draft.calendarByProfileId.get(grant.profileId), grant, (held) =>
-        Object.assign(held, patch, { updatedAt: Date.now() }),
+    await changeHost(state, basis.profileId, (draft, at) =>
+      applyIfUnchanged(what, draft.calendarByProfileId.get(basis.profileId), basis, (held) =>
+        Object.assign(held, patch, { updatedAt: at }),
       ),
     );
   } catch (error) {
@@ -523,11 +526,11 @@ const shouldMarkCalendarReconnectRequired = (error: unknown): boolean =>
 
 const fetchGoogleBusy = async (
   state: SfuState,
-  connection: SchedulingCalendarConnection,
+  credentials: CalendarCredentials,
   timeMin: number,
   timeMax: number,
 ): Promise<BusyInterval[]> => {
-  const accessToken = await refreshGoogleAccessToken(state, connection);
+  const accessToken = await accessTokenFor(state, credentials);
   const data = await googleFetchJson<{
     calendars?: Record<string, { busy?: Array<{ start?: string; end?: string }> }>;
   }>(GOOGLE_FREEBUSY_URL, {
@@ -539,11 +542,10 @@ const fetchGoogleBusy = async (
     body: JSON.stringify({
       timeMin: new Date(timeMin).toISOString(),
       timeMax: new Date(timeMax).toISOString(),
-      items: [{ id: connection.calendarId || "primary" }],
+      items: [{ id: credentials.calendarId }],
     }),
   });
-  const calendarId = connection.calendarId || "primary";
-  const busy = data.calendars?.[calendarId]?.busy;
+  const busy = data.calendars?.[credentials.calendarId]?.busy;
   if (!Array.isArray(busy)) {
     throw new Error("Google Calendar returned an invalid freebusy response.");
   }
@@ -559,14 +561,14 @@ const fetchGoogleBusy = async (
 
 const fetchOptionalGoogleBusy = async (
   state: SfuState,
-  connection: SchedulingCalendarConnection | null,
+  credentials: CalendarCredentials | null,
   eventType: SchedulingEventType,
   timeMin: number,
   timeMax: number,
 ): Promise<BusyInterval[]> => {
-  if (!connection) return [];
+  if (!credentials) return [];
   try {
-    return await fetchGoogleBusy(state, connection, timeMin, timeMax);
+    return await fetchGoogleBusy(state, credentials, timeMin, timeMax);
   } catch (error) {
     if (eventType.requiresCalendar) throw error;
     Logger.warn(
@@ -579,17 +581,9 @@ const fetchOptionalGoogleBusy = async (
 
 type EventTimes = { startAt: number; endAt: number };
 
-/**
- * A Google event a booking created: the grant and calendar it lives in, and
- * the times Google last confirmed it holds, or null while a move is not yet
- * confirmed. One copy is kept across retries, so a retry starts from what
- * Google holds, not from what the event was created with.
- */
 type BookingCalendarEvent = {
   id: string;
-  grant: CalendarGrant;
-  calendarId: string;
-  accessToken: string;
+  credentials: CalendarCredentials;
   timeZone: string;
   googleTimes: EventTimes | null;
 };
@@ -606,7 +600,7 @@ const eventTimes = (startAt: number, endAt: number, timeZone: string) => ({
 
 const createGoogleCalendarEvent = async (
   state: SfuState,
-  connection: SchedulingCalendarConnection,
+  credentials: CalendarCredentials,
   input: {
     title: string;
     description: string;
@@ -618,11 +612,10 @@ const createGoogleCalendarEvent = async (
     attendeeEmail: string;
   },
 ): Promise<BookingCalendarEvent> => {
-  const grant = grantOf(connection);
-  const calendarId = connection.calendarId || "primary";
   try {
-    const accessToken = await refreshGoogleAccessToken(state, connection);
-    const data = await googleFetchJson<{ id?: string }>(calendarEventsUrl(calendarId), {
+    const accessToken = await tokenForHeldGrant(state, credentials);
+    if (!accessToken) throw new Error(CALENDAR_CHANGED);
+    const data = await googleFetchJson<{ id?: string }>(calendarEventsUrl(credentials.calendarId), {
       method: "POST",
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -644,49 +637,37 @@ const createGoogleCalendarEvent = async (
     if (!data.id) throw new Error("Google did not return an event id.");
     return {
       id: data.id,
-      grant,
-      calendarId,
-      accessToken,
+      credentials,
       timeZone: input.timeZone,
       googleTimes: { startAt: input.startAt, endAt: input.endAt },
     };
   } catch (error) {
     if (shouldMarkCalendarReconnectRequired(error)) {
-      await markCalendarError(state, grant, error);
+      await markCalendarError(state, credentials, error);
     }
     throw error;
   }
 };
 
-/** The host's connection, if it still holds the grant the event was made with. */
-const connectionFor = (state: SfuState, grant: CalendarGrant): SchedulingCalendarConnection | null => {
-  const connection = state.scheduling.calendarByProfileId.get(grant.profileId);
-  return connection && sameStoredValue(grantOf(connection), grant) ? connection : null;
-};
-
-/** Moves the event in Google; what Google holds is unknown until it confirms the move. */
 const moveGoogleCalendarEvent = async (
   state: SfuState,
-  connection: SchedulingCalendarConnection,
   event: BookingCalendarEvent,
   times: EventTimes,
 ): Promise<void> => {
   event.googleTimes = null;
-  const accessToken = await refreshGoogleAccessToken(state, connection);
-  await googleFetchJson<{ id?: string }>(calendarEventsUrl(event.calendarId, event.id), {
+  const accessToken = await tokenForHeldGrant(state, event.credentials);
+  if (!accessToken) return;
+  await googleFetchJson<{ id?: string }>(calendarEventsUrl(event.credentials.calendarId, event.id), {
     method: "PATCH",
     headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
     body: JSON.stringify(eventTimes(times.startAt, times.endAt, event.timeZone)),
   });
-  event.accessToken = accessToken;
   event.googleTimes = times;
 };
 
-/** Deletes an event nothing should point at; an event already gone counts as deleted. */
 const deleteGoogleCalendarEvent = async (state: SfuState, event: BookingCalendarEvent): Promise<void> => {
-  const connection = connectionFor(state, event.grant);
-  const accessToken = connection ? await refreshGoogleAccessToken(state, connection) : event.accessToken;
-  const response = await fetch(calendarEventsUrl(event.calendarId, event.id), {
+  const accessToken = await accessTokenFor(state, event.credentials);
+  const response = await fetch(calendarEventsUrl(event.credentials.calendarId, event.id), {
     method: "DELETE",
     headers: { Authorization: `Bearer ${accessToken}` },
   });
@@ -697,24 +678,13 @@ const deleteGoogleCalendarEvent = async (state: SfuState, event: BookingCalendar
 
 const MAX_SETTLE_ROUNDS = 5;
 
-/**
- * Records a Google event a booking created and brings it in line with the
- * saved booking. The event already exists, so its id is never dropped: it
- * is recorded and moved to the booking's saved times when they differ from
- * what Google last confirmed, or the event is deleted when the booking is
- * gone or the host's calendar was reconnected to another grant. The booking
- * reads `synced` only once the saved times match what Google confirmed.
- * Every step is safe to repeat, and `event` carries what Google holds from
- * one attempt to the next.
- */
 const settleBookingEvent = async (
   state: SfuState,
   meetingId: string,
   event: BookingCalendarEvent,
 ): Promise<void> => {
   for (let round = 0; round < MAX_SETTLE_ROUNDS; round += 1) {
-    const connection = connectionFor(state, event.grant);
-    if (!connection) {
+    if (!grantStillHeld(state, event.credentials)) {
       await deleteGoogleCalendarEvent(state, event);
       Logger.info(`Deleted Google event ${event.id}: the host reconnected Google Calendar while booking ${meetingId} synced`);
       await changeMeetings(state.scheduledMeetings, state.scheduledMeetingPersistence, [meetingId], (draft) =>
@@ -722,7 +692,7 @@ const settleBookingEvent = async (
           ? updateScheduledMeeting(draft, meetingId, {
               googleCalendarEventId: null,
               calendarSyncStatus: "failed",
-              calendarSyncError: "Google Calendar was reconnected while this booking synced.",
+              calendarSyncError: CALENDAR_CHANGED,
             })
           : null,
       );
@@ -732,21 +702,25 @@ const settleBookingEvent = async (
       const held = draft.byId.get(meetingId);
       if (!held) return null;
       const times = { startAt: held.scheduledStartAt, endAt: held.scheduledEndAt };
-      const matches = event.googleTimes !== null && sameStoredValue(event.googleTimes, times);
+      const settled =
+        event.googleTimes !== null && sameStoredValue(event.googleTimes, times) && grantStillHeld(state, event.credentials);
       updateScheduledMeeting(draft, meetingId, {
         googleCalendarEventId: event.id,
-        calendarSyncStatus: matches ? "synced" : "pending",
+        calendarSyncStatus: settled ? "synced" : "pending",
         calendarSyncError: null,
       });
-      return { matches, times };
+      return { settled, times };
     });
     if (!recorded) {
       await deleteGoogleCalendarEvent(state, event);
       Logger.info(`Deleted Google event ${event.id}: booking ${meetingId} was removed while it synced`);
       return;
     }
-    if (recorded.matches) return;
-    await moveGoogleCalendarEvent(state, connection, event, recorded.times);
+    if (!grantStillHeld(state, event.credentials)) continue;
+    if (recorded.settled) return;
+    if (event.googleTimes === null || !sameStoredValue(event.googleTimes, recorded.times)) {
+      await moveGoogleCalendarEvent(state, event, recorded.times);
+    }
   }
   throw new Error(`Booking ${meetingId} kept moving while its Google event synced`);
 };
@@ -805,7 +779,7 @@ const resolvePublicTarget = (
   | {
       profile: SchedulingProfile;
       eventType: SchedulingEventType;
-      calendar: SchedulingCalendarConnection | null;
+      calendar: CalendarCredentials | null;
     }
   | { error: string; status: number } => {
   const profile = getPublicProfile(state.scheduling, clientId, username);
@@ -815,7 +789,35 @@ const resolvePublicTarget = (
     return { error: "Event type is not available.", status: 404 };
   }
   const calendar = requireConnectedCalendar(state, profile);
-  return { profile, eventType, calendar };
+  return {
+    profile: structuredClone(profile),
+    eventType: structuredClone(eventType),
+    calendar: calendar ? credentialsOf(calendar) : null,
+  };
+};
+
+const BOOKED_PROFILE_FIELDS = ["clientId", "userId", "email", "name", "timeZone"] as const;
+
+const sameCalendarGrant = (state: SfuState, profile: SchedulingProfile, calendar: CalendarCredentials | null): boolean => {
+  if (calendar) return grantStillHeld(state, calendar);
+  return !requireConnectedCalendar(state, profile);
+};
+
+const assertBookingPageUnchanged = (
+  state: SfuState,
+  target: { profile: SchedulingProfile; eventType: SchedulingEventType; calendar: CalendarCredentials | null },
+): void => {
+  const eventType = state.scheduling.eventTypesById.get(target.eventType.id);
+  const profile = state.scheduling.profilesById.get(target.profile.id);
+  if (
+    !eventType ||
+    !profile ||
+    !sameStoredValue(eventType, target.eventType) ||
+    !sameStoredValue(basisOf(profile, BOOKED_PROFILE_FIELDS), basisOf(target.profile, BOOKED_PROFILE_FIELDS)) ||
+    !sameCalendarGrant(state, profile, target.calendar)
+  ) {
+    throw new ChangedElsewhereError("booking page");
+  }
 };
 
 const resolvePublicTargetForClients = (
@@ -1275,8 +1277,9 @@ export const registerSchedulingRoutes = (
       const appOrigin = resolveAppOrigin(req);
       let meeting: ScheduledMeeting;
       try {
-        meeting = await changeMeetings(state.scheduledMeetings, state.scheduledMeetingPersistence, [], (draft) =>
-          createScheduledMeeting(
+        meeting = await changeMeetings(state.scheduledMeetings, state.scheduledMeetingPersistence, [], (draft) => {
+          assertBookingPageUnchanged(state, target);
+          return createScheduledMeeting(
             draft,
             {
               title: target.eventType.title,
@@ -1302,8 +1305,8 @@ export const registerSchedulingRoutes = (
               defaultHostName: target.profile.name,
               defaultHostUserId: target.profile.userId,
             },
-          ),
-        );
+          );
+        });
       } catch (createError) {
         await releaseSlotLease();
         throw createError;
@@ -1314,9 +1317,6 @@ export const registerSchedulingRoutes = (
         Logger.warn("Failed to release booking slot lock", releaseError);
       }
 
-      // The booking is saved, so from here on the guest gets a confirmation.
-      // Each later step records its outcome on its own and never fails it,
-      // and the confirmation reports only what has been saved.
       let calendarError: string | null = null;
       const calendar = target.calendar;
       if (calendar) {

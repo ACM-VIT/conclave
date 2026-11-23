@@ -35,7 +35,7 @@ import {
 import { assertSqliteWritable } from "./sqliteWriteCheck.js";
 import { finiteNumber, importFallbackFiles, readJsonStore, replaceIfNewer, requireArray } from "./fallbackImport.js";
 import { mergeNewestStamp } from "./stampedMerge.js";
-import { assignInPlace, persistThenApply, sameStoredValue, serialized } from "./persistThenApply.js";
+import { assignInPlace, ChangedElsewhereError, commitStamp, committed, persistThenApply, sameStoredValue, serialized, type Committed } from "./persistThenApply.js";
 import { NEXT_VERSION_LUA } from "./redisCommitVersion.js";
 import { addMirrorVersionColumn } from "./sqliteMirrorVersion.js";
 
@@ -89,7 +89,19 @@ export type SchedulingRecordWrite = {
   payload: unknown;
 };
 
+export type SchedulingCommit = {
+  kind: SchedulingRecordKind;
+  id: string;
+  record: SchedulingRecordWrite | null;
+  deletedAt: number | null;
+};
+
+export type CommittedScheduling = Committed<SchedulingCommit[]>;
+
+export type SchedulingChange = { records: SchedulingRecordWrite[]; deletions: SchedulingDeletion[] };
+
 export type SchedulingPersistence = {
+  commit: (change: SchedulingChange) => MaybePromise<CommittedScheduling>;
   save: (snapshot: SchedulingSnapshot) => MaybePromise<void>;
   importIfNewer: (record: SchedulingRecordWrite) => MaybePromise<boolean>;
   load: (options?: { strict?: boolean }) => MaybePromise<SchedulingSnapshot>;
@@ -1156,11 +1168,7 @@ const schedulingRecordsOf = (snapshot: SchedulingSnapshot): SchedulingRecordWrit
 
 type VersionedSnapshot = { version: number; snapshot: SchedulingSnapshot };
 
-export type MirroredSchedulingChange = {
-  version: number;
-  records: SchedulingRecordWrite[];
-  deletions: Array<SchedulingDeletion & { removed: boolean }>;
-};
+export type MirroredSchedulingChange = { version: number; commits: SchedulingCommit[] };
 
 type SqliteSchedulingStore = SchedulingPersistence & {
   mirror: (change: MirroredSchedulingChange) => Promise<void>;
@@ -1257,13 +1265,6 @@ export const createSqliteSchedulingPersistence = (
       throw error;
     }
   };
-  const applySnapshot = (snapshot: SchedulingSnapshot): void => {
-    for (const record of schedulingRecordsOf(snapshot)) write(upsert, record);
-    for (const { kind, id, deletedAt } of snapshot.deleted ?? []) {
-      deleteOlder.run(kind, id, deletedAt);
-      markDeleted.run(kind, id, deletedAt);
-    }
-  };
   const mirrorUpsert = db.prepare(`
     INSERT INTO scheduling_records (kind, id, client_id, updated_at, payload_json, mirror_version)
     SELECT ?1, ?2, ?3, ?4, ?5, ?6
@@ -1292,15 +1293,46 @@ export const createSqliteSchedulingPersistence = (
   const mirrorRecord = (record: SchedulingRecordWrite, version: number): void => {
     mirrorUpsert.run(record.kind, record.id, record.clientId, record.updatedAt, JSON.stringify(record.payload), version);
   };
+  const readRow = db.prepare("SELECT client_id, updated_at, payload_json FROM scheduling_records WHERE kind = ? AND id = ?");
+  const readStamp = db.prepare("SELECT deleted_at FROM scheduling_tombstones WHERE kind = ? AND id = ?");
+  const mirrorDropStamp = db.prepare("DELETE FROM scheduling_tombstones WHERE kind = ? AND id = ? AND mirror_version <= ?");
+  const readCommitted = (kind: SchedulingRecordKind, id: string): SchedulingCommit => {
+    const row = readRow.all(kind, id)[0] as { client_id?: unknown; updated_at?: unknown; payload_json?: unknown } | undefined;
+    const stamp = readStamp.all(kind, id)[0] as { deleted_at?: unknown } | undefined;
+    return {
+      kind,
+      id,
+      record: row
+        ? { kind, id, clientId: String(row.client_id), updatedAt: Number(row.updated_at), payload: JSON.parse(String(row.payload_json)) as unknown }
+        : null,
+      deletedAt: stamp ? Number(stamp.deleted_at) : null,
+    };
+  };
+  const commit = (change: SchedulingChange): CommittedScheduling => {
+    let commits: SchedulingCommit[] = [];
+    inTransaction(() => {
+      for (const record of change.records) write(upsert, record);
+      for (const { kind, id, deletedAt } of change.deletions) {
+        deleteOlder.run(kind, id, deletedAt);
+        markDeleted.run(kind, id, deletedAt);
+      }
+      commits = touchedKeys(change).map(([kind, id]) => readCommitted(kind, id));
+    });
+    return committed(commits);
+  };
   return {
-    save: async (snapshot) => inTransaction(() => applySnapshot(snapshot)),
+    commit: async (change) => commit(change),
+    save: async (snapshot) => {
+      commit(changeOfSnapshot(snapshot));
+    },
     importIfNewer: async (record) => write(upsertIfNewer, record),
-    mirror: async ({ version, records, deletions }) =>
+    mirror: async ({ version, commits }) =>
       inTransaction(() => {
-        for (const record of records) mirrorRecord(record, version);
-        for (const { kind, id, deletedAt, removed } of deletions) {
-          mirrorMark.run(kind, id, deletedAt, version);
-          if (removed) mirrorRemove.run(kind, id, version);
+        for (const { kind, id, record, deletedAt } of commits) {
+          if (record) mirrorRecord(record, version);
+          else mirrorRemove.run(kind, id, version);
+          if (deletedAt === null) mirrorDropStamp.run(kind, id, version);
+          else mirrorMark.run(kind, id, deletedAt, version);
         }
       }),
     syncFrom: async (authority, version) =>
@@ -1425,11 +1457,71 @@ const importIntoJsonSnapshot = (
   return replaced;
 };
 
+type SnapshotEntry = Record<string, unknown>;
+
+const commitIntoJsonSnapshot = (path: string, change: SchedulingChange): SchedulingCommit[] => {
+  const snapshot = readJsonSnapshot(path);
+  const stamps = new Map(normalizeDeletions(snapshot.deleted).map((entry) => [keyOf(entry.kind, entry.id), entry]));
+  const profilesBefore = storedProfilesById(snapshot);
+  const lists = new Map(
+    SCHEDULING_KINDS.map((kind) => [kind, [...snapshotList(snapshot, SNAPSHOT_FIELD[kind])] as SnapshotEntry[]]),
+  );
+  const keyField = (kind: SchedulingRecordKind) => (kind === "profile" || kind === "event_type" ? "id" : "profileId");
+  const storedAt = (kind: SchedulingRecordKind, entry: SnapshotEntry): number =>
+    kind === "availability"
+      ? hoursUpdatedAt(entry.availability, profilesBefore.get(entry.profileId))
+      : finiteNumber(entry.updatedAt) ?? 0;
+  const listOf = (kind: SchedulingRecordKind) => lists.get(kind)!;
+  const find = (kind: SchedulingRecordKind, id: string) =>
+    listOf(kind).findIndex((entry) => Boolean(entry) && typeof entry === "object" && entry[keyField(kind)] === id);
+  for (const record of change.records) {
+    const deletedAt = stamps.get(keyOf(record.kind, record.id))?.deletedAt;
+    if (deletedAt !== undefined && deletedAt > record.updatedAt) continue;
+    const index = find(record.kind, record.id);
+    if (index >= 0 && storedAt(record.kind, listOf(record.kind)[index]) > record.updatedAt) continue;
+    if (index >= 0) listOf(record.kind)[index] = record.payload as SnapshotEntry;
+    else listOf(record.kind).push(record.payload as SnapshotEntry);
+  }
+  for (const { kind, id, deletedAt } of change.deletions) {
+    const index = find(kind, id);
+    if (index >= 0 && storedAt(kind, listOf(kind)[index]) < deletedAt) listOf(kind).splice(index, 1);
+    const kept = Math.max(stamps.get(keyOf(kind, id))?.deletedAt ?? 0, deletedAt);
+    stamps.set(keyOf(kind, id), { kind, id, deletedAt: kept });
+  }
+  writeJsonAtomic(
+    path,
+    JSON.stringify(
+      {
+        ...snapshot,
+        profiles: listOf("profile"),
+        availability: listOf("availability"),
+        eventTypes: listOf("event_type"),
+        calendars: listOf("calendar"),
+        deleted: [...stamps.values()],
+      },
+      null,
+      2,
+    ),
+  );
+  return touchedKeys(change).map(([kind, id]) => {
+    const entry = listOf(kind)[find(kind, id)];
+    return {
+      kind,
+      id,
+      record: entry
+        ? { kind, id, clientId: typeof entry.clientId === "string" ? entry.clientId : CONCLAVE_CLIENT_ID, updatedAt: storedAt(kind, entry), payload: entry }
+        : null,
+      deletedAt: stamps.get(keyOf(kind, id))?.deletedAt ?? null,
+    };
+  });
+};
+
 const createFileSchedulingPersistence = (
   path: string = getSchedulingJsonPath(),
 ): SchedulingPersistence => {
   let profilesBeforeImport: Map<unknown, unknown> | null = null;
   return {
+    commit: async (change) => committed(commitIntoJsonSnapshot(path, change)),
     importIfNewer: async (record) => {
       profilesBeforeImport ??= storedProfilesById(readJsonSnapshot(path));
       return importIntoJsonSnapshot(path, record, profilesBeforeImport);
@@ -1497,26 +1589,42 @@ end
 const UPSERT_SCHEDULING_RECORD_SCRIPT = `${SCHEDULING_LUA}
 if redis.call("EXISTS", KEYS[3]) == 0 then return redis.error_reply("NOSEED the scheduling store is not seeded") end
 local applied = setIfNewer(KEYS[1], KEYS[2], ARGV[2], ARGV[1], tonumber(ARGV[3]) or 0, ARGV[4], ARGV[5] == "newer")
-return { nextVersion(KEYS[4]), applied }
+return { nextVersion(KEYS[4]), applied, ARGV[6], ARGV[1], redis.call("HGET", KEYS[1], ARGV[1]), redis.call("HGET", KEYS[2], ARGV[2]) }
 `;
 
 const SAVE_SCHEDULING_RECORDS_SCRIPT = `${SCHEDULING_LUA}
 if redis.call("EXISTS", KEYS[6]) == 0 then return redis.error_reply("NOSEED the scheduling store is not seeded") end
-local outcomes = {}
+local touched = {}
+local seen = {}
+local function touch(kindIndex, kind, id)
+  local key = kind .. ":" .. id
+  if not seen[key] then
+    seen[key] = true
+    touched[#touched + 1] = { kindIndex, kind, id }
+  end
+end
 local count = tonumber(ARGV[1]) or 0
 local index = 2
 for _ = 1, count do
   local kindIndex, kind, id = tonumber(ARGV[index]), ARGV[index + 1], ARGV[index + 2]
-  outcomes[#outcomes + 1] = setIfNewer(KEYS[kindIndex], KEYS[5], kind .. ":" .. id, id, tonumber(ARGV[index + 3]) or 0, ARGV[index + 4], false)
+  setIfNewer(KEYS[kindIndex], KEYS[5], kind .. ":" .. id, id, tonumber(ARGV[index + 3]) or 0, ARGV[index + 4], false)
+  touch(kindIndex, kind, id)
   index = index + 5
 end
 while index <= #ARGV do
   local kindIndex, kind, id = tonumber(ARGV[index]), ARGV[index + 1], ARGV[index + 2]
-  outcomes[#outcomes + 1] = markDeleted(KEYS[kindIndex], KEYS[5], kind .. ":" .. id, id, tonumber(ARGV[index + 3]) or 0)
+  markDeleted(KEYS[kindIndex], KEYS[5], kind .. ":" .. id, id, tonumber(ARGV[index + 3]) or 0)
+  touch(kindIndex, kind, id)
   index = index + 4
 end
-table.insert(outcomes, 1, nextVersion(KEYS[7]))
-return outcomes
+local reply = { nextVersion(KEYS[7]) }
+for _, entry in ipairs(touched) do
+  reply[#reply + 1] = entry[2]
+  reply[#reply + 1] = entry[3]
+  reply[#reply + 1] = redis.call("HGET", KEYS[entry[1]], entry[3])
+  reply[#reply + 1] = redis.call("HGET", KEYS[5], entry[2] .. ":" .. entry[3])
+end
+return reply
 `;
 
 /**
@@ -1622,11 +1730,11 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
     }
   }
 
-  async save(snapshot: SchedulingSnapshot): Promise<void> {
-    const records = schedulingRecordsOf(snapshot);
-    const deleted = snapshot.deleted ?? [];
-    return this.queueWrite(async () => {
-      const [version, ...outcomes] = (await this.evalSeeded([
+  async commit(change: SchedulingChange): Promise<CommittedScheduling> {
+    if (change.records.length === 0 && change.deletions.length === 0) return committed([]);
+    let commits: SchedulingCommit[] = [];
+    await this.queueWrite(async () => {
+      const [version, ...state] = (await this.evalSeeded([
         "EVAL",
         SAVE_SCHEDULING_RECORDS_SCRIPT,
         "7",
@@ -1634,30 +1742,32 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
         this.tombstonesKey,
         this.seededKey,
         this.versionKey,
-        String(records.length),
-        ...records.flatMap((record) => [
+        String(change.records.length),
+        ...change.records.flatMap((record) => [
           kindIndex(record.kind),
           record.kind,
           record.id,
           String(record.updatedAt),
-          JSON.stringify({ updatedAt: record.updatedAt, payload: record.payload }),
+          JSON.stringify({ updatedAt: record.updatedAt, clientId: record.clientId, payload: record.payload }),
         ]),
-        ...deleted.flatMap(({ kind, id, deletedAt }) => [kindIndex(kind), kind, id, String(deletedAt)]),
-      ])) as number[];
-      await this.updateMirror({
-        version: Number(version),
-        records: records.filter((_, index) => Number(outcomes[index]) === 1),
-        deletions: deleted.map((deletion, index) => ({ ...deletion, removed: Number(outcomes[records.length + index]) === 1 })),
-      });
+        ...change.deletions.flatMap(({ kind, id, deletedAt }) => [kindIndex(kind), kind, id, String(deletedAt)]),
+      ])) as unknown[];
+      commits = committedSchedulingFrom(state);
+      await this.updateMirror({ version: Number(version), commits });
     });
+    return committed(commits);
+  }
+
+  async save(snapshot: SchedulingSnapshot): Promise<void> {
+    await this.commit(changeOfSnapshot(snapshot));
   }
 
   async importIfNewer(record: SchedulingRecordWrite): Promise<boolean> {
     let applied = false;
     await this.queueWrite(async () => {
-      const [version, outcome] = (await this.upsertRecord(record, "newer")) as number[];
+      const [version, outcome, ...state] = (await this.upsertRecord(record, "newer")) as unknown[];
       applied = Number(outcome) === 1;
-      await this.updateMirror({ version: Number(version), records: applied ? [record] : [], deletions: [] });
+      await this.updateMirror({ version: Number(version), commits: committedSchedulingFrom(state) });
     });
     return applied;
   }
@@ -1791,8 +1901,9 @@ class RedisSchedulingPersistence implements SchedulingPersistence {
       record.id,
       `${record.kind}:${record.id}`,
       String(record.updatedAt),
-      JSON.stringify({ updatedAt: record.updatedAt, payload: record.payload }),
+      JSON.stringify({ updatedAt: record.updatedAt, clientId: record.clientId, payload: record.payload }),
       mode,
+      record.kind,
     ]);
   }
 
@@ -1893,14 +2004,43 @@ const snapshotSchedulingStore = (
   ),
 });
 
-export const persistScheduling = async (
-  store: SchedulingStore,
-  persistence: SchedulingPersistence | null,
-): Promise<void> => {
-  if (!persistence) return;
-  await persistence.save(snapshotSchedulingStore(store));
-  await persistence.flush?.();
+const committedSchedulingFrom = (state: unknown[]): SchedulingCommit[] => {
+  const commits: SchedulingCommit[] = [];
+  for (let index = 0; index < state.length; index += 4) {
+    const [kindValue, idValue, stored, deletedAt] = state.slice(index, index + 4);
+    const kind = SCHEDULING_KINDS.find((candidate) => candidate === kindValue);
+    if (!kind) continue;
+    const id = String(idValue);
+    const parsed = typeof stored === "string" ? (JSON.parse(stored) as { updatedAt?: unknown; clientId?: unknown; payload?: unknown }) : null;
+    const payload = parsed && "payload" in parsed ? parsed.payload : parsed;
+    commits.push({
+      kind,
+      id,
+      record: parsed
+        ? {
+            kind,
+            id,
+            clientId: typeof parsed.clientId === "string" ? parsed.clientId : CONCLAVE_CLIENT_ID,
+            updatedAt: finiteNumber(parsed.updatedAt) ?? 0,
+            payload,
+          }
+        : null,
+      deletedAt: deletedAt === null || deletedAt === undefined ? null : Number(deletedAt),
+    });
+  }
+  return commits;
 };
+
+const touchedKeys = (change: SchedulingChange): Array<[SchedulingRecordKind, string]> => {
+  const keys = new Map<string, [SchedulingRecordKind, string]>();
+  for (const { kind, id } of [...change.records, ...change.deletions]) keys.set(`${kind}:${id}`, [kind, id]);
+  return [...keys.values()];
+};
+
+const changeOfSnapshot = (snapshot: SchedulingSnapshot): SchedulingChange => ({
+  records: schedulingRecordsOf(snapshot),
+  deletions: snapshot.deleted ?? [],
+});
 
 type SchedulingFallbackEntry = {
   kind: SchedulingRecordKind;
@@ -2071,62 +2211,134 @@ const diffSchedulingStore = (store: SchedulingStore, draft: SchedulingStore): Sc
   },
 });
 
-/** Commits only the records a change touched, keeping the objects other code holds. */
-const applySchedulingPatch = (store: SchedulingStore, patch: SchedulingPatch): void => {
-  for (const id of patch.profiles.remove) {
-    const held = store.profilesById.get(id);
-    if (held) unindexProfile(store, held);
-    store.profilesById.delete(id);
-  }
-  for (const [id, profile] of patch.profiles.set) {
-    const held = store.profilesById.get(id);
-    if (held) unindexProfile(store, held);
-    registerProfile(store, held ? assignInPlace(held, profile) : profile);
-  }
-  for (const id of patch.hours.remove) store.availabilityByProfileId.delete(id);
-  for (const [id, hours] of patch.hours.set) store.availabilityByProfileId.set(id, hours);
-  for (const id of patch.eventTypes.remove) {
-    const held = store.eventTypesById.get(id);
-    if (held) unindexEventType(store, held);
-    store.eventTypesById.delete(id);
-  }
-  for (const [id, eventType] of patch.eventTypes.set) {
-    const held = store.eventTypesById.get(id);
-    if (held) unindexEventType(store, held);
-    registerEventType(store, held ? assignInPlace(held, eventType) : eventType);
-  }
-  for (const id of patch.calendars.remove) store.calendarByProfileId.delete(id);
-  for (const [id, calendar] of patch.calendars.set) {
-    const held = store.calendarByProfileId.get(id);
-    store.calendarByProfileId.set(id, held ? assignInPlace(held, calendar) : calendar);
-  }
+const keyOf = (kind: SchedulingRecordKind, id: string): string => `${kind}:${id}`;
+
+const recordAt = (store: SchedulingStore, kind: SchedulingRecordKind, id: string): number | undefined => {
+  if (kind === "profile") return store.profilesById.get(id)?.updatedAt;
+  if (kind === "availability") return store.availabilityByProfileId.get(id)?.updatedAt;
+  if (kind === "event_type") return store.eventTypesById.get(id)?.updatedAt;
+  return store.calendarByProfileId.get(id)?.updatedAt;
+};
+
+const changeOfPatch = (store: SchedulingStore, draft: SchedulingStore, patch: SchedulingPatch, at: number): SchedulingChange => {
+  for (const [id, profile] of patch.profiles.set) profile.updatedAt = commitStamp(at, store.profilesById.get(id)?.updatedAt);
+  for (const [id, hours] of patch.hours.set) hours.updatedAt = commitStamp(at, store.availabilityByProfileId.get(id)?.updatedAt);
+  for (const [id, eventType] of patch.eventTypes.set) eventType.updatedAt = commitStamp(at, store.eventTypesById.get(id)?.updatedAt);
+  for (const [id, calendar] of patch.calendars.set) calendar.updatedAt = commitStamp(at, store.calendarByProfileId.get(id)?.updatedAt);
+  const records: SchedulingRecordWrite[] = [
+    ...patch.profiles.set.map(([, profile]): SchedulingRecordWrite => ({
+      kind: "profile", id: profile.id, clientId: profile.clientId, updatedAt: profile.updatedAt, payload: profile,
+    })),
+    ...patch.hours.set.map(([profileId, availability]): SchedulingRecordWrite => ({
+      kind: "availability",
+      id: profileId,
+      clientId: draft.profilesById.get(profileId)?.clientId ?? CONCLAVE_CLIENT_ID,
+      updatedAt: availability.updatedAt ?? at,
+      payload: { profileId, availability },
+    })),
+    ...patch.eventTypes.set.map(([, eventType]): SchedulingRecordWrite => ({
+      kind: "event_type", id: eventType.id, clientId: eventType.clientId, updatedAt: eventType.updatedAt, payload: eventType,
+    })),
+    ...patch.calendars.set.map(([profileId, calendar]): SchedulingRecordWrite => ({
+      kind: "calendar", id: profileId, clientId: calendar.clientId, updatedAt: calendar.updatedAt, payload: serializeCalendar(calendar),
+    })),
+  ];
+  const removed: Array<[SchedulingRecordKind, string[]]> = [
+    ["profile", patch.profiles.remove],
+    ["availability", patch.hours.remove],
+    ["event_type", patch.eventTypes.remove],
+    ["calendar", patch.calendars.remove],
+  ];
+  const deletions = new Map<string, SchedulingDeletion>();
   for (const kind of SCHEDULING_KINDS) {
-    for (const id of patch.tombstones[kind].remove) store.tombstones[kind].delete(id);
-    for (const [id, deletedAt] of patch.tombstones[kind].set) store.tombstones[kind].set(id, deletedAt);
+    for (const [id] of patch.tombstones[kind].set) {
+      deletions.set(keyOf(kind, id), { kind, id, deletedAt: commitStamp(at, recordAt(store, kind, id)) });
+    }
+  }
+  for (const [kind, ids] of removed) {
+    for (const id of ids) {
+      if (!deletions.has(keyOf(kind, id))) deletions.set(keyOf(kind, id), { kind, id, deletedAt: commitStamp(at, recordAt(store, kind, id)) });
+    }
+  }
+  return { records, deletions: [...deletions.values()] };
+};
+
+const uncommittedScheduling = (change: SchedulingChange): CommittedScheduling =>
+  committed([
+    ...change.records.map((record) => ({ kind: record.kind, id: record.id, record, deletedAt: null })),
+    ...change.deletions.map(({ kind, id, deletedAt }) => ({ kind, id, record: null, deletedAt })),
+  ]);
+
+const committedSnapshot = (commits: SchedulingCommit[]): SchedulingSnapshot => {
+  const payloads = (kind: SchedulingRecordKind) =>
+    commits.flatMap((commit) => (commit.kind === kind && commit.record ? [commit.record.payload] : []));
+  return normalizeSnapshot({
+    profiles: payloads("profile") as SchedulingProfile[],
+    availability: payloads("availability") as SchedulingSnapshot["availability"],
+    eventTypes: payloads("event_type") as SchedulingEventType[],
+    calendars: payloads("calendar") as SchedulingCalendarConnection[],
+  });
+};
+
+export const applyCommittedScheduling = (store: SchedulingStore, commits: CommittedScheduling): void => {
+  const snapshot = committedSnapshot(commits);
+  const profiles = new Map(snapshot.profiles.map((profile) => [profile.id, profile]));
+  const hours = new Map(snapshot.availability.map((entry) => [entry.profileId, entry.availability]));
+  const eventTypes = new Map(snapshot.eventTypes.map((eventType) => [eventType.id, eventType]));
+  const calendars = new Map(snapshot.calendars.map((calendar) => [calendar.profileId, calendar]));
+  for (const { kind, id, deletedAt } of commits) {
+    if (kind === "profile") {
+      const held = store.profilesById.get(id);
+      if (held) unindexProfile(store, held);
+      const next = profiles.get(id);
+      if (next) registerProfile(store, held ? assignInPlace(held, next) : next);
+      else store.profilesById.delete(id);
+    } else if (kind === "availability") {
+      const next = hours.get(id);
+      if (next) store.availabilityByProfileId.set(id, next);
+      else store.availabilityByProfileId.delete(id);
+    } else if (kind === "event_type") {
+      const held = store.eventTypesById.get(id);
+      if (held) unindexEventType(store, held);
+      const next = eventTypes.get(id);
+      if (next) registerEventType(store, held ? assignInPlace(held, next) : next);
+      else store.eventTypesById.delete(id);
+    } else {
+      const held = store.calendarByProfileId.get(id);
+      const next = calendars.get(id);
+      if (next) store.calendarByProfileId.set(id, held ? assignInPlace(held, next) : next);
+      else store.calendarByProfileId.delete(id);
+    }
+    if (deletedAt === null) store.tombstones[kind].delete(id);
+    else store.tombstones[kind].set(id, deletedAt);
   }
 };
 
-/**
- * Runs a change to one host's scheduling records on a draft, saves the draft,
- * and only then commits the records the change touched. `host` names the
- * profile whose records the change may edit, or picks it from the store once
- * earlier changes are in.
- */
+const presentAfter = (store: SchedulingStore, record: SchedulingRecordWrite): boolean =>
+  recordAt(store, record.kind, record.id) !== undefined;
+
 export const changeSchedulingHost = async <R>(
   store: SchedulingStore,
   persistence: SchedulingPersistence | null,
   host: string | ((store: SchedulingStore) => string | null),
-  mutate: (draft: SchedulingStore) => R,
+  mutate: (draft: SchedulingStore, at: number) => R,
 ): Promise<R> => {
   const plan = await persistThenApply(store, "scheduling records", {
-    plan: () => {
+    plan: (at) => {
       const draft = draftSchedulingStore(store, typeof host === "function" ? host(store) : host);
-      const result = mutate(draft);
-      return { draft, result, patch: diffSchedulingStore(store, draft) };
+      const result = mutate(draft, at);
+      return { result, change: changeOfPatch(store, draft, diffSchedulingStore(store, draft), at) };
     },
-    save: ({ draft }) => persistScheduling(draft, persistence),
-    apply: ({ patch }) => applySchedulingPatch(store, patch),
+    save: async ({ change }) => {
+      if (change.records.length === 0 && change.deletions.length === 0) return committed([]);
+      if (!persistence) return uncommittedScheduling(change);
+      const commits = await persistence.commit(change);
+      await persistence.flush?.();
+      return commits;
+    },
+    apply: (_planned, commits) => applyCommittedScheduling(store, commits),
   });
+  if (plan.change.records.some((record) => !presentAfter(store, record))) throw new ChangedElsewhereError("scheduling record");
   return plan.result;
 };
 
@@ -2231,7 +2443,11 @@ export const mergePersistedScheduling = (
         },
       },
     );
-    if (options.writeBack) await persistScheduling(store, persistence);
+    if (options.writeBack) {
+      const commits = await persistence.commit(changeOfSnapshot(snapshotSchedulingStore(store)));
+      await persistence.flush?.();
+      applyCommittedScheduling(store, commits);
+    }
     return merged;
   });
 

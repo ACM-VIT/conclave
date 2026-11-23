@@ -13,10 +13,7 @@ import {
   type ScheduledMeetingStore,
 } from "../scheduledMeetings.js";
 import type { SfuState } from "../state.js";
-import {
-  PersistenceUnavailableError,
-  sendPersistenceUnavailable,
-} from "./persistenceUnavailable.js";
+import { answerStoreFailure } from "./persistenceUnavailable.js";
 import {
   canonicalizeClientId,
   canMigrateClientNamespace,
@@ -146,10 +143,7 @@ export const registerScheduledMeetingRoutes = (
     changeMeetings(state.scheduledMeetings, state.scheduledMeetingPersistence, ids, mutate);
 
   const answerFailure = (res: Response, error: unknown): void => {
-    if (error instanceof PersistenceUnavailableError) {
-      sendPersistenceUnavailable(res);
-      return;
-    }
+    if (answerStoreFailure(res, error)) return;
     res.status(400).json({ error: (error as Error).message });
   };
 

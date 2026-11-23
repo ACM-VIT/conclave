@@ -37,9 +37,12 @@ import {
   type ScheduledMeetingStore,
   updateScheduledMeeting,
 } from "../server/scheduledMeetings.js";
-import { changeWebinars, deleteScheduledWebinar } from "../server/scheduledWebinars.js";
+import { changeWebinars, createScheduledWebinarPersistence, deleteScheduledWebinar } from "../server/scheduledWebinars.js";
+import { runScheduledMeetingTick } from "../server/scheduledMeetingTick.js";
+import { runScheduledWebinarTick } from "../server/scheduledWebinarScheduler.js";
 import { createRedisSchedulingPersistence, createSchedulingPersistence, createSqliteSchedulingPersistence } from "../server/scheduling.js";
 import { sendDueSchedulingEmailReminders } from "../server/schedulingEmailReminders.js";
+import { serialized } from "../server/persistThenApply.js";
 import { readStampedJson } from "../server/stampedJsonFile.js";
 import { createSfuState, type SfuState } from "../server/state.js";
 import { hasRedis, startRedis } from "./support/redisServer.js";
@@ -534,5 +537,131 @@ describe("a JSON store moved to SQLite", () => {
     const inSqlite = await start();
     expect(inSqlite.scheduledWebinars.byId.has(webinar.id)).toBe(false);
     expect([...inSqlite.scheduledWebinars.deletedAt.keys()]).toEqual([webinar.id]);
+  });
+});
+
+describe.skipIf(!hasRedis)("a mirror stamp", () => {
+  const mirrorStamp = (table: string, where: string, ...params: string[]): number | null => {
+    const db = new DatabaseSync(sqlitePath());
+    try {
+      const row = db.prepare(`SELECT deleted_at FROM ${table} WHERE ${where}`).all(...params)[0] as { deleted_at?: unknown } | undefined;
+      return row ? Number(row.deleted_at) : null;
+    } finally {
+      db.close();
+    }
+  };
+
+  it("keeps the meeting deletion stamp Redis kept, not an older one a later save sends", async () => {
+    const persistence = createRedisScheduledMeetingPersistence(redis!.url, prefix, createSqliteScheduledMeetingPersistence(sqlitePath()));
+    open.push(persistence);
+    await persistence.loadState();
+    await persistence.saveChanged([], [{ id: "deleted-twice", deletedAt: 500 }]);
+    await persistence.saveChanged([], [{ id: "deleted-twice", deletedAt: 300 }]);
+
+    expect(Number(await raw!.hGet(`${prefix}:scheduled-meetings:tombstones`, "deleted-twice"))).toBe(500);
+    expect(mirrorStamp("scheduled_meeting_tombstones", "id = ?", "deleted-twice")).toBe(500);
+  });
+
+  it("keeps the scheduling deletion stamp Redis kept, not an older one a later save sends", async () => {
+    const persistence = createRedisSchedulingPersistence(redis!.url, prefix, createSqliteSchedulingPersistence(sqlitePath()));
+    open.push(persistence as never);
+    await persistence.load();
+    const stamp = (deletedAt: number) => ({
+      profiles: [], availability: [], eventTypes: [], calendars: [],
+      deleted: [{ kind: "event_type" as const, id: "deleted-twice", deletedAt }],
+    });
+    await persistence.save(stamp(500));
+    await persistence.save(stamp(300));
+
+    expect(Number(await raw!.hGet(`${prefix}:scheduling:tombstones`, "event_type:deleted-twice"))).toBe(500);
+    expect(mirrorStamp("scheduling_tombstones", "kind = 'event_type' AND id = ?", "deleted-twice")).toBe(500);
+  });
+});
+
+describe("a queued tick", () => {
+  it("stamps a meeting's status change when it commits, so an edit queued ahead cannot make storage skip it", async () => {
+    vi.stubEnv("SCHEDULED_MEETINGS_PERSISTENCE", "sqlite");
+    const state = await startState("sqlite");
+    const now = Date.now();
+    const due = await changeMeetings(state.scheduledMeetings, state.scheduledMeetingPersistence, [], (draft) =>
+      createScheduledMeeting(draft, { title: "due", scheduledStartAt: now - 60_000, scheduledEndAt: now + 3_600_000 }, HOST),
+    );
+    const persistence = state.scheduledMeetingPersistence!;
+    const blocker = gate();
+    const holding = serialized(state.scheduledMeetings, () => blocker.opened);
+    const editing = changeMeetings(state.scheduledMeetings, persistence, [due.id], (draft) =>
+      updateScheduledMeeting(draft, due.id, { title: "edited" }),
+    );
+    const ticking = runScheduledMeetingTick(state);
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    blocker.open();
+    await Promise.all([holding, editing, ticking]);
+
+    const stored = (await createSqliteScheduledMeetingPersistence(sqlitePath()).loadState()).records.find((meeting) => meeting.id === due.id);
+    const held = state.scheduledMeetings.byId.get(due.id);
+    expect([held?.status, held?.title]).toEqual(["live", "edited"]);
+    expect([stored?.status, stored?.title, stored?.updatedAt]).toEqual([held?.status, held?.title, held?.updatedAt]);
+  });
+
+  it("stamps a webinar's status change when it commits, so an edit queued ahead cannot make storage skip it", async () => {
+    vi.stubEnv("SCHEDULED_WEBINARS_PERSISTENCE", "sqlite");
+    const state = createSfuState({ roomRegistry: new LocalRoomRegistry({ instanceId: "webinar-tick", instanceUrl: "http://localhost", ttlMs: 45000 }) });
+    await initScheduledWebinars(state);
+    const due = { ...webinarRecord("due-webinar", 5), scheduledStartAt: Date.now() - 60_000, scheduledEndAt: Date.now() + 3_600_000 };
+    await changeWebinars(state.scheduledWebinars, state.scheduledWebinarPersistence, [], (draft) => {
+      draft.byId.set(due.id, due as never);
+    });
+    const persistence = state.scheduledWebinarPersistence!;
+    const blocker = gate();
+    const holding = serialized(state.scheduledWebinars, () => blocker.opened);
+    const editing = changeWebinars(state.scheduledWebinars, persistence, [due.id], (draft) => {
+      const webinar = draft.byId.get(due.id)!;
+      webinar.title = "edited";
+      webinar.updatedAt = Date.now();
+    });
+    const ticking = runScheduledWebinarTick(state);
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    blocker.open();
+    await Promise.all([holding, editing, ticking]);
+
+    const stored = createScheduledWebinarPersistence().loadState().records.find((webinar) => webinar.id === due.id);
+    const held = state.scheduledWebinars.byId.get(due.id);
+    expect([held?.status, held?.title]).toEqual(["live", "edited"]);
+    expect([stored?.status, stored?.title, stored?.updatedAt]).toEqual([held?.status, held?.title, held?.updatedAt]);
+  });
+});
+
+describe("a reminder scan", () => {
+  it("does not claim a reminder for a meeting cancelled while an earlier reminder was sending", async () => {
+    vi.stubEnv("SCHEDULED_MEETINGS_PERSISTENCE", "sqlite");
+    const state = await startState("sqlite");
+    const now = Date.now();
+    const first = await changeMeetings(state.scheduledMeetings, state.scheduledMeetingPersistence, [], (draft) =>
+      bookingDueForReminder(draft, "first", now),
+    );
+    const second = await changeMeetings(state.scheduledMeetings, state.scheduledMeetingPersistence, [], (draft) =>
+      bookingDueForReminder(draft, "second", now),
+    );
+    const sending = gate();
+    const sent = gate();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      sending.open();
+      await sent.opened;
+      return Response.json({ ok: true });
+    });
+
+    const scanning = sendDueSchedulingEmailReminders(state, now);
+    await sending.opened;
+    const [sendingFirst] = [...state.scheduledMeetings.byId.values()].filter((meeting) => meeting.emailReminderStatus === "pending");
+    const other = sendingFirst?.id === first.id ? second : first;
+    await changeMeetings(state.scheduledMeetings, state.scheduledMeetingPersistence, [other.id], (draft) =>
+      updateScheduledMeeting(draft, other.id, { status: "cancelled" }),
+    );
+    sent.open();
+    await scanning;
+
+    expect(workerCalls(fetchSpy)).toBe(1);
+    expect(state.scheduledMeetings.byId.get(other.id)?.emailReminderStatus).not.toBe("sent");
+    expect(state.scheduledMeetings.byId.get(other.id)?.emailReminderStatus).not.toBe("pending");
   });
 });

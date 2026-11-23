@@ -22,7 +22,6 @@ const eventType = (id: string, profileId: string, updatedAt: number) => ({
   isActive: true, requiresCalendar: false, createdAt: 1, updatedAt,
 });
 
-// SFU A in its own process: loads the shared store, waits, then saves its edited copy.
 const SFU_A = `
 import { existsSync, writeFileSync } from "node:fs";
 const scheduling = await import("./server/scheduling.ts");
@@ -36,7 +35,13 @@ const host = store.profilesById.get("host");
 host.name = "renamed on SFU A";
 host.updatedAt = 300;
 scheduling.deleteEventType(store, host, "intro");
-await scheduling.persistScheduling(store, persistence);
+await persistence.save({
+  profiles: [...store.profilesById.values()],
+  availability: [...store.availabilityByProfileId].map(([profileId, availability]) => ({ profileId, availability })),
+  eventTypes: [...store.eventTypesById.values()],
+  calendars: [...store.calendarByProfileId.values()],
+  deleted: Object.entries(store.tombstones).flatMap(([kind, stamps]) => [...stamps].map(([id, deletedAt]) => ({ kind, id, deletedAt }))),
+});
 persistence.close?.();
 `;
 

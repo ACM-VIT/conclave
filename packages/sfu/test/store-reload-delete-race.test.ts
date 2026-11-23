@@ -148,9 +148,8 @@ describe("a reload racing a delete", () => {
     await changeWebinars(sfuA.scheduledWebinars, sfuA.scheduledWebinarPersistence, [webinar.id], (draft) =>
       deleteScheduledWebinar(draft, webinar.id),
     );
-    await changeWebinars(sfuB.scheduledWebinars, sfuB.scheduledWebinarPersistence, [webinar.id], (draft) => {
-      draft.byId.get(webinar.id)!.updatedAt = 2;
-    });
+    const stale = sfuB.scheduledWebinars.byId.get(webinar.id)!;
+    sfuB.scheduledWebinarPersistence!.saveChanged([{ ...stale, updatedAt: 2 }]);
     await reloadPersistedStores(sfuB);
 
     expect(createScheduledWebinarPersistence().load().map((entry) => entry.id)).toEqual([]);

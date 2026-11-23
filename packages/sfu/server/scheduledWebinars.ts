@@ -23,7 +23,7 @@ import { canonicalizeClientId } from "./clientIds.js";
 import { assertSqliteWritable } from "./sqliteWriteCheck.js";
 import { describeEntry, importFallbackFiles, requireArray, requireRecord } from "./fallbackImport.js";
 import { mergeNewestStamp } from "./stampedMerge.js";
-import { assignInPlace, committedRecords, persistThenApply, sameStoredValue, serialized, targetIds, type ChangeTargets } from "./persistThenApply.js";
+import { assignInPlace, ChangedElsewhereError, commitStamp, committed, committedRecords, persistThenApply, sameStoredValue, serialized, targetIds, type ChangeTargets, type Committed } from "./persistThenApply.js";
 import { commitStampedJson, readStampedJson } from "./stampedJsonFile.js";
 
 const DEFAULT_EARLY_ENTRY_MINUTES = 10;
@@ -270,10 +270,12 @@ export const listScheduledWebinars = (
 
 export type StoredWebinars = { records: ScheduledWebinar[]; deletedAt: Map<string, number> };
 
-/** SQLite or the JSON file is the one authority, with one commit point per change. */
+export type WebinarCommit = { id: string; record: ScheduledWebinar | null; deletedAt: number | null };
+
+export type CommittedWebinars = Committed<WebinarCommit[]>;
+
 export type ScheduledWebinarPersistence = {
-  /** Commits changed webinars and deletion stamps as one write; per record the newest stamp wins. */
-  saveChanged: (webinars: ScheduledWebinar[], deletions?: Array<{ id: string; deletedAt: number }>) => void;
+  saveChanged: (webinars: ScheduledWebinar[], deletions?: Array<{ id: string; deletedAt: number }>) => CommittedWebinars;
   importIfNewer: (webinar: ScheduledWebinar) => boolean;
   loadState: (options?: { strict?: boolean }) => StoredWebinars;
   load: (options?: { strict?: boolean }) => ScheduledWebinar[];
@@ -310,15 +312,13 @@ const readWebinarsState = (path: string, options?: { strict?: boolean }): Stored
   }
 };
 
-/** The JSON store keeps deletion stamps beside the records, so an import never brings back what a host deleted. */
 const createFileScheduledWebinarPersistence = (
   path: string = scheduledWebinarsPath(),
 ): ScheduledWebinarPersistence => ({
-  saveChanged: (webinars, deletions = []) => {
-    commitStampedJson(path, normalizeStoredWebinar, { upserts: webinars, deletions });
-  },
+  saveChanged: (webinars, deletions = []) =>
+    committed(commitStampedJson(path, normalizeStoredWebinar, { upserts: webinars, deletions }).touched),
   importIfNewer: (webinar) =>
-    commitStampedJson(path, normalizeStoredWebinar, { upserts: [webinar], deletions: [] }, "newer") > 0,
+    commitStampedJson(path, normalizeStoredWebinar, { upserts: [webinar], deletions: [] }, "newer").written > 0,
   loadState: (options) => readWebinarsState(path, options),
   load: (options) => readWebinarsState(path, options).records,
 });
@@ -417,6 +417,8 @@ const createSqliteScheduledWebinarPersistence = (
   `);
   const loadTombstones = db.prepare("SELECT id, deleted_at FROM scheduled_webinar_tombstones");
   const deleteOlder = db.prepare("DELETE FROM scheduled_webinars WHERE id = ? AND updated_at < ?");
+  const readRow = db.prepare("SELECT payload_json FROM scheduled_webinars WHERE id = ?");
+  const readStamp = db.prepare("SELECT deleted_at FROM scheduled_webinar_tombstones WHERE id = ?");
   const markDeleted = db.prepare(`
     INSERT INTO scheduled_webinar_tombstones (id, deleted_at) VALUES (?, ?)
     ON CONFLICT(id) DO UPDATE SET
@@ -483,14 +485,26 @@ const createSqliteScheduledWebinarPersistence = (
 
   return {
     saveChanged: (webinars, deletions = []) => {
-      if (webinars.length === 0 && deletions.length === 0) return;
+      if (webinars.length === 0 && deletions.length === 0) return committed([]);
+      let commits: WebinarCommit[] = [];
       inTransaction(() => {
         for (const webinar of webinars) upsertWebinar(webinar);
         for (const { id, deletedAt } of deletions) {
           deleteOlder.run(id, deletedAt);
           markDeleted.run(id, deletedAt);
         }
+        const ids = [...new Set([...webinars.map((webinar) => webinar.id), ...deletions.map((deletion) => deletion.id)])];
+        commits = ids.map((id) => {
+          const row = readRow.all(id)[0] as { payload_json?: unknown } | undefined;
+          const stamp = readStamp.all(id)[0] as { deleted_at?: unknown } | undefined;
+          return {
+            id,
+            record: row ? normalizeStoredWebinar(JSON.parse(String(row.payload_json))) : null,
+            deletedAt: stamp ? Number(stamp.deleted_at) : null,
+          };
+        });
       });
+      return committed(commits);
     },
     importIfNewer: (webinar) => upsertWebinar(webinar, insertIfNewer),
     loadState,
@@ -900,7 +914,6 @@ export const updateScheduledWebinar = (
 };
 
 type WebinarPlan<R> = {
-  draft: ScheduledWebinarStore;
   result: R;
   upserts: ScheduledWebinar[];
   deletions: Array<{ id: string; deletedAt: number }>;
@@ -909,9 +922,10 @@ type WebinarPlan<R> = {
 const planWebinarChange = <R>(
   store: ScheduledWebinarStore,
   targets: ChangeTargets<ScheduledWebinarStore>,
-  mutate: (draft: ScheduledWebinarStore) => R,
+  mutate: (draft: ScheduledWebinarStore, at: number) => R,
+  at: number,
 ): WebinarPlan<R> => {
-  const ids = targetIds(targets, store);
+  const ids = targetIds(targets, store, at);
   const draft: ScheduledWebinarStore = {
     byId: new Map(store.byId),
     bySlug: new Map(store.bySlug),
@@ -922,48 +936,48 @@ const planWebinarChange = <R>(
     const held = store.byId.get(id);
     if (held) draft.byId.set(id, structuredClone(held));
   }
-  const result = mutate(draft);
+  const result = mutate(draft, at);
   const upserts = [...draft.byId].flatMap(([id, webinar]) => {
     const held = store.byId.get(id);
-    return held && sameStoredValue(held, webinar) ? [] : [webinar];
+    if (held && sameStoredValue(held, webinar)) return [];
+    webinar.updatedAt = commitStamp(at, held?.updatedAt);
+    return [webinar];
   });
   const deletions = ids
     .filter((id) => store.byId.has(id) && !draft.byId.has(id))
-    .map((id) => ({ id, deletedAt: draft.deletedAt.get(id) ?? Date.now() }));
-  return { draft, result, upserts, deletions };
+    .map((id) => ({ id, deletedAt: commitStamp(at, store.byId.get(id)?.updatedAt) }));
+  return { result, upserts, deletions };
 };
 
-/**
- * Runs a webinar mutation on a draft, saves what it changed, and only then
- * applies it to memory and the slug and room indexes. `ids` names the
- * webinars the mutation may change, or picks them from the store once earlier
- * changes are in; new webinars are picked up on their own.
- */
+const applyCommittedWebinars = (store: ScheduledWebinarStore, commits: CommittedWebinars): void => {
+  for (const { id, record, deletedAt } of commits) {
+    const held = store.byId.get(id);
+    if (held) removeFromIndexes(store, held);
+    if (record) indexScheduledWebinar(store, held ? assignInPlace(held, record) : record);
+    if (deletedAt === null) store.deletedAt.delete(id);
+    else store.deletedAt.set(id, deletedAt);
+  }
+};
+
 export const changeWebinars = async <R>(
   store: ScheduledWebinarStore,
   persistence: ScheduledWebinarPersistence | null,
   ids: ChangeTargets<ScheduledWebinarStore>,
-  mutate: (draft: ScheduledWebinarStore) => R,
+  mutate: (draft: ScheduledWebinarStore, at: number) => R,
 ): Promise<R> => {
   const plan = await persistThenApply(store, "scheduled webinars", {
-    plan: () => planWebinarChange(store, ids, mutate),
+    plan: (at) => planWebinarChange(store, ids, mutate, at),
     save: (planned) => {
-      if (!persistence || (planned.upserts.length === 0 && planned.deletions.length === 0)) return;
-      persistence.saveChanged(planned.upserts, planned.deletions);
+      if (planned.upserts.length === 0 && planned.deletions.length === 0) return committed([]);
+      if (persistence) return persistence.saveChanged(planned.upserts, planned.deletions);
+      return committed([
+        ...planned.upserts.map((webinar) => ({ id: webinar.id, record: webinar, deletedAt: null })),
+        ...planned.deletions.map(({ id, deletedAt }) => ({ id, record: null, deletedAt })),
+      ]);
     },
-    apply: (planned) => {
-      for (const webinar of planned.upserts) {
-        const held = store.byId.get(webinar.id);
-        if (held) removeFromIndexes(store, held);
-        indexScheduledWebinar(store, held ? assignInPlace(held, webinar) : webinar);
-      }
-      for (const { id, deletedAt } of planned.deletions) {
-        const held = store.byId.get(id);
-        if (held) removeFromIndexes(store, held);
-        store.deletedAt.set(id, deletedAt);
-      }
-    },
+    apply: (_planned, commits) => applyCommittedWebinars(store, commits),
   });
+  if (plan.upserts.some((webinar) => !store.byId.has(webinar.id))) throw new ChangedElsewhereError("scheduled webinar");
   return committedRecords(store.byId, plan.result);
 };
 

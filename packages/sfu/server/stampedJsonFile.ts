@@ -24,11 +24,6 @@ const writeAtomic = (path: string, data: string): void => {
   renameSync(tmp, path);
 };
 
-/**
- * Reads a JSON store: one array holding the live records and, as entries
- * marked `deleted`, the deletion stamps. Older SFUs skip the stamp entries,
- * because they are not valid records.
- */
 export const readStampedJson = <T>(path: string, normalize: (entry: unknown) => T | null): StampedState<T> => {
   if (!existsSync(path)) return { records: [], deletedAt: new Map() };
   const data: unknown = JSON.parse(readFileSync(path, "utf8"));
@@ -46,18 +41,14 @@ export const readStampedJson = <T>(path: string, normalize: (entry: unknown) => 
   return { records, deletedAt };
 };
 
-/**
- * Applies changed records and deletion stamps to a JSON store in one atomic
- * write, by the same rule as SQLite and Redis: per record, the newest stamp
- * wins, a value or a deletion. `newer` keeps what is stored on a tie, for
- * imports. Returns how many records the change wrote.
- */
+export type StampedCommit<T> = { id: string; record: T | null; deletedAt: number | null };
+
 export const commitStampedJson = <T extends Stamped>(
   path: string,
   normalize: (entry: unknown) => T | null,
   change: StampedChange<T>,
   mode: "save" | "newer" = "save",
-): number => {
+): { written: number; touched: StampedCommit<T>[] } => {
   const state = readStampedJson(path, normalize);
   const byId = new Map(state.records.map((record) => [record.id, record]));
   const wins = (incoming: number, stored: number | undefined): boolean =>
@@ -77,5 +68,9 @@ export const commitStampedJson = <T extends Stamped>(
   }
   const stamps: StoredDeletion[] = [...state.deletedAt].map(([id, deletedAt]) => ({ id, deletedAt, deleted: true }));
   writeAtomic(path, JSON.stringify([...byId.values(), ...stamps], null, 2));
-  return written;
+  const ids = [...new Set([...change.upserts.map((record) => record.id), ...change.deletions.map((deletion) => deletion.id)])];
+  return {
+    written,
+    touched: ids.map((id) => ({ id, record: byId.get(id) ?? null, deletedAt: state.deletedAt.get(id) ?? null })),
+  };
 };

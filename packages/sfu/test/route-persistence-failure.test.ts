@@ -7,20 +7,26 @@ import { config } from "../config/config.js";
 import { createSfuApp } from "../server/http/createApp.js";
 import { initScheduledMeetings, initScheduledWebinars, initScheduling } from "../server/init.js";
 import { LocalRoomRegistry } from "../server/roomRegistry.js";
+import { serialized } from "../server/persistThenApply.js";
 import { createScheduledMeetingPersistence } from "../server/scheduledMeetings.js";
+import { createScheduledWebinarPersistence } from "../server/scheduledWebinars.js";
 import { createSchedulingPersistence } from "../server/scheduling.js";
 import { createSfuState, type SfuState } from "../server/state.js";
 
-// Lets a test hold booking emails while they render, so an edit can land mid-render.
 const emailRender = vi.hoisted(() => ({ hold: null as null | (() => Promise<void>) }));
 
-// Lets a test take a background retry and run it when it chooses, instead of on a timer.
 const retries = vi.hoisted(() => ({ taken: null as null | Array<() => Promise<unknown>> }));
+
+const queued = vi.hoisted(() => ({ changes: [] as string[] }));
 
 vi.mock("../server/persistThenApply.js", async (importOriginal) => {
   const helpers = await importOriginal<typeof import("../server/persistThenApply.js")>();
   return {
     ...helpers,
+    persistThenApply: ((store, what, steps) => {
+      queued.changes.push(what);
+      return helpers.persistThenApply(store, what, steps);
+    }) as typeof helpers.persistThenApply,
     retryInBackground: (what: string, attempt: () => Promise<unknown>) => {
       if (retries.taken) retries.taken.push(attempt);
       else helpers.retryInBackground(what, attempt);
@@ -55,10 +61,10 @@ const startSfu = async () => {
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("no port");
-  const call = async (method: string, path: string, body?: unknown) => {
+  const call = async (method: string, path: string, body?: unknown, as: Record<string, string> = host) => {
     const response = await fetch(`http://127.0.0.1:${address.port}${path}`, {
       method,
-      headers: { "x-sfu-secret": config.sfuSecret, "x-sfu-client": "conclave", "content-type": "application/json", ...host },
+      headers: { "x-sfu-secret": config.sfuSecret, "x-sfu-client": "conclave", "content-type": "application/json", ...as },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
     const text = await response.text();
@@ -102,6 +108,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   retries.taken = null;
+  queued.changes = [];
   emailRender.hold = null;
   await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
   vi.unstubAllEnvs();
@@ -177,7 +184,7 @@ describe("a route whose save fails", () => {
     vi.spyOn(persistence, "saveChanged").mockImplementationOnce(async (meetings) => {
       saveStarted.resolve();
       await finishSave.promise;
-      await saveChanged(meetings);
+      return saveChanged(meetings);
     });
 
     const first = call("POST", "/scheduled-meetings", { title: "First", scheduledStartAt: later, roomCode: "one-room" });
@@ -202,7 +209,7 @@ describe("a route whose save fails", () => {
     vi.spyOn(persistence, "saveChanged").mockImplementationOnce(async (meetings, deletions) => {
       deleteStarted.resolve();
       await finishDelete.promise;
-      await saveChanged(meetings, deletions);
+      return saveChanged(meetings, deletions);
     });
 
     const deleting = call("DELETE", `/scheduled-meetings/${id}`);
@@ -245,9 +252,9 @@ describe("a route whose save fails", () => {
     expect(first.status).toBe(200);
     const original = first.body.profile as { id: string; name: string; username: string };
     const persistence = state.schedulingPersistence!;
-    const save = persistence.save.bind(persistence);
-    vi.spyOn(persistence, "save")
-      .mockImplementationOnce(save)
+    const commit = persistence.commit.bind(persistence);
+    vi.spyOn(persistence, "commit")
+      .mockImplementationOnce(commit)
       .mockImplementationOnce(() => {
         throw new Error("database is locked");
       });
@@ -268,7 +275,7 @@ describe("a route whose save fails", () => {
   it("answers 503 with the same code for a scheduling route", async () => {
     const { state, call } = await startSfu();
     expect((await call("GET", "/scheduling/profile")).status).toBe(200);
-    failSaves(state.schedulingPersistence!, ["save"]);
+    failSaves(state.schedulingPersistence!, ["commit"]);
 
     const response = await call("PUT", "/scheduling/profile", { name: "Renamed Host" });
     expect([response.status, response.body.error]).toEqual([503, unavailable.error]);
@@ -279,15 +286,25 @@ const EMAIL_WORKER = "https://email-worker.example.test";
 
 const GOOGLE_EVENTS = "https://www.googleapis.com/calendar/v3/calendars/";
 
-/**
- * Answers Google and the email worker in-process; every other request goes
- * out as usual. `beforeInsert` runs while Google is creating the event.
- */
-const fakeOutsideServices = (options: { beforeInsert?: () => Promise<void>; beforeMove?: () => Promise<void> } = {}) => {
+type OutsideHolds = {
+  beforeInsert?: () => Promise<void>;
+  beforeMove?: () => Promise<void>;
+  beforeBusy?: () => Promise<void>;
+  beforeToken?: () => Promise<void>;
+};
+
+const fakeOutsideServices = (options: OutsideHolds = {}) => {
   const passThrough = globalThis.fetch;
+  let tokens = 0;
   return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = input instanceof Request ? input.url : String(input);
+    if (url === "https://oauth2.googleapis.com/token") {
+      await options.beforeToken?.();
+      tokens += 1;
+      return Response.json({ access_token: `refreshed-access-${tokens}`, expires_in: 60 });
+    }
     if (url.startsWith("https://www.googleapis.com/calendar/v3/freeBusy")) {
+      await options.beforeBusy?.();
       return Response.json({ calendars: { primary: { busy: [] } } });
     }
     if (url.startsWith(GOOGLE_EVENTS)) {
@@ -311,13 +328,13 @@ const requestsTo = (outside: OutsideServices, prefix: string, method?: string) =
 
 const bodyOf = (call: Parameters<typeof fetch>) => JSON.parse(String(call[1]?.body)) as { start: { dateTime: string } };
 
-const bookableHost = async (call: Awaited<ReturnType<typeof startSfu>>["call"]) => {
+const bookableHost = async (call: Awaited<ReturnType<typeof startSfu>>["call"], accessTokenExpiresAt = Date.now() + 3_600_000) => {
   const { username } = (await call("GET", "/scheduling/profile")).body.profile as { username: string };
-  const { slug } = (await call("POST", "/scheduling/event-types", { title: "Intro call", isActive: true })).body.eventType as { slug: string };
+  const { id: eventTypeId, slug } = (await call("POST", "/scheduling/event-types", { title: "Intro call", isActive: true })).body.eventType as { id: string; slug: string };
   const connected = await call("POST", "/scheduling/calendar/google", {
     refreshToken: "refresh-token",
     accessToken: "access-token",
-    accessTokenExpiresAt: Date.now() + 3_600_000,
+    accessTokenExpiresAt,
   });
   expect(connected.status).toBe(200);
   const slots = (await call("GET", `/scheduling/public/${username}/${slug}/slots`)).body.slots as Array<{ startAt: number }>;
@@ -328,14 +345,14 @@ const bookableHost = async (call: Awaited<ReturnType<typeof startSfu>>["call"]) 
       attendeeName: "Guest",
       attendeeEmail: "guest@example.test",
     });
-  return { book, startAt: slots[0].startAt };
+  return { book, startAt: slots[0].startAt, eventTypeId };
 };
 
-/** Starts a booking and holds Google's reply to the event insert until `answer` runs. */
 const bookWithGoogleHeld = async (
   state: SfuState,
   call: Awaited<ReturnType<typeof startSfu>>["call"],
   beforeMove?: () => Promise<void>,
+  holds: { beforeToken?: () => Promise<void>; accessTokenExpiresAt?: number } = {},
 ) => {
   const insertStarted = deferred();
   const insertAnswered = deferred();
@@ -345,8 +362,9 @@ const bookWithGoogleHeld = async (
       await insertAnswered.promise;
     },
     beforeMove,
+    beforeToken: holds.beforeToken,
   });
-  const { book, startAt } = await bookableHost(call);
+  const { book, startAt } = await bookableHost(call, holds.accessTokenExpiresAt);
   const booking = book();
   await insertStarted.promise;
   const saved = [...state.scheduledMeetings.byId.values()].find((meeting) => meeting.source === "booking_link")!;
@@ -376,7 +394,7 @@ describe("a booking", () => {
         if (syncedSaves === 1) throw new Error("database is locked");
         await allowRetry.promise;
       }
-      await saveChanged(meetings);
+      return saveChanged(meetings);
     });
 
     const booked = await book();
@@ -449,7 +467,7 @@ describe("a booking", () => {
         syncedSaveFailed = true;
         throw new Error("database is locked");
       }
-      await saveChanged(meetings);
+      return saveChanged(meetings);
     });
     const movedStart = startAt + 2 * 3_600_000;
     await call("PATCH", `/scheduled-meetings/${saved.id}`, { scheduledStartAt: movedStart, scheduledEndAt: movedStart + 1_800_000 });
@@ -557,6 +575,216 @@ describe("a booking", () => {
     const stored = (await createScheduledMeetingPersistence().load()).find((meeting) => meeting.id === saved.id);
     expect([stored?.googleCalendarEventId ?? null, stored?.calendarSyncStatus]).toEqual([null, "failed"]);
   });
+
+  it("whose host reconnects Google while the event id is being saved deletes the event from the old calendar and never reads synced", async () => {
+    const { state, call } = await startSfu();
+    const outside = fakeOutsideServices();
+    const { book } = await bookableHost(call);
+    const persistence = state.scheduledMeetingPersistence!;
+    const saveChanged = persistence.saveChanged.bind(persistence);
+    const recordStarted = deferred();
+    const finishRecord = deferred();
+    let recordHeld = false;
+    vi.spyOn(persistence, "saveChanged").mockImplementation(async (meetings, deletions) => {
+      if (!recordHeld && meetings.some((meeting) => meeting.googleCalendarEventId === "google-event-1")) {
+        recordHeld = true;
+        recordStarted.resolve();
+        await finishRecord.promise;
+      }
+      return saveChanged(meetings, deletions);
+    });
+
+    const booking = book();
+    await recordStarted.promise;
+    const reconnected = await call("POST", "/scheduling/calendar/google", {
+      refreshToken: "other-account-refresh",
+      accessToken: "other-account-access",
+      accessTokenExpiresAt: Date.now() + 3_600_000,
+    });
+    expect(reconnected.status).toBe(200);
+    finishRecord.resolve();
+    const booked = await booking;
+
+    const confirmation = booked.body.booking as Confirmation;
+    expect(confirmation.syncStatus).toBe("failed");
+    const deletes = requestsTo(outside, `${GOOGLE_EVENTS}primary/events/google-event-1`, "DELETE");
+    expect(deletes.map(([, init]) => new Headers(init?.headers).get("authorization"))).toEqual(["Bearer access-token"]);
+    expect(requestsTo(outside, GOOGLE_EVENTS, "PATCH")).toHaveLength(0);
+    const held = state.scheduledMeetings.byId.get(confirmation.id);
+    expect([held?.googleCalendarEventId ?? null, held?.calendarSyncStatus]).toEqual([null, "failed"]);
+    const stored = (await createScheduledMeetingPersistence().load()).find((meeting) => meeting.id === confirmation.id);
+    expect([stored?.googleCalendarEventId ?? null, stored?.calendarSyncStatus]).toEqual([null, "failed"]);
+  });
+
+  it("whose page the host turns off while availability is checked answers 409 and books nothing", async () => {
+    const { state, call } = await startSfu();
+    const busyStarted = deferred();
+    const answerBusy = deferred();
+    let holdBusy = false;
+    const outside = fakeOutsideServices({
+      beforeBusy: async () => {
+        if (!holdBusy) return;
+        busyStarted.resolve();
+        await answerBusy.promise;
+      },
+    });
+    const { book, eventTypeId } = await bookableHost(call);
+    holdBusy = true;
+
+    const booking = book();
+    await busyStarted.promise;
+    const edited = await call("PATCH", `/scheduling/event-types/${eventTypeId}`, { isActive: false });
+    expect(edited.status).toBe(200);
+    answerBusy.resolve();
+    const booked = await booking;
+
+    expect([booked.status, booked.body.error]).toEqual([409, "changed_elsewhere"]);
+    expect(requestsTo(outside, GOOGLE_EVENTS)).toHaveLength(0);
+    expect(requestsTo(outside, EMAIL_WORKER)).toHaveLength(0);
+    expect([...state.scheduledMeetings.byId.values()].filter((meeting) => meeting.source === "booking_link")).toEqual([]);
+    expect((await createScheduledMeetingPersistence().load()).filter((meeting) => meeting.source === "booking_link")).toEqual([]);
+  });
+});
+
+describe("a booking whose host reconnects Google", () => {
+  const reconnect = (call: Awaited<ReturnType<typeof startSfu>>["call"]) =>
+    call("POST", "/scheduling/calendar/google", {
+      refreshToken: "other-account-refresh",
+      accessToken: "other-account-access",
+      accessTokenExpiresAt: Date.now() + 3_600_000,
+    });
+  const storedBooking = async (id: string) =>
+    (await createScheduledMeetingPersistence().load()).find((meeting) => meeting.id === id);
+
+  beforeEach(() => {
+    vi.stubEnv("SCHEDULING_EMAIL_WORKER_URL", EMAIL_WORKER);
+    vi.stubEnv("SCHEDULING_EMAIL_WORKER_SECRET", "email-secret");
+    vi.stubEnv("SFU_FOLLOW_UP_RETRY_DELAYS_MS", "20,40,80");
+  });
+
+  it("while availability is checked answers 409 and books nothing", async () => {
+    const { state, call } = await startSfu();
+    const busyStarted = deferred();
+    const answerBusy = deferred();
+    let holdBusy = false;
+    const outside = fakeOutsideServices({
+      beforeBusy: async () => {
+        if (!holdBusy) return;
+        busyStarted.resolve();
+        await answerBusy.promise;
+      },
+    });
+    const { book } = await bookableHost(call);
+    holdBusy = true;
+
+    const booking = book();
+    await busyStarted.promise;
+    expect((await reconnect(call)).status).toBe(200);
+    answerBusy.resolve();
+    const booked = await booking;
+
+    expect([booked.status, booked.body.error]).toEqual([409, "changed_elsewhere"]);
+    expect(requestsTo(outside, GOOGLE_EVENTS)).toHaveLength(0);
+    expect([...state.scheduledMeetings.byId.values()].filter((meeting) => meeting.source === "booking_link")).toEqual([]);
+  });
+
+  it("while the booking is being saved creates no Google event and marks the sync failed", async () => {
+    const { state, call } = await startSfu();
+    const outside = fakeOutsideServices();
+    const { book } = await bookableHost(call);
+    const persistence = state.scheduledMeetingPersistence!;
+    const saveChanged = persistence.saveChanged.bind(persistence);
+    const bookingSaveStarted = deferred();
+    const finishBookingSave = deferred();
+    let bookingHeld = false;
+    vi.spyOn(persistence, "saveChanged").mockImplementation(async (meetings, deletions) => {
+      if (!bookingHeld && meetings.some((meeting) => meeting.source === "booking_link")) {
+        bookingHeld = true;
+        bookingSaveStarted.resolve();
+        await finishBookingSave.promise;
+      }
+      return saveChanged(meetings, deletions);
+    });
+
+    const booking = book();
+    await bookingSaveStarted.promise;
+    expect((await reconnect(call)).status).toBe(200);
+    finishBookingSave.resolve();
+    const booked = await booking;
+
+    expect(booked.status).toBe(201);
+    const confirmation = booked.body.booking as Confirmation;
+    expect(confirmation.syncStatus).toBe("failed");
+    expect(requestsTo(outside, GOOGLE_EVENTS)).toHaveLength(0);
+    const stored = await storedBooking(confirmation.id);
+    expect([stored?.googleCalendarEventId ?? null, stored?.calendarSyncStatus]).toEqual([null, "failed"]);
+  });
+
+  it("while the moved booking refreshes its Google token never moves the old calendar's event, and deletes it", async () => {
+    vi.stubEnv("GOOGLE_CLIENT_ID", "google-client");
+    vi.stubEnv("GOOGLE_CLIENT_SECRET", "google-secret");
+    const { state, call } = await startSfu();
+    const refreshStarted = deferred();
+    const answerRefresh = deferred();
+    let holdRefresh = false;
+    const { outside, booking, saved, startAt, answer } = await bookWithGoogleHeld(state, call, undefined, {
+      accessTokenExpiresAt: Date.now() - 1_000,
+      beforeToken: async () => {
+        if (!holdRefresh) return;
+        holdRefresh = false;
+        refreshStarted.resolve();
+        await answerRefresh.promise;
+      },
+    });
+    const movedStart = startAt + 2 * 3_600_000;
+    expect((await call("PATCH", `/scheduled-meetings/${saved.id}`, { scheduledStartAt: movedStart, scheduledEndAt: movedStart + 1_800_000 })).status).toBe(200);
+    holdRefresh = true;
+    answer();
+    await refreshStarted.promise;
+    expect((await reconnect(call)).status).toBe(200);
+    answerRefresh.resolve();
+    const booked = await booking;
+
+    expect((booked.body.booking as Confirmation).syncStatus).toBe("failed");
+    expect(requestsTo(outside, GOOGLE_EVENTS, "PATCH")).toHaveLength(0);
+    expect(requestsTo(outside, `${GOOGLE_EVENTS}primary/events/google-event-1`, "DELETE")).toHaveLength(1);
+    const stored = await storedBooking(saved.id);
+    expect([stored?.googleCalendarEventId ?? null, stored?.calendarSyncStatus]).toEqual([null, "failed"]);
+  });
+});
+
+describe("a webinar edit", () => {
+  it("from a co-host the host removed while the edit waited in the queue answers 403 and changes nothing", async () => {
+    const { state, call } = await startSfu();
+    const coHost = { "x-user-id": "co-host-user", "x-user-email": "cohost@example.test", "x-user-name": "Co-host" };
+    const created = await call("POST", "/scheduled-webinars", {
+      title: "Launch",
+      scheduledStartAt: later,
+      linkSlug: "launch-day",
+      coHosts: [{ email: "cohost@example.test" }],
+    });
+    expect(created.status).toBe(201);
+    const id = (created.body.scheduledWebinar as { id: string }).id;
+    expect((await call("GET", `/scheduled-webinars/${id}`, undefined, coHost)).status).toBe(200);
+    const queueOpen = deferred();
+    const holding = serialized(state.scheduledWebinars, () => queueOpen.promise);
+    const inQueue = () => queued.changes.filter((what) => what === "scheduled webinars").length;
+    const before = inQueue();
+
+    const removing = call("PATCH", `/scheduled-webinars/${id}`, { coHosts: [] });
+    await vi.waitFor(() => expect(inQueue()).toBe(before + 1), { timeout: 5_000, interval: 5 });
+    const editing = call("PATCH", `/scheduled-webinars/${id}`, { title: "Co-host edit" }, coHost);
+    await vi.waitFor(() => expect(inQueue()).toBe(before + 2), { timeout: 5_000, interval: 5 });
+    queueOpen.resolve();
+    await holding;
+    const [removed, edited] = await Promise.all([removing, editing]);
+
+    expect([removed.status, edited.status]).toEqual([200, 403]);
+    const held = state.scheduledWebinars.byId.get(id);
+    expect([held?.title, held?.coHosts]).toEqual(["Launch", []]);
+    const stored = createScheduledWebinarPersistence().loadState().records.find((webinar) => webinar.id === id);
+    expect([stored?.title, stored?.coHosts]).toEqual(["Launch", []]);
+  });
 });
 
 describe("a late writer", () => {
@@ -564,15 +792,15 @@ describe("a late writer", () => {
     const { state, call } = await startSfu();
     const { id: profileId, username, userId } = (await call("GET", "/scheduling/profile")).body.profile as { id: string; username: string; userId: string };
     const persistence = state.schedulingPersistence!;
-    const save = persistence.save.bind(persistence);
+    const commit = persistence.commit.bind(persistence);
     const editSaveStarted = deferred();
     const finishEditSave = deferred();
-    vi.spyOn(persistence, "save")
-      .mockImplementationOnce(save)
-      .mockImplementationOnce(async (snapshot) => {
+    vi.spyOn(persistence, "commit")
+      .mockImplementationOnce(commit)
+      .mockImplementationOnce(async (change) => {
         editSaveStarted.resolve();
         await finishEditSave.promise;
-        await save(snapshot);
+        return commit(change);
       });
 
     const editing = call("PUT", "/scheduling/profile", { name: "Edited Host" });

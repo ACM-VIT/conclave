@@ -4,7 +4,7 @@ import type {
   SchedulingProfile,
 } from "../types.js";
 import { Logger } from "../utilities/loggers.js";
-import { applyIfUnchanged, basisOf, retryInBackground, serialized } from "./persistThenApply.js";
+import { applyIfUnchanged, retryInBackground, serialized } from "./persistThenApply.js";
 import {
   adoptStoredMeeting,
   changeMeetings,
@@ -167,10 +167,14 @@ const claimReminderForMeeting = async (
       return claimed ? adoptStoredMeeting(state.scheduledMeetings, claimed) : null;
     });
   }
-  return changeReminder(state, meeting.id, "reminder claim", basisOf(meeting, ["emailReminderStatus"]), {
-    emailReminderStatus: "pending",
-    emailReminderError: null,
-    emailReminderSentAt: null,
+  return changeMeetings(state.scheduledMeetings, state.scheduledMeetingPersistence, [meeting.id], (draft) => {
+    const current = draft.byId.get(meeting.id);
+    if (!current || !shouldSendSchedulingReminder(current, now, leadMs)) return null;
+    return updateScheduledMeeting(draft, meeting.id, {
+      emailReminderStatus: "pending",
+      emailReminderError: null,
+      emailReminderSentAt: null,
+    });
   });
 };
 

@@ -25,7 +25,7 @@ import { NEXT_VERSION_LUA } from "./redisCommitVersion.js";
 import { describeEntry, importFallbackFiles, requireArray, requireRecord } from "./fallbackImport.js";
 import { commitStampedJson, readStampedJson } from "./stampedJsonFile.js";
 import { mergeNewestStamp } from "./stampedMerge.js";
-import { assignInPlace, committedRecords, persistThenApply, sameStoredValue, serialized, targetIds, type ChangeTargets } from "./persistThenApply.js";
+import { assignInPlace, ChangedElsewhereError, commitStamp, committed, committedRecords, persistThenApply, sameStoredValue, serialized, targetIds, type ChangeTargets, type Committed } from "./persistThenApply.js";
 
 type MaybePromise<T> = T | Promise<T>;
 
@@ -519,9 +519,12 @@ export type MeetingDeletion = { id: string; deletedAt: number };
  * written after Redis commits and rebuilt from Redis whenever it may have
  * missed a change; memory is never loaded from it.
  */
+export type MeetingCommit = { id: string; record: ScheduledMeeting | null; deletedAt: number | null };
+
+export type CommittedMeetings = Committed<MeetingCommit[]>;
+
 export type ScheduledMeetingPersistence = {
-  /** Commits changed meetings and deletion stamps as one write; per record the newest stamp wins. */
-  saveChanged: (meetings: ScheduledMeeting[], deletions?: MeetingDeletion[]) => MaybePromise<void>;
+  saveChanged: (meetings: ScheduledMeeting[], deletions?: MeetingDeletion[]) => MaybePromise<CommittedMeetings>;
   importIfNewer: (meeting: ScheduledMeeting) => MaybePromise<boolean>;
   loadState: (options?: { strict?: boolean }) => MaybePromise<StoredMeetings>;
   reserveBookingSlot?: (
@@ -686,11 +689,9 @@ const normalizeStoredMeeting = (raw: unknown): ScheduledMeeting | null => {
 
 type VersionedMeetings = { version: number; state: StoredMeetings };
 
-export type MirroredMeetingChange = {
-  version: number;
-  upserts: ScheduledMeeting[];
-  deletions: Array<MeetingDeletion & { removed: boolean }>;
-};
+export type MirroredMeeting = { id: string; payload: string | null; deletedAt: number | null };
+
+export type MirroredMeetingChange = { version: number; meetings: MirroredMeeting[] };
 
 type SqliteMeetingStore = ScheduledMeetingPersistence & {
   mirror: (change: MirroredMeetingChange) => Promise<void>;
@@ -884,7 +885,7 @@ export const createSqliteScheduledMeetingPersistence = (
   const mirrorStamps = db.prepare("SELECT id, mirror_version FROM scheduled_meeting_tombstones");
   const dropRow = db.prepare("DELETE FROM scheduled_meetings WHERE id = ?");
   const dropStamp = db.prepare("DELETE FROM scheduled_meeting_tombstones WHERE id = ?");
-  const mirrorMeeting = (meeting: ScheduledMeeting, version: number): void => {
+  const mirrorMeetingPayload = (meeting: ScheduledMeeting, payload: string, version: number): void => {
     mirrorUpsert.run(
       meeting.id,
       meeting.clientId,
@@ -893,26 +894,46 @@ export const createSqliteScheduledMeetingPersistence = (
       meeting.scheduledStartAt,
       meeting.scheduledEndAt,
       meeting.updatedAt,
-      JSON.stringify(meeting),
+      payload,
       version,
     );
+  };
+  const mirrorMeeting = (meeting: ScheduledMeeting, version: number): void =>
+    mirrorMeetingPayload(meeting, JSON.stringify(meeting), version);
+
+  const readRow = db.prepare("SELECT payload_json FROM scheduled_meetings WHERE id = ?");
+  const readStamp = db.prepare("SELECT deleted_at FROM scheduled_meeting_tombstones WHERE id = ?");
+  const mirrorDropStamp = db.prepare("DELETE FROM scheduled_meeting_tombstones WHERE id = ? AND mirror_version <= ?");
+  const readCommitted = (id: string): MeetingCommit => {
+    const row = readRow.all(id)[0] as { payload_json?: unknown } | undefined;
+    const stamp = readStamp.all(id)[0] as { deleted_at?: unknown } | undefined;
+    return {
+      id,
+      record: row ? normalizeStoredMeeting(JSON.parse(String(row.payload_json))) : null,
+      deletedAt: stamp ? Number(stamp.deleted_at) : null,
+    };
   };
 
   return {
     saveChanged: async (meetings, deletions = []) => {
-      if (meetings.length === 0 && deletions.length === 0) return;
+      if (meetings.length === 0 && deletions.length === 0) return committed([]);
+      let commits: MeetingCommit[] = [];
       inTransaction(() => {
         for (const meeting of meetings) upsertMeeting(meeting);
         markDeletions(deletions);
+        commits = touchedIds(meetings, deletions).map(readCommitted);
       });
+      return committed(commits);
     },
     importIfNewer: async (meeting) => upsertMeeting(meeting, insertIfNewer),
-    mirror: async ({ version, upserts, deletions }) => {
+    mirror: async ({ version, meetings }) => {
       inTransaction(() => {
-        for (const meeting of upserts) mirrorMeeting(meeting, version);
-        for (const { id, deletedAt, removed } of deletions) {
-          mirrorMark.run(id, deletedAt, version);
-          if (removed) mirrorRemove.run(id, version);
+        for (const { id, payload, deletedAt } of meetings) {
+          const record = payload === null ? null : normalizeStoredMeeting(JSON.parse(payload));
+          if (record && payload !== null) mirrorMeetingPayload(record, payload, version);
+          else mirrorRemove.run(id, version);
+          if (deletedAt === null) mirrorDropStamp.run(id, version);
+          else mirrorMark.run(id, deletedAt, version);
         }
       });
     },
@@ -936,6 +957,30 @@ export const createSqliteScheduledMeetingPersistence = (
 };
 
 
+const mirroredMeetingsFrom = (state: unknown[]): MirroredMeeting[] => {
+  const meetings: MirroredMeeting[] = [];
+  for (let index = 0; index < state.length; index += 3) {
+    const [id, payload, deletedAt] = state.slice(index, index + 3);
+    meetings.push({
+      id: String(id),
+      payload: typeof payload === "string" ? payload : null,
+      deletedAt: deletedAt === null || deletedAt === undefined ? null : Number(deletedAt),
+    });
+  }
+  return meetings;
+};
+
+const commitsOfMirrored = (meetings: MirroredMeeting[]): MeetingCommit[] =>
+  meetings.map(({ id, payload, deletedAt }) => ({
+    id,
+    record: payload === null ? null : normalizeStoredMeeting(JSON.parse(payload)),
+    deletedAt,
+  }));
+
+const touchedIds = (meetings: ScheduledMeeting[], deletions: MeetingDeletion[]): string[] => [
+  ...new Set([...meetings.map((meeting) => meeting.id), ...deletions.map((deletion) => deletion.id)]),
+];
+
 const readMeetingsState = (path: string, options?: { strict?: boolean }): StoredMeetings => {
   try {
     return readStampedJson(path, normalizeStoredMeeting);
@@ -946,15 +991,13 @@ const readMeetingsState = (path: string, options?: { strict?: boolean }): Stored
   }
 };
 
-/** The JSON store keeps deletion stamps beside the records, so an import never brings back what a host deleted. */
 const createFileScheduledMeetingPersistence = (
   path: string = scheduledMeetingsPath(),
 ): ScheduledMeetingPersistence => ({
-  saveChanged: async (meetings, deletions = []) => {
-    commitStampedJson(path, normalizeStoredMeeting, { upserts: meetings, deletions });
-  },
+  saveChanged: async (meetings, deletions = []) =>
+    committed(commitStampedJson(path, normalizeStoredMeeting, { upserts: meetings, deletions }).touched),
   importIfNewer: async (meeting) =>
-    commitStampedJson(path, normalizeStoredMeeting, { upserts: [meeting], deletions: [] }, "newer") > 0,
+    commitStampedJson(path, normalizeStoredMeeting, { upserts: [meeting], deletions: [] }, "newer").written > 0,
   loadState: async (options) => readMeetingsState(path, options),
   load: async (options) => readMeetingsState(path, options).records,
 });
@@ -1016,11 +1059,11 @@ end
 meeting["emailReminderStatus"] = "pending"
 meeting["emailReminderError"] = cjson.null
 meeting["emailReminderSentAt"] = cjson.null
-meeting["updatedAt"] = now
+meeting["updatedAt"] = math.max(tonumber(ARGV[4]) or now, (tonumber(meeting["updatedAt"]) or 0) + 1)
 
 local nextPayload = cjson.encode(meeting)
 redis.call("HSET", key, meetingId, nextPayload)
-return { nextVersion(KEYS[2]), nextPayload }
+return { nextVersion(KEYS[2]), meetingId, nextPayload, redis.call("HGET", KEYS[3], meetingId) }
 `;
 
 const STORED_AT_LUA = `${NEXT_VERSION_LUA}
@@ -1055,27 +1098,52 @@ local function setIfNewer(hash, tombstones, id, updatedAt, payload, strict)
 end
 `;
 
-const SET_MEETING_IF_NEWER_SCRIPT = `${STORED_AT_LUA}
-if redis.call("EXISTS", KEYS[3]) == 0 then return redis.error_reply("NOSEED the scheduled meetings store is not seeded") end
-local applied = setIfNewer(KEYS[1], KEYS[2], ARGV[1], tonumber(ARGV[2]) or 0, ARGV[3], ARGV[4] == "newer")
-return { nextVersion(KEYS[4]), applied }
+const COMMITTED_LUA = `
+local function committedState(hash, tombstones, ids)
+  local state = {}
+  for _, id in ipairs(ids) do
+    state[#state + 1] = id
+    state[#state + 1] = redis.call("HGET", hash, id)
+    state[#state + 1] = redis.call("HGET", tombstones, id)
+  end
+  return state
+end
 `;
 
-const SAVE_MEETINGS_SCRIPT = `${STORED_AT_LUA}
+const SET_MEETING_IF_NEWER_SCRIPT = `${STORED_AT_LUA}${COMMITTED_LUA}
 if redis.call("EXISTS", KEYS[3]) == 0 then return redis.error_reply("NOSEED the scheduled meetings store is not seeded") end
-local outcomes = {}
+local applied = setIfNewer(KEYS[1], KEYS[2], ARGV[1], tonumber(ARGV[2]) or 0, ARGV[3], ARGV[4] == "newer")
+local reply = committedState(KEYS[1], KEYS[2], { ARGV[1] })
+table.insert(reply, 1, applied)
+table.insert(reply, 1, nextVersion(KEYS[4]))
+return reply
+`;
+
+const SAVE_MEETINGS_SCRIPT = `${STORED_AT_LUA}${COMMITTED_LUA}
+if redis.call("EXISTS", KEYS[3]) == 0 then return redis.error_reply("NOSEED the scheduled meetings store is not seeded") end
+local ids = {}
+local seen = {}
+local function touch(id)
+  if not seen[id] then
+    seen[id] = true
+    ids[#ids + 1] = id
+  end
+end
 local count = tonumber(ARGV[1]) or 0
 local index = 2
 for _ = 1, count do
-  outcomes[#outcomes + 1] = setIfNewer(KEYS[1], KEYS[2], ARGV[index], tonumber(ARGV[index + 1]) or 0, ARGV[index + 2], false)
+  setIfNewer(KEYS[1], KEYS[2], ARGV[index], tonumber(ARGV[index + 1]) or 0, ARGV[index + 2], false)
+  touch(ARGV[index])
   index = index + 3
 end
 while index <= #ARGV do
-  outcomes[#outcomes + 1] = markDeleted(KEYS[1], KEYS[2], ARGV[index], tonumber(ARGV[index + 1]) or 0)
+  markDeleted(KEYS[1], KEYS[2], ARGV[index], tonumber(ARGV[index + 1]) or 0)
+  touch(ARGV[index])
   index = index + 2
 end
-table.insert(outcomes, 1, nextVersion(KEYS[4]))
-return outcomes
+local reply = committedState(KEYS[1], KEYS[2], ids)
+table.insert(reply, 1, nextVersion(KEYS[4]))
+return reply
 `;
 
 /**
@@ -1172,10 +1240,11 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
     }
   }
 
-  async saveChanged(meetings: ScheduledMeeting[], deletions: MeetingDeletion[] = []): Promise<void> {
-    if (meetings.length === 0 && deletions.length === 0) return;
-    return this.queueWrite(async () => {
-      const [version, ...outcomes] = (await this.evalSeeded([
+  async saveChanged(meetings: ScheduledMeeting[], deletions: MeetingDeletion[] = []): Promise<CommittedMeetings> {
+    if (meetings.length === 0 && deletions.length === 0) return committed([]);
+    let commits: MeetingCommit[] = [];
+    await this.queueWrite(async () => {
+      const [version, ...state] = (await this.evalSeeded([
         "EVAL",
         SAVE_MEETINGS_SCRIPT,
         "4",
@@ -1186,19 +1255,18 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
         String(meetings.length),
         ...meetings.flatMap((meeting) => [meeting.id, String(meeting.updatedAt), JSON.stringify(meeting)]),
         ...deletions.flatMap(({ id, deletedAt }) => [id, String(deletedAt)]),
-      ])) as number[];
-      await this.updateMirror({
-        version: Number(version),
-        upserts: meetings.filter((_, index) => Number(outcomes[index]) === 1),
-        deletions: deletions.map((deletion, index) => ({ ...deletion, removed: Number(outcomes[meetings.length + index]) === 1 })),
-      });
+      ])) as unknown[];
+      const mirrored = mirroredMeetingsFrom(state);
+      commits = commitsOfMirrored(mirrored);
+      await this.updateMirror({ version: Number(version), meetings: mirrored });
     });
+    return committed(commits);
   }
 
   async importIfNewer(meeting: ScheduledMeeting): Promise<boolean> {
     let applied = false;
     await this.queueWrite(async () => {
-      const [version, outcome] = (await this.evalSeeded([
+      const [version, outcome, ...state] = (await this.evalSeeded([
         "EVAL",
         SET_MEETING_IF_NEWER_SCRIPT,
         "4",
@@ -1210,9 +1278,9 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
         String(meeting.updatedAt),
         JSON.stringify(meeting),
         "newer",
-      ])) as number[];
+      ])) as unknown[];
       applied = Number(outcome) === 1;
-      await this.updateMirror({ version: Number(version), upserts: applied ? [meeting] : [], deletions: [] });
+      await this.updateMirror({ version: Number(version), meetings: mirroredMeetingsFrom(state) });
     });
     return applied;
   }
@@ -1254,19 +1322,20 @@ class RedisScheduledMeetingPersistence implements ScheduledMeetingPersistence {
       const result = await this.client.sendCommand([
         "EVAL",
         CLAIM_EMAIL_REMINDER_SCRIPT,
-        "2",
+        "3",
         this.key,
         this.versionKey,
+        this.tombstonesKey,
         claim.meetingId,
         String(claim.now),
         String(claim.leadMs),
+        String(Date.now()),
       ]);
       if (!Array.isArray(result)) return;
-      const [version, payload] = result as unknown as [number, string];
-      const meeting = normalizeStoredMeeting(JSON.parse(String(payload)));
-      if (!meeting) return;
-      claimed = meeting;
-      await this.updateMirror({ version: Number(version), upserts: [meeting], deletions: [] });
+      const [version, ...state] = result as unknown[];
+      const mirrored = mirroredMeetingsFrom(state);
+      claimed = commitsOfMirrored(mirrored)[0]?.record ?? null;
+      await this.updateMirror({ version: Number(version), meetings: mirrored });
     });
     return claimed;
   }
@@ -1503,7 +1572,6 @@ export const mergePersistedMeetings = (
   });
 
 type MeetingPlan<R> = {
-  draft: ScheduledMeetingStore;
   result: R;
   upserts: ScheduledMeeting[];
   deletions: MeetingDeletion[];
@@ -1512,9 +1580,10 @@ type MeetingPlan<R> = {
 const planMeetingChange = <R>(
   store: ScheduledMeetingStore,
   targets: ChangeTargets<ScheduledMeetingStore>,
-  mutate: (draft: ScheduledMeetingStore) => R,
+  mutate: (draft: ScheduledMeetingStore, at: number) => R,
+  at: number,
 ): MeetingPlan<R> => {
-  const ids = targetIds(targets, store);
+  const ids = targetIds(targets, store, at);
   const draft: ScheduledMeetingStore = {
     byId: new Map(store.byId),
     byRoomCode: new Map(store.byRoomCode),
@@ -1524,27 +1593,36 @@ const planMeetingChange = <R>(
     const held = store.byId.get(id);
     if (held) draft.byId.set(id, structuredClone(held));
   }
-  const result = mutate(draft);
+  const result = mutate(draft, at);
   const upserts = [...draft.byId].flatMap(([id, meeting]) => {
     const held = store.byId.get(id);
-    return held && sameStoredValue(held, meeting) ? [] : [meeting];
+    if (held && sameStoredValue(held, meeting)) return [];
+    meeting.updatedAt = commitStamp(at, held?.updatedAt);
+    return [meeting];
   });
   const deletions = ids
     .filter((id) => store.byId.has(id) && !draft.byId.has(id))
-    .map((id) => ({ id, deletedAt: draft.deletedAt.get(id) ?? Date.now() }));
-  return { draft, result, upserts, deletions };
+    .map((id) => ({ id, deletedAt: commitStamp(at, store.byId.get(id)?.updatedAt) }));
+  return { result, upserts, deletions };
 };
+
+const uncommittedMeetings = (plan: MeetingPlan<unknown>): CommittedMeetings =>
+  committed([
+    ...plan.upserts.map((meeting) => ({ id: meeting.id, record: meeting, deletedAt: null })),
+    ...plan.deletions.map(({ id, deletedAt }) => ({ id, record: null, deletedAt })),
+  ]);
 
 const saveMeetingPlan = async (
-  persistence: ScheduledMeetingPersistence,
+  persistence: ScheduledMeetingPersistence | null,
   plan: MeetingPlan<unknown>,
-): Promise<void> => {
-  if (plan.upserts.length === 0 && plan.deletions.length === 0) return;
-  await persistence.saveChanged(plan.upserts, plan.deletions);
+): Promise<CommittedMeetings> => {
+  if (plan.upserts.length === 0 && plan.deletions.length === 0) return committed([]);
+  if (!persistence) return uncommittedMeetings(plan);
+  const result = await persistence.saveChanged(plan.upserts, plan.deletions);
   await persistence.flush?.();
+  return result;
 };
 
-/** Puts a meeting that storage already holds into memory, in place, with its room code. */
 export const adoptStoredMeeting = (store: ScheduledMeetingStore, meeting: ScheduledMeeting): ScheduledMeeting => {
   const held = store.byId.get(meeting.id);
   if (held) unregisterStore(store, held);
@@ -1553,36 +1631,34 @@ export const adoptStoredMeeting = (store: ScheduledMeetingStore, meeting: Schedu
   return adopted;
 };
 
-const applyMeetingPlan = (store: ScheduledMeetingStore, plan: MeetingPlan<unknown>): void => {
-  for (const meeting of plan.upserts) adoptStoredMeeting(store, meeting);
-  for (const { id, deletedAt } of plan.deletions) {
-    const held = store.byId.get(id);
-    if (held) unregisterStore(store, held);
-    store.deletedAt.set(id, deletedAt);
+export const applyCommittedMeetings = (store: ScheduledMeetingStore, commits: CommittedMeetings): void => {
+  for (const { id, record, deletedAt } of commits) {
+    if (record) {
+      adoptStoredMeeting(store, record);
+    } else {
+      const held = store.byId.get(id);
+      if (held) unregisterStore(store, held);
+    }
+    if (deletedAt === null) store.deletedAt.delete(id);
+    else store.deletedAt.set(id, deletedAt);
   }
 };
 
-/**
- * Runs a meeting mutation on a draft, saves what it changed, and only then
- * applies it to memory and the room-code index. `ids` names the meetings the
- * mutation may change, or picks them from the store once earlier changes are
- * in; new meetings it creates are picked up on their own.
- */
 export const changeMeetings = async <R>(
   store: ScheduledMeetingStore,
   persistence: ScheduledMeetingPersistence | null,
   ids: ChangeTargets<ScheduledMeetingStore>,
-  mutate: (draft: ScheduledMeetingStore) => R,
+  mutate: (draft: ScheduledMeetingStore, at: number) => R,
 ): Promise<R> => {
   const plan = await persistThenApply(store, "scheduled meetings", {
-    plan: () => planMeetingChange(store, ids, mutate),
-    save: (planned) => persistence && saveMeetingPlan(persistence, planned),
-    apply: (planned) => applyMeetingPlan(store, planned),
+    plan: (at) => planMeetingChange(store, ids, mutate, at),
+    save: (planned) => saveMeetingPlan(persistence, planned),
+    apply: (_planned, commits) => applyCommittedMeetings(store, commits),
   });
+  if (plan.upserts.some((meeting) => !store.byId.has(meeting.id))) throw new ChangedElsewhereError("scheduled meeting");
   return committedRecords(store.byId, plan.result);
 };
 
-/** Ids of the meetings that advanceScheduledMeetings would move on at `now`. */
 export const dueScheduledMeetingIds = (store: ScheduledMeetingStore, now = Date.now()): string[] =>
   [...store.byId.values()]
     .filter(
@@ -1594,19 +1670,20 @@ export const dueScheduledMeetingIds = (store: ScheduledMeetingStore, now = Date.
 
 export const advanceScheduledMeetings = (
   store: ScheduledMeetingStore,
-  now = Date.now(),
+  dueAt = Date.now(),
+  at = dueAt,
 ): ScheduledMeeting[] => {
   const changed: ScheduledMeeting[] = [];
   for (const meeting of store.byId.values()) {
-    if (meeting.status === "scheduled" && now >= meeting.scheduledStartAt) {
+    if (meeting.status === "scheduled" && dueAt >= meeting.scheduledStartAt) {
       meeting.status = "live";
-      if (!meeting.startedAt) meeting.startedAt = now;
-      meeting.updatedAt = now;
+      if (!meeting.startedAt) meeting.startedAt = at;
+      meeting.updatedAt = at;
       changed.push(meeting);
-    } else if (meeting.status === "live" && now >= meeting.scheduledEndAt) {
+    } else if (meeting.status === "live" && dueAt >= meeting.scheduledEndAt) {
       meeting.status = "ended";
-      if (!meeting.endedAt) meeting.endedAt = now;
-      meeting.updatedAt = now;
+      if (!meeting.endedAt) meeting.endedAt = at;
+      meeting.updatedAt = at;
       changed.push(meeting);
     }
   }

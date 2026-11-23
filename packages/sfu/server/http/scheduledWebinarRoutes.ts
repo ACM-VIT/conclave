@@ -27,10 +27,7 @@ import {
 import { clearWebinarLinkSlug } from "../webinar.js";
 import type { ChangeTargets } from "../persistThenApply.js";
 import type { SfuState } from "../state.js";
-import {
-  PersistenceUnavailableError,
-  sendPersistenceUnavailable,
-} from "./persistenceUnavailable.js";
+import { AccessRevokedError, answerStoreFailure } from "./persistenceUnavailable.js";
 import {
   canonicalizeClientId,
   canMigrateClientNamespace,
@@ -147,6 +144,14 @@ const serializeScheduledWebinar = (
   return safe;
 };
 
+const hasWebinarAccess = (
+  webinar: ScheduledWebinar,
+  user: ReturnType<typeof resolveUserContext>,
+): boolean =>
+  user.isAdmin ||
+  (Boolean(user.email) &&
+    (webinar.hostEmail === user.email || webinar.coHosts.some((entry) => entry.email === user.email)));
+
 export const registerScheduledWebinarRoutes = (
   app: Express,
   options: RegisterOptions,
@@ -166,10 +171,7 @@ export const registerScheduledWebinarRoutes = (
     changeWebinars(state.scheduledWebinars, state.scheduledWebinarPersistence, ids, mutate);
 
   const answerFailure = (res: Response, error: unknown): void => {
-    if (error instanceof PersistenceUnavailableError) {
-      sendPersistenceUnavailable(res);
-      return;
-    }
+    if (answerStoreFailure(res, error)) return;
     res.status(400).json({ error: (error as Error).message });
   };
 
@@ -341,18 +343,24 @@ export const registerScheduledWebinarRoutes = (
       res.status(404).json({ error: "Scheduled webinar not found" });
       return null;
     }
-    const user = resolveUserContext(req);
-    if (!user.isAdmin) {
-      if (
-        !user.email ||
-        (webinar.hostEmail !== user.email &&
-          !webinar.coHosts.some((entry) => entry.email === user.email))
-      ) {
-        res.status(403).json({ error: "Not authorized for this webinar" });
-        return null;
-      }
+    if (!hasWebinarAccess(webinar, resolveUserContext(req))) {
+      res.status(403).json({ error: "Not authorized for this webinar" });
+      return null;
     }
     return webinar;
+  };
+
+  const changeWithAccess = <R>(
+    req: Request,
+    id: string,
+    mutate: (draft: ScheduledWebinarStore) => R,
+  ): Promise<R> => {
+    const user = resolveUserContext(req);
+    return change([id], (draft) => {
+      const current = draft.byId.get(id);
+      if (current && !hasWebinarAccess(current, user)) throw new AccessRevokedError("webinar");
+      return mutate(draft);
+    });
   };
 
   app.get("/scheduled-webinars/:id", (req, res) => {
@@ -369,7 +377,7 @@ export const registerScheduledWebinarRoutes = (
 
     try {
       const body = (req.body ?? {}) as UpdateScheduledWebinarRequest;
-      const { webinar, inviteCodeHashChange } = await change([target.id], (draft) =>
+      const { webinar, inviteCodeHashChange } = await changeWithAccess(req, target.id, (draft) =>
         updateScheduledWebinar(draft, target.id, body),
       );
 
@@ -396,7 +404,7 @@ export const registerScheduledWebinarRoutes = (
 
     let webinar: ScheduledWebinar | null;
     try {
-      webinar = await change([target.id], (draft) => deleteScheduledWebinar(draft, target.id));
+      webinar = await changeWithAccess(req, target.id, (draft) => deleteScheduledWebinar(draft, target.id));
     } catch (error) {
       answerFailure(res, error);
       return;
@@ -431,7 +439,7 @@ export const registerScheduledWebinarRoutes = (
     if (!target) return;
 
     try {
-      const { webinar } = await change([target.id], (draft) =>
+      const { webinar } = await changeWithAccess(req, target.id, (draft) =>
         updateScheduledWebinar(draft, target.id, { status: "live" }),
       );
       ensureWebinarRoomConfig(state, webinar, null);
@@ -447,7 +455,7 @@ export const registerScheduledWebinarRoutes = (
     if (!target) return;
 
     try {
-      const { webinar } = await change([target.id], (draft) =>
+      const { webinar } = await changeWithAccess(req, target.id, (draft) =>
         updateScheduledWebinar(draft, target.id, { status: "ended" }),
       );
       const channelId = getRoomChannelId(webinar.clientId, webinar.roomId);
@@ -468,7 +476,7 @@ export const registerScheduledWebinarRoutes = (
     if (!target) return;
 
     try {
-      const { webinar } = await change([target.id], (draft) =>
+      const { webinar } = await changeWithAccess(req, target.id, (draft) =>
         updateScheduledWebinar(draft, target.id, { status: "cancelled" }),
       );
       const channelId = getRoomChannelId(webinar.clientId, webinar.roomId);
@@ -488,7 +496,7 @@ export const registerScheduledWebinarRoutes = (
     if (!target) return;
 
     try {
-      const { webinar, token } = await change([target.id], (draft) =>
+      const { webinar, token } = await changeWithAccess(req, target.id, (draft) =>
         createScheduledWebinarCoHostInvite(draft, target.id),
       );
       res.json({

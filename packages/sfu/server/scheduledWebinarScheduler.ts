@@ -174,26 +174,21 @@ const dueWebinarIds = (store: ScheduledWebinarStore, now: number): string[] =>
     )
     .map((webinar) => webinar.id);
 
-const advanceDueWebinars = (draft: ScheduledWebinarStore, now: number): ScheduledWebinar[] =>
-  dueWebinarIds(draft, now).map((id) => {
+const advanceDueWebinars = (draft: ScheduledWebinarStore, dueAt: number, at: number): ScheduledWebinar[] =>
+  dueWebinarIds(draft, dueAt).map((id) => {
     const webinar = draft.byId.get(id)!;
     if (webinar.status === "scheduled") {
       webinar.status = "live";
-      if (!webinar.liveStartedAt) webinar.liveStartedAt = now;
+      if (!webinar.liveStartedAt) webinar.liveStartedAt = at;
     } else {
       webinar.status = "ended";
-      webinar.endedAt = now;
+      webinar.endedAt = at;
     }
-    webinar.updatedAt = now;
+    webinar.updatedAt = at;
     return webinar;
   });
 
-/**
- * Opens rooms whose early entry has begun, then moves due webinars to live or
- * ended. The status change is saved before memory and the room move on, so a
- * failed save is tried again on the next tick.
- */
-const advanceScheduledWebinars = async (state: SfuState, now = Date.now()): Promise<number> => {
+export const runScheduledWebinarTick = async (state: SfuState, now = Date.now()): Promise<number> => {
   for (const webinar of state.scheduledWebinars.byId.values()) {
     if (webinar.status === "scheduled" && isWithinEarlyEntryWindow(webinar, now)) {
       applyScheduledWebinarToConfig(state, webinar, null);
@@ -207,7 +202,7 @@ const advanceScheduledWebinars = async (state: SfuState, now = Date.now()): Prom
       state.scheduledWebinars,
       state.scheduledWebinarPersistence,
       (store) => dueWebinarIds(store, now),
-      (draft) => advanceDueWebinars(draft, now),
+      (draft, at) => advanceDueWebinars(draft, now, at),
     );
   } catch (error) {
     Logger.warn("Failed to persist scheduled webinar status changes", error);
@@ -229,7 +224,7 @@ export const startScheduledWebinarTimer = (
   state.scheduledWebinarTimer = startBackgroundTimer(
     "Scheduled webinar tick",
     intervalMs,
-    () => advanceScheduledWebinars(state, Date.now()),
+    () => runScheduledWebinarTick(state, Date.now()),
     Logger.error,
   );
 };
