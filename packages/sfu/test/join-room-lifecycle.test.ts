@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Router, Worker } from "mediasoup/types";
+import type { Consumer, Router, Worker } from "mediasoup/types";
 import type { Server as SocketIOServer, Socket } from "socket.io";
 import { Admin } from "../config/classes/Admin.js";
 import { Client } from "../config/classes/Client.js";
@@ -24,18 +24,28 @@ afterEach(() => {
 
 const makeSocket = (id: string, user: SfuAuthPayload = {}) => {
   const handlers = new Map<string, Handler>();
+  const emit = vi.fn();
+  const roomEmits = new Map<string, ReturnType<typeof vi.fn>>();
+  const emitToRoom = (channelId: string) => {
+    const existing = roomEmits.get(channelId);
+    if (existing) return existing;
+    const recorder = vi.fn();
+    roomEmits.set(channelId, recorder);
+    return recorder;
+  };
+  const to = (channelId: string) => ({ emit: emitToRoom(channelId) });
   const socket = {
     id,
     data: { user },
     on: (event: string, handler: Handler) => handlers.set(event, handler),
-    emit: vi.fn(),
+    emit,
     disconnect: vi.fn(),
     connected: true,
     join: vi.fn(),
     leave: vi.fn(),
-    to: () => ({ emit: vi.fn() }),
+    to,
   } as unknown as Socket;
-  return { socket, handlers };
+  return { socket, handlers, emit, emitToRoom };
 };
 
 const makeState = (workers: Worker[] = []): SfuState => {
@@ -69,6 +79,124 @@ const join = async (
   ] as never[]);
   return { context, peer, ack };
 };
+
+describe("host roster on join", () => {
+  it("updates the old room's roster when its host switches rooms on the same socket", async () => {
+    const state = makeState();
+    const [oldRoom, nextRoom] = ["old", "next"].map((id) => {
+      const room = new Room({ id, clientId: "conclave", workerPid: null, router: {} as Router });
+      state.rooms.set(room.channelId, room);
+      return room;
+    });
+    const { peer } = await join(state, "alice-socket", {
+      userId: "alice", clientId: "conclave", sessionId: "a", isForcedHost: true,
+    }, oldRoom.id);
+    await join(state, "bob-socket", {
+      userId: "bob", clientId: "conclave", sessionId: "b", isForcedHost: true,
+    }, oldRoom.id);
+    expect(oldRoom.getHostUserId()).toBe("alice#a");
+    const oldRoomEvents = peer.emitToRoom(oldRoom.channelId);
+    const nextRoomEvents = peer.emitToRoom(nextRoom.channelId);
+    oldRoomEvents.mockClear();
+    nextRoomEvents.mockClear();
+    const ack = vi.fn();
+    await peer.handlers.get("joinRoom")!(
+      ...[{ roomId: nextRoom.id, sessionId: "a" }, ack] as never[]
+    );
+
+    expect(ack).toHaveBeenCalledWith(expect.objectContaining({ roomId: nextRoom.id, status: "joined" }));
+    expect(oldRoomEvents).toHaveBeenCalledWith("userLeft", { roomId: oldRoom.id, userId: "alice#a" });
+    expect(oldRoomEvents).toHaveBeenCalledWith("hostChanged", { roomId: oldRoom.id, hostUserId: "bob#b" });
+    expect(oldRoomEvents).toHaveBeenCalledWith("adminUsersChanged", { roomId: oldRoom.id, hostUserIds: ["bob#b"] });
+    expect(nextRoomEvents).not.toHaveBeenCalled();
+  });
+
+  it("sends an unchanged roster to the guest and broadcasts a new co-host", async () => {
+    const state = makeState();
+    const room = new Room({
+      id: "room",
+      clientId: "conclave",
+      workerPid: null,
+      router: {} as Router,
+    });
+    state.rooms.set(room.channelId, room);
+    const host = new Admin({ id: "host#h", socket: makeSocket("host-socket").socket });
+    room.setUserIdentity(host.id, "host", "Host");
+    room.hostUserKey = "host";
+    room.addClient(host);
+    broadcast.mockClear();
+
+    const guest = await join(state, "guest-socket", {
+      userId: "guest-bob",
+      clientId: "conclave",
+      sessionId: "guest",
+    });
+    expect(guest.peer.emit).toHaveBeenCalledWith("hostChanged", {
+      roomId: room.id,
+      hostUserId: host.id,
+    });
+    expect(guest.peer.emit).toHaveBeenCalledWith("adminUsersChanged", {
+      roomId: room.id,
+      hostUserIds: [host.id],
+    });
+    expect(broadcast).not.toHaveBeenCalledWith("hostChanged", expect.anything());
+    expect(broadcast).not.toHaveBeenCalledWith("adminUsersChanged", expect.anything());
+
+    await join(state, "cohost-socket", {
+      userId: "carol",
+      clientId: "conclave",
+      sessionId: "cohost",
+      isForcedHost: true,
+    });
+    expect(broadcast).not.toHaveBeenCalledWith("hostChanged", expect.anything());
+    expect(broadcast).toHaveBeenCalledWith("adminUsersChanged", {
+      roomId: room.id,
+      hostUserIds: [host.id, "carol#cohost"],
+    });
+  });
+
+  it("updates peers when a returning co-host becomes the primary host", async () => {
+    vi.useFakeTimers();
+    const state = makeState();
+    const room = new Room({
+      id: "room",
+      clientId: "conclave",
+      workerPid: null,
+      router: {} as Router,
+    });
+    state.rooms.set(room.channelId, room);
+    const first = new Admin({
+      id: "alice#a",
+      socket: makeSocket("first-host").socket,
+    });
+    room.setUserIdentity(first.id, "alice", "Alice");
+    room.hostUserKey = "alice";
+    room.addClient(first);
+    const fallback = await join(state, "fallback-host", {
+      userId: "bob", clientId: "conclave", sessionId: "b", isForcedHost: true,
+    });
+    const returningUser = { userId: "carol", clientId: "conclave", sessionId: "c" };
+    const returning = await join(state, "returning-host", {
+      ...returningUser, isForcedHost: true,
+    });
+
+    registerAdminHandlers(fallback.context, { roomId: room.id });
+    const kickAck = vi.fn();
+    await fallback.peer.handlers.get("kickUser")!(
+      ...[{ userId: first.id }, kickAck] as never[]
+    );
+    expect(kickAck).toHaveBeenCalledWith({ success: true });
+    expect(room.getHostUserId()).toBe("bob#b");
+    room.scheduleDisconnect("carol#c", returning.peer.socket.id, 10_000, vi.fn());
+    broadcast.mockClear();
+
+    const rejoined = await join(state, "rejoined-host", returningUser);
+    const host = { roomId: room.id, hostUserId: "carol#c" };
+    expect(rejoined.ack).toHaveBeenCalledWith(expect.objectContaining(host));
+    expect(broadcast).toHaveBeenCalledWith("hostChanged", host);
+    expect(broadcast).not.toHaveBeenCalledWith("adminUsersChanged", expect.anything());
+  });
+});
 
 describe("reconnect grace timer", () => {
   const guest = {
@@ -159,6 +287,98 @@ describe("reconnect grace timer", () => {
 });
 
 describe("concurrent room creation", () => {
+  it("puts simultaneous new rooms on separate idle workers", async () => {
+    let finishedCreatingRouter!: () => void;
+    const routersReady = new Promise<void>((resolve) => { finishedCreatingRouter = resolve; });
+    const workers = [1, 2, 3].map((pid) => ({
+      pid,
+      closed: false,
+      createRouter: vi.fn(async () => {
+        await routersReady;
+        return { closed: false } as Router;
+      }),
+    }));
+    const state = makeState(workers as unknown as Worker[]);
+    const pending = ["a", "b", "c"].map((id) =>
+      getOrCreateRoomWithOrigin(state, "conclave", id),
+    );
+
+    try {
+      await vi.waitFor(() => {
+        for (const worker of workers) {
+          expect(worker.createRouter).toHaveBeenCalledOnce();
+        }
+      });
+    } finally {
+      finishedCreatingRouter();
+      await Promise.all(pending);
+    }
+  });
+
+  it("spreads a burst across workers with unequal consumer counts", async () => {
+    let finishRouters!: () => void;
+    const routersReady = new Promise<void>((resolve) => { finishRouters = resolve; });
+    const workers = [1, 2].map((pid) => ({
+      pid,
+      closed: false,
+      createRouter: vi.fn(async () => {
+        await routersReady;
+        return { closed: false } as Router;
+      }),
+    }));
+    const state = makeState(workers as unknown as Worker[]);
+    const busy = new Room({
+      id: "busy",
+      clientId: "conclave",
+      workerPid: 1,
+      router: { closed: false } as Router,
+    });
+    const client = new Client({ id: "viewer", socket: makeSocket("viewer").socket });
+    busy.addClient(client);
+    client.consumers.set("first-video", {} as Consumer);
+    client.consumers.set("second-video", {} as Consumer);
+    state.rooms.set(busy.channelId, busy);
+
+    const pending = ["a", "b", "c", "d"].map((id) =>
+      getOrCreateRoomWithOrigin(state, "conclave", id),
+    );
+    try {
+      await vi.waitFor(() => {
+        const creations = workers.reduce((total, worker) => total + worker.createRouter.mock.calls.length, 0);
+        expect(creations).toBe(pending.length);
+      });
+    } finally {
+      finishRouters();
+    }
+    const rooms = await Promise.all(pending);
+    expect(rooms[0].room.workerPid).toBe(2);
+    expect(new Set(rooms.map(({ room }) => room.workerPid))).toEqual(new Set([1, 2]));
+  });
+
+  it("spreads sequential rooms that have no consumers across workers", async () => {
+    const workers = [1, 2].map((pid) => ({
+      pid,
+      closed: false,
+      createRouter: async () => ({ closed: false } as Router),
+    }));
+    const state = makeState(workers as unknown as Worker[]);
+    const { room: busy } = await getOrCreateRoomWithOrigin(state, "conclave", "busy");
+    const client = new Client({ id: "viewer", socket: makeSocket("viewer").socket });
+    busy.addClient(client);
+    client.consumers.set("first-video", {} as Consumer);
+    client.consumers.set("second-video", {} as Consumer);
+
+    const placements = [];
+    for (let i = 0; i < 8; i++) {
+      const { room } = await getOrCreateRoomWithOrigin(state, "conclave", `room-${i}`);
+      placements.push(room.workerPid);
+    }
+
+    expect(placements[0]).toBe(2);
+    expect(placements.filter((pid) => pid === 1)).toHaveLength(3);
+    expect(placements.filter((pid) => pid === 2)).toHaveLength(5);
+  });
+
   it("makes only the joiner whose call created the room its host", async () => {
     let releaseRouter!: () => void;
     const routerReady = new Promise<void>((resolve) => { releaseRouter = resolve; });
