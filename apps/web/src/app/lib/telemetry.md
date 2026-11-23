@@ -67,7 +67,11 @@ is answered. The next page load, and a page coming back into view, sends what
 storage holds, from any tab, while holding a Web Locks lock
 (`conclave:telemetry:replay`), so one tab replays at a time. A replay waits
 its turn for the lock and holds it until its sends have their first answers,
-or 10 s at most. A replay asked for while one runs, such as a page coming back
+or 10 s at most, and then stops any request still open before it lets the
+lock go. Each send of a saved batch claims it in storage under a new attempt
+id, and an answer from an earlier attempt changes nothing: a late reply can
+neither resend the batch nor shorten the wait a newer send was given, and a
+`Retry-After` only ever moves the next send later. A replay asked for while one runs, such as a page coming back
 while its own replay still waits for an answer, runs after it, so a batch
 saved meanwhile is not left for the next page load. Without the Web Locks API
 two tabs may both send a batch, and `/ingest` takes each uuid once. A beacon

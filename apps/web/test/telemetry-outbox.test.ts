@@ -19,7 +19,7 @@ const START = Date.parse("2026-11-23T00:00:00.000Z");
 const MINUTE = 60_000;
 
 type Reply = { status: number; retryAfter: string | null };
-type Answer = number | Reply | "offline" | "pending" | Promise<number>;
+type Answer = number | Reply | "offline" | "pending" | Promise<number | Reply>;
 
 /** Storage the next page load reads, shared by the outboxes a test makes: one entry per batch. */
 const memoryStore = () => {
@@ -28,6 +28,10 @@ const memoryStore = () => {
     save: (batch: StoredBatch) => {
       saved.set(batch.id, structuredClone(batch));
       return true;
+    },
+    get: (id: string) => {
+      const batch = saved.get(id);
+      return batch ? structuredClone(batch) : null;
     },
     remove: (id: string) => void saved.delete(id),
     list: () => [...saved.values()].map((batch) => structuredClone(batch)),
@@ -77,33 +81,46 @@ const harness = ({
   store = memoryStore() as Store,
   at = START,
   lock = noLock,
+  clock = { now: at },
+  ignoreAbort = false,
 } = {}) => {
-  let now = at;
   const timers: Array<{ at: number; fn: () => void; id: number }> = [];
   let ids = 0;
-  const posts: Array<{ body: string; keepalive: boolean; at: number }> = [];
+  const posts: Array<{ body: string; keepalive: boolean; at: number; signal?: AbortSignal }> = [];
   const beacons: string[] = [];
   const dropped: DroppedBatches[] = [];
   let beaconRefuses = false;
   const outbox = createOutbox({
     token: KEY,
-    now: () => now,
+    now: () => clock.now,
     setTimer: (fn, ms) => {
       const id = ++ids;
-      timers.push({ at: now + ms, fn, id });
+      timers.push({ at: clock.now + ms, fn, id });
       return id;
     },
     clearTimer: (id) => {
       const index = timers.findIndex((timer) => timer.id === id);
       if (index >= 0) timers.splice(index, 1);
     },
-    post: (body, keepalive) => {
-      posts.push({ body, keepalive, at: now });
+    post: (body, keepalive, signal) => {
+      posts.push({ body, keepalive, at: clock.now, signal });
       const answer = answers.shift() ?? 200;
-      if (answer === "pending") return new Promise<Reply>(() => {});
-      if (answer === "offline") return Promise.reject(new TypeError("Failed to fetch"));
-      if (answer instanceof Promise) return answer.then((status) => ({ status, retryAfter: null }));
-      return Promise.resolve(typeof answer === "number" ? { status: answer, retryAfter: null } : answer);
+      const reply = (value: number | Reply): Reply => (typeof value === "number" ? { status: value, retryAfter: null } : value);
+      const replied =
+        answer === "pending"
+          ? new Promise<Reply>(() => {})
+          : answer === "offline"
+            ? Promise.reject(new TypeError("Failed to fetch"))
+            : answer instanceof Promise
+              ? answer.then(reply)
+              : Promise.resolve(reply(answer));
+      if (!signal || ignoreAbort) return replied;
+      return new Promise<Reply>((resolve, reject) => {
+        const aborted = () => reject(new DOMException("The operation was aborted.", "AbortError"));
+        if (signal.aborted) aborted();
+        signal.addEventListener("abort", aborted, { once: true });
+        replied.then(resolve, reject);
+      });
     },
     beacon: (body) => {
       if (beaconRefuses) return false;
@@ -116,7 +133,7 @@ const harness = ({
     onStale: (counted) => dropped.push(counted),
   });
   const advance = async (ms: number) => {
-    const until = now + ms;
+    const until = clock.now + ms;
     for (;;) {
       // Answers already given settle first, and may set timers of their own.
       await new Promise((resolve) => setTimeout(resolve, 0));
@@ -124,11 +141,11 @@ const harness = ({
       const next = timers[0];
       if (!next || next.at > until) break;
       timers.shift();
-      now = next.at;
+      clock.now = next.at;
       next.fn();
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
-    now = until;
+    clock.now = until;
     await new Promise((resolve) => setTimeout(resolve, 0));
   };
   const batchOf = (body: string) => JSON.parse(body) as { api_key: string; batch: OutboxEvent[]; sent_at: string };
@@ -171,8 +188,8 @@ const event = (name = "meet_join_attempt", padding = 0, at = START): OutboxEvent
 });
 
 const answerLater = () => {
-  let answer: (status: number) => void = () => {};
-  const promise = new Promise<number>((resolve) => (answer = resolve));
+  let answer: (value: number | Reply) => void = () => {};
+  const promise = new Promise<number | Reply>((resolve) => (answer = resolve));
   return { promise, answer };
 };
 
@@ -334,8 +351,8 @@ describe("a batch storage cannot take", () => {
   it("says so when web storage refuses the write", () => {
     const store = createBatchStore(fullStorage);
 
-    expect(store.save({ id: "batch-full", events: [event()], oldestAt: START, sent: false, notBefore: 0, attempt: 0 })).toBe(false);
-    expect(createBatchStore(() => memoryWebStorage()).save({ id: "batch-ok", events: [event()], oldestAt: START, sent: false, notBefore: 0, attempt: 0 })).toBe(true);
+    expect(store.save({ id: "batch-full", events: [event()], oldestAt: START, sent: false, notBefore: 0, attempt: 0, sendId: "" })).toBe(false);
+    expect(createBatchStore(() => memoryWebStorage()).save({ id: "batch-ok", events: [event()], oldestAt: START, sent: false, notBefore: 0, attempt: 0, sendId: "" })).toBe(true);
   });
 
   it("waits out a Retry-After in memory, and sends it then", async () => {
@@ -384,6 +401,70 @@ describe("retries /ingest asked to wait for", () => {
 
     expect(h.posts.map((post) => post.at - START)).toEqual([5000, 7000, 11_000, 19_000, 35_000, 65_000]);
     expect(store.list()).toEqual([expect.objectContaining({ events: [limited], attempt: 6 })]);
+  });
+});
+
+describe("a reply from a send another has replaced", () => {
+  const savedBatch = (store: Store) => {
+    const closed = harness({ store });
+    closed.refuseBeacons();
+    const waiting = event();
+    closed.outbox.add(waiting);
+    closed.outbox.flushForUnload();
+    return waiting;
+  };
+
+  it("is cut off as the replay gives up the lock, and cannot shorten the wait a newer send was given", async () => {
+    const store = memoryStore();
+    const waiting = savedBatch(store);
+    const lock = sharedLock();
+    const clock = { now: START + 5000 };
+    const late = answerLater();
+    const first = harness({ answers: [late.promise], store, lock, clock });
+    const second = harness({ answers: [{ status: 429, retryAfter: "60" }], store, lock, clock });
+    first.outbox.replaySaved();
+    second.outbox.replaySaved();
+    await settle();
+    expect(second.posts).toEqual([]);
+
+    await first.advance(REPLAY_HOLD_MS);
+    expect(first.posts[0].signal?.aborted).toBe(true);
+    await second.advance(0);
+    expect(second.posted()).toEqual([waiting.uuid]);
+
+    late.answer({ status: 429, retryAfter: "1" });
+    await first.advance(30_000);
+    await second.advance(0);
+    expect(first.posts).toHaveLength(1);
+    expect(second.posts).toHaveLength(1);
+    expect(store.list()).toEqual([expect.objectContaining({ notBefore: START + 5000 + REPLAY_HOLD_MS + 60_000 })]);
+
+    await second.advance(START + 5000 + REPLAY_HOLD_MS + 60_000 - clock.now);
+    expect(second.posted()).toEqual([waiting.uuid, waiting.uuid]);
+    expect(store.list()).toEqual([]);
+  });
+
+  it("moves nothing when it arrives after a newer send took the batch, even if its request was never stopped", async () => {
+    const store = memoryStore();
+    const waiting = savedBatch(store);
+    const lock = sharedLock();
+    const clock = { now: START + 5000 };
+    const late = answerLater();
+    const first = harness({ answers: [late.promise], store, lock, clock, ignoreAbort: true });
+    const second = harness({ answers: [{ status: 429, retryAfter: "60" }], store, lock, clock });
+    first.outbox.replaySaved();
+    second.outbox.replaySaved();
+    await first.advance(REPLAY_HOLD_MS);
+    await second.advance(0);
+    expect(second.posted()).toEqual([waiting.uuid]);
+
+    late.answer({ status: 429, retryAfter: "1" });
+    await first.advance(30_000);
+    await second.advance(0);
+
+    expect(first.posts).toHaveLength(1);
+    expect(second.posts).toHaveLength(1);
+    expect(store.list()).toEqual([expect.objectContaining({ notBefore: START + 5000 + REPLAY_HOLD_MS + 60_000 })]);
   });
 });
 
@@ -834,7 +915,7 @@ describe("saved batches across tabs", () => {
     const size = 40 * 1024;
     const count = Math.ceil(MAX_STORED_CHARS / size) + 2;
     for (let i = 0; i < count; i++) {
-      store.save({ id: `batch-${i}`, events: [event("meet_join_attempt", size, START + i * 1000)], oldestAt: START + i * 1000, sent: false, notBefore: 0, attempt: 0 });
+      store.save({ id: `batch-${i}`, events: [event("meet_join_attempt", size, START + i * 1000)], oldestAt: START + i * 1000, sent: false, notBefore: 0, attempt: 0, sendId: "" });
     }
 
     const kept = store.list().map((batch) => batch.id);

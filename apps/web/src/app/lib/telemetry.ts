@@ -378,11 +378,12 @@ export function startTelemetry(): void {
     now: Date.now,
     setTimer: (run, ms) => window.setTimeout(run, ms),
     clearTimer: (timer) => window.clearTimeout(timer as number),
-    post: (body, keepalive) =>
+    post: (body, keepalive, signal) =>
       fetch(`${INGEST_PATH}/e/`, {
         method: "POST",
         body,
         keepalive,
+        signal,
         credentials: "omit",
         headers: { "content-type": "application/json" },
       }).then((response) => ({ status: response.status, retryAfter: response.headers.get("retry-after") })),

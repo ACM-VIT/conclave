@@ -62,11 +62,13 @@ export type StoredBatch = {
   /** No send before this time, by this browser's clock: a Retry-After /ingest gave. */
   notBefore: number;
   attempt: number;
+  sendId: string;
 };
 
 /** Storage the site's tabs share, one entry per batch. */
 export type BatchStore = {
   save: (batch: StoredBatch) => boolean;
+  get: (id: string) => StoredBatch | null;
   remove: (id: string) => void;
   list: () => StoredBatch[];
 };
@@ -83,7 +85,7 @@ export type OutboxDeps = {
    * Posts a batch body to /ingest: the response's status and Retry-After
    * header, or a rejection with no answer.
    */
-  post: (body: string, keepalive: boolean) => Promise<{ status: number; retryAfter: string | null }>;
+  post: (body: string, keepalive: boolean, signal?: AbortSignal) => Promise<{ status: number; retryAfter: string | null }>;
   /** Queues a batch body by beacon; false when the browser will not take it. */
   beacon: (body: string) => boolean;
   /** A new batch's id, a uuid. */
@@ -106,6 +108,8 @@ type Batch = {
   beaconed: boolean;
   // No send before this time: the Retry-After of its last answer.
   notBefore: number;
+  sendId: string;
+  saved: boolean;
 };
 
 type Queued = { event: OutboxEvent; bytes: number };
@@ -185,6 +189,8 @@ export function createOutbox(deps: OutboxDeps) {
       inFlight: null,
       beaconed: false,
       notBefore: 0,
+      sendId: "",
+      saved: false,
     }));
   };
 
@@ -200,6 +206,7 @@ export function createOutbox(deps: OutboxDeps) {
     sent: batch.beaconed || batch.inFlight === "keepalive",
     notBefore: batch.notBefore,
     attempt: batch.attempt,
+    sendId: batch.sendId,
   });
 
   const tooOld = (oldestAt: number): boolean => deps.now() - oldestAt > MAX_SEND_AGE_MS;
@@ -218,12 +225,19 @@ export function createOutbox(deps: OutboxDeps) {
 
   // A batch goes by keepalive only within the shared budget, so the page can
   // still send what it holds when it goes away. Resolves on the first answer.
-  const send = (batch: Batch): Promise<void> => {
+  const send = (batch: Batch, signal?: AbortSignal): Promise<void> => {
     if (tooOld(batch.oldestAt)) {
       release(batch);
       deps.onStale(counted([stored(batch)]));
       return Promise.resolve();
     }
+    if (batch.saved && deps.store.get(batch.id)?.sendId !== batch.sendId) {
+      live.delete(batch.id);
+      return Promise.resolve();
+    }
+    batch.sendId = deps.newId();
+    if (batch.saved) batch.saved = deps.store.save(stored(batch));
+    const sendId = batch.sendId;
     live.set(batch.id, batch);
     const body = bodyOf(batch.events);
     const bytes = byteLength(body);
@@ -232,12 +246,25 @@ export function createOutbox(deps: OutboxDeps) {
     batch.inFlight = keepalive ? "keepalive" : "fetch";
     const answered = (reply: { status: number; retryAfter: string | null } | null): void => {
       if (keepalive) keepaliveBytes -= bytes;
+      if (batch.sendId !== sendId) return;
       batch.inFlight = null;
+      if (signal?.aborted) {
+        live.delete(batch.id);
+        return;
+      }
+      if (batch.saved) {
+        const current = deps.store.get(batch.id);
+        if (current?.sendId !== sendId) {
+          live.delete(batch.id);
+          return;
+        }
+        batch.notBefore = Math.max(batch.notBefore, current.notBefore);
+      }
       const answer = reply ? answerOf(reply.status, reply.retryAfter, deps.now()) : null;
       if (answer && answer.outcome !== "retry") release(batch);
       else retry(batch, answer?.afterMs ?? null);
     };
-    return deps.post(body, keepalive).then(answered, () => answered(null));
+    return deps.post(body, keepalive, signal).then(answered, () => answered(null));
   };
 
   // After the next delay of the schedule, or the Retry-After /ingest asked
@@ -246,7 +273,7 @@ export function createOutbox(deps: OutboxDeps) {
     const delay = RETRY_DELAYS_MS[batch.attempt];
     batch.attempt += 1;
     const wait = Math.max(delay ?? RETRY_DELAYS_MS[RETRY_DELAYS_MS.length - 1], afterMs ?? 0);
-    batch.notBefore = afterMs === null ? 0 : deps.now() + wait;
+    if (afterMs !== null) batch.notBefore = Math.max(batch.notBefore, deps.now() + wait);
     if (delay === undefined) {
       if (!handOff(batch)) sendLater(batch, wait);
       return;
@@ -261,6 +288,7 @@ export function createOutbox(deps: OutboxDeps) {
 
   const handOff = (batch: Batch): boolean => {
     if (!deps.store.save(stored(batch))) return false;
+    batch.saved = true;
     live.delete(batch.id);
     return true;
   };
@@ -289,6 +317,7 @@ export function createOutbox(deps: OutboxDeps) {
   // One pass over storage: sends each batch in it, from any tab, that this
   // page is not already sending, and drops the ones too old to send.
   const replayPass = async (): Promise<void> => {
+    const cutOff = new AbortController();
     const stale: StoredBatch[] = [];
     const sends: Array<Promise<void>> = [];
     for (const saved of deps.store.list()) {
@@ -307,18 +336,22 @@ export function createOutbox(deps: OutboxDeps) {
         inFlight: null,
         beaconed: saved.sent,
         notBefore: saved.notBefore,
+        sendId: saved.sendId,
+        saved: true,
       };
       if (saved.notBefore > deps.now()) replayAt(saved.notBefore);
-      else sends.push(send(batch));
+      else sends.push(send(batch, cutOff.signal));
     }
     if (stale.length > 0) deps.onStale(counted(stale));
     if (sends.length === 0) return;
+    let answered = false;
     let timer: unknown = null;
     await Promise.race([
-      Promise.all(sends),
+      Promise.all(sends).then(() => (answered = true)),
       new Promise<void>((resolve) => (timer = deps.setTimer(resolve, REPLAY_HOLD_MS))),
     ]);
     deps.clearTimer(timer);
+    if (!answered) cutOff.abort();
   };
 
   /**
@@ -418,7 +451,9 @@ export function createOutbox(deps: OutboxDeps) {
           sendLater(batch, RETRY_DELAYS_MS[0]);
         }
       }
-      for (const batch of held) if (batch.inFlight !== null) deps.store.save(stored(batch));
+      for (const batch of held) {
+        if (batch.inFlight !== null && deps.store.save(stored(batch))) batch.saved = true;
+      }
     },
 
     replaySaved,
@@ -448,6 +483,7 @@ const StoredBatchSchema = z.object({
   sent: z.boolean(),
   notBefore: z.number().default(0),
   attempt: z.number().int().min(0).max(1000).default(0),
+  sendId: z.string().max(64).default(""),
 });
 
 /**
@@ -496,6 +532,15 @@ export function createBatchStore(storage: () => Storage): BatchStore {
         return true;
       } catch {
         return false;
+      }
+    },
+    get(id) {
+      try {
+        const key = keyOf(id);
+        const text = storage().getItem(key);
+        return text === null ? null : parse(key, text);
+      } catch {
+        return null;
       }
     },
     remove(id) {
