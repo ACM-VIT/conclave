@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   SINGLE_LABEL_SIZE,
   SINGLE_LABEL_WIDTH,
@@ -7,13 +7,12 @@ import {
 import {
   fitSingleLabel,
   fitWheelLabels,
-  graphemes,
-  splitGraphemesFallback,
   isLabelFlipped,
   wheelLabelGeometry,
   type LabelGeometry,
   type MeasureText,
 } from "../../../packages/apps-sdk/src/apps/wheel/web/labelFit";
+import { graphemes, splitGraphemesFallback } from "../../../packages/apps-sdk/src/apps/wheel/web/graphemes";
 
 const WIDE = new Set(["M", "W", "H", "m", "w"]);
 const measure: MeasureText = (text) =>
@@ -95,6 +94,14 @@ describe("wheel label fitting", () => {
     expect(fitSingleLabel("Ada", 120, measure)).toBeNull();
   });
 
+  it("trims trailing whitespace by whole clusters, never from inside one", () => {
+    const fitsCodePoints = (count: number) => (text: string) =>
+      (Array.from(text).length * SINGLE_LABEL_WIDTH) / (SINGLE_LABEL_SIZE * (count + 0.5));
+    expect(fitSingleLabel("AAAAA\u0600 BBBBBBBBBBB", 600, fitsCodePoints(8))).toBe("AAAAA\u0600 \u2026");
+    expect(fitSingleLabel("AAAAA BBBBBBBBBBB", 600, fitsCodePoints(7))).toBe("AAAAA\u2026");
+    expect(fitSingleLabel(" \u0600 BBBBBBBBBBB", 600, fitsCodePoints(3))).toBeNull();
+  });
+
   it("keeps 64 names readable at the smallest allowed size, or hides them when nothing fits", () => {
     const names = Array.from({ length: 64 }, (_, i) => `Person ${i + 1}`);
     const desktop = fitWheelLabels(names, geometry(64), measure);
@@ -148,6 +155,81 @@ describe("wheel label emoji", () => {
     for (const sample of samples) {
       const expected = Array.from(segmenter.segment(sample), (part) => part.segment);
       expect(splitGraphemesFallback(sample)).toEqual(expected);
+    }
+  });
+});
+
+describe("wheel label scripts without a grapheme segmenter", () => {
+  const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+  const segmented = (text: string): string[] => Array.from(segmenter.segment(text), (part) => part.segment);
+
+  it("keeps an Indic conjunct whole when it shortens a name", () => {
+    expect(splitGraphemesFallback("AAAAAलक्ष्मीनारायण").slice(0, 7)).toEqual(["A", "A", "A", "A", "A", "ल", "क्ष्मी"]);
+  });
+
+  it("keeps the stacked consonants that Unicode 17 joins in Myanmar, Khmer, Balinese and Javanese", () => {
+    expect(splitGraphemesFallback("သတ္တ")).toEqual(["သ", "တ္တ"]);
+    expect(splitGraphemesFallback("ခန္ဓာ")).toEqual(["ခ", "န္ဓ", "ာ"]);
+    expect(splitGraphemesFallback("ខ្មែរ")).toEqual(["ខ្មែ", "រ"]);
+    expect(splitGraphemesFallback("ᬅᬓ᭄ᬱᬭ")).toEqual(["ᬅ", "ᬓ᭄ᬱ", "ᬭ"]);
+    expect(splitGraphemesFallback("ꦲꦏ꧀ꦱꦫ")).toEqual(["ꦲ", "ꦏ꧀ꦱ", "ꦫ"]);
+  });
+
+  it("keeps listed linkers attached when the browser's character data predates their script", () => {
+    const test = RegExp.prototype.test;
+    const newerThanBrowser = /^[\u{11380}-\u{113FF}\u{11F00}-\u{11F5F}]$/u;
+    const olderData = vi.spyOn(RegExp.prototype, "test").mockImplementation(function (this: RegExp, input: string) {
+      return this.source.includes("\\p{") && test.call(newerThanBrowser, input) ? false : test.call(this, input);
+    });
+    let split: string[][];
+    try {
+      split = [
+        "AA\u{11392}\u{113D0}\u{113A5}\u{11392}",
+        "AA\u{11F12}\u{11F42}\u{11F13}\u{11F12}",
+        "\u{11392}\u{113B8}\u{113D0}\u{113A5}",
+      ].map(splitGraphemesFallback);
+    } finally {
+      olderData.mockRestore();
+    }
+    expect(split).toEqual([
+      ["A", "A", "\u{11392}\u{113D0}\u{113A5}", "\u{11392}"],
+      ["A", "A", "\u{11F12}\u{11F42}\u{11F13}", "\u{11F12}"],
+      ["\u{11392}\u{113B8}\u{113D0}\u{113A5}"],
+    ]);
+  });
+
+  it("splits names the way the browser segmenter does, script by script", () => {
+    const names = [
+      "AAAAAलक्ष्मीनारायण लक्ष्मीनारायण",
+      "क्षत्रिय श्रीमती हिन्दी स्त्री पृथ्वी अर्जुन",
+      "ज़्यादा द्\u200Dवार क्\u200Cष",
+      "ক্ষমা বাংলা রবীন্দ্রনাথ",
+      "ગુજરાતી લક્ષ્મી",
+      "ਪੰਜਾਬੀ ਸ੍ਰੀ",
+      "ଓଡ଼ିଆ ଲକ୍ଷ୍ମୀ",
+      "తెలుగు లక్ష్మి",
+      "ಕನ್ನಡ ಲಕ್ಷ್ಮಿ",
+      "മലയാളം ലക്ഷ്മി അവന്\u200D",
+      "தமிழ் லக்ஷ்மி",
+      "ශ්\u200Dරී ලංකා",
+      "ภาษาไทย น้ำ ที่",
+      "ພາສາລາວ ນ້ຳ",
+      "မြန်မာ အောင်ဆန်းစုကြည်",
+      "བོད་སྐད",
+      "مَرْحَبًا محمد",
+      "שָׁלוֹם",
+      "Nguye\u0302\u0303n",
+      "ｶﾞｷﾞ 山田太郎",
+      "क्A क्ক क्ก",
+      "अ्ष का्ष क़्ष क््ष क\u200D्ष क्\uFE0Fष",
+      "ক\u09CD\u09BEষ ক\u09BE\u09CDষ ക\u0D57\u0D4Dഷ",
+      "\u{1F469}\u0E33\u200D\u{1F4BB} \u{1F469}\u200C\u200D\u{1F4BB}",
+      "\u{16D43}\u{16D63}\u{16D67}\u{16D50}",
+      "\u200F\u064E\u0645\u062D\u0645\u062F a\u00AD\u0301b x\u200B\u200Dy",
+      "\u0600\u0661\u0662 \u0D4E\u0D15\u0D4D\u0D37 line\r\nnext",
+    ];
+    for (const name of names) {
+      expect(splitGraphemesFallback(name)).toEqual(segmented(name));
     }
   });
 });
