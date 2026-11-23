@@ -1,6 +1,7 @@
 "use client";
 
 import { Component, Suspense, type ReactNode } from "react";
+import PanelNoticeSlot from "./PanelNoticeSlot";
 
 export function meetingPanelKey(
   panel: "chat" | "transcript",
@@ -52,6 +53,7 @@ export default class MeetingPanelBoundary extends Component<
             Close panel
           </button>
         </div>
+        <PanelNoticeSlot />
         <div role="alert" className="space-y-2 p-4 text-sm">
           <p>This panel couldn’t open.</p>
           <p>Reload this page when you’re ready to rejoin the call.</p>

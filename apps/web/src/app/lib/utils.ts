@@ -1,7 +1,12 @@
 import { resolveViewerUrl } from "../../lib/novnc-viewer";
 import { EMOJI_REACTIONS, type ReactionEmoji } from "./constants";
 import { isMediaCaptureTimeoutError } from "./media-capture-timeout";
-import type { MeetError, ReactionOption } from "./types";
+import type {
+  MeetError,
+  MeetMediaDevice,
+  MeetMediaDeviceCause,
+  ReactionOption,
+} from "./types";
 
 export const toError = (value: unknown): Error =>
   value instanceof Error ? value : new Error(String(value));
@@ -146,48 +151,193 @@ export function extractRoomCode(input: string): string {
   return sanitizeRoomCode(trimmed);
 }
 
+type MediaDevice = "camera" | "microphone";
+type MediaCauses = NonNullable<MeetError["causes"]>;
+type MediaFailureKind = Exclude<MeetMediaDeviceCause["kind"], "other">;
+export type MediaDeviceFailures = Partial<Record<MediaDevice, unknown>>;
+
+const MEDIA_ERROR_MESSAGES: Record<MediaFailureKind, Record<MeetMediaDevice, string>> = {
+  blocked: {
+    camera: "Camera is blocked",
+    microphone: "Microphone is blocked",
+    both: "Camera and microphone are blocked",
+  },
+  missing: {
+    camera: "No camera found",
+    microphone: "No microphone found",
+    both: "No camera or microphone found",
+  },
+  busy: {
+    camera: "Camera is in use",
+    microphone: "Microphone is in use",
+    both: "Camera and microphone are in use",
+  },
+  unresponsive: {
+    camera: "Camera didn’t respond",
+    microphone: "Microphone didn’t respond",
+    both: "Camera and microphone didn’t respond",
+  },
+};
+
+const MEDIA_ERROR_ADVICE: Record<MediaFailureKind, Record<MeetMediaDevice, string>> = {
+  blocked: {
+    camera: "allow camera access in your browser",
+    microphone: "allow microphone access in your browser",
+    both: "allow camera and microphone access in your browser",
+  },
+  missing: {
+    camera: "connect or select a camera",
+    microphone: "connect or select a microphone",
+    both: "connect or select a camera and microphone",
+  },
+  busy: {
+    camera: "close other apps that are using your camera",
+    microphone: "close other apps that are using your microphone",
+    both: "close other apps that are using your camera and microphone",
+  },
+  unresponsive: {
+    camera: "check that your camera isn’t in use by another app",
+    microphone: "check that your microphone isn’t in use by another app",
+    both: "check that your camera and microphone aren’t in use by another app",
+  },
+};
+
+const MEDIA_FAILURE_CODES: Record<MediaFailureKind, MeetError["code"]> = {
+  blocked: "PERMISSION_DENIED",
+  missing: "MEDIA_ERROR",
+  busy: "MEDIA_ERROR",
+  unresponsive: "MEDIA_ERROR",
+};
+
+const lowerFirst = (text: string) => text.charAt(0).toLowerCase() + text.slice(1);
+const upperFirst = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
+
+function classifyMediaFailure(error: unknown): MediaFailureKind | null {
+  const message = error instanceof Error ? error.message : String(error);
+  const name = error instanceof Error ? error.name : "";
+  const matches = (...names: string[]) =>
+    names.some((candidate) => name === candidate || message.includes(candidate));
+  if (matches("NotAllowedError", "PermissionDeniedError") || message.includes("Permission denied")) {
+    return "blocked";
+  }
+  if (matches("NotFoundError", "DevicesNotFoundError", "OverconstrainedError")) return "missing";
+  if (matches("NotReadableError", "TrackStartError")) return "busy";
+  if (isMediaCaptureTimeoutError(error)) return "unresponsive";
+  return null;
+}
+
+const isConnectionFailure = (error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("Connection") || message.includes("socket");
+};
+
+function mediaCause(
+  error: unknown,
+  device: MediaDevice,
+  defaultCode: MeetError["code"],
+): MeetMediaDeviceCause {
+  const kind = classifyMediaFailure(error);
+  if (kind) {
+    return { code: MEDIA_FAILURE_CODES[kind], kind, message: MEDIA_ERROR_MESSAGES[kind][device] };
+  }
+  if (isConnectionFailure(error)) {
+    return { code: "CONNECTION_FAILED", kind: "other", message: "Failed to connect to server" };
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return { code: defaultCode, kind: "other", message };
+}
+
+function mediaErrorFromCauses(causes: MediaCauses): MeetError | null {
+  const { camera, microphone } = causes;
+  if (camera && microphone) {
+    const sharedKind = camera.kind === microphone.kind && camera.kind !== "other" ? camera.kind : null;
+    return {
+      code: [camera.code, microphone.code].includes("PERMISSION_DENIED")
+        ? "PERMISSION_DENIED"
+        : camera.code,
+      message: sharedKind
+        ? MEDIA_ERROR_MESSAGES[sharedKind].both
+        : `${microphone.message} and ${lowerFirst(camera.message)}`,
+      recoverable: true,
+      device: "both",
+      causes,
+    };
+  }
+  const device: MediaDevice | null = camera ? "camera" : microphone ? "microphone" : null;
+  const cause = camera ?? microphone;
+  if (!device || !cause) return null;
+  return { code: cause.code, message: cause.message, recoverable: true, device, causes };
+}
+
+export function createMediaDeviceError(
+  failures: MediaDeviceFailures,
+  defaultCode: MeetError["code"] = "MEDIA_ERROR",
+): MeetError | null {
+  const causes: MediaCauses = {};
+  for (const device of ["microphone", "camera"] as const) {
+    if (device in failures) causes[device] = mediaCause(failures[device], device, defaultCode);
+  }
+  return mediaErrorFromCauses(causes);
+}
+
+export function mediaErrorAdvice(error: MeetError): string | null {
+  const camera = error.causes?.camera;
+  const microphone = error.causes?.microphone;
+  const adviceFor = (device: MeetMediaDevice, cause: MeetMediaDeviceCause | undefined) =>
+    cause && cause.kind !== "other" ? MEDIA_ERROR_ADVICE[cause.kind][device] : null;
+  const parts =
+    camera && microphone && camera.kind === microphone.kind
+      ? [adviceFor("both", camera)]
+      : [adviceFor("microphone", microphone), adviceFor("camera", camera)];
+  const sentence = parts.filter((part): part is string => Boolean(part)).join(", and ");
+  return sentence ? `${upperFirst(sentence)}, then try again.` : null;
+}
+
 export function createMeetError(
   error: unknown,
-  defaultCode: MeetError["code"] = "UNKNOWN"
+  defaultCode: MeetError["code"] = "UNKNOWN",
+  device?: MeetMediaDevice,
 ): MeetError {
+  if (device) {
+    const devices: MediaDevice[] = device === "both" ? ["microphone", "camera"] : [device];
+    const deviceError = createMediaDeviceError(
+      Object.fromEntries(devices.map((target) => [target, error])),
+      defaultCode,
+    );
+    if (deviceError) return deviceError;
+  }
+  const kind = classifyMediaFailure(error);
+  if (kind && kind !== "busy") {
+    return { code: MEDIA_FAILURE_CODES[kind], message: MEDIA_ERROR_MESSAGES[kind].both, recoverable: true };
+  }
+  if (isConnectionFailure(error)) {
+    return { code: "CONNECTION_FAILED", message: "Failed to connect to server", recoverable: true };
+  }
   const message = error instanceof Error ? error.message : String(error);
-
-  if (
-    message.includes("Permission denied") ||
-    message.includes("NotAllowedError")
-  ) {
-    return {
-      code: "PERMISSION_DENIED",
-      message: "Camera/microphone permission denied",
-      recoverable: true,
-    };
-  }
-  if (
-    message.includes("NotFoundError") ||
-    message.includes("DevicesNotFoundError")
-  ) {
-    return {
-      code: "MEDIA_ERROR",
-      message: "Camera or microphone not found",
-      recoverable: true,
-    };
-  }
-  if (isMediaCaptureTimeoutError(error)) {
-    return {
-      code: "MEDIA_ERROR",
-      message: "Camera or microphone did not respond",
-      recoverable: true,
-    };
-  }
-  if (message.includes("Connection") || message.includes("socket")) {
-    return {
-      code: "CONNECTION_FAILED",
-      message: "Failed to connect to server",
-      recoverable: true,
-    };
-  }
-
   return { code: defaultCode, message, recoverable: false };
+}
+
+export function clearMediaDeviceError(
+  current: MeetError | null,
+  recovered: MediaDevice,
+): MeetError | null {
+  if (!current?.device) return current;
+  if (!current.causes) return current.device === recovered ? null : current;
+  if (!current.causes[recovered]) return current;
+  const { [recovered]: _cleared, ...remaining } = current.causes;
+  return mediaErrorFromCauses(remaining);
+}
+
+export function mergeMediaDeviceError(
+  current: MeetError | null,
+  next: MeetError,
+): MeetError {
+  if (!current?.causes || !next.causes) return next;
+  const covered = (Object.keys(current.causes) as MediaDevice[]).every(
+    (device) => next.causes?.[device],
+  );
+  if (covered) return next;
+  return mediaErrorFromCauses({ ...current.causes, ...next.causes }) ?? next;
 }
 
 export function generateSessionId(): string {

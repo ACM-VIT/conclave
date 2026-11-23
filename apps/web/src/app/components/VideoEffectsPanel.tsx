@@ -41,6 +41,7 @@ import {
   type CustomVideoBackground,
   type CustomVideoBackgroundSummary,
 } from "../lib/video-effects-custom-backgrounds";
+import PanelNoticeSlot from "./PanelNoticeSlot";
 
 type EffectsTab = "backgrounds" | "filters" | "appearance";
 type BackgroundEffectGroup = [
@@ -1183,6 +1184,7 @@ export default function VideoEffectsPanel({
           <X size={18} strokeWidth={ICON_STROKE} />
         </button>
       </header>
+      <PanelNoticeSlot />
 
       <div className="border-b border-white/[0.14] px-4 py-4">
         <VideoEffectsPreview
