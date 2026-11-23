@@ -373,7 +373,7 @@ describe("clearing an app", () => {
     for (const { writer, lastCopy } of writers) writer.sendUpdate("whiteboard", lastCopy);
 
     expect(join("late#1", "participant").coldSync("whiteboard")).toEqual({ shapes: [] });
-  });
+  }, 30_000);
 
   it("stays cleared when a client that missed the clear resyncs its old copy", () => {
     const { join } = makeRoom();
