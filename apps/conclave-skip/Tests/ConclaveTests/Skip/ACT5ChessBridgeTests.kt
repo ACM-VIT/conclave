@@ -102,7 +102,7 @@ class ACT5ChessBridgeTests {
         assertEquals(ChessResultReason.checkmate, mate.scene.chess!!.result.reason)
         assertEquals(ChessSide.black, mate.scene.chess!!.result.winner)
         assertEquals(ChessResultReason.fiftyMove, ChessSceneBuilder.parseReason("fifty-move"))
-        val shell = MeetingShellPresenter()
+        val shell = MeetingShellPresenter(defaults = IsolatedDefaults.make())
         val session = ActivitySession(shell = shell, stage = StagePresenter(shell = shell))
         assertEquals(ChessFixtureState.reconnecting, ChessFixtures.apply(ChessFixtureState.reconnecting.rawValue, session, ActivityFixtureOwner()))
         assertTrue(session.games.scene.chess!!.isReconnecting)

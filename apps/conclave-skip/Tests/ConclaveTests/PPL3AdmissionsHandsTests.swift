@@ -16,7 +16,7 @@ struct PPL3AdmissionsHandsTests {
     }
 
     private func makePeople() -> PeoplePresenter {
-        let shell = MeetingShellPresenter()
+        let shell = MeetingShellPresenter(defaults: IsolatedDefaults.make())
         return PeoplePresenter(shell: shell, stage: StagePresenter(shell: shell))
     }
 
@@ -396,7 +396,7 @@ struct PPL3AdmissionsHandsTests {
     }
 
     @Test func serverRaiseTimesOrderTheCoreQueue() async {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.roomId = "room-a"
@@ -416,7 +416,7 @@ struct PPL3AdmissionsHandsTests {
     }
 
     @Test func knockBannerActionsGoThroughPeopleOnTheStageOrigin() throws {
-        let shell = MeetingShellPresenter()
+        let shell = MeetingShellPresenter(defaults: IsolatedDefaults.make())
         let stage = StagePresenter(shell: shell)
         let people = PeoplePresenter(shell: shell, stage: stage)
         let log = record(people)
@@ -452,7 +452,7 @@ struct PPL3AdmissionsHandsTests {
     }
 
     @Test func aBannerAheadOfPeopleStillAdmitsOnTheLedger() {
-        let shell = MeetingShellPresenter()
+        let shell = MeetingShellPresenter(defaults: IsolatedDefaults.make())
         let stage = StagePresenter(shell: shell)
         let people = PeoplePresenter(shell: shell, stage: stage)
         let log = record(people)

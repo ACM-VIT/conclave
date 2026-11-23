@@ -8,7 +8,7 @@ struct STG8AttendeeViewerTests {
     static let longSleep: (Double) async -> Void = { _ in try? await Task.sleep(nanoseconds: 60_000_000_000) }
 
     private func presenter() -> StagePresenter {
-        let stage = StagePresenter(shell: MeetingShellPresenter())
+        let stage = StagePresenter(shell: MeetingShellPresenter(defaults: IsolatedDefaults.make()))
         stage.sleep = STG8AttendeeViewerTests.longSleep
         stage.captions.sleep = STG8AttendeeViewerTests.longSleep
         stage.shell.panels.onSnapshotChanged = { [weak stage] in stage?.panelSnapshotChanged() }

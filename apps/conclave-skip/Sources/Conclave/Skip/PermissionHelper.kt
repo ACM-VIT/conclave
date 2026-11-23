@@ -231,7 +231,7 @@ object PermissionHelper {
             apiLevel = Build.VERSION.SDK_INT,
             permissionGranted = hasPostNotificationsPermission(),
             appNotificationsEnabled = areAppNotificationsEnabled(),
-            asked = NotificationPreferences.permissionAsked(),
+            asked = NotificationPreferences.permissionAsked(defaults = skip.foundation.UserDefaults.standard),
             rationale = showsNotificationsRationale()
         ).rawValue
     }
@@ -316,7 +316,7 @@ object PermissionHelper {
                 suppressShareUntilElapsedMs =
                     SystemClock.elapsedRealtime() + NOTIFICATION_SHARE_SUPPRESSION_MS
 
-                if (permissions.isNotEmpty()) NotificationPreferences.setPermissionAsked()
+                if (permissions.isNotEmpty()) NotificationPreferences.setPermissionAsked(defaults = skip.foundation.UserDefaults.standard)
 
                 finishNotificationsPermission(
                     permissionGranted(

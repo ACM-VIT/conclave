@@ -13,7 +13,7 @@ import org.robolectric.annotation.Config
 class S6BVoicePlaybackTests {
     private fun item(id: String) = TtsQueueItem.make(messageId = id, userId = "speaker", displayName = "Speaker", text = id)
 
-    private fun queue(): TtsPlaybackQueue = TtsPlaybackQueue().apply {
+    private fun queue(): TtsPlaybackQueue = TtsPlaybackQueue(defaults = IsolatedDefaults.make()).apply {
         VoicePlaybackQueues.register(this)
         schedulesTimers = false
         preferences = { VoicePreferenceSnapshot.defaults }
