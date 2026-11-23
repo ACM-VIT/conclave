@@ -28,6 +28,7 @@ import MeetingOutcomeScreen from "./components/MeetingOutcomeScreen";
 import {
   clearRejoinIntent,
   readRejoinIntent,
+  reconnectEndedCall,
   saveRejoinIntent,
   type CallOutcome,
   type CallOutcomeKind,
@@ -2746,6 +2747,12 @@ export default function MeetsClient({
   useEffect(() => {
     leaveRoomCommandRef.current = leaveRoom;
   }, [leaveRoom]);
+
+  const reconnectPhase = reconnectRecoveryStatus?.phase;
+  useEffect(() => {
+    if (!reconnectEndedCall(reconnectPhase, connectionState, callJoinedAtRef.current !== null)) return;
+    leaveRoomCommandRef.current?.();
+  }, [connectionState, reconnectPhase]);
 
   const toggleBrowserAudio = useCallback(() => {
     if (browserAudioNeedsGesture) {
