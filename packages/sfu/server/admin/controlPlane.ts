@@ -707,7 +707,7 @@ export const applyRoomPolicyUpdate = (
     room.setLocked(update.locked);
     if (update.locked) {
       for (const userKey of room.userKeysById.values()) {
-        room.allowLockedUser(userKey);
+        room.keepAdmitted(userKey);
       }
     }
     changed.locked = update.locked;
@@ -1032,13 +1032,7 @@ export const kickClient = (
   // what is not a grant on the room: a scheduled invite, a recovery pass.
   const userKey = room.userKeysById.get(userId);
   if (userKey) {
-    room.revokeAllowedUser(userKey);
-    room.revokeLockedAllowedUser(userKey);
-    room.adminUserKeys.delete(userKey);
-    if (room.hostUserKey === userKey) {
-      room.hostUserKey = null;
-    }
-    room.revokeWebinarPromotion(userKey);
+    room.removeUser(userKey);
   }
   target.socket.emit("kicked", { reason, roomId: room.id });
   target.socket.disconnect(true);

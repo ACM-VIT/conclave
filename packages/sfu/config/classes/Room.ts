@@ -2840,13 +2840,26 @@ export class Room {
     this.lockedAllowedUsers.delete(userKey);
   }
 
+  removeUser(userKey: string) {
+    this.setReadmissionRequired(userKey, true);
+    this.allowedUsers.delete(userKey);
+    this.lockedAllowedUsers.delete(userKey);
+    this.adminUserKeys.delete(userKey);
+    if (this.hostUserKey === userKey) this.hostUserKey = null;
+    if (this.temporaryHostUserKey === userKey) this.temporaryHostUserKey = null;
+    this.webinarPromotedUserKeys.delete(userKey);
+  }
+
+  keepAdmitted(userKey: string) {
+    if (this.needsReadmission(userKey) || this.isBlocked(userKey)) return;
+    this.lockedAllowedUsers.add(userKey);
+  }
+
   // A block takes admission back as well. Unblocking alone does not return
   // it: a host lets the person in again.
   blockUser(userKey: string) {
-    this.setReadmissionRequired(userKey, true);
+    this.removeUser(userKey);
     this.blockedUsers.add(userKey);
-    this.allowedUsers.delete(userKey);
-    this.lockedAllowedUsers.delete(userKey);
     this.pendingClients.delete(userKey);
   }
 
@@ -2857,7 +2870,7 @@ export class Room {
   // Takes host rights away from everyone in the room with this user key, who
   // stay in it as admitted participants. Returns those who had them.
   demoteToParticipant(userKey: string): Client[] {
-    this.allowLockedUser(userKey);
+    this.keepAdmitted(userKey);
     this.adminUserKeys.delete(userKey);
     if (this.hostUserKey === userKey) this.hostUserKey = null;
     const demoted: Client[] = [];

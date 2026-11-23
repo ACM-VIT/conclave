@@ -750,12 +750,14 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           return;
         }
 
+        const needsReadmission = room.needsReadmission(userKey);
         const isReturningPrimaryHost =
           !isWebinarAttendeeJoin &&
+          !needsReadmission &&
           Boolean(room.hostUserKey) &&
           room.hostUserKey === userKey;
         const isPersistedAdminForExistingRoom =
-          !isWebinarAttendeeJoin && room.isAdminUserKey(userKey);
+          !isWebinarAttendeeJoin && !needsReadmission && room.isAdminUserKey(userKey);
         // The verified account the code belongs to hosts whenever it is
         // here, without knocking, whoever opened the room before it came.
         const isCodeOwner =
@@ -769,7 +771,6 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             isCodeOwner ||
             (hostRequested &&
               (clientPolicy.allowHostJoin || forcedHostJoin)));
-        const needsReadmission = room.needsReadmission(userKey);
         const provesMembership =
           !isWebinarAttendeeJoin &&
           !needsReadmission &&
