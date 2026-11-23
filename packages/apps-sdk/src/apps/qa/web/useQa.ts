@@ -208,7 +208,13 @@ export function useQa() {
   useEffect(() => {
     wishesRef.current = wishes;
   }, [wishes]);
-  const sendingRef = useRef(new Set<string>());
+  // Which session's request is on its way for each question. A loop belongs
+  // to the session it sends on: a new connection's clicks send on their own.
+  const sendingRef = useRef(new Map<string, unknown>());
+  const actRef = useRef(act);
+  useEffect(() => {
+    actRef.current = act;
+  }, [act]);
 
   /**
    * Flips the viewer's upvote on a question. Clicks are the viewer's intent
@@ -234,9 +240,9 @@ export function useQa() {
         current?.myUpvotes.has(id) ??
         false;
       wish({ value: !shown });
-      if (sendingRef.current.has(id)) return { ok: true };
+      if (sendingRef.current.get(id) === act) return { ok: true };
 
-      sendingRef.current.add(id);
+      sendingRef.current.set(id, act);
       try {
         // With nothing on its way, what was shown is what the server holds:
         // its last answer, or its view where no answer is waiting for one.
@@ -253,6 +259,9 @@ export function useQa() {
           };
           wish(flag);
           const result = await act("upvote", { id, value });
+          // The connection changed while this was on its way. What is wished
+          // now is the new session's, and a click there sends it there.
+          if (actRef.current !== act) return { ok: true };
           if (!result.ok) {
             wish(null);
             return { ok: false, error: describe(result, "upvote") };
@@ -285,7 +294,7 @@ export function useQa() {
           return { ok: true };
         }
       } finally {
-        sendingRef.current.delete(id);
+        if (sendingRef.current.get(id) === act) sendingRef.current.delete(id);
       }
     },
     [act],

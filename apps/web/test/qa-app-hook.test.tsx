@@ -431,3 +431,76 @@ it("lets a new connection's view decide an upvote answered on the old one", asyn
   expect(shownOnTheNewSocket).toBe(false);
   expect(nextClick.map((entry) => (entry.payload.input as { value: boolean }).value)).toEqual([true]);
 });
+
+it("sends a click made after a reconnect on the new connection, while the old one's request is still out", async () => {
+  // The upvote is on its way when the socket drops. It landed: the new
+  // connection's view shows it.
+  await click();
+  const next = new Map<string, Set<Listener>>();
+  const nextSent: Sent[] = [];
+  const nextSocket: AuthoritySocket = {
+    connected: true,
+    on: (event, listener) => {
+      next.set(event, (next.get(event) ?? new Set()).add(listener));
+    },
+    off: (event, listener) => {
+      next.get(event)?.delete(listener);
+    },
+    emit: (event, payload, ack) => {
+      nextSent.push({ event, payload: (payload ?? {}) as Record<string, unknown>, ack: ack as Sent["ack"] });
+    },
+  };
+  await act(async () =>
+    root.render(
+      <AuthorityProvider socket={nextSocket} joined>
+        <Probe />
+      </AuthorityProvider>,
+    ),
+  );
+  const nextLast = (event: string) => [...nextSent].reverse().find((entry) => entry.event === event)!;
+  await act(async () =>
+    nextLast(AUTHORITY_EVENTS.capabilities).ack!({
+      ok: true,
+      value: {
+        protocol: 1,
+        roomEpoch: "epoch",
+        serverNowMs: Date.now(),
+        apps: [{ instance: "qa.1", app: "qa", major: 1, surface: "panel" }],
+      },
+    }),
+  );
+  await act(async () => {
+    for (const listener of [...(next.get(AUTHORITY_EVENTS.frame) ?? [])]) {
+      listener({
+        kind: "replace",
+        subscription: nextLast(AUTHORITY_EVENTS.subscribe).payload.subscription,
+        generation: 1,
+        serverNowMs: Date.now(),
+        part: 0,
+        last: true,
+        revision: 1,
+        rows: [
+          question,
+          { bucket: "votes", key: "q1", value: { upvotes: 1 } },
+          { bucket: "myUpvotes", key: "q1", value: {} },
+        ],
+        grants: { actions: ["upvote"], needsIdentity: [], queries: [] },
+      });
+    }
+  });
+  const shownOnTheNewSocket = qa.questions[0].hasUpvoted;
+  // The viewer takes the vote back.
+  await act(async () => {
+    void qa.toggleUpvote("q1");
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  // The old connection's request ends without an answer.
+  await act(async () => vi.advanceTimersByTimeAsync(10_000));
+  const sentOnTheNewSocket = nextSent
+    .filter((entry) => entry.event === AUTHORITY_EVENTS.act)
+    .map((entry) => (entry.payload.input as { value: boolean }).value);
+
+  expect(shownOnTheNewSocket).toBe(true);
+  expect(sentOnTheNewSocket[0]).toBe(false);
+  expect(qa.questions[0].hasUpvoted).toBe(false);
+});
