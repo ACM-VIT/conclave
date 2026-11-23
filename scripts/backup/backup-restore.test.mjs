@@ -11,6 +11,9 @@ import { promisify } from "node:util";
 import { provideFlock } from "../test-support/host-tools.mjs";
 
 const run = promisify(execFile);
+// The restore refuses a state dir whose parent its group can write, so the
+// dirs the cases make get the same modes whatever the runner's umask.
+process.umask(0o022);
 // Every case has its own root dir, keys, state dir, docker stand-in, lock
 // files and fake SFUs, so they run side by side (see the end of the file).
 const queued = [];

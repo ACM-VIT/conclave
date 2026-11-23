@@ -157,8 +157,10 @@ def open_dir(dir_fd, name, shown):
 
 def open_parts(root_fd, parts, shown_root=""):
     """An fd for the directory the parts name below root_fd, every step a
-    real directory. FileNotFoundError when one is missing."""
-    fd = os.dup(root_fd)
+    real directory. FileNotFoundError when one is missing. It starts from a
+    fresh open of root_fd's directory, never a dup: listing a dup of a
+    directory fd comes back empty on Linux."""
+    fd = os.open(".", DIR_FLAGS, dir_fd=root_fd)
     walked = []
     try:
         for part in parts:

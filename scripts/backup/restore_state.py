@@ -400,7 +400,7 @@ class Swap:
 
     @staticmethod
     def aside_parent(root, parts):
-        fd = os.dup(root)
+        fd = os.open(".", DIR_FLAGS, dir_fd=root)
         try:
             for part in parts:
                 if at(fd, part, part) is None:
@@ -502,11 +502,13 @@ def apply_restore(state, archive, writes, sides, roots, stamp, owner, sqlite):
             if here.st_dev != parent.st_dev:
                 raise Refused(f"the state dir {state.given} is a file system of its own (a mount point), so the restore cannot build the restored tree beside it on the same one and rename it in; mount the volume one level up, or restore into a new dir and move it")
         staging_name = f".conclave-restore-{stamp}-{secrets.token_hex(4)}"
-        aside_name = f"{state.base}.pre-restore-{stamp}"
-        if len(aside_name.encode("utf-8")) > NAME_MAX:
-            aside_name = f".conclave-pre-restore-{stamp}"
-        if at(parent_fd, aside_name, aside_name) is not None:
-            raise Refused(f"{state.parent_real}/{aside_name} already exists; rerun the restore a second later")
+        aside_base = f"{state.base}.pre-restore-{stamp}"
+        if len(aside_base.encode("utf-8")) + 4 > NAME_MAX:
+            aside_base = f".conclave-pre-restore-{stamp}"
+        # Two restores in one second get their own dirs.
+        aside_name = next((name for name in [aside_base] + [f"{aside_base}-{n}" for n in range(2, 100)] if at(parent_fd, name, name) is None), None)
+        if aside_name is None:
+            raise Refused(f"{state.parent_real}/{aside_base} and 98 more like it already exist; clear them out")
         os.mkdir(staging_name, 0o700, dir_fd=parent_fd)
         staging_fd = open_dir(parent_fd, staging_name, staging_name)
         try:
