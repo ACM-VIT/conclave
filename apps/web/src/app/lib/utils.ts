@@ -212,6 +212,16 @@ export function parseCodeFieldPaste(text: string): CodeFieldPaste | null {
   return code ? { kind: "replace", code } : null;
 }
 
+export function insertIntoField(input: HTMLInputElement, text: string, maxLength: number) {
+  const start = input.selectionStart ?? input.value.length;
+  const end = input.selectionEnd ?? start;
+  const fits = text.slice(0, Math.max(0, maxLength - (input.value.length - (end - start))));
+  if (!fits) return;
+  if (document.execCommand("insertText", false, fits)) return;
+  input.setRangeText(fits, start, end, "end");
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
 type MediaDevice = "camera" | "microphone";
 type MediaCauses = NonNullable<MeetError["causes"]>;
 type MediaFailureKind = Exclude<MeetMediaDeviceCause["kind"], "other">;

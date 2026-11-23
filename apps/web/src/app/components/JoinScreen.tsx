@@ -38,6 +38,7 @@ import {
   generateRoomCode,
   ROOM_CODE_MAX_LENGTH,
   extractRoomCode,
+  insertIntoField,
   parseCodeFieldPaste,
   sanitizeInstitutionDisplayName,
   sanitizeRoomCodeInput,
@@ -1568,20 +1569,15 @@ function JoinScreen({
                       if (paste?.kind === "insert" && paste.text === text) return;
                       e.preventDefault();
                       if (paste?.kind === "replace") onCodeChange(paste.code);
-                      if (paste?.kind !== "insert") return;
-                      const input = e.currentTarget;
-                      input.setRangeText(
-                        paste.text,
-                        input.selectionStart ?? input.value.length,
-                        input.selectionEnd ?? input.value.length,
-                        "end",
-                      );
-                      input.dispatchEvent(new Event("input", { bubbles: true }));
+                      if (paste?.kind === "insert") {
+                        insertIntoField(e.currentTarget, paste.text, ROOM_CODE_MAX_LENGTH);
+                      }
                     }}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" && canJoin) joinMeeting();
                     }}
                     placeholder="Enter a code or link"
+                    maxLength={ROOM_CODE_MAX_LENGTH}
                     readOnly={isRoutedRoom}
                     autoFocus={isRoutedRoom}
                     className={`${FIELD} pr-12`}
