@@ -70,6 +70,7 @@ import AiModelSelect from "./AiModelSelect";
 import { useAiModels } from "../hooks/useAiModels";
 import RoomAiSettings from "./RoomAiSettings";
 import { configureRoomAiForFeature, type RoomAiController } from "../hooks/useRoomAi";
+import PanelNoticeSlot from "./PanelNoticeSlot";
 
 interface TranscriptPanelProps {
   roomAi?: RoomAiController;
@@ -1086,6 +1087,7 @@ export default function TranscriptPanel({
           </div>
         ) : null}
       </div>
+      <PanelNoticeSlot />
 
       {settingsOpen && roomAi ? (
         <div className="min-h-0 flex-1 overflow-y-auto">

@@ -21,6 +21,7 @@ import {
   type MeetViewMode,
   type MeetViewSettings,
 } from "../lib/meet-view";
+import PanelNoticeSlot from "./PanelNoticeSlot";
 
 interface MeetViewPanelProps {
   settings: MeetViewSettings;
@@ -156,6 +157,7 @@ export default function MeetViewPanel({
           <X size={18} strokeWidth={1.75} />
         </button>
       </header>
+      <PanelNoticeSlot />
 
       <div className="min-h-0 flex-1 overflow-y-auto pb-4 [scrollbar-width:thin] [scrollbar-color:rgba(250,250,250,0.24)_transparent]">
         <section className="px-4 py-4">

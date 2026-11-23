@@ -7,19 +7,59 @@ import React, {
   useState,
 } from "react";
 import type { WheelEntry, WheelSpin } from "../../core/doc/index";
-import { WHEEL_LABEL_INK, segmentColor } from "../palette";
+import {
+  HUB_RADIUS,
+  LABEL_PAD,
+  RIM_WIDTH,
+  SINGLE_LABEL_SIZE,
+  SINGLE_LABEL_Y,
+  VIEW_EXTENT,
+  VIEW_SIZE,
+  WHEEL_RADIUS,
+} from "../geometry";
+import {
+  fitSingleLabel,
+  fitWheelLabels,
+  isLabelFlipped,
+  labelFlipSignature,
+  wheelLabelGeometry,
+  type MeasureText,
+} from "../labelFit";
 import type { WheelSounds } from "../sounds";
 
-const WHEEL_RADIUS = 96;
-const LABEL_RADIUS = 87;
-const HUB_RADIUS = 24;
-const FLAPPER_PIVOT_Y = -102;
+const POINTER_ANGLE = 90;
+const POINTER_BASE = WHEEL_RADIUS + RIM_WIDTH + 3;
+const POINTER_TIP = WHEEL_RADIUS - 1.5;
+const VIEWBOX = `${-VIEW_EXTENT} ${-VIEW_EXTENT} ${VIEW_SIZE} ${VIEW_SIZE}`;
+const EMPTY_SEGMENT_COUNT = 8;
+
 const IDLE_DEG_PER_SEC = 3.6;
 const FLAPPER_STIFFNESS = 640;
 const FLAPPER_DAMPING = 16;
-const PULLBACK_DEG = 8;
-const PULLBACK_MS = 170;
 const MIN_VISIBLE_TAIL_MS = 1500;
+const REDUCED_TAIL_MS = 1100;
+
+const PROFILE_STEPS = 600;
+const WINDUP_MS = 150;
+const PUSH_MS = 240;
+const WINDUP_SPEED = 0.06;
+const DECAY_POWER = 2.5;
+const LABEL_FADE_FROM = 240;
+const LABEL_FADE_SPAN = 700;
+
+const HOLDING_STILL = Symbol("holding still");
+
+const COLOR = {
+  slices: ["#1F1F23", "#29292E"],
+  oddSeam: "#242428",
+  emptySlices: ["#1a1a1d", "#151518"],
+  ink: "rgba(250, 250, 250, 0.88)",
+  winner: "#F95F4A",
+  winnerInk: "#0a0a0b",
+  rim: "#18181b",
+  rimEdge: "rgba(250, 250, 250, 0.14)",
+  pointerEdge: "#0a0a0b",
+} as const;
 
 export type WheelStageProps = {
   entries: WheelEntry[];
@@ -31,14 +71,19 @@ export type WheelStageProps = {
   onRequestSpin: () => void;
   onSettled: (spin: WheelSpin, fresh: boolean) => void;
   onSpinningChange: (spinning: boolean) => void;
+  onPointerLabel?: (label: string | null) => void;
 };
 
 type ActiveAnimation = {
   spin: WheelSpin;
   anchor: number;
   startDeg: number;
+  restDeg: number;
   delta: number;
+  flipAt: number;
   launched: boolean;
+  reduced: boolean;
+  profile: Float64Array;
 };
 
 const mod360 = (value: number): number => ((value % 360) + 360) % 360;
@@ -50,57 +95,71 @@ const polar = (angleDeg: number, radius: number): readonly [number, number] => {
 
 const segmentPath = (index: number, count: number): string => {
   const sweep = 360 / count;
-  const a0 = sweep * index;
-  const a1 = sweep * (index + 1);
-  const [x0, y0] = polar(a0, WHEEL_RADIUS);
-  const [x1, y1] = polar(a1, WHEEL_RADIUS);
+  const [x0, y0] = polar(sweep * index, WHEEL_RADIUS);
+  const [x1, y1] = polar(sweep * (index + 1), WHEEL_RADIUS);
   const largeArc = sweep > 180 ? 1 : 0;
   return `M 0 0 L ${x0} ${y0} A ${WHEEL_RADIUS} ${WHEEL_RADIUS} 0 ${largeArc} 1 ${x1} ${y1} Z`;
 };
 
+const sliceFill = (index: number, count: number): string =>
+  count > 1 && count % 2 === 1 && index === count - 1
+    ? COLOR.oddSeam
+    : COLOR.slices[index % 2];
+
 const restingAngle = (spin: WheelSpin): number => {
   const sweep = 360 / spin.entries.length;
-  return mod360(-(spin.winnerIndex + spin.jitter) * sweep);
+  return mod360(POINTER_ANGLE - (spin.winnerIndex + spin.jitter) * sweep);
 };
 
-const spinCurve = (elapsedMs: number, durationMs: number, travelDeg: number): number => {
-  if (elapsedMs <= 0) return 0;
-  if (elapsedMs >= durationMs) return 1;
-  const pullbackFraction = PULLBACK_DEG / travelDeg;
-  if (elapsedMs < PULLBACK_MS) {
-    const p = elapsedMs / PULLBACK_MS;
-    const eased = 1 - Math.pow(1 - p, 3);
-    return -pullbackFraction * eased;
+const launchVelocity = (t: number, durationMs: number): number => {
+  if (t < WINDUP_MS) return -WINDUP_SPEED * Math.sin((Math.PI * t) / WINDUP_MS);
+  if (t < WINDUP_MS + PUSH_MS) {
+    const s = (t - WINDUP_MS) / PUSH_MS;
+    return s * s * (3 - 2 * s);
   }
-  const p = (elapsedMs - PULLBACK_MS) / (durationMs - PULLBACK_MS);
-  const eased = 1 - Math.pow(1 - p, 4);
-  return -pullbackFraction + (1 + pullbackFraction) * eased;
+  const coast = Math.max(1, durationMs - WINDUP_MS - PUSH_MS);
+  const s = Math.min(1, (t - WINDUP_MS - PUSH_MS) / coast);
+  return Math.pow(1 - s, DECAY_POWER);
 };
 
-const labelFontSize = (count: number): number => {
-  if (count <= 4) return 12.5;
-  if (count <= 8) return 11;
-  if (count <= 12) return 9.5;
-  if (count <= 20) return 8;
-  if (count <= 32) return 6.6;
-  if (count <= 48) return 5.4;
-  return 4.6;
+const buildProfile = (durationMs: number): Float64Array => {
+  const table = new Float64Array(PROFILE_STEPS + 1);
+  const step = durationMs / PROFILE_STEPS;
+  let travelled = 0;
+  for (let i = 0; i < PROFILE_STEPS; i += 1) {
+    travelled += launchVelocity((i + 0.5) * step, durationMs) * step;
+    table[i + 1] = travelled;
+  }
+  for (let i = 0; i <= PROFILE_STEPS; i += 1) table[i] /= travelled;
+  return table;
 };
 
-const labelMaxChars = (count: number): number => {
-  if (count <= 8) return 17;
-  if (count <= 16) return 14;
-  if (count <= 32) return 11;
-  return 9;
+const spinFraction = (animation: ActiveAnimation, elapsedMs: number): number => {
+  const duration = animation.spin.durationMs;
+  if (elapsedMs >= duration) return 1;
+  if (animation.reduced) {
+    const p = Math.max(0, (elapsedMs - (duration - REDUCED_TAIL_MS)) / REDUCED_TAIL_MS);
+    return 1 - Math.pow(1 - p, 3);
+  }
+  if (elapsedMs <= 0) return 0;
+  const position = (elapsedMs / duration) * PROFILE_STEPS;
+  const index = Math.floor(position);
+  const t = position - index;
+  const { profile } = animation;
+  return profile[index] + (profile[index + 1] - profile[index]) * t;
 };
 
-const truncateLabel = (label: string, count: number): string => {
-  const max = labelMaxChars(count);
-  return label.length > max ? `${label.slice(0, max - 1)}…` : label;
-};
+const pointerIndex = (rotation: number, count: number): number =>
+  Math.min(count - 1, Math.floor(mod360(POINTER_ANGLE - rotation) / (360 / count)));
 
-const EMPTY_SEGMENT_COUNT = 8;
-const EMPTY_SEGMENT_FILLS = ["#131316", "#0f0f11"];
+const fallbackMeasure: MeasureText = (text) => Array.from(text).length * 0.56;
+
+const canvasMeasure = (fontFamily: string): MeasureText => {
+  const context = document.createElement("canvas").getContext("2d");
+  if (!context) return fallbackMeasure;
+  context.font = `600 100px ${fontFamily}`;
+  return (text) => context.measureText(text).width / 100;
+};
 
 export function WheelStage({
   entries,
@@ -112,8 +171,11 @@ export function WheelStage({
   onRequestSpin,
   onSettled,
   onSpinningChange,
+  onPointerLabel,
 }: WheelStageProps) {
+  const svgRef = useRef<SVGSVGElement | null>(null);
   const wheelGroupRef = useRef<SVGGElement | null>(null);
+  const labelGroupRef = useRef<SVGGElement | null>(null);
   const flapperGroupRef = useRef<SVGGElement | null>(null);
 
   const rotationRef = useRef(0);
@@ -122,23 +184,58 @@ export function WheelStage({
   const flapperRef = useRef({ angle: 0, velocity: 0 });
   const segmentCountRef = useRef(0);
   const restingRef = useRef(false);
+  const speedRef = useRef(0);
+  const flipKeyRef = useRef("");
+  const pointerLabelRef = useRef<string | symbol | null>(null);
 
   const [displayedSpin, setDisplayedSpin] = useState<WheelSpin | null>(null);
-  const [hubHover, setHubHover] = useState(false);
-  const [hubFocus, setHubFocus] = useState(false);
+  const [flipRotation, setFlipRotation] = useState(0);
+  const [measure, setMeasure] = useState<MeasureText>(() => fallbackMeasure);
+  const [wheelPx, setWheelPx] = useState(0);
 
   const onSettledRef = useRef(onSettled);
   const onSpinningChangeRef = useRef(onSpinningChange);
+  const onPointerLabelRef = useRef(onPointerLabel);
   const soundsRef = useRef(sounds);
   const reducedMotionRef = useRef(reducedMotion);
   onSettledRef.current = onSettled;
   onSpinningChangeRef.current = onSpinningChange;
+  onPointerLabelRef.current = onPointerLabel;
   soundsRef.current = sounds;
   reducedMotionRef.current = reducedMotion;
 
   const displayedEntries = displayedSpin ? displayedSpin.entries : entries;
   const count = displayedEntries.length;
   segmentCountRef.current = count;
+  const displayedEntriesRef = useRef(displayedEntries);
+  displayedEntriesRef.current = displayedEntries;
+
+  useLayoutEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const updateScale = () => {
+      const box = svg.getBoundingClientRect();
+      setWheelPx(Math.max(0, Math.min(box.width, box.height)));
+    };
+    updateScale();
+    const observer = new ResizeObserver(updateScale);
+    observer.observe(svg);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const family = window.getComputedStyle(svg).fontFamily || "sans-serif";
+    setMeasure(() => canvasMeasure(family));
+    let cancelled = false;
+    void document.fonts?.ready.then(() => {
+      if (!cancelled) setMeasure(() => canvasMeasure(family));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const applyTransforms = useCallback(() => {
     const wheel = wheelGroupRef.current;
@@ -149,7 +246,7 @@ export function WheelStage({
     if (flapper) {
       flapper.setAttribute(
         "transform",
-        `rotate(${flapperRef.current.angle} 0 ${FLAPPER_PIVOT_Y})`
+        `rotate(${flapperRef.current.angle} 0 ${-POINTER_BASE})`
       );
     }
   }, []);
@@ -187,13 +284,18 @@ export function WheelStage({
     const startDeg = mod360(rotationRef.current);
     rotationRef.current = startDeg;
     restingRef.current = false;
-    const travel = mod360(restingAngle(spin) - startDeg) + spin.turns * 360;
+    const reduced = reducedMotionRef.current;
+    const restDeg = restingAngle(spin);
     animationRef.current = {
       spin,
       anchor,
       startDeg,
-      delta: travel,
+      restDeg,
+      delta: mod360(restDeg - startDeg) + (reduced ? 1 : spin.turns) * 360,
+      flipAt: reduced ? spin.durationMs - REDUCED_TAIL_MS : WINDUP_MS + PUSH_MS,
       launched: false,
+      reduced,
+      profile: buildProfile(spin.durationMs),
     };
     setDisplayedSpin(spin);
     onSpinningChangeRef.current(true);
@@ -206,24 +308,27 @@ export function WheelStage({
     const frame = (frameAt: number) => {
       const dt = Math.min(0.05, Math.max(0.001, (frameAt - lastFrameAt) / 1000));
       lastFrameAt = frameAt;
+      const frameNow = Date.now();
 
       const previousDeg = rotationRef.current;
       const animation = animationRef.current;
+      let flipReference = rotationRef.current;
+      let unwrappedDeg = previousDeg;
 
       if (animation) {
-        const elapsed = Date.now() - animation.anchor;
-        if (!animation.launched && elapsed >= PULLBACK_MS) {
+        const elapsed = frameNow - animation.anchor;
+        const launchAt = animation.reduced ? animation.flipAt : WINDUP_MS;
+        if (!animation.launched && elapsed >= launchAt) {
           animation.launched = true;
           soundsRef.current?.launch();
         }
-        const fraction = spinCurve(
-          elapsed,
-          animation.spin.durationMs,
-          animation.delta
-        );
-        rotationRef.current = animation.startDeg + animation.delta * fraction;
+        unwrappedDeg =
+          animation.startDeg + animation.delta * spinFraction(animation, elapsed);
+        rotationRef.current = unwrappedDeg;
+        flipReference = elapsed >= animation.flipAt ? animation.restDeg : animation.startDeg;
         if (elapsed >= animation.spin.durationMs) {
-          rotationRef.current = mod360(animation.startDeg + animation.delta);
+          rotationRef.current = animation.restDeg;
+          flipReference = animation.restDeg;
           restingRef.current = true;
           settledSpinIdsRef.current.add(animation.spin.spinId);
           const settled = animation.spin;
@@ -233,19 +338,56 @@ export function WheelStage({
           onSettledRef.current(settled, true);
         }
       } else if (!reducedMotionRef.current && !restingRef.current) {
-        rotationRef.current += IDLE_DEG_PER_SEC * dt;
-        if (rotationRef.current > 7200) {
-          rotationRef.current = mod360(rotationRef.current);
-        }
+        unwrappedDeg = previousDeg + IDLE_DEG_PER_SEC * dt;
+        rotationRef.current =
+          unwrappedDeg > 7200 ? mod360(unwrappedDeg) : unwrappedDeg;
+        flipReference = rotationRef.current;
       }
 
       const segments = segmentCountRef.current;
-      const moved = rotationRef.current - previousDeg;
+      const moved = unwrappedDeg - previousDeg;
+
+      if (segments > 0) {
+        const reference = segments === 1 ? rotationRef.current : flipReference;
+        const flipKey = labelFlipSignature(reference, segments);
+        if (flipKey !== flipKeyRef.current) {
+          flipKeyRef.current = flipKey;
+          setFlipRotation(reference);
+        }
+      }
+
+      speedRef.current += (Math.abs(moved) / dt - speedRef.current) * Math.min(1, dt * 12);
+      const labelGroup = labelGroupRef.current;
+      if (labelGroup) {
+        const fade = Math.min(
+          1,
+          Math.max(0, (speedRef.current - LABEL_FADE_FROM) / LABEL_FADE_SPAN)
+        );
+        labelGroup.setAttribute("opacity", (1 - 0.78 * fade).toFixed(3));
+      }
+
+      if (onPointerLabelRef.current && segments > 0) {
+        const holdingStill = Boolean(
+          animation?.reduced && frameNow - animation.anchor < animation.flipAt
+        );
+        const index =
+          !holdingStill && (animationRef.current || restingRef.current)
+            ? pointerIndex(rotationRef.current, segments)
+            : -1;
+        const label =
+          index >= 0 ? displayedEntriesRef.current[index]?.label ?? null : null;
+        const key = holdingStill ? HOLDING_STILL : label;
+        if (key !== pointerLabelRef.current) {
+          pointerLabelRef.current = key;
+          onPointerLabelRef.current(label);
+        }
+      }
+
       if (segments > 1 && moved > 0) {
         const sweep = 360 / segments;
         const crossings =
-          Math.floor(rotationRef.current / sweep) -
-          Math.floor(previousDeg / sweep);
+          Math.floor((unwrappedDeg - POINTER_ANGLE) / sweep) -
+          Math.floor((previousDeg - POINTER_ANGLE) / sweep);
         if (crossings > 0) {
           const speed = moved / dt;
           const intensity = Math.min(1, speed / 900);
@@ -276,21 +418,16 @@ export function WheelStage({
 
   const isSpinning = displayedSpin !== null;
   const canSpinNow = canSpin && !isSpinning && entries.length >= 2;
+  const hasHighlight = highlightIndex !== null;
 
-  const handleSpin = useCallback(() => {
-    if (!canSpinNow) return;
-    onRequestSpin();
-  }, [canSpinNow, onRequestSpin]);
-
-  const handleHubKeyDown = useCallback(
-    (event: React.KeyboardEvent<SVGGElement>) => {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        handleSpin();
-      }
-    },
-    [handleSpin]
-  );
+  const fitted = useMemo(() => {
+    if (count < 2) return null;
+    return fitWheelLabels(
+      displayedEntries.map((entry) => entry.label),
+      wheelLabelGeometry(count, wheelPx),
+      measure
+    );
+  }, [count, displayedEntries, measure, wheelPx]);
 
   const segments = useMemo(() => {
     if (count === 0) {
@@ -298,195 +435,120 @@ export function WheelStage({
         <path
           key={`empty-${index}`}
           d={segmentPath(index, EMPTY_SEGMENT_COUNT)}
-          fill={EMPTY_SEGMENT_FILLS[index % 2]}
-          stroke="#0b0b0b"
-          strokeWidth={1}
+          fill={COLOR.emptySlices[index % 2]}
         />
       ));
     }
-    if (count === 1) {
-      return (
-        <circle
-          r={WHEEL_RADIUS}
-          fill={segmentColor(0, 1)}
-          stroke="#0b0b0b"
-          strokeWidth={1}
-        />
-      );
-    }
-    const sweep = 360 / count;
-    return displayedEntries.map((entry, index) => {
-      const highlighted = highlightIndex === index;
-      const [dx, dy] = highlighted
-        ? polar(sweep * (index + 0.5), 3.5)
-        : ([0, 0] as const);
-      return (
-        <path
-          key={entry.id}
-          d={segmentPath(index, count)}
-          fill={segmentColor(index, count)}
-          stroke={highlighted ? "#fafafa" : "#0b0b0b"}
-          strokeWidth={highlighted ? 1.75 : 1}
-          transform={highlighted ? `translate(${dx} ${dy})` : undefined}
-          opacity={
-            highlightIndex !== null && !highlighted ? 0.45 : 1
-          }
-          style={{ transition: "opacity 200ms linear" }}
-        />
-      );
-    });
+    if (count === 1) return <circle r={WHEEL_RADIUS} fill={COLOR.slices[0]} />;
+    return displayedEntries.map((entry, index) => (
+      <path
+        key={entry.id}
+        d={segmentPath(index, count)}
+        fill={highlightIndex === index ? COLOR.winner : sliceFill(index, count)}
+        style={{ transition: "fill 120ms linear" }}
+      />
+    ));
   }, [displayedEntries, count, highlightIndex]);
 
   const labels = useMemo(() => {
-    if (count === 0) return null;
     if (count === 1) {
-      const entry = displayedEntries[0];
-      return (
+      const text = fitSingleLabel(displayedEntries[0].label, wheelPx, measure);
+      return text ? (
         <text
           x={0}
-          y={-((HUB_RADIUS + WHEEL_RADIUS) / 2)}
+          y={SINGLE_LABEL_Y}
+          transform={
+            isLabelFlipped(0, 1, flipRotation) ? `rotate(180 0 ${SINGLE_LABEL_Y})` : undefined
+          }
           textAnchor="middle"
-          dominantBaseline="middle"
-          fontSize={12.5}
+          dominantBaseline="central"
+          fontSize={SINGLE_LABEL_SIZE}
           fontWeight={600}
-          fill={WHEEL_LABEL_INK}
+          fill={COLOR.ink}
         >
-          {truncateLabel(entry.label, 1)}
+          {text}
         </text>
-      );
+      ) : null;
     }
+    if (!fitted) return null;
     const sweep = 360 / count;
-    const fontSize = labelFontSize(count);
     return displayedEntries.map((entry, index) => {
+      const text = fitted.labels[index]?.text;
+      if (!text) return null;
       const mid = sweep * (index + 0.5);
-      const [x, y] = polar(mid, LABEL_RADIUS);
-      const dimmed = highlightIndex !== null && highlightIndex !== index;
+      const [x, y] = polar(mid, WHEEL_RADIUS - LABEL_PAD);
+      const flipped = isLabelFlipped(index, count, flipRotation);
+      const highlighted = highlightIndex === index;
       return (
         <text
           key={entry.id}
           x={x}
           y={y}
-          transform={`rotate(${mid - 90} ${x} ${y})`}
-          textAnchor="end"
-          dominantBaseline="middle"
-          fontSize={fontSize}
+          transform={`rotate(${flipped ? mid + 90 : mid - 90} ${x} ${y})`}
+          textAnchor={flipped ? "start" : "end"}
+          dominantBaseline="central"
+          fontSize={fitted.fontSize}
           fontWeight={600}
-          fill={WHEEL_LABEL_INK}
-          opacity={dimmed ? 0.4 : 1}
+          fill={highlighted ? COLOR.winnerInk : COLOR.ink}
+          opacity={hasHighlight && !highlighted ? 0.4 : 1}
         >
-          {truncateLabel(entry.label, count)}
+          {text}
         </text>
       );
     });
-  }, [displayedEntries, count, highlightIndex]);
-
-  const hubActive = canSpinNow && (hubHover || hubFocus);
-  const hubFill = isSpinning
-    ? "#131316"
-    : canSpinNow
-      ? hubActive
-        ? "#ff7059"
-        : "#f95f4a"
-      : "#131316";
-  const hubStroke = isSpinning
-    ? "rgba(249, 95, 74, 0.5)"
-    : canSpinNow
-      ? "rgba(255, 255, 255, 0.22)"
-      : "rgba(255, 255, 255, 0.14)";
-  const hubTextFill = canSpinNow || isSpinning ? "#ffffff" : "rgba(250, 250, 250, 0.3)";
+  }, [displayedEntries, count, fitted, flipRotation, highlightIndex, hasHighlight, measure, wheelPx]);
 
   return (
     <div className="flex h-full w-full items-center justify-center p-4">
       <svg
-        viewBox="-114 -120 228 234"
+        ref={svgRef}
+        viewBox={VIEWBOX}
         className="h-full max-h-full w-full max-w-full"
         style={{ aspectRatio: "1 / 1" }}
         role="img"
         aria-label={
           count === 0
-            ? "Empty wheel. Add names to spin."
+            ? "Empty wheel"
             : `Wheel with ${count} name${count === 1 ? "" : "s"}`
         }
       >
         <circle
-          r={WHEEL_RADIUS + 5}
+          r={WHEEL_RADIUS + RIM_WIDTH / 2}
           fill="none"
-          stroke="rgba(255, 255, 255, 0.12)"
-          strokeWidth={3}
+          stroke={COLOR.rim}
+          strokeWidth={RIM_WIDTH}
         />
         <circle
-          r={WHEEL_RADIUS + 1.5}
+          r={WHEEL_RADIUS + RIM_WIDTH}
           fill="none"
-          stroke="rgba(255, 255, 255, 0.05)"
-          strokeWidth={1}
+          stroke={COLOR.rimEdge}
+          strokeWidth={0.75}
         />
 
         <g ref={wheelGroupRef}>
           {segments}
-          {labels}
+          <g ref={labelGroupRef}>{labels}</g>
         </g>
 
-        <g
-          role="button"
-          aria-label={canSpinNow ? "Spin the wheel" : "Spin unavailable"}
-          aria-disabled={!canSpinNow}
-          tabIndex={canSpinNow ? 0 : -1}
+        <circle
+          r={HUB_RADIUS}
+          fill={COLOR.rim}
+          stroke={COLOR.rimEdge}
+          strokeWidth={0.75}
           className={canSpinNow ? "cursor-pointer" : undefined}
-          onClick={handleSpin}
-          onKeyDown={handleHubKeyDown}
-          onMouseEnter={() => setHubHover(true)}
-          onMouseLeave={() => setHubHover(false)}
-          onFocus={() => setHubFocus(true)}
-          onBlur={() => setHubFocus(false)}
-          style={{
-            transform: hubActive ? "scale(1.05)" : "scale(1)",
-            transition: "transform 120ms ease-out",
-            transformBox: "fill-box",
-            transformOrigin: "center",
-            outline: "none",
-          }}
-        >
-          <circle r={HUB_RADIUS + 3} fill="#0b0b0b" />
-          <circle
-            r={HUB_RADIUS}
-            fill={hubFill}
-            stroke={hubStroke}
-            strokeWidth={1.5}
-            style={{ transition: "fill 150ms linear, stroke 150ms linear" }}
-          />
-          <text
-            textAnchor="middle"
-            dominantBaseline="middle"
-            fontSize={7.5}
-            fontWeight={700}
-            letterSpacing={2}
-            fill={hubTextFill}
-            style={{ userSelect: "none" }}
-          >
-            {isSpinning ? "•••" : "SPIN"}
-          </text>
-        </g>
+          onClick={canSpinNow ? onRequestSpin : undefined}
+        />
 
-        <g ref={flapperGroupRef}>
-          <path
-            d={`M 0 ${FLAPPER_PIVOT_Y - 7}
-                C 7 ${FLAPPER_PIVOT_Y - 7} 10 ${FLAPPER_PIVOT_Y - 2} 10 ${FLAPPER_PIVOT_Y + 1}
-                C 10 ${FLAPPER_PIVOT_Y + 7} 4 ${FLAPPER_PIVOT_Y + 14} 0 ${FLAPPER_PIVOT_Y + 25}
-                C -4 ${FLAPPER_PIVOT_Y + 14} -10 ${FLAPPER_PIVOT_Y + 7} -10 ${FLAPPER_PIVOT_Y + 1}
-                C -10 ${FLAPPER_PIVOT_Y - 2} -7 ${FLAPPER_PIVOT_Y - 7} 0 ${FLAPPER_PIVOT_Y - 7}
-                Z`}
-            fill="#f95f4a"
-            stroke="#0b0b0b"
-            strokeWidth={1.5}
-          />
-          <circle
-            cx={0}
-            cy={FLAPPER_PIVOT_Y}
-            r={3}
-            fill="#0b0b0b"
-            stroke="rgba(255, 255, 255, 0.4)"
-            strokeWidth={1}
-          />
+        <g transform={`rotate(${POINTER_ANGLE})`}>
+          <g ref={flapperGroupRef}>
+            <path
+              d={`M -6 ${-POINTER_BASE} L 6 ${-POINTER_BASE} L 1.1 ${-POINTER_TIP - 1.9} Q 0 ${-POINTER_TIP} -1.1 ${-POINTER_TIP - 1.9} Z`}
+              fill={COLOR.winner}
+              stroke={COLOR.pointerEdge}
+              strokeWidth={1.5}
+              strokeLinejoin="round"
+            />
+          </g>
         </g>
       </svg>
     </div>

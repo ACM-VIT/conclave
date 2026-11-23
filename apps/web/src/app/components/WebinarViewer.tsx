@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { color, font } from "@conclave/ui-tokens";
 import type { WebinarQaEntry } from "../lib/types";
+import PanelNoticeSlot from "./PanelNoticeSlot";
 
 const ICON_STROKE = 1.75;
 const CHROME_IDLE_HIDE_MS = 3_500;
@@ -366,6 +367,7 @@ export function WebinarQaPanel({
           <X size={18} strokeWidth={ICON_STROKE} />
         </button>
       </header>
+      <PanelNoticeSlot />
 
       <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-3.5">
         {orderedEntries.length === 0 ? (

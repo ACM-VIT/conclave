@@ -41,19 +41,18 @@ internal fun ChatPanel(
     val snackbars = remember { SnackbarHostState() }
     val sidePane = variant == InCallPageVariant.SidePane
     val copiedText = conclaveString("chat_copied")
-    LaunchedEffect(request.presentationID) {
-        val opened = System.currentTimeMillis()
-        presenter.panelDidOpen(ChatPresenter.destination(request.destination), request.targetId)
-        ChatDiagnostics.counters?.recordOpenLatency((System.currentTimeMillis() - opened).toDouble())
+    DisposableEffect(request.presentationID) {
+        val appearance = panels.panelDidAppear(panels.snapshot.session, request.presentationID)
+        onDispose { panels.panelDidDisappear(appearance) }
     }
-    DisposableEffect(presenter) {
-        onDispose { presenter.panelDidClose() }
+    LaunchedEffect(request.presentationID) {
+        presenter.route(ChatPresenter.destination(request.destination), request.targetId)
     }
 
     val destination = panels.destinationRequest
     LaunchedEffect(destination?.sequence) {
         val latest = panels.latestDestination(request.presentationID) ?: return@LaunchedEffect
-        presenter.panelDidOpen(ChatPresenter.destination(latest.destination), latest.targetId)
+        presenter.route(ChatPresenter.destination(latest.destination), latest.targetId)
     }
     LaunchedEffect(actions.copiedRequest) {
         if (actions.copiedRequest > 0) snackbars.showSnackbar(copiedText)
