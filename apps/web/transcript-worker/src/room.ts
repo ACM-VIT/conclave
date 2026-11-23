@@ -1765,7 +1765,8 @@ export class TranscriptRoom {
 
   /**
    * Saves the drained lines still on screen, unless a final already landed,
-   * in one snapshot write, and only then lets the drain go.
+   * and lets the drain go at once; the one snapshot write that keeps those
+   * lines finishes on its own, so a slow write never holds the old socket.
    */
   private async finishProviderDrain(drain: ProviderDrain): Promise<void> {
     if (this.providerDrains.get(drain.epoch) !== drain) return;
@@ -1774,11 +1775,11 @@ export class TranscriptRoom {
       if (this.hasFinalSegment(segment.itemId)) continue;
       saved = this.recordFinalSegment(segment, "") || saved;
     }
+    this.discardProviderDrain(drain);
     if (saved) {
       await this.persist();
       this.scheduleMinutes();
     }
-    this.discardProviderDrain(drain);
   }
 
   /**

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { TRANSCRIPTION_PROVIDER_DRAIN_MS } from "../transcript-worker/src/constants";
 import { TranscriptRoom } from "../transcript-worker/src/room";
 import type { Env, Viewer } from "../transcript-worker/src/types";
 
@@ -69,11 +70,24 @@ async function fixture(transcriptModel: string, env: Partial<Env> = {}) {
     CONCLAVE_AI_SETTINGS: JSON.stringify({ transcription: { model: transcriptModel } }),
   });
   const snapshots: { segments: { text: string }[] }[] = [];
+  let heldWrites: Promise<void> | null = null;
+  /** Holds every snapshot write until the returned release is called, as a slow storage write would. */
+  const holdWrites = () => {
+    let release = () => {};
+    heldWrites = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return () => {
+      heldWrites = null;
+      release();
+    };
+  };
   const room = new TranscriptRoom(
     {
       storage: {
         get: async () => undefined,
         put: async (_key: string, value: { segments: { text: string }[] }) => {
+          if (heldWrites) await heldWrites;
           snapshots.push(structuredClone(value));
         },
         delete: async () => true,
@@ -165,6 +179,7 @@ async function fixture(transcriptModel: string, env: Partial<Env> = {}) {
     snapshotCount,
     broadcastPlaces,
     viewerSnapshot,
+    holdWrites,
   };
 }
 
@@ -678,6 +693,25 @@ describe("one utterance the provider cannot transcribe fails only that utterance
 });
 
 describe("drain lifetime", () => {
+  it("closes the old socket at the deadline even while the snapshot write is slow", async () => {
+    vi.useFakeTimers();
+    const { sockets, start, switchTo, speak, commit, savedTexts, holdWrites } = await fixture(OPENAI);
+    await start("en");
+    const before = sockets[0];
+    await speak();
+    await commit();
+    before.emit(openAiCommitted("item_1"));
+    before.emit(openAiDelta("item_1", "Friday"));
+    await settle();
+
+    await switchTo("hi");
+    const release = holdWrites();
+    await vi.advanceTimersByTimeAsync(TRANSCRIPTION_PROVIDER_DRAIN_MS + 100);
+    expect(before.closed).toBe(true);
+    expect(savedTexts()).toEqual(["Friday"]);
+    release();
+    await settle();
+  });
 
   it("Sarvam: a replaced provider that never answers closes at the deadline, not at the quiet window", async () => {
     vi.useFakeTimers();
