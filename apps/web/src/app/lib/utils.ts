@@ -141,9 +141,9 @@ export function extractRoomCode(input: string): string {
   return sanitizeRoomCode(trimmed);
 }
 
-const BARE_LINK_HOST = String.raw`(?:localhost|\[[0-9a-f:.]+\]|[a-z0-9-]+(?:\.[a-z0-9-]+)+\.?)`;
+const PLAIN_ROOM_CODE = /^[a-z0-9-]+$/i;
 const MEETING_LINK = new RegExp(
-  String.raw`^(?:(?:https?:)?\/\/(?<prefixed>[^\/?#\\\s@]+)|(?<bare>${BARE_LINK_HOST}(?::\d{1,5})?))?\/(?<segment>[^\/?#\\\s]+)\/?(?:[?#]\S*)?$`,
+  String.raw`^(?:(?:https?:)?\/\/(?<prefixed>[^\/?#\\\s@]+)|(?<bare>(?:\[[0-9a-f:.]+\]|[^\/?#\\\s@:\[\]]+)(?::\d*)?))?\/(?<segment>[^\/?#\\\s]+)\/?(?:[?#]\S*)?$`,
   "i",
 );
 const NOT_ROOM_CODES = new Set([
@@ -156,27 +156,50 @@ const NOT_ROOM_CODES = new Set([
   "sign-in",
 ]);
 
-const isValidAuthority = (authority: string) => {
+const linkHostname = (authority: string) => {
   try {
-    new URL(`https://${authority}/`);
-    return true;
-  } catch {
-    return false;
-  }
-};
-
-export function roomCodeFromLink(text: string): string | null {
-  const { prefixed, bare, segment: rawSegment } = MEETING_LINK.exec(text.trim())?.groups ?? {};
-  const authority = prefixed ?? bare;
-  if (!rawSegment || (authority && !isValidAuthority(authority))) return null;
-  let segment: string;
-  try {
-    segment = decodeURIComponent(rawSegment).toLowerCase();
+    return new URL(`https://${authority}/`).hostname;
   } catch {
     return null;
   }
-  if (NOT_ROOM_CODES.has(segment)) return null;
-  return segment && sanitizeRoomCode(segment) === segment ? segment : null;
+};
+
+const fitsDns = (hostname: string) => {
+  if (hostname.startsWith("[")) return true;
+  const name = hostname.replace(/\.$/, "");
+  return (
+    name.length <= 253 &&
+    name.split(".").every((label) => label.length >= 1 && label.length <= 63)
+  );
+};
+
+const asRoomCode = (candidate: string) => {
+  if (!PLAIN_ROOM_CODE.test(candidate)) return null;
+  const code = candidate.toLowerCase();
+  return !NOT_ROOM_CODES.has(code) && sanitizeRoomCode(code) === code ? code : null;
+};
+
+export function roomCodeFromPaste(text: string): string | null {
+  const trimmed = text.trim();
+  if (PLAIN_ROOM_CODE.test(trimmed)) return asRoomCode(trimmed);
+  if (trimmed.includes("\\")) return null;
+  const { prefixed, bare, segment } = MEETING_LINK.exec(trimmed)?.groups ?? {};
+  if (!segment) return null;
+  const authority = prefixed ?? bare;
+  if (authority) {
+    const hostname = linkHostname(authority);
+    if (!hostname || !fitsDns(hostname)) return null;
+    const bareLooksLikeHost =
+      hostname === "localhost" || hostname.startsWith("[") || hostname.includes(".");
+    if (bare && !bareLooksLikeHost) return null;
+  }
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(segment);
+  } catch {
+    return null;
+  }
+  return asRoomCode(decoded);
 }
 
 export function createMeetError(
