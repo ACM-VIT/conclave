@@ -428,6 +428,49 @@ it("spaces its subscribe attempts out while the server keeps refusing them", asy
   }
 });
 
+it("asks again when a subscribe's answer comes too late and no view follows", async () => {
+  await mount();
+  await offer();
+  const first = server.last(AUTHORITY_EVENTS.subscribe)!;
+  // The answer is lost, and the refusal it carried arrives after the wait.
+  await act(async () => vi.advanceTimersByTimeAsync(6_000));
+  await act(async () => {
+    first.ack!({ ok: false, code: "rate-limited" });
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  const meanwhile = rendered().kind;
+  await act(async () => vi.advanceTimersByTimeAsync(10_000));
+  const askedAgain = server.count(AUTHORITY_EVENTS.subscribe);
+  await sendView();
+
+  expect(meanwhile).toBe("connecting");
+  expect(askedAgain).toBeGreaterThan(1);
+  expect(rendered()).toMatchObject({ kind: "ready", offered: "true" });
+});
+
+it("does not ask again when a subscribe's answer is lost but its view arrives", async () => {
+  await mount();
+  await offer();
+  // The server took the subscribe: its view comes, only the answer is lost.
+  const subscribe = server.last(AUTHORITY_EVENTS.subscribe)!;
+  await act(async () => {
+    server.push(AUTHORITY_EVENTS.frame, {
+      kind: "replace",
+      subscription: subscribe.payload.subscription,
+      generation: 1,
+      serverNowMs: Date.now(),
+      part: 0,
+      last: true,
+      rows: [],
+      grants: { actions: ["add"], needsIdentity: [], queries: [] },
+    });
+  });
+  await act(async () => vi.advanceTimersByTimeAsync(60_000));
+
+  expect(rendered()).toMatchObject({ kind: "ready", offered: "true" });
+  expect(server.count(AUTHORITY_EVENTS.subscribe)).toBe(1);
+});
+
 it("still revokes the view when a subscribe is refused as forbidden", async () => {
   await mount();
   await offer();
