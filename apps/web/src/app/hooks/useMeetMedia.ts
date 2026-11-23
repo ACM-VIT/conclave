@@ -41,7 +41,7 @@ import {
   mergeMediaDeviceError,
   type MediaDeviceFailures,
 } from "../lib/utils";
-import { acquireLocalTracks } from "../lib/media-acquisition";
+import { acquireLocalTracks, settleLocalTracks } from "../lib/media-acquisition";
 import {
   createCapturedSurfaceControlState,
   createCaptureController,
@@ -2083,22 +2083,14 @@ export function useMeetMedia({
         console.info("[Meets] Muted microphone warmup skipped:", failures.microphone);
       }
 
-      let nextAudioTrack =
-        getFirstLiveTrack(
-          acquiredTracks.filter((track) => track.kind === "audio"),
-        ) ?? reusableAudioTrack;
-      const nextVideoTrack =
-        getFirstLiveTrack(
-          acquiredTracks.filter((track) => track.kind === "video"),
-        ) ?? reusableVideoTrack;
-      if (nextAudioTrack) {
-        try {
-          nextAudioTrack = await prepareAudioPublishTrack(nextAudioTrack);
-        } catch (prepareErr) {
-          failures.microphone = prepareErr;
-          nextAudioTrack = null;
-        }
-      }
+      const settled = await settleLocalTracks({
+        acquired: acquiredTracks,
+        reusable: { audio: reusableAudioTrack, video: reusableVideoTrack },
+        prepareAudio: prepareAudioPublishTrack,
+      });
+      const nextAudioTrack = settled.audio;
+      const nextVideoTrack = settled.video;
+      if (settled.audioFailure !== undefined) failures.microphone = settled.audioFailure;
       const hasAudio = nextAudioTrack?.readyState === "live";
       const hasVideo = nextVideoTrack?.readyState === "live";
       const liveTracks = [hasAudio ? nextAudioTrack : null, hasVideo ? nextVideoTrack : null].filter(

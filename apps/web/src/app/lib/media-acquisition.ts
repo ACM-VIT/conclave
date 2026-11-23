@@ -35,3 +35,23 @@ export async function acquireLocalTracks({
   }
   return { streams, failures };
 }
+
+const firstLiveTrack = (tracks: MediaStreamTrack[], kind: "audio" | "video") =>
+  tracks.find((track) => track.kind === kind && track.readyState === "live") ?? null;
+
+interface SettleLocalTracksOptions {
+  acquired: MediaStreamTrack[];
+  reusable: { audio: MediaStreamTrack | null; video: MediaStreamTrack | null };
+  prepareAudio: (track: MediaStreamTrack) => Promise<MediaStreamTrack>;
+}
+
+export async function settleLocalTracks({ acquired, reusable, prepareAudio }: SettleLocalTracksOptions) {
+  const video = firstLiveTrack(acquired, "video") ?? reusable.video;
+  const freshAudio = firstLiveTrack(acquired, "audio");
+  if (!freshAudio) return { audio: reusable.audio, video, audioFailure: undefined };
+  try {
+    return { audio: await prepareAudio(freshAudio), video, audioFailure: undefined };
+  } catch (audioFailure) {
+    return { audio: null, video, audioFailure };
+  }
+}
