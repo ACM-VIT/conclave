@@ -8,6 +8,7 @@ import { fileURLToPath } from "url";
 import type { RouterRtpCodecCapability } from "mediasoup/types";
 import { resolveConfiguredSfuRegion } from "../server/regions.js";
 import { readRtcPortRange, readWorkerSizing } from "./workerSettings.mjs";
+import { parseSfuEnv } from "./env.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const sfuPackageRoot = path.resolve(__dirname, "..");
@@ -43,7 +44,7 @@ for (const envPath of envCandidates) {
   }
 }
 
-const sfuSecret = resolveSfuSecret();
+const sfuSecret = parseSfuEnv(process.env).SFU_SECRET;
 const sfuSecretFingerprint = (() => {
   const value = sfuSecret;
   return createHash("sha256").update(value).digest("hex").slice(0, 12);
@@ -119,32 +120,6 @@ export const resolveWebRtcTransportProtocolPolicy = (
       withDefault(environment.SFU_WEBRTC_PREFER_UDP, true),
   });
 };
-
-// Calendar tokens are encrypted with a key hashed from the raw secret, padding
-// included, unless SCHEDULING_TOKEN_SECRET is set. Keep in step with
-// scripts/deploy-sfu-preflight.mjs.
-function paddedSfuSecretMessage(schedulingTokenSecret: string | undefined): string {
-  return schedulingTokenSecret
-    ? "SFU_SECRET has leading or trailing whitespace. Remove it; SCHEDULING_TOKEN_SECRET keeps saved calendar tokens readable."
-    : "SFU_SECRET has leading or trailing whitespace. Saved calendar tokens are encrypted with the padded value, so first set SCHEDULING_TOKEN_SECRET to the exact current SFU_SECRET, padding included, before you trim SFU_SECRET.";
-}
-
-function resolveSfuSecret(): string {
-  const raw = process.env.SFU_SECRET;
-  const configured = raw?.trim();
-  if (raw && raw !== configured) throw new Error(paddedSfuSecretMessage(process.env.SCHEDULING_TOKEN_SECRET));
-  if (configured && configured !== "development-secret") {
-    return configured;
-  }
-
-  if (process.env.NODE_ENV === "production") {
-    throw new Error(
-      "SFU_SECRET must be set to a non-default value when NODE_ENV=production.",
-    );
-  }
-
-  return configured || "development-secret";
-}
 
 type WorkerLogLevel = "debug" | "warn" | "error" | "none";
 

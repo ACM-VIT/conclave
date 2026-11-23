@@ -6,19 +6,16 @@ import { forceCloseRoom } from "./rooms.js";
 import type { SfuState } from "./state.js";
 import {
   createScheduledWebinarPersistence,
-  importFallbackWebinars,
   loadPersistedSchedules,
   type ScheduledWebinarPersistence,
 } from "./scheduledWebinars.js";
 import {
   createScheduledMeetingPersistence,
-  importFallbackMeetings,
   loadPersistedMeetings,
   type ScheduledMeetingPersistence,
 } from "./scheduledMeetings.js";
 import {
   createSchedulingPersistence,
-  importFallbackScheduling,
   loadPersistedScheduling,
   type SchedulingPersistence,
 } from "./scheduling.js";
@@ -111,8 +108,7 @@ export const initScheduledWebinars = async (
   persistence: ScheduledWebinarPersistence = createScheduledWebinarPersistence(),
 ): Promise<void> => {
   state.scheduledWebinarPersistence = persistence;
-  await importFallbackWebinars(persistence);
-  const loaded = loadPersistedSchedules(state.scheduledWebinars, persistence);
+  const loaded = await loadPersistedSchedules(state.scheduledWebinars, persistence, { importFallback: true });
   if (loaded > 0) {
     Logger.info(`Restored ${loaded} scheduled webinar(s) from persistence`);
   }
@@ -123,8 +119,7 @@ export const initScheduledMeetings = async (
   persistence: ScheduledMeetingPersistence = createScheduledMeetingPersistence(),
 ): Promise<void> => {
   state.scheduledMeetingPersistence = persistence;
-  await importFallbackMeetings(persistence);
-  const loaded = await loadPersistedMeetings(state.scheduledMeetings, persistence);
+  const loaded = await loadPersistedMeetings(state.scheduledMeetings, persistence, { importFallback: true });
   if (loaded > 0) {
     Logger.info(`Restored ${loaded} scheduled meeting(s) from persistence`);
   }
@@ -135,8 +130,7 @@ export const initScheduling = async (
   persistence: SchedulingPersistence = createSchedulingPersistence(),
 ): Promise<void> => {
   state.schedulingPersistence = persistence;
-  await importFallbackScheduling(persistence);
-  const loaded = await loadPersistedScheduling(state.scheduling, persistence);
+  const loaded = await loadPersistedScheduling(state.scheduling, persistence, { importFallback: true });
   if (loaded > 0) {
     Logger.info(`Restored ${loaded} scheduling record(s) from persistence`);
   }

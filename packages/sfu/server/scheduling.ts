@@ -35,7 +35,7 @@ import {
 import { assertSqliteWritable } from "./sqliteWriteCheck.js";
 import { finiteNumber, importFallbackFiles, readJsonStore, replaceIfNewer, requireArray } from "./fallbackImport.js";
 import { mergeNewestStamp } from "./stampedMerge.js";
-import { assignInPlace, persistThenApply } from "./persistThenApply.js";
+import { assignInPlace, persistThenApply, sameStoredValue, serialized } from "./persistThenApply.js";
 
 type MaybePromise<T> = T | Promise<T>;
 
@@ -1870,11 +1870,6 @@ const unindexEventType = (store: SchedulingStore, eventType: SchedulingEventType
   if (store.eventTypeIdByProfileSlug.get(bySlug) === eventType.id) store.eventTypeIdByProfileSlug.delete(bySlug);
 };
 
-const setOrDelete = <K, V>(map: Map<K, V>, key: K, value: V | undefined): void => {
-  if (value === undefined) map.delete(key);
-  else map.set(key, value);
-};
-
 const hostRecordsOf = (store: SchedulingStore, profileId: string) => ({
   profile: store.profilesById.get(profileId),
   hours: store.availabilityByProfileId.get(profileId),
@@ -1907,40 +1902,75 @@ const draftSchedulingStore = (store: SchedulingStore, profileId: string | null):
   return draft;
 };
 
-const commitSchedulingHost = (store: SchedulingStore, draft: SchedulingStore, profileId: string): void => {
-  const held = hostRecordsOf(store, profileId);
-  const next = hostRecordsOf(draft, profileId);
-  if (held.profile) unindexProfile(store, held.profile);
-  if (next.profile) registerProfile(store, held.profile ? assignInPlace(held.profile, next.profile) : next.profile);
-  else store.profilesById.delete(profileId);
-  setOrDelete(store.availabilityByProfileId, profileId, next.hours);
-  const nextIds = new Set(next.eventTypes.map((eventType) => eventType.id));
-  for (const eventType of held.eventTypes) {
-    unindexEventType(store, eventType);
-    if (!nextIds.has(eventType.id)) store.eventTypesById.delete(eventType.id);
+type MapPatch<V> = { set: Array<[string, V]>; remove: string[] };
+
+/** The entries a draft added, changed or removed relative to memory. */
+const diffMap = <V>(held: ReadonlyMap<string, V>, next: ReadonlyMap<string, V>): MapPatch<V> => ({
+  set: [...next].filter(([key, value]) => !held.has(key) || !sameStoredValue(held.get(key), value)),
+  remove: [...held.keys()].filter((key) => !next.has(key)),
+});
+
+type SchedulingPatch = {
+  profiles: MapPatch<SchedulingProfile>;
+  hours: MapPatch<WeeklyAvailability>;
+  eventTypes: MapPatch<SchedulingEventType>;
+  calendars: MapPatch<SchedulingCalendarConnection>;
+  tombstones: Record<SchedulingRecordKind, MapPatch<number>>;
+};
+
+const diffSchedulingStore = (store: SchedulingStore, draft: SchedulingStore): SchedulingPatch => ({
+  profiles: diffMap(store.profilesById, draft.profilesById),
+  hours: diffMap(store.availabilityByProfileId, draft.availabilityByProfileId),
+  eventTypes: diffMap(store.eventTypesById, draft.eventTypesById),
+  calendars: diffMap(store.calendarByProfileId, draft.calendarByProfileId),
+  tombstones: {
+    profile: diffMap(store.tombstones.profile, draft.tombstones.profile),
+    availability: diffMap(store.tombstones.availability, draft.tombstones.availability),
+    event_type: diffMap(store.tombstones.event_type, draft.tombstones.event_type),
+    calendar: diffMap(store.tombstones.calendar, draft.tombstones.calendar),
+  },
+});
+
+/** Commits only the records a change touched, keeping the objects other code holds. */
+const applySchedulingPatch = (store: SchedulingStore, patch: SchedulingPatch): void => {
+  for (const id of patch.profiles.remove) {
+    const held = store.profilesById.get(id);
+    if (held) unindexProfile(store, held);
+    store.profilesById.delete(id);
   }
-  for (const eventType of next.eventTypes) {
-    const target = held.eventTypes.find((entry) => entry.id === eventType.id);
-    registerEventType(store, target ? assignInPlace(target, eventType) : eventType);
+  for (const [id, profile] of patch.profiles.set) {
+    const held = store.profilesById.get(id);
+    if (held) unindexProfile(store, held);
+    registerProfile(store, held ? assignInPlace(held, profile) : profile);
   }
-  if (next.calendar) {
-    store.calendarByProfileId.set(profileId, held.calendar ? assignInPlace(held.calendar, next.calendar) : next.calendar);
-  } else {
-    store.calendarByProfileId.delete(profileId);
+  for (const id of patch.hours.remove) store.availabilityByProfileId.delete(id);
+  for (const [id, hours] of patch.hours.set) store.availabilityByProfileId.set(id, hours);
+  for (const id of patch.eventTypes.remove) {
+    const held = store.eventTypesById.get(id);
+    if (held) unindexEventType(store, held);
+    store.eventTypesById.delete(id);
   }
-  for (const kind of ["profile", "availability", "calendar"] as const) {
-    setOrDelete(store.tombstones[kind], profileId, draft.tombstones[kind].get(profileId));
+  for (const [id, eventType] of patch.eventTypes.set) {
+    const held = store.eventTypesById.get(id);
+    if (held) unindexEventType(store, held);
+    registerEventType(store, held ? assignInPlace(held, eventType) : eventType);
   }
-  for (const id of new Set([...held.eventTypes.map((eventType) => eventType.id), ...nextIds])) {
-    setOrDelete(store.tombstones.event_type, id, draft.tombstones.event_type.get(id));
+  for (const id of patch.calendars.remove) store.calendarByProfileId.delete(id);
+  for (const [id, calendar] of patch.calendars.set) {
+    const held = store.calendarByProfileId.get(id);
+    store.calendarByProfileId.set(id, held ? assignInPlace(held, calendar) : calendar);
+  }
+  for (const kind of SCHEDULING_KINDS) {
+    for (const id of patch.tombstones[kind].remove) store.tombstones[kind].delete(id);
+    for (const [id, deletedAt] of patch.tombstones[kind].set) store.tombstones[kind].set(id, deletedAt);
   }
 };
 
 /**
  * Runs a change to one host's scheduling records on a draft, saves the draft,
- * and only then copies that host's records, indexes and tombstones into
- * memory. `host` names the profile, or picks it from the store once earlier
- * changes are in; a profile the change creates is committed with it.
+ * and only then commits the records the change touched. `host` names the
+ * profile whose records the change may edit, or picks it from the store once
+ * earlier changes are in.
  */
 export const changeSchedulingHost = async <R>(
   store: SchedulingStore,
@@ -1950,17 +1980,12 @@ export const changeSchedulingHost = async <R>(
 ): Promise<R> => {
   const plan = await persistThenApply(store, "scheduling records", {
     plan: () => {
-      const profileId = typeof host === "function" ? host(store) : host;
-      const draft = draftSchedulingStore(store, profileId);
+      const draft = draftSchedulingStore(store, typeof host === "function" ? host(store) : host);
       const result = mutate(draft);
-      const created = [...draft.profilesById.keys()].filter((id) => !store.profilesById.has(id));
-      const hosts = new Set(profileId ? [profileId, ...created] : created);
-      return { draft, result, hosts };
+      return { draft, result, patch: diffSchedulingStore(store, draft) };
     },
     save: ({ draft }) => persistScheduling(draft, persistence),
-    apply: ({ draft, hosts }) => {
-      for (const profileId of hosts) commitSchedulingHost(store, draft, profileId);
-    },
+    apply: ({ patch }) => applySchedulingPatch(store, patch),
   });
   return plan.result;
 };
@@ -1968,130 +1993,140 @@ export const changeSchedulingHost = async <R>(
 const deletionsOf = (snapshot: SchedulingSnapshot, kind: SchedulingRecordKind): Map<string, number> =>
   new Map((snapshot.deleted ?? []).filter((entry) => entry.kind === kind).map((entry) => [entry.id, entry.deletedAt]));
 
-export const mergePersistedScheduling = async (
+/**
+ * Merges what storage holds into memory, newest stamp wins, in the store's
+ * queue. With `writeBack`, it then saves the merged records in the same slot.
+ */
+export const mergePersistedScheduling = (
   store: SchedulingStore,
   persistence: SchedulingPersistence,
-  options?: { strict?: boolean },
-): Promise<number> => {
-  const snapshot = await persistence.load(options);
-  const drop = (kind: SchedulingRecordKind, id: string, deletedAt: number) => store.tombstones[kind].set(id, deletedAt);
-  let merged = mergeNewestStamp(
-    { values: store.profilesById, deletedAt: store.tombstones.profile },
-    { values: new Map(snapshot.profiles.map((profile) => [profile.id, profile])), deletedAt: deletionsOf(snapshot, "profile") },
-    (profile) => profile.updatedAt,
-    {
-      set: (id, profile) => {
-        const held = store.profilesById.get(id);
-        if (held) {
-          unindexProfile(store, held);
-          Object.assign(held, profile);
-        }
-        registerProfile(store, held ?? profile);
-        store.tombstones.profile.delete(id);
+  options: { strict?: boolean; writeBack?: boolean } = {},
+): Promise<number> =>
+  serialized(store, async () => {
+    const snapshot = await persistence.load({ strict: options.strict });
+    const drop = (kind: SchedulingRecordKind, id: string, deletedAt: number) => store.tombstones[kind].set(id, deletedAt);
+    let merged = mergeNewestStamp(
+      { values: store.profilesById, deletedAt: store.tombstones.profile },
+      { values: new Map(snapshot.profiles.map((profile) => [profile.id, profile])), deletedAt: deletionsOf(snapshot, "profile") },
+      (profile) => profile.updatedAt,
+      {
+        set: (id, profile) => {
+          const held = store.profilesById.get(id);
+          if (held) {
+            unindexProfile(store, held);
+            Object.assign(held, profile);
+          }
+          registerProfile(store, held ?? profile);
+          store.tombstones.profile.delete(id);
+        },
+        remove: (id, deletedAt) => {
+          const held = store.profilesById.get(id);
+          if (held) unindexProfile(store, held);
+          store.profilesById.delete(id);
+          drop("profile", id, deletedAt);
+        },
       },
-      remove: (id, deletedAt) => {
-        const held = store.profilesById.get(id);
-        if (held) unindexProfile(store, held);
-        store.profilesById.delete(id);
-        drop("profile", id, deletedAt);
-      },
-    },
-  );
-  const storedProfiles = new Map(snapshot.profiles.map((profile) => [profile.id, profile]));
-  const storedHours = new Map(
-    snapshot.availability.flatMap((entry): Array<[string, WeeklyAvailability]> => {
-      const profile = store.profilesById.get(entry.profileId);
-      if (!profile) return [];
-      const hours = normalizeWeeklyAvailability(entry.availability, profile.timeZone);
-      hours.updatedAt = hoursUpdatedAt(entry.availability, storedProfiles.get(entry.profileId));
-      return [[entry.profileId, hours]];
-    }),
-  );
-  merged += mergeNewestStamp(
-    { values: store.availabilityByProfileId, deletedAt: store.tombstones.availability },
-    { values: storedHours, deletedAt: deletionsOf(snapshot, "availability") },
-    (hours) => hours.updatedAt ?? 0,
-    {
-      set: (id, hours) => {
-        store.availabilityByProfileId.set(id, hours);
-        store.tombstones.availability.delete(id);
-      },
-      remove: (id, deletedAt) => {
-        store.availabilityByProfileId.delete(id);
-        drop("availability", id, deletedAt);
-      },
-    },
-  );
-  merged += mergeNewestStamp(
-    { values: store.eventTypesById, deletedAt: store.tombstones.event_type },
-    { values: new Map(snapshot.eventTypes.map((eventType) => [eventType.id, eventType])), deletedAt: deletionsOf(snapshot, "event_type") },
-    (eventType) => eventType.updatedAt,
-    {
-      set: (id, eventType) => {
-        const held = store.eventTypesById.get(id);
-        if (held) {
-          unindexEventType(store, held);
-          Object.assign(held, eventType);
-        }
-        registerEventType(store, held ?? eventType);
-        store.tombstones.event_type.delete(id);
-      },
-      remove: (id, deletedAt) => {
-        const held = store.eventTypesById.get(id);
-        if (held) unindexEventType(store, held);
-        store.eventTypesById.delete(id);
-        drop("event_type", id, deletedAt);
-      },
-    },
-  );
-  merged += mergeNewestStamp(
-    { values: store.calendarByProfileId, deletedAt: store.tombstones.calendar },
-    { values: new Map(snapshot.calendars.map((calendar) => [calendar.profileId, calendar])), deletedAt: deletionsOf(snapshot, "calendar") },
-    (calendar) => calendar.updatedAt ?? 0,
-    {
-      set: (id, calendar) => {
-        const held = store.calendarByProfileId.get(id);
-        if (held) Object.assign(held, calendar);
-        else store.calendarByProfileId.set(id, calendar);
-        store.tombstones.calendar.delete(id);
-      },
-      remove: (id, deletedAt) => {
-        store.calendarByProfileId.delete(id);
-        drop("calendar", id, deletedAt);
-      },
-    },
-  );
-  return merged;
-};
-
-export const loadPersistedScheduling = async (
-  store: SchedulingStore,
-  persistence: SchedulingPersistence,
-): Promise<number> => {
-  const snapshot = await persistence.load();
-  for (const profile of snapshot.profiles) {
-    registerProfile(store, profile);
-  }
-  for (const entry of snapshot.availability) {
-    const profile = store.profilesById.get(entry.profileId);
-    if (!profile) continue;
-    store.availabilityByProfileId.set(
-      entry.profileId,
-      normalizeWeeklyAvailability(entry.availability, profile.timeZone),
     );
-  }
-  for (const eventType of snapshot.eventTypes) {
-    registerEventType(store, eventType);
-  }
-  for (const calendar of snapshot.calendars) {
-    store.calendarByProfileId.set(calendar.profileId, calendar);
-  }
-  for (const { kind, id, deletedAt } of snapshot.deleted ?? []) {
-    store.tombstones[kind].set(id, deletedAt);
-  }
-  return (
-    snapshot.profiles.length +
-    snapshot.eventTypes.length +
-    snapshot.calendars.length
-  );
-};
+    const storedProfiles = new Map(snapshot.profiles.map((profile) => [profile.id, profile]));
+    const storedHours = new Map(
+      snapshot.availability.flatMap((entry): Array<[string, WeeklyAvailability]> => {
+        const profile = store.profilesById.get(entry.profileId);
+        if (!profile) return [];
+        const hours = normalizeWeeklyAvailability(entry.availability, profile.timeZone);
+        hours.updatedAt = hoursUpdatedAt(entry.availability, storedProfiles.get(entry.profileId));
+        return [[entry.profileId, hours]];
+      }),
+    );
+    merged += mergeNewestStamp(
+      { values: store.availabilityByProfileId, deletedAt: store.tombstones.availability },
+      { values: storedHours, deletedAt: deletionsOf(snapshot, "availability") },
+      (hours) => hours.updatedAt ?? 0,
+      {
+        set: (id, hours) => {
+          store.availabilityByProfileId.set(id, hours);
+          store.tombstones.availability.delete(id);
+        },
+        remove: (id, deletedAt) => {
+          store.availabilityByProfileId.delete(id);
+          drop("availability", id, deletedAt);
+        },
+      },
+    );
+    merged += mergeNewestStamp(
+      { values: store.eventTypesById, deletedAt: store.tombstones.event_type },
+      { values: new Map(snapshot.eventTypes.map((eventType) => [eventType.id, eventType])), deletedAt: deletionsOf(snapshot, "event_type") },
+      (eventType) => eventType.updatedAt,
+      {
+        set: (id, eventType) => {
+          const held = store.eventTypesById.get(id);
+          if (held) {
+            unindexEventType(store, held);
+            Object.assign(held, eventType);
+          }
+          registerEventType(store, held ?? eventType);
+          store.tombstones.event_type.delete(id);
+        },
+        remove: (id, deletedAt) => {
+          const held = store.eventTypesById.get(id);
+          if (held) unindexEventType(store, held);
+          store.eventTypesById.delete(id);
+          drop("event_type", id, deletedAt);
+        },
+      },
+    );
+    merged += mergeNewestStamp(
+      { values: store.calendarByProfileId, deletedAt: store.tombstones.calendar },
+      { values: new Map(snapshot.calendars.map((calendar) => [calendar.profileId, calendar])), deletedAt: deletionsOf(snapshot, "calendar") },
+      (calendar) => calendar.updatedAt ?? 0,
+      {
+        set: (id, calendar) => {
+          const held = store.calendarByProfileId.get(id);
+          if (held) Object.assign(held, calendar);
+          else store.calendarByProfileId.set(id, calendar);
+          store.tombstones.calendar.delete(id);
+        },
+        remove: (id, deletedAt) => {
+          store.calendarByProfileId.delete(id);
+          drop("calendar", id, deletedAt);
+        },
+      },
+    );
+    if (options.writeBack) await persistScheduling(store, persistence);
+    return merged;
+  });
+
+/** Loads stored scheduling records at startup, after any JSON fallback import, in the store's queue. */
+export const loadPersistedScheduling = (
+  store: SchedulingStore,
+  persistence: SchedulingPersistence,
+  options: { importFallback?: boolean } = {},
+): Promise<number> =>
+  serialized(store, async () => {
+    if (options.importFallback) await importFallbackScheduling(persistence);
+    const snapshot = await persistence.load();
+    for (const profile of snapshot.profiles) {
+      registerProfile(store, profile);
+    }
+    for (const entry of snapshot.availability) {
+      const profile = store.profilesById.get(entry.profileId);
+      if (!profile) continue;
+      store.availabilityByProfileId.set(
+        entry.profileId,
+        normalizeWeeklyAvailability(entry.availability, profile.timeZone),
+      );
+    }
+    for (const eventType of snapshot.eventTypes) {
+      registerEventType(store, eventType);
+    }
+    for (const calendar of snapshot.calendars) {
+      store.calendarByProfileId.set(calendar.profileId, calendar);
+    }
+    for (const { kind, id, deletedAt } of snapshot.deleted ?? []) {
+      store.tombstones[kind].set(id, deletedAt);
+    }
+    return (
+      snapshot.profiles.length +
+      snapshot.eventTypes.length +
+      snapshot.calendars.length
+    );
+  });

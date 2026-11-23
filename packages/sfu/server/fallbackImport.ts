@@ -2,6 +2,7 @@ import { chmodSync, existsSync, readdirSync, readFileSync, renameSync, rmSync, s
 import { join, resolve } from "node:path";
 import { Logger } from "../utilities/loggers.js";
 import { isSqliteLockedError } from "./sqliteWriteCheck.js";
+import { readSfuEnv } from "../config/env.js";
 
 /**
  * Older SFUs fell back to JSON files in their container layer when SQLite was
@@ -10,7 +11,7 @@ import { isSqliteLockedError } from "./sqliteWriteCheck.js";
  * the copy and this import read the same container path, never a host path.
  */
 export const fallbackImportDir = (): string =>
-  resolve(process.env.CONCLAVE_FALLBACK_IMPORT_DIR?.trim() || join(process.cwd(), "data", "json-fallback-import"));
+  resolve(readSfuEnv("CONCLAVE_FALLBACK_IMPORT_DIR") ?? join(process.cwd(), "data", "json-fallback-import"));
 
 const IMPORTED_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 

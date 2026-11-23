@@ -1,3 +1,4 @@
+import { readSfuEnv } from "../config/env.js";
 import { Logger } from "../utilities/loggers.js";
 
 /** A store write failed, so the change was not saved and memory was left as it was. */
@@ -11,7 +12,7 @@ export class PersistenceUnavailableError extends Error {
 const queues = new WeakMap<object, Promise<unknown>>();
 
 /** Runs work for one store one at a time, in the order it was asked for. */
-export const serialized = <T>(store: object, work: () => Promise<T>): Promise<T> => {
+export const serialized = <T>(store: object, work: () => T | Promise<T>): Promise<T> => {
   const previous = queues.get(store) ?? Promise.resolve();
   const run = previous.then(work, work);
   queues.set(store, run.catch(() => undefined));
@@ -60,6 +61,35 @@ export const assignInPlace = <T extends object>(target: T, next: T): T => {
   return Object.assign(target, next);
 };
 
+/** Whether two records would be stored the same way. */
+export const sameStoredValue = (before: unknown, after: unknown): boolean =>
+  before === after || JSON.stringify(before) === JSON.stringify(after);
+
+/** The current values of `keys`, copied, to compare against when a later reply comes back. */
+export const basisOf = <T extends object, K extends keyof T>(record: T, keys: readonly K[]): Pick<T, K> =>
+  structuredClone(Object.fromEntries(keys.map((key) => [key, record[key]]))) as Pick<T, K>;
+
+/**
+ * Applies the result of an outside call that came back later only if the
+ * record still holds the values the call was based on. Otherwise the result
+ * is dropped and logged, so a late reply never overwrites newer state.
+ */
+export const applyIfUnchanged = <T extends object, R>(
+  what: string,
+  record: T | undefined,
+  basis: Partial<T>,
+  apply: (record: T) => R,
+): R | null => {
+  const current =
+    record !== undefined &&
+    Object.entries(basis).every(([key, value]) => sameStoredValue(record[key as keyof T], value));
+  if (!current) {
+    Logger.info(`Dropped a late ${what}: the record changed while the call was in flight`);
+    return null;
+  }
+  return apply(record);
+};
+
 const hasId = (value: unknown): value is { id: string } =>
   Boolean(value) && typeof value === "object" && typeof (value as { id?: unknown }).id === "string";
 
@@ -75,17 +105,9 @@ export const committedRecords = <R>(byId: ReadonlyMap<string, object>, result: R
   return Object.fromEntries(Object.entries(result).map(([key, value]) => [key, committed(value)])) as R;
 };
 
-const retryDelaysMs = (): number[] => {
-  const configured = (process.env.SFU_FOLLOW_UP_RETRY_DELAYS_MS ?? "")
-    .split(",")
-    .map((value) => Number(value.trim()))
-    .filter((value) => Number.isFinite(value) && value >= 0);
-  return configured.length > 0 ? configured : [5_000, 30_000, 120_000];
-};
-
 /** Retries an idempotent step in the background with backoff, logging each failure; it never rejects. */
 export const retryInBackground = (what: string, attempt: () => Promise<unknown>): void => {
-  const delays = retryDelaysMs();
+  const delays = readSfuEnv("SFU_FOLLOW_UP_RETRY_DELAYS_MS");
   const tryAt = (index: number): void => {
     const timer = setTimeout(() => {
       attempt().catch((error: unknown) => {

@@ -23,7 +23,7 @@ import { canonicalizeClientId } from "./clientIds.js";
 import { assertSqliteWritable } from "./sqliteWriteCheck.js";
 import { describeEntry, importFallbackFiles, readJsonStore, replaceIfNewer, requireArray, requireRecord } from "./fallbackImport.js";
 import { mergeNewestStamp } from "./stampedMerge.js";
-import { assignInPlace, committedRecords, persistThenApply, targetIds, type ChangeTargets } from "./persistThenApply.js";
+import { assignInPlace, committedRecords, persistThenApply, sameStoredValue, serialized, targetIds, type ChangeTargets } from "./persistThenApply.js";
 
 const DEFAULT_EARLY_ENTRY_MINUTES = 10;
 const MAX_EARLY_ENTRY_MINUTES = 240;
@@ -627,45 +627,51 @@ export const importFallbackWebinars = async (persistence: ScheduledWebinarPersis
   });
 };
 
+/** Loads stored webinars into memory at startup, after any JSON fallback import, in the store's queue. */
 export const loadPersistedSchedules = (
   store: ScheduledWebinarStore,
   persistence: ScheduledWebinarPersistence,
-): number => {
-  const { records, deletedAt } = persistence.loadState();
-  for (const webinar of records) {
-    indexScheduledWebinar(store, webinar);
-  }
-  for (const [id, at] of deletedAt) store.deletedAt.set(id, at);
-  return records.length;
-};
+  options: { importFallback?: boolean } = {},
+): Promise<number> =>
+  serialized(store, async () => {
+    if (options.importFallback) await importFallbackWebinars(persistence);
+    const { records, deletedAt } = persistence.loadState();
+    for (const webinar of records) {
+      indexScheduledWebinar(store, webinar);
+    }
+    for (const [id, at] of deletedAt) store.deletedAt.set(id, at);
+    return records.length;
+  });
 
+/** Merges what storage holds into memory, newest stamp wins, in the store's queue. */
 export const mergePersistedSchedules = (
   store: ScheduledWebinarStore,
   persistence: ScheduledWebinarPersistence,
-): number => {
-  const stored = persistence.loadState({ strict: true });
-  return mergeNewestStamp(
-    { values: store.byId, deletedAt: store.deletedAt },
-    { values: new Map(stored.records.map((webinar) => [webinar.id, webinar])), deletedAt: stored.deletedAt },
-    (webinar) => webinar.updatedAt,
-    {
-      set: (id, webinar) => {
-        const held = store.byId.get(id);
-        if (held) {
-          removeFromIndexes(store, held);
-          Object.assign(held, webinar);
-        }
-        indexScheduledWebinar(store, held ?? webinar);
-        store.deletedAt.delete(id);
+): Promise<number> =>
+  serialized(store, () => {
+    const stored = persistence.loadState({ strict: true });
+    return mergeNewestStamp(
+      { values: store.byId, deletedAt: store.deletedAt },
+      { values: new Map(stored.records.map((webinar) => [webinar.id, webinar])), deletedAt: stored.deletedAt },
+      (webinar) => webinar.updatedAt,
+      {
+        set: (id, webinar) => {
+          const held = store.byId.get(id);
+          if (held) {
+            removeFromIndexes(store, held);
+            Object.assign(held, webinar);
+          }
+          indexScheduledWebinar(store, held ?? webinar);
+          store.deletedAt.delete(id);
+        },
+        remove: (id, deletedAt) => {
+          const held = store.byId.get(id);
+          if (held) removeFromIndexes(store, held);
+          store.deletedAt.set(id, deletedAt);
+        },
       },
-      remove: (id, deletedAt) => {
-        const held = store.byId.get(id);
-        if (held) removeFromIndexes(store, held);
-        store.deletedAt.set(id, deletedAt);
-      },
-    },
-  );
-};
+    );
+  });
 
 export type CreateScheduledWebinarOptions = {
   clientId: string;
@@ -945,8 +951,7 @@ const planWebinarChange = <R>(
   const result = mutate(draft);
   const upserts = [...draft.byId].flatMap(([id, webinar]) => {
     const held = store.byId.get(id);
-    if (held === webinar) return [];
-    return !held || JSON.stringify(held) !== JSON.stringify(webinar) ? [webinar] : [];
+    return held && sameStoredValue(held, webinar) ? [] : [webinar];
   });
   const deletions = ids
     .filter((id) => store.byId.has(id) && !draft.byId.has(id))

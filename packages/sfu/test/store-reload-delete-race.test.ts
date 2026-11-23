@@ -100,37 +100,37 @@ afterEach(() => {
 });
 
 describe("a reload racing a delete", () => {
-  it("keeps a meeting deleted while the reload's read was in flight deleted", async () => {
+  it("applies a meeting delete asked for while the reload's read was in flight after the reload, so it stays deleted", async () => {
     await createScheduledMeetingPersistence().saveChanged?.([meeting]);
     const state = await startState();
     const hold = holdFirstRead(state.scheduledMeetingPersistence!);
 
     const reload = reloadPersistedStores(state);
     await hold.read;
-    await changeMeetings(state.scheduledMeetings, state.scheduledMeetingPersistence, [meeting.id], (draft) =>
+    const deleting = changeMeetings(state.scheduledMeetings, state.scheduledMeetingPersistence, [meeting.id], (draft) =>
       deleteScheduledMeeting(draft, meeting.id),
     );
     hold.release();
-    await reload;
+    await Promise.all([reload, deleting]);
 
     expect(state.scheduledMeetings.byId.has(meeting.id)).toBe(false);
     expect((await createScheduledMeetingPersistence().load()).map((entry) => entry.id)).toEqual([]);
   });
 
-  it.each(["event type", "calendar connection"])("keeps a %s deleted while the reload's read was in flight deleted", async (kind) => {
+  it.each(["event type", "calendar connection"])("applies a %s delete asked for while the reload's read was in flight after the reload, so it stays deleted", async (kind) => {
     await createSchedulingPersistence().save({ profiles: [profile], availability: [], eventTypes: [eventType], calendars: [calendar] } as never);
     const state = await startState();
     const hold = holdFirstRead(state.schedulingPersistence!);
 
     const reload = reloadPersistedStores(state);
     await hold.read;
-    await changeSchedulingHost(state.scheduling, state.schedulingPersistence, "host", (draft) => {
+    const deleting = changeSchedulingHost(state.scheduling, state.schedulingPersistence, "host", (draft) => {
       const host = draft.profilesById.get("host")!;
       if (kind === "event type") deleteEventType(draft, host, eventType.id);
       else clearGoogleCalendarConnection(draft, host);
     });
     hold.release();
-    await reload;
+    await Promise.all([reload, deleting]);
 
     const stored = await createSchedulingPersistence().load();
     if (kind === "event type") {

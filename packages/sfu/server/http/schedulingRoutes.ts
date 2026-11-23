@@ -46,7 +46,7 @@ import {
   type SchedulingEmailDeliveryResult,
 } from "../schedulingEmails.js";
 import { buildSchedulingMeetingLink } from "../schedulingLinks.js";
-import { retryInBackground } from "../persistThenApply.js";
+import { applyIfUnchanged, basisOf, retryInBackground } from "../persistThenApply.js";
 import {
   PersistenceUnavailableError,
   sendPersistenceUnavailable,
@@ -434,6 +434,7 @@ const refreshGoogleAccessToken = async (
     return connection.accessToken;
   }
 
+  const grant = grantOf(connection);
   const config = requireGoogleConfig();
   const body = new URLSearchParams({
     client_id: config.clientId,
@@ -458,14 +459,14 @@ const refreshGoogleAccessToken = async (
     });
   } catch (error) {
     if (shouldMarkCalendarReconnectRequired(error)) {
-      await markCalendarError(state, connection, error);
+      await markCalendarError(state, grant, error);
     }
     throw error;
   }
   if (!token.access_token) {
     throw new Error("Google did not return an access token.");
   }
-  await saveConnectionState(state, connection, "the refreshed Google access token", {
+  await saveConnectionState(state, grant, "refreshed Google access token", {
     accessToken: token.access_token,
     accessTokenExpiresAt: Date.now() + Math.max(token.expires_in ?? 3600, 60) * 1000,
     status: "connected",
@@ -474,23 +475,30 @@ const refreshGoogleAccessToken = async (
   return token.access_token;
 };
 
+/** The Google grant a call was made with: the connection and the refresh token it held. */
+type CalendarGrant = Pick<SchedulingCalendarConnection, "profileId" | "id" | "refreshToken">;
+
+const grantOf = (connection: SchedulingCalendarConnection): CalendarGrant =>
+  basisOf(connection, ["profileId", "id", "refreshToken"]);
+
 /**
- * Saves a change to a host's calendar connection, then applies it. These are
- * caches and status marks, so a failed save is logged and the request goes
- * on with what Google returned.
+ * Saves what a Google call returned about a host's calendar connection, but
+ * only while the connection still holds the grant the call was made with, so
+ * a reply that comes back after a reconnect is dropped. These are caches and
+ * status marks, so a failed save is logged and the request goes on.
  */
 const saveConnectionState = async (
   state: SfuState,
-  connection: SchedulingCalendarConnection,
+  grant: CalendarGrant,
   what: string,
   patch: Partial<SchedulingCalendarConnection>,
 ): Promise<void> => {
   try {
-    await changeHost(state, connection.profileId, (draft) => {
-      const held = draft.calendarByProfileId.get(connection.profileId);
-      if (held?.id !== connection.id) return;
-      Object.assign(held, patch, { updatedAt: Date.now() });
-    });
+    await changeHost(state, grant.profileId, (draft) =>
+      applyIfUnchanged(what, draft.calendarByProfileId.get(grant.profileId), grant, (held) =>
+        Object.assign(held, patch, { updatedAt: Date.now() }),
+      ),
+    );
   } catch (error) {
     Logger.warn(`Failed to save ${what}`, error);
   }
@@ -498,10 +506,10 @@ const saveConnectionState = async (
 
 const markCalendarError = (
   state: SfuState,
-  connection: SchedulingCalendarConnection,
+  grant: CalendarGrant,
   error: unknown,
 ): Promise<void> =>
-  saveConnectionState(state, connection, "the calendar reconnect mark", {
+  saveConnectionState(state, grant, "calendar reconnect mark", {
     status: "needs_reconnect",
     error: (error as Error).message || "Google Calendar sync failed.",
   });
@@ -583,6 +591,7 @@ const createGoogleCalendarEvent = async (
     attendeeEmail: string;
   },
 ): Promise<string> => {
+  const grant = grantOf(connection);
   try {
     const accessToken = await refreshGoogleAccessToken(state, connection);
     const url = `${GOOGLE_CALENDAR_API}/calendars/${encodeURIComponent(
@@ -618,7 +627,7 @@ const createGoogleCalendarEvent = async (
     return data.id;
   } catch (error) {
     if (shouldMarkCalendarReconnectRequired(error)) {
-      await markCalendarError(state, connection, error);
+      await markCalendarError(state, grant, error);
     }
     throw error;
   }
@@ -734,20 +743,24 @@ const buildConfirmation = (
 });
 
 /**
- * Records a step that ran after a booking was saved. The booking already
- * exists, so a failed save is logged and retried in the background, never
- * turned into an error for the guest. Each step writes its own fields, so a
- * retry is safe to repeat.
+ * Records the outcome of a step that ran after a booking was saved, but only
+ * while the booking still holds the values the step started from. The
+ * booking already exists, so a failed save is logged and retried in the
+ * background, never turned into an error for the guest. Each step writes its
+ * own fields, so a retry is safe to repeat.
  */
 const recordBookingFollowUp = async (
   state: SfuState,
   meetingId: string,
   what: string,
+  basis: Partial<ScheduledMeeting>,
   fields: UpdateScheduledMeetingRequest,
 ): Promise<void> => {
   const save = () =>
     changeMeetings(state.scheduledMeetings, state.scheduledMeetingPersistence, [meetingId], (draft) =>
-      draft.byId.has(meetingId) ? updateScheduledMeeting(draft, meetingId, fields) : null,
+      applyIfUnchanged(`${what} for booking ${meetingId}`, draft.byId.get(meetingId), basis, () =>
+        updateScheduledMeeting(draft, meetingId, fields),
+      ),
     );
   try {
     await save();
@@ -1190,6 +1203,7 @@ export const registerSchedulingRoutes = (
       let calendarError: string | null = null;
       const calendar = target.calendar;
       if (calendar) {
+        const calendarBasis = basisOf(meeting, ["calendarSyncStatus", "scheduledStartAt", "scheduledEndAt"]);
         let calendarFields: UpdateScheduledMeetingRequest;
         try {
           const calendarEventId = await createGoogleCalendarEvent(state, calendar, {
@@ -1212,9 +1226,10 @@ export const registerSchedulingRoutes = (
           calendarFields = { calendarSyncStatus: "failed", calendarSyncError: calendarError };
         }
         booked = { ...booked, ...calendarFields };
-        await recordBookingFollowUp(state, meeting.id, "calendar event", calendarFields);
+        await recordBookingFollowUp(state, meeting.id, "calendar event", calendarBasis, calendarFields);
       }
 
+      const emailBasis = basisOf(meeting, ["emailNotificationStatus"]);
       const emailResult = await sendBookingEmails({
         profile: target.profile,
         eventType: target.eventType,
@@ -1228,7 +1243,7 @@ export const registerSchedulingRoutes = (
         emailNotificationSentAt: emailResult.sentAt,
       };
       booked = { ...booked, ...emailFields };
-      await recordBookingFollowUp(state, meeting.id, "email status", emailFields);
+      await recordBookingFollowUp(state, meeting.id, "email status", emailBasis, emailFields);
 
       res.status(201).json({
         booking: buildConfirmation(booked, appOrigin),

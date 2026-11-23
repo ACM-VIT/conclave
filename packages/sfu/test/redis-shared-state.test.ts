@@ -228,7 +228,7 @@ describe.skipIf(!hasRedis)("SFUs sharing one Redis", () => {
     }
   }, 30_000);
 
-  it("keeps a meeting deleted while the reload's Redis read was in flight deleted", async () => {
+  it("applies a meeting delete asked for while the reload's Redis read was in flight after the reload, so it stays deleted", async () => {
     const doomed = meeting("doomed");
     const seed = track(createScheduledMeetingPersistence());
     await seed.load();
@@ -258,9 +258,9 @@ describe.skipIf(!hasRedis)("SFUs sharing one Redis", () => {
 
     const reload = reloadPersistedStores(state);
     await read;
-    await changeMeetings(state.scheduledMeetings, persistence, [doomed.id], (draft) => deleteScheduledMeeting(draft, doomed.id));
+    const deleting = changeMeetings(state.scheduledMeetings, persistence, [doomed.id], (draft) => deleteScheduledMeeting(draft, doomed.id));
     release();
-    await reload;
+    await Promise.all([reload, deleting]);
 
     expect(state.scheduledMeetings.byId.has(doomed.id)).toBe(false);
     expect((await track(createScheduledMeetingPersistence()).load()).map((entry) => entry.id)).toEqual([]);

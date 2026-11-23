@@ -1,6 +1,6 @@
 import { mergePersistedMeetings } from "./scheduledMeetings.js";
 import { mergePersistedSchedules } from "./scheduledWebinars.js";
-import { mergePersistedScheduling, persistScheduling } from "./scheduling.js";
+import { mergePersistedScheduling } from "./scheduling.js";
 import type { SfuState } from "./state.js";
 
 /**
@@ -14,15 +14,13 @@ export const reloadPersistedStores = async (
   state: SfuState,
 ): Promise<{ webinars: number; meetings: number; scheduling: number }> => {
   const webinars = state.scheduledWebinarPersistence
-    ? mergePersistedSchedules(state.scheduledWebinars, state.scheduledWebinarPersistence)
+    ? await mergePersistedSchedules(state.scheduledWebinars, state.scheduledWebinarPersistence)
     : 0;
   const meetings = state.scheduledMeetingPersistence
     ? await mergePersistedMeetings(state.scheduledMeetings, state.scheduledMeetingPersistence)
     : 0;
-  let scheduling = 0;
-  if (state.schedulingPersistence) {
-    scheduling = await mergePersistedScheduling(state.scheduling, state.schedulingPersistence, { strict: true });
-    await persistScheduling(state.scheduling, state.schedulingPersistence);
-  }
+  const scheduling = state.schedulingPersistence
+    ? await mergePersistedScheduling(state.scheduling, state.schedulingPersistence, { strict: true, writeBack: true })
+    : 0;
   return { webinars, meetings, scheduling };
 };

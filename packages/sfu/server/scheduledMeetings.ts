@@ -28,7 +28,7 @@ import { canonicalizeClientId } from "./clientIds.js";
 import { assertSqliteWritable } from "./sqliteWriteCheck.js";
 import { describeEntry, importFallbackFiles, readJsonStore, replaceIfNewer, requireArray, requireRecord } from "./fallbackImport.js";
 import { mergeNewestStamp } from "./stampedMerge.js";
-import { assignInPlace, committedRecords, persistThenApply, targetIds, type ChangeTargets } from "./persistThenApply.js";
+import { assignInPlace, committedRecords, persistThenApply, sameStoredValue, serialized, targetIds, type ChangeTargets } from "./persistThenApply.js";
 
 type MaybePromise<T> = T | Promise<T>;
 
@@ -1336,45 +1336,51 @@ export const importFallbackMeetings = async (
   });
 };
 
-export const loadPersistedMeetings = async (
+/** Loads stored meetings into memory at startup, after any JSON fallback import, in the store's queue. */
+export const loadPersistedMeetings = (
   store: ScheduledMeetingStore,
   persistence: ScheduledMeetingPersistence,
-): Promise<number> => {
-  const { records, deletedAt } = await persistence.loadState();
-  for (const meeting of records) {
-    registerStore(store, meeting);
-  }
-  for (const [id, at] of deletedAt) store.deletedAt.set(id, at);
-  return records.length;
-};
+  options: { importFallback?: boolean } = {},
+): Promise<number> =>
+  serialized(store, async () => {
+    if (options.importFallback) await importFallbackMeetings(persistence);
+    const { records, deletedAt } = await persistence.loadState();
+    for (const meeting of records) {
+      registerStore(store, meeting);
+    }
+    for (const [id, at] of deletedAt) store.deletedAt.set(id, at);
+    return records.length;
+  });
 
-export const mergePersistedMeetings = async (
+/** Merges what storage holds into memory, newest stamp wins, in the store's queue. */
+export const mergePersistedMeetings = (
   store: ScheduledMeetingStore,
   persistence: ScheduledMeetingPersistence,
-): Promise<number> => {
-  const stored = await persistence.loadState({ strict: true });
-  return mergeNewestStamp(
-    { values: store.byId, deletedAt: store.deletedAt },
-    { values: new Map(stored.records.map((meeting) => [meeting.id, meeting])), deletedAt: stored.deletedAt },
-    (meeting) => meeting.updatedAt,
-    {
-      set: (id, meeting) => {
-        const held = store.byId.get(id);
-        if (held) {
-          unregisterStore(store, held);
-          Object.assign(held, meeting);
-        }
-        registerStore(store, held ?? meeting);
-        store.deletedAt.delete(id);
+): Promise<number> =>
+  serialized(store, async () => {
+    const stored = await persistence.loadState({ strict: true });
+    return mergeNewestStamp(
+      { values: store.byId, deletedAt: store.deletedAt },
+      { values: new Map(stored.records.map((meeting) => [meeting.id, meeting])), deletedAt: stored.deletedAt },
+      (meeting) => meeting.updatedAt,
+      {
+        set: (id, meeting) => {
+          const held = store.byId.get(id);
+          if (held) {
+            unregisterStore(store, held);
+            Object.assign(held, meeting);
+          }
+          registerStore(store, held ?? meeting);
+          store.deletedAt.delete(id);
+        },
+        remove: (id, deletedAt) => {
+          const held = store.byId.get(id);
+          if (held) unregisterStore(store, held);
+          store.deletedAt.set(id, deletedAt);
+        },
       },
-      remove: (id, deletedAt) => {
-        const held = store.byId.get(id);
-        if (held) unregisterStore(store, held);
-        store.deletedAt.set(id, deletedAt);
-      },
-    },
-  );
-};
+    );
+  });
 
 type MeetingPlan<R> = {
   draft: ScheduledMeetingStore;
@@ -1401,8 +1407,7 @@ const planMeetingChange = <R>(
   const result = mutate(draft);
   const upserts = [...draft.byId].flatMap(([id, meeting]) => {
     const held = store.byId.get(id);
-    if (held === meeting) return [];
-    return !held || JSON.stringify(held) !== JSON.stringify(meeting) ? [meeting] : [];
+    return held && sameStoredValue(held, meeting) ? [] : [meeting];
   });
   const deletions = ids
     .filter((id) => store.byId.has(id) && !draft.byId.has(id))

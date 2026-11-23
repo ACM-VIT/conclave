@@ -344,3 +344,104 @@ describe("a booking", () => {
     expect(requestsTo(outside, GOOGLE_EVENTS)).toHaveLength(1);
   });
 });
+
+describe("a late writer", () => {
+  it("runs a reload after an edit that is waiting on its save, and keeps the event type the reload recovered", async () => {
+    const { state, call } = await startSfu();
+    const { id: profileId, username, userId } = (await call("GET", "/scheduling/profile")).body.profile as { id: string; username: string; userId: string };
+    const persistence = state.schedulingPersistence!;
+    const save = persistence.save.bind(persistence);
+    const editSaveStarted = deferred();
+    const finishEditSave = deferred();
+    vi.spyOn(persistence, "save")
+      .mockImplementationOnce(save)
+      .mockImplementationOnce(async (snapshot) => {
+        editSaveStarted.resolve();
+        await finishEditSave.promise;
+        await save(snapshot);
+      });
+
+    const editing = call("PUT", "/scheduling/profile", { name: "Edited Host" });
+    await editSaveStarted.promise;
+    const now = Date.now();
+    const recovered = {
+      id: "recovered-event-type", clientId: "conclave", profileId, userId, slug: "recovered-call", title: "Recovered call",
+      description: "", durationMinutes: 30, minimumNoticeMinutes: 0, bookingWindowDays: 14, bufferBeforeMinutes: 0,
+      bufferAfterMinutes: 0, isActive: true, requiresCalendar: false, createdAt: now, updatedAt: now,
+    };
+    await createSchedulingPersistence().save({ profiles: [], availability: [], eventTypes: [recovered], calendars: [] });
+    let reloadAnswered = false;
+    const reloading = call("POST", "/admin/reload-stores").finally(() => {
+      reloadAnswered = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const answeredBeforeTheEdit = reloadAnswered;
+    finishEditSave.resolve();
+
+    expect([(await editing).status, (await reloading).status]).toEqual([200, 200]);
+    expect(answeredBeforeTheEdit).toBe(false);
+    expect(state.scheduling.eventTypesById.get(recovered.id)?.slug).toBe("recovered-call");
+    expect((await call("GET", `/scheduling/public/${username}/recovered-call`)).status).toBe(200);
+    expect(state.scheduling.profilesById.get(profileId)?.name).toBe("Edited Host");
+  });
+
+  it("drops a Google token refresh that comes back after the host reconnected, keeping the new token", async () => {
+    vi.stubEnv("GOOGLE_CLIENT_ID", "google-client");
+    vi.stubEnv("GOOGLE_CLIENT_SECRET", "google-secret");
+    const { state, call } = await startSfu();
+    const { id: profileId, username } = (await call("GET", "/scheduling/profile")).body.profile as { id: string; username: string };
+    const { slug } = (await call("POST", "/scheduling/event-types", { title: "Intro call", isActive: true })).body.eventType as { slug: string };
+    await call("POST", "/scheduling/calendar/google", { refreshToken: "old-refresh", accessToken: "old-access", accessTokenExpiresAt: Date.now() - 1_000 });
+    const refreshStarted = deferred();
+    const answerRefresh = deferred();
+    const passThrough = globalThis.fetch;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url === "https://oauth2.googleapis.com/token") {
+        refreshStarted.resolve();
+        await answerRefresh.promise;
+        return Response.json({ access_token: "stale-access", expires_in: 3600 });
+      }
+      if (url.startsWith("https://www.googleapis.com/calendar/v3/freeBusy")) {
+        return Response.json({ calendars: { primary: { busy: [] } } });
+      }
+      return passThrough(input, init);
+    });
+
+    const slots = call("GET", `/scheduling/public/${username}/${slug}/slots`);
+    await refreshStarted.promise;
+    const reconnected = await call("POST", "/scheduling/calendar/google", {
+      refreshToken: "new-refresh",
+      accessToken: "new-access",
+      accessTokenExpiresAt: Date.now() + 3_600_000,
+      email: "new-account@example.test",
+    });
+    expect(reconnected.status).toBe(200);
+    answerRefresh.resolve();
+    expect((await slots).status).toBe(200);
+
+    const held = state.scheduling.calendarByProfileId.get(profileId);
+    expect([held?.refreshToken, held?.accessToken, held?.email]).toEqual(["new-refresh", "new-access", "new-account@example.test"]);
+    const stored = (await createSchedulingPersistence().load()).calendars.find((calendar) => calendar.profileId === profileId);
+    expect([stored?.refreshToken, stored?.accessToken]).toEqual(["new-refresh", "new-access"]);
+  });
+
+  it("saves a Google token refresh when the connection did not change meanwhile", async () => {
+    vi.stubEnv("GOOGLE_CLIENT_ID", "google-client");
+    vi.stubEnv("GOOGLE_CLIENT_SECRET", "google-secret");
+    const { state, call } = await startSfu();
+    const { id: profileId, username } = (await call("GET", "/scheduling/profile")).body.profile as { id: string; username: string };
+    const { slug } = (await call("POST", "/scheduling/event-types", { title: "Intro call", isActive: true })).body.eventType as { slug: string };
+    await call("POST", "/scheduling/calendar/google", { refreshToken: "only-refresh", accessToken: "expired-access", accessTokenExpiresAt: Date.now() - 1_000 });
+    const passThrough = globalThis.fetch;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url === "https://oauth2.googleapis.com/token") return Response.json({ access_token: "fresh-access", expires_in: 3600 });
+      if (url.startsWith("https://www.googleapis.com/calendar/v3/freeBusy")) return Response.json({ calendars: { primary: { busy: [] } } });
+      return passThrough(input, init);
+    });
+
+    expect((await call("GET", `/scheduling/public/${username}/${slug}/slots`)).status).toBe(200);
+    expect(state.scheduling.calendarByProfileId.get(profileId)?.accessToken).toBe("fresh-access");
+  });
+});
