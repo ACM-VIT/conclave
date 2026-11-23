@@ -84,7 +84,7 @@ struct SET5LayoutPanelTests {
     }
 
     @Test func theStageFeedsTheLayoutPanelFromItsOwnState() {
-        let stage = StagePresenter(shell: MeetingShellPresenter())
+        let stage = StagePresenter(shell: MeetingShellPresenter(defaults: IsolatedDefaults.make()))
         stage.setViewport(Self.phone)
         stage.apply(StageFixtureScript.copy(StageFixtureScript.base(count: 6), viewMode: "sidebar", hideTilesWithoutVideo: true,
                                             pinnedUserId: "r2", viewMaxTiles: 9))
@@ -95,7 +95,7 @@ struct SET5LayoutPanelTests {
         stage.applyNotices(StageFixtureScript.noticeBase(isAudioOnly: true))
         #expect(stage.layoutPanel.snapshot.isAudioOnly)
 
-        let solo = StagePresenter(shell: MeetingShellPresenter())
+        let solo = StagePresenter(shell: MeetingShellPresenter(defaults: IsolatedDefaults.make()))
         solo.setViewport(Self.tablet)
         solo.apply(StageFixtureScript.base(count: 2, localCameraOn: true))
         #expect(solo.layoutPanel.snapshot.showsPosition && solo.layoutPanel.snapshot.phoneCap == 0)

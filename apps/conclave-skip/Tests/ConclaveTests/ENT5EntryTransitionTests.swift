@@ -332,7 +332,7 @@ private func ent5Settle(_ condition: () -> Bool) async -> Bool {
 @Suite(.serialized)
 struct ENT5EntryCoreDeltaTests {
     private func viewModel() -> MeetingViewModel {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         return viewModel
     }

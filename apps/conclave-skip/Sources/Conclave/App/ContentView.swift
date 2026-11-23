@@ -488,5 +488,5 @@ struct ErrorView: View {
 }
 
 #Preview {
-    ContentView(appState: AppState())
+    ContentView(appState: AppState(defaults: IsolatedDefaults.make()))
 }

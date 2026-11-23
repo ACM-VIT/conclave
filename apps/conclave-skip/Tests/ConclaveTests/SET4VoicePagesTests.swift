@@ -37,7 +37,7 @@ struct SET4VoicePagesTests {
         presenter.setStandardVoices([VoiceOptionModel(id: "v2", name: "Two", languageTag: "en-US")])
         #expect(presenter.chat.standardVoiceId == "")
 
-        let queue = TtsPlaybackQueue()
+        let queue = TtsPlaybackQueue(defaults: IsolatedDefaults.make())
         queue.schedulesTimers = false
         queue.preferences = { VoicePreferences.snapshot(defaults: defaults) }
         let speaker = TtsRecordingSpeaker(queue: queue)
@@ -139,7 +139,7 @@ struct SET4VoicePagesTests {
     }
 
     @Test func theHostSpeakerPlaysThePreviewUnderTheReservedIdSilently() {
-        let speaker = TtsSpeaker()
+        let speaker = TtsSpeaker(queue: TtsPlaybackQueue(defaults: IsolatedDefaults.make()))
         speaker.queue.schedulesTimers = false
         var playback: [String] = []
         speaker.onPlaybackChanged = { messageId, _ in playback.append(messageId) }
@@ -161,10 +161,7 @@ struct SET4VoicePagesTests {
     }
 
     nonisolated static func freshDefaults() -> UserDefaults {
-        let suite = "set4-voice-" + UUID().uuidString
-        let defaults = UserDefaults(suiteName: suite) ?? UserDefaults.standard
-        defaults.removePersistentDomain(forName: suite)
-        return defaults
+        IsolatedDefaults.make()
     }
 
     static func source(_ path: String) throws -> String {

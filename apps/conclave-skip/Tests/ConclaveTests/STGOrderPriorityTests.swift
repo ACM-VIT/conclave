@@ -21,7 +21,7 @@ struct STGOrderPriorityTests {
     }
 
     private func stage() -> StagePresenter {
-        let stage = StagePresenter(shell: MeetingShellPresenter())
+        let stage = StagePresenter(shell: MeetingShellPresenter(defaults: IsolatedDefaults.make()))
         stage.sleep = { _ in try? await Task.sleep(nanoseconds: 60_000_000_000) }
         stage.setViewport(StagePoliciesTests.iphoneSE)
         return stage

@@ -342,7 +342,7 @@ private struct HapticSpecimenRows: View {
     private func tap(_ kind: FeedbackKind) {
         record.add(kind, ConclaveGestureFeedback.decision(
             for: kind,
-            enabled: ConclaveFeedback.isEnabled(),
+            enabled: ConclaveFeedback.isEnabled(in: UserDefaults.standard),
             active: UIApplication.shared.applicationState == .active
         ))
     }
@@ -856,7 +856,7 @@ private struct CallControlSpecimens: View {
         .recordOnly { kind in
             record.add(kind, ConclaveGestureFeedback.decision(
                 for: kind,
-                enabled: ConclaveFeedback.isEnabled(),
+                enabled: ConclaveFeedback.isEnabled(in: UserDefaults.standard),
                 active: UIApplication.shared.applicationState == .active
             ))
         }

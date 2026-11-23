@@ -203,7 +203,7 @@ struct TRN1CaptionsTests {
         let off = StageFixtureSession(state: .grid4)
         #expect(!off.stage.captionsActive)
 
-        let stage = StagePresenter(shell: MeetingShellPresenter())
+        let stage = StagePresenter(shell: MeetingShellPresenter(defaults: IsolatedDefaults.make()))
         stage.captions.sleep = TRN1CaptionsTests.longSleep
         stage.apply(StageFixtureScript.copy(StageFixtureScript.base(count: 4), captionsOn: true, liveNotes: .paused))
         stage.captionChanged(CaptionLine(speakerName: "A", text: "hello", isFinal: true, updatedAtMillis: 0, isVisible: true))

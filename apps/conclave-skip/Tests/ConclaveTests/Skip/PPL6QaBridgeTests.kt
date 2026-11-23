@@ -34,7 +34,7 @@ class PPL6QaBridgeTests {
     ))
 
     private fun attendeePeople(): Pair<PeoplePresenter, Log> {
-        val shell = MeetingShellPresenter()
+        val shell = MeetingShellPresenter(defaults = IsolatedDefaults.make())
         val people = PeoplePresenter(shell = shell, stage = StagePresenter(shell = shell))
         val log = Log()
         people.onCommand = { command, ticket ->
@@ -153,7 +153,7 @@ class PPL6QaBridgeTests {
 
     @Test
     fun webinarHandRowsAndTheRoleTable() {
-        val shell = MeetingShellPresenter()
+        val shell = MeetingShellPresenter(defaults = IsolatedDefaults.make())
         val people = PeoplePresenter(shell = shell, stage = StagePresenter(shell = shell))
         val host = "u-ishaan"
         people.apply(PeopleInputs.make(

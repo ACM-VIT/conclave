@@ -329,7 +329,7 @@ class FeedbackPanelBridgeTests {
     )
 
     @Test fun productionSinkDeliversEachShellTokenOnce() {
-        val shell = MeetingShellPresenter()
+        val shell = MeetingShellPresenter(defaults = IsolatedDefaults.make())
         shell.apply(shellAt(ConnectionState.connecting))
         val received = mutableListOf<FeedbackKind>()
         val records = FeedbackDeliveryRecords()
@@ -353,7 +353,7 @@ class FeedbackPanelBridgeTests {
     }
 
     @Test fun productionSinkNeverReplaysAfterRotationOrPictureInPicture() {
-        val shell = MeetingShellPresenter()
+        val shell = MeetingShellPresenter(defaults = IsolatedDefaults.make())
         shell.apply(shellAt(ConnectionState.connecting))
         shell.apply(shellAt(ConnectionState.joined))
         val received = mutableListOf<FeedbackKind>()
