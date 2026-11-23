@@ -107,8 +107,24 @@ there; the deploy waits for it as usual. So a crash, a closed SSH session or a
 second deploy waiting on the lock always ends with every instance serving its
 last-known-good image or a build that passed its canary
 (`scripts/deploy-sfu-crash.test.mjs` kills a deploy at every step boundary to
-check it). An instance whose public URL does not reach it is not drained or
-rebuilt at all (exit 1): it could be shown to serve neither before nor after.
+check it).
+
+An instance whose public URL does not reach it is not drained or rebuilt at
+all, and neither is any instance after it (exit 1, `Deploy stopped: clients
+cannot reach <service> at its public URL`): it could be shown to serve neither
+before a rebuild nor after one. It keeps running and serving whatever calls
+reach it. To fix it:
+
+1. See where the route goes:
+   `curl -sS -H "x-sfu-secret: $SFU_SECRET" "$SFU_A_PUBLIC_URL/status"` (or
+   `SFU_B_PUBLIC_URL`, or `SFU_PUBLIC_URL` in the service's env) must answer
+   with that instance's own `instanceId`. No answer means the DNS record, the
+   proxy in front of it or the NSG rule is wrong; another `instanceId` means
+   the route lands on the other instance.
+2. Fix that route (or the URL in `.env`, if the URL itself is wrong). Do not
+   restart the SFU for it: the deploy refused before changing anything.
+3. Run `./scripts/deploy-sfu.sh --preflight-only` until it passes, then rerun
+   the deploy.
 
 An instance whose journal shows the target passed its canary there, still on
 the target image and config and serving by the rule above, is skipped, so a
@@ -132,7 +148,7 @@ if it is hung, and rerun.
 | 3 | A meeting outlasted the drain deadline. That instance was put back into service untouched, or, if the call reached it after its canary, left drained on the new image. | Rerun later. Instances already deployed are skipped. |
 | 4 | The canary failed. The instance runs the image it last served calls on, healthy and taking meetings. | Read the canary lines in the log, fix forward, deploy again. |
 | 5 | The canary failed and the instance could not be brought back: it is down or stopped. | Act now: read the log, start it on a known-good release (`--rollback`, or fix forward and deploy). |
-| 1 | Another instance is not serving, a public URL does not reach its instance, or anything else (preflight, build, Docker). Nothing after the failing step was drained. | Read the log. |
+| 1 | Another instance is not serving, a public URL does not reach its instance, or anything else (preflight, build, Docker). Nothing after the failing step was drained. | Read the log. For a public URL, follow the steps above: fix the route, pass `--preflight-only`, rerun. |
 
 During an exit 3, 4 or 5 the two instances can run different commits. That is the
 same mixed state every blue-green deploy passes through, and the SFU tolerates
