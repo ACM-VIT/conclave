@@ -9,6 +9,7 @@ import type {
   WebinarQaChangedNotification,
   WebinarQaEntry,
 } from "../types.js";
+import { peekRoomAuthority } from "./apps/authority/index.js";
 import type { SfuState } from "./state.js";
 import {
   ensureWebinarLinkSlug,
@@ -52,6 +53,8 @@ export const emitWebinarConfigChanged = (
     "webinar:configChanged",
     getWebinarConfigSnapshot(state, room),
   );
+  // Webinar mode and the Q&A switch decide what authority apps show to whom.
+  peekRoomAuthority(room)?.policyChanged();
 };
 
 const emitWebinarAttendeeCountNow = (

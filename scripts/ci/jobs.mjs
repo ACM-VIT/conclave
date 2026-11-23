@@ -52,6 +52,7 @@ export const jobs = {
       { dir: ".", script: "test:native-icons" },
       { dir: "packages/apps-sdk", script: "test:native-embed" },
       { dir: "packages/apps-sdk", script: "test:native-embed-apps" },
+      { dir: "packages/apps-sdk", script: "test:scripts" },
       { dir: "packages/apps-sdk", script: "check:apps" },
       { dir: ".", script: "check:video-effect-assets" },
       { dir: ".", script: "check:swift-events" },
