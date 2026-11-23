@@ -42,6 +42,9 @@ export const jobs = {
     tasks: [
       { dir: "apps/web", script: "build" },
       { dir: "packages/shared-browser", script: "build" },
+      // The deploy crash suite runs a hundred deploys; the build job has the
+      // time for it and checks does not.
+      { dir: ".", script: "test:deploy-crash" },
     ],
   },
   checks: {
@@ -49,7 +52,6 @@ export const jobs = {
     tasks: [
       { dir: ".", script: "test:quality-harness" },
       { dir: ".", script: "test:deploy-preflight" },
-      { dir: ".", script: "test:deploy-crash" },
       { dir: ".", script: "test:cloudflare-manifests" },
       { dir: ".", script: "test:native-tokens" },
       { dir: ".", script: "test:native-icons" },
