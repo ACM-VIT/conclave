@@ -30,6 +30,7 @@ import { answer } from "./answer.js";
 import { pollsAuthority, pollsContract } from "./fixtures/polls.js";
 import { probeAuthority, probeContract } from "./fixtures/probe.js";
 import { qaAuthority, qaContract } from "./fixtures/qa.js";
+import { ledgerAuthority, ledgerContract } from "./fixtures/ledger.js";
 
 const host = person("asha@example.com", "Asha", "host");
 const priya = person("priya@example.com", "Priya");
@@ -1266,6 +1267,46 @@ describe("bounds", () => {
     expect(raviStillHolds).toBe(252);
     expect(late.rows("marks")).toEqual([{ n: 0 }, { n: 1 }, { n: 200 }]);
     expect(raviTab.rows("marks").length).toBe(3);
+    expect(await room.converged()).toBe(true);
+  });
+
+  it("puts a row back for a viewer told of its clear, when it is cleared and put back twice before the next flush", async () => {
+    const room = new Harness([ledgerAuthority], {
+      runtime: {
+        limits: {
+          ...DEFAULT_AUTHORITY_LIMITS,
+          clearedRowsPerFlush: 1,
+          mutationsPerSecond: 1_000_000,
+          mutationBurst: 1_000_000,
+        },
+      },
+    });
+    const hostTab = await room.open(host, ledgerContract);
+    // Ravi holds a, b and x, and is told of their clears one a flush.
+    const raviTab = await room.open(ravi, ledgerContract);
+    for (const id of ["a", "b", "x"]) await hostTab.act("card", { id, text: `text ${id}` });
+    await room.deliver();
+    await hostTab.act("clearCard", { id: "a" });
+    await hostTab.act("clearCard", { id: "b" });
+    // Priya opens the app after those clears: she holds x alone.
+    const priyaTab = await room.open(priya, ledgerContract);
+    await room.deliver();
+    await hostTab.act("clearCard", { id: "x" });
+    await room.deliver();
+    const priyaHeldX = priyaTab.row("cards", "x");
+    const raviHeldX = raviTab.row("cards", "x");
+
+    // Before the next flush, x is put back, cleared, and put back as it was.
+    await hostTab.act("card", { id: "x", text: "text x" });
+    await hostTab.act("clearCard", { id: "x" });
+    await hostTab.act("card", { id: "x", text: "text x" });
+    for (let flush = 0; flush < 6; flush += 1) await room.deliver();
+
+    // Priya was told x went, so she is sent it again. Ravi never was.
+    expect(priyaHeldX).toBeNull();
+    expect(raviHeldX).toEqual({ id: "x", text: "text x" });
+    expect(priyaTab.row("cards", "x")).toEqual({ id: "x", text: "text x" });
+    expect(raviTab.row("cards", "x")).toEqual({ id: "x", text: "text x" });
     expect(await room.converged()).toBe(true);
   });
 

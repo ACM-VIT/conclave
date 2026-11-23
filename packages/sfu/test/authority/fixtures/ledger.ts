@@ -25,6 +25,8 @@ export const ledgerContract = defineContract({
     wipe: { input: s.null(), receipt: s.object({ removed: s.int({ min: 0 }) }) },
     /** Clears the caller's own secrets. */
     forget: { input: s.null(), receipt: s.object({ removed: s.int({ min: 0 }) }) },
+    /** Clears one card. */
+    clearCard: { input: s.object({ id }), receipt: s.object({ removed: s.int({ min: 0 }) }) },
     /** Many cards, or many of the caller's secrets, in one transaction. */
     deal: { input: s.object({ count: s.int({ min: 1, max: 20_000 }) }), receipt: s.null() },
     stash: { input: s.object({ count: s.int({ min: 1, max: 20_000 }) }), receipt: s.null() },
@@ -90,6 +92,14 @@ export const ledgerAuthority = defineAuthority({
       rate: RATE,
       run(ctx, tx) {
         return { removed: tx.clear("secrets", key("secret", ctx.subject)) };
+      },
+    },
+    clearCard: {
+      roles: ["moderator"],
+      identity: "any",
+      rate: RATE,
+      run(_ctx, tx, input) {
+        return { removed: tx.clear("cards", key("card", input.id)) };
       },
     },
     deal: {
