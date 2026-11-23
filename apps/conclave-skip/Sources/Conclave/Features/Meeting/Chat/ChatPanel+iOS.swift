@@ -197,6 +197,10 @@ enum ChatInAppBrowser {
     }
 }
 
+private final class ChatPanelAppearanceBox {
+    var token = 0
+}
+
 struct ChatPanelHost: View {
     let chat: ChatPresenter
     let panels: PanelCoordinator
@@ -205,6 +209,7 @@ struct ChatPanelHost: View {
     let onPromoteToLarge: () -> Void
     @Environment(\.conclaveSystemColorScheme) private var systemScheme
     @State private var path: [ChatPage] = []
+    @State private var appearance = ChatPanelAppearanceBox()
 
     var body: some View {
         PanelShell(title: ConclaveStrings.text("Chat"), presentation: resolved, hostStyle: resolved.style,
@@ -213,18 +218,22 @@ struct ChatPanelHost: View {
                    onPromoteToLarge: onPromoteToLarge) {
             ChatPanel(chat: chat, path: $path, hostStyle: resolved.style)
         }
-        .task(id: presentation.id) {
-            let opened = Date().timeIntervalSince1970 * 1000.0
-            chat.panelDidOpen(destination: ChatPresenter.destination(for: presentation.request.destination),
-                              targetId: presentation.request.targetId)
-            #if DEBUG
-            ChatDiagnostics.counters?.recordOpenLatency(Date().timeIntervalSince1970 * 1000.0 - opened)
-            #endif
+        .onAppear {
+            guard appearance.token == 0 else { return }
+            appearance.token = panels.panelDidAppear(session: presentation.session,
+                                                     presentationID: presentation.request.presentationID)
         }
-        .onDisappear { chat.panelDidClose() }
+        .onDisappear {
+            panels.panelDidDisappear(token: appearance.token)
+            appearance.token = 0
+        }
+        .task(id: presentation.id) {
+            chat.route(to: ChatPresenter.destination(for: presentation.request.destination),
+                       targetId: presentation.request.targetId)
+        }
         .onChange(of: panels.destinationRequest) { _, _ in
             guard let request = panels.latestDestination(for: presentation.request.presentationID) else { return }
-            chat.panelDidOpen(destination: ChatPresenter.destination(for: request.destination), targetId: request.targetId)
+            chat.route(to: ChatPresenter.destination(for: request.destination), targetId: request.targetId)
         }
     }
 }

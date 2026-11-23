@@ -630,6 +630,9 @@ final class MeetingViewModel {
     private var lastChatRoster: [ChatRosterEntry] = []
 
     private(set) var chatRefreshCount = 0
+    @ObservationIgnored private(set) var chatMessageInputBuildCount = 0
+    @ObservationIgnored private var chatInputMemo: [String: ChatInputMemo] = [:]
+    @ObservationIgnored private var chatInputMemoContext: ChatInputMemoContext? = nil
 
     private var nativeChatPanelIsCurrent = false
 
@@ -1319,6 +1322,9 @@ final class MeetingViewModel {
             self.callPresence.reportPipTarget(report.pipTarget)
         }
 
+        shell.onChatShownChanged = { [weak self] shown in
+            self?.chatShownChanged(shown)
+        }
         shell.panels.onSnapshotChanged = { [weak self] in
             guard let self else { return }
             self.stage.panelSnapshotChanged()
@@ -8112,6 +8118,14 @@ final class MeetingViewModel {
         let isInPictureInPicture = presence.isInPictureInPicture
         #endif
         let isForeground = appForegroundAllowsRemoteVideoReceive
+        #if SKIP
+        let pictureInPictureReplacesCallUI = true
+        #else
+        let pictureInPictureReplacesCallUI = false
+        #endif
+        shell.setCallSurfaceVisible(CallSurfaceVisibilityPolicy.isVisible(
+            isForeground: isForeground, isInPictureInPicture: isInPictureInPicture,
+            pictureInPictureReplacesCallUI: pictureInPictureReplacesCallUI))
         let usesNativeStage = NativeRouteFlags.shared.isEnabled(NativeRouteKey.call)
         SystemNotifications.shared.apply(SystemNotificationInputs.make(
             callSession: session.identity.callSession,
@@ -13529,9 +13543,32 @@ final class MeetingViewModel {
     }
 
     private func makeChatInputs(roster: [ChatRosterEntry]) -> ChatInputs {
+        var participantNames: [String: String] = [:]
+        for (id, participant) in state.participants { participantNames[id] = participant.displayName ?? "" }
+        let context = ChatInputMemoContext(roster: roster, displayNames: state.displayNames, participantNames: participantNames,
+                                           chatLocalUserId: chatLocalUserId, userId: state.userId,
+                                           sfuUserId: state.sfuUserId ?? "", displayName: state.displayName)
+        if context != chatInputMemoContext {
+            chatInputMemoContext = context
+            chatInputMemo = [:]
+        }
         var messages: [ChatMessageInput] = []
+        var keep = Set<String>()
         for message in state.chatMessages {
-            messages.append(makeChatMessageInput(message))
+            let isHistory = chatHistoryMessageIds.contains(message.id)
+            keep.insert(message.id)
+            if message.userId != ConclaveAssistantChatIdentity.userId, let memo = chatInputMemo[message.id],
+               memo.message == message, memo.isHistory == isHistory {
+                messages.append(memo.input)
+                continue
+            }
+            let input = makeChatMessageInput(message)
+            chatMessageInputBuildCount += 1
+            chatInputMemo[message.id] = ChatInputMemo(message: message, isHistory: isHistory, input: input)
+            messages.append(input)
+        }
+        if chatInputMemo.count > keep.count {
+            for id in Array(chatInputMemo.keys) where !keep.contains(id) { chatInputMemo.removeValue(forKey: id) }
         }
         var localRows: [ChatLocalRow] = []
         for system in state.systemMessages {
@@ -14084,12 +14121,12 @@ final class MeetingViewModel {
     }
 
     private func syncChatPanelOpenState() {
-        let snapshot = shell.panels.snapshot
-        let isCurrent = snapshot.current?.panel == MeetingPanel.chat && !snapshot.isDismissing
-        guard isCurrent != nativeChatPanelIsCurrent else { return }
-        nativeChatPanelIsCurrent = isCurrent
-        state.isChatOpen = isCurrent
-        if isCurrent {
+        nativeChatPanelIsCurrent = shell.chatPanelIsCurrent
+    }
+
+    private func chatShownChanged(_ shown: Bool) {
+        state.isChatOpen = shown
+        if shown {
             state.unreadChatCount = 0
             clearChatOverlayMessages()
         }
@@ -15967,3 +16004,19 @@ final class MeetingViewModel {
 #if !SKIP
 extension MeetingViewModel: ObservableObject {}
 #endif
+
+struct ChatInputMemo {
+    let message: ChatMessage
+    let isHistory: Bool
+    let input: ChatMessageInput
+}
+
+struct ChatInputMemoContext: Equatable {
+    let roster: [ChatRosterEntry]
+    let displayNames: [String: String]
+    let participantNames: [String: String]
+    let chatLocalUserId: String
+    let userId: String
+    let sfuUserId: String
+    let displayName: String
+}

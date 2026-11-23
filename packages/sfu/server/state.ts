@@ -22,6 +22,10 @@ import {
   createTranscriptRelayRegistry,
   type TranscriptRelayRegistry,
 } from "./transcript/relayRegistry.js";
+import {
+  createAppsAuthorityRuntime,
+  type AppsAuthorityRuntime,
+} from "./apps/authority/index.js";
 
 export type EndedRoom = {
   roomId: string;
@@ -48,12 +52,15 @@ export type SfuState = {
   schedulingPersistence: SchedulingPersistence | null;
   roomRegistry: RoomRegistry;
   transcriptRelays: TranscriptRelayRegistry;
+  /** Null when this SFU does not run authority apps. */
+  appsAuthority: AppsAuthorityRuntime | null;
   isDraining: boolean;
 };
 
 export const createSfuState = (options?: {
   isDraining?: boolean;
   roomRegistry?: RoomRegistry;
+  appsAuthority?: AppsAuthorityRuntime | null;
 }): SfuState => {
   return {
     workers: [],
@@ -72,6 +79,12 @@ export const createSfuState = (options?: {
     schedulingPersistence: null,
     roomRegistry: options?.roomRegistry ?? createRoomRegistry(config),
     transcriptRelays: createTranscriptRelayRegistry(config.transcriptRelay),
+    appsAuthority:
+      options?.appsAuthority !== undefined
+        ? options.appsAuthority
+        : config.appsAuthority.enabled
+          ? createAppsAuthorityRuntime()
+          : null,
     isDraining: options?.isDraining ?? config.draining,
   };
 };

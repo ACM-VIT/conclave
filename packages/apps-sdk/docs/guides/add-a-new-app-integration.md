@@ -16,6 +16,8 @@ pnpm -C packages/apps-sdk run new:app polls --name "Quick Polls"
 pnpm -C packages/apps-sdk run new:app polls --dry-run
 ```
 
+An app id is at most 48 lowercase letters, digits and dashes, starting with a letter. That rule is `appIdSchema` in `@conclave/apps-sdk/authority`, and `defineContract`, `new:app` and `check:apps` all check an id against it. The id is also the app's folder and the first part of its package subpaths, so `new:app` refuses one the SDK already uses (`authority`, `native-embed`, `sdk`, `apps`, `core`, `web`, `server`, `native`) and one `package.json` already exports something under. It refuses before writing any file.
+
 The command creates:
 
 ```text

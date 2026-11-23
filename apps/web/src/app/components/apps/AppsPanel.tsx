@@ -16,6 +16,7 @@ import {
   GameDockResizeHandle,
   HEAD_FONT,
 } from "../games/gameUi";
+import PanelNoticeSlot from "../PanelNoticeSlot";
 
 const commandFailureCopy = (result: AppsCommandResult): string | null => {
   if (result.ok) return null;
@@ -107,6 +108,7 @@ export function AppsPanel({
         <GameDockCloseButton onClose={onClose} label="Close apps" />
       </div>
 
+      <PanelNoticeSlot />
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
         <div className="flex flex-col gap-2">
           <p className="mb-1 text-[13px] leading-relaxed text-[#a1a1aa]">
