@@ -626,6 +626,25 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           }
 
           room.removeClient(targetUserId);
+          if (isWebinarAttendeeJoin) {
+            state.transcriptRelays
+              .stopRoomForUser({
+                roomKey: roomChannelId,
+                userId: targetUserId,
+                canStopAnyRelay: false,
+              })
+              .catch((error) => {
+                Logger.warn(
+                  `Transcript SFU relay stop for ${targetUserId} in room ${roomChannelId} failed: ${error}`,
+                );
+              });
+          } else {
+            state.transcriptRelays.handOver({
+              roomKey: roomChannelId,
+              fromUserId: targetUserId,
+              toUserId: userId,
+            });
+          }
           if (options?.disconnectSocket && client.socket.id !== socket.id) {
             client.socket.disconnect(true);
           }

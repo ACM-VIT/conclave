@@ -30,6 +30,7 @@ export type TranscriptRelayRegistry = {
     userId: string;
     canStopAnyRelay: boolean;
   }) => Promise<TranscriptSfuRelayStopResponse | { error: string }>;
+  handOver: (options: { roomKey: string; fromUserId: string; toUserId: string }) => void;
   syncRoom: (room: Room) => Promise<void>;
   closeAll: () => void;
 };
@@ -108,6 +109,15 @@ export const createTranscriptRelayRegistry = (options: {
         },
       });
       relays.set(key, relay);
+      const restore = (previous: TranscriptRelayInstance) => {
+        if (
+          relay.controllerUserId !== startOptions.controllerUserId &&
+          previous.controllerUserId === startOptions.controllerUserId
+        ) {
+          previous.controllerUserId = relay.controllerUserId;
+        }
+        relays.set(key, previous);
+      };
       try {
         await relay.start();
         if (relays.get(key) !== relay) {
@@ -124,7 +134,7 @@ export const createTranscriptRelayRegistry = (options: {
           const handoffReady = await relay.prepareHandoff();
           if (!handoffReady) {
             if (relays.get(key) === relay) {
-              relays.set(key, existingRelay);
+              restore(existingRelay);
             }
             relay.close();
             return {
@@ -146,7 +156,7 @@ export const createTranscriptRelayRegistry = (options: {
       } catch (error) {
         if (relays.get(key) === relay) {
           if (existingRelay) {
-            relays.set(key, existingRelay);
+            restore(existingRelay);
           } else {
             relays.delete(key);
           }
@@ -191,6 +201,12 @@ export const createTranscriptRelayRegistry = (options: {
         relays.delete(roomKey);
       }
       return { success: true };
+    },
+    handOver({ roomKey, fromUserId, toUserId }) {
+      const relay = relays.get(roomKey);
+      if (relay?.controllerUserId === fromUserId) {
+        relay.controllerUserId = toUserId;
+      }
     },
     async syncRoom(room) {
       try {

@@ -3073,6 +3073,135 @@ describe("what ending a seat releases", () => {
     expect(room.getClient(seatOf(controller))).toBeUndefined();
     await stoppedFor(state, room, relays[0]);
   });
+
+  const stopAs = (state: SfuState, room: Room, userId: string) =>
+    state.transcriptRelays.stopRoomForUser({ roomKey: room.channelId, userId, canStopAnyRelay: false });
+  const lostControl: unknown = { error: expect.any(String) as unknown };
+  const underAnotherPass = (tab: SfuAuthPayload & { userId: string; guestProof: string }) =>
+    ({
+      ...tab,
+      userId: `${tab.userId}-under-the-second-pass`,
+      guestProof: `${tab.guestProof}-the-second`,
+      guestWas: formerSeats(tab),
+    }) satisfies SfuAuthPayload;
+  const accountOf = (name: string, sessionId = `${name}-1`) =>
+    ({ email: `${name}@example.com`, userId: `${name}@example.com`, clientId: "conclave", sessionId }) satisfies SfuAuthPayload;
+
+  it("hands the transcript relay to the seat of a controller that comes back under another pass (Greptile)", async () => {
+    const state = makeState();
+    const relays = relayRig(state);
+    await join(state, guestHost);
+    const room = state.rooms.get("conclave:room")!;
+    const controller = tabOf("relay-pass-changer");
+    await join(state, controller);
+    await relayRun(state, room, controller);
+    const returning = underAnotherPass(controller);
+
+    expect((await join(state, returning)).ack).toHaveBeenCalledWith(joined);
+
+    expect(room.getClient(seatOf(controller))).toBeUndefined();
+    expect(relays[0].closed).toBe(false);
+    expect(await stopAs(state, room, seatOf(controller))).toEqual(lostControl);
+    expect(await stopAs(state, room, seatOf(returning))).toEqual({ success: true });
+    expect(relays[0].closed).toBe(true);
+  });
+
+  it("hands the transcript relay to the seat that takes over a controller's dropped seat", async () => {
+    const state = makeState();
+    const relays = relayRig(state);
+    await join(state, guestHost);
+    const room = state.rooms.get("conclave:room")!;
+    const controller = accountOf("relay-owner");
+    const before = await join(state, controller);
+    await relayRun(state, room, controller);
+    dropConnection(before.peer);
+    const returning = accountOf("relay-owner", "relay-owner-2");
+
+    expect((await join(state, returning)).ack).toHaveBeenCalledWith(joined);
+
+    expect(room.getClient(seatOf(controller))).toBeUndefined();
+    expect(await stopAs(state, room, seatOf(controller))).toEqual(lostControl);
+    expect(await stopAs(state, room, seatOf(returning))).toEqual({ success: true });
+    expect(relays[0].closed).toBe(true);
+  });
+
+  it.each([
+    ["to its own seat", "relay-watcher-1"],
+    ["to a new seat", "relay-watcher-2"],
+  ])("stops the transcript relay of a controller that comes back to the audience %s", async (_case, sessionId) => {
+    const state = makeState();
+    const relays = relayRig(state);
+    await join(state, guestHost);
+    const room = state.rooms.get("conclave:room")!;
+    const controller = accountOf("relay-watcher");
+    const before = await join(state, controller);
+    await relayRun(state, room, controller);
+    const config = getOrCreateWebinarRoomConfig(state.webinarConfigs, room.channelId);
+    config.enabled = true;
+    config.publicAccess = true;
+    setCustomWebinarLinkSlug({
+      webinarConfig: config,
+      webinarLinks: state.webinarLinks,
+      room: { channelId: room.channelId, id: room.id, clientId: room.clientId },
+      slug: "launch",
+    });
+    dropConnection(before.peer);
+
+    const watching = await join(state, { ...controller, sessionId, joinMode: "webinar_attendee" }, "launch");
+
+    expect(watching.ack).toHaveBeenCalledWith(expect.objectContaining({ status: "joined", webinarRole: "attendee" }));
+    await stoppedFor(state, room, relays[0]);
+  });
+
+  it("keeps the relay with the returning seat when a restart the old seat asked for fails after it left", async () => {
+    const state = makeState();
+    const closed: boolean[] = [];
+    let failRestart = () => {};
+    state.transcriptRelays = createTranscriptRelayRegistry({
+      enabled: true,
+      createRelay: (options) => {
+        const index = closed.push(false) - 1;
+        return {
+          controllerUserId: options.controllerUserId,
+          start:
+            index === 0
+              ? async () => {}
+              : () =>
+                  new Promise<void>((_resolve, reject) => {
+                    failRestart = () => reject(new Error("worker unreachable"));
+                  }),
+          prepareHandoff: async () => true,
+          syncProducers: async () => {},
+          close: () => {
+            closed[index] = true;
+          },
+        };
+      },
+    });
+    await join(state, guestHost);
+    const room = state.rooms.get("conclave:room")!;
+    const controller = tabOf("relay-restarter");
+    await join(state, controller);
+    await relayRun(state, room, controller);
+    const restart = state.transcriptRelays.start({
+      room,
+      workerUrl: "http://worker.test",
+      workerToken: "worker-token",
+      controllerUserId: seatOf(controller),
+      controllerDisplayName: "Controller",
+      canReplaceExistingRelay: false,
+    });
+    const returning = underAnotherPass(controller);
+
+    expect((await join(state, returning)).ack).toHaveBeenCalledWith(joined);
+    failRestart();
+
+    expect(await restart).toMatchObject({ success: false });
+    expect(closed).toEqual([false, true]);
+    expect(await stopAs(state, room, seatOf(controller))).toEqual(lostControl);
+    expect(await stopAs(state, room, seatOf(returning))).toEqual({ success: true });
+    expect(closed).toEqual([true, true]);
+  });
 });
 
 describe("a guest who is a co-host in two tabs, when one tab is removed", () => {
