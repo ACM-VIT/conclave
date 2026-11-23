@@ -197,6 +197,10 @@ enum ChatInAppBrowser {
     }
 }
 
+private final class ChatPanelAppearanceBox {
+    var token = 0
+}
+
 struct ChatPanelHost: View {
     let chat: ChatPresenter
     let panels: PanelCoordinator
@@ -205,7 +209,7 @@ struct ChatPanelHost: View {
     let onPromoteToLarge: () -> Void
     @Environment(\.conclaveSystemColorScheme) private var systemScheme
     @State private var path: [ChatPage] = []
-    @State private var appearanceToken = 0
+    @State private var appearance = ChatPanelAppearanceBox()
 
     var body: some View {
         PanelShell(title: ConclaveStrings.text("Chat"), presentation: resolved, hostStyle: resolved.style,
@@ -215,12 +219,13 @@ struct ChatPanelHost: View {
             ChatPanel(chat: chat, path: $path, hostStyle: resolved.style)
         }
         .onAppear {
-            appearanceToken = panels.panelDidAppear(session: presentation.session,
-                                                    presentationID: presentation.request.presentationID)
+            guard appearance.token == 0 else { return }
+            appearance.token = panels.panelDidAppear(session: presentation.session,
+                                                     presentationID: presentation.request.presentationID)
         }
         .onDisappear {
-            panels.panelDidDisappear(token: appearanceToken)
-            appearanceToken = 0
+            panels.panelDidDisappear(token: appearance.token)
+            appearance.token = 0
         }
         .task(id: presentation.id) {
             chat.route(to: ChatPresenter.destination(for: presentation.request.destination),
