@@ -254,7 +254,9 @@ shapes the values of listed properties:
 - **Retries.** `/ingest` keeps every event it forwarded by uuid (the last
   10,000, within 4 MB) and checks that first: a retry, or an event sent again,
   is forwarded exactly as the first delivery was, timestamp included, without
-  being built again. One request naming a uuid twice forwards it once.
+  being built again, and an event PostHog already took is not forwarded at
+  all (a request of only those is answered 200). One request naming a uuid
+  twice forwards it once.
 - **Required fields.** An `$exception` with no exception list, or an empty
   one, is not sent.
 

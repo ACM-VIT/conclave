@@ -6,7 +6,7 @@ import {
   type OutboundEvent,
   parseChunkManifest,
 } from "./telemetry-privacy";
-import { createOutboundSchemas, UNKNOWN_BUILD } from "./telemetry-schema";
+import { createOutboundSchemas, MAX_EVENT_AGE_MS, UNKNOWN_BUILD } from "./telemetry-schema";
 
 /**
  * The browser's PostHog traffic goes through /ingest on our own site, so the
@@ -72,10 +72,9 @@ export type IngestDeps = {
   forwarded: ForwardedEvents;
 };
 
-// How far an event's time may be from when we received it: posthog-js sends
-// within seconds, and retries for a few minutes at most. A browser clock a
-// little ahead is fine.
-const MAX_EVENT_AGE_MS = 5 * 60_000;
+// How far ahead of when we received it an event's time may be: a browser
+// clock a little ahead is fine. The outbox sends nothing older than
+// MAX_EVENT_AGE_MS.
 const MAX_EVENT_LEAD_MS = 60_000;
 const MAX_FORWARDED_EVENTS = 10_000;
 const MAX_FORWARDED_BYTES = 4 * 1024 * 1024;
@@ -83,24 +82,33 @@ const MAX_FORWARDED_BYTES = 4 * 1024 * 1024;
 type ForwardedEvent = OutboundEvent & { timestamp: string };
 
 export type ForwardedEvents = {
-  get: (uuid: string) => ForwardedEvent | undefined;
+  get: (uuid: string) => { event: ForwardedEvent; delivered: boolean } | undefined;
   remember: (event: ForwardedEvent) => void;
+  /** PostHog took these events. */
+  delivered: (uuids: readonly string[]) => void;
 };
 
 /**
  * The events this process forwarded, by uuid, the most recent 10,000 within
  * 4 MB: a retry of one is forwarded exactly as the first delivery was,
- * timestamp included, without being built again.
+ * timestamp included, without being built again, and one PostHog already
+ * took is not forwarded again.
  */
 export const createForwardedEvents = (): ForwardedEvents => {
-  const events = new Map<string, { event: ForwardedEvent; bytes: number }>();
+  const events = new Map<string, { event: ForwardedEvent; bytes: number; delivered: boolean }>();
   let total = 0;
   return {
-    get: (uuid) => events.get(uuid)?.event,
+    get: (uuid) => events.get(uuid),
+    delivered(uuids) {
+      for (const uuid of uuids) {
+        const known = events.get(uuid);
+        if (known) known.delivered = true;
+      }
+    },
     remember(event) {
       if (events.has(event.uuid)) return;
       const bytes = JSON.stringify(event).length;
-      events.set(event.uuid, { event, bytes });
+      events.set(event.uuid, { event, bytes, delivered: false });
       total += bytes;
       while (events.size > MAX_FORWARDED_EVENTS || total > MAX_FORWARDED_BYTES) {
         const [uuid, oldest] = events.entries().next().value as [string, { bytes: number }];
@@ -289,29 +297,38 @@ export async function forwardCapture(
   if (!deps.projectKey) return reply(404);
   const { ingestHost } = deps;
   if (!ingestHost) return reply(503);
-  let forwarded: string;
+  let prepared: Awaited<ReturnType<typeof prepareForward>>;
   try {
-    forwarded = JSON.stringify(await prepareForward(request, deps));
+    prepared = await prepareForward(request, deps);
   } catch (error) {
     // Nothing in a refused body would pass on a retry, and the reply does
     // not say what was wrong with it.
     return reply(error instanceof Refused ? error.status : 400);
   }
+  // Every event in it already reached PostHog: a page sending what it saved
+  // as it went away, or a beacon's batch again.
+  if (!prepared) return reply(200);
   try {
     const upstream = await deps.fetch(`${ingestHost}/e/`, {
       method: "POST",
       headers: { "content-type": "application/json", "user-agent": INGEST_USER_AGENT },
-      body: forwarded,
+      body: JSON.stringify(prepared),
       redirect: "manual",
     });
-    if (upstream.ok) return reply(200);
+    if (upstream.ok) {
+      deps.forwarded.delivered(prepared.batch.map((event) => event.uuid));
+      return reply(200);
+    }
     return reply(upstream.status >= 500 ? 503 : 400);
   } catch {
     return reply(503);
   }
 }
 
-/** The batch to send PostHog for one request, or a Refused error. */
+/**
+ * The batch to send PostHog for one request; null when PostHog already took
+ * every event in it, or a Refused error.
+ */
 const prepareForward = async (request: Request, deps: IngestDeps) => {
   const receivedAt = deps.now();
   const url = new URL(request.url);
@@ -340,13 +357,16 @@ const prepareForward = async (request: Request, deps: IngestDeps) => {
   const schemas = createOutboundSchemas(context);
   const sentAt = clientSentAt(url, decoded);
   const inRequest = new Set<string>();
+  let delivered = 0;
   const batch = sameBuild.flatMap((event) => {
     const uuid = event.uuid ?? crypto.randomUUID();
     if (inRequest.has(uuid)) return [];
     inRequest.add(uuid);
-    // A retry, or an event sent again, goes exactly as it went the first time.
+    // A retry, or an event sent again, goes exactly as it went the first
+    // time, and not at all once PostHog has it.
     const known = deps.forwarded.get(uuid);
-    if (known) return [known];
+    if (known?.delivered) delivered += 1;
+    if (known) return known.delivered ? [] : [known.event];
     const built = buildOutboundEvent(
       { uuid, event: event.event, properties: event.properties },
       // Our fields are the event's own: the browser took them from the
@@ -359,7 +379,10 @@ const prepareForward = async (request: Request, deps: IngestDeps) => {
     deps.forwarded.remember(forwarded);
     return [forwarded];
   });
-  if (batch.length === 0) throw new Refused(400);
+  if (batch.length === 0) {
+    if (delivered > 0) return null;
+    throw new Refused(400);
+  }
   return { api_key: deps.projectKey, batch };
 };
 

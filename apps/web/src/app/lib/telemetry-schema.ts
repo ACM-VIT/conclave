@@ -17,6 +17,12 @@ export const UNKNOWN_BUILD = "unknown";
 export const MESSAGE_WITHHELD = "[message withheld]";
 export const TYPE_WITHHELD = "[type withheld]";
 export const PATH_WITHHELD = "[path]";
+/**
+ * How long before /ingest receives an event it keeps the event's own time.
+ * The browser drops a saved batch before it is this old, rather than send it
+ * to be dated by when it arrived.
+ */
+export const MAX_EVENT_AGE_MS = 5 * 60_000;
 
 const count = z.number().int().min(0).max(1_000_000);
 const ms = z.number().int().min(0).max(7 * 24 * 3_600_000);

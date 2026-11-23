@@ -548,6 +548,8 @@ describe("round 9 at /ingest", () => {
     }
   });
 
+  const failing = async () => new Response(null, { status: 503 });
+
   it("sends a retried event as it sent it the first time, timestamp included", async () => {
     const forwarded = createForwardedEvents();
     const events = [
@@ -556,7 +558,16 @@ describe("round 9 at /ingest", () => {
       { ...event(), uuid: "0196f0a1-0000-7000-8000-0000000000b3", timestamp: "2031-01-01T00:00:00.000Z" },
     ];
     const json = JSON.stringify({ ...captureBody(events), sent_at: undefined });
-    const first = await forward(post(json, "application/json"), ["e"], at(RECEIVED, { forwarded }));
+    const sentFirst: string[] = [];
+    const first = await forward(post(json, "application/json"), ["e"], at(RECEIVED, {
+      forwarded,
+      fetch: async (_url, init) => {
+        sentFirst.push(String(init?.body));
+        return failing();
+      },
+    }));
+    expect(first.response.status).toBe(503);
+    first.upstream.push({ url: "", init: { body: sentFirst[0] } });
     const retry = await forward(post(json, "application/json"), ["e"], at(RECEIVED + 20_000, { forwarded }));
 
     expect(sentBody(retry.upstream).batch).toEqual(sentBody(first.upstream).batch);
@@ -571,12 +582,34 @@ describe("round 9 at /ingest", () => {
     const forwarded = createForwardedEvents();
     const ahead = { ...event(), uuid: "0196f0a1-0000-7000-8000-0000000000c1", timestamp: "2026-11-22T12:01:30.000Z" };
     const json = JSON.stringify({ ...captureBody([ahead]), sent_at: "2026-11-22T12:01:30.000Z" });
-    const first = await forward(post(json, "application/json"), ["e"], at(RECEIVED, { forwarded }));
+    const sentFirst: string[] = [];
+    const first = await forward(post(json, "application/json"), ["e"], at(RECEIVED, {
+      forwarded,
+      fetch: async (_url, init) => {
+        sentFirst.push(String(init?.body));
+        return failing();
+      },
+    }));
+    first.upstream.push({ url: "", init: { body: sentFirst[0] } });
     const retry = await forward(post(json, "application/json"), ["e"], at(RECEIVED + 40_000, { forwarded }));
 
     expect(sentBody(first.upstream).batch).toHaveLength(1);
     expect(sentBody(retry.upstream).batch).toEqual(sentBody(first.upstream).batch);
     expect(timesOf(first.upstream)).toEqual(["2026-11-22T12:00:00.000Z"]);
+  });
+
+  it("forwards nothing again for events PostHog already took, and answers the browser that they arrived", async () => {
+    const forwarded = createForwardedEvents();
+    const taken = { ...event(), uuid: "0196f0a1-0000-7000-8000-0000000000d1", timestamp: "2026-11-22T11:59:58.000Z" };
+    const fresh = { ...event(), uuid: "0196f0a1-0000-7000-8000-0000000000d2", timestamp: "2026-11-22T11:59:59.000Z" };
+    await forward(post(JSON.stringify(captureBody([taken])), "application/json"), ["e"], at(RECEIVED, { forwarded }));
+
+    const again = await forward(post(JSON.stringify(captureBody([taken])), "application/json"), ["e"], at(RECEIVED + 5000, { forwarded }));
+    expect(again.response.status).toBe(200);
+    expect(again.upstream).toEqual([]);
+
+    const mixed = await forward(post(JSON.stringify(captureBody([taken, fresh])), "application/json"), ["e"], at(RECEIVED + 6000, { forwarded }));
+    expect(sentBody(mixed.upstream).batch.map((sent) => sent.uuid)).toEqual([fresh.uuid]);
   });
 
   it("forwards an event once when one request names its uuid twice", async () => {
