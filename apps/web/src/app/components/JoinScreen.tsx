@@ -18,7 +18,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { memo, useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { prefetchConclaveAnimation } from "../lib/conclaveAnimation";
 import { prefetchConclaveLock } from "../lib/conclaveSound";
 import type { Dispatch, SetStateAction } from "react";
@@ -27,6 +27,7 @@ import { signOut, useSession } from "@/lib/auth-client";
 import type { RoomInfo } from "@/lib/sfu-types";
 import { buildMeetingUrl } from "@/lib/meeting-links";
 import type { RejoinMedia } from "../lib/call-outcome";
+import { useRejoinMediaRestore } from "../hooks/useRejoinMediaRestore";
 import type {
   ConnectionState,
   MeetError,
@@ -1062,17 +1063,13 @@ function JoinScreen({
     }
   };
 
-  const applyInitialMedia = useEffectEvent((media: RejoinMedia) => {
+  const restoringMedia = useRejoinMediaRestore(initialMedia, async (media) => {
     if (media.isAudioOnly) toggleAudioOnly();
-    if (media.isCameraOn && !media.isAudioOnly) void toggleCamera();
-    if (media.isMicOn) void toggleMic();
+    await Promise.allSettled([
+      media.isCameraOn && !media.isAudioOnly ? toggleCamera() : undefined,
+      media.isMicOn ? toggleMic() : undefined,
+    ]);
   });
-  const appliedInitialMediaRef = useRef(false);
-  useEffect(() => {
-    if (!initialMedia || appliedInitialMediaRef.current) return;
-    appliedInitialMediaRef.current = true;
-    applyInitialMedia(initialMedia);
-  }, [initialMedia]);
 
   useEffect(() => {
     if (!pending || !hasIdentity) return;
@@ -1105,6 +1102,7 @@ function JoinScreen({
   };
 
   const startMeeting = () => {
+    if (restoringMedia) return;
     if (!ensureGuest()) return;
     onEnterStart?.("new");
     commitPrejoinMedia();
@@ -1115,7 +1113,7 @@ function JoinScreen({
     const candidate = enforceShortCode
       ? sanitizeRoomCode(normalizedRoomId)
       : normalizedRoomId.trim();
-    if (!candidate) return;
+    if (!candidate || restoringMedia) return;
     if (!ensureGuest()) return;
     onEnterStart?.("join");
     commitPrejoinMedia();
@@ -1550,7 +1548,7 @@ function JoinScreen({
               {!isRoutedRoom && (
                   <button
                     onClick={startMeeting}
-                    disabled={isLoading || !nameReady}
+                    disabled={isLoading || !nameReady || restoringMedia}
                     className={CTA_PRIMARY}
                   >
                     <Plus size={18} />
@@ -1585,7 +1583,7 @@ function JoinScreen({
                 />
                 <button
                   onClick={joinMeeting}
-                  disabled={isLoading || !canJoin || !nameReady}
+                  disabled={isLoading || !canJoin || !nameReady || restoringMedia}
                   className={CTA_GHOST}
                 >
                   Join
