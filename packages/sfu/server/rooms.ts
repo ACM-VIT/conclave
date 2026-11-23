@@ -120,6 +120,9 @@ const recordRecoverableChanges = (state: SfuState, room: Room): void => {
   room.onRecoverableChange = () => {
     if (room.recordsItsCall) state.roomRecovery.noteRunning(room);
   };
+  // A lost call whose time ran out is a meeting that is over, as one that
+  // emptied or was ended is.
+  room.onLostCallEnded = () => noteMeetingOver(state, room);
 };
 
 /**

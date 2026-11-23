@@ -364,6 +364,9 @@ export class Room {
   // Told when what a recreated room would need changes: who hosts, and who
   // has to be let in again.
   public onRecoverableChange: (() => void) | null = null;
+  // Told once, when the lost call this room stood in for is over for good.
+  public onLostCallEnded: (() => void) | null = null;
+  private lostCallEnded = false;
   // A host ended the meeting for everyone. It may stay open a little longer
   // to say so, but it is over: it hands out no more recovery passes.
   private endedForEveryone = false;
@@ -2698,7 +2701,7 @@ export class Room {
     this.restorerLapseTimer = setTimeout(() => {
       this.restorerLapseTimer = null;
       if (this.restorer === null) return;
-      this.forgetLostHosts();
+      this.endLostCall();
       options.onLapse();
     }, Math.max(0, options.until - Date.now()) + 1);
     this.restorerLapseTimer.unref();
@@ -2719,14 +2722,22 @@ export class Room {
     return this.restorer?.rosterKnown !== false;
   }
 
-  // A meeting opened here after the lost call's time is up is a new one.
-  // That call's hosts are not its hosts.
-  forgetLostHosts() {
+  // The lost call's time is up, so a meeting opened here is a new one.
+  // Everything the lost call left goes with it, all at once: its hosts and
+  // co-hosts, a temporary host, and the people its hosts had removed or
+  // blocked. Admissions stay: whoever is here is in the new meeting.
+  endLostCall() {
+    if (this.lostCallEnded) return;
+    this.lostCallEnded = true;
     const report = this.onRecoverableChange;
     this.onRecoverableChange = null;
     this.hostUserKey = null;
     this.adminUserKeys.clear();
+    this.temporaryHostUserKey = null;
+    this.readmissionRequiredUserKeys.clear();
+    this.blockedUsers.clear();
     this.onRecoverableChange = report;
+    this.onLostCallEnded?.();
   }
 
   markRestored() {

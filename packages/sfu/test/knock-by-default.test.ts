@@ -1846,6 +1846,47 @@ describe.skipIf(!redisServerPath)("knockers waiting on an SFU when the next meet
   }, 30_000);
 });
 
+describe("an invited attendee a host removed from a call the server lost", () => {
+  // A host removes the invitee, then the SFU loses the call. Someone who was
+  // only knocking recreates the room, and nobody from the call comes back.
+  const lostWithTheInviteeRemoved = async () => {
+    vi.useFakeTimers({
+      toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
+    vi.setSystemTime(new Date("2026-11-22T08:00:00Z"));
+    const before = makeState();
+    schedule(before);
+    const created = await join(before, host);
+    expect((await join(before, invitee)).status).toBe("joined");
+    await send(created.peer, "kickUser", { userId: "invitee@example.com#i" });
+    const after = await restart(before);
+    const opener = await join(after, { ...knocker, allowRoomCreation: true });
+    expect(opener.status).toBe("waiting");
+    expect((await join(after, invitee)).status).toBe("waiting");
+    return { after, opener };
+  };
+
+  it("joins the meeting opened once the lost call's time is up, without knocking", async () => {
+    const { after, opener } = await lostWithTheInviteeRemoved();
+    vi.advanceTimersByTime(8 * MINUTE_MS);
+    expect((await askAgain(opener)).status).toBe("joined");
+    expect(opener.context.currentClient).toBeInstanceOf(Admin);
+
+    expect((await join(after, invitee)).status).toBe("joined");
+  });
+
+  it("joins it without knocking after the SFU restarts again too", async () => {
+    const { after, opener } = await lostWithTheInviteeRemoved();
+    vi.advanceTimersByTime(8 * MINUTE_MS);
+    await askAgain(opener);
+    await Promise.resolve();
+    const again = await restart(after);
+
+    await join(again, host);
+    expect((await join(again, invitee)).status).toBe("joined");
+  });
+});
+
 describe("an invited attendee removed on one SFU", () => {
   it("still has to be let in again on the SFU the meeting fails over to", async () => {
     // Both SFUs use one schedule store. B loaded the meeting when it started,

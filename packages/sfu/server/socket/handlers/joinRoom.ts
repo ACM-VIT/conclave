@@ -569,9 +569,9 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         }
 
         // Past its deadline, a room that stood in for a lost call is a new
-        // meeting to whoever opens it. That call's hosts are not its hosts.
+        // meeting to whoever opens it. Nothing of that call holds in it.
         if (room.restorerState(Date.now()) === "lapsed") {
-          room.forgetLostHosts();
+          room.endLostCall();
         }
 
         const webinarConfig = getOrCreateWebinarRoomConfig(
