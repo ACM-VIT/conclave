@@ -5,6 +5,7 @@ import {
   decideWebcamStartupResetVerification,
   enqueueWebcamStartupResetProducer,
   getConsumerMaximumSpatialLayer,
+  getHighestActiveSpatialLayer,
   getWebcamStartupResetQueueDelayMs,
   isCurrentConsumerGeneration,
   isProducerPauseSnapshotCurrent,
@@ -28,6 +29,7 @@ const poll = (
     adaptivelyPaused: false,
     observedSpatialLayer: 2,
     maximumSpatialLayer: 2,
+    highestActiveSpatialLayer: null,
     ...overrides,
   });
 
@@ -128,6 +130,38 @@ describe("webcam startup consumer generation reset", () => {
       action: "wait",
       highLayerSince: null,
     });
+  });
+
+  it("converges on the highest layer a low-quality camera actually sends", () => {
+    // Low quality keeps three layers with the top one switched off.
+    const lowCamera = { maximumSpatialLayer: 2, highestActiveSpatialLayer: 1 };
+
+    expect(poll({ ...lowCamera, observedSpatialLayer: 1 })).toEqual({
+      action: "queue",
+      highLayerSince: 500,
+    });
+    expect(poll({ ...lowCamera, observedSpatialLayer: 0 })).toEqual({
+      action: "wait",
+      highLayerSince: null,
+    });
+    expect(
+      poll({
+        ...lowCamera,
+        highestActiveSpatialLayer: 0,
+        observedSpatialLayer: 0,
+      }),
+    ).toEqual({ action: "wait", highLayerSince: null });
+  });
+
+  it("reads the highest active layer from the producer's per-layer scores", () => {
+    const highest = (score: unknown) => getHighestActiveSpatialLayer(score, 2);
+
+    expect(highest({ producerScores: [10, 9, 0] })).toBe(1);
+    expect(highest({ producerScores: [10, 9, 8] })).toBe(2);
+    expect(highest({ producerScores: [10, 9, 8, 7] })).toBe(2);
+    expect(highest({ producerScores: [0, 0, 0] })).toBeNull();
+    expect(highest({ score: 10 })).toBeNull();
+    expect(highest(undefined)).toBeNull();
   });
 
   it("requires sustained high-layer convergence and resets the window on a drop", () => {

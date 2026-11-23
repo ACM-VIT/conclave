@@ -1,62 +1,111 @@
 name: CI
 
 "on":
-  push:
-    branches: ["**"]
   pull_request:
+    branches: [staging, main]
+  merge_group:
+    branches: [staging, main]
+  push:
+    branches: [staging, main]
+  workflow_dispatch:
 
-# Cancel superseded runs on the same ref to save CI minutes.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
 
 jobs:
-  build:
-    name: check + build
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-
+  ci:
+    name: ${{ matrix.job }}
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-24.04' }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        job: [lint, typecheck, test, build, checks]
+    env:
+      COMMENT_RATCHET_BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event_name == 'merge_group' && github.event.merge_group.base_sha || github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000' && github.event.before || 'origin/staging' }}
+      COMMENT_RATCHET_MODE: ${{ github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000' && 'exact' || 'merge-base' }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7.0.1
+      - run: echo "CI_JOB_STARTED_AT=$(date +%s%3N)" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v7.0.1
         with:
+          filter: blob:none
           fetch-depth: 0
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v6.1.0
-        with:
-          version: 12.16.1
+      - id: setup
+        uses: ./.github/actions/setup
 
-      - name: Setup Node
-        uses: actions/setup-node@v7.1.0
-        with:
-          node-version: 22
-          cache: pnpm
+      - if: steps.setup.outputs.modules-hit != 'true'
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          echo "CI_JOB_STARTED_AT=$(date +%s%3N)" >> "$GITHUB_ENV"
+          echo "CI_BUDGET_FROM=setup ended, as node_modules missed the cache" >> "$GITHUB_ENV"
+          if [ "$EVENT" != "push" ]; then
+            echo "::warning title=node_modules cache miss::This $EVENT run installed node_modules without a cache, so its budget clock started after setup. A miss on every run means staging or main has not saved a cache for this lockfile and toolchain."
+          fi
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Cache the comment parsers
-        uses: actions/cache@v4
+      - id: comment-parsers
+        if: matrix.job == 'lint'
+        uses: actions/cache/restore@v6.1.0
         with:
           path: |
             ~/.cache/conclave/swift-trivia
             ~/.cache/conclave/kotlin-lexer
-          key: comment-parsers-${{ runner.os }}-${{ hashFiles('scripts/quality/comments/swift-trivia/Package.resolved', 'scripts/quality/comments/tokenizers.mjs') }}
+          key: comment-parsers-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/quality/comments/swift-trivia/**', 'scripts/quality/comments/kotlin-lexer/**', 'scripts/quality/comments/tokenizers.mjs') }}
+          restore-keys: comment-parsers-v1-${{ runner.os }}-${{ runner.arch }}-
 
-      - name: Check toolchains for the comment ratchet
-        run: |
-          swift --version
-          python3 -c 'import sys; assert sys.version_info >= (3, 12), sys.version'
-
-      - name: Fetch the comment parsers
-        run: pnpm comments:tools
-
-      - name: Check
-        run: pnpm check
+      - id: comment-tools
+        if: matrix.job == 'lint'
         env:
-          COMMENT_RATCHET_BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || (github.event.before != '0000000000000000000000000000000000000000' && github.event.before) || 'origin/staging' }}
-          COMMENT_RATCHET_MODE: ${{ github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000' && 'exact' || 'merge-base' }}
+          PARSERS_HIT: ${{ steps.comment-parsers.outputs.cache-hit }}
+        run: |
+          pnpm comments:tools
+          if [ "$PARSERS_HIT" != "true" ]; then
+            echo "CI_JOB_STARTED_AT=$(date +%s%3N)" >> "$GITHUB_ENV"
+            echo "CI_BUDGET_FROM=the comment parsers were built, as their cache missed" >> "$GITHUB_ENV"
+          fi
 
-      - name: Build
-        run: pnpm build
+      - id: next-cache
+        if: matrix.job == 'build'
+        uses: actions/cache/restore@v6.1.0
+        with:
+          path: apps/web/.next/cache
+          key: next-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
+          restore-keys: next-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}-
+
+      - id: run
+        run: node scripts/ci/run.mjs ${{ matrix.job }}
+
+      - if: always() && github.event_name == 'push' && matrix.job == 'typecheck' && steps.setup.outcome == 'success' && steps.setup.outputs.modules-hit != 'true'
+        uses: actions/cache/save@v6.1.0
+        with:
+          path: |
+            node_modules
+            apps/*/node_modules
+            packages/*/node_modules
+          key: ${{ steps.setup.outputs.modules-key }}
+
+      - if: always() && github.event_name == 'push' && matrix.job == 'typecheck' && steps.setup.outcome == 'success' && steps.setup.outputs.modules-hit != 'true'
+        uses: actions/cache/save@v6.1.0
+        with:
+          path: ${{ steps.setup.outputs.store-path }}
+          key: ${{ steps.setup.outputs.store-key }}
+
+      - if: always() && github.event_name == 'push' && matrix.job == 'lint' && steps.comment-tools.outcome == 'success' && steps.comment-parsers.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6.1.0
+        with:
+          path: |
+            ~/.cache/conclave/swift-trivia
+            ~/.cache/conclave/kotlin-lexer
+          key: ${{ steps.comment-parsers.outputs.cache-primary-key }}
+
+      - if: github.event_name == 'push' && matrix.job == 'build' && steps.run.outcome == 'success' && steps.next-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6.1.0
+        with:
+          path: apps/web/.next/cache
+          key: ${{ steps.next-cache.outputs.cache-primary-key }}
