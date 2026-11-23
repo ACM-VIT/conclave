@@ -99,6 +99,7 @@ describe("wheel label fitting", () => {
       (Array.from(text).length * SINGLE_LABEL_WIDTH) / (SINGLE_LABEL_SIZE * (count + 0.5));
     expect(fitSingleLabel("AAAAA\u0600 BBBBBBBBBBB", 600, fitsCodePoints(8))).toBe("AAAAA\u0600 \u2026");
     expect(fitSingleLabel("AAAAA BBBBBBBBBBB", 600, fitsCodePoints(7))).toBe("AAAAA\u2026");
+    expect(fitSingleLabel(" \u0600 BBBBBBBBBBB", 600, fitsCodePoints(3))).toBeNull();
   });
 
   it("keeps 64 names readable at the smallest allowed size, or hides them when nothing fits", () => {

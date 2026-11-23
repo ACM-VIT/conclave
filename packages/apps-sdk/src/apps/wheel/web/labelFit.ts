@@ -79,11 +79,14 @@ const largestFittingSize = (
 
 const WHITESPACE_CLUSTER = /^\s+$/u;
 
-const shortened = (clusters: string[], count: number): string => {
+const keptClusters = (clusters: string[], count: number): number => {
   let end = count;
   while (end > 0 && WHITESPACE_CLUSTER.test(clusters[end - 1])) end -= 1;
-  return `${clusters.slice(0, end).join("")}${ELLIPSIS}`;
+  return end;
 };
+
+const shortened = (clusters: string[], count: number): string =>
+  `${clusters.slice(0, keptClusters(clusters, count)).join("")}${ELLIPSIS}`;
 
 const truncateToWidth = (
   label: string,
@@ -100,7 +103,7 @@ const truncateToWidth = (
     if (widthAtSize(candidate) <= limit) low = mid;
     else high = mid - 1;
   }
-  if (low < 1) return null;
+  if (keptClusters(characters, low) < 1) return null;
   return {
     text: shortened(characters, low),
     truncated: true,
