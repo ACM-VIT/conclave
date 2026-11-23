@@ -215,6 +215,22 @@ class VideoProducerRefreshTests {
         assertEquals("screen-3", (field("screenProducer").get(call.media) as Producer).id)
     }
 
+    @Test
+    fun aVideoQualityChangedDuringAWebcamRefreshReachesTheCamera() {
+        val call = publishingCall("camera")
+        changeSettings(call.media, cameraMaxBitrateBps = 1_650_000, screenMaxBitrateBps = 2_500_000)
+        pumpMainLooperUntil { call.maxBitrates.size == 1 }
+        assertEquals(listOf(1_650_000), call.maxBitrates.toList())
+
+        call.media.updateVideoQuality(VideoQuality.low)
+        refresh(call.media, "camera")
+        call.firstAck.countDown()
+        pumpMainLooperUntil { call.maxBitrates.size == 2 }
+        settle()
+
+        assertEquals(180_000, call.maxBitrates.last())
+    }
+
     private fun replaceSession(call: Call, kind: String) {
         val generation = field("configurationGeneration")
         generation.setLong(call.media, generation.getLong(call.media) + 1)

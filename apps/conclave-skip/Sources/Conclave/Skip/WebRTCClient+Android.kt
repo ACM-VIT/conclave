@@ -3784,11 +3784,9 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         configuredScreenMaxBitrateBps = screenMaxBitrateBps.coerceIn(150_000, 15_000_000)
         configuredScreenContentHint = screenContentHint
         configuredScreenDegradationPreference = screenDegradationPreference
-        mediaPublishSettingsRevision += 1
         videoProducerBandwidthSignature = null
         screenProducerBandwidthSignature = null
-        lastAppliedLocalBandwidthSignature = null
-        applyLocalBandwidthProfile(currentLocalBandwidthQuality)
+        publishSettingsChanged()
     }
 
     private fun takeInFlightToken(): Long {
@@ -3799,6 +3797,12 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
     private fun notifyLocalAudioEnabled(enabled: Boolean) {
         if (audioBandwidthRefreshInFlight) return
         onLocalAudioEnabledChanged?.invoke(enabled)
+    }
+
+    private fun publishSettingsChanged() {
+        mediaPublishSettingsRevision += 1
+        lastAppliedLocalBandwidthSignature = null
+        applyLocalBandwidthProfile(currentLocalBandwidthQuality)
     }
 
     private fun replayVideoSettingsRefreshIfChangedSince(settingsRevision: Int) {
@@ -3824,8 +3828,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
     internal fun updateVideoQuality(quality: VideoQuality) {
         currentVideoQuality = quality
         evaluateWebcamTopologyTransition()
-        lastAppliedLocalBandwidthSignature = null
-        applyLocalBandwidthProfile(currentLocalBandwidthQuality)
+        publishSettingsChanged()
         if (webcamProducerTopology == WebcamProducerTopology.vp8SingleLayer) return
         val producer = videoProducer ?: return
         setSendProducerMaxSpatialLayer(

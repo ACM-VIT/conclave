@@ -628,6 +628,14 @@ Fixed 2026-10-22 and guarded by `testNativeCallCorrectnessBlockersStayFixed`:
   (`audioBandwidthRefreshInFlight`, `screenBandwidthRefreshInFlight`,
   `suppressLocalStateCallbacks`), `audioStartTask` identity and
   `audioCaptureRestartToken`. A new guard belongs in this list.
+- Every input that changes publish settings goes through
+  `publishSettingsChanged()` on Android (camera and share settings, video
+  quality), which bumps `mediaPublishSettingsRevision`. A video produce in
+  flight records the settings it encoded and replays the settings refresh
+  when the revision moved (`replayVideoSettingsRefreshIfChangedSince`); iOS
+  re-applies the newest profile at each commit point
+  (`reapplyLocalBandwidthProfile(ifChangedSince:)`). A new settings input
+  belongs here.
 - A failed mute fails closed on both platforms: `setAudioEnabled(false)`
   keeps the producer paused and the track silent, and the view model stays
   muted while showing the error.
