@@ -126,10 +126,13 @@ it("shows only the rest of a recent notice when the app is shown again", async (
   }
 });
 
-it("keeps the app from taking input while it is rebuilt from the server", async () => {
-  await renderLayout({ frozen: true });
-  const frame = [...container.querySelectorAll("div")].find((element) => element.textContent === "board" && element.hasAttribute("inert"));
-  expect(frame).toBeDefined();
+it("keeps the app from taking input while it is rebuilt from the server, but still announces the notice", async () => {
+  await renderLayout({ frozen: true, rejectedChangeAt: Date.now() });
+  const frozen = container.querySelector("[inert]");
+  expect(frozen?.textContent).toBe("board");
+  const notice = container.querySelector('[role="status"]');
+  expect(notice?.textContent).toContain("Your last change couldn't be saved");
+  expect(notice?.closest("[inert]")).toBeNull();
 
   await renderLayout({ frozen: false });
   expect(container.querySelector("[inert]")).toBeNull();

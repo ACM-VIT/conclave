@@ -120,14 +120,15 @@ function MeetingAppLayout({
           </div>
         ) : null}
         <div
-          inert={frozen}
           className={
             frameContent
               ? "relative min-h-0 min-w-0 flex-1 overflow-hidden rounded-2xl border border-white/10 bg-[#0b0b0b] shadow-[0_20px_60px_rgba(0,0,0,0.4)]"
               : "relative min-h-0 min-w-0 flex-1 overflow-hidden"
           }
         >
-          <App />
+          <div inert={frozen} className="contents">
+            <App />
+          </div>
           {noticeFor !== null && noticeFor === rejectedChangeAt ? <AdminNoticePill notice={REJECTED_CHANGE_NOTICE} compact /> : null}
         </div>
       </div>

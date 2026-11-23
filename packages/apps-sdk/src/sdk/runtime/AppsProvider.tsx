@@ -253,6 +253,16 @@ export function AppsProvider({
     socketRef.current = socket;
   }, [socket, resetLocalData]);
 
+  useEffect(() => {
+    disposedRef.current = false;
+    return () => {
+      disposedRef.current = true;
+      queueMicrotask(() => {
+        if (disposedRef.current) resetLocalData();
+      });
+    };
+  }, [resetLocalData]);
+
   const discardLocalApp = useCallback((appId: string) => {
     const doc = docsRef.current.get(appId);
     if (doc) {
@@ -427,11 +437,14 @@ export function AppsProvider({
 
       if (run.replaces) return true;
       const serverVector = response.stateVector ? toUint8Array(response.stateVector) : null;
-      if (serverVector && canWrite()) {
+      if (serverVector) {
         try {
           const updateForServer = Y.encodeStateAsUpdate(run.doc, serverVector);
           const serverState = Y.createSnapshot(Y.decodeUpdate(update).ds, Y.decodeStateVector(serverVector));
-          if (!Y.snapshotContainsUpdate(serverState, updateForServer)) {
+          if (Y.snapshotContainsUpdate(serverState, updateForServer)) return true;
+          if (!canWrite()) {
+            unsentAppsRef.current.add(run.appId);
+          } else {
             const payload: AppsUpdatePayload = {
               appId: run.appId,
               update: updateForServer,
@@ -659,13 +672,6 @@ export function AppsProvider({
     resumeWrites();
   }, [isAdmin, isReadOnly, resumeWrites]);
 
-  useEffect(() => {
-    disposedRef.current = false;
-    return () => {
-      disposedRef.current = true;
-      resetLocalData();
-    };
-  }, [resetLocalData]);
 
   const openApp = useCallback(async (appId: string, options?: Record<string, unknown>) => {
     const currentSocket = socketRef.current;

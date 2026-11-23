@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, useContext } from "react";
+import { StrictMode, act, useContext } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as Y from "yjs";
@@ -402,6 +402,45 @@ it("rebuilds a copy that changed while locked before it sends again, so later ch
   for (const upload of first.uploads) Y.applyUpdate(server, upload);
   expect(server.store.pendingStructs).toBeNull();
   expect(server.getText("t").toString()).toBe("after drawn before you joined");
+});
+
+it("rebuilds a seeded copy that opened while locked once writes are allowed", async () => {
+  const seeded = () => {
+    const doc = new Y.Doc();
+    doc.getText("t").insert(0, "seed ");
+    return doc;
+  };
+  await mount(first.socket, { isAdmin: false, apps: [{ id: "board", name: "Board", createDoc: seeded } as never] });
+  first.control.answerSync = () => boardContent();
+  await appState("board", true);
+  expect(boardText()).toContain("seed ");
+  expect(first.uploads).toEqual([]);
+
+  await appState("board", false);
+
+  expect(first.syncTimes).toHaveLength(2);
+  expect(boardText()).toBe("drawn before you joined");
+  expect(first.uploads).toEqual([]);
+});
+
+it("syncs the open app through a StrictMode effect replay even when replies arrive at once", async () => {
+  const live = makeSocket("board");
+  live.control.answerSync = () => boardContent();
+
+  await act(async () =>
+    root.render(
+      <StrictMode>
+        <AppsProvider socket={live.socket} apps={boardApps} isAdmin>
+          <Probe />
+        </AppsProvider>
+      </StrictMode>,
+    ),
+  );
+
+  expect(ctx.syncStatus).toBe("synced");
+  expect(boardText()).toBe("drawn before you joined");
+  expect(mountedDoc?.isDestroyed).toBe(false);
+  expect(live.syncTimes).toHaveLength(1);
 });
 
 it("rebuilds a copy that changed before the participant became a host", async () => {
