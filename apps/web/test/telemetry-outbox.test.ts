@@ -342,6 +342,47 @@ describe("a batch /ingest asked to wait for", () => {
     expect(store.list()).toEqual([]);
   });
 
+  it("is sent once by the tabs whose replays all held it, through a locked pass that reads storage again", async () => {
+    const store = memoryStore();
+    const closed = harness({ answers: [{ status: 503, retryAfter: "60" }], store });
+    const waiting = event();
+    closed.outbox.add(waiting);
+    await closed.advance(FLUSH_INTERVAL_MS);
+    closed.outbox.flushForUnload();
+
+    const lock = sharedLock();
+    const tabs = [harness({ store, lock, at: START + 20_000 }), harness({ store, lock, at: START + 20_000 })];
+    for (const tab of tabs) tab.outbox.replaySaved();
+    for (const tab of tabs) await tab.advance(45_000);
+
+    expect(tabs.flatMap((tab) => tab.posted())).toEqual([waiting.uuid]);
+    expect(store.list()).toEqual([]);
+  });
+
+  it("keeps every tab waiting for a new Retry-After its send was given", async () => {
+    const store = memoryStore();
+    const closed = harness({ answers: [{ status: 503, retryAfter: "60" }], store });
+    const waiting = event();
+    closed.outbox.add(waiting);
+    await closed.advance(FLUSH_INTERVAL_MS);
+    closed.outbox.flushForUnload();
+
+    const lock = sharedLock();
+    const first = harness({ answers: [{ status: 429, retryAfter: "30" }], store, lock, at: START + 20_000 });
+    const second = harness({ store, lock, at: START + 20_000 });
+    for (const tab of [first, second]) tab.outbox.replaySaved();
+    await first.advance(45_000);
+    await second.advance(45_000);
+    expect(first.posted()).toEqual([waiting.uuid]);
+    expect(second.posts).toEqual([]);
+    expect(store.list()).toEqual([expect.objectContaining({ notBefore: START + 65_000 + 30_000 })]);
+
+    await first.advance(30_000);
+    await second.advance(30_000);
+    expect([...first.posted(), ...second.posted()]).toEqual([waiting.uuid, waiting.uuid]);
+    expect(store.list()).toEqual([]);
+  });
+
   it("still goes by beacon after an ordinary backoff, which /ingest did not ask for", async () => {
     const h = harness({ answers: [503] });
     const failed = event();

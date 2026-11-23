@@ -241,18 +241,25 @@ export function createOutbox(deps: OutboxDeps) {
   // After the next delay of the schedule, or the Retry-After /ingest asked
   // for when that is longer.
   const retry = (batch: Batch, afterMs: number | null): void => {
-    // Kept through unload and replay, so a page hiding or coming back does
-    // not send it sooner than /ingest asked.
-    batch.notBefore = afterMs === null ? 0 : deps.now() + afterMs;
     const delay = RETRY_DELAYS_MS[batch.attempt];
+    batch.attempt += 1;
+    batch.notBefore = afterMs === null ? 0 : deps.now() + Math.max(delay ?? 0, afterMs);
     if (delay === undefined) {
       // This page has given up on it: storage keeps it for the next replay.
       live.delete(batch.id);
       deps.store.save(stored(batch));
       return;
     }
-    batch.attempt += 1;
-    sendLater(batch, Math.max(delay, afterMs ?? 0));
+    if (afterMs === null) {
+      sendLater(batch, delay);
+      return;
+    }
+    // /ingest asked it to wait: storage takes it, with the time it may go,
+    // and its next send is a locked replay then, which reads storage again,
+    // so no tab sends it sooner, or after another tab has.
+    live.delete(batch.id);
+    deps.store.save(stored(batch));
+    replayAt(batch.notBefore);
   };
 
   // Held as a batch waiting to send, so the page going away saves it.
@@ -262,6 +269,18 @@ export function createOutbox(deps: OutboxDeps) {
       batch.timer = null;
       void send(batch);
     }, ms);
+  };
+
+  // One timer, for the earliest saved batch /ingest asked to wait for.
+  let waitTimer: { handle: unknown; at: number } | null = null;
+  const replayAt = (at: number): void => {
+    if (waitTimer && waitTimer.at <= at) return;
+    if (waitTimer) deps.clearTimer(waitTimer.handle);
+    const handle = deps.setTimer(() => {
+      waitTimer = null;
+      replaySaved();
+    }, Math.max(at - deps.now(), 0));
+    waitTimer = { handle, at };
   };
 
   // One pass over storage: sends each batch in it, from any tab, that this
@@ -286,7 +305,7 @@ export function createOutbox(deps: OutboxDeps) {
         beaconed: saved.sent,
         notBefore: saved.notBefore,
       };
-      if (saved.notBefore > deps.now()) sendLater(batch, saved.notBefore - deps.now());
+      if (saved.notBefore > deps.now()) replayAt(saved.notBefore);
       else sends.push(send(batch));
     }
     if (stale.length > 0) deps.onStale(counted(stale));
@@ -298,6 +317,36 @@ export function createOutbox(deps: OutboxDeps) {
     ]);
     deps.clearTimer(timer);
   };
+
+  /**
+   * Sends what storage holds, from any tab, holding the replay lock until
+   * each send has its first answer, or REPLAY_HOLD_MS; a batch this page is
+   * still sending is left to that send. A batch too old to send is dropped,
+   * and the drops of one pass are counted together. An ask while a pass
+   * runs, such as a page coming back as one waits for its answers, gets a
+   * pass of its own after it, so nothing saved meanwhile waits for the
+   * next page load. A batch /ingest asked to wait for is left in storage,
+   * and a locked replay reads storage again when its time comes.
+   */
+  function replaySaved(): void {
+    if (replay === "waiting") return;
+    if (replay === "running") {
+      replayAgain = true;
+      return;
+    }
+    replay = "waiting";
+    deps.lock(async () => {
+      replay = "running";
+      try {
+        do {
+          replayAgain = false;
+          await replayPass();
+        } while (replayAgain);
+      } finally {
+        replay = "idle";
+      }
+    });
+  }
 
   function flush(): void {
     cancelFlush();
@@ -366,34 +415,7 @@ export function createOutbox(deps: OutboxDeps) {
       for (const batch of held) if (batch.inFlight !== null) deps.store.save(stored(batch));
     },
 
-    /**
-     * Sends what storage holds, from any tab, holding the replay lock until
-     * each send has its first answer, or REPLAY_HOLD_MS; a batch this page is
-     * still sending is left to that send. A batch too old to send is dropped,
-     * and the drops of one pass are counted together. An ask while a pass
-     * runs, such as a page coming back as one waits for its answers, gets a
-     * pass of its own after it, so nothing saved meanwhile waits for the
-     * next page load.
-     */
-    replaySaved(): void {
-      if (replay === "waiting") return;
-      if (replay === "running") {
-        replayAgain = true;
-        return;
-      }
-      replay = "waiting";
-      deps.lock(async () => {
-        replay = "running";
-        try {
-          do {
-            replayAgain = false;
-            await replayPass();
-          } while (replayAgain);
-        } finally {
-          replay = "idle";
-        }
-      });
-    },
+    replaySaved,
   };
 }
 
