@@ -27,12 +27,33 @@ export function formatSharedBrowserLabel(
   return name ? `${name} is sharing a browser` : "Shared browser";
 }
 
-function SharedBrowserPill({ label, isLive }: { label: string; isLive: boolean }) {
+function SharedBrowserPill({
+  label,
+  isLive,
+  onReload,
+}: {
+  label: string;
+  isLive: boolean;
+  onReload?: () => void;
+}) {
   return (
     <StageSourcePill icon={Globe} label={label} className="pointer-events-none">
       <span className="sr-only" role="status">
         {isLive ? " Live" : ""}
       </span>
+      {onReload ? (
+        <>
+          <span className="h-3 w-px shrink-0 bg-[#fafafa]/14" />
+          <button
+            type="button"
+            onClick={onReload}
+            aria-label="Reload shared browser"
+            className="pointer-events-auto shrink-0 text-[12px] font-medium text-[#fafafa]/70 transition-colors duration-100 hover:text-[#fafafa]"
+          >
+            Reload
+          </button>
+        </>
+      ) : null}
     </StageSourcePill>
   );
 }
@@ -83,7 +104,11 @@ function SharedBrowserFrame({
           action={{ label: "Retry", onClick: onRetry }}
         />
       ) : null}
-      <SharedBrowserPill label={label} isLive={isReady} />
+      <SharedBrowserPill
+        label={label}
+        isLive={isReady}
+        onReload={isReady ? onRetry : undefined}
+      />
     </div>
   );
 }
@@ -92,10 +117,14 @@ function SharedBrowserVideo({
   stream,
   src,
   label,
+  reloadKey,
+  onReload,
 }: {
   stream: MediaStream;
   src: string;
   label: string;
+  reloadKey: number;
+  onReload: () => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -141,7 +170,7 @@ function SharedBrowserVideo({
             style={{ objectFit: "fill", pointerEvents: "none" }}
           />
           <iframe
-            key={src}
+            key={`${reloadKey}:${src}`}
             src={`${src}${src.includes("?") ? "&" : "?"}${NOVNC_VIDEO_INPUT_PARAMS}`}
             className="absolute inset-0 h-full w-full border-0"
             style={{ opacity: 0, pointerEvents: "auto" }}
@@ -150,7 +179,7 @@ function SharedBrowserVideo({
           />
         </div>
       </div>
-      <SharedBrowserPill label={label} isLive={isPlaying} />
+      <SharedBrowserPill label={label} isLive={isPlaying} onReload={onReload} />
     </div>
   );
 }
@@ -165,6 +194,7 @@ function SharedBrowserStage({
   const [attempt, setAttempt] = useState(0);
   const resolvedNoVncUrl = resolveNoVncUrl(noVncUrl);
   const label = formatSharedBrowserLabel(controllerName, isLocalController);
+  const reload = () => setAttempt((value) => value + 1);
 
   return (
     <div
@@ -179,13 +209,15 @@ function SharedBrowserStage({
           stream={browserVideoStream}
           src={resolvedNoVncUrl}
           label={label}
+          reloadKey={attempt}
+          onReload={reload}
         />
       ) : (
         <SharedBrowserFrame
           key={`${attempt}:${resolvedNoVncUrl}`}
           src={resolvedNoVncUrl}
           label={label}
-          onRetry={() => setAttempt((value) => value + 1)}
+          onRetry={reload}
         />
       )}
     </div>

@@ -187,3 +187,39 @@ it("loads the page from scratch when the browser video goes away", () => {
   expect(text()).not.toContain("Couldn\u2019t load");
   expect(pageFrame().style.opacity).toBe("0");
 });
+
+it("keeps Reload reachable after the page loads, even if its connection later fails", () => {
+  render();
+  expect(button("Reload")).toBeUndefined();
+  finishLoading();
+  const loadedFrame = pageFrame();
+
+  const reload = button("Reload");
+  expect(reload).toBeDefined();
+  act(() => {
+    reload?.click();
+  });
+
+  expect(pageFrame()).not.toBe(loadedFrame);
+  expect(text()).toContain("Loading shared browser");
+  finishLoading();
+  expect(text()).not.toContain("Loading shared browser");
+  expect(button("Reload")).toBeDefined();
+});
+
+it("reloads the noVNC input layer over the browser video", () => {
+  vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(
+    () => new Promise<void>(() => {}),
+  );
+  render({ provider: "chromium", browserVideoStream: new MediaStream() });
+  const inputFrame = pageFrame();
+  const video = container.querySelector("video");
+
+  act(() => {
+    button("Reload")?.click();
+  });
+
+  expect(pageFrame()).not.toBe(inputFrame);
+  expect(pageFrame().getAttribute("title")).toBe("Shared browser input");
+  expect(container.querySelector("video")).toBe(video);
+});
