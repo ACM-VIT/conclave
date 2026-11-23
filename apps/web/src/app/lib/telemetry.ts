@@ -385,7 +385,7 @@ export function startTelemetry(): void {
         keepalive,
         credentials: "omit",
         headers: { "content-type": "application/json" },
-      }).then((response) => response.status),
+      }).then((response) => ({ status: response.status, retryAfter: response.headers.get("retry-after") })),
     beacon: (body) => {
       try {
         return navigator.sendBeacon(`${INGEST_PATH}/e/`, new Blob([body], { type: "application/json" }));

@@ -18,7 +18,8 @@ const KEY = "phc_test_project";
 const START = Date.parse("2026-11-23T00:00:00.000Z");
 const MINUTE = 60_000;
 
-type Answer = number | "offline" | "pending" | Promise<number>;
+type Reply = { status: number; retryAfter: string | null };
+type Answer = number | Reply | "offline" | "pending" | Promise<number>;
 
 /** Storage the next page load reads, shared by the outboxes a test makes: one entry per batch. */
 const memoryStore = () => {
@@ -85,9 +86,10 @@ const harness = ({
     post: (body, keepalive) => {
       posts.push({ body, keepalive, at: now });
       const answer = answers.shift() ?? 200;
-      if (answer === "pending") return new Promise<number>(() => {});
-      if (answer instanceof Promise) return answer;
-      return answer === "offline" ? Promise.reject(new TypeError("Failed to fetch")) : Promise.resolve(answer);
+      if (answer === "pending") return new Promise<Reply>(() => {});
+      if (answer === "offline") return Promise.reject(new TypeError("Failed to fetch"));
+      if (answer instanceof Promise) return answer.then((status) => ({ status, retryAfter: null }));
+      return Promise.resolve(typeof answer === "number" ? { status: answer, retryAfter: null } : answer);
     },
     beacon: (body) => {
       if (beaconRefuses) return false;
@@ -247,6 +249,56 @@ describe("the telemetry outbox", () => {
     h.outbox.flushForUnload();
 
     expect(h.uuidsIn(h.beacons)).toEqual([once.uuid]);
+  });
+});
+
+describe("answers from /ingest", () => {
+  it.each([
+    [200, "delivered"],
+    [204, "delivered"],
+    [400, "refused"],
+    [401, "refused"],
+    [403, "refused"],
+    [404, "refused"],
+    [405, "refused"],
+    [413, "refused"],
+    [408, "retried"],
+    [425, "retried"],
+    [429, "retried"],
+    [500, "retried"],
+    [502, "retried"],
+    [503, "retried"],
+    [504, "retried"],
+  ] as const)("takes %i as %s", async (status, outcome) => {
+    const store = memoryStore();
+    const h = harness({ answers: [status], store });
+    h.refuseBeacons();
+    const sent = event();
+    h.outbox.add(sent);
+    await h.advance(FLUSH_INTERVAL_MS);
+    // A batch still owed a send is saved as the page goes away; one
+    // delivered or refused for good is not.
+    h.outbox.flushForUnload();
+
+    expect(storedUuids(store)).toEqual(outcome === "retried" ? [sent.uuid] : []);
+  });
+
+  it("waits as long as Retry-After asks before sending again, at most a minute", async () => {
+    const at = (h: ReturnType<typeof harness>) => h.posts.map((post) => post.at - START);
+    const seconds = harness({ answers: [{ status: 429, retryAfter: "7" }] });
+    seconds.outbox.add(event());
+    await seconds.advance(FLUSH_INTERVAL_MS + 10_000);
+    expect(at(seconds)).toEqual([5000, 12_000]);
+
+    const date = harness({ answers: [{ status: 503, retryAfter: new Date(START + 5000 + 9000).toUTCString() }] });
+    date.outbox.add(event());
+    await date.advance(FLUSH_INTERVAL_MS + 10_000);
+    expect(at(date)).toEqual([5000, 14_000]);
+
+    const long = harness({ answers: [{ status: 429, retryAfter: "3600" }] });
+    long.outbox.add(event());
+    await long.advance(FLUSH_INTERVAL_MS + 2 * MINUTE);
+    expect(at(long)).toEqual([5000, 65_000]);
   });
 });
 

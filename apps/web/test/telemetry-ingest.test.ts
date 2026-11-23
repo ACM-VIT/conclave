@@ -718,3 +718,42 @@ describe("createChunkManifestLoader", () => {
     expect(urls).toHaveLength(3);
   });
 });
+
+describe("PostHog's answers and slow requests at /ingest", () => {
+  const json = () => JSON.stringify(captureBody([event()]));
+  const answering = (status: number, headers: Record<string, string> = {}) => async () =>
+    new Response(status === 204 ? null : "", { status, headers });
+
+  it.each([
+    [200, 200],
+    [204, 200],
+    [408, 503],
+    [425, 503],
+    [429, 503],
+    [500, 503],
+    [502, 503],
+    [503, 503],
+    [504, 503],
+    [400, 400],
+    [401, 400],
+    [403, 400],
+    [404, 400],
+    [413, 400],
+  ])("answers the browser for PostHog's %i with %i", async (upstream, expected) => {
+    const { response } = await forward(post(json(), "application/json"), ["e"], { fetch: answering(upstream) });
+
+    expect(response.status).toBe(expected);
+  });
+
+  it("passes PostHog's Retry-After on, in seconds and at most a minute", async () => {
+    const retryAfter = async (status: number, value: string) =>
+      (await forward(post(json(), "application/json"), ["e"], { fetch: answering(status, { "retry-after": value }) })).response.headers.get(
+        "retry-after",
+      );
+
+    expect(await retryAfter(429, "30")).toBe("30");
+    expect(await retryAfter(503, new Date(NOW + 20_000).toUTCString())).toBe("20");
+    expect(await retryAfter(429, "3600")).toBe("60");
+    expect(await retryAfter(429, "soon")).toBeNull();
+  });
+});

@@ -32,12 +32,16 @@ of requests rather than one per event. A batch goes 5 s after its first event,
 as soon as it holds 20 events, or before it would pass 48 KB (under the
 browser's 64 KB budget for keepalive requests and beacons), whichever comes
 first. An exception sends early, at most once every 3 s. An event is queued
-once by its uuid. A batch that fails (no answer, 429 or 5xx) is retried with
-the very same events after 2, 4, 8, 16 and 30 s; each send carries its own
-`sent_at`, so `/ingest` can tell the events' age by the browser's clock. A
-batch whose retries run out is saved, as below, for the next replay. A batch
-`/ingest` refuses is dropped. Batches go by keepalive fetch, without
-cookies.
+once by its uuid. One table, in `lib/telemetry-answers.ts`, says what an
+answer means, for the outbox reading `/ingest` and for `/ingest` reading
+PostHog: 2xx is delivered; 408, 425, 429 and any 5xx are worth sending again;
+anything else is refused for good. A batch with no answer, or one worth
+sending again, is retried with the very same events after 2, 4, 8, 16 and
+30 s, or after the answer's `Retry-After` when that is longer (seconds or an
+HTTP date, held to 60 s); each send carries its own `sent_at`, so `/ingest`
+can tell the events' age by the browser's clock. A batch whose retries run
+out is saved, as below, for the next replay. A refused batch is dropped.
+Batches go by keepalive fetch, without cookies.
 
 The outbox owns every batch until `/ingest` answers a send of it: a batch is
 queued, in flight or waiting to retry. A lifecycle flush is installed when
@@ -210,8 +214,10 @@ the 16 most recently used builds. A tab still running an older build is judged
 by its own manifest, not the newest one. It forwards the batch to PostHog as
 plain JSON with the fixed User-Agent `conclave-web-ingest/1` and no header of
 the browser's: no cookie, no IP address and no forwarded or referrer header
-reaches PostHog. If PostHog fails or cannot be reached, the browser is told to
-retry (503). A body that fails validation, an exception list of the wrong shape
+reaches PostHog. `/ingest` reads PostHog's answer through the same table as
+the outbox: delivered is 200; worth sending again, or no answer, is 503, with
+PostHog's `Retry-After` (in seconds, at most 60) when it gave one; refused is
+400. A body that fails validation, an exception list of the wrong shape
 included, gets 400 with an empty body, so the browser drops it and learns
 nothing of what failed.
 

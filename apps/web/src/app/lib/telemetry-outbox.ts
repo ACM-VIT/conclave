@@ -19,6 +19,7 @@
  */
 
 import { z } from "zod";
+import { answerOf } from "./telemetry-answers";
 import { MAX_EVENT_AGE_MS } from "./telemetry-schema";
 
 export type OutboxEvent = {
@@ -75,8 +76,11 @@ export type OutboxDeps = {
   now: () => number;
   setTimer: (run: () => void, ms: number) => unknown;
   clearTimer: (timer: unknown) => void;
-  /** Posts a batch body to /ingest: the response's status, or a rejection with no answer. */
-  post: (body: string, keepalive: boolean) => Promise<number>;
+  /**
+   * Posts a batch body to /ingest: the response's status and Retry-After
+   * header, or a rejection with no answer.
+   */
+  post: (body: string, keepalive: boolean) => Promise<{ status: number; retryAfter: string | null }>;
   /** Queues a batch body by beacon; false when the browser will not take it. */
   beacon: (body: string) => boolean;
   /** A new batch's id, a uuid. */
@@ -218,17 +222,19 @@ export function createOutbox(deps: OutboxDeps) {
     const keepalive = bytes <= MAX_BATCH_BYTES && keepaliveBytes + beaconBytes() + bytes <= UNLOAD_BUDGET_BYTES;
     if (keepalive) keepaliveBytes += bytes;
     batch.inFlight = keepalive ? "keepalive" : "fetch";
-    const answered = (status: number | null): void => {
+    const answered = (reply: { status: number; retryAfter: string | null } | null): void => {
       if (keepalive) keepaliveBytes -= bytes;
       batch.inFlight = null;
-      // Delivered, or refused, which a retry would not change.
-      if (status !== null && status !== 429 && status < 500) release(batch);
-      else retry(batch);
+      const answer = reply ? answerOf(reply.status, reply.retryAfter, deps.now()) : null;
+      if (answer && answer.outcome !== "retry") release(batch);
+      else retry(batch, answer?.afterMs ?? null);
     };
     return deps.post(body, keepalive).then(answered, () => answered(null));
   };
 
-  const retry = (batch: Batch): void => {
+  // After the next delay of the schedule, or the Retry-After /ingest asked
+  // for when that is longer.
+  const retry = (batch: Batch, afterMs: number | null): void => {
     const delay = RETRY_DELAYS_MS[batch.attempt];
     if (delay === undefined) {
       // This page has given up on it: storage keeps it for the next replay.
@@ -240,7 +246,7 @@ export function createOutbox(deps: OutboxDeps) {
     batch.timer = deps.setTimer(() => {
       batch.timer = null;
       void send(batch);
-    }, delay);
+    }, Math.max(delay, afterMs ?? 0));
   };
 
   // One pass over storage: sends each batch in it, from any tab, that this

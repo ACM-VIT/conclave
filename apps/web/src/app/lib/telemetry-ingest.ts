@@ -6,6 +6,7 @@ import {
   type OutboundEvent,
   parseChunkManifest,
 } from "./telemetry-privacy";
+import { answerOf } from "./telemetry-answers";
 import { createOutboundSchemas, MAX_EVENT_AGE_MS, UNKNOWN_BUILD } from "./telemetry-schema";
 
 /**
@@ -276,10 +277,13 @@ const eventTime = (timestamp: unknown, sentAt: number | null, receivedAt: number
   return new Date(at).toISOString();
 };
 
-const reply = (status: number) =>
+const reply = (status: number, retryAfterMs: number | null = null) =>
   new Response(status === 200 ? '{"status":1}' : null, {
     status,
-    headers: status === 200 ? { "content-type": "application/json" } : undefined,
+    headers: {
+      ...(status === 200 ? { "content-type": "application/json" } : {}),
+      ...(retryAfterMs !== null ? { "retry-after": String(Math.ceil(retryAfterMs / 1000)) } : {}),
+    },
   });
 
 /**
@@ -315,11 +319,13 @@ export async function forwardCapture(
       body: JSON.stringify(prepared),
       redirect: "manual",
     });
-    if (upstream.ok) {
+    // PostHog's answer, through the table the browser's outbox reads ours by.
+    const answer = answerOf(upstream.status, upstream.headers.get("retry-after"), deps.now());
+    if (answer.outcome === "delivered") {
       deps.forwarded.delivered(prepared.batch.map((event) => event.uuid));
       return reply(200);
     }
-    return reply(upstream.status >= 500 ? 503 : 400);
+    return answer.outcome === "retry" ? reply(503, answer.afterMs) : reply(400);
   } catch {
     return reply(503);
   }
