@@ -7,6 +7,8 @@ import {
 import {
   fitSingleLabel,
   fitWheelLabels,
+  graphemes,
+  splitGraphemesFallback,
   isLabelFlipped,
   wheelLabelGeometry,
   type LabelGeometry,
@@ -103,6 +105,50 @@ describe("wheel label fitting", () => {
 
     const phone = fitWheelLabels(names, geometry(64, 280), measure);
     expect(phone.labels.every((label) => label === null)).toBe(true);
+  });
+});
+
+describe("wheel label emoji", () => {
+  const family = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u200D\u{1F466}";
+
+  it("never cuts a joined emoji in half when it shortens a name", () => {
+    const label = `Team ${family}${family}${family} Rockets`;
+    const whole = graphemes(label);
+    for (let wheelPx = 200; wheelPx <= 900; wheelPx += 10) {
+      const fitted = fitWheelLabels([label, "Ada", "Bea", "Cal", "Dee", "Eve"], wheelLabelGeometry(6, wheelPx), measure);
+      const text = fitted.labels[0]?.text;
+      if (!text || !text.endsWith("…")) continue;
+      const kept = text.slice(0, -1).trimEnd();
+      expect(kept.endsWith("\u200D")).toBe(false);
+      const parts = graphemes(kept);
+      expect(parts).toEqual(whole.slice(0, parts.length).map((part, i) => (i === parts.length - 1 ? part.trimEnd() : part)));
+    }
+  });
+
+  it("splits a family emoji into one grapheme", () => {
+    expect(graphemes(family)).toEqual([family]);
+  });
+
+  it("keeps emoji whole even where the browser has no grapheme segmenter", () => {
+    const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+    const samples = [
+      `Team ${family}${family} Rockets`,
+      "Ren\u0065\u0301e",
+      "\u{1F1EE}\u{1F1F3}\u{1F1FA}\u{1F1F8} flags",
+      "thumbs \u{1F44D}\u{1F3FD}",
+      "love \u2764\uFE0F",
+      "\u{1F3F3}\uFE0F\u200D\u{1F308} pride",
+      "\u{1F1E6}\u0301\u{1F1E7}\u{1F1E8} split run",
+      "A\u200DB letters",
+      "\u{1F469}\u200D\u200D\u{1F469} doubled joiner",
+      "\u{1F469}\u{1F3FD}\u200D\u{1F4BB} toned worker",
+      "\u1112\u1161\u11AB\u1100\u1173\u11AF decomposed",
+      "\uD55C\u11AB\u1100\u1161 mixed",
+    ];
+    for (const sample of samples) {
+      const expected = Array.from(segmenter.segment(sample), (part) => part.segment);
+      expect(splitGraphemesFallback(sample)).toEqual(expected);
+    }
   });
 });
 
