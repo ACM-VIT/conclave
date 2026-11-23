@@ -351,6 +351,7 @@ export class Room {
   // it waits like anyone else.
   private restorer: { until: number; rosterKnown: boolean } | null = null;
   private restorerLapseTimer: NodeJS.Timeout | null = null;
+  private lostCallTimer: NodeJS.Timeout | null = null;
   private meetingParticipantCount = 0;
   private currentWebcamCodecPolicy: WebcamCodecPolicy =
     buildWebcamCodecPolicy("vp8", 0);
@@ -2527,6 +2528,10 @@ export class Room {
       clearTimeout(this.restorerLapseTimer);
       this.restorerLapseTimer = null;
     }
+    if (this.lostCallTimer) {
+      clearTimeout(this.lostCallTimer);
+      this.lostCallTimer = null;
+    }
     this.notifyLifecycle("closed");
     this.lifecycleListeners.clear();
     this.aiCredentials.clear();
@@ -2801,6 +2806,17 @@ export class Room {
     }
     if (lost.hostUserKey) this.makePrimaryHost(lost.hostUserKey);
     this.onRecoverableChange = report;
+    const endIfUnclaimed = () => {
+      this.lostCallTimer = null;
+      if (this.awaitingOpener) this.endLostCall();
+    };
+    const wait = lost.claimableUntil - Date.now();
+    if (wait < 0) {
+      endIfUnclaimed();
+      return;
+    }
+    this.lostCallTimer = setTimeout(endIfUnclaimed, wait + 1);
+    this.lostCallTimer.unref?.();
   }
 
   allowUser(userKey: string) {
