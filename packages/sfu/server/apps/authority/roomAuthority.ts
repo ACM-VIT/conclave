@@ -19,12 +19,13 @@ import {
   type ReplaceFrame,
   type SubscribeRequest,
 } from "@conclave/apps-sdk/authority";
-import type {
-  AuthorityModule,
-  AuthorityRandom,
-  Role,
-  RoomPolicy,
-  Subject,
+import {
+  DISPLAY_NAME_MAX_LENGTH,
+  type AuthorityModule,
+  type AuthorityRandom,
+  type Role,
+  type RoomPolicy,
+  type Subject,
 } from "@conclave/apps-sdk/authority/server";
 import type { Client } from "../../../config/classes/Client.js";
 import type { Room } from "../../../config/classes/Room.js";
@@ -120,6 +121,19 @@ export type RoomAuthorityStats = {
   /** Sockets disconnected because their queue was full. */
   disconnects: number;
   flushes: number;
+};
+
+/**
+ * A person's name as apps are handed it: at most `DISPLAY_NAME_MAX_LENGTH`
+ * long. The join path names someone without a name by their email, which
+ * can be longer, and an app storing names must not be broken by it. The cut
+ * never splits a character written as two UTF-16 units.
+ */
+const boundedName = (name: string): string => {
+  if (name.length <= DISPLAY_NAME_MAX_LENGTH) return name;
+  const end = DISPLAY_NAME_MAX_LENGTH;
+  const high = name.charCodeAt(end - 1);
+  return name.slice(0, high >= 0xd800 && high <= 0xdbff ? end - 1 : end);
 };
 
 /**
@@ -535,7 +549,7 @@ export class RoomAuthority {
         subject: identity.subject,
         verified: identity.verified,
         role,
-        displayName: this.room.getDisplayNameForUser(client.id) || "Guest",
+        displayName: boundedName(this.room.getDisplayNameForUser(client.id) || "Guest"),
       },
     };
   }

@@ -178,7 +178,10 @@ export type GateContext = {
   readonly subject: Subject;
   readonly role: Role;
   readonly verified: boolean;
-  /** The name the server accepted for this person. */
+  /**
+   * The name the server accepted for this person, at most
+   * `DISPLAY_NAME_MAX_LENGTH` long. One cut to fit keeps its start.
+   */
   readonly displayName: string;
   readonly room: RoomPolicy;
   /** The server clock, in ms. */

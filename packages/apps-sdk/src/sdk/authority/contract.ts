@@ -135,3 +135,10 @@ export const defineContract = <
   assertNames(contract.id, "view", Object.keys(contract.views));
   return contract;
 };
+
+/**
+ * The longest name the runtime hands an app, in UTF-16 units as `s.string`
+ * counts them. A contract that bounds the names it stores by this is never
+ * handed one its schema refuses. Shared by renderers and the server alike.
+ */
+export const DISPLAY_NAME_MAX_LENGTH = 200;
