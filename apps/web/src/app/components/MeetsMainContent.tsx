@@ -41,8 +41,8 @@ import ParticipantsPanel from "./ParticipantsPanel";
 import MeetSettingsPanel from "./MeetSettingsPanel";
 import MeetViewPanel from "./MeetViewPanel";
 import ReactionOverlay from "./ReactionOverlay";
-import BrowserLayout from "./BrowserLayout";
 import MeetingAppLayout from "./MeetingAppLayout";
+import SharedBrowserStage from "./SharedBrowserStage";
 import ScreenShareAudioPlayers from "./ScreenShareAudioPlayers";
 import SystemAudioPlayers from "./SystemAudioPlayers";
 import ParticipantVideo from "./ParticipantVideo";
@@ -56,7 +56,7 @@ import { PollsPanel } from "./polls/PollsPanel";
 import ToastQueue, { type ToastItem } from "./ToastQueue";
 import RoomAiPanel from "./RoomAiPanel";
 import AndroidUpsellSheet from "./AndroidUpsellSheet";
-import type { BrowserState } from "../hooks/useSharedBrowser";
+import type { BrowserCommand, BrowserState } from "../hooks/useSharedBrowser";
 import type {
   ConclaveAssistantApiKeyPromptState,
 } from "../hooks/useMeetChat";
@@ -290,6 +290,7 @@ interface MeetsMainContentProps {
   browserState?: BrowserState;
   isBrowserLaunching?: boolean;
   browserLaunchError?: string | null;
+  browserFailedCommand?: BrowserCommand | null;
   showBrowserControls?: boolean;
   onLaunchBrowser?: (url: string) => Promise<boolean>;
   onNavigateBrowser?: (url: string) => Promise<boolean>;
@@ -420,6 +421,11 @@ const DOCKED_PANEL_WIDTH = 360;
 const WEBINAR_QA_PANEL_WIDTH = 360;
 // The meeting area's bottom padding (p-4) plus a gap above the controls bar.
 const NOTICE_CONTROLS_CLEARANCE_PX = 24;
+const BROWSER_ERROR_TITLES: Record<BrowserCommand, string> = {
+  launch: "Couldn’t open the shared browser",
+  navigate: "Couldn’t open that page",
+  close: "Couldn’t close the shared browser",
+};
 const GAME_DOCK_MIN_STAGE_WIDTH = 420;
 
 const getGameDockMaxWidth = (
@@ -562,6 +568,7 @@ export default function MeetsMainContent({
   browserState,
   isBrowserLaunching,
   browserLaunchError,
+  browserFailedCommand,
   showBrowserControls = true,
   onLaunchBrowser,
   onNavigateBrowser,
@@ -2005,7 +2012,9 @@ export default function MeetsMainContent({
     browserLaunchError
       ? {
           id: "browser",
-          label: "Shared browser",
+          label: browserFailedCommand
+            ? BROWSER_ERROR_TITLES[browserFailedCommand]
+            : "Shared browser",
           message: browserLaunchError,
           tone: "danger",
           onDismiss: onClearBrowserError,
@@ -2666,7 +2675,8 @@ export default function MeetsMainContent({
         !isWatchHiddenLocally &&
         (!isDevPlaygroundActive || isDevPlaygroundEnabled) ? (
         <MeetingAppLayout
-          app={ActiveMeetingApp}
+          stageId="app"
+          fullStageBelowLarge
           frameContent={!isDevPlaygroundActive}
           leaveAction={isWatchActive ? watchLeaveAction : undefined}
           localStream={localStream}
@@ -2683,13 +2693,12 @@ export default function MeetsMainContent({
           onAudioPlaybackStarted={handleParticipantAudioPlaybackStarted}
           audioPlaybackAttemptToken={participantAudioPlaybackAttempt}
           getDisplayName={resolveDisplayName}
-        />
+        >
+          <ActiveMeetingApp />
+        </MeetingAppLayout>
       ) : browserState?.active && browserState.noVncUrl ? (
-        <BrowserLayout
-          noVncUrl={browserState.noVncUrl}
-          controllerName={resolveDisplayName(
-            browserState.controllerUserId || "",
-          )}
+        <MeetingAppLayout
+          stageId="shared-browser"
           localStream={localStream}
           isCameraOff={isCameraOff}
           isMuted={isMuted}
@@ -2704,9 +2713,22 @@ export default function MeetsMainContent({
           onAudioPlaybackStarted={handleParticipantAudioPlaybackStarted}
           audioPlaybackAttemptToken={participantAudioPlaybackAttempt}
           getDisplayName={resolveDisplayName}
-          provider={browserState.provider}
-          browserVideoStream={browserVideoStream}
-        />
+        >
+          <SharedBrowserStage
+            noVncUrl={browserState.noVncUrl}
+            controllerName={
+              browserState.controllerUserId
+                ? resolveDisplayName(browserState.controllerUserId)
+                : ""
+            }
+            isLocalController={
+              Boolean(browserState.controllerUserId) &&
+              browserState.controllerUserId === currentUserId
+            }
+            provider={browserState.provider}
+            browserVideoStream={browserVideoStream}
+          />
+        </MeetingAppLayout>
       ) : (
         <GridLayout
           localStream={effectiveLocalStream}
