@@ -718,6 +718,8 @@ type Connection = {
   awaiting: Utterance[];
   stalled: boolean;
   dead: boolean;
+  /** Sarvam has sent it a speech signal, so our voice check no longer opens lines on it. */
+  signalled: boolean;
 };
 type Utterance = {
   index: number;
@@ -771,11 +773,16 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
         awaiting: [],
         stalled: false,
         dead: false,
+        signalled: false,
       };
       connections.push(connection);
       return connection;
     };
     let live = connect();
+    const signalSpeech = (connection: Connection) => {
+      connection.signalled = true;
+      connection.socket.emit(sarvamSpeechStart());
+    };
     const utterances: Utterance[] = [];
     let acks = 0;
     const place = (utterance: Utterance, at = Date.now()) => {
@@ -838,7 +845,7 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
           if (random() < 0.7) acknowledge(live);
           return;
         }
-        if (sarvamSignalsSpeech) live.socket.emit(sarvamSpeechStart());
+        if (sarvamSignalsSpeech) signalSpeech(live);
         place(utterance);
         live.awaiting.push(utterance);
         if (live.awaiting.length === 1 && !live.stalled && random() < 0.25) {
@@ -856,7 +863,7 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
         place(utterance);
         await endTurn(utterance.speaker);
         await vi.advanceTimersByTimeAsync(600 + random() * 800);
-        live.socket.emit(sarvamSpeechStart());
+        signalSpeech(live);
         utterance.deadlineAt = Date.now() + DEADLINE;
         live.awaiting.push(utterance);
       },
@@ -864,7 +871,7 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
         if (live.provider !== "sarvam" || !sarvamSignalsSpeech) return moves.utter();
         await vi.advanceTimersByTimeAsync(1_600);
         const utterance = newUtterance(false);
-        live.socket.emit(sarvamSpeechStart());
+        signalSpeech(live);
         place(utterance);
         live.awaiting.push(utterance);
         await vi.advanceTimersByTimeAsync(50 + random() * 400);
@@ -885,7 +892,7 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
         if (live.provider !== "sarvam") return moves.utter();
         const utterance = newUtterance(false);
         await speak(utterance.speaker);
-        if (sarvamSignalsSpeech) live.socket.emit(sarvamSpeechStart());
+        if (sarvamSignalsSpeech) signalSpeech(live);
         place(utterance);
         live.awaiting.push(utterance);
         for (let elapsed = 0; elapsed < DEADLINE + 2_000; elapsed += 1_000) {
@@ -911,7 +918,7 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
         }
         await vi.advanceTimersByTimeAsync(200 + random() * 400);
         for (const utterance of [first, second]) {
-          live.socket.emit(sarvamSpeechStart());
+          signalSpeech(live);
           utterance.deadlineAt = Date.now() + DEADLINE;
           live.awaiting.push(utterance);
         }
@@ -921,7 +928,7 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
         await vi.advanceTimersByTimeAsync(1_600);
         const first = newUtterance(false);
         await speak(first.speaker);
-        live.socket.emit(sarvamSpeechStart());
+        signalSpeech(live);
         place(first);
         live.awaiting.push(first);
         await endTurn(first.speaker);
@@ -931,9 +938,17 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
         await endTurn(second.speaker);
         live.socket.emit(sarvamSpeechEnd());
         await vi.advanceTimersByTimeAsync(random() * 300);
-        live.socket.emit(sarvamSpeechStart());
+        signalSpeech(live);
         place(second);
         live.awaiting.push(second);
+      },
+      async cough() {
+        if (live.provider !== "sarvam" || !live.signalled) return moves.noise();
+        await vi.advanceTimersByTimeAsync(1_600);
+        const utterance = newUtterance(true);
+        await speak(utterance.speaker);
+        await endTurn(utterance.speaker);
+        await vi.advanceTimersByTimeAsync(3_100);
       },
       async crosstalk() {
         if (live.provider !== "sarvam" || !sarvamSignalsSpeech) return moves.utter();
@@ -946,7 +961,7 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
           await endTurn(utterance.speaker);
         }
         for (const utterance of [first, second]) {
-          live.socket.emit(sarvamSpeechStart());
+          signalSpeech(live);
           place(utterance);
           live.awaiting.push(utterance);
         }
@@ -965,7 +980,7 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
         }
         await endTurn(utterance.speaker);
         if (sarvamSignalsSpeech && random() < 0.5) {
-          live.socket.emit(sarvamSpeechStart());
+          signalSpeech(live);
           place(utterance);
           live.awaiting.push(utterance);
         }
@@ -1093,7 +1108,7 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
         } else {
           const speech = sent.filter((message) => audioOf(message) === sarvamSpeechPayload).length;
           expect(speech, "no line's replay audio was dropped by another line ending").toBe(replayedChunks);
-          if (sarvamSignalsSpeech) for (const _ of replayed) live.socket.emit(sarvamSpeechStart());
+          if (sarvamSignalsSpeech) for (const _ of replayed) signalSpeech(live);
           live.awaiting = replayed;
         }
       },
@@ -1110,7 +1125,7 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
         }
         const first = newUtterance(false);
         await speak(first.speaker);
-        if (sarvamSignalsSpeech) live.socket.emit(sarvamSpeechStart());
+        if (sarvamSignalsSpeech) signalSpeech(live);
         place(first);
         live.awaiting.push(first);
         if (!sarvamSignalsSpeech) {
@@ -1123,7 +1138,7 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
         const second = newUtterance(false);
         second.speaker = first.speaker;
         await speak(second.speaker);
-        if (sarvamSignalsSpeech) live.socket.emit(sarvamSpeechStart());
+        if (sarvamSignalsSpeech) signalSpeech(live);
         place(second);
         live.awaiting.push(second);
         await endTurn(second.speaker);
@@ -1169,6 +1184,7 @@ describe("invariant: every utterance a provider accepted ends as its text or a g
       ["crosstalk", 3],
       ["lateTurns", 3],
       ["lateEnd", 3],
+      ["cough", 2],
       ["turnPair", 4],
       ["lateAck", 3],
       ["itemFails", 3],

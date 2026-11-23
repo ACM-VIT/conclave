@@ -97,6 +97,29 @@ describe("Neon C3: finished or unowned Sarvam audio is never replayed", () => {
     expect(savedTexts()).toEqual(["Hello."]);
   });
 
+  it("speech no signal claimed in time is never replayed into a gap", async () => {
+    vi.useFakeTimers();
+    quiet();
+    const { providerSockets, start, speak, endTurn, savedTexts } = await rig(SARVAM);
+    await start("hi");
+    const [socket] = providerSockets();
+    await speak(ada);
+    socket.emit(sarvamSpeechStart());
+    await endTurn(ada);
+    socket.emit(sarvamFinal("one", "First."));
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    await speak(grace);
+    await endTurn(grace);
+    await vi.advanceTimersByTimeAsync(5_000);
+    socket.disconnect();
+    await settle();
+
+    expect(speechSent(providerSockets().at(-1)!)).toBe(0);
+    await vi.advanceTimersByTimeAsync(DEADLINE + 100);
+    expect(savedTexts()).toEqual(["First."]);
+  });
+
   it("noise turns are never replayed", async () => {
     vi.useFakeTimers();
     const { providerSockets, start, sendAudio, endTurn } = await rig(SARVAM);

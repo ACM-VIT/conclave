@@ -1362,8 +1362,8 @@ export class TranscriptRoom {
    * Keeps a chunk for a replay with the line it belongs to: a Sarvam
    * speaker's open line, which then waits 30 s from this chunk, else that
    * speaker's audio no line owns yet, which a line accepted for it adopts.
-   * Sarvam's unowned audio is kept only as long as a late speech signal
-   * could still claim it, and is never replayed on its own.
+   * Sarvam's unowned audio matters only while a late speech signal could
+   * still claim it, so only that much is kept or replayed.
    */
   private keepAudio(provider: string, speaker: TranscriptSpeaker, chunk: AudioChunk): void {
     const key = speakerKey(speaker);
@@ -2184,15 +2184,22 @@ export class TranscriptRoom {
   /**
    * A live connection failed: every line it owed waits for a replacement
    * with its own audio and words, and speech no line owns yet that our check
-   * heard becomes a line of its own. Words stay on screen meanwhile.
+   * heard becomes a line of its own. For Sarvam that is only speech a late
+   * signal could still have claimed; older speech Sarvam never signalled is
+   * not replayed. Words stay on screen meanwhile.
    */
   private handOffLiveLines(live: ProviderConnection): void {
     for (const line of this.ledger.active()) {
       if (line.epoch === live.epoch) this.awaitReplacement(line);
     }
+    const now = Date.now();
     for (const { speaker, chunks } of this.uncommittedAudio.values()) {
-      if (!chunks.some(({ voice }) => voice !== "quiet")) continue;
-      this.awaitReplacement(this.newLine(null, { state: "replaying", speaker, heard: true, audio: chunks }));
+      const audio =
+        live.session.provider === "sarvam"
+          ? chunks.filter(({ createdAt }) => now - createdAt <= UNOWNED_AUDIO_KEPT_MS)
+          : chunks;
+      if (!audio.some(({ voice }) => voice !== "quiet")) continue;
+      this.awaitReplacement(this.newLine(null, { state: "replaying", speaker, heard: true, audio }));
     }
     this.uncommittedAudio.clear();
     this.speakingLine.clear();
