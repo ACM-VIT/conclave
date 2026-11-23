@@ -261,15 +261,11 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
   const isCurrent = ({ room, appId, document }: SyncScope): boolean =>
     context.currentRoom === room && activeDocument(room, appId) === document;
 
-  const syncIn = async (
-    scope: SyncScope,
-    data: AppsSyncData,
-    rateLimited: boolean,
-  ): Promise<AppsSyncResponse | AppsSyncError> => {
+  const paySync = (): boolean => takeToken(socket, "apps:yjs:sync", RATE_LIMITS.appsYjsSync);
+  const tooManySyncs = (): AppsSyncError => retryLater("Too many app sync requests", 500);
+
+  const syncIn = async (scope: SyncScope, data: AppsSyncData): Promise<AppsSyncResponse | AppsSyncError> => {
     if (!isCurrent(scope)) return { error: "App not active" };
-    if (rateLimited && !takeToken(socket, "apps:yjs:sync", RATE_LIMITS.appsYjsSync)) {
-      return retryLater("Too many app sync requests", 500);
-    }
     const stateVector = toUint8Array(data.syncMessage);
     if (!stateVector) return { error: "Invalid sync payload" };
     if (stateVector.length > MAX_APPS_SYNC_BYTES) return { error: "Sync payload too large" };
@@ -289,6 +285,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
   const holdSync = (scope: SyncScope, data: AppsSyncData, callback: (response: AppsSyncResponse | AppsSyncError) => void): void => {
     let lastError = "App document is busy";
     let held = false;
+    let paid = false;
     let settled = false;
     let retry: NodeJS.Timeout | undefined;
     const stop = (): void => {
@@ -306,8 +303,9 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     };
     const deadline = setTimeout(() => settle({ error: lastError }), LEGACY_SYNC_HOLD_MS);
     openLegacySyncs.add(stop);
-    const attempt = (rateLimited: boolean): void => {
-      void syncIn(scope, data, rateLimited).then((outcome) => {
+    const attempt = (): void => {
+      paid ||= paySync();
+      void (paid ? syncIn(scope, data) : Promise.resolve(tooManySyncs())).then((outcome) => {
         if (settled) return;
         if (!("error" in outcome) || !outcome.retryable) {
           settle(outcome);
@@ -322,10 +320,10 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
           held = true;
           heldSyncs += 1;
         }
-        retry = setTimeout(() => attempt(false), outcome.retryAfterMs ?? 250);
+        retry = setTimeout(attempt, outcome.retryAfterMs ?? 250);
       });
     };
-    attempt(true);
+    attempt();
   };
 
   socket.on(
@@ -341,7 +339,11 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
         holdSync(scope, data, callback);
         return;
       }
-      void syncIn(scope, data, true).then((outcome) => respond(callback, outcome));
+      if (!paySync()) {
+        respond(callback, tooManySyncs());
+        return;
+      }
+      void syncIn(scope, data).then((outcome) => respond(callback, outcome));
     }
   );
 

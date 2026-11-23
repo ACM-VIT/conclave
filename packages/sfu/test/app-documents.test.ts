@@ -450,6 +450,37 @@ describe("app documents", { timeout: 30_000 }, () => {
     expect(await settledNow(older)).toEqual({ error: "App not active" });
   });
 
+  it("charges every held older-client sync against the sync budget until one of its attempts is paid", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const pool = createPool();
+    let syncsReachingTheDocument = 0;
+    const counting: AppDocumentPool = {
+      close: () => pool.close(),
+      open: () => {
+        const document = pool.open();
+        return {
+          ...document,
+          sync: (stateVector) => {
+            syncsReachingTheDocument += 1;
+            return document.sync(stateVector);
+          },
+        };
+      },
+    };
+    const room = inRoom(counting, "held-budget");
+    await room.open();
+    await Promise.all(Array.from({ length: 10 }, () => room.requestSync(new Y.Doc())));
+    const before = syncsReachingTheDocument;
+    const held = Array.from({ length: 4 }, () => room.requestSync(new Y.Doc(), false));
+    expect(await settledNow(Promise.race(held))).toBeUndefined();
+
+    await vi.advanceTimersByTimeAsync(500);
+    expect(syncsReachingTheDocument - before).toBe(1);
+    await vi.advanceTimersByTimeAsync(1_500);
+
+    expect(syncsReachingTheDocument - before).toBe(4);
+  });
+
   it("answers a sync from outside a room at once, with a retry hint only for a client that can retry", async () => {
     const room = inRoom(createPool(), "no-room");
     await room.open();
