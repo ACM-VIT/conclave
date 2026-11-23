@@ -157,3 +157,34 @@ describe("one host action's admissions", () => {
     expect(ledger.admits(["pass:A"], "lock")).toBe(true);
   });
 });
+
+describe("a ledger that refusals took past its limit", () => {
+  it("still changes the records it has: a denial taken back, a demoted guest invited again (Greptile)", () => {
+    let clock = 0;
+    const ledger = new AdmissionLedger(2);
+    ledger.deny("pass:A", (clock += 1));
+    ledger.deny("pass:B", (clock += 1));
+    ledger.revoke(["pass:C"], ["stage", "stageDemotion"], (clock += 1));
+    expect(ledger.size).toBe(3);
+
+    expect(ledger.admit("pass:A", "guest-gp_a", BOTH, (clock += 1))).toBe(true);
+    expect(ledger.admits(["pass:A"], "lock")).toBe(true);
+    expect(
+      ledger.admitAll(
+        [
+          { principal: "pass:C", userKey: "guest-gp_c", scopes: ["stage"], expiresAt: Date.now() + 60_000 },
+          { principal: "pass:C", userKey: "guest-gp_c", scopes: ["stageDemotion"] },
+        ],
+        (clock += 1),
+        { answersRequest: false },
+      ),
+    ).toBe(true);
+    expect(ledger.admits(["pass:C"], "stage")).toBe(true);
+    expect(ledger.refuses(["pass:C"], "stageDemotion")).toBe(false);
+
+    // A new record still never drops the refusal that is left.
+    expect(ledger.admit("pass:new", "guest-gp_new", BOTH, (clock += 1))).toBe(true);
+    expect(ledger.has("pass:B")).toBe(true);
+    expect(ledger.admits(["pass:B"], "lock")).toBe(false);
+  });
+});

@@ -2794,6 +2794,37 @@ describe("a host action when the decision record is full of refusals (Astra)", (
     expect(room.isLockedAllowed(guestOf("knocks").userId, guestOf("knocks").guestProof)).toBe(false);
   };
 
+  it("still takes back a denial and invites a demoted guest again once refusals are past the limit (Greptile)", async () => {
+    await fullRoom(async (room, state, host, waitingGuest) => {
+      const config = getOrCreateWebinarRoomConfig(state.webinarConfigs, room.channelId);
+      config.enabled = true;
+      config.publicAccess = true;
+      setCustomWebinarLinkSlug({
+        webinarConfig: config,
+        webinarLinks: state.webinarLinks,
+        room: { channelId: room.channelId, id: room.id, clientId: room.clientId },
+        slug: "launch",
+      });
+      const { guestRoom: _room, ...attendeeOfTheRoom } = guestOf("demoted-speaker");
+      const attendee = { ...attendeeOfTheRoom, joinMode: "webinar_attendee" } satisfies SfuAuthPayload;
+      const viewer = await join(state, attendee, "launch");
+      room.markWebinarDemotedUserKey(attendee.userId);
+      expect(await ask(host.peer, "rejectUser", { userId: guestOf("knocks").userId })).toHaveBeenCalledWith({ success: true });
+      expect(waitingGuest.peer.emit).toHaveBeenCalledWith("joinRejected", { roomId: "room" });
+      expect(room.decisionRecordCount).toBeGreaterThan(2);
+
+      const back = await join(state, guestOf("turned-away-1"));
+      expect(back.ack).toHaveBeenCalledWith(waiting);
+      expect(await ask(host.peer, "admitUser", { userId: guestOf("turned-away-1").userId })).toHaveBeenCalledWith({ success: true });
+      expect(back.peer.emit).toHaveBeenCalledWith(...approved);
+
+      registerWebinarInteractionHandlers(host.context);
+      expect(await ask(host.peer, "webinar:promoteAttendee", { userId: `${attendee.userId}#${attendee.sessionId}` })).toHaveBeenCalledWith({ success: true });
+      expect(viewer.peer.emit).toHaveBeenCalledWith("webinar:promoted", expect.anything());
+      expect(room.isWebinarDemotedUserKey(attendee.userId, attendee.guestProof)).toBe(false);
+    });
+  });
+
   it("fails admitting everyone who waits, and lets no one in", async () => {
     await fullRoom(async (room, _state, host, waitingGuest) => {
       expect(await ask(host.peer, "admin:admitAllPending")).toHaveBeenCalledWith(full);
