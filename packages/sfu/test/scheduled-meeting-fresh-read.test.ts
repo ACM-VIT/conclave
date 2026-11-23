@@ -288,6 +288,33 @@ describe.each(["sqlite", "redis"] as const)(
   },
 );
 
+describe.each(["sqlite", "redis"] as const)(
+  "a meeting that ends on an SFU that saw none of its removals, over a %s store",
+  (kind) => {
+    const test = kind === "redis" && !redisServerPath ? it.skip : it;
+
+    test("still takes back a removal another SFU made before the end and saved after it", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const removedAt = Date.parse("2026-11-23T08:00:00Z");
+      vi.setSystemTime(removedAt);
+      useStore(kind);
+      const sfuA = await startSfu(kind);
+      const meeting = await scheduleIntroCall(sfuA);
+      const sfuB = await startSfu(kind);
+
+      // The meeting failed over to SFU B and ends there. SFU A removed the
+      // invitee before that, and its save is still on its way.
+      vi.setSystemTime(removedAt + 60_000);
+      await endScheduledMeetingRemovals(sfuB.meetings, sfuB.persistence, "conclave", CODE, Date.now());
+      await sfuB.persistence.flush?.();
+      await sfuA.persistence.setInviteeReadmission?.(meeting.id, INVITEE, true, removedAt);
+      await sfuA.persistence.flush?.();
+
+      expect(isInvited(await startSfu(kind))).toBe(true);
+    });
+  },
+);
+
 describe("a json schedule store at the end of a meeting", () => {
   it("invites again the people removed from it", async () => {
     useStore("json");

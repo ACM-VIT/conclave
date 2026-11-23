@@ -1916,7 +1916,8 @@ export const persistScheduledMeetingChanges = (
  * The meeting at this room code is over: the people a host removed from it
  * are invited again. Only the removals made up to `endedAt` are taken back,
  * so a removal another SFU makes for the next meeting is never undone by
- * this one arriving late.
+ * this one arriving late. The end is saved even when this SFU knows of no
+ * removal: one another SFU made before it may still be on its way.
  */
 export const endScheduledMeetingRemovals = (
   store: ScheduledMeetingStore,
@@ -1926,13 +1927,14 @@ export const endScheduledMeetingRemovals = (
   endedAt: number,
 ): Promise<void> => {
   const meeting = getScheduledMeetingByRoomCode(store, clientId, roomCode);
-  if (!meeting || (meeting.readmissionRequiredEmails ?? []).length === 0) {
-    return Promise.resolve();
-  }
+  if (!meeting) return Promise.resolve();
+  const hadRemovals = (meeting.readmissionRequiredEmails ?? []).length > 0;
   meeting.readmissionRequiredEmails = [];
   if (!persistence) return Promise.resolve();
   if (!persistence.endRemovals) {
-    return persistScheduledMeetingChanges(store, persistence, [meeting]);
+    return hadRemovals
+      ? persistScheduledMeetingChanges(store, persistence, [meeting])
+      : Promise.resolve();
   }
   return Promise.resolve(persistence.endRemovals(meeting.id, endedAt)).then(() =>
     persistence.flush?.(),
