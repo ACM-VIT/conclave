@@ -51,7 +51,8 @@ then fail, and a deploy waits for them the same way. The deploy lock is a
 regular file no other user can open (0640, group `docker`), made and checked
 by `scripts/host_lock.py` for all three scripts: one that is a link, or owned
 by anyone but root, the running user or a `docker` member, is refused, and
-one an older script made for every user is narrowed by its owner. The Docker
+one an older script made for every user is given the `docker` group
+(`SFU_DEPLOY_LOCK_GROUP` overrides the name) and narrowed by its owner. The Docker
 check runs again after every copy, even when no SFU holds the fence.
 
 A backup is complete or it fails, with no archive and no heartbeat: a

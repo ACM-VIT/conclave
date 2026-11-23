@@ -28,7 +28,7 @@ MODE = 0o640
 
 def docker_group():
     try:
-        return grp.getgrnam("docker")
+        return grp.getgrnam(os.environ.get("SFU_DEPLOY_LOCK_GROUP") or "docker")
     except KeyError:
         return None
 
@@ -75,6 +75,12 @@ def check(fd, path):
         sys.exit(f"{path} was replaced while this run waited for it; rerun it")
     if not trusted(held.st_uid):
         sys.exit(f"{path} belongs to uid {held.st_uid}, who is neither root, this user nor in the docker group, so it could be replaced or held by them; remove it and rerun")
+    group = docker_group()
+    if group is not None and held.st_gid != group.gr_gid:
+        try:
+            os.fchown(fd, -1, group.gr_gid)
+        except PermissionError:
+            pass
     if held.st_mode & 0o027:
         try:
             os.fchmod(fd, MODE)

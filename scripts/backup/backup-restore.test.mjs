@@ -2278,6 +2278,29 @@ test("a restore gives its files to the user of a stopped SFU that mounts a dir a
   }
 });
 
+test("an existing lock that is narrowed is given the deploy group too, so its members can still open it", needs, async () => {
+  // Another group this user belongs to stands in for docker.
+  const ids = execFileSync("id", ["-G"], { encoding: "utf8" }).trim().split(/\s+/).map(Number);
+  const names = execFileSync("id", ["-Gn"], { encoding: "utf8" }).trim().split(/\s+/);
+  const other = ids.findIndex((gid) => gid !== process.getgid());
+  if (other < 0) return;
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  try {
+    const { state, config, backup } = await setUp(root);
+    withDatabase(state);
+    await writeFile(config, `${await readFile(config, "utf8")}\nSFU_DEPLOY_LOCK_GROUP=${names[other]}\n`);
+    const lock = path.join(root, "deploy.lock");
+    await writeFile(lock, "");
+    await chmod(lock, 0o666);
+    await backup("--local-only");
+    const after = await stat(lock);
+    assert.equal(after.mode & 0o777, 0o640);
+    assert.equal(after.gid, ids[other], `the lock's group is ${names[other]}`);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 // --- Greptile's four cases from the b55af173 round.
 
 test("Greptile: a link through a directory link and .. comes back as written and reaches the database it did", needs, async () => {
