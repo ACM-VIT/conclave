@@ -21,6 +21,7 @@ Use this page when debugging:
 | `apps:lock` | client -> server | yes | set lock flag (admin-only) |
 | `apps:yjs:sync` | client -> server | yes | request state diff for active app |
 | `apps:yjs:update` | bi-directional | no | relay Yjs content updates |
+| `apps:yjs:refused` | server -> client | no | tell a writer the room refused its update |
 | `apps:awareness` | bi-directional | no | relay awareness/presence updates |
 
 ## State and Control Flow
@@ -53,11 +54,18 @@ local copy of an app that leaves the stage and resync from the server when it
 returns.
 
 Yjs client ids are chosen by clients, so the SFU binds each one to the
-participant who first writes or shows presence under it, and to the app it
-does that in. It refuses that id from anyone else and in any other app, so
-bytes copied from one app never land in another. A participant who rejoins
-keeps their ids. A viewer that only syncs binds nothing. Each participant may
-hold up to 1024 ids and a room 16384; past that, new ids are refused.
+participant who first writes under it, and to the app it writes in. It
+refuses that id from anyone else and in any other app, so bytes copied from
+one app never land in another. A participant who rejoins keeps their ids. A
+viewer that only syncs binds nothing. One update may bring at most 8 new ids
+and a participant may hold 1024; there is no shared room-wide pool, so no
+participant's ids can stop another from writing.
+
+Presence only holds an id for a while. An id first shown in presence is held
+for that participant until its cursor is removed, times out after 30 s, the
+participant leaves or the app leaves the stage, and a participant may hold
+at most 4 this way; a presence packet that names more is refused. Writing
+under a held id makes it the participant's for good.
 
 A socket's `apps:yjs:update` is taken only once the room has answered its
 `apps:yjs:sync` for the presented document. That holds across Close and
@@ -215,6 +223,16 @@ Server -> peers (`apps:yjs:update`):
 
 - relayed to everyone else in room
 - receiver applies update with origin `"remote"`
+
+Server -> writer (`apps:yjs:refused`):
+
+- sent when the room refuses an update that carried a `replicaId`, once per
+  `replicaId`: `{ appId, replicaId, reason }`
+- `reason` is one of `rate-limited`, `not-live`, `locked`, `invalid`,
+  `too-large`, `not-synced`, `malformed`, `unresolved`, `unseen-value`,
+  `cleared`, `foreign-id` or `id-limit`
+- `AppsProvider` sends a `replicaId` for each local copy; on a refusal for its
+  current copy it drops that copy, syncs a fresh one and sets `rejectedChange`
 
 ## Awareness Flow
 

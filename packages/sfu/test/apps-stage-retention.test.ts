@@ -18,7 +18,8 @@ import { createSfuState } from "../server/state.js";
 import { LocalRoomRegistry } from "../server/roomRegistry.js";
 import {
   MAX_APP_DOC_BYTES,
-  MAX_CLIENT_IDS_PER_PARTICIPANT,
+  MAX_NEW_CLIENT_IDS_PER_UPDATE,
+  MAX_PRESENCE_IDS_PER_PARTICIPANT,
   MAX_ROOM_APP_DOCS,
   RoomApps,
 } from "../server/roomApps.js";
@@ -60,7 +61,8 @@ const makeRoom = () => {
     return changes;
   };
 
-  const join = (id: string, role: "host" | "participant", doc: Y.Doc = new Y.Doc()) => {
+  const join = (id: string, role: "host" | "participant", firstCopy: Y.Doc = new Y.Doc()) => {
+    let doc = firstCopy;
     const listeners = new Map<string, Listener>();
     const relayed: Sent[] = [];
     const received: Sent[] = [];
@@ -115,7 +117,12 @@ const makeRoom = () => {
     return {
       relayed,
       received,
-      doc,
+      get doc() {
+        return doc;
+      },
+      freshCopy: () => {
+        doc = new Y.Doc();
+      },
       sendUpdate: (appId: string, update: Uint8Array) => {
         ensureSynced(appId);
         send(appId, update);
@@ -123,6 +130,10 @@ const makeRoom = () => {
       // Sends without syncing first: an older client drawing before its sync
       // reply arrives, or a packet still in flight from an earlier stay.
       sendAsIs: send,
+      sendWithReplica: (appId: string, update: Uint8Array, replicaId: string) => {
+        ensureSynced(appId);
+        listeners.get("apps:yjs:update")!({ appId, update, replicaId });
+      },
       present: (appId: string, expectedRevision?: number) =>
         ask<{ success: boolean; error?: string }>("apps:open", { appId, expectedRevision }),
       closeLegacy: () => ask<{ success: boolean; error?: string }>("apps:close"),
@@ -202,16 +213,26 @@ const forgedUpdate = (clientID: number, clock: number, key: string): Uint8Array 
 };
 
 // A presence packet with one entry per id, in order, repeats included.
-const presencePacket = (clientIds: number[]): Uint8Array => {
+const presencePacket = (clientIds: number[], clock = 1, state = "{}"): Uint8Array => {
   const encoder = encoding.createEncoder();
   encoding.writeVarUint(encoder, clientIds.length);
   for (const clientId of clientIds) {
     encoding.writeVarUint(encoder, clientId);
-    encoding.writeVarUint(encoder, 1);
-    encoding.writeVarString(encoder, "{}");
+    encoding.writeVarUint(encoder, clock);
+    encoding.writeVarString(encoder, state);
   }
   return encoding.toUint8Array(encoder);
 };
+
+const authoredBy = (clientIds: number[]): Uint8Array =>
+  Y.mergeUpdates(
+    clientIds.map((clientId) => {
+      const author = new Y.Doc();
+      author.clientID = clientId;
+      author.getMap("shapes").set(`s${clientId}`, true);
+      return Y.encodeStateAsUpdate(author);
+    }),
+  );
 
 const clockOf = (doc: Y.Doc): number =>
   Y.decodeStateVector(Y.encodeStateVector(doc)).get(doc.clientID) ?? 0;
@@ -336,16 +357,13 @@ describe("clearing an app", () => {
     const { join } = makeRoom();
     const host = join("host#1", "host");
     host.present("whiteboard");
-    const writers = Array.from({ length: 5 }, (_, index) => {
+    const writers = Array.from({ length: 50 }, (_, index) => {
       const writer = join(`writer#${index}`, "participant");
-      const copies = Array.from({ length: 1000 }, (_, offset) => {
-        const author = new Y.Doc();
-        author.clientID = 100_000 + index * 1000 + offset;
-        author.getMap("shapes").set(`s${index}-${offset}`, true);
-        return Y.encodeStateAsUpdate(author);
-      });
-      writer.sendUpdate("whiteboard", Y.mergeUpdates(copies));
-      return { writer, lastCopy: copies.at(-1)! };
+      const ids = Array.from({ length: 100 }, (_, offset) => 100_000 + index * 100 + offset);
+      for (let start = 0; start < ids.length; start += MAX_NEW_CLIENT_IDS_PER_UPDATE) {
+        writer.sendUpdate("whiteboard", authoredBy(ids.slice(start, start + MAX_NEW_CLIENT_IDS_PER_UPDATE)));
+      }
+      return { writer, lastCopy: authoredBy([ids.at(-1)!]) };
     });
     expect(join("before#1", "participant").coldSync("whiteboard").shapes).toHaveLength(5000);
 
@@ -494,7 +512,7 @@ describe("Yjs client ids", () => {
     expect(join("late#1", "participant").coldSync("whiteboard")).toEqual({ shapes: ["circle"] });
   });
 
-  it("keeps an editor's client id, shown in presence, out of another app", () => {
+  it("keeps an editor drawing after another app takes the id their cursor showed", () => {
     const { join } = makeRoom();
     const host = join("host#1", "host");
     const editor = join("editor#1", "participant");
@@ -507,15 +525,17 @@ describe("Yjs client ids", () => {
     host.present("wheel");
     attacker.sendUpdate("wheel", forgedUpdate(editor.doc.clientID, 0, "claimed"));
     host.present("whiteboard");
+    editor.freshCopy();
 
     editor.relayed.length = 0;
     editor.draw("whiteboard", "square");
 
     expect(editor.relayed.map((sent) => sent.event)).toEqual(["apps:yjs:update"]);
+    expect(join("late#1", "participant").coldSync("whiteboard")).toEqual({ shapes: ["circle", "square"] });
     presence.destroy();
   });
 
-  it("lets a host draw after locking, whatever another participant wrote under their id", () => {
+  it("lets a host draw after locking, whatever another participant wrote under their old id", () => {
     const { join } = makeRoom();
     const host = join("host#1", "host");
     const artist = join("artist#1", "participant");
@@ -529,6 +549,7 @@ describe("Yjs client ids", () => {
     attacker.sendUpdate("wheel", forgedUpdate(host.doc.clientID, 0, "claimed"));
     host.present("whiteboard");
     host.lock(true);
+    host.freshCopy();
 
     host.relayed.length = 0;
     host.draw("whiteboard", "square");
@@ -689,7 +710,7 @@ describe("Yjs client ids", () => {
     const host = join("host#1", "host");
     const viewer = join("viewer#1", "participant");
     host.present("whiteboard");
-    const held = Array.from({ length: MAX_CLIENT_IDS_PER_PARTICIPANT - 1 }, (_, index) => 1000 + index);
+    const held = Array.from({ length: MAX_PRESENCE_IDS_PER_PARTICIPANT - 1 }, (_, index) => 1000 + index);
 
     viewer.sendRawAwareness("whiteboard", presencePacket(held), held[0]);
     viewer.sendRawAwareness("whiteboard", presencePacket([5, 5]), 5);
@@ -732,6 +753,95 @@ describe("Yjs client ids", () => {
     expect(join("late#1", "participant").coldSync("whiteboard")).toEqual({
       shapes: ["circle", "square"],
     });
+  });
+});
+
+describe("client id reservations", () => {
+  it("keeps a fresh writer usable after sixteen identities flood presence with client ids", () => {
+    const { join } = makeRoom();
+    const host = join("host#1", "host");
+    host.present("whiteboard");
+    for (let index = 0; index < 16; index += 1) {
+      const ids = Array.from({ length: 1024 }, (_, offset) => 10_000_000 + index * 1024 + offset);
+      join(`flood#${index}`, "participant").sendRawAwareness("whiteboard", presencePacket(ids), ids[0]);
+    }
+    const writer = join("writer#1", "participant");
+
+    writer.draw("whiteboard", "circle");
+
+    expect(writer.relayed.map((sent) => sent.event)).toEqual(["apps:yjs:update"]);
+    expect(join("late#1", "participant").coldSync("whiteboard")).toEqual({ shapes: ["circle"] });
+  });
+
+  it("refuses a presence packet that names more new ids than a participant may show", () => {
+    const { join } = makeRoom();
+    const host = join("host#1", "host");
+    const viewer = join("viewer#1", "participant");
+    host.present("whiteboard");
+    const ids = Array.from({ length: MAX_PRESENCE_IDS_PER_PARTICIPANT + 1 }, (_, index) => 500 + index);
+
+    viewer.sendRawAwareness("whiteboard", presencePacket(ids), ids[0]);
+
+    expect(viewer.relayed).toEqual([]);
+  });
+
+  it("frees a participant's presence ids when their cursors go, so they can keep showing new ones", () => {
+    const { room, join } = makeRoom();
+    const host = join("host#1", "host");
+    join("viewer#1", "participant");
+    host.present("whiteboard");
+
+    const shown = Array.from({ length: 1100 }, (_, index) => {
+      const id = 20_000 + index;
+      const forwarded = room.apps.applyAwarenessUpdate("whiteboard", presencePacket([id]), "viewer#1");
+      room.apps.applyAwarenessUpdate("whiteboard", presencePacket([id], 2, "null"), "viewer#1");
+      return forwarded !== null;
+    });
+
+    expect(shown.every(Boolean)).toBe(true);
+  });
+
+  it("frees a leaving participant's presence ids for others", () => {
+    const { room, join } = makeRoom();
+    const host = join("host#1", "host");
+    join("viewer#1", "participant");
+    join("next#1", "participant");
+    host.present("whiteboard");
+    room.apps.applyAwarenessUpdate("whiteboard", presencePacket([900]), "viewer#1");
+
+    room.apps.clearUserAwareness("viewer#1");
+
+    expect(room.apps.applyAwarenessUpdate("whiteboard", presencePacket([900]), "next#1")).not.toBeNull();
+  });
+
+  it("refuses an update that claims more new client ids than one update may", () => {
+    const { join } = makeRoom();
+    const host = join("host#1", "host");
+    const writer = join("writer#1", "participant");
+    host.present("whiteboard");
+    const allowed = Array.from({ length: MAX_NEW_CLIENT_IDS_PER_UPDATE }, (_, index) => 30_000 + index);
+    const tooMany = Array.from({ length: MAX_NEW_CLIENT_IDS_PER_UPDATE + 1 }, (_, index) => 31_000 + index);
+
+    writer.sendUpdate("whiteboard", authoredBy(tooMany));
+    writer.sendUpdate("whiteboard", authoredBy(allowed));
+
+    expect(writer.relayed.map((sent) => sent.event)).toEqual(["apps:yjs:update"]);
+    expect(join("late#1", "participant").coldSync("whiteboard").shapes).toHaveLength(allowed.length);
+  });
+
+  it("tells the writer, once per copy, that the room refused its change", () => {
+    const { join } = makeRoom();
+    const host = join("host#1", "host");
+    const writer = join("writer#1", "participant");
+    host.present("whiteboard");
+    const tooMany = Array.from({ length: MAX_NEW_CLIENT_IDS_PER_UPDATE + 1 }, (_, index) => 40_000 + index);
+
+    writer.sendWithReplica("whiteboard", authoredBy(tooMany), "copy-1");
+    writer.sendWithReplica("whiteboard", authoredBy(tooMany.map((id) => id + 100)), "copy-1");
+
+    const refusals = writer.received.filter((sent) => sent.event === "apps:yjs:refused");
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0].payload).toMatchObject({ appId: "whiteboard", replicaId: "copy-1" });
   });
 });
 

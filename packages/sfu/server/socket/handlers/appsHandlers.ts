@@ -14,6 +14,7 @@ import type {
   AppsSyncData,
   AppsSyncError,
   AppsSyncResponse,
+  AppsRefusedData,
   AppsUpdateData,
 } from "../../../types.js";
 import { Admin } from "../../../config/classes/Admin.js";
@@ -32,6 +33,13 @@ import { respond } from "./ack.js";
 const MAX_APPS_SYNC_BYTES = 64 * 1024;
 const MAX_APPS_UPDATE_BYTES = 256 * 1024;
 const MAX_APPS_AWARENESS_BYTES = 64 * 1024;
+const MAX_REPLICA_ID_LENGTH = 64;
+const REMEMBERED_REFUSED_REPLICAS = 16;
+
+const normalizeReplicaId = (value: unknown): string | undefined =>
+  typeof value === "string" && value.length > 0 && value.length <= MAX_REPLICA_ID_LENGTH
+    ? value
+    : undefined;
 
 const MAX_APP_ID_LENGTH = 128;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
@@ -151,6 +159,13 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
   let synced: { apps: RoomApps; mark: AppSyncMark } | null = null;
   const syncMarkHere = (): AppSyncMark | null =>
     synced && synced.apps === context.currentRoom?.apps ? synced.mark : null;
+  const refusedReplicas: string[] = [];
+  const signalRefused = (appId: string, replicaId: string | undefined, reason: string): void => {
+    if (!replicaId || refusedReplicas.includes(replicaId)) return;
+    refusedReplicas.push(replicaId);
+    if (refusedReplicas.length > REMEMBERED_REFUSED_REPLICAS) refusedReplicas.shift();
+    socket.emit("apps:yjs:refused", { appId, replicaId, reason } satisfies AppsRefusedData);
+  };
 
   const emitAppsState = (): AppsState => {
     const state = getRoomAppsState(context);
@@ -349,56 +364,67 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
   socket.on("apps:yjs:update", (data: AppsUpdateData) => {
     if (!context.currentRoom || !context.currentClient) return;
     if (context.currentClient.isObserver) return;
-    if (!takeToken(socket, "apps:yjs:update", RATE_LIMITS.appsYjsUpdate)) return;
-
     const appId = normalizeAppId(data?.appId);
     if (!appId) return;
-    const doc = context.currentRoom.apps.liveDoc(appId);
-    if (!doc) return;
+    const replicaId = normalizeReplicaId(data?.replicaId);
+    const writer = context.currentClient.id;
+    const refuse = (reason: string): void => {
+      Logger.warn(`[Apps] Dropping update for ${appId} from ${writer}: ${reason}`);
+      signalRefused(appId, replicaId, reason);
+    };
 
-    if (context.currentRoom.apps.locked && !canControlStage(context)) {
+    if (!takeToken(socket, "apps:yjs:update", RATE_LIMITS.appsYjsUpdate)) {
+      signalRefused(appId, replicaId, "rate-limited");
+      return;
+    }
+    const apps = context.currentRoom.apps;
+    const doc = apps.liveDoc(appId);
+    if (!doc) {
+      signalRefused(appId, replicaId, "not-live");
+      return;
+    }
+    if (apps.locked && !canControlStage(context)) {
+      signalRefused(appId, replicaId, "locked");
       return;
     }
 
     const update = toUint8Array(data.update);
-    if (!update || update.length === 0) return;
-    if (update.length > MAX_APPS_UPDATE_BYTES) return;
+    if (!update || update.length === 0) {
+      refuse("invalid");
+      return;
+    }
+    if (update.length > MAX_APPS_UPDATE_BYTES) {
+      refuse("too-large");
+      return;
+    }
 
-    // A socket writes only once the room has sent it the app's state for
-    // this stay on the stage. One that writes first, as an older client
-    // drawing before its sync reply arrives does, gets that state instead.
     const mark = syncMarkHere();
-    if (!context.currentRoom.apps.isCurrentSync(mark)) {
-      const resync = context.currentRoom.apps.syncMark(appId);
+    if (!apps.isCurrentSync(mark)) {
+      const resync = apps.syncMark(appId);
       if (resync) {
-        synced = { apps: context.currentRoom.apps, mark: resync };
+        synced = { apps, mark: resync };
         socket.emit("apps:yjs:update", {
           appId,
           update: Y.encodeStateAsUpdate(doc),
         } satisfies AppsUpdateData);
       }
-      Logger.warn(`[Apps] Dropping update for ${appId} from ${context.currentClient.id}: not_synced`);
+      refuse("not-synced");
       return;
     }
-    const refusal = context.currentRoom.apps.contentRefusal(
-      appId,
-      context.currentClient.id,
-      update,
-      mark,
-    );
+    const refusal = apps.contentRefusal(appId, writer, update, mark);
     if (refusal) {
-      Logger.warn(`[Apps] Dropping update for ${appId} from ${context.currentClient.id}: ${refusal}`);
+      refuse(refusal);
       return;
     }
-    if (!context.currentRoom.apps.reserveUpdate(appId, update)) {
-      Logger.warn(`[Apps] Dropping update for ${appId}: document size limit reached`);
+    if (!apps.reserveUpdate(appId, update)) {
+      refuse("too-large");
       return;
     }
 
     try {
       Y.applyUpdate(doc, update, socket.id);
-    } catch (error) {
-      Logger.warn("[Apps] Dropping invalid Yjs update", error);
+    } catch {
+      refuse("invalid");
       return;
     }
 

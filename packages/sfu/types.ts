@@ -1211,6 +1211,13 @@ export interface AppsSyncError {
 export interface AppsUpdateData {
   appId: string;
   update: Uint8Array;
+  replicaId?: string;
+}
+
+export interface AppsRefusedData {
+  appId: string;
+  replicaId: string;
+  reason: string;
 }
 
 export interface AppsAwarenessData {

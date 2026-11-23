@@ -16,7 +16,8 @@ export const MAX_APP_DOC_BYTES = 1024 * 1024;
 export const MAX_ROOM_APP_DOCS = 8;
 export const MAX_ROOM_APP_DOC_BYTES = 4 * 1024 * 1024;
 export const MAX_CLIENT_IDS_PER_PARTICIPANT = 1024;
-export const MAX_ROOM_CLIENT_IDS = 16384;
+export const MAX_NEW_CLIENT_IDS_PER_UPDATE = 8;
+export const MAX_PRESENCE_IDS_PER_PARTICIPANT = 4;
 
 // An update can grow the encoded document by more than its own size: a
 // deletion splits existing items, and alternating single-character deletions
@@ -43,13 +44,16 @@ export type AppSyncMark = {
 };
 
 export type ContentRefusal =
-  | "not_live"
-  | "not_synced"
+  | "not-live"
+  | "not-synced"
   | "malformed"
   | "unresolved"
-  | "unseen_value"
+  | "unseen-value"
   | "cleared"
-  | "foreign_id";
+  | "foreign-id"
+  | "id-limit";
+
+type ClientIdClaim = { participant: string; appId: string };
 
 export type AppsSnapshot = {
   activeAppId: string | null;
@@ -234,8 +238,10 @@ export class RoomApps {
   private generations = 0;
   private docs: Map<string, AppDoc> = new Map();
   private clearedWriters: Set<string> = new Set();
-  private clientIdOwners: Map<number, { participant: string; appId: string }> = new Map();
+  private clientIdOwners: Map<number, ClientIdClaim> = new Map();
   private clientIdCounts: Map<string, number> = new Map();
+  private presenceIds: Map<number, ClientIdClaim> = new Map();
+  private presenceIdCounts: Map<string, number> = new Map();
   private awareness: Map<string, Awareness> = new Map();
   private awarenessClientIdsByUser: Map<string, Map<string, Set<number>>> =
     new Map();
@@ -397,8 +403,8 @@ export class RoomApps {
     mark: AppSyncMark | null,
   ): ContentRefusal | null {
     const doc = this.liveDoc(appId);
-    if (!doc) return "not_live";
-    if (!this.isCurrentSync(mark)) return "not_synced";
+    if (!doc) return "not-live";
+    if (!this.isCurrentSync(mark)) return "not-synced";
     let facts: UpdateFacts;
     try {
       facts = readUpdate(doc, update);
@@ -407,12 +413,12 @@ export class RoomApps {
     }
     if (!facts.resolvable) return "unresolved";
     for (const replaced of facts.blindlyReplaced) {
-      if (heldIn(mark.seen, replaced) || heldIn(this.stayStart, replaced)) return "unseen_value";
+      if (heldIn(mark.seen, replaced) || heldIn(this.stayStart, replaced)) return "unseen-value";
     }
     for (const client of facts.touched) {
       if (this.clearedWriters.has(clearedWriterKey(appId, client))) return "cleared";
     }
-    return this.claimClientIds(this.participantOf(userId), appId, facts.writers) ? null : "foreign_id";
+    return this.claimClientIds(this.participantOf(userId), appId, facts.writers);
   }
 
   /**
@@ -486,24 +492,54 @@ export class RoomApps {
     for (const client of clients) this.clearedWriters.add(clearedWriterKey(appId, client));
   }
 
-  private claimClientIds(participant: string, appId: string, clients: Iterable<number>): boolean {
-    const unclaimed: number[] = [];
+  private claimClientIds(
+    participant: string,
+    appId: string,
+    clients: Iterable<number>,
+  ): "foreign-id" | "id-limit" | null {
+    const claims: number[] = [];
     for (const client of new Set(clients)) {
-      const owner = this.clientIdOwners.get(client);
-      if (owner === undefined) unclaimed.push(client);
-      else if (owner.participant !== participant || owner.appId !== appId) return false;
+      const owner = this.clientIdOwners.get(client) ?? this.presenceIds.get(client);
+      if (owner && (owner.participant !== participant || owner.appId !== appId)) return "foreign-id";
+      if (!this.clientIdOwners.has(client)) claims.push(client);
     }
-    if (unclaimed.length === 0) return true;
+    if (claims.length === 0) return null;
     const held = this.clientIdCounts.get(participant) ?? 0;
     if (
-      held + unclaimed.length > MAX_CLIENT_IDS_PER_PARTICIPANT ||
-      this.clientIdOwners.size + unclaimed.length > MAX_ROOM_CLIENT_IDS
+      claims.length > MAX_NEW_CLIENT_IDS_PER_UPDATE ||
+      held + claims.length > MAX_CLIENT_IDS_PER_PARTICIPANT
     ) {
-      return false;
+      return "id-limit";
     }
-    for (const client of unclaimed) this.clientIdOwners.set(client, { participant, appId });
-    this.clientIdCounts.set(participant, held + unclaimed.length);
+    this.releasePresenceIds(claims);
+    for (const client of claims) this.clientIdOwners.set(client, { participant, appId });
+    this.clientIdCounts.set(participant, held + claims.length);
+    return null;
+  }
+
+  private claimPresenceIds(participant: string, appId: string, clients: Iterable<number>): boolean {
+    const claims: number[] = [];
+    for (const client of new Set(clients)) {
+      const owner = this.clientIdOwners.get(client) ?? this.presenceIds.get(client);
+      if (owner === undefined) claims.push(client);
+      else if (owner.participant !== participant || owner.appId !== appId) return false;
+    }
+    const held = this.presenceIdCounts.get(participant) ?? 0;
+    if (held + claims.length > MAX_PRESENCE_IDS_PER_PARTICIPANT) return false;
+    for (const client of claims) this.presenceIds.set(client, { participant, appId });
+    if (claims.length > 0) this.presenceIdCounts.set(participant, held + claims.length);
     return true;
+  }
+
+  private releasePresenceIds(clients: Iterable<number>): void {
+    for (const client of clients) {
+      const claim = this.presenceIds.get(client);
+      if (!claim) continue;
+      this.presenceIds.delete(client);
+      const held = (this.presenceIdCounts.get(claim.participant) ?? 1) - 1;
+      if (held > 0) this.presenceIdCounts.set(claim.participant, held);
+      else this.presenceIdCounts.delete(claim.participant);
+    }
   }
 
   private destroyDoc(appId: string, entry: AppDoc): void {
@@ -527,6 +563,9 @@ export class RoomApps {
 
     destroyPresence(awareness);
     this.awareness.delete(appId);
+    this.releasePresenceIds(
+      Array.from(this.presenceIds).filter(([, claim]) => claim.appId === appId).map(([client]) => client),
+    );
     return removal;
   }
 
@@ -588,7 +627,7 @@ export class RoomApps {
     const own: AwarenessEntry[] = [];
     const claimed: number[] = [];
     for (const entry of decodeAwarenessEntries(awarenessUpdate)) {
-      const owner = this.clientIdOwners.get(entry.clientID);
+      const owner = this.clientIdOwners.get(entry.clientID) ?? this.presenceIds.get(entry.clientID);
       const removal = JSON.parse(entry.state) === null;
       const ours = owner?.participant === participant && owner.appId === appId;
       if (ours || (owner === undefined && !removal)) {
@@ -598,12 +637,13 @@ export class RoomApps {
         return null;
       }
     }
-    if (own.length === 0 || !this.claimClientIds(participant, appId, claimed)) return null;
+    if (own.length === 0 || !this.claimPresenceIds(participant, appId, claimed)) return null;
 
     const forwarded = encodeAwarenessEntries(own);
     let awareness = this.awareness.get(appId);
     if (!awareness) {
       awareness = createPresence();
+      awareness.on("update", ({ removed }: { removed: number[] }) => this.releasePresenceIds(removed));
       this.awareness.set(appId, awareness);
     }
     applyAwarenessUpdate(awareness, forwarded, userId ?? "socket");
@@ -681,6 +721,8 @@ export class RoomApps {
     this.clearedWriters.clear();
     this.clientIdOwners.clear();
     this.clientIdCounts.clear();
+    this.presenceIds.clear();
+    this.presenceIdCounts.clear();
     this.stage = { activeAppId: null, locked: false };
     this.revision += 1;
   }
