@@ -963,23 +963,35 @@ restore_drain_state() {
 # compose up after a pause or a crash would build the unchecked checkout. On a
 # host whose running images carry other names, it is tagged from the
 # instance's last-known-good image.
+SEEDED=""
+seed_service_tag() {
+  local svc="$1" lkg="" image_name
+  image_name="$(service_image_name "$svc")"
+  docker image inspect "$image_name" >/dev/null 2>&1 && return 0
+  serving "$svc" && lkg="$(container_image "$svc")"
+  [[ -n "$lkg" ]] || lkg="$(journal_get "$svc" lkg)"
+  [[ -n "$lkg" ]] || lkg="$(docker image inspect -f '{{.Id}}' "${IMAGE_REPO}:rollback-${svc}" 2>/dev/null || true)"
+  if [[ -z "$lkg" ]] || ! docker image inspect "$lkg" >/dev/null 2>&1; then
+    return 1
+  fi
+  docker tag "$lkg" "$image_name" || return 1
+  SEEDED+=" ${svc}"
+  echo "Tagged ${svc}'s last-known-good image as ${image_name}, so compose never builds it from the checkout."
+}
+
 seed_service_tags() {
-  local svc image_name lkg
+  local svc missing=""
+  SEEDED=""
   for svc in "${ALL_SFU_SERVICES[@]}"; do
-    image_name="$(service_image_name "$svc")"
-    docker image inspect "$image_name" >/dev/null 2>&1 && continue
-    lkg=""
-    serving "$svc" && lkg="$(container_image "$svc")"
-    [[ -n "$lkg" ]] || lkg="$(journal_get "$svc" lkg)"
-    [[ -n "$lkg" ]] || lkg="$(docker image inspect -f '{{.Id}}' "${IMAGE_REPO}:rollback-${svc}" 2>/dev/null || true)"
-    if [[ -n "$lkg" ]] && docker image inspect "$lkg" >/dev/null 2>&1; then
-      docker tag "$lkg" "$image_name"
-      checkpoint "seed ${svc}"
-      echo "Tagged ${svc}'s last-known-good image as ${image_name}, so compose never builds it from the checkout."
-    else
-      echo "WARNING: ${image_name} does not exist and ${svc} has no known-good image to give it; a plain compose up would build the checkout." >&2
-    fi
+    seed_service_tag "$svc" || missing+=" ${svc}"
   done
+  [[ -z "$SEEDED" ]] || checkpoint "seed${SEEDED}"
+  if [[ "${1:-}" == "warn" ]]; then
+    for svc in $missing; do
+      echo "WARNING: $(service_image_name "$svc") does not exist and could not be tagged from a known-good image of ${svc}; a plain compose up would build the checkout." >&2
+    done
+  fi
+  return 0
 }
 
 # Whether repair may restart an instance: only one that cannot be carrying
@@ -1267,6 +1279,7 @@ done
 seed_service_tags
 repair_interrupted
 restore_service_when_none_serves
+seed_service_tags warn
 
 ORDERED_SERVICES=()
 while read -r _class _rooms svc; do

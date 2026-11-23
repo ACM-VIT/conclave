@@ -19,13 +19,22 @@ const LAST_GOOD = "sha256:running";
 // sfu-b is the peer that must keep serving while sfu-a is drained. sfu-b's
 // own steps are the same ones in the same order, so they are not run again.
 const specs = () => ({ "sfu-a": {}, "sfu-b": {} });
+const bothDrained = () => ({ "sfu-a": { draining: true }, "sfu-b": { draining: true } });
 const ONLY_A = { SFU_DEPLOY_SERVICES: "sfu-a" };
 
 const scenarios = {
   // The build passes its canary.
-  passes: { env: ONLY_A, finalCode: 0, allowed: [LAST_GOOD, GOOD], finalImages: { "sfu-a": GOOD, "sfu-b": LAST_GOOD } },
+  passes: { title: "build passes its canary", env: ONLY_A, finalCode: 0, allowed: [LAST_GOOD, GOOD], finalImages: { "sfu-a": GOOD, "sfu-b": LAST_GOOD } },
   // The build fails its canary.
-  fails: { env: { ...ONLY_A, DEPLOY_TEST_BAD_IMAGES: GOOD }, finalCode: 4, allowed: [LAST_GOOD], finalImages: { "sfu-a": LAST_GOOD, "sfu-b": LAST_GOOD } },
+  fails: { title: "build fails its canary", env: { ...ONLY_A, DEPLOY_TEST_BAD_IMAGES: GOOD }, finalCode: 4, allowed: [LAST_GOOD], finalImages: { "sfu-a": LAST_GOOD, "sfu-b": LAST_GOOD } },
+  firstUpgrade: {
+    title: "first upgrade with every instance left drained, build passes its canary",
+    specs: bothDrained,
+    env: { ...ONLY_A, DEPLOY_TEST_UNTAGGED_SERVICE_BUILDS: "1" },
+    finalCode: 0,
+    allowed: [LAST_GOOD, GOOD],
+    finalImages: { "sfu-a": GOOD, "sfu-b": LAST_GOOD },
+  },
 };
 
 const sharedDir = async () => {
@@ -58,7 +67,7 @@ const assertServing = (sfus, allowed, label) => {
 // How many step boundaries a whole deploy of this scenario passes.
 const countSteps = async (scenario) => {
   let count = 0;
-  await withSfus(specs(), async (sfus) => {
+  await withSfus((scenario.specs ?? specs)(), async (sfus) => {
     const shared = await sharedDir();
     try {
       const log = path.join(shared.dir, "steps.log");
@@ -77,7 +86,7 @@ for (const [name, scenario] of Object.entries(scenarios)) counts[name] = await c
 
 const crashAt = async (name, step, variant) => {
   const scenario = scenarios[name];
-  await withSfus(specs(), async (sfus) => {
+  await withSfus((scenario.specs ?? specs)(), async (sfus) => {
     const shared = await sharedDir();
     try {
       const log = path.join(shared.dir, "steps.log");
@@ -95,11 +104,11 @@ const crashAt = async (name, step, variant) => {
       } else {
         const crashed = await deploy(sfus, { env: crashing });
         assert.equal(crashed.code, null, `the deploy dies at step ${step}:\n${crashed.output}`);
-        if (variant === "by hand") {
+        if (variant === "by hand" && (await steps(log)).some((line) => !/^\d+ lock held$/.test(line))) {
           // An operator restarts every instance with plain compose: each comes
           // up on what its own image name points at.
           for (const service of Object.keys(sfus)) {
-            await composeUpByHand(sfus, { tags: shared.env.DEPLOY_TEST_DOCKER_TAGS, dir: path.join(shared.dir, "by-hand") }, service);
+            await composeUpByHand(sfus, { tags: shared.env.DEPLOY_TEST_DOCKER_TAGS, dir: path.join(shared.dir, "by-hand"), env: scenario.env }, service);
           }
           assertServing(sfus, scenario.allowed, `after a hand-run compose up, crash at step ${step}`);
         }
@@ -114,10 +123,10 @@ const crashAt = async (name, step, variant) => {
 };
 
 describe("a deploy killed at any step", { concurrency: 8 }, () => {
-  for (const [name, variants] of [["passes", ["retried"]], ["fails", ["by hand", "waiting"]]]) {
+  for (const [name, variants] of [["passes", ["retried"]], ["fails", ["by hand", "waiting"]], ["firstUpgrade", ["by hand"]]]) {
     for (const variant of variants) {
       for (let step = 1; step <= counts[name]; step += 1) {
-        test(`build ${name} its canary, killed at step ${step} of ${counts[name]}, then ${variant}`, () => crashAt(name, step, variant));
+        test(`${scenarios[name].title}, killed at step ${step} of ${counts[name]}, then ${variant}`, () => crashAt(name, step, variant));
       }
     }
   }
