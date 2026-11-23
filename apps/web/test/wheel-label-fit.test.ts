@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   SINGLE_LABEL_SIZE,
   SINGLE_LABEL_WIDTH,
@@ -165,6 +165,29 @@ describe("wheel label scripts without a grapheme segmenter", () => {
     expect(splitGraphemesFallback("ខ្មែរ")).toEqual(["ខ្មែ", "រ"]);
     expect(splitGraphemesFallback("ᬅᬓ᭄ᬱᬭ")).toEqual(["ᬅ", "ᬓ᭄ᬱ", "ᬭ"]);
     expect(splitGraphemesFallback("ꦲꦏ꧀ꦱꦫ")).toEqual(["ꦲ", "ꦏ꧀ꦱ", "ꦫ"]);
+  });
+
+  it("keeps listed linkers attached when the browser's character data predates their script", () => {
+    const test = RegExp.prototype.test;
+    const newerThanBrowser = /^[\u{11380}-\u{113FF}\u{11F00}-\u{11F5F}]$/u;
+    const olderData = vi.spyOn(RegExp.prototype, "test").mockImplementation(function (this: RegExp, input: string) {
+      return this.source.includes("\\p{") && test.call(newerThanBrowser, input) ? false : test.call(this, input);
+    });
+    let split: string[][];
+    try {
+      split = [
+        "AA\u{11392}\u{113D0}\u{113A5}\u{11392}",
+        "AA\u{11F12}\u{11F42}\u{11F13}\u{11F12}",
+        "\u{11392}\u{113B8}\u{113D0}\u{113A5}",
+      ].map(splitGraphemesFallback);
+    } finally {
+      olderData.mockRestore();
+    }
+    expect(split).toEqual([
+      ["A", "A", "\u{11392}\u{113D0}\u{113A5}", "\u{11392}"],
+      ["A", "A", "\u{11F12}\u{11F42}\u{11F13}", "\u{11F12}"],
+      ["\u{11392}\u{113B8}\u{113D0}\u{113A5}"],
+    ]);
   });
 
   it("splits names the way the browser segmenter does, script by script", () => {

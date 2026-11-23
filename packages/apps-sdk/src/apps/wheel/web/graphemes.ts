@@ -102,7 +102,8 @@ const isControl = (point: string): boolean =>
   !PREPEND.test(point);
 
 const extendsCluster = (point: string): boolean =>
-  EXTENDS_CLUSTER.test(point) && !STANDALONE_SPACING_MARK.test(point);
+  (EXTENDS_CLUSTER.test(point) || CONJUNCT_LINKER.test(point) || EXTENDING_SPACING_MARK.test(point)) &&
+  !STANDALONE_SPACING_MARK.test(point);
 
 const isSpacingMark = (point: string): boolean =>
   SPACING_MARK.test(point) && !EXTENDING_SPACING_MARK.test(point) && !CONJUNCT_LINKER.test(point);
