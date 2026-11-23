@@ -6,19 +6,20 @@ extension IOSFeedbackDelivery {
     static func production(source: @escaping @MainActor () -> FeedbackSourceState) -> IOSFeedbackDelivery {
         IOSFeedbackDelivery(
             source: source,
+            defaults: UserDefaults.standard,
             recordOnly: false,
             deliversKind: { DeliveredTokenKinds.delivers($0) },
             records: FeedbackDeliveryRecords.shared
         )
     }
 
-    static func nativeCall(source: NativeCallFeedbackSource, defaults: UserDefaults = .standard,
+    static func nativeCall(source: NativeCallFeedbackSource, defaults: UserDefaults,
                            recordOnly: Bool = false) -> IOSFeedbackDelivery {
         IOSFeedbackDelivery(source: { source.state }, defaults: defaults, recordOnly: recordOnly,
                             deliversKind: { source.publisher.delivers($0) }, records: FeedbackDeliveryRecords.shared)
     }
 
-    static func nativePremeeting(premeeting: PremeetingPresenter, defaults: UserDefaults = .standard,
+    static func nativePremeeting(premeeting: PremeetingPresenter, defaults: UserDefaults,
                                  recordOnly: Bool = false) -> IOSFeedbackDelivery {
         IOSFeedbackDelivery(
             source: { FeedbackSourceState(session: premeeting.feedbackState.session, token: premeeting.feedbackState.token) },
@@ -66,7 +67,7 @@ private struct NativeCallFeedbackObserver: View {
     @State private var delivery: IOSFeedbackDelivery
 
     init(source: NativeCallFeedbackSource) {
-        _delivery = State(initialValue: IOSFeedbackDelivery.nativeCall(source: source))
+        _delivery = State(initialValue: IOSFeedbackDelivery.nativeCall(source: source, defaults: UserDefaults.standard))
     }
 
     var body: some View {
@@ -84,7 +85,7 @@ struct ConclavePremeetingFeedback: ViewModifier {
     @State private var premeetingDelivery: IOSFeedbackDelivery
 
     init(premeeting: PremeetingPresenter) {
-        _premeetingDelivery = State(initialValue: IOSFeedbackDelivery.nativePremeeting(premeeting: premeeting))
+        _premeetingDelivery = State(initialValue: IOSFeedbackDelivery.nativePremeeting(premeeting: premeeting, defaults: UserDefaults.standard))
     }
 
     func body(content: Content) -> some View {

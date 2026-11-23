@@ -11,7 +11,7 @@ struct STG3ShareSelfViewTests {
     static let videoHeight = 1080.0
 
     private func presenter(_ inputs: StageInputs, viewport: StageViewport? = nil) -> StagePresenter {
-        let stage = StagePresenter(shell: MeetingShellPresenter())
+        let stage = StagePresenter(shell: MeetingShellPresenter(defaults: IsolatedDefaults.make()))
         stage.setViewport(viewport ?? StagePoliciesTests.iphoneSE)
         stage.apply(inputs)
         return stage
@@ -440,7 +440,7 @@ struct STG3ShareSelfViewTests {
 @Suite(.serialized)
 struct STG3CameraFacingViewModelTests {
     @Test func theCameraOwnersFacingAndPauseReachTheStageInputs() {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         let camera = LocalPreviewController.shared
         let original = camera.facing
         defer {

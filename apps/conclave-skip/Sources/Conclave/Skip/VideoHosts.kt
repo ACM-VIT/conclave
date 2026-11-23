@@ -103,21 +103,26 @@ internal class VideoHostRecords {
 
 private val videoHostMain = Handler(Looper.getMainLooper())
 
-internal class VideoDetachWait(limitMillis: Long, windowMillis: Long) {
+internal class VideoDetachWait(
+    limitMillis: Long,
+    windowMillis: Long,
+    private val nanoTime: () -> Long = { System.nanoTime() },
+    private val awaitFor: (CountDownLatch, Long) -> Boolean = { gone, nanos -> gone.await(nanos, TimeUnit.NANOSECONDS) },
+) {
     private val limitNanos = TimeUnit.MILLISECONDS.toNanos(limitMillis)
     private val windowNanos = TimeUnit.MILLISECONDS.toNanos(windowMillis)
-    private var windowStart = System.nanoTime() - windowNanos
+    private var windowStart = nanoTime() - windowNanos
     private var waited = 0L
 
     fun await(gone: CountDownLatch): Boolean {
-        val entered = System.nanoTime()
+        val entered = nanoTime()
         if (entered - windowStart >= windowNanos) {
             windowStart = entered
             waited = 0L
         }
         val left = limitNanos - waited
-        val went = if (left > 0L) gone.await(left, TimeUnit.NANOSECONDS) else gone.count == 0L
-        waited += System.nanoTime() - entered
+        val went = if (left > 0L) awaitFor(gone, left) else gone.count == 0L
+        waited += nanoTime() - entered
         return went
     }
 

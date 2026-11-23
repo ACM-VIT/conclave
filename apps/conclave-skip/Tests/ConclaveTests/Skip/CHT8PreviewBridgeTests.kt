@@ -34,7 +34,7 @@ class CHT8PreviewBridgeTests {
     }
 
     private fun presenter(previews: Boolean = true): StagePresenter {
-        val stage = StagePresenter(shell = MeetingShellPresenter())
+        val stage = StagePresenter(shell = MeetingShellPresenter(defaults = IsolatedDefaults.make()))
         stage.chatPreviewsEnabled = { previews }
         stage.apply(StageFixtureScript.base(count = 4))
         stage.applyNotices(host())

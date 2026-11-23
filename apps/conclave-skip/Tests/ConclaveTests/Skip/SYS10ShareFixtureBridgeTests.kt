@@ -104,7 +104,7 @@ class SYS10ShareFixtureBridgeTests {
 
     @Test
     fun aSystemPickerCommandOnlyComesFromTheIOSPickerPath() {
-        val shell = MeetingShellPresenter()
+        val shell = MeetingShellPresenter(defaults = IsolatedDefaults.make())
         val stage = StagePresenter(shell = shell)
         val controls = CallControlsPresenter(shell = shell, stage = stage)
         val commands = mutableListOf<MeetingShellCommand>()
