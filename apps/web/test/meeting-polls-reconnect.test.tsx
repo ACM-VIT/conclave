@@ -5,7 +5,8 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { AuthorityProvider } from "@conclave/apps-sdk";
 import { AUTHORITY_EVENTS, type AuthoritySocket } from "@conclave/apps-sdk/authority";
 import { useMeetingPolls } from "../src/app/hooks/useMeetingPolls";
-import { WAITING_FOR_VIEW } from "../src/app/hooks/useHeldThroughReconnect";
+import { WAITING_FOR_VIEW, useReconnectHold } from "../src/app/hooks/useHeldThroughReconnect";
+import type { ConnectionState } from "../src/app/lib/types";
 
 type Listener = (...args: unknown[]) => void;
 type Sent = { event: string; payload: Record<string, unknown>; ack?: (reply: unknown) => void };
@@ -35,8 +36,17 @@ let current: ReturnType<typeof useMeetingPolls>;
 const renders: Shown[] = [];
 const latest = () => renders[renders.length - 1];
 
-function Probe({ isJoined, isWebinarAttendee }: { isJoined: boolean; isWebinarAttendee: boolean }) {
-  const polls = useMeetingPolls({ isJoined, isWebinarAttendee });
+function Probe({
+  isJoined,
+  connectionState,
+  isWebinarAttendee,
+}: {
+  isJoined: boolean;
+  connectionState: ConnectionState;
+  isWebinarAttendee: boolean;
+}) {
+  const hold = useReconnectHold({ isJoined, connectionState });
+  const polls = useMeetingPolls({ hold, isWebinarAttendee });
   current = polls;
   renders.push({
     isAvailable: polls.isAvailable,
@@ -49,17 +59,32 @@ function Probe({ isJoined, isWebinarAttendee }: { isJoined: boolean; isWebinarAt
 
 const mount = async ({
   connected = true,
+  connectionState = connected ? "joined" : "reconnecting",
+  socketOpen = connected,
   isJoined = true,
   isWebinarAttendee = false,
-}: { connected?: boolean; isJoined?: boolean; isWebinarAttendee?: boolean } = {}) => {
+}: {
+  connected?: boolean;
+  connectionState?: ConnectionState;
+  socketOpen?: boolean;
+  isJoined?: boolean;
+  isWebinarAttendee?: boolean;
+} = {}) => {
   await act(async () =>
     root.render(
-      <AuthorityProvider socket={connected ? socket : null} joined={connected}>
-        <Probe isJoined={isJoined} isWebinarAttendee={isWebinarAttendee} />
+      <AuthorityProvider socket={socketOpen ? socket : null} joined={connectionState === "joined"}>
+        <Probe isJoined={isJoined} connectionState={connectionState} isWebinarAttendee={isWebinarAttendee} />
       </AuthorityProvider>,
     ),
   );
 };
+
+const fire = async (event: string) =>
+  act(async () => {
+    for (const listener of [...(listeners.get(event) ?? [])]) listener();
+  });
+
+const nothingShown = { isAvailable: false, ids: [], canManage: false, canVote: false };
 
 const card = {
   bucket: "polls",
@@ -229,4 +254,64 @@ it("keeps every poll action waiting while the view comes back, and sends nothing
   expect(current.waiting).toBe(false);
   const results = await Promise.all(answers);
   expect(results).toEqual([WAITING_FOR_VIEW, WAITING_FOR_VIEW, WAITING_FOR_VIEW, WAITING_FOR_VIEW, WAITING_FOR_VIEW]);
+});
+
+
+it("drops the polls at once when a rejoin is refused and the meeting ends in an error", async () => {
+  await mount();
+  await offer();
+  await sendView();
+  await mount({ connected: false });
+  const whileReconnecting = latest();
+
+  await mount({ connectionState: "error", socketOpen: true });
+
+  expect(whileReconnecting).toEqual(hostWithAPoll);
+  expect(latest()).toEqual(nothingShown);
+  expect(current.waiting).toBe(false);
+});
+
+it("drops the polls at once when the reconnect attempts run out", async () => {
+  await mount();
+  await offer();
+  await sendView();
+  await mount({ connected: false });
+
+  await mount({ connectionState: "error", socketOpen: false });
+
+  expect(latest()).toEqual(nothingShown);
+  expect(current.waiting).toBe(false);
+});
+
+it("drops the polls at once when the server disconnects a slow socket and nothing reconnects", async () => {
+  await mount();
+  await offer();
+  await sendView();
+
+  await fire("disconnect");
+  await mount({ connectionState: "disconnected", socketOpen: true });
+
+  expect(latest()).toEqual(nothingShown);
+  expect(current.waiting).toBe(false);
+});
+
+it("drops the polls at once when the person is out of the meeting with the socket still open", async () => {
+  await mount();
+  await offer();
+  await sendView();
+
+  await mount({ connectionState: "waiting", socketOpen: true, isJoined: false });
+
+  expect(latest()).toEqual(nothingShown);
+  expect(current.waiting).toBe(false);
+});
+
+it("closes the polls the moment the person leaves, before the connection catches up", async () => {
+  await mount();
+  await offer();
+  await sendView();
+
+  await mount({ connectionState: "joined", socketOpen: true, isJoined: false });
+
+  expect(latest().isAvailable).toBe(false);
 });

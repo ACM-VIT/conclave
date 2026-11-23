@@ -1,25 +1,27 @@
 "use client";
 
 import { useMemo } from "react";
-import { useAuthorityAvailable, useAuthorityRuntime } from "@conclave/apps-sdk";
+import { useAuthorityAvailable } from "@conclave/apps-sdk";
 import { pollsContract, usePolls, type PollCard } from "@conclave/apps-sdk/polls/web";
-import { useHeldThroughReconnect, waitForView } from "./useHeldThroughReconnect";
+import {
+  useHeldThroughReconnect,
+  waitForView,
+  type ReconnectHold,
+} from "./useHeldThroughReconnect";
 
 export function useMeetingPolls({
-  isJoined,
+  hold,
   isWebinarAttendee,
   onPollStarted,
 }: {
-  isJoined: boolean;
+  hold: ReconnectHold;
   isWebinarAttendee: boolean;
   onPollStarted?: (poll: PollCard) => void;
 }) {
   const polls = usePolls({ onPollStarted });
-  const runtime = useAuthorityRuntime();
   const liveOffer = useAuthorityAvailable(pollsContract);
-  const awaitingServer = isJoined && runtime === "unknown";
-  const offered = useHeldThroughReconnect(liveOffer, awaitingServer);
-  const viewComing = awaitingServer || (offered && polls.isConnecting);
+  const offered = useHeldThroughReconnect(liveOffer, hold.holdingThroughReconnect);
+  const viewComing = hold.holdingThroughReconnect || (offered && polls.isConnecting);
   const shownPolls = useHeldThroughReconnect(polls.polls, viewComing && !polls.isReplacing);
   const liveGrants = useMemo(
     () => ({
@@ -41,6 +43,6 @@ export function useMeetingPolls({
     endPoll: viewComing ? waitForView : polls.endPoll,
     shareResults: viewComing ? waitForView : polls.shareResults,
     exportCsv: viewComing ? waitForView : polls.exportCsv,
-    isAvailable: offered && isJoined && !isWebinarAttendee,
+    isAvailable: offered && hold.connectionLive && !isWebinarAttendee,
   };
 }

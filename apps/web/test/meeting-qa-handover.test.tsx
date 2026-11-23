@@ -5,8 +5,12 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { AuthorityProvider } from "@conclave/apps-sdk";
 import { AUTHORITY_EVENTS, type AuthoritySocket } from "@conclave/apps-sdk/authority";
 import { useMeetingQa } from "../src/app/hooks/useMeetingQa";
-import { WAITING_FOR_VIEW } from "../src/app/hooks/useHeldThroughReconnect";
-import type { WebinarQaChangedNotification, WebinarQaEntry } from "../src/app/lib/types";
+import { WAITING_FOR_VIEW, useReconnectHold } from "../src/app/hooks/useHeldThroughReconnect";
+import type {
+  ConnectionState,
+  WebinarQaChangedNotification,
+  WebinarQaEntry,
+} from "../src/app/lib/types";
 import { withQaChange, type WebinarQaList } from "../src/app/lib/webinarQaList";
 
 type Listener = (...args: unknown[]) => void;
@@ -68,12 +72,15 @@ let oldEvents: { change: (notification: WebinarQaChangedNotification) => void };
 function Probe({
   isWebinar,
   isJoined,
+  connectionState,
   legacyQa,
 }: {
   isWebinar: boolean;
   isJoined: boolean;
+  connectionState: ConnectionState;
   legacyQa: typeof legacy;
 }) {
+  const hold = useReconnectHold({ isJoined, connectionState });
   const [list, setList] = useState<WebinarQaList>(legacyQa.entries);
   const [sent, setSent] = useState<WebinarQaList>(legacyQa.entries);
   if (legacyQa.entries !== sent) {
@@ -84,7 +91,7 @@ function Probe({
   qa = useMeetingQa({
     legacy: { ...legacyQa, entries: list, forget: () => setList(null) },
     isWebinar,
-    isJoined,
+    hold,
     currentUserId: "me",
   });
   renders.push(qa.entries.map((entry) => entry.id));
@@ -99,12 +106,27 @@ function Probe({
 const mount = async (
   isWebinar: boolean,
   legacyQa: typeof legacy = legacy,
-  { connected = true, isJoined = true }: { connected?: boolean; isJoined?: boolean } = {},
+  {
+    connected = true,
+    connectionState = connected ? "joined" : "reconnecting",
+    socketOpen = connected,
+    isJoined = true,
+  }: {
+    connected?: boolean;
+    connectionState?: ConnectionState;
+    socketOpen?: boolean;
+    isJoined?: boolean;
+  } = {},
 ) => {
   await act(async () =>
     root.render(
-      <AuthorityProvider socket={connected ? socket : null} joined={connected}>
-        <Probe isWebinar={isWebinar} isJoined={isJoined} legacyQa={legacyQa} />
+      <AuthorityProvider socket={socketOpen ? socket : null} joined={connectionState === "joined"}>
+        <Probe
+          isWebinar={isWebinar}
+          isJoined={isJoined}
+          connectionState={connectionState}
+          legacyQa={legacyQa}
+        />
       </AuthorityProvider>,
     ),
   );
@@ -657,4 +679,110 @@ it("keeps every action of a meeting's Q&A waiting while its view comes back, and
   expect(qa.entries.map((entry) => entry.hasUpvoted)).toEqual([true]);
   const results = await Promise.all(answers);
   expect(results).toEqual([WAITING_FOR_VIEW, WAITING_FOR_VIEW, WAITING_FOR_VIEW]);
+});
+
+const meetingWithTheApp = async () => {
+  const noOldList = { ...legacy, entries: null };
+  await mount(false, noOldList);
+  await offerQa();
+  await sendView();
+  return noOldList;
+};
+const nothingLeft = () => ({ offered: qa.offered, ids: qa.entries.map((entry) => entry.id), waiting: qa.waiting });
+
+it("drops a meeting's questions at once when a rejoin is refused and the meeting ends in an error", async () => {
+  const noOldList = await meetingWithTheApp();
+  await mount(false, noOldList, { connected: false });
+  const whileReconnecting = qa.entries.map((entry) => entry.id);
+
+  await mount(false, noOldList, { connectionState: "error", socketOpen: true });
+
+  expect(whileReconnecting).toEqual(["q1"]);
+  expect(nothingLeft()).toEqual({ offered: false, ids: [], waiting: false });
+});
+
+it("drops a meeting's questions at once when the reconnect attempts run out", async () => {
+  const noOldList = await meetingWithTheApp();
+  await mount(false, noOldList, { connected: false });
+
+  await mount(false, noOldList, { connectionState: "error", socketOpen: false });
+
+  expect(nothingLeft()).toEqual({ offered: false, ids: [], waiting: false });
+});
+
+it("drops a meeting's questions at once when the server disconnects a slow socket and nothing reconnects", async () => {
+  const noOldList = await meetingWithTheApp();
+
+  await fire("disconnect");
+  await mount(false, noOldList, { connectionState: "disconnected", socketOpen: true });
+
+  expect(nothingLeft()).toEqual({ offered: false, ids: [], waiting: false });
+});
+
+it("drops a meeting's questions at once when the person is out of the meeting with the socket still open", async () => {
+  const noOldList = await meetingWithTheApp();
+
+  await mount(false, noOldList, { connectionState: "waiting", socketOpen: true, isJoined: false });
+
+  expect(nothingLeft()).toEqual({ offered: false, ids: [], waiting: false });
+});
+
+it("keeps a webinar's attendee and host actions waiting while the old events' list comes back", async () => {
+  const oldServer = {
+    ...legacy,
+    entries: [fromOldEvents],
+    submit: vi.fn(async () => ({ ok: true })),
+    upvote: vi.fn(),
+    moderate: vi.fn(async () => ({ ok: true })),
+  };
+  await mount(true, oldServer);
+  await act(async () =>
+    last(AUTHORITY_EVENTS.capabilities)!.ack!({
+      ok: true,
+      value: { protocol: 1, roomEpoch: "epoch", serverNowMs: Date.now(), apps: [] },
+    }),
+  );
+  const beforeTheDrop = { waiting: qa.waiting, submit: qa.onSubmit };
+
+  await mount(true, { ...oldServer, entries: null }, { connected: false });
+  const whileWaiting = qa;
+  const answers = await act(async () =>
+    Promise.all([
+      Promise.resolve(whileWaiting.onSubmit?.("Will the slides be shared?")),
+      Promise.resolve(whileWaiting.onUpvote?.("q1")),
+      Promise.resolve(whileWaiting.onModerate?.({ id: "q1", action: "dismissed" })),
+    ]),
+  );
+  await mount(true, { ...oldServer, entries: [fromOldEvents] });
+
+  expect(beforeTheDrop).toEqual({ waiting: false, submit: oldServer.submit });
+  expect(oldServer.submit).not.toHaveBeenCalled();
+  expect(oldServer.upvote).not.toHaveBeenCalled();
+  expect(oldServer.moderate).not.toHaveBeenCalled();
+  expect(whileWaiting.waiting).toBe(true);
+  expect(whileWaiting.entries.map((entry) => entry.id)).toEqual(["q1"]);
+  expect(answers).toEqual([WAITING_FOR_VIEW, WAITING_FOR_VIEW, WAITING_FOR_VIEW]);
+  expect({ waiting: qa.waiting, submit: qa.onSubmit }).toEqual({ waiting: false, submit: oldServer.submit });
+});
+
+it("drops a webinar's questions at once when its reconnect ends in an error", async () => {
+  await mount(true, { ...legacy, entries: [fromOldEvents] });
+  await mount(true, { ...legacy, entries: null }, { connected: false });
+  const whileReconnecting = qa.entries.map((entry) => entry.id);
+
+  await mount(true, { ...legacy, entries: null }, { connectionState: "error", socketOpen: false });
+
+  expect(whileReconnecting).toEqual(["q1"]);
+  expect(qa.entries).toEqual([]);
+  expect(qa.waiting).toBe(false);
+  expect(qa.onSubmit).toBeUndefined();
+});
+
+it("drops a webinar's questions at once when the person is out of it with the socket still open", async () => {
+  await mount(true, { ...legacy, entries: [fromOldEvents] });
+
+  await mount(true, { ...legacy, entries: null }, { connectionState: "waiting", socketOpen: true, isJoined: false });
+
+  expect(qa.entries).toEqual([]);
+  expect(qa.onSubmit).toBeUndefined();
 });

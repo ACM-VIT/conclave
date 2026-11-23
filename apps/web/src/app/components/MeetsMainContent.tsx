@@ -111,6 +111,7 @@ import { pollsApp } from "@conclave/apps-sdk/polls/web";
 import { qaApp } from "@conclave/apps-sdk/qa/web";
 import { hasUnseenMeetingQuestion, useMeetingQa } from "../hooks/useMeetingQa";
 import { useMeetingPolls } from "../hooks/useMeetingPolls";
+import { useReconnectHold } from "../hooks/useHeldThroughReconnect";
 import { panelAppNeedsServerUpdate } from "../lib/panel-app-availability";
 import {
   GAME_DOCK_DEFAULT_WIDTH,
@@ -650,6 +651,7 @@ export default function MeetsMainContent({
   // Q&A comes from the Q&A app once this connection has the app's view, and
   // from the old webinar events until then, or for good on a server that
   // does not offer the app. Everything below reads this one source.
+  const reconnectHold = useReconnectHold({ isJoined, connectionState });
   const meetingQa = useMeetingQa({
     legacy: {
       entries: legacyQaEntries,
@@ -659,7 +661,7 @@ export default function MeetsMainContent({
       moderate: legacyModerateQuestion,
     },
     isWebinar: Boolean(webinarConfig?.enabled) || isWebinarAttendee,
-    isJoined,
+    hold: reconnectHold,
     currentUserId,
   });
   const webinarQaEntries = meetingQa.entries;
@@ -1524,7 +1526,7 @@ export default function MeetsMainContent({
     [],
   );
   const polls = useMeetingPolls({
-    isJoined,
+    hold: reconnectHold,
     isWebinarAttendee,
     onPollStarted: handlePollStarted,
   });
@@ -2941,6 +2943,7 @@ export default function MeetsMainContent({
           webinarQaEntries={webinarQaEntries}
           webinarHandQueue={webinarHandQueue}
           onModerateWebinarQuestion={onModerateWebinarQuestion}
+          webinarQaWaiting={meetingQa.waiting}
           onPromoteWebinarAttendee={onPromoteWebinarAttendee}
           onDemoteWebinarParticipant={onDemoteWebinarParticipant}
         />

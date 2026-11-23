@@ -1,6 +1,30 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { useAuthorityRuntime } from "@conclave/apps-sdk";
+import { reconnectHold, type ReconnectHold } from "../lib/meeting-surface-policy";
+import type { ConnectionState } from "../lib/types";
+
+export type { ReconnectHold };
+
+export function useReconnectHold({
+  isJoined,
+  connectionState,
+}: {
+  isJoined: boolean;
+  connectionState: ConnectionState;
+}): ReconnectHold {
+  const authorityRuntime = useAuthorityRuntime();
+  const { connectionLive, holdingThroughReconnect } = reconnectHold({
+    isJoined,
+    connectionState,
+    authorityRuntime,
+  });
+  return useMemo(
+    () => ({ connectionLive, holdingThroughReconnect }),
+    [connectionLive, holdingThroughReconnect],
+  );
+}
 
 export const WAITING_FOR_VIEW = {
   ok: false as const,

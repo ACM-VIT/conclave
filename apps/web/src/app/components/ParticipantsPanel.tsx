@@ -58,6 +58,7 @@ interface ParticipantsPanelProps {
   onDemoteWebinarParticipant?: (
     userId: string,
   ) => Promise<{ ok: boolean; error?: string }>;
+  webinarQaWaiting?: boolean;
 }
 
 const ICON = 18;
@@ -97,6 +98,7 @@ function ParticipantsPanel({
   onModerateWebinarQuestion,
   onPromoteWebinarAttendee,
   onDemoteWebinarParticipant,
+  webinarQaWaiting = false,
 }: ParticipantsPanelProps & {
   socket: Socket | null;
   isAdmin?: boolean | null;
@@ -645,7 +647,10 @@ function ParticipantsPanel({
                           <div className="mt-2">
                             <QaModerationActions
                               status={entry.status}
-                              disabled={busyWebinarActionKey === `qa-${entry.id}`}
+                              disabled={
+                                webinarQaWaiting ||
+                                busyWebinarActionKey === `qa-${entry.id}`
+                              }
                               onAction={(action) =>
                                 void runWebinarAction(`qa-${entry.id}`, () =>
                                   onModerateWebinarQuestion({

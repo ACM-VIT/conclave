@@ -1,10 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useAuthorityAvailable, useAuthorityRuntime } from "@conclave/apps-sdk";
+import { useAuthorityAvailable } from "@conclave/apps-sdk";
 import { qaContract, useQa } from "@conclave/apps-sdk/qa/web";
 import type { WebinarQaEntry, WebinarQaModerateRequest } from "../lib/types";
-import { useHeldThroughReconnect, waitForView } from "./useHeldThroughReconnect";
+import {
+  useHeldThroughReconnect,
+  waitForView,
+  type ReconnectHold,
+} from "./useHeldThroughReconnect";
 
 type Result = { ok: boolean; error?: string };
 
@@ -85,17 +89,16 @@ export const hasUnseenMeetingQuestion = ({
 export function useMeetingQa({
   legacy,
   isWebinar,
-  isJoined,
+  hold,
   currentUserId,
 }: {
   legacy: LegacyQa;
   isWebinar: boolean;
-  isJoined: boolean;
+  hold: ReconnectHold;
   currentUserId?: string | null;
 }) {
-  const runtime = useAuthorityRuntime();
   const liveOffer = useAuthorityAvailable(qaContract);
-  const awaitingServer = isJoined && runtime === "unknown";
+  const awaitingServer = hold.holdingThroughReconnect;
   const offered = useHeldThroughReconnect(liveOffer, awaitingServer);
   const qa = useQa();
   const fromApp = offered && qa.isReady;
@@ -144,18 +147,20 @@ export function useMeetingQa({
 
   // The list a source has now, or null while a connection or subscription
   // is coming back and none has one yet.
-  const live: WebinarQaEntry[] | null = fromApp
-    ? appEntries
-    : awaitingNewView
-      ? NO_ENTRIES
-      : qa.isRevoked
-        ? // Withdrawn: only a list the old events sent since can show.
-          (isWebinar ? legacy.entries : null) ?? NO_ENTRIES
-        : isWebinar
-          ? legacy.entries
-          : qa.isConnecting || awaitingServer
-            ? null
-            : NO_ENTRIES;
+  const live: WebinarQaEntry[] | null = !hold.connectionLive
+    ? NO_ENTRIES
+    : fromApp
+      ? appEntries
+      : awaitingNewView
+        ? NO_ENTRIES
+        : qa.isRevoked
+          ? // Withdrawn: only a list the old events sent since can show.
+            (isWebinar ? legacy.entries : null) ?? NO_ENTRIES
+          : isWebinar
+            ? legacy.entries
+            : qa.isConnecting || awaitingServer
+              ? null
+              : NO_ENTRIES;
   const [shown, setShown] = useState<WebinarQaEntry[]>(NO_ENTRIES);
   if (live !== null && live !== shown) setShown(live);
   const entries = live ?? shown;
@@ -166,8 +171,20 @@ export function useMeetingQa({
     [moderate],
   );
 
+  const waiting = live === null || (app.fromApp && !fromApp);
+  if (!hold.connectionLive) {
+    return {
+      offered,
+      fromApp: false as const,
+      waiting: false,
+      entries,
+      askNeedsIdentity: false,
+      onSubmit: undefined,
+      onUpvote: undefined,
+      onModerate: undefined,
+    };
+  }
   if (app.fromApp) {
-    const waiting = !fromApp;
     return {
       offered,
       fromApp: true as const,
@@ -184,7 +201,7 @@ export function useMeetingQa({
     return {
       offered,
       fromApp: false as const,
-      waiting: false,
+      waiting,
       entries,
       askNeedsIdentity: false,
       onSubmit: undefined,
@@ -195,11 +212,11 @@ export function useMeetingQa({
   return {
     offered,
     fromApp: false as const,
-    waiting: false,
+    waiting,
     entries,
     askNeedsIdentity: false,
-    onSubmit: legacy.submit,
-    onUpvote: legacy.upvote,
-    onModerate: legacy.moderate,
+    onSubmit: waiting ? waitForView : legacy.submit,
+    onUpvote: waiting ? waitForView : legacy.upvote,
+    onModerate: waiting ? waitForView : legacy.moderate,
   };
 }
