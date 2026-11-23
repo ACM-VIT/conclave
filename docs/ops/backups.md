@@ -208,6 +208,16 @@ To apply it:
      is there. It refuses while an SFU answers, while any running container
      mounts the state dir or a dir above or inside it, or while a process
      holds a database open.
+   - Every store's database, by its own precedence (its own variable, else
+     `CONCLAVE_SQLITE_PATH`, else the compose default, from this host's config
+     and every SFU container's env), must be in the archive; one it lacks
+     would come back empty, so the restore refuses unless `--only` leaves
+     SQLite out. With Redis configured, the archive must hold a Redis
+     snapshot (or `--only sqlite,files` leaves Redis out), the live Redis
+     must answer and take the URL's credentials, and the snapshot must load
+     into a throwaway server. All of this is settled before the first rename,
+     so a Redis that is down, refuses the password or cannot load the dump
+     changes nothing.
    - It builds the whole restored tree in a root-only staging dir beside the
      state dir, on the same file system, then moves each entry in by rename
      between open directories. What an entry replaces moves into

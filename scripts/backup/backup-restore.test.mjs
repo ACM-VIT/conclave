@@ -322,6 +322,7 @@ test(
 
       // The Redis step cannot reach a TLS Redis, so the restore must refuse
       // before it replaces any file.
+      await writeFile(path.join(repo, ".env"), "CONCLAVE_SQLITE_PATH=/var/lib/conclave/recordings/data/conclave.sqlite\n");
       await writeFile(config, `${await readFile(config, "utf8")}\nSFU_PERSISTENCE_REDIS_URL=rediss://127.0.0.1:${port}/0\n`);
       const live = new DatabaseSync(path.join(state, "data", "conclave.sqlite"));
       live.exec("INSERT INTO scheduled_webinars VALUES ('w2', 'Webinar 2')");
@@ -1798,7 +1799,9 @@ test("the host deploy lock is made so no other user can open it, and a lock that
     await backup("--local-only");
     assert.equal((await stat(lock)).mode & 0o777, 0o640);
     // One made world-writable by an older script is narrowed by its owner.
+    // (A second apart: archive names carry the second.)
     await chmod(lock, 0o666);
+    await new Promise((done) => setTimeout(done, 1_100));
     await backup("--local-only");
     assert.equal((await stat(lock)).mode & 0o777, 0o640);
     await rm(lock);
@@ -1993,6 +1996,146 @@ test("every store's own SQLite path is backed up, from the host config and from 
     await writeFile(config, `${await readFile(config, "utf8")}\nSCHEDULING_SQLITE_PATH=/var/lib/conclave/recordings/gone.db\n`);
     await assert.rejects(backup("--local-only"), /the configured database .*gone\.db is missing/);
   } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// --- Greptile's round on 88673407.
+
+// A Redis on a free port, optionally with a password, stopped by close().
+const startRedis = async (password) => {
+  const port = await freePort();
+  const args = ["--port", String(port), "--bind", "127.0.0.1", "--save", "", "--appendonly", "no", ...(password ? ["--requirepass", password] : [])];
+  const server = spawn("redis-server", args, { stdio: "ignore" });
+  const cli = (...more) => run("redis-cli", ["-h", "127.0.0.1", "-p", String(port), "--no-auth-warning", ...(password ? ["-a", password] : []), ...more]);
+  for (let i = 0; i < 50 && (await cli("PING").then((r) => r.stdout.trim(), () => "")) !== "PONG"; i += 1) {
+    await new Promise((done) => setTimeout(done, 100));
+  }
+  return { port, cli, close: () => server.kill() };
+};
+const needsRedis = { skip: missingWithRedis.length > 0 && `needs ${missingWithRedis.join(", ")} on PATH` };
+const workDirs = async (local) => (await readdir(local).catch(() => [])).filter((name) => name.startsWith(".work."));
+
+test("a shared CONCLAVE_SQLITE_PATH that no store opens does not stop a backup", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  try {
+    const stores = ["SCHEDULING_SQLITE_PATH=/var/lib/conclave/recordings/scheduling.db", "SCHEDULED_MEETINGS_SQLITE_PATH=/var/lib/conclave/recordings/meetings.db", "SCHEDULED_WEBINARS_SQLITE_PATH=/var/lib/conclave/recordings/webinars.db"];
+    const { state, local, setDocker, backup } = await setUp(root, stores);
+    for (const name of ["scheduling.db", "meetings.db", "webinars.db"]) makeDb(path.join(state, name), name);
+    // Every store has its own path, so the shared one (missing here) is
+    // opened by nobody, in the host config or in the container's env.
+    await setDocker([{ id: "sfu-a", mounts: [state], status: "exited", env: ["SFU_PORT=9", "SFU_INSTANCE_ID=sfu-a", ...stores, "CONCLAVE_SQLITE_PATH=/var/lib/conclave/recordings/gone.sqlite"] }]);
+    await backup("--local-only");
+    assert.equal((await archives(local)).length, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("every Redis precondition is checked before the first rename", needsRedis, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  const live = await startRedis();
+  const locked = await startRedis("s3cret");
+  try {
+    const { state, config, backup, latestArchive, restore } = await setUp(root, [`SFU_PERSISTENCE_REDIS_URL=redis://127.0.0.1:${live.port}/0`]);
+    makeDb(path.join(state, "conclave.sqlite"), "backed up");
+    await live.cli("SET", "conclave:sfu:persistence:meeting", "x");
+    await backup("--local-only");
+    const archive = await latestArchive();
+    const live2 = new DatabaseSync(path.join(state, "conclave.sqlite"));
+    live2.exec("INSERT INTO meetings VALUES ('after the backup')");
+    live2.close();
+    const unchanged = () => assert.deepEqual(rows(path.join(state, "conclave.sqlite")), ["after the backup", "backed up"], "nothing was changed");
+    const withRedis = async (url) => writeFile(config, `${await readFile(config, "utf8")}\nSFU_PERSISTENCE_REDIS_URL=${url}\n`);
+
+    await withRedis(`redis://127.0.0.1:${await freePort()}/0`);
+    await assert.rejects(restore("--file", archive, "--yes"), /cannot reach the Redis at 127\.0\.0\.1:\d+ .*nothing was changed/s);
+    unchanged();
+
+    await withRedis(`redis://127.0.0.1:${locked.port}/0`);
+    await assert.rejects(restore("--file", archive, "--yes"), /the Redis at 127\.0\.0\.1:\d+ refused this restore .*NOAUTH.*nothing was changed/s);
+    unchanged();
+
+    await withRedis(`redis://127.0.0.1:${live.port}/0`);
+    const broken = await tamper(root, archive, { replace: { "redis/dump.rdb": "not an RDB file" } }, path.join(root, "broken.tar.gz.age"));
+    await assert.rejects(restore("--file", broken, "--yes"), /the Redis snapshot in the backup does not load.*nothing was changed/s);
+    unchanged();
+  } finally {
+    live.close();
+    locked.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a configured Redis that the backup has no snapshot of is a refusal unless --only leaves Redis out", needsRedis, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  const live = await startRedis();
+  try {
+    const { state, config, backup, latestArchive, restore } = await setUp(root);
+    makeDb(path.join(state, "conclave.sqlite"), "backed up");
+    // Taken before Redis was turned on, so it holds no snapshot.
+    await backup("--local-only");
+    await writeFile(config, `${await readFile(config, "utf8")}\nSFU_PERSISTENCE_REDIS_URL=redis://127.0.0.1:${live.port}/0\n`);
+    await live.cli("SET", "conclave:sfu:persistence:newer", "x");
+    await assert.rejects(restore("--file", await latestArchive(), "--yes"), /Redis is configured .* but this backup has no Redis snapshot.*--only sqlite,files/s);
+    await rm(state, { recursive: true });
+    await restore("--file", await latestArchive(), "--yes", "--only", "sqlite,files");
+    assert.deepEqual(rows(path.join(state, "conclave.sqlite")), ["backed up"]);
+  } finally {
+    live.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a store the backup does not cover is a refusal unless --only leaves SQLite out", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  try {
+    const { state, config, backup, latestArchive, restore } = await setUp(root);
+    makeDb(path.join(state, "conclave.sqlite"), "backed up");
+    await writeFile(path.join(state, "notes.json"), "{}");
+    await backup("--local-only");
+    // The SFU now keeps scheduling in a database of its own.
+    await writeFile(config, `${await readFile(config, "utf8")}\nSCHEDULING_SQLITE_PATH=/var/lib/conclave/recordings/scheduling.db\n`);
+    await assert.rejects(restore("--file", await latestArchive(), "--yes"), /the backup has no copy of scheduling\.db, the database SCHEDULING_SQLITE_PATH \(the backup config\) names.*--only/s);
+    await rm(state, { recursive: true });
+    await restore("--file", await latestArchive(), "--yes", "--only", "files");
+    assert.equal(await readFile(path.join(state, "notes.json"), "utf8"), "{}");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a backup that stops at any early exit leaves no work dir, holds no fence, and says only why", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  const sfu = await fencedSfu();
+  try {
+    const { state, local, config, setDocker, backup } = await setUp(root, [`CONCLAVE_SFU_HEALTH_URLS="${sfu.health}"`]);
+    const base = await readFile(config, "utf8");
+    const exits = [
+      ["the state dir is missing", async () => rm(state, { recursive: true, force: true }), /the state dir .* does not exist/],
+      ["the preflight refuses", async () => mkdir(state, { recursive: true }), /the configured database .*conclave\.sqlite is missing/],
+      ["Docker cannot answer", async () => { withDatabase(state); await setDocker({ fail: true }); }, /Docker cannot list the SFU containers/],
+      ["a container is not fenced", async () => setDocker([sfu.container(state), { id: "rogue", mounts: [state], status: "running", env: ["SFU_PORT=1", "SFU_INSTANCE_ID=rogue"] }]), /rogue \(rogue\) is running but does not hold the write fence/],
+      ["a copy fails", async () => { await setDocker([sfu.container(state)]); await writeFile(path.join(state, "broken.sqlite"), "not a database"); }, /file is not a database/],
+      ["the payload would not restore", async () => { await rm(path.join(state, "broken.sqlite")); await writeFile(path.join(state, "bad\tname.json"), "{}"); }, /this backup would not restore/],
+    ];
+    for (const [label, arrange, message] of exits) {
+      await writeFile(config, base);
+      await arrange();
+      const before = sfu.requests.length;
+      const failed = await backup("--local-only").then(() => null, (error) => error);
+      assert.ok(failed, `${label}: the backup must fail`);
+      assert.match(String(failed.stderr), message, label);
+      assert.doesNotMatch(String(failed.stderr), /command not found|unbound variable/, `${label}: the cleanup ran cleanly`);
+      assert.deepEqual(await workDirs(local), [], `${label}: no work dir is left behind`);
+      const after = sfu.requests.slice(before);
+      if (after.some((request) => request.method === "POST" && !request.renew)) {
+        assert.equal(after.at(-1).method, "DELETE", `${label}: the fence it took is released`);
+      }
+    }
+    assert.deepEqual(await archives(local), []);
+  } finally {
+    await sfu.close();
     await rm(root, { recursive: true, force: true });
   }
 });
