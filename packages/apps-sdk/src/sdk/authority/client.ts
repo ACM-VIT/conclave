@@ -580,6 +580,8 @@ export class AuthoritySession<C extends AuthorityContract> {
       return;
     }
     if (frame.kind === "revoke") {
+      // Withdrawn: asking again would only be refused.
+      this.clearRestart();
       this.subscription = null;
       this.reset({ kind: "revoked", reason: frame.reason }, { keepSubscription: true });
       return;
@@ -593,6 +595,8 @@ export class AuthoritySession<C extends AuthorityContract> {
           return;
         }
         this.incoming = { generation: frame.generation, frames: [] };
+        // The view is on its way after all: a wait to ask again is moot.
+        this.clearRestart();
         // A replacement means what is held may no longer be this viewer's
         // to see. When it comes in parts, forget the old view now and not
         // when the last part lands.
@@ -708,7 +712,8 @@ export class AuthoritySession<C extends AuthorityContract> {
       () => {
         this.restartTimer = null;
         this.restartEpoch = null;
-        if (!this.closed) this.resubscribe();
+        const pointless = this.closed || this.incoming !== null || this.state.kind === "revoked";
+        if (!pointless) this.resubscribe();
       },
       // Spread out, so clients refused together do not all ask again together.
       wait * (0.75 + Math.random() * 0.25),
