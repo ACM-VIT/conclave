@@ -887,3 +887,134 @@ describe("a late writer", () => {
     expect(state.scheduling.calendarByProfileId.get(profileId)?.accessToken).toBe("fresh-access");
   });
 });
+
+const holdFirst = <Args extends unknown[], Result>(
+  target: object,
+  method: string,
+  matches: (...args: Args) => boolean,
+) => {
+  const owner = target as Record<string, (...args: Args) => Result>;
+  const original = owner[method].bind(target);
+  const started = deferred();
+  const finish = deferred();
+  let held = false;
+  vi.spyOn(owner, method as never).mockImplementation((async (...args: Args) => {
+    if (!held && matches(...args)) {
+      held = true;
+      started.resolve();
+      await finish.promise;
+    }
+    return original(...args);
+  }) as never);
+  return { started: started.promise, release: () => finish.resolve() };
+};
+
+const tick = (ms = 5) => new Promise((resolve) => setTimeout(resolve, ms));
+
+describe("two SFUs on one store", () => {
+  it("never answer an event type edit with a value storage did not keep", async () => {
+    const a = await startSfu();
+    await a.call("GET", "/scheduling/profile");
+    const { id } = (await a.call("POST", "/scheduling/event-types", { title: "Intro call", isActive: true })).body.eventType as { id: string };
+    const b = await startSfu();
+    const commit = holdFirst<[{ records: Array<{ kind: string }> }], unknown>(
+      a.state.schedulingPersistence!,
+      "commit",
+      (change) => change.records.some((record) => record.kind === "event_type"),
+    );
+
+    const editing = a.call("PATCH", `/scheduling/event-types/${id}`, { title: "Edit from A" });
+    await commit.started;
+    await tick();
+    expect((await b.call("PATCH", `/scheduling/event-types/${id}`, { title: "Edit from B" })).status).toBe(200);
+    commit.release();
+    const edited = await editing;
+
+    const stored = (await createSchedulingPersistence().load()).eventTypes.find((eventType) => eventType.id === id);
+    expect(stored?.title).toBe("Edit from B");
+    expect(a.state.scheduling.eventTypesById.get(id)?.title).toBe(stored?.title);
+    if (edited.status === 200) expect((edited.body.eventType as { title: string }).title).toBe(stored?.title);
+    else expect(edited.status).toBe(409);
+  });
+
+  it("never report a webinar delete that storage did not keep, nor close its room", async () => {
+    const a = await startSfu();
+    const created = await a.call("POST", "/scheduled-webinars", { title: "Launch", scheduledStartAt: later, linkSlug: "launch-day" });
+    const id = (created.body.scheduledWebinar as { id: string }).id;
+    const b = await startSfu();
+    const save = holdFirst<[unknown[], Array<{ id: string }> | undefined], unknown>(
+      a.state.scheduledWebinarPersistence!,
+      "saveChanged",
+      (_webinars, deletions) => (deletions ?? []).some((deletion) => deletion.id === id),
+    );
+
+    const deleting = a.call("DELETE", `/scheduled-webinars/${id}`);
+    await save.started;
+    await tick();
+    expect((await b.call("PATCH", `/scheduled-webinars/${id}`, { title: "Edit from B" })).status).toBe(200);
+    save.release();
+    const deleted = await deleting;
+
+    const stored = createScheduledWebinarPersistence().loadState().records.find((webinar) => webinar.id === id);
+    expect(stored?.title).toBe("Edit from B");
+    expect(a.state.scheduledWebinars.byId.get(id)?.title).toBe("Edit from B");
+    expect(deleted.status).toBe(409);
+    expect(a.state.webinarLinks.has("launch-day")).toBe(true);
+  });
+
+  it("never report a meeting delete that storage did not keep", async () => {
+    const a = await startSfu();
+    const created = await a.call("POST", "/scheduled-meetings", { title: "Standup", scheduledStartAt: later });
+    const id = (created.body.scheduledMeeting as { id: string }).id;
+    const b = await startSfu();
+    const save = holdFirst<[unknown[], Array<{ id: string }> | undefined], unknown>(
+      a.state.scheduledMeetingPersistence!,
+      "saveChanged",
+      (_meetings, deletions) => (deletions ?? []).some((deletion) => deletion.id === id),
+    );
+
+    const deleting = a.call("DELETE", `/scheduled-meetings/${id}`);
+    await save.started;
+    await tick();
+    expect((await b.call("PATCH", `/scheduled-meetings/${id}`, { title: "Edit from B" })).status).toBe(200);
+    save.release();
+    const deleted = await deleting;
+
+    const stored = (await createScheduledMeetingPersistence().load()).find((meeting) => meeting.id === id);
+    expect(stored?.title).toBe("Edit from B");
+    expect(a.state.scheduledMeetings.byId.get(id)?.title).toBe("Edit from B");
+    expect(deleted.status).toBe(409);
+  });
+});
+
+describe("a booking waiting to save", () => {
+  beforeEach(() => {
+    vi.stubEnv("SCHEDULING_EMAIL_WORKER_URL", EMAIL_WORKER);
+    vi.stubEnv("SCHEDULING_EMAIL_WORKER_SECRET", "email-secret");
+  });
+
+  it("is never confirmed in hours the host closed meanwhile", async () => {
+    const { state, call } = await startSfu();
+    const outside = fakeOutsideServices();
+    const { book, startAt } = await bookableHost(call);
+    const queueOpen = deferred();
+    const holding = serialized(state.scheduledMeetings, () => queueOpen.promise);
+    const inQueue = () => queued.changes.filter((what) => what === "scheduled meetings").length;
+    const before = inQueue();
+
+    const booking = book();
+    await vi.waitFor(() => expect(inQueue()).toBe(before + 1), { timeout: 5_000, interval: 5 });
+    const { availability } = (await call("GET", "/scheduling/availability/default")).body as { availability: { timeZone: string; windows: unknown[] } };
+    const date = new Intl.DateTimeFormat("en-CA", { timeZone: availability.timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(startAt);
+    const closed = await call("PUT", "/scheduling/availability/default", { ...availability, overrides: [{ date, unavailable: true }] });
+    expect(closed.status).toBe(200);
+    queueOpen.resolve();
+    await holding;
+    const booked = await booking;
+
+    expect(booked.status).toBe(409);
+    expect([...state.scheduledMeetings.byId.values()].filter((meeting) => meeting.source === "booking_link")).toEqual([]);
+    expect((await createScheduledMeetingPersistence().load()).filter((meeting) => meeting.source === "booking_link")).toEqual([]);
+    expect(requestsTo(outside, GOOGLE_EVENTS)).toHaveLength(0);
+  });
+});

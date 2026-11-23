@@ -24,7 +24,7 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 
 import type { ScheduledMeeting } from "../types.js";
-import { initScheduledMeetings, initScheduledWebinars } from "../server/init.js";
+import { initScheduledMeetings, initScheduledWebinars, initScheduling } from "../server/init.js";
 import { LocalRoomRegistry } from "../server/roomRegistry.js";
 import {
   changeMeetings,
@@ -40,7 +40,14 @@ import {
 import { changeWebinars, createScheduledWebinarPersistence, deleteScheduledWebinar } from "../server/scheduledWebinars.js";
 import { runScheduledMeetingTick } from "../server/scheduledMeetingTick.js";
 import { runScheduledWebinarTick } from "../server/scheduledWebinarScheduler.js";
-import { createRedisSchedulingPersistence, createSchedulingPersistence, createSqliteSchedulingPersistence } from "../server/scheduling.js";
+import {
+  createRedisSchedulingPersistence,
+  createSchedulingPersistence,
+  createSchedulingStore,
+  createSqliteSchedulingPersistence,
+  ensureSchedulingProfile,
+  mergePersistedScheduling,
+} from "../server/scheduling.js";
 import { sendDueSchedulingEmailReminders } from "../server/schedulingEmailReminders.js";
 import { serialized } from "../server/persistThenApply.js";
 import { readStampedJson } from "../server/stampedJsonFile.js";
@@ -663,5 +670,49 @@ describe("a reminder scan", () => {
     expect(workerCalls(fetchSpy)).toBe(1);
     expect(state.scheduledMeetings.byId.get(other.id)?.emailReminderStatus).not.toBe("sent");
     expect(state.scheduledMeetings.byId.get(other.id)?.emailReminderStatus).not.toBe("pending");
+  });
+});
+
+describe("legacy hours loaded at startup", () => {
+  const modes: Mode[] = hasRedis ? ["sqlite", "json", "redis"] : ["sqlite", "json"];
+  const OLD_WINDOWS = [{ day: 1, startMinutes: 540, endMinutes: 1020 }];
+  const NEW_WINDOWS = [{ day: 2, startMinutes: 600, endMinutes: 660 }];
+
+  const schedulingPersistence = (mode: Mode) => {
+    const persistence =
+      mode === "redis"
+        ? createRedisSchedulingPersistence(redis!.url, prefix, createSqliteSchedulingPersistence(sqlitePath()))
+        : mode === "json"
+          ? createSchedulingPersistence()
+          : createSqliteSchedulingPersistence(sqlitePath());
+    open.push(persistence as never);
+    return persistence;
+  };
+
+  it.each(modes)("in %s mode keep newer hours another SFU recovered over a reload", async (mode) => {
+    vi.stubEnv("SCHEDULING_PERSISTENCE", mode);
+    vi.stubEnv("SCHEDULING_PATH", join(stateDir, "json", "scheduling.json"));
+    const profile = ensureSchedulingProfile(createSchedulingStore(), {
+      clientId: "conclave",
+      userId: "legacy-host",
+      email: "legacy@example.test",
+      timeZone: "UTC",
+    });
+    profile.updatedAt = 1_000;
+    const legacyHours = { profileId: profile.id, availability: { timeZone: "UTC", windows: OLD_WINDOWS, overrides: [] } };
+    await schedulingPersistence(mode).save({ profiles: [profile], availability: [legacyHours] as never, eventTypes: [], calendars: [] });
+
+    const state = createSfuState({ roomRegistry: new LocalRoomRegistry({ instanceId: "legacy-hours", instanceUrl: "http://localhost", ttlMs: 45000 }) });
+    const local = schedulingPersistence(mode);
+    await initScheduling(state, local);
+    expect(state.scheduling.availabilityByProfileId.get(profile.id)?.windows).toEqual(OLD_WINDOWS);
+
+    const recovered = { profileId: profile.id, availability: { timeZone: "UTC", windows: NEW_WINDOWS, overrides: [], updatedAt: 5_000 } };
+    expect(await schedulingPersistence(mode).importIfNewer({ kind: "availability", id: profile.id, clientId: "conclave", updatedAt: 5_000, payload: recovered })).toBe(true);
+    await mergePersistedScheduling(state.scheduling, local, { strict: true, writeBack: true });
+
+    const stored = (await schedulingPersistence(mode).load()).availability.find((entry) => entry.profileId === profile.id);
+    expect((stored?.availability as { windows?: unknown } | undefined)?.windows).toEqual(NEW_WINDOWS);
+    expect(state.scheduling.availabilityByProfileId.get(profile.id)?.windows).toEqual(NEW_WINDOWS);
   });
 });
