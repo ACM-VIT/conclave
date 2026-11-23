@@ -366,9 +366,12 @@ def fenced_command(state):
 
 
 def containers_command(state):
-    for found in state_mounts(docker_containers(), state):
-        if found["relation"] != "exact":
-            continue
+    """The SFU containers that see the state dir, the ones that mount it
+    first, then those that mount a dir above or inside it."""
+    found_all = state_mounts(docker_containers(), state)
+    ordered = [found for found in found_all if found["relation"] == "exact"]
+    ordered += [found for found in found_all if found["relation"] == "related" and found["env"].get("SFU_INSTANCE_ID")]
+    for found in ordered:
         env = found["env"]
         print("|".join([found["id"], found["status"], env.get("SFU_PORT", ""), env.get("SFU_INSTANCE_ID", ""), found["user"], found["image"]]))
 

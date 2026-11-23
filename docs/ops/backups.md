@@ -156,7 +156,10 @@ Every store's database (`CONCLAVE_SQLITE_PATH`, or a store's own
 env, each store's precedence applied) must point inside the state dir. A
 container's path is read through that container's own mounts, so a store
 kept under a mount of a dir above the state dir (`/srv/conclave` at
-`/var/lib/conclave`, the state dir `/srv/conclave/recordings`) counts too. A path outside the volume lives inside
+`/var/lib/conclave`, the state dir `/srv/conclave/recordings`) counts too. An
+SFU container that mounts another host dir inside its view of the state dir
+(say `/srv/other` at `/var/lib/conclave/recordings/data`) opens files the
+backup cannot see there, so the backup and the restore refuse that layout. A path outside the volume lives inside
 the container and is lost on every deploy, so the backup fails until it is
 moved. Each gets the online backup whatever it is named (`live.db` as much as
 `conclave.sqlite`). If it is reached through links, the file they reach is
@@ -249,8 +252,9 @@ To apply it:
    runs as, each through its own fd as it is made (a file that gains a second
    name is refused); what was already in the state dir keeps its owner.
    Without a setting, `restore.sh` reads that user from the stopped SFU
-   containers that mount the state dir and resolves its uid and gid inside
-   their image; a lost state dir is matched by its path. Today's image runs as
+   containers that mount the state dir (then those that mount a dir above or
+   inside it) and resolves its uid and gid inside their image; a lost state
+   dir is matched by its path. Today's image runs as
    root, so the files stay root's. Once the SFU image runs as `node` (#272),
    they go to `node`. If the containers are gone, pass `--owner 1000:1000`
    (`node` in the Node image) or set `BACKUP_RESTORE_OWNER` in

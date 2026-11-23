@@ -586,6 +586,34 @@ def state_path(path, mounts, state):
     return None
 
 
+def state_view_problems(state, containers):
+    """A container sees the state dir where a mount of it, or of a dir above
+    it, lands. Another mount inside that view shows it other files than the
+    host has there, so what the SFU opens is not what a backup reads or a
+    restore writes."""
+    problems = []
+    state_real = os.path.realpath(state)
+    for found in containers:
+        if found["relation"] not in ("exact", "related"):
+            continue
+        mounts = [mount for mount in found["mounts"] if (mount.get("destination") or "").startswith("/")]
+        views = []
+        for mount in mounts:
+            source = os.path.realpath(mount["source"])
+            if within(state_real, source):
+                rest = state_real[len(source):].lstrip("/") if source != "/" else state_real.lstrip("/")
+                views.append(posixpath.join(mount["destination"], rest).rstrip("/") or "/")
+        for view in views:
+            for mount in mounts:
+                destination = mount["destination"].rstrip("/") or "/"
+                if destination == view or not within(destination, view):
+                    continue
+                expected = os.path.join(state_real, destination[len(view):].lstrip("/"))
+                if os.path.realpath(mount["source"]) != os.path.realpath(expected):
+                    problems.append(f"the container {found['id']} mounts {mount['source']} at {mount['destination']}, inside its view of the state dir ({view}), so what it opens there is not what the backup reads; mount it outside {view}, or from the state dir itself")
+    return problems
+
+
 def configured_stores(state, container, containers, env=None):
     """Every database a store opens, as this host's config sets it and as the
     env of each SFU container that mounts the state dir sets it, each store's
@@ -593,6 +621,9 @@ def configured_stores(state, container, containers, env=None):
     The SFU opens path.resolve(value), which drops ".." without reading the
     disk, so the same is done here. A path outside the state dir refuses."""
     env = os.environ if env is None else env
+    problems = state_view_problems(state, containers)
+    if problems:
+        raise Refused("\n".join(problems))
     roots = mount_roots(state, container)
     sources = [("the backup config", variable, value, lambda path: under_root(path, roots))
                for variable, value in store_paths(env, f"{container.rstrip('/')}/conclave.sqlite")]

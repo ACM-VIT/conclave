@@ -2234,6 +2234,50 @@ test("a dump the host's redis-server cannot read is loaded with the live server'
   }
 });
 
+// --- Greptile's round on 8c7e8b93.
+
+test("an SFU that mounts another dir inside its view of the state dir stops the backup", needs, async () => {
+  // The SFU sees /var/lib/conclave/recordings/data from another host dir,
+  // so the host's own state/data/live.db is not what it opens.
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  try {
+    const { state, local, setDocker, backup } = await setUp(root);
+    await mkdir(path.join(state, "data"));
+    makeDb(path.join(state, "data", "live.db"), "the host's copy");
+    await symlink("data/live.db", path.join(state, "conclave.sqlite"));
+    const other = path.join(root, "other-data");
+    await mkdir(other);
+    makeDb(path.join(other, "live.db"), "what the SFU opens");
+    await setDocker([{ id: "sfu-a", mounts: [state, { source: other, destination: "/var/lib/conclave/recordings/data" }], status: "exited", env: ["SFU_PORT=9", "SFU_INSTANCE_ID=sfu-a"] }]);
+    await assert.rejects(backup("--local-only"), /the container sfu-a mounts .*other-data at \/var\/lib\/conclave\/recordings\/data, inside its view of the state dir/);
+    assert.deepEqual(await archives(local), []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a restore gives its files to the user of a stopped SFU that mounts a dir above the state dir", needs, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "conclave-backup-"));
+  try {
+    const above = path.join(root, "srv", "conclave");
+    const state = path.join(above, "recordings");
+    const { config, setDocker, backup, latestArchive, restore } = await setUp(root, [`CONCLAVE_STATE_DIR=${state}`]);
+    await mkdir(state, { recursive: true });
+    withDatabase(state);
+    await setDocker([{ id: "sfu-a", mounts: [{ source: above, destination: "/var/lib/conclave" }], status: "exited", env: ["SFU_PORT=9", "SFU_INSTANCE_ID=sfu-a"] }]);
+    await backup("--local-only");
+    await writeFile(config, `${await readFile(config, "utf8")}\nBACKUP_RESTORE_OWNER=\n`);
+    const uid = process.getuid() === 0 ? 4242 : process.getuid();
+    const gid = process.getuid() === 0 ? 4242 : process.getgid();
+    await setDocker([{ id: "sfu-a", mounts: [{ source: above, destination: "/var/lib/conclave" }], status: "exited", env: ["SFU_PORT=9", "SFU_INSTANCE_ID=sfu-a"], user: `${uid}:${gid}` }]);
+    await rm(state, { recursive: true });
+    const result = await restore("--file", await latestArchive(), "--yes");
+    assert.match(result.stdout, new RegExp(`Gave the restored files in .* to ${uid}:${gid}, the user the SFU runs as`));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 // --- Greptile's four cases from the b55af173 round.
 
 test("Greptile: a link through a directory link and .. comes back as written and reaches the database it did", needs, async () => {
