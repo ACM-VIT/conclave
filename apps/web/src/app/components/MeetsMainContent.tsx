@@ -1695,7 +1695,7 @@ export default function MeetsMainContent({
   const isFullScreenPanelOpen =
     isJoined &&
     !canReserveDockedPanel &&
-    (isWebinarAttendee ? isWebinarQaOpen : isSecondaryPanelOpen);
+    (isWebinarAttendee ? isWebinarQaOpen : isSecondaryPanelOpen || isGameDockPresent);
   const controlsDockRef = useRef<HTMLDivElement>(null);
   const controlsDockSize = useElementSize(
     controlsDockRef,
