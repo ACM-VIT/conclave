@@ -1081,86 +1081,89 @@ export function WhiteboardCanvas({
 
   const handlePointerDown = useCallback(
     (event: React.PointerEvent<HTMLCanvasElement>) => {
-      if (editingElementId) {
-        commitEditing();
-      }
-      if (tool === "pan") {
-        clearCursor();
-        onPanStart?.(event.clientX, event.clientY);
-        return;
-      }
-      const rect = event.currentTarget.getBoundingClientRect();
-      const canvasPoint = toCanvasPoint(event.clientX, event.clientY, rect);
-      const point = { x: canvasPoint.x, y: canvasPoint.y, pressure: event.pressure };
-      if (tool === "laser") {
+      doc.transact(() => {
+        if (editingElementId) {
+          commitEditing();
+        }
+        if (tool === "pan") {
+          clearCursor();
+          onPanStart?.(event.clientX, event.clientY);
+          return;
+        }
+        const rect = event.currentTarget.getBoundingClientRect();
+        const canvasPoint = toCanvasPoint(event.clientX, event.clientY, rect);
+        const point = { x: canvasPoint.x, y: canvasPoint.y, pressure: event.pressure };
+        if (tool === "laser") {
+          event.currentTarget.setPointerCapture(event.pointerId);
+          laserTrailsRef.current.delete("self");
+          laserPointerIdRef.current = event.pointerId;
+          appendOwnLaserPoint(point);
+          scheduleCursorSync(point.x, point.y);
+          return;
+        }
         event.currentTarget.setPointerCapture(event.pointerId);
-        laserTrailsRef.current.delete("self");
-        laserPointerIdRef.current = event.pointerId;
-        appendOwnLaserPoint(point);
-        scheduleCursorSync(point.x, point.y);
-        return;
-      }
-      event.currentTarget.setPointerCapture(event.pointerId);
-      pendingMoveRef.current = null;
-      if (!locked) {
-        undoManager?.stopCapturing();
-        if (tool === "select" && selectedId) {
-          const selectedElement = elements.find((element) => element.id === selectedId) ?? null;
-          if (selectedElement) {
-            const selectedBounds = getSelectionBoundsForElement(selectedElement);
-            if (isRotatableElement(selectedElement) && isPointOnRotateHandle(selectedBounds, point)) {
-              const center = {
-                x: selectedBounds.x + selectedBounds.width / 2,
-                y: selectedBounds.y + selectedBounds.height / 2,
-              };
-              event.preventDefault();
-              rotateSessionRef.current = {
-                elementId: selectedElement.id,
-                center,
-                startPointerAngle: Math.atan2(point.y - center.y, point.x - center.x),
-                startRotation: getElementRotation(selectedElement),
-                startElement: selectedElement,
-              };
-              scheduleCursorSync(point.x, point.y);
-              return;
-            }
-
-            const canResize = isResizableElement(selectedElement);
-            if (canResize) {
-              const handle = getResizeHandleAtPoint(selectedBounds, point);
-              if (handle) {
+        pendingMoveRef.current = null;
+        if (!locked) {
+          undoManager?.stopCapturing();
+          if (tool === "select" && selectedId) {
+            const selectedElement = elements.find((element) => element.id === selectedId) ?? null;
+            if (selectedElement) {
+              const selectedBounds = getSelectionBoundsForElement(selectedElement);
+              if (isRotatableElement(selectedElement) && isPointOnRotateHandle(selectedBounds, point)) {
+                const center = {
+                  x: selectedBounds.x + selectedBounds.width / 2,
+                  y: selectedBounds.y + selectedBounds.height / 2,
+                };
                 event.preventDefault();
-                const rotation = getElementRotation(selectedElement);
-                const rotated = Math.abs(rotation) >= ROTATION_EPSILON;
-                const localBounds = rotated ? getBoundsForElement(selectedElement) : selectedBounds;
-                resizeSessionRef.current = {
-                  ...startResizeFrame(localBounds, rotation, handle, point),
+                rotateSessionRef.current = {
                   elementId: selectedElement.id,
+                  center,
+                  startPointerAngle: Math.atan2(point.y - center.y, point.x - center.x),
+                  startRotation: getElementRotation(selectedElement),
                   startElement: selectedElement,
                 };
                 scheduleCursorSync(point.x, point.y);
                 return;
               }
+
+              const canResize = isResizableElement(selectedElement);
+              if (canResize) {
+                const handle = getResizeHandleAtPoint(selectedBounds, point);
+                if (handle) {
+                  event.preventDefault();
+                  const rotation = getElementRotation(selectedElement);
+                  const rotated = Math.abs(rotation) >= ROTATION_EPSILON;
+                  const localBounds = rotated ? getBoundsForElement(selectedElement) : selectedBounds;
+                  resizeSessionRef.current = {
+                    ...startResizeFrame(localBounds, rotation, handle, point),
+                    elementId: selectedElement.id,
+                    startElement: selectedElement,
+                  };
+                  scheduleCursorSync(point.x, point.y);
+                  return;
+                }
+              }
+            }
+          }
+
+          engineRef.current?.onPointerDown(point);
+          const nextSelectedId = engineRef.current?.getSelectedId() ?? null;
+          setSelectedId(nextSelectedId);
+          if (tool === "text" || tool === "sticky") {
+            scheduleDeferredTask(() => startEditingById(nextSelectedId), 0);
+            if (onToolChange) {
+              scheduleDeferredTask(() => onToolChange("select"), 10);
             }
           }
         }
-
-        engineRef.current?.onPointerDown(point);
-        const nextSelectedId = engineRef.current?.getSelectedId() ?? null;
-        setSelectedId(nextSelectedId);
-        if (tool === "text" || tool === "sticky") {
-          scheduleDeferredTask(() => startEditingById(nextSelectedId), 0);
-          if (onToolChange) {
-            scheduleDeferredTask(() => onToolChange("select"), 10);
-          }
-        }
-      }
-      scheduleCursorSync(point.x, point.y);
+        scheduleCursorSync(point.x, point.y);
+      });
     },
     [
       appendOwnLaserPoint,
       commitEditing,
       clearCursor,
+      doc,
       editingElementId,
       elements,
       locked,
@@ -1295,12 +1298,14 @@ export function WhiteboardCanvas({
       return;
     }
     if (!locked) {
-      flushPendingMove();
-      engineRef.current?.onPointerUp();
+      doc.transact(() => {
+        flushPendingMove();
+        engineRef.current?.onPointerUp();
+      });
       setSelectedId(engineRef.current?.getSelectedId() ?? null);
     }
     clearCursor();
-  }, [locked, clearCursor, endOwnLaser, flushPendingMove, onPanEnd, tool]);
+  }, [doc, locked, clearCursor, endOwnLaser, flushPendingMove, onPanEnd, tool]);
 
   const handlePointerLeave = useCallback(
     (event: React.PointerEvent<HTMLCanvasElement>) => {
@@ -1649,8 +1654,7 @@ export function WhiteboardCanvas({
                 ) {
                   event.preventDefault();
                   commitEditing();
-                }
-                if (
+                } else if (
                   editingElement.type === "sticky" &&
                   event.key === "Enter" &&
                   (event.metaKey || event.ctrlKey)

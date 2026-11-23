@@ -123,7 +123,7 @@ const callbackPropName = (call: ts.CallExpression): string | null => {
   return null;
 };
 
-export const findAutomaticWrites = (program: ts.Program, isAppFile: (path: string) => boolean): Violation[] => {
+const writeAnalysis = (program: ts.Program) => {
   const checker = program.getTypeChecker();
 
   const functionOf = (declaration: ts.Node | undefined, seen = new Set<ts.Node>()): ts.Node | null => {
@@ -207,6 +207,12 @@ export const findAutomaticWrites = (program: ts.Program, isAppFile: (path: strin
     const target = functionOfExpression(call.expression);
     return target && writesWhenCalled(target) ? calleeName(call) : null;
   };
+
+  return { functionOfExpression, writesWhenCalled, writeCallName, isYjsMutation };
+};
+
+export const findAutomaticWrites = (program: ts.Program, isAppFile: (path: string) => boolean): Violation[] => {
+  const { functionOfExpression, writesWhenCalled, writeCallName } = writeAnalysis(program);
 
   const registeredListenerType = (fn: ts.Node, call: ts.CallExpression | null): string | null | undefined => {
     const typeOf = (registration: ts.CallExpression) => {
@@ -369,6 +375,119 @@ export const findAutomaticWrites = (program: ts.Program, isAppFile: (path: strin
   return violations;
 };
 
+type SplitChange = { path: string; line: number; writes: number };
+
+const LOOPS = new Set([ts.SyntaxKind.ForStatement, ts.SyntaxKind.ForOfStatement, ts.SyntaxKind.ForInStatement, ts.SyntaxKind.WhileStatement, ts.SyntaxKind.DoStatement]);
+const SHORT_CIRCUITS = new Set([ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken, ts.SyntaxKind.QuestionQuestionToken]);
+
+const ends = (statement: ts.Statement | undefined): boolean => {
+  if (!statement) return false;
+  if (ts.isReturnStatement(statement) || ts.isThrowStatement(statement)) return true;
+  if (ts.isBlock(statement)) return ends(statement.statements.at(-1));
+  if (ts.isIfStatement(statement)) return ends(statement.thenStatement) && ends(statement.elseStatement);
+  return false;
+};
+
+export const findSplitChanges = (program: ts.Program, isAppFile: (path: string) => boolean): SplitChange[] => {
+  const { writeCallName, isYjsMutation, functionOfExpression } = writeAnalysis(program);
+
+  const allowedFunction = (fn: ts.Node): boolean => {
+    const path = fn.getSourceFile().fileName;
+    for (let current: ts.Node | undefined = fn; current; current = current.parent) {
+      if (!ts.isVariableDeclaration(current)) continue;
+      const name = current.name.getText();
+      if (ALLOWED.some((entry) => path.endsWith(entry.file) && entry.inside === name)) return true;
+    }
+    return false;
+  };
+
+  const pathMemo = new Map<ts.Node, number>();
+  const writesOf = (fn: ts.Node): number => {
+    if (pathMemo.has(fn)) return pathMemo.get(fn)!;
+    pathMemo.set(fn, 1);
+    if (allowedFunction(fn)) return 1;
+    const body = isFunction(fn) ? fn.body : undefined;
+    const writes = !body ? 1 : ts.isBlock(body) ? writesAlong(body.statements, 0) : writesOn(body);
+    pathMemo.set(fn, writes);
+    return writes;
+  };
+
+  const writesOn = (node: ts.Node | undefined): number => {
+    if (!node) return 0;
+    if (isFunction(node)) {
+      const wrapper = node.parent && ts.isParenthesizedExpression(node.parent) ? node.parent : node;
+      if (wrapper.parent && ts.isCallExpression(wrapper.parent) && wrapper.parent.expression === wrapper) return writesOf(node);
+      const call = argumentOf(node);
+      const name = call ? calleeName(call) : null;
+      return name && name !== "transact" && SYNCHRONOUS_CALLBACKS.has(name) ? 2 * writesOn(node.body) : 0;
+    }
+    if (ts.isBlock(node)) return writesAlong(node.statements, 0);
+    if (ts.isIfStatement(node) || ts.isConditionalExpression(node)) {
+      const [test, yes, no] = ts.isIfStatement(node)
+        ? [node.expression, node.thenStatement, node.elseStatement]
+        : [node.condition, node.whenTrue, node.whenFalse];
+      return writesOn(test) + Math.max(writesOn(yes), writesOn(no));
+    }
+    if (ts.isSwitchStatement(node)) {
+      return writesOn(node.expression) + Math.max(0, ...node.caseBlock.clauses.map((clause) => writesAlong(clause.statements, 0)));
+    }
+    if (ts.isBinaryExpression(node) && SHORT_CIRCUITS.has(node.operatorToken.kind)) return writesOn(node.left) + writesOn(node.right);
+    let own = 0;
+    if (ts.isCallExpression(node) && writeCallName(node)) {
+      if (isYjsMutation(node)) {
+        if (calleeName(node) === "transact") return 1;
+        own = 1;
+      } else {
+        const target = functionOfExpression(node.expression);
+        own = target ? Math.max(1, writesOf(target)) : 1;
+      }
+    }
+    let inner = 0;
+    node.forEachChild((child) => {
+      inner += writesOn(child);
+    });
+    return own + (LOOPS.has(node.kind) ? 2 * inner : inner);
+  };
+
+  const writesAlong = (statements: ts.NodeArray<ts.Statement> | ts.Statement[], from: number): number => {
+    const statement = statements[from];
+    if (!statement) return 0;
+    if (ts.isReturnStatement(statement) || ts.isThrowStatement(statement)) return writesOn(statement.expression);
+    const rest = () => writesAlong(statements, from + 1);
+    if (ts.isIfStatement(statement)) {
+      const test = writesOn(statement.expression);
+      const yes = writesOn(statement.thenStatement) + (ends(statement.thenStatement) ? 0 : rest());
+      const no = writesOn(statement.elseStatement) + (ends(statement.elseStatement) ? 0 : rest());
+      return test + Math.max(yes, no);
+    }
+    return writesOn(statement) + rest();
+  };
+
+  const runsInOneTransaction = (fn: ts.Node): boolean => {
+    const call = argumentOf(fn);
+    return call !== null && ["transact", "writeOnce"].includes(calleeName(call) ?? "");
+  };
+
+  const exported = (fn: ts.Node): boolean => {
+    const holder = ts.isFunctionDeclaration(fn) ? fn : fn.parent?.parent?.parent;
+    return !!holder && ts.canHaveModifiers(holder) && !!ts.getModifiers(holder)?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword);
+  };
+  const entryPoint = (path: string, fn: ts.Node): boolean => !relative(APPS_DIR, path).split(sep).includes("core") || exported(fn);
+
+  const changes: SplitChange[] = [];
+  for (const file of program.getSourceFiles().filter((candidate) => isAppFile(candidate.fileName))) {
+    walk(file, (fn) => {
+      if (!isFunction(fn) || !fn.body || runsInOneTransaction(fn) || allowedFunction(fn)) return;
+      if (!entryPoint(file.fileName, fn)) return;
+      const writes = writesOf(fn);
+      if (writes < 2) return;
+      const { line } = file.getLineAndCharacterOfPosition(fn.getStart());
+      changes.push({ path: relative(APPS_DIR, file.fileName), line: line + 1, writes });
+    });
+  }
+  return changes;
+};
+
 const sourcesUnder = (dir: string): string[] =>
   readdirSync(dir).flatMap((entry) => {
     const path = join(dir, entry);
@@ -456,6 +575,18 @@ const ALLOWED_FIXTURES: Array<[string, string]> = [
   ["a read that fills a local array", `export function App({ doc }: { doc: Y.Doc }) { useEffect(() => { read(doc); }, [doc]); return null; }`],
 ];
 
+const SPLIT_FIXTURES: Array<[string, string, number]> = [
+  ["two writes in a row", `export const move = (doc: Y.Doc) => { doc.getArray("a").delete(0, 1); doc.getArray("a").insert(0, [1]); };`, 2],
+  ["a write in a loop", `export const fill = (doc: Y.Doc, values: number[]) => { for (const value of values) doc.getArray("a").push([value]); };`, 2],
+  ["a helper that writes twice", `const twice = (doc: Y.Doc) => { doc.getMap("m").set("a", 1); doc.getMap("m").set("b", 2); };
+     export function App({ doc }: { doc: Y.Doc }) { return <button onClick={() => twice(doc)} />; }`, 2],
+  ["two whole changes from one click", `export function App({ doc }: { doc: Y.Doc }) { return <button onClick={() => { save(doc, 1); save(doc, 2); }} />; }`, 2],
+  ["a function it calls in place", `export const move = (doc: Y.Doc) => { save(doc, 1); (() => save(doc, 2))(); };`, 2],
+  ["one transaction", `export const move = (doc: Y.Doc) => { doc.transact(() => { doc.getArray("a").delete(0, 1); doc.getArray("a").insert(0, [1]); }); };`, 0],
+  ["one of two branches", `export const pick = (doc: Y.Doc, left: boolean) => { if (left) { save(doc, 1); return; } save(doc, 2); };`, 0],
+  ["a writeOnce callback", `export function App() { useEffect(() => { writeOnce("k", (live) => { save(live, 1); save(live, 2); }); }, []); return null; }`, 0],
+];
+
 describe("automatic document writes", () => {
   it("only ever happen through writeOnce in every app", () => {
     const files = sourcesUnder(APPS_DIR);
@@ -463,6 +594,26 @@ describe("automatic document writes", () => {
     expect(files.filter(isWebOrShared).length).toBeGreaterThan(10);
 
     expect(findAutomaticWrites(program, isWebOrShared)).toEqual([]);
+  }, 60_000);
+
+  it("each go to the server whole, in one transaction", () => {
+    const files = sourcesUnder(APPS_DIR);
+    const program = ts.createProgram(files, COMPILER_OPTIONS);
+    const isApp = (path: string) => !relative(APPS_DIR, path).startsWith("..");
+
+    expect(findSplitChanges(program, isApp)).toEqual([]);
+  }, 60_000);
+
+  it("count the writes along the busiest path a change can take", () => {
+    const program = fixtureProgram(SPLIT_FIXTURES.map(([, body]) => body));
+    const changes = findSplitChanges(program, (path) => path.startsWith(FIXTURE_DIR) && !path.endsWith("core.ts"));
+
+    SPLIT_FIXTURES.forEach(([what, , writes], index) =>
+      expect({
+        what,
+        writes: Math.max(0, ...changes.filter((change) => change.path.endsWith(`fixture${index}.tsx`)).map((change) => change.writes)),
+      }).toEqual({ what, writes }),
+    );
   }, 60_000);
 
   it("are caught from timers, effects, promises, media events, awaits, render and props called from effects, and allowed otherwise", () => {

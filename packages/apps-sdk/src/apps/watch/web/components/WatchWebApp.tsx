@@ -220,12 +220,14 @@ export function WatchWebApp() {
   const acceptRequest = useCallback(
     (request: WatchRequest) => {
       if (getWatchRequestResolution(doc, request.id)) return;
-      resolveWatchRequest(doc, request.id, "added");
-      const item = enqueue(
-        doc,
-        { videoId: request.videoId, title: request.title },
-        { userId: request.byId, userName: request.byName },
-      );
+      const item = doc.transact(() => {
+        resolveWatchRequest(doc, request.id, "added");
+        return enqueue(
+          doc,
+          { videoId: request.videoId, title: request.title },
+          { userId: request.byId, userName: request.byName },
+        );
+      });
       if (!request.title) {
         saveItemTitleWhenKnown(item.id, request.videoId);
       }

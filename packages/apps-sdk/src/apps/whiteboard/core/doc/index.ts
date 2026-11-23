@@ -259,13 +259,15 @@ export const updatePageName = (
   pageId: string,
   name: string,
 ): void => {
-  if (
-    pageId === DEFAULT_WHITEBOARD_PAGE_ID &&
-    !getPagesMap(doc)?.has(pageId)
-  ) {
-    ensureDefaultPage(doc);
-  }
-  getPage(doc, pageId)?.set("name", name);
+  doc.transact(() => {
+    if (
+      pageId === DEFAULT_WHITEBOARD_PAGE_ID &&
+      !getPagesMap(doc)?.has(pageId)
+    ) {
+      ensureDefaultPage(doc);
+    }
+    getPage(doc, pageId)?.set("name", name);
+  });
 };
 
 const getWritablePage = (doc: Y.Doc, pageId: string): PageMap | null => {
@@ -282,9 +284,11 @@ export const addElement = (
   pageId: string,
   element: WhiteboardElement,
 ): void => {
-  const page = getWritablePage(doc, pageId);
-  if (!page) return;
-  ensurePageElements(page).push([element]);
+  doc.transact(() => {
+    const page = getWritablePage(doc, pageId);
+    if (!page) return;
+    ensurePageElements(page).push([element]);
+  });
 };
 
 export const updateElement = (
@@ -292,17 +296,19 @@ export const updateElement = (
   pageId: string,
   element: WhiteboardElement,
 ): void => {
-  const page = getWritablePage(doc, pageId);
-  if (!page) return;
-  const elements = ensurePageElements(page);
-  const list = elements.toArray();
-  const index = list.findIndex((item) => item.id === element.id);
-  if (index === -1) {
-    elements.push([element]);
-    return;
-  }
-  elements.delete(index, 1);
-  elements.insert(index, [element]);
+  doc.transact(() => {
+    const page = getWritablePage(doc, pageId);
+    if (!page) return;
+    const elements = ensurePageElements(page);
+    const list = elements.toArray();
+    const index = list.findIndex((item) => item.id === element.id);
+    if (index === -1) {
+      elements.push([element]);
+      return;
+    }
+    elements.delete(index, 1);
+    elements.insert(index, [element]);
+  });
 };
 
 export const removeElement = (
@@ -310,11 +316,13 @@ export const removeElement = (
   pageId: string,
   elementId: string,
 ): void => {
-  const elements = getPageElementsArray(doc, pageId);
-  if (!elements) return;
-  const index = elements.toArray().findIndex((item) => item.id === elementId);
-  if (index === -1) return;
-  elements.delete(index, 1);
+  doc.transact(() => {
+    const elements = getPageElementsArray(doc, pageId);
+    if (!elements) return;
+    const index = elements.toArray().findIndex((item) => item.id === elementId);
+    if (index === -1) return;
+    elements.delete(index, 1);
+  });
 };
 
 export const createId = (): string => {

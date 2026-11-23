@@ -47,9 +47,11 @@ export const getCounter = (doc: Y.Doc): number => {
 };
 
 export const setCounter = (doc: Y.Doc, next: number, userId?: string) => {
-  const normalized = Number.isFinite(next) ? Math.round(next) : 0;
-  getRoot(doc).set(COUNTER_KEY, normalized);
-  touchMeta(doc, userId);
+  doc.transact(() => {
+    const normalized = Number.isFinite(next) ? Math.round(next) : 0;
+    getRoot(doc).set(COUNTER_KEY, normalized);
+    touchMeta(doc, userId);
+  });
 };
 
 export const incrementCounter = (doc: Y.Doc, by = 1, userId?: string) => {
@@ -62,10 +64,12 @@ export const getNotes = (doc: Y.Doc): string => {
 };
 
 export const setNotes = (doc: Y.Doc, value: string, userId?: string) => {
-  const text = ensureAppText(getRoot(doc), NOTES_KEY);
-  text.delete(0, text.length);
-  text.insert(0, value);
-  touchMeta(doc, userId);
+  doc.transact(() => {
+    const text = ensureAppText(getRoot(doc), NOTES_KEY);
+    text.delete(0, text.length);
+    text.insert(0, value);
+    touchMeta(doc, userId);
+  });
 };
 
 export const getItems = (doc: Y.Doc): string[] => {
@@ -77,28 +81,34 @@ export const getItems = (doc: Y.Doc): string[] => {
 };
 
 export const addItem = (doc: Y.Doc, rawValue: string, userId?: string) => {
-  const value = rawValue.trim();
-  if (!value) return;
-  (ensureAppArray(getRoot(doc), ITEMS_KEY) as ItemsArray).push([value]);
-  touchMeta(doc, userId);
+  doc.transact(() => {
+    const value = rawValue.trim();
+    if (!value) return;
+    (ensureAppArray(getRoot(doc), ITEMS_KEY) as ItemsArray).push([value]);
+    touchMeta(doc, userId);
+  });
 };
 
 export const removeItemAt = (doc: Y.Doc, index: number, userId?: string) => {
-  const value = getRoot(doc).get(ITEMS_KEY);
-  if (!(value instanceof Y.Array)) return;
-  const items = value as ItemsArray;
-  if (index < 0 || index >= items.length) return;
-  items.delete(index, 1);
-  touchMeta(doc, userId);
+  doc.transact(() => {
+    const value = getRoot(doc).get(ITEMS_KEY);
+    if (!(value instanceof Y.Array)) return;
+    const items = value as ItemsArray;
+    if (index < 0 || index >= items.length) return;
+    items.delete(index, 1);
+    touchMeta(doc, userId);
+  });
 };
 
 export const clearItems = (doc: Y.Doc, userId?: string) => {
-  const value = getRoot(doc).get(ITEMS_KEY);
-  if (!(value instanceof Y.Array)) return;
-  const items = value as ItemsArray;
-  if (items.length === 0) return;
-  items.delete(0, items.length);
-  touchMeta(doc, userId);
+  doc.transact(() => {
+    const value = getRoot(doc).get(ITEMS_KEY);
+    if (!(value instanceof Y.Array)) return;
+    const items = value as ItemsArray;
+    if (items.length === 0) return;
+    items.delete(0, items.length);
+    touchMeta(doc, userId);
+  });
 };
 
 export const getMeta = (doc: Y.Doc): { createdAt: number | null; updatedAt: number | null } => {
