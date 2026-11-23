@@ -52,6 +52,7 @@ private class RecordingBackend(private val eglLock: Any = Any()) : VideoRenderBa
     private val destroyed: MutableSet<Any> = Collections.synchronizedSet(mutableSetOf())
     @Volatile private var stalledBind: CountDownLatch? = null
     @Volatile private var stalledUnbind: CountDownLatch? = null
+    @Volatile private var stalledSizeQuery: CountDownLatch? = null
     private val stalled = CountDownLatch(1)
     val unbound: MutableList<Any> = Collections.synchronizedList(mutableListOf())
     @Volatile var stopped = false
@@ -98,7 +99,10 @@ private class RecordingBackend(private val eglLock: Any = Any()) : VideoRenderBa
         stallOn(stalledBind) { stalledBind = null }
         return synchronized(eglLock) { bindSucceeds }
     }
-    override fun surfaceWidth(surface: Any): Int = width
+    override fun surfaceWidth(surface: Any): Int {
+        stallOn(stalledSizeQuery) { stalledSizeQuery = null }
+        return width
+    }
     override fun surfaceHeight(surface: Any): Int = height
     override fun swap(surface: Any): Boolean = synchronized(eglLock) {
         calls.add("swap $surface")
@@ -160,6 +164,7 @@ private class RecordingBackend(private val eglLock: Any = Any()) : VideoRenderBa
     }
     fun stallNextBind(): CountDownLatch = CountDownLatch(1).also { stalledBind = it }
     fun stallNextUnbind(): CountDownLatch = CountDownLatch(1).also { stalledUnbind = it }
+    fun stallNextSizeQuery(): CountDownLatch = CountDownLatch(1).also { stalledSizeQuery = it }
 
     fun awaitStall() {
         assertTrue("the render thread never reached the stall", stalled.await(5, TimeUnit.SECONDS))
@@ -392,6 +397,27 @@ class VideoRenderingTests {
         renderer.onFrame(frame())
         backend.settle()
         assertEquals(listOf("destroy surface-3", "create", "draw", "swap surface-4"), backend.calls.toList().drop(before))
+        assertEveryFrameGivenBack()
+    }
+
+    @Test fun aWindowThatAsksForASizeAgainWaitsForItAgainEvenAfterAnEarlierGiveUp() {
+        val renderer = rendererWithA160By62Window()
+        backend.width = 1032
+        backend.height = 400
+        renderer.attachSurface("window", 1)
+        renderer.onFrame(frame())
+        backend.settle()
+        clockNanos.addAndGet(TimeUnit.MILLISECONDS.toNanos(1_100))
+        renderer.onFrame(frame())
+        backend.settle()
+        assertEquals(1, backend.count("swap"))
+        renderer.windowSized(320, 124)
+        renderer.windowSized(160, 62)
+        val before = backend.calls.size
+        renderer.onFrame(frame())
+        backend.settle()
+        assertEquals("a frame was swapped into a buffer of the wrong size on an old give-up",
+            listOf("destroy surface-3", "create"), backend.calls.toList().drop(before))
         assertEveryFrameGivenBack()
     }
 
@@ -1199,6 +1225,32 @@ class VideoRenderingTests {
         stall.countDown()
         backend.settle()
         assertEquals("a frame was drawn into a surface that had been destroyed", listOf("create", "destroy surface-1"), backend.calls.toList())
+        assertEveryFrameGivenBack()
+    }
+
+    @Test fun anAttachStillQueuedWhenItsTileIsReleasedNeverTouchesTheWindowAfterItsCallbackReturns() {
+        val host = surfaceHost(detachWait = VideoDetachWait(limitMillis = 100, windowMillis = 60_000))
+        val gate = backend.park()
+        host.surfaceAvailable("window")
+        host.release()
+        host.surfaceDestroyed(host.holder)
+        gate.countDown()
+        backend.settle()
+        assertEquals("the render thread touched a window after its surfaceDestroyed returned", listOf<String>(), backend.calls.toList())
+    }
+
+    @Test fun aDrawPausedBetweenTwoWindowCallsStopsOnceTheCallbackHasReturned() {
+        val host = surfaceHost(detachWait = VideoDetachWait(limitMillis = 100, windowMillis = 60_000))
+        host.surfaceAvailable("window")
+        backend.settle()
+        val stall = backend.stallNextSizeQuery()
+        host.sink.onFrame(frame())
+        backend.awaitStall()
+        host.surfaceDestroyed(host.holder)
+        stall.countDown()
+        backend.settle()
+        assertEquals("the render thread drew into a window after its surfaceDestroyed returned",
+            listOf("create", "destroy surface-1"), backend.calls.toList())
         assertEveryFrameGivenBack()
     }
 
