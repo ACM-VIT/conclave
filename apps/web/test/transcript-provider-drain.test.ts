@@ -103,10 +103,15 @@ describe("switching the caption language keeps speech the old provider already h
     await settle();
 
     await switchTo("hi");
+    await speak();
+    await commit();
+    sockets[1].emit(openAiCommitted("item_1"));
     sockets[1].emit(openAiFinal("item_1", "Friday at noon"));
     await vi.advanceTimersByTimeAsync(15_000);
-
     expect(savedTexts()).toEqual(["Friday at noon"]);
+
+    await vi.advanceTimersByTimeAsync(TRANSCRIPTION_LINE_DEADLINE_MS);
+    expect(savedTexts()).toEqual(["Friday", "Friday at noon"]);
   });
 
   it("saves what was on screen when the old provider never finishes", async () => {

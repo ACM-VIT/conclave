@@ -1485,8 +1485,9 @@ export class TranscriptRoom {
       heard: audio.some(({ voice }) => voice !== "quiet"),
       audio,
     });
-    live.commitQueue.push(line.id);
+    live.commitQueue.push({ lineId: line.id, committedAt: Date.now() });
     this.armTranscriptionCommitWatchdog();
+    this.armLineTimer();
     if (line.heard) void this.persist();
     return true;
   }
@@ -1864,7 +1865,6 @@ export class TranscriptRoom {
       ...init,
       place: this.nextPlace(connection),
       epoch: connection?.epoch ?? null,
-      committedAt: now,
       deadlineAt: init.state === "replaying" ? Number.POSITIVE_INFINITY : now + TRANSCRIPTION_LINE_DEADLINE_MS,
     });
   }
@@ -1943,17 +1943,20 @@ export class TranscriptRoom {
   /**
    * A provider named a line: the line of exactly that commit's audio, by
    * OpenAI's ack order, or the one it already named. A line that ended
-   * keeps its place, so its late final fills it under the same itemId.
+   * keeps its place, so its late final fills it under the same itemId; one
+   * whose segment was trimmed shows nothing.
    */
   private acknowledgeLine(connection: ProviderConnection, providerItemId: string): CaptionLine | null {
     const known = connection.providerToLine.get(providerItemId);
     if (known) return this.ledger.get(known) ?? null;
     const committed = connection.session.provider === "openai" ? connection.commitQueue.shift() : undefined;
     if (committed !== undefined && connection === this.liveConnection) this.armTranscriptionCommitWatchdog();
-    const line =
-      (committed ? this.ledger.get(committed) : undefined) ??
-      this.newLine(connection, { state: "open", speaker: this.controllerSpeaker(), heard: true, audio: [] });
-    connection.bind(providerItemId, line.id);
+    const lineId =
+      committed?.lineId ??
+      this.newLine(connection, { state: "open", speaker: this.controllerSpeaker(), heard: true, audio: [] }).id;
+    connection.bind(providerItemId, lineId);
+    const line = this.ledger.get(lineId);
+    if (!line) return null;
     if (line.state === "pending_ack" || line.state === "replaying") {
       line.state = "open";
       line.epoch = connection.epoch;
@@ -1963,8 +1966,18 @@ export class TranscriptRoom {
     return line;
   }
 
+  /**
+   * The line a delta, final or failure names. OpenAI names only items it
+   * acknowledged, so one it no longer has a line for, such as a trimmed
+   * line's late final, shows nothing and never takes another line's commit.
+   */
+  private namedLine(connection: ProviderConnection, providerItemId: string): CaptionLine | null {
+    if (connection.session.provider === "openai" && !connection.providerToLine.has(providerItemId)) return null;
+    return this.acknowledgeLine(connection, providerItemId);
+  }
+
   private applyLineDelta(connection: ProviderConnection, providerItemId: string, delta: string): void {
-    const line = this.acknowledgeLine(connection, providerItemId);
+    const line = this.namedLine(connection, providerItemId);
     if (!line || line.state !== "open") return;
     const now = Date.now();
     line.text = line.freshText ? delta : `${line.text}${delta}`;
@@ -1985,7 +1998,7 @@ export class TranscriptRoom {
     providerItemId: string,
     transcript: string,
   ): Promise<void> {
-    const line = this.acknowledgeLine(connection, providerItemId);
+    const line = this.namedLine(connection, providerItemId);
     if (!line) return;
     const words = transcript.trim();
     let changed = false;
@@ -2006,7 +2019,7 @@ export class TranscriptRoom {
 
   /** One item a provider could not transcribe: only that line ends, as its words or a gap. */
   private async applyLineFailure(connection: ProviderConnection, providerItemId: string): Promise<void> {
-    const line = this.acknowledgeLine(connection, providerItemId);
+    const line = this.namedLine(connection, providerItemId);
     if (!line || !isActive(line)) return;
     const changed = this.endUnfinishedLines([line], "A provider failed one line", connection);
     if (connection.role === "draining") this.settleDrain(connection);
@@ -2114,7 +2127,7 @@ export class TranscriptRoom {
       clearTimeout(this.transcriptionCommitWatchdogTimer);
       this.transcriptionCommitWatchdogTimer = null;
     }
-    const oldest = this.ledger.get(this.liveConnection?.commitQueue[0] ?? "");
+    const oldest = this.liveConnection?.commitQueue[0];
     if (!oldest) return;
     const delay = Math.max(
       0,
@@ -2122,7 +2135,7 @@ export class TranscriptRoom {
     );
     this.transcriptionCommitWatchdogTimer = setTimeout(() => {
       this.transcriptionCommitWatchdogTimer = null;
-      const current = this.ledger.get(this.liveConnection?.commitQueue[0] ?? "");
+      const current = this.liveConnection?.commitQueue[0];
       if (!current) return;
       if (current.committedAt + TRANSCRIPTION_COMMIT_ACK_TIMEOUT_MS > Date.now()) {
         this.armTranscriptionCommitWatchdog();
@@ -2172,9 +2185,8 @@ export class TranscriptRoom {
           }
           connection.session.commitAudio();
           line.state = "pending_ack";
-          line.committedAt = Date.now();
           line.freshText = true;
-          connection.commitQueue.push(line.id);
+          connection.commitQueue.push({ lineId: line.id, committedAt: Date.now() });
         } else {
           for (const chunk of line.audio) {
             connection.session.appendAudio(chunk.audio, line.speaker, {

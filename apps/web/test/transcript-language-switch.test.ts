@@ -110,7 +110,9 @@ describe("switching the caption language mid-sentence", () => {
     const { room, viewer, providers } = await fixture();
     await room.startSession(viewer, { ...roomSession, type: "session.start", language: "en" });
     const before = providers[0];
+    before.callbacks.onCommitted("earlier");
     await before.callbacks.onFinal("earlier", "This line finished before switching.");
+    before.callbacks.onCommitted("utterance");
     before.callbacks.onDelta("utterance", "The release date is");
 
     await room.startSession(viewer, { ...roomSession, type: "session.takeover", language: "hi" });
@@ -129,6 +131,7 @@ describe("switching the caption language mid-sentence", () => {
     const { room, viewer, providers } = await fixture();
     await room.startSession(viewer, { ...roomSession, type: "session.start", language: "en" });
     const before = providers[0];
+    before.callbacks.onCommitted("utterance");
     before.callbacks.onDelta("utterance", "The release date is");
 
     await room.startSession(viewer, { ...roomSession, type: "session.takeover", language: "hi" });
@@ -143,10 +146,12 @@ describe("switching the caption language mid-sentence", () => {
     const { room, viewer, providers } = await fixture();
     await room.startSession(viewer, { ...roomSession, type: "session.start", language: "en" });
     const before = providers[0];
+    before.callbacks.onCommitted("utterance");
     before.callbacks.onDelta("utterance", "Hello");
 
     await room.startSession(viewer, { ...roomSession, type: "session.takeover", language: "hi" });
     await before.callbacks.onFinal("utterance", "Hello there.");
+    before.callbacks.onCommitted("later");
     await before.callbacks.onFinal("later", "Words after the switch.");
 
     expect(savedTexts(room)).toEqual(["Hello there."]);

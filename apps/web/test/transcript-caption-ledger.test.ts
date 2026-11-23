@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  TRANSCRIPTION_COMMIT_ACK_TIMEOUT_MS as COMMIT_ACK_TIMEOUT,
   TRANSCRIPTION_GAP_MARKER as GAP,
   TRANSCRIPTION_LINE_DEADLINE_MS as DEADLINE,
 } from "../transcript-worker/src/constants";
@@ -733,5 +734,70 @@ describe("Sarvam: speech evidence belongs to its own turn", () => {
     await vi.advanceTimersByTimeAsync(DEADLINE + 100);
 
     expect(speakers(room.segments)).toEqual([["First.", "ada"], [GAP, "grace"]]);
+  });
+});
+
+describe("OpenAI: a commit's line keeps its own deadline and watchdog", () => {
+  it("a commit never acknowledged on a quiet connection shows a gap at its own deadline", async () => {
+    vi.useFakeTimers();
+    quiet();
+    const { providerSockets, start, speak, commit, savedTexts } = await rig(OPENAI);
+    await start("en");
+    await speak(ada);
+    await commit(ada);
+    await vi.advanceTimersByTimeAsync(DEADLINE + 100);
+
+    expect(savedTexts()).toEqual([GAP]);
+    expect(providerSockets()).toHaveLength(1);
+  });
+
+  it("trimming a line still waiting for its ack keeps the watchdog that reconnects", async () => {
+    vi.useFakeTimers();
+    quiet();
+    const { providerSockets, start, speak, commit, savedTexts } = await transcriptRoomRig(lookup, OPENAI, {
+      TRANSCRIPT_MAX_SEGMENTS: "1",
+    });
+    await start("en");
+    for (const speaker of [ada, grace]) {
+      await speak(speaker);
+      await commit(speaker);
+    }
+    await vi.advanceTimersByTimeAsync(DEADLINE + 100);
+    expect(savedTexts()).toEqual([GAP]);
+
+    await vi.advanceTimersByTimeAsync(COMMIT_ACK_TIMEOUT - DEADLINE);
+    expect(providerSockets()).toHaveLength(2);
+  });
+
+  it("late answers for trimmed lines show nothing and never take a later line's commit", async () => {
+    vi.useFakeTimers();
+    quiet();
+    const { room, providerSockets, start, speak, commit, broadcastFinals } = await transcriptRoomRig(lookup, OPENAI, {
+      TRANSCRIPT_MAX_SEGMENTS: "1",
+    });
+    await start("en");
+    const [socket] = providerSockets();
+    await speak(ada);
+    await commit(ada);
+    socket.emit(openAiCommitted("a"));
+    for (const speaker of [grace, ada]) {
+      await speak(speaker);
+      await commit(speaker);
+    }
+    await vi.advanceTimersByTimeAsync(DEADLINE + 100);
+    await speak(grace);
+    await commit(grace);
+
+    socket.emit(openAiFinal("a", "Ada, late."));
+    socket.emit(openAiCommitted("g"));
+    socket.emit(openAiFinal("g", "Grace, late."));
+    socket.emit(openAiCommitted("h"));
+    socket.emit(openAiCommitted("x"));
+    socket.emit(openAiFinal("x", "Grace again."));
+    await settle();
+
+    expect(broadcastFinals()).not.toContain("Ada, late.");
+    expect(broadcastFinals()).not.toContain("Grace, late.");
+    expect(speakers(room.segments)).toEqual([["Grace again.", "grace"]]);
   });
 });

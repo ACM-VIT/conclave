@@ -36,9 +36,11 @@ export type CaptionLine = {
   audio: AudioChunk[];
   /** The connection that owes it, or null while it waits for a replacement. */
   epoch: number | null;
-  committedAt: number;
   deadlineAt: number;
 };
+
+/** A commit OpenAI has not acknowledged: its line, and when it was sent, kept even if the line is trimmed. */
+export type QueuedCommit = { lineId: string; committedAt: number };
 
 const ACTIVE: ReadonlySet<CaptionLineState> = new Set(["pending_ack", "open", "replaying"]);
 
@@ -70,6 +72,7 @@ export class CaptionLedger {
   active(): CaptionLine[] {
     return this.all().filter(isActive);
   }
+
 
   add(line: Omit<CaptionLine, "id" | "text" | "freshText"> & { text?: string }): CaptionLine {
     const created: CaptionLine = { id: crypto.randomUUID(), text: "", freshText: false, ...line };
@@ -117,7 +120,7 @@ export class CaptionLedger {
 export class ProviderConnection {
   role: "live" | "draining" = "live";
   readonly providerToLine = new Map<string, string>();
-  readonly commitQueue: string[] = [];
+  readonly commitQueue: QueuedCommit[] = [];
   /** Sarvam may report speech from its last audio until this time. */
   quietAt = 0;
   /** Places for lines a draining connection accepts after the switch, ahead of the new provider's. */
