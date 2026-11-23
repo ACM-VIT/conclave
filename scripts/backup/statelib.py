@@ -33,7 +33,7 @@ READ_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
 STOPPED = ("exited", "dead", "created")
 STORE_VARIABLES = ("SCHEDULING_SQLITE_PATH", "SCHEDULED_MEETINGS_SQLITE_PATH", "SCHEDULED_WEBINARS_SQLITE_PATH")
 
-PAYLOAD_FILES = ("MANIFEST", "SHA256SUMS", "sqlite-databases", "sqlite-links", "sqlite-chains", "sqlite-dirs", "state-files.tar", "redis/dump.rdb")
+PAYLOAD_FILES = ("MANIFEST", "SHA256SUMS", "sqlite-databases", "sqlite-links", "sqlite-chains", "sqlite-dirs", "state-files.tar", "redis/dump.rdb", "redis/database")
 
 
 class Refused(Exception):
@@ -336,6 +336,8 @@ class Archive:
         self.chains = read_pairs(os.path.join(payload, "sqlite-chains"))
         self.dirs = read_lines(os.path.join(payload, "sqlite-dirs"))
         self.has_redis = os.path.isfile(os.path.join(payload, "redis", "dump.rdb"))
+        source_db = read_lines(os.path.join(payload, "redis", "database"))
+        self.redis_db = source_db[0] if len(source_db) == 1 else None
         self.members = []
         tar_path = os.path.join(payload, "state-files.tar")
         if os.path.isfile(tar_path):
@@ -360,8 +362,10 @@ def archive_problems(archive):
         if name not in PAYLOAD_FILES or not os.path.isfile(full) or os.path.islink(full):
             problems.append(f"{name} in the archive is not part of a backup")
     redis_root = os.path.join(payload, "redis")
-    if os.path.isdir(redis_root) and sorted(os.listdir(redis_root)) not in ([], ["dump.rdb"]):
-        problems.append("redis/ in the archive holds more than dump.rdb")
+    if os.path.isdir(redis_root) and sorted(os.listdir(redis_root)) not in ([], ["database", "dump.rdb"]):
+        problems.append("redis/ in the archive must hold dump.rdb and the database it was taken from, and nothing else")
+    if archive.has_redis and not (archive.redis_db or "").isdigit():
+        problems.append("the backup's Redis snapshot does not say which database it was taken from")
     sqlite_root = os.path.join(payload, "sqlite")
     copies = set()
     if os.path.isdir(sqlite_root):
@@ -558,6 +562,30 @@ def store_paths(env, fallback=None):
     return picked
 
 
+def state_path(path, mounts, state):
+    """Where a container path lies below the state dir, read through the
+    container's mount whose destination holds it most closely, or None when
+    no mount does or it lands outside the state dir."""
+    best = None
+    for mount in mounts:
+        destination = mount.get("destination") or ""
+        if destination.startswith("/") and within(path, destination.rstrip("/") or "/"):
+            if best is None or len(destination) > len(best["destination"]):
+                best = mount
+    if best is None:
+        return None
+    destination = best["destination"].rstrip("/") or "/"
+    rest = path[len(destination):].lstrip("/") if destination != "/" else path.lstrip("/")
+    # Both sides resolved as far as they exist, so a lost state dir still
+    # matches the mount that names it.
+    for source in (os.path.realpath(best["source"]), os.path.normpath(best["source"])):
+        host = os.path.join(source, rest) if rest else source
+        for base in (os.path.realpath(state), os.path.normpath(os.path.abspath(state))):
+            if within(host, base) and host != base:
+                return host[len(base):].lstrip("/")
+    return None
+
+
 def configured_stores(state, container, containers, env=None):
     """Every database a store opens, as this host's config sets it and as the
     env of each SFU container that mounts the state dir sets it, each store's
@@ -566,20 +594,21 @@ def configured_stores(state, container, containers, env=None):
     disk, so the same is done here. A path outside the state dir refuses."""
     env = os.environ if env is None else env
     roots = mount_roots(state, container)
-    sources = [("the backup config", variable, value, roots)
+    sources = [("the backup config", variable, value, lambda path: under_root(path, roots))
                for variable, value in store_paths(env, f"{container.rstrip('/')}/conclave.sqlite")]
     for found in containers:
-        if found["relation"] == "exact":
+        if found["relation"] in ("exact", "related"):
             # A container without any of the variables runs with whatever its
-            # compose file set; only what its env says it opens counts here.
-            sources += [(f"the container {found['id']}", variable, value, list(found["destinations"]) + roots)
+            # compose file set; only what its env says it opens counts here,
+            # read through that container's own mounts.
+            sources += [(f"the container {found['id']}", variable, value, lambda path, mounts=found["mounts"]: state_path(path, mounts, state))
                         for variable, value in store_paths(found["env"])]
     stores = []
-    for where, variable, value, these_roots in sources:
+    for where, variable, value, locate in sources:
         shown = f"{variable}={value}" if variable != "the compose default" else f"the compose default {value}"
         if not value.startswith("/"):
             raise Refused(f"{shown} ({where}) is not an absolute path, so it is not on the volume; set it under {container}")
-        rel = under_root(posixpath.normpath(value), these_roots)
+        rel = locate(posixpath.normpath(value))
         if not rel:
             raise Refused(f"{shown} ({where}) is outside the state dir, so it is not on the volume; move it under {container}")
         if rel not in [store["rel"] for store in stores]:
