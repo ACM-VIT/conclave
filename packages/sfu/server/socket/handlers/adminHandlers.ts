@@ -1610,7 +1610,7 @@ export const registerAdminHandlers = (
     for (const pendingSocket of pendingSockets) {
       pendingSocket.disconnect(true);
     }
-    const closed = forceCloseRoom(state, roomChannelId);
+    const closed = forceCloseRoom(state, endedRoom);
     if (!closed) {
       Logger.warn(`Failed to force close room ${roomChannelId}: room not found`);
     }

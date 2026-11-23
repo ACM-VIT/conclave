@@ -9,6 +9,7 @@ import {
   type RoomAssignmentRecord,
 } from "../server/roomRegistry.js";
 import {
+  cleanupStaleRoom,
   getOrCreateRoomWithOrigin,
   hasUnconfirmedRoomLeases,
   renewRoomOwnerships,
@@ -24,16 +25,19 @@ const makeState = (): SfuState =>
     }),
   });
 
-const hostRoom = (state: SfuState) => {
-  const closeRouter = vi.fn();
+const hostRoom = (state: SfuState, id = "room") => {
+  const router = { closed: false, close: vi.fn() };
+  router.close.mockImplementation(() => {
+    router.closed = true;
+  });
   const room = new Room({
-    id: "room",
+    id,
     clientId: "conclave",
     workerPid: null,
-    router: { closed: false, close: closeRouter } as unknown as Router,
+    router: router as unknown as Router,
   });
   state.rooms.set(room.channelId, room);
-  return { room, closeRouter };
+  return { room, router, closeRouter: router.close };
 };
 
 const takeRegistryDown = (state: SfuState) => {
@@ -158,6 +162,32 @@ describe("rooms during a shared registry outage", () => {
 
     expect(state.rooms.get(room.channelId)).toBe(successor.room);
     expect(successor.closeRouter).not.toHaveBeenCalled();
+  });
+
+  it("leaves a reopened room alone when its old router closed while an earlier room renewed", async () => {
+    const state = makeState();
+    const first = hostRoom(state, "room-a");
+    const reopened = hostRoom(state, "room-b");
+    const renew = state.roomRegistry.renewRoom.bind(state.roomRegistry);
+    let answerFirstRenewal!: () => void;
+    const firstRenewalAnswered = new Promise<void>((resolve) => {
+      answerFirstRenewal = resolve;
+    });
+    state.roomRegistry.renewRoom = async (input) => {
+      if (input.channelId === first.room.channelId) await firstRenewalAnswered;
+      return renew(input);
+    };
+
+    const renewal = renewRoomOwnerships(state);
+    reopened.router.closed = true;
+    expect(cleanupStaleRoom(state, reopened.room)).toBe(true);
+    const successor = hostRoom(state, "room-b");
+    answerFirstRenewal();
+    await renewal;
+
+    expect(state.rooms.get(successor.room.channelId)).toBe(successor.room);
+    expect(successor.closeRouter).not.toHaveBeenCalled();
+    expect(state.rooms.get(first.room.channelId)).toBe(first.room);
   });
 
   it("sends a joiner to the instance that took the room over", async () => {

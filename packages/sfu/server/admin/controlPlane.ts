@@ -10,7 +10,7 @@ import type {
 import type { Room } from "../../config/classes/Room.js";
 import type { AppsAwarenessData } from "../../types.js";
 import { isGuestUserKey } from "../identity.js";
-import { cleanupRoom, getRoomChannelId } from "../rooms.js";
+import { cleanupRoom, getRoomChannelId, isCurrentRoom } from "../rooms.js";
 import type { SfuState } from "../state.js";
 import {
   emitWebinarAttendeeCountChanged,
@@ -224,20 +224,16 @@ const handleAdminRemoved = (
         }
       }
       room.startCleanupTimer(() => {
-        if (!state.rooms.has(roomChannelId)) return;
-        const roomInState = state.rooms.get(roomChannelId);
-        if (!roomInState || roomInState.hasActiveAdmin()) return;
-        if (roomInState.pendingClients.size > 0) {
-          for (const pending of roomInState.pendingClients.values()) {
+        if (!isCurrentRoom(state, room) || room.hasActiveAdmin()) return;
+        if (room.pendingClients.size > 0) {
+          for (const pending of room.pendingClients.values()) {
             pending.socket.emit("waitingRoomStatus", {
               message: "No one to let you in.",
               roomId,
             });
           }
         }
-        if (roomInState.isEmpty()) {
-          cleanupRoom(state, roomChannelId);
-        }
+        cleanupRoom(state, room);
       });
     }
   }
@@ -986,9 +982,7 @@ export const forceRemoveClientNow = (options: {
     handleAdminRemoved(io, state, room);
   }
 
-  if (state.rooms.has(roomChannelId)) {
-    cleanupRoom(state, roomChannelId);
-  }
+  cleanupRoom(state, room);
 
   return true;
 };

@@ -302,7 +302,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         };
 
         if (room?.router.closed) {
-          cleanupStaleRoom(state, roomChannelId);
+          cleanupStaleRoom(state, room);
           room = undefined;
         }
 
@@ -808,7 +808,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           emitWebinarFeedChanged(io, state, previousRoom);
 
           await socket.leave(previousChannelId);
-          cleanupRoom(state, previousChannelId);
+          cleanupRoom(state, previousRoom);
 
           context.currentRoom = null;
           context.currentClient = null;

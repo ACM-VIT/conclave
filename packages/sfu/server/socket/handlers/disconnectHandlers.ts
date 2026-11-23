@@ -3,7 +3,7 @@ import type { Room } from "../../../config/classes/Room.js";
 import { config } from "../../../config/config.js";
 import type { AppsAwarenessData } from "../../../types.js";
 import { Logger } from "../../../utilities/loggers.js";
-import { cleanupRoom } from "../../rooms.js";
+import { cleanupRoom, isCurrentRoom } from "../../rooms.js";
 import {
   emitWebinarAttendeeCountChanged,
   emitWebinarFeedChanged,
@@ -159,27 +159,21 @@ export const registerDisconnectHandlers = (
                 }
               }
               activeRoom.startCleanupTimer(() => {
-                if (state.rooms.has(roomChannelId)) {
-                  const roomInState = state.rooms.get(roomChannelId);
-                  if (roomInState) {
-                    if (roomInState.hasActiveAdmin()) {
-                      return;
-                    }
-                    if (roomInState.pendingClients.size > 0) {
-                      for (const pending of roomInState.pendingClients.values()) {
-                        pending.socket.emit("waitingRoomStatus", {
-                          message: "No one to let you in.",
-                          roomId,
-                        });
-                      }
-                    }
-                    if (roomInState.isEmpty()) {
-                      Logger.info(
-                        `Cleanup executed for room ${roomId}. Room is empty.`,
-                      );
-                      cleanupRoom(state, roomChannelId);
-                    }
+                if (!isCurrentRoom(state, activeRoom)) return;
+                if (activeRoom.hasActiveAdmin()) return;
+                if (activeRoom.pendingClients.size > 0) {
+                  for (const pending of activeRoom.pendingClients.values()) {
+                    pending.socket.emit("waitingRoomStatus", {
+                      message: "No one to let you in.",
+                      roomId,
+                    });
                   }
+                }
+                if (activeRoom.isEmpty()) {
+                  Logger.info(
+                    `Cleanup executed for room ${roomId}. Room is empty.`,
+                  );
+                  cleanupRoom(state, activeRoom);
                 }
               });
             }
@@ -197,9 +191,7 @@ export const registerDisconnectHandlers = (
           });
         }
 
-        if (state.rooms.has(roomChannelId)) {
-          cleanupRoom(state, roomChannelId);
-        }
+        cleanupRoom(state, activeRoom);
 
         Logger.info(`User ${userId} left room ${roomId}`);
 
@@ -264,9 +256,7 @@ export const registerDisconnectHandlers = (
               roomId: context.pendingRoomId,
             });
           }
-          if (pendingRoom.isEmpty()) {
-            cleanupRoom(state, context.pendingRoomChannelId);
-          }
+          cleanupRoom(state, pendingRoom);
         }
       }
     }
