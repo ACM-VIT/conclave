@@ -977,16 +977,6 @@ export class Room {
     const userKeys = this.userKeysByGuestProof.get(guestProof);
     userKeys?.delete(userKey);
     if (userKeys?.size === 0) this.userKeysByGuestProof.delete(guestProof);
-    this.forgetGuestPassIdentity(guestProof);
-  }
-
-  private forgetGuestPassIdentity(guestProof: string): void {
-    if (
-      !this.userKeysByGuestProof.has(guestProof) &&
-      !this.guestPassGroups.has(guestProof)
-    ) {
-      this.guestPassIdentities.delete(guestProof);
-    }
   }
 
   guestIdentityOf(userKey: string): string | undefined {
@@ -1453,7 +1443,6 @@ export class Room {
     for (const group of new Set(this.guestPassGroups.values())) {
       if ([...group].some((proof) => this.isKnownGuestPass(proof))) continue;
       for (const proof of group) this.guestPassGroups.delete(proof);
-      for (const proof of group) this.forgetGuestPassIdentity(proof);
     }
   }
 

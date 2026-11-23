@@ -3316,6 +3316,30 @@ describe("the identity the room's apps see for a guest (Daybreak)", () => {
     expect(seen(room, adapter, second)).toEqual(identity);
   });
 
+  it("stays the same when the guest leaves after a pass change and comes back under the new pass (Greptile)", async () => {
+    const { state, room, adapter } = await inRoom();
+    const onA = tabOf("leaves-after-a-pass-change");
+    const first = await join(state, onA);
+    const identity = seen(room, adapter, onA);
+    const onB = {
+      ...onA,
+      userId: `${onA.userId}-under-the-second-pass`,
+      guestProof: `${onA.guestProof}-the-second`,
+      guestWas: formerSeats(onA),
+    } satisfies SfuAuthPayload;
+    const second = await join(state, onB);
+    await endOfTurn();
+
+    room.removeClient(seatOf(onB));
+    await endOfTurn();
+    expect(room.getClient(seatOf(onA))).toBeUndefined();
+    expect(first.context.currentClient).not.toBe(second.context.currentClient);
+    expect((await join(state, onB)).ack).toHaveBeenCalledWith(joined);
+
+    expect(identity).toMatchObject({ verified: true });
+    expect(seen(room, adapter, onB)).toEqual(identity);
+  });
+
   it("is unverified for a guest token with no pass", async () => {
     const { state, room, adapter } = await inRoom();
     const namesItself = { userId: "guest-names-itself", clientId: "conclave", sessionId: "names-itself" } satisfies SfuAuthPayload;

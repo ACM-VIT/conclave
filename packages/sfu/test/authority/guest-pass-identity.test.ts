@@ -84,6 +84,28 @@ describe("a guest's pass, as the room's apps see it (Daybreak)", () => {
     expect(field(hostTab.row("polls", pollId), "results", "voterCount")).toBe(1);
   });
 
+  it("keeps the guest's identity and its one vote when it leaves after a pass change and comes back under the new pass (Greptile)", async () => {
+    const room = new Harness([pollsAuthority]);
+    const hostTab = await room.open(host, pollsContract);
+    const pollId = await pollIn(room, hostTab);
+    const onA = await guestTab(room, "guest-gp_gita-on-pass-a", "tab-1", "proof-of-pass-a");
+    expect((await onA.act("vote", { pollId, optionIds: ["o1"] })).ok).toBe(true);
+    await room.deliver();
+    linkPasses(room, "proof-of-pass-b", "proof-of-pass-a");
+    const onB = await guestTab(room, "guest-gp_gita-on-pass-b", "tab-1", "proof-of-pass-b");
+    room.room.removeClient(onA.seat.id);
+    await room.deliver();
+
+    room.room.removeClient(onB.seat.id);
+    await room.deliver();
+    const back = await guestTab(room, "guest-gp_gita-on-pass-b", "tab-1-back", "proof-of-pass-b");
+    await room.deliver();
+
+    expect(field(back.row("myVotes", pollId), "optionIds")).toEqual(["o1"]);
+    expect(await back.act("vote", { pollId, optionIds: ["o2"] })).toEqual(alreadyVoted);
+    expect(field(hostTab.row("polls", pollId), "results", "voterCount")).toBe(1);
+  });
+
   it("counts one vote for two tabs of a guest once the room links their passes", async () => {
     const room = new Harness([pollsAuthority]);
     const hostTab = await room.open(host, pollsContract);

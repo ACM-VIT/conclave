@@ -53,7 +53,7 @@ A browser can hold more than one pass, when several of its first requests were e
 
 A token names up to 15 other passes. A browser that sends more is logged by the route. The token then names the lowest pass, the passes the tab says it has joined under (`guestJoinedAs` in the join request, a hint that proves nothing by itself), and the lowest of the rest.
 
-The room's apps (`SFU_APPS_AUTHORITY_ENABLED`) see a guest whose pass the room has bound as one verified person. Its identity comes from the first pass the room saw among the passes it links as that guest, so it stays the same when a tab comes back under another pass and when a later join links the guest's passes. A guest the room holds no pass for, such as one whose token carries no `guestProof` or whose key first came in without one, stays unverified.
+The room's apps (`SFU_APPS_AUTHORITY_ENABLED`) see a guest whose pass the room has bound as one verified person. Its identity comes from the first pass the room saw among the passes it links as that guest, so it stays the same when a tab comes back under another pass, when a later join links the guest's passes, and when the guest leaves and comes back under any of them. The room keeps these identities for as long as it lasts, apart from the bindings of seat keys, which it still drops. A guest the room holds no pass for, such as one whose token carries no `guestProof` or whose key first came in without one, stays unverified.
 
 Only the HttpOnly pass cookies vouch for `guestWas`. A copy of a join token is not enough to be taken for its guest under another pass.
 
