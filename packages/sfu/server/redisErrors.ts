@@ -91,23 +91,31 @@ export type CrashGuardReporting = {
 
 type CrashEvent = "unhandledRejection" | "uncaughtException";
 
+/** The process the guards listen on and exit: this one, or a test's stand-in. */
+export type GuardedProcess = {
+  on: (event: CrashEvent, listener: (error: unknown) => void) => unknown;
+  exit: (code: number) => void;
+};
+
 export const installRedisCrashGuards = (
   reporting: CrashGuardReporting = {},
+  target: GuardedProcess = process,
 ): void => {
   let exiting = false;
   const exitAfterReport = (error: unknown, event: CrashEvent): void => {
     if (exiting || !reporting.onFatal) {
-      process.exit(1);
+      target.exit(1);
+      return;
     }
     exiting = true;
     const { onFatal } = reporting;
     void Promise.resolve()
       .then(() => onFatal(error, event))
       .catch(() => {})
-      .finally(() => process.exit(1));
+      .finally(() => target.exit(1));
   };
 
-  process.on("unhandledRejection", (reason) => {
+  target.on("unhandledRejection", (reason) => {
     if (isRedisTransientError(reason)) {
       Logger.warn(
         "[Redis] Suppressed unhandled transient Redis rejection; SFU remains online.",
@@ -121,7 +129,7 @@ export const installRedisCrashGuards = (
     exitAfterReport(reason, "unhandledRejection");
   });
 
-  process.on("uncaughtException", (error) => {
+  target.on("uncaughtException", (error) => {
     if (isRedisTransientError(error)) {
       Logger.warn(
         "[Redis] Suppressed uncaught transient Redis exception; SFU remains online.",

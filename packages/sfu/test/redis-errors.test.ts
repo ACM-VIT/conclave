@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   AbortError,
   ClientClosedError,
@@ -14,7 +15,11 @@ import {
   SocketTimeoutError,
   TimeoutError,
 } from "redis";
-import { isRedisTransientError } from "../server/redisErrors.js";
+import {
+  type CrashGuardReporting,
+  installRedisCrashGuards,
+  isRedisTransientError,
+} from "../server/redisErrors.js";
 
 const nodeSocketError = (code: string, message: string): Error => {
   const error = new Error(message) as Error & { code: string; syscall: string };
@@ -103,13 +108,12 @@ describe("Redis crash guards", () => {
   const runGuard = (
     event: "unhandledRejection" | "uncaughtException",
     errorExpression: string,
-    reportingExpression = "",
   ) => {
     const guardUrl = new URL("../server/redisErrors.ts", import.meta.url).href;
     const code = `
       import { TimeoutError, AbortError } from "redis";
       import { installRedisCrashGuards } from ${JSON.stringify(guardUrl)};
-      installRedisCrashGuards(${reportingExpression});
+      installRedisCrashGuards();
       const error = ${errorExpression};
       ${event === "unhandledRejection"
         ? "void Promise.reject(error);"
@@ -142,30 +146,6 @@ describe("Redis crash guards", () => {
         },
       );
 
-      it("reports a fatal error before exiting", () => {
-        const result = runGuard(
-          event,
-          'new TypeError("programming bug")',
-          `{ onFatal: (error) => new Promise((resolve) => setTimeout(() => {
-              console.log("REPORTED " + error.message);
-              resolve();
-            }, 50)) }`,
-        );
-        expect(result.status).toBe(1);
-        expect(result.stdout).toContain("REPORTED programming bug");
-      });
-
-      it("reports a suppressed Redis error and stays up", () => {
-        const result = runGuard(
-          event,
-          "new TimeoutError()",
-          `{ onSuppressed: (_error, kind) => console.log("SUPPRESSED " + kind) }`,
-        );
-        expect(result.status).toBe(0);
-        expect(result.stdout).toContain(`SUPPRESSED ${event}`);
-        expect(result.stdout).toContain("SFU_STILL_RUNNING");
-      });
-
       it("still exits for an unrelated programming error", () => {
         const result = runGuard(event, 'new TypeError("programming bug")');
         expect(result.error).toBeUndefined();
@@ -175,4 +155,75 @@ describe("Redis crash guards", () => {
       });
     },
   );
+});
+
+describe("Redis crash guard reporting", () => {
+  // A process the guards listen on: the test raises its events and sees its
+  // exits, and each report settles only when the test says so.
+  const guarded = (reporting: CrashGuardReporting) => {
+    const target = Object.assign(new EventEmitter(), { exit: vi.fn((_code: number) => {}) });
+    installRedisCrashGuards(reporting, target);
+    return target;
+  };
+  const report = () => {
+    let settle: (outcome: "sent" | "failed") => void = () => {};
+    const sent = new Promise<void>((resolve, reject) => {
+      settle = (outcome) => (outcome === "sent" ? resolve() : reject(new Error("report failed")));
+    });
+    return { onFatal: vi.fn((_error: unknown, _event: string) => sent), settle };
+  };
+  // Runs every promise callback already queued: the guard's chain is only those.
+  const drain = () => new Promise((resolve) => setImmediate(resolve));
+
+  describe.each(["unhandledRejection", "uncaughtException"] as const)("%s", (event) => {
+    it("reports a fatal error before exiting", async () => {
+      const fatal = report();
+      const target = guarded({ onFatal: fatal.onFatal });
+      target.emit(event, new TypeError("programming bug"));
+      await drain();
+
+      expect(fatal.onFatal).toHaveBeenCalledWith(expect.objectContaining({ message: "programming bug" }), event);
+      expect(target.exit).not.toHaveBeenCalled();
+      fatal.settle("sent");
+      await drain();
+      expect(target.exit).toHaveBeenCalledTimes(1);
+      expect(target.exit).toHaveBeenCalledWith(1);
+    });
+
+    it("exits when the report fails", async () => {
+      const fatal = report();
+      const target = guarded({ onFatal: fatal.onFatal });
+      target.emit(event, new TypeError("programming bug"));
+      fatal.settle("failed");
+      await drain();
+
+      expect(target.exit).toHaveBeenCalledTimes(1);
+      expect(target.exit).toHaveBeenCalledWith(1);
+    });
+
+    it("exits at once for a second fatal error while the first is reported", async () => {
+      const fatal = report();
+      const target = guarded({ onFatal: fatal.onFatal });
+      target.emit(event, new TypeError("programming bug"));
+      await drain();
+      target.emit(event, new TypeError("another bug"));
+
+      expect(fatal.onFatal).toHaveBeenCalledTimes(1);
+      expect(target.exit).toHaveBeenCalledTimes(1);
+      expect(target.exit).toHaveBeenCalledWith(1);
+    });
+
+    it("reports a suppressed Redis error and stays up", async () => {
+      const onSuppressed = vi.fn();
+      const fatal = report();
+      const target = guarded({ onSuppressed, onFatal: fatal.onFatal });
+      const error = new TimeoutError();
+      target.emit(event, error);
+      await drain();
+
+      expect(onSuppressed).toHaveBeenCalledWith(error, event);
+      expect(fatal.onFatal).not.toHaveBeenCalled();
+      expect(target.exit).not.toHaveBeenCalled();
+    });
+  });
 });
