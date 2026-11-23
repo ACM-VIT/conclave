@@ -173,7 +173,7 @@ class MicrophoneReplacementRecoveryTests {
     fun aBandwidthRefreshLeavesTheMicrophoneToAnInFlightRouteRecovery() {
         val call = liveCall()
         field("socketManager").set(call.media, unsafe.allocateInstance(SocketIOManager::class.java))
-        field("audioProducerRouteRecoveryInFlight").setBoolean(call.media, true)
+        field("audioProducerRouteRecoveryOwner").setLong(call.media, -1L)
 
         runBlocking { call.media.refreshLocalAudioProducerForBandwidthProfile(ConnectionQuality.good) }
 
@@ -253,9 +253,9 @@ class MicrophoneReplacementRecoveryTests {
         val call = liveCall()
         val media = call.media
         val produces = producingCall(call)
-        field("audioBandwidthRefreshInFlight").setBoolean(media, true)
+        field("audioBandwidthRefreshOwner").setLong(media, -1L)
         runBlocking { media.refreshLocalAudioProducerForBandwidthProfile(ConnectionQuality.emergency) }
-        field("audioBandwidthRefreshInFlight").setBoolean(media, false)
+        field("audioBandwidthRefreshOwner").setLong(media, 0L)
         WebRTCClient::class.java.getDeclaredMethod("runPendingMicrophoneChanges")
             .apply { isAccessible = true }
             .invoke(media)
@@ -266,7 +266,7 @@ class MicrophoneReplacementRecoveryTests {
         pumpMainLooperUntil { produces.codecOptions.size == 1 }
         repeat(5) { shadowOf(Looper.getMainLooper()).idle() }
         produces.firstAck.countDown()
-        pumpMainLooperUntil { !field("audioBandwidthRefreshInFlight").getBoolean(media) }
+        pumpMainLooperUntil { field("audioBandwidthRefreshOwner").getLong(media) == 0L }
         val settleUntil = System.currentTimeMillis() + 300
         pumpMainLooperUntil { System.currentTimeMillis() > settleUntil }
 
@@ -580,5 +580,141 @@ class MicrophoneReplacementRecoveryTests {
         assertTrue("the producer was paused", paused.await(2, TimeUnit.SECONDS))
         assertFalse("Producer.pause ran while Producer.replaceTrack was still running", pausedDuringReplace.get())
         assertFalse((field("localAudioTrack").get(media) as AudioTrack).enabled())
+    }
+
+    class HeldAcksSocket : io.socket.client.Socket(null, "/", null) {
+        var heldUnmutes: CopyOnWriteArrayList<io.socket.client.Ack>? = null
+        @Volatile var holdNextClose = false
+        @Volatile var heldClose: io.socket.client.Ack? = null
+        override fun emit(event: String?, vararg args: Any?): io.socket.emitter.Emitter {
+            val ack = args.lastOrNull() as? io.socket.client.Ack
+            val unmutes = heldUnmutes
+            if (event == "toggleMute" && unmutes != null && ack != null && !(args.first() as JSONObject).getBoolean("paused")) {
+                unmutes.add(ack)
+                return this
+            }
+            if (event == "closeProducer" && holdNextClose) {
+                holdNextClose = false
+                heldClose = ack
+                return this
+            }
+            ack?.call(JSONObject())
+            return this
+        }
+    }
+
+    private fun wire(media: WebRTCClient, socket: HeldAcksSocket) {
+        val manager = field("socketManager").get(media) as SocketIOManager
+        SocketIOManager::class.java.getDeclaredField("socket").apply { isAccessible = true }.set(manager, socket)
+        field("mainHandler").set(media, android.os.Handler(Looper.getMainLooper()))
+    }
+
+    private fun settle() {
+        val until = System.currentTimeMillis() + 300
+        pumpMainLooperUntil { System.currentTimeMillis() > until }
+    }
+
+    @Test
+    fun aRefreshThatOutlivesItsCallNeverSilencesTheNextCallsMicReports() {
+        skip.foundation.ProcessInfo.launch(org.robolectric.RuntimeEnvironment.getApplication())
+        val call = liveCall()
+        val media = call.media
+        val produces = producingCall(call)
+        prepareForCleanup(call)
+        produces.firstAck.countDown()
+        val reports = CopyOnWriteArrayList<Boolean>()
+        media.onLocalAudioEnabledChanged = { reports.add(it) }
+        val socket = unsafe.allocateInstance(HeldAcksSocket::class.java) as HeldAcksSocket
+        socket.holdNextClose = true
+        wire(media, socket)
+        val manager = field("socketManager").get(media)
+        val scope = CoroutineScope(Dispatchers.Main.immediate + SupervisorJob())
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            media.refreshLocalAudioProducerForBandwidthProfile(ConnectionQuality.emergency)
+        }
+        pumpMainLooperUntil { socket.heldClose != null }
+        assertTrue("the refresh waits on the old microphone's close", socket.heldClose != null)
+
+        runBlocking { media.cleanup(notifyLocalState = true, preserveCallAudioRouting = true) }
+        assertEquals(listOf(false), reports.toList())
+
+        val nextLane = SendTransportLane("NextCallLane")
+        val nextTransport = unsafe.allocateInstance(ProducingSendTransport::class.java) as ProducingSendTransport
+        val nextAck = CountDownLatch(1)
+        nextTransport.codecOptions = CopyOnWriteArrayList()
+        nextTransport.firstAck = nextAck
+        nextTransport.makeProducer = { index ->
+            (unsafe.allocateInstance(FakeProducer::class.java) as FakeProducer).also { it.fakeId = "next-mic-${index + 1}" }
+        }
+        val nextMic = (unsafe.allocateInstance(FakeProducer::class.java) as FakeProducer).also { it.fakeId = "next-mic-1" }
+        field("socketManager").set(media, manager)
+        field("sendTransport").set(media, nextTransport)
+        field("sendTransportLane").set(media, nextLane)
+        field("sendProducerLanes").set(media, java.util.IdentityHashMap<Producer, SendTransportLane>(mapOf(nextMic to nextLane)))
+        field("audioProducer").set(media, nextMic)
+        field("localAudioTrack").set(media, (unsafe.allocateInstance(FakeTrack::class.java) as FakeTrack).also { it.live = true })
+        field("localAudioTargetEnabled").setBoolean(media, true)
+        field("localAudioEnabled").setBoolean(media, true)
+        field("isCallAudioModeActive").setBoolean(media, true)
+        field("currentLocalBandwidthQuality").set(media, ConnectionQuality.good)
+        field("audioProducerBandwidthQuality").set(media, ConnectionQuality.good)
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            media.refreshLocalAudioProducerForBandwidthProfile(ConnectionQuality.emergency)
+        }
+        pumpMainLooperUntil { nextTransport.codecOptions!!.size == 1 }
+        assertEquals(1, nextTransport.codecOptions!!.size)
+        socket.heldClose!!.call(JSONObject())
+        settle()
+        nextAck.countDown()
+        pumpMainLooperUntil { (field("audioProducer").get(media) as Producer).id == "next-mic-2" }
+        settle()
+        assertEquals("next-mic-2", (field("audioProducer").get(media) as Producer).id)
+
+        val beforeMute = reports.size
+        runCatching { runBlocking { media.setAudioEnabled(false) } }
+        assertTrue("a mute in the next call reaches the view model", reports.size > beforeMute)
+        assertEquals(false, reports.last())
+    }
+
+    @Test
+    fun anOlderUnmuteEndingLateNeverLetsAQueuedMicChangeOverlapTheNewerUnmute() {
+        val app = org.robolectric.RuntimeEnvironment.getApplication()
+        skip.foundation.ProcessInfo.launch(app)
+        shadowOf(app).grantPermissions(android.Manifest.permission.RECORD_AUDIO)
+        val call = liveCall()
+        val media = call.media
+        producingCall(call)
+        val socket = unsafe.allocateInstance(HeldAcksSocket::class.java) as HeldAcksSocket
+        val unmutes = CopyOnWriteArrayList<io.socket.client.Ack>()
+        socket.heldUnmutes = unmutes
+        wire(media, socket)
+        val replaced = java.util.concurrent.atomic.AtomicInteger(0)
+        call.old.onReplace = { replaced.incrementAndGet() }
+        val scope = CoroutineScope(Dispatchers.Main.immediate + SupervisorJob())
+        fun change(enabled: Boolean) = scope.async(start = CoroutineStart.UNDISPATCHED) {
+            runCatching { media.setAudioEnabled(enabled) }
+        }
+
+        val firstMute = change(false)
+        pumpMainLooperUntil { firstMute.isCompleted }
+        val olderUnmute = change(true)
+        pumpMainLooperUntil { unmutes.size == 1 }
+        val secondMute = change(false)
+        pumpMainLooperUntil { secondMute.isCompleted }
+        val newerUnmute = change(true)
+        pumpMainLooperUntil { unmutes.size == 2 }
+        assertEquals(2, unmutes.size)
+        val noise = scope.async(start = CoroutineStart.UNDISPATCHED) { media.applyNoiseSuppression(true) }
+        pumpMainLooperUntil { noise.isCompleted }
+
+        unmutes[0].call(JSONObject())
+        pumpMainLooperUntil { olderUnmute.isCompleted }
+        settle()
+        awaitLane(call.lane)
+        assertEquals("a queued noise change ran while the newer unmute was in flight", 0, replaced.get())
+
+        unmutes[1].call(JSONObject())
+        pumpMainLooperUntil { newerUnmute.isCompleted && replaced.get() == 1 }
+        assertEquals(1, replaced.get())
     }
 }

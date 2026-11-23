@@ -610,6 +610,24 @@ Fixed 2026-10-22 and guarded by `testNativeCallCorrectnessBlockersStayFixed`:
   changes nothing). `startProducingAudio` is single-flight
   (`audioStartTask`) so two starts never race a produce, and microphone tracks
   are created disabled and enabled only by a live commit.
+- Every in-flight or scheduled flag on the Android client is an owner token,
+  not a boolean (`takeInFlightToken()`): `audioStartOrEnableOwner`,
+  `audioBandwidthRefreshOwner`, `audioProducerRouteRecoveryOwner`,
+  `audioNoiseSuppressionChangeOwner`, `videoBandwidthRefreshOwner`,
+  `screenBandwidthRefreshOwner`, `audioRouteReapplyOwner`,
+  `audioCaptureRestartOwner` and `audioRouteChangeNotificationOwner`. Only the
+  call holding a token clears it, and only while `configurationGeneration`
+  still matches. Resets end all such work at once: a mute clears the
+  start/enable owner, `cleanup()` clears them all, and
+  `releaseCallAudioMode()` clears the three route debounces. Work that ends
+  without its token still runs `runPendingMicrophoneChanges()`, which checks
+  the guards itself. Mic state reports go through `notifyLocalAudioEnabled`,
+  silent while the bandwidth refresh token is held, so
+  `onLocalAudioEnabledChanged` is never swapped out. iOS gets the same from
+  single-flight flags restored only in the same session
+  (`audioBandwidthRefreshInFlight`, `screenBandwidthRefreshInFlight`,
+  `suppressLocalStateCallbacks`), `audioStartTask` identity and
+  `audioCaptureRestartToken`. A new guard belongs in this list.
 - A failed mute fails closed on both platforms: `setAudioEnabled(false)`
   keeps the producer paused and the track silent, and the view model stays
   muted while showing the error.

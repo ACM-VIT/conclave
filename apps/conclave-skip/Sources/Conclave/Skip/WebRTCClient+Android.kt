@@ -1773,12 +1773,14 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
     private var pendingRouteChangePreviousId: String = ""
     private var ownCommunicationDeviceRequestAtMs = -1L
     private var bluetoothAccessDeniedOnce = false
-    private var audioStartOrEnableInFlight = false
-    private var audioRouteReapplyScheduled = false
+    private var inFlightTokenSequence = 0L
+    private var audioStartOrEnableOwner = 0L
+    private val audioStartOrEnableInFlight: Boolean get() = audioStartOrEnableOwner != 0L
+    private var audioRouteReapplyOwner = 0L
     private var delayedAudioRouteReapplyRunnable: Runnable? = null
     private var lastAudioRouteReapplyAtMs = 0L
-    private var audioRouteChangeNotificationScheduled = false
-    private var audioCaptureRestartScheduled = false
+    private var audioRouteChangeNotificationOwner = 0L
+    private var audioCaptureRestartOwner = 0L
     private var audioCaptureReassertionGeneration = 0
     private var lastAppliedAudioRouteSignature: String? = null
     private var audioRouteMismatchSignature: String? = null
@@ -1803,14 +1805,19 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
             routeOwner.reportInterruptionEvent(event)
         }
     }
-    private var audioBandwidthRefreshInFlight = false
-    private var audioProducerRouteRecoveryInFlight = false
+    private var audioBandwidthRefreshOwner = 0L
+    private val audioBandwidthRefreshInFlight: Boolean get() = audioBandwidthRefreshOwner != 0L
+    private var audioProducerRouteRecoveryOwner = 0L
+    private val audioProducerRouteRecoveryInFlight: Boolean get() = audioProducerRouteRecoveryOwner != 0L
     private var requestedMicrophoneBandwidthQuality: ConnectionQuality = ConnectionQuality.unknown
     private var microphoneBandwidthRefreshPending = false
-    private var audioNoiseSuppressionChangeInFlight = false
+    private var audioNoiseSuppressionChangeOwner = 0L
+    private val audioNoiseSuppressionChangeInFlight: Boolean get() = audioNoiseSuppressionChangeOwner != 0L
     private var pendingNoiseSuppression: Boolean? = null
-    private var videoBandwidthRefreshInFlight = false
-    private var screenBandwidthRefreshInFlight = false
+    private var videoBandwidthRefreshOwner = 0L
+    private val videoBandwidthRefreshInFlight: Boolean get() = videoBandwidthRefreshOwner != 0L
+    private var screenBandwidthRefreshOwner = 0L
+    private val screenBandwidthRefreshInFlight: Boolean get() = screenBandwidthRefreshOwner != 0L
     private var mediaPublishSettingsRevision = 0
     private var videoSettingsRefreshPending = false
     private var lastAppliedLocalBandwidthSignature: String? = null
@@ -2218,7 +2225,8 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
             return
         }
         localAudioTargetEnabled = true
-        audioStartOrEnableInFlight = true
+        val startToken = takeInFlightToken()
+        audioStartOrEnableOwner = startToken
         var pendingProducer: Producer? = null
         try {
             configureCallAudioMode(unmuted = true)
@@ -2270,7 +2278,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
             markMicrophoneProducerUnmuted(producer.id, "audio start")
 
             if (localAudioMuteIntentGeneration == muteIntentGeneration && audioProducer === producer) {
-                onLocalAudioEnabledChanged?.invoke(true)
+                notifyLocalAudioEnabled(true)
             }
         } catch (t: Throwable) {
             closeSendProducer(pendingProducer)
@@ -2287,7 +2295,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
             throw t
         } finally {
             if (generation == configurationGeneration) {
-                audioStartOrEnableInFlight = false
+                if (audioStartOrEnableOwner == startToken) audioStartOrEnableOwner = 0L
                 runPendingMicrophoneChanges()
             }
         }
@@ -3102,21 +3110,22 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         if (!enabled) {
             localAudioMuteIntentGeneration += 1
             audioCaptureReassertionGeneration += 1
-            audioStartOrEnableInFlight = false
+            audioStartOrEnableOwner = 0L
             pauseSendProducer(audioProducer)
             audioDeviceModule?.setMicrophoneMute(true)
             localAudioTrack?.setEnabled(false)
             localAudioEnabled = false
-            onLocalAudioEnabledChanged?.invoke(false)
+            notifyLocalAudioEnabled(false)
         }
         val socket = socketManager ?: throw ErrorException("Socket not configured")
         val producer = audioProducer ?: throw ErrorException("Audio producer not ready")
         val generation = configurationGeneration
         val muteIntentGeneration = localAudioMuteIntentGeneration
+        val enableToken = if (enabled) takeInFlightToken() else 0L
 
         try {
             if (enabled) {
-                audioStartOrEnableInFlight = true
+                audioStartOrEnableOwner = enableToken
                 if (!ensureRecordAudioPermission()) {
                     throw ErrorException("Microphone permission not granted")
                 }
@@ -3144,7 +3153,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
                     scheduleLocalAudioCaptureReassertion(true)
                 }
             }
-            onLocalAudioEnabledChanged?.invoke(enabled)
+            notifyLocalAudioEnabled(enabled)
         } catch (error: Throwable) {
             if (generation != configurationGeneration) {
                 throw error
@@ -3157,7 +3166,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
                 audioDeviceModule?.setMicrophoneMute(true)
                 localAudioTrack?.setEnabled(false)
                 localAudioEnabled = false
-                onLocalAudioEnabledChanged?.invoke(false)
+                notifyLocalAudioEnabled(false)
                 debugLog("[WebRTC] Failed to signal audio mute; kept the local mute: ${error}")
                 throw error
             }
@@ -3175,12 +3184,12 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
             localAudioTrack?.setEnabled(previous)
             localAudioEnabled = previous
             localAudioTargetEnabled = previous
-            onLocalAudioEnabledChanged?.invoke(previous)
+            notifyLocalAudioEnabled(previous)
             debugLog("[WebRTC] Failed to toggle audio: ${error}")
             throw error
         } finally {
             if (enabled && generation == configurationGeneration) {
-                audioStartOrEnableInFlight = false
+                if (audioStartOrEnableOwner == enableToken) audioStartOrEnableOwner = 0L
                 runPendingMicrophoneChanges()
             }
         }
@@ -3189,13 +3198,13 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
     internal fun suspendLocalAudioForRecovery() {
         localAudioMuteIntentGeneration += 1
         localAudioTargetEnabled = false
-        audioStartOrEnableInFlight = false
+        audioStartOrEnableOwner = 0L
         audioCaptureReassertionGeneration += 1
         pauseSendProducer(audioProducer)
         audioDeviceModule?.setMicrophoneMute(true)
         localAudioTrack?.setEnabled(false)
         localAudioEnabled = false
-        onLocalAudioEnabledChanged?.invoke(false)
+        notifyLocalAudioEnabled(false)
     }
 
     internal suspend fun reassertLocalAudioProducerUnmuted() {
@@ -3394,7 +3403,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
             audioDeviceModule?.setMicrophoneMute(true)
             localAudioEnabled = false
             localAudioTargetEnabled = false
-            onLocalAudioEnabledChanged?.invoke(false)
+            notifyLocalAudioEnabled(false)
             return true
         }
 
@@ -3782,6 +3791,16 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         applyLocalBandwidthProfile(currentLocalBandwidthQuality)
     }
 
+    private fun takeInFlightToken(): Long {
+        inFlightTokenSequence += 1
+        return inFlightTokenSequence
+    }
+
+    private fun notifyLocalAudioEnabled(enabled: Boolean) {
+        if (audioBandwidthRefreshInFlight) return
+        onLocalAudioEnabledChanged?.invoke(enabled)
+    }
+
     private fun replayVideoSettingsRefreshIfChangedSince(settingsRevision: Int) {
         if (settingsRevision != mediaPublishSettingsRevision) videoSettingsRefreshPending = true
         replayPendingVideoSettingsRefresh()
@@ -3873,7 +3892,8 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         val generation = configurationGeneration
         val offIntentGeneration = localVideoOffIntentGeneration
         val settingsRevision = mediaPublishSettingsRevision
-        videoBandwidthRefreshInFlight = true
+        val refreshToken = takeInFlightToken()
+        videoBandwidthRefreshOwner = refreshToken
         try {
             val appData = encodeJSONString(ProducerAppData(type = ProducerType.webcam.rawValue, paused = false))
             intentionalLocalVideoProducerCloseIds.add(oldProducer.id)
@@ -3937,7 +3957,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
             debugLog("[WebRTC] Failed to refresh webcam producer for bandwidth: ${error}")
         } finally {
             if (generation == configurationGeneration) {
-                videoBandwidthRefreshInFlight = false
+                if (videoBandwidthRefreshOwner == refreshToken) videoBandwidthRefreshOwner = 0L
                 replayVideoSettingsRefreshIfChangedSince(settingsRevision)
             }
         }
@@ -3964,9 +3984,8 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         val track = localAudioTrack ?: return
         val generation = configurationGeneration
         var handedToRecovery = false
-        audioBandwidthRefreshInFlight = true
-        val callback = onLocalAudioEnabledChanged
-        onLocalAudioEnabledChanged = null
+        val refreshToken = takeInFlightToken()
+        audioBandwidthRefreshOwner = refreshToken
         try {
 
             configureCallAudioMode(unmuted = true)
@@ -4009,11 +4028,10 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         } catch (error: Throwable) {
             debugLog("[WebRTC] Failed to refresh microphone producer for bandwidth: ${error}")
         } finally {
-            onLocalAudioEnabledChanged = callback
             if (generation == configurationGeneration) {
-                audioBandwidthRefreshInFlight = false
-                if (!localAudioEnabled && !handedToRecovery) {
-                    callback?.invoke(false)
+                if (audioBandwidthRefreshOwner == refreshToken) {
+                    audioBandwidthRefreshOwner = 0L
+                    if (!localAudioEnabled && !handedToRecovery) notifyLocalAudioEnabled(false)
                 }
                 runPendingMicrophoneChanges()
             }
@@ -4032,7 +4050,8 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         val track = screenVideoTrack ?: return
         val generation = configurationGeneration
         val settingsRevision = mediaPublishSettingsRevision
-        screenBandwidthRefreshInFlight = true
+        val refreshToken = takeInFlightToken()
+        screenBandwidthRefreshOwner = refreshToken
         lastScreenProducerSignalingError = null
         try {
             val appData = encodeJSONString(ProducerAppData(type = ProducerType.screen.rawValue, paused = false))
@@ -4086,7 +4105,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
             debugLog("[WebRTC] Failed to refresh screen producer for bandwidth: ${error}")
         } finally {
             if (generation == configurationGeneration) {
-                screenBandwidthRefreshInFlight = false
+                if (screenBandwidthRefreshOwner == refreshToken) screenBandwidthRefreshOwner = 0L
                 replayVideoSettingsRefreshIfChangedSince(settingsRevision)
             }
         }
@@ -4987,14 +5006,14 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         videoProducerBandwidthSignature = null
         screenProducerBandwidthQuality = ConnectionQuality.unknown
         screenProducerBandwidthSignature = null
-        audioBandwidthRefreshInFlight = false
-        audioProducerRouteRecoveryInFlight = false
+        audioBandwidthRefreshOwner = 0L
+        audioProducerRouteRecoveryOwner = 0L
         requestedMicrophoneBandwidthQuality = ConnectionQuality.unknown
         microphoneBandwidthRefreshPending = false
-        audioNoiseSuppressionChangeInFlight = false
+        audioNoiseSuppressionChangeOwner = 0L
         pendingNoiseSuppression = null
-        videoBandwidthRefreshInFlight = false
-        screenBandwidthRefreshInFlight = false
+        videoBandwidthRefreshOwner = 0L
+        screenBandwidthRefreshOwner = 0L
         videoSettingsRefreshPending = false
         lastAppliedLocalBandwidthSignature = null
 
@@ -5024,7 +5043,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         audioDeviceModule?.setMicrophoneMute(true)
         audioDeviceModule?.setSpeakerMute(false)
         applyAudioModuleInputDevice(null)
-        audioStartOrEnableInFlight = false
+        audioStartOrEnableOwner = 0L
         localAudioTargetEnabled = false
         if (!preserveCallAudioRouting) {
             releaseCallAudioMode()
@@ -5034,7 +5053,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         localVideoEnabled = false
 
         if (notifyLocalState) {
-            onLocalAudioEnabledChanged?.invoke(false)
+            notifyLocalAudioEnabled(false)
             onLocalVideoEnabledChanged?.invoke(false)
         }
 
@@ -5166,10 +5185,11 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         if (wasActive) {
             routeOwner.callAudioDidEnd()
         }
-        audioRouteReapplyScheduled = false
+        audioRouteReapplyOwner = 0L
+        audioRouteChangeNotificationOwner = 0L
         delayedAudioRouteReapplyRunnable?.let { mainHandler.removeCallbacks(it) }
         delayedAudioRouteReapplyRunnable = null
-        audioCaptureRestartScheduled = false
+        audioCaptureRestartOwner = 0L
         lastAppliedAudioRouteSignature = null
         audioRouteMismatchSignature = null
         audioRouteMismatchReapplyAttempts = 0
@@ -5340,10 +5360,11 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         if (forceCaptureRestart) {
             scheduleDelayedCallAudioRouteReapply()
         }
-        if (audioRouteReapplyScheduled) return
-        audioRouteReapplyScheduled = true
+        if (audioRouteReapplyOwner != 0L) return
+        val reapplyToken = takeInFlightToken()
+        audioRouteReapplyOwner = reapplyToken
         mainHandler.post {
-            audioRouteReapplyScheduled = false
+            if (audioRouteReapplyOwner == reapplyToken) audioRouteReapplyOwner = 0L
             val now = SystemClock.uptimeMillis()
             if (now - lastAudioRouteReapplyAtMs < 700L) {
                 scheduleDelayedCallAudioRouteReapply()
@@ -5402,10 +5423,11 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
 
     private fun notifyCallAudioRouteChanged() {
         val callback = onCallAudioRouteChanged ?: return
-        if (audioRouteChangeNotificationScheduled) return
-        audioRouteChangeNotificationScheduled = true
+        if (audioRouteChangeNotificationOwner != 0L) return
+        val notificationToken = takeInFlightToken()
+        audioRouteChangeNotificationOwner = notificationToken
         mainHandler.post {
-            audioRouteChangeNotificationScheduled = false
+            if (audioRouteChangeNotificationOwner == notificationToken) audioRouteChangeNotificationOwner = 0L
             if (isCallAudioModeActive) {
                 callback.invoke()
             }
@@ -5497,13 +5519,14 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
             return
         }
         if (audioProducerRouteRecoveryInFlight) return
-        if (audioCaptureRestartScheduled) return
+        if (audioCaptureRestartOwner != 0L) return
         val generation = audioCaptureReassertionGeneration
-        audioCaptureRestartScheduled = true
+        val restartToken = takeInFlightToken()
+        audioCaptureRestartOwner = restartToken
         debugLog("[WebRTC] Restarting microphone track after ${reason}")
         localAudioTrack?.setEnabled(false)
         mainHandler.postDelayed({
-            audioCaptureRestartScheduled = false
+            if (audioCaptureRestartOwner == restartToken) audioCaptureRestartOwner = 0L
             if (generation != audioCaptureReassertionGeneration) return@postDelayed
             if (!isCallAudioModeActive || !shouldLocalAudioCaptureStayActive()) return@postDelayed
             localAudioTrack?.setEnabled(true)
@@ -5529,7 +5552,8 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         }
         val factory = peerConnectionFactory ?: return
 
-        audioProducerRouteRecoveryInFlight = true
+        val recoveryToken = takeInFlightToken()
+        audioProducerRouteRecoveryOwner = recoveryToken
         audioRouteRecoveryScope.launch {
             var nextSource: AudioSource? = null
             var nextTrack: AudioTrack? = null
@@ -5583,7 +5607,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
                 if (muted) {
                     markMicrophoneProducerMuted(replacement.id, "route recovery")
                 } else {
-                    onLocalAudioEnabledChanged?.invoke(true)
+                    notifyLocalAudioEnabled(true)
                     forceUnmuteMicrophoneCapture()
                     audioManager()?.let { manager ->
                         applyPreferredCommunicationRoute(manager)
@@ -5625,7 +5649,7 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
                 disposeAudioTrack(nextTrack)
                 disposeAudioSource(nextSource)
                 if (generation == configurationGeneration) {
-                    audioProducerRouteRecoveryInFlight = false
+                    if (audioProducerRouteRecoveryOwner == recoveryToken) audioProducerRouteRecoveryOwner = 0L
                     runPendingMicrophoneChanges()
                 }
             }
@@ -6879,12 +6903,13 @@ internal class WebRTCClient : RecvTransport.Listener, Producer.Listener, Consume
         if (isMicrophoneChangeInFlight) return true
         pendingNoiseSuppression = null
         val generation = configurationGeneration
-        audioNoiseSuppressionChangeInFlight = true
+        val changeToken = takeInFlightToken()
+        audioNoiseSuppressionChangeOwner = changeToken
         try {
             return replaceMicrophoneTrackForNoiseSuppression(enabled, generation)
         } finally {
             if (generation == configurationGeneration) {
-                audioNoiseSuppressionChangeInFlight = false
+                if (audioNoiseSuppressionChangeOwner == changeToken) audioNoiseSuppressionChangeOwner = 0L
                 runPendingMicrophoneChanges()
             }
         }

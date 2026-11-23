@@ -218,8 +218,8 @@ class VideoProducerRefreshTests {
     private fun replaceSession(call: Call, kind: String) {
         val generation = field("configurationGeneration")
         generation.setLong(call.media, generation.getLong(call.media) + 1)
-        field("videoBandwidthRefreshInFlight").setBoolean(call.media, false)
-        field("screenBandwidthRefreshInFlight").setBoolean(call.media, false)
+        field("videoBandwidthRefreshOwner").setLong(call.media, 0L)
+        field("screenBandwidthRefreshOwner").setLong(call.media, 0L)
         field(if (kind == "camera") "videoProducerBandwidthSignature" else "screenProducerBandwidthSignature").set(call.media, null)
     }
 
