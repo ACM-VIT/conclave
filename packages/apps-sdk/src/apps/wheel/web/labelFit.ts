@@ -7,6 +7,7 @@ import {
   WHEEL_RADIUS,
   pxPerUnitFor,
 } from "./geometry";
+import { graphemes } from "./graphemes";
 
 export type MeasureText = (text: string) => number;
 
@@ -36,83 +37,6 @@ const OUTLIER_RATIO = 0.7;
 const MIN_FULL_RATIO = 0.75;
 
 const mod360 = (value: number): number => ((value % 360) + 360) % 360;
-
-const graphemeSegmenter =
-  typeof Intl !== "undefined" && typeof Intl.Segmenter === "function"
-    ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
-    : null;
-
-const EXTENDS_CLUSTER = /^(?:\p{M}|\u200D|\uFE0E|\uFE0F|[\u{1F3FB}-\u{1F3FF}]|[\u{E0020}-\u{E007F}])$/u;
-const REGIONAL_INDICATOR = /^[\u{1F1E6}-\u{1F1FF}]$/u;
-const PICTOGRAPHIC = /^\p{Extended_Pictographic}$/u;
-
-type HangulPart = "L" | "V" | "T" | "LV" | "LVT";
-
-const hangulPart = (point: string): HangulPart | null => {
-  const code = point.codePointAt(0) ?? 0;
-  if ((code >= 0x1100 && code <= 0x115f) || (code >= 0xa960 && code <= 0xa97c)) return "L";
-  if ((code >= 0x1160 && code <= 0x11a7) || (code >= 0xd7b0 && code <= 0xd7c6)) return "V";
-  if ((code >= 0x11a8 && code <= 0x11ff) || (code >= 0xd7cb && code <= 0xd7fb)) return "T";
-  if (code >= 0xac00 && code <= 0xd7a3) return (code - 0xac00) % 28 === 0 ? "LV" : "LVT";
-  return null;
-};
-
-const joinsHangul = (before: HangulPart, after: HangulPart): boolean =>
-  before === "L"
-    ? after !== "T"
-    : before === "LV" || before === "V"
-      ? after === "V" || after === "T"
-      : after === "T";
-
-export const splitGraphemesFallback = (text: string): string[] => {
-  const clusters: string[] = [];
-  let pictographicTail = false;
-  let afterJoiner = false;
-  let flagOpen = false;
-  let hangul: HangulPart | null = null;
-  for (const point of text) {
-    const last = clusters.length - 1;
-    const part = hangulPart(point);
-    if (last >= 0) {
-      if (afterJoiner && PICTOGRAPHIC.test(point)) {
-        clusters[last] += point;
-        afterJoiner = false;
-        pictographicTail = true;
-        continue;
-      }
-      if (EXTENDS_CLUSTER.test(point)) {
-        clusters[last] += point;
-        const joiner = point === "\u200D";
-        afterJoiner = joiner && pictographicTail;
-        if (joiner) pictographicTail = false;
-        flagOpen = false;
-        hangul = null;
-        continue;
-      }
-      if (flagOpen && REGIONAL_INDICATOR.test(point)) {
-        clusters[last] += point;
-        flagOpen = false;
-        continue;
-      }
-      if (hangul && part && joinsHangul(hangul, part)) {
-        clusters[last] += point;
-        hangul = part;
-        continue;
-      }
-    }
-    clusters.push(point);
-    pictographicTail = PICTOGRAPHIC.test(point);
-    afterJoiner = false;
-    flagOpen = REGIONAL_INDICATOR.test(point);
-    hangul = part;
-  }
-  return clusters;
-};
-
-export const graphemes = (text: string): string[] =>
-  graphemeSegmenter
-    ? Array.from(graphemeSegmenter.segment(text), (part) => part.segment)
-    : splitGraphemesFallback(text);
 
 const maxFontFor = (count: number): number =>
   count <= 2 ? 15 : count <= 6 ? 13 : count <= 12 ? 11 : 9.5;

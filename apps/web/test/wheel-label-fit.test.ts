@@ -7,13 +7,12 @@ import {
 import {
   fitSingleLabel,
   fitWheelLabels,
-  graphemes,
-  splitGraphemesFallback,
   isLabelFlipped,
   wheelLabelGeometry,
   type LabelGeometry,
   type MeasureText,
 } from "../../../packages/apps-sdk/src/apps/wheel/web/labelFit";
+import { graphemes, splitGraphemesFallback } from "../../../packages/apps-sdk/src/apps/wheel/web/graphemes";
 
 const WIDE = new Set(["M", "W", "H", "m", "w"]);
 const measure: MeasureText = (text) =>
@@ -148,6 +147,58 @@ describe("wheel label emoji", () => {
     for (const sample of samples) {
       const expected = Array.from(segmenter.segment(sample), (part) => part.segment);
       expect(splitGraphemesFallback(sample)).toEqual(expected);
+    }
+  });
+});
+
+describe("wheel label scripts without a grapheme segmenter", () => {
+  const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+  const segmented = (text: string): string[] => Array.from(segmenter.segment(text), (part) => part.segment);
+
+  it("keeps an Indic conjunct whole when it shortens a name", () => {
+    expect(splitGraphemesFallback("AAAAAलक्ष्मीनारायण").slice(0, 7)).toEqual(["A", "A", "A", "A", "A", "ल", "क्ष्मी"]);
+  });
+
+  it("keeps the stacked consonants that Unicode 17 joins in Myanmar, Khmer, Balinese and Javanese", () => {
+    expect(splitGraphemesFallback("သတ္တ")).toEqual(["သ", "တ္တ"]);
+    expect(splitGraphemesFallback("ခန္ဓာ")).toEqual(["ခ", "န္ဓ", "ာ"]);
+    expect(splitGraphemesFallback("ខ្មែរ")).toEqual(["ខ្មែ", "រ"]);
+    expect(splitGraphemesFallback("ᬅᬓ᭄ᬱᬭ")).toEqual(["ᬅ", "ᬓ᭄ᬱ", "ᬭ"]);
+    expect(splitGraphemesFallback("ꦲꦏ꧀ꦱꦫ")).toEqual(["ꦲ", "ꦏ꧀ꦱ", "ꦫ"]);
+  });
+
+  it("splits names the way the browser segmenter does, script by script", () => {
+    const names = [
+      "AAAAAलक्ष्मीनारायण लक्ष्मीनारायण",
+      "क्षत्रिय श्रीमती हिन्दी स्त्री पृथ्वी अर्जुन",
+      "ज़्यादा द्\u200Dवार क्\u200Cष",
+      "ক্ষমা বাংলা রবীন্দ্রনাথ",
+      "ગુજરાતી લક્ષ્મી",
+      "ਪੰਜਾਬੀ ਸ੍ਰੀ",
+      "ଓଡ଼ିଆ ଲକ୍ଷ୍ମୀ",
+      "తెలుగు లక్ష్మి",
+      "ಕನ್ನಡ ಲಕ್ಷ್ಮಿ",
+      "മലയാളം ലക്ഷ്മി അവന്\u200D",
+      "தமிழ் லக்ஷ்மி",
+      "ශ්\u200Dරී ලංකා",
+      "ภาษาไทย น้ำ ที่",
+      "ພາສາລາວ ນ້ຳ",
+      "မြန်မာ အောင်ဆန်းစုကြည်",
+      "བོད་སྐད",
+      "مَرْحَبًا محمد",
+      "שָׁלוֹם",
+      "Nguye\u0302\u0303n",
+      "ｶﾞｷﾞ 山田太郎",
+      "क्A क्ক क्ก",
+      "अ्ष का्ष क़्ष क््ष क\u200D्ष क्\uFE0Fष",
+      "ক\u09CD\u09BEষ ক\u09BE\u09CDষ ക\u0D57\u0D4Dഷ",
+      "\u{1F469}\u0E33\u200D\u{1F4BB} \u{1F469}\u200C\u200D\u{1F4BB}",
+      "\u{16D43}\u{16D63}\u{16D67}\u{16D50}",
+      "\u200F\u064E\u0645\u062D\u0645\u062F a\u00AD\u0301b x\u200B\u200Dy",
+      "\u0600\u0661\u0662 \u0D4E\u0D15\u0D4D\u0D37 line\r\nnext",
+    ];
+    for (const name of names) {
+      expect(splitGraphemesFallback(name)).toEqual(segmented(name));
     }
   });
 });
