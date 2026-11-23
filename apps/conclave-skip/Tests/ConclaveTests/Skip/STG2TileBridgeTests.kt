@@ -91,7 +91,7 @@ class STG2TileBridgeTests {
     }
 
     @Test fun dispatcherSendsCommandsAndWritesTheFit() {
-        val stage = StagePresenter(shell = MeetingShellPresenter())
+        val stage = StagePresenter(shell = MeetingShellPresenter(defaults = IsolatedDefaults.make()))
         stage.setViewport(iphoneSE)
         stage.apply(StageFixtureScript.inputs(StageFixtureState.grid6))
         val commands = mutableListOf<StageCommand>()

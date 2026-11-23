@@ -14,7 +14,7 @@ struct PPL4HostControlsTests {
 
     private func makeHost(sharing: Bool = false, hand: Bool = false, phase: String = MeetingPhaseKind.inCall.rawValue,
                           host: HostControlsInputs = HostControlsInputs.make(callSession: 1)) -> (PeoplePresenter, CommandLog) {
-        let shell = MeetingShellPresenter()
+        let shell = MeetingShellPresenter(defaults: IsolatedDefaults.make())
         let people = PeoplePresenter(shell: shell, stage: StagePresenter(shell: shell))
         let log = CommandLog()
         people.onCommand = { command, ticket in

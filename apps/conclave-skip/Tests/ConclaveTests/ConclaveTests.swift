@@ -604,7 +604,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testRecoveryQueuesMuteAndCameraIntent() throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state.connectionState = ConnectionState.joining
         viewModel.state.isRecoveringConnection = true
         viewModel.state.isMuted = false
@@ -1163,7 +1163,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testWaitingRoomApprovalRestartsMeetingEntryOverlay() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.roomId = "room-a"
         viewModel.state.connectionState = ConnectionState.waiting
@@ -1527,7 +1527,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testReactionSendFailureKeepsOptimisticReactionLikeWeb() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.roomId = "room-a"
         viewModel.state.connectionState = ConnectionState.joined
@@ -2338,7 +2338,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testVoiceAgentProducerStateDoesNotCreateNativeRosterParticipant() throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         let agentUserId = "voice-agent-456@agent.conclave#agent-session"
 
         viewModel.handleProducerState(ProducerInfo(
@@ -2465,7 +2465,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testJoinAckDisplayNameSnapshotSeedsRemotePresence() throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.roomId = "requested-room"
@@ -2793,7 +2793,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testDisplayNameUpdatedSuppressesSoloFallbackWithoutCreatingParticipant() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.roomId = "room-a"
@@ -2816,7 +2816,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testDisplayNameUpdatedRefreshesExistingParticipant() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.roomId = "room-a"
@@ -2840,7 +2840,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testGeneratedGuestSnapshotDoesNotOverwriteUsefulDisplayName() throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.roomId = "room-a"
@@ -2865,7 +2865,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testDepartedBareDisplayNameUpdateDoesNotCreatePresenceEvidence() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.roomId = "room-a"
@@ -2895,7 +2895,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testNewSessionClearsDepartedAccountDisplayNameStaleness() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.roomId = "room-a"
@@ -2922,7 +2922,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testAdminParticipantSnapshotRefreshesLocalDisplayNameAliasesAndChat() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.roomId = "room-a"
@@ -2976,7 +2976,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testAdminParticipantSnapshotKeepsSameAccountRemoteSessionVisible() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "alex@example.com#native-session", sessionId: "native-session")
         viewModel.state.sfuUserId = "alex@example.com"
         viewModel.state.displayName = "Alex Native"
@@ -3023,7 +3023,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testAdminParticipantSnapshotBlocksWebinarAttendeeHostPromotion() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "host@example.com#native-session", sessionId: "native-session")
         viewModel.state.sfuUserId = "host@example.com"
         viewModel.state.roomId = "room-a"
@@ -3132,7 +3132,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testRoomlessAppYjsUpdateOnlyMutatesActiveApp() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.roomId = "room-a"
@@ -3164,7 +3164,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testRoomlessAppAwarenessUpdateIgnoresInactiveApp() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.roomId = "room-a"
@@ -3247,7 +3247,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testAdminConfigSettersReportSkippedInFlightActions() throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "admin@example.com#local-session", sessionId: "local-session")
         viewModel.state.roomId = "room-a"
         viewModel.state.connectionState = ConnectionState.joined
@@ -3260,7 +3260,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testAdminAccessListSettersReportRejectedActions() throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "admin@example.com#local-session", sessionId: "local-session")
         viewModel.state.roomId = "room-a"
         viewModel.state.connectionState = ConnectionState.joined
@@ -3280,7 +3280,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testAdminNoticeShowsBannerWithoutAddingChatNoise() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.roomId = "room-a"
         viewModel.state.connectionState = ConnectionState.joined
@@ -3301,7 +3301,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testRoomlessServerRestartNoticeSurfacesWhileWaiting() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.roomId = "room-a"
         viewModel.state.connectionState = ConnectionState.waiting
@@ -3318,7 +3318,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testSharedBrowserActionsReportRejectedInput() throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "admin@example.com#local-session", sessionId: "local-session")
         viewModel.state.roomId = "room-a"
         viewModel.state.connectionState = ConnectionState.joined
@@ -3341,7 +3341,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testRoomlessConfigBroadcastsApplyToCurrentNativeRoom() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.roomId = "room-a"
         viewModel.state.connectionState = ConnectionState.joined
@@ -3378,7 +3378,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testConfigEventsCarryTheInviteCodeVersionToHostControls() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.roomId = "room-a"
         viewModel.state.connectionState = ConnectionState.joined
@@ -3404,7 +3404,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testWebinarConfigEncodesLinkSlugAsSinglePathSegment() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.roomId = "room-a"
         viewModel.state.connectionState = ConnectionState.joined
@@ -3432,7 +3432,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testPartialWebinarConfigSnapshotPreservesExistingLinkSlug() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.roomId = "room-a"
         viewModel.state.connectionState = ConnectionState.joined
@@ -3460,7 +3460,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testExplicitNullWebinarConfigSnapshotClearsExistingLinkSlug() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.roomId = "room-a"
         viewModel.state.connectionState = ConnectionState.joined
@@ -3484,7 +3484,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testDisplayNameSnapshotPrunesParticipantWithStaleProducer() throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.roomId = "room-a"
@@ -3516,7 +3516,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testBareDisplayNameSnapshotKeepsSessionScopedRemoteParticipant() throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.roomId = "room-a"
@@ -3540,7 +3540,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testProducerStateUpgradesBareSnapshotParticipantToSessionId() throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.roomId = "room-a"
@@ -3575,7 +3575,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testPausedRemoteScreenProducerClearsBaseActiveScreenShareAlias() throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.roomId = "room-a"
@@ -3604,7 +3604,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testPausedRemoteScreenProducerDoesNotClearDifferentSessionPresenter() throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.roomId = "room-a"
@@ -3640,7 +3640,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testRemoteProducerCloseWaitsForReplacementBeforeMarkingCameraOff() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.roomId = "room-a"
@@ -3681,7 +3681,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testAdminEnforcedRemoteProducerCloseMarksCameraOffImmediately() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.roomId = "room-a"
@@ -3897,7 +3897,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testDisplayNameSnapshotPrunesOldSameAccountSessionWhenNewSessionIsExact() throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.roomId = "room-a"
@@ -3955,7 +3955,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testSoloInviteFallbackIsSuppressedByRemoteRosterEvidence() throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.displayName = "Local"
@@ -3971,7 +3971,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testFreshJoinedStateDoesNotShowSoloFallbackBeforePresenceSnapshot() throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.displayName = "Local"
@@ -3985,7 +3985,7 @@ final class ConclaveTests: XCTestCase {
     #if !SKIP
     @MainActor
     func testCleanupResetsInitialPresenceSnapshotForNextRoom() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.displayName = "Local"
@@ -4009,7 +4009,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testCleanupResetsLocalMediaUiStateEvenWhenCallbacksAreSuppressed() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.displayName = "Local"
@@ -4032,7 +4032,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testAudioOnlyImmediatelyDisablesCameraIntent() {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.roomId = "room-a"
         viewModel.state.connectionState = ConnectionState.joined
@@ -4048,7 +4048,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testSoloInviteFallbackWaitsForInitialPresenceSnapshot() throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.displayName = "Local"
@@ -4082,7 +4082,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testStaleParticipantConnectionStateDoesNotCreateRemotePresence() throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.displayName = "Local"
@@ -4153,7 +4153,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testIdleSocketDisconnectDoesNotEnterMeetingReconnectState() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.connectionState = ConnectionState.connected
         viewModel.shouldRejoinAfterReconnect = false
@@ -4224,7 +4224,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testPendingWaitingRoomReplayKeepsSnapshotAndDeltasInOrder() throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "admin@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "admin@example.com"
         viewModel.state.roomId = "room-a"
@@ -4346,7 +4346,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testPreAckWaitingRoomBufferReplaysCompactedEvents() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "admin@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "admin@example.com"
         viewModel.state.roomId = "room-a"
@@ -4387,7 +4387,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testPendingRoomPolicyReplayAppliesOnlyCurrentRoomEvents() throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "admin@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "admin@example.com"
         viewModel.state.roomId = "room-a"
@@ -4420,7 +4420,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testStaleJoinRejectedDecisionDoesNotEndCurrentWaitingRoom() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.roomId = "room-a"
@@ -4438,7 +4438,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testPreAckRosterReplayAppliesOnlyCurrentRoomEvents() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.roomId = "room-a"
@@ -4489,7 +4489,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testPreAckRosterBufferKeepsNewestEventsOnly() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.roomId = "room-a"
@@ -4523,7 +4523,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testStalePreAckRosterEventsDoNotEvictCurrentRoomEvents() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.roomId = "room-a"
@@ -4551,7 +4551,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testStalePreAckRosterEvidenceDoesNotSuppressSoloFallback() throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.roomId = "room-a"
@@ -4578,7 +4578,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testPendingDisplayNameSnapshotUsesLatestPresenceEvidence() throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.roomId = "room-a"
@@ -4607,7 +4607,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testPreAckChatHistorySnapshotKeepsLatestOnly() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.roomId = "room-a"
@@ -4661,7 +4661,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testChatHistorySnapshotSeedsVisibleMessagesWithoutDuplicatesOrStaleRooms() throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "admin@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "admin@example.com"
         viewModel.state.roomId = "room-a"
@@ -4752,7 +4752,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testChatHistorySnapshotNormalizesTtsWhitespaceLikeWeb() throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "admin@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "admin@example.com"
         viewModel.state.roomId = "room-a"
@@ -4804,7 +4804,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testConclaveAssistantStreamUpdatesSingleNativeChatMessage() throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.roomId = "room-a"
@@ -4846,7 +4846,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testEmptyConclaveAssistantPlaceholderIsReplacedByFinalAnswer() throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.roomId = "room-a"
@@ -4878,7 +4878,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testStaleChatCommandDoesNotMutateNextRoom() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.roomId = "old-room"
@@ -5207,7 +5207,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testClearChatCommandResetsUnreadCount() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state.connectionState = ConnectionState.joined
         viewModel.state.roomId = "room-a"
         viewModel.state.unreadChatCount = 3
@@ -5278,7 +5278,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testUnmuteCommandReportsUnavailableInObserverMode() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "attendee@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "attendee@example.com"
         viewModel.state.roomId = "webinar-room"
@@ -5297,7 +5297,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testUnmuteCommandUsesSharedMediaPathWhenAvailable() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.displayName = "Local"
@@ -5316,7 +5316,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testChatCommandSendRespectsLockedChatBeforeSocketSend() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.roomId = "room-a"
@@ -5336,7 +5336,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testWhitespaceDmIsBlockedBeforeSocketSendWhenDisabled() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.roomId = "room-a"
@@ -5354,7 +5354,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testSendChatMessageShowsOptimisticMessageBeforeAckThenReplacesIt() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.displayName = "Local"
@@ -5378,7 +5378,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testStaleChatSendRemovesOptimisticMessageAfterRoomChange() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.displayName = "Local"
@@ -5398,7 +5398,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testRaiseCommandReportsUnavailableInWatchOnlyMode() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "attendee@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "attendee@example.com"
         viewModel.state.roomId = "webinar-room"
@@ -5502,7 +5502,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testTogglePinClearsAliasedPinnedParticipant() throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.connectionState = ConnectionState.joined
@@ -5711,7 +5711,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testTokenIdentitySwapPreservesRemoteSameAccountSession() throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "alex@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "alex@example.com"
         viewModel.state.displayName = "Alex Native"
@@ -5742,7 +5742,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testDepartedSameAccountSessionDoesNotBlockNewRemoteSession() throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.displayName = "Local"
@@ -5764,7 +5764,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testDelayedStableLeaveCleanupDoesNotRemoveQuickSessionRejoin() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.displayName = "Local"
@@ -5805,7 +5805,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testDepartedExactSessionCanBeMarkedPresentAgain() throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.connectionState = ConnectionState.joined
@@ -5823,7 +5823,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testPreAckBrowserStateReplaysAfterJoinReset() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.roomId = "demo-room"
         viewModel.state.connectionState = ConnectionState.joining
@@ -5852,7 +5852,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testStalePreAckBrowserCloseDoesNotReplaceCurrentPendingBrowserState() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.roomId = "demo-room"
         viewModel.state.connectionState = ConnectionState.joining
@@ -5881,7 +5881,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testPreAckBrowserClosedReplaysOnlyForCurrentRoom() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.roomId = "demo-room"
         viewModel.state.connectionState = ConnectionState.joining
@@ -5919,7 +5919,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testPreAckConfigSnapshotsReplayAfterJoinReset() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.roomId = "demo-room"
         viewModel.state.connectionState = ConnectionState.joining
@@ -5968,7 +5968,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testStalePreAckConfigSnapshotsDoNotReplaceCurrentPendingConfig() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.roomId = "demo-room"
         viewModel.state.connectionState = ConnectionState.joining
@@ -6032,7 +6032,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testStalePreAckAppsStateDoesNotReplaceCurrentPendingAppsState() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.roomId = "demo-room"
         viewModel.state.connectionState = ConnectionState.joining
@@ -6060,7 +6060,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testStalePreAckAppYjsUpdatesDoNotEvictCurrentPendingUpdate() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.roomId = "demo-room"
         viewModel.state.connectionState = ConnectionState.joining
@@ -6091,7 +6091,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testStalePreAckAppAwarenessUpdatesDoNotEvictCurrentPendingUpdate() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.roomId = "demo-room"
         viewModel.state.connectionState = ConnectionState.joining
@@ -6125,7 +6125,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testStalePreAckWebinarFeedDoesNotReplaceCurrentPendingFeed() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.roomId = "demo-room"
@@ -6163,7 +6163,7 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testWebinarFeedKeepsAliasedActiveScreenSharePresenter() async throws {
-        let viewModel = MeetingViewModel()
+        let viewModel = isolatedViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         viewModel.state.sfuUserId = "local@example.com"
         viewModel.state.roomId = "demo-room"
@@ -7266,7 +7266,7 @@ final class ConclaveTests: XCTestCase {
         let inputs = StageInputs.make(callSession: 1, isInCall: true, localUserId: "local", participants: participants,
                                       selfViewMode: "tile")
 
-        let unmeasured = StagePresenter(shell: MeetingShellPresenter())
+        let unmeasured = StagePresenter(shell: MeetingShellPresenter(defaults: IsolatedDefaults.make()))
         unmeasured.apply(inputs)
         XCTAssertEqual(unmeasured.layout.kind, StageKind.grid)
         XCTAssertEqual(unmeasured.layout.capacity, StageCapacity.zero)
@@ -7274,14 +7274,14 @@ final class ConclaveTests: XCTestCase {
         XCTAssertEqual(StageOrderPolicy.consumerFallbackRemoteIds(layout: unmeasured.layout, inputs: unmeasured.inputs,
                                                                   speakerUserId: unmeasured.speakerUserId), everyone)
 
-        let capped = StagePresenter(shell: MeetingShellPresenter())
+        let capped = StagePresenter(shell: MeetingShellPresenter(defaults: IsolatedDefaults.make()))
         capped.apply(StageInputs.make(callSession: 1, isInCall: true, localUserId: "local", participants: participants,
                                       viewMaxTiles: 6, selfViewMode: "tile"))
         XCTAssertEqual(capped.layout.capacity, StageCapacity.zero)
         XCTAssertEqual(StageOrderPolicy.consumerFallbackRemoteIds(layout: capped.layout, inputs: capped.inputs,
                                                                   speakerUserId: capped.speakerUserId), firstFive)
 
-        let measured = StagePresenter(shell: MeetingShellPresenter())
+        let measured = StagePresenter(shell: MeetingShellPresenter(defaults: IsolatedDefaults.make()))
         measured.setViewport(StageViewport(width: 375.0, height: 667.0, insetTop: 76.0, insetBottom: 64.0, insetLeading: 0.0,
                                            insetTrailing: 0.0, widthClass: StageSizeClass.compact,
                                            heightClass: StageSizeClass.regular, placement: StageChromePlacement.bottomBar))
@@ -7732,17 +7732,9 @@ final class ConclaveTests: XCTestCase {
 
     @MainActor
     func testConclaveAppDelegateOnlyQueuesSupportedJoinLinks() throws {
-        let state = AppState.shared
-        let previousPendingJoinURLString = state.pendingJoinURLString
+        let state = AppState(defaults: IsolatedDefaults.make())
         let previousPendingJoinRequestID = state.pendingJoinRequestID
-        defer {
-            state.pendingJoinURLString = previousPendingJoinURLString
-            state.pendingJoinRequestID = previousPendingJoinRequestID
-        }
-
-        state.pendingJoinURLString = nil
-        state.pendingJoinRequestID = previousPendingJoinRequestID
-        let openURL: (URL) -> Bool = ConclaveAppDelegate.shared.onOpenURL
+        let openURL: (URL) -> Bool = { ConclaveAppDelegate.shared.openURL($0, appState: state) }
 
         let ignoredURL = try XCTUnwrap(URL(string: "https://conclave.acmvit.in/privacy?case=\(UUID().uuidString)"))
         XCTAssertFalse(openURL(ignoredURL))

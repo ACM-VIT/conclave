@@ -30,10 +30,7 @@ struct SYS3NotificationsTests {
     }
 
     private func freshDefaults() -> UserDefaults {
-        let suite = "sys3-" + UUID().uuidString
-        let defaults = UserDefaults(suiteName: suite) ?? UserDefaults.standard
-        defaults.removePersistentDomain(forName: suite)
-        return defaults
+        IsolatedDefaults.make()
     }
 
     private func make(android: Bool, defaults: UserDefaults? = nil) -> (SystemNotifications, RecordingCenter) {

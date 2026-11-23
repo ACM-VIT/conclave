@@ -5,15 +5,11 @@ import Testing
 
 @MainActor
 final class RejoinHarness {
-    private static let resumeKey = "conclave.activeMeetingResume.v1"
-    private static let markerKey = MeetingResumeMarker.key
-
     private static let joinTeardown = "cleanup(notifyLocalState: false)"
 
-    let viewModel = MeetingViewModel()
+    let defaults = MemoryDefaults()
+    let viewModel: MeetingViewModel
     let calls = HeldStubCalls()
-    private let savedResumeSnapshot: Any?
-    private let savedResumeMarker: Any?
     private var endedToggles: [String] = []
     private var handledReports = 0
 
@@ -22,9 +18,7 @@ final class RejoinHarness {
     var generation: Int { media.configurationGeneration }
 
     init() {
-        savedResumeSnapshot = UserDefaults.standard.object(forKey: Self.resumeKey)
-        savedResumeMarker = UserDefaults.standard.object(forKey: Self.markerKey)
-
+        viewModel = isolatedViewModel(defaults: defaults)
         viewModel.testDetachHostNetworkMonitor()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         let calls = self.calls
@@ -118,11 +112,11 @@ final class RejoinHarness {
     var joinAttemptCount: Int { calls.count(Self.joinTeardown) }
 
     func clearResumeSnapshot() {
-        UserDefaults.standard.removeObject(forKey: Self.resumeKey)
+        defaults.removeObject(forKey: MeetingResumeStore.key)
     }
 
     func clearResumeMarker() {
-        UserDefaults.standard.removeObject(forKey: Self.markerKey)
+        defaults.removeObject(forKey: MeetingResumeMarker.key)
     }
 
     func scriptJoinFailures(_ error: Error) {
@@ -251,16 +245,6 @@ final class RejoinHarness {
         viewModel.testLocalToggleEnded = nil
         viewModel.testLocalMediaReportHandled = nil
         viewModel.testJoinFetch = nil
-        if let savedResumeSnapshot {
-            UserDefaults.standard.set(savedResumeSnapshot, forKey: Self.resumeKey)
-        } else {
-            UserDefaults.standard.removeObject(forKey: Self.resumeKey)
-        }
-        if let savedResumeMarker {
-            UserDefaults.standard.set(savedResumeMarker, forKey: Self.markerKey)
-        } else {
-            UserDefaults.standard.removeObject(forKey: Self.markerKey)
-        }
     }
 }
 
@@ -378,10 +362,14 @@ final class HeldStubCalls {
 }
 
 @MainActor
-func settle(timeout: Duration = .seconds(5), _ condition: () -> Bool) async -> Bool {
-    let deadline = ContinuousClock.now.advanced(by: timeout)
+func settle(floor: Duration = .seconds(5), turns: Int = 2_000, ceiling: Duration = .seconds(60),
+            now: () -> ContinuousClock.Instant = { ContinuousClock.now }, _ condition: () -> Bool) async -> Bool {
+    let start = now()
+    var taken = 0
     while !condition() {
-        guard ContinuousClock.now < deadline else { return false }
+        let waited = start.duration(to: now())
+        if Task.isCancelled || waited >= ceiling || (taken >= turns && waited >= floor) { return false }
+        taken += 1
         await Task.yield()
     }
     return true
