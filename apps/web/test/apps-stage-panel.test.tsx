@@ -144,6 +144,24 @@ describe("the presented board", () => {
     expect(ctx.getDoc("whiteboard").getMap("shapes").get("circle")).toBe(1);
   });
 
+  it("sends nothing before its first sync for a copy that holds nothing", async () => {
+    let sentBeforeSync = -1;
+    const answer = socket.emit;
+    socket.emit = ((event: string, ...args: unknown[]) => {
+      if (event === "apps:yjs:sync" && sentBeforeSync < 0) {
+        sentBeforeSync = sent("apps:yjs:update").length;
+      }
+      return answer(event, ...args);
+    }) as typeof socket.emit;
+    try {
+      await serverState({ activeAppId: "whiteboard", revision: 1, savedAppIds: [], docGeneration: 1 });
+    } finally {
+      socket.emit = answer;
+    }
+
+    expect(sentBeforeSync).toBe(0);
+  });
+
   it("never uploads a stray local copy of an app that is off the stage", async () => {
     await serverState({ activeAppId: "whiteboard", revision: 1, savedAppIds: ["wheel"] });
     ctx.getDoc("wheel").getMap("entries").set("stale", 1);

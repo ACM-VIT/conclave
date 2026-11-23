@@ -326,9 +326,9 @@ export function AppsProvider({
   const queueInitialUpdate = useCallback((appId: string, doc: Y.Doc) => {
     if (initialUpdateSentRef.current.has(appId)) return;
     if (isReadOnlyRef.current) return;
+    if (doc.store.clients.size === 0) return;
 
     const update = Y.encodeStateAsUpdate(doc);
-    if (update.length === 0) return;
 
     const currentSocket = socketRef.current;
     if (currentSocket && currentSocket.connected) {
