@@ -481,7 +481,67 @@ describe("order inside a replaced provider", () => {
   });
 });
 
+const openAiItemFailed = (itemId: string) => ({
+  type: "conversation.item.input_audio_transcription.failed",
+  item_id: itemId,
+  error: { message: "This item could not be transcribed" },
+});
+
+describe("one utterance the provider cannot transcribe fails only that utterance", () => {
+  it("OpenAI: the old provider keeps finishing the next utterance after the switch", async () => {
+    vi.useFakeTimers();
+    const { sockets, start, switchTo, speak, commit, savedTexts } = await fixture(OPENAI);
+    await start("en");
+    const before = sockets[0];
+    for (const itemId of ["item_1", "item_2"]) {
+      await speak();
+      await commit();
+      before.emit(openAiCommitted(itemId));
+    }
+    before.emit(openAiDelta("item_1", "First half"));
+    await settle();
+
+    await switchTo("hi");
+    before.emit(openAiItemFailed("item_1"));
+    await settle();
+    expect(before.closed).toBe(false);
+    before.emit(openAiFinal("item_2", "Second sentence."));
+    await settle();
+
+    expect(savedTexts()).toEqual(["First half", "Second sentence."]);
+    expect(before.closed).toBe(true);
+  });
+});
+
 describe("drain lifetime", () => {
+  it("closes the old socket at its lines' deadline even while the snapshot write is slow", async () => {
+    vi.useFakeTimers();
+    const { room, sockets, start, switchTo, speak, commit, savedTexts } = await fixture(OPENAI);
+    await start("en");
+    const before = sockets[0];
+    await speak();
+    await commit();
+    before.emit(openAiCommitted("item_1"));
+    before.emit(openAiDelta("item_1", "Friday"));
+    await settle();
+
+    await switchTo("hi");
+    await settle();
+    const storage = (room as unknown as { state: { storage: { put: (key: string, value: unknown) => Promise<void> } } }).state.storage;
+    const put = storage.put.bind(storage);
+    const held: Array<() => void> = [];
+    storage.put = (key, value) =>
+      new Promise<void>((resolve) => {
+        held.push(() => void put(key, value).then(resolve));
+      });
+    await vi.advanceTimersByTimeAsync(TRANSCRIPTION_LINE_DEADLINE_MS + 100);
+    expect(before.closed).toBe(true);
+    expect(savedTexts()).toEqual(["Friday"]);
+    storage.put = put;
+    for (const release of held) release();
+    await settle();
+  });
+
   it("Sarvam: a replaced provider that never answers stays open past the quiet window and ends its line as a gap", async () => {
     vi.useFakeTimers();
     vi.spyOn(console, "warn").mockImplementation(() => {});
