@@ -8,9 +8,9 @@ IST to Azure Blob Storage in another region.
 
 | Data | Where it lives | How it is copied |
 | --- | --- | --- |
-| Scheduled meetings, scheduling, webinars | Every `*.sqlite` under the state dir (`/var/lib/conclave/recordings`, the SFU volume), at any depth | SQLite online backup (`.backup`), then `PRAGMA integrity_check`. Each keeps its path below the state dir. |
+| Scheduled meetings, scheduling, webinars | Every `*.sqlite` under the state dir (`/var/lib/conclave/recordings`, the SFU volume), at any depth, and each store's own database: `SCHEDULING_SQLITE_PATH`, `SCHEDULED_MEETINGS_SQLITE_PATH` or `SCHEDULED_WEBINARS_SQLITE_PATH`, else `CONCLAVE_SQLITE_PATH`, else the compose default `conclave.sqlite`, as the host config and every SFU container's env set them | SQLite's online backup API (from Python, so no path passes through a shell), then `PRAGMA integrity_check`. Each keeps its path below the state dir. |
 | Scheduled meetings and scheduling (Redis mode) | Host Redis, keys `conclave:sfu:persistence*` | `redis-cli --rdb`: the server forks a fresh snapshot, the same way `BGSAVE` does, and streams it |
-| Anything else in the state dir | JSON stores and similar files | `tar` |
+| Anything else in the state dir | JSON stores and similar files | A tar written in Python while the fence still holds |
 
 SQLite and Redis are copied at one point in time. Before either copy, the
 backup asks every SFU in `CONCLAVE_SFU_HEALTH_URLS` to hold its durable
@@ -24,17 +24,21 @@ The SFUs keep serving from memory, and media and signalling never wait on
 it. The hold belongs to
 the backup's random owner token: only that token renews or releases it, and
 the SFU lifts it at its deadline, never later than 30 s after it was taken,
-if the backup dies. The backup renews between the SQLite and Redis copies and
-again after both, which fails once an SFU restarted or its hold lapsed, and
+if the backup dies. The backup renews after the SQLite copies and again after
+the Redis copy and the other files, which fails once an SFU restarted or its
+hold lapsed, and
 each copy must finish with at least 2 s of the hold left, compared in
 milliseconds; such a night archives nothing.
 
 Silence is not proof that an SFU writes nothing. Every SFU in the list must
 hold the fence, or Docker must report the container on that URL's port
-exited, dead or created; and every running container that mounts the state
-dir must hold it. Mounts are matched on real paths, so a `CONCLAVE_STATE_DIR`
-that is a symlink to the mounted directory works, and an SFU container with a
-mount that does not resolve counts as running. When Docker cannot answer, or an SFU answers but will not
+exited, dead or created; and every running container that can write the state
+dir (a writable mount of it, of a dir above it or of one inside it) must be an
+SFU that holds it: one with an `SFU_INSTANCE_ID`, the only running container
+under that ID, listening on the port whose answer named it. Mounts are
+matched on real paths, so a `CONCLAVE_STATE_DIR` that is a symlink to the
+mounted directory works, and an SFU container with a mount that does not
+resolve counts as running. When Docker cannot answer, or an SFU answers but will not
 hold the fence (one from before the fence existed), the backup stops, so
 deploy the SFU before turning backups on, and keep the health URLs on the
 SFUs' local ports (`http://127.0.0.1:3031/health`). One backup or restore
@@ -43,18 +47,24 @@ second one exits at once. Both also hold the host's deploy lock
 (`/run/lock/conclave-sfu-deploy.lock`, the one `deploy-sfu.sh` takes) for
 their whole run, so no deploy starts or replaces an SFU mid-copy; they wait
 up to `BACKUP_DEPLOY_LOCK_WAIT_SECONDS` (900) for a deploy already under way,
-then fail, and a deploy waits for them the same way. The Docker check runs
-again after every copy, even when no SFU holds the fence.
+then fail, and a deploy waits for them the same way. The deploy lock is a
+regular file no other user can open (0640, group `docker`), made and checked
+by `scripts/host_lock.py` for all three scripts: one that is a link, or owned
+by anyone but root, the running user or a `docker` member, is refused, and
+one an older script made for every user is narrowed by its owner. The Docker
+check runs again after every copy, even when no SFU holds the fence.
 
 A backup is complete or it fails, with no archive and no heartbeat: a
-missing state dir fails it, and so does a missing database the SFU opens
-(`CONCLAVE_SQLITE_PATH`, or the compose default `conclave.sqlite` in the
-state dir), even when Redis alone could be copied. Each expected source (that
+missing state dir fails it, and so does a missing database a store opens, a
+directory it cannot list, or a database whose name leaves no room for
+SQLite's `-wal`, `-shm` and `-journal` files, even when Redis alone could be
+copied. Each expected source (that
 database, and Redis when configured) must be in the payload before it is
 encrypted, and the encrypted file is checked before the job keeps it. The
 other files go in as files and directories only, hard links stored whole (as
-`tar --hard-dereference` does), with any other link or special file left out
-and logged; and the restore's own validator runs over the payload, so a
+`tar --hard-dereference` does), with any other link, special file, database or
+SQLite side file left out (the first two logged); and the restore's own
+checks run over the payload, so a
 backup that would not restore fails and the previous archives stay. Only
 then are older local archives rotated, and the newest is always kept, so a
 bad night never pushes out the last complete backup.
@@ -127,7 +137,7 @@ Install on the VM (through `az vm run-command invoke ... --scripts @file.sh`,
 as root):
 
 ```bash
-apt-get update && apt-get install -y age sqlite3 redis-tools psmisc util-linux python3
+apt-get update && apt-get install -y age redis-tools psmisc util-linux python3
 install -d -m 0700 /etc/conclave /var/backups/conclave
 echo "age1...your public key..." > /etc/conclave/backup-recipients.txt
 R=/home/azureuser/repos/conclave
@@ -140,13 +150,18 @@ systemctl enable --now conclave-backup.timer
 systemctl list-timers conclave-backup.timer
 ```
 
-`CONCLAVE_SQLITE_PATH` in the repo `.env` (if set) must point inside the
-state dir. A path outside the volume lives inside the container and is lost on
-every deploy, so the backup fails until it is moved. The configured database
-gets the online backup whatever it is named (`live.db` as much as
-`conclave.sqlite`). If it is a symlink, the
-file it reaches is backed up once and the link is recreated on restore; a link
-to a file outside the state dir fails the backup the same way.
+Every store's database (`CONCLAVE_SQLITE_PATH`, or a store's own
+`SCHEDULING_SQLITE_PATH`, `SCHEDULED_MEETINGS_SQLITE_PATH` or
+`SCHEDULED_WEBINARS_SQLITE_PATH`, in the repo `.env` or an SFU container's
+env) must point inside the state dir. A path outside the volume lives inside
+the container and is lost on every deploy, so the backup fails until it is
+moved. Each gets the online backup whatever it is named (`live.db` as much as
+`conclave.sqlite`). If it is reached through links, the file they reach is
+backed up once, and every link on the way is recorded relative
+(`conclave.sqlite -> data/live.db`, whether it was written with the
+container's path, the host's or `..` steps) with the directories it passes,
+so a restore into any dir rebuilds the same chain; a link to a file outside
+the state dir fails the backup.
 
 If the upload fails, the encrypted archive stays in `/var/backups/conclave`,
 the job fails, and the heartbeat is not sent. The newest
@@ -173,35 +188,52 @@ To apply it:
 1. Stop new work: drain both SFUs and wait for 0 rooms, as the deploy does.
 2. `cd $R && docker compose -f docker-compose.sfu.yml stop sfu-a sfu-b`
 3. `sudo $R/scripts/backup/restore.sh --identity /root/conclave-backup.key --latest --yes`
-   It refuses while an SFU answers or any process holds a database open. The
-   path rules live in one place, `scripts/backup/restore_paths.py`. Before
-   anything changes, its validator checks the archive: every database copy,
-   recorded link and file is a plain relative path (no absolute name, no
-   `..`, no control characters), the files are regular files and directories
-   only, nothing sits under a recorded link, and every recorded link's
-   target, read as the SFU reads it with the container's path
-   (`/var/lib/conclave/recordings`, or `CONCLAVE_CONTAINER_STATE_DIR`) mapped
-   to the state dir, stays inside. It then checks the live state dir: no link
-   or file on the way to any write. One problem refuses the whole restore.
-   The writes go through an open state dir one directory at a time with
-   `O_NOFOLLOW`, so a link anywhere on the way stops a write instead of being
-   followed; what sits at a destination is moved aside or replaced by
-   rename, never written through. Recorded links are recreated relative
-   (`conclave.sqlite -> data/live.db`), never to a literal host path. Other
-   files are extracted into a fresh staging dir inside the state dir, checked
-   there and renamed into place. So a populated dir restores the same as an
-   empty one. The
-   current databases are kept as `*.pre-restore-<stamp>`. The Redis keys
+   `restore.sh` only downloads and decrypts the archive and takes the locks.
+   Everything that touches what is inside it runs in
+   `scripts/backup/restore_state.py`, and nothing from the archive passes
+   through a shell:
+   - It reads the archive into a private work dir (root's, 0700, outside the
+     state dir): plain relative names only (no absolute name, no `..`, no
+     control characters), regular files and directories only, nothing
+     followed, and a `SHA256SUMS` that names every other file exactly once
+     and nothing else. Then it checks the payload with the rules the backup
+     ran: every database listed once, nothing under a recorded link, no SQLite
+     side file among the other files, no path twice or under two spellings
+     that differ only in case, and every recorded chain, rebuilt from the
+     archive alone, reaching its database.
+   - It checks the live state dir: every directory on the way to a write is a
+     real directory on the state dir's file system (a link, a file or a mount
+     point there refuses the restore), nothing it replaces is a directory, and
+     every chain still reaches its database with the restore laid over what
+     is there. It refuses while an SFU answers, while any running container
+     mounts the state dir or a dir above or inside it, or while a process
+     holds a database open.
+   - It builds the whole restored tree in a root-only staging dir beside the
+     state dir, on the same file system, then moves each entry in by rename
+     between open directories. What an entry replaces moves into
+     `<state dir>.pre-restore-<stamp>` beside the state dir, under its own
+     name, together with a live database's `-wal`, `-shm` and `-journal`, so a
+     stale journal never replays onto the restored copy. Any failure from the
+     first rename on undoes every rename. A populated dir restores the same as
+     an empty one, and a lost state dir is the staging tree renamed into place.
+   - The state dir's parent must be writable by its owner alone, and the state
+     dir must not be a mount point of its own: the restore keeps its staging
+     copy in that parent and renames from it. Put a dedicated volume one level
+     up (`/var/lib/conclave` rather than `.../recordings`), or restore into a
+     new dir and move it.
+   The Redis keys
    matching `conclave:sfu:persistence*` end up exactly as in the backup: those
    it has are restored, and those it lacks are deleted, so a meeting created
    after the backup cannot outlive the restore. Other keys, such as room
    leases, are left alone. `--redis-pattern '*'` makes the whole database match
    the backup. A TLS (`rediss://`) Redis is refused before anything changes;
    use `--only sqlite,files` there.
-   The restored files go to the user the SFU runs as. Without a setting,
-   `restore.sh` reads it from the stopped SFU containers that mount the state
-   dir and resolves its uid and gid inside their image; a lost state dir is
-   created first, so those containers are still found. Today's image runs as
+   The entries the restore creates, and only those, go to the user the SFU
+   runs as, each through its own fd as it is made (a file that gains a second
+   name is refused); what was already in the state dir keeps its owner.
+   Without a setting, `restore.sh` reads that user from the stopped SFU
+   containers that mount the state dir and resolves its uid and gid inside
+   their image; a lost state dir is matched by its path. Today's image runs as
    root, so the files stay root's. Once the SFU image runs as `node` (#272),
    they go to `node`. If the containers are gone, pass `--owner 1000:1000`
    (`node` in the Node image) or set `BACKUP_RESTORE_OWNER` in
@@ -213,9 +245,9 @@ To apply it:
 
 Use `--blob daily/2026/11/<name>` or `--file <path>` for an older backup and
 `--only sqlite`, `--only redis` or `--only files` for part of one. The links on
-the way to a database (`conclave.sqlite -> current -> live.db`) belong to the
-SQLite part: `--only sqlite` brings back the whole chain, and `--only files`
-installs none of it. `--latest` and the local retention order archives by the
+the way to a database (`conclave.sqlite -> current -> live.db`), and the
+directories they pass, belong to the SQLite part: `--only sqlite` brings back
+the whole chain, and `--only files` installs none of it. `--latest` and the local retention order archives by the
 timestamp in their names, so a renamed host never makes an older one look
 newer.
 
