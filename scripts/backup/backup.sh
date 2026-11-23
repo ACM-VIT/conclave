@@ -23,6 +23,43 @@ for arg in "$@"; do
   esac
 done
 
+# Cleanup, set up before anything can fail and safe at any point of the run:
+# it undoes only what exists by then, so whichever check stops the backup, no
+# work dir is left behind and no fence stays held.
+work=""
+fenced=()
+owner=""
+prune_archives="false"
+fence_request() {
+  curl -s --max-time 30 -w $'\n%{http_code}' -X "$1" -H "x-sfu-secret: ${SFU_SECRET:-}" \
+    -H "content-type: application/json" -d "$3" "${2}/admin/persistence-fence" || true
+}
+release_fences() {
+  local base
+  for base in "${fenced[@]}"; do
+    fence_request DELETE "$base" "{\"owner\": \"${owner}\"}" >/dev/null
+  done
+  fenced=()
+}
+# Keeps the newest BACKUP_LOCAL_KEEP archives. Armed only once tonight's
+# archive is complete and checked, so no run rotates away the last good one.
+prune_local_archives() {
+  local archives i keep="${BACKUP_LOCAL_KEEP:-3}"
+  (( keep >= 1 )) || keep=1
+  mapfile -t archives < <(shopt -s nullglob; for found in "${BACKUP_LOCAL_DIR}"/conclave-*.tar.gz.age; do printf '%s\n' "$found"; done | by_stamp)
+  for ((i = 0; i < ${#archives[@]} - keep; i++)); do
+    rm -f "${archives[i]}"
+  done
+}
+cleanup() {
+  set +e
+  release_fences
+  [[ -n "$work" ]] && rm -rf "$work"
+  [[ "$prune_archives" == "true" ]] && prune_local_archives
+  return 0
+}
+trap cleanup EXIT
+
 load_backup_config
 recipients="${BACKUP_AGE_RECIPIENTS_FILE:-/etc/conclave/backup-recipients.txt}"
 [[ -s "$recipients" ]] || die "no age recipients in ${recipients}"
@@ -45,8 +82,6 @@ stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 name="conclave-${BACKUP_NAME:-$(hostname -s)}-${stamp}"
 mkdir -p "$BACKUP_LOCAL_DIR"
 work="$(mktemp -d "${BACKUP_LOCAL_DIR}/.work.XXXXXX")"
-fenced=()
-trap 'release_fences; rm -rf "$work"' EXIT
 payload="${work}/payload"
 mkdir -p "${payload}/sqlite"
 manifest="${payload}/MANIFEST"
@@ -75,17 +110,6 @@ FENCE_HOLD_MS="${BACKUP_FENCE_HOLD_MS:-20000}"
 FENCE_MARGIN_MS=2000
 fence_until=0
 owner="backup-$(od -An -tx1 -N12 /dev/urandom | tr -d ' \n')"
-fence_request() {
-  curl -s --max-time 30 -w $'\n%{http_code}' -X "$1" -H "x-sfu-secret: ${SFU_SECRET:-}" \
-    -H "content-type: application/json" -d "$3" "${2}/admin/persistence-fence" || true
-}
-release_fences() {
-  local base
-  for base in "${fenced[@]}"; do
-    fence_request DELETE "$base" "{\"owner\": \"${owner}\"}" >/dev/null
-  done
-  fenced=()
-}
 # The earliest deadline among the held fences, in milliseconds.
 note_until() {
   local until
@@ -207,16 +231,7 @@ fi
 # Only now, with tonight's archive complete and checked, does every exit keep
 # just the newest BACKUP_LOCAL_KEEP archives, so nights whose upload failed
 # cannot fill the disk and no run ever rotates away the last complete one.
-keep="${BACKUP_LOCAL_KEEP:-3}"
-(( keep >= 1 )) || keep=1
-prune_local_archives() {
-  local archives i
-  mapfile -t archives < <(shopt -s nullglob; for found in "${BACKUP_LOCAL_DIR}"/conclave-*.tar.gz.age; do printf '%s\n' "$found"; done | by_stamp)
-  for ((i = 0; i < ${#archives[@]} - keep; i++)); do
-    rm -f "${archives[i]}"
-  done
-}
-trap 'release_fences; rm -rf "$work"; prune_local_archives' EXIT
+prune_archives="true"
 size="$(wc -c < "$archive" | tr -d ' ')"
 log "Encrypted archive ${archive} (${size} bytes)"
 
